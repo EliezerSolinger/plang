@@ -1768,6 +1768,9 @@ static def register_func(s: *Sema, f: *Func):
     i0: i32
     for i0 in range(f->nparams):
         resolve_type(s, f->params[i0].type)
+        # fold const/enum array dims to literals; under --std=c89 a runtime
+        # dimension in a parameter (VLA, e.g. `a: i32[n]`) is rejected here too.
+        fold_const_dims(s, f->params[i0].type)
     resolve_type(s, f->ret)
     if not s->funcs.has(f->cname):
         s->funcs.put(f->cname, f)

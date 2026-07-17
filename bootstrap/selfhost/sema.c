@@ -3462,6 +3462,7 @@ static void register_func(Sema *s, Func *f) {
     int32_t i0;
     for (i0 = 0; i0 < f->nparams; i0 += 1) {
         resolve_type(s, f->params[i0].type);
+        fold_const_dims(s, f->params[i0].type);
     }
     resolve_type(s, f->ret);
     if (!StrMap_pFunc_has(&s->funcs, f->cname)) {
@@ -3534,13 +3535,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_1833_9 = d;
-            __with_1833_9->kind = DL_STRUCT;
-            __with_1833_9->name = si0->name;
-            __with_1833_9->fields = NULL;
-            __with_1833_9->nfields = 0;
-            __with_1833_9->methods = bodies0;
-            __with_1833_9->nmethods = nb;
+            Decl *__with_1836_9 = d;
+            __with_1836_9->kind = DL_STRUCT;
+            __with_1836_9->name = si0->name;
+            __with_1836_9->fields = NULL;
+            __with_1836_9->nfields = 0;
+            __with_1836_9->methods = bodies0;
+            __with_1836_9->nmethods = nb;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3570,9 +3571,9 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         inst->name = fmangled;
         inst->cname = fmangled;
         {
-            Decl *__with_1864_9 = d;
-            __with_1864_9->kind = DL_FUNC;
-            __with_1864_9->func = inst;
+            Decl *__with_1867_9 = d;
+            __with_1867_9->kind = DL_FUNC;
+            __with_1867_9->func = inst;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3604,13 +3605,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             protos[i] = clone_func(s, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_1891_9 = d;
-            __with_1891_9->kind = DL_STRUCT;
-            __with_1891_9->name = mangled;
-            __with_1891_9->fields = fields;
-            __with_1891_9->nfields = tpl->nfields;
-            __with_1891_9->methods = protos;
-            __with_1891_9->nmethods = tpl->nmethods;
+            Decl *__with_1894_9 = d;
+            __with_1894_9->kind = DL_STRUCT;
+            __with_1894_9->name = mangled;
+            __with_1894_9->fields = fields;
+            __with_1894_9->nfields = tpl->nfields;
+            __with_1894_9->methods = protos;
+            __with_1894_9->nmethods = tpl->nmethods;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3627,13 +3628,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         bodies[i] = clone_func(s, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_1910_5 = d;
-        __with_1910_5->kind = DL_STRUCT;
-        __with_1910_5->name = mangled;
-        __with_1910_5->fields = NULL;
-        __with_1910_5->nfields = 0;
-        __with_1910_5->methods = bodies;
-        __with_1910_5->nmethods = tpl->nmethods;
+        Decl *__with_1913_5 = d;
+        __with_1913_5->kind = DL_STRUCT;
+        __with_1913_5->name = mangled;
+        __with_1913_5->fields = NULL;
+        __with_1913_5->nfields = 0;
+        __with_1913_5->methods = bodies;
+        __with_1913_5->nmethods = tpl->nmethods;
     }
     register_decl(s, m, d, check_bodies);
 }
@@ -3831,13 +3832,13 @@ static void inject_defines(Sema *s, Cc *cc, Module *m) {
         }
         Decl *dc = arena_alloc(s->a, sizeof(Decl));
         {
-            Decl *__with_2099_9 = dc;
-            __with_2099_9->kind = DL_VAR;
-            __with_2099_9->pos = zp;
-            __with_2099_9->name = name;
-            __with_2099_9->is_const = 1;
-            __with_2099_9->is_static = 1;
-            __with_2099_9->init = ini;
+            Decl *__with_2102_9 = dc;
+            __with_2102_9->kind = DL_VAR;
+            __with_2102_9->pos = zp;
+            __with_2102_9->name = name;
+            __with_2102_9->is_const = 1;
+            __with_2102_9->is_static = 1;
+            __with_2102_9->init = ini;
         }
         nd[np] = dc;
         np += 1;
