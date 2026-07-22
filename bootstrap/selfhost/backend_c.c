@@ -8,6 +8,7 @@
 #include "lexer.h"
 #include "vecs.h"
 #include "../stl/vec.h"
+#include "../stl/set.h"
 
 typedef enum { PR_COMMA = 0, PR_ASSIGN = 1, PR_TERN = 2, PR_OR = 3, PR_AND = 4, PR_BOR = 5, PR_BXOR = 6, PR_BAND = 7, PR_EQ = 8, PR_REL = 9, PR_SHIFT = 10, PR_ADD = 11, PR_MUL = 12, PR_UNARY = 13, PR_POST = 14, PR_PRIM = 15 } CPrec;
 
@@ -220,6 +221,8 @@ int g_std89 = 0;
 
 int32_t g_i64 = 0;
 
+int g_c_mod = 0;
+
 void backend_c_config(int std89, int32_t i64_mode) {
     g_std89 = std89;
     g_i64 = i64_mode;
@@ -270,6 +273,18 @@ static const char *base_cname(const char *n) {
         i += 1;
     }
     return n;
+}
+
+static void emit_type_name(StrBuf *b, Type *t) {
+    if (t->tag_kind == TAG_STRUCT) {
+        sb_printf(b, "struct %s", t->name);
+        return;
+    }
+    if (t->tag_kind == TAG_UNION) {
+        sb_printf(b, "union %s", t->name);
+        return;
+    }
+    sb_puts(b, base_cname(t->name));
 }
 
 static void indent(StrBuf *b, int32_t n) {
@@ -339,8 +354,12 @@ static void emit_fnptr_decl(StrBuf *b, Type *ft, const char *inner) {
 }
 
 static void emit_cast_typename(StrBuf *b, Type *t) {
+    int pc[16];
     int stars = 0;
     while (t->kind == TY_PTR) {
+        if (stars < 16) {
+            pc[stars] = t->is_const;
+        }
         stars += 1;
         t = t->inner;
     }
@@ -354,12 +373,48 @@ static void emit_cast_typename(StrBuf *b, Type *t) {
         emit_fnptr_decl(b, t, buf);
         return;
     }
-    sb_puts(b, base_cname(t->name));
+    if (t->kind == TY_ARRAY) {
+        Expr *dims[16];
+        int nd = 0;
+        while (t->kind == TY_ARRAY && nd < 16) {
+            dims[nd] = t->arr_len;
+            nd += 1;
+            t = t->inner;
+        }
+        emit_cast_typename(b, t);
+        if (stars > 0) {
+            sb_puts(b, " (");
+            size_t i;
+            for (i = 0; i < stars; i += 1) {
+                sb_putc(b, '*');
+            }
+            sb_putc(b, ')');
+        }
+        size_t i;
+        for (i = 0; i < nd; i += 1) {
+            sb_putc(b, '[');
+            if (dims[i] != NULL) {
+                emit_expr(b, dims[i], 0);
+            }
+            sb_putc(b, ']');
+        }
+        return;
+    }
+    if (t->is_const) {
+        sb_puts(b, "const ");
+    }
+    if (t->is_volatile) {
+        sb_puts(b, "volatile ");
+    }
+    emit_type_name(b, t);
     if (stars != 0) {
         sb_putc(b, ' ');
-        size_t i;
-        for (i = 0; i < stars; i += 1) {
+        ptrdiff_t i;
+        for (i = stars - 1; i > -1; i += -1) {
             sb_putc(b, '*');
+            if (i < 16 && pc[i]) {
+                sb_puts(b, "const");
+            }
         }
     }
 }
@@ -509,7 +564,7 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_VAARG: {
-            sb_puts(b, "va_arg(");
+            sb_puts(b, (g_c_mod ? "__builtin_va_arg(" : "va_arg("));
             emit_expr(b, e->lhs, 0);
             sb_puts(b, ", ");
             emit_cast_typename(b, e->cast_type);
@@ -568,8 +623,12 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
         nd += 1;
         t = t->inner;
     }
+    int pc[16];
     int stars = 0;
     while (t->kind == TY_PTR) {
+        if (stars < 16) {
+            pc[stars] = t->is_const;
+        }
         stars += 1;
         t = t->inner;
     }
@@ -603,7 +662,7 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
             t = t->inner;
         }
         emit_type_quals(b, t);
-        sb_puts(b, base_cname(t->name));
+        emit_type_name(b, t);
         sb_puts(b, " (");
         size_t ai;
         for (ai = 0; ai < stars; ai += 1) {
@@ -633,12 +692,15 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
     if (self_struct != NULL && strcmp(t->name, self_struct) == 0) {
         sb_printf(b, "struct %s", base_cname(t->name));
     } else {
-        sb_puts(b, base_cname(t->name));
+        emit_type_name(b, t);
     }
     sb_putc(b, ' ');
-    size_t i;
-    for (i = 0; i < stars; i += 1) {
+    ptrdiff_t i;
+    for (i = stars - 1; i > -1; i += -1) {
         sb_putc(b, '*');
+        if (i < 16 && pc[i]) {
+            sb_puts(b, "const ");
+        }
     }
     if (t->is_restrict && stars > 0 && !g_std89) {
         sb_puts(b, "restrict ");
@@ -660,6 +722,9 @@ static void emit_block_body(StrBuf *b, Block *blk, int32_t ind);
 static void emit_simple_inline(StrBuf *b, Stmt *s);
 
 static int stmt_exits(Stmt *s) {
+    if (s->kind == ST_BLOCK) {
+        return s->body != NULL && s->body->n > 0 && stmt_exits(s->body->stmts[s->body->n - 1]);
+    }
     return s->kind == ST_RETURN || s->kind == ST_BREAK || s->kind == ST_CONTINUE || s->kind == ST_GOTO;
 }
 
@@ -694,9 +759,100 @@ static int step_is_negative(Expr *step) {
     return step != NULL && step->kind == EX_UNARY && step->op == TK_MINUS;
 }
 
+static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind);
+
+static int stmtexpr_complex(Expr *e) {
+    if (e == NULL || e->kind != EX_STMTEXPR) {
+        return 0;
+    }
+    size_t si;
+    for (si = 0; si < (e->xblock != NULL ? e->xblock->n : 0); si += 1) {
+        if (e->xblock->stmts[si]->kind != ST_EXPR) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void emit_stmtexpr_block(StrBuf *b, Expr *e, int32_t ind, const char *tail) {
+    indent(b, ind);
+    sb_puts(b, "{\n");
+    size_t si;
+    for (si = 0; si < (e->xblock != NULL ? e->xblock->n : 0); si += 1) {
+        emit_stmt(b, e->xblock->stmts[si], ind + 1);
+    }
+    if (e->lhs != NULL || tail != NULL) {
+        indent(b, ind + 1);
+        if (tail != NULL) {
+            sb_puts(b, tail);
+        }
+        if (e->lhs != NULL) {
+            emit_expr(b, e->lhs, 0);
+        } else {
+            sb_putc(b, '0');
+        }
+        sb_puts(b, ";\n");
+    }
+    indent(b, ind);
+    sb_puts(b, "}\n");
+}
+
+static int emit_expr_stmt_lowered(StrBuf *b, Expr *e, int32_t ind) {
+    if (e == NULL) {
+        return 0;
+    }
+    if (e->kind == EX_STMTEXPR && stmtexpr_complex(e)) {
+        emit_stmtexpr_block(b, e, ind, NULL);
+        return 1;
+    }
+    if (e->kind == EX_ASSIGN && e->op == TK_ASSIGN && stmtexpr_complex(e->rhs)) {
+        StrBuf tb = {0};
+        emit_expr(&tb, e->lhs, PR_UNARY);
+        sb_puts(&tb, " = ");
+        emit_stmtexpr_block(b, e->rhs, ind, tb.data);
+        sb_free(&tb);
+        return 1;
+    }
+    if (e->kind == EX_TERNARY && (stmtexpr_complex(e->lhs) || stmtexpr_complex(e->rhs))) {
+        indent(b, ind);
+        sb_puts(b, "if (");
+        emit_expr(b, e->cond, 0);
+        sb_puts(b, ") {\n");
+        if (!emit_expr_stmt_lowered(b, e->lhs, ind + 1)) {
+            indent(b, ind + 1);
+            emit_expr(b, e->lhs, 0);
+            sb_puts(b, ";\n");
+        }
+        indent(b, ind);
+        sb_puts(b, "} else {\n");
+        if (!emit_expr_stmt_lowered(b, e->rhs, ind + 1)) {
+            indent(b, ind + 1);
+            emit_expr(b, e->rhs, 0);
+            sb_puts(b, ";\n");
+        }
+        indent(b, ind);
+        sb_puts(b, "}\n");
+        return 1;
+    }
+    return 0;
+}
+
 static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
     switch (s->kind) {
         case ST_VAR: {
+            if (stmtexpr_complex(s->init)) {
+                indent(b, ind);
+                if (s->is_const) {
+                    sb_puts(b, "const ");
+                }
+                emit_var_decl(b, s->type, s->name, NULL);
+                sb_puts(b, ";\n");
+                StrBuf tl = {0};
+                sb_printf(&tl, "%s = ", s->name);
+                emit_stmtexpr_block(b, s->init, ind, tl.data);
+                sb_free(&tl);
+                return;
+            }
             indent(b, ind);
             if (s->is_static) {
                 sb_puts(b, "static ");
@@ -713,6 +869,14 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             break;
         }
         case ST_ASSIGN: {
+            if (s->op == TK_ASSIGN && stmtexpr_complex(s->rhs)) {
+                StrBuf ta = {0};
+                emit_expr(&ta, s->lhs, PR_UNARY);
+                sb_puts(&ta, " = ");
+                emit_stmtexpr_block(b, s->rhs, ind, ta.data);
+                sb_free(&ta);
+                return;
+            }
             indent(b, ind);
             emit_expr(b, s->lhs, 0);
             sb_printf(b, " %s ", op_cstr(s->op));
@@ -721,12 +885,19 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             break;
         }
         case ST_EXPR: {
+            if (emit_expr_stmt_lowered(b, s->expr, ind)) {
+                return;
+            }
             indent(b, ind);
             emit_expr(b, s->expr, 0);
             sb_puts(b, ";\n");
             break;
         }
         case ST_RETURN: {
+            if (g_defers.len == 0 && stmtexpr_complex(s->expr)) {
+                emit_stmtexpr_block(b, s->expr, ind, "return ");
+                return;
+            }
             if (g_defers.len > 0) {
                 int void_ret = g_cur_ret->kind == TY_NAME && strcmp(g_cur_ret->name, "void") == 0;
                 if (s->expr != NULL && !void_ret) {
@@ -963,6 +1134,14 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             sb_puts(b, "}\n");
             break;
         }
+        case ST_BLOCK: {
+            indent(b, ind);
+            sb_puts(b, "{\n");
+            emit_block_body(b, s->body, ind + 1);
+            indent(b, ind);
+            sb_puts(b, "}\n");
+            break;
+        }
         case ST_SWITCH: {
             indent(b, ind);
             sb_puts(b, "switch (");
@@ -1130,6 +1309,27 @@ static void emit_func(StrBuf *b, Func *f) {
     sb_puts(b, "}\n");
 }
 
+static void emit_struct_fields(StrBuf *b, Decl *d, int32_t ind) {
+    size_t i;
+    for (i = 0; i < d->nfields; i += 1) {
+        if (d->fields[i].anon != NULL) {
+            Decl *sub = d->fields[i].anon;
+            indent(b, ind);
+            sb_printf(b, "%s {\n", (sub->kind == DL_UNION ? "union" : "struct"));
+            emit_struct_fields(b, sub, ind + 1);
+            indent(b, ind);
+            sb_puts(b, "};\n");
+            continue;
+        }
+        indent(b, ind);
+        emit_var_decl(b, d->fields[i].type, d->fields[i].name, d->name);
+        if (d->fields[i].bit_width >= 0) {
+            sb_printf(b, " : %d", d->fields[i].bit_width);
+        }
+        sb_puts(b, ";\n");
+    }
+}
+
 static void emit_decl(StrBuf *b, Decl *d) {
     switch (d->kind) {
         case DL_IMPORT: {
@@ -1173,17 +1373,12 @@ static void emit_decl(StrBuf *b, Decl *d) {
         }
         case DL_STRUCT:
         case DL_UNION: {
-            if (d->nfields > 0) {
+            if (d->is_anon) {
+                return;
+            }
+            if (d->nfields > 0 || d->is_def) {
                 sb_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
-                size_t i;
-                for (i = 0; i < d->nfields; i += 1) {
-                    indent(b, 1);
-                    emit_var_decl(b, d->fields[i].type, d->fields[i].name, d->name);
-                    if (d->fields[i].bit_width >= 0) {
-                        sb_printf(b, " : %d", d->fields[i].bit_width);
-                    }
-                    sb_puts(b, ";\n");
-                }
+                emit_struct_fields(b, d, 1);
                 sb_puts(b, "};\n");
             }
             size_t j;
@@ -1219,6 +1414,7 @@ void emit_module_c(Module *m, StrBuf *out) {
     g_needs_stdint = 0;
     g_needs_stddef = 0;
     g_in_header = m->is_header;
+    g_c_mod = m->is_c;
     StrBuf body = {0};
     int prev_import = 0;
     int fwd_done = 0;
@@ -1232,24 +1428,13 @@ void emit_module_c(Module *m, StrBuf *out) {
         if (i > 0 && !(is_import && prev_import)) {
             sb_putc(&body, '\n');
         }
-        if (!fwd_done && (d->kind == DL_STRUCT || d->kind == DL_UNION) && (d->nfields > 0 || d->is_fwd)) {
+        if (!fwd_done && !g_c_mod && (d->kind == DL_STRUCT || d->kind == DL_UNION) && d->nfields > 0) {
             fwd_done = 1;
             size_t j;
             for (j = 0; j < m->ndecls; j += 1) {
                 Decl *d2 = m->decls[j];
-                if ((d2->kind == DL_STRUCT || d2->kind == DL_UNION) && (d2->nfields > 0 || d2->is_fwd) && d2->ntparams == 0) {
-                    int dup = 0;
-                    size_t j2;
-                    for (j2 = 0; j2 < j; j2 += 1) {
-                        Decl *d3 = m->decls[j2];
-                        if ((d3->kind == DL_STRUCT || d3->kind == DL_UNION) && (d3->nfields > 0 || d3->is_fwd) && d3->ntparams == 0 && strcmp(d3->name, d2->name) == 0) {
-                            dup = 1;
-                            break;
-                        }
-                    }
-                    if (!dup) {
-                        sb_printf(&body, "typedef %s %s %s;\n", (d2->kind == DL_UNION ? "union" : "struct"), d2->name, d2->name);
-                    }
+                if ((d2->kind == DL_STRUCT || d2->kind == DL_UNION) && d2->nfields > 0 && d2->ntparams == 0) {
+                    sb_printf(&body, "typedef %s %s %s;\n", (d2->kind == DL_UNION ? "union" : "struct"), d2->name, d2->name);
                 }
             }
             sb_putc(&body, '\n');

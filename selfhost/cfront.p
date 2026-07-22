@@ -12,6 +12,8 @@ import "../stl/map.ph"
 # set.ph; bodies come from the implement in sema.p). StrMap<*Type> is generic -> declare.
 declare StrMap<*Type>
 declare StrMap<i64>
+declare StrMap<*char>
+implement StrMap<*char>
 
 # C tokens (kind + text); punctuators store the string ("+", "==", ";")
 enum CtKind:
@@ -98,11 +100,21 @@ struct Cx:
                 self->adv()
                 continue
             pos: Pos = self->here()
-            # wide/unicode literal prefix (L'..' L".." u'..' U".."): consumes
-            # the prefix and treats it as a normal literal (wchar_t ~ int in the backend)
+            # wide/unicode literal prefix (L'..' L".." u'..' U".."): the prefix
+            # is KEPT in the token text — `wchar_t s[] = L"..."` must re-emit the
+            # L or the initializer changes type (array of char vs wchar_t)
             if (c == 'L' or c == 'u' or c == 'U') and self->i + 1 < self->n and (self->s[self->i + 1] == '\'' or self->s[self->i + 1] == '"'):
-                self->adv()
-                c = self->s[self->i]
+                wst: usize = self->i
+                self->adv()                    # prefix
+                wq: char = self->s[self->i]
+                self->adv()                    # opening quote
+                while self->i < self->n and self->s[self->i] != wq:
+                    if self->s[self->i] == '\\':
+                        self->adv()
+                    self->adv()
+                self->adv()                    # closing quote
+                self->push(CT_STR if wq == '"' else CT_CHAR, pos, self->slice(wst))
+                continue
             # identifier / keyword
             if is_alpha_(c):
                 start: usize = self->i
@@ -277,6 +289,14 @@ struct Cp:
     enum_signed: StrSet      # enum tags with a negative enumerator (-> int)
     fwd_tags: StrSet         # struct/union tags already declared (fwd or def):
                              #   a bodyless `struct X` emits ONE forward decl
+    def_tags: StrSet         # tags DEFINED with a body: a redefinition in an
+                             #   inner scope shadows -> renamed (T -> T__sN)
+    tag_alias: StrMap<*char> # active tag renames (scoped; undone at block exit)
+    alias_names: **char      # undo stack for tag_alias: original tag +
+    alias_prevs: **char      #   previous alias value (None = none)
+    nalias: i32
+    ca_n: i32
+    ca_p: i32
     out_decls: *Vec<*Decl>   # structs/enums found are emitted here
     anon: i32                # counter for anonymous tags
     saw_const: bool          # skip_gnu saw 'const' (read by parse_base_type)
@@ -403,24 +423,45 @@ struct Cp:
                 if tag == None:
                     tag = arena_printf(self->a, "__anon%d", self->anon)
                     self->anon += 1
+                elif self->def_tags.has(tag):
+                    # redefinition in an inner scope: C tags are block-scoped
+                    # (`struct T` in a function shadows the file-scope one), but
+                    # our decls are hoisted — rename and alias until block exit
+                    renamed: const *char = arena_printf(self->a, "%s__s%d", tag, self->anon)
+                    self->anon += 1
+                    self->alias_names = vec_grow(self->alias_names, self->nalias, &self->ca_n, sizeof(*self->alias_names))
+                    self->alias_prevs = vec_grow(self->alias_prevs, self->nalias, &self->ca_p, sizeof(*self->alias_prevs))
+                    self->alias_names[self->nalias] = (*char)(tag)
+                    self->alias_prevs[self->nalias] = self->tag_alias.get_or(tag, None)
+                    self->nalias += 1
+                    self->tag_alias.put(tag, (*char)(renamed))
+                    tag = renamed
                 d: *Decl = self->parse_struct_body(tag, is_union)
                 self->out_decls.push(d)
+                self->def_tags.add(tag)
                 self->fwd_tags.add(tag)
-            elif tag != None and not self->fwd_tags.has(tag):
-                # bodyless `struct X` (a forward like glibc's `struct _IO_marker;`
-                # or a field/param referencing an opaque tag): emit ONE forward
-                # decl so the C backend's upfront typedef pass covers the name.
-                fd: *Decl = arena_alloc(self->a, sizeof(Decl))
-                fd->kind = DL_UNION if is_union else DL_STRUCT
-                fd->name = tag
-                fd->is_fwd = True
-                fd->pos = self->pk()->pos
-                self->out_decls.push(fd)
-                self->fwd_tags.add(tag)
+            elif tag != None:
+                al: *char = self->tag_alias.get_or(tag, None)
+                if al != None:
+                    tag = al   # reference inside a scope that renamed this tag
+                if not self->fwd_tags.has(tag):
+                    # bodyless `struct X` (a forward like glibc's `struct _IO_marker;`
+                    # or a field/param referencing an opaque tag): emit ONE forward
+                    # decl so the C backend's upfront typedef pass covers the name.
+                    fd: *Decl = arena_alloc(self->a, sizeof(Decl))
+                    fd->kind = DL_UNION if is_union else DL_STRUCT
+                    fd->name = tag
+                    fd->is_fwd = True
+                    fd->pos = self->pk()->pos
+                    self->out_decls.push(fd)
+                    self->fwd_tags.add(tag)
             # does NOT register the tag as a type name: in C, tags live in
             # their own namespace (a function and a struct can have the SAME name;
-            # only `struct X` refers to the tag)
-            return self->base_name(tag)
+            # only `struct X` refers to the tag). The SPELLING is preserved via
+            # tag_kind — the C backend re-emits `struct X`, never a bare `X`.
+            tt: *Type = self->base_name(tag)
+            tt->tag_kind = TAG_UNION if is_union else TAG_STRUCT
+            return tt
         if strcmp(w, "enum") == 0:
             self->adv()
             self->skip_gnu()
@@ -466,17 +507,27 @@ struct Cp:
         uns: bool = word_in(n, "unsigned")
         longs: i32 = word_count(n, "long")
         if word_in(n, "double"):
-            return "double"
+            # `long double` is a DISTINCT type (x87 80-bit on x86-64): collapsing
+            # it to double breaks the ABI (e.g. printf %Lf reads garbage)
+            return "long double" if longs > 0 else "double"
         if word_in(n, "float"):
             return "float"
         if word_in(n, "void"):
             return "void"
+        # DISTINCT C types must stay distinct (e.g. for _Generic): long !=
+        # long long, char != signed char — even when the width coincides.
+        # u8/u16/i8 are used where the C type identity is the same typedef
+        # (uint8_t IS unsigned char, int8_t IS signed char).
         if word_in(n, "char"):
-            return "u8" if uns else "char"
+            if uns:
+                return "u8"
+            return "i8" if word_in(n, "signed") else "char"
         if word_in(n, "short"):
             return "u16" if uns else "short"
-        if longs >= 1:
-            return "u64" if uns else "long"
+        if longs >= 2:
+            return "unsigned long long" if uns else "long long"
+        if longs == 1:
+            return "unsigned long" if uns else "long"
         # plain int/signed/unsigned
         return "unsigned" if uns else "int"
 
@@ -484,8 +535,14 @@ struct Cp:
         t: *Type = base
         while self->is_punct("*"):
             self->adv()
+            # const after '*' qualifies the POINTER (int * const != const int *):
+            # recorded on the TY_PTR node so _Generic/casts keep them distinct
+            sc: bool = self->saw_const
+            self->saw_const = False
             self->skip_gnu()  # const/volatile/__restrict after '*'
             t = ty_ptr(self->a, t)
+            t->is_const = self->saw_const
+            self->saw_const = sc
         return t
 
     # does the next token start a pointer-to-function declarator? pattern
@@ -493,7 +550,27 @@ struct Cp:
     static def is_fnptr_ahead(self: *Cp) -> bool:
         if not self->is_punct("("):
             return False
-        return strcmp(self->pk1()->text, "*") == 0
+        if strcmp(self->pk1()->text, "*") == 0:
+            return True
+        # GNU noise before the star: ( __attribute__((...)) * ). Scan past the
+        # attribute's parenthesized group and require the '*' — a lookahead
+        # that does not consume (the declarator parser skip_gnu()s for real).
+        if self->pk1()->kind == CT_ID and strcmp(self->pk1()->text, "__attribute__") == 0:
+            k: usize = self->i + 2      # token after '(' '__attribute__'
+            if k >= self->nt or self->t[k].kind != CT_PUNCT or strcmp(self->t[k].text, "(") != 0:
+                return False
+            depth = 0
+            while k < self->nt:
+                if self->t[k].kind == CT_PUNCT and strcmp(self->t[k].text, "(") == 0:
+                    depth += 1
+                elif self->t[k].kind == CT_PUNCT and strcmp(self->t[k].text, ")") == 0:
+                    depth -= 1
+                    if depth == 0:
+                        k += 1
+                        break
+                k += 1
+            return k < self->nt and self->t[k].kind == CT_PUNCT and strcmp(self->t[k].text, "*") == 0
+        return False
 
     # pointer-to-function declarator starting from '(' — compat: delegates to
     # the full recursive declarator (params capture discarded)
@@ -520,6 +597,21 @@ struct Cp:
             self->skip_gnu()
             ty = ty_ptr(self->a, ty)
         if self->is_punct("("):
+            # '(' here is either a GROUPED declarator — (*name), (name) — or a
+            # PARAMETER LIST of an abstract function declarator: `int ()`,
+            # `int (int x)` (C11 6.7.6.3p8: such a parameter decays to a
+            # pointer to function). It is a parameter list when what follows
+            # starts a type (or is ')' / '...').
+            nx2: *CTok = self->pk1()
+            starts_params: bool = False
+            if nx2->kind == CT_PUNCT and (strcmp(nx2->text, ")") == 0 or strcmp(nx2->text, "...") == 0):
+                starts_params = True
+            elif nx2->kind == CT_ID and (self->is_type_kw(nx2->text) or strcmp(nx2->text, "struct") == 0 or strcmp(nx2->text, "union") == 0 or strcmp(nx2->text, "enum") == 0 or strcmp(nx2->text, "const") == 0 or strcmp(nx2->text, "volatile") == 0 or self->types.has(nx2->text)):
+                starts_params = True
+            if starts_params:
+                self->skip_parens()   # signature detail not needed: emits as ()
+                *out_name = ""
+                return ty_func(self->a, ty)
             start: usize = self->i
             self->adv()
             depth = 1
@@ -600,6 +692,10 @@ struct Cp:
                 pty = self->parse_fnptr(pty, &fpn)
                 if fpn != None:
                     pname = fpn
+                # abstract FUNCTION-type parameter — `int ()`, `int (int x)` —
+                # decays to a pointer to function (C11 6.7.6.3p8)
+                if pty->kind == TY_FUNC:
+                    pty = ty_ptr(self->a, pty)
             elif self->pk()->kind == CT_ID:
                 pname = self->adv()->text
                 # FUNCTION-type parameter: T name(params) — decays to a
@@ -696,8 +792,17 @@ struct Cp:
                     fields.push(fp)
                 elif fty != None and fty->kind == TY_NAME and fty->name != None and strncmp(fty->name, "__anon", 6) == 0 and self->is_punct(";"):
                     # anonymous member (struct/union without a declarator): field
-                    # with name "" — the layout incorporates it and lookup descends into it
+                    # with name "" — the layout incorporates it and lookup descends
+                    # into it. The nested definition (just pushed to out_decls) is
+                    # linked on the field: the C backend inlines it at this position.
                     fa: Field = {"", fty, self->pk()->pos, -1}
+                    if fty->kind == TY_NAME:
+                        for ai in range(self->out_decls.len - 1, -1, -1):
+                            ad: *Decl = self->out_decls.get(ai)
+                            if (ad->kind == DL_STRUCT or ad->kind == DL_UNION) and strcmp(ad->name, fty->name) == 0:
+                                fa.anon = ad
+                                ad->is_anon = True
+                                break
                     fields.push(fa)
             while self->eat(",")
             if not self->eat(";"):
@@ -710,6 +815,7 @@ struct Cp:
             .name = tag
             .fields = fields.data
             .nfields = fields.len
+            .is_def = True   # has a body (even `struct X {}`: GNU empty struct)
         return d
 
     # evaluator for CONSTANT integer expressions over the tokens (for enum
@@ -1029,6 +1135,7 @@ def c_postfix(p: *Cp) -> *Expr
 def c_postfix_from(p: *Cp, e: *Expr) -> *Expr
 def c_peek_is_type(p: *Cp) -> bool
 def c_block(p: *Cp) -> *Block
+def cp_alias_restore(p: *Cp, mark: i32)
 def c_stmt_into(p: *Cp, out: *Vec<*Stmt>)
 def c_decl_into(p: *Cp, out: *Vec<*Stmt>)
 def c_simple_stmt(p: *Cp) -> *Stmt
@@ -1299,6 +1406,9 @@ def c_peek_is_type(p: *Cp) -> bool:
     w: const *char = nx->text
     if p->is_type_kw(w) or strcmp(w, "struct") == 0 or strcmp(w, "union") == 0 or strcmp(w, "enum") == 0 or strcmp(w, "const") == 0:
         return True
+    # a cast may open with GNU noise: ((__attribute__((noinline)) int(*)(void))fp)
+    if strcmp(w, "__attribute__") == 0 or strcmp(w, "__extension__") == 0 or strcmp(w, "volatile") == 0:
+        return True
     return p->types.has(w)
 
 def c_binary(p: *Cp, minprec: i32) -> *Expr:
@@ -1450,15 +1560,23 @@ def c_init_elem(p: *Cp, out: *Vec<*Expr>):
     out->push(c_initializer(p))
 
 # ---------- statements ----------
+# undoes scoped struct-tag renames registered after `mark` (block exit)
+def cp_alias_restore(p: *Cp, mark: i32):
+    while p->nalias > mark:
+        p->nalias -= 1
+        p->tag_alias.put(p->alias_names[p->nalias], p->alias_prevs[p->nalias])
+
 def c_block(p: *Cp) -> *Block:
     v: Vec<*Stmt>
     v.init()
+    amark: i32 = p->nalias
     if p->eat("{"):
         while not p->is_punct("}") and p->pk()->kind != CT_EOF:
             c_stmt_into(p, &v)
         p->expect_punct("}")
     else:
         c_stmt_into(p, &v)
+    cp_alias_restore(p, amark)
     b: *Block = arena_alloc(p->a, sizeof(Block))
     b->stmts = v.data
     b->n = v.len
@@ -1520,7 +1638,9 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
     if p->is_kw("typedef"):
         c_typedef(p)
         return
-    # case V:  /  default:  (markers inside a switch)
+    # case V:  /  default:  (markers inside a switch). Like `label:`, the marker
+    # PREFIXES the following statement — parse it into the same block, or the
+    # body of a braceless `switch (x) case 0: stmt;` would escape the switch.
     if p->is_kw("case"):
         p->adv()
         cv: *Expr = c_ternary(p)   # the case's constant expression
@@ -1528,11 +1648,15 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         cs: *Stmt = st_new(p->a, ST_CASE, pos)
         cs->expr = cv
         out.push(cs)
+        if not p->is_punct("}"):
+            c_stmt_into(p, out)
         return
     if p->is_kw("default"):
         p->adv()
         p->expect_punct(":")
         out.push(st_new(p->a, ST_CASE, pos))  # expr=None => default
+        if not p->is_punct("}"):
+            c_stmt_into(p, out)
         return
     if p->is_kw("switch"):
         p->adv()
@@ -1564,11 +1688,22 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         out.push(gs)
         return
     if p->is_punct("{"):
-        # nested block: inline (block scope ignored in the slice)
+        # nested block: a REAL scope (ST_BLOCK) — an inner `int s;` must not
+        # collide with a sibling `s`, and local struct tags shadow outer ones
         p->adv()
+        bs: *Stmt = st_new(p->a, ST_BLOCK, pos)
+        bv: Vec<*Stmt>
+        bv.init()
+        amark: i32 = p->nalias
         while not p->is_punct("}") and p->pk()->kind != CT_EOF:
-            c_stmt_into(p, out)
+            c_stmt_into(p, &bv)
         p->expect_punct("}")
+        cp_alias_restore(p, amark)
+        bb: *Block = arena_alloc(p->a, sizeof(Block))
+        bb->stmts = bv.data
+        bb->n = bv.len
+        bs->body = bb
+        out.push(bs)
         return
     if p->is_kw("return"):
         p->adv()
@@ -1946,6 +2081,7 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> 
     m: *Module = arena_alloc(a, sizeof(Module))
     m->path = arena_strdup(a, file)
     m->is_header = False
+    m->is_c = True
     decls: Vec<*Decl>
     decls.init()
     cp.out_decls = &decls
@@ -1958,4 +2094,8 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> 
     cp.types.deinit()
     cp.typedefs.deinit()
     cp.fwd_tags.deinit()
+    cp.def_tags.deinit()
+    cp.tag_alias.deinit()
+    free(cp.alias_names)
+    free(cp.alias_prevs)
     return m

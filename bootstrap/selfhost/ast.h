@@ -8,6 +8,8 @@ typedef enum { TK_EOF = 0, TK_NEWLINE, TK_INDENT, TK_DEDENT, TK_IDENT, TK_NUMBER
 
 typedef enum { TY_NAME = 0, TY_PTR, TY_ARRAY, TY_FUNC } TypeKind;
 
+typedef enum { TAG_NONE = 0, TAG_STRUCT, TAG_UNION, TAG_ENUM } TagKind;
+
 typedef struct Type Type;
 typedef struct Expr Expr;
 typedef struct Block Block;
@@ -25,6 +27,7 @@ struct Type {
     int is_const;
     int is_volatile;
     int is_restrict;
+    TagKind tag_kind;
     const char *name;
     struct Type *inner;
     Expr *arr_len;
@@ -57,7 +60,7 @@ struct Block {
     int32_t n;
 };
 
-typedef enum { ST_VAR = 0, ST_ASSIGN, ST_EXPR, ST_RETURN, ST_IF, ST_WHILE, ST_DO, ST_FOR, ST_MATCH, ST_BREAK, ST_CONTINUE, ST_GOTO, ST_LABEL, ST_DEFER, ST_WITH, ST_CFOR, ST_SWITCH, ST_CASE } StmtKind;
+typedef enum { ST_VAR = 0, ST_ASSIGN, ST_EXPR, ST_RETURN, ST_IF, ST_WHILE, ST_DO, ST_FOR, ST_MATCH, ST_BREAK, ST_CONTINUE, ST_GOTO, ST_LABEL, ST_DEFER, ST_WITH, ST_CFOR, ST_SWITCH, ST_CASE, ST_BLOCK } StmtKind;
 
 struct MatchCase {
     Expr **vals;
@@ -131,6 +134,7 @@ struct Field {
     Type *type;
     Pos pos;
     int32_t bit_width;
+    Decl *anon;
 };
 
 struct EnumItem {
@@ -148,6 +152,8 @@ struct Decl {
     const char *import_path;
     int is_include;
     int is_fwd;
+    int is_def;
+    int is_anon;
     const char *name;
     Type *type;
     Expr *init;
@@ -169,6 +175,7 @@ struct Module {
     const char *path;
     const char *name;
     int is_header;
+    int is_c;
     Decl **decls;
     int32_t ndecls;
 };

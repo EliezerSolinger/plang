@@ -1731,6 +1731,9 @@ static def check_stmt(s: *Sema, st: *Stmt):
             check_defer_body(s, st->body, 0, 0)
             check_block(s, st->body)
             return
+        case ST_BLOCK:
+            check_block(s, st->body)
+            return
         case _:
             return
 

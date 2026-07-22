@@ -85,9 +85,9 @@ def arith_rank(t: *Type) -> i32:
         return 6
     if strcmp(n, "float") == 0 or strcmp(n, "f32") == 0:
         return 5
-    if strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0:
+    if strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "unsigned long") == 0 or strcmp(n, "unsigned long long") == 0:
         return 4
-    if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "isize") == 0:
+    if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "isize") == 0 or strcmp(n, "long long") == 0:
         return 3
     if strcmp(n, "unsigned") == 0 or strcmp(n, "u32") == 0:
         return 2
@@ -470,7 +470,7 @@ struct Qb:
         if t->kind == TY_PTR or t->kind == TY_ARRAY or t->kind == TY_FUNC:
             return 'l'
         n: const *char = t->name
-        if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "isize") == 0 or strcmp(n, "size_t") == 0 or strcmp(n, "ptrdiff_t") == 0 or strcmp(n, "long long") == 0:
+        if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "isize") == 0 or strcmp(n, "size_t") == 0 or strcmp(n, "ptrdiff_t") == 0 or strcmp(n, "long long") == 0 or strcmp(n, "unsigned long") == 0 or strcmp(n, "unsigned long long") == 0:
             return 'l'
         if strcmp(n, "double") == 0 or strcmp(n, "f64") == 0:
             return 'd'
@@ -1230,7 +1230,11 @@ struct Qb:
         if t == None or t->kind != TY_NAME or t->name == None:
             return True
         n: const *char = t->name
-        return not (strcmp(n, "u8") == 0 or strcmp(n, "u16") == 0 or strcmp(n, "u32") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "unsigned") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "bool") == 0)
+        # any C spelling that STARTS with `unsigned` ("unsigned", "unsigned long",
+        # "unsigned long long", "unsigned char"...) is unsigned
+        if strncmp(n, "unsigned", 8) == 0:
+            return False
+        return not (strcmp(n, "u8") == 0 or strcmp(n, "u16") == 0 or strcmp(n, "u32") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "bool") == 0)
 
     # signedness of an operand (from its declared/ingested type; an unprototyped
     # call has no type and defaults to signed, like C's implicit int)
@@ -2450,6 +2454,10 @@ struct Qb:
                 sb_printf(self->out, "@l%d\n", dg)
             case ST_SWITCH:
                 self->emit_switch(s)
+            case ST_BLOCK:
+                # bare block (C front end): QBE has flat per-function vars, so
+                # the scope is emitted inline (shadowing not supported here)
+                self->emit_block(s->body)
             case ST_CASE:
                 # case label (may be nested in a loop — Duff's device);
                 # the label was assigned by the owning switch's dispatch

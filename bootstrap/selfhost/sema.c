@@ -3454,6 +3454,10 @@ static void check_stmt(Sema *s, Stmt *st) {
             check_block(s, st->body);
             return;
         }
+        case ST_BLOCK: {
+            check_block(s, st->body);
+            return;
+        }
         default: {
             return;
         }
@@ -3876,13 +3880,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_2114_9 = d;
-            __with_2114_9->kind = DL_STRUCT;
-            __with_2114_9->name = si0->name;
-            __with_2114_9->fields = NULL;
-            __with_2114_9->nfields = 0;
-            __with_2114_9->methods = bodies0;
-            __with_2114_9->nmethods = nb;
+            Decl *__with_2117_9 = d;
+            __with_2117_9->kind = DL_STRUCT;
+            __with_2117_9->name = si0->name;
+            __with_2117_9->fields = NULL;
+            __with_2117_9->nfields = 0;
+            __with_2117_9->methods = bodies0;
+            __with_2117_9->nmethods = nb;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3912,9 +3916,9 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         inst->name = fmangled;
         inst->cname = fmangled;
         {
-            Decl *__with_2144_9 = d;
-            __with_2144_9->kind = DL_FUNC;
-            __with_2144_9->func = inst;
+            Decl *__with_2147_9 = d;
+            __with_2147_9->kind = DL_FUNC;
+            __with_2147_9->func = inst;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3946,13 +3950,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             protos[i] = clone_func(s, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_2170_9 = d;
-            __with_2170_9->kind = DL_STRUCT;
-            __with_2170_9->name = mangled;
-            __with_2170_9->fields = fields;
-            __with_2170_9->nfields = tpl->nfields;
-            __with_2170_9->methods = protos;
-            __with_2170_9->nmethods = tpl->nmethods;
+            Decl *__with_2173_9 = d;
+            __with_2173_9->kind = DL_STRUCT;
+            __with_2173_9->name = mangled;
+            __with_2173_9->fields = fields;
+            __with_2173_9->nfields = tpl->nfields;
+            __with_2173_9->methods = protos;
+            __with_2173_9->nmethods = tpl->nmethods;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3969,13 +3973,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         bodies[i] = clone_func(s, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_2189_5 = d;
-        __with_2189_5->kind = DL_STRUCT;
-        __with_2189_5->name = mangled;
-        __with_2189_5->fields = NULL;
-        __with_2189_5->nfields = 0;
-        __with_2189_5->methods = bodies;
-        __with_2189_5->nmethods = tpl->nmethods;
+        Decl *__with_2192_5 = d;
+        __with_2192_5->kind = DL_STRUCT;
+        __with_2192_5->name = mangled;
+        __with_2192_5->fields = NULL;
+        __with_2192_5->nfields = 0;
+        __with_2192_5->methods = bodies;
+        __with_2192_5->nmethods = tpl->nmethods;
     }
     register_decl(s, m, d, check_bodies);
 }
@@ -4175,13 +4179,13 @@ static void inject_defines(Sema *s, Cc *cc, Module *m) {
         }
         Decl *dc = arena_alloc(s->a, sizeof(Decl));
         {
-            Decl *__with_2377_9 = dc;
-            __with_2377_9->kind = DL_VAR;
-            __with_2377_9->pos = zp;
-            __with_2377_9->name = name;
-            __with_2377_9->is_const = 1;
-            __with_2377_9->is_static = 1;
-            __with_2377_9->init = ini;
+            Decl *__with_2380_9 = dc;
+            __with_2380_9->kind = DL_VAR;
+            __with_2380_9->pos = zp;
+            __with_2380_9->name = name;
+            __with_2380_9->is_const = 1;
+            __with_2380_9->is_static = 1;
+            __with_2380_9->init = ini;
         }
         nd[np] = dc;
         np += 1;

@@ -100,11 +100,21 @@ enum TypeKind:
     TY_ARRAY
     TY_FUNC    # function type (C): inner = return type; params ignored
 
+# how a TY_NAME was SPELLED in C source: `struct X` / `union X` / `enum X`.
+# C keeps tags in their own namespace, so the C backend must reproduce the
+# spelling — a bare `X` may mean something else entirely (variable, function).
+enum TagKind:
+    TAG_NONE = 0
+    TAG_STRUCT
+    TAG_UNION
+    TAG_ENUM
+
 struct Type:
     kind: TypeKind
-    is_const: bool     # meaningful on the TY_NAME node
+    is_const: bool     # TY_NAME: const base; TY_PTR: const POINTER (int * const)
     is_volatile: bool  # C 'volatile' qualifier (TY_NAME)
     is_restrict: bool  # C 'restrict' qualifier (on pointer)
+    tag_kind: TagKind  # TY_NAME spelled `struct X`/`union X`/`enum X` in C source
     name: const *char  # TY_NAME: "int", "unsigned int", "Point"...
     inner: *Type       # TY_PTR / TY_ARRAY
     arr_len: *Expr     # TY_ARRAY (None = "[]")
@@ -181,6 +191,8 @@ enum StmtKind:
     ST_CFOR    # C's for(init; cond; post) — faithful (not lowered)
     ST_SWITCH  # C's switch (faithful, with fallthrough): subject + body w/ ST_CASE
     ST_CASE    # case/default marker inside a switch: expr=value (None=default)
+    ST_BLOCK   # bare `{ ... }` (C front end): real block scope — inner decls
+               #   must not collide with siblings (body=Block)
 
 struct MatchCase:
     vals: **Expr   # None/0 if default
@@ -263,6 +275,8 @@ struct Field:
     type: *Type
     pos: Pos
     bit_width: i32   # bitfield width; -1 = normal field (0 = `:0`)
+    anon: *Decl      # C11 anonymous member (name ""): the nested struct/union
+                     #   definition, inlined at this position by the C backend
 
 struct EnumItem:
     name: const *char
@@ -289,6 +303,10 @@ struct Decl:
     # DL_STRUCT/DL_UNION (C front end)
     is_fwd: bool             # bodyless forward (`struct X;`): needs the upfront
                              #   typedef, but has no definition to emit
+    is_def: bool             # definition WITH a body (even if zero fields —
+                             #   GNU empty struct): the body must be emitted
+    is_anon: bool            # C11 anonymous member definition: inlined at its
+                             #   field position, never emitted standalone
     # DL_VAR (global, includes const)
     name: const *char
     type: *Type
@@ -313,6 +331,8 @@ struct Module:
     path: const *char  # source file path
     name: const *char  # basename without extension
     is_header: bool    # .ph
+    is_c: bool         # produced by the C front end (c_parse): round-tripped C
+                       #   has no #include left, so va_arg etc. emit as builtins
     decls: **Decl
     ndecls: i32
 

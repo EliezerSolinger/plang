@@ -80,10 +80,10 @@ int32_t arith_rank(Type *t) {
     if (strcmp(n, "float") == 0 || strcmp(n, "f32") == 0) {
         return 5;
     }
-    if (strcmp(n, "u64") == 0 || strcmp(n, "usize") == 0) {
+    if (strcmp(n, "u64") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "unsigned long") == 0 || strcmp(n, "unsigned long long") == 0) {
         return 4;
     }
-    if (strcmp(n, "long") == 0 || strcmp(n, "i64") == 0 || strcmp(n, "isize") == 0) {
+    if (strcmp(n, "long") == 0 || strcmp(n, "i64") == 0 || strcmp(n, "isize") == 0 || strcmp(n, "long long") == 0) {
         return 3;
     }
     if (strcmp(n, "unsigned") == 0 || strcmp(n, "u32") == 0) {
@@ -1097,7 +1097,7 @@ static char Qb_cls_of(Qb *self, Type *t) {
         return 'l';
     }
     const char *n = t->name;
-    if (strcmp(n, "long") == 0 || strcmp(n, "i64") == 0 || strcmp(n, "u64") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "isize") == 0 || strcmp(n, "size_t") == 0 || strcmp(n, "ptrdiff_t") == 0 || strcmp(n, "long long") == 0) {
+    if (strcmp(n, "long") == 0 || strcmp(n, "i64") == 0 || strcmp(n, "u64") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "isize") == 0 || strcmp(n, "size_t") == 0 || strcmp(n, "ptrdiff_t") == 0 || strcmp(n, "long long") == 0 || strcmp(n, "unsigned long") == 0 || strcmp(n, "unsigned long long") == 0) {
         return 'l';
     }
     if (strcmp(n, "double") == 0 || strcmp(n, "f64") == 0) {
@@ -2044,7 +2044,10 @@ static int Qb_is_signed(Qb *self, Type *t) {
         return 1;
     }
     const char *n = t->name;
-    return !(strcmp(n, "u8") == 0 || strcmp(n, "u16") == 0 || strcmp(n, "u32") == 0 || strcmp(n, "u64") == 0 || strcmp(n, "unsigned") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "bool") == 0);
+    if (strncmp(n, "unsigned", 8) == 0) {
+        return 0;
+    }
+    return !(strcmp(n, "u8") == 0 || strcmp(n, "u16") == 0 || strcmp(n, "u32") == 0 || strcmp(n, "u64") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "bool") == 0);
 }
 
 static int Qb_op_signed(Qb *self, Expr *e) {
@@ -3484,6 +3487,10 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
         }
         case ST_SWITCH: {
             Qb_emit_switch(self, s);
+            break;
+        }
+        case ST_BLOCK: {
+            Qb_emit_block(self, s->body);
             break;
         }
         case ST_CASE: {
