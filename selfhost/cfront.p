@@ -1,7 +1,7 @@
 # cfront.p — C frontend: tokenizes + parses C (preprocessed) -> plang AST.
 # See cfront.ph. Reuses the constructors from ast.ph and the TokKind ops from lexer.ph.
-import <string.h>
-import <stdlib.h>
+include <string.h>
+include <stdlib.h>
 import "cfront.ph"
 import "vecs.ph"
 import "../stl/vec.ph"
@@ -275,6 +275,8 @@ struct Cp:
     typedefs: StrMap<*Type>  # typedef name -> underlying type (resolved)
     enumvals: StrMap<i64>    # enum constant -> value (for ceval)
     enum_signed: StrSet      # enum tags with a negative enumerator (-> int)
+    fwd_tags: StrSet         # struct/union tags already declared (fwd or def):
+                             #   a bodyless `struct X` emits ONE forward decl
     out_decls: *Vec<*Decl>   # structs/enums found are emitted here
     anon: i32                # counter for anonymous tags
     saw_const: bool          # skip_gnu saw 'const' (read by parse_base_type)
@@ -403,6 +405,18 @@ struct Cp:
                     self->anon += 1
                 d: *Decl = self->parse_struct_body(tag, is_union)
                 self->out_decls.push(d)
+                self->fwd_tags.add(tag)
+            elif tag != None and not self->fwd_tags.has(tag):
+                # bodyless `struct X` (a forward like glibc's `struct _IO_marker;`
+                # or a field/param referencing an opaque tag): emit ONE forward
+                # decl so the C backend's upfront typedef pass covers the name.
+                fd: *Decl = arena_alloc(self->a, sizeof(Decl))
+                fd->kind = DL_UNION if is_union else DL_STRUCT
+                fd->name = tag
+                fd->is_fwd = True
+                fd->pos = self->pk()->pos
+                self->out_decls.push(fd)
+                self->fwd_tags.add(tag)
             # does NOT register the tag as a type name: in C, tags live in
             # their own namespace (a function and a struct can have the SAME name;
             # only `struct X` refers to the tag)
@@ -658,7 +672,6 @@ struct Cp:
                             fdims[fndim] = fd
                             fndim += 1
                     if bad_dim:
-                        fk0: i32
                         for fk0 in range(fndim):
                             fty = ty_ptr(self->a, fty)   # old fallback
                     else:
@@ -1424,7 +1437,6 @@ def c_init_elem(p: *Cp, out: *Vec<*Expr>):
         d->lhs = v
         if is_range:
             # range: expands into unit designators (same value)
-            k: i64
             for k in range(lo, hi + 1):
                 dk: *Expr = ex_new(p->a, EX_DESIG, pos)
                 ik: *Expr = ex_new(p->a, EX_NUMBER, pos)
@@ -1945,4 +1957,5 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> 
     m->ndecls = decls.len
     cp.types.deinit()
     cp.typedefs.deinit()
+    cp.fwd_tags.deinit()
     return m

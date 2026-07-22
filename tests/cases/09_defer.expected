@@ -1,0 +1,14 @@
+inicio
+dentro if
+defer if
+i=0
+defer loop 0
+defer loop 1
+i=2
+defer loop 2
+defer loop 3
+defer 2a
+defer 2b
+defer 1
+ret=20
+aloca=7

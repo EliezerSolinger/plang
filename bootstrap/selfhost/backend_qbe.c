@@ -43,7 +43,7 @@ Expr *merge_init(Expr *old, Expr *new) {
     m->pos = new->pos;
     int32_t tot = old->nargs + new->nargs;
     Expr **a = calloc((size_t)tot, sizeof(old->args[0]));
-    int32_t i;
+    size_t i;
     for (i = 0; i < old->nargs; i += 1) {
         a[i] = old->args[i];
     }
@@ -360,35 +360,6 @@ const char *fnum(const char *t) {
     memcpy(b, t, n);
     b[n] = '\0';
     return b;
-}
-
-const char *libc_ret_l[] = {"strchr", "strrchr", "strstr", "strpbrk", "strdup", "strndup", "strcat", "strcpy", "strncpy", "malloc", "calloc", "realloc", "memcpy", "memmove", "memset", "memchr", "fopen", "freopen", "fdopen", "getenv", "fgets", "strlen", "fread", "fwrite", "ftell", "strtol", "strtoll", "strtoul", "strtoull", "realpath", "getcwd", "dirname", "basename", "ctime", "asctime", "localtime", "gmtime", "time", "strerror", "setlocale", "tmpfile", "fmemopen", "mmap", "signal", "readdir", "opendir", NULL};
-
-const char *libc_math_d[] = {"sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "exp", "exp2", "expm1", "log", "log10", "log2", "log1p", "pow", "sqrt", "cbrt", "hypot", "ceil", "floor", "round", "trunc", "rint", "nearbyint", "fabs", "fmod", "remainder", "copysign", "fdim", "fmax", "fmin", "tgamma", "lgamma", "erf", "erfc", NULL};
-
-int is_libc_math_d(const char *name) {
-    int32_t i = 0;
-    while (libc_math_d[i] != NULL) {
-        if (strcmp(name, libc_math_d[i]) == 0) {
-            return 1;
-        }
-        i += 1;
-    }
-    return 0;
-}
-
-char libc_ret_cls(const char *name) {
-    if (strcmp(name, "strtod") == 0 || strcmp(name, "atof") == 0 || is_libc_math_d(name)) {
-        return 'd';
-    }
-    int32_t i = 0;
-    while (libc_ret_l[i] != NULL) {
-        if (strcmp(name, libc_ret_l[i]) == 0) {
-            return 'l';
-        }
-        i += 1;
-    }
-    return 'w';
 }
 
 char qpromote(char a, char b) {
@@ -990,6 +961,8 @@ static int Qb_is_valist(Qb *self, Type *t);
 
 static int Qb_is_signed(Qb *self, Type *t);
 
+static int Qb_op_signed(Qb *self, Expr *e);
+
 static QVar *Qb_find_var(Qb *self, const char *name);
 
 static int Qb_enum_lookup(Qb *self, const char *name, int64_t *out);
@@ -1143,7 +1116,7 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
     }
     switch (e->kind) {
         case EX_NUMBER: {
-            return (int64_t)strtoll(e->text, NULL, 0);
+            return (int64_t)strtoull(e->text, NULL, 0);
         }
         case EX_CHARLIT: {
             return (int64_t)Qb_charval(self, e->text);
@@ -1424,7 +1397,7 @@ static int32_t Qb_slayout(Qb *self, Decl *d, const char *fname, Type **out_ty, i
 static int32_t Qb_struct_size(Qb *self, Decl *d) {
     if (d->kind == DL_UNION) {
         int mx = 0;
-        int32_t u;
+        size_t u;
         for (u = 0; u < d->nfields; u += 1) {
             int32_t fs = Qb_size_of(self, d->fields[u].type);
             if (fs > mx) {
@@ -1572,7 +1545,7 @@ static int32_t Qb_data_fill(Qb *self, StrBuf *db, Type *ty, Expr **items, int32_
 
 static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr **items, int32_t nitems, int32_t *idx) {
     int has_desig = 0;
-    int32_t di;
+    size_t di;
     for (di = *idx; di < nitems; di += 1) {
         if (items[di] != NULL && items[di]->kind == EX_DESIG) {
             has_desig = 1;
@@ -1617,7 +1590,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
         }
         if (has_desig && *idx < nitems && items[*idx]->kind == EX_DESIG && items[*idx]->field != NULL) {
             const char *fname = items[*idx]->field;
-            int32_t ui;
+            size_t ui;
             for (ui = 0; ui < sd->nfields; ui += 1) {
                 if (strcmp(sd->fields[ui].name, fname) == 0) {
                     Expr *one = items[*idx]->lhs;
@@ -1741,7 +1714,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
 static int32_t Qb_data_fill_slots_arr(Qb *self, StrBuf *db, Type *ty, int32_t count, int32_t esz, Expr **items, int32_t nitems, int32_t *idx) {
     int cur = 0;
     int mx = 0;
-    int32_t k;
+    size_t k;
     for (k = *idx; k < nitems; k += 1) {
         Expr *it = items[k];
         if (it != NULL && it->kind == EX_DESIG && it->rhs != NULL) {
@@ -1796,13 +1769,13 @@ static int32_t Qb_data_fill_slots_arr(Qb *self, StrBuf *db, Type *ty, int32_t co
 static int32_t Qb_data_fill_slots_struct(Qb *self, StrBuf *db, Decl *sd, Expr **items, int32_t nitems, int32_t *idx) {
     Expr **slots = calloc((size_t)sd->nfields, sizeof(items[0]));
     int cur = 0;
-    int32_t k;
+    size_t k;
     for (k = *idx; k < nitems; k += 1) {
         Expr *it = items[k];
         Expr *val = it;
         if (it != NULL && it->kind == EX_DESIG && it->field != NULL) {
             int fi = -1;
-            int32_t f2;
+            size_t f2;
             for (f2 = 0; f2 < sd->nfields; f2 += 1) {
                 if (strcmp(sd->fields[f2].name, it->field) == 0) {
                     fi = f2;
@@ -2072,6 +2045,10 @@ static int Qb_is_signed(Qb *self, Type *t) {
     }
     const char *n = t->name;
     return !(strcmp(n, "u8") == 0 || strcmp(n, "u16") == 0 || strcmp(n, "u32") == 0 || strcmp(n, "u64") == 0 || strcmp(n, "unsigned") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "bool") == 0);
+}
+
+static int Qb_op_signed(Qb *self, Expr *e) {
+    return Qb_is_signed(self, Qb_qtype_of(self, e));
 }
 
 static QVar *Qb_find_var(Qb *self, const char *name) {
@@ -2404,7 +2381,7 @@ static char Qb_ecls(Qb *self, Expr *e) {
         return 'l';
     }
     if (e->kind == EX_CALL && e->lhs != NULL && e->lhs->kind == EX_IDENT && StrMap_pFunc_get_or(&self->funcs, e->lhs->text, NULL) == NULL && Qb_find_var(self, e->lhs->text) == NULL && StrMap_pType_get_or(&self->globals, e->lhs->text, NULL) == NULL) {
-        return libc_ret_cls(e->lhs->text);
+        return 'w';
     }
     if (e->kind == EX_UNARY && (e->op == TK_MINUS || e->op == TK_PLUS || e->op == TK_TILDE)) {
         return Qb_ecls(self, e->lhs);
@@ -3153,7 +3130,7 @@ static int32_t Qb_emit_binary(Qb *self, Expr *e) {
         l = Qb_emit_coerce(self, l, lcls, cls);
         r = Qb_emit_coerce(self, r, rcls, cls);
     }
-    int sgn = Qb_is_signed(self, Qb_qtype_of(self, e->lhs)) && Qb_is_signed(self, Qb_qtype_of(self, e->rhs));
+    int sgn = Qb_op_signed(self, e->lhs) && Qb_op_signed(self, e->rhs);
     int32_t t = Qb_tmp(self);
     if (is_cmp) {
         sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, op, cls, sgn), l, r);
@@ -3324,7 +3301,7 @@ static int32_t Qb_emit_call(Qb *self, Expr *e) {
         }
     } else {
         f = StrMap_pFunc_get_or(&self->funcs, fname, NULL);
-        rcls = (f != NULL ? Qb_cls_of(self, f->ret) : libc_ret_cls(fname));
+        rcls = (f != NULL ? Qb_cls_of(self, f->ret) : 'w');
     }
     Vec_i32 argt;
     Vec_char argc;
@@ -3342,9 +3319,6 @@ static int32_t Qb_emit_call(Qb *self, Expr *e) {
             char pc = Qb_cls_of(self, f->params[i].type);
             av = Qb_emit_coerce(self, av, ac, pc);
             ac = pc;
-        } else if (f == NULL && !indirect && fname != NULL && is_libc_math_d(fname)) {
-            av = Qb_emit_coerce(self, av, ac, 'd');
-            ac = 'd';
         } else if ((is_var || (f == NULL && !indirect)) && ac == 's') {
             av = Qb_emit_coerce(self, av, 's', 'd');
             ac = 'd';
@@ -3882,7 +3856,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
         }
         Expr *it0 = (*idx < nitems ? items[*idx] : NULL);
         if (it0 != NULL && it0->kind == EX_DESIG && it0->field != NULL) {
-            int32_t ui;
+            size_t ui;
             for (ui = 0; ui < sd->nfields; ui += 1) {
                 if (strcmp(sd->fields[ui].name, it0->field) == 0) {
                     Expr *one0 = it0->lhs;
@@ -3919,7 +3893,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
         }
         if (it2 != NULL && it2->kind == EX_DESIG && it2->field != NULL) {
             int k = -1;
-            int32_t j2;
+            size_t j2;
             for (j2 = 0; j2 < sd->nfields; j2 += 1) {
                 if (strcmp(sd->fields[j2].name, it2->field) == 0) {
                     k = j2;
@@ -4270,6 +4244,7 @@ static void Qb_emit_for(Qb *self, Stmt *s) {
     QVar *v = Qb_find_var(self, s->var);
     if (s->from != NULL) {
         int32_t fv = Qb_emit_rvalue(self, s->from);
+        fv = Qb_emit_coerce(self, fv, Qb_ecls(self, s->from), v->cls);
         sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), fv, v->slot);
     } else {
         int32_t z = Qb_tmp(self);
@@ -4286,6 +4261,7 @@ static void Qb_emit_for(Qb *self, Stmt *s) {
     int32_t iv = Qb_tmp(self);
     sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", iv, v->cls, Qb_load_op(self, v->ty), v->slot);
     int32_t tov = Qb_emit_rvalue(self, s->to);
+    tov = Qb_emit_coerce(self, tov, Qb_ecls(self, s->to), v->cls);
     int32_t cc = Qb_tmp(self);
     const char *cmp = arena_qcmp((neg ? "csgt" : "cslt"), v->cls);
     sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", cc, cmp, iv, tov);
@@ -4307,6 +4283,7 @@ static void Qb_emit_for(Qb *self, Stmt *s) {
     int32_t stepv;
     if (s->step != NULL) {
         stepv = Qb_emit_rvalue(self, s->step);
+        stepv = Qb_emit_coerce(self, stepv, Qb_ecls(self, s->step), v->cls);
     } else {
         stepv = Qb_tmp(self);
         sb_printf(self->out, "\t%%t%d =%c copy 1\n", stepv, v->cls);
@@ -4363,7 +4340,7 @@ static void Qb_collect_cases(Qb *self, Block *b, Vec_pStmt *acc) {
         if (st->kind == ST_CASE) {
             Vec_pStmt_push(acc, st);
         } else if (st->kind != ST_SWITCH) {
-            int32_t j;
+            size_t j;
             for (j = 0; j < st->nconds; j += 1) {
                 Qb_collect_cases(self, st->blocks[j], acc);
             }
@@ -4433,7 +4410,7 @@ static void Qb_emit_match(Qb *self, Stmt *s) {
             default_lbl = labels.data[i];
             continue;
         }
-        int32_t j;
+        size_t j;
         for (j = 0; j < mc->nvals; j += 1) {
             int32_t cv = Qb_emit_rvalue(self, mc->vals[j]);
             cv = Qb_emit_coerce(self, cv, Qb_ecls(self, mc->vals[j]), scls);
@@ -4469,7 +4446,7 @@ static void Qb_collect_evars(Qb *self, Expr *e) {
     Qb_collect_evars(self, e->lhs);
     Qb_collect_evars(self, e->rhs);
     Qb_collect_evars(self, e->cond);
-    int32_t j;
+    size_t j;
     for (j = 0; j < e->nargs; j += 1) {
         Qb_collect_evars(self, e->args[j]);
     }
@@ -4485,7 +4462,7 @@ static void Qb_collect_vars(Qb *self, Block *b) {
         Qb_collect_evars(self, st->rhs);
         Qb_collect_evars(self, st->cond);
         Qb_collect_evars(self, st->subject);
-        int32_t ci;
+        size_t ci;
         for (ci = 0; ci < st->nconds; ci += 1) {
             Qb_collect_evars(self, st->conds[ci]);
         }
@@ -4521,7 +4498,7 @@ static void Qb_collect_vars(Qb *self, Block *b) {
                         Qb_collect_vars(self, st->else_block);
                     }
                 } else {
-                    int32_t j;
+                    size_t j;
                     for (j = 0; j < st->nconds; j += 1) {
                         Qb_collect_vars(self, st->blocks[j]);
                     }
@@ -4560,7 +4537,7 @@ static void Qb_collect_vars(Qb *self, Block *b) {
                         Qb_collect_vars(self, st->cases[st->tm_sel]->body);
                     }
                 } else {
-                    int32_t mj;
+                    size_t mj;
                     for (mj = 0; mj < st->ncases; mj += 1) {
                         Qb_collect_vars(self, st->cases[mj]->body);
                     }
@@ -4805,15 +4782,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
     StrMap_pFunc_init(&qb.funcs);
     StrMap_pDecl_init(&qb.structs);
     Vec_EnumConst_init(&qb.enumc);
-    const char *libc_k[] = {"EOF", "SEEK_SET", "SEEK_CUR", "SEEK_END", "EXIT_SUCCESS", "EXIT_FAILURE", NULL};
-    int64_t libc_v[] = {-1, 0, 1, 2, 0, 1};
-    int32_t lk = 0;
-    while (libc_k[lk] != NULL) {
-        EnumConst eck = {libc_k[lk], libc_v[lk]};
-        Vec_EnumConst_push(&qb.enumc, eck);
-        lk += 1;
-    }
-    int32_t i;
+    size_t i;
     for (i = 0; i < m->ndecls; i += 1) {
         Decl *d = m->decls[i];
         if (d->kind == DL_FUNC) {
@@ -4826,13 +4795,13 @@ void emit_module_qbe(Module *m, StrBuf *out) {
             if (d->nfields > 0 || StrMap_pDecl_get_or(&qb.structs, d->name, NULL) == NULL) {
                 StrMap_pDecl_put(&qb.structs, d->name, d);
             }
-            int32_t j;
+            size_t j;
             for (j = 0; j < d->nmethods; j += 1) {
                 StrMap_pFunc_put(&qb.funcs, d->methods[j]->cname, d->methods[j]);
             }
         } else if (d->kind == DL_ENUM) {
             int64_t next_val = 0;
-            int32_t k;
+            size_t k;
             for (k = 0; k < d->nitems; k += 1) {
                 EnumItem *iv = &d->items[k];
                 if (iv->value != NULL && iv->value->kind == EX_NUMBER) {
@@ -4848,7 +4817,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
     }
     StrSet seen_ty;
     StrSet_init(&seen_ty);
-    int32_t ti;
+    size_t ti;
     for (ti = 0; ti < m->ndecls; ti += 1) {
         Decl *dt = m->decls[ti];
         if ((dt->kind == DL_STRUCT || dt->kind == DL_UNION) && dt->nfields > 0) {
@@ -4860,7 +4829,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
     StrSet gdone;
     StrSet_init(&ginit);
     StrSet_init(&gdone);
-    int32_t gi;
+    size_t gi;
     for (gi = 0; gi < m->ndecls; gi += 1) {
         Decl *gd = m->decls[gi];
         if (gd->kind == DL_VAR && gd->init != NULL) {
@@ -4892,7 +4861,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                 char dcls = Qb_cls_of(&qb, d2->type);
                 int64_t val = 0;
                 if (d2->init->kind == EX_NUMBER) {
-                    val = strtoll(d2->init->text, NULL, 0);
+                    val = (int64_t)strtoull(d2->init->text, NULL, 0);
                 } else if (d2->init->kind == EX_CHARLIT) {
                     val = (int64_t)Qb_charval(&qb, d2->init->text);
                 } else if (d2->init->kind == EX_TRUE) {
@@ -4996,7 +4965,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
             if (d3->ntparams > 0) {
                 continue;
             }
-            int32_t j2;
+            size_t j2;
             for (j2 = 0; j2 < d3->nmethods; j2 += 1) {
                 Func *mth = d3->methods[j2];
                 if (mth->body != NULL) {

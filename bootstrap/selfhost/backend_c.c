@@ -273,7 +273,7 @@ static const char *base_cname(const char *n) {
 }
 
 static void indent(StrBuf *b, int32_t n) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < n; i += 1) {
         sb_puts(b, "    ");
     }
@@ -307,7 +307,7 @@ static void emit_binary_operand(StrBuf *b, Expr *child, int32_t min_prec, int32_
 }
 
 static void emit_args(StrBuf *b, Expr **args, int32_t n) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < n; i += 1) {
         if (i != 0) {
             sb_puts(b, ", ");
@@ -321,7 +321,7 @@ static void emit_fnptr_decl(StrBuf *b, Type *ft, const char *inner) {
     sb_puts(&frag, "(");
     sb_puts(&frag, inner);
     sb_puts(&frag, ")(");
-    int32_t i;
+    size_t i;
     for (i = 0; i < ft->ntargs; i += 1) {
         if (i != 0) {
             sb_puts(&frag, ", ");
@@ -346,7 +346,7 @@ static void emit_cast_typename(StrBuf *b, Type *t) {
     }
     if (t->kind == TY_FUNC) {
         char buf[8];
-        int32_t j;
+        size_t j;
         for (j = 0; j < stars; j += 1) {
             buf[j] = '*';
         }
@@ -357,7 +357,7 @@ static void emit_cast_typename(StrBuf *b, Type *t) {
     sb_puts(b, base_cname(t->name));
     if (stars != 0) {
         sb_putc(b, ' ');
-        int32_t i;
+        size_t i;
         for (i = 0; i < stars; i += 1) {
             sb_putc(b, '*');
         }
@@ -452,7 +452,7 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
         case EX_GENERIC: {
             sb_puts(b, "_Generic(");
             emit_expr(b, e->lhs, PR_ASSIGN);
-            int32_t gi;
+            size_t gi;
             for (gi = 0; gi < e->nargs; gi += 1) {
                 sb_puts(b, ", ");
                 if (e->gen_types[gi] == NULL) {
@@ -517,7 +517,7 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_STMTEXPR: {
-            int32_t si;
+            size_t si;
             for (si = 0; si < (e->xblock != NULL ? e->xblock->n : 0); si += 1) {
                 if (e->xblock->stmts[si]->kind != ST_EXPR) {
                     fatal("statement expression with declarations or control flow cannot be lowered to standard C; use the qbe backend");
@@ -575,14 +575,14 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
     }
     if (t->kind == TY_FUNC) {
         StrBuf mid = {0};
-        int32_t si;
+        size_t si;
         for (si = 0; si < stars; si += 1) {
             sb_putc(&mid, '*');
         }
         if (name != NULL) {
             sb_puts(&mid, name);
         }
-        int32_t di;
+        size_t di;
         for (di = 0; di < nd; di += 1) {
             sb_putc(&mid, '[');
             if (dims[di] != NULL) {
@@ -605,7 +605,7 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
         emit_type_quals(b, t);
         sb_puts(b, base_cname(t->name));
         sb_puts(b, " (");
-        int32_t ai;
+        size_t ai;
         for (ai = 0; ai < stars; ai += 1) {
             sb_putc(b, '*');
         }
@@ -636,7 +636,7 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
         sb_puts(b, base_cname(t->name));
     }
     sb_putc(b, ' ');
-    int32_t i;
+    size_t i;
     for (i = 0; i < stars; i += 1) {
         sb_putc(b, '*');
     }
@@ -698,6 +698,9 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
     switch (s->kind) {
         case ST_VAR: {
             indent(b, ind);
+            if (s->is_static) {
+                sb_puts(b, "static ");
+            }
             if (s->is_const) {
                 sb_puts(b, "const ");
             }
@@ -787,7 +790,7 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                 return;
             }
             indent(b, ind);
-            int32_t i;
+            size_t i;
             for (i = 0; i < s->nconds; i += 1) {
                 sb_puts(b, (i == 0 ? "if (" : "} else if ("));
                 emit_expr(b, s->conds[i], 0);
@@ -880,14 +883,14 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             sb_puts(b, ") {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
-            int32_t i;
+            size_t i;
             for (i = 0; i < s->ncases; i += 1) {
                 MatchCase *mc = s->cases[i];
                 if (mc->is_default) {
                     indent(b, ind + 1);
                     sb_puts(b, "default: {\n");
                 } else {
-                    int32_t j;
+                    size_t j;
                     for (j = 0; j < mc->nvals; j += 1) {
                         indent(b, ind + 1);
                         sb_puts(b, "case ");
@@ -1035,7 +1038,7 @@ static void emit_block_body(StrBuf *b, Block *blk, int32_t ind) {
     int32_t mark = g_defers.len;
     int opened = 0;
     int seen_stmt = 0;
-    int32_t i;
+    size_t i;
     for (i = 0; i < blk->n; i += 1) {
         Stmt *s = blk->stmts[i];
         if (g_std89 && s->kind == ST_VAR && seen_stmt) {
@@ -1066,7 +1069,7 @@ static void emit_func_params(StrBuf *b, Func *f) {
         sb_puts(b, "void");
         return;
     }
-    int32_t i;
+    size_t i;
     for (i = 0; i < f->nparams; i += 1) {
         if (i != 0) {
             sb_puts(b, ", ");
@@ -1101,7 +1104,7 @@ static void emit_func(StrBuf *b, Func *f) {
     }
     if (rt != NULL && rt->kind == TY_FUNC) {
         StrBuf mid = {0};
-        int32_t si;
+        size_t si;
         for (si = 0; si < rstars; si += 1) {
             sb_putc(&mid, '*');
         }
@@ -1148,6 +1151,11 @@ static void emit_decl(StrBuf *b, Decl *d) {
             break;
         }
         case DL_VAR: {
+            if (d->is_extern) {
+                sb_puts(b, "extern ");
+            } else if (d->is_static) {
+                sb_puts(b, "static ");
+            }
             if (d->is_const) {
                 sb_puts(b, "const ");
             }
@@ -1167,7 +1175,7 @@ static void emit_decl(StrBuf *b, Decl *d) {
         case DL_UNION: {
             if (d->nfields > 0) {
                 sb_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
-                int32_t i;
+                size_t i;
                 for (i = 0; i < d->nfields; i += 1) {
                     indent(b, 1);
                     emit_var_decl(b, d->fields[i].type, d->fields[i].name, d->name);
@@ -1178,7 +1186,7 @@ static void emit_decl(StrBuf *b, Decl *d) {
                 }
                 sb_puts(b, "};\n");
             }
-            int32_t j;
+            size_t j;
             for (j = 0; j < d->nmethods; j += 1) {
                 sb_putc(b, '\n');
                 emit_func(b, d->methods[j]);
@@ -1187,7 +1195,7 @@ static void emit_decl(StrBuf *b, Decl *d) {
         }
         case DL_ENUM: {
             sb_puts(b, "typedef enum { ");
-            int32_t i;
+            size_t i;
             for (i = 0; i < d->nitems; i += 1) {
                 if (i != 0) {
                     sb_puts(b, ", ");
@@ -1214,7 +1222,7 @@ void emit_module_c(Module *m, StrBuf *out) {
     StrBuf body = {0};
     int prev_import = 0;
     int fwd_done = 0;
-    int32_t i;
+    size_t i;
     for (i = 0; i < m->ndecls; i += 1) {
         Decl *d = m->decls[i];
         if ((d->kind == DL_STRUCT || d->kind == DL_UNION) && d->ntparams > 0) {
@@ -1224,13 +1232,24 @@ void emit_module_c(Module *m, StrBuf *out) {
         if (i > 0 && !(is_import && prev_import)) {
             sb_putc(&body, '\n');
         }
-        if (!fwd_done && (d->kind == DL_STRUCT || d->kind == DL_UNION) && d->nfields > 0) {
+        if (!fwd_done && (d->kind == DL_STRUCT || d->kind == DL_UNION) && (d->nfields > 0 || d->is_fwd)) {
             fwd_done = 1;
-            int32_t j;
+            size_t j;
             for (j = 0; j < m->ndecls; j += 1) {
                 Decl *d2 = m->decls[j];
-                if ((d2->kind == DL_STRUCT || d2->kind == DL_UNION) && d2->nfields > 0 && d2->ntparams == 0) {
-                    sb_printf(&body, "typedef %s %s %s;\n", (d2->kind == DL_UNION ? "union" : "struct"), d2->name, d2->name);
+                if ((d2->kind == DL_STRUCT || d2->kind == DL_UNION) && (d2->nfields > 0 || d2->is_fwd) && d2->ntparams == 0) {
+                    int dup = 0;
+                    size_t j2;
+                    for (j2 = 0; j2 < j; j2 += 1) {
+                        Decl *d3 = m->decls[j2];
+                        if ((d3->kind == DL_STRUCT || d3->kind == DL_UNION) && (d3->nfields > 0 || d3->is_fwd) && d3->ntparams == 0 && strcmp(d3->name, d2->name) == 0) {
+                            dup = 1;
+                            break;
+                        }
+                    }
+                    if (!dup) {
+                        sb_printf(&body, "typedef %s %s %s;\n", (d2->kind == DL_UNION ? "union" : "struct"), d2->name, d2->name);
+                    }
                 }
             }
             sb_putc(&body, '\n');

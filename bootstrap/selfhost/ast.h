@@ -87,6 +87,7 @@ struct Stmt {
     Expr *cond;
     Block *body;
     const char *var;
+    const char *var2;
     Expr *from;
     Expr *to;
     Expr *step;
@@ -145,6 +146,8 @@ struct Decl {
     Pos pos;
     int import_system;
     const char *import_path;
+    int is_include;
+    int is_fwd;
     const char *name;
     Type *type;
     Expr *init;

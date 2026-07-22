@@ -1,6 +1,6 @@
 # parser.p — recursive descent following the EBNF from spec §10
 # (port of src/parser.c)
-import <string.h>
+include <string.h>
 import "parser.ph"
 import "vecs.ph"
 import "../stl/vec.ph"
@@ -107,7 +107,6 @@ static def parse_type(p: *P) -> *Type:
         inner: *Type = parse_type(p)
         expect(p, TK_RPAREN, "tipo agrupado (T)")
         t = inner
-        kg: i32
         for kg in range(stars):
             t = ty_ptr(p->a, t)
         gdims: *Expr[16]
@@ -353,7 +352,6 @@ static def try_paren_cast(p: *P) -> *Expr:
         arg: *Expr = parse_expr(p)
         expect(p, TK_RPAREN, "pointer cast")
         t: *Type = ty_name(p->a, name)
-        k: i32
         for k in range(stars):
             t = ty_ptr(p->a, t)
         e: *Expr = ex_new(p->a, EX_CAST, pos)
@@ -661,11 +659,14 @@ static def parse_for(p: *P) -> *Stmt:
     pos: Pos = adv(p)->pos
     s: *Stmt = st_new(p->a, ST_FOR, pos)
     s->var = expect(p, TK_IDENT, "for")->text
+    if accept(p, TK_COMMA):
+        s->var2 = expect(p, TK_IDENT, "for (second loop variable)")->text
     expect(p, TK_IN, "for (expected 'in')")
-    r: *Token = expect(p, TK_IDENT, "for (expected 'range')")
-    if strcmp(r->text, "range") != 0:
-        fatal_at(p->file, r->pos, "for only accepts 'range(...)' in v0.1")
-    expect(p, TK_LPAREN, "range")
+    r: *Token = expect(p, TK_IDENT, "for (expected 'range' or 'enumerate')")
+    is_enum: bool = strcmp(r->text, "enumerate") == 0
+    if not is_enum and strcmp(r->text, "range") != 0:
+        fatal_at(p->file, r->pos, "for only accepts 'range(...)' or 'enumerate(...)'")
+    expect(p, TK_LPAREN, r->text)
     a1: *Expr = parse_expr(p)
     a2: *Expr = None
     a3: *Expr = None
@@ -673,15 +674,28 @@ static def parse_for(p: *P) -> *Stmt:
         a2 = parse_expr(p)
         if accept(p, TK_COMMA):
             a3 = parse_expr(p)
-    expect(p, TK_RPAREN, "range")
+    expect(p, TK_RPAREN, r->text)
     expect(p, TK_COLON, "for")
-    if a2 != None:
-        s->from = a1
-        s->to = a2
+    if is_enum:
+        # `for i, v in enumerate(arr)` — needs exactly two vars and one arg. Sema
+        # lowers it to a range over arr's length + a `v = arr[i]` binding.
+        if s->var2 == None:
+            fatal_at(p->file, r->pos, "enumerate(...) needs two loop variables: `for i, v in enumerate(x)`")
+        if a2 != None:
+            fatal_at(p->file, r->pos, "enumerate(...) takes a single argument")
+        s->from = None
+        s->to = a1        # the array; sema replaces this with its length
+        s->step = None
     else:
-        s->from = None  # 0
-        s->to = a1
-    s->step = a3  # None = 1
+        if s->var2 != None:
+            fatal_at(p->file, r->pos, "range(...) has a single loop variable (did you mean enumerate?)")
+        if a2 != None:
+            s->from = a1
+            s->to = a2
+        else:
+            s->from = None  # 0
+            s->to = a1
+        s->step = a3  # None = 1
     s->body = parse_block(p)
     return s
 
@@ -983,10 +997,51 @@ static def parse_enum(p: *P) -> *Decl:
     d->nitems = items.len
     return d
 
+# reconstructs a `<...>` header path from tokens (include is a contextual word,
+# not a keyword, so the lexer does NOT special-case `<h>` after it).
+static def spell_tok(t: *Token) -> const *char:
+    if t->text != None:
+        return t->text
+    match t->kind:
+        case TK_DOT:
+            return "."
+        case TK_SLASH:
+            return "/"
+        case TK_MINUS:
+            return "-"
+        case _:
+            return ""
+
+# contextual `include`: a C header directive. `include` is NOT reserved — it is
+# only special here, at a top-level declaration, when followed by `<...>` or a
+# string (same idea as `range` in a for-loop). Emits #include AND (F2) ingests.
+static def parse_c_include(p: *P) -> *Decl:
+    inc: *Token = adv(p)   # the `include` identifier
+    d: *Decl = arena_alloc(p->a, sizeof(Decl))
+    d->kind = DL_IMPORT
+    d->is_include = True
+    d->pos = inc->pos
+    if at(p, TK_STRING):
+        raw: const *char = adv(p)->text  # with quotes
+        len: usize = strlen(raw)
+        d->import_path = arena_strndup(p->a, raw + 1, len - 2 if len >= 2 else 0)
+        d->import_system = False
+    else:
+        expect(p, TK_LT, "include <header>")
+        path: const *char = ""
+        while not at(p, TK_GT) and not at(p, TK_NEWLINE) and not at(p, TK_EOF):
+            path = arena_printf(p->a, "%s%s", path, spell_tok(adv(p)))
+        expect(p, TK_GT, "include <header> (missing '>')")
+        d->import_path = path
+        d->import_system = True
+    expect(p, TK_NEWLINE, "include")
+    return d
+
 static def parse_import(p: *P) -> *Decl:
     pos: Pos = adv(p)->pos
     d: *Decl = arena_alloc(p->a, sizeof(Decl))
     d->kind = DL_IMPORT
+    d->is_include = False
     d->pos = pos
     if at(p, TK_HEADER):
         d->import_system = True
@@ -1040,6 +1095,7 @@ static def parse_top(p: *P) -> *Decl:
         case TK_STRUCT:
             return parse_struct_or_union(p, False)
         case TK_UNION:
+            warn_at(p->file, t->pos, "'union' in Plang is deprecated and will be removed in a future version")
             return parse_struct_or_union(p, True)
         case TK_ENUM:
             return parse_enum(p)
@@ -1058,6 +1114,11 @@ static def parse_top(p: *P) -> *Decl:
             d->func = f
             return d
         case TK_CONST, TK_IDENT:
+            # contextual `include <h>` / `include "h"`: recognized only here, when
+            # `include` is followed by `<` or a string. Otherwise it stays a normal
+            # identifier (a global named `include`, etc. keeps working).
+            if not is_extern and at(p, TK_IDENT) and strcmp(pk(p)->text, "include") == 0 and (pk1(p)->kind == TK_LT or pk1(p)->kind == TK_STRING):
+                return parse_c_include(p)
             is_const: bool = accept(p, TK_CONST)
             # `const def f(...)`: function evaluated at compile-time (not emitted in the binary)
             if is_const and at(p, TK_DEF):

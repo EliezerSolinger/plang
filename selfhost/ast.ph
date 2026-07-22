@@ -216,6 +216,8 @@ struct Stmt:
     body: *Block
     # ST_FOR (range)
     var: const *char
+    var2: const *char  # 2nd loop var for `enumerate` (None = plain range). Sema
+                       #   lowers enumerate to a range-for, so backends only see `var`.
     from: *Expr      # None = 0
     to: *Expr
     step: *Expr      # None = 1
@@ -283,6 +285,10 @@ struct Decl:
     # DL_IMPORT
     import_system: bool      # <h> or bare -> #include <...>
     import_path: const *char # without <> / quotes
+    is_include: bool         # parsed via `include` (C header) rather than `import`
+    # DL_STRUCT/DL_UNION (C front end)
+    is_fwd: bool             # bodyless forward (`struct X;`): needs the upfront
+                             #   typedef, but has no definition to emit
     # DL_VAR (global, includes const)
     name: const *char
     type: *Type

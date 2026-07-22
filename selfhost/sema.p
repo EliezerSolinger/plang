@@ -5,12 +5,15 @@
 # checking is left to the C compiler. Sema only does what's necessary for
 # the TRANSLATION to be correct. Unknown symbols (printf, FILE, ...)
 # are tolerated: they come from C headers.
-import <string.h>
-import <stdlib.h>
-import <time.h>
+include <string.h>
+include <stdlib.h>
+include <stdio.h>
+include <ctype.h>
+include <time.h>
 import "sema.ph"
 import "lexer.ph"
 import "parser.ph"
+import "cfront.ph"
 import "../stl/map.ph"
 import "../stl/set.ph"
 
@@ -75,6 +78,8 @@ struct Sema:
     globals: StrMap<*Type>
     enumconsts: StrSet
     constvals: StrMap<*CVal>   # constants known at compile time (int/float/str)
+    macroconsts: StrSet      # constvals that came from ingested C headers (#define):
+                             #   folded to literals in expressions (QBE has no cpp)
     csteps: i32              # CTFE interpreter step budget
     cur_fname: const *char   # cname of the function being checked (for __func__)
     vla_ctr: i32             # --std=c89: counter of hidden VLA pointers (__vlaN)
@@ -100,7 +105,6 @@ static def ends_with(s: const *char, suf: const *char) -> bool:
     return n >= m and strcmp(s + n - m, suf) == 0
 
 def cc_load_module(cc: *Cc, path: const *char) -> *Module:
-    i: i32
     for i in range(cc->nmods):
         if strcmp(cc->mods[i]->path, path) == 0:
             return cc->mods[i]
@@ -135,14 +139,12 @@ static def find_func(s: *Sema, cname: const *char) -> *Func:
     return s->funcs.get_or(cname, None)
 
 static def sinfo_method(si: *SInfo, name: const *char) -> *Func:
-    i: i32
     for i in range(si->nmethods):
         if strcmp(si->methods[i]->name, name) == 0:
             return si->methods[i]
     return None
 
 static def sinfo_field(si: *SInfo, name: const *char) -> *Field:
-    i: i32
     for i in range(si->nfields):
         if strcmp(si->fields[i].name, name) == 0:
             return &si->fields[i]
@@ -195,7 +197,6 @@ static def mangle_instance(s: *Sema, g: *Type) -> *char:
     sb: StrBuf = {0}
     defer sb_free(&sb)
     sb_puts(&sb, g->name)
-    i: i32
     for i in range(g->ntargs):
         sb_puts(&sb, "_")
         mangle_type_into(&sb, g->targs[i])
@@ -213,13 +214,11 @@ static def resolve_type(s: *Sema, t: *Type):
         # function pointer: resolves return (inner) and param types
         # (kept in targs); does NOT mangle — TY_FUNC is never generic
         resolve_type(s, t->inner)
-        i0: i32
         for i0 in range(t->ntargs):
             resolve_type(s, t->targs[i0])
         return
     if t->ntargs == 0:
         return
-    i: i32
     for i in range(t->ntargs):
         resolve_type(s, t->targs[i])
     mangled: *char = mangle_instance(s, t)
@@ -230,7 +229,6 @@ static def resolve_type(s: *Sema, t: *Type):
     t->ntargs = 0
 
 static def subst_lookup(sub: *Subst, name: const *char) -> *Type:
-    i: i32
     for i in range(sub->n):
         if strcmp(sub->names[i], name) == 0:
             return sub->types[i]
@@ -255,7 +253,6 @@ static def clone_type(s: *Sema, sub: *Subst, t: *Type) -> *Type:
     nt->is_restrict = t->is_restrict
     if t->ntargs > 0:
         args: **Type = arena_alloc(s->a, usize(t->ntargs) * sizeof(*args))
-        i: i32
         for i in range(t->ntargs):
             args[i] = clone_type(s, sub, t->targs[i])
         nt->targs = args
@@ -283,7 +280,6 @@ static def clone_expr(s: *Sema, sub: *Subst, e: *Expr) -> *Expr:
         .nargs = e->nargs
         if e->args != None:
             args: **Expr = arena_alloc(s->a, usize(e->nargs) * sizeof(*args))
-            i: i32
             for i in range(e->nargs):
                 args[i] = clone_expr(s, sub, e->args[i])
             .args = args
@@ -306,7 +302,6 @@ static def clone_stmt(s: *Sema, sub: *Subst, st: *Stmt) -> *Stmt:
         if st->conds != None:
             nc: **Expr = arena_alloc(s->a, usize(st->nconds) * sizeof(*nc))
             nb: **Block = arena_alloc(s->a, usize(st->nconds) * sizeof(*nb))
-            i: i32
             for i in range(st->nconds):
                 nc[i] = clone_expr(s, sub, st->conds[i])
                 nb[i] = clone_block(s, sub, st->blocks[i])
@@ -324,7 +319,6 @@ static def clone_stmt(s: *Sema, sub: *Subst, st: *Stmt) -> *Stmt:
         .subject = clone_expr(s, sub, st->subject)
         if st->cases != None:
             cs: **MatchCase = arena_alloc(s->a, usize(st->ncases) * sizeof(*cs))
-            j: i32
             for j in range(st->ncases):
                 oc: *MatchCase = st->cases[j]
                 mc: *MatchCase = arena_alloc(s->a, sizeof(MatchCase))
@@ -333,7 +327,6 @@ static def clone_stmt(s: *Sema, sub: *Subst, st: *Stmt) -> *Stmt:
                     .nvals = oc->nvals
                     if oc->vals != None:
                         vs: **Expr = arena_alloc(s->a, usize(oc->nvals) * sizeof(*vs))
-                        k: i32
                         for k in range(oc->nvals):
                             vs[k] = clone_expr(s, sub, oc->vals[k])
                         .vals = vs
@@ -352,7 +345,6 @@ static def clone_block(s: *Sema, sub: *Subst, b: *Block) -> *Block:
         return None
     nb: *Block = arena_alloc(s->a, sizeof(Block))
     stmts: **Stmt = arena_alloc(s->a, usize(b->n) * sizeof(*stmts))
-    i: i32
     for i in range(b->n):
         stmts[i] = clone_stmt(s, sub, b->stmts[i])
     nb->stmts = stmts
@@ -367,7 +359,6 @@ static def clone_func(s: *Sema, sub: *Subst, f: *Func, owner: const *char, with_
     nf->tparams = None
     nf->ntparams = 0
     params: *Param = arena_alloc(s->a, usize(f->nparams) * sizeof(*params))
-    i: i32
     for i in range(f->nparams):
         params[i].name = f->params[i].name
         params[i].type = clone_type(s, sub, f->params[i].type)
@@ -467,6 +458,13 @@ static def type_of(s: *Sema, e: *Expr) -> *Type:
                 fu: *Func = find_func(s, e->lhs->text)
                 if fu != None:
                     return fu->ret
+            # callee is an expression of function-pointer type (a variable or a
+            # struct field): the result type is the function type's return (inner).
+            ct: *Type = type_of(s, e->lhs)
+            if ct != None and ct->kind == TY_PTR and ct->inner != None and ct->inner->kind == TY_FUNC:
+                return ct->inner->inner
+            if ct != None and ct->kind == TY_FUNC:
+                return ct->inner
             return None
         case EX_CAST, EX_VAARG:
             return e->cast_type
@@ -513,7 +511,6 @@ static def lower_designators(s: *Sema, e: *Expr, t: *Type):
         has_desig: bool = False
         maxp: i32 = -1
         pos = 0
-        i: i32
         for i in range(e->nargs):
             it: *Expr = e->args[i]
             val: *Expr = it
@@ -529,7 +526,6 @@ static def lower_designators(s: *Sema, e: *Expr, t: *Type):
             return
         n: i32 = maxp + 1
         args: **Expr = arena_alloc(s->a, usize(n) * sizeof(*args))
-        k: i32
         for k in range(n):
             args[k] = None
         pos = 0
@@ -554,7 +550,6 @@ static def lower_designators(s: *Sema, e: *Expr, t: *Type):
     if si->is_union:
         # C89 only initializes the FIRST member of the union: a designator for
         # another member has no equivalent positional form
-        u: i32
         for u in range(e->nargs):
             ud: *Expr = e->args[u]
             if ud != None and ud->kind == EX_DESIG and ud->field != None:
@@ -567,7 +562,6 @@ static def lower_designators(s: *Sema, e: *Expr, t: *Type):
     has_f: bool = False
     maxf: i32 = -1
     fi = 0
-    i2: i32
     for i2 in range(e->nargs):
         it3: *Expr = e->args[i2]
         val3: *Expr = it3
@@ -587,7 +581,6 @@ static def lower_designators(s: *Sema, e: *Expr, t: *Type):
         return
     nf: i32 = maxf + 1
     fargs: **Expr = arena_alloc(s->a, usize(nf) * sizeof(*fargs))
-    k2: i32
     for k2 in range(nf):
         fargs[k2] = None
     fi = 0
@@ -672,7 +665,10 @@ static def ceval_num(txt: const *char) -> CVal:
         i -= 1
     if isflt or hasf:
         return cv_flt(strtod(txt, None))
-    return cv_int(i64(strtoll(txt, None, 0)))
+    # integer literal text is always non-negative (unary '-' is a separate node),
+    # so strtoull covers the full 0..2^64-1 range; strtoll would saturate a value
+    # with the high bit set (e.g. a 64-bit hash seed) at LLONG_MAX. The bits fit i64.
+    return cv_int(i64(strtoull(txt, None, 0)))
 
 static def ceval_val(s: *Sema, e: *Expr, env: *CFrame, ok: *bool) -> CVal
 static def ccall(s: *Sema, f: *Func, e: *Expr, env: *CFrame, ok: *bool) -> CVal
@@ -682,7 +678,6 @@ static def cexec_block(s: *Sema, b: *Block, env: *CFrame, ret: *CVal, returned: 
 static def cframe_find(env: *CFrame, name: const *char, out: *CVal) -> bool:
     if env == None:
         return False
-    i: i32
     for i in range(env->n):
         if strcmp(env->names[i], name) == 0:
             *out = env->vals[i]
@@ -690,7 +685,6 @@ static def cframe_find(env: *CFrame, name: const *char, out: *CVal) -> bool:
     return False
 
 static def cframe_set(env: *CFrame, name: const *char, v: CVal):
-    i: i32
     for i in range(env->n):
         if strcmp(env->names[i], name) == 0:
             env->vals[i] = v
@@ -839,6 +833,15 @@ static def ceval_val(s: *Sema, e: *Expr, env: *CFrame, ok: *bool) -> CVal:
                 # `if typestr(x) == "*char":` prunes at compile time (like match type)
                 if strcmp(e->lhs->text, "typestr") == 0 and e->nargs == 1:
                     return cv_str(arena_printf(s->a, "\"%s\"", render_type_p(s->a, type_of(s, e->args[0]))))
+                # len(arr): element count of a fixed array T[N]. In a comptime
+                # context (e.g. an array dimension) it folds straight to N; in a
+                # value context check_expr already lowered it to sizeof/sizeof.
+                if strcmp(e->lhs->text, "len") == 0 and e->nargs == 1 and find_func(s, e->lhs->text) == None:
+                    at: *Type = type_of(s, e->args[0])
+                    if at != None and at->kind == TY_ARRAY and at->arr_len != None:
+                        return ceval_val(s, at->arr_len, env, ok)
+                    *ok = False
+                    return cv_int(0)
                 cf: *Func = find_func(s, e->lhs->text)
                 if cf != None and cf->is_comptime:
                     return ccall(s, cf, e, env, ok)
@@ -859,7 +862,6 @@ static def ccall(s: *Sema, f: *Func, e: *Expr, env: *CFrame, ok: *bool) -> CVal:
     fr.names = arena_alloc(s->a, usize(fr.cap) * sizeof(*fr.names))
     fr.vals = arena_alloc(s->a, usize(fr.cap) * sizeof(*fr.vals))
     fr.n = 0
-    i: i32
     for i in range(f->nparams):
         av: CVal = ceval_val(s, e->args[i], env, ok)
         cframe_set(&fr, f->params[i].name, av)
@@ -872,7 +874,6 @@ static def ccall(s: *Sema, f: *Func, e: *Expr, env: *CFrame, ok: *bool) -> CVal:
 static def cexec_block(s: *Sema, b: *Block, env: *CFrame, ret: *CVal, returned: *bool, ok: *bool):
     if b == None:
         return
-    i: i32
     for i in range(b->n):
         if *returned or not *ok:
             return
@@ -1114,7 +1115,6 @@ static def render_type_p(a: *Arena, t: *Type) -> const *char:
         return arena_printf(a, "%s[]", render_type_p(a, t->inner))
     if t->kind == TY_FUNC:
         buf: const *char = "def("
-        i: i32
         for i in range(t->ntargs):
             buf = arena_printf(a, "%s%s%s", buf, ", " if i != 0 else "", render_type_p(a, t->targs[i]))
         return arena_printf(a, "%s) -> %s", buf, render_type_p(a, t->inner))
@@ -1188,14 +1188,11 @@ static def resolve_gcall(s: *Sema, e: *Expr):
     ftpl: *Func = s->func_templates.get_or(callee->text, None)
     if ftpl == None:
         return
-    ai: i32
     for ai in range(e->nargs):
         check_expr(s, e->args[ai])
     targs: **Type = arena_alloc(s->a, usize(ftpl->ntparams) * sizeof(*targs))
-    ti: i32
     for ti in range(ftpl->ntparams):
         found: *Type = None
-        pj: i32
         for pj in range(ftpl->nparams):
             if pj >= e->nargs:
                 break
@@ -1225,7 +1222,6 @@ static def check_expr(s: *Sema, e: *Expr):
             if callee->kind == EX_IDENT:
                 cfn: *Func = find_func(s, callee->text)
                 if cfn != None and cfn->is_comptime:
-                    ci: i32
                     for ci in range(e->nargs):
                         check_expr(s, e->args[ci])
                     cok: bool = True
@@ -1250,6 +1246,30 @@ static def check_expr(s: *Sema, e: *Expr):
                     .kind = EX_NUMBER
                     .text = "1" if s->constvals.has(e->args[0]->text) else "0"
                     .lhs = None
+                    .args = None
+                    .nargs = 0
+                return
+            # len(arr): compile-time element count of a fixed array T[N]. Lowered
+            # to the idiomatic `sizeof(arr)/sizeof(arr[0])` — a C constant expr the
+            # target evaluates (QBE folds it), and sizeof(elem) cancels, so the
+            # result is N regardless of the target's struct layout. `len` is
+            # contextual: a user function named `len` takes precedence.
+            if callee->kind == EX_IDENT and strcmp(callee->text, "len") == 0 and e->nargs == 1 and find_func(s, callee->text) == None:
+                arr: *Expr = e->args[0]
+                check_expr(s, arr)
+                at: *Type = type_of(s, arr)
+                if at == None or at->kind != TY_ARRAY or at->arr_len == None:
+                    fatal_at(s->file, e->pos, "len(x) requires a fixed-size array (T[N])")
+                zero: *Expr = ex_new(s->a, EX_NUMBER, e->pos)
+                zero->text = "0"
+                idx0: *Expr = ex_new(s->a, EX_INDEX, e->pos)
+                idx0->lhs = arr
+                idx0->rhs = zero
+                with e:
+                    .kind = EX_BINARY
+                    .op = TK_SLASH
+                    .lhs = mk_call1(s->a, "sizeof", arr, e->pos)
+                    .rhs = mk_call1(s->a, "sizeof", idx0, e->pos)
                     .args = None
                     .nargs = 0
                 return
@@ -1323,7 +1343,6 @@ static def check_expr(s: *Sema, e: *Expr):
                         args = vec_grow(args, n, &cn, sizeof(*args))
                         args[n] = selfx
                         n += 1
-                        i: i32
                         for i in range(e->nargs):
                             check_expr(s, e->args[i])
                             args = vec_grow(args, n, &cn, sizeof(*args))
@@ -1340,12 +1359,10 @@ static def check_expr(s: *Sema, e: *Expr):
                     # field that is a function pointer: normal call
                     fix_field_op(s, callee)
                 # unknown type: pass it through as is
-                j: i32
                 for j in range(e->nargs):
                     check_expr(s, e->args[j])
                 return
             check_expr(s, callee)
-            k: i32
             for k in range(e->nargs):
                 check_expr(s, e->args[k])
             return
@@ -1361,7 +1378,6 @@ static def check_expr(s: *Sema, e: *Expr):
                     fn2: *Expr = ex_new(s->a, EX_IDENT, e->pos)
                     fn2->text = base->name
                     deref: *Expr = fn2
-                    k2: i32
                     for k2 in range(stars):
                         u: *Expr = ex_new(s->a, EX_UNARY, e->pos)
                         u->op = TK_STAR
@@ -1399,6 +1415,18 @@ static def check_expr(s: *Sema, e: *Expr):
             return
         case EX_IDENT:
             fold_predefined(s, e)   # __FILE__/__LINE__/__func__/... -> literal
+            # ingested C macro constant (EOF, BUFSIZ...): folds to its literal —
+            # QBE has no preprocessor to resolve the name. Any real symbol with
+            # the same name (local, global, enum, function) takes precedence.
+            if e->kind == EX_IDENT and s->macroconsts.has(e->text) and scope_find(s, e->text) == None and s->globals.get_or(e->text, None) == None and not is_enum_const(s, e->text) and find_func(s, e->text) == None:
+                mcp: *CVal = s->constvals.get_or(e->text, None)
+                if mcp != None:
+                    if mcp->kind == CV_STR:
+                        e->kind = EX_STRING
+                        e->text = mcp->sval
+                    elif mcp->kind == CV_INT:
+                        e->kind = EX_NUMBER
+                        e->text = arena_printf(s->a, "%lld", mcp->ival)
             return
         case EX_FIELD:
             check_expr(s, e->lhs)
@@ -1421,7 +1449,6 @@ static def check_expr(s: *Sema, e: *Expr):
             check_expr(s, e->rhs)
             return
         case EX_INITLIST:
-            i2: i32
             for i2 in range(e->nargs):
                 check_expr(s, e->args[i2])
             return
@@ -1433,7 +1460,6 @@ static def check_expr(s: *Sema, e: *Expr):
 static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
     if b == None:
         return None
-    i: i32
     for i in range(b->n):
         st: *Stmt = b->stmts[i]
         if st->kind == k:
@@ -1441,7 +1467,6 @@ static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
         r: *Stmt = None
         match st->kind:
             case ST_IF:
-                j: i32
                 for j in range(st->nconds):
                     r = block_find_kind(st->blocks[j], k)
                     if r != None:
@@ -1454,7 +1479,6 @@ static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
                 if r != None:
                     return r
             case ST_MATCH:
-                j2: i32
                 for j2 in range(st->ncases):
                     r = block_find_kind(st->cases[j2]->body, k)
                     if r != None:
@@ -1465,7 +1489,6 @@ static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
 
 # defer body: no return; break/continue only in a loop/match of the body itself
 static def check_defer_body(s: *Sema, b: *Block, loop_depth: i32, break_depth: i32):
-    i: i32
     for i in range(b->n):
         st: *Stmt = b->stmts[i]
         match st->kind:
@@ -1480,13 +1503,11 @@ static def check_defer_body(s: *Sema, b: *Block, loop_depth: i32, break_depth: i
             case ST_WHILE, ST_DO, ST_FOR, ST_CFOR:
                 check_defer_body(s, st->body, loop_depth + 1, break_depth + 1)
             case ST_IF:
-                j: i32
                 for j in range(st->nconds):
                     check_defer_body(s, st->blocks[j], loop_depth, break_depth)
                 if st->else_block != None:
                     check_defer_body(s, st->else_block, loop_depth, break_depth)
             case ST_MATCH:
-                j2: i32
                 for j2 in range(st->ncases):
                     check_defer_body(s, st->cases[j2]->body, loop_depth, break_depth + 1)
             case ST_DEFER:
@@ -1521,7 +1542,6 @@ static def tm_decay(s: *Sema, t: *Type) -> *Type:
 static def resolve_typematch(s: *Sema, st: *Stmt):
     subj: *Type = tm_decay(s, type_of(s, st->subject))
     dflt = -1
-    i: i32
     for i in range(st->ncases):
         c: *MatchCase = st->cases[i]
         if c->is_default:
@@ -1607,7 +1627,6 @@ static def check_stmt(s: *Sema, st: *Stmt):
             # doesn't prune if any branch contains a label: it may be the target of a
             # `goto` from outside (the C idiom of dead code reachable via goto).
             has_lbl: bool = False
-            il: i32
             for il in range(st->nconds):
                 if block_find_kind(st->blocks[il], ST_LABEL) != None:
                     has_lbl = True
@@ -1623,7 +1642,6 @@ static def check_stmt(s: *Sema, st: *Stmt):
                 st->if_sel = -2
             # checks only the live branch once folded (dead branches are left out)
             if st->if_sel == -1:
-                i: i32
                 for i in range(st->nconds):
                     check_expr(s, st->conds[i])
                     check_block(s, st->blocks[i])
@@ -1663,9 +1681,7 @@ static def check_stmt(s: *Sema, st: *Stmt):
                 if st->tm_sel >= 0:
                     check_block(s, st->cases[st->tm_sel]->body)
                 return
-            j: i32
             for j in range(st->ncases):
-                k: i32
                 for k in range(st->cases[j]->nvals):
                     cval: *Expr = st->cases[j]->vals[k]
                     check_expr(s, cval)
@@ -1718,11 +1734,104 @@ static def check_stmt(s: *Sema, st: *Stmt):
         case _:
             return
 
+# `-N` literals parse as EX_UNARY(TK_MINUS): a negative bound/step in a range.
+static def expr_is_negative(e: *Expr) -> bool:
+    return e != None and e->kind == EX_UNARY and e->op == TK_MINUS
+
+static def block_prepend(s: *Sema, b: *Block, st: *Stmt):
+    ns: **Stmt = arena_alloc(s->a, usize(b->n + 1) * sizeof(*ns))
+    ns[0] = st
+    for i in range(b->n):
+        ns[i + 1] = b->stmts[i]
+    b->stmts = ns
+    b->n += 1
+
+# auto-declaration of `for` loop variables (Python-style: the iterator lives on
+# after the loop, in the enclosing scope). Returns the synthesized decl(s) via
+# d1/d2 (None when unused); the caller inserts them right before the loop.
+#   for i in range(...)        -> `i: usize` (or `isize` if a bound/step is < 0)
+#   for i, v in enumerate(arr) -> `i: usize`, `v: <elem>`; the loop is rewritten
+#                                 to a range over arr's length + a `v = arr[i]`
+#                                 binding at the top of the body (pure sugar).
+# A plain-range variable that is already in scope is left untouched (legacy).
+static def lower_for_iter(s: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt):
+    *d1 = None
+    *d2 = None
+    if st->var2 != None:
+        arr: *Expr = st->to
+        at: *Type = type_of(s, arr)
+        if at == None:
+            at = infer_type(s, arr)
+        if at == None or at->kind != TY_ARRAY or at->arr_len == None:
+            fatal_at(s->file, st->pos, "for ... in enumerate(x): x must be a sized array")
+        idecl: *Stmt = st_new(s->a, ST_VAR, st->pos)
+        idecl->name = st->var
+        idecl->type = ty_name(s->a, "usize")
+        vdecl: *Stmt = st_new(s->a, ST_VAR, st->pos)
+        vdecl->name = st->var2
+        vdecl->type = at->inner
+        # bind `v = arr[i]` at the top of the body, then rewrite to range(0, len)
+        ix: *Expr = ex_new(s->a, EX_INDEX, st->pos)
+        ix->lhs = arr
+        ix->rhs = mk_ident(s->a, st->var, st->pos)
+        asn: *Stmt = st_new(s->a, ST_ASSIGN, st->pos)
+        asn->lhs = mk_ident(s->a, st->var2, st->pos)
+        asn->op = TK_ASSIGN
+        asn->rhs = ix
+        block_prepend(s, st->body, asn)
+        st->from = None
+        st->to = at->arr_len
+        st->step = None
+        st->var2 = None       # now a plain range-for for check_stmt and the backends
+        scope_add(s, idecl->name, idecl->type)
+        scope_add(s, vdecl->name, vdecl->type)
+        *d1 = idecl
+        *d2 = vdecl
+        return
+    if scope_find(s, st->var) != None:
+        return   # explicitly declared already — keep legacy behavior
+    is_signed: bool = expr_is_negative(st->from) or expr_is_negative(st->to) or expr_is_negative(st->step)
+    ty: *Type = ty_name(s->a, "isize" if is_signed else "usize")
+    decl: *Stmt = st_new(s->a, ST_VAR, st->pos)
+    decl->name = st->var
+    decl->type = ty
+    scope_add(s, st->var, ty)
+    *d1 = decl
+
+# checks a block's statements, injecting auto-declared `for` iterators as an
+# ST_VAR right before their loop. The caller owns the scope, so the iterator
+# stays visible after the loop. b->stmts is rebuilt only if something was added.
+static def check_stmts(s: *Sema, b: *Block):
+    ns: **Stmt = None
+    nn: i32 = 0
+    cap: i32 = 0
+    injected: bool = False
+    for i in range(b->n):
+        st: *Stmt = b->stmts[i]
+        if st->kind == ST_FOR:
+            d1: *Stmt = None
+            d2: *Stmt = None
+            lower_for_iter(s, st, &d1, &d2)
+            if d1 != None:
+                ns = vec_grow(ns, nn, &cap, sizeof(*ns))
+                ns[nn] = d1
+                nn += 1
+                injected = True
+            if d2 != None:
+                ns = vec_grow(ns, nn, &cap, sizeof(*ns))
+                ns[nn] = d2
+                nn += 1
+        check_stmt(s, st)
+        ns = vec_grow(ns, nn, &cap, sizeof(*ns))
+        ns[nn] = st
+        nn += 1
+    if injected:
+        b->stmts = ns
+        b->n = nn
+
 static def check_block(s: *Sema, b: *Block):
     scope_push(s)
-    i: i32
-    for i in range(b->n):
-        check_stmt(s, b->stmts[i])
+    check_stmts(s, b)
     scope_pop(s)
 
 static def check_func_body(s: *Sema, f: *Func):
@@ -1737,11 +1846,9 @@ static def check_func_body(s: *Sema, f: *Func):
     s->cur_fname = f->cname   # for __func__
     s->vla_nhoist = 0         # --std=c89: VLA statements to hoist to the entry
     scope_push(s)
-    i: i32
     for i in range(f->nparams):
         scope_add(s, f->params[i].name, f->params[i].type)
-    for i in range(f->body->n):
-        check_stmt(s, f->body->stmts[i])
+    check_stmts(s, f->body)
     scope_pop(s)
     # hoists the hidden pointers + defers of the VLAs to the function's ENTRY. They
     # stay before any label (goto doesn't skip the decl) and in the outermost scope (the
@@ -1765,7 +1872,6 @@ static def register_func(s: *Sema, f: *Func):
         if not s->func_templates.has(f->name):
             s->func_templates.put(f->name, f)
         return
-    i0: i32
     for i0 in range(f->nparams):
         resolve_type(s, f->params[i0].type)
         # fold const/enum array dims to literals; under --std=c89 a runtime
@@ -1805,6 +1911,179 @@ static def register_func(s: *Sema, f: *Func):
 static def register_module(s: *Sema, m: *Module, check_bodies: bool)
 static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool)
 
+# ---------- C header ingestion (`include <h>` / `include "h"`) ----------
+# `include` is transparent: the header's declarations (types, prototypes) become
+# known to P via register_module, while the backend still emits a plain #include.
+# We use the system C preprocessor (`cc -E`) — already required to turn P's C
+# output into a binary — then feed the result to the C front end (c_parse).
+# popen/pclose are POSIX, not declared by <stdio.h> under strict -std=c11, so we
+# prototype them here — otherwise C assumes an int return and truncates the FILE*.
+def popen(cmd: const *char, mode: const *char) -> *FILE
+def pclose(stream: *FILE) -> i32
+
+static def cpp_capture(s: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char:
+    cpp: const *char = s->cc->cpp if s->cc->cpp != None else "cc"
+    cmd: const *char
+    if is_sys:
+        cmd = arena_printf(s->a, "printf '#include <%s>\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir)
+    else:
+        cmd = arena_printf(s->a, "printf '#include \"%s\"\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir)
+    f: *FILE = popen(cmd, "r")
+    if f == None:
+        fatal("could not run '%s -E' to ingest C header '%s' (see --cpp / PLANGC_CPP)", cpp, path)
+    b: StrBuf = {0}
+    chunk: char[4097]
+    while True:
+        n: usize = fread(&chunk[0], 1, 4096, f)
+        if n == 0:
+            break
+        chunk[n] = '\0'
+        sb_puts(&b, &chunk[0])
+    rc: i32 = pclose(f)
+    if rc != 0:
+        fatal("'%s' failed to preprocess header '%s' (not found? see --cpp / PLANGC_CPP)", cpp, path)
+    out: const *char = arena_strdup(s->a, b.data if b.data != None else "")
+    sb_free(&b)
+    return out
+
+# object-like macro RHS -> integer, tolerantly: parens, unary +/-/~, ONE integer
+# literal with C suffixes. Anything more complex returns False (macro skipped).
+static def macro_int_val(txt: const *char, out: *i64) -> bool:
+    i: i32 = 0
+    neg: bool = False
+    flip: bool = False
+    while txt[i] != '\0':
+        c: char = txt[i]
+        if c == ' ' or c == '\t' or c == '(':
+            i += 1
+        elif c == '-':
+            neg = not neg
+            i += 1
+        elif c == '+':
+            i += 1
+        elif c == '~':
+            flip = not flip
+            i += 1
+        else:
+            break
+    if not (txt[i] >= '0' and txt[i] <= '9'):
+        return False
+    endp: *char = None
+    v: i64 = i64(strtoull(txt + i, &endp, 0))
+    while *endp == 'u' or *endp == 'U' or *endp == 'l' or *endp == 'L':
+        endp += 1
+    while *endp != '\0':
+        if *endp != ' ' and *endp != '\t' and *endp != ')':
+            return False
+        endp += 1
+    if flip:
+        v = ~v
+    if neg:
+        v = -v
+    *out = v
+    return True
+
+static def macro_put(s: *Sema, name: const *char, v: CVal):
+    cp: *CVal = arena_alloc(s->a, sizeof(CVal))
+    *cp = v
+    s->constvals.put(name, cp)
+    s->macroconsts.add(name)
+
+# `cc -E -dM`: every #define visible after including the header. Object-like
+# macros whose RHS is a literal (or an alias to one) become comptime constants —
+# EOF, BUFSIZ, RAND_MAX... Function-like and token/text macros are skipped: they
+# have no typed value (that's cpp territory; in the C backend they still pass
+# through and the emitted #include resolves them).
+static def ingest_macros(s: *Sema, path: const *char, is_sys: bool, dir: const *char):
+    src: const *char = cpp_capture(s, "-E -dM", path, is_sys, dir)
+    an: **char = None    # alias macros (NAME -> IDENT): resolved after the scan
+    av: **char = None
+    nal = 0; cal = 0; cav = 0
+    p: const *char = src
+    while *p != '\0':
+        # each line: #define NAME rest
+        eol: const *char = strchr(p, '\n')
+        if eol == None:
+            eol = p + strlen(p)
+        if strncmp(p, "#define ", 8) == 0:
+            q: const *char = p + 8
+            st: const *char = q
+            while q < eol and *q != ' ' and *q != '(' and *q != '\t':
+                q += 1
+            if q < eol and *q != '(':   # '(' right after the name = function-like: skip
+                name: const *char = arena_strndup(s->a, st, usize(q - st))
+                while q < eol and (*q == ' ' or *q == '\t'):
+                    q += 1
+                rhs: const *char = arena_strndup(s->a, q, usize(eol - q))
+                if not s->constvals.has(name):
+                    iv: i64 = 0
+                    rl: usize = strlen(rhs)
+                    if macro_int_val(rhs, &iv):
+                        macro_put(s, name, cv_int(iv))
+                    elif rl >= 2 and rhs[0] == '"' and rhs[rl - 1] == '"':
+                        macro_put(s, name, cv_str(rhs))
+                    elif rl > 0 and (isalpha(rhs[0]) or rhs[0] == '_'):
+                        ok2: bool = True
+                        k: usize = 1
+                        while k < rl:
+                            if not (isalnum(rhs[k]) or rhs[k] == '_'):
+                                ok2 = False
+                                break
+                            k += 1
+                        if ok2:   # NAME -> OTHER_MACRO: resolve later
+                            an = vec_grow(an, nal, &cal, sizeof(*an))
+                            av = vec_grow(av, nal, &cav, sizeof(*av))
+                            an[nal] = (*char)(name)
+                            av[nal] = (*char)(rhs)
+                            nal += 1
+        p = eol + 1 if *eol != '\0' else eol
+    # alias passes: INT_MAX -> __INT_MAX__ etc. (bounded; chains are short)
+    pass_: i32 = 0
+    while pass_ < 4:
+        changed: bool = False
+        for i in range(nal):
+            if an[i] != None and not s->constvals.has(an[i]):
+                tv: *CVal = s->constvals.get_or(av[i], None)
+                if tv != None:
+                    macro_put(s, an[i], *tv)
+                    an[i] = None
+                    changed = True
+        if not changed:
+            break
+        pass_ += 1
+    free(an)
+    free(av)
+
+static def ingest_c_header(s: *Sema, m: *Module, d: *Decl):
+    dir: const *char = dir_of(s->a, m->path)
+    key: const *char = arena_printf(s->a, "<c>%s", d->import_path)
+    # declarations: cache by path (a header is parsed once per compilation)
+    cached: *Module = None
+    i: i32
+    for i in range(s->cc->nmods):
+        if strcmp(s->cc->mods[i]->path, key) == 0:
+            cached = s->cc->mods[i]
+            break
+    if cached == None:
+        src: const *char = cpp_capture(s, "-E -P", d->import_path, d->import_system, dir)
+        cached = c_parse(s->a, d->import_path, src, strlen(src))
+        cached->path = key
+        # signatures only: drop function bodies (glibc's static-inline helpers
+        # call __builtin_* the QBE backend can't emit, and their bodies would be
+        # re-checked/re-emitted per TU). A call to one resolves to the real libc
+        # symbol; the C backend's emitted #include keeps the inline version.
+        for i in range(cached->ndecls):
+            if cached->decls[i]->kind == DL_FUNC:
+                cached->decls[i]->func->body = None
+                cached->decls[i]->func->is_inline = False
+                cached->decls[i]->func->is_static = False
+        s->cc->mods = vec_grow(s->cc->mods, s->cc->nmods, &s->cc->cmods, sizeof(*s->cc->mods))
+        s->cc->mods[s->cc->nmods] = cached
+        s->cc->nmods += 1
+    register_module(s, cached, False)
+    # macro constants: registered per sema run (constvals are per-module state)
+    ingest_macros(s, d->import_path, d->import_system, dir)
+
 # declare/implement X<...>: monomorphizes the template and turns the node into
 # a concrete DL_STRUCT (declare: fields + prototypes; implement: bodies only),
 # which follows the normal registration and emission flow
@@ -1821,7 +2100,6 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
             fatal_at(s->file, d->pos, "'%s' already implemented (duplicate implement)", g->name)
         s->implemented.add(g->name)
         nb = 0
-        j0: i32
         for j0 in range(si0->nmethods):
             if si0->methods[j0]->body != None and si0->methods[j0]->in_header:
                 nb += 1
@@ -1849,7 +2127,6 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
     if ftpl != None:
         if g->ntargs != ftpl->ntparams:
             fatal_at(s->file, d->pos, "'%s' expects %d type argument(s), got %d", g->name, ftpl->ntparams, g->ntargs)
-        fi: i32
         for fi in range(g->ntargs):
             resolve_type(s, g->targs[fi])
         fmangled: *char = mangle_instance(s, g)
@@ -1875,7 +2152,6 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         fatal_at(s->file, d->pos, "generic struct '%s' not found", g->name)
     if g->ntargs != tpl->ntparams:
         fatal_at(s->file, d->pos, "'%s' expects %d type argument(s), got %d", g->name, tpl->ntparams, g->ntargs)
-    i: i32
     for i in range(g->ntargs):
         resolve_type(s, g->targs[i])
     mangled: *char = mangle_instance(s, g)
@@ -1922,7 +2198,9 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
 static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
     match d->kind:
         case DL_IMPORT:
-            if not d->import_system and ends_with(d->import_path, ".ph"):
+            if d->is_include:
+                ingest_c_header(s, m, d)
+            elif not d->import_system and ends_with(d->import_path, ".ph"):
                 dir: const *char = dir_of(s->a, m->path)
                 full: const *char = arena_printf(s->a, "%s/%s", dir, d->import_path)
                 sub: *Module = cc_load_module(s->cc, full)
@@ -1967,7 +2245,6 @@ static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
                 si->is_union = d->kind == DL_UNION
                 s->structs.put(d->name, si)
                 add_type(s, d->name)
-            i: i32
             for i in range(d->nfields):
                 resolve_type(s, d->fields[i].type)
                 fold_const_dims(s, d->fields[i].type)  # i32[MAX] -> i32[64] (enum/const)
@@ -2028,7 +2305,6 @@ static def register_module(s: *Sema, m: *Module, check_bodies: bool):
 
     prev: const *char = s->file
     s->file = m->path
-    j: i32
     for j in range(m->ndecls):
         register_decl(s, m, m->decls[j], check_bodies)
     s->file = prev
@@ -2076,7 +2352,6 @@ static def inject_defines(s: *Sema, cc: *Cc, m: *Module):
     zp: Pos = {0, 0}
     nd: **Decl = arena_alloc(s->a, usize(cc->ndefines + m->ndecls) * sizeof(*nd))
     np = 0
-    i: i32
     for i in range(cc->ndefines):
         d: const *char = cc->defines[i]
         eq: const *char = strchr(d, '=')
@@ -2108,7 +2383,6 @@ static def inject_defines(s: *Sema, cc: *Cc, m: *Module):
             .init = ini
         nd[np] = dc
         np += 1
-    j: i32
     for j in range(m->ndecls):
         nd[np] = m->decls[j]
         np += 1
@@ -2129,6 +2403,7 @@ def sema_run(cc: *Cc, m: *Module):
         s.funcs.deinit()
         s.globals.deinit()
         s.constvals.deinit()
+        s.macroconsts.deinit()
         s.enumconsts.deinit()
         s.done.deinit()
         free(s.locals)

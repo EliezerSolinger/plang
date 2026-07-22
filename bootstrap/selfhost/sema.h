@@ -16,6 +16,7 @@ struct Cc {
     int32_t ndefines;
     const char *backend_name;
     int32_t std_version;
+    const char *cpp;
 };
 
 Module *cc_load_module(Cc *cc, const char *path);

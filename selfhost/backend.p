@@ -1,5 +1,5 @@
 # backend.p — backend registration and dispatch (implements backend.ph)
-import <string.h>
+include <string.h>
 import "backend.ph"
 
 # sentinel: name == None ends the table

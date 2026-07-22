@@ -476,6 +476,7 @@ struct Cp {
     StrMap_pType typedefs;
     StrMap_i64 enumvals;
     StrSet enum_signed;
+    StrSet fwd_tags;
     Vec_pDecl *out_decls;
     int32_t anon;
     int saw_const;
@@ -642,6 +643,15 @@ static Type *Cp_parse_base_type(Cp *self) {
             }
             Decl *d = Cp_parse_struct_body(self, tag, is_union);
             Vec_pDecl_push(self->out_decls, d);
+            StrSet_add(&self->fwd_tags, tag);
+        } else if (tag != NULL && !StrSet_has(&self->fwd_tags, tag)) {
+            Decl *fd = arena_alloc(self->a, sizeof(Decl));
+            fd->kind = (is_union ? DL_UNION : DL_STRUCT);
+            fd->name = tag;
+            fd->is_fwd = 1;
+            fd->pos = Cp_pk(self)->pos;
+            Vec_pDecl_push(self->out_decls, fd);
+            StrSet_add(&self->fwd_tags, tag);
         }
         return Cp_base_name(self, tag);
     }
@@ -912,7 +922,7 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
                     }
                 }
                 if (bad_dim) {
-                    int32_t fk0;
+                    size_t fk0;
                     for (fk0 = 0; fk0 < fndim; fk0 += 1) {
                         fty = ty_ptr(self->a, fty);
                     }
@@ -952,11 +962,11 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
     Cp_expect_punct(self, "}");
     Decl *d = arena_alloc(self->a, sizeof(Decl));
     {
-        Decl *__with_695_9 = d;
-        __with_695_9->kind = (is_union ? DL_UNION : DL_STRUCT);
-        __with_695_9->name = tag;
-        __with_695_9->fields = fields.data;
-        __with_695_9->nfields = fields.len;
+        Decl *__with_708_9 = d;
+        __with_708_9->kind = (is_union ? DL_UNION : DL_STRUCT);
+        __with_708_9->name = tag;
+        __with_708_9->fields = fields.data;
+        __with_708_9->nfields = fields.len;
     }
     return d;
 }
@@ -1803,7 +1813,7 @@ void c_init_elem(Cp *p, Vec_pExpr *out) {
         }
         d->lhs = v;
         if (is_range) {
-            int64_t k;
+            size_t k;
             for (k = lo; k < hi + 1; k += 1) {
                 Expr *dk = ex_new(p->a, EX_DESIG, pos);
                 Expr *ik = ex_new(p->a, EX_NUMBER, pos);
@@ -2181,16 +2191,16 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         if (fpty != NULL && fpty->kind == TY_FUNC && fhp) {
             Func *ff = arena_alloc(p->a, sizeof(Func));
             {
-                Func *__with_1778_13 = ff;
-                __with_1778_13->pos = pos;
-                __with_1778_13->name = fpname;
-                __with_1778_13->cname = fpname;
-                __with_1778_13->ret = fpty->inner;
-                __with_1778_13->params = fprms.data;
-                __with_1778_13->nparams = fprms.len;
-                __with_1778_13->is_varargs = fva;
+                Func *__with_1790_13 = ff;
+                __with_1790_13->pos = pos;
+                __with_1790_13->name = fpname;
+                __with_1790_13->cname = fpname;
+                __with_1790_13->ret = fpty->inner;
+                __with_1790_13->params = fprms.data;
+                __with_1790_13->nparams = fprms.len;
+                __with_1790_13->is_varargs = fva;
                 if (Cp_is_punct(p, "{")) {
-                    __with_1778_13->body = c_block(p);
+                    __with_1790_13->body = c_block(p);
                 }
             }
             Decl *df = arena_alloc(p->a, sizeof(Decl));
@@ -2201,14 +2211,14 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         }
         Decl *dfp = arena_alloc(p->a, sizeof(Decl));
         {
-            Decl *__with_1794_9 = dfp;
-            __with_1794_9->kind = DL_VAR;
-            __with_1794_9->pos = pos;
-            __with_1794_9->name = fpname;
-            __with_1794_9->type = fpty;
-            __with_1794_9->is_extern = is_extern;
+            Decl *__with_1806_9 = dfp;
+            __with_1806_9->kind = DL_VAR;
+            __with_1806_9->pos = pos;
+            __with_1806_9->name = fpname;
+            __with_1806_9->type = fpty;
+            __with_1806_9->is_extern = is_extern;
             if (Cp_eat(p, "=")) {
-                __with_1794_9->init = c_initializer(p);
+                __with_1806_9->init = c_initializer(p);
             }
         }
         return dfp;
@@ -2234,16 +2244,16 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
         Cp_skip_gnu(p);
         Func *f = arena_alloc(p->a, sizeof(Func));
         {
-            Func *__with_1824_9 = f;
-            __with_1824_9->pos = pos;
-            __with_1824_9->name = name;
-            __with_1824_9->cname = name;
-            __with_1824_9->ret = ty;
-            __with_1824_9->params = params.data;
-            __with_1824_9->nparams = params.len;
-            __with_1824_9->is_varargs = is_vararg;
+            Func *__with_1836_9 = f;
+            __with_1836_9->pos = pos;
+            __with_1836_9->name = name;
+            __with_1836_9->cname = name;
+            __with_1836_9->ret = ty;
+            __with_1836_9->params = params.data;
+            __with_1836_9->nparams = params.len;
+            __with_1836_9->is_varargs = is_vararg;
             if (Cp_is_punct(p, "{")) {
-                __with_1824_9->body = c_block(p);
+                __with_1836_9->body = c_block(p);
             }
         }
         Decl *d = arena_alloc(p->a, sizeof(Decl));
@@ -2272,14 +2282,14 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
     Cp_skip_gnu(p);
     Decl *d2 = arena_alloc(p->a, sizeof(Decl));
     {
-        Decl *__with_1856_5 = d2;
-        __with_1856_5->kind = DL_VAR;
-        __with_1856_5->pos = pos;
-        __with_1856_5->name = name;
-        __with_1856_5->type = ty;
-        __with_1856_5->is_extern = is_extern;
+        Decl *__with_1868_5 = d2;
+        __with_1868_5->kind = DL_VAR;
+        __with_1868_5->pos = pos;
+        __with_1868_5->name = name;
+        __with_1868_5->type = ty;
+        __with_1868_5->is_extern = is_extern;
         if (Cp_eat(p, "=")) {
-            __with_1856_5->init = c_initializer(p);
+            __with_1868_5->init = c_initializer(p);
         }
     }
     return d2;
@@ -2369,5 +2379,6 @@ Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes) {
     m->ndecls = decls.len;
     StrSet_deinit(&cp.types);
     StrMap_pType_deinit(&cp.typedefs);
+    StrSet_deinit(&cp.fwd_tags);
     return m;
 }

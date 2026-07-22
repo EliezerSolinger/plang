@@ -12,9 +12,9 @@
 # F1 slice: integers (w/l), char, pointers, arrays, arithmetic/relational/
 # logical ops, if/elif/else/while/for/do, non-variadic calls, strings,
 # return. Pending: floats, struct by value, variadics, match, defer.
-import <stdio.h>
-import <string.h>
-import <stdlib.h>
+include <stdio.h>
+include <string.h>
+include <stdlib.h>
 import "backend.ph"
 import "lexer.ph"
 import "vecs.ph"
@@ -55,7 +55,6 @@ def merge_init(old: *Expr, new: *Expr) -> *Expr:
     m->pos = new->pos
     tot: i32 = old->nargs + new->nargs
     a: **Expr = calloc(usize(tot), sizeof(old->args[0]))
-    i: i32
     for i in range(old->nargs):
         a[i] = old->args[i]
     for i in range(new->nargs):
@@ -299,48 +298,12 @@ def fnum(t: const *char) -> const *char:
     return b
 
 # arithmetic promotion of QBE classes: float wins over int, double wins over single
-# return class of libc functions WITHOUT a prototype in P (the C backend uses
-# the headers; QBE needs to know so it doesn't truncate a pointer/size_t nor
-# read garbage in the high 32 bits of an int return). Names outside the list
-# assume int ('w').
-libc_ret_l: const *char[] = {
-    "strchr", "strrchr", "strstr", "strpbrk", "strdup", "strndup", "strcat",
-    "strcpy", "strncpy", "malloc", "calloc", "realloc", "memcpy", "memmove",
-    "memset", "memchr", "fopen", "freopen", "fdopen", "getenv", "fgets",
-    "strlen", "fread", "fwrite", "ftell", "strtol", "strtoll", "strtoul",
-    "strtoull", "realpath", "getcwd", "dirname", "basename",
-    "ctime", "asctime", "localtime", "gmtime", "time", "strerror",
-    "setlocale", "tmpfile", "fmemopen", "mmap", "signal", "readdir",
-    "opendir", None}
-
-# <math.h> functions with signature (double...) -> double. With no prototype
-# in P, QBE needs to know so it can (a) read the return from xmm0 (class 'd',
-# not 'w') and (b) coerce integer arguments to double before the call
-# (sin(2) -> sin(2.0)).
-libc_math_d: const *char[] = {
-    "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh",
-    "tanh", "asinh", "acosh", "atanh", "exp", "exp2", "expm1", "log", "log10",
-    "log2", "log1p", "pow", "sqrt", "cbrt", "hypot", "ceil", "floor", "round",
-    "trunc", "rint", "nearbyint", "fabs", "fmod", "remainder", "copysign",
-    "fdim", "fmax", "fmin", "tgamma", "lgamma", "erf", "erfc", None}
-
-def is_libc_math_d(name: const *char) -> bool:
-    i: i32 = 0
-    while libc_math_d[i] != None:
-        if strcmp(name, libc_math_d[i]) == 0:
-            return True
-        i += 1
-    return False
-
-def libc_ret_cls(name: const *char) -> char:
-    if strcmp(name, "strtod") == 0 or strcmp(name, "atof") == 0 or is_libc_math_d(name):
-        return 'd'
-    i: i32 = 0
-    while libc_ret_l[i] != None:
-        if strcmp(name, libc_ret_l[i]) == 0:
-            return 'l'
-        i += 1
-    return 'w'
+#
+# NOTE: there is no hardcoded libc knowledge here anymore. A call with no known
+# prototype defaults to class 'w' (C's implicit-int rule). Real signatures come
+# from `include <header.h>` — the header is ingested (cpp + C front end) and its
+# prototypes/macros flow through sema, so pointer/size_t/double returns and
+# unsigned comparisons are all derived from the actual declarations.
 
 def qpromote(a: char, b: char) -> char:
     if a == 'd' or b == 'd':
@@ -432,6 +395,7 @@ struct Qb:
     static def emit_qtype(self: *Qb, out: *StrBuf, name: const *char, done: *StrSet)
     static def is_valist(self: *Qb, t: *Type) -> bool
     static def is_signed(self: *Qb, t: *Type) -> bool
+    static def op_signed(self: *Qb, e: *Expr) -> bool
     static def find_var(self: *Qb, name: const *char) -> *QVar
     static def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool
     static def qtype_of(self: *Qb, e: *Expr) -> *Type
@@ -522,7 +486,9 @@ struct Qb:
             return 0
         match e->kind:
             case EX_NUMBER:
-                return i64(strtoll(e->text, None, 0))
+                # literal text is non-negative; strtoull avoids LLONG_MAX saturation
+                # for values >= 2^63 (the bit pattern fits i64).
+                return i64(strtoull(e->text, None, 0))
             case EX_CHARLIT:
                 return i64(self->charval(e->text))
             case EX_TRUE:
@@ -734,7 +700,6 @@ struct Qb:
         # union: all fields at offset 0; size = the largest field
         if d->kind == DL_UNION:
             mx = 0
-            u: i32
             for u in range(d->nfields):
                 fs: i32 = self->size_of(d->fields[u].type)
                 if fs > mx:
@@ -873,7 +838,6 @@ struct Qb:
     static def data_fill_body(self: *Qb, db: *StrBuf, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, idx: *i32) -> i32:
         # is there a designator at this level?
         has_desig: bool = False
-        di: i32
         for di in range(*idx, nitems):
             if items[di] != None and items[di]->kind == EX_DESIG:
                 has_desig = True
@@ -908,7 +872,6 @@ struct Qb:
                 # designator in union: finds the owning member (direct or inside
                 # an anonymous member) and delegates the whole stream to it
                 fname: const *char = items[*idx]->field
-                ui: i32
                 for ui in range(sd->nfields):
                     if strcmp(sd->fields[ui].name, fname) == 0:
                         # direct member: initializes only it with the value
@@ -1005,7 +968,6 @@ struct Qb:
     static def data_fill_slots_arr(self: *Qb, db: *StrBuf, ty: *Type, count: i32, esz: i32, items: **Expr, nitems: i32, idx: *i32) -> i32:
         # 1st pass: size (if inferred) = max(position) + 1
         cur = 0; mx = 0
-        k: i32
         for k in range(*idx, nitems):
             it: *Expr = items[k]
             if it != None and it->kind == EX_DESIG and it->rhs != None:
@@ -1049,13 +1011,11 @@ struct Qb:
     static def data_fill_slots_struct(self: *Qb, db: *StrBuf, sd: *Decl, items: **Expr, nitems: i32, idx: *i32) -> i32:
         slots: **Expr = calloc(usize(sd->nfields), sizeof(items[0]))
         cur = 0
-        k: i32
         for k in range(*idx, nitems):
             it: *Expr = items[k]
             val: *Expr = it
             if it != None and it->kind == EX_DESIG and it->field != None:
                 fi = -1
-                f2: i32
                 for f2 in range(sd->nfields):
                     if strcmp(sd->fields[f2].name, it->field) == 0:
                         fi = f2
@@ -1271,6 +1231,11 @@ struct Qb:
             return True
         n: const *char = t->name
         return not (strcmp(n, "u8") == 0 or strcmp(n, "u16") == 0 or strcmp(n, "u32") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "unsigned") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "bool") == 0)
+
+    # signedness of an operand (from its declared/ingested type; an unprototyped
+    # call has no type and defaults to signed, like C's implicit int)
+    static def op_signed(self: *Qb, e: *Expr) -> bool:
+        return self->is_signed(self->qtype_of(e))
 
     static def find_var(self: *Qb, name: const *char) -> *QVar:
         i: i32
@@ -1519,10 +1484,10 @@ struct Qb:
         # sizeof(...) -> size_t (class 'l')
         if e->kind == EX_CALL and e->lhs != None and e->lhs->kind == EX_IDENT and strcmp(e->lhs->text, "sizeof") == 0:
             return 'l'
-        # direct call to a function WITHOUT a prototype (libc): uses the return
-        # class table (otherwise a returned pointer would be truncated to 'w')
+        # direct call to a function WITHOUT a prototype: defaults to 'w' (C's
+        # implicit-int rule). `include <header.h>` ingests the real signature.
         if e->kind == EX_CALL and e->lhs != None and e->lhs->kind == EX_IDENT and self->funcs.get_or(e->lhs->text, None) == None and self->find_var(e->lhs->text) == None and self->globals.get_or(e->lhs->text, None) == None:
-            return libc_ret_cls(e->lhs->text)
+            return 'w'
         # -x / +x / ~x preserve the operand's class (matters for float)
         if e->kind == EX_UNARY and (e->op == TK_MINUS or e->op == TK_PLUS or e->op == TK_TILDE):
             return self->ecls(e->lhs)
@@ -2163,7 +2128,7 @@ struct Qb:
                 cls = 'w'
             l = self->emit_coerce(l, lcls, cls)
             r = self->emit_coerce(r, rcls, cls)
-        sgn: bool = self->is_signed(self->qtype_of(e->lhs)) and self->is_signed(self->qtype_of(e->rhs))
+        sgn: bool = self->op_signed(e->lhs) and self->op_signed(e->rhs)
         t: i32 = self->tmp()
         if is_cmp:
             sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, self->cmp_name(op, cls, sgn), l, r)
@@ -2320,7 +2285,7 @@ struct Qb:
                 rcls = self->cls_of(ct->inner)
         else:
             f = self->funcs.get_or(fname, None)
-            rcls = self->cls_of(f->ret) if f != None else libc_ret_cls(fname)
+            rcls = self->cls_of(f->ret) if f != None else 'w'
         # evaluates arguments
         argt: Vec<i32>
         argc: Vec<char>
@@ -2340,9 +2305,6 @@ struct Qb:
                 # coerce to the declared parameter's class
                 pc: char = self->cls_of(f->params[i].type)
                 av = self->emit_coerce(av, ac, pc); ac = pc
-            elif f == None and not indirect and fname != None and is_libc_math_d(fname):
-                # <math.h> without a prototype: the arguments are double (sin(2)->sin(2.0))
-                av = self->emit_coerce(av, ac, 'd'); ac = 'd'
             elif (is_var or (f == None and not indirect)) and ac == 's':
                 # standard C promotion: float -> double in a variadic argument
                 # OR in a call to a function without a prototype (e.g. printf from <stdio.h>)
@@ -2834,7 +2796,6 @@ struct Qb:
             it0: *Expr = items[*idx] if *idx < nitems else None
             if it0 != None and it0->kind == EX_DESIG and it0->field != None:
                 # direct member or inside an anonymous one
-                ui: i32
                 for ui in range(sd->nfields):
                     if strcmp(sd->fields[ui].name, it0->field) == 0:
                         one0: *Expr = it0->lhs
@@ -2862,7 +2823,6 @@ struct Qb:
                 break   # positional past the last field; a designator may go back
             if it2 != None and it2->kind == EX_DESIG and it2->field != None:
                 k = -1
-                j2: i32
                 for j2 in range(sd->nfields):
                     if strcmp(sd->fields[j2].name, it2->field) == 0:
                         k = j2
@@ -3137,6 +3097,7 @@ struct Qb:
         # init: i = from (or 0)
         if s->from != None:
             fv: i32 = self->emit_rvalue(s->from)
+            fv = self->emit_coerce(fv, self->ecls(s->from), v->cls)
             sb_printf(self->out, "\t%s %%t%d, %%t%d\n", self->store_op(v->ty), fv, v->slot)
         else:
             z: i32 = self->tmp()
@@ -3152,6 +3113,7 @@ struct Qb:
         iv: i32 = self->tmp()
         sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", iv, v->cls, self->load_op(v->ty), v->slot)
         tov: i32 = self->emit_rvalue(s->to)
+        tov = self->emit_coerce(tov, self->ecls(s->to), v->cls)
         cc: i32 = self->tmp()
         cmp: const *char = arena_qcmp("csgt" if neg else "cslt", v->cls)
         sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", cc, cmp, iv, tov)
@@ -3173,6 +3135,7 @@ struct Qb:
         stepv: i32
         if s->step != None:
             stepv = self->emit_rvalue(s->step)
+            stepv = self->emit_coerce(stepv, self->ecls(s->step), v->cls)
         else:
             stepv = self->tmp()
             sb_printf(self->out, "\t%%t%d =%c copy 1\n", stepv, v->cls)
@@ -3230,7 +3193,6 @@ struct Qb:
             if st->kind == ST_CASE:
                 acc->push(st)
             elif st->kind != ST_SWITCH:
-                j: i32
                 for j in range(st->nconds):
                     self->collect_cases(st->blocks[j], acc)
                 self->collect_cases(st->else_block, acc)
@@ -3297,7 +3259,6 @@ struct Qb:
             if mc->is_default:
                 default_lbl = labels.data[i]
                 continue
-            j: i32
             for j in range(mc->nvals):
                 cv: i32 = self->emit_rvalue(mc->vals[j])
                 cv = self->emit_coerce(cv, self->ecls(mc->vals[j]), scls)
@@ -3329,7 +3290,6 @@ struct Qb:
         self->collect_evars(e->lhs)
         self->collect_evars(e->rhs)
         self->collect_evars(e->cond)
-        j: i32
         for j in range(e->nargs):
             self->collect_evars(e->args[j])
 
@@ -3343,7 +3303,6 @@ struct Qb:
             self->collect_evars(st->rhs)
             self->collect_evars(st->cond)
             self->collect_evars(st->subject)
-            ci: i32
             for ci in range(st->nconds):
                 self->collect_evars(st->conds[ci])
             match st->kind:
@@ -3374,7 +3333,6 @@ struct Qb:
                         elif st->if_sel == st->nconds:
                             self->collect_vars(st->else_block)
                     else:
-                        j: i32
                         for j in range(st->nconds):
                             self->collect_vars(st->blocks[j])
                         if st->else_block != None:
@@ -3395,7 +3353,6 @@ struct Qb:
                         if st->tm_sel >= 0:
                             self->collect_vars(st->cases[st->tm_sel]->body)
                     else:
-                        mj: i32
                         for mj in range(st->ncases):
                             self->collect_vars(st->cases[mj]->body)
                 case _:
@@ -3627,21 +3584,11 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
         qb.structs.deinit()
         qb.enumc.deinit()
         sb_free(&qb.data)
-    # universal macros from <stdio.h>/<stdlib.h> resolved as constants: the
-    # C backend gets them from the headers, but QBE has no preprocessor — without
-    # this `EOF` etc. would become an undefined symbol at link time. Values are
-    # fixed across every real platform (glibc/musl/BSD). Registered as if they
-    # were an enum.
-    libc_k: const *char[] = {"EOF", "SEEK_SET", "SEEK_CUR", "SEEK_END", "EXIT_SUCCESS", "EXIT_FAILURE", None}
-    libc_v: i64[] = {-1, 0, 1, 2, 0, 1}
-    lk: i32 = 0
-    while libc_k[lk] != None:
-        eck: EnumConst = {libc_k[lk], libc_v[lk]}
-        qb.enumc.push(eck)
-        lk += 1
+    # (macro constants like EOF/SEEK_SET are no longer hardcoded here: with
+    # `include <header.h>` sema ingests the real #defines and folds them to
+    # literals before the backend ever sees the names)
 
     # collects function signatures and global types
-    i: i32
     for i in range(m->ndecls):
         d: *Decl = m->decls[i]
         if d->kind == DL_FUNC:
@@ -3654,14 +3601,12 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
             # too — but never shadowing a real layout that has fields
             if d->nfields > 0 or qb.structs.get_or(d->name, None) == None:
                 qb.structs.put(d->name, d)
-            j: i32
             for j in range(d->nmethods):
                 qb.funcs.put(d->methods[j]->cname, d->methods[j])
         elif d->kind == DL_ENUM:
             # registers each constant with its value (auto-increment; an
             # explicit number/char value repositions the counter)
             next_val: i64 = 0
-            k: i32
             for k in range(d->nitems):
                 iv: *EnumItem = &d->items[k]
                 if iv->value != None and iv->value->kind == EX_NUMBER:
@@ -3679,7 +3624,6 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
     # from other compilers (e.g. a 4-byte Ref would come back in %eax, not via sret)
     seen_ty: StrSet
     seen_ty.init()
-    ti: i32
     for ti in range(m->ndecls):
         dt: *Decl = m->decls[ti]
         if (dt->kind == DL_STRUCT or dt->kind == DL_UNION) and dt->nfields > 0:
@@ -3694,7 +3638,6 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
     gdone: StrSet
     ginit.init()
     gdone.init()
-    gi: i32
     for gi in range(m->ndecls):
         gd: *Decl = m->decls[gi]
         if gd->kind == DL_VAR and gd->init != None:
@@ -3730,7 +3673,7 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
                 dcls: char = qb.cls_of(d2->type)
                 val: i64 = 0
                 if d2->init->kind == EX_NUMBER:
-                    val = strtoll(d2->init->text, None, 0)
+                    val = i64(strtoull(d2->init->text, None, 0))   # full u64 range; bits fit i64
                 elif d2->init->kind == EX_CHARLIT:
                     val = i64(qb.charval(d2->init->text))
                 elif d2->init->kind == EX_TRUE:
@@ -3835,7 +3778,6 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
             if d3->ntparams > 0:
                 continue   # generic template: only the instances (declare/
                            # implement) get emitted; T is abstract here
-            j2: i32
             for j2 in range(d3->nmethods):
                 mth: *Func = d3->methods[j2]
                 if mth->body != None:

@@ -1,0 +1,19 @@
+2 18 8
+um DOIS 2
+sumiu
+iter: 1=um 2=DOIS
+big=50 ok=100
+10 2 1
+-1
+1 0 1
+set=25 has49=1 has48=0
+strset=2 1 0
+q=11 peek=10 soma=45
+slice=4 30..60
+olá, mundo 42! len=15
+eq=1
+dict<int>: 111 200 has30=0 size=2
+dict<str>: a=1 b=2 buf=1
+dict<str> after remove: a=-1 size=1
+list<int>: len=5 first=99 last=8 idx6=3 count4=1 has8=1
+list<str>: count(a)=2 idx(buf 'a')=0 has(c)=0

@@ -55,4 +55,6 @@ void fatal(const char *fmt, ...);
 
 void fatal_at(const char *file, Pos pos, const char *fmt, ...);
 
+void warn_at(const char *file, Pos pos, const char *fmt, ...);
+
 char *read_entire_file(const char *path, size_t *out_len);

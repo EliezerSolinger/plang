@@ -28,6 +28,8 @@ static void usage(void) {
     fprintf(stderr, "  --i64-downgrade  under c89: map 64-bit ints to 32-bit\n");
     fprintf(stderr, "  --i64-longlong   under c89: use the long long extension\n");
     fprintf(stderr, "  --backend <b>    codegen target (default: c)\n");
+    fprintf(stderr, "  --cpp <cc>       C compiler used to preprocess `include <h>` headers\n");
+    fprintf(stderr, "                   (default: PLANGC_CPP env, else \"cc\")\n");
     fprintf(stderr, "  --tokens         dump tokens and exit\n");
     fprintf(stderr, "  -h, --help       this help\n");
     exit(2);
@@ -70,13 +72,13 @@ static void dump_tokens(const char *path, Cc *cc) {
 
 static void qbe_merge_types(Cc *cc, Module *m) {
     int extra = 0;
-    int32_t i;
+    size_t i;
     for (i = 0; i < cc->nmods; i += 1) {
         Module *md = cc->mods[i];
         if (md == m) {
             continue;
         }
-        int32_t j;
+        size_t j;
         for (j = 0; j < md->ndecls; j += 1) {
             Decl *dd = md->decls[j];
             DeclKind dk = dd->kind;
@@ -98,7 +100,7 @@ static void qbe_merge_types(Cc *cc, Module *m) {
         if (md2 == m) {
             continue;
         }
-        int32_t j2;
+        size_t j2;
         for (j2 = 0; j2 < md2->ndecls; j2 += 1) {
             Decl *d = md2->decls[j2];
             if (d->kind == DL_STRUCT || d->kind == DL_UNION) {
@@ -106,7 +108,7 @@ static void qbe_merge_types(Cc *cc, Module *m) {
                 *c = *d;
                 if (d->nmethods > 0) {
                     Func **mc = arena_alloc(&cc->arena, sizeof(*d->methods) * (size_t)d->nmethods);
-                    int32_t mk;
+                    size_t mk;
                     for (mk = 0; mk < d->nmethods; mk += 1) {
                         Func *fc = arena_alloc(&cc->arena, sizeof(Func));
                         *fc = *d->methods[mk];
@@ -128,7 +130,7 @@ static void qbe_merge_types(Cc *cc, Module *m) {
             }
         }
     }
-    int32_t j3;
+    size_t j3;
     for (j3 = 0; j3 < m->ndecls; j3 += 1) {
         nd[p] = m->decls[j3];
         p += 1;
@@ -143,11 +145,15 @@ int main(int argc, char **argv) {
     int tokens_only = 0;
     int std_version = 99;
     int i64_mode = 0;
+    const char *cpp_cmd = getenv("PLANGC_CPP");
+    if (cpp_cmd == NULL) {
+        cpp_cmd = "cc";
+    }
     Vec_pchar inputs;
     Vec_pchar_init(&inputs);
     Vec_pchar defines;
     Vec_pchar_init(&defines);
-    int32_t i;
+    size_t i;
     for (i = 1; i < argc; i += 1) {
         if (strncmp(argv[i], "--std=", 6) == 0) {
             const char *std = argv[i] + 6;
@@ -184,6 +190,12 @@ int main(int argc, char **argv) {
                 usage();
             }
             backend_name = argv[i];
+        } else if (strcmp(argv[i], "--cpp") == 0) {
+            i += 1;
+            if (i >= argc) {
+                usage();
+            }
+            cpp_cmd = argv[i];
         } else if (strcmp(argv[i], "--tokens") == 0) {
             tokens_only = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -217,14 +229,15 @@ int main(int argc, char **argv) {
     cc.ndefines = defines.len;
     cc.backend_name = be->name;
     cc.std_version = std_version;
+    cc.cpp = cpp_cmd;
     if (tokens_only) {
-        int32_t j;
+        size_t j;
         for (j = 0; j < inputs.len; j += 1) {
             dump_tokens(Vec_pchar_get(&inputs, j), &cc);
         }
         return 0;
     }
-    int32_t k;
+    size_t k;
     for (k = 0; k < inputs.len; k += 1) {
         const char *path = Vec_pchar_get(&inputs, k);
         Module *m;

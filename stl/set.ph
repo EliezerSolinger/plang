@@ -14,8 +14,8 @@
 #   for i in range(s.elen):
 #       if not s.dead[i]:
 #           ... s.keys[i] ...
-import <stdlib.h>
-import <string.h>
+include <stdlib.h>
+include <string.h>
 import "hash.ph"
 
 struct Set<T>:

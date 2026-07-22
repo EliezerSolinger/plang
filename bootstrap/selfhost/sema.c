@@ -3,10 +3,13 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <ctype.h>
 #include <time.h>
 #include "sema.h"
 #include "lexer.h"
 #include "parser.h"
+#include "cfront.h"
 #include "../stl/map.h"
 #include "../stl/set.h"
 
@@ -1365,6 +1368,7 @@ struct Sema {
     StrMap_pType globals;
     StrSet enumconsts;
     StrMap_pCVal constvals;
+    StrSet macroconsts;
     int32_t csteps;
     const char *cur_fname;
     int32_t vla_ctr;
@@ -1391,7 +1395,7 @@ static int ends_with(const char *s, const char *suf) {
 }
 
 Module *cc_load_module(Cc *cc, const char *path) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < cc->nmods; i += 1) {
         if (strcmp(cc->mods[i]->path, path) == 0) {
             return cc->mods[i];
@@ -1436,7 +1440,7 @@ static Func *find_func(Sema *s, const char *cname) {
 }
 
 static Func *sinfo_method(SInfo *si, const char *name) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < si->nmethods; i += 1) {
         if (strcmp(si->methods[i]->name, name) == 0) {
             return si->methods[i];
@@ -1446,7 +1450,7 @@ static Func *sinfo_method(SInfo *si, const char *name) {
 }
 
 static Field *sinfo_field(SInfo *si, const char *name) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < si->nfields; i += 1) {
         if (strcmp(si->fields[i].name, name) == 0) {
             return &si->fields[i];
@@ -1510,7 +1514,7 @@ static void mangle_type_into(StrBuf *sb, Type *t) {
 static char *mangle_instance(Sema *s, Type *g) {
     StrBuf sb = {0};
     sb_puts(&sb, g->name);
-    int32_t i;
+    size_t i;
     for (i = 0; i < g->ntargs; i += 1) {
         sb_puts(&sb, "_");
         mangle_type_into(&sb, g->targs[i]);
@@ -1532,7 +1536,7 @@ static void resolve_type(Sema *s, Type *t) {
     }
     if (t->kind == TY_FUNC) {
         resolve_type(s, t->inner);
-        int32_t i0;
+        size_t i0;
         for (i0 = 0; i0 < t->ntargs; i0 += 1) {
             resolve_type(s, t->targs[i0]);
         }
@@ -1541,7 +1545,7 @@ static void resolve_type(Sema *s, Type *t) {
     if (t->ntargs == 0) {
         return;
     }
-    int32_t i;
+    size_t i;
     for (i = 0; i < t->ntargs; i += 1) {
         resolve_type(s, t->targs[i]);
     }
@@ -1555,7 +1559,7 @@ static void resolve_type(Sema *s, Type *t) {
 }
 
 static Type *subst_lookup(Subst *sub, const char *name) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < sub->n; i += 1) {
         if (strcmp(sub->names[i], name) == 0) {
             return sub->types[i];
@@ -1588,7 +1592,7 @@ static Type *clone_type(Sema *s, Subst *sub, Type *t) {
     nt->is_restrict = t->is_restrict;
     if (t->ntargs > 0) {
         Type **args = arena_alloc(s->a, (size_t)t->ntargs * sizeof(*args));
-        int32_t i;
+        size_t i;
         for (i = 0; i < t->ntargs; i += 1) {
             args[i] = clone_type(s, sub, t->targs[i]);
         }
@@ -1612,24 +1616,24 @@ static Expr *clone_expr(Sema *s, Subst *sub, Expr *e) {
     }
     Expr *ne = ex_new(s->a, e->kind, e->pos);
     {
-        Expr *__with_277_5 = ne;
-        __with_277_5->text = e->text;
-        __with_277_5->op = e->op;
-        __with_277_5->lhs = clone_expr(s, sub, e->lhs);
-        __with_277_5->rhs = clone_expr(s, sub, e->rhs);
-        __with_277_5->cond = clone_expr(s, sub, e->cond);
-        __with_277_5->nargs = e->nargs;
+        Expr *__with_274_5 = ne;
+        __with_274_5->text = e->text;
+        __with_274_5->op = e->op;
+        __with_274_5->lhs = clone_expr(s, sub, e->lhs);
+        __with_274_5->rhs = clone_expr(s, sub, e->rhs);
+        __with_274_5->cond = clone_expr(s, sub, e->cond);
+        __with_274_5->nargs = e->nargs;
         if (e->args != NULL) {
             Expr **args = arena_alloc(s->a, (size_t)e->nargs * sizeof(*args));
-            int32_t i;
+            size_t i;
             for (i = 0; i < e->nargs; i += 1) {
                 args[i] = clone_expr(s, sub, e->args[i]);
             }
-            __with_277_5->args = args;
+            __with_274_5->args = args;
         }
-        __with_277_5->field = e->field;
-        __with_277_5->cast_type = clone_type(s, sub, e->cast_type);
-        __with_277_5->cast_tentative = e->cast_tentative;
+        __with_274_5->field = e->field;
+        __with_274_5->cast_type = clone_type(s, sub, e->cast_type);
+        __with_274_5->cast_tentative = e->cast_tentative;
     }
     return ne;
 }
@@ -1637,65 +1641,65 @@ static Expr *clone_expr(Sema *s, Subst *sub, Expr *e) {
 static Stmt *clone_stmt(Sema *s, Subst *sub, Stmt *st) {
     Stmt *ns = st_new(s->a, st->kind, st->pos);
     {
-        Stmt *__with_297_5 = ns;
-        __with_297_5->name = st->name;
-        __with_297_5->type = clone_type(s, sub, st->type);
-        __with_297_5->init = clone_expr(s, sub, st->init);
-        __with_297_5->is_const = st->is_const;
-        __with_297_5->lhs = clone_expr(s, sub, st->lhs);
-        __with_297_5->op = st->op;
-        __with_297_5->rhs = clone_expr(s, sub, st->rhs);
-        __with_297_5->expr = clone_expr(s, sub, st->expr);
+        Stmt *__with_293_5 = ns;
+        __with_293_5->name = st->name;
+        __with_293_5->type = clone_type(s, sub, st->type);
+        __with_293_5->init = clone_expr(s, sub, st->init);
+        __with_293_5->is_const = st->is_const;
+        __with_293_5->lhs = clone_expr(s, sub, st->lhs);
+        __with_293_5->op = st->op;
+        __with_293_5->rhs = clone_expr(s, sub, st->rhs);
+        __with_293_5->expr = clone_expr(s, sub, st->expr);
         if (st->conds != NULL) {
             Expr **nc = arena_alloc(s->a, (size_t)st->nconds * sizeof(*nc));
             Block **nb = arena_alloc(s->a, (size_t)st->nconds * sizeof(*nb));
-            int32_t i;
+            size_t i;
             for (i = 0; i < st->nconds; i += 1) {
                 nc[i] = clone_expr(s, sub, st->conds[i]);
                 nb[i] = clone_block(s, sub, st->blocks[i]);
             }
-            __with_297_5->conds = nc;
-            __with_297_5->blocks = nb;
+            __with_293_5->conds = nc;
+            __with_293_5->blocks = nb;
         }
-        __with_297_5->nconds = st->nconds;
-        __with_297_5->else_block = clone_block(s, sub, st->else_block);
-        __with_297_5->if_sel = st->if_sel;
-        __with_297_5->cond = clone_expr(s, sub, st->cond);
-        __with_297_5->body = clone_block(s, sub, st->body);
-        __with_297_5->var = st->var;
-        __with_297_5->from = clone_expr(s, sub, st->from);
-        __with_297_5->to = clone_expr(s, sub, st->to);
-        __with_297_5->step = clone_expr(s, sub, st->step);
-        __with_297_5->subject = clone_expr(s, sub, st->subject);
+        __with_293_5->nconds = st->nconds;
+        __with_293_5->else_block = clone_block(s, sub, st->else_block);
+        __with_293_5->if_sel = st->if_sel;
+        __with_293_5->cond = clone_expr(s, sub, st->cond);
+        __with_293_5->body = clone_block(s, sub, st->body);
+        __with_293_5->var = st->var;
+        __with_293_5->from = clone_expr(s, sub, st->from);
+        __with_293_5->to = clone_expr(s, sub, st->to);
+        __with_293_5->step = clone_expr(s, sub, st->step);
+        __with_293_5->subject = clone_expr(s, sub, st->subject);
         if (st->cases != NULL) {
             MatchCase **cs = arena_alloc(s->a, (size_t)st->ncases * sizeof(*cs));
-            int32_t j;
+            size_t j;
             for (j = 0; j < st->ncases; j += 1) {
                 MatchCase *oc = st->cases[j];
                 MatchCase *mc = arena_alloc(s->a, sizeof(MatchCase));
                 {
-                    MatchCase *__with_331_17 = mc;
-                    __with_331_17->is_default = oc->is_default;
-                    __with_331_17->nvals = oc->nvals;
+                    MatchCase *__with_325_17 = mc;
+                    __with_325_17->is_default = oc->is_default;
+                    __with_325_17->nvals = oc->nvals;
                     if (oc->vals != NULL) {
                         Expr **vs = arena_alloc(s->a, (size_t)oc->nvals * sizeof(*vs));
-                        int32_t k;
+                        size_t k;
                         for (k = 0; k < oc->nvals; k += 1) {
                             vs[k] = clone_expr(s, sub, oc->vals[k]);
                         }
-                        __with_331_17->vals = vs;
+                        __with_325_17->vals = vs;
                     }
-                    __with_331_17->type_pat = clone_type(s, sub, oc->type_pat);
-                    __with_331_17->body = clone_block(s, sub, oc->body);
+                    __with_325_17->type_pat = clone_type(s, sub, oc->type_pat);
+                    __with_325_17->body = clone_block(s, sub, oc->body);
                 }
                 cs[j] = mc;
             }
-            __with_297_5->cases = cs;
+            __with_293_5->cases = cs;
         }
-        __with_297_5->ncases = st->ncases;
-        __with_297_5->is_typematch = st->is_typematch;
-        __with_297_5->tm_sel = st->tm_sel;
-        __with_297_5->label = st->label;
+        __with_293_5->ncases = st->ncases;
+        __with_293_5->is_typematch = st->is_typematch;
+        __with_293_5->tm_sel = st->tm_sel;
+        __with_293_5->label = st->label;
     }
     return ns;
 }
@@ -1706,7 +1710,7 @@ static Block *clone_block(Sema *s, Subst *sub, Block *b) {
     }
     Block *nb = arena_alloc(s->a, sizeof(Block));
     Stmt **stmts = arena_alloc(s->a, (size_t)b->n * sizeof(*stmts));
-    int32_t i;
+    size_t i;
     for (i = 0; i < b->n; i += 1) {
         stmts[i] = clone_stmt(s, sub, b->stmts[i]);
     }
@@ -1723,7 +1727,7 @@ static Func *clone_func(Sema *s, Subst *sub, Func *f, const char *owner, int wit
     nf->tparams = NULL;
     nf->ntparams = 0;
     Param *params = arena_alloc(s->a, (size_t)f->nparams * sizeof(*params));
-    int32_t i;
+    size_t i;
     for (i = 0; i < f->nparams; i += 1) {
         params[i].name = f->params[i].name;
         params[i].type = clone_type(s, sub, f->params[i].type);
@@ -1862,6 +1866,13 @@ static Type *type_of(Sema *s, Expr *e) {
                     return fu->ret;
                 }
             }
+            Type *ct = type_of(s, e->lhs);
+            if (ct != NULL && ct->kind == TY_PTR && ct->inner != NULL && ct->inner->kind == TY_FUNC) {
+                return ct->inner->inner;
+            }
+            if (ct != NULL && ct->kind == TY_FUNC) {
+                return ct->inner;
+            }
             return NULL;
         }
         case EX_CAST:
@@ -1921,7 +1932,7 @@ static void lower_designators(Sema *s, Expr *e, Type *t) {
         int has_desig = 0;
         int32_t maxp = -1;
         int pos = 0;
-        int32_t i;
+        size_t i;
         for (i = 0; i < e->nargs; i += 1) {
             Expr *it = e->args[i];
             Expr *val = it;
@@ -1941,7 +1952,7 @@ static void lower_designators(Sema *s, Expr *e, Type *t) {
         }
         int32_t n = maxp + 1;
         Expr **args = arena_alloc(s->a, (size_t)n * sizeof(*args));
-        int32_t k;
+        size_t k;
         for (k = 0; k < n; k += 1) {
             args[k] = NULL;
         }
@@ -1973,7 +1984,7 @@ static void lower_designators(Sema *s, Expr *e, Type *t) {
         return;
     }
     if (si->is_union) {
-        int32_t u;
+        size_t u;
         for (u = 0; u < e->nargs; u += 1) {
             Expr *ud = e->args[u];
             if (ud != NULL && ud->kind == EX_DESIG && ud->field != NULL) {
@@ -1990,7 +2001,7 @@ static void lower_designators(Sema *s, Expr *e, Type *t) {
     int has_f = 0;
     int32_t maxf = -1;
     int fi = 0;
-    int32_t i2;
+    size_t i2;
     for (i2 = 0; i2 < e->nargs; i2 += 1) {
         Expr *it3 = e->args[i2];
         Expr *val3 = it3;
@@ -2015,7 +2026,7 @@ static void lower_designators(Sema *s, Expr *e, Type *t) {
     }
     int32_t nf = maxf + 1;
     Expr **fargs = arena_alloc(s->a, (size_t)nf * sizeof(*fargs));
-    int32_t k2;
+    size_t k2;
     for (k2 = 0; k2 < nf; k2 += 1) {
         fargs[k2] = NULL;
     }
@@ -2125,7 +2136,7 @@ static CVal ceval_num(const char *txt) {
     if (isflt || hasf) {
         return cv_flt(strtod(txt, NULL));
     }
-    return cv_int((int64_t)strtoll(txt, NULL, 0));
+    return cv_int((int64_t)strtoull(txt, NULL, 0));
 }
 
 static CVal ceval_val(Sema *s, Expr *e, CFrame *env, int *ok);
@@ -2140,7 +2151,7 @@ static int cframe_find(CFrame *env, const char *name, CVal *out) {
     if (env == NULL) {
         return 0;
     }
-    int32_t i;
+    size_t i;
     for (i = 0; i < env->n; i += 1) {
         if (strcmp(env->names[i], name) == 0) {
             *out = env->vals[i];
@@ -2151,7 +2162,7 @@ static int cframe_find(CFrame *env, const char *name, CVal *out) {
 }
 
 static void cframe_set(CFrame *env, const char *name, CVal v) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < env->n; i += 1) {
         if (strcmp(env->names[i], name) == 0) {
             env->vals[i] = v;
@@ -2356,6 +2367,14 @@ static CVal ceval_val(Sema *s, Expr *e, CFrame *env, int *ok) {
                 if (strcmp(e->lhs->text, "typestr") == 0 && e->nargs == 1) {
                     return cv_str(arena_printf(s->a, "\"%s\"", render_type_p(s->a, type_of(s, e->args[0]))));
                 }
+                if (strcmp(e->lhs->text, "len") == 0 && e->nargs == 1 && find_func(s, e->lhs->text) == NULL) {
+                    Type *at = type_of(s, e->args[0]);
+                    if (at != NULL && at->kind == TY_ARRAY && at->arr_len != NULL) {
+                        return ceval_val(s, at->arr_len, env, ok);
+                    }
+                    *ok = 0;
+                    return cv_int(0);
+                }
                 Func *cf = find_func(s, e->lhs->text);
                 if (cf != NULL && cf->is_comptime) {
                     return ccall(s, cf, e, env, ok);
@@ -2381,7 +2400,7 @@ static CVal ccall(Sema *s, Func *f, Expr *e, CFrame *env, int *ok) {
     fr.names = arena_alloc(s->a, (size_t)fr.cap * sizeof(*fr.names));
     fr.vals = arena_alloc(s->a, (size_t)fr.cap * sizeof(*fr.vals));
     fr.n = 0;
-    int32_t i;
+    size_t i;
     for (i = 0; i < f->nparams; i += 1) {
         CVal av = ceval_val(s, e->args[i], env, ok);
         cframe_set(&fr, f->params[i].name, av);
@@ -2396,7 +2415,7 @@ static void cexec_block(Sema *s, Block *b, CFrame *env, CVal *ret, int *returned
     if (b == NULL) {
         return;
     }
-    int32_t i;
+    size_t i;
     for (i = 0; i < b->n; i += 1) {
         if (*returned || ! *ok) {
             return;
@@ -2663,7 +2682,7 @@ static const char *render_type_p(Arena *a, Type *t) {
     }
     if (t->kind == TY_FUNC) {
         const char *buf = "def(";
-        int32_t i;
+        size_t i;
         for (i = 0; i < t->ntargs; i += 1) {
             buf = arena_printf(a, "%s%s%s", buf, (i != 0 ? ", " : ""), render_type_p(a, t->targs[i]));
         }
@@ -2747,15 +2766,15 @@ static void resolve_gcall(Sema *s, Expr *e) {
     if (ftpl == NULL) {
         return;
     }
-    int32_t ai;
+    size_t ai;
     for (ai = 0; ai < e->nargs; ai += 1) {
         check_expr(s, e->args[ai]);
     }
     Type **targs = arena_alloc(s->a, (size_t)ftpl->ntparams * sizeof(*targs));
-    int32_t ti;
+    size_t ti;
     for (ti = 0; ti < ftpl->ntparams; ti += 1) {
         Type *found = NULL;
-        int32_t pj;
+        size_t pj;
         for (pj = 0; pj < ftpl->nparams; pj += 1) {
             if (pj >= e->nargs) {
                 break;
@@ -2791,7 +2810,7 @@ static void check_expr(Sema *s, Expr *e) {
             if (callee->kind == EX_IDENT) {
                 Func *cfn = find_func(s, callee->text);
                 if (cfn != NULL && cfn->is_comptime) {
-                    int32_t ci;
+                    size_t ci;
                     for (ci = 0; ci < e->nargs; ci += 1) {
                         check_expr(s, e->args[ci]);
                     }
@@ -2815,12 +2834,35 @@ static void check_expr(Sema *s, Expr *e) {
             }
             if (callee->kind == EX_IDENT && strcmp(callee->text, "is_defined") == 0 && e->nargs == 1 && e->args[0]->kind == EX_IDENT) {
                 {
-                    Expr *__with_1249_17 = e;
-                    __with_1249_17->kind = EX_NUMBER;
-                    __with_1249_17->text = (StrMap_pCVal_has(&s->constvals, e->args[0]->text) ? "1" : "0");
-                    __with_1249_17->lhs = NULL;
-                    __with_1249_17->args = NULL;
-                    __with_1249_17->nargs = 0;
+                    Expr *__with_1245_17 = e;
+                    __with_1245_17->kind = EX_NUMBER;
+                    __with_1245_17->text = (StrMap_pCVal_has(&s->constvals, e->args[0]->text) ? "1" : "0");
+                    __with_1245_17->lhs = NULL;
+                    __with_1245_17->args = NULL;
+                    __with_1245_17->nargs = 0;
+                }
+                return;
+            }
+            if (callee->kind == EX_IDENT && strcmp(callee->text, "len") == 0 && e->nargs == 1 && find_func(s, callee->text) == NULL) {
+                Expr *arr = e->args[0];
+                check_expr(s, arr);
+                Type *at = type_of(s, arr);
+                if (at == NULL || at->kind != TY_ARRAY || at->arr_len == NULL) {
+                    fatal_at(s->file, e->pos, "len(x) requires a fixed-size array (T[N])");
+                }
+                Expr *zero = ex_new(s->a, EX_NUMBER, e->pos);
+                zero->text = "0";
+                Expr *idx0 = ex_new(s->a, EX_INDEX, e->pos);
+                idx0->lhs = arr;
+                idx0->rhs = zero;
+                {
+                    Expr *__with_1268_17 = e;
+                    __with_1268_17->kind = EX_BINARY;
+                    __with_1268_17->op = TK_SLASH;
+                    __with_1268_17->lhs = mk_call1(s->a, "sizeof", arr, e->pos);
+                    __with_1268_17->rhs = mk_call1(s->a, "sizeof", idx0, e->pos);
+                    __with_1268_17->args = NULL;
+                    __with_1268_17->nargs = 0;
                 }
                 return;
             }
@@ -2832,12 +2874,12 @@ static void check_expr(Sema *s, Expr *e) {
             if (callee->kind == EX_IDENT && strcmp(callee->text, "typestr") == 0 && e->nargs == 1) {
                 const char *tn = render_type_p(s->a, type_of(s, e->args[0]));
                 {
-                    Expr *__with_1267_17 = e;
-                    __with_1267_17->kind = EX_STRING;
-                    __with_1267_17->text = arena_printf(s->a, "\"%s\"", tn);
-                    __with_1267_17->lhs = NULL;
-                    __with_1267_17->args = NULL;
-                    __with_1267_17->nargs = 0;
+                    Expr *__with_1287_17 = e;
+                    __with_1287_17->kind = EX_STRING;
+                    __with_1287_17->text = arena_printf(s->a, "\"%s\"", tn);
+                    __with_1287_17->lhs = NULL;
+                    __with_1287_17->args = NULL;
+                    __with_1287_17->nargs = 0;
                 }
                 return;
             }
@@ -2848,12 +2890,12 @@ static void check_expr(Sema *s, Expr *e) {
                 Expr *targ = e->args[0];
                 check_expr(s, targ);
                 {
-                    Expr *__with_1280_17 = e;
-                    __with_1280_17->kind = EX_CAST;
-                    __with_1280_17->cast_type = callee->cast_type;
-                    __with_1280_17->lhs = targ;
-                    __with_1280_17->args = NULL;
-                    __with_1280_17->nargs = 0;
+                    Expr *__with_1300_17 = e;
+                    __with_1300_17->kind = EX_CAST;
+                    __with_1300_17->cast_type = callee->cast_type;
+                    __with_1300_17->lhs = targ;
+                    __with_1300_17->args = NULL;
+                    __with_1300_17->nargs = 0;
                 }
                 return;
             }
@@ -2864,12 +2906,12 @@ static void check_expr(Sema *s, Expr *e) {
                 Expr *arg = e->args[0];
                 check_expr(s, arg);
                 {
-                    Expr *__with_1293_17 = e;
-                    __with_1293_17->kind = EX_CAST;
-                    __with_1293_17->cast_type = ty_name(s->a, callee->text);
-                    __with_1293_17->lhs = arg;
-                    __with_1293_17->args = NULL;
-                    __with_1293_17->nargs = 0;
+                    Expr *__with_1313_17 = e;
+                    __with_1313_17->kind = EX_CAST;
+                    __with_1313_17->cast_type = ty_name(s->a, callee->text);
+                    __with_1313_17->lhs = arg;
+                    __with_1313_17->args = NULL;
+                    __with_1313_17->nargs = 0;
                 }
                 return;
             }
@@ -2901,7 +2943,7 @@ static void check_expr(Sema *s, Expr *e) {
                         args = vec_grow(args, n, &cn, sizeof(*args));
                         args[n] = selfx;
                         n += 1;
-                        int32_t i;
+                        size_t i;
                         for (i = 0; i < e->nargs; i += 1) {
                             check_expr(s, e->args[i]);
                             args = vec_grow(args, n, &cn, sizeof(*args));
@@ -2920,14 +2962,14 @@ static void check_expr(Sema *s, Expr *e) {
                     }
                     fix_field_op(s, callee);
                 }
-                int32_t j;
+                size_t j;
                 for (j = 0; j < e->nargs; j += 1) {
                     check_expr(s, e->args[j]);
                 }
                 return;
             }
             check_expr(s, callee);
-            int32_t k;
+            size_t k;
             for (k = 0; k < e->nargs; k += 1) {
                 check_expr(s, e->args[k]);
             }
@@ -2945,7 +2987,7 @@ static void check_expr(Sema *s, Expr *e) {
                     Expr *fn2 = ex_new(s->a, EX_IDENT, e->pos);
                     fn2->text = base->name;
                     Expr *deref = fn2;
-                    int32_t k2;
+                    size_t k2;
                     for (k2 = 0; k2 < stars; k2 += 1) {
                         Expr *u = ex_new(s->a, EX_UNARY, e->pos);
                         u->op = TK_STAR;
@@ -2959,13 +3001,13 @@ static void check_expr(Sema *s, Expr *e) {
                     args2[n2] = e->lhs;
                     n2 += 1;
                     {
-                        Expr *__with_1375_21 = e;
-                        __with_1375_21->kind = EX_CALL;
-                        __with_1375_21->lhs = deref;
-                        __with_1375_21->args = args2;
-                        __with_1375_21->nargs = n2;
-                        __with_1375_21->cast_type = NULL;
-                        __with_1375_21->cast_tentative = 0;
+                        Expr *__with_1391_21 = e;
+                        __with_1391_21->kind = EX_CALL;
+                        __with_1391_21->lhs = deref;
+                        __with_1391_21->args = args2;
+                        __with_1391_21->nargs = n2;
+                        __with_1391_21->cast_type = NULL;
+                        __with_1391_21->cast_tentative = 0;
                     }
                     check_expr(s, e);
                     return;
@@ -2990,6 +3032,18 @@ static void check_expr(Sema *s, Expr *e) {
         }
         case EX_IDENT: {
             fold_predefined(s, e);
+            if (e->kind == EX_IDENT && StrSet_has(&s->macroconsts, e->text) && scope_find(s, e->text) == NULL && StrMap_pType_get_or(&s->globals, e->text, NULL) == NULL && !is_enum_const(s, e->text) && find_func(s, e->text) == NULL) {
+                CVal *mcp = StrMap_pCVal_get_or(&s->constvals, e->text, NULL);
+                if (mcp != NULL) {
+                    if (mcp->kind == CV_STR) {
+                        e->kind = EX_STRING;
+                        e->text = mcp->sval;
+                    } else if (mcp->kind == CV_INT) {
+                        e->kind = EX_NUMBER;
+                        e->text = arena_printf(s->a, "%lld", mcp->ival);
+                    }
+                }
+            }
             return;
         }
         case EX_FIELD: {
@@ -3018,7 +3072,7 @@ static void check_expr(Sema *s, Expr *e) {
             return;
         }
         case EX_INITLIST: {
-            int32_t i2;
+            size_t i2;
             for (i2 = 0; i2 < e->nargs; i2 += 1) {
                 check_expr(s, e->args[i2]);
             }
@@ -3034,7 +3088,7 @@ static Stmt *block_find_kind(Block *b, StmtKind k) {
     if (b == NULL) {
         return NULL;
     }
-    int32_t i;
+    size_t i;
     for (i = 0; i < b->n; i += 1) {
         Stmt *st = b->stmts[i];
         if (st->kind == k) {
@@ -3043,7 +3097,7 @@ static Stmt *block_find_kind(Block *b, StmtKind k) {
         Stmt *r = NULL;
         switch (st->kind) {
             case ST_IF: {
-                int32_t j;
+                size_t j;
                 for (j = 0; j < st->nconds; j += 1) {
                     r = block_find_kind(st->blocks[j], k);
                     if (r != NULL) {
@@ -3069,7 +3123,7 @@ static Stmt *block_find_kind(Block *b, StmtKind k) {
                 break;
             }
             case ST_MATCH: {
-                int32_t j2;
+                size_t j2;
                 for (j2 = 0; j2 < st->ncases; j2 += 1) {
                     r = block_find_kind(st->cases[j2]->body, k);
                     if (r != NULL) {
@@ -3087,7 +3141,7 @@ static Stmt *block_find_kind(Block *b, StmtKind k) {
 }
 
 static void check_defer_body(Sema *s, Block *b, int32_t loop_depth, int32_t break_depth) {
-    int32_t i;
+    size_t i;
     for (i = 0; i < b->n; i += 1) {
         Stmt *st = b->stmts[i];
         switch (st->kind) {
@@ -3115,7 +3169,7 @@ static void check_defer_body(Sema *s, Block *b, int32_t loop_depth, int32_t brea
                 break;
             }
             case ST_IF: {
-                int32_t j;
+                size_t j;
                 for (j = 0; j < st->nconds; j += 1) {
                     check_defer_body(s, st->blocks[j], loop_depth, break_depth);
                 }
@@ -3125,7 +3179,7 @@ static void check_defer_body(Sema *s, Block *b, int32_t loop_depth, int32_t brea
                 break;
             }
             case ST_MATCH: {
-                int32_t j2;
+                size_t j2;
                 for (j2 = 0; j2 < st->ncases; j2 += 1) {
                     check_defer_body(s, st->cases[j2]->body, loop_depth, break_depth + 1);
                 }
@@ -3177,7 +3231,7 @@ static Type *tm_decay(Sema *s, Type *t) {
 static void resolve_typematch(Sema *s, Stmt *st) {
     Type *subj = tm_decay(s, type_of(s, st->subject));
     int dflt = -1;
-    int32_t i;
+    size_t i;
     for (i = 0; i < st->ncases; i += 1) {
         MatchCase *c = st->cases[i];
         if (c->is_default) {
@@ -3237,12 +3291,12 @@ static void check_stmt(Sema *s, Stmt *st) {
                     fatal_at(s->file, st->pos, "cannot infer type of '%s'; declare it with an explicit type ('%s: T = ...')", st->lhs->text, st->lhs->text);
                 }
                 {
-                    Stmt *__with_1575_17 = st;
-                    __with_1575_17->kind = ST_VAR;
-                    __with_1575_17->name = st->lhs->text;
-                    __with_1575_17->type = ity;
-                    __with_1575_17->init = st->rhs;
-                    __with_1575_17->is_const = 0;
+                    Stmt *__with_1595_17 = st;
+                    __with_1595_17->kind = ST_VAR;
+                    __with_1595_17->name = st->lhs->text;
+                    __with_1595_17->type = ity;
+                    __with_1595_17->init = st->rhs;
+                    __with_1595_17->is_const = 0;
                 }
                 resolve_type(s, st->type);
                 scope_add(s, st->name, st->type);
@@ -3275,7 +3329,7 @@ static void check_stmt(Sema *s, Stmt *st) {
                 ic += 1;
             }
             int has_lbl = 0;
-            int32_t il;
+            size_t il;
             for (il = 0; il < st->nconds; il += 1) {
                 if (block_find_kind(st->blocks[il], ST_LABEL) != NULL) {
                     has_lbl = 1;
@@ -3294,7 +3348,7 @@ static void check_stmt(Sema *s, Stmt *st) {
                 st->if_sel = -2;
             }
             if (st->if_sel == -1) {
-                int32_t i;
+                size_t i;
                 for (i = 0; i < st->nconds; i += 1) {
                     check_expr(s, st->conds[i]);
                     check_block(s, st->blocks[i]);
@@ -3342,9 +3396,9 @@ static void check_stmt(Sema *s, Stmt *st) {
                 }
                 return;
             }
-            int32_t j;
+            size_t j;
             for (j = 0; j < st->ncases; j += 1) {
-                int32_t k;
+                size_t k;
                 for (k = 0; k < st->cases[j]->nvals; k += 1) {
                     Expr *cval = st->cases[j]->vals[k];
                     check_expr(s, cval);
@@ -3406,12 +3460,107 @@ static void check_stmt(Sema *s, Stmt *st) {
     }
 }
 
+static int expr_is_negative(Expr *e) {
+    return e != NULL && e->kind == EX_UNARY && e->op == TK_MINUS;
+}
+
+static void block_prepend(Sema *s, Block *b, Stmt *st) {
+    Stmt **ns = arena_alloc(s->a, (size_t)(b->n + 1) * sizeof(*ns));
+    ns[0] = st;
+    size_t i;
+    for (i = 0; i < b->n; i += 1) {
+        ns[i + 1] = b->stmts[i];
+    }
+    b->stmts = ns;
+    b->n += 1;
+}
+
+static void lower_for_iter(Sema *s, Stmt *st, Stmt **d1, Stmt **d2) {
+    *d1 = NULL;
+    *d2 = NULL;
+    if (st->var2 != NULL) {
+        Expr *arr = st->to;
+        Type *at = type_of(s, arr);
+        if (at == NULL) {
+            at = infer_type(s, arr);
+        }
+        if (at == NULL || at->kind != TY_ARRAY || at->arr_len == NULL) {
+            fatal_at(s->file, st->pos, "for ... in enumerate(x): x must be a sized array");
+        }
+        Stmt *idecl = st_new(s->a, ST_VAR, st->pos);
+        idecl->name = st->var;
+        idecl->type = ty_name(s->a, "usize");
+        Stmt *vdecl = st_new(s->a, ST_VAR, st->pos);
+        vdecl->name = st->var2;
+        vdecl->type = at->inner;
+        Expr *ix = ex_new(s->a, EX_INDEX, st->pos);
+        ix->lhs = arr;
+        ix->rhs = mk_ident(s->a, st->var, st->pos);
+        Stmt *asn = st_new(s->a, ST_ASSIGN, st->pos);
+        asn->lhs = mk_ident(s->a, st->var2, st->pos);
+        asn->op = TK_ASSIGN;
+        asn->rhs = ix;
+        block_prepend(s, st->body, asn);
+        st->from = NULL;
+        st->to = at->arr_len;
+        st->step = NULL;
+        st->var2 = NULL;
+        scope_add(s, idecl->name, idecl->type);
+        scope_add(s, vdecl->name, vdecl->type);
+        *d1 = idecl;
+        *d2 = vdecl;
+        return;
+    }
+    if (scope_find(s, st->var) != NULL) {
+        return;
+    }
+    int is_signed = expr_is_negative(st->from) || expr_is_negative(st->to) || expr_is_negative(st->step);
+    Type *ty = ty_name(s->a, (is_signed ? "isize" : "usize"));
+    Stmt *decl = st_new(s->a, ST_VAR, st->pos);
+    decl->name = st->var;
+    decl->type = ty;
+    scope_add(s, st->var, ty);
+    *d1 = decl;
+}
+
+static void check_stmts(Sema *s, Block *b) {
+    Stmt **ns = NULL;
+    int32_t nn = 0;
+    int32_t cap = 0;
+    int injected = 0;
+    size_t i;
+    for (i = 0; i < b->n; i += 1) {
+        Stmt *st = b->stmts[i];
+        if (st->kind == ST_FOR) {
+            Stmt *d1 = NULL;
+            Stmt *d2 = NULL;
+            lower_for_iter(s, st, &d1, &d2);
+            if (d1 != NULL) {
+                ns = vec_grow(ns, nn, &cap, sizeof(*ns));
+                ns[nn] = d1;
+                nn += 1;
+                injected = 1;
+            }
+            if (d2 != NULL) {
+                ns = vec_grow(ns, nn, &cap, sizeof(*ns));
+                ns[nn] = d2;
+                nn += 1;
+            }
+        }
+        check_stmt(s, st);
+        ns = vec_grow(ns, nn, &cap, sizeof(*ns));
+        ns[nn] = st;
+        nn += 1;
+    }
+    if (injected) {
+        b->stmts = ns;
+        b->n = nn;
+    }
+}
+
 static void check_block(Sema *s, Block *b) {
     scope_push(s);
-    int32_t i;
-    for (i = 0; i < b->n; i += 1) {
-        check_stmt(s, b->stmts[i]);
-    }
+    check_stmts(s, b);
     scope_pop(s);
 }
 
@@ -3429,13 +3578,11 @@ static void check_func_body(Sema *s, Func *f) {
     s->cur_fname = f->cname;
     s->vla_nhoist = 0;
     scope_push(s);
-    int32_t i;
+    size_t i;
     for (i = 0; i < f->nparams; i += 1) {
         scope_add(s, f->params[i].name, f->params[i].type);
     }
-    for (i = 0; i < f->body->n; i += 1) {
-        check_stmt(s, f->body->stmts[i]);
-    }
+    check_stmts(s, f->body);
     scope_pop(s);
     if (s->vla_nhoist > 0) {
         int32_t total = s->vla_nhoist + f->body->n;
@@ -3459,7 +3606,7 @@ static void register_func(Sema *s, Func *f) {
         }
         return;
     }
-    int32_t i0;
+    size_t i0;
     for (i0 = 0; i0 < f->nparams; i0 += 1) {
         resolve_type(s, f->params[i0].type);
         fold_const_dims(s, f->params[i0].type);
@@ -3505,6 +3652,200 @@ static void register_module(Sema *s, Module *m, int check_bodies);
 
 static void register_decl(Sema *s, Module *m, Decl *d, int check_bodies);
 
+FILE *popen(const char *cmd, const char *mode);
+
+int32_t pclose(FILE *stream);
+
+static const char *cpp_capture(Sema *s, const char *flags, const char *path, int is_sys, const char *dir) {
+    const char *cpp = (s->cc->cpp != NULL ? s->cc->cpp : "cc");
+    const char *cmd;
+    if (is_sys) {
+        cmd = arena_printf(s->a, "printf '#include <%s>\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir);
+    } else {
+        cmd = arena_printf(s->a, "printf '#include \"%s\"\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir);
+    }
+    FILE *f = popen(cmd, "r");
+    if (f == NULL) {
+        fatal("could not run '%s -E' to ingest C header '%s' (see --cpp / PLANGC_CPP)", cpp, path);
+    }
+    StrBuf b = {0};
+    char chunk[4097];
+    while (1) {
+        size_t n = fread(&chunk[0], 1, 4096, f);
+        if (n == 0) {
+            break;
+        }
+        chunk[n] = '\0';
+        sb_puts(&b, &chunk[0]);
+    }
+    int32_t rc = pclose(f);
+    if (rc != 0) {
+        fatal("'%s' failed to preprocess header '%s' (not found? see --cpp / PLANGC_CPP)", cpp, path);
+    }
+    const char *out = arena_strdup(s->a, (b.data != NULL ? b.data : ""));
+    sb_free(&b);
+    return out;
+}
+
+static int macro_int_val(const char *txt, int64_t *out) {
+    int32_t i = 0;
+    int neg = 0;
+    int flip = 0;
+    while (txt[i] != '\0') {
+        char c = txt[i];
+        if (c == ' ' || c == '\t' || c == '(') {
+            i += 1;
+        } else if (c == '-') {
+            neg = !neg;
+            i += 1;
+        } else if (c == '+') {
+            i += 1;
+        } else if (c == '~') {
+            flip = !flip;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if (!(txt[i] >= '0' && txt[i] <= '9')) {
+        return 0;
+    }
+    char *endp = NULL;
+    int64_t v = (int64_t)strtoull(txt + i, &endp, 0);
+    while (*endp == 'u' || *endp == 'U' || *endp == 'l' || *endp == 'L') {
+        endp += 1;
+    }
+    while (*endp != '\0') {
+        if (*endp != ' ' && *endp != '\t' && *endp != ')') {
+            return 0;
+        }
+        endp += 1;
+    }
+    if (flip) {
+        v = ~v;
+    }
+    if (neg) {
+        v = -v;
+    }
+    *out = v;
+    return 1;
+}
+
+static void macro_put(Sema *s, const char *name, CVal v) {
+    CVal *cp = arena_alloc(s->a, sizeof(CVal));
+    *cp = v;
+    StrMap_pCVal_put(&s->constvals, name, cp);
+    StrSet_add(&s->macroconsts, name);
+}
+
+static void ingest_macros(Sema *s, const char *path, int is_sys, const char *dir) {
+    const char *src = cpp_capture(s, "-E -dM", path, is_sys, dir);
+    char **an = NULL;
+    char **av = NULL;
+    int nal = 0;
+    int cal = 0;
+    int cav = 0;
+    const char *p = src;
+    while (*p != '\0') {
+        const char *eol = strchr(p, '\n');
+        if (eol == NULL) {
+            eol = p + strlen(p);
+        }
+        if (strncmp(p, "#define ", 8) == 0) {
+            const char *q = p + 8;
+            const char *st = q;
+            while (q < eol && *q != ' ' && *q != '(' && *q != '\t') {
+                q += 1;
+            }
+            if (q < eol && *q != '(') {
+                const char *name = arena_strndup(s->a, st, (size_t)(q - st));
+                while (q < eol && (*q == ' ' || *q == '\t')) {
+                    q += 1;
+                }
+                const char *rhs = arena_strndup(s->a, q, (size_t)(eol - q));
+                if (!StrMap_pCVal_has(&s->constvals, name)) {
+                    int64_t iv = 0;
+                    size_t rl = strlen(rhs);
+                    if (macro_int_val(rhs, &iv)) {
+                        macro_put(s, name, cv_int(iv));
+                    } else if (rl >= 2 && rhs[0] == '"' && rhs[rl - 1] == '"') {
+                        macro_put(s, name, cv_str(rhs));
+                    } else if (rl > 0 && (isalpha(rhs[0]) || rhs[0] == '_')) {
+                        int ok2 = 1;
+                        size_t k = 1;
+                        while (k < rl) {
+                            if (!(isalnum(rhs[k]) || rhs[k] == '_')) {
+                                ok2 = 0;
+                                break;
+                            }
+                            k += 1;
+                        }
+                        if (ok2) {
+                            an = vec_grow(an, nal, &cal, sizeof(*an));
+                            av = vec_grow(av, nal, &cav, sizeof(*av));
+                            an[nal] = (char *)name;
+                            av[nal] = (char *)rhs;
+                            nal += 1;
+                        }
+                    }
+                }
+            }
+        }
+        p = (*eol != '\0' ? eol + 1 : eol);
+    }
+    int32_t pass_ = 0;
+    while (pass_ < 4) {
+        int changed = 0;
+        size_t i;
+        for (i = 0; i < nal; i += 1) {
+            if (an[i] != NULL && !StrMap_pCVal_has(&s->constvals, an[i])) {
+                CVal *tv = StrMap_pCVal_get_or(&s->constvals, av[i], NULL);
+                if (tv != NULL) {
+                    macro_put(s, an[i], *tv);
+                    an[i] = NULL;
+                    changed = 1;
+                }
+            }
+        }
+        if (!changed) {
+            break;
+        }
+        pass_ += 1;
+    }
+    free(an);
+    free(av);
+}
+
+static void ingest_c_header(Sema *s, Module *m, Decl *d) {
+    const char *dir = dir_of(s->a, m->path);
+    const char *key = arena_printf(s->a, "<c>%s", d->import_path);
+    Module *cached = NULL;
+    int32_t i;
+    for (i = 0; i < s->cc->nmods; i += 1) {
+        if (strcmp(s->cc->mods[i]->path, key) == 0) {
+            cached = s->cc->mods[i];
+            break;
+        }
+    }
+    if (cached == NULL) {
+        const char *src = cpp_capture(s, "-E -P", d->import_path, d->import_system, dir);
+        cached = c_parse(s->a, d->import_path, src, strlen(src));
+        cached->path = key;
+        for (i = 0; i < cached->ndecls; i += 1) {
+            if (cached->decls[i]->kind == DL_FUNC) {
+                cached->decls[i]->func->body = NULL;
+                cached->decls[i]->func->is_inline = 0;
+                cached->decls[i]->func->is_static = 0;
+            }
+        }
+        s->cc->mods = vec_grow(s->cc->mods, s->cc->nmods, &s->cc->cmods, sizeof(*s->cc->mods));
+        s->cc->mods[s->cc->nmods] = cached;
+        s->cc->nmods += 1;
+    }
+    register_module(s, cached, 0);
+    ingest_macros(s, d->import_path, d->import_system, dir);
+}
+
 static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
     Type *g = d->type;
     if (g->ntargs == 0) {
@@ -3517,7 +3858,7 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         }
         StrSet_add(&s->implemented, g->name);
         int nb = 0;
-        int32_t j0;
+        size_t j0;
         for (j0 = 0; j0 < si0->nmethods; j0 += 1) {
             if (si0->methods[j0]->body != NULL && si0->methods[j0]->in_header) {
                 nb += 1;
@@ -3535,13 +3876,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_1836_9 = d;
-            __with_1836_9->kind = DL_STRUCT;
-            __with_1836_9->name = si0->name;
-            __with_1836_9->fields = NULL;
-            __with_1836_9->nfields = 0;
-            __with_1836_9->methods = bodies0;
-            __with_1836_9->nmethods = nb;
+            Decl *__with_2114_9 = d;
+            __with_2114_9->kind = DL_STRUCT;
+            __with_2114_9->name = si0->name;
+            __with_2114_9->fields = NULL;
+            __with_2114_9->nfields = 0;
+            __with_2114_9->methods = bodies0;
+            __with_2114_9->nmethods = nb;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3551,7 +3892,7 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         if (g->ntargs != ftpl->ntparams) {
             fatal_at(s->file, d->pos, "'%s' expects %d type argument(s), got %d", g->name, ftpl->ntparams, g->ntargs);
         }
-        int32_t fi;
+        size_t fi;
         for (fi = 0; fi < g->ntargs; fi += 1) {
             resolve_type(s, g->targs[fi]);
         }
@@ -3571,9 +3912,9 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         inst->name = fmangled;
         inst->cname = fmangled;
         {
-            Decl *__with_1867_9 = d;
-            __with_1867_9->kind = DL_FUNC;
-            __with_1867_9->func = inst;
+            Decl *__with_2144_9 = d;
+            __with_2144_9->kind = DL_FUNC;
+            __with_2144_9->func = inst;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3585,7 +3926,7 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
     if (g->ntargs != tpl->ntparams) {
         fatal_at(s->file, d->pos, "'%s' expects %d type argument(s), got %d", g->name, tpl->ntparams, g->ntargs);
     }
-    int32_t i;
+    size_t i;
     for (i = 0; i < g->ntargs; i += 1) {
         resolve_type(s, g->targs[i]);
     }
@@ -3605,13 +3946,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             protos[i] = clone_func(s, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_1894_9 = d;
-            __with_1894_9->kind = DL_STRUCT;
-            __with_1894_9->name = mangled;
-            __with_1894_9->fields = fields;
-            __with_1894_9->nfields = tpl->nfields;
-            __with_1894_9->methods = protos;
-            __with_1894_9->nmethods = tpl->nmethods;
+            Decl *__with_2170_9 = d;
+            __with_2170_9->kind = DL_STRUCT;
+            __with_2170_9->name = mangled;
+            __with_2170_9->fields = fields;
+            __with_2170_9->nfields = tpl->nfields;
+            __with_2170_9->methods = protos;
+            __with_2170_9->nmethods = tpl->nmethods;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -3628,13 +3969,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         bodies[i] = clone_func(s, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_1913_5 = d;
-        __with_1913_5->kind = DL_STRUCT;
-        __with_1913_5->name = mangled;
-        __with_1913_5->fields = NULL;
-        __with_1913_5->nfields = 0;
-        __with_1913_5->methods = bodies;
-        __with_1913_5->nmethods = tpl->nmethods;
+        Decl *__with_2189_5 = d;
+        __with_2189_5->kind = DL_STRUCT;
+        __with_2189_5->name = mangled;
+        __with_2189_5->fields = NULL;
+        __with_2189_5->nfields = 0;
+        __with_2189_5->methods = bodies;
+        __with_2189_5->nmethods = tpl->nmethods;
     }
     register_decl(s, m, d, check_bodies);
 }
@@ -3642,7 +3983,9 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
 static void register_decl(Sema *s, Module *m, Decl *d, int check_bodies) {
     switch (d->kind) {
         case DL_IMPORT: {
-            if (!d->import_system && ends_with(d->import_path, ".ph")) {
+            if (d->is_include) {
+                ingest_c_header(s, m, d);
+            } else if (!d->import_system && ends_with(d->import_path, ".ph")) {
                 const char *dir = dir_of(s->a, m->path);
                 const char *full = arena_printf(s->a, "%s/%s", dir, d->import_path);
                 Module *sub = cc_load_module(s->cc, full);
@@ -3699,7 +4042,7 @@ static void register_decl(Sema *s, Module *m, Decl *d, int check_bodies) {
                 StrMap_pSInfo_put(&s->structs, d->name, si);
                 add_type(s, d->name);
             }
-            int32_t i;
+            size_t i;
             for (i = 0; i < d->nfields; i += 1) {
                 resolve_type(s, d->fields[i].type);
                 fold_const_dims(s, d->fields[i].type);
@@ -3768,7 +4111,7 @@ static void register_module(Sema *s, Module *m, int check_bodies) {
     StrSet_add(&s->done, m->path);
     const char *prev = s->file;
     s->file = m->path;
-    int32_t j;
+    size_t j;
     for (j = 0; j < m->ndecls; j += 1) {
         register_decl(s, m, m->decls[j], check_bodies);
     }
@@ -3805,7 +4148,7 @@ static void inject_defines(Sema *s, Cc *cc, Module *m) {
     Pos zp = {0, 0};
     Decl **nd = arena_alloc(s->a, (size_t)(cc->ndefines + m->ndecls) * sizeof(*nd));
     int np = 0;
-    int32_t i;
+    size_t i;
     for (i = 0; i < cc->ndefines; i += 1) {
         const char *d = cc->defines[i];
         const char *eq = strchr(d, '=');
@@ -3832,18 +4175,18 @@ static void inject_defines(Sema *s, Cc *cc, Module *m) {
         }
         Decl *dc = arena_alloc(s->a, sizeof(Decl));
         {
-            Decl *__with_2102_9 = dc;
-            __with_2102_9->kind = DL_VAR;
-            __with_2102_9->pos = zp;
-            __with_2102_9->name = name;
-            __with_2102_9->is_const = 1;
-            __with_2102_9->is_static = 1;
-            __with_2102_9->init = ini;
+            Decl *__with_2377_9 = dc;
+            __with_2377_9->kind = DL_VAR;
+            __with_2377_9->pos = zp;
+            __with_2377_9->name = name;
+            __with_2377_9->is_const = 1;
+            __with_2377_9->is_static = 1;
+            __with_2377_9->init = ini;
         }
         nd[np] = dc;
         np += 1;
     }
-    int32_t j;
+    size_t j;
     for (j = 0; j < m->ndecls; j += 1) {
         nd[np] = m->decls[j];
         np += 1;
@@ -3874,6 +4217,7 @@ void sema_run(Cc *cc, Module *m) {
         StrMap_pFunc_deinit(&s.funcs);
         StrMap_pType_deinit(&s.globals);
         StrMap_pCVal_deinit(&s.constvals);
+        StrSet_deinit(&s.macroconsts);
         StrSet_deinit(&s.enumconsts);
         StrSet_deinit(&s.done);
         free(s.locals);

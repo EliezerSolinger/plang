@@ -14,6 +14,8 @@ struct Cc:
     ndefines: i32
     backend_name: const *char   # active backend ("c"/"qbe") for __PLANG_BACKEND__
     std_version: i32     # target of the C backend: 99 (default) or 89 (--std=c89)
+    cpp: const *char     # C compiler used to preprocess `include <h>` headers
+                         #   (--cpp flag / PLANGC_CPP env; default "cc")
 
 # Reads, decodes, lexes and parses a file (with cache by path).
 def cc_load_module(cc: *Cc, path: const *char) -> *Module

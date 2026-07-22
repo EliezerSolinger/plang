@@ -47,7 +47,6 @@ def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out_cp: **u32, out
             goto bad
         if i + usize(len) > nbytes:
             goto bad
-        k: i32
         for k in range(1, len):
             c: i32 = bytes[i + k] & 0xFF
             if (c & 0xC0) != 0x80:

@@ -121,7 +121,7 @@ static Type *parse_type(P *p) {
         Type *inner = parse_type(p);
         expect(p, TK_RPAREN, "tipo agrupado (T)");
         t = inner;
-        int32_t kg;
+        size_t kg;
         for (kg = 0; kg < stars; kg += 1) {
             t = ty_ptr(p->a, t);
         }
@@ -184,12 +184,12 @@ static Type *parse_type(P *p) {
         }
         t = ty_name(p->a, name);
         {
-            Type *__with_169_9 = t;
-            __with_169_9->is_const = is_const;
-            __with_169_9->is_volatile = is_volatile;
-            __with_169_9->is_restrict = is_restrict;
-            __with_169_9->targs = targs.data;
-            __with_169_9->ntargs = targs.len;
+            Type *__with_168_9 = t;
+            __with_168_9->is_const = is_const;
+            __with_168_9->is_volatile = is_volatile;
+            __with_168_9->is_restrict = is_restrict;
+            __with_168_9->targs = targs.data;
+            __with_168_9->ntargs = targs.len;
         }
     }
     int32_t k;
@@ -389,7 +389,7 @@ static Expr *try_paren_cast(P *p) {
         Expr *arg = parse_expr(p);
         expect(p, TK_RPAREN, "pointer cast");
         Type *t = ty_name(p->a, name);
-        int32_t k;
+        size_t k;
         for (k = 0; k < stars; k += 1) {
             t = ty_ptr(p->a, t);
         }
@@ -752,12 +752,16 @@ static Stmt *parse_for(P *p) {
     Pos pos = adv(p)->pos;
     Stmt *s = st_new(p->a, ST_FOR, pos);
     s->var = expect(p, TK_IDENT, "for")->text;
-    expect(p, TK_IN, "for (expected 'in')");
-    Token *r = expect(p, TK_IDENT, "for (expected 'range')");
-    if (strcmp(r->text, "range") != 0) {
-        fatal_at(p->file, r->pos, "for only accepts 'range(...)' in v0.1");
+    if (accept(p, TK_COMMA)) {
+        s->var2 = expect(p, TK_IDENT, "for (second loop variable)")->text;
     }
-    expect(p, TK_LPAREN, "range");
+    expect(p, TK_IN, "for (expected 'in')");
+    Token *r = expect(p, TK_IDENT, "for (expected 'range' or 'enumerate')");
+    int is_enum = strcmp(r->text, "enumerate") == 0;
+    if (!is_enum && strcmp(r->text, "range") != 0) {
+        fatal_at(p->file, r->pos, "for only accepts 'range(...)' or 'enumerate(...)'");
+    }
+    expect(p, TK_LPAREN, r->text);
     Expr *a1 = parse_expr(p);
     Expr *a2 = NULL;
     Expr *a3 = NULL;
@@ -767,16 +771,31 @@ static Stmt *parse_for(P *p) {
             a3 = parse_expr(p);
         }
     }
-    expect(p, TK_RPAREN, "range");
+    expect(p, TK_RPAREN, r->text);
     expect(p, TK_COLON, "for");
-    if (a2 != NULL) {
-        s->from = a1;
-        s->to = a2;
-    } else {
+    if (is_enum) {
+        if (s->var2 == NULL) {
+            fatal_at(p->file, r->pos, "enumerate(...) needs two loop variables: `for i, v in enumerate(x)`");
+        }
+        if (a2 != NULL) {
+            fatal_at(p->file, r->pos, "enumerate(...) takes a single argument");
+        }
         s->from = NULL;
         s->to = a1;
+        s->step = NULL;
+    } else {
+        if (s->var2 != NULL) {
+            fatal_at(p->file, r->pos, "range(...) has a single loop variable (did you mean enumerate?)");
+        }
+        if (a2 != NULL) {
+            s->from = a1;
+            s->to = a2;
+        } else {
+            s->from = NULL;
+            s->to = a1;
+        }
+        s->step = a3;
     }
-    s->step = a3;
     s->body = parse_block(p);
     return s;
 }
@@ -967,15 +986,15 @@ static Func *parse_func(P *p, int is_static, int is_inline, const char *owner) {
     }
     Func *f = arena_alloc(p->a, sizeof(Func));
     {
-        Func *__with_850_5 = f;
-        __with_850_5->pos = pos;
-        __with_850_5->name = name->text;
-        __with_850_5->owner = owner;
-        __with_850_5->cname = (owner != NULL ? arena_printf(p->a, "%s_%s", owner, name->text) : name->text);
-        __with_850_5->is_static = is_static;
-        __with_850_5->is_inline = is_inline;
-        __with_850_5->tparams = ftparams.data;
-        __with_850_5->ntparams = ftparams.len;
+        Func *__with_864_5 = f;
+        __with_864_5->pos = pos;
+        __with_864_5->name = name->text;
+        __with_864_5->owner = owner;
+        __with_864_5->cname = (owner != NULL ? arena_printf(p->a, "%s_%s", owner, name->text) : name->text);
+        __with_864_5->is_static = is_static;
+        __with_864_5->is_inline = is_inline;
+        __with_864_5->tparams = ftparams.data;
+        __with_864_5->ntparams = ftparams.len;
     }
     expect(p, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1076,13 +1095,13 @@ static Decl *parse_struct_or_union(P *p, int is_union) {
     }
     expect(p, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_949_5 = d;
-        __with_949_5->fields = fields.data;
-        __with_949_5->nfields = fields.len;
-        __with_949_5->methods = methods.data;
-        __with_949_5->nmethods = methods.len;
-        __with_949_5->tparams = tparams.data;
-        __with_949_5->ntparams = tparams.len;
+        Decl *__with_963_5 = d;
+        __with_963_5->fields = fields.data;
+        __with_963_5->nfields = fields.len;
+        __with_963_5->methods = methods.data;
+        __with_963_5->nmethods = methods.len;
+        __with_963_5->tparams = tparams.data;
+        __with_963_5->ntparams = tparams.len;
     }
     return d;
 }
@@ -1117,10 +1136,56 @@ static Decl *parse_enum(P *p) {
     return d;
 }
 
+static const char *spell_tok(Token *t) {
+    if (t->text != NULL) {
+        return t->text;
+    }
+    switch (t->kind) {
+        case TK_DOT: {
+            return ".";
+        }
+        case TK_SLASH: {
+            return "/";
+        }
+        case TK_MINUS: {
+            return "-";
+        }
+        default: {
+            return "";
+        }
+    }
+}
+
+static Decl *parse_c_include(P *p) {
+    Token *inc = adv(p);
+    Decl *d = arena_alloc(p->a, sizeof(Decl));
+    d->kind = DL_IMPORT;
+    d->is_include = 1;
+    d->pos = inc->pos;
+    if (at(p, TK_STRING)) {
+        const char *raw = adv(p)->text;
+        size_t len = strlen(raw);
+        d->import_path = arena_strndup(p->a, raw + 1, (len >= 2 ? len - 2 : 0));
+        d->import_system = 0;
+    } else {
+        expect(p, TK_LT, "include <header>");
+        const char *path = "";
+        while (!at(p, TK_GT) && !at(p, TK_NEWLINE) && !at(p, TK_EOF)) {
+            path = arena_printf(p->a, "%s%s", path, spell_tok(adv(p)));
+        }
+        expect(p, TK_GT, "include <header> (missing '>')");
+        d->import_path = path;
+        d->import_system = 1;
+    }
+    expect(p, TK_NEWLINE, "include");
+    return d;
+}
+
 static Decl *parse_import(P *p) {
     Pos pos = adv(p)->pos;
     Decl *d = arena_alloc(p->a, sizeof(Decl));
     d->kind = DL_IMPORT;
+    d->is_include = 0;
     d->pos = pos;
     if (at(p, TK_HEADER)) {
         d->import_system = 1;
@@ -1180,6 +1245,7 @@ static Decl *parse_top(P *p) {
             return parse_struct_or_union(p, 0);
         }
         case TK_UNION: {
+            warn_at(p->file, t->pos, "'union' in Plang is deprecated and will be removed in a future version");
             return parse_struct_or_union(p, 1);
         }
         case TK_ENUM: {
@@ -1206,6 +1272,9 @@ static Decl *parse_top(P *p) {
         }
         case TK_CONST:
         case TK_IDENT: {
+            if (!is_extern && at(p, TK_IDENT) && strcmp(pk(p)->text, "include") == 0 && (pk1(p)->kind == TK_LT || pk1(p)->kind == TK_STRING)) {
+                return parse_c_include(p);
+            }
             int is_const = accept(p, TK_CONST);
             if (is_const && at(p, TK_DEF)) {
                 Func *cf = parse_func(p, 0, 0, NULL);
@@ -1219,18 +1288,18 @@ static Decl *parse_top(P *p) {
             Token *name = expect(p, TK_IDENT, "global declaration");
             Decl *d2 = arena_alloc(p->a, sizeof(Decl));
             {
-                Decl *__with_1073_13 = d2;
-                __with_1073_13->kind = DL_VAR;
-                __with_1073_13->pos = name->pos;
-                __with_1073_13->name = name->text;
-                __with_1073_13->is_const = is_const;
-                __with_1073_13->is_extern = is_extern;
+                Decl *__with_1134_13 = d2;
+                __with_1134_13->kind = DL_VAR;
+                __with_1134_13->pos = name->pos;
+                __with_1134_13->name = name->text;
+                __with_1134_13->is_const = is_const;
+                __with_1134_13->is_extern = is_extern;
                 if (accept(p, TK_COLON)) {
-                    __with_1073_13->type = parse_type(p);
+                    __with_1134_13->type = parse_type(p);
                 }
                 if (accept(p, TK_ASSIGN)) {
-                    __with_1073_13->init = parse_initializer(p);
-                } else if (__with_1073_13->type == NULL) {
+                    __with_1134_13->init = parse_initializer(p);
+                } else if (__with_1134_13->type == NULL) {
                     fatal_at(p->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(p->file, name->pos, "const requires a value");

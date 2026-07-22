@@ -47,6 +47,7 @@ def utf8_encode(cp: u32, out: char[4]) -> i32
 # ---------- errors ----------
 def fatal(fmt: const *char, ...)
 def fatal_at(file: const *char, pos: Pos, fmt: const *char, ...)
+def warn_at(file: const *char, pos: Pos, fmt: const *char, ...)
 
 # ---------- files ----------
 def read_entire_file(path: const *char, out_len: *usize) -> *char

@@ -1,6 +1,6 @@
 # lexer.p — tokenizes UTF-32 codepoints, emitting NEWLINE/INDENT/DEDENT
 # (port of src/lexer.c, using structs with P methods)
-import <string.h>
+include <string.h>
 import "lexer.ph"
 import "../stl/vec.ph"
 

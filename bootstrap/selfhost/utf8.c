@@ -56,7 +56,7 @@ int32_t utf8_decode(const char *bytes, size_t nbytes, Arena *a, uint32_t **out_c
         if (i + (size_t)len > nbytes) {
             goto bad;
         }
-        int32_t k;
+        size_t k;
         for (k = 1; k < len; k += 1) {
             int32_t c = bytes[i + k] & 0xFF;
             if ((c & 0xC0) != 0x80) {

@@ -8,10 +8,10 @@
 #   s.appendf(" world %d", 42)
 #   printf("%s\n", s.cstr())
 #   s.deinit()
-import <stdio.h>
-import <stdlib.h>
-import <string.h>
-import <stdarg.h>
+include <stdio.h>
+include <stdlib.h>
+include <string.h>
+include <stdarg.h>
 
 struct Str:
     data: *char

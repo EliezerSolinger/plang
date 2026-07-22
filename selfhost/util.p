@@ -3,10 +3,10 @@
 # First module of the compiler written in P. Generates an equivalent util.c
 # to the original and links with the rest of the compiler still in C.
 # Uses P's fixed-width aliases (i32/u32/usize/... — spec §3.1.1).
-import <stdio.h>
-import <stdlib.h>
-import <string.h>
-import <stdarg.h>
+include <stdio.h>
+include <stdlib.h>
+include <string.h>
+include <stdarg.h>
 import "plang.ph"
 
 # ---------- arena ----------
@@ -134,13 +134,21 @@ def fatal_at(file: const *char, pos: Pos, fmt: const *char, ...):
     va_end(ap)
     exit(1)
 
+def warn_at(file: const *char, pos: Pos, fmt: const *char, ...):
+    ap: va_list
+    va_start(ap, fmt)
+    fprintf(stderr, "%s:%d:%d: warning: ", file, pos.line, pos.col)
+    vfprintf(stderr, fmt, ap)
+    fprintf(stderr, "\n")
+    va_end(ap)
+
 # ---------- files ----------
 def read_entire_file(path: const *char, out_len: *usize) -> *char:
     f: *FILE = fopen(path, "rb")
     if f == None:
         fatal("could not open '%s'", path)
     defer fclose(f)
-    if fseek(f, 0, 2) != 0:   # 2 = SEEK_END (macro from <stdio.h>; QBE has no cpp)
+    if fseek(f, 0, SEEK_END) != 0:   # SEEK_END: ingested from <stdio.h> via `include`
         fatal("fseek failed on '%s'", path)
     sz: long = ftell(f)
     if sz < 0:

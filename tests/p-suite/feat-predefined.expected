@@ -1,0 +1,9 @@
+func=main helper=helper
+method=Point_tag
+line=22
+file_ok=1
+date_len=11 time_len=8
+counter=0,1,2
+plang=1 version=0.6
+backend_defined=1 nonempty=1
+v06

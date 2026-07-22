@@ -12,8 +12,8 @@
 #   q.push(1)
 #   x: int = q.pop()    # assumes size > 0 (C semantics, no check)
 #   q.deinit()
-import <stdlib.h>
-import <string.h>
+include <stdlib.h>
+include <string.h>
 
 struct Queue<T>:
     data: *T

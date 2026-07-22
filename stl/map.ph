@@ -16,8 +16,8 @@
 #   for i in range(m.elen):
 #       if not m.dead[i]:
 #           ... m.keys[i] / m.vals[i] ...
-import <stdlib.h>
-import <string.h>
+include <stdlib.h>
+include <string.h>
 import "hash.ph"
 
 struct Map<K, V>:

@@ -6,8 +6,8 @@
 # compile time via `match type`: *char is compared BY CONTENT (strcmp), anything
 # else BY BYTES — so List<*char> "just works" like Python. The list does NOT own
 # the elements. `defer l.deinit()`.
-import <stdlib.h>
-import <string.h>
+include <stdlib.h>
+include <string.h>
 
 struct List<T>:
     data: *T

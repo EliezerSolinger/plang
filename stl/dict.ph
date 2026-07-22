@@ -14,8 +14,8 @@
 #   for i in range(d.elen):
 #       if not d.dead[i]:
 #           ... d.keys[i] / d.vals[i] ...
-import <stdlib.h>
-import <string.h>
+include <stdlib.h>
+include <string.h>
 import "hash.ph"
 
 struct Dict<K, V>:

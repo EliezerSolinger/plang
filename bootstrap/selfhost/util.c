@@ -147,6 +147,15 @@ void fatal_at(const char *file, Pos pos, const char *fmt, ...) {
     exit(1);
 }
 
+void warn_at(const char *file, Pos pos, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(stderr, "%s:%d:%d: warning: ", file, pos.line, pos.col);
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
+}
+
 char *read_entire_file(const char *path, size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (f == NULL) {

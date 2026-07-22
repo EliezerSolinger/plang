@@ -9,8 +9,8 @@
 #   v.deinit()
 #
 # No bounds-check (C semantics); manual memory via init/deinit.
-import <stdlib.h>
-import <string.h>
+include <stdlib.h>
+include <string.h>
 
 struct Vec<T>:
     data: *T

@@ -1,8 +1,8 @@
 # main.p — driver: orchestrates the pipeline (port of src/main.c)
 #   file -> utf8 -> lexer -> parser -> sema -> backend -> output
-import <stdio.h>
-import <stdlib.h>
-import <string.h>
+include <stdio.h>
+include <stdlib.h>
+include <string.h>
 import "backend.ph"
 import "lexer.ph"
 import "parser.ph"
@@ -27,6 +27,8 @@ static def usage():
     fprintf(stderr, "  --i64-downgrade  under c89: map 64-bit ints to 32-bit\n")
     fprintf(stderr, "  --i64-longlong   under c89: use the long long extension\n")
     fprintf(stderr, "  --backend <b>    codegen target (default: c)\n")
+    fprintf(stderr, "  --cpp <cc>       C compiler used to preprocess `include <h>` headers\n")
+    fprintf(stderr, "                   (default: PLANGC_CPP env, else \"cc\")\n")
     fprintf(stderr, "  --tokens         dump tokens and exit\n")
     fprintf(stderr, "  -h, --help       this help\n")
     exit(2)
@@ -51,7 +53,6 @@ static def dump_tokens(path: const *char, cc: *Cc):
     bytes: *char = read_entire_file(path, &len)
     defer free(bytes)
     tl: TokenList = lex(path, bytes, len, &cc->arena)
-    i: usize
     for i in range(tl.n):
         t: *Token = &tl.toks[i]
         printf("%4d:%-3d %-16s %s\n", t->pos.line, t->pos.col, tok_kind_name(t->kind), t->text if t->text != None else "")
@@ -63,12 +64,10 @@ static def dump_tokens(path: const *char, cc: *Cc):
 # Doing this in the C backend would duplicate typedefs.
 static def qbe_merge_types(cc: *Cc, m: *Module):
     extra = 0
-    i: i32
     for i in range(cc->nmods):
         md: *Module = cc->mods[i]
         if md == m:
             continue
-        j: i32
         for j in range(md->ndecls):
             dd: *Decl = md->decls[j]
             dk: DeclKind = dd->kind
@@ -87,7 +86,6 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
         md2: *Module = cc->mods[i]
         if md2 == m:
             continue
-        j2: i32
         for j2 in range(md2->ndecls):
             d: *Decl = md2->decls[j2]
             if d->kind == DL_STRUCT or d->kind == DL_UNION:
@@ -99,7 +97,6 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
                 *c = *d
                 if d->nmethods > 0:
                     mc: **Func = arena_alloc(&cc->arena, sizeof(*d->methods) * usize(d->nmethods))
-                    mk: i32
                     for mk in range(d->nmethods):
                         fc: *Func = arena_alloc(&cc->arena, sizeof(Func))
                         *fc = *d->methods[mk]
@@ -122,7 +119,6 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
                 # (local symbol, no link collision between TUs)
                 nd[p] = d
                 p += 1
-    j3: i32
     for j3 in range(m->ndecls):
         nd[p] = m->decls[j3]
         p += 1
@@ -135,12 +131,15 @@ def main(argc: int, argv: **char) -> int:
     tokens_only: bool = False
     std_version = 99      # target of the C backend (--std=c89 -> 89)
     i64_mode = 0          # under c89: 0=error, 1=downgrade 64->32, 2=long long
+    # C compiler used to preprocess `include <h>`: --cpp > PLANGC_CPP env > "cc"
+    cpp_cmd: const *char = getenv("PLANGC_CPP")
+    if cpp_cmd == None:
+        cpp_cmd = "cc"
     inputs: Vec<*char>
     inputs.init()
     defines: Vec<*char>   # -D NAME=VALUE: comptime consts injected from outside
     defines.init()
 
-    i: i32
     for i in range(1, argc):
         if strncmp(argv[i], "--std=", 6) == 0:
             std: const *char = argv[i] + 6
@@ -172,6 +171,11 @@ def main(argc: int, argv: **char) -> int:
             if i >= argc:
                 usage()
             backend_name = argv[i]
+        elif strcmp(argv[i], "--cpp") == 0:
+            i += 1
+            if i >= argc:
+                usage()
+            cpp_cmd = argv[i]
         elif strcmp(argv[i], "--tokens") == 0:
             tokens_only = True
         elif strcmp(argv[i], "-h") == 0 or strcmp(argv[i], "--help") == 0:
@@ -201,14 +205,13 @@ def main(argc: int, argv: **char) -> int:
     cc.ndefines = defines.len
     cc.backend_name = be->name
     cc.std_version = std_version
+    cc.cpp = cpp_cmd
 
     if tokens_only:
-        j: i32
         for j in range(inputs.len):
             dump_tokens(inputs.get(j), &cc)
         return 0
 
-    k: i32
     for k in range(inputs.len):
         path: const *char = inputs.get(k)
         m: *Module
