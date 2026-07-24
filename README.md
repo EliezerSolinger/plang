@@ -60,6 +60,14 @@ plangc prog.p -o prog.c      # Plang -> C (default backend)
 cc prog.c -o prog            # then any C compiler builds it
 ```
 
+For a project, `--out-dir` compiles many files at once and mirrors the source
+tree in the output (builds never write next to your sources):
+
+```sh
+plangc --out-dir out stl/*.ph src/*.ph src/*.p
+cc out/src/*.c -o prog
+```
+
 For code aimed at very old toolchains, emit strict C89:
 
 ```sh
@@ -118,6 +126,14 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 - **Systems types:** `i8..i64`, `u8..u64`, `f32/f64`, `bool`, `char`, pointers
   (`*T`), fixed arrays (`T[N]`), `usize`/`isize`; plus the native C spellings.
 - **Structs with methods**, unions, enums, bitfields, function pointers.
+- **`out` / `ref` / `in` parameters** — sugar over plain pointers
+  (`divmod(17, 5, out r)`; `in` emits `const T*`). The ABI stays a raw
+  pointer; C calls it as always.
+- **`in` / `not in`**, string `==` by content (`strcmp`; identity is `is`),
+  and `match` on strings.
+- **Default and named arguments**, resolved at compile time.
+- **Clang-compatible warnings:** `-W<group>`, `-Wall`, `-Werror`,
+  `-pedantic-errors` — same group names and defaults as clang.
 - **First-class C interop:** `import <stdio.h>` becomes `#include`; call libc
   directly; the emitted C is clean enough to read and diff.
 
@@ -134,16 +150,17 @@ Because it's built on generics, containers store elements **by value** (a
 header-only: `import "stl/vec.ph"`, then `declare Vec<int>` / `implement
 Vec<int>`. Skip it entirely and use raw pointers + libc if you prefer.
 
-See **[specs.md](specs.md)** for the language reference.
+See **[SPECS.MD](SPECS.MD)** for the language reference.
 
 ## Repository layout
 
 ```
 selfhost/     the compiler, written in Plang (.p source, .ph headers)
-bootstrap/    the C seed generated from selfhost/ — builds plangc with cc
+bootstrap/    the C seed generated from selfhost/ (+ bootstrap/stl headers)
 stl/          optional standard library (header-only generic templates, .ph)
+tests/        gating suites, C corpora (c-testsuite, wacct), clang-compare
 Makefile      builds plangc from the seed
-specs.md      language reference
+SPECS.MD      language reference
 ```
 
 `plangc` is the compiler; `selfhost/` is both its implementation and a large,
@@ -156,8 +173,9 @@ make selfhost   # rebuilds plangc from selfhost/ using the seed compiler
 
 ## Status
 
-This is a feature-frozen snapshot of the language. The compiler self-hosts and
+The compiler self-hosts (3-stage fixed point, through both back ends) and
 passes its test suite on Unix systems with a standard C toolchain.
+`make verify` runs the whole battery.
 
 ## License
 
