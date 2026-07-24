@@ -81,15 +81,15 @@ def arith_rank(t: *Type) -> i32:
     if t == None or t->kind != TY_NAME or t->name == None:
         return 1
     n: const *char = t->name
-    if strcmp(n, "double") == 0 or strcmp(n, "f64") == 0:
+    if n in {"double", "f64"}:
         return 6
-    if strcmp(n, "float") == 0 or strcmp(n, "f32") == 0:
+    if n in {"float", "f32"}:
         return 5
-    if strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "unsigned long") == 0 or strcmp(n, "unsigned long long") == 0:
+    if n in {"u64", "usize", "unsigned long", "unsigned long long"}:
         return 4
-    if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "isize") == 0 or strcmp(n, "long long") == 0:
+    if n in {"long", "i64", "isize", "long long"}:
         return 3
-    if strcmp(n, "unsigned") == 0 or strcmp(n, "u32") == 0:
+    if n in {"unsigned", "u32"}:
         return 2
     return 1
 
@@ -322,6 +322,10 @@ struct QVar:
     is_static: bool # static local: global storage $sl<sid>, no alloc
     sid: i32        # id of the static storage
     nbytes: i32     # explicit alloc size (0 = use size_of); for arrays []
+    ext: bool       # block-scope extern: storage is the global symbol $name
+    decl: *Stmt     # the ST_VAR/ST_WITH that declared it (None: param). Ties the
+                    # collect pre-pass entry to its emission-time lexical binding —
+                    # NAMES may repeat across blocks with different types.
 
 # enum constant resolved to an integer value (QBE has no enum)
 struct EnumConst:
@@ -344,7 +348,7 @@ declare StrMap<*Decl>
 
 # does the last statement of a block unconditionally jump away? (defers already emitted)
 def stmt_exits_q(s: *Stmt) -> bool:
-    return s->kind == ST_RETURN or s->kind == ST_BREAK or s->kind == ST_CONTINUE or s->kind == ST_GOTO
+    return s->kind in {ST_RETURN, ST_BREAK, ST_CONTINUE, ST_GOTO}
 
 struct Qb:
     out: *StrBuf
@@ -354,7 +358,9 @@ struct Qb:
     nlbl: i32
     nstr: i32
     nstatic: i32    # counter of static-local storages ($sl<sid>)
-    vars: Vec<QVar>     # locals/params of the current function
+    vars: Vec<QVar>     # locals/params of the current function (ALL declarations)
+    binds: Vec<i32>     # lexical scope: indices into vars, innermost binding last;
+                        # emit_block saves/restores its length (shadowing correct)
     enumc: Vec<EnumConst>   # module's enum constants -> integer value
     globals: StrMap<*Type>
     funcs: StrMap<*Func>
@@ -397,6 +403,8 @@ struct Qb:
     static def is_signed(self: *Qb, t: *Type) -> bool
     static def op_signed(self: *Qb, e: *Expr) -> bool
     static def find_var(self: *Qb, name: const *char) -> *QVar
+    static def bind_decl(self: *Qb, s: *Stmt)
+    static def emit_block_body(self: *Qb, b: *Block)
     static def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool
     static def qtype_of(self: *Qb, e: *Expr) -> *Type
     static def gtype_of(self: *Qb, e: *Expr) -> *Type
@@ -450,9 +458,10 @@ struct Qb:
     static def emit_switch(self: *Qb, s: *Stmt)
     static def emit_match(self: *Qb, s: *Stmt)
     static def collect_vars(self: *Qb, b: *Block)
-    static def add_var(self: *Qb, name: const *char, ty: *Type)
-    static def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr)
-    static def static_fix_len(self: *Qb, name: const *char, ty: *Type, total: i32)
+    static def add_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt)
+    static def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr, decl: *Stmt)
+    static def add_extern_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt)
+    static def static_fix_len(self: *Qb, ty: *Type, total: i32)
     static def emit_func(self: *Qb, f: *Func)
 
     static def tmp(self: *Qb) -> i32:
@@ -467,22 +476,22 @@ struct Qb:
     static def cls_of(self: *Qb, t: *Type) -> char:
         if t == None:
             return 'w'
-        if t->kind == TY_PTR or t->kind == TY_ARRAY or t->kind == TY_FUNC:
+        if t->kind in {TY_PTR, TY_ARRAY, TY_FUNC}:
             return 'l'
         n: const *char = t->name
-        if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "isize") == 0 or strcmp(n, "size_t") == 0 or strcmp(n, "ptrdiff_t") == 0 or strcmp(n, "long long") == 0 or strcmp(n, "unsigned long") == 0 or strcmp(n, "unsigned long long") == 0:
+        if n in {"long", "i64", "u64", "usize", "isize", "size_t", "ptrdiff_t", "long long", "unsigned long", "unsigned long long"}:
             return 'l'
-        if strcmp(n, "double") == 0 or strcmp(n, "f64") == 0:
+        if n in {"double", "f64"}:
             return 'd'
-        if strcmp(n, "float") == 0 or strcmp(n, "f32") == 0:
+        if n in {"float", "f32"}:
             return 's'
         return 'w'
 
     # evaluates a constant integer expression (array dimensions, e.g. 5*32,
     # N+1, enum). Returns the value; *ok=False if not reducible at compile time.
-    static def const_int(self: *Qb, e: *Expr, ok: *bool) -> i64:
+    static def const_int(self: *Qb, e: *Expr, ref ok: bool) -> i64:
         if e == None:
-            *ok = False
+            ok = False
             return 0
         match e->kind:
             case EX_NUMBER:
@@ -499,12 +508,12 @@ struct Qb:
                 ev: i64 = 0
                 if self->enum_lookup(e->text, &ev):
                     return ev
-                *ok = False
+                ok = False
                 return 0
             case EX_CAST:
-                return self->const_int(e->lhs, ok)
+                return self->const_int(e->lhs, ref ok)
             case EX_UNARY:
-                v: i64 = self->const_int(e->lhs, ok)
+                v: i64 = self->const_int(e->lhs, ref ok)
                 if e->op == TK_MINUS:
                     return -v
                 if e->op == TK_TILDE:
@@ -513,11 +522,11 @@ struct Qb:
                     return 0 if v != 0 else 1
                 if e->op == TK_PLUS:
                     return v
-                *ok = False
+                ok = False
                 return 0
             case EX_BINARY:
-                a: i64 = self->const_int(e->lhs, ok)
-                b: i64 = self->const_int(e->rhs, ok)
+                a: i64 = self->const_int(e->lhs, ref ok)
+                b: i64 = self->const_int(e->rhs, ref ok)
                 match e->op:
                     case TK_PLUS:
                         return a + b
@@ -556,13 +565,13 @@ struct Qb:
                     case TK_OR:
                         return 1 if (a != 0 or b != 0) else 0
                     case _:
-                        *ok = False
+                        ok = False
                         return 0
             case EX_TERNARY:
-                c: i64 = self->const_int(e->cond, ok)
-                return self->const_int(e->lhs, ok) if c != 0 else self->const_int(e->rhs, ok)
+                c: i64 = self->const_int(e->cond, ref ok)
+                return self->const_int(e->lhs, ref ok) if c != 0 else self->const_int(e->rhs, ref ok)
             case _:
-                *ok = False
+                ok = False
                 return 0
 
     static def size_of(self: *Qb, t: *Type) -> i32:
@@ -575,16 +584,16 @@ struct Qb:
             count = 0
             if t->arr_len != None:
                 ok: bool = True
-                v: i64 = self->const_int(t->arr_len, &ok)
+                v: i64 = self->const_int(t->arr_len, ref ok)
                 if ok and v > 0:
                     count = i32(v)
             return count * self->size_of(t->inner)
         n: const *char = t->name
-        if strcmp(n, "va_list") == 0 or strcmp(n, "__builtin_va_list") == 0:
+        if n in {"va_list", "__builtin_va_list"}:
             return 24   # va_list SysV: 24-byte region (treated as aggregate)
-        if strcmp(n, "char") == 0 or strcmp(n, "bool") == 0 or strcmp(n, "i8") == 0 or strcmp(n, "u8") == 0:
+        if n in {"char", "bool", "i8", "u8"}:
             return 1
-        if strcmp(n, "short") == 0 or strcmp(n, "i16") == 0 or strcmp(n, "u16") == 0:
+        if n in {"short", "i16", "u16"}:
             return 2
         if self->cls_of(t) == 'l' or self->cls_of(t) == 'd':
             return 8
@@ -602,7 +611,7 @@ struct Qb:
         if t == None or t->kind != TY_ARRAY or t->arr_len == None:
             return False
         ok: bool = True
-        self->const_int(t->arr_len, &ok)
+        self->const_int(t->arr_len, ref ok)
         return not ok
 
     static def type_align(self: *Qb, t: *Type) -> i32:
@@ -775,7 +784,7 @@ struct Qb:
             sb_printf(db, " l 0,")   # None = null pointer (8 bytes)
             return 8
         ok: bool = True
-        v: i64 = self->const_int(e, &ok)
+        v: i64 = self->const_int(e, ref ok)
         if not ok:
             return -1
         dt: const *char = "w"
@@ -846,7 +855,7 @@ struct Qb:
             count = -1   # -1 = size inferred from the initializer
             if ty->arr_len != None:
                 cok: bool = True
-                cv: i64 = self->const_int(ty->arr_len, &cok)
+                cv: i64 = self->const_int(ty->arr_len, ref cok)
                 if cok and cv >= 0:
                     count = i32(cv)
             esz: i32 = self->size_of(ty->inner)
@@ -929,7 +938,7 @@ struct Qb:
                         break
                     if sd->fields[i].name[0] != '\0' and *idx < nitems:
                         vok: bool = True
-                        vv: i64 = self->const_int(items[*idx], &vok)
+                        vv: i64 = self->const_int(items[*idx], ref vok)
                         if not vok:
                             return -1
                         *idx += 1
@@ -972,7 +981,7 @@ struct Qb:
             it: *Expr = items[k]
             if it != None and it->kind == EX_DESIG and it->rhs != None:
                 ok: bool = True
-                v: i64 = self->const_int(it->rhs, &ok)
+                v: i64 = self->const_int(it->rhs, ref ok)
                 if not ok:
                     return -1
                 cur = i32(v)
@@ -987,7 +996,7 @@ struct Qb:
             val: *Expr = it2
             if it2 != None and it2->kind == EX_DESIG:
                 ok2: bool = True
-                cur = i32(self->const_int(it2->rhs, &ok2)); val = it2->lhs
+                cur = i32(self->const_int(it2->rhs, ref ok2)); val = it2->lhs
             if cur >= 0 and cur < n:
                 slots[cur] = merge_init(slots[cur], val)
             cur += 1
@@ -1048,7 +1057,7 @@ struct Qb:
                         break
                     if slots[k] != None:
                         vok: bool = True
-                        vv: i64 = self->const_int(slots[k], &vok)
+                        vv: i64 = self->const_int(slots[k], ref vok)
                         if not vok:
                             free(slots)
                             return -1
@@ -1097,7 +1106,7 @@ struct Qb:
             c = 0
             if ft->arr_len != None:
                 aok: bool = True
-                av: i64 = self->const_int(ft->arr_len, &aok)
+                av: i64 = self->const_int(ft->arr_len, ref aok)
                 if aok and av > 0:
                     c = i32(av)
             if c == 0:
@@ -1212,7 +1221,7 @@ struct Qb:
     static def is_valist(self: *Qb, t: *Type) -> bool:
         if t == None or t->kind != TY_NAME:
             return False
-        return strcmp(t->name, "va_list") == 0 or strcmp(t->name, "__builtin_va_list") == 0
+        return t->name in {"va_list", "__builtin_va_list"}
 
     # if t (after deref) is a known struct, returns the DL_STRUCT; else None
     static def struct_of(self: *Qb, t: *Type) -> *Decl:
@@ -1234,19 +1243,33 @@ struct Qb:
         # "unsigned long long", "unsigned char"...) is unsigned
         if strncmp(n, "unsigned", 8) == 0:
             return False
-        return not (strcmp(n, "u8") == 0 or strcmp(n, "u16") == 0 or strcmp(n, "u32") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "bool") == 0)
+        return not (n in {"u8", "u16", "u32", "u64", "usize", "bool"})
 
     # signedness of an operand (from its declared/ingested type; an unprototyped
     # call has no type and defaults to signed, like C's implicit int)
     static def op_signed(self: *Qb, e: *Expr) -> bool:
         return self->is_signed(self->qtype_of(e))
 
+    # lexical name resolution: walk the ACTIVE bindings innermost-first. Two
+    # declarations may share a name with different types (sibling/nested blocks);
+    # a flat name search would fuse them — wrong offsets and store classes.
     static def find_var(self: *Qb, name: const *char) -> *QVar:
+        k: i32
+        for k in range(self->binds.len - 1, -1, -1):
+            idx: i32 = self->binds.get(k)
+            if strcmp(self->vars.data[idx].name, name) == 0:
+                return &self->vars.data[idx]
+        return None
+
+    # activates the binding of a declaration at its emission point: ties the
+    # emitted ST_VAR/ST_WITH to the QVar the collect pre-pass created for it
+    # (identity by Stmt pointer, immune to name collisions)
+    static def bind_decl(self: *Qb, s: *Stmt):
         i: i32
         for i in range(self->vars.len):
-            if strcmp(self->vars.data[i].name, name) == 0:
-                return &self->vars.data[i]
-        return None
+            if self->vars.data[i].decl == s:
+                self->binds.push(i)
+                return
 
     # enum constant -> integer value (QBE has no enum); *out receives the value
     static def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool:
@@ -1397,7 +1420,7 @@ struct Qb:
                 return self->qtype_of(e)
             case EX_BINARY:
                 op: i32 = e->op
-                if op == TK_EQ or op == TK_NE or op == TK_LT or op == TK_LE or op == TK_GT or op == TK_GE or op == TK_AND or op == TK_OR:
+                if op in {TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE, TK_AND, TK_OR}:
                     return mk_tyname("int")
                 return arith_promote(self->gtype_of(e->lhs), self->gtype_of(e->rhs))
             case EX_UNARY:
@@ -1452,8 +1475,8 @@ struct Qb:
                     return False
                 ok1: bool = True
                 ok2: bool = True
-                va: i64 = self->const_int(a->arr_len, &ok1)
-                vb: i64 = self->const_int(b->arr_len, &ok2)
+                va: i64 = self->const_int(a->arr_len, ref ok1)
+                vb: i64 = self->const_int(b->arr_len, ref ok2)
                 return ok1 and ok2 and va == vb
             case _:
                 return False
@@ -1493,7 +1516,7 @@ struct Qb:
         if e->kind == EX_CALL and e->lhs != None and e->lhs->kind == EX_IDENT and self->funcs.get_or(e->lhs->text, None) == None and self->find_var(e->lhs->text) == None and self->globals.get_or(e->lhs->text, None) == None:
             return 'w'
         # -x / +x / ~x preserve the operand's class (matters for float)
-        if e->kind == EX_UNARY and (e->op == TK_MINUS or e->op == TK_PLUS or e->op == TK_TILDE):
+        if e->kind == EX_UNARY and (e->op in {TK_MINUS, TK_PLUS, TK_TILDE}):
             return self->ecls(e->lhs)
         if e->kind == EX_NUMBER:
             if is_float_lit(e->text):
@@ -1511,7 +1534,7 @@ struct Qb:
             return 'w'
         if e->kind == EX_BINARY:
             op: i32 = e->op
-            if op == TK_EQ or op == TK_NE or op == TK_LT or op == TK_LE or op == TK_GT or op == TK_GE or op == TK_AND or op == TK_OR:
+            if op in {TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE, TK_AND, TK_OR}:
                 return 'w'
             # mirrors emit_binary: shift preserves the lhs; the rest promotes both
             if op == TK_SHL or op == TK_SHR:
@@ -1554,6 +1577,10 @@ struct Qb:
             case EX_IDENT:
                 v: *QVar = self->find_var(e->text)
                 if v != None:
+                    if v->ext:
+                        te: i32 = self->tmp()
+                        sb_printf(self->out, "\t%%t%d =l copy $%s\n", te, v->name)
+                        return te
                     if v->is_static:
                         ts: i32 = self->tmp()
                         sb_printf(self->out, "\t%%t%d =l copy $sl%d\n", ts, v->sid)
@@ -1578,7 +1605,7 @@ struct Qb:
                 lk: i32 = e->lhs->kind
                 if e->op == TK_ARROW:
                     base = self->emit_rvalue(e->lhs)
-                elif lk == EX_CALL or lk == EX_COMPOUND or lk == EX_STMTEXPR or lk == EX_GENERIC or lk == EX_CAST:
+                elif lk in {EX_CALL, EX_COMPOUND, EX_STMTEXPR, EX_GENERIC, EX_CAST}:
                     # base is an aggregate RVALUE ((f()).field): the aggregate
                     # rvalue is already the address of the object (sret/anonymous slot)
                     base = self->emit_rvalue(e->lhs)
@@ -1643,7 +1670,7 @@ struct Qb:
     # QBE class of the operand expected by the store (b/h/w use 'w'; l uses 'l')
     static def store_cls(self: *Qb, t: *Type) -> char:
         c: char = self->cls_of(t)
-        if c == 'l' or c == 'd' or c == 's':
+        if c in {'l', 'd', 's'}:
             return c
         return 'w'
 
@@ -1717,7 +1744,7 @@ struct Qb:
                 if v != None:
                     # static local: address is $sl<sid>; array/struct decays,
                     # otherwise load
-                    if v->is_static:
+                    if v->is_static or v->ext:
                         sa: i32 = self->emit_addr(e)
                         if v->ty != None and (v->ty->kind == TY_ARRAY or self->is_agg(v->ty) or self->is_valist(v->ty)):
                             return sa
@@ -1752,7 +1779,7 @@ struct Qb:
                     return t8e
                 # stderr/stdout/stdin: libc FILE* globals -> LOAD the pointer
                 # (the value is the FILE*; passing the address $stderr would give a FILE**)
-                if strcmp(e->text, "stderr") == 0 or strcmp(e->text, "stdout") == 0 or strcmp(e->text, "stdin") == 0:
+                if e->text in {"stderr", "stdout", "stdin"}:
                     tio: i32 = self->tmp()
                     sb_printf(self->out, "\t%%t%d =l loadl $%s\n", tio, e->text)
                     return tio
@@ -1811,14 +1838,20 @@ struct Qb:
                 return self->emit_rvalue(self->gen_select(e))
             case EX_STMTEXPR:
                 # ({...}) becomes flow: the statements execute HERE in the CFG (correct
-                # even inside a ternary/&&/|| branch), and the value is the last expression
+                # even inside a ternary/&&/|| branch), and the value is the last expression.
+                # The VALUE expr is still inside the braces' scope, so the block's
+                # bindings are only popped after it is emitted.
+                semark: i32 = self->binds.len
                 if e->xblock != None:
-                    self->emit_block(e->xblock)
+                    self->emit_block_body(e->xblock)
+                seres: i32
                 if e->lhs != None:
-                    return self->emit_rvalue(e->lhs)
-                tv0: i32 = self->tmp()
-                sb_printf(self->out, "\t%%t%d =w copy 0\n", tv0)
-                return tv0
+                    seres = self->emit_rvalue(e->lhs)
+                else:
+                    seres = self->tmp()
+                    sb_printf(self->out, "\t%%t%d =w copy 0\n", seres)
+                self->binds.len = semark
+                return seres
             case EX_VAARG:
                 apv: i32 = self->emit_rvalue(e->lhs)   # va_list address
                 vcls: char = self->cls_of(e->cast_type)
@@ -1862,7 +1895,7 @@ struct Qb:
     static def charval(self: *Qb, lex: const *char) -> i32:
         # lex = 'x' with quotes; handles escapes (includes octal \NNN and hex \xNN)
         # wide/unicode prefix (L'x', u'x', U'x'): skip it (value = ASCII codepoint)
-        if lex[0] == 'L' or lex[0] == 'u' or lex[0] == 'U':
+        if lex[0] in {'L', 'u', 'U'}:
             lex += 1
         if lex[1] != '\\':
             return i32(lex[1])
@@ -2116,7 +2149,7 @@ struct Qb:
         pa: i32 = self->try_ptr_arith(op, l, self->qtype_of(e->lhs), lcls, r, self->qtype_of(e->rhs), rcls)
         if pa >= 0:
             return pa
-        is_cmp: bool = op == TK_EQ or op == TK_NE or op == TK_LT or op == TK_LE or op == TK_GT or op == TK_GE
+        is_cmp: bool = op in {TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE}
         is_shift: bool = op == TK_SHL or op == TK_SHR
         # promotes both operands to a common class (float beats int, l beats w);
         # shift preserves the lhs class and keeps the count as-is
@@ -2259,13 +2292,13 @@ struct Qb:
             return ro
         # varargs: va_start -> vastart; va_end -> no-op; va_copy -> 24B copy
         # (also the __builtin_* forms, which the system cpp leaves raw)
-        if fname != None and (strcmp(fname, "va_start") == 0 or strcmp(fname, "__builtin_va_start") == 0) and e->nargs >= 1:
+        if fname != None and (fname in {"va_start", "__builtin_va_start"}) and e->nargs >= 1:
             ap0: i32 = self->emit_rvalue(e->args[0])
             sb_printf(self->out, "\tvastart %%t%d\n", ap0)
             return ap0
-        if fname != None and (strcmp(fname, "va_end") == 0 or strcmp(fname, "__builtin_va_end") == 0):
+        if fname != None and (fname in {"va_end", "__builtin_va_end"}):
             return self->tmp()   # no-op in QBE
-        if fname != None and (strcmp(fname, "va_copy") == 0 or strcmp(fname, "__builtin_va_copy") == 0) and e->nargs == 2:
+        if fname != None and (fname in {"va_copy", "__builtin_va_copy"}) and e->nargs == 2:
             dstp: i32 = self->emit_rvalue(e->args[0])
             srcp: i32 = self->emit_rvalue(e->args[1])
             self->emit_struct_copy(dstp, srcp, 24)
@@ -2373,7 +2406,10 @@ struct Qb:
         for i in range(self->defers.len - 1, mark - 1, -1):
             self->emit_block(self->defers.data[i]->body)
 
-    static def emit_block(self: *Qb, b: *Block):
+    # statements + end-of-block defers WITHOUT closing the lexical scope — the
+    # caller controls binds (emit_block pops; statement-expressions pop only
+    # after emitting their value expression, which sees the block's names)
+    static def emit_block_body(self: *Qb, b: *Block):
         mark: i32 = self->defers.len
         i: i32
         for i in range(b->n):
@@ -2385,9 +2421,15 @@ struct Qb:
             self->emit_defers_downto(mark)
         self->defers.len = mark
 
+    static def emit_block(self: *Qb, b: *Block):
+        bmark: i32 = self->binds.len   # lexical scope: bindings die with the block
+        self->emit_block_body(b)
+        self->binds.len = bmark        # allocas stay valid; only the NAMES go out of scope
+
     static def emit_stmt(self: *Qb, s: *Stmt):
         match s->kind:
             case ST_VAR:
+                self->bind_decl(s)   # the name is visible from HERE to block end
                 v: *QVar = self->find_var(s->name)
                 if v != None and not v->is_static and self->is_vla_type(s->type):
                     # VLA C99: allocate on the stack with runtime size (n * sizeof(elem))
@@ -2458,6 +2500,9 @@ struct Qb:
                 # bare block (C front end): QBE has flat per-function vars, so
                 # the scope is emitted inline (shadowing not supported here)
                 self->emit_block(s->body)
+            case ST_PASS, ST_GLOBAL, ST_NONLOCAL, ST_CPROTO:
+                return   # no-ops: nothing to emit (global/nonlocal are sema markers;
+                         #   a block-scope proto only matters for the C backend)
             case ST_CASE:
                 # case label (may be nested in a loop — Duff's device);
                 # the label was assigned by the owning switch's dispatch
@@ -2467,6 +2512,7 @@ struct Qb:
                 self->emit_match(s)
             case ST_WITH:
                 # initializes the hidden pointer (evaluated once) and emits the body
+                self->bind_decl(s)
                 wv: *QVar = self->find_var(s->name)
                 if wv != None and s->init != None:
                     self->emit_var_init(wv, s->init)
@@ -2529,7 +2575,6 @@ struct Qb:
     static def emit_bf_store(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32, val: i32, vcls: char):
         usz: i32 = self->size_of(ft)
         ucl: char = 'l' if usz == 8 else 'w'
-        bits: i32 = usz * 8
         mask: i64 = (i64(1) << bw) - 1
         v: i32 = self->emit_coerce(val, vcls, ucl)
         m1: i32 = self->tmp()
@@ -2766,7 +2811,7 @@ struct Qb:
             count = -1
             if ty->arr_len != None:
                 cok: bool = True
-                cv: i64 = self->const_int(ty->arr_len, &cok)
+                cv: i64 = self->const_int(ty->arr_len, ref cok)
                 if cok and cv >= 0:
                     count = i32(cv)
             pos = 0
@@ -2778,7 +2823,7 @@ struct Qb:
                 it: *Expr = items[*idx]
                 if it != None and it->kind == EX_DESIG and it->rhs != None:
                     dok: bool = True
-                    pos = i32(self->const_int(it->rhs, &dok))
+                    pos = i32(self->const_int(it->rhs, ref dok))
                     fa: i32 = self->tmp()
                     sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa, addr, pos * esz)
                     one: *Expr = it->lhs
@@ -3155,6 +3200,7 @@ struct Qb:
 
     # for(init; cond; post) in C style — faithful: continue jumps to the post step
     static def emit_cfor(self: *Qb, s: *Stmt):
+        fmark: i32 = self->binds.len   # C99: the for-init declaration scopes to the loop
         if s->for_init != None:
             self->emit_stmt(s->for_init)
         cond: i32 = self->lbl()
@@ -3184,6 +3230,7 @@ struct Qb:
             self->emit_stmt(s->for_post)
         sb_printf(self->out, "\tjmp @l%d\n", cond)
         sb_printf(self->out, "@l%d\n", end)
+        self->binds.len = fmark   # the for-init binding dies with the loop
 
     # faithful C switch (with fallthrough). Two passes: (1) chain of tests
     # subject==caseK -> jump to the case's label; (2) bodies in order, each
@@ -3315,13 +3362,17 @@ struct Qb:
                 self->collect_evars(st->conds[ci])
             match st->kind:
                 case ST_VAR:
-                    if st->is_static:
-                        self->add_static_var(st->name, st->type, st->init)
+                    if st->is_extern:
+                        self->add_extern_var(st->name, st->type, st)
+                    elif st->is_static:
+                        self->add_static_var(st->name, st->type, st->init, st)
                     else:
-                        self->add_var(st->name, st->type)
+                        self->add_var(st->name, st->type, st)
                         # infer the alloc size of `T x[] = init` (otherwise the
                         # alloc ends up too small -> overflow): string -> number of
-                        # units + 1; list -> number of elements.
+                        # units + 1; list -> number of elements. Applies to the var
+                        # JUST added (the last one — never search by name here:
+                        # homonyms in other blocks would hijack the fix).
                         if st->type != None and st->type->kind == TY_ARRAY and st->type->arr_len == None and st->init != None:
                             esz: i32 = self->size_of(st->type->inner)
                             units = -1
@@ -3330,9 +3381,7 @@ struct Qb:
                             elif st->init->kind == EX_INITLIST:
                                 units = st->init->nargs
                             if units >= 0:
-                                v: *QVar = self->find_var(st->name)
-                                if v != None:
-                                    v->nbytes = units * esz
+                                self->vars.data[self->vars.len - 1].nbytes = units * esz
                 case ST_IF:
                     # folded at compile-time: only the live branch has real locals
                     if st->if_sel != -1:
@@ -3348,11 +3397,11 @@ struct Qb:
                 case ST_WHILE, ST_DO, ST_FOR, ST_DEFER:
                     self->collect_vars(st->body)
                 case ST_WITH:
-                    self->add_var(st->name, st->type)
+                    self->add_var(st->name, st->type, st)
                     self->collect_vars(st->body)
                 case ST_CFOR:
                     if st->for_init != None and st->for_init->kind == ST_VAR:
-                        self->add_var(st->for_init->name, st->for_init->type)
+                        self->add_var(st->for_init->name, st->for_init->type, st->for_init)
                     self->collect_vars(st->body)
                 case ST_SWITCH:
                     self->collect_vars(st->body)
@@ -3366,20 +3415,28 @@ struct Qb:
                 case _:
                     continue
 
-    static def add_var(self: *Qb, name: const *char, ty: *Type):
-        if self->find_var(name) != None:
-            return
+    # EVERY declaration gets its own slot — no name dedup: homonyms in
+    # sibling/nested blocks are DISTINCT variables (types may differ); fusing
+    # them corrupts field offsets and store classes. Resolution is lexical,
+    # via the binds stack (see find_var/bind_decl).
+    static def add_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt):
         slot: i32 = self->tmp()
-        qv: QVar = {name, slot, self->cls_of(ty), ty, False, 0, 0}
+        qv: QVar = {name, slot, self->cls_of(ty), ty, False, 0, 0, False, decl}
         self->vars.push(qv)
 
-    # static local: global storage $sl<sid> with a single init (data), no alloc
-    static def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr):
-        if self->find_var(name) != None:
-            return
+    # block-scope `extern T x;`: no storage of its own — addressing uses the
+    # global symbol $name (the object with external linkage)
+    static def add_extern_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt):
+        qv: QVar = {name, 0, self->cls_of(ty), ty, False, 0, 0, True, decl}
+        self->vars.push(qv)
+
+    # static local: global storage $sl<sid> with a single init (data), no alloc.
+    # No dedup either: two same-named statics in different blocks are distinct
+    # objects in C — each gets its own storage.
+    static def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr, decl: *Stmt):
         sid: i32 = self->nstatic
         self->nstatic += 1
-        qv: QVar = {name, 0, self->cls_of(ty), ty, True, sid, 0}
+        qv: QVar = {name, 0, self->cls_of(ty), ty, True, sid, 0, False, decl}
         self->vars.push(qv)
         # emits the storage (constant init or zero) into the module's data buffer
         sz: i32 = self->size_of(ty)
@@ -3404,7 +3461,7 @@ struct Qb:
                 sb_printf(&self->data, ", z %d", total - (nb + 1))
             sb_puts(&self->data, " }\n")
             sb_free(&dbs)
-            self->static_fix_len(name, ty, total)
+            self->static_fix_len(ty, total)
             return
         # list/compound: general aggregate walker (elision, designators...)
         if init != None and (init->kind == EX_INITLIST or init->kind == EX_COMPOUND):
@@ -3417,14 +3474,14 @@ struct Qb:
                     dbl.len -= 1
                     dbl.data[dbl.len] = '\0'
                 sb_printf(&self->data, "data $sl%d = align %d {%s }\n", sid, self->type_align(ty), dbl.data)
-                self->static_fix_len(name, ty, rr)
+                self->static_fix_len(ty, rr)
             else:
                 sb_printf(&self->data, "data $sl%d = { z %d }\n", sid, sz if sz > 0 else rr)
             sb_free(&dbl)
             return
         # constant scalar (number/char/enum/expression)
         svok: bool = True
-        sval: i64 = self->const_int(init, &svok) if init != None else 0
+        sval: i64 = self->const_int(init, ref svok) if init != None else 0
         if init != None and svok and scls != 's' and scls != 'd':
             dt: const *char = "w"
             if sz == 1:
@@ -3444,10 +3501,11 @@ struct Qb:
 
     # records the real size of an inferred ([]) array static local:
     # nbytes for decay and synthetic arr_len for sizeof
-    static def static_fix_len(self: *Qb, name: const *char, ty: *Type, total: i32):
-        v: *QVar = self->find_var(name)
-        if v != None:
-            v->nbytes = total
+    static def static_fix_len(self: *Qb, ty: *Type, total: i32):
+        # applies to the var JUST registered by add_static_var (the last one) —
+        # this runs during collect, before any lexical binding exists
+        if self->vars.len > 0:
+            self->vars.data[self->vars.len - 1].nbytes = total
         if ty != None and ty->kind == TY_ARRAY and ty->arr_len == None:
             esz: i32 = self->size_of(ty->inner)
             if esz > 0:
@@ -3462,6 +3520,7 @@ struct Qb:
         if f->body == None:
             return  # prototype: nothing to emit in QBE
         self->vars.init()
+        self->binds.init()
         self->defers.init()
         self->ntmp = 0
         self->nlbl = 0
@@ -3506,7 +3565,8 @@ struct Qb:
             pt: *Type = f->params[i].type
             if pt != None and pt->kind == TY_ARRAY:
                 pt = mk_typtr(pt->inner)
-            self->add_var(f->params[i].name, pt)
+            self->add_var(f->params[i].name, pt, None)
+            self->binds.push(i)   # params: bound for the whole function (indices 0..n-1)
         # slots for locals
         self->collect_vars(f->body)
         # emits the allocs (REAL size; arrays allocate all the bytes). Aggregate
@@ -3676,7 +3736,7 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
                 sb_printf(out, "%sdata $%s = { %c %c_%s }\n", xp, d2->name, gcls, gcls, fnum(d2->init->text))
                 continue
             # constant scalar initializer (number/char) -> emits the value
-            lit: bool = d2->init != None and (d2->init->kind == EX_NUMBER or d2->init->kind == EX_CHARLIT or d2->init->kind == EX_TRUE or d2->init->kind == EX_FALSE)
+            lit: bool = d2->init != None and (d2->init->kind in {EX_NUMBER, EX_CHARLIT, EX_TRUE, EX_FALSE})
             if lit:
                 dcls: char = qb.cls_of(d2->type)
                 val: i64 = 0
@@ -3747,7 +3807,7 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
             elif d2->init != None and gcls != 's' and gcls != 'd':
                 # general constant scalar (enum, expression): evaluate; else zero
                 cvok: bool = True
-                cvv: i64 = qb.const_int(d2->init, &cvok)
+                cvv: i64 = qb.const_int(d2->init, ref cvok)
                 if cvok:
                     cdt: const *char = "w"
                     if sz == 1:

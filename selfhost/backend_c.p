@@ -67,8 +67,12 @@ static def expr_prec(e: *Expr) -> i32:
             return PR_PRIM
         case EX_UNARY, EX_CAST:
             return PR_UNARY
-        case EX_CALL, EX_INDEX, EX_FIELD, EX_INCDEC:
+        case EX_CALL, EX_INDEX, EX_FIELD:
             return PR_POST
+        case EX_INCDEC:
+            # postfix x++ binds like a postfix; PREFIX ++x is a unary — the
+            # difference decides the parens in (++p)->c
+            return PR_POST if e->incdec_post else PR_UNARY
         case EX_DESIG:
             return PR_PRIM
         case _:
@@ -184,6 +188,7 @@ type_aliases_c89: TypeAlias[] = {
 
 g_needs_stdint: bool = False
 g_needs_stddef: bool = False
+g_needs_string: bool = False   # sema-injected strcmp (the `in` lowering)
 g_std89: bool = False   # --std=c89
 g_i64: i32 = 0          # under c89: 0=error, 1=downgrade to 32, 2=long long
 g_c_mod: bool = False       # emitting a C-front-end module (round-tripped C)?
@@ -193,10 +198,10 @@ def backend_c_config(std89: bool, i64_mode: i32):
     g_i64 = i64_mode
 
 static def is_i64_name(n: const *char) -> bool:
-    return strcmp(n, "i64") == 0 or strcmp(n, "int64_t") == 0 or strcmp(n, "long long") == 0 or strcmp(n, "long long int") == 0
+    return n in {"i64", "int64_t", "long long", "long long int"}
 
 static def is_u64_name(n: const *char) -> bool:
-    return strcmp(n, "u64") == 0 or strcmp(n, "uint64_t") == 0 or strcmp(n, "unsigned long long") == 0
+    return n in {"u64", "uint64_t", "unsigned long long"}
 
 static def base_cname(n: const *char) -> const *char:
     if g_std89:
@@ -250,7 +255,7 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
 # operands of "confusable" operators get extra parentheses to
 # generate C without -Wparentheses: arithmetic/shift inside & | ^, and && in ||
 static def op_is_confusable(op: i32) -> bool:
-    return op == TK_AMP or op == TK_PIPE or op == TK_CARET or op == TK_SHL or op == TK_SHR
+    return op in {TK_AMP, TK_PIPE, TK_CARET, TK_SHL, TK_SHR}
 
 static def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_op: i32):
     force: bool = False
@@ -295,55 +300,62 @@ static def emit_fnptr_decl(b: *StrBuf, ft: *Type, inner: const *char):
     emit_var_decl(b, ft->inner, frag.data if frag.data != None else "", None)
     sb_free(&frag)
 
-static def emit_cast_typename(b: *StrBuf, t: *Type):
-    # pointer chain, keeping each level's const (int * const != int *);
-    # pc[0] = OUTERMOST pointer; stars are spelled inner->outer
-    pc: bool[16]
-    stars = 0
-    while t->kind == TY_PTR:
-        if stars < 16:
-            pc[stars] = t->is_const
-        stars += 1
-        t = t->inner
-    if t->kind == TY_FUNC:
-        buf: char[8]
-        for j in range(stars):
-            buf[j] = '*'
-        buf[stars] = '\0'
-        emit_fnptr_decl(b, t, buf)
+# general C declarator spelling ("declaration mirrors use"): walks the type
+# from the OUTERMOST constructor inward, building the declarator around `decl`.
+# Pointers PREPEND '*'; arrays/functions APPEND a suffix — wrapping the
+# accumulated declarator in parens first when it begins with '*', because
+# suffixes bind tighter than pointers. Handles arbitrary nesting:
+#   ptr->arr        int (*)[2]
+#   arr->ptr->arr   double (*[3][4])[2]
+#   ptr->func       int (*)(void)
+static def emit_typename_decl(b: *StrBuf, t: *Type, decl: const *char):
+    if t->kind == TY_PTR:
+        s: StrBuf = {0}
+        sb_putc(&s, '*')
+        if t->is_const:
+            sb_puts(&s, "const ")
+        sb_puts(&s, decl)
+        emit_typename_decl(b, t->inner, s.data if s.data != None else "")
+        sb_free(&s)
         return
-    # array typename (e.g. `int[4]` in a _Generic association):
-    #   T [d0][d1]  /  pointer to array: T (*)[d0]
-    if t->kind == TY_ARRAY:
-        dims: *Expr[16]
-        nd = 0
-        while t->kind == TY_ARRAY and nd < 16:
-            dims[nd] = t->arr_len
-            nd += 1
-            t = t->inner
-        emit_cast_typename(b, t)
-        if stars > 0:
-            sb_puts(b, " (")
-            for i in range(stars):
-                sb_putc(b, '*')
-            sb_putc(b, ')')
-        for i in range(nd):
-            sb_putc(b, '[')
-            if dims[i] != None:
-                emit_expr(b, dims[i], 0)
-            sb_putc(b, ']')
+    if t->kind == TY_ARRAY or t->kind == TY_FUNC:
+        s: StrBuf = {0}
+        if decl[0] == '*':
+            sb_putc(&s, '(')
+            sb_puts(&s, decl)
+            sb_putc(&s, ')')
+        else:
+            sb_puts(&s, decl)
+        if t->kind == TY_ARRAY:
+            sb_putc(&s, '[')
+            if t->arr_len != None:
+                emit_expr(&s, t->arr_len, 0)
+            sb_putc(&s, ']')
+        else:
+            sb_putc(&s, '(')
+            for i in range(t->ntargs):
+                if i != 0:
+                    sb_puts(&s, ", ")
+                pt: *Type = t->targs[i]
+                if pt->kind == TY_NAME and pt->name != None and strcmp(pt->name, "...") == 0:
+                    sb_puts(&s, "...")
+                else:
+                    emit_var_decl(&s, pt, None, None)
+            sb_putc(&s, ')')
+        emit_typename_decl(b, t->inner, s.data if s.data != None else "")
+        sb_free(&s)
         return
     if t->is_const:
         sb_puts(b, "const ")
     if t->is_volatile:
         sb_puts(b, "volatile ")
     emit_type_name(b, t)
-    if stars != 0:
+    if decl != None and decl[0] != '\0':
         sb_putc(b, ' ')
-        for i in range(stars - 1, -1, -1):   # innermost pointer first
-            sb_putc(b, '*')
-            if i < 16 and pc[i]:
-                sb_puts(b, "const")   # const POINTER at this level
+        sb_puts(b, decl)
+
+static def emit_cast_typename(b: *StrBuf, t: *Type):
+    emit_typename_decl(b, t, "")
 
 static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
     prec: i32 = expr_prec(e)
@@ -359,7 +371,9 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
         case EX_FALSE:
             sb_putc(b, '0')
         case EX_NONE:
-            sb_puts(b, "NULL")
+            # a round-tripped C module has no #include left — spell the null
+            # pointer without needing <stddef.h>
+            sb_puts(b, "((void*)0)" if g_c_mod else "NULL")
         case EX_UNARY:
             sb_puts(b, op_cstr(e->op))
             # avoids "--x" / "& &x" turning into another token
@@ -371,12 +385,20 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
             sb_printf(b, " %s ", op_cstr(e->op))
             emit_binary_operand(b, e->rhs, prec + 1, e->op)
         case EX_TERNARY:
-            emit_expr(b, e->cond, 0)
+            # the COND is a logical-or-expression in the C grammar: an
+            # assignment there must keep its parentheses ((x = 5) ? a : b)
+            emit_expr(b, e->cond, PR_TERN)
             sb_puts(b, " ? ")
             emit_expr(b, e->lhs, 0)
             sb_puts(b, " : ")
-            emit_expr(b, e->rhs, 0)
+            # the ELSE arm is a conditional-expression in the C grammar: an
+            # assignment there must be parenthesized (a ? b : (c = d))
+            emit_expr(b, e->rhs, PR_TERN)
         case EX_CALL:
+            # the `in` lowering injects strcmp calls: P modules get the include
+            # (C modules manage their own headers — some even redeclare strcmp)
+            if not g_c_mod and e->lhs != None and e->lhs->kind == EX_IDENT and e->lhs->text != None and strcmp(e->lhs->text, "strcmp") == 0:
+                g_needs_string = True
             emit_expr(b, e->lhs, PR_POST)
             sb_putc(b, '(')
             emit_args(b, e->args, e->nargs)
@@ -532,8 +554,16 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
             adims[an] = t->arr_len
             an += 1
             t = t->inner
+        # the array ELEMENT may itself be a pointer chain (`struct s *(*p)[3]`):
+        # emit those stars right after the base name
+        istars = 0
+        while t->kind == TY_PTR:
+            istars += 1
+            t = t->inner
         emit_type_quals(b, t)
         emit_type_name(b, t)
+        for ii in range(istars):
+            sb_putc(b, '*')
         sb_puts(b, " (")
         for ai in range(stars):
             sb_putc(b, '*')
@@ -552,7 +582,10 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
             sb_putc(b, ']')
         return
     emit_type_quals(b, t)
-    if self_struct != None and strcmp(t->name, self_struct) == 0:
+    if self_struct != None and strcmp(t->name, self_struct) == 0 and t->tag_kind == TAG_NONE:
+        # self-referential field of a P struct (no tag_kind): spell `struct X`.
+        # A C union/struct keeps its own tag_kind spelling (union u *p), so only
+        # fall back to the hardcoded `struct` when the node carries no spelling.
         sb_printf(b, "struct %s", base_cname(t->name))
     else:
         emit_type_name(b, t)
@@ -578,7 +611,7 @@ static def emit_simple_inline(b: *StrBuf, s: *Stmt)
 static def stmt_exits(s: *Stmt) -> bool:
     if s->kind == ST_BLOCK:   # a bare block exits if its last statement does
         return s->body != None and s->body->n > 0 and stmt_exits(s->body->stmts[s->body->n - 1])
-    return s->kind == ST_RETURN or s->kind == ST_BREAK or s->kind == ST_CONTINUE or s->kind == ST_GOTO
+    return s->kind in {ST_RETURN, ST_BREAK, ST_CONTINUE, ST_GOTO}
 
 # ---------- defer ----------
 # Stack of pending defers for the current function. Each block flushes (in
@@ -608,6 +641,7 @@ static def step_is_negative(step: *Expr) -> bool:
     return step != None and step->kind == EX_UNARY and step->op == TK_MINUS
 
 static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32)
+static def emit_func_sig(b: *StrBuf, f: *Func)
 
 # ---------- GNU statement expressions in statement position ----------
 # `({ stmts; v })` with declarations/control flow has no expression-level
@@ -700,7 +734,9 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
                 sb_free(&tl)
                 return
             indent(b, ind)
-            if s->is_static:
+            if s->is_extern:
+                sb_puts(b, "extern ")   # block-scope extern: declaration only
+            elif s->is_static:
                 sb_puts(b, "static ")   # static local: persistent storage, single init
             if s->is_const:
                 sb_puts(b, "const ")
@@ -922,6 +958,15 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             g_ncont -= 1
             indent(b, ind)
             sb_puts(b, "}\n")
+        case ST_PASS:
+            indent(b, ind)
+            sb_puts(b, ";\n")   # explicit no-op
+        case ST_CPROTO:
+            # block-scope function declaration: re-binds the name to the
+            # file-scope function, shadowing any outer variable (C11 6.2.1p4)
+            indent(b, ind)
+            emit_func_sig(b, s->cfunc)
+            sb_puts(b, ";\n")
         case ST_BLOCK:
             # bare block: real C scope (inner decls don't collide with siblings)
             indent(b, ind)
@@ -1027,17 +1072,9 @@ static def emit_func_params(b: *StrBuf, f: *Func):
     if f->is_varargs:
         sb_puts(b, ", ...")
 
-static def emit_func(b: *StrBuf, f: *Func):
-    if f->is_comptime:
-        return   # `const def`: evaluated at compile time, doesn't end up in the binary
-    if f->ntparams > 0:
-        return   # generic template (def foo<T>): only its monomorphizations are emitted
-    g_cur_ret = f->ret
-    g_defers.len = 0
-    if f->is_static:
-        sb_puts(b, "static ")
-    if f->is_inline and not g_std89:
-        sb_puts(b, "inline ")   # 'inline' is C99; under c89 only static remains
+# signature only:  Ret cname(params) — with the nested declarators a return
+# type of function-pointer or pointer-to-array demands
+static def emit_func_sig(b: *StrBuf, f: *Func):
     # return type is a function pointer? nested declarator:
     #   InnerRet (*cname(func-params))(fnptr-params)
     rt: *Type = f->ret
@@ -1055,11 +1092,39 @@ static def emit_func(b: *StrBuf, f: *Func):
         sb_putc(&mid, ')')
         emit_fnptr_decl(b, rt, mid.data if mid.data != None else "")
         sb_free(&mid)
+    elif rt != None and rt->kind == TY_ARRAY and rstars > 0:
+        # return type is a pointer to array? nested declarator:
+        #   Elem (*cname(params))[d0][d1] — emit_var_decl builds the dims
+        #   around the composite "name" (*cname(params))
+        mid: StrBuf = {0}
+        sb_putc(&mid, '(')
+        for si in range(rstars):
+            sb_putc(&mid, '*')
+        sb_puts(&mid, f->cname)
+        sb_putc(&mid, '(')
+        emit_func_params(&mid, f)
+        sb_putc(&mid, ')')
+        sb_putc(&mid, ')')
+        emit_var_decl(b, rt, mid.data if mid.data != None else "", None)
+        sb_free(&mid)
     else:
         emit_var_decl(b, f->ret, f->cname, None)
         sb_putc(b, '(')
         emit_func_params(b, f)
         sb_putc(b, ')')
+
+static def emit_func(b: *StrBuf, f: *Func):
+    if f->is_comptime:
+        return   # `const def`: evaluated at compile time, doesn't end up in the binary
+    if f->ntparams > 0:
+        return   # generic template (def foo<T>): only its monomorphizations are emitted
+    g_cur_ret = f->ret
+    g_defers.len = 0
+    if f->is_static:
+        sb_puts(b, "static ")
+    if f->is_inline and not g_std89:
+        sb_puts(b, "inline ")   # 'inline' is C99; under c89 only static remains
+    emit_func_sig(b, f)
     # a method body declared in a .ph becomes a prototype in the .h — the code
     # only materializes with 'implement Name' in a .p (static/inline: opt-in to
     # emit the body in the header)
@@ -1135,6 +1200,10 @@ static def emit_decl(b: *StrBuf, d: *Decl):
                 sb_printf(b, "%s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
                 emit_struct_fields(b, d, 1)
                 sb_puts(b, "};\n")
+            elif d->is_fwd and g_c_mod:
+                # C round-trip keeps the forward: a later PROTOTYPE with a
+                # by-value param of this tag needs it already in scope
+                sb_printf(b, "%s %s;\n", "union" if d->kind == DL_UNION else "struct", d->name)
             for j in range(d->nmethods):
                 sb_putc(b, '\n')
                 emit_func(b, d->methods[j])
@@ -1153,7 +1222,7 @@ static def emit_decl(b: *StrBuf, d: *Decl):
             return
 
 def emit_module_c(m: *Module, out: *StrBuf):
-    g_needs_stdint = False; g_needs_stddef = False
+    g_needs_stdint = False; g_needs_stddef = False; g_needs_string = False
     g_in_header = m->is_header
     g_c_mod = m->is_c
 
@@ -1206,7 +1275,9 @@ def emit_module_c(m: *Module, out: *StrBuf):
         sb_puts(out, "#include <stdint.h>\n")
     if g_needs_stddef:
         sb_puts(out, "#include <stddef.h>\n")
-    if g_needs_stdint or g_needs_stddef:
+    if g_needs_string:
+        sb_puts(out, "#include <string.h>\n")
+    if g_needs_stdint or g_needs_stddef or g_needs_string:
         sb_putc(out, '\n')
     if body.data != None:
         sb_puts(out, body.data)

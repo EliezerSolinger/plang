@@ -1,7 +1,9 @@
 #include <string.h>
+
+#include <string.h>
 #include "backend.h"
 
-Backend backends[] = {{"c", "c", "h"}, {"qbe", "ssa", NULL}, {NULL, NULL, NULL}};
+Backend backends[3] = {{"c", "c", "h"}, {"qbe", "ssa", NULL}, {NULL, NULL, NULL}};
 
 const Backend *backend_find(const char *name) {
     int i = 0;

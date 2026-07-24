@@ -68,11 +68,12 @@ plangc --std=c89 prog.p -o prog.c   # C89-conformant output
 
 ### Compiling C (the C front end)
 
-`plangc` reads C too. Preprocess first if the file has `#include`/`#define`
-(any `cpp`), then let `plangc` re-emit it:
+`plangc` reads C too. A `.c` file is preprocessed automatically (`--cpp`
+chooses the compiler used for that; default `cc`); pass a `.i` if you already
+preprocessed it yourself:
 
 ```sh
-cpp modern.c > modern.i              # your preprocessor of choice
+cpp modern.c > modern.i              # optional: your preprocessor of choice
 plangc --std=c89 modern.i -o out.c   # C11 (+ GNU exts) -> strict C89
 cc89 out.c -o modern                 # builds on a C89-only compiler
 ```

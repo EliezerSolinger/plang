@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -394,6 +395,8 @@ struct QVar {
     int is_static;
     int32_t sid;
     int32_t nbytes;
+    int ext;
+    Stmt *decl;
 };
 
 struct EnumConst {
@@ -415,13 +418,13 @@ void Vec_QVar_push(Vec_QVar *self, QVar item);
 
 QVar Vec_QVar_pop(Vec_QVar *self);
 
-QVar Vec_QVar_get(Vec_QVar *self, int32_t i);
+QVar Vec_QVar_get(const Vec_QVar *self, int32_t i);
 
 void Vec_QVar_set(Vec_QVar *self, int32_t i, QVar item);
 
-QVar Vec_QVar_last(Vec_QVar *self);
+QVar Vec_QVar_last(const Vec_QVar *self);
 
-int Vec_QVar_is_empty(Vec_QVar *self);
+int Vec_QVar_is_empty(const Vec_QVar *self);
 
 void Vec_QVar_remove_at(Vec_QVar *self, int32_t i);
 
@@ -433,69 +436,69 @@ void Vec_QVar_deinit(Vec_QVar *self);
 
 
 void Vec_QVar_init(Vec_QVar *self) {
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 void Vec_QVar_reserve(Vec_QVar *self, int32_t n) {
-    if (n <= self->cap) {
+    if (n <= (*self).cap) {
         return;
     }
-    int32_t nc = (self->cap == 0 ? 8 : self->cap);
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
     while (nc < n) {
         nc *= 2;
     }
-    self->data = realloc(self->data, sizeof(QVar) * (size_t)nc);
-    self->cap = nc;
+    (*self).data = realloc((*self).data, sizeof(QVar) * (size_t)nc);
+    (*self).cap = nc;
 }
 
 void Vec_QVar_push(Vec_QVar *self, QVar item) {
-    Vec_QVar_reserve(self, self->len + 1);
-    self->data[self->len] = item;
-    self->len += 1;
+    Vec_QVar_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
 }
 
 QVar Vec_QVar_pop(Vec_QVar *self) {
-    self->len -= 1;
-    return self->data[self->len];
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
 }
 
-QVar Vec_QVar_get(Vec_QVar *self, int32_t i) {
-    return self->data[i];
+QVar Vec_QVar_get(const Vec_QVar *self, int32_t i) {
+    return (*self).data[i];
 }
 
 void Vec_QVar_set(Vec_QVar *self, int32_t i, QVar item) {
-    self->data[i] = item;
+    (*self).data[i] = item;
 }
 
-QVar Vec_QVar_last(Vec_QVar *self) {
-    return self->data[self->len - 1];
+QVar Vec_QVar_last(const Vec_QVar *self) {
+    return (*self).data[(*self).len - 1];
 }
 
-int Vec_QVar_is_empty(Vec_QVar *self) {
-    return self->len == 0;
+int Vec_QVar_is_empty(const Vec_QVar *self) {
+    return (*self).len == 0;
 }
 
 void Vec_QVar_remove_at(Vec_QVar *self, int32_t i) {
-    memmove(&self->data[i], &self->data[i + 1], sizeof(QVar) * (size_t)(self->len - i - 1));
-    self->len -= 1;
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(QVar) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
 }
 
 void Vec_QVar_swap_remove(Vec_QVar *self, int32_t i) {
-    self->len -= 1;
-    self->data[i] = self->data[self->len];
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
 }
 
 void Vec_QVar_clear(Vec_QVar *self) {
-    self->len = 0;
+    (*self).len = 0;
 }
 
 void Vec_QVar_deinit(Vec_QVar *self) {
-    free(self->data);
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 struct Vec_EnumConst {
@@ -512,13 +515,13 @@ void Vec_EnumConst_push(Vec_EnumConst *self, EnumConst item);
 
 EnumConst Vec_EnumConst_pop(Vec_EnumConst *self);
 
-EnumConst Vec_EnumConst_get(Vec_EnumConst *self, int32_t i);
+EnumConst Vec_EnumConst_get(const Vec_EnumConst *self, int32_t i);
 
 void Vec_EnumConst_set(Vec_EnumConst *self, int32_t i, EnumConst item);
 
-EnumConst Vec_EnumConst_last(Vec_EnumConst *self);
+EnumConst Vec_EnumConst_last(const Vec_EnumConst *self);
 
-int Vec_EnumConst_is_empty(Vec_EnumConst *self);
+int Vec_EnumConst_is_empty(const Vec_EnumConst *self);
 
 void Vec_EnumConst_remove_at(Vec_EnumConst *self, int32_t i);
 
@@ -530,69 +533,69 @@ void Vec_EnumConst_deinit(Vec_EnumConst *self);
 
 
 void Vec_EnumConst_init(Vec_EnumConst *self) {
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 void Vec_EnumConst_reserve(Vec_EnumConst *self, int32_t n) {
-    if (n <= self->cap) {
+    if (n <= (*self).cap) {
         return;
     }
-    int32_t nc = (self->cap == 0 ? 8 : self->cap);
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
     while (nc < n) {
         nc *= 2;
     }
-    self->data = realloc(self->data, sizeof(EnumConst) * (size_t)nc);
-    self->cap = nc;
+    (*self).data = realloc((*self).data, sizeof(EnumConst) * (size_t)nc);
+    (*self).cap = nc;
 }
 
 void Vec_EnumConst_push(Vec_EnumConst *self, EnumConst item) {
-    Vec_EnumConst_reserve(self, self->len + 1);
-    self->data[self->len] = item;
-    self->len += 1;
+    Vec_EnumConst_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
 }
 
 EnumConst Vec_EnumConst_pop(Vec_EnumConst *self) {
-    self->len -= 1;
-    return self->data[self->len];
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
 }
 
-EnumConst Vec_EnumConst_get(Vec_EnumConst *self, int32_t i) {
-    return self->data[i];
+EnumConst Vec_EnumConst_get(const Vec_EnumConst *self, int32_t i) {
+    return (*self).data[i];
 }
 
 void Vec_EnumConst_set(Vec_EnumConst *self, int32_t i, EnumConst item) {
-    self->data[i] = item;
+    (*self).data[i] = item;
 }
 
-EnumConst Vec_EnumConst_last(Vec_EnumConst *self) {
-    return self->data[self->len - 1];
+EnumConst Vec_EnumConst_last(const Vec_EnumConst *self) {
+    return (*self).data[(*self).len - 1];
 }
 
-int Vec_EnumConst_is_empty(Vec_EnumConst *self) {
-    return self->len == 0;
+int Vec_EnumConst_is_empty(const Vec_EnumConst *self) {
+    return (*self).len == 0;
 }
 
 void Vec_EnumConst_remove_at(Vec_EnumConst *self, int32_t i) {
-    memmove(&self->data[i], &self->data[i + 1], sizeof(EnumConst) * (size_t)(self->len - i - 1));
-    self->len -= 1;
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(EnumConst) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
 }
 
 void Vec_EnumConst_swap_remove(Vec_EnumConst *self, int32_t i) {
-    self->len -= 1;
-    self->data[i] = self->data[self->len];
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
 }
 
 void Vec_EnumConst_clear(Vec_EnumConst *self) {
-    self->len = 0;
+    (*self).len = 0;
 }
 
 void Vec_EnumConst_deinit(Vec_EnumConst *self) {
-    free(self->data);
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 struct Vec_i32 {
@@ -609,13 +612,13 @@ void Vec_i32_push(Vec_i32 *self, int32_t item);
 
 int32_t Vec_i32_pop(Vec_i32 *self);
 
-int32_t Vec_i32_get(Vec_i32 *self, int32_t i);
+int32_t Vec_i32_get(const Vec_i32 *self, int32_t i);
 
 void Vec_i32_set(Vec_i32 *self, int32_t i, int32_t item);
 
-int32_t Vec_i32_last(Vec_i32 *self);
+int32_t Vec_i32_last(const Vec_i32 *self);
 
-int Vec_i32_is_empty(Vec_i32 *self);
+int Vec_i32_is_empty(const Vec_i32 *self);
 
 void Vec_i32_remove_at(Vec_i32 *self, int32_t i);
 
@@ -627,69 +630,69 @@ void Vec_i32_deinit(Vec_i32 *self);
 
 
 void Vec_i32_init(Vec_i32 *self) {
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 void Vec_i32_reserve(Vec_i32 *self, int32_t n) {
-    if (n <= self->cap) {
+    if (n <= (*self).cap) {
         return;
     }
-    int32_t nc = (self->cap == 0 ? 8 : self->cap);
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
     while (nc < n) {
         nc *= 2;
     }
-    self->data = realloc(self->data, sizeof(int32_t) * (size_t)nc);
-    self->cap = nc;
+    (*self).data = realloc((*self).data, sizeof(int32_t) * (size_t)nc);
+    (*self).cap = nc;
 }
 
 void Vec_i32_push(Vec_i32 *self, int32_t item) {
-    Vec_i32_reserve(self, self->len + 1);
-    self->data[self->len] = item;
-    self->len += 1;
+    Vec_i32_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
 }
 
 int32_t Vec_i32_pop(Vec_i32 *self) {
-    self->len -= 1;
-    return self->data[self->len];
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
 }
 
-int32_t Vec_i32_get(Vec_i32 *self, int32_t i) {
-    return self->data[i];
+int32_t Vec_i32_get(const Vec_i32 *self, int32_t i) {
+    return (*self).data[i];
 }
 
 void Vec_i32_set(Vec_i32 *self, int32_t i, int32_t item) {
-    self->data[i] = item;
+    (*self).data[i] = item;
 }
 
-int32_t Vec_i32_last(Vec_i32 *self) {
-    return self->data[self->len - 1];
+int32_t Vec_i32_last(const Vec_i32 *self) {
+    return (*self).data[(*self).len - 1];
 }
 
-int Vec_i32_is_empty(Vec_i32 *self) {
-    return self->len == 0;
+int Vec_i32_is_empty(const Vec_i32 *self) {
+    return (*self).len == 0;
 }
 
 void Vec_i32_remove_at(Vec_i32 *self, int32_t i) {
-    memmove(&self->data[i], &self->data[i + 1], sizeof(int32_t) * (size_t)(self->len - i - 1));
-    self->len -= 1;
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(int32_t) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
 }
 
 void Vec_i32_swap_remove(Vec_i32 *self, int32_t i) {
-    self->len -= 1;
-    self->data[i] = self->data[self->len];
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
 }
 
 void Vec_i32_clear(Vec_i32 *self) {
-    self->len = 0;
+    (*self).len = 0;
 }
 
 void Vec_i32_deinit(Vec_i32 *self) {
-    free(self->data);
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 struct Vec_char {
@@ -706,13 +709,13 @@ void Vec_char_push(Vec_char *self, char item);
 
 char Vec_char_pop(Vec_char *self);
 
-char Vec_char_get(Vec_char *self, int32_t i);
+char Vec_char_get(const Vec_char *self, int32_t i);
 
 void Vec_char_set(Vec_char *self, int32_t i, char item);
 
-char Vec_char_last(Vec_char *self);
+char Vec_char_last(const Vec_char *self);
 
-int Vec_char_is_empty(Vec_char *self);
+int Vec_char_is_empty(const Vec_char *self);
 
 void Vec_char_remove_at(Vec_char *self, int32_t i);
 
@@ -724,69 +727,69 @@ void Vec_char_deinit(Vec_char *self);
 
 
 void Vec_char_init(Vec_char *self) {
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 void Vec_char_reserve(Vec_char *self, int32_t n) {
-    if (n <= self->cap) {
+    if (n <= (*self).cap) {
         return;
     }
-    int32_t nc = (self->cap == 0 ? 8 : self->cap);
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
     while (nc < n) {
         nc *= 2;
     }
-    self->data = realloc(self->data, sizeof(char) * (size_t)nc);
-    self->cap = nc;
+    (*self).data = realloc((*self).data, sizeof(char) * (size_t)nc);
+    (*self).cap = nc;
 }
 
 void Vec_char_push(Vec_char *self, char item) {
-    Vec_char_reserve(self, self->len + 1);
-    self->data[self->len] = item;
-    self->len += 1;
+    Vec_char_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
 }
 
 char Vec_char_pop(Vec_char *self) {
-    self->len -= 1;
-    return self->data[self->len];
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
 }
 
-char Vec_char_get(Vec_char *self, int32_t i) {
-    return self->data[i];
+char Vec_char_get(const Vec_char *self, int32_t i) {
+    return (*self).data[i];
 }
 
 void Vec_char_set(Vec_char *self, int32_t i, char item) {
-    self->data[i] = item;
+    (*self).data[i] = item;
 }
 
-char Vec_char_last(Vec_char *self) {
-    return self->data[self->len - 1];
+char Vec_char_last(const Vec_char *self) {
+    return (*self).data[(*self).len - 1];
 }
 
-int Vec_char_is_empty(Vec_char *self) {
-    return self->len == 0;
+int Vec_char_is_empty(const Vec_char *self) {
+    return (*self).len == 0;
 }
 
 void Vec_char_remove_at(Vec_char *self, int32_t i) {
-    memmove(&self->data[i], &self->data[i + 1], sizeof(char) * (size_t)(self->len - i - 1));
-    self->len -= 1;
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(char) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
 }
 
 void Vec_char_swap_remove(Vec_char *self, int32_t i) {
-    self->len -= 1;
-    self->data[i] = self->data[self->len];
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
 }
 
 void Vec_char_clear(Vec_char *self) {
-    self->len = 0;
+    (*self).len = 0;
 }
 
 void Vec_char_deinit(Vec_char *self) {
-    free(self->data);
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 struct StrMap_pType {
@@ -804,7 +807,7 @@ struct StrMap_pType {
 
 void StrMap_pType_init(StrMap_pType *self);
 
-int32_t StrMap_pType_find_slot(StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrMap_pType_find_slot(const StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrMap_pType_rehash(StrMap_pType *self, int32_t newcap);
 
@@ -812,11 +815,11 @@ void StrMap_pType_grow_entries(StrMap_pType *self);
 
 void StrMap_pType_put(StrMap_pType *self, const char *key, Type *value);
 
-int StrMap_pType_get(StrMap_pType *self, const char *key, Type **out);
+int StrMap_pType_get(const StrMap_pType *self, const char *key, Type **out);
 
-Type *StrMap_pType_get_or(StrMap_pType *self, const char *key, Type *fallback);
+Type *StrMap_pType_get_or(const StrMap_pType *self, const char *key, Type *fallback);
 
-int StrMap_pType_has(StrMap_pType *self, const char *key);
+int StrMap_pType_has(const StrMap_pType *self, const char *key);
 
 int StrMap_pType_remove(StrMap_pType *self, const char *key);
 
@@ -837,7 +840,7 @@ struct StrMap_pFunc {
 
 void StrMap_pFunc_init(StrMap_pFunc *self);
 
-int32_t StrMap_pFunc_find_slot(StrMap_pFunc *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrMap_pFunc_find_slot(const StrMap_pFunc *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrMap_pFunc_rehash(StrMap_pFunc *self, int32_t newcap);
 
@@ -845,11 +848,11 @@ void StrMap_pFunc_grow_entries(StrMap_pFunc *self);
 
 void StrMap_pFunc_put(StrMap_pFunc *self, const char *key, Func *value);
 
-int StrMap_pFunc_get(StrMap_pFunc *self, const char *key, Func **out);
+int StrMap_pFunc_get(const StrMap_pFunc *self, const char *key, Func **out);
 
-Func *StrMap_pFunc_get_or(StrMap_pFunc *self, const char *key, Func *fallback);
+Func *StrMap_pFunc_get_or(const StrMap_pFunc *self, const char *key, Func *fallback);
 
-int StrMap_pFunc_has(StrMap_pFunc *self, const char *key);
+int StrMap_pFunc_has(const StrMap_pFunc *self, const char *key);
 
 int StrMap_pFunc_remove(StrMap_pFunc *self, const char *key);
 
@@ -870,7 +873,7 @@ struct StrMap_pDecl {
 
 void StrMap_pDecl_init(StrMap_pDecl *self);
 
-int32_t StrMap_pDecl_find_slot(StrMap_pDecl *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrMap_pDecl_find_slot(const StrMap_pDecl *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrMap_pDecl_rehash(StrMap_pDecl *self, int32_t newcap);
 
@@ -878,11 +881,11 @@ void StrMap_pDecl_grow_entries(StrMap_pDecl *self);
 
 void StrMap_pDecl_put(StrMap_pDecl *self, const char *key, Decl *value);
 
-int StrMap_pDecl_get(StrMap_pDecl *self, const char *key, Decl **out);
+int StrMap_pDecl_get(const StrMap_pDecl *self, const char *key, Decl **out);
 
-Decl *StrMap_pDecl_get_or(StrMap_pDecl *self, const char *key, Decl *fallback);
+Decl *StrMap_pDecl_get_or(const StrMap_pDecl *self, const char *key, Decl *fallback);
 
-int StrMap_pDecl_has(StrMap_pDecl *self, const char *key);
+int StrMap_pDecl_has(const StrMap_pDecl *self, const char *key);
 
 int StrMap_pDecl_remove(StrMap_pDecl *self, const char *key);
 
@@ -901,6 +904,7 @@ struct Qb {
     int32_t nstr;
     int32_t nstatic;
     Vec_QVar vars;
+    Vec_i32 binds;
     Vec_EnumConst enumc;
     StrMap_pType globals;
     StrMap_pFunc funcs;
@@ -964,6 +968,10 @@ static int Qb_is_signed(Qb *self, Type *t);
 static int Qb_op_signed(Qb *self, Expr *e);
 
 static QVar *Qb_find_var(Qb *self, const char *name);
+
+static void Qb_bind_decl(Qb *self, Stmt *s);
+
+static void Qb_emit_block_body(Qb *self, Block *b);
 
 static int Qb_enum_lookup(Qb *self, const char *name, int64_t *out);
 
@@ -1071,11 +1079,13 @@ static void Qb_emit_match(Qb *self, Stmt *s);
 
 static void Qb_collect_vars(Qb *self, Block *b);
 
-static void Qb_add_var(Qb *self, const char *name, Type *ty);
+static void Qb_add_var(Qb *self, const char *name, Type *ty, Stmt *decl);
 
-static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init);
+static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init, Stmt *decl);
 
-static void Qb_static_fix_len(Qb *self, const char *name, Type *ty, int32_t total);
+static void Qb_add_extern_var(Qb *self, const char *name, Type *ty, Stmt *decl);
+
+static void Qb_static_fix_len(Qb *self, Type *ty, int32_t total);
 
 static void Qb_emit_func(Qb *self, Func *f);
 
@@ -1136,10 +1146,10 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
             return 0;
         }
         case EX_CAST: {
-            return Qb_const_int(self, e->lhs, ok);
+            return Qb_const_int(self, e->lhs, & *ok);
         }
         case EX_UNARY: {
-            int64_t v = Qb_const_int(self, e->lhs, ok);
+            int64_t v = Qb_const_int(self, e->lhs, & *ok);
             if (e->op == TK_MINUS) {
                 return -v;
             }
@@ -1156,8 +1166,8 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
             return 0;
         }
         case EX_BINARY: {
-            int64_t a = Qb_const_int(self, e->lhs, ok);
-            int64_t b = Qb_const_int(self, e->rhs, ok);
+            int64_t a = Qb_const_int(self, e->lhs, & *ok);
+            int64_t b = Qb_const_int(self, e->rhs, & *ok);
             switch (e->op) {
                 case TK_PLUS: {
                     return a + b;
@@ -1221,8 +1231,8 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
             break;
         }
         case EX_TERNARY: {
-            int64_t c = Qb_const_int(self, e->cond, ok);
-            return (c != 0 ? Qb_const_int(self, e->lhs, ok) : Qb_const_int(self, e->rhs, ok));
+            int64_t c = Qb_const_int(self, e->cond, & *ok);
+            return (c != 0 ? Qb_const_int(self, e->lhs, & *ok) : Qb_const_int(self, e->rhs, & *ok));
         }
         default: {
             *ok = 0;
@@ -2055,13 +2065,24 @@ static int Qb_op_signed(Qb *self, Expr *e) {
 }
 
 static QVar *Qb_find_var(Qb *self, const char *name) {
-    int32_t i;
-    for (i = 0; i < self->vars.len; i += 1) {
-        if (strcmp(self->vars.data[i].name, name) == 0) {
-            return &self->vars.data[i];
+    int32_t k;
+    for (k = self->binds.len - 1; k > -1; k += -1) {
+        int32_t idx = Vec_i32_get(&self->binds, k);
+        if (strcmp(self->vars.data[idx].name, name) == 0) {
+            return &self->vars.data[idx];
         }
     }
     return NULL;
+}
+
+static void Qb_bind_decl(Qb *self, Stmt *s) {
+    int32_t i;
+    for (i = 0; i < self->vars.len; i += 1) {
+        if (self->vars.data[i].decl == s) {
+            Vec_i32_push(&self->binds, i);
+            return;
+        }
+    }
 }
 
 static int Qb_enum_lookup(Qb *self, const char *name, int64_t *out) {
@@ -2450,6 +2471,11 @@ static int32_t Qb_emit_addr(Qb *self, Expr *e) {
         case EX_IDENT: {
             QVar *v = Qb_find_var(self, e->text);
             if (v != NULL) {
+                if (v->ext) {
+                    int32_t te = Qb_tmp(self);
+                    sb_printf(self->out, "\t%%t%d =l copy $%s\n", te, v->name);
+                    return te;
+                }
                 if (v->is_static) {
                     int32_t ts = Qb_tmp(self);
                     sb_printf(self->out, "\t%%t%d =l copy $sl%d\n", ts, v->sid);
@@ -2640,7 +2666,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
             }
             QVar *v = Qb_find_var(self, e->text);
             if (v != NULL) {
-                if (v->is_static) {
+                if (v->is_static || v->ext) {
                     int32_t sa = Qb_emit_addr(self, e);
                     if (v->ty != NULL && (v->ty->kind == TY_ARRAY || Qb_is_agg(self, v->ty) || Qb_is_valist(self, v->ty))) {
                         return sa;
@@ -2744,15 +2770,19 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
             return Qb_emit_rvalue(self, Qb_gen_select(self, e));
         }
         case EX_STMTEXPR: {
+            int32_t semark = self->binds.len;
             if (e->xblock != NULL) {
-                Qb_emit_block(self, e->xblock);
+                Qb_emit_block_body(self, e->xblock);
             }
+            int32_t seres;
             if (e->lhs != NULL) {
-                return Qb_emit_rvalue(self, e->lhs);
+                seres = Qb_emit_rvalue(self, e->lhs);
+            } else {
+                seres = Qb_tmp(self);
+                sb_printf(self->out, "\t%%t%d =w copy 0\n", seres);
             }
-            int32_t tv0 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =w copy 0\n", tv0);
-            return tv0;
+            self->binds.len = semark;
+            return seres;
         }
         case EX_VAARG: {
             int32_t apv = Qb_emit_rvalue(self, e->lhs);
@@ -3384,7 +3414,7 @@ static void Qb_emit_defers_downto(Qb *self, int32_t mark) {
     }
 }
 
-static void Qb_emit_block(Qb *self, Block *b) {
+static void Qb_emit_block_body(Qb *self, Block *b) {
     int32_t mark = self->defers.len;
     int32_t i;
     for (i = 0; i < b->n; i += 1) {
@@ -3397,9 +3427,16 @@ static void Qb_emit_block(Qb *self, Block *b) {
     self->defers.len = mark;
 }
 
+static void Qb_emit_block(Qb *self, Block *b) {
+    int32_t bmark = self->binds.len;
+    Qb_emit_block_body(self, b);
+    self->binds.len = bmark;
+}
+
 static void Qb_emit_stmt(Qb *self, Stmt *s) {
     switch (s->kind) {
         case ST_VAR: {
+            Qb_bind_decl(self, s);
             QVar *v = Qb_find_var(self, s->name);
             if (v != NULL && !v->is_static && Qb_is_vla_type(self, s->type)) {
                 Type *elem = s->type->inner;
@@ -3493,6 +3530,12 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
             Qb_emit_block(self, s->body);
             break;
         }
+        case ST_PASS:
+        case ST_GLOBAL:
+        case ST_NONLOCAL:
+        case ST_CPROTO: {
+            return;
+        }
         case ST_CASE: {
             sb_printf(self->out, "\tjmp @l%d\n", s->case_lbl);
             sb_printf(self->out, "@l%d\n", s->case_lbl);
@@ -3503,6 +3546,7 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
             break;
         }
         case ST_WITH: {
+            Qb_bind_decl(self, s);
             QVar *wv = Qb_find_var(self, s->name);
             if (wv != NULL && s->init != NULL) {
                 Qb_emit_var_init(self, wv, s->init);
@@ -3575,7 +3619,6 @@ static int32_t Qb_emit_bf_load(Qb *self, int32_t addr, Type *ft, int32_t bo, int
 static void Qb_emit_bf_store(Qb *self, int32_t addr, Type *ft, int32_t bo, int32_t bw, int32_t val, char vcls) {
     int32_t usz = Qb_size_of(self, ft);
     char ucl = (usz == 8 ? 'l' : 'w');
-    int32_t bits = usz * 8;
     int64_t mask = ((int64_t)1 << bw) - 1;
     int32_t v = Qb_emit_coerce(self, val, vcls, ucl);
     int32_t m1 = Qb_tmp(self);
@@ -4303,6 +4346,7 @@ static void Qb_emit_for(Qb *self, Stmt *s) {
 }
 
 static void Qb_emit_cfor(Qb *self, Stmt *s) {
+    int32_t fmark = self->binds.len;
     if (s->for_init != NULL) {
         Qb_emit_stmt(self, s->for_init);
     }
@@ -4335,6 +4379,7 @@ static void Qb_emit_cfor(Qb *self, Stmt *s) {
     }
     sb_printf(self->out, "\tjmp @l%d\n", cond);
     sb_printf(self->out, "@l%d\n", end);
+    self->binds.len = fmark;
 }
 
 static void Qb_collect_cases(Qb *self, Block *b, Vec_pStmt *acc) {
@@ -4475,10 +4520,12 @@ static void Qb_collect_vars(Qb *self, Block *b) {
         }
         switch (st->kind) {
             case ST_VAR: {
-                if (st->is_static) {
-                    Qb_add_static_var(self, st->name, st->type, st->init);
+                if (st->is_extern) {
+                    Qb_add_extern_var(self, st->name, st->type, st);
+                } else if (st->is_static) {
+                    Qb_add_static_var(self, st->name, st->type, st->init, st);
                 } else {
-                    Qb_add_var(self, st->name, st->type);
+                    Qb_add_var(self, st->name, st->type, st);
                     if (st->type != NULL && st->type->kind == TY_ARRAY && st->type->arr_len == NULL && st->init != NULL) {
                         int32_t esz = Qb_size_of(self, st->type->inner);
                         int units = -1;
@@ -4488,10 +4535,7 @@ static void Qb_collect_vars(Qb *self, Block *b) {
                             units = st->init->nargs;
                         }
                         if (units >= 0) {
-                            QVar *v = Qb_find_var(self, st->name);
-                            if (v != NULL) {
-                                v->nbytes = units * esz;
-                            }
+                            self->vars.data[self->vars.len - 1].nbytes = units * esz;
                         }
                     }
                 }
@@ -4523,13 +4567,13 @@ static void Qb_collect_vars(Qb *self, Block *b) {
                 break;
             }
             case ST_WITH: {
-                Qb_add_var(self, st->name, st->type);
+                Qb_add_var(self, st->name, st->type, st);
                 Qb_collect_vars(self, st->body);
                 break;
             }
             case ST_CFOR: {
                 if (st->for_init != NULL && st->for_init->kind == ST_VAR) {
-                    Qb_add_var(self, st->for_init->name, st->for_init->type);
+                    Qb_add_var(self, st->for_init->name, st->for_init->type, st->for_init);
                 }
                 Qb_collect_vars(self, st->body);
                 break;
@@ -4558,22 +4602,21 @@ static void Qb_collect_vars(Qb *self, Block *b) {
     }
 }
 
-static void Qb_add_var(Qb *self, const char *name, Type *ty) {
-    if (Qb_find_var(self, name) != NULL) {
-        return;
-    }
+static void Qb_add_var(Qb *self, const char *name, Type *ty, Stmt *decl) {
     int32_t slot = Qb_tmp(self);
-    QVar qv = {name, slot, Qb_cls_of(self, ty), ty, 0, 0, 0};
+    QVar qv = {name, slot, Qb_cls_of(self, ty), ty, 0, 0, 0, 0, decl};
     Vec_QVar_push(&self->vars, qv);
 }
 
-static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init) {
-    if (Qb_find_var(self, name) != NULL) {
-        return;
-    }
+static void Qb_add_extern_var(Qb *self, const char *name, Type *ty, Stmt *decl) {
+    QVar qv = {name, 0, Qb_cls_of(self, ty), ty, 0, 0, 0, 1, decl};
+    Vec_QVar_push(&self->vars, qv);
+}
+
+static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init, Stmt *decl) {
     int32_t sid = self->nstatic;
     self->nstatic += 1;
-    QVar qv = {name, 0, Qb_cls_of(self, ty), ty, 1, sid, 0};
+    QVar qv = {name, 0, Qb_cls_of(self, ty), ty, 1, sid, 0, 0, decl};
     Vec_QVar_push(&self->vars, qv);
     int32_t sz = Qb_size_of(self, ty);
     char scls = Qb_cls_of(self, ty);
@@ -4596,7 +4639,7 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init) 
         }
         sb_puts(&self->data, " }\n");
         sb_free(&dbs);
-        Qb_static_fix_len(self, name, ty, total);
+        Qb_static_fix_len(self, ty, total);
         return;
     }
     if (init != NULL && (init->kind == EX_INITLIST || init->kind == EX_COMPOUND)) {
@@ -4610,7 +4653,7 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init) 
                 dbl.data[dbl.len] = '\0';
             }
             sb_printf(&self->data, "data $sl%d = align %d {%s }\n", sid, Qb_type_align(self, ty), dbl.data);
-            Qb_static_fix_len(self, name, ty, rr);
+            Qb_static_fix_len(self, ty, rr);
         } else {
             sb_printf(&self->data, "data $sl%d = { z %d }\n", sid, (sz > 0 ? sz : rr));
         }
@@ -4638,10 +4681,9 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init) 
     }
 }
 
-static void Qb_static_fix_len(Qb *self, const char *name, Type *ty, int32_t total) {
-    QVar *v = Qb_find_var(self, name);
-    if (v != NULL) {
-        v->nbytes = total;
+static void Qb_static_fix_len(Qb *self, Type *ty, int32_t total) {
+    if (self->vars.len > 0) {
+        self->vars.data[self->vars.len - 1].nbytes = total;
     }
     if (ty != NULL && ty->kind == TY_ARRAY && ty->arr_len == NULL) {
         int32_t esz = Qb_size_of(self, ty->inner);
@@ -4661,6 +4703,7 @@ static void Qb_emit_func(Qb *self, Func *f) {
         return;
     }
     Vec_QVar_init(&self->vars);
+    Vec_i32_init(&self->binds);
     Vec_pStmt_init(&self->defers);
     self->ntmp = 0;
     self->nlbl = 0;
@@ -4708,7 +4751,8 @@ static void Qb_emit_func(Qb *self, Func *f) {
         if (pt != NULL && pt->kind == TY_ARRAY) {
             pt = mk_typtr(pt->inner);
         }
-        Qb_add_var(self, f->params[i].name, pt);
+        Qb_add_var(self, f->params[i].name, pt, NULL);
+        Vec_i32_push(&self->binds, i);
     }
     Qb_collect_vars(self, f->body);
     for (i = 0; i < self->vars.len; i += 1) {

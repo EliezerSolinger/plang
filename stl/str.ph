@@ -18,35 +18,35 @@ struct Str:
     len: usize
     cap: usize
 
-    def init(self: *Str):
-        self->data = None
-        self->len = 0
-        self->cap = 0
+    def init(out self: Str):
+        self.data = None
+        self.len = 0
+        self.cap = 0
 
     # ensures room for `extra` more bytes + NUL
-    def reserve(self: *Str, extra: usize):
-        if self->len + extra + 1 <= self->cap:
+    def reserve(ref self: Str, extra: usize):
+        if self.len + extra + 1 <= self.cap:
             return
-        nc: usize = 32 if self->cap == 0 else self->cap
-        while nc < self->len + extra + 1:
+        nc: usize = 32 if self.cap == 0 else self.cap
+        while nc < self.len + extra + 1:
             nc *= 2
-        self->data = realloc(self->data, nc)
-        self->cap = nc
+        self.data = realloc(self.data, nc)
+        self.cap = nc
 
-    def push(self: *Str, c: char):
-        self->reserve(1)
-        self->data[self->len] = c
-        self->len += 1
-        self->data[self->len] = '\0'
+    def push(ref self: Str, c: char):
+        self.reserve(1)
+        self.data[self.len] = c
+        self.len += 1
+        self.data[self.len] = '\0'
 
-    def append(self: *Str, s: const *char):
+    def append(ref self: Str, s: const *char):
         n: usize = strlen(s)
-        self->reserve(n)
-        memcpy(self->data + self->len, s, n)
-        self->len += n
-        self->data[self->len] = '\0'
+        self.reserve(n)
+        memcpy(self.data + self.len, s, n)
+        self.len += n
+        self.data[self.len] = '\0'
 
-    def appendf(self: *Str, fmt: const *char, ...):
+    def appendf(ref self: Str, fmt: const *char, ...):
         ap: va_list
         ap2: va_list
         va_start(ap, fmt)
@@ -56,24 +56,24 @@ struct Str:
         if n < 0:
             va_end(ap2)
             return
-        self->reserve(usize(n))
-        vsnprintf(self->data + self->len, usize(n) + 1, fmt, ap2)
+        self.reserve(usize(n))
+        vsnprintf(self.data + self.len, usize(n) + 1, fmt, ap2)
         va_end(ap2)
-        self->len += usize(n)
+        self.len += usize(n)
 
-    def cstr(self: *Str) -> const *char:
-        return self->data if self->data != None else ""
+    def cstr(in self: Str) -> const *char:
+        return self.data if self.data != None else ""
 
-    def eq(self: *Str, other: const *char) -> bool:
-        return strcmp(self->cstr(), other) == 0
+    def eq(in self: Str, other: const *char) -> bool:
+        return strcmp(self.cstr(), other) == 0
 
-    def clear(self: *Str):
-        self->len = 0
-        if self->data != None:
-            self->data[0] = '\0'
+    def clear(ref self: Str):
+        self.len = 0
+        if self.data != None:
+            self.data[0] = '\0'
 
-    def deinit(self: *Str):
-        free(self->data)
-        self->data = None
-        self->len = 0
-        self->cap = 0
+    def deinit(ref self: Str):
+        free(self.data)
+        self.data = None
+        self.len = 0
+        self.cap = 0

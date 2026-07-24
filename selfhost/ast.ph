@@ -56,6 +56,7 @@ enum TokKind:
     TK_RBRACE
     TK_COMMA
     TK_COLON
+    TK_WALRUS  # := (walrus): assignment expression `(x := expr)`
     TK_SEMI
     TK_DOT
     TK_ARROW
@@ -90,6 +91,8 @@ enum TokKind:
     TK_SHR_EQ
     TK_DECLARE
     TK_IMPLEMENT
+    TK_IS      # `a is b` — pointer identity (contextual word; the lexer never
+    TK_ISNOT   #   emits these: the parser recognizes `is` / `is not` infix)
     TK_COUNT
 
 
@@ -148,10 +151,21 @@ enum ExprKind:
     EX_GENERIC   # _Generic(lhs, T: e, ...): args=exprs, gen_types=types (None=default)
     EX_STMTEXPR  # ({ stmts; e; }) GNU: xblock=statements, lhs=value (last expr)
     EX_WITHSELF  # `with`'s implicit receiver (.field); sema resolves to EX_IDENT
+    EX_WALRUS    # `(x := expr)` (P): assignment EXPRESSION; declares x at
+                 #   FUNCTION scope on first use (like Python). text=name,
+                 #   lhs=value. Sema hoists the decl and rewrites to EX_ASSIGN.
+    EX_IN        # `x in y` / `x not in y` (P): membership, value bool. Sema
+                 #   LOWERS it to ==/strcmp or-chains — backends never see it.
+                 #   lhs=needle, rhs=haystack ({...} list, string literal or
+                 #   fixed array); op=TK_NOT when negated
 
 struct Expr:
     kind: ExprKind
     pos: Pos
+    parened: bool         # written wrapped in (...) — silences -Wparentheses
+    out_done: bool        # ident already resolved as a byref-param deref (sema)
+    byref: i32            # on a call-site '&x' born from `out x`/`ref x`/`in x`:
+                          #   the ParamByref kind (drives the init tracking)
     text: const *char     # EX_IDENT / literal lexeme (verbatim)
     op: i32               # TokKind: unary, binary, EX_FIELD (TK_DOT/TK_ARROW)
     lhs: *Expr            # operand / receiver / callee / ternary value
@@ -193,6 +207,14 @@ enum StmtKind:
     ST_CASE    # case/default marker inside a switch: expr=value (None=default)
     ST_BLOCK   # bare `{ ... }` (C front end): real block scope — inner decls
                #   must not collide with siblings (body=Block)
+    ST_PASS    # `pass` (P): explicit no-op — fills an intentionally empty block
+    ST_GLOBAL    # `global x` (P): x must be a module global; declaring a local
+                 #   x afterwards in this function is an error (uses st->name)
+    ST_NONLOCAL  # `nonlocal x` (P): the next `x = value` declares x at FUNCTION
+                 #   scope (survives the enclosing block) — Python's if/else idiom
+    ST_CPROTO    # block-scope function declaration (C): `int foo(void);` inside a
+                 #   block — re-binds the name to the file-scope function (shadowing
+                 #   any outer variable). cfunc points at the hoisted prototype.
 
 struct MatchCase:
     vals: **Expr   # None/0 if default
@@ -210,6 +232,8 @@ struct Stmt:
     init: *Expr
     is_const: bool
     is_static: bool   # static local (C): persistent storage, single init
+    is_extern: bool   # block-scope `extern int x;`: declaration only — refers
+                      #   to the object with external linkage (shadows locals)
     # ST_ASSIGN
     lhs: *Expr
     op: i32          # TokKind of the assignment operator
@@ -246,12 +270,27 @@ struct Stmt:
     label: const *char
     # ST_CASE: QBE label assigned by the switch dispatch (backend)
     case_lbl: i32
+    # ST_CPROTO: the hoisted file-scope prototype this block-scope decl re-binds
+    cfunc: *Func
 
 # ---------- top-level declarations ----------
+# by-reference parameter kinds (C#-style sugar over pointers)
+enum ParamByref:
+    PK_NONE = 0
+    PK_OUT     # output only: the CALL initializes the variable
+    PK_REF     # in/out: must arrive initialized, may be modified
+    PK_IN      # read-only by reference (const *T): no copy, no writes
+
 struct Param:
     name: const *char
     type: *Type
     pos: Pos
+    dflt: *Expr   # P default value (`b: i32 = 0`) — COMPILE-TIME constant,
+                  #   filled in at the call site by sema (zero runtime cost)
+    byref: i32    # PK_OUT/PK_REF/PK_IN (P): SUGAR over a pointer — type is *T
+                  #   (const *T for `in`), the body uses `name` without '*',
+                  #   callers say `out x`/`ref x`/`in x` (= &x). The C ABI is
+                  #   the plain pointer. 0 = ordinary parameter.
 
 struct Func:
     pos: Pos
@@ -261,6 +300,8 @@ struct Func:
     params: *Param
     nparams: i32
     is_varargs: bool     # last parameter is "..."
+    sig_empty: bool      # C prototype declared with empty parens `()` — the
+                         #   signature is UNKNOWN (K&R), unlike `(void)`/params
     ret: *Type
     is_static: bool
     is_inline: bool
@@ -333,6 +374,9 @@ struct Module:
     is_header: bool    # .ph
     is_c: bool         # produced by the C front end (c_parse): round-tripped C
                        #   has no #include left, so va_arg etc. emit as builtins
+    tdnames: **char    # typedef NAMES seen (va_list, wchar_t, off_t...): the C
+    ntd: i32           #   front end resolves them away, but P code referencing
+                       #   the name must still see a KNOWN type
     decls: **Decl
     ndecls: i32
 

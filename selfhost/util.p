@@ -142,6 +142,98 @@ def warn_at(file: const *char, pos: Pos, fmt: const *char, ...):
     fprintf(stderr, "\n")
     va_end(ap)
 
+# ---------- clang-style warning groups ----------
+# Each diagnostic call site names its GROUP (-Wincompatible-pointer-types...)
+# and a site DEFAULT (WD_*). Explicit driver flags override the default:
+#   -W<g> = warn   -Wno-<g> = off   -Werror=<g> = error   -Wno-error=<g> = demote
+#   -Werror promotes all active warnings; -w silences warnings; -Wall enables
+#   the WD_WALL set; -pedantic/-pedantic-errors drive the wd_pedantic() sites.
+struct WGroup:
+    name: const *char
+    state: i32       # 0 off, 1 warn, 2 error (only meaningful if has_state)
+    has_state: bool
+    no_error: bool   # -Wno-error=<g>: never promoted to error
+
+g_wgroups: WGroup[96]
+g_nwgroups: i32 = 0
+g_werror: bool = False
+g_wall: bool = False
+g_wpedantic: i32 = 0    # 0 off, 1 -pedantic (warn), 2 -pedantic-errors
+g_wsuppress: bool = False   # -w
+g_warn_count: i32 = 0
+
+static def wgroup_idx(name: const *char) -> i32:
+    for i in range(g_nwgroups):
+        if strcmp(g_wgroups[i].name, name) == 0:
+            return i
+    if g_nwgroups >= 96:
+        return -1
+    g_wgroups[g_nwgroups].name = name
+    g_wgroups[g_nwgroups].state = 1
+    g_wgroups[g_nwgroups].has_state = False
+    g_wgroups[g_nwgroups].no_error = False
+    g_nwgroups += 1
+    return g_nwgroups - 1
+
+def diag_set(name: const *char, state: i32):
+    i: i32 = wgroup_idx(name)
+    if i >= 0:
+        g_wgroups[i].state = state
+        g_wgroups[i].has_state = True
+
+def diag_set_no_error(name: const *char):
+    i: i32 = wgroup_idx(name)
+    if i >= 0:
+        g_wgroups[i].no_error = True
+
+# driver-level switches (parsed in main.p)
+def diag_config(werror: bool, wall: bool, pedantic: i32, suppress: bool):
+    g_werror = werror
+    g_wall = wall
+    g_wpedantic = pedantic
+    g_wsuppress = suppress
+
+# the default for pedantic-gated sites (GNU/C23 extensions)
+def wd_pedantic() -> i32:
+    if g_wpedantic == 2:
+        return WD_ERR
+    if g_wpedantic == 1:
+        return WD_WARN
+    return WD_OFF
+
+def cdiag_at(file: const *char, pos: Pos, group: const *char, wdef: i32, fmt: const *char, ...):
+    sev: i32
+    if wdef == WD_ERR:
+        sev = 2
+    elif wdef == WD_EXTWARN:
+        sev = 2 if g_wpedantic == 2 else 1
+    elif wdef == WD_WARN:
+        sev = 1
+    elif wdef == WD_WALL:
+        sev = 1 if g_wall else 0
+    else:
+        sev = 0
+    gi: i32 = wgroup_idx(group)
+    if gi >= 0 and g_wgroups[gi].has_state:
+        sev = g_wgroups[gi].state
+    if sev == 1 and g_werror and not (gi >= 0 and g_wgroups[gi].no_error):
+        sev = 2
+    if sev == 2 and gi >= 0 and g_wgroups[gi].no_error:
+        sev = 1
+    if sev == 0:
+        return
+    if sev == 1 and g_wsuppress:
+        return
+    ap: va_list
+    va_start(ap, fmt)
+    fprintf(stderr, "%s:%d:%d: %s: ", file, pos.line, pos.col, "error" if sev == 2 else "warning")
+    vfprintf(stderr, fmt, ap)
+    fprintf(stderr, " [-W%s]\n", group)
+    va_end(ap)
+    if sev == 2:
+        exit(1)
+    g_warn_count += 1
+
 # ---------- files ----------
 def read_entire_file(path: const *char, out_len: *usize) -> *char:
     f: *FILE = fopen(path, "rb")

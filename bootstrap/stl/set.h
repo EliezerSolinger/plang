@@ -21,7 +21,7 @@ struct StrSet {
 
 void StrSet_init(StrSet *self);
 
-int32_t StrSet_find_slot(StrSet *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrSet_find_slot(const StrSet *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrSet_rehash(StrSet *self, int32_t newcap);
 
@@ -29,7 +29,7 @@ void StrSet_grow_entries(StrSet *self);
 
 int StrSet_add(StrSet *self, const char *key);
 
-int StrSet_has(StrSet *self, const char *key);
+int StrSet_has(const StrSet *self, const char *key);
 
 int StrSet_remove(StrSet *self, const char *key);
 

@@ -76,6 +76,17 @@ const N = 64        # compile-time constant (folds; usable as an array size)
 (Python-style); otherwise it is an assignment. Multiple simple statements may
 share a line with `;`.
 
+**Walrus** — `(x := expr)` assigns *and* yields the value, inside an
+expression. On first use it declares `x` at **function scope** (like Python),
+so the classic read loop works:
+
+```python
+while (c := next_char(src)) != '\0':
+    ...
+```
+
+The parenthesized form is required.
+
 ---
 
 ## 4. Functions
@@ -93,6 +104,53 @@ def log(fmt: const *char, ...):      # variadic (C varargs)
 
 A `def` header with **no `:`/body** is a *prototype* — declare before use, as
 in C. There is no automatic prototype generation.
+
+### Default values and named arguments
+
+```python
+def area(w: i32, h: i32 = 10, scale: i32 = 1) -> i32:
+    return w * h * scale
+
+area(2)                   # 20
+area(2, 3)                # 6
+area(2, scale=5)          # 100  (named argument)
+area(2, h=4, scale=2)     # 16
+```
+
+Defaults must be **compile-time constants** and may only appear on trailing
+parameters. Both features are resolved entirely at compile time: the call is
+rewritten to plain positional form, so the emitted C is an ordinary call —
+zero cost, ordinary C ABI. Named arguments cannot be used with variadic
+functions, and a positional argument cannot follow a named one.
+
+### out / ref / in — by-reference parameters
+
+C#-style **sugar over pointers**. The real parameter type is a pointer
+(`const *T` for `in`); the keyword documents the intent, lets the body use the
+name without `*`, and drives the compiler's init-tracking:
+
+| form | emitted C | contract (checked) |
+|---|---|---|
+| `out v: T` | `T *v` | the **call initializes** the caller's variable; a body that never assigns it warns |
+| `ref v: T` | `T *v` | must arrive **initialized** (else `-Wuninitialized`); read and written |
+| `in v: T` | `const T *v` | read-only by reference (no copy); writes are compile errors |
+
+```python
+def divmod(a: i32, b: i32, out resto: i32) -> i32:
+    resto = a % b            # no '*': the name auto-derefs
+    return a / b
+
+r: i32
+q: i32 = divmod(17, 5, out r)     # call site says which way data flows
+divmod(9, 4, &r)                  # raw pointer still works — SAME function
+```
+
+At the call site `out x` / `ref x` / `in x` is exactly `&x`; the keyword must
+match the parameter's kind when present, and plain `&x` is always accepted
+(C interop). Const-ness of `in` is **shallow**, as in C: `p.next.x = 1`
+through a loaded pointer is legal; `p.x = 1` is not. The keywords are
+contextual — `out`/`ref` remain valid identifiers elsewhere. C code calls
+these functions with ordinary pointers; nothing byref-specific crosses the ABI.
 
 Function pointers:
 
@@ -142,6 +200,18 @@ match tok:
         ...
 ```
 
+`match` on a **string** compares content (`strcmp`), not pointers — the C
+`switch` can't, so it lowers to an if/else chain; duplicate string cases are
+compile errors and the subject must be side-effect-free:
+
+```python
+match name:
+    case "float", "f32":
+        return "float"
+    case _:
+        return name
+```
+
 `match type(x)` selects by the **static type** of `x` at compile time (see §9).
 
 ---
@@ -154,6 +224,39 @@ match tok:
 - Bitwise: `& | ^ ~ << >>`.
 - Address / deref: `&x`, `*p`. Member: `p.field` (dot works through pointers).
 - Index: `a[i]`. Assignment ops: `= += -= *= /= %= &= |= ^= <<= >>=`.
+- Identity: `is`, `is not` — **pointer** equality (contextual words).
+- Membership: `in`, `not in` (below).
+
+### Strings compare by content
+
+When one side of `==`/`!=` is a **string literal** and the other is
+string-typed, the comparison is `strcmp` content equality — never a pointer
+test. Pointer identity is spelled `is`:
+
+```python
+if t->name == "void":       # strcmp under the hood
+if a is b:                  # same pointer?
+```
+
+(Two string *variables* still compare as pointers; only literal comparisons
+are rewritten.)
+
+### in / not in — membership
+
+A `bool` expression, at the same precedence as `==`:
+
+```python
+c in "aeiou"                      # char vs each byte of the literal (unrolled)
+n in {1, 3, 5, 7}                 # == chain
+name in {"float", "double"}       # strcmp chain — content, never pointers
+q in primes                       # fixed array T[N] (N ≤ 64, unrolled)
+x not in {A, B}                   # negation
+```
+
+The left side is expanded into one comparison per element, so it must be
+side-effect-free (`f() in {...}` is an error — assign it to a variable
+first). Everything is lowered at compile time; the emitted C is the chain of
+comparisons you would have written by hand.
 
 ---
 
@@ -172,6 +275,18 @@ d: i32 = p.norm2()
 ```
 
 Methods compile to free functions named `Struct_method`.
+
+`self` takes any of five forms — value, pointer, or the by-ref trio (§4):
+
+```python
+struct Caixa:
+    def init(out self: Caixa):        # constructor: v.init() COUNTS as
+        self.n = 0                    #   initializing v (definite assignment)
+    def push(ref self: Caixa, v: i32): ...   # mutator
+    def soma(in self: Caixa) -> i32: ...     # read-only, no copy (const T*)
+    def copia(self: Caixa) -> i32: ...       # by value (a copy)
+    def klass(self: *Caixa) -> i32: ...      # classic pointer receiver
+```
 
 ```python
 enum Color:
@@ -343,9 +458,10 @@ so C and Plang compile side by side in the same project.
 - **Plang:** `.p` source, `.ph` headers.
 - **C:** `.c`/`.i` files. Understands C11 plus common GNU extensions —
   statement expressions `({...})`, `_Generic`, `__attribute__`, compound
-  literals, designated initializers (including ranges), `__builtin_*`. It does
-  not run the preprocessor; preprocess first (`cpp`, `gcc -E`, …) if the file
-  has `#include`/`#define`.
+  literals, designated initializers (including ranges), `__builtin_*`.
+  A `.c` input is **preprocessed automatically** (via the compiler named by
+  `--cpp` / `PLANGC_CPP`, default `cc -E`); a `.i` file is taken as already
+  preprocessed.
 
 ### Back ends
 
@@ -359,6 +475,47 @@ so C and Plang compile side by side in the same project.
 - **QBE:** [QBE](https://c9x.me/compile/) IL. `plangc --backend qbe f.p -o
   f.ssa`. QBE handles the SysV ABI (structs by value, varargs). Requires the
   external `qbe` tool plus an assembler and linker.
+
+### The driver
+
+```sh
+plangc file.p -o file.c              # one input, explicit output
+plangc --out-dir out stl/*.ph selfhost/*.p    # many inputs, MIRRORED layout
+```
+
+`--out-dir <dir>` mirrors each input's path under `<dir>` (creating
+directories): `out/stl/vec.h`, `out/selfhost/sema.c`, … Since imports are
+file-relative (an `import "../stl/vec.ph"` emits `#include "../stl/vec.h"`),
+the mirror resolves them internally — builds never write next to the sources.
+Other flags: `-D NAME[=VAL]`, `--std=c89`, `--backend qbe`, `--cpp <cc>`.
+
+`--inline-runtime` makes helpers the **compiler itself injects** (e.g. the
+`in` operator's `strcmp`) come from self-contained inline Plang functions
+instead of libc — the C output gains no `#include <string.h>`, and the QBE
+binary has no undefined `strcmp`. It never touches libc calls *you* write.
+
+### Diagnostics — clang-compatible `-W` flags
+
+Warnings use clang's group names, defaults and flag grammar:
+
+```sh
+-W<group>   -Wno-<group>   -Werror   -Werror=<group>   -Wno-error=<group>
+-Wall   -Wextra   -w   -pedantic   -pedantic-errors
+```
+
+Highlights (defaults match clang, verified case-by-case against a real
+clang by `tests/clang-compare.sh`): `-Wincompatible-pointer-types`,
+`-Wpointer-sign`, `-Wpointer-integer-compare`,
+`-Wcompare-distinct-pointer-types`, `-Wexcess-initializers`, `-Wparentheses`,
+`-Wunused-value`, `-Wreturn-type` (warning for a missing return, **error** for
+`return;` in a non-void function), `-Wimplicit-function-declaration` and
+`-Wint-conversion` (errors by default, demotable with `-Wno-error=`), and the
+`-Wall` set: `-Wunused-variable`, `-Wuninitialized`,
+`-Wunused-but-set-variable`. GNU/C23 extensions (`{}` initializers, empty
+structs, struct self-casts, `void*` arithmetic, `sizeof(void)`) are accepted
+by default like gcc/clang; `-pedantic` warns about them and
+`-pedantic-errors` rejects them. Plang code is held to the same rules as C
+input — the compiler compiles itself with `-Wall` clean.
 
 ### C11 → C89, and embedded targets
 

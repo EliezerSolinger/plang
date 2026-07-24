@@ -1,6 +1,7 @@
 # main.p — driver: orchestrates the pipeline (port of src/main.c)
 #   file -> utf8 -> lexer -> parser -> sema -> backend -> output
 include <stdio.h>
+include <sys/stat.h>
 include <stdlib.h>
 include <string.h>
 import "backend.ph"
@@ -12,7 +13,35 @@ import "../stl/vec.ph"
 import "vecs.ph"
 
 
-static def has_suffix(s: const *char, suf: const *char) -> bool:
+static def popen(cmd: const *char, mode: const *char) -> *FILE
+def pclose(stream: *FILE) -> i32
+
+# runs the configured C preprocessor over a RAW .c file (cpp resolves
+# #include/#define/#if); the cpp's stderr flows through to the user. A cpp
+# failure is a compile error — invalid preprocessing IS invalid input.
+static def preprocess_c(cc: *Cc, path: const *char, out_len: *usize) -> *char:
+    cpp: const *char = cc->cpp if cc->cpp != None else "cc"
+    cmd: const *char = arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path)
+    f: *FILE = popen(cmd, "r")
+    if f == None:
+        fatal("could not run the C preprocessor '%s' (see --cpp / PLANGC_CPP)", cpp)
+    b: StrBuf = {0}
+    chunk: char[4097]
+    while True:
+        n: usize = fread(&chunk[0], 1, 4096, f)
+        if n == 0:
+            break
+        chunk[n] = '\0'
+        sb_puts(&b, &chunk[0])
+    rc: i32 = pclose(f)
+    if rc != 0:
+        fatal("C preprocessing failed for '%s' ('%s -E'; fix the errors above or see --cpp / PLANGC_CPP)", path, cpp)
+    res: *char = arena_strdup(&cc->arena, b.data if b.data != None else "")
+    *out_len = strlen(res)
+    sb_free(&b)
+    return res
+
+def has_suffix(s: const *char, suf: const *char) -> bool:
     n: usize = strlen(s)
     m: usize = strlen(suf)
     return n >= m and strcmp(s + n - m, suf) == 0
@@ -22,6 +51,8 @@ static def usage():
     fprintf(stderr, "\n")
     fprintf(stderr, "options:\n")
     fprintf(stderr, "  -o <file>        output (single input only; '-' = stdout)\n")
+    fprintf(stderr, "  --out-dir <dir>  mirror each input's path under <dir> (out/stl/x.h,\n")
+    fprintf(stderr, "                   out/selfhost/x.c ...): builds never touch the sources\n")
     fprintf(stderr, "  -D NAME[=VAL]    define a compile-time const (int/float/\"str\")\n")
     fprintf(stderr, "  --std=c89        emit strict C89 (C backend; default: c99)\n")
     fprintf(stderr, "  --i64-downgrade  under c89: map 64-bit ints to 32-bit\n")
@@ -29,9 +60,29 @@ static def usage():
     fprintf(stderr, "  --backend <b>    codegen target (default: c)\n")
     fprintf(stderr, "  --cpp <cc>       C compiler used to preprocess `include <h>` headers\n")
     fprintf(stderr, "                   (default: PLANGC_CPP env, else \"cc\")\n")
+    fprintf(stderr, "  -W<group>        clang-style warning control: -W<g>, -Wno-<g>,\n")
+    fprintf(stderr, "                   -Werror, -Werror=<g>, -Wno-error=<g>, -Wall, -w\n")
+    fprintf(stderr, "  --inline-runtime helpers injected by the compiler (e.g. the 'in'\n")
+    fprintf(stderr, "                   operator's strcmp) become self-contained inline\n")
+    fprintf(stderr, "                   functions - the output has no libc dependency for them\n")
+    fprintf(stderr, "  -pedantic        warn on GNU/C23 extensions in C input\n")
+    fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n")
     fprintf(stderr, "  --tokens         dump tokens and exit\n")
     fprintf(stderr, "  -h, --help       this help\n")
     exit(2)
+
+# creates every directory in the path of `p` (the file part is skipped)
+static def mkdirs_for(p: const *char):
+    buf: *char = malloc(strlen(p) + 1)   # (strdup is POSIX — hidden under -std=c11)
+    strcpy(buf, p)
+    i: usize = 1
+    while buf[i] != '\0':
+        if buf[i] == '/':
+            buf[i] = '\0'
+            mkdir(buf, 493)   # 0755; EEXIST: fine
+            buf[i] = '/'
+        i += 1
+    free(buf)
 
 static def derive_output(a: *Arena, input: const *char, be: const *Backend) -> const *char:
     n: usize = strlen(input)
@@ -71,7 +122,7 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
         for j in range(md->ndecls):
             dd: *Decl = md->decls[j]
             dk: DeclKind = dd->kind
-            if dk == DL_STRUCT or dk == DL_UNION or dk == DL_ENUM:
+            if dk in {DL_STRUCT, DL_UNION, DL_ENUM}:
                 extra += 1
             elif dk == DL_FUNC and (dd->func->body == None or dd->func->is_inline or dd->func->is_static):
                 # prototype (registers signature) OR header-only free function
@@ -127,9 +178,15 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
 
 def main(argc: int, argv: **char) -> int:
     out_path: const *char = None
+    out_dir: const *char = None   # --out-dir: mirrors each input's path here
     backend_name: const *char = None
     tokens_only: bool = False
     std_version = 99      # target of the C backend (--std=c89 -> 89)
+    pedantic_lvl = 0      # -pedantic = 1 (warn), -pedantic-errors = 2 (error)
+    inline_runtime: bool = False   # --inline-runtime: no libc in injected helpers
+    werror: bool = False
+    wall: bool = False
+    wsuppress: bool = False
     i64_mode = 0          # under c89: 0=error, 1=downgrade 64->32, 2=long long
     # C compiler used to preprocess `include <h>`: --cpp > PLANGC_CPP env > "cc"
     cpp_cmd: const *char = getenv("PLANGC_CPP")
@@ -143,7 +200,7 @@ def main(argc: int, argv: **char) -> int:
     for i in range(1, argc):
         if strncmp(argv[i], "--std=", 6) == 0:
             std: const *char = argv[i] + 6
-            if strcmp(std, "c89") == 0 or strcmp(std, "c90") == 0:
+            if std in {"c89", "c90"}:
                 std_version = 89
             elif strcmp(std, "c99") == 0:
                 std_version = 99
@@ -166,6 +223,11 @@ def main(argc: int, argv: **char) -> int:
             if i >= argc:
                 usage()
             out_path = argv[i]
+        elif strcmp(argv[i], "--out-dir") == 0:
+            i += 1
+            if i >= argc:
+                usage()
+            out_dir = argv[i]
         elif strcmp(argv[i], "--backend") == 0:
             i += 1
             if i >= argc:
@@ -176,9 +238,31 @@ def main(argc: int, argv: **char) -> int:
             if i >= argc:
                 usage()
             cpp_cmd = argv[i]
+        elif strcmp(argv[i], "--inline-runtime") == 0:
+            inline_runtime = True
+        elif argv[i] in {"-pedantic", "--pedantic", "-Wpedantic"}:
+            pedantic_lvl = 1
+        elif argv[i] in {"-pedantic-errors", "--pedantic-errors"}:
+            pedantic_lvl = 2
+        elif strcmp(argv[i], "-w") == 0:
+            wsuppress = True
+        elif strcmp(argv[i], "-Werror") == 0:
+            werror = True
+        elif strncmp(argv[i], "-Werror=", 8) == 0:
+            diag_set(argv[i] + 8, 2)
+        elif strncmp(argv[i], "-Wno-error=", 11) == 0:
+            diag_set_no_error(argv[i] + 11)
+        elif strcmp(argv[i], "-Wall") == 0:
+            wall = True
+        elif strcmp(argv[i], "-Wextra") == 0:
+            wall = True   # accepted; the -Wextra set matches -Wall for now
+        elif strncmp(argv[i], "-Wno-", 5) == 0:
+            diag_set(argv[i] + 5, 0)
+        elif argv[i][0] == '-' and argv[i][1] == 'W' and argv[i][2] != '\0':
+            diag_set(argv[i] + 2, 1)   # -W<group>: enable as a warning
         elif strcmp(argv[i], "--tokens") == 0:
             tokens_only = True
-        elif strcmp(argv[i], "-h") == 0 or strcmp(argv[i], "--help") == 0:
+        elif argv[i] in {"-h", "--help"}:
             usage()
         elif argv[i][0] == '-' and strcmp(argv[i], "-") != 0:
             fprintf(stderr, "plangc: unknown option '%s'\n", argv[i])
@@ -189,6 +273,8 @@ def main(argc: int, argv: **char) -> int:
         usage()
     if out_path != None and inputs.len > 1:
         fatal("-o can only be used with a single input file")
+    if out_path != None and out_dir != None:
+        fatal("-o and --out-dir are mutually exclusive")
 
     be: const *Backend = backend_find(backend_name) if backend_name != None else backend_default()
     if be == None:
@@ -206,6 +292,8 @@ def main(argc: int, argv: **char) -> int:
     cc.backend_name = be->name
     cc.std_version = std_version
     cc.cpp = cpp_cmd
+    cc.inline_runtime = inline_runtime
+    diag_config(werror, wall, pedantic_lvl, wsuppress)
 
     if tokens_only:
         for j in range(inputs.len):
@@ -216,11 +304,22 @@ def main(argc: int, argv: **char) -> int:
         path: const *char = inputs.get(k)
         m: *Module
         if has_suffix(path, ".c") or has_suffix(path, ".i"):
-            # C frontend: produces the same AST; the backend infers types (F1),
-            # so we don't go through P's sema
+            # C frontend: produces the same AST and goes through the SAME sema
+            # as P — that is what makes --std=c89 correct for C input too
+            # (designated initializers lowered to positional, VLAs to
+            # malloc/free). Sema is deliberately shallow (deep type checking is
+            # the target compiler's job), so valid C is untouched.
             clen: usize = 0
-            cbytes: *char = read_entire_file(path, &clen)
-            m = c_parse(&cc.arena, path, cbytes, clen)
+            cbytes: *char
+            if has_suffix(path, ".c"):
+                # RAW C: run the configured preprocessor first, so #include
+                # and #define resolve like in any production compiler driver.
+                # .i input is already preprocessed and skips this.
+                cbytes = preprocess_c(&cc, path, &clen)
+            else:
+                cbytes = read_entire_file(path, &clen)
+            m = c_parse(&cc.arena, path, cbytes, clen, True)
+            sema_run(&cc, m)
         else:
             m = cc_load_module(&cc, path)
             sema_run(&cc, m)
@@ -235,6 +334,11 @@ def main(argc: int, argv: **char) -> int:
         backend_emit(be, m, &out)
 
         dest: const *char = out_path if out_path != None else derive_output(&cc.arena, inputs.get(k), be)
+        if out_dir != None:
+            # the output tree MIRRORS the source tree under --out-dir, so the
+            # emitted file-relative includes ("../stl/x.h") resolve inside it
+            dest = arena_printf(&cc.arena, "%s/%s", out_dir, dest)
+            mkdirs_for(dest)
         if strcmp(dest, "-") == 0:
             fwrite(out.data, 1, out.len, stdout)
         else:

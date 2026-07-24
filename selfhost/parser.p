@@ -62,10 +62,10 @@ static def expect_gt(p: *P):
 
 # ---------- types ----------
 static def is_type_modifier(s: const *char) -> bool:
-    return strcmp(s, "unsigned") == 0 or strcmp(s, "signed") == 0 or strcmp(s, "long") == 0 or strcmp(s, "short") == 0
+    return s in {"unsigned", "signed", "long", "short"}
 
 static def is_type_base_word(s: const *char) -> bool:
-    return strcmp(s, "int") == 0 or strcmp(s, "char") == 0 or strcmp(s, "short") == 0 or strcmp(s, "long") == 0 or strcmp(s, "float") == 0 or strcmp(s, "double") == 0
+    return s in {"int", "char", "short", "long", "float", "double"}
 
 static def parse_expr(p: *P) -> *Expr
 static def parse_block(p: *P) -> *Block
@@ -279,6 +279,17 @@ static def parse_primary(p: *P) -> *Expr:
             # GNU statement expression: ({ stmt; stmt; value })
             if pk1(p)->kind == TK_LBRACE:
                 return parse_stmtexpr(p)
+            # walrus: (name := expr) — assignment EXPRESSION, Python-style
+            if pk1(p)->kind == TK_IDENT and pk2(p) != None and pk2(p)->kind == TK_WALRUS:
+                adv(p)  # (
+                wname: const *char = adv(p)->text
+                wpos: Pos = adv(p)->pos   # :=
+                w: *Expr = ex_new(p->a, EX_WALRUS, wpos)
+                w->text = wname
+                w->lhs = parse_expr(p)
+                expect(p, TK_RPAREN, "walrus expression")
+                w->parened = True
+                return w
             adv(p)
             e = parse_expr(p)
             expect(p, TK_RPAREN, "parenthesized expression")
@@ -314,7 +325,35 @@ static def parse_postfix(p: *P) -> *Expr:
             args.init()
             if not at(p, TK_RPAREN):
                 do:
-                    args.push(parse_expr(p))
+                    # `out x` / `ref x` / `in x` — by-ref argument sugar:
+                    # passes &x, self-documenting at the call site (C#-style)
+                    cbrk: i32 = PK_NONE
+                    if at(p, TK_IDENT) and (pk1(p)->kind == TK_IDENT or pk1(p)->kind == TK_STAR or pk1(p)->kind == TK_LPAREN):
+                        if strcmp(pk(p)->text, "out") == 0:
+                            cbrk = PK_OUT
+                        elif strcmp(pk(p)->text, "ref") == 0:
+                            cbrk = PK_REF
+                    elif at(p, TK_IN) and (pk1(p)->kind == TK_IDENT or pk1(p)->kind == TK_STAR or pk1(p)->kind == TK_LPAREN):
+                        cbrk = PK_IN
+                    if cbrk != PK_NONE:
+                        opos: Pos = adv(p)->pos
+                        oa: *Expr = ex_new(p->a, EX_UNARY, opos)
+                        oa->op = TK_AMP
+                        oa->lhs = parse_unary(p)
+                        oa->byref = cbrk
+                        args.push(oa)
+                        continue
+                    # named argument: name=value (EX_DESIG marker; sema
+                    # resolves it to the parameter's position)
+                    if at(p, TK_IDENT) and pk1(p)->kind == TK_ASSIGN:
+                        nt: *Token = adv(p)
+                        adv(p)  # =
+                        na: *Expr = ex_new(p->a, EX_DESIG, nt->pos)
+                        na->field = nt->text
+                        na->lhs = parse_expr(p)
+                        args.push(na)
+                    else:
+                        args.push(parse_expr(p))
                 while accept(p, TK_COMMA)
             expect(p, TK_RPAREN, "function call")
             call->args = args.data
@@ -411,9 +450,39 @@ static def parse_rel(p: *P) -> *Expr:
 
 static def parse_eq(p: *P) -> *Expr:
     e: *Expr = parse_rel(p)
-    while at(p, TK_EQ) or at(p, TK_NE):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_rel(p))
+    while True:
+        # `is` / `is not` (contextual, like Python): pointer IDENTITY. Infix
+        # position is unambiguous — an identifier can never follow a complete
+        # expression — so the name `is` is not reserved.
+        if at(p, TK_IDENT) and strcmp(pk(p)->text, "is") == 0:
+            ipos: Pos = adv(p)->pos
+            iop: i32 = TK_IS
+            if accept(p, TK_NOT):
+                iop = TK_ISNOT
+            e = bin(p, iop, ipos, e, parse_rel(p))
+            continue
+        if at(p, TK_EQ) or at(p, TK_NE):
+            op: *Token = adv(p)
+            e = bin(p, op->kind, op->pos, e, parse_rel(p))
+            continue
+        # `x in y` / `x not in y`: membership (value bool; lowered by sema)
+        if at(p, TK_IN):
+            npos: Pos = adv(p)->pos
+            ie: *Expr = ex_new(p->a, EX_IN, npos)
+            ie->lhs = e
+            ie->rhs = parse_initializer(p) if at(p, TK_LBRACE) else parse_rel(p)
+            e = ie
+            continue
+        if at(p, TK_NOT) and pk1(p) != None and pk1(p)->kind == TK_IN:
+            nnpos: Pos = adv(p)->pos   # not
+            adv(p)                     # in
+            ne: *Expr = ex_new(p->a, EX_IN, nnpos)
+            ne->lhs = e
+            ne->rhs = parse_initializer(p) if at(p, TK_LBRACE) else parse_rel(p)
+            ne->op = TK_NOT
+            e = ne
+            continue
+        break
     return e
 
 static def parse_bitand(p: *P) -> *Expr:
@@ -568,7 +637,7 @@ static def parse_initializer(p: *P) -> *Expr:
 
 # ---------- statements ----------
 static def is_assign_op(k: TokKind) -> bool:
-    return k == TK_ASSIGN or k == TK_PLUS_EQ or k == TK_MINUS_EQ or k == TK_STAR_EQ or k == TK_SLASH_EQ or k == TK_PERCENT_EQ or k == TK_AMP_EQ or k == TK_PIPE_EQ or k == TK_CARET_EQ or k == TK_SHL_EQ or k == TK_SHR_EQ
+    return k in {TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ}
 
 # end of a simple statement: ';' (more statements on the same line) or newline.
 # a trailing ';' before the newline is accepted, as is ';;'.
@@ -662,10 +731,22 @@ static def parse_for(p: *P) -> *Stmt:
     if accept(p, TK_COMMA):
         s->var2 = expect(p, TK_IDENT, "for (second loop variable)")->text
     expect(p, TK_IN, "for (expected 'in')")
+    # `for v in xs:` — direct iteration over a sized array's VALUES. Recognized
+    # when what follows is not range(...)/enumerate(...): sema synthesizes the
+    # index and lowers it like enumerate (pure sugar).
+    if not (at(p, TK_IDENT) and (strcmp(pk(p)->text, "range") == 0 or strcmp(pk(p)->text, "enumerate") == 0) and pk1(p)->kind == TK_LPAREN):
+        if s->var2 != None:
+            fatal_at(p->file, pk(p)->pos, "iterating values takes ONE variable (`for v in xs`); use enumerate for index+value")
+        s->var2 = s->var    # the named variable receives the VALUE
+        s->var = ""         # sema synthesizes the hidden index
+        s->from = None
+        s->to = parse_expr(p)   # the array; sema swaps in its length
+        s->step = None
+        expect(p, TK_COLON, "for")
+        s->body = parse_block(p)
+        return s
     r: *Token = expect(p, TK_IDENT, "for (expected 'range' or 'enumerate')")
     is_enum: bool = strcmp(r->text, "enumerate") == 0
-    if not is_enum and strcmp(r->text, "range") != 0:
-        fatal_at(p->file, r->pos, "for only accepts 'range(...)' or 'enumerate(...)'")
     expect(p, TK_LPAREN, r->text)
     a1: *Expr = parse_expr(p)
     a2: *Expr = None
@@ -755,6 +836,42 @@ static def parse_with(p: *P) -> *Stmt:
 
 static def parse_stmt(p: *P) -> *Stmt:
     t: *Token = pk(p)
+    if t->kind == TK_IDENT and strcmp(t->text, "pass") == 0 and (pk1(p)->kind == TK_NEWLINE or pk1(p)->kind == TK_SEMI):
+        adv(p)
+        if at(p, TK_NEWLINE):
+            adv(p)
+        return st_new(p->a, ST_PASS, t->pos)
+    # `global x` / `nonlocal x` (contextual, like Python): scope declarations.
+    # Two identifiers in a row never start any other P statement. ONE name per
+    # line (write `global a` / `global b` on separate lines for several).
+    if t->kind == TK_IDENT and pk1(p)->kind == TK_IDENT and (t->text in {"global", "nonlocal"}):
+        kw: StmtKind = ST_GLOBAL if t->text[0] == 'g' else ST_NONLOCAL
+        adv(p)
+        first: *Stmt = None
+        extra: Vec<*Stmt>
+        extra.init()
+        do:
+            nm: *Token = expect(p, TK_IDENT, "global/nonlocal")
+            gs: *Stmt = st_new(p->a, kw, nm->pos)
+            gs->name = nm->text
+            if first == None:
+                first = gs
+            else:
+                extra.push(gs)
+        while accept(p, TK_COMMA)
+        expect(p, TK_NEWLINE, "global/nonlocal")
+        if extra.len == 0:
+            return first
+        blk: *Stmt = st_new(p->a, ST_BLOCK, t->pos)   # several names: wrap
+        bb: *Block = arena_alloc(p->a, sizeof(Block))
+        all: **Stmt = arena_alloc(p->a, usize(extra.len + 1) * sizeof(*all))
+        all[0] = first
+        for i in range(extra.len):
+            all[i + 1] = extra.get(i)
+        bb->stmts = all
+        bb->n = extra.len + 1
+        blk->body = bb
+        return blk
     if t->kind == TK_IDENT and pk1(p)->kind == TK_COLON:
         if pk2(p)->kind == TK_NEWLINE:  # label
             s: *Stmt = st_new(p->a, ST_LABEL, t->pos)
@@ -882,9 +999,33 @@ static def parse_func(p: *P, is_static: bool, is_inline: bool, owner: const *cha
                     fatal_at(p->file, el->pos, "'...' requires at least one named parameter before it")
                 f->is_varargs = True
                 break  # '...' can only be the last one
+            # `out|ref|in name: T` — by-reference sugar (contextual: keyword
+            # followed by another identifier; a parameter NAMED out/ref works)
+            brk: i32 = PK_NONE
+            if at(p, TK_IDENT) and pk1(p)->kind == TK_IDENT:
+                if strcmp(pk(p)->text, "out") == 0:
+                    adv(p)
+                    brk = PK_OUT
+                elif strcmp(pk(p)->text, "ref") == 0:
+                    adv(p)
+                    brk = PK_REF
+            elif at(p, TK_IN) and pk1(p)->kind == TK_IDENT:
+                adv(p)
+                brk = PK_IN
             pn: *Token = expect(p, TK_IDENT, "parameter name")
             expect(p, TK_COLON, "parameter (missing ': type')")
             prm: Param = {pn->text, parse_type(p), pn->pos}
+            if brk != PK_NONE:
+                if brk == PK_IN:
+                    prm.type->is_const = True       # read-only pointee
+                prm.type = ty_ptr(p->a, prm.type)   # the REAL type: *T
+                prm.byref = brk
+            if accept(p, TK_ASSIGN):
+                if brk != PK_NONE:
+                    fatal_at(p->file, pn->pos, "an out/ref/in parameter cannot have a default value")
+                prm.dflt = parse_expr(p)   # default: must be comptime (sema checks)
+            elif not params.is_empty() and params.data[params.len - 1].dflt != None:
+                fatal_at(p->file, pn->pos, "parameter '%s' needs a default value (it follows a defaulted parameter)", pn->text)
             params.push(prm)
         while accept(p, TK_COMMA)
     expect(p, TK_RPAREN, "function parameters")
@@ -1043,19 +1184,19 @@ static def parse_import(p: *P) -> *Decl:
     d->kind = DL_IMPORT
     d->is_include = False
     d->pos = pos
+    # `import` is for P modules only; C headers go through `include`
     if at(p, TK_HEADER):
-        d->import_system = True
-        d->import_path = adv(p)->text
+        fatal_at(p->file, pk(p)->pos, "'import <%s>' was removed: C headers use `include <%s>` (import is for P modules: import \"x.ph\")", pk(p)->text, pk(p)->text)
     elif at(p, TK_STRING):
         raw: const *char = adv(p)->text  # with quotes
         len: usize = strlen(raw)
         d->import_path = arena_strndup(p->a, raw + 1, len - 2 if len >= 2 else 0)
         d->import_system = False
-    elif at(p, TK_IDENT):
-        d->import_system = True
-        d->import_path = arena_printf(p->a, "%s.h", adv(p)->text)
+        pl: usize = strlen(d->import_path)
+        if pl < 3 or strcmp(d->import_path + pl - 3, ".ph") != 0:
+            fatal_at(p->file, d->pos, "import \"%s\": import takes a P header (.ph); for a C header use `include \"%s\"`", d->import_path, d->import_path)
     else:
-        fatal_at(p->file, pk(p)->pos, "import expects <header>, \"file\" or a module name")
+        fatal_at(p->file, pk(p)->pos, "import expects a P header: import \"module.ph\" (C headers use include <...>)")
     expect(p, TK_NEWLINE, "import")
     return d
 

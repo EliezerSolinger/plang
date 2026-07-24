@@ -31,13 +31,13 @@ void Vec_pExpr_push(Vec_pExpr *self, Expr *item);
 
 Expr *Vec_pExpr_pop(Vec_pExpr *self);
 
-Expr *Vec_pExpr_get(Vec_pExpr *self, int32_t i);
+Expr *Vec_pExpr_get(const Vec_pExpr *self, int32_t i);
 
 void Vec_pExpr_set(Vec_pExpr *self, int32_t i, Expr *item);
 
-Expr *Vec_pExpr_last(Vec_pExpr *self);
+Expr *Vec_pExpr_last(const Vec_pExpr *self);
 
-int Vec_pExpr_is_empty(Vec_pExpr *self);
+int Vec_pExpr_is_empty(const Vec_pExpr *self);
 
 void Vec_pExpr_remove_at(Vec_pExpr *self, int32_t i);
 
@@ -61,13 +61,13 @@ void Vec_pStmt_push(Vec_pStmt *self, Stmt *item);
 
 Stmt *Vec_pStmt_pop(Vec_pStmt *self);
 
-Stmt *Vec_pStmt_get(Vec_pStmt *self, int32_t i);
+Stmt *Vec_pStmt_get(const Vec_pStmt *self, int32_t i);
 
 void Vec_pStmt_set(Vec_pStmt *self, int32_t i, Stmt *item);
 
-Stmt *Vec_pStmt_last(Vec_pStmt *self);
+Stmt *Vec_pStmt_last(const Vec_pStmt *self);
 
-int Vec_pStmt_is_empty(Vec_pStmt *self);
+int Vec_pStmt_is_empty(const Vec_pStmt *self);
 
 void Vec_pStmt_remove_at(Vec_pStmt *self, int32_t i);
 
@@ -91,13 +91,13 @@ void Vec_pBlock_push(Vec_pBlock *self, Block *item);
 
 Block *Vec_pBlock_pop(Vec_pBlock *self);
 
-Block *Vec_pBlock_get(Vec_pBlock *self, int32_t i);
+Block *Vec_pBlock_get(const Vec_pBlock *self, int32_t i);
 
 void Vec_pBlock_set(Vec_pBlock *self, int32_t i, Block *item);
 
-Block *Vec_pBlock_last(Vec_pBlock *self);
+Block *Vec_pBlock_last(const Vec_pBlock *self);
 
-int Vec_pBlock_is_empty(Vec_pBlock *self);
+int Vec_pBlock_is_empty(const Vec_pBlock *self);
 
 void Vec_pBlock_remove_at(Vec_pBlock *self, int32_t i);
 
@@ -121,13 +121,13 @@ void Vec_pDecl_push(Vec_pDecl *self, Decl *item);
 
 Decl *Vec_pDecl_pop(Vec_pDecl *self);
 
-Decl *Vec_pDecl_get(Vec_pDecl *self, int32_t i);
+Decl *Vec_pDecl_get(const Vec_pDecl *self, int32_t i);
 
 void Vec_pDecl_set(Vec_pDecl *self, int32_t i, Decl *item);
 
-Decl *Vec_pDecl_last(Vec_pDecl *self);
+Decl *Vec_pDecl_last(const Vec_pDecl *self);
 
-int Vec_pDecl_is_empty(Vec_pDecl *self);
+int Vec_pDecl_is_empty(const Vec_pDecl *self);
 
 void Vec_pDecl_remove_at(Vec_pDecl *self, int32_t i);
 
@@ -151,13 +151,13 @@ void Vec_pType_push(Vec_pType *self, Type *item);
 
 Type *Vec_pType_pop(Vec_pType *self);
 
-Type *Vec_pType_get(Vec_pType *self, int32_t i);
+Type *Vec_pType_get(const Vec_pType *self, int32_t i);
 
 void Vec_pType_set(Vec_pType *self, int32_t i, Type *item);
 
-Type *Vec_pType_last(Vec_pType *self);
+Type *Vec_pType_last(const Vec_pType *self);
 
-int Vec_pType_is_empty(Vec_pType *self);
+int Vec_pType_is_empty(const Vec_pType *self);
 
 void Vec_pType_remove_at(Vec_pType *self, int32_t i);
 
@@ -181,13 +181,13 @@ void Vec_pFunc_push(Vec_pFunc *self, Func *item);
 
 Func *Vec_pFunc_pop(Vec_pFunc *self);
 
-Func *Vec_pFunc_get(Vec_pFunc *self, int32_t i);
+Func *Vec_pFunc_get(const Vec_pFunc *self, int32_t i);
 
 void Vec_pFunc_set(Vec_pFunc *self, int32_t i, Func *item);
 
-Func *Vec_pFunc_last(Vec_pFunc *self);
+Func *Vec_pFunc_last(const Vec_pFunc *self);
 
-int Vec_pFunc_is_empty(Vec_pFunc *self);
+int Vec_pFunc_is_empty(const Vec_pFunc *self);
 
 void Vec_pFunc_remove_at(Vec_pFunc *self, int32_t i);
 
@@ -211,13 +211,13 @@ void Vec_pMatchCase_push(Vec_pMatchCase *self, MatchCase *item);
 
 MatchCase *Vec_pMatchCase_pop(Vec_pMatchCase *self);
 
-MatchCase *Vec_pMatchCase_get(Vec_pMatchCase *self, int32_t i);
+MatchCase *Vec_pMatchCase_get(const Vec_pMatchCase *self, int32_t i);
 
 void Vec_pMatchCase_set(Vec_pMatchCase *self, int32_t i, MatchCase *item);
 
-MatchCase *Vec_pMatchCase_last(Vec_pMatchCase *self);
+MatchCase *Vec_pMatchCase_last(const Vec_pMatchCase *self);
 
-int Vec_pMatchCase_is_empty(Vec_pMatchCase *self);
+int Vec_pMatchCase_is_empty(const Vec_pMatchCase *self);
 
 void Vec_pMatchCase_remove_at(Vec_pMatchCase *self, int32_t i);
 
@@ -241,13 +241,13 @@ void Vec_pchar_push(Vec_pchar *self, char *item);
 
 char *Vec_pchar_pop(Vec_pchar *self);
 
-char *Vec_pchar_get(Vec_pchar *self, int32_t i);
+char *Vec_pchar_get(const Vec_pchar *self, int32_t i);
 
 void Vec_pchar_set(Vec_pchar *self, int32_t i, char *item);
 
-char *Vec_pchar_last(Vec_pchar *self);
+char *Vec_pchar_last(const Vec_pchar *self);
 
-int Vec_pchar_is_empty(Vec_pchar *self);
+int Vec_pchar_is_empty(const Vec_pchar *self);
 
 void Vec_pchar_remove_at(Vec_pchar *self, int32_t i);
 
@@ -271,13 +271,13 @@ void Vec_Param_push(Vec_Param *self, Param item);
 
 Param Vec_Param_pop(Vec_Param *self);
 
-Param Vec_Param_get(Vec_Param *self, int32_t i);
+Param Vec_Param_get(const Vec_Param *self, int32_t i);
 
 void Vec_Param_set(Vec_Param *self, int32_t i, Param item);
 
-Param Vec_Param_last(Vec_Param *self);
+Param Vec_Param_last(const Vec_Param *self);
 
-int Vec_Param_is_empty(Vec_Param *self);
+int Vec_Param_is_empty(const Vec_Param *self);
 
 void Vec_Param_remove_at(Vec_Param *self, int32_t i);
 
@@ -301,13 +301,13 @@ void Vec_Field_push(Vec_Field *self, Field item);
 
 Field Vec_Field_pop(Vec_Field *self);
 
-Field Vec_Field_get(Vec_Field *self, int32_t i);
+Field Vec_Field_get(const Vec_Field *self, int32_t i);
 
 void Vec_Field_set(Vec_Field *self, int32_t i, Field item);
 
-Field Vec_Field_last(Vec_Field *self);
+Field Vec_Field_last(const Vec_Field *self);
 
-int Vec_Field_is_empty(Vec_Field *self);
+int Vec_Field_is_empty(const Vec_Field *self);
 
 void Vec_Field_remove_at(Vec_Field *self, int32_t i);
 
@@ -331,13 +331,13 @@ void Vec_EnumItem_push(Vec_EnumItem *self, EnumItem item);
 
 EnumItem Vec_EnumItem_pop(Vec_EnumItem *self);
 
-EnumItem Vec_EnumItem_get(Vec_EnumItem *self, int32_t i);
+EnumItem Vec_EnumItem_get(const Vec_EnumItem *self, int32_t i);
 
 void Vec_EnumItem_set(Vec_EnumItem *self, int32_t i, EnumItem item);
 
-EnumItem Vec_EnumItem_last(Vec_EnumItem *self);
+EnumItem Vec_EnumItem_last(const Vec_EnumItem *self);
 
-int Vec_EnumItem_is_empty(Vec_EnumItem *self);
+int Vec_EnumItem_is_empty(const Vec_EnumItem *self);
 
 void Vec_EnumItem_remove_at(Vec_EnumItem *self, int32_t i);
 

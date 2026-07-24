@@ -50,12 +50,15 @@ total_fail=0
 # usage: build_bin <src> <bin> <errfile> [extra cc flags...]
 build_bin() {
     local src=$1 bin=$2 err=$3; shift 3
+    # optional per-test compiler flags in <src-sans-ext>.flags
+    local xf="" base="${src%.*}"
+    [ -f "$base.flags" ] && xf=$(cat "$base.flags")
     if [ "$BACKEND" = qbe ]; then
-        $PLANGC --backend qbe "$src" -o "$bin.ssa" 2>"$err" &&
+        $PLANGC $xf --backend qbe "$src" -o "$bin.ssa" 2>"$err" &&
         $QBE "$bin.ssa" -o "$bin.s" 2>>"$err" &&
         $CC "$bin.s" -o "$bin" "$@" -lm 2>>"$err"
     else
-        $PLANGC $PFLAGS "$src" -o "$bin.c" 2>"$err" &&
+        $PLANGC $PFLAGS $xf "$src" -o "$bin.c" 2>"$err" &&
         $CC $CSTD -w "$bin.c" -o "$bin" "$@" -lm 2>>"$err"
     fi
 }
@@ -119,23 +122,28 @@ suite_modules() {
 
 suite_stl() {
     echo "== stl (header-only library) =="
-    local err=$OUT/stl_main.err ok=1 f
-    for f in stl/*.ph; do
-        # same mode as the test TU: mixing c99 headers with c89 TUs would
-        # conflict (uint64_t vs unsigned long long)
-        $PLANGC $PFLAGS "$f" -o "stl/$(basename "$f" .ph).h" 2>"$err" || ok=0
-    done
-    # output sits at tests/out/ so the emitted #include "../../stl/*.h" resolves
-    if [ $ok = 1 ] && build_bin tests/stl/main.p "$OUT/stl_main" "$err" \
+    # o repo NUNCA é tocado: os headers da stl vão para $OUT/stl e a TU de
+    # teste para $OUT/stlrun/tu — o #include "../../stl/x.h" emitido resolve
+    # para $OUT/stl (espelho do layout dos fontes dentro do workdir)
+    # --out-dir espelha a raiz dentro do workdir ($OUT/mirror): a TU sai em
+    # mirror/tests/stl/main.c e o include "../../stl/x.h" resolve em mirror/stl
+    local err=$OUT/stl_main.err ok=1 M=$OUT/mirror
+    $PLANGC $PFLAGS --out-dir "$M" stl/*.ph tests/stl/main.p 2>"$err" || ok=0
+    if [ "$BACKEND" = qbe ]; then
+        ok=1
+        $PLANGC --out-dir "$M" stl/*.ph 2>"$err" || ok=0
+        $PLANGC --backend qbe tests/stl/main.p -o "$M/stl_main.ssa" 2>>"$err" &&
+        $QBE "$M/stl_main.ssa" -o "$M/stl_main.s" 2>>"$err" &&
+        $CC "$M/stl_main.s" -o "$OUT/stl_main" -lm 2>>"$err" || ok=0
+    else
+        [ $ok = 1 ] && { $CC $CSTD -w "$M/tests/stl/main.c" -o "$OUT/stl_main" -lm 2>>"$err" || ok=0; }
+    fi
+    if [ $ok = 1 ] \
        && check_run "$OUT/stl_main" tests/stl/main.expected stl; then
         echo "   stl: ok"
     else
         [ -s "$err" ] && sed 's/^/       /' "$err" | head -3
         echo "   stl: FAILED"; total_fail=$((total_fail+1))
-    fi
-    # leave the repo's stl/*.h in default (c99) mode, whatever mode we tested in
-    if [ -n "$PFLAGS" ]; then
-        for f in stl/*.ph; do $PLANGC "$f" -o "stl/$(basename "$f" .ph).h" 2>/dev/null; done
     fi
 }
 
@@ -153,6 +161,139 @@ suite_psuite() {
     done
     echo "   p-suite: $pass ok, $fail failed (of $((pass+fail)))"
     total_fail=$((total_fail+fail))
+}
+
+suite_errors() {
+    echo "== errors (diagnostics: compilation MUST fail with the message) =="
+    local pass=0 fail=0 src name err
+    for src in tests/errors/*.p tests/errors/*.c; do
+        [ -f "$src" ] || continue
+        name=$(basename "$src"); name=${name%.*}; err=$OUT/errors_$name.err
+        # optional per-test extra flags (e.g. --pedantic) in <name>.flags
+        xflags=""; [ -f "tests/errors/$name.flags" ] && xflags=$(cat "tests/errors/$name.flags")
+        if $PLANGC $PFLAGS $xflags "$src" -o /dev/null 2>"$err"; then
+            echo "  FAIL $name (compiled; expected an error)"; fail=$((fail+1))
+        elif ! grep -qF "$(cat "tests/errors/$name.expected")" "$err"; then
+            echo "  FAIL $name (wrong message):"; sed 's/^/       /' "$err" | head -2
+            fail=$((fail+1))
+        else
+            pass=$((pass+1))
+        fi
+    done
+    echo "   errors: $pass ok, $fail failed"
+    total_fail=$((total_fail+fail))
+}
+
+# must-NOT-compile corpora: the compiler is expected to REJECT each file
+# (nonzero exit, no crash). Informational scoreboard — measures diagnostic
+# coverage of the C front end. Sources: tests/wacct (vendored, MIT) and, when
+# fetched via tests/fetch-external.sh, gcc.dg/noncompile + clang Sema/Parser.
+run_reject_dir() {
+    local label=$1 dir=$2 rej=0 acc=0 crash=0 f
+    [ -d "$dir" ] || return 0
+    while IFS= read -r f; do
+        # must-reject corpora model a MAX-CONFORMANCE compiler: promote all
+        # warnings and GNU extensions to errors (like clang -Werror -pedantic-errors)
+        timeout 5 $PLANGC -Werror -pedantic-errors "$f" -o /dev/null 2>/dev/null
+        local rc=$?
+        if [ $rc -eq 139 ] || [ $rc -eq 134 ]; then crash=$((crash+1))
+        elif [ $rc -ne 0 ]; then rej=$((rej+1))
+        else acc=$((acc+1)); fi
+    done < <(find "$dir" -name "*.c" | sort)
+    local tot=$((rej+acc+crash))
+    [ $tot -gt 0 ] && echo "   $label: rejected $rej/$tot (accepted $acc, crashed $crash)"
+}
+
+# wacct valid corpus: 600+ single-file C programs with expected exit codes
+# (tests/wacct/expected_results.json). Gating: any wrong compile/run fails.
+suite_wvalid() {
+    echo "== wacct-valid (C programs, expected exit codes) =="
+    local exp=$OUT/wvalid.tsv
+    mkdir -p "$OUT"/wvalid
+    python3 - > "$exp" <<'PYEOF'
+import json, os
+d = json.load(open("tests/wacct/expected_results.json"))
+p = json.load(open("tests/wacct/test_properties.json"))
+libs = p.get("libs", {}); alibs = p.get("assembly_libs", {})
+for k, v in d.items():
+    out = v.get("stdout", "").replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+    # companion sources: helper .c libs + platform assembly libs (_linux.s)
+    deps = list(libs.get(k, []))
+    for a in alibs.get(k, []):
+        deps.append(a + "_linux.s")
+    print(f"{k}\t{v.get('return_code', 0)}\t{';'.join(deps)}\t{out}")
+PYEOF
+    local pass=0 fail=0 skip=0 rel src bin want deps wanto got goto_ dep extras
+    while IFS=$'\t' read -r rel want deps wanto; do
+        src=tests/wacct/tests/$rel
+        [ -f "$src" ] || { skip=$((skip+1)); continue; }
+        case "$rel" in */libraries/*) skip=$((skip+1)); continue ;; esac
+        # framework-driver test: the harness injects its own main() and inspects
+        # the generated code (chapter-20 register allocation). If neither the
+        # test nor any companion lib defines main, it isn't runnable standalone.
+        local has_main=0
+        grep -q "main *(" "$src" && has_main=1
+        for dep in ${deps//;/ }; do
+            case "$dep" in *.c) grep -q "main *(" "tests/wacct/tests/$dep" 2>/dev/null && has_main=1 ;; esac
+        done
+        [ $has_main = 0 ] && { skip=$((skip+1)); continue; }
+        bin=$OUT/wvalid/$(echo "$rel" | tr '/' '_' | sed 's/\.c$//')
+        # companion libs: .c goes through the compiler too; .s straight to cc
+        extras=""
+        if [ -n "$deps" ]; then
+            local miss=0
+            for dep in ${deps//;/ }; do
+                local dsrc=tests/wacct/tests/$dep
+                [ -f "$dsrc" ] || { miss=1; break; }
+                case "$dep" in
+                    *.s) extras="$extras $dsrc" ;;
+                    *.c)
+                        local dout=$OUT/wvalid/$(echo "$dep" | tr '/' '_').lib.c
+                        $PLANGC $PFLAGS "$dsrc" -o "$dout" 2>/dev/null || { miss=1; break; }
+                        extras="$extras $dout" ;;
+                esac
+            done
+            [ $miss = 1 ] && { skip=$((skip+1)); continue; }
+        fi
+        if ! build_bin "$src" "$bin" "$bin.err" $extras; then
+            echo "  FAIL $rel (build)"; sed 's/^/       /' "$bin.err" | head -2; fail=$((fail+1)); continue
+        fi
+        ( cd "$OUT"/wvalid && timeout 10 "$ROOT/$bin" >"$ROOT/$bin.out" 2>/dev/null )
+        got=$?
+        goto_=$(sed -e 's/\\/\\\\/g' -e 's/\t/\\t/g' "$bin.out" | awk 'BEGIN{ORS="\\n"}{print}' | sed 's/\\n$//')
+        if [ "$got" != "$want" ]; then
+            echo "  FAIL $rel (exit $got, expected $want)"; fail=$((fail+1))
+        elif [ -n "$wanto" ] && [ "$goto_" != "$wanto" ]; then
+            echo "  FAIL $rel (stdout differs)"; fail=$((fail+1))
+        else
+            pass=$((pass+1))
+        fi
+    done < "$exp"
+    echo "   wacct-valid: $pass ok, $fail failed ($skip skipped: multi-file/absent)"
+    total_fail=$((total_fail+fail))
+}
+
+suite_cinvalid() {
+    echo "== c-invalid (must-reject scoreboards — informational) =="
+    local d rej=0 tot=0
+    # wacct: per-category tally (lex/parse/semantics/types/...)
+    for cat in invalid_lex invalid_parse invalid_semantics invalid_types invalid_declarations invalid_labels invalid_struct_tags; do
+        local files
+        files=$(find tests/wacct/tests -type d -name "$cat" 2>/dev/null)
+        [ -n "$files" ] || continue
+        local r=0 a=0 c=0 f rc
+        while IFS= read -r f; do
+            # max-conformance mode, like clang -Werror -pedantic-errors: the
+            # wacct reference compiler rejects all of these
+            timeout 5 $PLANGC -Werror -pedantic-errors "$f" -o /dev/null 2>/dev/null; rc=$?
+            if [ $rc -eq 139 ] || [ $rc -eq 134 ]; then c=$((c+1))
+            elif [ $rc -ne 0 ]; then r=$((r+1)); else a=$((a+1)); fi
+        done < <(find $files -name "*.c" | sort)
+        echo "   wacct/$cat: rejected $r/$((r+a+c)) (accepted $a, crashed $c)"
+    done
+    run_reject_dir "gcc.dg/noncompile" tests/external/gcc-noncompile
+    run_reject_dir "clang/Parser"      tests/external/clang-parser
+    run_reject_dir "clang/Sema"        tests/external/clang-sema
 }
 
 suite_csuite() {
@@ -174,7 +315,7 @@ suite_csuite() {
 }
 
 # ---------- main ----------
-suites=${*:-"cases modules stl p-suite c-suite"}
+suites=${*:-"cases modules stl p-suite errors c-suite"}
 echo "plangc test run — PLANGC=$PLANGC BACKEND=$BACKEND${STD:+ STD=$STD}"
 for s in $suites; do
     case $s in
@@ -182,8 +323,11 @@ for s in $suites; do
         modules)  suite_modules ;;
         stl)      suite_stl ;;
         p-suite)  suite_psuite ;;
+        errors)   suite_errors ;;
+        c-invalid) suite_cinvalid ;;
+        wacct-valid) suite_wvalid ;;
         c-suite)  suite_csuite ;;
-        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_csuite ;;
+        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_csuite ;;
         *) echo "unknown suite '$s' (cases|modules|stl|p-suite|c-suite|all)"; exit 2 ;;
     esac
 done

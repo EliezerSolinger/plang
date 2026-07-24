@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <string.h>
 #include "lexer.h"
@@ -23,13 +24,13 @@ void Vec_Token_push(Vec_Token *self, Token item);
 
 Token Vec_Token_pop(Vec_Token *self);
 
-Token Vec_Token_get(Vec_Token *self, int32_t i);
+Token Vec_Token_get(const Vec_Token *self, int32_t i);
 
 void Vec_Token_set(Vec_Token *self, int32_t i, Token item);
 
-Token Vec_Token_last(Vec_Token *self);
+Token Vec_Token_last(const Vec_Token *self);
 
-int Vec_Token_is_empty(Vec_Token *self);
+int Vec_Token_is_empty(const Vec_Token *self);
 
 void Vec_Token_remove_at(Vec_Token *self, int32_t i);
 
@@ -41,69 +42,69 @@ void Vec_Token_deinit(Vec_Token *self);
 
 
 void Vec_Token_init(Vec_Token *self) {
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 void Vec_Token_reserve(Vec_Token *self, int32_t n) {
-    if (n <= self->cap) {
+    if (n <= (*self).cap) {
         return;
     }
-    int32_t nc = (self->cap == 0 ? 8 : self->cap);
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
     while (nc < n) {
         nc *= 2;
     }
-    self->data = realloc(self->data, sizeof(Token) * (size_t)nc);
-    self->cap = nc;
+    (*self).data = realloc((*self).data, sizeof(Token) * (size_t)nc);
+    (*self).cap = nc;
 }
 
 void Vec_Token_push(Vec_Token *self, Token item) {
-    Vec_Token_reserve(self, self->len + 1);
-    self->data[self->len] = item;
-    self->len += 1;
+    Vec_Token_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
 }
 
 Token Vec_Token_pop(Vec_Token *self) {
-    self->len -= 1;
-    return self->data[self->len];
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
 }
 
-Token Vec_Token_get(Vec_Token *self, int32_t i) {
-    return self->data[i];
+Token Vec_Token_get(const Vec_Token *self, int32_t i) {
+    return (*self).data[i];
 }
 
 void Vec_Token_set(Vec_Token *self, int32_t i, Token item) {
-    self->data[i] = item;
+    (*self).data[i] = item;
 }
 
-Token Vec_Token_last(Vec_Token *self) {
-    return self->data[self->len - 1];
+Token Vec_Token_last(const Vec_Token *self) {
+    return (*self).data[(*self).len - 1];
 }
 
-int Vec_Token_is_empty(Vec_Token *self) {
-    return self->len == 0;
+int Vec_Token_is_empty(const Vec_Token *self) {
+    return (*self).len == 0;
 }
 
 void Vec_Token_remove_at(Vec_Token *self, int32_t i) {
-    memmove(&self->data[i], &self->data[i + 1], sizeof(Token) * (size_t)(self->len - i - 1));
-    self->len -= 1;
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Token) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
 }
 
 void Vec_Token_swap_remove(Vec_Token *self, int32_t i) {
-    self->len -= 1;
-    self->data[i] = self->data[self->len];
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
 }
 
 void Vec_Token_clear(Vec_Token *self) {
-    self->len = 0;
+    (*self).len = 0;
 }
 
 void Vec_Token_deinit(Vec_Token *self) {
-    free(self->data);
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 typedef enum { MAX_INDENT = 64 } LxLimit;
@@ -113,7 +114,7 @@ struct Keyword {
     TokKind kind;
 };
 
-const Keyword keywords[] = {{"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF}, {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE}, {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO}, {"match", TK_MATCH}, {"case", TK_CASE}, {"break", TK_BREAK}, {"continue", TK_CONTINUE}, {"goto", TK_GOTO}, {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION}, {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR}, {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE}, {"None", TK_NONE}, {"static", TK_STATIC}, {"inline", TK_INLINE}, {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT}, {"defer", TK_DEFER}, {"with", TK_WITH}, {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT}, {NULL, TK_EOF}};
+const Keyword keywords[35] = {{"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF}, {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE}, {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO}, {"match", TK_MATCH}, {"case", TK_CASE}, {"break", TK_BREAK}, {"continue", TK_CONTINUE}, {"goto", TK_GOTO}, {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION}, {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR}, {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE}, {"None", TK_NONE}, {"static", TK_STATIC}, {"inline", TK_INLINE}, {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT}, {"defer", TK_DEFER}, {"with", TK_WITH}, {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT}, {NULL, TK_EOF}};
 
 const char *tok_kind_name(TokKind k) {
     switch (k) {
@@ -597,7 +598,12 @@ static void Lx_lex_op(Lx *self) {
             break;
         }
         case ':': {
-            k = TK_COLON;
+            if (c1 == '=') {
+                k = TK_WALRUS;
+                len = 2;
+            } else {
+                k = TK_COLON;
+            }
             break;
         }
         case ';': {

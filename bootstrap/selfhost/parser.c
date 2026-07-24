@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <string.h>
 #include "parser.h"
@@ -310,6 +311,17 @@ static Expr *parse_primary(P *p) {
             if (pk1(p)->kind == TK_LBRACE) {
                 return parse_stmtexpr(p);
             }
+            if (pk1(p)->kind == TK_IDENT && pk2(p) != NULL && pk2(p)->kind == TK_WALRUS) {
+                adv(p);
+                const char *wname = adv(p)->text;
+                Pos wpos = adv(p)->pos;
+                Expr *w = ex_new(p->a, EX_WALRUS, wpos);
+                w->text = wname;
+                w->lhs = parse_expr(p);
+                expect(p, TK_RPAREN, "walrus expression");
+                w->parened = 1;
+                return w;
+            }
             adv(p);
             e = parse_expr(p);
             expect(p, TK_RPAREN, "parenthesized expression");
@@ -348,7 +360,35 @@ static Expr *parse_postfix(P *p) {
             Vec_pExpr_init(&args);
             if (!at(p, TK_RPAREN)) {
                 do {
-                    Vec_pExpr_push(&args, parse_expr(p));
+                    int32_t cbrk = PK_NONE;
+                    if (at(p, TK_IDENT) && (pk1(p)->kind == TK_IDENT || pk1(p)->kind == TK_STAR || pk1(p)->kind == TK_LPAREN)) {
+                        if (strcmp(pk(p)->text, "out") == 0) {
+                            cbrk = PK_OUT;
+                        } else if (strcmp(pk(p)->text, "ref") == 0) {
+                            cbrk = PK_REF;
+                        }
+                    } else if (at(p, TK_IN) && (pk1(p)->kind == TK_IDENT || pk1(p)->kind == TK_STAR || pk1(p)->kind == TK_LPAREN)) {
+                        cbrk = PK_IN;
+                    }
+                    if (cbrk != PK_NONE) {
+                        Pos opos = adv(p)->pos;
+                        Expr *oa = ex_new(p->a, EX_UNARY, opos);
+                        oa->op = TK_AMP;
+                        oa->lhs = parse_unary(p);
+                        oa->byref = cbrk;
+                        Vec_pExpr_push(&args, oa);
+                        continue;
+                    }
+                    if (at(p, TK_IDENT) && pk1(p)->kind == TK_ASSIGN) {
+                        Token *nt = adv(p);
+                        adv(p);
+                        Expr *na = ex_new(p->a, EX_DESIG, nt->pos);
+                        na->field = nt->text;
+                        na->lhs = parse_expr(p);
+                        Vec_pExpr_push(&args, na);
+                    } else {
+                        Vec_pExpr_push(&args, parse_expr(p));
+                    }
                 } while (accept(p, TK_COMMA));
             }
             expect(p, TK_RPAREN, "function call");
@@ -470,9 +510,40 @@ static Expr *parse_rel(P *p) {
 
 static Expr *parse_eq(P *p) {
     Expr *e = parse_rel(p);
-    while (at(p, TK_EQ) || at(p, TK_NE)) {
-        Token *op = adv(p);
-        e = bin(p, op->kind, op->pos, e, parse_rel(p));
+    while (1) {
+        if (at(p, TK_IDENT) && strcmp(pk(p)->text, "is") == 0) {
+            Pos ipos = adv(p)->pos;
+            int32_t iop = TK_IS;
+            if (accept(p, TK_NOT)) {
+                iop = TK_ISNOT;
+            }
+            e = bin(p, iop, ipos, e, parse_rel(p));
+            continue;
+        }
+        if (at(p, TK_EQ) || at(p, TK_NE)) {
+            Token *op = adv(p);
+            e = bin(p, op->kind, op->pos, e, parse_rel(p));
+            continue;
+        }
+        if (at(p, TK_IN)) {
+            Pos npos = adv(p)->pos;
+            Expr *ie = ex_new(p->a, EX_IN, npos);
+            ie->lhs = e;
+            ie->rhs = (at(p, TK_LBRACE) ? parse_initializer(p) : parse_rel(p));
+            e = ie;
+            continue;
+        }
+        if (at(p, TK_NOT) && pk1(p) != NULL && pk1(p)->kind == TK_IN) {
+            Pos nnpos = adv(p)->pos;
+            adv(p);
+            Expr *ne = ex_new(p->a, EX_IN, nnpos);
+            ne->lhs = e;
+            ne->rhs = (at(p, TK_LBRACE) ? parse_initializer(p) : parse_rel(p));
+            ne->op = TK_NOT;
+            e = ne;
+            continue;
+        }
+        break;
     }
     return e;
 }
@@ -756,11 +827,21 @@ static Stmt *parse_for(P *p) {
         s->var2 = expect(p, TK_IDENT, "for (second loop variable)")->text;
     }
     expect(p, TK_IN, "for (expected 'in')");
+    if (!(at(p, TK_IDENT) && (strcmp(pk(p)->text, "range") == 0 || strcmp(pk(p)->text, "enumerate") == 0) && pk1(p)->kind == TK_LPAREN)) {
+        if (s->var2 != NULL) {
+            fatal_at(p->file, pk(p)->pos, "iterating values takes ONE variable (`for v in xs`); use enumerate for index+value");
+        }
+        s->var2 = s->var;
+        s->var = "";
+        s->from = NULL;
+        s->to = parse_expr(p);
+        s->step = NULL;
+        expect(p, TK_COLON, "for");
+        s->body = parse_block(p);
+        return s;
+    }
     Token *r = expect(p, TK_IDENT, "for (expected 'range' or 'enumerate')");
     int is_enum = strcmp(r->text, "enumerate") == 0;
-    if (!is_enum && strcmp(r->text, "range") != 0) {
-        fatal_at(p->file, r->pos, "for only accepts 'range(...)' or 'enumerate(...)'");
-    }
     expect(p, TK_LPAREN, r->text);
     Expr *a1 = parse_expr(p);
     Expr *a2 = NULL;
@@ -859,6 +940,46 @@ static Stmt *parse_with(P *p) {
 
 static Stmt *parse_stmt(P *p) {
     Token *t = pk(p);
+    if (t->kind == TK_IDENT && strcmp(t->text, "pass") == 0 && (pk1(p)->kind == TK_NEWLINE || pk1(p)->kind == TK_SEMI)) {
+        adv(p);
+        if (at(p, TK_NEWLINE)) {
+            adv(p);
+        }
+        return st_new(p->a, ST_PASS, t->pos);
+    }
+    if (t->kind == TK_IDENT && pk1(p)->kind == TK_IDENT && (strcmp(t->text, "global") == 0 || strcmp(t->text, "nonlocal") == 0)) {
+        StmtKind kw = (t->text[0] == 'g' ? ST_GLOBAL : ST_NONLOCAL);
+        adv(p);
+        Stmt *first = NULL;
+        Vec_pStmt extra;
+        Vec_pStmt_init(&extra);
+        do {
+            Token *nm = expect(p, TK_IDENT, "global/nonlocal");
+            Stmt *gs = st_new(p->a, kw, nm->pos);
+            gs->name = nm->text;
+            if (first == NULL) {
+                first = gs;
+            } else {
+                Vec_pStmt_push(&extra, gs);
+            }
+        } while (accept(p, TK_COMMA));
+        expect(p, TK_NEWLINE, "global/nonlocal");
+        if (extra.len == 0) {
+            return first;
+        }
+        Stmt *blk = st_new(p->a, ST_BLOCK, t->pos);
+        Block *bb = arena_alloc(p->a, sizeof(Block));
+        Stmt **all = arena_alloc(p->a, (size_t)(extra.len + 1) * sizeof(*all));
+        all[0] = first;
+        size_t i;
+        for (i = 0; i < extra.len; i += 1) {
+            all[i + 1] = Vec_pStmt_get(&extra, i);
+        }
+        bb->stmts = all;
+        bb->n = extra.len + 1;
+        blk->body = bb;
+        return blk;
+    }
     if (t->kind == TK_IDENT && pk1(p)->kind == TK_COLON) {
         if (pk2(p)->kind == TK_NEWLINE) {
             Stmt *s = st_new(p->a, ST_LABEL, t->pos);
@@ -986,15 +1107,15 @@ static Func *parse_func(P *p, int is_static, int is_inline, const char *owner) {
     }
     Func *f = arena_alloc(p->a, sizeof(Func));
     {
-        Func *__with_864_5 = f;
-        __with_864_5->pos = pos;
-        __with_864_5->name = name->text;
-        __with_864_5->owner = owner;
-        __with_864_5->cname = (owner != NULL ? arena_printf(p->a, "%s_%s", owner, name->text) : name->text);
-        __with_864_5->is_static = is_static;
-        __with_864_5->is_inline = is_inline;
-        __with_864_5->tparams = ftparams.data;
-        __with_864_5->ntparams = ftparams.len;
+        Func *__with_981_5 = f;
+        __with_981_5->pos = pos;
+        __with_981_5->name = name->text;
+        __with_981_5->owner = owner;
+        __with_981_5->cname = (owner != NULL ? arena_printf(p->a, "%s_%s", owner, name->text) : name->text);
+        __with_981_5->is_static = is_static;
+        __with_981_5->is_inline = is_inline;
+        __with_981_5->tparams = ftparams.data;
+        __with_981_5->ntparams = ftparams.len;
     }
     expect(p, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1009,9 +1130,37 @@ static Func *parse_func(P *p, int is_static, int is_inline, const char *owner) {
                 f->is_varargs = 1;
                 break;
             }
+            int32_t brk = PK_NONE;
+            if (at(p, TK_IDENT) && pk1(p)->kind == TK_IDENT) {
+                if (strcmp(pk(p)->text, "out") == 0) {
+                    adv(p);
+                    brk = PK_OUT;
+                } else if (strcmp(pk(p)->text, "ref") == 0) {
+                    adv(p);
+                    brk = PK_REF;
+                }
+            } else if (at(p, TK_IN) && pk1(p)->kind == TK_IDENT) {
+                adv(p);
+                brk = PK_IN;
+            }
             Token *pn = expect(p, TK_IDENT, "parameter name");
             expect(p, TK_COLON, "parameter (missing ': type')");
             Param prm = {pn->text, parse_type(p), pn->pos};
+            if (brk != PK_NONE) {
+                if (brk == PK_IN) {
+                    prm.type->is_const = 1;
+                }
+                prm.type = ty_ptr(p->a, prm.type);
+                prm.byref = brk;
+            }
+            if (accept(p, TK_ASSIGN)) {
+                if (brk != PK_NONE) {
+                    fatal_at(p->file, pn->pos, "an out/ref/in parameter cannot have a default value");
+                }
+                prm.dflt = parse_expr(p);
+            } else if (!Vec_Param_is_empty(&params) && params.data[params.len - 1].dflt != NULL) {
+                fatal_at(p->file, pn->pos, "parameter '%s' needs a default value (it follows a defaulted parameter)", pn->text);
+            }
             Vec_Param_push(&params, prm);
         } while (accept(p, TK_COMMA));
     }
@@ -1095,13 +1244,13 @@ static Decl *parse_struct_or_union(P *p, int is_union) {
     }
     expect(p, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_963_5 = d;
-        __with_963_5->fields = fields.data;
-        __with_963_5->nfields = fields.len;
-        __with_963_5->methods = methods.data;
-        __with_963_5->nmethods = methods.len;
-        __with_963_5->tparams = tparams.data;
-        __with_963_5->ntparams = tparams.len;
+        Decl *__with_1104_5 = d;
+        __with_1104_5->fields = fields.data;
+        __with_1104_5->nfields = fields.len;
+        __with_1104_5->methods = methods.data;
+        __with_1104_5->nmethods = methods.len;
+        __with_1104_5->tparams = tparams.data;
+        __with_1104_5->ntparams = tparams.len;
     }
     return d;
 }
@@ -1188,18 +1337,18 @@ static Decl *parse_import(P *p) {
     d->is_include = 0;
     d->pos = pos;
     if (at(p, TK_HEADER)) {
-        d->import_system = 1;
-        d->import_path = adv(p)->text;
+        fatal_at(p->file, pk(p)->pos, "'import <%s>' was removed: C headers use `include <%s>` (import is for P modules: import \"x.ph\")", pk(p)->text, pk(p)->text);
     } else if (at(p, TK_STRING)) {
         const char *raw = adv(p)->text;
         size_t len = strlen(raw);
         d->import_path = arena_strndup(p->a, raw + 1, (len >= 2 ? len - 2 : 0));
         d->import_system = 0;
-    } else if (at(p, TK_IDENT)) {
-        d->import_system = 1;
-        d->import_path = arena_printf(p->a, "%s.h", adv(p)->text);
+        size_t pl = strlen(d->import_path);
+        if (pl < 3 || strcmp(d->import_path + pl - 3, ".ph") != 0) {
+            fatal_at(p->file, d->pos, "import \"%s\": import takes a P header (.ph); for a C header use `include \"%s\"`", d->import_path, d->import_path);
+        }
     } else {
-        fatal_at(p->file, pk(p)->pos, "import expects <header>, \"file\" or a module name");
+        fatal_at(p->file, pk(p)->pos, "import expects a P header: import \"module.ph\" (C headers use include <...>)");
     }
     expect(p, TK_NEWLINE, "import");
     return d;
@@ -1288,18 +1437,18 @@ static Decl *parse_top(P *p) {
             Token *name = expect(p, TK_IDENT, "global declaration");
             Decl *d2 = arena_alloc(p->a, sizeof(Decl));
             {
-                Decl *__with_1134_13 = d2;
-                __with_1134_13->kind = DL_VAR;
-                __with_1134_13->pos = name->pos;
-                __with_1134_13->name = name->text;
-                __with_1134_13->is_const = is_const;
-                __with_1134_13->is_extern = is_extern;
+                Decl *__with_1275_13 = d2;
+                __with_1275_13->kind = DL_VAR;
+                __with_1275_13->pos = name->pos;
+                __with_1275_13->name = name->text;
+                __with_1275_13->is_const = is_const;
+                __with_1275_13->is_extern = is_extern;
                 if (accept(p, TK_COLON)) {
-                    __with_1134_13->type = parse_type(p);
+                    __with_1275_13->type = parse_type(p);
                 }
                 if (accept(p, TK_ASSIGN)) {
-                    __with_1134_13->init = parse_initializer(p);
-                } else if (__with_1134_13->type == NULL) {
+                    __with_1275_13->init = parse_initializer(p);
+                } else if (__with_1275_13->type == NULL) {
                     fatal_at(p->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(p->file, name->pos, "const requires a value");

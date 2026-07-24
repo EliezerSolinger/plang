@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <string.h>
 #include <stdlib.h>
@@ -15,6 +16,8 @@ typedef struct StrMap_pchar StrMap_pchar;
 typedef struct CTok CTok;
 typedef struct Vec_CTok Vec_CTok;
 typedef struct Cx Cx;
+typedef struct CTag CTag;
+typedef struct Vec_CTag Vec_CTag;
 typedef struct Cp Cp;
 
 struct StrMap_pType {
@@ -32,7 +35,7 @@ struct StrMap_pType {
 
 void StrMap_pType_init(StrMap_pType *self);
 
-int32_t StrMap_pType_find_slot(StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrMap_pType_find_slot(const StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrMap_pType_rehash(StrMap_pType *self, int32_t newcap);
 
@@ -40,11 +43,11 @@ void StrMap_pType_grow_entries(StrMap_pType *self);
 
 void StrMap_pType_put(StrMap_pType *self, const char *key, Type *value);
 
-int StrMap_pType_get(StrMap_pType *self, const char *key, Type **out);
+int StrMap_pType_get(const StrMap_pType *self, const char *key, Type **out);
 
-Type *StrMap_pType_get_or(StrMap_pType *self, const char *key, Type *fallback);
+Type *StrMap_pType_get_or(const StrMap_pType *self, const char *key, Type *fallback);
 
-int StrMap_pType_has(StrMap_pType *self, const char *key);
+int StrMap_pType_has(const StrMap_pType *self, const char *key);
 
 int StrMap_pType_remove(StrMap_pType *self, const char *key);
 
@@ -65,7 +68,7 @@ struct StrMap_i64 {
 
 void StrMap_i64_init(StrMap_i64 *self);
 
-int32_t StrMap_i64_find_slot(StrMap_i64 *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrMap_i64_find_slot(const StrMap_i64 *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrMap_i64_rehash(StrMap_i64 *self, int32_t newcap);
 
@@ -73,11 +76,11 @@ void StrMap_i64_grow_entries(StrMap_i64 *self);
 
 void StrMap_i64_put(StrMap_i64 *self, const char *key, int64_t value);
 
-int StrMap_i64_get(StrMap_i64 *self, const char *key, int64_t *out);
+int StrMap_i64_get(const StrMap_i64 *self, const char *key, int64_t *out);
 
-int64_t StrMap_i64_get_or(StrMap_i64 *self, const char *key, int64_t fallback);
+int64_t StrMap_i64_get_or(const StrMap_i64 *self, const char *key, int64_t fallback);
 
-int StrMap_i64_has(StrMap_i64 *self, const char *key);
+int StrMap_i64_has(const StrMap_i64 *self, const char *key);
 
 int StrMap_i64_remove(StrMap_i64 *self, const char *key);
 
@@ -98,7 +101,7 @@ struct StrMap_pchar {
 
 void StrMap_pchar_init(StrMap_pchar *self);
 
-int32_t StrMap_pchar_find_slot(StrMap_pchar *self, const char *key, uint64_t h, int32_t *out_entry);
+int32_t StrMap_pchar_find_slot(const StrMap_pchar *self, const char *key, uint64_t h, int32_t *out_entry);
 
 void StrMap_pchar_rehash(StrMap_pchar *self, int32_t newcap);
 
@@ -106,11 +109,11 @@ void StrMap_pchar_grow_entries(StrMap_pchar *self);
 
 void StrMap_pchar_put(StrMap_pchar *self, const char *key, char *value);
 
-int StrMap_pchar_get(StrMap_pchar *self, const char *key, char **out);
+int StrMap_pchar_get(const StrMap_pchar *self, const char *key, char **out);
 
-char *StrMap_pchar_get_or(StrMap_pchar *self, const char *key, char *fallback);
+char *StrMap_pchar_get_or(const StrMap_pchar *self, const char *key, char *fallback);
 
-int StrMap_pchar_has(StrMap_pchar *self, const char *key);
+int StrMap_pchar_has(const StrMap_pchar *self, const char *key);
 
 int StrMap_pchar_remove(StrMap_pchar *self, const char *key);
 
@@ -118,15 +121,15 @@ void StrMap_pchar_deinit(StrMap_pchar *self);
 
 
 void StrMap_pchar_init(StrMap_pchar *self) {
-    memset(self, 0, sizeof(*self));
+    memset(& *self, 0, sizeof(*self));
 }
 
-int32_t StrMap_pchar_find_slot(StrMap_pchar *self, const char *key, uint64_t h, int32_t *out_entry) {
-    int32_t mask = self->icap - 1;
+int32_t StrMap_pchar_find_slot(const StrMap_pchar *self, const char *key, uint64_t h, int32_t *out_entry) {
+    int32_t mask = (*self).icap - 1;
     int32_t slot = (int32_t)(h & (uint64_t)mask);
     int32_t first_tomb = -1;
     while (1) {
-        int32_t idx = self->indices[slot];
+        int32_t idx = (*self).indices[slot];
         if (idx == -1) {
             *out_entry = -1;
             return (first_tomb != -1 ? first_tomb : slot);
@@ -135,7 +138,7 @@ int32_t StrMap_pchar_find_slot(StrMap_pchar *self, const char *key, uint64_t h, 
             if (first_tomb == -1) {
                 first_tomb = slot;
             }
-        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
+        } else if (!(*self).dead[idx] && (*self).hashes[idx] == h && strcmp((*self).keys[idx], key) == 0) {
             *out_entry = idx;
             return slot;
         }
@@ -146,135 +149,135 @@ int32_t StrMap_pchar_find_slot(StrMap_pchar *self, const char *key, uint64_t h, 
 void StrMap_pchar_rehash(StrMap_pchar *self, int32_t newcap) {
     int32_t w = 0;
     int32_t r;
-    for (r = 0; r < self->elen; r += 1) {
-        if (!self->dead[r]) {
+    for (r = 0; r < (*self).elen; r += 1) {
+        if (!(*self).dead[r]) {
             if (w != r) {
-                self->hashes[w] = self->hashes[r];
-                self->keys[w] = self->keys[r];
-                self->vals[w] = self->vals[r];
+                (*self).hashes[w] = (*self).hashes[r];
+                (*self).keys[w] = (*self).keys[r];
+                (*self).vals[w] = (*self).vals[r];
             }
-            self->dead[w] = 0;
+            (*self).dead[w] = 0;
             w += 1;
         }
     }
-    self->elen = w;
-    self->tombs = 0;
-    free(self->indices);
-    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
-    self->icap = newcap;
+    (*self).elen = w;
+    (*self).tombs = 0;
+    free((*self).indices);
+    (*self).indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    (*self).icap = newcap;
     int32_t i;
     for (i = 0; i < newcap; i += 1) {
-        self->indices[i] = -1;
+        (*self).indices[i] = -1;
     }
     int32_t mask = newcap - 1;
-    for (i = 0; i < self->elen; i += 1) {
-        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
-        while (self->indices[slot] != -1) {
+    for (i = 0; i < (*self).elen; i += 1) {
+        int32_t slot = (int32_t)((*self).hashes[i] & (uint64_t)mask);
+        while ((*self).indices[slot] != -1) {
             slot = (slot + 1) & mask;
         }
-        self->indices[slot] = i;
+        (*self).indices[slot] = i;
     }
 }
 
 void StrMap_pchar_grow_entries(StrMap_pchar *self) {
-    if (self->elen < self->ecap) {
+    if ((*self).elen < (*self).ecap) {
         return;
     }
-    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
-    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
-    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
-    self->vals = realloc(self->vals, sizeof(char *) * (size_t)nc);
-    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
-    self->ecap = nc;
+    int32_t nc = ((*self).ecap == 0 ? 8 : (*self).ecap * 2);
+    (*self).hashes = realloc((*self).hashes, sizeof(uint64_t) * (size_t)nc);
+    (*self).keys = realloc((*self).keys, sizeof((*self).keys[0]) * (size_t)nc);
+    (*self).vals = realloc((*self).vals, sizeof(char *) * (size_t)nc);
+    (*self).dead = realloc((*self).dead, sizeof(int) * (size_t)nc);
+    (*self).ecap = nc;
 }
 
 void StrMap_pchar_put(StrMap_pchar *self, const char *key, char *value) {
-    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
-        StrMap_pchar_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
+    if ((*self).icap == 0 || ((*self).size + (*self).tombs + 1) * 3 >= (*self).icap * 2) {
+        StrMap_pchar_rehash(& *self, ((*self).icap == 0 ? 8 : (*self).icap * 2));
     }
     uint64_t h = hash_cstr(key);
     int32_t entry = -1;
-    int32_t slot = StrMap_pchar_find_slot(self, key, h, &entry);
+    int32_t slot = StrMap_pchar_find_slot(& *self, key, h, &entry);
     if (entry >= 0) {
-        self->vals[entry] = value;
+        (*self).vals[entry] = value;
         return;
     }
-    StrMap_pchar_grow_entries(self);
+    StrMap_pchar_grow_entries(& *self);
     size_t n = strlen(key) + 1;
     char *kcopy = malloc(n);
     memcpy(kcopy, key, n);
-    int32_t e = self->elen;
-    self->hashes[e] = h;
-    self->keys[e] = kcopy;
-    self->vals[e] = value;
-    self->dead[e] = 0;
-    self->elen += 1;
-    if (self->indices[slot] == -2) {
-        self->tombs -= 1;
+    int32_t e = (*self).elen;
+    (*self).hashes[e] = h;
+    (*self).keys[e] = kcopy;
+    (*self).vals[e] = value;
+    (*self).dead[e] = 0;
+    (*self).elen += 1;
+    if ((*self).indices[slot] == -2) {
+        (*self).tombs -= 1;
     }
-    self->indices[slot] = e;
-    self->size += 1;
+    (*self).indices[slot] = e;
+    (*self).size += 1;
 }
 
-int StrMap_pchar_get(StrMap_pchar *self, const char *key, char **out) {
-    if (self->size == 0) {
+int StrMap_pchar_get(const StrMap_pchar *self, const char *key, char **out) {
+    if ((*self).size == 0) {
         return 0;
     }
     int32_t entry = -1;
-    StrMap_pchar_find_slot(self, key, hash_cstr(key), &entry);
+    StrMap_pchar_find_slot(& *self, key, hash_cstr(key), &entry);
     if (entry < 0) {
         return 0;
     }
-    *out = self->vals[entry];
+    *out = (*self).vals[entry];
     return 1;
 }
 
-char *StrMap_pchar_get_or(StrMap_pchar *self, const char *key, char *fallback) {
+char *StrMap_pchar_get_or(const StrMap_pchar *self, const char *key, char *fallback) {
     char *v = fallback;
-    StrMap_pchar_get(self, key, &v);
+    StrMap_pchar_get(& *self, key, &v);
     return v;
 }
 
-int StrMap_pchar_has(StrMap_pchar *self, const char *key) {
+int StrMap_pchar_has(const StrMap_pchar *self, const char *key) {
     int32_t entry = -1;
-    if (self->size == 0) {
+    if ((*self).size == 0) {
         return 0;
     }
-    StrMap_pchar_find_slot(self, key, hash_cstr(key), &entry);
+    StrMap_pchar_find_slot(& *self, key, hash_cstr(key), &entry);
     return entry >= 0;
 }
 
 int StrMap_pchar_remove(StrMap_pchar *self, const char *key) {
-    if (self->size == 0) {
+    if ((*self).size == 0) {
         return 0;
     }
     int32_t entry = -1;
-    int32_t slot = StrMap_pchar_find_slot(self, key, hash_cstr(key), &entry);
+    int32_t slot = StrMap_pchar_find_slot(& *self, key, hash_cstr(key), &entry);
     if (entry < 0) {
         return 0;
     }
-    free(self->keys[entry]);
-    self->keys[entry] = NULL;
-    self->dead[entry] = 1;
-    self->indices[slot] = -2;
-    self->size -= 1;
-    self->tombs += 1;
+    free((*self).keys[entry]);
+    (*self).keys[entry] = NULL;
+    (*self).dead[entry] = 1;
+    (*self).indices[slot] = -2;
+    (*self).size -= 1;
+    (*self).tombs += 1;
     return 1;
 }
 
 void StrMap_pchar_deinit(StrMap_pchar *self) {
     int32_t i;
-    for (i = 0; i < self->elen; i += 1) {
-        if (!self->dead[i]) {
-            free(self->keys[i]);
+    for (i = 0; i < (*self).elen; i += 1) {
+        if (!(*self).dead[i]) {
+            free((*self).keys[i]);
         }
     }
-    free(self->indices);
-    free(self->hashes);
-    free(self->keys);
-    free(self->vals);
-    free(self->dead);
-    memset(self, 0, sizeof(*self));
+    free((*self).indices);
+    free((*self).hashes);
+    free((*self).keys);
+    free((*self).vals);
+    free((*self).dead);
+    memset(& *self, 0, sizeof(*self));
 }
 
 typedef enum { CT_EOF = 0, CT_ID, CT_NUM, CT_STR, CT_CHAR, CT_PUNCT } CtKind;
@@ -284,6 +287,10 @@ int is_alpha_(char c);
 int is_alnum_(char c);
 
 int is_num_cont(char c);
+
+int is_hex_digit(char c);
+
+const char *c_num_error(const char *t);
 
 int32_t word_count(const char *s, const char *w);
 
@@ -309,13 +316,13 @@ void Vec_CTok_push(Vec_CTok *self, CTok item);
 
 CTok Vec_CTok_pop(Vec_CTok *self);
 
-CTok Vec_CTok_get(Vec_CTok *self, int32_t i);
+CTok Vec_CTok_get(const Vec_CTok *self, int32_t i);
 
 void Vec_CTok_set(Vec_CTok *self, int32_t i, CTok item);
 
-CTok Vec_CTok_last(Vec_CTok *self);
+CTok Vec_CTok_last(const Vec_CTok *self);
 
-int Vec_CTok_is_empty(Vec_CTok *self);
+int Vec_CTok_is_empty(const Vec_CTok *self);
 
 void Vec_CTok_remove_at(Vec_CTok *self, int32_t i);
 
@@ -327,69 +334,76 @@ void Vec_CTok_deinit(Vec_CTok *self);
 
 
 void Vec_CTok_init(Vec_CTok *self) {
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
 }
 
 void Vec_CTok_reserve(Vec_CTok *self, int32_t n) {
-    if (n <= self->cap) {
+    if (n <= (*self).cap) {
         return;
     }
-    int32_t nc = (self->cap == 0 ? 8 : self->cap);
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
     while (nc < n) {
         nc *= 2;
     }
-    self->data = realloc(self->data, sizeof(CTok) * (size_t)nc);
-    self->cap = nc;
+    (*self).data = realloc((*self).data, sizeof(CTok) * (size_t)nc);
+    (*self).cap = nc;
 }
 
 void Vec_CTok_push(Vec_CTok *self, CTok item) {
-    Vec_CTok_reserve(self, self->len + 1);
-    self->data[self->len] = item;
-    self->len += 1;
+    Vec_CTok_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
 }
 
 CTok Vec_CTok_pop(Vec_CTok *self) {
-    self->len -= 1;
-    return self->data[self->len];
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
 }
 
-CTok Vec_CTok_get(Vec_CTok *self, int32_t i) {
-    return self->data[i];
+CTok Vec_CTok_get(const Vec_CTok *self, int32_t i) {
+    return (*self).data[i];
 }
 
 void Vec_CTok_set(Vec_CTok *self, int32_t i, CTok item) {
-    self->data[i] = item;
+    (*self).data[i] = item;
 }
 
-CTok Vec_CTok_last(Vec_CTok *self) {
-    return self->data[self->len - 1];
+CTok Vec_CTok_last(const Vec_CTok *self) {
+    return (*self).data[(*self).len - 1];
 }
 
-int Vec_CTok_is_empty(Vec_CTok *self) {
-    return self->len == 0;
+int Vec_CTok_is_empty(const Vec_CTok *self) {
+    return (*self).len == 0;
 }
 
 void Vec_CTok_remove_at(Vec_CTok *self, int32_t i) {
-    memmove(&self->data[i], &self->data[i + 1], sizeof(CTok) * (size_t)(self->len - i - 1));
-    self->len -= 1;
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(CTok) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
 }
 
 void Vec_CTok_swap_remove(Vec_CTok *self, int32_t i) {
-    self->len -= 1;
-    self->data[i] = self->data[self->len];
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
 }
 
 void Vec_CTok_clear(Vec_CTok *self) {
-    self->len = 0;
+    (*self).len = 0;
 }
 
 void Vec_CTok_deinit(Vec_CTok *self) {
-    free(self->data);
-    self->data = NULL;
-    self->len = 0;
-    self->cap = 0;
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
+}
+
+static int is_c_escape(char e) {
+    if (e >= '0' && e <= '7') {
+        return 1;
+    }
+    return e == 'n' || e == 't' || e == 'r' || e == 'a' || e == 'b' || e == 'f' || e == 'v' || e == 'x' || e == 'u' || e == 'U' || e == 'e' || e == '\'' || e == '"' || e == '?' || e == '\\' || e == '\n';
 }
 
 struct Cx {
@@ -401,6 +415,7 @@ struct Cx {
     int32_t col;
     Vec_CTok toks;
     Arena *a;
+    int strict;
 };
 
 static void Cx_lex_punct(Cx *self, Pos pos);
@@ -486,7 +501,7 @@ static void Cx_tokenize(Cx *self) {
             Cx_push(self, CT_ID, pos, Cx_slice(self, start));
             continue;
         }
-        if (c >= '0' && c <= '9') {
+        if ((c >= '0' && c <= '9') || (c == '.' && Cx_peekc(self, 1) >= '0' && Cx_peekc(self, 1) <= '9')) {
             size_t start2 = self->i;
             while (self->i < self->n && is_num_cont(self->s[self->i])) {
                 char ch = self->s[self->i];
@@ -495,15 +510,26 @@ static void Cx_tokenize(Cx *self) {
                     Cx_adv(self);
                 }
             }
-            Cx_push(self, CT_NUM, pos, Cx_slice(self, start2));
+            const char *ntxt = Cx_slice(self, start2);
+            const char *nerr = c_num_error(ntxt);
+            if (nerr != NULL) {
+                fatal_at(self->file, pos, "malformed number constant '%s': %s", ntxt, nerr);
+            }
+            Cx_push(self, CT_NUM, pos, ntxt);
             continue;
         }
         if (c == '"') {
             size_t start3 = self->i;
             Cx_adv(self);
             while (self->i < self->n && self->s[self->i] != '"') {
+                if (self->strict && self->s[self->i] == '\n') {
+                    fatal_at(self->file, pos, "newline in string literal (missing closing '\"')");
+                }
                 if (self->s[self->i] == '\\') {
                     Cx_adv(self);
+                    if (self->strict && !is_c_escape(self->s[self->i])) {
+                        fatal_at(self->file, pos, "invalid escape sequence '\\%c' in string literal", self->s[self->i]);
+                    }
                 }
                 Cx_adv(self);
             }
@@ -515,8 +541,14 @@ static void Cx_tokenize(Cx *self) {
             size_t start4 = self->i;
             Cx_adv(self);
             while (self->i < self->n && self->s[self->i] != '\'') {
+                if (self->strict && self->s[self->i] == '\n') {
+                    fatal_at(self->file, pos, "newline in character constant");
+                }
                 if (self->s[self->i] == '\\') {
                     Cx_adv(self);
+                    if (self->strict && !is_c_escape(self->s[self->i])) {
+                        fatal_at(self->file, pos, "invalid escape sequence '\\%c' in character constant", self->s[self->i]);
+                    }
                 }
                 Cx_adv(self);
             }
@@ -600,7 +632,113 @@ int is_alnum_(char c) {
 }
 
 int is_num_cont(char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == 'x' || c == 'X' || c == '.' || c == 'u' || c == 'U' || c == 'l' || c == 'L' || c == 'p' || c == 'P';
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || (c == 'x' || c == 'X' || c == '.' || c == 'u' || c == 'U' || c == 'l' || c == 'L' || c == 'p' || c == 'P');
+}
+
+int is_hex_digit(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+const char *c_num_error(const char *t) {
+    int32_t i = 0;
+    int hex = t[0] == '0' && (t[1] == 'x' || t[1] == 'X');
+    int isflt = 0;
+    if (hex) {
+        i = 2;
+        int nd = 0;
+        while (is_hex_digit(t[i])) {
+            i += 1;
+            nd += 1;
+        }
+        if (t[i] == '.') {
+            isflt = 1;
+            i += 1;
+            while (is_hex_digit(t[i])) {
+                i += 1;
+                nd += 1;
+            }
+        }
+        if (nd == 0) {
+            return "hex constant needs at least one digit";
+        }
+        if (t[i] == 'p' || t[i] == 'P') {
+            isflt = 1;
+            i += 1;
+            if (t[i] == '+' || t[i] == '-') {
+                i += 1;
+            }
+            if (!(t[i] >= '0' && t[i] <= '9')) {
+                return "hex-float exponent needs at least one digit";
+            }
+            while (t[i] >= '0' && t[i] <= '9') {
+                i += 1;
+            }
+        } else if (isflt) {
+            return "hex float requires a 'p' exponent";
+        }
+    } else {
+        int oct_ = t[0] == '0';
+        int bad8 = 0;
+        while (t[i] >= '0' && t[i] <= '9') {
+            if (t[i] > '7') {
+                bad8 = 1;
+            }
+            i += 1;
+        }
+        if (t[i] == '.') {
+            isflt = 1;
+            i += 1;
+            while (t[i] >= '0' && t[i] <= '9') {
+                i += 1;
+            }
+        }
+        if (t[i] == 'e' || t[i] == 'E') {
+            isflt = 1;
+            i += 1;
+            if (t[i] == '+' || t[i] == '-') {
+                i += 1;
+            }
+            if (!(t[i] >= '0' && t[i] <= '9')) {
+                return "exponent needs at least one digit";
+            }
+            while (t[i] >= '0' && t[i] <= '9') {
+                i += 1;
+            }
+        }
+        if (oct_ && bad8 && !isflt) {
+            return "invalid digit in octal constant (digits must be 0-7)";
+        }
+    }
+    if (isflt) {
+        if (t[i] == 'f' || t[i] == 'F' || t[i] == 'l' || t[i] == 'L') {
+            i += 1;
+        }
+    } else {
+        int us = 0;
+        int ls = 0;
+        while (t[i] != '\0') {
+            if ((t[i] == 'u' || t[i] == 'U') && us == 0) {
+                us = 1;
+                i += 1;
+            } else if ((t[i] == 'l' || t[i] == 'L') && ls == 0) {
+                char lcase = t[i];
+                ls = 1;
+                i += 1;
+                if (t[i] == lcase) {
+                    ls = 2;
+                    i += 1;
+                } else if (t[i] == 'l' || t[i] == 'L') {
+                    return "mixed-case 'll' suffix";
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    if (t[i] != '\0') {
+        return "invalid suffix on number constant";
+    }
+    return NULL;
 }
 
 int32_t cchar_val(const char *lex) {
@@ -666,11 +804,186 @@ int32_t cchar_val(const char *lex) {
             return v;
         }
         default: {
+            if (e >= '0' && e <= '7') {
+                int ov = 0;
+                size_t ok2 = 2;
+                while (ok2 < n - 1 && lex[ok2] >= '0' && lex[ok2] <= '7') {
+                    ov = ov * 8 + (int32_t)(lex[ok2] - '0');
+                    ok2 += 1;
+                }
+                return ov;
+            }
             return (int32_t)e;
         }
     }
     return 0;
 }
+
+static int is_c_keyword(const char *w) {
+    if (w == NULL) {
+        return 0;
+    }
+    switch (w[0]) {
+        case 'a': {
+            return strcmp(w, "auto") == 0;
+        }
+        case 'b': {
+            return strcmp(w, "break") == 0;
+        }
+        case 'c': {
+            return strcmp(w, "case") == 0 || strcmp(w, "char") == 0 || strcmp(w, "const") == 0 || strcmp(w, "continue") == 0;
+        }
+        case 'd': {
+            return strcmp(w, "default") == 0 || strcmp(w, "do") == 0 || strcmp(w, "double") == 0;
+        }
+        case 'e': {
+            return strcmp(w, "else") == 0 || strcmp(w, "enum") == 0 || strcmp(w, "extern") == 0;
+        }
+        case 'f': {
+            return strcmp(w, "float") == 0 || strcmp(w, "for") == 0;
+        }
+        case 'g': {
+            return strcmp(w, "goto") == 0;
+        }
+        case 'i': {
+            return strcmp(w, "if") == 0 || strcmp(w, "int") == 0 || strcmp(w, "inline") == 0;
+        }
+        case 'l': {
+            return strcmp(w, "long") == 0;
+        }
+        case 'r': {
+            return strcmp(w, "register") == 0 || strcmp(w, "restrict") == 0 || strcmp(w, "return") == 0;
+        }
+        case 's': {
+            return strcmp(w, "short") == 0 || strcmp(w, "signed") == 0 || strcmp(w, "sizeof") == 0 || strcmp(w, "static") == 0 || strcmp(w, "struct") == 0 || strcmp(w, "switch") == 0;
+        }
+        case 't': {
+            return strcmp(w, "typedef") == 0;
+        }
+        case 'u': {
+            return strcmp(w, "union") == 0 || strcmp(w, "unsigned") == 0;
+        }
+        case 'v': {
+            return strcmp(w, "void") == 0 || strcmp(w, "volatile") == 0;
+        }
+        case 'w': {
+            return strcmp(w, "while") == 0;
+        }
+        case '_': {
+            return strcmp(w, "_Bool") == 0;
+        }
+        default: {
+            return 0;
+        }
+    }
+}
+
+struct CTag {
+    const char *name;
+    const char *cname;
+    int is_union;
+    int defined;
+    int32_t depth;
+};
+
+struct Vec_CTag {
+    CTag *data;
+    int32_t len;
+    int32_t cap;
+};
+
+void Vec_CTag_init(Vec_CTag *self);
+
+void Vec_CTag_reserve(Vec_CTag *self, int32_t n);
+
+void Vec_CTag_push(Vec_CTag *self, CTag item);
+
+CTag Vec_CTag_pop(Vec_CTag *self);
+
+CTag Vec_CTag_get(const Vec_CTag *self, int32_t i);
+
+void Vec_CTag_set(Vec_CTag *self, int32_t i, CTag item);
+
+CTag Vec_CTag_last(const Vec_CTag *self);
+
+int Vec_CTag_is_empty(const Vec_CTag *self);
+
+void Vec_CTag_remove_at(Vec_CTag *self, int32_t i);
+
+void Vec_CTag_swap_remove(Vec_CTag *self, int32_t i);
+
+void Vec_CTag_clear(Vec_CTag *self);
+
+void Vec_CTag_deinit(Vec_CTag *self);
+
+
+void Vec_CTag_init(Vec_CTag *self) {
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
+}
+
+void Vec_CTag_reserve(Vec_CTag *self, int32_t n) {
+    if (n <= (*self).cap) {
+        return;
+    }
+    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    while (nc < n) {
+        nc *= 2;
+    }
+    (*self).data = realloc((*self).data, sizeof(CTag) * (size_t)nc);
+    (*self).cap = nc;
+}
+
+void Vec_CTag_push(Vec_CTag *self, CTag item) {
+    Vec_CTag_reserve(& *self, (*self).len + 1);
+    (*self).data[(*self).len] = item;
+    (*self).len += 1;
+}
+
+CTag Vec_CTag_pop(Vec_CTag *self) {
+    (*self).len -= 1;
+    return (*self).data[(*self).len];
+}
+
+CTag Vec_CTag_get(const Vec_CTag *self, int32_t i) {
+    return (*self).data[i];
+}
+
+void Vec_CTag_set(Vec_CTag *self, int32_t i, CTag item) {
+    (*self).data[i] = item;
+}
+
+CTag Vec_CTag_last(const Vec_CTag *self) {
+    return (*self).data[(*self).len - 1];
+}
+
+int Vec_CTag_is_empty(const Vec_CTag *self) {
+    return (*self).len == 0;
+}
+
+void Vec_CTag_remove_at(Vec_CTag *self, int32_t i) {
+    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(CTag) * (size_t)((*self).len - i - 1));
+    (*self).len -= 1;
+}
+
+void Vec_CTag_swap_remove(Vec_CTag *self, int32_t i) {
+    (*self).len -= 1;
+    (*self).data[i] = (*self).data[(*self).len];
+}
+
+void Vec_CTag_clear(Vec_CTag *self) {
+    (*self).len = 0;
+}
+
+void Vec_CTag_deinit(Vec_CTag *self) {
+    free((*self).data);
+    (*self).data = NULL;
+    (*self).len = 0;
+    (*self).cap = 0;
+}
+
+Expr *c_expr(Cp *p);
 
 struct Cp {
     const char *file;
@@ -682,20 +995,26 @@ struct Cp {
     StrMap_pType typedefs;
     StrMap_i64 enumvals;
     StrSet enum_signed;
-    StrSet fwd_tags;
-    StrSet def_tags;
-    StrMap_pchar tag_alias;
-    char **alias_names;
-    char **alias_prevs;
-    int32_t nalias;
-    int32_t ca_n;
-    int32_t ca_p;
+    Vec_CTag tags;
+    int32_t tag_depth;
+    StrSet used_cnames;
     Vec_pDecl *out_decls;
+    int params_empty;
+    int cap_sig_empty;
     int32_t anon;
     int saw_const;
+    int strict;
+    int spec_static;
+    int spec_extern;
 };
 
 static void Cp_skip_gnu(Cp *self);
+
+static int Cp_is_storage_kw(Cp *self, const char *w);
+
+static int32_t Cp_tag_find(Cp *self, const char *name);
+
+static int32_t Cp_tag_push(Cp *self, const char *name, int is_union, int defined);
 
 static void Cp_skip_parens(Cp *self);
 
@@ -704,6 +1023,8 @@ static void Cp_skip_to(Cp *self, const char *a, const char *b);
 static int Cp_is_type_kw(Cp *self, const char *w);
 
 static const char *Cp_canon_arith(Cp *self, const char *n);
+
+static void Cp_check_arith_specs(Cp *self, const char *n, Pos pos);
 
 static Type *Cp_parse_base_type(Cp *self);
 
@@ -720,6 +1041,8 @@ static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Para
 static Type *Cp_parse_decl_suffix(Cp *self, Type *ty);
 
 static void Cp_parse_params(Cp *self, Vec_Param *prms, int *varargs);
+
+static void Cp_parse_params_inner(Cp *self, Vec_Param *prms, int *varargs);
 
 static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union);
 
@@ -780,6 +1103,10 @@ static int Cp_is_type_kw(Cp *self, const char *w) {
     return strcmp(w, "void") == 0 || strcmp(w, "char") == 0 || strcmp(w, "short") == 0 || strcmp(w, "int") == 0 || strcmp(w, "long") == 0 || strcmp(w, "float") == 0 || strcmp(w, "double") == 0 || strcmp(w, "signed") == 0 || strcmp(w, "unsigned") == 0 || strcmp(w, "_Bool") == 0;
 }
 
+static int Cp_is_storage_kw(Cp *self, const char *w) {
+    return strcmp(w, "static") == 0 || strcmp(w, "extern") == 0 || strcmp(w, "register") == 0 || strcmp(w, "auto") == 0;
+}
+
 static void Cp_skip_gnu(Cp *self) {
     while (Cp_pk(self)->kind == CT_ID) {
         const char *w = Cp_pk(self)->text;
@@ -791,6 +1118,10 @@ static void Cp_skip_gnu(Cp *self) {
         } else if (strcmp(w, "const") == 0 || strcmp(w, "volatile") == 0 || strcmp(w, "__volatile__") == 0 || strcmp(w, "restrict") == 0 || strcmp(w, "__restrict") == 0 || strcmp(w, "__restrict__") == 0 || strcmp(w, "__extension__") == 0 || strcmp(w, "static") == 0 || strcmp(w, "extern") == 0 || strcmp(w, "register") == 0 || strcmp(w, "auto") == 0 || strcmp(w, "inline") == 0 || strcmp(w, "__inline") == 0 || strcmp(w, "__inline__") == 0 || strcmp(w, "_Noreturn") == 0 || strcmp(w, "__thread") == 0 || strcmp(w, "_Thread_local") == 0) {
             if (strcmp(w, "const") == 0) {
                 self->saw_const = 1;
+            } else if (strcmp(w, "static") == 0) {
+                self->spec_static = 1;
+            } else if (strcmp(w, "extern") == 0) {
+                self->spec_extern = 1;
             }
             Cp_adv(self);
         } else {
@@ -813,7 +1144,7 @@ static void Cp_skip_parens(Cp *self) {
 }
 
 static int Cp_tok_is_type(Cp *self, const char *w) {
-    if (Cp_is_type_kw(self, w) || strcmp(w, "struct") == 0 || strcmp(w, "union") == 0 || strcmp(w, "enum") == 0) {
+    if (Cp_is_type_kw(self, w) || (strcmp(w, "struct") == 0 || strcmp(w, "union") == 0 || strcmp(w, "enum") == 0)) {
         return 1;
     }
     if (strcmp(w, "const") == 0 || strcmp(w, "volatile") == 0 || strcmp(w, "unsigned") == 0 || strcmp(w, "signed") == 0) {
@@ -828,7 +1159,7 @@ static int Cp_at_type(Cp *self) {
         return 0;
     }
     const char *w = t->text;
-    if (Cp_is_type_kw(self, w) || strcmp(w, "struct") == 0 || strcmp(w, "union") == 0 || strcmp(w, "enum") == 0) {
+    if (Cp_is_type_kw(self, w) || (strcmp(w, "struct") == 0 || strcmp(w, "union") == 0 || strcmp(w, "enum") == 0)) {
         return 1;
     }
     if (strcmp(w, "const") == 0 || strcmp(w, "volatile") == 0 || strcmp(w, "static") == 0 || strcmp(w, "extern") == 0 || strcmp(w, "register") == 0 || strcmp(w, "inline") == 0 || strcmp(w, "__extension__") == 0 || strcmp(w, "__inline") == 0 || strcmp(w, "__inline__") == 0 || strcmp(w, "unsigned") == 0 || strcmp(w, "signed") == 0) {
@@ -839,48 +1170,73 @@ static int Cp_at_type(Cp *self) {
 
 static Type *Cp_parse_base_type(Cp *self) {
     self->saw_const = 0;
+    self->spec_static = 0;
+    self->spec_extern = 0;
     Cp_skip_gnu(self);
     const char *w = Cp_pk(self)->text;
+    if (self->strict && self->spec_static && self->spec_extern) {
+        fatal_at(self->file, Cp_pk(self)->pos, "conflicting storage classes ('static' and 'extern')");
+    }
     if (strcmp(w, "struct") == 0 || strcmp(w, "union") == 0) {
         int is_union = strcmp(w, "union") == 0;
         Cp_adv(self);
+        if (self->strict && Cp_pk(self)->kind == CT_ID && Cp_is_storage_kw(self, Cp_pk(self)->text)) {
+            fatal_at(self->file, Cp_pk(self)->pos, "misplaced storage class '%s' (must precede the type)", Cp_pk(self)->text);
+        }
         Cp_skip_gnu(self);
         const char *tag = NULL;
         if (Cp_pk(self)->kind == CT_ID && !Cp_is_punct(self, "{")) {
+            if (self->strict && (Cp_is_type_kw(self, Cp_pk(self)->text) || is_c_keyword(Cp_pk(self)->text))) {
+                fatal_at(self->file, Cp_pk(self)->pos, "invalid struct/union tag '%s' (a C keyword)", Cp_pk(self)->text);
+            }
             tag = Cp_adv(self)->text;
         }
         if (Cp_is_punct(self, "{")) {
             if (tag == NULL) {
                 tag = arena_printf(self->a, "__anon%d", self->anon);
                 self->anon += 1;
-            } else if (StrSet_has(&self->def_tags, tag)) {
-                const char *renamed = arena_printf(self->a, "%s__s%d", tag, self->anon);
-                self->anon += 1;
-                self->alias_names = vec_grow(self->alias_names, self->nalias, &self->ca_n, sizeof(*self->alias_names));
-                self->alias_prevs = vec_grow(self->alias_prevs, self->nalias, &self->ca_p, sizeof(*self->alias_prevs));
-                self->alias_names[self->nalias] = (char *)tag;
-                self->alias_prevs[self->nalias] = StrMap_pchar_get_or(&self->tag_alias, tag, NULL);
-                self->nalias += 1;
-                StrMap_pchar_put(&self->tag_alias, tag, (char *)renamed);
-                tag = renamed;
+                StrSet_add(&self->used_cnames, tag);
+            } else {
+                int32_t di = Cp_tag_find(self, tag);
+                if (di >= 0 && self->tags.data[di].depth == self->tag_depth) {
+                    if (self->strict && self->tags.data[di].is_union != is_union) {
+                        fatal_at(self->file, Cp_pk(self)->pos, "'%s' declared as both struct and union (wrong kind of tag)", tag);
+                    }
+                    if (self->tags.data[di].defined) {
+                        if (self->strict) {
+                            fatal_at(self->file, Cp_pk(self)->pos, "redefinition of '%s %s'", (is_union ? "union" : "struct"), tag);
+                        }
+                        di = Cp_tag_push(self, tag, is_union, 1);
+                    } else {
+                        self->tags.data[di].defined = 1;
+                    }
+                } else {
+                    di = Cp_tag_push(self, tag, is_union, 1);
+                }
+                tag = self->tags.data[di].cname;
             }
             Decl *d = Cp_parse_struct_body(self, tag, is_union);
             Vec_pDecl_push(self->out_decls, d);
-            StrSet_add(&self->def_tags, tag);
-            StrSet_add(&self->fwd_tags, tag);
         } else if (tag != NULL) {
-            char *al = StrMap_pchar_get_or(&self->tag_alias, tag, NULL);
-            if (al != NULL) {
-                tag = al;
+            int standalone = Cp_is_punct(self, ";");
+            int32_t ri = Cp_tag_find(self, tag);
+            int fresh = 0;
+            if (ri >= 0 && (!standalone || self->tags.data[ri].depth == self->tag_depth)) {
+                if (self->strict && self->tags.data[ri].is_union != is_union) {
+                    fatal_at(self->file, Cp_pk(self)->pos, "'%s' declared as both struct and union (wrong kind of tag)", tag);
+                }
+            } else {
+                ri = Cp_tag_push(self, tag, is_union, 0);
+                fresh = 1;
             }
-            if (!StrSet_has(&self->fwd_tags, tag)) {
+            tag = self->tags.data[ri].cname;
+            if (fresh) {
                 Decl *fd = arena_alloc(self->a, sizeof(Decl));
                 fd->kind = (is_union ? DL_UNION : DL_STRUCT);
                 fd->name = tag;
                 fd->is_fwd = 1;
                 fd->pos = Cp_pk(self)->pos;
                 Vec_pDecl_push(self->out_decls, fd);
-                StrSet_add(&self->fwd_tags, tag);
             }
         }
         Type *tt = Cp_base_name(self, tag);
@@ -904,10 +1260,27 @@ static Type *Cp_parse_base_type(Cp *self) {
         return Cp_base_name(self, "unsigned");
     }
     if (Cp_is_type_kw(self, w)) {
+        Pos spos = Cp_pk(self)->pos;
         const char *name = Cp_adv(self)->text;
-        while (Cp_pk(self)->kind == CT_ID && Cp_is_type_kw(self, Cp_pk(self)->text)) {
-            name = arena_printf(self->a, "%s %s", name, Cp_adv(self)->text);
+        while (Cp_pk(self)->kind == CT_ID && (Cp_is_type_kw(self, Cp_pk(self)->text) || Cp_is_storage_kw(self, Cp_pk(self)->text))) {
+            if (Cp_is_storage_kw(self, Cp_pk(self)->text)) {
+                if (Cp_pk(self)->text[1] == 't') {
+                    if (self->strict && self->spec_extern) {
+                        fatal_at(self->file, Cp_pk(self)->pos, "conflicting storage classes ('static' and 'extern')");
+                    }
+                    self->spec_static = 1;
+                } else if (Cp_pk(self)->text[0] == 'e') {
+                    if (self->strict && self->spec_static) {
+                        fatal_at(self->file, Cp_pk(self)->pos, "conflicting storage classes ('static' and 'extern')");
+                    }
+                    self->spec_extern = 1;
+                }
+                Cp_adv(self);
+            } else {
+                name = arena_printf(self->a, "%s %s", name, Cp_adv(self)->text);
+            }
         }
+        Cp_check_arith_specs(self, name, spos);
         return Cp_base_name(self, Cp_canon_arith(self, name));
     }
     if (StrSet_has(&self->types, w)) {
@@ -918,14 +1291,89 @@ static Type *Cp_parse_base_type(Cp *self) {
         }
         return Cp_base_name(self, w);
     }
+    if (self->strict) {
+        fatal_at(self->file, Cp_pk(self)->pos, "unknown type name '%s'", w);
+    }
     Cp_adv(self);
     return Cp_base_name(self, "int");
+}
+
+static int32_t Cp_tag_find(Cp *self, const char *name) {
+    int32_t k;
+    for (k = self->tags.len - 1; k > -1; k += -1) {
+        if (strcmp(self->tags.data[k].name, name) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+static int32_t Cp_tag_push(Cp *self, const char *name, int is_union, int defined) {
+    const char *cn = name;
+    if (StrSet_has(&self->used_cnames, cn)) {
+        cn = arena_printf(self->a, "%s__s%d", name, self->anon);
+        self->anon += 1;
+    }
+    StrSet_add(&self->used_cnames, cn);
+    CTag ct = {name, cn, is_union, defined, self->tag_depth};
+    Vec_CTag_push(&self->tags, ct);
+    return self->tags.len - 1;
 }
 
 static Type *Cp_base_name(Cp *self, const char *n) {
     Type *t = ty_name(self->a, n);
     t->is_const = self->saw_const;
     return t;
+}
+
+static void Cp_check_arith_specs(Cp *self, const char *n, Pos pos) {
+    if (!self->strict) {
+        return;
+    }
+    int32_t nvoid = word_count(n, "void");
+    int32_t nchar = word_count(n, "char");
+    int32_t nshort = word_count(n, "short");
+    int32_t nint = word_count(n, "int");
+    int32_t nlong = word_count(n, "long");
+    int32_t nflt = word_count(n, "float");
+    int32_t ndbl = word_count(n, "double");
+    int32_t nsig = word_count(n, "signed");
+    int32_t nuns = word_count(n, "unsigned");
+    int32_t nbool = word_count(n, "_Bool");
+    int bad = 0;
+    if (nsig + nuns > 1) {
+        bad = 1;
+    }
+    if (nvoid + nchar + nflt + ndbl + nbool > 1) {
+        bad = 1;
+    }
+    if (nshort > 1 || nint > 1 || nlong > 2) {
+        bad = 1;
+    }
+    if (nshort > 0 && nlong > 0) {
+        bad = 1;
+    }
+    if ((nflt > 0 || ndbl > 0 || nvoid > 0 || nbool > 0) && nsig + nuns + nshort > 0) {
+        bad = 1;
+    }
+    if (nflt > 0 && nlong > 0) {
+        bad = 1;
+    }
+    if (ndbl > 0 && nlong > 1) {
+        bad = 1;
+    }
+    if ((nvoid > 0 || nchar > 0 || nflt > 0 || ndbl > 0 || nbool > 0) && nint > 0) {
+        bad = 1;
+    }
+    if (nchar > 0 && nshort + nlong > 0) {
+        bad = 1;
+    }
+    if (nvoid > 0 && nchar + nshort + nint + nlong + nflt + ndbl + nsig + nuns + nbool > 0) {
+        bad = 1;
+    }
+    if (bad) {
+        fatal_at(self->file, pos, "invalid combination of type specifiers ('%s')", n);
+    }
 }
 
 static const char *Cp_canon_arith(Cp *self, const char *n) {
@@ -1007,7 +1455,7 @@ static Type *Cp_parse_fnptr(Cp *self, Type *ret, char **out_name) {
     Vec_Param_init(&prms);
     int va = 0;
     int hp = 0;
-    return Cp_parse_declarator(self, ret, out_name, &prms, &va, &hp);
+    return Cp_parse_declarator(self, ret, & *out_name, &prms, &va, &hp);
 }
 
 static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Param *prms, int *varargs, int *has_params) {
@@ -1023,7 +1471,7 @@ static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Para
         int starts_params = 0;
         if (nx2->kind == CT_PUNCT && (strcmp(nx2->text, ")") == 0 || strcmp(nx2->text, "...") == 0)) {
             starts_params = 1;
-        } else if (nx2->kind == CT_ID && (Cp_is_type_kw(self, nx2->text) || strcmp(nx2->text, "struct") == 0 || strcmp(nx2->text, "union") == 0 || strcmp(nx2->text, "enum") == 0 || strcmp(nx2->text, "const") == 0 || strcmp(nx2->text, "volatile") == 0 || StrSet_has(&self->types, nx2->text))) {
+        } else if (nx2->kind == CT_ID && (Cp_is_type_kw(self, nx2->text) || (strcmp(nx2->text, "struct") == 0 || strcmp(nx2->text, "union") == 0 || strcmp(nx2->text, "enum") == 0 || strcmp(nx2->text, "const") == 0 || strcmp(nx2->text, "volatile") == 0) || StrSet_has(&self->types, nx2->text))) {
             starts_params = 1;
         }
         if (starts_params) {
@@ -1042,11 +1490,35 @@ static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Para
             }
             Cp_adv(self);
         }
-        ty = Cp_parse_decl_suffix(self, ty);
+        Vec_Param eprms;
+        Vec_Param_init(&eprms);
+        int eva = 0;
+        int ecap = 0;
+        int e_empty = 0;
+        if (Cp_is_punct(self, "(")) {
+            Cp_adv(self);
+            Cp_parse_params(self, &eprms, &eva);
+            Cp_expect_punct(self, ")");
+            Cp_skip_gnu(self);
+            ty = ty_func(self->a, ty);
+            ecap = 1;
+            e_empty = self->params_empty;
+        } else {
+            ty = Cp_parse_decl_suffix(self, ty);
+        }
         size_t end = self->i;
         self->i = start + 1;
-        Type *r = Cp_parse_declarator(self, ty, out_name, prms, varargs, has_params);
+        Type *r = Cp_parse_declarator(self, ty, & *out_name, & *prms, & *varargs, & *has_params);
         self->i = end;
+        if (ecap && ! *has_params) {
+            size_t ei;
+            for (ei = 0; ei < eprms.len; ei += 1) {
+                Vec_Param_push(& *prms, Vec_Param_get(&eprms, ei));
+            }
+            *varargs = eva;
+            *has_params = 1;
+            self->cap_sig_empty = e_empty;
+        }
         return r;
     }
     *out_name = "";
@@ -1055,10 +1527,11 @@ static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Para
     }
     if (Cp_is_punct(self, "(")) {
         Cp_adv(self);
-        Cp_parse_params(self, prms, varargs);
+        Cp_parse_params(self, & *prms, & *varargs);
         Cp_expect_punct(self, ")");
         Cp_skip_gnu(self);
         *has_params = 1;
+        self->cap_sig_empty = self->params_empty;
         return ty_func(self->a, ty);
     }
     return Cp_parse_decl_suffix(self, ty);
@@ -1099,6 +1572,12 @@ static Type *Cp_parse_decl_suffix(Cp *self, Type *ty) {
 }
 
 static void Cp_parse_params(Cp *self, Vec_Param *prms, int *varargs) {
+    int empty_here = Cp_is_punct(self, ")");
+    Cp_parse_params_inner(self, & *prms, & *varargs);
+    self->params_empty = empty_here;
+}
+
+static void Cp_parse_params_inner(Cp *self, Vec_Param *prms, int *varargs) {
     *varargs = 0;
     if (Cp_is_punct(self, ")")) {
         return;
@@ -1114,6 +1593,9 @@ static void Cp_parse_params(Cp *self, Vec_Param *prms, int *varargs) {
             return;
         }
         Type *pbase = Cp_parse_base_type(self);
+        if (self->strict && (self->spec_static || self->spec_extern)) {
+            fatal_at(self->file, Cp_pk(self)->pos, "storage class specifier on a function parameter");
+        }
         Type *pty = Cp_parse_stars(self, pbase);
         const char *pname = "";
         if (Cp_is_punct(self, "(")) {
@@ -1132,16 +1614,35 @@ static void Cp_parse_params(Cp *self, Vec_Param *prms, int *varargs) {
                 pty = ty_ptr(self->a, ty_func(self->a, pty));
             }
         }
+        Vec_pExpr dims;
+        Vec_pExpr_init(&dims);
         while (Cp_eat(self, "[")) {
-            if (!Cp_is_punct(self, "]")) {
-                Cp_skip_to(self, "]", "]");
+            while (Cp_pk(self)->kind == CT_ID && (strcmp(Cp_pk(self)->text, "const") == 0 || strcmp(Cp_pk(self)->text, "static") == 0 || strcmp(Cp_pk(self)->text, "restrict") == 0 || strcmp(Cp_pk(self)->text, "__restrict") == 0 || strcmp(Cp_pk(self)->text, "volatile") == 0)) {
+                Cp_adv(self);
+            }
+            Expr *de = NULL;
+            if (Cp_is_punct(self, "*") && strcmp(Cp_pk1(self)->text, "]") == 0) {
+                Cp_adv(self);
+            } else if (!Cp_is_punct(self, "]")) {
+                de = c_expr(self);
             }
             Cp_expect_punct(self, "]");
+            Vec_pExpr_push(&dims, de);
+        }
+        if (dims.len > 0) {
+            if (self->strict && pty != NULL && pty->kind == TY_NAME && pty->name != NULL && strcmp(pty->name, "void") == 0) {
+                fatal_at(self->file, Cp_pk(self)->pos, "parameter declares an array of voids");
+            }
+            ptrdiff_t di;
+            for (di = dims.len - 1; di > 0; di += -1) {
+                pty = ty_array(self->a, pty, Vec_pExpr_get(&dims, di));
+            }
             pty = ty_ptr(self->a, pty);
         }
+        Vec_pExpr_deinit(&dims);
         Cp_skip_gnu(self);
         Param prm = {pname, pty, Cp_pk(self)->pos};
-        Vec_Param_push(prms, prm);
+        Vec_Param_push(& *prms, prm);
     } while (Cp_eat(self, ","));
 }
 
@@ -1166,6 +1667,9 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
     Vec_Field_init(&fields);
     while (!Cp_is_punct(self, "}") && Cp_pk(self)->kind != CT_EOF) {
         Type *base = Cp_parse_base_type(self);
+        if (self->strict && (self->spec_static || self->spec_extern)) {
+            fatal_at(self->file, Cp_pk(self)->pos, "storage class specifier on a struct/union member");
+        }
         do {
             Type *fty = Cp_parse_stars(self, base);
             const char *fname = "";
@@ -1175,6 +1679,9 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
                 fname = fpn;
             } else {
                 if (Cp_pk(self)->kind == CT_ID) {
+                    if (self->strict && is_c_keyword(Cp_pk(self)->text)) {
+                        fatal_at(self->file, Cp_pk(self)->pos, "invalid member name '%s' (a C keyword)", Cp_pk(self)->text);
+                    }
                     fname = Cp_adv(self)->text;
                 }
                 Expr *fdims[8];
@@ -1224,6 +1731,17 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
                 }
             }
             if (fname[0] != '\0') {
+                if (self->strict && fty != NULL && fty->kind == TY_NAME && fty->name != NULL && strcmp(fty->name, "void") == 0) {
+                    fatal_at(self->file, Cp_pk(self)->pos, "member '%s' has incomplete type 'void'", fname);
+                }
+                if (self->strict) {
+                    size_t dmi;
+                    for (dmi = 0; dmi < fields.len; dmi += 1) {
+                        if (fields.data[dmi].name != NULL && strcmp(fields.data[dmi].name, fname) == 0) {
+                            fatal_at(self->file, Cp_pk(self)->pos, "duplicate member '%s'", fname);
+                        }
+                    }
+                }
                 Field fl = {fname, fty, Cp_pk(self)->pos, bw};
                 Vec_Field_push(&fields, fl);
             } else if (bw >= 0) {
@@ -1243,22 +1761,33 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
                     }
                 }
                 Vec_Field_push(&fields, fa);
+            } else if (self->strict) {
+                fatal_at(self->file, Cp_pk(self)->pos, "struct/union member declaration without a declarator");
             }
         } while (Cp_eat(self, ","));
+        if (self->strict && Cp_is_punct(self, "=")) {
+            fatal_at(self->file, Cp_pk(self)->pos, "a struct/union member cannot have an initializer");
+        }
         if (!Cp_eat(self, ";")) {
+            if (self->strict) {
+                fatal_at(self->file, Cp_pk(self)->pos, "malformed struct/union member declarator (found '%s')", Cp_pk(self)->text);
+            }
             Cp_skip_to(self, ";", ";");
             Cp_eat(self, ";");
         }
     }
+    if (self->strict && fields.len == 0) {
+        cdiag_at(self->file, Cp_pk(self)->pos, "gnu-empty-struct", wd_pedantic(), "empty struct is a GNU extension");
+    }
     Cp_expect_punct(self, "}");
     Decl *d = arena_alloc(self->a, sizeof(Decl));
     {
-        Decl *__with_813_9 = d;
-        __with_813_9->kind = (is_union ? DL_UNION : DL_STRUCT);
-        __with_813_9->name = tag;
-        __with_813_9->fields = fields.data;
-        __with_813_9->nfields = fields.len;
-        __with_813_9->is_def = 1;
+        Decl *__with_1175_9 = d;
+        __with_1175_9->kind = (is_union ? DL_UNION : DL_STRUCT);
+        __with_1175_9->name = tag;
+        __with_1175_9->fields = fields.data;
+        __with_1175_9->nfields = fields.len;
+        __with_1175_9->is_def = 1;
     }
     return d;
 }
@@ -1276,7 +1805,7 @@ static int64_t Cp_type_size(Cp *self, Type *t, int *ok) {
             *ok = 0;
             return 0;
         }
-        return (int64_t)strtoll(t->arr_len->text, NULL, 0) * Cp_type_size(self, t->inner, ok);
+        return (int64_t)strtoll(t->arr_len->text, NULL, 0) * Cp_type_size(self, t->inner, & *ok);
     }
     const char *n = t->name;
     if (n == NULL) {
@@ -1297,7 +1826,7 @@ static int64_t Cp_type_size(Cp *self, Type *t, int *ok) {
     }
     Type *u = StrMap_pType_get_or(&self->typedefs, n, NULL);
     if (u != NULL) {
-        return Cp_type_size(self, u, ok);
+        return Cp_type_size(self, u, & *ok);
     }
     *ok = 0;
     return 0;
@@ -1323,7 +1852,7 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
             } else {
                 *ok = 0;
             }
-            return Cp_type_size(self, sty, ok);
+            return Cp_type_size(self, sty, & *ok);
         }
         *ok = 0;
         return 0;
@@ -1339,7 +1868,7 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
     }
     if (Cp_is_punct(self, "(")) {
         Cp_adv(self);
-        int64_t r = Cp_ceval(self, ok);
+        int64_t r = Cp_ceval(self, & *ok);
         if (Cp_is_punct(self, ")")) {
             Cp_adv(self);
         } else {
@@ -1349,19 +1878,19 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
     }
     if (Cp_is_punct(self, "-")) {
         Cp_adv(self);
-        return -Cp_ceval_prim(self, ok);
+        return -Cp_ceval_prim(self, & *ok);
     }
     if (Cp_is_punct(self, "+")) {
         Cp_adv(self);
-        return Cp_ceval_prim(self, ok);
+        return Cp_ceval_prim(self, & *ok);
     }
     if (Cp_is_punct(self, "~")) {
         Cp_adv(self);
-        return ~Cp_ceval_prim(self, ok);
+        return ~Cp_ceval_prim(self, & *ok);
     }
     if (Cp_is_punct(self, "!")) {
         Cp_adv(self);
-        return (Cp_ceval_prim(self, ok) != 0 ? 0 : 1);
+        return (Cp_ceval_prim(self, & *ok) != 0 ? 0 : 1);
     }
     *ok = 0;
     return 0;
@@ -1406,14 +1935,14 @@ static int32_t Cp_ceval_prec(Cp *self) {
 }
 
 static int64_t Cp_ceval_bin(Cp *self, int32_t minprec, int *ok) {
-    int64_t lhs = Cp_ceval_prim(self, ok);
+    int64_t lhs = Cp_ceval_prim(self, & *ok);
     while (*ok) {
         int32_t prec = Cp_ceval_prec(self);
         if (prec < minprec) {
             break;
         }
         const char *op = Cp_adv(self)->text;
-        int64_t rhs = Cp_ceval_bin(self, prec + 1, ok);
+        int64_t rhs = Cp_ceval_bin(self, prec + 1, & *ok);
         if (strcmp(op, "*") == 0) {
             lhs = lhs * rhs;
         } else if (strcmp(op, "/") == 0) {
@@ -1456,17 +1985,17 @@ static int64_t Cp_ceval_bin(Cp *self, int32_t minprec, int *ok) {
 }
 
 static int64_t Cp_ceval(Cp *self, int *ok) {
-    int64_t c = Cp_ceval_bin(self, 0, ok);
+    int64_t c = Cp_ceval_bin(self, 0, & *ok);
     if (*ok && Cp_is_punct(self, "?")) {
         Cp_adv(self);
-        int64_t a = Cp_ceval(self, ok);
+        int64_t a = Cp_ceval(self, & *ok);
         if (Cp_is_punct(self, ":")) {
             Cp_adv(self);
         } else {
             *ok = 0;
             return 0;
         }
-        int64_t b = Cp_ceval(self, ok);
+        int64_t b = Cp_ceval(self, & *ok);
         return (c != 0 ? a : b);
     }
     return c;
@@ -1668,9 +2197,11 @@ Expr *c_postfix_from(Cp *p, Expr *e);
 
 int c_peek_is_type(Cp *p);
 
+Type *c_abstract_decl(Cp *p, Type *base);
+
 Block *c_block(Cp *p);
 
-void cp_alias_restore(Cp *p, int32_t mark);
+void cp_tags_restore(Cp *p, int32_t mark);
 
 void c_stmt_into(Cp *p, Vec_pStmt *out);
 
@@ -1783,6 +2314,9 @@ Expr *c_primary(Cp *p) {
                 g->gen_types = gtys.data;
                 return g;
             }
+            if (p->strict && Cp_is_type_kw(p, t->text)) {
+                fatal_at(p->file, t->pos, "expected an expression, found type keyword '%s'", t->text);
+            }
             Expr *e4 = ex_new(p->a, EX_IDENT, t->pos);
             e4->text = Cp_adv(p)->text;
             return e4;
@@ -1803,6 +2337,7 @@ Expr *c_primary(Cp *p) {
                 }
                 Expr *inner = c_expr(p);
                 Cp_expect_punct(p, ")");
+                inner->parened = 1;
                 return inner;
             }
             fatal_at(p->file, t->pos, "invalid expression (found '%s')", (t->text != NULL ? t->text : "EOF"));
@@ -1882,9 +2417,12 @@ Expr *c_unary(Cp *p) {
         call->lhs = callee;
         Vec_pExpr sargs;
         Vec_pExpr_init(&sargs);
+        if (p->strict && !Cp_is_punct(p, "(") && Cp_pk(p)->kind == CT_ID && Cp_tok_is_type(p, Cp_pk(p)->text)) {
+            fatal_at(p->file, Cp_pk(p)->pos, "'sizeof' of a type requires parentheses: sizeof(%s)", Cp_pk(p)->text);
+        }
         if (Cp_is_punct(p, "(") && c_peek_is_type(p)) {
             Cp_adv(p);
-            Type *ty = Cp_parse_decl_suffix(p, Cp_parse_stars(p, Cp_parse_base_type(p)));
+            Type *ty = c_abstract_decl(p, Cp_parse_base_type(p));
             Cp_expect_punct(p, ")");
             Expr *tr = ex_new(p->a, EX_TYPEREF, pos);
             tr->cast_type = ty;
@@ -1927,11 +2465,8 @@ Expr *c_unary(Cp *p) {
     }
     if (Cp_is_punct(p, "(") && c_peek_is_type(p)) {
         Cp_adv(p);
-        Type *ty = Cp_parse_stars(p, Cp_parse_base_type(p));
-        if (Cp_is_fnptr_ahead(p)) {
-            char *dummy = NULL;
-            ty = Cp_parse_fnptr(p, ty, &dummy);
-        } else if (Cp_is_punct(p, "[")) {
+        Type *ty = c_abstract_decl(p, Cp_parse_base_type(p));
+        if (Cp_is_punct(p, "[")) {
             ty = Cp_parse_decl_suffix(p, ty);
         }
         Cp_expect_punct(p, ")");
@@ -1951,13 +2486,27 @@ Expr *c_unary(Cp *p) {
     return c_postfix(p);
 }
 
+Type *c_abstract_decl(Cp *p, Type *base) {
+    Type *t = Cp_parse_stars(p, base);
+    if (Cp_is_fnptr_ahead(p)) {
+        char *dummy = NULL;
+        return Cp_parse_fnptr(p, t, &dummy);
+    }
+    if (Cp_is_punct(p, "(") && (strcmp(Cp_pk1(p)->text, "*") == 0 || strcmp(Cp_pk1(p)->text, "(") == 0)) {
+        Cp_adv(p);
+        t = c_abstract_decl(p, t);
+        Cp_expect_punct(p, ")");
+    }
+    return Cp_parse_decl_suffix(p, t);
+}
+
 int c_peek_is_type(Cp *p) {
     CTok *nx = Cp_pk1(p);
     if (nx->kind != CT_ID) {
         return 0;
     }
     const char *w = nx->text;
-    if (Cp_is_type_kw(p, w) || strcmp(w, "struct") == 0 || strcmp(w, "union") == 0 || strcmp(w, "enum") == 0 || strcmp(w, "const") == 0) {
+    if (Cp_is_type_kw(p, w) || (strcmp(w, "struct") == 0 || strcmp(w, "union") == 0 || strcmp(w, "enum") == 0 || strcmp(w, "const") == 0)) {
         return 1;
     }
     if (strcmp(w, "__attribute__") == 0 || strcmp(w, "__extension__") == 0 || strcmp(w, "volatile") == 0) {
@@ -2045,6 +2594,9 @@ Expr *c_initializer(Cp *p) {
             break;
         }
     }
+    if (p->strict && args.len == 0) {
+        cdiag_at(p->file, pos, "c23-extensions", wd_pedantic(), "use of an empty initializer is a C23 extension");
+    }
     Cp_expect_punct(p, "}");
     e->args = args.data;
     e->nargs = args.len;
@@ -2127,35 +2679,61 @@ void c_init_elem(Cp *p, Vec_pExpr *out) {
     Vec_pExpr_push(out, c_initializer(p));
 }
 
-void cp_alias_restore(Cp *p, int32_t mark) {
-    while (p->nalias > mark) {
-        p->nalias -= 1;
-        StrMap_pchar_put(&p->tag_alias, p->alias_names[p->nalias], p->alias_prevs[p->nalias]);
-    }
+void cp_tags_restore(Cp *p, int32_t mark) {
+    p->tags.len = mark;
+    p->tag_depth -= 1;
 }
 
 Block *c_block(Cp *p) {
     Vec_pStmt v;
     Vec_pStmt_init(&v);
-    int32_t amark = p->nalias;
+    int32_t tmark = p->tags.len;
+    p->tag_depth += 1;
     if (Cp_eat(p, "{")) {
         while (!Cp_is_punct(p, "}") && Cp_pk(p)->kind != CT_EOF) {
             c_stmt_into(p, &v);
         }
         Cp_expect_punct(p, "}");
     } else {
+        if (p->strict && (Cp_at_type(p) || Cp_is_kw(p, "typedef"))) {
+            fatal_at(p->file, Cp_pk(p)->pos, "a declaration is not a statement — the body of if/else/while/for needs braces to declare");
+        }
         c_stmt_into(p, &v);
     }
-    cp_alias_restore(p, amark);
+    cp_tags_restore(p, tmark);
     Block *b = arena_alloc(p->a, sizeof(Block));
     b->stmts = v.data;
     b->n = v.len;
     return b;
 }
 
+void c_local_proto(Cp *p, Vec_pStmt *out, const char *name, Type *ret, Vec_Param prms, int va, int sig_empty) {
+    Func *lf = arena_alloc(p->a, sizeof(Func));
+    {
+        Func *__with_1982_5 = lf;
+        __with_1982_5->pos = Cp_pk(p)->pos;
+        __with_1982_5->name = name;
+        __with_1982_5->cname = name;
+        __with_1982_5->ret = ret;
+        __with_1982_5->params = prms.data;
+        __with_1982_5->nparams = prms.len;
+        __with_1982_5->is_varargs = va;
+        __with_1982_5->sig_empty = sig_empty;
+    }
+    Decl *ld = arena_alloc(p->a, sizeof(Decl));
+    ld->kind = DL_FUNC;
+    ld->pos = Cp_pk(p)->pos;
+    ld->func = lf;
+    Vec_pDecl_push(p->out_decls, ld);
+    Stmt *cs = st_new(p->a, ST_CPROTO, Cp_pk(p)->pos);
+    cs->cfunc = lf;
+    Vec_pStmt_push(out, cs);
+}
+
 void c_decl_into(Cp *p, Vec_pStmt *out) {
-    int is_static = Cp_is_kw(p, "static");
     Type *base = Cp_parse_base_type(p);
+    int is_static = p->spec_static;
+    int is_extern = p->spec_extern;
     if (Cp_is_punct(p, ";")) {
         Cp_adv(p);
         return;
@@ -2163,15 +2741,38 @@ void c_decl_into(Cp *p, Vec_pStmt *out) {
     do {
         Type *ty = Cp_parse_stars(p, base);
         const char *name;
-        if (Cp_is_fnptr_ahead(p)) {
-            char *fpn = NULL;
-            ty = Cp_parse_fnptr(p, ty, &fpn);
-            name = fpn;
+        if (Cp_is_punct(p, "(")) {
+            char *gpn = NULL;
+            Vec_Param gprms;
+            Vec_Param_init(&gprms);
+            int gva = 0;
+            int ghp = 0;
+            ty = Cp_parse_declarator(p, ty, &gpn, &gprms, &gva, &ghp);
+            name = gpn;
+            if (ty != NULL && ty->kind == TY_FUNC) {
+                if (p->strict && is_static) {
+                    fatal_at(p->file, Cp_pk(p)->pos, "invalid storage class for block-scope declaration of '%s'", name);
+                }
+                c_local_proto(p, out, name, ty->inner, gprms, gva, (ghp ? p->cap_sig_empty : 0));
+                continue;
+            }
         } else {
+            if (p->strict && (Cp_pk(p)->kind != CT_ID || is_c_keyword(Cp_pk(p)->text))) {
+                fatal_at(p->file, Cp_pk(p)->pos, "expected a declarator name, found '%s'", (Cp_pk(p)->text != NULL ? Cp_pk(p)->text : "EOF"));
+            }
             name = Cp_adv(p)->text;
             if (Cp_is_punct(p, "(")) {
-                Cp_skip_parens(p);
+                Cp_adv(p);
+                Vec_Param lprms;
+                Vec_Param_init(&lprms);
+                int lva = 0;
+                Cp_parse_params(p, &lprms, &lva);
+                Cp_expect_punct(p, ")");
                 Cp_skip_gnu(p);
+                if (p->strict && is_static) {
+                    fatal_at(p->file, Cp_pk(p)->pos, "invalid storage class for block-scope declaration of '%s'", name);
+                }
+                c_local_proto(p, out, name, ty, lprms, lva, p->params_empty);
                 continue;
             }
             Expr *adims[8];
@@ -2196,6 +2797,7 @@ void c_decl_into(Cp *p, Vec_pStmt *out) {
         s->name = name;
         s->type = ty;
         s->is_static = is_static;
+        s->is_extern = is_extern;
         if (Cp_eat(p, "=")) {
             s->init = c_initializer(p);
         }
@@ -2221,6 +2823,9 @@ void c_stmt_into(Cp *p, Vec_pStmt *out) {
         Stmt *cs = st_new(p->a, ST_CASE, pos);
         cs->expr = cv;
         Vec_pStmt_push(out, cs);
+        if (p->strict && (Cp_at_type(p) || Cp_is_kw(p, "typedef"))) {
+            fatal_at(p->file, Cp_pk(p)->pos, "a declaration is not a statement — a case label cannot prefix a declaration (wrap it in braces)");
+        }
         if (!Cp_is_punct(p, "}")) {
             c_stmt_into(p, out);
         }
@@ -2230,6 +2835,9 @@ void c_stmt_into(Cp *p, Vec_pStmt *out) {
         Cp_adv(p);
         Cp_expect_punct(p, ":");
         Vec_pStmt_push(out, st_new(p->a, ST_CASE, pos));
+        if (p->strict && (Cp_at_type(p) || Cp_is_kw(p, "typedef"))) {
+            fatal_at(p->file, Cp_pk(p)->pos, "a declaration is not a statement — a case label cannot prefix a declaration (wrap it in braces)");
+        }
         if (!Cp_is_punct(p, "}")) {
             c_stmt_into(p, out);
         }
@@ -2246,12 +2854,18 @@ void c_stmt_into(Cp *p, Vec_pStmt *out) {
         Vec_pStmt_push(out, sw);
         return;
     }
-    if (Cp_pk(p)->kind == CT_ID && Cp_pk1(p)->kind == CT_PUNCT && strcmp(Cp_pk1(p)->text, ":") == 0) {
+    if (Cp_pk(p)->kind == CT_ID && Cp_pk1(p)->kind == CT_PUNCT && strcmp(Cp_pk1(p)->text, ":") == 0 && !(p->strict && is_c_keyword(Cp_pk(p)->text) && !StrSet_has(&p->types, Cp_pk(p)->text))) {
         const char *lbl = Cp_adv(p)->text;
         Cp_adv(p);
         Stmt *ls = st_new(p->a, ST_LABEL, pos);
         ls->label = lbl;
         Vec_pStmt_push(out, ls);
+        if (p->strict && Cp_is_punct(p, "}")) {
+            fatal_at(p->file, Cp_pk(p)->pos, "label '%s' at the end of a compound statement (a label must prefix a statement)", lbl);
+        }
+        if (p->strict && (Cp_at_type(p) || Cp_is_kw(p, "typedef"))) {
+            fatal_at(p->file, Cp_pk(p)->pos, "a declaration is not a statement — a label cannot prefix a declaration (C11; wrap it in braces)");
+        }
         if (!Cp_is_punct(p, "}")) {
             c_stmt_into(p, out);
         }
@@ -2270,12 +2884,13 @@ void c_stmt_into(Cp *p, Vec_pStmt *out) {
         Stmt *bs = st_new(p->a, ST_BLOCK, pos);
         Vec_pStmt bv;
         Vec_pStmt_init(&bv);
-        int32_t amark = p->nalias;
+        int32_t btmark = p->tags.len;
+        p->tag_depth += 1;
         while (!Cp_is_punct(p, "}") && Cp_pk(p)->kind != CT_EOF) {
             c_stmt_into(p, &bv);
         }
         Cp_expect_punct(p, "}");
-        cp_alias_restore(p, amark);
+        cp_tags_restore(p, btmark);
         Block *bb = arena_alloc(p->a, sizeof(Block));
         bb->stmts = bv.data;
         bb->n = bv.len;
@@ -2419,9 +3034,14 @@ void c_for_into(Cp *p, Vec_pStmt *out) {
     Cp_adv(p);
     Cp_expect_punct(p, "(");
     Stmt *s = st_new(p->a, ST_CFOR, pos);
+    Vec_pStmt fdecls;
+    Vec_pStmt_init(&fdecls);
     if (!Cp_is_punct(p, ";")) {
         if (Cp_at_type(p)) {
             Type *fbase = Cp_parse_base_type(p);
+            if (p->strict && (p->spec_static || p->spec_extern)) {
+                fatal_at(p->file, Cp_pk(p)->pos, "storage class ('static'/'extern') on a for-loop initial declaration");
+            }
             do {
                 Type *fty = Cp_parse_stars(p, fbase);
                 const char *fname = Cp_adv(p)->text;
@@ -2439,7 +3059,7 @@ void c_for_into(Cp *p, Vec_pStmt *out) {
                 if (Cp_eat(p, "=")) {
                     fs->init = c_initializer(p);
                 }
-                Vec_pStmt_push(out, fs);
+                Vec_pStmt_push(&fdecls, fs);
             } while (Cp_eat(p, ","));
         } else {
             s->for_init = c_simple_stmt(p);
@@ -2455,7 +3075,25 @@ void c_for_into(Cp *p, Vec_pStmt *out) {
     }
     Cp_expect_punct(p, ")");
     s->body = c_block(p);
-    Vec_pStmt_push(out, s);
+    if (fdecls.len == 1) {
+        s->for_init = Vec_pStmt_get(&fdecls, 0);
+        Vec_pStmt_push(out, s);
+    } else if (fdecls.len > 1) {
+        Stmt *wb = st_new(p->a, ST_BLOCK, pos);
+        Block *bb = arena_alloc(p->a, sizeof(Block));
+        Stmt **all = arena_alloc(p->a, (size_t)(fdecls.len + 1) * sizeof(*all));
+        size_t fi;
+        for (fi = 0; fi < fdecls.len; fi += 1) {
+            all[fi] = Vec_pStmt_get(&fdecls, fi);
+        }
+        all[fdecls.len] = s;
+        bb->stmts = all;
+        bb->n = fdecls.len + 1;
+        wb->body = bb;
+        Vec_pStmt_push(out, wb);
+    } else {
+        Vec_pStmt_push(out, s);
+    }
 }
 
 void c_typedef(Cp *p) {
@@ -2503,26 +3141,27 @@ void c_typedef(Cp *p) {
 
 Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
     Type *ty = Cp_parse_stars(p, base);
-    if (Cp_is_fnptr_ahead(p)) {
+    if (Cp_is_punct(p, "(")) {
         char *fpname = NULL;
         Vec_Param fprms;
         Vec_Param_init(&fprms);
         int fva = 0;
         int fhp = 0;
         Type *fpty = Cp_parse_declarator(p, ty, &fpname, &fprms, &fva, &fhp);
-        if (fpty != NULL && fpty->kind == TY_FUNC && fhp) {
+        if (fpty != NULL && fpty->kind == TY_FUNC) {
             Func *ff = arena_alloc(p->a, sizeof(Func));
             {
-                Func *__with_1925_13 = ff;
-                __with_1925_13->pos = pos;
-                __with_1925_13->name = fpname;
-                __with_1925_13->cname = fpname;
-                __with_1925_13->ret = fpty->inner;
-                __with_1925_13->params = fprms.data;
-                __with_1925_13->nparams = fprms.len;
-                __with_1925_13->is_varargs = fva;
+                Func *__with_2400_13 = ff;
+                __with_2400_13->pos = pos;
+                __with_2400_13->name = fpname;
+                __with_2400_13->cname = fpname;
+                __with_2400_13->ret = fpty->inner;
+                __with_2400_13->params = fprms.data;
+                __with_2400_13->nparams = fprms.len;
+                __with_2400_13->is_varargs = fva;
+                __with_2400_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
                 if (Cp_is_punct(p, "{")) {
-                    __with_1925_13->body = c_block(p);
+                    __with_2400_13->body = c_block(p);
                 }
             }
             Decl *df = arena_alloc(p->a, sizeof(Decl));
@@ -2533,23 +3172,20 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         }
         Decl *dfp = arena_alloc(p->a, sizeof(Decl));
         {
-            Decl *__with_1941_9 = dfp;
-            __with_1941_9->kind = DL_VAR;
-            __with_1941_9->pos = pos;
-            __with_1941_9->name = fpname;
-            __with_1941_9->type = fpty;
-            __with_1941_9->is_extern = is_extern;
+            Decl *__with_2417_9 = dfp;
+            __with_2417_9->kind = DL_VAR;
+            __with_2417_9->pos = pos;
+            __with_2417_9->name = fpname;
+            __with_2417_9->type = fpty;
+            __with_2417_9->is_extern = is_extern;
             if (Cp_eat(p, "=")) {
-                __with_1941_9->init = c_initializer(p);
+                __with_2417_9->init = c_initializer(p);
             }
         }
         return dfp;
     }
-    if (Cp_is_punct(p, "(") && Cp_pk1(p)->kind == CT_ID && p->i + 2 < p->nt && p->t[p->i + 2].text != NULL && strcmp(p->t[p->i + 2].text, ")") == 0) {
-        Cp_adv(p);
-        const char *name0 = Cp_adv(p)->text;
-        Cp_expect_punct(p, ")");
-        return parse_one_decl_named(p, ty, name0, is_extern, pos);
+    if (p->strict && !Cp_is_punct(p, "(") && (Cp_pk(p)->kind != CT_ID || is_c_keyword(Cp_pk(p)->text))) {
+        fatal_at(p->file, Cp_pk(p)->pos, "expected a declarator name, found '%s'", (Cp_pk(p)->text != NULL ? Cp_pk(p)->text : "EOF"));
     }
     const char *name = Cp_adv(p)->text;
     return parse_one_decl_named(p, ty, name, is_extern, pos);
@@ -2566,16 +3202,17 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
         Cp_skip_gnu(p);
         Func *f = arena_alloc(p->a, sizeof(Func));
         {
-            Func *__with_1971_9 = f;
-            __with_1971_9->pos = pos;
-            __with_1971_9->name = name;
-            __with_1971_9->cname = name;
-            __with_1971_9->ret = ty;
-            __with_1971_9->params = params.data;
-            __with_1971_9->nparams = params.len;
-            __with_1971_9->is_varargs = is_vararg;
+            Func *__with_2443_9 = f;
+            __with_2443_9->pos = pos;
+            __with_2443_9->name = name;
+            __with_2443_9->cname = name;
+            __with_2443_9->ret = ty;
+            __with_2443_9->params = params.data;
+            __with_2443_9->nparams = params.len;
+            __with_2443_9->is_varargs = is_vararg;
+            __with_2443_9->sig_empty = p->params_empty;
             if (Cp_is_punct(p, "{")) {
-                __with_1971_9->body = c_block(p);
+                __with_2443_9->body = c_block(p);
             }
         }
         Decl *d = arena_alloc(p->a, sizeof(Decl));
@@ -2604,14 +3241,14 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
     Cp_skip_gnu(p);
     Decl *d2 = arena_alloc(p->a, sizeof(Decl));
     {
-        Decl *__with_2003_5 = d2;
-        __with_2003_5->kind = DL_VAR;
-        __with_2003_5->pos = pos;
-        __with_2003_5->name = name;
-        __with_2003_5->type = ty;
-        __with_2003_5->is_extern = is_extern;
+        Decl *__with_2476_5 = d2;
+        __with_2476_5->kind = DL_VAR;
+        __with_2476_5->pos = pos;
+        __with_2476_5->name = name;
+        __with_2476_5->type = ty;
+        __with_2476_5->is_extern = is_extern;
         if (Cp_eat(p, "=")) {
-            __with_2003_5->init = c_initializer(p);
+            __with_2476_5->init = c_initializer(p);
         }
     }
     return d2;
@@ -2621,12 +3258,32 @@ Decl *c_top(Cp *p) {
     Pos pos = Cp_pk(p)->pos;
     int is_extern = Cp_is_kw(p, "extern");
     int is_static = Cp_is_kw(p, "static");
+    p->spec_static = 0;
+    p->spec_extern = 0;
     Cp_skip_gnu(p);
+    if (p->spec_static) {
+        is_static = 1;
+    }
+    if (p->spec_extern) {
+        is_extern = 1;
+    }
+    if (p->strict && is_static && is_extern) {
+        fatal_at(p->file, pos, "conflicting storage classes ('static' and 'extern')");
+    }
     if (Cp_is_kw(p, "typedef")) {
         c_typedef(p);
         return NULL;
     }
     Type *base = Cp_parse_base_type(p);
+    if (p->spec_static) {
+        is_static = 1;
+    }
+    if (p->spec_extern) {
+        is_extern = 1;
+    }
+    if (p->strict && is_static && is_extern) {
+        fatal_at(p->file, pos, "conflicting storage classes ('static' and 'extern')");
+    }
     Cp_skip_gnu(p);
     if (Cp_is_punct(p, ";")) {
         Cp_adv(p);
@@ -2659,9 +3316,10 @@ void mark_static(Decl *d, int is_static) {
     }
 }
 
-Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes) {
+Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes, int strict) {
     Cx cx = {0};
     cx.file = file;
+    cx.strict = strict;
     cx.s = bytes;
     cx.n = nbytes;
     cx.line = 1;
@@ -2671,15 +3329,17 @@ Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes) {
     Cx_tokenize(&cx);
     Cp cp = {0};
     cp.file = file;
+    cp.strict = strict;
     cp.t = cx.toks.data;
     cp.nt = cx.toks.len;
     cp.a = a;
     StrSet_init(&cp.types);
+    Vec_CTag_init(&cp.tags);
     StrMap_pType_init(&cp.typedefs);
     StrMap_i64_init(&cp.enumvals);
     StrSet_init(&cp.enum_signed);
     cp.anon = 0;
-    const char *builtins[] = {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t", "wchar_t", "va_list", "__builtin_va_list", NULL};
+    const char *builtins[31] = {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t", "wchar_t", "va_list", "__builtin_va_list", "__int128", "__int128_t", "__uint128_t", "_Float16", "_Float32", "_Float32x", "_Float64", "_Float64x", "_Float128", "_Decimal32", "_Decimal64", "_Decimal128", NULL};
     int bi = 0;
     while (builtins[bi] != NULL) {
         StrSet_add(&cp.types, builtins[bi]);
@@ -2700,12 +3360,22 @@ Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes) {
     }
     m->decls = decls.data;
     m->ndecls = decls.len;
+    if (cp.typedefs.elen > 0) {
+        char **tdn = arena_alloc(a, (size_t)cp.typedefs.elen * sizeof(*tdn));
+        int ntd = 0;
+        size_t ti;
+        for (ti = 0; ti < cp.typedefs.elen; ti += 1) {
+            if (!cp.typedefs.dead[ti]) {
+                tdn[ntd] = arena_strdup(a, cp.typedefs.keys[ti]);
+                ntd += 1;
+            }
+        }
+        m->tdnames = tdn;
+        m->ntd = ntd;
+    }
     StrSet_deinit(&cp.types);
     StrMap_pType_deinit(&cp.typedefs);
-    StrSet_deinit(&cp.fwd_tags);
-    StrSet_deinit(&cp.def_tags);
-    StrMap_pchar_deinit(&cp.tag_alias);
-    free(cp.alias_names);
-    free(cp.alias_prevs);
+    Vec_CTag_deinit(&cp.tags);
+    StrSet_deinit(&cp.used_cnames);
     return m;
 }

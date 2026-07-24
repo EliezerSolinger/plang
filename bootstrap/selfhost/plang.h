@@ -55,6 +55,18 @@ void fatal(const char *fmt, ...);
 
 void fatal_at(const char *file, Pos pos, const char *fmt, ...);
 
+typedef enum { WD_OFF = 0, WD_WALL, WD_WARN, WD_EXTWARN, WD_ERR } WDefault;
+
+void diag_set(const char *name, int32_t state);
+
+void diag_config(int werror, int wall, int32_t pedantic, int suppress);
+
+void diag_set_no_error(const char *name);
+
+int32_t wd_pedantic(void);
+
+void cdiag_at(const char *file, Pos pos, const char *group, int32_t wdef, const char *fmt, ...);
+
 void warn_at(const char *file, Pos pos, const char *fmt, ...);
 
 char *read_entire_file(const char *path, size_t *out_len);

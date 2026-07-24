@@ -47,6 +47,20 @@ def utf8_encode(cp: u32, out: char[4]) -> i32
 # ---------- errors ----------
 def fatal(fmt: const *char, ...)
 def fatal_at(file: const *char, pos: Pos, fmt: const *char, ...)
+
+# clang-style warning-group diagnostics (util.p). Site defaults:
+enum WDefault:
+    WD_OFF = 0    # enabled only by an explicit -W<group>
+    WD_WALL       # enabled by -Wall
+    WD_WARN       # warning by default
+    WD_EXTWARN    # EXTENSION diagnostic: warns by default, and -pedantic-errors
+                  #   promotes it to an error (clang's ext_* class)
+    WD_ERR        # error by default (demotable: -Wno-error=<group>)
+def diag_set(name: const *char, state: i32)
+def diag_config(werror: bool, wall: bool, pedantic: i32, suppress: bool)
+def diag_set_no_error(name: const *char)
+def wd_pedantic() -> i32
+def cdiag_at(file: const *char, pos: Pos, group: const *char, wdef: i32, fmt: const *char, ...)
 def warn_at(file: const *char, pos: Pos, fmt: const *char, ...)
 
 # ---------- files ----------

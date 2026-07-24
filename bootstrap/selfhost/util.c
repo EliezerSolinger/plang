@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,6 +155,120 @@ void warn_at(const char *file, Pos pos, const char *fmt, ...) {
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
+}
+
+typedef struct WGroup WGroup;
+
+struct WGroup {
+    const char *name;
+    int32_t state;
+    int has_state;
+    int no_error;
+};
+
+WGroup g_wgroups[96];
+
+int32_t g_nwgroups = 0;
+
+int g_werror = 0;
+
+int g_wall = 0;
+
+int32_t g_wpedantic = 0;
+
+int g_wsuppress = 0;
+
+int32_t g_warn_count = 0;
+
+static int32_t wgroup_idx(const char *name) {
+    size_t i;
+    for (i = 0; i < g_nwgroups; i += 1) {
+        if (strcmp(g_wgroups[i].name, name) == 0) {
+            return i;
+        }
+    }
+    if (g_nwgroups >= 96) {
+        return -1;
+    }
+    g_wgroups[g_nwgroups].name = name;
+    g_wgroups[g_nwgroups].state = 1;
+    g_wgroups[g_nwgroups].has_state = 0;
+    g_wgroups[g_nwgroups].no_error = 0;
+    g_nwgroups += 1;
+    return g_nwgroups - 1;
+}
+
+void diag_set(const char *name, int32_t state) {
+    int32_t i = wgroup_idx(name);
+    if (i >= 0) {
+        g_wgroups[i].state = state;
+        g_wgroups[i].has_state = 1;
+    }
+}
+
+void diag_set_no_error(const char *name) {
+    int32_t i = wgroup_idx(name);
+    if (i >= 0) {
+        g_wgroups[i].no_error = 1;
+    }
+}
+
+void diag_config(int werror, int wall, int32_t pedantic, int suppress) {
+    g_werror = werror;
+    g_wall = wall;
+    g_wpedantic = pedantic;
+    g_wsuppress = suppress;
+}
+
+int32_t wd_pedantic(void) {
+    if (g_wpedantic == 2) {
+        return WD_ERR;
+    }
+    if (g_wpedantic == 1) {
+        return WD_WARN;
+    }
+    return WD_OFF;
+}
+
+void cdiag_at(const char *file, Pos pos, const char *group, int32_t wdef, const char *fmt, ...) {
+    int32_t sev;
+    if (wdef == WD_ERR) {
+        sev = 2;
+    } else if (wdef == WD_EXTWARN) {
+        sev = (g_wpedantic == 2 ? 2 : 1);
+    } else if (wdef == WD_WARN) {
+        sev = 1;
+    } else if (wdef == WD_WALL) {
+        sev = (g_wall ? 1 : 0);
+    } else {
+        sev = 0;
+    }
+    int32_t gi = wgroup_idx(group);
+    if (gi >= 0 && g_wgroups[gi].has_state) {
+        sev = g_wgroups[gi].state;
+    }
+    if (sev == 1 && g_werror && !(gi >= 0 && g_wgroups[gi].no_error)) {
+        sev = 2;
+    }
+    if (sev == 2 && gi >= 0 && g_wgroups[gi].no_error) {
+        sev = 1;
+    }
+    if (sev == 0) {
+        return;
+    }
+    if (sev == 1 && g_wsuppress) {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(stderr, "%s:%d:%d: %s: ", file, pos.line, pos.col, (sev == 2 ? "error" : "warning"));
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, " [-W%s]\n", group);
+    va_end(ap);
+    if (sev == 2) {
+        exit(1);
+    }
+    g_warn_count += 1;
 }
 
 char *read_entire_file(const char *path, size_t *out_len) {

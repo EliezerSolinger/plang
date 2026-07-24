@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -79,9 +80,11 @@ static int32_t expr_prec(Expr *e) {
         }
         case EX_CALL:
         case EX_INDEX:
-        case EX_FIELD:
-        case EX_INCDEC: {
+        case EX_FIELD: {
             return PR_POST;
+        }
+        case EX_INCDEC: {
+            return (e->incdec_post ? PR_POST : PR_UNARY);
         }
         case EX_DESIG: {
             return PR_PRIM;
@@ -209,13 +212,15 @@ struct TypeAlias {
     int32_t hdr;
 };
 
-TypeAlias type_aliases[] = {{"bool", "int", HDR_NONE}, {"i8", "int8_t", HDR_STDINT}, {"i16", "int16_t", HDR_STDINT}, {"i32", "int32_t", HDR_STDINT}, {"i64", "int64_t", HDR_STDINT}, {"u8", "uint8_t", HDR_STDINT}, {"u16", "uint16_t", HDR_STDINT}, {"u32", "uint32_t", HDR_STDINT}, {"u64", "uint64_t", HDR_STDINT}, {"f32", "float", HDR_NONE}, {"f64", "double", HDR_NONE}, {"usize", "size_t", HDR_STDDEF}, {"isize", "ptrdiff_t", HDR_STDDEF}, {NULL, NULL, HDR_NONE}};
+TypeAlias type_aliases[14] = {{"bool", "int", HDR_NONE}, {"i8", "int8_t", HDR_STDINT}, {"i16", "int16_t", HDR_STDINT}, {"i32", "int32_t", HDR_STDINT}, {"i64", "int64_t", HDR_STDINT}, {"u8", "uint8_t", HDR_STDINT}, {"u16", "uint16_t", HDR_STDINT}, {"u32", "uint32_t", HDR_STDINT}, {"u64", "uint64_t", HDR_STDINT}, {"f32", "float", HDR_NONE}, {"f64", "double", HDR_NONE}, {"usize", "size_t", HDR_STDDEF}, {"isize", "ptrdiff_t", HDR_STDDEF}, {NULL, NULL, HDR_NONE}};
 
-TypeAlias type_aliases_c89[] = {{"bool", "int", HDR_NONE}, {"i8", "signed char", HDR_NONE}, {"i16", "short", HDR_NONE}, {"i32", "int", HDR_NONE}, {"u8", "unsigned char", HDR_NONE}, {"u16", "unsigned short", HDR_NONE}, {"u32", "unsigned int", HDR_NONE}, {"int8_t", "signed char", HDR_NONE}, {"int16_t", "short", HDR_NONE}, {"int32_t", "int", HDR_NONE}, {"uint8_t", "unsigned char", HDR_NONE}, {"uint16_t", "unsigned short", HDR_NONE}, {"uint32_t", "unsigned int", HDR_NONE}, {"f32", "float", HDR_NONE}, {"f64", "double", HDR_NONE}, {"usize", "size_t", HDR_STDDEF}, {"isize", "ptrdiff_t", HDR_STDDEF}, {NULL, NULL, HDR_NONE}};
+TypeAlias type_aliases_c89[18] = {{"bool", "int", HDR_NONE}, {"i8", "signed char", HDR_NONE}, {"i16", "short", HDR_NONE}, {"i32", "int", HDR_NONE}, {"u8", "unsigned char", HDR_NONE}, {"u16", "unsigned short", HDR_NONE}, {"u32", "unsigned int", HDR_NONE}, {"int8_t", "signed char", HDR_NONE}, {"int16_t", "short", HDR_NONE}, {"int32_t", "int", HDR_NONE}, {"uint8_t", "unsigned char", HDR_NONE}, {"uint16_t", "unsigned short", HDR_NONE}, {"uint32_t", "unsigned int", HDR_NONE}, {"f32", "float", HDR_NONE}, {"f64", "double", HDR_NONE}, {"usize", "size_t", HDR_STDDEF}, {"isize", "ptrdiff_t", HDR_STDDEF}, {NULL, NULL, HDR_NONE}};
 
 int g_needs_stdint = 0;
 
 int g_needs_stddef = 0;
+
+int g_needs_string = 0;
 
 int g_std89 = 0;
 
@@ -353,51 +358,51 @@ static void emit_fnptr_decl(StrBuf *b, Type *ft, const char *inner) {
     sb_free(&frag);
 }
 
-static void emit_cast_typename(StrBuf *b, Type *t) {
-    int pc[16];
-    int stars = 0;
-    while (t->kind == TY_PTR) {
-        if (stars < 16) {
-            pc[stars] = t->is_const;
+static void emit_typename_decl(StrBuf *b, Type *t, const char *decl) {
+    if (t->kind == TY_PTR) {
+        StrBuf s = {0};
+        sb_putc(&s, '*');
+        if (t->is_const) {
+            sb_puts(&s, "const ");
         }
-        stars += 1;
-        t = t->inner;
-    }
-    if (t->kind == TY_FUNC) {
-        char buf[8];
-        size_t j;
-        for (j = 0; j < stars; j += 1) {
-            buf[j] = '*';
-        }
-        buf[stars] = '\0';
-        emit_fnptr_decl(b, t, buf);
+        sb_puts(&s, decl);
+        emit_typename_decl(b, t->inner, (s.data != NULL ? s.data : ""));
+        sb_free(&s);
         return;
     }
-    if (t->kind == TY_ARRAY) {
-        Expr *dims[16];
-        int nd = 0;
-        while (t->kind == TY_ARRAY && nd < 16) {
-            dims[nd] = t->arr_len;
-            nd += 1;
-            t = t->inner;
+    if (t->kind == TY_ARRAY || t->kind == TY_FUNC) {
+        StrBuf s = {0};
+        if (decl[0] == '*') {
+            sb_putc(&s, '(');
+            sb_puts(&s, decl);
+            sb_putc(&s, ')');
+        } else {
+            sb_puts(&s, decl);
         }
-        emit_cast_typename(b, t);
-        if (stars > 0) {
-            sb_puts(b, " (");
+        if (t->kind == TY_ARRAY) {
+            sb_putc(&s, '[');
+            if (t->arr_len != NULL) {
+                emit_expr(&s, t->arr_len, 0);
+            }
+            sb_putc(&s, ']');
+        } else {
+            sb_putc(&s, '(');
             size_t i;
-            for (i = 0; i < stars; i += 1) {
-                sb_putc(b, '*');
+            for (i = 0; i < t->ntargs; i += 1) {
+                if (i != 0) {
+                    sb_puts(&s, ", ");
+                }
+                Type *pt = t->targs[i];
+                if (pt->kind == TY_NAME && pt->name != NULL && strcmp(pt->name, "...") == 0) {
+                    sb_puts(&s, "...");
+                } else {
+                    emit_var_decl(&s, pt, NULL, NULL);
+                }
             }
-            sb_putc(b, ')');
+            sb_putc(&s, ')');
         }
-        size_t i;
-        for (i = 0; i < nd; i += 1) {
-            sb_putc(b, '[');
-            if (dims[i] != NULL) {
-                emit_expr(b, dims[i], 0);
-            }
-            sb_putc(b, ']');
-        }
+        emit_typename_decl(b, t->inner, (s.data != NULL ? s.data : ""));
+        sb_free(&s);
         return;
     }
     if (t->is_const) {
@@ -407,16 +412,14 @@ static void emit_cast_typename(StrBuf *b, Type *t) {
         sb_puts(b, "volatile ");
     }
     emit_type_name(b, t);
-    if (stars != 0) {
+    if (decl != NULL && decl[0] != '\0') {
         sb_putc(b, ' ');
-        ptrdiff_t i;
-        for (i = stars - 1; i > -1; i += -1) {
-            sb_putc(b, '*');
-            if (i < 16 && pc[i]) {
-                sb_puts(b, "const");
-            }
-        }
+        sb_puts(b, decl);
     }
+}
+
+static void emit_cast_typename(StrBuf *b, Type *t) {
+    emit_typename_decl(b, t, "");
 }
 
 static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
@@ -442,7 +445,7 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_NONE: {
-            sb_puts(b, "NULL");
+            sb_puts(b, (g_c_mod ? "((void*)0)" : "NULL"));
             break;
         }
         case EX_UNARY: {
@@ -460,14 +463,17 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_TERNARY: {
-            emit_expr(b, e->cond, 0);
+            emit_expr(b, e->cond, PR_TERN);
             sb_puts(b, " ? ");
             emit_expr(b, e->lhs, 0);
             sb_puts(b, " : ");
-            emit_expr(b, e->rhs, 0);
+            emit_expr(b, e->rhs, PR_TERN);
             break;
         }
         case EX_CALL: {
+            if (!g_c_mod && e->lhs != NULL && e->lhs->kind == EX_IDENT && e->lhs->text != NULL && strcmp(e->lhs->text, "strcmp") == 0) {
+                g_needs_string = 1;
+            }
             emit_expr(b, e->lhs, PR_POST);
             sb_putc(b, '(');
             emit_args(b, e->args, e->nargs);
@@ -661,8 +667,17 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
             an += 1;
             t = t->inner;
         }
+        int istars = 0;
+        while (t->kind == TY_PTR) {
+            istars += 1;
+            t = t->inner;
+        }
         emit_type_quals(b, t);
         emit_type_name(b, t);
+        size_t ii;
+        for (ii = 0; ii < istars; ii += 1) {
+            sb_putc(b, '*');
+        }
         sb_puts(b, " (");
         size_t ai;
         for (ai = 0; ai < stars; ai += 1) {
@@ -689,7 +704,7 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
         return;
     }
     emit_type_quals(b, t);
-    if (self_struct != NULL && strcmp(t->name, self_struct) == 0) {
+    if (self_struct != NULL && strcmp(t->name, self_struct) == 0 && t->tag_kind == TAG_NONE) {
         sb_printf(b, "struct %s", base_cname(t->name));
     } else {
         emit_type_name(b, t);
@@ -760,6 +775,8 @@ static int step_is_negative(Expr *step) {
 }
 
 static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind);
+
+static void emit_func_sig(StrBuf *b, Func *f);
 
 static int stmtexpr_complex(Expr *e) {
     if (e == NULL || e->kind != EX_STMTEXPR) {
@@ -854,7 +871,9 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                 return;
             }
             indent(b, ind);
-            if (s->is_static) {
+            if (s->is_extern) {
+                sb_puts(b, "extern ");
+            } else if (s->is_static) {
                 sb_puts(b, "static ");
             }
             if (s->is_const) {
@@ -1134,6 +1153,17 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             sb_puts(b, "}\n");
             break;
         }
+        case ST_PASS: {
+            indent(b, ind);
+            sb_puts(b, ";\n");
+            break;
+        }
+        case ST_CPROTO: {
+            indent(b, ind);
+            emit_func_sig(b, s->cfunc);
+            sb_puts(b, ";\n");
+            break;
+        }
         case ST_BLOCK: {
             indent(b, ind);
             sb_puts(b, "{\n");
@@ -1260,21 +1290,7 @@ static void emit_func_params(StrBuf *b, Func *f) {
     }
 }
 
-static void emit_func(StrBuf *b, Func *f) {
-    if (f->is_comptime) {
-        return;
-    }
-    if (f->ntparams > 0) {
-        return;
-    }
-    g_cur_ret = f->ret;
-    g_defers.len = 0;
-    if (f->is_static) {
-        sb_puts(b, "static ");
-    }
-    if (f->is_inline && !g_std89) {
-        sb_puts(b, "inline ");
-    }
+static void emit_func_sig(StrBuf *b, Func *f) {
     Type *rt = f->ret;
     int rstars = 0;
     while (rt != NULL && rt->kind == TY_PTR) {
@@ -1293,12 +1309,44 @@ static void emit_func(StrBuf *b, Func *f) {
         sb_putc(&mid, ')');
         emit_fnptr_decl(b, rt, (mid.data != NULL ? mid.data : ""));
         sb_free(&mid);
+    } else if (rt != NULL && rt->kind == TY_ARRAY && rstars > 0) {
+        StrBuf mid = {0};
+        sb_putc(&mid, '(');
+        size_t si;
+        for (si = 0; si < rstars; si += 1) {
+            sb_putc(&mid, '*');
+        }
+        sb_puts(&mid, f->cname);
+        sb_putc(&mid, '(');
+        emit_func_params(&mid, f);
+        sb_putc(&mid, ')');
+        sb_putc(&mid, ')');
+        emit_var_decl(b, rt, (mid.data != NULL ? mid.data : ""), NULL);
+        sb_free(&mid);
     } else {
         emit_var_decl(b, f->ret, f->cname, NULL);
         sb_putc(b, '(');
         emit_func_params(b, f);
         sb_putc(b, ')');
     }
+}
+
+static void emit_func(StrBuf *b, Func *f) {
+    if (f->is_comptime) {
+        return;
+    }
+    if (f->ntparams > 0) {
+        return;
+    }
+    g_cur_ret = f->ret;
+    g_defers.len = 0;
+    if (f->is_static) {
+        sb_puts(b, "static ");
+    }
+    if (f->is_inline && !g_std89) {
+        sb_puts(b, "inline ");
+    }
+    emit_func_sig(b, f);
     int deferred = g_in_header && f->owner != NULL && !f->is_static && !f->is_inline;
     if (f->body == NULL || deferred) {
         sb_puts(b, ";\n");
@@ -1380,6 +1428,8 @@ static void emit_decl(StrBuf *b, Decl *d) {
                 sb_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
                 emit_struct_fields(b, d, 1);
                 sb_puts(b, "};\n");
+            } else if (d->is_fwd && g_c_mod) {
+                sb_printf(b, "%s %s;\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
             }
             size_t j;
             for (j = 0; j < d->nmethods; j += 1) {
@@ -1413,6 +1463,7 @@ static void emit_decl(StrBuf *b, Decl *d) {
 void emit_module_c(Module *m, StrBuf *out) {
     g_needs_stdint = 0;
     g_needs_stddef = 0;
+    g_needs_string = 0;
     g_in_header = m->is_header;
     g_c_mod = m->is_c;
     StrBuf body = {0};
@@ -1467,7 +1518,10 @@ void emit_module_c(Module *m, StrBuf *out) {
     if (g_needs_stddef) {
         sb_puts(out, "#include <stddef.h>\n");
     }
-    if (g_needs_stdint || g_needs_stddef) {
+    if (g_needs_string) {
+        sb_puts(out, "#include <string.h>\n");
+    }
+    if (g_needs_stdint || g_needs_stddef || g_needs_string) {
         sb_putc(out, '\n');
     }
     if (body.data != NULL) {

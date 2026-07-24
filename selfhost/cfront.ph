@@ -9,4 +9,10 @@
 import "plang.ph"
 import "ast.ph"
 
-def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> *Module
+# strict=True: the file is USER code — C constraint violations are errors.
+# strict=False: ingested system headers — GNU noise is skipped tolerantly.
+def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, strict: bool) -> *Module
+
+# value of a C char literal ('a', '\n', '\x41', '\012') — the single source of
+# truth for escapes (sema's comptime folding delegates here)
+def cchar_val(lex: const *char) -> i32

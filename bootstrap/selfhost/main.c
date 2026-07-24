@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include "backend.h"
@@ -12,7 +14,38 @@
 #include "../stl/vec.h"
 #include "vecs.h"
 
-static int has_suffix(const char *s, const char *suf) {
+static FILE *popen(const char *cmd, const char *mode);
+
+int32_t pclose(FILE *stream);
+
+static char *preprocess_c(Cc *cc, const char *path, size_t *out_len) {
+    const char *cpp = (cc->cpp != NULL ? cc->cpp : "cc");
+    const char *cmd = arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path);
+    FILE *f = popen(cmd, "r");
+    if (f == NULL) {
+        fatal("could not run the C preprocessor '%s' (see --cpp / PLANGC_CPP)", cpp);
+    }
+    StrBuf b = {0};
+    char chunk[4097];
+    while (1) {
+        size_t n = fread(&chunk[0], 1, 4096, f);
+        if (n == 0) {
+            break;
+        }
+        chunk[n] = '\0';
+        sb_puts(&b, &chunk[0]);
+    }
+    int32_t rc = pclose(f);
+    if (rc != 0) {
+        fatal("C preprocessing failed for '%s' ('%s -E'; fix the errors above or see --cpp / PLANGC_CPP)", path, cpp);
+    }
+    char *res = arena_strdup(&cc->arena, (b.data != NULL ? b.data : ""));
+    *out_len = strlen(res);
+    sb_free(&b);
+    return res;
+}
+
+int has_suffix(const char *s, const char *suf) {
     size_t n = strlen(s);
     size_t m = strlen(suf);
     return n >= m && strcmp(s + n - m, suf) == 0;
@@ -23,6 +56,8 @@ static void usage(void) {
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -o <file>        output (single input only; '-' = stdout)\n");
+    fprintf(stderr, "  --out-dir <dir>  mirror each input's path under <dir> (out/stl/x.h,\n");
+    fprintf(stderr, "                   out/selfhost/x.c ...): builds never touch the sources\n");
     fprintf(stderr, "  -D NAME[=VAL]    define a compile-time const (int/float/\"str\")\n");
     fprintf(stderr, "  --std=c89        emit strict C89 (C backend; default: c99)\n");
     fprintf(stderr, "  --i64-downgrade  under c89: map 64-bit ints to 32-bit\n");
@@ -30,9 +65,31 @@ static void usage(void) {
     fprintf(stderr, "  --backend <b>    codegen target (default: c)\n");
     fprintf(stderr, "  --cpp <cc>       C compiler used to preprocess `include <h>` headers\n");
     fprintf(stderr, "                   (default: PLANGC_CPP env, else \"cc\")\n");
+    fprintf(stderr, "  -W<group>        clang-style warning control: -W<g>, -Wno-<g>,\n");
+    fprintf(stderr, "                   -Werror, -Werror=<g>, -Wno-error=<g>, -Wall, -w\n");
+    fprintf(stderr, "  --inline-runtime helpers injected by the compiler (e.g. the 'in'\n");
+    fprintf(stderr, "                   operator's strcmp) become self-contained inline\n");
+    fprintf(stderr, "                   functions - the output has no libc dependency for them\n");
+    fprintf(stderr, "  -pedantic        warn on GNU/C23 extensions in C input\n");
+    fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n");
     fprintf(stderr, "  --tokens         dump tokens and exit\n");
     fprintf(stderr, "  -h, --help       this help\n");
     exit(2);
+}
+
+static void mkdirs_for(const char *p) {
+    char *buf = malloc(strlen(p) + 1);
+    strcpy(buf, p);
+    size_t i = 1;
+    while (buf[i] != '\0') {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            mkdir(buf, 493);
+            buf[i] = '/';
+        }
+        i += 1;
+    }
+    free(buf);
 }
 
 static const char *derive_output(Arena *a, const char *input, const Backend *be) {
@@ -141,9 +198,15 @@ static void qbe_merge_types(Cc *cc, Module *m) {
 
 int main(int argc, char **argv) {
     const char *out_path = NULL;
+    const char *out_dir = NULL;
     const char *backend_name = NULL;
     int tokens_only = 0;
     int std_version = 99;
+    int pedantic_lvl = 0;
+    int inline_runtime = 0;
+    int werror = 0;
+    int wall = 0;
+    int wsuppress = 0;
     int i64_mode = 0;
     const char *cpp_cmd = getenv("PLANGC_CPP");
     if (cpp_cmd == NULL) {
@@ -184,6 +247,12 @@ int main(int argc, char **argv) {
                 usage();
             }
             out_path = argv[i];
+        } else if (strcmp(argv[i], "--out-dir") == 0) {
+            i += 1;
+            if (i >= argc) {
+                usage();
+            }
+            out_dir = argv[i];
         } else if (strcmp(argv[i], "--backend") == 0) {
             i += 1;
             if (i >= argc) {
@@ -196,6 +265,28 @@ int main(int argc, char **argv) {
                 usage();
             }
             cpp_cmd = argv[i];
+        } else if (strcmp(argv[i], "--inline-runtime") == 0) {
+            inline_runtime = 1;
+        } else if (strcmp(argv[i], "-pedantic") == 0 || strcmp(argv[i], "--pedantic") == 0 || strcmp(argv[i], "-Wpedantic") == 0) {
+            pedantic_lvl = 1;
+        } else if (strcmp(argv[i], "-pedantic-errors") == 0 || strcmp(argv[i], "--pedantic-errors") == 0) {
+            pedantic_lvl = 2;
+        } else if (strcmp(argv[i], "-w") == 0) {
+            wsuppress = 1;
+        } else if (strcmp(argv[i], "-Werror") == 0) {
+            werror = 1;
+        } else if (strncmp(argv[i], "-Werror=", 8) == 0) {
+            diag_set(argv[i] + 8, 2);
+        } else if (strncmp(argv[i], "-Wno-error=", 11) == 0) {
+            diag_set_no_error(argv[i] + 11);
+        } else if (strcmp(argv[i], "-Wall") == 0) {
+            wall = 1;
+        } else if (strcmp(argv[i], "-Wextra") == 0) {
+            wall = 1;
+        } else if (strncmp(argv[i], "-Wno-", 5) == 0) {
+            diag_set(argv[i] + 5, 0);
+        } else if (argv[i][0] == '-' && argv[i][1] == 'W' && argv[i][2] != '\0') {
+            diag_set(argv[i] + 2, 1);
         } else if (strcmp(argv[i], "--tokens") == 0) {
             tokens_only = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -212,6 +303,9 @@ int main(int argc, char **argv) {
     }
     if (out_path != NULL && inputs.len > 1) {
         fatal("-o can only be used with a single input file");
+    }
+    if (out_path != NULL && out_dir != NULL) {
+        fatal("-o and --out-dir are mutually exclusive");
     }
     const Backend *be = (backend_name != NULL ? backend_find(backend_name) : backend_default());
     if (be == NULL) {
@@ -230,6 +324,8 @@ int main(int argc, char **argv) {
     cc.backend_name = be->name;
     cc.std_version = std_version;
     cc.cpp = cpp_cmd;
+    cc.inline_runtime = inline_runtime;
+    diag_config(werror, wall, pedantic_lvl, wsuppress);
     if (tokens_only) {
         size_t j;
         for (j = 0; j < inputs.len; j += 1) {
@@ -243,8 +339,14 @@ int main(int argc, char **argv) {
         Module *m;
         if (has_suffix(path, ".c") || has_suffix(path, ".i")) {
             size_t clen = 0;
-            char *cbytes = read_entire_file(path, &clen);
-            m = c_parse(&cc.arena, path, cbytes, clen);
+            char *cbytes;
+            if (has_suffix(path, ".c")) {
+                cbytes = preprocess_c(&cc, path, &clen);
+            } else {
+                cbytes = read_entire_file(path, &clen);
+            }
+            m = c_parse(&cc.arena, path, cbytes, clen, 1);
+            sema_run(&cc, m);
         } else {
             m = cc_load_module(&cc, path);
             sema_run(&cc, m);
@@ -255,6 +357,10 @@ int main(int argc, char **argv) {
         StrBuf out = {0};
         backend_emit(be, m, &out);
         const char *dest = (out_path != NULL ? out_path : derive_output(&cc.arena, Vec_pchar_get(&inputs, k), be));
+        if (out_dir != NULL) {
+            dest = arena_printf(&cc.arena, "%s/%s", out_dir, dest);
+            mkdirs_for(dest);
+        }
         if (strcmp(dest, "-") == 0) {
             fwrite(out.data, 1, out.len, stdout);
         } else {

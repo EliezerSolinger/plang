@@ -4,7 +4,7 @@
 
 #include "plang.h"
 
-typedef enum { TK_EOF = 0, TK_NEWLINE, TK_INDENT, TK_DEDENT, TK_IDENT, TK_NUMBER, TK_STRING, TK_CHARLIT, TK_HEADER, TK_DEF, TK_RETURN, TK_IF, TK_ELIF, TK_ELSE, TK_WHILE, TK_FOR, TK_IN, TK_DO, TK_MATCH, TK_CASE, TK_BREAK, TK_CONTINUE, TK_GOTO, TK_CONST, TK_STRUCT, TK_ENUM, TK_UNION, TK_IMPORT, TK_AND, TK_OR, TK_NOT, TK_TRUE, TK_FALSE, TK_NONE, TK_STATIC, TK_INLINE, TK_EXTERN, TK_VOLATILE, TK_RESTRICT, TK_DEFER, TK_WITH, TK_LPAREN, TK_RPAREN, TK_LBRACKET, TK_RBRACKET, TK_LBRACE, TK_RBRACE, TK_COMMA, TK_COLON, TK_SEMI, TK_DOT, TK_ARROW, TK_ELLIPSIS, TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT, TK_AMP, TK_PIPE, TK_CARET, TK_TILDE, TK_SHL, TK_SHR, TK_LT, TK_LE, TK_GT, TK_GE, TK_EQ, TK_NE, TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ, TK_DECLARE, TK_IMPLEMENT, TK_COUNT } TokKind;
+typedef enum { TK_EOF = 0, TK_NEWLINE, TK_INDENT, TK_DEDENT, TK_IDENT, TK_NUMBER, TK_STRING, TK_CHARLIT, TK_HEADER, TK_DEF, TK_RETURN, TK_IF, TK_ELIF, TK_ELSE, TK_WHILE, TK_FOR, TK_IN, TK_DO, TK_MATCH, TK_CASE, TK_BREAK, TK_CONTINUE, TK_GOTO, TK_CONST, TK_STRUCT, TK_ENUM, TK_UNION, TK_IMPORT, TK_AND, TK_OR, TK_NOT, TK_TRUE, TK_FALSE, TK_NONE, TK_STATIC, TK_INLINE, TK_EXTERN, TK_VOLATILE, TK_RESTRICT, TK_DEFER, TK_WITH, TK_LPAREN, TK_RPAREN, TK_LBRACKET, TK_RBRACKET, TK_LBRACE, TK_RBRACE, TK_COMMA, TK_COLON, TK_WALRUS, TK_SEMI, TK_DOT, TK_ARROW, TK_ELLIPSIS, TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT, TK_AMP, TK_PIPE, TK_CARET, TK_TILDE, TK_SHL, TK_SHR, TK_LT, TK_LE, TK_GT, TK_GE, TK_EQ, TK_NE, TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ, TK_DECLARE, TK_IMPLEMENT, TK_IS, TK_ISNOT, TK_COUNT } TokKind;
 
 typedef enum { TY_NAME = 0, TY_PTR, TY_ARRAY, TY_FUNC } TypeKind;
 
@@ -35,11 +35,14 @@ struct Type {
     int32_t ntargs;
 };
 
-typedef enum { EX_IDENT = 0, EX_NUMBER, EX_STRING, EX_CHARLIT, EX_TRUE, EX_FALSE, EX_NONE, EX_UNARY, EX_BINARY, EX_TERNARY, EX_CALL, EX_INDEX, EX_FIELD, EX_CAST, EX_INITLIST, EX_TYPEREF, EX_INCDEC, EX_DESIG, EX_ASSIGN, EX_COMMA, EX_COMPOUND, EX_VAARG, EX_GENERIC, EX_STMTEXPR, EX_WITHSELF } ExprKind;
+typedef enum { EX_IDENT = 0, EX_NUMBER, EX_STRING, EX_CHARLIT, EX_TRUE, EX_FALSE, EX_NONE, EX_UNARY, EX_BINARY, EX_TERNARY, EX_CALL, EX_INDEX, EX_FIELD, EX_CAST, EX_INITLIST, EX_TYPEREF, EX_INCDEC, EX_DESIG, EX_ASSIGN, EX_COMMA, EX_COMPOUND, EX_VAARG, EX_GENERIC, EX_STMTEXPR, EX_WITHSELF, EX_WALRUS, EX_IN } ExprKind;
 
 struct Expr {
     ExprKind kind;
     Pos pos;
+    int parened;
+    int out_done;
+    int32_t byref;
     const char *text;
     int32_t op;
     struct Expr *lhs;
@@ -60,7 +63,7 @@ struct Block {
     int32_t n;
 };
 
-typedef enum { ST_VAR = 0, ST_ASSIGN, ST_EXPR, ST_RETURN, ST_IF, ST_WHILE, ST_DO, ST_FOR, ST_MATCH, ST_BREAK, ST_CONTINUE, ST_GOTO, ST_LABEL, ST_DEFER, ST_WITH, ST_CFOR, ST_SWITCH, ST_CASE, ST_BLOCK } StmtKind;
+typedef enum { ST_VAR = 0, ST_ASSIGN, ST_EXPR, ST_RETURN, ST_IF, ST_WHILE, ST_DO, ST_FOR, ST_MATCH, ST_BREAK, ST_CONTINUE, ST_GOTO, ST_LABEL, ST_DEFER, ST_WITH, ST_CFOR, ST_SWITCH, ST_CASE, ST_BLOCK, ST_PASS, ST_GLOBAL, ST_NONLOCAL, ST_CPROTO } StmtKind;
 
 struct MatchCase {
     Expr **vals;
@@ -78,6 +81,7 @@ struct Stmt {
     Expr *init;
     int is_const;
     int is_static;
+    int is_extern;
     Expr *lhs;
     int32_t op;
     Expr *rhs;
@@ -103,12 +107,17 @@ struct Stmt {
     int32_t tm_sel;
     const char *label;
     int32_t case_lbl;
+    Func *cfunc;
 };
+
+typedef enum { PK_NONE = 0, PK_OUT, PK_REF, PK_IN } ParamByref;
 
 struct Param {
     const char *name;
     Type *type;
     Pos pos;
+    Expr *dflt;
+    int32_t byref;
 };
 
 struct Func {
@@ -119,6 +128,7 @@ struct Func {
     Param *params;
     int32_t nparams;
     int is_varargs;
+    int sig_empty;
     Type *ret;
     int is_static;
     int is_inline;
@@ -176,6 +186,8 @@ struct Module {
     const char *name;
     int is_header;
     int is_c;
+    char **tdnames;
+    int32_t ntd;
     Decl **decls;
     int32_t ndecls;
 };

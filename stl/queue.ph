@@ -21,43 +21,43 @@ struct Queue<T>:
     size: i32
     cap: i32
 
-    def init(self: *Queue<T>):
-        memset(self, 0, sizeof(*self))
+    def init(out self: Queue<T>):
+        memset(&self, 0, sizeof(self))
 
-    def grow(self: *Queue<T>):
-        if self->size < self->cap:
+    def grow(ref self: Queue<T>):
+        if self.size < self.cap:
             return
-        nc: i32 = 8 if self->cap == 0 else self->cap * 2
+        nc: i32 = 8 if self.cap == 0 else self.cap * 2
         nd: *T = malloc(sizeof(T) * usize(nc))
         i: i32
-        for i in range(self->size):
-            nd[i] = self->data[(self->head + i) % self->cap]
-        free(self->data)
-        self->data = nd
-        self->head = 0
-        self->cap = nc
+        for i in range(self.size):
+            nd[i] = self.data[(self.head + i) % self.cap]
+        free(self.data)
+        self.data = nd
+        self.head = 0
+        self.cap = nc
 
-    def push(self: *Queue<T>, item: T):
-        self->grow()
-        self->data[(self->head + self->size) % self->cap] = item
-        self->size += 1
+    def push(ref self: Queue<T>, item: T):
+        self.grow()
+        self.data[(self.head + self.size) % self.cap] = item
+        self.size += 1
 
-    def pop(self: *Queue<T>) -> T:
-        v: T = self->data[self->head]
-        self->head = (self->head + 1) % self->cap
-        self->size -= 1
+    def pop(ref self: Queue<T>) -> T:
+        v: T = self.data[self.head]
+        self.head = (self.head + 1) % self.cap
+        self.size -= 1
         return v
 
-    def peek(self: *Queue<T>) -> T:
-        return self->data[self->head]
+    def peek(in self: Queue<T>) -> T:
+        return self.data[self.head]
 
-    def is_empty(self: *Queue<T>) -> bool:
-        return self->size == 0
+    def is_empty(in self: Queue<T>) -> bool:
+        return self.size == 0
 
-    def clear(self: *Queue<T>):
-        self->head = 0
-        self->size = 0
+    def clear(ref self: Queue<T>):
+        self.head = 0
+        self.size = 0
 
-    def deinit(self: *Queue<T>):
-        free(self->data)
-        memset(self, 0, sizeof(*self))
+    def deinit(ref self: Queue<T>):
+        free(self.data)
+        memset(&self, 0, sizeof(self))

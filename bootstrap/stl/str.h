@@ -25,9 +25,9 @@ void Str_append(Str *self, const char *s);
 
 void Str_appendf(Str *self, const char *fmt, ...);
 
-const char *Str_cstr(Str *self);
+const char *Str_cstr(const Str *self);
 
-int Str_eq(Str *self, const char *other);
+int Str_eq(const Str *self, const char *other);
 
 void Str_clear(Str *self);
 

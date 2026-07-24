@@ -28,6 +28,8 @@ enum CtKind:
 def is_alpha_(c: char) -> bool
 def is_alnum_(c: char) -> bool
 def is_num_cont(c: char) -> bool
+def is_hex_digit(c: char) -> bool
+def c_num_error(t: const *char) -> const *char
 def word_count(s: const *char, w: const *char) -> i32
 def word_in(s: const *char, w: const *char) -> bool
 
@@ -40,6 +42,13 @@ declare Vec<CTok>
 implement Vec<CTok>
 
 # ---------- tokenizer ----------
+# valid C escape after a backslash: simple escapes, octal, hex, universal
+# (\u/\U) and the GNU \e (kept: gcc accepts it)
+static def is_c_escape(e: char) -> bool:
+    if e >= '0' and e <= '7':
+        return True
+    return e in {'n', 't', 'r', 'a', 'b', 'f', 'v', 'x', 'u', 'U', 'e', '\'', '"', '?', '\\', '\n'}
+
 struct Cx:
     file: const *char
     s: const *char
@@ -49,6 +58,7 @@ struct Cx:
     col: i32
     toks: Vec<CTok>
     a: *Arena
+    strict: bool   # user code: lexical constraint violations are errors
 
     static def lex_punct(self: *Cx, pos: Pos)
 
@@ -78,7 +88,7 @@ struct Cx:
         while self->i < self->n:
             c: char = self->s[self->i]
             # whitespace
-            if c == ' ' or c == '\t' or c == '\r' or c == '\n':
+            if c in {' ', '\t', '\r', '\n'}:
                 self->adv()
                 continue
             # preprocessor marker lines: # 1 "file" ...
@@ -103,7 +113,7 @@ struct Cx:
             # wide/unicode literal prefix (L'..' L".." u'..' U".."): the prefix
             # is KEPT in the token text — `wchar_t s[] = L"..."` must re-emit the
             # L or the initializer changes type (array of char vs wchar_t)
-            if (c == 'L' or c == 'u' or c == 'U') and self->i + 1 < self->n and (self->s[self->i + 1] == '\'' or self->s[self->i + 1] == '"'):
+            if (c in {'L', 'u', 'U'}) and self->i + 1 < self->n and (self->s[self->i + 1] == '\'' or self->s[self->i + 1] == '"'):
                 wst: usize = self->i
                 self->adv()                    # prefix
                 wq: char = self->s[self->i]
@@ -123,23 +133,31 @@ struct Cx:
                 self->push(CT_ID, pos, self->slice(start))
                 continue
             # number (int/hex/float, incl. hex-float 0x1p63 and exponent 1e-5)
-            if c >= '0' and c <= '9':
+            if (c >= '0' and c <= '9') or (c == '.' and self->peekc(1) >= '0' and self->peekc(1) <= '9'):
                 start2: usize = self->i
                 while self->i < self->n and is_num_cont(self->s[self->i]):
                     ch: char = self->s[self->i]
                     self->adv()
                     # sign after exponent (e/E dec, p/P hex) is part of the number
-                    if (ch == 'e' or ch == 'E' or ch == 'p' or ch == 'P') and self->i < self->n and (self->s[self->i] == '+' or self->s[self->i] == '-'):
+                    if (ch in {'e', 'E', 'p', 'P'}) and self->i < self->n and (self->s[self->i] == '+' or self->s[self->i] == '-'):
                         self->adv()
-                self->push(CT_NUM, pos, self->slice(start2))
+                ntxt: const *char = self->slice(start2)
+                nerr: const *char = c_num_error(ntxt)
+                if nerr != None:
+                    fatal_at(self->file, pos, "malformed number constant '%s': %s", ntxt, nerr)
+                self->push(CT_NUM, pos, ntxt)
                 continue
             # string
             if c == '"':
                 start3: usize = self->i
                 self->adv()
                 while self->i < self->n and self->s[self->i] != '"':
+                    if self->strict and self->s[self->i] == '\n':
+                        fatal_at(self->file, pos, "newline in string literal (missing closing '\"')")
                     if self->s[self->i] == '\\':
                         self->adv()
+                        if self->strict and not is_c_escape(self->s[self->i]):
+                            fatal_at(self->file, pos, "invalid escape sequence '\\%c' in string literal", self->s[self->i])
                     self->adv()
                 self->adv()  # closing quote
                 self->push(CT_STR, pos, self->slice(start3))
@@ -149,8 +167,12 @@ struct Cx:
                 start4: usize = self->i
                 self->adv()
                 while self->i < self->n and self->s[self->i] != '\'':
+                    if self->strict and self->s[self->i] == '\n':
+                        fatal_at(self->file, pos, "newline in character constant")
                     if self->s[self->i] == '\\':
                         self->adv()
+                        if self->strict and not is_c_escape(self->s[self->i]):
+                            fatal_at(self->file, pos, "invalid escape sequence '\\%c' in character constant", self->s[self->i])
                     self->adv()
                 self->adv()
                 self->push(CT_CHAR, pos, self->slice(start4))
@@ -177,7 +199,7 @@ struct Cx:
             two = True
         elif c == '>' and (c1 == '>' or c1 == '='):
             two = True
-        elif c == '-' and (c1 == '>' or c1 == '-' or c1 == '='):
+        elif c == '-' and (c1 in {'>', '-', '='}):
             two = True
         elif c == '+' and (c1 == '+' or c1 == '='):
             two = True
@@ -185,7 +207,7 @@ struct Cx:
             two = True
         elif c == '|' and (c1 == '|' or c1 == '='):
             two = True
-        elif (c == '=' or c == '!' or c == '*' or c == '/' or c == '%' or c == '^') and c1 == '=':
+        elif (c in {'=', '!', '*', '/', '%', '^'}) and c1 == '=':
             two = True
         if two:
             self->adv()
@@ -223,7 +245,93 @@ def is_alnum_(c: char) -> bool:
     return is_alpha_(c) or (c >= '0' and c <= '9')
 
 def is_num_cont(c: char) -> bool:
-    return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == 'x' or c == 'X' or c == '.' or c == 'u' or c == 'U' or c == 'l' or c == 'L' or c == 'p' or c == 'P'
+    return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c in {'x', 'X', '.', 'u', 'U', 'l', 'L', 'p', 'P'}
+
+def is_hex_digit(c: char) -> bool:
+    return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+
+# validates the FORM of a C number constant; returns a human explanation of
+# what is wrong, or None when well-formed. The lexer is greedy (12ul2 is one
+# token), so this is where `1e`, `1e+`, `100ul2`, `09` get a friendly error.
+def c_num_error(t: const *char) -> const *char:
+    i: i32 = 0
+    hex: bool = t[0] == '0' and (t[1] == 'x' or t[1] == 'X')
+    isflt: bool = False
+    if hex:
+        i = 2
+        nd = 0
+        while is_hex_digit(t[i]):
+            i += 1
+            nd += 1
+        if t[i] == '.':
+            isflt = True
+            i += 1
+            while is_hex_digit(t[i]):
+                i += 1
+                nd += 1
+        if nd == 0:
+            return "hex constant needs at least one digit"
+        if t[i] == 'p' or t[i] == 'P':
+            isflt = True
+            i += 1
+            if t[i] == '+' or t[i] == '-':
+                i += 1
+            if not (t[i] >= '0' and t[i] <= '9'):
+                return "hex-float exponent needs at least one digit"
+            while t[i] >= '0' and t[i] <= '9':
+                i += 1
+        elif isflt:
+            return "hex float requires a 'p' exponent"
+    else:
+        oct_: bool = t[0] == '0'
+        bad8: bool = False
+        while t[i] >= '0' and t[i] <= '9':
+            if t[i] > '7':
+                bad8 = True
+            i += 1
+        if t[i] == '.':
+            isflt = True
+            i += 1
+            while t[i] >= '0' and t[i] <= '9':
+                i += 1
+        if t[i] == 'e' or t[i] == 'E':
+            isflt = True
+            i += 1
+            if t[i] == '+' or t[i] == '-':
+                i += 1
+            if not (t[i] >= '0' and t[i] <= '9'):
+                return "exponent needs at least one digit"
+            while t[i] >= '0' and t[i] <= '9':
+                i += 1
+        if oct_ and bad8 and not isflt:
+            return "invalid digit in octal constant (digits must be 0-7)"
+    # suffix: float -> one of f/F/l/L; integer -> u/U and up to two l/L
+    if isflt:
+        if t[i] in {'f', 'F', 'l', 'L'}:
+            i += 1
+    else:
+        # integer suffix: at most one u/U and one L-GROUP ('l', 'L', 'll' or
+        # 'LL' — the two must be ADJACENT and the SAME case: 'lL' and 'lul'
+        # are invalid), in either order
+        us = 0; ls = 0
+        while t[i] != '\0':
+            if (t[i] == 'u' or t[i] == 'U') and us == 0:
+                us = 1
+                i += 1
+            elif (t[i] == 'l' or t[i] == 'L') and ls == 0:
+                lcase: char = t[i]
+                ls = 1
+                i += 1
+                if t[i] == lcase:
+                    ls = 2
+                    i += 1
+                elif t[i] == 'l' or t[i] == 'L':
+                    return "mixed-case 'll' suffix"
+            else:
+                break
+    if t[i] != '\0':
+        return "invalid suffix on number constant"
+    return None
 
 # value of a C char literal ('a', '\n', '\x41', '\0') for ceval
 def cchar_val(lex: const *char) -> i32:
@@ -273,10 +381,78 @@ def cchar_val(lex: const *char) -> i32:
                 k += 1
             return v
         case _:
-            return i32(e)
+            # octal escape \NNN (\0 already handled above)
+            if e >= '0' and e <= '7':
+                ov = 0
+                ok2: usize = 2
+                while ok2 < n - 1 and lex[ok2] >= '0' and lex[ok2] <= '7':
+                    ov = ov * 8 + i32(lex[ok2] - '0')
+                    ok2 += 1
+                return ov
+            return i32(e)   # \? \e etc: the character itself
     return 0
 
+# a real C KEYWORD can never be a declarator name. Typedef names CAN (member
+# and inner-scope names shadow them — C keeps separate namespaces).
+static def is_c_keyword(w: const *char) -> bool:
+    if w == None:
+        return False
+    match w[0]:
+        case 'a':
+            return strcmp(w, "auto") == 0
+        case 'b':
+            return strcmp(w, "break") == 0
+        case 'c':
+            return w in {"case", "char", "const", "continue"}
+        case 'd':
+            return w in {"default", "do", "double"}
+        case 'e':
+            return w in {"else", "enum", "extern"}
+        case 'f':
+            return w in {"float", "for"}
+        case 'g':
+            return strcmp(w, "goto") == 0
+        case 'i':
+            return w in {"if", "int", "inline"}
+        case 'l':
+            return strcmp(w, "long") == 0
+        case 'r':
+            return w in {"register", "restrict", "return"}
+        case 's':
+            return w in {"short", "signed", "sizeof", "static", "struct", "switch"}
+        case 't':
+            return strcmp(w, "typedef") == 0
+        case 'u':
+            return w in {"union", "unsigned"}
+        case 'v':
+            return w in {"void", "volatile"}
+        case 'w':
+            return strcmp(w, "while") == 0
+        case '_':
+            return strcmp(w, "_Bool") == 0
+        case _:
+            return False
+
+# ---------- scoped tag table ----------
+# C keeps ONE tag namespace with BLOCK scope: `struct s` in an inner block
+# shadows the outer one; a standalone `struct s;` DECLARES a new incomplete
+# tag in the current scope; kind (struct/union) is part of the identity.
+# Each identity gets a unique emitted name (cname) because our decls are
+# hoisted to module level — the outermost keeps the source spelling.
+struct CTag:
+    name: const *char    # tag as written in the source
+    cname: const *char   # unique emitted name (name, or name__sN when shadowing)
+    is_union: bool       # struct vs union — same namespace, distinct kinds
+    defined: bool        # this identity has seen a body
+    depth: i32           # lexical scope depth of the declaration
+
+declare Vec<CTag>
+implement Vec<CTag>
+
 # ---------- parser ----------
+# forward: parse_params (a Cp method) parses array-dimension sizes with c_expr
+def c_expr(p: *Cp) -> *Expr
+
 struct Cp:
     file: const *char
     t: *CTok
@@ -287,41 +463,46 @@ struct Cp:
     typedefs: StrMap<*Type>  # typedef name -> underlying type (resolved)
     enumvals: StrMap<i64>    # enum constant -> value (for ceval)
     enum_signed: StrSet      # enum tags with a negative enumerator (-> int)
-    fwd_tags: StrSet         # struct/union tags already declared (fwd or def):
-                             #   a bodyless `struct X` emits ONE forward decl
-    def_tags: StrSet         # tags DEFINED with a body: a redefinition in an
-                             #   inner scope shadows -> renamed (T -> T__sN)
-    tag_alias: StrMap<*char> # active tag renames (scoped; undone at block exit)
-    alias_names: **char      # undo stack for tag_alias: original tag +
-    alias_prevs: **char      #   previous alias value (None = none)
-    nalias: i32
-    ca_n: i32
-    ca_p: i32
+    tags: Vec<CTag>          # visible tag identities, innermost LAST; blocks
+                             #   save/restore tags.len (see c_block)
+    tag_depth: i32           # current lexical scope depth
+    used_cnames: StrSet      # every emitted tag cname (module-wide uniqueness)
     out_decls: *Vec<*Decl>   # structs/enums found are emitted here
+    params_empty: bool       # last COMPLETED parse_params saw `()` (sig unknown)
+    cap_sig_empty: bool      # same, for the signature captured by parse_declarator
     anon: i32                # counter for anonymous tags
     saw_const: bool          # skip_gnu saw 'const' (read by parse_base_type)
+    strict: bool             # user code: C constraint violations are ERRORS.
+                             # False for ingested system headers (GNU noise).
+    spec_static: bool        # storage class absorbed mid-specifier (C allows
+    spec_extern: bool        #   `int static signed i`): read by the caller
 
     static def skip_gnu(self: *Cp)
+    static def is_storage_kw(self: *Cp, w: const *char) -> bool
+    static def tag_find(self: *Cp, name: const *char) -> i32
+    static def tag_push(self: *Cp, name: const *char, is_union: bool, defined: bool) -> i32
     static def skip_parens(self: *Cp)
     static def skip_to(self: *Cp, a: const *char, b: const *char)
     static def is_type_kw(self: *Cp, w: const *char) -> bool
     static def canon_arith(self: *Cp, n: const *char) -> const *char
+    static def check_arith_specs(self: *Cp, n: const *char, pos: Pos)
     static def parse_base_type(self: *Cp) -> *Type
     static def base_name(self: *Cp, n: const *char) -> *Type
     static def parse_stars(self: *Cp, base: *Type) -> *Type
     static def is_fnptr_ahead(self: *Cp) -> bool
-    static def parse_fnptr(self: *Cp, ret: *Type, out_name: **char) -> *Type
-    static def parse_declarator(self: *Cp, base: *Type, out_name: **char, prms: *Vec<Param>, varargs: *bool, has_params: *bool) -> *Type
+    static def parse_fnptr(self: *Cp, ret: *Type, out out_name: *char) -> *Type
+    static def parse_declarator(self: *Cp, base: *Type, out out_name: *char, ref prms: Vec<Param>, out varargs: bool, out has_params: bool) -> *Type
     static def parse_decl_suffix(self: *Cp, ty: *Type) -> *Type
-    static def parse_params(self: *Cp, prms: *Vec<Param>, varargs: *bool)
+    static def parse_params(self: *Cp, ref prms: Vec<Param>, out varargs: bool)
+    static def parse_params_inner(self: *Cp, ref prms: Vec<Param>, out varargs: bool)
     static def parse_struct_body(self: *Cp, tag: const *char, is_union: bool) -> *Decl
     static def parse_enum_body(self: *Cp, tag: const *char) -> *Decl
     static def tok_is_type(self: *Cp, w: const *char) -> bool
-    static def type_size(self: *Cp, t: *Type, ok: *bool) -> i64
-    static def ceval_prim(self: *Cp, ok: *bool) -> i64
+    static def type_size(self: *Cp, t: *Type, ref ok: bool) -> i64
+    static def ceval_prim(self: *Cp, ref ok: bool) -> i64
     static def ceval_prec(self: *Cp) -> i32
-    static def ceval_bin(self: *Cp, minprec: i32, ok: *bool) -> i64
-    static def ceval(self: *Cp, ok: *bool) -> i64
+    static def ceval_bin(self: *Cp, minprec: i32, ref ok: bool) -> i64
+    static def ceval(self: *Cp, ref ok: bool) -> i64
 
     static def pk(self: *Cp) -> *CTok:
         return &self->t[self->i]
@@ -354,7 +535,11 @@ struct Cp:
 
     # C type keyword (base arithmetic)
     static def is_type_kw(self: *Cp, w: const *char) -> bool:
-        return strcmp(w, "void") == 0 or strcmp(w, "char") == 0 or strcmp(w, "short") == 0 or strcmp(w, "int") == 0 or strcmp(w, "long") == 0 or strcmp(w, "float") == 0 or strcmp(w, "double") == 0 or strcmp(w, "signed") == 0 or strcmp(w, "unsigned") == 0 or strcmp(w, "_Bool") == 0
+        return w in {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool"}
+
+    # storage-class specifier — legal in any position among the type words
+    static def is_storage_kw(self: *Cp, w: const *char) -> bool:
+        return w in {"static", "extern", "register", "auto"}
 
     # GNU noise/qualifiers that cproc accepts and we ignore:
     # __attribute__((...)) / __asm__(...) / const / volatile / restrict /
@@ -362,13 +547,17 @@ struct Cp:
     static def skip_gnu(self: *Cp):
         while self->pk()->kind == CT_ID:
             w: const *char = self->pk()->text
-            if strcmp(w, "__attribute__") == 0 or strcmp(w, "__attribute") == 0 or strcmp(w, "__asm__") == 0 or strcmp(w, "__asm") == 0 or strcmp(w, "asm") == 0:
+            if w in {"__attribute__", "__attribute", "__asm__", "__asm", "asm"}:
                 self->adv()
                 if self->is_punct("("):
                     self->skip_parens()
-            elif strcmp(w, "const") == 0 or strcmp(w, "volatile") == 0 or strcmp(w, "__volatile__") == 0 or strcmp(w, "restrict") == 0 or strcmp(w, "__restrict") == 0 or strcmp(w, "__restrict__") == 0 or strcmp(w, "__extension__") == 0 or strcmp(w, "static") == 0 or strcmp(w, "extern") == 0 or strcmp(w, "register") == 0 or strcmp(w, "auto") == 0 or strcmp(w, "inline") == 0 or strcmp(w, "__inline") == 0 or strcmp(w, "__inline__") == 0 or strcmp(w, "_Noreturn") == 0 or strcmp(w, "__thread") == 0 or strcmp(w, "_Thread_local") == 0:
+            elif w in {"const", "volatile", "__volatile__", "restrict", "__restrict", "__restrict__", "__extension__", "static", "extern", "register", "auto", "inline", "__inline", "__inline__", "_Noreturn", "__thread", "_Thread_local"}:
                 if strcmp(w, "const") == 0:
                     self->saw_const = True   # for parse_base_type to mark the type
+                elif strcmp(w, "static") == 0:
+                    self->spec_static = True   # storage class (any position)
+                elif strcmp(w, "extern") == 0:
+                    self->spec_extern = True
                 self->adv()
             else:
                 break
@@ -387,9 +576,9 @@ struct Cp:
     # does the word `w` begin a type name? (builtin/struct/union/enum/
     # qualifier/known typedef) — used by at_type and sizeof in ceval
     static def tok_is_type(self: *Cp, w: const *char) -> bool:
-        if self->is_type_kw(w) or strcmp(w, "struct") == 0 or strcmp(w, "union") == 0 or strcmp(w, "enum") == 0:
+        if self->is_type_kw(w) or w in {"struct", "union", "enum"}:
             return True
-        if strcmp(w, "const") == 0 or strcmp(w, "volatile") == 0 or strcmp(w, "unsigned") == 0 or strcmp(w, "signed") == 0:
+        if w in {"const", "volatile", "unsigned", "signed"}:
             return True
         return self->types.has(w)
 
@@ -398,10 +587,10 @@ struct Cp:
         if t->kind != CT_ID:
             return False
         w: const *char = t->text
-        if self->is_type_kw(w) or strcmp(w, "struct") == 0 or strcmp(w, "union") == 0 or strcmp(w, "enum") == 0:
+        if self->is_type_kw(w) or w in {"struct", "union", "enum"}:
             return True
         # qualifiers/storage also start a type
-        if strcmp(w, "const") == 0 or strcmp(w, "volatile") == 0 or strcmp(w, "static") == 0 or strcmp(w, "extern") == 0 or strcmp(w, "register") == 0 or strcmp(w, "inline") == 0 or strcmp(w, "__extension__") == 0 or strcmp(w, "__inline") == 0 or strcmp(w, "__inline__") == 0 or strcmp(w, "unsigned") == 0 or strcmp(w, "signed") == 0:
+        if w in {"const", "volatile", "static", "extern", "register", "inline", "__extension__", "__inline", "__inline__", "unsigned", "signed"}:
             return True
         return self->types.has(w)
 
@@ -409,52 +598,76 @@ struct Cp:
     # arithmetic type, and handles struct/union/enum (with optional body def).
     static def parse_base_type(self: *Cp) -> *Type:
         self->saw_const = False
-        self->skip_gnu()
+        self->spec_static = False
+        self->spec_extern = False
+        self->skip_gnu()   # absorbs leading storage class into spec_static/extern
         w: const *char = self->pk()->text
+        if self->strict and self->spec_static and self->spec_extern:
+            fatal_at(self->file, self->pk()->pos, "conflicting storage classes ('static' and 'extern')")
         # struct / union / enum
-        if strcmp(w, "struct") == 0 or strcmp(w, "union") == 0:
+        if w in {"struct", "union"}:
             is_union: bool = strcmp(w, "union") == 0
             self->adv()
+            if self->strict and self->pk()->kind == CT_ID and self->is_storage_kw(self->pk()->text):
+                fatal_at(self->file, self->pk()->pos, "misplaced storage class '%s' (must precede the type)", self->pk()->text)
             self->skip_gnu()
             tag: const *char = None
             if self->pk()->kind == CT_ID and not self->is_punct("{"):
+                if self->strict and (self->is_type_kw(self->pk()->text) or is_c_keyword(self->pk()->text)):
+                    fatal_at(self->file, self->pk()->pos, "invalid struct/union tag '%s' (a C keyword)", self->pk()->text)
                 tag = self->adv()->text
             if self->is_punct("{"):
                 if tag == None:
+                    # anonymous: unique name, no lookup ever reaches it
                     tag = arena_printf(self->a, "__anon%d", self->anon)
                     self->anon += 1
-                elif self->def_tags.has(tag):
-                    # redefinition in an inner scope: C tags are block-scoped
-                    # (`struct T` in a function shadows the file-scope one), but
-                    # our decls are hoisted — rename and alias until block exit
-                    renamed: const *char = arena_printf(self->a, "%s__s%d", tag, self->anon)
-                    self->anon += 1
-                    self->alias_names = vec_grow(self->alias_names, self->nalias, &self->ca_n, sizeof(*self->alias_names))
-                    self->alias_prevs = vec_grow(self->alias_prevs, self->nalias, &self->ca_p, sizeof(*self->alias_prevs))
-                    self->alias_names[self->nalias] = (*char)(tag)
-                    self->alias_prevs[self->nalias] = self->tag_alias.get_or(tag, None)
-                    self->nalias += 1
-                    self->tag_alias.put(tag, (*char)(renamed))
-                    tag = renamed
+                    self->used_cnames.add(tag)
+                else:
+                    # DEFINITION: completes a same-scope forward, redefines in
+                    # an inner scope (new identity, shadowing), errors on a
+                    # same-scope redefinition or kind conflict (strict)
+                    di: i32 = self->tag_find(tag)
+                    if di >= 0 and self->tags.data[di].depth == self->tag_depth:
+                        if self->strict and self->tags.data[di].is_union != is_union:
+                            fatal_at(self->file, self->pk()->pos, "'%s' declared as both struct and union (wrong kind of tag)", tag)
+                        if self->tags.data[di].defined:
+                            if self->strict:
+                                fatal_at(self->file, self->pk()->pos, "redefinition of '%s %s'", "union" if is_union else "struct", tag)
+                            di = self->tag_push(tag, is_union, True)   # tolerant: shadow anyway
+                        else:
+                            self->tags.data[di].defined = True         # completes the forward
+                    else:
+                        di = self->tag_push(tag, is_union, True)
+                    tag = self->tags.data[di].cname
+                # the identity is registered BEFORE the body so a self-referential
+                # member (`union u { union u *p; }`) resolves to THIS tag
                 d: *Decl = self->parse_struct_body(tag, is_union)
                 self->out_decls.push(d)
-                self->def_tags.add(tag)
-                self->fwd_tags.add(tag)
             elif tag != None:
-                al: *char = self->tag_alias.get_or(tag, None)
-                if al != None:
-                    tag = al   # reference inside a scope that renamed this tag
-                if not self->fwd_tags.has(tag):
-                    # bodyless `struct X` (a forward like glibc's `struct _IO_marker;`
-                    # or a field/param referencing an opaque tag): emit ONE forward
-                    # decl so the C backend's upfront typedef pass covers the name.
+                # `struct T;` standalone is a DECLARATION: it declares a NEW
+                # incomplete tag in the CURRENT scope (shadowing an outer one);
+                # a mere REFERENCE (`struct T *p`) binds to the visible identity
+                standalone: bool = self->is_punct(";")
+                ri: i32 = self->tag_find(tag)
+                fresh: bool = False
+                if ri >= 0 and (not standalone or self->tags.data[ri].depth == self->tag_depth):
+                    if self->strict and self->tags.data[ri].is_union != is_union:
+                        fatal_at(self->file, self->pk()->pos, "'%s' declared as both struct and union (wrong kind of tag)", tag)
+                else:
+                    # undeclared reference, or standalone decl shadowing an outer
+                    # scope: new incomplete identity in the current scope
+                    ri = self->tag_push(tag, is_union, False)
+                    fresh = True
+                tag = self->tags.data[ri].cname
+                if fresh:
+                    # emit ONE forward decl so the C backend's upfront typedef
+                    # pass covers the (possibly renamed) name
                     fd: *Decl = arena_alloc(self->a, sizeof(Decl))
                     fd->kind = DL_UNION if is_union else DL_STRUCT
                     fd->name = tag
                     fd->is_fwd = True
                     fd->pos = self->pk()->pos
                     self->out_decls.push(fd)
-                    self->fwd_tags.add(tag)
             # does NOT register the tag as a type name: in C, tags live in
             # their own namespace (a function and a struct can have the SAME name;
             # only `struct X` refers to the tag). The SPELLING is preserved via
@@ -476,11 +689,25 @@ struct Cp:
             if tag2 != None and self->enum_signed.has(tag2):
                 return self->base_name("int")
             return self->base_name("unsigned")
-        # multi-word arithmetic type: unsigned long long int, etc.
+        # multi-word arithmetic type: unsigned long long int, etc. Storage-class
+        # specifiers may interleave (`int static signed i`): absorb them.
         if self->is_type_kw(w):
+            spos: Pos = self->pk()->pos
             name: const *char = self->adv()->text
-            while self->pk()->kind == CT_ID and self->is_type_kw(self->pk()->text):
-                name = arena_printf(self->a, "%s %s", name, self->adv()->text)
+            while self->pk()->kind == CT_ID and (self->is_type_kw(self->pk()->text) or self->is_storage_kw(self->pk()->text)):
+                if self->is_storage_kw(self->pk()->text):
+                    if self->pk()->text[1] == 't':
+                        if self->strict and self->spec_extern:
+                            fatal_at(self->file, self->pk()->pos, "conflicting storage classes ('static' and 'extern')")
+                        self->spec_static = True
+                    elif self->pk()->text[0] == 'e':
+                        if self->strict and self->spec_static:
+                            fatal_at(self->file, self->pk()->pos, "conflicting storage classes ('static' and 'extern')")
+                        self->spec_extern = True
+                    self->adv()
+                else:
+                    name = arena_printf(self->a, "%s %s", name, self->adv()->text)
+            self->check_arith_specs(name, spos)
             return self->base_name(self->canon_arith(name))
         # typedef name: resolves to the underlying type (the backend doesn't change;
         # doesn't mark const on the typedef's shared node)
@@ -490,9 +717,31 @@ struct Cp:
             if u != None:
                 return u
             return self->base_name(w)  # struct tag
-        # unknown: assume int (tolerant, like header noise)
+        # unknown: strict user code errors; header noise assumes int
+        if self->strict:
+            fatal_at(self->file, self->pk()->pos, "unknown type name '%s'", w)
         self->adv()
         return self->base_name("int")
+
+    # innermost visible tag identity with this source name (-1 = none)
+    static def tag_find(self: *Cp, name: const *char) -> i32:
+        k: i32
+        for k in range(self->tags.len - 1, -1, -1):
+            if strcmp(self->tags.data[k].name, name) == 0:
+                return k
+        return -1
+
+    # new tag identity in the CURRENT scope; the emitted cname is unique
+    # across the module (hoisted decls must not collide)
+    static def tag_push(self: *Cp, name: const *char, is_union: bool, defined: bool) -> i32:
+        cn: const *char = name
+        if self->used_cnames.has(cn):
+            cn = arena_printf(self->a, "%s__s%d", name, self->anon)
+            self->anon += 1
+        self->used_cnames.add(cn)
+        ct: CTag = {name, cn, is_union, defined, self->tag_depth}
+        self->tags.push(ct)
+        return self->tags.len - 1
 
     # new TY_NAME node with the const seen from the qualifiers ahead
     # (significant for _Generic matching: const char* vs char*)
@@ -500,6 +749,45 @@ struct Cp:
         t: *Type = ty_name(self->a, n)
         t->is_const = self->saw_const
         return t
+
+    # C11 6.7.2p2: only the listed multisets of type specifiers are valid —
+    # rejects 'unsigned float', 'signed void', 'char int', 'long short', etc.
+    static def check_arith_specs(self: *Cp, n: const *char, pos: Pos):
+        if not self->strict:
+            return
+        nvoid: i32 = word_count(n, "void")
+        nchar: i32 = word_count(n, "char")
+        nshort: i32 = word_count(n, "short")
+        nint: i32 = word_count(n, "int")
+        nlong: i32 = word_count(n, "long")
+        nflt: i32 = word_count(n, "float")
+        ndbl: i32 = word_count(n, "double")
+        nsig: i32 = word_count(n, "signed")
+        nuns: i32 = word_count(n, "unsigned")
+        nbool: i32 = word_count(n, "_Bool")
+        bad: bool = False
+        if nsig + nuns > 1:
+            bad = True                              # signed unsigned / twice
+        if nvoid + nchar + nflt + ndbl + nbool > 1:
+            bad = True                              # two base types
+        if nshort > 1 or nint > 1 or nlong > 2:
+            bad = True
+        if nshort > 0 and nlong > 0:
+            bad = True
+        if (nflt > 0 or ndbl > 0 or nvoid > 0 or nbool > 0) and nsig + nuns + nshort > 0:
+            bad = True                              # unsigned double, signed void...
+        if nflt > 0 and nlong > 0:
+            bad = True                              # long float
+        if ndbl > 0 and nlong > 1:
+            bad = True                              # long long double
+        if (nvoid > 0 or nchar > 0 or nflt > 0 or ndbl > 0 or nbool > 0) and nint > 0:
+            bad = True                              # char int, double int...
+        if nchar > 0 and nshort + nlong > 0:
+            bad = True                              # short char / long char
+        if nvoid > 0 and nchar + nshort + nint + nlong + nflt + ndbl + nsig + nuns + nbool > 0:
+            bad = True
+        if bad:
+            fatal_at(self->file, pos, "invalid combination of type specifiers ('%s')", n)
 
     # canonicalizes a multi-word arithmetic type for the backend, ORDER-INSENSITIVE
     # (C allows "long unsigned int" == "unsigned long"). Counts the words.
@@ -574,12 +862,12 @@ struct Cp:
 
     # pointer-to-function declarator starting from '(' — compat: delegates to
     # the full recursive declarator (params capture discarded)
-    static def parse_fnptr(self: *Cp, ret: *Type, out_name: **char) -> *Type:
+    static def parse_fnptr(self: *Cp, ret: *Type, out out_name: *char) -> *Type:
         prms: Vec<Param>
         prms.init()
         va: bool = False
         hp: bool = False
-        return self->parse_declarator(ret, out_name, &prms, &va, &hp)
+        return self->parse_declarator(ret, out out_name, ref prms, out va, out hp)
 
     # full C declarator (recursive, two passes chibicc-style):
     #   declarator := '*'* ( '(' declarator ')' | name ) suffix*
@@ -589,7 +877,7 @@ struct Cp:
     # (saves/restores the token index). The params of the declarator that HAS
     # the name are captured in prms/varargs (has_params marks the capture) —
     # it's the function's signature when the result is TY_FUNC.
-    static def parse_declarator(self: *Cp, base: *Type, out_name: **char, prms: *Vec<Param>, varargs: *bool, has_params: *bool) -> *Type:
+    static def parse_declarator(self: *Cp, base: *Type, out out_name: *char, ref prms: Vec<Param>, out varargs: bool, out has_params: bool) -> *Type:
         ty: *Type = base
         self->skip_gnu()
         while self->is_punct("*"):
@@ -604,13 +892,13 @@ struct Cp:
             # starts a type (or is ')' / '...').
             nx2: *CTok = self->pk1()
             starts_params: bool = False
-            if nx2->kind == CT_PUNCT and (strcmp(nx2->text, ")") == 0 or strcmp(nx2->text, "...") == 0):
+            if nx2->kind == CT_PUNCT and (nx2->text in {")", "..."}):
                 starts_params = True
-            elif nx2->kind == CT_ID and (self->is_type_kw(nx2->text) or strcmp(nx2->text, "struct") == 0 or strcmp(nx2->text, "union") == 0 or strcmp(nx2->text, "enum") == 0 or strcmp(nx2->text, "const") == 0 or strcmp(nx2->text, "volatile") == 0 or self->types.has(nx2->text)):
+            elif nx2->kind == CT_ID and (self->is_type_kw(nx2->text) or nx2->text in {"struct", "union", "enum", "const", "volatile"} or self->types.has(nx2->text)):
                 starts_params = True
             if starts_params:
                 self->skip_parens()   # signature detail not needed: emits as ()
-                *out_name = ""
+                out_name = ""
                 return ty_func(self->a, ty)
             start: usize = self->i
             self->adv()
@@ -621,22 +909,47 @@ struct Cp:
                 elif self->is_punct(")"):
                     depth -= 1
                 self->adv()
-            ty = self->parse_decl_suffix(ty)
+            # EXTERNAL suffix that is a parameter list — `(name)(params)`,
+            # `(*(f))(params)` — parse it FOR REAL (not skip): if the inner
+            # declarator turns out not to carry its own signature, these are
+            # the function's parameters and must survive to the prototype
+            eprms: Vec<Param>
+            eprms.init()
+            eva: bool = False
+            ecap: bool = False
+            e_empty: bool = False
+            if self->is_punct("("):
+                self->adv()
+                self->parse_params(ref eprms, out eva)
+                self->expect_punct(")")
+                self->skip_gnu()
+                ty = ty_func(self->a, ty)
+                ecap = True
+                e_empty = self->params_empty
+            else:
+                ty = self->parse_decl_suffix(ty)
             end: usize = self->i
             self->i = start + 1
-            r: *Type = self->parse_declarator(ty, out_name, prms, varargs, has_params)
+            r: *Type = self->parse_declarator(ty, out out_name, ref prms, out varargs, out has_params)
             self->i = end
+            if ecap and not has_params:
+                for ei in range(eprms.len):
+                    prms.push(eprms.get(ei))
+                varargs = eva
+                has_params = True
+                self->cap_sig_empty = e_empty
             return r
-        *out_name = ""
+        out_name = ""
         if self->pk()->kind == CT_ID:
-            *out_name = self->adv()->text
+            out_name = self->adv()->text
         if self->is_punct("("):
             # suffix directly on the name: function signature — captures params
             self->adv()
-            self->parse_params(prms, varargs)
+            self->parse_params(ref prms, out varargs)
             self->expect_punct(")")
             self->skip_gnu()
-            *has_params = True
+            has_params = True
+            self->cap_sig_empty = self->params_empty
             return ty_func(self->a, ty)
         return self->parse_decl_suffix(ty)
 
@@ -653,7 +966,7 @@ struct Cp:
             if not self->is_punct("]"):
                 dsave: usize = self->i
                 dok: bool = True
-                dv: i64 = self->ceval(&dok)
+                dv: i64 = self->ceval(ref dok)
                 if dok and self->is_punct("]"):
                     dd = ex_new(self->a, EX_NUMBER, self->pk()->pos)
                     dd->text = arena_printf(self->a, "%lld", dv)
@@ -670,8 +983,13 @@ struct Cp:
         return ty
 
     # parameter list (after the '(' already consumed; leaves at the ')')
-    static def parse_params(self: *Cp, prms: *Vec<Param>, varargs: *bool):
-        *varargs = False
+    static def parse_params(self: *Cp, ref prms: Vec<Param>, out varargs: bool):
+        empty_here: bool = self->is_punct(")")
+        self->parse_params_inner(ref prms, out varargs)
+        self->params_empty = empty_here
+
+    static def parse_params_inner(self: *Cp, ref prms: Vec<Param>, out varargs: bool):
+        varargs = False
         if self->is_punct(")"):
             return
         if self->is_kw("void") and strcmp(self->pk1()->text, ")") == 0:
@@ -680,16 +998,18 @@ struct Cp:
         do:
             if self->is_punct("..."):
                 self->adv()
-                *varargs = True
+                varargs = True
                 return
             pbase: *Type = self->parse_base_type()
+            if self->strict and (self->spec_static or self->spec_extern):
+                fatal_at(self->file, self->pk()->pos, "storage class specifier on a function parameter")
             pty: *Type = self->parse_stars(pbase)
             pname: const *char = ""
             # function-pointer parameter: T (*name)(args) -> captured via
             # the recursive declarator (the precise type matters for inference)
             if self->is_punct("("):
                 fpn: *char = None
-                pty = self->parse_fnptr(pty, &fpn)
+                pty = self->parse_fnptr(pty, out fpn)
                 if fpn != None:
                     pname = fpn
                 # abstract FUNCTION-type parameter — `int ()`, `int (int x)` —
@@ -703,14 +1023,35 @@ struct Cp:
                 if self->is_punct("("):
                     self->skip_parens()
                     pty = ty_ptr(self->a, ty_func(self->a, pty))
+            # array parameter: only the OUTERMOST dimension decays to a pointer;
+            # inner dimensions are kept (`int a[2][3]` -> `int (*)[3]`, NOT int**)
+            dims: Vec<*Expr>
+            dims.init()
             while self->eat("["):
-                if not self->is_punct("]"):
-                    self->skip_to("]", "]")
+                # C99 qualifiers inside a parameter's brackets: int x[const 5],
+                # int x[static 5], int x[restrict] — not part of the size expr
+                while self->pk()->kind == CT_ID and (strcmp(self->pk()->text, "const") == 0 or strcmp(self->pk()->text, "static") == 0 or strcmp(self->pk()->text, "restrict") == 0 or strcmp(self->pk()->text, "__restrict") == 0 or strcmp(self->pk()->text, "volatile") == 0):
+                    self->adv()
+                de: *Expr = None
+                # `[*]` — unspecified VLA size in a prototype: no dimension
+                if self->is_punct("*") and strcmp(self->pk1()->text, "]") == 0:
+                    self->adv()
+                elif not self->is_punct("]"):
+                    de = c_expr(self)
                 self->expect_punct("]")
-                pty = ty_ptr(self->a, pty)  # param array decays to a pointer
+                dims.push(de)
+            if dims.len > 0:
+                if self->strict and pty != None and pty->kind == TY_NAME and pty->name != None and strcmp(pty->name, "void") == 0:
+                    fatal_at(self->file, self->pk()->pos, "parameter declares an array of voids")
+                # build the inner array type from the innermost dimension up,
+                # skipping the first (it becomes the pointer)
+                for di in range(dims.len - 1, 0, -1):
+                    pty = ty_array(self->a, pty, dims.get(di))
+                pty = ty_ptr(self->a, pty)
+            dims.deinit()
             self->skip_gnu()
             prm: Param = {pname, pty, self->pk()->pos}
-            prms->push(prm)
+            prms.push(prm)
         while self->eat(",")
 
     # skips tokens (respecting () [] {}) until one of the terminators at level 0
@@ -734,15 +1075,19 @@ struct Cp:
         fields.init()
         while not self->is_punct("}") and self->pk()->kind != CT_EOF:
             base: *Type = self->parse_base_type()
+            if self->strict and (self->spec_static or self->spec_extern):
+                fatal_at(self->file, self->pk()->pos, "storage class specifier on a struct/union member")
             do:
                 fty: *Type = self->parse_stars(base)
                 fname: const *char = ""
                 # function-pointer field: T (*name)(args)
                 if self->is_fnptr_ahead():
                     fpn: *char = None
-                    fty = self->parse_fnptr(fty, &fpn); fname = fpn
+                    fty = self->parse_fnptr(fty, out fpn); fname = fpn
                 else:
                     if self->pk()->kind == CT_ID:
+                        if self->strict and is_c_keyword(self->pk()->text):
+                            fatal_at(self->file, self->pk()->pos, "invalid member name '%s' (a C keyword)", self->pk()->text)
                         fname = self->adv()->text
                     # array field: literal dim becomes a real TY_ARRAY (correct
                     # layout for offsets/sizeof); complex dim falls back to the
@@ -755,7 +1100,7 @@ struct Cp:
                         if not self->is_punct("]"):
                             fdsave: usize = self->i
                             fok: bool = True
-                            fv: i64 = self->ceval(&fok)
+                            fv: i64 = self->ceval(ref fok)
                             if fok and self->is_punct("]"):
                                 fd = ex_new(self->a, EX_NUMBER, self->pk()->pos)
                                 fd->text = arena_printf(self->a, "%lld", fv)
@@ -777,12 +1122,18 @@ struct Cp:
                 bw = -1                     # -1 = not a bitfield
                 if self->eat(":"):               # bitfield: constant width
                     wok: bool = True
-                    wv: i64 = self->ceval(&wok)
+                    wv: i64 = self->ceval(ref wok)
                     if wok:
                         bw = i32(wv)
                     else:
                         self->skip_to(",", ";")
                 if fname[0] != '\0':
+                    if self->strict and fty != None and fty->kind == TY_NAME and fty->name != None and strcmp(fty->name, "void") == 0:
+                        fatal_at(self->file, self->pk()->pos, "member '%s' has incomplete type 'void'", fname)
+                    if self->strict:
+                        for dmi in range(fields.len):
+                            if fields.data[dmi].name != None and strcmp(fields.data[dmi].name, fname) == 0:
+                                fatal_at(self->file, self->pk()->pos, "duplicate member '%s'", fname)
                     fl: Field = {fname, fty, self->pk()->pos, bw}
                     fields.push(fl)
                 elif bw >= 0:
@@ -804,10 +1155,21 @@ struct Cp:
                                 ad->is_anon = True
                                 break
                     fields.push(fa)
+                elif self->strict:
+                    fatal_at(self->file, self->pk()->pos, "struct/union member declaration without a declarator")
             while self->eat(",")
+            if self->strict and self->is_punct("="):
+                fatal_at(self->file, self->pk()->pos, "a struct/union member cannot have an initializer")
             if not self->eat(";"):
+                if self->strict:
+                    fatal_at(self->file, self->pk()->pos, "malformed struct/union member declarator (found '%s')", self->pk()->text)
                 self->skip_to(";", ";")  # weird field declarator: skip it
                 self->eat(";")
+        # NOTE: an empty member list (`struct {}`) is invalid STANDARD C but a
+        # widely-used GNU extension (c-suite 00216 depends on it) — accepted
+        # by default; -pedantic warns, -pedantic-errors rejects
+        if self->strict and fields.len == 0:
+            cdiag_at(self->file, self->pk()->pos, "gnu-empty-struct", wd_pedantic(), "empty struct is a GNU extension")
         self->expect_punct("}")
         d: *Decl = arena_alloc(self->a, sizeof(Decl))
         with d:
@@ -824,36 +1186,36 @@ struct Cp:
     # size of a basic type for sizeof in const-expr (primitives, pointer,
     # array of constant dim, resolved typedef). *ok=False if unknown
     # (e.g.: struct without a layout in the frontend).
-    static def type_size(self: *Cp, t: *Type, ok: *bool) -> i64:
+    static def type_size(self: *Cp, t: *Type, ref ok: bool) -> i64:
         if t == None:
-            *ok = False
+            ok = False
             return 0
         if t->kind == TY_PTR or t->kind == TY_FUNC:
             return 8
         if t->kind == TY_ARRAY:
             if t->arr_len == None or t->arr_len->kind != EX_NUMBER:
-                *ok = False
+                ok = False
                 return 0
-            return i64(strtoll(t->arr_len->text, None, 0)) * self->type_size(t->inner, ok)
+            return i64(strtoll(t->arr_len->text, None, 0)) * self->type_size(t->inner, ref ok)
         n: const *char = t->name
         if n == None:
-            *ok = False
+            ok = False
             return 0
-        if strcmp(n, "char") == 0 or strcmp(n, "i8") == 0 or strcmp(n, "u8") == 0 or strcmp(n, "bool") == 0 or strcmp(n, "_Bool") == 0:
+        if n in {"char", "i8", "u8", "bool", "_Bool"}:
             return 1
-        if strcmp(n, "short") == 0 or strcmp(n, "i16") == 0 or strcmp(n, "u16") == 0:
+        if n in {"short", "i16", "u16"}:
             return 2
-        if strcmp(n, "int") == 0 or strcmp(n, "unsigned") == 0 or strcmp(n, "i32") == 0 or strcmp(n, "u32") == 0 or strcmp(n, "float") == 0 or strcmp(n, "f32") == 0:
+        if n in {"int", "unsigned", "i32", "u32", "float", "f32"}:
             return 4
-        if strcmp(n, "long") == 0 or strcmp(n, "i64") == 0 or strcmp(n, "u64") == 0 or strcmp(n, "double") == 0 or strcmp(n, "f64") == 0 or strcmp(n, "size_t") == 0 or strcmp(n, "ssize_t") == 0 or strcmp(n, "ptrdiff_t") == 0 or strcmp(n, "usize") == 0 or strcmp(n, "isize") == 0 or strcmp(n, "intptr_t") == 0 or strcmp(n, "uintptr_t") == 0:
+        if n in {"long", "i64", "u64", "double", "f64", "size_t", "ssize_t", "ptrdiff_t", "usize", "isize", "intptr_t", "uintptr_t"}:
             return 8
         u: *Type = self->typedefs.get_or(n, None)
         if u != None:
-            return self->type_size(u, ok)
-        *ok = False
+            return self->type_size(u, ref ok)
+        ok = False
         return 0
 
-    static def ceval_prim(self: *Cp, ok: *bool) -> i64:
+    static def ceval_prim(self: *Cp, ref ok: bool) -> i64:
         t: *CTok = self->pk()
         if t->kind == CT_NUM:
             self->adv()
@@ -871,55 +1233,55 @@ struct Cp:
                 if self->is_punct(")"):
                     self->adv()
                 else:
-                    *ok = False
-                return self->type_size(sty, ok)
+                    ok = False
+                return self->type_size(sty, ref ok)
             # sizeof expr: only the simple case of an identifier with a type
             # is rare in const-expr; not reducible -> aborts the evaluation
-            *ok = False
+            ok = False
             return 0
         if t->kind == CT_ID:
             self->adv()
             v: i64 = self->enumvals.get_or(t->text, 0x7FFFFFFFFFFFFFFF)
             if v == 0x7FFFFFFFFFFFFFFF:
-                *ok = False
+                ok = False
                 return 0
             return v
         if self->is_punct("("):
             self->adv()
-            r: i64 = self->ceval(ok)
+            r: i64 = self->ceval(ref ok)
             if self->is_punct(")"):
                 self->adv()
             else:
-                *ok = False   # never fatals: the caller restores and skips
+                ok = False   # never fatals: the caller restores and skips
             return r
         if self->is_punct("-"):
             self->adv()
-            return -self->ceval_prim(ok)
+            return -self->ceval_prim(ref ok)
         if self->is_punct("+"):
             self->adv()
-            return self->ceval_prim(ok)
+            return self->ceval_prim(ref ok)
         if self->is_punct("~"):
             self->adv()
-            return ~self->ceval_prim(ok)
+            return ~self->ceval_prim(ref ok)
         if self->is_punct("!"):
             self->adv()
-            return 0 if self->ceval_prim(ok) != 0 else 1
-        *ok = False
+            return 0 if self->ceval_prim(ref ok) != 0 else 1
+        ok = False
         return 0
 
     static def ceval_prec(self: *Cp) -> i32:
         p: const *char = self->pk()->text
         if p == None or self->pk()->kind != CT_PUNCT:
             return -1
-        if strcmp(p, "*") == 0 or strcmp(p, "/") == 0 or strcmp(p, "%") == 0:
+        if p in {"*", "/", "%"}:
             return 10
-        if strcmp(p, "+") == 0 or strcmp(p, "-") == 0:
+        if p in {"+", "-"}:
             return 9
-        if strcmp(p, "<<") == 0 or strcmp(p, ">>") == 0:
+        if p in {"<<", ">>"}:
             return 8
-        if strcmp(p, "<") == 0 or strcmp(p, "<=") == 0 or strcmp(p, ">") == 0 or strcmp(p, ">=") == 0:
+        if p in {"<", "<=", ">", ">="}:
             return 7
-        if strcmp(p, "==") == 0 or strcmp(p, "!=") == 0:
+        if p in {"==", "!="}:
             return 6
         if strcmp(p, "&") == 0:
             return 5
@@ -933,14 +1295,14 @@ struct Cp:
             return 1
         return -1
 
-    static def ceval_bin(self: *Cp, minprec: i32, ok: *bool) -> i64:
-        lhs: i64 = self->ceval_prim(ok)
-        while *ok:
+    static def ceval_bin(self: *Cp, minprec: i32, ref ok: bool) -> i64:
+        lhs: i64 = self->ceval_prim(ref ok)
+        while ok:
             prec: i32 = self->ceval_prec()
             if prec < minprec:
                 break
             op: const *char = self->adv()->text
-            rhs: i64 = self->ceval_bin(prec + 1, ok)
+            rhs: i64 = self->ceval_bin(prec + 1, ref ok)
             if strcmp(op, "*") == 0:
                 lhs = lhs * rhs
             elif strcmp(op, "/") == 0:
@@ -979,17 +1341,17 @@ struct Cp:
                 lhs = 1 if lhs != 0 or rhs != 0 else 0
         return lhs
 
-    static def ceval(self: *Cp, ok: *bool) -> i64:
-        c: i64 = self->ceval_bin(0, ok)
-        if *ok and self->is_punct("?"):
+    static def ceval(self: *Cp, ref ok: bool) -> i64:
+        c: i64 = self->ceval_bin(0, ref ok)
+        if ok and self->is_punct("?"):
             self->adv()
-            a: i64 = self->ceval(ok)
+            a: i64 = self->ceval(ref ok)
             if self->is_punct(":"):
                 self->adv()
             else:
-                *ok = False
+                ok = False
                 return 0
-            b: i64 = self->ceval(ok)
+            b: i64 = self->ceval(ref ok)
             return a if c != 0 else b
         return c
 
@@ -1006,7 +1368,7 @@ struct Cp:
             it: EnumItem = {iname, None, self->pk()->pos}
             if self->eat("="):
                 vok: bool = True
-                v: i64 = self->ceval(&vok)
+                v: i64 = self->ceval(ref vok)
                 if vok:
                     ve: *Expr = ex_new(self->a, EX_NUMBER, self->pk()->pos)
                     ve->text = arena_printf(self->a, "%lld", v)
@@ -1084,20 +1446,20 @@ def cbin_prec(p: const *char) -> i32:
         return 4
     if strcmp(p, "&") == 0:
         return 5
-    if strcmp(p, "==") == 0 or strcmp(p, "!=") == 0:
+    if p in {"==", "!="}:
         return 6
-    if strcmp(p, "<") == 0 or strcmp(p, "<=") == 0 or strcmp(p, ">") == 0 or strcmp(p, ">=") == 0:
+    if p in {"<", "<=", ">", ">="}:
         return 7
-    if strcmp(p, "<<") == 0 or strcmp(p, ">>") == 0:
+    if p in {"<<", ">>"}:
         return 8
-    if strcmp(p, "+") == 0 or strcmp(p, "-") == 0:
+    if p in {"+", "-"}:
         return 9
-    if strcmp(p, "*") == 0 or strcmp(p, "/") == 0 or strcmp(p, "%") == 0:
+    if p in {"*", "/", "%"}:
         return 10
     return 0  # not a binary operator
 
 def is_assign_punct(p: const *char) -> bool:
-    return strcmp(p, "=") == 0 or strcmp(p, "+=") == 0 or strcmp(p, "-=") == 0 or strcmp(p, "*=") == 0 or strcmp(p, "/=") == 0 or strcmp(p, "%=") == 0 or strcmp(p, "&=") == 0 or strcmp(p, "|=") == 0 or strcmp(p, "^=") == 0 or strcmp(p, "<<=") == 0 or strcmp(p, ">>=") == 0
+    return p in {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
 
 def assign2tok(p: const *char) -> i32:
     if strcmp(p, "=") == 0:
@@ -1134,8 +1496,9 @@ def c_primary(p: *Cp) -> *Expr
 def c_postfix(p: *Cp) -> *Expr
 def c_postfix_from(p: *Cp, e: *Expr) -> *Expr
 def c_peek_is_type(p: *Cp) -> bool
+def c_abstract_decl(p: *Cp, base: *Type) -> *Type
 def c_block(p: *Cp) -> *Block
-def cp_alias_restore(p: *Cp, mark: i32)
+def cp_tags_restore(p: *Cp, mark: i32)
 def c_stmt_into(p: *Cp, out: *Vec<*Stmt>)
 def c_decl_into(p: *Cp, out: *Vec<*Stmt>)
 def c_simple_stmt(p: *Cp) -> *Stmt
@@ -1177,7 +1540,7 @@ def c_primary(p: *Cp) -> *Expr:
             return e3
         case CT_ID:
             # va_arg(ap, T) / __builtin_va_arg: special form with a TYPE
-            if (strcmp(t->text, "va_arg") == 0 or strcmp(t->text, "__builtin_va_arg") == 0) and strcmp(p->pk1()->text, "(") == 0:
+            if (t->text in {"va_arg", "__builtin_va_arg"}) and strcmp(p->pk1()->text, "(") == 0:
                 p->adv()
                 p->adv()  # (
                 va: *Expr = ex_new(p->a, EX_VAARG, t->pos)
@@ -1237,6 +1600,8 @@ def c_primary(p: *Cp) -> *Expr:
                 g->nargs = gexs.len
                 g->gen_types = gtys.data
                 return g
+            if p->strict and p->is_type_kw(t->text):
+                fatal_at(p->file, t->pos, "expected an expression, found type keyword '%s'", t->text)
             e4: *Expr = ex_new(p->a, EX_IDENT, t->pos)
             e4->text = p->adv()->text
             return e4
@@ -1257,6 +1622,7 @@ def c_primary(p: *Cp) -> *Expr:
                     return se
                 inner: *Expr = c_expr(p)
                 p->expect_punct(")")
+                inner->parened = True
                 return inner
             fatal_at(p->file, t->pos, "invalid expression (found '%s')", t->text if t->text != None else "EOF")
             return None
@@ -1332,9 +1698,11 @@ def c_unary(p: *Cp) -> *Expr:
         call->lhs = callee
         sargs: Vec<*Expr>
         sargs.init()
+        if p->strict and not p->is_punct("(") and p->pk()->kind == CT_ID and p->tok_is_type(p->pk()->text):
+            fatal_at(p->file, p->pk()->pos, "'sizeof' of a type requires parentheses: sizeof(%s)", p->pk()->text)
         if p->is_punct("(") and c_peek_is_type(p):
             p->adv()  # (
-            ty: *Type = p->parse_decl_suffix(p->parse_stars(p->parse_base_type()))
+            ty: *Type = c_abstract_decl(p, p->parse_base_type())
             p->expect_punct(")")
             tr: *Expr = ex_new(p->a, EX_TYPEREF, pos)
             tr->cast_type = ty
@@ -1372,14 +1740,12 @@ def c_unary(p: *Cp) -> *Expr:
         e->lhs = c_unary(p)
         return e
     # cast: ( type ) unary   (includes pointer-to-function and abstract
-    # declarator with a suffix: (Blk*[]){...}, (int[4]){...})
+    # declarator with a suffix: (Blk*[]){...}, (int[4]){...}, and grouped
+    # abstract declarators: (long (*)), (double *(**)), (int ((((*))))))
     if p->is_punct("(") and c_peek_is_type(p):
         p->adv()
-        ty: *Type = p->parse_stars(p->parse_base_type())
-        if p->is_fnptr_ahead():
-            dummy: *char = None
-            ty = p->parse_fnptr(ty, &dummy)
-        elif p->is_punct("["):
+        ty: *Type = c_abstract_decl(p, p->parse_base_type())
+        if p->is_punct("["):
             ty = p->parse_decl_suffix(ty)
         p->expect_punct(")")
         # C99 compound literal:  (type){ ... }  -> anonymous object (postfix
@@ -1397,6 +1763,23 @@ def c_unary(p: *Cp) -> *Expr:
         return c
     return c_postfix(p)
 
+# abstract declarator (no name) for casts/typenames: '*'* [ '(' abstract ')' ]
+# suffix* — handles redundant grouping ((((*)))) and fn-pointers (*)(args)
+def c_abstract_decl(p: *Cp, base: *Type) -> *Type:
+    t: *Type = p->parse_stars(base)
+    # fn-pointer first: is_fnptr_ahead scans past __attribute__ groups, so
+    # `int(*)(void)` and `int(__attribute__((x)) *)(void)` both land here
+    if p->is_fnptr_ahead():
+        dummy: *char = None
+        return p->parse_fnptr(t, out dummy)
+    # plain redundant grouping: (*), ((((*)))), (double *(**))
+    if p->is_punct("(") and (strcmp(p->pk1()->text, "*") == 0 or strcmp(p->pk1()->text, "(") == 0):
+        p->adv()
+        t = c_abstract_decl(p, t)
+        p->expect_punct(")")
+    # trailing suffixes: sizeof(int[2][3]), casts to array-ish abstracts
+    return p->parse_decl_suffix(t)
+
 def c_peek_is_type(p: *Cp) -> bool:
     # looks 1 token ahead of the '(' — is it a type name? (builtin, struct/
     # union/enum, or a known typedef)
@@ -1404,10 +1787,10 @@ def c_peek_is_type(p: *Cp) -> bool:
     if nx->kind != CT_ID:
         return False
     w: const *char = nx->text
-    if p->is_type_kw(w) or strcmp(w, "struct") == 0 or strcmp(w, "union") == 0 or strcmp(w, "enum") == 0 or strcmp(w, "const") == 0:
+    if p->is_type_kw(w) or w in {"struct", "union", "enum", "const"}:
         return True
     # a cast may open with GNU noise: ((__attribute__((noinline)) int(*)(void))fp)
-    if strcmp(w, "__attribute__") == 0 or strcmp(w, "__extension__") == 0 or strcmp(w, "volatile") == 0:
+    if w in {"__attribute__", "__extension__", "volatile"}:
         return True
     return p->types.has(w)
 
@@ -1483,6 +1866,10 @@ def c_initializer(p: *Cp) -> *Expr:
         c_init_elem(p, &args)
         if not p->eat(","):
             break
+    # `{}` (empty initializer) is C23/GNU — accepted by default (real-world
+    # code and the c-suite rely on it); -pedantic warns, -pedantic-errors rejects
+    if p->strict and args.len == 0:
+        cdiag_at(p->file, pos, "c23-extensions", wd_pedantic(), "use of an empty initializer is a C23 extension")
     p->expect_punct("}")
     e->args = args.data
     e->nargs = args.len
@@ -1561,30 +1948,59 @@ def c_init_elem(p: *Cp, out: *Vec<*Expr>):
 
 # ---------- statements ----------
 # undoes scoped struct-tag renames registered after `mark` (block exit)
-def cp_alias_restore(p: *Cp, mark: i32):
-    while p->nalias > mark:
-        p->nalias -= 1
-        p->tag_alias.put(p->alias_names[p->nalias], p->alias_prevs[p->nalias])
+# closes a lexical scope: tag identities declared inside die with the block
+# (their hoisted DECLS keep the unique cname — only the NAME goes out of scope)
+def cp_tags_restore(p: *Cp, mark: i32):
+    p->tags.len = mark
+    p->tag_depth -= 1
 
 def c_block(p: *Cp) -> *Block:
     v: Vec<*Stmt>
     v.init()
-    amark: i32 = p->nalias
+    tmark: i32 = p->tags.len
+    p->tag_depth += 1
     if p->eat("{"):
         while not p->is_punct("}") and p->pk()->kind != CT_EOF:
             c_stmt_into(p, &v)
         p->expect_punct("}")
     else:
+        if p->strict and (p->at_type() or p->is_kw("typedef")):
+            fatal_at(p->file, p->pk()->pos, "a declaration is not a statement — the body of if/else/while/for needs braces to declare")
         c_stmt_into(p, &v)
-    cp_alias_restore(p, amark)
+    cp_tags_restore(p, tmark)
     b: *Block = arena_alloc(p->a, sizeof(Block))
     b->stmts = v.data
     b->n = v.len
     return b
 
+# block-scope function declaration: hoists a file-scope prototype (the name
+# refers to the external function — sema needs the signature) AND leaves an
+# ST_CPROTO in the block, so the emitted C re-binds the name locally (shadowing
+# any outer variable of the same name, C11 6.2.1p4)
+def c_local_proto(p: *Cp, out: *Vec<*Stmt>, name: const *char, ret: *Type, prms: Vec<Param>, va: bool, sig_empty: bool):
+    lf: *Func = arena_alloc(p->a, sizeof(Func))
+    with lf:
+        .pos = p->pk()->pos
+        .name = name
+        .cname = name
+        .ret = ret
+        .params = prms.data
+        .nparams = prms.len
+        .is_varargs = va
+        .sig_empty = sig_empty
+    ld: *Decl = arena_alloc(p->a, sizeof(Decl))
+    ld->kind = DL_FUNC
+    ld->pos = p->pk()->pos
+    ld->func = lf
+    p->out_decls.push(ld)
+    cs: *Stmt = st_new(p->a, ST_CPROTO, p->pk()->pos)
+    cs->cfunc = lf
+    out.push(cs)
+
 def c_decl_into(p: *Cp, out: *Vec<*Stmt>):
-    is_static: bool = p->is_kw("static")  # parse_base_type/skip_gnu consumes it
-    base: *Type = p->parse_base_type()
+    base: *Type = p->parse_base_type()   # absorbs storage class (any position)
+    is_static: bool = p->spec_static
+    is_extern: bool = p->spec_extern
     # local type def without a declarator:  struct T { ... } ;
     if p->is_punct(";"):
         p->adv()
@@ -1592,16 +2008,41 @@ def c_decl_into(p: *Cp, out: *Vec<*Stmt>):
     do:
         ty: *Type = p->parse_stars(base)
         name: const *char
-        # local function pointer:  RET (*name)(params)
-        if p->is_fnptr_ahead():
-            fpn: *char = None
-            ty = p->parse_fnptr(ty, &fpn); name = fpn
+        # grouped declarator: the full recursive engine — (name), (*fp)(params),
+        # ((array_of_pointers)[3]), (*(p))... A TY_FUNC result is a block-scope
+        # function PROTOTYPE (hoisted below, like the named path).
+        if p->is_punct("("):
+            gpn: *char = None
+            gprms: Vec<Param>
+            gprms.init()
+            gva: bool = False
+            ghp: bool = False
+            ty = p->parse_declarator(ty, out gpn, ref gprms, out gva, out ghp)
+            name = gpn
+            if ty != None and ty->kind == TY_FUNC:
+                if p->strict and is_static:
+                    fatal_at(p->file, p->pk()->pos, "invalid storage class for block-scope declaration of '%s'", name)
+                c_local_proto(p, out, name, ty->inner, gprms, gva, p->cap_sig_empty if ghp else False)
+                continue
         else:
+            if p->strict and (p->pk()->kind != CT_ID or is_c_keyword(p->pk()->text)):
+                fatal_at(p->file, p->pk()->pos, "expected a declarator name, found '%s'", p->pk()->text if p->pk()->text != None else "EOF")
             name = p->adv()->text
-            # local function prototype:  RET name(params) ;  -> just skip it
+            # local function prototype:  RET name(params) ; — in C a block-scope
+            # function declaration has FILE-scope effect (the name refers to the
+            # external function). Register it as a hoisted prototype so the
+            # sema knows the name IS a function with this return type.
             if p->is_punct("("):
-                p->skip_parens()
+                p->adv()
+                lprms: Vec<Param>
+                lprms.init()
+                lva: bool = False
+                p->parse_params(ref lprms, out lva)
+                p->expect_punct(")")
                 p->skip_gnu()
+                if p->strict and is_static:
+                    fatal_at(p->file, p->pk()->pos, "invalid storage class for block-scope declaration of '%s'", name)
+                c_local_proto(p, out, name, ty, lprms, lva, p->params_empty)
                 continue
             # arrays: name[d0][d1]... — in C, arr[2][4] = array[2] of array[4],
             # so apply the dims in REVERSE order (the innermost last)
@@ -1622,6 +2063,7 @@ def c_decl_into(p: *Cp, out: *Vec<*Stmt>):
         s->name = name
         s->type = ty
         s->is_static = is_static
+        s->is_extern = is_extern
         if p->eat("="):
             s->init = c_initializer(p)
         out.push(s)
@@ -1648,6 +2090,8 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         cs: *Stmt = st_new(p->a, ST_CASE, pos)
         cs->expr = cv
         out.push(cs)
+        if p->strict and (p->at_type() or p->is_kw("typedef")):
+            fatal_at(p->file, p->pk()->pos, "a declaration is not a statement — a case label cannot prefix a declaration (wrap it in braces)")
         if not p->is_punct("}"):
             c_stmt_into(p, out)
         return
@@ -1655,6 +2099,8 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         p->adv()
         p->expect_punct(":")
         out.push(st_new(p->a, ST_CASE, pos))  # expr=None => default
+        if p->strict and (p->at_type() or p->is_kw("typedef")):
+            fatal_at(p->file, p->pk()->pos, "a declaration is not a statement — a case label cannot prefix a declaration (wrap it in braces)")
         if not p->is_punct("}"):
             c_stmt_into(p, out)
         return
@@ -1668,8 +2114,9 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         sw->body = c_block(p)
         out.push(sw)
         return
-    # label:  name :
-    if p->pk()->kind == CT_ID and p->pk1()->kind == CT_PUNCT and strcmp(p->pk1()->text, ":") == 0:
+    # label:  name :  (a C keyword is never a label name — `unsigned: ...`
+    # falls through to the declaration path, which rejects it in strict mode)
+    if p->pk()->kind == CT_ID and p->pk1()->kind == CT_PUNCT and strcmp(p->pk1()->text, ":") == 0 and not (p->strict and is_c_keyword(p->pk()->text) and not p->types.has(p->pk()->text)):
         lbl: const *char = p->adv()->text
         p->adv()  # ':'
         ls: *Stmt = st_new(p->a, ST_LABEL, pos)
@@ -1677,6 +2124,10 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         out.push(ls)
         # in C, `label:` prefixes the following statement — parse it in the same
         # block (otherwise, as the body of an if/while without braces, it would escape)
+        if p->strict and p->is_punct("}"):
+            fatal_at(p->file, p->pk()->pos, "label '%s' at the end of a compound statement (a label must prefix a statement)", lbl)
+        if p->strict and (p->at_type() or p->is_kw("typedef")):
+            fatal_at(p->file, p->pk()->pos, "a declaration is not a statement — a label cannot prefix a declaration (C11; wrap it in braces)")
         if not p->is_punct("}"):
             c_stmt_into(p, out)
         return
@@ -1694,11 +2145,12 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         bs: *Stmt = st_new(p->a, ST_BLOCK, pos)
         bv: Vec<*Stmt>
         bv.init()
-        amark: i32 = p->nalias
+        btmark: i32 = p->tags.len
+        p->tag_depth += 1
         while not p->is_punct("}") and p->pk()->kind != CT_EOF:
             c_stmt_into(p, &bv)
         p->expect_punct("}")
-        cp_alias_restore(p, amark)
+        cp_tags_restore(p, btmark)
         bb: *Block = arena_alloc(p->a, sizeof(Block))
         bb->stmts = bv.data
         bb->n = bv.len
@@ -1828,12 +2280,19 @@ def c_for_into(p: *Cp, out: *Vec<*Stmt>):
     p->adv()  # for
     p->expect_punct("(")
     s: *Stmt = st_new(p->a, ST_CFOR, pos)
+    fdecls: Vec<*Stmt>
+    fdecls.init()
     if not p->is_punct(";"):
-        # declaration with MULTIPLE declarators in the init (C99:
-        # `for (char *a = x, b = 0; ...)`): hoists the declarations before the
-        # for (equivalent — the scope model here is flat)
+        # C99 for-init declaration: `for (int i = 0; ...)` — the declaration's
+        # scope is the FOR itself. A single declarator stays inline in for_init;
+        # multiple declarators wrap the whole loop in an ST_BLOCK (own scope),
+        # so `for (int shadow = ...)` never collides with an outer `shadow`.
         if p->at_type():
             fbase: *Type = p->parse_base_type()
+            # C11 6.8.5.3: a for-init declaration only takes auto/register —
+            # `for (static int i = 0; ...)` / extern are constraint violations
+            if p->strict and (p->spec_static or p->spec_extern):
+                fatal_at(p->file, p->pk()->pos, "storage class ('static'/'extern') on a for-loop initial declaration")
             do:
                 fty: *Type = p->parse_stars(fbase)
                 fname: const *char = p->adv()->text
@@ -1848,7 +2307,7 @@ def c_for_into(p: *Cp, out: *Vec<*Stmt>):
                 fs->type = fty
                 if p->eat("="):
                     fs->init = c_initializer(p)
-                out.push(fs)
+                fdecls.push(fs)
             while p->eat(",")
         else:
             s->for_init = c_simple_stmt(p)
@@ -1860,7 +2319,22 @@ def c_for_into(p: *Cp, out: *Vec<*Stmt>):
         s->for_post = c_simple_stmt(p)
     p->expect_punct(")")
     s->body = c_block(p)
-    out.push(s)
+    if fdecls.len == 1:
+        s->for_init = fdecls.get(0)   # inline: for (int i = 0; ...)
+        out.push(s)
+    elif fdecls.len > 1:
+        wb: *Stmt = st_new(p->a, ST_BLOCK, pos)
+        bb: *Block = arena_alloc(p->a, sizeof(Block))
+        all: **Stmt = arena_alloc(p->a, usize(fdecls.len + 1) * sizeof(*all))
+        for fi in range(fdecls.len):
+            all[fi] = fdecls.get(fi)
+        all[fdecls.len] = s
+        bb->stmts = all
+        bb->n = fdecls.len + 1
+        wb->body = bb
+        out.push(wb)
+    else:
+        out.push(s)
 
 # typedef <type> <name> ;  — registers the resolved name; the embedded
 # struct/enum def was already emitted by parse_base_type. Doesn't generate its own decl.
@@ -1874,7 +2348,7 @@ def c_typedef(p: *Cp):
         # of chained calls: `fty go(); go()()->field`)
         if p->is_fnptr_ahead():
             fpn: *char = None
-            fpt: *Type = p->parse_fnptr(ty, &fpn)
+            fpt: *Type = p->parse_fnptr(ty, out fpn)
             if fpn != None and fpn[0] != '\0':
                 p->types.add(fpn)
                 p->typedefs.put(fpn, fpt)
@@ -1911,16 +2385,17 @@ def c_typedef(p: *Cp):
 # ';' (the caller handles the list).
 def parse_one_decl(p: *Cp, base: *Type, is_extern: bool, pos: Pos) -> *Decl:
     ty: *Type = p->parse_stars(base)
-    # declarator with a group: RET (*name)(params) = fn-ptr var, OR
-    # RET (*name(params))(params2) = FUNCTION whose return type is fn-ptr (00124)
-    if p->is_fnptr_ahead():
+    # ANY grouped declarator goes through the full recursive engine:
+    # (name), ((name)), (*fp)(params), (*f(params))(params2), (*p)[3][6],
+    # ((*(p))[3])[6], (*foo(params))[3]... parse_declarator handles them all.
+    if p->is_punct("("):
         fpname: *char = None
         fprms: Vec<Param>
         fprms.init()
         fva: bool = False
         fhp: bool = False
-        fpty: *Type = p->parse_declarator(ty, &fpname, &fprms, &fva, &fhp)
-        if fpty != None and fpty->kind == TY_FUNC and fhp:
+        fpty: *Type = p->parse_declarator(ty, out fpname, ref fprms, out fva, out fhp)
+        if fpty != None and fpty->kind == TY_FUNC:
             ff: *Func = arena_alloc(p->a, sizeof(Func))
             with ff:
                 .pos = pos
@@ -1930,6 +2405,7 @@ def parse_one_decl(p: *Cp, base: *Type, is_extern: bool, pos: Pos) -> *Decl:
                 .params = fprms.data
                 .nparams = fprms.len
                 .is_varargs = fva
+                .sig_empty = p->cap_sig_empty if fhp else False
                 if p->is_punct("{"):
                     .body = c_block(p)   # definition
             df: *Decl = arena_alloc(p->a, sizeof(Decl))
@@ -1947,12 +2423,8 @@ def parse_one_decl(p: *Cp, base: *Type, is_extern: bool, pos: Pos) -> *Decl:
             if p->eat("="):
                 .init = c_initializer(p)
         return dfp
-    # parens-only declarator: `void *(incmem)(...)` — strips the parens
-    if p->is_punct("(") and p->pk1()->kind == CT_ID and p->i + 2 < p->nt and p->t[p->i + 2].text != None and strcmp(p->t[p->i + 2].text, ")") == 0:
-        p->adv()
-        name0: const *char = p->adv()->text
-        p->expect_punct(")")
-        return parse_one_decl_named(p, ty, name0, is_extern, pos)
+    if p->strict and not p->is_punct("(") and (p->pk()->kind != CT_ID or is_c_keyword(p->pk()->text)):
+        fatal_at(p->file, p->pk()->pos, "expected a declarator name, found '%s'", p->pk()->text if p->pk()->text != None else "EOF")
     name: const *char = p->adv()->text
     return parse_one_decl_named(p, ty, name, is_extern, pos)
 
@@ -1964,7 +2436,7 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
         params: Vec<Param>
         params.init()
         is_vararg: bool = False
-        p->parse_params(&params, &is_vararg)
+        p->parse_params(ref params, out is_vararg)
         p->expect_punct(")")
         p->skip_gnu()   # __attribute__/__asm__ after the parameter list
         f: *Func = arena_alloc(p->a, sizeof(Func))
@@ -1976,6 +2448,7 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
             .params = params.data
             .nparams = params.len
             .is_varargs = is_vararg
+            .sig_empty = p->params_empty
             if p->is_punct("{"):
                 .body = c_block(p)   # definition
         d: *Decl = arena_alloc(p->a, sizeof(Decl))
@@ -2014,11 +2487,27 @@ def c_top(p: *Cp) -> *Decl:
     pos: Pos = p->pk()->pos
     is_extern: bool = p->is_kw("extern")   # before skip_gnu consumes it
     is_static: bool = p->is_kw("static")   # local symbol of the TU (not exported)
-    p->skip_gnu()
+    p->spec_static = False
+    p->spec_extern = False
+    p->skip_gnu()   # absorbs `__extension__ static __inline ...` prefixes
+    if p->spec_static:
+        is_static = True
+    if p->spec_extern:
+        is_extern = True
+    if p->strict and is_static and is_extern:
+        fatal_at(p->file, pos, "conflicting storage classes ('static' and 'extern')")
     if p->is_kw("typedef"):
         c_typedef(p)
         return None
     base: *Type = p->parse_base_type()
+    # storage class in any position (before/after/among the type words) was
+    # absorbed by parse_base_type into these flags
+    if p->spec_static:
+        is_static = True
+    if p->spec_extern:
+        is_extern = True
+    if p->strict and is_static and is_extern:
+        fatal_at(p->file, pos, "conflicting storage classes ('static' and 'extern')")
     p->skip_gnu()
     # struct/enum/union def without a declarator:  struct S { ... } ;
     if p->is_punct(";"):
@@ -2047,9 +2536,10 @@ def mark_static(d: *Decl, is_static: bool):
     elif d->kind == DL_VAR:
         d->is_static = True
 
-def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> *Module:
+def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, strict: bool) -> *Module:
     cx: Cx = {0}
     cx.file = file
+    cx.strict = strict
     cx.s = bytes
     cx.n = nbytes
     cx.line = 1
@@ -2060,10 +2550,12 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> 
 
     cp: Cp = {0}
     cp.file = file
+    cp.strict = strict
     cp.t = cx.toks.data
     cp.nt = cx.toks.len
     cp.a = a
     cp.types.init()
+    cp.tags.init()
     cp.typedefs.init()
     cp.enumvals.init()
     cp.enum_signed.init()
@@ -2072,7 +2564,10 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> 
     builtins: const *char[] = {"void", "char", "short", "int", "long",
         "float", "double", "signed", "unsigned", "_Bool", "size_t",
         "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t", "wchar_t",
-        "va_list", "__builtin_va_list", None}
+        "va_list", "__builtin_va_list",
+        "__int128", "__int128_t", "__uint128_t",
+        "_Float16", "_Float32", "_Float32x", "_Float64", "_Float64x", "_Float128",
+        "_Decimal32", "_Decimal64", "_Decimal128", None}
     bi = 0
     while builtins[bi] != None:
         cp.types.add(builtins[bi])
@@ -2091,11 +2586,22 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> 
             decls.push(d)
     m->decls = decls.data
     m->ndecls = decls.len
+    # export the typedef NAMES: P code referencing e.g. `va_list`/`off_t` from an
+    # ingested header must see a known type (the underlying type was resolved
+    # inline; only the name needs to exist for the semantic pass)
+    if cp.typedefs.elen > 0:
+        tdn: **char = arena_alloc(a, usize(cp.typedefs.elen) * sizeof(*tdn))
+        ntd = 0
+        for ti in range(cp.typedefs.elen):
+            if not cp.typedefs.dead[ti]:
+                # the StrMap owns its key strings (freed on deinit): copy into
+                # the arena — the module outlives the parser
+                tdn[ntd] = arena_strdup(a, cp.typedefs.keys[ti])
+                ntd += 1
+        m->tdnames = tdn
+        m->ntd = ntd
     cp.types.deinit()
     cp.typedefs.deinit()
-    cp.fwd_tags.deinit()
-    cp.def_tags.deinit()
-    cp.tag_alias.deinit()
-    free(cp.alias_names)
-    free(cp.alias_prevs)
+    cp.tags.deinit()
+    cp.used_cnames.deinit()
     return m

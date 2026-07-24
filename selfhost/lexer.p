@@ -384,7 +384,10 @@ struct Lx:
             case ',':
                 k = TK_COMMA
             case ':':
-                k = TK_COLON
+                if c1 == '=':
+                    k = TK_WALRUS; len = 2
+                else:
+                    k = TK_COLON
             case ';':
                 k = TK_SEMI
             case '.':
@@ -489,7 +492,7 @@ def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> Toke
     while lx.i < lx.n:
         c: u32 = lx.cur()
 
-        if c == ' ' or c == '\t' or c == '\r':
+        if c in {' ', '\t', '\r'}:
             lx.i += 1
             continue
         if c == '#':
@@ -519,7 +522,7 @@ def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> Toke
             continue
         # wide/unicode literal prefixes: L"..." u"..." U"..." u8"..." and
         # L'x' u'x' U'x'. The prefix goes into the token text and the backend handles it.
-        if c == 'L' or c == 'u' or c == 'U':
+        if c in {'L', 'u', 'U'}:
             plen: usize = 1
             if c == 'u' and lx.peek(1) == '8':
                 plen = 2
