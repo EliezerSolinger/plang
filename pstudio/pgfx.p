@@ -160,6 +160,16 @@ struct PgWindow:
                 return True
             # evento irrelevante: continua esperando dentro do mesmo prazo
 
+    def poll_event(ref self: PgWindow, out ev: PgEvent) -> bool:
+        ev.kind = PGE_NONE
+        ev.text[0] = '\0'
+        while True:
+            e: SDL_Event
+            if SDL_PollEvent(&e) == 0:
+                return False
+            if self.translate(&e, out ev):
+                return True
+
     def confirm_close(ref self: PgWindow, filename: const *char) -> i32:
         btns: SDL_MessageBoxButtonData[3]
         memset(btns, 0, sizeof(btns))

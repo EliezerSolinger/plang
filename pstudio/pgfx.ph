@@ -70,6 +70,11 @@ struct PgWindow:
     # PGE_RESIZE para o app relayoutar. False só em erro fatal do SDL.
     def wait_event(ref self: PgWindow, out ev: PgEvent, timeout_ms: i32) -> bool
 
+    # pega o próximo evento SEM bloquear; False = fila vazia. O loop usa isto
+    # para drenar tudo o que chegou e desenhar UMA vez por frame — com vsync,
+    # um present por evento de movimento deixa o arraste atrás do cursor.
+    def poll_event(ref self: PgWindow, out ev: PgEvent) -> bool
+
     # diálogo nativo (fechar aba suja): 0=salvar 1=descartar 2=cancelar
     def confirm_close(ref self: PgWindow, filename: const *char) -> i32
     # pergunta sim/não (recarregar arquivo mudado por fora): True = sim

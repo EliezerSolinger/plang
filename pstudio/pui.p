@@ -381,6 +381,8 @@ struct Ui:
             idt->cursor = cp_len(idt->text)
         else:
             td: *TextData = nd->data
+            if strcmp(td->text, text) == 0:
+                return          # texto igual: nada sujou (evita repaint à toa)
             free(td->text)
             td->text = own_str(text)
         self.queue_redraw(id)
@@ -401,12 +403,15 @@ struct Ui:
         self.nodes.data[id].base.rect = r
         if old.x != r.x or old.y != r.y or old.w != r.w or old.h != r.h:
             self.nodes.data[id].base.flags |= UF_DIRTY
+            self.needs_draw = True
 
     def queue_redraw(ref self: Ui, id: i32):
         self.nodes.data[id].base.flags |= UF_DIRTY
+        self.needs_draw = True
 
     def queue_redraw_tree(ref self: Ui, id: i32):
         self.nodes.data[id].base.flags |= UF_DIRTY
+        self.needs_draw = True
         c: i32 = self.nodes.data[id].first_child
         while c >= 0:
             self.queue_redraw_tree(c)
@@ -688,6 +693,7 @@ struct Ui:
     def layout(ref self: Ui, w: i32, h: i32):
         self.lay_w = w
         self.lay_h = h
+        self.needs_draw = True
         if self.root < 0:
             return
         self.measure(self.root)
@@ -836,6 +842,7 @@ struct Ui:
             ch = self.nodes.data[ch].next_sibling
 
     def draw(ref self: Ui, ref fb: PgFb):
+        self.needs_draw = False
         fb.clip_reset()
         fb.clear(self.theme.bg)
         if self.root >= 0:

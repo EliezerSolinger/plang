@@ -106,6 +106,8 @@ struct Ui:
     font: PgFont
     lay_w: i32        # tamanho do último layout (p/ relayout após mudanças)
     lay_h: i32
+    needs_draw: bool  # algo sujou desde o último draw() — o loop consulta
+                      #   isto em vez de repintar a cada evento
 
     # ---- ciclo de vida ----
     def init(out self: Ui, font: PgFont)

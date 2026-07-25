@@ -18,3 +18,4 @@ stl/*.h
 # external (non-distributable) test corpora — tests/fetch-external.sh
 tests/external/
 .verify/
+a.out

@@ -831,41 +831,53 @@ struct App:
 
     # ---------- loop ----------
 
+    static def handle_event(ref self: App, ev: *PgEvent, ref blink: i64):
+        match ev->kind:
+            case PGE_QUIT:
+                self.try_quit()
+            case PGE_RESIZE:
+                self.ui.layout(ev->x, ev->y)
+                self.ui.queue_redraw_tree(self.root)
+            case PGE_TIMEOUT:
+                now: i64 = ps_millis()
+                if now - blink >= i64(BLINK_MS):
+                    blink = now
+                    cv: *CodeView = self.cur_cv()
+                    if cv != None and self.ui.focus_get() == cv->id:
+                        cv->caret_on = not cv->caret_on
+                        self.ui.queue_redraw(cv->id)
+            case PGE_FOCUS_GAINED:
+                self.check_external()
+            case PGE_KEY:
+                # teclado é de baixa frequência: força o repaint (uma tecla
+                # sempre mexe em algo visível, e não há fila para acumular)
+                if not self.key_shortcut(ev):
+                    self.ui.input_event(ev)
+                    self.update_status()
+                self.dirty_ui = True
+            case _:
+                # mouse/roda: NÃO força repaint. Quem realmente sujou algo
+                # levantou ui.needs_draw — mover o mouse sem efeito visual não
+                # deve custar um frame inteiro de rasterização.
+                if self.ui.input_event(ev):
+                    self.update_status()
+
     def run(ref self: App) -> i32:
         blink: i64 = ps_millis()
         while self.running:
-            if self.dirty_ui:
+            ev: PgEvent
+            # UM evento bloqueante (timeout = piscar do caret) e depois DRENA
+            # a fila: o present é por FRAME, não por evento. Com vsync cada
+            # present segura ~16ms; um por evento de movimento deixa o arraste
+            # atrás do cursor porque a fila do SDL cresce mais rápido do que a
+            # gente consome (medido: 200 motions = 182ms assim, 1ms drenando).
+            if not self.win.wait_event(out ev, BLINK_MS):
+                break
+            self.handle_event(&ev, ref blink)
+            while self.running and self.win.poll_event(out ev):
+                self.handle_event(&ev, ref blink)
+            if self.dirty_ui or self.ui.needs_draw:
                 self.ui.draw(ref self.win.fb)
                 self.win.present()
                 self.dirty_ui = False
-            ev: PgEvent
-            if not self.win.wait_event(out ev, BLINK_MS):
-                break
-            match ev.kind:
-                case PGE_QUIT:
-                    self.try_quit()
-                case PGE_RESIZE:
-                    self.ui.layout(ev.x, ev.y)
-                    self.ui.queue_redraw_tree(self.root)
-                    self.dirty_ui = True
-                case PGE_TIMEOUT:
-                    now: i64 = ps_millis()
-                    if now - blink >= i64(BLINK_MS):
-                        blink = now
-                        cv: *CodeView = self.cur_cv()
-                        if cv != None and self.ui.focus_get() == cv->id:
-                            cv->caret_on = not cv->caret_on
-                            self.ui.queue_redraw(cv->id)
-                            self.dirty_ui = True
-                case PGE_FOCUS_GAINED:
-                    self.check_external()
-                case PGE_KEY:
-                    if not self.key_shortcut(&ev):
-                        self.ui.input_event(&ev)
-                        self.update_status()
-                    self.dirty_ui = True
-                case _:
-                    if self.ui.input_event(&ev):
-                        self.update_status()
-                    self.dirty_ui = True
         return 0

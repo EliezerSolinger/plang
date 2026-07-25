@@ -42,8 +42,16 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
 ### 2. pgfx — plataforma gráfica
 - SDL2 por dentro. Framebuffer nosso u32 ARGB em RAM →
   `SDL_UpdateTexture` → `SDL_RenderCopy` → `SDL_RenderPresent` (vsync).
-- **Frame dirigido a eventos**: `SDL_WaitEvent` + timer (~500ms) para piscar
-  cursor. Editor parado = 0% CPU.
+- **Frame dirigido a eventos, um present por FRAME**: o loop bloqueia em
+  `wait_event` (timeout de ~500ms para piscar o cursor) e então **drena** a
+  fila com `poll_event` antes de desenhar uma única vez. Um present por
+  *evento* seria fatal: o vsync segura ~16ms cada um enquanto o X entrega
+  centenas de movimentos por segundo, e o arraste fica atrás do cursor
+  (medido: 200 movimentos = 182ms de CPU assim, 1,9ms drenando). Editor
+  parado = 0% CPU.
+- **Repaint só quando algo sujou**: `Ui.needs_draw` é levantado por
+  `queue_redraw`/`set_rect`/`layout`; mover o mouse sem efeito visual não
+  custa frame nenhum (`set_text` com o mesmo texto também não suja).
 - Rasterizador de software em P: rects, linhas, blit de glyphs do atlas com
   alpha, clip-rect por widget.
 
