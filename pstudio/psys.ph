@@ -1,25 +1,25 @@
-# psys.ph — camada de sistema do pstudio (SÓ OS: arquivos, processos, tempo).
+# psys.ph — the pstudio system layer (OS ONLY: files, processes, time).
 #
-# O VFS é uma interface por function pointers: o editor nunca chama a libc de
-# arquivos diretamente — chama o backend ativo. Hoje existe o backend `local`;
-# um backend `ssh/sftp` futuro é só outra Vfs preenchida (transporte por
-# subprocesso, ver DESIGN.md). API de ARQUIVO INTEIRO por decisão de design:
-# um editor carrega e salva arquivos inteiros; write é atômico (temp+rename).
+# The VFS is an interface of function pointers: the editor never calls libc's
+# file functions directly — it calls the active backend. Today there is the
+# `local` backend; a future `ssh/sftp` one is just another filled-in Vfs
+# (transport over a subprocess, see DESIGN.md). WHOLE-FILE API by design: an
+# editor loads and saves entire files; write is atomic (temp + rename).
 include <stddef.h>
 
 struct PsStat:
     exists: bool
     is_dir: bool
     size: i64
-    mtime: i64       # segundos unix (detecção de mudança externa)
+    mtime: i64       # unix seconds (detects external changes)
 
 struct PsDirEntry:
-    name: *char      # malloc'd (liberar com ps_entries_free)
+    name: *char      # malloc'd (free with ps_entries_free)
     is_dir: bool
 
-# Backend do VFS. As assinaturas usam ponteiros crus (não byref) porque
-# tipos de function pointer não carregam os modificadores out/ref/in —
-# os WRAPPERS abaixo dão a interface confortável.
+# A VFS backend. The signatures take raw pointers (not byref) because
+# function-pointer types don't carry the out/ref/in modifiers — the WRAPPERS
+# below provide the comfortable interface.
 struct Vfs:
     ctx: *void
     read_all_fn: def(ctx: *void, path: const *char, out_len: *usize) -> *char
@@ -27,34 +27,34 @@ struct Vfs:
     list_dir_fn: def(ctx: *void, path: const *char, out_n: *i32) -> *PsDirEntry
     stat_fn: def(ctx: *void, path: const *char, out_st: *PsStat) -> bool
 
-# ---- wrappers (a API que o editor usa) ----
-# lê o arquivo inteiro; None em erro. Buffer malloc'd, NUL-terminado
-# (len NÃO conta o NUL) — livre para tratar como string ou bytes.
+# ---- wrappers (the API the editor uses) ----
+# reads the whole file; None on error. malloc'd, NUL-terminated buffer
+# (len does NOT count the NUL) — treat it as a string or as bytes.
 def vfs_read_all(in v: Vfs, path: const *char, out len: usize) -> *char
 
-# grava o arquivo inteiro ATOMICAMENTE (temp no mesmo diretório + rename)
+# writes the whole file ATOMICALLY (temp in the same dir + rename)
 def vfs_write_all(in v: Vfs, path: const *char, data: const *char, len: usize) -> bool
 
-# lista um diretório (entradas ordenadas: dirs primeiro, depois nome);
-# None em erro; liberar com ps_entries_free
+# lists a directory (sorted: dirs first, then by name); None on error;
+# free with ps_entries_free
 def vfs_list_dir(in v: Vfs, path: const *char, out n: i32) -> *PsDirEntry
 
 def vfs_stat(in v: Vfs, path: const *char, out st: PsStat) -> bool
 
 def ps_entries_free(entries: *PsDirEntry, n: i32)
 
-# ---- backend local (libc) ----
+# ---- local backend (libc) ----
 def vfs_local() -> Vfs
 
-# ---- processos ----
-# roda um comando (sh -c), captura stdout+stderr juntos; retorna o exit code.
-# output é malloc'd NUL-terminado (None se nem rodou).
+# ---- processes ----
+# runs a command (sh -c), capturing stdout+stderr together; returns the exit
+# code. output is malloc'd and NUL-terminated (None if it never ran).
 def ps_run(cmd: const *char, out output: *char) -> i32
 
-# ---- tempo ----
-def ps_millis() -> i64          # relógio monotônico, milissegundos
+# ---- time ----
+def ps_millis() -> i64          # monotonic clock, milliseconds
 
 # ---- paths ----
 def ps_path_join(a: const *char, b: const *char) -> *char   # malloc'd
 def ps_path_dirname(path: const *char) -> *char             # malloc'd
-def ps_path_basename(path: const *char) -> const *char      # aponta para dentro
+def ps_path_basename(path: const *char) -> const *char      # points inside `path`

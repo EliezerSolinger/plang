@@ -1,6 +1,7 @@
-# pui.p — implementação do toolkit (ver pui.ph). A matemática de layout segue
-# a Godot: BoxContainer::_resort (min + EXPAND proporcional com acumulador de
-# erro fracionário) e SplitContainer (offset clampado pelos mins dos lados).
+# pui.p — the toolkit implementation (see pui.ph). The layout math follows
+# Godot: BoxContainer::_resort (minimums + EXPAND shared proportionally with a
+# fractional-error accumulator) and SplitContainer (the offset is clamped by
+# both sides' minimums).
 include <stdlib.h>
 include <string.h>
 import "pui.ph"
@@ -24,11 +25,11 @@ struct BoxData:
 
 struct SplitData:
     vertical: bool
-    offset: i32       # tamanho do primeiro filho, em px do eixo
+    offset: i32       # size of the first child, in axis pixels
     dragging: bool
-    grab: i32         # distância mouse->offset no início do drag
+    grab: i32         # mouse-to-offset distance when the drag started
 
-struct TextData:      # label E button (button ganha sinal)
+struct TextData:      # label AND button (a button also gets a signal)
     text: *char
     sig: UiSignal
 
@@ -39,18 +40,18 @@ struct ScrollData:
     value: i64
     sig: UiSignal
     dragging: bool
-    grab: i32         # offset do mouse dentro do polegar
+    grab: i32         # mouse offset inside the thumb
 
 struct InputData:
-    text: *char       # UTF-8 NUL-terminado (malloc, cresce)
-    len: usize        # bytes usados (sem o NUL)
+    text: *char       # NUL-terminated UTF-8 (malloc'd, grows)
+    len: usize        # bytes in use (not counting the NUL)
     cap: usize
-    cursor: i32       # posição do caret em CODEPOINTS
+    cursor: i32       # caret position in CODEPOINTS
     sig_changed: UiSignal
     sig_submit: UiSignal
     sig_cancel: UiSignal
 
-# ---------- tema default (dark) ----------
+# ---------- default theme (dark) ----------
 
 static def theme_dark() -> Theme:
     t: Theme = {0}
@@ -69,7 +70,7 @@ static def theme_dark() -> Theme:
         .handle = 6
     return t
 
-# ---------- utf8 (o input de uma linha navega por codepoint) ----------
+# ---------- utf8 (the line input navigates by codepoint) ----------
 
 static def cp_len(s: const *char) -> i32:
     n: i32 = 0
@@ -90,7 +91,7 @@ static def cp_to_byte(s: const *char, col: i32) -> usize:
     return i
 
 struct Ui:
-    # protótipos dos helpers internos (usados antes de suas definições)
+    # prototypes for the internal helpers (used before they are defined)
     static def is_vis(ref self: Ui, id: i32) -> bool
     static def unlink_node(ref self: Ui, id: i32)
     static def link_last(ref self: Ui, id: i32, parent: i32)
@@ -112,7 +113,7 @@ struct Ui:
     static def input_edit(ref self: Ui, id: i32, ev: *PgEvent) -> bool
     static def input_insert(ref self: Ui, id: i32, s: const *char)
 
-    # ---------- ciclo de vida ----------
+    # ---------- lifetime ----------
 
     def init(out self: Ui, font: PgFont):
         self.nodes.init()
@@ -159,7 +160,7 @@ struct Ui:
         self.nodes.deinit()
 
     def node(ref self: Ui, id: i32) -> *UINode:
-        # CUIDADO: o ponteiro invalida no próximo new_node (o pool realoca)
+        # CAREFUL: this pointer dies on the next new_node (the pool reallocates)
         return &self.nodes.data[id]
 
     def data_of(ref self: Ui, id: i32) -> *void:
@@ -225,7 +226,12 @@ struct Ui:
         return id
 
     def free_node(ref self: Ui, id: i32):
-        # solta a subárvore de baixo pra cima (links morrem junto)
+        # a parent may draw based on its children: one disappears, it goes dirty
+        p0: i32 = self.nodes.data[id].parent
+        if p0 >= 0:
+            self.queue_redraw(p0)
+        self.needs_draw = True
+        # releases the subtree bottom-up (the links go with it)
         c: i32 = self.nodes.data[id].first_child
         while c >= 0:
             nx: i32 = self.nodes.data[c].next_sibling
@@ -252,7 +258,7 @@ struct Ui:
         self.unlink_node(id)
         self.link_last(id, new_parent)
 
-    # ---------- construtores ----------
+    # ---------- constructors ----------
 
     def panel(ref self: Ui, parent: i32) -> i32:
         return self.new_node(WK_PANEL, parent)
@@ -326,7 +332,7 @@ struct Ui:
         nd->c_free = c_free
         return id
 
-    # ---------- propriedades ----------
+    # ---------- properties ----------
 
     def set_expand(ref self: Ui, id: i32, h: bool, v: bool):
         f: u32 = self.nodes.data[id].base.flags & ~(UF_EXPAND_H | UF_EXPAND_V)
@@ -382,7 +388,7 @@ struct Ui:
         else:
             td: *TextData = nd->data
             if strcmp(td->text, text) == 0:
-                return          # texto igual: nada sujou (evita repaint à toa)
+                return          # same text: nothing changed (skips a pointless repaint)
             free(td->text)
             td->text = own_str(text)
         self.queue_redraw(id)
@@ -417,7 +423,7 @@ struct Ui:
             self.queue_redraw_tree(c)
             c = self.nodes.data[c].next_sibling
 
-    # ---------- sinais ----------
+    # ---------- signals ----------
 
     def on_click(ref self: Ui, id: i32, fn: def(ctx: *void, id: i32, arg: i64), ctx: *void):
         td: *TextData = self.nodes.data[id].data
@@ -473,7 +479,7 @@ struct Ui:
         sd: *ScrollData = self.nodes.data[id].data
         return sd->value
 
-    # ---------- foco ----------
+    # ---------- focus ----------
 
     def focus_set(ref self: Ui, id: i32):
         if self.focus == id:
@@ -488,10 +494,10 @@ struct Ui:
     def focus_get(ref self: Ui) -> i32:
         return self.focus
 
-    # ---------- fase 1: minimum size (sobe) ----------
+    # ---------- phase 1: minimum size (bubbles up) ----------
 
     static def measure(ref self: Ui, id: i32):
-        # pós-ordem: filhos primeiro
+        # post-order: children first
         c: i32 = self.nodes.data[id].first_child
         while c >= 0:
             self.measure(c)
@@ -573,10 +579,11 @@ struct Ui:
         nd->base.cw = w
         nd->base.ch = h
 
-    # ---------- fase 2: atribuição de rects (desce) ----------
+    # ---------- phase 2: rect assignment (flows down) ----------
 
-    # BoxContainer::_resort: mins somados; espaço restante repartido entre os
-    # EXPAND proporcionalmente ao stretch, com acumulador de erro fracionário
+    # BoxContainer::_resort: minimums are summed and the leftover space is
+    # shared among the EXPAND children in proportion to their stretch, with a
+    # fractional-error accumulator
     static def lay_box(ref self: Ui, id: i32, r: PgRect):
         bd: *BoxData = self.nodes.data[id].data
         vert: bool = bd->vertical
@@ -600,7 +607,7 @@ struct Ui:
         stretch_diff: i32 = space - combined_min
         if stretch_diff < 0:
             stretch_diff = 0
-        # distribui com acumulador de erro (inteiro): err += resto; >=total -> +1px
+        # integer error accumulator: err += remainder; once >= total, hand out 1px
         err: i32 = 0
         pos: i32 = r.y if vert else r.x
         c = self.nodes.data[id].first_child
@@ -626,8 +633,9 @@ struct Ui:
                 pos += size + sep
             c = nx
 
-    # SplitContainer: offset clampado entre o min do primeiro e o espaço menos
-    # o min do segundo; o divisor fica entre os dois
+    # SplitContainer: the offset is clamped between the first child's minimum
+    # and the space left after the second child's minimum; the divider sits
+    # between them
     static def lay_split(ref self: Ui, id: i32, r: PgRect):
         sd: *SplitData = self.nodes.data[id].data
         vert: bool = sd->vertical
@@ -675,7 +683,7 @@ struct Ui:
                 self.lay_split(id, r)
             case WK_CUSTOM:
                 if nd->c_layout != None:
-                    nd->c_layout(&self, id, r)   # container próprio do app
+                    nd->c_layout(&self, id, r)   # the app lays out its own children
                     return
                 c0: i32 = nd->first_child
                 while c0 >= 0:
@@ -683,7 +691,7 @@ struct Ui:
                         self.lay_assign(c0, r)
                     c0 = self.nodes.data[c0].next_sibling
             case _:
-                # PANEL/folhas: filhos empilhados no rect inteiro
+                # PANEL/leaves: children stacked on the whole rect
                 c: i32 = nd->first_child
                 while c >= 0:
                     if self.is_vis(c):
@@ -703,7 +711,7 @@ struct Ui:
         if self.lay_w > 0:
             self.layout(self.lay_w, self.lay_h)
 
-    # ---------- comandos ----------
+    # ---------- commands ----------
 
     static def cmd_push(ref self: Ui, id: i32) -> *Cmd:
         nd: *UINode = &self.nodes.data[id]
@@ -743,9 +751,9 @@ struct Ui:
         c->cp = cp
         c->color = color
 
-    # ---------- builders por kind ----------
+    # ---------- builders, per kind ----------
 
-    # rect do polegar da scrollbar (também usado pelo input)
+    # the scrollbar thumb's rect (input uses it too)
     static def scroll_thumb(ref self: Ui, id: i32) -> PgRect:
         nd: *UINode = &self.nodes.data[id]
         sd: *ScrollData = nd->data
@@ -799,7 +807,7 @@ struct Ui:
                     self.cmd_rect(id, pg_rect(cx, ty, 1, lh), th->text)
             case WK_SPLIT:
                 sd: *SplitData = nd->data
-                # só o traço do divisor (os filhos se desenham)
+                # only the divider stripe (the children draw themselves)
                 hs: i32 = th->handle
                 if sd->vertical:
                     self.cmd_rect(id, pg_rect(r.x, r.y + sd->offset, r.w, hs), th->border)
@@ -854,7 +862,7 @@ struct Ui:
     static def hit_walk(ref self: Ui, id: i32, x: i32, y: i32) -> i32:
         if not self.is_vis(id) or not self.nodes.data[id].base.rect.contains(x, y):
             return -1
-        # último filho que contém o ponto ganha (desenha por cima)
+        # the last child containing the point wins (it draws on top)
         best: i32 = id
         c: i32 = self.nodes.data[id].first_child
         while c >= 0:
@@ -959,7 +967,7 @@ struct Ui:
             return True
         return False
 
-    # input dirigido a UM widget; True = consumiu
+    # input aimed at ONE widget; True = consumed
     static def node_input(ref self: Ui, id: i32, ev: *PgEvent) -> bool:
         nd: *UINode = &self.nodes.data[id]
         match nd->kind:
@@ -999,7 +1007,7 @@ struct Ui:
                         sd->dragging = True
                         sd->grab = p - (t.y if vert0 else t.x)
                     else:
-                        # clique na pista: pula uma página na direção
+                        # click on the track: jump one page that way
                         nv: i64 = sd->value - sd->page if p < (t.y if vert0 else t.x) else sd->value + sd->page
                         self.scroll_set(id, sd->total, sd->page, nv)
                         emit(&sd->sig, id, sd->value)
@@ -1062,13 +1070,13 @@ struct Ui:
                 t: i32 = self.hit(ev->x, ev->y)
                 if t < 0:
                     return False
-                # foco: o alvo se focável, senão o ancestral focável mais próximo
+                # focus: the target if focusable, else its nearest focusable ancestor
                 f: i32 = t
                 while f >= 0 and (self.nodes.data[f].base.flags & UF_FOCUSABLE) == 0:
                     f = self.nodes.data[f].parent
                 if f >= 0:
                     self.focus_set(f)
-                # sobe até alguém consumir (split pega o clique no divisor aqui)
+                # bubble up until someone consumes it (the split grabs its divider here)
                 h: i32 = t
                 while h >= 0:
                     if self.node_input(h, ev):
@@ -1086,7 +1094,16 @@ struct Ui:
             case PGE_MOUSE_MOVE:
                 if self.capture >= 0:
                     return self.node_input(self.capture, ev)
-                self.set_hover(self.hit(ev->x, ev->y))
+                t2: i32 = self.hit(ev->x, ev->y)
+                self.set_hover(t2)
+                # deliver the motion to the widget under the cursor (bubbling
+                # up until consumed), like Godot's _gui_input: this is how a
+                # composite widget lights up sub-parts (a tab's ×) without
+                # capturing the mouse
+                while t2 >= 0:
+                    if self.node_input(t2, ev):
+                        return True
+                    t2 = self.nodes.data[t2].parent
                 return False
             case PGE_WHEEL:
                 w: i32 = self.hit(ev->x, ev->y)

@@ -293,7 +293,7 @@ struct Lx:
             if col > top:
                 if self->nindents >= MAX_INDENT:
                     if self->tolerant:
-                        return   # clampa: trata como o mesmo nível
+                        return   # clamp: treat it as the same level
                     fatal_at(self->file, p, "indentation too deep")
                 self->indents[self->nindents] = col
                 self->nindents += 1
@@ -315,7 +315,7 @@ struct Lx:
             c: u32 = self->cur()
             if self->i >= self->n or c == '\n':
                 if self->tolerant:
-                    break   # token vai até o fim da linha
+                    break   # the token runs to the end of the line
                 fatal_at(self->file, p, "unterminated literal (missing %c)", char(quote))
             if c == '\\':
                 self->i += 2  # escape: copy verbatim
@@ -486,9 +486,10 @@ struct Lx:
 def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> TokenList:
     return lex_ex(file, bytes, nbytes, a, False)
 
-# tolerant=True: modo EDITOR (pstudio) — nunca chama fatal; input inválido é
-# recuperado (string aberta vira token até a EOL, char estranho é pulado,
-# UTF-8 inválido vira '?'). O compilador continua usando lex() (estrito).
+# tolerant=True: EDITOR mode (pstudio) — never calls fatal; invalid input is
+# recovered (an unterminated string becomes a token up to the EOL, a stray
+# character is skipped, invalid UTF-8 becomes '?'). The compiler keeps using
+# the strict lex().
 def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tolerant: bool) -> TokenList:
     lx: Lx = {0}
     lx.file = file
@@ -504,7 +505,7 @@ def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tole
     if utf8_decode(bytes, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0:
         if not tolerant:
             fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off)
-        # substitui bytes inválidos por '?' até decodificar
+        # replace invalid bytes with '?' until it decodes
         fixed: *char = arena_alloc(a, nbytes + 1)
         memcpy(fixed, bytes, nbytes)
         fixed[nbytes] = '\0'

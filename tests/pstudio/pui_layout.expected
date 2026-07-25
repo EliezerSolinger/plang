@@ -6,7 +6,7 @@
 [5] 0,52 240x68
 [6] 0,52 80x68
 [7] 86,52 154x68
-click: handled=11 fired=1 focus_no_botao=1
+click: handled=11 fired=1 focus_on_button=1
 hit_split_handle=1
 scroll=900
 input=[ol!] changes=3

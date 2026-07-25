@@ -1,4 +1,4 @@
-# psys.p — implementação da camada de sistema (backend local = libc).
+# psys.p — the system layer implemented over libc (the `local` backend).
 include <stdio.h>
 include <stdlib.h>
 include <string.h>
@@ -8,7 +8,7 @@ include <unistd.h>
 include <time.h>
 import "psys.ph"
 
-# ---------- backend local ----------
+# ---------- local backend ----------
 static def ps_stat_path(path: const *char, out st: PsStat) -> bool
 
 static def local_read_all(ctx: *void, path: const *char, out_len: *usize) -> *char:
@@ -29,7 +29,7 @@ static def local_read_all(ctx: *void, path: const *char, out_len: *usize) -> *ch
     return buf
 
 static def local_write_all(ctx: *void, path: const *char, data: const *char, len: usize) -> bool:
-    # atômico: grava num temp no MESMO diretório e faz rename por cima
+    # atomic: write a temp in the SAME directory, then rename over the target
     tmp: *char = malloc(strlen(path) + 8)
     strcpy(tmp, path)
     strcat(tmp, ".pstmp")
@@ -47,7 +47,7 @@ static def local_write_all(ctx: *void, path: const *char, data: const *char, len
     free(tmp)
     return ok
 
-# ordena: diretórios primeiro, depois por nome (case-sensitive simples)
+# sort order: directories first, then by name (plain case-sensitive)
 static def entry_less(a: *PsDirEntry, b: *PsDirEntry) -> bool:
     if a->is_dir != b->is_dir:
         return a->is_dir
@@ -80,7 +80,7 @@ static def local_list_dir(ctx: *void, path: const *char, out_n: *i32) -> *PsDirE
         entries[n].is_dir = st.is_dir
         n += 1
     closedir(d)
-    # insertion sort (listas de diretório são pequenas)
+    # insertion sort (directory listings are small)
     for i in range(1, n):
         j: i32 = i
         while j > 0 and entry_less(&entries[j], &entries[j - 1]):
@@ -100,12 +100,12 @@ static def ps_stat_path(path: const *char, out st: PsStat) -> bool:
     if stat(path, &sb) != 0:
         return False
     st.exists = True
-    # S_ISDIR é macro (some no ingest): máscara POSIX estável
+    # S_ISDIR is a macro (it vanishes on ingest): stable POSIX mask
     st.is_dir = (i32(sb.st_mode) & 0xF000) == 0x4000
     st.size = i64(sb.st_size)
-    st.mtime = i64(sb.st_mtim.tv_sec)   # st_mtime é macro p/ st_mtim.tv_sec
-    # (código POSIX: com -std=cNN estrito, compile o C gerado com
-    #  -D_DEFAULT_SOURCE — é o que a suíte de testes faz)
+    st.mtime = i64(sb.st_mtim.tv_sec)   # st_mtime is a macro for st_mtim.tv_sec
+    # (POSIX code: under a strict -std=cNN, build the generated C with
+    #  -D_DEFAULT_SOURCE — that is what the test suite does)
     return True
 
 static def local_stat(ctx: *void, path: const *char, out_st: *PsStat) -> bool:
@@ -142,7 +142,7 @@ def ps_entries_free(entries: *PsDirEntry, n: i32):
         free(entries[i].name)
     free(entries)
 
-# ---------- processos ----------
+# ---------- processes ----------
 
 def ps_run(cmd: const *char, out output: *char) -> i32:
     output = None
@@ -173,12 +173,12 @@ def ps_run(cmd: const *char, out output: *char) -> i32:
         buf = malloc(1)
     buf[n] = '\0'
     output = buf
-    # WEXITSTATUS sem depender do macro (formato POSIX: byte alto)
+    # WEXITSTATUS without the macro (POSIX layout: the high byte)
     if rc < 0:
         return -1
     return (rc >> 8) & 0xff
 
-# ---------- tempo ----------
+# ---------- time ----------
 
 def ps_millis() -> i64:
     ts: timespec

@@ -27,8 +27,8 @@ struct Sym:
     assigned: bool    # has a value: initializer seen, or address escaped (&x)
     uninit_warned: bool
     byref: i32        # out/ref/in parameter: uses of the name auto-deref (*name)
-    for_iter: bool    # iterador injetado por `for`: uma declaração explícita
-                      #   posterior REAPROVEITA a variável (vira atribuição)
+    for_iter: bool    # iterator injected by `for`: a later explicit
+                      #   declaration REUSES it (and becomes an assignment)
     pos: Pos          # declaration site; line 0 = untracked (params, with, ...)
 
 struct SInfo:
@@ -306,9 +306,9 @@ static def resolve_type(s: *Sema, t: *Type):
         return
     if t->ntargs == 0:
         if t->kind == TY_NAME and t->tag_kind == TAG_NONE and t->name != None:
-            # typedef de header C para um TAG (`regex_t`): passa a usar a
-            # GRAFIA DO TAG — o layout é conhecido por esse nome nos dois
-            # backends (o QBE só enxerga o tamanho real por aqui)
+            # a C-header typedef of a TAG (`regex_t`): switch to the TAG's
+            # spelling — the layout is known under that name in both backends
+            # (this is the only way QBE learns the real size)
             ta: *Type = s->tdalias.get_or(t->name, None)
             if ta != None:
                 t->name = ta->name
@@ -316,7 +316,7 @@ static def resolve_type(s: *Sema, t: *Type):
                 return
             tsi: *SInfo = find_struct(s, t->name)
             if tsi != None and tsi->c_tag:
-                # (se houver typedef homônimo, `struct X` continua C válido)
+                # (with a same-named typedef around, `struct X` is still valid C)
                 t->tag_kind = TAG_UNION if tsi->is_union else TAG_STRUCT
         return
     for i in range(t->ntargs):
@@ -1389,11 +1389,11 @@ static def vla_hoist_add(s: *Sema, st: *Stmt):
     s->vla_hoist[s->vla_nhoist] = st
     s->vla_nhoist += 1
 
-# um receptor `in self` (SOMENTE LEITURA por contrato) aceita um rvalue:
-# `f().m()` materializa um temporário e passa o endereço dele, como
-# `(__inN = f(), &__inN)` — C89 válido (a declaração sobe para a entrada da
-# função, igual ao walrus). `ref`/`out` NUNCA fazem isso: escrever num
-# temporário seria perda silenciosa, então lá o rvalue é erro.
+# an `in self` receiver (READ-ONLY by contract) accepts an rvalue: `f().m()`
+# materializes a temporary and passes its address, as `(__inN = f(), &__inN)`
+# — valid C89 (the declaration is hoisted to the function entry, like the
+# walrus does). `ref`/`out` NEVER do this: writing into a temporary would be a
+# silent loss, so there an rvalue is an error.
 static def materialize_in(s: *Sema, e: *Expr) -> *Expr:
     t: *Type = type_of(s, e)
     if t == None:
@@ -2821,7 +2821,7 @@ static def check_expr(s: *Sema, e: *Expr):
                             selfx->lhs = recv
                         elif not self_by_val and not recv_is_ptr:
                             if not is_lvalue(recv) and recv->kind != EX_STRING:
-                                # rvalue: só `in self` (leitura) pode materializar
+                                # rvalue: only `in self` (read-only) may materialize a temporary
                                 if mth->nparams > 0 and mth->params[0].byref == PK_IN:
                                     selfx = materialize_in(s, recv)
                                 else:
@@ -3442,16 +3442,16 @@ static def check_stmt(s: *Sema, st: *Stmt):
             # a NEW block). `extern` after `extern` is a redeclaration — legal.
             rex: bool = False
             if st->name != None and scope_find_cur(s, st->name, &rex):
-                # iterador injetado por `for` + redeclaração do MESMO tipo:
-                # reaproveita a variável — a declaração vira só a atribuição
-                # do valor inicial (pedido do usuário: nada de renomear i)
+                # an iterator injected by `for` plus a redeclaration of the
+                # SAME type: reuse the variable — the declaration becomes just
+                # the assignment of the initial value
                 fdx: i32 = sym_index(s, st->name)
                 if fdx >= 0 and s->locals[fdx].for_iter and not st->is_extern and not st->is_static:
                     rt: *Type = st->type
                     if rt == None and st->init != None:
                         rt = type_of(s, st->init)
                     if type_eq_p(rt, s->locals[fdx].type):
-                        s->locals[fdx].for_iter = False   # agora é explícita
+                        s->locals[fdx].for_iter = False   # it is an explicit declaration now
                         s->locals[fdx].pos = st->pos
                         if st->init != None:
                             st->kind = ST_ASSIGN
@@ -4612,10 +4612,10 @@ static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
             if check_bodies:
                 check_expr(s, d->init)
                 check_init(s, d->type, d->init, d->pos)
-            # known constant: registers the value (int/float/str) for folding and
-            # pruning. `X: const i32 = 4` (P) marca const no TIPO; `const X = 4`
-            # (C) marca no Decl — as duas formas contam, senão o valor não é
-            # dobrável e um `i32[X]` viraria VLA.
+            # known constant: registers the value (int/float/str) for folding
+            # and pruning. `X: const i32 = 4` (P) marks const on the TYPE;
+            # `const X = 4` (C) marks it on the Decl — both forms count, else
+            # the value would not fold and `i32[X]` would become a VLA.
             if d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
                 cok: bool = True
                 cvv: CVal = ceval_val(s, d->init, None, ref cok)
@@ -4640,7 +4640,7 @@ static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
                 si = arena_alloc(s->a, sizeof(SInfo))
                 si->name = d->name
                 si->is_union = d->kind == DL_UNION
-                si->c_tag = s->in_chdr and not d->is_td   # C tag: needs `struct X` in C (não p/ typedef renomeado)
+                si->c_tag = s->in_chdr and not d->is_td   # C tag: needs `struct X` in C (not for a renamed typedef)
                 s->structs.put(d->name, si)
                 add_type(s, d->name)
             elif si->is_union != (d->kind == DL_UNION) and not s->in_chdr:
@@ -4729,11 +4729,12 @@ static def register_module(s: *Sema, m: *Module, check_bodies: bool):
     s->file = m->path
     for j in range(m->ndecls):
         register_decl(s, m, m->decls[j], check_bodies)
-    # typedef de um TAG (`typedef struct re_pattern_buffer regex_t`): registra
-    # o nome do typedef como ALIAS do mesmo layout — DEPOIS dos decls, quando
-    # os tags já existem. Sem isto o backend QBE não sabe o tamanho de
-    # `re: regex_t` (o backend C escapa porque o header do sistema define o
-    # nome, mas o QBE precisa do layout para reservar a pilha).
+    # a typedef of a TAG (`typedef struct re_pattern_buffer regex_t`):
+    # register the typedef name as an ALIAS of the same layout — AFTER the
+    # decls, once the tags exist. Without this the QBE backend does not know
+    # the size of `re: regex_t` (the C backend gets away with it because the
+    # system header defines the name, but QBE needs the layout to reserve
+    # stack space).
     for ti in range(m->ntd):
         if m->tdtypes == None or m->tdtypes[ti] == None:
             continue

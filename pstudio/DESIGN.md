@@ -109,8 +109,13 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
 - **Linha de comando**: `pstudio [pasta|arquivos]` — pasta abre a árvore na
   raiz; arquivos abrem em abas (árvore no diretório comum); sem args = árvore
   no cwd. **Sem restauração de sessão no v0.1** (v0.2).
-- Abas (dirty indicator; fechar suja → **SDL_ShowMessageBox** nativo com
-  salvar/descartar/cancelar — modal do pui só se o do SDL ficar curto).
+- Abas **na coluna do editor** (não numa faixa no topo geral): a árvore de
+  arquivos ocupa a altura toda, como Sublime/VS Code. Cada aba tem marcador de
+  sujo (`*`) que vira **botão × ao passar o mouse** (clique no × ou botão do
+  meio fecha); fechar aba suja → **SDL_ShowMessageBox** nativo com
+  salvar/descartar/cancelar — modal do pui só se o do SDL ficar curto.
+- **Strings de interface em inglês** (o código e os comentários também, como no
+  compilador); só este documento de design fica em português.
 - Árvore de arquivos (VFS): **filtrada** (esconde dotfiles, .git, out/,
   tests/out) e **somente-leitura** no v0.1 (operações de arquivo = v0.2).
 - Status bar: arquivo, linha:coluna, EOL.

@@ -1,17 +1,17 @@
-# codeview.ph — o widget de edição do pstudio: um WK_CUSTOM que junta
-# core (Buffer/Highlight) + pui (layout/comandos/input) + pgfx (fonte).
+# codeview.ph — pstudio's editing widget: a WK_CUSTOM that ties together
+# core (Buffer/Highlight) + pui (layout/commands/input) + pgfx (the font).
 #
-# Segue o TextEdit da Godot no essencial: as SCROLLBARS são filhos INTERNOS
-# que o próprio widget cria e posiciona (c_layout), e os GUTTERS são
-# plugáveis (números de linha hoje; breakpoints/erros depois, sem refactor).
+# It follows Godot's TextEdit where it matters: the SCROLLBARS are INTERNAL
+# children the widget creates and positions itself (c_layout), and the GUTTERS
+# are pluggable (line numbers today; breakpoints/errors later, no refactor).
 include <stddef.h>
 import "pui.ph"
 import "core.ph"
 
-# um gutter: coluna à esquerda do texto. `draw` preenche o texto da linha
-# (buf de `cap` bytes) e devolve a cor; retorno False = célula vazia.
+# a gutter: a column to the left of the text. `draw` fills in the line's text
+# (a buffer of `cap` bytes) and returns the color; False = empty cell.
 struct Gutter:
-    width_cp: i32     # largura em CARACTERES (mono)
+    width_cp: i32     # width in CHARACTERS (mono)
     ctx: *void
     draw: def(ctx: *void, cv: *CodeView, line: i32, out_text: *char, cap: usize, out_color: *u32) -> bool
 
@@ -20,64 +20,64 @@ MAX_GUTTERS: const i32 = 4
 struct CodeView:
     buf: Buffer
     hl: Highlight
-    path: *char       # None = sem arquivo (buffer solto)
-    ui: *Ui           # dono (os callbacks recebem o mesmo ponteiro)
-    id: i32           # id deste widget no pool
-    vsb: i32          # scrollbar vertical (filho interno)
+    path: *char       # None = no file (a detached buffer)
+    ui: *Ui           # owner (the callbacks get this same pointer)
+    id: i32           # this widget's id in the pool
+    vsb: i32          # vertical scrollbar (internal child)
     hsb: i32          # horizontal
-    top: i32          # primeira linha visível
-    left: i32         # primeira COLUNA DE TELA visível (tabs expandidos)
+    top: i32          # first visible line
+    left: i32         # first visible SCREEN COLUMN (tabs expanded)
     gutters: Gutter[MAX_GUTTERS]
     ngutters: i32
-    caret_on: bool    # fase do piscar (o app alterna no timeout)
-    mouse_sel: bool   # arrastando seleção
-    mtime: i64        # mtime do arquivo na última leitura (mudança externa)
-    # callback opcional: avisa o app que algo mudou (título/status bar)
+    caret_on: bool    # blink phase (the app toggles it on the timeout)
+    mouse_sel: bool   # dragging a selection
+    mtime: i64        # the file's mtime at the last read (external-change check)
+    # optional callback: tells the app something changed (title/status bar)
     on_change: def(ctx: *void, cv: *CodeView)
     on_change_ctx: *void
 
-# cria o widget (com scrollbars internas) e devolve o id
+# creates the widget (with its internal scrollbars) and returns the id
 def cv_create(ref ui: Ui, parent: i32) -> i32
-def cv_of(ref ui: Ui, id: i32) -> *CodeView     # payload do widget
+def cv_of(ref ui: Ui, id: i32) -> *CodeView     # the widget's payload
 
 struct CodeView:
-    # ---- arquivo ----
+    # ---- file ----
     def load_file(ref self: CodeView, path: const *char) -> bool
     def save_file(ref self: CodeView) -> bool
-    def reload(ref self: CodeView) -> bool       # relê do disco (descarta edições)
-    def set_text(ref self: CodeView, text: const *char)   # buffer solto
+    def reload(ref self: CodeView) -> bool       # re-reads from disk (discards edits)
+    def set_text(ref self: CodeView, text: const *char)   # a detached buffer
 
-    # ---- geometria (o app usa p/ status bar e para o palette) ----
-    def text_rect(in self: CodeView) -> PgRect   # área do texto (sem gutter/barras)
-    def gutter_w(in self: CodeView) -> i32       # largura total dos gutters (px)
+    # ---- geometry (the app uses it for the status bar and the palette) ----
+    def text_rect(in self: CodeView) -> PgRect   # the text area (without gutters/scrollbars)
+    def gutter_w(in self: CodeView) -> i32       # total gutter width (px)
     def visible_lines(in self: CodeView) -> i32
     def add_gutter(ref self: CodeView, g: Gutter)
-    def line_numbers_gutter(ref self: CodeView)  # o gutter padrão (números)
+    def line_numbers_gutter(ref self: CodeView)  # the default gutter (line numbers)
 
-    # ---- navegação ----
+    # ---- navigation ----
     def scroll_to_caret(ref self: CodeView)
     def set_top(ref self: CodeView, line: i32)
     def set_left(ref self: CodeView, col: i32)
-    # coluna de TELA de (line, col) — expande tabs para TAB_WIDTH
+    # SCREEN column of (line, col) — expands tabs to TAB_WIDTH
     def screen_col(in self: CodeView, line: i32, col: i32) -> i32
-    # inverso: coluna de codepoint mais próxima de uma coluna de tela
+    # the inverse: the codepoint column nearest a screen column
     def col_from_screen(in self: CodeView, line: i32, scol: i32) -> i32
     def pos_from_xy(in self: CodeView, x: i32, y: i32, out line: i32, out col: i32)
 
-    # ---- edição (repassa ao buffer e cuida de scroll/dirty/relex) ----
-    def changed(ref self: CodeView)              # invalida: relex + redraw
+    # ---- editing (forwards to the buffer, then scroll/dirty/relex) ----
+    def changed(ref self: CodeView)              # invalidate: relex + redraw
     def copy(ref self: CodeView) -> bool         # -> clipboard (multi-caret)
     def cut(ref self: CodeView, now_ms: i64) -> bool
     def paste(ref self: CodeView, now_ms: i64)
-    def indent(ref self: CodeView, now_ms: i64)  # tab: 4 espaços ou bloco
+    def indent(ref self: CodeView, now_ms: i64)  # tab: 4 spaces, or the whole block
     def unindent(ref self: CodeView, now_ms: i64)
-    def newline(ref self: CodeView, now_ms: i64) # enter com auto-indent
+    def newline(ref self: CodeView, now_ms: i64) # enter, with auto-indent
 
-    # ---- busca (usada pela barra de busca do app) ----
-    # `re` = tratar needle como POSIX regex; move o caret e faz scroll
+    # ---- search (driven by the app's find bar) ----
+    # `re` = treat needle as a POSIX regex; moves the caret and scrolls
     def search(ref self: CodeView, needle: const *char, forward: bool, re: bool, from_caret: bool) -> bool
 
-# clipboard multi-caret (estilo Sublime): N seleções guardam N pedaços; o
-# clipboard do SISTEMA recebe tudo unido por \n. Vive no módulo (um só editor).
+# multi-caret clipboard (Sublime style): N selections keep N pieces, while the
+# SYSTEM clipboard gets them joined by \n. Module state (one editor per process).
 def cv_clip_clear()
 def cv_clip_count() -> i32

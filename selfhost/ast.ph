@@ -383,9 +383,9 @@ struct Module:
     tdnames: **char    # typedef NAMES seen (va_list, wchar_t, off_t...): the C
     ntd: i32           #   front end resolves them away, but P code referencing
                        #   the name must still see a KNOWN type
-    tdtypes: **Type    # o tipo SUBJACENTE de cada tdname (paralelo a tdnames):
-                       #   `regex_t` -> `struct re_pattern_buffer`, para P
-                       #   resolver LAYOUT (tamanho/alinhamento), não só o nome
+    tdtypes: **Type    # the UNDERLYING type of each tdname (parallel array):
+                       #   `regex_t` -> `struct re_pattern_buffer`, so P can
+                       #   resolve the LAYOUT (size/alignment), not just a name
     decls: **Decl
     ndecls: i32
 

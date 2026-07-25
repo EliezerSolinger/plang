@@ -1,8 +1,8 @@
 include <stdio.h>
 import "../../pstudio/pgfx_raster.ph"
 
-# renderiza a região como ASCII art: '#' pixel de texto, '+' moldura,
-# '.' fundo do rect, ' ' fundo do clear — saída legível E determinística
+# renders the region as ASCII art: '#' a text pixel, '+' the frame,
+# '.' the rect's fill, ' ' the cleared background — readable AND deterministic
 static def dump(ref fb: PgFb, r: PgRect):
     for y in range(r.y, r.y + r.h):
         for x in range(r.x, r.x + r.w):
@@ -32,7 +32,7 @@ def main() -> int:
 
     end: i32 = fb.draw_text(in f, "Hi!", 4, 3, 0xFFFFFFFF)
     printf("end=%d\n", end)
-    # clip: este rect NÃO deve receber nada fora dele
+    # clip: nothing may land outside this rect
     fb.clip_set(pg_rect(4, 4, 8, 8))
     fb.fill_rect(pg_rect(0, 0, 100, 100), 0xFFFF0000)
     fb.clip_reset()

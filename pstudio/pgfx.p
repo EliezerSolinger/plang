@@ -1,11 +1,11 @@
-# pgfx.p — implementação SDL2 da plataforma gráfica (ver pgfx.ph).
-# ÚNICO arquivo do pstudio que fala com o SDL diretamente.
+# pgfx.p — the SDL2 implementation of the graphics platform (see pgfx.ph).
+# The ONLY file in pstudio that talks to SDL directly.
 include <SDL2/SDL.h>
 include <stdlib.h>
 include <string.h>
 import "pgfx.ph"
 
-# macros do SDL somem no ingest — valores estáveis da ABI do SDL2:
+# SDL macros vanish on ingest — stable values from the SDL2 ABI:
 SDL_INIT_VIDEO_V: const u32 = 0x20                 # SDL_INIT_VIDEO
 SDL_WINDOWPOS_CENTERED_V: const i32 = 0x2FFF0000   # SDL_WINDOWPOS_CENTERED
 
@@ -38,7 +38,7 @@ struct PgWindow:
         self.ren = SDL_CreateRenderer(self.win, -1,
                                       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC)
         if self.ren == None:
-            self.ren = SDL_CreateRenderer(self.win, -1, 0)   # fallback: software
+            self.ren = SDL_CreateRenderer(self.win, -1, 0)   # fallback: software renderer
         if self.ren == None:
             SDL_DestroyWindow(self.win)
             SDL_Quit()
@@ -51,7 +51,7 @@ struct PgWindow:
         SDL_StartTextInput()
         return True
 
-    # (re)cria a textura streaming no tamanho do framebuffer
+    # (re)creates the streaming texture at the framebuffer's size
     static def make_texture(ref self: PgWindow) -> bool:
         if self.tex != None:
             SDL_DestroyTexture(self.tex)
@@ -83,7 +83,7 @@ struct PgWindow:
     def set_title(ref self: PgWindow, title: const *char):
         SDL_SetWindowTitle(self.win, title)
 
-    # traduz 1 SDL_Event; PGE_NONE = evento que não interessa (segue esperando)
+    # translates one SDL_Event; PGE_NONE = uninteresting (keep waiting)
     static def translate(ref self: PgWindow, e: *SDL_Event, out ev: PgEvent) -> bool:
         ev.kind = PGE_NONE
         ev.key = 0; ev.mods = 0; ev.x = 0; ev.y = 0
@@ -132,7 +132,7 @@ struct PgWindow:
             elif we == u8(SDL_WINDOWEVENT_FOCUS_LOST):
                 ev.kind = PGE_FOCUS_LOST
             elif we == u8(SDL_WINDOWEVENT_EXPOSED):
-                # janela precisa repintar: um present resolve sem acordar o app
+                # the window needs a repaint: a present handles it without waking the app
                 self.present()
         return ev.kind != PGE_NONE
 
@@ -146,7 +146,7 @@ struct PgWindow:
             if timeout_ms <= 0:
                 got = SDL_WaitEvent(&e)
                 if got == 0:
-                    return False   # erro fatal do SDL (sem timeout não expira)
+                    return False   # fatal SDL error (without a timeout it cannot expire)
             else:
                 now: u32 = SDL_GetTicks()
                 if now >= deadline:
@@ -158,7 +158,7 @@ struct PgWindow:
                     return True
             if self.translate(&e, out ev):
                 return True
-            # evento irrelevante: continua esperando dentro do mesmo prazo
+            # irrelevant event: keep waiting within the same deadline
 
     def poll_event(ref self: PgWindow, out ev: PgEvent) -> bool:
         ev.kind = PGE_NONE
@@ -175,14 +175,14 @@ struct PgWindow:
         memset(btns, 0, sizeof(btns))
         btns[0].flags = u32(SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT)
         btns[0].buttonid = 0
-        btns[0].text = "Salvar"
+        btns[0].text = "Save"
         btns[1].buttonid = 1
-        btns[1].text = "Descartar"
+        btns[1].text = "Discard"
         btns[2].flags = u32(SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT)
         btns[2].buttonid = 2
-        btns[2].text = "Cancelar"
+        btns[2].text = "Cancel"
         msg: char[512]
-        snprintf(msg, sizeof(msg), "%s tem alteracoes nao salvas.", filename)
+        snprintf(msg, sizeof(msg), "%s has unsaved changes.", filename)
         data: SDL_MessageBoxData = {0}
         data.flags = u32(SDL_MESSAGEBOX_WARNING)
         data.window = self.win
@@ -192,7 +192,7 @@ struct PgWindow:
         data.buttons = btns
         hit: i32 = 2
         if SDL_ShowMessageBox(&data, &hit) != 0:
-            return 2   # erro: trata como cancelar (nunca perde dados)
+            return 2   # on error, act as cancel (never lose data)
         return hit
 
     def confirm_reload(ref self: PgWindow, filename: const *char) -> bool:
@@ -200,12 +200,12 @@ struct PgWindow:
         memset(btns, 0, sizeof(btns))
         btns[0].flags = u32(SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT)
         btns[0].buttonid = 1
-        btns[0].text = "Recarregar"
+        btns[0].text = "Reload"
         btns[1].flags = u32(SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT)
         btns[1].buttonid = 0
-        btns[1].text = "Manter edicoes"
+        btns[1].text = "Keep my edits"
         msg: char[512]
-        snprintf(msg, sizeof(msg), "%s mudou no disco e tem edicoes locais.", filename)
+        snprintf(msg, sizeof(msg), "%s changed on disk and has local edits.", filename)
         data: SDL_MessageBoxData = {0}
         data.flags = u32(SDL_MESSAGEBOX_INFORMATION)
         data.window = self.win

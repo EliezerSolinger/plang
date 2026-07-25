@@ -1,4 +1,4 @@
-# app.p — o editor montado: abas, árvore, palette, busca, loop de eventos.
+# app.p — the editor assembled: tabs, tree, palette, search, event loop.
 include <stdio.h>
 include <stdlib.h>
 include <string.h>
@@ -10,24 +10,24 @@ implement Vec<Tab>
 implement Vec<TreeEntry>
 implement Vec<PalItem>
 
-MAX_SCAN: const i32 = 20000     # teto da varredura de arquivos do projeto
-BLINK_MS: const i32 = 500       # piscar do caret (DESIGN.md)
+MAX_SCAN: const i32 = 20000     # cap on the project file scan
+BLINK_MS: const i32 = 500       # caret blink (DESIGN.md)
 
-# ---------- utilidades ----------
+# ---------- helpers ----------
 
 static def own(s: const *char) -> *char:
     r: *char = malloc(strlen(s) + 1)
     strcpy(r, s)
     return r
 
-# nomes ignorados na árvore e no índice do palette (DESIGN.md: filtrada)
+# names hidden from the tree and the palette index (DESIGN.md: filtered)
 static def is_hidden(name: const *char) -> bool:
     if name[0] == '.':
         return True
     return name in {"out", "node_modules", "__pycache__"}
 
-# fuzzy: subsequência com bônus para casamento consecutivo e início de palavra.
-# -1 = não casa. Modelo do ctrl+p do Sublime, simplificado.
+# fuzzy: subsequence match, with a bonus for consecutive hits and for landing
+# at a word start. -1 = no match. Sublime's ctrl+p model, simplified.
 static def fuzzy_score(hay: const *char, needle: const *char) -> i32:
     if needle[0] == '\0':
         return 1
@@ -53,7 +53,7 @@ static def fuzzy_score(hay: const *char, needle: const *char) -> i32:
         hi += 1
     if needle[ni] != '\0':
         return -1
-    # caminhos curtos primeiro
+    # shorter paths first
     return score - i32(strlen(hay)) / 4
 
 static def pal_free(items: *Vec<PalItem>):
@@ -62,7 +62,7 @@ static def pal_free(items: *Vec<PalItem>):
         free(items->data[i].payload)
     items->clear()
 
-# comandos do palette (modo '>')
+# palette commands (the '>' mode)
 struct Command:
     name: const *char
     id: i32
@@ -78,8 +78,29 @@ static def tabbar_min(ui: *Ui, id: i32, out_w: *i32, out_h: *i32):
     *out_w = 0
     *out_h = ui->font.line_h() + 8
 
+# [1 char pad][name][pad][×][pad]
 static def tab_width(ui: *Ui, t: *Tab) -> i32:
     return ui->font.text_width(t->title) + ui->font.char_w() * 4
+
+# the × cell's rect for a tab starting at x
+static def tab_close_rect(ui: *Ui, x: i32, w: i32, r: PgRect) -> PgRect:
+    cw: i32 = ui->font.char_w()
+    lh: i32 = ui->font.line_h()
+    return pg_rect(x + w - cw * 2, r.y + (r.h - lh) / 2, cw, lh)
+
+# the tab under a point (-1 = none); over_x tells whether it hit the ×
+static def tab_at(ui: *Ui, app: *App, r: PgRect, px: i32, py: i32, out over_x: bool) -> i32:
+    over_x = False
+    if not r.contains(px, py):
+        return -1
+    x: i32 = r.x
+    for i in range(app->tabs.len):
+        w: i32 = tab_width(ui, &app->tabs.data[i])
+        if px >= x and px < x + w:
+            over_x = tab_close_rect(ui, x, w, r).contains(px, py)
+            return i
+        x += w
+    return -1
 
 static def tabbar_build(ui: *Ui, id: i32):
     app: *App = ui->data_of(id)
@@ -98,31 +119,42 @@ static def tabbar_build(ui: *Ui, id: i32):
         cv: *CodeView = cv_of(ref *ui, t->cv)
         ui->cmd_text(id, x + ui->font.char_w(), r.y + (r.h - lh) / 2, t->title,
                      th->text if active else th->text_dim)
-        if cv->buf.dirty:
-            ui->cmd_text(id, x + w - ui->font.char_w() * 2, r.y + (r.h - lh) / 2, "*", th->accent)
+        # dirty marker / close button: a dot when modified, an × on hover
+        # (Sublime's model) — the lit × gets a background to read as a target
+        xr: PgRect = tab_close_rect(ui, x, w, r)
+        hovered: bool = app->tab_hover == i
+        if hovered and app->tab_hover_x:
+            ui->cmd_rect(id, xr, th->panel_hi)
+            ui->cmd_text(id, xr.x, xr.y, "×", th->text)
+        elif hovered:
+            ui->cmd_text(id, xr.x, xr.y, "×", th->text_dim)
+        elif cv->buf.dirty:
+            ui->cmd_text(id, xr.x, xr.y, "*", th->accent)
         ui->cmd_rect(id, pg_rect(x + w - 1, r.y, 1, r.h), th->border)
         x += w
     ui->cmd_rect(id, pg_rect(r.x, r.y + r.h - 1, r.w, 1), th->border)
 
 static def tabbar_input(ui: *Ui, id: i32, ev: *PgEvent) -> bool:
-    if ev->kind != PGE_MOUSE_DOWN:
-        return False
     app: *App = ui->data_of(id)
     r: PgRect = ui->rect_of(id)
-    x: i32 = r.x
-    for i in range(app->tabs.len):
-        w: i32 = tab_width(ui, &app->tabs.data[i])
-        if ev->x >= x and ev->x < x + w:
-            # último caractere da aba = fechar (ou botão do meio)
-            if ev->button == 2 or ev->x > x + w - ui->font.char_w() * 2:
-                app->close_tab(i)
-            else:
-                app->select_tab(i)
-            return True
-        x += w
+    ox: bool
+    hit: i32 = tab_at(ui, app, r, ev->x, ev->y, out ox)
+    if ev->kind == PGE_MOUSE_MOVE:
+        # only dirty when the state really changes (else every motion repaints)
+        if hit != app->tab_hover or ox != app->tab_hover_x:
+            app->tab_hover = hit
+            app->tab_hover_x = ox
+            ui->queue_redraw(id)
+        return hit >= 0
+    if ev->kind != PGE_MOUSE_DOWN or hit < 0:
+        return False
+    if ev->button == 2 or ox:            # middle button or the × closes the tab
+        app->close_tab(hit)
+    elif ev->button == 1:
+        app->select_tab(hit)
     return True
 
-# ---------- árvore de arquivos ----------
+# ---------- file tree ----------
 
 static def tree_min(ui: *Ui, id: i32, out_w: *i32, out_h: *i32):
     *out_w = ui->font.char_w() * 18
@@ -232,7 +264,7 @@ static def pal_input(ui: *Ui, id: i32, ev: *PgEvent) -> bool:
         return True
     return False
 
-# ---------- sinais ----------
+# ---------- signals ----------
 
 static def on_pal_changed(ctx: *void, id: i32, arg: i64):
     app: *App = ctx
@@ -277,12 +309,13 @@ struct App:
     static def try_quit(ref self: App)
     static def run_command(ref self: App, cmd: i32)
 
-    # ---------- construção ----------
+    # ---------- construction ----------
 
     def init(out self: App, dir: const *char, w: i32 = 1100, h: i32 = 720) -> bool:
         memset(&self, 0, sizeof(App))
         self.zoom = 1
         self.cur = -1
+        self.tab_hover = -1
         self.tabs.init()
         self.entries.init()
         self.palitems.init()
@@ -292,11 +325,11 @@ struct App:
             return False
         self.ui.init(pg_font_default(self.zoom))
 
-        # raiz = PANEL (empilha): [ coluna do editor | palette flutuante ]
+        # root = PANEL (stacks): [ editor column | floating palette ]
+        # The TAB BAR lives INSIDE the editor column (not across the top), so
+        # the file tree spans the full height — like Sublime/VS Code.
         self.root = self.ui.panel(-1)
         col: i32 = self.ui.box(self.root, True)
-        self.tabbar = self.ui.custom(col, &self, tabbar_min, tabbar_build,
-                                     tabbar_input, None, None)
         self.split = self.ui.split(col, False)
         self.ui.set_expand(self.split, True, True)
         self.tree = self.ui.custom(self.split, &self, tree_min, tree_build,
@@ -304,12 +337,14 @@ struct App:
         self.editors = self.ui.box(self.split, True)
         self.ui.set_expand(self.editors, True, True)
         self.ui.split_set(self.split, 220)
+        self.tabbar = self.ui.custom(self.editors, &self, tabbar_min, tabbar_build,
+                                     tabbar_input, None, None)
         self.cvhost = self.ui.box(self.editors, True)
         self.ui.set_expand(self.cvhost, True, True)
 
-        # barra de busca: último filho da coluna = FIXA no rodapé (Sublime)
+        # find bar: last child of the column = PINNED to the bottom (Sublime)
         self.findbar = self.ui.box(self.editors, False)
-        self.ui.label(self.findbar, "buscar:")
+        self.ui.label(self.findbar, "find:")
         self.findinput = self.ui.line_input(self.findbar)
         self.ui.set_expand(self.findinput, True, False)
         self.ui.on_changed(self.findinput, on_find_changed, &self)
@@ -319,7 +354,7 @@ struct App:
 
         self.status = self.ui.label(col, " ")
 
-        # palette (último filho da raiz: desenha por cima e ganha o hit-test)
+        # palette (last child of the root: draws on top and wins the hit-test)
         self.palette = self.ui.custom(self.root, &self, pal_min, pal_build,
                                       pal_input, pal_layout, None)
         self.palinput = self.ui.line_input(self.palette)
@@ -351,7 +386,7 @@ struct App:
         self.ui.deinit()
         self.win.close()
 
-    # ---------- abas ----------
+    # ---------- tabs ----------
 
     def cur_cv(ref self: App) -> *CodeView:
         if self.cur < 0 or self.cur >= self.tabs.len:
@@ -359,7 +394,7 @@ struct App:
         return cv_of(ref self.ui, self.tabs.data[self.cur].cv)
 
     def open_file(ref self: App, path: const *char):
-        # já aberto? só ativa
+        # already open? just activate it
         for i in range(self.tabs.len):
             cv: *CodeView = cv_of(ref self.ui, self.tabs.data[i].cv)
             if cv->path != None and strcmp(cv->path, path) == 0:
@@ -401,11 +436,18 @@ struct App:
         self.ui.free_node(self.tabs.data[i].cv)
         free(self.tabs.data[i].title)
         self.tabs.remove_at(i)
+        self.tab_hover = -1
+        self.tab_hover_x = False
         if self.tabs.is_empty():
             self.cur = -1
             self.ui.relayout()
         else:
             self.select_tab(i - 1 if i > 0 else 0)
+        # the tab bar and the tree are RETAINED and their rects did not
+        # change: without dirtying them by hand the closed tab would stay
+        # painted on screen
+        self.ui.queue_redraw(self.tabbar)
+        self.ui.queue_redraw(self.tree)
         self.update_status()
         self.dirty_ui = True
 
@@ -421,23 +463,23 @@ struct App:
         s.init()
         cv: *CodeView = self.cur_cv()
         if cv == None:
-            s.append(" pstudio — ctrl+p abre um arquivo")
+            s.append(" pstudio — ctrl+p to open a file")
         else:
             c: *Caret = cv->buf.caret(0)
-            s.appendf(" %s%s   ", cv->path if cv->path != None else "(sem nome)",
+            s.appendf(" %s%s   ", cv->path if cv->path != None else "(untitled)",
                       "*" if cv->buf.dirty else "")
             s.appendf("%d:%d", c->line + 1, c->col + 1)
             if cv->buf.ncarets() > 1:
                 s.appendf(" (%d carets)", cv->buf.ncarets())
-            s.appendf("   %s   %d linhas   %dx",
+            s.appendf("   %s   %d lines   %dx",
                       "CRLF" if cv->buf.crlf else "LF", cv->buf.nlines(), self.zoom)
         self.ui.set_text(self.status, s.cstr())
         s.deinit()
         self.dirty_ui = True
 
-    # ---------- árvore ----------
+    # ---------- tree ----------
 
-    # (re)constrói a lista plana: dirs primeiro, filtrada, com expansão
+    # (re)builds the flat list: dirs first, filtered, honoring expansion
     static def build_tree(ref self: App, dir: const *char, depth: i32, at: i32) -> i32:
         v: Vfs = vfs_local()
         n: i32
@@ -462,7 +504,7 @@ struct App:
         self.entries.clear()
         self.build_tree(self.root_dir, 0, 0)
         self.tree_top = 0
-        # índice de arquivos para o palette (varredura recursiva, uma vez)
+        # the palette's file index (one recursive scan)
         pal_free(&self.files)
         count: i32 = 0
         self.scan_dir(self.root_dir, 0, ref count)
@@ -472,7 +514,7 @@ struct App:
         if not e->is_dir:
             return
         if e->expanded:
-            # remove os descendentes (profundidade maior) logo abaixo
+            # drop the descendants (deeper entries) right below
             d: i32 = e->depth
             j: i32 = i + 1
             while j < self.entries.len and self.entries.data[j].depth > d:
@@ -540,7 +582,7 @@ struct App:
 
     def palette_filter(ref self: App):
         q: const *char = self.ui.text_of(self.palinput)
-        # o prefixo escolhe o modo (Sublime): '>' comandos, ':' ir para linha
+        # the prefix picks the mode (Sublime): '>' commands, ':' go to line
         if q[0] == '>':
             self.palmode = PAL_COMMANDS
             q += 1
@@ -565,7 +607,7 @@ struct App:
                     j += 1
             case PAL_GOTO:
                 lab: char[64]
-                snprintf(lab, sizeof(lab), "ir para a linha %s", q if q[0] != '\0' else "…")
+                snprintf(lab, sizeof(lab), "go to line %s", q if q[0] != '\0' else "…")
                 it2: PalItem = {own(lab), own(q), 0}
                 self.palitems.push(it2)
             case _:
@@ -575,7 +617,7 @@ struct App:
                         it3: PalItem = {own(self.files.data[i].label),
                                         own(self.files.data[i].payload), sc2}
                         self.palitems.push(it3)
-                # maior score primeiro (insertion sort: listas pequenas)
+                # highest score first (insertion sort: the lists are small)
                 for i in range(1, self.palitems.len):
                     t: PalItem = self.palitems.data[i]
                     k: i32 = i
@@ -613,7 +655,7 @@ struct App:
                 self.open_file(payload)
         free(payload)
 
-    # ---------- busca ----------
+    # ---------- search ----------
 
     def find_open(ref self: App):
         self.ui.set_visible(self.findbar, True)
@@ -643,7 +685,7 @@ struct App:
         self.update_status()
         self.dirty_ui = True
 
-    # ---------- comandos / atalhos ----------
+    # ---------- commands / shortcuts ----------
 
     def set_zoom(ref self: App, z: i32):
         nz: i32 = 1 if z < 1 else (3 if z > 3 else z)
@@ -687,10 +729,10 @@ struct App:
                 pass
         self.dirty_ui = True
 
-    # atalhos globais (Sublime). True = consumido, não desce para a árvore de UI
+    # global shortcuts (Sublime). True = consumed, never reaches the UI tree
     def key_shortcut(ref self: App, ev: *PgEvent) -> bool:
         pal_open: bool = self.ui.is_visible(self.palette)
-        # navegação da palette: as setas não são do input de texto
+        # palette navigation: the arrows do not belong to the text input
         if pal_open and ev->key in {PGK_UP, PGK_DOWN}:
             n: i32 = self.palitems.len
             if n > 0:
@@ -775,7 +817,7 @@ struct App:
         self.dirty_ui = True
         return True
 
-    # ---------- mudança externa / saída ----------
+    # ---------- external changes / quitting ----------
 
     static def check_external(ref self: App):
         v: Vfs = vfs_local()
@@ -788,13 +830,13 @@ struct App:
                 continue
             if st.mtime == cv->mtime:
                 continue
-            # mtime mudou: sem edições locais recarrega; com edições, pergunta
+            # mtime changed: reload when clean, ask when there are local edits
             if not cv->buf.dirty:
                 cv->reload()
             elif self.win.confirm_reload(self.tabs.data[i].title):
                 cv->reload()
             else:
-                cv->mtime = st.mtime   # decidiu manter: não pergunta de novo
+                cv->mtime = st.mtime   # they chose to keep them: do not ask again
         self.dirty_ui = True
 
     static def try_quit(ref self: App):
@@ -804,7 +846,7 @@ struct App:
             if cv->buf.dirty:
                 r: i32 = self.win.confirm_close(self.tabs.data[i].title)
                 if r == 2:
-                    return          # cancelou: continua editando
+                    return          # cancelled: keep editing
                 if r == 0 and not cv->save_file():
                     return
             i += 1
@@ -849,16 +891,16 @@ struct App:
             case PGE_FOCUS_GAINED:
                 self.check_external()
             case PGE_KEY:
-                # teclado é de baixa frequência: força o repaint (uma tecla
-                # sempre mexe em algo visível, e não há fila para acumular)
+                # the keyboard is low frequency: force the repaint (a key
+                # always changes something visible, and no queue builds up)
                 if not self.key_shortcut(ev):
                     self.ui.input_event(ev)
                     self.update_status()
                 self.dirty_ui = True
             case _:
-                # mouse/roda: NÃO força repaint. Quem realmente sujou algo
-                # levantou ui.needs_draw — mover o mouse sem efeito visual não
-                # deve custar um frame inteiro de rasterização.
+                # mouse/wheel: do NOT force a repaint. Whatever actually got
+                # dirty raised ui.needs_draw — moving the mouse with no visual
+                # effect must not cost a full rasterized frame.
                 if self.ui.input_event(ev):
                     self.update_status()
 
@@ -866,11 +908,11 @@ struct App:
         blink: i64 = ps_millis()
         while self.running:
             ev: PgEvent
-            # UM evento bloqueante (timeout = piscar do caret) e depois DRENA
-            # a fila: o present é por FRAME, não por evento. Com vsync cada
-            # present segura ~16ms; um por evento de movimento deixa o arraste
-            # atrás do cursor porque a fila do SDL cresce mais rápido do que a
-            # gente consome (medido: 200 motions = 182ms assim, 1ms drenando).
+            # ONE blocking event (the timeout drives the caret blink), then
+            # DRAIN the queue: the present is per FRAME, not per event. With
+            # vsync each present holds ~16ms, so one per motion event leaves
+            # the drag behind the cursor — SDL's queue grows faster than we
+            # consume it (measured: 200 motions = 182ms that way, 1ms drained).
             if not self.win.wait_event(out ev, BLINK_MS):
                 break
             self.handle_event(&ev, ref blink)

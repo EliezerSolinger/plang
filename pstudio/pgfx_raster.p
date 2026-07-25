@@ -1,4 +1,4 @@
-# pgfx_raster.p — rasterizador de software (puro, sem SDL; ver pgfx_raster.ph)
+# pgfx_raster.p — the software rasterizer (pure, no SDL; see pgfx_raster.ph)
 include <stdlib.h>
 include <string.h>
 import "pgfx_raster.ph"
@@ -28,7 +28,7 @@ struct PgRect:
     def is_empty(in self: PgRect) -> bool:
         return self.w <= 0 or self.h <= 0
 
-# ---------- fonte ----------
+# ---------- font ----------
 
 def pg_font_default(scale: i32) -> PgFont:
     f: PgFont = {0}
@@ -41,8 +41,8 @@ def pg_font_default(scale: i32) -> PgFont:
         .scale = scale if scale >= 1 else 1
     return f
 
-# decodifica 1 codepoint UTF-8 e avança o índice; inválido vira U+FFFD e
-# avança 1 byte (o atlas rende □ para qualquer cp fora da faixa ASCII)
+# decodes one UTF-8 codepoint and advances the index; an invalid byte yields
+# U+FFFD and advances by 1 (the atlas draws □ for anything it lacks)
 def pg_utf8_step(s: const *char, ref i: usize) -> u32:
     b0: u32 = u32(u8(s[i]))
     if b0 < 0x80:
@@ -87,7 +87,7 @@ struct PgFont:
 
 # ---------- framebuffer ----------
 
-# mistura src sobre dst com alpha a (0..255), por canal
+# blends src over dst with alpha a (0..255), per channel
 static def blend(dst: u32, src: u32, a: u32) -> u32:
     if a == 255:
         return src
@@ -145,12 +145,12 @@ struct PgFb:
     def draw_glyph(ref self: PgFb, in f: PgFont, cp: u32, x: i32, y: i32, color: u32) -> i32:
         s: i32 = f.scale
         adv: i32 = f.cell_w * s
-        # descarte rápido: célula inteira fora do clip
+        # fast reject: the whole cell is outside the clip
         if x + adv <= self.clip.x or x >= self.clip.x + self.clip.w:
             return adv
         if y + f.cell_h * s <= self.clip.y or y >= self.clip.y + self.clip.h:
             return adv
-        gi: i32 = fa_index(cp)   # fora das faixas do atlas -> □
+        gi: i32 = fa_index(cp)   # outside the atlas ranges -> □
         cell: const *u8 = f.pixels + usize(gi) * usize(f.cell_w) * usize(f.cell_h)
         for gy in range(f.cell_h):
             arow: const *u8 = cell + usize(gy) * usize(f.cell_w)
@@ -158,7 +158,7 @@ struct PgFb:
                 a: u32 = u32(arow[gx])
                 if a == 0:
                     continue
-                # bloco s×s (escala inteira, vizinho mais próximo)
+                # s×s block (integer scale, nearest neighbor)
                 for sy in range(s):
                     py: i32 = y + gy * s + sy
                     if py < self.clip.y or py >= self.clip.y + self.clip.h:

@@ -275,8 +275,8 @@ static def emit_args(b: *StrBuf, args: **Expr, n: i32):
     for i in range(n):
         if i != 0:
             sb_puts(b, ", ")
-        # PR_ASSIGN: uma expressão VÍRGULA como argumento precisa de parênteses
-        # (senão viraria dois argumentos) — ex.: o temporário de um `in` rvalue
+        # PR_ASSIGN: a COMMA expression as an argument needs parentheses (or
+        # it would read as two arguments) — e.g. an `in` rvalue's temporary
         emit_expr(b, args[i], PR_ASSIGN)
 
 # emits a function-pointer declarator in C: Ret (*<inner>)(params).
@@ -1183,8 +1183,9 @@ static def emit_decl(b: *StrBuf, d: *Decl):
             elif d->is_static:
                 sb_puts(b, "static ")   # internal linkage: no collision between TUs
             elif g_in_header and not g_c_mod and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
-                # const global num .ph: sem `static`, cada TU que inclui o .h
-                # geraria uma DEFINIÇÃO externa do símbolo (colisão no link)
+                # a const global in a .ph: without `static`, every TU that
+                # includes the .h would emit an external DEFINITION of the
+                # symbol (a link collision)
                 sb_puts(b, "static ")
             if d->is_const:
                 sb_puts(b, "const ")
@@ -1204,8 +1205,8 @@ static def emit_decl(b: *StrBuf, d: *Decl):
                 return   # inlined at its anonymous-member position
             if d->nfields > 0 or d->is_def:
                 if d->is_td:
-                    # tag anônimo renomeado p/ o nome do typedef (cfront): as
-                    # referências usam o nome PURO — o typedef tem que existir
+                    # an anonymous tag renamed to its typedef name (cfront):
+                    # references use the BARE name, so the typedef must exist
                     sb_printf(b, "typedef %s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
                     emit_struct_fields(b, d, 1)
                     sb_printf(b, "} %s;\n", d->name)

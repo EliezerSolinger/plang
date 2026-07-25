@@ -5,7 +5,7 @@ import "../../pstudio/psys.ph"
 
 def main() -> int:
     v: Vfs = vfs_local()
-    # write atômico + read
+    # atomic write + read
     ok: bool = vfs_write_all(in v, "/tmp/pstudio_vfs_test.txt", "hello vfs\n", 10)
     printf("write=%d\n", ok)
     n: usize
@@ -16,7 +16,7 @@ def main() -> int:
     st: PsStat
     vfs_stat(in v, "/tmp/pstudio_vfs_test.txt", out st)
     printf("stat: exists=%d dir=%d size=%lld\n", st.exists, st.is_dir, st.size)
-    # list (o arquivo aparece em /tmp? só confere que lista raiz sem crash)
+    # list (just checks that listing the root works and does not crash)
     cnt: i32
     es: *PsDirEntry = vfs_list_dir(in v, "/", out cnt)
     printf("list_root=%d\n", 1 if cnt > 0 else 0)
@@ -27,10 +27,10 @@ def main() -> int:
     printf("join=%s dir=%s base=%s\n", j, d, ps_path_basename(j))
     free(j)
     free(d)
-    # clock monotônico anda
+    # the monotonic clock advances
     t0: i64 = ps_millis()
     printf("clock=%d\n", 1 if t0 >= 0 else 0)
-    # processos
+    # processes
     outp: *char
     rc: i32 = ps_run("echo proc-ok", out outp)
     printf("run rc=%d out=%s", rc, outp)

@@ -9,8 +9,8 @@ struct Token:
     text: const *char   # lexeme (NUL-terminated, in the arena); None for punctuation
 
 struct TokenList:
-    toks: *Token       # array malloc'd: o CHAMADOR é o dono (free quando
-                       #   terminar). Os LEXEMAS vivem na arena passada ao lex.
+    toks: *Token       # malloc'd array: the CALLER owns it (free it when
+                       #   done). The LEXEMES live in the arena passed to lex.
     n: usize
 
 def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> TokenList

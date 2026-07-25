@@ -1,4 +1,4 @@
-# codeview.p — implementação do widget de edição (ver codeview.ph)
+# codeview.p — the editing widget's implementation (see codeview.ph)
 include <stdio.h>
 include <stdlib.h>
 include <string.h>
@@ -7,16 +7,16 @@ import "psys.ph"
 
 CV_TAB: const i32 = 4       # soft tabs (DESIGN.md)
 
-# cores por classe de highlight (tema dark; índice = HL_*)
+# colors per highlight class (dark theme; the index is HL_*)
 hl_colors: const u32[6] = {
     0xFFD4D4D4,   # HL_TEXT
-    0xFFC586C0,   # HL_KW      (roxo)
-    0xFFCE9178,   # HL_STR     (laranja)
-    0xFFB5CEA8,   # HL_NUM     (verde claro)
-    0xFF6A9955,   # HL_COMMENT (verde)
+    0xFFC586C0,   # HL_KW      (purple)
+    0xFFCE9178,   # HL_STR     (orange)
+    0xFFB5CEA8,   # HL_NUM     (light green)
+    0xFF6A9955,   # HL_COMMENT (green)
     0xFFD4D4D4}   # HL_PUNCT
 
-# ---------- clipboard multi-caret (um editor por processo) ----------
+# ---------- multi-caret clipboard (one editor per process) ----------
 clip_parts: **char = None
 clip_n: i32 = 0
 
@@ -35,7 +35,7 @@ static def clip_set(parts: **char, n: i32):
     clip_parts = parts
     clip_n = n
 
-# ---------- gutter padrão: números de linha ----------
+# ---------- the default gutter: line numbers ----------
 static def gutter_numbers(ctx: *void, cv: *CodeView, line: i32, out_text: *char, cap: usize, out_color: *u32) -> bool:
     snprintf(out_text, cap, "%d", line + 1)
     cur: bool = False
@@ -52,7 +52,7 @@ struct CodeView:
     static def max_screen_cols(in self: CodeView) -> i32
     static def sel_lines_range(ref self: CodeView, out l0: i32, out l1: i32) -> bool
 
-    # ---------- arquivo ----------
+    # ---------- file ----------
 
     def load_file(ref self: CodeView, path: const *char) -> bool:
         v: Vfs = vfs_local()
@@ -67,7 +67,7 @@ struct CodeView:
         strcpy(self.path, path)
         st: PsStat
         self.mtime = st.mtime if vfs_stat(in v, path, out st) else 0
-        # highlight só para arquivos P (o resto fica em texto puro)
+        # highlighting only for P files (everything else stays plain text)
         ext: const *char = strrchr(path, '.')
         self.hl.deinit()
         self.hl.init(ext != None and (strcmp(ext, ".p") == 0 or strcmp(ext, ".ph") == 0))
@@ -97,7 +97,7 @@ struct CodeView:
             return False
         keep_top: i32 = self.top
         p: *char = self.path
-        self.path = None      # load_file libera o antigo; preserva o nome
+        self.path = None      # load_file frees the old one; keep the name alive
         ok: bool = self.load_file(p)
         free(p)
         if ok:
@@ -108,7 +108,7 @@ struct CodeView:
         self.buf.load(text, strlen(text))
         self.changed()
 
-    # ---------- geometria ----------
+    # ---------- geometry ----------
 
     def gutter_w(in self: CodeView) -> i32:
         if self.ngutters == 0:
@@ -117,7 +117,7 @@ struct CodeView:
         total: i32 = 0
         for i in range(self.ngutters):
             total += self.gutters[i].width_cp * cw
-        return total + cw   # 1 caractere de respiro antes do texto
+        return total + cw   # one character of breathing room before the text
 
     def text_rect(in self: CodeView) -> PgRect:
         r: PgRect = self.ui->rect_of(self.id)
@@ -143,7 +143,7 @@ struct CodeView:
         g.draw = gutter_numbers
         self.add_gutter(g)
 
-    # ---------- colunas de tela (tabs expandidos) ----------
+    # ---------- screen columns (tabs expanded) ----------
 
     def screen_col(in self: CodeView, line: i32, col: i32) -> i32:
         s: const *char = self.buf.line_text(line)
@@ -195,8 +195,8 @@ struct CodeView:
         col = self.col_from_screen(l, sc)
 
     static def max_screen_cols(in self: CodeView) -> i32:
-        # maior largura de linha VISÍVEL (barra horizontal proporcional ao que
-        # está na tela, como a Godot faz — não varre o arquivo inteiro)
+        # widest VISIBLE line (the horizontal bar tracks what is on screen,
+        # as Godot does — it never scans the whole file)
         vis: i32 = self.visible_lines()
         mx: i32 = 1
         for i in range(self.top, self.top + vis + 1):
@@ -219,10 +219,10 @@ struct CodeView:
         mx: i32 = self.max_screen_cols()
         self.ui->scroll_set(self.hsb, i64(mx + 1), i64(cols), i64(self.left))
         self.left = i32(self.ui->scroll_value(self.hsb))
-        # a barra horizontal só aparece quando precisa (padrão Sublime/Godot)
+        # the horizontal bar shows up only when needed (Sublime/Godot behavior)
         self.ui->set_visible(self.hsb, mx >= cols)
 
-    # ---------- navegação ----------
+    # ---------- navigation ----------
 
     def set_top(ref self: CodeView, line: i32):
         n: i32 = line
@@ -274,7 +274,7 @@ struct CodeView:
         if self.on_change != None:
             self.on_change(self.on_change_ctx, &self)
 
-    # ---------- desenho ----------
+    # ---------- drawing ----------
 
     static def build(ref self: CodeView):
         ui: *Ui = self.ui
@@ -287,20 +287,20 @@ struct CodeView:
         vis: i32 = self.visible_lines()
         gw: i32 = self.gutter_w()
 
-        ui->cmd_rect(self.id, r, 0xFF1E1F22)                      # fundo
+        ui->cmd_rect(self.id, r, 0xFF1E1F22)                      # background
         if gw > 0:
             ui->cmd_rect(self.id, pg_rect(r.x, r.y, gw, r.h), 0xFF232527)
 
         self.hl.update(ref self.buf)
 
-        # linha atual (só com 1 caret sem seleção, como o Sublime)
+        # current line (only with a single caret and no selection, like Sublime)
         if self.buf.ncarets() == 1 and not self.buf.has_sel():
             cl: i32 = self.buf.caret(0)->line
             if cl >= self.top and cl < self.top + vis:
                 ui->cmd_rect(self.id, pg_rect(tr.x, tr.y + (cl - self.top) * lh, tr.w, lh),
                              0xFF26282C)
 
-        # seleções (antes do texto: o replay é em ordem)
+        # selections (before the text: the replay is in order)
         for k in range(self.buf.ncarets()):
             l0: i32; c0: i32; l1: i32; c1: i32
             self.buf.sel_range(k, out l0, out c0, out l1, out c1)
@@ -317,7 +317,7 @@ struct CodeView:
                     continue
                 ui->cmd_rect(self.id, pg_rect(x0, tr.y + (ln - self.top) * lh, x1 - x0, lh), th->sel)
 
-        # gutters + texto
+        # gutters + text
         buf: char[64]
         for vi in range(vis + 1):
             ln: i32 = self.top + vi
@@ -330,7 +330,7 @@ struct CodeView:
                 col: u32 = th->text_dim
                 buf[0] = '\0'
                 if g->draw != None and g->draw(g->ctx, &self, ln, buf, sizeof(buf), &col):
-                    # números alinhados à direita na coluna do gutter
+                    # numbers right-aligned inside the gutter column
                     tw: i32 = i32(strlen(buf))
                     ui->cmd_text(self.id, gx + (g->width_cp - tw) * cw, y, buf, col)
                 gx += g->width_cp * cw
@@ -352,7 +352,7 @@ struct CodeView:
                 if sc > self.left + cols:
                     break
 
-        # carets (por cima de tudo)
+        # carets (on top of everything)
         if self.caret_on and ui->focus_get() == self.id:
             for k in range(self.buf.ncarets()):
                 c: *Caret = self.buf.caret(k)
@@ -404,8 +404,8 @@ struct CodeView:
 
     def paste(ref self: CodeView, now_ms: i64):
         sys: *char = pgfx_clipboard_get()
-        # N pedaços para N carets (Sublime): só quando o clipboard do sistema
-        # ainda casa com o que copiamos (senão o texto de fora manda)
+        # N pieces for N carets (Sublime): only while the system clipboard
+        # still matches what we copied (otherwise outside text wins)
         if clip_n == self.buf.ncarets() and clip_n > 1:
             self.buf.insert_each(clip_parts, clip_n, now_ms)
         elif sys != None:
@@ -416,7 +416,7 @@ struct CodeView:
         self.changed()
         self.scroll_to_caret()
 
-    # ---------- indentação ----------
+    # ---------- indentation ----------
 
     static def sel_lines_range(ref self: CodeView, out l0: i32, out l1: i32) -> bool:
         l0 = 0; l1 = -1
@@ -435,8 +435,8 @@ struct CodeView:
     def indent(ref self: CodeView, now_ms: i64):
         l0: i32; l1: i32
         if self.sel_lines_range(out l0, out l1):
-            # bloco: 4 espaços em cada linha (do fim pro começo, sem mexer nas
-            # posições ainda não processadas)
+            # block: 4 spaces on each line (bottom-up, so the positions not
+            # yet processed stay valid)
             for ln in range(l1, l0 - 1, -1):
                 self.buf.replace_range(ln, 0, ln, 0, "    ", now_ms)
             self.buf.select_range(l0, 0, l1, self.buf.line_cp(l1))
@@ -470,7 +470,7 @@ struct CodeView:
         self.scroll_to_caret()
 
     def newline(ref self: CodeView, now_ms: i64):
-        # auto-indent: repete o recuo da linha e aprofunda depois de ':'
+        # auto-indent: repeat the line's indent, and go deeper after a ':'
         c: *Caret = self.buf.caret(self.buf.ncarets() - 1)
         s: const *char = self.buf.line_text(c->line)
         ind: i32 = 0
@@ -484,7 +484,7 @@ struct CodeView:
         if j >= 0 and s[j] == ':':
             deeper = True
         if ind > cb:
-            ind = cb          # caret dentro do recuo: não duplica
+            ind = cb          # caret inside the indent: do not duplicate it
         total: i32 = ind + (CV_TAB if deeper else 0)
         txt: *char = malloc(usize(total) + 2)
         txt[0] = '\n'
@@ -496,7 +496,7 @@ struct CodeView:
         self.changed()
         self.scroll_to_caret()
 
-    # ---------- busca ----------
+    # ---------- search ----------
 
     def search(ref self: CodeView, needle: const *char, forward: bool, re: bool, from_caret: bool) -> bool:
         if needle == None or needle[0] == '\0':
@@ -508,7 +508,7 @@ struct CodeView:
             sl = 0
             sc = 0
         elif forward:
-            # começa DEPOIS da seleção atual (senão acha ela mesma de novo)
+            # start AFTER the current selection (else it finds itself again)
             a: i32; b: i32; d: i32; e: i32
             self.buf.sel_range(0, out a, out b, out d, out e)
             sl = d
@@ -549,7 +549,7 @@ struct CodeView:
                     self.buf.move_to(l, c)
                     self.buf.select_word_at(0)
                 elif (ev->mods & PGM_ALT) != 0:
-                    self.buf.add_caret(l, c)     # caret extra (alt+click)
+                    self.buf.add_caret(l, c)     # extra caret (alt+click)
                 elif (ev->mods & PGM_SHIFT) != 0:
                     cr: *Caret = self.buf.caret(0)
                     self.buf.select_range(cr->aline, cr->acol, l, c)
@@ -566,7 +566,7 @@ struct CodeView:
                 self.pos_from_xy(ev->x, ev->y, out l2, out c2)
                 cr2: *Caret = self.buf.caret(0)
                 self.buf.select_range(cr2->aline, cr2->acol, l2, c2)
-                # arrastar fora da área rola a tela
+                # dragging outside the area scrolls it
                 tr: PgRect = self.text_rect()
                 if ev->y < tr.y:
                     self.set_top(self.top - 1)
@@ -579,7 +579,7 @@ struct CodeView:
                 return True
             case PGE_WHEEL:
                 if (ev->mods & PGM_CTRL) != 0:
-                    return False   # ctrl+roda = zoom (o app trata)
+                    return False   # ctrl+wheel = zoom (the app handles it)
                 self.set_top(self.top - ev->wheel_y * 3)
                 return True
             case PGE_TEXT:
@@ -644,7 +644,7 @@ struct CodeView:
                 pass
         return False
 
-# ---------- callbacks do pui ----------
+# ---------- pui callbacks ----------
 static def cv_min(ui: *Ui, id: i32, out_w: *i32, out_h: *i32):
     cv: *CodeView = ui->data_of(id)
     *out_w = cv->gutter_w() + ui->font.char_w() * 8
@@ -653,8 +653,8 @@ static def cv_min(ui: *Ui, id: i32, out_w: *i32, out_h: *i32):
 static def cv_layout(ui: *Ui, id: i32, r: PgRect):
     cv: *CodeView = ui->data_of(id)
     hs: i32 = ui->theme.handle + 2
-    # scrollbars internas (padrão TextEdit da Godot): a vertical ocupa a
-    # direita inteira; a horizontal, o rodapé menos a largura da vertical
+    # internal scrollbars (Godot's TextEdit layout): the vertical one takes
+    # the full right edge; the horizontal one the bottom minus that width
     ui->set_rect(cv->vsb, pg_rect(r.x + r.w - hs, r.y, hs, r.h - hs))
     ui->set_rect(cv->hsb, pg_rect(r.x + cv->gutter_w(), r.y + r.h - hs,
                                   r.w - hs - cv->gutter_w(), hs))

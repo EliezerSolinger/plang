@@ -1,6 +1,7 @@
-# app_flow: o EDITOR INTEIRO exercitado sem teclado nem display (SDL dummy).
-# Monta um projeto pequeno, abre arquivos, digita, usa palette/busca/abas e
-# faz um "screenshot" ASCII do frame — regressão de layout e de desenho.
+# app_flow: the WHOLE EDITOR exercised without a keyboard or a display (the
+# SDL dummy driver). It builds a small project, opens files, types, uses the
+# palette/search/tabs and takes an ASCII "screenshot" of the frame — a
+# regression test for both layout and drawing.
 include <stdio.h>
 include <stdlib.h>
 include <string.h>
@@ -11,7 +12,7 @@ static def wr(path: const *char, text: const *char):
     v: Vfs = vfs_local()
     vfs_write_all(in v, path, text, strlen(text))
 
-# mapa grosso do framebuffer: 1 caractere por célula de 16x24 px
+# coarse map of the framebuffer: one character per 16x24 px cell
 static def shot(ref app: App, r: PgRect):
     fb: *PgFb = &app.win.fb
     for cy in range(r.y, r.y + r.h, 24):
@@ -61,62 +62,62 @@ def main() -> int:
 
     app: App
     if not app.init("proj"):
-        printf("app-skip (SDL indisponivel)\n")
+        printf("app-skip (SDL unavailable)\n")
         return 0
-    printf("janela=%dx%d\n", app.win.fb.w, app.win.fb.h)
-    printf("arvore=%d arquivos_indexados=%d\n", app.entries.len, app.files.len)
+    printf("window=%dx%d\n", app.win.fb.w, app.win.fb.h)
+    printf("tree=%d indexed_files=%d\n", app.entries.len, app.files.len)
 
-    # abre pela árvore: 1ª entrada é o dir "sub", depois os arquivos
+    # open through the tree: the 1st entry is the "sub" dir, then the files
     app.open_file("proj/hello.p")
-    printf("abas=%d cur=%d titulo=%s\n", app.tabs.len, app.cur, app.tabs.data[0].title)
+    printf("tabs=%d cur=%d title=%s\n", app.tabs.len, app.cur, app.tabs.data[0].title)
     cv: *CodeView = app.cur_cv()
-    printf("linhas=%d hl=%d gutter=%d\n", cv->buf.nlines(), cv->hl.enabled, cv->gutter_w())
+    printf("lines=%d hl=%d gutter=%d\n", cv->buf.nlines(), cv->hl.enabled, cv->gutter_w())
 
-    # digita no fim da linha 2 (o CodeView tem o foco)
+    # type at the end of line 2 (the CodeView has focus)
     cv->buf.move_to(1, cv->buf.line_cp(1))
     typed(ref app, "0")
-    printf("digitado=[%s] dirty=%d\n", cv->buf.line_text(1), cv->buf.dirty)
+    printf("typed=[%s] dirty=%d\n", cv->buf.line_text(1), cv->buf.dirty)
 
-    # ctrl+z desfaz, ctrl+y refaz (atalho global)
+    # ctrl+z undoes, ctrl+y redoes (global shortcut)
     keyp(ref app, i32('z'), PGM_CTRL)
     printf("undo=[%s]\n", cv->buf.line_text(1))
     keyp(ref app, i32('y'), PGM_CTRL)
     printf("redo=[%s]\n", cv->buf.line_text(1))
 
-    # ctrl+d duas vezes: palavra + próxima ocorrência
+    # ctrl+d twice: the word, then the next occurrence
     cv->buf.move_to(2, 12)
     keyp(ref app, i32('d'), PGM_CTRL)
     keyp(ref app, i32('d'), PGM_CTRL)
     printf("carets=%d\n", cv->buf.ncarets())
     cv->buf.collapse()
 
-    # palette de arquivos: filtra por "not" (proj/sub/notas.txt)
+    # file palette: filter by "not" (proj/sub/notas.txt)
     keyp(ref app, i32('p'), PGM_CTRL)
     typed(ref app, "not")
-    printf("palette=%d topo=%s\n", app.palitems.len,
+    printf("palette=%d top=%s\n", app.palitems.len,
            app.palitems.data[0].label if app.palitems.len > 0 else "-")
-    keyp(ref app, PGK_RETURN, 0)          # abre o selecionado
-    printf("abas=%d cur=%s hl_txt=%d\n", app.tabs.len, app.tabs.data[app.cur].title,
+    keyp(ref app, PGK_RETURN, 0)          # open the selected entry
+    printf("tabs=%d cur=%s hl_txt=%d\n", app.tabs.len, app.tabs.data[app.cur].title,
            app.cur_cv()->hl.enabled)
 
-    # palette de comandos: ">zoom in"
+    # command palette: ">zoom in"
     keyp(ref app, i32('p'), PGM_CTRL)
     typed(ref app, ">")
     typed(ref app, "zoomin")
-    printf("cmds=%d topo=%s\n", app.palitems.len,
+    printf("cmds=%d top=%s\n", app.palitems.len,
            app.palitems.data[0].label if app.palitems.len > 0 else "-")
     keyp(ref app, PGK_RETURN, 0)
     printf("zoom=%d cell=%d\n", app.zoom, app.ui.font.char_w())
     app.set_zoom(1)
 
-    # ir para linha via ":" (palette)
+    # go to line via ":" (palette)
     app.select_tab(0)
     keyp(ref app, i32('g'), PGM_CTRL)
     typed(ref app, "3")
     keyp(ref app, PGK_RETURN, 0)
     printf("goto=%d\n", app.cur_cv()->buf.caret(0)->line + 1)
 
-    # busca incremental (ctrl+f) + próxima ocorrência
+    # incremental search (ctrl+f) + next occurrence
     keyp(ref app, i32('f'), PGM_CTRL)
     typed(ref app, "i32")
     c0: *Caret = app.cur_cv()->buf.caret(0)
@@ -126,36 +127,36 @@ def main() -> int:
     printf("find2=%d:%d\n", c1->line, c1->acol)
     app.find_close()
 
-    # abas: clique na segunda aba pela barra
+    # tabs: click the second tab on the bar
     tb: PgRect = app.ui.rect_of(app.tabbar)
     click(ref app, tb.x + 5, tb.y + tb.h / 2)
-    printf("aba_clicada=%d\n", app.cur)
+    printf("clicked_tab=%d\n", app.cur)
 
-    # árvore: clica no diretório (expande) e conta entradas
+    # tree: click the directory (expands it) and count the entries
     tr: PgRect = app.ui.rect_of(app.tree)
     click(ref app, tr.x + 20, tr.y + app.ui.font.line_h() / 2)
-    printf("arvore_expandida=%d\n", app.entries.len)
+    printf("tree_expanded=%d\n", app.entries.len)
 
-    # status bar e screenshot do frame
+    # status bar and a screenshot of the frame
     app.update_status()
     printf("status=[%s]\n", app.ui.text_of(app.status))
     app.ui.draw(ref app.win.fb)
     shot(ref app, pg_rect(0, 0, 480, 240))
 
-    # ctrl+s grava; o arquivo no disco tem que refletir a edição
+    # ctrl+s saves; the file on disk must reflect the edit
     app.select_tab(0)
     keyp(ref app, i32('s'), PGM_CTRL)
     v: Vfs = vfs_local()
     n: usize
     data: *char = vfs_read_all(in v, "proj/hello.p", out n)
-    printf("salvo=%d dirty=%d\n", 1 if strstr(data, "resposta0") != None else 0,
+    printf("saved=%d dirty=%d\n", 1 if strstr(data, "resposta0") != None else 0,
            app.cur_cv()->buf.dirty)
     free(data)
 
-    # fecha as abas (nenhuma suja: sem diálogo)
+    # close the tabs (none dirty: no dialog)
     while not app.tabs.is_empty():
         app.close_tab(app.tabs.len - 1)
-    printf("abas=%d\n", app.tabs.len)
+    printf("tabs=%d\n", app.tabs.len)
 
     app.deinit()
     ps_run("rm -rf proj", out sh)

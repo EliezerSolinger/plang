@@ -173,8 +173,8 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
                 nd[p] = d
                 p += 1
             elif d->kind == DL_VAR and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
-                # const de .ph: dado TU-local (mesma regra do `static const`
-                # que o backend C põe no .h) — sem colisão de símbolo no link
+                # a .ph const: TU-local data (the same rule the C backend
+                # applies with `static const` in the .h) — no link collision
                 cv: *Decl = arena_alloc(&cc->arena, sizeof(Decl))
                 *cv = *d
                 cv->is_static = True

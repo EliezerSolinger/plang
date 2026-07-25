@@ -30,6 +30,6 @@ find(a+b)=1 1:11
 find_back(def)=1 0:0
 find_re(so.a)=1 0:4-8
 cls(0,0)=1 cls(0,4)=0 cmt=4
-tolerante=1
+tolerant=1
 save=26 bytes
 core-ok

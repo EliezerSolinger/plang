@@ -1,5 +1,5 @@
-# pui headless: árvore, duas fases de layout (matemática Godot), hit-test,
-# clique sintético em botão (sinal), scrollbar, input de linha e freelist.
+# pui, headless: the tree, both layout phases (Godot's math), hit-testing, a
+# synthetic button click (signal), scrollbar, line input and the freelist.
 include <stdio.h>
 include <string.h>
 import "../../pstudio/pui.ph"
@@ -37,7 +37,7 @@ def main() -> int:
     ui: Ui
     ui.init(pg_font_default(1))
 
-    # raiz: vbox [ label | hbox [ botão A | botão B(expande) ] | split ]
+    # root: vbox [ label | hbox [ button A | button B(expands) ] | split ]
     root: i32 = ui.box(-1, True)
     lbl: i32 = ui.label(root, "titulo")
     row: i32 = ui.box(root, False)
@@ -62,7 +62,7 @@ def main() -> int:
     rect_of(ref ui, left)
     rect_of(ref ui, right)
 
-    # clique sintético no botão A: press + release dentro do rect
+    # synthetic click on button A: press + release inside its rect
     ui.on_click(ba, on_click, None)
     r: PgRect = ui.rect_of(ba)
     ev: PgEvent = {0}
@@ -73,16 +73,16 @@ def main() -> int:
     c1: bool = ui.input_event(&ev)
     ev.kind = PGE_MOUSE_UP
     c2: bool = ui.input_event(&ev)
-    printf("click: handled=%d%d fired=%d focus_no_botao=%d\n",
+    printf("click: handled=%d%d fired=%d focus_on_button=%d\n",
            c1, c2, clicks, 1 if ui.focus_get() == ba else 0)
     printf("hit_split_handle=%d\n", 1 if ui.hit(80 + 2, 60) == sp else 0)
 
-    # scrollbar: set/clamp/valor
+    # scrollbar: set/clamp/value
     sb: i32 = ui.scrollbar(root, True)
-    ui.scroll_set(sb, 1000, 100, 5000)   # clampa em 900
+    ui.scroll_set(sb, 1000, 100, 5000)   # clamps to 900
     printf("scroll=%lld\n", ui.scroll_value(sb))
 
-    # input de linha: digitar, mover, apagar, submeter
+    # line input: type, move, delete, submit
     inp: i32 = ui.line_input(root)
     ui.on_changed(inp, on_change, None)
     ui.on_submit(inp, on_submit, None)
@@ -95,7 +95,7 @@ def main() -> int:
     key(ref ui, PGK_RETURN)
     printf("submits=%d\n", submits)
 
-    # desenha num fb pequeno só pra exercitar builders/replay (sem crash)
+    # draw into a small fb just to exercise the builders/replay (no crash)
     fb: PgFb
     fb.init(240, 120)
     ui.layout(240, 120)
@@ -107,12 +107,12 @@ def main() -> int:
     printf("draw_lit=%d\n", 1 if lit > 100 else 0)
     fb.deinit()
 
-    # visibilidade tira do layout e do hit-test
+    # hiding a widget removes it from layout and hit-testing
     ui.set_visible(row, False)
     printf("hidden_hit=%d\n", 1 if ui.hit(ui.rect_of(ba).x + 1, ui.rect_of(ba).y + 1) != ba else 0)
     ui.set_visible(row, True)
 
-    # freelist: libera a linha e cria outro nó — reusa um id da subárvore
+    # freelist: free the row and create another node — it reuses a subtree id
     ui.free_node(row)
     n2: i32 = ui.label(root, "novo")
     printf("reuse=%d\n", 1 if n2 in {row, ba, bb} else 0)

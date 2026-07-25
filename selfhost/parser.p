@@ -136,8 +136,8 @@ static def parse_type(p: *P) -> *Type:
                     adv(p)
                     ptypes.push(ty_name(p->a, "..."))   # variadic sentinel
                     break
-                # nome opcional de parâmetro (`def(ctx: *void)` — documentação;
-                # só o TIPO importa para o ponteiro de função)
+                # optional parameter name (`def(ctx: *void)` — documentation
+                # only; a function pointer cares about the TYPE alone)
                 if at(p, TK_IDENT) and pk1(p)->kind == TK_COLON:
                     adv(p)
                     adv(p)

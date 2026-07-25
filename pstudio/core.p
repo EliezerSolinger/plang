@@ -1,11 +1,11 @@
-# core.p — buffer de edição (ver core.ph). Sem janela: tudo testável headless.
+# core.p — the editing buffer (see core.ph). No window: all testable headless.
 include <stdlib.h>
 include <string.h>
 include <regex.h>
 import "core.ph"
-import "../selfhost/lexer.ph"   # relex REAL (modo tolerante) p/ highlight
+import "../selfhost/lexer.ph"   # the REAL relex (tolerant mode) for highlighting
 
-# instâncias da STL usadas pelo buffer (uma só TU as materializa)
+# the STL instances the buffer uses (a single TU materializes them)
 implement Vec<BufLine>
 implement Vec<Caret>
 implement Vec<EditOp>
@@ -13,7 +13,7 @@ implement Vec<UndoGroup>
 implement Vec<HlSpan>
 implement Vec<HlLine>
 
-UNDO_PAUSE_MS: const i64 = 700   # pausa que quebra a coalescência de digitação
+UNDO_PAUSE_MS: const i64 = 700   # pause that breaks typing coalescence
 TAB_WIDTH: const i32 = 4         # soft tabs (DESIGN.md)
 
 # ---------- utf8 / strings ----------
@@ -27,7 +27,7 @@ static def cp_count(s: const *char) -> i32:
         i += 1
     return n
 
-# byte offset do codepoint `col` (clampa no fim)
+# byte offset of codepoint `col` (clamps at the end)
 static def col_to_byte(s: const *char, col: i32) -> i32:
     n: i32 = 0
     i: usize = 0
@@ -39,7 +39,7 @@ static def col_to_byte(s: const *char, col: i32) -> i32:
         i += 1
     return i32(i)
 
-# codepoints antes do byte offset b
+# codepoints before byte offset b
 static def byte_to_col(s: const *char, b: i32) -> i32:
     n: i32 = 0
     for i in range(b):
@@ -61,7 +61,7 @@ static def own_n(s: const *char, n: usize) -> *char:
 static def is_word_ch(ch: char) -> bool:
     return (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_'
 
-# fim (line,col) de um texto inserido em (l,c)
+# end (line,col) of a text inserted at (l,c)
 static def text_end(l: i32, c: i32, text: const *char, el: *i32, ec: *i32):
     *el = l
     seg: i32 = 0
@@ -75,14 +75,14 @@ static def text_end(l: i32, c: i32, text: const *char, el: *i32, ec: *i32):
             seg += 1
     *ec = seg if nl else c + seg
 
-# ajusta uma posição após a remoção de [l0,c0 .. l1,c1)
+# adjusts a position after the removal of [l0,c0 .. l1,c1)
 static def adj_del_pos(l0: i32, c0: i32, l1: i32, c1: i32, pl: *i32, pc: *i32):
     l: i32 = *pl
     c: i32 = *pc
     if l < l0 or (l == l0 and c <= c0):
         return
     if l < l1 or (l == l1 and c < c1):
-        *pl = l0; *pc = c0   # dentro do trecho apagado: clampa no início
+        *pl = l0; *pc = c0   # inside the deleted range: clamp to its start
         return
     if l == l1:
         *pl = l0
@@ -98,7 +98,7 @@ static def group_drop(g: *UndoGroup):
     g->after.deinit()
 
 struct Buffer:
-    # ---- helpers internos ----
+    # ---- internal helpers ----
     static def line_put(ref self: Buffer, i: i32, text: *char)
     static def push_line(ref self: Buffer, text: *char)
     static def raw_insert(ref self: Buffer, line: i32, col: i32, text: const *char, el: *i32, ec: *i32)
@@ -116,7 +116,7 @@ struct Buffer:
     static def clamp_col(in self: Buffer, line: i32, col: i32) -> i32
     static def move_one_h(ref self: Buffer, c: *Caret, delta: i32, sel: bool)
 
-    # ---------- ciclo de vida ----------
+    # ---------- lifetime ----------
 
     def init(out self: Buffer):
         memset(&self, 0, sizeof(Buffer))
@@ -202,7 +202,7 @@ struct Buffer:
     def mark_saved(ref self: Buffer):
         self.dirty = False
 
-    # ---------- consulta ----------
+    # ---------- queries ----------
 
     def nlines(in self: Buffer) -> i32:
         return self.lines.len
@@ -279,7 +279,7 @@ struct Buffer:
         self.sel_range(k, out l0, out c0, out l1, out c1)
         return self.range_text(l0, c0, l1, c1)
 
-    # ---------- linhas (cru) ----------
+    # ---------- lines (raw) ----------
 
     static def line_put(ref self: Buffer, i: i32, text: *char):
         free(self.lines.data[i].text)
@@ -306,11 +306,11 @@ struct Buffer:
             self.version += 1
             self.dirty = True
             return
-        # multi-linha: head + primeiro segmento | meios | último segmento + tail
+        # multi-line: head + first segment | middles | last segment + tail
         tail: *char = own(old + cb)
         self.lines.insert_gap(line + 1, nl)
         for gi in range(line + 1, line + 1 + nl):
-            self.lines.data[gi].text = None    # slots novos: nada a liberar
+            self.lines.data[gi].text = None    # fresh slots: nothing to free
             self.lines.data[gi].ncp = 0
         seg_start: usize = 0
         li: i32 = line
@@ -328,7 +328,7 @@ struct Buffer:
                     self.line_put(li, nw2)
                     first = False
                 elif ch == '\0':
-                    # último segmento ganha o tail
+                    # the last segment takes the tail
                     nw3: *char = malloc(strlen(seg) + strlen(tail) + 1)
                     strcpy(nw3, seg)
                     strcat(nw3, tail)
@@ -373,7 +373,7 @@ struct Buffer:
         self.dirty = True
         return deleted
 
-    # ---------- ajuste dos OUTROS carets após uma edição ----------
+    # ---------- fixing up the OTHER carets after an edit ----------
 
     static def adj_insert(ref self: Buffer, skip: i32, l: i32, c: i32, el: i32, ec: i32):
         dl: i32 = el - l
@@ -415,7 +415,7 @@ struct Buffer:
         for i in range(cs.len):
             self.carets.push(cs.data[i])
 
-    # abre (ou continua) o grupo do topo; coalesce = digitação contínua
+    # opens (or continues) the top group; coalesce = continuous typing
     static def group_begin(ref self: Buffer, coalesce: bool, now_ms: i64):
         self.redo_clear()
         if coalesce and self.group_open and not self.undo.is_empty() and now_ms - self.last_ms < UNDO_PAUSE_MS:
@@ -482,7 +482,7 @@ struct Buffer:
     # ---------- carets ----------
 
     static def carets_sort(ref self: Buffer):
-        # insertion sort por (line,col) + dedup de posições iguais
+        # insertion sort by (line,col) + dedup of identical positions
         cs: *Caret = self.carets.data
         for i in range(1, self.carets.len):
             t: Caret = cs[i]
@@ -529,9 +529,9 @@ struct Buffer:
         c->goal = -1
         return True
 
-    # ---------- edição pública (multi-caret) ----------
+    # ---------- public editing (multi-caret) ----------
 
-    # apaga a seleção do caret k (se houver), gravando no undo
+    # deletes caret k's selection (if any), recording it in the undo group
     static def del_sel_at(ref self: Buffer, k: i32):
         c: *Caret = &self.carets.data[k]
         if c->aline == c->line and c->acol == c->col:
@@ -547,7 +547,7 @@ struct Buffer:
         c2->goal = -1
 
     def insert(ref self: Buffer, text: const *char, now_ms: i64):
-        # digitação "normal" coalesce; espaço/enter/tab quebram o grupo (Sublime)
+        # "normal" typing coalesces; space/enter/tab break the group (Sublime)
         breaker: bool = text[0] in {' ', '\n', '\t'} and text[1] == '\0'
         self.group_begin(not breaker and not self.has_sel(), now_ms)
         for k in range(self.carets.len - 1, -1, -1):
@@ -611,8 +611,8 @@ struct Buffer:
                 l0 -= 1
                 c0 = self.lines.data[l0].ncp
             elif c->col > 0:
-                # backspace inteligente: só espaços à esquerda -> volta ao
-                # múltiplo de TAB_WIDTH anterior
+                # smart backspace: only spaces to the left -> go back to the
+                # previous multiple of TAB_WIDTH
                 allsp: bool = True
                 lb: const *char = self.lines.data[c->line].text
                 for i in range(self.col_byte(c->line, c->col)):
@@ -671,11 +671,11 @@ struct Buffer:
         self.group_end()
         self.group_open = False
 
-    # ---------- movimento ----------
+    # ---------- movement ----------
 
     static def move_one_h(ref self: Buffer, c: *Caret, delta: i32, sel: bool):
         if not sel and (c->aline != c->line or c->acol != c->col):
-            # colapsa na borda da seleção (Sublime)
+            # collapse onto the selection's edge (Sublime)
             anchor_first: bool = c->aline < c->line or (c->aline == c->line and c->acol <= c->col)
             if (anchor_first and delta < 0) or (not anchor_first and delta > 0):
                 c->line = c->aline; c->col = c->acol
@@ -820,7 +820,7 @@ struct Buffer:
             for k in range(self.carets.len):
                 self.select_word_at(k)
             return
-        # adiciona caret na PRÓXIMA ocorrência do texto do último caret (wrap)
+        # add a caret at the NEXT occurrence of the last caret's text (wrapping)
         last: i32 = self.carets.len - 1
         needle: *char = self.sel_text(last)
         if needle == None:
@@ -842,7 +842,7 @@ struct Buffer:
                 self.carets_sort()
         free(needle)
 
-    # ---------- busca ----------
+    # ---------- search ----------
 
     def find(in self: Buffer, needle: const *char, from_line: i32, from_col: i32,
              forward: bool, out l: i32, out c: i32) -> bool:
@@ -865,7 +865,7 @@ struct Buffer:
                 sl = (sl + 1) % self.lines.len
                 sb = 0
             return False
-        # para trás: última ocorrência ANTES de (from_line, from_col)
+        # backwards: the last occurrence BEFORE (from_line, from_col)
         sl2: i32 = from_line
         limit: i32 = self.col_byte(from_line, from_col)
         for step in range(self.lines.len + 1):
@@ -886,7 +886,7 @@ struct Buffer:
                 c = byte_to_col(s2, best)
                 return True
             sl2 = sl2 - 1 if sl2 > 0 else self.lines.len - 1
-            limit = -1   # linhas anteriores: a linha inteira vale
+            limit = -1   # earlier lines: the whole line counts
         return False
 
     def find_re(in self: Buffer, pattern: const *char, from_line: i32, from_col: i32,
@@ -985,8 +985,8 @@ struct Highlight:
         a: Arena = {0}
         tl: TokenList = lex_ex("<buffer>", text, n, &a, True)
         defer:
-            free(tl.toks)      # o array é do chamador (ver lexer.ph); relexamos
-            arena_drop(&a)     # a cada tecla — sem isto o editor vaza sempre
+            free(tl.toks)      # the array belongs to the caller (lexer.ph); we
+            arena_drop(&a)     # relex on every keystroke — else the editor leaks
         for i in range(tl.n):
             t: *Token = &tl.toks[i]
             if t->text == None or t->kind in {TK_EOF, TK_NEWLINE, TK_INDENT, TK_DEDENT}:
@@ -994,7 +994,7 @@ struct Highlight:
             ln: i32 = t->pos.line - 1
             if ln < 0 or ln >= self.lines.len:
                 continue
-            cls: u8 = HL_KW   # token com texto que não é ident/número/string
+            cls: u8 = HL_KW   # a token with text that is not an ident/number/string
             if t->kind == TK_IDENT:
                 cls = HL_TEXT
             elif t->kind == TK_NUMBER:
@@ -1005,7 +1005,7 @@ struct Highlight:
                 continue
             span_add(&self.lines.data[ln], t->pos.col - 1, cp_count(t->text), cls)
         free(text)
-        # comentários: primeiro '#' fora de string vai até o fim da linha
+        # comments: the first '#' outside a string runs to the end of the line
         for ln in range(b.nlines()):
             s: const *char = b.line_text(ln)
             h: *HlLine = &self.lines.data[ln]

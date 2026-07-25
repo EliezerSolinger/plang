@@ -309,11 +309,11 @@ def c_num_error(t: const *char) -> const *char:
             return "invalid digit in octal constant (digits must be 0-7)"
     # suffix: float -> one of f/F/l/L, or a GCC _FloatN suffix (f16/f32/f64/
     # f128/f32x/f64x — como em 0.0f16 nos headers do SDL); integer -> u/U e
-    # até dois l/L
+    # up to two l/L
     if isflt:
         if t[i] in {'f', 'F', 'l', 'L'}:
             i += 1
-            # _FloatN: dígitos colados no f/F (16, 32, 64, 128) + 'x' opcional
+            # _FloatN: digits glued to the f/F (16, 32, 64, 128) + an optional 'x'
             if (t[i - 1] == 'f' or t[i - 1] == 'F') and t[i] >= '0' and t[i] <= '9':
                 nfd = 0
                 while t[i] >= '0' and t[i] <= '9':
@@ -549,7 +549,7 @@ struct Cp:
 
     # C type keyword (base arithmetic)
     static def is_type_kw(self: *Cp, w: const *char) -> bool:
-        # __int128/_Complex são combináveis como palavras de tipo
+        # __int128/_Complex combine as type words
         return w in {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "__int128", "_Complex", "_Imaginary"}
 
     # storage-class specifier — legal in any position among the type words
@@ -1184,7 +1184,7 @@ struct Cp:
                     fields.push(fa)
                 elif self->strict:
                     fatal_at(self->file, self->pk()->pos, "struct/union member declaration without a declarator")
-                self->skip_gnu()   # atributo após o bitfield também
+                self->skip_gnu()   # an attribute after the bitfield, too
             while self->eat(",")
             if self->strict and self->is_punct("="):
                 fatal_at(self->file, self->pk()->pos, "a struct/union member cannot have an initializer")
@@ -1275,8 +1275,8 @@ struct Cp:
                 return 0
             return v
         if self->is_punct("("):
-            # cast em const-expr: (Uint8)('Y'), ((Uint32)(x)) — o valor é
-            # truncado/estendido para a LARGURA do tipo (semântica C)
+            # a cast inside a constant expression: (Uint8)('Y'), ((Uint32)(x))
+            # — the value is truncated/extended to the type's WIDTH (C rules)
             if self->pk1()->kind == CT_ID and self->tok_is_type(self->pk1()->text):
                 self->adv()
                 cbase: *Type = self->parse_stars(self->parse_base_type())
@@ -1286,7 +1286,7 @@ struct Cp:
                     ok = False
                     return 0
                 if cbase->kind == TY_PTR:
-                    ok = False   # cast para ponteiro não é valor de enum
+                    ok = False   # a cast to a pointer is not an enum value
                     return 0
                 cv: i64 = self->ceval_prim(ref ok)
                 csz: i64 = self->type_size(cbase, ref ok)
@@ -1416,7 +1416,7 @@ struct Cp:
         items: Vec<EnumItem>
         items.init()
         next_val: i64 = 0
-        sym_tail: bool = False   # último valor foi simbólico (não-redutível)
+        sym_tail: bool = False   # the last value was symbolic (not reducible)
         while not self->is_punct("}") and self->pk()->kind != CT_EOF:
             iname: const *char = self->adv()->text
             it: EnumItem = {iname, None, self->pk()->pos}
@@ -1434,9 +1434,10 @@ struct Cp:
                     if v < 0 and tag != None:
                         self->enum_signed.add(tag)   # int representation
                 else:
-                    # valor não redutível aqui: RESTAURA e guarda a EXPRESSÃO
-                    # (a emissão fica fiel; o cc calcula). Membros automáticos
-                    # seguintes não entram em enumvals (valor desconhecido).
+                    # not reducible here: RESTORE the cursor and keep the
+                    # EXPRESSION (emission stays faithful; the cc computes it).
+                    # Following auto-numbered members are left out of enumvals
+                    # (their value is unknown).
                     self->i = esave
                     it.value = c_ternary(self)
                     sym_tail = True
@@ -2462,12 +2463,13 @@ def c_typedef(p: *Cp):
         p->skip_gnu()
         p->types.add(name)
         p->typedefs.put(name, ty)
-        # typedef struct {...} Name (SÓ NO INGEST, onde nada é reemitido): o
-        # tag anônimo é inalcançável por outro caminho — renomeia decl E nó de
-        # tipo para o nome do typedef, para o layout ser encontrável pelo nome
-        # que o código usa (QBE). is_td marca que a grafia C é o typedef puro
-        # (nunca `struct Name`). No round-trip C (strict) o typedef continua
-        # sendo resolvido para `struct __anonN` — reemissão autossuficiente.
+        # typedef struct {...} Name (INGEST ONLY, where nothing is re-emitted):
+        # the anonymous tag is unreachable by any other path — rename both the
+        # decl AND the type node to the typedef's name so the layout is found
+        # under the name the code uses (QBE). is_td records that the C spelling
+        # is the bare typedef (never `struct Name`). On the C round trip
+        # (strict) the typedef still resolves to `struct __anonN`, keeping the
+        # re-emitted C self-contained.
         if not p->strict and ty->kind == TY_NAME and ty->tag_kind != TAG_NONE and ty->name != None and strncmp(ty->name, "__anon", 6) == 0:
             for adx in range(p->out_decls.len - 1, -1, -1):
                 ad2: *Decl = p->out_decls.get(adx)
@@ -2584,7 +2586,7 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
             .init = c_initializer(p)
     return d2
 
-# `_Static_assert(cond, "msg");` — engolida no parse (nível topo e bloco).
+# `_Static_assert(cond, "msg");` — swallowed while parsing (top level and block).
 def c_static_assert(p: *Cp):
     p->adv()
     p->skip_parens()

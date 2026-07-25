@@ -1,9 +1,9 @@
-# main.p — entrada do pstudio.
-#   pstudio                        -> árvore no diretório atual
-#   pstudio <pasta>                -> árvore na pasta
-#   pstudio <arq...>               -> abre os arquivos em abas
-#   pstudio --shot <img.ppm> ...   -> renderiza 1 frame, grava e sai (headless)
-#   pstudio --size 900x600 ...     -> tamanho da janela
+# main.p — pstudio's entry point.
+#   pstudio                        -> tree rooted at the current directory
+#   pstudio <dir>                  -> tree rooted at <dir>
+#   pstudio <file...>              -> opens the files in tabs
+#   pstudio --shot <img.ppm> ...   -> renders 1 frame, writes it, exits (headless)
+#   pstudio --size 900x600 ...     -> window size
 include <stdio.h>
 include <stdlib.h>
 include <string.h>
@@ -16,7 +16,7 @@ def main(argc: i32, argv: **char) -> i32:
     shot: const *char = None
     win_w: i32 = 1100
     win_h: i32 = 720
-    # varredura 1: opções
+    # pass 1: options
     i: i32 = 1
     while i < argc:
         if strcmp(argv[i], "--shot") == 0 and i + 1 < argc:
@@ -31,10 +31,10 @@ def main(argc: i32, argv: **char) -> i32:
             i += 2
             continue
         if strncmp(argv[i], "--", 2) == 0:
-            fprintf(stderr, "pstudio: opcao desconhecida '%s'\n", argv[i])
+            fprintf(stderr, "pstudio: unknown option '%s'\n", argv[i])
             return 2
         i += 1
-    # varredura 2: pasta/arquivos
+    # pass 2: directory/files
     i = 1
     while i < argc:
         if strcmp(argv[i], "--shot") == 0 or strcmp(argv[i], "--size") == 0:
@@ -42,7 +42,7 @@ def main(argc: i32, argv: **char) -> i32:
             continue
         st: PsStat
         if not vfs_stat(in v, argv[i], out st) or not st.exists:
-            fprintf(stderr, "pstudio: '%s' nao existe\n", argv[i])
+            fprintf(stderr, "pstudio: '%s' does not exist\n", argv[i])
             i += 1
             continue
         if st.is_dir and dir == None:
@@ -56,7 +56,7 @@ def main(argc: i32, argv: **char) -> i32:
 
     app: App
     if not app.init(dir, win_w, win_h):
-        fprintf(stderr, "pstudio: nao consegui abrir a janela (SDL). Sem DISPLAY?\n")
+        fprintf(stderr, "pstudio: could not open a window (SDL). Is DISPLAY set?\n")
         free(dir)
         return 1
     free(dir)
