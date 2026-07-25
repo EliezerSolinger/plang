@@ -158,7 +158,7 @@ static def tabbar_input(ui: *Ui, id: i32, ev: *PgEvent) -> bool:
 
 static def tree_min(ui: *Ui, id: i32, out_w: *i32, out_h: *i32):
     *out_w = ui->font.char_w() * 18
-    *out_h = 0
+    *out_h = ui->font.line_h()
 
 static def tree_build(ui: *Ui, id: i32):
     app: *App = ui->data_of(id)
@@ -166,8 +166,9 @@ static def tree_build(ui: *Ui, id: i32):
     th: *Theme = &ui->theme
     lh: i32 = ui->font.line_h()
     cw: i32 = ui->font.char_w()
-    ui->cmd_rect(id, r, th->panel)
-    ui->cmd_rect(id, pg_rect(r.x + r.w - 1, r.y, 1, r.h), th->border)
+    # no background and no header here: the pane (a box with a bg) carries
+    # both, and the divider of the SPLIT is the separator — this widget only
+    # owns its rows, so its rect maps 1:1 to them
     vis: i32 = r.h / lh
     for vi in range(vis + 1):
         i: i32 = app->tree_top + vi
@@ -332,8 +333,17 @@ struct App:
         col: i32 = self.ui.box(self.root, True)
         self.split = self.ui.split(col, False)
         self.ui.set_expand(self.split, True, True)
-        self.tree = self.ui.custom(self.split, &self, tree_min, tree_build,
+        # the tree PANE is a box with a background: [ FOLDERS | rows ]. The
+        # header is a real label, so the layout engine (not hand-written
+        # offsets) decides where the rows begin — Sublime's sidebar shape.
+        self.tree_pane = self.ui.box(self.split, True)
+        self.ui.set_bg(self.tree_pane, self.ui.theme.panel)
+        head: i32 = self.ui.label(self.tree_pane, "FOLDERS")
+        self.ui.set_pad(head, 6)
+        self.ui.set_min(head, 0, self.ui.font.line_h() + 8)
+        self.tree = self.ui.custom(self.tree_pane, &self, tree_min, tree_build,
                                    tree_input, None, None)
+        self.ui.set_expand(self.tree, True, True)
         self.editors = self.ui.box(self.split, True)
         self.ui.set_expand(self.editors, True, True)
         self.ui.split_set(self.split, 220)
@@ -352,7 +362,8 @@ struct App:
         self.ui.on_cancel(self.findinput, on_find_cancel, &self)
         self.ui.set_visible(self.findbar, False)
 
-        self.status = self.ui.label(col, " ")
+        self.status = self.ui.label(col, "")
+        self.ui.set_pad(self.status, 6)
 
         # palette (last child of the root: draws on top and wins the hit-test)
         self.palette = self.ui.custom(self.root, &self, pal_min, pal_build,
@@ -463,10 +474,10 @@ struct App:
         s.init()
         cv: *CodeView = self.cur_cv()
         if cv == None:
-            s.append(" pstudio — ctrl+p to open a file")
+            s.append("pstudio — ctrl+p to open a file")
         else:
             c: *Caret = cv->buf.caret(0)
-            s.appendf(" %s%s   ", cv->path if cv->path != None else "(untitled)",
+            s.appendf("%s%s   ", cv->path if cv->path != None else "(untitled)",
                       "*" if cv->buf.dirty else "")
             s.appendf("%d:%d", c->line + 1, c->col + 1)
             if cv->buf.ncarets() > 1:
@@ -712,7 +723,7 @@ struct App:
                 if cv != None:
                     cv->reload()
             case 4:
-                self.ui.set_visible(self.tree, not self.ui.is_visible(self.tree))
+                self.ui.set_visible(self.tree_pane, not self.ui.is_visible(self.tree_pane))
             case 5:
                 self.set_zoom(self.zoom + 1)
             case 6:

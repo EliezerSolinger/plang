@@ -15,7 +15,7 @@ find1=0:14
 find2=1:7
 clicked_tab=0
 tree_expanded=4
-status=[ proj/hello.p*   2:11   LF   4 lines   1x]
+status=[proj/hello.p*   2:11   LF   4 lines   1x]
 ##############################
 ##############################
 ###################### ####...

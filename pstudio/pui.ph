@@ -38,6 +38,10 @@ struct WidgetBase:
     flags: u32
     cw: i32           # minimum COMPUTED by phase 1 (layout-internal)
     ch: i32
+    bg: u32           # painted before anything else; 0 = transparent. Lets a
+                      #   plain container carry a background (Godot needs a
+                      #   PanelContainer for this) — no wrapper widget needed
+    pad: i32          # left inset for text (label/button/input)
 
 # a retained draw command (replayed at composition time)
 enum CmdKind:
@@ -137,6 +141,8 @@ struct Ui:
     def set_expand(ref self: Ui, id: i32, h: bool, v: bool)
     def set_min(ref self: Ui, id: i32, w: i32, h: i32)
     def set_stretch(ref self: Ui, id: i32, weight: i32)
+    def set_bg(ref self: Ui, id: i32, color: u32)   # 0 = transparent
+    def set_pad(ref self: Ui, id: i32, px: i32)     # left inset for text
     def set_visible(ref self: Ui, id: i32, vis: bool)
     def is_visible(ref self: Ui, id: i32) -> bool
     def set_focusable(ref self: Ui, id: i32, f: bool)

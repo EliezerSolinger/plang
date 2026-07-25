@@ -349,6 +349,14 @@ struct Ui:
     def set_stretch(ref self: Ui, id: i32, weight: i32):
         self.nodes.data[id].base.stretch = weight if weight > 0 else 1
 
+    def set_bg(ref self: Ui, id: i32, color: u32):
+        self.nodes.data[id].base.bg = color
+        self.queue_redraw(id)
+
+    def set_pad(ref self: Ui, id: i32, px: i32):
+        self.nodes.data[id].base.pad = px
+        self.queue_redraw(id)
+
     def set_visible(ref self: Ui, id: i32, vis: bool):
         f: u32 = self.nodes.data[id].base.flags
         was: bool = (f & UF_VISIBLE) != 0
@@ -778,12 +786,15 @@ struct Ui:
         th: *Theme = &self.theme
         r: PgRect = nd->base.rect
         lh: i32 = self.font.line_h()
+        if nd->base.bg != 0:
+            self.cmd_rect(id, r, nd->base.bg)   # background of any widget
         match nd->kind:
             case WK_PANEL:
                 self.cmd_rect(id, r, th->panel)
             case WK_LABEL:
                 td: *TextData = nd->data
-                self.cmd_text(id, r.x, r.y + (r.h - lh) / 2, td->text, th->text)
+                self.cmd_text(id, r.x + nd->base.pad, r.y + (r.h - lh) / 2,
+                              td->text, th->text)
             case WK_BUTTON:
                 tb: *TextData = nd->data
                 bg: u32 = th->panel_hi
@@ -799,7 +810,7 @@ struct Ui:
                 idt: *InputData = nd->data
                 self.cmd_rect(id, r, th->panel_lo)
                 self.cmd_frame(id, r, th->accent if self.focus == id else th->border)
-                tx: i32 = r.x + 4
+                tx: i32 = r.x + (nd->base.pad if nd->base.pad > 0 else 4)
                 ty: i32 = r.y + (r.h - lh) / 2
                 self.cmd_text(id, tx, ty, idt->text, th->text)
                 if self.focus == id:
@@ -991,7 +1002,8 @@ struct Ui:
                 if ev->kind == PGE_MOUSE_DOWN and ev->button == 1:
                     idt: *InputData = nd->data
                     cw: i32 = self.font.char_w()
-                    rel: i32 = (ev->x - (nd->base.rect.x + 4) + cw / 2) / cw
+                    inset: i32 = nd->base.pad if nd->base.pad > 0 else 4
+                    rel: i32 = (ev->x - (nd->base.rect.x + inset) + cw / 2) / cw
                     ncp: i32 = cp_len(idt->text)
                     idt->cursor = 0 if rel < 0 else (ncp if rel > ncp else rel)
                     self.queue_redraw(id)

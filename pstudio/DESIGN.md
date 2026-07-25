@@ -118,6 +118,12 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
   compilador); só este documento de design fica em português.
 - Árvore de arquivos (VFS): **filtrada** (esconde dotfiles, .git, out/,
   tests/out) e **somente-leitura** no v0.1 (operações de arquivo = v0.2).
+  Cabeçalho **FOLDERS** como a sidebar do Sublime — e ele é um **widget de
+  verdade**: o painel da árvore é um box com fundo (`set_bg`) contendo
+  [label FOLDERS | linhas], então quem decide onde as linhas começam é o motor
+  de layout, não offsets escritos à mão (o rect do widget de linhas mapeia 1:1
+  nelas). `set_bg`/`set_pad` no `WidgetBase` existem para isso: dão fundo e
+  recuo a qualquer widget sem precisar de um wrapper tipo PanelContainer.
 - Status bar: arquivo, linha:coluna, EOL.
 - **Palette (ctrl+p)**: fuzzy de arquivos; `>` muda para comandos; `:` vai
   para linha. Um widget só, modelo Sublime.

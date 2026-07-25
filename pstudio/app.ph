@@ -36,7 +36,8 @@ struct App:
     win: PgWindow
     root: i32         # root panel (stacks the layout and the palette)
     tabbar: i32
-    tree: i32
+    tree_pane: i32    # box with the "FOLDERS" header + the rows
+    tree: i32         # the rows themselves (its rect == the rows area)
     split: i32
     editors: i32      # vertical box: [cvhost | find bar]
     cvhost: i32       # the box hosting the CodeViews (the find bar sits below)

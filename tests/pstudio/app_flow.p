@@ -132,7 +132,9 @@ def main() -> int:
     click(ref app, tb.x + 5, tb.y + tb.h / 2)
     printf("clicked_tab=%d\n", app.cur)
 
-    # tree: click the directory (expands it) and count the entries
+    # tree: click the first row to expand the directory, then count the
+    # entries. No offset math here: rect_of(tree) IS the rows area (the
+    # "FOLDERS" header is a sibling label, laid out by the container)
     tr: PgRect = app.ui.rect_of(app.tree)
     click(ref app, tr.x + 20, tr.y + app.ui.font.line_h() / 2)
     printf("tree_expanded=%d\n", app.entries.len)
