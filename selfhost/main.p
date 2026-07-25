@@ -128,6 +128,8 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
                 # prototype (registers signature) OR header-only free function
                 # (static/inline with body, §8.5): this one is emitted per-TU
                 extra += 1
+            elif dk == DL_VAR and dd->init != None and (dd->is_const or (dd->type != None and dd->type->is_const)):
+                extra += 1
     if extra == 0:
         return
     total: i32 = extra + m->ndecls
@@ -169,6 +171,14 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
                 # function (static/inline): emitted per-TU, not exported
                 # (local symbol, no link collision between TUs)
                 nd[p] = d
+                p += 1
+            elif d->kind == DL_VAR and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
+                # const de .ph: dado TU-local (mesma regra do `static const`
+                # que o backend C põe no .h) — sem colisão de símbolo no link
+                cv: *Decl = arena_alloc(&cc->arena, sizeof(Decl))
+                *cv = *d
+                cv->is_static = True
+                nd[p] = cv
                 p += 1
     for j3 in range(m->ndecls):
         nd[p] = m->decls[j3]

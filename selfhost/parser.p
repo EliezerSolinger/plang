@@ -136,6 +136,11 @@ static def parse_type(p: *P) -> *Type:
                     adv(p)
                     ptypes.push(ty_name(p->a, "..."))   # variadic sentinel
                     break
+                # nome opcional de parâmetro (`def(ctx: *void)` — documentação;
+                # só o TIPO importa para o ponteiro de função)
+                if at(p, TK_IDENT) and pk1(p)->kind == TK_COLON:
+                    adv(p)
+                    adv(p)
                 ptypes.push(parse_type(p))
             while accept(p, TK_COMMA)
         expect(p, TK_RPAREN, "def(...) for function pointer")
@@ -1206,6 +1211,8 @@ static def parse_instantiate(p: *P) -> *Decl:
     kw: *Token = adv(p)
     d: *Decl = arena_alloc(p->a, sizeof(Decl))
     d->kind = DL_DECLARE if kw->kind == TK_DECLARE else DL_IMPLEMENT
+    if kw->kind == TK_INLINE:
+        d->inline_inst = True   # declare+implement, static inline bodies
     d->pos = kw->pos
     gname: *Token = expect(p, TK_IDENT, "struct name")
     d->name = gname->text
@@ -1218,6 +1225,8 @@ static def parse_instantiate(p: *P) -> *Decl:
         expect_gt(p)
     elif d->kind == DL_DECLARE:
         fatal_at(p->file, kw->pos, "declare requires type arguments (a non-generic struct is already defined by its own .ph)")
+    elif d->inline_inst:
+        fatal_at(p->file, kw->pos, "inline instantiation requires type arguments (use 'implement %s' for a non-generic struct)", d->name)
     gt: *Type = ty_name(p->a, gname->text)
     gt->targs = targs.data
     gt->ntargs = targs.len
@@ -1241,6 +1250,9 @@ static def parse_top(p: *P) -> *Decl:
         case TK_ENUM:
             return parse_enum(p)
         case TK_STATIC, TK_INLINE, TK_DEF:
+            # `inline Vec<int>` (instantiation) vs `inline def f...` (modifier)
+            if t->kind == TK_INLINE and pk1(p)->kind == TK_IDENT:
+                return parse_instantiate(p)
             st: bool = False
             inl: bool = False
             while at(p, TK_STATIC) or at(p, TK_INLINE):

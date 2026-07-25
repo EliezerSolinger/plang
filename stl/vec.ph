@@ -53,6 +53,22 @@ struct Vec<T>:
     def is_empty(in self: Vec<T>) -> bool:
         return self.len == 0
 
+    # opens a GAP of n slots at i (contents undefined): block insertion
+    # (inserting lines in a text buffer, splicing a run) without a temp array
+    def insert_gap(ref self: Vec<T>, i: i32, n: i32):
+        self.reserve(self.len + n)
+        memmove(&self.data[i + n], &self.data[i], sizeof(T) * usize(self.len - i))
+        self.len += n
+
+    def insert_at(ref self: Vec<T>, i: i32, item: T):
+        self.insert_gap(i, 1)
+        self.data[i] = item
+
+    # removes n elements from i, preserving order
+    def remove_range(ref self: Vec<T>, i: i32, n: i32):
+        memmove(&self.data[i], &self.data[i + n], sizeof(T) * usize(self.len - i - n))
+        self.len -= n
+
     # removes while preserving order (O(n))
     def remove_at(ref self: Vec<T>, i: i32):
         memmove(&self.data[i], &self.data[i + 1], sizeof(T) * usize(self.len - i - 1))

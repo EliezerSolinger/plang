@@ -15,3 +15,6 @@ stl/*.h
 .hello
 .hello.p
 .hello.c
+# external (non-distributable) test corpora — tests/fetch-external.sh
+tests/external/
+.verify/

@@ -152,12 +152,33 @@ Vec<int>`. Skip it entirely and use raw pointers + libc if you prefer.
 
 See **[SPECS.MD](SPECS.MD)** for the language reference.
 
+## Plang Studio — a code editor written in Plang
+
+`pstudio/` is a GUI code editor written in **pure Plang**, with SDL2 as its
+only dependency: tabs, a file tree, a fuzzy command palette (ctrl+p), multi
+caret editing (ctrl+d), coalesced undo, incremental search (ctrl+f, POSIX
+regex with a `/` prefix), and syntax highlighting that reuses **the
+compiler's own lexer**. The UI toolkit (`pui`) and software rasterizer
+(`pgfx`) are Plang too — no widget library involved.
+
+```sh
+sudo apt install libsdl2-dev
+make pstudio                 # -> out/bin/pstudio
+./out/bin/pstudio .          # open the tree in the current directory
+```
+
+It doubles as the largest Plang program after the compiler itself, so
+`make verify` compiles it as a gate and runs `tests/pstudio/` — headless
+tests that drive the editor with synthetic events. See
+[pstudio/DESIGN.md](pstudio/DESIGN.md).
+
 ## Repository layout
 
 ```
 selfhost/     the compiler, written in Plang (.p source, .ph headers)
 bootstrap/    the C seed generated from selfhost/ (+ bootstrap/stl headers)
 stl/          optional standard library (header-only generic templates, .ph)
+pstudio/      Plang Studio: a code editor in pure Plang (SDL2 only)
 tests/        gating suites, C corpora (c-testsuite, wacct), clang-compare
 Makefile      builds plangc from the seed
 SPECS.MD      language reference

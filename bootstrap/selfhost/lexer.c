@@ -32,6 +32,12 @@ Token Vec_Token_last(const Vec_Token *self);
 
 int Vec_Token_is_empty(const Vec_Token *self);
 
+void Vec_Token_insert_gap(Vec_Token *self, int32_t i, int32_t n);
+
+void Vec_Token_insert_at(Vec_Token *self, int32_t i, Token item);
+
+void Vec_Token_remove_range(Vec_Token *self, int32_t i, int32_t n);
+
 void Vec_Token_remove_at(Vec_Token *self, int32_t i);
 
 void Vec_Token_swap_remove(Vec_Token *self, int32_t i);
@@ -84,6 +90,22 @@ Token Vec_Token_last(const Vec_Token *self) {
 
 int Vec_Token_is_empty(const Vec_Token *self) {
     return (*self).len == 0;
+}
+
+void Vec_Token_insert_gap(Vec_Token *self, int32_t i, int32_t n) {
+    Vec_Token_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Token) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_Token_insert_at(Vec_Token *self, int32_t i, Token item) {
+    Vec_Token_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_Token_remove_range(Vec_Token *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Token) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
 }
 
 void Vec_Token_remove_at(Vec_Token *self, int32_t i) {
@@ -396,6 +418,7 @@ struct Lx {
     int32_t nindents;
     int32_t paren;
     int prev_import;
+    int tolerant;
 };
 
 static uint32_t Lx_cur(Lx *self) {
@@ -472,6 +495,9 @@ static void Lx_lex_newline_and_indent(Lx *self) {
         Pos p = Lx_here(self);
         if (col > top) {
             if (self->nindents >= MAX_INDENT) {
+                if (self->tolerant) {
+                    return;
+                }
                 fatal_at(self->file, p, "indentation too deep");
             }
             self->indents[self->nindents] = col;
@@ -482,7 +508,7 @@ static void Lx_lex_newline_and_indent(Lx *self) {
                 self->nindents -= 1;
                 Lx_push_tok(self, TK_DEDENT, p, NULL);
             }
-            if (col != self->indents[self->nindents - 1]) {
+            if (col != self->indents[self->nindents - 1] && !self->tolerant) {
                 fatal_at(self->file, p, "inconsistent indentation");
             }
         }
@@ -495,6 +521,9 @@ static void Lx_lex_str_at(Lx *self, size_t start, Pos p, uint32_t quote, TokKind
     while (1) {
         uint32_t c = Lx_cur(self);
         if (self->i >= self->n || c == '\n') {
+            if (self->tolerant) {
+                break;
+            }
             fatal_at(self->file, p, "unterminated literal (missing %c)", (char)quote);
         }
         if (c == '\\') {
@@ -518,7 +547,7 @@ static void Lx_lex_number(Lx *self) {
     size_t start = self->i;
     if (Lx_cur(self) == '0' && (Lx_peek(self, 1) == 'x' || Lx_peek(self, 1) == 'X')) {
         self->i += 2;
-        if (!is_hex(Lx_cur(self))) {
+        if (!is_hex(Lx_cur(self)) && !self->tolerant) {
             fatal_at(self->file, p, "invalid hexadecimal number");
         }
         while (is_hex(Lx_cur(self))) {
@@ -742,11 +771,19 @@ static void Lx_lex_op(Lx *self) {
                 k = TK_NE;
                 len = 2;
             } else {
+                if (self->tolerant) {
+                    self->i += 1;
+                    return;
+                }
                 fatal_at(self->file, p, "'!' does not exist in P — use 'not'");
             }
             break;
         }
         default: {
+            if (self->tolerant) {
+                self->i += 1;
+                return;
+            }
             fatal_at(self->file, p, "unexpected character (U+%04X)", c);
             break;
         }
@@ -756,6 +793,10 @@ static void Lx_lex_op(Lx *self) {
 }
 
 TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a) {
+    return lex_ex(file, bytes, nbytes, a, 0);
+}
+
+TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, int tolerant) {
     Lx lx = {0};
     lx.file = file;
     lx.bytes = bytes;
@@ -764,9 +805,19 @@ TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a) {
     lx.line = 1;
     lx.indents[0] = 0;
     lx.nindents = 1;
+    lx.tolerant = tolerant;
     size_t err_off = 0;
     if (utf8_decode(bytes, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0) {
-        fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off);
+        if (!tolerant) {
+            fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off);
+        }
+        char *fixed = arena_alloc(a, nbytes + 1);
+        memcpy(fixed, bytes, nbytes);
+        fixed[nbytes] = '\0';
+        while (utf8_decode(fixed, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0) {
+            fixed[err_off] = '?';
+        }
+        lx.bytes = fixed;
     }
     Lx_lex_newline_and_indent(&lx);
     while (lx.i < lx.n) {
@@ -799,7 +850,7 @@ TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a) {
             while (lx.i < lx.n && Lx_cur(&lx) != '>' && Lx_cur(&lx) != '\n') {
                 lx.i += 1;
             }
-            if (Lx_cur(&lx) != '>') {
+            if (Lx_cur(&lx) != '>' && !lx.tolerant) {
                 fatal_at(lx.file, p, "unterminated header (missing '>')");
             }
             const char *text = Lx_slice(&lx, start, lx.i);
@@ -828,7 +879,7 @@ TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a) {
             while (is_ident_cont(Lx_cur(&lx))) {
                 lx.i += 1;
             }
-            if (Lx_cur(&lx) >= 128) {
+            if (Lx_cur(&lx) >= 128 && !lx.tolerant) {
                 fatal_at(lx.file, Lx_here(&lx), "identifiers must be ASCII ([A-Za-z0-9_])");
             }
             const char *text = Lx_slice(&lx, start, lx.i);
@@ -845,6 +896,10 @@ TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a) {
             continue;
         }
         if (c >= 128) {
+            if (lx.tolerant) {
+                lx.i += 1;
+                continue;
+            }
             fatal_at(lx.file, Lx_here(&lx), "Unicode character outside string/comment (U+%04X)", c);
         }
         if (is_digit(c)) {

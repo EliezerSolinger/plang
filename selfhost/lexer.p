@@ -224,6 +224,7 @@ struct Lx:
     nindents: i32
     paren: i32         # depth of () [] {} — implicit continuation
     prev_import: bool
+    tolerant: bool     # modo editor (lex_ex): NUNCA fatal — recupera e segue
 
     static def cur(self: *Lx) -> u32:
         return self->cp[self->i] if self->i < self->n else 0
@@ -291,6 +292,8 @@ struct Lx:
             p: Pos = self->here()
             if col > top:
                 if self->nindents >= MAX_INDENT:
+                    if self->tolerant:
+                        return   # clampa: trata como o mesmo nível
                     fatal_at(self->file, p, "indentation too deep")
                 self->indents[self->nindents] = col
                 self->nindents += 1
@@ -299,7 +302,7 @@ struct Lx:
                 while col < self->indents[self->nindents - 1]:
                     self->nindents -= 1
                     self->push_tok(TK_DEDENT, p, None)
-                if col != self->indents[self->nindents - 1]:
+                if col != self->indents[self->nindents - 1] and not self->tolerant:
                     fatal_at(self->file, p, "inconsistent indentation")
             return
 
@@ -311,6 +314,8 @@ struct Lx:
         while True:
             c: u32 = self->cur()
             if self->i >= self->n or c == '\n':
+                if self->tolerant:
+                    break   # token vai até o fim da linha
                 fatal_at(self->file, p, "unterminated literal (missing %c)", char(quote))
             if c == '\\':
                 self->i += 2  # escape: copy verbatim
@@ -328,7 +333,7 @@ struct Lx:
         start: usize = self->i
         if self->cur() == '0' and (self->peek(1) == 'x' or self->peek(1) == 'X'):
             self->i += 2
-            if not is_hex(self->cur()):
+            if not is_hex(self->cur()) and not self->tolerant:
                 fatal_at(self->file, p, "invalid hexadecimal number")
             while is_hex(self->cur()):
                 self->i += 1
@@ -466,13 +471,25 @@ struct Lx:
                 if c1 == '=':
                     k = TK_NE; len = 2
                 else:
+                    if self->tolerant:
+                        self->i += 1
+                        return
                     fatal_at(self->file, p, "'!' does not exist in P — use 'not'")
             case _:
+                if self->tolerant:
+                    self->i += 1
+                    return
                 fatal_at(self->file, p, "unexpected character (U+%04X)", c)
         self->i += usize(len)
         self->push_tok(k, p, None)
 
 def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> TokenList:
+    return lex_ex(file, bytes, nbytes, a, False)
+
+# tolerant=True: modo EDITOR (pstudio) — nunca chama fatal; input inválido é
+# recuperado (string aberta vira token até a EOL, char estranho é pulado,
+# UTF-8 inválido vira '?'). O compilador continua usando lex() (estrito).
+def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tolerant: bool) -> TokenList:
     lx: Lx = {0}
     lx.file = file
     lx.bytes = bytes
@@ -481,10 +498,19 @@ def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> Toke
     lx.line = 1
     lx.indents[0] = 0
     lx.nindents = 1
+    lx.tolerant = tolerant
 
     err_off: usize = 0
     if utf8_decode(bytes, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0:
-        fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off)
+        if not tolerant:
+            fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off)
+        # substitui bytes inválidos por '?' até decodificar
+        fixed: *char = arena_alloc(a, nbytes + 1)
+        memcpy(fixed, bytes, nbytes)
+        fixed[nbytes] = '\0'
+        while utf8_decode(fixed, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0:
+            fixed[err_off] = '?'
+        lx.bytes = fixed
 
     # handles the indentation of the first line
     lx.lex_newline_and_indent()
@@ -514,7 +540,7 @@ def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> Toke
             start: usize = lx.i
             while lx.i < lx.n and lx.cur() != '>' and lx.cur() != '\n':
                 lx.i += 1
-            if lx.cur() != '>':
+            if lx.cur() != '>' and not lx.tolerant:
                 fatal_at(lx.file, p, "unterminated header (missing '>')")
             text: const *char = lx.slice(start, lx.i)
             lx.i += 1  # '>'
@@ -539,7 +565,7 @@ def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> Toke
             start: usize = lx.i
             while is_ident_cont(lx.cur()):
                 lx.i += 1
-            if lx.cur() >= 128:
+            if lx.cur() >= 128 and not lx.tolerant:
                 fatal_at(lx.file, lx.here(), "identifiers must be ASCII ([A-Za-z0-9_])")
             text: const *char = lx.slice(start, lx.i)
             k: TokKind = TK_IDENT
@@ -552,6 +578,9 @@ def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> Toke
             lx.push_tok(k, p, text)
             continue
         if c >= 128:
+            if lx.tolerant:
+                lx.i += 1
+                continue
             fatal_at(lx.file, lx.here(), "Unicode character outside string/comment (U+%04X)", c)
         if is_digit(c):
             lx.lex_number()

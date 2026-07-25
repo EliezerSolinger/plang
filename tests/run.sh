@@ -296,6 +296,68 @@ suite_cinvalid() {
     run_reject_dir "clang/Sema"        tests/external/clang-sema
 }
 
+suite_pstudio() {
+    echo "== pstudio (editor em P: headless sempre; SDL com driver dummy) =="
+    # maior consumidor de P depois do compilador: compilar TUDO é gating.
+    # SDL2 é dependência com skip gracioso (DESIGN.md): sem libsdl2-dev os
+    # testes headless (psys, raster) rodam mesmo assim.
+    local M=$OUT/mirror pass=0 fail=0 name src bin err deps d ok cobjs ldext
+    local sdl=0; pkg-config --exists sdl2 >/dev/null 2>&1 && sdl=1
+    mkdir -p "$OUT"/pstudio
+    export SDL_VIDEODRIVER=dummy
+    for src in tests/pstudio/*.p; do
+        name=$(basename "$src" .p)
+        deps=""
+        case $name in
+            psys_vfs)    deps="pstudio/psys" ;;
+            pgfx_raster) deps="pstudio/pgfx_raster pstudio/font_atlas" ;;
+            pgfx_*)      deps="pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas" ;;
+            pui_*)       deps="pstudio/pui pstudio/pgfx_raster pstudio/font_atlas" ;;
+            core_*)      deps="pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
+            app_*)       deps="pstudio/app pstudio/codeview pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
+        esac
+        if [ $sdl = 0 ] && case " $deps " in *" pgfx "*) true;; *) false;; esac; then
+            echo "  skip $name (sem SDL2)"; continue
+        fi
+        bin=$OUT/pstudio/$name; err=$bin.err; : >"$err"
+        ok=1; cobjs=""; ldext=""
+        case " $deps " in *"/pgfx "*) ldext=$(pkg-config --cflags --libs sdl2) ;; esac
+        if [ "$BACKEND" = qbe ]; then
+            for d in $deps; do
+                dn=$(echo "$d" | tr '/' '_')
+                $PLANGC --backend qbe $d.p -o "$bin.$dn.ssa" 2>>"$err" &&
+                $QBE "$bin.$dn.ssa" -o "$bin.$dn.s" 2>>"$err" || { ok=0; break; }
+                cobjs="$cobjs $bin.$dn.s"
+            done
+            [ $ok = 1 ] && { $PLANGC --backend qbe "$src" -o "$bin.ssa" 2>>"$err" &&
+                             $QBE "$bin.ssa" -o "$bin.s" 2>>"$err" || ok=0; }
+            [ $ok = 1 ] && { $CC "$bin.s" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
+        else
+            # headers: pstudio inteiro + interfaces que o core reusa do compilador
+            for d in pstudio/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph stl/*.ph; do
+                $PLANGC $PFLAGS --out-dir "$M" "$d" 2>>"$err" || ok=0
+            done
+            for d in $deps; do
+                $PLANGC $PFLAGS --out-dir "$M" $d.p 2>>"$err" || ok=0
+                cobjs="$cobjs $M/$d.c"
+            done
+            [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$M" "$src" 2>>"$err" || ok=0; }
+            # psys é POSIX: -D_DEFAULT_SOURCE reexpõe st_mtim & cia. quando o
+            # -std=c11 estrito da suíte esconde (o ingest do plangc vê modo GNU)
+            [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -w "$M/tests/pstudio/$name.c" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
+        fi
+        if [ $ok = 1 ] && check_run "$bin" "tests/pstudio/$name.expected" "$name"; then
+            pass=$((pass+1))
+        else
+            [ -s "$err" ] && sed 's/^/       /' "$err" | head -3
+            fail=$((fail+1))
+        fi
+    done
+    unset SDL_VIDEODRIVER
+    echo "   pstudio: $pass ok, $fail failed"
+    total_fail=$((total_fail+fail))
+}
+
 suite_csuite() {
     echo "== c-suite (C frontend scoreboard — informational) =="
     local pass=0 fail=0 src name bin
@@ -315,7 +377,7 @@ suite_csuite() {
 }
 
 # ---------- main ----------
-suites=${*:-"cases modules stl p-suite errors c-suite"}
+suites=${*:-"cases modules stl p-suite errors pstudio c-suite"}
 echo "plangc test run — PLANGC=$PLANGC BACKEND=$BACKEND${STD:+ STD=$STD}"
 for s in $suites; do
     case $s in
@@ -326,8 +388,9 @@ for s in $suites; do
         errors)   suite_errors ;;
         c-invalid) suite_cinvalid ;;
         wacct-valid) suite_wvalid ;;
+        pstudio)  suite_pstudio ;;
         c-suite)  suite_csuite ;;
-        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_csuite ;;
+        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_pstudio; suite_csuite ;;
         *) echo "unknown suite '$s' (cases|modules|stl|p-suite|c-suite|all)"; exit 2 ;;
     esac
 done

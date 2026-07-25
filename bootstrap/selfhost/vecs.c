@@ -49,6 +49,22 @@ int Vec_pExpr_is_empty(const Vec_pExpr *self) {
     return (*self).len == 0;
 }
 
+void Vec_pExpr_insert_gap(Vec_pExpr *self, int32_t i, int32_t n) {
+    Vec_pExpr_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Expr *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pExpr_insert_at(Vec_pExpr *self, int32_t i, Expr *item) {
+    Vec_pExpr_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pExpr_remove_range(Vec_pExpr *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Expr *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
+}
+
 void Vec_pExpr_remove_at(Vec_pExpr *self, int32_t i) {
     memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Expr *) * (size_t)((*self).len - i - 1));
     (*self).len -= 1;
@@ -114,6 +130,22 @@ Stmt *Vec_pStmt_last(const Vec_pStmt *self) {
 
 int Vec_pStmt_is_empty(const Vec_pStmt *self) {
     return (*self).len == 0;
+}
+
+void Vec_pStmt_insert_gap(Vec_pStmt *self, int32_t i, int32_t n) {
+    Vec_pStmt_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Stmt *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pStmt_insert_at(Vec_pStmt *self, int32_t i, Stmt *item) {
+    Vec_pStmt_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pStmt_remove_range(Vec_pStmt *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Stmt *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
 }
 
 void Vec_pStmt_remove_at(Vec_pStmt *self, int32_t i) {
@@ -183,6 +215,22 @@ int Vec_pBlock_is_empty(const Vec_pBlock *self) {
     return (*self).len == 0;
 }
 
+void Vec_pBlock_insert_gap(Vec_pBlock *self, int32_t i, int32_t n) {
+    Vec_pBlock_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Block *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pBlock_insert_at(Vec_pBlock *self, int32_t i, Block *item) {
+    Vec_pBlock_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pBlock_remove_range(Vec_pBlock *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Block *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
+}
+
 void Vec_pBlock_remove_at(Vec_pBlock *self, int32_t i) {
     memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Block *) * (size_t)((*self).len - i - 1));
     (*self).len -= 1;
@@ -248,6 +296,22 @@ Decl *Vec_pDecl_last(const Vec_pDecl *self) {
 
 int Vec_pDecl_is_empty(const Vec_pDecl *self) {
     return (*self).len == 0;
+}
+
+void Vec_pDecl_insert_gap(Vec_pDecl *self, int32_t i, int32_t n) {
+    Vec_pDecl_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Decl *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pDecl_insert_at(Vec_pDecl *self, int32_t i, Decl *item) {
+    Vec_pDecl_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pDecl_remove_range(Vec_pDecl *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Decl *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
 }
 
 void Vec_pDecl_remove_at(Vec_pDecl *self, int32_t i) {
@@ -317,6 +381,22 @@ int Vec_pType_is_empty(const Vec_pType *self) {
     return (*self).len == 0;
 }
 
+void Vec_pType_insert_gap(Vec_pType *self, int32_t i, int32_t n) {
+    Vec_pType_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Type *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pType_insert_at(Vec_pType *self, int32_t i, Type *item) {
+    Vec_pType_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pType_remove_range(Vec_pType *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Type *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
+}
+
 void Vec_pType_remove_at(Vec_pType *self, int32_t i) {
     memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Type *) * (size_t)((*self).len - i - 1));
     (*self).len -= 1;
@@ -382,6 +462,22 @@ Func *Vec_pFunc_last(const Vec_pFunc *self) {
 
 int Vec_pFunc_is_empty(const Vec_pFunc *self) {
     return (*self).len == 0;
+}
+
+void Vec_pFunc_insert_gap(Vec_pFunc *self, int32_t i, int32_t n) {
+    Vec_pFunc_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Func *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pFunc_insert_at(Vec_pFunc *self, int32_t i, Func *item) {
+    Vec_pFunc_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pFunc_remove_range(Vec_pFunc *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Func *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
 }
 
 void Vec_pFunc_remove_at(Vec_pFunc *self, int32_t i) {
@@ -451,6 +547,22 @@ int Vec_pMatchCase_is_empty(const Vec_pMatchCase *self) {
     return (*self).len == 0;
 }
 
+void Vec_pMatchCase_insert_gap(Vec_pMatchCase *self, int32_t i, int32_t n) {
+    Vec_pMatchCase_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(MatchCase *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pMatchCase_insert_at(Vec_pMatchCase *self, int32_t i, MatchCase *item) {
+    Vec_pMatchCase_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pMatchCase_remove_range(Vec_pMatchCase *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(MatchCase *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
+}
+
 void Vec_pMatchCase_remove_at(Vec_pMatchCase *self, int32_t i) {
     memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(MatchCase *) * (size_t)((*self).len - i - 1));
     (*self).len -= 1;
@@ -516,6 +628,22 @@ char *Vec_pchar_last(const Vec_pchar *self) {
 
 int Vec_pchar_is_empty(const Vec_pchar *self) {
     return (*self).len == 0;
+}
+
+void Vec_pchar_insert_gap(Vec_pchar *self, int32_t i, int32_t n) {
+    Vec_pchar_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(char *) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_pchar_insert_at(Vec_pchar *self, int32_t i, char *item) {
+    Vec_pchar_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_pchar_remove_range(Vec_pchar *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(char *) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
 }
 
 void Vec_pchar_remove_at(Vec_pchar *self, int32_t i) {
@@ -585,6 +713,22 @@ int Vec_Param_is_empty(const Vec_Param *self) {
     return (*self).len == 0;
 }
 
+void Vec_Param_insert_gap(Vec_Param *self, int32_t i, int32_t n) {
+    Vec_Param_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Param) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_Param_insert_at(Vec_Param *self, int32_t i, Param item) {
+    Vec_Param_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_Param_remove_range(Vec_Param *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Param) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
+}
+
 void Vec_Param_remove_at(Vec_Param *self, int32_t i) {
     memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Param) * (size_t)((*self).len - i - 1));
     (*self).len -= 1;
@@ -652,6 +796,22 @@ int Vec_Field_is_empty(const Vec_Field *self) {
     return (*self).len == 0;
 }
 
+void Vec_Field_insert_gap(Vec_Field *self, int32_t i, int32_t n) {
+    Vec_Field_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Field) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_Field_insert_at(Vec_Field *self, int32_t i, Field item) {
+    Vec_Field_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_Field_remove_range(Vec_Field *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Field) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
+}
+
 void Vec_Field_remove_at(Vec_Field *self, int32_t i) {
     memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Field) * (size_t)((*self).len - i - 1));
     (*self).len -= 1;
@@ -717,6 +877,22 @@ EnumItem Vec_EnumItem_last(const Vec_EnumItem *self) {
 
 int Vec_EnumItem_is_empty(const Vec_EnumItem *self) {
     return (*self).len == 0;
+}
+
+void Vec_EnumItem_insert_gap(Vec_EnumItem *self, int32_t i, int32_t n) {
+    Vec_EnumItem_reserve(& *self, (*self).len + n);
+    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(EnumItem) * (size_t)((*self).len - i));
+    (*self).len += n;
+}
+
+void Vec_EnumItem_insert_at(Vec_EnumItem *self, int32_t i, EnumItem item) {
+    Vec_EnumItem_insert_gap(& *self, i, 1);
+    (*self).data[i] = item;
+}
+
+void Vec_EnumItem_remove_range(Vec_EnumItem *self, int32_t i, int32_t n) {
+    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(EnumItem) * (size_t)((*self).len - i - n));
+    (*self).len -= n;
 }
 
 void Vec_EnumItem_remove_at(Vec_EnumItem *self, int32_t i) {

@@ -158,12 +158,14 @@ typedef enum { DL_IMPORT = 0, DL_VAR, DL_FUNC, DL_STRUCT, DL_ENUM, DL_UNION, DL_
 struct Decl {
     DeclKind kind;
     Pos pos;
+    int inline_inst;
     int import_system;
     const char *import_path;
     int is_include;
     int is_fwd;
     int is_def;
     int is_anon;
+    int is_td;
     const char *name;
     Type *type;
     Expr *init;
@@ -188,6 +190,7 @@ struct Module {
     int is_c;
     char **tdnames;
     int32_t ntd;
+    Type **tdtypes;
     Decl **decls;
     int32_t ndecls;
 };

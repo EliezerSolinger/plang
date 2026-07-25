@@ -185,6 +185,12 @@ r = a if cond else b         # ternary
 break     continue     goto label     label:
 ```
 
+The `for` iterator is declared implicitly (`usize`, or `isize` when a bound
+is negative) and stays visible after the loop. It is **reusable**: a later
+`for i in ...` in the same scope reuses the variable, and a later explicit
+declaration of the *same type* (`i: usize = 0`) is accepted and becomes a
+plain assignment. A redeclaration with a *different* type is still an error.
+
 C's three-part `for` and `switch` are also accepted (mainly for the C
 frontend); the idiomatic forms above cover normal use.
 
@@ -288,6 +294,11 @@ struct Caixa:
     def klass(self: *Caixa) -> i32: ...      # classic pointer receiver
 ```
 
+A receiver that may be written through (`ref`/`out`/`self: *T`) requires an
+**lvalue**: `make().push(1)` is an error, because the mutation would land in a
+temporary. A read-only `in self` accepts an rvalue — the compiler materializes
+a temporary for it, so `pg_rect(0, 0, 8, 8).contains(x, y)` just works.
+
 ```python
 enum Color:
     RED          # 0
@@ -371,6 +382,22 @@ max(2.5, 1.5)    # -> max_double
 
 The call infers each type parameter by unifying a parameter's type against the
 argument's type (`T`, `*T`, nested). The instance must have been `declare`d.
+
+### inline — instantiate in place
+
+`inline X<...>` is `declare` + `implement` in one directive, with the bodies
+emitted **`static inline`** (internal linkage):
+
+```python
+inline Vec<int>       # definition + bodies, right here, TU-local
+inline max<int>
+```
+
+Because each translation unit gets its own local copy, several TUs may
+`inline` the *same* instance and still link — no "one `implement` per
+program" coordination. Use `declare`/`implement` when you want one shared
+extern instance; use `inline` for self-contained files and header-style use.
+Repeating `inline X<T>` in the same TU is an error.
 
 ### Mangling
 

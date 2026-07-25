@@ -275,7 +275,9 @@ static def emit_args(b: *StrBuf, args: **Expr, n: i32):
     for i in range(n):
         if i != 0:
             sb_puts(b, ", ")
-        emit_expr(b, args[i], 0)
+        # PR_ASSIGN: uma expressão VÍRGULA como argumento precisa de parênteses
+        # (senão viraria dois argumentos) — ex.: o temporário de um `in` rvalue
+        emit_expr(b, args[i], PR_ASSIGN)
 
 # emits a function-pointer declarator in C: Ret (*<inner>)(params).
 # `inner` is already the ready-made core (e.g. "name", "*name", "name[4]", or "" for a cast).
@@ -1180,6 +1182,10 @@ static def emit_decl(b: *StrBuf, d: *Decl):
                 sb_puts(b, "extern ")
             elif d->is_static:
                 sb_puts(b, "static ")   # internal linkage: no collision between TUs
+            elif g_in_header and not g_c_mod and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
+                # const global num .ph: sem `static`, cada TU que inclui o .h
+                # geraria uma DEFINIÇÃO externa do símbolo (colisão no link)
+                sb_puts(b, "static ")
             if d->is_const:
                 sb_puts(b, "const ")
             emit_var_decl(b, d->type, d->name, None)
@@ -1197,9 +1203,16 @@ static def emit_decl(b: *StrBuf, d: *Decl):
             if d->is_anon:
                 return   # inlined at its anonymous-member position
             if d->nfields > 0 or d->is_def:
-                sb_printf(b, "%s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
-                emit_struct_fields(b, d, 1)
-                sb_puts(b, "};\n")
+                if d->is_td:
+                    # tag anônimo renomeado p/ o nome do typedef (cfront): as
+                    # referências usam o nome PURO — o typedef tem que existir
+                    sb_printf(b, "typedef %s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
+                    emit_struct_fields(b, d, 1)
+                    sb_printf(b, "} %s;\n", d->name)
+                else:
+                    sb_printf(b, "%s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
+                    emit_struct_fields(b, d, 1)
+                    sb_puts(b, "};\n")
             elif d->is_fwd and g_c_mod:
                 # C round-trip keeps the forward: a later PROTOTYPE with a
                 # by-value param of this tag needs it already in scope

@@ -14,14 +14,14 @@
 #include "../stl/vec.h"
 #include "vecs.h"
 
-static FILE *popen(const char *cmd, const char *mode);
+static struct _IO_FILE *popen(const char *cmd, const char *mode);
 
-int32_t pclose(FILE *stream);
+int32_t pclose(struct _IO_FILE *stream);
 
 static char *preprocess_c(Cc *cc, const char *path, size_t *out_len) {
     const char *cpp = (cc->cpp != NULL ? cc->cpp : "cc");
     const char *cmd = arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path);
-    FILE *f = popen(cmd, "r");
+    struct _IO_FILE *f = popen(cmd, "r");
     if (f == NULL) {
         fatal("could not run the C preprocessor '%s' (see --cpp / PLANGC_CPP)", cpp);
     }
@@ -143,6 +143,8 @@ static void qbe_merge_types(Cc *cc, Module *m) {
                 extra += 1;
             } else if (dk == DL_FUNC && (dd->func->body == NULL || dd->func->is_inline || dd->func->is_static)) {
                 extra += 1;
+            } else if (dk == DL_VAR && dd->init != NULL && (dd->is_const || (dd->type != NULL && dd->type->is_const))) {
+                extra += 1;
             }
         }
     }
@@ -183,6 +185,12 @@ static void qbe_merge_types(Cc *cc, Module *m) {
                 p += 1;
             } else if (d->kind == DL_FUNC && (d->func->body == NULL || d->func->is_inline || d->func->is_static)) {
                 nd[p] = d;
+                p += 1;
+            } else if (d->kind == DL_VAR && d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
+                Decl *cv = arena_alloc(&cc->arena, sizeof(Decl));
+                *cv = *d;
+                cv->is_static = 1;
+                nd[p] = cv;
                 p += 1;
             }
         }
@@ -364,7 +372,7 @@ int main(int argc, char **argv) {
         if (strcmp(dest, "-") == 0) {
             fwrite(out.data, 1, out.len, stdout);
         } else {
-            FILE *f = fopen(dest, "wb");
+            struct _IO_FILE *f = fopen(dest, "wb");
             if (f == NULL) {
                 fatal("could not write '%s'", dest);
             }

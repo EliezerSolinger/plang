@@ -39,6 +39,12 @@ Expr *Vec_pExpr_last(const Vec_pExpr *self);
 
 int Vec_pExpr_is_empty(const Vec_pExpr *self);
 
+void Vec_pExpr_insert_gap(Vec_pExpr *self, int32_t i, int32_t n);
+
+void Vec_pExpr_insert_at(Vec_pExpr *self, int32_t i, Expr *item);
+
+void Vec_pExpr_remove_range(Vec_pExpr *self, int32_t i, int32_t n);
+
 void Vec_pExpr_remove_at(Vec_pExpr *self, int32_t i);
 
 void Vec_pExpr_swap_remove(Vec_pExpr *self, int32_t i);
@@ -68,6 +74,12 @@ void Vec_pStmt_set(Vec_pStmt *self, int32_t i, Stmt *item);
 Stmt *Vec_pStmt_last(const Vec_pStmt *self);
 
 int Vec_pStmt_is_empty(const Vec_pStmt *self);
+
+void Vec_pStmt_insert_gap(Vec_pStmt *self, int32_t i, int32_t n);
+
+void Vec_pStmt_insert_at(Vec_pStmt *self, int32_t i, Stmt *item);
+
+void Vec_pStmt_remove_range(Vec_pStmt *self, int32_t i, int32_t n);
 
 void Vec_pStmt_remove_at(Vec_pStmt *self, int32_t i);
 
@@ -99,6 +111,12 @@ Block *Vec_pBlock_last(const Vec_pBlock *self);
 
 int Vec_pBlock_is_empty(const Vec_pBlock *self);
 
+void Vec_pBlock_insert_gap(Vec_pBlock *self, int32_t i, int32_t n);
+
+void Vec_pBlock_insert_at(Vec_pBlock *self, int32_t i, Block *item);
+
+void Vec_pBlock_remove_range(Vec_pBlock *self, int32_t i, int32_t n);
+
 void Vec_pBlock_remove_at(Vec_pBlock *self, int32_t i);
 
 void Vec_pBlock_swap_remove(Vec_pBlock *self, int32_t i);
@@ -128,6 +146,12 @@ void Vec_pDecl_set(Vec_pDecl *self, int32_t i, Decl *item);
 Decl *Vec_pDecl_last(const Vec_pDecl *self);
 
 int Vec_pDecl_is_empty(const Vec_pDecl *self);
+
+void Vec_pDecl_insert_gap(Vec_pDecl *self, int32_t i, int32_t n);
+
+void Vec_pDecl_insert_at(Vec_pDecl *self, int32_t i, Decl *item);
+
+void Vec_pDecl_remove_range(Vec_pDecl *self, int32_t i, int32_t n);
 
 void Vec_pDecl_remove_at(Vec_pDecl *self, int32_t i);
 
@@ -159,6 +183,12 @@ Type *Vec_pType_last(const Vec_pType *self);
 
 int Vec_pType_is_empty(const Vec_pType *self);
 
+void Vec_pType_insert_gap(Vec_pType *self, int32_t i, int32_t n);
+
+void Vec_pType_insert_at(Vec_pType *self, int32_t i, Type *item);
+
+void Vec_pType_remove_range(Vec_pType *self, int32_t i, int32_t n);
+
 void Vec_pType_remove_at(Vec_pType *self, int32_t i);
 
 void Vec_pType_swap_remove(Vec_pType *self, int32_t i);
@@ -188,6 +218,12 @@ void Vec_pFunc_set(Vec_pFunc *self, int32_t i, Func *item);
 Func *Vec_pFunc_last(const Vec_pFunc *self);
 
 int Vec_pFunc_is_empty(const Vec_pFunc *self);
+
+void Vec_pFunc_insert_gap(Vec_pFunc *self, int32_t i, int32_t n);
+
+void Vec_pFunc_insert_at(Vec_pFunc *self, int32_t i, Func *item);
+
+void Vec_pFunc_remove_range(Vec_pFunc *self, int32_t i, int32_t n);
 
 void Vec_pFunc_remove_at(Vec_pFunc *self, int32_t i);
 
@@ -219,6 +255,12 @@ MatchCase *Vec_pMatchCase_last(const Vec_pMatchCase *self);
 
 int Vec_pMatchCase_is_empty(const Vec_pMatchCase *self);
 
+void Vec_pMatchCase_insert_gap(Vec_pMatchCase *self, int32_t i, int32_t n);
+
+void Vec_pMatchCase_insert_at(Vec_pMatchCase *self, int32_t i, MatchCase *item);
+
+void Vec_pMatchCase_remove_range(Vec_pMatchCase *self, int32_t i, int32_t n);
+
 void Vec_pMatchCase_remove_at(Vec_pMatchCase *self, int32_t i);
 
 void Vec_pMatchCase_swap_remove(Vec_pMatchCase *self, int32_t i);
@@ -248,6 +290,12 @@ void Vec_pchar_set(Vec_pchar *self, int32_t i, char *item);
 char *Vec_pchar_last(const Vec_pchar *self);
 
 int Vec_pchar_is_empty(const Vec_pchar *self);
+
+void Vec_pchar_insert_gap(Vec_pchar *self, int32_t i, int32_t n);
+
+void Vec_pchar_insert_at(Vec_pchar *self, int32_t i, char *item);
+
+void Vec_pchar_remove_range(Vec_pchar *self, int32_t i, int32_t n);
 
 void Vec_pchar_remove_at(Vec_pchar *self, int32_t i);
 
@@ -279,6 +327,12 @@ Param Vec_Param_last(const Vec_Param *self);
 
 int Vec_Param_is_empty(const Vec_Param *self);
 
+void Vec_Param_insert_gap(Vec_Param *self, int32_t i, int32_t n);
+
+void Vec_Param_insert_at(Vec_Param *self, int32_t i, Param item);
+
+void Vec_Param_remove_range(Vec_Param *self, int32_t i, int32_t n);
+
 void Vec_Param_remove_at(Vec_Param *self, int32_t i);
 
 void Vec_Param_swap_remove(Vec_Param *self, int32_t i);
@@ -309,6 +363,12 @@ Field Vec_Field_last(const Vec_Field *self);
 
 int Vec_Field_is_empty(const Vec_Field *self);
 
+void Vec_Field_insert_gap(Vec_Field *self, int32_t i, int32_t n);
+
+void Vec_Field_insert_at(Vec_Field *self, int32_t i, Field item);
+
+void Vec_Field_remove_range(Vec_Field *self, int32_t i, int32_t n);
+
 void Vec_Field_remove_at(Vec_Field *self, int32_t i);
 
 void Vec_Field_swap_remove(Vec_Field *self, int32_t i);
@@ -338,6 +398,12 @@ void Vec_EnumItem_set(Vec_EnumItem *self, int32_t i, EnumItem item);
 EnumItem Vec_EnumItem_last(const Vec_EnumItem *self);
 
 int Vec_EnumItem_is_empty(const Vec_EnumItem *self);
+
+void Vec_EnumItem_insert_gap(Vec_EnumItem *self, int32_t i, int32_t n);
+
+void Vec_EnumItem_insert_at(Vec_EnumItem *self, int32_t i, EnumItem item);
+
+void Vec_EnumItem_remove_range(Vec_EnumItem *self, int32_t i, int32_t n);
 
 void Vec_EnumItem_remove_at(Vec_EnumItem *self, int32_t i);
 

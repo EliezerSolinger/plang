@@ -11,6 +11,7 @@
 #   4. suítes gating      cases/modules/stl/p-suite/errors em C, QBE e C89
 #   5. fixed point QBE    ssa(s2) == ssa(compilador construído do próprio ssa)
 #   6. scoreboards        c-suite e wacct-valid (informativos, com piso)
+#   7. pstudio            o editor inteiro compila e linka (skip sem SDL2)
 #   7. seed drift         bootstrap/ em dia com os fontes? (informativo)
 #
 # Sai com código != 0 em qualquer falha gating. Artefatos de falha ficam em
@@ -34,7 +35,7 @@ bad()  { printf '   \033[31mFAIL\033[0m %s\n' "${1:-}"; FAIL=1; }
 rm -rf tests/out              # nunca deixar artefatos velhos enganarem o diagnóstico
 mkdir -p $V/{out1,out2,out3,qb1,qb2,stl}
 
-step "1/7 seed: bootstrap C -> plangc_seed"
+step "1/8 seed: bootstrap C -> plangc_seed"
 if $CC $CFLAGS -o $V/plangc_seed bootstrap/selfhost/*.c 2>$V/seed.err; then ok; else bad "$(head -2 $V/seed.err)"; exit 1; fi
 
 gen() { # gen <plangc> <outdir>  — gera stl headers + selfhost C
@@ -46,25 +47,25 @@ gen() { # gen <plangc> <outdir>  — gera stl headers + selfhost C
   for f in selfhost/*.p;  do b=$(basename "${f%.p}");  $bin "$f" -o $out/$b.c 2>$V/gen.err || { head -2 $V/gen.err; return 1; }; done
 }
 
-step "2/7 escada: seed -> s1 -> s2 -> out3"
+step "2/8 escada: seed -> s1 -> s2 -> out3"
 if gen $V/plangc_seed $V/out1 && $CC $CFLAGS -o $V/plangc_s1 $V/out1/*.c 2>$V/s1.err; then ok "stage1"; else bad "stage1: $(head -2 $V/s1.err 2>/dev/null)"; exit 1; fi
 if gen $V/plangc_s1 $V/out2 && $CC $CFLAGS -o $V/plangc_s2 $V/out2/*.c 2>$V/s2.err; then ok "stage2"; else bad "stage2: $(head -2 $V/s2.err 2>/dev/null)"; exit 1; fi
 if gen $V/plangc_s2 $V/out3; then ok "stage3 (geração)"; else bad "stage3"; exit 1; fi
 
-step "3/7 fixed point C: out2 == out3"
+step "3/8 fixed point C: out2 == out3"
 if diff -rq $V/out2 $V/out3 >/dev/null 2>&1; then ok; else bad "$(diff -rq $V/out2 $V/out3 | head -3)"; fi
 
-step "4/7 suítes gating (C, QBE, C89) com o stage2"
+step "4/8 suítes gating (C, QBE, C89) com o stage2"
 for mode in "C:" "QBE:BACKEND=qbe" "C89:STD=c89"; do
   name=${mode%%:*}; env=${mode#*:}
-  if env PLANGC=$PWD/$V/plangc_s2 $env bash tests/run.sh cases modules stl p-suite errors >$V/suite_$name.log 2>&1; then
+  if env PLANGC=$PWD/$V/plangc_s2 $env bash tests/run.sh cases modules stl p-suite errors pstudio >$V/suite_$name.log 2>&1; then
     ok "$name"
   else
     bad "$name (tests/out + $V/suite_$name.log)"
   fi
 done
 
-step "5/7 fixed point QBE"
+step "5/8 fixed point QBE"
 qfp=1
 for f in selfhost/*.p; do b=$(basename "${f%.p}")
   $V/plangc_s2 --backend qbe "$f" -o $V/qb1/$b.ssa 2>/dev/null || qfp=0
@@ -79,7 +80,7 @@ else qfp=0; fi
 [ $qfp = 1 ] && ok || bad "compilador QBE-built diverge do C-built"
 
 if [ "$QUICK" != "quick" ]; then
-  step "6/7 scoreboards (pisos: c-suite>=$CSUITE_FLOOR, wacct>=$WACCT_FLOOR)"
+  step "6/8 scoreboards (pisos: c-suite>=$CSUITE_FLOOR, wacct>=$WACCT_FLOOR)"
   cs=$(PLANGC=$PWD/$V/plangc_s2 bash tests/run.sh c-suite 2>/dev/null | grep -oE 'score: [0-9]+' | grep -oE '[0-9]+')
   [ "${cs:-0}" -ge $CSUITE_FLOOR ] && ok "c-suite $cs/220" || bad "c-suite caiu: ${cs:-?}/220 (piso $CSUITE_FLOOR)"
   wa=$(PLANGC=$PWD/$V/plangc_s2 bash tests/run.sh wacct-valid 2>/dev/null | grep -oE 'wacct-valid: [0-9]+' | grep -oE '[0-9]+')
@@ -93,10 +94,28 @@ if [ "$QUICK" != "quick" ]; then
     fi
   fi
 else
-  step "6/7 scoreboards — pulados (quick)"
+  step "6/8 scoreboards — pulados (quick)"
 fi
 
-step "7/7 seed drift (informativo)"
+step "7/8 pstudio (compilação do editor: maior consumidor de P)"
+# gating de COMPILAÇÃO do editor inteiro (a suíte funcional roda no passo 4).
+# SDL2 é dependência com skip gracioso — sem libsdl2-dev só avisa.
+if pkg-config --exists sdl2 >/dev/null 2>&1; then
+  if $V/plangc_s2 --out-dir $V/pst stl/*.ph selfhost/plang.ph selfhost/ast.ph \
+       selfhost/lexer.ph pstudio/*.ph pstudio/*.p selfhost/lexer.p selfhost/utf8.p \
+       selfhost/util.p >$V/pstudio.log 2>&1 &&
+     $CC -w -D_DEFAULT_SOURCE -o $V/pstudio_bin $V/pst/pstudio/*.c \
+       $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
+       $(pkg-config --cflags --libs sdl2) -lm >>$V/pstudio.log 2>&1; then
+    ok "editor compila e linka"
+  else
+    bad "pstudio nao compilou (veja $V/pstudio.log)"
+  fi
+else
+  ok "skipped: no SDL2"
+fi
+
+step "8/8 seed drift (informativo)"
 drift=0
 for f in $V/out2/*.c $V/out2/*.h; do
   b=$(basename "$f")

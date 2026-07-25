@@ -27,11 +27,15 @@ struct Sym:
     assigned: bool    # has a value: initializer seen, or address escaped (&x)
     uninit_warned: bool
     byref: i32        # out/ref/in parameter: uses of the name auto-deref (*name)
+    for_iter: bool    # iterador injetado por `for`: uma declaração explícita
+                      #   posterior REAPROVEITA a variável (vira atribuição)
     pos: Pos          # declaration site; line 0 = untracked (params, with, ...)
 
 struct SInfo:
     name: const *char
     is_union: bool
+    c_tag: bool     # ingested C TAG without a typedef (struct stat, struct
+                    #   dirent...): P references emit the `struct X` spelling
     defined: bool   # saw a DEFINITION (not just a forward `struct S;`)
     fields: *Field
     nfields: i32
@@ -97,6 +101,9 @@ struct Sema:
                              #   folded to literals in expressions (QBE has no cpp)
     in_chdr: bool            # registering an ingested C header (relaxed checks)
     for_ctr: i32             # hidden index counter for `for v in xs` (__fiN)
+    in_ctr: i32              # hidden temporaries for `in` receivers (__inN)
+    tdalias: StrMap<*Type>   # typedef de header C -> tipo do TAG subjacente
+                             #   (`regex_t` -> `struct re_pattern_buffer`)
     c_mod: bool              # checking a C module: no Python-style inference
                              #   (`a = 1` does NOT declare in C)
     fn_globals: StrSet       # names pinned by `global x` in the current function
@@ -298,6 +305,19 @@ static def resolve_type(s: *Sema, t: *Type):
             resolve_type(s, t->targs[i0])
         return
     if t->ntargs == 0:
+        if t->kind == TY_NAME and t->tag_kind == TAG_NONE and t->name != None:
+            # typedef de header C para um TAG (`regex_t`): passa a usar a
+            # GRAFIA DO TAG — o layout é conhecido por esse nome nos dois
+            # backends (o QBE só enxerga o tamanho real por aqui)
+            ta: *Type = s->tdalias.get_or(t->name, None)
+            if ta != None:
+                t->name = ta->name
+                t->tag_kind = ta->tag_kind
+                return
+            tsi: *SInfo = find_struct(s, t->name)
+            if tsi != None and tsi->c_tag:
+                # (se houver typedef homônimo, `struct X` continua C válido)
+                t->tag_kind = TAG_UNION if tsi->is_union else TAG_STRUCT
         return
     for i in range(t->ntargs):
         resolve_type(s, t->targs[i])
@@ -1368,6 +1388,39 @@ static def vla_hoist_add(s: *Sema, st: *Stmt):
     s->vla_hoist = vec_grow(s->vla_hoist, s->vla_nhoist, &s->vla_choist, sizeof(*s->vla_hoist))
     s->vla_hoist[s->vla_nhoist] = st
     s->vla_nhoist += 1
+
+# um receptor `in self` (SOMENTE LEITURA por contrato) aceita um rvalue:
+# `f().m()` materializa um temporário e passa o endereço dele, como
+# `(__inN = f(), &__inN)` — C89 válido (a declaração sobe para a entrada da
+# função, igual ao walrus). `ref`/`out` NUNCA fazem isso: escrever num
+# temporário seria perda silenciosa, então lá o rvalue é erro.
+static def materialize_in(s: *Sema, e: *Expr) -> *Expr:
+    t: *Type = type_of(s, e)
+    if t == None:
+        t = infer_type(s, e)
+    if t == None:
+        fatal_at(s->file, e->pos, "cannot infer the type of the 'in' receiver expression")
+    name: const *char = arena_printf(s->a, "__in%d", s->in_ctr)
+    s->in_ctr += 1
+    hd: *Stmt = st_new(s->a, ST_VAR, e->pos)
+    hd->name = name
+    hd->type = t
+    resolve_type(s, hd->type)
+    vla_hoist_add(s, hd)
+    hp: *Type = arena_alloc(s->a, sizeof(Type))
+    *hp = *t
+    s->fn_hoisted.put(name, hp)
+    asn: *Expr = ex_new(s->a, EX_ASSIGN, e->pos)
+    asn->op = TK_ASSIGN
+    asn->lhs = mk_ident(s->a, name, e->pos)
+    asn->rhs = e
+    adr: *Expr = ex_new(s->a, EX_UNARY, e->pos)
+    adr->op = TK_AMP
+    adr->lhs = mk_ident(s->a, name, e->pos)
+    cma: *Expr = ex_new(s->a, EX_COMMA, e->pos)
+    cma->lhs = asn
+    cma->rhs = adr
+    return cma
 
 # --std=c89: a LOCAL array with a non-constant dimension (VLA) doesn't exist in C89.
 # Lowers `a: T[n]` (no initializer) reusing malloc/free, in a way that is SAFE
@@ -2767,9 +2820,17 @@ static def check_expr(s: *Sema, e: *Expr):
                             selfx->op = TK_STAR
                             selfx->lhs = recv
                         elif not self_by_val and not recv_is_ptr:
-                            selfx = ex_new(s->a, EX_UNARY, recv->pos)
-                            selfx->op = TK_AMP
-                            selfx->lhs = recv
+                            if not is_lvalue(recv) and recv->kind != EX_STRING:
+                                # rvalue: só `in self` (leitura) pode materializar
+                                if mth->nparams > 0 and mth->params[0].byref == PK_IN:
+                                    selfx = materialize_in(s, recv)
+                                else:
+                                    kwn: const *char = "ref" if mth->nparams > 0 and mth->params[0].byref == PK_REF else ("out" if mth->nparams > 0 and mth->params[0].byref == PK_OUT else "*")
+                                    fatal_at(s->file, recv->pos, "method '%s' takes '%s self' (it may write through it), so the receiver must be an lvalue (a variable, field, array element or *pointer)", callee->field, kwn)
+                            else:
+                                selfx = ex_new(s->a, EX_UNARY, recv->pos)
+                                selfx->op = TK_AMP
+                                selfx->lhs = recv
                         args: **Expr = None
                         n = 0; cn = 0
                         args = vec_grow(args, n, &cn, sizeof(*args))
@@ -3381,6 +3442,27 @@ static def check_stmt(s: *Sema, st: *Stmt):
             # a NEW block). `extern` after `extern` is a redeclaration — legal.
             rex: bool = False
             if st->name != None and scope_find_cur(s, st->name, &rex):
+                # iterador injetado por `for` + redeclaração do MESMO tipo:
+                # reaproveita a variável — a declaração vira só a atribuição
+                # do valor inicial (pedido do usuário: nada de renomear i)
+                fdx: i32 = sym_index(s, st->name)
+                if fdx >= 0 and s->locals[fdx].for_iter and not st->is_extern and not st->is_static:
+                    rt: *Type = st->type
+                    if rt == None and st->init != None:
+                        rt = type_of(s, st->init)
+                    if type_eq_p(rt, s->locals[fdx].type):
+                        s->locals[fdx].for_iter = False   # agora é explícita
+                        s->locals[fdx].pos = st->pos
+                        if st->init != None:
+                            st->kind = ST_ASSIGN
+                            st->lhs = mk_ident(s->a, st->name, st->pos)
+                            st->op = TK_ASSIGN
+                            st->rhs = st->init
+                            st->init = None
+                            check_stmt(s, st)
+                        else:
+                            st->kind = ST_PASS
+                        return
                 if not (st->is_extern and rex):
                     fatal_at(s->file, st->pos, "redefinition of '%s' in the same scope", st->name)
             if s->fn_globals.has(st->name):
@@ -3816,7 +3898,9 @@ static def lower_for_iter(s: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt):
         st->step = None
         st->var2 = None       # now a plain range-for for check_stmt and the backends
         scope_add(s, idecl->name, idecl->type)
+        s->locals[s->nlocals - 1].for_iter = True
         scope_add(s, vdecl->name, vdecl->type)
+        s->locals[s->nlocals - 1].for_iter = True
         *d1 = idecl
         *d2 = vdecl
         return
@@ -3828,6 +3912,7 @@ static def lower_for_iter(s: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt):
     decl->name = st->var
     decl->type = ty
     scope_add(s, st->var, ty)
+    s->locals[s->nlocals - 1].for_iter = True
     *d1 = decl
 
 # checks a block's statements, injecting auto-declared `for` iterators as an
@@ -4383,6 +4468,8 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         want_body: bool = d->kind == DL_IMPLEMENT
         if d->kind == DL_DECLARE and s->funcs.has(fmangled):
             fatal_at(s->file, d->pos, "'%s' already declared (duplicate declare)", fmangled)
+        if d->inline_inst and s->funcs.has(fmangled):
+            fatal_at(s->file, d->pos, "'%s' already instantiated in this TU", fmangled)
         if want_body:
             if s->implemented.has(fmangled):
                 fatal_at(s->file, d->pos, "'%s' already implemented (duplicate implement)", fmangled)
@@ -4390,6 +4477,9 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         inst: *Func = clone_func(s, &fsub, ftpl, None, want_body)
         inst->name = fmangled
         inst->cname = fmangled
+        if d->inline_inst:
+            inst->is_static = True   # TU-local: many TUs may inline the same
+            inst->is_inline = True   #   instance without link conflicts
         with d:
             .kind = DL_FUNC
             .func = inst
@@ -4405,6 +4495,31 @@ static def instantiate(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         resolve_type(s, g->targs[i])
     mangled: *char = mangle_instance(s, g)
     sub: Subst = {tpl->tparams, g->targs, g->ntargs}
+
+    if d->inline_inst:
+        # `inline Vec<int>`: definition AND bodies here, with INTERNAL linkage
+        # (static inline) — safe to repeat in other TUs, link-conflict-free
+        if find_struct(s, mangled) != None:
+            fatal_at(s->file, d->pos, "'%s' already instantiated in this TU", mangled)
+        s->implemented.add(mangled)
+        iflds: *Field = arena_alloc(s->a, usize(tpl->nfields) * sizeof(*iflds))
+        for ii in range(tpl->nfields):
+            iflds[ii] = tpl->fields[ii]
+            iflds[ii].type = clone_type(s, &sub, tpl->fields[ii].type)
+        ibodies: **Func = arena_alloc(s->a, usize(tpl->nmethods) * sizeof(*ibodies))
+        for ii in range(tpl->nmethods):
+            ibodies[ii] = clone_func(s, &sub, tpl->methods[ii], mangled, True)
+            ibodies[ii]->is_static = True
+            ibodies[ii]->is_inline = True
+        with d:
+            .kind = DL_STRUCT
+            .name = mangled
+            .fields = iflds
+            .nfields = tpl->nfields
+            .methods = ibodies
+            .nmethods = tpl->nmethods
+        register_decl(s, m, d, check_bodies)
+        return
 
     if d->kind == DL_DECLARE:
         if find_struct(s, mangled) != None:
@@ -4497,8 +4612,11 @@ static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
             if check_bodies:
                 check_expr(s, d->init)
                 check_init(s, d->type, d->init, d->pos)
-            # known constant: registers the value (int/float/str) for folding and pruning
-            if d->is_const and d->init != None:
+            # known constant: registers the value (int/float/str) for folding and
+            # pruning. `X: const i32 = 4` (P) marca const no TIPO; `const X = 4`
+            # (C) marca no Decl — as duas formas contam, senão o valor não é
+            # dobrável e um `i32[X]` viraria VLA.
+            if d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
                 cok: bool = True
                 cvv: CVal = ceval_val(s, d->init, None, ref cok)
                 if cok and cvv.kind != CV_BAD:
@@ -4522,6 +4640,7 @@ static def register_decl(s: *Sema, m: *Module, d: *Decl, check_bodies: bool):
                 si = arena_alloc(s->a, sizeof(SInfo))
                 si->name = d->name
                 si->is_union = d->kind == DL_UNION
+                si->c_tag = s->in_chdr and not d->is_td   # C tag: needs `struct X` in C (não p/ typedef renomeado)
                 s->structs.put(d->name, si)
                 add_type(s, d->name)
             elif si->is_union != (d->kind == DL_UNION) and not s->in_chdr:
@@ -4610,6 +4729,20 @@ static def register_module(s: *Sema, m: *Module, check_bodies: bool):
     s->file = m->path
     for j in range(m->ndecls):
         register_decl(s, m, m->decls[j], check_bodies)
+    # typedef de um TAG (`typedef struct re_pattern_buffer regex_t`): registra
+    # o nome do typedef como ALIAS do mesmo layout — DEPOIS dos decls, quando
+    # os tags já existem. Sem isto o backend QBE não sabe o tamanho de
+    # `re: regex_t` (o backend C escapa porque o header do sistema define o
+    # nome, mas o QBE precisa do layout para reservar a pilha).
+    for ti in range(m->ntd):
+        if m->tdtypes == None or m->tdtypes[ti] == None:
+            continue
+        ut: *Type = m->tdtypes[ti]
+        if ut->kind == TY_NAME and ut->name != None and ut->tag_kind != TAG_NONE:
+            usi: *SInfo = find_struct(s, ut->name)
+            if usi != None and find_struct(s, m->tdnames[ti]) == None:
+                s->structs.put(m->tdnames[ti], usi)
+                s->tdalias.put(m->tdnames[ti], ut)
     s->file = prev
 
 builtins: const *char[] = {
@@ -4738,6 +4871,7 @@ def sema_run(cc: *Cc, m: *Module):
         s.gstatics.deinit()
         s.gexterns.deinit()
         s.enumconsts.deinit()
+        s.tdalias.deinit()
         s.fn_globals.deinit()
         s.fn_nonlocals.deinit()
         s.fn_hoisted.deinit()

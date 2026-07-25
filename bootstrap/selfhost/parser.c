@@ -155,6 +155,10 @@ static Type *parse_type(P *p) {
                     Vec_pType_push(&ptypes, ty_name(p->a, "..."));
                     break;
                 }
+                if (at(p, TK_IDENT) && pk1(p)->kind == TK_COLON) {
+                    adv(p);
+                    adv(p);
+                }
                 Vec_pType_push(&ptypes, parse_type(p));
             } while (accept(p, TK_COMMA));
         }
@@ -185,12 +189,12 @@ static Type *parse_type(P *p) {
         }
         t = ty_name(p->a, name);
         {
-            Type *__with_168_9 = t;
-            __with_168_9->is_const = is_const;
-            __with_168_9->is_volatile = is_volatile;
-            __with_168_9->is_restrict = is_restrict;
-            __with_168_9->targs = targs.data;
-            __with_168_9->ntargs = targs.len;
+            Type *__with_173_9 = t;
+            __with_173_9->is_const = is_const;
+            __with_173_9->is_volatile = is_volatile;
+            __with_173_9->is_restrict = is_restrict;
+            __with_173_9->targs = targs.data;
+            __with_173_9->ntargs = targs.len;
         }
     }
     int32_t k;
@@ -1107,15 +1111,15 @@ static Func *parse_func(P *p, int is_static, int is_inline, const char *owner) {
     }
     Func *f = arena_alloc(p->a, sizeof(Func));
     {
-        Func *__with_981_5 = f;
-        __with_981_5->pos = pos;
-        __with_981_5->name = name->text;
-        __with_981_5->owner = owner;
-        __with_981_5->cname = (owner != NULL ? arena_printf(p->a, "%s_%s", owner, name->text) : name->text);
-        __with_981_5->is_static = is_static;
-        __with_981_5->is_inline = is_inline;
-        __with_981_5->tparams = ftparams.data;
-        __with_981_5->ntparams = ftparams.len;
+        Func *__with_986_5 = f;
+        __with_986_5->pos = pos;
+        __with_986_5->name = name->text;
+        __with_986_5->owner = owner;
+        __with_986_5->cname = (owner != NULL ? arena_printf(p->a, "%s_%s", owner, name->text) : name->text);
+        __with_986_5->is_static = is_static;
+        __with_986_5->is_inline = is_inline;
+        __with_986_5->tparams = ftparams.data;
+        __with_986_5->ntparams = ftparams.len;
     }
     expect(p, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1244,13 +1248,13 @@ static Decl *parse_struct_or_union(P *p, int is_union) {
     }
     expect(p, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1104_5 = d;
-        __with_1104_5->fields = fields.data;
-        __with_1104_5->nfields = fields.len;
-        __with_1104_5->methods = methods.data;
-        __with_1104_5->nmethods = methods.len;
-        __with_1104_5->tparams = tparams.data;
-        __with_1104_5->ntparams = tparams.len;
+        Decl *__with_1109_5 = d;
+        __with_1109_5->fields = fields.data;
+        __with_1109_5->nfields = fields.len;
+        __with_1109_5->methods = methods.data;
+        __with_1109_5->nmethods = methods.len;
+        __with_1109_5->tparams = tparams.data;
+        __with_1109_5->ntparams = tparams.len;
     }
     return d;
 }
@@ -1358,6 +1362,9 @@ static Decl *parse_instantiate(P *p) {
     Token *kw = adv(p);
     Decl *d = arena_alloc(p->a, sizeof(Decl));
     d->kind = (kw->kind == TK_DECLARE ? DL_DECLARE : DL_IMPLEMENT);
+    if (kw->kind == TK_INLINE) {
+        d->inline_inst = 1;
+    }
     d->pos = kw->pos;
     Token *gname = expect(p, TK_IDENT, "struct name");
     d->name = gname->text;
@@ -1370,6 +1377,8 @@ static Decl *parse_instantiate(P *p) {
         expect_gt(p);
     } else if (d->kind == DL_DECLARE) {
         fatal_at(p->file, kw->pos, "declare requires type arguments (a non-generic struct is already defined by its own .ph)");
+    } else if (d->inline_inst) {
+        fatal_at(p->file, kw->pos, "inline instantiation requires type arguments (use 'implement %s' for a non-generic struct)", d->name);
     }
     Type *gt = ty_name(p->a, gname->text);
     gt->targs = targs.data;
@@ -1403,6 +1412,9 @@ static Decl *parse_top(P *p) {
         case TK_STATIC:
         case TK_INLINE:
         case TK_DEF: {
+            if (t->kind == TK_INLINE && pk1(p)->kind == TK_IDENT) {
+                return parse_instantiate(p);
+            }
             int st = 0;
             int inl = 0;
             while (at(p, TK_STATIC) || at(p, TK_INLINE)) {
@@ -1437,18 +1449,18 @@ static Decl *parse_top(P *p) {
             Token *name = expect(p, TK_IDENT, "global declaration");
             Decl *d2 = arena_alloc(p->a, sizeof(Decl));
             {
-                Decl *__with_1275_13 = d2;
-                __with_1275_13->kind = DL_VAR;
-                __with_1275_13->pos = name->pos;
-                __with_1275_13->name = name->text;
-                __with_1275_13->is_const = is_const;
-                __with_1275_13->is_extern = is_extern;
+                Decl *__with_1287_13 = d2;
+                __with_1287_13->kind = DL_VAR;
+                __with_1287_13->pos = name->pos;
+                __with_1287_13->name = name->text;
+                __with_1287_13->is_const = is_const;
+                __with_1287_13->is_extern = is_extern;
                 if (accept(p, TK_COLON)) {
-                    __with_1275_13->type = parse_type(p);
+                    __with_1287_13->type = parse_type(p);
                 }
                 if (accept(p, TK_ASSIGN)) {
-                    __with_1275_13->init = parse_initializer(p);
-                } else if (__with_1275_13->type == NULL) {
+                    __with_1287_13->init = parse_initializer(p);
+                } else if (__with_1287_13->type == NULL) {
                     fatal_at(p->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(p->file, name->pos, "const requires a value");

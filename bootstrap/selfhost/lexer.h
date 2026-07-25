@@ -21,4 +21,6 @@ struct TokenList {
 
 TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a);
 
+TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, int tolerant);
+
 const char *tok_kind_name(TokKind k);

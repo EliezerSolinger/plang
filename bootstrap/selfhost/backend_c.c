@@ -332,7 +332,7 @@ static void emit_args(StrBuf *b, Expr **args, int32_t n) {
         if (i != 0) {
             sb_puts(b, ", ");
         }
-        emit_expr(b, args[i], 0);
+        emit_expr(b, args[i], PR_ASSIGN);
     }
 }
 
@@ -1403,6 +1403,8 @@ static void emit_decl(StrBuf *b, Decl *d) {
                 sb_puts(b, "extern ");
             } else if (d->is_static) {
                 sb_puts(b, "static ");
+            } else if (g_in_header && !g_c_mod && d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
+                sb_puts(b, "static ");
             }
             if (d->is_const) {
                 sb_puts(b, "const ");
@@ -1425,9 +1427,15 @@ static void emit_decl(StrBuf *b, Decl *d) {
                 return;
             }
             if (d->nfields > 0 || d->is_def) {
-                sb_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
-                emit_struct_fields(b, d, 1);
-                sb_puts(b, "};\n");
+                if (d->is_td) {
+                    sb_printf(b, "typedef %s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
+                    emit_struct_fields(b, d, 1);
+                    sb_printf(b, "} %s;\n", d->name);
+                } else {
+                    sb_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
+                    emit_struct_fields(b, d, 1);
+                    sb_puts(b, "};\n");
+                }
             } else if (d->is_fwd && g_c_mod) {
                 sb_printf(b, "%s %s;\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
             }

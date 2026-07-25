@@ -272,7 +272,7 @@ void cdiag_at(const char *file, Pos pos, const char *group, int32_t wdef, const 
 }
 
 char *read_entire_file(const char *path, size_t *out_len) {
-    FILE *f = fopen(path, "rb");
+    struct _IO_FILE *f = fopen(path, "rb");
     if (f == NULL) {
         fatal("could not open '%s'", path);
     }

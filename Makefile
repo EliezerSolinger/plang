@@ -9,6 +9,7 @@
 #   make test-qbe   # same through the QBE backend (needs qbe/)
 #   make test-c89   # same in strict-C89 mode
 #   make selfhost   # rebuild plangc from the Plang source (self-host check)
+#   make pstudio    # build the editor (pstudio/, needs libsdl2-dev)
 #   make clean
 
 CC     ?= cc
@@ -58,7 +59,25 @@ selfhost: plangc
 	$(CC) $(CFLAGS) -w -o plangc2 out/selfhost/*.c
 	@echo "self-host OK: plangc2 rebuilt from Plang source"
 
+# Plang Studio: o editor em P puro (pstudio/). Precisa de libsdl2-dev; o C sai
+# em out/ (espelho da raiz: imports relativos resolvem lá) e o binário em
+# out/bin/pstudio — a raiz já tem a PASTA pstudio/, daí o out/bin.
+PSTUDIO_SRC = pstudio/font_atlas.p pstudio/psys.p pstudio/pgfx_raster.p \
+              pstudio/pgfx.p pstudio/pui.p pstudio/core.p pstudio/codeview.p \
+              pstudio/app.p pstudio/main.p
+PSTUDIO_DEPS = selfhost/lexer.p selfhost/utf8.p selfhost/util.p
+
+pstudio: plangc
+	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
+	./plangc --out-dir out stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph \
+	         pstudio/*.ph $(PSTUDIO_SRC) $(PSTUDIO_DEPS)
+	@mkdir -p out/bin
+	$(CC) $(CFLAGS) -w -D_DEFAULT_SOURCE -o out/bin/pstudio \
+	      $(patsubst %.p,out/%.c,$(PSTUDIO_SRC)) $(patsubst %.p,out/%.c,$(PSTUDIO_DEPS)) \
+	      `pkg-config --cflags --libs sdl2` -lm
+	@echo "pstudio pronto: ./out/bin/pstudio [pasta|arquivos]"
+
 clean:
 	rm -rf plangc plangc2 out tests/out stl/*.h .hello .hello.p .hello.c
 
-.PHONY: check test test-qbe test-c89 verify verify-quick selfhost clean
+.PHONY: check test test-qbe test-c89 verify verify-quick selfhost pstudio clean

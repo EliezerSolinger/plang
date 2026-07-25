@@ -30,6 +30,8 @@ def is_alnum_(c: char) -> bool
 def is_num_cont(c: char) -> bool
 def is_hex_digit(c: char) -> bool
 def c_num_error(t: const *char) -> const *char
+def c_static_assert(p: *Cp)
+def c_ternary(p: *Cp) -> *Expr
 def word_count(s: const *char, w: const *char) -> i32
 def word_in(s: const *char, w: const *char) -> bool
 
@@ -305,10 +307,22 @@ def c_num_error(t: const *char) -> const *char:
                 i += 1
         if oct_ and bad8 and not isflt:
             return "invalid digit in octal constant (digits must be 0-7)"
-    # suffix: float -> one of f/F/l/L; integer -> u/U and up to two l/L
+    # suffix: float -> one of f/F/l/L, or a GCC _FloatN suffix (f16/f32/f64/
+    # f128/f32x/f64x — como em 0.0f16 nos headers do SDL); integer -> u/U e
+    # até dois l/L
     if isflt:
         if t[i] in {'f', 'F', 'l', 'L'}:
             i += 1
+            # _FloatN: dígitos colados no f/F (16, 32, 64, 128) + 'x' opcional
+            if (t[i - 1] == 'f' or t[i - 1] == 'F') and t[i] >= '0' and t[i] <= '9':
+                nfd = 0
+                while t[i] >= '0' and t[i] <= '9':
+                    i += 1
+                    nfd += 1
+                if nfd > 3:
+                    return "invalid suffix on number constant"
+                if t[i] == 'x' or t[i] == 'X':
+                    i += 1
     else:
         # integer suffix: at most one u/U and one L-GROUP ('l', 'L', 'll' or
         # 'LL' — the two must be ADJACENT and the SAME case: 'lL' and 'lul'
@@ -535,7 +549,8 @@ struct Cp:
 
     # C type keyword (base arithmetic)
     static def is_type_kw(self: *Cp, w: const *char) -> bool:
-        return w in {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool"}
+        # __int128/_Complex são combináveis como palavras de tipo
+        return w in {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "__int128", "_Complex", "_Imaginary"}
 
     # storage-class specifier — legal in any position among the type words
     static def is_storage_kw(self: *Cp, w: const *char) -> bool:
@@ -713,6 +728,10 @@ struct Cp:
         # doesn't mark const on the typedef's shared node)
         if self->types.has(w):
             self->adv()
+            # builtin float seguido de _Complex: `_Float16 _Complex`
+            if self->pk()->kind == CT_ID and self->pk()->text != None and (strcmp(self->pk()->text, "_Complex") == 0 or strcmp(self->pk()->text, "_Imaginary") == 0):
+                cw: const *char = arena_printf(self->a, "%s %s", w, self->adv()->text)
+                return self->base_name(cw)
             u: *Type = self->typedefs.get_or(w, None)
             if u != None:
                 return u
@@ -821,6 +840,13 @@ struct Cp:
 
     static def parse_stars(self: *Cp, base: *Type) -> *Type:
         t: *Type = base
+        # qualificador PÓS-base: `void const *p` == `const void *p` (C permite
+        # qualifiers em qualquer ordem entre as palavras do tipo)
+        if self->pk()->kind == CT_ID and (strcmp(self->pk()->text, "const") == 0 or strcmp(self->pk()->text, "volatile") == 0):
+            if strcmp(self->pk()->text, "const") == 0:
+                t->is_const = True
+            self->adv()
+            self->skip_gnu()
         while self->is_punct("*"):
             self->adv()
             # const after '*' qualifies the POINTER (int * const != const int *):
@@ -1119,6 +1145,7 @@ struct Cp:
                         fk: i32
                         for fk in range(fndim - 1, -1, -1):
                             fty = ty_array(self->a, fty, fdims[fk])
+                self->skip_gnu()   # `long long x __attribute__((aligned(...)))`
                 bw = -1                     # -1 = not a bitfield
                 if self->eat(":"):               # bitfield: constant width
                     wok: bool = True
@@ -1157,6 +1184,7 @@ struct Cp:
                     fields.push(fa)
                 elif self->strict:
                     fatal_at(self->file, self->pk()->pos, "struct/union member declaration without a declarator")
+                self->skip_gnu()   # atributo após o bitfield também
             while self->eat(",")
             if self->strict and self->is_punct("="):
                 fatal_at(self->file, self->pk()->pos, "a struct/union member cannot have an initializer")
@@ -1247,6 +1275,31 @@ struct Cp:
                 return 0
             return v
         if self->is_punct("("):
+            # cast em const-expr: (Uint8)('Y'), ((Uint32)(x)) — o valor é
+            # truncado/estendido para a LARGURA do tipo (semântica C)
+            if self->pk1()->kind == CT_ID and self->tok_is_type(self->pk1()->text):
+                self->adv()
+                cbase: *Type = self->parse_stars(self->parse_base_type())
+                if self->is_punct(")"):
+                    self->adv()
+                else:
+                    ok = False
+                    return 0
+                if cbase->kind == TY_PTR:
+                    ok = False   # cast para ponteiro não é valor de enum
+                    return 0
+                cv: i64 = self->ceval_prim(ref ok)
+                csz: i64 = self->type_size(cbase, ref ok)
+                if not ok:
+                    return 0
+                uns: bool = cbase->kind == TY_NAME and cbase->name != None and word_in(cbase->name, "unsigned")
+                if csz == 1:
+                    return i64(u8(cv)) if uns else i64(i8(cv))
+                if csz == 2:
+                    return i64(u16(cv)) if uns else i64(i16(cv))
+                if csz == 4:
+                    return i64(u32(cv)) if uns else i64(i32(cv))
+                return cv
             self->adv()
             r: i64 = self->ceval(ref ok)
             if self->is_punct(")"):
@@ -1363,10 +1416,12 @@ struct Cp:
         items: Vec<EnumItem>
         items.init()
         next_val: i64 = 0
+        sym_tail: bool = False   # último valor foi simbólico (não-redutível)
         while not self->is_punct("}") and self->pk()->kind != CT_EOF:
             iname: const *char = self->adv()->text
             it: EnumItem = {iname, None, self->pk()->pos}
             if self->eat("="):
+                esave: usize = self->i
                 vok: bool = True
                 v: i64 = self->ceval(ref vok)
                 if vok:
@@ -1374,14 +1429,21 @@ struct Cp:
                     ve->text = arena_printf(self->a, "%lld", v)
                     it.value = ve
                     next_val = v + 1
+                    sym_tail = False
                     self->enumvals.put(iname, v)
                     if v < 0 and tag != None:
                         self->enum_signed.add(tag)   # int representation
                 else:
-                    self->skip_to(",", "}")
+                    # valor não redutível aqui: RESTAURA e guarda a EXPRESSÃO
+                    # (a emissão fica fiel; o cc calcula). Membros automáticos
+                    # seguintes não entram em enumvals (valor desconhecido).
+                    self->i = esave
+                    it.value = c_ternary(self)
+                    sym_tail = True
             else:
-                self->enumvals.put(iname, next_val)
-                next_val += 1
+                if not sym_tail:
+                    self->enumvals.put(iname, next_val)
+                    next_val += 1
             items.push(it)
             if not self->eat(","):
                 break
@@ -1687,6 +1749,10 @@ def c_postfix_from(p: *Cp, e: *Expr) -> *Expr:
 
 def c_unary(p: *Cp) -> *Expr:
     pos: Pos = p->pk()->pos
+    # __extension__ prefixando uma EXPRESSÃO (compound literal etc.): no-op
+    if p->pk()->kind == CT_ID and p->pk()->text != None and strcmp(p->pk()->text, "__extension__") == 0:
+        p->adv()
+        return c_unary(p)
     # sizeof ( type )  or  sizeof unary-expr. Reuses P's post-sema form:
     # EX_CALL(sizeof, [EX_TYPEREF]) — the C backend emits sizeof(type), QBE
     # emits the constant. (There's no sema in the C frontend, so we already produce the EX_TYPEREF.)
@@ -2076,6 +2142,26 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
     if p->is_punct(";"):
         p->adv()
         return
+    # extended inline asm STATEMENT: __asm__ [volatile/goto] ( ... : ... );
+    # ingest (headers): skipped — the bodies are dropped anyway. Strict user
+    # code: an honest error beats silently losing the asm in the round-trip.
+    if p->pk()->kind == CT_ID and p->pk()->text != None and (strcmp(p->pk()->text, "_Static_assert") == 0 or strcmp(p->pk()->text, "static_assert") == 0):
+        c_static_assert(p)
+        return
+    asmw: const *char = p->pk()->text if p->pk()->kind == CT_ID else None
+    if asmw != None and asmw in {"__asm__", "__asm", "asm"}:
+        if p->strict:
+            fatal_at(p->file, pos, "inline asm statements are not supported by the C front end")
+        p->adv()
+        while True:
+            qw: const *char = p->pk()->text if p->pk()->kind == CT_ID else None
+            if qw == None or qw not in {"__volatile__", "volatile", "goto", "inline", "__inline__"}:
+                break
+            p->adv()
+        if p->is_punct("("):
+            p->skip_parens()
+        p->eat(";")
+        return
     # local typedef (inside a function): registers the type, doesn't generate a statement
     if p->is_kw("typedef"):
         c_typedef(p)
@@ -2376,6 +2462,21 @@ def c_typedef(p: *Cp):
         p->skip_gnu()
         p->types.add(name)
         p->typedefs.put(name, ty)
+        # typedef struct {...} Name (SÓ NO INGEST, onde nada é reemitido): o
+        # tag anônimo é inalcançável por outro caminho — renomeia decl E nó de
+        # tipo para o nome do typedef, para o layout ser encontrável pelo nome
+        # que o código usa (QBE). is_td marca que a grafia C é o typedef puro
+        # (nunca `struct Name`). No round-trip C (strict) o typedef continua
+        # sendo resolvido para `struct __anonN` — reemissão autossuficiente.
+        if not p->strict and ty->kind == TY_NAME and ty->tag_kind != TAG_NONE and ty->name != None and strncmp(ty->name, "__anon", 6) == 0:
+            for adx in range(p->out_decls.len - 1, -1, -1):
+                ad2: *Decl = p->out_decls.get(adx)
+                if ad2->kind in {DL_STRUCT, DL_UNION} and ad2->name != None and strcmp(ad2->name, ty->name) == 0:
+                    ad2->name = name
+                    ad2->is_td = True
+                    ty->name = name
+                    ty->tag_kind = TAG_NONE
+                    break
     while p->eat(",")
     p->expect_punct(";")
 
@@ -2483,6 +2584,12 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
             .init = c_initializer(p)
     return d2
 
+# `_Static_assert(cond, "msg");` — engolida no parse (nível topo e bloco).
+def c_static_assert(p: *Cp):
+    p->adv()
+    p->skip_parens()
+    p->eat(";")
+
 def c_top(p: *Cp) -> *Decl:
     pos: Pos = p->pk()->pos
     is_extern: bool = p->is_kw("extern")   # before skip_gnu consumes it
@@ -2498,6 +2605,9 @@ def c_top(p: *Cp) -> *Decl:
         fatal_at(p->file, pos, "conflicting storage classes ('static' and 'extern')")
     if p->is_kw("typedef"):
         c_typedef(p)
+        return None
+    if p->pk()->kind == CT_ID and p->pk()->text != None and (strcmp(p->pk()->text, "_Static_assert") == 0 or strcmp(p->pk()->text, "static_assert") == 0):
+        c_static_assert(p)
         return None
     base: *Type = p->parse_base_type()
     # storage class in any position (before/after/among the type words) was
@@ -2591,14 +2701,17 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, str
     # inline; only the name needs to exist for the semantic pass)
     if cp.typedefs.elen > 0:
         tdn: **char = arena_alloc(a, usize(cp.typedefs.elen) * sizeof(*tdn))
+        tdt: **Type = arena_alloc(a, usize(cp.typedefs.elen) * sizeof(*tdt))
         ntd = 0
         for ti in range(cp.typedefs.elen):
             if not cp.typedefs.dead[ti]:
                 # the StrMap owns its key strings (freed on deinit): copy into
                 # the arena — the module outlives the parser
                 tdn[ntd] = arena_strdup(a, cp.typedefs.keys[ti])
+                tdt[ntd] = cp.typedefs.vals[ti]
                 ntd += 1
         m->tdnames = tdn
+        m->tdtypes = tdt
         m->ntd = ntd
     cp.types.deinit()
     cp.typedefs.deinit()

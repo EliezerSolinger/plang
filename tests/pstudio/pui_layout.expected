@@ -1,0 +1,17 @@
+[0] 0,0 240x120
+[1] 0,0 240x16
+[2] 0,20 240x28
+[3] 0,20 20x28
+[4] 24,20 216x28
+[5] 0,52 240x68
+[6] 0,52 80x68
+[7] 86,52 154x68
+click: handled=11 fired=1 focus_no_botao=1
+hit_split_handle=1
+scroll=900
+input=[ol!] changes=3
+submits=1
+draw_lit=1
+hidden_hit=1
+reuse=1
+pui-ok

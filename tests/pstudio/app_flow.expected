@@ -1,0 +1,31 @@
+janela=1100x720
+arvore=3 arquivos_indexados=3
+abas=1 cur=0 titulo=hello.p
+linhas=4 hl=1 gutter=48
+digitado=[    x: i32 = 42  # resposta0] dirty=1
+undo=[    x: i32 = 42  # resposta]
+redo=[    x: i32 = 42  # resposta0]
+carets=2
+palette=1 topo=sub/notas.txt
+abas=2 cur=notas.txt hl_txt=0
+cmds=1 topo=Zoom In
+zoom=2 cell=16
+goto=3
+find1=0:14
+find2=1:7
+aba_clicada=0
+arvore_expandida=4
+status=[ proj/hello.p*   2:11   LF   4 linhas   1x]
+##############################
+##############################
+###################### ####...
+######################  ..    
+######################        
+######################        
+######################        
+######################        
+######################        
+######################        
+salvo=1 dirty=0
+abas=0
+app-ok

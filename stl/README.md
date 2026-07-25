@@ -34,7 +34,7 @@ Transpile os `.ph` da stl junto (gera os `.h` ao lado): `plangc stl/*.ph`.
 
 | Módulo | O quê | Notas |
 |---|---|---|
-| `vec.ph` | `Vec<T>` array dinâmico | `push/pop/get/set/last/remove_at/swap_remove/reserve/clear`; sem bounds-check (semântica C) |
+| `vec.ph` | `Vec<T>` array dinâmico | `push/pop/get/set/last/insert_at/insert_gap/remove_at/remove_range/swap_remove/reserve/clear`; sem bounds-check (semântica C) |
 | `map.ph` | `Map<K,V>` e `StrMap<V>` | compact dict estilo Python 3.7: ordem de inserção preservada, probe linear, tombstones, resize a 2/3 de carga |
 | `str.ph` | `Str` string dinâmica | sempre NUL-terminada; `append/appendf(fmt, ...)/push/eq/cstr`; exige `implement Str` em um `.p` |
 | `set.ph` | `Set<T>` e `StrSet` | mesma topologia do dict, sem hash cacheado (recalcula no resize — economia de memória); `StrSet` copia as chaves e exige `implement StrSet` |

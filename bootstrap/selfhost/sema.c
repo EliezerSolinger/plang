@@ -38,12 +38,14 @@ struct Sym {
     int assigned;
     int uninit_warned;
     int32_t byref;
+    int for_iter;
     Pos pos;
 };
 
 struct SInfo {
     const char *name;
     int is_union;
+    int c_tag;
     int defined;
     Field *fields;
     int32_t nfields;
@@ -1385,6 +1387,8 @@ struct Sema {
     StrSet macroconsts;
     int in_chdr;
     int32_t for_ctr;
+    int32_t in_ctr;
+    StrMap_pType tdalias;
     int c_mod;
     StrSet fn_globals;
     StrSet fn_nonlocals;
@@ -1632,6 +1636,18 @@ static void resolve_type(Sema *s, Type *t) {
         return;
     }
     if (t->ntargs == 0) {
+        if (t->kind == TY_NAME && t->tag_kind == TAG_NONE && t->name != NULL) {
+            Type *ta = StrMap_pType_get_or(&s->tdalias, t->name, NULL);
+            if (ta != NULL) {
+                t->name = ta->name;
+                t->tag_kind = ta->tag_kind;
+                return;
+            }
+            SInfo *tsi = find_struct(s, t->name);
+            if (tsi != NULL && tsi->c_tag) {
+                t->tag_kind = (tsi->is_union ? TAG_UNION : TAG_STRUCT);
+            }
+        }
         return;
     }
     size_t i;
@@ -1706,24 +1722,24 @@ static Expr *clone_expr(Sema *s, Subst *sub, Expr *e) {
     }
     Expr *ne = ex_new(s->a, e->kind, e->pos);
     {
-        Expr *__with_355_5 = ne;
-        __with_355_5->text = e->text;
-        __with_355_5->op = e->op;
-        __with_355_5->lhs = clone_expr(s, sub, e->lhs);
-        __with_355_5->rhs = clone_expr(s, sub, e->rhs);
-        __with_355_5->cond = clone_expr(s, sub, e->cond);
-        __with_355_5->nargs = e->nargs;
+        Expr *__with_375_5 = ne;
+        __with_375_5->text = e->text;
+        __with_375_5->op = e->op;
+        __with_375_5->lhs = clone_expr(s, sub, e->lhs);
+        __with_375_5->rhs = clone_expr(s, sub, e->rhs);
+        __with_375_5->cond = clone_expr(s, sub, e->cond);
+        __with_375_5->nargs = e->nargs;
         if (e->args != NULL) {
             Expr **args = arena_alloc(s->a, (size_t)e->nargs * sizeof(*args));
             size_t i;
             for (i = 0; i < e->nargs; i += 1) {
                 args[i] = clone_expr(s, sub, e->args[i]);
             }
-            __with_355_5->args = args;
+            __with_375_5->args = args;
         }
-        __with_355_5->field = e->field;
-        __with_355_5->cast_type = clone_type(s, sub, e->cast_type);
-        __with_355_5->cast_tentative = e->cast_tentative;
+        __with_375_5->field = e->field;
+        __with_375_5->cast_type = clone_type(s, sub, e->cast_type);
+        __with_375_5->cast_tentative = e->cast_tentative;
     }
     return ne;
 }
@@ -1731,15 +1747,15 @@ static Expr *clone_expr(Sema *s, Subst *sub, Expr *e) {
 static Stmt *clone_stmt(Sema *s, Subst *sub, Stmt *st) {
     Stmt *ns = st_new(s->a, st->kind, st->pos);
     {
-        Stmt *__with_374_5 = ns;
-        __with_374_5->name = st->name;
-        __with_374_5->type = clone_type(s, sub, st->type);
-        __with_374_5->init = clone_expr(s, sub, st->init);
-        __with_374_5->is_const = st->is_const;
-        __with_374_5->lhs = clone_expr(s, sub, st->lhs);
-        __with_374_5->op = st->op;
-        __with_374_5->rhs = clone_expr(s, sub, st->rhs);
-        __with_374_5->expr = clone_expr(s, sub, st->expr);
+        Stmt *__with_394_5 = ns;
+        __with_394_5->name = st->name;
+        __with_394_5->type = clone_type(s, sub, st->type);
+        __with_394_5->init = clone_expr(s, sub, st->init);
+        __with_394_5->is_const = st->is_const;
+        __with_394_5->lhs = clone_expr(s, sub, st->lhs);
+        __with_394_5->op = st->op;
+        __with_394_5->rhs = clone_expr(s, sub, st->rhs);
+        __with_394_5->expr = clone_expr(s, sub, st->expr);
         if (st->conds != NULL) {
             Expr **nc = arena_alloc(s->a, (size_t)st->nconds * sizeof(*nc));
             Block **nb = arena_alloc(s->a, (size_t)st->nconds * sizeof(*nb));
@@ -1748,19 +1764,19 @@ static Stmt *clone_stmt(Sema *s, Subst *sub, Stmt *st) {
                 nc[i] = clone_expr(s, sub, st->conds[i]);
                 nb[i] = clone_block(s, sub, st->blocks[i]);
             }
-            __with_374_5->conds = nc;
-            __with_374_5->blocks = nb;
+            __with_394_5->conds = nc;
+            __with_394_5->blocks = nb;
         }
-        __with_374_5->nconds = st->nconds;
-        __with_374_5->else_block = clone_block(s, sub, st->else_block);
-        __with_374_5->if_sel = st->if_sel;
-        __with_374_5->cond = clone_expr(s, sub, st->cond);
-        __with_374_5->body = clone_block(s, sub, st->body);
-        __with_374_5->var = st->var;
-        __with_374_5->from = clone_expr(s, sub, st->from);
-        __with_374_5->to = clone_expr(s, sub, st->to);
-        __with_374_5->step = clone_expr(s, sub, st->step);
-        __with_374_5->subject = clone_expr(s, sub, st->subject);
+        __with_394_5->nconds = st->nconds;
+        __with_394_5->else_block = clone_block(s, sub, st->else_block);
+        __with_394_5->if_sel = st->if_sel;
+        __with_394_5->cond = clone_expr(s, sub, st->cond);
+        __with_394_5->body = clone_block(s, sub, st->body);
+        __with_394_5->var = st->var;
+        __with_394_5->from = clone_expr(s, sub, st->from);
+        __with_394_5->to = clone_expr(s, sub, st->to);
+        __with_394_5->step = clone_expr(s, sub, st->step);
+        __with_394_5->subject = clone_expr(s, sub, st->subject);
         if (st->cases != NULL) {
             MatchCase **cs = arena_alloc(s->a, (size_t)st->ncases * sizeof(*cs));
             size_t j;
@@ -1768,28 +1784,28 @@ static Stmt *clone_stmt(Sema *s, Subst *sub, Stmt *st) {
                 MatchCase *oc = st->cases[j];
                 MatchCase *mc = arena_alloc(s->a, sizeof(MatchCase));
                 {
-                    MatchCase *__with_406_17 = mc;
-                    __with_406_17->is_default = oc->is_default;
-                    __with_406_17->nvals = oc->nvals;
+                    MatchCase *__with_426_17 = mc;
+                    __with_426_17->is_default = oc->is_default;
+                    __with_426_17->nvals = oc->nvals;
                     if (oc->vals != NULL) {
                         Expr **vs = arena_alloc(s->a, (size_t)oc->nvals * sizeof(*vs));
                         size_t k;
                         for (k = 0; k < oc->nvals; k += 1) {
                             vs[k] = clone_expr(s, sub, oc->vals[k]);
                         }
-                        __with_406_17->vals = vs;
+                        __with_426_17->vals = vs;
                     }
-                    __with_406_17->type_pat = clone_type(s, sub, oc->type_pat);
-                    __with_406_17->body = clone_block(s, sub, oc->body);
+                    __with_426_17->type_pat = clone_type(s, sub, oc->type_pat);
+                    __with_426_17->body = clone_block(s, sub, oc->body);
                 }
                 cs[j] = mc;
             }
-            __with_374_5->cases = cs;
+            __with_394_5->cases = cs;
         }
-        __with_374_5->ncases = st->ncases;
-        __with_374_5->is_typematch = st->is_typematch;
-        __with_374_5->tm_sel = st->tm_sel;
-        __with_374_5->label = st->label;
+        __with_394_5->ncases = st->ncases;
+        __with_394_5->is_typematch = st->is_typematch;
+        __with_394_5->tm_sel = st->tm_sel;
+        __with_394_5->label = st->label;
     }
     return ns;
 }
@@ -3003,18 +3019,49 @@ static void vla_hoist_add(Sema *s, Stmt *st) {
     s->vla_nhoist += 1;
 }
 
+static Expr *materialize_in(Sema *s, Expr *e) {
+    Type *t = type_of(s, e);
+    if (t == NULL) {
+        t = infer_type(s, e);
+    }
+    if (t == NULL) {
+        fatal_at(s->file, e->pos, "cannot infer the type of the 'in' receiver expression");
+    }
+    const char *name = arena_printf(s->a, "__in%d", s->in_ctr);
+    s->in_ctr += 1;
+    Stmt *hd = st_new(s->a, ST_VAR, e->pos);
+    hd->name = name;
+    hd->type = t;
+    resolve_type(s, hd->type);
+    vla_hoist_add(s, hd);
+    Type *hp = arena_alloc(s->a, sizeof(Type));
+    *hp = *t;
+    StrMap_pType_put(&s->fn_hoisted, name, hp);
+    Expr *asn = ex_new(s->a, EX_ASSIGN, e->pos);
+    asn->op = TK_ASSIGN;
+    asn->lhs = mk_ident(s->a, name, e->pos);
+    asn->rhs = e;
+    Expr *adr = ex_new(s->a, EX_UNARY, e->pos);
+    adr->op = TK_AMP;
+    adr->lhs = mk_ident(s->a, name, e->pos);
+    Expr *cma = ex_new(s->a, EX_COMMA, e->pos);
+    cma->lhs = asn;
+    cma->rhs = adr;
+    return cma;
+}
+
 static void ensure_libc_proto(Sema *s, const char *name, Type *ret) {
     if (StrMap_pFunc_has(&s->funcs, name)) {
         return;
     }
     Func *lf = arena_alloc(s->a, sizeof(Func));
     {
-        Func *__with_1391_5 = lf;
-        __with_1391_5->name = name;
-        __with_1391_5->cname = name;
-        __with_1391_5->ret = ret;
-        __with_1391_5->nparams = 0;
-        __with_1391_5->sig_empty = 1;
+        Func *__with_1444_5 = lf;
+        __with_1444_5->name = name;
+        __with_1444_5->cname = name;
+        __with_1444_5->ret = ret;
+        __with_1444_5->nparams = 0;
+        __with_1444_5->sig_empty = 1;
     }
     StrMap_pFunc_put(&s->funcs, name, lf);
 }
@@ -3672,16 +3719,16 @@ static void lower_match_strings(Sema *s, Stmt *st) {
         nc += 1;
     }
     {
-        Stmt *__with_1925_5 = st;
-        __with_1925_5->kind = ST_IF;
-        __with_1925_5->conds = conds;
-        __with_1925_5->blocks = blocks;
-        __with_1925_5->nconds = nc;
-        __with_1925_5->else_block = els;
-        __with_1925_5->subject = NULL;
-        __with_1925_5->cases = NULL;
-        __with_1925_5->ncases = 0;
-        __with_1925_5->if_sel = -1;
+        Stmt *__with_1978_5 = st;
+        __with_1978_5->kind = ST_IF;
+        __with_1978_5->conds = conds;
+        __with_1978_5->blocks = blocks;
+        __with_1978_5->nconds = nc;
+        __with_1978_5->else_block = els;
+        __with_1978_5->subject = NULL;
+        __with_1978_5->cases = NULL;
+        __with_1978_5->ncases = 0;
+        __with_1978_5->if_sel = -1;
     }
 }
 
@@ -4544,12 +4591,12 @@ static void check_expr(Sema *s, Expr *e) {
             }
             if (callee->kind == EX_IDENT && strcmp(callee->text, "is_defined") == 0 && e->nargs == 1 && e->args[0]->kind == EX_IDENT) {
                 {
-                    Expr *__with_2634_17 = e;
-                    __with_2634_17->kind = EX_NUMBER;
-                    __with_2634_17->text = (StrMap_pCVal_has(&s->constvals, e->args[0]->text) ? "1" : "0");
-                    __with_2634_17->lhs = NULL;
-                    __with_2634_17->args = NULL;
-                    __with_2634_17->nargs = 0;
+                    Expr *__with_2687_17 = e;
+                    __with_2687_17->kind = EX_NUMBER;
+                    __with_2687_17->text = (StrMap_pCVal_has(&s->constvals, e->args[0]->text) ? "1" : "0");
+                    __with_2687_17->lhs = NULL;
+                    __with_2687_17->args = NULL;
+                    __with_2687_17->nargs = 0;
                 }
                 return;
             }
@@ -4566,13 +4613,13 @@ static void check_expr(Sema *s, Expr *e) {
                 idx0->lhs = arr;
                 idx0->rhs = zero;
                 {
-                    Expr *__with_2657_17 = e;
-                    __with_2657_17->kind = EX_BINARY;
-                    __with_2657_17->op = TK_SLASH;
-                    __with_2657_17->lhs = mk_call1(s->a, "sizeof", arr, e->pos);
-                    __with_2657_17->rhs = mk_call1(s->a, "sizeof", idx0, e->pos);
-                    __with_2657_17->args = NULL;
-                    __with_2657_17->nargs = 0;
+                    Expr *__with_2710_17 = e;
+                    __with_2710_17->kind = EX_BINARY;
+                    __with_2710_17->op = TK_SLASH;
+                    __with_2710_17->lhs = mk_call1(s->a, "sizeof", arr, e->pos);
+                    __with_2710_17->rhs = mk_call1(s->a, "sizeof", idx0, e->pos);
+                    __with_2710_17->args = NULL;
+                    __with_2710_17->nargs = 0;
                 }
                 return;
             }
@@ -4615,12 +4662,12 @@ static void check_expr(Sema *s, Expr *e) {
             if (callee->kind == EX_IDENT && strcmp(callee->text, "typestr") == 0 && e->nargs == 1) {
                 const char *tn = render_type_p(s->a, type_of(s, e->args[0]));
                 {
-                    Expr *__with_2699_17 = e;
-                    __with_2699_17->kind = EX_STRING;
-                    __with_2699_17->text = arena_printf(s->a, "\"%s\"", tn);
-                    __with_2699_17->lhs = NULL;
-                    __with_2699_17->args = NULL;
-                    __with_2699_17->nargs = 0;
+                    Expr *__with_2752_17 = e;
+                    __with_2752_17->kind = EX_STRING;
+                    __with_2752_17->text = arena_printf(s->a, "\"%s\"", tn);
+                    __with_2752_17->lhs = NULL;
+                    __with_2752_17->args = NULL;
+                    __with_2752_17->nargs = 0;
                 }
                 return;
             }
@@ -4631,12 +4678,12 @@ static void check_expr(Sema *s, Expr *e) {
                 Expr *targ = e->args[0];
                 check_expr(s, targ);
                 {
-                    Expr *__with_2712_17 = e;
-                    __with_2712_17->kind = EX_CAST;
-                    __with_2712_17->cast_type = callee->cast_type;
-                    __with_2712_17->lhs = targ;
-                    __with_2712_17->args = NULL;
-                    __with_2712_17->nargs = 0;
+                    Expr *__with_2765_17 = e;
+                    __with_2765_17->kind = EX_CAST;
+                    __with_2765_17->cast_type = callee->cast_type;
+                    __with_2765_17->lhs = targ;
+                    __with_2765_17->args = NULL;
+                    __with_2765_17->nargs = 0;
                 }
                 return;
             }
@@ -4647,12 +4694,12 @@ static void check_expr(Sema *s, Expr *e) {
                 Expr *arg = e->args[0];
                 check_expr(s, arg);
                 {
-                    Expr *__with_2726_17 = e;
-                    __with_2726_17->kind = EX_CAST;
-                    __with_2726_17->cast_type = ty_name(s->a, callee->text);
-                    __with_2726_17->lhs = arg;
-                    __with_2726_17->args = NULL;
-                    __with_2726_17->nargs = 0;
+                    Expr *__with_2779_17 = e;
+                    __with_2779_17->kind = EX_CAST;
+                    __with_2779_17->cast_type = ty_name(s->a, callee->text);
+                    __with_2779_17->lhs = arg;
+                    __with_2779_17->args = NULL;
+                    __with_2779_17->nargs = 0;
                 }
                 return;
             }
@@ -4691,9 +4738,18 @@ static void check_expr(Sema *s, Expr *e) {
                             selfx->op = TK_STAR;
                             selfx->lhs = recv;
                         } else if (!self_by_val && !recv_is_ptr) {
-                            selfx = ex_new(s->a, EX_UNARY, recv->pos);
-                            selfx->op = TK_AMP;
-                            selfx->lhs = recv;
+                            if (!is_lvalue(recv) && recv->kind != EX_STRING) {
+                                if (mth->nparams > 0 && mth->params[0].byref == PK_IN) {
+                                    selfx = materialize_in(s, recv);
+                                } else {
+                                    const char *kwn = (mth->nparams > 0 && mth->params[0].byref == PK_REF ? "ref" : (mth->nparams > 0 && mth->params[0].byref == PK_OUT ? "out" : "*"));
+                                    fatal_at(s->file, recv->pos, "method '%s' takes '%s self' (it may write through it), so the receiver must be an lvalue (a variable, field, array element or *pointer)", callee->field, kwn);
+                                }
+                            } else {
+                                selfx = ex_new(s->a, EX_UNARY, recv->pos);
+                                selfx->op = TK_AMP;
+                                selfx->lhs = recv;
+                            }
                         }
                         Expr **args = NULL;
                         int n = 0;
@@ -4828,13 +4884,13 @@ static void check_expr(Sema *s, Expr *e) {
                     args2[n2] = e->lhs;
                     n2 += 1;
                     {
-                        Expr *__with_2879_21 = e;
-                        __with_2879_21->kind = EX_CALL;
-                        __with_2879_21->lhs = deref;
-                        __with_2879_21->args = args2;
-                        __with_2879_21->nargs = n2;
-                        __with_2879_21->cast_type = NULL;
-                        __with_2879_21->cast_tentative = 0;
+                        Expr *__with_2940_21 = e;
+                        __with_2940_21->kind = EX_CALL;
+                        __with_2940_21->lhs = deref;
+                        __with_2940_21->args = args2;
+                        __with_2940_21->nargs = n2;
+                        __with_2940_21->cast_type = NULL;
+                        __with_2940_21->cast_tentative = 0;
                     }
                     check_expr(s, e);
                     return;
@@ -4926,11 +4982,11 @@ static void check_expr(Sema *s, Expr *e) {
                     Expr *oin = mk_ident(s->a, e->text, e->pos);
                     oin->out_done = 1;
                     {
-                        Expr *__with_2968_21 = e;
-                        __with_2968_21->kind = EX_UNARY;
-                        __with_2968_21->op = TK_STAR;
-                        __with_2968_21->lhs = oin;
-                        __with_2968_21->text = NULL;
+                        Expr *__with_3029_21 = e;
+                        __with_3029_21->kind = EX_UNARY;
+                        __with_3029_21->op = TK_STAR;
+                        __with_3029_21->lhs = oin;
+                        __with_3029_21->text = NULL;
                     }
                     check_expr(s, e);
                     return;
@@ -5275,12 +5331,12 @@ static void check_expr(Sema *s, Expr *e) {
             }
             Expr *wid = mk_ident(s->a, e->text, e->pos);
             {
-                Expr *__with_3245_13 = e;
-                __with_3245_13->kind = EX_ASSIGN;
-                __with_3245_13->op = TK_ASSIGN;
-                __with_3245_13->rhs = e->lhs;
-                __with_3245_13->lhs = wid;
-                __with_3245_13->text = NULL;
+                Expr *__with_3306_13 = e;
+                __with_3306_13->kind = EX_ASSIGN;
+                __with_3306_13->op = TK_ASSIGN;
+                __with_3306_13->rhs = e->lhs;
+                __with_3306_13->lhs = wid;
+                __with_3306_13->text = NULL;
             }
             return;
         }
@@ -5489,6 +5545,28 @@ static void check_stmt(Sema *s, Stmt *st) {
         case ST_VAR: {
             int rex = 0;
             if (st->name != NULL && scope_find_cur(s, st->name, &rex)) {
+                int32_t fdx = sym_index(s, st->name);
+                if (fdx >= 0 && s->locals[fdx].for_iter && !st->is_extern && !st->is_static) {
+                    Type *rt = st->type;
+                    if (rt == NULL && st->init != NULL) {
+                        rt = type_of(s, st->init);
+                    }
+                    if (type_eq_p(rt, s->locals[fdx].type)) {
+                        s->locals[fdx].for_iter = 0;
+                        s->locals[fdx].pos = st->pos;
+                        if (st->init != NULL) {
+                            st->kind = ST_ASSIGN;
+                            st->lhs = mk_ident(s->a, st->name, st->pos);
+                            st->op = TK_ASSIGN;
+                            st->rhs = st->init;
+                            st->init = NULL;
+                            check_stmt(s, st);
+                        } else {
+                            st->kind = ST_PASS;
+                        }
+                        return;
+                    }
+                }
                 if (!(st->is_extern && rex)) {
                     fatal_at(s->file, st->pos, "redefinition of '%s' in the same scope", st->name);
                 }
@@ -5581,12 +5659,12 @@ static void check_stmt(Sema *s, Stmt *st) {
                     return;
                 }
                 {
-                    Stmt *__with_3470_17 = st;
-                    __with_3470_17->kind = ST_VAR;
-                    __with_3470_17->name = st->lhs->text;
-                    __with_3470_17->type = ity;
-                    __with_3470_17->init = st->rhs;
-                    __with_3470_17->is_const = 0;
+                    Stmt *__with_3552_17 = st;
+                    __with_3552_17->kind = ST_VAR;
+                    __with_3552_17->name = st->lhs->text;
+                    __with_3552_17->type = ity;
+                    __with_3552_17->init = st->rhs;
+                    __with_3552_17->is_const = 0;
                 }
                 resolve_type(s, st->type);
                 scope_add(s, st->name, st->type);
@@ -5995,7 +6073,9 @@ static void lower_for_iter(Sema *s, Stmt *st, Stmt **d1, Stmt **d2) {
         st->step = NULL;
         st->var2 = NULL;
         scope_add(s, idecl->name, idecl->type);
+        s->locals[s->nlocals - 1].for_iter = 1;
         scope_add(s, vdecl->name, vdecl->type);
+        s->locals[s->nlocals - 1].for_iter = 1;
         *d1 = idecl;
         *d2 = vdecl;
         return;
@@ -6009,6 +6089,7 @@ static void lower_for_iter(Sema *s, Stmt *st, Stmt **d1, Stmt **d2) {
     decl->name = st->var;
     decl->type = ty;
     scope_add(s, st->var, ty);
+    s->locals[s->nlocals - 1].for_iter = 1;
     *d1 = decl;
 }
 
@@ -6429,9 +6510,9 @@ static void register_module(Sema *s, Module *m, int check_bodies);
 
 static void register_decl(Sema *s, Module *m, Decl *d, int check_bodies);
 
-FILE *popen(const char *cmd, const char *mode);
+struct _IO_FILE *popen(const char *cmd, const char *mode);
 
-int32_t pclose(FILE *stream);
+int32_t pclose(struct _IO_FILE *stream);
 
 static const char *cpp_capture(Sema *s, const char *flags, const char *path, int is_sys, const char *dir) {
     const char *cpp = (s->cc->cpp != NULL ? s->cc->cpp : "cc");
@@ -6441,7 +6522,7 @@ static const char *cpp_capture(Sema *s, const char *flags, const char *path, int
     } else {
         cmd = arena_printf(s->a, "printf '#include \"%s\"\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir);
     }
-    FILE *f = popen(cmd, "r");
+    struct _IO_FILE *f = popen(cmd, "r");
     if (f == NULL) {
         fatal("could not run '%s -E' to ingest C header '%s' (see --cpp / PLANGC_CPP)", cpp, path);
     }
@@ -6663,13 +6744,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_4363_9 = d;
-            __with_4363_9->kind = DL_STRUCT;
-            __with_4363_9->name = si0->name;
-            __with_4363_9->fields = NULL;
-            __with_4363_9->nfields = 0;
-            __with_4363_9->methods = bodies0;
-            __with_4363_9->nmethods = nb;
+            Decl *__with_4448_9 = d;
+            __with_4448_9->kind = DL_STRUCT;
+            __with_4448_9->name = si0->name;
+            __with_4448_9->fields = NULL;
+            __with_4448_9->nfields = 0;
+            __with_4448_9->methods = bodies0;
+            __with_4448_9->nmethods = nb;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -6689,6 +6770,9 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         if (d->kind == DL_DECLARE && StrMap_pFunc_has(&s->funcs, fmangled)) {
             fatal_at(s->file, d->pos, "'%s' already declared (duplicate declare)", fmangled);
         }
+        if (d->inline_inst && StrMap_pFunc_has(&s->funcs, fmangled)) {
+            fatal_at(s->file, d->pos, "'%s' already instantiated in this TU", fmangled);
+        }
         if (want_body) {
             if (StrSet_has(&s->implemented, fmangled)) {
                 fatal_at(s->file, d->pos, "'%s' already implemented (duplicate implement)", fmangled);
@@ -6698,10 +6782,14 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         Func *inst = clone_func(s, &fsub, ftpl, NULL, want_body);
         inst->name = fmangled;
         inst->cname = fmangled;
+        if (d->inline_inst) {
+            inst->is_static = 1;
+            inst->is_inline = 1;
+        }
         {
-            Decl *__with_4393_9 = d;
-            __with_4393_9->kind = DL_FUNC;
-            __with_4393_9->func = inst;
+            Decl *__with_4483_9 = d;
+            __with_4483_9->kind = DL_FUNC;
+            __with_4483_9->func = inst;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -6719,6 +6807,35 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
     }
     char *mangled = mangle_instance(s, g);
     Subst sub = {tpl->tparams, g->targs, g->ntargs};
+    if (d->inline_inst) {
+        if (find_struct(s, mangled) != NULL) {
+            fatal_at(s->file, d->pos, "'%s' already instantiated in this TU", mangled);
+        }
+        StrSet_add(&s->implemented, mangled);
+        Field *iflds = arena_alloc(s->a, (size_t)tpl->nfields * sizeof(*iflds));
+        size_t ii;
+        for (ii = 0; ii < tpl->nfields; ii += 1) {
+            iflds[ii] = tpl->fields[ii];
+            iflds[ii].type = clone_type(s, &sub, tpl->fields[ii].type);
+        }
+        Func **ibodies = arena_alloc(s->a, (size_t)tpl->nmethods * sizeof(*ibodies));
+        for (ii = 0; ii < tpl->nmethods; ii += 1) {
+            ibodies[ii] = clone_func(s, &sub, tpl->methods[ii], mangled, 1);
+            ibodies[ii]->is_static = 1;
+            ibodies[ii]->is_inline = 1;
+        }
+        {
+            Decl *__with_4514_9 = d;
+            __with_4514_9->kind = DL_STRUCT;
+            __with_4514_9->name = mangled;
+            __with_4514_9->fields = iflds;
+            __with_4514_9->nfields = tpl->nfields;
+            __with_4514_9->methods = ibodies;
+            __with_4514_9->nmethods = tpl->nmethods;
+        }
+        register_decl(s, m, d, check_bodies);
+        return;
+    }
     if (d->kind == DL_DECLARE) {
         if (find_struct(s, mangled) != NULL) {
             fatal_at(s->file, d->pos, "'%s' already declared (duplicate declare)", mangled);
@@ -6733,13 +6850,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
             protos[i] = clone_func(s, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_4419_9 = d;
-            __with_4419_9->kind = DL_STRUCT;
-            __with_4419_9->name = mangled;
-            __with_4419_9->fields = fields;
-            __with_4419_9->nfields = tpl->nfields;
-            __with_4419_9->methods = protos;
-            __with_4419_9->nmethods = tpl->nmethods;
+            Decl *__with_4534_9 = d;
+            __with_4534_9->kind = DL_STRUCT;
+            __with_4534_9->name = mangled;
+            __with_4534_9->fields = fields;
+            __with_4534_9->nfields = tpl->nfields;
+            __with_4534_9->methods = protos;
+            __with_4534_9->nmethods = tpl->nmethods;
         }
         register_decl(s, m, d, check_bodies);
         return;
@@ -6756,13 +6873,13 @@ static void instantiate(Sema *s, Module *m, Decl *d, int check_bodies) {
         bodies[i] = clone_func(s, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_4438_5 = d;
-        __with_4438_5->kind = DL_STRUCT;
-        __with_4438_5->name = mangled;
-        __with_4438_5->fields = NULL;
-        __with_4438_5->nfields = 0;
-        __with_4438_5->methods = bodies;
-        __with_4438_5->nmethods = tpl->nmethods;
+        Decl *__with_4553_5 = d;
+        __with_4553_5->kind = DL_STRUCT;
+        __with_4553_5->name = mangled;
+        __with_4553_5->fields = NULL;
+        __with_4553_5->nfields = 0;
+        __with_4553_5->methods = bodies;
+        __with_4553_5->nmethods = tpl->nmethods;
     }
     register_decl(s, m, d, check_bodies);
 }
@@ -6833,7 +6950,7 @@ static void register_decl(Sema *s, Module *m, Decl *d, int check_bodies) {
                 check_expr(s, d->init);
                 check_init(s, d->type, d->init, d->pos);
             }
-            if (d->is_const && d->init != NULL) {
+            if (d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
                 int cok = 1;
                 CVal cvv = ceval_val(s, d->init, NULL, &cok);
                 if (cok && cvv.kind != CV_BAD) {
@@ -6862,6 +6979,7 @@ static void register_decl(Sema *s, Module *m, Decl *d, int check_bodies) {
                 si = arena_alloc(s->a, sizeof(SInfo));
                 si->name = d->name;
                 si->is_union = d->kind == DL_UNION;
+                si->c_tag = s->in_chdr && !d->is_td;
                 StrMap_pSInfo_put(&s->structs, d->name, si);
                 add_type(s, d->name);
             } else if (si->is_union != (d->kind == DL_UNION) && !s->in_chdr) {
@@ -6966,6 +7084,19 @@ static void register_module(Sema *s, Module *m, int check_bodies) {
     for (j = 0; j < m->ndecls; j += 1) {
         register_decl(s, m, m->decls[j], check_bodies);
     }
+    for (ti = 0; ti < m->ntd; ti += 1) {
+        if (m->tdtypes == NULL || m->tdtypes[ti] == NULL) {
+            continue;
+        }
+        Type *ut = m->tdtypes[ti];
+        if (ut->kind == TY_NAME && ut->name != NULL && ut->tag_kind != TAG_NONE) {
+            SInfo *usi = find_struct(s, ut->name);
+            if (usi != NULL && find_struct(s, m->tdnames[ti]) == NULL) {
+                StrMap_pSInfo_put(&s->structs, m->tdnames[ti], usi);
+                StrMap_pType_put(&s->tdalias, m->tdnames[ti], ut);
+            }
+        }
+    }
     s->file = prev;
 }
 
@@ -7026,13 +7157,13 @@ static void inject_defines(Sema *s, Cc *cc, Module *m) {
         }
         Decl *dc = arena_alloc(s->a, sizeof(Decl));
         {
-            Decl *__with_4685_9 = dc;
-            __with_4685_9->kind = DL_VAR;
-            __with_4685_9->pos = zp;
-            __with_4685_9->name = name;
-            __with_4685_9->is_const = 1;
-            __with_4685_9->is_static = 1;
-            __with_4685_9->init = ini;
+            Decl *__with_4818_9 = dc;
+            __with_4818_9->kind = DL_VAR;
+            __with_4818_9->pos = zp;
+            __with_4818_9->name = name;
+            __with_4818_9->is_const = 1;
+            __with_4818_9->is_static = 1;
+            __with_4818_9->init = ini;
         }
         nd[np] = dc;
         np += 1;
@@ -7134,6 +7265,7 @@ void sema_run(Cc *cc, Module *m) {
         StrSet_deinit(&s.gstatics);
         StrSet_deinit(&s.gexterns);
         StrSet_deinit(&s.enumconsts);
+        StrMap_pType_deinit(&s.tdalias);
         StrSet_deinit(&s.fn_globals);
         StrSet_deinit(&s.fn_nonlocals);
         StrMap_pType_deinit(&s.fn_hoisted);

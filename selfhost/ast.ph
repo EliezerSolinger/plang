@@ -333,10 +333,13 @@ enum DeclKind:
     DL_UNION
     DL_DECLARE    # declare Vec<int>: emits monomorphized definition
     DL_IMPLEMENT  # implement Vec<int>: emits monomorphized bodies
+                  #   (inline_inst: `inline Vec<int>` = declare+implement with
+                  #   STATIC INLINE bodies — TU-local, link-safe in many TUs)
 
 struct Decl:
     kind: DeclKind
     pos: Pos
+    inline_inst: bool   # `inline X<T>`: instantiate here with internal linkage
     # DL_IMPORT
     import_system: bool      # <h> or bare -> #include <...>
     import_path: const *char # without <> / quotes
@@ -348,6 +351,9 @@ struct Decl:
                              #   GNU empty struct): the body must be emitted
     is_anon: bool            # C11 anonymous member definition: inlined at its
                              #   field position, never emitted standalone
+    is_td: bool              # anonymous tag RENAMED to its typedef name
+                             #   (`typedef struct {...} X`): the C spelling is
+                             #   the bare `X`, never `struct X`
     # DL_VAR (global, includes const)
     name: const *char
     type: *Type
@@ -377,6 +383,9 @@ struct Module:
     tdnames: **char    # typedef NAMES seen (va_list, wchar_t, off_t...): the C
     ntd: i32           #   front end resolves them away, but P code referencing
                        #   the name must still see a KNOWN type
+    tdtypes: **Type    # o tipo SUBJACENTE de cada tdname (paralelo a tdnames):
+                       #   `regex_t` -> `struct re_pattern_buffer`, para P
+                       #   resolver LAYOUT (tamanho/alinhamento), não só o nome
     decls: **Decl
     ndecls: i32
 

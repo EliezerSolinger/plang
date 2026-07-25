@@ -1,0 +1,4 @@
+open=320x200
+wait=1 timeout=1
+lit=1
+pgfx-ok
