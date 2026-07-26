@@ -30,15 +30,23 @@ struct PgRect:
 
 # ---------- font ----------
 
-def pg_font_default(scale: i32) -> PgFont:
+def pg_font_steps() -> i32:
+    return fa_sizes()
+
+def pg_font_default_size() -> i32:
+    return 3 if fa_sizes() > 3 else fa_sizes() / 2
+
+def pg_font_default(size: i32) -> PgFont:
+    s: i32 = 0 if size < 0 else (fa_sizes() - 1 if size >= fa_sizes() else size)
     f: PgFont = {0}
     with f:
-        .pixels = fa_pixels()
-        .cell_w = fa_cell_w()
-        .cell_h = fa_cell_h()
-        .baseline = fa_baseline()
+        .pixels = fa_pixels(s)
+        .cell_w = fa_cell_w(s)
+        .cell_h = fa_cell_h(s)
+        .baseline = fa_baseline(s)
         .count = fa_count()
-        .scale = scale if scale >= 1 else 1
+        .size = s
+        .px = fa_px(s)
     return f
 
 # decodes one UTF-8 codepoint and advances the index; an invalid byte yields
@@ -70,10 +78,10 @@ def pg_utf8_step(s: const *char, ref i: usize) -> u32:
 
 struct PgFont:
     def char_w(in self: PgFont) -> i32:
-        return self.cell_w * self.scale
+        return self.cell_w
 
     def line_h(in self: PgFont) -> i32:
-        return self.cell_h * self.scale
+        return self.cell_h
 
     def text_width(in self: PgFont, s: const *char) -> i32:
         return self.text_width_n(s, strlen(s))
@@ -131,10 +139,11 @@ struct PgFb:
 
     def fill_rect(ref self: PgFb, r: PgRect, color: u32):
         c: PgRect = r.intersect(self.clip)
+        a: u32 = (color >> 24) & 0xFF
         for y in range(c.y, c.y + c.h):
             row: *u32 = self.px + usize(y) * usize(self.w)
             for x in range(c.x, c.x + c.w):
-                row[x] = color
+                row[x] = color if a == 255 else blend(row[x], color, a)
 
     def frame_rect(ref self: PgFb, r: PgRect, color: u32):
         self.fill_rect(pg_rect(r.x, r.y, r.w, 1), color)
@@ -143,32 +152,28 @@ struct PgFb:
         self.fill_rect(pg_rect(r.x + r.w - 1, r.y, 1, r.h), color)
 
     def draw_glyph(ref self: PgFb, in f: PgFont, cp: u32, x: i32, y: i32, color: u32) -> i32:
-        s: i32 = f.scale
-        adv: i32 = f.cell_w * s
+        adv: i32 = f.cell_w
         # fast reject: the whole cell is outside the clip
         if x + adv <= self.clip.x or x >= self.clip.x + self.clip.w:
             return adv
-        if y + f.cell_h * s <= self.clip.y or y >= self.clip.y + self.clip.h:
+        if y + f.cell_h <= self.clip.y or y >= self.clip.y + self.clip.h:
             return adv
         gi: i32 = fa_index(cp)   # outside the atlas ranges -> □
         cell: const *u8 = f.pixels + usize(gi) * usize(f.cell_w) * usize(f.cell_h)
         for gy in range(f.cell_h):
+            py: i32 = y + gy
+            if py < self.clip.y or py >= self.clip.y + self.clip.h:
+                continue
             arow: const *u8 = cell + usize(gy) * usize(f.cell_w)
+            row: *u32 = self.px + usize(py) * usize(self.w)
             for gx in range(f.cell_w):
                 a: u32 = u32(arow[gx])
                 if a == 0:
                     continue
-                # s×s block (integer scale, nearest neighbor)
-                for sy in range(s):
-                    py: i32 = y + gy * s + sy
-                    if py < self.clip.y or py >= self.clip.y + self.clip.h:
-                        continue
-                    row: *u32 = self.px + usize(py) * usize(self.w)
-                    for sx in range(s):
-                        px: i32 = x + gx * s + sx
-                        if px < self.clip.x or px >= self.clip.x + self.clip.w:
-                            continue
-                        row[px] = blend(row[px], color, a)
+                px: i32 = x + gx
+                if px < self.clip.x or px >= self.clip.x + self.clip.w:
+                    continue
+                row[px] = blend(row[px], color, a)
         return adv
 
     def draw_text(ref self: PgFb, in f: PgFont, s: const *char, x: i32, y: i32, color: u32) -> i32:

@@ -26,6 +26,8 @@ static const int extras[] = {
     0x2022, 0x2026,                  /* • … */
     0x2190, 0x2192,                  /* ← → */
     0x2713, 0x2717,                  /* ✓ ✗ */
+    0x25B8, 0x25BE,                  /* ▸ ▾ (fold gutter) */
+    0x25CF, 0x25C6, 0x25AA,          /* ● ◆ ▪ (breakpoint/bookmark marks) */
 };
 #define NA (A1 - A0 + 1)
 #define NB (B1 - B0 + 1)
@@ -70,86 +72,117 @@ static void synth_box(unsigned char *cell, int cw, int ch, int baseline) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 5) {
-        fprintf(stderr, "uso: mkatlas <fonte.ttf> <px> <saida.p> <saida.ph>\n");
+    if (argc < 4) {
+        fprintf(stderr, "uso: mkatlas <fonte.ttf> <saida.p> <saida.ph> [px...]\n");
         return 1;
     }
     long ttf_len;
     unsigned char *ttf = read_file(argv[1], &ttf_len);
     if (!ttf) { fprintf(stderr, "mkatlas: nao li %s\n", argv[1]); return 1; }
-    int px = atoi(argv[2]);
+
+    /* The sizes the editor can zoom through. Real rasterizations, roughly a
+     * 1.2x step apart: doubling a 16px bitmap (what integer scaling does) is
+     * a jump nobody can work with. */
+    static const int default_px[] = {11, 13, 15, 17, 20, 24, 29};
+    int px[32], nsizes = 0;
+    if (argc > 4) {
+        for (int i = 4; i < argc && nsizes < 32; i++) px[nsizes++] = atoi(argv[i]);
+    } else {
+        nsizes = (int)(sizeof(default_px) / sizeof(default_px[0]));
+        for (int i = 0; i < nsizes; i++) px[i] = default_px[i];
+    }
 
     stbtt_fontinfo fi;
     if (!stbtt_InitFont(&fi, ttf, stbtt_GetFontOffsetForIndex(ttf, 0))) {
         fprintf(stderr, "mkatlas: fonte invalida\n");
         return 1;
     }
-    float scale = stbtt_ScaleForPixelHeight(&fi, (float)px);
     int ascent, descent, linegap;
     stbtt_GetFontVMetrics(&fi, &ascent, &descent, &linegap);
     int adv_m, lsb_m;
     stbtt_GetCodepointHMetrics(&fi, 'M', &adv_m, &lsb_m);
 
-    int cell_w = (int)ceilf(adv_m * scale);
-    int baseline = (int)roundf(ascent * scale);
-    int cell_h = (int)ceilf((ascent - descent + linegap) * scale);
-
-    unsigned char *pixels = calloc((size_t)NGLYPHS * cell_w * cell_h, 1);
-
-    for (int i = 0; i < NGLYPHS; i++) {
-        int cp = cp_of_index(i);
-        unsigned char *cell = pixels + (size_t)i * cell_w * cell_h;
-        int gi = stbtt_FindGlyphIndex(&fi, cp);
-        if (gi == 0) {
-            if (cp == BOX_CP) synth_box(cell, cell_w, cell_h, baseline);
-            continue;
-        }
-        int x0, y0, x1, y1;
-        stbtt_GetGlyphBitmapBox(&fi, gi, scale, scale, &x0, &y0, &x1, &y1);
-        int gw = x1 - x0, gh = y1 - y0;
-        if (gw <= 0 || gh <= 0) continue;
-        unsigned char *tmp = malloc((size_t)gw * gh);
-        stbtt_MakeGlyphBitmap(&fi, tmp, gw, gh, gw, scale, scale, gi);
-        int dx0 = x0, dy0 = baseline + y0;
-        for (int y = 0; y < gh; y++) {
-            int dy = dy0 + y;
-            if (dy < 0 || dy >= cell_h) continue;
-            for (int x = 0; x < gw; x++) {
-                int dx = dx0 + x;
-                if (dx < 0 || dx >= cell_w) continue;
-                cell[dy * cell_w + dx] = tmp[y * gw + x];
+    int cw[32], chh[32], base[32];
+    size_t off[32], total = 0;
+    unsigned char *grids[32];
+    for (int s = 0; s < nsizes; s++) {
+        float scale = stbtt_ScaleForPixelHeight(&fi, (float)px[s]);
+        cw[s] = (int)ceilf(adv_m * scale);
+        base[s] = (int)roundf(ascent * scale);
+        chh[s] = (int)ceilf((ascent - descent + linegap) * scale);
+        size_t gsz = (size_t)NGLYPHS * cw[s] * chh[s];
+        grids[s] = calloc(gsz, 1);
+        off[s] = total;
+        total += gsz;
+        for (int i = 0; i < NGLYPHS; i++) {
+            int cp = cp_of_index(i);
+            unsigned char *cell = grids[s] + (size_t)i * cw[s] * chh[s];
+            int gi = stbtt_FindGlyphIndex(&fi, cp);
+            if (gi == 0) {
+                if (cp == BOX_CP) synth_box(cell, cw[s], chh[s], base[s]);
+                continue;
             }
+            int x0, y0, x1, y1;
+            stbtt_GetGlyphBitmapBox(&fi, gi, scale, scale, &x0, &y0, &x1, &y1);
+            int gw = x1 - x0, gh = y1 - y0;
+            if (gw <= 0 || gh <= 0) continue;
+            unsigned char *tmp = malloc((size_t)gw * gh);
+            stbtt_MakeGlyphBitmap(&fi, tmp, gw, gh, gw, scale, scale, gi);
+            for (int y = 0; y < gh; y++) {
+                int dy = base[s] + y0 + y;
+                if (dy < 0 || dy >= chh[s]) continue;
+                for (int x = 0; x < gw; x++) {
+                    int dx = x0 + x;
+                    if (dx < 0 || dx >= cw[s]) continue;
+                    cell[dy * cw[s] + dx] = tmp[y * gw + x];
+                }
+            }
+            free(tmp);
         }
-        free(tmp);
     }
 
     /* ---- emite o .p ---- */
-    FILE *o = fopen(argv[3], "w");
-    if (!o) { fprintf(stderr, "mkatlas: nao escrevi %s\n", argv[3]); return 1; }
-    size_t total = (size_t)NGLYPHS * cell_w * cell_h;
+    FILE *o = fopen(argv[2], "w");
+    if (!o) { fprintf(stderr, "mkatlas: nao escrevi %s\n", argv[2]); return 1; }
     fprintf(o,
-        "# font_atlas.p — GERADO por pstudio/tools/mkatlas.c (JetBrains Mono, OFL)\n"
-        "# (licenca OFL). NAO EDITAR A MAO; regenerar com:\n"
-        "#   cc pstudio/tools/mkatlas.c -o mkatlas -lm && ./mkatlas <ttf> %d \\\n"
-        "#      pstudio/font_atlas.p pstudio/font_atlas.ph\n"
-        "# Grid mono: %d glifos (ASCII %d..%d, Latin-1 %d..%d, %d extras de\n"
-        "# pontuacao e U+25A1 no indice %d), celula %dx%d alpha 8-bit; o\n"
-        "# glifo i comeca no byte i*%d.\n"
+        "# font_atlas.p — GENERATED by pstudio/tools/mkatlas.c (JetBrains Mono,\n"
+        "# OFL). DO NOT EDIT; regenerate with:\n"
+        "#   cc pstudio/tools/mkatlas.c -o mkatlas -lm && ./mkatlas <ttf> \\\n"
+        "#      pstudio/font_atlas.p pstudio/font_atlas.ph [px...]\n"
+        "# %d mono grids (one per zoom step, each a REAL rasterization), %d\n"
+        "# glyphs each: ASCII %d..%d, Latin-1 %d..%d, %d punctuation extras and\n"
+        "# U+25A1 last. Inside a grid, glyph i starts at i*cell_w*cell_h.\n"
         "import \"font_atlas.ph\"\n\n",
-        px, NGLYPHS, A0, A1, B0, B1, NEX, NGLYPHS - 1,
-        cell_w, cell_h, cell_w * cell_h);
+        nsizes, NGLYPHS, A0, A1, B0, B1, NEX);
     fprintf(o, "fa_data: const u8[%zu] = {", total);
-    for (size_t i = 0; i < total; i++) {
-        if (i % 24 == 0) fprintf(o, "\n    ");
-        fprintf(o, "%d,", pixels[i]);
+    size_t written = 0;
+    for (int s = 0; s < nsizes; s++) {
+        size_t gsz = (size_t)NGLYPHS * cw[s] * chh[s];
+        for (size_t i = 0; i < gsz; i++, written++) {
+            if (written % 24 == 0) fprintf(o, "\n    ");
+            fprintf(o, "%d,", grids[s][i]);
+        }
     }
     fprintf(o, "\n}\n\n");
-    fprintf(o, "def fa_cell_w() -> i32:\n    return %d\n\n", cell_w);
-    fprintf(o, "def fa_cell_h() -> i32:\n    return %d\n\n", cell_h);
-    fprintf(o, "def fa_baseline() -> i32:\n    return %d\n\n", baseline);
+    fprintf(o, "fa_cw: const i32[%d] = {", nsizes);
+    for (int s = 0; s < nsizes; s++) fprintf(o, "%s%d", s ? ", " : "", cw[s]);
+    fprintf(o, "}\nfa_ch: const i32[%d] = {", nsizes);
+    for (int s = 0; s < nsizes; s++) fprintf(o, "%s%d", s ? ", " : "", chh[s]);
+    fprintf(o, "}\nfa_bl: const i32[%d] = {", nsizes);
+    for (int s = 0; s < nsizes; s++) fprintf(o, "%s%d", s ? ", " : "", base[s]);
+    fprintf(o, "}\nfa_off: const usize[%d] = {", nsizes);
+    for (int s = 0; s < nsizes; s++) fprintf(o, "%s%zu", s ? ", " : "", off[s]);
+    fprintf(o, "}\nfa_px_tbl: const i32[%d] = {", nsizes);
+    for (int s = 0; s < nsizes; s++) fprintf(o, "%s%d", s ? ", " : "", px[s]);
+    fprintf(o, "}\n\n");
+    fprintf(o, "def fa_sizes() -> i32:\n    return %d\n\n", nsizes);
+    fprintf(o, "def fa_cell_w(size: i32) -> i32:\n    return fa_cw[size]\n\n");
+    fprintf(o, "def fa_cell_h(size: i32) -> i32:\n    return fa_ch[size]\n\n");
+    fprintf(o, "def fa_baseline(size: i32) -> i32:\n    return fa_bl[size]\n\n");
+    fprintf(o, "def fa_px(size: i32) -> i32:\n    return fa_px_tbl[size]\n\n");
     fprintf(o, "def fa_count() -> i32:\n    return %d\n\n", NGLYPHS);
     fprintf(o,
-        "# codepoint -> indice no grid; fora das faixas devolve o glifo box\n"
+        "# codepoint -> index inside a grid; outside the ranges it is the box\n"
         "def fa_index(cp: u32) -> i32:\n"
         "    if cp >= %d and cp <= %d:\n"
         "        return i32(cp) - %d\n"
@@ -159,28 +192,34 @@ int main(int argc, char **argv) {
     for (int e = 0; e < NEX; e++)
         fprintf(o, "    if cp == %d:\n        return %d\n", extras[e], NA + NB + e);
     fprintf(o, "    return %d\n\n", NGLYPHS - 1);
-    fprintf(o, "def fa_pixels() -> const *u8:\n    return fa_data\n");
+    fprintf(o, "def fa_pixels(size: i32) -> const *u8:\n    return fa_data + fa_off[size]\n");
     fclose(o);
 
     /* ---- emite o .ph ---- */
-    FILE *h = fopen(argv[4], "w");
-    if (!h) { fprintf(stderr, "mkatlas: nao escrevi %s\n", argv[4]); return 1; }
+    FILE *h = fopen(argv[3], "w");
+    if (!h) { fprintf(stderr, "mkatlas: nao escrevi %s\n", argv[3]); return 1; }
     fprintf(h,
-        "# font_atlas.ph — GERADO por pstudio/tools/mkatlas.c (ver font_atlas.p).\n"
-        "# Atlas mono %dpx: celula %dx%d, baseline %d, glifos ASCII %d..%d,\n"
-        "# Latin-1 %d..%d (acentos), pontuacao tipografica e U+25A1 no fim.\n"
-        "# fa_pixels() e um grid de alpha 8-bit: o glifo i ocupa os bytes\n"
-        "# [i*cw*ch, (i+1)*cw*ch); use fa_index(cp) para achar o i.\n\n"
-        "def fa_cell_w() -> i32\n"
-        "def fa_cell_h() -> i32\n"
-        "def fa_baseline() -> i32\n"
+        "# font_atlas.ph — GENERATED by pstudio/tools/mkatlas.c (see font_atlas.p).\n"
+        "# %d mono grids, one per zoom step: every step is a REAL rasterization\n"
+        "# of the font, not a pixel-doubled bitmap. Sizes (px):",
+        nsizes);
+    for (int s = 0; s < nsizes; s++) fprintf(h, " %d", px[s]);
+    fprintf(h,
+        ".\n# Glyphs: ASCII %d..%d, Latin-1 %d..%d (accents), typographic\n"
+        "# punctuation and U+25A1 last; fa_index(cp) gives the index and\n"
+        "# fa_pixels(size) the grid (8-bit alpha, glyph i at i*cw*ch).\n\n"
+        "def fa_sizes() -> i32                     # how many zoom steps exist\n"
+        "def fa_cell_w(size: i32) -> i32\n"
+        "def fa_cell_h(size: i32) -> i32\n"
+        "def fa_baseline(size: i32) -> i32\n"
+        "def fa_px(size: i32) -> i32               # nominal pixel height\n"
         "def fa_count() -> i32\n"
         "def fa_index(cp: u32) -> i32\n"
-        "def fa_pixels() -> const *u8\n",
-        px, cell_w, cell_h, baseline, A0, A1, B0, B1);
+        "def fa_pixels(size: i32) -> const *u8\n",
+        A0, A1, B0, B1);
     fclose(h);
 
-    fprintf(stderr, "mkatlas: %d glifos, celula %dx%d, baseline %d, %zu bytes\n",
-            NGLYPHS, cell_w, cell_h, baseline, total);
+    fprintf(stderr, "mkatlas: %d tamanhos, %d glifos, %zu bytes\n",
+            nsizes, NGLYPHS, total);
     return 0;
 }

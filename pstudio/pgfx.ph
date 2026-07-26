@@ -39,6 +39,9 @@ PGK_PAGEUP: const i32 = 1073741899
 PGK_PAGEDOWN: const i32 = 1073741902
 PGK_END: const i32 = 1073741901
 PGK_HOME: const i32 = 1073741898
+PGK_F1: const i32 = 1073741882
+PGK_F2: const i32 = 1073741883
+PGK_F3: const i32 = 1073741884
 
 struct PgEvent:
     kind: PgEventKind

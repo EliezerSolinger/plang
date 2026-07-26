@@ -313,8 +313,9 @@ suite_pstudio() {
             pgfx_raster) deps="pstudio/pgfx_raster pstudio/font_atlas" ;;
             pgfx_*)      deps="pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas" ;;
             pui_*)       deps="pstudio/pui pstudio/pgfx_raster pstudio/font_atlas" ;;
+            core_complete) deps="pstudio/complete pstudio/core pstudio/psys selfhost/lexer selfhost/utf8 selfhost/util" ;;
             core_*)      deps="pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
-            app_*)       deps="pstudio/app pstudio/codeview pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
+            app_*)       deps="pstudio/app pstudio/codeview pstudio/complete pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
         esac
         if [ $sdl = 0 ] && case " $deps " in *" pgfx "*) true;; *) false;; esac; then
             echo "  skip $name (sem SDL2)"; continue

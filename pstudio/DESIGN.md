@@ -133,6 +133,57 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
   por ora. O gutter do CodeView nasce PLUGÁVEL (números de linha já usam a
   API), então erros/breakpoints plugam depois sem refactor.
 
+### Edição de código (reaproveitando a matemática do CodeEdit da Godot)
+- **Code folding por INDENTAÇÃO** (a regra do `can_fold_line`/`_fold_line`
+  deles, que em P é a história inteira: sem `#region` e sem string/comentário
+  multilinha). O custo real não é dobrar, é o **mapeamento linha↔tela**: com
+  linhas escondidas, uma fileira da tela não é uma linha do buffer. Ele vive no
+  `Buffer` (`visible_count`/`next_visible`/`to_visible`/`from_visible`) e o
+  CodeView passa por ele nos SEIS lugares que convertem coordenada
+  (desenho, `pos_from_xy`, `scroll_to_caret`, barras, `set_top`, largura
+  máxima). Word wrap, quando vier, usa a mesma máquina.
+  - invariante: `folded` ⇒ o bloco abaixo é exatamente o `hidden`. Qualquer
+    edição crua que toque um cabeçalho **libera** o fold (`unfold_range` nos
+    `raw_insert`/`raw_delete`), e um caret dentro do bloco é puxado para o
+    cabeçalho ao dobrar.
+  - fold aninhado **continua dobrado** ao abrir o externo (a Godot desfaz os
+    dois e deixa o `folded` inconsistente).
+  - gutter `▾`/`▸` **clicável** (o `Gutter` ganhou `click`, como os gutters da
+    Godot); `…` marca o bloco recolhido; `ctrl+[`/`ctrl+]`, `ctrl+shift+[`/`]`
+    e os comandos Fold/Unfold/Fold All/Unfold All na palette.
+- **Comandos de linha** (mover, duplicar, apagar, juntar) e **toggle comentário**
+  no `Buffer`, multi-caret e num único grupo de undo: cada caret gera um bloco
+  de linhas, blocos que se tocam são fundidos, e o processamento é de baixo
+  para cima. O comentário entra na MENOR indentação do bloco (marcadores
+  alinhados) e sai quando todas as linhas já estão comentadas.
+- **Guias de indentação**: régua de 1px em cada parada de tab dentro do recuo;
+  linha em branco herda o recuo do vizinho menos profundo (a Godot não tem
+  isso, e numa linguagem indentada ajuda mais que em C).
+- **Auto-pares** `()[]{}""''`: abre o par, digitar o fechamento pula por cima,
+  backspace entre um par vazio apaga os dois, seleção é envolvida. Uma quote
+  logo depois de letra/dígito é apóstrofo, não par.
+
+### Minimap, marcas e autocomplete
+- **Minimap** desenhado a partir do HIGHLIGHT (não dos glifos), como a Godot:
+  cada linha vira faixas de 2px coloridas por classe; janela translúcida marca
+  o viewport; clique/arraste salta. Isso pediu **alpha no `fill_rect`** do
+  rasterizador (cor com alpha < 255 agora mistura) — antes só o texto tinha.
+- **Marcas por linha** (`BufLine.mark`, bitmask): ● breakpoint (clique no
+  gutter) e ◆ bookmark (ctrl+F2, F2/shift+F2 navega). Viajam com a linha nas
+  edições e são o **segundo e terceiro clientes** do gutter plugável — a
+  abstração deixou de ser promessa.
+- **Autocomplete** (`complete.ph/.p`) alimentado pelo **lexer do compilador em
+  modo tolerante**: funciona em buffer meio digitado e nunca sugere de dentro
+  de string/comentário. Do fluxo de tokens ele recupera `def`, `struct` + seus
+  membros, `x: T` (inclusive **parâmetros**) e os `import`s — indexando também
+  os `.ph` importados. `x.`/`x->` lista os membros do tipo de `x`; **`self.`
+  resolve pelo struct que contém o caret** (por indentação), não por adivinhação.
+  Popup ancorado no caret (vira para cima quando não cabe), ctrl+espaço abre,
+  setas navegam, enter/tab aceita.
+  - o que NÃO é: um type checker. Tipagem de expressão completa precisa de
+    parser tolerante + sema sobre o buffer; quando existir, entra atrás da
+    mesma API de query.
+
 ### Comportamento de texto
 - **TAB = 4 espaços** (soft tabs; backspace inteligente no início da linha);
   `\t` existente renderiza com largura 4.
@@ -144,8 +195,10 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
 - **Clipboard multi-caret estilo Sublime**: copiar N seleções guarda N
   pedaços; colar com N carets distribui 1:1; para o clipboard do sistema
   (SDL) vai unido por \n.
-- Defaults menores: caret de barra piscando ~500ms; atlas 16px como tamanho
-  inicial; zoom por escala inteira (1x/2x/3x).
+- Defaults menores: caret de barra piscando ~500ms; **zoom = 7 tamanhos REAIS
+  no atlas** (11/13/15/17/20/24/29px, começando em 17px). Escala inteira de
+  bitmap foi descartada: 1x→2x dobra tudo de uma vez e fica inusável — cada
+  passo agora é uma rasterização de verdade da fonte.
 
 ## Verificação
 - `make verify` ganha: **compilação gating do pstudio** (maior consumidor de

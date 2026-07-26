@@ -48,85 +48,85 @@ void Vec_Token_deinit(Vec_Token *self);
 
 
 void Vec_Token_init(Vec_Token *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_Token_reserve(Vec_Token *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(Token) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(Token) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_Token_push(Vec_Token *self, Token item) {
-    Vec_Token_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_Token_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 Token Vec_Token_pop(Vec_Token *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 Token Vec_Token_get(const Vec_Token *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_Token_set(Vec_Token *self, int32_t i, Token item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 Token Vec_Token_last(const Vec_Token *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_Token_is_empty(const Vec_Token *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_Token_insert_gap(Vec_Token *self, int32_t i, int32_t n) {
-    Vec_Token_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(Token) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_Token_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(Token) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_Token_insert_at(Vec_Token *self, int32_t i, Token item) {
-    Vec_Token_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_Token_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_Token_remove_range(Vec_Token *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(Token) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(Token) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_Token_remove_at(Vec_Token *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(Token) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(Token) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_Token_swap_remove(Vec_Token *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_Token_clear(Vec_Token *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_Token_deinit(Vec_Token *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 typedef enum { MAX_INDENT = 64 } LxLimit;
@@ -437,7 +437,7 @@ static Pos Lx_here(Lx *self) {
 static const char *Lx_slice(Lx *self, size_t start, size_t end) {
     size_t b0 = self->off[start];
     size_t b1 = (end < self->n ? self->off[end] : self->nbytes);
-    return arena_strndup(self->a, self->bytes + b0, b1 - b0);
+    return Arena_strndup(self->a, self->bytes + b0, b1 - b0);
 }
 
 static void Lx_push_tok(Lx *self, TokKind k, Pos pos, const char *text) {
@@ -811,7 +811,7 @@ TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, i
         if (!tolerant) {
             fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off);
         }
-        char *fixed = arena_alloc(a, nbytes + 1);
+        char *fixed = Arena_alloc(a, nbytes + 1);
         memcpy(fixed, bytes, nbytes);
         fixed[nbytes] = '\0';
         while (utf8_decode(fixed, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0) {

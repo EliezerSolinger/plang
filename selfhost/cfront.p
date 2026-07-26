@@ -84,7 +84,7 @@ struct Cx:
         self->toks.push(t)
 
     static def slice(self: *Cx, start: usize) -> const *char:
-        return arena_strndup(self->a, self->s + start, self->i - start)
+        return self->a->strndup(self->s + start, self->i - start)
 
     static def tokenize(self: *Cx):
         while self->i < self->n:
@@ -413,9 +413,9 @@ static def is_c_keyword(w: const *char) -> bool:
         return False
     match w[0]:
         case 'a':
-            return strcmp(w, "auto") == 0
+            return w == "auto"
         case 'b':
-            return strcmp(w, "break") == 0
+            return w == "break"
         case 'c':
             return w in {"case", "char", "const", "continue"}
         case 'd':
@@ -425,25 +425,25 @@ static def is_c_keyword(w: const *char) -> bool:
         case 'f':
             return w in {"float", "for"}
         case 'g':
-            return strcmp(w, "goto") == 0
+            return w == "goto"
         case 'i':
             return w in {"if", "int", "inline"}
         case 'l':
-            return strcmp(w, "long") == 0
+            return w == "long"
         case 'r':
             return w in {"register", "restrict", "return"}
         case 's':
             return w in {"short", "signed", "sizeof", "static", "struct", "switch"}
         case 't':
-            return strcmp(w, "typedef") == 0
+            return w == "typedef"
         case 'u':
             return w in {"union", "unsigned"}
         case 'v':
             return w in {"void", "volatile"}
         case 'w':
-            return strcmp(w, "while") == 0
+            return w == "while"
         case '_':
-            return strcmp(w, "_Bool") == 0
+            return w == "_Bool"
         case _:
             return False
 
@@ -567,11 +567,11 @@ struct Cp:
                 if self->is_punct("("):
                     self->skip_parens()
             elif w in {"const", "volatile", "__volatile__", "restrict", "__restrict", "__restrict__", "__extension__", "static", "extern", "register", "auto", "inline", "__inline", "__inline__", "_Noreturn", "__thread", "_Thread_local"}:
-                if strcmp(w, "const") == 0:
+                if w == "const":
                     self->saw_const = True   # for parse_base_type to mark the type
-                elif strcmp(w, "static") == 0:
+                elif w == "static":
                     self->spec_static = True   # storage class (any position)
-                elif strcmp(w, "extern") == 0:
+                elif w == "extern":
                     self->spec_extern = True
                 self->adv()
             else:
@@ -621,7 +621,7 @@ struct Cp:
             fatal_at(self->file, self->pk()->pos, "conflicting storage classes ('static' and 'extern')")
         # struct / union / enum
         if w in {"struct", "union"}:
-            is_union: bool = strcmp(w, "union") == 0
+            is_union: bool = w == "union"
             self->adv()
             if self->strict and self->pk()->kind == CT_ID and self->is_storage_kw(self->pk()->text):
                 fatal_at(self->file, self->pk()->pos, "misplaced storage class '%s' (must precede the type)", self->pk()->text)
@@ -634,7 +634,7 @@ struct Cp:
             if self->is_punct("{"):
                 if tag == None:
                     # anonymous: unique name, no lookup ever reaches it
-                    tag = arena_printf(self->a, "__anon%d", self->anon)
+                    tag = self->a->printf("__anon%d", self->anon)
                     self->anon += 1
                     self->used_cnames.add(tag)
                 else:
@@ -677,7 +677,7 @@ struct Cp:
                 if fresh:
                     # emit ONE forward decl so the C backend's upfront typedef
                     # pass covers the (possibly renamed) name
-                    fd: *Decl = arena_alloc(self->a, sizeof(Decl))
+                    fd: *Decl = self->a->alloc(sizeof(Decl))
                     fd->kind = DL_UNION if is_union else DL_STRUCT
                     fd->name = tag
                     fd->is_fwd = True
@@ -690,7 +690,7 @@ struct Cp:
             tt: *Type = self->base_name(tag)
             tt->tag_kind = TAG_UNION if is_union else TAG_STRUCT
             return tt
-        if strcmp(w, "enum") == 0:
+        if w == "enum":
             self->adv()
             self->skip_gnu()
             tag2: const *char = None
@@ -721,7 +721,7 @@ struct Cp:
                         self->spec_extern = True
                     self->adv()
                 else:
-                    name = arena_printf(self->a, "%s %s", name, self->adv()->text)
+                    name = self->a->printf("%s %s", name, self->adv()->text)
             self->check_arith_specs(name, spos)
             return self->base_name(self->canon_arith(name))
         # typedef name: resolves to the underlying type (the backend doesn't change;
@@ -729,8 +729,8 @@ struct Cp:
         if self->types.has(w):
             self->adv()
             # builtin float seguido de _Complex: `_Float16 _Complex`
-            if self->pk()->kind == CT_ID and self->pk()->text != None and (strcmp(self->pk()->text, "_Complex") == 0 or strcmp(self->pk()->text, "_Imaginary") == 0):
-                cw: const *char = arena_printf(self->a, "%s %s", w, self->adv()->text)
+            if self->pk()->kind == CT_ID and self->pk()->text != None and (self->pk()->text == "_Complex" or self->pk()->text == "_Imaginary"):
+                cw: const *char = self->a->printf("%s %s", w, self->adv()->text)
                 return self->base_name(cw)
             u: *Type = self->typedefs.get_or(w, None)
             if u != None:
@@ -755,7 +755,7 @@ struct Cp:
     static def tag_push(self: *Cp, name: const *char, is_union: bool, defined: bool) -> i32:
         cn: const *char = name
         if self->used_cnames.has(cn):
-            cn = arena_printf(self->a, "%s__s%d", name, self->anon)
+            cn = self->a->printf("%s__s%d", name, self->anon)
             self->anon += 1
         self->used_cnames.add(cn)
         ct: CTag = {name, cn, is_union, defined, self->tag_depth}
@@ -842,8 +842,8 @@ struct Cp:
         t: *Type = base
         # qualificador PÓS-base: `void const *p` == `const void *p` (C permite
         # qualifiers em qualquer ordem entre as palavras do tipo)
-        if self->pk()->kind == CT_ID and (strcmp(self->pk()->text, "const") == 0 or strcmp(self->pk()->text, "volatile") == 0):
-            if strcmp(self->pk()->text, "const") == 0:
+        if self->pk()->kind == CT_ID and (self->pk()->text == "const" or self->pk()->text == "volatile"):
+            if self->pk()->text == "const":
                 t->is_const = True
             self->adv()
             self->skip_gnu()
@@ -864,26 +864,26 @@ struct Cp:
     static def is_fnptr_ahead(self: *Cp) -> bool:
         if not self->is_punct("("):
             return False
-        if strcmp(self->pk1()->text, "*") == 0:
+        if self->pk1()->text == "*":
             return True
         # GNU noise before the star: ( __attribute__((...)) * ). Scan past the
         # attribute's parenthesized group and require the '*' — a lookahead
         # that does not consume (the declarator parser skip_gnu()s for real).
-        if self->pk1()->kind == CT_ID and strcmp(self->pk1()->text, "__attribute__") == 0:
+        if self->pk1()->kind == CT_ID and self->pk1()->text == "__attribute__":
             k: usize = self->i + 2      # token after '(' '__attribute__'
-            if k >= self->nt or self->t[k].kind != CT_PUNCT or strcmp(self->t[k].text, "(") != 0:
+            if k >= self->nt or self->t[k].kind != CT_PUNCT or self->t[k].text != "(":
                 return False
             depth = 0
             while k < self->nt:
-                if self->t[k].kind == CT_PUNCT and strcmp(self->t[k].text, "(") == 0:
+                if self->t[k].kind == CT_PUNCT and self->t[k].text == "(":
                     depth += 1
-                elif self->t[k].kind == CT_PUNCT and strcmp(self->t[k].text, ")") == 0:
+                elif self->t[k].kind == CT_PUNCT and self->t[k].text == ")":
                     depth -= 1
                     if depth == 0:
                         k += 1
                         break
                 k += 1
-            return k < self->nt and self->t[k].kind == CT_PUNCT and strcmp(self->t[k].text, "*") == 0
+            return k < self->nt and self->t[k].kind == CT_PUNCT and self->t[k].text == "*"
         return False
 
     # pointer-to-function declarator starting from '(' — compat: delegates to
@@ -995,7 +995,7 @@ struct Cp:
                 dv: i64 = self->ceval(ref dok)
                 if dok and self->is_punct("]"):
                     dd = ex_new(self->a, EX_NUMBER, self->pk()->pos)
-                    dd->text = arena_printf(self->a, "%lld", dv)
+                    dd->text = self->a->printf("%lld", dv)
                 else:
                     self->i = dsave
                     self->skip_to("]", "]")
@@ -1018,7 +1018,7 @@ struct Cp:
         varargs = False
         if self->is_punct(")"):
             return
-        if self->is_kw("void") and strcmp(self->pk1()->text, ")") == 0:
+        if self->is_kw("void") and self->pk1()->text == ")":
             self->adv()
             return
         do:
@@ -1056,18 +1056,18 @@ struct Cp:
             while self->eat("["):
                 # C99 qualifiers inside a parameter's brackets: int x[const 5],
                 # int x[static 5], int x[restrict] — not part of the size expr
-                while self->pk()->kind == CT_ID and (strcmp(self->pk()->text, "const") == 0 or strcmp(self->pk()->text, "static") == 0 or strcmp(self->pk()->text, "restrict") == 0 or strcmp(self->pk()->text, "__restrict") == 0 or strcmp(self->pk()->text, "volatile") == 0):
+                while self->pk()->kind == CT_ID and (self->pk()->text == "const" or self->pk()->text == "static" or self->pk()->text == "restrict" or self->pk()->text == "__restrict" or self->pk()->text == "volatile"):
                     self->adv()
                 de: *Expr = None
                 # `[*]` — unspecified VLA size in a prototype: no dimension
-                if self->is_punct("*") and strcmp(self->pk1()->text, "]") == 0:
+                if self->is_punct("*") and self->pk1()->text == "]":
                     self->adv()
                 elif not self->is_punct("]"):
                     de = c_expr(self)
                 self->expect_punct("]")
                 dims.push(de)
             if dims.len > 0:
-                if self->strict and pty != None and pty->kind == TY_NAME and pty->name != None and strcmp(pty->name, "void") == 0:
+                if self->strict and pty != None and pty->kind == TY_NAME and pty->name != None and pty->name == "void":
                     fatal_at(self->file, self->pk()->pos, "parameter declares an array of voids")
                 # build the inner array type from the innermost dimension up,
                 # skipping the first (it becomes the pointer)
@@ -1129,7 +1129,7 @@ struct Cp:
                             fv: i64 = self->ceval(ref fok)
                             if fok and self->is_punct("]"):
                                 fd = ex_new(self->a, EX_NUMBER, self->pk()->pos)
-                                fd->text = arena_printf(self->a, "%lld", fv)
+                                fd->text = self->a->printf("%lld", fv)
                             else:
                                 self->i = fdsave
                                 bad_dim = True   # non-constant dim: ptr fallback
@@ -1155,7 +1155,7 @@ struct Cp:
                     else:
                         self->skip_to(",", ";")
                 if fname[0] != '\0':
-                    if self->strict and fty != None and fty->kind == TY_NAME and fty->name != None and strcmp(fty->name, "void") == 0:
+                    if self->strict and fty != None and fty->kind == TY_NAME and fty->name != None and fty->name == "void":
                         fatal_at(self->file, self->pk()->pos, "member '%s' has incomplete type 'void'", fname)
                     if self->strict:
                         for dmi in range(fields.len):
@@ -1199,7 +1199,7 @@ struct Cp:
         if self->strict and fields.len == 0:
             cdiag_at(self->file, self->pk()->pos, "gnu-empty-struct", wd_pedantic(), "empty struct is a GNU extension")
         self->expect_punct("}")
-        d: *Decl = arena_alloc(self->a, sizeof(Decl))
+        d: *Decl = self->a->alloc(sizeof(Decl))
         with d:
             .kind = DL_UNION if is_union else DL_STRUCT
             .name = tag
@@ -1252,7 +1252,7 @@ struct Cp:
             self->adv()
             return i64(cchar_val(t->text))
         # sizeof(type) / sizeof expr in const-expr (e.g.: enum NBit = 8*sizeof(x))
-        if t->kind == CT_ID and strcmp(t->text, "sizeof") == 0:
+        if t->kind == CT_ID and t->text == "sizeof":
             self->adv()
             # sizeof ( TYPE ): the token after '(' starts a type
             if self->is_punct("(") and self->pk1()->kind == CT_ID and self->tok_is_type(self->pk1()->text):
@@ -1336,15 +1336,15 @@ struct Cp:
             return 7
         if p in {"==", "!="}:
             return 6
-        if strcmp(p, "&") == 0:
+        if p == "&":
             return 5
-        if strcmp(p, "^") == 0:
+        if p == "^":
             return 4
-        if strcmp(p, "|") == 0:
+        if p == "|":
             return 3
-        if strcmp(p, "&&") == 0:
+        if p == "&&":
             return 2
-        if strcmp(p, "||") == 0:
+        if p == "||":
             return 1
         return -1
 
@@ -1356,41 +1356,41 @@ struct Cp:
                 break
             op: const *char = self->adv()->text
             rhs: i64 = self->ceval_bin(prec + 1, ref ok)
-            if strcmp(op, "*") == 0:
+            if op == "*":
                 lhs = lhs * rhs
-            elif strcmp(op, "/") == 0:
+            elif op == "/":
                 lhs = lhs / rhs if rhs != 0 else 0
-            elif strcmp(op, "%") == 0:
+            elif op == "%":
                 lhs = lhs % rhs if rhs != 0 else 0
-            elif strcmp(op, "+") == 0:
+            elif op == "+":
                 lhs = lhs + rhs
-            elif strcmp(op, "-") == 0:
+            elif op == "-":
                 lhs = lhs - rhs
-            elif strcmp(op, "<<") == 0:
+            elif op == "<<":
                 lhs = lhs << rhs
-            elif strcmp(op, ">>") == 0:
+            elif op == ">>":
                 lhs = lhs >> rhs
-            elif strcmp(op, "<") == 0:
+            elif op == "<":
                 lhs = 1 if lhs < rhs else 0
-            elif strcmp(op, "<=") == 0:
+            elif op == "<=":
                 lhs = 1 if lhs <= rhs else 0
-            elif strcmp(op, ">") == 0:
+            elif op == ">":
                 lhs = 1 if lhs > rhs else 0
-            elif strcmp(op, ">=") == 0:
+            elif op == ">=":
                 lhs = 1 if lhs >= rhs else 0
-            elif strcmp(op, "==") == 0:
+            elif op == "==":
                 lhs = 1 if lhs == rhs else 0
-            elif strcmp(op, "!=") == 0:
+            elif op == "!=":
                 lhs = 1 if lhs != rhs else 0
-            elif strcmp(op, "&") == 0:
+            elif op == "&":
                 lhs = lhs & rhs
-            elif strcmp(op, "^") == 0:
+            elif op == "^":
                 lhs = lhs ^ rhs
-            elif strcmp(op, "|") == 0:
+            elif op == "|":
                 lhs = lhs | rhs
-            elif strcmp(op, "&&") == 0:
+            elif op == "&&":
                 lhs = 1 if lhs != 0 and rhs != 0 else 0
-            elif strcmp(op, "||") == 0:
+            elif op == "||":
                 lhs = 1 if lhs != 0 or rhs != 0 else 0
         return lhs
 
@@ -1426,7 +1426,7 @@ struct Cp:
                 v: i64 = self->ceval(ref vok)
                 if vok:
                     ve: *Expr = ex_new(self->a, EX_NUMBER, self->pk()->pos)
-                    ve->text = arena_printf(self->a, "%lld", v)
+                    ve->text = self->a->printf("%lld", v)
                     it.value = ve
                     next_val = v + 1
                     sym_tail = False
@@ -1449,9 +1449,9 @@ struct Cp:
             if not self->eat(","):
                 break
         self->expect_punct("}")
-        d: *Decl = arena_alloc(self->a, sizeof(Decl))
+        d: *Decl = self->a->alloc(sizeof(Decl))
         d->kind = DL_ENUM
-        d->name = tag if tag != None else arena_printf(self->a, "__enum%d", self->anon)
+        d->name = tag if tag != None else self->a->printf("__enum%d", self->anon)
         if tag == None:
             self->anon += 1
         d->items = items.data
@@ -1460,54 +1460,54 @@ struct Cp:
 
 # ---------- mapping of C operators -> TokKind (op in the AST) ----------
 def punct2tok(p: const *char) -> i32:
-    if strcmp(p, "+") == 0:
+    if p == "+":
         return TK_PLUS
-    if strcmp(p, "-") == 0:
+    if p == "-":
         return TK_MINUS
-    if strcmp(p, "*") == 0:
+    if p == "*":
         return TK_STAR
-    if strcmp(p, "/") == 0:
+    if p == "/":
         return TK_SLASH
-    if strcmp(p, "%") == 0:
+    if p == "%":
         return TK_PERCENT
-    if strcmp(p, "&") == 0:
+    if p == "&":
         return TK_AMP
-    if strcmp(p, "|") == 0:
+    if p == "|":
         return TK_PIPE
-    if strcmp(p, "^") == 0:
+    if p == "^":
         return TK_CARET
-    if strcmp(p, "<<") == 0:
+    if p == "<<":
         return TK_SHL
-    if strcmp(p, ">>") == 0:
+    if p == ">>":
         return TK_SHR
-    if strcmp(p, "==") == 0:
+    if p == "==":
         return TK_EQ
-    if strcmp(p, "!=") == 0:
+    if p == "!=":
         return TK_NE
-    if strcmp(p, "<") == 0:
+    if p == "<":
         return TK_LT
-    if strcmp(p, "<=") == 0:
+    if p == "<=":
         return TK_LE
-    if strcmp(p, ">") == 0:
+    if p == ">":
         return TK_GT
-    if strcmp(p, ">=") == 0:
+    if p == ">=":
         return TK_GE
-    if strcmp(p, "&&") == 0:
+    if p == "&&":
         return TK_AND
-    if strcmp(p, "||") == 0:
+    if p == "||":
         return TK_OR
     return TK_EOF
 
 def cbin_prec(p: const *char) -> i32:
-    if strcmp(p, "||") == 0:
+    if p == "||":
         return 1
-    if strcmp(p, "&&") == 0:
+    if p == "&&":
         return 2
-    if strcmp(p, "|") == 0:
+    if p == "|":
         return 3
-    if strcmp(p, "^") == 0:
+    if p == "^":
         return 4
-    if strcmp(p, "&") == 0:
+    if p == "&":
         return 5
     if p in {"==", "!="}:
         return 6
@@ -1525,25 +1525,25 @@ def is_assign_punct(p: const *char) -> bool:
     return p in {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="}
 
 def assign2tok(p: const *char) -> i32:
-    if strcmp(p, "=") == 0:
+    if p == "=":
         return TK_ASSIGN
-    if strcmp(p, "+=") == 0:
+    if p == "+=":
         return TK_PLUS_EQ
-    if strcmp(p, "-=") == 0:
+    if p == "-=":
         return TK_MINUS_EQ
-    if strcmp(p, "*=") == 0:
+    if p == "*=":
         return TK_STAR_EQ
-    if strcmp(p, "/=") == 0:
+    if p == "/=":
         return TK_SLASH_EQ
-    if strcmp(p, "%=") == 0:
+    if p == "%=":
         return TK_PERCENT_EQ
-    if strcmp(p, "&=") == 0:
+    if p == "&=":
         return TK_AMP_EQ
-    if strcmp(p, "|=") == 0:
+    if p == "|=":
         return TK_PIPE_EQ
-    if strcmp(p, "^=") == 0:
+    if p == "^=":
         return TK_CARET_EQ
-    if strcmp(p, "<<=") == 0:
+    if p == "<<=":
         return TK_SHL_EQ
     return TK_SHR_EQ
 
@@ -1589,12 +1589,12 @@ def c_primary(p: *Cp) -> *Expr:
                 nxt: const *char = p->adv()->text
                 n1: usize = strlen(txt)
                 sb: StrBuf = {0}
-                sb_puts(&sb, txt)
+                sb.puts(txt)
                 sb.len = n1 - 1        # drop the first string's closing quote
                 sb.data[sb.len] = '\0'
-                sb_puts(&sb, nxt + 1)  # skip the second string's opening quote
-                txt = arena_strdup(p->a, sb.data)
-                sb_free(&sb)
+                sb.puts(nxt + 1)  # skip the second string's opening quote
+                txt = p->a->strdup(sb.data)
+                sb.deinit()
             e2->text = txt
             return e2
         case CT_CHAR:
@@ -1603,7 +1603,7 @@ def c_primary(p: *Cp) -> *Expr:
             return e3
         case CT_ID:
             # va_arg(ap, T) / __builtin_va_arg: special form with a TYPE
-            if (t->text in {"va_arg", "__builtin_va_arg"}) and strcmp(p->pk1()->text, "(") == 0:
+            if (t->text in {"va_arg", "__builtin_va_arg"}) and p->pk1()->text == "(":
                 p->adv()
                 p->adv()  # (
                 va: *Expr = ex_new(p->a, EX_VAARG, t->pos)
@@ -1614,7 +1614,7 @@ def c_primary(p: *Cp) -> *Expr:
                 return va
             # __builtin_offsetof(T, field[.sub]): layout constant — becomes
             # EX_CALL("__offsetof", [typeref, ident(path)]) for the backend
-            if strcmp(t->text, "__builtin_offsetof") == 0 and strcmp(p->pk1()->text, "(") == 0:
+            if t->text == "__builtin_offsetof" and p->pk1()->text == "(":
                 p->adv()
                 p->adv()  # (
                 oc: *Expr = ex_new(p->a, EX_CALL, t->pos)
@@ -1626,7 +1626,7 @@ def c_primary(p: *Cp) -> *Expr:
                 p->expect_punct(",")
                 path: const *char = p->adv()->text
                 while p->eat("."):
-                    path = arena_printf(p->a, "%s.%s", path, p->adv()->text)
+                    path = p->a->printf("%s.%s", path, p->adv()->text)
                 p->expect_punct(")")
                 onm: *Expr = ex_new(p->a, EX_IDENT, t->pos)
                 onm->text = path
@@ -1639,7 +1639,7 @@ def c_primary(p: *Cp) -> *Expr:
                 return oc
             # _Generic(ctrl, T1: e1, ..., default: eN) — selection by type
             # (C11); the choice happens in the backend (which knows the types)
-            if strcmp(t->text, "_Generic") == 0:
+            if t->text == "_Generic":
                 p->adv()
                 p->expect_punct("(")
                 g: *Expr = ex_new(p->a, EX_GENERIC, t->pos)
@@ -1710,7 +1710,7 @@ def c_postfix_from(p: *Cp, e: *Expr) -> *Expr:
                 while p->eat(",")
             p->expect_punct(")")
             # __builtin_expect(x, c) is just a branch hint: reinterpret as x
-            if e->kind == EX_IDENT and strcmp(e->text, "__builtin_expect") == 0 and args.len >= 1:
+            if e->kind == EX_IDENT and e->text == "__builtin_expect" and args.len >= 1:
                 e = args.get(0)
                 continue
             call->args = args.data
@@ -1751,7 +1751,7 @@ def c_postfix_from(p: *Cp, e: *Expr) -> *Expr:
 def c_unary(p: *Cp) -> *Expr:
     pos: Pos = p->pk()->pos
     # __extension__ prefixando uma EXPRESSÃO (compound literal etc.): no-op
-    if p->pk()->kind == CT_ID and p->pk()->text != None and strcmp(p->pk()->text, "__extension__") == 0:
+    if p->pk()->kind == CT_ID and p->pk()->text != None and p->pk()->text == "__extension__":
         p->adv()
         return c_unary(p)
     # sizeof ( type )  or  sizeof unary-expr. Reuses P's post-sema form:
@@ -1840,7 +1840,7 @@ def c_abstract_decl(p: *Cp, base: *Type) -> *Type:
         dummy: *char = None
         return p->parse_fnptr(t, out dummy)
     # plain redundant grouping: (*), ((((*)))), (double *(**))
-    if p->is_punct("(") and (strcmp(p->pk1()->text, "*") == 0 or strcmp(p->pk1()->text, "(") == 0):
+    if p->is_punct("(") and (p->pk1()->text == "*" or p->pk1()->text == "("):
         p->adv()
         t = c_abstract_decl(p, t)
         p->expect_punct(")")
@@ -1993,7 +1993,7 @@ def c_init_elem(p: *Cp, out: *Vec<*Expr>):
         for ci in range(nchain - 1, -1, -1):
             chain[ci]->lhs = v
             wrap: *Expr = ex_new(p->a, EX_INITLIST, chain[ci]->pos)
-            wa: **Expr = arena_alloc(p->a, sizeof(v))
+            wa: **Expr = p->a->alloc(sizeof(v))
             wa[0] = chain[ci]
             wrap->args = wa
             wrap->nargs = 1
@@ -2004,7 +2004,7 @@ def c_init_elem(p: *Cp, out: *Vec<*Expr>):
             for k in range(lo, hi + 1):
                 dk: *Expr = ex_new(p->a, EX_DESIG, pos)
                 ik: *Expr = ex_new(p->a, EX_NUMBER, pos)
-                ik->text = arena_printf(p->a, "%lld", k)
+                ik->text = p->a->printf("%lld", k)
                 dk->rhs = ik
                 dk->lhs = v
                 out->push(dk)
@@ -2035,7 +2035,7 @@ def c_block(p: *Cp) -> *Block:
             fatal_at(p->file, p->pk()->pos, "a declaration is not a statement — the body of if/else/while/for needs braces to declare")
         c_stmt_into(p, &v)
     cp_tags_restore(p, tmark)
-    b: *Block = arena_alloc(p->a, sizeof(Block))
+    b: *Block = p->a->alloc(sizeof(Block))
     b->stmts = v.data
     b->n = v.len
     return b
@@ -2045,7 +2045,7 @@ def c_block(p: *Cp) -> *Block:
 # ST_CPROTO in the block, so the emitted C re-binds the name locally (shadowing
 # any outer variable of the same name, C11 6.2.1p4)
 def c_local_proto(p: *Cp, out: *Vec<*Stmt>, name: const *char, ret: *Type, prms: Vec<Param>, va: bool, sig_empty: bool):
-    lf: *Func = arena_alloc(p->a, sizeof(Func))
+    lf: *Func = p->a->alloc(sizeof(Func))
     with lf:
         .pos = p->pk()->pos
         .name = name
@@ -2055,7 +2055,7 @@ def c_local_proto(p: *Cp, out: *Vec<*Stmt>, name: const *char, ret: *Type, prms:
         .nparams = prms.len
         .is_varargs = va
         .sig_empty = sig_empty
-    ld: *Decl = arena_alloc(p->a, sizeof(Decl))
+    ld: *Decl = p->a->alloc(sizeof(Decl))
     ld->kind = DL_FUNC
     ld->pos = p->pk()->pos
     ld->func = lf
@@ -2146,7 +2146,7 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
     # extended inline asm STATEMENT: __asm__ [volatile/goto] ( ... : ... );
     # ingest (headers): skipped — the bodies are dropped anyway. Strict user
     # code: an honest error beats silently losing the asm in the round-trip.
-    if p->pk()->kind == CT_ID and p->pk()->text != None and (strcmp(p->pk()->text, "_Static_assert") == 0 or strcmp(p->pk()->text, "static_assert") == 0):
+    if p->pk()->kind == CT_ID and p->pk()->text != None and (p->pk()->text == "_Static_assert" or p->pk()->text == "static_assert"):
         c_static_assert(p)
         return
     asmw: const *char = p->pk()->text if p->pk()->kind == CT_ID else None
@@ -2203,7 +2203,7 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
         return
     # label:  name :  (a C keyword is never a label name — `unsigned: ...`
     # falls through to the declaration path, which rejects it in strict mode)
-    if p->pk()->kind == CT_ID and p->pk1()->kind == CT_PUNCT and strcmp(p->pk1()->text, ":") == 0 and not (p->strict and is_c_keyword(p->pk()->text) and not p->types.has(p->pk()->text)):
+    if p->pk()->kind == CT_ID and p->pk1()->kind == CT_PUNCT and p->pk1()->text == ":" and not (p->strict and is_c_keyword(p->pk()->text) and not p->types.has(p->pk()->text)):
         lbl: const *char = p->adv()->text
         p->adv()  # ':'
         ls: *Stmt = st_new(p->a, ST_LABEL, pos)
@@ -2238,7 +2238,7 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
             c_stmt_into(p, &bv)
         p->expect_punct("}")
         cp_tags_restore(p, btmark)
-        bb: *Block = arena_alloc(p->a, sizeof(Block))
+        bb: *Block = p->a->alloc(sizeof(Block))
         bb->stmts = bv.data
         bb->n = bv.len
         bs->body = bb
@@ -2411,8 +2411,8 @@ def c_for_into(p: *Cp, out: *Vec<*Stmt>):
         out.push(s)
     elif fdecls.len > 1:
         wb: *Stmt = st_new(p->a, ST_BLOCK, pos)
-        bb: *Block = arena_alloc(p->a, sizeof(Block))
-        all: **Stmt = arena_alloc(p->a, usize(fdecls.len + 1) * sizeof(*all))
+        bb: *Block = p->a->alloc(sizeof(Block))
+        all: **Stmt = p->a->alloc(usize(fdecls.len + 1) * sizeof(*all))
         for fi in range(fdecls.len):
             all[fi] = fdecls.get(fi)
         all[fdecls.len] = s
@@ -2499,7 +2499,7 @@ def parse_one_decl(p: *Cp, base: *Type, is_extern: bool, pos: Pos) -> *Decl:
         fhp: bool = False
         fpty: *Type = p->parse_declarator(ty, out fpname, ref fprms, out fva, out fhp)
         if fpty != None and fpty->kind == TY_FUNC:
-            ff: *Func = arena_alloc(p->a, sizeof(Func))
+            ff: *Func = p->a->alloc(sizeof(Func))
             with ff:
                 .pos = pos
                 .name = fpname
@@ -2511,12 +2511,12 @@ def parse_one_decl(p: *Cp, base: *Type, is_extern: bool, pos: Pos) -> *Decl:
                 .sig_empty = p->cap_sig_empty if fhp else False
                 if p->is_punct("{"):
                     .body = c_block(p)   # definition
-            df: *Decl = arena_alloc(p->a, sizeof(Decl))
+            df: *Decl = p->a->alloc(sizeof(Decl))
             df->kind = DL_FUNC
             df->pos = pos
             df->func = ff
             return df
-        dfp: *Decl = arena_alloc(p->a, sizeof(Decl))
+        dfp: *Decl = p->a->alloc(sizeof(Decl))
         with dfp:
             .kind = DL_VAR
             .pos = pos
@@ -2542,7 +2542,7 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
         p->parse_params(ref params, out is_vararg)
         p->expect_punct(")")
         p->skip_gnu()   # __attribute__/__asm__ after the parameter list
-        f: *Func = arena_alloc(p->a, sizeof(Func))
+        f: *Func = p->a->alloc(sizeof(Func))
         with f:
             .pos = pos
             .name = name
@@ -2554,7 +2554,7 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
             .sig_empty = p->params_empty
             if p->is_punct("{"):
                 .body = c_block(p)   # definition
-        d: *Decl = arena_alloc(p->a, sizeof(Decl))
+        d: *Decl = p->a->alloc(sizeof(Decl))
         d->kind = DL_FUNC
         d->pos = pos
         d->func = f
@@ -2575,7 +2575,7 @@ def parse_one_decl_named(p: *Cp, ty: *Type, name: const *char, is_extern: bool, 
     for gk in range(gnd - 1, -1, -1):
         ty = ty_array(p->a, ty, gdims[gk])
     p->skip_gnu()
-    d2: *Decl = arena_alloc(p->a, sizeof(Decl))
+    d2: *Decl = p->a->alloc(sizeof(Decl))
     with d2:
         .kind = DL_VAR
         .pos = pos
@@ -2608,7 +2608,7 @@ def c_top(p: *Cp) -> *Decl:
     if p->is_kw("typedef"):
         c_typedef(p)
         return None
-    if p->pk()->kind == CT_ID and p->pk()->text != None and (strcmp(p->pk()->text, "_Static_assert") == 0 or strcmp(p->pk()->text, "static_assert") == 0):
+    if p->pk()->kind == CT_ID and p->pk()->text != None and (p->pk()->text == "_Static_assert" or p->pk()->text == "static_assert"):
         c_static_assert(p)
         return None
     base: *Type = p->parse_base_type()
@@ -2685,8 +2685,8 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, str
         cp.types.add(builtins[bi])
         bi += 1
 
-    m: *Module = arena_alloc(a, sizeof(Module))
-    m->path = arena_strdup(a, file)
+    m: *Module = a->alloc(sizeof(Module))
+    m->path = a->strdup(file)
     m->is_header = False
     m->is_c = True
     decls: Vec<*Decl>
@@ -2702,14 +2702,14 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, str
     # ingested header must see a known type (the underlying type was resolved
     # inline; only the name needs to exist for the semantic pass)
     if cp.typedefs.elen > 0:
-        tdn: **char = arena_alloc(a, usize(cp.typedefs.elen) * sizeof(*tdn))
-        tdt: **Type = arena_alloc(a, usize(cp.typedefs.elen) * sizeof(*tdt))
+        tdn: **char = a->alloc(usize(cp.typedefs.elen) * sizeof(*tdn))
+        tdt: **Type = a->alloc(usize(cp.typedefs.elen) * sizeof(*tdt))
         ntd = 0
         for ti in range(cp.typedefs.elen):
             if not cp.typedefs.dead[ti]:
                 # the StrMap owns its key strings (freed on deinit): copy into
                 # the arena — the module outlives the parser
-                tdn[ntd] = arena_strdup(a, cp.typedefs.keys[ti])
+                tdn[ntd] = a->strdup(cp.typedefs.keys[ti])
                 tdt[ntd] = cp.typedefs.vals[ti]
                 ntd += 1
         m->tdnames = tdn

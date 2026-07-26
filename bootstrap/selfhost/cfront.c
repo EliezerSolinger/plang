@@ -121,15 +121,15 @@ void StrMap_pchar_deinit(StrMap_pchar *self);
 
 
 void StrMap_pchar_init(StrMap_pchar *self) {
-    memset(& *self, 0, sizeof(*self));
+    memset(self, 0, sizeof(*self));
 }
 
 int32_t StrMap_pchar_find_slot(const StrMap_pchar *self, const char *key, uint64_t h, int32_t *out_entry) {
-    int32_t mask = (*self).icap - 1;
+    int32_t mask = self->icap - 1;
     int32_t slot = (int32_t)(h & (uint64_t)mask);
     int32_t first_tomb = -1;
     while (1) {
-        int32_t idx = (*self).indices[slot];
+        int32_t idx = self->indices[slot];
         if (idx == -1) {
             *out_entry = -1;
             return (first_tomb != -1 ? first_tomb : slot);
@@ -138,7 +138,7 @@ int32_t StrMap_pchar_find_slot(const StrMap_pchar *self, const char *key, uint64
             if (first_tomb == -1) {
                 first_tomb = slot;
             }
-        } else if (!(*self).dead[idx] && (*self).hashes[idx] == h && strcmp((*self).keys[idx], key) == 0) {
+        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
             *out_entry = idx;
             return slot;
         }
@@ -149,135 +149,135 @@ int32_t StrMap_pchar_find_slot(const StrMap_pchar *self, const char *key, uint64
 void StrMap_pchar_rehash(StrMap_pchar *self, int32_t newcap) {
     int32_t w = 0;
     int32_t r;
-    for (r = 0; r < (*self).elen; r += 1) {
-        if (!(*self).dead[r]) {
+    for (r = 0; r < self->elen; r += 1) {
+        if (!self->dead[r]) {
             if (w != r) {
-                (*self).hashes[w] = (*self).hashes[r];
-                (*self).keys[w] = (*self).keys[r];
-                (*self).vals[w] = (*self).vals[r];
+                self->hashes[w] = self->hashes[r];
+                self->keys[w] = self->keys[r];
+                self->vals[w] = self->vals[r];
             }
-            (*self).dead[w] = 0;
+            self->dead[w] = 0;
             w += 1;
         }
     }
-    (*self).elen = w;
-    (*self).tombs = 0;
-    free((*self).indices);
-    (*self).indices = malloc(sizeof(int32_t) * (size_t)newcap);
-    (*self).icap = newcap;
+    self->elen = w;
+    self->tombs = 0;
+    free(self->indices);
+    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    self->icap = newcap;
     int32_t i;
     for (i = 0; i < newcap; i += 1) {
-        (*self).indices[i] = -1;
+        self->indices[i] = -1;
     }
     int32_t mask = newcap - 1;
-    for (i = 0; i < (*self).elen; i += 1) {
-        int32_t slot = (int32_t)((*self).hashes[i] & (uint64_t)mask);
-        while ((*self).indices[slot] != -1) {
+    for (i = 0; i < self->elen; i += 1) {
+        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
+        while (self->indices[slot] != -1) {
             slot = (slot + 1) & mask;
         }
-        (*self).indices[slot] = i;
+        self->indices[slot] = i;
     }
 }
 
 void StrMap_pchar_grow_entries(StrMap_pchar *self) {
-    if ((*self).elen < (*self).ecap) {
+    if (self->elen < self->ecap) {
         return;
     }
-    int32_t nc = ((*self).ecap == 0 ? 8 : (*self).ecap * 2);
-    (*self).hashes = realloc((*self).hashes, sizeof(uint64_t) * (size_t)nc);
-    (*self).keys = realloc((*self).keys, sizeof((*self).keys[0]) * (size_t)nc);
-    (*self).vals = realloc((*self).vals, sizeof(char *) * (size_t)nc);
-    (*self).dead = realloc((*self).dead, sizeof(int) * (size_t)nc);
-    (*self).ecap = nc;
+    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
+    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
+    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
+    self->vals = realloc(self->vals, sizeof(char *) * (size_t)nc);
+    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
+    self->ecap = nc;
 }
 
 void StrMap_pchar_put(StrMap_pchar *self, const char *key, char *value) {
-    if ((*self).icap == 0 || ((*self).size + (*self).tombs + 1) * 3 >= (*self).icap * 2) {
-        StrMap_pchar_rehash(& *self, ((*self).icap == 0 ? 8 : (*self).icap * 2));
+    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
+        StrMap_pchar_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
     }
     uint64_t h = hash_cstr(key);
     int32_t entry = -1;
-    int32_t slot = StrMap_pchar_find_slot(& *self, key, h, &entry);
+    int32_t slot = StrMap_pchar_find_slot(self, key, h, &entry);
     if (entry >= 0) {
-        (*self).vals[entry] = value;
+        self->vals[entry] = value;
         return;
     }
-    StrMap_pchar_grow_entries(& *self);
+    StrMap_pchar_grow_entries(self);
     size_t n = strlen(key) + 1;
     char *kcopy = malloc(n);
     memcpy(kcopy, key, n);
-    int32_t e = (*self).elen;
-    (*self).hashes[e] = h;
-    (*self).keys[e] = kcopy;
-    (*self).vals[e] = value;
-    (*self).dead[e] = 0;
-    (*self).elen += 1;
-    if ((*self).indices[slot] == -2) {
-        (*self).tombs -= 1;
+    int32_t e = self->elen;
+    self->hashes[e] = h;
+    self->keys[e] = kcopy;
+    self->vals[e] = value;
+    self->dead[e] = 0;
+    self->elen += 1;
+    if (self->indices[slot] == -2) {
+        self->tombs -= 1;
     }
-    (*self).indices[slot] = e;
-    (*self).size += 1;
+    self->indices[slot] = e;
+    self->size += 1;
 }
 
 int StrMap_pchar_get(const StrMap_pchar *self, const char *key, char **out) {
-    if ((*self).size == 0) {
+    if (self->size == 0) {
         return 0;
     }
     int32_t entry = -1;
-    StrMap_pchar_find_slot(& *self, key, hash_cstr(key), &entry);
+    StrMap_pchar_find_slot(self, key, hash_cstr(key), &entry);
     if (entry < 0) {
         return 0;
     }
-    *out = (*self).vals[entry];
+    *out = self->vals[entry];
     return 1;
 }
 
 char *StrMap_pchar_get_or(const StrMap_pchar *self, const char *key, char *fallback) {
     char *v = fallback;
-    StrMap_pchar_get(& *self, key, &v);
+    StrMap_pchar_get(self, key, &v);
     return v;
 }
 
 int StrMap_pchar_has(const StrMap_pchar *self, const char *key) {
     int32_t entry = -1;
-    if ((*self).size == 0) {
+    if (self->size == 0) {
         return 0;
     }
-    StrMap_pchar_find_slot(& *self, key, hash_cstr(key), &entry);
+    StrMap_pchar_find_slot(self, key, hash_cstr(key), &entry);
     return entry >= 0;
 }
 
 int StrMap_pchar_remove(StrMap_pchar *self, const char *key) {
-    if ((*self).size == 0) {
+    if (self->size == 0) {
         return 0;
     }
     int32_t entry = -1;
-    int32_t slot = StrMap_pchar_find_slot(& *self, key, hash_cstr(key), &entry);
+    int32_t slot = StrMap_pchar_find_slot(self, key, hash_cstr(key), &entry);
     if (entry < 0) {
         return 0;
     }
-    free((*self).keys[entry]);
-    (*self).keys[entry] = NULL;
-    (*self).dead[entry] = 1;
-    (*self).indices[slot] = -2;
-    (*self).size -= 1;
-    (*self).tombs += 1;
+    free(self->keys[entry]);
+    self->keys[entry] = NULL;
+    self->dead[entry] = 1;
+    self->indices[slot] = -2;
+    self->size -= 1;
+    self->tombs += 1;
     return 1;
 }
 
 void StrMap_pchar_deinit(StrMap_pchar *self) {
     int32_t i;
-    for (i = 0; i < (*self).elen; i += 1) {
-        if (!(*self).dead[i]) {
-            free((*self).keys[i]);
+    for (i = 0; i < self->elen; i += 1) {
+        if (!self->dead[i]) {
+            free(self->keys[i]);
         }
     }
-    free((*self).indices);
-    free((*self).hashes);
-    free((*self).keys);
-    free((*self).vals);
-    free((*self).dead);
-    memset(& *self, 0, sizeof(*self));
+    free(self->indices);
+    free(self->hashes);
+    free(self->keys);
+    free(self->vals);
+    free(self->dead);
+    memset(self, 0, sizeof(*self));
 }
 
 typedef enum { CT_EOF = 0, CT_ID, CT_NUM, CT_STR, CT_CHAR, CT_PUNCT } CtKind;
@@ -344,85 +344,85 @@ void Vec_CTok_deinit(Vec_CTok *self);
 
 
 void Vec_CTok_init(Vec_CTok *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_CTok_reserve(Vec_CTok *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(CTok) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(CTok) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_CTok_push(Vec_CTok *self, CTok item) {
-    Vec_CTok_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_CTok_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 CTok Vec_CTok_pop(Vec_CTok *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 CTok Vec_CTok_get(const Vec_CTok *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_CTok_set(Vec_CTok *self, int32_t i, CTok item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 CTok Vec_CTok_last(const Vec_CTok *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_CTok_is_empty(const Vec_CTok *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_CTok_insert_gap(Vec_CTok *self, int32_t i, int32_t n) {
-    Vec_CTok_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(CTok) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_CTok_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(CTok) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_CTok_insert_at(Vec_CTok *self, int32_t i, CTok item) {
-    Vec_CTok_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_CTok_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_CTok_remove_range(Vec_CTok *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(CTok) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(CTok) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_CTok_remove_at(Vec_CTok *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(CTok) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(CTok) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_CTok_swap_remove(Vec_CTok *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_CTok_clear(Vec_CTok *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_CTok_deinit(Vec_CTok *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 static int is_c_escape(char e) {
@@ -471,7 +471,7 @@ static void Cx_push(Cx *self, CtKind kind, Pos pos, const char *text) {
 }
 
 static const char *Cx_slice(Cx *self, size_t start) {
-    return arena_strndup(self->a, self->s + start, self->i - start);
+    return Arena_strndup(self->a, self->s + start, self->i - start);
 }
 
 static void Cx_tokenize(Cx *self) {
@@ -963,85 +963,85 @@ void Vec_CTag_deinit(Vec_CTag *self);
 
 
 void Vec_CTag_init(Vec_CTag *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_CTag_reserve(Vec_CTag *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(CTag) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(CTag) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_CTag_push(Vec_CTag *self, CTag item) {
-    Vec_CTag_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_CTag_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 CTag Vec_CTag_pop(Vec_CTag *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 CTag Vec_CTag_get(const Vec_CTag *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_CTag_set(Vec_CTag *self, int32_t i, CTag item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 CTag Vec_CTag_last(const Vec_CTag *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_CTag_is_empty(const Vec_CTag *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_CTag_insert_gap(Vec_CTag *self, int32_t i, int32_t n) {
-    Vec_CTag_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(CTag) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_CTag_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(CTag) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_CTag_insert_at(Vec_CTag *self, int32_t i, CTag item) {
-    Vec_CTag_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_CTag_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_CTag_remove_range(Vec_CTag *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(CTag) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(CTag) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_CTag_remove_at(Vec_CTag *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(CTag) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(CTag) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_CTag_swap_remove(Vec_CTag *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_CTag_clear(Vec_CTag *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_CTag_deinit(Vec_CTag *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 Expr *c_expr(Cp *p);
@@ -1254,7 +1254,7 @@ static Type *Cp_parse_base_type(Cp *self) {
         }
         if (Cp_is_punct(self, "{")) {
             if (tag == NULL) {
-                tag = arena_printf(self->a, "__anon%d", self->anon);
+                tag = Arena_printf(self->a, "__anon%d", self->anon);
                 self->anon += 1;
                 StrSet_add(&self->used_cnames, tag);
             } else {
@@ -1292,7 +1292,7 @@ static Type *Cp_parse_base_type(Cp *self) {
             }
             tag = self->tags.data[ri].cname;
             if (fresh) {
-                Decl *fd = arena_alloc(self->a, sizeof(Decl));
+                Decl *fd = Arena_alloc(self->a, sizeof(Decl));
                 fd->kind = (is_union ? DL_UNION : DL_STRUCT);
                 fd->name = tag;
                 fd->is_fwd = 1;
@@ -1338,7 +1338,7 @@ static Type *Cp_parse_base_type(Cp *self) {
                 }
                 Cp_adv(self);
             } else {
-                name = arena_printf(self->a, "%s %s", name, Cp_adv(self)->text);
+                name = Arena_printf(self->a, "%s %s", name, Cp_adv(self)->text);
             }
         }
         Cp_check_arith_specs(self, name, spos);
@@ -1347,7 +1347,7 @@ static Type *Cp_parse_base_type(Cp *self) {
     if (StrSet_has(&self->types, w)) {
         Cp_adv(self);
         if (Cp_pk(self)->kind == CT_ID && Cp_pk(self)->text != NULL && (strcmp(Cp_pk(self)->text, "_Complex") == 0 || strcmp(Cp_pk(self)->text, "_Imaginary") == 0)) {
-            const char *cw = arena_printf(self->a, "%s %s", w, Cp_adv(self)->text);
+            const char *cw = Arena_printf(self->a, "%s %s", w, Cp_adv(self)->text);
             return Cp_base_name(self, cw);
         }
         Type *u = StrMap_pType_get_or(&self->typedefs, w, NULL);
@@ -1376,7 +1376,7 @@ static int32_t Cp_tag_find(Cp *self, const char *name) {
 static int32_t Cp_tag_push(Cp *self, const char *name, int is_union, int defined) {
     const char *cn = name;
     if (StrSet_has(&self->used_cnames, cn)) {
-        cn = arena_printf(self->a, "%s__s%d", name, self->anon);
+        cn = Arena_printf(self->a, "%s__s%d", name, self->anon);
         self->anon += 1;
     }
     StrSet_add(&self->used_cnames, cn);
@@ -1527,7 +1527,7 @@ static Type *Cp_parse_fnptr(Cp *self, Type *ret, char **out_name) {
     Vec_Param_init(&prms);
     int va = 0;
     int hp = 0;
-    return Cp_parse_declarator(self, ret, & *out_name, &prms, &va, &hp);
+    return Cp_parse_declarator(self, ret, out_name, &prms, &va, &hp);
 }
 
 static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Param *prms, int *varargs, int *has_params) {
@@ -1580,12 +1580,12 @@ static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Para
         }
         size_t end = self->i;
         self->i = start + 1;
-        Type *r = Cp_parse_declarator(self, ty, & *out_name, & *prms, & *varargs, & *has_params);
+        Type *r = Cp_parse_declarator(self, ty, out_name, prms, varargs, has_params);
         self->i = end;
         if (ecap && ! *has_params) {
             size_t ei;
             for (ei = 0; ei < eprms.len; ei += 1) {
-                Vec_Param_push(& *prms, Vec_Param_get(&eprms, ei));
+                Vec_Param_push(prms, Vec_Param_get(&eprms, ei));
             }
             *varargs = eva;
             *has_params = 1;
@@ -1599,7 +1599,7 @@ static Type *Cp_parse_declarator(Cp *self, Type *base, char **out_name, Vec_Para
     }
     if (Cp_is_punct(self, "(")) {
         Cp_adv(self);
-        Cp_parse_params(self, & *prms, & *varargs);
+        Cp_parse_params(self, prms, varargs);
         Cp_expect_punct(self, ")");
         Cp_skip_gnu(self);
         *has_params = 1;
@@ -1624,7 +1624,7 @@ static Type *Cp_parse_decl_suffix(Cp *self, Type *ty) {
             int64_t dv = Cp_ceval(self, &dok);
             if (dok && Cp_is_punct(self, "]")) {
                 dd = ex_new(self->a, EX_NUMBER, Cp_pk(self)->pos);
-                dd->text = arena_printf(self->a, "%lld", dv);
+                dd->text = Arena_printf(self->a, "%lld", dv);
             } else {
                 self->i = dsave;
                 Cp_skip_to(self, "]", "]");
@@ -1645,7 +1645,7 @@ static Type *Cp_parse_decl_suffix(Cp *self, Type *ty) {
 
 static void Cp_parse_params(Cp *self, Vec_Param *prms, int *varargs) {
     int empty_here = Cp_is_punct(self, ")");
-    Cp_parse_params_inner(self, & *prms, & *varargs);
+    Cp_parse_params_inner(self, prms, varargs);
     self->params_empty = empty_here;
 }
 
@@ -1714,7 +1714,7 @@ static void Cp_parse_params_inner(Cp *self, Vec_Param *prms, int *varargs) {
         Vec_pExpr_deinit(&dims);
         Cp_skip_gnu(self);
         Param prm = {pname, pty, Cp_pk(self)->pos};
-        Vec_Param_push(& *prms, prm);
+        Vec_Param_push(prms, prm);
     } while (Cp_eat(self, ","));
 }
 
@@ -1767,7 +1767,7 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
                         int64_t fv = Cp_ceval(self, &fok);
                         if (fok && Cp_is_punct(self, "]")) {
                             fd = ex_new(self->a, EX_NUMBER, Cp_pk(self)->pos);
-                            fd->text = arena_printf(self->a, "%lld", fv);
+                            fd->text = Arena_printf(self->a, "%lld", fv);
                         } else {
                             self->i = fdsave;
                             bad_dim = 1;
@@ -1854,7 +1854,7 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
         cdiag_at(self->file, Cp_pk(self)->pos, "gnu-empty-struct", wd_pedantic(), "empty struct is a GNU extension");
     }
     Cp_expect_punct(self, "}");
-    Decl *d = arena_alloc(self->a, sizeof(Decl));
+    Decl *d = Arena_alloc(self->a, sizeof(Decl));
     {
         Decl *__with_1203_9 = d;
         __with_1203_9->kind = (is_union ? DL_UNION : DL_STRUCT);
@@ -1879,7 +1879,7 @@ static int64_t Cp_type_size(Cp *self, Type *t, int *ok) {
             *ok = 0;
             return 0;
         }
-        return (int64_t)strtoll(t->arr_len->text, NULL, 0) * Cp_type_size(self, t->inner, & *ok);
+        return (int64_t)strtoll(t->arr_len->text, NULL, 0) * Cp_type_size(self, t->inner, ok);
     }
     const char *n = t->name;
     if (n == NULL) {
@@ -1900,7 +1900,7 @@ static int64_t Cp_type_size(Cp *self, Type *t, int *ok) {
     }
     Type *u = StrMap_pType_get_or(&self->typedefs, n, NULL);
     if (u != NULL) {
-        return Cp_type_size(self, u, & *ok);
+        return Cp_type_size(self, u, ok);
     }
     *ok = 0;
     return 0;
@@ -1926,7 +1926,7 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
             } else {
                 *ok = 0;
             }
-            return Cp_type_size(self, sty, & *ok);
+            return Cp_type_size(self, sty, ok);
         }
         *ok = 0;
         return 0;
@@ -1954,8 +1954,8 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
                 *ok = 0;
                 return 0;
             }
-            int64_t cv = Cp_ceval_prim(self, & *ok);
-            int64_t csz = Cp_type_size(self, cbase, & *ok);
+            int64_t cv = Cp_ceval_prim(self, ok);
+            int64_t csz = Cp_type_size(self, cbase, ok);
             if (! *ok) {
                 return 0;
             }
@@ -1972,7 +1972,7 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
             return cv;
         }
         Cp_adv(self);
-        int64_t r = Cp_ceval(self, & *ok);
+        int64_t r = Cp_ceval(self, ok);
         if (Cp_is_punct(self, ")")) {
             Cp_adv(self);
         } else {
@@ -1982,19 +1982,19 @@ static int64_t Cp_ceval_prim(Cp *self, int *ok) {
     }
     if (Cp_is_punct(self, "-")) {
         Cp_adv(self);
-        return -Cp_ceval_prim(self, & *ok);
+        return -Cp_ceval_prim(self, ok);
     }
     if (Cp_is_punct(self, "+")) {
         Cp_adv(self);
-        return Cp_ceval_prim(self, & *ok);
+        return Cp_ceval_prim(self, ok);
     }
     if (Cp_is_punct(self, "~")) {
         Cp_adv(self);
-        return ~Cp_ceval_prim(self, & *ok);
+        return ~Cp_ceval_prim(self, ok);
     }
     if (Cp_is_punct(self, "!")) {
         Cp_adv(self);
-        return (Cp_ceval_prim(self, & *ok) != 0 ? 0 : 1);
+        return (Cp_ceval_prim(self, ok) != 0 ? 0 : 1);
     }
     *ok = 0;
     return 0;
@@ -2039,14 +2039,14 @@ static int32_t Cp_ceval_prec(Cp *self) {
 }
 
 static int64_t Cp_ceval_bin(Cp *self, int32_t minprec, int *ok) {
-    int64_t lhs = Cp_ceval_prim(self, & *ok);
+    int64_t lhs = Cp_ceval_prim(self, ok);
     while (*ok) {
         int32_t prec = Cp_ceval_prec(self);
         if (prec < minprec) {
             break;
         }
         const char *op = Cp_adv(self)->text;
-        int64_t rhs = Cp_ceval_bin(self, prec + 1, & *ok);
+        int64_t rhs = Cp_ceval_bin(self, prec + 1, ok);
         if (strcmp(op, "*") == 0) {
             lhs = lhs * rhs;
         } else if (strcmp(op, "/") == 0) {
@@ -2089,17 +2089,17 @@ static int64_t Cp_ceval_bin(Cp *self, int32_t minprec, int *ok) {
 }
 
 static int64_t Cp_ceval(Cp *self, int *ok) {
-    int64_t c = Cp_ceval_bin(self, 0, & *ok);
+    int64_t c = Cp_ceval_bin(self, 0, ok);
     if (*ok && Cp_is_punct(self, "?")) {
         Cp_adv(self);
-        int64_t a = Cp_ceval(self, & *ok);
+        int64_t a = Cp_ceval(self, ok);
         if (Cp_is_punct(self, ":")) {
             Cp_adv(self);
         } else {
             *ok = 0;
             return 0;
         }
-        int64_t b = Cp_ceval(self, & *ok);
+        int64_t b = Cp_ceval(self, ok);
         return (c != 0 ? a : b);
     }
     return c;
@@ -2120,7 +2120,7 @@ static Decl *Cp_parse_enum_body(Cp *self, const char *tag) {
             int64_t v = Cp_ceval(self, &vok);
             if (vok) {
                 Expr *ve = ex_new(self->a, EX_NUMBER, Cp_pk(self)->pos);
-                ve->text = arena_printf(self->a, "%lld", v);
+                ve->text = Arena_printf(self->a, "%lld", v);
                 it.value = ve;
                 next_val = v + 1;
                 sym_tail = 0;
@@ -2145,9 +2145,9 @@ static Decl *Cp_parse_enum_body(Cp *self, const char *tag) {
         }
     }
     Cp_expect_punct(self, "}");
-    Decl *d = arena_alloc(self->a, sizeof(Decl));
+    Decl *d = Arena_alloc(self->a, sizeof(Decl));
     d->kind = DL_ENUM;
-    d->name = (tag != NULL ? tag : arena_printf(self->a, "__enum%d", self->anon));
+    d->name = (tag != NULL ? tag : Arena_printf(self->a, "__enum%d", self->anon));
     if (tag == NULL) {
         self->anon += 1;
     }
@@ -2347,12 +2347,12 @@ Expr *c_primary(Cp *p) {
                 const char *nxt = Cp_adv(p)->text;
                 size_t n1 = strlen(txt);
                 StrBuf sb = {0};
-                sb_puts(&sb, txt);
+                StrBuf_puts(&sb, txt);
                 sb.len = n1 - 1;
                 sb.data[sb.len] = '\0';
-                sb_puts(&sb, nxt + 1);
-                txt = arena_strdup(p->a, sb.data);
-                sb_free(&sb);
+                StrBuf_puts(&sb, nxt + 1);
+                txt = Arena_strdup(p->a, sb.data);
+                StrBuf_deinit(&sb);
             }
             e2->text = txt;
             return e2;
@@ -2385,7 +2385,7 @@ Expr *c_primary(Cp *p) {
                 Cp_expect_punct(p, ",");
                 const char *path = Cp_adv(p)->text;
                 while (Cp_eat(p, ".")) {
-                    path = arena_printf(p->a, "%s.%s", path, Cp_adv(p)->text);
+                    path = Arena_printf(p->a, "%s.%s", path, Cp_adv(p)->text);
                 }
                 Cp_expect_punct(p, ")");
                 Expr *onm = ex_new(p->a, EX_IDENT, t->pos);
@@ -2769,7 +2769,7 @@ void c_init_elem(Cp *p, Vec_pExpr *out) {
         for (ci = nchain - 1; ci > -1; ci += -1) {
             chain[ci]->lhs = v;
             Expr *wrap = ex_new(p->a, EX_INITLIST, chain[ci]->pos);
-            Expr **wa = arena_alloc(p->a, sizeof(v));
+            Expr **wa = Arena_alloc(p->a, sizeof(v));
             wa[0] = chain[ci];
             wrap->args = wa;
             wrap->nargs = 1;
@@ -2781,7 +2781,7 @@ void c_init_elem(Cp *p, Vec_pExpr *out) {
             for (k = lo; k < hi + 1; k += 1) {
                 Expr *dk = ex_new(p->a, EX_DESIG, pos);
                 Expr *ik = ex_new(p->a, EX_NUMBER, pos);
-                ik->text = arena_printf(p->a, "%lld", k);
+                ik->text = Arena_printf(p->a, "%lld", k);
                 dk->rhs = ik;
                 dk->lhs = v;
                 Vec_pExpr_push(out, dk);
@@ -2816,26 +2816,26 @@ Block *c_block(Cp *p) {
         c_stmt_into(p, &v);
     }
     cp_tags_restore(p, tmark);
-    Block *b = arena_alloc(p->a, sizeof(Block));
+    Block *b = Arena_alloc(p->a, sizeof(Block));
     b->stmts = v.data;
     b->n = v.len;
     return b;
 }
 
 void c_local_proto(Cp *p, Vec_pStmt *out, const char *name, Type *ret, Vec_Param prms, int va, int sig_empty) {
-    Func *lf = arena_alloc(p->a, sizeof(Func));
+    Func *lf = Arena_alloc(p->a, sizeof(Func));
     {
-        Func *__with_2048_5 = lf;
-        __with_2048_5->pos = Cp_pk(p)->pos;
-        __with_2048_5->name = name;
-        __with_2048_5->cname = name;
-        __with_2048_5->ret = ret;
-        __with_2048_5->params = prms.data;
-        __with_2048_5->nparams = prms.len;
-        __with_2048_5->is_varargs = va;
-        __with_2048_5->sig_empty = sig_empty;
+        Func *__with_2049_5 = lf;
+        __with_2049_5->pos = Cp_pk(p)->pos;
+        __with_2049_5->name = name;
+        __with_2049_5->cname = name;
+        __with_2049_5->ret = ret;
+        __with_2049_5->params = prms.data;
+        __with_2049_5->nparams = prms.len;
+        __with_2049_5->is_varargs = va;
+        __with_2049_5->sig_empty = sig_empty;
     }
-    Decl *ld = arena_alloc(p->a, sizeof(Decl));
+    Decl *ld = Arena_alloc(p->a, sizeof(Decl));
     ld->kind = DL_FUNC;
     ld->pos = Cp_pk(p)->pos;
     ld->func = lf;
@@ -3029,7 +3029,7 @@ void c_stmt_into(Cp *p, Vec_pStmt *out) {
         }
         Cp_expect_punct(p, "}");
         cp_tags_restore(p, btmark);
-        Block *bb = arena_alloc(p->a, sizeof(Block));
+        Block *bb = Arena_alloc(p->a, sizeof(Block));
         bb->stmts = bv.data;
         bb->n = bv.len;
         bs->body = bb;
@@ -3218,8 +3218,8 @@ void c_for_into(Cp *p, Vec_pStmt *out) {
         Vec_pStmt_push(out, s);
     } else if (fdecls.len > 1) {
         Stmt *wb = st_new(p->a, ST_BLOCK, pos);
-        Block *bb = arena_alloc(p->a, sizeof(Block));
-        Stmt **all = arena_alloc(p->a, (size_t)(fdecls.len + 1) * sizeof(*all));
+        Block *bb = Arena_alloc(p->a, sizeof(Block));
+        Stmt **all = Arena_alloc(p->a, (size_t)(fdecls.len + 1) * sizeof(*all));
         size_t fi;
         for (fi = 0; fi < fdecls.len; fi += 1) {
             all[fi] = Vec_pStmt_get(&fdecls, fi);
@@ -3300,37 +3300,37 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         int fhp = 0;
         Type *fpty = Cp_parse_declarator(p, ty, &fpname, &fprms, &fva, &fhp);
         if (fpty != NULL && fpty->kind == TY_FUNC) {
-            Func *ff = arena_alloc(p->a, sizeof(Func));
+            Func *ff = Arena_alloc(p->a, sizeof(Func));
             {
-                Func *__with_2501_13 = ff;
-                __with_2501_13->pos = pos;
-                __with_2501_13->name = fpname;
-                __with_2501_13->cname = fpname;
-                __with_2501_13->ret = fpty->inner;
-                __with_2501_13->params = fprms.data;
-                __with_2501_13->nparams = fprms.len;
-                __with_2501_13->is_varargs = fva;
-                __with_2501_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
+                Func *__with_2503_13 = ff;
+                __with_2503_13->pos = pos;
+                __with_2503_13->name = fpname;
+                __with_2503_13->cname = fpname;
+                __with_2503_13->ret = fpty->inner;
+                __with_2503_13->params = fprms.data;
+                __with_2503_13->nparams = fprms.len;
+                __with_2503_13->is_varargs = fva;
+                __with_2503_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
                 if (Cp_is_punct(p, "{")) {
-                    __with_2501_13->body = c_block(p);
+                    __with_2503_13->body = c_block(p);
                 }
             }
-            Decl *df = arena_alloc(p->a, sizeof(Decl));
+            Decl *df = Arena_alloc(p->a, sizeof(Decl));
             df->kind = DL_FUNC;
             df->pos = pos;
             df->func = ff;
             return df;
         }
-        Decl *dfp = arena_alloc(p->a, sizeof(Decl));
+        Decl *dfp = Arena_alloc(p->a, sizeof(Decl));
         {
-            Decl *__with_2518_9 = dfp;
-            __with_2518_9->kind = DL_VAR;
-            __with_2518_9->pos = pos;
-            __with_2518_9->name = fpname;
-            __with_2518_9->type = fpty;
-            __with_2518_9->is_extern = is_extern;
+            Decl *__with_2520_9 = dfp;
+            __with_2520_9->kind = DL_VAR;
+            __with_2520_9->pos = pos;
+            __with_2520_9->name = fpname;
+            __with_2520_9->type = fpty;
+            __with_2520_9->is_extern = is_extern;
             if (Cp_eat(p, "=")) {
-                __with_2518_9->init = c_initializer(p);
+                __with_2520_9->init = c_initializer(p);
             }
         }
         return dfp;
@@ -3351,22 +3351,22 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
         Cp_parse_params(p, &params, &is_vararg);
         Cp_expect_punct(p, ")");
         Cp_skip_gnu(p);
-        Func *f = arena_alloc(p->a, sizeof(Func));
+        Func *f = Arena_alloc(p->a, sizeof(Func));
         {
-            Func *__with_2544_9 = f;
-            __with_2544_9->pos = pos;
-            __with_2544_9->name = name;
-            __with_2544_9->cname = name;
-            __with_2544_9->ret = ty;
-            __with_2544_9->params = params.data;
-            __with_2544_9->nparams = params.len;
-            __with_2544_9->is_varargs = is_vararg;
-            __with_2544_9->sig_empty = p->params_empty;
+            Func *__with_2546_9 = f;
+            __with_2546_9->pos = pos;
+            __with_2546_9->name = name;
+            __with_2546_9->cname = name;
+            __with_2546_9->ret = ty;
+            __with_2546_9->params = params.data;
+            __with_2546_9->nparams = params.len;
+            __with_2546_9->is_varargs = is_vararg;
+            __with_2546_9->sig_empty = p->params_empty;
             if (Cp_is_punct(p, "{")) {
-                __with_2544_9->body = c_block(p);
+                __with_2546_9->body = c_block(p);
             }
         }
-        Decl *d = arena_alloc(p->a, sizeof(Decl));
+        Decl *d = Arena_alloc(p->a, sizeof(Decl));
         d->kind = DL_FUNC;
         d->pos = pos;
         d->func = f;
@@ -3390,16 +3390,16 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
         ty = ty_array(p->a, ty, gdims[gk]);
     }
     Cp_skip_gnu(p);
-    Decl *d2 = arena_alloc(p->a, sizeof(Decl));
+    Decl *d2 = Arena_alloc(p->a, sizeof(Decl));
     {
-        Decl *__with_2577_5 = d2;
-        __with_2577_5->kind = DL_VAR;
-        __with_2577_5->pos = pos;
-        __with_2577_5->name = name;
-        __with_2577_5->type = ty;
-        __with_2577_5->is_extern = is_extern;
+        Decl *__with_2579_5 = d2;
+        __with_2579_5->kind = DL_VAR;
+        __with_2579_5->pos = pos;
+        __with_2579_5->name = name;
+        __with_2579_5->type = ty;
+        __with_2579_5->is_extern = is_extern;
         if (Cp_eat(p, "=")) {
-            __with_2577_5->init = c_initializer(p);
+            __with_2579_5->init = c_initializer(p);
         }
     }
     return d2;
@@ -3506,8 +3506,8 @@ Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes, in
         StrSet_add(&cp.types, builtins[bi]);
         bi += 1;
     }
-    Module *m = arena_alloc(a, sizeof(Module));
-    m->path = arena_strdup(a, file);
+    Module *m = Arena_alloc(a, sizeof(Module));
+    m->path = Arena_strdup(a, file);
     m->is_header = 0;
     m->is_c = 1;
     Vec_pDecl decls;
@@ -3522,13 +3522,13 @@ Module *c_parse(Arena *a, const char *file, const char *bytes, size_t nbytes, in
     m->decls = decls.data;
     m->ndecls = decls.len;
     if (cp.typedefs.elen > 0) {
-        char **tdn = arena_alloc(a, (size_t)cp.typedefs.elen * sizeof(*tdn));
-        Type **tdt = arena_alloc(a, (size_t)cp.typedefs.elen * sizeof(*tdt));
+        char **tdn = Arena_alloc(a, (size_t)cp.typedefs.elen * sizeof(*tdn));
+        Type **tdt = Arena_alloc(a, (size_t)cp.typedefs.elen * sizeof(*tdt));
         int ntd = 0;
         size_t ti;
         for (ti = 0; ti < cp.typedefs.elen; ti += 1) {
             if (!cp.typedefs.dead[ti]) {
-                tdn[ntd] = arena_strdup(a, cp.typedefs.keys[ti]);
+                tdn[ntd] = Arena_strdup(a, cp.typedefs.keys[ti]);
                 tdt[ntd] = cp.typedefs.vals[ti];
                 ntd += 1;
             }

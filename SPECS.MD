@@ -191,6 +191,12 @@ is negative) and stays visible after the loop. It is **reusable**: a later
 declaration of the *same type* (`i: usize = 0`) is accepted and becomes a
 plain assignment. A redeclaration with a *different* type is still an error.
 
+When a later loop over the same iterator **counts down through negative
+values**, an unsigned iterator would compile to `i > -1` — a loop that never
+runs. So: if the compiler owns that declaration it is **promoted to `isize`**
+(which represents both ranges); if *you* declared the variable unsigned, the
+descending loop is a compile error telling you to use `isize`.
+
 C's three-part `for` and `switch` are also accepted (mainly for the C
 frontend); the idiomatic forms above cover normal use.
 

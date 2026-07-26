@@ -108,7 +108,7 @@ def main() -> int:
            app.palitems.data[0].label if app.palitems.len > 0 else "-")
     keyp(ref app, PGK_RETURN, 0)
     printf("zoom=%d cell=%d\n", app.zoom, app.ui.font.char_w())
-    app.set_zoom(1)
+    app.set_zoom(pg_font_default_size())      # back to the default step
 
     # go to line via ":" (palette)
     app.select_tab(0)
@@ -138,6 +138,70 @@ def main() -> int:
     tr: PgRect = app.ui.rect_of(app.tree)
     click(ref app, tr.x + 20, tr.y + app.ui.font.line_h() / 2)
     printf("tree_expanded=%d\n", app.entries.len)
+
+    # ---- folding through the gutter, and the new editing commands ----
+    app.select_tab(0)
+    cvf: *CodeView = app.cur_cv()
+    cvf->buf.move_to(0, 0)
+    rw: PgRect = app.ui.rect_of(cvf->id)
+    trf: PgRect = cvf->text_rect()
+    lhf: i32 = app.ui.font.line_h()
+    cwf: i32 = app.ui.font.char_w()
+    printf("can_fold0=%d\n", cvf->buf.can_fold(0))
+    # gutter columns, left to right: marks (2) | fold (2) | numbers (5)
+    click(ref app, rw.x + cwf, trf.y + lhf / 2)                    # ● toggles
+    printf("gutter mark: %d\n", cvf->buf.mark_of(0))
+    click(ref app, rw.x + cwf, trf.y + lhf / 2)
+    printf("gutter unmark: %d\n", cvf->buf.mark_of(0))
+    click(ref app, rw.x + cwf * 3, trf.y + lhf / 2)                # ▾ of line 0
+    printf("gutter fold: folded0=%d visible=%d rows_line1=%d\n",
+           cvf->buf.is_folded(0), cvf->buf.visible_count(), cvf->line_at_row(1))
+    click(ref app, rw.x + cwf * 3, trf.y + lhf / 2)                # ▸ unfolds
+    printf("gutter unfold: folded0=%d visible=%d\n",
+           cvf->buf.is_folded(0), cvf->buf.visible_count())
+    # bookmarks: ctrl+F2 marks, F2 jumps
+    cvf->buf.move_to(2, 0)
+    keyp(ref app, PGK_F2, PGM_CTRL)
+    cvf->buf.move_to(0, 0)
+    keyp(ref app, PGK_F2, 0)
+    printf("bookmark: mark2=%d caret=%d\n", cvf->buf.mark_of(2), cvf->buf.caret(0)->line)
+
+    # ctrl+/ comments, ctrl+shift+d duplicates, ctrl+shift+up moves
+    cvf->buf.move_to(1, 4)
+    keyp(ref app, i32('/'), PGM_CTRL)
+    printf("comment: 1=[%s]\n", cvf->buf.line_text(1))
+    keyp(ref app, i32('/'), PGM_CTRL)
+    printf("uncomment: 1=[%s]\n", cvf->buf.line_text(1))
+    keyp(ref app, i32('d'), PGM_CTRL | PGM_SHIFT)
+    printf("dup: 1=[%s] 2=[%s] lines=%d\n", cvf->buf.line_text(1),
+           cvf->buf.line_text(2), cvf->buf.nlines())
+    keyp(ref app, PGK_UP, PGM_CTRL | PGM_SHIFT)
+    printf("moved: caret=%d\n", cvf->buf.caret(0)->line)
+    keyp(ref app, i32('z'), PGM_CTRL)
+    keyp(ref app, i32('z'), PGM_CTRL)
+
+    # auto-pairs: typing '(' inserts the pair, typing ')' steps over it
+    cvf->buf.move_to(1, cvf->buf.line_cp(1))
+    typed(ref app, "(")
+    printf("pair: 1=[%s] col=%d\n", cvf->buf.line_text(1), cvf->buf.caret(0)->col)
+    typed(ref app, ")")
+    printf("skip: 1=[%s] col=%d\n", cvf->buf.line_text(1), cvf->buf.caret(0)->col)
+    keyp(ref app, PGK_BACKSPACE, 0)      # between the pair: removes both
+    printf("pair_bs: 1=[%s]\n", cvf->buf.line_text(1))
+    keyp(ref app, i32('z'), PGM_CTRL)
+
+    # ---- completion: the index feeds the popup ----
+    cvf->buf.move_to(0, 0)
+    cvf->buf.end(False)
+    typed(ref app, " ")
+    typed(ref app, "m")
+    keyp(ref app, i32(' '), PGM_CTRL)          # ctrl+space
+    printf("popup: open=%d hits=%d first=%s\n", cvf->cmp_open, cvf->cmp_hits.len,
+           cvf->index.sym(cvf->cmp_hits.data[0])->name if cvf->cmp_hits.len > 0 else "-")
+    keyp(ref app, PGK_RETURN, 0)               # accepts the selection
+    printf("accepted: 0=[%s] open=%d\n", cvf->buf.line_text(0), cvf->cmp_open)
+    keyp(ref app, i32('z'), PGM_CTRL)
+    keyp(ref app, i32('z'), PGM_CTRL)
 
     # status bar and a screenshot of the frame
     app.update_status()

@@ -1,7 +1,7 @@
 window=1100x720
 tree=3 indexed_files=3
 tabs=1 cur=0 title=hello.p
-lines=4 hl=1 gutter=48
+lines=4 hl=1 gutter=80
 typed=[    x: i32 = 42  # resposta0] dirty=1
 undo=[    x: i32 = 42  # resposta]
 redo=[    x: i32 = 42  # resposta0]
@@ -9,23 +9,38 @@ carets=2
 palette=1 top=sub/notas.txt
 tabs=2 cur=notas.txt hl_txt=0
 cmds=1 top=Zoom In
-zoom=2 cell=16
+zoom=4 cell=10
 goto=3
 find1=0:14
 find2=1:7
 clicked_tab=0
 tree_expanded=4
-status=[proj/hello.p*   2:11   LF   4 lines   1x]
+can_fold0=1
+gutter mark: 2
+gutter unmark: 0
+gutter fold: folded0=1 visible=2 rows_line1=3
+gutter unfold: folded0=0 visible=4
+bookmark: mark2=1 caret=2
+comment: 1=[    # x: i32 = 42  # resposta0]
+uncomment: 1=[    x: i32 = 42  # resposta0]
+dup: 1=[    x: i32 = 42  # resposta0] 2=[    x: i32 = 42  # resposta0] lines=5
+moved: caret=1
+pair: 1=[    x: i32 = 42  # resposta0()] col=29
+skip: 1=[    x: i32 = 42  # resposta0()] col=30
+pair_bs: 1=[    x: i32 = 42  # resposta0(]
+popup: open=1 hits=2 first=main
+accepted: 0=[def main() -> i32: main] open=0
+status=[proj/hello.p*   1:20   LF   4 lines   17px]
 ##############################
 ##############################
-###################### ####...
-######################  ..    
-######################        
-######################        
-######################        
-######################        
-######################        
-######################        
+###################. ###.....#
+###################. .....    
+###################.          
+###################.          
+###################.          
+###################.          
+###################.          
+###################.          
 saved=1 dirty=0
 tabs=0
 app-ok

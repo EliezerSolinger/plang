@@ -19,9 +19,9 @@ def pclose(stream: *FILE) -> i32
 # runs the configured C preprocessor over a RAW .c file (cpp resolves
 # #include/#define/#if); the cpp's stderr flows through to the user. A cpp
 # failure is a compile error — invalid preprocessing IS invalid input.
-static def preprocess_c(cc: *Cc, path: const *char, out_len: *usize) -> *char:
+static def preprocess_c(cc: *Cc, path: const *char, out out_len: usize) -> *char:
     cpp: const *char = cc->cpp if cc->cpp != None else "cc"
-    cmd: const *char = arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path)
+    cmd: const *char = cc->arena.printf("%s -E -P -x c \"%s\"", cpp, path)
     f: *FILE = popen(cmd, "r")
     if f == None:
         fatal("could not run the C preprocessor '%s' (see --cpp / PLANGC_CPP)", cpp)
@@ -32,13 +32,13 @@ static def preprocess_c(cc: *Cc, path: const *char, out_len: *usize) -> *char:
         if n == 0:
             break
         chunk[n] = '\0'
-        sb_puts(&b, &chunk[0])
+        b.puts(&chunk[0])
     rc: i32 = pclose(f)
     if rc != 0:
         fatal("C preprocessing failed for '%s' ('%s -E'; fix the errors above or see --cpp / PLANGC_CPP)", path, cpp)
-    res: *char = arena_strdup(&cc->arena, b.data if b.data != None else "")
-    *out_len = strlen(res)
-    sb_free(&b)
+    res: *char = cc->arena.strdup(b.data if b.data != None else "")
+    out_len = strlen(res)
+    b.deinit()
     return res
 
 def has_suffix(s: const *char, suf: const *char) -> bool:
@@ -86,22 +86,22 @@ static def mkdirs_for(p: const *char):
 
 static def derive_output(a: *Arena, input: const *char, be: const *Backend) -> const *char:
     n: usize = strlen(input)
-    if n > 3 and strcmp(input + n - 3, ".ph") == 0:
+    if n > 3 and input + n - 3 == ".ph":
         if be->hdr_ext == None:
             fatal("backend '%s' does not generate headers (.ph)", be->name)
-        return arena_printf(a, "%.*s.%s", i32(n - 3), input, be->hdr_ext)
-    if n > 2 and strcmp(input + n - 2, ".p") == 0:
-        return arena_printf(a, "%.*s.%s", i32(n - 2), input, be->out_ext)
-    if n > 2 and strcmp(input + n - 2, ".c") == 0:
-        return arena_printf(a, "%.*s.%s", i32(n - 2), input, be->out_ext)
-    if n > 2 and strcmp(input + n - 2, ".i") == 0:
-        return arena_printf(a, "%.*s.%s", i32(n - 2), input, be->out_ext)
+        return a->printf("%.*s.%s", i32(n - 3), input, be->hdr_ext)
+    if n > 2 and input + n - 2 == ".p":
+        return a->printf("%.*s.%s", i32(n - 2), input, be->out_ext)
+    if n > 2 and input + n - 2 == ".c":
+        return a->printf("%.*s.%s", i32(n - 2), input, be->out_ext)
+    if n > 2 and input + n - 2 == ".i":
+        return a->printf("%.*s.%s", i32(n - 2), input, be->out_ext)
     fatal("'%s': unknown extension (expected .p, .ph, .c or .i)", input)
     return None
 
 static def dump_tokens(path: const *char, cc: *Cc):
     len: usize = 0
-    bytes: *char = read_entire_file(path, &len)
+    bytes: *char = read_entire_file(path, out len)
     defer free(bytes)
     tl: TokenList = lex(path, bytes, len, &cc->arena)
     for i in range(tl.n):
@@ -133,7 +133,7 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
     if extra == 0:
         return
     total: i32 = extra + m->ndecls
-    nd: **Decl = arena_alloc(&cc->arena, sizeof(*m->decls) * usize(total))
+    nd: **Decl = cc->arena.alloc(sizeof(*m->decls) * usize(total))
     p = 0
     for i in range(cc->nmods):
         md2: *Module = cc->mods[i]
@@ -146,12 +146,12 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
                 # method with body=None (registers ret/params for coercion in
                 # calls; emit_func skips body None — materialized via
                 # `implement` on the owning object, without duplicating code)
-                c: *Decl = arena_alloc(&cc->arena, sizeof(Decl))
+                c: *Decl = cc->arena.alloc(sizeof(Decl))
                 *c = *d
                 if d->nmethods > 0:
-                    mc: **Func = arena_alloc(&cc->arena, sizeof(*d->methods) * usize(d->nmethods))
+                    mc: **Func = cc->arena.alloc(sizeof(*d->methods) * usize(d->nmethods))
                     for mk in range(d->nmethods):
-                        fc: *Func = arena_alloc(&cc->arena, sizeof(Func))
+                        fc: *Func = cc->arena.alloc(sizeof(Func))
                         *fc = *d->methods[mk]
                         # common methods are materialized via `implement` on
                         # the owning object (body=None here, signature only);
@@ -175,7 +175,7 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
             elif d->kind == DL_VAR and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
                 # a .ph const: TU-local data (the same rule the C backend
                 # applies with `static const` in the .h) — no link collision
-                cv: *Decl = arena_alloc(&cc->arena, sizeof(Decl))
+                cv: *Decl = cc->arena.alloc(sizeof(Decl))
                 *cv = *d
                 cv->is_static = True
                 nd[p] = cv
@@ -212,13 +212,13 @@ def main(argc: int, argv: **char) -> int:
             std: const *char = argv[i] + 6
             if std in {"c89", "c90"}:
                 std_version = 89
-            elif strcmp(std, "c99") == 0:
+            elif std == "c99":
                 std_version = 99
             else:
                 fatal("unknown --std '%s' (supported: c89, c99)", std)
-        elif strcmp(argv[i], "--i64-downgrade") == 0:
+        elif argv[i] == "--i64-downgrade":
             i64_mode = 1
-        elif strcmp(argv[i], "--i64-longlong") == 0:
+        elif argv[i] == "--i64-longlong":
             i64_mode = 2
         elif argv[i][0] == '-' and argv[i][1] == 'D':
             if argv[i][2] != '\0':
@@ -228,53 +228,53 @@ def main(argc: int, argv: **char) -> int:
                 if i >= argc:
                     usage()
                 defines.push(argv[i])         # -D NAME=VALUE (separate)
-        elif strcmp(argv[i], "-o") == 0:
+        elif argv[i] == "-o":
             i += 1
             if i >= argc:
                 usage()
             out_path = argv[i]
-        elif strcmp(argv[i], "--out-dir") == 0:
+        elif argv[i] == "--out-dir":
             i += 1
             if i >= argc:
                 usage()
             out_dir = argv[i]
-        elif strcmp(argv[i], "--backend") == 0:
+        elif argv[i] == "--backend":
             i += 1
             if i >= argc:
                 usage()
             backend_name = argv[i]
-        elif strcmp(argv[i], "--cpp") == 0:
+        elif argv[i] == "--cpp":
             i += 1
             if i >= argc:
                 usage()
             cpp_cmd = argv[i]
-        elif strcmp(argv[i], "--inline-runtime") == 0:
+        elif argv[i] == "--inline-runtime":
             inline_runtime = True
         elif argv[i] in {"-pedantic", "--pedantic", "-Wpedantic"}:
             pedantic_lvl = 1
         elif argv[i] in {"-pedantic-errors", "--pedantic-errors"}:
             pedantic_lvl = 2
-        elif strcmp(argv[i], "-w") == 0:
+        elif argv[i] == "-w":
             wsuppress = True
-        elif strcmp(argv[i], "-Werror") == 0:
+        elif argv[i] == "-Werror":
             werror = True
         elif strncmp(argv[i], "-Werror=", 8) == 0:
             diag_set(argv[i] + 8, 2)
         elif strncmp(argv[i], "-Wno-error=", 11) == 0:
             diag_set_no_error(argv[i] + 11)
-        elif strcmp(argv[i], "-Wall") == 0:
+        elif argv[i] == "-Wall":
             wall = True
-        elif strcmp(argv[i], "-Wextra") == 0:
+        elif argv[i] == "-Wextra":
             wall = True   # accepted; the -Wextra set matches -Wall for now
         elif strncmp(argv[i], "-Wno-", 5) == 0:
             diag_set(argv[i] + 5, 0)
         elif argv[i][0] == '-' and argv[i][1] == 'W' and argv[i][2] != '\0':
             diag_set(argv[i] + 2, 1)   # -W<group>: enable as a warning
-        elif strcmp(argv[i], "--tokens") == 0:
+        elif argv[i] == "--tokens":
             tokens_only = True
         elif argv[i] in {"-h", "--help"}:
             usage()
-        elif argv[i][0] == '-' and strcmp(argv[i], "-") != 0:
+        elif argv[i][0] == '-' and argv[i] != "-":
             fprintf(stderr, "plangc: unknown option '%s'\n", argv[i])
             usage()
         else:
@@ -290,7 +290,7 @@ def main(argc: int, argv: **char) -> int:
     if be == None:
         fatal("unknown backend: '%s'", backend_name)
 
-    if std_version == 89 and strcmp(be->name, "c") != 0:
+    if std_version == 89 and be->name != "c":
         fatal("--std=c89 only applies to the C backend")
     if i64_mode != 0 and std_version != 89:
         fatal("--i64-downgrade/--i64-longlong require --std=c89")
@@ -325,9 +325,9 @@ def main(argc: int, argv: **char) -> int:
                 # RAW C: run the configured preprocessor first, so #include
                 # and #define resolve like in any production compiler driver.
                 # .i input is already preprocessed and skips this.
-                cbytes = preprocess_c(&cc, path, &clen)
+                cbytes = preprocess_c(&cc, path, out clen)
             else:
-                cbytes = read_entire_file(path, &clen)
+                cbytes = read_entire_file(path, out clen)
             m = c_parse(&cc.arena, path, cbytes, clen, True)
             sema_run(&cc, m)
         else:
@@ -336,20 +336,20 @@ def main(argc: int, argv: **char) -> int:
             # QBE needs the LAYOUTS of imported types (offsets/enum). Imported
             # structs must not re-emit methods here (materialized via
             # `implement`); emit_func skips in_header methods.
-            if strcmp(be->name, "qbe") == 0:
+            if be->name == "qbe":
                 qbe_merge_types(&cc, m)
 
         out: StrBuf = {0}
-        defer sb_free(&out)
+        defer out.deinit()
         backend_emit(be, m, &out)
 
         dest: const *char = out_path if out_path != None else derive_output(&cc.arena, inputs.get(k), be)
         if out_dir != None:
             # the output tree MIRRORS the source tree under --out-dir, so the
             # emitted file-relative includes ("../stl/x.h") resolve inside it
-            dest = arena_printf(&cc.arena, "%s/%s", out_dir, dest)
+            dest = cc.arena.printf("%s/%s", out_dir, dest)
             mkdirs_for(dest)
-        if strcmp(dest, "-") == 0:
+        if dest == "-":
             fwrite(out.data, 1, out.len, stdout)
         else:
             f: *FILE = fopen(dest, "wb")

@@ -207,7 +207,7 @@ int32_t cstr_bytes(StrBuf *out, const char *lex) {
         } else {
             b = (int32_t)c & 0xFF;
         }
-        sb_printf(out, " b %d,", b);
+        StrBuf_printf(out, " b %d,", b);
         count += 1;
         i += 1;
     }
@@ -286,7 +286,7 @@ int32_t wstr_data(StrBuf *out, const char *lex, char elem) {
                 i += 4;
             }
         }
-        sb_printf(out, " %c %u,", elem, cp);
+        StrBuf_printf(out, " %c %u,", elem, cp);
         cnt += 1;
     }
     return cnt;
@@ -442,85 +442,85 @@ void Vec_QVar_deinit(Vec_QVar *self);
 
 
 void Vec_QVar_init(Vec_QVar *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_QVar_reserve(Vec_QVar *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(QVar) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(QVar) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_QVar_push(Vec_QVar *self, QVar item) {
-    Vec_QVar_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_QVar_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 QVar Vec_QVar_pop(Vec_QVar *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 QVar Vec_QVar_get(const Vec_QVar *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_QVar_set(Vec_QVar *self, int32_t i, QVar item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 QVar Vec_QVar_last(const Vec_QVar *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_QVar_is_empty(const Vec_QVar *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_QVar_insert_gap(Vec_QVar *self, int32_t i, int32_t n) {
-    Vec_QVar_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(QVar) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_QVar_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(QVar) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_QVar_insert_at(Vec_QVar *self, int32_t i, QVar item) {
-    Vec_QVar_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_QVar_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_QVar_remove_range(Vec_QVar *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(QVar) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(QVar) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_QVar_remove_at(Vec_QVar *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(QVar) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(QVar) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_QVar_swap_remove(Vec_QVar *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_QVar_clear(Vec_QVar *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_QVar_deinit(Vec_QVar *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 struct Vec_EnumConst {
@@ -561,85 +561,85 @@ void Vec_EnumConst_deinit(Vec_EnumConst *self);
 
 
 void Vec_EnumConst_init(Vec_EnumConst *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_EnumConst_reserve(Vec_EnumConst *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(EnumConst) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(EnumConst) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_EnumConst_push(Vec_EnumConst *self, EnumConst item) {
-    Vec_EnumConst_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_EnumConst_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 EnumConst Vec_EnumConst_pop(Vec_EnumConst *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 EnumConst Vec_EnumConst_get(const Vec_EnumConst *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_EnumConst_set(Vec_EnumConst *self, int32_t i, EnumConst item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 EnumConst Vec_EnumConst_last(const Vec_EnumConst *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_EnumConst_is_empty(const Vec_EnumConst *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_EnumConst_insert_gap(Vec_EnumConst *self, int32_t i, int32_t n) {
-    Vec_EnumConst_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(EnumConst) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_EnumConst_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(EnumConst) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_EnumConst_insert_at(Vec_EnumConst *self, int32_t i, EnumConst item) {
-    Vec_EnumConst_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_EnumConst_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_EnumConst_remove_range(Vec_EnumConst *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(EnumConst) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(EnumConst) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_EnumConst_remove_at(Vec_EnumConst *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(EnumConst) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(EnumConst) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_EnumConst_swap_remove(Vec_EnumConst *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_EnumConst_clear(Vec_EnumConst *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_EnumConst_deinit(Vec_EnumConst *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 struct Vec_i32 {
@@ -680,85 +680,85 @@ void Vec_i32_deinit(Vec_i32 *self);
 
 
 void Vec_i32_init(Vec_i32 *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_i32_reserve(Vec_i32 *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(int32_t) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(int32_t) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_i32_push(Vec_i32 *self, int32_t item) {
-    Vec_i32_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_i32_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 int32_t Vec_i32_pop(Vec_i32 *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 int32_t Vec_i32_get(const Vec_i32 *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_i32_set(Vec_i32 *self, int32_t i, int32_t item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 int32_t Vec_i32_last(const Vec_i32 *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_i32_is_empty(const Vec_i32 *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_i32_insert_gap(Vec_i32 *self, int32_t i, int32_t n) {
-    Vec_i32_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(int32_t) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_i32_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(int32_t) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_i32_insert_at(Vec_i32 *self, int32_t i, int32_t item) {
-    Vec_i32_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_i32_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_i32_remove_range(Vec_i32 *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(int32_t) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(int32_t) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_i32_remove_at(Vec_i32 *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(int32_t) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(int32_t) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_i32_swap_remove(Vec_i32 *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_i32_clear(Vec_i32 *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_i32_deinit(Vec_i32 *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 struct Vec_char {
@@ -799,85 +799,85 @@ void Vec_char_deinit(Vec_char *self);
 
 
 void Vec_char_init(Vec_char *self) {
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 void Vec_char_reserve(Vec_char *self, int32_t n) {
-    if (n <= (*self).cap) {
+    if (n <= self->cap) {
         return;
     }
-    int32_t nc = ((*self).cap == 0 ? 8 : (*self).cap);
+    int32_t nc = (self->cap == 0 ? 8 : self->cap);
     while (nc < n) {
         nc *= 2;
     }
-    (*self).data = realloc((*self).data, sizeof(char) * (size_t)nc);
-    (*self).cap = nc;
+    self->data = realloc(self->data, sizeof(char) * (size_t)nc);
+    self->cap = nc;
 }
 
 void Vec_char_push(Vec_char *self, char item) {
-    Vec_char_reserve(& *self, (*self).len + 1);
-    (*self).data[(*self).len] = item;
-    (*self).len += 1;
+    Vec_char_reserve(self, self->len + 1);
+    self->data[self->len] = item;
+    self->len += 1;
 }
 
 char Vec_char_pop(Vec_char *self) {
-    (*self).len -= 1;
-    return (*self).data[(*self).len];
+    self->len -= 1;
+    return self->data[self->len];
 }
 
 char Vec_char_get(const Vec_char *self, int32_t i) {
-    return (*self).data[i];
+    return self->data[i];
 }
 
 void Vec_char_set(Vec_char *self, int32_t i, char item) {
-    (*self).data[i] = item;
+    self->data[i] = item;
 }
 
 char Vec_char_last(const Vec_char *self) {
-    return (*self).data[(*self).len - 1];
+    return self->data[self->len - 1];
 }
 
 int Vec_char_is_empty(const Vec_char *self) {
-    return (*self).len == 0;
+    return self->len == 0;
 }
 
 void Vec_char_insert_gap(Vec_char *self, int32_t i, int32_t n) {
-    Vec_char_reserve(& *self, (*self).len + n);
-    memmove(&(*self).data[i + n], &(*self).data[i], sizeof(char) * (size_t)((*self).len - i));
-    (*self).len += n;
+    Vec_char_reserve(self, self->len + n);
+    memmove(&self->data[i + n], &self->data[i], sizeof(char) * (size_t)(self->len - i));
+    self->len += n;
 }
 
 void Vec_char_insert_at(Vec_char *self, int32_t i, char item) {
-    Vec_char_insert_gap(& *self, i, 1);
-    (*self).data[i] = item;
+    Vec_char_insert_gap(self, i, 1);
+    self->data[i] = item;
 }
 
 void Vec_char_remove_range(Vec_char *self, int32_t i, int32_t n) {
-    memmove(&(*self).data[i], &(*self).data[i + n], sizeof(char) * (size_t)((*self).len - i - n));
-    (*self).len -= n;
+    memmove(&self->data[i], &self->data[i + n], sizeof(char) * (size_t)(self->len - i - n));
+    self->len -= n;
 }
 
 void Vec_char_remove_at(Vec_char *self, int32_t i) {
-    memmove(&(*self).data[i], &(*self).data[i + 1], sizeof(char) * (size_t)((*self).len - i - 1));
-    (*self).len -= 1;
+    memmove(&self->data[i], &self->data[i + 1], sizeof(char) * (size_t)(self->len - i - 1));
+    self->len -= 1;
 }
 
 void Vec_char_swap_remove(Vec_char *self, int32_t i) {
-    (*self).len -= 1;
-    (*self).data[i] = (*self).data[(*self).len];
+    self->len -= 1;
+    self->data[i] = self->data[self->len];
 }
 
 void Vec_char_clear(Vec_char *self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 void Vec_char_deinit(Vec_char *self) {
-    free((*self).data);
-    (*self).data = NULL;
-    (*self).len = 0;
-    (*self).cap = 0;
+    free(self->data);
+    self->data = NULL;
+    self->len = 0;
+    self->cap = 0;
 }
 
 struct StrMap_pType {
@@ -1234,10 +1234,10 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
             return 0;
         }
         case EX_CAST: {
-            return Qb_const_int(self, e->lhs, & *ok);
+            return Qb_const_int(self, e->lhs, ok);
         }
         case EX_UNARY: {
-            int64_t v = Qb_const_int(self, e->lhs, & *ok);
+            int64_t v = Qb_const_int(self, e->lhs, ok);
             if (e->op == TK_MINUS) {
                 return -v;
             }
@@ -1254,8 +1254,8 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
             return 0;
         }
         case EX_BINARY: {
-            int64_t a = Qb_const_int(self, e->lhs, & *ok);
-            int64_t b = Qb_const_int(self, e->rhs, & *ok);
+            int64_t a = Qb_const_int(self, e->lhs, ok);
+            int64_t b = Qb_const_int(self, e->rhs, ok);
             switch (e->op) {
                 case TK_PLUS: {
                     return a + b;
@@ -1319,8 +1319,8 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
             break;
         }
         case EX_TERNARY: {
-            int64_t c = Qb_const_int(self, e->cond, & *ok);
-            return (c != 0 ? Qb_const_int(self, e->lhs, & *ok) : Qb_const_int(self, e->rhs, & *ok));
+            int64_t c = Qb_const_int(self, e->cond, ok);
+            return (c != 0 ? Qb_const_int(self, e->lhs, ok) : Qb_const_int(self, e->rhs, ok));
         }
         default: {
             *ok = 0;
@@ -1530,11 +1530,11 @@ static const char *Qb_emit_anon_data(Qb *self, Type *ty, Expr *e) {
             adb.len -= 1;
             adb.data[adb.len] = '\0';
         }
-        sb_printf(&self->data, "data $%s = align %d {%s }\n", nm, Qb_type_align(self, ty), adb.data);
+        StrBuf_printf(&self->data, "data $%s = align %d {%s }\n", nm, Qb_type_align(self, ty), adb.data);
     } else {
-        sb_printf(&self->data, "data $%s = { z %d }\n", nm, (Qb_size_of(self, ty) > 0 ? Qb_size_of(self, ty) : 1));
+        StrBuf_printf(&self->data, "data $%s = { z %d }\n", nm, (Qb_size_of(self, ty) > 0 ? Qb_size_of(self, ty) : 1));
     }
-    sb_free(&adb);
+    StrBuf_deinit(&adb);
     return nm;
 }
 
@@ -1547,35 +1547,35 @@ static int32_t Qb_data_scalar(Qb *self, StrBuf *db, Type *ty, Expr *e) {
     if (ty != NULL && ty->kind == TY_PTR && (e->kind == EX_COMPOUND || e->kind == EX_INITLIST)) {
         Type *aty = (e->kind == EX_COMPOUND ? e->cast_type : ty->inner);
         const char *anm = Qb_emit_anon_data(self, aty, e);
-        sb_printf(db, " l $%s,", anm);
+        StrBuf_printf(db, " l $%s,", anm);
         return 8;
     }
     if ((scls == 'd' || scls == 's') && e->kind == EX_NUMBER) {
-        sb_printf(db, " %c %c_%s,", scls, scls, fnum(e->text));
+        StrBuf_printf(db, " %c %c_%s,", scls, scls, fnum(e->text));
         return sz;
     }
     if (e->kind == EX_UNARY && e->op == TK_AMP && e->lhs != NULL && e->lhs->kind == EX_IDENT) {
-        sb_printf(db, " l $%s,", e->lhs->text);
+        StrBuf_printf(db, " l $%s,", e->lhs->text);
         return 8;
     }
     if (e->kind == EX_IDENT && StrMap_pFunc_get_or(&self->funcs, e->text, NULL) != NULL) {
-        sb_printf(db, " l $%s,", e->text);
+        StrBuf_printf(db, " l $%s,", e->text);
         return 8;
     }
     if (e->kind == EX_IDENT) {
         Type *ga = StrMap_pType_get_or(&self->globals, e->text, NULL);
         if (ga != NULL && ga->kind == TY_ARRAY) {
-            sb_printf(db, " l $%s,", e->text);
+            StrBuf_printf(db, " l $%s,", e->text);
             return 8;
         }
     }
     if (e->kind == EX_STRING && ty != NULL && ty->kind == TY_PTR) {
         int32_t sid = Qb_emit_string(self, e->text);
-        sb_printf(db, " l $qstr%d,", sid);
+        StrBuf_printf(db, " l $qstr%d,", sid);
         return 8;
     }
     if (e->kind == EX_NONE) {
-        sb_printf(db, " l 0,");
+        StrBuf_printf(db, " l 0,");
         return 8;
     }
     int ok = 1;
@@ -1591,7 +1591,7 @@ static int32_t Qb_data_scalar(Qb *self, StrBuf *db, Type *ty, Expr *e) {
     } else if (sz == 8) {
         dt = "l";
     }
-    sb_printf(db, " %s %lld,", dt, v);
+    StrBuf_printf(db, " %s %lld,", dt, v);
     return sz;
 }
 
@@ -1622,10 +1622,10 @@ static int32_t Qb_data_fill(Qb *self, StrBuf *db, Type *ty, Expr **items, int32_
         Expr *se = items[*idx];
         *idx += 1;
         int32_t nb = cstr_bytes(db, se->text);
-        sb_puts(db, " b 0,");
+        StrBuf_puts(db, " b 0,");
         int32_t sz2 = Qb_size_of(self, ty);
         if (sz2 > nb + 1) {
-            sb_printf(db, " z %d,", sz2 - (nb + 1));
+            StrBuf_printf(db, " z %d,", sz2 - (nb + 1));
             return sz2;
         }
         return nb + 1;
@@ -1674,7 +1674,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
             cnt += 1;
         }
         if (count >= 0 && count * esz > emitted) {
-            sb_printf(db, " z %d,", count * esz - emitted);
+            StrBuf_printf(db, " z %d,", count * esz - emitted);
             emitted = count * esz;
         }
         return emitted;
@@ -1700,7 +1700,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
                     }
                     int32_t usz0 = Qb_struct_size(self, sd);
                     if (usz0 > ru) {
-                        sb_printf(db, " z %d,", usz0 - ru);
+                        StrBuf_printf(db, " z %d,", usz0 - ru);
                     }
                     return usz0;
                 }
@@ -1719,7 +1719,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
                         }
                         int32_t usz1 = Qb_struct_size(self, sd);
                         if (usz1 > ra) {
-                            sb_printf(db, " z %d,", usz1 - ra);
+                            StrBuf_printf(db, " z %d,", usz1 - ra);
                         }
                         return usz1;
                     }
@@ -1733,7 +1733,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
         }
         int32_t usz = Qb_struct_size(self, sd);
         if (usz > r2) {
-            sb_printf(db, " z %d,", usz - r2);
+            StrBuf_printf(db, " z %d,", usz - r2);
         }
         return usz;
     }
@@ -1774,7 +1774,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
                 i += 1;
             }
             if (ub > off) {
-                sb_printf(db, " z %d,", ub - off);
+                StrBuf_printf(db, " z %d,", ub - off);
             }
             const char *dtn = "w";
             if (ts == 1) {
@@ -1784,7 +1784,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
             } else if (ts == 8) {
                 dtn = "l";
             }
-            sb_printf(db, " %s %lld,", dtn, uval);
+            StrBuf_printf(db, " %s %lld,", dtn, uval);
             off = ub + ts;
             continue;
         }
@@ -1793,7 +1793,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
         }
         int32_t fo = align_up(off, Qb_type_align(self, sd->fields[i].type));
         if (fo > off) {
-            sb_printf(db, " z %d,", fo - off);
+            StrBuf_printf(db, " z %d,", fo - off);
         }
         int32_t r3 = Qb_data_fill(self, db, sd->fields[i].type, items, nitems, idx);
         if (r3 < 0) {
@@ -1804,7 +1804,7 @@ static int32_t Qb_data_fill_body(Qb *self, StrBuf *db, Type *ty, Decl *sd, Expr 
     }
     int32_t tot = Qb_struct_size(self, sd);
     if (tot > off) {
-        sb_printf(db, " z %d,", tot - off);
+        StrBuf_printf(db, " z %d,", tot - off);
     }
     return tot;
 }
@@ -1848,7 +1848,7 @@ static int32_t Qb_data_fill_slots_arr(Qb *self, StrBuf *db, Type *ty, int32_t co
     int emitted = 0;
     for (k = 0; k < n; k += 1) {
         if (slots[k] == NULL) {
-            sb_printf(db, " z %d,", esz);
+            StrBuf_printf(db, " z %d,", esz);
             emitted += esz;
         } else {
             int j = 0;
@@ -1927,7 +1927,7 @@ static int32_t Qb_data_fill_slots_struct(Qb *self, StrBuf *db, Decl *sd, Expr **
                 k += 1;
             }
             if (ub > off) {
-                sb_printf(db, " z %d,", ub - off);
+                StrBuf_printf(db, " z %d,", ub - off);
             }
             const char *dtn = "w";
             if (ts == 1) {
@@ -1937,18 +1937,18 @@ static int32_t Qb_data_fill_slots_struct(Qb *self, StrBuf *db, Decl *sd, Expr **
             } else if (ts == 8) {
                 dtn = "l";
             }
-            sb_printf(db, " %s %lld,", dtn, uval);
+            StrBuf_printf(db, " %s %lld,", dtn, uval);
             off = ub + ts;
             continue;
         }
         int32_t fo = align_up(off, Qb_type_align(self, sd->fields[k].type));
         if (fo > off) {
-            sb_printf(db, " z %d,", fo - off);
+            StrBuf_printf(db, " z %d,", fo - off);
         }
         int32_t fsz = Qb_size_of(self, sd->fields[k].type);
         if (slots[k] == NULL) {
             if (fsz > 0) {
-                sb_printf(db, " z %d,", fsz);
+                StrBuf_printf(db, " z %d,", fsz);
             }
             off = fo + fsz;
         } else {
@@ -1965,7 +1965,7 @@ static int32_t Qb_data_fill_slots_struct(Qb *self, StrBuf *db, Decl *sd, Expr **
     free(slots);
     int32_t tot = Qb_struct_size(self, sd);
     if (tot > off) {
-        sb_printf(db, " z %d,", tot - off);
+        StrBuf_printf(db, " z %d,", tot - off);
     }
     return tot;
 }
@@ -1990,7 +1990,7 @@ static int Qb_qtype_member(Qb *self, StrBuf *out, Type *ft, int32_t count) {
         return 0;
     }
     if (ft->kind == TY_PTR || ft->kind == TY_FUNC) {
-        sb_printf(out, " l %d,", count);
+        StrBuf_printf(out, " l %d,", count);
         return 1;
     }
     if (ft->kind != TY_NAME) {
@@ -2001,7 +2001,7 @@ static int Qb_qtype_member(Qb *self, StrBuf *out, Type *ft, int32_t count) {
         if (sub->nfields == 0) {
             return 1;
         }
-        sb_printf(out, " :%s %d,", ft->name, count);
+        StrBuf_printf(out, " :%s %d,", ft->name, count);
         return 1;
     }
     if (Qb_is_valist(self, ft)) {
@@ -2021,7 +2021,7 @@ static int Qb_qtype_member(Qb *self, StrBuf *out, Type *ft, int32_t count) {
     } else if (sz == 8) {
         le = 'l';
     }
-    sb_printf(out, " %c %d,", le, count);
+    StrBuf_printf(out, " %c %d,", le, count);
     return 1;
 }
 
@@ -2048,7 +2048,7 @@ static void Qb_emit_qtype(Qb *self, StrBuf *out, const char *name, StrSet *done)
     int ok = 1;
     if (d->kind == DL_UNION) {
         for (i = 0; i < d->nfields; i += 1) {
-            sb_puts(&db, " {");
+            StrBuf_puts(&db, " {");
             if (!Qb_qtype_member(self, &db, d->fields[i].type, 1)) {
                 ok = 0;
                 break;
@@ -2057,7 +2057,7 @@ static void Qb_emit_qtype(Qb *self, StrBuf *out, const char *name, StrSet *done)
                 db.len -= 1;
                 db.data[db.len] = '\0';
             }
-            sb_puts(&db, " }");
+            StrBuf_puts(&db, " }");
         }
     } else {
         i = 0;
@@ -2089,7 +2089,7 @@ static void Qb_emit_qtype(Qb *self, StrBuf *out, const char *name, StrSet *done)
                 } else if (ts == 8) {
                     ul = 'l';
                 }
-                sb_printf(&db, " %c 1,", ul);
+                StrBuf_printf(&db, " %c 1,", ul);
                 continue;
             }
             if (!Qb_qtype_member(self, &db, d->fields[i].type, 1)) {
@@ -2103,11 +2103,11 @@ static void Qb_emit_qtype(Qb *self, StrBuf *out, const char *name, StrSet *done)
         db.data[db.len] = '\0';
     }
     if (ok) {
-        sb_printf(out, "type :%s = align %d {%s }\n", name, Qb_struct_align(self, d), (db.data != NULL ? db.data : ""));
+        StrBuf_printf(out, "type :%s = align %d {%s }\n", name, Qb_struct_align(self, d), (db.data != NULL ? db.data : ""));
     } else {
-        sb_printf(out, "type :%s = align %d { %d }\n", name, Qb_struct_align(self, d), Qb_struct_size(self, d));
+        StrBuf_printf(out, "type :%s = align %d { %d }\n", name, Qb_struct_align(self, d), Qb_struct_size(self, d));
     }
-    sb_free(&db);
+    StrBuf_deinit(&db);
 }
 
 static int Qb_is_agg(Qb *self, Type *t) {
@@ -2530,6 +2530,12 @@ static char Qb_ecls(Qb *self, Expr *e) {
     if (e->kind == EX_UNARY && e->op == TK_NOT) {
         return 'w';
     }
+    if (e->kind == EX_IDENT && Qb_find_var(self, e->text) == NULL && StrMap_pType_get_or(&self->globals, e->text, NULL) == NULL) {
+        int64_t eve = 0;
+        if (!Qb_enum_lookup(self, e->text, &eve)) {
+            return 'l';
+        }
+    }
     Type *te = Qb_qtype_of(self, e);
     if (Qb_is_agg(self, te) || (te != NULL && te->kind == TY_ARRAY) || Qb_is_valist(self, te)) {
         return 'l';
@@ -2543,14 +2549,14 @@ static int32_t Qb_emit_string(Qb *self, const char *lex) {
     if (lit_is_wide(lex)) {
         char elem = (lex[0] == 'u' ? 'h' : 'w');
         int32_t esz = (lex[0] == 'u' ? 2 : 4);
-        sb_printf(&self->data, "data $qstr%d = align %d {", id, esz);
+        StrBuf_printf(&self->data, "data $qstr%d = align %d {", id, esz);
         wstr_data(&self->data, lex, elem);
-        sb_printf(&self->data, " %c 0 }\n", elem);
+        StrBuf_printf(&self->data, " %c 0 }\n", elem);
         return id;
     }
-    sb_printf(&self->data, "data $qstr%d = {", id);
+    StrBuf_printf(&self->data, "data $qstr%d = {", id);
     cstr_bytes(&self->data, lex);
-    sb_puts(&self->data, " b 0 }\n");
+    StrBuf_puts(&self->data, " b 0 }\n");
     return id;
 }
 
@@ -2561,18 +2567,18 @@ static int32_t Qb_emit_addr(Qb *self, Expr *e) {
             if (v != NULL) {
                 if (v->ext) {
                     int32_t te = Qb_tmp(self);
-                    sb_printf(self->out, "\t%%t%d =l copy $%s\n", te, v->name);
+                    StrBuf_printf(self->out, "\t%%t%d =l copy $%s\n", te, v->name);
                     return te;
                 }
                 if (v->is_static) {
                     int32_t ts = Qb_tmp(self);
-                    sb_printf(self->out, "\t%%t%d =l copy $sl%d\n", ts, v->sid);
+                    StrBuf_printf(self->out, "\t%%t%d =l copy $sl%d\n", ts, v->sid);
                     return ts;
                 }
                 return v->slot;
             }
             int32_t t = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l copy $%s\n", t, e->text);
+            StrBuf_printf(self->out, "\t%%t%d =l copy $%s\n", t, e->text);
             return t;
         }
         case EX_UNARY: {
@@ -2601,7 +2607,7 @@ static int32_t Qb_emit_addr(Qb *self, Expr *e) {
             Type *fty = NULL;
             int32_t off = Qb_field_offset(self, d, e->field, &fty);
             int32_t fa = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa, base, off);
+            StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa, base, off);
             return fa;
         }
         case EX_INDEX: {
@@ -2609,7 +2615,7 @@ static int32_t Qb_emit_addr(Qb *self, Expr *e) {
             int32_t idx = Qb_emit_rvalue(self, e->rhs);
             if (Qb_ecls(self, e->rhs) != 'l') {
                 int32_t idxl = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =l extsw %%t%d\n", idxl, idx);
+                StrBuf_printf(self->out, "\t%%t%d =l extsw %%t%d\n", idxl, idx);
                 idx = idxl;
             }
             Type *elem = Qb_qtype_of(self, e->lhs);
@@ -2618,9 +2624,9 @@ static int32_t Qb_emit_addr(Qb *self, Expr *e) {
                 esz = Qb_size_of(self, elem->inner);
             }
             int32_t off = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l mul %%t%d, %d\n", off, idx, esz);
+            StrBuf_printf(self->out, "\t%%t%d =l mul %%t%d, %d\n", off, idx, esz);
             int32_t a = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l add %%t%d, %%t%d\n", a, base, off);
+            StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %%t%d\n", a, base, off);
             return a;
         }
         default: {
@@ -2687,21 +2693,21 @@ static int32_t Qb_emit_coerce(Qb *self, int32_t val, char frm, char to) {
     }
     int32_t t = Qb_tmp(self);
     if (frm == 'w' && to == 'l') {
-        sb_printf(self->out, "\t%%t%d =l extsw %%t%d\n", t, val);
+        StrBuf_printf(self->out, "\t%%t%d =l extsw %%t%d\n", t, val);
     } else if (frm == 'l' && to == 'w') {
-        sb_printf(self->out, "\t%%t%d =w copy %%t%d\n", t, val);
+        StrBuf_printf(self->out, "\t%%t%d =w copy %%t%d\n", t, val);
     } else if ((frm == 'w' || frm == 'l') && (to == 's' || to == 'd')) {
         const char *conv = (frm == 'w' ? "swtof" : "sltof");
-        sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t, to, conv, val);
+        StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t, to, conv, val);
     } else if ((frm == 's' || frm == 'd') && (to == 'w' || to == 'l')) {
         const char *conv2 = (frm == 's' ? "stosi" : "dtosi");
-        sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t, to, conv2, val);
+        StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t, to, conv2, val);
     } else if (frm == 's' && to == 'd') {
-        sb_printf(self->out, "\t%%t%d =d exts %%t%d\n", t, val);
+        StrBuf_printf(self->out, "\t%%t%d =d exts %%t%d\n", t, val);
     } else if (frm == 'd' && to == 's') {
-        sb_printf(self->out, "\t%%t%d =s truncd %%t%d\n", t, val);
+        StrBuf_printf(self->out, "\t%%t%d =s truncd %%t%d\n", t, val);
     } else {
-        sb_printf(self->out, "\t%%t%d =%c copy %%t%d\n", t, to, val);
+        StrBuf_printf(self->out, "\t%%t%d =%c copy %%t%d\n", t, to, val);
     }
     return t;
 }
@@ -2712,34 +2718,34 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
             if (is_float_lit(e->text)) {
                 char fc = float_cls(e->text);
                 int32_t tf = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =%c copy %c_%s\n", tf, fc, fc, fnum(e->text));
+                StrBuf_printf(self->out, "\t%%t%d =%c copy %c_%s\n", tf, fc, fc, fnum(e->text));
                 return tf;
             }
             uint64_t nv = strtoull(e->text, NULL, 0);
             int32_t t = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c copy %llu\n", t, Qb_ecls(self, e), nv);
+            StrBuf_printf(self->out, "\t%%t%d =%c copy %llu\n", t, Qb_ecls(self, e), nv);
             return t;
         }
         case EX_TRUE: {
             int32_t t2 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =w copy 1\n", t2);
+            StrBuf_printf(self->out, "\t%%t%d =w copy 1\n", t2);
             return t2;
         }
         case EX_FALSE:
         case EX_NONE: {
             int32_t t3 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c copy 0\n", t3, Qb_ecls(self, e));
+            StrBuf_printf(self->out, "\t%%t%d =%c copy 0\n", t3, Qb_ecls(self, e));
             return t3;
         }
         case EX_CHARLIT: {
             int32_t t4 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =w copy %d\n", t4, Qb_charval(self, e->text));
+            StrBuf_printf(self->out, "\t%%t%d =w copy %d\n", t4, Qb_charval(self, e->text));
             return t4;
         }
         case EX_STRING: {
             int32_t sid = Qb_emit_string(self, e->text);
             int32_t t5 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l copy $qstr%d\n", t5, sid);
+            StrBuf_printf(self->out, "\t%%t%d =l copy $qstr%d\n", t5, sid);
             return t5;
         }
         case EX_IDENT: {
@@ -2749,7 +2755,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
                 int32_t fsid = Qb_emit_string(self, fq);
                 free(fq);
                 int32_t tfq = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =l copy $qstr%d\n", tfq, fsid);
+                StrBuf_printf(self->out, "\t%%t%d =l copy $qstr%d\n", tfq, fsid);
                 return tfq;
             }
             QVar *v = Qb_find_var(self, e->text);
@@ -2760,43 +2766,43 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
                         return sa;
                     }
                     int32_t ts2 = Qb_tmp(self);
-                    sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", ts2, v->cls, Qb_load_op(self, v->ty), sa);
+                    StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", ts2, v->cls, Qb_load_op(self, v->ty), sa);
                     return ts2;
                 }
                 if (v->ty != NULL && (v->ty->kind == TY_ARRAY || Qb_is_agg(self, v->ty) || Qb_is_valist(self, v->ty))) {
                     int32_t tb = Qb_tmp(self);
-                    sb_printf(self->out, "\t%%t%d =l copy %%t%d\n", tb, v->slot);
+                    StrBuf_printf(self->out, "\t%%t%d =l copy %%t%d\n", tb, v->slot);
                     return tb;
                 }
                 int32_t t6 = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t6, v->cls, Qb_load_op(self, v->ty), v->slot);
+                StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t6, v->cls, Qb_load_op(self, v->ty), v->slot);
                 return t6;
             }
             Type *gt = StrMap_pType_get_or(&self->globals, e->text, NULL);
             if (gt != NULL) {
                 if (gt->kind == TY_ARRAY || Qb_is_agg(self, gt) || Qb_is_valist(self, gt)) {
                     int32_t tg = Qb_tmp(self);
-                    sb_printf(self->out, "\t%%t%d =l copy $%s\n", tg, e->text);
+                    StrBuf_printf(self->out, "\t%%t%d =l copy $%s\n", tg, e->text);
                     return tg;
                 }
                 int32_t addr = Qb_emit_addr(self, e);
                 int32_t t7 = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t7, Qb_cls_of(self, gt), Qb_load_op(self, gt), addr);
+                StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t7, Qb_cls_of(self, gt), Qb_load_op(self, gt), addr);
                 return t7;
             }
             int64_t ev = 0;
             if (Qb_enum_lookup(self, e->text, &ev)) {
                 int32_t t8e = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =w copy %lld\n", t8e, ev);
+                StrBuf_printf(self->out, "\t%%t%d =w copy %lld\n", t8e, ev);
                 return t8e;
             }
             if (strcmp(e->text, "stderr") == 0 || strcmp(e->text, "stdout") == 0 || strcmp(e->text, "stdin") == 0) {
                 int32_t tio = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =l loadl $%s\n", tio, e->text);
+                StrBuf_printf(self->out, "\t%%t%d =l loadl $%s\n", tio, e->text);
                 return tio;
             }
             int32_t t8 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l copy $%s\n", t8, e->text);
+            StrBuf_printf(self->out, "\t%%t%d =l copy $%s\n", t8, e->text);
             return t8;
         }
         case EX_CAST: {
@@ -2818,7 +2824,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
                 return addr2;
             }
             int32_t t9 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t9, Qb_cls_of(self, et), Qb_load_op(self, et), addr2);
+            StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t9, Qb_cls_of(self, et), Qb_load_op(self, et), addr2);
             return t9;
         }
         case EX_FIELD: {
@@ -2838,7 +2844,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
                 return faddr;
             }
             int32_t tf = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", tf, Qb_cls_of(self, ft), Qb_load_op(self, ft), faddr);
+            StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", tf, Qb_cls_of(self, ft), Qb_load_op(self, ft), faddr);
             return tf;
         }
         case EX_TERNARY: {
@@ -2867,7 +2873,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
                 seres = Qb_emit_rvalue(self, e->lhs);
             } else {
                 seres = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =w copy 0\n", seres);
+                StrBuf_printf(self->out, "\t%%t%d =w copy 0\n", seres);
             }
             self->binds.len = semark;
             return seres;
@@ -2876,7 +2882,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
             int32_t apv = Qb_emit_rvalue(self, e->lhs);
             char vcls = Qb_cls_of(self, e->cast_type);
             int32_t tv = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c vaarg %%t%d\n", tv, vcls, apv);
+            StrBuf_printf(self->out, "\t%%t%d =%c vaarg %%t%d\n", tv, vcls, apv);
             return tv;
         }
         case EX_COMPOUND: {
@@ -2886,7 +2892,7 @@ static int32_t Qb_emit_rvalue(Qb *self, Expr *e) {
                 return slot;
             }
             int32_t tc = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", tc, Qb_cls_of(self, ty), Qb_load_op(self, ty), slot);
+            StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", tc, Qb_cls_of(self, ty), Qb_load_op(self, ty), slot);
             return tc;
         }
         default: {
@@ -2902,19 +2908,19 @@ static int32_t Qb_emit_incdec(Qb *self, Expr *e) {
     char cls = Qb_cls_of(self, ty);
     int32_t addr = Qb_emit_addr(self, e->lhs);
     int32_t old = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", old, cls, Qb_load_op(self, ty), addr);
+    StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", old, cls, Qb_load_op(self, ty), addr);
     const char *opn = (e->op == TK_PLUS ? "add" : "sub");
     int32_t nw = Qb_tmp(self);
     if (cls == 's' || cls == 'd') {
-        sb_printf(self->out, "\t%%t%d =%c %s %%t%d, %c_1\n", nw, cls, opn, old, cls);
+        StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d, %c_1\n", nw, cls, opn, old, cls);
     } else {
         int step = 1;
         if (ty != NULL && ty->kind == TY_PTR) {
             step = Qb_size_of(self, ty->inner);
         }
-        sb_printf(self->out, "\t%%t%d =%c %s %%t%d, %d\n", nw, cls, opn, old, step);
+        StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d, %d\n", nw, cls, opn, old, step);
     }
-    sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, ty), nw, addr);
+    StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, ty), nw, addr);
     return (e->incdec_post ? old : nw);
 }
 
@@ -3014,7 +3020,7 @@ static int32_t Qb_emit_cast(Qb *self, Expr *e) {
                 xop = (Qb_is_signed(self, e->cast_type) ? "extsh" : "extuh");
             }
             int32_t tx = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =w %s %%t%d\n", tx, xop, r);
+            StrBuf_printf(self->out, "\t%%t%d =w %s %%t%d\n", tx, xop, r);
             return tx;
         }
     }
@@ -3033,7 +3039,7 @@ static int32_t Qb_emit_unary(Qb *self, Expr *e) {
                 return addr;
             }
             int32_t t = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t, Qb_cls_of(self, et), Qb_load_op(self, et), addr);
+            StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", t, Qb_cls_of(self, et), Qb_load_op(self, et), addr);
             return t;
         }
         case TK_AMP: {
@@ -3043,16 +3049,16 @@ static int32_t Qb_emit_unary(Qb *self, Expr *e) {
             int32_t v = Qb_emit_rvalue(self, e->lhs);
             char c = Qb_ecls(self, e->lhs);
             int32_t t2 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c neg %%t%d\n", t2, c, v);
+            StrBuf_printf(self->out, "\t%%t%d =%c neg %%t%d\n", t2, c, v);
             return t2;
         }
         case TK_TILDE: {
             int32_t v2 = Qb_emit_rvalue(self, e->lhs);
             char c2 = Qb_ecls(self, e->lhs);
             int32_t one = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c copy -1\n", one, c2);
+            StrBuf_printf(self->out, "\t%%t%d =%c copy -1\n", one, c2);
             int32_t t3 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c xor %%t%d, %%t%d\n", t3, c2, v2, one);
+            StrBuf_printf(self->out, "\t%%t%d =%c xor %%t%d, %%t%d\n", t3, c2, v2, one);
             return t3;
         }
         case TK_NOT: {
@@ -3060,13 +3066,13 @@ static int32_t Qb_emit_unary(Qb *self, Expr *e) {
             char nc = Qb_ecls(self, e->lhs);
             int32_t t4 = Qb_tmp(self);
             if (nc == 'l') {
-                sb_printf(self->out, "\t%%t%d =w ceql %%t%d, 0\n", t4, v3);
+                StrBuf_printf(self->out, "\t%%t%d =w ceql %%t%d, 0\n", t4, v3);
             } else if (nc == 'd') {
-                sb_printf(self->out, "\t%%t%d =w ceqd %%t%d, d_0\n", t4, v3);
+                StrBuf_printf(self->out, "\t%%t%d =w ceqd %%t%d, d_0\n", t4, v3);
             } else if (nc == 's') {
-                sb_printf(self->out, "\t%%t%d =w ceqs %%t%d, s_0\n", t4, v3);
+                StrBuf_printf(self->out, "\t%%t%d =w ceqs %%t%d, s_0\n", t4, v3);
             } else {
-                sb_printf(self->out, "\t%%t%d =w ceqw %%t%d, 0\n", t4, v3);
+                StrBuf_printf(self->out, "\t%%t%d =w ceqw %%t%d, 0\n", t4, v3);
             }
             return t4;
         }
@@ -3182,10 +3188,10 @@ static int32_t Qb_try_ptr_arith(Qb *self, int32_t op, int32_t l, Type *lt, char 
         }
         int32_t esz0 = Qb_size_of(self, lt->inner);
         int32_t d = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l sub %%t%d, %%t%d\n", d, l, r);
+        StrBuf_printf(self->out, "\t%%t%d =l sub %%t%d, %%t%d\n", d, l, r);
         if (esz0 > 1) {
             int32_t q = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l div %%t%d, %d\n", q, d, esz0);
+            StrBuf_printf(self->out, "\t%%t%d =l div %%t%d, %d\n", q, d, esz0);
             return q;
         }
         return d;
@@ -3203,11 +3209,11 @@ static int32_t Qb_try_ptr_arith(Qb *self, int32_t op, int32_t l, Type *lt, char 
     iv = Qb_emit_coerce(self, iv, icl, 'l');
     if (esz != 1) {
         int32_t sc = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l mul %%t%d, %d\n", sc, iv, esz);
+        StrBuf_printf(self->out, "\t%%t%d =l mul %%t%d, %d\n", sc, iv, esz);
         iv = sc;
     }
     int32_t res = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =l %s %%t%d, %%t%d\n", res, (op == TK_PLUS ? "add" : "sub"), pv, iv);
+    StrBuf_printf(self->out, "\t%%t%d =l %s %%t%d, %%t%d\n", res, (op == TK_PLUS ? "add" : "sub"), pv, iv);
     return res;
 }
 
@@ -3254,9 +3260,9 @@ static int32_t Qb_emit_binary(Qb *self, Expr *e) {
     int sgn = Qb_op_signed(self, e->lhs) && Qb_op_signed(self, e->rhs);
     int32_t t = Qb_tmp(self);
     if (is_cmp) {
-        sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, op, cls, sgn), l, r);
+        StrBuf_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, op, cls, sgn), l, r);
     } else {
-        sb_printf(self->out, "\t%%t%d =%c %s %%t%d, %%t%d\n", t, cls, Qb_binop_name(self, op, cls, sgn), l, r);
+        StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d, %%t%d\n", t, cls, Qb_binop_name(self, op, cls, sgn), l, r);
     }
     return t;
 }
@@ -3269,18 +3275,18 @@ static int32_t Qb_emit_cond(Qb *self, Expr *e) {
     }
     int32_t t = Qb_tmp(self);
     if (c == 'l') {
-        sb_printf(self->out, "\t%%t%d =w cnel %%t%d, 0\n", t, v);
+        StrBuf_printf(self->out, "\t%%t%d =w cnel %%t%d, 0\n", t, v);
     } else if (c == 'd') {
-        sb_printf(self->out, "\t%%t%d =w cned %%t%d, d_0\n", t, v);
+        StrBuf_printf(self->out, "\t%%t%d =w cned %%t%d, d_0\n", t, v);
     } else {
-        sb_printf(self->out, "\t%%t%d =w cnes %%t%d, s_0\n", t, v);
+        StrBuf_printf(self->out, "\t%%t%d =w cnes %%t%d, s_0\n", t, v);
     }
     return t;
 }
 
 static void Qb_emit_slot(Qb *self, int32_t res, int32_t align, int32_t bytes) {
     StrBuf *dst = (self->slots != NULL ? self->slots : self->out);
-    sb_printf(dst, "\t%%r%d =l alloc%d %d\n", res, align, bytes);
+    StrBuf_printf(dst, "\t%%r%d =l alloc%d %d\n", res, align, bytes);
 }
 
 static int32_t Qb_emit_logical(Qb *self, Expr *e) {
@@ -3292,23 +3298,23 @@ static int32_t Qb_emit_logical(Qb *self, Expr *e) {
     int32_t set0 = Qb_lbl(self);
     int32_t set1 = Qb_lbl(self);
     if (e->op == TK_AND) {
-        sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", l, rhs_lbl, set0);
+        StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", l, rhs_lbl, set0);
     } else {
-        sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", l, set1, rhs_lbl);
+        StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", l, set1, rhs_lbl);
     }
-    sb_printf(self->out, "@l%d\n", rhs_lbl);
+    StrBuf_printf(self->out, "@l%d\n", rhs_lbl);
     int32_t rb = Qb_emit_cond(self, e->rhs);
-    sb_printf(self->out, "\tstorew %%t%d, %%r%d\n", rb, res);
-    sb_printf(self->out, "\tjmp @l%d\n", end_lbl);
-    sb_printf(self->out, "@l%d\n", set1);
-    sb_printf(self->out, "\tstorew 1, %%r%d\n", res);
-    sb_printf(self->out, "\tjmp @l%d\n", end_lbl);
-    sb_printf(self->out, "@l%d\n", set0);
-    sb_printf(self->out, "\tstorew 0, %%r%d\n", res);
-    sb_printf(self->out, "\tjmp @l%d\n", end_lbl);
-    sb_printf(self->out, "@l%d\n", end_lbl);
+    StrBuf_printf(self->out, "\tstorew %%t%d, %%r%d\n", rb, res);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", end_lbl);
+    StrBuf_printf(self->out, "@l%d\n", set1);
+    StrBuf_printf(self->out, "\tstorew 1, %%r%d\n", res);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", end_lbl);
+    StrBuf_printf(self->out, "@l%d\n", set0);
+    StrBuf_printf(self->out, "\tstorew 0, %%r%d\n", res);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", end_lbl);
+    StrBuf_printf(self->out, "@l%d\n", end_lbl);
     int32_t t = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =w loadw %%r%d\n", t, res);
+    StrBuf_printf(self->out, "\t%%t%d =w loadw %%r%d\n", t, res);
     return t;
 }
 
@@ -3332,20 +3338,20 @@ static int32_t Qb_emit_ternary(Qb *self, Expr *e) {
     int32_t tl = Qb_lbl(self);
     int32_t fl = Qb_lbl(self);
     int32_t el = Qb_lbl(self);
-    sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, tl, fl);
-    sb_printf(self->out, "@l%d\n", tl);
+    StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, tl, fl);
+    StrBuf_printf(self->out, "@l%d\n", tl);
     int32_t tv = Qb_emit_rvalue(self, e->lhs);
     tv = Qb_emit_coerce(self, tv, Qb_ecls(self, e->lhs), cls);
-    sb_printf(self->out, "\t%s %%t%d, %%r%d\n", sop, tv, res);
-    sb_printf(self->out, "\tjmp @l%d\n", el);
-    sb_printf(self->out, "@l%d\n", fl);
+    StrBuf_printf(self->out, "\t%s %%t%d, %%r%d\n", sop, tv, res);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", el);
+    StrBuf_printf(self->out, "@l%d\n", fl);
     int32_t fv = Qb_emit_rvalue(self, e->rhs);
     fv = Qb_emit_coerce(self, fv, Qb_ecls(self, e->rhs), cls);
-    sb_printf(self->out, "\t%s %%t%d, %%r%d\n", sop, fv, res);
-    sb_printf(self->out, "\tjmp @l%d\n", el);
-    sb_printf(self->out, "@l%d\n", el);
+    StrBuf_printf(self->out, "\t%s %%t%d, %%r%d\n", sop, fv, res);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", el);
+    StrBuf_printf(self->out, "@l%d\n", el);
     int32_t t = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c %s %%r%d\n", t, cls, lop, res);
+    StrBuf_printf(self->out, "\t%%t%d =%c %s %%r%d\n", t, cls, lop, res);
     return t;
 }
 
@@ -3356,7 +3362,7 @@ static int32_t Qb_emit_call(Qb *self, Expr *e) {
         Type *st = (arg->kind == EX_TYPEREF ? arg->cast_type : Qb_qtype_of(self, arg));
         int32_t sz = Qb_size_of(self, st);
         int32_t rs = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l copy %d\n", rs, sz);
+        StrBuf_printf(self->out, "\t%%t%d =l copy %d\n", rs, sz);
         return rs;
     }
     if (fname != NULL && strcmp(fname, "__offsetof") == 0 && e->nargs == 2) {
@@ -3385,12 +3391,12 @@ static int32_t Qb_emit_call(Qb *self, Expr *e) {
             path = dot + 1;
         }
         int32_t ro = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l copy %d\n", ro, off);
+        StrBuf_printf(self->out, "\t%%t%d =l copy %d\n", ro, off);
         return ro;
     }
     if (fname != NULL && (strcmp(fname, "va_start") == 0 || strcmp(fname, "__builtin_va_start") == 0) && e->nargs >= 1) {
         int32_t ap0 = Qb_emit_rvalue(self, e->args[0]);
-        sb_printf(self->out, "\tvastart %%t%d\n", ap0);
+        StrBuf_printf(self->out, "\tvastart %%t%d\n", ap0);
         return ap0;
     }
     if (fname != NULL && (strcmp(fname, "va_end") == 0 || strcmp(fname, "__builtin_va_end") == 0)) {
@@ -3450,46 +3456,46 @@ static int32_t Qb_emit_call(Qb *self, Expr *e) {
     int ragg = !indirect && f != NULL && Qb_is_agg(self, f->ret);
     int32_t rt = Qb_tmp(self);
     if (ragg) {
-        sb_printf(self->out, "\t%%t%d =:%s call $%s(", rt, f->ret->name, fname);
+        StrBuf_printf(self->out, "\t%%t%d =:%s call $%s(", rt, f->ret->name, fname);
     } else if (indirect) {
-        sb_printf(self->out, "\t%%t%d =%c call %%t%d(", rt, rcls, callee);
+        StrBuf_printf(self->out, "\t%%t%d =%c call %%t%d(", rt, rcls, callee);
     } else {
-        sb_printf(self->out, "\t%%t%d =%c call $%s(", rt, rcls, fname);
+        StrBuf_printf(self->out, "\t%%t%d =%c call $%s(", rt, rcls, fname);
     }
     int wrote = 0;
     int unknown_proto = indirect || f == NULL;
     if (unknown_proto) {
-        sb_puts(self->out, "...");
+        StrBuf_puts(self->out, "...");
         wrote += 1;
     }
     for (i = 0; i < e->nargs; i += 1) {
         if (is_var && i == nfixed) {
             if (wrote != 0) {
-                sb_puts(self->out, ", ");
+                StrBuf_puts(self->out, ", ");
             }
-            sb_puts(self->out, "...");
+            StrBuf_puts(self->out, "...");
             wrote += 1;
         }
         if (wrote != 0) {
-            sb_puts(self->out, ", ");
+            StrBuf_puts(self->out, ", ");
         }
         Type *at = Qb_qtype_of(self, e->args[i]);
         if (Qb_is_agg(self, at)) {
-            sb_printf(self->out, ":%s %%t%d", at->name, argt.data[i]);
+            StrBuf_printf(self->out, ":%s %%t%d", at->name, argt.data[i]);
         } else if (Qb_is_valist(self, at)) {
-            sb_printf(self->out, "l %%t%d", argt.data[i]);
+            StrBuf_printf(self->out, "l %%t%d", argt.data[i]);
         } else {
-            sb_printf(self->out, "%c %%t%d", argc.data[i], argt.data[i]);
+            StrBuf_printf(self->out, "%c %%t%d", argc.data[i], argt.data[i]);
         }
         wrote += 1;
     }
     if (is_var && e->nargs <= nfixed) {
         if (wrote != 0) {
-            sb_puts(self->out, ", ");
+            StrBuf_puts(self->out, ", ");
         }
-        sb_puts(self->out, "...");
+        StrBuf_puts(self->out, "...");
     }
-    sb_puts(self->out, ")\n");
+    StrBuf_puts(self->out, ")\n");
     Vec_i32_deinit(&argt);
     Vec_char_deinit(&argc);
     return rt;
@@ -3532,10 +3538,10 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
                 int32_t nt = Qb_emit_rvalue(self, s->type->arr_len);
                 int32_t ntl = Qb_emit_coerce(self, nt, Qb_ecls(self, s->type->arr_len), 'l');
                 int32_t szt = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =l mul %%t%d, %d\n", szt, ntl, esz);
+                StrBuf_printf(self->out, "\t%%t%d =l mul %%t%d, %d\n", szt, ntl, esz);
                 int32_t ea = Qb_type_align(self, elem);
                 int32_t qa = (ea > 8 ? 16 : (ea > 4 ? 8 : 4));
-                sb_printf(self->out, "\t%%t%d =l alloc%d %%t%d\n", v->slot, qa, szt);
+                StrBuf_printf(self->out, "\t%%t%d =l alloc%d %%t%d\n", v->slot, qa, szt);
             } else if (s->init != NULL && v != NULL && !v->is_static) {
                 Qb_emit_var_init(self, v, s->init);
             }
@@ -3556,13 +3562,13 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
                     val2 = Qb_emit_coerce(self, val2, Qb_ecls(self, s->expr), self->cur_ret_cls);
                 }
                 Qb_emit_defers_downto(self, 0);
-                sb_printf(self->out, "\tret %%t%d\n", val2);
+                StrBuf_printf(self->out, "\tret %%t%d\n", val2);
             } else {
                 Qb_emit_defers_downto(self, 0);
-                sb_puts(self->out, "\tret\n");
+                StrBuf_puts(self->out, "\tret\n");
             }
             int32_t dead = Qb_lbl(self);
-            sb_printf(self->out, "@l%d\n", dead);
+            StrBuf_printf(self->out, "@l%d\n", dead);
             break;
         }
         case ST_IF: {
@@ -3587,27 +3593,27 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
         }
         case ST_BREAK: {
             Qb_emit_defers_downto(self, self->brk_dm[self->nbrk - 1]);
-            sb_printf(self->out, "\tjmp @l%d\n", self->brk[self->nbrk - 1]);
+            StrBuf_printf(self->out, "\tjmp @l%d\n", self->brk[self->nbrk - 1]);
             int32_t d = Qb_lbl(self);
-            sb_printf(self->out, "@l%d\n", d);
+            StrBuf_printf(self->out, "@l%d\n", d);
             break;
         }
         case ST_CONTINUE: {
             Qb_emit_defers_downto(self, self->cont_dm[self->ncont - 1]);
-            sb_printf(self->out, "\tjmp @l%d\n", self->cont[self->ncont - 1]);
+            StrBuf_printf(self->out, "\tjmp @l%d\n", self->cont[self->ncont - 1]);
             int32_t d2 = Qb_lbl(self);
-            sb_printf(self->out, "@l%d\n", d2);
+            StrBuf_printf(self->out, "@l%d\n", d2);
             break;
         }
         case ST_LABEL: {
-            sb_printf(self->out, "\tjmp @u_%s\n", s->label);
-            sb_printf(self->out, "@u_%s\n", s->label);
+            StrBuf_printf(self->out, "\tjmp @u_%s\n", s->label);
+            StrBuf_printf(self->out, "@u_%s\n", s->label);
             break;
         }
         case ST_GOTO: {
-            sb_printf(self->out, "\tjmp @u_%s\n", s->label);
+            StrBuf_printf(self->out, "\tjmp @u_%s\n", s->label);
             int32_t dg = Qb_lbl(self);
-            sb_printf(self->out, "@l%d\n", dg);
+            StrBuf_printf(self->out, "@l%d\n", dg);
             break;
         }
         case ST_SWITCH: {
@@ -3625,8 +3631,8 @@ static void Qb_emit_stmt(Qb *self, Stmt *s) {
             return;
         }
         case ST_CASE: {
-            sb_printf(self->out, "\tjmp @l%d\n", s->case_lbl);
-            sb_printf(self->out, "@l%d\n", s->case_lbl);
+            StrBuf_printf(self->out, "\tjmp @l%d\n", s->case_lbl);
+            StrBuf_printf(self->out, "@l%d\n", s->case_lbl);
             break;
         }
         case ST_MATCH: {
@@ -3683,22 +3689,22 @@ static int32_t Qb_emit_bf_load(Qb *self, int32_t addr, Type *ft, int32_t bo, int
         lop = "loadw";
     }
     int32_t u = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", u, ucl, lop, addr);
+    StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", u, ucl, lop, addr);
     if (Qb_is_signed(self, ft)) {
         int32_t a = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c shl %%t%d, %d\n", a, ucl, u, bits - bo - bw);
+        StrBuf_printf(self->out, "\t%%t%d =%c shl %%t%d, %d\n", a, ucl, u, bits - bo - bw);
         int32_t b = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c sar %%t%d, %d\n", b, ucl, a, bits - bw);
+        StrBuf_printf(self->out, "\t%%t%d =%c sar %%t%d, %d\n", b, ucl, a, bits - bw);
         return b;
     }
     int32_t s = u;
     if (bo > 0) {
         s = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c shr %%t%d, %d\n", s, ucl, u, bo);
+        StrBuf_printf(self->out, "\t%%t%d =%c shr %%t%d, %d\n", s, ucl, u, bo);
     }
     if (bw < bits) {
         int32_t m = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c and %%t%d, %lld\n", m, ucl, s, ((int64_t)1 << bw) - 1);
+        StrBuf_printf(self->out, "\t%%t%d =%c and %%t%d, %lld\n", m, ucl, s, ((int64_t)1 << bw) - 1);
         return m;
     }
     return s;
@@ -3710,11 +3716,11 @@ static void Qb_emit_bf_store(Qb *self, int32_t addr, Type *ft, int32_t bo, int32
     int64_t mask = ((int64_t)1 << bw) - 1;
     int32_t v = Qb_emit_coerce(self, val, vcls, ucl);
     int32_t m1 = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c and %%t%d, %lld\n", m1, ucl, v, mask);
+    StrBuf_printf(self->out, "\t%%t%d =%c and %%t%d, %lld\n", m1, ucl, v, mask);
     int32_t m2 = m1;
     if (bo > 0) {
         m2 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c shl %%t%d, %d\n", m2, ucl, m1, bo);
+        StrBuf_printf(self->out, "\t%%t%d =%c shl %%t%d, %d\n", m2, ucl, m1, bo);
     }
     const char *lop = "loadl";
     const char *sop = "storel";
@@ -3729,16 +3735,16 @@ static void Qb_emit_bf_store(Qb *self, int32_t addr, Type *ft, int32_t bo, int32
         sop = "storew";
     }
     int32_t u = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", u, ucl, lop, addr);
+    StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", u, ucl, lop, addr);
     int32_t c1 = Qb_tmp(self);
     int64_t keep = ~(mask << bo);
     if (usz < 8) {
         keep = keep & 0xFFFFFFFF;
     }
-    sb_printf(self->out, "\t%%t%d =%c and %%t%d, %lld\n", c1, ucl, u, keep);
+    StrBuf_printf(self->out, "\t%%t%d =%c and %%t%d, %lld\n", c1, ucl, u, keep);
     int32_t u2 = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c or %%t%d, %%t%d\n", u2, ucl, c1, m2);
-    sb_printf(self->out, "\t%s %%t%d, %%t%d\n", sop, u2, addr);
+    StrBuf_printf(self->out, "\t%%t%d =%c or %%t%d, %%t%d\n", u2, ucl, c1, m2);
+    StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", sop, u2, addr);
 }
 
 static int32_t Qb_emit_store_to(Qb *self, Expr *lhs, int32_t op, Expr *rhs) {
@@ -3767,7 +3773,7 @@ static int32_t Qb_emit_store_to(Qb *self, Expr *lhs, int32_t op, Expr *rhs) {
             cur = Qb_emit_coerce(self, cur, Qb_ecls(self, lhs), cls);
             r = Qb_emit_coerce(self, r, Qb_ecls(self, rhs), cls);
             val = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =%c %s %%t%d, %%t%d\n", val, cls, Qb_binop_name(self, bop, cls, sgn), cur, r);
+            StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d, %%t%d\n", val, cls, Qb_binop_name(self, bop, cls, sgn), cur, r);
             val = Qb_emit_coerce(self, val, cls, scls);
         }
     }
@@ -3780,7 +3786,7 @@ static int32_t Qb_emit_store_to(Qb *self, Expr *lhs, int32_t op, Expr *rhs) {
         return val;
     }
     int32_t addr = Qb_emit_addr(self, lhs);
-    sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, lt), val, addr);
+    StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, lt), val, addr);
     return val;
 }
 
@@ -3802,7 +3808,7 @@ static void Qb_emit_var_init(Qb *self, QVar *v, Expr *init) {
     if (init->kind != EX_INITLIST) {
         int32_t val = Qb_emit_rvalue(self, init);
         val = Qb_emit_coerce(self, val, Qb_ecls(self, init), Qb_store_cls(self, ty));
-        sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, ty), val, v->slot);
+        StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, ty), val, v->slot);
         return;
     }
     Qb_emit_zero(self, v->slot, Qb_size_of(self, ty));
@@ -3828,7 +3834,7 @@ static int32_t Qb_emit_compound(Qb *self, Expr *e) {
     int32_t bytes = (sz > qa ? sz : qa);
     int32_t slot = Qb_tmp(self);
     StrBuf *adst = (self->slots != NULL ? self->slots : self->out);
-    sb_printf(adst, "\t%%t%d =l alloc%d %d\n", slot, qa, bytes);
+    StrBuf_printf(adst, "\t%%t%d =l alloc%d %d\n", slot, qa, bytes);
     Qb_emit_zero(self, slot, sz);
     Qb_emit_init_addr(self, slot, ty, e);
     return slot;
@@ -3838,20 +3844,20 @@ static void Qb_emit_zero(Qb *self, int32_t addr, int32_t size) {
     int off = 0;
     while (off + 8 <= size) {
         int32_t a = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a, addr, off);
-        sb_printf(self->out, "\tstorel 0, %%t%d\n", a);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a, addr, off);
+        StrBuf_printf(self->out, "\tstorel 0, %%t%d\n", a);
         off += 8;
     }
     while (off + 4 <= size) {
         int32_t a4 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a4, addr, off);
-        sb_printf(self->out, "\tstorew 0, %%t%d\n", a4);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a4, addr, off);
+        StrBuf_printf(self->out, "\tstorew 0, %%t%d\n", a4);
         off += 4;
     }
     while (off + 1 <= size) {
         int32_t a1 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a1, addr, off);
-        sb_printf(self->out, "\tstoreb 0, %%t%d\n", a1);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a1, addr, off);
+        StrBuf_printf(self->out, "\tstoreb 0, %%t%d\n", a1);
         off += 1;
     }
 }
@@ -3860,32 +3866,32 @@ static void Qb_emit_struct_copy(Qb *self, int32_t dst, int32_t src, int32_t size
     int off = 0;
     while (off + 8 <= size) {
         int32_t sp = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", sp, src, off);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", sp, src, off);
         int32_t ld = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l loadl %%t%d\n", ld, sp);
+        StrBuf_printf(self->out, "\t%%t%d =l loadl %%t%d\n", ld, sp);
         int32_t dp = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dp, dst, off);
-        sb_printf(self->out, "\tstorel %%t%d, %%t%d\n", ld, dp);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dp, dst, off);
+        StrBuf_printf(self->out, "\tstorel %%t%d, %%t%d\n", ld, dp);
         off += 8;
     }
     while (off + 4 <= size) {
         int32_t sp4 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", sp4, src, off);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", sp4, src, off);
         int32_t l4 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =w loadw %%t%d\n", l4, sp4);
+        StrBuf_printf(self->out, "\t%%t%d =w loadw %%t%d\n", l4, sp4);
         int32_t dp4 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dp4, dst, off);
-        sb_printf(self->out, "\tstorew %%t%d, %%t%d\n", l4, dp4);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dp4, dst, off);
+        StrBuf_printf(self->out, "\tstorew %%t%d, %%t%d\n", l4, dp4);
         off += 4;
     }
     while (off + 1 <= size) {
         int32_t sp1 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", sp1, src, off);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", sp1, src, off);
         int32_t l1 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =w loadub %%t%d\n", l1, sp1);
+        StrBuf_printf(self->out, "\t%%t%d =w loadub %%t%d\n", l1, sp1);
         int32_t dp1 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dp1, dst, off);
-        sb_printf(self->out, "\tstoreb %%t%d, %%t%d\n", l1, dp1);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dp1, dst, off);
+        StrBuf_printf(self->out, "\tstoreb %%t%d, %%t%d\n", l1, dp1);
         off += 1;
     }
 }
@@ -3932,7 +3938,7 @@ static void Qb_emit_fill(Qb *self, int32_t addr, Type *ty, Expr **items, int32_t
         *idx += 1;
         int32_t val = Qb_emit_rvalue(self, it);
         val = Qb_emit_coerce(self, val, Qb_ecls(self, it), Qb_store_cls(self, ty));
-        sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, ty), val, addr);
+        StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, ty), val, addr);
         return;
     }
     if (sd != NULL && Qb_is_agg(self, Qb_qtype_of(self, it))) {
@@ -3964,7 +3970,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
                 int dok = 1;
                 pos = (int32_t)Qb_const_int(self, it->rhs, &dok);
                 int32_t fa = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa, addr, pos * esz);
+                StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa, addr, pos * esz);
                 Expr *one = it->lhs;
                 int j = 0;
                 Qb_emit_fill(self, fa, elem, &one, 1, &j);
@@ -3976,7 +3982,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
                 break;
             }
             int32_t fa2 = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa2, addr, pos * esz);
+            StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa2, addr, pos * esz);
             Qb_emit_fill(self, fa2, elem, items, nitems, idx);
             pos += 1;
             if (*idx == prev) {
@@ -4048,7 +4054,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
                 int dbw = -1;
                 int32_t duoff = Qb_slayout(self, sd, sd->fields[fi].name, &dbft, &dbo, &dbw);
                 int32_t dfa = Qb_tmp(self);
-                sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dfa, addr, duoff);
+                StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", dfa, addr, duoff);
                 int32_t dbv = Qb_emit_rvalue(self, it2->lhs);
                 Qb_emit_bf_store(self, dfa, dbft, dbo, dbw, dbv, Qb_ecls(self, it2->lhs));
                 *idx += 1;
@@ -4058,7 +4064,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
             Type *fty0 = NULL;
             int32_t foff0 = Qb_field_offset(self, sd, sd->fields[fi].name, &fty0);
             int32_t fad = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fad, addr, foff0);
+            StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fad, addr, foff0);
             Expr *oned = it2->lhs;
             int jd = 0;
             Qb_emit_fill(self, fad, sd->fields[fi].type, &oned, 1, &jd);
@@ -4076,7 +4082,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
             int bw = -1;
             int32_t uoff = Qb_slayout(self, sd, sd->fields[fi].name, &bft, &bo, &bw);
             int32_t bfa = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", bfa, addr, uoff);
+            StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", bfa, addr, uoff);
             int32_t bv = Qb_emit_rvalue(self, items[*idx]);
             Qb_emit_bf_store(self, bfa, bft, bo, bw, bv, Qb_ecls(self, items[*idx]));
             *idx += 1;
@@ -4086,7 +4092,7 @@ static void Qb_emit_fill_body(Qb *self, int32_t addr, Type *ty, Decl *sd, Expr *
         Type *fty = NULL;
         int32_t foff = Qb_field_offset(self, sd, sd->fields[fi].name, &fty);
         int32_t fa3 = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa3, addr, foff);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa3, addr, foff);
         Qb_emit_fill(self, fa3, sd->fields[fi].type, items, nitems, idx);
         fi += 1;
         if (*idx == prev2) {
@@ -4175,15 +4181,15 @@ static void Qb_emit_str_to_addr(Qb *self, int32_t addr, const char *lex, int32_t
             b = (int32_t)c & 0xFF;
         }
         int32_t a = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a, addr, off);
-        sb_printf(self->out, "\tstoreb %d, %%t%d\n", b, a);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a, addr, off);
+        StrBuf_printf(self->out, "\tstoreb %d, %%t%d\n", b, a);
         off += 1;
         i += 1;
     }
     if (off < cap) {
         int32_t az = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", az, addr, off);
-        sb_printf(self->out, "\tstoreb 0, %%t%d\n", az);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", az, addr, off);
+        StrBuf_printf(self->out, "\tstoreb 0, %%t%d\n", az);
     }
 }
 
@@ -4260,13 +4266,13 @@ static void Qb_emit_wstr_to_addr(Qb *self, int32_t addr, const char *lex) {
             }
         }
         int32_t a = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a, addr, off);
-        sb_printf(self->out, "\tstorew %u, %%t%d\n", cp, a);
+        StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", a, addr, off);
+        StrBuf_printf(self->out, "\tstorew %u, %%t%d\n", cp, a);
         off += 4;
     }
     int32_t az = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", az, addr, off);
-    sb_printf(self->out, "\tstorew 0, %%t%d\n", az);
+    StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", az, addr, off);
+    StrBuf_printf(self->out, "\tstorew 0, %%t%d\n", az);
 }
 
 static int32_t Qb_compound_base(Qb *self, int32_t op) {
@@ -4322,28 +4328,28 @@ static void Qb_emit_if(Qb *self, Stmt *s) {
         int32_t c = Qb_emit_cond(self, s->conds[i]);
         int32_t body = Qb_lbl(self);
         int32_t nxt = Qb_lbl(self);
-        sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, nxt);
-        sb_printf(self->out, "@l%d\n", body);
+        StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, nxt);
+        StrBuf_printf(self->out, "@l%d\n", body);
         Qb_emit_block(self, s->blocks[i]);
-        sb_printf(self->out, "\tjmp @l%d\n", end);
-        sb_printf(self->out, "@l%d\n", nxt);
+        StrBuf_printf(self->out, "\tjmp @l%d\n", end);
+        StrBuf_printf(self->out, "@l%d\n", nxt);
     }
     if (s->else_block != NULL) {
         Qb_emit_block(self, s->else_block);
     }
-    sb_printf(self->out, "\tjmp @l%d\n", end);
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", end);
+    StrBuf_printf(self->out, "@l%d\n", end);
 }
 
 static void Qb_emit_while(Qb *self, Stmt *s) {
     int32_t cond = Qb_lbl(self);
     int32_t body = Qb_lbl(self);
     int32_t end = Qb_lbl(self);
-    sb_printf(self->out, "\tjmp @l%d\n", cond);
-    sb_printf(self->out, "@l%d\n", cond);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", cond);
     int32_t c = Qb_emit_cond(self, s->cond);
-    sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, end);
-    sb_printf(self->out, "@l%d\n", body);
+    StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, end);
+    StrBuf_printf(self->out, "@l%d\n", body);
     self->brk[self->nbrk] = end;
     self->brk_dm[self->nbrk] = self->defers.len;
     self->nbrk += 1;
@@ -4353,16 +4359,16 @@ static void Qb_emit_while(Qb *self, Stmt *s) {
     Qb_emit_block(self, s->body);
     self->nbrk -= 1;
     self->ncont -= 1;
-    sb_printf(self->out, "\tjmp @l%d\n", cond);
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", end);
 }
 
 static void Qb_emit_do(Qb *self, Stmt *s) {
     int32_t body = Qb_lbl(self);
     int32_t cond = Qb_lbl(self);
     int32_t end = Qb_lbl(self);
-    sb_printf(self->out, "\tjmp @l%d\n", body);
-    sb_printf(self->out, "@l%d\n", body);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", body);
+    StrBuf_printf(self->out, "@l%d\n", body);
     self->brk[self->nbrk] = end;
     self->brk_dm[self->nbrk] = self->defers.len;
     self->nbrk += 1;
@@ -4372,10 +4378,10 @@ static void Qb_emit_do(Qb *self, Stmt *s) {
     Qb_emit_block(self, s->body);
     self->nbrk -= 1;
     self->ncont -= 1;
-    sb_printf(self->out, "@l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", cond);
     int32_t c = Qb_emit_cond(self, s->cond);
-    sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, end);
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, end);
+    StrBuf_printf(self->out, "@l%d\n", end);
 }
 
 static void Qb_emit_for(Qb *self, Stmt *s) {
@@ -4383,28 +4389,28 @@ static void Qb_emit_for(Qb *self, Stmt *s) {
     if (s->from != NULL) {
         int32_t fv = Qb_emit_rvalue(self, s->from);
         fv = Qb_emit_coerce(self, fv, Qb_ecls(self, s->from), v->cls);
-        sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), fv, v->slot);
+        StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), fv, v->slot);
     } else {
         int32_t z = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c copy 0\n", z, v->cls);
-        sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), z, v->slot);
+        StrBuf_printf(self->out, "\t%%t%d =%c copy 0\n", z, v->cls);
+        StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), z, v->slot);
     }
     int32_t cond = Qb_lbl(self);
     int32_t body = Qb_lbl(self);
     int32_t post = Qb_lbl(self);
     int32_t end = Qb_lbl(self);
     int neg = s->step != NULL && s->step->kind == EX_UNARY && s->step->op == TK_MINUS;
-    sb_printf(self->out, "\tjmp @l%d\n", cond);
-    sb_printf(self->out, "@l%d\n", cond);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", cond);
     int32_t iv = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", iv, v->cls, Qb_load_op(self, v->ty), v->slot);
+    StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", iv, v->cls, Qb_load_op(self, v->ty), v->slot);
     int32_t tov = Qb_emit_rvalue(self, s->to);
     tov = Qb_emit_coerce(self, tov, Qb_ecls(self, s->to), v->cls);
     int32_t cc = Qb_tmp(self);
     const char *cmp = arena_qcmp((neg ? "csgt" : "cslt"), v->cls);
-    sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", cc, cmp, iv, tov);
-    sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", cc, body, end);
-    sb_printf(self->out, "@l%d\n", body);
+    StrBuf_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", cc, cmp, iv, tov);
+    StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", cc, body, end);
+    StrBuf_printf(self->out, "@l%d\n", body);
     self->brk[self->nbrk] = end;
     self->brk_dm[self->nbrk] = self->defers.len;
     self->nbrk += 1;
@@ -4414,23 +4420,23 @@ static void Qb_emit_for(Qb *self, Stmt *s) {
     Qb_emit_block(self, s->body);
     self->nbrk -= 1;
     self->ncont -= 1;
-    sb_printf(self->out, "\tjmp @l%d\n", post);
-    sb_printf(self->out, "@l%d\n", post);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", post);
+    StrBuf_printf(self->out, "@l%d\n", post);
     int32_t iv2 = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c %s %%t%d\n", iv2, v->cls, Qb_load_op(self, v->ty), v->slot);
+    StrBuf_printf(self->out, "\t%%t%d =%c %s %%t%d\n", iv2, v->cls, Qb_load_op(self, v->ty), v->slot);
     int32_t stepv;
     if (s->step != NULL) {
         stepv = Qb_emit_rvalue(self, s->step);
         stepv = Qb_emit_coerce(self, stepv, Qb_ecls(self, s->step), v->cls);
     } else {
         stepv = Qb_tmp(self);
-        sb_printf(self->out, "\t%%t%d =%c copy 1\n", stepv, v->cls);
+        StrBuf_printf(self->out, "\t%%t%d =%c copy 1\n", stepv, v->cls);
     }
     int32_t nv = Qb_tmp(self);
-    sb_printf(self->out, "\t%%t%d =%c add %%t%d, %%t%d\n", nv, v->cls, iv2, stepv);
-    sb_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), nv, v->slot);
-    sb_printf(self->out, "\tjmp @l%d\n", cond);
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "\t%%t%d =%c add %%t%d, %%t%d\n", nv, v->cls, iv2, stepv);
+    StrBuf_printf(self->out, "\t%s %%t%d, %%t%d\n", Qb_store_op(self, v->ty), nv, v->slot);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", end);
 }
 
 static void Qb_emit_cfor(Qb *self, Stmt *s) {
@@ -4442,15 +4448,15 @@ static void Qb_emit_cfor(Qb *self, Stmt *s) {
     int32_t body = Qb_lbl(self);
     int32_t post = Qb_lbl(self);
     int32_t end = Qb_lbl(self);
-    sb_printf(self->out, "\tjmp @l%d\n", cond);
-    sb_printf(self->out, "@l%d\n", cond);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", cond);
     if (s->cond != NULL) {
         int32_t c = Qb_emit_cond(self, s->cond);
-        sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, end);
+        StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", c, body, end);
     } else {
-        sb_printf(self->out, "\tjmp @l%d\n", body);
+        StrBuf_printf(self->out, "\tjmp @l%d\n", body);
     }
-    sb_printf(self->out, "@l%d\n", body);
+    StrBuf_printf(self->out, "@l%d\n", body);
     self->brk[self->nbrk] = end;
     self->brk_dm[self->nbrk] = self->defers.len;
     self->nbrk += 1;
@@ -4460,13 +4466,13 @@ static void Qb_emit_cfor(Qb *self, Stmt *s) {
     Qb_emit_block(self, s->body);
     self->nbrk -= 1;
     self->ncont -= 1;
-    sb_printf(self->out, "\tjmp @l%d\n", post);
-    sb_printf(self->out, "@l%d\n", post);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", post);
+    StrBuf_printf(self->out, "@l%d\n", post);
     if (s->for_post != NULL) {
         Qb_emit_stmt(self, s->for_post);
     }
-    sb_printf(self->out, "\tjmp @l%d\n", cond);
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", cond);
+    StrBuf_printf(self->out, "@l%d\n", end);
     self->binds.len = fmark;
 }
 
@@ -4508,22 +4514,22 @@ static void Qb_emit_switch(Qb *self, Stmt *s) {
             int32_t cv = Qb_emit_rvalue(self, st->expr);
             cv = Qb_emit_coerce(self, cv, Qb_ecls(self, st->expr), scls);
             int32_t t = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, TK_EQ, scls, 1), subj, cv);
+            StrBuf_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, TK_EQ, scls, 1), subj, cv);
             int32_t nxt = Qb_lbl(self);
-            sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", t, st->case_lbl, nxt);
-            sb_printf(self->out, "@l%d\n", nxt);
+            StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", t, st->case_lbl, nxt);
+            StrBuf_printf(self->out, "@l%d\n", nxt);
         }
     }
-    sb_printf(self->out, "\tjmp @l%d\n", default_lbl);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", default_lbl);
     int32_t dead = Qb_lbl(self);
-    sb_printf(self->out, "@l%d\n", dead);
+    StrBuf_printf(self->out, "@l%d\n", dead);
     self->brk[self->nbrk] = end;
     self->brk_dm[self->nbrk] = self->defers.len;
     self->nbrk += 1;
     Qb_emit_block(self, s->body);
     self->nbrk -= 1;
-    sb_printf(self->out, "\tjmp @l%d\n", end);
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", end);
+    StrBuf_printf(self->out, "@l%d\n", end);
     Vec_pStmt_deinit(&cs);
 }
 
@@ -4555,20 +4561,20 @@ static void Qb_emit_match(Qb *self, Stmt *s) {
             int32_t cv = Qb_emit_rvalue(self, mc->vals[j]);
             cv = Qb_emit_coerce(self, cv, Qb_ecls(self, mc->vals[j]), scls);
             int32_t t = Qb_tmp(self);
-            sb_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, TK_EQ, scls, 1), subj, cv);
+            StrBuf_printf(self->out, "\t%%t%d =w %s %%t%d, %%t%d\n", t, Qb_cmp_name(self, TK_EQ, scls, 1), subj, cv);
             int32_t nxt = Qb_lbl(self);
-            sb_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", t, labels.data[i], nxt);
-            sb_printf(self->out, "@l%d\n", nxt);
+            StrBuf_printf(self->out, "\tjnz %%t%d, @l%d, @l%d\n", t, labels.data[i], nxt);
+            StrBuf_printf(self->out, "@l%d\n", nxt);
         }
     }
-    sb_printf(self->out, "\tjmp @l%d\n", default_lbl);
+    StrBuf_printf(self->out, "\tjmp @l%d\n", default_lbl);
     for (i = 0; i < s->ncases; i += 1) {
         MatchCase *mc2 = s->cases[i];
-        sb_printf(self->out, "@l%d\n", labels.data[i]);
+        StrBuf_printf(self->out, "@l%d\n", labels.data[i]);
         Qb_emit_block(self, mc2->body);
-        sb_printf(self->out, "\tjmp @l%d\n", end);
+        StrBuf_printf(self->out, "\tjmp @l%d\n", end);
     }
-    sb_printf(self->out, "@l%d\n", end);
+    StrBuf_printf(self->out, "@l%d\n", end);
     Vec_i32_deinit(&labels);
 }
 
@@ -4709,24 +4715,24 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init, 
     int32_t sz = Qb_size_of(self, ty);
     char scls = Qb_cls_of(self, ty);
     if (init != NULL && init->kind == EX_NUMBER && (scls == 's' || scls == 'd')) {
-        sb_printf(&self->data, "data $sl%d = { %c %c_%s }\n", sid, scls, scls, fnum(init->text));
+        StrBuf_printf(&self->data, "data $sl%d = { %c %c_%s }\n", sid, scls, scls, fnum(init->text));
         return;
     }
     if (init != NULL && init->kind == EX_STRING && ty != NULL && ty->kind == TY_PTR) {
         int32_t sps = Qb_emit_string(self, init->text);
-        sb_printf(&self->data, "data $sl%d = { l $qstr%d }\n", sid, sps);
+        StrBuf_printf(&self->data, "data $sl%d = { l $qstr%d }\n", sid, sps);
         return;
     }
     if (init != NULL && init->kind == EX_STRING && ty != NULL && ty->kind == TY_ARRAY) {
         StrBuf dbs = {0};
         int32_t nb = cstr_bytes(&dbs, init->text);
         int32_t total = (sz > nb + 1 ? sz : nb + 1);
-        sb_printf(&self->data, "data $sl%d = {%s b 0", sid, (dbs.data != NULL ? dbs.data : ""));
+        StrBuf_printf(&self->data, "data $sl%d = {%s b 0", sid, (dbs.data != NULL ? dbs.data : ""));
         if (total > nb + 1) {
-            sb_printf(&self->data, ", z %d", total - (nb + 1));
+            StrBuf_printf(&self->data, ", z %d", total - (nb + 1));
         }
-        sb_puts(&self->data, " }\n");
-        sb_free(&dbs);
+        StrBuf_puts(&self->data, " }\n");
+        StrBuf_deinit(&dbs);
         Qb_static_fix_len(self, ty, total);
         return;
     }
@@ -4740,12 +4746,12 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init, 
                 dbl.len -= 1;
                 dbl.data[dbl.len] = '\0';
             }
-            sb_printf(&self->data, "data $sl%d = align %d {%s }\n", sid, Qb_type_align(self, ty), dbl.data);
+            StrBuf_printf(&self->data, "data $sl%d = align %d {%s }\n", sid, Qb_type_align(self, ty), dbl.data);
             Qb_static_fix_len(self, ty, rr);
         } else {
-            sb_printf(&self->data, "data $sl%d = { z %d }\n", sid, (sz > 0 ? sz : rr));
+            StrBuf_printf(&self->data, "data $sl%d = { z %d }\n", sid, (sz > 0 ? sz : rr));
         }
-        sb_free(&dbl);
+        StrBuf_deinit(&dbl);
         return;
     }
     int svok = 1;
@@ -4759,13 +4765,13 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init, 
         } else if (Qb_cls_of(self, ty) == 'l' || sz == 8) {
             dt = "l";
         }
-        sb_printf(&self->data, "data $sl%d = { %s %lld }\n", sid, dt, sval);
+        StrBuf_printf(&self->data, "data $sl%d = { %s %lld }\n", sid, dt, sval);
     } else if (init != NULL && init->kind == EX_IDENT && StrMap_pType_get_or(&self->globals, init->text, NULL) != NULL && StrMap_pType_get_or(&self->globals, init->text, NULL)->kind == TY_ARRAY) {
-        sb_printf(&self->data, "data $sl%d = { l $%s }\n", sid, init->text);
+        StrBuf_printf(&self->data, "data $sl%d = { l $%s }\n", sid, init->text);
     } else if (init != NULL && init->kind == EX_UNARY && init->op == TK_AMP && init->lhs != NULL && init->lhs->kind == EX_IDENT) {
-        sb_printf(&self->data, "data $sl%d = { l $%s }\n", sid, init->lhs->text);
+        StrBuf_printf(&self->data, "data $sl%d = { l $%s }\n", sid, init->lhs->text);
     } else {
-        sb_printf(&self->data, "data $sl%d = { z %d }\n", sid, sz);
+        StrBuf_printf(&self->data, "data $sl%d = { z %d }\n", sid, sz);
     }
 }
 
@@ -4805,35 +4811,35 @@ static void Qb_emit_func(Qb *self, Func *f) {
     self->cur_ret_name = (ret_agg ? f->ret->name : NULL);
     self->cur_fname = f->cname;
     if (strcmp(f->cname, "main") == 0 || !f->is_static) {
-        sb_puts(self->out, "export ");
+        StrBuf_puts(self->out, "export ");
     }
     if (ret_agg) {
-        sb_printf(self->out, "function :%s $%s(", f->ret->name, f->cname);
+        StrBuf_printf(self->out, "function :%s $%s(", f->ret->name, f->cname);
     } else if (is_void) {
-        sb_printf(self->out, "function $%s(", f->cname);
+        StrBuf_printf(self->out, "function $%s(", f->cname);
     } else {
-        sb_printf(self->out, "function %c $%s(", rcls, f->cname);
+        StrBuf_printf(self->out, "function %c $%s(", rcls, f->cname);
     }
     int32_t i;
     for (i = 0; i < f->nparams; i += 1) {
         if (i != 0) {
-            sb_puts(self->out, ", ");
+            StrBuf_puts(self->out, ", ");
         }
         if (Qb_is_agg(self, f->params[i].type)) {
-            sb_printf(self->out, ":%s %%a%d", f->params[i].type->name, i);
+            StrBuf_printf(self->out, ":%s %%a%d", f->params[i].type->name, i);
         } else if (Qb_is_valist(self, f->params[i].type)) {
-            sb_printf(self->out, "l %%a%d", i);
+            StrBuf_printf(self->out, "l %%a%d", i);
         } else {
-            sb_printf(self->out, "%c %%a%d", Qb_cls_of(self, f->params[i].type), i);
+            StrBuf_printf(self->out, "%c %%a%d", Qb_cls_of(self, f->params[i].type), i);
         }
     }
     if (f->is_varargs) {
         if (f->nparams != 0) {
-            sb_puts(self->out, ", ");
+            StrBuf_puts(self->out, ", ");
         }
-        sb_puts(self->out, "...");
+        StrBuf_puts(self->out, "...");
     }
-    sb_puts(self->out, ") {\n@start\n");
+    StrBuf_puts(self->out, ") {\n@start\n");
     for (i = 0; i < f->nparams; i += 1) {
         Type *pt = f->params[i].type;
         if (pt != NULL && pt->kind == TY_ARRAY) {
@@ -4857,7 +4863,7 @@ static void Qb_emit_func(Qb *self, Func *f) {
         int32_t sz = (qv->nbytes > 0 ? qv->nbytes : Qb_size_of(self, qv->ty));
         int32_t align = (sz > 4 || qv->cls == 'l' || qv->cls == 'd' ? 8 : 4);
         int32_t bytes = (sz > align ? sz : align);
-        sb_printf(self->out, "\t%%t%d =l alloc%d %d\n", qv->slot, align, bytes);
+        StrBuf_printf(self->out, "\t%%t%d =l alloc%d %d\n", qv->slot, align, bytes);
     }
     for (i = 0; i < self->vars.len; i += 1) {
         QVar *zv = &self->vars.data[i];
@@ -4867,14 +4873,14 @@ static void Qb_emit_func(Qb *self, Func *f) {
         if (zv->ty != NULL && (zv->ty->kind == TY_ARRAY || Qb_is_agg(self, zv->ty))) {
             continue;
         }
-        sb_printf(self->out, "\t%s 0, %%t%d\n", Qb_store_op(self, zv->ty), zv->slot);
+        StrBuf_printf(self->out, "\t%s 0, %%t%d\n", Qb_store_op(self, zv->ty), zv->slot);
     }
     for (i = 0; i < f->nparams; i += 1) {
         QVar *pv = Qb_find_var(self, f->params[i].name);
         if (Qb_is_agg(self, f->params[i].type) || Qb_is_valist(self, f->params[i].type)) {
-            sb_printf(self->out, "\t%%t%d =l copy %%a%d\n", pv->slot, i);
+            StrBuf_printf(self->out, "\t%%t%d =l copy %%a%d\n", pv->slot, i);
         } else {
-            sb_printf(self->out, "\t%s %%a%d, %%t%d\n", Qb_store_op(self, pv->ty), i, pv->slot);
+            StrBuf_printf(self->out, "\t%s %%a%d, %%t%d\n", Qb_store_op(self, pv->ty), i, pv->slot);
         }
     }
     StrBuf slotbuf = {0};
@@ -4884,21 +4890,21 @@ static void Qb_emit_func(Qb *self, Func *f) {
     self->out = &bodybuf;
     Qb_emit_block(self, f->body);
     if (is_void) {
-        sb_puts(self->out, "\tret\n");
+        StrBuf_puts(self->out, "\tret\n");
     } else {
-        sb_printf(self->out, "\tret 0\n");
+        StrBuf_printf(self->out, "\tret 0\n");
     }
     self->out = saved_out;
     self->slots = NULL;
     if (slotbuf.data != NULL) {
-        sb_puts(self->out, slotbuf.data);
+        StrBuf_puts(self->out, slotbuf.data);
     }
     if (bodybuf.data != NULL) {
-        sb_puts(self->out, bodybuf.data);
+        StrBuf_puts(self->out, bodybuf.data);
     }
-    sb_free(&slotbuf);
-    sb_free(&bodybuf);
-    sb_puts(self->out, "}\n\n");
+    StrBuf_deinit(&slotbuf);
+    StrBuf_deinit(&bodybuf);
+    StrBuf_puts(self->out, "}\n\n");
     Vec_QVar_deinit(&self->vars);
 }
 
@@ -4992,7 +4998,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
             int32_t sz = Qb_size_of(&qb, d2->type);
             char gcls = Qb_cls_of(&qb, d2->type);
             if (d2->init != NULL && d2->init->kind == EX_NUMBER && (gcls == 's' || gcls == 'd')) {
-                sb_printf(out, "%sdata $%s = { %c %c_%s }\n", xp, d2->name, gcls, gcls, fnum(d2->init->text));
+                StrBuf_printf(out, "%sdata $%s = { %c %c_%s }\n", xp, d2->name, gcls, gcls, fnum(d2->init->text));
                 continue;
             }
             int lit = d2->init != NULL && (d2->init->kind == EX_NUMBER || d2->init->kind == EX_CHARLIT || d2->init->kind == EX_TRUE || d2->init->kind == EX_FALSE);
@@ -5014,7 +5020,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                 } else if (dcls == 'l' || sz == 8) {
                     dt = "l";
                 }
-                sb_printf(out, "%sdata $%s = { %s %lld }\n", xp, d2->name, dt, val);
+                StrBuf_printf(out, "%sdata $%s = { %s %lld }\n", xp, d2->name, dt, val);
             } else if (d2->init != NULL && (d2->init->kind == EX_INITLIST || d2->init->kind == EX_COMPOUND) && (d2->type->kind == TY_ARRAY || Qb_struct_of(&qb, d2->type) != NULL)) {
                 StrBuf db = {0};
                 Expr *one = d2->init;
@@ -5036,29 +5042,29 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                             d2->type->arr_len = ne;
                         }
                     }
-                    sb_printf(out, "%sdata $%s = align %d {%s }\n", xp, d2->name, Qb_type_align(&qb, d2->type), db.data);
+                    StrBuf_printf(out, "%sdata $%s = align %d {%s }\n", xp, d2->name, Qb_type_align(&qb, d2->type), db.data);
                 } else {
-                    sb_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
+                    StrBuf_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
                 }
-                sb_free(&db);
+                StrBuf_deinit(&db);
             } else if (d2->init != NULL && d2->init->kind == EX_UNARY && d2->init->op == TK_AMP && d2->init->lhs != NULL && d2->init->lhs->kind == EX_IDENT) {
-                sb_printf(out, "%sdata $%s = { l $%s }\n", xp, d2->name, d2->init->lhs->text);
+                StrBuf_printf(out, "%sdata $%s = { l $%s }\n", xp, d2->name, d2->init->lhs->text);
             } else if (d2->init != NULL && d2->init->kind == EX_IDENT && StrMap_pFunc_get_or(&qb.funcs, d2->init->text, NULL) != NULL) {
-                sb_printf(out, "%sdata $%s = { l $%s }\n", xp, d2->name, d2->init->text);
+                StrBuf_printf(out, "%sdata $%s = { l $%s }\n", xp, d2->name, d2->init->text);
             } else if (d2->init != NULL && d2->init->kind == EX_IDENT && StrMap_pType_get_or(&qb.globals, d2->init->text, NULL) != NULL && StrMap_pType_get_or(&qb.globals, d2->init->text, NULL)->kind == TY_ARRAY) {
-                sb_printf(out, "%sdata $%s = { l $%s }\n", xp, d2->name, d2->init->text);
+                StrBuf_printf(out, "%sdata $%s = { l $%s }\n", xp, d2->name, d2->init->text);
             } else if (d2->init != NULL && d2->init->kind == EX_STRING && d2->type->kind == TY_PTR) {
                 int32_t sidp = Qb_emit_string(&qb, d2->init->text);
-                sb_printf(out, "%sdata $%s = { l $qstr%d }\n", xp, d2->name, sidp);
+                StrBuf_printf(out, "%sdata $%s = { l $qstr%d }\n", xp, d2->name, sidp);
             } else if (d2->init != NULL && d2->init->kind == EX_STRING && d2->type->kind == TY_ARRAY) {
-                sb_printf(out, "%sdata $%s = {", xp, d2->name);
+                StrBuf_printf(out, "%sdata $%s = {", xp, d2->name);
                 int32_t nb = cstr_bytes(out, d2->init->text);
-                sb_puts(out, " b 0");
+                StrBuf_puts(out, " b 0");
                 int32_t pad = sz - (nb + 1);
                 if (pad > 0) {
-                    sb_printf(out, ", z %d", pad);
+                    StrBuf_printf(out, ", z %d", pad);
                 }
-                sb_puts(out, " }\n");
+                StrBuf_puts(out, " }\n");
             } else if (d2->init != NULL && gcls != 's' && gcls != 'd') {
                 int cvok = 1;
                 int64_t cvv = Qb_const_int(&qb, d2->init, &cvok);
@@ -5071,12 +5077,12 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                     } else if (gcls == 'l' || sz == 8) {
                         cdt = "l";
                     }
-                    sb_printf(out, "%sdata $%s = { %s %lld }\n", xp, d2->name, cdt, cvv);
+                    StrBuf_printf(out, "%sdata $%s = { %s %lld }\n", xp, d2->name, cdt, cvv);
                 } else {
-                    sb_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
+                    StrBuf_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
                 }
             } else {
-                sb_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
+                StrBuf_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
             }
         }
     }
@@ -5119,13 +5125,13 @@ void emit_module_qbe(Module *m, StrBuf *out) {
     }
     StrSet_deinit(&fdone);
     if (qb.data.data != NULL) {
-        sb_puts(out, qb.data.data);
+        StrBuf_puts(out, qb.data.data);
     }
     {
         StrMap_pType_deinit(&qb.globals);
         StrMap_pFunc_deinit(&qb.funcs);
         StrMap_pDecl_deinit(&qb.structs);
         Vec_EnumConst_deinit(&qb.enumc);
-        sb_free(&qb.data);
+        StrBuf_deinit(&qb.data);
     }
 }

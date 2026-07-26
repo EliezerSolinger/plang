@@ -237,16 +237,16 @@ static def base_cname(n: const *char) -> const *char:
 # `X` may name something else entirely (C front end preserves the spelling).
 static def emit_type_name(b: *StrBuf, t: *Type):
     if t->tag_kind == TAG_STRUCT:
-        sb_printf(b, "struct %s", t->name)
+        b->printf("struct %s", t->name)
         return
     if t->tag_kind == TAG_UNION:
-        sb_printf(b, "union %s", t->name)
+        b->printf("union %s", t->name)
         return
-    sb_puts(b, base_cname(t->name))
+    b->puts(base_cname(t->name))
 
 static def indent(b: *StrBuf, n: i32):
     for i in range(n):
-        sb_puts(b, "    ")
+        b->puts("    ")
 
 # ---------- expressions ----------
 static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32)
@@ -265,16 +265,16 @@ static def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_o
         if parent_op == TK_OR and child->op == TK_AND:
             force = True
     if force:
-        sb_putc(b, '(')
+        b->putc('(')
         emit_expr(b, child, 0)
-        sb_putc(b, ')')
+        b->putc(')')
     else:
         emit_expr(b, child, min_prec)
 
 static def emit_args(b: *StrBuf, args: **Expr, n: i32):
     for i in range(n):
         if i != 0:
-            sb_puts(b, ", ")
+            b->puts(", ")
         # PR_ASSIGN: a COMMA expression as an argument needs parentheses (or
         # it would read as two arguments) — e.g. an `in` rvalue's temporary
         emit_expr(b, args[i], PR_ASSIGN)
@@ -287,20 +287,20 @@ static def emit_args(b: *StrBuf, args: **Expr, n: i32):
 # itself a function pointer nests correctly: Ret (*(*p)(a))(b).
 static def emit_fnptr_decl(b: *StrBuf, ft: *Type, inner: const *char):
     frag: StrBuf = {0}
-    sb_puts(&frag, "(")
-    sb_puts(&frag, inner)
-    sb_puts(&frag, ")(")
+    frag.puts("(")
+    frag.puts(inner)
+    frag.puts(")(")
     for i in range(ft->ntargs):
         if i != 0:
-            sb_puts(&frag, ", ")
+            frag.puts(", ")
         pt: *Type = ft->targs[i]
-        if pt->kind == TY_NAME and pt->name != None and strcmp(pt->name, "...") == 0:
-            sb_puts(&frag, "...")   # variadic parameter
+        if pt->kind == TY_NAME and pt->name != None and pt->name == "...":
+            frag.puts("...")   # variadic parameter
         else:
             emit_var_decl(&frag, pt, None, None)
-    sb_putc(&frag, ')')
+    frag.putc(')')
     emit_var_decl(b, ft->inner, frag.data if frag.data != None else "", None)
-    sb_free(&frag)
+    frag.deinit()
 
 # general C declarator spelling ("declaration mirrors use"): walks the type
 # from the OUTERMOST constructor inward, building the declarator around `decl`.
@@ -313,48 +313,48 @@ static def emit_fnptr_decl(b: *StrBuf, ft: *Type, inner: const *char):
 static def emit_typename_decl(b: *StrBuf, t: *Type, decl: const *char):
     if t->kind == TY_PTR:
         s: StrBuf = {0}
-        sb_putc(&s, '*')
+        s.putc('*')
         if t->is_const:
-            sb_puts(&s, "const ")
-        sb_puts(&s, decl)
+            s.puts("const ")
+        s.puts(decl)
         emit_typename_decl(b, t->inner, s.data if s.data != None else "")
-        sb_free(&s)
+        s.deinit()
         return
     if t->kind == TY_ARRAY or t->kind == TY_FUNC:
         s: StrBuf = {0}
         if decl[0] == '*':
-            sb_putc(&s, '(')
-            sb_puts(&s, decl)
-            sb_putc(&s, ')')
+            s.putc('(')
+            s.puts(decl)
+            s.putc(')')
         else:
-            sb_puts(&s, decl)
+            s.puts(decl)
         if t->kind == TY_ARRAY:
-            sb_putc(&s, '[')
+            s.putc('[')
             if t->arr_len != None:
                 emit_expr(&s, t->arr_len, 0)
-            sb_putc(&s, ']')
+            s.putc(']')
         else:
-            sb_putc(&s, '(')
+            s.putc('(')
             for i in range(t->ntargs):
                 if i != 0:
-                    sb_puts(&s, ", ")
+                    s.puts(", ")
                 pt: *Type = t->targs[i]
-                if pt->kind == TY_NAME and pt->name != None and strcmp(pt->name, "...") == 0:
-                    sb_puts(&s, "...")
+                if pt->kind == TY_NAME and pt->name != None and pt->name == "...":
+                    s.puts("...")
                 else:
                     emit_var_decl(&s, pt, None, None)
-            sb_putc(&s, ')')
+            s.putc(')')
         emit_typename_decl(b, t->inner, s.data if s.data != None else "")
-        sb_free(&s)
+        s.deinit()
         return
     if t->is_const:
-        sb_puts(b, "const ")
+        b->puts("const ")
     if t->is_volatile:
-        sb_puts(b, "volatile ")
+        b->puts("volatile ")
     emit_type_name(b, t)
     if decl != None and decl[0] != '\0':
-        sb_putc(b, ' ')
-        sb_puts(b, decl)
+        b->putc(' ')
+        b->puts(decl)
 
 static def emit_cast_typename(b: *StrBuf, t: *Type):
     emit_typename_decl(b, t, "")
@@ -363,120 +363,120 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
     prec: i32 = expr_prec(e)
     paren: bool = prec < min_prec or e->kind == EX_TERNARY  # ternary: always ()
     if paren:
-        sb_putc(b, '(')
+        b->putc('(')
 
     match e->kind:
         case EX_IDENT, EX_NUMBER, EX_STRING, EX_CHARLIT:
-            sb_puts(b, e->text)
+            b->puts(e->text)
         case EX_TRUE:
-            sb_putc(b, '1')
+            b->putc('1')
         case EX_FALSE:
-            sb_putc(b, '0')
+            b->putc('0')
         case EX_NONE:
             # a round-tripped C module has no #include left — spell the null
             # pointer without needing <stddef.h>
-            sb_puts(b, "((void*)0)" if g_c_mod else "NULL")
+            b->puts("((void*)0)" if g_c_mod else "NULL")
         case EX_UNARY:
-            sb_puts(b, op_cstr(e->op))
+            b->puts(op_cstr(e->op))
             # avoids "--x" / "& &x" turning into another token
             if e->lhs->kind == EX_UNARY:
-                sb_putc(b, ' ')
+                b->putc(' ')
             emit_expr(b, e->lhs, PR_UNARY)
         case EX_BINARY:
             emit_binary_operand(b, e->lhs, prec, e->op)
-            sb_printf(b, " %s ", op_cstr(e->op))
+            b->printf(" %s ", op_cstr(e->op))
             emit_binary_operand(b, e->rhs, prec + 1, e->op)
         case EX_TERNARY:
             # the COND is a logical-or-expression in the C grammar: an
             # assignment there must keep its parentheses ((x = 5) ? a : b)
             emit_expr(b, e->cond, PR_TERN)
-            sb_puts(b, " ? ")
+            b->puts(" ? ")
             emit_expr(b, e->lhs, 0)
-            sb_puts(b, " : ")
+            b->puts(" : ")
             # the ELSE arm is a conditional-expression in the C grammar: an
             # assignment there must be parenthesized (a ? b : (c = d))
             emit_expr(b, e->rhs, PR_TERN)
         case EX_CALL:
             # the `in` lowering injects strcmp calls: P modules get the include
             # (C modules manage their own headers — some even redeclare strcmp)
-            if not g_c_mod and e->lhs != None and e->lhs->kind == EX_IDENT and e->lhs->text != None and strcmp(e->lhs->text, "strcmp") == 0:
+            if not g_c_mod and e->lhs != None and e->lhs->kind == EX_IDENT and e->lhs->text != None and e->lhs->text == "strcmp":
                 g_needs_string = True
             emit_expr(b, e->lhs, PR_POST)
-            sb_putc(b, '(')
+            b->putc('(')
             emit_args(b, e->args, e->nargs)
-            sb_putc(b, ')')
+            b->putc(')')
         case EX_INDEX:
             emit_expr(b, e->lhs, PR_POST)
-            sb_putc(b, '[')
+            b->putc('[')
             emit_expr(b, e->rhs, 0)
-            sb_putc(b, ']')
+            b->putc(']')
         case EX_FIELD:
             emit_expr(b, e->lhs, PR_POST)
-            sb_puts(b, op_cstr(e->op))
-            sb_puts(b, e->field)
+            b->puts(op_cstr(e->op))
+            b->puts(e->field)
         case EX_CAST:
-            sb_putc(b, '(')
+            b->putc('(')
             emit_cast_typename(b, e->cast_type)
-            sb_putc(b, ')')
+            b->putc(')')
             emit_expr(b, e->lhs, PR_UNARY)
         case EX_INITLIST:
-            sb_putc(b, '{')
+            b->putc('{')
             emit_args(b, e->args, e->nargs)
-            sb_putc(b, '}')
+            b->putc('}')
         case EX_TYPEREF:
             emit_cast_typename(b, e->cast_type)
         case EX_GENERIC:
             # passed through verbatim: the target C compiler (C11) resolves the selection
-            sb_puts(b, "_Generic(")
+            b->puts("_Generic(")
             emit_expr(b, e->lhs, PR_ASSIGN)
             for gi in range(e->nargs):
-                sb_puts(b, ", ")
+                b->puts(", ")
                 if e->gen_types[gi] == None:
-                    sb_puts(b, "default")
+                    b->puts("default")
                 else:
                     emit_cast_typename(b, e->gen_types[gi])
-                sb_puts(b, ": ")
+                b->puts(": ")
                 emit_expr(b, e->args[gi], PR_ASSIGN)
-            sb_putc(b, ')')
+            b->putc(')')
         case EX_INCDEC:
             opstr: const *char = "++" if e->op == TK_PLUS else "--"
             if e->incdec_post:
                 emit_expr(b, e->lhs, PR_POST)
-                sb_puts(b, opstr)
+                b->puts(opstr)
             else:
-                sb_puts(b, opstr)
+                b->puts(opstr)
                 emit_expr(b, e->lhs, PR_UNARY)
         case EX_DESIG:
             if e->field != None:
-                sb_printf(b, ".%s = ", e->field)
+                b->printf(".%s = ", e->field)
             else:
-                sb_putc(b, '[')
+                b->putc('[')
                 emit_expr(b, e->rhs, 0)
-                sb_puts(b, "] = ")
+                b->puts("] = ")
             emit_expr(b, e->lhs, 0)
         case EX_ASSIGN:
             emit_expr(b, e->lhs, PR_UNARY)
-            sb_printf(b, " %s ", op_cstr(e->op))
+            b->printf(" %s ", op_cstr(e->op))
             emit_expr(b, e->rhs, PR_ASSIGN)
         case EX_COMMA:
             emit_expr(b, e->lhs, PR_ASSIGN)
-            sb_puts(b, ", ")
+            b->puts(", ")
             emit_expr(b, e->rhs, PR_ASSIGN)
         case EX_COMPOUND:
-            sb_putc(b, '(')
+            b->putc('(')
             emit_cast_typename(b, e->cast_type)
-            sb_puts(b, "){")
+            b->puts("){")
             emit_args(b, e->args, e->nargs)
-            sb_putc(b, '}')
+            b->putc('}')
         case EX_VAARG:
             # round-tripped C (is_c) has no #include left, so the va_arg macro is
             # undefined there — use the compiler builtin. P keeps the portable
             # spelling (its emitted #include <stdarg.h> provides the macro).
-            sb_puts(b, "__builtin_va_arg(" if g_c_mod else "va_arg(")
+            b->puts("__builtin_va_arg(" if g_c_mod else "va_arg(")
             emit_expr(b, e->lhs, 0)
-            sb_puts(b, ", ")
+            b->puts(", ")
             emit_cast_typename(b, e->cast_type)
-            sb_putc(b, ')')
+            b->putc(')')
         case EX_STMTEXPR:
             # the GNU syntax doesn't come out in the generated C: a block of
             # expressions only becomes the comma operator (standard C); with
@@ -485,29 +485,29 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
             for si in range(e->xblock->n if e->xblock != None else 0):
                 if e->xblock->stmts[si]->kind != ST_EXPR:
                     fatal("statement expression with declarations or control flow cannot be lowered to standard C; use the qbe backend")
-            sb_putc(b, '(')
+            b->putc('(')
             for si in range(e->xblock->n if e->xblock != None else 0):
                 emit_expr(b, e->xblock->stmts[si]->expr, PR_ASSIGN)
-                sb_puts(b, ", ")
+                b->puts(", ")
             if e->lhs != None:
                 emit_expr(b, e->lhs, PR_ASSIGN)
             else:
-                sb_putc(b, '0')
-            sb_putc(b, ')')
+                b->putc('0')
+            b->putc(')')
         case EX_WITHSELF:
             # the semantic pass always rewrites this to EX_IDENT; reaching here is an internal bug
             fatal("internal: EX_WITHSELF reached the C backend unresolved")
     if paren:
-        sb_putc(b, ')')
+        b->putc(')')
 
 # ---------- declarators ----------
 # C qualifiers of the base type (const/volatile). 'restrict' qualifies the
 # pointer, not the base type — emitted after the '*' (see emit_var_decl).
 static def emit_type_quals(b: *StrBuf, t: *Type):
     if t->is_const:
-        sb_puts(b, "const ")
+        b->puts("const ")
     if t->is_volatile:
-        sb_puts(b, "volatile ")
+        b->puts("volatile ")
 
 # P's type grammar (["const"] {"*"} name {"[n]"}) always becomes the
 # C declarator "base *...name[n]..." — no parentheses ever needed.
@@ -536,16 +536,16 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
     if t->kind == TY_FUNC:
         mid: StrBuf = {0}
         for si in range(stars):
-            sb_putc(&mid, '*')
+            mid.putc('*')
         if name != None:
-            sb_puts(&mid, name)
+            mid.puts(name)
         for di in range(nd):
-            sb_putc(&mid, '[')
+            mid.putc('[')
             if dims[di] != None:
                 emit_expr(&mid, dims[di], 0)
-            sb_putc(&mid, ']')
+            mid.putc(']')
         emit_fnptr_decl(b, t, mid.data if mid.data != None else "")
-        sb_free(&mid)
+        mid.deinit()
         return
     # pointer to array (only reachable with stars>0; otherwise the array loop
     # above would have consumed it):  base (*<stars>name<outer>)[<inner>]
@@ -565,46 +565,46 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
         emit_type_quals(b, t)
         emit_type_name(b, t)
         for ii in range(istars):
-            sb_putc(b, '*')
-        sb_puts(b, " (")
+            b->putc('*')
+        b->puts(" (")
         for ai in range(stars):
-            sb_putc(b, '*')
+            b->putc('*')
         if name != None:
-            sb_puts(b, name)
+            b->puts(name)
         for ai in range(nd):
-            sb_putc(b, '[')
+            b->putc('[')
             if dims[ai] != None:
                 emit_expr(b, dims[ai], 0)
-            sb_putc(b, ']')
-        sb_putc(b, ')')
+            b->putc(']')
+        b->putc(')')
         for ai in range(an):
-            sb_putc(b, '[')
+            b->putc('[')
             if adims[ai] != None:
                 emit_expr(b, adims[ai], 0)
-            sb_putc(b, ']')
+            b->putc(']')
         return
     emit_type_quals(b, t)
     if self_struct != None and strcmp(t->name, self_struct) == 0 and t->tag_kind == TAG_NONE:
         # self-referential field of a P struct (no tag_kind): spell `struct X`.
         # A C union/struct keeps its own tag_kind spelling (union u *p), so only
         # fall back to the hardcoded `struct` when the node carries no spelling.
-        sb_printf(b, "struct %s", base_cname(t->name))
+        b->printf("struct %s", base_cname(t->name))
     else:
         emit_type_name(b, t)
-    sb_putc(b, ' ')
+    b->putc(' ')
     for i in range(stars - 1, -1, -1):   # innermost pointer first
-        sb_putc(b, '*')
+        b->putc('*')
         if i < 16 and pc[i]:
-            sb_puts(b, "const ")   # const POINTER at this level
+            b->puts("const ")   # const POINTER at this level
     if t->is_restrict and stars > 0 and not g_std89:
-        sb_puts(b, "restrict ")   # 'restrict' is C99; omitted under c89
+        b->puts("restrict ")   # 'restrict' is C99; omitted under c89
     if name != None:
-        sb_puts(b, name)
+        b->puts(name)
     for i in range(nd):
-        sb_putc(b, '[')
+        b->putc('[')
         if dims[i] != None:
             emit_expr(b, dims[i], 0)
-        sb_putc(b, ']')
+        b->putc(']')
 
 # ---------- statements ----------
 static def emit_block_body(b: *StrBuf, blk: *Block, ind: i32)
@@ -634,10 +634,10 @@ static def emit_defers_downto(b: *StrBuf, mark: i32, ind: i32):
     for i in range(g_defers.len - 1, mark - 1, -1):
         # own braces: isolates the defer body's declarations
         indent(b, ind)
-        sb_puts(b, "{\n")
+        b->puts("{\n")
         emit_block_body(b, g_defers.data[i]->body, ind + 1)
         indent(b, ind)
-        sb_puts(b, "}\n")
+        b->puts("}\n")
 
 static def step_is_negative(step: *Expr) -> bool:
     return step != None and step->kind == EX_UNARY and step->op == TK_MINUS
@@ -667,20 +667,20 @@ static def stmtexpr_complex(e: *Expr) -> bool:
 # the final value — None discards it (bare expression statement)
 static def emit_stmtexpr_block(b: *StrBuf, e: *Expr, ind: i32, tail: const *char):
     indent(b, ind)
-    sb_puts(b, "{\n")
+    b->puts("{\n")
     for si in range(e->xblock->n if e->xblock != None else 0):
         emit_stmt(b, e->xblock->stmts[si], ind + 1)
     if e->lhs != None or tail != None:
         indent(b, ind + 1)
         if tail != None:
-            sb_puts(b, tail)
+            b->puts(tail)
         if e->lhs != None:
             emit_expr(b, e->lhs, 0)
         else:
-            sb_putc(b, '0')
-        sb_puts(b, ";\n")
+            b->putc('0')
+        b->puts(";\n")
     indent(b, ind)
-    sb_puts(b, "}\n")
+    b->puts("}\n")
 
 # statement-position lowering for expressions containing complex statement
 # expressions. Returns True when handled (nothing more to emit).
@@ -694,29 +694,29 @@ static def emit_expr_stmt_lowered(b: *StrBuf, e: *Expr, ind: i32) -> bool:
     if e->kind == EX_ASSIGN and e->op == TK_ASSIGN and stmtexpr_complex(e->rhs):
         tb: StrBuf = {0}
         emit_expr(&tb, e->lhs, PR_UNARY)
-        sb_puts(&tb, " = ")
+        tb.puts(" = ")
         emit_stmtexpr_block(b, e->rhs, ind, tb.data)
-        sb_free(&tb)
+        tb.deinit()
         return True
     # cond ? A : ({...}) in statement position: becomes if/else — each arm is
     # itself a statement position (recursion handles nesting)
     if e->kind == EX_TERNARY and (stmtexpr_complex(e->lhs) or stmtexpr_complex(e->rhs)):
         indent(b, ind)
-        sb_puts(b, "if (")
+        b->puts("if (")
         emit_expr(b, e->cond, 0)
-        sb_puts(b, ") {\n")
+        b->puts(") {\n")
         if not emit_expr_stmt_lowered(b, e->lhs, ind + 1):
             indent(b, ind + 1)
             emit_expr(b, e->lhs, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         indent(b, ind)
-        sb_puts(b, "} else {\n")
+        b->puts("} else {\n")
         if not emit_expr_stmt_lowered(b, e->rhs, ind + 1):
             indent(b, ind + 1)
             emit_expr(b, e->rhs, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         indent(b, ind)
-        sb_puts(b, "}\n")
+        b->puts("}\n")
         return True
     return False
 
@@ -727,52 +727,52 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
                 # T name; { stmts; name = v; }
                 indent(b, ind)
                 if s->is_const:
-                    sb_puts(b, "const ")
+                    b->puts("const ")
                 emit_var_decl(b, s->type, s->name, None)
-                sb_puts(b, ";\n")
+                b->puts(";\n")
                 tl: StrBuf = {0}
-                sb_printf(&tl, "%s = ", s->name)
+                tl.printf("%s = ", s->name)
                 emit_stmtexpr_block(b, s->init, ind, tl.data)
-                sb_free(&tl)
+                tl.deinit()
                 return
             indent(b, ind)
             if s->is_extern:
-                sb_puts(b, "extern ")   # block-scope extern: declaration only
+                b->puts("extern ")   # block-scope extern: declaration only
             elif s->is_static:
-                sb_puts(b, "static ")   # static local: persistent storage, single init
+                b->puts("static ")   # static local: persistent storage, single init
             if s->is_const:
-                sb_puts(b, "const ")
+                b->puts("const ")
             emit_var_decl(b, s->type, s->name, None)
             if s->init != None:
-                sb_puts(b, " = ")
+                b->puts(" = ")
                 emit_expr(b, s->init, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         case ST_ASSIGN:
             if s->op == TK_ASSIGN and stmtexpr_complex(s->rhs):
                 ta: StrBuf = {0}
                 emit_expr(&ta, s->lhs, PR_UNARY)
-                sb_puts(&ta, " = ")
+                ta.puts(" = ")
                 emit_stmtexpr_block(b, s->rhs, ind, ta.data)
-                sb_free(&ta)
+                ta.deinit()
                 return
             indent(b, ind)
             emit_expr(b, s->lhs, 0)
-            sb_printf(b, " %s ", op_cstr(s->op))
+            b->printf(" %s ", op_cstr(s->op))
             emit_expr(b, s->rhs, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         case ST_EXPR:
             if emit_expr_stmt_lowered(b, s->expr, ind):
                 return
             indent(b, ind)
             emit_expr(b, s->expr, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         case ST_RETURN:
             if g_defers.len == 0 and stmtexpr_complex(s->expr):
                 emit_stmtexpr_block(b, s->expr, ind, "return ")
                 return
             if g_defers.len > 0:
                 # evaluates the value BEFORE the defers, into a temporary
-                void_ret: bool = g_cur_ret->kind == TY_NAME and strcmp(g_cur_ret->name, "void") == 0
+                void_ret: bool = g_cur_ret->kind == TY_NAME and g_cur_ret->name == "void"
                 if s->expr != None and not void_ret:
                     tmp: char[32]
                     snprintf(tmp, 32, "__defer_ret%d", g_ret_tmp_counter)
@@ -780,32 +780,32 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
                     ind2 = ind
                     if g_std89:
                         # C89: the temporary's decl needs to open its own block
-                        indent(b, ind); sb_puts(b, "{\n"); ind2 = ind + 1
+                        indent(b, ind); b->puts("{\n"); ind2 = ind + 1
                     indent(b, ind2)
                     emit_var_decl(b, g_cur_ret, tmp, None)
-                    sb_puts(b, " = ")
+                    b->puts(" = ")
                     emit_expr(b, s->expr, 0)
-                    sb_puts(b, ";\n")
+                    b->puts(";\n")
                     emit_defers_downto(b, 0, ind2)
                     indent(b, ind2)
-                    sb_printf(b, "return %s;\n", tmp)
+                    b->printf("return %s;\n", tmp)
                     if g_std89:
-                        indent(b, ind); sb_puts(b, "}\n")
+                        indent(b, ind); b->puts("}\n")
                 else:
                     if s->expr != None:
                         indent(b, ind)
                         emit_expr(b, s->expr, 0)
-                        sb_puts(b, ";\n")
+                        b->puts(";\n")
                     emit_defers_downto(b, 0, ind)
                     indent(b, ind)
-                    sb_puts(b, "return;\n")
+                    b->puts("return;\n")
             else:
                 indent(b, ind)
-                sb_puts(b, "return")
+                b->puts("return")
                 if s->expr != None:
-                    sb_putc(b, ' ')
+                    b->putc(' ')
                     emit_expr(b, s->expr, 0)
-                sb_puts(b, ";\n")
+                b->puts(";\n")
         case ST_IF:
             # folded at compile time: emits only the live branch (prunes the dead branch)
             if s->if_sel != -1:
@@ -816,28 +816,28 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
                     blk = s->else_block
                 if blk != None:
                     indent(b, ind)
-                    sb_puts(b, "{\n")
+                    b->puts("{\n")
                     emit_block_body(b, blk, ind + 1)
                     indent(b, ind)
-                    sb_puts(b, "}\n")
+                    b->puts("}\n")
                 return
             indent(b, ind)
             for i in range(s->nconds):
-                sb_puts(b, "if (" if i == 0 else "} else if (")
+                b->puts("if (" if i == 0 else "} else if (")
                 emit_expr(b, s->conds[i], 0)
-                sb_puts(b, ") {\n")
+                b->puts(") {\n")
                 emit_block_body(b, s->blocks[i], ind + 1)
                 indent(b, ind)
             if s->else_block != None:
-                sb_puts(b, "} else {\n")
+                b->puts("} else {\n")
                 emit_block_body(b, s->else_block, ind + 1)
                 indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_WHILE:
             indent(b, ind)
-            sb_puts(b, "while (")
+            b->puts("while (")
             emit_expr(b, s->cond, 0)
-            sb_puts(b, ") {\n")
+            b->puts(") {\n")
             g_break_marks[g_nbreak] = g_defers.len
             g_nbreak += 1
             g_cont_marks[g_ncont] = g_defers.len
@@ -846,10 +846,10 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             g_nbreak -= 1
             g_ncont -= 1
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_DO:
             indent(b, ind)
-            sb_puts(b, "do {\n")
+            b->puts("do {\n")
             g_break_marks[g_nbreak] = g_defers.len
             g_nbreak += 1
             g_cont_marks[g_ncont] = g_defers.len
@@ -858,25 +858,25 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             g_nbreak -= 1
             g_ncont -= 1
             indent(b, ind)
-            sb_puts(b, "} while (")
+            b->puts("} while (")
             emit_expr(b, s->cond, 0)
-            sb_puts(b, ");\n")
+            b->puts(");\n")
         case ST_FOR:
             indent(b, ind)
-            sb_printf(b, "for (%s = ", s->var)
+            b->printf("for (%s = ", s->var)
             if s->from != None:
                 emit_expr(b, s->from, 0)
             else:
-                sb_putc(b, '0')
+                b->putc('0')
             # a negative literal step reverses the comparison (spec §7.3)
-            sb_printf(b, "; %s %s ", s->var, ">" if step_is_negative(s->step) else "<")
+            b->printf("; %s %s ", s->var, ">" if step_is_negative(s->step) else "<")
             emit_expr(b, s->to, 0)
-            sb_printf(b, "; %s += ", s->var)
+            b->printf("; %s += ", s->var)
             if s->step != None:
                 emit_expr(b, s->step, 0)
             else:
-                sb_putc(b, '1')
-            sb_puts(b, ") {\n")
+                b->putc('1')
+            b->puts(") {\n")
             g_break_marks[g_nbreak] = g_defers.len
             g_nbreak += 1
             g_cont_marks[g_ncont] = g_defers.len
@@ -885,72 +885,72 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             g_nbreak -= 1
             g_ncont -= 1
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_MATCH:
             # match type(x): resolved at compile time — emits only the chosen block
             if s->is_typematch:
                 if s->tm_sel >= 0:
                     indent(b, ind)
-                    sb_puts(b, "{\n")
+                    b->puts("{\n")
                     emit_block_body(b, s->cases[s->tm_sel]->body, ind + 1)
                     indent(b, ind)
-                    sb_puts(b, "}\n")
+                    b->puts("}\n")
                 return
             indent(b, ind)
-            sb_puts(b, "switch (")
+            b->puts("switch (")
             emit_expr(b, s->subject, 0)
-            sb_puts(b, ") {\n")
+            b->puts(") {\n")
             g_break_marks[g_nbreak] = g_defers.len
             g_nbreak += 1
             for i in range(s->ncases):
                 mc: *MatchCase = s->cases[i]
                 if mc->is_default:
                     indent(b, ind + 1)
-                    sb_puts(b, "default: {\n")
+                    b->puts("default: {\n")
                 else:
                     for j in range(mc->nvals):
                         indent(b, ind + 1)
-                        sb_puts(b, "case ")
+                        b->puts("case ")
                         emit_expr(b, mc->vals[j], 0)
-                        sb_puts(b, ":\n" if j + 1 < mc->nvals else ": {\n")
+                        b->puts(":\n" if j + 1 < mc->nvals else ": {\n")
                 emit_block_body(b, mc->body, ind + 2)
                 # no fallthrough: automatic break (spec §7.5)
                 if mc->body->n == 0 or not stmt_exits(mc->body->stmts[mc->body->n - 1]):
                     indent(b, ind + 2)
-                    sb_puts(b, "break;\n")
+                    b->puts("break;\n")
                 indent(b, ind + 1)
-                sb_puts(b, "}\n")
+                b->puts("}\n")
             g_nbreak -= 1
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_BREAK:
             if g_nbreak > 0 and g_defers.len > g_break_marks[g_nbreak - 1]:
                 emit_defers_downto(b, g_break_marks[g_nbreak - 1], ind)
             indent(b, ind)
-            sb_puts(b, "break;\n")
+            b->puts("break;\n")
         case ST_CONTINUE:
             if g_ncont > 0 and g_defers.len > g_cont_marks[g_ncont - 1]:
                 emit_defers_downto(b, g_cont_marks[g_ncont - 1], ind)
             indent(b, ind)
-            sb_puts(b, "continue;\n")
+            b->puts("continue;\n")
         case ST_GOTO:
             indent(b, ind)
-            sb_printf(b, "goto %s;\n", s->label)
+            b->printf("goto %s;\n", s->label)
         case ST_LABEL:
             indent(b, ind)
-            sb_printf(b, "%s:;\n", s->label)
+            b->printf("%s:;\n", s->label)
         case ST_CFOR:
             indent(b, ind)
-            sb_puts(b, "for (")
+            b->puts("for (")
             if s->for_init != None:
                 emit_simple_inline(b, s->for_init)
-            sb_puts(b, "; ")
+            b->puts("; ")
             if s->cond != None:
                 emit_expr(b, s->cond, 0)
-            sb_puts(b, "; ")
+            b->puts("; ")
             if s->for_post != None:
                 emit_simple_inline(b, s->for_post)
-            sb_puts(b, ") {\n")
+            b->puts(") {\n")
             g_break_marks[g_nbreak] = g_defers.len
             g_nbreak += 1
             g_cont_marks[g_ncont] = g_defers.len
@@ -959,61 +959,61 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             g_nbreak -= 1
             g_ncont -= 1
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_PASS:
             indent(b, ind)
-            sb_puts(b, ";\n")   # explicit no-op
+            b->puts(";\n")   # explicit no-op
         case ST_CPROTO:
             # block-scope function declaration: re-binds the name to the
             # file-scope function, shadowing any outer variable (C11 6.2.1p4)
             indent(b, ind)
             emit_func_sig(b, s->cfunc)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         case ST_BLOCK:
             # bare block: real C scope (inner decls don't collide with siblings)
             indent(b, ind)
-            sb_puts(b, "{\n")
+            b->puts("{\n")
             emit_block_body(b, s->body, ind + 1)
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_SWITCH:
             # a switch faithful to C (with fallthrough): emits the raw body, with the
             # ST_CASE markers turning into case/default. break exits; continue
             # (not stacked here) follows the outer loop.
             indent(b, ind)
-            sb_puts(b, "switch (")
+            b->puts("switch (")
             emit_expr(b, s->subject, 0)
-            sb_puts(b, ") {\n")
+            b->puts(") {\n")
             g_break_marks[g_nbreak] = g_defers.len
             g_nbreak += 1
             emit_block_body(b, s->body, ind + 1)
             g_nbreak -= 1
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
         case ST_CASE:
             if s->expr == None:
                 indent(b, ind)
-                sb_puts(b, "default:\n")
+                b->puts("default:\n")
             else:
                 indent(b, ind)
-                sb_puts(b, "case ")
+                b->puts("case ")
                 emit_expr(b, s->expr, 0)
-                sb_puts(b, ":\n")
+                b->puts(":\n")
         case ST_DEFER:
             g_defers.push(s)
         case ST_WITH:
             # subcontext: hidden pointer to the target (evaluated once) + body,
             # all inside a C block with its own scope.
             indent(b, ind)
-            sb_puts(b, "{\n")
+            b->puts("{\n")
             indent(b, ind + 1)
             emit_var_decl(b, s->type, s->name, None)
-            sb_puts(b, " = ")
+            b->puts(" = ")
             emit_expr(b, s->init, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
             emit_block_body(b, s->body, ind + 1)
             indent(b, ind)
-            sb_puts(b, "}\n")
+            b->puts("}\n")
 
 # emits the for's init/post inline (no indentation, no trailing ';')
 static def emit_simple_inline(b: *StrBuf, s: *Stmt):
@@ -1021,11 +1021,11 @@ static def emit_simple_inline(b: *StrBuf, s: *Stmt):
         case ST_VAR:
             emit_var_decl(b, s->type, s->name, None)
             if s->init != None:
-                sb_puts(b, " = ")
+                b->puts(" = ")
                 emit_expr(b, s->init, 0)
         case ST_ASSIGN:
             emit_expr(b, s->lhs, 0)
-            sb_printf(b, " %s ", op_cstr(s->op))
+            b->printf(" %s ", op_cstr(s->op))
             emit_expr(b, s->rhs, 0)
         case ST_EXPR:
             emit_expr(b, s->expr, 0)
@@ -1044,7 +1044,7 @@ static def emit_block_body(b: *StrBuf, blk: *Block, ind: i32):
         s: *Stmt = blk->stmts[i]
         if g_std89 and s->kind == ST_VAR and seen_stmt:
             indent(b, ind + opened)
-            sb_puts(b, "{\n")
+            b->puts("{\n")
             opened += 1
             seen_stmt = False
         if s->kind != ST_VAR and s->kind != ST_DEFER:
@@ -1059,20 +1059,20 @@ static def emit_block_body(b: *StrBuf, blk: *Block, ind: i32):
     while opened > 0:
         opened -= 1
         indent(b, ind + opened)
-        sb_puts(b, "}\n")
+        b->puts("}\n")
 
 # ---------- top-level declarations ----------
 # emits a function's parameter list (inside the parentheses)
 static def emit_func_params(b: *StrBuf, f: *Func):
     if f->nparams == 0:
-        sb_puts(b, "void")
+        b->puts("void")
         return
     for i in range(f->nparams):
         if i != 0:
-            sb_puts(b, ", ")
+            b->puts(", ")
         emit_var_decl(b, f->params[i].type, f->params[i].name, None)
     if f->is_varargs:
-        sb_puts(b, ", ...")
+        b->puts(", ...")
 
 # signature only:  Ret cname(params) — with the nested declarators a return
 # type of function-pointer or pointer-to-array demands
@@ -1087,33 +1087,33 @@ static def emit_func_sig(b: *StrBuf, f: *Func):
     if rt != None and rt->kind == TY_FUNC:
         mid: StrBuf = {0}
         for si in range(rstars):
-            sb_putc(&mid, '*')
-        sb_puts(&mid, f->cname)
-        sb_putc(&mid, '(')
+            mid.putc('*')
+        mid.puts(f->cname)
+        mid.putc('(')
         emit_func_params(&mid, f)
-        sb_putc(&mid, ')')
+        mid.putc(')')
         emit_fnptr_decl(b, rt, mid.data if mid.data != None else "")
-        sb_free(&mid)
+        mid.deinit()
     elif rt != None and rt->kind == TY_ARRAY and rstars > 0:
         # return type is a pointer to array? nested declarator:
         #   Elem (*cname(params))[d0][d1] — emit_var_decl builds the dims
         #   around the composite "name" (*cname(params))
         mid: StrBuf = {0}
-        sb_putc(&mid, '(')
+        mid.putc('(')
         for si in range(rstars):
-            sb_putc(&mid, '*')
-        sb_puts(&mid, f->cname)
-        sb_putc(&mid, '(')
+            mid.putc('*')
+        mid.puts(f->cname)
+        mid.putc('(')
         emit_func_params(&mid, f)
-        sb_putc(&mid, ')')
-        sb_putc(&mid, ')')
+        mid.putc(')')
+        mid.putc(')')
         emit_var_decl(b, rt, mid.data if mid.data != None else "", None)
-        sb_free(&mid)
+        mid.deinit()
     else:
         emit_var_decl(b, f->ret, f->cname, None)
-        sb_putc(b, '(')
+        b->putc('(')
         emit_func_params(b, f)
-        sb_putc(b, ')')
+        b->putc(')')
 
 static def emit_func(b: *StrBuf, f: *Func):
     if f->is_comptime:
@@ -1123,20 +1123,20 @@ static def emit_func(b: *StrBuf, f: *Func):
     g_cur_ret = f->ret
     g_defers.len = 0
     if f->is_static:
-        sb_puts(b, "static ")
+        b->puts("static ")
     if f->is_inline and not g_std89:
-        sb_puts(b, "inline ")   # 'inline' is C99; under c89 only static remains
+        b->puts("inline ")   # 'inline' is C99; under c89 only static remains
     emit_func_sig(b, f)
     # a method body declared in a .ph becomes a prototype in the .h — the code
     # only materializes with 'implement Name' in a .p (static/inline: opt-in to
     # emit the body in the header)
     deferred: bool = g_in_header and f->owner != None and not f->is_static and not f->is_inline
     if f->body == None or deferred:
-        sb_puts(b, ";\n")
+        b->puts(";\n")
         return
-    sb_puts(b, " {\n")
+    b->puts(" {\n")
     emit_block_body(b, f->body, 1)
-    sb_puts(b, "}\n")
+    b->puts("}\n")
 
 # emits a struct/union's fields; a C11 anonymous member carries its nested
 # definition on the field (Field.anon) and is inlined RECURSIVELY, so member
@@ -1146,16 +1146,16 @@ static def emit_struct_fields(b: *StrBuf, d: *Decl, ind: i32):
         if d->fields[i].anon != None:
             sub: *Decl = d->fields[i].anon
             indent(b, ind)
-            sb_printf(b, "%s {\n", "union" if sub->kind == DL_UNION else "struct")
+            b->printf("%s {\n", "union" if sub->kind == DL_UNION else "struct")
             emit_struct_fields(b, sub, ind + 1)
             indent(b, ind)
-            sb_puts(b, "};\n")
+            b->puts("};\n")
             continue
         indent(b, ind)
         emit_var_decl(b, d->fields[i].type, d->fields[i].name, d->name)
         if d->fields[i].bit_width >= 0:
-            sb_printf(b, " : %d", d->fields[i].bit_width)
-        sb_puts(b, ";\n")
+            b->printf(" : %d", d->fields[i].bit_width)
+        b->puts(";\n")
 
 static def emit_decl(b: *StrBuf, d: *Decl):
     match d->kind:
@@ -1164,36 +1164,36 @@ static def emit_decl(b: *StrBuf, d: *Decl):
             # import "x.ph" -> #include "x.h" (spec §9.2)
             fixed: *char = None
             n: usize = strlen(path)
-            if not d->import_system and n > 3 and strcmp(path + n - 3, ".ph") == 0:
+            if not d->import_system and n > 3 and path + n - 3 == ".ph":
                 fixed = malloc(n)
                 memcpy(fixed, path, n - 3)
                 memcpy(fixed + n - 3, ".h", 3)
                 path = fixed
             if d->import_system:
-                sb_printf(b, "#include <%s>\n", path)
+                b->printf("#include <%s>\n", path)
             else:
-                sb_printf(b, "#include \"%s\"\n", path)
+                b->printf("#include \"%s\"\n", path)
             free(fixed)
         case DL_VAR:
             if d->is_extern:
                 # `extern` must survive the round-trip: dropping it would turn a
                 # declaration into a DEFINITION — e.g. glibc's `extern FILE
                 # *stdout;` would become a NULL global interposing libc's symbol.
-                sb_puts(b, "extern ")
+                b->puts("extern ")
             elif d->is_static:
-                sb_puts(b, "static ")   # internal linkage: no collision between TUs
+                b->puts("static ")   # internal linkage: no collision between TUs
             elif g_in_header and not g_c_mod and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
                 # a const global in a .ph: without `static`, every TU that
                 # includes the .h would emit an external DEFINITION of the
                 # symbol (a link collision)
-                sb_puts(b, "static ")
+                b->puts("static ")
             if d->is_const:
-                sb_puts(b, "const ")
+                b->puts("const ")
             emit_var_decl(b, d->type, d->name, None)
             if d->init != None:
-                sb_puts(b, " = ")
+                b->puts(" = ")
                 emit_expr(b, d->init, 0)
-            sb_puts(b, ";\n")
+            b->puts(";\n")
         case DL_FUNC:
             emit_func(b, d->func)
         case DL_STRUCT, DL_UNION:
@@ -1207,30 +1207,30 @@ static def emit_decl(b: *StrBuf, d: *Decl):
                 if d->is_td:
                     # an anonymous tag renamed to its typedef name (cfront):
                     # references use the BARE name, so the typedef must exist
-                    sb_printf(b, "typedef %s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
+                    b->printf("typedef %s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
                     emit_struct_fields(b, d, 1)
-                    sb_printf(b, "} %s;\n", d->name)
+                    b->printf("} %s;\n", d->name)
                 else:
-                    sb_printf(b, "%s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
+                    b->printf("%s %s {\n", "union" if d->kind == DL_UNION else "struct", d->name)
                     emit_struct_fields(b, d, 1)
-                    sb_puts(b, "};\n")
+                    b->puts("};\n")
             elif d->is_fwd and g_c_mod:
                 # C round-trip keeps the forward: a later PROTOTYPE with a
                 # by-value param of this tag needs it already in scope
-                sb_printf(b, "%s %s;\n", "union" if d->kind == DL_UNION else "struct", d->name)
+                b->printf("%s %s;\n", "union" if d->kind == DL_UNION else "struct", d->name)
             for j in range(d->nmethods):
-                sb_putc(b, '\n')
+                b->putc('\n')
                 emit_func(b, d->methods[j])
         case DL_ENUM:
-            sb_puts(b, "typedef enum { ")
+            b->puts("typedef enum { ")
             for i in range(d->nitems):
                 if i != 0:
-                    sb_puts(b, ", ")
-                sb_puts(b, d->items[i].name)
+                    b->puts(", ")
+                b->puts(d->items[i].name)
                 if d->items[i].value != None:
-                    sb_puts(b, " = ")
+                    b->puts(" = ")
                     emit_expr(b, d->items[i].value, 0)
-            sb_printf(b, " } %s;\n", d->name)
+            b->printf(" } %s;\n", d->name)
         case _:
             # DL_DECLARE/DL_IMPLEMENT are converted into DL_STRUCT by the semantic pass
             return
@@ -1241,7 +1241,7 @@ def emit_module_c(m: *Module, out: *StrBuf):
     g_c_mod = m->is_c
 
     body: StrBuf = {0}
-    defer sb_free(&body)
+    defer body.deinit()
     prev_import: bool = False
     fwd_done: bool = False
     for i in range(m->ndecls):
@@ -1252,7 +1252,7 @@ def emit_module_c(m: *Module, out: *StrBuf):
             continue
         is_import: bool = d->kind == DL_IMPORT
         if i > 0 and not (is_import and prev_import):
-            sb_putc(&body, '\n')
+            body.putc('\n')
         # before the first struct/union definition, emit typedefs upfront for
         # the module's structs/unions: allows mutual reference (e.g. Type <->
         # Expr) without a manual declaration. Only for P modules: C-front-end
@@ -1264,8 +1264,8 @@ def emit_module_c(m: *Module, out: *StrBuf):
             for j in range(m->ndecls):
                 d2: *Decl = m->decls[j]
                 if (d2->kind == DL_STRUCT or d2->kind == DL_UNION) and d2->nfields > 0 and d2->ntparams == 0:
-                    sb_printf(&body, "typedef %s %s %s;\n", "union" if d2->kind == DL_UNION else "struct", d2->name, d2->name)
-            sb_putc(&body, '\n')
+                    body.printf("typedef %s %s %s;\n", "union" if d2->kind == DL_UNION else "struct", d2->name, d2->name)
+            body.putc('\n')
         emit_decl(&body, d)
         prev_import = is_import
 
@@ -1282,18 +1282,18 @@ def emit_module_c(m: *Module, out: *StrBuf):
                     up = '_'
                 guard[gk] = up
                 gk += 1
-            sb_printf(out, "#ifndef %s\n#define %s\n\n", guard, guard)
+            out->printf("#ifndef %s\n#define %s\n\n", guard, guard)
         else:
-            sb_puts(out, "#pragma once\n\n")
+            out->puts("#pragma once\n\n")
     if g_needs_stdint:
-        sb_puts(out, "#include <stdint.h>\n")
+        out->puts("#include <stdint.h>\n")
     if g_needs_stddef:
-        sb_puts(out, "#include <stddef.h>\n")
+        out->puts("#include <stddef.h>\n")
     if g_needs_string:
-        sb_puts(out, "#include <string.h>\n")
+        out->puts("#include <string.h>\n")
     if g_needs_stdint or g_needs_stddef or g_needs_string:
-        sb_putc(out, '\n')
+        out->putc('\n')
     if body.data != None:
-        sb_puts(out, body.data)
+        out->puts(body.data)
     if m->is_header and g_std89:
-        sb_puts(out, "\n#endif\n")
+        out->puts("\n#endif\n")

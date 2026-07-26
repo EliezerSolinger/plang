@@ -46,7 +46,10 @@ def main(argc: i32, argv: **char) -> i32:
             i += 1
             continue
         if st.is_dir and dir == None:
-            dir = ps_path_dirname(ps_path_join(argv[i], "x"))
+            # join then dirname normalizes "a/" and "a//" down to "a"
+            j: *char = ps_path_join(argv[i], "x")
+            dir = ps_path_dirname(j)
+            free(j)
         elif not st.is_dir and dir == None:
             dir = ps_path_dirname(argv[i])
         i += 1

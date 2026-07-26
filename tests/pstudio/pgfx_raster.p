@@ -24,7 +24,7 @@ def main() -> int:
     fb.fill_rect(pg_rect(1, 1, 38, 20), 0xFF303030)
     fb.frame_rect(pg_rect(1, 1, 38, 20), 0xFF00FF00)
 
-    f: PgFont = pg_font_default(1)
+    f: PgFont = pg_font_default(pg_font_default_size())
     printf("cell=%dx%d base=%d adv=%d lh=%d\n",
            f.cell_w, f.cell_h, f.baseline, f.char_w(), f.line_h())
     printf("w(abc)=%d w(áé□)=%d w3(abcdef)=%d\n",

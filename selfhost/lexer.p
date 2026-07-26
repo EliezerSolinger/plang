@@ -240,7 +240,7 @@ struct Lx:
     static def slice(self: *Lx, start: usize, end: usize) -> const *char:
         b0: usize = self->off[start]
         b1: usize = self->off[end] if end < self->n else self->nbytes
-        return arena_strndup(self->a, self->bytes + b0, b1 - b0)
+        return self->a->strndup(self->bytes + b0, b1 - b0)
 
     static def push_tok(self: *Lx, k: TokKind, pos: Pos, text: const *char):
         t: Token = {k, pos, text}
@@ -502,14 +502,14 @@ def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tole
     lx.tolerant = tolerant
 
     err_off: usize = 0
-    if utf8_decode(bytes, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0:
+    if utf8_decode(bytes, nbytes, a, out lx.cp, out lx.off, out lx.n, &err_off) != 0:
         if not tolerant:
             fatal("%s: invalid UTF-8 byte at offset %zu", file, err_off)
         # replace invalid bytes with '?' until it decodes
-        fixed: *char = arena_alloc(a, nbytes + 1)
+        fixed: *char = a->alloc(nbytes + 1)
         memcpy(fixed, bytes, nbytes)
         fixed[nbytes] = '\0'
-        while utf8_decode(fixed, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0:
+        while utf8_decode(fixed, nbytes, a, out lx.cp, out lx.off, out lx.n, &err_off) != 0:
             fixed[err_off] = '?'
         lx.bytes = fixed
 

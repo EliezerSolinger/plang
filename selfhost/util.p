@@ -22,98 +22,99 @@ static def arena_new_block(min: usize) -> *ArenaBlock:
     b->cap = cap
     return b
 
-def arena_alloc(a: *Arena, size: usize) -> *void:
-    size = (size + 15) & ~usize(15)
-    if a->head == None or a->head->used + size > a->head->cap:
-        b: *ArenaBlock = arena_new_block(size)
-        b->next = a->head
-        a->head = b
-    base: *char = (*char)(a->head + 1)
-    p: *void = base + a->head->used
-    a->head->used += size
-    memset(p, 0, size)
-    return p
+struct Arena:
+    def alloc(self: *Arena, size: usize) -> *void:
+        size = (size + 15) & ~usize(15)
+        if self->head == None or self->head->used + size > self->head->cap:
+            b: *ArenaBlock = arena_new_block(size)
+            b->next = self->head
+            self->head = b
+        base: *char = (*char)(self->head + 1)
+        p: *void = base + self->head->used
+        self->head->used += size
+        memset(p, 0, size)
+        return p
 
-def arena_strndup(a: *Arena, s: const *char, n: usize) -> *char:
-    p: *char = arena_alloc(a, n + 1)
-    memcpy(p, s, n)
-    p[n] = '\0'
-    return p
+    def strndup(self: *Arena, s: const *char, n: usize) -> *char:
+        p: *char = self->alloc(n + 1)
+        memcpy(p, s, n)
+        p[n] = '\0'
+        return p
 
-def arena_strdup(a: *Arena, s: const *char) -> *char:
-    return arena_strndup(a, s, strlen(s))
+    def strdup(self: *Arena, s: const *char) -> *char:
+        return self->strndup(s, strlen(s))
 
-def arena_printf(a: *Arena, fmt: const *char, ...) -> *char:
-    ap: va_list
-    ap2: va_list
-    va_start(ap, fmt)
-    va_copy(ap2, ap)
-    n: i32 = vsnprintf(None, 0, fmt, ap)
-    va_end(ap)
-    if n < 0:
-        fatal("arena_printf: invalid format")
-    p: *char = arena_alloc(a, usize(n) + 1)
-    vsnprintf(p, usize(n) + 1, fmt, ap2)
-    va_end(ap2)
-    return p
+    def printf(self: *Arena, fmt: const *char, ...) -> *char:
+        ap: va_list
+        ap2: va_list
+        va_start(ap, fmt)
+        va_copy(ap2, ap)
+        n: i32 = vsnprintf(None, 0, fmt, ap)
+        va_end(ap)
+        if n < 0:
+            fatal("Arena.printf: invalid format")
+        p: *char = self->alloc(usize(n) + 1)
+        vsnprintf(p, usize(n) + 1, fmt, ap2)
+        va_end(ap2)
+        return p
 
 # ---------- dynamic array (replaces the VPUSH macro in the ports) ----------
-# usage: arr = vec_grow(arr, len, &cap, sizeof(T))   # *void converts on its own
+# usage: arr = vec_grow(arr, len, ref cap, sizeof(T))  # *void converts on its own
 #       arr[len] = item
 #       len += 1
-def vec_grow(arr: *void, len: i32, cap: *i32, elem: usize) -> *void:
-    if len < *cap:
+def vec_grow(arr: *void, len: i32, ref cap: i32, elem: usize) -> *void:
+    if len < cap:
         return arr
-    new_cap: i32 = 8 if *cap == 0 else *cap * 2
+    new_cap: i32 = 8 if cap == 0 else cap * 2
     arr = realloc(arr, elem * usize(new_cap))
     if arr == None:
         fatal("out of memory")
-    *cap = new_cap
+    cap = new_cap
     return arr
 
-# ---------- string builder ----------
-static def sb_grow(b: *StrBuf, extra: usize):
-    if b->len + extra + 1 > b->cap:
-        nc: usize = 256 if b->cap == 0 else b->cap * 2
-        while nc < b->len + extra + 1:
-            nc *= 2
-        b->data = realloc(b->data, nc)
-        if b->data == None:
-            fatal("out of memory")
-        b->cap = nc
+struct StrBuf:
+    static def grow(self: *StrBuf, extra: usize):
+        if self->len + extra + 1 > self->cap:
+            nc: usize = 256 if self->cap == 0 else self->cap * 2
+            while nc < self->len + extra + 1:
+                nc *= 2
+            self->data = realloc(self->data, nc)
+            if self->data == None:
+                fatal("out of memory")
+            self->cap = nc
 
-def sb_putc(b: *StrBuf, c: char):
-    sb_grow(b, 1)
-    b->data[b->len] = c
-    b->len += 1
-    b->data[b->len] = '\0'
+    def putc(self: *StrBuf, c: char):
+        self->grow(1)
+        self->data[self->len] = c
+        self->len += 1
+        self->data[self->len] = '\0'
 
-def sb_puts(b: *StrBuf, s: const *char):
-    n: usize = strlen(s)
-    sb_grow(b, n)
-    memcpy(b->data + b->len, s, n)
-    b->len += n
-    b->data[b->len] = '\0'
+    def puts(self: *StrBuf, s: const *char):
+        n: usize = strlen(s)
+        self->grow(n)
+        memcpy(self->data + self->len, s, n)
+        self->len += n
+        self->data[self->len] = '\0'
 
-def sb_printf(b: *StrBuf, fmt: const *char, ...):
-    ap: va_list
-    ap2: va_list
-    va_start(ap, fmt)
-    va_copy(ap2, ap)
-    n: i32 = vsnprintf(None, 0, fmt, ap)
-    va_end(ap)
-    if n < 0:
-        fatal("sb_printf: invalid format")
-    sb_grow(b, usize(n))
-    vsnprintf(b->data + b->len, usize(n) + 1, fmt, ap2)
-    va_end(ap2)
-    b->len += usize(n)
+    def printf(self: *StrBuf, fmt: const *char, ...):
+        ap: va_list
+        ap2: va_list
+        va_start(ap, fmt)
+        va_copy(ap2, ap)
+        n: i32 = vsnprintf(None, 0, fmt, ap)
+        va_end(ap)
+        if n < 0:
+            fatal("StrBuf.printf: invalid format")
+        self->grow(usize(n))
+        vsnprintf(self->data + self->len, usize(n) + 1, fmt, ap2)
+        va_end(ap2)
+        self->len += usize(n)
 
-def sb_free(b: *StrBuf):
-    free(b->data)
-    b->data = None
-    b->len = 0
-    b->cap = 0
+    def deinit(self: *StrBuf):
+        free(self->data)
+        self->data = None
+        self->len = 0
+        self->cap = 0
 
 # ---------- errors ----------
 def fatal(fmt: const *char, ...):
@@ -235,7 +236,7 @@ def cdiag_at(file: const *char, pos: Pos, group: const *char, wdef: i32, fmt: co
     g_warn_count += 1
 
 # ---------- files ----------
-def read_entire_file(path: const *char, out_len: *usize) -> *char:
+def read_entire_file(path: const *char, out out_len: usize) -> *char:
     f: *FILE = fopen(path, "rb")
     if f == None:
         fatal("could not open '%s'", path)
@@ -252,6 +253,5 @@ def read_entire_file(path: const *char, out_len: *usize) -> *char:
     if fread(buf, 1, usize(sz), f) != usize(sz):
         fatal("failed to read '%s'", path)
     buf[sz] = '\0'
-    if out_len != None:
-        *out_len = usize(sz)
+    out_len = usize(sz)
     return buf

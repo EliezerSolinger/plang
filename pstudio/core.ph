@@ -13,6 +13,15 @@ import "../stl/vec.ph"
 struct BufLine:
     text: *char       # UTF-8 bytes, NO \n, NUL-terminated (malloc)
     ncp: i32          # codepoints (cached for movement and layout)
+    hidden: bool      # folded away: never drawn, never holds a caret
+    folded: bool      # fold HEADER: the block below it is hidden
+    mark: u8          # MARK_* bitmask: travels with the line through edits
+
+# a block of whole lines: what the line commands operate on (one per caret,
+# merged when two carets touch the same or adjacent blocks)
+struct LineRange:
+    l0: i32
+    l1: i32
 
 struct Caret:
     line: i32         # 0-based
@@ -34,6 +43,7 @@ struct EditOp:
 declare Vec<BufLine>
 declare Vec<Caret>
 declare Vec<EditOp>
+declare Vec<LineRange>
 
 struct UndoGroup:
     ops: Vec<EditOp>
@@ -109,6 +119,54 @@ struct Buffer:
     def find_re(in self: Buffer, pattern: const *char, from_line: i32, from_col: i32,
                 forward: bool, out l: i32, out c0: i32, out c1: i32) -> bool
 
+    # ---- line-oriented commands (multi-caret, each one undo group) ----
+    # the merged line blocks the carets touch (caller deinits the Vec)
+    def line_ranges(in self: Buffer) -> Vec<LineRange>
+    def move_lines(ref self: Buffer, dir: i32, now_ms: i64)      # dir = -1/+1
+    def duplicate_lines(ref self: Buffer, now_ms: i64)
+    def delete_lines(ref self: Buffer, now_ms: i64)
+    def join_lines(ref self: Buffer, now_ms: i64)                # with the next
+    # comments/uncomments the blocks: if EVERY non-blank line already starts
+    # with `marker`, it is removed; otherwise it is inserted at the block's
+    # SMALLEST indentation, so the markers line up
+    def toggle_comment(ref self: Buffer, marker: const *char, now_ms: i64)
+
+    # ---- folding (by INDENTATION, like GDScript in Godot's CodeEdit) ----
+    def indent_of(in self: Buffer, line: i32) -> i32     # indent in columns
+    def is_blank(in self: Buffer, line: i32) -> bool      # only whitespace
+    # foldable when the next non-blank line is indented deeper
+    def can_fold(in self: Buffer, line: i32) -> bool
+    def fold_end(in self: Buffer, line: i32) -> i32      # last line of the block
+    def fold(ref self: Buffer, line: i32) -> bool
+    def unfold(ref self: Buffer, line: i32) -> bool
+    def toggle_fold(ref self: Buffer, line: i32) -> bool
+    def fold_all(ref self: Buffer)
+    def unfold_all(ref self: Buffer)
+    # releases every fold whose HEADER is inside [l0,l1] — the raw edits call
+    # this, so `folded` always implies "the block below is exactly hidden"
+    def unfold_range(ref self: Buffer, l0: i32, l1: i32)
+    def is_hidden(in self: Buffer, line: i32) -> bool
+    def is_folded(in self: Buffer, line: i32) -> bool
+
+    # ---- per-line marks (gutter clients: bookmarks, breakpoints) ----
+    # They live in the line, so inserting/removing lines carries them along.
+    def mark_of(in self: Buffer, line: i32) -> u8
+    def toggle_mark(ref self: Buffer, line: i32, mark: u8)
+    def clear_marks(ref self: Buffer, mark: u8)
+    # the next/previous line carrying `mark`, wrapping around; -1 if none
+    def next_mark(in self: Buffer, from_line: i32, mark: u8, forward: bool) -> i32
+
+    # ---- visible-line mapping ----
+    # With folding, a screen row is NOT a buffer line. Everything that converts
+    # between the two goes through here (the CodeView has exactly six such
+    # places). These are O(lines): they are called a handful of times per frame,
+    # never per row — the drawing walks rows with next_visible instead.
+    def visible_count(in self: Buffer) -> i32
+    # the line `delta` visible steps away from `line` (clamped, always visible)
+    def next_visible(in self: Buffer, line: i32, delta: i32) -> i32
+    def to_visible(in self: Buffer, line: i32) -> i32    # line -> visible index
+    def from_visible(in self: Buffer, vidx: i32) -> i32  # visible index -> line
+
     # ---- undo ----
     def undo_step(ref self: Buffer) -> bool
     def redo_step(ref self: Buffer) -> bool
@@ -116,6 +174,9 @@ struct Buffer:
     def mark_saved(ref self: Buffer)              # after saving: clears dirty
 
 # ---- highlighting (full relex with the compiler's lexer, tolerant) ----
+MARK_BOOKMARK: const u8 = 1     # navigation mark (F2 jumps between them)
+MARK_BREAKPOINT: const u8 = 2   # kept for whoever wires a runner in
+
 HL_TEXT: const u8 = 0
 HL_KW: const u8 = 1
 HL_STR: const u8 = 2

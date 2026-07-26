@@ -20,7 +20,7 @@ int32_t pclose(struct _IO_FILE *stream);
 
 static char *preprocess_c(Cc *cc, const char *path, size_t *out_len) {
     const char *cpp = (cc->cpp != NULL ? cc->cpp : "cc");
-    const char *cmd = arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path);
+    const char *cmd = Arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path);
     struct _IO_FILE *f = popen(cmd, "r");
     if (f == NULL) {
         fatal("could not run the C preprocessor '%s' (see --cpp / PLANGC_CPP)", cpp);
@@ -33,15 +33,15 @@ static char *preprocess_c(Cc *cc, const char *path, size_t *out_len) {
             break;
         }
         chunk[n] = '\0';
-        sb_puts(&b, &chunk[0]);
+        StrBuf_puts(&b, &chunk[0]);
     }
     int32_t rc = pclose(f);
     if (rc != 0) {
         fatal("C preprocessing failed for '%s' ('%s -E'; fix the errors above or see --cpp / PLANGC_CPP)", path, cpp);
     }
-    char *res = arena_strdup(&cc->arena, (b.data != NULL ? b.data : ""));
+    char *res = Arena_strdup(&cc->arena, (b.data != NULL ? b.data : ""));
     *out_len = strlen(res);
-    sb_free(&b);
+    StrBuf_deinit(&b);
     return res;
 }
 
@@ -98,16 +98,16 @@ static const char *derive_output(Arena *a, const char *input, const Backend *be)
         if (be->hdr_ext == NULL) {
             fatal("backend '%s' does not generate headers (.ph)", be->name);
         }
-        return arena_printf(a, "%.*s.%s", (int32_t)(n - 3), input, be->hdr_ext);
+        return Arena_printf(a, "%.*s.%s", (int32_t)(n - 3), input, be->hdr_ext);
     }
     if (n > 2 && strcmp(input + n - 2, ".p") == 0) {
-        return arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
+        return Arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
     }
     if (n > 2 && strcmp(input + n - 2, ".c") == 0) {
-        return arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
+        return Arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
     }
     if (n > 2 && strcmp(input + n - 2, ".i") == 0) {
-        return arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
+        return Arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
     }
     fatal("'%s': unknown extension (expected .p, .ph, .c or .i)", input);
     return NULL;
@@ -152,7 +152,7 @@ static void qbe_merge_types(Cc *cc, Module *m) {
         return;
     }
     int32_t total = extra + m->ndecls;
-    Decl **nd = arena_alloc(&cc->arena, sizeof(*m->decls) * (size_t)total);
+    Decl **nd = Arena_alloc(&cc->arena, sizeof(*m->decls) * (size_t)total);
     int p = 0;
     for (i = 0; i < cc->nmods; i += 1) {
         Module *md2 = cc->mods[i];
@@ -163,13 +163,13 @@ static void qbe_merge_types(Cc *cc, Module *m) {
         for (j2 = 0; j2 < md2->ndecls; j2 += 1) {
             Decl *d = md2->decls[j2];
             if (d->kind == DL_STRUCT || d->kind == DL_UNION) {
-                Decl *c = arena_alloc(&cc->arena, sizeof(Decl));
+                Decl *c = Arena_alloc(&cc->arena, sizeof(Decl));
                 *c = *d;
                 if (d->nmethods > 0) {
-                    Func **mc = arena_alloc(&cc->arena, sizeof(*d->methods) * (size_t)d->nmethods);
+                    Func **mc = Arena_alloc(&cc->arena, sizeof(*d->methods) * (size_t)d->nmethods);
                     size_t mk;
                     for (mk = 0; mk < d->nmethods; mk += 1) {
-                        Func *fc = arena_alloc(&cc->arena, sizeof(Func));
+                        Func *fc = Arena_alloc(&cc->arena, sizeof(Func));
                         *fc = *d->methods[mk];
                         if (!(fc->is_inline || fc->is_static)) {
                             fc->body = NULL;
@@ -187,7 +187,7 @@ static void qbe_merge_types(Cc *cc, Module *m) {
                 nd[p] = d;
                 p += 1;
             } else if (d->kind == DL_VAR && d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
-                Decl *cv = arena_alloc(&cc->arena, sizeof(Decl));
+                Decl *cv = Arena_alloc(&cc->arena, sizeof(Decl));
                 *cv = *d;
                 cv->is_static = 1;
                 nd[p] = cv;
@@ -366,7 +366,7 @@ int main(int argc, char **argv) {
         backend_emit(be, m, &out);
         const char *dest = (out_path != NULL ? out_path : derive_output(&cc.arena, Vec_pchar_get(&inputs, k), be));
         if (out_dir != NULL) {
-            dest = arena_printf(&cc.arena, "%s/%s", out_dir, dest);
+            dest = Arena_printf(&cc.arena, "%s/%s", out_dir, dest);
             mkdirs_for(dest);
         }
         if (strcmp(dest, "-") == 0) {
@@ -380,7 +380,7 @@ int main(int argc, char **argv) {
             fclose(f);
         }
         {
-            sb_free(&out);
+            StrBuf_deinit(&out);
         }
     }
     return 0;

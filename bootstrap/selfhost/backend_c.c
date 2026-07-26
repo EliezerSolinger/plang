@@ -282,20 +282,20 @@ static const char *base_cname(const char *n) {
 
 static void emit_type_name(StrBuf *b, Type *t) {
     if (t->tag_kind == TAG_STRUCT) {
-        sb_printf(b, "struct %s", t->name);
+        StrBuf_printf(b, "struct %s", t->name);
         return;
     }
     if (t->tag_kind == TAG_UNION) {
-        sb_printf(b, "union %s", t->name);
+        StrBuf_printf(b, "union %s", t->name);
         return;
     }
-    sb_puts(b, base_cname(t->name));
+    StrBuf_puts(b, base_cname(t->name));
 }
 
 static void indent(StrBuf *b, int32_t n) {
     size_t i;
     for (i = 0; i < n; i += 1) {
-        sb_puts(b, "    ");
+        StrBuf_puts(b, "    ");
     }
 }
 
@@ -318,9 +318,9 @@ static void emit_binary_operand(StrBuf *b, Expr *child, int32_t min_prec, int32_
         }
     }
     if (force) {
-        sb_putc(b, '(');
+        StrBuf_putc(b, '(');
         emit_expr(b, child, 0);
-        sb_putc(b, ')');
+        StrBuf_putc(b, ')');
     } else {
         emit_expr(b, child, min_prec);
     }
@@ -330,7 +330,7 @@ static void emit_args(StrBuf *b, Expr **args, int32_t n) {
     size_t i;
     for (i = 0; i < n; i += 1) {
         if (i != 0) {
-            sb_puts(b, ", ");
+            StrBuf_puts(b, ", ");
         }
         emit_expr(b, args[i], PR_ASSIGN);
     }
@@ -338,83 +338,83 @@ static void emit_args(StrBuf *b, Expr **args, int32_t n) {
 
 static void emit_fnptr_decl(StrBuf *b, Type *ft, const char *inner) {
     StrBuf frag = {0};
-    sb_puts(&frag, "(");
-    sb_puts(&frag, inner);
-    sb_puts(&frag, ")(");
+    StrBuf_puts(&frag, "(");
+    StrBuf_puts(&frag, inner);
+    StrBuf_puts(&frag, ")(");
     size_t i;
     for (i = 0; i < ft->ntargs; i += 1) {
         if (i != 0) {
-            sb_puts(&frag, ", ");
+            StrBuf_puts(&frag, ", ");
         }
         Type *pt = ft->targs[i];
         if (pt->kind == TY_NAME && pt->name != NULL && strcmp(pt->name, "...") == 0) {
-            sb_puts(&frag, "...");
+            StrBuf_puts(&frag, "...");
         } else {
             emit_var_decl(&frag, pt, NULL, NULL);
         }
     }
-    sb_putc(&frag, ')');
+    StrBuf_putc(&frag, ')');
     emit_var_decl(b, ft->inner, (frag.data != NULL ? frag.data : ""), NULL);
-    sb_free(&frag);
+    StrBuf_deinit(&frag);
 }
 
 static void emit_typename_decl(StrBuf *b, Type *t, const char *decl) {
     if (t->kind == TY_PTR) {
         StrBuf s = {0};
-        sb_putc(&s, '*');
+        StrBuf_putc(&s, '*');
         if (t->is_const) {
-            sb_puts(&s, "const ");
+            StrBuf_puts(&s, "const ");
         }
-        sb_puts(&s, decl);
+        StrBuf_puts(&s, decl);
         emit_typename_decl(b, t->inner, (s.data != NULL ? s.data : ""));
-        sb_free(&s);
+        StrBuf_deinit(&s);
         return;
     }
     if (t->kind == TY_ARRAY || t->kind == TY_FUNC) {
         StrBuf s = {0};
         if (decl[0] == '*') {
-            sb_putc(&s, '(');
-            sb_puts(&s, decl);
-            sb_putc(&s, ')');
+            StrBuf_putc(&s, '(');
+            StrBuf_puts(&s, decl);
+            StrBuf_putc(&s, ')');
         } else {
-            sb_puts(&s, decl);
+            StrBuf_puts(&s, decl);
         }
         if (t->kind == TY_ARRAY) {
-            sb_putc(&s, '[');
+            StrBuf_putc(&s, '[');
             if (t->arr_len != NULL) {
                 emit_expr(&s, t->arr_len, 0);
             }
-            sb_putc(&s, ']');
+            StrBuf_putc(&s, ']');
         } else {
-            sb_putc(&s, '(');
+            StrBuf_putc(&s, '(');
             size_t i;
             for (i = 0; i < t->ntargs; i += 1) {
                 if (i != 0) {
-                    sb_puts(&s, ", ");
+                    StrBuf_puts(&s, ", ");
                 }
                 Type *pt = t->targs[i];
                 if (pt->kind == TY_NAME && pt->name != NULL && strcmp(pt->name, "...") == 0) {
-                    sb_puts(&s, "...");
+                    StrBuf_puts(&s, "...");
                 } else {
                     emit_var_decl(&s, pt, NULL, NULL);
                 }
             }
-            sb_putc(&s, ')');
+            StrBuf_putc(&s, ')');
         }
         emit_typename_decl(b, t->inner, (s.data != NULL ? s.data : ""));
-        sb_free(&s);
+        StrBuf_deinit(&s);
         return;
     }
     if (t->is_const) {
-        sb_puts(b, "const ");
+        StrBuf_puts(b, "const ");
     }
     if (t->is_volatile) {
-        sb_puts(b, "volatile ");
+        StrBuf_puts(b, "volatile ");
     }
     emit_type_name(b, t);
     if (decl != NULL && decl[0] != '\0') {
-        sb_putc(b, ' ');
-        sb_puts(b, decl);
+        StrBuf_putc(b, ' ');
+        StrBuf_puts(b, decl);
     }
 }
 
@@ -426,47 +426,47 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
     int32_t prec = expr_prec(e);
     int paren = prec < min_prec || e->kind == EX_TERNARY;
     if (paren) {
-        sb_putc(b, '(');
+        StrBuf_putc(b, '(');
     }
     switch (e->kind) {
         case EX_IDENT:
         case EX_NUMBER:
         case EX_STRING:
         case EX_CHARLIT: {
-            sb_puts(b, e->text);
+            StrBuf_puts(b, e->text);
             break;
         }
         case EX_TRUE: {
-            sb_putc(b, '1');
+            StrBuf_putc(b, '1');
             break;
         }
         case EX_FALSE: {
-            sb_putc(b, '0');
+            StrBuf_putc(b, '0');
             break;
         }
         case EX_NONE: {
-            sb_puts(b, (g_c_mod ? "((void*)0)" : "NULL"));
+            StrBuf_puts(b, (g_c_mod ? "((void*)0)" : "NULL"));
             break;
         }
         case EX_UNARY: {
-            sb_puts(b, op_cstr(e->op));
+            StrBuf_puts(b, op_cstr(e->op));
             if (e->lhs->kind == EX_UNARY) {
-                sb_putc(b, ' ');
+                StrBuf_putc(b, ' ');
             }
             emit_expr(b, e->lhs, PR_UNARY);
             break;
         }
         case EX_BINARY: {
             emit_binary_operand(b, e->lhs, prec, e->op);
-            sb_printf(b, " %s ", op_cstr(e->op));
+            StrBuf_printf(b, " %s ", op_cstr(e->op));
             emit_binary_operand(b, e->rhs, prec + 1, e->op);
             break;
         }
         case EX_TERNARY: {
             emit_expr(b, e->cond, PR_TERN);
-            sb_puts(b, " ? ");
+            StrBuf_puts(b, " ? ");
             emit_expr(b, e->lhs, 0);
-            sb_puts(b, " : ");
+            StrBuf_puts(b, " : ");
             emit_expr(b, e->rhs, PR_TERN);
             break;
         }
@@ -475,35 +475,35 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
                 g_needs_string = 1;
             }
             emit_expr(b, e->lhs, PR_POST);
-            sb_putc(b, '(');
+            StrBuf_putc(b, '(');
             emit_args(b, e->args, e->nargs);
-            sb_putc(b, ')');
+            StrBuf_putc(b, ')');
             break;
         }
         case EX_INDEX: {
             emit_expr(b, e->lhs, PR_POST);
-            sb_putc(b, '[');
+            StrBuf_putc(b, '[');
             emit_expr(b, e->rhs, 0);
-            sb_putc(b, ']');
+            StrBuf_putc(b, ']');
             break;
         }
         case EX_FIELD: {
             emit_expr(b, e->lhs, PR_POST);
-            sb_puts(b, op_cstr(e->op));
-            sb_puts(b, e->field);
+            StrBuf_puts(b, op_cstr(e->op));
+            StrBuf_puts(b, e->field);
             break;
         }
         case EX_CAST: {
-            sb_putc(b, '(');
+            StrBuf_putc(b, '(');
             emit_cast_typename(b, e->cast_type);
-            sb_putc(b, ')');
+            StrBuf_putc(b, ')');
             emit_expr(b, e->lhs, PR_UNARY);
             break;
         }
         case EX_INITLIST: {
-            sb_putc(b, '{');
+            StrBuf_putc(b, '{');
             emit_args(b, e->args, e->nargs);
-            sb_putc(b, '}');
+            StrBuf_putc(b, '}');
             break;
         }
         case EX_TYPEREF: {
@@ -511,70 +511,70 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_GENERIC: {
-            sb_puts(b, "_Generic(");
+            StrBuf_puts(b, "_Generic(");
             emit_expr(b, e->lhs, PR_ASSIGN);
             size_t gi;
             for (gi = 0; gi < e->nargs; gi += 1) {
-                sb_puts(b, ", ");
+                StrBuf_puts(b, ", ");
                 if (e->gen_types[gi] == NULL) {
-                    sb_puts(b, "default");
+                    StrBuf_puts(b, "default");
                 } else {
                     emit_cast_typename(b, e->gen_types[gi]);
                 }
-                sb_puts(b, ": ");
+                StrBuf_puts(b, ": ");
                 emit_expr(b, e->args[gi], PR_ASSIGN);
             }
-            sb_putc(b, ')');
+            StrBuf_putc(b, ')');
             break;
         }
         case EX_INCDEC: {
             const char *opstr = (e->op == TK_PLUS ? "++" : "--");
             if (e->incdec_post) {
                 emit_expr(b, e->lhs, PR_POST);
-                sb_puts(b, opstr);
+                StrBuf_puts(b, opstr);
             } else {
-                sb_puts(b, opstr);
+                StrBuf_puts(b, opstr);
                 emit_expr(b, e->lhs, PR_UNARY);
             }
             break;
         }
         case EX_DESIG: {
             if (e->field != NULL) {
-                sb_printf(b, ".%s = ", e->field);
+                StrBuf_printf(b, ".%s = ", e->field);
             } else {
-                sb_putc(b, '[');
+                StrBuf_putc(b, '[');
                 emit_expr(b, e->rhs, 0);
-                sb_puts(b, "] = ");
+                StrBuf_puts(b, "] = ");
             }
             emit_expr(b, e->lhs, 0);
             break;
         }
         case EX_ASSIGN: {
             emit_expr(b, e->lhs, PR_UNARY);
-            sb_printf(b, " %s ", op_cstr(e->op));
+            StrBuf_printf(b, " %s ", op_cstr(e->op));
             emit_expr(b, e->rhs, PR_ASSIGN);
             break;
         }
         case EX_COMMA: {
             emit_expr(b, e->lhs, PR_ASSIGN);
-            sb_puts(b, ", ");
+            StrBuf_puts(b, ", ");
             emit_expr(b, e->rhs, PR_ASSIGN);
             break;
         }
         case EX_COMPOUND: {
-            sb_putc(b, '(');
+            StrBuf_putc(b, '(');
             emit_cast_typename(b, e->cast_type);
-            sb_puts(b, "){");
+            StrBuf_puts(b, "){");
             emit_args(b, e->args, e->nargs);
-            sb_putc(b, '}');
+            StrBuf_putc(b, '}');
             break;
         }
         case EX_VAARG: {
-            sb_puts(b, (g_c_mod ? "__builtin_va_arg(" : "va_arg("));
+            StrBuf_puts(b, (g_c_mod ? "__builtin_va_arg(" : "va_arg("));
             emit_expr(b, e->lhs, 0);
-            sb_puts(b, ", ");
+            StrBuf_puts(b, ", ");
             emit_cast_typename(b, e->cast_type);
-            sb_putc(b, ')');
+            StrBuf_putc(b, ')');
             break;
         }
         case EX_STMTEXPR: {
@@ -584,17 +584,17 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
                     fatal("statement expression with declarations or control flow cannot be lowered to standard C; use the qbe backend");
                 }
             }
-            sb_putc(b, '(');
+            StrBuf_putc(b, '(');
             for (si = 0; si < (e->xblock != NULL ? e->xblock->n : 0); si += 1) {
                 emit_expr(b, e->xblock->stmts[si]->expr, PR_ASSIGN);
-                sb_puts(b, ", ");
+                StrBuf_puts(b, ", ");
             }
             if (e->lhs != NULL) {
                 emit_expr(b, e->lhs, PR_ASSIGN);
             } else {
-                sb_putc(b, '0');
+                StrBuf_putc(b, '0');
             }
-            sb_putc(b, ')');
+            StrBuf_putc(b, ')');
             break;
         }
         case EX_WITHSELF: {
@@ -603,16 +603,16 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
         }
     }
     if (paren) {
-        sb_putc(b, ')');
+        StrBuf_putc(b, ')');
     }
 }
 
 static void emit_type_quals(StrBuf *b, Type *t) {
     if (t->is_const) {
-        sb_puts(b, "const ");
+        StrBuf_puts(b, "const ");
     }
     if (t->is_volatile) {
-        sb_puts(b, "volatile ");
+        StrBuf_puts(b, "volatile ");
     }
 }
 
@@ -642,21 +642,21 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
         StrBuf mid = {0};
         size_t si;
         for (si = 0; si < stars; si += 1) {
-            sb_putc(&mid, '*');
+            StrBuf_putc(&mid, '*');
         }
         if (name != NULL) {
-            sb_puts(&mid, name);
+            StrBuf_puts(&mid, name);
         }
         size_t di;
         for (di = 0; di < nd; di += 1) {
-            sb_putc(&mid, '[');
+            StrBuf_putc(&mid, '[');
             if (dims[di] != NULL) {
                 emit_expr(&mid, dims[di], 0);
             }
-            sb_putc(&mid, ']');
+            StrBuf_putc(&mid, ']');
         }
         emit_fnptr_decl(b, t, (mid.data != NULL ? mid.data : ""));
-        sb_free(&mid);
+        StrBuf_deinit(&mid);
         return;
     }
     if (t->kind == TY_ARRAY) {
@@ -676,59 +676,59 @@ static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self
         emit_type_name(b, t);
         size_t ii;
         for (ii = 0; ii < istars; ii += 1) {
-            sb_putc(b, '*');
+            StrBuf_putc(b, '*');
         }
-        sb_puts(b, " (");
+        StrBuf_puts(b, " (");
         size_t ai;
         for (ai = 0; ai < stars; ai += 1) {
-            sb_putc(b, '*');
+            StrBuf_putc(b, '*');
         }
         if (name != NULL) {
-            sb_puts(b, name);
+            StrBuf_puts(b, name);
         }
         for (ai = 0; ai < nd; ai += 1) {
-            sb_putc(b, '[');
+            StrBuf_putc(b, '[');
             if (dims[ai] != NULL) {
                 emit_expr(b, dims[ai], 0);
             }
-            sb_putc(b, ']');
+            StrBuf_putc(b, ']');
         }
-        sb_putc(b, ')');
+        StrBuf_putc(b, ')');
         for (ai = 0; ai < an; ai += 1) {
-            sb_putc(b, '[');
+            StrBuf_putc(b, '[');
             if (adims[ai] != NULL) {
                 emit_expr(b, adims[ai], 0);
             }
-            sb_putc(b, ']');
+            StrBuf_putc(b, ']');
         }
         return;
     }
     emit_type_quals(b, t);
     if (self_struct != NULL && strcmp(t->name, self_struct) == 0 && t->tag_kind == TAG_NONE) {
-        sb_printf(b, "struct %s", base_cname(t->name));
+        StrBuf_printf(b, "struct %s", base_cname(t->name));
     } else {
         emit_type_name(b, t);
     }
-    sb_putc(b, ' ');
+    StrBuf_putc(b, ' ');
     ptrdiff_t i;
     for (i = stars - 1; i > -1; i += -1) {
-        sb_putc(b, '*');
+        StrBuf_putc(b, '*');
         if (i < 16 && pc[i]) {
-            sb_puts(b, "const ");
+            StrBuf_puts(b, "const ");
         }
     }
     if (t->is_restrict && stars > 0 && !g_std89) {
-        sb_puts(b, "restrict ");
+        StrBuf_puts(b, "restrict ");
     }
     if (name != NULL) {
-        sb_puts(b, name);
+        StrBuf_puts(b, name);
     }
     for (i = 0; i < nd; i += 1) {
-        sb_putc(b, '[');
+        StrBuf_putc(b, '[');
         if (dims[i] != NULL) {
             emit_expr(b, dims[i], 0);
         }
-        sb_putc(b, ']');
+        StrBuf_putc(b, ']');
     }
 }
 
@@ -763,10 +763,10 @@ static void emit_defers_downto(StrBuf *b, int32_t mark, int32_t ind) {
     int32_t i;
     for (i = g_defers.len - 1; i > mark - 1; i += -1) {
         indent(b, ind);
-        sb_puts(b, "{\n");
+        StrBuf_puts(b, "{\n");
         emit_block_body(b, g_defers.data[i]->body, ind + 1);
         indent(b, ind);
-        sb_puts(b, "}\n");
+        StrBuf_puts(b, "}\n");
     }
 }
 
@@ -793,7 +793,7 @@ static int stmtexpr_complex(Expr *e) {
 
 static void emit_stmtexpr_block(StrBuf *b, Expr *e, int32_t ind, const char *tail) {
     indent(b, ind);
-    sb_puts(b, "{\n");
+    StrBuf_puts(b, "{\n");
     size_t si;
     for (si = 0; si < (e->xblock != NULL ? e->xblock->n : 0); si += 1) {
         emit_stmt(b, e->xblock->stmts[si], ind + 1);
@@ -801,17 +801,17 @@ static void emit_stmtexpr_block(StrBuf *b, Expr *e, int32_t ind, const char *tai
     if (e->lhs != NULL || tail != NULL) {
         indent(b, ind + 1);
         if (tail != NULL) {
-            sb_puts(b, tail);
+            StrBuf_puts(b, tail);
         }
         if (e->lhs != NULL) {
             emit_expr(b, e->lhs, 0);
         } else {
-            sb_putc(b, '0');
+            StrBuf_putc(b, '0');
         }
-        sb_puts(b, ";\n");
+        StrBuf_puts(b, ";\n");
     }
     indent(b, ind);
-    sb_puts(b, "}\n");
+    StrBuf_puts(b, "}\n");
 }
 
 static int emit_expr_stmt_lowered(StrBuf *b, Expr *e, int32_t ind) {
@@ -825,30 +825,30 @@ static int emit_expr_stmt_lowered(StrBuf *b, Expr *e, int32_t ind) {
     if (e->kind == EX_ASSIGN && e->op == TK_ASSIGN && stmtexpr_complex(e->rhs)) {
         StrBuf tb = {0};
         emit_expr(&tb, e->lhs, PR_UNARY);
-        sb_puts(&tb, " = ");
+        StrBuf_puts(&tb, " = ");
         emit_stmtexpr_block(b, e->rhs, ind, tb.data);
-        sb_free(&tb);
+        StrBuf_deinit(&tb);
         return 1;
     }
     if (e->kind == EX_TERNARY && (stmtexpr_complex(e->lhs) || stmtexpr_complex(e->rhs))) {
         indent(b, ind);
-        sb_puts(b, "if (");
+        StrBuf_puts(b, "if (");
         emit_expr(b, e->cond, 0);
-        sb_puts(b, ") {\n");
+        StrBuf_puts(b, ") {\n");
         if (!emit_expr_stmt_lowered(b, e->lhs, ind + 1)) {
             indent(b, ind + 1);
             emit_expr(b, e->lhs, 0);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
         }
         indent(b, ind);
-        sb_puts(b, "} else {\n");
+        StrBuf_puts(b, "} else {\n");
         if (!emit_expr_stmt_lowered(b, e->rhs, ind + 1)) {
             indent(b, ind + 1);
             emit_expr(b, e->rhs, 0);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
         }
         indent(b, ind);
-        sb_puts(b, "}\n");
+        StrBuf_puts(b, "}\n");
         return 1;
     }
     return 0;
@@ -860,47 +860,47 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             if (stmtexpr_complex(s->init)) {
                 indent(b, ind);
                 if (s->is_const) {
-                    sb_puts(b, "const ");
+                    StrBuf_puts(b, "const ");
                 }
                 emit_var_decl(b, s->type, s->name, NULL);
-                sb_puts(b, ";\n");
+                StrBuf_puts(b, ";\n");
                 StrBuf tl = {0};
-                sb_printf(&tl, "%s = ", s->name);
+                StrBuf_printf(&tl, "%s = ", s->name);
                 emit_stmtexpr_block(b, s->init, ind, tl.data);
-                sb_free(&tl);
+                StrBuf_deinit(&tl);
                 return;
             }
             indent(b, ind);
             if (s->is_extern) {
-                sb_puts(b, "extern ");
+                StrBuf_puts(b, "extern ");
             } else if (s->is_static) {
-                sb_puts(b, "static ");
+                StrBuf_puts(b, "static ");
             }
             if (s->is_const) {
-                sb_puts(b, "const ");
+                StrBuf_puts(b, "const ");
             }
             emit_var_decl(b, s->type, s->name, NULL);
             if (s->init != NULL) {
-                sb_puts(b, " = ");
+                StrBuf_puts(b, " = ");
                 emit_expr(b, s->init, 0);
             }
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             break;
         }
         case ST_ASSIGN: {
             if (s->op == TK_ASSIGN && stmtexpr_complex(s->rhs)) {
                 StrBuf ta = {0};
                 emit_expr(&ta, s->lhs, PR_UNARY);
-                sb_puts(&ta, " = ");
+                StrBuf_puts(&ta, " = ");
                 emit_stmtexpr_block(b, s->rhs, ind, ta.data);
-                sb_free(&ta);
+                StrBuf_deinit(&ta);
                 return;
             }
             indent(b, ind);
             emit_expr(b, s->lhs, 0);
-            sb_printf(b, " %s ", op_cstr(s->op));
+            StrBuf_printf(b, " %s ", op_cstr(s->op));
             emit_expr(b, s->rhs, 0);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             break;
         }
         case ST_EXPR: {
@@ -909,7 +909,7 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             }
             indent(b, ind);
             emit_expr(b, s->expr, 0);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             break;
         }
         case ST_RETURN: {
@@ -926,39 +926,39 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                     int32_t ind2 = ind;
                     if (g_std89) {
                         indent(b, ind);
-                        sb_puts(b, "{\n");
+                        StrBuf_puts(b, "{\n");
                         ind2 = ind + 1;
                     }
                     indent(b, ind2);
                     emit_var_decl(b, g_cur_ret, tmp, NULL);
-                    sb_puts(b, " = ");
+                    StrBuf_puts(b, " = ");
                     emit_expr(b, s->expr, 0);
-                    sb_puts(b, ";\n");
+                    StrBuf_puts(b, ";\n");
                     emit_defers_downto(b, 0, ind2);
                     indent(b, ind2);
-                    sb_printf(b, "return %s;\n", tmp);
+                    StrBuf_printf(b, "return %s;\n", tmp);
                     if (g_std89) {
                         indent(b, ind);
-                        sb_puts(b, "}\n");
+                        StrBuf_puts(b, "}\n");
                     }
                 } else {
                     if (s->expr != NULL) {
                         indent(b, ind);
                         emit_expr(b, s->expr, 0);
-                        sb_puts(b, ";\n");
+                        StrBuf_puts(b, ";\n");
                     }
                     emit_defers_downto(b, 0, ind);
                     indent(b, ind);
-                    sb_puts(b, "return;\n");
+                    StrBuf_puts(b, "return;\n");
                 }
             } else {
                 indent(b, ind);
-                sb_puts(b, "return");
+                StrBuf_puts(b, "return");
                 if (s->expr != NULL) {
-                    sb_putc(b, ' ');
+                    StrBuf_putc(b, ' ');
                     emit_expr(b, s->expr, 0);
                 }
-                sb_puts(b, ";\n");
+                StrBuf_puts(b, ";\n");
             }
             break;
         }
@@ -972,35 +972,35 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                 }
                 if (blk != NULL) {
                     indent(b, ind);
-                    sb_puts(b, "{\n");
+                    StrBuf_puts(b, "{\n");
                     emit_block_body(b, blk, ind + 1);
                     indent(b, ind);
-                    sb_puts(b, "}\n");
+                    StrBuf_puts(b, "}\n");
                 }
                 return;
             }
             indent(b, ind);
             size_t i;
             for (i = 0; i < s->nconds; i += 1) {
-                sb_puts(b, (i == 0 ? "if (" : "} else if ("));
+                StrBuf_puts(b, (i == 0 ? "if (" : "} else if ("));
                 emit_expr(b, s->conds[i], 0);
-                sb_puts(b, ") {\n");
+                StrBuf_puts(b, ") {\n");
                 emit_block_body(b, s->blocks[i], ind + 1);
                 indent(b, ind);
             }
             if (s->else_block != NULL) {
-                sb_puts(b, "} else {\n");
+                StrBuf_puts(b, "} else {\n");
                 emit_block_body(b, s->else_block, ind + 1);
                 indent(b, ind);
             }
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_WHILE: {
             indent(b, ind);
-            sb_puts(b, "while (");
+            StrBuf_puts(b, "while (");
             emit_expr(b, s->cond, 0);
-            sb_puts(b, ") {\n");
+            StrBuf_puts(b, ") {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
             g_cont_marks[g_ncont] = g_defers.len;
@@ -1009,12 +1009,12 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             g_nbreak -= 1;
             g_ncont -= 1;
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_DO: {
             indent(b, ind);
-            sb_puts(b, "do {\n");
+            StrBuf_puts(b, "do {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
             g_cont_marks[g_ncont] = g_defers.len;
@@ -1023,28 +1023,28 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             g_nbreak -= 1;
             g_ncont -= 1;
             indent(b, ind);
-            sb_puts(b, "} while (");
+            StrBuf_puts(b, "} while (");
             emit_expr(b, s->cond, 0);
-            sb_puts(b, ");\n");
+            StrBuf_puts(b, ");\n");
             break;
         }
         case ST_FOR: {
             indent(b, ind);
-            sb_printf(b, "for (%s = ", s->var);
+            StrBuf_printf(b, "for (%s = ", s->var);
             if (s->from != NULL) {
                 emit_expr(b, s->from, 0);
             } else {
-                sb_putc(b, '0');
+                StrBuf_putc(b, '0');
             }
-            sb_printf(b, "; %s %s ", s->var, (step_is_negative(s->step) ? ">" : "<"));
+            StrBuf_printf(b, "; %s %s ", s->var, (step_is_negative(s->step) ? ">" : "<"));
             emit_expr(b, s->to, 0);
-            sb_printf(b, "; %s += ", s->var);
+            StrBuf_printf(b, "; %s += ", s->var);
             if (s->step != NULL) {
                 emit_expr(b, s->step, 0);
             } else {
-                sb_putc(b, '1');
+                StrBuf_putc(b, '1');
             }
-            sb_puts(b, ") {\n");
+            StrBuf_puts(b, ") {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
             g_cont_marks[g_ncont] = g_defers.len;
@@ -1053,24 +1053,24 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             g_nbreak -= 1;
             g_ncont -= 1;
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_MATCH: {
             if (s->is_typematch) {
                 if (s->tm_sel >= 0) {
                     indent(b, ind);
-                    sb_puts(b, "{\n");
+                    StrBuf_puts(b, "{\n");
                     emit_block_body(b, s->cases[s->tm_sel]->body, ind + 1);
                     indent(b, ind);
-                    sb_puts(b, "}\n");
+                    StrBuf_puts(b, "}\n");
                 }
                 return;
             }
             indent(b, ind);
-            sb_puts(b, "switch (");
+            StrBuf_puts(b, "switch (");
             emit_expr(b, s->subject, 0);
-            sb_puts(b, ") {\n");
+            StrBuf_puts(b, ") {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
             size_t i;
@@ -1078,27 +1078,27 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                 MatchCase *mc = s->cases[i];
                 if (mc->is_default) {
                     indent(b, ind + 1);
-                    sb_puts(b, "default: {\n");
+                    StrBuf_puts(b, "default: {\n");
                 } else {
                     size_t j;
                     for (j = 0; j < mc->nvals; j += 1) {
                         indent(b, ind + 1);
-                        sb_puts(b, "case ");
+                        StrBuf_puts(b, "case ");
                         emit_expr(b, mc->vals[j], 0);
-                        sb_puts(b, (j + 1 < mc->nvals ? ":\n" : ": {\n"));
+                        StrBuf_puts(b, (j + 1 < mc->nvals ? ":\n" : ": {\n"));
                     }
                 }
                 emit_block_body(b, mc->body, ind + 2);
                 if (mc->body->n == 0 || !stmt_exits(mc->body->stmts[mc->body->n - 1])) {
                     indent(b, ind + 2);
-                    sb_puts(b, "break;\n");
+                    StrBuf_puts(b, "break;\n");
                 }
                 indent(b, ind + 1);
-                sb_puts(b, "}\n");
+                StrBuf_puts(b, "}\n");
             }
             g_nbreak -= 1;
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_BREAK: {
@@ -1106,7 +1106,7 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                 emit_defers_downto(b, g_break_marks[g_nbreak - 1], ind);
             }
             indent(b, ind);
-            sb_puts(b, "break;\n");
+            StrBuf_puts(b, "break;\n");
             break;
         }
         case ST_CONTINUE: {
@@ -1114,34 +1114,34 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                 emit_defers_downto(b, g_cont_marks[g_ncont - 1], ind);
             }
             indent(b, ind);
-            sb_puts(b, "continue;\n");
+            StrBuf_puts(b, "continue;\n");
             break;
         }
         case ST_GOTO: {
             indent(b, ind);
-            sb_printf(b, "goto %s;\n", s->label);
+            StrBuf_printf(b, "goto %s;\n", s->label);
             break;
         }
         case ST_LABEL: {
             indent(b, ind);
-            sb_printf(b, "%s:;\n", s->label);
+            StrBuf_printf(b, "%s:;\n", s->label);
             break;
         }
         case ST_CFOR: {
             indent(b, ind);
-            sb_puts(b, "for (");
+            StrBuf_puts(b, "for (");
             if (s->for_init != NULL) {
                 emit_simple_inline(b, s->for_init);
             }
-            sb_puts(b, "; ");
+            StrBuf_puts(b, "; ");
             if (s->cond != NULL) {
                 emit_expr(b, s->cond, 0);
             }
-            sb_puts(b, "; ");
+            StrBuf_puts(b, "; ");
             if (s->for_post != NULL) {
                 emit_simple_inline(b, s->for_post);
             }
-            sb_puts(b, ") {\n");
+            StrBuf_puts(b, ") {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
             g_cont_marks[g_ncont] = g_defers.len;
@@ -1150,50 +1150,50 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             g_nbreak -= 1;
             g_ncont -= 1;
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_PASS: {
             indent(b, ind);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             break;
         }
         case ST_CPROTO: {
             indent(b, ind);
             emit_func_sig(b, s->cfunc);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             break;
         }
         case ST_BLOCK: {
             indent(b, ind);
-            sb_puts(b, "{\n");
+            StrBuf_puts(b, "{\n");
             emit_block_body(b, s->body, ind + 1);
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_SWITCH: {
             indent(b, ind);
-            sb_puts(b, "switch (");
+            StrBuf_puts(b, "switch (");
             emit_expr(b, s->subject, 0);
-            sb_puts(b, ") {\n");
+            StrBuf_puts(b, ") {\n");
             g_break_marks[g_nbreak] = g_defers.len;
             g_nbreak += 1;
             emit_block_body(b, s->body, ind + 1);
             g_nbreak -= 1;
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
         case ST_CASE: {
             if (s->expr == NULL) {
                 indent(b, ind);
-                sb_puts(b, "default:\n");
+                StrBuf_puts(b, "default:\n");
             } else {
                 indent(b, ind);
-                sb_puts(b, "case ");
+                StrBuf_puts(b, "case ");
                 emit_expr(b, s->expr, 0);
-                sb_puts(b, ":\n");
+                StrBuf_puts(b, ":\n");
             }
             break;
         }
@@ -1203,15 +1203,15 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
         }
         case ST_WITH: {
             indent(b, ind);
-            sb_puts(b, "{\n");
+            StrBuf_puts(b, "{\n");
             indent(b, ind + 1);
             emit_var_decl(b, s->type, s->name, NULL);
-            sb_puts(b, " = ");
+            StrBuf_puts(b, " = ");
             emit_expr(b, s->init, 0);
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             emit_block_body(b, s->body, ind + 1);
             indent(b, ind);
-            sb_puts(b, "}\n");
+            StrBuf_puts(b, "}\n");
             break;
         }
     }
@@ -1222,14 +1222,14 @@ static void emit_simple_inline(StrBuf *b, Stmt *s) {
         case ST_VAR: {
             emit_var_decl(b, s->type, s->name, NULL);
             if (s->init != NULL) {
-                sb_puts(b, " = ");
+                StrBuf_puts(b, " = ");
                 emit_expr(b, s->init, 0);
             }
             break;
         }
         case ST_ASSIGN: {
             emit_expr(b, s->lhs, 0);
-            sb_printf(b, " %s ", op_cstr(s->op));
+            StrBuf_printf(b, " %s ", op_cstr(s->op));
             emit_expr(b, s->rhs, 0);
             break;
         }
@@ -1252,7 +1252,7 @@ static void emit_block_body(StrBuf *b, Block *blk, int32_t ind) {
         Stmt *s = blk->stmts[i];
         if (g_std89 && s->kind == ST_VAR && seen_stmt) {
             indent(b, ind + opened);
-            sb_puts(b, "{\n");
+            StrBuf_puts(b, "{\n");
             opened += 1;
             seen_stmt = 0;
         }
@@ -1269,24 +1269,24 @@ static void emit_block_body(StrBuf *b, Block *blk, int32_t ind) {
     while (opened > 0) {
         opened -= 1;
         indent(b, ind + opened);
-        sb_puts(b, "}\n");
+        StrBuf_puts(b, "}\n");
     }
 }
 
 static void emit_func_params(StrBuf *b, Func *f) {
     if (f->nparams == 0) {
-        sb_puts(b, "void");
+        StrBuf_puts(b, "void");
         return;
     }
     size_t i;
     for (i = 0; i < f->nparams; i += 1) {
         if (i != 0) {
-            sb_puts(b, ", ");
+            StrBuf_puts(b, ", ");
         }
         emit_var_decl(b, f->params[i].type, f->params[i].name, NULL);
     }
     if (f->is_varargs) {
-        sb_puts(b, ", ...");
+        StrBuf_puts(b, ", ...");
     }
 }
 
@@ -1301,33 +1301,33 @@ static void emit_func_sig(StrBuf *b, Func *f) {
         StrBuf mid = {0};
         size_t si;
         for (si = 0; si < rstars; si += 1) {
-            sb_putc(&mid, '*');
+            StrBuf_putc(&mid, '*');
         }
-        sb_puts(&mid, f->cname);
-        sb_putc(&mid, '(');
+        StrBuf_puts(&mid, f->cname);
+        StrBuf_putc(&mid, '(');
         emit_func_params(&mid, f);
-        sb_putc(&mid, ')');
+        StrBuf_putc(&mid, ')');
         emit_fnptr_decl(b, rt, (mid.data != NULL ? mid.data : ""));
-        sb_free(&mid);
+        StrBuf_deinit(&mid);
     } else if (rt != NULL && rt->kind == TY_ARRAY && rstars > 0) {
         StrBuf mid = {0};
-        sb_putc(&mid, '(');
+        StrBuf_putc(&mid, '(');
         size_t si;
         for (si = 0; si < rstars; si += 1) {
-            sb_putc(&mid, '*');
+            StrBuf_putc(&mid, '*');
         }
-        sb_puts(&mid, f->cname);
-        sb_putc(&mid, '(');
+        StrBuf_puts(&mid, f->cname);
+        StrBuf_putc(&mid, '(');
         emit_func_params(&mid, f);
-        sb_putc(&mid, ')');
-        sb_putc(&mid, ')');
+        StrBuf_putc(&mid, ')');
+        StrBuf_putc(&mid, ')');
         emit_var_decl(b, rt, (mid.data != NULL ? mid.data : ""), NULL);
-        sb_free(&mid);
+        StrBuf_deinit(&mid);
     } else {
         emit_var_decl(b, f->ret, f->cname, NULL);
-        sb_putc(b, '(');
+        StrBuf_putc(b, '(');
         emit_func_params(b, f);
-        sb_putc(b, ')');
+        StrBuf_putc(b, ')');
     }
 }
 
@@ -1341,20 +1341,20 @@ static void emit_func(StrBuf *b, Func *f) {
     g_cur_ret = f->ret;
     g_defers.len = 0;
     if (f->is_static) {
-        sb_puts(b, "static ");
+        StrBuf_puts(b, "static ");
     }
     if (f->is_inline && !g_std89) {
-        sb_puts(b, "inline ");
+        StrBuf_puts(b, "inline ");
     }
     emit_func_sig(b, f);
     int deferred = g_in_header && f->owner != NULL && !f->is_static && !f->is_inline;
     if (f->body == NULL || deferred) {
-        sb_puts(b, ";\n");
+        StrBuf_puts(b, ";\n");
         return;
     }
-    sb_puts(b, " {\n");
+    StrBuf_puts(b, " {\n");
     emit_block_body(b, f->body, 1);
-    sb_puts(b, "}\n");
+    StrBuf_puts(b, "}\n");
 }
 
 static void emit_struct_fields(StrBuf *b, Decl *d, int32_t ind) {
@@ -1363,18 +1363,18 @@ static void emit_struct_fields(StrBuf *b, Decl *d, int32_t ind) {
         if (d->fields[i].anon != NULL) {
             Decl *sub = d->fields[i].anon;
             indent(b, ind);
-            sb_printf(b, "%s {\n", (sub->kind == DL_UNION ? "union" : "struct"));
+            StrBuf_printf(b, "%s {\n", (sub->kind == DL_UNION ? "union" : "struct"));
             emit_struct_fields(b, sub, ind + 1);
             indent(b, ind);
-            sb_puts(b, "};\n");
+            StrBuf_puts(b, "};\n");
             continue;
         }
         indent(b, ind);
         emit_var_decl(b, d->fields[i].type, d->fields[i].name, d->name);
         if (d->fields[i].bit_width >= 0) {
-            sb_printf(b, " : %d", d->fields[i].bit_width);
+            StrBuf_printf(b, " : %d", d->fields[i].bit_width);
         }
-        sb_puts(b, ";\n");
+        StrBuf_puts(b, ";\n");
     }
 }
 
@@ -1391,30 +1391,30 @@ static void emit_decl(StrBuf *b, Decl *d) {
                 path = fixed;
             }
             if (d->import_system) {
-                sb_printf(b, "#include <%s>\n", path);
+                StrBuf_printf(b, "#include <%s>\n", path);
             } else {
-                sb_printf(b, "#include \"%s\"\n", path);
+                StrBuf_printf(b, "#include \"%s\"\n", path);
             }
             free(fixed);
             break;
         }
         case DL_VAR: {
             if (d->is_extern) {
-                sb_puts(b, "extern ");
+                StrBuf_puts(b, "extern ");
             } else if (d->is_static) {
-                sb_puts(b, "static ");
+                StrBuf_puts(b, "static ");
             } else if (g_in_header && !g_c_mod && d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
-                sb_puts(b, "static ");
+                StrBuf_puts(b, "static ");
             }
             if (d->is_const) {
-                sb_puts(b, "const ");
+                StrBuf_puts(b, "const ");
             }
             emit_var_decl(b, d->type, d->name, NULL);
             if (d->init != NULL) {
-                sb_puts(b, " = ");
+                StrBuf_puts(b, " = ");
                 emit_expr(b, d->init, 0);
             }
-            sb_puts(b, ";\n");
+            StrBuf_puts(b, ";\n");
             break;
         }
         case DL_FUNC: {
@@ -1428,38 +1428,38 @@ static void emit_decl(StrBuf *b, Decl *d) {
             }
             if (d->nfields > 0 || d->is_def) {
                 if (d->is_td) {
-                    sb_printf(b, "typedef %s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
+                    StrBuf_printf(b, "typedef %s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
                     emit_struct_fields(b, d, 1);
-                    sb_printf(b, "} %s;\n", d->name);
+                    StrBuf_printf(b, "} %s;\n", d->name);
                 } else {
-                    sb_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
+                    StrBuf_printf(b, "%s %s {\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
                     emit_struct_fields(b, d, 1);
-                    sb_puts(b, "};\n");
+                    StrBuf_puts(b, "};\n");
                 }
             } else if (d->is_fwd && g_c_mod) {
-                sb_printf(b, "%s %s;\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
+                StrBuf_printf(b, "%s %s;\n", (d->kind == DL_UNION ? "union" : "struct"), d->name);
             }
             size_t j;
             for (j = 0; j < d->nmethods; j += 1) {
-                sb_putc(b, '\n');
+                StrBuf_putc(b, '\n');
                 emit_func(b, d->methods[j]);
             }
             break;
         }
         case DL_ENUM: {
-            sb_puts(b, "typedef enum { ");
+            StrBuf_puts(b, "typedef enum { ");
             size_t i;
             for (i = 0; i < d->nitems; i += 1) {
                 if (i != 0) {
-                    sb_puts(b, ", ");
+                    StrBuf_puts(b, ", ");
                 }
-                sb_puts(b, d->items[i].name);
+                StrBuf_puts(b, d->items[i].name);
                 if (d->items[i].value != NULL) {
-                    sb_puts(b, " = ");
+                    StrBuf_puts(b, " = ");
                     emit_expr(b, d->items[i].value, 0);
                 }
             }
-            sb_printf(b, " } %s;\n", d->name);
+            StrBuf_printf(b, " } %s;\n", d->name);
             break;
         }
         default: {
@@ -1485,7 +1485,7 @@ void emit_module_c(Module *m, StrBuf *out) {
         }
         int is_import = d->kind == DL_IMPORT;
         if (i > 0 && !(is_import && prev_import)) {
-            sb_putc(&body, '\n');
+            StrBuf_putc(&body, '\n');
         }
         if (!fwd_done && !g_c_mod && (d->kind == DL_STRUCT || d->kind == DL_UNION) && d->nfields > 0) {
             fwd_done = 1;
@@ -1493,10 +1493,10 @@ void emit_module_c(Module *m, StrBuf *out) {
             for (j = 0; j < m->ndecls; j += 1) {
                 Decl *d2 = m->decls[j];
                 if ((d2->kind == DL_STRUCT || d2->kind == DL_UNION) && d2->nfields > 0 && d2->ntparams == 0) {
-                    sb_printf(&body, "typedef %s %s %s;\n", (d2->kind == DL_UNION ? "union" : "struct"), d2->name, d2->name);
+                    StrBuf_printf(&body, "typedef %s %s %s;\n", (d2->kind == DL_UNION ? "union" : "struct"), d2->name, d2->name);
                 }
             }
-            sb_putc(&body, '\n');
+            StrBuf_putc(&body, '\n');
         }
         emit_decl(&body, d);
         prev_import = is_import;
@@ -1515,30 +1515,30 @@ void emit_module_c(Module *m, StrBuf *out) {
                 guard[gk] = up;
                 gk += 1;
             }
-            sb_printf(out, "#ifndef %s\n#define %s\n\n", guard, guard);
+            StrBuf_printf(out, "#ifndef %s\n#define %s\n\n", guard, guard);
         } else {
-            sb_puts(out, "#pragma once\n\n");
+            StrBuf_puts(out, "#pragma once\n\n");
         }
     }
     if (g_needs_stdint) {
-        sb_puts(out, "#include <stdint.h>\n");
+        StrBuf_puts(out, "#include <stdint.h>\n");
     }
     if (g_needs_stddef) {
-        sb_puts(out, "#include <stddef.h>\n");
+        StrBuf_puts(out, "#include <stddef.h>\n");
     }
     if (g_needs_string) {
-        sb_puts(out, "#include <string.h>\n");
+        StrBuf_puts(out, "#include <string.h>\n");
     }
     if (g_needs_stdint || g_needs_stddef || g_needs_string) {
-        sb_putc(out, '\n');
+        StrBuf_putc(out, '\n');
     }
     if (body.data != NULL) {
-        sb_puts(out, body.data);
+        StrBuf_puts(out, body.data);
     }
     if (m->is_header && g_std89) {
-        sb_puts(out, "\n#endif\n");
+        StrBuf_puts(out, "\n#endif\n");
     }
     {
-        sb_free(&body);
+        StrBuf_deinit(&body);
     }
 }

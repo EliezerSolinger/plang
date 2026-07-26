@@ -21,9 +21,9 @@ def utf8_encode(cp: u32, out: char[4]) -> i32:
     out[3] = char(0x80 | (cp & 0x3F))
     return 4
 
-def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out_cp: **u32, out_off: **u32, out_n: *usize, err_off: *usize) -> i32:
-    cp: *u32 = arena_alloc(a, (nbytes + 1) * sizeof(u32))
-    off: *u32 = arena_alloc(a, (nbytes + 1) * sizeof(u32))
+def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out out_cp: *u32, out out_off: *u32, out out_n: usize, err_off: *usize) -> i32:
+    cp: *u32 = a->alloc((nbytes + 1) * sizeof(u32))
+    off: *u32 = a->alloc((nbytes + 1) * sizeof(u32))
     i: usize = 0
     n: usize = 0
 
@@ -63,9 +63,9 @@ def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out_cp: **u32, out
         n += 1
         i += usize(len)
 
-    *out_cp = cp
-    *out_off = off
-    *out_n = n
+    out_cp = cp
+    out_off = off
+    out_n = n
     return 0
 
     bad:

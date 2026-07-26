@@ -7,13 +7,17 @@
 include <stddef.h>
 import "pui.ph"
 import "core.ph"
+import "complete.ph"
 
 # a gutter: a column to the left of the text. `draw` fills in the line's text
-# (a buffer of `cap` bytes) and returns the color; False = empty cell.
+# (a buffer of `cap` bytes) and returns the color; False = empty cell. `click`
+# is optional: a gutter that reacts to the mouse (folding, breakpoints) gets
+# the line that was clicked and returns True when it consumed the click.
 struct Gutter:
     width_cp: i32     # width in CHARACTERS (mono)
     ctx: *void
     draw: def(ctx: *void, cv: *CodeView, line: i32, out_text: *char, cap: usize, out_color: *u32) -> bool
+    click: def(ctx: *void, cv: *CodeView, line: i32) -> bool
 
 MAX_GUTTERS: const i32 = 4
 
@@ -29,6 +33,15 @@ struct CodeView:
     left: i32         # first visible SCREEN COLUMN (tabs expanded)
     gutters: Gutter[MAX_GUTTERS]
     ngutters: i32
+    index: Index      # completion index, rebuilt lazily from the buffer
+    cmp_open: bool    # the completion popup is showing
+    cmp_hits: Vec<i32>
+    cmp_sel: i32
+    cmp_top: i32      # first row shown in the popup
+    cmp_col: i32      # column where the word being completed starts
+    cmp_owner: *char  # struct whose members are listed (the `x.` case)
+    minimap: bool     # the overview strip on the right (Godot's TextEdit)
+    minimap_drag: bool
     caret_on: bool    # blink phase (the app toggles it on the timeout)
     mouse_sel: bool   # dragging a selection
     mtime: i64        # the file's mtime at the last read (external-change check)
@@ -49,12 +62,21 @@ struct CodeView:
 
     # ---- geometry (the app uses it for the status bar and the palette) ----
     def text_rect(in self: CodeView) -> PgRect   # the text area (without gutters/scrollbars)
+    def minimap_rect(in self: CodeView) -> PgRect  # empty when the strip is off
+    def toggle_minimap(ref self: CodeView)
     def gutter_w(in self: CodeView) -> i32       # total gutter width (px)
     def visible_lines(in self: CodeView) -> i32
     def add_gutter(ref self: CodeView, g: Gutter)
     def line_numbers_gutter(ref self: CodeView)  # the default gutter (line numbers)
+    def fold_gutter(ref self: CodeView)          # ▾/▸ markers, click toggles
+    def marks_gutter(ref self: CodeView)         # ● breakpoint / ◆ bookmark
 
     # ---- navigation ----
+    # the buffer line drawn at screen row `row` (0 = the top of the view), and
+    # the row a line is drawn at (-1 when it is folded away). Every screen
+    # coordinate goes through these — the buffer holds the visible-line map.
+    def line_at_row(in self: CodeView, row: i32) -> i32
+    def row_of_line(in self: CodeView, line: i32) -> i32
     def scroll_to_caret(ref self: CodeView)
     def set_top(ref self: CodeView, line: i32)
     def set_left(ref self: CodeView, col: i32)
@@ -72,6 +94,24 @@ struct CodeView:
     def indent(ref self: CodeView, now_ms: i64)  # tab: 4 spaces, or the whole block
     def unindent(ref self: CodeView, now_ms: i64)
     def newline(ref self: CodeView, now_ms: i64) # enter, with auto-indent
+
+    # ---- folding / line commands (the keys and the palette call these) ----
+    def toggle_fold_at_caret(ref self: CodeView)
+    def fold_all(ref self: CodeView)
+    def unfold_all(ref self: CodeView)
+    def toggle_comment(ref self: CodeView, now_ms: i64)
+    def toggle_bookmark(ref self: CodeView)
+    def goto_mark(ref self: CodeView, forward: bool)   # jumps between bookmarks
+    def move_lines(ref self: CodeView, dir: i32, now_ms: i64)
+    def duplicate_lines(ref self: CodeView, now_ms: i64)
+    def delete_lines(ref self: CodeView, now_ms: i64)
+    def join_lines(ref self: CodeView, now_ms: i64)
+
+    # ---- completion (index built from the compiler's lexer) ----
+    def complete_open(ref self: CodeView)     # ctrl+space, and after `.`/`->`
+    def complete_close(ref self: CodeView)
+    def complete_accept(ref self: CodeView, now_ms: i64) -> bool
+    def complete_refresh(ref self: CodeView)  # re-filter after each keystroke
 
     # ---- search (driven by the app's find bar) ----
     # `re` = treat needle as a POSIX regex; moves the caret and scrolls

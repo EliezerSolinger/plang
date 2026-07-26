@@ -1,0 +1,35 @@
+lines=8
+up:   1=[        return x] 2=[    if x > 0:] caret=1
+down: 1=[    if x > 0:] 2=[        return x] caret=2
+undo: 1=[    if x > 0:] 2=[        return x]
+block: 1=[    return 0] 2=[    if x > 0:] 3=[        return x]
+edge: lines=8
+dup: 5=[def b():] 6=[def b():] caret=6:2
+del: 5=[def b():] lines=8 caret=6
+join: 1=[    if x > 0: return x] lines=7
+multi: 1=[    if x > 0:] 2=[    if x > 0:] 6=[def b():] 7=[def b():]
+carets: 2:0 7:0
+cmt:  1=[    # if x > 0:] 2=[    #     return x]
+uncmt: 1=[    if x > 0:] 2=[        return x]
+after_undo: 1=[    if x > 0:]
+can_fold: 0=1 1=1 2=0 4=0
+fold_end: 0=3 1=2 5=6
+inner folded: 1 hidden2=1 visible=7
+ 0|def a(x: i32) -> i32:
+-1|    if x > 0:
+-2|        return x
+-3|    return 0
+ 4|
+ 5|def b():
+ 6|    pass
+ 7|
+visible=5
+map: to_vis(5)=2 from_vis(1)=4 next(0,+1)=4 next(5,-1)=4
+down_over_fold=4
+outer open: folded1=1 hidden2=1 hidden3=0 visible=7
+all open: visible=8
+caret pulled: 1:13
+edit released: folded1=0 hidden2=0 visible=8
+fold_all: visible=4 folded0=1 folded5=1
+unfold_all: visible=8
+core-lines-ok

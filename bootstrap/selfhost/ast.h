@@ -196,21 +196,21 @@ struct Module {
 };
 
 static inline Type *ty_name(Arena *a, const char *name) {
-    Type *t = arena_alloc(a, sizeof(Type));
+    Type *t = Arena_alloc(a, sizeof(Type));
     t->kind = TY_NAME;
     t->name = name;
     return t;
 }
 
 static inline Type *ty_ptr(Arena *a, Type *inner) {
-    Type *t = arena_alloc(a, sizeof(Type));
+    Type *t = Arena_alloc(a, sizeof(Type));
     t->kind = TY_PTR;
     t->inner = inner;
     return t;
 }
 
 static inline Type *ty_array(Arena *a, Type *inner, Expr *len) {
-    Type *t = arena_alloc(a, sizeof(Type));
+    Type *t = Arena_alloc(a, sizeof(Type));
     t->kind = TY_ARRAY;
     t->inner = inner;
     t->arr_len = len;
@@ -218,21 +218,21 @@ static inline Type *ty_array(Arena *a, Type *inner, Expr *len) {
 }
 
 static inline Type *ty_func(Arena *a, Type *ret) {
-    Type *t = arena_alloc(a, sizeof(Type));
+    Type *t = Arena_alloc(a, sizeof(Type));
     t->kind = TY_FUNC;
     t->inner = ret;
     return t;
 }
 
 static inline Expr *ex_new(Arena *a, ExprKind k, Pos pos) {
-    Expr *e = arena_alloc(a, sizeof(Expr));
+    Expr *e = Arena_alloc(a, sizeof(Expr));
     e->kind = k;
     e->pos = pos;
     return e;
 }
 
 static inline Stmt *st_new(Arena *a, StmtKind k, Pos pos) {
-    Stmt *s = arena_alloc(a, sizeof(Stmt));
+    Stmt *s = Arena_alloc(a, sizeof(Stmt));
     s->kind = k;
     s->pos = pos;
     s->if_sel = -1;

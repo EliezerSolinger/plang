@@ -63,8 +63,8 @@ selfhost: plangc
 # em out/ (espelho da raiz: imports relativos resolvem lá) e o binário em
 # out/bin/pstudio — a raiz já tem a PASTA pstudio/, daí o out/bin.
 PSTUDIO_SRC = pstudio/font_atlas.p pstudio/psys.p pstudio/pgfx_raster.p \
-              pstudio/pgfx.p pstudio/pui.p pstudio/core.p pstudio/codeview.p \
-              pstudio/app.p pstudio/main.p
+              pstudio/pgfx.p pstudio/pui.p pstudio/core.p pstudio/complete.p \
+              pstudio/codeview.p pstudio/app.p pstudio/main.p
 PSTUDIO_DEPS = selfhost/lexer.p selfhost/utf8.p selfhost/util.p
 
 pstudio: plangc

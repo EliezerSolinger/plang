@@ -27,8 +27,8 @@ int32_t utf8_encode(uint32_t cp, char out[4]) {
 }
 
 int32_t utf8_decode(const char *bytes, size_t nbytes, Arena *a, uint32_t **out_cp, uint32_t **out_off, size_t *out_n, size_t *err_off) {
-    uint32_t *cp = arena_alloc(a, (nbytes + 1) * sizeof(uint32_t));
-    uint32_t *off = arena_alloc(a, (nbytes + 1) * sizeof(uint32_t));
+    uint32_t *cp = Arena_alloc(a, (nbytes + 1) * sizeof(uint32_t));
+    uint32_t *off = Arena_alloc(a, (nbytes + 1) * sizeof(uint32_t));
     size_t i = 0;
     size_t n = 0;
     if (nbytes >= 3 && (bytes[0] & 0xFF) == 0xEF && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF) {

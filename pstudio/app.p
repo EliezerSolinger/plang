@@ -70,7 +70,14 @@ struct Command:
 commands: Command[] = {
     {"Save", 0}, {"Save All", 1}, {"Close Tab", 2}, {"Reload File", 3},
     {"Toggle File Tree", 4}, {"Zoom In", 5}, {"Zoom Out", 6}, {"Zoom Reset", 7},
-    {"Find", 8}, {"Go To Line", 9}, {"Quit", 10}, {None, -1}}
+    {"Find", 8}, {"Go To Line", 9}, {"Quit", 10},
+    {"Fold", 11}, {"Unfold", 11}, {"Fold All", 12}, {"Unfold All", 13},
+    {"Toggle Comment", 14},
+    {"Toggle Bookmark", 20}, {"Next Bookmark", 21}, {"Clear Bookmarks", 22},
+    {"Toggle Minimap", 23},
+    {"Move Line Up", 15}, {"Move Line Down", 16},
+    {"Duplicate Line", 17}, {"Delete Line", 18}, {"Join Lines", 19},
+    {None, -1}}
 
 # ---------- tab bar ----------
 
@@ -314,7 +321,7 @@ struct App:
 
     def init(out self: App, dir: const *char, w: i32 = 1100, h: i32 = 720) -> bool:
         memset(&self, 0, sizeof(App))
-        self.zoom = 1
+        self.zoom = pg_font_default_size()
         self.cur = -1
         self.tab_hover = -1
         self.tabs.init()
@@ -482,8 +489,9 @@ struct App:
             s.appendf("%d:%d", c->line + 1, c->col + 1)
             if cv->buf.ncarets() > 1:
                 s.appendf(" (%d carets)", cv->buf.ncarets())
-            s.appendf("   %s   %d lines   %dx",
-                      "CRLF" if cv->buf.crlf else "LF", cv->buf.nlines(), self.zoom)
+            s.appendf("   %s   %d lines   %dpx",
+                      "CRLF" if cv->buf.crlf else "LF", cv->buf.nlines(),
+                      self.ui.font.px)
         self.ui.set_text(self.status, s.cstr())
         s.deinit()
         self.dirty_ui = True
@@ -698,8 +706,10 @@ struct App:
 
     # ---------- commands / shortcuts ----------
 
+    # one step of the atlas, not a multiplier: the sizes are real
+    # rasterizations (11..29px), so zooming feels gradual
     def set_zoom(ref self: App, z: i32):
-        nz: i32 = 1 if z < 1 else (3 if z > 3 else z)
+        nz: i32 = 0 if z < 0 else (pg_font_steps() - 1 if z >= pg_font_steps() else z)
         if nz == self.zoom:
             return
         self.zoom = nz
@@ -729,13 +739,53 @@ struct App:
             case 6:
                 self.set_zoom(self.zoom - 1)
             case 7:
-                self.set_zoom(1)
+                self.set_zoom(pg_font_default_size())
             case 8:
                 self.find_open()
             case 9:
                 self.palette_open(PAL_GOTO)
             case 10:
                 self.try_quit()
+            case 11:
+                if cv != None:
+                    cv->toggle_fold_at_caret()
+            case 12:
+                if cv != None:
+                    cv->fold_all()
+            case 13:
+                if cv != None:
+                    cv->unfold_all()
+            case 14:
+                if cv != None:
+                    cv->toggle_comment(ps_millis())
+            case 15:
+                if cv != None:
+                    cv->move_lines(-1, ps_millis())
+            case 16:
+                if cv != None:
+                    cv->move_lines(1, ps_millis())
+            case 17:
+                if cv != None:
+                    cv->duplicate_lines(ps_millis())
+            case 18:
+                if cv != None:
+                    cv->delete_lines(ps_millis())
+            case 19:
+                if cv != None:
+                    cv->join_lines(ps_millis())
+            case 20:
+                if cv != None:
+                    cv->toggle_bookmark()
+            case 21:
+                if cv != None:
+                    cv->goto_mark(True)
+            case 22:
+                if cv != None:
+                    cv->buf.clear_marks(MARK_BOOKMARK)
+                    self.ui.queue_redraw(cv->id)
+            case 23:
+                if cv != None:
+                    cv->toggle_minimap()
             case _:
                 pass
         self.dirty_ui = True
@@ -758,6 +808,15 @@ struct App:
                     self.paltop = self.palsel - 11
                 self.ui.queue_redraw(self.palette)
                 self.dirty_ui = True
+            return True
+        cvk: *CodeView = self.cur_cv()
+        if ev->key == PGK_F2 and cvk != None:
+            if (ev->mods & PGM_CTRL) != 0:
+                cvk->toggle_bookmark()
+            else:
+                cvk->goto_mark((ev->mods & PGM_SHIFT) == 0)
+            self.update_status()
+            self.dirty_ui = True
             return True
         if (ev->mods & PGM_CTRL) == 0:
             return False
@@ -810,15 +869,45 @@ struct App:
                     cv->paste(now)
             case i32('d'):
                 if cv != None:
-                    cv->buf.ctrl_d()
-                    cv->scroll_to_caret()
-                    self.ui.queue_redraw(cv->id)
+                    if shift:
+                        cv->duplicate_lines(now)      # ctrl+shift+d
+                    else:
+                        cv->buf.ctrl_d()
+                        cv->scroll_to_caret()
+                        self.ui.queue_redraw(cv->id)
+            case i32('/'):
+                if cv != None:
+                    cv->toggle_comment(now)           # ctrl+/
+            case i32('k'):
+                if cv != None:
+                    cv->delete_lines(now)             # ctrl+shift+k / ctrl+k
+            case i32('j'):
+                if cv != None:
+                    cv->join_lines(now)               # ctrl+j
+            case PGK_UP:
+                if cv != None and shift:
+                    cv->move_lines(-1, now)           # ctrl+shift+up
+            case PGK_DOWN:
+                if cv != None and shift:
+                    cv->move_lines(1, now)            # ctrl+shift+down
+            case i32('['):
+                if cv != None:
+                    if shift:
+                        cv->fold_all()
+                    else:
+                        cv->toggle_fold_at_caret()     # ctrl+[ folds/unfolds
+            case i32(']'):
+                if cv != None:
+                    if shift:
+                        cv->unfold_all()
+                    else:
+                        cv->toggle_fold_at_caret()
             case i32('='), i32('+'):
                 self.set_zoom(self.zoom + 1)
             case i32('-'):
                 self.set_zoom(self.zoom - 1)
             case i32('0'):
-                self.set_zoom(1)
+                self.set_zoom(pg_font_default_size())
             case PGK_TAB:
                 if not self.tabs.is_empty():
                     self.select_tab((self.cur + (self.tabs.len - 1 if shift else 1)) % self.tabs.len)

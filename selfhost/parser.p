@@ -8,58 +8,6 @@ import "../stl/vec.ph"
 # Vec instances from the STL used by the compiler: the implements live here;
 # other modules that need them just do the declare (links against these bodies)
 
-struct P:
-    t: *Token
-    n: usize
-    i: usize
-    file: const *char
-    a: *Arena
-
-# ---------- primitives ----------
-static def pk(p: *P) -> *Token:
-    return &p->t[p->i]
-
-static def pk1(p: *P) -> *Token:
-    return &p->t[p->i + 1] if p->i + 1 < p->n else &p->t[p->n - 1]
-
-static def pk2(p: *P) -> *Token:
-    return &p->t[p->i + 2] if p->i + 2 < p->n else &p->t[p->n - 1]
-
-static def at(p: *P, k: TokKind) -> bool:
-    return pk(p)->kind == k
-
-static def adv(p: *P) -> *Token:
-    t: *Token = &p->t[p->i]
-    if t->kind != TK_EOF:
-        p->i += 1
-    return t
-
-static def accept(p: *P, k: TokKind) -> bool:
-    if at(p, k):
-        adv(p)
-        return True
-    return False
-
-static def expect(p: *P, k: TokKind, ctx: const *char) -> *Token:
-    if not at(p, k):
-        fatal_at(p->file, pk(p)->pos, "expected %s in %s, found %s", tok_kind_name(k), ctx, tok_kind_name(pk(p)->kind))
-    return adv(p)
-
-# closes generic type arguments: '>' — splitting '>>', '>>=' and '>=' when
-# needed (Vec<Vec<int>> lexes the end as '>>')
-static def expect_gt(p: *P):
-    k: TokKind = pk(p)->kind
-    if k == TK_GT:
-        adv(p)
-    elif k == TK_SHR:
-        pk(p)->kind = TK_GT       # consumes one '>' from '>>'
-    elif k == TK_SHR_EQ:
-        pk(p)->kind = TK_GE       # consumes one '>' from '>>='
-    elif k == TK_GE:
-        pk(p)->kind = TK_ASSIGN   # consumes the '>' from '>='
-    else:
-        fatal_at(p->file, pk(p)->pos, "expected '>' closing type arguments, found %s", tok_kind_name(k))
-
 # ---------- types ----------
 static def is_type_modifier(s: const *char) -> bool:
     return s in {"unsigned", "signed", "long", "short"}
@@ -67,1081 +15,9 @@ static def is_type_modifier(s: const *char) -> bool:
 static def is_type_base_word(s: const *char) -> bool:
     return s in {"int", "char", "short", "long", "float", "double"}
 
-static def parse_expr(p: *P) -> *Expr
-static def parse_block(p: *P) -> *Block
-static def parse_initializer(p: *P) -> *Expr
-static def parse_stmt(p: *P) -> *Stmt
-
-static def parse_type(p: *P) -> *Type:
-    is_const: bool = False
-    is_volatile: bool = False
-    is_restrict: bool = False
-    while True:
-        if accept(p, TK_CONST):
-            is_const = True
-        elif accept(p, TK_VOLATILE):
-            is_volatile = True
-        elif accept(p, TK_RESTRICT):
-            is_restrict = True
-        else:
-            break
-    stars = 0
-    while accept(p, TK_STAR):
-        stars += 1
-        # 'restrict' after '*' (int * restrict p): qualifies the pointer
-        while at(p, TK_RESTRICT) or at(p, TK_CONST) or at(p, TK_VOLATILE):
-            if accept(p, TK_RESTRICT):
-                is_restrict = True
-            elif accept(p, TK_CONST):
-                is_const = True
-            else:
-                adv(p)
-                is_volatile = True
-
-    t: *Type
-    if at(p, TK_LPAREN):
-        # grouped type: *(T[N]) = pointer to array (char (*p)[4]);
-        # disambiguates from *char[4] (array of pointers). The `*` already read
-        # wrap the group; dims after the group are external.
-        adv(p)
-        inner: *Type = parse_type(p)
-        expect(p, TK_RPAREN, "tipo agrupado (T)")
-        t = inner
-        for kg in range(stars):
-            t = ty_ptr(p->a, t)
-        gdims: *Expr[16]
-        gn = 0
-        while accept(p, TK_LBRACKET):
-            if at(p, TK_RBRACKET):
-                gdims[gn] = None
-            else:
-                gdims[gn] = parse_expr(p)
-            gn += 1
-            expect(p, TK_RBRACKET, "array dimension")
-        kk: i32
-        for kk in range(gn - 1, -1, -1):
-            t = ty_array(p->a, t, gdims[kk])
-        return t
-    if at(p, TK_DEF):
-        # function pointer:  def(T1, T2, ...) -> Ret   (Ret optional = void)
-        # A function value in P is always a pointer, so this produces
-        # TY_PTR(TY_FUNC): inner = return type, targs = parameter types.
-        adv(p)
-        expect(p, TK_LPAREN, "def( for function pointer")
-        ptypes: Vec<*Type>
-        ptypes.init()
-        if not at(p, TK_RPAREN):
-            do:
-                if at(p, TK_ELLIPSIS):
-                    adv(p)
-                    ptypes.push(ty_name(p->a, "..."))   # variadic sentinel
-                    break
-                # optional parameter name (`def(ctx: *void)` — documentation
-                # only; a function pointer cares about the TYPE alone)
-                if at(p, TK_IDENT) and pk1(p)->kind == TK_COLON:
-                    adv(p)
-                    adv(p)
-                ptypes.push(parse_type(p))
-            while accept(p, TK_COMMA)
-        expect(p, TK_RPAREN, "def(...) for function pointer")
-        ret: *Type = ty_name(p->a, "void")
-        if accept(p, TK_ARROW):
-            ret = parse_type(p)
-        ft: *Type = ty_func(p->a, ret)
-        ft->targs = ptypes.data
-        ft->ntargs = ptypes.len
-        t = ty_ptr(p->a, ft)
-    else:
-        id: *Token = expect(p, TK_IDENT, "type name")
-        name: const *char = id->text
-        # multi-word C types: "unsigned int", "long long", "long double"...
-        words = 1
-        while words < 3 and is_type_modifier(name) and at(p, TK_IDENT) and is_type_base_word(pk(p)->text):
-            name = arena_printf(p->a, "%s %s", name, adv(p)->text)
-            words += 1
-
-        # generic arguments: Vec<int>, Map<int, *char>...
-        targs: Vec<*Type>
-        targs.init()
-        if accept(p, TK_LT):
-            do:
-                targs.push(parse_type(p))
-            while accept(p, TK_COMMA)
-            expect_gt(p)
-
-        t = ty_name(p->a, name)
-        with t:
-            .is_const = is_const
-            .is_volatile = is_volatile
-            .is_restrict = is_restrict
-            .targs = targs.data
-            .ntargs = targs.len
-    k: i32
-    for k in range(stars):
-        t = ty_ptr(p->a, t)
-
-    # array dimensions: the first one written is the outermost
-    dims: *Expr[16]
-    nd = 0
-    while accept(p, TK_LBRACKET):
-        if nd >= 16:
-            fatal_at(p->file, pk(p)->pos, "array with too many dimensions")
-        # C99 qualified parameter declarator: T x[static N], [const N]...
-        while at(p, TK_STATIC) or at(p, TK_CONST) or at(p, TK_VOLATILE) or at(p, TK_RESTRICT):
-            adv(p)
-        if at(p, TK_RBRACKET):
-            dims[nd] = None
-        else:
-            dims[nd] = parse_expr(p)
-        nd += 1
-        expect(p, TK_RBRACKET, "array dimension")
-    for k in range(nd - 1, -1, -1):
-        t = ty_array(p->a, t, dims[k])
-    return t
-
-# ---------- expressions ----------
-static def bin(p: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr:
-    e: *Expr = ex_new(p->a, EX_BINARY, pos)
-    e->op = op
-    e->lhs = l
-    e->rhs = r
-    return e
-
-static def parse_unary(p: *P) -> *Expr
-
-# GNU statement expression: ({ s1; s2; ...; value }). Inside the parens,
-# newlines are suppressed, so statements are separated by ';'. If the
-# last item is an expression (no ';' before the '}'), it's the VALUE; otherwise
-# the value is void. The C backend lowers it to the comma operator (exprs only); QBE
-# emits the flow directly (accepts declarations/control).
-static def parse_stmtexpr(p: *P) -> *Expr:
-    pos: Pos = pk(p)->pos
-    adv(p)  # '('
-    adv(p)  # '{'
-    e: *Expr = ex_new(p->a, EX_STMTEXPR, pos)
-    stmts: Vec<*Stmt>
-    stmts.init()
-    val: *Expr = None
-    while not at(p, TK_RBRACE) and not at(p, TK_EOF):
-        s: *Stmt = parse_stmt(p)
-        if at(p, TK_RBRACE) and s->kind == ST_EXPR:
-            val = s->expr   # last expr without ';' = value of the stmt-expr
-        else:
-            stmts.push(s)
-    expect(p, TK_RBRACE, "statement expression")
-    expect(p, TK_RPAREN, "statement expression")
-    blk: *Block = arena_alloc(p->a, sizeof(Block))
-    blk->stmts = stmts.data
-    blk->n = stmts.len
-    e->xblock = blk
-    e->lhs = val
-    return e
-
-static def parse_primary(p: *P) -> *Expr:
-    t: *Token = pk(p)
-    e: *Expr
-    match t->kind:
-        case TK_IDENT:
-            # va_arg(ap, Type): special form (the 2nd arg is a TYPE)
-            if strcmp(t->text, "va_arg") == 0:
-                adv(p)
-                if at(p, TK_LPAREN):
-                    adv(p)
-                    va: *Expr = ex_new(p->a, EX_VAARG, t->pos)
-                    va->lhs = parse_expr(p)
-                    expect(p, TK_COMMA, "va_arg(ap, type)")
-                    va->cast_type = parse_type(p)
-                    expect(p, TK_RPAREN, "va_arg")
-                    return va
-                e = ex_new(p->a, EX_IDENT, t->pos)
-                e->text = "va_arg"
-                return e
-            e = ex_new(p->a, EX_IDENT, t->pos)
-            e->text = adv(p)->text
-            return e
-        case TK_NUMBER:
-            e = ex_new(p->a, EX_NUMBER, t->pos)
-            e->text = adv(p)->text
-            return e
-        case TK_STRING:
-            e = ex_new(p->a, EX_STRING, t->pos)
-            e->text = adv(p)->text
-            return e
-        case TK_CHARLIT:
-            e = ex_new(p->a, EX_CHARLIT, t->pos)
-            e->text = adv(p)->text
-            return e
-        case TK_TRUE:
-            adv(p)
-            return ex_new(p->a, EX_TRUE, t->pos)
-        case TK_FALSE:
-            adv(p)
-            return ex_new(p->a, EX_FALSE, t->pos)
-        case TK_NONE:
-            adv(p)
-            return ex_new(p->a, EX_NONE, t->pos)
-        case TK_LPAREN:
-            # GNU statement expression: ({ stmt; stmt; value })
-            if pk1(p)->kind == TK_LBRACE:
-                return parse_stmtexpr(p)
-            # walrus: (name := expr) — assignment EXPRESSION, Python-style
-            if pk1(p)->kind == TK_IDENT and pk2(p) != None and pk2(p)->kind == TK_WALRUS:
-                adv(p)  # (
-                wname: const *char = adv(p)->text
-                wpos: Pos = adv(p)->pos   # :=
-                w: *Expr = ex_new(p->a, EX_WALRUS, wpos)
-                w->text = wname
-                w->lhs = parse_expr(p)
-                expect(p, TK_RPAREN, "walrus expression")
-                w->parened = True
-                return w
-            adv(p)
-            e = parse_expr(p)
-            expect(p, TK_RPAREN, "parenthesized expression")
-            return e
-        case TK_DOT:
-            # `.field` without a receiver: implicit member of the innermost `with`.
-            # sema validates that we're inside a `with` and resolves the receiver.
-            adv(p)  # '.'
-            base: *Expr = ex_new(p->a, EX_WITHSELF, t->pos)
-            f: *Expr = ex_new(p->a, EX_FIELD, t->pos)
-            f->op = TK_ARROW  # receiver is a pointer; fix_field_op confirms
-            f->lhs = base
-            f->field = expect(p, TK_IDENT, "implicit member ('.field' inside 'with')")->text
-            return f
-        case _:
-            fatal_at(p->file, t->pos, "invalid expression (found %s)", tok_kind_name(t->kind))
-            return None
-
-static def parse_postfix(p: *P) -> *Expr:
-    e: *Expr = parse_primary(p)
-    while True:
-        pos: Pos = pk(p)->pos
-        if accept(p, TK_LBRACKET):
-            ix: *Expr = ex_new(p->a, EX_INDEX, pos)
-            ix->lhs = e
-            ix->rhs = parse_expr(p)
-            expect(p, TK_RBRACKET, "array index")
-            e = ix
-        elif accept(p, TK_LPAREN):
-            call: *Expr = ex_new(p->a, EX_CALL, pos)
-            call->lhs = e
-            args: Vec<*Expr>
-            args.init()
-            if not at(p, TK_RPAREN):
-                do:
-                    # `out x` / `ref x` / `in x` — by-ref argument sugar:
-                    # passes &x, self-documenting at the call site (C#-style)
-                    cbrk: i32 = PK_NONE
-                    if at(p, TK_IDENT) and (pk1(p)->kind == TK_IDENT or pk1(p)->kind == TK_STAR or pk1(p)->kind == TK_LPAREN):
-                        if strcmp(pk(p)->text, "out") == 0:
-                            cbrk = PK_OUT
-                        elif strcmp(pk(p)->text, "ref") == 0:
-                            cbrk = PK_REF
-                    elif at(p, TK_IN) and (pk1(p)->kind == TK_IDENT or pk1(p)->kind == TK_STAR or pk1(p)->kind == TK_LPAREN):
-                        cbrk = PK_IN
-                    if cbrk != PK_NONE:
-                        opos: Pos = adv(p)->pos
-                        oa: *Expr = ex_new(p->a, EX_UNARY, opos)
-                        oa->op = TK_AMP
-                        oa->lhs = parse_unary(p)
-                        oa->byref = cbrk
-                        args.push(oa)
-                        continue
-                    # named argument: name=value (EX_DESIG marker; sema
-                    # resolves it to the parameter's position)
-                    if at(p, TK_IDENT) and pk1(p)->kind == TK_ASSIGN:
-                        nt: *Token = adv(p)
-                        adv(p)  # =
-                        na: *Expr = ex_new(p->a, EX_DESIG, nt->pos)
-                        na->field = nt->text
-                        na->lhs = parse_expr(p)
-                        args.push(na)
-                    else:
-                        args.push(parse_expr(p))
-                while accept(p, TK_COMMA)
-            expect(p, TK_RPAREN, "function call")
-            call->args = args.data
-            call->nargs = args.len
-            e = call
-        elif accept(p, TK_DOT):
-            f: *Expr = ex_new(p->a, EX_FIELD, pos)
-            f->op = TK_DOT
-            f->lhs = e
-            f->field = expect(p, TK_IDENT, "field access")->text
-            e = f
-        elif accept(p, TK_ARROW):
-            f2: *Expr = ex_new(p->a, EX_FIELD, pos)
-            f2->op = TK_ARROW
-            f2->lhs = e
-            f2->field = expect(p, TK_IDENT, "field access")->text
-            e = f2
-        else:
-            break
-    return e
-
-# tries to recognize the pointer cast "(*type)(expr)"; if the shape doesn't
-# match, backtracks and parses as a normal expression
-static def try_paren_cast(p: *P) -> *Expr:
-    save: usize = p->i
-    pos: Pos = pk(p)->pos
-    adv(p)  # '('
-    stars = 0
-    while accept(p, TK_STAR):
-        stars += 1
-    if stars > 0 and at(p, TK_IDENT) and pk1(p)->kind == TK_RPAREN and pk2(p)->kind == TK_LPAREN:
-        name: const *char = adv(p)->text
-        adv(p)  # ')'
-        adv(p)  # '('
-        arg: *Expr = parse_expr(p)
-        expect(p, TK_RPAREN, "pointer cast")
-        t: *Type = ty_name(p->a, name)
-        for k in range(stars):
-            t = ty_ptr(p->a, t)
-        e: *Expr = ex_new(p->a, EX_CAST, pos)
-        e->cast_type = t
-        e->lhs = arg
-        e->cast_tentative = True  # sema confirms whether 'name' really is a type
-        return e
-    p->i = save
-    return None
-
-static def parse_unary(p: *P) -> *Expr:
-    t: *Token = pk(p)
-    match t->kind:
-        case TK_MINUS, TK_PLUS, TK_TILDE, TK_STAR, TK_AMP:
-            adv(p)
-            e: *Expr = ex_new(p->a, EX_UNARY, t->pos)
-            e->op = t->kind
-            e->lhs = parse_unary(p)
-            return e
-        case TK_LPAREN:
-            if pk1(p)->kind == TK_STAR:
-                c: *Expr = try_paren_cast(p)
-                if c != None:
-                    return c
-            return parse_postfix(p)
-        case _:
-            return parse_postfix(p)
-
-# binary levels, from strongest to weakest (mirrors the EBNF)
-static def parse_mul(p: *P) -> *Expr:
-    e: *Expr = parse_unary(p)
-    while at(p, TK_STAR) or at(p, TK_SLASH) or at(p, TK_PERCENT):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_unary(p))
-    return e
-
-static def parse_add(p: *P) -> *Expr:
-    e: *Expr = parse_mul(p)
-    while at(p, TK_PLUS) or at(p, TK_MINUS):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_mul(p))
-    return e
-
-static def parse_shift(p: *P) -> *Expr:
-    e: *Expr = parse_add(p)
-    while at(p, TK_SHL) or at(p, TK_SHR):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_add(p))
-    return e
-
-static def parse_rel(p: *P) -> *Expr:
-    e: *Expr = parse_shift(p)
-    while at(p, TK_LT) or at(p, TK_LE) or at(p, TK_GT) or at(p, TK_GE):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_shift(p))
-    return e
-
-static def parse_eq(p: *P) -> *Expr:
-    e: *Expr = parse_rel(p)
-    while True:
-        # `is` / `is not` (contextual, like Python): pointer IDENTITY. Infix
-        # position is unambiguous — an identifier can never follow a complete
-        # expression — so the name `is` is not reserved.
-        if at(p, TK_IDENT) and strcmp(pk(p)->text, "is") == 0:
-            ipos: Pos = adv(p)->pos
-            iop: i32 = TK_IS
-            if accept(p, TK_NOT):
-                iop = TK_ISNOT
-            e = bin(p, iop, ipos, e, parse_rel(p))
-            continue
-        if at(p, TK_EQ) or at(p, TK_NE):
-            op: *Token = adv(p)
-            e = bin(p, op->kind, op->pos, e, parse_rel(p))
-            continue
-        # `x in y` / `x not in y`: membership (value bool; lowered by sema)
-        if at(p, TK_IN):
-            npos: Pos = adv(p)->pos
-            ie: *Expr = ex_new(p->a, EX_IN, npos)
-            ie->lhs = e
-            ie->rhs = parse_initializer(p) if at(p, TK_LBRACE) else parse_rel(p)
-            e = ie
-            continue
-        if at(p, TK_NOT) and pk1(p) != None and pk1(p)->kind == TK_IN:
-            nnpos: Pos = adv(p)->pos   # not
-            adv(p)                     # in
-            ne: *Expr = ex_new(p->a, EX_IN, nnpos)
-            ne->lhs = e
-            ne->rhs = parse_initializer(p) if at(p, TK_LBRACE) else parse_rel(p)
-            ne->op = TK_NOT
-            e = ne
-            continue
-        break
-    return e
-
-static def parse_bitand(p: *P) -> *Expr:
-    e: *Expr = parse_eq(p)
-    while at(p, TK_AMP):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_eq(p))
-    return e
-
-static def parse_bitxor(p: *P) -> *Expr:
-    e: *Expr = parse_bitand(p)
-    while at(p, TK_CARET):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_bitand(p))
-    return e
-
-static def parse_bitor(p: *P) -> *Expr:
-    e: *Expr = parse_bitxor(p)
-    while at(p, TK_PIPE):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_bitxor(p))
-    return e
-
-static def parse_not(p: *P) -> *Expr:
-    if at(p, TK_NOT):
-        op: *Token = adv(p)
-        e: *Expr = ex_new(p->a, EX_UNARY, op->pos)
-        e->op = TK_NOT
-        e->lhs = parse_not(p)
-        return e
-    return parse_bitor(p)
-
-static def parse_and(p: *P) -> *Expr:
-    e: *Expr = parse_not(p)
-    while at(p, TK_AND):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_not(p))
-    return e
-
-static def parse_or(p: *P) -> *Expr:
-    e: *Expr = parse_and(p)
-    while at(p, TK_OR):
-        op: *Token = adv(p)
-        e = bin(p, op->kind, op->pos, e, parse_and(p))
-    return e
-
-# Python-style ternary: value if cond else other
-static def parse_ternary(p: *P) -> *Expr:
-    v: *Expr = parse_or(p)
-    if at(p, TK_IF):
-        pos: Pos = adv(p)->pos
-        c: *Expr = parse_or(p)
-        expect(p, TK_ELSE, "ternary (missing 'else')")
-        o: *Expr = parse_ternary(p)
-        e: *Expr = ex_new(p->a, EX_TERNARY, pos)
-        e->cond = c
-        e->lhs = v
-        e->rhs = o
-        return e
-    return v
-
-static def parse_expr(p: *P) -> *Expr:
-    return parse_ternary(p)
-
-# a list element: [idx]=v / .field=v (C99 designator) or value/nested.
-# Extensions reinterpreted as plain C99 (the GNU form doesn't survive into the AST):
-#   [a ... b] = v  ->  [a]=v, [a+1]=v, ..., [b]=v   (expansion)
-#   .a.j = v / [i][j] = v  ->  .a = {.j = v} / [i] = {[j] = v}  (nesting)
-static def parse_init_elem(p: *P, out: *Vec<*Expr>):
-    if at(p, TK_LBRACKET) or at(p, TK_DOT):
-        pos: Pos = pk(p)->pos
-        d: *Expr = ex_new(p->a, EX_DESIG, pos)
-        lo: i64 = 0
-        hi: i64 = 0
-        is_range: bool = False
-        if at(p, TK_LBRACKET):
-            adv(p)
-            d->rhs = parse_expr(p)   # index
-            if at(p, TK_ELLIPSIS):
-                adv(p)
-                he: *Expr = parse_expr(p)
-                if d->rhs->kind != EX_NUMBER or he->kind != EX_NUMBER:
-                    fatal_at(p->file, pos, "range designator bounds must be integer literals")
-                lo = strtoll(d->rhs->text, None, 0)
-                hi = strtoll(he->text, None, 0)
-                if hi < lo:
-                    fatal_at(p->file, pos, "range designator with descending bounds")
-                is_range = True
-            expect(p, TK_RBRACKET, "designator index")
-        else:
-            adv(p)  # .
-            d->field = expect(p, TK_IDENT, "field designator")->text
-        # chained designators: each extra level becomes a nested list
-        chain: *Expr[8]
-        nchain = 0
-        while at(p, TK_LBRACKET) or at(p, TK_DOT):
-            cpos: Pos = pk(p)->pos
-            cd: *Expr = ex_new(p->a, EX_DESIG, cpos)
-            if accept(p, TK_LBRACKET):
-                cd->rhs = parse_expr(p)
-                expect(p, TK_RBRACKET, "designator index")
-            else:
-                adv(p)  # .
-                cd->field = expect(p, TK_IDENT, "field designator")->text
-            if nchain < 8:
-                chain[nchain] = cd
-                nchain += 1
-        expect(p, TK_ASSIGN, "designator (missing '=')")
-        v: *Expr = parse_initializer(p)
-        # wraps from the inside out: .a.j=v -> .a = {.j = v}
-        ci: i32
-        for ci in range(nchain - 1, -1, -1):
-            chain[ci]->lhs = v
-            wrap: *Expr = ex_new(p->a, EX_INITLIST, chain[ci]->pos)
-            wa: **Expr = arena_alloc(p->a, sizeof(v))
-            wa[0] = chain[ci]
-            wrap->args = wa
-            wrap->nargs = 1
-            v = wrap
-        d->lhs = v
-        if is_range:
-            # range: expands into unit designators (same value)
-            k: i64 = lo
-            while k <= hi:
-                dk: *Expr = ex_new(p->a, EX_DESIG, pos)
-                ik: *Expr = ex_new(p->a, EX_NUMBER, pos)
-                ik->text = arena_printf(p->a, "%lld", k)
-                dk->rhs = ik
-                dk->lhs = v
-                out->push(dk)
-                k += 1
-            return
-        out->push(d)
-        return
-    out->push(parse_initializer(p))
-
-static def parse_initializer(p: *P) -> *Expr:
-    if at(p, TK_LBRACE):
-        pos: Pos = adv(p)->pos
-        e: *Expr = ex_new(p->a, EX_INITLIST, pos)
-        args: Vec<*Expr>
-        args.init()
-        if not at(p, TK_RBRACE):
-            do:
-                parse_init_elem(p, &args)
-            while accept(p, TK_COMMA) and not at(p, TK_RBRACE)
-        expect(p, TK_RBRACE, "initializer")
-        e->args = args.data
-        e->nargs = args.len
-        return e
-    return parse_expr(p)
-
 # ---------- statements ----------
 static def is_assign_op(k: TokKind) -> bool:
     return k in {TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ}
-
-# end of a simple statement: ';' (more statements on the same line) or newline.
-# a trailing ';' before the newline is accepted, as is ';;'.
-static def end_stmt(p: *P, what: const *char):
-    if at(p, TK_SEMI):
-        while at(p, TK_SEMI):
-            adv(p)
-        accept(p, TK_NEWLINE)
-        return
-    if at(p, TK_RBRACE):
-        return  # end of statement expression ({ ... }): '}' is not consumed here
-    expect(p, TK_NEWLINE, what)
-
-static def parse_block(p: *P) -> *Block:
-    expect(p, TK_NEWLINE, "start of block (after ':')")
-    expect(p, TK_INDENT, "indented block")
-    v: Vec<*Stmt>
-    v.init()
-    while not at(p, TK_DEDENT) and not at(p, TK_EOF):
-        v.push(parse_stmt(p))
-    expect(p, TK_DEDENT, "end of block")
-    b: *Block = arena_alloc(p->a, sizeof(Block))
-    b->stmts = v.data
-    b->n = v.len
-    return b
-
-static def parse_var_stmt(p: *P, is_const: bool) -> *Stmt:
-    name: *Token = expect(p, TK_IDENT, "variable declaration")
-    s: *Stmt = st_new(p->a, ST_VAR, name->pos)
-    s->name = name->text
-    s->is_const = is_const
-    # explicit type (`name: type`) or inferred (`name = value`, no ':').
-    # type == None signals inference for sema (via type_of of the initializer).
-    if accept(p, TK_COLON):
-        s->type = parse_type(p)
-    if accept(p, TK_ASSIGN):
-        s->init = parse_initializer(p)
-    elif s->type == None:
-        fatal_at(p->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text)
-    elif is_const:
-        fatal_at(p->file, name->pos, "const requires a value ('const %s: T = ...')", name->text)
-    end_stmt(p, "variable declaration")
-    return s
-
-static def parse_if(p: *P) -> *Stmt:
-    pos: Pos = adv(p)->pos  # if
-    s: *Stmt = st_new(p->a, ST_IF, pos)
-    s->if_sel = -1  # -1 = runtime; sema may fold it to one branch
-    conds: Vec<*Expr>
-    blocks: Vec<*Block>
-    conds.init()
-    blocks.init()
-    conds.push(parse_expr(p))
-    expect(p, TK_COLON, "if")
-    blocks.push(parse_block(p))
-    while at(p, TK_ELIF):
-        adv(p)
-        conds.push(parse_expr(p))
-        expect(p, TK_COLON, "elif")
-        blocks.push(parse_block(p))
-    if accept(p, TK_ELSE):
-        expect(p, TK_COLON, "else")
-        s->else_block = parse_block(p)
-    s->conds = conds.data
-    s->blocks = blocks.data
-    s->nconds = conds.len
-    return s
-
-static def parse_while(p: *P) -> *Stmt:
-    pos: Pos = adv(p)->pos
-    s: *Stmt = st_new(p->a, ST_WHILE, pos)
-    s->cond = parse_expr(p)
-    expect(p, TK_COLON, "while")
-    s->body = parse_block(p)
-    return s
-
-static def parse_do(p: *P) -> *Stmt:
-    pos: Pos = adv(p)->pos
-    s: *Stmt = st_new(p->a, ST_DO, pos)
-    expect(p, TK_COLON, "do")
-    s->body = parse_block(p)
-    expect(p, TK_WHILE, "do-while (missing 'while' after the block)")
-    s->cond = parse_expr(p)
-    expect(p, TK_NEWLINE, "do-while")
-    return s
-
-static def parse_for(p: *P) -> *Stmt:
-    pos: Pos = adv(p)->pos
-    s: *Stmt = st_new(p->a, ST_FOR, pos)
-    s->var = expect(p, TK_IDENT, "for")->text
-    if accept(p, TK_COMMA):
-        s->var2 = expect(p, TK_IDENT, "for (second loop variable)")->text
-    expect(p, TK_IN, "for (expected 'in')")
-    # `for v in xs:` — direct iteration over a sized array's VALUES. Recognized
-    # when what follows is not range(...)/enumerate(...): sema synthesizes the
-    # index and lowers it like enumerate (pure sugar).
-    if not (at(p, TK_IDENT) and (strcmp(pk(p)->text, "range") == 0 or strcmp(pk(p)->text, "enumerate") == 0) and pk1(p)->kind == TK_LPAREN):
-        if s->var2 != None:
-            fatal_at(p->file, pk(p)->pos, "iterating values takes ONE variable (`for v in xs`); use enumerate for index+value")
-        s->var2 = s->var    # the named variable receives the VALUE
-        s->var = ""         # sema synthesizes the hidden index
-        s->from = None
-        s->to = parse_expr(p)   # the array; sema swaps in its length
-        s->step = None
-        expect(p, TK_COLON, "for")
-        s->body = parse_block(p)
-        return s
-    r: *Token = expect(p, TK_IDENT, "for (expected 'range' or 'enumerate')")
-    is_enum: bool = strcmp(r->text, "enumerate") == 0
-    expect(p, TK_LPAREN, r->text)
-    a1: *Expr = parse_expr(p)
-    a2: *Expr = None
-    a3: *Expr = None
-    if accept(p, TK_COMMA):
-        a2 = parse_expr(p)
-        if accept(p, TK_COMMA):
-            a3 = parse_expr(p)
-    expect(p, TK_RPAREN, r->text)
-    expect(p, TK_COLON, "for")
-    if is_enum:
-        # `for i, v in enumerate(arr)` — needs exactly two vars and one arg. Sema
-        # lowers it to a range over arr's length + a `v = arr[i]` binding.
-        if s->var2 == None:
-            fatal_at(p->file, r->pos, "enumerate(...) needs two loop variables: `for i, v in enumerate(x)`")
-        if a2 != None:
-            fatal_at(p->file, r->pos, "enumerate(...) takes a single argument")
-        s->from = None
-        s->to = a1        # the array; sema replaces this with its length
-        s->step = None
-    else:
-        if s->var2 != None:
-            fatal_at(p->file, r->pos, "range(...) has a single loop variable (did you mean enumerate?)")
-        if a2 != None:
-            s->from = a1
-            s->to = a2
-        else:
-            s->from = None  # 0
-            s->to = a1
-        s->step = a3  # None = 1
-    s->body = parse_block(p)
-    return s
-
-static def parse_match(p: *P) -> *Stmt:
-    pos: Pos = adv(p)->pos
-    s: *Stmt = st_new(p->a, ST_MATCH, pos)
-    s->tm_sel = -1
-    # `match type(x):` — type-based selection (compile-time). `type` is not a
-    # keyword; we recognize the `type ( expr )` shape in the subject position.
-    if at(p, TK_IDENT) and strcmp(pk(p)->text, "type") == 0 and pk1(p)->kind == TK_LPAREN:
-        adv(p)  # type
-        adv(p)  # (
-        s->is_typematch = True
-        s->subject = parse_expr(p)
-        expect(p, TK_RPAREN, "match type(x)")
-    else:
-        s->subject = parse_expr(p)
-    expect(p, TK_COLON, "match")
-    expect(p, TK_NEWLINE, "match")
-    expect(p, TK_INDENT, "match body")
-    cases: Vec<*MatchCase>
-    cases.init()
-    while at(p, TK_CASE):
-        adv(p)
-        mc: *MatchCase = arena_alloc(p->a, sizeof(MatchCase))
-        if at(p, TK_IDENT) and strcmp(pk(p)->text, "_") == 0:
-            adv(p)
-            mc->is_default = True
-        elif s->is_typematch:
-            # type case: `case int:`, `case *Node:`, `case Point:` ...
-            mc->type_pat = parse_type(p)
-        else:
-            vals: Vec<*Expr>
-            vals.init()
-            do:
-                vals.push(parse_expr(p))
-            while accept(p, TK_COMMA)
-            mc->vals = vals.data
-            mc->nvals = vals.len
-        expect(p, TK_COLON, "case")
-        mc->body = parse_block(p)
-        cases.push(mc)
-    expect(p, TK_DEDENT, "end of match")
-    if cases.is_empty():
-        fatal_at(p->file, pos, "match without any case")
-    s->cases = cases.data
-    s->ncases = cases.len
-    return s
-
-static def parse_with(p: *P) -> *Stmt:
-    pos: Pos = adv(p)->pos  # with
-    s: *Stmt = st_new(p->a, ST_WITH, pos)
-    s->expr = parse_expr(p)   # the target (struct or *struct)
-    expect(p, TK_COLON, "with")
-    s->body = parse_block(p)
-    return s
-
-static def parse_stmt(p: *P) -> *Stmt:
-    t: *Token = pk(p)
-    if t->kind == TK_IDENT and strcmp(t->text, "pass") == 0 and (pk1(p)->kind == TK_NEWLINE or pk1(p)->kind == TK_SEMI):
-        adv(p)
-        if at(p, TK_NEWLINE):
-            adv(p)
-        return st_new(p->a, ST_PASS, t->pos)
-    # `global x` / `nonlocal x` (contextual, like Python): scope declarations.
-    # Two identifiers in a row never start any other P statement. ONE name per
-    # line (write `global a` / `global b` on separate lines for several).
-    if t->kind == TK_IDENT and pk1(p)->kind == TK_IDENT and (t->text in {"global", "nonlocal"}):
-        kw: StmtKind = ST_GLOBAL if t->text[0] == 'g' else ST_NONLOCAL
-        adv(p)
-        first: *Stmt = None
-        extra: Vec<*Stmt>
-        extra.init()
-        do:
-            nm: *Token = expect(p, TK_IDENT, "global/nonlocal")
-            gs: *Stmt = st_new(p->a, kw, nm->pos)
-            gs->name = nm->text
-            if first == None:
-                first = gs
-            else:
-                extra.push(gs)
-        while accept(p, TK_COMMA)
-        expect(p, TK_NEWLINE, "global/nonlocal")
-        if extra.len == 0:
-            return first
-        blk: *Stmt = st_new(p->a, ST_BLOCK, t->pos)   # several names: wrap
-        bb: *Block = arena_alloc(p->a, sizeof(Block))
-        all: **Stmt = arena_alloc(p->a, usize(extra.len + 1) * sizeof(*all))
-        all[0] = first
-        for i in range(extra.len):
-            all[i + 1] = extra.get(i)
-        bb->stmts = all
-        bb->n = extra.len + 1
-        blk->body = bb
-        return blk
-    if t->kind == TK_IDENT and pk1(p)->kind == TK_COLON:
-        if pk2(p)->kind == TK_NEWLINE:  # label
-            s: *Stmt = st_new(p->a, ST_LABEL, t->pos)
-            s->label = adv(p)->text
-            adv(p)  # ':'
-            adv(p)  # NEWLINE
-            return s
-        return parse_var_stmt(p, False)
-    match t->kind:
-        case TK_IF:
-            return parse_if(p)
-        case TK_WHILE:
-            return parse_while(p)
-        case TK_FOR:
-            return parse_for(p)
-        case TK_DO:
-            return parse_do(p)
-        case TK_MATCH:
-            return parse_match(p)
-        case TK_WITH:
-            return parse_with(p)
-        case TK_CONST:
-            adv(p)
-            return parse_var_stmt(p, True)
-        case TK_RETURN:
-            adv(p)
-            s: *Stmt = st_new(p->a, ST_RETURN, t->pos)
-            if not at(p, TK_NEWLINE):
-                s->expr = parse_expr(p)
-            end_stmt(p, "return")
-            return s
-        case TK_BREAK:
-            adv(p)
-            end_stmt(p, "break")
-            return st_new(p->a, ST_BREAK, t->pos)
-        case TK_CONTINUE:
-            adv(p)
-            end_stmt(p, "continue")
-            return st_new(p->a, ST_CONTINUE, t->pos)
-        case TK_GOTO:
-            adv(p)
-            s2: *Stmt = st_new(p->a, ST_GOTO, t->pos)
-            s2->label = expect(p, TK_IDENT, "goto")->text
-            end_stmt(p, "goto")
-            return s2
-        case TK_DEFER:
-            adv(p)
-            sd: *Stmt = st_new(p->a, ST_DEFER, t->pos)
-            if accept(p, TK_COLON):
-                sd->body = parse_block(p)
-            else:
-                # defer <expr|assignment> — becomes a single-statement block
-                de: *Expr = parse_expr(p)
-                inner: *Stmt = None
-                if is_assign_op(pk(p)->kind):
-                    op: *Token = adv(p)
-                    inner = st_new(p->a, ST_ASSIGN, t->pos)
-                    inner->lhs = de
-                    inner->op = op->kind
-                    inner->rhs = parse_expr(p)
-                else:
-                    inner = st_new(p->a, ST_EXPR, t->pos)
-                    inner->expr = de
-                end_stmt(p, "defer")
-                blk: *Block = arena_alloc(p->a, sizeof(Block))
-                v: Vec<*Stmt>
-                v.init()
-                v.push(inner)
-                blk->stmts = v.data
-                blk->n = v.len
-                sd->body = blk
-            return sd
-        case _:
-            if t->kind == TK_INDENT:
-                fatal_at(p->file, t->pos, "unexpected indentation (block did not start with ':')")
-            e: *Expr = parse_expr(p)
-            s3: *Stmt = None
-            if is_assign_op(pk(p)->kind):
-                op: *Token = adv(p)
-                s3 = st_new(p->a, ST_ASSIGN, t->pos)
-                s3->lhs = e
-                s3->op = op->kind
-                s3->rhs = parse_expr(p)
-            else:
-                s3 = st_new(p->a, ST_EXPR, t->pos)
-                s3->expr = e
-            end_stmt(p, "end of statement")
-            return s3
-
-# ---------- top-level declarations ----------
-static def parse_func(p: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func:
-    pos: Pos = expect(p, TK_DEF, "function")->pos
-    name: *Token = expect(p, TK_IDENT, "function name")
-    # generic function template: def foo<T, U>(...). Type params usable in the
-    # param/return types and body; monomorphized explicitly via `declare foo<int>`.
-    ftparams: Vec<*char>
-    ftparams.init()
-    if accept(p, TK_LT):
-        if owner != None:
-            fatal_at(p->file, name->pos, "methods cannot add their own type parameters (use the struct's)")
-        do:
-            ftp: *Token = expect(p, TK_IDENT, "type parameter")
-            ftparams.push((*char)(ftp->text))
-        while accept(p, TK_COMMA)
-        expect_gt(p)
-    f: *Func = arena_alloc(p->a, sizeof(Func))
-    with f:
-        .pos = pos
-        .name = name->text
-        .owner = owner
-        .cname = arena_printf(p->a, "%s_%s", owner, name->text) if owner != None else name->text
-        .is_static = is_static
-        .is_inline = is_inline
-        .tparams = ftparams.data
-        .ntparams = ftparams.len
-
-    expect(p, TK_LPAREN, "function parameters")
-    params: Vec<Param>
-    params.init()
-    if not at(p, TK_RPAREN):
-        do:
-            if at(p, TK_ELLIPSIS):
-                el: *Token = adv(p)
-                if params.is_empty():
-                    fatal_at(p->file, el->pos, "'...' requires at least one named parameter before it")
-                f->is_varargs = True
-                break  # '...' can only be the last one
-            # `out|ref|in name: T` — by-reference sugar (contextual: keyword
-            # followed by another identifier; a parameter NAMED out/ref works)
-            brk: i32 = PK_NONE
-            if at(p, TK_IDENT) and pk1(p)->kind == TK_IDENT:
-                if strcmp(pk(p)->text, "out") == 0:
-                    adv(p)
-                    brk = PK_OUT
-                elif strcmp(pk(p)->text, "ref") == 0:
-                    adv(p)
-                    brk = PK_REF
-            elif at(p, TK_IN) and pk1(p)->kind == TK_IDENT:
-                adv(p)
-                brk = PK_IN
-            pn: *Token = expect(p, TK_IDENT, "parameter name")
-            expect(p, TK_COLON, "parameter (missing ': type')")
-            prm: Param = {pn->text, parse_type(p), pn->pos}
-            if brk != PK_NONE:
-                if brk == PK_IN:
-                    prm.type->is_const = True       # read-only pointee
-                prm.type = ty_ptr(p->a, prm.type)   # the REAL type: *T
-                prm.byref = brk
-            if accept(p, TK_ASSIGN):
-                if brk != PK_NONE:
-                    fatal_at(p->file, pn->pos, "an out/ref/in parameter cannot have a default value")
-                prm.dflt = parse_expr(p)   # default: must be comptime (sema checks)
-            elif not params.is_empty() and params.data[params.len - 1].dflt != None:
-                fatal_at(p->file, pn->pos, "parameter '%s' needs a default value (it follows a defaulted parameter)", pn->text)
-            params.push(prm)
-        while accept(p, TK_COMMA)
-    expect(p, TK_RPAREN, "function parameters")
-    if accept(p, TK_ARROW):
-        f->ret = parse_type(p)
-    else:
-        f->ret = ty_name(p->a, "void")  # no '->' = void
-    f->params = params.data
-    f->nparams = params.len
-
-    if accept(p, TK_COLON):
-        f->body = parse_block(p)
-    else:
-        expect(p, TK_NEWLINE, "function prototype")
-    return f
-
-static def parse_struct_or_union(p: *P, is_union: bool) -> *Decl:
-    pos: Pos = adv(p)->pos  # struct/union
-    name: *Token = expect(p, TK_IDENT, "union" if is_union else "struct")
-    # type parameters: struct Vec<T>: (generic template)
-    tparams: Vec<*char>
-    tparams.init()
-    if accept(p, TK_LT):
-        if is_union:
-            fatal_at(p->file, name->pos, "union cannot be generic")
-        do:
-            tp: *Token = expect(p, TK_IDENT, "type parameter")
-            tparams.push((*char)(tp->text))
-        while accept(p, TK_COMMA)
-        expect_gt(p)
-    expect(p, TK_COLON, "struct/union")
-    expect(p, TK_NEWLINE, "struct/union")
-    expect(p, TK_INDENT, "struct/union body")
-
-    d: *Decl = arena_alloc(p->a, sizeof(Decl))
-    d->kind = DL_UNION if is_union else DL_STRUCT
-    d->pos = pos
-    d->name = name->text
-
-    fields: Vec<Field>
-    methods: Vec<*Func>
-    fields.init()
-    methods.init()
-
-    while not at(p, TK_DEDENT) and not at(p, TK_EOF):
-        if at(p, TK_DEF) or at(p, TK_STATIC) or at(p, TK_INLINE):
-            if is_union:
-                fatal_at(p->file, pk(p)->pos, "union cannot have methods")
-            st: bool = False
-            inl: bool = False
-            while at(p, TK_STATIC) or at(p, TK_INLINE):
-                if adv(p)->kind == TK_STATIC:
-                    st = True
-                else:
-                    inl = True
-            methods.push(parse_func(p, st, inl, name->text))
-        else:
-            fn: *Token = expect(p, TK_IDENT, "struct field")
-            expect(p, TK_COLON, "struct field")
-            fty: *Type = parse_type(p)
-            bw = -1  # -1 = normal field
-            if accept(p, TK_COLON):
-                # bitfield: `name: type : width` (width is an integer literal).
-                we: *Expr = parse_expr(p)
-                if we->kind != EX_NUMBER:
-                    fatal_at(p->file, we->pos, "bitfield width must be an integer literal")
-                bw = i32(strtoll(we->text, None, 0))
-                if bw < 0:
-                    fatal_at(p->file, we->pos, "bitfield width cannot be negative")
-            # name '_' in a bitfield = anonymous field (padding / ':0' closes the unit)
-            fname: const *char = "" if (bw >= 0 and strcmp(fn->text, "_") == 0) else fn->text
-            fl: Field = {fname, fty, fn->pos, bw}
-            expect(p, TK_NEWLINE, "struct field")
-            fields.push(fl)
-    expect(p, TK_DEDENT, "end of struct/union")
-    with d:
-        .fields = fields.data
-        .nfields = fields.len
-        .methods = methods.data
-        .nmethods = methods.len
-        .tparams = tparams.data
-        .ntparams = tparams.len
-    return d
-
-static def parse_enum(p: *P) -> *Decl:
-    pos: Pos = adv(p)->pos
-    name: *Token = expect(p, TK_IDENT, "enum")
-    expect(p, TK_COLON, "enum")
-    expect(p, TK_NEWLINE, "enum")
-    expect(p, TK_INDENT, "enum body")
-
-    d: *Decl = arena_alloc(p->a, sizeof(Decl))
-    d->kind = DL_ENUM
-    d->pos = pos
-    d->name = name->text
-
-    items: Vec<EnumItem>
-    items.init()
-    while not at(p, TK_DEDENT) and not at(p, TK_EOF):
-        idt: *Token = expect(p, TK_IDENT, "enum item")
-        it: EnumItem = {idt->text, None, idt->pos}
-        if accept(p, TK_ASSIGN):
-            it.value = parse_expr(p)
-        expect(p, TK_NEWLINE, "enum item")
-        items.push(it)
-    expect(p, TK_DEDENT, "end of enum")
-    if items.is_empty():
-        fatal_at(p->file, pos, "empty enum")
-    d->items = items.data
-    d->nitems = items.len
-    return d
 
 # reconstructs a `<...>` header path from tokens (include is a contextual word,
 # not a keyword, so the lexer does NOT special-case `<h>` after it).
@@ -1158,173 +34,1351 @@ static def spell_tok(t: *Token) -> const *char:
         case _:
             return ""
 
-# contextual `include`: a C header directive. `include` is NOT reserved — it is
-# only special here, at a top-level declaration, when followed by `<...>` or a
-# string (same idea as `range` in a for-loop). Emits #include AND (F2) ingests.
-static def parse_c_include(p: *P) -> *Decl:
-    inc: *Token = adv(p)   # the `include` identifier
-    d: *Decl = arena_alloc(p->a, sizeof(Decl))
-    d->kind = DL_IMPORT
-    d->is_include = True
-    d->pos = inc->pos
-    if at(p, TK_STRING):
-        raw: const *char = adv(p)->text  # with quotes
-        len: usize = strlen(raw)
-        d->import_path = arena_strndup(p->a, raw + 1, len - 2 if len >= 2 else 0)
-        d->import_system = False
-    else:
-        expect(p, TK_LT, "include <header>")
-        path: const *char = ""
-        while not at(p, TK_GT) and not at(p, TK_NEWLINE) and not at(p, TK_EOF):
-            path = arena_printf(p->a, "%s%s", path, spell_tok(adv(p)))
-        expect(p, TK_GT, "include <header> (missing '>')")
-        d->import_path = path
-        d->import_system = True
-    expect(p, TK_NEWLINE, "include")
-    return d
+struct P:
+    t: *Token
+    n: usize
+    i: usize
+    file: const *char
+    a: *Arena
 
-static def parse_import(p: *P) -> *Decl:
-    pos: Pos = adv(p)->pos
-    d: *Decl = arena_alloc(p->a, sizeof(Decl))
-    d->kind = DL_IMPORT
-    d->is_include = False
-    d->pos = pos
-    # `import` is for P modules only; C headers go through `include`
-    if at(p, TK_HEADER):
-        fatal_at(p->file, pk(p)->pos, "'import <%s>' was removed: C headers use `include <%s>` (import is for P modules: import \"x.ph\")", pk(p)->text, pk(p)->text)
-    elif at(p, TK_STRING):
-        raw: const *char = adv(p)->text  # with quotes
-        len: usize = strlen(raw)
-        d->import_path = arena_strndup(p->a, raw + 1, len - 2 if len >= 2 else 0)
-        d->import_system = False
-        pl: usize = strlen(d->import_path)
-        if pl < 3 or strcmp(d->import_path + pl - 3, ".ph") != 0:
-            fatal_at(p->file, d->pos, "import \"%s\": import takes a P header (.ph); for a C header use `include \"%s\"`", d->import_path, d->import_path)
-    else:
-        fatal_at(p->file, pk(p)->pos, "import expects a P header: import \"module.ph\" (C headers use include <...>)")
-    expect(p, TK_NEWLINE, "import")
-    return d
+    static def pk(self: *P) -> *Token
+    static def pk1(self: *P) -> *Token
+    static def pk2(self: *P) -> *Token
+    static def at(self: *P, k: TokKind) -> bool
+    static def adv(self: *P) -> *Token
+    static def accept(self: *P, k: TokKind) -> bool
+    static def expect(self: *P, k: TokKind, ctx: const *char) -> *Token
+    static def expect_gt(self: *P)
+    static def parse_type(self: *P) -> *Type
+    static def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr
+    static def parse_stmtexpr(self: *P) -> *Expr
+    static def parse_primary(self: *P) -> *Expr
+    static def parse_postfix(self: *P) -> *Expr
+    static def try_paren_cast(self: *P) -> *Expr
+    static def parse_unary(self: *P) -> *Expr
+    static def parse_mul(self: *P) -> *Expr
+    static def parse_add(self: *P) -> *Expr
+    static def parse_shift(self: *P) -> *Expr
+    static def parse_rel(self: *P) -> *Expr
+    static def parse_eq(self: *P) -> *Expr
+    static def parse_bitand(self: *P) -> *Expr
+    static def parse_bitxor(self: *P) -> *Expr
+    static def parse_bitor(self: *P) -> *Expr
+    static def parse_not(self: *P) -> *Expr
+    static def parse_and(self: *P) -> *Expr
+    static def parse_or(self: *P) -> *Expr
+    static def parse_ternary(self: *P) -> *Expr
+    static def parse_expr(self: *P) -> *Expr
+    static def parse_init_elem(self: *P, out: *Vec<*Expr>)
+    static def parse_initializer(self: *P) -> *Expr
+    static def end_stmt(self: *P, what: const *char)
+    static def parse_block(self: *P) -> *Block
+    static def parse_var_stmt(self: *P, is_const: bool) -> *Stmt
+    static def parse_if(self: *P) -> *Stmt
+    static def parse_while(self: *P) -> *Stmt
+    static def parse_do(self: *P) -> *Stmt
+    static def parse_for(self: *P) -> *Stmt
+    static def parse_match(self: *P) -> *Stmt
+    static def parse_with(self: *P) -> *Stmt
+    static def parse_stmt(self: *P) -> *Stmt
+    static def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func
+    static def parse_struct_or_union(self: *P, is_union: bool) -> *Decl
+    static def parse_enum(self: *P) -> *Decl
+    static def parse_c_include(self: *P) -> *Decl
+    static def parse_import(self: *P) -> *Decl
+    static def parse_instantiate(self: *P) -> *Decl
+    static def parse_top(self: *P) -> *Decl
 
-# declare Vec<int> / implement Vec<int> — explicit instantiation of a generic
-# implement Str (no <>) — materializes bodies of a struct declared in .ph
-static def parse_instantiate(p: *P) -> *Decl:
-    kw: *Token = adv(p)
-    d: *Decl = arena_alloc(p->a, sizeof(Decl))
-    d->kind = DL_DECLARE if kw->kind == TK_DECLARE else DL_IMPLEMENT
-    if kw->kind == TK_INLINE:
-        d->inline_inst = True   # declare+implement, static inline bodies
-    d->pos = kw->pos
-    gname: *Token = expect(p, TK_IDENT, "struct name")
-    d->name = gname->text
-    targs: Vec<*Type>
-    targs.init()
-    if accept(p, TK_LT):
-        do:
-            targs.push(parse_type(p))
-        while accept(p, TK_COMMA)
-        expect_gt(p)
-    elif d->kind == DL_DECLARE:
-        fatal_at(p->file, kw->pos, "declare requires type arguments (a non-generic struct is already defined by its own .ph)")
-    elif d->inline_inst:
-        fatal_at(p->file, kw->pos, "inline instantiation requires type arguments (use 'implement %s' for a non-generic struct)", d->name)
-    gt: *Type = ty_name(p->a, gname->text)
-    gt->targs = targs.data
-    gt->ntargs = targs.len
-    d->type = gt
-    expect(p, TK_NEWLINE, "declare/implement")
-    return d
+    # ---------- primitives ----------
+    static def pk(self: *P) -> *Token:
+        return &self->t[self->i]
 
-static def parse_top(p: *P) -> *Decl:
-    is_extern: bool = accept(p, TK_EXTERN)   # storage class: declaration, not def
-    t: *Token = pk(p)
-    match t->kind:
-        case TK_IMPORT:
-            return parse_import(p)
-        case TK_DECLARE, TK_IMPLEMENT:
-            return parse_instantiate(p)
-        case TK_STRUCT:
-            return parse_struct_or_union(p, False)
-        case TK_UNION:
-            warn_at(p->file, t->pos, "'union' in Plang is deprecated and will be removed in a future version")
-            return parse_struct_or_union(p, True)
-        case TK_ENUM:
-            return parse_enum(p)
-        case TK_STATIC, TK_INLINE, TK_DEF:
-            # `inline Vec<int>` (instantiation) vs `inline def f...` (modifier)
-            if t->kind == TK_INLINE and pk1(p)->kind == TK_IDENT:
-                return parse_instantiate(p)
-            st: bool = False
-            inl: bool = False
-            while at(p, TK_STATIC) or at(p, TK_INLINE):
-                if adv(p)->kind == TK_STATIC:
-                    st = True
+    static def pk1(self: *P) -> *Token:
+        return &self->t[self->i + 1] if self->i + 1 < self->n else &self->t[self->n - 1]
+
+    static def pk2(self: *P) -> *Token:
+        return &self->t[self->i + 2] if self->i + 2 < self->n else &self->t[self->n - 1]
+
+    static def at(self: *P, k: TokKind) -> bool:
+        return self->pk()->kind == k
+
+    static def adv(self: *P) -> *Token:
+        t: *Token = &self->t[self->i]
+        if t->kind != TK_EOF:
+            self->i += 1
+        return t
+
+    static def accept(self: *P, k: TokKind) -> bool:
+        if self->at(k):
+            self->adv()
+            return True
+        return False
+
+    static def expect(self: *P, k: TokKind, ctx: const *char) -> *Token:
+        if not self->at(k):
+            fatal_at(self->file, self->pk()->pos, "expected %s in %s, found %s", tok_kind_name(k), ctx, tok_kind_name(self->pk()->kind))
+        return self->adv()
+
+    # closes generic type arguments: '>' — splitting '>>', '>>=' and '>=' when
+    # needed (Vec<Vec<int>> lexes the end as '>>')
+    static def expect_gt(self: *P):
+        k: TokKind = self->pk()->kind
+        if k == TK_GT:
+            self->adv()
+        elif k == TK_SHR:
+            self->pk()->kind = TK_GT       # consumes one '>' from '>>'
+        elif k == TK_SHR_EQ:
+            self->pk()->kind = TK_GE       # consumes one '>' from '>>='
+        elif k == TK_GE:
+            self->pk()->kind = TK_ASSIGN   # consumes the '>' from '>='
+        else:
+            fatal_at(self->file, self->pk()->pos, "expected '>' closing type arguments, found %s", tok_kind_name(k))
+
+    static def parse_type(self: *P) -> *Type:
+        is_const: bool = False
+        is_volatile: bool = False
+        is_restrict: bool = False
+        while True:
+            if self->accept(TK_CONST):
+                is_const = True
+            elif self->accept(TK_VOLATILE):
+                is_volatile = True
+            elif self->accept(TK_RESTRICT):
+                is_restrict = True
+            else:
+                break
+        stars = 0
+        while self->accept(TK_STAR):
+            stars += 1
+            # 'restrict' after '*' (int * restrict p): qualifies the pointer
+            while self->at(TK_RESTRICT) or self->at(TK_CONST) or self->at(TK_VOLATILE):
+                if self->accept(TK_RESTRICT):
+                    is_restrict = True
+                elif self->accept(TK_CONST):
+                    is_const = True
                 else:
-                    inl = True
-            f: *Func = parse_func(p, st, inl, None)
-            d: *Decl = arena_alloc(p->a, sizeof(Decl))
-            d->kind = DL_FUNC
-            d->pos = f->pos
-            d->func = f
-            return d
-        case TK_CONST, TK_IDENT:
-            # contextual `include <h>` / `include "h"`: recognized only here, when
-            # `include` is followed by `<` or a string. Otherwise it stays a normal
-            # identifier (a global named `include`, etc. keeps working).
-            if not is_extern and at(p, TK_IDENT) and strcmp(pk(p)->text, "include") == 0 and (pk1(p)->kind == TK_LT or pk1(p)->kind == TK_STRING):
-                return parse_c_include(p)
-            is_const: bool = accept(p, TK_CONST)
-            # `const def f(...)`: function evaluated at compile-time (not emitted in the binary)
-            if is_const and at(p, TK_DEF):
-                cf: *Func = parse_func(p, False, False, None)
-                cf->is_comptime = True
-                cd: *Decl = arena_alloc(p->a, sizeof(Decl))
-                cd->kind = DL_FUNC
-                cd->pos = cf->pos
-                cd->func = cf
-                return cd
-            name: *Token = expect(p, TK_IDENT, "global declaration")
-            d2: *Decl = arena_alloc(p->a, sizeof(Decl))
-            with d2:
-                .kind = DL_VAR
-                .pos = name->pos
-                .name = name->text
+                    self->adv()
+                    is_volatile = True
+
+        t: *Type
+        if self->at(TK_LPAREN):
+            # grouped type: *(T[N]) = pointer to array (char (*p)[4]);
+            # disambiguates from *char[4] (array of pointers). The `*` already read
+            # wrap the group; dims after the group are external.
+            self->adv()
+            inner: *Type = self->parse_type()
+            self->expect(TK_RPAREN, "tipo agrupado (T)")
+            t = inner
+            for kg in range(stars):
+                t = ty_ptr(self->a, t)
+            gdims: *Expr[16]
+            gn = 0
+            while self->accept(TK_LBRACKET):
+                if self->at(TK_RBRACKET):
+                    gdims[gn] = None
+                else:
+                    gdims[gn] = self->parse_expr()
+                gn += 1
+                self->expect(TK_RBRACKET, "array dimension")
+            kk: i32
+            for kk in range(gn - 1, -1, -1):
+                t = ty_array(self->a, t, gdims[kk])
+            return t
+        if self->at(TK_DEF):
+            # function pointer:  def(T1, T2, ...) -> Ret   (Ret optional = void)
+            # A function value in P is always a pointer, so this produces
+            # TY_PTR(TY_FUNC): inner = return type, targs = parameter types.
+            self->adv()
+            self->expect(TK_LPAREN, "def( for function pointer")
+            ptypes: Vec<*Type>
+            ptypes.init()
+            if not self->at(TK_RPAREN):
+                do:
+                    if self->at(TK_ELLIPSIS):
+                        self->adv()
+                        ptypes.push(ty_name(self->a, "..."))   # variadic sentinel
+                        break
+                    # optional parameter name (`def(ctx: *void)` — documentation
+                    # only; a function pointer cares about the TYPE alone)
+                    if self->at(TK_IDENT) and self->pk1()->kind == TK_COLON:
+                        self->adv()
+                        self->adv()
+                    ptypes.push(self->parse_type())
+                while self->accept(TK_COMMA)
+            self->expect(TK_RPAREN, "def(...) for function pointer")
+            ret: *Type = ty_name(self->a, "void")
+            if self->accept(TK_ARROW):
+                ret = self->parse_type()
+            ft: *Type = ty_func(self->a, ret)
+            ft->targs = ptypes.data
+            ft->ntargs = ptypes.len
+            t = ty_ptr(self->a, ft)
+        else:
+            id: *Token = self->expect(TK_IDENT, "type name")
+            name: const *char = id->text
+            # multi-word C types: "unsigned int", "long long", "long double"...
+            words = 1
+            while words < 3 and is_type_modifier(name) and self->at(TK_IDENT) and is_type_base_word(self->pk()->text):
+                name = self->a->printf("%s %s", name, self->adv()->text)
+                words += 1
+
+            # generic arguments: Vec<int>, Map<int, *char>...
+            targs: Vec<*Type>
+            targs.init()
+            if self->accept(TK_LT):
+                do:
+                    targs.push(self->parse_type())
+                while self->accept(TK_COMMA)
+                self->expect_gt()
+
+            t = ty_name(self->a, name)
+            with t:
                 .is_const = is_const
-                .is_extern = is_extern
-                if accept(p, TK_COLON):
-                    .type = parse_type(p)   # explicit type
-                if accept(p, TK_ASSIGN):
-                    .init = parse_initializer(p)
-                elif .type == None:
-                    fatal_at(p->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text)
-                elif is_const and not is_extern:
-                    fatal_at(p->file, name->pos, "const requires a value")
-            expect(p, TK_NEWLINE, "global declaration")
-            return d2
-        case _:
-            fatal_at(p->file, t->pos, "invalid top-level declaration (found %s)", tok_kind_name(t->kind))
-            return None
+                .is_volatile = is_volatile
+                .is_restrict = is_restrict
+                .targs = targs.data
+                .ntargs = targs.len
+        k: i32
+        for k in range(stars):
+            t = ty_ptr(self->a, t)
+
+        # array dimensions: the first one written is the outermost
+        dims: *Expr[16]
+        nd = 0
+        while self->accept(TK_LBRACKET):
+            if nd >= 16:
+                fatal_at(self->file, self->pk()->pos, "array with too many dimensions")
+            # C99 qualified parameter declarator: T x[static N], [const N]...
+            while self->at(TK_STATIC) or self->at(TK_CONST) or self->at(TK_VOLATILE) or self->at(TK_RESTRICT):
+                self->adv()
+            if self->at(TK_RBRACKET):
+                dims[nd] = None
+            else:
+                dims[nd] = self->parse_expr()
+            nd += 1
+            self->expect(TK_RBRACKET, "array dimension")
+        for k in range(nd - 1, -1, -1):
+            t = ty_array(self->a, t, dims[k])
+        return t
+
+    # ---------- expressions ----------
+    static def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr:
+        e: *Expr = ex_new(self->a, EX_BINARY, pos)
+        e->op = op
+        e->lhs = l
+        e->rhs = r
+        return e
+
+    # GNU statement expression: ({ s1; s2; ...; value }). Inside the parens,
+    # newlines are suppressed, so statements are separated by ';'. If the
+    # last item is an expression (no ';' before the '}'), it's the VALUE; otherwise
+    # the value is void. The C backend lowers it to the comma operator (exprs only); QBE
+    # emits the flow directly (accepts declarations/control).
+    static def parse_stmtexpr(self: *P) -> *Expr:
+        pos: Pos = self->pk()->pos
+        self->adv()  # '('
+        self->adv()  # '{'
+        e: *Expr = ex_new(self->a, EX_STMTEXPR, pos)
+        stmts: Vec<*Stmt>
+        stmts.init()
+        val: *Expr = None
+        while not self->at(TK_RBRACE) and not self->at(TK_EOF):
+            s: *Stmt = self->parse_stmt()
+            if self->at(TK_RBRACE) and s->kind == ST_EXPR:
+                val = s->expr   # last expr without ';' = value of the stmt-expr
+            else:
+                stmts.push(s)
+        self->expect(TK_RBRACE, "statement expression")
+        self->expect(TK_RPAREN, "statement expression")
+        blk: *Block = self->a->alloc(sizeof(Block))
+        blk->stmts = stmts.data
+        blk->n = stmts.len
+        e->xblock = blk
+        e->lhs = val
+        return e
+
+    static def parse_primary(self: *P) -> *Expr:
+        t: *Token = self->pk()
+        e: *Expr
+        match t->kind:
+            case TK_IDENT:
+                # va_arg(ap, Type): special form (the 2nd arg is a TYPE)
+                if t->text == "va_arg":
+                    self->adv()
+                    if self->at(TK_LPAREN):
+                        self->adv()
+                        va: *Expr = ex_new(self->a, EX_VAARG, t->pos)
+                        va->lhs = self->parse_expr()
+                        self->expect(TK_COMMA, "va_arg(ap, type)")
+                        va->cast_type = self->parse_type()
+                        self->expect(TK_RPAREN, "va_arg")
+                        return va
+                    e = ex_new(self->a, EX_IDENT, t->pos)
+                    e->text = "va_arg"
+                    return e
+                e = ex_new(self->a, EX_IDENT, t->pos)
+                e->text = self->adv()->text
+                return e
+            case TK_NUMBER:
+                e = ex_new(self->a, EX_NUMBER, t->pos)
+                e->text = self->adv()->text
+                return e
+            case TK_STRING:
+                e = ex_new(self->a, EX_STRING, t->pos)
+                e->text = self->adv()->text
+                return e
+            case TK_CHARLIT:
+                e = ex_new(self->a, EX_CHARLIT, t->pos)
+                e->text = self->adv()->text
+                return e
+            case TK_TRUE:
+                self->adv()
+                return ex_new(self->a, EX_TRUE, t->pos)
+            case TK_FALSE:
+                self->adv()
+                return ex_new(self->a, EX_FALSE, t->pos)
+            case TK_NONE:
+                self->adv()
+                return ex_new(self->a, EX_NONE, t->pos)
+            case TK_LPAREN:
+                # GNU statement expression: ({ stmt; stmt; value })
+                if self->pk1()->kind == TK_LBRACE:
+                    return self->parse_stmtexpr()
+                # walrus: (name := expr) — assignment EXPRESSION, Python-style
+                if self->pk1()->kind == TK_IDENT and self->pk2() != None and self->pk2()->kind == TK_WALRUS:
+                    self->adv()  # (
+                    wname: const *char = self->adv()->text
+                    wpos: Pos = self->adv()->pos   # :=
+                    w: *Expr = ex_new(self->a, EX_WALRUS, wpos)
+                    w->text = wname
+                    w->lhs = self->parse_expr()
+                    self->expect(TK_RPAREN, "walrus expression")
+                    w->parened = True
+                    return w
+                self->adv()
+                e = self->parse_expr()
+                self->expect(TK_RPAREN, "parenthesized expression")
+                return e
+            case TK_DOT:
+                # `.field` without a receiver: implicit member of the innermost `with`.
+                # sema validates that we're inside a `with` and resolves the receiver.
+                self->adv()  # '.'
+                base: *Expr = ex_new(self->a, EX_WITHSELF, t->pos)
+                f: *Expr = ex_new(self->a, EX_FIELD, t->pos)
+                f->op = TK_ARROW  # receiver is a pointer; fix_field_op confirms
+                f->lhs = base
+                f->field = self->expect(TK_IDENT, "implicit member ('.field' inside 'with')")->text
+                return f
+            case _:
+                fatal_at(self->file, t->pos, "invalid expression (found %s)", tok_kind_name(t->kind))
+                return None
+
+    static def parse_postfix(self: *P) -> *Expr:
+        e: *Expr = self->parse_primary()
+        while True:
+            pos: Pos = self->pk()->pos
+            if self->accept(TK_LBRACKET):
+                ix: *Expr = ex_new(self->a, EX_INDEX, pos)
+                ix->lhs = e
+                ix->rhs = self->parse_expr()
+                self->expect(TK_RBRACKET, "array index")
+                e = ix
+            elif self->accept(TK_LPAREN):
+                call: *Expr = ex_new(self->a, EX_CALL, pos)
+                call->lhs = e
+                args: Vec<*Expr>
+                args.init()
+                if not self->at(TK_RPAREN):
+                    do:
+                        # `out x` / `ref x` / `in x` — by-ref argument sugar:
+                        # passes &x, self-documenting at the call site (C#-style)
+                        cbrk: i32 = PK_NONE
+                        if self->at(TK_IDENT) and (self->pk1()->kind == TK_IDENT or self->pk1()->kind == TK_STAR or self->pk1()->kind == TK_LPAREN):
+                            if self->pk()->text == "out":
+                                cbrk = PK_OUT
+                            elif self->pk()->text == "ref":
+                                cbrk = PK_REF
+                        elif self->at(TK_IN) and (self->pk1()->kind == TK_IDENT or self->pk1()->kind == TK_STAR or self->pk1()->kind == TK_LPAREN):
+                            cbrk = PK_IN
+                        if cbrk != PK_NONE:
+                            opos: Pos = self->adv()->pos
+                            oa: *Expr = ex_new(self->a, EX_UNARY, opos)
+                            oa->op = TK_AMP
+                            oa->lhs = self->parse_unary()
+                            oa->byref = cbrk
+                            args.push(oa)
+                            continue
+                        # named argument: name=value (EX_DESIG marker; sema
+                        # resolves it to the parameter's position)
+                        if self->at(TK_IDENT) and self->pk1()->kind == TK_ASSIGN:
+                            nt: *Token = self->adv()
+                            self->adv()  # =
+                            na: *Expr = ex_new(self->a, EX_DESIG, nt->pos)
+                            na->field = nt->text
+                            na->lhs = self->parse_expr()
+                            args.push(na)
+                        else:
+                            args.push(self->parse_expr())
+                    while self->accept(TK_COMMA)
+                self->expect(TK_RPAREN, "function call")
+                call->args = args.data
+                call->nargs = args.len
+                e = call
+            elif self->accept(TK_DOT):
+                f: *Expr = ex_new(self->a, EX_FIELD, pos)
+                f->op = TK_DOT
+                f->lhs = e
+                f->field = self->expect(TK_IDENT, "field access")->text
+                e = f
+            elif self->accept(TK_ARROW):
+                f2: *Expr = ex_new(self->a, EX_FIELD, pos)
+                f2->op = TK_ARROW
+                f2->lhs = e
+                f2->field = self->expect(TK_IDENT, "field access")->text
+                e = f2
+            else:
+                break
+        return e
+
+    # tries to recognize the pointer cast "(*type)(expr)"; if the shape doesn't
+    # match, backtracks and parses as a normal expression
+    static def try_paren_cast(self: *P) -> *Expr:
+        save: usize = self->i
+        pos: Pos = self->pk()->pos
+        self->adv()  # '('
+        stars = 0
+        while self->accept(TK_STAR):
+            stars += 1
+        if stars > 0 and self->at(TK_IDENT) and self->pk1()->kind == TK_RPAREN and self->pk2()->kind == TK_LPAREN:
+            name: const *char = self->adv()->text
+            self->adv()  # ')'
+            self->adv()  # '('
+            arg: *Expr = self->parse_expr()
+            self->expect(TK_RPAREN, "pointer cast")
+            t: *Type = ty_name(self->a, name)
+            for k in range(stars):
+                t = ty_ptr(self->a, t)
+            e: *Expr = ex_new(self->a, EX_CAST, pos)
+            e->cast_type = t
+            e->lhs = arg
+            e->cast_tentative = True  # sema confirms whether 'name' really is a type
+            return e
+        self->i = save
+        return None
+
+    static def parse_unary(self: *P) -> *Expr:
+        t: *Token = self->pk()
+        match t->kind:
+            case TK_MINUS, TK_PLUS, TK_TILDE, TK_STAR, TK_AMP:
+                self->adv()
+                e: *Expr = ex_new(self->a, EX_UNARY, t->pos)
+                e->op = t->kind
+                e->lhs = self->parse_unary()
+                return e
+            case TK_LPAREN:
+                if self->pk1()->kind == TK_STAR:
+                    c: *Expr = self->try_paren_cast()
+                    if c != None:
+                        return c
+                return self->parse_postfix()
+            case _:
+                return self->parse_postfix()
+
+    # binary levels, from strongest to weakest (mirrors the EBNF)
+    static def parse_mul(self: *P) -> *Expr:
+        e: *Expr = self->parse_unary()
+        while self->at(TK_STAR) or self->at(TK_SLASH) or self->at(TK_PERCENT):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_unary())
+        return e
+
+    static def parse_add(self: *P) -> *Expr:
+        e: *Expr = self->parse_mul()
+        while self->at(TK_PLUS) or self->at(TK_MINUS):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_mul())
+        return e
+
+    static def parse_shift(self: *P) -> *Expr:
+        e: *Expr = self->parse_add()
+        while self->at(TK_SHL) or self->at(TK_SHR):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_add())
+        return e
+
+    static def parse_rel(self: *P) -> *Expr:
+        e: *Expr = self->parse_shift()
+        while self->at(TK_LT) or self->at(TK_LE) or self->at(TK_GT) or self->at(TK_GE):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_shift())
+        return e
+
+    static def parse_eq(self: *P) -> *Expr:
+        e: *Expr = self->parse_rel()
+        while True:
+            # `is` / `is not` (contextual, like Python): pointer IDENTITY. Infix
+            # position is unambiguous — an identifier can never follow a complete
+            # expression — so the name `is` is not reserved.
+            if self->at(TK_IDENT) and self->pk()->text == "is":
+                ipos: Pos = self->adv()->pos
+                iop: i32 = TK_IS
+                if self->accept(TK_NOT):
+                    iop = TK_ISNOT
+                e = self->bin(iop, ipos, e, self->parse_rel())
+                continue
+            if self->at(TK_EQ) or self->at(TK_NE):
+                op: *Token = self->adv()
+                e = self->bin(op->kind, op->pos, e, self->parse_rel())
+                continue
+            # `x in y` / `x not in y`: membership (value bool; lowered by sema)
+            if self->at(TK_IN):
+                npos: Pos = self->adv()->pos
+                ie: *Expr = ex_new(self->a, EX_IN, npos)
+                ie->lhs = e
+                ie->rhs = self->parse_initializer() if self->at(TK_LBRACE) else self->parse_rel()
+                e = ie
+                continue
+            if self->at(TK_NOT) and self->pk1() != None and self->pk1()->kind == TK_IN:
+                nnpos: Pos = self->adv()->pos   # not
+                self->adv()                     # in
+                ne: *Expr = ex_new(self->a, EX_IN, nnpos)
+                ne->lhs = e
+                ne->rhs = self->parse_initializer() if self->at(TK_LBRACE) else self->parse_rel()
+                ne->op = TK_NOT
+                e = ne
+                continue
+            break
+        return e
+
+    static def parse_bitand(self: *P) -> *Expr:
+        e: *Expr = self->parse_eq()
+        while self->at(TK_AMP):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_eq())
+        return e
+
+    static def parse_bitxor(self: *P) -> *Expr:
+        e: *Expr = self->parse_bitand()
+        while self->at(TK_CARET):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_bitand())
+        return e
+
+    static def parse_bitor(self: *P) -> *Expr:
+        e: *Expr = self->parse_bitxor()
+        while self->at(TK_PIPE):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_bitxor())
+        return e
+
+    static def parse_not(self: *P) -> *Expr:
+        if self->at(TK_NOT):
+            op: *Token = self->adv()
+            e: *Expr = ex_new(self->a, EX_UNARY, op->pos)
+            e->op = TK_NOT
+            e->lhs = self->parse_not()
+            return e
+        return self->parse_bitor()
+
+    static def parse_and(self: *P) -> *Expr:
+        e: *Expr = self->parse_not()
+        while self->at(TK_AND):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_not())
+        return e
+
+    static def parse_or(self: *P) -> *Expr:
+        e: *Expr = self->parse_and()
+        while self->at(TK_OR):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_and())
+        return e
+
+    # Python-style ternary: value if cond else other
+    static def parse_ternary(self: *P) -> *Expr:
+        v: *Expr = self->parse_or()
+        if self->at(TK_IF):
+            pos: Pos = self->adv()->pos
+            c: *Expr = self->parse_or()
+            self->expect(TK_ELSE, "ternary (missing 'else')")
+            o: *Expr = self->parse_ternary()
+            e: *Expr = ex_new(self->a, EX_TERNARY, pos)
+            e->cond = c
+            e->lhs = v
+            e->rhs = o
+            return e
+        return v
+
+    static def parse_expr(self: *P) -> *Expr:
+        return self->parse_ternary()
+
+    # a list element: [idx]=v / .field=v (C99 designator) or value/nested.
+    # Extensions reinterpreted as plain C99 (the GNU form doesn't survive into the AST):
+    #   [a ... b] = v  ->  [a]=v, [a+1]=v, ..., [b]=v   (expansion)
+    #   .a.j = v / [i][j] = v  ->  .a = {.j = v} / [i] = {[j] = v}  (nesting)
+    static def parse_init_elem(self: *P, out: *Vec<*Expr>):
+        if self->at(TK_LBRACKET) or self->at(TK_DOT):
+            pos: Pos = self->pk()->pos
+            d: *Expr = ex_new(self->a, EX_DESIG, pos)
+            lo: i64 = 0
+            hi: i64 = 0
+            is_range: bool = False
+            if self->at(TK_LBRACKET):
+                self->adv()
+                d->rhs = self->parse_expr()   # index
+                if self->at(TK_ELLIPSIS):
+                    self->adv()
+                    he: *Expr = self->parse_expr()
+                    if d->rhs->kind != EX_NUMBER or he->kind != EX_NUMBER:
+                        fatal_at(self->file, pos, "range designator bounds must be integer literals")
+                    lo = strtoll(d->rhs->text, None, 0)
+                    hi = strtoll(he->text, None, 0)
+                    if hi < lo:
+                        fatal_at(self->file, pos, "range designator with descending bounds")
+                    is_range = True
+                self->expect(TK_RBRACKET, "designator index")
+            else:
+                self->adv()  # .
+                d->field = self->expect(TK_IDENT, "field designator")->text
+            # chained designators: each extra level becomes a nested list
+            chain: *Expr[8]
+            nchain = 0
+            while self->at(TK_LBRACKET) or self->at(TK_DOT):
+                cpos: Pos = self->pk()->pos
+                cd: *Expr = ex_new(self->a, EX_DESIG, cpos)
+                if self->accept(TK_LBRACKET):
+                    cd->rhs = self->parse_expr()
+                    self->expect(TK_RBRACKET, "designator index")
+                else:
+                    self->adv()  # .
+                    cd->field = self->expect(TK_IDENT, "field designator")->text
+                if nchain < 8:
+                    chain[nchain] = cd
+                    nchain += 1
+            self->expect(TK_ASSIGN, "designator (missing '=')")
+            v: *Expr = self->parse_initializer()
+            # wraps from the inside out: .a.j=v -> .a = {.j = v}
+            ci: i32
+            for ci in range(nchain - 1, -1, -1):
+                chain[ci]->lhs = v
+                wrap: *Expr = ex_new(self->a, EX_INITLIST, chain[ci]->pos)
+                wa: **Expr = self->a->alloc(sizeof(v))
+                wa[0] = chain[ci]
+                wrap->args = wa
+                wrap->nargs = 1
+                v = wrap
+            d->lhs = v
+            if is_range:
+                # range: expands into unit designators (same value)
+                k: i64 = lo
+                while k <= hi:
+                    dk: *Expr = ex_new(self->a, EX_DESIG, pos)
+                    ik: *Expr = ex_new(self->a, EX_NUMBER, pos)
+                    ik->text = self->a->printf("%lld", k)
+                    dk->rhs = ik
+                    dk->lhs = v
+                    out->push(dk)
+                    k += 1
+                return
+            out->push(d)
+            return
+        out->push(self->parse_initializer())
+
+    static def parse_initializer(self: *P) -> *Expr:
+        if self->at(TK_LBRACE):
+            pos: Pos = self->adv()->pos
+            e: *Expr = ex_new(self->a, EX_INITLIST, pos)
+            args: Vec<*Expr>
+            args.init()
+            if not self->at(TK_RBRACE):
+                do:
+                    self->parse_init_elem(&args)
+                while self->accept(TK_COMMA) and not self->at(TK_RBRACE)
+            self->expect(TK_RBRACE, "initializer")
+            e->args = args.data
+            e->nargs = args.len
+            return e
+        return self->parse_expr()
+
+    # end of a simple statement: ';' (more statements on the same line) or newline.
+    # a trailing ';' before the newline is accepted, as is ';;'.
+    static def end_stmt(self: *P, what: const *char):
+        if self->at(TK_SEMI):
+            while self->at(TK_SEMI):
+                self->adv()
+            self->accept(TK_NEWLINE)
+            return
+        if self->at(TK_RBRACE):
+            return  # end of statement expression ({ ... }): '}' is not consumed here
+        self->expect(TK_NEWLINE, what)
+
+    static def parse_block(self: *P) -> *Block:
+        self->expect(TK_NEWLINE, "start of block (after ':')")
+        self->expect(TK_INDENT, "indented block")
+        v: Vec<*Stmt>
+        v.init()
+        while not self->at(TK_DEDENT) and not self->at(TK_EOF):
+            v.push(self->parse_stmt())
+        self->expect(TK_DEDENT, "end of block")
+        b: *Block = self->a->alloc(sizeof(Block))
+        b->stmts = v.data
+        b->n = v.len
+        return b
+
+    static def parse_var_stmt(self: *P, is_const: bool) -> *Stmt:
+        name: *Token = self->expect(TK_IDENT, "variable declaration")
+        s: *Stmt = st_new(self->a, ST_VAR, name->pos)
+        s->name = name->text
+        s->is_const = is_const
+        # explicit type (`name: type`) or inferred (`name = value`, no ':').
+        # type == None signals inference for sema (via type_of of the initializer).
+        if self->accept(TK_COLON):
+            s->type = self->parse_type()
+        if self->accept(TK_ASSIGN):
+            s->init = self->parse_initializer()
+        elif s->type == None:
+            fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text)
+        elif is_const:
+            fatal_at(self->file, name->pos, "const requires a value ('const %s: T = ...')", name->text)
+        self->end_stmt("variable declaration")
+        return s
+
+    static def parse_if(self: *P) -> *Stmt:
+        pos: Pos = self->adv()->pos  # if
+        s: *Stmt = st_new(self->a, ST_IF, pos)
+        s->if_sel = -1  # -1 = runtime; sema may fold it to one branch
+        conds: Vec<*Expr>
+        blocks: Vec<*Block>
+        conds.init()
+        blocks.init()
+        conds.push(self->parse_expr())
+        self->expect(TK_COLON, "if")
+        blocks.push(self->parse_block())
+        while self->at(TK_ELIF):
+            self->adv()
+            conds.push(self->parse_expr())
+            self->expect(TK_COLON, "elif")
+            blocks.push(self->parse_block())
+        if self->accept(TK_ELSE):
+            self->expect(TK_COLON, "else")
+            s->else_block = self->parse_block()
+        s->conds = conds.data
+        s->blocks = blocks.data
+        s->nconds = conds.len
+        return s
+
+    static def parse_while(self: *P) -> *Stmt:
+        pos: Pos = self->adv()->pos
+        s: *Stmt = st_new(self->a, ST_WHILE, pos)
+        s->cond = self->parse_expr()
+        self->expect(TK_COLON, "while")
+        s->body = self->parse_block()
+        return s
+
+    static def parse_do(self: *P) -> *Stmt:
+        pos: Pos = self->adv()->pos
+        s: *Stmt = st_new(self->a, ST_DO, pos)
+        self->expect(TK_COLON, "do")
+        s->body = self->parse_block()
+        self->expect(TK_WHILE, "do-while (missing 'while' after the block)")
+        s->cond = self->parse_expr()
+        self->expect(TK_NEWLINE, "do-while")
+        return s
+
+    static def parse_for(self: *P) -> *Stmt:
+        pos: Pos = self->adv()->pos
+        s: *Stmt = st_new(self->a, ST_FOR, pos)
+        s->var = self->expect(TK_IDENT, "for")->text
+        if self->accept(TK_COMMA):
+            s->var2 = self->expect(TK_IDENT, "for (second loop variable)")->text
+        self->expect(TK_IN, "for (expected 'in')")
+        # `for v in xs:` — direct iteration over a sized array's VALUES. Recognized
+        # when what follows is not range(...)/enumerate(...): sema synthesizes the
+        # index and lowers it like enumerate (pure sugar).
+        if not (self->at(TK_IDENT) and (self->pk()->text == "range" or self->pk()->text == "enumerate") and self->pk1()->kind == TK_LPAREN):
+            if s->var2 != None:
+                fatal_at(self->file, self->pk()->pos, "iterating values takes ONE variable (`for v in xs`); use enumerate for index+value")
+            s->var2 = s->var    # the named variable receives the VALUE
+            s->var = ""         # sema synthesizes the hidden index
+            s->from = None
+            s->to = self->parse_expr()   # the array; sema swaps in its length
+            s->step = None
+            self->expect(TK_COLON, "for")
+            s->body = self->parse_block()
+            return s
+        r: *Token = self->expect(TK_IDENT, "for (expected 'range' or 'enumerate')")
+        is_enum: bool = r->text == "enumerate"
+        self->expect(TK_LPAREN, r->text)
+        a1: *Expr = self->parse_expr()
+        a2: *Expr = None
+        a3: *Expr = None
+        if self->accept(TK_COMMA):
+            a2 = self->parse_expr()
+            if self->accept(TK_COMMA):
+                a3 = self->parse_expr()
+        self->expect(TK_RPAREN, r->text)
+        self->expect(TK_COLON, "for")
+        if is_enum:
+            # `for i, v in enumerate(arr)` — needs exactly two vars and one arg. Sema
+            # lowers it to a range over arr's length + a `v = arr[i]` binding.
+            if s->var2 == None:
+                fatal_at(self->file, r->pos, "enumerate(...) needs two loop variables: `for i, v in enumerate(x)`")
+            if a2 != None:
+                fatal_at(self->file, r->pos, "enumerate(...) takes a single argument")
+            s->from = None
+            s->to = a1        # the array; sema replaces this with its length
+            s->step = None
+        else:
+            if s->var2 != None:
+                fatal_at(self->file, r->pos, "range(...) has a single loop variable (did you mean enumerate?)")
+            if a2 != None:
+                s->from = a1
+                s->to = a2
+            else:
+                s->from = None  # 0
+                s->to = a1
+            s->step = a3  # None = 1
+        s->body = self->parse_block()
+        return s
+
+    static def parse_match(self: *P) -> *Stmt:
+        pos: Pos = self->adv()->pos
+        s: *Stmt = st_new(self->a, ST_MATCH, pos)
+        s->tm_sel = -1
+        # `match type(x):` — type-based selection (compile-time). `type` is not a
+        # keyword; we recognize the `type ( expr )` shape in the subject position.
+        if self->at(TK_IDENT) and self->pk()->text == "type" and self->pk1()->kind == TK_LPAREN:
+            self->adv()  # type
+            self->adv()  # (
+            s->is_typematch = True
+            s->subject = self->parse_expr()
+            self->expect(TK_RPAREN, "match type(x)")
+        else:
+            s->subject = self->parse_expr()
+        self->expect(TK_COLON, "match")
+        self->expect(TK_NEWLINE, "match")
+        self->expect(TK_INDENT, "match body")
+        cases: Vec<*MatchCase>
+        cases.init()
+        while self->at(TK_CASE):
+            self->adv()
+            mc: *MatchCase = self->a->alloc(sizeof(MatchCase))
+            if self->at(TK_IDENT) and self->pk()->text == "_":
+                self->adv()
+                mc->is_default = True
+            elif s->is_typematch:
+                # type case: `case int:`, `case *Node:`, `case Point:` ...
+                mc->type_pat = self->parse_type()
+            else:
+                vals: Vec<*Expr>
+                vals.init()
+                do:
+                    vals.push(self->parse_expr())
+                while self->accept(TK_COMMA)
+                mc->vals = vals.data
+                mc->nvals = vals.len
+            self->expect(TK_COLON, "case")
+            mc->body = self->parse_block()
+            cases.push(mc)
+        self->expect(TK_DEDENT, "end of match")
+        if cases.is_empty():
+            fatal_at(self->file, pos, "match without any case")
+        s->cases = cases.data
+        s->ncases = cases.len
+        return s
+
+    static def parse_with(self: *P) -> *Stmt:
+        pos: Pos = self->adv()->pos  # with
+        s: *Stmt = st_new(self->a, ST_WITH, pos)
+        s->expr = self->parse_expr()   # the target (struct or *struct)
+        self->expect(TK_COLON, "with")
+        s->body = self->parse_block()
+        return s
+
+    static def parse_stmt(self: *P) -> *Stmt:
+        t: *Token = self->pk()
+        if t->kind == TK_IDENT and t->text == "pass" and (self->pk1()->kind == TK_NEWLINE or self->pk1()->kind == TK_SEMI):
+            self->adv()
+            if self->at(TK_NEWLINE):
+                self->adv()
+            return st_new(self->a, ST_PASS, t->pos)
+        # `global x` / `nonlocal x` (contextual, like Python): scope declarations.
+        # Two identifiers in a row never start any other P statement. ONE name per
+        # line (write `global a` / `global b` on separate lines for several).
+        if t->kind == TK_IDENT and self->pk1()->kind == TK_IDENT and (t->text in {"global", "nonlocal"}):
+            kw: StmtKind = ST_GLOBAL if t->text[0] == 'g' else ST_NONLOCAL
+            self->adv()
+            first: *Stmt = None
+            extra: Vec<*Stmt>
+            extra.init()
+            do:
+                nm: *Token = self->expect(TK_IDENT, "global/nonlocal")
+                gs: *Stmt = st_new(self->a, kw, nm->pos)
+                gs->name = nm->text
+                if first == None:
+                    first = gs
+                else:
+                    extra.push(gs)
+            while self->accept(TK_COMMA)
+            self->expect(TK_NEWLINE, "global/nonlocal")
+            if extra.len == 0:
+                return first
+            blk: *Stmt = st_new(self->a, ST_BLOCK, t->pos)   # several names: wrap
+            bb: *Block = self->a->alloc(sizeof(Block))
+            all: **Stmt = self->a->alloc(usize(extra.len + 1) * sizeof(*all))
+            all[0] = first
+            for i in range(extra.len):
+                all[i + 1] = extra.get(i)
+            bb->stmts = all
+            bb->n = extra.len + 1
+            blk->body = bb
+            return blk
+        if t->kind == TK_IDENT and self->pk1()->kind == TK_COLON:
+            if self->pk2()->kind == TK_NEWLINE:  # label
+                s: *Stmt = st_new(self->a, ST_LABEL, t->pos)
+                s->label = self->adv()->text
+                self->adv()  # ':'
+                self->adv()  # NEWLINE
+                return s
+            return self->parse_var_stmt(False)
+        match t->kind:
+            case TK_IF:
+                return self->parse_if()
+            case TK_WHILE:
+                return self->parse_while()
+            case TK_FOR:
+                return self->parse_for()
+            case TK_DO:
+                return self->parse_do()
+            case TK_MATCH:
+                return self->parse_match()
+            case TK_WITH:
+                return self->parse_with()
+            case TK_CONST:
+                self->adv()
+                return self->parse_var_stmt(True)
+            case TK_RETURN:
+                self->adv()
+                s: *Stmt = st_new(self->a, ST_RETURN, t->pos)
+                if not self->at(TK_NEWLINE):
+                    s->expr = self->parse_expr()
+                self->end_stmt("return")
+                return s
+            case TK_BREAK:
+                self->adv()
+                self->end_stmt("break")
+                return st_new(self->a, ST_BREAK, t->pos)
+            case TK_CONTINUE:
+                self->adv()
+                self->end_stmt("continue")
+                return st_new(self->a, ST_CONTINUE, t->pos)
+            case TK_GOTO:
+                self->adv()
+                s2: *Stmt = st_new(self->a, ST_GOTO, t->pos)
+                s2->label = self->expect(TK_IDENT, "goto")->text
+                self->end_stmt("goto")
+                return s2
+            case TK_DEFER:
+                self->adv()
+                sd: *Stmt = st_new(self->a, ST_DEFER, t->pos)
+                if self->accept(TK_COLON):
+                    sd->body = self->parse_block()
+                else:
+                    # defer <expr|assignment> — becomes a single-statement block
+                    de: *Expr = self->parse_expr()
+                    inner: *Stmt = None
+                    if is_assign_op(self->pk()->kind):
+                        op: *Token = self->adv()
+                        inner = st_new(self->a, ST_ASSIGN, t->pos)
+                        inner->lhs = de
+                        inner->op = op->kind
+                        inner->rhs = self->parse_expr()
+                    else:
+                        inner = st_new(self->a, ST_EXPR, t->pos)
+                        inner->expr = de
+                    self->end_stmt("defer")
+                    blk: *Block = self->a->alloc(sizeof(Block))
+                    v: Vec<*Stmt>
+                    v.init()
+                    v.push(inner)
+                    blk->stmts = v.data
+                    blk->n = v.len
+                    sd->body = blk
+                return sd
+            case _:
+                if t->kind == TK_INDENT:
+                    fatal_at(self->file, t->pos, "unexpected indentation (block did not start with ':')")
+                e: *Expr = self->parse_expr()
+                s3: *Stmt = None
+                if is_assign_op(self->pk()->kind):
+                    op: *Token = self->adv()
+                    s3 = st_new(self->a, ST_ASSIGN, t->pos)
+                    s3->lhs = e
+                    s3->op = op->kind
+                    s3->rhs = self->parse_expr()
+                else:
+                    s3 = st_new(self->a, ST_EXPR, t->pos)
+                    s3->expr = e
+                self->end_stmt("end of statement")
+                return s3
+
+    # ---------- top-level declarations ----------
+    static def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func:
+        pos: Pos = self->expect(TK_DEF, "function")->pos
+        name: *Token = self->expect(TK_IDENT, "function name")
+        # generic function template: def foo<T, U>(...). Type params usable in the
+        # param/return types and body; monomorphized explicitly via `declare foo<int>`.
+        ftparams: Vec<*char>
+        ftparams.init()
+        if self->accept(TK_LT):
+            if owner != None:
+                fatal_at(self->file, name->pos, "methods cannot add their own type parameters (use the struct's)")
+            do:
+                ftp: *Token = self->expect(TK_IDENT, "type parameter")
+                ftparams.push((*char)(ftp->text))
+            while self->accept(TK_COMMA)
+            self->expect_gt()
+        f: *Func = self->a->alloc(sizeof(Func))
+        with f:
+            .pos = pos
+            .name = name->text
+            .owner = owner
+            .cname = self->a->printf("%s_%s", owner, name->text) if owner != None else name->text
+            .is_static = is_static
+            .is_inline = is_inline
+            .tparams = ftparams.data
+            .ntparams = ftparams.len
+
+        self->expect(TK_LPAREN, "function parameters")
+        params: Vec<Param>
+        params.init()
+        if not self->at(TK_RPAREN):
+            do:
+                if self->at(TK_ELLIPSIS):
+                    el: *Token = self->adv()
+                    if params.is_empty():
+                        fatal_at(self->file, el->pos, "'...' requires at least one named parameter before it")
+                    f->is_varargs = True
+                    break  # '...' can only be the last one
+                # `out|ref|in name: T` — by-reference sugar (contextual: keyword
+                # followed by another identifier; a parameter NAMED out/ref works)
+                brk: i32 = PK_NONE
+                if self->at(TK_IDENT) and self->pk1()->kind == TK_IDENT:
+                    if self->pk()->text == "out":
+                        self->adv()
+                        brk = PK_OUT
+                    elif self->pk()->text == "ref":
+                        self->adv()
+                        brk = PK_REF
+                elif self->at(TK_IN) and self->pk1()->kind == TK_IDENT:
+                    self->adv()
+                    brk = PK_IN
+                pn: *Token = self->expect(TK_IDENT, "parameter name")
+                self->expect(TK_COLON, "parameter (missing ': type')")
+                prm: Param = {pn->text, self->parse_type(), pn->pos}
+                if brk != PK_NONE:
+                    if brk == PK_IN:
+                        prm.type->is_const = True       # read-only pointee
+                    prm.type = ty_ptr(self->a, prm.type)   # the REAL type: *T
+                    prm.byref = brk
+                if self->accept(TK_ASSIGN):
+                    if brk != PK_NONE:
+                        fatal_at(self->file, pn->pos, "an out/ref/in parameter cannot have a default value")
+                    prm.dflt = self->parse_expr()   # default: must be comptime (sema checks)
+                elif not params.is_empty() and params.data[params.len - 1].dflt != None:
+                    fatal_at(self->file, pn->pos, "parameter '%s' needs a default value (it follows a defaulted parameter)", pn->text)
+                params.push(prm)
+            while self->accept(TK_COMMA)
+        self->expect(TK_RPAREN, "function parameters")
+        if self->accept(TK_ARROW):
+            f->ret = self->parse_type()
+        else:
+            f->ret = ty_name(self->a, "void")  # no '->' = void
+        f->params = params.data
+        f->nparams = params.len
+
+        if self->accept(TK_COLON):
+            f->body = self->parse_block()
+        else:
+            self->expect(TK_NEWLINE, "function prototype")
+        return f
+
+    static def parse_struct_or_union(self: *P, is_union: bool) -> *Decl:
+        pos: Pos = self->adv()->pos  # struct/union
+        name: *Token = self->expect(TK_IDENT, "union" if is_union else "struct")
+        # type parameters: struct Vec<T>: (generic template)
+        tparams: Vec<*char>
+        tparams.init()
+        if self->accept(TK_LT):
+            if is_union:
+                fatal_at(self->file, name->pos, "union cannot be generic")
+            do:
+                tp: *Token = self->expect(TK_IDENT, "type parameter")
+                tparams.push((*char)(tp->text))
+            while self->accept(TK_COMMA)
+            self->expect_gt()
+        self->expect(TK_COLON, "struct/union")
+        self->expect(TK_NEWLINE, "struct/union")
+        self->expect(TK_INDENT, "struct/union body")
+
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_UNION if is_union else DL_STRUCT
+        d->pos = pos
+        d->name = name->text
+
+        fields: Vec<Field>
+        methods: Vec<*Func>
+        fields.init()
+        methods.init()
+
+        while not self->at(TK_DEDENT) and not self->at(TK_EOF):
+            if self->at(TK_DEF) or self->at(TK_STATIC) or self->at(TK_INLINE):
+                if is_union:
+                    fatal_at(self->file, self->pk()->pos, "union cannot have methods")
+                st: bool = False
+                inl: bool = False
+                while self->at(TK_STATIC) or self->at(TK_INLINE):
+                    if self->adv()->kind == TK_STATIC:
+                        st = True
+                    else:
+                        inl = True
+                methods.push(self->parse_func(st, inl, name->text))
+            else:
+                fn: *Token = self->expect(TK_IDENT, "struct field")
+                self->expect(TK_COLON, "struct field")
+                fty: *Type = self->parse_type()
+                bw = -1  # -1 = normal field
+                if self->accept(TK_COLON):
+                    # bitfield: `name: type : width` (width is an integer literal).
+                    we: *Expr = self->parse_expr()
+                    if we->kind != EX_NUMBER:
+                        fatal_at(self->file, we->pos, "bitfield width must be an integer literal")
+                    bw = i32(strtoll(we->text, None, 0))
+                    if bw < 0:
+                        fatal_at(self->file, we->pos, "bitfield width cannot be negative")
+                # name '_' in a bitfield = anonymous field (padding / ':0' closes the unit)
+                fname: const *char = "" if (bw >= 0 and fn->text == "_") else fn->text
+                fl: Field = {fname, fty, fn->pos, bw}
+                self->expect(TK_NEWLINE, "struct field")
+                fields.push(fl)
+        self->expect(TK_DEDENT, "end of struct/union")
+        with d:
+            .fields = fields.data
+            .nfields = fields.len
+            .methods = methods.data
+            .nmethods = methods.len
+            .tparams = tparams.data
+            .ntparams = tparams.len
+        return d
+
+    static def parse_enum(self: *P) -> *Decl:
+        pos: Pos = self->adv()->pos
+        name: *Token = self->expect(TK_IDENT, "enum")
+        self->expect(TK_COLON, "enum")
+        self->expect(TK_NEWLINE, "enum")
+        self->expect(TK_INDENT, "enum body")
+
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_ENUM
+        d->pos = pos
+        d->name = name->text
+
+        items: Vec<EnumItem>
+        items.init()
+        while not self->at(TK_DEDENT) and not self->at(TK_EOF):
+            idt: *Token = self->expect(TK_IDENT, "enum item")
+            it: EnumItem = {idt->text, None, idt->pos}
+            if self->accept(TK_ASSIGN):
+                it.value = self->parse_expr()
+            self->expect(TK_NEWLINE, "enum item")
+            items.push(it)
+        self->expect(TK_DEDENT, "end of enum")
+        if items.is_empty():
+            fatal_at(self->file, pos, "empty enum")
+        d->items = items.data
+        d->nitems = items.len
+        return d
+
+    # contextual `include`: a C header directive. `include` is NOT reserved — it is
+    # only special here, at a top-level declaration, when followed by `<...>` or a
+    # string (same idea as `range` in a for-loop). Emits #include AND (F2) ingests.
+    static def parse_c_include(self: *P) -> *Decl:
+        inc: *Token = self->adv()   # the `include` identifier
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_IMPORT
+        d->is_include = True
+        d->pos = inc->pos
+        if self->at(TK_STRING):
+            raw: const *char = self->adv()->text  # with quotes
+            len: usize = strlen(raw)
+            d->import_path = self->a->strndup(raw + 1, len - 2 if len >= 2 else 0)
+            d->import_system = False
+        else:
+            self->expect(TK_LT, "include <header>")
+            path: const *char = ""
+            while not self->at(TK_GT) and not self->at(TK_NEWLINE) and not self->at(TK_EOF):
+                path = self->a->printf("%s%s", path, spell_tok(self->adv()))
+            self->expect(TK_GT, "include <header> (missing '>')")
+            d->import_path = path
+            d->import_system = True
+        self->expect(TK_NEWLINE, "include")
+        return d
+
+    static def parse_import(self: *P) -> *Decl:
+        pos: Pos = self->adv()->pos
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_IMPORT
+        d->is_include = False
+        d->pos = pos
+        # `import` is for P modules only; C headers go through `include`
+        if self->at(TK_HEADER):
+            fatal_at(self->file, self->pk()->pos, "'import <%s>' was removed: C headers use `include <%s>` (import is for P modules: import \"x.ph\")", self->pk()->text, self->pk()->text)
+        elif self->at(TK_STRING):
+            raw: const *char = self->adv()->text  # with quotes
+            len: usize = strlen(raw)
+            d->import_path = self->a->strndup(raw + 1, len - 2 if len >= 2 else 0)
+            d->import_system = False
+            pl: usize = strlen(d->import_path)
+            if pl < 3 or d->import_path + pl - 3 != ".ph":
+                fatal_at(self->file, d->pos, "import \"%s\": import takes a P header (.ph); for a C header use `include \"%s\"`", d->import_path, d->import_path)
+        else:
+            fatal_at(self->file, self->pk()->pos, "import expects a P header: import \"module.ph\" (C headers use include <...>)")
+        self->expect(TK_NEWLINE, "import")
+        return d
+
+    # declare Vec<int> / implement Vec<int> — explicit instantiation of a generic
+    # implement Str (no <>) — materializes bodies of a struct declared in .ph
+    static def parse_instantiate(self: *P) -> *Decl:
+        kw: *Token = self->adv()
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_DECLARE if kw->kind == TK_DECLARE else DL_IMPLEMENT
+        if kw->kind == TK_INLINE:
+            d->inline_inst = True   # declare+implement, static inline bodies
+        d->pos = kw->pos
+        gname: *Token = self->expect(TK_IDENT, "struct name")
+        d->name = gname->text
+        targs: Vec<*Type>
+        targs.init()
+        if self->accept(TK_LT):
+            do:
+                targs.push(self->parse_type())
+            while self->accept(TK_COMMA)
+            self->expect_gt()
+        elif d->kind == DL_DECLARE:
+            fatal_at(self->file, kw->pos, "declare requires type arguments (a non-generic struct is already defined by its own .ph)")
+        elif d->inline_inst:
+            fatal_at(self->file, kw->pos, "inline instantiation requires type arguments (use 'implement %s' for a non-generic struct)", d->name)
+        gt: *Type = ty_name(self->a, gname->text)
+        gt->targs = targs.data
+        gt->ntargs = targs.len
+        d->type = gt
+        self->expect(TK_NEWLINE, "declare/implement")
+        return d
+
+    static def parse_top(self: *P) -> *Decl:
+        is_extern: bool = self->accept(TK_EXTERN)   # storage class: declaration, not def
+        t: *Token = self->pk()
+        match t->kind:
+            case TK_IMPORT:
+                return self->parse_import()
+            case TK_DECLARE, TK_IMPLEMENT:
+                return self->parse_instantiate()
+            case TK_STRUCT:
+                return self->parse_struct_or_union(False)
+            case TK_UNION:
+                warn_at(self->file, t->pos, "'union' in Plang is deprecated and will be removed in a future version")
+                return self->parse_struct_or_union(True)
+            case TK_ENUM:
+                return self->parse_enum()
+            case TK_STATIC, TK_INLINE, TK_DEF:
+                # `inline Vec<int>` (instantiation) vs `inline def f...` (modifier)
+                if t->kind == TK_INLINE and self->pk1()->kind == TK_IDENT:
+                    return self->parse_instantiate()
+                # `static name: T = ...` — a module-level table that stays LOCAL to
+                # this translation unit (without it every global is exported and
+                # two modules with the same table name collide at link time)
+                nxk: TokKind = self->pk1()->kind
+                if t->kind == TK_STATIC and nxk in {TK_IDENT, TK_CONST}:
+                    self->adv()
+                    sg: *Decl = self->parse_top()
+                    if sg == None or sg->kind != DL_VAR:
+                        fatal_at(self->file, t->pos, "'static' here can only precede a global variable or a 'def'")
+                    sg->is_static = True
+                    return sg
+                st: bool = False
+                inl: bool = False
+                while self->at(TK_STATIC) or self->at(TK_INLINE):
+                    if self->adv()->kind == TK_STATIC:
+                        st = True
+                    else:
+                        inl = True
+                if not self->at(TK_DEF):
+                    fatal_at(self->file, t->pos, "'%s' at file scope precedes a 'def' or a global variable (found %s)", "static" if st else "inline", tok_kind_name(self->pk()->kind))
+                f: *Func = self->parse_func(st, inl, None)
+                d: *Decl = self->a->alloc(sizeof(Decl))
+                d->kind = DL_FUNC
+                d->pos = f->pos
+                d->func = f
+                return d
+            case TK_CONST, TK_IDENT:
+                # contextual `include <h>` / `include "h"`: recognized only here, when
+                # `include` is followed by `<` or a string. Otherwise it stays a normal
+                # identifier (a global named `include`, etc. keeps working).
+                if not is_extern and self->at(TK_IDENT) and self->pk()->text == "include" and (self->pk1()->kind == TK_LT or self->pk1()->kind == TK_STRING):
+                    return self->parse_c_include()
+                is_const: bool = self->accept(TK_CONST)
+                # `const def f(...)`: function evaluated at compile-time (not emitted in the binary)
+                if is_const and self->at(TK_DEF):
+                    cf: *Func = self->parse_func(False, False, None)
+                    cf->is_comptime = True
+                    cd: *Decl = self->a->alloc(sizeof(Decl))
+                    cd->kind = DL_FUNC
+                    cd->pos = cf->pos
+                    cd->func = cf
+                    return cd
+                name: *Token = self->expect(TK_IDENT, "global declaration")
+                d2: *Decl = self->a->alloc(sizeof(Decl))
+                with d2:
+                    .kind = DL_VAR
+                    .pos = name->pos
+                    .name = name->text
+                    .is_const = is_const
+                    .is_extern = is_extern
+                    if self->accept(TK_COLON):
+                        .type = self->parse_type()   # explicit type
+                    if self->accept(TK_ASSIGN):
+                        .init = self->parse_initializer()
+                    elif .type == None:
+                        fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text)
+                    elif is_const and not is_extern:
+                        fatal_at(self->file, name->pos, "const requires a value")
+                self->expect(TK_NEWLINE, "global declaration")
+                return d2
+            case _:
+                fatal_at(self->file, t->pos, "invalid top-level declaration (found %s)", tok_kind_name(t->kind))
+                return None
 
 static def module_basename(a: *Arena, path: const *char) -> const *char:
     slash: const *char = strrchr(path, '/')
     base: const *char = slash + 1 if slash != None else path
     dot: const *char = strrchr(base, '.')
-    return arena_strndup(a, base, usize(dot - base)) if dot != None else arena_strdup(a, base)
+    return a->strndup(base, usize(dot - base)) if dot != None else a->strdup(base)
 
 def parse_tokens(a: *Arena, file: const *char, tl: TokenList, is_header: i32) -> *Module:
     p: P = {tl.toks, tl.n, 0, file, a}
-    m: *Module = arena_alloc(a, sizeof(Module))
-    m->path = arena_strdup(a, file)
+    m: *Module = a->alloc(sizeof(Module))
+    m->path = a->strdup(file)
     m->name = module_basename(a, file)
     m->is_header = is_header
 
     decls: Vec<*Decl>
     decls.init()
-    while not at(&p, TK_EOF):
-        if accept(&p, TK_NEWLINE):
+    while not p.at(TK_EOF):
+        if p.accept(TK_NEWLINE):
             continue
-        if at(&p, TK_INDENT):
-            fatal_at(file, pk(&p)->pos, "unexpected indentation at top level")
-        decls.push(parse_top(&p))
+        if p.at(TK_INDENT):
+            fatal_at(file, p.pk()->pos, "unexpected indentation at top level")
+        decls.push(p.parse_top())
     m->decls = decls.data
     m->ndecls = decls.len
     return m

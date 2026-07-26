@@ -10,6 +10,7 @@ implement Vec<BufLine>
 implement Vec<Caret>
 implement Vec<EditOp>
 implement Vec<UndoGroup>
+implement Vec<LineRange>
 implement Vec<HlSpan>
 implement Vec<HlLine>
 
@@ -115,6 +116,9 @@ struct Buffer:
     static def del_sel_at(ref self: Buffer, k: i32)
     static def clamp_col(in self: Buffer, line: i32, col: i32) -> i32
     static def move_one_h(ref self: Buffer, c: *Caret, delta: i32, sel: bool)
+    static def line_cut(ref self: Buffer, l: i32) -> *char
+    static def line_paste(ref self: Buffer, at: i32, text: const *char)
+    static def unfold_enclosing(ref self: Buffer, line: i32) -> bool
 
     # ---------- lifetime ----------
 
@@ -129,7 +133,7 @@ struct Buffer:
         self.carets.push(c0)
 
     static def push_line(ref self: Buffer, text: *char):
-        bl: BufLine = {text, cp_count(text)}
+        bl: BufLine = {text, cp_count(text), False, False, 0}
         self.lines.push(bl)
 
     static def redo_clear(ref self: Buffer):
@@ -287,6 +291,9 @@ struct Buffer:
         self.lines.data[i].ncp = cp_count(text)
 
     static def raw_insert(ref self: Buffer, line: i32, col: i32, text: const *char, el: *i32, ec: *i32):
+        # editing a fold header releases its block: `folded` must always mean
+        # "the lines below are exactly the hidden ones"
+        self.unfold_range(line, line)
         cb: i32 = self.col_byte(line, col)
         old: const *char = self.lines.data[line].text
         nl: i32 = 0
@@ -312,6 +319,9 @@ struct Buffer:
         for gi in range(line + 1, line + 1 + nl):
             self.lines.data[gi].text = None    # fresh slots: nothing to free
             self.lines.data[gi].ncp = 0
+            self.lines.data[gi].hidden = False
+            self.lines.data[gi].folded = False
+            self.lines.data[gi].mark = 0
         seg_start: usize = 0
         li: i32 = line
         i: usize = 0
@@ -349,6 +359,7 @@ struct Buffer:
         self.dirty = True
 
     static def raw_delete(ref self: Buffer, l0: i32, c0: i32, l1: i32, c1: i32) -> *char:
+        self.unfold_range(l0, l1)     # same invariant as raw_insert
         deleted: *char = self.range_text(l0, c0, l1, c1)
         b0: i32 = self.col_byte(l0, c0)
         if l0 == l1:
@@ -684,12 +695,12 @@ struct Buffer:
             return
         col: i32 = c->col + delta
         line: i32 = c->line
-        while col < 0 and line > 0:
-            line -= 1
+        while col < 0 and self.next_visible(line, -1) != line:
+            line = self.next_visible(line, -1)
             col += self.lines.data[line].ncp + 1
-        while col > self.lines.data[line].ncp and line + 1 < self.lines.len:
+        while col > self.lines.data[line].ncp and self.next_visible(line, 1) != line:
             col -= self.lines.data[line].ncp + 1
-            line += 1
+            line = self.next_visible(line, 1)
         c->line = line
         c->col = self.clamp_col(line, col)
         if not sel:
@@ -707,11 +718,7 @@ struct Buffer:
             c: *Caret = &self.carets.data[k]
             if c->goal < 0:
                 c->goal = c->col
-            line: i32 = c->line + delta
-            if line < 0:
-                line = 0
-            if line >= self.lines.len:
-                line = self.lines.len - 1
+            line: i32 = self.next_visible(c->line, delta)   # skips folds
             c->line = line
             c->col = self.clamp_col(line, c->goal)
             if not sel:
@@ -929,6 +936,470 @@ struct Buffer:
                 sl = sl - 1 if sl > 0 else self.lines.len - 1
         regfree(&re)
         return found
+
+    # ---------- line-oriented commands ----------
+
+    # removes line `l` whole (with its newline) and returns its text; the edit
+    # is recorded in the open undo group like any other
+    static def line_cut(ref self: Buffer, l: i32) -> *char:
+        n: i32 = self.lines.len
+        if n == 1:
+            only: *char = own(self.lines.data[0].text)
+            if self.lines.data[0].ncp > 0:
+                d0: *char = self.raw_delete(0, 0, 0, self.lines.data[0].ncp)
+                self.op_push(OP_DELETE, 0, 0, d0)
+            return only
+        if l + 1 < n:
+            d1: *char = self.raw_delete(l, 0, l + 1, 0)      # "text\n"
+            self.op_push(OP_DELETE, l, 0, d1)
+            k: usize = strlen(d1)
+            return own_n(d1, k - 1 if k > 0 else 0)
+        # last line: swallow the newline that precedes it
+        pc: i32 = self.lines.data[l - 1].ncp
+        d2: *char = self.raw_delete(l - 1, pc, l, self.lines.data[l].ncp)
+        self.op_push(OP_DELETE, l - 1, pc, d2)               # "\ntext"
+        return own(d2 + 1)
+
+    # inserts `text` as a NEW line at index `at` (at == nlines appends)
+    static def line_paste(ref self: Buffer, at: i32, text: const *char):
+        el: i32; ec: i32
+        if at < self.lines.len:
+            ins: *char = malloc(strlen(text) + 2)
+            strcpy(ins, text)
+            strcat(ins, "\n")
+            self.raw_insert(at, 0, ins, &el, &ec)
+            self.op_push(OP_INSERT, at, 0, ins)              # the group owns it
+            return
+        last: i32 = self.lines.len - 1
+        col: i32 = self.lines.data[last].ncp
+        ins2: *char = malloc(strlen(text) + 2)
+        strcpy(ins2, "\n")
+        strcat(ins2, text)
+        self.raw_insert(last, col, ins2, &el, &ec)
+        self.op_push(OP_INSERT, last, col, ins2)
+
+    def line_ranges(in self: Buffer) -> Vec<LineRange>:
+        r: Vec<LineRange>
+        r.init()
+        for k in range(self.carets.len):
+            a: i32; b: i32; c: i32; d: i32
+            self.sel_range(k, out a, out b, out c, out d)
+            if c > a and d == 0:
+                c -= 1        # a selection ending at column 0 excludes that line
+            if not r.is_empty() and a <= r.data[r.len - 1].l1 + 1:
+                if c > r.data[r.len - 1].l1:
+                    r.data[r.len - 1].l1 = c      # merge touching blocks
+            else:
+                lr: LineRange = {a, c}
+                r.push(lr)
+        return r
+
+    def move_lines(ref self: Buffer, dir: i32, now_ms: i64):
+        rs: Vec<LineRange> = self.line_ranges()
+        defer:
+            rs.deinit()
+        for i in range(rs.len):     # nothing moves if a block would fall off
+            if dir < 0 and rs.data[i].l0 == 0:
+                return
+            if dir > 0 and rs.data[i].l1 >= self.lines.len - 1:
+                return
+        self.group_begin(False, now_ms)
+        if dir < 0:
+            for i in range(rs.len):
+                t: *char = self.line_cut(rs.data[i].l0 - 1)
+                self.line_paste(rs.data[i].l1, t)
+                free(t)
+        else:
+            for i in range(rs.len - 1, -1, -1):
+                t2: *char = self.line_cut(rs.data[i].l1 + 1)
+                self.line_paste(rs.data[i].l0, t2)
+                free(t2)
+        for k in range(self.carets.len):
+            c: *Caret = &self.carets.data[k]
+            c->line += dir
+            c->aline += dir
+            c->goal = -1
+        self.carets_sort()
+        self.group_end()
+        self.group_open = False
+
+    def duplicate_lines(ref self: Buffer, now_ms: i64):
+        rs: Vec<LineRange> = self.line_ranges()
+        defer:
+            rs.deinit()
+        self.group_begin(False, now_ms)
+        for i in range(rs.len - 1, -1, -1):
+            a: i32 = rs.data[i].l0
+            b: i32 = rs.data[i].l1
+            col: i32 = self.lines.data[b].ncp
+            body: *char = self.range_text(a, 0, b, col)
+            ins: *char = malloc(strlen(body) + 2)
+            strcpy(ins, "\n")
+            strcat(ins, body)
+            free(body)
+            el: i32; ec: i32
+            self.raw_insert(b, col, ins, &el, &ec)
+            self.op_push(OP_INSERT, b, col, ins)
+        # every caret lands on the COPY: it shifts by its own block plus the
+        # height of every block above it
+        for k in range(self.carets.len):
+            c: *Caret = &self.carets.data[k]
+            up: i32 = 0
+            for i in range(rs.len):
+                h: i32 = rs.data[i].l1 - rs.data[i].l0 + 1
+                if rs.data[i].l1 < c->line or (c->line >= rs.data[i].l0 and c->line <= rs.data[i].l1):
+                    up += h
+            c->line += up
+            c->aline += up
+            c->goal = -1
+        self.carets_sort()
+        self.group_end()
+        self.group_open = False
+
+    def delete_lines(ref self: Buffer, now_ms: i64):
+        rs: Vec<LineRange> = self.line_ranges()
+        defer:
+            rs.deinit()
+        self.group_begin(False, now_ms)
+        for i in range(rs.len - 1, -1, -1):
+            for l in range(rs.data[i].l1, rs.data[i].l0 - 1, -1):
+                free(self.line_cut(l))
+        # each caret goes to the top of its block, minus what was cut above it
+        for k in range(self.carets.len):
+            c: *Caret = &self.carets.data[k]
+            gone: i32 = 0
+            home: i32 = c->line
+            for i in range(rs.len):
+                h: i32 = rs.data[i].l1 - rs.data[i].l0 + 1
+                if rs.data[i].l1 < c->line:
+                    gone += h
+                elif c->line >= rs.data[i].l0:
+                    home = rs.data[i].l0
+            nl: i32 = home - gone
+            if nl >= self.lines.len:
+                nl = self.lines.len - 1
+            if nl < 0:
+                nl = 0
+            c->line = nl
+            c->col = self.clamp_col(nl, c->col)
+            c->aline = c->line
+            c->acol = c->col
+            c->goal = -1
+        self.carets_sort()
+        self.group_end()
+        self.group_open = False
+
+    def join_lines(ref self: Buffer, now_ms: i64):
+        self.group_begin(False, now_ms)
+        for k in range(self.carets.len - 1, -1, -1):
+            c: *Caret = &self.carets.data[k]
+            l: i32 = c->line
+            if l + 1 >= self.lines.len:
+                continue
+            s: const *char = self.lines.data[l].text
+            nx: const *char = self.lines.data[l + 1].text
+            ind: i32 = 0
+            while nx[ind] == ' ' or nx[ind] == '\t':
+                ind += 1
+            endc: i32 = self.lines.data[l].ncp
+            # a space between the two, unless one side is empty or the current
+            # line already ends in whitespace (Sublime's ctrl+j)
+            glue: const *char = " "
+            if endc == 0 or nx[ind] == '\0':
+                glue = ""
+            else:
+                lastch: char = s[strlen(s) - 1]
+                if lastch in {' ', '\t'}:
+                    glue = ""
+            dt: *char = self.raw_delete(l, endc, l + 1, byte_to_col(nx, ind))
+            self.op_push(OP_DELETE, l, endc, dt)
+            if glue[0] != '\0':
+                el: i32; ec: i32
+                self.raw_insert(l, endc, glue, &el, &ec)
+                self.op_push(OP_INSERT, l, endc, own(glue))
+            c2: *Caret = &self.carets.data[k]
+            c2->line = l
+            c2->col = endc
+            c2->aline = l
+            c2->acol = endc
+            c2->goal = -1
+        self.carets_sort()
+        self.group_end()
+        self.group_open = False
+
+    def toggle_comment(ref self: Buffer, marker: const *char, now_ms: i64):
+        rs: Vec<LineRange> = self.line_ranges()
+        defer:
+            rs.deinit()
+        mlen: usize = strlen(marker)
+        all_commented: bool = True
+        any_line: bool = False
+        min_ind: i32 = 1 << 28
+        for i in range(rs.len):
+            for l in range(rs.data[i].l0, rs.data[i].l1 + 1):
+                if self.is_blank(l):
+                    continue
+                any_line = True
+                s: const *char = self.lines.data[l].text
+                b: i32 = 0
+                while s[b] == ' ' or s[b] == '\t':
+                    b += 1
+                if strncmp(s + b, marker, mlen) != 0:
+                    all_commented = False
+                col: i32 = byte_to_col(s, b)
+                if col < min_ind:
+                    min_ind = col
+        if not any_line:
+            return
+        self.group_begin(False, now_ms)
+        for i in range(rs.len - 1, -1, -1):
+            for l in range(rs.data[i].l1, rs.data[i].l0 - 1, -1):
+                if self.is_blank(l):
+                    continue
+                s2: const *char = self.lines.data[l].text
+                if all_commented:
+                    b2: i32 = 0
+                    while s2[b2] == ' ' or s2[b2] == '\t':
+                        b2 += 1
+                    n: usize = mlen
+                    if s2[usize(b2) + mlen] == ' ':
+                        n += 1        # the space added when commenting
+                    c0: i32 = byte_to_col(s2, b2)
+                    c1: i32 = c0 + i32(n)
+                    dt: *char = self.raw_delete(l, c0, l, c1)
+                    self.op_push(OP_DELETE, l, c0, dt)
+                    for k in range(self.carets.len):
+                        cc: *Caret = &self.carets.data[k]
+                        if cc->line == l and cc->col > c0:
+                            cc->col = c0 if cc->col < c1 else cc->col - i32(n)
+                        if cc->aline == l and cc->acol > c0:
+                            cc->acol = c0 if cc->acol < c1 else cc->acol - i32(n)
+                else:
+                    txt: *char = malloc(mlen + 2)
+                    strcpy(txt, marker)
+                    strcat(txt, " ")
+                    el: i32; ec: i32
+                    self.raw_insert(l, min_ind, txt, &el, &ec)
+                    self.op_push(OP_INSERT, l, min_ind, txt)
+                    add: i32 = i32(mlen) + 1
+                    for k in range(self.carets.len):
+                        cc2: *Caret = &self.carets.data[k]
+                        if cc2->line == l and cc2->col >= min_ind:
+                            cc2->col += add
+                        if cc2->aline == l and cc2->acol >= min_ind:
+                            cc2->acol += add
+        self.carets_sort()
+        self.group_end()
+        self.group_open = False
+
+    # ---------- folding (by indentation) ----------
+
+    def is_blank(in self: Buffer, line: i32) -> bool:
+        s: const *char = self.lines.data[line].text
+        i: usize = 0
+        while s[i] == ' ' or s[i] == '\t':
+            i += 1
+        return s[i] == '\0'
+
+    def indent_of(in self: Buffer, line: i32) -> i32:
+        s: const *char = self.lines.data[line].text
+        n: i32 = 0
+        i: usize = 0
+        while s[i] == ' ' or s[i] == '\t':
+            if s[i] == '\t':
+                n += TAB_WIDTH - (n % TAB_WIDTH)
+            else:
+                n += 1
+            i += 1
+        return n
+
+    def can_fold(in self: Buffer, line: i32) -> bool:
+        if line < 0 or line + 1 >= self.lines.len:
+            return False
+        if self.lines.data[line].hidden or self.lines.data[line].folded:
+            return False
+        if self.is_blank(line):
+            return False
+        base: i32 = self.indent_of(line)
+        for i in range(line + 1, self.lines.len):
+            if self.is_blank(i):
+                continue
+            return self.indent_of(i) > base
+        return False
+
+    def fold_end(in self: Buffer, line: i32) -> i32:
+        base: i32 = self.indent_of(line)
+        end: i32 = line
+        for i in range(line + 1, self.lines.len):
+            if self.is_blank(i):
+                continue        # blank lines never end a block
+            if self.indent_of(i) > base:
+                end = i
+            else:
+                break
+        return end
+
+    def is_hidden(in self: Buffer, line: i32) -> bool:
+        return self.lines.data[line].hidden
+
+    def is_folded(in self: Buffer, line: i32) -> bool:
+        return self.lines.data[line].folded
+
+    def fold(ref self: Buffer, line: i32) -> bool:
+        if not self.can_fold(line):
+            return False
+        e: i32 = self.fold_end(line)
+        for i in range(line + 1, e + 1):
+            self.lines.data[i].hidden = True
+        self.lines.data[line].folded = True
+        # a caret may not sit on a hidden line: pull it onto the header
+        hc: i32 = self.lines.data[line].ncp
+        for k in range(self.carets.len):
+            c: *Caret = &self.carets.data[k]
+            if c->line > line and c->line <= e:
+                c->line = line
+                c->col = hc
+            if c->aline > line and c->aline <= e:
+                c->aline = line
+                c->acol = hc
+        self.carets_sort()
+        return True
+
+    def unfold(ref self: Buffer, line: i32) -> bool:
+        if line < 0 or line >= self.lines.len or not self.lines.data[line].folded:
+            return False
+        self.lines.data[line].folded = False
+        e: i32 = self.fold_end(line)
+        i: i32 = line + 1
+        while i <= e and i < self.lines.len:
+            self.lines.data[i].hidden = False
+            if self.lines.data[i].folded:
+                i = self.fold_end(i) + 1     # a nested fold STAYS collapsed
+            else:
+                i += 1
+        return True
+
+    def toggle_fold(ref self: Buffer, line: i32) -> bool:
+        if self.lines.data[line].folded:
+            return self.unfold(line)
+        return self.fold(line)
+
+    # the enclosing folded header of a hidden line (Godot walks back the same
+    # way); False when the line was not hidden
+    static def unfold_enclosing(ref self: Buffer, line: i32) -> bool:
+        if line < 0 or line >= self.lines.len or not self.lines.data[line].hidden:
+            return False
+        for h in range(line - 1, -1, -1):
+            if self.lines.data[h].folded:
+                self.unfold(h)
+                return True
+        self.lines.data[line].hidden = False   # orphan: never leave it invisible
+        return True
+
+    def unfold_range(ref self: Buffer, l0: i32, l1: i32):
+        a: i32 = l0 if l0 > 0 else 0
+        b: i32 = l1 if l1 < self.lines.len - 1 else self.lines.len - 1
+        for i in range(a, b + 1):
+            if self.lines.data[i].folded:
+                self.unfold(i)
+        # an edit reaching INTO a collapsed block (undo/redo can) releases it
+        guard: i32 = 0
+        while guard < 64:
+            hit: bool = False
+            for i in range(a, b + 1):
+                if self.lines.data[i].hidden:
+                    self.unfold_enclosing(i)
+                    hit = True
+                    break
+            if not hit:
+                return
+            guard += 1
+
+    def fold_all(ref self: Buffer):
+        for i in range(self.lines.len):
+            if self.can_fold(i):
+                self.fold(i)      # can_fold is False on hidden lines: level 1
+
+    def unfold_all(ref self: Buffer):
+        for i in range(self.lines.len):
+            self.lines.data[i].hidden = False
+            self.lines.data[i].folded = False
+
+    # ---------- per-line marks ----------
+
+    def mark_of(in self: Buffer, line: i32) -> u8:
+        if line < 0 or line >= self.lines.len:
+            return 0
+        return self.lines.data[line].mark
+
+    def toggle_mark(ref self: Buffer, line: i32, mark: u8):
+        if line < 0 or line >= self.lines.len:
+            return
+        self.lines.data[line].mark = self.lines.data[line].mark ^ mark
+
+    def clear_marks(ref self: Buffer, mark: u8):
+        for i in range(self.lines.len):
+            self.lines.data[i].mark = self.lines.data[i].mark & ~mark
+
+    def next_mark(in self: Buffer, from_line: i32, mark: u8, forward: bool) -> i32:
+        n: i32 = self.lines.len
+        for step in range(1, n + 1):
+            i: i32 = ((from_line + step) % n) if forward else ((from_line - step + n * 2) % n)
+            if (self.lines.data[i].mark & mark) != 0:
+                return i
+        return -1
+
+    # ---------- visible-line mapping ----------
+
+    def visible_count(in self: Buffer) -> i32:
+        n: i32 = 0
+        for i in range(self.lines.len):
+            if not self.lines.data[i].hidden:
+                n += 1
+        return n
+
+    def next_visible(in self: Buffer, line: i32, delta: i32) -> i32:
+        l: i32 = line
+        if l < 0:
+            l = 0
+        if l >= self.lines.len:
+            l = self.lines.len - 1
+        if delta > 0:
+            for step in range(delta):
+                i: i32 = l + 1
+                while i < self.lines.len and self.lines.data[i].hidden:
+                    i += 1
+                if i >= self.lines.len:
+                    break
+                l = i
+        elif delta < 0:
+            for step in range(-delta):
+                j: i32 = l - 1
+                while j >= 0 and self.lines.data[j].hidden:
+                    j -= 1
+                if j < 0:
+                    break
+                l = j
+        while l > 0 and self.lines.data[l].hidden:
+            l -= 1        # the starting line itself may have just been folded
+        return l
+
+    def to_visible(in self: Buffer, line: i32) -> i32:
+        n: i32 = 0
+        for i in range(line if line < self.lines.len else self.lines.len):
+            if not self.lines.data[i].hidden:
+                n += 1
+        return n
+
+    def from_visible(in self: Buffer, vidx: i32) -> i32:
+        n: i32 = 0
+        for i in range(self.lines.len):
+            if self.lines.data[i].hidden:
+                continue
+            if n >= vidx:
+                return i
+            n += 1
+        return self.lines.len - 1
 
 # ---------- highlight ----------
 

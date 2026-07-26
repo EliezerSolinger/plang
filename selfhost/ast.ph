@@ -392,38 +392,38 @@ struct Module:
 # constructors (arena) — header-only: trivial, hot allocators (one per AST
 # node), so `static inline` in the .ph (§8.5). Avoids a separate ast.p file.
 static inline def ty_name(a: *Arena, name: const *char) -> *Type:
-    t: *Type = arena_alloc(a, sizeof(Type))
+    t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_NAME
     t->name = name
     return t
 
 static inline def ty_ptr(a: *Arena, inner: *Type) -> *Type:
-    t: *Type = arena_alloc(a, sizeof(Type))
+    t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_PTR
     t->inner = inner
     return t
 
 static inline def ty_array(a: *Arena, inner: *Type, len: *Expr) -> *Type:
-    t: *Type = arena_alloc(a, sizeof(Type))
+    t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_ARRAY
     t->inner = inner
     t->arr_len = len
     return t
 
 static inline def ty_func(a: *Arena, ret: *Type) -> *Type:
-    t: *Type = arena_alloc(a, sizeof(Type))
+    t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_FUNC
     t->inner = ret
     return t
 
 static inline def ex_new(a: *Arena, k: ExprKind, pos: Pos) -> *Expr:
-    e: *Expr = arena_alloc(a, sizeof(Expr))
+    e: *Expr = a->alloc(sizeof(Expr))
     e->kind = k
     e->pos = pos
     return e
 
 static inline def st_new(a: *Arena, k: StmtKind, pos: Pos) -> *Stmt:
-    s: *Stmt = arena_alloc(a, sizeof(Stmt))
+    s: *Stmt = a->alloc(sizeof(Stmt))
     s->kind = k
     s->pos = pos
     s->if_sel = -1   # runtime by default (any frontend); sema may fold

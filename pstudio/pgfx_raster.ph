@@ -17,22 +17,27 @@ struct PgRect:
 # free constructor (there is no receiver to build yet)
 def pg_rect(x: i32, y: i32, w: i32, h: i32) -> PgRect
 
-# A font = mono atlas + integer scale (1x/2x/3x). Text measurement goes
-# through this API (pui assumes no grid — only the CodeView exploits mono).
+# A font = one of the atlas's mono grids. Zoom picks a DIFFERENT grid (a real
+# rasterization at that pixel size) instead of scaling a bitmap: doubling an
+# 8x16 cell is a jump nobody can work with. Text measurement goes through this
+# API (pui assumes no grid — only the CodeView exploits mono).
 struct PgFont:
     pixels: const *u8
     cell_w: i32
     cell_h: i32
     baseline: i32
     count: i32        # glyphs in the grid (the last one is the □ fallback)
-    scale: i32        # integer scale 1x/2x/3x (nearest neighbor)
+    size: i32         # which zoom step (0 .. pg_font_steps()-1)
+    px: i32           # its nominal pixel height, for the status bar
 
-    def char_w(in self: PgFont) -> i32          # advance of one cell, scaled
+    def char_w(in self: PgFont) -> i32          # advance of one cell
     def line_h(in self: PgFont) -> i32
     def text_width(in self: PgFont, s: const *char) -> i32
     def text_width_n(in self: PgFont, s: const *char, nbytes: usize) -> i32
 
-def pg_font_default(scale: i32) -> PgFont       # the built-in atlas (JetBrains Mono)
+def pg_font_default(size: i32) -> PgFont    # the built-in atlas (JetBrains Mono)
+def pg_font_steps() -> i32                  # how many zoom steps exist
+def pg_font_default_size() -> i32           # the comfortable starting step
 
 struct PgFb:
     px: *u32          # w*h pixels 0xAARRGGBB (malloc'd; see init)
@@ -48,6 +53,8 @@ struct PgFb:
     def clip_reset(ref self: PgFb)
 
     def clear(ref self: PgFb, color: u32)       # ignores the clip (whole frame)
+    # alpha < 255 BLENDS over what is there (translucent overlays: the
+    # minimap viewport, tints); alpha 255 is a plain fill
     def fill_rect(ref self: PgFb, r: PgRect, color: u32)
     def frame_rect(ref self: PgFb, r: PgRect, color: u32)   # 1px outline
 

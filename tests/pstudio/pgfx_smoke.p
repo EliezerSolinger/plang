@@ -10,7 +10,7 @@ def main() -> int:
         return 0
     printf("open=%dx%d\n", w.fb.w, w.fb.h)
     w.fb.clear(0xFF101010)
-    f: PgFont = pg_font_default(2)
+    f: PgFont = pg_font_default(pg_font_default_size())
     w.fb.draw_text(in f, "pstudio", 8, 8, 0xFFE0E0E0)
     w.present()
     # drain the window's initial events; the timeout path must be reached

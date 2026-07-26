@@ -35,7 +35,7 @@ static def typed(ref ui: Ui, s: const *char):
 
 def main() -> int:
     ui: Ui
-    ui.init(pg_font_default(1))
+    ui.init(pg_font_default(pg_font_default_size()))
 
     # root: vbox [ label | hbox [ button A | button B(expands) ] | split ]
     root: i32 = ui.box(-1, True)

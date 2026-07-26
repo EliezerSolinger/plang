@@ -17,10 +17,10 @@ def backend_default() -> const *Backend:
     return &backends[0]
 
 def backend_emit(be: const *Backend, m: *Module, out: *StrBuf):
-    if strcmp(be->name, "c") == 0:
+    if be->name == "c":
         emit_module_c(m, out)
         return
-    if strcmp(be->name, "qbe") == 0:
+    if be->name == "qbe":
         emit_module_qbe(m, out)
         return
     fatal("backend '%s' has no registered emitter", be->name)
