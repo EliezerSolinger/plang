@@ -314,6 +314,7 @@ suite_pstudio() {
             pgfx_*)      deps="pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas" ;;
             pui_*)       deps="pstudio/pui pstudio/pgfx_raster pstudio/font_atlas" ;;
             core_complete) deps="pstudio/complete pstudio/core pstudio/psys selfhost/lexer selfhost/utf8 selfhost/util" ;;
+            cv_*)        deps="pstudio/codeview pstudio/complete pstudio/core pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys selfhost/lexer selfhost/utf8 selfhost/util" ;;
             core_*)      deps="pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
             app_*)       deps="pstudio/app pstudio/codeview pstudio/complete pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
         esac

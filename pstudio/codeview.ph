@@ -78,6 +78,8 @@ struct CodeView:
     def line_at_row(in self: CodeView, row: i32) -> i32
     def row_of_line(in self: CodeView, line: i32) -> i32
     def scroll_to_caret(ref self: CodeView)
+    # after a fold: hold the viewport still instead of chasing the caret
+    def anchor_top(ref self: CodeView)
     def set_top(ref self: CodeView, line: i32)
     def set_left(ref self: CodeView, col: i32)
     # SCREEN column of (line, col) — expands tabs to TAB_WIDTH
@@ -112,6 +114,9 @@ struct CodeView:
     def complete_close(ref self: CodeView)
     def complete_accept(ref self: CodeView, now_ms: i64) -> bool
     def complete_refresh(ref self: CodeView)  # re-filter after each keystroke
+    # popup geometry — every clamp lives in these two (see CMP_* in codeview.p)
+    def cmp_rows(in self: CodeView) -> i32     # candidates on screen
+    def cmp_rect(in self: CodeView) -> PgRect  # the box, fitted and clamped
 
     # ---- search (driven by the app's find bar) ----
     # `re` = treat needle as a POSIX regex; moves the caret and scrolls

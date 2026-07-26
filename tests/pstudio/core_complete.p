@@ -6,7 +6,7 @@ include <string.h>
 import "../../pstudio/complete.ph"
 import "../../pstudio/psys.ph"
 
-SRC: const *char = "import \"lib.ph\"\n\nstruct Point:\n    x: i32\n    y: i32\n    def dist(in self: Point) -> i32\n\ndef make_point(a: i32) -> Point:\n    p: Point\n    total: i32 = 0\n    return p\n"
+SRC: const *char = "import \"lib.ph\"\n\nstruct Point:\n    x: i32\n    y: i32\n    def dist(in self: Point) -> i32\n\ndef make_point(a: i32, pp: *Point) -> Point:\n    p: Point\n    q: *Point = pp\n    r: const *Point = pp\n    total: i32 = 0\n    return p\n"
 
 LIB: const *char = "struct Color:\n    r: u8\n    g: u8\n\ndef color_mix(a: Color, b: Color) -> Color\n"
 
@@ -45,7 +45,10 @@ def main() -> int:
     show(in ix, "Poi", None)
     # members only show up behind an owner
     show(in ix, "", "Point")
-    # `p: Point` bridges the variable to its type
+    # `p: Point` bridges the variable to its type — and so do the POINTER
+    # spellings: almost every variable in this codebase is `x: *T`, so stopping
+    # at the star meant member completion never resolved anything
+    printf("ptr: q=%s r=%s param=%s\n", ix.owner_of("q"), ix.owner_of("r"), ix.owner_of("pp"))
     printf("owner(p)=%s owner(Point)=%s owner(nope)=%s\n",
            ix.owner_of("p"), ix.owner_of("Point"),
            ix.owner_of("nope") if ix.owner_of("nope") != None else "-")

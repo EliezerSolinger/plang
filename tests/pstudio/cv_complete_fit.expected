@@ -1,0 +1,6 @@
+candidatos=12 owner=c
+largo          caixa=576x176 rows=10 dentro=1 cmds=30 vazamentos=0
+estreito       caixa=194x176 rows=10 dentro=1 cmds=10 vazamentos=0
+baixo          caixa=576x125 rows=7 dentro=1 cmds=21 vazamentos=0
+minusculo      caixa=129x91 rows=5 dentro=1 cmds=10 vazamentos=0
+complete-fit-ok

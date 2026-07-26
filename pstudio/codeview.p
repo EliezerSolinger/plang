@@ -7,10 +7,15 @@ import "psys.ph"
 import "complete.ph"
 
 CV_TAB: const i32 = 4       # soft tabs (DESIGN.md)
-# a char literal cannot hold a codepoint above ASCII (in C it would be a
-# multi-character constant), so the ones we draw by codepoint are named here
-CP_ELLIPSIS: const u32 = 0x2026    # … after a collapsed block
-
+# completion popup. The box is fitted to the candidates ON SHOW and then clamped
+# to the text area, so it can never reach over the minimap or off the widget;
+# whatever does not fit is elided (cmd_text_fit) rather than painted outside.
+CMP_MAX_ROWS: const i32 = 10       # candidates visible at once
+CMP_MIN_COLS: const i32 = 16       # the box never looks like a sliver
+CMP_MAX_COLS: const i32 = 72       # ... nor spans a wide editor
+CMP_PAD: const i32 = 3             # inner margin (px)
+CMP_MIN_DETAIL: const i32 = 8      # columns below which the signature is dropped
+                                   #   instead of elided down to just "…"
 # minimap: one pixel row per line, one pixel column per character (Godot draws
 # it from the HIGHLIGHT, not from glyphs — at this scale letters are noise)
 MM_COLS: const i32 = 90            # characters shown across the strip
@@ -110,8 +115,7 @@ static def gutter_fold_draw(ctx: *void, cv: *CodeView, line: i32, out_text: *cha
 static def gutter_fold_click(ctx: *void, cv: *CodeView, line: i32) -> bool:
     if not cv->buf.toggle_fold(line):
         return False
-    cv->changed()
-    cv->scroll_to_caret()
+    cv->anchor_top()
     return True
 
 # ---------- the default gutter: line numbers ----------
@@ -376,6 +380,13 @@ struct CodeView:
             self.sync_bars()
             self.ui->queue_redraw(self.id)
 
+    # a fold changed the visible mapping: keep the viewport where it is. Folding
+    # from the GUTTER must not scroll (Godot/Sublime) — the caret can be
+    # anywhere, and chasing it jumps the reader out of the block being folded.
+    def anchor_top(ref self: CodeView):
+        self.top = self.buf.visible_at_or_before(self.top)
+        self.changed()
+
     def scroll_to_caret(ref self: CodeView):
         c: *Caret = self.buf.caret(self.buf.ncarets() - 1)
         vis: i32 = self.visible_lines()
@@ -517,51 +528,30 @@ struct CodeView:
                 ui->cmd_glyph(self.id, ex, y, CP_ELLIPSIS, th->text_dim)
 
         # ---- completion popup, anchored under the caret ----
-        if self.cmp_open and not self.cmp_hits.is_empty():
-            crow2: i32 = self.row_of_line(self.buf.caret(0)->line)
-            if crow2 >= 0:
-                rows2: i32 = self.cmp_hits.len
-                if rows2 > 8:
-                    rows2 = 8
-                # widest candidate (name + a gap + the signature), capped
-                wid: i32 = 12
-                for hi in range(rows2):
-                    sm: *CSym = self.index.sym(self.cmp_hits.data[self.cmp_top + hi]) if self.cmp_top + hi < self.cmp_hits.len else None
-                    if sm == None:
-                        break
-                    l2: i32 = i32(strlen(sm->name)) + 2
-                    if sm->detail != None:
-                        l2 += i32(strlen(sm->detail)) + 1
-                    if l2 > wid:
-                        wid = l2
-                if wid > 60:
-                    wid = 60
-                pw: i32 = wid * cw
-                ph: i32 = rows2 * lh + 4
-                px2: i32 = tr.x + (self.screen_col(self.buf.caret(0)->line, self.cmp_col) - self.left) * cw
-                if px2 + pw > tr.x + tr.w:
-                    px2 = tr.x + tr.w - pw
-                if px2 < tr.x:
-                    px2 = tr.x
-                py2: i32 = tr.y + (crow2 + 1) * lh
-                if py2 + ph > tr.y + tr.h:
-                    py2 = tr.y + crow2 * lh - ph      # flip above the caret
-                ui->cmd_rect(self.id, pg_rect(px2, py2, pw, ph), 0xFF2B2D30)
-                ui->cmd_frame(self.id, pg_rect(px2, py2, pw, ph), th->accent)
-                for hi in range(rows2):
-                    idx2: i32 = self.cmp_top + hi
-                    if idx2 >= self.cmp_hits.len:
-                        break
-                    sm2: *CSym = self.index.sym(self.cmp_hits.data[idx2])
-                    ry: i32 = py2 + 2 + hi * lh
-                    if idx2 == self.cmp_sel:
-                        ui->cmd_rect(self.id, pg_rect(px2 + 1, ry, pw - 2, lh), th->sel)
-                    ui->cmd_text(self.id, px2 + 4, ry, sm2->name,
-                                 th->text if idx2 == self.cmp_sel else th->text_dim)
-                    if sm2->detail != None:
-                        dx: i32 = px2 + 4 + (i32(strlen(sm2->name)) + 2) * cw
-                        if dx < px2 + pw - cw:
-                            ui->cmd_text(self.id, dx, ry, sm2->detail, 0xFF6E7075)
+        if self.cmp_open and not self.cmp_hits.is_empty() and self.row_of_line(self.buf.caret(0)->line) >= 0:
+            pr: PgRect = self.cmp_rect()
+            rows2: i32 = self.cmp_rows()
+            ui->cmd_rect(self.id, pr, 0xFF2B2D30)
+            ui->cmd_frame(self.id, pr, th->accent)
+            inner: i32 = pr.w - 2 * CMP_PAD
+            for hi in range(rows2):
+                idx2: i32 = self.cmp_top + hi
+                if idx2 >= self.cmp_hits.len:
+                    break
+                sm2: *CSym = self.index.sym(self.cmp_hits.data[idx2])
+                ry: i32 = pr.y + CMP_PAD + hi * lh
+                if idx2 == self.cmp_sel:
+                    ui->cmd_rect(self.id, pg_rect(pr.x + 1, ry, pr.w - 2, lh), th->sel)
+                # the NAME is what gets picked, so it keeps whatever it needs;
+                # the signature takes the leftover and steps aside when there
+                # is not enough of it left to say anything
+                nw: i32 = ui->cmd_text_fit(self.id, pr.x + CMP_PAD, ry, sm2->name, inner,
+                                           th->text if idx2 == self.cmp_sel else th->text_dim)
+                if sm2->detail != None:
+                    dw: i32 = inner - nw - 2 * cw
+                    if dw >= CMP_MIN_DETAIL * cw:
+                        ui->cmd_text_fit(self.id, pr.x + CMP_PAD + nw + 2 * cw, ry,
+                                         sm2->detail, dw, 0xFF6E7075)
 
         # ---- minimap: a run of same-class characters becomes one rect ----
         if self.minimap:
@@ -890,6 +880,63 @@ struct CodeView:
         r[e - b] = '\0'
         return r
 
+    # How many candidates the popup shows. Both the drawing and the arrow keys
+    # ask HERE — they used to each carry their own `8`, so a popup shortened by
+    # a low pane scrolled against rows that were not on screen.
+    def cmp_rows(in self: CodeView) -> i32:
+        n: i32 = self.cmp_hits.len
+        if n > CMP_MAX_ROWS:
+            n = CMP_MAX_ROWS
+        fits: i32 = self.text_rect().h / self.ui->font.line_h() - 1
+        if n > fits:
+            n = fits
+        return n if n > 1 else 1
+
+    # The popup box: as wide as the candidates on show need, then clamped to the
+    # text area. Every overflow is decided here, once — the rows that follow
+    # only have to keep their text inside `w`.
+    def cmp_rect(in self: CodeView) -> PgRect:
+        tr: PgRect = self.text_rect()
+        cw: i32 = self.ui->font.char_w()
+        lh: i32 = self.ui->font.line_h()
+        rows: i32 = self.cmp_rows()
+        w: i32 = CMP_MIN_COLS * cw
+        for hi in range(rows):
+            i: i32 = self.cmp_top + hi
+            if i >= self.cmp_hits.len:
+                break
+            sm: *CSym = self.index.sym(self.cmp_hits.data[i])
+            # measured in CODEPOINTS (what the font draws), never in bytes
+            cand: i32 = self.ui->font.text_width(sm->name)
+            if sm->detail != None:
+                cand += 2 * cw + self.ui->font.text_width(sm->detail)
+            if cand > w:
+                w = cand
+        w += 2 * CMP_PAD
+        if w > CMP_MAX_COLS * cw:
+            w = CMP_MAX_COLS * cw
+        if w > tr.w - cw:                  # a narrow pane wins over any minimum
+            w = tr.w - cw
+        h: i32 = rows * lh + 2 * CMP_PAD
+        if h > tr.h:                       # a pane shorter than one row + margin
+            h = tr.h
+        x: i32 = tr.x + (self.screen_col(self.buf.caret(0)->line, self.cmp_col) - self.left) * cw
+        if x + w > tr.x + tr.w:
+            x = tr.x + tr.w - w
+        if x < tr.x:
+            x = tr.x
+        row: i32 = self.row_of_line(self.buf.caret(0)->line)
+        y: i32 = tr.y + (row + 1) * lh
+        if y + h > tr.y + tr.h:
+            y = tr.y + row * lh - h        # flip above the caret
+        # neither side fits — a low pane, or a caret the view has scrolled away
+        # from. Keep the box in the area: covering the text beats hanging off it.
+        if y + h > tr.y + tr.h:
+            y = tr.y + tr.h - h
+        if y < tr.y:
+            y = tr.y
+        return pg_rect(x, y, w, h)
+
     def complete_close(ref self: CodeView):
         if not self.cmp_open:
             return
@@ -987,15 +1034,16 @@ struct CodeView:
             self.changed()
             self.scroll_to_caret()
 
+    # fold/unfold ALL is a view operation, not a navigation one: it keeps the
+    # reader where they are (the caret may be anywhere). Folding away the block
+    # the viewport starts on leaves its header as the first row.
     def fold_all(ref self: CodeView):
         self.buf.fold_all()
-        self.changed()
-        self.scroll_to_caret()
+        self.anchor_top()
 
     def unfold_all(ref self: CodeView):
         self.buf.unfold_all()
-        self.changed()
-        self.scroll_to_caret()
+        self.anchor_top()
 
     def toggle_bookmark(ref self: CodeView):
         self.buf.toggle_mark(self.buf.caret(0)->line, MARK_BOOKMARK)
@@ -1186,10 +1234,11 @@ struct CodeView:
                             self.cmp_sel = n2 - 1
                         if self.cmp_sel >= n2:
                             self.cmp_sel = 0
+                        rows3: i32 = self.cmp_rows()      # what is actually on screen
                         if self.cmp_sel < self.cmp_top:
                             self.cmp_top = self.cmp_sel
-                        elif self.cmp_sel >= self.cmp_top + 8:
-                            self.cmp_top = self.cmp_sel - 7
+                        elif self.cmp_sel >= self.cmp_top + rows3:
+                            self.cmp_top = self.cmp_sel - rows3 + 1
                         ui->queue_redraw(self.id)
                         return True
                     if ev->key not in {PGK_BACKSPACE, PGK_LEFT, PGK_RIGHT}:

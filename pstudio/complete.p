@@ -63,6 +63,19 @@ static def line_of(text: const *char, n: i32) -> *char:
     r[e - start] = '\0'
     return r
 
+# The type NAME a declaration binds to, starting at the token after the `:`.
+# Walks past `const` and the stars: in this codebase practically every variable
+# is `x: *Type`, and stopping at the `*` meant member completion never resolved
+# anything. A pointer completes just like the value — `->` and `.` are one thing
+# to the index, and the editor already accepts either.
+static def decl_type_name(tl: TokenList, at: usize) -> const *char:
+    i: usize = at
+    while i < tl.n and tl.toks[i].kind in {TK_STAR, TK_CONST}:
+        i += 1
+    if i < tl.n and tl.toks[i].kind == TK_IDENT:
+        return tl.toks[i].text
+    return None
+
 struct Index:
     static def add(ref self: Index, name: const *char, detail: const *char, owner: const *char, kind: SymKind)
     static def has(in self: Index, name: const *char, owner: const *char) -> bool
@@ -192,14 +205,13 @@ struct Index:
                     # a parameter is a declaration too: `def f(p: Point)` is
                     # what makes `p.` work inside the body
                     if paren > 0 and i + 2 < tl.n and tl.toks[i + 1].kind == TK_COLON:
-                        pt: *Token = &tl.toks[i + 2]
-                        if pt->kind == TK_IDENT:
-                            pv2: CVar = {own(t->text), own(pt->text)}
+                        ptn: const *char = decl_type_name(tl, i + 2)
+                        if ptn != None:
+                            pv2: CVar = {own(t->text), own(ptn)}
                             self.vars.push(pv2)
                     # `name: Type` — a field inside a struct, a variable outside
                     if line_start and i + 2 < tl.n and tl.toks[i + 1].kind == TK_COLON:
-                        ty: *Token = &tl.toks[i + 2]
-                        tyname: const *char = ty->text if ty->kind == TK_IDENT else None
+                        tyname: const *char = decl_type_name(tl, i + 2)
                         if cur_struct != None:
                             d: *char = line_of(text, t->pos.line - 1)
                             self.add(t->text, d, cur_struct, SYM_MEMBER)

@@ -166,6 +166,11 @@ struct Buffer:
     def next_visible(in self: Buffer, line: i32, delta: i32) -> i32
     def to_visible(in self: Buffer, line: i32) -> i32    # line -> visible index
     def from_visible(in self: Buffer, vidx: i32) -> i32  # visible index -> line
+    # nearest VISIBLE line at or BEFORE `line` — what a viewport anchored on a
+    # line that a fold just swallowed must show. Walking forward instead (which
+    # is what from_visible(to_visible(line)) does) would land after the block
+    # and scroll the view away from the fold the user just closed.
+    def visible_at_or_before(in self: Buffer, line: i32) -> i32
 
     # ---- undo ----
     def undo_step(ref self: Buffer) -> bool

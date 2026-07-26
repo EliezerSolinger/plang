@@ -21,6 +21,10 @@ enum WidgetKind:
     WK_INPUT       # single-line text input (palette, search)
     WK_CUSTOM      # app widget: driven by the node's function pointers
 
+# a char literal cannot hold a codepoint above ASCII (in C that would be a
+# multi-character constant), so the ones drawn by codepoint are named here
+CP_ELLIPSIS: const u32 = 0x2026    # … elided text, collapsed block
+
 # WidgetBase flags
 UF_VISIBLE: const u32 = 1
 UF_EXPAND_H: const u32 = 2    # horizontal SIZE_EXPAND (stretches in a horizontal BOX)
@@ -186,3 +190,9 @@ struct Ui:
     def cmd_text(ref self: Ui, id: i32, x: i32, y: i32, text: const *char, color: u32)
     def cmd_text_n(ref self: Ui, id: i32, x: i32, y: i32, text: const *char, nbytes: usize, color: u32)
     def cmd_glyph(ref self: Ui, id: i32, x: i32, y: i32, cp: u32, color: u32)
+    # `text` clipped to `max_w` pixels, ending in `…` when it does not fit.
+    # Returns the width actually drawn, so a caller laying out columns knows
+    # where the next one may start. Anything drawing text it did not measure
+    # should come through here: clipping the widget only hides the overflow,
+    # it still paints over whatever the box was supposed to frame.
+    def cmd_text_fit(ref self: Ui, id: i32, x: i32, y: i32, text: const *char, max_w: i32, color: u32) -> i32

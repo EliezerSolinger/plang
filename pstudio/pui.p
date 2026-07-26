@@ -752,6 +752,31 @@ struct Ui:
         memcpy(c->text, text, nbytes)
         c->text[nbytes] = '\0'
 
+    def cmd_text_fit(ref self: Ui, id: i32, x: i32, y: i32, text: const *char, max_w: i32, color: u32) -> i32:
+        cw: i32 = self.font.char_w()
+        if max_w < cw or text == None or text[0] == '\0':
+            return 0
+        w: i32 = self.font.text_width(text)
+        if w <= max_w:
+            self.cmd_text(id, x, y, text, color)
+            return w
+        # one cell goes to the ellipsis; cut on a CODEPOINT boundary — the font
+        # measures codepoints, so a byte cut would both mis-measure and split
+        # a multi-byte glyph into garbage
+        budget: i32 = max_w / cw - 1
+        nb: usize = 0
+        n: i32 = 0
+        while text[nb] != '\0':
+            if (u8(text[nb]) & 0xC0) != 0x80:
+                if n == budget:
+                    break
+                n += 1
+            nb += 1
+        if nb > 0:
+            self.cmd_text_n(id, x, y, text, nb, color)
+        self.cmd_glyph(id, x + n * cw, y, CP_ELLIPSIS, color)
+        return (n + 1) * cw
+
     def cmd_glyph(ref self: Ui, id: i32, x: i32, y: i32, cp: u32, color: u32):
         c: *Cmd = self.cmd_push(id)
         c->kind = CMD_GLYPH

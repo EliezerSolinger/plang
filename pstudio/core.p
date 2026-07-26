@@ -1401,6 +1401,13 @@ struct Buffer:
             n += 1
         return self.lines.len - 1
 
+    def visible_at_or_before(in self: Buffer, line: i32) -> i32:
+        i: i32 = line if line < self.lines.len else self.lines.len - 1
+        # line 0 is never hidden: a fold hides only what FOLLOWS its header
+        while i > 0 and self.lines.data[i].hidden:
+            i -= 1
+        return i if i > 0 else 0
+
 # ---------- highlight ----------
 
 static def arena_drop(a: *Arena):

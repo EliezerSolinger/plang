@@ -1,0 +1,8 @@
+lines=161 visible_rows=17
+top=20 caret=0
+folded=1 top=20 (era 20) caret=0
+unfold: top=20 (era 20) folded=0
+fold_all: inner=22 -> top=20 hidden(inner)=1 caret=0
+unfold_all: top=20
+at_caret: top=24 caret=40 folded=1
+fold-scroll-ok
