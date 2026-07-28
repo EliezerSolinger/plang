@@ -103,9 +103,20 @@ static def ps_stat_path(path: const *char, out st: PsStat) -> bool:
     # S_ISDIR is a macro (it vanishes on ingest): stable POSIX mask
     st.is_dir = (i32(sb.st_mode) & 0xF000) == 0x4000
     st.size = i64(sb.st_size)
-    st.mtime = i64(sb.st_mtim.tv_sec)   # st_mtime is a macro for st_mtim.tv_sec
-    # (POSIX code: under a strict -std=cNN, build the generated C with
-    #  -D_DEFAULT_SOURCE — that is what the test suite does)
+    # `struct stat`'s modification time has no single spelling across libcs, and
+    # the one portable NAME is a macro, so it is gone by the time P sees the
+    # struct. `hasfield` picks at compile time and the dead branch is never
+    # checked (so naming a field the platform lacks is fine):
+    #   glibc  st_mtim      (struct timespec, POSIX.1-2008; needs -D_DEFAULT_SOURCE
+    #                        under a strict -std=cNN, which the test suite passes)
+    #   macOS  st_mtimespec (struct timespec, __DARWIN_UNIX03 — the default)
+    #   older  st_mtime     (plain time_t member, no sub-second part)
+    if hasfield(sb, "st_mtim"):
+        st.mtime = i64(sb.st_mtim.tv_sec)
+    elif hasfield(sb, "st_mtimespec"):
+        st.mtime = i64(sb.st_mtimespec.tv_sec)
+    else:
+        st.mtime = i64(sb.st_mtime)
     return True
 
 static def local_stat(ctx: *void, path: const *char, out_st: *PsStat) -> bool:

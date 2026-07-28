@@ -327,6 +327,7 @@ struct Sema:
     static def ceval(self: *Sema, e: *Expr, ref ok: bool) -> i64
     static def infer_type(self: *Sema, e: *Expr) -> *Type
     static def sugg_text(self: *Sema, sg: *Sugg) -> const *char
+    static def hasfield_of(self: *Sema, e: *Expr) -> bool
     static def known_type_name(self: *Sema, n: const *char) -> bool
     static def is_check_ptr(self: *Sema, e: *Expr)
     static def is_wrap_voidp(self: *Sema, e: *Expr) -> *Expr
@@ -1103,6 +1104,11 @@ struct Sema:
                     # `if typestr(x) == "*char":` prunes at compile time (like match type)
                     if e->lhs->text == "typestr" and e->nargs == 1:
                         return cv_str(self->a->printf("\"%s\"", render_type_p(self->a, self->type_of(e->args[0]))))
+                    # hasfield(x, "name"): member present? This is the path the
+                    # ST_IF pruning takes, and it runs BEFORE check_expr folds the
+                    # node — so the answer has to be available here too
+                    if e->lhs->text == "hasfield" and e->nargs == 2:
+                        return cv_int(1 if self->hasfield_of(e) else 0)
                     # len(arr): element count of a fixed array T[N]. In a comptime
                     # context (e.g. an array dimension) it folds straight to N; in a
                     # value context check_expr already lowered it to sizeof/sizeof.
@@ -1271,6 +1277,32 @@ struct Sema:
         if sg->best != None and sg->bestd > 0 and sg->bestd <= lim:
             return self->a->printf(" (did you mean '%s'?)", sg->best)
         return ""
+
+    # hasfield(x, "name") — does x's struct/union declare that member? Answered at
+    # compile time, so `if hasfield(...)` prunes and the DEAD branch is never
+    # type-checked (ST_IF, check_stmt): a branch may legitimately name a member
+    # this platform's libc does not have.
+    #
+    # Called from BOTH check_expr (which folds the node to True/False) and ceval
+    # (which is what the ST_IF pruning consults) — the fold in ST_IF runs before
+    # check_expr ever sees the condition, so handling only one is not enough.
+    static def hasfield_of(self: *Sema, e: *Expr) -> bool:
+        ht: *Type = e->args[0]->cast_type if e->args[0]->kind == EX_TYPEREF else self->type_of(e->args[0])
+        while ht != None and ht->kind == TY_PTR:   # hasfield(p, "x") asks about *p
+            ht = ht->inner
+        if ht == None or ht->kind != TY_NAME:
+            fatal_at(self->file, e->pos, "hasfield: first argument must be a struct or union (or a pointer to one)")
+        if e->args[1]->kind != EX_STRING or e->args[1]->text == None:
+            fatal_at(self->file, e->pos, "hasfield: second argument must be a string literal naming the member")
+        hsi: *SInfo = self->find_struct(ht->name)
+        if hsi == None:
+            fatal_at(self->file, e->pos, "hasfield: '%s' is not a known struct or union", ht->name)
+        for hi in range(hsi->nfields):
+            # the literal still carries its quotes: compare against the quoted
+            # spelling rather than unquoting it
+            if hsi->fields[hi].name != None and strcmp(e->args[1]->text, self->a->printf("\"%s\"", hsi->fields[hi].name)) == 0:
+                return True
+        return False
 
     static def known_type_name(self: *Sema, n: const *char) -> bool:
         if self->types.has(n):
@@ -2690,6 +2722,26 @@ struct Sema:
                     with e:
                         .kind = EX_STRING
                         .text = self->a->printf("\"%s\"", tn)
+                        .lhs = None
+                        .args = None
+                        .nargs = 0
+                    return
+                # hasfield(x, "name"): does x's struct/union declare that member?
+                # Folded to True/False at compile time, so `if hasfield(...)` prunes
+                # and the DEAD branch is never type-checked (see ST_IF above) — the
+                # branch may name a field that does not exist on this platform.
+                #
+                # This is the answer to a C-struct shape that differs per libc, of
+                # which the modification time is the standard example: glibc's
+                # `struct stat` carries `st_mtim` (POSIX.1-2008), macOS carries
+                # `st_mtimespec`, and the portable `st_mtime` is a MACRO on both, so
+                # it vanishes on header ingest and P cannot spell it. Consistent with
+                # never abstracting libc: adapt to the shape libc actually has.
+                if callee->kind == EX_IDENT and callee->text == "hasfield" and e->nargs == 2:
+                    hf: bool = self->hasfield_of(e)
+                    with e:
+                        .kind = EX_TRUE if hf else EX_FALSE
+                        .text = None
                         .lhs = None
                         .args = None
                         .nargs = 0
