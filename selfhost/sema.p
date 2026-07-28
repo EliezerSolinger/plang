@@ -69,6 +69,9 @@ declare StrMap<*Type>
 implement StrMap<*Type>
 declare StrMap<*Decl>
 implement StrMap<*Decl>
+# the QBE backend folds module-level consts through a map of their initializers
+declare StrMap<*Expr>
+implement StrMap<*Expr>
 declare StrMap<i64>
 implement StrMap<i64>
 declare StrMap<*CVal>
@@ -131,8 +134,11 @@ static def type_is_unsigned(t: *Type) -> bool
 # output into a binary — then feed the result to the C front end (c_parse).
 # popen/pclose are POSIX, not declared by <stdio.h> under strict -std=c11, so we
 # prototype them here — otherwise C assumes an int return and truncates the FILE*.
+# Spelled with libc's OWN types (`FILE`, `int`), never the underlying tag: on a
+# platform whose <stdio.h> does declare them, a mismatched spelling is a hard
+# "conflicting types" error, and `struct _IO_FILE` is glibc-only.
 def popen(cmd: const *char, mode: const *char) -> *FILE
-def pclose(stream: *FILE) -> i32
+def pclose(stream: *FILE) -> int
 static def macro_int_val(txt: const *char, out: *i64) -> bool
 static def inject_inline_runtime(cc: *Cc, m: *Module)
 def sema_run(cc: *Cc, m: *Module)
@@ -226,6 +232,9 @@ struct Sema:
     funcs: StrMap<*Func>
     globals: StrMap<*Type>
     enumconsts: StrSet
+    enums: StrMap<*Decl>     # enum TYPE name -> its declaration, for -Wswitch:
+                             #   exhaustiveness needs the enumerator list, which
+                             #   `enumconsts` (a flat set) cannot give back
     constvals: StrMap<*CVal>   # constants known at compile time (int/float/str)
     gstatics: StrSet         # file-scope names declared 'static' (internal
                              #   linkage) — a later extern/non-static conflicts
@@ -267,6 +276,23 @@ struct Sema:
     nscopes: i32
     cscopes: i32
     done: StrSet             # modules already registered (avoids cycle/duplicate)
+    # every free function THIS module defines, mapped to the line it is defined
+    # on. Declarations are registered as the file is walked, so a call to a name
+    # that appears later has nothing to resolve against — this map is what lets
+    # the diagnostic say "it is right there, below" instead of "no such thing".
+    later_defs: StrMap<i64>
+    # A complex statement expression `({ decl; ...; v })` in a NESTED position
+    # (a call argument, say) has no standard-C spelling. It is hoisted here: the
+    # block becomes a real statement in front of the enclosing one, and the
+    # expression becomes a temporary. `se_pend` carries the blocks waiting to be
+    # inserted (check_stmts drains them); `lazy_depth` marks the positions where
+    # hoisting would be WRONG — a short-circuit's right operand or a ternary arm
+    # must not run before the branch is taken.
+    se_ctr: i32
+    se_pend: **Stmt
+    se_npend: i32
+    se_cpend: i32
+    lazy_depth: i32
     with_names: **char       # stack of hidden pointers of the active `with`s
     nwith: i32
     cwith: i32
@@ -308,7 +334,7 @@ struct Sema:
     static def require_complete(self: *Sema, t: *Type, pos: Pos)
     static def fold_const_dims(self: *Sema, t: *Type)
     static def vla_hoist_add(self: *Sema, st: *Stmt)
-    static def materialize_in(self: *Sema, e: *Expr) -> *Expr
+    static def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr
     static def ensure_libc_proto(self: *Sema, name: const *char, ret: *Type)
     static def lower_vla_c89(self: *Sema, st: *Stmt) -> bool
     static def fold_predefined(self: *Sema, e: *Expr)
@@ -354,6 +380,7 @@ struct Sema:
     static def walk_gotos(self: *Sema, b: *Block, names: **char, n: i32)
     static def switch_collect_cases(self: *Sema, b: *Block, ref vals: *i64, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32, ref ndef: i32, ref defpos: Pos, mask: u64)
     static def check_switch_dups(self: *Sema, b: *Block)
+    static def check_enum_exhaustive(self: *Sema, pos: Pos, subj: *Type, vals: *i64, n: i32, has_default: bool, what: const *char)
     static def check_func_body(self: *Sema, f: *Func)
     static def register_func(self: *Sema, f: *Func)
     static def cpp_capture(self: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char
@@ -486,7 +513,15 @@ struct Sema:
             if t->kind == TY_NAME and t->tag_kind == TAG_NONE and t->name != None:
                 # a C-header typedef of a TAG (`regex_t`): switch to the TAG's
                 # spelling — the layout is known under that name in both backends
-                # (this is the only way QBE learns the real size)
+                # (this is the only way QBE learns the real size).
+                #
+                # The type system stays CANONICAL on the tag: one spelling, so
+                # comparison, layout and the round-trip all keep working. What
+                # the C backend PRINTS is a separate question — for a P module it
+                # prints the typedef again (see Module.tdrev), because that is
+                # the spelling the emitted `#include` declares and the tag is
+                # libc-internal (`struct _IO_FILE` is glibc's; macOS has no such
+                # tag, so printing it made the output non-portable).
                 ta: *Type = self->tdalias.get_or(t->name, None)
                 if ta != None:
                     t->name = ta->name
@@ -1342,12 +1377,66 @@ struct Sema:
         self->vla_hoist[self->vla_nhoist] = st
         self->vla_nhoist += 1
 
-    static def materialize_in(self: *Sema, e: *Expr) -> *Expr:
+    # Evaluates `e` ONCE into a hoisted temporary and yields its ADDRESS. Used
+    # wherever the language hands a by-reference construct an rvalue: `in self`
+    # on a call result, `with` on one. Taking `&expr` directly is invalid C —
+    # the C backend used to emit it and only the C compiler complained.
+    # `({ ... })` whose block holds anything other than expressions: there is no
+    # standard-C form for it (the comma operator only sequences expressions)
+    static def stmtexpr_needs_hoist(self: *Sema, e: *Expr) -> bool:
+        if e == None or e->kind != EX_STMTEXPR or e->xblock == None or e->lhs == None:
+            return False
+        for i in range(e->xblock->n):
+            if e->xblock->stmts[i]->kind != ST_EXPR:
+                return True
+        return False
+
+    # hoists `e`'s block in front of the enclosing statement and rewrites `e`
+    # into the temporary that receives its value. Must be called with `e`'s own
+    # scope still pushed: the value expression refers to the block's locals.
+    static def hoist_stmtexpr(self: *Sema, e: *Expr):
+        t: *Type = self->type_of(e->lhs)
+        if t == None:
+            t = self->infer_type(e->lhs)
+        if t == None or is_void_val(t):
+            return          # no value to carry: statement position handles it
+        name: const *char = self->a->printf("__se%d", self->se_ctr)
+        self->se_ctr += 1
+        hd: *Stmt = st_new(self->a, ST_VAR, e->pos)
+        hd->name = name
+        hd->type = t
+        self->resolve_type(hd->type)
+        self->vla_hoist_add(hd)
+        hp: *Type = self->a->alloc(sizeof(Type))
+        *hp = *t
+        self->fn_hoisted.put(name, hp)
+        # the block, with the value assigned to the temporary at the end
+        asn: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
+        asn->op = TK_ASSIGN
+        asn->lhs = mk_ident(self->a, name, e->pos)
+        asn->rhs = e->lhs
+        nb: *Block = self->a->alloc(sizeof(Block))
+        nn: i32 = e->xblock->n
+        nb->stmts = self->a->alloc(usize(nn + 1) * sizeof(*nb->stmts))
+        for i in range(nn):
+            nb->stmts[i] = e->xblock->stmts[i]
+        nb->stmts[nn] = asn
+        nb->n = nn + 1
+        blk: *Stmt = st_new(self->a, ST_BLOCK, e->pos)
+        blk->body = nb
+        self->se_pend = vec_grow(self->se_pend, self->se_npend, ref self->se_cpend, sizeof(*self->se_pend))
+        self->se_pend[self->se_npend] = blk
+        self->se_npend += 1
+        # and the expression itself becomes the temporary
+        idn: *Expr = mk_ident(self->a, name, e->pos)
+        *e = *idn
+
+    static def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr:
         t: *Type = self->type_of(e)
         if t == None:
             t = self->infer_type(e)
         if t == None:
-            fatal_at(self->file, e->pos, "cannot infer the type of the 'in' receiver expression")
+            fatal_at(self->file, e->pos, "cannot infer the type of the %s", what)
         name: const *char = self->a->printf("__in%d", self->in_ctr)
         self->in_ctr += 1
         hd: *Stmt = st_new(self->a, ST_VAR, e->pos)
@@ -2672,7 +2761,7 @@ struct Sema:
                                 if not is_lvalue(recv) and recv->kind != EX_STRING:
                                     # rvalue: only `in self` (read-only) may materialize a temporary
                                     if mth->nparams > 0 and mth->params[0].byref == PK_IN:
-                                        selfx = self->materialize_in(recv)
+                                        selfx = self->materialize_temp(recv, "'in' receiver expression")
                                     else:
                                         kwn: const *char = "ref" if mth->nparams > 0 and mth->params[0].byref == PK_REF else ("out" if mth->nparams > 0 and mth->params[0].byref == PK_OUT else "*")
                                         fatal_at(self->file, recv->pos, "method '%s' takes '%s self' (it may write through it), so the receiver must be an lvalue (a variable, field, array element or *pointer)", callee->field, kwn)
@@ -2724,6 +2813,14 @@ struct Sema:
                     # C99: calling a name declared NOWHERE is an implicit function
                     # declaration — an error in user C code (headers stay tolerant)
                     if cvt == None and self->find_func(callee->text) == None and not self->in_chdr and not self->is_type_name(callee->text) and not self->is_enum_const(callee->text) and callee->text not in {"sizeof", "_Alignof", "__alignof__"} and strncmp(callee->text, "__builtin_", 10) != 0 and strncmp(callee->text, "va_", 3) != 0 and callee->text not in {"offsetof", "assert", "static_assert", "_Static_assert"}:
+                        # the name may be perfectly well defined — just further
+                        # down. That is an ORDERING problem, and saying so beats
+                        # sending the reader off to look for a missing function.
+                        dl: i64 = self->later_defs.get_or(callee->text, 0)
+                        if dl > i64(e->pos.line):
+                            cdiag_at(self->file, e->pos, "implicit-function-declaration", WD_ERR,
+                                     "'%s' is only declared further down in this file (line %lld): move it above this call, or add a forward 'def' line (no body) before this point",
+                                     callee->text, dl)
                         cdiag_at(self->file, e->pos, "implicit-function-declaration", WD_ERR, "implicit declaration of function '%s'", callee->text)
                 # arity: a call through the function NAME with a KNOWN signature
                 # must pass the right number of arguments ('()' protos stay open)
@@ -3003,7 +3100,14 @@ struct Sema:
                             self->check_expr(e)
                             return
                 self->check_expr(e->lhs)
-                self->check_expr(e->rhs)
+                # the right operand of and/or runs only if the left allowed it:
+                # hoisting out of there would evaluate it unconditionally
+                if e->op == TK_AND or e->op == TK_OR:
+                    self->lazy_depth += 1
+                    self->check_expr(e->rhs)
+                    self->lazy_depth -= 1
+                else:
+                    self->check_expr(e->rhs)
                 # `a is b` / `a is not b`: POINTER identity, regardless of type.
                 # Desugars to (void*)a ==/!= (void*)b — no backend work needed.
                 if e->op == TK_IS or e->op == TK_ISNOT:
@@ -3022,8 +3126,11 @@ struct Sema:
                 return
             case EX_TERNARY:
                 self->check_expr(e->cond)
+                # only ONE arm runs: neither may be hoisted in front of the test
+                self->lazy_depth += 1
                 self->check_expr(e->lhs)
                 self->check_expr(e->rhs)
+                self->lazy_depth -= 1
                 self->require_scalar(e->cond, "ternary condition")
                 tva: *Type = self->type_of(e->lhs)
                 tvb: *Type = self->type_of(e->rhs)
@@ -3178,6 +3285,11 @@ struct Sema:
                 if e->xblock != None:
                     self->check_stmts(e->xblock)
                 self->check_expr(e->lhs)
+                # nested and complex: hoist the block out (see hoist_stmtexpr).
+                # In a lazy position the block must stay where it is — the C
+                # backend restructures the ternary instead.
+                if self->lazy_depth == 0 and self->stmtexpr_needs_hoist(e):
+                    self->hoist_stmtexpr(e)
                 self->scope_pop()
                 return
             case EX_INITLIST:
@@ -3522,7 +3634,14 @@ struct Sema:
                         self->check_block(st->cases[st->tm_sel]->body)
                         self->sw_depth -= 1
                     return
+                # covered values, for -Wswitch/-Wswitch-enum (checked after the
+                # loop: the folding below is what makes every label ceval-able)
+                mvals: *i64 = None
+                mn = 0; mcap = 0
+                mdef: bool = False
                 for j in range(st->ncases):
+                    if st->cases[j]->is_default:
+                        mdef = True
                     for k in range(st->cases[j]->nvals):
                         cval: *Expr = st->cases[j]->vals[k]
                         self->check_expr(cval)
@@ -3535,9 +3654,17 @@ struct Sema:
                             if cok:
                                 cval->kind = EX_NUMBER
                                 cval->text = self->a->printf("%lld", cv)
+                        mok: bool = True
+                        mv: i64 = self->ceval(cval, ref mok)
+                        if mok:
+                            mvals = vec_grow(mvals, mn, ref mcap, sizeof(*mvals))
+                            mvals[mn] = mv
+                            mn += 1
                     self->sw_depth += 1
                     self->check_block(st->cases[j]->body)
                     self->sw_depth -= 1
+                self->check_enum_exhaustive(st->pos, self->type_of(st->subject), mvals, mn, mdef, "match")
+                free(mvals)
                 return
             case ST_WITH:
                 self->check_expr(st->expr)
@@ -3555,6 +3682,12 @@ struct Sema:
                 st->name = self->a->printf("__with_%d_%d", st->pos.line, st->pos.col)
                 if is_ptr:
                     st->init = st->expr
+                elif not is_lvalue(st->expr) and st->expr->kind != EX_STRING:
+                    # `with faz():` — an RVALUE target. Pascal semantics say
+                    # evaluate once, so materialize it: `&faz()` is not C, and
+                    # the C backend used to emit it and let the C compiler
+                    # complain (the QBE backend refused it outright).
+                    st->init = self->materialize_temp(st->expr, "'with' target expression")
                 else:
                     st->init = take_addr(self->a, st->expr)
                 # pushes the receiver; the body is checked with `.field` available
@@ -3626,6 +3759,7 @@ struct Sema:
                     if sww > 0 and sww < 8:
                         swm = (u64(1) << u64(sww * 8)) - 1
                 self->switch_collect_cases(st->body, ref swvals, ref swn, ref swcap, ref swposs, ref swcap2, ref swndef, ref swdp, swm)
+                self->check_enum_exhaustive(st->pos, swt, swvals, swn, swndef > 0, "switch")
                 free(swvals)
                 free(swposs)
                 self->sw_depth += 1
@@ -3644,7 +3778,10 @@ struct Sema:
                 if self->loop_depth == 0:
                     fatal_at(self->file, st->pos, "'continue' outside a loop")
                 return
-            case _:
+            # No `case _:` ON PURPOSE — see collect_vars in backend_qbe.p. These
+            # three carry nothing for this pass to check; every OTHER kind does,
+            # so a new one must not be able to reach here unnoticed.
+            case ST_GOTO, ST_LABEL, ST_PASS:
                 return
 
     static def block_prepend(self: *Sema, b: *Block, st: *Stmt):
@@ -3744,7 +3881,14 @@ struct Sema:
                     ns = vec_grow(ns, nn, ref cap, sizeof(*ns))
                     ns[nn] = d2
                     nn += 1
+            mark: i32 = self->se_npend
             self->check_stmt(st)
+            for k in range(mark, self->se_npend):
+                ns = vec_grow(ns, nn, ref cap, sizeof(*ns))
+                ns[nn] = self->se_pend[k]
+                nn += 1
+                injected = True
+            self->se_npend = mark
             ns = vec_grow(ns, nn, ref cap, sizeof(*ns))
             ns[nn] = st
             nn += 1
@@ -3847,6 +3991,73 @@ struct Sema:
             self->switch_collect_cases(st->else_block, ref vals, ref n, ref cap, ref poss, ref cap2, ref ndef, ref defpos, mask)
             for j in range(st->nconds):
                 self->switch_collect_cases(st->blocks[j], ref vals, ref n, ref cap, ref poss, ref cap2, ref ndef, ref defpos, mask)
+
+    # -Wswitch / -Wswitch-enum: enumerators of the subject's type that no case
+    # covers. Clang's split, and we keep it:
+    #   -Wswitch       on by default, fires ONLY when there is no default label
+    #                  (a default makes the switch total, so C code is quiet).
+    #   -Wswitch-enum  off by default and NOT in -Wall, fires even WITH a default.
+    # The second is the one a dispatch over an AST node kind wants: the catch-all
+    # exists for the kinds that need no work, and adding a kind must still be
+    # reported. That is why plangc builds itself with -Wswitch-enum (see the
+    # Makefile) — a `case _:` must never be able to swallow a NEW kind silently.
+    #
+    # Coverage is decided BY VALUE, not by name: two enumerators sharing a value
+    # are covered together. Same as clang, and required for correctness — a case
+    # on either spelling really does handle both.
+    #
+    # Only fires on P input today. The C front end MAPS `enum Tag` to its
+    # underlying integer type (cfront.p: `unsigned`, or `int` when an enumerator
+    # is negative — gcc's rule, and 00218 depends on it), so a C switch subject
+    # no longer carries the enum's identity and there is nothing to check
+    # against. Keeping that identity means giving TAG_ENUM a width/signedness
+    # everywhere arithmetic asks — a real change, not a side effect of this one.
+    static def check_enum_exhaustive(self: *Sema, pos: Pos, subj: *Type, vals: *i64, n: i32, has_default: bool, what: const *char):
+        if self->in_chdr or subj == None or subj->kind != TY_NAME:
+            return
+        ed: *Decl = self->enums.get_or(subj->name, None)
+        if ed == None or ed->nitems == 0:
+            return
+        missing: **char = None
+        nm = 0; mcap = 0
+        for i in range(ed->nitems):
+            ecv: *CVal = self->constvals.get_or(ed->items[i].name, None)
+            if ecv == None or ecv->kind != CV_INT:
+                # a value we cannot fold: stay silent rather than report a
+                # coverage hole that may not be one
+                free(missing)
+                return
+            found: bool = False
+            for j in range(n):
+                if vals[j] == ecv->ival:
+                    found = True
+                    break
+            if not found:
+                missing = vec_grow(missing, nm, ref mcap, sizeof(*missing))
+                missing[nm] = (*char)(ed->items[i].name)
+                nm += 1
+        if nm > 0:
+            # clang's phrasing, including its "spell out up to 3" cutoff
+            # clang says "not EXPLICITLY handled" when a default label exists —
+            # the switch is total, the point is only that a case is missing
+            expl: const *char = "explicitly " if has_default else ""
+            b: StrBuf = {0}
+            if nm > 3:
+                b.printf("%d enumeration values not %shandled in %s: ", nm, expl, what)
+                for i in range(3):
+                    b.printf("%s'%s'", "" if i == 0 else ", ", missing[i])
+                b.puts("...")
+            else:
+                b.printf("enumeration value%s ", "" if nm == 1 else "s")
+                for i in range(nm):
+                    if i > 0:
+                        b.puts(", " if nm > 2 and i < nm - 1 else (", and " if nm > 2 else " and "))
+                    b.printf("'%s'", missing[i])
+                b.printf(" not %shandled in %s", expl, what)
+            cdiag_at(self->file, pos, "switch-enum" if has_default else "switch",
+                     WD_OFF if has_default else WD_WARN, "%s", b.data)
+            b.deinit()
+        free(missing)
 
     static def check_switch_dups(self: *Sema, b: *Block):
         if b == None:
@@ -4443,6 +4654,8 @@ struct Sema:
                 return
             case DL_ENUM:
                 self->add_type(d->name)
+                if d->name != None:
+                    self->enums.put(d->name, d)
                 j: i32
                 enext: i64 = 0   # auto-incremented value
                 for j in range(d->nitems):
@@ -4485,6 +4698,19 @@ struct Sema:
 
         prev: const *char = self->file
         self->file = m->path
+        # index the module's own functions BEFORE walking it, so a call to one
+        # that is only defined further down can be diagnosed as an ordering
+        # problem. Only for the module being checked: in an imported one the
+        # names are all registered up front anyway, and in a C module
+        # use-before-declaration is C's own rule, reported as C reports it.
+        if check_bodies and not m->is_c:
+            for j in range(m->ndecls):
+                fd: *Decl = m->decls[j]
+                if fd->kind == DL_FUNC and fd->func != None and fd->func->name != None:
+                    # the FIRST spelling of the name: with a prototype below the
+                    # call it is the prototype, not the body, that has to move
+                    if not self->later_defs.has(fd->func->name):
+                        self->later_defs.put(fd->func->name, i64(fd->func->pos.line))
         for j in range(m->ndecls):
             self->register_decl(m, m->decls[j], check_bodies)
         # a typedef of a TAG (`typedef struct re_pattern_buffer regex_t`):
@@ -5156,11 +5382,13 @@ def sema_run(cc: *Cc, m: *Module):
         s.gstatics.deinit()
         s.gexterns.deinit()
         s.enumconsts.deinit()
+        s.enums.deinit()
         s.tdalias.deinit()
         s.fn_globals.deinit()
         s.fn_nonlocals.deinit()
         s.fn_hoisted.deinit()
         s.done.deinit()
+        s.later_defs.deinit()
         free(s.locals)
         free(s.scopes)
 
@@ -5196,3 +5424,39 @@ def sema_run(cc: *Cc, m: *Module):
             nd[i + 2] = m->decls[i]
         m->decls = nd
         m->ndecls = m->ndecls + 2
+
+    # TAG -> typedef reverse map, for the C backend to print `FILE` where the
+    # type is canonically `struct _IO_FILE` (see Module.tdrev_*). P modules only:
+    # a round-tripped C module has no typedef left in its output to refer to.
+    # The keys are copies OWNED by tdalias, which the defer above frees — so
+    # they are duplicated into the arena, not aliased.
+    if not m->is_c and s.tdalias.elen > 0:
+        rtags: **char = s.a->alloc(usize(s.tdalias.elen) * sizeof(*rtags))
+        rnames: **char = s.a->alloc(usize(s.tdalias.elen) * sizeof(*rnames))
+        nrev: i32 = 0
+        for ti in range(s.tdalias.elen):
+            if s.tdalias.dead[ti]:
+                continue
+            tv: *Type = s.tdalias.vals[ti]
+            if tv == None or tv->name == None:
+                continue
+            tdn: const *char = s.tdalias.keys[ti]
+            # One entry per TAG, preferring the PUBLIC name: glibc gives
+            # `struct _IO_FILE` two typedefs, `FILE` and `__FILE`, and a leading
+            # underscore marks the implementation's reserved namespace — the same
+            # category as the tag itself, so it is not what we want to print.
+            prev: i32 = -1
+            for rj in range(nrev):
+                if strcmp(rtags[rj], tv->name) == 0:
+                    prev = rj
+                    break
+            if prev >= 0:
+                if rnames[prev][0] == '_' and tdn[0] != '_':
+                    rnames[prev] = s.a->strdup(tdn)
+                continue
+            rtags[nrev] = s.a->strdup(tv->name)
+            rnames[nrev] = s.a->strdup(tdn)
+            nrev += 1
+        m->tdrev_tags = rtags
+        m->tdrev_names = rnames
+        m->ntdrev = nrev

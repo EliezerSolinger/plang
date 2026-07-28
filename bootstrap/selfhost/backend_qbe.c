@@ -385,6 +385,7 @@ typedef struct Vec_char Vec_char;
 typedef struct StrMap_pType StrMap_pType;
 typedef struct StrMap_pFunc StrMap_pFunc;
 typedef struct StrMap_pDecl StrMap_pDecl;
+typedef struct StrMap_pExpr StrMap_pExpr;
 typedef struct Qb Qb;
 
 struct QVar {
@@ -979,6 +980,39 @@ int StrMap_pDecl_remove(StrMap_pDecl *self, const char *key);
 
 void StrMap_pDecl_deinit(StrMap_pDecl *self);
 
+struct StrMap_pExpr {
+    int32_t *indices;
+    int32_t icap;
+    uint64_t *hashes;
+    char **keys;
+    Expr **vals;
+    int *dead;
+    int32_t elen;
+    int32_t ecap;
+    int32_t size;
+    int32_t tombs;
+};
+
+void StrMap_pExpr_init(StrMap_pExpr *self);
+
+int32_t StrMap_pExpr_find_slot(const StrMap_pExpr *self, const char *key, uint64_t h, int32_t *out_entry);
+
+void StrMap_pExpr_rehash(StrMap_pExpr *self, int32_t newcap);
+
+void StrMap_pExpr_grow_entries(StrMap_pExpr *self);
+
+void StrMap_pExpr_put(StrMap_pExpr *self, const char *key, Expr *value);
+
+int StrMap_pExpr_get(const StrMap_pExpr *self, const char *key, Expr **out);
+
+Expr *StrMap_pExpr_get_or(const StrMap_pExpr *self, const char *key, Expr *fallback);
+
+int StrMap_pExpr_has(const StrMap_pExpr *self, const char *key);
+
+int StrMap_pExpr_remove(StrMap_pExpr *self, const char *key);
+
+void StrMap_pExpr_deinit(StrMap_pExpr *self);
+
 int stmt_exits_q(Stmt *s) {
     return s->kind == ST_RETURN || s->kind == ST_BREAK || s->kind == ST_CONTINUE || s->kind == ST_GOTO;
 }
@@ -997,6 +1031,8 @@ struct Qb {
     StrMap_pType globals;
     StrMap_pFunc funcs;
     StrMap_pDecl structs;
+    int32_t cdepth;
+    StrMap_pExpr gconsts;
     int32_t brk[64];
     int32_t brk_dm[64];
     int32_t nbrk;
@@ -1225,10 +1261,20 @@ static int64_t Qb_const_int(Qb *self, Expr *e, int *ok) {
         case EX_FALSE: {
             return 0;
         }
+        case EX_NONE: {
+            return 0;
+        }
         case EX_IDENT: {
             int64_t ev = 0;
             if (Qb_enum_lookup(self, e->text, &ev)) {
                 return ev;
+            }
+            Expr *gc = StrMap_pExpr_get_or(&self->gconsts, e->text, NULL);
+            if (gc != NULL && self->cdepth < 32) {
+                self->cdepth += 1;
+                int64_t gv = Qb_const_int(self, gc, ok);
+                self->cdepth -= 1;
+                return gv;
             }
             *ok = 0;
             return 0;
@@ -4589,12 +4635,9 @@ static void Qb_collect_evars(Qb *self, Expr *e) {
         Qb_collect_evars(self, e->lhs);
         return;
     }
-    Qb_collect_evars(self, e->lhs);
-    Qb_collect_evars(self, e->rhs);
-    Qb_collect_evars(self, e->cond);
     size_t j;
-    for (j = 0; j < e->nargs; j += 1) {
-        Qb_collect_evars(self, e->args[j]);
+    for (j = 0; j < expr_nexprs(e); j += 1) {
+        Qb_collect_evars(self, expr_expr_at(e, j));
     }
 }
 
@@ -4602,15 +4645,9 @@ static void Qb_collect_vars(Qb *self, Block *b) {
     int32_t i;
     for (i = 0; i < b->n; i += 1) {
         Stmt *st = b->stmts[i];
-        Qb_collect_evars(self, st->init);
-        Qb_collect_evars(self, st->expr);
-        Qb_collect_evars(self, st->lhs);
-        Qb_collect_evars(self, st->rhs);
-        Qb_collect_evars(self, st->cond);
-        Qb_collect_evars(self, st->subject);
         size_t ci;
-        for (ci = 0; ci < st->nconds; ci += 1) {
-            Qb_collect_evars(self, st->conds[ci]);
+        for (ci = 0; ci < stmt_nexprs(st); ci += 1) {
+            Qb_collect_evars(self, stmt_expr_at(st, ci));
         }
         switch (st->kind) {
             case ST_VAR: {
@@ -4660,6 +4697,10 @@ static void Qb_collect_vars(Qb *self, Block *b) {
                 Qb_collect_vars(self, st->body);
                 break;
             }
+            case ST_BLOCK: {
+                Qb_collect_vars(self, st->body);
+                break;
+            }
             case ST_WITH: {
                 Qb_add_var(self, st->name, st->type, st);
                 Qb_collect_vars(self, st->body);
@@ -4689,7 +4730,18 @@ static void Qb_collect_vars(Qb *self, Block *b) {
                 }
                 break;
             }
-            default: {
+            case ST_ASSIGN:
+            case ST_EXPR:
+            case ST_RETURN:
+            case ST_BREAK:
+            case ST_CONTINUE:
+            case ST_GOTO:
+            case ST_LABEL:
+            case ST_CASE:
+            case ST_PASS:
+            case ST_GLOBAL:
+            case ST_NONLOCAL:
+            case ST_CPROTO: {
                 continue;
             }
         }
@@ -4926,6 +4978,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
     StrMap_pType_init(&qb.globals);
     StrMap_pFunc_init(&qb.funcs);
     StrMap_pDecl_init(&qb.structs);
+    StrMap_pExpr_init(&qb.gconsts);
     Vec_EnumConst_init(&qb.enumc);
     size_t i;
     for (i = 0; i < m->ndecls; i += 1) {
@@ -4936,6 +4989,9 @@ void emit_module_qbe(Module *m, StrBuf *out) {
             }
         } else if (d->kind == DL_VAR) {
             StrMap_pType_put(&qb.globals, d->name, d->type);
+            if (d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
+                StrMap_pExpr_put(&qb.gconsts, d->name, d->init);
+            }
         } else if (d->kind == DL_STRUCT || d->kind == DL_UNION) {
             if (d->nfields > 0 || StrMap_pDecl_get_or(&qb.structs, d->name, NULL) == NULL) {
                 StrMap_pDecl_put(&qb.structs, d->name, d);
@@ -5044,7 +5100,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                     }
                     StrBuf_printf(out, "%sdata $%s = align %d {%s }\n", xp, d2->name, Qb_type_align(&qb, d2->type), db.data);
                 } else {
-                    StrBuf_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
+                    fatal_at(m->path, d2->pos, "qbe backend: cannot build the static initializer of '%s' (a value here is not a compile-time constant this backend can fold)", d2->name);
                 }
                 StrBuf_deinit(&db);
             } else if (d2->init != NULL && d2->init->kind == EX_UNARY && d2->init->op == TK_AMP && d2->init->lhs != NULL && d2->init->lhs->kind == EX_IDENT) {
@@ -5079,7 +5135,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                     }
                     StrBuf_printf(out, "%sdata $%s = { %s %lld }\n", xp, d2->name, cdt, cvv);
                 } else {
-                    StrBuf_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
+                    fatal_at(m->path, d2->pos, "qbe backend: cannot build the static initializer of '%s' (a value here is not a compile-time constant this backend can fold)", d2->name);
                 }
             } else {
                 StrBuf_printf(out, "%sdata $%s = { z %d }\n", xp, d2->name, sz);
@@ -5131,6 +5187,7 @@ void emit_module_qbe(Module *m, StrBuf *out) {
         StrMap_pType_deinit(&qb.globals);
         StrMap_pFunc_deinit(&qb.funcs);
         StrMap_pDecl_deinit(&qb.structs);
+        StrMap_pExpr_deinit(&qb.gconsts);
         Vec_EnumConst_deinit(&qb.enumc);
         StrBuf_deinit(&qb.data);
     }

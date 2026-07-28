@@ -228,6 +228,12 @@ int32_t g_i64 = 0;
 
 int g_c_mod = 0;
 
+char **g_tdrev_tags = NULL;
+
+char **g_tdrev_names = NULL;
+
+int32_t g_ntdrev = 0;
+
 void backend_c_config(int std89, int32_t i64_mode) {
     g_std89 = std89;
     g_i64 = i64_mode;
@@ -280,7 +286,27 @@ static const char *base_cname(const char *n) {
     return n;
 }
 
+static const char *tdrev_lookup(const char *tag) {
+    if (g_c_mod || tag == NULL) {
+        return NULL;
+    }
+    size_t i;
+    for (i = 0; i < g_ntdrev; i += 1) {
+        if (strcmp(g_tdrev_tags[i], tag) == 0) {
+            return g_tdrev_names[i];
+        }
+    }
+    return NULL;
+}
+
 static void emit_type_name(StrBuf *b, Type *t) {
+    if (t->tag_kind == TAG_STRUCT || t->tag_kind == TAG_UNION) {
+        const char *td = tdrev_lookup(t->name);
+        if (td != NULL) {
+            StrBuf_puts(b, td);
+            return;
+        }
+    }
     if (t->tag_kind == TAG_STRUCT) {
         StrBuf_printf(b, "struct %s", t->name);
         return;
@@ -601,6 +627,14 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             fatal("internal: EX_WITHSELF reached the C backend unresolved");
             break;
         }
+        case EX_WALRUS: {
+            fatal("internal: EX_WALRUS reached the C backend unresolved");
+            break;
+        }
+        case EX_IN: {
+            fatal("internal: EX_IN reached the C backend unlowered");
+            break;
+        }
     }
     if (paren) {
         StrBuf_putc(b, ')');
@@ -854,6 +888,19 @@ static int emit_expr_stmt_lowered(StrBuf *b, Expr *e, int32_t ind) {
     return 0;
 }
 
+static int block_is_silent(Block *blk) {
+    if (blk == NULL) {
+        return 1;
+    }
+    size_t i;
+    for (i = 0; i < blk->n; i += 1) {
+        if (!(blk->stmts[i]->kind == ST_GLOBAL || blk->stmts[i]->kind == ST_NONLOCAL)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
     switch (s->kind) {
         case ST_VAR: {
@@ -882,7 +929,7 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             emit_var_decl(b, s->type, s->name, NULL);
             if (s->init != NULL) {
                 StrBuf_puts(b, " = ");
-                emit_expr(b, s->init, 0);
+                emit_expr(b, s->init, PR_ASSIGN);
             }
             StrBuf_puts(b, ";\n");
             break;
@@ -1165,6 +1212,9 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             break;
         }
         case ST_BLOCK: {
+            if (block_is_silent(s->body)) {
+                return;
+            }
             indent(b, ind);
             StrBuf_puts(b, "{\n");
             emit_block_body(b, s->body, ind + 1);
@@ -1207,12 +1257,16 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             indent(b, ind + 1);
             emit_var_decl(b, s->type, s->name, NULL);
             StrBuf_puts(b, " = ");
-            emit_expr(b, s->init, 0);
+            emit_expr(b, s->init, PR_ASSIGN);
             StrBuf_puts(b, ";\n");
             emit_block_body(b, s->body, ind + 1);
             indent(b, ind);
             StrBuf_puts(b, "}\n");
             break;
+        }
+        case ST_GLOBAL:
+        case ST_NONLOCAL: {
+            return;
         }
     }
 }
@@ -1223,7 +1277,7 @@ static void emit_simple_inline(StrBuf *b, Stmt *s) {
             emit_var_decl(b, s->type, s->name, NULL);
             if (s->init != NULL) {
                 StrBuf_puts(b, " = ");
-                emit_expr(b, s->init, 0);
+                emit_expr(b, s->init, PR_ASSIGN);
             }
             break;
         }
@@ -1474,6 +1528,9 @@ void emit_module_c(Module *m, StrBuf *out) {
     g_needs_string = 0;
     g_in_header = m->is_header;
     g_c_mod = m->is_c;
+    g_tdrev_tags = m->tdrev_tags;
+    g_tdrev_names = m->tdrev_names;
+    g_ntdrev = m->ntdrev;
     StrBuf body = {0};
     int prev_import = 0;
     int fwd_done = 0;

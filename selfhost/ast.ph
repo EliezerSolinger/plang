@@ -386,6 +386,17 @@ struct Module:
     tdtypes: **Type    # the UNDERLYING type of each tdname (parallel array):
                        #   `regex_t` -> `struct re_pattern_buffer`, so P can
                        #   resolve the LAYOUT (size/alignment), not just a name
+    # REVERSE of the above, filled by sema on the module being emitted: TAG name
+    # -> the typedef that names it. Types are canonical on the tag (one spelling,
+    # so comparison/layout/round-trip all work), but a P module must PRINT the
+    # typedef: the tag is a libc internal — glibc spells FILE `struct _IO_FILE`,
+    # macOS `struct __sFILE` — so printing it makes the C non-portable, and where
+    # we also declare the libc function ourselves it outright conflicts with the
+    # system header. A round-trip C module prints the tag: its input was
+    # preprocessed, so the typedef is not in the output to be referred to.
+    tdrev_tags: **char
+    tdrev_names: **char
+    ntdrev: i32
     decls: **Decl
     ndecls: i32
 
@@ -428,3 +439,77 @@ static inline def st_new(a: *Arena, k: StmtKind, pos: Pos) -> *Stmt:
     s->pos = pos
     s->if_sel = -1   # runtime by default (any frontend); sema may fold
     return s
+
+# ---------- child enumeration ----------
+# THE list of a node's direct *Expr children. Every GENERIC traversal must go
+# through here, so adding an expression field to Stmt/Expr is a one-line change
+# that all of them inherit. The alternative — a field list written by hand in
+# each traversal — drifts, and drift here is silent: a child nobody visits is
+# simply not processed, and the failure shows up much later as wrong output.
+#
+# Syntax-directed code (the emitters, sema's checkers) does NOT use this: there
+# the order and the per-kind handling ARE the logic. Their safety net is
+# -Wswitch, which is why those matches list every kind instead of defaulting.
+#
+# Index-based, not callback-based: no allocation, no function pointer in a hot
+# path, and it matches how the rest of the compiler is written. A child may
+# legitimately be None (the node carries every kind's fields), so a caller must
+# tolerate None instead of stopping at the first one.
+ST_NEXPR_FIXED: const i32 = 9   # count of the scalar *Expr fields below
+EX_NEXPR_FIXED: const i32 = 3
+
+static inline def stmt_nexprs(s: *Stmt) -> i32:
+    if s == None:
+        return 0
+    n: i32 = ST_NEXPR_FIXED + s->nconds
+    for i in range(s->ncases):
+        n += s->cases[i]->nvals
+    return n
+
+static inline def stmt_expr_at(s: *Stmt, i: i32) -> *Expr:
+    match i:
+        case 0:
+            return s->init
+        case 1:
+            return s->lhs
+        case 2:
+            return s->rhs
+        case 3:
+            return s->expr
+        case 4:
+            return s->cond
+        case 5:
+            return s->subject
+        case 6:
+            return s->from
+        case 7:
+            return s->to
+        case 8:
+            return s->step
+    k: i32 = i - ST_NEXPR_FIXED
+    if k < s->nconds:
+        return s->conds[k]
+    k -= s->nconds
+    for j in range(s->ncases):
+        if k < s->cases[j]->nvals:
+            return s->cases[j]->vals[k]
+        k -= s->cases[j]->nvals
+    return None
+
+static inline def expr_nexprs(e: *Expr) -> i32:
+    if e == None:
+        return 0
+    return EX_NEXPR_FIXED + e->nargs
+
+static inline def expr_expr_at(e: *Expr, i: i32) -> *Expr:
+    match i:
+        case 0:
+            return e->lhs
+        case 1:
+            return e->rhs
+        case 2:
+            return e->cond
+    k: i32 = i - EX_NEXPR_FIXED
+    if k < e->nargs:
+        return e->args[k]
+    return None

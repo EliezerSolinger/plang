@@ -14,14 +14,14 @@
 #include "../stl/vec.h"
 #include "vecs.h"
 
-static struct _IO_FILE *popen(const char *cmd, const char *mode);
+FILE *popen(const char *cmd, const char *mode);
 
-int32_t pclose(struct _IO_FILE *stream);
+int pclose(FILE *stream);
 
 static char *preprocess_c(Cc *cc, const char *path, size_t *out_len) {
     const char *cpp = (cc->cpp != NULL ? cc->cpp : "cc");
     const char *cmd = Arena_printf(&cc->arena, "%s -E -P -x c \"%s\"", cpp, path);
-    struct _IO_FILE *f = popen(cmd, "r");
+    FILE *f = popen(cmd, "r");
     if (f == NULL) {
         fatal("could not run the C preprocessor '%s' (see --cpp / PLANGC_CPP)", cpp);
     }
@@ -354,12 +354,16 @@ int main(int argc, char **argv) {
                 cbytes = read_entire_file(path, &clen);
             }
             m = c_parse(&cc.arena, path, cbytes, clen, 1);
-            sema_run(&cc, m);
+            if (!be->pre_sema) {
+                sema_run(&cc, m);
+            }
         } else {
             m = cc_load_module(&cc, path);
-            sema_run(&cc, m);
-            if (strcmp(be->name, "qbe") == 0) {
-                qbe_merge_types(&cc, m);
+            if (!be->pre_sema) {
+                sema_run(&cc, m);
+                if (strcmp(be->name, "qbe") == 0) {
+                    qbe_merge_types(&cc, m);
+                }
             }
         }
         StrBuf out = {0};
@@ -372,7 +376,7 @@ int main(int argc, char **argv) {
         if (strcmp(dest, "-") == 0) {
             fwrite(out.data, 1, out.len, stdout);
         } else {
-            struct _IO_FILE *f = fopen(dest, "wb");
+            FILE *f = fopen(dest, "wb");
             if (f == NULL) {
                 fatal("could not write '%s'", dest);
             }

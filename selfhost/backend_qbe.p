@@ -345,6 +345,7 @@ implement Vec<char>
 declare StrMap<*Type>
 declare StrMap<*Func>
 declare StrMap<*Decl>
+declare StrMap<*Expr>
 
 # does the last statement of a block unconditionally jump away? (defers already emitted)
 def stmt_exits_q(s: *Stmt) -> bool:
@@ -365,6 +366,11 @@ struct Qb:
     globals: StrMap<*Type>
     funcs: StrMap<*Func>
     structs: StrMap<*Decl>   # struct name -> DL_STRUCT (for layout/offsets)
+    cdepth: i32              # const-folding recursion guard (see const_int)
+    gconsts: StrMap<*Expr>   # module-level `const NAME = expr` -> its initializer.
+                             #   QBE has no preprocessor, so a STATIC initializer
+                             #   naming one has to be folded here (the C backend
+                             #   just emits the name and lets C resolve it).
     brk: i32[64]        # stack of break labels
     brk_dm: i32[64]     # mark of the defer stack at each break level
     nbrk: i32
@@ -504,10 +510,20 @@ struct Qb:
                 return 1
             case EX_FALSE:
                 return 0
+            case EX_NONE:
+                return 0        # the null pointer constant is a constant zero
             case EX_IDENT:
                 ev: i64 = 0
                 if self->enum_lookup(e->text, &ev):
                     return ev
+                # a module-level `const NAME = <const expr>`: fold its initializer.
+                # The depth guard stops a const that (illegally) names itself.
+                gc: *Expr = self->gconsts.get_or(e->text, None)
+                if gc != None and self->cdepth < 32:
+                    self->cdepth += 1
+                    gv: i64 = self->const_int(gc, ref ok)
+                    self->cdepth -= 1
+                    return gv
                 ok = False
                 return 0
             case EX_CAST:
@@ -3352,24 +3368,19 @@ struct Qb:
                 self->collect_vars(e->xblock)
             self->collect_evars(e->lhs)
             return
-        self->collect_evars(e->lhs)
-        self->collect_evars(e->rhs)
-        self->collect_evars(e->cond)
-        for j in range(e->nargs):
-            self->collect_evars(e->args[j])
+        for j in range(expr_nexprs(e)):
+            self->collect_evars(expr_expr_at(e, j))
 
     static def collect_vars(self: *Qb, b: *Block):
         i: i32
         for i in range(b->n):
             st: *Stmt = b->stmts[i]
-            self->collect_evars(st->init)
-            self->collect_evars(st->expr)
-            self->collect_evars(st->lhs)
-            self->collect_evars(st->rhs)
-            self->collect_evars(st->cond)
-            self->collect_evars(st->subject)
-            for ci in range(st->nconds):
-                self->collect_evars(st->conds[ci])
+            # every *Expr child, via the canonical list in ast.ph. The hand
+            # written list this replaces was missing `from`/`to`/`step` and the
+            # case values — a statement expression in a range bound or a case
+            # label would have had its declarations left without a slot.
+            for ci in range(stmt_nexprs(st)):
+                self->collect_evars(stmt_expr_at(st, ci))
             match st->kind:
                 case ST_VAR:
                     if st->is_extern:
@@ -3406,6 +3417,12 @@ struct Qb:
                             self->collect_vars(st->else_block)
                 case ST_WHILE, ST_DO, ST_FOR, ST_DEFER:
                     self->collect_vars(st->body)
+                case ST_BLOCK:
+                    # a bare block's declarations are still function-scope slots
+                    # here (QBE vars are flat per function). Missing this case
+                    # left them undeclared: the emitted code then referenced the
+                    # name as a GLOBAL symbol and the link failed.
+                    self->collect_vars(st->body)
                 case ST_WITH:
                     self->add_var(st->name, st->type, st)
                     self->collect_vars(st->body)
@@ -3422,7 +3439,15 @@ struct Qb:
                     else:
                         for mj in range(st->ncases):
                             self->collect_vars(st->cases[mj]->body)
-                case _:
+                # No `case _:` ON PURPOSE. These kinds declare nothing and hold
+                # no block whose declarations are function-scope here, so there
+                # is genuinely nothing to collect — but they are LISTED, because
+                # this match is the one that once dropped ST_BLOCK into a
+                # catch-all and left its declarations without a slot (the
+                # emitted code then named them as GLOBAL symbols and the link
+                # failed). Without a default, -Wswitch reports the next kind
+                # somebody adds instead of silently ignoring it.
+                case ST_ASSIGN, ST_EXPR, ST_RETURN, ST_BREAK, ST_CONTINUE, ST_GOTO, ST_LABEL, ST_CASE, ST_PASS, ST_GLOBAL, ST_NONLOCAL, ST_CPROTO:
                     continue
 
     # EVERY declaration gets its own slot — no name dedup: homonyms in
@@ -3655,11 +3680,13 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
     qb.globals.init()
     qb.funcs.init()
     qb.structs.init()
+    qb.gconsts.init()
     qb.enumc.init()
     defer:
         qb.globals.deinit()
         qb.funcs.deinit()
         qb.structs.deinit()
+        qb.gconsts.deinit()
         qb.enumc.deinit()
         qb.data.deinit()
     # (macro constants like EOF/SEEK_SET are no longer hardcoded here: with
@@ -3674,6 +3701,10 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
                 qb.funcs.put(d->func->cname, d->func)
         elif d->kind == DL_VAR:
             qb.globals.put(d->name, d->type)
+            # `NAME: const T = v` puts the qualifier on the TYPE, `const NAME = v`
+            # on the declaration — both are consts to fold
+            if d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
+                qb.gconsts.put(d->name, d->init)
         elif d->kind == DL_STRUCT or d->kind == DL_UNION:
             # registers the layout (union too); EMPTY struct ({} GNU, size 0)
             # too — but never shadowing a real layout that has fields
@@ -3789,7 +3820,10 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
                             d2->type->arr_len = ne
                     out->printf("%sdata $%s = align %d {%s }\n", xp, d2->name, qb.type_align(d2->type), db.data)
                 else:
-                    out->printf("%sdata $%s = { z %d }\n", xp, d2->name, sz)
+                    # NEVER zero-fill silently: that once produced a compiler
+                    # whose `backends[]` table was all zeros, so it could not
+                    # find its own backends. Better a loud stop than wrong data.
+                    fatal_at(m->path, d2->pos, "qbe backend: cannot build the static initializer of '%s' (a value here is not a compile-time constant this backend can fold)", d2->name)
                 db.deinit()
             elif d2->init != None and d2->init->kind == EX_UNARY and d2->init->op == TK_AMP and d2->init->lhs != None and d2->init->lhs->kind == EX_IDENT:
                 # global pointer = &symbol (e.g. fn-ptr = &function)
@@ -3828,7 +3862,10 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
                         cdt = "l"
                     out->printf("%sdata $%s = { %s %lld }\n", xp, d2->name, cdt, cvv)
                 else:
-                    out->printf("%sdata $%s = { z %d }\n", xp, d2->name, sz)
+                    # NEVER zero-fill silently: that once produced a compiler
+                    # whose `backends[]` table was all zeros, so it could not
+                    # find its own backends. Better a loud stop than wrong data.
+                    fatal_at(m->path, d2->pos, "qbe backend: cannot build the static initializer of '%s' (a value here is not a compile-time constant this backend can fold)", d2->name)
             else:
                 # no initializer (or non-constant form) -> zero
                 out->printf("%sdata $%s = { z %d }\n", xp, d2->name, sz)

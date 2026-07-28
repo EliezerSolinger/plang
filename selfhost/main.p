@@ -13,8 +13,14 @@ import "../stl/vec.ph"
 import "vecs.ph"
 
 
-static def popen(cmd: const *char, mode: const *char) -> *FILE
-def pclose(stream: *FILE) -> i32
+# popen/pclose are POSIX and <stdio.h> hides them under strict -std=c11, so the
+# prototypes are ours (see the same pair in sema.p). NOT `static`: these name the
+# libc functions, and a static declaration of one is invalid where the system
+# header does declare them (macOS: "static declaration follows non-static").
+# Spelled with libc's own types — `FILE`, `int` — so the declaration is
+# compatible with the system header's wherever both are visible.
+def popen(cmd: const *char, mode: const *char) -> *FILE
+def pclose(stream: *FILE) -> int
 
 # runs the configured C preprocessor over a RAW .c file (cpp resolves
 # #include/#define/#if); the cpp's stderr flows through to the user. A cpp
@@ -329,15 +335,19 @@ def main(argc: int, argv: **char) -> int:
             else:
                 cbytes = read_entire_file(path, out clen)
             m = c_parse(&cc.arena, path, cbytes, clen, True)
-            sema_run(&cc, m)
+            if not be->pre_sema:
+                sema_run(&cc, m)
         else:
             m = cc_load_module(&cc, path)
-            sema_run(&cc, m)
-            # QBE needs the LAYOUTS of imported types (offsets/enum). Imported
-            # structs must not re-emit methods here (materialized via
-            # `implement`); emit_func skips in_header methods.
-            if be->name == "qbe":
-                qbe_merge_types(&cc, m)
+            # a pre-sema backend wants the SURFACE tree: printing the source
+            # language must not see the lowering (backend_p)
+            if not be->pre_sema:
+                sema_run(&cc, m)
+                # QBE needs the LAYOUTS of imported types (offsets/enum). Imported
+                # structs must not re-emit methods here (materialized via
+                # `implement`); emit_func skips in_header methods.
+                if be->name == "qbe":
+                    qbe_merge_types(&cc, m)
 
         out: StrBuf = {0}
         defer out.deinit()

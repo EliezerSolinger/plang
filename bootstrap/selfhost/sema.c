@@ -21,6 +21,7 @@ typedef struct StrMap_pSInfo StrMap_pSInfo;
 typedef struct StrMap_pFunc StrMap_pFunc;
 typedef struct StrMap_pType StrMap_pType;
 typedef struct StrMap_pDecl StrMap_pDecl;
+typedef struct StrMap_pExpr StrMap_pExpr;
 typedef struct StrMap_i64 StrMap_i64;
 typedef struct StrMap_pCVal StrMap_pCVal;
 typedef struct Subst Subst;
@@ -975,6 +976,200 @@ void StrMap_pDecl_deinit(StrMap_pDecl *self) {
     memset(self, 0, sizeof(*self));
 }
 
+struct StrMap_pExpr {
+    int32_t *indices;
+    int32_t icap;
+    uint64_t *hashes;
+    char **keys;
+    Expr **vals;
+    int *dead;
+    int32_t elen;
+    int32_t ecap;
+    int32_t size;
+    int32_t tombs;
+};
+
+void StrMap_pExpr_init(StrMap_pExpr *self);
+
+int32_t StrMap_pExpr_find_slot(const StrMap_pExpr *self, const char *key, uint64_t h, int32_t *out_entry);
+
+void StrMap_pExpr_rehash(StrMap_pExpr *self, int32_t newcap);
+
+void StrMap_pExpr_grow_entries(StrMap_pExpr *self);
+
+void StrMap_pExpr_put(StrMap_pExpr *self, const char *key, Expr *value);
+
+int StrMap_pExpr_get(const StrMap_pExpr *self, const char *key, Expr **out);
+
+Expr *StrMap_pExpr_get_or(const StrMap_pExpr *self, const char *key, Expr *fallback);
+
+int StrMap_pExpr_has(const StrMap_pExpr *self, const char *key);
+
+int StrMap_pExpr_remove(StrMap_pExpr *self, const char *key);
+
+void StrMap_pExpr_deinit(StrMap_pExpr *self);
+
+
+void StrMap_pExpr_init(StrMap_pExpr *self) {
+    memset(self, 0, sizeof(*self));
+}
+
+int32_t StrMap_pExpr_find_slot(const StrMap_pExpr *self, const char *key, uint64_t h, int32_t *out_entry) {
+    int32_t mask = self->icap - 1;
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    int32_t first_tomb = -1;
+    while (1) {
+        int32_t idx = self->indices[slot];
+        if (idx == -1) {
+            *out_entry = -1;
+            return (first_tomb != -1 ? first_tomb : slot);
+        }
+        if (idx == -2) {
+            if (first_tomb == -1) {
+                first_tomb = slot;
+            }
+        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
+            *out_entry = idx;
+            return slot;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+void StrMap_pExpr_rehash(StrMap_pExpr *self, int32_t newcap) {
+    int32_t w = 0;
+    int32_t r;
+    for (r = 0; r < self->elen; r += 1) {
+        if (!self->dead[r]) {
+            if (w != r) {
+                self->hashes[w] = self->hashes[r];
+                self->keys[w] = self->keys[r];
+                self->vals[w] = self->vals[r];
+            }
+            self->dead[w] = 0;
+            w += 1;
+        }
+    }
+    self->elen = w;
+    self->tombs = 0;
+    free(self->indices);
+    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    self->icap = newcap;
+    int32_t i;
+    for (i = 0; i < newcap; i += 1) {
+        self->indices[i] = -1;
+    }
+    int32_t mask = newcap - 1;
+    for (i = 0; i < self->elen; i += 1) {
+        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
+        while (self->indices[slot] != -1) {
+            slot = (slot + 1) & mask;
+        }
+        self->indices[slot] = i;
+    }
+}
+
+void StrMap_pExpr_grow_entries(StrMap_pExpr *self) {
+    if (self->elen < self->ecap) {
+        return;
+    }
+    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
+    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
+    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
+    self->vals = realloc(self->vals, sizeof(Expr *) * (size_t)nc);
+    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
+    self->ecap = nc;
+}
+
+void StrMap_pExpr_put(StrMap_pExpr *self, const char *key, Expr *value) {
+    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
+        StrMap_pExpr_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
+    }
+    uint64_t h = hash_cstr(key);
+    int32_t entry = -1;
+    int32_t slot = StrMap_pExpr_find_slot(self, key, h, &entry);
+    if (entry >= 0) {
+        self->vals[entry] = value;
+        return;
+    }
+    StrMap_pExpr_grow_entries(self);
+    size_t n = strlen(key) + 1;
+    char *kcopy = malloc(n);
+    memcpy(kcopy, key, n);
+    int32_t e = self->elen;
+    self->hashes[e] = h;
+    self->keys[e] = kcopy;
+    self->vals[e] = value;
+    self->dead[e] = 0;
+    self->elen += 1;
+    if (self->indices[slot] == -2) {
+        self->tombs -= 1;
+    }
+    self->indices[slot] = e;
+    self->size += 1;
+}
+
+int StrMap_pExpr_get(const StrMap_pExpr *self, const char *key, Expr **out) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    StrMap_pExpr_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    *out = self->vals[entry];
+    return 1;
+}
+
+Expr *StrMap_pExpr_get_or(const StrMap_pExpr *self, const char *key, Expr *fallback) {
+    Expr *v = fallback;
+    StrMap_pExpr_get(self, key, &v);
+    return v;
+}
+
+int StrMap_pExpr_has(const StrMap_pExpr *self, const char *key) {
+    int32_t entry = -1;
+    if (self->size == 0) {
+        return 0;
+    }
+    StrMap_pExpr_find_slot(self, key, hash_cstr(key), &entry);
+    return entry >= 0;
+}
+
+int StrMap_pExpr_remove(StrMap_pExpr *self, const char *key) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    int32_t slot = StrMap_pExpr_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    free(self->keys[entry]);
+    self->keys[entry] = NULL;
+    self->dead[entry] = 1;
+    self->indices[slot] = -2;
+    self->size -= 1;
+    self->tombs += 1;
+    return 1;
+}
+
+void StrMap_pExpr_deinit(StrMap_pExpr *self) {
+    int32_t i;
+    for (i = 0; i < self->elen; i += 1) {
+        if (!self->dead[i]) {
+            free(self->keys[i]);
+        }
+    }
+    free(self->indices);
+    free(self->hashes);
+    free(self->keys);
+    free(self->vals);
+    free(self->dead);
+    memset(self, 0, sizeof(*self));
+}
+
 struct StrMap_i64 {
     int32_t *indices;
     int32_t icap;
@@ -1451,9 +1646,9 @@ static int expr_is_negative(Expr *e);
 
 static int type_is_unsigned(Type *t);
 
-struct _IO_FILE *popen(const char *cmd, const char *mode);
+FILE *popen(const char *cmd, const char *mode);
 
-int32_t pclose(struct _IO_FILE *stream);
+int pclose(FILE *stream);
 
 static int macro_int_val(const char *txt, int64_t *out);
 
@@ -1543,6 +1738,7 @@ struct Sema {
     StrMap_pFunc funcs;
     StrMap_pType globals;
     StrSet enumconsts;
+    StrMap_pDecl enums;
     StrMap_pCVal constvals;
     StrSet gstatics;
     StrSet gexterns;
@@ -1575,6 +1771,12 @@ struct Sema {
     int32_t nscopes;
     int32_t cscopes;
     StrSet done;
+    StrMap_i64 later_defs;
+    int32_t se_ctr;
+    Stmt **se_pend;
+    int32_t se_npend;
+    int32_t se_cpend;
+    int32_t lazy_depth;
     char **with_names;
     int32_t nwith;
     int32_t cwith;
@@ -1654,7 +1856,7 @@ static void Sema_fold_const_dims(Sema *self, Type *t);
 
 static void Sema_vla_hoist_add(Sema *self, Stmt *st);
 
-static Expr *Sema_materialize_in(Sema *self, Expr *e);
+static Expr *Sema_materialize_temp(Sema *self, Expr *e, const char *what);
 
 static void Sema_ensure_libc_proto(Sema *self, const char *name, Type *ret);
 
@@ -1745,6 +1947,8 @@ static void Sema_walk_gotos(Sema *self, Block *b, char **names, int32_t n);
 static void Sema_switch_collect_cases(Sema *self, Block *b, int64_t **vals, int32_t *n, int32_t *cap, Pos **poss, int32_t *cap2, int32_t *ndef, Pos *defpos, uint64_t mask);
 
 static void Sema_check_switch_dups(Sema *self, Block *b);
+
+static void Sema_check_enum_exhaustive(Sema *self, Pos pos, Type *subj, int64_t *vals, int32_t n, int has_default, const char *what);
 
 static void Sema_check_func_body(Sema *self, Func *f);
 
@@ -1988,24 +2192,24 @@ static Expr *Sema_clone_expr(Sema *self, Subst *sub, Expr *e) {
     }
     Expr *ne = ex_new(self->a, e->kind, e->pos);
     {
-        Expr *__with_544_9 = ne;
-        __with_544_9->text = e->text;
-        __with_544_9->op = e->op;
-        __with_544_9->lhs = Sema_clone_expr(self, sub, e->lhs);
-        __with_544_9->rhs = Sema_clone_expr(self, sub, e->rhs);
-        __with_544_9->cond = Sema_clone_expr(self, sub, e->cond);
-        __with_544_9->nargs = e->nargs;
+        Expr *__with_579_9 = ne;
+        __with_579_9->text = e->text;
+        __with_579_9->op = e->op;
+        __with_579_9->lhs = Sema_clone_expr(self, sub, e->lhs);
+        __with_579_9->rhs = Sema_clone_expr(self, sub, e->rhs);
+        __with_579_9->cond = Sema_clone_expr(self, sub, e->cond);
+        __with_579_9->nargs = e->nargs;
         if (e->args != NULL) {
             Expr **args = Arena_alloc(self->a, (size_t)e->nargs * sizeof(*args));
             size_t i;
             for (i = 0; i < e->nargs; i += 1) {
                 args[i] = Sema_clone_expr(self, sub, e->args[i]);
             }
-            __with_544_9->args = args;
+            __with_579_9->args = args;
         }
-        __with_544_9->field = e->field;
-        __with_544_9->cast_type = Sema_clone_type(self, sub, e->cast_type);
-        __with_544_9->cast_tentative = e->cast_tentative;
+        __with_579_9->field = e->field;
+        __with_579_9->cast_type = Sema_clone_type(self, sub, e->cast_type);
+        __with_579_9->cast_tentative = e->cast_tentative;
     }
     return ne;
 }
@@ -2013,15 +2217,15 @@ static Expr *Sema_clone_expr(Sema *self, Subst *sub, Expr *e) {
 static Stmt *Sema_clone_stmt(Sema *self, Subst *sub, Stmt *st) {
     Stmt *ns = st_new(self->a, st->kind, st->pos);
     {
-        Stmt *__with_563_9 = ns;
-        __with_563_9->name = st->name;
-        __with_563_9->type = Sema_clone_type(self, sub, st->type);
-        __with_563_9->init = Sema_clone_expr(self, sub, st->init);
-        __with_563_9->is_const = st->is_const;
-        __with_563_9->lhs = Sema_clone_expr(self, sub, st->lhs);
-        __with_563_9->op = st->op;
-        __with_563_9->rhs = Sema_clone_expr(self, sub, st->rhs);
-        __with_563_9->expr = Sema_clone_expr(self, sub, st->expr);
+        Stmt *__with_598_9 = ns;
+        __with_598_9->name = st->name;
+        __with_598_9->type = Sema_clone_type(self, sub, st->type);
+        __with_598_9->init = Sema_clone_expr(self, sub, st->init);
+        __with_598_9->is_const = st->is_const;
+        __with_598_9->lhs = Sema_clone_expr(self, sub, st->lhs);
+        __with_598_9->op = st->op;
+        __with_598_9->rhs = Sema_clone_expr(self, sub, st->rhs);
+        __with_598_9->expr = Sema_clone_expr(self, sub, st->expr);
         if (st->conds != NULL) {
             Expr **nc = Arena_alloc(self->a, (size_t)st->nconds * sizeof(*nc));
             Block **nb = Arena_alloc(self->a, (size_t)st->nconds * sizeof(*nb));
@@ -2030,19 +2234,19 @@ static Stmt *Sema_clone_stmt(Sema *self, Subst *sub, Stmt *st) {
                 nc[i] = Sema_clone_expr(self, sub, st->conds[i]);
                 nb[i] = Sema_clone_block(self, sub, st->blocks[i]);
             }
-            __with_563_9->conds = nc;
-            __with_563_9->blocks = nb;
+            __with_598_9->conds = nc;
+            __with_598_9->blocks = nb;
         }
-        __with_563_9->nconds = st->nconds;
-        __with_563_9->else_block = Sema_clone_block(self, sub, st->else_block);
-        __with_563_9->if_sel = st->if_sel;
-        __with_563_9->cond = Sema_clone_expr(self, sub, st->cond);
-        __with_563_9->body = Sema_clone_block(self, sub, st->body);
-        __with_563_9->var = st->var;
-        __with_563_9->from = Sema_clone_expr(self, sub, st->from);
-        __with_563_9->to = Sema_clone_expr(self, sub, st->to);
-        __with_563_9->step = Sema_clone_expr(self, sub, st->step);
-        __with_563_9->subject = Sema_clone_expr(self, sub, st->subject);
+        __with_598_9->nconds = st->nconds;
+        __with_598_9->else_block = Sema_clone_block(self, sub, st->else_block);
+        __with_598_9->if_sel = st->if_sel;
+        __with_598_9->cond = Sema_clone_expr(self, sub, st->cond);
+        __with_598_9->body = Sema_clone_block(self, sub, st->body);
+        __with_598_9->var = st->var;
+        __with_598_9->from = Sema_clone_expr(self, sub, st->from);
+        __with_598_9->to = Sema_clone_expr(self, sub, st->to);
+        __with_598_9->step = Sema_clone_expr(self, sub, st->step);
+        __with_598_9->subject = Sema_clone_expr(self, sub, st->subject);
         if (st->cases != NULL) {
             MatchCase **cs = Arena_alloc(self->a, (size_t)st->ncases * sizeof(*cs));
             size_t j;
@@ -2050,28 +2254,28 @@ static Stmt *Sema_clone_stmt(Sema *self, Subst *sub, Stmt *st) {
                 MatchCase *oc = st->cases[j];
                 MatchCase *mc = Arena_alloc(self->a, sizeof(MatchCase));
                 {
-                    MatchCase *__with_595_21 = mc;
-                    __with_595_21->is_default = oc->is_default;
-                    __with_595_21->nvals = oc->nvals;
+                    MatchCase *__with_630_21 = mc;
+                    __with_630_21->is_default = oc->is_default;
+                    __with_630_21->nvals = oc->nvals;
                     if (oc->vals != NULL) {
                         Expr **vs = Arena_alloc(self->a, (size_t)oc->nvals * sizeof(*vs));
                         size_t k;
                         for (k = 0; k < oc->nvals; k += 1) {
                             vs[k] = Sema_clone_expr(self, sub, oc->vals[k]);
                         }
-                        __with_595_21->vals = vs;
+                        __with_630_21->vals = vs;
                     }
-                    __with_595_21->type_pat = Sema_clone_type(self, sub, oc->type_pat);
-                    __with_595_21->body = Sema_clone_block(self, sub, oc->body);
+                    __with_630_21->type_pat = Sema_clone_type(self, sub, oc->type_pat);
+                    __with_630_21->body = Sema_clone_block(self, sub, oc->body);
                 }
                 cs[j] = mc;
             }
-            __with_563_9->cases = cs;
+            __with_598_9->cases = cs;
         }
-        __with_563_9->ncases = st->ncases;
-        __with_563_9->is_typematch = st->is_typematch;
-        __with_563_9->tm_sel = st->tm_sel;
-        __with_563_9->label = st->label;
+        __with_598_9->ncases = st->ncases;
+        __with_598_9->is_typematch = st->is_typematch;
+        __with_598_9->tm_sel = st->tm_sel;
+        __with_598_9->label = st->label;
     }
     return ns;
 }
@@ -3018,13 +3222,66 @@ static void Sema_vla_hoist_add(Sema *self, Stmt *st) {
     self->vla_nhoist += 1;
 }
 
-static Expr *Sema_materialize_in(Sema *self, Expr *e) {
+static int Sema_stmtexpr_needs_hoist(Sema *self, Expr *e) {
+    if (e == NULL || e->kind != EX_STMTEXPR || e->xblock == NULL || e->lhs == NULL) {
+        return 0;
+    }
+    size_t i;
+    for (i = 0; i < e->xblock->n; i += 1) {
+        if (e->xblock->stmts[i]->kind != ST_EXPR) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void Sema_hoist_stmtexpr(Sema *self, Expr *e) {
+    Type *t = Sema_type_of(self, e->lhs);
+    if (t == NULL) {
+        t = Sema_infer_type(self, e->lhs);
+    }
+    if (t == NULL || is_void_val(t)) {
+        return;
+    }
+    const char *name = Arena_printf(self->a, "__se%d", self->se_ctr);
+    self->se_ctr += 1;
+    Stmt *hd = st_new(self->a, ST_VAR, e->pos);
+    hd->name = name;
+    hd->type = t;
+    Sema_resolve_type(self, hd->type);
+    Sema_vla_hoist_add(self, hd);
+    Type *hp = Arena_alloc(self->a, sizeof(Type));
+    *hp = *t;
+    StrMap_pType_put(&self->fn_hoisted, name, hp);
+    Stmt *asn = st_new(self->a, ST_ASSIGN, e->pos);
+    asn->op = TK_ASSIGN;
+    asn->lhs = mk_ident(self->a, name, e->pos);
+    asn->rhs = e->lhs;
+    Block *nb = Arena_alloc(self->a, sizeof(Block));
+    int32_t nn = e->xblock->n;
+    nb->stmts = Arena_alloc(self->a, (size_t)(nn + 1) * sizeof(*nb->stmts));
+    size_t i;
+    for (i = 0; i < nn; i += 1) {
+        nb->stmts[i] = e->xblock->stmts[i];
+    }
+    nb->stmts[nn] = asn;
+    nb->n = nn + 1;
+    Stmt *blk = st_new(self->a, ST_BLOCK, e->pos);
+    blk->body = nb;
+    self->se_pend = vec_grow(self->se_pend, self->se_npend, &self->se_cpend, sizeof(*self->se_pend));
+    self->se_pend[self->se_npend] = blk;
+    self->se_npend += 1;
+    Expr *idn = mk_ident(self->a, name, e->pos);
+    *e = *idn;
+}
+
+static Expr *Sema_materialize_temp(Sema *self, Expr *e, const char *what) {
     Type *t = Sema_type_of(self, e);
     if (t == NULL) {
         t = Sema_infer_type(self, e);
     }
     if (t == NULL) {
-        fatal_at(self->file, e->pos, "cannot infer the type of the 'in' receiver expression");
+        fatal_at(self->file, e->pos, "cannot infer the type of the %s", what);
     }
     const char *name = Arena_printf(self->a, "__in%d", self->in_ctr);
     self->in_ctr += 1;
@@ -3055,12 +3312,12 @@ static void Sema_ensure_libc_proto(Sema *self, const char *name, Type *ret) {
     }
     Func *lf = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1392_9 = lf;
-        __with_1392_9->name = name;
-        __with_1392_9->cname = name;
-        __with_1392_9->ret = ret;
-        __with_1392_9->nparams = 0;
-        __with_1392_9->sig_empty = 1;
+        Func *__with_1481_9 = lf;
+        __with_1481_9->name = name;
+        __with_1481_9->cname = name;
+        __with_1481_9->ret = ret;
+        __with_1481_9->nparams = 0;
+        __with_1481_9->sig_empty = 1;
     }
     StrMap_pFunc_put(&self->funcs, name, lf);
 }
@@ -3676,16 +3933,16 @@ static void Sema_lower_match_strings(Sema *self, Stmt *st) {
         nc += 1;
     }
     {
-        Stmt *__with_1889_9 = st;
-        __with_1889_9->kind = ST_IF;
-        __with_1889_9->conds = conds;
-        __with_1889_9->blocks = blocks;
-        __with_1889_9->nconds = nc;
-        __with_1889_9->else_block = els;
-        __with_1889_9->subject = NULL;
-        __with_1889_9->cases = NULL;
-        __with_1889_9->ncases = 0;
-        __with_1889_9->if_sel = -1;
+        Stmt *__with_1978_9 = st;
+        __with_1978_9->kind = ST_IF;
+        __with_1978_9->conds = conds;
+        __with_1978_9->blocks = blocks;
+        __with_1978_9->nconds = nc;
+        __with_1978_9->else_block = els;
+        __with_1978_9->subject = NULL;
+        __with_1978_9->cases = NULL;
+        __with_1978_9->ncases = 0;
+        __with_1978_9->if_sel = -1;
     }
 }
 
@@ -4486,12 +4743,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             }
             if (callee->kind == EX_IDENT && strcmp(callee->text, "is_defined") == 0 && e->nargs == 1 && e->args[0]->kind == EX_IDENT) {
                 {
-                    Expr *__with_2536_21 = e;
-                    __with_2536_21->kind = EX_NUMBER;
-                    __with_2536_21->text = (StrMap_pCVal_has(&self->constvals, e->args[0]->text) ? "1" : "0");
-                    __with_2536_21->lhs = NULL;
-                    __with_2536_21->args = NULL;
-                    __with_2536_21->nargs = 0;
+                    Expr *__with_2625_21 = e;
+                    __with_2625_21->kind = EX_NUMBER;
+                    __with_2625_21->text = (StrMap_pCVal_has(&self->constvals, e->args[0]->text) ? "1" : "0");
+                    __with_2625_21->lhs = NULL;
+                    __with_2625_21->args = NULL;
+                    __with_2625_21->nargs = 0;
                 }
                 return;
             }
@@ -4508,13 +4765,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 idx0->lhs = arr;
                 idx0->rhs = zero;
                 {
-                    Expr *__with_2559_21 = e;
-                    __with_2559_21->kind = EX_BINARY;
-                    __with_2559_21->op = TK_SLASH;
-                    __with_2559_21->lhs = mk_call1(self->a, "sizeof", arr, e->pos);
-                    __with_2559_21->rhs = mk_call1(self->a, "sizeof", idx0, e->pos);
-                    __with_2559_21->args = NULL;
-                    __with_2559_21->nargs = 0;
+                    Expr *__with_2648_21 = e;
+                    __with_2648_21->kind = EX_BINARY;
+                    __with_2648_21->op = TK_SLASH;
+                    __with_2648_21->lhs = mk_call1(self->a, "sizeof", arr, e->pos);
+                    __with_2648_21->rhs = mk_call1(self->a, "sizeof", idx0, e->pos);
+                    __with_2648_21->args = NULL;
+                    __with_2648_21->nargs = 0;
                 }
                 return;
             }
@@ -4557,12 +4814,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             if (callee->kind == EX_IDENT && strcmp(callee->text, "typestr") == 0 && e->nargs == 1) {
                 const char *tn = render_type_p(self->a, Sema_type_of(self, e->args[0]));
                 {
-                    Expr *__with_2601_21 = e;
-                    __with_2601_21->kind = EX_STRING;
-                    __with_2601_21->text = Arena_printf(self->a, "\"%s\"", tn);
-                    __with_2601_21->lhs = NULL;
-                    __with_2601_21->args = NULL;
-                    __with_2601_21->nargs = 0;
+                    Expr *__with_2690_21 = e;
+                    __with_2690_21->kind = EX_STRING;
+                    __with_2690_21->text = Arena_printf(self->a, "\"%s\"", tn);
+                    __with_2690_21->lhs = NULL;
+                    __with_2690_21->args = NULL;
+                    __with_2690_21->nargs = 0;
                 }
                 return;
             }
@@ -4573,12 +4830,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 Expr *targ = e->args[0];
                 Sema_check_expr(self, targ);
                 {
-                    Expr *__with_2614_21 = e;
-                    __with_2614_21->kind = EX_CAST;
-                    __with_2614_21->cast_type = callee->cast_type;
-                    __with_2614_21->lhs = targ;
-                    __with_2614_21->args = NULL;
-                    __with_2614_21->nargs = 0;
+                    Expr *__with_2703_21 = e;
+                    __with_2703_21->kind = EX_CAST;
+                    __with_2703_21->cast_type = callee->cast_type;
+                    __with_2703_21->lhs = targ;
+                    __with_2703_21->args = NULL;
+                    __with_2703_21->nargs = 0;
                 }
                 return;
             }
@@ -4589,12 +4846,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 Expr *arg = e->args[0];
                 Sema_check_expr(self, arg);
                 {
-                    Expr *__with_2628_21 = e;
-                    __with_2628_21->kind = EX_CAST;
-                    __with_2628_21->cast_type = ty_name(self->a, callee->text);
-                    __with_2628_21->lhs = arg;
-                    __with_2628_21->args = NULL;
-                    __with_2628_21->nargs = 0;
+                    Expr *__with_2717_21 = e;
+                    __with_2717_21->kind = EX_CAST;
+                    __with_2717_21->cast_type = ty_name(self->a, callee->text);
+                    __with_2717_21->lhs = arg;
+                    __with_2717_21->args = NULL;
+                    __with_2717_21->nargs = 0;
                 }
                 return;
             }
@@ -4635,7 +4892,7 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                         } else if (!self_by_val && !recv_is_ptr) {
                             if (!is_lvalue(recv) && recv->kind != EX_STRING) {
                                 if (mth->nparams > 0 && mth->params[0].byref == PK_IN) {
-                                    selfx = Sema_materialize_in(self, recv);
+                                    selfx = Sema_materialize_temp(self, recv, "'in' receiver expression");
                                 } else {
                                     const char *kwn = (mth->nparams > 0 && mth->params[0].byref == PK_REF ? "ref" : (mth->nparams > 0 && mth->params[0].byref == PK_OUT ? "out" : "*"));
                                     fatal_at(self->file, recv->pos, "method '%s' takes '%s self' (it may write through it), so the receiver must be an lvalue (a variable, field, array element or *pointer)", callee->field, kwn);
@@ -4700,6 +4957,10 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     fatal_at(self->file, e->pos, "called object '%s' is not a function or function pointer", callee->text);
                 }
                 if (cvt == NULL && Sema_find_func(self, callee->text) == NULL && !self->in_chdr && !Sema_is_type_name(self, callee->text) && !Sema_is_enum_const(self, callee->text) && !(strcmp(callee->text, "sizeof") == 0 || strcmp(callee->text, "_Alignof") == 0 || strcmp(callee->text, "__alignof__") == 0) && strncmp(callee->text, "__builtin_", 10) != 0 && strncmp(callee->text, "va_", 3) != 0 && !(strcmp(callee->text, "offsetof") == 0 || strcmp(callee->text, "assert") == 0 || strcmp(callee->text, "static_assert") == 0 || strcmp(callee->text, "_Static_assert") == 0)) {
+                    int64_t dl = StrMap_i64_get_or(&self->later_defs, callee->text, 0);
+                    if (dl > (int64_t)e->pos.line) {
+                        cdiag_at(self->file, e->pos, "implicit-function-declaration", WD_ERR, "'%s' is only declared further down in this file (line %lld): move it above this call, or add a forward 'def' line (no body) before this point", callee->text, dl);
+                    }
                     cdiag_at(self->file, e->pos, "implicit-function-declaration", WD_ERR, "implicit declaration of function '%s'", callee->text);
                 }
             }
@@ -4778,13 +5039,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     args2[n2] = e->lhs;
                     n2 += 1;
                     {
-                        Expr *__with_2788_25 = e;
-                        __with_2788_25->kind = EX_CALL;
-                        __with_2788_25->lhs = deref;
-                        __with_2788_25->args = args2;
-                        __with_2788_25->nargs = n2;
-                        __with_2788_25->cast_type = NULL;
-                        __with_2788_25->cast_tentative = 0;
+                        Expr *__with_2885_25 = e;
+                        __with_2885_25->kind = EX_CALL;
+                        __with_2885_25->lhs = deref;
+                        __with_2885_25->args = args2;
+                        __with_2885_25->nargs = n2;
+                        __with_2885_25->cast_type = NULL;
+                        __with_2885_25->cast_tentative = 0;
                     }
                     Sema_check_expr(self, e);
                     return;
@@ -4876,11 +5137,11 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     Expr *oin = mk_ident(self->a, e->text, e->pos);
                     oin->out_done = 1;
                     {
-                        Expr *__with_2877_25 = e;
-                        __with_2877_25->kind = EX_UNARY;
-                        __with_2877_25->op = TK_STAR;
-                        __with_2877_25->lhs = oin;
-                        __with_2877_25->text = NULL;
+                        Expr *__with_2974_25 = e;
+                        __with_2974_25->kind = EX_UNARY;
+                        __with_2974_25->op = TK_STAR;
+                        __with_2974_25->lhs = oin;
+                        __with_2974_25->text = NULL;
                     }
                     Sema_check_expr(self, e);
                     return;
@@ -5037,7 +5298,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 }
             }
             Sema_check_expr(self, e->lhs);
-            Sema_check_expr(self, e->rhs);
+            if (e->op == TK_AND || e->op == TK_OR) {
+                self->lazy_depth += 1;
+                Sema_check_expr(self, e->rhs);
+                self->lazy_depth -= 1;
+            } else {
+                Sema_check_expr(self, e->rhs);
+            }
             if (e->op == TK_IS || e->op == TK_ISNOT) {
                 Sema_is_check_ptr(self, e->lhs);
                 Sema_is_check_ptr(self, e->rhs);
@@ -5054,8 +5321,10 @@ static void Sema_check_expr(Sema *self, Expr *e) {
         }
         case EX_TERNARY: {
             Sema_check_expr(self, e->cond);
+            self->lazy_depth += 1;
             Sema_check_expr(self, e->lhs);
             Sema_check_expr(self, e->rhs);
+            self->lazy_depth -= 1;
             Sema_require_scalar(self, e->cond, "ternary condition");
             Type *tva = Sema_type_of(self, e->lhs);
             Type *tvb = Sema_type_of(self, e->rhs);
@@ -5232,12 +5501,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             }
             Expr *wid = mk_ident(self->a, e->text, e->pos);
             {
-                Expr *__with_3162_17 = e;
-                __with_3162_17->kind = EX_ASSIGN;
-                __with_3162_17->op = TK_ASSIGN;
-                __with_3162_17->rhs = e->lhs;
-                __with_3162_17->lhs = wid;
-                __with_3162_17->text = NULL;
+                Expr *__with_3269_17 = e;
+                __with_3269_17->kind = EX_ASSIGN;
+                __with_3269_17->op = TK_ASSIGN;
+                __with_3269_17->rhs = e->lhs;
+                __with_3269_17->lhs = wid;
+                __with_3269_17->text = NULL;
             }
             return;
         }
@@ -5256,6 +5525,9 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 Sema_check_stmts(self, e->xblock);
             }
             Sema_check_expr(self, e->lhs);
+            if (self->lazy_depth == 0 && Sema_stmtexpr_needs_hoist(self, e)) {
+                Sema_hoist_stmtexpr(self, e);
+            }
             Sema_scope_pop(self);
             return;
         }
@@ -5477,12 +5749,12 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
                     return;
                 }
                 {
-                    Stmt *__with_3357_21 = st;
-                    __with_3357_21->kind = ST_VAR;
-                    __with_3357_21->name = st->lhs->text;
-                    __with_3357_21->type = ity;
-                    __with_3357_21->init = st->rhs;
-                    __with_3357_21->is_const = 0;
+                    Stmt *__with_3469_21 = st;
+                    __with_3469_21->kind = ST_VAR;
+                    __with_3469_21->name = st->lhs->text;
+                    __with_3469_21->type = ity;
+                    __with_3469_21->init = st->rhs;
+                    __with_3469_21->is_const = 0;
                 }
                 Sema_resolve_type(self, st->type);
                 Sema_scope_add(self, st->name, st->type);
@@ -5684,8 +5956,15 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
                 }
                 return;
             }
+            int64_t *mvals = NULL;
+            int mn = 0;
+            int mcap = 0;
+            int mdef = 0;
             size_t j;
             for (j = 0; j < st->ncases; j += 1) {
+                if (st->cases[j]->is_default) {
+                    mdef = 1;
+                }
                 size_t k;
                 for (k = 0; k < st->cases[j]->nvals; k += 1) {
                     Expr *cval = st->cases[j]->vals[k];
@@ -5698,11 +5977,20 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
                             cval->text = Arena_printf(self->a, "%lld", cv);
                         }
                     }
+                    int mok = 1;
+                    int64_t mv = Sema_ceval(self, cval, &mok);
+                    if (mok) {
+                        mvals = vec_grow(mvals, mn, &mcap, sizeof(*mvals));
+                        mvals[mn] = mv;
+                        mn += 1;
+                    }
                 }
                 self->sw_depth += 1;
                 Sema_check_block(self, st->cases[j]->body);
                 self->sw_depth -= 1;
             }
+            Sema_check_enum_exhaustive(self, st->pos, Sema_type_of(self, st->subject), mvals, mn, mdef, "match");
+            free(mvals);
             return;
         }
         case ST_WITH: {
@@ -5723,6 +6011,8 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
             st->name = Arena_printf(self->a, "__with_%d_%d", st->pos.line, st->pos.col);
             if (is_ptr) {
                 st->init = st->expr;
+            } else if (!is_lvalue(st->expr) && st->expr->kind != EX_STRING) {
+                st->init = Sema_materialize_temp(self, st->expr, "'with' target expression");
             } else {
                 st->init = take_addr(self->a, st->expr);
             }
@@ -5808,6 +6098,7 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
                 }
             }
             Sema_switch_collect_cases(self, st->body, &swvals, &swn, &swcap, &swposs, &swcap2, &swndef, &swdp, swm);
+            Sema_check_enum_exhaustive(self, st->pos, swt, swvals, swn, swndef > 0, "switch");
             free(swvals);
             free(swposs);
             self->sw_depth += 1;
@@ -5833,7 +6124,9 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
             }
             return;
         }
-        default: {
+        case ST_GOTO:
+        case ST_LABEL:
+        case ST_PASS: {
             return;
         }
     }
@@ -5941,7 +6234,16 @@ static void Sema_check_stmts(Sema *self, Block *b) {
                 nn += 1;
             }
         }
+        int32_t mark = self->se_npend;
         Sema_check_stmt(self, st);
+        size_t k;
+        for (k = mark; k < self->se_npend; k += 1) {
+            ns = vec_grow(ns, nn, &cap, sizeof(*ns));
+            ns[nn] = self->se_pend[k];
+            nn += 1;
+            injected = 1;
+        }
+        self->se_npend = mark;
         ns = vec_grow(ns, nn, &cap, sizeof(*ns));
         ns[nn] = st;
         nn += 1;
@@ -6080,6 +6382,63 @@ static void Sema_switch_collect_cases(Sema *self, Block *b, int64_t **vals, int3
             Sema_switch_collect_cases(self, st->blocks[j], vals, n, cap, poss, cap2, ndef, defpos, mask);
         }
     }
+}
+
+static void Sema_check_enum_exhaustive(Sema *self, Pos pos, Type *subj, int64_t *vals, int32_t n, int has_default, const char *what) {
+    if (self->in_chdr || subj == NULL || subj->kind != TY_NAME) {
+        return;
+    }
+    Decl *ed = StrMap_pDecl_get_or(&self->enums, subj->name, NULL);
+    if (ed == NULL || ed->nitems == 0) {
+        return;
+    }
+    char **missing = NULL;
+    int nm = 0;
+    int mcap = 0;
+    size_t i;
+    for (i = 0; i < ed->nitems; i += 1) {
+        CVal *ecv = StrMap_pCVal_get_or(&self->constvals, ed->items[i].name, NULL);
+        if (ecv == NULL || ecv->kind != CV_INT) {
+            free(missing);
+            return;
+        }
+        int found = 0;
+        size_t j;
+        for (j = 0; j < n; j += 1) {
+            if (vals[j] == ecv->ival) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            missing = vec_grow(missing, nm, &mcap, sizeof(*missing));
+            missing[nm] = (char *)ed->items[i].name;
+            nm += 1;
+        }
+    }
+    if (nm > 0) {
+        const char *expl = (has_default ? "explicitly " : "");
+        StrBuf b = {0};
+        if (nm > 3) {
+            StrBuf_printf(&b, "%d enumeration values not %shandled in %s: ", nm, expl, what);
+            for (i = 0; i < 3; i += 1) {
+                StrBuf_printf(&b, "%s'%s'", (i == 0 ? "" : ", "), missing[i]);
+            }
+            StrBuf_puts(&b, "...");
+        } else {
+            StrBuf_printf(&b, "enumeration value%s ", (nm == 1 ? "" : "s"));
+            for (i = 0; i < nm; i += 1) {
+                if (i > 0) {
+                    StrBuf_puts(&b, (nm > 2 && i < nm - 1 ? ", " : (nm > 2 ? ", and " : " and ")));
+                }
+                StrBuf_printf(&b, "'%s'", missing[i]);
+            }
+            StrBuf_printf(&b, " not %shandled in %s", expl, what);
+        }
+        cdiag_at(self->file, pos, (has_default ? "switch-enum" : "switch"), (has_default ? WD_OFF : WD_WARN), "%s", b.data);
+        StrBuf_deinit(&b);
+    }
+    free(missing);
 }
 
 static void Sema_check_switch_dups(Sema *self, Block *b) {
@@ -6339,7 +6698,7 @@ static const char *Sema_cpp_capture(Sema *self, const char *flags, const char *p
     } else {
         cmd = Arena_printf(self->a, "printf '#include \"%s\"\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir);
     }
-    struct _IO_FILE *f = popen(cmd, "r");
+    FILE *f = popen(cmd, "r");
     if (f == NULL) {
         fatal("could not run '%s -E' to ingest C header '%s' (see --cpp / PLANGC_CPP)", cpp, path);
     }
@@ -6518,13 +6877,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_4206_13 = d;
-            __with_4206_13->kind = DL_STRUCT;
-            __with_4206_13->name = si0->name;
-            __with_4206_13->fields = NULL;
-            __with_4206_13->nfields = 0;
-            __with_4206_13->methods = bodies0;
-            __with_4206_13->nmethods = nb;
+            Decl *__with_4417_13 = d;
+            __with_4417_13->kind = DL_STRUCT;
+            __with_4417_13->name = si0->name;
+            __with_4417_13->fields = NULL;
+            __with_4417_13->nfields = 0;
+            __with_4417_13->methods = bodies0;
+            __with_4417_13->nmethods = nb;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -6561,9 +6920,9 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             inst->is_inline = 1;
         }
         {
-            Decl *__with_4241_13 = d;
-            __with_4241_13->kind = DL_FUNC;
-            __with_4241_13->func = inst;
+            Decl *__with_4452_13 = d;
+            __with_4452_13->kind = DL_FUNC;
+            __with_4452_13->func = inst;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -6599,13 +6958,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             ibodies[ii]->is_inline = 1;
         }
         {
-            Decl *__with_4272_13 = d;
-            __with_4272_13->kind = DL_STRUCT;
-            __with_4272_13->name = mangled;
-            __with_4272_13->fields = iflds;
-            __with_4272_13->nfields = tpl->nfields;
-            __with_4272_13->methods = ibodies;
-            __with_4272_13->nmethods = tpl->nmethods;
+            Decl *__with_4483_13 = d;
+            __with_4483_13->kind = DL_STRUCT;
+            __with_4483_13->name = mangled;
+            __with_4483_13->fields = iflds;
+            __with_4483_13->nfields = tpl->nfields;
+            __with_4483_13->methods = ibodies;
+            __with_4483_13->nmethods = tpl->nmethods;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -6624,13 +6983,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             protos[i] = Sema_clone_func(self, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_4292_13 = d;
-            __with_4292_13->kind = DL_STRUCT;
-            __with_4292_13->name = mangled;
-            __with_4292_13->fields = fields;
-            __with_4292_13->nfields = tpl->nfields;
-            __with_4292_13->methods = protos;
-            __with_4292_13->nmethods = tpl->nmethods;
+            Decl *__with_4503_13 = d;
+            __with_4503_13->kind = DL_STRUCT;
+            __with_4503_13->name = mangled;
+            __with_4503_13->fields = fields;
+            __with_4503_13->nfields = tpl->nfields;
+            __with_4503_13->methods = protos;
+            __with_4503_13->nmethods = tpl->nmethods;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -6647,13 +7006,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
         bodies[i] = Sema_clone_func(self, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_4311_9 = d;
-        __with_4311_9->kind = DL_STRUCT;
-        __with_4311_9->name = mangled;
-        __with_4311_9->fields = NULL;
-        __with_4311_9->nfields = 0;
-        __with_4311_9->methods = bodies;
-        __with_4311_9->nmethods = tpl->nmethods;
+        Decl *__with_4522_9 = d;
+        __with_4522_9->kind = DL_STRUCT;
+        __with_4522_9->name = mangled;
+        __with_4522_9->fields = NULL;
+        __with_4522_9->nfields = 0;
+        __with_4522_9->methods = bodies;
+        __with_4522_9->nmethods = tpl->nmethods;
     }
     Sema_register_decl(self, m, d, check_bodies);
 }
@@ -6807,6 +7166,9 @@ static void Sema_register_decl(Sema *self, Module *m, Decl *d, int check_bodies)
         }
         case DL_ENUM: {
             Sema_add_type(self, d->name);
+            if (d->name != NULL) {
+                StrMap_pDecl_put(&self->enums, d->name, d);
+            }
             int32_t j;
             int64_t enext = 0;
             for (j = 0; j < d->nitems; j += 1) {
@@ -6854,6 +7216,17 @@ static void Sema_register_module(Sema *self, Module *m, int check_bodies) {
     }
     const char *prev = self->file;
     self->file = m->path;
+    if (check_bodies && !m->is_c) {
+        size_t j;
+        for (j = 0; j < m->ndecls; j += 1) {
+            Decl *fd = m->decls[j];
+            if (fd->kind == DL_FUNC && fd->func != NULL && fd->func->name != NULL) {
+                if (!StrMap_i64_has(&self->later_defs, fd->func->name)) {
+                    StrMap_i64_put(&self->later_defs, fd->func->name, (int64_t)fd->func->pos.line);
+                }
+            }
+        }
+    }
     size_t j;
     for (j = 0; j < m->ndecls; j += 1) {
         Sema_register_decl(self, m, m->decls[j], check_bodies);
@@ -6929,13 +7302,13 @@ static void Sema_inject_defines(Sema *self, Cc *cc, Module *m) {
         }
         Decl *dc = Arena_alloc(self->a, sizeof(Decl));
         {
-            Decl *__with_4562_13 = dc;
-            __with_4562_13->kind = DL_VAR;
-            __with_4562_13->pos = zp;
-            __with_4562_13->name = name;
-            __with_4562_13->is_const = 1;
-            __with_4562_13->is_static = 1;
-            __with_4562_13->init = ini;
+            Decl *__with_4788_13 = dc;
+            __with_4788_13->kind = DL_VAR;
+            __with_4788_13->pos = zp;
+            __with_4788_13->name = name;
+            __with_4788_13->is_const = 1;
+            __with_4788_13->is_static = 1;
+            __with_4788_13->init = ini;
         }
         nd[np] = dc;
         np += 1;
@@ -7547,6 +7920,42 @@ void sema_run(Cc *cc, Module *m) {
         m->decls = nd;
         m->ndecls = m->ndecls + 2;
     }
+    if (!m->is_c && s.tdalias.elen > 0) {
+        char **rtags = Arena_alloc(s.a, (size_t)s.tdalias.elen * sizeof(*rtags));
+        char **rnames = Arena_alloc(s.a, (size_t)s.tdalias.elen * sizeof(*rnames));
+        int32_t nrev = 0;
+        size_t ti;
+        for (ti = 0; ti < s.tdalias.elen; ti += 1) {
+            if (s.tdalias.dead[ti]) {
+                continue;
+            }
+            Type *tv = s.tdalias.vals[ti];
+            if (tv == NULL || tv->name == NULL) {
+                continue;
+            }
+            const char *tdn = s.tdalias.keys[ti];
+            int32_t prev = -1;
+            size_t rj;
+            for (rj = 0; rj < nrev; rj += 1) {
+                if (strcmp(rtags[rj], tv->name) == 0) {
+                    prev = rj;
+                    break;
+                }
+            }
+            if (prev >= 0) {
+                if (rnames[prev][0] == '_' && tdn[0] != '_') {
+                    rnames[prev] = Arena_strdup(s.a, tdn);
+                }
+                continue;
+            }
+            rtags[nrev] = Arena_strdup(s.a, tv->name);
+            rnames[nrev] = Arena_strdup(s.a, tdn);
+            nrev += 1;
+        }
+        m->tdrev_tags = rtags;
+        m->tdrev_names = rnames;
+        m->ntdrev = nrev;
+    }
     {
         StrMap_pDecl_deinit(&s.templates);
         StrMap_pFunc_deinit(&s.func_templates);
@@ -7561,11 +7970,13 @@ void sema_run(Cc *cc, Module *m) {
         StrSet_deinit(&s.gstatics);
         StrSet_deinit(&s.gexterns);
         StrSet_deinit(&s.enumconsts);
+        StrMap_pDecl_deinit(&s.enums);
         StrMap_pType_deinit(&s.tdalias);
         StrSet_deinit(&s.fn_globals);
         StrSet_deinit(&s.fn_nonlocals);
         StrMap_pType_deinit(&s.fn_hoisted);
         StrSet_deinit(&s.done);
+        StrMap_i64_deinit(&s.later_defs);
         free(s.locals);
         free(s.scopes);
     }

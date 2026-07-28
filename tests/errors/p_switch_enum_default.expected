@@ -1,0 +1,1 @@
+enumeration values 'VERDE', 'AZUL', and 'ROXO' not explicitly handled in match [-Wswitch-enum]

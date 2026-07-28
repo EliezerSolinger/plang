@@ -7,7 +7,8 @@
 # Etapas (todas a partir dos FONTES atuais, nunca de binários velhos):
 #   1. seed        bootstrap C -> plangc_seed
 #   2. escada      seed compila selfhost -> s1; s1 -> s2; s2 -> out3
-#   3. fixed point C      out2 == out3 (byte a byte)
+#   3. fixed point C      out2 == out3 (byte a byte) + nenhuma tag interna de
+#                         libc no C gerado (portabilidade: glibc vs macOS)
 #   4. suítes gating      cases/modules/stl/p-suite/errors em C, QBE e C89
 #   5. fixed point QBE    ssa(s2) == ssa(compilador construído do próprio ssa)
 #   6. scoreboards        c-suite e wacct-valid (informativos, com piso)
@@ -54,11 +55,21 @@ if gen $V/plangc_s2 $V/out3; then ok "stage3 (geração)"; else bad "stage3"; ex
 
 step "3/8 fixed point C: out2 == out3"
 if diff -rq $V/out2 $V/out3 >/dev/null 2>&1; then ok; else bad "$(diff -rq $V/out2 $V/out3 | head -3)"; fi
+# O C gerado não pode nomear TAG interna de uma libc: `FILE` é `struct _IO_FILE`
+# na glibc e `struct __sFILE` no macOS, então imprimir a tag amarra a saída a uma
+# libc — e onde o compilador também declara a função (popen/pclose) o header do
+# sistema entra em conflito e a build quebra. Sema canonicaza no tag de propósito
+# (é como os backends aprendem o layout); quem tem de imprimir o typedef é o
+# backend C, via Module.tdrev_*. Este gate é o que impede a volta da regressão:
+# em glibc a build passa dos dois jeitos, então o teste tem de ser sobre o TEXTO.
+leak=$(grep -l '_IO_FILE\|__sFILE\|_G_config\|__gnuc_va_list' $V/out2/*.c $V/out2/*.h $V/stl/*.h 2>/dev/null | head -3)
+if [ -z "$leak" ]; then ok "sem tag interna de libc no C gerado"
+else bad "tag interna de libc no C gerado: $leak"; fi
 
 step "4/8 suítes gating (C, QBE, C89) com o stage2"
 for mode in "C:" "QBE:BACKEND=qbe" "C89:STD=c89"; do
   name=${mode%%:*}; env=${mode#*:}
-  if env PLANGC=$PWD/$V/plangc_s2 $env bash tests/run.sh cases modules stl p-suite errors pstudio >$V/suite_$name.log 2>&1; then
+  if env PLANGC=$PWD/$V/plangc_s2 $env bash tests/run.sh cases modules stl p-suite errors pstudio roundtrip >$V/suite_$name.log 2>&1; then
     ok "$name"
   else
     bad "$name (tests/out + $V/suite_$name.log)"

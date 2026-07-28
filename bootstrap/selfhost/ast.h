@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include "plang.h"
 
@@ -191,6 +192,9 @@ struct Module {
     char **tdnames;
     int32_t ntd;
     Type **tdtypes;
+    char **tdrev_tags;
+    char **tdrev_names;
+    int32_t ntdrev;
     Decl **decls;
     int32_t ndecls;
 };
@@ -237,4 +241,91 @@ static inline Stmt *st_new(Arena *a, StmtKind k, Pos pos) {
     s->pos = pos;
     s->if_sel = -1;
     return s;
+}
+
+static const int32_t ST_NEXPR_FIXED = 9;
+
+static const int32_t EX_NEXPR_FIXED = 3;
+
+static inline int32_t stmt_nexprs(Stmt *s) {
+    if (s == NULL) {
+        return 0;
+    }
+    int32_t n = ST_NEXPR_FIXED + s->nconds;
+    size_t i;
+    for (i = 0; i < s->ncases; i += 1) {
+        n += s->cases[i]->nvals;
+    }
+    return n;
+}
+
+static inline Expr *stmt_expr_at(Stmt *s, int32_t i) {
+    switch (i) {
+        case 0: {
+            return s->init;
+        }
+        case 1: {
+            return s->lhs;
+        }
+        case 2: {
+            return s->rhs;
+        }
+        case 3: {
+            return s->expr;
+        }
+        case 4: {
+            return s->cond;
+        }
+        case 5: {
+            return s->subject;
+        }
+        case 6: {
+            return s->from;
+        }
+        case 7: {
+            return s->to;
+        }
+        case 8: {
+            return s->step;
+        }
+    }
+    int32_t k = i - ST_NEXPR_FIXED;
+    if (k < s->nconds) {
+        return s->conds[k];
+    }
+    k -= s->nconds;
+    size_t j;
+    for (j = 0; j < s->ncases; j += 1) {
+        if (k < s->cases[j]->nvals) {
+            return s->cases[j]->vals[k];
+        }
+        k -= s->cases[j]->nvals;
+    }
+    return NULL;
+}
+
+static inline int32_t expr_nexprs(Expr *e) {
+    if (e == NULL) {
+        return 0;
+    }
+    return EX_NEXPR_FIXED + e->nargs;
+}
+
+static inline Expr *expr_expr_at(Expr *e, int32_t i) {
+    switch (i) {
+        case 0: {
+            return e->lhs;
+        }
+        case 1: {
+            return e->rhs;
+        }
+        case 2: {
+            return e->cond;
+        }
+    }
+    int32_t k = i - EX_NEXPR_FIXED;
+    if (k < e->nargs) {
+        return e->args[k];
+    }
+    return NULL;
 }

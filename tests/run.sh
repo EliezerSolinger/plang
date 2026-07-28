@@ -378,6 +378,44 @@ suite_csuite() {
     echo "   c-suite score: $pass/$((pass+fail)) (doesn't gate; artifacts in $OUT/csuite)"
 }
 
+# The P backend is a ROUND TRIP: print the AST back as P, re-parse it, and the C
+# must come out identical. That proves the AST holds the whole surface language —
+# nothing the parser reads is lost, and nothing the printer writes is invented.
+#
+# `__with_<line>_<col>` bakes the source POSITION into a generated name (on
+# purpose: it makes the C traceable), and a reprint drops comments, so those
+# names shift. They are normalized before the comparison; everything else must
+# match byte for byte.
+suite_roundtrip() {
+    echo "== roundtrip (AST -> P -> AST: the C must be identical) =="
+    local pass=0 fail=0 src name d=$OUT/roundtrip
+    rm -rf "$d"; mkdir -p "$d/a" "$d/b"
+    for src in tests/cases/*.p tests/p-suite/*.p; do
+        name=$(echo "${src%.p}" | tr '/' '_')
+        # __LINE__/__FILE__/__TIME__ resolve against the file being compiled, so
+        # a reprint at another path with other line numbers CANNOT match — that
+        # is the feature working, not a round-trip failure
+        case $src in *feat-predefined*) continue ;; esac
+        if ! $PLANGC "$src" -o "$d/a/$name.c" 2>/dev/null; then continue; fi   # already covered elsewhere
+        if ! $PLANGC --backend p "$src" -o "$d/$name.p" 2>"$d/$name.e1"; then
+            echo "  FAIL $src (cannot print): $(sed 's/.*error: //' "$d/$name.e1" | head -1)"
+            fail=$((fail+1)); continue
+        fi
+        if ! $PLANGC "$d/$name.p" -o "$d/b/$name.c" 2>"$d/$name.e2"; then
+            echo "  FAIL $src (printed P does not re-parse): $(sed 's/.*error: //' "$d/$name.e2" | head -1)"
+            fail=$((fail+1)); continue
+        fi
+        if diff -q <(sed -E 's/__with_[0-9]+_[0-9]+/__with_N/g' "$d/a/$name.c") \
+                   <(sed -E 's/__with_[0-9]+_[0-9]+/__with_N/g' "$d/b/$name.c") >/dev/null; then
+            pass=$((pass+1))
+        else
+            echo "  FAIL $src (C differs after the round trip)"; fail=$((fail+1))
+        fi
+    done
+    echo "   roundtrip: $pass ok, $fail failed"
+    total_fail=$((total_fail+fail))
+}
+
 # ---------- main ----------
 suites=${*:-"cases modules stl p-suite errors pstudio c-suite"}
 echo "plangc test run — PLANGC=$PLANGC BACKEND=$BACKEND${STD:+ STD=$STD}"
@@ -391,9 +429,10 @@ for s in $suites; do
         c-invalid) suite_cinvalid ;;
         wacct-valid) suite_wvalid ;;
         pstudio)  suite_pstudio ;;
+        roundtrip) suite_roundtrip ;;
         c-suite)  suite_csuite ;;
-        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_pstudio; suite_csuite ;;
-        *) echo "unknown suite '$s' (cases|modules|stl|p-suite|c-suite|all)"; exit 2 ;;
+        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_pstudio; suite_roundtrip; suite_csuite ;;
+        *) echo "unknown suite '$s' (cases|modules|stl|p-suite|errors|pstudio|roundtrip|c-suite|all)"; exit 2 ;;
     esac
 done
 echo

@@ -193,6 +193,13 @@ g_std89: bool = False   # --std=c89
 g_i64: i32 = 0          # under c89: 0=error, 1=downgrade to 32, 2=long long
 g_c_mod: bool = False       # emitting a C-front-end module (round-tripped C)?
 
+# TAG -> typedef reverse map of the module being emitted (Module.tdrev_*): sema
+# canonicalizes a C-header typedef onto its TAG, and this maps it back for
+# printing. Empty for a round-trip C module, which must print the tag.
+g_tdrev_tags: **char = None
+g_tdrev_names: **char = None
+g_ntdrev: i32 = 0
+
 def backend_c_config(std89: bool, i64_mode: i32):
     g_std89 = std89
     g_i64 = i64_mode
@@ -232,10 +239,27 @@ static def base_cname(n: const *char) -> const *char:
         i += 1
     return n
 
+# a TAG that a C-header typedef names: the typedef's name, else None. Only the
+# tag came from the header's internals — `FILE` is `struct _IO_FILE` on glibc and
+# `struct __sFILE` on macOS — so a P module must print the typedef, which is what
+# its emitted `#include` actually declares.
+static def tdrev_lookup(tag: const *char) -> const *char:
+    if g_c_mod or tag == None:
+        return None
+    for i in range(g_ntdrev):
+        if strcmp(g_tdrev_tags[i], tag) == 0:
+            return g_tdrev_names[i]
+    return None
+
 # base type name. A type SPELLED `struct X`/`union X` in C source (tag_kind)
 # is re-emitted with its keyword — tags live in their own namespace, and a bare
 # `X` may name something else entirely (C front end preserves the spelling).
 static def emit_type_name(b: *StrBuf, t: *Type):
+    if t->tag_kind == TAG_STRUCT or t->tag_kind == TAG_UNION:
+        td: const *char = tdrev_lookup(t->name)
+        if td != None:
+            b->puts(td)
+            return
     if t->tag_kind == TAG_STRUCT:
         b->printf("struct %s", t->name)
         return
@@ -497,6 +521,12 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
         case EX_WITHSELF:
             # the semantic pass always rewrites this to EX_IDENT; reaching here is an internal bug
             fatal("internal: EX_WITHSELF reached the C backend unresolved")
+        case EX_WALRUS:
+            # sema hoists the declaration and rewrites this to EX_ASSIGN
+            fatal("internal: EX_WALRUS reached the C backend unresolved")
+        case EX_IN:
+            # sema lowers `x in y` to an ==/strcmp or-chain
+            fatal("internal: EX_IN reached the C backend unlowered")
     if paren:
         b->putc(')')
 
@@ -720,6 +750,16 @@ static def emit_expr_stmt_lowered(b: *StrBuf, e: *Expr, ind: i32) -> bool:
         return True
     return False
 
+# a block whose statements all emit nothing (P's `global`/`nonlocal` are scope
+# declarations, not code): its braces would be pure noise
+static def block_is_silent(blk: *Block) -> bool:
+    if blk == None:
+        return True
+    for i in range(blk->n):
+        if blk->stmts[i]->kind not in {ST_GLOBAL, ST_NONLOCAL}:
+            return False
+    return True
+
 static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
     match s->kind:
         case ST_VAR:
@@ -745,7 +785,9 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             emit_var_decl(b, s->type, s->name, None)
             if s->init != None:
                 b->puts(" = ")
-                emit_expr(b, s->init, 0)
+                # PR_ASSIGN: an initializer is an assignment-expression — a COMMA
+                # here would parse as a DECLARATOR LIST (`T *a = x, &y;`)
+                emit_expr(b, s->init, PR_ASSIGN)
             b->puts(";\n")
         case ST_ASSIGN:
             if s->op == TK_ASSIGN and stmtexpr_complex(s->rhs):
@@ -970,7 +1012,11 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             emit_func_sig(b, s->cfunc)
             b->puts(";\n")
         case ST_BLOCK:
-            # bare block: real C scope (inner decls don't collide with siblings)
+            # bare block: real C scope (inner decls don't collide with siblings).
+            # P's parser also makes one just to group `global a, b` — those emit
+            # NOTHING, so the braces would be vestigial noise in the output.
+            if block_is_silent(s->body):
+                return
             indent(b, ind)
             b->puts("{\n")
             emit_block_body(b, s->body, ind + 1)
@@ -1009,11 +1055,16 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             indent(b, ind + 1)
             emit_var_decl(b, s->type, s->name, None)
             b->puts(" = ")
-            emit_expr(b, s->init, 0)
+            emit_expr(b, s->init, PR_ASSIGN)
             b->puts(";\n")
             emit_block_body(b, s->body, ind + 1)
             indent(b, ind)
             b->puts("}\n")
+        case ST_GLOBAL, ST_NONLOCAL:
+            # binding directives, not code: they only steer where sema declares
+            # the name. Emitting nothing IS correct — saying so explicitly is
+            # what stops a new kind from joining them by falling out silently.
+            return
 
 # emits the for's init/post inline (no indentation, no trailing ';')
 static def emit_simple_inline(b: *StrBuf, s: *Stmt):
@@ -1022,7 +1073,7 @@ static def emit_simple_inline(b: *StrBuf, s: *Stmt):
             emit_var_decl(b, s->type, s->name, None)
             if s->init != None:
                 b->puts(" = ")
-                emit_expr(b, s->init, 0)
+                emit_expr(b, s->init, PR_ASSIGN)
         case ST_ASSIGN:
             emit_expr(b, s->lhs, 0)
             b->printf(" %s ", op_cstr(s->op))
@@ -1239,6 +1290,9 @@ def emit_module_c(m: *Module, out: *StrBuf):
     g_needs_stdint = False; g_needs_stddef = False; g_needs_string = False
     g_in_header = m->is_header
     g_c_mod = m->is_c
+    g_tdrev_tags = m->tdrev_tags
+    g_tdrev_names = m->tdrev_names
+    g_ntdrev = m->ntdrev
 
     body: StrBuf = {0}
     defer body.deinit()
