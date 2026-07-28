@@ -501,6 +501,8 @@ struct Cp:
     static def tag_find(self: *Cp, name: const *char) -> i32
     static def tag_push(self: *Cp, name: const *char, is_union: bool, defined: bool) -> i32
     static def skip_parens(self: *Cp)
+    static def skip_braces(self: *Cp)
+    static def has_block_decl(self: *Cp) -> bool
     static def skip_to(self: *Cp, a: const *char, b: const *char)
     static def is_type_kw(self: *Cp, w: const *char) -> bool
     static def canon_arith(self: *Cp, n: const *char) -> const *char
@@ -1098,6 +1100,38 @@ struct Cp:
         while self->eat(",")
 
     # skips tokens (respecting () [] {}) until one of the terminators at level 0
+    # consumes a balanced `{ ... }` (the caller is positioned ON the '{')
+    static def skip_braces(self: *Cp):
+        self->expect_punct("{")
+        depth = 1
+        while depth > 0 and self->pk()->kind != CT_EOF:
+            if self->is_punct("{"):
+                depth += 1
+            elif self->is_punct("}"):
+                depth -= 1
+            self->adv()
+
+    # Does the declaration starting HERE use an Apple block declarator? A LOOKAHEAD
+    # (consumes nothing), scanning to the ';' or '{' that ends the declaration.
+    # `(` immediately followed by `^` is the signature: `^` is otherwise xor, which
+    # never follows an open paren directly.
+    static def has_block_decl(self: *Cp) -> bool:
+        k: usize = self->i
+        depth = 0
+        while k < self->nt and self->t[k].kind != CT_EOF:
+            tk: *CTok = &self->t[k]
+            if tk->kind == CT_PUNCT and tk->text != None:
+                if depth == 0 and (tk->text == ";" or tk->text == "{"):
+                    return False
+                if tk->text in {"(", "[", "{"}:
+                    depth += 1
+                    if tk->text == "(" and k + 1 < self->nt and self->t[k + 1].kind == CT_PUNCT and self->t[k + 1].text == "^":
+                        return True
+                elif tk->text in {")", "]", "}"}:
+                    depth -= 1
+            k += 1
+        return False
+
     static def skip_to(self: *Cp, a: const *char, b: const *char):
         depth = 0
         while self->pk()->kind != CT_EOF:
@@ -1441,6 +1475,13 @@ struct Cp:
         sym_tail: bool = False   # the last value was symbolic (not reducible)
         while not self->is_punct("}") and self->pk()->kind != CT_EOF:
             iname: const *char = self->adv()->text
+            # attribute BETWEEN the enumerator and its '=' — C23 spells it
+            # `identifier attribute-specifier-seq = value`, and clang/gcc have
+            # taken it for far longer. macOS <time.h> declares clockid_t that
+            # way (`_CLOCK_REALTIME __CLOCK_AVAILABILITY = 0`, the macro being an
+            # availability attribute), so without this the header dies on
+            # "expected '}'".
+            self->skip_gnu()
             it: EnumItem = {iname, None, self->pk()->pos}
             if self->eat("="):
                 esave: usize = self->i
@@ -1468,6 +1509,7 @@ struct Cp:
                     self->enumvals.put(iname, next_val)
                     next_val += 1
             items.push(it)
+            self->skip_gnu()   # also legal after the value, before the ','
             if not self->eat(","):
                 break
         self->expect_punct("}")
@@ -2232,6 +2274,7 @@ def c_stmt_into(p: *Cp, out: *Vec<*Stmt>):
     if p->pk()->kind == CT_ID and p->pk1()->kind == CT_PUNCT and p->pk1()->text == ":" and not (p->strict and is_c_keyword(p->pk()->text) and not p->types.has(p->pk()->text)):
         lbl: const *char = p->adv()->text
         p->adv()  # ':'
+        p->skip_gnu()   # `L: __attribute__((unused));` — attribute on the label
         ls: *Stmt = st_new(p->a, ST_LABEL, pos)
         ls->label = lbl
         out.push(ls)
@@ -2636,6 +2679,27 @@ def c_top(p: *Cp) -> *Decl:
         return None
     if p->pk()->kind == CT_ID and p->pk()->text != None and (p->pk()->text == "_Static_assert" or p->pk()->text == "static_assert"):
         c_static_assert(p)
+        return None
+    # Apple BLOCKS (`int (^)(void)`). Not C, and we do not model them: a block is
+    # a heap object with a code pointer, not a function pointer, so translating
+    # `^` as `*` would be a LIE. It used to do exactly that, silently —
+    # `int (^)(const void *, const void *)` came out `int (*)()`, losing the
+    # parameters, and `int (^f(void))(void)` came out `int (void);`, losing the
+    # name. macOS <stdlib.h> declares qsort_b/bsearch_b this way whenever
+    # __BLOCKS__ is on, which is the default, so the mistranslation was already
+    # happening on every macOS build.
+    #
+    # An ingested HEADER just drops the declaration: the P output keeps its
+    # `#include`, so nothing is lost, and code that calls the name gets a clean
+    # unknown-identifier error rather than wrong C. In strict USER code it is an
+    # error, because there silence would hide it.
+    if p->has_block_decl():
+        if p->strict:
+            fatal_at(p->file, pos, "Apple blocks ('^') are not supported")
+        p->skip_to(";", "{")
+        if p->is_punct("{"):
+            p->skip_braces()
+        p->eat(";")
         return None
     base: *Type = p->parse_base_type()
     # storage class in any position (before/after/among the type words) was

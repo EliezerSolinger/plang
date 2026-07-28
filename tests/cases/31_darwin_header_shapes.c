@@ -17,8 +17,30 @@
  * 3. `__asm("_name")` renaming, which is what __DARWIN_ALIAS expands to.
  *
  * 4. C11 `_Alignas`, in both its integer and its type form.
+ *
+ * 5. An attribute BETWEEN an enumerator and its '=' — C23 spells it
+ *    `identifier attribute-specifier-seq = value`, and clang/gcc took it long
+ *    before. Apple's <time.h> declares clockid_t exactly so:
+ *      typedef enum {
+ *      _CLOCK_REALTIME __CLOCK_AVAILABILITY = 0,      // Libc/include/_time.h:210
+ *    guarded by `#if __has_feature(enumerator_attributes)`, which is true on
+ *    clang — so on macOS the attributes ARE there, and the header died on
+ *    "time.h:170:17: error: expected '}'". `deprecated` stands in for the
+ *    availability macro below so this file also builds with gcc.
+ *
+ * 6. An attribute on a LABEL.
+ *
+ * tests/apple-headers.sh checks the same front end against the REAL Apple
+ * headers (fetched, not vendored); this file is the offline gate.
  */
 #include <stdio.h>
+
+/* the clockid_t shape, attribute between enumerator and '=' */
+typedef enum {
+    MEU_REALTIME __attribute__((deprecated)) = 0,
+    MEU_MONOTONIC __attribute__((deprecated)) = 6,
+    MEU_SEM_VALOR __attribute__((deprecated)),
+} meu_clockid_t;
 
 extern int mac_only(int x)
     __attribute__((availability(macos, introduced = 10.13.4)));
@@ -46,5 +68,9 @@ int main(void) {
     printf("%d\n", conta("darwin", buf, buf, buf));
     printf("%c\n", buf[0]);
     printf("%d %d\n", (int)sizeof alinhado, (int)sizeof alinhado2);
+    printf("%d %d %d\n", MEU_REALTIME, MEU_MONOTONIC, MEU_SEM_VALOR);
+    goto fim;
+fim:
+    __attribute__((unused));
     return 0;
 }

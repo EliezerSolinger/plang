@@ -1074,6 +1074,10 @@ static int32_t Cp_tag_push(Cp *self, const char *name, int is_union, int defined
 
 static void Cp_skip_parens(Cp *self);
 
+static void Cp_skip_braces(Cp *self);
+
+static int Cp_has_block_decl(Cp *self);
+
 static void Cp_skip_to(Cp *self, const char *a, const char *b);
 
 static int Cp_is_type_kw(Cp *self, const char *w);
@@ -1716,6 +1720,42 @@ static void Cp_parse_params_inner(Cp *self, Vec_Param *prms, int *varargs) {
     } while (Cp_eat(self, ","));
 }
 
+static void Cp_skip_braces(Cp *self) {
+    Cp_expect_punct(self, "{");
+    int depth = 1;
+    while (depth > 0 && Cp_pk(self)->kind != CT_EOF) {
+        if (Cp_is_punct(self, "{")) {
+            depth += 1;
+        } else if (Cp_is_punct(self, "}")) {
+            depth -= 1;
+        }
+        Cp_adv(self);
+    }
+}
+
+static int Cp_has_block_decl(Cp *self) {
+    size_t k = self->i;
+    int depth = 0;
+    while (k < self->nt && self->t[k].kind != CT_EOF) {
+        CTok *tk = &self->t[k];
+        if (tk->kind == CT_PUNCT && tk->text != NULL) {
+            if (depth == 0 && (strcmp(tk->text, ";") == 0 || strcmp(tk->text, "{") == 0)) {
+                return 0;
+            }
+            if (strcmp(tk->text, "(") == 0 || strcmp(tk->text, "[") == 0 || strcmp(tk->text, "{") == 0) {
+                depth += 1;
+                if (strcmp(tk->text, "(") == 0 && k + 1 < self->nt && self->t[k + 1].kind == CT_PUNCT && strcmp(self->t[k + 1].text, "^") == 0) {
+                    return 1;
+                }
+            } else if (strcmp(tk->text, ")") == 0 || strcmp(tk->text, "]") == 0 || strcmp(tk->text, "}") == 0) {
+                depth -= 1;
+            }
+        }
+        k += 1;
+    }
+    return 0;
+}
+
 static void Cp_skip_to(Cp *self, const char *a, const char *b) {
     int depth = 0;
     while (Cp_pk(self)->kind != CT_EOF) {
@@ -1854,12 +1894,12 @@ static Decl *Cp_parse_struct_body(Cp *self, const char *tag, int is_union) {
     Cp_expect_punct(self, "}");
     Decl *d = Arena_alloc(self->a, sizeof(Decl));
     {
-        Decl *__with_1220_9 = d;
-        __with_1220_9->kind = (is_union ? DL_UNION : DL_STRUCT);
-        __with_1220_9->name = tag;
-        __with_1220_9->fields = fields.data;
-        __with_1220_9->nfields = fields.len;
-        __with_1220_9->is_def = 1;
+        Decl *__with_1254_9 = d;
+        __with_1254_9->kind = (is_union ? DL_UNION : DL_STRUCT);
+        __with_1254_9->name = tag;
+        __with_1254_9->fields = fields.data;
+        __with_1254_9->nfields = fields.len;
+        __with_1254_9->is_def = 1;
     }
     return d;
 }
@@ -2115,6 +2155,7 @@ static Decl *Cp_parse_enum_body(Cp *self, const char *tag) {
     int sym_tail = 0;
     while (!Cp_is_punct(self, "}") && Cp_pk(self)->kind != CT_EOF) {
         const char *iname = Cp_adv(self)->text;
+        Cp_skip_gnu(self);
         EnumItem it = {iname, NULL, Cp_pk(self)->pos};
         if (Cp_eat(self, "=")) {
             size_t esave = self->i;
@@ -2142,6 +2183,7 @@ static Decl *Cp_parse_enum_body(Cp *self, const char *tag) {
             }
         }
         Vec_EnumItem_push(&items, it);
+        Cp_skip_gnu(self);
         if (!Cp_eat(self, ",")) {
             break;
         }
@@ -2831,15 +2873,15 @@ Block *c_block(Cp *p) {
 void c_local_proto(Cp *p, Vec_pStmt *out, const char *name, Type *ret, Vec_Param prms, int va, int sig_empty) {
     Func *lf = Arena_alloc(p->a, sizeof(Func));
     {
-        Func *__with_2075_5 = lf;
-        __with_2075_5->pos = Cp_pk(p)->pos;
-        __with_2075_5->name = name;
-        __with_2075_5->cname = name;
-        __with_2075_5->ret = ret;
-        __with_2075_5->params = prms.data;
-        __with_2075_5->nparams = prms.len;
-        __with_2075_5->is_varargs = va;
-        __with_2075_5->sig_empty = sig_empty;
+        Func *__with_2117_5 = lf;
+        __with_2117_5->pos = Cp_pk(p)->pos;
+        __with_2117_5->name = name;
+        __with_2117_5->cname = name;
+        __with_2117_5->ret = ret;
+        __with_2117_5->params = prms.data;
+        __with_2117_5->nparams = prms.len;
+        __with_2117_5->is_varargs = va;
+        __with_2117_5->sig_empty = sig_empty;
     }
     Decl *ld = Arena_alloc(p->a, sizeof(Decl));
     ld->kind = DL_FUNC;
@@ -3001,6 +3043,7 @@ void c_stmt_into(Cp *p, Vec_pStmt *out) {
     if (Cp_pk(p)->kind == CT_ID && Cp_pk1(p)->kind == CT_PUNCT && strcmp(Cp_pk1(p)->text, ":") == 0 && !(p->strict && is_c_keyword(Cp_pk(p)->text) && !StrSet_has(&p->types, Cp_pk(p)->text))) {
         const char *lbl = Cp_adv(p)->text;
         Cp_adv(p);
+        Cp_skip_gnu(p);
         Stmt *ls = st_new(p->a, ST_LABEL, pos);
         ls->label = lbl;
         Vec_pStmt_push(out, ls);
@@ -3308,17 +3351,17 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         if (fpty != NULL && fpty->kind == TY_FUNC) {
             Func *ff = Arena_alloc(p->a, sizeof(Func));
             {
-                Func *__with_2529_13 = ff;
-                __with_2529_13->pos = pos;
-                __with_2529_13->name = fpname;
-                __with_2529_13->cname = fpname;
-                __with_2529_13->ret = fpty->inner;
-                __with_2529_13->params = fprms.data;
-                __with_2529_13->nparams = fprms.len;
-                __with_2529_13->is_varargs = fva;
-                __with_2529_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
+                Func *__with_2572_13 = ff;
+                __with_2572_13->pos = pos;
+                __with_2572_13->name = fpname;
+                __with_2572_13->cname = fpname;
+                __with_2572_13->ret = fpty->inner;
+                __with_2572_13->params = fprms.data;
+                __with_2572_13->nparams = fprms.len;
+                __with_2572_13->is_varargs = fva;
+                __with_2572_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
                 if (Cp_is_punct(p, "{")) {
-                    __with_2529_13->body = c_block(p);
+                    __with_2572_13->body = c_block(p);
                 }
             }
             Decl *df = Arena_alloc(p->a, sizeof(Decl));
@@ -3329,14 +3372,14 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         }
         Decl *dfp = Arena_alloc(p->a, sizeof(Decl));
         {
-            Decl *__with_2546_9 = dfp;
-            __with_2546_9->kind = DL_VAR;
-            __with_2546_9->pos = pos;
-            __with_2546_9->name = fpname;
-            __with_2546_9->type = fpty;
-            __with_2546_9->is_extern = is_extern;
+            Decl *__with_2589_9 = dfp;
+            __with_2589_9->kind = DL_VAR;
+            __with_2589_9->pos = pos;
+            __with_2589_9->name = fpname;
+            __with_2589_9->type = fpty;
+            __with_2589_9->is_extern = is_extern;
             if (Cp_eat(p, "=")) {
-                __with_2546_9->init = c_initializer(p);
+                __with_2589_9->init = c_initializer(p);
             }
         }
         return dfp;
@@ -3359,17 +3402,17 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
         Cp_skip_gnu(p);
         Func *f = Arena_alloc(p->a, sizeof(Func));
         {
-            Func *__with_2572_9 = f;
-            __with_2572_9->pos = pos;
-            __with_2572_9->name = name;
-            __with_2572_9->cname = name;
-            __with_2572_9->ret = ty;
-            __with_2572_9->params = params.data;
-            __with_2572_9->nparams = params.len;
-            __with_2572_9->is_varargs = is_vararg;
-            __with_2572_9->sig_empty = p->params_empty;
+            Func *__with_2615_9 = f;
+            __with_2615_9->pos = pos;
+            __with_2615_9->name = name;
+            __with_2615_9->cname = name;
+            __with_2615_9->ret = ty;
+            __with_2615_9->params = params.data;
+            __with_2615_9->nparams = params.len;
+            __with_2615_9->is_varargs = is_vararg;
+            __with_2615_9->sig_empty = p->params_empty;
             if (Cp_is_punct(p, "{")) {
-                __with_2572_9->body = c_block(p);
+                __with_2615_9->body = c_block(p);
             }
         }
         Decl *d = Arena_alloc(p->a, sizeof(Decl));
@@ -3398,14 +3441,14 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
     Cp_skip_gnu(p);
     Decl *d2 = Arena_alloc(p->a, sizeof(Decl));
     {
-        Decl *__with_2605_5 = d2;
-        __with_2605_5->kind = DL_VAR;
-        __with_2605_5->pos = pos;
-        __with_2605_5->name = name;
-        __with_2605_5->type = ty;
-        __with_2605_5->is_extern = is_extern;
+        Decl *__with_2648_5 = d2;
+        __with_2648_5->kind = DL_VAR;
+        __with_2648_5->pos = pos;
+        __with_2648_5->name = name;
+        __with_2648_5->type = ty;
+        __with_2648_5->is_extern = is_extern;
         if (Cp_eat(p, "=")) {
-            __with_2605_5->init = c_initializer(p);
+            __with_2648_5->init = c_initializer(p);
         }
     }
     return d2;
@@ -3439,6 +3482,17 @@ Decl *c_top(Cp *p) {
     }
     if (Cp_pk(p)->kind == CT_ID && Cp_pk(p)->text != NULL && (strcmp(Cp_pk(p)->text, "_Static_assert") == 0 || strcmp(Cp_pk(p)->text, "static_assert") == 0)) {
         c_static_assert(p);
+        return NULL;
+    }
+    if (Cp_has_block_decl(p)) {
+        if (p->strict) {
+            fatal_at(p->file, pos, "Apple blocks ('^') are not supported");
+        }
+        Cp_skip_to(p, ";", "{");
+        if (Cp_is_punct(p, "{")) {
+            Cp_skip_braces(p);
+        }
+        Cp_eat(p, ";");
         return NULL;
     }
     Type *base = Cp_parse_base_type(p);
