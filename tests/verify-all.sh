@@ -112,6 +112,10 @@ step "7/8 pstudio (compilação do editor: maior consumidor de P)"
 # gating de COMPILAÇÃO do editor inteiro (a suíte funcional roda no passo 4).
 # SDL2 é dependência com skip gracioso — sem libsdl2-dev só avisa.
 if pkg-config --exists sdl2 >/dev/null 2>&1; then
+  # o cc que o plangc usa para pré-processar `include <SDL2/SDL.h>` precisa dos
+  # mesmos -I da compilação final: fora do Linux os headers do SDL2 não estão
+  # num caminho de busca padrão (Homebrew). Ver PLANGC_CPP no Makefile.
+  export PLANGC_CPP="$CC $(pkg-config --cflags sdl2)"
   if $V/plangc_s2 --out-dir $V/pst stl/*.ph selfhost/plang.ph selfhost/ast.ph \
        selfhost/lexer.ph pstudio/*.ph pstudio/*.p selfhost/lexer.p selfhost/utf8.p \
        selfhost/util.p >$V/pstudio.log 2>&1 &&

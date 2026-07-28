@@ -310,6 +310,10 @@ suite_pstudio() {
     local sdl=0; pkg-config --exists sdl2 >/dev/null 2>&1 && sdl=1
     mkdir -p "$OUT"/pstudio
     export SDL_VIDEODRIVER=dummy
+    # plangc preprocesses `include <SDL2/SDL.h>` with its own cc, which does not
+    # search Homebrew's include dir — give it the same flags the final compile
+    # gets (see the Makefile's PLANGC_CPP for the full reasoning)
+    [ $sdl = 1 ] && export PLANGC_CPP="${CC:-cc} $(pkg-config --cflags sdl2)"
     for src in tests/pstudio/*.p; do
         name=$(basename "$src" .p)
         deps=""

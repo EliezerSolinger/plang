@@ -67,6 +67,18 @@ PSTUDIO_SRC = pstudio/font_atlas.p pstudio/psys.p pstudio/pgfx_raster.p \
               pstudio/codeview.p pstudio/app.p pstudio/main.p
 PSTUDIO_DEPS = selfhost/lexer.p selfhost/utf8.p selfhost/util.p
 
+# SDL2's headers are NOT on the default include path everywhere: Homebrew puts
+# them under /opt/homebrew/include (Apple Silicon) or /usr/local/include (Intel),
+# neither of which cc searches. plangc preprocesses `include <SDL2/SDL.h>` with
+# its own cc, so it needs the same -I the final compile gets — otherwise the
+# ingest fails with "failed to preprocess header 'SDL2/SDL.h'" on macOS while
+# building fine on Linux, where /usr/include/SDL2 happens to be found anyway.
+# Via PLANGC_CPP so that EVERY plangc invocation is covered, not just this one.
+# It also passes -D_REENTRANT along, so the declarations plangc ingests are the
+# same ones the C compiler will see.
+SDL2_CFLAGS = $(shell pkg-config --cflags sdl2 2>/dev/null)
+
+pstudio: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS)
 pstudio: plangc
 	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
 	./plangc --out-dir out stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph \
