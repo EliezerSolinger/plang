@@ -143,11 +143,16 @@ struct Cx:
                     # sign after exponent (e/E dec, p/P hex) is part of the number
                     if (ch in {'e', 'E', 'p', 'P'}) and self->i < self->n and (self->s[self->i] == '+' or self->s[self->i] == '-'):
                         self->adv()
-                ntxt: const *char = self->slice(start2)
-                nerr: const *char = c_num_error(ntxt)
-                if nerr != None:
-                    fatal_at(self->file, pos, "malformed number constant '%s': %s", ntxt, nerr)
-                self->push(CT_NUM, pos, ntxt)
+                # NOT validated here. What is scanned above is C's
+                # PREPROCESSING-NUMBER (C11 6.4.8), which is deliberately looser
+                # than a numeric constant: `10.13.4` is a well-formed pp-number
+                # and only ill-formed if something tries to USE it as a value.
+                # macOS headers are full of them — `__attribute__((availability(
+                # macos,introduced=10.13.4)))` — inside constructs we skip, so
+                # rejecting at tokenize time made <stdlib.h> unparseable.
+                # c_num_error runs at the two places a CT_NUM becomes a value
+                # (c_primary and ceval_prim), which is where C says it matters.
+                self->push(CT_NUM, pos, self->slice(start2))
                 continue
             # string
             if c == '"':
@@ -562,10 +567,22 @@ struct Cp:
     static def skip_gnu(self: *Cp):
         while self->pk()->kind == CT_ID:
             w: const *char = self->pk()->text
-            if w in {"__attribute__", "__attribute", "__asm__", "__asm", "asm"}:
+            # takes a PARENTHESIZED argument, which is skipped whole. `_Alignas`
+            # is C11's alignment specifier (`_Alignas(16) char buf[16]`) and is
+            # dropped for the same reason as `__attribute__((aligned(N)))`:
+            # alignment does not change the emitted C, which carries the
+            # specifier's own source through unchanged.
+            if w in {"__attribute__", "__attribute", "__asm__", "__asm", "asm", "_Alignas", "__alignas__"}:
                 self->adv()
                 if self->is_punct("("):
                     self->skip_parens()
+            # clang's NULLABILITY qualifiers. They appear all over the macOS SDK
+            # (`char * _Nullable s`), always right after a '*', and carry no
+            # meaning for codegen — pure annotation. Both spellings exist across
+            # SDK versions.
+            elif w in {"_Nullable", "_Nonnull", "_Null_unspecified", "__nullable", "__nonnull", "__null_unspecified"}:
+                self->adv()
+                continue
             elif w in {"const", "volatile", "__volatile__", "restrict", "__restrict", "__restrict__", "__extension__", "static", "extern", "register", "auto", "inline", "__inline", "__inline__", "_Noreturn", "__thread", "_Thread_local"}:
                 if w == "const":
                     self->saw_const = True   # for parse_base_type to mark the type
@@ -1246,6 +1263,11 @@ struct Cp:
     static def ceval_prim(self: *Cp, ref ok: bool) -> i64:
         t: *CTok = self->pk()
         if t->kind == CT_NUM:
+            # same as c_primary: a pp-number is only required to be a valid
+            # constant at the point it is evaluated as one
+            nerr: const *char = c_num_error(t->text)
+            if nerr != None:
+                fatal_at(self->file, t->pos, "malformed number constant '%s': %s", t->text, nerr)
             self->adv()
             return i64(strtoll(t->text, None, 0))
         if t->kind == CT_CHAR:
@@ -1577,6 +1599,10 @@ def c_primary(p: *Cp) -> *Expr:
     t: *CTok = p->pk()
     match t->kind:
         case CT_NUM:
+            # a pp-number USED as a value must be a real numeric constant
+            nerr: const *char = c_num_error(t->text)
+            if nerr != None:
+                fatal_at(p->file, t->pos, "malformed number constant '%s': %s", t->text, nerr)
             e: *Expr = ex_new(p->a, EX_NUMBER, t->pos)
             e->text = p->adv()->text
             return e

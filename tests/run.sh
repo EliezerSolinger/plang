@@ -83,8 +83,13 @@ check_run() {
 suite_cases() {
     echo "== cases (end-to-end P) =="
     local pass=0 fail=0 src name bin
-    for src in tests/cases/*.p; do
-        name=$(basename "$src" .p); bin=$OUT/cases/$name
+    # *.c too: C input that must be ACCEPTED. tests/errors covers the must-REJECT
+    # side and c-suite is a vendored scoreboard that does not gate, so there was
+    # nowhere to pin a header shape the front end has to swallow (the macOS SDK's
+    # nullability and availability attributes, for one).
+    for src in tests/cases/*.p tests/cases/*.c; do
+        [ -f "$src" ] || continue
+        name=$(basename "$src"); name=${name%.*}; bin=$OUT/cases/$name
         if build_bin "$src" "$bin" "$bin.err" && check_run "$bin" "tests/cases/$name.expected" "$name"; then
             pass=$((pass+1))
         else
