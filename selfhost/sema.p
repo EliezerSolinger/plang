@@ -69,6 +69,9 @@ declare StrMap<*Type>
 implement StrMap<*Type>
 declare StrMap<*Decl>
 implement StrMap<*Decl>
+# declare only: cfront.p already IMPLEMENTS this instance, and a second set of
+# bodies would collide at link time
+declare StrMap<*char>
 # the QBE backend folds module-level consts through a map of their initializers
 declare StrMap<*Expr>
 implement StrMap<*Expr>
@@ -231,6 +234,10 @@ struct Sema:
     structs: StrMap<*SInfo>
     funcs: StrMap<*Func>
     globals: StrMap<*Type>
+    macroalias: StrMap<*char>  # `#define NAME OTHER` from an ingested C header
+                               #   where OTHER is a declared OBJECT, not a constant:
+                               #   macOS spells stderr `#define stderr __stderrp`,
+                               #   so P must follow the rename (see ingest_macros)
     enumconsts: StrSet
     enums: StrMap<*Decl>     # enum TYPE name -> its declaration, for -Wswitch:
                              #   exhaustiveness needs the enumerator list, which
@@ -328,6 +335,7 @@ struct Sema:
     static def infer_type(self: *Sema, e: *Expr) -> *Type
     static def sugg_text(self: *Sema, sg: *Sugg) -> const *char
     static def hasfield_of(self: *Sema, e: *Expr) -> bool
+    static def macro_alias_rewrite(self: *Sema, e: *Expr) -> bool
     static def known_type_name(self: *Sema, n: const *char) -> bool
     static def is_check_ptr(self: *Sema, e: *Expr)
     static def is_wrap_voidp(self: *Sema, e: *Expr) -> *Expr
@@ -1302,6 +1310,31 @@ struct Sema:
             # spelling rather than unquoting it
             if hsi->fields[hi].name != None and strcmp(e->args[1]->text, self->a->printf("\"%s\"", hsi->fields[hi].name)) == 0:
                 return True
+        return False
+
+    # `#define NAME OTHER` from a C header, where OTHER is a declared object or
+    # function: rewrite the identifier to OTHER in place. True if it rewrote.
+    # Only ever consulted for a name that resolves nowhere else, so it cannot
+    # shadow a real declaration. Both a plain reference and a CALL need it — the
+    # call path checks its callee separately and would otherwise report an
+    # implicit function declaration.
+    static def macro_alias_rewrite(self: *Sema, e: *Expr) -> bool:
+        if e == None or e->kind != EX_IDENT or e->text == None:
+            return False
+        # follows a CHAIN (`#define a b` / `#define b c`), bounded the same way the
+        # constant-alias passes above are: real chains are one or two links, and a
+        # bound means a cyclic #define cannot spin here
+        cur: *char = (*char)(e->text)
+        hop: i32 = 0
+        while hop < 4:
+            nxt: *char = self->macroalias.get_or(cur, None)
+            if nxt == None:
+                break
+            cur = nxt
+            if self->globals.get_or(cur, None) != None or self->find_func(cur) != None:
+                e->text = cur
+                return True
+            hop += 1
         return False
 
     static def known_type_name(self: *Sema, n: const *char) -> bool:
@@ -2629,6 +2662,11 @@ struct Sema:
             case EX_CALL:
                 self->resolve_gcall(e)   # def foo<T> template call -> foo_int
                 callee: *Expr = e->lhs
+                # a callee that is a C-header alias macro (`#define ma_fn ma_real_fn`)
+                # resolves to its target BEFORE anything downstream looks the name
+                # up — otherwise this reads as an implicit function declaration
+                if callee != None and callee->kind == EX_IDENT and self->find_func(callee->text) == None and self->scope_find(callee->text) == None and self->globals.get_or(callee->text, None) == None:
+                    self->macro_alias_rewrite(callee)
                 # call to a `const def`: evaluated at compile time and folded to a literal.
                 # Comptime-only: args must be constants, otherwise it's an error.
                 if callee->kind == EX_IDENT:
@@ -3041,6 +3079,11 @@ struct Sema:
                             cdiag_at(self->file, e->pos, "uninitialized", WD_WALL, "variable '%s' is uninitialized when used here", e->text)
                 if e->kind == EX_IDENT and not self->in_callee and not self->in_chdr:
                     if self->scope_find(e->text) == None and self->globals.get_or(e->text, None) == None and not self->is_enum_const(e->text) and self->find_func(e->text) == None and not self->constvals.has(e->text) and not self->types.has(e->text):
+                        # a C-header `#define NAME OTHER` renaming a declared object
+                        # (macOS: stderr -> __stderrp). Follow it and re-resolve.
+                        if self->macro_alias_rewrite(e):
+                            self->check_expr(e)
+                            return
                         sgu: Sugg
                         sgu.init(e->text)
                         for li in range(self->nlocals):
@@ -4398,6 +4441,16 @@ struct Sema:
             if not changed:
                 break
             pass_ += 1
+        # An alias whose target is not a CONSTANT is a rename of a declared OBJECT,
+        # and it has to survive too: macOS declares no `stderr` at all — <stdio.h>
+        # has `__stderrp` plus `#define stderr __stderrp`. Since a P source is never
+        # run through cpp, the macro cannot apply itself, so the name is recorded and
+        # an identifier that resolves nowhere else follows the rename (check_expr).
+        # Same shape as glibc's `st_mtime` -> `st_mtim.tv_sec`, except a plain rename
+        # is something we CAN follow; a member path is what `hasfield` is for.
+        for i2 in range(nal):
+            if an[i2] != None and not self->macroalias.has(an[i2]):
+                self->macroalias.put(an[i2], av[i2])
         free(an)
         free(av)
 
@@ -5434,6 +5487,7 @@ def sema_run(cc: *Cc, m: *Module):
         s.gstatics.deinit()
         s.gexterns.deinit()
         s.enumconsts.deinit()
+        s.macroalias.deinit()
         s.enums.deinit()
         s.tdalias.deinit()
         s.fn_globals.deinit()

@@ -44,6 +44,29 @@ fi
 rm -rf "$OUT"
 mkdir -p "$OUT"/cases "$OUT"/mod "$OUT"/psuite "$OUT"/csuite
 
+# The cc that plangc uses to preprocess `include <h>` / `include "h"`. Set ONCE
+# here, for the whole run, because it has to satisfy every suite:
+#   - SDL2's include dir: outside Linux (Homebrew) it is not a default search
+#     path, and SDL_cpuinfo.h drags in the compiler's SIMD-intrinsics headers,
+#     which nothing here uses (see the Makefile's SDL2_NOSIMD).
+#   - the test directories: a test may include a header sitting next to it, and
+#     the roundtrip suite reprints the P into tests/out, from where a source
+#     relative include would no longer resolve.
+# Deliberately not set inside a suite function: `export` there leaks into every
+# suite that runs after it, which is how the roundtrip suite ended up being run
+# with a cpp configured for pstudio.
+CPPX="$CC"
+if pkg-config --exists sdl2 >/dev/null 2>&1; then
+    CPPX="$CPPX $(pkg-config --cflags sdl2) -DSDL_DISABLE_IMMINTRIN_H \
+-DSDL_DISABLE_MMINTRIN_H -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H \
+-DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H \
+-DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
+fi
+for d in tests/cases tests/p-suite tests/modules tests/stl tests/pstudio; do
+    [ -d "$d" ] && CPPX="$CPPX -I$d"
+done
+export PLANGC_CPP="$CPPX"
+
 total_fail=0
 
 # compile one P (or preprocessed C) source to a binary via the chosen backend.
@@ -53,13 +76,18 @@ build_bin() {
     # optional per-test compiler flags in <src-sans-ext>.flags
     local xf="" base="${src%.*}"
     [ -f "$base.flags" ] && xf=$(cat "$base.flags")
+    # a test may `include "local.h"`, and the emitted `#include "local.h"` is
+    # relative to the SOURCE — but the generated .c lands in tests/out. (The real
+    # builds do not need this: --out-dir mirrors the tree, so relative includes
+    # resolve in the mirror.)
+    local sdir="-I$(dirname "$src")"
     if [ "$BACKEND" = qbe ]; then
         $PLANGC $xf --backend qbe "$src" -o "$bin.ssa" 2>"$err" &&
         $QBE "$bin.ssa" -o "$bin.s" 2>>"$err" &&
         $CC "$bin.s" -o "$bin" "$@" -lm 2>>"$err"
     else
         $PLANGC $PFLAGS $xf "$src" -o "$bin.c" 2>"$err" &&
-        $CC $CSTD -w "$bin.c" -o "$bin" "$@" -lm 2>>"$err"
+        $CC $CSTD -w $sdir "$bin.c" -o "$bin" "$@" -lm 2>>"$err"
     fi
 }
 
@@ -310,14 +338,7 @@ suite_pstudio() {
     local sdl=0; pkg-config --exists sdl2 >/dev/null 2>&1 && sdl=1
     mkdir -p "$OUT"/pstudio
     export SDL_VIDEODRIVER=dummy
-    # plangc preprocesses `include <SDL2/SDL.h>` with its own cc, which does not
-    # search Homebrew's include dir, and SDL_cpuinfo.h drags in the compiler's
-    # SIMD-intrinsics headers (arm_neon.h on Apple Silicon) that nothing here
-    # uses. See the Makefile's PLANGC_CPP / SDL2_NOSIMD for the full reasoning.
-    local sdl_nosimd="-DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H \
--DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H \
--DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
-    [ $sdl = 1 ] && export PLANGC_CPP="${CC:-cc} $(pkg-config --cflags sdl2) $sdl_nosimd"
+    # PLANGC_CPP (with SDL2's flags) is set once at the top of this script
     for src in tests/pstudio/*.p; do
         name=$(basename "$src" .p)
         deps=""
@@ -336,7 +357,9 @@ suite_pstudio() {
         fi
         bin=$OUT/pstudio/$name; err=$bin.err; : >"$err"
         ok=1; cobjs=""; ldext=""
-        case " $deps " in *"/pgfx "*) ldext="$sdl_nosimd $(pkg-config --cflags --libs sdl2)" ;; esac
+        # os mesmos -DSDL_DISABLE_* do PLANGC_CPP, para o cc ver as mesmas
+        # declarações que o plangc viu (ver SDL2_NOSIMD no Makefile)
+        case " $deps " in *"/pgfx "*) ldext="-DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H $(pkg-config --cflags --libs sdl2)" ;; esac
         if [ "$BACKEND" = qbe ]; then
             for d in $deps; do
                 dn=$(echo "$d" | tr '/' '_')

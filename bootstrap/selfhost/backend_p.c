@@ -888,7 +888,11 @@ void p_decl(StrBuf *b, Decl *d) {
     switch (d->kind) {
         case DL_IMPORT: {
             if (d->is_include) {
-                StrBuf_printf(b, "include <%s>\n", d->import_path);
+                if (d->import_system) {
+                    StrBuf_printf(b, "include <%s>\n", d->import_path);
+                } else {
+                    StrBuf_printf(b, "include \"%s\"\n", d->import_path);
+                }
             } else if (d->import_system) {
                 StrBuf_printf(b, "import <%s>\n", d->import_path);
             } else {

@@ -648,7 +648,15 @@ def p_decl(b: *StrBuf, d: *Decl):
     match d->kind:
         case DL_IMPORT:
             if d->is_include:
-                b->printf("include <%s>\n", d->import_path)
+                # `include "h"` and `include <h>` are NOT interchangeable: the
+                # quoted form searches the includer's directory first. Printing
+                # every include as angled lost that, and a reprint then failed to
+                # find a header sitting next to the source (the round trip catches
+                # it: `#include "x.h"` became `#include <x.h>`).
+                if d->import_system:
+                    b->printf("include <%s>\n", d->import_path)
+                else:
+                    b->printf("include \"%s\"\n", d->import_path)
             elif d->import_system:
                 b->printf("import <%s>\n", d->import_path)
             else:
