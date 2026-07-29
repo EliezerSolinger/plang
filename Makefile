@@ -76,9 +76,22 @@ PSTUDIO_DEPS = selfhost/lexer.p selfhost/utf8.p selfhost/util.p
 # Via PLANGC_CPP so that EVERY plangc invocation is covered, not just this one.
 # It also passes -D_REENTRANT along, so the declarations plangc ingests are the
 # same ones the C compiler will see.
+#
+# SDL_cpuinfo.h also pulls in the COMPILER-INTRINSICS headers — immintrin.h on
+# x86, arm_neon.h on Apple Silicon — and SDL ships an opt-out for each, meant for
+# consumers that do not use SIMD. pstudio is one: no vector type appears anywhere
+# in SDL's own API, only in those headers. They are the densest, most
+# compiler-specific C in the tree (arm_neon.h is generated, tens of thousands of
+# lines of target attributes and builtin aliases) and ingesting it on arm64 macOS
+# failed outright. Turning them off also cuts what plangc must parse from ~44k
+# lines to under 5k, and the generated C is byte-identical either way.
 SDL2_CFLAGS = $(shell pkg-config --cflags sdl2 2>/dev/null)
+SDL2_NOSIMD = -DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H \
+              -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H \
+              -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H \
+              -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H
 
-pstudio: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS)
+pstudio: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS) $(SDL2_NOSIMD)
 pstudio: plangc
 	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
 	./plangc --out-dir out stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph \
@@ -86,7 +99,7 @@ pstudio: plangc
 	@mkdir -p out/bin
 	$(CC) $(CFLAGS) -w -D_DEFAULT_SOURCE -o out/bin/pstudio \
 	      $(patsubst %.p,out/%.c,$(PSTUDIO_SRC)) $(patsubst %.p,out/%.c,$(PSTUDIO_DEPS)) \
-	      `pkg-config --cflags --libs sdl2` -lm
+	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm
 	@echo "pstudio pronto: ./out/bin/pstudio [pasta|arquivos]"
 
 clean:

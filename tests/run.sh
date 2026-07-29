@@ -311,9 +311,13 @@ suite_pstudio() {
     mkdir -p "$OUT"/pstudio
     export SDL_VIDEODRIVER=dummy
     # plangc preprocesses `include <SDL2/SDL.h>` with its own cc, which does not
-    # search Homebrew's include dir — give it the same flags the final compile
-    # gets (see the Makefile's PLANGC_CPP for the full reasoning)
-    [ $sdl = 1 ] && export PLANGC_CPP="${CC:-cc} $(pkg-config --cflags sdl2)"
+    # search Homebrew's include dir, and SDL_cpuinfo.h drags in the compiler's
+    # SIMD-intrinsics headers (arm_neon.h on Apple Silicon) that nothing here
+    # uses. See the Makefile's PLANGC_CPP / SDL2_NOSIMD for the full reasoning.
+    local sdl_nosimd="-DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H \
+-DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H \
+-DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
+    [ $sdl = 1 ] && export PLANGC_CPP="${CC:-cc} $(pkg-config --cflags sdl2) $sdl_nosimd"
     for src in tests/pstudio/*.p; do
         name=$(basename "$src" .p)
         deps=""
@@ -332,7 +336,7 @@ suite_pstudio() {
         fi
         bin=$OUT/pstudio/$name; err=$bin.err; : >"$err"
         ok=1; cobjs=""; ldext=""
-        case " $deps " in *"/pgfx "*) ldext=$(pkg-config --cflags --libs sdl2) ;; esac
+        case " $deps " in *"/pgfx "*) ldext="$sdl_nosimd $(pkg-config --cflags --libs sdl2)" ;; esac
         if [ "$BACKEND" = qbe ]; then
             for d in $deps; do
                 dn=$(echo "$d" | tr '/' '_')

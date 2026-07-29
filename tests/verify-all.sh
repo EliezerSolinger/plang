@@ -114,14 +114,21 @@ step "7/8 pstudio (compilação do editor: maior consumidor de P)"
 if pkg-config --exists sdl2 >/dev/null 2>&1; then
   # o cc que o plangc usa para pré-processar `include <SDL2/SDL.h>` precisa dos
   # mesmos -I da compilação final: fora do Linux os headers do SDL2 não estão
-  # num caminho de busca padrão (Homebrew). Ver PLANGC_CPP no Makefile.
-  export PLANGC_CPP="$CC $(pkg-config --cflags sdl2)"
+  # num caminho de busca padrão (Homebrew). E SDL_cpuinfo.h arrasta os headers de
+  # intrínsecos SIMD do compilador (arm_neon.h no Apple Silicon), que ninguém aqui
+  # usa. Ver PLANGC_CPP / SDL2_NOSIMD no Makefile.
+  # continuações com '\': PLANGC_CPP vai para um shell, e um newline LITERAL aqui
+  # encerraria o comando no meio (o cc recebia metade dos -D como um comando novo)
+  nosimd="-DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H -DSDL_DISABLE_XMMINTRIN_H \
+-DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H \
+-DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
+  export PLANGC_CPP="$CC $(pkg-config --cflags sdl2) $nosimd"
   if $V/plangc_s2 --out-dir $V/pst stl/*.ph selfhost/plang.ph selfhost/ast.ph \
        selfhost/lexer.ph pstudio/*.ph pstudio/*.p selfhost/lexer.p selfhost/utf8.p \
        selfhost/util.p >$V/pstudio.log 2>&1 &&
      $CC -w -D_DEFAULT_SOURCE -o $V/pstudio_bin $V/pst/pstudio/*.c \
        $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
-       $(pkg-config --cflags --libs sdl2) -lm >>$V/pstudio.log 2>&1; then
+       $nosimd $(pkg-config --cflags --libs sdl2) -lm >>$V/pstudio.log 2>&1; then
     ok "editor compila e linka"
   else
     bad "pstudio nao compilou (veja $V/pstudio.log)"
