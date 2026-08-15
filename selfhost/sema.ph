@@ -27,3 +27,7 @@ def cc_load_module(cc: *Cc, path: const *char) -> *Module
 # Mutates the AST: rewrites casts, method calls and ./-> operators.
 def sema_run(cc: *Cc, m: *Module)
 def cpp_capture_ex(a: *Arena, cpp_cmd: const *char, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char
+
+# the value of an object-like #define whose right side is an integer literal —
+# the same reader on both boundaries (72.4)
+def macro_int_val(txt: const *char, out: *i64) -> bool

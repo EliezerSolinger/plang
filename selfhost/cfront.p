@@ -511,6 +511,7 @@ struct Cp:
     static def canon_arith(self: *Cp, n: const *char) -> const *char
     static def check_arith_specs(self: *Cp, n: const *char, pos: Pos)
     static def parse_base_type(self: *Cp) -> *Type
+    static def parse_base_type_raw(self: *Cp) -> *Type
     static def base_name(self: *Cp, n: const *char) -> *Type
     static def parse_stars(self: *Cp, base: *Type) -> *Type
     static def is_fnptr_ahead(self: *Cp) -> bool
@@ -633,7 +634,18 @@ struct Cp:
 
     # base type: skips qualifiers/GNU, resolves typedef, builds a multi-word
     # arithmetic type, and handles struct/union/enum (with optional body def).
+    # `const` on the BASE type is information, and it used to be dropped for
+    # every spelling but the plain-name one: a typedef (`static const int32_t
+    # X`) or a multi-word arithmetic type (`static const unsigned int X`) came
+    # back unqualified. The boundary of 72.4 reads this to tell a CONSTANT from
+    # a mutable global, so the flag is applied to whatever the parse produced.
     static def parse_base_type(self: *Cp) -> *Type:
+        t0: *Type = self->parse_base_type_raw()
+        if t0 != None and self->saw_const and t0->kind == TY_NAME:
+            t0->is_const = True
+        return t0
+
+    static def parse_base_type_raw(self: *Cp) -> *Type:
         self->saw_const = False
         self->spec_static = False
         self->spec_extern = False

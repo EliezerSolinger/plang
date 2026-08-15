@@ -154,7 +154,8 @@ static def type_is_unsigned(t: *Type) -> bool
 # "conflicting types" error, and `struct _IO_FILE` is glibc-only.
 def popen(cmd: const *char, mode: const *char) -> *FILE
 def pclose(stream: *FILE) -> int
-static def macro_int_val(txt: const *char, out: *i64) -> bool
+# exported: pscript's boundary reads the same #define literals (72.4)
+def macro_int_val(txt: const *char, out: *i64) -> bool
 static def inject_inline_runtime(cc: *Cc, m: *Module)
 def sema_run(cc: *Cc, m: *Module)
 
@@ -6553,7 +6554,7 @@ static def type_is_unsigned(t: *Type) -> bool:
 
 # object-like macro RHS -> integer, tolerantly: parens, unary +/-/~, ONE integer
 # literal with C suffixes. Anything more complex returns False (macro skipped).
-static def macro_int_val(txt: const *char, out: *i64) -> bool:
+def macro_int_val(txt: const *char, out: *i64) -> bool:
     i: i32 = 0
     neg: bool = False
     flip: bool = False

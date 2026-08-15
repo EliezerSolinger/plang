@@ -953,6 +953,60 @@ teste:
       compilador, que é P — atravessaria pelo mesmo shim), árvore de arquivos,
       abas, paleta de comandos e minimapa.
 
+### Bateria 73 — o tripé async/worker/shared, fechado (2026-08-15)
+
+Pedido seu: a especificação da linguagem completa, com o sistema de
+`async`/`await` + worker + `shared` inteiro. O que entrou, e o que cada peça
+conserta:
+
+- [x] **O `await sleep()` ESTACIONA (48.2/18.4).** Era o buraco que fazia o
+      resto não significar nada: o timer parava a THREAD, então um `async def`
+      rodava do começo ao fim no momento em que era chamado e duas tasks nunca
+      se sobrepunham. Agora um sleep é uma task no RELÓGIO — quem espera fica
+      estacionado, o resto roda, e só quando nada está pronto a thread dorme,
+      exatamente até o próximo prazo. É a metade do loop da 18.4 que faz
+      sentido enquanto não houver descritor para esperar.
+      Gate: `cancel_race.psc` mede que duas tasks de 4×10ms terminam juntas em
+      menos de 75ms — bloqueando levaria o dobro.
+- [x] **`t.cancel()` (37.2/36.4).** Não é kill: a task LANÇA no próximo passo
+      dela, então `defer` e `with` desenrolam como em qualquer outro erro. Uma
+      task 100% CPU sem `await` não cancela — para isso existe worker (36.4).
+- [x] **`race(ts)`** devolve o ÍNDICE do primeiro a terminar e cancela os
+      outros — é o cancelamento que impede a corrida de deixar órfã.
+- [x] **`timeout(t, s)`** é a mesma corrida com o relógio do outro lado: True
+      se a task terminou a tempo, False se o relógio venceu, e o perdedor é
+      cancelado nos dois casos.
+- [x] **`await` dentro de `for` (50.1).** A máquina de estados desmontava `if` e
+      `while`; o `for` sobre `range(...)` e sobre lista agora também. Ele ganha
+      QUATRO estados, não três: o incremento é um estado próprio porque
+      `continue` precisa alcançá-lo — desaçucarar para `while` mandaria o
+      `continue` para a cabeça e o laço nunca andaria.
+- [x] **Mensagem serializada (34.3).** Bytes continuam por memcpy; `str` e
+      `list` de bytes (números, bools, `record`) são serializados e
+      RECONSTRUÍDOS no heap de quem recebe — copiar o grafo direto alocaria no
+      heap de outra thread e acordaria o coletor dela, que é o que a 18.1
+      proíbe.
+- [x] **`shared` com a escada de cópia inteira (42.1):** número, `record` e
+      agora `str` — os bytes vivem fora de todo heap e a leitura devolve uma
+      string nova no heap de quem lê.
+- [x] **`w.detach()` (36.3):** o programa deixa de esperar por aquele worker no
+      fim. Nada é morto no meio; a thread vai embora com o processo.
+- [x] **`transfer(b)` (18.2):** entrega os bytes do buffer e INVALIDA a
+      referência de quem enviou — zero cópia, e o erro clássico (dois donos
+      escrevendo o mesmo bloco) vira exceção em vez de corrida.
+- [x] **Correção que a leitura do runtime achou:** o CABEÇALHO do buffer vivia
+      no heap coletado enquanto outra thread segurava o ponteiro. Um coletor que
+      MOVE não pode ser dono do que outra thread está lendo — é a mesma razão
+      pela qual o bloco de controle do worker é malloc'ado. Agora o cabeçalho
+      também é.
+
+**O que continua fora, e por quê:** o `epoll`/`kqueue` da 18.4 (só ganha o que
+promete quando houver DESCRITOR para esperar — socket, arquivo assíncrono; a
+metade dos prazos está feita), a cópia PROFUNDA de grafo em mensagem (34.3 diz
+que o caso geral serializa; hoje serializa `str` e `list` de bytes, e um grafo
+com ciclo pede a guarda que a 18.2 menciona), e `unsafe` (11-12), que pressupõe
+um tipo ponteiro no pscript.
+
 ## Pendências de decisão acumuladas
 
 Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da bateria.)

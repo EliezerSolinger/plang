@@ -4,6 +4,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <stdio.h>
 #include "ps_sema.h"
 #include "../stl/vec.h"
 #include "../stl/map.h"
@@ -15,6 +17,8 @@
 #include "cfront.h"
 
 typedef struct StrMap_pPsFunc StrMap_pPsFunc;
+typedef struct StrMap_pPsExpr StrMap_pPsExpr;
+typedef struct Vec_pchar Vec_pchar;
 typedef struct StrMap_pPsDecl StrMap_pPsDecl;
 typedef struct StrMap_pPsType StrMap_pPsType;
 typedef struct StrMap_pPsNs StrMap_pPsNs;
@@ -61,6 +65,236 @@ int StrMap_pPsFunc_has(const StrMap_pPsFunc *self, const char *key);
 int StrMap_pPsFunc_remove(StrMap_pPsFunc *self, const char *key);
 
 void StrMap_pPsFunc_deinit(StrMap_pPsFunc *self);
+
+struct StrMap_pPsExpr {
+    int32_t *indices;
+    int32_t icap;
+    uint64_t *hashes;
+    char **keys;
+    PsExpr **vals;
+    int *dead;
+    int32_t elen;
+    int32_t ecap;
+    int32_t size;
+    int32_t tombs;
+};
+
+void StrMap_pPsExpr_init(StrMap_pPsExpr *self);
+
+int32_t StrMap_pPsExpr_find_slot(const StrMap_pPsExpr *self, const char *key, uint64_t h, int32_t *out_entry);
+
+void StrMap_pPsExpr_rehash(StrMap_pPsExpr *self, int32_t newcap);
+
+void StrMap_pPsExpr_grow_entries(StrMap_pPsExpr *self);
+
+void StrMap_pPsExpr_put(StrMap_pPsExpr *self, const char *key, PsExpr *value);
+
+int StrMap_pPsExpr_get(const StrMap_pPsExpr *self, const char *key, PsExpr **out);
+
+PsExpr *StrMap_pPsExpr_get_or(const StrMap_pPsExpr *self, const char *key, PsExpr *fallback);
+
+int StrMap_pPsExpr_has(const StrMap_pPsExpr *self, const char *key);
+
+int StrMap_pPsExpr_remove(StrMap_pPsExpr *self, const char *key);
+
+void StrMap_pPsExpr_deinit(StrMap_pPsExpr *self);
+
+struct Vec_pchar {
+    const char **data;
+    int32_t len;
+    int32_t cap;
+};
+
+void Vec_pchar_init(Vec_pchar *self);
+
+void Vec_pchar_reserve(Vec_pchar *self, int32_t n);
+
+void Vec_pchar_push(Vec_pchar *self, const char *item);
+
+const char *Vec_pchar_pop(Vec_pchar *self);
+
+const char *Vec_pchar_get(const Vec_pchar *self, int32_t i);
+
+void Vec_pchar_set(Vec_pchar *self, int32_t i, const char *item);
+
+const char *Vec_pchar_last(const Vec_pchar *self);
+
+int Vec_pchar_is_empty(const Vec_pchar *self);
+
+void Vec_pchar_insert_gap(Vec_pchar *self, int32_t i, int32_t n);
+
+void Vec_pchar_insert_at(Vec_pchar *self, int32_t i, const char *item);
+
+void Vec_pchar_remove_range(Vec_pchar *self, int32_t i, int32_t n);
+
+void Vec_pchar_remove_at(Vec_pchar *self, int32_t i);
+
+void Vec_pchar_swap_remove(Vec_pchar *self, int32_t i);
+
+void Vec_pchar_clear(Vec_pchar *self);
+
+void Vec_pchar_deinit(Vec_pchar *self);
+
+
+void StrMap_pPsExpr_init(StrMap_pPsExpr *self) {
+    memset(self, 0, sizeof(*self));
+}
+
+int32_t StrMap_pPsExpr_find_slot(const StrMap_pPsExpr *self, const char *key, uint64_t h, int32_t *out_entry) {
+    int32_t mask = self->icap - 1;
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    int32_t first_tomb = -1;
+    while (1) {
+        int32_t idx = self->indices[slot];
+        if (idx == -1) {
+            *out_entry = -1;
+            return (first_tomb != -1 ? first_tomb : slot);
+        }
+        if (idx == -2) {
+            if (first_tomb == -1) {
+                first_tomb = slot;
+            }
+        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
+            *out_entry = idx;
+            return slot;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+void StrMap_pPsExpr_rehash(StrMap_pPsExpr *self, int32_t newcap) {
+    int32_t w = 0;
+    int32_t r;
+    for (r = 0; r < self->elen; r += 1) {
+        if (!self->dead[r]) {
+            if (w != r) {
+                self->hashes[w] = self->hashes[r];
+                self->keys[w] = self->keys[r];
+                self->vals[w] = self->vals[r];
+            }
+            self->dead[w] = 0;
+            w += 1;
+        }
+    }
+    self->elen = w;
+    self->tombs = 0;
+    free(self->indices);
+    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    self->icap = newcap;
+    int32_t i;
+    for (i = 0; i < newcap; i += 1) {
+        self->indices[i] = -1;
+    }
+    int32_t mask = newcap - 1;
+    for (i = 0; i < self->elen; i += 1) {
+        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
+        while (self->indices[slot] != -1) {
+            slot = (slot + 1) & mask;
+        }
+        self->indices[slot] = i;
+    }
+}
+
+void StrMap_pPsExpr_grow_entries(StrMap_pPsExpr *self) {
+    if (self->elen < self->ecap) {
+        return;
+    }
+    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
+    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
+    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
+    self->vals = realloc(self->vals, sizeof(PsExpr *) * (size_t)nc);
+    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
+    self->ecap = nc;
+}
+
+void StrMap_pPsExpr_put(StrMap_pPsExpr *self, const char *key, PsExpr *value) {
+    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
+        StrMap_pPsExpr_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
+    }
+    uint64_t h = hash_cstr(key);
+    int32_t entry = -1;
+    int32_t slot = StrMap_pPsExpr_find_slot(self, key, h, &entry);
+    if (entry >= 0) {
+        self->vals[entry] = value;
+        return;
+    }
+    StrMap_pPsExpr_grow_entries(self);
+    size_t n = strlen(key) + 1;
+    char *kcopy = malloc(n);
+    memcpy(kcopy, key, n);
+    int32_t e = self->elen;
+    self->hashes[e] = h;
+    self->keys[e] = kcopy;
+    self->vals[e] = value;
+    self->dead[e] = 0;
+    self->elen += 1;
+    if (self->indices[slot] == -2) {
+        self->tombs -= 1;
+    }
+    self->indices[slot] = e;
+    self->size += 1;
+}
+
+int StrMap_pPsExpr_get(const StrMap_pPsExpr *self, const char *key, PsExpr **out) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    StrMap_pPsExpr_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    *out = self->vals[entry];
+    return 1;
+}
+
+PsExpr *StrMap_pPsExpr_get_or(const StrMap_pPsExpr *self, const char *key, PsExpr *fallback) {
+    PsExpr *v = fallback;
+    StrMap_pPsExpr_get(self, key, &v);
+    return v;
+}
+
+int StrMap_pPsExpr_has(const StrMap_pPsExpr *self, const char *key) {
+    int32_t entry = -1;
+    if (self->size == 0) {
+        return 0;
+    }
+    StrMap_pPsExpr_find_slot(self, key, hash_cstr(key), &entry);
+    return entry >= 0;
+}
+
+int StrMap_pPsExpr_remove(StrMap_pPsExpr *self, const char *key) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    int32_t slot = StrMap_pPsExpr_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    free(self->keys[entry]);
+    self->keys[entry] = NULL;
+    self->dead[entry] = 1;
+    self->indices[slot] = -2;
+    self->size -= 1;
+    self->tombs += 1;
+    return 1;
+}
+
+void StrMap_pPsExpr_deinit(StrMap_pPsExpr *self) {
+    int32_t i;
+    for (i = 0; i < self->elen; i += 1) {
+        if (!self->dead[i]) {
+            free(self->keys[i]);
+        }
+    }
+    free(self->indices);
+    free(self->hashes);
+    free(self->keys);
+    free(self->vals);
+    free(self->dead);
+    memset(self, 0, sizeof(*self));
+}
 
 
 void StrMap_pPsFunc_init(StrMap_pPsFunc *self) {
@@ -1348,6 +1582,7 @@ struct PsSema {
     PsType *hint;
     const char *cpp;
     StrMap_pPsFunc cfuncs;
+    StrMap_pPsExpr cconsts;
     PsNs *root_ns;
     PsNs *cur_ns;
     StrMap_pPsNs nsof;
@@ -1412,6 +1647,8 @@ static void PsSema_key_ok(PsSema *self, PsType *t, Pos pos, const char *what);
 static void PsSema_pod_only(PsSema *self, PsType *t, Pos pos, const char *what);
 
 static void PsSema_copyable(PsSema *self, PsType *t, Pos pos, const char *what);
+
+static void PsSema_sendable(PsSema *self, PsType *t, Pos pos, const char *what);
 
 static void PsSema_check_endian(PsSema *self, PsExpr *e);
 
@@ -1516,15 +1753,15 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_302_9 = &self->locals[self->nlocals];
-        __with_302_9->name = name;
-        __with_302_9->type = t;
-        __with_302_9->assigned = assigned;
-        __with_302_9->is_const = is_const;
-        __with_302_9->is_module = 0;
-        __with_302_9->opt_type = NULL;
-        __with_302_9->any_type = NULL;
-        __with_302_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_313_9 = &self->locals[self->nlocals];
+        __with_313_9->name = name;
+        __with_313_9->type = t;
+        __with_313_9->assigned = assigned;
+        __with_313_9->is_const = is_const;
+        __with_313_9->is_module = 0;
+        __with_313_9->opt_type = NULL;
+        __with_313_9->any_type = NULL;
+        __with_313_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -1794,6 +2031,13 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                     t = self->locals[li].any_type;
                 }
             } else {
+                if (StrMap_pPsExpr_has(&self->cconsts, e->text) && !StrMap_pPsType_has(&self->globals, e->text) && !StrMap_pPsFunc_has(&self->funcs, e->text)) {
+                    PsExpr *cl9 = StrMap_pPsExpr_get_or(&self->cconsts, e->text, NULL);
+                    Pos pp9 = e->pos;
+                    *e = *cl9;
+                    e->pos = pp9;
+                    return PsSema_check_expr(self, e);
+                }
                 e->text = PsSema_gname(self, e->text, e->pos);
                 e->is_gref = StrMap_pPsType_has(&self->globals, e->text);
                 if (!StrMap_pPsType_has(&self->globals, e->text) && StrMap_pPsFunc_has(&self->funcs, e->text)) {
@@ -1888,7 +2132,7 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 }
             }
             if (wf->ret != NULL && wf->ret->kind != PT_VOID) {
-                PsSema_pod_only(self, wf->ret, e->pos, "a message from a worker");
+                PsSema_sendable(self, wf->ret, e->pos, "a message from a worker");
             }
             e->spawn_fn = wn;
             PsType *wt6 = ps_type(self->a, PT_WORKER, e->pos);
@@ -2225,8 +2469,14 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
         case PE_IN: {
             PsType *nt5 = PsSema_check_expr(self, e->lhs);
             PsType *ht5 = PsSema_check_expr(self, e->rhs);
+            if (ht5 != NULL && ht5->kind == PT_STR) {
+                PsSema_want(self, e->lhs, nt5, ps_type(self->a, PT_STR, e->pos), "the text looked for");
+                t = ps_type(self->a, PT_BOOL, e->pos);
+                e->type = t;
+                return t;
+            }
             if (ht5 == NULL || !(ht5->kind == PT_DICT || ht5->kind == PT_SET)) {
-                fatal_at(self->file, e->pos, "`in` takes a dict or a set on the right so far, not %s", ps_type_str(self->a, ht5));
+                fatal_at(self->file, e->pos, "`in` takes a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5));
             }
             PsSema_want(self, e->lhs, nt5, (ht5->kind == PT_DICT ? ht5->key : ht5->inner), "the tested value");
             t = ps_type(self->a, PT_BOOL, e->pos);
@@ -2478,6 +2728,17 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             }
             fatal_at(self->file, e->pos, "a list has append, insert, remove_at and reverse so far, not '%s'", lm);
         }
+        if (rt != NULL && rt->kind == PT_TASK) {
+            const char *tm9 = e->lhs->text;
+            if (strcmp(tm9, "cancel") != 0 && strcmp(tm9, "cancelled") != 0) {
+                fatal_at(self->file, e->pos, "a task has cancel() and cancelled(), not '%s'", tm9);
+            }
+            if (e->nargs != 0) {
+                fatal_at(self->file, e->pos, "%s() takes no arguments", tm9);
+            }
+            e->lhs->type = rt;
+            return ps_type(self->a, (strcmp(tm9, "cancelled") == 0 ? PT_BOOL : PT_VOID), e->pos);
+        }
         if (rt != NULL && rt->kind == PT_TIMER) {
             if (strcmp(e->lhs->text, "tick") != 0) {
                 fatal_at(self->file, e->pos, "an interval has tick(), not '%s'", e->lhs->text);
@@ -2580,6 +2841,13 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 eo->inner = ert;
                 return eo;
             }
+            if (strcmp(wm, "detach") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "detach() takes no arguments");
+                }
+                e->lhs->type = rt;
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
             if (strcmp(wm, "recv") == 0) {
                 if (e->nargs != 0) {
                     fatal_at(self->file, e->pos, "recv() takes no arguments");
@@ -2589,7 +2857,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 rtk->inner = rt->inner;
                 return rtk;
             }
-            fatal_at(self->file, e->pos, "a worker has send, recv and error (36.1/37.3), not '%s'", wm);
+            fatal_at(self->file, e->pos, "a worker has send, detach, recv and error (36.1/37.3), not '%s'", wm);
         }
         if (rt != NULL && rt->kind == PT_DYN) {
             PsDecl *td3 = StrMap_pPsDecl_get_or(&self->traits, rt->name, NULL);
@@ -2890,6 +3158,42 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         rt7->name = "Status";
         return rt7;
     }
+    if (strcmp(name, "transfer") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "transfer() takes a buffer");
+        }
+        PsType *bft = PsSema_check_expr(self, e->args[0]);
+        if (bft == NULL || bft->kind != PT_BUFFER) {
+            fatal_at(self->file, e->pos, "transfer() takes a buffer — the one thing meant to be shared (52.3) — found %s", ps_type_str(self->a, bft));
+        }
+        return bft;
+    }
+    if (strcmp(name, "race") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "race() takes a list of tasks");
+        }
+        PsType *rt9 = PsSema_check_expr(self, e->args[0]);
+        if (rt9 == NULL || rt9->kind != PT_LIST || rt9->inner == NULL || rt9->inner->kind != PT_TASK) {
+            fatal_at(self->file, e->pos, "race() takes a list of tasks, found %s", ps_type_str(self->a, rt9));
+        }
+        PsType *rk9 = ps_type(self->a, PT_TASK, e->pos);
+        rk9->inner = ps_type(self->a, PT_INT, e->pos);
+        return rk9;
+    }
+    if (strcmp(name, "timeout") == 0) {
+        if (e->nargs != 2) {
+            fatal_at(self->file, e->pos, "timeout() takes a task and the seconds");
+        }
+        PsType *tt9 = PsSema_check_expr(self, e->args[0]);
+        if (tt9 == NULL || tt9->kind != PT_TASK) {
+            fatal_at(self->file, e->pos, "timeout() takes a task, found %s", ps_type_str(self->a, tt9));
+        }
+        PsType *st9 = PsSema_check_expr(self, e->args[1]);
+        PsSema_want(self, e->args[1], st9, ps_type(self->a, PT_FLOAT, e->pos), "the seconds of timeout()");
+        PsType *ok9 = ps_type(self->a, PT_TASK, e->pos);
+        ok9->inner = ps_type(self->a, PT_BOOL, e->pos);
+        return ok9;
+    }
     if (strcmp(name, "gather") == 0) {
         if (e->nargs != 1) {
             fatal_at(self->file, e->pos, "gather() takes a list of tasks");
@@ -3145,26 +3449,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_1724_17 = e;
-                __with_1724_17->kind = PE_STR;
-                __with_1724_17->text = lit7;
-                __with_1724_17->lhs = NULL;
-                __with_1724_17->rhs = NULL;
-                __with_1724_17->args = NULL;
-                __with_1724_17->nargs = 0;
+                PsExpr *__with_1809_17 = e;
+                __with_1809_17->kind = PE_STR;
+                __with_1809_17->text = lit7;
+                __with_1809_17->lhs = NULL;
+                __with_1809_17->rhs = NULL;
+                __with_1809_17->args = NULL;
+                __with_1809_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_1737_13 = e;
-            __with_1737_13->kind = PE_LOWERED;
-            __with_1737_13->low = ln7;
-            __with_1737_13->lhs = NULL;
-            __with_1737_13->rhs = NULL;
-            __with_1737_13->args = NULL;
-            __with_1737_13->nargs = 0;
+            PsExpr *__with_1822_13 = e;
+            __with_1822_13->kind = PE_LOWERED;
+            __with_1822_13->low = ln7;
+            __with_1822_13->lhs = NULL;
+            __with_1822_13->rhs = NULL;
+            __with_1822_13->args = NULL;
+            __with_1822_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -3352,10 +3656,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_1909_17 = &ns->quals[ns->nquals];
-                __with_1909_17->name = q;
-                __with_1909_17->orig = d->path;
-                __with_1909_17->ns = sub;
+                PsNsEnt *__with_1994_17 = &ns->quals[ns->nquals];
+                __with_1994_17->name = q;
+                __with_1994_17->orig = d->path;
+                __with_1994_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -3368,10 +3672,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_1921_21 = &ns->ents[ns->nents];
-                    __with_1921_21->name = local;
-                    __with_1921_21->orig = d->names[k];
-                    __with_1921_21->ns = sub;
+                    PsNsEnt *__with_2006_21 = &ns->ents[ns->nents];
+                    __with_2006_21->name = local;
+                    __with_2006_21->orig = d->names[k];
+                    __with_2006_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -3726,21 +4030,90 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2249_9 = e;
-        __with_2249_9->kind = PE_NAME;
-        __with_2249_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2249_9->lhs = NULL;
+        PsExpr *__with_2334_9 = e;
+        __with_2334_9->kind = PE_NAME;
+        __with_2334_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2334_9->lhs = NULL;
     }
     return 1;
+}
+
+static void PsSema_cconst_put(PsSema *self, const char *name, int64_t v) {
+    if (name == NULL || StrMap_pPsExpr_has(&self->cconsts, name) || StrMap_pPsFunc_has(&self->cfuncs, name)) {
+        return;
+    }
+    PsExpr *lit = ps_expr(self->a, PE_INT, zero_ps_pos());
+    lit->text = Arena_printf(self->a, "%lld", v);
+    StrMap_pPsExpr_put(&self->cconsts, name, lit);
 }
 
 static void PsSema_ingest_header(PsSema *self, PsModule *m, PsDecl *d) {
     const char *dir = path_dir(self->a, m->path);
     const char *src = cpp_capture_ex(self->a, self->cpp, "-E -P", d->path, d->import_system, dir);
     Module *cm = c_parse(self->a, d->path, src, strlen(src), 0);
+    const char *mac = cpp_capture_ex(self->a, self->cpp, "-E -dM", d->path, d->import_system, dir);
+    Vec_pchar al9;
+    Vec_pchar av9;
+    Vec_pchar_init(&al9);
+    Vec_pchar_init(&av9);
+    const char *p9 = mac;
+    while (*p9 != '\0') {
+        const char *eol = strchr(p9, '\n');
+        if (eol == NULL) {
+            eol = p9 + strlen(p9);
+        }
+        if (strncmp(p9, "#define ", 8) == 0) {
+            const char *q9 = p9 + 8;
+            const char *st9 = q9;
+            while (q9 < eol && *q9 != ' ' && *q9 != '(' && *q9 != '\t') {
+                q9 += 1;
+            }
+            if (q9 < eol && *q9 != '(') {
+                const char *nm9 = Arena_strndup(self->a, st9, (size_t)(q9 - st9));
+                while (q9 < eol && (*q9 == ' ' || *q9 == '\t')) {
+                    q9 += 1;
+                }
+                const char *rhs9 = Arena_strndup(self->a, q9, (size_t)(eol - q9));
+                int64_t iv9 = 0;
+                if (macro_int_val(rhs9, &iv9)) {
+                    PsSema_cconst_put(self, nm9, iv9);
+                } else if (strlen(rhs9) > 0 && (isalpha(rhs9[0]) || rhs9[0] == '_')) {
+                    Vec_pchar_push(&al9, nm9);
+                    Vec_pchar_push(&av9, rhs9);
+                }
+            }
+        }
+        p9 = (*eol != '\0' ? eol + 1 : eol);
+    }
+    size_t round9;
+    for (round9 = 0; round9 < 2; round9 += 1) {
+        size_t k9;
+        for (k9 = 0; k9 < al9.len; k9 += 1) {
+            PsExpr *tgt9 = StrMap_pPsExpr_get_or(&self->cconsts, av9.data[k9], NULL);
+            if (tgt9 != NULL && !StrMap_pPsExpr_has(&self->cconsts, al9.data[k9])) {
+                StrMap_pPsExpr_put(&self->cconsts, al9.data[k9], tgt9);
+            }
+        }
+    }
     size_t i;
     for (i = 0; i < cm->ndecls; i += 1) {
         Decl *cd = cm->decls[i];
+        if (cd->kind == DL_ENUM) {
+            int64_t nxt = 0;
+            size_t j;
+            for (j = 0; j < cd->nitems; j += 1) {
+                if (cd->items[j].value != NULL && cd->items[j].value->kind == EX_NUMBER) {
+                    nxt = strtoll(cd->items[j].value->text, NULL, 0);
+                }
+                PsSema_cconst_put(self, cd->items[j].name, nxt);
+                nxt += 1;
+            }
+            continue;
+        }
+        if (cd->kind == DL_VAR && cd->is_static && cd->name != NULL && cd->init != NULL && cd->init->kind == EX_NUMBER && cd->type != NULL && PsSema_c_type(self, cd->type) != NULL && PsSema_c_type(self, cd->type)->kind == PT_INT) {
+            PsSema_cconst_put(self, cd->name, strtoll(cd->init->text, NULL, 0));
+            continue;
+        }
         if (cd->kind != DL_FUNC || cd->func == NULL || cd->func->name == NULL) {
             continue;
         }
@@ -3804,6 +4177,22 @@ static void PsSema_check_endian(PsSema *self, PsExpr *e) {
     if (et == NULL || et->kind != PT_NAME || et->name == NULL || strcmp(ps_disp(et->name), "Endian") != 0) {
         fatal_at(self->file, e->pos, "the byte order is an `Endian` — `LE` or `BE` — found %s", ps_type_str(self->a, et));
     }
+}
+
+static void PsSema_sendable(PsSema *self, PsType *t, Pos pos, const char *what) {
+    if (t != NULL && t->kind == PT_STR) {
+        return;
+    }
+    if (t != NULL && t->kind == PT_LIST && t->inner != NULL) {
+        if (t->inner->kind == PT_INT || t->inner->kind == PT_FLOAT || t->inner->kind == PT_BOOL) {
+            return;
+        }
+        if (t->inner->kind == PT_NAME && StrMap_pPsDecl_has(&self->records, t->inner->name) && StrMap_pPsDecl_get_or(&self->records, t->inner->name, NULL)->kind == PD_RECORD) {
+            return;
+        }
+        fatal_at(self->file, pos, "%s is %s: a list crosses heaps when its ELEMENTS are bytes — numbers, bools or a `record` (34.3)", what, ps_type_str(self->a, t));
+    }
+    PsSema_pod_only(self, t, pos, what);
 }
 
 static void PsSema_copyable(PsSema *self, PsType *t, Pos pos, const char *what) {
@@ -4419,8 +4808,21 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                     self->depth -= 1;
                     return;
                 }
+                if (lit4 != NULL && lit4->kind == PT_STR) {
+                    if (s->nnames != 1) {
+                        fatal_at(self->file, s->pos, "`for ch in s` takes one variable");
+                    }
+                    self->depth += 1;
+                    PsSema_add_local(self, s->names[0], ps_type(self->a, PT_STR, s->pos), 1, 0);
+                    self->loop_depth += 1;
+                    PsSema_check_block(self, s->body);
+                    self->loop_depth -= 1;
+                    PsSema_pop_scope(self);
+                    self->depth -= 1;
+                    return;
+                }
                 if (lit4 == NULL || !(lit4->kind == PT_LIST || lit4->kind == PT_DICT || lit4->kind == PT_SET)) {
-                    fatal_at(self->file, s->pos, "`for x in ...` takes a range, a list, a dict, a set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4));
+                    fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, a list, a dict, a set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4));
                 }
                 if (s->nnames != 1) {
                     fatal_at(self->file, s->pos, "`for x in xs` takes one variable");
@@ -5298,6 +5700,7 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd) {
     StrMap_pPsType_init(&s.globals);
     StrSet_init(&s.gconst);
     StrMap_pPsFunc_init(&s.cfuncs);
+    StrMap_pPsExpr_init(&s.cconsts);
     StrMap_pPsNs_init(&s.nsof);
     StrSet_init(&s.prefixes);
     StrMap_pchar_init(&PS_DISP);
@@ -5426,7 +5829,7 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd) {
                     PsSema_copyable(&s, sdt->key, d->pos, "the key of a `shared dict`");
                     PsSema_copyable(&s, sdt->inner, d->pos, "the value of a `shared dict`");
                 } else {
-                    PsSema_pod_only(&s, sdt, d->pos, "a `shared` variable");
+                    PsSema_copyable(&s, sdt, d->pos, "a `shared` variable");
                 }
             }
             s.nlocals = 0;
@@ -5450,7 +5853,7 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd) {
                         fatal_at(m->path, d->pos, "a `shared dict` starts empty: it lives outside every heap, so there is nothing yet to copy into it (42.1)");
                     }
                 } else {
-                    PsSema_pod_only(&s, gt, d->pos, "a `shared` variable");
+                    PsSema_copyable(&s, gt, d->pos, "a `shared` variable");
                 }
                 StrSet_add(&s.shared, d->name);
             }

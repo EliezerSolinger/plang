@@ -31,19 +31,9 @@ const CARET: int = 0xFFAEAFAD
 const CUR_LINE: int = 0xFF2A2D2E
 const FG_FOLD: int = 0xFFC586C0
 
-# The event kinds the shim answers with. They are `static const` in shim.h, but
-# the boundary ingests FUNCTIONS and not constants (45.5), so a C header's
-# `#define`s and enums — SDL's keycodes included — are invisible from here.
-# Written out again, and noted as a finding of the port.
-const EV_NONE: int = 0
-const EV_QUIT: int = 1
-const EV_KEY: int = 2
-const EV_TEXT: int = 3
-const EV_MOUSE_DOWN: int = 4
-const EV_MOUSE_UP: int = 5
-const EV_MOUSE_MOVE: int = 6
-const EV_WHEEL: int = 7
-const EV_RESIZE: int = 8
+# The event kinds come from shim.h itself now (72.4): a `static const` scalar
+# crosses the boundary as the number it is, so there is no second copy here to
+# fall out of step with the first.
 
 const MOD_SHIFT: int = 1
 const MOD_CTRL: int = 2
@@ -134,8 +124,8 @@ struct Editor:
 
     def draw_text(self, s: str, x: int, y: int, color: int) -> int:
         at = x
-        for i in range(len(s)):
-            at += shim_glyph(cp_of(s[i]), at, y, color)
+        for ch in s:
+            at += shim_glyph(ord(ch), at, y, color)
         return at
 
     def draw(self):
@@ -399,18 +389,18 @@ def main(path: str):
     ed.draw()
     while ed.running:
         kind = shim_poll()
-        if kind == EV_NONE:
+        if kind == SHIM_NONE:
             continue
         now = shim_millis()
-        if kind == EV_QUIT:
+        if kind == SHIM_QUIT:
             ed.running = False
-        elif kind == EV_KEY:
+        elif kind == SHIM_KEY:
             ed.on_key(shim_ev_key(), shim_ev_mods(), now)
-        elif kind == EV_TEXT:
+        elif kind == SHIM_TEXT:
             ed.on_text(shim_ev_cp(), now)
-        elif kind == EV_MOUSE_DOWN:
+        elif kind == SHIM_MOUSE_DOWN:
             ed.on_click(shim_ev_x(), shim_ev_y(), shim_ev_clicks(), shim_ev_mods())
-        elif kind == EV_WHEEL:
+        elif kind == SHIM_WHEEL:
             step = shim_ev_wheel() * 3
             self_top = ed.top - step
             ed.top = 0 if self_top < 0 else (ed.buf.nlines() - 1 if self_top >= ed.buf.nlines() else self_top)

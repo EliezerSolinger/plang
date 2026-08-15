@@ -128,6 +128,8 @@ struct PsLow:
     static def sd_arg(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr
     static def sdict_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
     static def shared_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    static def shared_lock_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    static def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr
     static def shared_lock(self: *PsLow, name: const *char, unlock: bool, pos: Pos) -> *Stmt
     static def in_frame(self: *PsLow, name: const *char) -> bool
     static def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr
@@ -136,6 +138,7 @@ struct PsLow:
     static def call_rt(self: *PsLow, name: const *char, pos: Pos) -> *Expr
     static def to_str(self: *PsLow, e: *PsExpr) -> *Expr
     static def sig_lit(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
+    static def task_of_int(self: *PsLow, v: *Expr, pos: Pos) -> *Expr
     static def pack_fields(self: *PsLow, out: *Vec<*Stmt>, lst: *Expr, base: *Expr, t: *PsType, pos: Pos, unpk: *Expr, be: *Expr, ref off: i64)
     static def scalar_bytes(self: *PsLow, t: *PsType, pos: Pos) -> i64
     static def str_lit(self: *PsLow, s: const *char, pos: Pos) -> *Expr
@@ -165,6 +168,7 @@ struct PsLow:
     static def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt
     static def lower_try(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     static def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    static def lower_str_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     static def lower_iter_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     static def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     static def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
@@ -419,6 +423,17 @@ struct PsLow:
         s->nconds = 1
         s->if_sel = -1
         return s
+
+    # `race` and `timeout` answer a NUMBER, and what the language awaits is a
+    # task — so the number is wrapped in one that is already finished (36.2)
+    static def task_of_int(self: *PsLow, v: *Expr, pos: Pos) -> *Expr:
+        c: *Expr = self->call_rt("ps_task_of_int", pos)
+        self->push_arg(c, self->ctx_arg(pos))
+        cv: *Expr = ex_new(self->a, EX_CAST, pos)
+        cv->cast_type = ty_name(self->a, "i64")
+        cv->lhs = v
+        self->push_arg(c, cv)
+        return c
 
     # the descriptor a function value carries (29.3): the canonical spelling of
     # its type, which both sides of a narrowing write the same way
@@ -1040,6 +1055,16 @@ struct PsLow:
                     # (42.1): there is nothing to copy here, and taking the
                     # variable's lock around a read would only be a second lock
                     return self->shared_ref(e->text, e->pos)
+                elif e->is_gref and self->is_svar(e->text) and e->type != None and e->type->kind == PT_STR:
+                    # a shared STRING (42.1): the bytes are the variable's own,
+                    # and what comes back is a fresh string in THIS heap — the
+                    # lock is taken inside the runtime so no path forgets it
+                    sg: *Expr = self->call_rt("ps_shared_str_get", e->pos)
+                    self->push_arg(sg, self->ctx_arg(e->pos))
+                    self->push_arg(sg, self->shared_lock_ref(e->text, e->pos))
+                    self->push_arg(sg, self->addr_of_shared(e->text, e->pos))
+                    self->allocs = True
+                    return sg
                 elif e->is_gref and self->is_svar(e->text):
                     # `shared` is read by COPY under its lock (42.3). The copy
                     # is taken BEFORE the statement, so the lock is never held
@@ -1189,6 +1214,17 @@ struct PsLow:
                 self->allocs = True
                 return self->comma2(ch2, self->ident(dn, e->pos), e->pos)
             case PE_IN:
+                if e->rhs != None and e->rhs->type != None and e->rhs->type->kind == PT_STR:
+                    # 72.2: substring, and it answers the same bool `in` always did
+                    sc: *Expr = self->call_rt("ps_str_has", e->pos)
+                    self->push_arg(sc, self->expr(e->rhs))
+                    self->push_arg(sc, self->expr(e->lhs))
+                    if e->op == TK_NOT:
+                        sn3: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                        sn3->op = TK_NOT
+                        sn3->lhs = sc
+                        return sn3
+                    return sc
                 if self->is_sdict(e->rhs):
                     sh: *Expr = self->call_rt("ps_sdict_has", e->pos)
                     self->push_arg(sh, self->expr(e->rhs))
@@ -1786,6 +1822,12 @@ struct PsLow:
             self->allocs = True
             return call8
         # a buffer (19.4/52.3)
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_TASK:
+            tc9: *Expr = self->call_rt("ps_task_cancel" if strcmp(e->lhs->text, "cancel") == 0 else "ps_task_cancelled", e->pos)
+            if strcmp(e->lhs->text, "cancel") == 0:
+                self->push_arg(tc9, self->ctx_arg(e->pos))
+            self->push_arg(tc9, self->expr(e->lhs->lhs))
+            return tc9
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_TIMER:
             tc9: *Expr = self->call_rt("ps_timer_tick", e->pos)
             self->push_arg(tc9, self->ctx_arg(e->pos))
@@ -1837,6 +1879,22 @@ struct PsLow:
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_WORKER:
             wt8: *PsType = e->lhs->type
             to_parent: bool = e->lhs->lhs->kind == PE_NAME and strcmp(e->lhs->lhs->text, "parent") == 0
+            if strcmp(e->lhs->text, "detach") == 0:
+                dt8: *Expr = self->call_rt("ps_worker_detach", e->pos)
+                self->push_arg(dt8, self->expr(e->lhs->lhs))
+                return dt8
+            mk8: PsTypeKind = wt8->inner->kind if wt8->inner != None else PT_UNKNOWN
+            if strcmp(e->lhs->text, "send") == 0 and (mk8 == PT_STR or mk8 == PT_LIST):
+                # 34.3: not bytes, so it is SERIALIZED — the runtime writes the
+                # characters (or the count and the elements) into the queue and
+                # rebuilds the value in the receiver's own heap
+                ss8: *Expr = self->call_rt(("ps_worker_send_str_up" if to_parent else "ps_worker_send_str_down") if mk8 == PT_STR else ("ps_worker_send_list_up" if to_parent else "ps_worker_send_list_down"), e->pos)
+                if to_parent:
+                    self->push_arg(ss8, self->ctx_arg(e->pos))
+                else:
+                    self->push_arg(ss8, self->expr(e->lhs->lhs))
+                self->push_arg(ss8, self->expr(e->args[0]))
+                return ss8
             if strcmp(e->lhs->text, "send") == 0:
                 mn: const *char = self->a->printf("__ms%d", self->tmp_ctr)
                 self->tmp_ctr += 1
@@ -1863,6 +1921,16 @@ struct PsLow:
                 self->push_arg(ec, self->expr(e->lhs->lhs))
                 self->allocs = True
                 return ec
+            if mk8 == PT_STR or mk8 == PT_LIST:
+                rs8: *Expr = self->call_rt(("ps_parent_recv_str" if to_parent else "ps_worker_recv_str") if mk8 == PT_STR else ("ps_parent_recv_list" if to_parent else "ps_worker_recv_list"), e->pos)
+                self->push_arg(rs8, self->ctx_arg(e->pos))
+                if not to_parent:
+                    self->push_arg(rs8, self->expr(e->lhs->lhs))
+                if mk8 == PT_LIST:
+                    self->push_arg(rs8, self->elem_size(wt8->inner->inner, e->pos))
+                    self->push_arg(rs8, ex_new(self->a, EX_TRUE if opt_is_ref(wt8->inner->inner) else EX_FALSE, e->pos))
+                self->allocs = True
+                return rs8
             rc: *Expr = self->call_rt("ps_parent_recv" if to_parent else "ps_worker_recv", e->pos)
             self->push_arg(rc, self->ctx_arg(e->pos))
             if not to_parent:
@@ -2078,6 +2146,38 @@ struct PsLow:
             st7: *Expr = self->call_rt("ps_worker_status", e->pos)
             self->push_arg(st7, self->expr(e->args[0]))
             return st7
+        if strcmp(name, "transfer") == 0:
+            # the handle is the value; what the call does is take it away from
+            # THIS context (18.2), so the expression still answers the buffer
+            tb9: const *char = self->a->printf("__tb%d", self->tmp_ctr)
+            self->tmp_ctr += 1
+            td9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+            td9->name = tb9
+            td9->type = ty_ptr(self->a, ty_name(self->a, "PsBuffer"))
+            td9->init = self->expr(e->args[0])
+            self->pre.push(td9)
+            tr9: *Expr = self->call_rt("ps_buffer_transfer", e->pos)
+            self->push_arg(tr9, self->ctx_arg(e->pos))
+            self->push_arg(tr9, self->ident(tb9, e->pos))
+            ts9: *Stmt = st_new(self->a, ST_EXPR, e->pos)
+            ts9->expr = tr9
+            self->pre.push(ts9)
+            return self->ident(tb9, e->pos)
+        if strcmp(name, "race") == 0:
+            rc9: *Expr = self->call_rt("ps_race", e->pos)
+            self->push_arg(rc9, self->ctx_arg(e->pos))
+            self->push_arg(rc9, self->expr(e->args[0]))
+            self->raised = True
+            self->allocs = True
+            return self->task_of_int(rc9, e->pos)
+        if strcmp(name, "timeout") == 0:
+            to9: *Expr = self->call_rt("ps_timeout", e->pos)
+            self->push_arg(to9, self->ctx_arg(e->pos))
+            self->push_arg(to9, self->expr(e->args[0]))
+            self->push_arg(to9, self->as_f64(e->args[1]))
+            self->raised = True
+            self->allocs = True
+            return self->task_of_int(to9, e->pos)
         if strcmp(name, "gather") == 0:
             # the results are a list, and what the call gives back is a task
             # that is already finished — the same shape `recv` uses
@@ -3090,7 +3190,11 @@ struct PsLow:
         if t == None or t->kind != TY_PTR or t->inner == None or t->inner->kind != TY_NAME or t->inner->name == None:
             return False
         n: const *char = t->inner->name
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsBuffer") == 0:
+        # `PsBuffer` is NOT here on purpose (19.4/52.3): both its header and its
+        # bytes are malloc'd, because another thread holds the pointer and a
+        # collector that moves cannot own what another thread is reading. It is
+        # a handle, not an object of this heap.
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -3262,6 +3366,21 @@ struct PsLow:
     # a `shared` variable and its lock live in ONE process-wide set: they are
     # the one global the workers really do share (42.1), so they are not in the
     # per-context struct that everything else lives in
+    # the mutex of a shared variable, and the ADDRESS of its slot — what a
+    # runtime call needs when the value is not a number it can carry
+    static def shared_lock_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+        f: *Expr = ex_new(self->a, EX_FIELD, pos)
+        f->op = TK_DOT
+        f->lhs = self->ident("__ps_shared", pos)
+        f->field = self->a->printf("%s__lock", ps_cname(self->a, name))
+        return f
+
+    static def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+        a: *Expr = ex_new(self->a, EX_UNARY, pos)
+        a->op = TK_AMP
+        a->lhs = self->shared_ref(name, pos)
+        return a
+
     static def shared_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
         f->op = TK_DOT
@@ -3367,6 +3486,15 @@ struct PsLow:
                     out->push(fa)
                     if self->raised:
                         out->push(self->guard(s->pos))
+                    return
+                if s->is_global and self->is_svar(s->name) and s->type != None and s->type->kind == PT_STR:
+                    # a shared STRING (42.1): the bytes are copied INTO the
+                    # variable's own, and the lock lives inside the runtime call
+                    sps: *Expr = self->call_rt("ps_shared_str_put", s->pos)
+                    self->push_arg(sps, self->shared_lock_ref(s->name, s->pos))
+                    self->push_arg(sps, self->addr_of_shared(s->name, s->pos))
+                    self->push_arg(sps, self->expr(s->rhs))
+                    self->push_expr_stmt(out, sps, s->pos)
                     return
                 if s->is_global and self->is_svar(s->name):
                     # the value is computed FIRST, then the lock is taken: no
@@ -3546,6 +3674,21 @@ struct PsLow:
                 # ONE lock, which is what makes a compound operation atomic. The
                 # value of `e` is computed before the lock is taken, so no user
                 # code runs while it is held.
+                if s->lhs->kind == PE_NAME and s->lhs->is_gref and self->is_svar(s->lhs->text) and s->lhs->type != None and s->lhs->type->kind == PT_STR:
+                    sp5: *Expr = self->call_rt("ps_shared_str_put", s->pos)
+                    self->push_arg(sp5, self->shared_lock_ref(s->lhs->text, s->pos))
+                    self->push_arg(sp5, self->addr_of_shared(s->lhs->text, s->pos))
+                    if s->op == TK_ASSIGN:
+                        self->push_arg(sp5, self->expr(s->rhs))
+                    else:
+                        cat5: *PsExpr = ps_expr(self->a, PE_BINARY, s->pos)
+                        cat5->op = ps_lower_binop(s->op)
+                        cat5->lhs = s->lhs
+                        cat5->rhs = s->rhs
+                        cat5->type = s->lhs->type
+                        self->push_arg(sp5, self->binary(cat5))
+                    self->push_expr_stmt(out, sp5, s->pos)
+                    return
                 if s->lhs->kind == PE_NAME and s->lhs->is_gref and self->is_svar(s->lhs->text):
                     nm5: const *char = s->lhs->text
                     rv5: *Expr = self->value_first(s->rhs, s->lhs->type, s->pos)
@@ -3664,6 +3807,9 @@ struct PsLow:
                     return
                 if s->iter->type != None and (s->iter->type->kind == PT_DICT or s->iter->type->kind == PT_SET):
                     self->lower_dict_for(s, out)
+                    return
+                if s->iter->type != None and s->iter->type->kind == PT_STR:
+                    self->lower_str_for(s, out)
                     return
                 if s->iter->type != None and s->iter->type->kind == PT_LIST:
                     self->lower_list_for(s, out)
@@ -3976,6 +4122,56 @@ struct PsLow:
         wb->n = inner.len
         fr->body = wb
         out->push(fr)
+
+    # `for ch in s` (72.3): a cursor in BYTES that the runtime advances one
+    # character at a time. A loop by index would recount the UTF-8 offset from
+    # the start of the string on every round, which is the quadratic shape the
+    # port had to write by hand before this existed.
+    static def lower_str_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+        sn: const *char = self->a->printf("__ss%d", self->tmp_ctr)
+        on: const *char = self->a->printf("__so%d", self->tmp_ctr)
+        self->tmp_ctr += 1
+        sd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        sd->name = sn
+        sd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
+        sd->init = self->expr(s->iter)
+        out->push(sd)
+        od: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        od->name = on
+        od->type = ty_name(self->a, "i64")
+        od->init = self->num("0", s->pos)
+        out->push(od)
+        nb: *Expr = self->call_rt("ps_str_nbytes", s->pos)
+        self->push_arg(nb, self->ident(sn, s->pos))
+        cond: *Expr = ex_new(self->a, EX_BINARY, s->pos)
+        cond->op = TK_LT
+        cond->lhs = self->ident(on, s->pos)
+        cond->rhs = nb
+        step: *Expr = self->call_rt("ps_str_step", s->pos)
+        self->push_arg(step, self->ctx_arg(s->pos))
+        self->push_arg(step, self->ident(sn, s->pos))
+        self->push_arg(step, self->addr_of(on, s->pos))
+        inner: Vec<*Stmt>
+        inner.init()
+        if self->in_frame(s->names[0]):
+            ba: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+            ba->lhs = self->async_field(s->names[0], s->pos)
+            ba->op = TK_ASSIGN
+            ba->rhs = step
+            inner.push(ba)
+        else:
+            bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+            bd->name = ps_cname(self->a, s->names[0])
+            bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
+            bd->init = step
+            inner.push(bd)
+        body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        for i in range(body->n):
+            inner.push(body->stmts[i])
+        wh: *Stmt = st_new(self->a, ST_WHILE, s->pos)
+        wh->cond = cond
+        wh->body = self->mk_block(&inner)
+        out->push(wh)
 
     static def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         et: *PsType = s->iter->type->inner
@@ -4481,6 +4677,10 @@ static def lower_shared_struct(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
         # lives outside every heap, so the variable holds THAT handle
         if sv.data[i]->type != None and sv.data[i]->type->kind == PT_DICT:
             d->fields[i * 2].type = ty_ptr(L->a, ty_name(L->a, "PsSDict"))
+        elif sv.data[i]->type != None and sv.data[i]->type->kind == PT_STR:
+            # 42.1: the bytes live outside every heap, in the same shape the
+            # shared table keeps them in
+            d->fields[i * 2].type = ty_name(L->a, "PsSStr")
         else:
             d->fields[i * 2].type = L->ty(sv.data[i]->type)
         d->fields[i * 2].pos = sv.data[i]->pos
@@ -4528,6 +4728,22 @@ static def lower_shared_init(L: *PsLow, sv: Vec<*PsDecl>, with_body: bool) -> *D
         asg->op = TK_ASSIGN
         asg->rhs = L->call_rt("ps_lock_new", f->pos)
         body.push(asg)
+        if sv.data[i]->type != None and sv.data[i]->type->kind == PT_STR and sv.data[i]->init != None:
+            # the initial value of a shared STRING, written here because a
+            # `shared` is process-wide and this runs before any context exists
+            if sv.data[i]->init->kind != PE_STR:
+                fatal_at(L->file, sv.data[i]->pos, "the initial value of a `shared` string is a literal: it is written before the program starts (42.1)")
+            sn0: usize = 0
+            sb0: *char = str_lit_decode(L->a, sv.data[i]->init->text, out sn0)
+            si0: *Expr = L->call_rt("ps_shared_str_init", f->pos)
+            L->push_arg(si0, L->addr_of_shared(sv.data[i]->name, f->pos))
+            lit0: *Expr = ex_new(L->a, EX_STRING, f->pos)
+            lit0->text = c_string_literal(L->a, sb0, sn0)
+            L->push_arg(si0, lit0)
+            L->push_arg(si0, L->num(L->a->printf("%zu", sn0), f->pos))
+            ss0: *Stmt = st_new(L->a, ST_EXPR, f->pos)
+            ss0->expr = si0
+            body.push(ss0)
         if sv.data[i]->type != None and sv.data[i]->type->kind == PT_DICT:
             # the ETS table of 42.1 is BUILT here, before any worker exists:
             # it lives outside every heap, so it is not a value some context
@@ -5077,6 +5293,16 @@ static def async_slots_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, ref n: i32
 static def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32)
 static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
 
+# The cursor of a `for` that had to become a state machine, and the sequence it
+# walks. Named from the POSITION of the loop so that the pass which builds the
+# frame and the pass which writes the states agree without a channel between
+# them — two names computed from the same line and column cannot drift.
+def ps_for_cursor(a: *Arena, pos: Pos) -> const *char:
+    return a->printf("__afi_%d_%d", pos.line, pos.col)
+
+def ps_for_seq(a: *Arena, pos: Pos) -> const *char:
+    return a->printf("__afs_%d_%d", pos.line, pos.col)
+
 static def has_await_e(e: *PsExpr) -> bool:
     if e == None:
         return False
@@ -5149,6 +5375,15 @@ static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: cons
                     et = it->inner
                 if et != None:
                     async_add_field(L, ref v, s->names[0], et, s->pos, file)
+                # a `for` with an await inside becomes a state machine, and its
+                # CURSOR has to survive between steps like every other local.
+                # The name is derived from where the loop is written, because
+                # this pass and the splitter have to agree on it without
+                # talking to each other.
+                if has_await_b(s->body) or has_await_e(s->iter):
+                    async_add_field(L, ref v, ps_for_cursor(L->a, s->pos), ps_type(L->a, PT_INT, s->pos), s->pos, file)
+                    if it != None and it->kind == PT_LIST:
+                        async_add_field(L, ref v, ps_for_seq(L->a, s->pos), it, s->pos, file)
         case PS_TRY:
             if s->name != None:
                 er: *PsType = ps_type(L->a, PT_NAME, s->pos)
@@ -5450,12 +5685,100 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             B.brk = ob
             B.cont = oc
             B.cur = after
+        case PS_FOR:
+            # `for` with an await inside. It gets FOUR states, not three: the
+            # increment is a state of its own because `continue` has to reach
+            # it — desugaring into a `while` would send `continue` to the head
+            # and the loop would never advance.
+            #
+            # The two shapes that carry an await today are `range(...)` and a
+            # LIST; anything else (dict, set, string, an Iterable of your own)
+            # says so, because guessing an iteration protocol here would be a
+            # second lowering to keep in step with the first.
+            ip: *PsExpr = s->iter
+            is_range: bool = ip != None and ip->kind == PE_CALL and ip->lhs != None and ip->lhs->kind == PE_NAME and strcmp(ip->lhs->text, "range") == 0
+            is_list: bool = ip != None and ip->type != None and ip->type->kind == PT_LIST
+            if not is_range and not is_list:
+                fatal_at(B.file, s->pos, "an `await` inside this `for` is not compiled yet: the state machine takes apart `for` over `range(...)` and over a list (50.1)")
+            iv: const *char = ps_for_cursor(B.L->a, s->pos)
+            lv: const *char = ps_for_seq(B.L->a, s->pos)
+            init: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
+            init->lhs = B.L->async_field(iv, s->pos)
+            init->op = TK_ASSIGN
+            init->rhs = B.L->expr(ip->args[0]) if is_range and ip->nargs > 1 else B.L->num("0", s->pos)
+            ab_emit(ref B, init)
+            limit: *Expr = None
+            if is_range:
+                limit = B.L->expr(ip->args[1]) if ip->nargs > 1 else B.L->expr(ip->args[0])
+            else:
+                li: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
+                li->lhs = B.L->async_field(lv, s->pos)
+                li->op = TK_ASSIGN
+                li->rhs = B.L->expr(ip)
+                ab_emit(ref B, li)
+                ln: *Expr = B.L->call_rt("ps_list_len", s->pos)
+                B.L->push_arg(ln, B.L->async_field(lv, s->pos))
+                limit = ln
+            fhead: i32 = ab_state(ref B)
+            fbody: i32 = ab_state(ref B)
+            fstep: i32 = ab_state(ref B)
+            fafter: i32 = ab_state(ref B)
+            ab_goto(ref B, fhead, s->pos)
+            B.cur = fhead
+            fcond: *Expr = ex_new(B.L->a, EX_BINARY, s->pos)
+            fcond->op = TK_LT
+            fcond->lhs = B.L->async_field(iv, s->pos)
+            fcond->rhs = limit
+            fif: *Stmt = st_new(B.L->a, ST_IF, s->pos)
+            fif->conds = B.L->a->alloc(sizeof(*fif->conds))
+            fif->conds[0] = fcond
+            ftb: *Block = B.L->a->alloc(sizeof(Block))
+            ftb->stmts = B.L->a->alloc(sizeof(*ftb->stmts))
+            ftb->stmts[0] = ab_set_state(ref B, fbody, s->pos)
+            ftb->n = 1
+            ffb: *Block = B.L->a->alloc(sizeof(Block))
+            ffb->stmts = B.L->a->alloc(sizeof(*ffb->stmts))
+            ffb->stmts[0] = ab_set_state(ref B, fafter, s->pos)
+            ffb->n = 1
+            fif->blocks = B.L->a->alloc(sizeof(*fif->blocks))
+            fif->blocks[0] = ftb
+            fif->else_block = ffb
+            fif->nconds = 1
+            fif->if_sel = -1
+            ab_emit(ref B, fif)
+            ab_emit(ref B, st_new(B.L->a, ST_CONTINUE, s->pos))
+            fob: i32 = B.brk
+            foc: i32 = B.cont
+            B.brk = fafter
+            B.cont = fstep
+            B.cur = fbody
+            # the loop variable, at the top of the body
+            bind: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
+            bind->lhs = B.L->async_field(s->names[0], s->pos) if B.L->in_frame(s->names[0]) else B.L->ident(ps_cname(B.L->a, s->names[0]), s->pos)
+            bind->op = TK_ASSIGN
+            if is_range:
+                bind->rhs = B.L->async_field(iv, s->pos)
+            else:
+                bind->rhs = B.L->elem_at(B.L->async_field(lv, s->pos), B.L->async_field(iv, s->pos), ip->type->inner, s->pos)
+            ab_emit(ref B, bind)
+            ab_block(ref B, s->body)
+            ab_goto(ref B, fstep, s->pos)
+            B.cur = fstep
+            inc: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
+            inc->lhs = B.L->async_field(iv, s->pos)
+            inc->op = TK_PLUS_EQ
+            inc->rhs = B.L->expr(ip->args[2]) if is_range and ip->nargs > 2 else B.L->num("1", s->pos)
+            ab_emit(ref B, inc)
+            ab_goto(ref B, fhead, s->pos)
+            B.brk = fob
+            B.cont = foc
+            B.cur = fafter
         case PS_BREAK:
             ab_goto(ref B, B.brk, s->pos)
         case PS_CONTINUE:
             ab_goto(ref B, B.cont, s->pos)
         case _:
-            fatal_at(B.file, s->pos, "an `await` inside this statement is not compiled yet — the state machine takes apart `if` and `while` so far (50.1)")
+            fatal_at(B.file, s->pos, "an `await` inside this statement is not compiled yet — the state machine takes apart `if`, `while` and `for` so far (50.1)")
 
 static def ab_block(ref B: AsyncB, b: *PsBlock):
     if b == None:

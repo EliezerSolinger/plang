@@ -25,3 +25,5 @@ Module *cc_load_module(Cc *cc, const char *path);
 void sema_run(Cc *cc, Module *m);
 
 const char *cpp_capture_ex(Arena *a, const char *cpp_cmd, const char *flags, const char *path, int is_sys, const char *dir);
+
+int macro_int_val(const char *txt, int64_t *out);

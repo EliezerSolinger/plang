@@ -24,6 +24,8 @@
 # never a silent wrong type.
 include <string.h>
 include <stdlib.h>
+include <ctype.h>
+include <stdio.h>
 import "ps_sema.ph"
 import "../stl/vec.ph"
 import "../stl/map.ph"
@@ -35,6 +37,9 @@ import "sema.ph"
 import "cfront.ph"
 
 declare StrMap<*PsFunc>
+declare StrMap<*PsExpr>
+declare Vec<const *char>   # implemented in vecs.p
+implement StrMap<*PsExpr>
 implement StrMap<*PsFunc>
 declare StrMap<*PsDecl>
 implement StrMap<*PsDecl>
@@ -173,6 +178,11 @@ struct PsSema:
                              #   cannot infer it alone: `xs: list<int> = []`
     cpp: const *char         # the C compiler used to preprocess an `include <h>`
     cfuncs: StrMap<*PsFunc>  # C functions the boundary rule (45.5) lets through
+    cconsts: StrMap<*PsExpr> # C CONSTANTS the boundary lets through (72.4): a
+                             #   member of an `enum`, a `static const` scalar and
+                             #   an object-like `#define` whose value is a number.
+                             #   A read of one is replaced by the literal, so
+                             #   nothing of the header survives into the program.
     root_ns: *PsNs           # the module being compiled (41.3)
     cur_ns: *PsNs            # the namespace the declaration being checked is in
     nsof: StrMap<*PsNs>      # by module PATH, so a diamond import loads once
@@ -232,6 +242,7 @@ struct PsSema:
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def check_endian(self: *PsSema, e: *PsExpr)
     static def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl)
     static def build_ns(self: *PsSema, m: *PsModule, prefix: const *char, name: const *char) -> *PsNs
@@ -534,6 +545,14 @@ struct PsSema:
                         e->any_cast = self->locals[li].any_type
                         t = self->locals[li].any_type
                 else:
+                    # a constant a C header gave (72.4): the read IS the
+                    # number, so nothing of the header survives into the program
+                    if self->cconsts.has(e->text) and not self->globals.has(e->text) and not self->funcs.has(e->text):
+                        cl9: *PsExpr = self->cconsts.get_or(e->text, None)
+                        pp9: Pos = e->pos
+                        *e = *cl9
+                        e->pos = pp9
+                        return self->check_expr(e)
                     # not a local: the name is resolved in the module's
                     # NAMESPACE, and what comes back is the renamed global the
                     # rest of the compiler sees from here on (41.3)
@@ -635,7 +654,11 @@ struct PsSema:
                     else:
                         self->pod_only(pty, e->pos, "an argument to a worker")
                 if wf->ret != None and wf->ret->kind != PT_VOID:
-                    self->pod_only(wf->ret, e->pos, "a message from a worker")
+                    # 34.3: bytes cross by memcpy, and what is not bytes is
+                    # SERIALIZED — a `str` as its characters, a `list` of bytes
+                    # as a count and its elements. Nothing of one heap ever
+                    # reaches another either way.
+                    self->sendable(wf->ret, e->pos, "a message from a worker")
                 e->spawn_fn = wn
                 wt6: *PsType = ps_type(self->a, PT_WORKER, e->pos)
                 wt6->inner = wf->ret if wf->ret != None else ps_type(self->a, PT_VOID, e->pos)
@@ -924,8 +947,16 @@ struct PsSema:
                 # exists (8.1)
                 nt5: *PsType = self->check_expr(e->lhs)
                 ht5: *PsType = self->check_expr(e->rhs)
+                if ht5 != None and ht5->kind == PT_STR:
+                    # 72.2: over a string `in` is SUBSTRING, as Python spells
+                    # it. There is no second reading to confuse it with — a
+                    # string is not a container of anything else.
+                    self->want(e->lhs, nt5, ps_type(self->a, PT_STR, e->pos), "the text looked for")
+                    t = ps_type(self->a, PT_BOOL, e->pos)
+                    e->type = t
+                    return t
                 if ht5 == None or ht5->kind not in {PT_DICT, PT_SET}:
-                    fatal_at(self->file, e->pos, "`in` takes a dict or a set on the right so far, not %s", ps_type_str(self->a, ht5))
+                    fatal_at(self->file, e->pos, "`in` takes a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5))
                 self->want(e->lhs, nt5, ht5->key if ht5->kind == PT_DICT else ht5->inner, "the tested value")
                 t = ps_type(self->a, PT_BOOL, e->pos)
             case PE_FIELD:
@@ -1120,6 +1151,17 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "reverse() takes no arguments")
                     return ps_type(self->a, PT_VOID, e->pos)
                 fatal_at(self->file, e->pos, "a list has append, insert, remove_at and reverse so far, not '%s'", lm)
+            # a task can be asked to stop (37.2). It is not a kill: the next
+            # step of THAT task raises inside it, so its `defer` and its `with`
+            # unwind exactly as they would for any other error.
+            if rt != None and rt->kind == PT_TASK:
+                tm9: const *char = e->lhs->text
+                if strcmp(tm9, "cancel") != 0 and strcmp(tm9, "cancelled") != 0:
+                    fatal_at(self->file, e->pos, "a task has cancel() and cancelled(), not '%s'", tm9)
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "%s() takes no arguments", tm9)
+                e->lhs->type = rt
+                return ps_type(self->a, PT_BOOL if strcmp(tm9, "cancelled") == 0 else PT_VOID, e->pos)
             # the repeating clock (48.2/51.1): one method, and what it gives
             # back is a TASK — so waiting for a tick is the same `await` every
             # other wait uses (36.2)
@@ -1214,6 +1256,14 @@ struct PsSema:
                     eo: *PsType = ps_type(self->a, PT_OPT, e->pos)
                     eo->inner = ert
                     return eo
+                if strcmp(wm, "detach") == 0:
+                    # 36.3: the program stops waiting for THIS one at the end.
+                    # Nothing is killed — a worker only ever finishes itself
+                    # (36.4) — the shutdown simply does not block on it.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "detach() takes no arguments")
+                    e->lhs->type = rt
+                    return ps_type(self->a, PT_VOID, e->pos)
                 if strcmp(wm, "recv") == 0:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "recv() takes no arguments")
@@ -1221,7 +1271,7 @@ struct PsSema:
                     rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                     rtk->inner = rt->inner
                     return rtk
-                fatal_at(self->file, e->pos, "a worker has send, recv and error (36.1/37.3), not '%s'", wm)
+                fatal_at(self->file, e->pos, "a worker has send, detach, recv and error (36.1/37.3), not '%s'", wm)
             # a method on a `dyn Trait` (66.3): the call goes through the
             # vtable in the box, and what is checked here is the TRAIT's
             # signature — the concrete type is not known and is not needed
@@ -1492,6 +1542,41 @@ struct PsSema:
             rt7: *PsType = ps_type(self->a, PT_NAME, e->pos)
             rt7->name = "Status"
             return rt7
+        if strcmp(name, "transfer") == 0:
+            # 18.2: the bytes change hands. Nothing is copied — what changes is
+            # WHO may use them, and using them after giving them away raises.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "transfer() takes a buffer")
+            bft: *PsType = self->check_expr(e->args[0])
+            if bft == None or bft->kind != PT_BUFFER:
+                fatal_at(self->file, e->pos, "transfer() takes a buffer — the one thing meant to be shared (52.3) — found %s", ps_type_str(self->a, bft))
+            return bft
+        if strcmp(name, "race") == 0:
+            # 37.2: the first to finish WINS and the others are cancelled — the
+            # idiom that leaves no orphan behind. What comes back is the INDEX
+            # of the winner, because knowing who won is the reason to race; the
+            # value is read from that task afterwards.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "race() takes a list of tasks")
+            rt9: *PsType = self->check_expr(e->args[0])
+            if rt9 == None or rt9->kind != PT_LIST or rt9->inner == None or rt9->inner->kind != PT_TASK:
+                fatal_at(self->file, e->pos, "race() takes a list of tasks, found %s", ps_type_str(self->a, rt9))
+            rk9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            rk9->inner = ps_type(self->a, PT_INT, e->pos)
+            return rk9
+        if strcmp(name, "timeout") == 0:
+            # 48.2: a race against the clock that CANCELS the loser. True when
+            # the task finished in time, False when the clock did.
+            if e->nargs != 2:
+                fatal_at(self->file, e->pos, "timeout() takes a task and the seconds")
+            tt9: *PsType = self->check_expr(e->args[0])
+            if tt9 == None or tt9->kind != PT_TASK:
+                fatal_at(self->file, e->pos, "timeout() takes a task, found %s", ps_type_str(self->a, tt9))
+            st9: *PsType = self->check_expr(e->args[1])
+            self->want(e->args[1], st9, ps_type(self->a, PT_FLOAT, e->pos), "the seconds of timeout()")
+            ok9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            ok9->inner = ps_type(self->a, PT_BOOL, e->pos)
+            return ok9
         if strcmp(name, "gather") == 0:
             # 35.3: `await gather(ts)` — every task, in the order they were
             # given. It IS a task itself, so it is awaited like any other.
@@ -2262,12 +2347,79 @@ struct PsSema:
     # A declaration that does not fit is SKIPPED, not rejected: a header has
     # hundreds, and refusing the file because one of them takes a `FILE*` would
     # make the rule useless.
+    # A constant the header gave: kept as the LITERAL it is, so a read becomes
+    # the number and nothing of the header survives into the program (72.4).
+    static def cconst_put(self: *PsSema, name: const *char, v: i64):
+        if name == None or self->cconsts.has(name) or self->cfuncs.has(name):
+            return
+        lit: *PsExpr = ps_expr(self->a, PE_INT, zero_ps_pos())
+        lit->text = self->a->printf("%lld", v)
+        self->cconsts.put(name, lit)
+
     static def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl):
         dir: const *char = path_dir(self->a, m->path)
         src: const *char = cpp_capture_ex(self->a, self->cpp, "-E -P", d->path, d->import_system, dir)
         cm: *Module = c_parse(self->a, d->path, src, strlen(src), False)
+        # every object-like #define whose value is an integer literal (72.4).
+        # `-E -P` expands macros away, so they are read from `-E -dM`, which is
+        # the same door the P side uses.
+        mac: const *char = cpp_capture_ex(self->a, self->cpp, "-E -dM", d->path, d->import_system, dir)
+        al9: Vec<const *char>
+        av9: Vec<const *char>
+        al9.init()
+        av9.init()
+        p9: const *char = mac
+        while *p9 != '\0':
+            eol: const *char = strchr(p9, '\n')
+            if eol == None:
+                eol = p9 + strlen(p9)
+            if strncmp(p9, "#define ", 8) == 0:
+                q9: const *char = p9 + 8
+                st9: const *char = q9
+                while q9 < eol and *q9 != ' ' and *q9 != '(' and *q9 != '\t':
+                    q9 += 1
+                if q9 < eol and *q9 != '(':        # function-like: no typed value
+                    nm9: const *char = self->a->strndup(st9, usize(q9 - st9))
+                    while q9 < eol and (*q9 == ' ' or *q9 == '\t'):
+                        q9 += 1
+                    rhs9: const *char = self->a->strndup(q9, usize(eol - q9))
+                    iv9: i64 = 0
+                    if macro_int_val(rhs9, &iv9):
+                        self->cconst_put(nm9, iv9)
+                    elif strlen(rhs9) > 0 and (isalpha(rhs9[0]) or rhs9[0] == '_'):
+                        # `#define INT_MAX __INT_MAX__` — an alias. Kept for a
+                        # second pass, because the macro it names may not have
+                        # been read yet.
+                        al9.push(nm9)
+                        av9.push(rhs9)
+            p9 = eol + 1 if *eol != '\0' else eol
+        # the aliases, now that every literal is known. Two rounds is enough for
+        # the chains a header actually writes (NAME -> OTHER -> literal).
+        for round9 in range(2):
+            for k9 in range(al9.len):
+                tgt9: *PsExpr = self->cconsts.get_or(av9.data[k9], None)
+                if tgt9 != None and not self->cconsts.has(al9.data[k9]):
+                    self->cconsts.put(al9.data[k9], tgt9)
         for i in range(cm->ndecls):
             cd: *Decl = cm->decls[i]
+            # a member of an `enum`, and a `static const` scalar: both are
+            # values a number can carry, so both cross (72.4)
+            if cd->kind == DL_ENUM:
+                nxt: i64 = 0
+                for j in range(cd->nitems):
+                    if cd->items[j].value != None and cd->items[j].value->kind == EX_NUMBER:
+                        nxt = strtoll(cd->items[j].value->text, None, 0)
+                    self->cconst_put(cd->items[j].name, nxt)
+                    nxt += 1
+                continue
+            # `static T X = <literal>;` in a HEADER is the shape a constant
+            # takes there — it is what P emits for a `const` module variable and
+            # what any header writes when it wants a named number. A mutable
+            # `static` in a header is a per-includer COPY, so reading its
+            # initializer says exactly as much as reading the variable would.
+            if cd->kind == DL_VAR and cd->is_static and cd->name != None and cd->init != None and cd->init->kind == EX_NUMBER and cd->type != None and self->c_type(cd->type) != None and self->c_type(cd->type)->kind == PT_INT:
+                self->cconst_put(cd->name, strtoll(cd->init->text, None, 0))
+                continue
             if cd->kind != DL_FUNC or cd->func == None or cd->func->name == None:
                 continue
             f: *Func = cd->func
@@ -2337,6 +2489,19 @@ struct PsSema:
         et: *PsType = self->check_expr(e)
         if et == None or et->kind != PT_NAME or et->name == None or strcmp(ps_disp(et->name), "Endian") != 0:
             fatal_at(self->file, e->pos, "the byte order is an `Endian` — `LE` or `BE` — found %s", ps_type_str(self->a, et))
+
+    # what a MESSAGE may be (34.3): bytes, a string, or a list of either — the
+    # three shapes the runtime knows how to rebuild in the receiver's own heap
+    static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
+        if t != None and t->kind == PT_STR:
+            return
+        if t != None and t->kind == PT_LIST and t->inner != None:
+            if t->inner->kind in {PT_INT, PT_FLOAT, PT_BOOL}:
+                return
+            if t->inner->kind == PT_NAME and self->records.has(t->inner->name) and self->records.get_or(t->inner->name, None)->kind == PD_RECORD:
+                return
+            fatal_at(self->file, pos, "%s is %s: a list crosses heaps when its ELEMENTS are bytes — numbers, bools or a `record` (34.3)", what, ps_type_str(self->a, t))
+        self->pod_only(t, pos, what)
 
     static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t != None and t->kind == PT_STR:
@@ -2892,8 +3057,22 @@ struct PsSema:
                         self->pop_scope()
                         self->depth -= 1
                         return
+                    if lit4 != None and lit4->kind == PT_STR:
+                        # 72.3: over a string the loop yields CHARACTERS — each
+                        # one a string of length 1, which is what `s[i]` gives
+                        # and what `len` counts (3.4)
+                        if s->nnames != 1:
+                            fatal_at(self->file, s->pos, "`for ch in s` takes one variable")
+                        self->depth += 1
+                        self->add_local(s->names[0], ps_type(self->a, PT_STR, s->pos), True, False)
+                        self->loop_depth += 1
+                        self->check_block(s->body)
+                        self->loop_depth -= 1
+                        self->pop_scope()
+                        self->depth -= 1
+                        return
                     if lit4 == None or lit4->kind not in {PT_LIST, PT_DICT, PT_SET}:
-                        fatal_at(self->file, s->pos, "`for x in ...` takes a range, a list, a dict, a set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4))
+                        fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, a list, a dict, a set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4))
                     if s->nnames != 1:
                         fatal_at(self->file, s->pos, "`for x in xs` takes one variable")
                     self->depth += 1
@@ -3565,6 +3744,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
     s.globals.init()
     s.gconst.init()
     s.cfuncs.init()
+    s.cconsts.init()
     s.nsof.init()
     s.prefixes.init()
     PS_DISP.init()
@@ -3679,7 +3859,10 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
                     s.copyable(sdt->key, d->pos, "the key of a `shared dict`")
                     s.copyable(sdt->inner, d->pos, "the value of a `shared dict`")
                 else:
-                    s.pod_only(sdt, d->pos, "a `shared` variable")
+                    # 42.1: the copy ladder — a `str` is on it, because the
+                    # variable keeps BYTES of its own and hands back a fresh
+                    # string to whoever reads
+                    s.copyable(sdt, d->pos, "a `shared` variable")
             s.nlocals = 0
             s.cur_ret = None
             s.cur_fn = "the module"
@@ -3701,7 +3884,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
                     if d->init != None and not (d->init->kind == PE_DICT and d->init->nargs == 0):
                         fatal_at(m->path, d->pos, "a `shared dict` starts empty: it lives outside every heap, so there is nothing yet to copy into it (42.1)")
                 else:
-                    s.pod_only(gt, d->pos, "a `shared` variable")
+                    s.copyable(gt, d->pos, "a `shared` variable")
                 s.shared.add(d->name)
             s.globals.put(d->name, gt)
             if d->is_const:

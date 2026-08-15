@@ -2748,6 +2748,51 @@ forward pro trio, retorno ref, `??` com e sem None) + 9 erros novos
 `tests/errors/p_ref_*`, `p_coalesce_nonptr`, `p_null_deref` — nos três modos,
 incluindo o roundtrip do printer P (que aprendeu a soletrar `ref T` e `??`).
 
+## Bateria 72 — o que o porte cobrou (2026-08-15)
+
+Perguntas que nasceram de portar o editor e de um teste que sondou o contrato
+das traits. Todas respondidas por você.
+
+**72.1 `ord`/`chr` ficam. ✅** São o par do Python e a única porta entre
+caractere e codepoint — sem eles nenhum texto alcança uma interface que fala
+número, que é toda a fronteira do 45.5. Lançam em entrada inválida (`ord` exige
+exatamente um caractere; `chr` exige 0..0x10FFFF) e são UTF-8 dos dois lados.
+
+**72.2 `"ab" in s` é SUBSTRING, como no Python. ✅** Não conflita com a 8.1:
+uma string não é contêiner de outra coisa, então não há segunda leitura
+possível para `needle in hay`.
+
+**72.3 `for ch in s` itera CARACTERES. ✅** `len(s)` já são codepoints e `s[i]`
+já é um caractere (3.4); iterar é o fecho disso. E não é só conforto: o
+contorno por índice reconta o offset UTF-8 a cada acesso, então um laço sobre
+string era quadrático — o laço anda pelos bytes UMA vez.
+
+**72.4 Constantes de header C atravessam. ✅** Membro de `enum`, `static const`
+escalar **e `#define` numérico**. É a mesma segurança do resto da fronteira
+(nenhum endereço cruza), e sem isso toda biblioteca C de verdade obriga a
+duplicar tabela de constantes — que é exatamente onde o erro por desatualização
+mora (os keycodes do SDL, no porte, tiveram de ser redigitados).
+
+**72.5 `implement` confere a ASSINATURA INTEIRA, e o P ganha tipo associado. ✅**
+O checador olhava nome e aridade, então uma trait que promete `-> i64` podia
+receber um impl que devolve outra coisa — e era esse buraco que fazia
+`for v in it` render qualquer tipo. Fechar sem `type Item` (66.4, que o pscript
+já tem) tornaria `Iterable` do P inútil para qualquer coisa que não fosse
+`i64`; as duas coisas entram juntas.
+
+**72.6 Atravessa a fronteira: `const` de tipo `record`, só LEITURA. ✅** O lado
+P recebe `in ref T` (`const T*`). É imutável, vive o processo, não se move, não
+morre e não tem lock a respeitar — e o compilador CONFERE no sítio da chamada
+que o argumento é um nome que resolve para um `const` de record. Cobre tabela
+de lookup e configuração fixa. `shared` fica de fora: entregar o endereço
+furaria a promessa da 42.3 (todo acesso sob o mutex), e a forma com lock de
+escopo (`with borrow(x) as r:`) fica registrada para se o caso aparecer.
+
+**72.7 O próximo bloco é cancelamento + `race` + `timeout` (37.2/36.4/18.2).**
+É o último pedaço da fase E: `t.cancel()` faz o próximo `await` DA TASK lançar
+lá dentro, `race` fica com o primeiro e cancela o perdedor, e `timeout` é os
+dois juntos.
+
 # Estado da implementação (atualizado 2026-08-14)
 
 O compilador do pscript vive em `selfhost/ps_*.p`, **junto com o frontend de C**

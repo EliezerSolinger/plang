@@ -1,0 +1,11 @@
+gathered 6 6 overlapped True
+winner 1 loser cancelled True winner cancelled False
+in time False cancelled True
+quick in time True
+asked True
+log: a
+log: b
+log: fast
+log: g:cleanup
+log: q
+log: h:cleanup

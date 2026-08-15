@@ -1,0 +1,8 @@
+worker said 7
+ints 5 0 16
+records 3 2 -2
+worker did 4
+tally 4 label start.... table 4
+filled 4
+caught: this buffer was transferred: it belongs to whoever received it (18.2)
+detached

@@ -121,20 +121,20 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 |---|---|---|---|
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
-| Mensagem POD por memcpy; `str` por cópia de bytes | 34.3 | args e `Stat` | ◐ (POD e `str`; o resto falta) |
+| Mensagem POD por memcpy; o resto SERIALIZADO | 34.3 | `workers_full` | ✅ bytes por memcpy; `str` e `list` de bytes serializam e são reconstruídos no heap de QUEM RECEBE |
 | `send` para worker morto devolve `bool` | 45.3 | — | ✅ |
-| `async`/`await`; task quente; await no topo | 17.4, 35.3, 39.4 | main | ✅ |
+| `async`/`await`; task quente; await no topo | 17.4, 35.3, 39.4 | `cancel_race` | ✅ e o `await sleep()` ESTACIONA: duas tasks se intercalam de verdade (antes o timer parava a thread e uma rodava inteira antes da outra) |
 | `gather` | 35.3 | — | ✅ |
-| `interval` + `await t.tick()`; `sleep`; `timeout` | 48.2, 51.1 | `interval`, `timers` | ◐ `sleep` e `interval` (com tick que COALESCE) prontos; `timeout` precisa de cancelamento (37.2) |
+| `interval` + `await t.tick()`; `sleep`; `timeout` | 48.2, 51.1 | `interval`, `cancel_race` | ✅ os três, sobre a fila de deadlines do escalonador; `timeout` cancela o perdedor |
 | `status(id)` | 37.3 | `timers` | ✅ RUNNING/DONE/ERROR/GONE |
 | Erro de worker vira estado + mensagem | 37.4, 68.8 | `w.error()` no teste de timers | ✅ o pai colhe o `Error` completo; colher silencia o stderr do join |
-| Join implícito de todos os workers | 36.3 | fim do programa | ✅ |
+| Join implícito de todos os workers; `detach` | 36.3 | `workers_full` | ✅ espera todos por padrão; `w.detach()` marca o descartável — nada é morto no meio |
 | Global mutável = privado do worker | 42.2 | RNG por worker | ✅ |
-| `shared` var (lock por variável, composto atômico) | 42.1, 42.3 | `rows_done += 1` | ✅ |
+| `shared` var (lock por variável, composto atômico) | 42.1, 42.3 | `shared`, `workers_full` | ✅ número, `record` e `str` (a escada de cópia da 42.1 inteira) |
 | `shared dict` (ETS) | 42.1 | `shared_dict` | ✅ tabela fora dos heaps, lock próprio, chave/valor na escada de cópia (str inclusive) |
-| Buffer compartilhado | 19.4, 52.3 | o framebuffer | ✅ |
+| Buffer compartilhado | 19.4, 52.3 | o framebuffer, `workers_full` | ✅ e o CABEÇALHO saiu do heap coletado: outra thread segura esse ponteiro, e um coletor que move não pode ser dono dele |
 | Vista tipada do buffer (`view_f64()`) | 18.3 | `views` | ✅ `view_f64/f32/i64/i32/u8` — mesma memória, sem cópia; a vista não cresce |
-| `transfer` / `race` / cancelamento cooperativo | 18.2, 37.2, 36.4 | — | ⏳ o bloco que falta da fase E (é ele que destrava `timeout`) |
+| `transfer` / `race` / cancelamento cooperativo | 18.2, 37.2, 36.4 | `cancel_race`, `workers_full` | ✅ `t.cancel()` LANÇA no próximo passo da task (o `defer` desenrola); `race` fica com o primeiro e cancela o resto; `transfer` entrega os bytes e invalida a referência de quem enviou |
 
 ## O porte do editor (bateria 71)
 

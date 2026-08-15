@@ -44,6 +44,7 @@ def ps_ctx_init(out ctx: PsCtx):
     # `nogc:` state (26). A context that starts with garbage here would look
     # like it were inside a block that nobody opened — the collector would
     # never run, and a budget of noise would raise out of nowhere.
+    ctx.timers = None
     ctx.nogc = 0
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
@@ -227,6 +228,148 @@ def ps_worker_finish(ctx: *PsCtx, blk: *void):
     pthread_cond_broadcast(&b->cv)
     pthread_mutex_unlock(&b->mu)
 
+static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
+static def ps_list_bytes(l: *PsList, out_n: *usize) -> *char
+static def ps_str_msg_task(ctx: *PsCtx, m: *PsMsg) -> *PsTask
+static def ps_list_msg_task(ctx: *PsCtx, m: *PsMsg, esize: i32, eref: bool) -> *PsTask
+
+# ---------- messages that are not pure bytes (34.3) ----------
+# A string travels as its BYTES and is rebuilt where it lands; a list travels as
+# a count followed by its elements. Nothing of one heap ever reaches another.
+def ps_worker_send_str_up(ctx: *PsCtx, s: *PsStr) -> bool:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return False
+    pthread_mutex_lock(&b->mu)
+    ps_msg_push(&b->up_head, &b->up_tail, s->data if s != None else "", usize(s->len) if s != None else usize(0))
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+    return True
+
+def ps_worker_send_str_down(w: *PsWorker, s: *PsStr) -> bool:
+    if w == None or w->blk == None:
+        return False
+    b: *PsWorkerBlk = w->blk
+    if b->done != 0:
+        return False
+    pthread_mutex_lock(&b->mu)
+    ps_msg_push(&b->down_head, &b->down_tail, s->data if s != None else "", usize(s->len) if s != None else usize(0))
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+    return True
+
+# the string is BUILT here, in the receiver's own heap — which is the whole
+# reason the bytes crossed instead of the object
+static def ps_str_msg_task(ctx: *PsCtx, m: *PsMsg) -> *PsTask:
+    v: *PsStr = ps_str_new(ctx, m->data if m != None else "", m->size if m != None else usize(0))
+    if m != None:
+        free(m->data)
+        free(m)
+    t: *PsTask = ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    *(**PsStr)(ps_task_ret(t)) = v
+    return t
+
+def ps_worker_recv_str(ctx: *PsCtx, w: *PsWorker) -> *PsTask:
+    if w == None or w->blk == None:
+        return ps_str_msg_task(ctx, None)
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    while b->up_head == None and b->done == 0:
+        pthread_cond_wait(&b->cv, &b->mu)
+    m: *PsMsg = ps_msg_pop(&b->up_head, &b->up_tail)
+    pthread_mutex_unlock(&b->mu)
+    return ps_str_msg_task(ctx, m)
+
+def ps_parent_recv_str(ctx: *PsCtx) -> *PsTask:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return ps_str_msg_task(ctx, None)
+    pthread_mutex_lock(&b->mu)
+    while b->down_head == None:
+        pthread_cond_wait(&b->cv, &b->mu)
+    m: *PsMsg = ps_msg_pop(&b->down_head, &b->down_tail)
+    pthread_mutex_unlock(&b->mu)
+    return ps_str_msg_task(ctx, m)
+
+# a list of pure bytes: the count and then the elements, one block
+static def ps_list_bytes(l: *PsList, out_n: *usize) -> *char:
+    n: i64 = l->len if l != None else 0
+    es: usize = usize(l->esize) if l != None else usize(1)
+    total: usize = sizeof(i64) + usize(n) * es
+    buf: *char = (*char)(malloc(total))
+    memcpy(buf, &n, sizeof(i64))
+    if n > 0:
+        memcpy(buf + sizeof(i64), ps_list_base(l), usize(n) * es)
+    *out_n = total
+    return buf
+
+def ps_worker_send_list_up(ctx: *PsCtx, l: *PsList) -> bool:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return False
+    n: usize = 0
+    buf: *char = ps_list_bytes(l, &n)
+    pthread_mutex_lock(&b->mu)
+    ps_msg_push(&b->up_head, &b->up_tail, buf, n)
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+    free(buf)
+    return True
+
+def ps_worker_send_list_down(w: *PsWorker, l: *PsList) -> bool:
+    if w == None or w->blk == None:
+        return False
+    b: *PsWorkerBlk = w->blk
+    if b->done != 0:
+        return False
+    n: usize = 0
+    buf: *char = ps_list_bytes(l, &n)
+    pthread_mutex_lock(&b->mu)
+    ps_msg_push(&b->down_head, &b->down_tail, buf, n)
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+    free(buf)
+    return True
+
+static def ps_list_msg_task(ctx: *PsCtx, m: *PsMsg, esize: i32, eref: bool) -> *PsTask:
+    cnt: i64 = 0
+    if m != None and m->size >= sizeof(i64):
+        memcpy(&cnt, m->data, sizeof(i64))
+    v: *PsList = ps_list_new(ctx, esize, eref, cnt)
+    i: i64 = 0
+    while i < cnt:
+        dst: *char = ps_list_push(ctx, v)
+        memcpy(dst, m->data + sizeof(i64) + usize(i) * usize(esize), usize(esize))
+        i += 1
+    if m != None:
+        free(m->data)
+        free(m)
+    t: *PsTask = ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    *(**PsList)(ps_task_ret(t)) = v
+    return t
+
+def ps_worker_recv_list(ctx: *PsCtx, w: *PsWorker, esize: i32, eref: bool) -> *PsTask:
+    if w == None or w->blk == None:
+        return ps_list_msg_task(ctx, None, esize, eref)
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    while b->up_head == None and b->done == 0:
+        pthread_cond_wait(&b->cv, &b->mu)
+    m: *PsMsg = ps_msg_pop(&b->up_head, &b->up_tail)
+    pthread_mutex_unlock(&b->mu)
+    return ps_list_msg_task(ctx, m, esize, eref)
+
+def ps_parent_recv_list(ctx: *PsCtx, esize: i32, eref: bool) -> *PsTask:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return ps_list_msg_task(ctx, None, esize, eref)
+    pthread_mutex_lock(&b->mu)
+    while b->down_head == None:
+        pthread_cond_wait(&b->cv, &b->mu)
+    m: *PsMsg = ps_msg_pop(&b->down_head, &b->down_tail)
+    pthread_mutex_unlock(&b->mu)
+    return ps_list_msg_task(ctx, m, esize, eref)
+
 def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool:
     b: *PsWorkerBlk = ctx->parent
     if b == None:
@@ -269,6 +412,9 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     t->err = None
     t->waiting_on = None
     t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
     t->next = None
     return t
 
@@ -320,7 +466,10 @@ def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
 def ps_join_all(ctx: *PsCtx):
     b: *PsWorkerBlk = ctx->workers
     while b != None:
-        if b->started != 0 and b->joined == 0:
+        # a DETACHED worker is not waited for (36.3): the program ends when its
+        # own work is done, and nothing is killed in the middle — the thread
+        # simply goes with the process
+        if b->started != 0 and b->joined == 0 and b->detached == 0:
             pthread_join(b->thread, None)
             b->joined = 1
         if b->failed != 0 and b->collected == 0 and b->err != None:
@@ -424,7 +573,12 @@ def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList:
 
 # ---------- buffers (19.4/52.3) ----------
 def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer:
-    b: *PsBuffer = (*PsBuffer)(ps_alloc(ctx, sizeof(PsBuffer), PS_TY_BUFFER))
+    # malloc'd, not collected: a worker holds this pointer, and the collector
+    # that owns this context would move the object out from under it
+    b: *PsBuffer = (*PsBuffer)(calloc(1, sizeof(PsBuffer)))
+    b->obj.ty = PS_TY_BUFFER
+    b->obj.size = u32(sizeof(PsBuffer))
+    b->gone_from = None
     b->data = None
     b->nbytes = 0
     b->open = 0
@@ -448,7 +602,12 @@ def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer):
 def ps_buffer_size(b: *PsBuffer) -> i64:
     return i64(b->nbytes) if b != None else 0
 
+static def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool
+
 static def ps_buffer_slot(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> *f64:
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return None
     if b == None or b->open == 0:
         ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
         return None
@@ -630,7 +789,18 @@ static def js_value(j: *PsJson) -> *PsObj:
 # 18.3: the SAME bytes, read as elements of `esize` each. Nothing is copied and
 # nothing is owned — the list header is collected, the bytes are the buffer's,
 # and holding the buffer in `owner` is what keeps them alive.
+def ps_buffer_transfer(ctx: *PsCtx, b: *PsBuffer):
+    if b != None:
+        b->gone_from = (*void)(ctx)
+
+# has THIS context given the buffer away? (18.2)
+static def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool:
+    return b != None and b->gone_from != None and b->gone_from == (*void)(ctx)
+
 def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, line: i32) -> *PsList:
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return None
     if b == None or b->open == 0:
         ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
         return None
@@ -770,6 +940,10 @@ def ps_sys_exit(ctx: *PsCtx, code: i64):
     exit(int(code))
 
 # 0 running, 1 done, 2 error, 3 gone (37.3)
+def ps_worker_detach(w: *PsWorker):
+    if w != None and w->blk != None:
+        ((*PsWorkerBlk)(w->blk))->detached = 1
+
 def ps_worker_status(w: *PsWorker) -> i64:
     if w == None or w->blk == None:
         return 3
@@ -778,12 +952,13 @@ def ps_worker_status(w: *PsWorker) -> i64:
         return 0
     return 2 if b->failed != 0 else 1
 
+# 48.2: `await sleep(s)` PARKS — it does not stop the thread. The task is put
+# on the clock and everything else keeps running; only when nothing at all is
+# ready does the thread sleep, and then exactly until the next deadline. This
+# is what makes two `async def`s actually interleave instead of running one
+# after the other.
 def ps_sleep(ctx: *PsCtx, seconds: f64) -> *PsTask:
-    ts: timespec
-    ts.tv_sec = i64(seconds)
-    ts.tv_nsec = i64((seconds - f64(i64(seconds))) * 1000000000.0)
-    nanosleep(&ts, None)
-    return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    return ps_timer_task(ctx, ps_sys_time() + (seconds if seconds > 0.0 else 0.0))
 
 def ps_sys_time() -> f64:
     ts: timespec
@@ -969,6 +1144,28 @@ def ps_file_close(ctx: *PsCtx, f: *PsFile):
         f->fp = None
 
 # ---------- `shared` (42.1/42.3) ----------
+static def ps_sstr_set(dst: *PsSStr, s: *PsStr)
+
+def ps_shared_str_init(slot: *PsSStr, bytes: const *char, n: i64):
+    if slot->p != None:
+        free(slot->p)
+    slot->p = (*char)(malloc(usize(n) + 1))
+    memcpy(slot->p, bytes, usize(n))
+    slot->p[n] = '\0'
+    slot->n = usize(n)
+
+def ps_shared_str_get(ctx: *PsCtx, mu: *void, slot: *PsSStr) -> *PsStr:
+    ps_lock(mu)
+    # the copy is made INSIDE the lock and lands in this context's own heap
+    r: *PsStr = ps_str_new(ctx, slot->p if slot->p != None else "", slot->n if slot->p != None else usize(0))
+    ps_unlock(mu)
+    return r
+
+def ps_shared_str_put(mu: *void, slot: *PsSStr, v: *PsStr):
+    ps_lock(mu)
+    ps_sstr_set(slot, v)
+    ps_unlock(mu)
+
 def ps_lock_new() -> *void:
     mu: *pthread_mutex_t = (*pthread_mutex_t)(malloc(sizeof(pthread_mutex_t)))
     pthread_mutex_init(mu, None)
@@ -999,16 +1196,13 @@ def ps_interval_new(ctx: *PsCtx, seconds: f64, file: const *char, line: i32) -> 
 # program wanted, and would make a slow loop spin instead of settle.
 def ps_timer_tick(ctx: *PsCtx, t: *PsTimer) -> *PsTask:
     now: f64 = ps_sys_time()
+    at: f64 = t->next
     if now < t->next:
-        ts: timespec
-        wait: f64 = t->next - now
-        ts.tv_sec = i64(wait)
-        ts.tv_nsec = i64((wait - f64(i64(wait))) * 1000000000.0)
-        nanosleep(&ts, None)
         t->next = t->next + t->period
     else:
+        at = now                   # late: ONE tick now, and the clock moves on
         t->next = now + t->period
-    return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    return ps_timer_task(ctx, at)
 
 # ---------- pack / unpack (59) ----------
 # One field at a time, least significant byte first. Reading and writing go
@@ -1267,6 +1461,9 @@ def ps_task_new(ctx: *PsCtx, step: def(ctx: *PsCtx, t: *PsTask) -> bool, frame: 
     t->err = None
     t->waiting_on = None
     t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
     t->next = None
     # the first step runs here and can collect, so the task travels on the
     # shadow stack like everything else
@@ -1285,6 +1482,11 @@ def ps_task_done(t: *PsTask) -> bool:
 def ps_task_step(ctx: *PsCtx, t: *PsTask):
     if ps_task_done(t):
         return
+    # 37.2: a task asked to stop raises HERE, at the step it was going to run
+    # anyway. The generated step checks for a pending exception first thing and
+    # unwinds, so `defer` and `with` do what they do for any other error.
+    if t->cancelled != 0 and ctx->exc == None:
+        ps_raise(ctx, "task cancelled", PS_CAT_VALUE, "<cancel>", 0)
     # The step can collect (its statements poll), and a moving collector would
     # leave THIS function holding the old address. The runtime uses the same
     # shadow stack the generated code uses — it is not exempt.
@@ -1324,6 +1526,171 @@ def ps_gather(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsList:
         i += 1
     return out
 
+static def ps_sched_push(ctx: *PsCtx, t: *PsTask)
+static def ps_sched_pop(ctx: *PsCtx) -> *PsTask
+
+# A task with no step: the CLOCK finishes it (48.2).
+def ps_timer_task(ctx: *PsCtx, at: f64) -> *PsTask:
+    # it carries a frame like any other task, even though its value is nothing:
+    # `await` reads the result through `ps_task_ret`, and a task without a
+    # frame would be a null dereference at the one place nobody expects one
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + sizeof(PsStrPtr), PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_POD_DESC
+    memset(fr + sizeof(PsUser), 0, sizeof(PsStrPtr))
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = 0
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->next = None
+    t->cancelled = 0
+    t->is_timer = 1
+    t->deadline = at
+    t->next = ctx->timers          # order does not matter: the earliest is found
+    ctx->timers = t
+    return t
+
+# The earliest deadline still pending, or a negative number when there is none.
+static def ps_timer_soonest(ctx: *PsCtx) -> f64:
+    best: f64 = -1.0
+    t: *PsTask = ctx->timers
+    while t != None:
+        if t->state == 0 and (best < 0.0 or t->deadline < best):
+            best = t->deadline
+        t = t->next
+    return best
+
+# Finishes every timer whose moment has come, and wakes whoever waited on it.
+static def ps_timers_fire(ctx: *PsCtx, now: f64) -> bool:
+    any: bool = False
+    t: *PsTask = ctx->timers
+    while t != None:
+        n: *PsTask = t->next
+        if t->state == 0 and t->deadline <= now:
+            t->state = -1
+            w: *PsTask = t->waiter
+            t->waiter = None
+            if w != None:
+                w->waiting_on = None
+                ps_sched_push(ctx, w)
+            any = True
+        t = n
+    # the finished ones leave the list, so it stays as short as the program is
+    prev: **PsTask = &ctx->timers
+    cur: *PsTask = ctx->timers
+    while cur != None:
+        nx: *PsTask = cur->next
+        if cur->state != 0:
+            *prev = nx
+            cur->next = None
+        else:
+            prev = &cur->next
+        cur = nx
+    return any
+
+# ONE step of the world: run something that is ready, or — when nothing is —
+# wait for the clock. False means neither was possible, which is a deadlock.
+def ps_sched_progress(ctx: *PsCtx) -> bool:
+    n: *PsTask = ps_sched_pop(ctx)
+    if n != None:
+        ps_task_step(ctx, n)
+        return True
+    if ps_timers_fire(ctx, ps_sys_time()):
+        return True
+    soon: f64 = ps_timer_soonest(ctx)
+    if soon < 0.0:
+        return False
+    wait: f64 = soon - ps_sys_time()
+    if wait > 0.0:
+        ts: timespec
+        ts.tv_sec = i64(wait)
+        ts.tv_nsec = i64((wait - f64(i64(wait))) * 1000000000.0)
+        nanosleep(&ts, None)
+    return ps_timers_fire(ctx, ps_sys_time())
+
+def ps_task_of_int(ctx: *PsCtx, v: i64) -> *PsTask:
+    t: *PsTask = ps_msg_task(ctx, None, sizeof(i64))
+    *(*i64)(ps_task_ret(t)) = v
+    return t
+
+def ps_task_cancel(ctx: *PsCtx, t: *PsTask):
+    if t == None or ps_task_done(t):
+        return
+    t->cancelled = 1
+    # it has to be REACHABLE by the scheduler to notice: a task parked on
+    # another one is woken so its own next step can raise
+    if t->waiting_on != None:
+        t->waiting_on = None
+        ps_sched_push(ctx, t)
+
+def ps_task_cancelled(t: *PsTask) -> bool:
+    return t != None and t->cancelled != 0
+
+# The first to finish wins; every other one is cancelled, and cancelling is
+# what keeps `race` from leaving orphans behind (37.2).
+def ps_race(ctx: *PsCtx, ts: *PsList) -> i64:
+    if ts == None or ts->len == 0:
+        ps_raise(ctx, "race() needs at least one task", PS_CAT_VALUE, "<race>", 0)
+        return -1
+    win: i64 = -1
+    while win < 0:
+        i: i64 = 0
+        while i < ts->len:
+            base: **PsTask = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
+            if ps_task_done(*base):
+                win = i
+                i = ts->len
+            else:
+                i += 1
+        if win >= 0:
+            break
+        if not ps_sched_progress(ctx):
+            ps_raise(ctx, "deadlock: racing tasks that nothing can finish", PS_CAT_VALUE, "<race>", 0)
+            return -1
+        if ctx->exc != None:
+            return -1
+    i2: i64 = 0
+    while i2 < ts->len:
+        if i2 != win:
+            lose: **PsTask = (**PsTask)(ps_list_base(ts) + usize(i2) * usize(ts->esize))
+            ps_task_cancel(ctx, *lose)
+        i2 += 1
+    wb: **PsTask = (**PsTask)(ps_list_base(ts) + usize(win) * usize(ts->esize))
+    if (*wb)->err != None and ctx->exc == None:
+        ctx->exc = (*wb)->err        # 19.3: the winner's error is the race's
+    return win
+
+# The clock is the other racer (48.2). Without the loop of 18.4 there is no
+# descriptor to wait on, so the deadline is checked between steps — which is
+# exactly where a cooperative task can be stopped anyway.
+def ps_timeout(ctx: *PsCtx, t: *PsTask, seconds: f64) -> bool:
+    deadline: f64 = ps_sys_time() + seconds
+    # its own deadline joins the clock, so the scheduler never sleeps PAST it
+    ps_timer_task(ctx, deadline)
+    slots: **PsObj[1]
+    slots[0] = (**PsObj)(&t)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 1)
+    while not ps_task_done(t):
+        if ps_sys_time() >= deadline:
+            ps_pop_frame(ctx, &f)
+            ps_task_cancel(ctx, t)
+            return False
+        if not ps_sched_progress(ctx):
+            ps_pop_frame(ctx, &f)
+            ps_task_cancel(ctx, t)
+            return False           # nothing left to run: the clock wins
+        if ctx->exc != None:
+            ps_pop_frame(ctx, &f)
+            return True
+    ps_pop_frame(ctx, &f)
+    if t->err != None and ctx->exc == None:
+        ctx->exc = t->err
+    return True
+
 def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
     out: *PsList = ps_gather(ctx, ts, esize, eref)
     fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + sizeof(PsStrPtr), PS_TY_USER))
@@ -1338,6 +1705,9 @@ def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
     t->err = None
     t->waiting_on = None
     t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
     t->next = None
     return t
 
@@ -1370,12 +1740,10 @@ def ps_task_wait(ctx: *PsCtx, t: *PsTask):
     f: PsFrame
     ps_push_frame(ctx, &f, slots, 2)
     while not ps_task_done(t):
-        n = ps_sched_pop(ctx)
-        if n == None:
+        if not ps_sched_progress(ctx):
             ps_raise(ctx, "deadlock: awaiting a task that nothing can finish", PS_CAT_VALUE, "<runtime>", 0)
             ps_pop_frame(ctx, &f)
             return
-        ps_task_step(ctx, n)
         n = None
         if ctx->exc != None:
             ps_pop_frame(ctx, &f)
@@ -1506,7 +1874,7 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
         case PS_TY_ANY:
             pass          # a boxed number holds no reference
         case PS_TY_BUFFER:
-            pass          # the bytes are malloc'd, and shared on purpose
+            pass          # not even reachable here: the header is malloc'd too
         case PS_TY_TIMER:
             pass          # two numbers and nothing to follow
         case PS_TY_CLOSURE:
@@ -1920,6 +2288,42 @@ def ps_str_from_bool(ctx: *PsCtx, v: bool) -> *PsStr:
 
 # negative, zero or positive — C's convention, which is what the neighbourhood
 # already speaks (and what `sorted` compares with)
+def ps_str_nbytes(s: *PsStr) -> i64:
+    return i64(s->len) if s != None else 0
+
+def ps_str_step(ctx: *PsCtx, s: *PsStr, off: *i64) -> *PsStr:
+    if s == None or *off >= i64(s->len):
+        return ps_str_new(ctx, "", 0)
+    a: usize = usize(*off)
+    n: usize = 1
+    c: u8 = u8(s->data[a])
+    if (c & 0xF8) == 0xF0:
+        n = 4
+    elif (c & 0xF0) == 0xE0:
+        n = 3
+    elif (c & 0xE0) == 0xC0:
+        n = 2
+    if a + n > usize(s->len):
+        n = usize(s->len) - a          # truncated tail: hand back what is there
+    *off = i64(a + n)
+    return ps_str_new(ctx, s->data + a, n)
+
+def ps_str_has(hay: *PsStr, needle: *PsStr) -> bool:
+    if hay == None or needle == None:
+        return False
+    n: usize = usize(needle->len)
+    if n == usize(0):
+        return True
+    if n > usize(hay->len):
+        return False
+    limit: usize = usize(hay->len) - n
+    i: usize = 0
+    while i <= limit:
+        if memcmp(hay->data + i, needle->data, n) == 0:
+            return True
+        i += 1
+    return False
+
 def ps_str_lt(a: *PsStr, b: *PsStr) -> i32:
     if a == None or b == None:
         return 0

@@ -72,22 +72,6 @@ struct UndoGroup:
 
 # ---------- helpers ----------
 
-# Python spells this `needle in hay`, and pscript's `in` is membership in a
-# dict or a set (8.1) — substring is not part of it yet. Written out here so
-# the port does not quietly invent a language rule; noted as a finding.
-def contains(hay: str, needle: str) -> bool:
-    n = len(needle)
-    if n == 0:
-        return True
-    limit = len(hay) - n
-    i = 0
-    while i <= limit:
-        if hay[i:i + n] == needle:
-            return True
-        i += 1
-    return False
-
-
 def is_word_ch(c: str) -> bool:
     return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_"
 
@@ -97,8 +81,8 @@ def text_end(l: int, c: int, text: str) -> Span:
     el = l
     seg = 0
     nl = False
-    for i in range(len(text)):
-        if text[i] == "\n":
+    for ch in text:
+        if ch == "\n":
             el += 1
             seg = 0
             nl = True
@@ -133,24 +117,21 @@ struct Buffer:
 
     def load(self, data: str):
         """Replaces the content. CRLF is detected and remembered for saving."""
-        self.crlf = contains(data, "\r\n")
+        self.crlf = "\r\n" in data
         body = data
         if self.crlf:
             body = ""
-            # `for ch in s` over a str is not compiled yet (the `for` of 40.3
-            # takes a range, a list, a dict, a set or an Iterable), so the walk
-            # is by index — noted as a finding of the port
-            for i in range(len(data)):
-                if data[i] != "\r":
-                    body += data[i]
+            for ch in data:
+                if ch != "\r":
+                    body += ch
         self.lines = []
         cur = ""
-        for i in range(len(body)):
-            if body[i] == "\n":
+        for ch in body:
+            if ch == "\n":
                 self.lines.append(BufLine(cur, False, False, 0))
                 cur = ""
             else:
-                cur += body[i]
+                cur += ch
         self.lines.append(BufLine(cur, False, False, 0))
         self.carets = [Caret(0, 0, 0, 0, -1)]
         self.undo = []
@@ -258,17 +239,17 @@ struct Buffer:
         cur = self.lines[line]
         head = cur.text[0:col]
         tail = cur.text[col:]
-        if not contains(text, "\n"):
+        if not ("\n" in text):
             cur.text = head + text + tail
             return end
         parts: list<str> = []
         acc = ""
-        for i in range(len(text)):
-            if text[i] == "\n":
+        for ch in text:
+            if ch == "\n":
                 parts.append(acc)
                 acc = ""
             else:
-                acc += text[i]
+                acc += ch
         parts.append(acc)
         cur.text = head + parts[0]
         at = line
@@ -364,7 +345,7 @@ struct Buffer:
 
     def insert(self, text: str, now_ms: int):
         """Inserts at every caret. A newline or a space breaks the group."""
-        coalesce = not contains(text, "\n") and text != " "
+        coalesce = not ("\n" in text) and text != " "
         self.group_begin(coalesce, now_ms)
         k = len(self.carets) - 1
         while k >= 0:
