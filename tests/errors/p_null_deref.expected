@@ -1,0 +1,1 @@
+'p' is None here: this dereference will crash

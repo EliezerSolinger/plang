@@ -1,0 +1,3 @@
+ticks 3 at least 3 periods True
+coalesced True
+caught: an interval needs a positive period

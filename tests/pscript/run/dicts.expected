@@ -1,0 +1,10 @@
+len 3  ana 34  cleo 45
+in: True False
+get -1 21
+updated ana 35 (len still 3)
+removed True again False  len 2
+sum of ages 80
+squares 200  49 39601
+set len 3  has-a True  has-z False
+names 50  [0] name-2950  [49] name-2999
+caught: key not found

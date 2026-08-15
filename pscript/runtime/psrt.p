@@ -1,0 +1,2382 @@
+# psrt.p — bodies of the pscript runtime. See psrt.ph for what v0 covers.
+import "psrt.ph"
+
+const PS_BLOCK_BYTES = 1 << 20      # 1 MiB per block
+const PS_GC_BYTES = 1 << 21         # collect after 2 MiB since the last one (14.2)
+const PS_GC_OBJECTS = 200000        # ... or after this many objects (14.2)
+
+static def ps_new_block(min: usize) -> *PsBlock:
+    cap: usize = usize(PS_BLOCK_BYTES) if min < usize(PS_BLOCK_BYTES) else min
+    b: *PsBlock = malloc(sizeof(PsBlock))
+    if b == None:
+        fprintf(stderr, "pscript: out of memory\n")
+        exit(1)
+    b->base = malloc(cap)
+    if b->base == None:
+        fprintf(stderr, "pscript: out of memory\n")
+        exit(1)
+    b->next = None
+    b->used = 0
+    b->cap = cap
+    return b
+
+static def ps_free_blocks(b: *PsBlock):
+    while b != None:
+        n: *PsBlock = b->next
+        free(b->base)
+        free(b)
+        b = n
+
+def ps_ctx_init(out ctx: PsCtx):
+    ctx.blocks = ps_new_block(0)
+    ctx.frames = None
+    ctx.roots = None
+    ctx.exc = None
+    ctx.live = 0
+    ctx.alloced = 0
+    ctx.nalloc = 0
+    ctx.ngc = 0
+    ctx.ready = None
+    ctx.ready_tail = None
+    ctx.globals = None
+    ctx.parent = None
+    ctx.workers = None
+    # `nogc:` state (26). A context that starts with garbage here would look
+    # like it were inside a block that nobody opened — the collector would
+    # never run, and a budget of noise would raise out of nowhere.
+    ctx.nogc = 0
+    ctx.nogc_budget = usize(0)
+    ctx.nogc_start = usize(0)
+
+def ps_ctx_done(ctx: *PsCtx) -> int:
+    ps_join_all(ctx)
+    # An exception that reaches the top of the program is reported and becomes
+    # the exit status — the same shape CPython gives an uncaught error.
+    rc: int = 0
+    if ctx->exc != None:
+        e: *PsErr = ctx->exc
+        # whatever the program printed comes first: with stdout block-buffered
+        # (a pipe, a file) the error would otherwise overtake it
+        fflush(stdout)
+        fprintf(stderr, "%s:%d: error: %s\n", e->file if e->file != None else "?", e->line, e->msg->data if e->msg != None else "")
+        rc = 1
+    ps_free_blocks(ctx->blocks)
+    ctx->blocks = None
+    r: *PsRoot = ctx->roots
+    while r != None:
+        nx: *PsRoot = r->next
+        free(r)
+        r = nx
+    ctx->roots = None
+    return rc
+
+# Allocation NEVER collects. When the block is full it chains on another one,
+# and ps_gc_poll does the collecting at a point where no C temporary is live.
+# That single rule is what makes a MOVING collector safe under a lowering that
+# builds expressions out of nested calls.
+def ps_alloc(ctx: *PsCtx, size: usize, ty: i32) -> *void:
+    n: usize = (size + 15) & ~usize(15)   # every object 16-aligned
+    b: *PsBlock = ctx->blocks
+    if b == None or b->used + n > b->cap:
+        nb: *PsBlock = ps_new_block(n)
+        nb->next = ctx->blocks
+        ctx->blocks = nb
+        b = nb
+    p: *char = b->base + b->used
+    b->used += n
+    ctx->alloced += n
+    ctx->nalloc += 1
+    o: *PsObj = (*PsObj)(p)
+    o->ty = ty
+    o->size = u32(n)
+    o->fwd = None
+    return p
+
+# a `struct` (20.1). Zeroed on purpose: a field that is a reference has to start
+# as None, or the collector would follow whatever was in the block.
+def ps_new(ctx: *PsCtx, d: const *PsDesc, size: usize) -> *void:
+    # the SIZE comes from the call site, not from the descriptor: it is
+    # `sizeof(S)`, and a static initializer holding that is one thing the QBE
+    # back end cannot fold. In an expression it costs nothing.
+    p: *char = (*char)(ps_alloc(ctx, size, PS_TY_USER))
+    memset(p + sizeof(PsObj), 0, size - sizeof(PsObj))
+    u: *PsUser = (*PsUser)(p)
+    u->desc = d
+    return p
+
+# every message frame has the same layout question — bytes, nothing inside to
+# follow — so one descriptor serves them all
+static const PS_POD_DESC: const PsDesc = {"message", None}
+
+# the frame a gathered result lives in holds ONE reference — the list — so it
+# needs a trace of its own
+static def ps_gather_trace(o: *void, to: *PsBlock):
+    p: **PsObj = (**PsObj)((*char)(o) + sizeof(PsUser))
+    *p = ps_forward(to, *p)
+
+static const PS_GATHER_DESC: const PsDesc = {"gather", ps_gather_trace}
+
+# `strdup` is POSIX, not C: under `-std=c11` glibc hides it, and a call with no
+# prototype comes back as an `int` — which on a 64-bit machine is a pointer with
+# its top half gone. Two lines of our own cost nothing and depend on nothing.
+static def ps_dup(s: const *char) -> *char:
+    n: usize = strlen(s)
+    p: *char = (*char)(malloc(n + 1))
+    memcpy(p, s, n + 1)
+    return p
+
+# ---------- workers (35.1/36.1) ----------
+static def ps_msg_push(head: **PsMsg, tail: **PsMsg, p: const *void, size: usize):
+    m: *PsMsg = (*PsMsg)(malloc(sizeof(PsMsg)))
+    m->next = None
+    m->size = size
+    m->data = (*char)(malloc(size if size > 0 else 1))
+    if size > 0:
+        memcpy(m->data, p, size)
+    if *tail == None:
+        *head = m
+        *tail = m
+    else:
+        (*tail)->next = m
+        *tail = m
+
+static def ps_msg_pop(head: **PsMsg, tail: **PsMsg) -> *PsMsg:
+    m: *PsMsg = *head
+    if m == None:
+        return None
+    *head = m->next
+    if *head == None:
+        *tail = None
+    m->next = None
+    return m
+
+def ps_worker_new(ctx: *PsCtx, entry: def(p: *void) -> *void, args: *void, nargs: usize) -> *PsWorker:
+    blk: *PsWorkerBlk = (*PsWorkerBlk)(malloc(sizeof(PsWorkerBlk)))
+    memset(blk, 0, sizeof(PsWorkerBlk))
+    pthread_mutex_init(&blk->mu, None)
+    pthread_cond_init(&blk->cv, None)
+    blk->nargs = nargs
+    blk->args = malloc(nargs if nargs > 0 else 1)
+    if nargs > 0:
+        memcpy(blk->args, args, nargs)
+    # the block joins the spawner's list BEFORE the thread starts, so a worker
+    # that finishes instantly is still joined (36.3)
+    blk->next = ctx->workers
+    ctx->workers = blk
+    w: *PsWorker = (*PsWorker)(ps_alloc(ctx, sizeof(PsWorker), PS_TY_WORKER))
+    w->blk = blk
+    if pthread_create(&blk->thread, None, entry, (*void)(blk)) != 0:
+        blk->done = 1
+        blk->failed = 1
+        blk->err = ps_dup("could not start the worker thread")
+        return w
+    blk->started = 1
+    return w
+
+def ps_str_export(s: *PsStr) -> *char:
+    n: usize = usize(s->len) if s != None else 0
+    p: *char = (*char)(malloc(n + 1))
+    if s != None and n > 0:
+        memcpy(p, s->data, n)
+    p[n] = '\0'
+    return p
+
+def ps_str_import(ctx: *PsCtx, p: *char) -> *PsStr:
+    out: *PsStr = ps_str_new(ctx, p, strlen(p))
+    free(p)
+    return out
+
+def ps_list_export(l: *PsList) -> *void:
+    n: i64 = l->len if l != None else 0
+    es: i32 = l->esize if l != None else 1
+    total: usize = sizeof(i64) + sizeof(i32) + usize(n) * usize(es)
+    p: *char = (*char)(malloc(total))
+    *(*i64)(p) = n
+    *(*i32)(p + sizeof(i64)) = es
+    if n > 0:
+        memcpy(p + sizeof(i64) + sizeof(i32), (*char)(l->data) + sizeof(PsArr), usize(n) * usize(es))
+    return (*void)(p)
+
+def ps_list_import(ctx: *PsCtx, p: *void) -> *PsList:
+    b: *char = (*char)(p)
+    n: i64 = *(*i64)(b)
+    es: i32 = *(*i32)(b + sizeof(i64))
+    l: *PsList = ps_list_new(ctx, es, False, n)
+    src: *char = b + sizeof(i64) + sizeof(i32)
+    for i in range(i32(n)):
+        dst: *char = ps_list_push(ctx, l)
+        memcpy(dst, src + usize(i) * usize(es), usize(es))
+    free(p)
+    return l
+
+def ps_worker_args(blk: *void) -> *void:
+    return ((*PsWorkerBlk)(blk))->args
+
+def ps_worker_finish(ctx: *PsCtx, blk: *void):
+    b: *PsWorkerBlk = (*PsWorkerBlk)(blk)
+    pthread_mutex_lock(&b->mu)
+    if ctx->exc != None:
+        # 37.4: a worker that dies with an uncaught error becomes STATE plus a
+        # message for the parent; the program keeps going and whoever spawned it
+        # decides what that means
+        b->failed = 1
+        b->err = ps_dup(ctx->exc->msg->data if ctx->exc->msg != None else "?")
+        b->err_cat = ctx->exc->cat
+        ctx->exc = None
+    b->done = 1
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+
+def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return False
+    pthread_mutex_lock(&b->mu)
+    ps_msg_push(&b->up_head, &b->up_tail, p, size)
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+    return True
+
+def ps_worker_send_down(w: *PsWorker, p: const *void, size: usize) -> bool:
+    if w == None or w->blk == None:
+        return False
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    if b->done != 0:
+        pthread_mutex_unlock(&b->mu)
+        return False        # 45.3: sending to a worker that is gone is `False`
+    ps_msg_push(&b->down_head, &b->down_tail, p, size)
+    pthread_cond_broadcast(&b->cv)
+    pthread_mutex_unlock(&b->mu)
+    return True
+
+# a finished task carrying `size` bytes of message: the shape `await` wants,
+# with the blocking done here. When the I/O loop of 18.4 exists, this is where
+# the task starts PARKED instead.
+static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_POD_DESC
+    memset(fr + sizeof(PsUser), 0, size)
+    if m != None:
+        memcpy(fr + sizeof(PsUser), m->data, m->size if m->size < size else size)
+        free(m->data)
+        free(m)
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = -1
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->next = None
+    return t
+
+def ps_worker_recv(ctx: *PsCtx, w: *PsWorker, size: usize) -> *PsTask:
+    if w == None or w->blk == None:
+        return ps_msg_task(ctx, None, size)
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    while b->up_head == None and b->done == 0:
+        pthread_cond_wait(&b->cv, &b->mu)
+    m: *PsMsg = ps_msg_pop(&b->up_head, &b->up_tail)
+    pthread_mutex_unlock(&b->mu)
+    return ps_msg_task(ctx, m, size)
+
+def ps_parent_recv(ctx: *PsCtx, size: usize) -> *PsTask:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return ps_msg_task(ctx, None, size)
+    pthread_mutex_lock(&b->mu)
+    while b->down_head == None:
+        pthread_cond_wait(&b->cv, &b->mu)
+    m: *PsMsg = ps_msg_pop(&b->down_head, &b->down_tail)
+    pthread_mutex_unlock(&b->mu)
+    return ps_msg_task(ctx, m, size)
+
+def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
+    if w == None or w->blk == None:
+        return None
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    if b->done == 0 or b->failed == 0:
+        pthread_mutex_unlock(&b->mu)
+        return None
+    b->collected = 1
+    msg: *char = ps_dup(b->err if b->err != None else "?")
+    cat: i32 = b->err_cat
+    pthread_mutex_unlock(&b->mu)
+    e: *PsErr = (*PsErr)(ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR))
+    e->msg = ps_str_new(ctx, msg, strlen(msg))
+    e->cat = cat
+    e->file = None
+    e->line = 0
+    free(msg)
+    return e
+
+# 36.3: join by default — nothing is ever killed from outside, so the program
+# ends when every worker has ended. A failure nobody COLLECTED is reported here:
+# silence would hide it, and whoever did collect it already decided (37.4).
+def ps_join_all(ctx: *PsCtx):
+    b: *PsWorkerBlk = ctx->workers
+    while b != None:
+        if b->started != 0 and b->joined == 0:
+            pthread_join(b->thread, None)
+            b->joined = 1
+        if b->failed != 0 and b->collected == 0 and b->err != None:
+            fprintf(stderr, "worker error: %s\n", b->err)
+        b = b->next
+
+# `xs[a:b]` — a COPY (17.3). Python's clamping, not an error: a slice past the
+# end trims, which is what makes `xs[1:]` on an empty list an empty list instead
+# of a stopped program.
+def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsList:
+    n: i64 = l->len
+    i: i64 = a if has_a else 0
+    j: i64 = b if has_b else n
+    if i < 0:
+        i += n
+    if j < 0:
+        j += n
+    if i < 0:
+        i = 0
+    if j > n:
+        j = n
+    out: *PsList = ps_list_new(ctx, l->esize, l->eref, j - i if j > i else 0)
+    k: i64 = i
+    while k < j:
+        src: *char = (*char)(l->data) + sizeof(PsArr) + usize(k) * usize(l->esize)
+        dst: *char = ps_list_push(ctx, out)
+        memcpy(dst, src, usize(l->esize))
+        k += 1
+    return out
+
+def ps_list_insert(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> *char:
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k > l->len:
+        ps_raise(ctx, "insert position out of range", PS_CAT_INDEX, file, line)
+        return ps_list_push(ctx, l)
+    ps_list_push(ctx, l)          # grows by one; the slot moves below
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    es: usize = usize(l->esize)
+    m: i64 = l->len - 1
+    while m > k:
+        memcpy(base + usize(m) * es, base + usize(m - 1) * es, es)
+        m -= 1
+    return base + usize(k) * es
+
+def ps_list_remove_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32):
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k >= l->len:
+        ps_raise(ctx, "list index out of range", PS_CAT_INDEX, file, line)
+        return
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    es: usize = usize(l->esize)
+    m: i64 = k
+    while m + 1 < l->len:
+        memcpy(base + usize(m) * es, base + usize(m + 1) * es, es)
+        m += 1
+    l->len -= 1
+
+def ps_list_reverse(l: *PsList):
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    es: usize = usize(l->esize)
+    tmp: char[64]
+    i: i64 = 0
+    j: i64 = l->len - 1
+    while i < j and es <= 64:
+        memcpy(tmp, base + usize(i) * es, es)
+        memcpy(base + usize(i) * es, base + usize(j) * es, es)
+        memcpy(base + usize(j) * es, tmp, es)
+        i += 1
+        j -= 1
+
+# `sorted(xs)` (28.4): a COPY, in natural order. Sorting IN PLACE would be the
+# other half of the pair and is not what the name says — Python has both, and
+# this is the one whose meaning is unambiguous.
+static def ps_cmp_int(a: const *void, b: const *void) -> int:
+    x: i64 = *(*i64)(a)
+    y: i64 = *(*i64)(b)
+    return -1 if x < y else (1 if x > y else 0)
+
+static def ps_cmp_float(a: const *void, b: const *void) -> int:
+    x: f64 = *(*f64)(a)
+    y: f64 = *(*f64)(b)
+    return -1 if x < y else (1 if x > y else 0)
+
+static def ps_cmp_str(a: const *void, b: const *void) -> int:
+    x: *PsStr = *(**PsStr)(a)
+    y: *PsStr = *(**PsStr)(b)
+    return strcmp(x->data, y->data)
+
+def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList:
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, False, False)
+    if out->len < 2:
+        return out
+    base: *void = (*void)((*char)(out->data) + sizeof(PsArr))
+    if kind == 0:
+        qsort(base, usize(out->len), usize(out->esize), ps_cmp_int)
+    elif kind == 1:
+        qsort(base, usize(out->len), usize(out->esize), ps_cmp_float)
+    else:
+        qsort(base, usize(out->len), usize(out->esize), ps_cmp_str)
+    return out
+
+# ---------- buffers (19.4/52.3) ----------
+def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer:
+    b: *PsBuffer = (*PsBuffer)(ps_alloc(ctx, sizeof(PsBuffer), PS_TY_BUFFER))
+    b->data = None
+    b->nbytes = 0
+    b->open = 0
+    if nbytes < 0:
+        ps_raise(ctx, "a buffer cannot have a negative size", PS_CAT_VALUE, file, line)
+        return b
+    b->data = (*char)(calloc(usize(nbytes) if nbytes > 0 else 1, 1))
+    if b->data == None:
+        ps_raise(ctx, "out of memory for the buffer", PS_CAT_VALUE, file, line)
+        return b
+    b->nbytes = usize(nbytes)
+    b->open = 1
+    return b
+
+def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer):
+    if b != None and b->open != 0:
+        free(b->data)
+        b->data = None
+        b->open = 0
+
+def ps_buffer_size(b: *PsBuffer) -> i64:
+    return i64(b->nbytes) if b != None else 0
+
+static def ps_buffer_slot(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> *f64:
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return None
+    n: i64 = i64(b->nbytes / 8)
+    k: i64 = i + n if i < 0 else i
+    if k < 0 or k >= n:
+        ps_raise(ctx, "buffer index out of range", PS_CAT_INDEX, file, line)
+        return None
+    return (*f64)(b->data + usize(k) * 8)
+
+def ps_buffer_get_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> f64:
+    p: *f64 = ps_buffer_slot(ctx, b, i, file, line)
+    return *p if p != None else 0.0
+
+def ps_buffer_set_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, v: f64, file: const *char, line: i32):
+    p: *f64 = ps_buffer_slot(ctx, b, i, file, line)
+    if p != None:
+        *p = v
+
+# ---------- `json` (41.1) ----------
+# Recursive descent over the text, straight into the values the language already
+# has. Numbers all become float — JSON has one number type and pretending
+# otherwise would be inventing a rule the format does not have.
+struct PsJson:
+    ctx: *PsCtx
+    s: const *char
+    n: usize
+    i: usize
+    bad: i32
+    file: const *char
+    line: i32
+
+static def js_fail(j: *PsJson, what: const *char):
+    if j->bad != 0:
+        return
+    j->bad = 1
+    msg: char[160]
+    snprintf(msg, 160, "invalid JSON: %s at byte %d", what, int(j->i))
+    ps_raise(j->ctx, msg, PS_CAT_VALUE, j->file, j->line)
+
+static def js_space(j: *PsJson):
+    while j->i < j->n and (j->s[j->i] == ' ' or j->s[j->i] == '\t' or j->s[j->i] == '\n' or j->s[j->i] == '\r'):
+        j->i += 1
+
+static def js_value(j: *PsJson) -> *PsObj
+
+static def js_string(j: *PsJson) -> *PsStr:
+    j->i += 1                     # the opening quote
+    buf: *char = (*char)(malloc(j->n - j->i + 1))
+    k: usize = 0
+    while j->i < j->n and j->s[j->i] != '"':
+        c: char = j->s[j->i]
+        if c == '\\' and j->i + 1 < j->n:
+            j->i += 1
+            e: char = j->s[j->i]
+            if e == 'n':
+                c = '\n'
+            elif e == 't':
+                c = '\t'
+            elif e == 'r':
+                c = '\r'
+            else:
+                c = e             # \" \\ \/ and anything else, as itself
+        buf[k] = c
+        k += 1
+        j->i += 1
+    if j->i >= j->n:
+        js_fail(j, "a string that never ends")
+        free(buf)
+        return ps_str_new(j->ctx, "", 0)
+    j->i += 1                     # the closing quote
+    out: *PsStr = ps_str_new(j->ctx, buf, k)
+    free(buf)
+    return out
+
+static def js_array(j: *PsJson) -> *PsObj:
+    j->i += 1
+    l: *PsList = ps_list_new(j->ctx, i32(sizeof(PsStrPtr)), True, 0)
+    js_space(j)
+    if j->i < j->n and j->s[j->i] == ']':
+        j->i += 1
+        return (*PsObj)(l)
+    while j->i < j->n and j->bad == 0:
+        v: *PsObj = js_value(j)
+        slot: *char = ps_list_push(j->ctx, l)
+        p: **PsObj = (**PsObj)(slot)
+        *p = v
+        js_space(j)
+        if j->i < j->n and j->s[j->i] == ',':
+            j->i += 1
+            js_space(j)
+            continue
+        if j->i < j->n and j->s[j->i] == ']':
+            j->i += 1
+            return (*PsObj)(l)
+        js_fail(j, "a ',' or a ']' was expected")
+        return (*PsObj)(l)
+    return (*PsObj)(l)
+
+static def js_object(j: *PsJson) -> *PsObj:
+    j->i += 1
+    d: *PsDict = ps_dict_new(j->ctx, i32(sizeof(PsStrPtr)), i32(sizeof(PsStrPtr)), PS_K_STR, True, True)
+    js_space(j)
+    if j->i < j->n and j->s[j->i] == '}':
+        j->i += 1
+        return (*PsObj)(d)
+    while j->i < j->n and j->bad == 0:
+        js_space(j)
+        if j->i >= j->n or j->s[j->i] != '"':
+            js_fail(j, "a key has to be a string")
+            return (*PsObj)(d)
+        k: *PsStr = js_string(j)
+        js_space(j)
+        if j->i >= j->n or j->s[j->i] != ':':
+            js_fail(j, "a ':' was expected")
+            return (*PsObj)(d)
+        j->i += 1
+        js_space(j)
+        v: *PsObj = js_value(j)
+        slot: *char = ps_dict_put(j->ctx, d, (*char)(&k))
+        vp: **PsObj = (**PsObj)(slot)
+        *vp = v
+        js_space(j)
+        if j->i < j->n and j->s[j->i] == ',':
+            j->i += 1
+            continue
+        if j->i < j->n and j->s[j->i] == '}':
+            j->i += 1
+            return (*PsObj)(d)
+        js_fail(j, "a ',' or a '}' was expected")
+        return (*PsObj)(d)
+    return (*PsObj)(d)
+
+static def js_value(j: *PsJson) -> *PsObj:
+    js_space(j)
+    if j->i >= j->n:
+        js_fail(j, "the text ended")
+        return ps_any_none(j->ctx)
+    c: char = j->s[j->i]
+    if c == '{':
+        return js_object(j)
+    if c == '[':
+        return js_array(j)
+    if c == '"':
+        return (*PsObj)(js_string(j))
+    if strncmp(j->s + j->i, "true", 4) == 0:
+        j->i += 4
+        return ps_any_bool(j->ctx, True)
+    if strncmp(j->s + j->i, "false", 5) == 0:
+        j->i += 5
+        return ps_any_bool(j->ctx, False)
+    if strncmp(j->s + j->i, "null", 4) == 0:
+        j->i += 4
+        return ps_any_none(j->ctx)
+    if c == '-' or (c >= '0' and c <= '9'):
+        end: *char = None
+        v: f64 = strtod(j->s + j->i, &end)
+        if end == j->s + j->i:
+            js_fail(j, "a number that is not one")
+            return ps_any_none(j->ctx)
+        start: usize = j->i
+        j->i = usize(end - j->s)
+        # Python's rule (68.6): an INTEGRAL literal is an int, anything with a
+        # point or an exponent is a float. The honest cost, taken with eyes
+        # open: the type now depends on the SPELLING in the text — a producer
+        # that writes 16.0 one day and 16 the next changes what `as` accepts.
+        integral: bool = True
+        k: usize = start
+        while k < j->i:
+            if j->s[k] == '.' or j->s[k] == 'e' or j->s[k] == 'E':
+                integral = False
+            k += 1
+        if integral:
+            return ps_any_int(j->ctx, strtoll(j->s + start, None, 10))
+        return ps_any_float(j->ctx, v)
+    js_fail(j, "a value was expected")
+    return ps_any_none(j->ctx)
+
+# 18.3: the SAME bytes, read as elements of `esize` each. Nothing is copied and
+# nothing is owned — the list header is collected, the bytes are the buffer's,
+# and holding the buffer in `owner` is what keeps them alive.
+def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, line: i32) -> *PsList:
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return None
+    if b->nbytes % usize(esize) != usize(0):
+        ps_raise(ctx, "the buffer does not divide into elements of this size", PS_CAT_VALUE, file, line)
+        return None
+    l: *PsList = ps_alloc(ctx, sizeof(PsList), PS_TY_LIST)
+    l->len = i64(b->nbytes / usize(esize))
+    l->cap = l->len
+    l->esize = esize
+    l->eref = False
+    l->data = None
+    l->raw = b->data
+    l->owner = b
+    return l
+
+def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *PsObj:
+    j: PsJson
+    j.ctx = ctx
+    j.s = text->data
+    j.n = usize(text->len)
+    j.i = 0
+    j.bad = 0
+    j.file = file
+    j.line = line
+    v: *PsObj = js_value(&j)
+    js_space(&j)
+    if j.bad == 0 and j.i < j.n:
+        js_fail(&j, "there is text after the value")
+    return v
+
+# ---------- `re` (41.2) ----------
+PS_RE_MAX_GROUPS: const i32 = 16
+
+def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    rx: regex_t
+    rc: int = regcomp(&rx, pattern->data, REG_EXTENDED)
+    if rc != 0:
+        buf: char[256]
+        regerror(rc, &rx, buf, 256)
+        ps_raise(ctx, buf, PS_CAT_VALUE, file, line)
+        return None
+    m: regmatch_t[16]
+    got: int = regexec(&rx, text->data, usize(PS_RE_MAX_GROUPS), m, 0)
+    if got != 0:
+        regfree(&rx)
+        return None          # no match: the option is empty (9.4/40.1)
+    n: i32 = 0
+    while n < PS_RE_MAX_GROUPS and m[n].rm_so >= 0:
+        n += 1
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, i64(n))
+    for i in range(n):
+        st: *char = text->data + m[i].rm_so
+        ln: usize = usize(m[i].rm_eo - m[i].rm_so)
+        slot: *char = ps_list_push(ctx, out)
+        sp: **PsStr = (**PsStr)(slot)
+        *sp = ps_str_new(ctx, st, ln)
+    regfree(&rx)
+    return out
+
+def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> f64, env: *void) -> *PsList:
+    n: i64 = l->len
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, False, False)
+    if n < 2:
+        return out
+    # the key of each element, computed once (28.4)
+    keys: *f64 = (*f64)(malloc(usize(n) * sizeof(f64)))
+    idx: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
+    base: *char = (*char)(out->data) + sizeof(PsArr)
+    es: usize = usize(out->esize)
+    for i in range(i32(n)):
+        keys[i] = keyfn(env, ctx, (*void)(base + usize(i) * es))
+        idx[i] = i64(i)
+        if ctx->exc != None:
+            free(keys)
+            free(idx)
+            return out
+    # insertion sort over the INDICES: stable, and n is small in the cases this
+    # is for. The elements move once, at the end.
+    k: i64 = 1
+    while k < n:
+        j: i64 = k
+        while j > 0 and keys[idx[j - 1]] > keys[idx[j]]:
+            t: i64 = idx[j - 1]
+            idx[j - 1] = idx[j]
+            idx[j] = t
+            j -= 1
+        k += 1
+    src: *char = (*char)(malloc(usize(n) * es))
+    memcpy(src, base, usize(n) * es)
+    for i2 in range(i32(n)):
+        memcpy(base + usize(i2) * es, src + usize(idx[i2]) * es, es)
+    free(src)
+    free(keys)
+    free(idx)
+    return out
+
+# ---------- `sys` (48.3) ----------
+static PS_ARGC: int = 0
+static PS_ARGV: **char = None
+
+def ps_sys_args(argc: int, argv: **char):
+    PS_ARGC = argc
+    PS_ARGV = argv
+
+def ps_sys_argv(ctx: *PsCtx) -> *PsList:
+    l: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, i64(PS_ARGC))
+    for i in range(PS_ARGC):
+        slot: *char = ps_list_push(ctx, l)
+        p: **PsStr = (**PsStr)(slot)
+        *p = ps_str_new(ctx, PS_ARGV[i], strlen(PS_ARGV[i]))
+    return l
+
+# POSIX declares it in <unistd.h> under _GNU_SOURCE and elsewhere in a header
+# this file does not include; declaring it is the portable-enough thing every
+# runtime does
+extern environ: **char
+
+def ps_sys_env(ctx: *PsCtx) -> *PsDict:
+    d: *PsDict = ps_dict_new(ctx, i32(sizeof(PsStrPtr)), i32(sizeof(PsStrPtr)), PS_K_STR, True, True)
+    e: **char = environ
+    while e != None and *e != None:
+        line: const *char = *e
+        eq: const *char = strchr(line, '=')
+        if eq != None:
+            k: *PsStr = ps_str_new(ctx, line, usize(eq - line))
+            v: *PsStr = ps_str_new(ctx, eq + 1, strlen(eq + 1))
+            slot: *char = ps_dict_put(ctx, d, (*char)(&k))
+            vp: **PsStr = (**PsStr)(slot)
+            *vp = v
+        e += 1
+    return d
+
+def ps_sys_exit(ctx: *PsCtx, code: i64):
+    # an explicit exit is an explicit exit: whatever is still running does not
+    # get a say, which is exactly what the program asked for
+    exit(int(code))
+
+# 0 running, 1 done, 2 error, 3 gone (37.3)
+def ps_worker_status(w: *PsWorker) -> i64:
+    if w == None or w->blk == None:
+        return 3
+    b: *PsWorkerBlk = w->blk
+    if b->done == 0:
+        return 0
+    return 2 if b->failed != 0 else 1
+
+def ps_sleep(ctx: *PsCtx, seconds: f64) -> *PsTask:
+    ts: timespec
+    ts.tv_sec = i64(seconds)
+    ts.tv_nsec = i64((seconds - f64(i64(seconds))) * 1000000000.0)
+    nanosleep(&ts, None)
+    return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+
+def ps_sys_time() -> f64:
+    ts: timespec
+    clock_gettime(CLOCK_MONOTONIC, &ts)
+    return f64(ts.tv_sec) + f64(ts.tv_nsec) / 1000000000.0
+
+# ---------- function values (28.1/19.2) ----------
+def ps_closure_new(ctx: *PsCtx, fn: *void, env: *PsObj, sig: const *char) -> *PsClosure:
+    c: *PsClosure = (*PsClosure)(ps_alloc(ctx, sizeof(PsClosure), PS_TY_CLOSURE))
+    c->fn = fn
+    c->env = env
+    c->sig = sig
+    return c
+
+# 29.4: the signature has to agree. The spellings are written by the compiler
+# from the same canonical form on both sides, so a comparison of the text is a
+# comparison of the TYPES — and it happens once, before the call.
+def ps_closure_narrow(ctx: *PsCtx, c: *PsClosure, want: const *char, file: const *char, line: i32) -> *PsClosure:
+    if c == None:
+        ps_raise(ctx, "there is no function here to narrow", PS_CAT_VALUE, file, line)
+        return None
+    if c->sig == None or strcmp(c->sig, want) != 0:
+        ps_raise_str(ctx, ps_str_concat(ctx, ps_str_new(ctx, "this function is ", 17), ps_str_concat(ctx, ps_str_new(ctx, c->sig if c->sig != None else "of unknown shape", strlen(c->sig) if c->sig != None else usize(16)), ps_str_concat(ctx, ps_str_new(ctx, ", not ", 6), ps_str_new(ctx, want, strlen(want))))), i64(PS_CAT_TYPE), file, line)
+        return None
+    return c
+
+# ---------- `any` (39.2) and `as` (55.2) ----------
+static def ps_any_new(ctx: *PsCtx, kind: i32) -> *PsAny:
+    a: *PsAny = (*PsAny)(ps_alloc(ctx, sizeof(PsAny), PS_TY_ANY))
+    a->kind = kind
+    a->i = 0
+    a->f = 0.0
+    return a
+
+def ps_any_int(ctx: *PsCtx, v: i64) -> *PsObj:
+    a: *PsAny = ps_any_new(ctx, PS_ANY_INT)
+    a->i = v
+    return (*PsObj)(a)
+
+def ps_any_float(ctx: *PsCtx, v: f64) -> *PsObj:
+    a: *PsAny = ps_any_new(ctx, PS_ANY_FLOAT)
+    a->f = v
+    return (*PsObj)(a)
+
+def ps_any_bool(ctx: *PsCtx, v: bool) -> *PsObj:
+    a: *PsAny = ps_any_new(ctx, PS_ANY_BOOL)
+    a->i = 1 if v else 0
+    return (*PsObj)(a)
+
+def ps_any_none(ctx: *PsCtx) -> *PsObj:
+    return (*PsObj)(ps_any_new(ctx, PS_ANY_NONE))
+
+# what an `any` says it is, in words, for the message a failed `as` prints
+static def ps_any_what(v: *PsObj) -> const *char:
+    if v == None:
+        return "nothing"
+    match v->ty:
+        case PS_TY_STR:
+            return "str"
+        case PS_TY_LIST:
+            return "list"
+        case PS_TY_DICT:
+            return "dict"
+        case PS_TY_ANY:
+            a: *PsAny = (*PsAny)(v)
+            if a->kind == PS_ANY_INT:
+                return "int"
+            if a->kind == PS_ANY_FLOAT:
+                return "float"
+            if a->kind == PS_ANY_BOOL:
+                return "bool"
+            return "None"
+        case _:
+            return "a value of another type"
+
+static def ps_as_fail(ctx: *PsCtx, v: *PsObj, want: const *char, file: const *char, line: i32):
+    msg: char[160]
+    snprintf(msg, 160, "this `any` holds %s, not %s", ps_any_what(v), want)
+    ps_raise(ctx, msg, PS_CAT_TYPE, file, line)
+
+def ps_as_int(ctx: *PsCtx, v: *PsObj, file: const *char, line: i32) -> i64:
+    if v == None or v->ty != PS_TY_ANY or ((*PsAny)(v))->kind != PS_ANY_INT:
+        ps_as_fail(ctx, v, "int", file, line)
+        return 0
+    return ((*PsAny)(v))->i
+
+def ps_as_float(ctx: *PsCtx, v: *PsObj, file: const *char, line: i32) -> f64:
+    if v != None and v->ty == PS_TY_ANY:
+        a: *PsAny = (*PsAny)(v)
+        if a->kind == PS_ANY_FLOAT:
+            return a->f
+        if a->kind == PS_ANY_INT:
+            return f64(a->i)      # int promotes to float, as everywhere (32.1)
+    ps_as_fail(ctx, v, "float", file, line)
+    return 0.0
+
+def ps_as_bool(ctx: *PsCtx, v: *PsObj, file: const *char, line: i32) -> bool:
+    if v == None or v->ty != PS_TY_ANY or ((*PsAny)(v))->kind != PS_ANY_BOOL:
+        ps_as_fail(ctx, v, "bool", file, line)
+        return False
+    return ((*PsAny)(v))->i != 0
+
+def ps_as_ref(ctx: *PsCtx, v: *PsObj, want: i32, what: const *char, file: const *char, line: i32) -> *PsObj:
+    if v == None or v->ty != want:
+        ps_as_fail(ctx, v, what, file, line)
+        return None
+    return v
+
+def ps_is_kind(v: *PsObj, ty: i32, kind: i32) -> bool:
+    if v == None:
+        return False
+    if ty != PS_TY_ANY:
+        return v->ty == ty
+    return v->ty == PS_TY_ANY and ((*PsAny)(v))->kind == kind
+
+def ps_exc_take(ctx: *PsCtx) -> *PsErr:
+    e: *PsErr = ctx->exc
+    ctx->exc = None
+    return e
+
+def ps_exc_put(ctx: *PsCtx, e: *PsErr):
+    if e != None:
+        ctx->exc = e
+
+# ---------- files (48.1) ----------
+# Python's shape over stdio. Failure raises with the `io` category, and the
+# message says WHICH file — a program that stops has to say what it was doing.
+def ps_file_open(ctx: *PsCtx, path: *PsStr, mode: *PsStr, file: const *char, line: i32) -> *PsFile:
+    f: *PsFile = (*PsFile)(ps_alloc(ctx, sizeof(PsFile), PS_TY_FILE))
+    f->fp = None
+    f->is_open = 0
+    fp: *FILE = fopen(path->data, mode->data)
+    if fp == None:
+        # the message says WHICH file: a program that stops has to say what it
+        # was doing when it stopped
+        msg: char[512]
+        snprintf(msg, 512, "cannot open '%s'", path->data)
+        ps_raise(ctx, msg, PS_CAT_IO, file, line)
+        return f
+    f->fp = fp
+    f->is_open = 1
+    return f
+
+def ps_file_write(ctx: *PsCtx, f: *PsFile, s: *PsStr, file: const *char, line: i32) -> i64:
+    if f == None or f->is_open == 0:
+        ps_raise(ctx, "write to a file that is not open", PS_CAT_IO, file, line)
+        return 0
+    n: usize = fwrite(s->data, 1, usize(s->len), f->fp)
+    if n != usize(s->len):
+        ps_raise(ctx, "could not write the whole string", PS_CAT_IO, file, line)
+    return i64(n)
+
+def ps_file_read(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsStr:
+    if f == None or f->is_open == 0:
+        ps_raise(ctx, "read from a file that is not open", PS_CAT_IO, file, line)
+        return ps_str_new(ctx, "", 0)
+    # read it whole, growing a buffer: `ftell` lies on a text stream and on
+    # anything that is not a regular file
+    cap: usize = 4096
+    len: usize = 0
+    buf: *char = (*char)(malloc(cap))
+    while True:
+        if len == cap:
+            cap *= 2
+            buf = (*char)(realloc(buf, cap))
+        got: usize = fread(buf + len, 1, cap - len, f->fp)
+        len += got
+        if got == 0:
+            break
+    out: *PsStr = ps_str_new(ctx, buf, len)
+    free(buf)
+    return out
+
+def ps_file_readlines(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsList:
+    whole: *PsStr = ps_file_read(ctx, f, file, line)
+    nl: *PsStr = ps_str_new(ctx, "\n", 1)
+    return ps_str_split(ctx, whole, nl)
+
+def ps_file_close(ctx: *PsCtx, f: *PsFile):
+    if f != None and f->is_open != 0:
+        fclose(f->fp)
+        f->is_open = 0
+        f->fp = None
+
+# ---------- `shared` (42.1/42.3) ----------
+def ps_lock_new() -> *void:
+    mu: *pthread_mutex_t = (*pthread_mutex_t)(malloc(sizeof(pthread_mutex_t)))
+    pthread_mutex_init(mu, None)
+    return (*void)(mu)
+
+def ps_lock(mu: *void):
+    pthread_mutex_lock((*pthread_mutex_t)(mu))
+
+def ps_unlock(mu: *void):
+    pthread_mutex_unlock((*pthread_mutex_t)(mu))
+
+static def ps_hash_bytes(b: const *char, n: usize) -> u64
+static def ps_sdict_grow(d: *PsSDict, ncap: i64)
+static def ps_sdict_slot(d: *PsSDict, key: const *void) -> i64
+
+# ---------- the repeating clock (48.2/51.1) ----------
+def ps_interval_new(ctx: *PsCtx, seconds: f64, file: const *char, line: i32) -> *PsTimer:
+    if seconds <= 0.0:
+        ps_raise(ctx, "an interval needs a positive period", PS_CAT_VALUE, file, line)
+        return None
+    t: *PsTimer = (*PsTimer)(ps_alloc(ctx, sizeof(PsTimer), PS_TY_TIMER))
+    t->period = seconds
+    t->next = ps_sys_time() + seconds
+    return t
+
+# A tick COALESCES (51.1): a program that fell behind gets ONE tick and the
+# clock is set forward from NOW — a queue of missed ticks is never what the
+# program wanted, and would make a slow loop spin instead of settle.
+def ps_timer_tick(ctx: *PsCtx, t: *PsTimer) -> *PsTask:
+    now: f64 = ps_sys_time()
+    if now < t->next:
+        ts: timespec
+        wait: f64 = t->next - now
+        ts.tv_sec = i64(wait)
+        ts.tv_nsec = i64((wait - f64(i64(wait))) * 1000000000.0)
+        nanosleep(&ts, None)
+        t->next = t->next + t->period
+    else:
+        t->next = now + t->period
+    return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+
+# ---------- pack / unpack (59) ----------
+# One field at a time, least significant byte first. Reading and writing go
+# through the same shift ladder, so the format does not depend on how this
+# machine happens to store an integer — and a float travels as the bits it is.
+def ps_pack_int(ctx: *PsCtx, l: *PsList, v: u64, nbytes: i32, be: i32):
+    for i in range(nbytes):
+        # the shift ladder decides the order, so neither side depends on how
+        # THIS machine happens to store an integer
+        k: i32 = (nbytes - 1 - i) if be != 0 else i
+        p: *char = ps_list_push(ctx, l)
+        *(*u8)(p) = u8((v >> u64(k * 8)) & u64(255))
+
+def ps_unpack_int(l: *PsList, off: i64, nbytes: i32, be: i32) -> u64:
+    v: u64 = 0
+    base: *u8 = (*u8)(ps_list_base(l))
+    for i in range(nbytes):
+        k: i32 = (nbytes - 1 - i) if be != 0 else i
+        v = v | (u64(base[off + i64(i)]) << u64(k * 8))
+    return v
+
+def ps_pack_f64(ctx: *PsCtx, l: *PsList, v: f64, be: i32):
+    b: u64 = 0
+    memcpy(&b, &v, sizeof(b))
+    ps_pack_int(ctx, l, b, 8, be)
+
+def ps_unpack_f64(l: *PsList, off: i64, be: i32) -> f64:
+    b: u64 = ps_unpack_int(l, off, 8, be)
+    v: f64 = 0.0
+    memcpy(&v, &b, sizeof(v))
+    return v
+
+def ps_pack_f32(ctx: *PsCtx, l: *PsList, v: f32, be: i32):
+    b: u32 = 0
+    memcpy(&b, &v, sizeof(b))
+    ps_pack_int(ctx, l, u64(b), 4, be)
+
+def ps_unpack_f32(l: *PsList, off: i64, be: i32) -> f32:
+    b: u32 = u32(ps_unpack_int(l, off, 4, be))
+    v: f32 = 0.0
+    memcpy(&v, &b, sizeof(v))
+    return v
+
+def ps_unpack_check(ctx: *PsCtx, l: *PsList, want: i64, file: const *char, line: i32):
+    if l == None or l->len != want:
+        ps_raise(ctx, "these bytes are not the right length for this record", PS_CAT_VALUE, file, line)
+
+# ---------- the shared dict (42.1), the ETS table ----------
+# Open addressing with linear probing, like the collected dict — the algorithm
+# is the same, what changes is WHERE it lives (malloc, not the heap) and that
+# every operation happens under one lock.
+#
+# A string key or value is stored as a `PsSStr`: a length and a malloc'ed copy
+# of the bytes. Reading one back builds a fresh string in the READER's heap, so
+# two workers never look at the same object — 42.1's copy ladder, literally.
+static def ps_sstr_set(dst: *PsSStr, s: *PsStr):
+    if dst->p != None:
+        free(dst->p)
+    n: usize = usize(s->len)
+    dst->p = (*char)(malloc(n + 1))
+    memcpy(dst->p, s->data, n)
+    dst->p[n] = '\0'
+    dst->n = n
+
+static def ps_skey_hash(d: *PsSDict, key: const *void) -> u64:
+    if d->kstr:
+        ks: *PsStr = (*PsStr)(key)
+        return ps_hash_bytes(ks->data, usize(ks->len))
+    return ps_hash_bytes((*char)(key), d->ksize)
+
+static def ps_skey_eq(d: *PsSDict, slot: const *char, key: const *void) -> bool:
+    if d->kstr:
+        st: *PsSStr = (*PsSStr)(slot)
+        ks: *PsStr = (*PsStr)(key)
+        if st->n != usize(ks->len):
+            return False
+        return memcmp(st->p, ks->data, st->n) == 0
+    return memcmp(slot, (*char)(key), d->ksize) == 0
+
+static def ps_sdict_grow(d: *PsSDict, ncap: i64):
+    okeys: *char = d->keys
+    ovals: *char = d->vals
+    ostate: *char = d->state
+    ocap: i64 = d->cap
+    d->keys = (*char)(calloc(usize(ncap), d->ksize))
+    d->vals = (*char)(calloc(usize(ncap), d->vsize))
+    d->state = (*char)(calloc(usize(ncap), 1))
+    d->cap = ncap
+    d->len = 0
+    for i in range(ocap):
+        if ostate == None or ostate[i] == 0:
+            continue
+        ksrc: *char = okeys + usize(i) * d->ksize
+        h: u64 = 0
+        if d->kstr:
+            ss: *PsSStr = (*PsSStr)(ksrc)
+            h = ps_hash_bytes(ss->p, ss->n)
+        else:
+            h = ps_hash_bytes(ksrc, d->ksize)
+        j: i64 = i64(h % u64(ncap))
+        while d->state[j] != 0:
+            j = (j + 1) % ncap
+        memcpy(d->keys + usize(j) * d->ksize, ksrc, d->ksize)
+        memcpy(d->vals + usize(j) * d->vsize, ovals + usize(i) * d->vsize, d->vsize)
+        d->state[j] = 1
+        d->len += 1
+    free(okeys)
+    free(ovals)
+    free(ostate)
+
+def ps_sdict_new(ksize: i64, vsize: i64, kstr: bool, vstr: bool) -> *PsSDict:
+    d: *PsSDict = (*PsSDict)(calloc(1, sizeof(PsSDict)))
+    d->mu = ps_lock_new()
+    d->ksize = usize(ksize)
+    d->vsize = usize(vsize)
+    d->kstr = kstr
+    d->vstr = vstr
+    ps_sdict_grow(d, 16)
+    return d
+
+def ps_sdict_len(d: *PsSDict) -> i64:
+    ps_lock(d->mu)
+    n: i64 = d->len
+    ps_unlock(d->mu)
+    return n
+
+# the slot a key belongs in, found or free. The caller holds the lock.
+static def ps_sdict_slot(d: *PsSDict, key: const *void) -> i64:
+    j: i64 = i64(ps_skey_hash(d, key) % u64(d->cap))
+    while d->state[j] != 0:
+        if ps_skey_eq(d, d->keys + usize(j) * d->ksize, key):
+            return j
+        j = (j + 1) % d->cap
+    return j
+
+def ps_sdict_put(ctx: *PsCtx, d: *PsSDict, key: const *void, val: const *void):
+    ps_lock(d->mu)
+    if (d->len + 1) * 4 > d->cap * 3:
+        ps_sdict_grow(d, d->cap * 2)
+    j: i64 = ps_sdict_slot(d, key)
+    if d->state[j] == 0:
+        if d->kstr:
+            ks: *PsSStr = (*PsSStr)(d->keys + usize(j) * d->ksize)
+            ks->p = None
+            ps_sstr_set(ks, (*PsStr)(key))
+        else:
+            memcpy(d->keys + usize(j) * d->ksize, (*char)(key), d->ksize)
+        d->state[j] = 1
+        d->len += 1
+        if d->vstr:
+            vs0: *PsSStr = (*PsSStr)(d->vals + usize(j) * d->vsize)
+            vs0->p = None
+    if d->vstr:
+        ps_sstr_set((*PsSStr)(d->vals + usize(j) * d->vsize), (*PsStr)(val))
+    else:
+        memcpy(d->vals + usize(j) * d->vsize, (*char)(val), d->vsize)
+    ps_unlock(d->mu)
+
+def ps_sdict_has(d: *PsSDict, key: const *void) -> bool:
+    ps_lock(d->mu)
+    j: i64 = ps_sdict_slot(d, key)
+    r: bool = d->state[j] != 0
+    ps_unlock(d->mu)
+    return r
+
+def ps_sdict_get(ctx: *PsCtx, d: *PsSDict, key: const *void, out: *void, file: const *char, line: i32):
+    ps_lock(d->mu)
+    j: i64 = ps_sdict_slot(d, key)
+    if d->state[j] == 0:
+        ps_unlock(d->mu)
+        ps_raise(ctx, "key not in the shared dict", PS_CAT_KEY, file, line)
+        return
+    if d->vstr:
+        vs: *PsSStr = (*PsSStr)(d->vals + usize(j) * d->vsize)
+        # the copy is made INSIDE the lock and lands in the reader's own heap
+        cp: *PsStr = ps_str_new(ctx, vs->p, vs->n)
+        memcpy(out, &cp, sizeof(cp))
+    else:
+        memcpy(out, d->vals + usize(j) * d->vsize, d->vsize)
+    ps_unlock(d->mu)
+
+def ps_sdict_del(d: *PsSDict, key: const *void) -> bool:
+    ps_lock(d->mu)
+    j: i64 = ps_sdict_slot(d, key)
+    if d->state[j] == 0:
+        ps_unlock(d->mu)
+        return False
+    # a hole would cut a probe chain in two, so the tail is reinserted — the
+    # table is small and this keeps the invariant obvious
+    if d->kstr:
+        ks: *PsSStr = (*PsSStr)(d->keys + usize(j) * d->ksize)
+        free(ks->p)
+        ks->p = None
+    if d->vstr:
+        vs: *PsSStr = (*PsSStr)(d->vals + usize(j) * d->vsize)
+        free(vs->p)
+        vs->p = None
+    d->state[j] = 0
+    d->len -= 1
+    k: i64 = (j + 1) % d->cap
+    while d->state[k] != 0:
+        kb: *char = d->keys + usize(k) * d->ksize
+        h: u64 = ps_hash_bytes(((*PsSStr)(kb))->p, ((*PsSStr)(kb))->n) if d->kstr else ps_hash_bytes(kb, d->ksize)
+        want: i64 = i64(h % u64(d->cap))
+        if want != k:
+            tk: *char = (*char)(malloc(d->ksize))
+            tv: *char = (*char)(malloc(d->vsize))
+            memcpy(tk, kb, d->ksize)
+            memcpy(tv, d->vals + usize(k) * d->vsize, d->vsize)
+            d->state[k] = 0
+            d->len -= 1
+            j2: i64 = i64(h % u64(d->cap))
+            while d->state[j2] != 0:
+                j2 = (j2 + 1) % d->cap
+            memcpy(d->keys + usize(j2) * d->ksize, tk, d->ksize)
+            memcpy(d->vals + usize(j2) * d->vsize, tv, d->vsize)
+            d->state[j2] = 1
+            d->len += 1
+            free(tk)
+            free(tv)
+        k = (k + 1) % d->cap
+    ps_unlock(d->mu)
+    return True
+
+
+# ---------- tasks (35.3/50.1) ----------
+# The scheduler is a run queue and nothing else: no threads here (that is 35.1,
+# the worker), no I/O yet (18.4). A task steps until it parks on another task or
+# finishes; finishing wakes whoever was parked on it.
+static def ps_sched_push(ctx: *PsCtx, t: *PsTask):
+    t->next = None
+    if ctx->ready_tail == None:
+        ctx->ready = t
+        ctx->ready_tail = t
+    else:
+        ctx->ready_tail->next = t
+        ctx->ready_tail = t
+
+static def ps_sched_pop(ctx: *PsCtx) -> *PsTask:
+    t: *PsTask = ctx->ready
+    if t == None:
+        return None
+    ctx->ready = t->next
+    if ctx->ready == None:
+        ctx->ready_tail = None
+    t->next = None
+    return t
+
+# calling an `async def` STARTS it (35.3): the first step runs right here, so
+# everything up to the first `await` happens synchronously, as in JS
+def ps_task_new(ctx: *PsCtx, step: def(ctx: *PsCtx, t: *PsTask) -> bool, frame: *PsObj) -> *PsTask:
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = 0
+    t->step = step
+    t->frame = frame
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->next = None
+    # the first step runs here and can collect, so the task travels on the
+    # shadow stack like everything else
+    slots: **PsObj[1]
+    slots[0] = (**PsObj)(&t)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 1)
+    ps_task_step(ctx, t)
+    ps_pop_frame(ctx, &f)
+    return t
+
+def ps_task_done(t: *PsTask) -> bool:
+    return t != None and (t->state == -1 or t->state == -2)
+
+# one step, and what follows from it: a task that finished wakes its waiter
+def ps_task_step(ctx: *PsCtx, t: *PsTask):
+    if ps_task_done(t):
+        return
+    # The step can collect (its statements poll), and a moving collector would
+    # leave THIS function holding the old address. The runtime uses the same
+    # shadow stack the generated code uses — it is not exempt.
+    slots: **PsObj[1]
+    slots[0] = (**PsObj)(&t)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 1)
+    done: bool = t->step(ctx, t)
+    ps_pop_frame(ctx, &f)
+    if not done:
+        return
+    if t->state != -2:
+        t->state = -1
+    w: *PsTask = t->waiter
+    t->waiter = None
+    if w != None:
+        w->waiting_on = None
+        ps_sched_push(ctx, w)
+
+# 35.3: composition over a list. The results come back in the order the tasks
+# were given, not the order they finished — a program that has to think about
+# which finished first is a program that should not have used `gather`.
+def ps_gather(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsList:
+    out: *PsList = ps_list_new(ctx, esize, eref, ts->len)
+    i: i64 = 0
+    while i < ts->len:
+        base: **PsTask = (**PsTask)((*char)(ts->data) + sizeof(PsArr) + usize(i) * usize(ts->esize))
+        t: *PsTask = *base
+        ps_task_wait(ctx, t)
+        if ctx->exc != None:
+            return out
+        dst: *char = ps_list_push(ctx, out)
+        # the list may have MOVED while the task ran, so the source is read
+        # after the wait and through the list again
+        base = (**PsTask)((*char)(ts->data) + sizeof(PsArr) + usize(i) * usize(ts->esize))
+        memcpy(dst, ps_task_ret(*base), usize(esize))
+        i += 1
+    return out
+
+def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
+    out: *PsList = ps_gather(ctx, ts, esize, eref)
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + sizeof(PsStrPtr), PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_GATHER_DESC
+    p: **PsList = (**PsList)(fr + sizeof(PsUser))
+    *p = out
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = -1
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->next = None
+    return t
+
+def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask):
+    waiter->waiting_on = on
+    on->waiter = waiter
+
+def ps_task_fail(ctx: *PsCtx, t: *PsTask):
+    # the task CAPTURES the error: the flag is cleared here so the rest of the
+    # program keeps running, and it is raised again at the await (19.3)
+    t->err = ctx->exc
+    ctx->exc = None
+    t->state = -2
+
+def ps_task_take_err(ctx: *PsCtx, t: *PsTask):
+    if t != None and t->err != None and ctx->exc == None:
+        ctx->exc = t->err
+
+def ps_task_ret(t: *PsTask) -> *void:
+    return (*char)(t->frame) + sizeof(PsUser)
+
+# The one place the runtime blocks: the entry point awaiting a task. It runs the
+# queue until the task is finished — and if the queue empties first, nothing can
+# ever finish it, which is a deadlock and says so.
+def ps_task_wait(ctx: *PsCtx, t: *PsTask):
+    n: *PsTask = None
+    slots: **PsObj[2]
+    slots[0] = (**PsObj)(&t)
+    slots[1] = (**PsObj)(&n)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 2)
+    while not ps_task_done(t):
+        n = ps_sched_pop(ctx)
+        if n == None:
+            ps_raise(ctx, "deadlock: awaiting a task that nothing can finish", PS_CAT_VALUE, "<runtime>", 0)
+            ps_pop_frame(ctx, &f)
+            return
+        ps_task_step(ctx, n)
+        n = None
+        if ctx->exc != None:
+            ps_pop_frame(ctx, &f)
+            return
+    ps_pop_frame(ctx, &f)
+    if t->err != None and ctx->exc == None:
+        # 19.3: the error the task finished with is raised again where it is awaited
+        ctx->exc = t->err
+
+# `dyn Trait` (66.3). The value is copied INTO the box: what is boxed is often a
+# temporary — `p = Money(5)` — and a box pointing at a dead stack slot would be
+# a dangling reference the collector cannot see.
+def ps_box(ctx: *PsCtx, src: const *void, nbytes: usize, vt: const *void, isref: bool) -> *PsDyn:
+    d: *PsDyn = (*PsDyn)(ps_alloc(ctx, sizeof(PsDyn) + nbytes, PS_TY_DYN))
+    d->vt = vt
+    d->nbytes = u32(nbytes)
+    d->isref = 1 if isref else 0
+    memcpy(&d->data[0], src, nbytes)
+    return d
+
+def ps_dyn_data(ctx: *PsCtx, d: *PsDyn) -> *void:
+    if d == None:
+        ps_raise(ctx, "a method was called on a `dyn` that holds nothing", PS_CAT_TYPE, "<runtime>", 0)
+        return None
+    return &d->data[0]
+
+# ---------- the shadow stack ----------
+def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32):
+    f->prev = ctx->frames
+    f->nslots = n
+    f->slots = slots
+    ctx->frames = f
+
+def ps_pop_frame(ctx: *PsCtx, f: *PsFrame):
+    ctx->frames = f->prev
+
+def ps_add_root(ctx: *PsCtx, slot: **PsObj):
+    r: *PsRoot = malloc(sizeof(PsRoot))
+    if r == None:
+        fprintf(stderr, "pscript: out of memory\n")
+        exit(1)
+    r->slot = slot
+    r->next = ctx->roots
+    ctx->roots = r
+
+# ---------- the collector ----------
+# Cheney (15.1): copy every reachable object into a fresh block and free the old
+# ones. The scan pointer walks what has been copied so far, so the to-space
+# doubles as the work queue and there is no explicit stack to size or overflow.
+def ps_forward(to: *PsBlock, p: *PsObj) -> *PsObj:
+    if p == None:
+        return None
+    if p->ty == PS_TY_MOVED:
+        return p->fwd
+    n: usize = usize(p->size)
+    d: *char = to->base + to->used
+    to->used += n
+    memcpy(d, p, n)
+    p->ty = PS_TY_MOVED
+    p->fwd = (*PsObj)(d)
+    return (*PsObj)(d)
+
+# the references INSIDE one object. Every collected type is listed here, and a
+# type that gains a reference field gains a line here — the one place the
+# collector has to learn about a new type.
+static def ps_scan_object(to: *PsBlock, o: *PsObj):
+    match o->ty:
+        case PS_TY_STR:
+            pass          # bytes are inline (51.2): nothing to follow
+        case PS_TY_ERR:
+            e: *PsErr = (*PsErr)(o)
+            e->msg = (*PsStr)(ps_forward(to, (*PsObj)(e->msg)))
+        case PS_TY_LIST:
+            l: *PsList = (*PsList)(o)
+            if l->raw != None:
+                # a view (18.3): the bytes are the buffer's and never move, so
+                # there is nothing to copy here — only the buffer itself has to
+                # stay reachable while the view does
+                l->owner = (*PsBuffer)(ps_forward(to, (*PsObj)(l->owner)))
+                return
+            l->data = (*PsArr)(ps_forward(to, (*PsObj)(l->data)))
+            if l->eref and l->data != None:
+                # elements that ARE references get forwarded one by one; a list
+                # of records holds bytes and there is nothing inside to follow
+                base: **PsObj = (**PsObj)((*char)(l->data) + sizeof(PsArr))
+                for i in range(i32(l->len)):
+                    base[i] = ps_forward(to, base[i])
+        case PS_TY_DICT:
+            d: *PsDict = (*PsDict)(o)
+            d->keys = (*PsArr)(ps_forward(to, (*PsObj)(d->keys)))
+            d->vals = (*PsArr)(ps_forward(to, (*PsObj)(d->vals)))
+            d->state = (*PsArr)(ps_forward(to, (*PsObj)(d->state)))
+            if (d->kref or d->vref) and d->state != None:
+                stb: *char = (*char)(d->state) + sizeof(PsArr)
+                for i in range(i32(d->cap)):
+                    if stb[i] != 1:
+                        continue
+                    if d->kref:
+                        kp: **PsObj = (**PsObj)((*char)(d->keys) + sizeof(PsArr) + usize(i) * usize(d->ksize))
+                        *kp = ps_forward(to, *kp)
+                    if d->vref:
+                        vp: **PsObj = (**PsObj)((*char)(d->vals) + sizeof(PsArr) + usize(i) * usize(d->vsize))
+                        *vp = ps_forward(to, *vp)
+        case PS_TY_ARR:
+            pass          # raw bytes: whoever owns it knows what is inside
+        case PS_TY_DYN:
+            # a record inside is pure bytes and there is nothing to follow; a
+            # `struct` inside is one reference, and it is right here
+            dy: *PsDyn = (*PsDyn)(o)
+            if dy->isref != 0:
+                dp: **PsObj = (**PsObj)(&dy->data[0])
+                *dp = ps_forward(to, *dp)
+        case PS_TY_TASK:
+            tk: *PsTask = (*PsTask)(o)
+            tk->frame = ps_forward(to, tk->frame)
+            if tk->err != None:
+                tk->err = (*PsErr)(ps_forward(to, (*PsObj)(tk->err)))
+            if tk->waiting_on != None:
+                tk->waiting_on = (*PsTask)(ps_forward(to, (*PsObj)(tk->waiting_on)))
+            if tk->waiter != None:
+                tk->waiter = (*PsTask)(ps_forward(to, (*PsObj)(tk->waiter)))
+            if tk->next != None:
+                tk->next = (*PsTask)(ps_forward(to, (*PsObj)(tk->next)))
+        case PS_TY_WORKER:
+            pass          # the control block is malloc'd and never moves
+        case PS_TY_FILE:
+            pass          # the FILE belongs to libc, not to the collector
+        case PS_TY_ANY:
+            pass          # a boxed number holds no reference
+        case PS_TY_BUFFER:
+            pass          # the bytes are malloc'd, and shared on purpose
+        case PS_TY_TIMER:
+            pass          # two numbers and nothing to follow
+        case PS_TY_CLOSURE:
+            cl: *PsClosure = (*PsClosure)(o)
+            if cl->env != None:
+                cl->env = ps_forward(to, cl->env)
+        case PS_TY_USER:
+            # a `struct` (20.1): the compiler wrote the tracing, because only
+            # it knows the fields. One case here serves every user type.
+            u: *PsUser = (*PsUser)(o)
+            if u->desc->trace != None:
+                u->desc->trace((*void)(o), to)
+        case _:
+            pass
+
+def ps_gc(ctx: *PsCtx):
+    # to-space sized for everything currently allocated: the copy can never
+    # need more than that, so the collector never allocates mid-copy
+    total: usize = 0
+    b: *PsBlock = ctx->blocks
+    while b != None:
+        total += b->used
+        b = b->next
+    to: *PsBlock = ps_new_block(total + usize(PS_BLOCK_BYTES))
+
+    # roots: the shadow stack (49.4) and the module-level variables
+    f: *PsFrame = ctx->frames
+    while f != None:
+        for i in range(f->nslots):
+            slot: **PsObj = f->slots[i]
+            if slot != None:
+                *slot = ps_forward(to, *slot)
+        f = f->prev
+    r: *PsRoot = ctx->roots
+    while r != None:
+        *r->slot = ps_forward(to, *r->slot)
+        r = r->next
+    if ctx->exc != None:
+        ctx->exc = (*PsErr)(ps_forward(to, (*PsObj)(ctx->exc)))
+    # the run queue is a root of its own: a task that nobody holds a reference
+    # to is still going to run, so the collector must not lose it
+    if ctx->ready != None:
+        ctx->ready = (*PsTask)(ps_forward(to, (*PsObj)(ctx->ready)))
+    if ctx->ready_tail != None:
+        ctx->ready_tail = (*PsTask)(ps_forward(to, (*PsObj)(ctx->ready_tail)))
+
+    # Cheney's scan: everything already copied is the work list
+    scan: usize = 0
+    while scan < to->used:
+        o: *PsObj = (*PsObj)(to->base + scan)
+        ps_scan_object(to, o)
+        scan += usize(o->size)
+
+    ps_free_blocks(ctx->blocks)
+    ctx->blocks = to
+    ctx->live = to->used
+    ctx->alloced = 0
+    ctx->nalloc = 0
+    ctx->ngc += 1
+
+# The safe point. Both limits of 14.2 count, and either one trips it: a program
+# that allocates one huge list and one that allocates a million small objects
+# are both covered.
+#
+# Inside `nogc:` (26) the safe point does NOTHING: that is the whole promise of
+# the block — no collection, so no pause, and nothing moves under the code.
+def ps_gc_poll(ctx: *PsCtx):
+    if ctx->nogc > 0:
+        if ctx->nogc_budget != usize(0) and ctx->alloced - ctx->nogc_start > ctx->nogc_budget:
+            ps_raise(ctx, "nogc budget exceeded", PS_CAT_VALUE, "<nogc>", 0)
+        return
+    if ctx->alloced < usize(PS_GC_BYTES) and ctx->nalloc < PS_GC_OBJECTS:
+        return
+    ps_gc(ctx)
+
+# `nogc:` begins (26.1). With a budget it PRE-RESERVES: the collector runs
+# first, so the block starts on a clean heap and what it may spend is measured
+# from there (26.2) — going over raises at the next safe point (26.3).
+def ps_gc_suspend(ctx: *PsCtx, budget: i64, file: const *char, line: i32):
+    if ctx->nogc == 0 and budget > 0:
+        ps_gc(ctx)
+        ctx->nogc_budget = usize(budget)
+        ctx->nogc_start = ctx->alloced
+    elif ctx->nogc == 0:
+        ctx->nogc_budget = usize(0)
+        ctx->nogc_start = ctx->alloced
+    ctx->nogc += 1
+
+# and ends. The counter is what makes nesting work (26.5.3); the collector only
+# comes back when the OUTERMOST block is done, and the poll right after is what
+# pays the debt the block ran up.
+def ps_gc_resume(ctx: *PsCtx):
+    if ctx->nogc > 0:
+        ctx->nogc -= 1
+    if ctx->nogc == 0:
+        ctx->nogc_budget = usize(0)
+        ps_gc_poll(ctx)
+
+# ---------- lists ----------
+static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64)
+
+def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList:
+    l: *PsList = ps_alloc(ctx, sizeof(PsList), PS_TY_LIST)
+    l->len = 0
+    l->cap = 0
+    l->esize = esize
+    l->eref = eref
+    l->data = None
+    l->raw = None       # an ordinary list OWNS its bytes (18.3 borrows them)
+    l->owner = None
+    if cap > 0:
+        ps_list_grow(ctx, l, cap)
+    return l
+
+# Replaces the backing storage with a bigger one. The HEADER does not move, so
+# every reference to the list survives a growth untouched.
+static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64):
+    if need <= l->cap:
+        return
+    ncap: i64 = 8 if l->cap == 0 else l->cap * 2
+    while ncap < need:
+        ncap *= 2
+    nb: usize = usize(ncap) * usize(l->esize)
+    a: *PsArr = ps_alloc(ctx, sizeof(PsArr) + nb, PS_TY_ARR)
+    a->nbytes = nb
+    if l->data != None and l->len > 0:
+        memcpy((*char)(a) + sizeof(PsArr), (*char)(l->data) + sizeof(PsArr), usize(l->len) * usize(l->esize))
+    l->data = a
+    l->cap = ncap
+
+def ps_list_len(l: *PsList) -> i64:
+    return l->len
+
+# The base of the elements. A list with no storage yet answers a SCRATCH slot
+# instead of None: after an index that raised, the generated code still performs
+# the read whose value the exception check is about to throw away, and reading
+# from nowhere would take the program down before the check ever runs.
+static PS_SCRATCH: char[64]
+
+def ps_list_base(l: *PsList) -> *char:
+    # a view (18.3) borrows the buffer's bytes: they are where they always
+    # were, and indexing, iterating and slicing all go through here
+    if l->raw != None:
+        return l->raw
+    if l->data == None:
+        return PS_SCRATCH
+    return (*char)(l->data) + sizeof(PsArr)
+
+def ps_arr_at(ctx: *PsCtx, i: i64, n: i64, file: const *char, line: i32) -> i64:
+    k: i64 = i + n if i < 0 else i
+    if k < 0 or k >= n:
+        ps_raise(ctx, "array index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return k
+
+def ps_list_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> i64:
+    # negative counts from the end (31.4), and out of range RAISES (5.2) rather
+    # than reading whatever is there
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k >= l->len:
+        ps_raise(ctx, "list index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return k
+
+def ps_list_push(ctx: *PsCtx, l: *PsList) -> *char:
+    if l->raw != None:
+        # 18.3: the window has exactly the elements the buffer has room for.
+        # Growing would mean allocating, and then it would not be the same
+        # bytes the other threads are looking at.
+        ps_raise(ctx, "a view over a buffer has a fixed size", PS_CAT_VALUE, "<view>", 0)
+        return PS_SCRATCH
+    ps_list_grow(ctx, l, l->len + 1)
+    p: *char = ps_list_base(l) + usize(l->len) * usize(l->esize)
+    l->len += 1
+    memset(p, 0, usize(l->esize))
+    return p
+
+# ---------- dicts and sets ----------
+static def ps_dict_rehash(ctx: *PsCtx, d: *PsDict, ncap: i64)
+
+static def ps_hash_bytes(b: const *char, n: usize) -> u64:
+    h: u64 = 1469598103934665603     # FNV-1a
+    for i in range(n):
+        h ^= u64(u8(b[i]))
+        h *= 1099511628211
+    return h
+
+# the hash and the equality of ONE key, by kind. A `str` key hashes its BYTES
+# and compares by content (22.2); everything else is bits, which is also what
+# makes a float key compare `+0.0` and `-0.0` apart (47.1).
+static def ps_key_hash(d: *PsDict, k: const *char) -> u64:
+    if d->kkind == PS_K_STR:
+        s: *PsStr = *(**PsStr)(k)
+        return ps_hash_bytes(s->data, usize(s->len))
+    return ps_hash_bytes(k, usize(d->ksize))
+
+static def ps_key_eq(d: *PsDict, a: const *char, b: const *char) -> bool:
+    if d->kkind == PS_K_STR:
+        return ps_str_eq(*(**PsStr)(a), *(**PsStr)(b))
+    return memcmp(a, b, usize(d->ksize)) == 0
+
+def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vref: bool) -> *PsDict:
+    d: *PsDict = ps_alloc(ctx, sizeof(PsDict), PS_TY_DICT)
+    d->n = 0
+    d->used = 0
+    d->cap = 0
+    d->ksize = ksize
+    d->vsize = vsize
+    d->kkind = kkind
+    d->kref = kref
+    d->vref = vref
+    d->keys = None
+    d->vals = None
+    d->state = None
+    ps_dict_rehash(ctx, d, 8)
+    return d
+
+static def ps_arr_new(ctx: *PsCtx, nbytes: usize) -> *PsArr:
+    a: *PsArr = ps_alloc(ctx, sizeof(PsArr) + nbytes, PS_TY_ARR)
+    a->nbytes = nbytes
+    memset((*char)(a) + sizeof(PsArr), 0, nbytes)
+    return a
+
+static def ps_arr_data(a: *PsArr) -> *char:
+    return (*char)(a) + sizeof(PsArr)
+
+static def ps_dict_rehash(ctx: *PsCtx, d: *PsDict, ncap: i64):
+    ok: *PsArr = d->keys
+    ov: *PsArr = d->vals
+    ost: *PsArr = d->state
+    ocap: i64 = d->cap
+    d->keys = ps_arr_new(ctx, usize(ncap) * usize(d->ksize))
+    d->vals = ps_arr_new(ctx, usize(ncap) * usize(d->vsize if d->vsize > 0 else 1))
+    d->state = ps_arr_new(ctx, usize(ncap))
+    d->cap = ncap
+    d->n = 0
+    d->used = 0
+    if ost == None:
+        return
+    ostate: *char = ps_arr_data(ost)
+    okeys: *char = ps_arr_data(ok)
+    ovals: *char = ps_arr_data(ov)
+    for i in range(i32(ocap)):
+        if ostate[i] != 1:
+            continue
+        kp: *char = okeys + usize(i) * usize(d->ksize)
+        slot: *char = ps_dict_put(ctx, d, kp)
+        if d->vsize > 0:
+            memcpy(slot, ovals + usize(i) * usize(d->vsize), usize(d->vsize))
+
+def ps_dict_len(d: *PsDict) -> i64:
+    return d->n
+
+# finds the slot for `key`: the live one that matches, or the first free one
+static def ps_dict_slot(d: *PsDict, key: const *char, ref found: bool) -> i64:
+    st: *char = ps_arr_data(d->state)
+    keys: *char = ps_arr_data(d->keys)
+    mask: u64 = u64(d->cap) - 1
+    i: u64 = ps_key_hash(d, key) & mask
+    first_free: i64 = -1
+    while True:
+        s: char = st[i]
+        if s == 0:
+            found = False
+            return i64(i) if first_free < 0 else first_free
+        if s == 2:
+            if first_free < 0:
+                first_free = i64(i)
+        elif ps_key_eq(d, keys + usize(i) * usize(d->ksize), key):
+            found = True
+            return i64(i)
+        i = (i + 1) & mask
+
+def ps_dict_put(ctx: *PsCtx, d: *PsDict, key: const *char) -> *char:
+    if (d->used + 1) * 4 >= d->cap * 3:      # load factor 3/4
+        ps_dict_rehash(ctx, d, d->cap * 2)
+    found: bool = False
+    i: i64 = ps_dict_slot(d, key, ref found)
+    st: *char = ps_arr_data(d->state)
+    if not found:
+        memcpy(ps_arr_data(d->keys) + usize(i) * usize(d->ksize), key, usize(d->ksize))
+        if st[i] == 0:
+            d->used += 1
+        st[i] = 1
+        d->n += 1
+    if d->vsize == 0:
+        return None
+    return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+
+def ps_dict_get(ctx: *PsCtx, d: *PsDict, key: const *char, file: const *char, line: i32) -> *char:
+    found: bool = False
+    i: i64 = ps_dict_slot(d, key, ref found)
+    if not found:
+        # a missing key RAISES (5.2); `get(k, default)` is the other idiom
+        ps_raise(ctx, "key not found", PS_CAT_KEY, file, line)
+        return ps_arr_data(d->vals)
+    return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+
+def ps_dict_has(d: *PsDict, key: const *char) -> bool:
+    found: bool = False
+    ps_dict_slot(d, key, ref found)
+    return found
+
+def ps_dict_del(d: *PsDict, key: const *char) -> bool:
+    found: bool = False
+    i: i64 = ps_dict_slot(d, key, ref found)
+    if not found:
+        return False
+    ps_arr_data(d->state)[i] = 2      # tombstone: the probe chain stays intact
+    d->n -= 1
+    return True
+
+def ps_dict_cap(d: *PsDict) -> i64:
+    return d->cap
+
+def ps_dict_live(d: *PsDict, i: i64) -> bool:
+    return ps_arr_data(d->state)[i] == 1
+
+def ps_dict_key_at(d: *PsDict, i: i64) -> *char:
+    return ps_arr_data(d->keys) + usize(i) * usize(d->ksize)
+
+def ps_dict_val_at(d: *PsDict, i: i64) -> *char:
+    return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+
+# ---------- strings ----------
+# counts codepoints in UTF-8: every byte that is not a continuation starts one
+static def ps_utf8_count(b: const *char, n: usize) -> u32:
+    c: u32 = 0
+    for i in range(n):
+        if (u8(b[i]) & 0xC0) != 0x80:
+            c += 1
+    return c
+
+# byte offset of codepoint `k`, or `n` when k is past the end
+static def ps_utf8_off(b: const *char, n: usize, k: i64) -> usize:
+    seen: i64 = 0
+    for i in range(n):
+        if (u8(b[i]) & 0xC0) != 0x80:
+            if seen == k:
+                return usize(i)
+            seen += 1
+    return n
+
+def ps_str_new(ctx: *PsCtx, bytes: const *char, len: usize) -> *PsStr:
+    s: *PsStr = ps_alloc(ctx, sizeof(PsStr) + len + 1, PS_TY_STR)
+    s->len = u32(len)
+    s->hash = 0
+    if len > 0:
+        memcpy(s->data, bytes, len)
+    s->data[len] = '\0'
+    s->nchars = ps_utf8_count(s->data, len)
+    return s
+
+def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr:
+    n: usize = usize(a->len) + usize(b->len)
+    s: *PsStr = ps_alloc(ctx, sizeof(PsStr) + n + 1, PS_TY_STR)
+    s->len = u32(n)
+    # CHARACTERS too (3.4): `len()` is O(1) because every constructor sets this,
+    # and concatenation is the one that used to forget — a joined string
+    # reported length 0 while printing perfectly.
+    s->nchars = a->nchars + b->nchars
+    s->hash = 0
+    memcpy(s->data, a->data, usize(a->len))
+    memcpy(s->data + a->len, b->data, usize(b->len))
+    s->data[n] = '\0'
+    return s
+
+# The digits by hand rather than snprintf: `%lld` versus `%ld` for an i64 is a
+# portability question with no good answer in a header meant to compile
+# anywhere, and a runtime that warns is a runtime nobody trusts. Works in the
+# NEGATIVES so that the most negative integer, which has no positive
+# counterpart, needs no special case.
+def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr:
+    buf: char[24]
+    i: i32 = 24
+    neg: bool = v < 0
+    n: i64 = v if neg else -v
+    do:
+        i -= 1
+        buf[i] = char(i32('0') - i32(n % 10))
+        n /= 10
+    while n != 0
+    if neg:
+        i -= 1
+        buf[i] = '-'
+    return ps_str_new(ctx, buf + i, usize(24 - i))
+
+# Python's repr: the SHORTEST form that reads back as the same double. Tries 15,
+# then 16, then 17 significant digits and keeps the first that round-trips — the
+# standard recipe, and the reason `0.1 + 0.2` prints all its digits instead of a
+# tidy lie. A result with no '.', 'e', 'inf' or 'nan' in it gets a ".0", because
+# a float that prints as `2` is indistinguishable from an int.
+def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr:
+    buf: char[64]
+    n: i32 = 0
+    prec: i32 = 15
+    while prec <= 17:
+        n = snprintf(buf, 64, "%.*g", prec, v)
+        if strtod(buf, None) == v:
+            break
+        prec += 1
+    if strpbrk(buf, ".eEni") == None:
+        buf[n] = '.'
+        buf[n + 1] = '0'
+        n += 2
+        buf[n] = '\0'
+    return ps_str_new(ctx, buf, usize(n))
+
+def ps_str_from_bool(ctx: *PsCtx, v: bool) -> *PsStr:
+    return ps_str_new(ctx, "True" if v else "False", usize(4 if v else 5))
+
+def ps_str_eq(a: *PsStr, b: *PsStr) -> bool:
+    if a == b:
+        return True
+    if a->len != b->len:
+        return False
+    return memcmp(a->data, b->data, usize(a->len)) == 0
+
+def ps_str_cstr(s: *PsStr) -> const *char:
+    return s->data if s != None else ""
+
+def ps_str_len(ctx: *PsCtx, s: *PsStr) -> i64:
+    # CHARACTERS, as 3.4 asks — counted once at creation, so this is O(1)
+    return i64(s->nchars)
+
+def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *PsStr:
+    k: i64 = i + i64(s->nchars) if i < 0 else i
+    if k < 0 or k >= i64(s->nchars):
+        ps_raise(ctx, "string index out of range", PS_CAT_INDEX, file, line)
+        return ps_str_new(ctx, "", 0)
+    a: usize = ps_utf8_off(s->data, usize(s->len), k)
+    b: usize = ps_utf8_off(s->data, usize(s->len), k + 1)
+    return ps_str_new(ctx, s->data + a, b - a)
+
+def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsStr:
+    n: i64 = i64(s->nchars)
+    lo: i64 = a if has_a else 0
+    hi: i64 = b if has_b else n
+    if lo < 0:
+        lo += n
+    if hi < 0:
+        hi += n
+    # a slice CLAMPS instead of raising, as Python's does: `xs[:99]` is the
+    # whole thing, not an error
+    if lo < 0:
+        lo = 0
+    if hi > n:
+        hi = n
+    if lo >= hi:
+        return ps_str_new(ctx, "", 0)
+    ba: usize = ps_utf8_off(s->data, usize(s->len), lo)
+    bb: usize = ps_utf8_off(s->data, usize(s->len), hi)
+    return ps_str_new(ctx, s->data + ba, bb - ba)
+
+def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64:
+    if needle->len == 0:
+        return 0
+    if needle->len > s->len:
+        return -1
+    chars: i64 = 0
+    for i in range(usize(s->len) - usize(needle->len) + 1):
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+                return chars
+            chars += 1
+    return -1
+
+def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
+    if needle->len == 0:
+        return True
+    if needle->len > s->len:
+        return False
+    for i in range(usize(s->len) - usize(needle->len) + 1):
+        if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+            return True
+    return False
+
+def ps_str_startswith(s: *PsStr, p: *PsStr) -> bool:
+    if p->len > s->len:
+        return False
+    return memcmp(s->data, p->data, usize(p->len)) == 0
+
+def ps_str_endswith(s: *PsStr, p: *PsStr) -> bool:
+    if p->len > s->len:
+        return False
+    return memcmp(s->data + (usize(s->len) - usize(p->len)), p->data, usize(p->len)) == 0
+
+def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    a: usize = 0
+    b: usize = usize(s->len)
+    while a < b and (s->data[a] == ' ' or s->data[a] == '\t' or s->data[a] == '\n' or s->data[a] == '\r'):
+        a += 1
+    while b > a and (s->data[b - 1] == ' ' or s->data[b - 1] == '\t' or s->data[b - 1] == '\n' or s->data[b - 1] == '\r'):
+        b -= 1
+    return ps_str_new(ctx, s->data + a, b - a)
+
+# splits on a NON-EMPTY separator, like Python's `s.split(sep)`
+def ps_str_split(ctx: *PsCtx, s: *PsStr, sep: *PsStr) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 4)
+    if sep->len == 0:
+        ps_raise(ctx, "split() needs a non-empty separator", PS_CAT_VALUE, "<split>", 0)
+        return out
+    start: usize = 0
+    i: usize = 0
+    n: usize = usize(s->len)
+    m: usize = usize(sep->len)
+    while i + m <= n:
+        if memcmp(s->data + i, sep->data, m) == 0:
+            piece: *PsStr = ps_str_new(ctx, s->data + start, i - start)
+            slot: **PsStr = (**PsStr)(ps_list_push(ctx, out))
+            *slot = piece
+            i += m
+            start = i
+        else:
+            i += 1
+    last: *PsStr = ps_str_new(ctx, s->data + start, n - start)
+    slot2: **PsStr = (**PsStr)(ps_list_push(ctx, out))
+    *slot2 = last
+    return out
+
+def ps_str_to_int(ctx: *PsCtx, s: *PsStr) -> i64:
+    end: *char = None
+    v: i64 = strtoll(s->data, &end, 10)
+    if end == s->data or *end != '\0':
+        ps_raise(ctx, "int(): the string is not a number", PS_CAT_VALUE, "<int>", 0)
+        return 0
+    return v
+
+def ps_str_to_float(ctx: *PsCtx, s: *PsStr) -> f64:
+    end: *char = None
+    v: f64 = strtod(s->data, &end)
+    if end == s->data or *end != '\0':
+        ps_raise(ctx, "float(): the string is not a number", PS_CAT_VALUE, "<float>", 0)
+        return 0.0
+    return v
+
+# ---------- errors ----------
+def ps_raise(ctx: *PsCtx, msg: const *char, cat: i32, file: const *char, line: i32):
+    # The FIRST exception wins: a raise while one is already pending would lose
+    # the original, and the original is the one that explains what happened.
+    if ctx->exc != None:
+        return
+    e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
+    e->msg = ps_str_new(ctx, msg, strlen(msg))
+    e->cat = cat
+    e->file = file
+    e->line = line
+    ctx->exc = e
+
+def ps_raise_str(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32):
+    if ctx->exc != None:
+        return
+    e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
+    e->msg = msg
+    e->cat = i32(cat)
+    e->file = file
+    e->line = line
+    ctx->exc = e
+
+def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64) -> *PsErr:
+    e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
+    e->msg = msg
+    e->cat = i32(cat)
+    e->file = None
+    e->line = 0
+    return e
+
+def ps_reraise(ctx: *PsCtx, e: *PsErr):
+    # re-raising keeps the ORIGINAL position and category: the point of
+    # `raise e` is to pass the same failure on, not to report a new one here
+    if ctx->exc != None or e == None:
+        return
+    ctx->exc = e
+
+def ps_has_exc(ctx: *PsCtx) -> bool:
+    return ctx->exc != None
+
+def ps_take_exc(ctx: *PsCtx) -> *PsErr:
+    e: *PsErr = ctx->exc
+    ctx->exc = None
+    return e
+
+def ps_err_message(e: *PsErr) -> *PsStr:
+    return e->msg
+
+def ps_err_category(e: *PsErr) -> i64:
+    return i64(e->cat)
+
+# ---------- formatting ----------
+# pads `src` to `width` according to `align`; `zero` fills with '0' after any
+# sign, which is what `08d` means
+static def ps_pad(ctx: *PsCtx, src: const *char, n: usize, width: i32, align: char, zero: bool) -> *PsStr:
+    if width <= 0 or usize(width) <= n:
+        return ps_str_new(ctx, src, n)
+    total: usize = usize(width)
+    pad: usize = total - n
+    out: *PsStr = ps_alloc(ctx, sizeof(PsStr) + total + 1, PS_TY_STR)
+    out->len = u32(total)
+    out->hash = 0
+    # padding is ASCII spaces or zeros, so the character count grows with it
+    out->nchars = u32(pad) + ps_utf8_count(src, n)
+    d: *char = out->data
+    if zero and align != '^':
+        # the sign stays in front of the zeros: -0042, never 00-42
+        lead: usize = 1 if n > 0 and (src[0] == '-' or src[0] == '+') else 0
+        memcpy(d, src, lead)
+        memset(d + lead, '0', pad)
+        memcpy(d + lead + pad, src + lead, n - lead)
+    elif align == '<':
+        memcpy(d, src, n)
+        memset(d + n, ' ', pad)
+    elif align == '^':
+        left: usize = pad / 2
+        memset(d, ' ', left)
+        memcpy(d + left, src, n)
+        memset(d + left + n, ' ', pad - left)
+    else:
+        memset(d, ' ', pad)
+        memcpy(d + pad, src, n)
+    d[total] = '\0'
+    return out
+
+def ps_fmt_int(ctx: *PsCtx, v: i64, width: i32, align: char, zero: bool, ty: char) -> *PsStr:
+    buf: char[32]
+    n: usize = 0
+    if ty == 'x' or ty == 'X' or ty == 'b' or ty == 'o':
+        base: i64 = 16 if (ty == 'x' or ty == 'X') else (2 if ty == 'b' else 8)
+        digits: const *char = "0123456789abcdef" if ty != 'X' else "0123456789ABCDEF"
+        i: i32 = 32
+        u: u64 = u64(v)
+        do:
+            i -= 1
+            buf[i] = digits[usize(u % u64(base))]
+            u /= u64(base)
+        while u != 0
+        n = usize(32 - i)
+        return ps_pad(ctx, buf + i, n, width, align, zero)
+    t: *PsStr = ps_str_from_int(ctx, v)
+    return ps_pad(ctx, t->data, usize(t->len), width, align, zero)
+
+def ps_fmt_float(ctx: *PsCtx, v: f64, width: i32, prec: i32, align: char, zero: bool) -> *PsStr:
+    if prec < 0:
+        t: *PsStr = ps_str_from_float(ctx, v)
+        return ps_pad(ctx, t->data, usize(t->len), width, align, zero)
+    buf: char[64]
+    n: i32 = snprintf(buf, 64, "%.*f", prec, v)
+    return ps_pad(ctx, buf, usize(n), width, align, zero)
+
+def ps_fmt_str(ctx: *PsCtx, s: *PsStr, width: i32, align: char) -> *PsStr:
+    return ps_pad(ctx, s->data, usize(s->len), width, align, False)
+
+# ---------- output ----------
+def ps_print(ctx: *PsCtx, s: *PsStr):
+    # 49.2: once an exception is pending, every call is a no-op until the check
+    # at the end of the statement sees it. Printing here would be printing a
+    # value that was never really computed.
+    if ctx->exc != None:
+        return
+    fwrite(s->data, 1, usize(s->len), stdout)
+    fputc('\n', stdout)
+
+# ---------- arithmetic ----------
+# Overflow raises (7.2). The checks are the portable ones: detect before the
+# operation, so nothing ever relies on signed overflow, which is undefined in C
+# and would let the target compiler delete the check.
+def ps_add(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b > 0 and a > 9223372036854775807 - b:
+        ps_raise(ctx, "integer overflow in +", PS_CAT_OVERFLOW, file, line)
+        return 0
+    if b < 0 and a < (-9223372036854775807 - 1) - b:
+        ps_raise(ctx, "integer overflow in +", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a + b
+
+def ps_sub(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b < 0 and a > 9223372036854775807 + b:
+        ps_raise(ctx, "integer overflow in -", PS_CAT_OVERFLOW, file, line)
+        return 0
+    if b > 0 and a < (-9223372036854775807 - 1) + b:
+        ps_raise(ctx, "integer overflow in -", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a - b
+
+def ps_mul(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if a != 0:
+        r: i64 = a * b
+        # the division check: exact for every case except the one below
+        if b != 0 and (r / a != b or (a == -1 and b == (-9223372036854775807 - 1))):
+            ps_raise(ctx, "integer overflow in *", PS_CAT_OVERFLOW, file, line)
+            return 0
+        return r
+    return 0
+
+def ps_neg(ctx: *PsCtx, a: i64, file: const *char, line: i32) -> i64:
+    if a == (-9223372036854775807 - 1):
+        ps_raise(ctx, "integer overflow in unary -", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return -a
+
+def ps_div(ctx: *PsCtx, a: f64, b: f64, file: const *char, line: i32) -> f64:
+    # `/` is float even between ints (39.1), and dividing by zero RAISES the
+    # way Python does (47.2) rather than producing inf
+    if b == 0.0:
+        ps_raise(ctx, "division by zero", PS_CAT_ZERO, file, line)
+        return 0.0
+    return a / b
+
+def ps_floordiv(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b == 0:
+        ps_raise(ctx, "integer division by zero", PS_CAT_ZERO, file, line)
+        return 0
+    if a == (-9223372036854775807 - 1) and b == -1:
+        ps_raise(ctx, "integer overflow in //", PS_CAT_OVERFLOW, file, line)
+        return 0
+    q: i64 = a / b            # C truncates toward zero
+    if (a % b != 0) and ((a < 0) != (b < 0)):
+        q -= 1                # Python floors
+    return q
+
+def ps_mod(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b == 0:
+        ps_raise(ctx, "integer modulo by zero", PS_CAT_ZERO, file, line)
+        return 0
+    if a == (-9223372036854775807 - 1) and b == -1:
+        return 0
+    r: i64 = a % b            # C keeps the DIVIDEND's sign
+    if r != 0 and ((r < 0) != (b < 0)):
+        r += b                # Python takes the DIVISOR's, preserving
+    return r                  #   a == (a//b)*b + a%b
+
+def ps_fpow(a: f64, b: f64) -> f64:
+    return pow(a, b)
+
+# Python's `//` and `%` on floats are the same RULE as on integers: the quotient
+# floors and the remainder carries the divisor's sign, so `a == (a//b)*b + a%b`
+# holds there too. Dividing by zero raises, as it does everywhere else (32.2).
+def ps_ffloordiv(ctx: *PsCtx, a: f64, b: f64, file: const *char, line: i32) -> f64:
+    if b == 0.0:
+        ps_raise(ctx, "float division by zero", PS_CAT_ZERO, file, line)
+        return 0.0
+    return floor(a / b)
+
+def ps_fmod(ctx: *PsCtx, a: f64, b: f64, file: const *char, line: i32) -> f64:
+    if b == 0.0:
+        ps_raise(ctx, "float modulo by zero", PS_CAT_ZERO, file, line)
+        return 0.0
+    return a - floor(a / b) * b
+
+# ---------- exact widths (68.2) ----------
+def ps_fitw(ctx: *PsCtx, v: i64, lo: i64, hi: i64, what: const *char, file: const *char, line: i32) -> i64:
+    if v < lo or v > hi:
+        msg: char[96]
+        snprintf(msg, 96, "overflow of %s", what)
+        ps_raise(ctx, msg, PS_CAT_OVERFLOW, file, line)
+        return 0
+    return v
+
+def ps_f_to_iw(ctx: *PsCtx, v: f64, lo: i64, hi: i64, what: const *char, file: const *char, line: i32) -> i64:
+    if v != v or v < f64(lo) or v > f64(hi):
+        msg: char[96]
+        snprintf(msg, 96, "%f does not fit %s", v, what)
+        ps_raise(ctx, msg, PS_CAT_OVERFLOW, file, line)
+        return 0
+    return i64(v)
+
+def ps_uadd(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if a > ~u64(0) - b:
+        ps_raise(ctx, "overflow of u64 in +", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a + b
+
+def ps_usub(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if b > a:
+        ps_raise(ctx, "overflow of u64 in - (the result would be negative)", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a - b
+
+def ps_umul(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if a != 0 and b > (~u64(0)) / a:
+        ps_raise(ctx, "overflow of u64 in *", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a * b
+
+def ps_udiv(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if b == 0:
+        ps_raise(ctx, "integer division by zero", PS_CAT_ZERO, file, line)
+        return 0
+    return a / b
+
+def ps_umod(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if b == 0:
+        ps_raise(ctx, "integer modulo by zero", PS_CAT_ZERO, file, line)
+        return 0
+    return a % b
+
+def ps_upow(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    r: u64 = 1
+    base: u64 = a
+    e: u64 = b
+    while e > 0:
+        if e & 1 == 1:
+            r = ps_umul(ctx, r, base, file, line)
+            if ctx->exc != None:
+                return 0
+        e >>= 1
+        if e > 0:
+            base = ps_umul(ctx, base, base, file, line)
+            if ctx->exc != None:
+                return 0
+    return r
+
+def ps_u_to_i(ctx: *PsCtx, v: u64, file: const *char, line: i32) -> i64:
+    if v > u64(9223372036854775807):
+        ps_raise(ctx, "this u64 does not fit int", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return i64(v)
+
+def ps_i_to_u64(ctx: *PsCtx, v: i64, file: const *char, line: i32) -> u64:
+    if v < 0:
+        ps_raise(ctx, "a negative int does not fit u64", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return u64(v)
+
+def ps_f_to_u64(ctx: *PsCtx, v: f64, file: const *char, line: i32) -> u64:
+    if v != v or v < 0.0 or v >= 18446744073709551616.0:
+        ps_raise(ctx, "this float does not fit u64", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return u64(v)
+
+def ps_wrapw(v: i64, bits: i32, uns: bool) -> i64:
+    u: u64 = u64(v)
+    if bits < 64:
+        u &= (u64(1) << u64(bits)) - 1
+    if not uns and bits < 64 and (u & (u64(1) << u64(bits - 1))) != 0:
+        u |= ~((u64(1) << u64(bits)) - 1)      # sign-extend the wrapped value
+    return i64(u)
+
+def ps_str_from_uint(ctx: *PsCtx, v: u64) -> *PsStr:
+    buf: char[24]
+    i: i32 = 24
+    n: u64 = v
+    do:
+        i -= 1
+        buf[i] = char('0' + int(n % 10))
+        n /= 10
+    while n != 0
+    return ps_str_new(ctx, buf + i, usize(24 - i))
+
+def ps_fmt_uint(ctx: *PsCtx, v: u64, width: i32, align: char, zero: bool, ty: char) -> *PsStr:
+    s: *PsStr = ps_str_from_uint(ctx, v)
+    return ps_pad(ctx, s->data, usize(s->len), width, align, zero)
+
+def ps_pow(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    # A variable exponent cannot change the static type of the result (47.3), so
+    # a negative one raises instead of quietly becoming a float. A constant
+    # negative exponent is folded to a float long before it reaches here.
+    if b < 0:
+        ps_raise(ctx, "negative exponent on integers (write a float base for that)", PS_CAT_VALUE, file, line)
+        return 0
+    r: i64 = 1
+    base: i64 = a
+    e: i64 = b
+    while e > 0:
+        if e & 1 == 1:
+            r = ps_mul(ctx, r, base, file, line)
+            if ctx->exc != None:
+                return 0
+        e >>= 1
+        if e > 0:
+            base = ps_mul(ctx, base, base, file, line)
+            if ctx->exc != None:
+                return 0
+    return r

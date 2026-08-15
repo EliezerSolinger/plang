@@ -1,0 +1,2 @@
+before
+tests/pscript/run/raise.psc:9: error: division by zero

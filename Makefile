@@ -32,13 +32,13 @@ check: plangc
 # and the c-testsuite ported to P. c-suite (C frontend scoreboard) is
 # informational: run it explicitly with `bash tests/run.sh c-suite`.
 test: plangc
-	bash tests/run.sh cases modules stl p-suite errors
+	bash tests/run.sh cases modules stl p-suite errors pscript
 
 test-qbe: plangc
-	BACKEND=qbe bash tests/run.sh cases modules stl p-suite errors
+	BACKEND=qbe bash tests/run.sh cases modules stl p-suite errors pscript
 
 test-c89: plangc
-	STD=c89 bash tests/run.sh cases modules stl p-suite errors
+	STD=c89 bash tests/run.sh cases modules stl p-suite errors pscript
 
 # the FULL verification battery in one command: bootstrap ladder from the
 # committed seed, C fixed point (stage2==stage3), gating suites on C/QBE/C89,

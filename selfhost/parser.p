@@ -19,27 +19,17 @@ static def is_type_base_word(s: const *char) -> bool:
 static def is_assign_op(k: TokKind) -> bool:
     return k in {TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ}
 
-# reconstructs a `<...>` header path from tokens (include is a contextual word,
-# not a keyword, so the lexer does NOT special-case `<h>` after it).
-static def spell_tok(t: *Token) -> const *char:
-    if t->text != None:
-        return t->text
-    match t->kind:
-        case TK_DOT:
-            return "."
-        case TK_SLASH:
-            return "/"
-        case TK_MINUS:
-            return "-"
-        case _:
-            return ""
-
 struct P:
     t: *Token
     n: usize
     i: usize
     file: const *char
     a: *Arena
+    # aliases declared by `import "x.ph" as ns` in THIS file (42.4). Collected
+    # while parsing so that a type can be qualified: `ns.Point` is only read as
+    # one name when `ns` really is an alias, which keeps `(p.x)` from ever
+    # looking like a cast to a type called `p.x`.
+    nsv: Vec<*char>
 
     static def pk(self: *P) -> *Token
     static def pk1(self: *P) -> *Token
@@ -50,6 +40,9 @@ struct P:
     static def expect(self: *P, k: TokKind, ctx: const *char) -> *Token
     static def expect_gt(self: *P)
     static def parse_type(self: *P) -> *Type
+    static def parse_type_ref(self: *P) -> *Type
+    static def at_ref_type(self: *P) -> bool
+    static def has_ns(self: *P, name: const *char) -> bool
     static def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr
     static def parse_stmtexpr(self: *P) -> *Expr
     static def parse_primary(self: *P) -> *Expr
@@ -67,6 +60,7 @@ struct P:
     static def parse_not(self: *P) -> *Expr
     static def parse_and(self: *P) -> *Expr
     static def parse_or(self: *P) -> *Expr
+    static def parse_coalesce(self: *P) -> *Expr
     static def parse_ternary(self: *P) -> *Expr
     static def parse_expr(self: *P) -> *Expr
     static def parse_init_elem(self: *P, out: *Vec<*Expr>)
@@ -82,11 +76,13 @@ struct P:
     static def parse_with(self: *P) -> *Stmt
     static def parse_stmt(self: *P) -> *Stmt
     static def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func
-    static def parse_struct_or_union(self: *P, is_union: bool) -> *Decl
+    static def parse_struct_or_union(self: *P, is_union: bool, is_record: bool = False) -> *Decl
     static def parse_enum(self: *P) -> *Decl
     static def parse_c_include(self: *P) -> *Decl
     static def parse_import(self: *P) -> *Decl
     static def parse_instantiate(self: *P) -> *Decl
+    static def parse_trait(self: *P) -> *Decl
+    static def parse_trait_impl(self: *P, tname: const *char, pos: Pos) -> *Decl
     static def parse_top(self: *P) -> *Decl
 
     # ---------- primitives ----------
@@ -134,7 +130,35 @@ struct P:
         else:
             fatal_at(self->file, self->pk()->pos, "expected '>' closing type arguments, found %s", tok_kind_name(k))
 
+    static def has_ns(self: *P, name: const *char) -> bool:
+        for i in range(self->nsv.len):
+            if strcmp(self->nsv.data[i], name) == 0:
+                return True
+        return False
+
+    # `ref` starts a type only when a type actually follows — `x: ref = e`
+    # still declares a variable whose TYPE is the (unfortunate) name `ref`
+    static def at_ref_type(self: *P) -> bool:
+        if not self->at(TK_IDENT) or strcmp(self->pk()->text, "ref") != 0:
+            return False
+        nk: i32 = self->pk1()->kind
+        return nk == TK_IDENT or nk == TK_STAR or nk == TK_CONST or nk == TK_VOLATILE or nk == TK_DEF
+
+    # `ref T` (69.1) is legal ONLY where this wrapper is used: a local
+    # declaration and a function return. Everywhere else parse_type itself
+    # rejects it with the reason, so the error lands on the exact position.
+    static def parse_type_ref(self: *P) -> *Type:
+        if self->at_ref_type():
+            self->adv()   # the `ref` keyword
+            inner: *Type = self->parse_type()   # `ref ref T` falls into the guard below
+            rt: *Type = ty_ptr(self->a, inner)
+            rt->is_ref = True
+            return rt
+        return self->parse_type()
+
     static def parse_type(self: *P) -> *Type:
+        if self->at_ref_type():
+            fatal_at(self->file, self->pk()->pos, "'ref T' is only a local variable or return type (69.1): a parameter takes the trio (`ref v: T`); fields, globals and inner types hold a pointer (*T)")
         is_const: bool = False
         is_volatile: bool = False
         is_restrict: bool = False
@@ -159,6 +183,8 @@ struct P:
                 else:
                     self->adv()
                     is_volatile = True
+        if stars > 0 and self->at_ref_type():
+            fatal_at(self->file, self->pk()->pos, "a ref cannot live behind a pointer: '*ref T' has no meaning — the pointer itself is the nullable form (69.1)")
 
         t: *Type
         if self->at(TK_LPAREN):
@@ -222,6 +248,14 @@ struct P:
                 name = self->a->printf("%s %s", name, self->adv()->text)
                 words += 1
 
+            # `ns.Point`: a type qualified by an import alias. Sema strips the
+            # alias after checking that the module really declares the name.
+            ns_qual: bool = False
+            if self->at(TK_DOT) and self->pk1()->kind == TK_IDENT and self->has_ns(name):
+                self->adv()
+                name = self->a->printf("%s.%s", name, self->adv()->text)
+                ns_qual = True
+
             # generic arguments: Vec<int>, Map<int, *char>...
             targs: Vec<*Type>
             targs.init()
@@ -236,6 +270,7 @@ struct P:
                 .is_const = is_const
                 .is_volatile = is_volatile
                 .is_restrict = is_restrict
+                .ns_qual = ns_qual
                 .targs = targs.data
                 .ntargs = targs.len
         k: i32
@@ -594,12 +629,21 @@ struct P:
             e = self->bin(op->kind, op->pos, e, self->parse_and())
         return e
 
+    # `a ?? b` (69.3): b if a is None. Binds tighter than the ternary and
+    # looser than `or`; chains left, which for pointers reads the same either way
+    static def parse_coalesce(self: *P) -> *Expr:
+        e: *Expr = self->parse_or()
+        while self->at(TK_COALESCE):
+            op: *Token = self->adv()
+            e = self->bin(op->kind, op->pos, e, self->parse_or())
+        return e
+
     # Python-style ternary: value if cond else other
     static def parse_ternary(self: *P) -> *Expr:
-        v: *Expr = self->parse_or()
+        v: *Expr = self->parse_coalesce()
         if self->at(TK_IF):
             pos: Pos = self->adv()->pos
-            c: *Expr = self->parse_or()
+            c: *Expr = self->parse_coalesce()
             self->expect(TK_ELSE, "ternary (missing 'else')")
             o: *Expr = self->parse_ternary()
             e: *Expr = ex_new(self->a, EX_TERNARY, pos)
@@ -733,7 +777,7 @@ struct P:
         # explicit type (`name: type`) or inferred (`name = value`, no ':').
         # type == None signals inference for sema (via type_of of the initializer).
         if self->accept(TK_COLON):
-            s->type = self->parse_type()
+            s->type = self->parse_type_ref()
         if self->accept(TK_ASSIGN):
             s->init = self->parse_initializer()
         elif s->type == None:
@@ -1030,12 +1074,21 @@ struct P:
         # param/return types and body; monomorphized explicitly via `declare foo<int>`.
         ftparams: Vec<*char>
         ftparams.init()
+        ftbounds: Vec<*char>
+        ftbounds.init()
         if self->accept(TK_LT):
             if owner != None:
                 fatal_at(self->file, name->pos, "methods cannot add their own type parameters (use the struct's)")
             do:
                 ftp: *Token = self->expect(TK_IDENT, "type parameter")
                 ftparams.push((*char)(ftp->text))
+                # `def sort<T: Comparable>` (67.1) — the bound is checked at
+                # INSTANTIATION, where the concrete type is known, so the calls
+                # inside stay direct and no vtable is ever built
+                if self->accept(TK_COLON):
+                    ftbounds.push((*char)(self->expect(TK_IDENT, "trait bound")->text))
+                else:
+                    ftbounds.push(None)
             while self->accept(TK_COMMA)
             self->expect_gt()
         f: *Func = self->a->alloc(sizeof(Func))
@@ -1047,6 +1100,7 @@ struct P:
             .is_static = is_static
             .is_inline = is_inline
             .tparams = ftparams.data
+            .tbounds = ftbounds.data
             .ntparams = ftparams.len
 
         self->expect(TK_LPAREN, "function parameters")
@@ -1091,7 +1145,7 @@ struct P:
             while self->accept(TK_COMMA)
         self->expect(TK_RPAREN, "function parameters")
         if self->accept(TK_ARROW):
-            f->ret = self->parse_type()
+            f->ret = self->parse_type_ref()
         else:
             f->ret = ty_name(self->a, "void")  # no '->' = void
         f->params = params.data
@@ -1103,8 +1157,8 @@ struct P:
             self->expect(TK_NEWLINE, "function prototype")
         return f
 
-    static def parse_struct_or_union(self: *P, is_union: bool) -> *Decl:
-        pos: Pos = self->adv()->pos  # struct/union
+    static def parse_struct_or_union(self: *P, is_union: bool, is_record: bool = False) -> *Decl:
+        pos: Pos = self->adv()->pos  # struct/union/record
         name: *Token = self->expect(TK_IDENT, "union" if is_union else "struct")
         # type parameters: struct Vec<T>: (generic template)
         tparams: Vec<*char>
@@ -1115,6 +1169,8 @@ struct P:
             do:
                 tp: *Token = self->expect(TK_IDENT, "type parameter")
                 tparams.push((*char)(tp->text))
+                if self->accept(TK_COLON):
+                    self->expect(TK_IDENT, "trait bound")
             while self->accept(TK_COMMA)
             self->expect_gt()
         self->expect(TK_COLON, "struct/union")
@@ -1123,6 +1179,7 @@ struct P:
 
         d: *Decl = self->a->alloc(sizeof(Decl))
         d->kind = DL_UNION if is_union else DL_STRUCT
+        d->is_record = is_record
         d->pos = pos
         d->name = name->text
 
@@ -1221,6 +1278,8 @@ struct P:
             self->expect(TK_GT, "include <header> (missing '>')")
             d->import_path = path
             d->import_system = True
+        if self->at(TK_IDENT) and self->pk()->text == "as":
+            fatal_at(self->file, self->pk()->pos, "`include ... as` is not a thing: a C header has no namespace to qualify (`as` is for `import \"module.ph\"`)")
         self->expect(TK_NEWLINE, "include")
         return d
 
@@ -1243,13 +1302,85 @@ struct P:
                 fatal_at(self->file, d->pos, "import \"%s\": import takes a P header (.ph); for a C header use `include \"%s\"`", d->import_path, d->import_path)
         else:
             fatal_at(self->file, self->pk()->pos, "import expects a P header: import \"module.ph\" (C headers use include <...>)")
+        # `as ns` — the optional QUALIFIED spelling. `as` stays a plain
+        # identifier everywhere else: it is recognized by text here, not by a
+        # keyword, so no existing name called `as` ever stops compiling.
+        if self->at(TK_IDENT) and self->pk()->text == "as":
+            self->adv()
+            d->import_alias = self->expect(TK_IDENT, "import ... as <name>")->text
+            self->nsv.push((*char)(d->import_alias))
         self->expect(TK_NEWLINE, "import")
         return d
 
     # declare Vec<int> / implement Vec<int> — explicit instantiation of a generic
     # implement Str (no <>) — materializes bodies of a struct declared in .ph
+    # `trait Name:` — a named set of method signatures (67.1). The bodies are
+    # never here; an `implement Name for T:` block supplies them per type.
+    # `Self` inside a signature means "the type this is implemented for", which
+    # is what keeps `Comparable` from needing Java's F-bounded generic.
+    # `implement Trait for Type:` — the bodies, attached to Type. They register
+    # as METHODS of Type, so a call inside a monomorphized generic resolves
+    # through the method lookup that already exists: no new dispatch, and no
+    # vtable, which is the whole point of taking traits to P in the static form
+    # only (67.1).
+    static def parse_trait_impl(self: *P, tname: const *char, pos: Pos) -> *Decl:
+        ty: *Token = self->expect(TK_IDENT, "implement <trait> for <type>")
+        self->expect(TK_COLON, "implement ... for")
+        self->expect(TK_NEWLINE, "implement ... for")
+        self->expect(TK_INDENT, "implement ... for")
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_IMPLEMENT
+        d->pos = pos
+        d->name = tname
+        d->trait_for = ty->text
+        ms: Vec<*Func>
+        ms.init()
+        while not self->at(TK_DEDENT) and not self->at(TK_EOF):
+            if self->accept(TK_NEWLINE):
+                continue
+            if not self->at(TK_DEF):
+                fatal_at(self->file, self->pk()->pos, "an `implement ... for` block holds method bodies")
+            ms.push(self->parse_func(False, False, ty->text))
+        self->expect(TK_DEDENT, "implement ... for")
+        d->methods = ms.data
+        d->nmethods = ms.len
+        return d
+
+    static def parse_trait(self: *P) -> *Decl:
+        self->adv()                       # `trait`
+        name: *Token = self->expect(TK_IDENT, "trait name")
+        self->expect(TK_COLON, "trait")
+        self->expect(TK_NEWLINE, "trait")
+        self->expect(TK_INDENT, "trait body")
+        d: *Decl = self->a->alloc(sizeof(Decl))
+        d->kind = DL_TRAIT
+        d->pos = name->pos
+        d->name = name->text
+        ms: Vec<*Func>
+        ms.init()
+        while not self->at(TK_DEDENT) and not self->at(TK_EOF):
+            if self->accept(TK_NEWLINE):
+                continue
+            if not self->at(TK_DEF):
+                fatal_at(self->file, self->pk()->pos, "a trait holds method signatures: `def name(...) -> T`")
+            f: *Func = self->parse_func(False, False, name->text)
+            if f->body != None:
+                fatal_at(self->file, f->pos, "a trait method has no body — `implement %s for T:` supplies it", name->text)
+            ms.push(f)
+        self->expect(TK_DEDENT, "trait")
+        d->methods = ms.data
+        d->nmethods = ms.len
+        return d
+
     static def parse_instantiate(self: *P) -> *Decl:
         kw: *Token = self->adv()
+        # `implement Printable for Vec:` (67.2) — the same word as generic
+        # instantiation, told apart by the `for`. One word with two forms beats
+        # two words that look alike.
+        if kw->kind == TK_IMPLEMENT and self->at(TK_IDENT) and self->pk1()->kind == TK_FOR:
+            tn: *Token = self->adv()
+            self->adv()          # `for`
+            return self->parse_trait_impl(tn->text, kw->pos)
         d: *Decl = self->a->alloc(sizeof(Decl))
         d->kind = DL_DECLARE if kw->kind == TK_DECLARE else DL_IMPLEMENT
         if kw->kind == TK_INLINE:
@@ -1326,6 +1457,15 @@ struct P:
                 # identifier (a global named `include`, etc. keeps working).
                 if not is_extern and self->at(TK_IDENT) and self->pk()->text == "include" and (self->pk1()->kind == TK_LT or self->pk1()->kind == TK_STRING):
                     return self->parse_c_include()
+                # contextual `record Name:` (65.1) — same treatment as `include`
+                # above and as `global`/`nonlocal` in statements. Making it a
+                # keyword would break any program that already calls something
+                # `record`, and it buys nothing.
+                if not is_extern and self->at(TK_IDENT) and self->pk()->text == "record" and self->pk1()->kind == TK_IDENT:
+                    return self->parse_struct_or_union(False, True)
+                # contextual `trait X:` (67.1) — same treatment as `record`
+                if not is_extern and self->at(TK_IDENT) and self->pk()->text == "trait" and self->pk1()->kind == TK_IDENT:
+                    return self->parse_trait()
                 is_const: bool = self->accept(TK_CONST)
                 # `const def f(...)`: function evaluated at compile-time (not emitted in the binary)
                 if is_const and self->at(TK_DEF):
@@ -1366,6 +1506,7 @@ static def module_basename(a: *Arena, path: const *char) -> const *char:
 
 def parse_tokens(a: *Arena, file: const *char, tl: TokenList, is_header: i32) -> *Module:
     p: P = {tl.toks, tl.n, 0, file, a}
+    p.nsv.init()
     m: *Module = a->alloc(sizeof(Module))
     m->path = a->strdup(file)
     m->name = module_basename(a, file)
@@ -1381,4 +1522,5 @@ def parse_tokens(a: *Arena, file: const *char, tl: TokenList, is_header: i32) ->
         decls.push(p.parse_top())
     m->decls = decls.data
     m->ndecls = decls.len
+    p.nsv.deinit()   # the alias STRINGS are arena-owned; only the vector is ours
     return m

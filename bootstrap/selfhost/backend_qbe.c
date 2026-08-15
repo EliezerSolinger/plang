@@ -14,20 +14,6 @@
 
 const char *arena_qcmp(const char *base, char cls);
 
-int is_hexc(char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
-
-int32_t hexc(char c) {
-    if (c >= '0' && c <= '9') {
-        return (int32_t)(c - '0');
-    }
-    if (c >= 'a' && c <= 'f') {
-        return (int32_t)(c - 'a') + 10;
-    }
-    return (int32_t)(c - 'A') + 10;
-}
-
 int32_t align_up(int32_t x, int32_t a) {
     if (a <= 1) {
         return x;
@@ -127,7 +113,7 @@ const char *lit_body(const char *lex) {
     return lex + lit_prefix_len(lex);
 }
 
-int32_t cstr_bytes(StrBuf *out, const char *lex) {
+int32_t cstr_bytes(StrBuf *out, const char *lex, int32_t limit) {
     lex = lit_body(lex);
     int count = 0;
     size_t i = 1;
@@ -179,7 +165,7 @@ int32_t cstr_bytes(StrBuf *out, const char *lex) {
                     b = 39;
                     break;
                 }
-                case '?': {
+                case '\?': {
                     b = 63;
                     break;
                 }
@@ -206,6 +192,9 @@ int32_t cstr_bytes(StrBuf *out, const char *lex) {
             }
         } else {
             b = (int32_t)c & 0xFF;
+        }
+        if (limit >= 0 && count >= limit) {
+            break;
         }
         StrBuf_printf(out, " b %d,", b);
         count += 1;
@@ -1031,6 +1020,7 @@ struct Qb {
     StrMap_pType globals;
     StrMap_pFunc funcs;
     StrMap_pDecl structs;
+    StrMap_pType tdsc;
     int32_t cdepth;
     StrMap_pExpr gconsts;
     int32_t brk[64];
@@ -1052,6 +1042,8 @@ static int32_t Qb_tmp(Qb *self);
 static int32_t Qb_lbl(Qb *self);
 
 static char Qb_cls_of(Qb *self, Type *t);
+
+static const char *Qb_td_resolve(Qb *self, const char *name);
 
 static int32_t Qb_size_of(Qb *self, Type *t);
 
@@ -1223,6 +1215,23 @@ static int32_t Qb_lbl(Qb *self) {
     return self->nlbl;
 }
 
+static const char *Qb_td_resolve(Qb *self, const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    const char *n = name;
+    int32_t d = 0;
+    while (d < 8) {
+        Type *u = StrMap_pType_get_or(&self->tdsc, n, NULL);
+        if (u == NULL || u->name == NULL || strcmp(u->name, n) == 0) {
+            return n;
+        }
+        n = u->name;
+        d += 1;
+    }
+    return n;
+}
+
 static char Qb_cls_of(Qb *self, Type *t) {
     if (t == NULL) {
         return 'w';
@@ -1230,7 +1239,7 @@ static char Qb_cls_of(Qb *self, Type *t) {
     if (t->kind == TY_PTR || t->kind == TY_ARRAY || t->kind == TY_FUNC) {
         return 'l';
     }
-    const char *n = t->name;
+    const char *n = Qb_td_resolve(self, t->name);
     if (strcmp(n, "long") == 0 || strcmp(n, "i64") == 0 || strcmp(n, "u64") == 0 || strcmp(n, "usize") == 0 || strcmp(n, "isize") == 0 || strcmp(n, "size_t") == 0 || strcmp(n, "ptrdiff_t") == 0 || strcmp(n, "long long") == 0 || strcmp(n, "unsigned long") == 0 || strcmp(n, "unsigned long long") == 0) {
         return 'l';
     }
@@ -1393,7 +1402,7 @@ static int32_t Qb_size_of(Qb *self, Type *t) {
         }
         return count * Qb_size_of(self, t->inner);
     }
-    const char *n = t->name;
+    const char *n = Qb_td_resolve(self, t->name);
     if (strcmp(n, "va_list") == 0 || strcmp(n, "__builtin_va_list") == 0) {
         return 24;
     }
@@ -1667,7 +1676,7 @@ static int32_t Qb_data_fill(Qb *self, StrBuf *db, Type *ty, Expr **items, int32_
     if (aggr && ty->kind == TY_ARRAY && *idx < nitems && items[*idx] != NULL && items[*idx]->kind == EX_STRING && Qb_size_of(self, ty->inner) == 1) {
         Expr *se = items[*idx];
         *idx += 1;
-        int32_t nb = cstr_bytes(db, se->text);
+        int32_t nb = cstr_bytes(db, se->text, -1);
         StrBuf_puts(db, " b 0,");
         int32_t sz2 = Qb_size_of(self, ty);
         if (sz2 > nb + 1) {
@@ -2529,6 +2538,9 @@ static char Qb_ecls(Qb *self, Expr *e) {
     if (e->kind == EX_STMTEXPR) {
         return (e->lhs != NULL ? Qb_ecls(self, e->lhs) : 'w');
     }
+    if (e->kind == EX_COMMA) {
+        return Qb_ecls(self, e->rhs);
+    }
     if (e->kind == EX_STRING || e->kind == EX_NONE) {
         return 'l';
     }
@@ -2601,7 +2613,7 @@ static int32_t Qb_emit_string(Qb *self, const char *lex) {
         return id;
     }
     StrBuf_printf(&self->data, "data $qstr%d = {", id);
-    cstr_bytes(&self->data, lex);
+    cstr_bytes(&self->data, lex, -1);
     StrBuf_puts(&self->data, " b 0 }\n");
     return id;
 }
@@ -2655,6 +2667,13 @@ static int32_t Qb_emit_addr(Qb *self, Expr *e) {
             int32_t fa = Qb_tmp(self);
             StrBuf_printf(self->out, "\t%%t%d =l add %%t%d, %d\n", fa, base, off);
             return fa;
+        }
+        case EX_COMMA: {
+            Qb_emit_rvalue(self, e->lhs);
+            if (e->rhs->kind == EX_CALL || e->rhs->kind == EX_COMPOUND || e->rhs->kind == EX_STMTEXPR || e->rhs->kind == EX_GENERIC || e->rhs->kind == EX_CAST) {
+                return Qb_emit_rvalue(self, e->rhs);
+            }
+            return Qb_emit_addr(self, e->rhs);
         }
         case EX_INDEX: {
             int32_t base = Qb_emit_rvalue(self, e->lhs);
@@ -3009,7 +3028,7 @@ static int32_t Qb_charval(Qb *self, const char *lex) {
         case '"': {
             return 34;
         }
-        case '?': {
+        case '\?': {
             return 63;
         }
         case 'x': {
@@ -4198,7 +4217,7 @@ static void Qb_emit_str_to_addr(Qb *self, int32_t addr, const char *lex, int32_t
                     b = 39;
                     break;
                 }
-                case '?': {
+                case '\?': {
                     b = 63;
                     break;
                 }
@@ -4777,11 +4796,18 @@ static void Qb_add_static_var(Qb *self, const char *name, Type *ty, Expr *init, 
     }
     if (init != NULL && init->kind == EX_STRING && ty != NULL && ty->kind == TY_ARRAY) {
         StrBuf dbs = {0};
-        int32_t nb = cstr_bytes(&dbs, init->text);
-        int32_t total = (sz > nb + 1 ? sz : nb + 1);
-        StrBuf_printf(&self->data, "data $sl%d = {%s b 0", sid, (dbs.data != NULL ? dbs.data : ""));
-        if (total > nb + 1) {
-            StrBuf_printf(&self->data, ", z %d", total - (nb + 1));
+        int32_t nb = cstr_bytes(&dbs, init->text, (sz > 0 ? sz : -1));
+        int nul = sz <= 0 || nb < sz;
+        int32_t total = (sz > 0 ? sz : nb + 1);
+        StrBuf_printf(&self->data, "data $sl%d = {%s", sid, (dbs.data != NULL ? dbs.data : ""));
+        if (nul) {
+            StrBuf_puts(&self->data, " b 0");
+            nb += 1;
+        } else {
+            StrBuf_trim_comma(&self->data);
+        }
+        if (total > nb) {
+            StrBuf_printf(&self->data, "%s z %d", (!nul ? "" : ","), total - nb);
         }
         StrBuf_puts(&self->data, " }\n");
         StrBuf_deinit(&dbs);
@@ -4978,9 +5004,13 @@ void emit_module_qbe(Module *m, StrBuf *out) {
     StrMap_pType_init(&qb.globals);
     StrMap_pFunc_init(&qb.funcs);
     StrMap_pDecl_init(&qb.structs);
+    StrMap_pType_init(&qb.tdsc);
+    size_t i;
+    for (i = 0; i < m->ntdsc; i += 1) {
+        StrMap_pType_put(&qb.tdsc, m->tdsc_names[i], m->tdsc_types[i]);
+    }
     StrMap_pExpr_init(&qb.gconsts);
     Vec_EnumConst_init(&qb.enumc);
-    size_t i;
     for (i = 0; i < m->ndecls; i += 1) {
         Decl *d = m->decls[i];
         if (d->kind == DL_FUNC) {
@@ -5114,11 +5144,17 @@ void emit_module_qbe(Module *m, StrBuf *out) {
                 StrBuf_printf(out, "%sdata $%s = { l $qstr%d }\n", xp, d2->name, sidp);
             } else if (d2->init != NULL && d2->init->kind == EX_STRING && d2->type->kind == TY_ARRAY) {
                 StrBuf_printf(out, "%sdata $%s = {", xp, d2->name);
-                int32_t nb = cstr_bytes(out, d2->init->text);
-                StrBuf_puts(out, " b 0");
-                int32_t pad = sz - (nb + 1);
+                int32_t nb = cstr_bytes(out, d2->init->text, (sz > 0 ? sz : -1));
+                int gnul = sz <= 0 || nb < sz;
+                if (gnul) {
+                    StrBuf_puts(out, " b 0");
+                    nb += 1;
+                } else {
+                    StrBuf_trim_comma(out);
+                }
+                int32_t pad = sz - nb;
                 if (pad > 0) {
-                    StrBuf_printf(out, ", z %d", pad);
+                    StrBuf_printf(out, "%s z %d", (!gnul ? "" : ","), pad);
                 }
                 StrBuf_puts(out, " }\n");
             } else if (d2->init != NULL && gcls != 's' && gcls != 'd') {

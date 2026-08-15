@@ -1,1 +1,1 @@
-uninitialized but passed as 'ref'
+'r' is a ref and binds at its declaration

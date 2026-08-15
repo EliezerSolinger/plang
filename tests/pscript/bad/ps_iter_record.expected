@@ -1,0 +1,1 @@
+`for x in ...` needs a struct: the cursor has to advance

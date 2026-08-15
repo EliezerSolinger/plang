@@ -9,6 +9,9 @@ import "lexer.ph"
 import "parser.ph"
 import "sema.ph"
 import "cfront.ph"
+import "ps_parser.ph"
+import "ps_sema.ph"
+import "ps_lower.ph"
 import "../stl/vec.ph"
 import "vecs.ph"
 
@@ -74,6 +77,9 @@ static def usage():
     fprintf(stderr, "  -pedantic        warn on GNU/C23 extensions in C input\n")
     fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n")
     fprintf(stderr, "  --tokens         dump tokens and exit\n")
+    fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n")
+    fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n")
+    fprintf(stderr, "                   (default: pscript/runtime)\n")
     fprintf(stderr, "  -h, --help       this help\n")
     exit(2)
 
@@ -102,7 +108,9 @@ static def derive_output(a: *Arena, input: const *char, be: const *Backend) -> c
         return a->printf("%.*s.%s", i32(n - 2), input, be->out_ext)
     if n > 2 and input + n - 2 == ".i":
         return a->printf("%.*s.%s", i32(n - 2), input, be->out_ext)
-    fatal("'%s': unknown extension (expected .p, .ph, .c or .i)", input)
+    if n > 4 and input + n - 4 == ".psc":
+        return a->printf("%.*s.%s", i32(n - 4), input, be->out_ext)
+    fatal("'%s': unknown extension (expected .p, .ph, .psc, .c or .i)", input)
     return None
 
 static def dump_tokens(path: const *char, cc: *Cc):
@@ -197,6 +205,11 @@ def main(argc: int, argv: **char) -> int:
     out_dir: const *char = None   # --out-dir: mirrors each input's path here
     backend_name: const *char = None
     tokens_only: bool = False
+    parse_only: bool = False        # stop after the front end (a syntax check)
+    # where the pscript runtime lives (16.4: it is P source compiled with the
+    # program). The emitted import is made relative to the .psc, so this is
+    # written the way the sources are laid out, not baked in absolute.
+    ps_runtime: const *char = "pscript/runtime"
     std_version = 99      # target of the C backend (--std=c89 -> 89)
     pedantic_lvl = 0      # -pedantic = 1 (warn), -pedantic-errors = 2 (error)
     inline_runtime: bool = False   # --inline-runtime: no libc in injected helpers
@@ -278,6 +291,13 @@ def main(argc: int, argv: **char) -> int:
             diag_set(argv[i] + 2, 1)   # -W<group>: enable as a warning
         elif argv[i] == "--tokens":
             tokens_only = True
+        elif argv[i] == "--parse-only":
+            parse_only = True
+        elif argv[i] == "--ps-runtime":
+            i += 1
+            if i >= argc:
+                fatal("--ps-runtime needs a directory")
+            ps_runtime = argv[i]
         elif argv[i] in {"-h", "--help"}:
             usage()
         elif argv[i][0] == '-' and argv[i] != "-":
@@ -319,7 +339,28 @@ def main(argc: int, argv: **char) -> int:
     for k in range(inputs.len):
         path: const *char = inputs.get(k)
         m: *Module
-        if has_suffix(path, ".c") or has_suffix(path, ".i"):
+        if has_suffix(path, ".psc"):
+            # pscript front end (50.3: one binary, the extension picks the
+            # language). Its own lexer spec, grammar, tree and sema, and then it
+            # LOWERS to the P tree — so from here down the pipeline is the one P
+            # uses, its sema included, which is what verifies the lowering (49.1).
+            pslen: usize = 0
+            psbytes: *char = read_entire_file(path, out pslen)
+            defer free(psbytes)
+            pstl: TokenList = ps_lex(path, psbytes, pslen, &cc.arena)
+            psm: *PsModule = ps_parse(&cc.arena, path, pstl)
+            if parse_only:
+                continue
+            ps_sema_run(&cc.arena, psm, cc.cpp)
+            m = ps_lower(&cc.arena, psm, ps_runtime)
+            if not be->pre_sema:
+                sema_run(&cc, m)
+                # the runtime's types and signatures come from an imported
+                # header, and QBE needs their LAYOUTS — without this the context
+                # is a four-byte local and every runtime call returns a word
+                if be->name == "qbe":
+                    qbe_merge_types(&cc, m)
+        elif has_suffix(path, ".c") or has_suffix(path, ".i"):
             # C frontend: produces the same AST and goes through the SAME sema
             # as P — that is what makes --std=c89 correct for C input too
             # (designated initializers lowered to positional, VLAs to

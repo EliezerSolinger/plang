@@ -93,6 +93,44 @@ enum TokKind:
     TK_IMPLEMENT
     TK_IS      # `a is b` — pointer identity (contextual word; the lexer never
     TK_ISNOT   #   emits these: the parser recognizes `is` / `is not` infix)
+    # ---- pscript only ----
+    # The token vocabulary is shared because the LEXER is shared (one set of
+    # machinery for indentation, strings and numbers, driven by a LexSpec). P's
+    # lexer never emits any of these — its spec has neither the keywords nor the
+    # extended operators — and P's parser would reject them if it saw one.
+    TK_ASYNC
+    TK_AWAIT
+    TK_RECORD
+    TK_SHARED
+    TK_SPAWN
+    TK_RAISE
+    TK_TRY
+    TK_CATCH
+    TK_FINALLY
+    TK_GLOBAL
+    TK_NONLOCAL
+    TK_LAMBDA
+    TK_PASS
+    TK_ASSERT
+    TK_UNSAFE
+    TK_NOGC
+    TK_FROM
+    TK_AS
+    TK_IMPLEMENTS
+    TK_QUESTION      # ?   — the option type suffix, `T?`
+    TK_COALESCE      # ??
+    TK_COALESCE_EQ   # ??=
+    TK_OPTDOT        # ?.
+    TK_OPTINDEX      # ?[
+    TK_POW           # **
+    TK_POW_EQ        # **=
+    TK_FLOORDIV      # //
+    TK_FLOORDIV_EQ   # //=
+    TK_WRAP_STAR     # %*  — wrapping multiply (54.1)
+    TK_WRAP_PLUS     # %+
+    TK_WRAP_MINUS    # %-
+    TK_AT            # @   — decorator
+    TK_FSTRING       # f"..." (lexeme with the prefix and quotes)
     TK_COUNT
 
 
@@ -117,6 +155,12 @@ struct Type:
     is_const: bool     # TY_NAME: const base; TY_PTR: const POINTER (int * const)
     is_volatile: bool  # C 'volatile' qualifier (TY_NAME)
     is_restrict: bool  # C 'restrict' qualifier (on pointer)
+    is_ref: bool       # TY_PTR born from `ref T` (69.1): a non-nullable reference.
+                       #   Same layout and codegen as the pointer; the GUARANTEE
+                       #   (never None, binds once, auto-derefs) lives in sema.
+    ns_qual: bool      # name is `alias.Name` from a namespaced import (42.4).
+                       #   An explicit mark, never a search for a dot: a varargs
+                       #   parameter is spelled `...` and would answer to one.
     tag_kind: TagKind  # TY_NAME spelled `struct X`/`union X`/`enum X` in C source
     name: const *char  # TY_NAME: "int", "unsigned int", "Point"...
     inner: *Type       # TY_PTR / TY_ARRAY
@@ -179,6 +223,11 @@ struct Expr:
     xblock: *Block        # EX_STMTEXPR: statements executed before the value
     cast_tentative: bool  # (*name)(x): can be a cast OR a call via deref
     incdec_post: bool     # EX_INCDEC: True = postfix (x++), False = prefix (++x)
+    # EX_STRING produced by expanding embed()/embed_bytes(): the path as the
+    # source spelled it, kept so the P backend can print the call back instead
+    # of the file's contents. None on every other string.
+    embed_path: const *char
+    embed_bin: bool       # came from embed_bytes(): size the array WITHOUT the NUL
 
 # ---------- statements ----------
 struct Block:
@@ -309,6 +358,9 @@ struct Func:
     in_header: bool      # method registered from a .ph
     body: *Block         # None = prototype
     tparams: **char      # generic function template: type-parameter names (def foo<T>)
+    tbounds: **char      # `def sort<T: Comparable>`: the trait each one must satisfy
+                         #   (67.1). Checked at INSTANTIATION, where the concrete type
+                         #   is known — so the call is direct and there is no vtable.
     ntparams: i32        # 0 = ordinary function; >0 = template (monomorphized via declare)
 
 struct Field:
@@ -328,6 +380,7 @@ enum DeclKind:
     DL_IMPORT = 0
     DL_VAR
     DL_FUNC
+    DL_TRAIT     # `trait X:` — a named set of method signatures (67.1)
     DL_STRUCT
     DL_ENUM
     DL_UNION
@@ -343,6 +396,9 @@ struct Decl:
     # DL_IMPORT
     import_system: bool      # <h> or bare -> #include <...>
     import_path: const *char # without <> / quotes
+    import_alias: const *char # `import "x.ph" as ns`: the qualified name (42.4).
+                              #   Optional and additive — the flat spelling of the
+                              #   imported symbols keeps working either way.
     is_include: bool         # parsed via `include` (C header) rather than `import`
     # DL_STRUCT/DL_UNION (C front end)
     is_fwd: bool             # bodyless forward (`struct X;`): needs the upfront
@@ -351,6 +407,15 @@ struct Decl:
                              #   GNU empty struct): the body must be emitted
     is_anon: bool            # C11 anonymous member definition: inlined at its
                              #   field position, never emitted standalone
+    trait_for: const *char   # `implement X for T:` — the TYPE this impl is for
+                             #   (67.2: the same word as generic instantiation,
+                             #   told apart by the `for`)
+    is_record: bool          # `record X:` — a struct the compiler CHECKS to be pure
+                             #   bytes (65.1): no pointer anywhere inside, so it is
+                             #   memcpy-able, writable to disk and comparable by
+                             #   content. Emits an ordinary C struct; the guarantee
+                             #   is entirely compile-time, which is why it belongs
+                             #   in a language with no runtime.
     is_td: bool              # anonymous tag RENAMED to its typedef name
                              #   (`typedef struct {...} X`): the C spelling is
                              #   the bare `X`, never `struct X`
@@ -369,6 +434,7 @@ struct Decl:
     methods: **Func
     nmethods: i32
     tparams: **char   # generic struct (template): type parameter names
+    tbounds: **char   # trait each type parameter must satisfy (None = unbounded)
     ntparams: i32     # template is not emitted or registered
     # DL_ENUM
     items: *EnumItem
@@ -397,6 +463,20 @@ struct Module:
     tdrev_tags: **char
     tdrev_names: **char
     ntdrev: i32
+    # typedef -> UNDERLYING SCALAR type (`pthread_t` -> `unsigned long`), for a
+    # back end that has to know a size the C compiler would have known for it.
+    # The C back end never needs this — it prints the typedef and lets the
+    # system header speak — but QBE lays out structs itself, and a typedef it
+    # cannot resolve becomes four bytes and a corrupted layout.
+    tdsc_names: **char
+    tdsc_types: **Type
+    ntdsc: i32
+    # `import "x.ph" as ns`: the QUALIFIED spelling this file may use. Per file,
+    # never inherited — an alias declared here is invisible to every other module
+    # in the same compilation. Parallel arrays: alias name -> module it names.
+    ns_names: **char
+    ns_mods: **Module
+    nns: i32
     decls: **Decl
     ndecls: i32
 

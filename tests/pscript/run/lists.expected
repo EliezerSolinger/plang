@@ -1,0 +1,8 @@
+len 3  first 1  last 3
+sum 6
+after 10 2 3 4 (len 4)
+record list 3 sum-x 9.0
+names n0 n2 n4 (len 5)
+big 20000 0 19998 39998
+kept 4: 0-0 1000-3000 2000-6000 3000-9000
+caught: list index out of range

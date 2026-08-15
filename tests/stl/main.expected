@@ -17,3 +17,6 @@ dict<str>: a=1 b=2 buf=1
 dict<str> after remove: a=-1 size=1
 list<int>: len=5 first=99 last=8 idx6=3 count4=1 has8=1
 list<str>: count(a)=2 idx(buf 'a')=0 has(c)=0
+printable: (3, 4)
+iterable sum: 10
+for-in sum: 6

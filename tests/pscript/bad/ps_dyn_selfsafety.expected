@@ -1,0 +1,1 @@
+'Scaled' cannot be a `dyn`: 'scale' returns `Self`

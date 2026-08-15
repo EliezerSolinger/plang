@@ -1,0 +1,12 @@
+len 12
+first h  last d
+slice hello | world | hello | world
+clamped hello, world
+u len 10  u[2] á  u[4]  
+find 7 -1
+contains True False
+starts True ends True
+strip [padded]
+split 2: 800 600
+csv 4: [a] [b] [] [c]
+caught: string index out of range

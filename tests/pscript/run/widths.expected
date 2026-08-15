@@ -1,0 +1,14 @@
+u8 255
+caught: overflow of u8
+wrap 0 -1
+i8 wrap -128
+widened -1234
+named -1234
+caught: overflow of i8
+rng 16620430977058721579
+as float True
+caught: this u64 does not fit int
+down 42
+caught: a negative int does not fit u64
+f32 2.75 True
+pixel 255 128 0 255

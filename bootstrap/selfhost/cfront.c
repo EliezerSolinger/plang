@@ -429,7 +429,7 @@ static int is_c_escape(char e) {
     if (e >= '0' && e <= '7') {
         return 1;
     }
-    return e == 'n' || e == 't' || e == 'r' || e == 'a' || e == 'b' || e == 'f' || e == 'v' || e == 'x' || e == 'u' || e == 'U' || e == 'e' || e == '\'' || e == '"' || e == '?' || e == '\\' || e == '\n';
+    return e == 'n' || e == 't' || e == 'r' || e == 'a' || e == 'b' || e == 'f' || e == 'v' || e == 'x' || e == 'u' || e == 'U' || e == 'e' || e == '\'' || e == '"' || e == '\?' || e == '\\' || e == '\n';
 }
 
 struct Cx {
@@ -2132,7 +2132,7 @@ static int64_t Cp_ceval_bin(Cp *self, int32_t minprec, int *ok) {
 
 static int64_t Cp_ceval(Cp *self, int *ok) {
     int64_t c = Cp_ceval_bin(self, 0, ok);
-    if (*ok && Cp_is_punct(self, "?")) {
+    if (*ok && Cp_is_punct(self, "\?")) {
         Cp_adv(self);
         int64_t a = Cp_ceval(self, ok);
         if (Cp_is_punct(self, ":")) {
@@ -2700,7 +2700,7 @@ Expr *c_binary(Cp *p, int32_t minprec) {
 
 Expr *c_ternary(Cp *p) {
     Expr *c = c_binary(p, 1);
-    if (Cp_is_punct(p, "?")) {
+    if (Cp_is_punct(p, "\?")) {
         Pos pos = Cp_pk(p)->pos;
         Cp_adv(p);
         Expr *t = c_expr(p);

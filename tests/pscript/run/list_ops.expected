@@ -1,0 +1,10 @@
+2 20 30
+tail 3 head 2 whole 5
+neg 40 clamped 2
+after insert 7 5 25
+after remove 5 10 40
+reversed 40 30
+strings 2 b c
+empty slice 0
+sorted 1 2 3 original 3
+words apple pear

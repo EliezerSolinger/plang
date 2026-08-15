@@ -1,0 +1,14 @@
+ok  42
+caught: negative input
+bad -1
+runtime: integer division by zero (zero? True)
+cleanup ran
+no fail -> 1
+cleanup ran
+fail    -> 2
+before
+handled: stop here
+rethrown: original
+done
+index? True io? False
+mine True no such thing

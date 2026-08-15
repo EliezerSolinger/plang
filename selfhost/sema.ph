@@ -26,3 +26,4 @@ def cc_load_module(cc: *Cc, path: const *char) -> *Module
 # Runs sema on the module (resolving local .ph imports recursively).
 # Mutates the AST: rewrites casts, method calls and ./-> operators.
 def sema_run(cc: *Cc, m: *Module)
+def cpp_capture_ex(a: *Arena, cpp_cmd: const *char, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char

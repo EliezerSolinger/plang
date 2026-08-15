@@ -7,7 +7,6 @@
 #include "../stl/vec.h"
 
 typedef struct Vec_Token Vec_Token;
-typedef struct Keyword Keyword;
 typedef struct Lx Lx;
 
 struct Vec_Token {
@@ -131,12 +130,29 @@ void Vec_Token_deinit(Vec_Token *self) {
 
 typedef enum { MAX_INDENT = 64 } LxLimit;
 
-struct Keyword {
-    const char *word;
-    TokKind kind;
-};
+static const Keyword P_KEYWORDS[35] = {{"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF}, {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE}, {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO}, {"match", TK_MATCH}, {"case", TK_CASE}, {"break", TK_BREAK}, {"continue", TK_CONTINUE}, {"goto", TK_GOTO}, {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION}, {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR}, {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE}, {"None", TK_NONE}, {"static", TK_STATIC}, {"inline", TK_INLINE}, {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT}, {"defer", TK_DEFER}, {"with", TK_WITH}, {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT}, {NULL, TK_EOF}};
 
-const Keyword keywords[35] = {{"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF}, {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE}, {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO}, {"match", TK_MATCH}, {"case", TK_CASE}, {"break", TK_BREAK}, {"continue", TK_CONTINUE}, {"goto", TK_GOTO}, {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION}, {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR}, {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE}, {"None", TK_NONE}, {"static", TK_STATIC}, {"inline", TK_INLINE}, {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT}, {"defer", TK_DEFER}, {"with", TK_WITH}, {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT}, {NULL, TK_EOF}};
+static const LexSpec P_LEXSPEC = {P_KEYWORDS, 0, 0, 0};
+
+const char *spell_tok(Token *t) {
+    if (t->text != NULL) {
+        return t->text;
+    }
+    switch (t->kind) {
+        case TK_DOT: {
+            return ".";
+        }
+        case TK_SLASH: {
+            return "/";
+        }
+        case TK_MINUS: {
+            return "-";
+        }
+        default: {
+            return "";
+        }
+    }
+}
 
 const char *tok_kind_name(TokKind k) {
     switch (k) {
@@ -380,6 +396,105 @@ const char *tok_kind_name(TokKind k) {
         case TK_SHR_EQ: {
             return "'>>='";
         }
+        case TK_ASYNC: {
+            return "'async'";
+        }
+        case TK_AWAIT: {
+            return "'await'";
+        }
+        case TK_RECORD: {
+            return "'record'";
+        }
+        case TK_SHARED: {
+            return "'shared'";
+        }
+        case TK_SPAWN: {
+            return "'spawn'";
+        }
+        case TK_RAISE: {
+            return "'raise'";
+        }
+        case TK_TRY: {
+            return "'try'";
+        }
+        case TK_CATCH: {
+            return "'catch'";
+        }
+        case TK_FINALLY: {
+            return "'finally'";
+        }
+        case TK_GLOBAL: {
+            return "'global'";
+        }
+        case TK_NONLOCAL: {
+            return "'nonlocal'";
+        }
+        case TK_LAMBDA: {
+            return "'lambda'";
+        }
+        case TK_PASS: {
+            return "'pass'";
+        }
+        case TK_ASSERT: {
+            return "'assert'";
+        }
+        case TK_UNSAFE: {
+            return "'unsafe'";
+        }
+        case TK_NOGC: {
+            return "'nogc'";
+        }
+        case TK_FROM: {
+            return "'from'";
+        }
+        case TK_AS: {
+            return "'as'";
+        }
+        case TK_IMPLEMENTS: {
+            return "'implements'";
+        }
+        case TK_QUESTION: {
+            return "'\?'";
+        }
+        case TK_COALESCE: {
+            return "'\?\?'";
+        }
+        case TK_COALESCE_EQ: {
+            return "'\?\?='";
+        }
+        case TK_OPTDOT: {
+            return "'\?.'";
+        }
+        case TK_OPTINDEX: {
+            return "'\?['";
+        }
+        case TK_POW: {
+            return "'**'";
+        }
+        case TK_POW_EQ: {
+            return "'**='";
+        }
+        case TK_FLOORDIV: {
+            return "'//'";
+        }
+        case TK_FLOORDIV_EQ: {
+            return "'//='";
+        }
+        case TK_WRAP_STAR: {
+            return "'%*'";
+        }
+        case TK_WRAP_PLUS: {
+            return "'%+'";
+        }
+        case TK_WRAP_MINUS: {
+            return "'%-'";
+        }
+        case TK_AT: {
+            return "'@'";
+        }
+        case TK_FSTRING: {
+            return "f-string";
+        }
         default: {
             return "token";
         }
@@ -419,6 +534,7 @@ struct Lx {
     int32_t paren;
     int prev_import;
     int tolerant;
+    const LexSpec *spec;
 };
 
 static uint32_t Lx_cur(Lx *self) {
@@ -542,6 +658,35 @@ static void Lx_lex_string(Lx *self, uint32_t quote, TokKind kind) {
     Lx_lex_str_at(self, self->i, Lx_here(self), quote, kind);
 }
 
+static void Lx_lex_triple_at(Lx *self, size_t start, Pos p, uint32_t quote, TokKind kind) {
+    self->i += 3;
+    while (1) {
+        uint32_t c = Lx_cur(self);
+        if (self->i >= self->n) {
+            if (self->tolerant) {
+                break;
+            }
+            fatal_at(self->file, p, "unterminated triple-quoted literal");
+        }
+        if (c == '\\') {
+            self->i += 2;
+            continue;
+        }
+        if (c == '\n') {
+            self->line += 1;
+            self->i += 1;
+            self->line_start = self->i;
+            continue;
+        }
+        if (c == quote && Lx_peek(self, 1) == quote && Lx_peek(self, 2) == quote) {
+            self->i += 3;
+            break;
+        }
+        self->i += 1;
+    }
+    Lx_push_tok(self, kind, p, Lx_slice(self, start, self->i));
+}
+
 static void Lx_lex_number(Lx *self) {
     Pos p = Lx_here(self);
     size_t start = self->i;
@@ -591,6 +736,79 @@ static void Lx_lex_op(Lx *self) {
     uint32_t c2 = Lx_peek(self, 2);
     TokKind k = TK_EOF;
     int len = 1;
+    if (self->spec->ext_ops) {
+        TokKind ek = TK_EOF;
+        int elen = 0;
+        switch (c) {
+            case '\?': {
+                if (c1 == '\?' && c2 == '=') {
+                    ek = TK_COALESCE_EQ;
+                    elen = 3;
+                } else if (c1 == '\?') {
+                    ek = TK_COALESCE;
+                    elen = 2;
+                } else if (c1 == '.') {
+                    ek = TK_OPTDOT;
+                    elen = 2;
+                } else if (c1 == '[') {
+                    ek = TK_OPTINDEX;
+                    elen = 2;
+                    self->paren += 1;
+                } else {
+                    ek = TK_QUESTION;
+                    elen = 1;
+                }
+                break;
+            }
+            case '*': {
+                if (c1 == '*' && c2 == '=') {
+                    ek = TK_POW_EQ;
+                    elen = 3;
+                } else if (c1 == '*') {
+                    ek = TK_POW;
+                    elen = 2;
+                }
+                break;
+            }
+            case '/': {
+                if (c1 == '/' && c2 == '=') {
+                    ek = TK_FLOORDIV_EQ;
+                    elen = 3;
+                } else if (c1 == '/') {
+                    ek = TK_FLOORDIV;
+                    elen = 2;
+                }
+                break;
+            }
+            case '%': {
+                if (c1 == '*') {
+                    ek = TK_WRAP_STAR;
+                    elen = 2;
+                } else if (c1 == '+') {
+                    ek = TK_WRAP_PLUS;
+                    elen = 2;
+                } else if (c1 == '-') {
+                    ek = TK_WRAP_MINUS;
+                    elen = 2;
+                }
+                break;
+            }
+            case '@': {
+                ek = TK_AT;
+                elen = 1;
+                break;
+            }
+            default: {
+                ;
+                break;
+            }
+        }
+        if (elen > 0) {
+            self->i += (size_t)elen;
+            Lx_push_tok(self, ek, p, NULL);
+            return;
+        }
+    }
     switch (c) {
         case '(': {
             k = TK_LPAREN;
@@ -650,6 +868,18 @@ static void Lx_lex_op(Lx *self) {
         }
         case '~': {
             k = TK_TILDE;
+            break;
+        }
+        case '\?': {
+            if (c1 == '\?') {
+                k = TK_COALESCE;
+                len = 2;
+            } else if (self->tolerant) {
+                self->i += 1;
+                return;
+            } else {
+                fatal_at(self->file, p, "unexpected character (U+003F)");
+            }
             break;
         }
         case '+': {
@@ -793,11 +1023,16 @@ static void Lx_lex_op(Lx *self) {
 }
 
 TokenList lex(const char *file, const char *bytes, size_t nbytes, Arena *a) {
-    return lex_ex(file, bytes, nbytes, a, 0);
+    return lex_with(file, bytes, nbytes, a, 0, &P_LEXSPEC);
 }
 
 TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, int tolerant) {
+    return lex_with(file, bytes, nbytes, a, tolerant, &P_LEXSPEC);
+}
+
+TokenList lex_with(const char *file, const char *bytes, size_t nbytes, Arena *a, int tolerant, const LexSpec *spec) {
     Lx lx = {0};
+    lx.spec = spec;
     lx.file = file;
     lx.bytes = bytes;
     lx.nbytes = nbytes;
@@ -815,7 +1050,7 @@ TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, i
         memcpy(fixed, bytes, nbytes);
         fixed[nbytes] = '\0';
         while (utf8_decode(fixed, nbytes, a, &lx.cp, &lx.off, &lx.n, &err_off) != 0) {
-            fixed[err_off] = '?';
+            fixed[err_off] = '\?';
         }
         lx.bytes = fixed;
     }
@@ -873,6 +1108,17 @@ TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, i
                 continue;
             }
         }
+        if (lx.spec->fstrings && c == 'f' && Lx_peek(&lx, 1) == '"') {
+            size_t fstart = lx.i;
+            Pos fp = Lx_here(&lx);
+            lx.i += 1;
+            if (lx.spec->triple_str && Lx_peek(&lx, 1) == '"' && Lx_peek(&lx, 2) == '"') {
+                Lx_lex_triple_at(&lx, fstart, fp, '"', TK_FSTRING);
+            } else {
+                Lx_lex_str_at(&lx, fstart, fp, '"', TK_FSTRING);
+            }
+            continue;
+        }
         if (is_ident_start(c)) {
             Pos p = Lx_here(&lx);
             size_t start = lx.i;
@@ -884,10 +1130,11 @@ TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, i
             }
             const char *text = Lx_slice(&lx, start, lx.i);
             TokKind k = TK_IDENT;
+            const Keyword *kws = lx.spec->keywords;
             int j = 0;
-            while (keywords[j].word != NULL) {
-                if (strcmp(text, keywords[j].word) == 0) {
-                    k = keywords[j].kind;
+            while (kws[j].word != NULL) {
+                if (strcmp(text, kws[j].word) == 0) {
+                    k = kws[j].kind;
                     break;
                 }
                 j += 1;
@@ -904,6 +1151,10 @@ TokenList lex_ex(const char *file, const char *bytes, size_t nbytes, Arena *a, i
         }
         if (is_digit(c)) {
             Lx_lex_number(&lx);
+            continue;
+        }
+        if (c == '"' && lx.spec->triple_str && Lx_peek(&lx, 1) == '"' && Lx_peek(&lx, 2) == '"') {
+            Lx_lex_triple_at(&lx, lx.i, Lx_here(&lx), '"', TK_STRING);
             continue;
         }
         if (c == '"') {

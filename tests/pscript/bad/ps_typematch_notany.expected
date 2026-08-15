@@ -1,0 +1,1 @@
+`match type(x)` asks what an `any` holds (39.2), found int

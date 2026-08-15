@@ -27,19 +27,20 @@ import "vecs.ph"
 # its context gets parenthesized.
 PP_LOW: const i32 = 0        # no constraint (statement level, inside parens)
 PP_TERNARY: const i32 = 1
-PP_OR: const i32 = 2
-PP_AND: const i32 = 3
-PP_NOT: const i32 = 4
-PP_BITOR: const i32 = 5
-PP_BITXOR: const i32 = 6
-PP_BITAND: const i32 = 7
-PP_EQ: const i32 = 8
-PP_REL: const i32 = 9
-PP_SHIFT: const i32 = 10
-PP_ADD: const i32 = 11
-PP_MUL: const i32 = 12
-PP_UNARY: const i32 = 13
-PP_POSTFIX: const i32 = 14
+PP_COALESCE: const i32 = 2   # `??` (69.3): tighter than the ternary, looser than `or`
+PP_OR: const i32 = 3
+PP_AND: const i32 = 4
+PP_NOT: const i32 = 5
+PP_BITOR: const i32 = 6
+PP_BITXOR: const i32 = 7
+PP_BITAND: const i32 = 8
+PP_EQ: const i32 = 9
+PP_REL: const i32 = 10
+PP_SHIFT: const i32 = 11
+PP_ADD: const i32 = 12
+PP_MUL: const i32 = 13
+PP_UNARY: const i32 = 14
+PP_POSTFIX: const i32 = 15
 
 static def op_pstr(op: i32) -> const *char:
     match op:
@@ -109,11 +110,15 @@ static def op_pstr(op: i32) -> const *char:
             return "<<="
         case TK_SHR_EQ:
             return ">>="
+        case TK_COALESCE:
+            return "??"
         case _:
             return "?"
 
 static def binary_prec(op: i32) -> i32:
     match op:
+        case TK_COALESCE:
+            return PP_COALESCE
         case TK_OR:
             return PP_OR
         case TK_AND:
@@ -153,6 +158,10 @@ static def p_type(b: *StrBuf, t: *Type, no_const: bool = False):
         return
     match t->kind:
         case TY_PTR:
+            if t->is_ref:
+                b->puts("ref ")
+                p_type(b, t->inner)
+                return
             # `def(...) -> R` already BUILDS a TY_PTR(TY_FUNC) — "a function value
             # in P is always a pointer" — so an explicit star here would make a
             # pointer to a function pointer
@@ -255,7 +264,13 @@ def p_expr(b: *StrBuf, e: *Expr, min_prec: i32):
         b->putc('(')
     match e->kind:
         case EX_IDENT, EX_NUMBER, EX_STRING, EX_CHARLIT:
-            b->puts(e->text if e->text != None else "?")
+            # an expanded embed prints as the CALL again, not as the file it
+            # pulled in: the P this back end emits is source, and source that
+            # inlines a megabyte of data is not source anyone can read
+            if e->kind == EX_STRING and e->embed_path != None:
+                b->printf("%s(%s)", "embed_bytes" if e->embed_bin else "embed", e->embed_path)
+            else:
+                b->puts(e->text if e->text != None else "?")
         case EX_TRUE:
             b->puts("True")
         case EX_FALSE:
@@ -616,7 +631,7 @@ static def p_func(b: *StrBuf, f: *Func, ind: i32):
     p_block(b, f->body, ind + 1)
 
 static def p_struct(b: *StrBuf, d: *Decl):
-    b->puts("union " if d->kind == DL_UNION else "struct ")
+    b->puts("union " if d->kind == DL_UNION else ("record " if d->is_record else "struct "))
     b->puts(d->name)
     if d->ntparams > 0:
         b->putc('<')
@@ -659,6 +674,8 @@ def p_decl(b: *StrBuf, d: *Decl):
                     b->printf("include \"%s\"\n", d->import_path)
             elif d->import_system:
                 b->printf("import <%s>\n", d->import_path)
+            elif d->import_alias != None:
+                b->printf("import \"%s\" as %s\n", d->import_path, d->import_alias)
             else:
                 b->printf("import \"%s\"\n", d->import_path)
         case DL_VAR:
@@ -692,7 +709,18 @@ def p_decl(b: *StrBuf, d: *Decl):
                     b->puts(" = ")
                     p_expr(b, d->items[i].value, PP_LOW)
                 b->putc('\n')
+        case DL_TRAIT:
+            b->printf("trait %s:\n", d->name)
+            for i in range(d->nmethods):
+                p_func(b, d->methods[i], 1)
         case DL_DECLARE, DL_IMPLEMENT:
+            # `implement Trait for Type:` (67.2) and `implement Vec<int>` are the
+            # same word; the `for` is what tells them apart, here as in the parser
+            if d->trait_for != None:
+                b->printf("implement %s for %s:\n", d->name, d->trait_for)
+                for i in range(d->nmethods):
+                    p_func(b, d->methods[i], 1)
+                return
             if d->inline_inst:
                 b->puts("inline ")
             elif d->kind == DL_DECLARE:

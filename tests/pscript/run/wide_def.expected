@@ -1,0 +1,4 @@
+True False
+3.0
+5
+caught: this function is def(str) -> bool, not def(int) -> int

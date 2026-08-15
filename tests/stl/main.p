@@ -9,6 +9,7 @@ import "../../stl/queue.ph"
 import "../../stl/slice.ph"
 import "../../stl/dict.ph"
 import "../../stl/list.ph"
+import "../../stl/traits.ph"
 
 declare Vec<int>
 implement Vec<int>
@@ -40,6 +41,59 @@ declare List<int>
 implement List<int>
 declare List<*char>
 implement List<*char>
+
+# ---- the system traits (67.4) ----
+# In P a trait is STATIC only: a bound on a generic, checked at the
+# instantiation and monomorphized away — no vtable is built and no call becomes
+# indirect. `Printable` is the one that cannot read the same in both languages:
+# pscript's returns a `str`, which is a collected object, so P's writes into a
+# buffer the caller already owns.
+record Point:
+    x: i32
+    y: i32
+
+implement Comparable for Point:
+    def cmp(self: *Point, other: *Point) -> i32:
+        return (self->x * self->x + self->y * self->y) - (other->x * other->x + other->y * other->y)
+
+implement Printable for Point:
+    def to_str(self: *Point, ref b: Str):
+        b.appendf("(%d, %d)", self->x, self->y)
+
+struct Countdown:
+    at: i64
+
+implement Iterable for Countdown:
+    def has_next(self: *Countdown) -> bool:
+        return self->at > 0
+
+    def next(self: *Countdown) -> i64:
+        self->at -= 1
+        return self->at
+
+def bigger<T: Comparable>(a: *T, b: *T) -> *T:
+    return a if a->cmp(b) >= 0 else b
+
+def show<T: Printable>(v: *T):
+    sb: Str
+    sb.init()
+    v->to_str(ref sb)
+    printf("printable: %s\n", sb.cstr())
+    sb.deinit()
+
+def sum_all<T: Iterable>(it: *T) -> i64:
+    total: i64 = 0
+    while it->has_next():
+        total += it->next()
+    return total
+
+declare bigger<Point>
+implement bigger<Point>
+declare show<Point>
+implement show<Point>
+declare sum_all<Countdown>
+implement sum_all<Countdown>
+
 
 def main() -> int:
     # ---- Vec ----
@@ -190,4 +244,18 @@ def main() -> int:
     strcpy(buf2, "a")            # ponteiro != literal
     printf("list<str>: count(a)=%d idx(buf 'a')=%d has(c)=%d\n", ls2.count("a"), ls2.index(buf2), ls2.contains("c"))
     ls2.deinit()
+
+    # ---- traits ----
+    pa: Point = {1, 2}
+    pb: Point = {3, 4}
+    show(bigger(&pa, &pb))
+    cd: Countdown = {5}
+    printf("iterable sum: %lld\n", sum_all(&cd))
+    # 68.9: the same protocol, driven by the language — `for v in it` lowers to
+    # the cursor + while, all direct calls, zero runtime
+    cd2: Countdown = {4}
+    forsum: i64 = 0
+    for v in cd2:
+        forsum += v
+    printf("for-in sum: %lld\n", forsum)
     return 0

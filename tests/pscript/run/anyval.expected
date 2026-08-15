@@ -1,0 +1,9 @@
+count 5
+int 1
+float 2.5
+bool True
+str text
+identity True True
+caught: this `any` holds str, not int
+doc smallpt 16 2.2
+nested 2 2

@@ -19,26 +19,6 @@ static int is_assign_op(TokKind k) {
     return k == TK_ASSIGN || k == TK_PLUS_EQ || k == TK_MINUS_EQ || k == TK_STAR_EQ || k == TK_SLASH_EQ || k == TK_PERCENT_EQ || k == TK_AMP_EQ || k == TK_PIPE_EQ || k == TK_CARET_EQ || k == TK_SHL_EQ || k == TK_SHR_EQ;
 }
 
-static const char *spell_tok(Token *t) {
-    if (t->text != NULL) {
-        return t->text;
-    }
-    switch (t->kind) {
-        case TK_DOT: {
-            return ".";
-        }
-        case TK_SLASH: {
-            return "/";
-        }
-        case TK_MINUS: {
-            return "-";
-        }
-        default: {
-            return "";
-        }
-    }
-}
-
 typedef struct P P;
 
 struct P {
@@ -47,6 +27,7 @@ struct P {
     size_t i;
     const char *file;
     Arena *a;
+    Vec_pchar nsv;
 };
 
 static Token *P_pk(P *self);
@@ -66,6 +47,12 @@ static Token *P_expect(P *self, TokKind k, const char *ctx);
 static void P_expect_gt(P *self);
 
 static Type *P_parse_type(P *self);
+
+static Type *P_parse_type_ref(P *self);
+
+static int P_at_ref_type(P *self);
+
+static int P_has_ns(P *self, const char *name);
 
 static Expr *P_bin(P *self, int32_t op, Pos pos, Expr *l, Expr *r);
 
@@ -101,6 +88,8 @@ static Expr *P_parse_and(P *self);
 
 static Expr *P_parse_or(P *self);
 
+static Expr *P_parse_coalesce(P *self);
+
 static Expr *P_parse_ternary(P *self);
 
 static Expr *P_parse_expr(P *self);
@@ -131,7 +120,7 @@ static Stmt *P_parse_stmt(P *self);
 
 static Func *P_parse_func(P *self, int is_static, int is_inline, const char *owner);
 
-static Decl *P_parse_struct_or_union(P *self, int is_union);
+static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record);
 
 static Decl *P_parse_enum(P *self);
 
@@ -140,6 +129,10 @@ static Decl *P_parse_c_include(P *self);
 static Decl *P_parse_import(P *self);
 
 static Decl *P_parse_instantiate(P *self);
+
+static Decl *P_parse_trait(P *self);
+
+static Decl *P_parse_trait_impl(P *self, const char *tname, Pos pos);
 
 static Decl *P_parse_top(P *self);
 
@@ -197,7 +190,39 @@ static void P_expect_gt(P *self) {
     }
 }
 
+static int P_has_ns(P *self, const char *name) {
+    size_t i;
+    for (i = 0; i < self->nsv.len; i += 1) {
+        if (strcmp(self->nsv.data[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int P_at_ref_type(P *self) {
+    if (!P_at(self, TK_IDENT) || strcmp(P_pk(self)->text, "ref") != 0) {
+        return 0;
+    }
+    int32_t nk = P_pk1(self)->kind;
+    return nk == TK_IDENT || nk == TK_STAR || nk == TK_CONST || nk == TK_VOLATILE || nk == TK_DEF;
+}
+
+static Type *P_parse_type_ref(P *self) {
+    if (P_at_ref_type(self)) {
+        P_adv(self);
+        Type *inner = P_parse_type(self);
+        Type *rt = ty_ptr(self->a, inner);
+        rt->is_ref = 1;
+        return rt;
+    }
+    return P_parse_type(self);
+}
+
 static Type *P_parse_type(P *self) {
+    if (P_at_ref_type(self)) {
+        fatal_at(self->file, P_pk(self)->pos, "'ref T' is only a local variable or return type (69.1): a parameter takes the trio (`ref v: T`); fields, globals and inner types hold a pointer (*T)");
+    }
     int is_const = 0;
     int is_volatile = 0;
     int is_restrict = 0;
@@ -225,6 +250,9 @@ static Type *P_parse_type(P *self) {
                 is_volatile = 1;
             }
         }
+    }
+    if (stars > 0 && P_at_ref_type(self)) {
+        fatal_at(self->file, P_pk(self)->pos, "a ref cannot live behind a pointer: '*ref T' has no meaning — the pointer itself is the nullable form (69.1)");
     }
     Type *t;
     if (P_at(self, TK_LPAREN)) {
@@ -289,6 +317,12 @@ static Type *P_parse_type(P *self) {
             name = Arena_printf(self->a, "%s %s", name, P_adv(self)->text);
             words += 1;
         }
+        int ns_qual = 0;
+        if (P_at(self, TK_DOT) && P_pk1(self)->kind == TK_IDENT && P_has_ns(self, name)) {
+            P_adv(self);
+            name = Arena_printf(self->a, "%s.%s", name, P_adv(self)->text);
+            ns_qual = 1;
+        }
         Vec_pType targs;
         Vec_pType_init(&targs);
         if (P_accept(self, TK_LT)) {
@@ -299,12 +333,13 @@ static Type *P_parse_type(P *self) {
         }
         t = ty_name(self->a, name);
         {
-            Type *__with_235_13 = t;
-            __with_235_13->is_const = is_const;
-            __with_235_13->is_volatile = is_volatile;
-            __with_235_13->is_restrict = is_restrict;
-            __with_235_13->targs = targs.data;
-            __with_235_13->ntargs = targs.len;
+            Type *__with_269_13 = t;
+            __with_269_13->is_const = is_const;
+            __with_269_13->is_volatile = is_volatile;
+            __with_269_13->is_restrict = is_restrict;
+            __with_269_13->ns_qual = ns_qual;
+            __with_269_13->targs = targs.data;
+            __with_269_13->ntargs = targs.len;
         }
     }
     int32_t k;
@@ -716,11 +751,20 @@ static Expr *P_parse_or(P *self) {
     return e;
 }
 
+static Expr *P_parse_coalesce(P *self) {
+    Expr *e = P_parse_or(self);
+    while (P_at(self, TK_COALESCE)) {
+        Token *op = P_adv(self);
+        e = P_bin(self, op->kind, op->pos, e, P_parse_or(self));
+    }
+    return e;
+}
+
 static Expr *P_parse_ternary(P *self) {
-    Expr *v = P_parse_or(self);
+    Expr *v = P_parse_coalesce(self);
     if (P_at(self, TK_IF)) {
         Pos pos = P_adv(self)->pos;
-        Expr *c = P_parse_or(self);
+        Expr *c = P_parse_coalesce(self);
         P_expect(self, TK_ELSE, "ternary (missing 'else')");
         Expr *o = P_parse_ternary(self);
         Expr *e = ex_new(self->a, EX_TERNARY, pos);
@@ -867,7 +911,7 @@ static Stmt *P_parse_var_stmt(P *self, int is_const) {
     s->name = name->text;
     s->is_const = is_const;
     if (P_accept(self, TK_COLON)) {
-        s->type = P_parse_type(self);
+        s->type = P_parse_type_ref(self);
     }
     if (P_accept(self, TK_ASSIGN)) {
         s->init = P_parse_initializer(self);
@@ -974,7 +1018,7 @@ static Stmt *P_parse_for(P *self) {
         s->step = NULL;
     } else {
         if (s->var2 != NULL) {
-            fatal_at(self->file, r->pos, "range(...) has a single loop variable (did you mean enumerate?)");
+            fatal_at(self->file, r->pos, "range(...) has a single loop variable (did you mean enumerate\?)");
         }
         if (a2 != NULL) {
             s->from = a1;
@@ -1203,6 +1247,8 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     Token *name = P_expect(self, TK_IDENT, "function name");
     Vec_pchar ftparams;
     Vec_pchar_init(&ftparams);
+    Vec_pchar ftbounds;
+    Vec_pchar_init(&ftbounds);
     if (P_accept(self, TK_LT)) {
         if (owner != NULL) {
             fatal_at(self->file, name->pos, "methods cannot add their own type parameters (use the struct's)");
@@ -1210,20 +1256,26 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
         do {
             Token *ftp = P_expect(self, TK_IDENT, "type parameter");
             Vec_pchar_push(&ftparams, (char *)ftp->text);
+            if (P_accept(self, TK_COLON)) {
+                Vec_pchar_push(&ftbounds, (char *)P_expect(self, TK_IDENT, "trait bound")->text);
+            } else {
+                Vec_pchar_push(&ftbounds, NULL);
+            }
         } while (P_accept(self, TK_COMMA));
         P_expect_gt(self);
     }
     Func *f = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1042_9 = f;
-        __with_1042_9->pos = pos;
-        __with_1042_9->name = name->text;
-        __with_1042_9->owner = owner;
-        __with_1042_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
-        __with_1042_9->is_static = is_static;
-        __with_1042_9->is_inline = is_inline;
-        __with_1042_9->tparams = ftparams.data;
-        __with_1042_9->ntparams = ftparams.len;
+        Func *__with_1095_9 = f;
+        __with_1095_9->pos = pos;
+        __with_1095_9->name = name->text;
+        __with_1095_9->owner = owner;
+        __with_1095_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
+        __with_1095_9->is_static = is_static;
+        __with_1095_9->is_inline = is_inline;
+        __with_1095_9->tparams = ftparams.data;
+        __with_1095_9->tbounds = ftbounds.data;
+        __with_1095_9->ntparams = ftparams.len;
     }
     P_expect(self, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1274,7 +1326,7 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     }
     P_expect(self, TK_RPAREN, "function parameters");
     if (P_accept(self, TK_ARROW)) {
-        f->ret = P_parse_type(self);
+        f->ret = P_parse_type_ref(self);
     } else {
         f->ret = ty_name(self->a, "void");
     }
@@ -1288,7 +1340,7 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     return f;
 }
 
-static Decl *P_parse_struct_or_union(P *self, int is_union) {
+static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     Pos pos = P_adv(self)->pos;
     Token *name = P_expect(self, TK_IDENT, (is_union ? "union" : "struct"));
     Vec_pchar tparams;
@@ -1300,6 +1352,9 @@ static Decl *P_parse_struct_or_union(P *self, int is_union) {
         do {
             Token *tp = P_expect(self, TK_IDENT, "type parameter");
             Vec_pchar_push(&tparams, (char *)tp->text);
+            if (P_accept(self, TK_COLON)) {
+                P_expect(self, TK_IDENT, "trait bound");
+            }
         } while (P_accept(self, TK_COMMA));
         P_expect_gt(self);
     }
@@ -1308,6 +1363,7 @@ static Decl *P_parse_struct_or_union(P *self, int is_union) {
     P_expect(self, TK_INDENT, "struct/union body");
     Decl *d = Arena_alloc(self->a, sizeof(Decl));
     d->kind = (is_union ? DL_UNION : DL_STRUCT);
+    d->is_record = is_record;
     d->pos = pos;
     d->name = name->text;
     Vec_Field fields;
@@ -1352,13 +1408,13 @@ static Decl *P_parse_struct_or_union(P *self, int is_union) {
     }
     P_expect(self, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1165_9 = d;
-        __with_1165_9->fields = fields.data;
-        __with_1165_9->nfields = fields.len;
-        __with_1165_9->methods = methods.data;
-        __with_1165_9->nmethods = methods.len;
-        __with_1165_9->tparams = tparams.data;
-        __with_1165_9->ntparams = tparams.len;
+        Decl *__with_1222_9 = d;
+        __with_1222_9->fields = fields.data;
+        __with_1222_9->nfields = fields.len;
+        __with_1222_9->methods = methods.data;
+        __with_1222_9->nmethods = methods.len;
+        __with_1222_9->tparams = tparams.data;
+        __with_1222_9->ntparams = tparams.len;
     }
     return d;
 }
@@ -1414,6 +1470,9 @@ static Decl *P_parse_c_include(P *self) {
         d->import_path = path;
         d->import_system = 1;
     }
+    if (P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "as") == 0) {
+        fatal_at(self->file, P_pk(self)->pos, "`include ... as` is not a thing: a C header has no namespace to qualify (`as` is for `import \"module.ph\"`)");
+    }
     P_expect(self, TK_NEWLINE, "include");
     return d;
 }
@@ -1438,12 +1497,80 @@ static Decl *P_parse_import(P *self) {
     } else {
         fatal_at(self->file, P_pk(self)->pos, "import expects a P header: import \"module.ph\" (C headers use include <...>)");
     }
+    if (P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "as") == 0) {
+        P_adv(self);
+        d->import_alias = P_expect(self, TK_IDENT, "import ... as <name>")->text;
+        Vec_pchar_push(&self->nsv, (char *)d->import_alias);
+    }
     P_expect(self, TK_NEWLINE, "import");
+    return d;
+}
+
+static Decl *P_parse_trait_impl(P *self, const char *tname, Pos pos) {
+    Token *ty = P_expect(self, TK_IDENT, "implement <trait> for <type>");
+    P_expect(self, TK_COLON, "implement ... for");
+    P_expect(self, TK_NEWLINE, "implement ... for");
+    P_expect(self, TK_INDENT, "implement ... for");
+    Decl *d = Arena_alloc(self->a, sizeof(Decl));
+    d->kind = DL_IMPLEMENT;
+    d->pos = pos;
+    d->name = tname;
+    d->trait_for = ty->text;
+    Vec_pFunc ms;
+    Vec_pFunc_init(&ms);
+    while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
+        if (P_accept(self, TK_NEWLINE)) {
+            continue;
+        }
+        if (!P_at(self, TK_DEF)) {
+            fatal_at(self->file, P_pk(self)->pos, "an `implement ... for` block holds method bodies");
+        }
+        Vec_pFunc_push(&ms, P_parse_func(self, 0, 0, ty->text));
+    }
+    P_expect(self, TK_DEDENT, "implement ... for");
+    d->methods = ms.data;
+    d->nmethods = ms.len;
+    return d;
+}
+
+static Decl *P_parse_trait(P *self) {
+    P_adv(self);
+    Token *name = P_expect(self, TK_IDENT, "trait name");
+    P_expect(self, TK_COLON, "trait");
+    P_expect(self, TK_NEWLINE, "trait");
+    P_expect(self, TK_INDENT, "trait body");
+    Decl *d = Arena_alloc(self->a, sizeof(Decl));
+    d->kind = DL_TRAIT;
+    d->pos = name->pos;
+    d->name = name->text;
+    Vec_pFunc ms;
+    Vec_pFunc_init(&ms);
+    while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
+        if (P_accept(self, TK_NEWLINE)) {
+            continue;
+        }
+        if (!P_at(self, TK_DEF)) {
+            fatal_at(self->file, P_pk(self)->pos, "a trait holds method signatures: `def name(...) -> T`");
+        }
+        Func *f = P_parse_func(self, 0, 0, name->text);
+        if (f->body != NULL) {
+            fatal_at(self->file, f->pos, "a trait method has no body — `implement %s for T:` supplies it", name->text);
+        }
+        Vec_pFunc_push(&ms, f);
+    }
+    P_expect(self, TK_DEDENT, "trait");
+    d->methods = ms.data;
+    d->nmethods = ms.len;
     return d;
 }
 
 static Decl *P_parse_instantiate(P *self) {
     Token *kw = P_adv(self);
+    if (kw->kind == TK_IMPLEMENT && P_at(self, TK_IDENT) && P_pk1(self)->kind == TK_FOR) {
+        Token *tn = P_adv(self);
+        P_adv(self);
+        return P_parse_trait_impl(self, tn->text, kw->pos);
+    }
     Decl *d = Arena_alloc(self->a, sizeof(Decl));
     d->kind = (kw->kind == TK_DECLARE ? DL_DECLARE : DL_IMPLEMENT);
     if (kw->kind == TK_INLINE) {
@@ -1484,11 +1611,11 @@ static Decl *P_parse_top(P *self) {
             return P_parse_instantiate(self);
         }
         case TK_STRUCT: {
-            return P_parse_struct_or_union(self, 0);
+            return P_parse_struct_or_union(self, 0, 0);
         }
         case TK_UNION: {
             warn_at(self->file, t->pos, "'union' in Plang is deprecated and will be removed in a future version");
-            return P_parse_struct_or_union(self, 1);
+            return P_parse_struct_or_union(self, 1, 0);
         }
         case TK_ENUM: {
             return P_parse_enum(self);
@@ -1533,6 +1660,12 @@ static Decl *P_parse_top(P *self) {
             if (!is_extern && P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "include") == 0 && (P_pk1(self)->kind == TK_LT || P_pk1(self)->kind == TK_STRING)) {
                 return P_parse_c_include(self);
             }
+            if (!is_extern && P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "record") == 0 && P_pk1(self)->kind == TK_IDENT) {
+                return P_parse_struct_or_union(self, 0, 1);
+            }
+            if (!is_extern && P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "trait") == 0 && P_pk1(self)->kind == TK_IDENT) {
+                return P_parse_trait(self);
+            }
             int is_const = P_accept(self, TK_CONST);
             if (is_const && P_at(self, TK_DEF)) {
                 Func *cf = P_parse_func(self, 0, 0, NULL);
@@ -1546,18 +1679,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1341_17 = d2;
-                __with_1341_17->kind = DL_VAR;
-                __with_1341_17->pos = name->pos;
-                __with_1341_17->name = name->text;
-                __with_1341_17->is_const = is_const;
-                __with_1341_17->is_extern = is_extern;
+                Decl *__with_1481_17 = d2;
+                __with_1481_17->kind = DL_VAR;
+                __with_1481_17->pos = name->pos;
+                __with_1481_17->name = name->text;
+                __with_1481_17->is_const = is_const;
+                __with_1481_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1341_17->type = P_parse_type(self);
+                    __with_1481_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1341_17->init = P_parse_initializer(self);
-                } else if (__with_1341_17->type == NULL) {
+                    __with_1481_17->init = P_parse_initializer(self);
+                } else if (__with_1481_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");
@@ -1582,6 +1715,7 @@ static const char *module_basename(Arena *a, const char *path) {
 
 Module *parse_tokens(Arena *a, const char *file, TokenList tl, int32_t is_header) {
     P p = {tl.toks, tl.n, 0, file, a};
+    Vec_pchar_init(&p.nsv);
     Module *m = Arena_alloc(a, sizeof(Module));
     m->path = Arena_strdup(a, file);
     m->name = module_basename(a, file);
@@ -1599,5 +1733,6 @@ Module *parse_tokens(Arena *a, const char *file, TokenList tl, int32_t is_header
     }
     m->decls = decls.data;
     m->ndecls = decls.len;
+    Vec_pchar_deinit(&p.nsv);
     return m;
 }

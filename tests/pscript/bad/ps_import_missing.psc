@@ -1,0 +1,3 @@
+import nosuchmodule
+
+print("unreachable")

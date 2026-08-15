@@ -35,6 +35,7 @@ struct StrBuf:
     def putc(self: *StrBuf, c: char)
     def puts(self: *StrBuf, s: const *char)
     def printf(self: *StrBuf, fmt: const *char, ...)
+    def trim_comma(self: *StrBuf)
     def deinit(self: *StrBuf)
 
 # ---------- utf8 <-> utf32 ----------
@@ -63,5 +64,19 @@ def wd_pedantic() -> i32
 def cdiag_at(file: const *char, pos: Pos, group: const *char, wdef: i32, fmt: const *char, ...)
 def warn_at(file: const *char, pos: Pos, fmt: const *char, ...)
 
+# ---------- characters ----------
+def is_hexc(c: char) -> bool
+def hexc(c: char) -> i32
+
 # ---------- files ----------
 def read_entire_file(path: const *char, out out_len: usize) -> *char
+def read_entire_file_opt(path: const *char, out out_len: usize) -> *char
+
+# ---------- paths ----------
+def path_dir(a: *Arena, path: const *char) -> const *char
+def path_join(a: *Arena, dir: const *char, rel: const *char) -> const *char
+def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *char
+
+# ---------- C string literals ----------
+def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char
+def c_string_literal(a: *Arena, bytes: const *char, n: usize) -> const *char

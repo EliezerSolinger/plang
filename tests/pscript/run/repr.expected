@@ -1,0 +1,8 @@
+Pt(x=1, y=2)
+Line(a=Pt(x=0, y=0), b=Pt(x=3, y=4), tint=BLUE)
+GREEN
+Named(label=origin, at=Pt(x=1, y=2))
+$2
+value: Pt(x=1, y=2) and RED
+in a string: Pt(x=1, y=2) / BLUE / $0
+True

@@ -1,0 +1,6 @@
+sum 0..4 = 10
+sum 2..7 = 27
+step 3 = 18
+first square over 50 = 8
+odd count = 5
+grid = 36

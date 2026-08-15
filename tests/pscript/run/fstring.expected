@@ -1,0 +1,14 @@
+hello, world!
+n = 42, twice = 84
+[    42]
+[42    ]
+[  42  ]
+[000042]
+[-00042]
+hex 2a HEX 2A bin 101010 oct 52
+pct 93.5%
+[     93.46]
+[     world] [world     ] [   world   ]
+flag True
+braces {literal} and a hole 42
+nested call world: 5

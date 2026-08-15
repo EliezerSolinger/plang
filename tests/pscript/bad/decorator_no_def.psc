@@ -1,0 +1,2 @@
+@memoize
+x = 1

@@ -12,11 +12,7 @@ implement Vec<Token>
 enum LxLimit:
     MAX_INDENT = 64
 
-struct Keyword:
-    word: const *char
-    kind: TokKind
-
-const keywords: Keyword[] = {
+static const P_KEYWORDS: Keyword[] = {
     {"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF},
     {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE},
     {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO},
@@ -30,6 +26,27 @@ const keywords: Keyword[] = {
     {"defer", TK_DEFER}, {"with", TK_WITH},
     {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT},
     {None, TK_EOF}}
+
+# P reads plain strings and plain operators: no interpolation prefix, no triple
+# quote, and `?`/`@`/`**`/`//` are not operators at all.
+static P_LEXSPEC: const LexSpec = {P_KEYWORDS, False, False, False}
+
+# reconstructs a `<...>` header path from tokens. `include` is a CONTEXTUAL
+# word in both languages, not a keyword, so the lexer cannot special-case `<h>`
+# after it the way it does after `import` — the parser reassembles the path
+# from the tokens it got. Shared: both front ends have the same problem.
+def spell_tok(t: *Token) -> const *char:
+    if t->text != None:
+        return t->text
+    match t->kind:
+        case TK_DOT:
+            return "."
+        case TK_SLASH:
+            return "/"
+        case TK_MINUS:
+            return "-"
+        case _:
+            return ""
 
 def tok_kind_name(k: TokKind) -> const *char:
     match k:
@@ -193,6 +210,73 @@ def tok_kind_name(k: TokKind) -> const *char:
             return "'<<='"
         case TK_SHR_EQ:
             return "'>>='"
+        # pscript's vocabulary: named here too, so its diagnostics read the same
+        case TK_ASYNC:
+            return "'async'"
+        case TK_AWAIT:
+            return "'await'"
+        case TK_RECORD:
+            return "'record'"
+        case TK_SHARED:
+            return "'shared'"
+        case TK_SPAWN:
+            return "'spawn'"
+        case TK_RAISE:
+            return "'raise'"
+        case TK_TRY:
+            return "'try'"
+        case TK_CATCH:
+            return "'catch'"
+        case TK_FINALLY:
+            return "'finally'"
+        case TK_GLOBAL:
+            return "'global'"
+        case TK_NONLOCAL:
+            return "'nonlocal'"
+        case TK_LAMBDA:
+            return "'lambda'"
+        case TK_PASS:
+            return "'pass'"
+        case TK_ASSERT:
+            return "'assert'"
+        case TK_UNSAFE:
+            return "'unsafe'"
+        case TK_NOGC:
+            return "'nogc'"
+        case TK_FROM:
+            return "'from'"
+        case TK_AS:
+            return "'as'"
+        case TK_IMPLEMENTS:
+            return "'implements'"
+        case TK_QUESTION:
+            return "'?'"
+        case TK_COALESCE:
+            return "'??'"
+        case TK_COALESCE_EQ:
+            return "'??='"
+        case TK_OPTDOT:
+            return "'?.'"
+        case TK_OPTINDEX:
+            return "'?['"
+        case TK_POW:
+            return "'**'"
+        case TK_POW_EQ:
+            return "'**='"
+        case TK_FLOORDIV:
+            return "'//'"
+        case TK_FLOORDIV_EQ:
+            return "'//='"
+        case TK_WRAP_STAR:
+            return "'%*'"
+        case TK_WRAP_PLUS:
+            return "'%+'"
+        case TK_WRAP_MINUS:
+            return "'%-'"
+        case TK_AT:
+            return "'@'"
+        case TK_FSTRING:
+            return "f-string"
         case _:
             return "token"
 
@@ -225,6 +309,7 @@ struct Lx:
     paren: i32         # depth of () [] {} — implicit continuation
     prev_import: bool
     tolerant: bool     # modo editor (lex_ex): NUNCA fatal — recupera e segue
+    spec: const *LexSpec  # which language is being read (keywords + extensions)
 
     static def cur(self: *Lx) -> u32:
         return self->cp[self->i] if self->i < self->n else 0
@@ -328,6 +413,31 @@ struct Lx:
     static def lex_string(self: *Lx, quote: u32, kind: TokKind):
         self->lex_str_at(self->i, self->here(), quote, kind)
 
+    # """...""" (LexSpec.triple_str): the only literal that may contain a raw
+    # newline, so it is also the only one that has to keep the line counter
+    # honest. The lexeme carries all six quotes; the parser strips them.
+    static def lex_triple_at(self: *Lx, start: usize, p: Pos, quote: u32, kind: TokKind):
+        self->i += 3
+        while True:
+            c: u32 = self->cur()
+            if self->i >= self->n:
+                if self->tolerant:
+                    break
+                fatal_at(self->file, p, "unterminated triple-quoted literal")
+            if c == '\\':
+                self->i += 2
+                continue
+            if c == '\n':
+                self->line += 1
+                self->i += 1
+                self->line_start = self->i
+                continue
+            if c == quote and self->peek(1) == quote and self->peek(2) == quote:
+                self->i += 3
+                break
+            self->i += 1
+        self->push_tok(kind, p, self->slice(start, self->i))
+
     static def lex_number(self: *Lx):
         p: Pos = self->here()
         start: usize = self->i
@@ -367,6 +477,55 @@ struct Lx:
         k: TokKind = TK_EOF  # always overwritten; error cases call fatal_at
         len = 1
 
+        # LexSpec.ext_ops — operators that exist in pscript and not in P. They
+        # are matched BEFORE the shared table below, which therefore stays
+        # exactly what P has always read.
+        #
+        # `%*`, `%+` and `%-` (the wrapping arithmetic of 54.1) do shadow
+        # `x % *p` and `x % +y`: the lexer cannot tell them apart, so the
+        # parenthesized form is the way to spell the second one.
+        if self->spec->ext_ops:
+            ek: TokKind = TK_EOF
+            elen = 0
+            match c:
+                case '?':
+                    if c1 == '?' and c2 == '=':
+                        ek = TK_COALESCE_EQ; elen = 3
+                    elif c1 == '?':
+                        ek = TK_COALESCE; elen = 2
+                    elif c1 == '.':
+                        ek = TK_OPTDOT; elen = 2
+                    elif c1 == '[':
+                        ek = TK_OPTINDEX; elen = 2
+                        self->paren += 1
+                    else:
+                        ek = TK_QUESTION; elen = 1
+                case '*':
+                    if c1 == '*' and c2 == '=':
+                        ek = TK_POW_EQ; elen = 3
+                    elif c1 == '*':
+                        ek = TK_POW; elen = 2
+                case '/':
+                    if c1 == '/' and c2 == '=':
+                        ek = TK_FLOORDIV_EQ; elen = 3
+                    elif c1 == '/':
+                        ek = TK_FLOORDIV; elen = 2
+                case '%':
+                    if c1 == '*':
+                        ek = TK_WRAP_STAR; elen = 2
+                    elif c1 == '+':
+                        ek = TK_WRAP_PLUS; elen = 2
+                    elif c1 == '-':
+                        ek = TK_WRAP_MINUS; elen = 2
+                case '@':
+                    ek = TK_AT; elen = 1
+                case _:
+                    pass
+            if elen > 0:
+                self->i += usize(elen)
+                self->push_tok(ek, p, None)
+                return
+
         match c:
             case '(':
                 k = TK_LPAREN
@@ -402,6 +561,17 @@ struct Lx:
                     k = TK_DOT
             case '~':
                 k = TK_TILDE
+            case '?':
+                # P has exactly ONE '?' spelling: the coalesce pair (69.3).
+                # A lone '?' stays the error it always was — and in the editor's
+                # tolerant mode it is skipped, exactly like the default case.
+                if c1 == '?':
+                    k = TK_COALESCE; len = 2
+                elif self->tolerant:
+                    self->i += 1
+                    return
+                else:
+                    fatal_at(self->file, p, "unexpected character (U+003F)")
             case '+':
                 if c1 == '=':
                     k = TK_PLUS_EQ; len = 2
@@ -484,14 +654,18 @@ struct Lx:
         self->push_tok(k, p, None)
 
 def lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> TokenList:
-    return lex_ex(file, bytes, nbytes, a, False)
+    return lex_with(file, bytes, nbytes, a, False, &P_LEXSPEC)
 
 # tolerant=True: EDITOR mode (pstudio) — never calls fatal; invalid input is
 # recovered (an unterminated string becomes a token up to the EOL, a stray
 # character is skipped, invalid UTF-8 becomes '?'). The compiler keeps using
 # the strict lex().
 def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tolerant: bool) -> TokenList:
+    return lex_with(file, bytes, nbytes, a, tolerant, &P_LEXSPEC)
+
+def lex_with(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tolerant: bool, spec: const *LexSpec) -> TokenList:
     lx: Lx = {0}
+    lx.spec = spec
     lx.file = file
     lx.bytes = bytes
     lx.nbytes = nbytes
@@ -561,6 +735,18 @@ def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tole
                 k: TokKind = TK_STRING if q == '"' else TK_CHARLIT
                 lx.lex_str_at(pstart, pp, q, k)
                 continue
+        # f"..." (LexSpec.fstrings) — one token carrying the prefix and the
+        # quotes; the placeholders are parsed later, where the expressions can
+        # be handed to the real expression parser instead of a second scanner.
+        if lx.spec->fstrings and c == 'f' and lx.peek(1) == '"':
+            fstart: usize = lx.i
+            fp: Pos = lx.here()
+            lx.i += 1   # the prefix; now on the opening quote
+            if lx.spec->triple_str and lx.peek(1) == '"' and lx.peek(2) == '"':
+                lx.lex_triple_at(fstart, fp, '"', TK_FSTRING)
+            else:
+                lx.lex_str_at(fstart, fp, '"', TK_FSTRING)
+            continue
         if is_ident_start(c):
             p: Pos = lx.here()
             start: usize = lx.i
@@ -570,10 +756,11 @@ def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tole
                 fatal_at(lx.file, lx.here(), "identifiers must be ASCII ([A-Za-z0-9_])")
             text: const *char = lx.slice(start, lx.i)
             k: TokKind = TK_IDENT
+            kws: const *Keyword = lx.spec->keywords
             j = 0
-            while keywords[j].word != None:
-                if strcmp(text, keywords[j].word) == 0:
-                    k = keywords[j].kind
+            while kws[j].word != None:
+                if strcmp(text, kws[j].word) == 0:
+                    k = kws[j].kind
                     break
                 j += 1
             lx.push_tok(k, p, text)
@@ -585,6 +772,9 @@ def lex_ex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, tole
             fatal_at(lx.file, lx.here(), "Unicode character outside string/comment (U+%04X)", c)
         if is_digit(c):
             lx.lex_number()
+            continue
+        if c == '"' and lx.spec->triple_str and lx.peek(1) == '"' and lx.peek(2) == '"':
+            lx.lex_triple_at(lx.i, lx.here(), '"', TK_STRING)
             continue
         if c == '"':
             lx.lex_string('"', TK_STRING)

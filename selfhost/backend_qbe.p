@@ -24,17 +24,6 @@ import "../stl/set.ph"
 
 def arena_qcmp(base: const *char, cls: char) -> const *char
 
-# hex digit helpers (free functions, before the struct so methods can see them)
-def is_hexc(c: char) -> bool:
-    return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
-
-def hexc(c: char) -> i32:
-    if c >= '0' and c <= '9':
-        return i32(c - '0')
-    if c >= 'a' and c <= 'f':
-        return i32(c - 'a') + 10
-    return i32(c - 'A') + 10
-
 def align_up(x: i32, a: i32) -> i32:
     if a <= 1:
         return x
@@ -124,7 +113,10 @@ def lit_is_wide(lex: const *char) -> bool:
 def lit_body(lex: const *char) -> const *char:
     return lex + lit_prefix_len(lex)
 
-def cstr_bytes(out: *StrBuf, lex: const *char) -> i32:
+# `limit` caps how many bytes are emitted (-1 = no cap): C truncates a string
+# initializer to the declared array size, and the nul is dropped when it does
+# not fit — `char x[3] = "abc"` is three bytes, not four.
+def cstr_bytes(out: *StrBuf, lex: const *char, limit: i32) -> i32:
     lex = lit_body(lex)  # skip prefix (u8"...") — raw bytes
     count = 0
     i: usize = 1  # skip the opening quote
@@ -173,6 +165,8 @@ def cstr_bytes(out: *StrBuf, lex: const *char) -> i32:
                         b = i32(e)
         else:
             b = i32(c) & 0xFF
+        if limit >= 0 and count >= limit:
+            break
         out->printf(" b %d,", b)
         count += 1
         i += 1
@@ -365,7 +359,8 @@ struct Qb:
     enumc: Vec<EnumConst>   # module's enum constants -> integer value
     globals: StrMap<*Type>
     funcs: StrMap<*Func>
-    structs: StrMap<*Decl>   # struct name -> DL_STRUCT (for layout/offsets)
+    structs: StrMap<*Decl>
+    tdsc: StrMap<*Type>      # typedef de header C -> escalar subjacente   # struct name -> DL_STRUCT (for layout/offsets)
     cdepth: i32              # const-folding recursion guard (see const_int)
     gconsts: StrMap<*Expr>   # module-level `const NAME = expr` -> its initializer.
                              #   QBE has no preprocessor, so a STATIC initializer
@@ -389,6 +384,7 @@ struct Qb:
     static def tmp(self: *Qb) -> i32
     static def lbl(self: *Qb) -> i32
     static def cls_of(self: *Qb, t: *Type) -> char
+    static def td_resolve(self: *Qb, name: const *char) -> const *char
     static def size_of(self: *Qb, t: *Type) -> i32
     static def type_align(self: *Qb, t: *Type) -> i32
     static def struct_align(self: *Qb, d: *Decl) -> i32
@@ -479,12 +475,30 @@ struct Qb:
         return self->nlbl
 
     # ---------- type mapping ----------
+    # A typedef from a C header names a type this back end has to LAY OUT, and
+    # the name alone says nothing: `pthread_t` is an `unsigned long`, and taking
+    # it for four bytes corrupts every offset after it in the struct. The C back
+    # end never has this problem — it prints the typedef and the system header
+    # answers — so the map is filled only for the back ends that need it.
+    static def td_resolve(self: *Qb, name: const *char) -> const *char:
+        if name == None:
+            return None
+        n: const *char = name
+        d: i32 = 0
+        while d < 8:
+            u: *Type = self->tdsc.get_or(n, None)
+            if u == None or u->name == None or strcmp(u->name, n) == 0:
+                return n
+            n = u->name
+            d += 1
+        return n
+
     static def cls_of(self: *Qb, t: *Type) -> char:
         if t == None:
             return 'w'
         if t->kind in {TY_PTR, TY_ARRAY, TY_FUNC}:
             return 'l'
-        n: const *char = t->name
+        n: const *char = self->td_resolve(t->name)
         if n in {"long", "i64", "u64", "usize", "isize", "size_t", "ptrdiff_t", "long long", "unsigned long", "unsigned long long"}:
             return 'l'
         if n in {"double", "f64"}:
@@ -604,7 +618,7 @@ struct Qb:
                 if ok and v > 0:
                     count = i32(v)
             return count * self->size_of(t->inner)
-        n: const *char = t->name
+        n: const *char = self->td_resolve(t->name)
         if n in {"va_list", "__builtin_va_list"}:
             return 24   # va_list SysV: 24-byte region (treated as aggregate)
         if n in {"char", "bool", "i8", "u8"}:
@@ -839,7 +853,7 @@ struct Qb:
         if aggr and ty->kind == TY_ARRAY and idx < nitems and items[idx] != None and items[idx]->kind == EX_STRING and self->size_of(ty->inner) == 1:
             se: *Expr = items[idx]
             idx += 1
-            nb: i32 = cstr_bytes(db, se->text)
+            nb: i32 = cstr_bytes(db, se->text, -1)
             db->puts(" b 0,")
             sz2: i32 = self->size_of(ty)
             if sz2 > nb + 1:
@@ -1520,6 +1534,12 @@ struct Qb:
             return self->ecls(self->gen_select(e))
         if e->kind == EX_STMTEXPR:
             return self->ecls(e->lhs) if e->lhs != None else 'w'
+        # the comma operator YIELDS its right side, so it has that side's class.
+        # Without this the fallback asked qtype_of, which for a comparison
+        # reports the OPERAND's type — `(t = x, a.f == b.f)` came out class 'd'
+        # and the `not` around it compared a boolean against a double zero.
+        if e->kind == EX_COMMA:
+            return self->ecls(e->rhs)
         if e->kind == EX_STRING or e->kind == EX_NONE:
             return 'l'
         if e->kind == EX_UNARY and e->op == TK_AMP:
@@ -1593,7 +1613,7 @@ struct Qb:
             self->data.printf(" %c 0 }\n", elem)
             return id
         self->data.printf("data $qstr%d = {", id)
-        cstr_bytes(&self->data, lex)
+        cstr_bytes(&self->data, lex, -1)
         self->data.puts(" b 0 }\n")
         return id
 
@@ -1642,6 +1662,18 @@ struct Qb:
                 fa: i32 = self->tmp()
                 self->out->printf("\t%%t%d =l add %%t%d, %d\n", fa, base, off)
                 return fa
+            case EX_COMMA:
+                # `(a, b).f` — the comma is a sequence point: evaluate the left
+                # for its effect, and the ADDRESS is the right one's. It is what
+                # a lowering that binds operands to temporaries produces, and
+                # what C says the value of a comma is.
+                self->emit_rvalue(e->lhs)
+                if e->rhs->kind in {EX_CALL, EX_COMPOUND, EX_STMTEXPR, EX_GENERIC, EX_CAST}:
+                    # an aggregate RVALUE is already the address of the object
+                    # it lives in (sret or an anonymous slot), exactly as the
+                    # field case above treats it
+                    return self->emit_rvalue(e->rhs)
+                return self->emit_addr(e->rhs)
             case EX_INDEX:
                 base: i32 = self->emit_rvalue(e->lhs)
                 idx: i32 = self->emit_rvalue(e->rhs)
@@ -3489,11 +3521,18 @@ struct Qb:
         # static char[] = "...": bytes + nul (size inferred when [])
         if init != None and init->kind == EX_STRING and ty != None and ty->kind == TY_ARRAY:
             dbs: StrBuf = {0}
-            nb: i32 = cstr_bytes(&dbs, init->text)
-            total: i32 = sz if sz > nb + 1 else nb + 1
-            self->data.printf("data $sl%d = {%s b 0", sid, dbs.data if dbs.data != None else "")
-            if total > nb + 1:
-                self->data.printf(", z %d", total - (nb + 1))
+            nb: i32 = cstr_bytes(&dbs, init->text, sz if sz > 0 else -1)
+            # the nul only goes in when the declared array has room for it
+            nul: bool = sz <= 0 or nb < sz
+            total: i32 = sz if sz > 0 else nb + 1
+            self->data.printf("data $sl%d = {%s", sid, dbs.data if dbs.data != None else "")
+            if nul:
+                self->data.puts(" b 0")
+                nb += 1
+            else:
+                self->data.trim_comma()
+            if total > nb:
+                self->data.printf("%s z %d", "" if not nul else ",", total - nb)
             self->data.puts(" }\n")
             dbs.deinit()
             self->static_fix_len(ty, total)
@@ -3680,6 +3719,9 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
     qb.globals.init()
     qb.funcs.init()
     qb.structs.init()
+    qb.tdsc.init()
+    for i in range(m->ntdsc):
+        qb.tdsc.put(m->tdsc_names[i], m->tdsc_types[i])
     qb.gconsts.init()
     qb.enumc.init()
     defer:
@@ -3842,11 +3884,16 @@ def emit_module_qbe(m: *Module, out: *StrBuf):
                 # char arr[] = "..." (or fixed size): bytes + nul, with padding
                 # if the declared array is larger than the string
                 out->printf("%sdata $%s = {", xp, d2->name)
-                nb: i32 = cstr_bytes(out, d2->init->text)
-                out->puts(" b 0")
-                pad: i32 = sz - (nb + 1)
+                nb: i32 = cstr_bytes(out, d2->init->text, sz if sz > 0 else -1)
+                gnul: bool = sz <= 0 or nb < sz
+                if gnul:
+                    out->puts(" b 0")
+                    nb += 1
+                else:
+                    out->trim_comma()
+                pad: i32 = sz - nb
                 if pad > 0:
-                    out->printf(", z %d", pad)
+                    out->printf("%s z %d", "" if not gnul else ",", pad)
                 out->puts(" }\n")
             elif d2->init != None and gcls != 's' and gcls != 'd':
                 # general constant scalar (enum, expression): evaluate; else zero

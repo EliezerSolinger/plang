@@ -1,0 +1,3 @@
+Plang embeds this file verbatim.
+Tabs	here, quotes "here", backslash \ here.
+Trigraph bait: ??= and ??/ stay literal.

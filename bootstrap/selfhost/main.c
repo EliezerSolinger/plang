@@ -11,6 +11,9 @@
 #include "parser.h"
 #include "sema.h"
 #include "cfront.h"
+#include "ps_parser.h"
+#include "ps_sema.h"
+#include "ps_lower.h"
 #include "../stl/vec.h"
 #include "vecs.h"
 
@@ -73,6 +76,9 @@ static void usage(void) {
     fprintf(stderr, "  -pedantic        warn on GNU/C23 extensions in C input\n");
     fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n");
     fprintf(stderr, "  --tokens         dump tokens and exit\n");
+    fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n");
+    fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n");
+    fprintf(stderr, "                   (default: pscript/runtime)\n");
     fprintf(stderr, "  -h, --help       this help\n");
     exit(2);
 }
@@ -109,7 +115,10 @@ static const char *derive_output(Arena *a, const char *input, const Backend *be)
     if (n > 2 && strcmp(input + n - 2, ".i") == 0) {
         return Arena_printf(a, "%.*s.%s", (int32_t)(n - 2), input, be->out_ext);
     }
-    fatal("'%s': unknown extension (expected .p, .ph, .c or .i)", input);
+    if (n > 4 && strcmp(input + n - 4, ".psc") == 0) {
+        return Arena_printf(a, "%.*s.%s", (int32_t)(n - 4), input, be->out_ext);
+    }
+    fatal("'%s': unknown extension (expected .p, .ph, .psc, .c or .i)", input);
     return NULL;
 }
 
@@ -209,6 +218,8 @@ int main(int argc, char **argv) {
     const char *out_dir = NULL;
     const char *backend_name = NULL;
     int tokens_only = 0;
+    int parse_only = 0;
+    const char *ps_runtime = "pscript/runtime";
     int std_version = 99;
     int pedantic_lvl = 0;
     int inline_runtime = 0;
@@ -297,6 +308,14 @@ int main(int argc, char **argv) {
             diag_set(argv[i] + 2, 1);
         } else if (strcmp(argv[i], "--tokens") == 0) {
             tokens_only = 1;
+        } else if (strcmp(argv[i], "--parse-only") == 0) {
+            parse_only = 1;
+        } else if (strcmp(argv[i], "--ps-runtime") == 0) {
+            i += 1;
+            if (i >= argc) {
+                fatal("--ps-runtime needs a directory");
+            }
+            ps_runtime = argv[i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage();
         } else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0) {
@@ -345,7 +364,29 @@ int main(int argc, char **argv) {
     for (k = 0; k < inputs.len; k += 1) {
         const char *path = Vec_pchar_get(&inputs, k);
         Module *m;
-        if (has_suffix(path, ".c") || has_suffix(path, ".i")) {
+        if (has_suffix(path, ".psc")) {
+            size_t pslen = 0;
+            char *psbytes = read_entire_file(path, &pslen);
+            TokenList pstl = ps_lex(path, psbytes, pslen, &cc.arena);
+            PsModule *psm = ps_parse(&cc.arena, path, pstl);
+            if (parse_only) {
+                {
+                    free(psbytes);
+                }
+                continue;
+            }
+            ps_sema_run(&cc.arena, psm, cc.cpp);
+            m = ps_lower(&cc.arena, psm, ps_runtime);
+            if (!be->pre_sema) {
+                sema_run(&cc, m);
+                if (strcmp(be->name, "qbe") == 0) {
+                    qbe_merge_types(&cc, m);
+                }
+            }
+            {
+                free(psbytes);
+            }
+        } else if (has_suffix(path, ".c") || has_suffix(path, ".i")) {
             size_t clen = 0;
             char *cbytes;
             if (has_suffix(path, ".c")) {

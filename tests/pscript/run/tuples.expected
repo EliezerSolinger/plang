@@ -1,0 +1,5 @@
+17 // 5 = 3, 17 % 5 = 2
+dim 800x600
+True False
+nested 1 2 3
+copy kept 10 20

@@ -1,0 +1,901 @@
+# pscript — plano de execução
+
+**Este arquivo é o ponto de retomada.** Ele existe porque o contexto de uma sessão se
+compacta e some; o repositório não. Quem retomar (inclusive eu mesmo depois de uma
+compactação) deve ler **este arquivo primeiro**, depois a seção "Estado da
+implementação" de `DESIGN.md`.
+
+Atualize o estado das etapas AQUI ao terminar cada uma, no mesmo commit lógico do
+trabalho. Uma etapa só está `[x]` quando `make verify` deu 8/8 **e** o seed foi
+regenerado.
+
+---
+
+## Regras que não se negociam
+
+Vieram do usuário ao longo do projeto e valem para tudo abaixo.
+
+1. **Nunca commitar. Nunca dar push.** Quem commita é o usuário. Deixe a árvore
+   limpa e descreva o que mudou.
+2. **`make verify` tem de dar 8/8 depois de cada etapa**, e o seed tem de ser
+   regenerado (`bootstrap/` em dia com os fontes). A receita está no fim deste
+   arquivo.
+3. **Nada de atalho.** Solução completa, robusta e definitiva; se algo não couber,
+   diga o que ficou de fora e por quê, em vez de entregar meio.
+4. **Só o usuário decide design.** Se aparecer uma bifurcação de linguagem, NÃO
+   decida: registre como bateria nova em `DESIGN.md` com as opções e a consequência
+   de cada uma, escolha a saída **mais conservadora** para não travar, e marque no
+   texto que está pendente de decisão.
+5. **Todo código e toda mensagem de erro em INGLÊS** (58.1, 51.4), no pscript e no
+   selfhost.
+6. **libc é o runtime; nunca abstrair.** Exceção única: `--inline-runtime`.
+7. **Tuplas foram removidas do P a pedido — não repropor para o P.** No pscript elas
+   existem normalmente.
+8. Cada etapa entra com **teste que roda**, nos três modos (C, QBE, C89), como a 50.4
+   pediu.
+
+## O critério que ordena o trabalho (65)
+
+Duas perguntas, nessa ordem:
+
+1. **Precisa de runtime?** Não → o recurso mora no **P**, e o pscript herda de graça
+   porque baixa para P.
+2. **É seguro de memória?** Sim → o pscript pode **baixar em cima** disso em vez de
+   sintetizar.
+
+Cada travessia converte código do `ps_lower` em código do P que **a sema do P
+verifica** (49.1). Por isso levar coisa para o P não é generosidade: é o que faz o
+lowering encolher e ficar conferido.
+
+---
+
+## Etapas
+
+### Fase A — em dia
+
+- [x] **A1** `embed`/`embed_bytes` no P (63.5) + `import ... as ns` (42.4)
+- [x] **A2** Lexer compartilhado por `LexSpec`; `TokKind` comum
+- [x] **A3** Front end do pscript: `ps_lexer`, `ps_ast`, `ps_parser` — os dois
+      programas de validação passam inteiros
+- [x] **A4** `ps_sema` + `ps_lower` + runtime v0 (`pscript/runtime/psrt.{ph,p}`):
+      fatia vertical rodando nos três modos (50.4)
+- [x] **A5** Escopo de bloco nas duas linguagens (64.1)
+- [x] **A6** `record` no P (65.1): bytes puros checados, `==` por conteúdo campo a
+      campo, construtor `Vec(1.0, 2.0)` posicional e nomeado, com lowering C89
+
+### Fase B — tipos de valor no pscript (não precisam do coletor)
+
+> Ordem dentro da fase é livre; o que importa é cada etapa entrar verde nos três modos
+> com o seed regenerado. `./reseed.sh` faz a escada e atualiza o `bootstrap/`.
+
+- [x] **B1 `record` no pscript.** Feito. Construtor posicional e nomeado, método com
+      `in self`, encadeamento, semântica de valor, `==` por conteúdo — tudo herdado do
+      `record` do P, e o lowering ficou um repasse (a promessa da 65 se pagou).
+      Descobertas: (a) num MÉTODO o receptor vai no parâmetro 0 e o ctx no 1, porque a
+      sugar de método do P lê params[0] — a 49.3 exige que toda função RECEBA o ctx, não
+      a posição; (b) o guarda de exceção precisa de um `__zret: T = {0}` declarado
+      quando a função devolve record, porque `return {0}` não é C; (c) bug do backend C
+      corrigido: `x = (a, b)` perdia os parênteses e virava `(x = a), b`.
+- [x] **B2 Tuplas.** Feito para tuplas de BYTES PUROS. É a única construção que o
+      lowering SINTETIZA em vez de renomear, porque tuplas foram removidas do P: cada
+      SHAPE distinto vira um `record` do P com campos `_0`, `_1`, … — e ser record não é
+      coincidência, é o que 58.2 descreve, então `==` por conteúdo e o construtor vêm de
+      graça. Tupla com `str` dentro precisa que o COLETOR a rastreie, então ela entra na
+      fase C com erro claro até lá.
+- [x] **B3 `for`** — feito para `range(a, b, step)`, que o P já tem com o mesmo
+      significado (mais um repasse). O protocolo de 40.3 (`has_next()`/`next()`) precisa
+      de cursor MUTÁVEL, e o único agregado mutável é `struct`, que é coletado: entra na
+      fase C junto com o coletor.
+- [x] **B4 `T?`, `??`, `?.`, narrowing por fluxo.** Feito. REPRESENTAÇÃO escolhida por
+      espécie, que é o que mantém o caso comum de graça: referência já é ponteiro, então
+      `str?` é o ponteiro nulo e custa zero; VALOR não tem padrão de bits sobrando para
+      "ausente" (todo int é um int válido), então ganha um record `{has, v}`. Isso é
+      implementação, não linguagem — registrado como nota, não como bateria.
+      Três bugs achados no caminho, todos consertados e com teste:
+      (a) `add_local` não inicializava TODOS os campos e `vec_grow` devolve memória
+          suja — um `opt_type` velho fazia o lowering entrar num option que não existia,
+          e só aparecia na SEGUNDA compilação do mesmo processo;
+      (b) o backend C emitia `??` cru dentro de literal, e trigrafo é substituído na
+          fase 1 da tradução: a mensagem `"'??' takes an option"` saía `'^ takes an
+          option`. Agora todo `?` sai escapado (`tests/cases/37_trigraph.p`);
+      (c) `import` de caminho ABSOLUTO era colado atrás do diretório do incluidor —
+          agora usa `path_join`.
+- [x] **B5 `match` e `enum`.** Feito. Enum do pscript É enum do P (constantes inteiras
+      de C), e o `match` sobre enum/int/bool é o `match` do P — outro repasse. Sobre
+      ENUM a exaustividade é exigida sem `case _` (29.2), e o `-Wswitch-enum` do P
+      confere de novo no código gerado: a garantia é dita duas vezes e verificada duas
+      vezes. Match de STRING não podia ser repasse — o sujeito aqui é um objeto
+      coletado, não `const *char` — então vira cadeia if/elif com `ps_str_eq`, que
+      compara por CONTEÚDO (22.2), com o sujeito avaliado uma vez só.
+- [x] **B6 `try`/`catch`/`finally`/`raise`.** Feito, no modelo de flag da 49.2 e SEM
+      `goto` (que o P proíbe em função com `defer` e que a 50.1 já recusara): cada
+      statement do corpo do try é guardado por um flag que o raise limpa, e o `finally`
+      baixa para o `defer` do P — que é exatamente a semântica dele, inclusive para um
+      `return` de dentro do try. `raise error(msg)`/`raise e`, `e.message`/`e.category`.
+      Duas coisas que o lowering teve de fazer e valem registro: içar as declarações do
+      corpo do try para o bloco do try (cada `if flag:` é um escopo em P), e pular o
+      próprio `return` quando o flag caiu — senão a chamada que lançou ainda devolvia
+      lixo. Falta: categorias com NOME (hoje `e.category` é int); `with` ainda não.
+
+### Fase C — o coletor e os tipos coletados
+
+> **Ordem escolhida:** o coletor ANTES de list/dict/set. Com só `str` e o erro no heap,
+> a máquina de rastreio é pequena e dá para acertá-la; depois cada tipo novo é só mais
+> um caso de trace. É o "cresce recurso a recurso" da 50.4.
+
+- [x] **C1 Shadow stack + C2 coletor de Cheney.** Feitos juntos, e funcionando:
+      50 mil rodadas alocando ~4,4 milhões de objetos terminam com **7,4 MB de pico**
+      de RSS — sem coleta seriam mais de 200 MB — e o valor vivo sai correto, que é o
+      que prova que as referências foram reescritas.
+
+      Três decisões de implementação que valem registro:
+      - **O frame guarda ENDEREÇOS de slot** (17.1), não valores. É isso que deixa cada
+        local coletado continuar sendo uma VARIÁVEL COM NOME no C gerado (`title`, não
+        `__slots[2]`) e ainda assim ser encontrada e atualizada. Custa um store por
+        local na entrada do bloco.
+      - **Um frame por BLOCO que tenha local coletado**, não por função — porque o
+        escopo é de bloco (64.1). As declarações do bloco sobem para o topo DELE e
+        começam em None: um slot só é registrado quando já contém None ou referência de
+        verdade, nunca o que estava na pilha.
+      - **Alocar NUNCA coleta.** Quando o bloco enche, encadeia outro; quem coleta é
+        `ps_gc_poll`, emitido nos LIMITES DE STATEMENT. É o argumento de segurança
+        inteiro: uma expressão em C guarda intermediários em temporários que a shadow
+        stack não conhece, então coletar no meio de uma moveria objeto que um
+        temporário ainda aponta. O poll só sai depois de statement que pode alocar, e
+        isso o lowering sabe porque toda chamada de runtime passa por um lugar só.
+- [x] **C3 `str`**: índice por CARACTERE (3.4) com índice negativo, fatia que COPIA
+      (17.3) e recorta como a do Python em vez de lançar, `split`, `strip`, `find`,
+      `contains`, `startswith`, `endswith`. `len` conta CODEPOINTS e é O(1) — a contagem
+      sai na passada que já copia os bytes. Indexar é O(i) hoje porque o armazenamento é
+      UTF-8; a largura adaptativa da 7.1 é o que torna O(1), e é mudança de
+      REPRESENTAÇÃO, não de assinatura, então entra depois sem mover nada. Falta: 7.1,
+      o cache UTF-8 da 51.2 (que hoje É a representação), fatia com passo, e o resto dos
+      métodos.
+      Decorrência registrada: **`'x'` é STRING no pscript**, igual a `"x"` — não existe
+      tipo `char` para um literal de caractere ter (a 3.4 diz que `s[3]` devolve string
+      de um caractere), e é a regra do Python. O lexer compartilhado continua
+      distinguindo; quem decide que dá no mesmo é o parser do pscript.
+- [x] **C4 `list<T>`.** Feita: literal homogêneo com inferência, indexação com índice
+      negativo (31.4) e erro de faixa que LANÇA (5.2), atribuição em índice, `append`,
+      `len`, `for x in xs`, e o coletor rastreando os elementos quando são referência.
+      Dois objetos por baixo — o cabeçalho, que é o que a variável aponta, e o
+      armazenamento, que cresce sendo SUBSTITUÍDO: é o que deixa a lista crescer sem
+      invalidar nenhuma referência a ela. Elementos ficam INLINE, por valor:
+      `list<Vec>` é array plano de records de 24 bytes, sem ponteiro por elemento
+      (52.1) — que é a razão de `record` ser tipo de valor. Falta: fatia, `T[N]`
+      interoperando por `in` (60.2), e os outros métodos de lista.
+- [x] **C5 `dict<K,V>` e `set<T>`.** Feitos: literais, `d[k]` (que LANÇA quando falta,
+      5.2) e `get(k, default)` para o outro idioma, atribuição em chave, `in`/`not in`,
+      `add`/`remove`, `len`, `for k in d` (dá as CHAVES, como Python), e o coletor
+      rastreando chaves e valores quando são referência. Endereçamento aberto com a
+      chave guardada POR VALOR — copiada no insert, que é o que faz "chave por conteúdo"
+      significar alguma coisa. `set<T>` é isto com valor de tamanho zero: uma
+      implementação só, e um lugar só para o coletor aprender. Chave de `record` pede
+      hash campo a campo (bytes crus incluem padding) e por ora dá erro claro.
+
+      **Bug de linguagem achado aqui e corrigido:** o C não define a ordem de avaliação
+      de argumentos nem dos operandos de `+`, e o pscript promete a do Python — da
+      esquerda para a direita. `f"{d.remove('a')} {d.remove('a')}"` dava `True` na
+      SEGUNDA chamada porque o C rodou ela primeiro. Agora todo operando não-trivial
+      menos o último é ligado a um temporário, em ordem; a vírgula é ponto de sequência,
+      e é ela que fixa a ordem. `and`/`or` ficam de fora de propósito: eles curto-circuitam.
+- [x] **C6 f-string.** Feita, resolvida INTEIRA em compilação: o parser quebra o
+      literal em texto e buracos `{expr:spec}`, parseia cada expressão com o próprio
+      parser e devolve uma cadeia de `+`. O runtime vê concatenação e uma chamada de
+      formatação por buraco — nunca uma format string para interpretar. Confere com o
+      Python de verdade em todos os casos do teste, inclusive `^` (centrar), que só
+      pode existir PORQUE não há printf no meio: printf não centra.
+
+- [x] **Comprehensions** (8.1). Uma comprehension é um LAÇO, e laço é statement — então
+      ela é içada para antes do statement que a contém e a expressão vira a lista
+      pronta. Duas coisas que isso obrigou a acertar: dentro de braço de ternário ou do
+      lado direito de `and`/`or` ela é RECUSADA com mensagem clara, porque içar mudaria
+      QUANDO ela roda; e uma comprehension aninhada é içada para o corpo do laço de
+      fora, não para o statement — senão a lista interna seria construída fora do laço
+      que define a variável.
+
+- [x] **Módulos** (41.3). `import geom`, `import geom as g`, `from geom import Vec2
+      [as V]`, tipo qualificado (`g.Kind`) e privacidade `static` (44.4).
+      **Namespace de verdade, resolvido por RENOMEAÇÃO.** A visibilidade é a do
+      Python: um nome de outro módulo só existe aqui se o qualificador o nomear ou o
+      `from` o trouxer — nunca por simplesmente existir. Como o alvo é uma unidade de
+      tradução só, que não tem namespace nenhum, a resolução acontece em compilação:
+      cada declaração de um módulo importado recebe um nome global único
+      (`geom__area`) e a referência qualificada é reescrita para ele. Dois módulos
+      podem declarar `area` cada um; nenhum enxerga o do outro, e o C que sai continua
+      legível — `lib_geom__Vec2_add`, não um número.
+
+      **É o único lugar onde o pscript responde diferente do P, de propósito.** A 42.4
+      fez do qualificador do P uma GRAFIA CONFERIDA sobre um conjunto plano de nomes,
+      porque o P é a linguagem que conversa com o C, onde o nome já É global e
+      renomear quebraria justamente o que ela serve. O pscript não tem essa obrigação:
+      paga a renomeação e ganha módulos de verdade.
+
+      Detalhes que a implementação obrigou a acertar: o módulo entra no cache ANTES de
+      recursar, senão um ciclo `a → b → a` parseia uma segunda cópia e as declarações
+      colidem; um módulo importado com STATEMENTS de topo é recusado (importar é pedir
+      definições, não rodar um programa); o erro de dentro de um módulo importado passa
+      a apontar o ARQUIVO dele, não o do importador; e o furo de f-string passou a
+      herdar a posição da f-string — era lexado sozinho e todo erro dentro dele
+      apontava para 1:1.
+      Gate: `tests/pscript/run/modules.psc` (+2 fixtures) e 9 casos em
+      `tests/pscript/bad/ps_import_*`.
+
+- [x] **`struct`, o tipo de referência COLETADO (20.1).** Era o buraco que faltava da
+      fase C: `record` é valor de bytes puros, `struct` é a referência que o coletor
+      possui — campos mutáveis que todo mundo que segura a referência enxerga, campos
+      que são eles próprios referências, e uma forma que pode apontar para ELA MESMA
+      (lista ligada, árvore). Semântica de referência de verdade: `==` é identidade,
+      dois nomes são um objeto só, e `Node?` é o ponteiro nulo (custo zero).
+
+      **Como o coletor aprende um tipo do usuário:** não aprende. Os campos são o que o
+      programa disser, então o compilador ESCREVE o rastreio — um `Node__trace` de duas
+      linhas que encaminha cada campo de referência — e o descritor do tipo aponta para
+      ele. Esse descritor é o typedesc que a 50.2 pediu, chegando onde ele sempre ia
+      ser preciso primeiro. Escrito como CÓDIGO e não como tabela de offsets porque
+      código é o que o compilador de C confere.
+
+      Detalhe que a bateria QBE cobrou: `sizeof(S)` num inicializador estático é uma das
+      coisas que aquele back end não dobra, então o tamanho vai no SÍTIO DA CHAMADA
+      (`ps_new(ctx, &S__desc, sizeof(S))`) — em expressão não custa nada.
+
+      Junto vieram: `while x != None:` estreitando dentro do corpo (43.1 — é a forma que
+      percorrer uma cadeia pede, e o `if` já tinha a máquina toda); `dyn Trait` sobre
+      `struct`, onde a caixa guarda a REFERÊNCIA e precisa dizer isso ao coletor; e a
+      regra do receptor: `in self` num record (57.1), `self` num struct (20.1), decidido
+      pela ESPÉCIE do tipo e não pela trait.
+      Gate: `tests/pscript/run/struct.psc` (com 20 mil alocações e a cadeia viva) e
+      3 casos em `tests/pscript/bad/ps_struct_*` / `ps_record_self`.
+
+### Fase D — traits (66/67), decididas e não implementadas
+
+- [x] **D1 Traits no P, forma estática.** Feito: `trait X:` com assinaturas,
+      `implement X for T:` (desambiguado do `implement Vec<int>` pelo `for`, 67.2),
+      `def f<T: X>` com o limite conferido na INSTANCIAÇÃO, e a regra órfã da 67.3
+      (uma implementação por par, e o módulo tem de ser dono da trait ou do tipo).
+      O que fez isso caber barato: o bloco `implement` registra os métodos como
+      métodos DO TIPO, então uma chamada dentro do genérico monomorfizado resolve
+      pela busca de método que o P já tinha — **nenhum despacho novo foi inventado e
+      nenhuma vtable é construída**, que é exatamente o que "só a forma estática"
+      compra. Depois de registrar, o nó vira a forma que os backends já emitem para
+      "struct redeclarada só para carregar corpos de método": nenhum backend aprendeu
+      o que é uma trait. Gate: `tests/cases/38_traits.p` e 3 casos em
+      `tests/errors/p_trait_*`.
+- [x] **D2a Traits no pscript: declaração, conformidade nominal e despacho ESTÁTICO.**
+      `trait X:` (contextual, como no P — a 67.2 pediu zero palavra nova e um keyword
+      duro tiraria `trait` de quem já usa a palavra como nome), cláusula
+      `record R implements X:` e bloco `implement X for T:` (66.1) — inclusive
+      ATRAVESSANDO módulos nos dois sentidos: minha trait para o tipo deles, a trait
+      deles para o meu tipo. `Self` na assinatura (66.4). Regra órfã e uma
+      implementação por par (67.3). Checagem NOMINAL (66.2): ter os métodos não basta.
+
+      **Despacho estático (66.3):** `def f<T: Trait>` monomorfiza. O parâmetro de tipo é
+      LIDO dos argumentos (ninguém escreve `f<int>(...)`), o limite é conferido onde o
+      tipo concreto existe, e o que a chamada acaba nomeando é uma função comum —
+      `largest__Money`, legível no C gerado. Nenhuma vtable é construída e as chamadas
+      de dentro do corpo resolvem pela busca de método que já existia. A cópia é feita
+      por um walker só, que clona e substitui na MESMA passada: um clone que depois é
+      editado precisaria de dois walkers sobre a mesma árvore, e dois walkers divergem
+      no dia em que um nó ganha campo (`selfhost/ps_generic.p`).
+
+      Decorrência registrada: com o rename dos módulos, uma mensagem passaria a dizer
+      `lib_geom__Vec2`. Agora existe um registro de nome de EXIBIÇÃO — todo diagnóstico
+      diz `lib_geom.Vec2`, que é o que a pessoa escreveu.
+      Gate: `tests/pscript/run/traits.psc`, `generics.psc` e 13 casos em
+      `tests/pscript/bad/ps_trait_*` / `ps_bound_*`.
+- [x] **D2b `dyn Trait` e tipo associado.** Feitos.
+
+      **`dyn Trait` (66.3):** o oposto explícito do limite de genérico — para o caso que
+      a forma estática não faz, uma lista com valores de tipos DIFERENTES que cumprem o
+      mesmo contrato. O valor é encaixotado (`record` é valor e não tem tamanho fixo
+      entre os tipos de uma trait) e a caixa carrega a vtable do par. Três coisas saem
+      no C, nessa ordem porque o P lê de cima para baixo: um STRUCT por trait usada como
+      `dyn` (com receptor `*void`, então um struct serve a todos os tipos), um THUNK por
+      (trait, tipo, método) e um VALOR estático de vtable por par. Thunk em vez de
+      converter o ponteiro de função: conversão entre tipos de função é a única que o C
+      não promete nada sobre — e assim o C gerado continua legível
+      (`VT_Shape__Circle__area`). Segurança de objeto: uma trait com `Self` fora do
+      receptor, ou com tipo associado, NÃO pode ser `dyn`, e a mensagem diz por quê —
+      é onde o Rust traça a mesma linha.
+
+      **Tipo associado (66.4):** `type Item` na trait, `type Item = int` na
+      implementação (nas duas formas, cláusula e bloco). Sem ele, `Iterable` obrigaria o
+      CHAMADOR a dizer o que a coisa produz. Na comparação de assinaturas o nome é
+      substituído por NÓ, igual ao `Self`.
+
+      **Bug de coletor achado aqui, e era grave:** `is_collected` listava só
+      `PsStr` e `PsErr`, então um local `list`/`dict`/`set` NÃO entrava na shadow stack.
+      O programa segfaultava assim que uma coleta acontecia com uma lista viva —
+      `tests/pscript/run/gc_list.psc` é o teste que acusou e que agora prende isso.
+      Junto: `opt_is_ref` (que decide representação de `T?`, se a lista rastreia
+      elemento e se o dict rastreia chave/valor) também ganhou `dyn`.
+      Gate: `tests/pscript/run/dyn.psc`, `assoc.psc`, `gc_list.psc` e 6 casos em
+      `tests/pscript/bad/ps_dyn_*` / `ps_assoc_*`.
+- [x] **D3 Traits do sistema.** `Comparable` e `Iterable` nas duas linguagens;
+      `Printable` só no P, com a assinatura que a 67.4 exigiu.
+
+      **No pscript** elas vêm de um PRELÚDIO: um pedaço de fonte que o compilador
+      parseia como qualquer módulo e antepõe às declarações do programa. Escrito como
+      fonte de propósito — uma trait montada à mão com nós de AST seria um segundo jeito
+      de dizer a mesma coisa, e no dia em que a superfície mudasse um dos dois ficaria
+      para trás. Se o programa declarar `Comparable` dele, o dele vale: o prelúdio é um
+      PADRÃO, não uma reserva do nome.
+
+      **`for x in obj`** sobre tipo do usuário (40.3): o protocolo escrito por extenso,
+      `has_next()` e `next()` — e não o `next() -> Option` do Rust, porque com opção
+      iterar uma sequência de opções não distingue o fim de um elemento vazio. O cursor
+      precisa AVANÇAR, então o iterador é um `struct`: método de record não muta o
+      receptor (20.1/57.1) e o laço nunca terminaria — a mensagem diz isso.
+
+      **No P** as três estão em `stl/traits.ph` e são usadas como o P usa trait: limite
+      de genérico, conferido na instanciação, monomorfizado até sumir. `Printable`
+      escreve num `Str` do chamador — `ref` e não `out`, porque `out` no P promete que
+      o callee atribui a coisa inteira, e o que o método faz é APENDAR.
+      Gate: `tests/pscript/run/iterable.psc` + 2 casos em `tests/pscript/bad/ps_iter_*`,
+      e a seção de traits em `tests/stl/main.p`.
+
+      **Bug do back end QBE achado aqui:** `(a, b).campo` — vírgula como base de acesso a
+      campo — caía em "not a valid lvalue". É a forma que um lowering que liga operandos
+      a temporários EM ORDEM produz (o do pscript produz, para manter a avaliação da
+      esquerda para a direita). Agora o endereço é o do lado direito, e um rvalue
+      agregado ali já É o endereço do objeto, como o caso de campo ao lado já tratava.
+
+### Marco intermediário — o path tracer RODA, e agora em PARALELO
+
+- [x] **`pscript/examples/smallpt_core.psc`**: o smallpt sem a concorrência — uma
+      thread, cena montada em código, sem `sys`/`json`/`re` e sem topo assíncrono.
+      Tudo o que o smallpt pede da LINGUAGEM, nada do que ele pede do runtime
+      concorrente. Ele COMPILA E RENDERIZA: `record` com métodos e `in self`, enum com
+      `match` exaustivo, `list<Sphere>`, recursão profunda, `**` em float, `%*`
+      modular, variável de módulo com `global`, `include <math.h>`, e o coletor
+      atravessando tudo isso. A 96x72 com 40 amostras a caixa de Cornell aparece: a
+      faixa de luz no teto, as duas esferas, o chão claro.
+      Gate: 32x24 com 1 amostra e checksum, nos três modos.
+
+      **Dois bugs de verdade caíram aqui, os dois de código GERADO:**
+      - **Ordem de avaliação em chamada de MÉTODO.** O receptor é um operando e é o
+        PRIMEIRO; o pscript promete esquerda para a direita e o C não promete nada.
+        `radiance(...).scale(re).add(radiance(...).scale(tr))` — duas chamadas que
+        puxam do mesmo fluxo aleatório — dava imagens DIFERENTES no C e no QBE. As
+        chamadas comuns já tinham esse tratamento; a forma de método tinha ficado de
+        fora. Foi o path tracer que achou, comparando os dois back ends.
+      - **`return <literal de lista>` numa função com `defer`.** O back end C monta
+        `T tmp = <expr>;` e o literal baixa para uma cadeia de vírgulas — sem
+        parênteses aquilo é uma LISTA DE DECLARADORES, e o programa nem compilava.
+        Todo outro inicializador já saía em precedência de atribuição; esse não.
+        Gate: `tests/pscript/run/return_list.psc`.
+
+      Registrado, não decidido: o RNG precisa de deslocamento LÓGICO, e `int` é i64
+      com `>>` aritmético. O `u64` do smallpt original depende da 65.14 (larguras
+      exatas) e da 53.1 (estouro de unsigned), que continuam **em aberto** — por ora o
+      programa mascara os 53 bits de cima, com o porquê escrito no lugar.
+
+### Fase E — concorrência (a metade mais arriscada do design)
+
+- [x] **E1 `async`/`await`, a máquina de estados (50.1).** Um `async def` vira três
+      coisas: um FRAME (struct gerado com os parâmetros, os locais e o resultado), uma
+      função STEP cujo corpo é um `match` no estado — um `case` por trecho entre awaits
+      — e um INICIADOR que aloca o frame, cria a task e roda o primeiro passo, porque
+      chamar um `async def` já COMEÇA (35.3, o future quente do JS: "esqueci de dar
+      await e nada rodou" é o bug clássico do modelo frio).
+
+      Por que `match` e não `goto`: o P proíbe `goto` em função com `defer`, e a 50.1
+      escolheu a forma do C# por isso. O preço é que controle de fluxo AO REDOR de um
+      await tem de ser desmontado em estados — o `if` vira "seta o estado e continue", o
+      `while` vira estado de cabeça e estado de corpo — com o step inteiro dentro de um
+      `while True:` para que `continue` SEJA o salto. O que sobra é bem legível.
+
+      No frame mora TODO local, não o conjunto mínimo que atravessa um await: o mínimo
+      pede análise de vivacidade, e este é o jeito obviamente correto. O custo é um
+      objeto por chamada — que é o que uma task é de qualquer forma.
+
+      Erro atravessa await (19.3): a task CAPTURA o erro (limpa a flag, para o resto do
+      programa seguir) e ele é relançado onde se dá `await`. `try`/`catch` em volta de
+      um `await` no topo funciona.
+
+      **Quatro bugs de verdade caíram aqui:**
+      - **`ps_str_concat` nunca preenchia `nchars`** — toda string concatenada dizia ter
+        comprimento 0, embora imprimisse certo. Estava lá desde a C3; foi um teste de
+        async que passou a construir string em laço que acusou.
+      - **Endereço de destino computado ANTES de um valor que aloca.** `F->x = f()`: o C
+        não diz qual lado vem primeiro, e um coletor que MOVE objetos transforma isso em
+        escrita no endereço velho. Agora, quando o valor pode alocar, ele vira um
+        statement próprio antes (`value_first`) — vale para campo de frame, campo de
+        `struct`, elemento de lista e chave de dict.
+      - **`ctx.ready`/`ready_tail` não eram inicializados** em `ps_ctx_init`: a fila de
+        tarefas começava com lixo da pilha e o coletor seguia o lixo.
+      - **`await` no meio de uma expressão, no TOPO.** Esperar roda outras tasks, que
+        alocam — e no meio de uma expressão há temporários de C segurando referências
+        que a shadow stack não conhece. Agora a espera é içada para statements próprios
+        antes; e `await` na CONDIÇÃO de um laço de topo é recusado com mensagem, porque
+        ali o içamento tiraria a espera de dentro do laço (o topo não é máquina de
+        estados; dentro de um `async def` o mesmo caso funciona).
+
+      Junto: nomes que o C já tomou (`double`, `log`, `round`, `time`…) passam a ser
+      renomeados com um `_` no fim SÓ quando colidem — o resto do C gerado continua com
+      o nome que a pessoa escreveu.
+      Gate: `tests/pscript/run/async.psc`, `async_error.psc`, `async_gc.psc` (40 tasks
+      com coleta no meio), nos três modos.
+- [ ] **E2 Loop de I/O**: epoll no Linux, kqueue no macOS (18.4).
+- [x] **E3 Workers** (35.1/36.1), primeira forma. `spawn(f, (a, b))` é UMA thread do
+      SO com heap, coletor e contexto próprios (18.1) — nunca um pool, porque um pool
+      poria dois trabalhos no mesmo heap e o isolamento é o ponto. A função de entrada
+      é NOMEADA e não captura nada: recebe só o que foi mandado, e o que atravessa são
+      BYTES (34.3), copiados na saída e na entrada. Nenhuma referência cruza dois heaps,
+      então nenhum coletor precisa saber do outro.
+
+      O worker É o canal (36.1): `parent.send(x)` de dentro, `await w.recv()` de fora,
+      `w.send(x)` no outro sentido — e `send` para worker que já foi devolve `False`
+      (45.3), nem exceção nem silêncio. Erro não capturado vira ESTADO e mensagem para
+      o pai (37.4): o programa segue. Nada morre de fora — o programa espera todo mundo
+      antes de terminar (36.3).
+
+      O bloco de controle é malloc'ado de propósito: a outra thread segura um ponteiro
+      para ele, e um coletor que MOVE não pode mover o que outra thread está lendo.
+
+      Limites desta forma, registrados: mensagem é POD (número, bool, enum, `record`) —
+      `str`/`list` pedem a serialização da 34.3, que não existe ainda; `await w.recv()`
+      BLOQUEIA (o topo pode, 36.3), e dentro de um `async def` ele ainda não estaciona,
+      o que é o que a fase E2 (loop de I/O, 18.4/36.2) resolve.
+
+      **Bug do P achado aqui, e valia por si:** um `typedef` de header C para um ESCALAR
+      (`pthread_t` = `unsigned long`) não chegava ao back end QBE, que então lhe dava
+      quatro bytes — e todo campo depois dele no struct ficava no offset errado. O C
+      nunca viu isso porque imprime o typedef e deixa o header do sistema responder.
+      Agora a sema exporta o mapa typedef→escalar e o QBE resolve.
+      **Variável de módulo mutável virou WORKER-LOCAL de verdade (42.2).** Ela era um
+      `static` de arquivo em C, isto é, COMPARTILHADA entre as threads — dois workers
+      chamando `seed()` semeavam o mesmo gerador, e o path tracer paralelo dava um
+      número diferente a cada corrida. Agora o conjunto das mutáveis é um struct que o
+      CONTEXTO aponta: um por thread, criado no thunk do worker, com as coletadas
+      virando raízes daquele contexto. `const` continua estático de arquivo — é
+      imutável, e cada worker nasce com ele (52.4).
+
+      Duas correções de escopo vieram junto, as duas de verdade:
+      - atribuir dentro de uma FUNÇÃO a um nome que também é variável de módulo criava
+        um LOCAL, não escrevia no global — que é a regra do Python e da 55.3 (`global`
+        é o opt-in). Estava escrevendo no global.
+      - o `pre` (onde o lowering pendura declarações que precisam vir antes do
+        statement) era global ao lowering: um temporário pendurado DENTRO de um laço
+        saía na frente do LAÇO, referindo a variável do laço de fora dele. Agora cada
+        statement guarda e devolve o seu.
+      Gate: `tests/pscript/run/workers.psc` (4 threads, cada uma alocando no seu heap),
+      `pscript/examples/smallpt_workers.psc` (o path tracer renderizado em paralelo,
+      determinístico) e `tests/cases/39_typedef_size.p`.
+- [x] **E4 `shared`** (42.1/42.3), variáveis. A terceira camada do modelo: global é do
+      WORKER (42.2), mensagem é TRANSFERÊNCIA (34.3), e `shared` é sincronizado POR
+      CÓPIA. Cada `shared` tem o seu mutex, e operação composta (`+=`) segura o lock na
+      leitura-modificação-escrita inteira — quatro threads incrementando 25 mil vezes
+      cada dão exatamente 100 mil.
+
+      Duas regras que a implementação teve de fixar, as duas com mensagem:
+      - **valor calculado ANTES do lock**: nenhum código do usuário roda com um lock na
+        mão, o que também é o que impede duas leituras da mesma variável de travarem
+        uma na outra;
+      - **escrever `shared` de dentro de uma função exige `global x`**. É a regra do
+        Python (55.3), e aqui obedecê-la em silêncio esconderia o defeito: sem o
+        `global`, a linha faria um LOCAL e a variável sincronizada nunca mudaria. Então
+        o compilador recusa e diz o que escrever.
+
+      Falta o `dict` compartilhado (a tabela estilo ETS da 42.1), que é estrutura de
+      runtime própria; variável escalar e `record` já valem.
+      Gate: `tests/pscript/run/shared.psc` e 2 casos em `tests/pscript/bad/ps_shared_*`.
+
+### Fase G — biblioteca e I/O (o que o smallpt ainda espera)
+
+- [x] **Arquivos e `with`** (48.1/19.4). `open(path, mode)` com a forma do Python sobre
+      stdio — libc É o runtime, não há por que embrulhar `fopen` — e `read`,
+      `readlines`, `write`, `close`. Falha LANÇA com categoria `io` e a mensagem diz
+      QUAL arquivo: um programa que para tem de dizer o que estava fazendo.
+
+      `with X as f:` adquire, roda o bloco e libera no fim — inclusive quando um erro sai
+      pelo meio, porque a liberação baixa para o `defer` do P, que roda em toda saída de
+      bloco. Dentro de um `try` o corpo do `with` é pulado pela mesma flag que o resto
+      (senão o bloco rodava depois de o `open` ter falhado). Por ora `with` só aceita
+      arquivo: o protocolo geral — o que `with` significa para um tipo seu — não está
+      decidido, e inventá-lo seria decidir por você.
+      Gate: `tests/pscript/run/files.psc` + `tests/pscript/bad/ps_with_nonfile.psc`.
+      Decorrência: o `smallpt_core` agora SALVA a imagem (`smallpt.ppm`) — um path
+      tracer que renderiza e não grava é um benchmark, não um programa.
+- [x] **`sys`** (48.3): `sys.argv`, `sys.env`, `sys.exit(n)` e `sys.time()`. É o único
+      módulo SEM arquivo por trás — o que ele nomeia é o entorno do próprio programa, e
+      só o runtime responde. `import sys` cria um namespace embutido cujos membros
+      resolvem para nomes que a sema conhece de cor (`__sys_argv` e companhia), o que
+      deixa o programa escrever `sys.argv` sem que exista um `sys.psc` para carregar.
+      `main` passou a receber `argc`/`argv` e a entregá-los ao runtime na primeira
+      linha, porque ninguém mais os enxerga.
+      Gate: `tests/pscript/run/sysmod.psc`.
+- [x] **`re`** (41.2): ERE do POSIX, direto da libc — dependência zero, "libc é o
+      runtime" ao pé da letra. `re.match(padrão, texto)` devolve os GRUPOS ([0] é a
+      casada inteira) ou None, que é o que faz `if not m:` ler do jeito certo (40.1);
+      padrão inválido LANÇA com a mensagem que a própria libc dá. Sem lookahead e sem
+      `\d`, que é o que ERE clássico é.
+      Gate: `tests/pscript/run/regex.psc`.
+- [x] **`print` com vários valores e `sorted`.** `print(a, b, c)` junta com espaço, como
+      no Python (44.2 para o caso que se sentia todo dia; o `*args` geral continua
+      adiante). `sorted(xs)` COPIA e ordena números e strings (28.4) — `key=` precisa da
+      comparação chamar de volta para o programa e vem com o resto da 28.4.
+- [x] **`any` (39.2) e `as` conferido (55.2).** `any` é UM ponteiro para objeto com
+      cabeçalho — estreito de propósito, que é o que o deixa do mesmo tamanho de
+      qualquer outra referência. `str`, `list` e `dict` já SÃO objetos assim, então
+      entram como eles mesmos: nada é embrulhado e nada é copiado; número, bool e None
+      ganham a caixa que o cabeçalho paga. Ler de volta é `as`, e `as` CONFERE: a tag
+      tem de bater, e a mensagem diz o que o valor realmente era.
+
+      Regra que a implementação obrigou a fixar: uma lista dentro de um `any` tem de ser
+      `list<any>` — o que está dentro também precisa carregar o próprio tipo, senão ler
+      de volta seria ler bytes que ninguém etiquetou. Um literal em posição de `any`
+      já nasce assim.
+
+      Junto: `is` virou o que a 22.2 diz que ele é — IDENTIDADE, o mesmo objeto e não um
+      igual — e só referência tem identidade para comparar.
+      Falta o TESTE de tipo sobre `any` (o downcast da 50.2): por ora a pergunta se faz
+      com `as` dentro de um `try`.
+      Gate: `tests/pscript/run/anyval.psc` + 2 casos em `tests/pscript/bad/`.
+- [x] **`gather`** (35.3): `await gather(ts)` espera todas e devolve os resultados na
+      ordem em que as TAREFAS foram dadas, não na ordem em que terminaram — quem precisa
+      saber quem terminou primeiro não devia estar usando `gather`.
+      Gate: `tests/pscript/run/gather.psc`.
+- [x] **`json`** (41.1): texto entra, `any` sai. Objeto vira `dict<str, any>`, array
+      vira `list<any>`, e as folhas são str, float, bool e None. Não há esquema para
+      declarar nem tipo para escrever — ler um valor de volta é `as`, que confere
+      (55.2), e é esse o contrato inteiro. Número é sempre float, porque JSON tem UM
+      tipo numérico e fingir o contrário seria inventar regra que o formato não tem.
+      JSON inválido lança dizendo o quê e em que byte.
+      Gate: `tests/pscript/run/jsonmod.psc`.
+- [x] **`buffer`** (19.4/52.3): a única coisa feita para ser compartilhada. Os bytes são
+      malloc'ados e nunca se movem — precisam ser alcançáveis de outra thread, e um
+      coletor que MOVE não pode ser dono deles. Então o que atravessa para o worker é o
+      HANDLE, e o isolamento da 18.1 continua valendo para tudo que o coletor possui:
+      nenhuma referência cruza dois heaps. Fechar é explícito, que é para o que serve o
+      `with` (que agora aceita arquivo e buffer).
+      `get_f64`/`set_f64`/`size` por ora; a VISTA tipada da 18.3 (`px = fb.view_f64()`
+      e depois `px[i] = v`) é o açúcar que falta.
+      Gate: `tests/pscript/run/buffers.psc` (quatro threads escrevendo no mesmo bloco).
+- [x] **Função é VALOR (28.1) e lambda captura POR VALOR (19.2).** `f: def(int) -> int`
+      guarda uma função nomeada ou uma lambda; dá para passar, guardar em `list` e em
+      `dict<str, def(...)>`, e chamar de qualquer um desses lugares.
+
+      A captura é por valor: a lambda copia o que lê no momento em que é criada, e é
+      isso que faz três closures feitas no mesmo laço guardarem três números diferentes
+      — sem célula e sem passada de promoção. O ambiente é um struct gerado, coletado
+      como qualquer outro, com a função de rastreio que o compilador escreve (a mesma
+      máquina do frame de `async`, reaproveitada).
+
+      Lambda não tem anotação (a forma do Python), então os tipos dos parâmetros vêm do
+      CONTEXTO — a anotação de quem recebe. Para isso o tipo esperado passou a ser
+      propagado para dentro de argumento de chamada, `append`/`insert` e literal de
+      dict; sem contexto, a mensagem diz o que escrever. Uma função NOMEADA usada como
+      valor ganha um adaptador de uma linha, porque a ABI de closure recebe o ambiente
+      primeiro e a de uma função comum não.
+
+      Ainda fora: `def` LARGO sem assinatura (29.3) e `sorted` com `key` (28.4).
+      Gate: `tests/pscript/run/lambdas.psc` + `tests/pscript/bad/ps_lambda_noctx.psc`.
+- [x] **Fatia de lista e o resto da lista** (17.3/27.3): `xs[a:b]` COPIA e CLAMPA como
+      no Python (passar do fim apara em vez de lançar — é o único lugar em que fatiar e
+      indexar discordam de propósito), mais `insert`, `remove_at` e `reverse`.
+      Gate: `tests/pscript/run/list_ops.psc`.
+- [x] **`T[N]`, `assert` e `defer`** (33.4/46.4/43.4). O array fixo é o OPT-IN: `list` é
+      o padrão, e `T[N]` é a saída para quando o tamanho é conhecido e a alocação
+      incomoda. É o array do P, que é o do C — sem cabeçalho, sem coletor, os elementos
+      moram onde a variável mora. Indexar continua LANÇANDO fora de faixa (5.2): o
+      tamanho é conhecido, então o teste é uma comparação com uma constante. Funciona
+      como local, parâmetro e variável de módulo (essa é escrita elemento a elemento,
+      porque C não ATRIBUI array), e `for x in xs` sobre ele é um laço contado.
+      `assert` existe e é strippable; `defer` na superfície é o do P.
+      Decorrência: `print` passou a ser no-op enquanto há exceção pendente (49.2) — sem
+      isso ele imprimia o valor que o índice inválido não chegou a produzir.
+      Gate: `tests/pscript/run/arrays.psc`.
+- [ ] **`*args`** (44.2) e `T[N]` interoperando com `list` por `in` (60.2).
+
+### Fase F — o marco
+
+- [x] **F1 `vec3.psc` compila, linka e roda** — o primeiro dos dois programas de
+      validação, nos três modos, e já está na suíte. O que ele obrigou a fazer:
+      `include <math.h>` com a REGRA DE FRONTEIRA da 45.5 (só assinatura sem ponteiro
+      atravessa; `sqrt` entra, `fopen` não, e o que não cabe é PULADO e não recusado —
+      um header tem centenas de declarações); chamada a função de C sem ctx; `in` escrito
+      no sítio da chamada, com materialização quando o argumento não tem endereço
+      (`a.add(b).scale(2.0)` encadeia sobre o RESULTADO de uma chamada); e const de
+      módulo construído de constantes.
+- [x] **F2 — o smallpt COMPLETO roda e produz a imagem.**
+      `pscript/examples/smallpt_full.psc`: o programa de validação da 52, na forma que a
+      linguagem tem hoje. Ele lê as opções da linha de comando, renderiza em PARALELO
+      com uma thread por worker escrevendo no mesmo buffer, grava o PPM e conta o que
+      cada worker fez. Numa passada ele usa: `record` com método e `in self` (52.1/57.1),
+      `enum` com `match` exaustivo (29.2), workers (35.1/18.1/36.1/36.3), `buffer`
+      compartilhado (19.4/52.3), `shared` com lock por variável (42.1/42.3), `sys.argv`
+      e `re.match` (48.3/41.2), `json.parse` lido de volta com `as` conferido
+      (41.1/55.2), arquivo com `with` (48.1), lambda capturando por valor (28.1/19.2),
+      `assert` (46.4), `defer` (43.4), opção com narrowing (43.1) e `%*` modular (54.1).
+      A 96x72 com 64 amostras a caixa de Cornell aparece inteira.
+
+      Diferenças em relação ao `smallpt.psc` original, que continua sendo o alvo: não há
+      `async for`/`interval` (o loop de I/O é a fase E2), `sorted` com `key` nem `*args`
+      — o progresso é impresso no fim em vez de a cada meio segundo.
+
+      **Dois bugs achados por ele, os dois de coletor:** um `str` como argumento de
+      worker não atravessava (agora atravessa como BYTES e é reconstruído do outro lado,
+      que é a escada de cópia da 34.3); e o valor que o `with` liga não entrava na
+      shadow stack — o bloco do `with` era montado à mão sem o wrap de Henderson, então
+      o buffer se movia debaixo do programa assim que uma coleta acontecia.
+      Gate: `tests/pscript/run/smallpt_full.expected`, nos três modos.
+- [x] **`*args` (44.2) e `sorted(key=)` (28.4).**
+      `*xs` é açúcar sobre `list<T>` e nada mais: dentro da função o parâmetro É uma
+      lista — a mesma que o resto da linguagem já conhece — e o que o sítio da chamada
+      faz é construir uma. Nenhum tipo novo, nenhuma segunda convenção de chamada.
+
+      `sorted(xs, key=f)` calcula a chave de cada elemento UMA vez (n chamadas, não
+      n log n) e ordena o pareamento. O adaptador que deixa o runtime chamar de volta
+      para o programa é escrito pelo compilador: o sítio da chamada é o único lugar que
+      sabe o que são os elementos, e o runtime só move bytes. `key=` é o primeiro
+      argumento NOMEADO que existe — o geral (44.1) continua adiante.
+      Gate: `tests/pscript/run/varargs.psc` e `sortkey.psc`.
+- [x] **`sleep`, `status` e `list` de POD atravessando para o worker.**
+      `await sleep(s)` é uma task como qualquer outra, o que mantém UM mecanismo de
+      espera na linguagem (36.2); até o loop de I/O existir (18.4) ela realmente dorme a
+      thread — no topo é exatamente o certo, e dentro de um `async def` é a limitação
+      dita em voz alta. `status(w)` responde running/done/error/gone (37.3), que é o
+      mínimo que torna supervisão possível — o `status(id)` com id solto continua em
+      aberto. E uma `list` de bytes puros atravessa inteira (34.3): copiada aqui,
+      reconstruída lá, dois objetos em dois heaps.
+
+      **Bug de portabilidade achado aqui:** `strdup` é POSIX, não C — sob `-std=c11` o
+      glibc o esconde, e uma chamada sem protótipo volta como `int`, isto é, um ponteiro
+      com a metade de cima perdida. Duas linhas próprias no lugar. É exatamente a classe
+      de problema que o compilar-no-macOS costuma achar.
+      Gate: `tests/pscript/run/timers.psc` e a segunda metade de `workers.psc`.
+- [x] **Categoria de erro com NOME (15.2).** `e.category == IO` passa a ler como o que
+      significa: o enum `Category` (NONE/INDEX/KEY/TYPE/VALUE/ZERO/OVERFLOW/IO, na ordem
+      que o runtime já usava) vem do prelúdio, e `raise error(msg, IO)` recebe um também.
+      Regra que isso obrigou a fixar: o nome do PROGRAMA ganha do prelúdio — de uma
+      declaração e também dos ITENS que um enum do prelúdio introduz. `TYPE`, `VALUE` e
+      `KEY` são palavras que um programa tem direito de usar, então o padrão sai de
+      cena em vez de colidir.
+      **Bug achado junto:** indexar uma lista VAZIA derrubava o programa antes do check
+      de exceção rodar — o código gerado ainda faz a leitura cujo valor o check vai
+      jogar fora, e ler de lugar nenhum matava o processo. A lista sem armazenamento
+      responde um slot de rascunho.
+
+- [ ] **F2b `smallpt.psc` (o arquivo original, sem adaptação).** Falta a vista tipada do
+      buffer (18.3), `w.id` + `status(id)`, `interval` de verdade (E2) e o `def` LARGO
+      da 29.3.
+- [x] **F3 `FEATURES.md` atualizado.** Cada recurso ganhou uma coluna de ESTADO —
+      implementado com teste que prende (✅), implementado em parte com o que falta dito
+      (◐), ou decidido e ainda não feito (⏳) — e a tabela do topo diz quais são os três
+      smallpts que existem hoje e o que cada um cobre.
+
+---
+
+## Se aparecer uma decisão de design
+
+Não decida. Faça isto:
+
+1. Acrescente uma bateria nova em `DESIGN.md` (formato: pergunta → opções, cada uma
+   com a consequência nomeada → sem veredito).
+2. Escolha a opção **mais conservadora** para não travar, e escreva no texto
+   `> PENDENTE DE DECISÃO — segui com (x) para não travar`.
+3. Liste a pendência no fim deste arquivo.
+
+## Receita da verificação e do seed
+
+```sh
+# bateria completa (~10 min)
+bash tests/verify-all.sh          # tem de terminar com 8/8
+
+# regenerar o seed quando a etapa 8/8 acusar DRIFT
+V=.verify; CC=cc; CFLAGS="-O2 -std=c11 -w"
+rm -rf $V; mkdir -p $V/{out1,out2,out3,stl}
+gen() { local bin=$1 out=$2 f b
+  for f in stl/*.ph;      do $bin "$f" -o $V/stl/$(basename "${f%.ph}").h || return 1; done
+  for f in selfhost/*.ph; do b=$(basename "${f%.ph}"); $bin "$f" -o $out/$b.h || return 1; done
+  for f in selfhost/*.p;  do b=$(basename "${f%.p}");  $bin "$f" -o $out/$b.c || return 1; done; }
+$CC $CFLAGS -o $V/seed bootstrap/selfhost/*.c
+gen $V/seed $V/out1 && $CC $CFLAGS -o $V/s1 $V/out1/*.c
+gen $V/s1   $V/out2 && $CC $CFLAGS -o $V/s2 $V/out2/*.c
+gen $V/s2   $V/out3 && diff -rq $V/out2 $V/out3     # ponto fixo: tem de bater
+cp $V/out2/*.c $V/out2/*.h bootstrap/selfhost/ && cp $V/stl/*.h bootstrap/stl/
+rm -rf $V && make plangc
+bash tests/verify-all.sh          # 8/8 e "bootstrap em dia"
+```
+
+Ciclo rápido durante o desenvolvimento (sem a escada inteira):
+
+```sh
+./plangc --out-dir out stl/*.ph selfhost/*.ph selfhost/*.p && \
+  cc -O2 -std=c11 -w -o plangc2 out/selfhost/*.c
+for m in "" "BACKEND=qbe" "STD=c89"; do
+  env PLANGC=./plangc2 $m bash tests/run.sh cases errors modules stl p-suite roundtrip pscript
+done
+```
+
+## Buracos conhecidos, achados no caminho
+
+- [x] **Variável de módulo MUTÁVEL.** Era um buraco: `x = 1` no topo virava local do
+  `main`, e `global x` numa função dava "'x' is not a module variable". Agora uma
+  declaração de topo É variável de módulo, a regra do Python — e os statements de topo
+  passaram a ser checados ANTES dos corpos das funções, que é o que faz toda função
+  enxergar todas elas, inclusive as escritas mais abaixo. O nome continua sendo também
+  um LOCAL do topo, de propósito: é o mesmo armazenamento nos dois casos, e é o que
+  mantém a análise de fluxo — o narrowing da 43.1 acima de tudo — funcionando para o
+  código que vem depois. Uma variável de módulo COLETADA entra como raiz do coletor
+  (`gc_list.psc` prende isso).
+
+### Bateria 68 — as decisões da prática (respondidas por você, 2026-08-14)
+
+- [x] **68.1** limite de genérico NOMINAL no P também (gate: `tests/errors/p_bound_nominal.p`)
+- [x] **68.2** larguras exatas COMPLETAS — fecha 65.14 e 53.1 de uma vez.
+      `i8`…`u64` e `f32` são tipos de verdade: variável, parâmetro, campo, elemento de
+      lista, retorno. As regras, cada uma com o porquê:
+      * **literal ADAPTA** à largura do contexto, com a faixa conferida em COMPILAÇÃO
+        (`x: u8 = 300` nem compila);
+      * **alargamento sem perda é implícito** (i8→int, u8→u32, u32→int; f32→float);
+        estreitar tem NOME (`i8(x)`, `u64(x)`…) e a conversão CONFERE — fora da faixa
+        lança, na mesma voz de todo estouro (53.1);
+      * **aritmética exige tipo comum sem perda**; sinais misturados da mesma largura
+        não têm chão comum e convertem por nome (é o que impede `u32 + i32` de
+        significar alguma coisa em silêncio); estouro de largura LANÇA;
+      * **`%+ %- %*` são a volta intencional**, mascarada à largura (127 %+ 1 em i8 dá
+        -128) — a 54.1, agora por largura;
+      * **u64 é o inteiro que o i64 não carrega**: ops checadas próprias, formatador
+        próprio, `>>` LÓGICO por construção, e as travessias i64↔u64↔float têm nome e
+        conferem;
+      * unário `-` em unsigned é recusado com a mensagem dizendo as duas saídas.
+      **Decorrência no smallpt:** o RNG virou u64 de verdade — a máscara de 53 bits e o
+      comentário pedindo desculpas sumiram, e o xorshift64* bate BIT A BIT com o Python
+      (verificado: 16620430977058721579).
+      Gate: `tests/pscript/run/widths.psc` + 5 casos em `tests/pscript/bad/ps_width_*`,
+      nos três modos.
+- [x] **68.3** sombra do prelúdio: programa ganha COM aviso; só o item colidido cai
+      (gate: `tests/pscript/run/shadow.psc`)
+- [x] **68.4** `with` = trait `Closeable`; cleanup roda com exceção pendente
+      (gate: `tests/pscript/run/closeable.psc`)
+- [x] **68.5** teste de tipo = `match type(x):` com narrowing por case
+      (gate: `tests/pscript/run/typematch.psc`)
+- [x] **68.6** número JSON pela regra do Python (gate: `jsonmod.psc` atualizado)
+- [x] **68.7** lambda só com contexto (nada a fazer)
+- [x] **68.8** `w.error()` devolve o Error completo; colher silencia o stderr do join
+      (gate: `timers.psc` atualizado)
+- [x] **68.9** `for v in x` no P sobre Iterable, zero runtime
+      (gates: `tests/cases/40_for_iterable.p`, `tests/errors/p_for_notiter.p`, stl)
+
+**Incidente de ferramenta, registrado porque custou tempo:** os scripts de patch
+desta sessão viviam em um tmp/ e um deles se chamava `re.py`; qualquer outro script
+dali que fizesse `import re` executava ESSE arquivo (o diretório do script entra no
+sys.path do Python) e re-aplicava o patch do regex — daí seções duplicadas no runtime
+e ramos duplicados na sema/lowering. Tudo deduplicado e conferido com uma varredura de
+definições repetidas; os scripts aplicados foram movidos para fora do alcance do
+import. Moral: script de patch nunca leva nome de módulo da stdlib.
+
+Consertos que as 68 puxaram: `Error` reconhecido como referência embutida
+(`Error?` é ponteiro nulo, sem record `{has,v}`); seção `re` DUPLICADA no runtime
+removida (só o `.p` acusava — protótipo duplicado é legal, corpo não); checagem
+de aridade duplicada na chamada de `async def` removida.
+
+### Bateria 69 — nulabilidade no P virou `ref T` (respondida por você, 2026-08-14)
+
+A pergunta original ("cast de ponteiro para tipo nulável?") passou por três
+formas até assentar: estrito com migração → anotação clang-style → **inversão
+de polaridade**: `*T` fica nulável como C manda, e o polo verificado é um TIPO
+novo, generalizando o `ref` que os parâmetros já tinham. O registro completo
+do vai-e-vem está na Bateria 69 do DESIGN.md; a especificação em SPECS.MD.
+
+- [x] **69.1** `ref T` tipo de primeira classe: não-nulável, liga-uma-vez,
+      auto-deref; LOCAL e RETORNO (campo = bateria futura, exige prova de
+      inicialização). Zero migração, zero runtime, `T*` no C emitido.
+- [x] **69.2** entrada de `*T` só por narrowing (`if p != None:` / early-return);
+      sem cast de volta. Prova por função, conservadora (laço mata fato de quem
+      o corpo escreve; label/case mata tudo; `&x` desliga a variável).
+      Violação: `-Wnullability`, erro demovível.
+- [x] **69.3** açúcar só `??` (avaliação única, C89 via temp içado + `?:`).
+- [x] **69.6** parâmetro segue só com o trio `ref v: T` (sem grafia sinônima).
+- [x] **69.7** `-Wnull-dereference` de fluxo: só fato PROVADO dispara.
+- [ ] **69.x futura** campo `ref` em struct (prova de init em toda construção).
+- [ ] **69.8 futura** alias de valor no pscript (ref a campo/elemento),
+      condicionado a derived pointers no Cheney.
+
+Gates: `tests/cases/41_ref.p` nos três modos (inclusive roundtrip do printer,
+que aprendeu `ref T` e `??`) + `tests/errors/p_ref_param|field|uninit|none|
+unproved|nested|rvalue`, `p_coalesce_nonptr`, `p_null_deref` (com `-Werror`).
+
+### Bateria 70 — a varredura das pendências decididas (2026-08-15)
+
+Não é uma bateria de PERGUNTAS: é a leva de coisas que já estavam decididas no
+DESIGN e não existiam no compilador. Cada uma entrou com teste que prende, nos
+três modos, e o seed foi refeito ao fim de cada ciclo.
+
+**Consertos que a varredura achou (defeitos de verdade, não pendências):**
+
+- **`d[k] += v` e `xs[i] += v` DESCARTAVAM a operação.** O lowering escrevia só
+  o operando direito: `d["a"] += 5` deixava 5 onde devia ficar 6. Agora o
+  elemento é lido, o operador é aplicado e o resultado volta — com o contêiner e
+  o índice ligados a temporários, de modo que cada um é avaliado UMA vez (a
+  regra do Python, e a única forma de um efeito colateral no índice se comportar).
+  Gate: `tests/pscript/run/compound_index.psc`.
+- **`print(f(), x)` lia `x` ANTES de `f()`.** C não define a ordem dos argumentos;
+  Python define. Agora os argumentos do `print` passam pelo mesmo ordenador que
+  as chamadas usam, e ler uma variável de MÓDULO conta como efeito — porque uma
+  chamada ao lado pode ser exatamente quem a escreve.
+  Gate: `tests/pscript/run/eval_order.psc`.
+- **O tipo esperado vazava para dentro de um operador.** `float(x %* K)` adaptava
+  `K` a float; agora o contexto para no operador, que só precisa que seus dois
+  lados concordem ENTRE SI (68.2).
+- **Três campos novos do contexto não eram inicializados** (`nogc`) — o mesmo
+  defeito que a fase E1 já tinha registrado com `ready/ready_tail`, e que faz o
+  programa inteiro falhar de um jeito que não parece ter relação. Achado pela
+  suíte, no mesmo dia em que nasceu.
+
+**O que passou a existir:**
+
+- [x] **26 `nogc:`** — com orçamento opcional (`nogc(64k):`), que pré-reserva e
+      LANÇA ao estourar; aninha por contador; `await` dentro é erro de compilação
+      (26.5.1). Gate: `nogc.psc` + 2 casos ruins.
+- [x] **28.3 decorador** — `@deco` e `@deco(args)`. `@twice def inc` É
+      `inc = twice(inc)`: a função guarda o corpo sob um nome privado e o NOME do
+      programa vira variável de módulo com o valor devolvido. Puxou duas coisas
+      que faltavam: o tipo de RETORNO como contexto de lambda, e captura
+      TRANSITIVA (lambda dentro de lambda). Gate: `decorators.psc`.
+- [x] **29.3/29.4 `def` largo** — um `def` sem assinatura guarda qualquer função,
+      e chamar exige estreitar (`f as def(str) -> bool`), o que é uma comparação
+      do descritor que o valor carrega. Gate: `wide_def.psc` + 2 casos ruins.
+- [x] **42.1 `shared dict`** — a tabela ETS: fora dos heaps, lock próprio, chave e
+      valor na escada de cópia (com `str`, porque a tabela guarda bytes seus e
+      devolve uma string nova no heap de QUEM LÊ). Gate: `shared_dict.psc`.
+- [x] **43.2 `??=`** — inclusive sobre elemento, com o índice avaliado uma vez.
+- [x] **44.1 default por chamada** — `def f(xs=[])` dá lista nova a cada chamada,
+      que é o conserto da armadilha mais famosa do Python. O default é checado no
+      escopo que o ESCREVEU e substituído no sítio da chamada. Nomeados entraram
+      junto, em função e em método. Gate: `defaults.psc` + 2 casos ruins.
+- [x] **44.2 `*args`** — faltava só o splat: `f(a, *xs)` entrega a lista inteira,
+      sem construir outra. Gate: `varargs.psc`.
+- [x] **44.3 repr derivado** — `Rect(x=1, y=2)` para record, struct e enum,
+      aninhado, em `print`, `str()` e f-string; um `to_str()` do tipo sobrepõe.
+      Construído como UMA expressão, o que é seguro porque o coletor só roda em
+      fronteira de statement. Gate: `repr.psc`.
+- [x] **18.3 vista tipada do buffer** — `view_f64/f32/i64/i32/u8`: a mesma
+      memória vista como elementos, sem cópia. É uma lista que EMPRESTA: lê,
+      escreve, itera e fatia como qualquer outra, e recusa crescer, porque
+      crescer seria possuir. Gate: `views.psc`.
+- [x] **48.2/51.1 `interval`** — `await t.tick()` em laço comum, com tick que
+      COALESCE (quem se atrasou recebe UM tick, não a fila dos que perdeu).
+      Gate: `interval.psc`.
+- [x] **59/62.4 `pack`/`unpack<T>`** — formato denso, campos na ordem da
+      declaração, tamanho como contrato. **Extensão decidida por você hoje: a
+      ordem de bytes é PARÂMETRO** (`pack(r, BE)`, `unpack<T>(b, BE)`), com LE
+      por padrão — bytes que saem do processo encontram as regras dos outros.
+      Entrou um `enum Endian` no prelúdio. Gate: `packing.psc` + 1 caso ruim.
+- [x] **63.1/63.5 `embed`/`embed_bytes` no pscript** — o texto vira `str`; o
+      binário vira `static` + memcpy, então um megabyte de fonte custa um
+      megabyte de DADO e não um megabyte de AST. Gate: `embed.psc`.
+- [x] **63.2 template, modo sem header** — `render("email.tpl")` é uma f-string
+      que mora num arquivo: mesmas chaves, mesmos escapes, mesma mini-linguagem
+      de formato, resolvida em COMPILAÇÃO contra o escopo de quem chamou.
+      Gate: `template.psc`.
+- [x] **Corrigido no inventário** — `status()` (37.3) e `sorted(key=)` (28.4) já
+      existiam e estavam marcados como pendentes.
+
+**O que continua pendente, e por quê (não é esquecimento):**
+
+- [ ] **11-12 `unsafe`** — o que ele destrava (deref de ponteiro cru, aritmética
+      de ponteiro, cast entre ponteiros, chamada variádica) pressupõe um tipo
+      PONTEIRO no pscript, que não existe. É uma adição de linguagem, não um
+      recurso solto — e a medalha da 12.1 continua valendo: o raytracer não
+      precisa.
+- [ ] **18.4 loop de I/O (epoll/kqueue)** — hoje `sleep` e `tick` realmente
+      dormem a thread, que é o certo no topo (não há mais nada para rodar) e a
+      limitação honesta dentro de um `async def`. O loop só ganha o que promete
+      quando houver DESCRITOR para esperar; enquanto a linguagem não tem socket
+      nem arquivo assíncrono, ele seria um `nanosleep` com epoll em volta.
+- [ ] **37.2/36.4/18.2 cancelamento, `race`, `transfer`** — um bloco só, e é ele
+      que destrava `timeout` (que É race + cancel do perdedor). Mexe no
+      escalonador: `t.cancel()` faz o próximo `await` DA TASK lançar lá dentro.
+- [ ] **63.2 template, modo COM header** — gerar `render_email(nome: str, ...)`
+      a partir da primeira linha do arquivo exige decidir a superfície (como o
+      programa NOMEIA a função gerada), e isso é decisão sua.
+- [ ] **2.4 `import` de `.ph` de P** — a parte de tipos é clara (a fronteira da
+      45.5 já diz o que atravessa); o que falta decidir é como o módulo P entra
+      no BUILD do programa pscript.
+
+## Pendências de decisão acumuladas
+
+Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da bateria.)

@@ -1,0 +1,1 @@
+'Vec2.show' returns int; the trait declares str

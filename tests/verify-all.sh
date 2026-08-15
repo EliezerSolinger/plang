@@ -69,7 +69,7 @@ else bad "tag interna de libc no C gerado: $leak"; fi
 step "4/8 suítes gating (C, QBE, C89) com o stage2"
 for mode in "C:" "QBE:BACKEND=qbe" "C89:STD=c89"; do
   name=${mode%%:*}; env=${mode#*:}
-  if env PLANGC=$PWD/$V/plangc_s2 $env bash tests/run.sh cases modules stl p-suite errors pstudio roundtrip >$V/suite_$name.log 2>&1; then
+  if env PLANGC=$PWD/$V/plangc_s2 $env bash tests/run.sh cases modules stl p-suite errors pstudio roundtrip pscript >$V/suite_$name.log 2>&1; then
     ok "$name"
   else
     bad "$name (tests/out + $V/suite_$name.log)"

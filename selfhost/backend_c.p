@@ -276,10 +276,35 @@ static def indent(b: *StrBuf, n: i32):
 static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32)
 static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: const *char)
 
+# Copies a string/char literal, escaping every `?` as `\?`.
+#
+# Trigraphs are replaced in translation phase 1, BEFORE escape sequences are
+# read, so a literal containing `??'` becomes `^` under any strictly conforming
+# mode — which is exactly what `-std=c11` is. The compiler found this in its own
+# message text: `"'??' takes an option"` was printing as `'^ takes an option`.
+# Escaping every `?` is idempotent and costs one byte each.
+static def emit_literal_notrigraph(b: *StrBuf, lex: const *char):
+    i: usize = 0
+    n: usize = strlen(lex)
+    while i < n:
+        c: char = lex[i]
+        if c == '\\' and i + 1 < n:
+            b->putc(c)
+            b->putc(lex[i + 1])   # an escape is copied whole: `\?` stays `\?`
+            i += 2
+            continue
+        if c == '?':
+            b->putc('\\')
+        b->putc(c)
+        i += 1
+
 # operands of "confusable" operators get extra parentheses to
 # generate C without -Wparentheses: arithmetic/shift inside & | ^, and && in ||
 static def op_is_confusable(op: i32) -> bool:
     return op in {TK_AMP, TK_PIPE, TK_CARET, TK_SHL, TK_SHR}
+
+static def op_is_relational(op: i32) -> bool:
+    return op in {TK_LT, TK_LE, TK_GT, TK_GE}
 
 static def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_op: i32):
     force: bool = False
@@ -287,6 +312,12 @@ static def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_o
         if op_is_confusable(parent_op):
             force = True
         if parent_op == TK_OR and child->op == TK_AND:
+            force = True
+        # `(a < 0) != (b < 0)` — the sign-comparison idiom. C's precedence
+        # already groups it the way it reads, but gcc and clang warn about it
+        # under -Wparentheses, and generated C that has to be compiled with
+        # warnings off is generated C nobody can trust.
+        if parent_op in {TK_EQ, TK_NE} and op_is_relational(child->op):
             force = True
     if force:
         b->putc('(')
@@ -391,7 +422,10 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
 
     match e->kind:
         case EX_IDENT, EX_NUMBER, EX_STRING, EX_CHARLIT:
-            b->puts(e->text)
+            if e->kind == EX_STRING or e->kind == EX_CHARLIT:
+                emit_literal_notrigraph(b, e->text)
+            else:
+                b->puts(e->text)
         case EX_TRUE:
             b->putc('1')
         case EX_FALSE:
@@ -800,7 +834,10 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             indent(b, ind)
             emit_expr(b, s->lhs, 0)
             b->printf(" %s ", op_cstr(s->op))
-            emit_expr(b, s->rhs, 0)
+            # PR_ASSIGN, not 0: the comma operator binds LOOSER than `=`, so a
+            # comma right-hand side emitted without parentheses would read as
+            # `(x = a), b` — the assignment would take only the first operand
+            emit_expr(b, s->rhs, PR_ASSIGN)
             b->puts(";\n")
         case ST_EXPR:
             if emit_expr_stmt_lowered(b, s->expr, ind):
@@ -826,7 +863,10 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
                     indent(b, ind2)
                     emit_var_decl(b, g_cur_ret, tmp, None)
                     b->puts(" = ")
-                    emit_expr(b, s->expr, 0)
+                    # PR_ASSIGN, like every other initializer: a COMMA here
+                    # would parse as a DECLARATOR LIST and declare a second
+                    # variable instead of sequencing (`T x = (a, b);`)
+                    emit_expr(b, s->expr, PR_ASSIGN)
                     b->puts(";\n")
                     emit_defers_downto(b, 0, ind2)
                     indent(b, ind2)
@@ -1077,7 +1117,7 @@ static def emit_simple_inline(b: *StrBuf, s: *Stmt):
         case ST_ASSIGN:
             emit_expr(b, s->lhs, 0)
             b->printf(" %s ", op_cstr(s->op))
-            emit_expr(b, s->rhs, 0)
+            emit_expr(b, s->rhs, PR_ASSIGN)
         case ST_EXPR:
             emit_expr(b, s->expr, 0)
         case _:

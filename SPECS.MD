@@ -152,6 +152,51 @@ through a loaded pointer is legal; `p.x = 1` is not. The keywords are
 contextual — `out`/`ref` remain valid identifiers elsewhere. C code calls
 these functions with ordinary pointers; nothing byref-specific crosses the ABI.
 
+### ref T — the non-nullable reference (69.1)
+
+`ref T` generalizes the trio into a first-class TYPE for **locals and
+returns**: a reference that is never `None`, binds exactly once, and
+auto-derefs like a byref parameter always did. The pointer stays what C made
+it — nullable — and `ref` is the opt-in for the places the flow can vouch for.
+Same layout and ABI as `*T`; the guarantee lives entirely in sema.
+
+```python
+n: i32 = 5
+r: ref i32 = n           # binds to the PLACE n (auto-&)
+r = 7                    # writes THROUGH: n == 7 (a rebind cannot be spelled)
+
+def pick(a: *Pt) -> ref Pt:
+    if a != None:
+        return *a        # a raw pointer enters ref-land only under proof (69.2)
+    return fallback      # any lvalue of Pt works
+x: Pt = pick(p)          # a ref result in value position loads through
+```
+
+Rules the compiler enforces:
+- binding sources: an lvalue of `T`, another `ref T`, a ref-returning call, or
+  `*p` **proven** non-None by the flow (`if p != None:` / `if p == None: return`) —
+  the proof is per-function and conservative (loops, labels, `&x` and case
+  labels drop facts). An unproven `*p` is `-Wnullability` (error by default,
+  demotable with `-Wno-error=nullability`);
+- positions: local and return only. Parameters keep the trio spelling
+  (`ref v: T`); fields, globals, generics arguments and anything behind a
+  pointer hold `*T` — the parser says why at the exact position;
+- inference never creates a ref: `v = f()` from `f() -> ref T` gives `v: *T`.
+
+### `??` — the None-coalescing pair (69.3)
+
+`a ?? b` yields `a` unless it is `None`, then `b`. Pointers only (`??` IS the
+None test), `a` evaluated exactly once, `b` only on the None path. Binds
+tighter than the ternary, looser than `or`. Lowered to a hoisted temporary +
+`?:` — plain C89, identical under both backends.
+
+### -Wnull-dereference (69.7)
+
+The same flow facts that admit a `ref` binding also flag the opposite: a
+dereference of a pointer **proven** `None` on every path that reaches it
+(`if p == None: return p->x`). Only proven facts fire — the warning never
+guesses.
+
 Function pointers:
 
 ```python
@@ -455,15 +500,57 @@ prunes the same way.
 - **Predefined constants:** `__FILE__`, `__LINE__`, `__func__`, `__DATE__`,
   `__TIME__`, `__PLANG__`, `__PLANG_STD__`, `__PLANG_BACKEND__`.
 
+### `embed` / `embed_bytes` — a file as a literal
+
+```python
+HELP:  const *char = embed("help.txt")        # text, nul-terminated
+ATLAS: const u8[]  = embed_bytes("font.bin")  # bytes; len(ATLAS) == file size
+```
+
+The file's contents replace the call at parse time, so what the rest of the
+compiler sees is an ordinary string literal — nothing is read at run time and
+nothing enters the ABI. The path is resolved **against the directory of the
+file that spells the embed**, never the working directory, so a module and its
+data move together.
+
+The two differ only in how the array is sized and what they will accept:
+
+- `embed` yields a C string. A nul byte anywhere in the file is an error
+  (it would silently truncate the string), and `T[]` gets the C length —
+  contents plus the nul.
+- `embed_bytes` takes any bytes at all, and `T[]` gets **exactly** the file's
+  size: no terminator, so `len(ATLAS)` is the file size. Give an explicit
+  `T[N]` and C's rule applies — a larger array is zero-padded, an exact fit
+  drops the nul.
+
+Both are contextual: a function or variable of your own named `embed` or
+`embed_bytes` takes precedence, as with `len`.
+
 ---
 
 ## 11. Imports and C interop
 
 ```python
-import <stdio.h>          # -> #include <stdio.h>
-import <math.h>
-import "point.ph"         # -> #include "point.h" (a Plang header)
+include <stdio.h>            # -> #include <stdio.h>   (C header)
+include "vendor/thing.h"     # -> #include "vendor/thing.h"
+import "point.ph"            # -> #include "point.h"   (a Plang header)
+import "point.ph" as geo     # the same, plus a qualified spelling
 ```
+
+`include` is for C headers, `import` for Plang ones — they are not
+interchangeable, and `import <h>` is rejected with a message that says so.
+
+### `as` — qualified names
+
+`import "point.ph" as geo` adds a **spelling**: `geo.Point`, `geo.dist(...)`,
+`geo.ORIGIN`. It takes nothing away — the flat names stay visible, which is why
+putting `as` on an existing import can never break the file that does it.
+
+What the alias buys is a check and a reader: the member has to be declared by
+that module (its own imports are not re-exported, as in Python), and whoever
+reads the call site can see where the name came from. Since Plang links flat,
+`geo.dist` and `dist` are the same symbol; anything genuinely declared as `geo`
+— a variable, a type, a function — wins over the alias.
 
 C functions are called directly (`printf`, `malloc`, …). The emitted C is
 plain and readable, so it links against any C library and can be inspected or
@@ -478,6 +565,106 @@ diffed.
   for small hot functions.
 - A generic template lives in a `.ph`; users `declare X<...>` (definition goes
   to their `.h`) and `implement X<...>` in exactly one `.p`.
+
+### `record` — a struct the compiler checks to be pure bytes
+
+```python
+record Vec:
+    x: f64
+    y: f64
+
+    def dot(in self: Vec, b: Vec) -> f64:
+        return self.x * b.x + self.y * b.y
+```
+
+A `record` is a `struct` with one extra rule: **no pointer anywhere inside** —
+only numbers, bools, enums, other records, and fixed arrays of those. The rule
+is checked at compile time and costs nothing at run time; what it buys is that
+a value of it can be `memcpy`'d, written to a file, sent to another process and
+compared as itself, and none of that silently breaks the day someone adds a
+`name: const *char`. Use `struct` when it has to hold a pointer.
+
+Rule of thumb: **record is data, struct is entity.**
+
+Two things follow from the guarantee:
+
+- `==` and `!=` compare **content**, field by field — never `memcmp`, because
+  the padding a C compiler inserts between fields holds whatever was on the
+  stack.
+- `Vec(1.0, 2.0)` constructs, positionally or by name (`Vec(y=2.0, x=1.0)`,
+  which must name every field). Before this, P had no way to write an aggregate
+  **value** inline: it needed a variable to live in.
+
+### `trait` — a named set of method signatures
+
+```python
+trait Comparable:
+    def cmp(self: *Comparable, other: *Comparable) -> i32
+
+implement Comparable for Point:
+    def cmp(self: *Point, other: *Point) -> i32:
+        return self->x - other->x
+
+def sort<T: Comparable>(xs: *T, n: usize):
+    ...            # cmp() inside is a DIRECT call
+
+declare sort<Point>
+implement sort<Point>
+```
+
+A trait names methods; an `implement <Trait> for <Type>:` block supplies them
+for one type. A generic can then require it: `def sort<T: Comparable>`.
+
+The bound is checked at **instantiation**, where the concrete type is known, so
+the calls inside stay direct — **a trait never becomes a vtable**. The impl
+block registers its methods as the type's own, so the call resolves through the
+ordinary method lookup; nothing new is dispatched and nothing is emitted for the
+trait itself.
+
+The check is **nominal** (68.1): having the methods is not enough — the pair has
+to be declared with `implement X for T:`. pscript answers the same way (66.2),
+and the two languages agreeing here is worth more than the convenience of
+"satisfies by accident".
+
+`implement` serves two purposes and the `for` tells them apart:
+`implement Vec<int>` instantiates a generic, `implement Printable for Vec:`
+satisfies a trait.
+
+**The orphan rule:** at most one implementation per (trait, type) in a program,
+and the module must declare either the trait or the type. Without it two modules
+could implement the same pair differently and the behaviour would depend on who
+linked — with the error landing far from the cause.
+
+### `for v in it` — iteration over an Iterable implementer
+
+```python
+trait Iterable:
+    def has_next(self: *Iterable) -> bool
+    def next(self: *Iterable) -> i64
+
+struct Countdown:
+    at: i64
+
+implement Iterable for Countdown:
+    def has_next(self: *Countdown) -> bool:
+        return self->at > 0
+    def next(self: *Countdown) -> i64:
+        self->at -= 1
+        return self->at
+
+c: Countdown = {5}
+for v in c:          # or `for v in p` where p: *Countdown
+    total += v
+```
+
+`for v in x` takes a sized array (as before) **or a value whose type implements
+`Iterable`** — declared, because the bound is nominal (68.1). The loop lowers in
+sema to its own block: a cursor bound once, then `while __it->has_next():
+v = __it->next()`. Every call is direct, nothing allocates, and no back end
+knows the loop was ever a `for` — zero runtime, which is the condition of the
+feature. The cursor and `v` live in the loop's block, so two loops in a row can
+reuse the name. `stl/traits.ph` declares `Iterable` (with `Comparable` and
+`Printable`); a local `trait Iterable:` works the same.
 
 ---
 

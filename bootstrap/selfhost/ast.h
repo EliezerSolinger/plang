@@ -5,7 +5,7 @@
 
 #include "plang.h"
 
-typedef enum { TK_EOF = 0, TK_NEWLINE, TK_INDENT, TK_DEDENT, TK_IDENT, TK_NUMBER, TK_STRING, TK_CHARLIT, TK_HEADER, TK_DEF, TK_RETURN, TK_IF, TK_ELIF, TK_ELSE, TK_WHILE, TK_FOR, TK_IN, TK_DO, TK_MATCH, TK_CASE, TK_BREAK, TK_CONTINUE, TK_GOTO, TK_CONST, TK_STRUCT, TK_ENUM, TK_UNION, TK_IMPORT, TK_AND, TK_OR, TK_NOT, TK_TRUE, TK_FALSE, TK_NONE, TK_STATIC, TK_INLINE, TK_EXTERN, TK_VOLATILE, TK_RESTRICT, TK_DEFER, TK_WITH, TK_LPAREN, TK_RPAREN, TK_LBRACKET, TK_RBRACKET, TK_LBRACE, TK_RBRACE, TK_COMMA, TK_COLON, TK_WALRUS, TK_SEMI, TK_DOT, TK_ARROW, TK_ELLIPSIS, TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT, TK_AMP, TK_PIPE, TK_CARET, TK_TILDE, TK_SHL, TK_SHR, TK_LT, TK_LE, TK_GT, TK_GE, TK_EQ, TK_NE, TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ, TK_DECLARE, TK_IMPLEMENT, TK_IS, TK_ISNOT, TK_COUNT } TokKind;
+typedef enum { TK_EOF = 0, TK_NEWLINE, TK_INDENT, TK_DEDENT, TK_IDENT, TK_NUMBER, TK_STRING, TK_CHARLIT, TK_HEADER, TK_DEF, TK_RETURN, TK_IF, TK_ELIF, TK_ELSE, TK_WHILE, TK_FOR, TK_IN, TK_DO, TK_MATCH, TK_CASE, TK_BREAK, TK_CONTINUE, TK_GOTO, TK_CONST, TK_STRUCT, TK_ENUM, TK_UNION, TK_IMPORT, TK_AND, TK_OR, TK_NOT, TK_TRUE, TK_FALSE, TK_NONE, TK_STATIC, TK_INLINE, TK_EXTERN, TK_VOLATILE, TK_RESTRICT, TK_DEFER, TK_WITH, TK_LPAREN, TK_RPAREN, TK_LBRACKET, TK_RBRACKET, TK_LBRACE, TK_RBRACE, TK_COMMA, TK_COLON, TK_WALRUS, TK_SEMI, TK_DOT, TK_ARROW, TK_ELLIPSIS, TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT, TK_AMP, TK_PIPE, TK_CARET, TK_TILDE, TK_SHL, TK_SHR, TK_LT, TK_LE, TK_GT, TK_GE, TK_EQ, TK_NE, TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ, TK_DECLARE, TK_IMPLEMENT, TK_IS, TK_ISNOT, TK_ASYNC, TK_AWAIT, TK_RECORD, TK_SHARED, TK_SPAWN, TK_RAISE, TK_TRY, TK_CATCH, TK_FINALLY, TK_GLOBAL, TK_NONLOCAL, TK_LAMBDA, TK_PASS, TK_ASSERT, TK_UNSAFE, TK_NOGC, TK_FROM, TK_AS, TK_IMPLEMENTS, TK_QUESTION, TK_COALESCE, TK_COALESCE_EQ, TK_OPTDOT, TK_OPTINDEX, TK_POW, TK_POW_EQ, TK_FLOORDIV, TK_FLOORDIV_EQ, TK_WRAP_STAR, TK_WRAP_PLUS, TK_WRAP_MINUS, TK_AT, TK_FSTRING, TK_COUNT } TokKind;
 
 typedef enum { TY_NAME = 0, TY_PTR, TY_ARRAY, TY_FUNC } TypeKind;
 
@@ -28,6 +28,8 @@ struct Type {
     int is_const;
     int is_volatile;
     int is_restrict;
+    int is_ref;
+    int ns_qual;
     TagKind tag_kind;
     const char *name;
     struct Type *inner;
@@ -57,6 +59,8 @@ struct Expr {
     Block *xblock;
     int cast_tentative;
     int incdec_post;
+    const char *embed_path;
+    int embed_bin;
 };
 
 struct Block {
@@ -137,6 +141,7 @@ struct Func {
     int in_header;
     Block *body;
     char **tparams;
+    char **tbounds;
     int32_t ntparams;
 };
 
@@ -154,7 +159,7 @@ struct EnumItem {
     Pos pos;
 };
 
-typedef enum { DL_IMPORT = 0, DL_VAR, DL_FUNC, DL_STRUCT, DL_ENUM, DL_UNION, DL_DECLARE, DL_IMPLEMENT } DeclKind;
+typedef enum { DL_IMPORT = 0, DL_VAR, DL_FUNC, DL_TRAIT, DL_STRUCT, DL_ENUM, DL_UNION, DL_DECLARE, DL_IMPLEMENT } DeclKind;
 
 struct Decl {
     DeclKind kind;
@@ -162,10 +167,13 @@ struct Decl {
     int inline_inst;
     int import_system;
     const char *import_path;
+    const char *import_alias;
     int is_include;
     int is_fwd;
     int is_def;
     int is_anon;
+    const char *trait_for;
+    int is_record;
     int is_td;
     const char *name;
     Type *type;
@@ -179,6 +187,7 @@ struct Decl {
     Func **methods;
     int32_t nmethods;
     char **tparams;
+    char **tbounds;
     int32_t ntparams;
     EnumItem *items;
     int32_t nitems;
@@ -195,6 +204,12 @@ struct Module {
     char **tdrev_tags;
     char **tdrev_names;
     int32_t ntdrev;
+    char **tdsc_names;
+    Type **tdsc_types;
+    int32_t ntdsc;
+    char **ns_names;
+    struct Module **ns_mods;
+    int32_t nns;
     Decl **decls;
     int32_t ndecls;
 };

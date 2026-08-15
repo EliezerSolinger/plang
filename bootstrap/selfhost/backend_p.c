@@ -12,31 +12,33 @@ const int32_t PP_LOW = 0;
 
 const int32_t PP_TERNARY = 1;
 
-const int32_t PP_OR = 2;
+const int32_t PP_COALESCE = 2;
 
-const int32_t PP_AND = 3;
+const int32_t PP_OR = 3;
 
-const int32_t PP_NOT = 4;
+const int32_t PP_AND = 4;
 
-const int32_t PP_BITOR = 5;
+const int32_t PP_NOT = 5;
 
-const int32_t PP_BITXOR = 6;
+const int32_t PP_BITOR = 6;
 
-const int32_t PP_BITAND = 7;
+const int32_t PP_BITXOR = 7;
 
-const int32_t PP_EQ = 8;
+const int32_t PP_BITAND = 8;
 
-const int32_t PP_REL = 9;
+const int32_t PP_EQ = 9;
 
-const int32_t PP_SHIFT = 10;
+const int32_t PP_REL = 10;
 
-const int32_t PP_ADD = 11;
+const int32_t PP_SHIFT = 11;
 
-const int32_t PP_MUL = 12;
+const int32_t PP_ADD = 12;
 
-const int32_t PP_UNARY = 13;
+const int32_t PP_MUL = 13;
 
-const int32_t PP_POSTFIX = 14;
+const int32_t PP_UNARY = 14;
+
+const int32_t PP_POSTFIX = 15;
 
 static const char *op_pstr(int32_t op) {
     switch (op) {
@@ -139,14 +141,20 @@ static const char *op_pstr(int32_t op) {
         case TK_SHR_EQ: {
             return ">>=";
         }
+        case TK_COALESCE: {
+            return "\?\?";
+        }
         default: {
-            return "?";
+            return "\?";
         }
     }
 }
 
 static int32_t binary_prec(int32_t op) {
     switch (op) {
+        case TK_COALESCE: {
+            return PP_COALESCE;
+        }
         case TK_OR: {
             return PP_OR;
         }
@@ -208,6 +216,11 @@ static void p_type(StrBuf *b, Type *t, int no_const) {
     }
     switch (t->kind) {
         case TY_PTR: {
+            if (t->is_ref) {
+                StrBuf_puts(b, "ref ");
+                p_type(b, t->inner, 0);
+                return;
+            }
             if (t->inner != NULL && t->inner->kind == TY_FUNC) {
                 p_type(b, t->inner, 0);
                 return;
@@ -346,7 +359,11 @@ void p_expr(StrBuf *b, Expr *e, int32_t min_prec) {
         case EX_NUMBER:
         case EX_STRING:
         case EX_CHARLIT: {
-            StrBuf_puts(b, (e->text != NULL ? e->text : "?"));
+            if (e->kind == EX_STRING && e->embed_path != NULL) {
+                StrBuf_printf(b, "%s(%s)", (e->embed_bin ? "embed_bytes" : "embed"), e->embed_path);
+            } else {
+                StrBuf_puts(b, (e->text != NULL ? e->text : "\?"));
+            }
             break;
         }
         case EX_TRUE: {
@@ -404,7 +421,7 @@ void p_expr(StrBuf *b, Expr *e, int32_t min_prec) {
                 p_expr(b, e->lhs, PP_POSTFIX);
                 StrBuf_puts(b, (e->op == TK_ARROW ? "->" : "."));
             }
-            StrBuf_puts(b, (e->field != NULL ? e->field : "?"));
+            StrBuf_puts(b, (e->field != NULL ? e->field : "\?"));
             break;
         }
         case EX_WITHSELF: {
@@ -462,7 +479,7 @@ void p_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_WALRUS: {
-            StrBuf_puts(b, (e->text != NULL ? e->text : "?"));
+            StrBuf_puts(b, (e->text != NULL ? e->text : "\?"));
             StrBuf_puts(b, " := ");
             p_expr(b, e->lhs, PP_LOW);
             break;
@@ -845,7 +862,7 @@ static void p_func(StrBuf *b, Func *f, int32_t ind) {
 }
 
 static void p_struct(StrBuf *b, Decl *d) {
-    StrBuf_puts(b, (d->kind == DL_UNION ? "union " : "struct "));
+    StrBuf_puts(b, (d->kind == DL_UNION ? "union " : (d->is_record ? "record " : "struct ")));
     StrBuf_puts(b, d->name);
     if (d->ntparams > 0) {
         StrBuf_putc(b, '<');
@@ -895,6 +912,8 @@ void p_decl(StrBuf *b, Decl *d) {
                 }
             } else if (d->import_system) {
                 StrBuf_printf(b, "import <%s>\n", d->import_path);
+            } else if (d->import_alias != NULL) {
+                StrBuf_printf(b, "import \"%s\" as %s\n", d->import_path, d->import_alias);
             } else {
                 StrBuf_printf(b, "import \"%s\"\n", d->import_path);
             }
@@ -950,8 +969,24 @@ void p_decl(StrBuf *b, Decl *d) {
             }
             break;
         }
+        case DL_TRAIT: {
+            StrBuf_printf(b, "trait %s:\n", d->name);
+            size_t i;
+            for (i = 0; i < d->nmethods; i += 1) {
+                p_func(b, d->methods[i], 1);
+            }
+            break;
+        }
         case DL_DECLARE:
         case DL_IMPLEMENT: {
+            if (d->trait_for != NULL) {
+                StrBuf_printf(b, "implement %s for %s:\n", d->name, d->trait_for);
+                size_t i;
+                for (i = 0; i < d->nmethods; i += 1) {
+                    p_func(b, d->methods[i], 1);
+                }
+                return;
+            }
             if (d->inline_inst) {
                 StrBuf_puts(b, "inline ");
             } else if (d->kind == DL_DECLARE) {

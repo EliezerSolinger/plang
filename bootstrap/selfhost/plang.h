@@ -45,6 +45,8 @@ void StrBuf_puts(StrBuf *self, const char *s);
 
 void StrBuf_printf(StrBuf *self, const char *fmt, ...);
 
+void StrBuf_trim_comma(StrBuf *self);
+
 void StrBuf_deinit(StrBuf *self);
 
 int32_t utf8_decode(const char *bytes, size_t nbytes, Arena *a, uint32_t **out_cp, uint32_t **out_off, size_t *out_n, size_t *err_off);
@@ -69,4 +71,20 @@ void cdiag_at(const char *file, Pos pos, const char *group, int32_t wdef, const 
 
 void warn_at(const char *file, Pos pos, const char *fmt, ...);
 
+int is_hexc(char c);
+
+int32_t hexc(char c);
+
 char *read_entire_file(const char *path, size_t *out_len);
+
+char *read_entire_file_opt(const char *path, size_t *out_len);
+
+const char *path_dir(Arena *a, const char *path);
+
+const char *path_join(Arena *a, const char *dir, const char *rel);
+
+const char *path_relative(Arena *a, const char *from_dir, const char *to);
+
+char *str_lit_decode(Arena *a, const char *lex, size_t *out_len);
+
+const char *c_string_literal(Arena *a, const char *bytes, size_t n);

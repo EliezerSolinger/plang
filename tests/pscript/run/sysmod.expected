@@ -1,0 +1,4 @@
+argv True
+env has PATH True
+home is a string True
+sum 4999950000 took a moment True

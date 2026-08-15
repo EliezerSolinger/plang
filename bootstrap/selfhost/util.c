@@ -8,6 +8,22 @@
 #include <stdarg.h>
 #include "plang.h"
 
+static char *read_open_file(FILE *f, const char *path, size_t *out_len);
+
+int is_hexc(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+int32_t hexc(char c) {
+    if (c >= '0' && c <= '9') {
+        return (int32_t)(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return (int32_t)(c - 'a') + 10;
+    }
+    return (int32_t)(c - 'A') + 10;
+}
+
 const int ARENA_MIN_BLOCK = 65536;
 
 static ArenaBlock *arena_new_block(size_t min) {
@@ -121,6 +137,13 @@ void StrBuf_printf(StrBuf *self, const char *fmt, ...) {
     vsnprintf(self->data + self->len, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     self->len += (size_t)n;
+}
+
+void StrBuf_trim_comma(StrBuf *self) {
+    while (self->len > 0 && (self->data[self->len - 1] == ' ' || self->data[self->len - 1] == ',')) {
+        self->len -= 1;
+        self->data[self->len] = '\0';
+    }
 }
 
 void StrBuf_deinit(StrBuf *self) {
@@ -278,6 +301,27 @@ char *read_entire_file(const char *path, size_t *out_len) {
     if (f == NULL) {
         fatal("could not open '%s'", path);
     }
+    char *__defer_ret0 = read_open_file(f, path, out_len);
+    {
+        fclose(f);
+    }
+    return __defer_ret0;
+}
+
+char *read_entire_file_opt(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        *out_len = 0;
+        return NULL;
+    }
+    char *__defer_ret1 = read_open_file(f, path, out_len);
+    {
+        fclose(f);
+    }
+    return __defer_ret1;
+}
+
+static char *read_open_file(FILE *f, const char *path, size_t *out_len) {
     if (fseek(f, 0, 2) != 0) {
         fatal("fseek failed on '%s'", path);
     }
@@ -295,9 +339,197 @@ char *read_entire_file(const char *path, size_t *out_len) {
     }
     buf[sz] = '\0';
     *out_len = (size_t)sz;
-    char *__defer_ret0 = buf;
-    {
-        fclose(f);
+    return buf;
+}
+
+const char *path_dir(Arena *a, const char *path) {
+    const char *slash = strrchr(path, '/');
+    if (slash == NULL) {
+        return Arena_strdup(a, ".");
     }
-    return __defer_ret0;
+    if (slash == path) {
+        return Arena_strdup(a, "/");
+    }
+    return Arena_strndup(a, path, (size_t)(slash - path));
+}
+
+const char *path_join(Arena *a, const char *dir, const char *rel) {
+    if (rel[0] == '/') {
+        return Arena_strdup(a, rel);
+    }
+    if (strcmp(dir, ".") == 0) {
+        return Arena_strdup(a, rel);
+    }
+    if (dir[strlen(dir) - 1] == '/') {
+        return Arena_printf(a, "%s%s", dir, rel);
+    }
+    return Arena_printf(a, "%s/%s", dir, rel);
+}
+
+char *str_lit_decode(Arena *a, const char *lex, size_t *out_len) {
+    size_t n = strlen(lex);
+    char *buf = Arena_alloc(a, n + 1);
+    size_t len = 0;
+    size_t i = 0;
+    char q = '"';
+    size_t k;
+    for (k = 0; k < n; k += 1) {
+        if (lex[k] == '"' || lex[k] == '\'') {
+            q = lex[k];
+            break;
+        }
+    }
+    while (i < n) {
+        if (lex[i] != q) {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        while (i < n && lex[i] != q) {
+            if (lex[i] != '\\') {
+                buf[len] = lex[i];
+                len += 1;
+                i += 1;
+                continue;
+            }
+            i += 1;
+            if (i >= n) {
+                break;
+            }
+            char c = lex[i];
+            i += 1;
+            if (c == 'n') {
+                buf[len] = '\n';
+            } else if (c == 't') {
+                buf[len] = '\t';
+            } else if (c == 'r') {
+                buf[len] = '\r';
+            } else if (c == 'a') {
+                buf[len] = '\a';
+            } else if (c == 'b') {
+                buf[len] = '\b';
+            } else if (c == 'f') {
+                buf[len] = '\f';
+            } else if (c == 'v') {
+                buf[len] = '\v';
+            } else if (c == 'e') {
+                buf[len] = (char)27;
+            } else if (c == 'x') {
+                uint32_t v = 0;
+                while (i < n && is_hexc(lex[i])) {
+                    v = v * 16 + (uint32_t)hexc(lex[i]);
+                    i += 1;
+                }
+                buf[len] = (char)(v & 0xFF);
+            } else if (c >= '0' && c <= '7') {
+                uint32_t o = (uint32_t)(c - '0');
+                int32_t k = 1;
+                while (i < n && k < 3 && lex[i] >= '0' && lex[i] <= '7') {
+                    o = o * 8 + (uint32_t)(lex[i] - '0');
+                    i += 1;
+                    k += 1;
+                }
+                buf[len] = (char)(o & 0xFF);
+            } else {
+                buf[len] = c;
+            }
+            len += 1;
+        }
+        i += 1;
+    }
+    buf[len] = '\0';
+    *out_len = len;
+    return buf;
+}
+
+const char *c_string_literal(Arena *a, const char *bytes, size_t n) {
+    char *out = Arena_alloc(a, n * 4 + 3);
+    size_t j = 0;
+    out[j] = '"';
+    j += 1;
+    size_t i;
+    for (i = 0; i < n; i += 1) {
+        uint8_t c = (uint8_t)bytes[i];
+        if (c == (uint8_t)'"' || c == (uint8_t)'\\') {
+            out[j] = '\\';
+            out[j + 1] = (char)c;
+            j += 2;
+        } else if (c == (uint8_t)'\?') {
+            out[j] = '\\';
+            out[j + 1] = '\?';
+            j += 2;
+        } else if (c == (uint8_t)'\n' || c == (uint8_t)'\t' || c == (uint8_t)'\r') {
+            out[j] = '\\';
+            out[j + 1] = (c == (uint8_t)'\n' ? 'n' : (c == (uint8_t)'\t' ? 't' : 'r'));
+            j += 2;
+        } else if (c >= 0x20 && c < 0x7F) {
+            out[j] = (char)c;
+            j += 1;
+        } else {
+            out[j] = '\\';
+            out[j + 1] = (char)((uint8_t)'0' + (c >> 6));
+            out[j + 2] = (char)((uint8_t)'0' + ((c >> 3) & 7));
+            out[j + 3] = (char)((uint8_t)'0' + (c & 7));
+            j += 4;
+        }
+    }
+    out[j] = '"';
+    out[j + 1] = '\0';
+    return out;
+}
+
+const char *path_relative(Arena *a, const char *from_dir, const char *to) {
+    if (from_dir[0] == '/' != (to[0] == '/')) {
+        return Arena_strdup(a, to);
+    }
+    if (from_dir[0] == '\0' || (from_dir[0] == '.' && from_dir[1] == '\0')) {
+        return Arena_strdup(a, to);
+    }
+    size_t f = 0;
+    size_t t = 0;
+    size_t lastf = 0;
+    size_t lastt = 0;
+    while (1) {
+        size_t fe = f;
+        while (from_dir[fe] != '\0' && from_dir[fe] != '/') {
+            fe += 1;
+        }
+        size_t te = t;
+        while (to[te] != '\0' && to[te] != '/') {
+            te += 1;
+        }
+        if (fe - f != te - t || memcmp(from_dir + f, to + t, fe - f) != 0) {
+            break;
+        }
+        if (from_dir[fe] == '\0' || to[te] == '\0') {
+            if (from_dir[fe] == '\0') {
+                lastf = fe;
+                lastt = (to[te] == '\0' ? te : te + 1);
+            }
+            break;
+        }
+        f = fe + 1;
+        t = te + 1;
+        lastf = f;
+        lastt = t;
+    }
+    if (lastf == 0 && lastt == 0) {
+        lastf = f;
+        lastt = t;
+    }
+    StrBuf out = {0};
+    size_t i = lastf;
+    while (from_dir[i] != '\0') {
+        if (from_dir[i] == '/') {
+            StrBuf_puts(&out, "../");
+        }
+        i += 1;
+    }
+    if (lastf < strlen(from_dir)) {
+        StrBuf_puts(&out, "../");
+    }
+    StrBuf_puts(&out, to + lastt);
+    const char *r = Arena_strdup(a, (out.data != NULL ? out.data : ""));
+    StrBuf_deinit(&out);
+    return r;
 }

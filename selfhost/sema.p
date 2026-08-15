@@ -14,6 +14,7 @@ import "sema.ph"
 import "lexer.ph"
 import "parser.ph"
 import "cfront.ph"
+import "embed.ph"
 import "../stl/map.ph"
 import "../stl/set.ph"
 
@@ -27,6 +28,11 @@ struct Sym:
     assigned: bool    # has a value: initializer seen, or address escaped (&x)
     uninit_warned: bool
     byref: i32        # out/ref/in parameter: uses of the name auto-deref (*name)
+                      #   — and a LOCAL `r: ref T` (69.1) rides the same rail
+    nn: i32           # null fact for a pointer local, per flow position (69.7):
+                      #   0 = unknown, 1 = proven non-None, 2 = proven None
+    nn_off: bool      # address escaped (&x): the fact could be changed from
+                      #   anywhere, so this local never carries one again
     for_iter: bool    # iterator injected by `for`: a later explicit
                       #   declaration REUSES it (and becomes an assignment)
     for_decl: *Stmt   # that injected declaration: a later loop over a NEGATIVE
@@ -39,6 +45,9 @@ struct SInfo:
     c_tag: bool     # ingested C TAG without a typedef (struct stat, struct
                     #   dirent...): P references emit the `struct X` spelling
     defined: bool   # saw a DEFINITION (not just a forward `struct S;`)
+    is_record: bool # declared with `record` (65.1): the compiler has CHECKED that
+                    #   no pointer lives anywhere inside, so values of it are safe
+                    #   to memcpy, to write to disk and to compare by content
     fields: *Field
     nfields: i32
     cfields: i32
@@ -90,7 +99,6 @@ struct Subst:
 # come first in the file, inside the struct)
 static def ends_with(s: const *char, suf: const *char) -> bool
 def cc_load_module(cc: *Cc, path: const *char) -> *Module
-static def dir_of(a: *Arena, path: const *char) -> const *char
 static def sinfo_method(si: *SInfo, name: const *char) -> *Func
 static def sinfo_field(si: *SInfo, name: const *char) -> *Field
 # ---------- scopes ----------
@@ -100,6 +108,9 @@ static def subst_lookup(sub: *Subst, name: const *char) -> *Type
 static def is_void_val(t: *Type) -> bool
 static def strip_ptr_or_array(t: *Type) -> *Type
 static def ceval_char(lex: const *char) -> i64
+static def names_own_type(t: *Type, init: *Expr) -> bool
+static def is_designator(e: *Expr) -> bool
+static def decl_in_module(m: *Module, name: const *char) -> bool
 static def cv_int(v: i64) -> CVal
 static def cv_flt(v: f64) -> CVal
 static def cv_str(v: const *char) -> CVal
@@ -127,6 +138,7 @@ static def init_str_units(lex: const *char) -> i32
 static def init_skip_field(f: *Field) -> bool
 static def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type
 static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt
+static def block_terminates(b: *Block) -> bool
 static def type_eq_p(a: *Type, b: *Type) -> bool
 static def expr_is_negative(e: *Expr) -> bool
 static def type_is_unsigned(t: *Type) -> bool
@@ -223,6 +235,33 @@ builtins: const *char[] = {
 # the output carries no libc dependency for compiler-injected calls.
 INLINE_RUNTIME_SRC: const *char = "static def __plang_strcmp(a: const *char, b: const *char) -> i32:\n    i: usize = 0\n    while a[i] != '\\0' and a[i] == b[i]:\n        i += 1\n    return i32(u8(a[i])) - i32(u8(b[i]))\n"
 
+# The same, without a Sema: pscript's own front end ingests C headers too (45.5),
+# and it has no reason to build a P sema to do it.
+def cpp_capture_ex(a: *Arena, cpp_cmd: const *char, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char:
+    cpp: const *char = cpp_cmd if cpp_cmd != None else "cc"
+    cmd: const *char
+    if is_sys:
+        cmd = a->printf("printf '#include <%s>\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir)
+    else:
+        cmd = a->printf("printf '#include \"%s\"\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir)
+    f: *FILE = popen(cmd, "r")
+    if f == None:
+        fatal("could not run '%s -E' to ingest C header '%s' (see --cpp / PLANGC_CPP)", cpp, path)
+    b: StrBuf = {0}
+    chunk: char[4097]
+    while True:
+        n: usize = fread(&chunk[0], 1, 4096, f)
+        if n == 0:
+            break
+        chunk[n] = '\0'
+        b.puts(&chunk[0])
+    rc: i32 = pclose(f)
+    if rc != 0:
+        fatal("'%s' failed to preprocess header '%s' (not found? see --cpp / PLANGC_CPP)", cpp, path)
+    out: const *char = a->strdup(b.data if b.data != None else "")
+    b.deinit()
+    return out
+
 struct Sema:
     cc: *Cc
     a: *Arena
@@ -251,10 +290,18 @@ struct Sema:
                              #   a second initialized definition is an error
     macroconsts: StrSet      # constvals that came from ingested C headers (#define):
                              #   folded to literals in expressions (QBE has no cpp)
+    cur_mod: *Module         # module being registered/checked: its `import ... as`
+                             #   aliases are visible ONLY while it is current
     in_chdr: bool            # registering an ingested C header (relaxed checks)
     for_ctr: i32             # hidden index counter for `for v in xs` (__fiN)
     in_ctr: i32              # hidden temporaries for `in` receivers (__inN)
+    co_ctr: i32              # hidden temporaries for `a ?? b` (__coN)
+    uneval: i32              # depth inside sizeof/_Alignof: the operand is NOT
+                             #   evaluated, so no null fact can fire there (69.7)
+    traits: StrMap<*Decl>    # `trait X:` — the signatures it names (67.1)
+    timpls: StrSet           # "Trait/Type" pairs already implemented (67.3)
     tdalias: StrMap<*Type>   # typedef de header C -> tipo do TAG subjacente
+    tdscalar: StrMap<*Type>  # typedef de header C -> tipo ESCALAR subjacente
                              #   (`regex_t` -> `struct re_pattern_buffer`)
     c_mod: bool              # checking a C module: no Python-style inference
                              #   (`a = 1` does NOT declare in C)
@@ -262,6 +309,10 @@ struct Sema:
     fn_nonlocals: StrSet     # names marked by `nonlocal x` (declare at fn scope)
     fn_hoisted: StrMap<*Type>  # nonlocal names already declared (hoisted): they
                                #   stay visible for the REST of the function
+    rc_ctr: i32              # counter of the hidden record temporaries C89 needs
+    in_complit_init: bool    # checking an initializer that DIRECTLY names its own
+                             #   type (`v: Vec = Vec(...)`): the record constructor
+                             #   collapses to a brace list there, so C89 is fine
     in_wlhs: bool            # checking the LHS of a plain assignment: the ident
                              #   is written, not read (-Wuninitialized suppressed)
     in_callee: bool          # checking a call's callee: an unknown name is an
@@ -319,6 +370,24 @@ struct Sema:
     static def find_template(self: *Sema, n: const *char) -> *Decl
     static def mangle_instance(self: *Sema, g: *Type) -> *char
     static def resolve_type(self: *Sema, t: *Type)
+    static def check_pure_bytes(self: *Sema, si: *SInfo, d: *Decl)
+    static def record_ctor(self: *Sema, e: *Expr, si: *SInfo)
+    static def flatten_complit(self: *Sema, t: *Type, init: *Expr)
+    static def complit_to_temp(self: *Sema, e: *Expr, si: *SInfo)
+    static def fill_field(self: *Sema, dst: *Expr, t: *Type, src: *Expr, pos: Pos) -> *Expr
+    static def comma_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr
+    static def record_eq(self: *Sema, e: *Expr) -> bool
+    static def eq_operand(self: *Sema, e: *Expr, ref pre: *Expr) -> *Expr
+    static def record_eq_chain(self: *Sema, si: *SInfo, a: *Expr, b: *Expr, pos: Pos) -> *Expr
+    static def record_eq_value(self: *Sema, t: *Type, a: *Expr, b: *Expr, pos: Pos) -> *Expr
+    static def eq_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr
+    static def mk_field(self: *Sema, base: *Expr, name: const *char, pos: Pos) -> *Expr
+    static def const_len(self: *Sema, e: *Expr, ref out_n: i64) -> bool
+    static def ns_module(self: *Sema, name: const *char) -> *Module
+    static def ns_shadowed(self: *Sema, name: const *char) -> bool
+    static def ns_has(self: *Sema, m: *Module, member: const *char) -> bool
+    static def ns_plain(self: *Sema, dotted: const *char, pos: Pos) -> const *char
+    static def try_ns_ref(self: *Sema, e: *Expr) -> bool
     static def clone_type(self: *Sema, sub: *Subst, t: *Type) -> *Type
     static def clone_expr(self: *Sema, sub: *Subst, e: *Expr) -> *Expr
     static def clone_stmt(self: *Sema, sub: *Subst, st: *Stmt) -> *Stmt
@@ -366,6 +435,17 @@ struct Sema:
     static def check_byref_kw(self: *Sema, a: *Expr, fn: *Func, pi: i32)
     static def byref_write_base(self: *Sema, e: *Expr) -> i32
     static def func_designator(self: *Sema, e: *Expr) -> *Func
+    static def nn_save(self: *Sema) -> *i32
+    static def nn_restore(self: *Sema, snap: *i32)
+    static def nn_clear_all(self: *Sema)
+    static def nn_of_expr(self: *Sema, e: *Expr) -> i32
+    static def nn_assign(self: *Sema, lhs: *Expr, v: i32)
+    static def apply_cond_facts(self: *Sema, e: *Expr, branch_true: bool)
+    static def nn_kill_writes(self: *Sema, b: *Block)
+    static def null_deref_check(self: *Sema, base: *Expr, pos: Pos)
+    static def bind_ref(self: *Sema, e: *Expr, reft: *Type, pos: Pos, what: const *char) -> *Expr
+    static def check_ref_var(self: *Sema, st: *Stmt)
+    static def lower_coalesce(self: *Sema, e: *Expr)
     static def check_assign_types(self: *Sema, pos: Pos, lt: *Type, rt: *Type, rhs: *Expr)
     static def init_leaf(self: *Sema, t: *Type, e: *Expr)
     static def init_arg_class(self: *Sema, e: *Expr) -> i32
@@ -383,6 +463,7 @@ struct Sema:
     static def check_stmt(self: *Sema, st: *Stmt)
     static def block_prepend(self: *Sema, b: *Block, st: *Stmt)
     static def lower_for_iter(self: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt)
+    static def lower_for_iterable(self: *Sema, st: *Stmt, at: *Type, d1: **Stmt, d2: **Stmt)
     static def check_stmts(self: *Sema, b: *Block)
     static def check_block(self: *Sema, b: *Block)
     static def walk_labels(self: *Sema, b: *Block, ref names: **char, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32)
@@ -397,6 +478,8 @@ struct Sema:
     static def ingest_macros(self: *Sema, path: const *char, is_sys: bool, dir: const *char)
     static def ingest_c_header(self: *Sema, m: *Module, d: *Decl)
     static def instantiate(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
+    static def trait_impl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
+    static def check_bound(self: *Sema, t: *Type, trait: const *char, tparam: const *char, pos: Pos)
     static def register_decl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
     static def register_module(self: *Sema, m: *Module, check_bodies: bool)
     static def reg_builtin(self: *Sema, name: const *char, v: CVal)
@@ -518,6 +601,12 @@ struct Sema:
             for i0 in range(t->ntargs):
                 self->resolve_type(t->targs[i0])
             return
+        # `ns.Point` (42.4): strip the alias once it has been checked, and the
+        # plain name goes on to resolve exactly as it always did
+        if t->ns_qual and t->name != None:
+            zp: Pos = {0}
+            t->name = self->ns_plain(t->name, zp)
+            t->ns_qual = False
         if t->ntargs == 0:
             if t->kind == TY_NAME and t->tag_kind == TAG_NONE and t->name != None:
                 # a C-header typedef of a TAG (`regex_t`): switch to the TAG's
@@ -554,7 +643,9 @@ struct Sema:
         if t == None:
             return None
         if t->kind == TY_PTR:
-            return ty_ptr(self->a, self->clone_type(sub, t->inner))
+            cpt: *Type = ty_ptr(self->a, self->clone_type(sub, t->inner))
+            cpt->is_ref = t->is_ref   # `-> ref T` in a template stays a ref
+            return cpt
         if t->kind == TY_ARRAY:
             return ty_array(self->a, self->clone_type(sub, t->inner), self->clone_expr(sub, t->arr_len))
         rep: *Type = subst_lookup(sub, t->name)
@@ -690,6 +781,10 @@ struct Sema:
         match e->kind:
             case EX_ASSIGN:
                 return self->type_of(e->lhs)
+            case EX_COMPOUND:
+                return e->cast_type    # `(T){...}` IS a value of T
+            case EX_COMMA:
+                return self->type_of(e->rhs)   # the comma operator yields its RIGHT side
             case EX_IN:
                 return ty_name(self->a, "bool")
             case EX_WALRUS:
@@ -1369,7 +1464,25 @@ struct Sema:
     static def infer_array_len(self: *Sema, t: *Type, init: *Expr):
         if t == None or t->kind != TY_ARRAY or t->arr_len != None:
             return
-        if init == None or init->kind != EX_INITLIST:
+        if init == None:
+            return
+        # `X: const u8[] = embed_bytes("f")` — the file's own size IS the length.
+        # C would give size+1 here (the literal's nul), which is right for text
+        # and wrong for bytes, so embed_bytes drops it: `len(X)` is the file size.
+        # A hand-written `char x[] = "abc"` keeps its C behaviour (no arr_len,
+        # the target sizes it) — this infers only what embed introduced.
+        if init->kind == EX_STRING and init->embed_path != None:
+            sel: *Type = t->inner
+            if sel == None or sel->kind != TY_NAME or ctype_width(sel->name) != 1:
+                return
+            units: i32 = init_str_units(init->text)
+            if units < 0:
+                return
+            slit: *Expr = ex_new(self->a, EX_NUMBER, init->pos)
+            slit->text = self->a->printf("%d", units if init->embed_bin else units + 1)
+            t->arr_len = slit
+            return
+        if init->kind != EX_INITLIST:
             return
         # aggregate elements (struct/array) may use C brace ELISION — a flat scalar
         # list where nargs is NOT the element count. Only infer when the element is
@@ -2157,7 +2270,232 @@ struct Sema:
             return None
         return self->find_func(e->text)
 
+    # ---------- null facts (69.7) and ref binding (69.1) ----------
+    # A tiny flow analysis over pointer LOCALS: locals[i].nn holds what this
+    # point of the flow has PROVEN about the pointer (nothing / non-None /
+    # None). Facts are snapshotted around branches, killed by writes that a
+    # loop could replay, and dropped entirely at labels and escaped addresses.
+    # Two consumers only: -Wnull-dereference (fires on a proven None) and the
+    # proof `ref T` demands before stealing the place behind a pointer.
+    static def nn_save(self: *Sema) -> *i32:
+        snap: *i32 = self->a->alloc(usize(self->nlocals + 1) * sizeof(i32))
+        snap[0] = self->nlocals
+        for i in range(self->nlocals):
+            snap[i + 1] = self->locals[i].nn
+        return snap
+
+    static def nn_restore(self: *Sema, snap: *i32):
+        for i in range(self->nlocals):
+            self->locals[i].nn = snap[i + 1] if i < snap[0] else 0
+
+    static def nn_clear_all(self: *Sema):
+        for i in range(self->nlocals):
+            self->locals[i].nn = 0
+
+    # what a fresh value proves about the pointer it lands in
+    static def nn_of_expr(self: *Sema, e: *Expr) -> i32:
+        if e == None:
+            return 0
+        if e->kind == EX_NONE:
+            return 2
+        if e->kind == EX_UNARY and e->op == TK_AMP:
+            return 1
+        if e->kind == EX_STRING:
+            return 1
+        if e->kind == EX_CAST:
+            return self->nn_of_expr(e->lhs)
+        if e->kind == EX_IDENT:
+            ni: i32 = self->sym_index(e->text)
+            if ni >= 0 and not self->locals[ni].nn_off:
+                return self->locals[ni].nn
+            return 0
+        nt: *Type = self->type_of(e)
+        if nt != None and nt->kind == TY_PTR and nt->is_ref:
+            return 1
+        return 0
+
+    # record a fact on a pointer local being assigned (idents only: a fact on
+    # p->f or a[i] would need an alias analysis this deliberately isn't)
+    static def nn_assign(self: *Sema, lhs: *Expr, v: i32):
+        if lhs == None or lhs->kind != EX_IDENT:
+            return
+        ai: i32 = self->sym_index(lhs->text)
+        if ai < 0 or self->locals[ai].nn_off or self->locals[ai].byref != PK_NONE:
+            return
+        if self->locals[ai].type == None or self->locals[ai].type->kind != TY_PTR:
+            return
+        self->locals[ai].nn = v
+
+    # facts a condition proves inside the branch where it was `branch_true`
+    static def apply_cond_facts(self: *Sema, e: *Expr, branch_true: bool):
+        if e == None:
+            return
+        if e->kind == EX_UNARY and e->op == TK_NOT:
+            self->apply_cond_facts(e->lhs, not branch_true)
+            return
+        if e->kind == EX_BINARY and e->op == TK_AND and branch_true:
+            # both conjuncts hold; the FALSE side of an `and` proves nothing
+            self->apply_cond_facts(e->lhs, True)
+            self->apply_cond_facts(e->rhs, True)
+            return
+        if e->kind == EX_BINARY and e->op == TK_OR and not branch_true:
+            self->apply_cond_facts(e->lhs, False)
+            self->apply_cond_facts(e->rhs, False)
+            return
+        if e->kind == EX_BINARY and (e->op == TK_EQ or e->op == TK_NE):
+            oth: *Expr = None
+            if e->lhs != None and e->lhs->kind == EX_NONE:
+                oth = e->rhs
+            elif e->rhs != None and e->rhs->kind == EX_NONE:
+                oth = e->lhs
+            if oth != None and oth->kind == EX_IDENT:
+                isnull: bool = (e->op == TK_EQ) == branch_true
+                self->nn_assign(oth, 2 if isnull else 1)
+            return
+        if e->kind == EX_IDENT:
+            # pointer truthiness: `if p:` proves non-None inside the branch
+            ti: i32 = self->sym_index(e->text)
+            if ti >= 0 and self->locals[ti].type != None and self->locals[ti].type->kind == TY_PTR:
+                self->nn_assign(e, 1 if branch_true else 2)
+
+    # a loop body runs again after its own writes: any local it assigns cannot
+    # keep a fact from BEFORE the loop (the back edge would smuggle it in)
+    static def nn_kill_writes(self: *Sema, b: *Block):
+        if b == None:
+            return
+        for i in range(b->n):
+            s: *Stmt = b->stmts[i]
+            if s == None:
+                continue
+            if s->kind == ST_ASSIGN:
+                self->nn_assign(s->lhs, 0)
+            elif s->kind == ST_EXPR and s->expr != None and (s->expr->kind == EX_ASSIGN or s->expr->kind == EX_INCDEC):
+                self->nn_assign(s->expr->lhs, 0)
+            elif s->kind == ST_IF:
+                for j in range(s->nconds):
+                    self->nn_kill_writes(s->blocks[j])
+                self->nn_kill_writes(s->else_block)
+            elif s->kind == ST_WHILE or s->kind == ST_DO or s->kind == ST_FOR or s->kind == ST_CFOR or s->kind == ST_BLOCK or s->kind == ST_DEFER or s->kind == ST_WITH:
+                self->nn_kill_writes(s->body)
+            elif s->kind == ST_MATCH:
+                for j in range(s->ncases):
+                    if s->cases[j] != None:
+                        self->nn_kill_writes(s->cases[j]->body)
+
+    # -Wnull-dereference (69.7): only a PROVEN fact fires — the pointer was
+    # None on every path that reaches this dereference, so it always crashes
+    static def null_deref_check(self: *Sema, base: *Expr, pos: Pos):
+        if self->in_chdr or self->uneval > 0 or base == None or base->kind != EX_IDENT or base->out_done:
+            return
+        di: i32 = self->sym_index(base->text)
+        if di < 0 or self->locals[di].nn_off or self->locals[di].nn != 2:
+            return
+        if self->locals[di].type == None or self->locals[di].type->kind != TY_PTR:
+            return
+        cdiag_at(self->file, pos, "null-dereference", WD_WARN, "'%s' is None here: this dereference will crash", base->text)
+
+    # turns a CHECKED place expression into the pointer a `ref T` stores,
+    # demanding the flow's proof when the place lives behind a raw pointer.
+    # Returns the expression the declaration/return actually keeps.
+    static def bind_ref(self: *Sema, e: *Expr, reft: *Type, pos: Pos, what: const *char) -> *Expr:
+        it: *Type = self->type_of(e)
+        # a value that is already a ref (another ref, a ref-returning call):
+        # the pointer it carries is non-None by construction — copy it
+        if it != None and it->kind == TY_PTR and it->is_ref:
+            self->check_assign_types(pos, reft, it, e)
+            return e
+        # `*p`: stealing the place behind a raw pointer takes proof (69.2)
+        if e->kind == EX_UNARY and e->op == TK_STAR and e->lhs != None:
+            if not is_byref_deref(e):
+                proven: bool = False
+                if e->lhs->kind == EX_IDENT:
+                    pi: i32 = self->sym_index(e->lhs->text)
+                    proven = pi >= 0 and not self->locals[pi].nn_off and self->locals[pi].nn == 1
+                if not proven:
+                    cdiag_at(self->file, pos, "nullability", WD_ERR, "cannot prove this pointer is not None: bind the %s inside `if p != None:` (69.2)", what)
+            self->check_assign_types(pos, reft, self->type_of(e->lhs), e->lhs)
+            return e->lhs
+        if not is_lvalue(e):
+            fatal_at(self->file, pos, "a ref aliases a PLACE: the %s must be a variable, field, element or *pointer — not a temporary value", what)
+        at: *Expr = take_addr(self->a, e)
+        self->check_assign_types(pos, reft, self->type_of(at), at)
+        return at
+
+    # `a ?? b` (69.3): b when a is None. Lowered to a hoisted temp + comma so
+    # `a` is evaluated exactly once and `b` stays behind the branch — plain
+    # C89 (?:), identical in both backends.
+    static def lower_coalesce(self: *Sema, e: *Expr):
+        self->check_expr(e->lhs)
+        clt: *Type = self->type_of(e->lhs)
+        if clt == None or clt->kind != TY_PTR:
+            fatal_at(self->file, e->pos, "the left side of '??' must be a pointer: '??' is the None test (69.3)")
+        if clt->is_ref:
+            fatal_at(self->file, e->pos, "the left side of '??' is a ref — it is never None, the right side would be dead (69.1)")
+        tname: const *char = self->a->printf("__co%d", self->co_ctr)
+        self->co_ctr += 1
+        cot: *Type = self->a->alloc(sizeof(Type))
+        *cot = *clt
+        cot->is_ref = False
+        hd: *Stmt = st_new(self->a, ST_VAR, e->pos)
+        hd->name = tname
+        hd->type = cot
+        self->resolve_type(hd->type)
+        self->vla_hoist_add(hd)
+        chp: *Type = self->a->alloc(sizeof(Type))
+        *chp = *cot
+        self->fn_hoisted.put(tname, chp)
+        asn: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
+        asn->op = TK_ASSIGN
+        asn->lhs = mk_ident(self->a, tname, e->pos)
+        asn->rhs = e->lhs
+        cnd: *Expr = ex_new(self->a, EX_BINARY, e->pos)
+        cnd->op = TK_NE
+        cnd->lhs = mk_ident(self->a, tname, e->pos)
+        cnd->rhs = ex_new(self->a, EX_NONE, e->pos)
+        tern: *Expr = ex_new(self->a, EX_TERNARY, e->pos)
+        tern->cond = cnd
+        tern->lhs = mk_ident(self->a, tname, e->pos)
+        tern->rhs = e->rhs
+        cma: *Expr = ex_new(self->a, EX_COMMA, e->pos)
+        cma->lhs = asn
+        cma->rhs = tern
+        *e = *cma
+        self->check_expr(e)
+
+    # `r: ref T = <place>` (69.1): binds once, auto-derefs forever after — the
+    # same rail a `ref v: T` parameter rides. The local's stored type is the
+    # pointer; byref=PK_REF makes every later use of the name a load/store
+    # through the referent, which is exactly why a rebind cannot be spelled.
+    static def check_ref_var(self: *Sema, st: *Stmt):
+        if st->is_extern or st->is_static:
+            fatal_at(self->file, st->pos, "a ref cannot have a storage class: it binds at a moment in the flow")
+        self->resolve_type(st->type)
+        if st->init == None:
+            fatal_at(self->file, st->pos, "'%s' is a ref and binds at its declaration: `%s: ref T = <place>`", st->name, st->name)
+        if st->init->kind == EX_NONE:
+            fatal_at(self->file, st->pos, "a ref is never None — if absence is a state, hold a pointer (*T) instead (69.1)")
+        self->check_expr(st->init)
+        st->init = self->bind_ref(st->init, st->type, st->pos, "ref")
+        self->scope_add_x(st->name, st->type, False)
+        self->locals[self->nlocals - 1].pos = st->pos
+        self->locals[self->nlocals - 1].assigned = True
+        self->locals[self->nlocals - 1].byref = PK_REF
+        self->locals[self->nlocals - 1].nn = 1
+
     static def check_assign_types(self: *Sema, pos: Pos, lt: *Type, rt: *Type, rhs: *Expr):
+        # a ref where a VALUE of T is expected: load through it (69.1) — the
+        # pointer is non-None by construction, so the load is always safe
+        if rt != None and rt->kind == TY_PTR and rt->is_ref and lt != None and lt->kind != TY_PTR and lt->kind != TY_ARRAY and rhs != None and type_eq_p(lt, rt->inner):
+            rin: *Expr = self->a->alloc(sizeof(Expr))
+            *rin = *rhs
+            with rhs:
+                .kind = EX_UNARY
+                .op = TK_STAR
+                .lhs = rin
+                .rhs = None
+                .out_done = True
+                .text = None
+            rt = rt->inner
         lsi: *SInfo = self->val_struct(lt)
         rsi: *SInfo = self->val_struct(rt)
         if lsi != None and rsi != None:
@@ -2647,6 +2985,12 @@ struct Sema:
             if found == None:
                 fatal_at(self->file, e->pos, "cannot infer type parameter '%s' of generic function '%s' (no argument constrains it)", ftpl->tparams[ti], callee->text)
             targs[ti] = found
+            # `def sort<T: Comparable>` (67.1): the bound is checked HERE, where
+            # the concrete type is known. That is what makes the calls inside the
+            # body direct — the trait never becomes a vtable, it becomes a
+            # promise the compiler verified before monomorphizing.
+            if ftpl->tbounds != None and ftpl->tbounds[ti] != None:
+                self->check_bound(found, ftpl->tbounds[ti], ftpl->tparams[ti], e->pos)
         g: *Type = ty_name(self->a, callee->text)
         g->targs = targs
         g->ntargs = ftpl->ntparams
@@ -2661,6 +3005,9 @@ struct Sema:
         match e->kind:
             case EX_CALL:
                 self->resolve_gcall(e)   # def foo<T> template call -> foo_int
+                # `ns.f(...)` is a QUALIFIED call, never a method call: resolve
+                # the alias first, so everything below sees the plain name
+                self->try_ns_ref(e->lhs)
                 callee: *Expr = e->lhs
                 # a callee that is a C-header alias macro (`#define ma_fn ma_real_fn`)
                 # resolves to its target BEFORE anything downstream looks the name
@@ -2800,6 +3147,14 @@ struct Sema:
                 # Python-style cast: T(x) when T is a known type — a FUNCTION with
                 # the same name wins (C tags live in their own namespace)
                 if callee->kind == EX_IDENT and self->is_type_name(callee->text) and self->find_func(callee->text) == None:
+                    # `Vec(1.0, 2.0)` on a RECORD builds a value (65.1). It is not
+                    # ambiguous with the cast above: casting a scalar to an
+                    # aggregate is meaningless in C, so on a record a call is
+                    # always construction, whatever the argument count.
+                    csi: *SInfo = self->find_struct(callee->text)
+                    if csi != None and csi->is_record:
+                        self->record_ctor(e, csi)
+                        return
                     if e->nargs != 1:
                         fatal_at(self->file, e->pos, "cast %s(...) requires exactly 1 argument", callee->text)
                     arg: *Expr = e->args[0]
@@ -2940,6 +3295,9 @@ struct Sema:
                 self->in_callee = True
                 self->check_expr(callee)
                 self->in_callee = prevcal
+                unev: bool = callee->kind == EX_IDENT and callee->text != None and (callee->text in {"sizeof", "_Alignof", "__alignof__", "alignof"})
+                if unev:
+                    self->uneval += 1
                 for k in range(e->nargs):
                     if e->args[k] != None and e->args[k]->kind == EX_DESIG and e->args[k]->field != None:
                         fatal_at(self->file, e->args[k]->pos, "named argument '%s=' in a call the compiler cannot resolve (unknown or indirect function)", e->args[k]->field)
@@ -2949,6 +3307,8 @@ struct Sema:
                         cas: *SInfo = self->val_struct(cat)
                         if cas != None and not cas->defined:
                             fatal_at(self->file, e->pos, "argument %d has incomplete type '%s'", k + 1, cas->name)
+                if unev:
+                    self->uneval -= 1
                 return
             case EX_CAST:
                 if e->cast_tentative:
@@ -3097,9 +3457,17 @@ struct Sema:
                         fatal_at(self->file, e->pos, "use of undeclared identifier '%s'%s", e->text, self->sugg_text(&sgu))
                 return
             case EX_FIELD:
+                # `ns.name` from a namespaced import (42.4): not a member access
+                # at all — the alias is a spelling, so this collapses to the
+                # plain identifier. Anything really declared as `ns` wins.
+                if self->try_ns_ref(e):
+                    self->check_expr(e)
+                    return
                 self->check_expr(e->lhs)
                 ft0: *Type = self->type_of(e->lhs)
                 if ft0 != None:
+                    if ft0->kind == TY_PTR:
+                        self->null_deref_check(e->lhs, e->pos)
                     if ft0->kind == TY_NAME and is_arith_type(ft0):
                         fatal_at(self->file, e->pos, "request for member '%s' in something not a structure or union", e->field)
                     if ft0->kind == TY_NAME and not self->in_chdr:
@@ -3139,6 +3507,8 @@ struct Sema:
                         self->locals[awsi].assigned = True
                         self->locals[awsi].read = True
                         self->locals[awsi].written = True   # the address escapes: writes may happen through it
+                        self->locals[awsi].nn_off = True    # ... so no null fact survives it (69.7)
+                        self->locals[awsi].nn = 0
                 self->check_expr(e->lhs)
                 if e->op == TK_STAR:
                     # dereferencing a positively-non-pointer value; deref of a
@@ -3152,6 +3522,7 @@ struct Sema:
                         uds: *SInfo = self->val_struct(udt->inner)
                         if uds != None and not uds->defined:
                             fatal_at(self->file, e->pos, "dereferencing a pointer to incomplete type '%s %s'", "union" if uds->is_union else "struct", uds->name)
+                    self->null_deref_check(e->lhs, e->pos)
                 elif e->op == TK_AMP:
                     # `&*p` IS `p` (see take_addr): forwarding a received byref
                     # parameter to another byref call would otherwise spell `& *p`
@@ -3173,6 +3544,9 @@ struct Sema:
                             fatal_at(self->file, e->pos, "'~' requires an integer operand")
                 return
             case EX_BINARY:
+                if e->op == TK_COALESCE:
+                    self->lower_coalesce(e)
+                    return
                 # P: comparing a string-typed value with a string LITERAL compares
                 # CONTENT (strcmp) — pointer identity is spelled `is`. Conservative:
                 # only when one side is a literal (var == var stays a pointer test).
@@ -3212,6 +3586,8 @@ struct Sema:
                     e->op = nop
                     e->lhs = self->is_wrap_voidp(e->lhs)
                     e->rhs = self->is_wrap_voidp(e->rhs)
+                elif e->op in {TK_EQ, TK_NE} and self->record_eq(e):
+                    return   # `a == b` between records: rewritten field by field
                 else:
                     # every remaining binary operator needs scalar operands: a
                     # struct/union/void VALUE is invalid on either side (C and P)
@@ -3248,6 +3624,9 @@ struct Sema:
             case EX_INDEX:
                 self->check_expr(e->lhs)
                 self->check_expr(e->rhs)
+                ixnt: *Type = self->type_of(e->lhs)
+                if ixnt != None and ixnt->kind == TY_PTR:
+                    self->null_deref_check(e->lhs, e->pos)
                 if not self->in_chdr:
                     ixt: *Type = self->type_of(e->lhs)
                     ixr: *Type = self->type_of(e->rhs)
@@ -3307,8 +3686,10 @@ struct Sema:
                     fatal_at(self->file, e->pos, "cannot assign to a function")
                 if e->op == TK_ASSIGN:
                     self->check_assign_types(e->pos, xalt, self->type_of(e->rhs), e->rhs)
+                    self->nn_assign(e->lhs, self->nn_of_expr(e->rhs))
                 else:
                     self->check_compound_types(e->pos, e->op, e->lhs, e->rhs)
+                    self->nn_assign(e->lhs, 0)
                 return
             case EX_INCDEC:
                 iwsi: i32 = self->sym_index(e->lhs->text) if e->lhs != None and e->lhs->kind == EX_IDENT else -1
@@ -3491,6 +3872,38 @@ struct Sema:
                         self->gexterns.add(st->name)
                     elif st->type != None and not self->type_compat(gvt, st->type):
                         fatal_at(self->file, st->pos, "conflicting types for '%s' (block-scope extern vs the file-scope declaration)", st->name)
+                # `nonlocal x` then `x: T = e` — the TYPED first assignment. The
+                # inferred form (`x = e`, handled in the ST_ASSIGN path) already
+                # hoisted; without this the typed one declared a fresh variable
+                # INSIDE the block, shadowing the hoisted one, and the code read
+                # a value that was never written.
+                if st->type != None and st->name != None and self->fn_nonlocals.has(st->name) and self->fn_hoisted.get_or(st->name, None) == None and not st->is_static and not st->is_extern:
+                    if st->type->is_ref:
+                        fatal_at(self->file, st->pos, "a ref cannot be 'nonlocal': it binds at one moment of one flow (69.1)")
+                    self->resolve_type(st->type)
+                    self->infer_array_len(st->type, st->init)
+                    self->require_complete(st->type, st->pos)
+                    nhd: *Stmt = st_new(self->a, ST_VAR, st->pos)
+                    nhd->name = st->name
+                    nhd->type = st->type
+                    self->vla_hoist_add(nhd)     # prepended at function entry
+                    nhp: *Type = self->a->alloc(sizeof(Type))
+                    *nhp = *st->type
+                    self->fn_hoisted.put(st->name, nhp)
+                    if st->init == None:
+                        st->kind = ST_PASS
+                        return
+                    st->kind = ST_ASSIGN
+                    st->lhs = mk_ident(self->a, st->name, st->pos)
+                    st->op = TK_ASSIGN
+                    st->rhs = st->init
+                    st->init = None
+                    st->type = None
+                    self->check_stmt(st)
+                    return
+                if st->type != None and st->type->is_ref:
+                    self->check_ref_var(st)
+                    return
                 if st->type != None:
                     # C rule: the name is in scope from its own declarator onward —
                     # `p: **char = alloc(sizeof(*p))` is idiomatic and must see `p`
@@ -3500,16 +3913,30 @@ struct Sema:
                     self->scope_add_x(st->name, st->type, st->is_extern)
                     self->locals[self->nlocals - 1].pos = st->pos
                     self->locals[self->nlocals - 1].assigned = True   # visible-from-declarator copy
+                    prevci: bool = self->in_complit_init
+                    self->in_complit_init = names_own_type(st->type, st->init)
                     self->check_expr(st->init)
+                    self->in_complit_init = prevci
                 else:
                     self->check_expr(st->init)
                     if st->init != None:
                         st->type = self->infer_type(st->init)   # `name = value` / `const N = value`
                     if st->type == None:
                         fatal_at(self->file, st->pos, "cannot infer type of '%s'; add an explicit type", st->name)
+                    # inferring from a ref-returning call yields the POINTER, not
+                    # a new ref: a ref is opted into by spelling it (69.1)
+                    if st->type->kind == TY_PTR and st->type->is_ref:
+                        drt: *Type = self->a->alloc(sizeof(Type))
+                        *drt = *st->type
+                        drt->is_ref = False
+                        st->type = drt
                     self->resolve_type(st->type)
                     self->infer_array_len(st->type, st->init)
                     self->require_complete(st->type, st->pos)
+                # `v: Vec = Vec(1.0, 2.0)` — the constructor IS the whole
+                # initializer, so the compound literal buys nothing: a brace list
+                # says the same thing, and says it in C89 too.
+                self->flatten_complit(st->type, st->init)
                 if not st->is_extern:
                     self->require_defined(st->type, st->pos)
                     if is_void_val(st->type):
@@ -3539,6 +3966,7 @@ struct Sema:
                 self->locals[self->nlocals - 1].pos = st->pos
                 if st->init != None or st->is_static or st->is_extern:
                     self->locals[self->nlocals - 1].assigned = True
+                self->locals[self->nlocals - 1].nn = self->nn_of_expr(st->init)
                 return
             case ST_ASSIGN:
                 # Python-style inference: `name = expr` with `name` not yet
@@ -3549,6 +3977,12 @@ struct Sema:
                     ity: *Type = self->infer_type(st->rhs)
                     if ity == None:
                         fatal_at(self->file, st->pos, "cannot infer type of '%s'; declare it with an explicit type ('%s: T = ...')", st->lhs->text, st->lhs->text)
+                    if ity->kind == TY_PTR and ity->is_ref:
+                        # inference strips ref-ness: what flows in is the pointer
+                        irt: *Type = self->a->alloc(sizeof(Type))
+                        *irt = *ity
+                        irt->is_ref = False
+                        ity = irt
                     # `nonlocal x`: the declaration is HOISTED to function scope —
                     # the variable survives this block (Python's if/else idiom)
                     if self->fn_nonlocals.has(st->lhs->text):
@@ -3569,6 +4003,7 @@ struct Sema:
                         .is_const = False
                     self->resolve_type(st->type)
                     self->scope_add(st->name, st->type)
+                    self->locals[self->nlocals - 1].nn = self->nn_of_expr(st->init)
                     return
                 wsi: i32 = self->sym_index(st->lhs->text) if st->lhs != None and st->lhs->kind == EX_IDENT else -1
                 if wsi >= 0 and self->locals[wsi].byref == PK_IN:
@@ -3600,11 +4035,17 @@ struct Sema:
                     fatal_at(self->file, st->pos, "cannot assign to a function")
                 if st->op == TK_ASSIGN:
                     self->check_assign_types(st->pos, salt, self->type_of(st->rhs), st->rhs)
+                    self->nn_assign(st->lhs, self->nn_of_expr(st->rhs))
                 else:
                     self->check_compound_types(st->pos, st->op, st->lhs, st->rhs)
+                    self->nn_assign(st->lhs, 0)
                 return
             case ST_EXPR, ST_RETURN:
                 self->check_expr(st->expr)
+                if st->kind == ST_RETURN and st->expr != None and self->cur_ret != None and self->cur_ret->kind == TY_PTR and self->cur_ret->is_ref and not self->in_chdr:
+                    if st->expr->kind == EX_NONE:
+                        fatal_at(self->file, st->pos, "a ref return is never None (69.1) — return a pointer (*T) if absence is a state")
+                    st->expr = self->bind_ref(st->expr, self->cur_ret, st->pos, "ref return")
                 if st->kind == ST_EXPR and not self->in_chdr and st->expr != None and self->expr_no_effect(st->expr):
                     cdiag_at(self->file, st->pos, "unused-value", WD_WARN, "expression result unused")
                 if not self->in_chdr and st->expr != None:
@@ -3654,13 +4095,33 @@ struct Sema:
                     st->if_sel = -2
                 # checks only the live branch once folded (dead branches are left out)
                 if st->if_sel == -1:
+                    # null facts (69.7): each branch sees what its condition
+                    # proves; later elifs (and the else) see the accumulated
+                    # NEGATIONS of the ones that did not take. After the if,
+                    # facts survive only when every then-branch exits — the
+                    # `if p == None: return` idiom leaves p proven behind it.
+                    nnbase: *i32 = self->nn_save()
+                    allcut: bool = st->else_block == None
                     for i in range(st->nconds):
                         self->check_expr(st->conds[i])
                         self->require_scalar(st->conds[i], "if condition")
                         self->check_cond_assign(st->conds[i])
+                        nnsnap: *i32 = self->nn_save()
+                        self->apply_cond_facts(st->conds[i], True)
                         self->check_block(st->blocks[i])
+                        self->nn_restore(nnsnap)
+                        self->apply_cond_facts(st->conds[i], False)
+                        if not block_terminates(st->blocks[i]):
+                            allcut = False
                     if st->else_block != None:
                         self->check_block(st->else_block)
+                    if not allcut:
+                        # merge point: back to base, minus whatever ANY branch
+                        # may have written (a fact must hold on every path)
+                        self->nn_restore(nnbase)
+                        for i in range(st->nconds):
+                            self->nn_kill_writes(st->blocks[i])
+                        self->nn_kill_writes(st->else_block)
                 elif st->if_sel >= 0 and st->if_sel < st->nconds:
                     self->check_block(st->blocks[st->if_sel])
                 elif st->if_sel == st->nconds:
@@ -3670,9 +4131,18 @@ struct Sema:
                 self->check_expr(st->cond)
                 self->require_scalar(st->cond, "loop condition")
                 self->check_cond_assign(st->cond)
+                # the back edge replays the body: a fact on anything the body
+                # writes cannot enter it — NOR survive the loop (the kill runs
+                # BEFORE the snapshot, so what the loop may have changed stays
+                # unknown after it). What the body derives inside stays inside.
+                self->nn_kill_writes(st->body)
+                lsnap: *i32 = self->nn_save()
+                if st->kind == ST_WHILE:
+                    self->apply_cond_facts(st->cond, True)
                 self->loop_depth += 1
                 self->check_block(st->body)
                 self->loop_depth -= 1
+                self->nn_restore(lsnap)
                 return
             case ST_FOR:
                 self->check_expr(st->from)
@@ -3692,9 +4162,12 @@ struct Sema:
                         self->locals[fvi2].written = True
                         self->locals[fvi2].read = True
                         self->locals[fvi2].used = True
+                self->nn_kill_writes(st->body)   # the back edge (69.7) — and the
+                fsnap: *i32 = self->nn_save()    #   kill survives the loop too
                 self->loop_depth += 1
                 self->check_block(st->body)
                 self->loop_depth -= 1
+                self->nn_restore(fsnap)
                 return
             case ST_CFOR:
                 self->scope_push()   # C99: the for-init declaration scopes to the LOOP
@@ -3707,9 +4180,14 @@ struct Sema:
                 self->check_cond_assign(st->cond)
                 if st->for_post != None:
                     self->check_stmt(st->for_post)
+                self->nn_kill_writes(st->body)   # the back edge (69.7) — and the
+                if st->for_post != None and st->for_post->kind == ST_ASSIGN:
+                    self->nn_assign(st->for_post->lhs, 0)
+                cfsnap: *i32 = self->nn_save()   #   kill survives the loop too
                 self->loop_depth += 1
                 self->check_block(st->body)
                 self->loop_depth -= 1
+                self->nn_restore(cfsnap)
                 self->scope_pop()
                 return
             case ST_MATCH:
@@ -3755,9 +4233,12 @@ struct Sema:
                             mvals = vec_grow(mvals, mn, ref mcap, sizeof(*mvals))
                             mvals[mn] = mv
                             mn += 1
+                    msnap: *i32 = self->nn_save()   # facts stay inside the case
                     self->sw_depth += 1
                     self->check_block(st->cases[j]->body)
                     self->sw_depth -= 1
+                    self->nn_restore(msnap)
+                    self->nn_kill_writes(st->cases[j]->body)   # merge point
                 self->check_enum_exhaustive(st->pos, self->type_of(st->subject), mvals, mn, mdef, "match")
                 free(mvals)
                 return
@@ -3797,7 +4278,11 @@ struct Sema:
                 return
             case ST_DEFER:
                 self->check_defer_body(st->body, 0, 0)
+                # the body runs at block EXIT: today's facts won't hold there (69.7)
+                dsnap: *i32 = self->nn_save()
+                self->nn_clear_all()
                 self->check_block(st->body)
+                self->nn_restore(dsnap)
                 return
             case ST_BLOCK:
                 self->check_block(st->body)
@@ -3857,9 +4342,12 @@ struct Sema:
                 self->check_enum_exhaustive(st->pos, swt, swvals, swn, swndef > 0, "switch")
                 free(swvals)
                 free(swposs)
+                swsnap: *i32 = self->nn_save()
                 self->sw_depth += 1
                 self->check_block(st->body)
                 self->sw_depth -= 1
+                self->nn_restore(swsnap)
+                self->nn_kill_writes(st->body)   # merge point
                 return
             case ST_BREAK:
                 if self->loop_depth == 0 and self->sw_depth == 0:
@@ -3868,6 +4356,7 @@ struct Sema:
             case ST_CASE:
                 if self->sw_depth == 0:
                     fatal_at(self->file, st->pos, "'%s' label outside a switch", "case" if st->expr != None else "default")
+                self->nn_clear_all()   # a jump target, like a label (69.7)
                 return
             case ST_CONTINUE:
                 if self->loop_depth == 0:
@@ -3876,7 +4365,11 @@ struct Sema:
             # No `case _:` ON PURPOSE — see collect_vars in backend_qbe.p. These
             # three carry nothing for this pass to check; every OTHER kind does,
             # so a new one must not be able to reach here unnoticed.
-            case ST_GOTO, ST_LABEL, ST_PASS:
+            case ST_LABEL:
+                # a goto may land here from anywhere: every fact dies (69.7)
+                self->nn_clear_all()
+                return
+            case ST_GOTO, ST_PASS:
                 return
 
     static def block_prepend(self: *Sema, b: *Block, st: *Stmt):
@@ -3886,6 +4379,91 @@ struct Sema:
             ns[i + 1] = b->stmts[i]
         b->stmts = ns
         b->n += 1
+
+    # `for v in it:` where `it` is a struct/record (or pointer to one) that
+    # implements Iterable. The FOR becomes, in place, its OWN BLOCK:
+    #
+    #     {
+    #         __itN: *T = &it        (or `it`, when it is already a pointer)
+    #         v: <ret of next>
+    #         while __itN->has_next():
+    #             v = __itN->next()
+    #             <body>
+    #     }
+    #
+    # A block, so the cursor and the loop variable die with the loop — two
+    # `for v in ...` in a row reuse the name, exactly as 64.1's block scope
+    # says — and so the whole thing goes through check_block like hand-written
+    # code: the method calls resolve through the lookup the impl block filled,
+    # and no backend learns anything.
+    static def lower_for_iterable(self: *Sema, st: *Stmt, at: *Type, d1: **Stmt, d2: **Stmt):
+        base: *Type = at
+        nptr: i32 = 0
+        while base != None and base->kind == TY_PTR:
+            base = base->inner
+            nptr += 1
+        si: *SInfo = self->val_struct(base)
+        if si == None or nptr > 1:
+            fatal_at(self->file, st->pos, "`for v in x` takes a sized array or a type that implements Iterable, not %s", render_type_p(self->a, at))
+        if not self->timpls.has(self->a->printf("Iterable/%s", si->name)):
+            fatal_at(self->file, st->pos, "`for v in x` over '%s': the type has to implement Iterable — the bound is nominal (68.1), so write `implement Iterable for %s:`", si->name, si->name)
+        nx: *Func = sinfo_method(si, "next")
+        hn: *Func = sinfo_method(si, "has_next")
+        if nx == None or hn == None:
+            fatal_at(self->file, st->pos, "'%s' implements Iterable but is missing %s", si->name, "next()" if nx == None else "has_next()")
+        # the cursor, bound ONCE — the expression may have effects, and a loop
+        # that re-evaluated it would run them every turn
+        cn: const *char = self->a->printf("__it%d", self->for_ctr)
+        self->for_ctr += 1
+        cd: *Stmt = st_new(self->a, ST_VAR, st->pos)
+        cd->name = cn
+        cd->type = ty_ptr(self->a, ty_name(self->a, si->name))
+        if nptr == 1:
+            cd->init = st->to
+        else:
+            amp: *Expr = ex_new(self->a, EX_UNARY, st->pos)
+            amp->op = TK_AMP
+            amp->lhs = st->to
+            cd->init = amp
+        vd: *Stmt = st_new(self->a, ST_VAR, st->pos)
+        vd->name = st->var2
+        vd->type = nx->ret if nx->ret != None else ty_name(self->a, "int")
+        # `v = __it->next()` opens the body
+        nc: *Expr = ex_new(self->a, EX_CALL, st->pos)
+        nf: *Expr = ex_new(self->a, EX_FIELD, st->pos)
+        nf->op = TK_ARROW
+        nf->lhs = mk_ident(self->a, cn, st->pos)
+        nf->field = "next"
+        nc->lhs = nf
+        bind: *Stmt = st_new(self->a, ST_ASSIGN, st->pos)
+        bind->lhs = mk_ident(self->a, st->var2, st->pos)
+        bind->op = TK_ASSIGN
+        bind->rhs = nc
+        self->block_prepend(st->body, bind)
+        hc: *Expr = ex_new(self->a, EX_CALL, st->pos)
+        hf: *Expr = ex_new(self->a, EX_FIELD, st->pos)
+        hf->op = TK_ARROW
+        hf->lhs = mk_ident(self->a, cn, st->pos)
+        hf->field = "has_next"
+        hc->lhs = hf
+        wl: *Stmt = st_new(self->a, ST_WHILE, st->pos)
+        wl->cond = hc
+        wl->body = st->body
+        blk: *Block = self->a->alloc(sizeof(Block))
+        blk->stmts = self->a->alloc(usize(3) * sizeof(*blk->stmts))
+        blk->stmts[0] = cd
+        blk->stmts[1] = vd
+        blk->stmts[2] = wl
+        blk->n = 3
+        st->kind = ST_BLOCK
+        st->body = blk
+        st->var = None
+        st->var2 = None
+        st->from = None
+        st->to = None
+        st->step = None
+        *d1 = None
+        *d2 = None
 
     static def lower_for_iter(self: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt):
         *d1 = None
@@ -3899,8 +4477,18 @@ struct Sema:
             at: *Type = self->type_of(arr)
             if at == None:
                 at = self->infer_type(arr)
-            if at == None or at->kind != TY_ARRAY or at->arr_len == None:
-                fatal_at(self->file, st->pos, "for ... in enumerate(x)/`for v in x`: x must be a sized array")
+            # `for v in it` over a type that implements Iterable (68.9): the
+            # protocol of 40.3, written out — a cursor bound once, then
+            # `while has_next(): v = next()`. Everything here is a DIRECT call
+            # the method lookup resolves: no vtable, no allocation, no runtime,
+            # which is the condition the request set. Nominal, like every other
+            # use of a trait now (68.1): the pair `implement Iterable for T:`
+            # has to exist.
+            if at != None and at->kind != TY_ARRAY:
+                self->lower_for_iterable(st, at, d1, d2)
+                return
+            if at == None or at->arr_len == None:
+                fatal_at(self->file, st->pos, "`for v in x` takes a sized array or a type that implements Iterable (68.9)")
             idecl: *Stmt = st_new(self->a, ST_VAR, st->pos)
             idecl->name = st->var
             idecl->type = ty_name(self->a, "usize")
@@ -4349,29 +4937,7 @@ struct Sema:
                             si2->nmethods += 1
 
     static def cpp_capture(self: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char:
-        cpp: const *char = self->cc->cpp if self->cc->cpp != None else "cc"
-        cmd: const *char
-        if is_sys:
-            cmd = self->a->printf("printf '#include <%s>\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir)
-        else:
-            cmd = self->a->printf("printf '#include \"%s\"\\n' | %s %s -I%s -x c - 2>/dev/null", path, cpp, flags, dir)
-        f: *FILE = popen(cmd, "r")
-        if f == None:
-            fatal("could not run '%s -E' to ingest C header '%s' (see --cpp / PLANGC_CPP)", cpp, path)
-        b: StrBuf = {0}
-        chunk: char[4097]
-        while True:
-            n: usize = fread(&chunk[0], 1, 4096, f)
-            if n == 0:
-                break
-            chunk[n] = '\0'
-            b.puts(&chunk[0])
-        rc: i32 = pclose(f)
-        if rc != 0:
-            fatal("'%s' failed to preprocess header '%s' (not found? see --cpp / PLANGC_CPP)", cpp, path)
-        out: const *char = self->a->strdup(b.data if b.data != None else "")
-        b.deinit()
-        return out
+        return cpp_capture_ex(self->a, self->cc->cpp, flags, path, is_sys, dir)
 
     static def macro_put(self: *Sema, name: const *char, v: CVal):
         cp: *CVal = self->a->alloc(sizeof(CVal))
@@ -4455,7 +5021,7 @@ struct Sema:
         free(av)
 
     static def ingest_c_header(self: *Sema, m: *Module, d: *Decl):
-        dir: const *char = dir_of(self->a, m->path)
+        dir: const *char = path_dir(self->a, m->path)
         key: const *char = self->a->printf("<c>%s", d->import_path)
         # declarations: cache by path (a header is parsed once per compilation)
         cached: *Module = None
@@ -4490,6 +5056,95 @@ struct Sema:
     # declare/implement X<...>: monomorphizes the template and turns the node into
     # a concrete DL_STRUCT (declare: fields + prototypes; implement: bodies only),
     # which follows the normal registration and emission flow
+    # `implement Trait for Type:` (67.2) — attaches the bodies to Type as
+    # METHODS, so a call inside a monomorphized generic resolves through the
+    # lookup that already exists. No dispatch is invented and no vtable is built:
+    # that is exactly what "static form only" (67.1) buys.
+    static def trait_impl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
+        tr: *Decl = self->traits.get_or(d->name, None)
+        if tr == None:
+            fatal_at(self->file, d->pos, "unknown trait '%s'", d->name)
+        si: *SInfo = self->find_struct(d->trait_for)
+        if si == None:
+            fatal_at(self->file, d->pos, "unknown type '%s'", d->trait_for)
+        # THE ORPHAN RULE (67.3): at most one implementation per (trait, type),
+        # and this module must own one of the two. Without it, two modules
+        # implement the same pair differently and the behaviour depends on who
+        # linked — with the error landing far from the cause.
+        key: const *char = self->a->printf("%s/%s", d->name, d->trait_for)
+        if self->timpls.has(key):
+            fatal_at(self->file, d->pos, "'%s' is already implemented for '%s'", d->name, d->trait_for)
+        self->timpls.add(key)
+        if not decl_in_module(m, d->name) and not decl_in_module(m, d->trait_for):
+            fatal_at(self->file, d->pos, "this module declares neither the trait '%s' nor the type '%s', so it cannot implement one for the other (the orphan rule keeps two modules from disagreeing)", d->name, d->trait_for)
+        # every signature the trait names has to be here, and nothing else
+        for i in range(tr->nmethods):
+            want: *Func = tr->methods[i]
+            got: *Func = None
+            for j in range(d->nmethods):
+                if strcmp(d->methods[j]->name, want->name) == 0:
+                    got = d->methods[j]
+                    break
+            if got == None:
+                fatal_at(self->file, d->pos, "'%s' for '%s' is missing '%s'", d->name, d->trait_for, want->name)
+            if got->nparams != want->nparams:
+                fatal_at(self->file, got->pos, "'%s' takes %d parameter(s) in trait '%s', %d given", want->name, want->nparams, d->name, got->nparams)
+        for j in range(d->nmethods):
+            found: bool = False
+            for i in range(tr->nmethods):
+                if strcmp(tr->methods[i]->name, d->methods[j]->name) == 0:
+                    found = True
+                    break
+            if not found:
+                fatal_at(self->file, d->methods[j]->pos, "'%s' is not a method of trait '%s'", d->methods[j]->name, d->name)
+        # registered as the type's own methods
+        for j in range(d->nmethods):
+            mth: *Func = d->methods[j]
+            si->methods = vec_grow(si->methods, si->nmethods, ref si->cmethods, sizeof(*si->methods))
+            si->methods[si->nmethods] = mth
+            si->nmethods += 1
+            if m->is_header:
+                mth->in_header = True
+            self->register_func(mth)
+        for j in range(d->nmethods):
+            if check_bodies:
+                self->check_func_body(d->methods[j])
+        # The node becomes the shape the back ends already emit for "a struct
+        # redeclared only to carry method bodies": no fields, no definition,
+        # just the functions. So no back end learns anything about traits —
+        # after this point there is nothing left of the trait but the methods it
+        # required, which is the same thing that makes it cost nothing at run time.
+        with d:
+            .kind = DL_STRUCT
+            .name = d->trait_for
+            .fields = None
+            .nfields = 0
+            .is_def = False
+            .is_fwd = False
+
+    # does `t` satisfy `trait`? It does when it has every method the trait names.
+    # The impl block registered them as the type's own methods, so this is the
+    # same lookup a hand-written call would do.
+    static def check_bound(self: *Sema, t: *Type, trait: const *char, tparam: const *char, pos: Pos):
+        tr: *Decl = self->traits.get_or(trait, None)
+        if tr == None:
+            fatal_at(self->file, pos, "unknown trait '%s' in the bound on '%s'", trait, tparam)
+        base: *Type = t
+        while base != None and base->kind == TY_PTR:
+            base = base->inner
+        si: *SInfo = self->val_struct(base)
+        if si == None:
+            fatal_at(self->file, pos, "'%s' = %s does not implement '%s': only a struct or record can (write `implement %s for T:`)", tparam, render_type_p(self->a, t), trait, trait)
+        # NOMINAL, as in pscript (66.2/68.1): having the methods is not enough —
+        # the pair has to be DECLARED with `implement X for T:`. The two
+        # languages answer the same question the same way, which is what 65
+        # asked for, and 'satisfies by accident' dies on this side too.
+        if not self->timpls.has(self->a->printf("%s/%s", trait, si->name)):
+            fatal_at(self->file, pos, "'%s' = '%s' does not DECLARE '%s': the bound is nominal (68.1) — write `implement %s for %s:`", tparam, si->name, trait, trait, si->name)
+        for i in range(tr->nmethods):
+            if sinfo_method(si, tr->methods[i]->name) == None:
+                fatal_at(self->file, pos, "'%s' = '%s' does not implement '%s': '%s' is missing (write `implement %s for %s:`)", tparam, si->name, trait, tr->methods[i]->name, trait, si->name)
+
     static def instantiate(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         g: *Type = d->type
 
@@ -4537,6 +5192,12 @@ struct Sema:
                 fatal_at(self->file, d->pos, "'%s' expects %d type argument(s), got %d", g->name, ftpl->ntparams, g->ntargs)
             for fi in range(g->ntargs):
                 self->resolve_type(g->targs[fi])
+                # the bound (67.1) is checked HERE too, before the body is
+                # cloned: otherwise the failure surfaces as "no method named
+                # size" from inside the clone, which names the symptom instead
+                # of the contract
+                if ftpl->tbounds != None and ftpl->tbounds[fi] != None:
+                    self->check_bound(g->targs[fi], ftpl->tbounds[fi], ftpl->tparams[fi], d->pos)
             fmangled: *char = self->mangle_instance(g)
             fsub: Subst = {ftpl->tparams, g->targs, g->ntargs}
             want_body: bool = d->kind == DL_IMPLEMENT
@@ -4633,18 +5294,423 @@ struct Sema:
             .nmethods = tpl->nmethods
         self->register_decl(m, d, check_bodies)
 
+    # ---------- qualified names: `import "x.ph" as ns` (42.4) ----------
+    # The alias is a SPELLING, not a scope: P links flat, so `ns.f` resolves to
+    # the very same symbol `f` names. What the alias buys is a CHECK — the
+    # member has to be declared in that module — plus a reader who can see at
+    # the call site where a name comes from. The flat spelling keeps working,
+    # which is why adding an alias never breaks an existing file.
+    static def ns_module(self: *Sema, name: const *char) -> *Module:
+        if self->cur_mod == None or name == None:
+            return None
+        for i in range(self->cur_mod->nns):
+            if strcmp(self->cur_mod->ns_names[i], name) == 0:
+                return self->cur_mod->ns_mods[i]
+        return None
+
+    # a real declaration always wins over an alias: `ns` used as a variable,
+    # function, type or constant is that thing, exactly as before the import
+    static def ns_shadowed(self: *Sema, name: const *char) -> bool:
+        return self->sym_index(name) >= 0 or self->globals.has(name) or self->funcs.has(name) or self->types.has(name) or self->enumconsts.has(name)
+
+    # is `member` declared by module `m` itself? Imports of `m` do NOT re-export
+    # (Python's rule): `import "parser.ph" as ps` gives ps.parse_tokens, and the
+    # types parser.ph itself imported stay behind their own module.
+    static def ns_has(self: *Sema, m: *Module, member: const *char) -> bool:
+        for i in range(m->ndecls):
+            d: *Decl = m->decls[i]
+            match d->kind:
+                case DL_FUNC:
+                    if d->func != None and d->func->name != None and strcmp(d->func->name, member) == 0:
+                        return True
+                case DL_VAR, DL_STRUCT, DL_UNION, DL_ENUM:
+                    if d->name != None and strcmp(d->name, member) == 0:
+                        return True
+                    for j in range(d->nitems):
+                        if d->items[j].name != None and strcmp(d->items[j].name, member) == 0:
+                            return True
+                case DL_TRAIT:
+                    if d->name != None and strcmp(d->name, member) == 0:
+                        return True
+                case DL_IMPORT, DL_DECLARE, DL_IMPLEMENT:
+                    pass
+        return False
+
+    # rewrites `ns.name` to the plain identifier IN PLACE, True when it did.
+    # Both places a qualified name can appear go through here: as a value, and
+    # as a CALLEE — where it has to happen before the dot is read as a method
+    # receiver, and before the callee dispatch that turns `T(x)` into a cast.
+    static def try_ns_ref(self: *Sema, e: *Expr) -> bool:
+        if e == None or e->kind != EX_FIELD or e->op != TK_DOT:
+            return False
+        if e->lhs == None or e->lhs->kind != EX_IDENT or e->lhs->text == None or e->field == None:
+            return False
+        if self->ns_shadowed(e->lhs->text) or self->ns_module(e->lhs->text) == None:
+            return False
+        qual: const *char = self->a->printf("%s.%s", e->lhs->text, e->field)
+        with e:
+            .kind = EX_IDENT
+            .text = self->ns_plain(qual, e->pos)
+            .lhs = None
+            .field = None
+        return True
+
+    # splits "ns.member" and validates it; returns the plain member name
+    static def ns_plain(self: *Sema, dotted: const *char, pos: Pos) -> const *char:
+        dot: const *char = strchr(dotted, '.')
+        ns: const *char = self->a->strndup(dotted, usize(dot - dotted))
+        member: const *char = dot + 1
+        m: *Module = self->ns_module(ns)
+        # a Type carries no position (the AST never needed one): a zero position
+        # means "report against the file, not a line" rather than `file:0:0`
+        if m == None:
+            if pos.line == 0:
+                fatal("%s: '%s' is not an import alias of this file (write `import \"...\" as %s` to make one)", self->file, ns, ns)
+            fatal_at(self->file, pos, "'%s' is not an import alias of this file (write `import \"...\" as %s` to make one)", ns, ns)
+        if not self->ns_has(m, member):
+            if pos.line == 0:
+                fatal("%s: module '%s' declares no '%s'", self->file, ns, member)
+            fatal_at(self->file, pos, "module '%s' declares no '%s'", ns, member)
+        return member
+
+    # `record X:` (65.1) — X must be PURE BYTES: primitives, enums, other
+    # records and fixed arrays of those, and nothing else.
+    #
+    # The rule is one sentence, but every clause of it pays for something: with
+    # no pointer inside, a value of X can be memcpy'd, written to a file, sent to
+    # another process and compared field by field, and none of those silently
+    # break the day someone adds a `name: const *char`. That is the whole feature
+    # — it costs nothing at run time and it is a guarantee C cannot state.
+    static def check_pure_bytes(self: *Sema, si: *SInfo, d: *Decl):
+        for i in range(si->nfields):
+            f: *Field = &si->fields[i]
+            t: *Type = f->type
+            while t != None and t->kind == TY_ARRAY:
+                t = t->inner     # `T[N]` of pure bytes is pure bytes
+            if t == None:
+                continue
+            if t->kind == TY_PTR:
+                fatal_at(self->file, f->pos, "record '%s': field '%s' is a pointer — a record is pure bytes, so it can be copied, written out and compared as itself. Use `struct` if it has to hold one.", si->name, f->name)
+            if t->kind == TY_FUNC:
+                fatal_at(self->file, f->pos, "record '%s': field '%s' is a function — a record is pure bytes. Use `struct`.", si->name, f->name)
+            if t->kind != TY_NAME:
+                continue
+            fsi: *SInfo = self->find_struct(t->name)
+            if fsi == None:
+                continue    # a primitive, an enum, or a C type: nothing to descend
+            if fsi->is_union:
+                fatal_at(self->file, f->pos, "record '%s': field '%s' is a union — its bytes have no single meaning, so it cannot be compared or written out. Use `struct`.", si->name, f->name)
+            if not fsi->is_record:
+                fatal_at(self->file, f->pos, "record '%s': field '%s' has type '%s', which is a struct — only another `record` is known to be pure bytes.", si->name, f->name, t->name)
+
+    # `a == b` / `a != b` between two values of the same `record` (65.1).
+    # Rewritten into a chain of FIELD comparisons, never a memcmp: the padding a
+    # C compiler inserts between fields holds whatever was on the stack, so
+    # memcmp would compare garbage and report a difference that is not there.
+    # Returns False when this is not a record comparison, and the normal
+    # "structs are not scalars" error follows.
+    static def record_eq(self: *Sema, e: *Expr) -> bool:
+        lsi: *SInfo = self->val_struct(self->type_of(e->lhs))
+        rsi: *SInfo = self->val_struct(self->type_of(e->rhs))
+        if lsi == None or rsi == None or not lsi->is_record or lsi != rsi:
+            return False
+        ne: bool = e->op == TK_NE
+        # The chain reads each side once PER FIELD, so a side that is not a plain
+        # designator — a call, a constructor — would run that many times. Each
+        # one is bound to a hidden variable first, evaluated exactly once.
+        pre: *Expr = None
+        la: *Expr = self->eq_operand(e->lhs, ref pre)
+        rb: *Expr = self->eq_operand(e->rhs, ref pre)
+        chain: *Expr = self->record_eq_chain(lsi, la, rb, e->pos)
+        if pre != None:
+            chain = self->comma_join(pre, chain, e->pos)
+            chain->parened = True
+        if ne:
+            n: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+            n->op = TK_NOT
+            n->lhs = chain
+            n->parened = True
+            chain = n
+        *e = *chain
+        return True
+
+    # a side of a record comparison: a plain designator is used as is, anything
+    # else is evaluated once into a hidden variable
+    static def eq_operand(self: *Sema, e: *Expr, ref pre: *Expr) -> *Expr:
+        if is_designator(e):
+            return e
+        t: *Type = self->type_of(e)
+        name: const *char = self->a->printf("__re%d", self->rc_ctr)
+        self->rc_ctr += 1
+        hd: *Stmt = st_new(self->a, ST_VAR, e->pos)
+        hd->name = name
+        hd->type = t
+        self->vla_hoist_add(hd)
+        hp: *Type = self->a->alloc(sizeof(Type))
+        *hp = *t
+        self->fn_hoisted.put(name, hp)
+        asg: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
+        asg->op = TK_ASSIGN
+        asg->lhs = mk_ident(self->a, name, e->pos)
+        asg->rhs = e
+        asg->parened = True
+        pre = self->comma_join(pre, asg, e->pos)
+        return mk_ident(self->a, name, e->pos)
+
+    # `a.f0 == b.f0 and a.f1 == b.f1 and ...`, descending into nested records and
+    # unrolling fixed arrays (their length is a compile-time constant, and a
+    # record is small by construction — it is the thing that crosses boundaries)
+    static def record_eq_chain(self: *Sema, si: *SInfo, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
+        acc: *Expr = None
+        for i in range(si->nfields):
+            f: *Field = &si->fields[i]
+            fa: *Expr = self->mk_field(a, f->name, pos)
+            fb: *Expr = self->mk_field(b, f->name, pos)
+            acc = self->eq_join(acc, self->record_eq_value(f->type, fa, fb, pos), pos)
+        if acc == None:
+            # a record with no fields: every value of it is every other value
+            acc = ex_new(self->a, EX_TRUE, pos)
+        return acc
+
+    static def record_eq_value(self: *Sema, t: *Type, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
+        if t != None and t->kind == TY_ARRAY:
+            n: i64 = 0
+            if t->arr_len == None or not self->const_len(t->arr_len, ref n) or n < 0:
+                fatal_at(self->file, pos, "comparing a record with an array field of unknown length")
+            acc: *Expr = None
+            for k in range(i32(n)):
+                idx: *Expr = ex_new(self->a, EX_NUMBER, pos)
+                idx->text = self->a->printf("%d", k)
+                ia: *Expr = ex_new(self->a, EX_INDEX, pos)
+                ia->lhs = a
+                ia->rhs = idx
+                ib: *Expr = ex_new(self->a, EX_INDEX, pos)
+                ib->lhs = b
+                ib->rhs = idx
+                acc = self->eq_join(acc, self->record_eq_value(t->inner, ia, ib, pos), pos)
+            if acc == None:
+                acc = ex_new(self->a, EX_TRUE, pos)
+            return acc
+        nsi: *SInfo = self->val_struct(t)
+        if nsi != None:
+            return self->record_eq_chain(nsi, a, b, pos)
+        cmp: *Expr = ex_new(self->a, EX_BINARY, pos)
+        cmp->op = TK_EQ
+        cmp->lhs = a
+        cmp->rhs = b
+        cmp->parened = True
+        return cmp
+
+    static def eq_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr:
+        if acc == None:
+            return one
+        j: *Expr = ex_new(self->a, EX_BINARY, pos)
+        j->op = TK_AND
+        j->lhs = acc
+        j->rhs = one
+        return j
+
+    static def mk_field(self: *Sema, base: *Expr, name: const *char, pos: Pos) -> *Expr:
+        f: *Expr = ex_new(self->a, EX_FIELD, pos)
+        f->op = TK_DOT
+        f->lhs = base
+        f->field = name
+        return f
+
+    static def const_len(self: *Sema, e: *Expr, ref out_n: i64) -> bool:
+        ok: bool = True
+        v: i64 = self->ceval(e, ref ok)
+        if not ok:
+            return False
+        out_n = v
+        return True
+
+    # `(T){a, b}` -> `(__rcN.f0 = a, __rcN.f1 = b, __rcN)` with `__rcN: T`
+    # hoisted to the function entry. Valid C89: a comma expression of plain
+    # assignments, evaluated where it is written, so a constructor inside a loop
+    # still builds a fresh value each turn.
+    static def complit_to_temp(self: *Sema, e: *Expr, si: *SInfo):
+        name: const *char = self->a->printf("__rc%d", self->rc_ctr)
+        self->rc_ctr += 1
+        hd: *Stmt = st_new(self->a, ST_VAR, e->pos)
+        hd->name = name
+        hd->type = e->cast_type
+        self->vla_hoist_add(hd)          # prepended at function entry
+        hp: *Type = self->a->alloc(sizeof(Type))
+        *hp = *e->cast_type
+        self->fn_hoisted.put(name, hp)
+        base: *Expr = mk_ident(self->a, name, e->pos)
+        chain: *Expr = None
+        for i in range(e->nargs):
+            if i >= si->nfields:
+                break
+            chain = self->comma_join(chain, self->fill_field(self->mk_field(base, si->fields[i].name, e->pos), si->fields[i].type, e->args[i], e->pos), e->pos)
+        if chain == None:
+            *e = *base
+            return
+        *e = *self->comma_join(chain, base, e->pos)
+
+    # one assignment, descending into nested aggregates because C89 cannot
+    # assign a brace list to anything but a declaration
+    static def fill_field(self: *Sema, dst: *Expr, t: *Type, src: *Expr, pos: Pos) -> *Expr:
+        agg: bool = src != None and (src->kind == EX_COMPOUND or src->kind == EX_INITLIST)
+        if agg and t != None and t->kind == TY_ARRAY:
+            n: i64 = 0
+            if t->arr_len == None or not self->const_len(t->arr_len, ref n):
+                fatal_at(self->file, pos, "cannot build this array field under --std=c89")
+            acc: *Expr = None
+            for k in range(i32(n)):
+                if k >= src->nargs:
+                    break
+                idx: *Expr = ex_new(self->a, EX_NUMBER, pos)
+                idx->text = self->a->printf("%d", k)
+                el: *Expr = ex_new(self->a, EX_INDEX, pos)
+                el->lhs = dst
+                el->rhs = idx
+                acc = self->comma_join(acc, self->fill_field(el, t->inner, src->args[k], pos), pos)
+            if acc == None:
+                acc = ex_new(self->a, EX_NUMBER, pos)
+                acc->text = "0"
+            return acc
+        if agg:
+            nsi: *SInfo = self->val_struct(t)
+            if nsi != None:
+                acc2: *Expr = None
+                for k in range(nsi->nfields):
+                    if k >= src->nargs:
+                        break
+                    acc2 = self->comma_join(acc2, self->fill_field(self->mk_field(dst, nsi->fields[k].name, pos), nsi->fields[k].type, src->args[k], pos), pos)
+                if acc2 == None:
+                    acc2 = ex_new(self->a, EX_NUMBER, pos)
+                    acc2->text = "0"
+                return acc2
+        if t != None and t->kind == TY_ARRAY:
+            fatal_at(self->file, pos, "cannot assign to an array field under --std=c89 (write the value into a variable first)")
+        asg: *Expr = ex_new(self->a, EX_ASSIGN, pos)
+        asg->op = TK_ASSIGN
+        asg->lhs = dst
+        asg->rhs = src
+        asg->parened = True
+        return asg
+
+    static def comma_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr:
+        if acc == None:
+            return one
+        c: *Expr = ex_new(self->a, EX_COMMA, pos)
+        c->lhs = acc
+        c->rhs = one
+        return c
+
+    # a compound literal that IS the whole initializer of a matching declaration
+    # is just a brace list wearing a cast
+    static def flatten_complit(self: *Sema, t: *Type, init: *Expr):
+        if init == None or init->kind != EX_COMPOUND or t == None or init->cast_type == None:
+            return
+        if t->kind != TY_NAME or init->cast_type->kind != TY_NAME or t->name == None or init->cast_type->name == None:
+            return
+        if strcmp(t->name, init->cast_type->name) != 0:
+            return
+        init->kind = EX_INITLIST
+        init->cast_type = None
+
+    # `Vec(1.0, 2.0)` / `Vec(y=2.0, x=1.0)` — the record constructor (65.1).
+    # Becomes a C compound literal, which is also the first way P has to write an
+    # aggregate VALUE inline: before this, a struct value needed a variable to
+    # live in. Named arguments become designated initializers, and P already
+    # lowers those to positional under --std=c89.
+    static def record_ctor(self: *Sema, e: *Expr, si: *SInfo):
+        named: bool = False
+        positional: bool = False
+        for i in range(e->nargs):
+            if e->args[i] != None and e->args[i]->kind == EX_DESIG and e->args[i]->field != None:
+                named = True
+            else:
+                positional = True
+        if named and positional:
+            fatal_at(self->file, e->pos, "%s(...): mixing named and positional fields", si->name)
+        if positional and e->nargs > si->nfields:
+            fatal_at(self->file, e->pos, "%s(...) takes %d field(s), %d given", si->name, si->nfields, e->nargs)
+        if named:
+            # Named form must name EVERY field. Partial named construction would
+            # need a designated initializer to survive, and those do not exist in
+            # C89 — reordering into positional here keeps the emitted C plain in
+            # every mode, and "you left one out" is a better error than a silent
+            # zero. The positional form keeps C's trailing zero-fill.
+            byname: **Expr = self->a->alloc(usize(si->nfields) * sizeof(*byname))
+            for i in range(e->nargs):
+                a: *Expr = e->args[i]
+                slot: i32 = -1
+                for fi in range(si->nfields):
+                    if strcmp(si->fields[fi].name, a->field) == 0:
+                        slot = fi
+                        break
+                if slot < 0:
+                    sgc: Sugg
+                    sgc.init(a->field)
+                    for fi in range(si->nfields):
+                        sgc.feed(si->fields[fi].name)
+                    fatal_at(self->file, a->pos, "'%s' has no field '%s'%s", si->name, a->field, self->sugg_text(&sgc))
+                if byname[slot] != None:
+                    fatal_at(self->file, a->pos, "'%s' is given twice", a->field)
+                self->check_expr(a->lhs)
+                byname[slot] = a->lhs
+            for fi in range(si->nfields):
+                if byname[fi] == None:
+                    fatal_at(self->file, e->pos, "%s(...): field '%s' is missing (the named form names every field)", si->name, si->fields[fi].name)
+            e->args = byname
+            e->nargs = si->nfields
+        else:
+            for i in range(e->nargs):
+                self->check_expr(e->args[i])
+        ct: *Type = ty_name(self->a, si->name)
+        self->resolve_type(ct)
+        with e:
+            .kind = EX_COMPOUND
+            .cast_type = ct
+            .lhs = None
+        # C89 has no compound literal. Where the constructor is the whole
+        # initializer of a declaration it collapses to a brace list (see
+        # flatten_complit); anywhere else it is lowered to a hidden variable
+        # filled field by field. C89 is the mode that exists for the targets
+        # that gave P its reason to be, so the feature works there too rather
+        # than being refused there.
+        if self->cc != None and self->cc->std_version == 89 and not self->in_complit_init:
+            self->complit_to_temp(e, si)
+
     static def register_decl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         match d->kind:
             case DL_IMPORT:
                 if d->is_include:
                     self->ingest_c_header(m, d)
                 elif not d->import_system and ends_with(d->import_path, ".ph"):
-                    dir: const *char = dir_of(self->a, m->path)
-                    full: const *char = self->a->printf("%s/%s", dir, d->import_path)
+                    dir: const *char = path_dir(self->a, m->path)
+                    # path_join, not printf: an ABSOLUTE import path must be
+                    # taken as it stands, not glued behind the includer's
+                    # directory (which produced `a/b//abs/path`)
+                    full: const *char = path_join(self->a, dir, d->import_path)
                     sub: *Module = cc_load_module(self->cc, full)
                     self->register_module(sub, False)
+                    if d->import_alias != None:
+                        for na in range(m->nns):
+                            if strcmp(m->ns_names[na], d->import_alias) == 0:
+                                fatal_at(self->file, d->pos, "import alias '%s' is already taken in this file", d->import_alias)
+                        m->ns_names[m->nns] = (*char)(d->import_alias)
+                        m->ns_mods[m->nns] = sub
+                        m->nns += 1
+                elif d->import_alias != None:
+                    fatal_at(self->file, d->pos, "import '%s' as '%s': only a P header (.ph) has a namespace to qualify", d->import_path, d->import_alias)
+                return
+            case DL_TRAIT:
+                # A trait is a NAME plus signatures; it is emitted nowhere and
+                # takes no space. What it buys is the check at instantiation.
+                if self->traits.has(d->name):
+                    fatal_at(self->file, d->pos, "trait '%s' is declared twice", d->name)
+                self->traits.put(d->name, d)
                 return
             case DL_DECLARE, DL_IMPLEMENT:
+                if d->trait_for != None:
+                    self->trait_impl(m, d, check_bodies)
+                    return
                 self->instantiate(m, d, check_bodies)
                 return
             case DL_VAR:
@@ -4667,6 +5733,8 @@ struct Sema:
                     self->gdefs.add(d->name)
                 if not self->in_chdr and self->funcs.has(d->name) and self->globals.get_or(d->name, None) == None:
                     fatal_at(self->file, d->pos, "'%s' redeclared as a different kind of symbol", d->name)
+                if d->type != None and d->type->is_ref:
+                    fatal_at(self->file, d->pos, "'%s' cannot be a module-level ref: a ref binds at a moment; module state holds a pointer (69.1)", d->name)
                 if self->c_mod and not self->in_chdr:
                     prevt2: *Type = self->globals.get_or(d->name, None)
                     if prevt2 != None and not self->type_compat(prevt2, d->type):
@@ -4684,7 +5752,15 @@ struct Sema:
                         fatal_at(self->file, d->pos, "initializer of file-scope '%s' is not a constant expression", d->name)
                 self->globals.put(d->name, d->type)
                 if check_bodies:
+                    prevfi: bool = self->in_complit_init
+                    self->in_complit_init = names_own_type(d->type, d->init)
                     self->check_expr(d->init)
+                    self->in_complit_init = prevfi
+                    # a record constructor that IS the whole initializer of a
+                    # file-scope variable collapses to a brace list: a compound
+                    # literal is not valid at file scope in C89, and this is
+                    # better C in every mode
+                    self->flatten_complit(d->type, d->init)
                     self->check_init(d->type, d->init, d->pos)
                 # known constant: registers the value (int/float/str) for folding
                 # and pruning. `X: const i32 = 4` (P) marks const on the TYPE;
@@ -4745,6 +5821,9 @@ struct Sema:
                         si->nfields += 1
                 if not d->is_fwd:
                     si->defined = True   # a real definition: values of it may exist
+                if d->is_record:
+                    si->is_record = True
+                    self->check_pure_bytes(si, d)
                 for i in range(d->nmethods):
                     if m->is_header:
                         d->methods[i]->in_header = True
@@ -4802,7 +5881,19 @@ struct Sema:
             self->add_type(m->tdnames[ti])
 
         prev: const *char = self->file
+        prevm: *Module = self->cur_mod
         self->file = m->path
+        self->cur_mod = m
+        # namespace aliases are per FILE (42.4): sized exactly, filled by the
+        # DL_IMPORT arm below as each import is registered
+        if m->ns_names == None:
+            nsn: i32 = 0
+            for j in range(m->ndecls):
+                if m->decls[j]->kind == DL_IMPORT and m->decls[j]->import_alias != None:
+                    nsn += 1
+            if nsn > 0:
+                m->ns_names = self->a->alloc(usize(nsn) * sizeof(*m->ns_names))
+                m->ns_mods = self->a->alloc(usize(nsn) * sizeof(*m->ns_mods))
         # index the module's own functions BEFORE walking it, so a call to one
         # that is only defined further down can be diagnosed as an ordering
         # problem. Only for the module being checked: in an imported one the
@@ -4833,7 +5924,15 @@ struct Sema:
                 if usi != None and self->find_struct(m->tdnames[ti]) == None:
                     self->structs.put(m->tdnames[ti], usi)
                     self->tdalias.put(m->tdnames[ti], ut)
+            elif ut->kind == TY_NAME and ut->name != None:
+                # a typedef of a SCALAR (`pthread_t` = `unsigned long`): the C
+                # back end never needs it, but a back end that lays out structs
+                # itself does — without it the field is four bytes and every
+                # offset after it is wrong
+                if not self->tdscalar.has(m->tdnames[ti]):
+                    self->tdscalar.put(m->tdnames[ti], ut)
         self->file = prev
+        self->cur_mod = prevm
 
     static def reg_builtin(self: *Sema, name: const *char, v: CVal):
         cp: *CVal = self->a->alloc(sizeof(CVal))
@@ -4922,16 +6021,12 @@ def cc_load_module(cc: *Cc, path: const *char) -> *Module:
     defer free(bytes)
     tl: TokenList = lex(path, bytes, len, &cc->arena)
     m: *Module = parse_tokens(&cc->arena, path, tl, ends_with(path, ".ph"))
+    expand_embeds(&cc->arena, m)
     cc->mods = vec_grow(cc->mods, cc->nmods, ref cc->cmods, sizeof(*cc->mods))
     cc->mods[cc->nmods] = m
     cc->nmods += 1
     return m
 
-static def dir_of(a: *Arena, path: const *char) -> const *char:
-    slash: const *char = strrchr(path, '/')
-    if slash == None:
-        return a->strdup(".")
-    return a->strndup(path, usize(slash - path))
 
 
 
@@ -5122,6 +6217,39 @@ static def is_c_arith_words(n: const *char) -> bool:
 
 # can the expression be assigned to / incremented / addressed? (C lvalue rule,
 # on the TOP node: variables, array elements, fields, *deref, compound literals)
+# is `init` a call to exactly the type `t` names? (`v: Vec = Vec(...)`)
+static def names_own_type(t: *Type, init: *Expr) -> bool:
+    if t == None or init == None or t->kind != TY_NAME or t->name == None:
+        return False
+    if init->kind != EX_CALL or init->lhs == None or init->lhs->kind != EX_IDENT or init->lhs->text == None:
+        return False
+    return strcmp(t->name, init->lhs->text) == 0
+
+# a plain designator: a name, a field of one, an element of one. Reading it
+# twice costs nothing and has no side effect.
+static def is_designator(e: *Expr) -> bool:
+    if e == None:
+        return False
+    match e->kind:
+        case EX_IDENT:
+            return True
+        case EX_FIELD:
+            return is_designator(e->lhs)
+        case EX_INDEX:
+            return is_designator(e->lhs) and is_designator(e->rhs)
+        case EX_NUMBER:
+            return True
+        case _:
+            return False
+
+# does this module declare `name` as a trait or a type? (the orphan rule)
+static def decl_in_module(m: *Module, name: const *char) -> bool:
+    for i in range(m->ndecls):
+        d: *Decl = m->decls[i]
+        if d->name != None and strcmp(d->name, name) == 0 and d->kind in {DL_TRAIT, DL_STRUCT, DL_UNION, DL_ENUM}:
+            return True
+    return False
+
 static def is_lvalue(e: *Expr) -> bool:
     if e == None:
         return True
@@ -5169,7 +6297,13 @@ static def mk_call1(a: *Arena, fn: const *char, arg: *Expr, pos: Pos) -> *Expr:
 # generated deref, whose operand is a pointer by construction: collapsing the
 # pair preserves the type (an ARRAY operand would not — sizeof would differ).
 static def is_byref_deref(x: *Expr) -> bool:
-    return x != None and x->kind == EX_UNARY and x->op == TK_STAR and x->lhs != None and x->lhs->kind == EX_IDENT and x->lhs->out_done
+    if x == None or x->kind != EX_UNARY or x->op != TK_STAR:
+        return False
+    # out_done on the DEREF node itself: a ref-returning call wrapped by sema
+    # (69.1) — the operand is a pointer by construction, same as the ident case
+    if x->out_done:
+        return True
+    return x->lhs != None and x->lhs->kind == EX_IDENT and x->lhs->out_done
 
 static def take_addr(a: *Arena, x: *Expr) -> *Expr:
     if is_byref_deref(x):
@@ -5188,6 +6322,8 @@ static def render_type_p(a: *Arena, t: *Type) -> const *char:
     if t == None:
         return "?"
     if t->kind == TY_PTR:
+        if t->is_ref:
+            return a->printf("ref %s", render_type_p(a, t->inner))
         return a->printf("*%s", render_type_p(a, t->inner))
     if t->kind == TY_ARRAY:
         if t->arr_len != None and t->arr_len->kind == EX_NUMBER:
@@ -5321,6 +6457,16 @@ static def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type:
 
 # ---------- defer: structural validations ----------
 # recursively looks for a statement of kind k (for the goto+defer rule)
+# does this block END the flow that entered it? (69.7: what makes the
+# `if p == None: return` idiom leave its proof behind). Only the four
+# statements the language GUARANTEES to leave count; a call that never
+# returns is knowledge sema does not have.
+static def block_terminates(b: *Block) -> bool:
+    if b == None or b->n == 0:
+        return False
+    k: i32 = b->stmts[b->n - 1]->kind
+    return k == ST_RETURN or k == ST_BREAK or k == ST_CONTINUE or k == ST_GOTO
+
 static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
     if b == None:
         return None
@@ -5490,6 +6636,9 @@ def sema_run(cc: *Cc, m: *Module):
         s.macroalias.deinit()
         s.enums.deinit()
         s.tdalias.deinit()
+        s.tdscalar.deinit()
+        s.traits.deinit()
+        s.timpls.deinit()
         s.fn_globals.deinit()
         s.fn_nonlocals.deinit()
         s.fn_hoisted.deinit()
@@ -5530,6 +6679,21 @@ def sema_run(cc: *Cc, m: *Module):
             nd[i + 2] = m->decls[i]
         m->decls = nd
         m->ndecls = m->ndecls + 2
+
+    # typedef -> underlying SCALAR, for a back end that computes layouts itself
+    if s.tdscalar.elen > 0:
+        sn: **char = s.a->alloc(usize(s.tdscalar.elen) * sizeof(*sn))
+        st2: **Type = s.a->alloc(usize(s.tdscalar.elen) * sizeof(*st2))
+        nsc: i32 = 0
+        for ti in range(s.tdscalar.elen):
+            if s.tdscalar.dead[ti]:
+                continue
+            sn[nsc] = s.a->strdup(s.tdscalar.keys[ti])
+            st2[nsc] = s.tdscalar.vals[ti]
+            nsc += 1
+        m->tdsc_names = sn
+        m->tdsc_types = st2
+        m->ntdsc = nsc
 
     # TAG -> typedef reverse map, for the C backend to print `FILE` where the
     # type is canonically `struct _IO_FILE` (see Module.tdrev_*). P modules only:

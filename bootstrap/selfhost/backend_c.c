@@ -197,7 +197,7 @@ static const char *op_cstr(int32_t op) {
             return "->";
         }
         default: {
-            return "?";
+            return "\?";
         }
     }
 }
@@ -329,8 +329,31 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec);
 
 static void emit_var_decl(StrBuf *b, Type *t, const char *name, const char *self_struct);
 
+static void emit_literal_notrigraph(StrBuf *b, const char *lex) {
+    size_t i = 0;
+    size_t n = strlen(lex);
+    while (i < n) {
+        char c = lex[i];
+        if (c == '\\' && i + 1 < n) {
+            StrBuf_putc(b, c);
+            StrBuf_putc(b, lex[i + 1]);
+            i += 2;
+            continue;
+        }
+        if (c == '\?') {
+            StrBuf_putc(b, '\\');
+        }
+        StrBuf_putc(b, c);
+        i += 1;
+    }
+}
+
 static int op_is_confusable(int32_t op) {
     return op == TK_AMP || op == TK_PIPE || op == TK_CARET || op == TK_SHL || op == TK_SHR;
+}
+
+static int op_is_relational(int32_t op) {
+    return op == TK_LT || op == TK_LE || op == TK_GT || op == TK_GE;
 }
 
 static void emit_binary_operand(StrBuf *b, Expr *child, int32_t min_prec, int32_t parent_op) {
@@ -340,6 +363,9 @@ static void emit_binary_operand(StrBuf *b, Expr *child, int32_t min_prec, int32_
             force = 1;
         }
         if (parent_op == TK_OR && child->op == TK_AND) {
+            force = 1;
+        }
+        if ((parent_op == TK_EQ || parent_op == TK_NE) && op_is_relational(child->op)) {
             force = 1;
         }
     }
@@ -459,7 +485,11 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
         case EX_NUMBER:
         case EX_STRING:
         case EX_CHARLIT: {
-            StrBuf_puts(b, e->text);
+            if (e->kind == EX_STRING || e->kind == EX_CHARLIT) {
+                emit_literal_notrigraph(b, e->text);
+            } else {
+                StrBuf_puts(b, e->text);
+            }
             break;
         }
         case EX_TRUE: {
@@ -490,7 +520,7 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
         }
         case EX_TERNARY: {
             emit_expr(b, e->cond, PR_TERN);
-            StrBuf_puts(b, " ? ");
+            StrBuf_puts(b, " \? ");
             emit_expr(b, e->lhs, 0);
             StrBuf_puts(b, " : ");
             emit_expr(b, e->rhs, PR_TERN);
@@ -946,7 +976,7 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             indent(b, ind);
             emit_expr(b, s->lhs, 0);
             StrBuf_printf(b, " %s ", op_cstr(s->op));
-            emit_expr(b, s->rhs, 0);
+            emit_expr(b, s->rhs, PR_ASSIGN);
             StrBuf_puts(b, ";\n");
             break;
         }
@@ -979,7 +1009,7 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
                     indent(b, ind2);
                     emit_var_decl(b, g_cur_ret, tmp, NULL);
                     StrBuf_puts(b, " = ");
-                    emit_expr(b, s->expr, 0);
+                    emit_expr(b, s->expr, PR_ASSIGN);
                     StrBuf_puts(b, ";\n");
                     emit_defers_downto(b, 0, ind2);
                     indent(b, ind2);
@@ -1284,7 +1314,7 @@ static void emit_simple_inline(StrBuf *b, Stmt *s) {
         case ST_ASSIGN: {
             emit_expr(b, s->lhs, 0);
             StrBuf_printf(b, " %s ", op_cstr(s->op));
-            emit_expr(b, s->rhs, 0);
+            emit_expr(b, s->rhs, PR_ASSIGN);
             break;
         }
         case ST_EXPR: {

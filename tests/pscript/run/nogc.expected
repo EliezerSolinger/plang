@@ -1,0 +1,5 @@
+plain 1000
+budget ok 100
+nested 10
+over budget: nogc budget exceeded
+after 2000

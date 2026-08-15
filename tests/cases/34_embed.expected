@@ -1,0 +1,11 @@
+Plang embeds this file verbatim.
+Tabs	here, quotes "here", backslash \ here.
+Trigraph bait: ??= and ??/ stay literal.
+text bytes: 118
+text array: 119
+blob bytes: 13
+BLOB[13]: 00 01 02 ff 41 42 43 00 7f 0a 5c 22 3f
+EXACT[13]: 00 01 02 ff 41 42 43 00 7f 0a 5c 22 3f
+PADDED[16]: 00 01 02 ff 41 42 43 00 7f 0a 5c 22 3f 00 00 00
+nul at 0: 0, nul at 7: 0
+local: 118

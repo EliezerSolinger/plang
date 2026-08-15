@@ -1,0 +1,4 @@
+smallpt 32x24, 4 samples/pixel, 4 workers
+rows 24 rays 3072
+wrote smallpt.ppm (5804 bytes)
+done

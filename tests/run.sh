@@ -431,7 +431,10 @@ suite_roundtrip() {
         # __LINE__/__FILE__/__TIME__ resolve against the file being compiled, so
         # a reprint at another path with other line numbers CANNOT match — that
         # is the feature working, not a round-trip failure
-        case $src in *feat-predefined*) continue ;; esac
+        # embed() resolves its path against the file that spells it, so the
+        # reprint — which lives in another directory — cannot see the data
+        # files. Same class as the predefined macros above: the feature working.
+        case $src in *feat-predefined*|*_embed*) continue ;; esac
         if ! $PLANGC "$src" -o "$d/a/$name.c" 2>/dev/null; then continue; fi   # already covered elsewhere
         if ! $PLANGC --backend p "$src" -o "$d/$name.p" 2>"$d/$name.e1"; then
             echo "  FAIL $src (cannot print): $(sed 's/.*error: //' "$d/$name.e1" | head -1)"
@@ -455,6 +458,79 @@ suite_roundtrip() {
 # ---------- main ----------
 suites=${*:-"cases modules stl p-suite errors pstudio c-suite"}
 echo "plangc test run — PLANGC=$PLANGC BACKEND=$BACKEND${STD:+ STD=$STD}"
+suite_pscript() {
+    echo "== pscript (front end + runtime: parse, reject, and RUN) =="
+    local pass=0 fail=0 src name err d=$OUT/psc
+    mkdir -p "$d"
+    # 1. sources the front end must accept. The whole language parses; only a
+    #    subset reaches the back end so far, so these are checked with
+    #    --parse-only and the run corpus below is what proves the rest.
+    for src in tests/pscript/ok/*.psc pscript/examples/*.psc; do
+        [ -f "$src" ] || continue
+        name=$(basename "$src"); err=$OUT/pscript_${name%.psc}.err
+        if $PLANGC --parse-only "$src" 2>"$err"; then
+            pass=$((pass+1))
+        else
+            echo "  FAIL $src: $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1))
+        fi
+    done
+    # 2. programs that COMPILE AND RUN: pscript -> P -> C/QBE -> a binary, with
+    #    the runtime (16.4: P source compiled alongside) linked in. Combined
+    #    stdout+stderr and the exit status are both compared, because a raised
+    #    exception is part of what a program does.
+    local rt="$d/rt"
+    rm -rf "$rt"; mkdir -p "$rt"
+    if ! $PLANGC $PFLAGS --out-dir "$rt" pscript/runtime/psrt.ph pscript/runtime/psrt.p 2>"$d/rt.err"; then
+        echo "  FAIL runtime: $(sed 's/.*error: //' "$d/rt.err" | head -1)"; fail=$((fail+1))
+    else
+      for src in tests/pscript/run/*.psc pscript/examples/vec3.psc pscript/examples/smallpt_core.psc pscript/examples/smallpt_workers.psc pscript/examples/smallpt_full.psc; do
+        [ -f "$src" ] || continue
+        name=$(basename "$src"); name=${name%.psc}; err=$d/$name.err
+        case $name in lib_*) continue ;; esac   # import fixtures, not programs
+        local want_exit=0
+        [ -f "tests/pscript/run/$name.exit" ] && want_exit=$(cat "tests/pscript/run/$name.exit")
+        local expfile="tests/pscript/run/$name.expected"
+        local ok=1
+        if [ "$BACKEND" = qbe ]; then
+            $PLANGC --backend qbe --out-dir "$rt" pscript/runtime/psrt.p 2>"$err" &&
+            $PLANGC --backend qbe "$src" -o "$d/$name.ssa" 2>>"$err" &&
+            $QBE "$d/$name.ssa" -o "$d/$name.s" 2>>"$err" &&
+            $QBE "$rt/pscript/runtime/psrt.ssa" -o "$d/psrt.s" 2>>"$err" &&
+            $CC "$d/$name.s" "$d/psrt.s" -o "$d/$name" -lm -pthread 2>>"$err" || ok=0
+        else
+            $PLANGC $PFLAGS --out-dir "$rt" "$src" 2>"$err" &&
+            $CC $CSTD -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt.c" -o "$d/$name" -lm -pthread 2>>"$err" || ok=0
+        fi
+        if [ $ok = 0 ]; then
+            echo "  FAIL $name (build): $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1)); continue
+        fi
+        ( cd "$d" && "./$name" >"$name.out" 2>&1 ); local rc=$?
+        if [ "$rc" != "$want_exit" ]; then
+            echo "  FAIL $name (exit $rc, expected $want_exit)"; fail=$((fail+1))
+        elif ! diff -q "$expfile" "$d/$name.out" >/dev/null; then
+            echo "  FAIL $name (output differs; see $d/$name.out)"; fail=$((fail+1))
+        else
+            pass=$((pass+1))
+        fi
+      done
+    fi
+    for src in tests/pscript/bad/*.psc; do
+        [ -f "$src" ] || continue
+        name=$(basename "$src"); name=${name%.psc}
+        case $name in lib_*) continue ;; esac   # import fixtures, not tests
+        err=$OUT/pscript_bad_$name.err
+        if $PLANGC "$src" -o /dev/null 2>"$err"; then
+            echo "  FAIL $name (parsed; expected an error)"; fail=$((fail+1))
+        elif ! grep -qF "$(cat "tests/pscript/bad/$name.expected")" "$err"; then
+            echo "  FAIL $name (wrong message): $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1))
+        else
+            pass=$((pass+1))
+        fi
+    done
+    echo "   pscript: $pass ok, $fail failed"
+    total_fail=$((total_fail+fail))
+}
+
 for s in $suites; do
     case $s in
         cases)    suite_cases ;;
@@ -466,9 +542,10 @@ for s in $suites; do
         wacct-valid) suite_wvalid ;;
         pstudio)  suite_pstudio ;;
         roundtrip) suite_roundtrip ;;
+        pscript)  suite_pscript ;;
         c-suite)  suite_csuite ;;
-        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_pstudio; suite_roundtrip; suite_csuite ;;
-        *) echo "unknown suite '$s' (cases|modules|stl|p-suite|errors|pstudio|roundtrip|c-suite|all)"; exit 2 ;;
+        all)      suite_cases; suite_modules; suite_stl; suite_psuite; suite_errors; suite_pstudio; suite_roundtrip; suite_pscript; suite_csuite ;;
+        *) echo "unknown suite '$s' (cases|modules|stl|p-suite|errors|pstudio|roundtrip|pscript|c-suite|all)"; exit 2 ;;
     esac
 done
 echo
