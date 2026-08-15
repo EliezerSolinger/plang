@@ -24,11 +24,12 @@ The compiler is **written in Plang itself** and bootstraps to a fixed point.
 This repository ships that Plang source plus the generated C **seed**, so the
 whole thing builds with nothing but a C compiler.
 
-### It compiles C *and* Plang, side by side
+### One compiler, three languages
 
-`plangc` also has a **C front end**: it accepts `.c`/`.i` files as well as
-`.p`/`.ph`, and both go through the same back ends. So in one project you can
-mix C and Plang and compile it all with `plangc`. Two things fall out of this:
+`plangc` accepts `.c`/`.i` (a full **C front end**), `.p`/`.ph` (Plang) and
+`.psc` (**pscript**, the garbage-collected sibling language described below),
+and all three go through the same back ends. So one project can mix C, Plang
+and pscript and be built by one compiler. Two things fall out of the C half:
 
 - **C11 → C89 on any C89 compiler.** Feed modern C (C11, plus common GNU
   extensions) and emit **strict C89** — so code written today builds on an
@@ -74,6 +75,9 @@ For code aimed at very old toolchains, emit strict C89:
 plangc --std=c89 prog.p -o prog.c   # C89-conformant output
 ```
 
+A `.psc` (pscript) compiles the same way — it just needs its runtime compiled
+alongside; see [pscript](#pscript--the-sibling-language-with-a-runtime) below.
+
 ### Compiling C (the C front end)
 
 `plangc` reads C too. A `.c` file is preprocessed automatically (`--cpp`
@@ -106,7 +110,7 @@ cc prog.o -o prog            # link
 This requires the external `qbe` tool (and an assembler/linker); the C backend
 above needs only `cc`, so it is the recommended default.
 
-## What the language has
+## What Plang has
 
 Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 **all at zero runtime cost** (everything lowers to plain C):
@@ -129,6 +133,20 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 - **`out` / `ref` / `in` parameters** — sugar over plain pointers
   (`divmod(17, 5, out r)`; `in` emits `const T*`). The ABI stays a raw
   pointer; C calls it as always.
+- **`ref T`, a non-nullable reference** for locals and returns: it binds once,
+  auto-dereferences, and is a plain `T*` in the emitted C. `*T` stays nullable
+  as C made it, and a raw pointer enters `ref` only under proof
+  (`if p != None:`). The same flow analysis powers **`-Wnull-dereference`**,
+  and **`??`** coalesces pointers (`p ?? fallback`).
+- **Traits**: `trait Comparable:` plus `implement Comparable for T:`, used as
+  generic bounds (`def sort<T: Comparable>`) that are checked where the type is
+  concrete and then monomorphized — no vtable, no dispatch, nothing at run
+  time. `for v in it` works over any type that implements `Iterable`, and
+  lowers to a cursor and direct calls.
+- **`record`** — a struct the compiler has *checked* to be pure bytes: safe to
+  memcpy, to write to disk, and to compare by content.
+- **`embed("f.txt")` / `embed_bytes("f.bin")`** — a file becomes data at
+  compile time (a `static const` array), so a program ships as one binary.
 - **`in` / `not in`**, string `==` by content (`strcmp`; identity is `is`),
   and `match` on strings.
 - **Default and named arguments**, resolved at compile time.
@@ -151,6 +169,61 @@ header-only: `import "stl/vec.ph"`, then `declare Vec<int>` / `implement
 Vec<int>`. Skip it entirely and use raw pointers + libc if you prefer.
 
 See **[SPECS.MD](SPECS.MD)** for the language reference.
+
+## pscript — the sibling language, with a runtime
+
+Plang's promise is *zero runtime*: no collector, no hidden allocation, C's ABI.
+That promise is also a ceiling. **pscript** (`.psc`) is the other side of it —
+a language for the code where safety matters more than the last byte:
+
+```python
+record Point:
+    x: float
+    y: float
+
+def farthest(ps: list<Point>) -> Point:
+    best = ps[0]
+    for p in ps:
+        if p.x * p.x + p.y * p.y > best.x * best.x + best.y * best.y:
+            best = p
+    return best
+
+pts = [Point(1.0, 2.0), Point(3.0, 4.0)]
+print(farthest(pts))            # Point(x=3.0, y=4.0)
+```
+
+It has a **copying garbage collector**, exceptions with `try`/`catch`, real
+strings and `list`/`dict`/`set`, `T?` options with flow narrowing, closures,
+`async`/`await`, and **workers** — OS threads with a heap and a collector each,
+so nothing is shared by accident and messages cross as bytes. Bounds are
+checked, integer overflow raises instead of wrapping (the wrap has its own
+spelling, `%+ %- %*`), and a `shared dict` gives workers named state without a
+pointer ever crossing two heaps.
+
+It is not a second compiler: a `.psc` is lowered to **Plang's own AST** and
+from there down the pipeline is the one Plang already had — the same checker
+(which doubles as a verifier of the lowering), the same C and QBE back ends,
+the same three build modes. The runtime is Plang source compiled alongside your
+program, so there is still no library to install:
+
+```sh
+plangc --out-dir out pscript/runtime/psrt.ph pscript/runtime/psrt.p   # once
+plangc --out-dir out hello.psc
+cc out/hello.c out/pscript/runtime/psrt.c -o hello -lm -pthread
+```
+
+(`--ps-runtime <dir>` says where the runtime lives if it is not in
+`pscript/runtime`.)
+
+The validation program is a **path tracer**: `pscript/examples/smallpt_core.psc`
+renders and writes a PPM, `smallpt_workers.psc` renders it in parallel across
+workers, and `smallpt_full.psc` adds a CLI, a JSON scene and a shared
+framebuffer. All three run in the test suite, in all three modes.
+
+The design is written down decision by decision in
+[pscript/DESIGN.md](pscript/DESIGN.md), what exists in
+[pscript/FEATURES.md](pscript/FEATURES.md), and what is next in
+[pscript/PLAN.md](pscript/PLAN.md).
 
 ## Plang Studio — a code editor written in Plang
 
@@ -176,8 +249,10 @@ tests that drive the editor with synthetic events. See
 
 ```
 selfhost/     the compiler, written in Plang (.p source, .ph headers)
+              — including the C front end (cfront) and pscript's (ps_*)
 bootstrap/    the C seed generated from selfhost/ (+ bootstrap/stl headers)
 stl/          optional standard library (header-only generic templates, .ph)
+pscript/      the sibling language: its runtime (in Plang), design and examples
 pstudio/      Plang Studio: a code editor in pure Plang (SDL2 only)
 tests/        gating suites, C corpora (c-testsuite, wacct), clang-compare
 Makefile      builds plangc from the seed
@@ -195,8 +270,19 @@ make selfhost   # rebuilds plangc from selfhost/ using the seed compiler
 ## Status
 
 The compiler self-hosts (3-stage fixed point, through both back ends) and
-passes its test suite on Unix systems with a standard C toolchain.
-`make verify` runs the whole battery.
+passes its test suite on Unix systems with a standard C toolchain. Every gating
+suite runs three times — C, QBE and strict C89 — and `make verify` runs the
+whole battery, from the seed's fixed point to the editor's headless tests.
+
+The C front end is measured against real corpora rather than claims: the
+c-testsuite passes 220/220, 741 wacct programs produce their expected exit
+codes, and 155 diagnostics match clang's text exactly.
+
+pscript is younger. Its front end parses the whole language and a large subset
+compiles and runs — enough for a parallel path tracer with a JSON scene — while
+`unsafe`, the epoll/kqueue I/O loop, and task cancellation (`race`, `timeout`)
+are still ahead; [pscript/PLAN.md](pscript/PLAN.md) says where each stands and
+why.
 
 ## License
 
