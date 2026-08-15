@@ -402,10 +402,13 @@ def cchar_val(lex: const *char) -> i32:
         case _:
             # octal escape \NNN (\0 already handled above)
             if e >= '0' and e <= '7':
+                # three digits at most (C11 6.4.4.4); a fourth is a character
                 ov = 0
-                ok2: usize = 2
-                while ok2 < n - 1 and lex[ok2] >= '0' and lex[ok2] <= '7':
+                ok2: usize = 1
+                od5: i32 = 0
+                while od5 < 3 and ok2 < n - 1 and lex[ok2] >= '0' and lex[ok2] <= '7':
                     ov = ov * 8 + i32(lex[ok2] - '0')
+                    od5 += 1
                     ok2 += 1
                 return ov
             return i32(e)   # \? \e etc: the character itself

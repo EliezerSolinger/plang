@@ -1918,6 +1918,21 @@ def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr:
 def ps_str_from_bool(ctx: *PsCtx, v: bool) -> *PsStr:
     return ps_str_new(ctx, "True" if v else "False", usize(4 if v else 5))
 
+# negative, zero or positive — C's convention, which is what the neighbourhood
+# already speaks (and what `sorted` compares with)
+def ps_str_lt(a: *PsStr, b: *PsStr) -> i32:
+    if a == None or b == None:
+        return 0
+    na: usize = usize(a->len)
+    nb: usize = usize(b->len)
+    n: usize = na if na < nb else nb
+    r: int = memcmp(a->data, b->data, n)
+    if r != 0:
+        return -1 if r < 0 else 1
+    if na == nb:
+        return 0
+    return -1 if na < nb else 1
+
 def ps_str_eq(a: *PsStr, b: *PsStr) -> bool:
     if a == b:
         return True
@@ -1940,6 +1955,47 @@ def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *
     a: usize = ps_utf8_off(s->data, usize(s->len), k)
     b: usize = ps_utf8_off(s->data, usize(s->len), k + 1)
     return ps_str_new(ctx, s->data + a, b - a)
+
+def ps_str_ord(ctx: *PsCtx, s: *PsStr, file: const *char, line: i32) -> i64:
+    if s == None or s->nchars != 1:
+        ps_raise(ctx, "ord() takes a string of exactly one character", PS_CAT_VALUE, file, line)
+        return 0
+    b: *u8 = (*u8)(s->data)
+    c: u32 = u32(b[0])
+    if c < 0x80:
+        return i64(c)
+    if (c & 0xE0) == 0xC0:
+        return i64(((c & 0x1F) << 6) | (u32(b[1]) & 0x3F))
+    if (c & 0xF0) == 0xE0:
+        return i64(((c & 0x0F) << 12) | ((u32(b[1]) & 0x3F) << 6) | (u32(b[2]) & 0x3F))
+    return i64(((c & 0x07) << 18) | ((u32(b[1]) & 0x3F) << 12) | ((u32(b[2]) & 0x3F) << 6) | (u32(b[3]) & 0x3F))
+
+def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr:
+    if cp < 0 or cp > 1114111:
+        ps_raise(ctx, "chr() takes a codepoint between 0 and 0x10FFFF", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    b: char[5]
+    n: usize = 0
+    v: u32 = u32(cp)
+    if v < 0x80:
+        b[0] = char(v)
+        n = 1
+    elif v < 0x800:
+        b[0] = char(0xC0 | (v >> 6))
+        b[1] = char(0x80 | (v & 0x3F))
+        n = 2
+    elif v < 0x10000:
+        b[0] = char(0xE0 | (v >> 12))
+        b[1] = char(0x80 | ((v >> 6) & 0x3F))
+        b[2] = char(0x80 | (v & 0x3F))
+        n = 3
+    else:
+        b[0] = char(0xF0 | (v >> 18))
+        b[1] = char(0x80 | ((v >> 12) & 0x3F))
+        b[2] = char(0x80 | ((v >> 6) & 0x3F))
+        b[3] = char(0x80 | (v & 0x3F))
+        n = 4
+    return ps_str_new(ctx, &b[0], n)
 
 def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsStr:
     n: i64 = i64(s->nchars)

@@ -154,16 +154,29 @@ int main(int argc, char **argv) {
         "# U+25A1 last. Inside a grid, glyph i starts at i*cell_w*cell_h.\n"
         "import \"font_atlas.ph\"\n\n",
         nsizes, NGLYPHS, A0, A1, B0, B1, NEX);
-    fprintf(o, "fa_data: const u8[%zu] = {", total);
-    size_t written = 0;
-    for (int s = 0; s < nsizes; s++) {
-        size_t gsz = (size_t)NGLYPHS * cw[s] * chh[s];
-        for (size_t i = 0; i < gsz; i++, written++) {
-            if (written % 24 == 0) fprintf(o, "\n    ");
-            fprintf(o, "%d,", grids[s][i]);
-        }
+    /* The pixels go to a BINARY file next to the source and the source embeds
+       it (63.5): the data is the same, the .p stops being eleven thousand
+       lines of decimal, and the editor still ships as a single binary because
+       `embed_bytes` is resolved at compile time. */
+    {
+        char binpath[1024];
+        snprintf(binpath, sizeof binpath, "%s", argv[2]);
+        char *dot = strrchr(binpath, '.');
+        if (dot) strcpy(dot, ".bin"); else strcat(binpath, ".bin");
+        FILE *b = fopen(binpath, "wb");
+        if (!b) { fprintf(stderr, "mkatlas: nao escrevi %s\n", binpath); return 1; }
+        for (int s = 0; s < nsizes; s++)
+            fwrite(grids[s], 1, (size_t)NGLYPHS * cw[s] * chh[s], b);
+        fclose(b);
+        const char *base_name = strrchr(binpath, '/');
+        base_name = base_name ? base_name + 1 : binpath;
+        fprintf(o,
+            "# The %zu bytes of the grids, EMBEDDED (63.5): the file is the data,\n"
+            "# read at compile time and emitted as a static array, so the editor still\n"
+            "# ships as one binary and this source is a page instead of eleven thousand\n"
+            "# lines. Regenerating the atlas rewrites the .bin; nothing here changes.\n"
+            "fa_data: const u8[] = embed_bytes(\"%s\")\n\n", total, base_name);
     }
-    fprintf(o, "\n}\n\n");
     fprintf(o, "fa_cw: const i32[%d] = {", nsizes);
     for (int s = 0; s < nsizes; s++) fprintf(o, "%s%d", s ? ", " : "", cw[s]);
     fprintf(o, "}\nfa_ch: const i32[%d] = {", nsizes);

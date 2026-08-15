@@ -102,7 +102,24 @@ pstudio: plangc
 	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm
 	@echo "pstudio pronto: ./out/bin/pstudio [pasta|arquivos]"
 
+# The pscript PORT of the editor (pstudio/ps/): the logic in pscript, the hand
+# that touches SDL2 still in P. Built the way anyone would build a pscript
+# program — the runtime compiled alongside — plus the shim it calls through.
+pstudio-ps: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS) $(SDL2_NOSIMD)
+pstudio-ps: plangc
+	@pkg-config --exists sdl2 || { echo "pstudio-ps: falta libsdl2-dev"; exit 1; }
+	./plangc --out-dir out stl/*.ph selfhost/plang.ph pstudio/*.ph pstudio/ps/shim.ph \
+	         pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p pstudio/psys.p \
+	         pstudio/ps/shim.p pscript/runtime/psrt.ph pscript/runtime/psrt.p
+	./plangc --cpp "$(CC) -Iout/pstudio/ps" --out-dir out pstudio/ps/app.psc
+	@mkdir -p out/bin
+	$(CC) $(CFLAGS) -w -D_DEFAULT_SOURCE -Iout/pstudio/ps -o out/bin/pstudio-ps \
+	      out/pstudio/ps/app.c out/pscript/runtime/psrt.c out/pstudio/ps/shim.c \
+	      out/pstudio/pgfx.c out/pstudio/pgfx_raster.c out/pstudio/font_atlas.c out/pstudio/psys.c \
+	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm -pthread
+	@echo "pstudio-ps pronto: ./out/bin/pstudio-ps [arquivo]"
+
 clean:
 	rm -rf plangc plangc2 out tests/out stl/*.h .hello .hello.p .hello.c
 
-.PHONY: check test test-qbe test-c89 verify verify-quick selfhost pstudio clean
+.PHONY: check test test-qbe test-c89 verify verify-quick selfhost pstudio pstudio-ps clean

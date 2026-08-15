@@ -180,8 +180,10 @@ int32_t cstr_bytes(StrBuf *out, const char *lex, int32_t limit) {
                 default: {
                     if (e >= '0' && e <= '7') {
                         b = (int32_t)(e - '0');
-                        while (i + 1 < n - 1 && lex[i + 1] >= '0' && lex[i + 1] <= '7') {
+                        int32_t od = 1;
+                        while (od < 3 && i + 1 < n - 1 && lex[i + 1] >= '0' && lex[i + 1] <= '7') {
                             b = b * 8 + (int32_t)(lex[i + 1] - '0');
+                            od += 1;
                             i += 1;
                         }
                     } else {
@@ -296,7 +298,9 @@ int32_t lit_unit_count(const char *lex, int wide) {
                 }
             } else if (lex[i] >= '0' && lex[i] <= '7') {
                 i += 1;
-                while (i < n - 1 && lex[i] >= '0' && lex[i] <= '7') {
+                int32_t od2 = 1;
+                while (od2 < 3 && i < n - 1 && lex[i] >= '0' && lex[i] <= '7') {
+                    od2 += 1;
                     i += 1;
                 }
             } else {
@@ -3055,9 +3059,11 @@ static int32_t Qb_charval(Qb *self, const char *lex) {
         default: {
             if (c >= '0' && c <= '7') {
                 int ov = 0;
-                size_t k = 2;
-                while (lex[k] >= '0' && lex[k] <= '7') {
-                    ov = ov * 8 + (int32_t)(lex[k] - '0');
+                size_t k = 1;
+                int32_t od3 = 0;
+                while (od3 < 3 && lex[k + 1] >= '0' && lex[k + 1] <= '7') {
+                    ov = ov * 8 + (int32_t)(lex[k + 1] - '0');
+                    od3 += 1;
                     k += 1;
                 }
                 return ov;
@@ -4232,8 +4238,10 @@ static void Qb_emit_str_to_addr(Qb *self, int32_t addr, const char *lex, int32_t
                 default: {
                     if (e >= '0' && e <= '7') {
                         b = (int32_t)(e - '0');
-                        while (i + 1 < n - 1 && lex[i + 1] >= '0' && lex[i + 1] <= '7') {
+                        int32_t od4 = 1;
+                        while (od4 < 3 && i + 1 < n - 1 && lex[i + 1] >= '0' && lex[i + 1] <= '7') {
                             b = b * 8 + (int32_t)(lex[i + 1] - '0');
+                            od4 += 1;
                             i += 1;
                         }
                     } else {

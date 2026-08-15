@@ -225,6 +225,34 @@ The design is written down decision by decision in
 [pscript/FEATURES.md](pscript/FEATURES.md), and what is next in
 [pscript/PLAN.md](pscript/PLAN.md).
 
+### The trial by fire: the editor, ported
+
+`pstudio/ps/` is Plang Studio's buffer and application **written in pscript**,
+with the hand that touches SDL2 still in Plang:
+
+```sh
+make pstudio-ps          # -> out/bin/pstudio-ps
+```
+
+The boundary rule (only a pointer-free signature crosses) decides the split by
+itself: SDL2 is nothing but pointers, so `shim.p` keeps the window, the events
+and the pixels and exposes them as **scalars** — a handle, a key code, a
+colour, one codepoint at a time — while the editor above it (lines, carets,
+selection, undo, search, folding, layout, key bindings, painting) is pscript.
+The two meet through `include "shim.h"`, the header the compiler itself emits:
+no FFI, no bindings.
+
+It is 933 lines of pscript where the Plang buffer needs 1505, and the
+difference is not style — a line is a `str`, `len(s)` is codepoints, slicing
+copies, and the collector owns the graph, so three UTF-8 helpers, every
+`malloc`/`free` pair and every `deinit` simply are not there.
+
+Both halves are gated: the buffer runs headless in the test suite, and the
+whole editor runs its own self-test with SDL's dummy driver — open, type,
+select, undo, multi-caret, **draw** and save. What the port found on the way
+(six real compiler bugs, three registered gaps) is written down in
+[pstudio/ps/README.md](pstudio/ps/README.md).
+
 ## Plang Studio — a code editor written in Plang
 
 `pstudio/` is a GUI code editor written in **pure Plang**, with SDL2 as its
@@ -244,6 +272,11 @@ It doubles as the largest Plang program after the compiler itself, so
 `make verify` compiles it as a gate and runs `tests/pstudio/` — headless
 tests that drive the editor with synthetic events. See
 [pstudio/DESIGN.md](pstudio/DESIGN.md).
+
+The font atlas shows what `embed_bytes` is for: 263 KB of glyphs used to be
+eleven thousand lines of decimal in a `.p`, and are now one line reading a
+`.bin` at compile time — same single binary, same static array, a page of
+source instead of a phone book.
 
 ## Repository layout
 

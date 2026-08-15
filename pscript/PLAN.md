@@ -896,6 +896,63 @@ três modos, e o seed foi refeito ao fim de cada ciclo.
       45.5 já diz o que atravessa); o que falta decidir é como o módulo P entra
       no BUILD do programa pscript.
 
+### Bateria 71 — a prova de fogo: pstudio em pscript (2026-08-15)
+
+O editor foi portado para pscript, com a mão que toca o SDL2 ainda em P
+(`pstudio/ps/`, com um README próprio). Roda: abre janela, carrega arquivo,
+edita com múltiplos cursores, desfaz, busca, dobra, desenha pelo atlas de fonte
+e salva. Dois testes entram no gate — o núcleo headless e o autoteste do
+editor inteiro com SDL em driver dummy.
+
+**A divisão que a fronteira impôs** (45.5: só assinatura sem ponteiro
+atravessa): `shim.p` expõe janela, eventos e pixels em ESCALARES — handles,
+códigos de tecla, cores, um codepoint por vez — e `app.psc`/`lib_core.psc`
+carregam o editor inteiro. O pscript chama o P por `include "shim.h"`, o header
+que o próprio compilador emite: sem FFI, sem binding.
+
+**O tamanho:** `core.p` (1505 linhas) virou `lib_core.psc` (933) fazendo o
+mesmo. Não é estilo: uma linha é `str` e `len(s)` são codepoints, então somem o
+cache `ncp` e as três funções de conversão byte↔codepoint; fatiar copia, então
+some o `range_text` com malloc/memcpy; o coletor é dono do grafo, então somem
+`own`, `own_n`, `group_drop` e os `deinit`.
+
+**Seis defeitos que só um programa de verdade acha**, todos corrigidos com
+teste:
+
+- [x] **um método não enxergava variável de módulo** — uma função livre ao lado
+      enxergava. As passagens da sema estavam fora de ordem: o corpo do método
+      era checado ANTES de os statements de topo declararem as variáveis.
+      Gate: `tests/pscript/run/method_globals.psc`.
+- [x] **assinaturas resolviam tarde demais** — o efeito colateral vinha de
+      checar o corpo, e o topo roda primeiro (39.4). Uma chamada comparava
+      `Vec2` com `lib_geom.Vec2` e recusava o valor do tipo que pediu. Agora há
+      uma passagem que resolve toda assinatura antes de qualquer chamada.
+- [x] **o tipo do CAMPO não era contexto** — `self.lines = []` não compilava,
+      nem `UndoGroup([], ...)`. O mesmo já valia para declaração e retorno.
+- [x] **`<` `>` `<=` `>=` entre strings comparavam PONTEIROS** — resultado
+      silenciosamente errado, ordenado por onde o coletor pôs cada uma. Agora
+      comparam conteúdo (`ps_str_lt`), a mesma ordem que `sorted` usa.
+- [x] **um local de módulo importado não podia repetir um nome do programa** —
+      o guard que protege contra usar um nome não importado disparava também
+      sobre um nome que estava sendo LIGADO.
+- [x] **`ord`/`chr` não existiam** — e sem eles nenhum texto alcança uma
+      interface que fala número (a fronteira inteira, e o desenho de qualquer
+      glifo). São o par do Python e a única porta entre caractere e codepoint.
+      **Decisão sua a confirmar:** implementei porque o porte parava sem eles.
+
+**Lacunas registradas, sem inventar decisão** (o porte contornou e anotou):
+
+- [ ] `"x" in s` — substring. O `in` do pscript é pertinência em dict/set (8.1)
+      e o Python usa a mesma palavra para substring.
+- [ ] `for ch in s` — iterar os caracteres de uma string. Hoje o `for` toma
+      range, list, dict, set ou um `Iterable` (40.3).
+- [ ] **constantes de header C são invisíveis** na fronteira: ela ingere
+      FUNÇÕES (45.5), então todo `#define`/enum de um header — os keycodes do
+      SDL inteiros — precisa ser redigitado do lado pscript.
+- [ ] o que falta do editor: realce de sintaxe (o `codeview.p` usa o lexer do
+      compilador, que é P — atravessaria pelo mesmo shim), árvore de arquivos,
+      abas, paleta de comandos e minimapa.
+
 ## Pendências de decisão acumuladas
 
 Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da bateria.)

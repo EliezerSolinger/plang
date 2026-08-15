@@ -157,9 +157,16 @@ def cstr_bytes(out: *StrBuf, lex: const *char, limit: i32) -> i32:
                         i += 1
                 case _:
                     if e >= '0' and e <= '7':
+                        # AT MOST three digits (C11 6.4.4.4): a fourth one is
+                        # DATA, not part of the escape. Reading further both
+                        # produced a value beyond a byte and swallowed the byte
+                        # that followed — which is how 263KB of embedded font
+                        # came out shifted.
                         b = i32(e - '0')
-                        while i + 1 < n - 1 and lex[i + 1] >= '0' and lex[i + 1] <= '7':
+                        od: i32 = 1
+                        while od < 3 and i + 1 < n - 1 and lex[i + 1] >= '0' and lex[i + 1] <= '7':
                             b = b * 8 + i32(lex[i + 1] - '0')
+                            od += 1
                             i += 1
                     else:
                         b = i32(e)
@@ -247,7 +254,9 @@ def lit_unit_count(lex: const *char, wide: bool) -> i32:
                     i += 1
             elif lex[i] >= '0' and lex[i] <= '7':
                 i += 1
-                while i < n - 1 and lex[i] >= '0' and lex[i] <= '7':
+                od2: i32 = 1
+                while od2 < 3 and i < n - 1 and lex[i] >= '0' and lex[i] <= '7':
+                    od2 += 1
                     i += 1
             else:
                 i += 1
@@ -2001,9 +2010,11 @@ struct Qb:
             case _:
                 if c >= '0' and c <= '7':
                     ov = 0
-                    k: usize = 2
-                    while lex[k] >= '0' and lex[k] <= '7':
-                        ov = ov * 8 + i32(lex[k] - '0')
+                    k: usize = 1
+                    od3: i32 = 0
+                    while od3 < 3 and lex[k + 1] >= '0' and lex[k + 1] <= '7':
+                        ov = ov * 8 + i32(lex[k + 1] - '0')
+                        od3 += 1
                         k += 1
                     return ov
                 return i32(c)
@@ -3032,8 +3043,10 @@ struct Qb:
                     case _:
                         if e >= '0' and e <= '7':
                             b = i32(e - '0')
-                            while i + 1 < n - 1 and lex[i + 1] >= '0' and lex[i + 1] <= '7':
+                            od4: i32 = 1
+                            while od4 < 3 and i + 1 < n - 1 and lex[i + 1] >= '0' and lex[i + 1] <= '7':
                                 b = b * 8 + i32(lex[i + 1] - '0')
+                                od4 += 1
                                 i += 1
                         else:
                             b = i32(e)

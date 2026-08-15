@@ -1852,6 +1852,22 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
             }
             return PsLow_int_op(self, e, "ps_pow", "ps_upow");
         }
+        case TK_LT:
+        case TK_LE:
+        case TK_GT:
+        case TK_GE: {
+            if (is_str) {
+                Expr *cl = PsLow_call_rt(self, "ps_str_lt", e->pos);
+                PsLow_push_arg(self, cl, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, cl, PsLow_expr(self, e->rhs));
+                Expr *cmp0 = ex_new(self->a, EX_BINARY, e->pos);
+                cmp0->op = e->op;
+                cmp0->lhs = cl;
+                cmp0->rhs = PsLow_num(self, "0", e->pos);
+                return cmp0;
+            }
+            break;
+        }
         case TK_EQ:
         case TK_NE: {
             if (is_str) {
@@ -2361,6 +2377,17 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         }
         self->raised = 1;
         return PsLow_ident(self, on9, e->pos);
+    }
+    if (strcmp(name, "ord") == 0 || strcmp(name, "chr") == 0) {
+        Expr *oc = PsLow_call_rt(self, (strcmp(name, "ord") == 0 ? "ps_str_ord" : "ps_str_chr"), e->pos);
+        PsLow_push_arg(self, oc, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, oc, PsLow_expr(self, e->args[0]));
+        PsLow_pos_args(self, oc, e->pos);
+        self->raised = 1;
+        if (strcmp(name, "chr") == 0) {
+            self->allocs = 1;
+        }
+        return oc;
     }
     if (strcmp(name, "interval") == 0) {
         Expr *iv9 = PsLow_call_rt(self, "ps_interval_new", e->pos);

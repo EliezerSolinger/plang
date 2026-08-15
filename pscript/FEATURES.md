@@ -53,11 +53,11 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | fatia de lista (cópia, clamp) | 17.3 | `sys.argv[1:]` | ✅ |
 | `dict<K,V>`; chave por conteúdo | 4.x, 38.1 | JSON, `sys.env` | ✅ |
 | `set` + `in`/`not in` | 8.1 | — | ✅ |
-| `str` imutável; `len` em codepoints | 31.3, 3.4 | tudo | ✅ |
+| `str` imutável; `len` em codepoints | 31.3, 3.4 | tudo, e o buffer do editor | ✅ com `ord`/`chr` (a porta entre caractere e codepoint); `x in s` (substring) e `for ch in s` ainda não |
 | largura adaptativa / cache UTF-8 | 7.1, 14.1 | — | ◐ hoje UTF-8 com contagem de codepoints no cabeçalho, que É a forma de cache da 51.2; a largura adaptativa continua adiante |
 | `s[i]` por caractere; índice negativo; fatia | 3.4, 31.4, 17.3 | parse de `--dim` | ✅ |
 | Iteração pelo protocolo `has_next()`/`next()` | 40.3 | — | ✅ (sobre `struct` que implementa `Iterable`) |
-| `==` conteúdo / `is` identidade | 22.2 | — | ✅ |
+| `==` conteúdo / `is` identidade | 22.2 | — | ✅ — e `<` `>` `<=` `>=` entre strings também comparam CONTEÚDO (comparavam ponteiro; achado do porte do editor) |
 | enum igual ao P, `match` exaustivo | 29.2 | `match obj.kind:` | ✅ |
 | Repr derivado (`Rect(x=1, y=2)`) | 44.3 | `repr` | ✅ record/struct/enum, aninhado, em `print`, `str()` e f-string; `to_str()` do tipo sobrepõe |
 
@@ -135,6 +135,20 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | Buffer compartilhado | 19.4, 52.3 | o framebuffer | ✅ |
 | Vista tipada do buffer (`view_f64()`) | 18.3 | `views` | ✅ `view_f64/f32/i64/i32/u8` — mesma memória, sem cópia; a vista não cresce |
 | `transfer` / `race` / cancelamento cooperativo | 18.2, 37.2, 36.4 | — | ⏳ o bloco que falta da fase E (é ele que destrava `timeout`) |
+
+## O porte do editor (bateria 71)
+
+O pstudio foi portado para pscript em `pstudio/ps/` — buffer, aplicação e
+desenho em pscript, com janela/eventos/pixels em P atrás de uma fronteira só de
+escalares. Roda e está no gate (headless e com SDL dummy). Ver
+`pstudio/ps/README.md`.
+
+| Recurso | Decisão | Exercitado em | Estado |
+|---|---|---|---|
+| método enxerga variável de módulo | 42.2 | `method_globals` | ✅ (era bug: passagens fora de ordem) |
+| assinatura resolvida antes de qualquer chamada | 41.3 | `modules` | ✅ (era bug: resolvia ao checar o corpo) |
+| tipo do campo como contexto do valor | 54.2 | o editor inteiro | ✅ |
+| `ord` / `chr` | — | `ordchr`, o desenho de todo glifo | ✅ **a confirmar por você** (não havia decisão; sem eles o porte parava) |
 
 ## Módulos e stdlib
 

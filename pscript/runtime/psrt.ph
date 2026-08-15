@@ -628,6 +628,11 @@ def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr
 def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr
 def ps_str_from_bool(ctx: *PsCtx, v: bool) -> *PsStr
 def ps_str_eq(a: *PsStr, b: *PsStr) -> bool
+# `<` `<=` `>` `>=` between strings compare CONTENT, byte by byte and then by
+# length — the same order `sorted` uses (28.4), so the two never disagree.
+# Comparing the pointers instead would order by where the collector happened to
+# put them, which is not an order at all.
+def ps_str_lt(a: *PsStr, b: *PsStr) -> i32
 def ps_str_len(ctx: *PsCtx, s: *PsStr) -> i64
 # the bytes, for the few places a C string is what is wanted (an assert message,
 # a path). The pointer belongs to the object and dies with it.
@@ -642,6 +647,12 @@ def ps_str_to_float(ctx: *PsCtx, s: *PsStr) -> f64
 # REPRESENTATION, not of this signature — so it can land later without moving
 # anything.
 def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *PsStr
+
+# `ord` and `chr`, Python's pair: a character is a one-character STRING here
+# (3.4), so these are the only door between text and the number a codepoint is
+# — and the only way a string reaches an interface that speaks scalars.
+def ps_str_ord(ctx: *PsCtx, s: *PsStr, file: const *char, line: i32) -> i64
+def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr
 # `s[a:b]` — a COPY (17.3), so no interior pointer ever exists
 def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsStr
 def ps_str_split(ctx: *PsCtx, s: *PsStr, sep: *PsStr) -> *PsList

@@ -1,0 +1,30 @@
+lines 3 text hello|world|
+typed hello, there|world| carets 0:12
+undo1 hello|world|
+undo2 hello|world|
+redo hello, there|world|
+word 0:6
+selected [beta ]
+replaced alpha Xgamma|second line|
+ncarets 3 at 0:3 0:11 0:19
+multi ! dog ! dog !|
+found 0 4 0 7
+next 1 5
+missing True
+count 2
+replaced 2 one 2 three|four 2 six|
+dup a|b|b|c|
+indent     a|b|b|c|
+dedent a|b|b|c|
+comment # a|b|b|c|
+uncomment a|b|b|c|
+can fold True end 2
+folded True True True False
+still there def f():|    body|    more|after|
+unfolded False
+mark 1 0
+crlf True lines 3
+roundtrip 6
+join abcd| 0:2
+del acd|
+undone abcd|

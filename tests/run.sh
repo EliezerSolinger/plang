@@ -391,6 +391,53 @@ suite_pstudio() {
             fail=$((fail+1))
         fi
     done
+
+    # the ported editor's CORE, headless: no window, no SDL — the same shape as
+    # the `core_*` tests beside it, and the part of the port that is pure logic
+    local C=$OUT/pstudio_pscore errc=$OUT/pstudio_pscore.err
+    rm -rf "$C"; mkdir -p "$C"; : >"$errc"
+    ok=1
+    $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt.p 2>>"$errc" || ok=0
+    [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/core_test.psc 2>>"$errc" || ok=0; }
+    [ $ok = 1 ] && { $CC $CSTD -w -o "$C/core_test" "$C/pstudio/ps/core_test.c" \
+                         "$C/pscript/runtime/psrt.c" -lm -pthread 2>>"$errc" || ok=0; }
+    if [ $ok = 1 ] && check_run "$C/core_test" tests/pstudio/ps_core.expected "pstudio-ps-core"; then
+        pass=$((pass+1))
+    else
+        echo "  FAIL pstudio-ps-core (the ported buffer)"
+        [ -s "$errc" ] && sed 's/^/       /' "$errc" | head -3
+        fail=$((fail+1))
+    fi
+
+    # the pscript PORT of the editor: the logic in pscript, the driver in P.
+    # It is built the way a user would build one — the runtime and the shim
+    # compiled alongside — and then run headless through its own self-test,
+    # which drives the real code paths (open, type, select, undo, DRAW, save).
+    if [ $sdl = 1 ] && [ "$BACKEND" != qbe ]; then
+        local P=$OUT/pstudio_ps err2=$OUT/pstudio_ps.err
+        rm -rf "$P"; mkdir -p "$P"; : >"$err2"
+        local sdlflags="-DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H $(pkg-config --cflags --libs sdl2)"
+        ok=1
+        for d in pstudio/*.ph pstudio/ps/shim.ph stl/*.ph selfhost/plang.ph; do
+            $PLANGC $PFLAGS --out-dir "$P" "$d" 2>>"$err2" || ok=0
+        done
+        for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/ps/shim; do
+            [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
+        done
+        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pscript/runtime/psrt.ph pscript/runtime/psrt.p 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS --cpp "$CC -I$P/pstudio/ps" --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -w -I"$P/pstudio/ps" -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt.c" "$P/pstudio/ps/shim.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/pstudio/psys.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
+        printf 'line one\nline two\nline three\n' > "$P/sample.txt"
+        if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
+           diff -q "$P/out" tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then
+            pass=$((pass+1))
+        else
+            echo "  FAIL pstudio-ps (the pscript port)"
+            [ -s "$err2" ] && sed 's/^/       /' "$err2" | head -3
+            [ -f "$P/out" ] && diff "$P/out" tests/pstudio/ps_selftest.expected | head -4 | sed 's/^/       /'
+            fail=$((fail+1))
+        fi
+    fi
     unset SDL_VIDEODRIVER
     echo "   pstudio: $pass ok, $fail failed"
     total_fail=$((total_fail+fail))

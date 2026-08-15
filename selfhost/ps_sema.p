@@ -60,16 +60,16 @@ struct PsLamF:
 declare Vec<PsLamF>
 implement Vec<PsLamF>
 
-# The system traits (D3/67.4), which every program has without importing
-# anything. They are written as SOURCE and parsed like any other module: a trait
-# built by hand out of AST nodes would be a second way to say the same thing,
-# and the day the surface changes one of them would be forgotten.
+# The prelude (D3/67.4): the names every program has without importing anything.
+# It is SOURCE — see ps_prelude.psc — parsed like any other module, because a
+# trait built by hand out of AST nodes would be a second way to say the same
+# thing, and the day the surface changed one of them would be forgotten.
 #
-# `Iterable` uses the protocol of 40.3 — `has_next()`/`next()` and not Rust's
-# `next() -> Option`, because with an option `list<int?>` cannot tell the end
-# from an element that is None. The associated type (66.4) is what lets the
-# IMPLEMENTATION say what it yields instead of the caller.
-static const PS_PRELUDE: const *char = "enum Category:\n    NONE\n    INDEX\n    KEY\n    TYPE\n    VALUE\n    ZERO\n    OVERFLOW\n    IO\n\nenum Status:\n    RUNNING\n    DONE\n    ERROR\n    GONE\n\nenum Endian:\n    LE\n    BE\n\ntrait Comparable:\n    def cmp(in self, other: Self) -> int\n\ntrait Iterable:\n    type Item\n    def has_next(self) -> bool\n    def next(self) -> Item\n\ntrait Closeable:\n    def close(self)\n"
+# `embed` (63.5) is what lets it be a real file and still cost nothing at run
+# time: the bytes are read at COMPILE time and become a static array, so there
+# is no file to find, no path to configure, and the prelude a compiler carries
+# is exactly the one that was compiled into it.
+static const PS_PRELUDE: const *char = embed("ps_prelude.psc")
 
 # Renamed name -> the name a diagnostic should print (`geom.Vec2`). Module
 # scope because `ps_type_str` is a free function: it is called from everywhere,
@@ -238,12 +238,15 @@ struct PsSema:
     static def builtin_ns(self: *PsSema, name: const *char, path: const *char) -> *PsNs
     static def fresh_prefix(self: *PsSema, name: const *char) -> const *char
     static def gname(self: *PsSema, name: const *char, pos: Pos) -> const *char
+    static def gname_soft(self: *PsSema, name: const *char) -> const *char
+    static def gname_x(self: *PsSema, name: const *char, pos: Pos, hard: bool) -> const *char
     static def enter_decl(self: *PsSema, d: *PsDecl)
     static def enter_func(self: *PsSema, d: *PsDecl, f: *PsFunc)
     static def check_impl(self: *PsSema, d: *PsDecl)
     static def check_implements(self: *PsSema, d: *PsDecl)
     static def conform(self: *PsSema, rd: *PsDecl, td: *PsDecl, ms: **PsFunc, nms: i32, pos: Pos, closed: bool, assoc: *PsType)
     static def sig_type(self: *PsSema, ns: *PsNs, t: *PsType, selfname: const *char) -> *PsType
+    static def resolve_sig(self: *PsSema, f: *PsFunc)
     static def find_trait(self: *PsSema, t: *PsType, pos: Pos) -> *PsDecl
     static def is_struct_name(self: *PsSema, name: const *char) -> bool
     static def named_type(self: *PsSema, name: const *char, pos: Pos) -> *PsType
@@ -783,8 +786,15 @@ struct PsSema:
                 lw->inner = lt2
                 t = lw
             case PE_INDEX:
+                # neither the container nor the index inherits the type the
+                # SURROUNDINGS expect: in `Vec(trio[0] as float, ...)` the
+                # float belongs to the result, and letting it reach the `0`
+                # would index a list with a floating point number
+                prevhx: *PsType = self->hint
+                self->hint = None
                 ct3: *PsType = self->check_expr(e->lhs)
                 it3: *PsType = self->check_expr(e->rhs)
+                self->hint = prevhx
                 if ct3 != None and ct3->kind == PT_ARRAY:
                     # a fixed array knows its size, so the check is a compare
                     # against a constant — indexing still RAISES (5.2)
@@ -1615,6 +1625,17 @@ struct PsSema:
             ro: *PsType = ps_type(self->a, PT_OPT, e->pos)
             ro->inner = gl
             return ro
+        if strcmp(name, "ord") == 0 or strcmp(name, "chr") == 0:
+            # Python's pair. A character IS a one-character string here (3.4),
+            # so these are the door between text and the number a codepoint is
+            # — and the only way a string reaches an interface of scalars.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "%s() takes one %s", name, "character" if strcmp(name, "ord") == 0 else "codepoint")
+            if strcmp(name, "ord") == 0:
+                self->check_want(e->args[0], ps_type(self->a, PT_STR, e->pos), "the character of ord()")
+                return ps_type(self->a, PT_INT, e->pos)
+            self->check_want(e->args[0], ps_type(self->a, PT_INT, e->pos), "the codepoint of chr()")
+            return ps_type(self->a, PT_STR, e->pos)
         if strcmp(name, "interval") == 0:
             # 48.2/51.1: a repeating clock, consumed with `await t.tick()` in an
             # ordinary loop — no new grammar, and a tick that coalesces
@@ -2093,6 +2114,15 @@ struct PsSema:
     # A signature type, resolved in the namespace that WROTE it and with `Self`
     # standing for the implementing type (66.4). It resolves a COPY: the same
     # trait signature is compared against every type that implements it.
+    # the types a signature names, resolved in the namespace that WROTE it
+    static def resolve_sig(self: *PsSema, f: *PsFunc):
+        if f == None:
+            return
+        f->ret = self->resolve_type(f->ret)
+        for i in range(f->nparams):
+            if f->params[i].type != None:
+                f->params[i].type = self->resolve_type(f->params[i].type)
+
     static def sig_type(self: *PsSema, ns: *PsNs, t: *PsType, selfname: const *char) -> *PsType:
         if t == None:
             return None
@@ -2180,6 +2210,17 @@ struct PsSema:
     # it belongs to the module being compiled, which an imported module must
     # not be able to reach: that is the visibility rule doing its job.
     static def gname(self: *PsSema, name: const *char, pos: Pos) -> const *char:
+        return self->gname_x(name, pos, True)
+
+    # `soft` is for a name that is about to be BOUND, not read: a local of an
+    # imported module may perfectly well share its spelling with a variable of
+    # the program that imports it, and refusing that would make a module's
+    # locals depend on who imports it.
+    static def gname_soft(self: *PsSema, name: const *char) -> const *char:
+        zp: Pos = {0}
+        return self->gname_x(name, zp, False)
+
+    static def gname_x(self: *PsSema, name: const *char, pos: Pos, hard: bool) -> const *char:
         ns: *PsNs = self->cur_ns
         if ns == None:
             return name
@@ -2188,7 +2229,7 @@ struct PsSema:
         e: *PsNsEnt = ns_find(ns->ents, ns->nents, name)
         if e != None:
             return self->a->printf("%s%s", e->ns->prefix, e->orig)
-        if ns != self->root_ns and self->root_ns != None and self->root_ns->sym.has(name):
+        if hard and ns != self->root_ns and self->root_ns != None and self->root_ns->sym.has(name):
             fatal_at(ns->m->path, pos, "unknown name '%s' (it belongs to the module being compiled, which '%s' does not import)", name, ns->name)
         return name
 
@@ -2485,8 +2526,10 @@ struct PsSema:
                     fatal_at(self->file, a->pos, "'%s' is given twice", a->text)
                 val = a->lhs
             seen[slot] = True
-            at: *PsType = self->check_expr(val)
-            self->want(val, at, rd->fields[slot].type, self->a->printf("field '%s'", rd->fields[slot].name))
+            # the FIELD's type is context for the value (54.2), the same way a
+            # declaration's is: `UndoGroup([], ...)` says what the empty list holds
+            self->check_want(val, rd->fields[slot].type, self->a->printf("field '%s'", rd->fields[slot].name))
+            at: *PsType = val->type
             a->type = rd->fields[slot].type
         if named:
             for fi in range(rd->nfields):
@@ -2527,7 +2570,7 @@ struct PsSema:
                 # a module variable is reached by its RENAMED name (41.3); a
                 # new local keeps the name as written, so the rewrite only
                 # happens on the paths that really assign a module variable
-                gn: const *char = self->gname(s->name, s->pos)
+                gn: const *char = self->gname_soft(s->name)
                 if self->fn_globals.has(s->name):
                     # `global x` inside a function: the assignment goes to the
                     # module variable, never to a new local
@@ -2634,11 +2677,20 @@ struct PsSema:
             case PS_ASSIGN:
                 if s->lhs->kind == PE_INDEX and s->op == TK_ASSIGN:
                     et3: *PsType = self->check_expr(s->lhs)
+                    prevhi: *PsType = self->hint
+                    self->hint = et3
                     vt4: *PsType = self->check_expr(s->rhs)
+                    self->hint = prevhi
                     self->want(s->rhs, vt4, et3, "the assigned element")
                     return
                 lt: *PsType = self->check_expr(s->lhs)
+                # what is being ASSIGNED TO is context for the value, exactly as
+                # a declaration's type is: `self.lines = []` says what the empty
+                # list holds, and so does `d[k] = []`
+                prevha: *PsType = self->hint
+                self->hint = lt
                 rt: *PsType = self->check_expr(s->rhs)
+                self->hint = prevha
                 if s->lhs->kind == PE_NAME:
                     li2: i32 = self->find_local(s->lhs->text)
                     if li2 >= 0 and self->locals[li2].is_const:
@@ -3677,12 +3729,22 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
         if (d->kind == PD_RECORD or d->kind == PD_STRUCT) and d->nimplements > 0:
             s.check_implements(d)
 
+    # Every SIGNATURE is resolved here, before anything calls it. Naming a type
+    # from another module leaves a qualifier on the node (41.3), and resolving
+    # is what strips it and renames it to the global everyone knows — so a call
+    # checked before this compared `Vec2` against `lib_geom.Vec2` and refused a
+    # value of the very type it asked for. It used to happen as a side effect of
+    # checking the BODY, which is far too late: the top level runs first (39.4).
+    # Bodies still wait for the pass below; only the signatures move.
     for i in range(m->ndecls):
-        d: *PsDecl = m->decls[i]
-        if d->kind == PD_RECORD or d->kind == PD_STRUCT:
-            for j in range(d->nmethods):
-                s.enter_func(d, d->methods[j])
-                s.check_method(d, d->methods[j])
+        dm: *PsDecl = m->decls[i]
+        s.enter_decl(dm)
+        if dm->kind == PD_FUNC and dm->func != None and dm->func->ntparams == 0:
+            s.resolve_sig(dm->func)
+        if dm->kind != PD_RECORD and dm->kind != PD_STRUCT:
+            continue
+        for j in range(dm->nmethods):
+            s.resolve_sig(dm->methods[j])
 
     # The top-level statements ARE the program (39.4), and they are checked
     # BEFORE the function bodies for one reason: a declaration among them is a
@@ -3700,10 +3762,15 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
 
     for i in range(m->ndecls):
         s.enter_decl(m->decls[i])
+        d2: *PsDecl = m->decls[i]
+        if d2->kind == PD_RECORD or d2->kind == PD_STRUCT:
+            for j in range(d2->nmethods):
+                s.enter_func(d2, d2->methods[j])
+                s.check_method(d2, d2->methods[j])
         # a generic is a TEMPLATE: what gets checked is each instance, where
         # the type parameter is a real type (66.3)
-        if m->decls[i]->kind == PD_FUNC and m->decls[i]->func->ntparams == 0:
-            s.check_func(m->decls[i]->func)
+        if d2->kind == PD_FUNC and d2->func->ntparams == 0:
+            s.check_func(d2->func)
 
     # one file-scope variable per module variable the top level declared: the
     # ASSIGNMENT stays where it was written, so the order the program runs in

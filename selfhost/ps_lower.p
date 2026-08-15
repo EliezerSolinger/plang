@@ -1557,6 +1557,21 @@ struct PsLow:
                     self->push_arg(fp, self->as_f64(e->rhs))
                     return fp
                 return self->int_op(e, "ps_pow", "ps_upow")
+            case TK_LT, TK_LE, TK_GT, TK_GE:
+                if is_str:
+                    # ordering strings compares CONTENT, like `==` does (22.2):
+                    # `ps_str_lt` answers negative/zero/positive and the operator
+                    # is applied to THAT. Falling through to the generic path
+                    # compared the pointers, which ordered by where the
+                    # collector happened to put them.
+                    cl: *Expr = self->call_rt("ps_str_lt", e->pos)
+                    self->push_arg(cl, self->expr(e->lhs))
+                    self->push_arg(cl, self->expr(e->rhs))
+                    cmp0: *Expr = ex_new(self->a, EX_BINARY, e->pos)
+                    cmp0->op = e->op
+                    cmp0->lhs = cl
+                    cmp0->rhs = self->num("0", e->pos)
+                    return cmp0
             case TK_EQ, TK_NE:
                 if is_str:
                     # `==` on strings compares CONTENT (22.2)
@@ -2036,6 +2051,15 @@ struct PsLow:
                 self->pre.push(us9.data[i])
             self->raised = True
             return self->ident(on9, e->pos)
+        if strcmp(name, "ord") == 0 or strcmp(name, "chr") == 0:
+            oc: *Expr = self->call_rt("ps_str_ord" if strcmp(name, "ord") == 0 else "ps_str_chr", e->pos)
+            self->push_arg(oc, self->ctx_arg(e->pos))
+            self->push_arg(oc, self->expr(e->args[0]))
+            self->pos_args(oc, e->pos)
+            self->raised = True
+            if strcmp(name, "chr") == 0:
+                self->allocs = True
+            return oc
         if strcmp(name, "interval") == 0:
             iv9: *Expr = self->call_rt("ps_interval_new", e->pos)
             self->push_arg(iv9, self->ctx_arg(e->pos))
