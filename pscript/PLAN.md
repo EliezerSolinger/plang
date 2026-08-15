@@ -1047,6 +1047,29 @@ sandbox. Volta quando aparecer algo que a fronteira 45.5 não dê conta. Enquant
 não voltar, o pscript NÃO tem tipo ponteiro — e é isso que mantém o `--safe` da
 12.3 desnecessário.
 
+**Por que ele perdeu o sentido** (palavras do usuário: a linguagem evoluiu para
+outro lado). Três decisões posteriores comeram o `unsafe` por baixo, uma por
+vez:
+
+  * o coletor virou um Cheney de dois espaços (15.1), e **objeto do pscript
+    anda**. Ponteiro cru para dentro do heap não é uma opção perigosa que o
+    programa assume — é uma opção que não funciona, a menos que o coletor ganhe
+    objeto fixado, espaço não-móvel e a fragmentação que vem junto;
+  * o `buffer` saiu do heap coletado (bytes malloc'ados, endereço estável) e
+    ganhou `view_*`, `pack`/`unpack` com endianness. O caso "mexer em memória
+    crua" passou a ter resposta SEGURA melhor do que a insegura seria;
+  * a fronteira 45.5 se firmou como o jeito de falar com C, e o shim do pstudio
+    provou: SDL2 inteiro atravessou sem uma linha de `unsafe`, com o compilador
+    conferindo os dois lados.
+
+Dito de outro jeito: o `unsafe` do pscript já existe e chama-se **P** — o
+`psrt.p` e os shims são exatamente a parte insegura, escrita numa linguagem com
+ponteiro de verdade e conferida pelo mesmo compilador. Do pedido original sobrou
+só a chamada variádica, que não pede tipo ponteiro nenhum e ainda não tem um
+caso real. Se voltar, volta por aí — e depois, no máximo, por um ponteiro
+restrito a memória DE FORA do heap coletado. Deref de objeto coletado pede outro
+coletor, e essa é a conta que nunca fechou.
+
 ### 75.2 — template SEM header: passa um dict e renderiza
 
 O usuário fechou a 63.2 pelo outro lado: não existe linha de cabeçalho nem
