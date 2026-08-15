@@ -1007,6 +1007,83 @@ que o caso geral serializa; hoje serializa `str` e `list` de bytes, e um grafo
 com ciclo pede a guarda que a 18.2 menciona), e `unsafe` (11-12), que pressupõe
 um tipo ponteiro no pscript.
 
+As baterias 74 e 75, logo abaixo, mexem em dois desses: a fila do worker ganha
+descritor (que é meio caminho do `epoll`) e a cópia profunda passa a ser
+trabalho a fazer. `unsafe` fica fora por decisão.
+
+## Baterias 74 e 75 — decididas pelo usuário, AINDA NÃO implementadas
+
+Tudo abaixo já é decisão fechada. Falta escrever.
+
+### 74.1 — `await w.recv()` ESTACIONA, com eventfd
+
+Hoje `w.recv()` dentro de um `async def` bloqueia a thread na condvar do worker:
+uma task esperando mensagem congela todas as outras. Decidido: a fila do worker
+ganha um DESCRITOR (eventfd no Linux, self-pipe onde não houver), o `await
+w.recv()` estaciona a task como o `sleep` estaciona, e o laço do escalonador
+espera NO descritor em vez de espiar a fila. É deliberadamente a forma da 36.2,
+e já é metade do `epoll` da 18.4 — o loop passa a ter uma lista de descritores
+e um prazo mais próximo, que é exatamente a assinatura de que a 18.4 precisa.
+
+### 74.2 — cópia PROFUNDA de grafo em mensagem, com guarda de ciclo (34.3)
+
+Decidido fazer o caso geral: `list<str>`, `dict<K,V>`, `record`/`struct` com
+referências, e ciclo. A serialização anda no grafo do objeto (o mesmo caminho
+que o coletor já sabe andar, como a 18.2 registra) e leva um mapa de
+já-visitados; um objeto revisitado vira uma REFERÊNCIA à posição anterior, e a
+reconstrução no heap do receptor refaz a ligação. Sem isso um grafo cíclico
+serializa para sempre.
+
+### 74.3 — esperar por task cancelada LANÇA (confirmado)
+
+Fica como está: cancelamento é um erro com categoria própria e viaja como
+qualquer outro (19.3). Quem quiser ignorar filtra por categoria no `catch`.
+
+### 75.1 — `unsafe` (11-12) fica FORA do v0.1
+
+Registrado com o motivo, não descartado: nem o raytracer nem o editor
+precisaram, e o shim em P já cobre o caso real (SDL2 inteiro) sem furar a
+sandbox. Volta quando aparecer algo que a fronteira 45.5 não dê conta. Enquanto
+não voltar, o pscript NÃO tem tipo ponteiro — e é isso que mantém o `--safe` da
+12.3 desnecessário.
+
+### 75.2 — template SEM header: passa um dict e renderiza
+
+O usuário fechou a 63.2 pelo outro lado: não existe linha de cabeçalho nem
+função tipada gerada. O template recebe um DICT com os valores e renderiza:
+
+    render("email.tpl", {"nome": "Ana", "valor": "12.50"})
+
+A forma de uma chave só, sem dict, continua sendo o `render(path)` que já
+funciona. O que fica de fora, por decisão: declarar tipos no arquivo e gerar
+`render_email(nome: str, valor: float)`.
+
+### 75.3 — `import "shim.ph"`: o compilador PUXA o módulo P para o build (2.4)
+
+`import "shim.ph"` num programa pscript faz o plangc compilar o `.p`
+correspondente e emitir o `.c` ao lado do seu, num comando só. Os tipos que
+atravessam continuam sendo os da fronteira 45.5 — o import não afrouxa nada,
+só tira do usuário o trabalho manual que o porte do pstudio fez à mão
+(compilar o P, incluir o header gerado).
+
+### 75.4 — escolhas de implementação, CONFIRMADAS
+
+Quatro coisas que eu decidi implementando e o usuário ratificou:
+
+  * `await race(ts)` devolve o ÍNDICE do vencedor (o valor se lê da task);
+  * `await timeout(t, ms)` devolve `bool` — True se terminou a tempo — e
+    cancela o perdedor nos dois casos;
+  * o CABEÇALHO de um `buffer` nunca é liberado (os bytes são, no `close`):
+    outra thread pode estar segurando o ponteiro, e liberar seria
+    use-after-free entre contextos;
+  * o valor inicial de um `shared str` é um LITERAL, porque é escrito antes de
+    existir qualquer contexto.
+
 ## Pendências de decisão acumuladas
 
-Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da bateria.)
+  * **72.5** (decidido, não implementado): `implement Trait for T` deve conferir
+    a assinatura INTEIRA, tipo de retorno incluído, e o P ganha tipo associado
+    (`type Item`) para que `Iterable` não seja preso a `i64`.
+  * **72.6** (decidido, não implementado): um `const` de tipo `record` atravessa
+    a fronteira pscript→P por REFERÊNCIA, somente leitura (`in ref T` do lado
+    P), conferido no ponto da chamada.
