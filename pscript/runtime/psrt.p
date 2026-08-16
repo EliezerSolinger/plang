@@ -3048,7 +3048,11 @@ def ps_forward(to: *PsBlock, p: *PsObj) -> *PsObj:
 static def ps_scan_object(to: *PsBlock, o: *PsObj):
     match o->ty:
         case PS_TY_STR:
-            pass          # bytes are inline (51.2): nothing to follow
+            # the bytes are inline (51.2); what CAN be inside is the offset
+            # index (80.1b), built on demand and collected like anything else
+            st9: *PsStr = (*PsStr)(o)
+            if st9->offs != None:
+                st9->offs = (*PsArr)(ps_forward(to, (*PsObj)(st9->offs)))
         case PS_TY_ERR:
             e: *PsErr = (*PsErr)(o)
             e->msg = (*PsStr)(ps_forward(to, (*PsObj)(e->msg)))
@@ -3491,6 +3495,51 @@ def ps_utf8_valid(b: const *char, n: usize) -> bool:
         i += usize(need) + 1
     return True
 
+# 80.1b — indexar em O(1).
+#
+# A decisão pedia a largura adaptativa do PEP 393 (latin-1/UCS-2/UCS-4 por
+# string). Implementá-la LITERALMENTE aqui sairia caro de um jeito que só
+# ficou visível depois: tudo neste sistema quer os bytes UTF-8 — o socket, o
+# arquivo, a mensagem entre heaps, a fronteira com o P (84.1), o `print`. Com o
+# texto guardado em UCS-4, cada uma dessas travessias precisaria MATERIALIZAR o
+# UTF-8, e o PEP 393 resolve isso guardando as DUAS formas. Ou seja: o preço
+# real seria duas cópias de toda string que atravessa qualquer coisa.
+#
+# O que está aqui alcança a mesma propriedade observável — `s[i]` e fatia em
+# O(1) — com uma cópia só:
+#
+#   * ASCII (a esmagadora maioria, e TODO texto de protocolo) não precisa de
+#     nada: `nchars == len` já É a prova de que cada byte é um caractere, então
+#     o índice é acesso direto. Repare que essa prova já estava no cabeçalho
+#     desde sempre — só ninguém tinha reparado nela;
+#   * o resto ganha um ÍNDICE DE DESLOCAMENTOS construído na primeira vez que
+#     alguém indexa aquela string, e guardado nela. O(n) uma vez, O(1) daí em
+#     diante, e nada para quem nunca indexa.
+#
+# Uma `str` é imutável (31.3), então o índice nunca precisa ser invalidado.
+static def ps_str_ascii(s: *PsStr) -> bool:
+    return s->nchars == s->len
+
+# o índice, construído sob demanda e guardado na própria string
+static def ps_str_index(ctx: *PsCtx, s: *PsStr) -> *PsArr:
+    if s->offs != None:
+        return s->offs
+    n: usize = usize(s->len)
+    cnt: usize = usize(s->nchars)
+    a: *PsArr = (*PsArr)(ps_alloc(ctx, sizeof(PsArr) + (cnt + 1) * sizeof(u32), PS_TY_ARR))
+    a->nbytes = (cnt + 1) * sizeof(u32)
+    off: *u32 = (*u32)((*char)(a) + sizeof(PsArr))
+    k: usize = 0
+    i: usize = 0
+    while i < n:
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            off[k] = u32(i)
+            k += 1
+        i += 1
+    off[cnt] = u32(n)
+    s->offs = a
+    return a
+
 # byte offset of codepoint `k`, or `n` when k is past the end
 static def ps_utf8_off(b: const *char, n: usize, k: i64) -> usize:
     seen: i64 = 0
@@ -3509,6 +3558,7 @@ def ps_str_new(ctx: *PsCtx, bytes: const *char, len: usize) -> *PsStr:
         memcpy(s->data, bytes, len)
     s->data[len] = '\0'
     s->nchars = ps_utf8_count(s->data, len)
+    s->offs = None
     return s
 
 # 79.1/83.2: bytes become text HERE, and only if they really are text. A `str`
@@ -3555,6 +3605,7 @@ def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr:
     memcpy(s->data, a->data, usize(a->len))
     memcpy(s->data + a->len, b->data, usize(b->len))
     s->data[n] = '\0'
+    s->offs = None
     return s
 
 # The digits by hand rather than snprintf: `%lld` versus `%ld` for an i64 is a
@@ -3671,8 +3722,12 @@ def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *
     if k < 0 or k >= i64(s->nchars):
         ps_raise(ctx, "string index out of range", PS_CAT_INDEX, file, line)
         return ps_str_new(ctx, "", 0)
-    a: usize = ps_utf8_off(s->data, usize(s->len), k)
-    b: usize = ps_utf8_off(s->data, usize(s->len), k + 1)
+    if ps_str_ascii(s):
+        return ps_str_new(ctx, s->data + usize(k), usize(1))
+    idx: *PsArr = ps_str_index(ctx, s)
+    off: *u32 = (*u32)((*char)(idx) + sizeof(PsArr))
+    a: usize = usize(off[k])
+    b: usize = usize(off[k + 1])
     return ps_str_new(ctx, s->data + a, b - a)
 
 def ps_str_ord(ctx: *PsCtx, s: *PsStr, file: const *char, line: i32) -> i64:
@@ -3732,8 +3787,12 @@ def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: boo
         hi = n
     if lo >= hi:
         return ps_str_new(ctx, "", 0)
-    ba: usize = ps_utf8_off(s->data, usize(s->len), lo)
-    bb: usize = ps_utf8_off(s->data, usize(s->len), hi)
+    if ps_str_ascii(s):
+        return ps_str_new(ctx, s->data + usize(lo), usize(hi - lo))
+    idx: *PsArr = ps_str_index(ctx, s)
+    off: *u32 = (*u32)((*char)(idx) + sizeof(PsArr))
+    ba: usize = usize(off[lo])
+    bb: usize = usize(off[hi])
     return ps_str_new(ctx, s->data + ba, bb - ba)
 
 def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64:
@@ -3908,6 +3967,7 @@ static def ps_pad(ctx: *PsCtx, src: const *char, n: usize, width: i32, align: ch
     out: *PsStr = ps_alloc(ctx, sizeof(PsStr) + total + 1, PS_TY_STR)
     out->len = u32(total)
     out->hash = 0
+    out->offs = None
     # padding is ASCII spaces or zeros, so the character count grows with it
     out->nchars = u32(pad) + ps_utf8_count(src, n)
     d: *char = out->data

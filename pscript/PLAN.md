@@ -1572,6 +1572,37 @@ estados e ambos anteriores a esta fase:
 E `str` ganhou `lower()`/`upper()` (ASCII, e dito em voz alta: caixa em Unicode
 depende de língua, e um `lower()` que fingisse saber disso mentiria).
 
+### 80.1b — indexar em O(1) — FEITO, mas NÃO como PEP 393
+
+A decisão pedia a largura adaptativa do PEP 393 (latin-1/UCS-2/UCS-4 por
+string). Não foi isso que entrou, e o motivo só ficou visível depois de o resto
+desta fase existir — vale registrar por inteiro, porque é uma decisão que eu
+tomei sozinho:
+
+**TUDO neste sistema quer os bytes UTF-8.** O socket manda bytes, o arquivo
+grava bytes, a mensagem entre heaps serializa bytes, a fronteira com o P (84.1)
+empresta um ponteiro para bytes, o `print` escreve bytes. Com o texto guardado
+em UCS-4, cada uma dessas travessias teria de MATERIALIZAR o UTF-8 — e é
+exatamente por isso que o próprio PEP 393 guarda as DUAS formas, com um cache
+UTF-8 preguiçoso ao lado. O preço real da adaptativa aqui seria duas cópias de
+toda string que atravessa qualquer coisa.
+
+O que entrou alcança a mesma propriedade observável — `s[i]` e fatia em O(1) —
+com uma cópia só:
+
+  * **ASCII não precisa de nada**: `nchars == len` já É a prova de que cada
+    byte é um caractere, então o índice é acesso direto. Essa prova estava no
+    cabeçalho desde a 51.2 — só ninguém tinha reparado nela. Cobre a
+    esmagadora maioria das strings e TODO texto de protocolo;
+  * **o resto ganha um índice de deslocamentos**, construído na primeira vez
+    que alguém indexa AQUELA string, guardado nela e coletado com ela. O(n) uma
+    vez, O(1) daí em diante, e nada para quem nunca indexa. Como uma `str` é
+    imutável (31.3), ele nunca se invalida.
+
+Se um dia aparecer um programa que sofra com isso — muito texto não-ASCII,
+indexado o tempo todo, sem atravessar nada —, a adaptativa continua registrada
+e o caminho está livre. Teste: `tests/pscript/run/str_index.psc`.
+
 ### A ordem de implementação
 
   1. escalonador: `await` cede sempre (78.4) e o laço drena no fim (77.3);

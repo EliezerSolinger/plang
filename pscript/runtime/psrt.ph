@@ -67,6 +67,11 @@ struct PsStr:
                     #   Computed once at creation, in the pass that copies the
                     #   bytes anyway, so `len(s)` stays O(1).
     hash: u32       # 0 = not computed yet
+    offs: *PsArr    # 80.1b: o índice de deslocamentos, construído na primeira
+                    #   vez que alguém indexa ESTA string por caractere. ASCII
+                    #   nunca precisa dele (`nchars == len` já prova que cada
+                    #   byte é um caractere), e quem nunca indexa não paga nada.
+                    #   Uma `str` é imutável, então ele nunca se invalida.
     data: char[1]   # flexible in practice: allocated with len + 1 bytes
 
 # a heap block: allocation is a bump inside one of these, and the collector

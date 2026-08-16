@@ -54,7 +54,7 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `dict<K,V>`; chave por conteúdo | 4.x, 38.1 | JSON, `sys.env` | ✅ |
 | `set` + `in`/`not in` | 8.1 | — | ✅ |
 | `str` imutável; `len` em codepoints | 31.3, 3.4 | tudo, e o buffer do editor | ✅ com `ord`/`chr` (a porta entre caractere e codepoint); `x in s` (substring) e `for ch in s` ainda não |
-| largura adaptativa / cache UTF-8 | 7.1, 14.1 | — | ◐ hoje UTF-8 com contagem de codepoints no cabeçalho, que É a forma de cache da 51.2; a largura adaptativa continua adiante |
+| índice O(1) em `s[i]` e fatia | 7.1, 80.1b | `str_index` | ✅ ASCII direto (`nchars == len` já prova); não-ASCII ganha um índice de deslocamentos construído sob demanda e coletado com a string. NÃO é o PEP 393: guardar UCS-4 obrigaria a materializar UTF-8 em toda travessia (socket, arquivo, mensagem, fronteira), que é por que o próprio PEP guarda as duas formas |
 | `s[i]` por caractere; índice negativo; fatia | 3.4, 31.4, 17.3 | parse de `--dim` | ✅ |
 | Iteração pelo protocolo `has_next()`/`next()` | 40.3 | — | ✅ (sobre `struct` que implementa `Iterable`) |
 | `==` conteúdo / `is` identidade | 22.2 | — | ✅ — e `<` `>` `<=` `>=` entre strings também comparam CONTEÚDO (comparavam ponteiro; achado do porte do editor) |
