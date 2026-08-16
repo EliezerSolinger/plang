@@ -1199,6 +1199,186 @@ Quatro coisas que eu decidi implementando e o usuário ratificou:
   * o valor inicial de um `shared str` é um LITERAL, porque é escrito antes de
     existir qualquer contexto.
 
+## Baterias 76 a 80 — I/O de verdade: pool, socket e o que o JS faz
+
+Decisões do usuário, todas fechadas, nenhuma implementada ainda. É o programa
+de trabalho da próxima fase: `async` deixa de ser sobre relógio e passa a ser
+sobre I/O, que é a razão pela qual `async` existe.
+
+**O desenho em uma frase:** `async/await` para I/O, `spawn`/worker para CPU, e
+cada worker com escalonador próprio (então um worker também usa `await`).
+
+### 76.1 — o que o runtime atende: arquivo, socket e DNS, tudo agora
+
+A separação é a da libuv, e não é gosto: **socket tem modo não-bloqueante de
+verdade** e entra no `poll` que a 74.1 já construiu; **arquivo não tem** —
+`read(2)` bloqueia sempre — e por isso precisa de thread; **DNS** (`getaddrinfo`)
+também bloqueia e vai ao pool.
+
+### 76.2 — TODO I/O vira aguardável
+
+`f.read()` passa a devolver uma task: `texto = await f.read()`. O código
+existente ganha um `await` na frente, e como o topo também espera, nada fica
+impossível de escrever. Um nome por operação, e o que é lento PARECE lento —
+que é a lição do async colorido.
+
+### 76.3 — um pool por processo, preguiçoso
+
+UM pool para o processo inteiro, criado na primeira operação assíncrona, com N
+threads (padrão = núcleos, teto 8) e `PSCRIPT_POOL` para mandar diferente. A
+thread do pool **nunca toca o heap de ninguém**: ela trabalha em bytes
+malloc'ados e devolve bytes malloc'ados; quem constrói o valor no heap é o
+escalonador do contexto que pediu, exatamente como a recepção de mensagem da
+74.1 faz. Cada contexto tem sua fila de conclusão e seu descritor de acordar.
+
+### 76.4 — cancelar I/O solta quem espera
+
+Uma operação já em voo não se interrompe: `read(2)` não volta até voltar.
+Então `cancel`/`timeout` **liberam quem esperava na hora** (com o erro de
+cancelamento), a operação termina em paz na thread do pool e o resultado é
+descartado. Nada vaza e nada é cortado no meio.
+
+### 77.1 — o módulo `net`, orientado a conexão
+
+    import net
+
+    srv = net.listen(8080)
+    c = await srv.accept()
+    dados = await c.read(4096)
+    await c.write("pong")
+    c.close()
+
+    ip = await net.lookup("exemplo.com")
+
+Esconde socket/bind/listen/setsockopt atrás do que o programa quer. A conexão
+é `Closeable`, então entra no `with`.
+
+### 77.2 / 78.1 — HTTP é NOSSO, escrito em pscript, depois do socket
+
+Nada de terceiro dentro do runtime. O teste do que entra no `psrt` é: **precisa
+de acesso privilegiado ao heap, ao coletor ou ao escalonador?** Coletor,
+escalonador, pool, `poll`, socket e DNS precisam; parser de HTTP, JSON e URL
+não — são máquinas de estado sobre bytes, e ficam melhor escritas em pscript,
+onde o usuário lê e depura na própria linguagem.
+
+O llhttp é ele mesmo uma máquina de estados descrita num DSL em TypeScript que
+cospe C; reimplementá-la a partir da especificação nos dá o mesmo parser sem um
+`.c` de terceiro. Entra DEPOIS que socket e pool estiverem verdes.
+
+Quem quiser **TLS** ou a libcurl usa `import "tls.ph"` / `import "curl.ph"` — a
+fronteira da 75.3 existe justamente para isso, e a libcurl ainda por cima tem o
+laço dela, que teria de ser dirigido pelo nosso `poll`: integração, não
+linkagem, e integração desse tamanho não mora debaixo da abstração.
+
+### 77.3 — o laço DRENA no fim do programa
+
+Como o JS: ao chegar ao fim, o escalonador roda até não haver mais nada pronto,
+nem prazo, nem I/O em voo. Hoje uma task órfã morre pela metade (medido:
+`orphan:start` sai, `orphan:end` nunca). Com isso, uma task solta passa a
+funcionar como todo mundo espera e um servidor no topo deixa de precisar de
+`while True` artificial.
+
+### 77.4 / 78.2 — console: `print` síncrono, e os dois irmãos assíncronos
+
+`print` continua como é — escrita em buffer, barata, canal de diagnóstico da
+linguagem; um `await` em cada print envenenaria todo programa. Entram TAMBÉM
+`await aprint(...)` (mesmos argumentos, mesma junção por espaço) e
+`sys.out`/`sys.err` como objetos de arquivo, para quem quer escrever bytes,
+redirecionar ou usar `with`. E `await input()` estaciona, porque stdin espera
+por gente.
+
+**O porquê, que vale escrever:** embrulhar um `print` bloqueante num `async def`
+NÃO o torna assíncrono. Um `async def` é uma máquina de estados que só cede
+onde há `await`; se o corpo chama `write(2)` e ele bloqueia, a thread inteira
+para com todas as tasks daquele contexto. O que torna algo não-bloqueante é a
+OPERAÇÃO ser uma task — no pool ou no `poll`.
+
+### 78.3 — `async:` e `async lambda`, os dois
+
+    t = async:
+        await sleep(1)
+        print("pronto")
+
+    g = async lambda x: await busca(x)
+
+O bloco `async:` vira uma Task ali mesmo, capturando por valor como o lambda faz
+(19.2) — é o que serve disparar trabalho de fundo sem declarar função, e casa
+com a drenagem: `async:` sozinho é fire-and-forget que agora termina.
+
+### 78.4 — `await` CEDE SEMPRE, como o JS
+
+Mesmo com o valor pronto, o `await` passa pelo escalonador. Ordem previsível e
+justiça entre tasks — sem isso, um laço de `await`s que sempre acha resposta
+pronta (um cliente rápido, num servidor) nunca deixa outra task rodar.
+
+### 79.1 — `read` devolve `list<u8>`
+
+Bytes são bytes: um socket traz metade de um caractere UTF-8, um JPEG, um frame
+binário. `read` dá `list<u8>` e quem sabe que aquilo é texto chama `str(b)`, que
+LANÇA se não for UTF-8 válido. `write` aceita os dois. Usa um tipo que a
+linguagem já tem, que já atravessa em mensagem, e deixa o parser de HTTP
+natural.
+
+### 79.2 — até n bytes, vazio é fim
+
+`read(n)` devolve o que chegou (1..n); o vazio significa que o outro lado
+fechou — a semântica do `recv(2)`, que é o que todo parser incremental espera.
+Quem quiser exatamente n chama `read_exact(n)`, que insiste e LANÇA se o fim
+vier antes.
+
+### 79.3 / 80.2 — `open` e `close` aguardáveis, mas a limpeza fecha síncrono
+
+`f = await open("x")` vai ao pool. `await f.close()` existe. MAS `with` e
+`defer` chamam o fechamento BLOQUEANTE — porque `with`/`defer` também rodam
+durante o DESENROLAR de uma exceção, e esperar no meio do desenrolar obrigaria a
+limpeza a virar estado da máquina (um `with` podendo estacionar na saída por
+erro). `close(2)` só demora em caso patológico, então o custo é ~zero e a
+delicadeza toda é evitada.
+
+### 79.4 — combinadores
+
+Já existem `gather` (= `Promise.all`, resultados na ordem DADA, não na de
+chegada), `race` (índice do vencedor, cancela o resto) e `timeout`. Entram:
+
+  * `gather_settled` (= `allSettled`): espera todas e devolve o estado de cada
+    uma, valor ou erro, sem que a primeira falha derrube o conjunto;
+  * `first_ok` (= `any`): a primeira que der certo vence; se todas falharem,
+    lança com o conjunto de erros;
+  * `gather(ts, at_most=8)`: teto de concorrência, para que mil arquivos não
+    virem mil tasks afogando o pool.
+
+### 80.1a — strings ATRAVESSAM a fronteira P↔pscript
+
+Hoje não atravessam, e por isso não existe aqui a dança de `c_str()` do C++.
+Com socket e HTTP chegando, um shim em P vai querer receber e devolver texto.
+Decidido: definir como uma string cruza — provavelmente `const *char` mais
+tamanho, COPIADO dos dois lados, para que nenhum ponteiro de heap coletado
+escape e nenhum `malloc` do P entre no coletor. A conversão passa a existir,
+explícita e num lugar só.
+
+### 80.1b — largura adaptativa da `str` (a 7.1, inteira)
+
+`s[i]` hoje varre (O(n)); `len(s)` já é O(1) pelo `nchars` no cabeçalho.
+Decidido fazer o PEP 393: latin-1 / UCS-2 / UCS-4 escolhidos por string
+conforme o maior codepoint, com índice e fatia O(1) SEMPRE. Mexe em
+representação, coletor, concatenação (converter larguras), `pack`, mensagem
+entre heaps e fronteira com o P — é uma leva inteira sozinha, e vem depois do
+I/O.
+
+### A ordem de implementação
+
+  1. escalonador: `await` cede sempre (78.4) e o laço drena no fim (77.3);
+  2. pool de threads (76.3) com fila de conclusão por contexto;
+  3. arquivo aguardável (76.2, 79.1/79.2/79.3/80.2) — quebra os testes que usam
+     `f.read()`, e eles são atualizados junto;
+  4. `sys.out`/`sys.err` e `aprint` (78.2);
+  5. `net`: socket no `poll`, DNS no pool (77.1);
+  6. combinadores (79.4);
+  7. `async:` e `async lambda` (78.3);
+  8. strings atravessando a fronteira (80.1a);
+  9. largura adaptativa (80.1b);
+ 10. HTTP em pscript (77.2/78.1).
+
 ## Pendências de decisão acumuladas
 
 Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da
