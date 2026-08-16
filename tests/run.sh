@@ -21,6 +21,10 @@ set -u
 cd "$(dirname "$0")/.."
 
 PLANGC=${PLANGC:-./plangc}
+# the runtime speaks POSIX (socket, getaddrinfo, poll, pipe, pthread) and glibc
+# hides those under a strict `-std=`; asking for them explicitly is what every
+# project that uses them does
+PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
 CC=${CC:-cc}
 BACKEND=${BACKEND:-c}
 STD=${STD:-}
@@ -400,7 +404,7 @@ suite_pstudio() {
     $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt.p 2>>"$errc" || ok=0
     [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/core_test.psc 2>>"$errc" || ok=0; }
     [ $ok = 1 ] && { $CC $CSTD -w -o "$C/core_test" "$C/pstudio/ps/core_test.c" \
-                         "$C/pscript/runtime/psrt.c" -lm -pthread 2>>"$errc" || ok=0; }
+                         "$C/pscript/runtime/psrt.c" $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
     if [ $ok = 1 ] && check_run "$C/core_test" tests/pstudio/ps_core.expected "pstudio-ps-core"; then
         pass=$((pass+1))
     else
@@ -426,7 +430,7 @@ suite_pstudio() {
         done
         [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pscript/runtime/psrt.ph pscript/runtime/psrt.p 2>>"$err2" || ok=0; }
         [ $ok = 1 ] && { $PLANGC $PFLAGS --cpp "$CC -I$P/pstudio/ps" --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -w -I"$P/pstudio/ps" -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt.c" "$P/pstudio/ps/shim.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/pstudio/psys.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -I"$P/pstudio/ps" -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt.c" "$P/pstudio/ps/shim.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/pstudio/psys.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
         printf 'line one\nline two\nline three\n' > "$P/sample.txt"
         if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
            diff -q "$P/out" tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then
@@ -552,7 +556,7 @@ suite_pscript() {
                 $QBE "$pm" -o "${pm%.ssa}.s" 2>>"$err" || ok=0
                 qextra="$qextra ${pm%.ssa}.s"
             done
-            [ $ok = 1 ] && { $CC "$d/$name.s" "$d/psrt.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
+            [ $ok = 1 ] && { $CC $PSDEFS "$d/$name.s" "$d/psrt.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         else
             $PLANGC $PFLAGS --out-dir "$rt" "$src" 2>"$err" || ok=0
             local cextra=""
@@ -560,7 +564,7 @@ suite_pscript() {
                 [ -f "$pm" ] || continue
                 cextra="$cextra $pm"
             done
-            [ $ok = 1 ] && { $CC $CSTD -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt.c" $cextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
+            [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt.c" $cextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         fi
         if [ $ok = 0 ]; then
             echo "  FAIL $name (build): $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1)); continue

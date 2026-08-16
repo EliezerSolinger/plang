@@ -47,6 +47,10 @@ static def ps_is_const_init(e: *PsExpr) -> bool
 static def block_uses(b: *PsBlock, name: const *char) -> bool
 static def expr_uses(e: *PsExpr, name: const *char) -> bool
 static def opt_is_ref(t: *PsType) -> bool
+def ps_cleanup_flag(a: *Arena, pos: Pos) -> const *char
+static def ab_defer(ref B: AsyncB, s: *PsStmt)
+static def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos)
+static def ab_with(ref B: AsyncB, s: *PsStmt)
 static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32
 static def sh_mangle(L: *PsLow, t: *PsType) -> const *char
 static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
@@ -109,6 +113,23 @@ struct PsLow:
     async_catch: i32     # inside a `try` in a step function (50.1): the state
                          #   the machine goes to when something raises. -1 when
                          #   there is no `try` around this point.
+    # The CLEANUPS of the async function being lowered (`defer`, the release of
+    # a `with`, the `finally` of a `try`). A step function cannot use P's own
+    # `defer`: P runs it at every `return`, and a step RETURNS every time the
+    # task suspends — the cleanup would fire on a suspension, which is when it
+    # must not. So each one arms a bit in the frame, and every TRUE exit
+    # (return, failure, the end) runs the armed ones in reverse.
+    acl_flag: **char
+    acl_body: **PsBlock  # `defer`/`finally`: the block to run
+    acl_name: **char     # `with`: the resource, whose release is built fresh
+    acl_type: **PsType   #   at each exit (sharing one tree would be checked
+    nacl: i32            #   twice by P's sema)
+    cacl1: i32
+    cacl2: i32
+    cacl3: i32
+    cacl4: i32
+    in_cleanup: bool     # lowering a cleanup body: its own guard must not try
+                         #   to run the cleanups again
     async_names: StrSet
     frame_names: StrSet  # the generated async frames: collected like any struct
     fnvals: Vec<*PsFunc> # functions used as VALUES: each needs one adapter, so
@@ -168,6 +189,9 @@ struct PsLow:
     static def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     static def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
     static def guard(self: *PsLow, pos: Pos) -> *Stmt
+    static def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos)
+    static def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt
+    static def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos)
     static def push_arg(self: *PsLow, c: *Expr, e: *Expr)
     static def ctx_arg(self: *PsLow, pos: Pos) -> *Expr
     static def pos_args(self: *PsLow, c: *Expr, pos: Pos)
@@ -275,6 +299,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsTimer"))
             case PT_FILE:
                 return ty_ptr(self->a, ty_name(self->a, "PsFile"))
+            case PT_CONN:
+                return ty_ptr(self->a, ty_name(self->a, "PsConn"))
             case PT_BUFFER:
                 return ty_ptr(self->a, ty_name(self->a, "PsBuffer"))
             case PT_FUNC:
@@ -373,6 +399,100 @@ struct PsLow:
             return self->num("0.0", pos)
         return self->num("0", pos)
 
+    # The RELEASE of a `with`: a user `close()` for a Closeable, or the
+    # runtime's for a file or a buffer. 80.2: this is the BLOCKING close even
+    # now that `await f.close()` exists — cleanup also runs while an exception
+    # is unwinding, and waiting in the middle of an unwind would make the
+    # cleanup itself a state of the machine. `close(2)` only takes long in
+    # pathological cases, so the price is about zero.
+    static def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt:
+        k: PsTypeKind = t->kind if t != None else PT_UNKNOWN
+        cl: *Expr = None
+        if k == PT_NAME:
+            cl = self->call_rt(self->a->printf("%s_close", ps_cname(self->a, t->name)), pos)
+            rcv: *Expr = self->async_field(name, pos) if self->in_frame(name) else self->ident(name, pos)
+            if not t->is_ref:
+                ra: *Expr = ex_new(self->a, EX_UNARY, pos)
+                ra->op = TK_AMP
+                ra->lhs = rcv
+                rcv = ra
+            self->push_arg(cl, rcv)
+            self->push_arg(cl, self->ctx_arg(pos))
+        else:
+            cl = self->call_rt("ps_buffer_close" if k == PT_BUFFER else ("ps_conn_close" if k == PT_CONN else "ps_file_close"), pos)
+            self->push_arg(cl, self->ctx_arg(pos))
+            self->push_arg(cl, self->async_field(name, pos) if self->in_frame(name) else self->ident(name, pos))
+        st: *Stmt = st_new(self->a, ST_EXPR, pos)
+        st->expr = cl
+        return st
+
+    # Every cleanup armed so far, newest first, each guarded by its own bit.
+    # Called at the TRUE exits of a step function and nowhere else — a
+    # suspension is not an exit, and that distinction is the whole point.
+    static def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos):
+        if self->in_cleanup:
+            return
+        self->in_cleanup = True
+        i: i32 = self->nacl - 1
+        while i >= 0:
+            body: Vec<*Stmt>
+            body.init()
+            dis: *Stmt = st_new(self->a, ST_ASSIGN, pos)
+            dis->lhs = self->async_field(self->acl_flag[i], pos)
+            dis->op = TK_ASSIGN
+            dis->rhs = ex_new(self->a, EX_FALSE, pos)
+            body.push(dis)
+            if self->acl_body[i] != None:
+                inner: *Block = self->block(self->acl_body[i])
+                for k in range(inner->n):
+                    body.push(inner->stmts[k])
+            else:
+                body.push(self->close_stmt(self->acl_name[i], self->acl_type[i], pos))
+            blk: *Block = self->a->alloc(sizeof(Block))
+            blk->stmts = body.data
+            blk->n = body.len
+            g: *Stmt = st_new(self->a, ST_IF, pos)
+            g->conds = self->a->alloc(sizeof(*g->conds))
+            g->conds[0] = self->async_field(self->acl_flag[i], pos)
+            g->blocks = self->a->alloc(sizeof(*g->blocks))
+            g->blocks[0] = blk
+            g->nconds = 1
+            g->if_sel = -1
+            out->push(g)
+            i -= 1
+        self->in_cleanup = False
+
+    # just one of them, by index: what the ordinary end of a `with` block runs
+    static def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos):
+        if i < 0 or i >= self->nacl or self->in_cleanup:
+            return
+        self->in_cleanup = True
+        body: Vec<*Stmt>
+        body.init()
+        dis: *Stmt = st_new(self->a, ST_ASSIGN, pos)
+        dis->lhs = self->async_field(self->acl_flag[i], pos)
+        dis->op = TK_ASSIGN
+        dis->rhs = ex_new(self->a, EX_FALSE, pos)
+        body.push(dis)
+        if self->acl_body[i] != None:
+            inner: *Block = self->block(self->acl_body[i])
+            for k in range(inner->n):
+                body.push(inner->stmts[k])
+        else:
+            body.push(self->close_stmt(self->acl_name[i], self->acl_type[i], pos))
+        blk: *Block = self->a->alloc(sizeof(Block))
+        blk->stmts = body.data
+        blk->n = body.len
+        g: *Stmt = st_new(self->a, ST_IF, pos)
+        g->conds = self->a->alloc(sizeof(*g->conds))
+        g->conds[0] = self->async_field(self->acl_flag[i], pos)
+        g->blocks = self->a->alloc(sizeof(*g->blocks))
+        g->blocks[0] = blk
+        g->nconds = 1
+        g->if_sel = -1
+        out->push(g)
+        self->in_cleanup = False
+
     # `if ps_has_exc(&__ctx): return <nothing meaningful>` — the check of 49.2
     static def guard(self: *PsLow, pos: Pos) -> *Stmt:
         chk: *Expr = self->call_rt("ps_has_exc", pos)
@@ -424,7 +544,8 @@ struct PsLow:
             return cs2
         if self->async_task != None:
             # inside a step function (50.1): the task takes the error and the
-            # step ends. Whoever awaits it gets the error raised again (19.3).
+            # step ends. Whoever awaits it gets the error raised again (19.3) —
+            # and the armed cleanups run first, because this IS an exit.
             fl: *Expr = self->call_rt("ps_task_fail", pos)
             self->push_arg(fl, self->ctx_arg(pos))
             fl->args[fl->nargs] = self->ident(self->async_task, pos)
@@ -433,11 +554,14 @@ struct PsLow:
             fs->expr = fl
             fr: *Stmt = st_new(self->a, ST_RETURN, pos)
             fr->expr = ex_new(self->a, EX_TRUE, pos)
+            fv: Vec<*Stmt>
+            fv.init()
+            fv.push(fs)
+            self->async_cleanup(&fv, pos)
+            fv.push(fr)
             fb: *Block = self->a->alloc(sizeof(Block))
-            fb->stmts = self->a->alloc(usize(2) * sizeof(*fb->stmts))
-            fb->stmts[0] = fs
-            fb->stmts[1] = fr
-            fb->n = 2
+            fb->stmts = fv.data
+            fb->n = fv.len
             gs: *Stmt = st_new(self->a, ST_IF, pos)
             gs->conds = self->a->alloc(sizeof(*gs->conds))
             gs->conds[0] = chk
@@ -726,6 +850,20 @@ struct PsLow:
                 name = "ps_str_from_float"
             case PT_BOOL:
                 name = "ps_str_from_bool"
+            case PT_LIST:
+                # 79.1: `str(b)` is how bytes become text, and it CHECKS —
+                # a `str` promises codepoints, so bytes that are not valid
+                # UTF-8 raise instead of quietly making one that lies
+                if e->type->inner != None and e->type->inner->kind == PT_INT and e->type->inner->width == 8:
+                    bc: *Expr = self->call_rt("ps_str_from_bytes", e->pos)
+                    self->push_arg(bc, self->ctx_arg(e->pos))
+                    self->push_arg(bc, v)
+                    self->pos_args(bc, e->pos)
+                    self->raised = True
+                    self->allocs = True
+                    return bc
+                fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type))
+                return None
             case PT_NAME:
                 # a record, a struct or an enum: the derived form (44.3), or
                 # the type's own `to_str()` when it wrote one
@@ -1086,6 +1224,12 @@ struct PsLow:
                     return cw8
                 # `sys.argv` / `sys.env` (48.3): values only the runtime can
                 # answer, so the read IS the call
+                if strcmp(e->text, "__sys_out") == 0 or strcmp(e->text, "__sys_err") == 0:
+                    sf9: *Expr = self->call_rt("ps_std_file", e->pos)
+                    self->push_arg(sf9, self->ctx_arg(e->pos))
+                    self->push_arg(sf9, self->num("0" if strcmp(e->text, "__sys_out") == 0 else "1", e->pos))
+                    self->allocs = True
+                    return sf9
                 if strcmp(e->text, "__sys_argv") == 0 or strcmp(e->text, "__sys_env") == 0:
                     sc9: *Expr = self->call_rt("ps_sys_argv" if strcmp(e->text, "__sys_argv") == 0 else "ps_sys_env", e->pos)
                     self->push_arg(sc9, self->ctx_arg(e->pos))
@@ -1905,6 +2049,32 @@ struct PsLow:
                 self->pos_args(bc, e->pos)
                 self->raised = True
             return bc
+        # a socket (77.1): accept, read and write are POLLED — the syscall runs
+        # when the descriptor says it can, inside the scheduler's own `poll`
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_CONN:
+            cmn: const *char = e->lhs->text
+            cc7: *Expr = None
+            if strcmp(cmn, "accept") == 0:
+                cc7 = self->call_rt("ps_net_accept", e->pos)
+            elif strcmp(cmn, "read") == 0:
+                cc7 = self->call_rt("ps_conn_read", e->pos)
+            elif strcmp(cmn, "write") == 0:
+                cwa: *PsType = e->args[0]->type
+                cc7 = self->call_rt("ps_conn_write_bytes" if cwa != None and cwa->kind == PT_LIST else "ps_conn_write", e->pos)
+            elif strcmp(cmn, "close") == 0:
+                cc7 = self->call_rt("ps_conn_close", e->pos)
+            else:
+                cc7 = self->call_rt("ps_conn_port", e->pos)
+                self->push_arg(cc7, self->expr(e->lhs->lhs))
+                return cc7
+            self->push_arg(cc7, self->ctx_arg(e->pos))
+            self->push_arg(cc7, self->expr(e->lhs->lhs))
+            for i in range(e->nargs):
+                self->push_arg(cc7, self->expr(e->args[i]))
+            if strcmp(cmn, "close") != 0:
+                self->raised = True
+                self->allocs = True
+            return cc7
         # a file (48.1/76.2): every one of them describes a job for the pool and
         # hands back a parked task. What used to be a call that blocked the
         # thread is now a call that returns immediately with something to await
@@ -2093,9 +2263,9 @@ struct PsLow:
                     self->push_arg(c1, self->expr(a))
             return c1
         # ---- builtins ----
-        if strcmp(name, "print") == 0:
+        if strcmp(name, "print") == 0 or strcmp(name, "aprint") == 0:
             # several values are joined by spaces, as Python does (44.2)
-            c: *Expr = self->call_rt("ps_print", e->pos)
+            c: *Expr = self->call_rt("ps_aprint" if strcmp(name, "aprint") == 0 else "ps_print", e->pos)
             self->push_arg(c, self->ctx_arg(e->pos))
             # left to right, as Python promises (44.2): a call in one argument
             # and a read of what it writes in the next is decided by the ORDER,
@@ -2267,6 +2437,13 @@ struct PsLow:
             self->allocs = True
             self->raised = True
             return gc9
+        if strcmp(name, "gather_settled") == 0 or strcmp(name, "first_ok") == 0:
+            sc9: *Expr = self->call_rt("ps_gather_settled_task" if strcmp(name, "gather_settled") == 0 else "ps_first_ok_task", e->pos)
+            self->push_arg(sc9, self->ctx_arg(e->pos))
+            self->push_arg(sc9, self->expr(e->args[0]))
+            self->allocs = True
+            self->raised = True
+            return sc9
         if strcmp(name, "sorted") == 0 and e->nargs == 2:
             # the adapter is emitted per call site, because it is the only place
             # the element type is known; the runtime only ever sees bytes
@@ -2305,6 +2482,14 @@ struct PsLow:
             return xc
         if strcmp(name, "__sys_time") == 0:
             return self->call_rt("ps_sys_time", e->pos)
+        if starts_with(name, "__net_"):
+            nc: *Expr = self->call_rt(self->a->printf("ps_net_%s", name + 6), e->pos)
+            self->push_arg(nc, self->ctx_arg(e->pos))
+            for i in range(e->nargs):
+                self->push_arg(nc, self->expr(e->args[i]))
+            self->raised = True
+            self->allocs = True
+            return nc
         if strcmp(name, "__json_parse") == 0:
             jc: *Expr = self->call_rt("ps_json_parse", e->pos)
             self->push_arg(jc, self->ctx_arg(e->pos))
@@ -3829,6 +4014,7 @@ struct PsLow:
                         out->push(sa)
                         if self->raised:
                             out->push(self->guard(s->pos))
+                    self->async_cleanup(out, s->pos)
                     ds: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
                     df: *Expr = ex_new(self->a, EX_FIELD, s->pos)
                     df->op = TK_ARROW
@@ -4057,7 +4243,7 @@ struct PsLow:
                     self->push_arg(cl9, rcv9)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                 else:
-                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else "ps_file_close", s->pos)
+                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close"), s->pos)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                     self->push_arg(cl9, self->ident(s->name, s->pos))
                 ce9: *Stmt = st_new(self->a, ST_EXPR, s->pos)
@@ -5406,6 +5592,12 @@ static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
 # walks. Named from the POSITION of the loop so that the pass which builds the
 # frame and the pass which writes the states agree without a channel between
 # them — two names computed from the same line and column cannot drift.
+# the frame bit that says a cleanup is ARMED. Named from where it is written,
+# so the pass that builds the frame and the pass that writes the states agree
+# without talking to each other — the same trick the `for` cursor uses.
+def ps_cleanup_flag(a: *Arena, pos: Pos) -> const *char:
+    return a->printf("__cl_%d_%d", pos.line, pos.col)
+
 def ps_for_cursor(a: *Arena, pos: Pos) -> const *char:
     return a->printf("__afi_%d_%d", pos.line, pos.col)
 
@@ -5498,6 +5690,15 @@ static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: cons
                 er: *PsType = ps_type(L->a, PT_NAME, s->pos)
                 er->name = "Error"
                 async_add_field(L, ref v, s->name, er, s->pos, file)
+            if s->finally_block != None:
+                async_add_field(L, ref v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file)
+        case PS_DEFER:
+            async_add_field(L, ref v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file)
+        case PS_WITH:
+            if s->name != None and s->expr != None:
+                async_add_field(L, ref v, s->name, s->expr->type, s->pos, file)
+            if has_await_b(s->body):
+                async_add_field(L, ref v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file)
         case _:
             pass
     async_fields_b(L, s->body, ref v, file)
@@ -5720,8 +5921,66 @@ static def ab_plain(ref B: AsyncB, s: *PsStmt):
     for i in range(out.len):
         ab_emit(ref B, out.data[i])
 
+# `defer` inside a step function: ARM a bit in the frame, and let the exits run
+# it. Never P's own `defer`, which would fire when the task merely suspends.
+static def ab_defer(ref B: AsyncB, s: *PsStmt):
+    if has_await_b(s->body):
+        fatal_at(B.file, s->pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1)")
+    ab_arm(ref B, ps_cleanup_flag(B.L->a, s->pos), s->body, None, None, s->pos)
+
+# register a cleanup and emit the statement that arms it
+static def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos):
+    B.L->acl_flag = vec_grow(B.L->acl_flag, B.L->nacl, ref B.L->cacl1, sizeof(*B.L->acl_flag))
+    B.L->acl_body = vec_grow(B.L->acl_body, B.L->nacl, ref B.L->cacl2, sizeof(*B.L->acl_body))
+    B.L->acl_name = vec_grow(B.L->acl_name, B.L->nacl, ref B.L->cacl3, sizeof(*B.L->acl_name))
+    B.L->acl_type = vec_grow(B.L->acl_type, B.L->nacl, ref B.L->cacl4, sizeof(*B.L->acl_type))
+    B.L->acl_flag[B.L->nacl] = (*char)(fl)
+    B.L->acl_body[B.L->nacl] = body
+    B.L->acl_name[B.L->nacl] = (*char)(name)
+    B.L->acl_type[B.L->nacl] = t
+    B.L->nacl += 1
+    arm: *Stmt = st_new(B.L->a, ST_ASSIGN, pos)
+    arm->lhs = B.L->async_field(fl, pos)
+    arm->op = TK_ASSIGN
+    arm->rhs = ex_new(B.L->a, EX_TRUE, pos)
+    ab_emit(ref B, arm)
+
+# `with x as f:` whose body suspends. The bind and the release are the same as
+# anywhere else; what changes is WHEN the release runs — at the end of the
+# block, or at whatever exit leaves the block early, and never at a suspension.
+static def ab_with(ref B: AsyncB, s: *PsStmt):
+    bind: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
+    bind->lhs = B.L->async_field(s->name, s->pos)
+    bind->op = TK_ASSIGN
+    if has_await_e(s->expr):
+        ab_split_e(ref B, s->expr)
+    bind->rhs = B.L->expr(s->expr)
+    for i in range(B.L->pre.len):
+        ab_emit(ref B, B.L->pre.data[i])
+    B.L->pre.init()
+    ab_emit(ref B, bind)
+    ab_emit(ref B, B.L->guard(s->pos))
+    ab_arm(ref B, ps_cleanup_flag(B.L->a, s->pos), None, s->name, s->expr->type, s->pos)
+    ab_block(ref B, s->body)
+    # the ordinary way out: the release runs HERE, and the bit is cleared so
+    # that a later exit does not run it again
+    out: Vec<*Stmt>
+    out.init()
+    B.L->async_cleanup_one(&out, B.L->nacl - 1, s->pos)
+    for i in range(out.len):
+        ab_emit(ref B, out.data[i])
+    B.L->nacl -= 1
+
 static def ab_stmt(ref B: AsyncB, s: *PsStmt):
     if s == None:
+        return
+    # a `defer` is armed even when nothing in it awaits: its SCOPE is the whole
+    # function, and the function spans states
+    if s->kind == PS_DEFER:
+        ab_defer(ref B, s)
+        return
+    if s->kind == PS_WITH and (has_await_b(s->body) or has_await_e(s->expr)):
+        ab_with(ref B, s)
         return
     if not has_await_s(s):
         ab_plain(ref B, s)
@@ -5908,8 +6167,11 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             # the guard pointing at the CATCH state, so a raise anywhere in it
             # — including after a suspension — lands in the handler instead of
             # ending the task. Which is the whole point of catching.
-            if s->finally_block != None:
-                fatal_at(B.file, s->pos, "a `finally` around an `await` is not compiled yet: its cleanup has to survive a suspension, and that is the same hole `with` and `defer` have inside an `async def` (50.1)")
+            # `finally` is a cleanup like the others: armed before the body,
+            # run at the ordinary end AND at whatever exit leaves early
+            hasfin: bool = s->finally_block != None
+            if hasfin:
+                ab_arm(ref B, ps_cleanup_flag(B.L->a, s->pos), s->finally_block, None, None, s->pos)
             cst: i32 = ab_state(ref B)
             aft: i32 = ab_state(ref B)
             sc: i32 = B.L->async_catch
@@ -5941,6 +6203,13 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             ab_block(ref B, s->catch_block)
             ab_goto(ref B, aft, s->pos)
             B.cur = aft
+            if hasfin:
+                fv9: Vec<*Stmt>
+                fv9.init()
+                B.L->async_cleanup_one(&fv9, B.L->nacl - 1, s->pos)
+                for fi in range(fv9.len):
+                    ab_emit(ref B, fv9.data[fi])
+                B.L->nacl -= 1
         case PS_BREAK:
             ab_goto(ref B, B.brk, s->pos)
         case PS_CONTINUE:
@@ -5966,7 +6235,10 @@ static def async_frame_decl(L: *PsLow, f: *PsFunc, owner: const *char, file: con
     # knowing which function produced it
     r: PsField = {0}
     r.name = "__ret"
-    r.type = f->ret if f->ret != None else ps_type(L->a, PT_INT, f->pos)
+    # a function with nothing to give back still needs a slot: `ps_task_ret`
+    # reads the frame's first user field at a fixed offset, and a `void` field
+    # is not a thing C can declare
+    r.type = f->ret if f->ret != None and f->ret->kind != PT_VOID else ps_type(L->a, PT_INT, f->pos)
     r.pos = f->pos
     fields.push(r)
     for i in range(f->nparams):
@@ -6110,6 +6382,8 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
     L->zret = None
     L->in_main = False
 
+    L->nacl = 0          # the cleanups are per FUNCTION (50.1)
+    L->in_cleanup = False
     B: AsyncB = {0}
     B.L = L
     B.t = "__t"
@@ -6123,8 +6397,15 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
     # was already a `return`, in which case this would be dead code
     ends: bool = B.states[B.cur].len > 0 and B.states[B.cur].data[B.states[B.cur].len - 1]->kind == ST_RETURN
     if not ends:
+        # the end IS an exit, so whatever is still armed runs here
+        cv: Vec<*Stmt>
+        cv.init()
+        L->async_cleanup(&cv, f->pos)
+        for ci in range(cv.len):
+            ab_emit(ref B, cv.data[ci])
         ab_emit(ref B, ab_set_state(ref B, -1, f->pos))
         ab_ret(ref B, True, f->pos)
+    L->nacl = 0
 
     # `F *fr = (F *)t->frame;`
     body: Vec<*Stmt>
@@ -6894,7 +7175,7 @@ static def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 static def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

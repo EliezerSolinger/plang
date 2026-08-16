@@ -62,6 +62,7 @@ struct PsP:
     # at the call, and what gets spliced is the expression written for that
     # key. Zero-initialized for every ordinary f-string, where `sub` is False
     # and none of the rest is looked at.
+    blocked: bool       # the expression just parsed ended in a block (78.3)
     sub: bool
     sk: **char          # the keys, decoded
     sv: **PsExpr        # what was written for each one
@@ -251,6 +252,11 @@ struct PsP:
                 t = ps_type(self->a, PT_FILE, pos)
             elif name == "buffer":
                 t = ps_type(self->a, PT_BUFFER, pos)
+            elif name == "socket":
+                # 77.1: one name for both ends of it — what `net.listen` gives
+                # and what `accept` gives are the same kind of thing, and the
+                # program tells them apart by what it does with them
+                t = ps_type(self->a, PT_CONN, pos)
             elif name == "list":
                 t = ps_type(self->a, PT_LIST, pos)
                 self->expect(TK_LT, "list<T>")
@@ -410,6 +416,17 @@ struct PsP:
                 return self->parse_dict_or_set()
             case TK_LAMBDA:
                 return self->parse_lambda()
+            case TK_ASYNC:
+                # `async:` + a block (78.3): a task made right here, without
+                # having to name a function for it. What it captures, it
+                # captures BY VALUE, exactly as a lambda does (19.2).
+                if self->pk1()->kind != TK_COLON:
+                    fatal_at(self->file, self->pk()->pos, "`async` here opens a block: write `async:` and indent what the task does (78.3)")
+                ap: Pos = self->adv()->pos
+                ab: *PsExpr = ps_expr(self->a, PE_ASYNCBLK, ap)
+                ab->body = self->parse_block()
+                self->blocked = True
+                return ab
             case TK_AWAIT:
                 self->adv()
                 aw: *PsExpr = ps_expr(self->a, PE_AWAIT, pos)
@@ -1061,7 +1078,12 @@ struct PsP:
             case _:
                 pass
         s2: *PsStmt = self->parse_simple_stmt()
-        self->expect(TK_NEWLINE, "statement")
+        # a statement that ENDED IN A BLOCK (`t = async:` and its body) has no
+        # newline left to eat: the block took the DEDENT and the line with it
+        if self->blocked:
+            self->blocked = False
+        else:
+            self->expect(TK_NEWLINE, "statement")
         return s2
 
     static def parse_simple_stmt(self: *PsP) -> *PsStmt:
@@ -1708,6 +1730,12 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
                 fd->name = fd->func->name
                 decls.push(fd)
             case TK_ASYNC:
+                # `async:` opens a BLOCK (78.3), `async def` opens a function —
+                # the colon is what tells them apart, here as in the expression
+                # parser
+                if p.pk1()->kind == TK_COLON:
+                    top.push(p.parse_stmt())
+                    continue
                 p.adv()
                 afd: *PsDecl = ps_decl(a, PD_FUNC, p.pk()->pos)
                 afd->func = p.parse_func(False, True, None)

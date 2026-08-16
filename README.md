@@ -234,7 +234,8 @@ program, so there is still no library to install:
 ```sh
 plangc --out-dir out pscript/runtime/psrt.ph pscript/runtime/psrt.p   # once
 plangc --out-dir out hello.psc
-cc out/hello.c out/pscript/runtime/psrt.c -o hello -lm -pthread
+cc -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE \
+   out/hello.c out/pscript/runtime/psrt.c -o hello -lm -pthread
 ```
 
 (`--ps-runtime <dir>` says where the runtime lives if it is not in

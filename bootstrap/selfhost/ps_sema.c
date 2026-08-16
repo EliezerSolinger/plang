@@ -1605,6 +1605,8 @@ struct PsSema {
     Vec_pPsStmt mvars;
     StrSet dseen;
     Vec_pPsDecl dtraits;
+    Vec_pPsDecl ablks;
+    int32_t nablk;
     Vec_pPsDecl hdrrecs;
     Vec_PsDynUse dpairs;
     int32_t depth;
@@ -1763,15 +1765,15 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_326_9 = &self->locals[self->nlocals];
-        __with_326_9->name = name;
-        __with_326_9->type = t;
-        __with_326_9->assigned = assigned;
-        __with_326_9->is_const = is_const;
-        __with_326_9->is_module = 0;
-        __with_326_9->opt_type = NULL;
-        __with_326_9->any_type = NULL;
-        __with_326_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_331_9 = &self->locals[self->nlocals];
+        __with_331_9->name = name;
+        __with_331_9->type = t;
+        __with_331_9->assigned = assigned;
+        __with_331_9->is_const = is_const;
+        __with_331_9->is_module = 0;
+        __with_331_9->opt_type = NULL;
+        __with_331_9->any_type = NULL;
+        __with_331_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -1879,7 +1881,8 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
         case PT_VOID:
         case PT_FILE:
         case PT_BUFFER:
-        case PT_TIMER: {
+        case PT_TIMER:
+        case PT_CONN: {
             ;
             break;
         }
@@ -2075,6 +2078,8 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                     PsType *av = ps_type(self->a, PT_LIST, e->pos);
                     av->inner = ps_type(self->a, PT_STR, e->pos);
                     t = av;
+                } else if (strcmp(e->text, "__sys_out") == 0 || strcmp(e->text, "__sys_err") == 0) {
+                    t = ps_type(self->a, PT_FILE, e->pos);
                 } else if (strcmp(e->text, "__sys_env") == 0) {
                     PsType *ev = ps_type(self->a, PT_DICT, e->pos);
                     ev->key = ps_type(self->a, PT_STR, e->pos);
@@ -2182,6 +2187,62 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             e->ncaps = self->lam_fr.data[top7].caps.len;
             self->lam_fr.len -= 1;
             t = lh;
+            break;
+        }
+        case PE_ASYNCBLK: {
+            PsLamF fr8 = {0};
+            fr8.base = self->nlocals;
+            Vec_PsParam_init(&fr8.caps);
+            Vec_PsLamF_push(&self->lam_fr, fr8);
+            self->depth += 1;
+            PsType *prevret = self->cur_ret;
+            int previn = self->in_async;
+            self->cur_ret = ps_type(self->a, PT_VOID, e->pos);
+            self->in_async = 1;
+            PsSema_check_block(self, e->body);
+            self->cur_ret = prevret;
+            self->in_async = previn;
+            PsSema_pop_scope(self);
+            self->depth -= 1;
+            int32_t tp8 = self->lam_fr.len - 1;
+            PsParam *caps8 = self->lam_fr.data[tp8].caps.data;
+            int32_t nc8 = self->lam_fr.data[tp8].caps.len;
+            self->lam_fr.len -= 1;
+            PsFunc *fn8 = Arena_alloc(self->a, sizeof(PsFunc));
+            fn8->name = Arena_printf(self->a, "__ablk%d", self->nablk);
+            self->nablk += 1;
+            fn8->params = caps8;
+            fn8->nparams = nc8;
+            fn8->ret = ps_type(self->a, PT_VOID, e->pos);
+            fn8->body = e->body;
+            fn8->is_async = 1;
+            fn8->pos = e->pos;
+            PsDecl *dcl8 = ps_decl(self->a, PD_FUNC, e->pos);
+            dcl8->name = fn8->name;
+            dcl8->func = fn8;
+            Vec_pPsDecl_push(&self->ablks, dcl8);
+            StrMap_pPsFunc_put(&self->funcs, fn8->name, fn8);
+            PsExpr **args8 = Arena_alloc(self->a, (size_t)(nc8 + 1) * sizeof(*args8));
+            size_t i;
+            for (i = 0; i < nc8; i += 1) {
+                PsExpr *nm8 = ps_expr(self->a, PE_NAME, e->pos);
+                nm8->text = caps8[i].name;
+                nm8->type = caps8[i].type;
+                args8[i] = nm8;
+            }
+            PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
+            cal8->text = fn8->name;
+            {
+                PsExpr *__with_772_17 = e;
+                __with_772_17->kind = PE_CALL;
+                __with_772_17->lhs = cal8;
+                __with_772_17->args = args8;
+                __with_772_17->nargs = nc8;
+                __with_772_17->body = NULL;
+            }
+            PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
+            tk8->inner = ps_type(self->a, PT_VOID, e->pos);
+            t = tk8;
             break;
         }
         case PE_CAST: {
@@ -2802,6 +2863,49 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             }
             fatal_at(self->file, e->pos, "a buffer has get_f64, set_f64, size and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm);
         }
+        if (rt != NULL && rt->kind == PT_CONN) {
+            const char *cm = e->lhs->text;
+            e->lhs->type = rt;
+            PsType *ctk = ps_type(self->a, PT_TASK, e->pos);
+            if (strcmp(cm, "write") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "write() takes one str or one list<u8>");
+                }
+                PsType *cw = PsSema_check_expr(self, e->args[0]);
+                if (cw == NULL || !(cw->kind == PT_STR || (cw->kind == PT_LIST && cw->inner != NULL && cw->inner->kind == PT_INT && cw->inner->width == 8))) {
+                    fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, cw));
+                }
+                ctk->inner = ps_type(self->a, PT_INT, e->pos);
+                return ctk;
+            }
+            if (strcmp(cm, "read") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "read(n) takes how many BYTES at most; the empty answer means the other side closed (79.2)");
+                }
+                PsType *cn = PsSema_check_expr(self, e->args[0]);
+                PsSema_want(self, e->args[0], cn, ps_type(self->a, PT_INT, e->pos), "read()");
+                PsType *cb = ps_type(self->a, PT_LIST, e->pos);
+                cb->inner = ps_type(self->a, PT_INT, e->pos);
+                cb->inner->width = 8;
+                cb->inner->uns = 1;
+                ctk->inner = cb;
+                return ctk;
+            }
+            if (e->nargs != 0) {
+                fatal_at(self->file, e->pos, "'%s' takes no arguments", cm);
+            }
+            if (strcmp(cm, "accept") == 0) {
+                ctk->inner = ps_type(self->a, PT_CONN, e->pos);
+                return ctk;
+            }
+            if (strcmp(cm, "close") == 0) {
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            if (strcmp(cm, "port") == 0) {
+                return ps_type(self->a, PT_INT, e->pos);
+            }
+            fatal_at(self->file, e->pos, "a socket has accept, read(n), write, close and port (77.1), not '%s'", cm);
+        }
         if (rt != NULL && rt->kind == PT_FILE) {
             const char *fm = e->lhs->text;
             e->lhs->type = rt;
@@ -3176,13 +3280,18 @@ static PsType *PsSema_call_generic(PsSema *self, PsExpr *e, PsFunc *f, const cha
 }
 
 static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
-    if (strcmp(name, "print") == 0) {
+    if (strcmp(name, "print") == 0 || strcmp(name, "aprint") == 0) {
         if (e->nargs == 0) {
-            fatal_at(self->file, e->pos, "print() takes at least one value");
+            fatal_at(self->file, e->pos, "%s() takes at least one value", name);
         }
         size_t i;
         for (i = 0; i < e->nargs; i += 1) {
             PsSema_check_expr(self, e->args[i]);
+        }
+        if (strcmp(name, "aprint") == 0) {
+            PsType *at9 = ps_type(self->a, PT_TASK, e->pos);
+            at9->inner = ps_type(self->a, PT_INT, e->pos);
+            return at9;
         }
         return ps_type(self->a, PT_VOID, e->pos);
     }
@@ -3257,6 +3366,25 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         PsType *gk = ps_type(self->a, PT_TASK, e->pos);
         gk->inner = gl;
         return gk;
+    }
+    if (strcmp(name, "gather_settled") == 0 || strcmp(name, "first_ok") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "%s() takes a list of tasks", name);
+        }
+        PsType *st9 = PsSema_check_expr(self, e->args[0]);
+        if (st9 == NULL || st9->kind != PT_LIST || st9->inner == NULL || st9->inner->kind != PT_TASK) {
+            fatal_at(self->file, e->pos, "%s() takes a list of tasks, found %s", name, ps_type_str(self->a, st9));
+        }
+        PsType *rk9 = ps_type(self->a, PT_TASK, e->pos);
+        if (strcmp(name, "first_ok") == 0) {
+            rk9->inner = ps_type(self->a, PT_INT, e->pos);
+            return rk9;
+        }
+        PsType *eo9 = ps_type(self->a, PT_LIST, e->pos);
+        eo9->inner = ps_type(self->a, PT_OPT, e->pos);
+        eo9->inner->inner = PsSema_named_type(self, "Error", e->pos);
+        rk9->inner = eo9;
+        return rk9;
     }
     if (strcmp(name, "sorted") == 0) {
         if (e->nargs < 1 || e->nargs > 2) {
@@ -3375,6 +3503,36 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "sys.time() takes no arguments");
         }
         return ps_type(self->a, PT_FLOAT, e->pos);
+    }
+    if (strcmp(name, "__net_listen") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "net.listen() takes a port: `net.listen(8080)`");
+        }
+        PsType *lp = PsSema_check_expr(self, e->args[0]);
+        PsSema_want(self, e->args[0], lp, ps_type(self->a, PT_INT, e->pos), "net.listen()");
+        return ps_type(self->a, PT_CONN, e->pos);
+    }
+    if (strcmp(name, "__net_connect") == 0) {
+        if (e->nargs != 2) {
+            fatal_at(self->file, e->pos, "net.connect() takes a host and a port: `await net.connect(\"exemplo.com\", 80)`");
+        }
+        PsType *ch = PsSema_check_expr(self, e->args[0]);
+        PsSema_want(self, e->args[0], ch, ps_type(self->a, PT_STR, e->pos), "net.connect()");
+        PsType *cp = PsSema_check_expr(self, e->args[1]);
+        PsSema_want(self, e->args[1], cp, ps_type(self->a, PT_INT, e->pos), "net.connect()");
+        PsType *ct = ps_type(self->a, PT_TASK, e->pos);
+        ct->inner = ps_type(self->a, PT_CONN, e->pos);
+        return ct;
+    }
+    if (strcmp(name, "__net_lookup") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "net.lookup() takes a host name");
+        }
+        PsType *lh = PsSema_check_expr(self, e->args[0]);
+        PsSema_want(self, e->args[0], lh, ps_type(self->a, PT_STR, e->pos), "net.lookup()");
+        PsType *lt = ps_type(self->a, PT_TASK, e->pos);
+        lt->inner = ps_type(self->a, PT_STR, e->pos);
+        return lt;
     }
     if (strcmp(name, "__json_parse") == 0) {
         if (e->nargs != 1) {
@@ -3538,26 +3696,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_1909_17 = e;
-                __with_1909_17->kind = PE_STR;
-                __with_1909_17->text = lit7;
-                __with_1909_17->lhs = NULL;
-                __with_1909_17->rhs = NULL;
-                __with_1909_17->args = NULL;
-                __with_1909_17->nargs = 0;
+                PsExpr *__with_2068_17 = e;
+                __with_2068_17->kind = PE_STR;
+                __with_2068_17->text = lit7;
+                __with_2068_17->lhs = NULL;
+                __with_2068_17->rhs = NULL;
+                __with_2068_17->args = NULL;
+                __with_2068_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_1922_13 = e;
-            __with_1922_13->kind = PE_LOWERED;
-            __with_1922_13->low = ln7;
-            __with_1922_13->lhs = NULL;
-            __with_1922_13->rhs = NULL;
-            __with_1922_13->args = NULL;
-            __with_1922_13->nargs = 0;
+            PsExpr *__with_2081_13 = e;
+            __with_2081_13->kind = PE_LOWERED;
+            __with_2081_13->low = ln7;
+            __with_2081_13->lhs = NULL;
+            __with_2081_13->rhs = NULL;
+            __with_2081_13->args = NULL;
+            __with_2081_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -3715,7 +3873,7 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
         }
         const char *path = path_join(self->a, dir, Arena_printf(self->a, "%s.psc", d->path));
         PsNs *sub = StrMap_pPsNs_get_or(&self->nsof, path, NULL);
-        if (sub == NULL && (strcmp(d->path, "sys") == 0 || strcmp(d->path, "re") == 0 || strcmp(d->path, "json") == 0)) {
+        if (sub == NULL && (strcmp(d->path, "sys") == 0 || strcmp(d->path, "re") == 0 || strcmp(d->path, "json") == 0 || strcmp(d->path, "net") == 0)) {
             sub = PsSema_builtin_ns(self, d->path, path);
         }
         if (sub == NULL) {
@@ -3747,10 +3905,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2099_17 = &ns->quals[ns->nquals];
-                __with_2099_17->name = q;
-                __with_2099_17->orig = d->path;
-                __with_2099_17->ns = sub;
+                PsNsEnt *__with_2258_17 = &ns->quals[ns->nquals];
+                __with_2258_17->name = q;
+                __with_2258_17->orig = d->path;
+                __with_2258_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -3763,10 +3921,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2111_21 = &ns->ents[ns->nents];
-                    __with_2111_21->name = local;
-                    __with_2111_21->orig = d->names[k];
-                    __with_2111_21->ns = sub;
+                    PsNsEnt *__with_2270_21 = &ns->ents[ns->nents];
+                    __with_2270_21->name = local;
+                    __with_2270_21->orig = d->names[k];
+                    __with_2270_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4047,7 +4205,11 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
     ns->quals = NULL;
     ns->nquals = 0;
     ns->cquals = 0;
-    if (strcmp(name, "re") == 0) {
+    if (strcmp(name, "net") == 0) {
+        StrSet_add(&ns->sym, "listen");
+        StrSet_add(&ns->sym, "connect");
+        StrSet_add(&ns->sym, "lookup");
+    } else if (strcmp(name, "re") == 0) {
         StrSet_add(&ns->sym, "match");
     } else if (strcmp(name, "json") == 0) {
         StrSet_add(&ns->sym, "parse");
@@ -4056,6 +4218,8 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "env");
         StrSet_add(&ns->sym, "exit");
         StrSet_add(&ns->sym, "time");
+        StrSet_add(&ns->sym, "out");
+        StrSet_add(&ns->sym, "err");
     }
     StrMap_pPsNs_put(&self->nsof, path, ns);
     return ns;
@@ -4121,10 +4285,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2439_9 = e;
-        __with_2439_9->kind = PE_NAME;
-        __with_2439_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2439_9->lhs = NULL;
+        PsExpr *__with_2606_9 = e;
+        __with_2606_9->kind = PE_NAME;
+        __with_2606_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2606_9->lhs = NULL;
     }
     return 1;
 }
@@ -4936,7 +5100,7 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
         }
         case PS_WITH: {
             PsType *wt9 = PsSema_check_expr(self, s->expr);
-            int closeable = wt9 != NULL && (wt9->kind == PT_FILE || wt9->kind == PT_BUFFER);
+            int closeable = wt9 != NULL && (wt9->kind == PT_FILE || wt9->kind == PT_BUFFER || wt9->kind == PT_CONN);
             if (!closeable && wt9 != NULL && wt9->kind == PT_NAME && StrMap_pPsDecl_has(&self->records, wt9->name)) {
                 closeable = StrSet_has(&self->timpls, Arena_printf(self->a, "Closeable|%s", wt9->name));
             }
@@ -5499,6 +5663,7 @@ int ps_is_ref_type(PsType *t) {
         case PT_TASK:
         case PT_WORKER:
         case PT_FILE:
+        case PT_CONN:
         case PT_FUNC:
         case PT_DYN: {
             return 1;
@@ -5792,6 +5957,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
         case PT_BUFFER: {
             return "buffer";
         }
+        case PT_CONN: {
+            return "socket";
+        }
         case PT_TIMER: {
             return "a timer";
         }
@@ -5914,6 +6082,7 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd) {
     Vec_pPsStmt_init(&s.mvars);
     StrSet_init(&s.dseen);
     Vec_pPsDecl_init(&s.dtraits);
+    Vec_pPsDecl_init(&s.ablks);
     Vec_pPsDecl_init(&s.hdrrecs);
     Vec_PsDynUse_init(&s.dpairs);
     s.cpp = cpp_cmd;
@@ -6185,6 +6354,18 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd) {
         }
         m->decls = nd2;
         m->ndecls = m->ndecls + made.len;
+    }
+    if (s.ablks.len > 0) {
+        PsDecl **na8 = Arena_alloc(a, (size_t)(m->ndecls + (int32_t)s.ablks.len) * sizeof(*na8));
+        size_t k8;
+        for (k8 = 0; k8 < m->ndecls; k8 += 1) {
+            na8[k8] = m->decls[k8];
+        }
+        for (k8 = 0; k8 < (int32_t)s.ablks.len; k8 += 1) {
+            na8[m->ndecls + k8] = s.ablks.data[k8];
+        }
+        m->decls = na8;
+        m->ndecls += (int32_t)s.ablks.len;
     }
     m->dyns = s.dpairs.data;
     m->ndyns = s.dpairs.len;

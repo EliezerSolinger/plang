@@ -45,6 +45,8 @@ enum PsTypeKind:
                      #   type of message it sends back (36.1).
     PT_FILE          # an open file (48.1)
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
+    PT_CONN          # a socket, listening or connected (77.1): `net.listen`
+                     #   gives one, `await srv.accept()` gives another
     PT_TIMER         # a repeating clock (48.2/51.1): `await t.tick()` in an
                      #   ordinary loop, and a tick that COALESCES
     PT_DYN           # dyn Trait — the dynamic half of the dispatch (66.3):
@@ -104,6 +106,8 @@ enum PsExprKind:
     PE_SET        # {a, b}
     PE_COMPREHEND # [e for x in xs if c]
     PE_LAMBDA
+    PE_ASYNCBLK   # `async:` followed by a block (78.3): a Task made right
+                  #   there, capturing by value as a lambda does (19.2)
     PE_WALRUS     # (x := e)
     PE_AWAIT
     PE_SPAWN

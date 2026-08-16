@@ -1348,6 +1348,7 @@ struct PsP {
     size_t i;
     const char *file;
     Arena *a;
+    int blocked;
     int sub;
     char **sk;
     PsExpr **sv;
@@ -1589,6 +1590,8 @@ static PsType *PsP_parse_type(PsP *self) {
             t = ps_type(self->a, PT_FILE, pos);
         } else if (strcmp(name, "buffer") == 0) {
             t = ps_type(self->a, PT_BUFFER, pos);
+        } else if (strcmp(name, "socket") == 0) {
+            t = ps_type(self->a, PT_CONN, pos);
         } else if (strcmp(name, "list") == 0) {
             t = ps_type(self->a, PT_LIST, pos);
             PsP_expect(self, TK_LT, "list<T>");
@@ -1748,6 +1751,16 @@ static PsExpr *PsP_parse_primary(PsP *self) {
         }
         case TK_LAMBDA: {
             return PsP_parse_lambda(self);
+        }
+        case TK_ASYNC: {
+            if (PsP_pk1(self)->kind != TK_COLON) {
+                fatal_at(self->file, PsP_pk(self)->pos, "`async` here opens a block: write `async:` and indent what the task does (78.3)");
+            }
+            Pos ap = PsP_adv(self)->pos;
+            PsExpr *ab = ps_expr(self->a, PE_ASYNCBLK, ap);
+            ab->body = PsP_parse_block(self);
+            self->blocked = 1;
+            return ab;
         }
         case TK_AWAIT: {
             PsP_adv(self);
@@ -2464,7 +2477,11 @@ static PsStmt *PsP_parse_stmt(PsP *self) {
         }
     }
     PsStmt *s2 = PsP_parse_simple_stmt(self);
-    PsP_expect(self, TK_NEWLINE, "statement");
+    if (self->blocked) {
+        self->blocked = 0;
+    } else {
+        PsP_expect(self, TK_NEWLINE, "statement");
+    }
     return s2;
 }
 
@@ -3162,6 +3179,10 @@ PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
                 break;
             }
             case TK_ASYNC: {
+                if (PsP_pk1(&p)->kind == TK_COLON) {
+                    Vec_pPsStmt_push(&top, PsP_parse_stmt(&p));
+                    continue;
+                }
                 PsP_adv(&p);
                 PsDecl *afd = ps_decl(a, PD_FUNC, PsP_pk(&p)->pos);
                 afd->func = PsP_parse_func(&p, 0, 1, NULL);

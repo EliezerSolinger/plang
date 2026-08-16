@@ -14,6 +14,9 @@
 
 CC     ?= cc
 CFLAGS ?= -O2 -std=c11
+# the pscript runtime speaks POSIX (socket, getaddrinfo, poll, pipe, pthread),
+# and glibc hides those under a strict `-std=`
+PSDEFS = -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE
 
 SEED = $(wildcard bootstrap/selfhost/*.c)
 
@@ -113,7 +116,7 @@ pstudio-ps: plangc
 	         pstudio/ps/shim.p pscript/runtime/psrt.ph pscript/runtime/psrt.p
 	./plangc --cpp "$(CC) -Iout/pstudio/ps" --out-dir out pstudio/ps/app.psc
 	@mkdir -p out/bin
-	$(CC) $(CFLAGS) -w -D_DEFAULT_SOURCE -Iout/pstudio/ps -o out/bin/pstudio-ps \
+	$(CC) $(CFLAGS) -w $(PSDEFS) -Iout/pstudio/ps -o out/bin/pstudio-ps \
 	      out/pstudio/ps/app.c out/pscript/runtime/psrt.c out/pstudio/ps/shim.c \
 	      out/pstudio/pgfx.c out/pstudio/pgfx_raster.c out/pstudio/font_atlas.c out/pstudio/psys.c \
 	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm -pthread

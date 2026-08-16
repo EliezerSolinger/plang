@@ -223,6 +223,11 @@ struct PsSema:
                              #   the lowering needs one file-scope variable each
     dseen: StrSet            # dyn traits and pairs already noted
     dtraits: Vec<*PsDecl>    # traits used as `dyn` (66.3)
+    ablks: Vec<*PsDecl>      # the functions an `async:` block turned into
+                             #   (78.3): appended to the module after checking,
+                             #   because their bodies were checked HERE, in the
+                             #   scope that wrote them
+    nablk: i32
     hdrrecs: Vec<*PsDecl>    # records that came from an imported header (72.6):
                              #   they join the module's declarations so the
                              #   lowering finds them, and carry `from_hdr` so
@@ -409,7 +414,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN:
                 pass
         return t
 
@@ -598,6 +603,12 @@ struct PsSema:
                         av: *PsType = ps_type(self->a, PT_LIST, e->pos)
                         av->inner = ps_type(self->a, PT_STR, e->pos)
                         t = av
+                    elif strcmp(e->text, "__sys_out") == 0 or strcmp(e->text, "__sys_err") == 0:
+                        # 78.2: the two standard streams as ordinary files, so
+                        # writing to them is the same awaitable operation as
+                        # writing anywhere else. Closing one is a no-op: they
+                        # belong to the process, not to the program.
+                        t = ps_type(self->a, PT_FILE, e->pos)
                     elif strcmp(e->text, "__sys_env") == 0:
                         ev: *PsType = ps_type(self->a, PT_DICT, e->pos)
                         ev->key = ps_type(self->a, PT_STR, e->pos)
@@ -711,6 +722,62 @@ struct PsSema:
                 e->ncaps = self->lam_fr.data[top7].caps.len
                 self->lam_fr.len -= 1
                 t = lh
+            case PE_ASYNCBLK:
+                # 78.3: the block becomes an `async def` of its own, whose
+                # PARAMETERS are what it captured. The capture analysis is the
+                # lambda's (19.2) — a name from outside, read inside, travels
+                # by value — and the rewrite is a call to that function, so
+                # from here on it is an ordinary task.
+                fr8: PsLamF = {0}
+                fr8.base = self->nlocals
+                fr8.caps.init()
+                self->lam_fr.push(fr8)
+                self->depth += 1
+                prevret: *PsType = self->cur_ret
+                previn: bool = self->in_async
+                self->cur_ret = ps_type(self->a, PT_VOID, e->pos)
+                self->in_async = True
+                self->check_block(e->body)
+                self->cur_ret = prevret
+                self->in_async = previn
+                self->pop_scope()
+                self->depth -= 1
+                tp8: i32 = self->lam_fr.len - 1
+                caps8: *PsParam = self->lam_fr.data[tp8].caps.data
+                nc8: i32 = self->lam_fr.data[tp8].caps.len
+                self->lam_fr.len -= 1
+                fn8: *PsFunc = self->a->alloc(sizeof(PsFunc))
+                fn8->name = self->a->printf("__ablk%d", self->nablk)
+                self->nablk += 1
+                fn8->params = caps8
+                fn8->nparams = nc8
+                fn8->ret = ps_type(self->a, PT_VOID, e->pos)
+                fn8->body = e->body
+                fn8->is_async = True
+                fn8->pos = e->pos
+                dcl8: *PsDecl = ps_decl(self->a, PD_FUNC, e->pos)
+                dcl8->name = fn8->name
+                dcl8->func = fn8
+                self->ablks.push(dcl8)
+                self->funcs.put(fn8->name, fn8)
+                # the expression IS the call now
+                args8: **PsExpr = self->a->alloc(usize(nc8 + 1) * sizeof(*args8))
+                for i in range(nc8):
+                    nm8: *PsExpr = ps_expr(self->a, PE_NAME, e->pos)
+                    nm8->text = caps8[i].name
+                    nm8->type = caps8[i].type
+                    args8[i] = nm8
+                cal8: *PsExpr = ps_expr(self->a, PE_NAME, e->pos)
+                cal8->text = fn8->name
+                with e:
+                    .kind = PE_CALL
+                    .lhs = cal8
+                    .args = args8
+                    .nargs = nc8
+                    .body = None
+                tk8: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                tk8->inner = ps_type(self->a, PT_VOID, e->pos)
+                t = tk8
             case PE_CAST:
                 # `x as T` (55.2) UNBOXES an `any`, and it is CHECKED: the tag
                 # has to agree or it raises. Converting between numbers is a
@@ -1227,6 +1294,43 @@ struct PsSema:
                     return vl
                 fatal_at(self->file, e->pos, "a buffer has get_f64, set_f64, size and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
             # a file (48.1): read, write, readlines, close
+            # a socket (77.1): accept, read, write, close, port. Accept, read
+            # and write are POLLED — a socket has a real non-blocking mode, so
+            # the scheduler waits for the descriptor in the `poll` it already
+            # runs and the syscall happens when it can no longer block.
+            if rt != None and rt->kind == PT_CONN:
+                cm: const *char = e->lhs->text
+                e->lhs->type = rt
+                ctk: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                if strcmp(cm, "write") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "write() takes one str or one list<u8>")
+                    cw: *PsType = self->check_expr(e->args[0])
+                    if cw == None or not (cw->kind == PT_STR or (cw->kind == PT_LIST and cw->inner != None and cw->inner->kind == PT_INT and cw->inner->width == 8)):
+                        fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, cw))
+                    ctk->inner = ps_type(self->a, PT_INT, e->pos)
+                    return ctk
+                if strcmp(cm, "read") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "read(n) takes how many BYTES at most; the empty answer means the other side closed (79.2)")
+                    cn: *PsType = self->check_expr(e->args[0])
+                    self->want(e->args[0], cn, ps_type(self->a, PT_INT, e->pos), "read()")
+                    cb: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    cb->inner = ps_type(self->a, PT_INT, e->pos)
+                    cb->inner->width = 8
+                    cb->inner->uns = True
+                    ctk->inner = cb
+                    return ctk
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "'%s' takes no arguments", cm)
+                if strcmp(cm, "accept") == 0:
+                    ctk->inner = ps_type(self->a, PT_CONN, e->pos)
+                    return ctk
+                if strcmp(cm, "close") == 0:
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if strcmp(cm, "port") == 0:
+                    return ps_type(self->a, PT_INT, e->pos)
+                fatal_at(self->file, e->pos, "a socket has accept, read(n), write, close and port (77.1), not '%s'", cm)
             # 48.1 + 76.2: every one of these is a TASK now. The names say what
             # comes back, because the return type follows the name and not the
             # number of arguments: `read(n)` gives BYTES (up to n, empty at the
@@ -1575,14 +1679,24 @@ struct PsSema:
     # be what Python's is; until that is compiled, one argument is the honest
     # subset and the error says so.
     static def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType:
-        if strcmp(name, "print") == 0:
+        if strcmp(name, "print") == 0 or strcmp(name, "aprint") == 0:
             # Python's `print`: as many values as you like, joined by spaces
             # (44.2). The general `*args` is still ahead; this is the one place
             # it was missed every day.
+            #
+            # 78.2: `print` stays SYNCHRONOUS — it is the language's diagnostic
+            # channel, it writes into a buffer, and an `await` on every line
+            # would poison every program. `aprint` is the sibling for when the
+            # write itself can wait (a full pipe, a slow terminal): same
+            # arguments, same joining, and a task to await.
             if e->nargs == 0:
-                fatal_at(self->file, e->pos, "print() takes at least one value")
+                fatal_at(self->file, e->pos, "%s() takes at least one value", name)
             for i in range(e->nargs):
                 self->check_expr(e->args[i])
+            if strcmp(name, "aprint") == 0:
+                at9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                at9->inner = ps_type(self->a, PT_INT, e->pos)
+                return at9
             return ps_type(self->a, PT_VOID, e->pos)
         if strcmp(name, "sleep") == 0:
             # 48.2: `await sleep(s)`. It IS a task, so it is awaited like
@@ -1653,6 +1767,25 @@ struct PsSema:
             gk: *PsType = ps_type(self->a, PT_TASK, e->pos)
             gk->inner = gl
             return gk
+        if strcmp(name, "gather_settled") == 0 or strcmp(name, "first_ok") == 0:
+            # 79.4: the siblings of `gather` and `race`. `gather_settled` waits
+            # for every task and answers with the ERROR of each one, None where
+            # it worked — the values are read from the tasks, which are done by
+            # then. `first_ok` gives the index of the first that succeeded.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "%s() takes a list of tasks", name)
+            st9: *PsType = self->check_expr(e->args[0])
+            if st9 == None or st9->kind != PT_LIST or st9->inner == None or st9->inner->kind != PT_TASK:
+                fatal_at(self->file, e->pos, "%s() takes a list of tasks, found %s", name, ps_type_str(self->a, st9))
+            rk9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            if strcmp(name, "first_ok") == 0:
+                rk9->inner = ps_type(self->a, PT_INT, e->pos)
+                return rk9
+            eo9: *PsType = ps_type(self->a, PT_LIST, e->pos)
+            eo9->inner = ps_type(self->a, PT_OPT, e->pos)
+            eo9->inner->inner = self->named_type("Error", e->pos)
+            rk9->inner = eo9
+            return rk9
         if strcmp(name, "sorted") == 0:
             # 28.4: a COPY, ordered. Without `key=` the order is the natural one
             # and the elements have to be comparable; with it, what is compared
@@ -1753,6 +1886,32 @@ struct PsSema:
             if e->nargs != 0:
                 fatal_at(self->file, e->pos, "sys.time() takes no arguments")
             return ps_type(self->a, PT_FLOAT, e->pos)
+        if strcmp(name, "__net_listen") == 0:
+            # 77.1: binding and listening are instant, so this one is NOT a
+            # task — what waits is `accept`, and that is where the await goes
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "net.listen() takes a port: `net.listen(8080)`")
+            lp: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], lp, ps_type(self->a, PT_INT, e->pos), "net.listen()")
+            return ps_type(self->a, PT_CONN, e->pos)
+        if strcmp(name, "__net_connect") == 0:
+            if e->nargs != 2:
+                fatal_at(self->file, e->pos, "net.connect() takes a host and a port: `await net.connect(\"exemplo.com\", 80)`")
+            ch: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], ch, ps_type(self->a, PT_STR, e->pos), "net.connect()")
+            cp: *PsType = self->check_expr(e->args[1])
+            self->want(e->args[1], cp, ps_type(self->a, PT_INT, e->pos), "net.connect()")
+            ct: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            ct->inner = ps_type(self->a, PT_CONN, e->pos)
+            return ct
+        if strcmp(name, "__net_lookup") == 0:
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "net.lookup() takes a host name")
+            lh: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], lh, ps_type(self->a, PT_STR, e->pos), "net.lookup()")
+            lt: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            lt->inner = ps_type(self->a, PT_STR, e->pos)
+            return lt
         if strcmp(name, "__json_parse") == 0:
             # 41.1: text in, `any` out. There is no schema to declare — reading
             # it back is `as`, which checks (55.2).
@@ -2071,7 +2230,7 @@ struct PsSema:
             # `sys` is the one module that is not a file (48.3): what it names
             # is the program's own surroundings, which only the runtime can
             # answer. Its members are BUILTINS, so there is nothing to load.
-            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0):
+            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0):
                 sub = self->builtin_ns(d->path, path)
             if sub == None:
                 n: usize = 0
@@ -2364,7 +2523,13 @@ struct PsSema:
         ns->quals = None
         ns->nquals = 0
         ns->cquals = 0
-        if strcmp(name, "re") == 0:
+        if strcmp(name, "net") == 0:
+            # 77.1: what a program actually wants from a network, with
+            # socket/bind/listen/setsockopt left behind
+            ns->sym.add("listen")
+            ns->sym.add("connect")
+            ns->sym.add("lookup")
+        elif strcmp(name, "re") == 0:
             ns->sym.add("match")
         elif strcmp(name, "json") == 0:
             ns->sym.add("parse")
@@ -2373,6 +2538,8 @@ struct PsSema:
             ns->sym.add("env")
             ns->sym.add("exit")
             ns->sym.add("time")
+            ns->sym.add("out")
+            ns->sym.add("err")
         self->nsof.put(path, ns)
         return ns
 
@@ -3204,7 +3371,7 @@ struct PsSema:
                 # P's `defer`. Only a file so far; the general protocol (what
                 # `with` means for a type of your own) is not decided yet.
                 wt9: *PsType = self->check_expr(s->expr)
-                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER)
+                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN)
                 if not closeable and wt9 != None and wt9->kind == PT_NAME and self->records.has(wt9->name):
                     # the protocol (68.4): `with` takes anything that DECLARES
                     # Closeable — nominal, like every use of a trait — and calls
@@ -3672,7 +3839,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_FUNC, PT_DYN:
+        case PT_STR, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -3865,6 +4032,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "file"
         case PT_BUFFER:
             return "buffer"
+        case PT_CONN:
+            return "socket"
         case PT_TIMER:
             return "a timer"
         case PT_LIST:
@@ -3977,6 +4146,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
     s.mvars.init()
     s.dseen.init()
     s.dtraits.init()
+    s.ablks.init()
     s.hdrrecs.init()
     s.dpairs.init()
     s.cpp = cpp_cmd
@@ -4236,6 +4406,19 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
             nd2[m->ndecls + k] = fd2
         m->decls = nd2
         m->ndecls = m->ndecls + made.len
+
+    # 78.3: the functions the `async:` blocks became. They join the module HERE
+    # and not earlier, because their bodies were checked as the blocks were
+    # met — in the scope that wrote them, which is what makes the capture by
+    # value mean anything.
+    if s.ablks.len > 0:
+        na8: **PsDecl = a->alloc(usize(m->ndecls + i32(s.ablks.len)) * sizeof(*na8))
+        for k8 in range(m->ndecls):
+            na8[k8] = m->decls[k8]
+        for k8 in range(i32(s.ablks.len)):
+            na8[m->ndecls + k8] = s.ablks.data[k8]
+        m->decls = na8
+        m->ndecls += i32(s.ablks.len)
 
     # published last: an instance's body can be the first place a `dyn` appears
     m->dyns = s.dpairs.data

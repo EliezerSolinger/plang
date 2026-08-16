@@ -174,12 +174,9 @@ def sphere_from(v: any) -> Sphere:
 async def load_scene(path: str) -> list<Sphere>:
     """JSON in, spheres out (41.1). Failure raises with the io category and the
     program says which file it could not read."""
-    # no `with` here: cleanup inside an `async def` is still emitted at the
-    # wrong moment (it runs when the task SUSPENDS), so the close is explicit
-    # until the state machine learns to unwind — see the PLAN
-    f = await open(path, "r")
-    text = await f.text()
-    await f.close()
+    nonlocal text
+    with await open(path, "r") as f:
+        text = await f.text()
     doc = json.parse(text) as list<any>
     out: list<Sphere> = []
     i = 0

@@ -204,9 +204,8 @@ struct Editor:
     # program while the disk answered now stops only this task.
     async def open_file(self, path: str):
         try:
-            f = await open(path, "r")
-            self.buf.load(await f.text())
-            await f.close()
+            with await open(path, "r") as f:
+                self.buf.load(await f.text())
             self.path = path
             self.top = 0
             self.say("opened " + path)
@@ -220,9 +219,8 @@ struct Editor:
             self.say("no file name")
             return
         try:
-            f = await open(self.path, "w")
-            await f.write(self.buf.text())
-            await f.close()
+            with await open(self.path, "w") as f:
+                await f.write(self.buf.text())
             self.buf.mark_saved()
             self.say("saved " + self.path)
         catch e:
@@ -375,9 +373,9 @@ async def selftest(path: str) -> int:
 
     ed.path = path + ".out"
     await ed.save()
-    f = await open(ed.path, "r")
-    print("saved", len(await f.text()), "bytes; dirty", ed.buf.dirty)
-    await f.close()
+    with await open(ed.path, "r") as f:
+        # a block is a SCOPE (64.1), so what it reads is printed inside it
+        print("saved", len(await f.text()), "bytes; dirty", ed.buf.dirty)
     shim_close()
     return 0
 

@@ -211,6 +211,14 @@ static int expr_uses(PsExpr *e, const char *name);
 
 static int opt_is_ref(PsType *t);
 
+const char *ps_cleanup_flag(Arena *a, Pos pos);
+
+static void ab_defer(AsyncB *B, PsStmt *s);
+
+static void ab_arm(AsyncB *B, const char *fl, PsBlock *body, const char *name, PsType *t, Pos pos);
+
+static void ab_with(AsyncB *B, PsStmt *s);
+
 static int32_t frame_index(Vec_pPsDecl *afr, const char *name);
 
 static const char *sh_mangle(PsLow *L, PsType *t);
@@ -273,6 +281,16 @@ struct PsLow {
     const char *async_frame;
     const char *async_task;
     int32_t async_catch;
+    char **acl_flag;
+    PsBlock **acl_body;
+    char **acl_name;
+    PsType **acl_type;
+    int32_t nacl;
+    int32_t cacl1;
+    int32_t cacl2;
+    int32_t cacl3;
+    int32_t cacl4;
+    int in_cleanup;
     StrSet async_names;
     StrSet frame_names;
     Vec_pPsFunc fnvals;
@@ -364,6 +382,12 @@ static Expr *PsLow_repr_value(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t 
 static Expr *PsLow_zero_of(PsLow *self, Type *t, Pos pos);
 
 static Stmt *PsLow_guard(PsLow *self, Pos pos);
+
+static void PsLow_async_cleanup(PsLow *self, Vec_pStmt *out, Pos pos);
+
+static Stmt *PsLow_close_stmt(PsLow *self, const char *name, PsType *t, Pos pos);
+
+static void PsLow_async_cleanup_one(PsLow *self, Vec_pStmt *out, int32_t i, Pos pos);
 
 static void PsLow_push_arg(PsLow *self, Expr *c, Expr *e);
 
@@ -541,6 +565,9 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         case PT_FILE: {
             return ty_ptr(self->a, ty_name(self->a, "PsFile"));
         }
+        case PT_CONN: {
+            return ty_ptr(self->a, ty_name(self->a, "PsConn"));
+        }
         case PT_BUFFER: {
             return ty_ptr(self->a, ty_name(self->a, "PsBuffer"));
         }
@@ -643,6 +670,104 @@ static Expr *PsLow_zero_of(PsLow *self, Type *t, Pos pos) {
     return PsLow_num(self, "0", pos);
 }
 
+static Stmt *PsLow_close_stmt(PsLow *self, const char *name, PsType *t, Pos pos) {
+    PsTypeKind k = (t != NULL ? t->kind : PT_UNKNOWN);
+    Expr *cl = NULL;
+    if (k == PT_NAME) {
+        cl = PsLow_call_rt(self, Arena_printf(self->a, "%s_close", ps_cname(self->a, t->name)), pos);
+        Expr *rcv = (PsLow_in_frame(self, name) ? PsLow_async_field(self, name, pos) : PsLow_ident(self, name, pos));
+        if (!t->is_ref) {
+            Expr *ra = ex_new(self->a, EX_UNARY, pos);
+            ra->op = TK_AMP;
+            ra->lhs = rcv;
+            rcv = ra;
+        }
+        PsLow_push_arg(self, cl, rcv);
+        PsLow_push_arg(self, cl, PsLow_ctx_arg(self, pos));
+    } else {
+        cl = PsLow_call_rt(self, (k == PT_BUFFER ? "ps_buffer_close" : (k == PT_CONN ? "ps_conn_close" : "ps_file_close")), pos);
+        PsLow_push_arg(self, cl, PsLow_ctx_arg(self, pos));
+        PsLow_push_arg(self, cl, (PsLow_in_frame(self, name) ? PsLow_async_field(self, name, pos) : PsLow_ident(self, name, pos)));
+    }
+    Stmt *st = st_new(self->a, ST_EXPR, pos);
+    st->expr = cl;
+    return st;
+}
+
+static void PsLow_async_cleanup(PsLow *self, Vec_pStmt *out, Pos pos) {
+    if (self->in_cleanup) {
+        return;
+    }
+    self->in_cleanup = 1;
+    int32_t i = self->nacl - 1;
+    while (i >= 0) {
+        Vec_pStmt body;
+        Vec_pStmt_init(&body);
+        Stmt *dis = st_new(self->a, ST_ASSIGN, pos);
+        dis->lhs = PsLow_async_field(self, self->acl_flag[i], pos);
+        dis->op = TK_ASSIGN;
+        dis->rhs = ex_new(self->a, EX_FALSE, pos);
+        Vec_pStmt_push(&body, dis);
+        if (self->acl_body[i] != NULL) {
+            Block *inner = PsLow_block(self, self->acl_body[i]);
+            size_t k;
+            for (k = 0; k < inner->n; k += 1) {
+                Vec_pStmt_push(&body, inner->stmts[k]);
+            }
+        } else {
+            Vec_pStmt_push(&body, PsLow_close_stmt(self, self->acl_name[i], self->acl_type[i], pos));
+        }
+        Block *blk = Arena_alloc(self->a, sizeof(Block));
+        blk->stmts = body.data;
+        blk->n = body.len;
+        Stmt *g = st_new(self->a, ST_IF, pos);
+        g->conds = Arena_alloc(self->a, sizeof(*g->conds));
+        g->conds[0] = PsLow_async_field(self, self->acl_flag[i], pos);
+        g->blocks = Arena_alloc(self->a, sizeof(*g->blocks));
+        g->blocks[0] = blk;
+        g->nconds = 1;
+        g->if_sel = -1;
+        Vec_pStmt_push(out, g);
+        i -= 1;
+    }
+    self->in_cleanup = 0;
+}
+
+static void PsLow_async_cleanup_one(PsLow *self, Vec_pStmt *out, int32_t i, Pos pos) {
+    if (i < 0 || i >= self->nacl || self->in_cleanup) {
+        return;
+    }
+    self->in_cleanup = 1;
+    Vec_pStmt body;
+    Vec_pStmt_init(&body);
+    Stmt *dis = st_new(self->a, ST_ASSIGN, pos);
+    dis->lhs = PsLow_async_field(self, self->acl_flag[i], pos);
+    dis->op = TK_ASSIGN;
+    dis->rhs = ex_new(self->a, EX_FALSE, pos);
+    Vec_pStmt_push(&body, dis);
+    if (self->acl_body[i] != NULL) {
+        Block *inner = PsLow_block(self, self->acl_body[i]);
+        size_t k;
+        for (k = 0; k < inner->n; k += 1) {
+            Vec_pStmt_push(&body, inner->stmts[k]);
+        }
+    } else {
+        Vec_pStmt_push(&body, PsLow_close_stmt(self, self->acl_name[i], self->acl_type[i], pos));
+    }
+    Block *blk = Arena_alloc(self->a, sizeof(Block));
+    blk->stmts = body.data;
+    blk->n = body.len;
+    Stmt *g = st_new(self->a, ST_IF, pos);
+    g->conds = Arena_alloc(self->a, sizeof(*g->conds));
+    g->conds[0] = PsLow_async_field(self, self->acl_flag[i], pos);
+    g->blocks = Arena_alloc(self->a, sizeof(*g->blocks));
+    g->blocks[0] = blk;
+    g->nconds = 1;
+    g->if_sel = -1;
+    Vec_pStmt_push(out, g);
+    self->in_cleanup = 0;
+}
+
 static Stmt *PsLow_guard(PsLow *self, Pos pos) {
     Expr *chk = PsLow_call_rt(self, "ps_has_exc", pos);
     PsLow_push_arg(self, chk, PsLow_ctx_arg(self, pos));
@@ -696,11 +821,14 @@ static Stmt *PsLow_guard(PsLow *self, Pos pos) {
         fs->expr = fl;
         Stmt *fr = st_new(self->a, ST_RETURN, pos);
         fr->expr = ex_new(self->a, EX_TRUE, pos);
+        Vec_pStmt fv;
+        Vec_pStmt_init(&fv);
+        Vec_pStmt_push(&fv, fs);
+        PsLow_async_cleanup(self, &fv, pos);
+        Vec_pStmt_push(&fv, fr);
         Block *fb = Arena_alloc(self->a, sizeof(Block));
-        fb->stmts = Arena_alloc(self->a, (size_t)2 * sizeof(*fb->stmts));
-        fb->stmts[0] = fs;
-        fb->stmts[1] = fr;
-        fb->n = 2;
+        fb->stmts = fv.data;
+        fb->n = fv.len;
         Stmt *gs = st_new(self->a, ST_IF, pos);
         gs->conds = Arena_alloc(self->a, sizeof(*gs->conds));
         gs->conds[0] = chk;
@@ -1019,6 +1147,19 @@ static Expr *PsLow_to_str(PsLow *self, PsExpr *e) {
         case PT_BOOL: {
             name = "ps_str_from_bool";
             break;
+        }
+        case PT_LIST: {
+            if (e->type->inner != NULL && e->type->inner->kind == PT_INT && e->type->inner->width == 8) {
+                Expr *bc = PsLow_call_rt(self, "ps_str_from_bytes", e->pos);
+                PsLow_push_arg(self, bc, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, bc, v);
+                PsLow_pos_args(self, bc, e->pos);
+                self->raised = 1;
+                self->allocs = 1;
+                return bc;
+            }
+            fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type));
+            return NULL;
         }
         case PT_NAME: {
             Expr *rp = PsLow_repr_of(self, v, e->type, e->pos, 0);
@@ -1367,6 +1508,13 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 PsLow_push_arg(self, cw8, PsLow_sig_lit(self, e->type, e->pos));
                 self->allocs = 1;
                 return cw8;
+            }
+            if (strcmp(e->text, "__sys_out") == 0 || strcmp(e->text, "__sys_err") == 0) {
+                Expr *sf9 = PsLow_call_rt(self, "ps_std_file", e->pos);
+                PsLow_push_arg(self, sf9, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, sf9, PsLow_num(self, (strcmp(e->text, "__sys_out") == 0 ? "0" : "1"), e->pos));
+                self->allocs = 1;
+                return sf9;
             }
             if (strcmp(e->text, "__sys_argv") == 0 || strcmp(e->text, "__sys_env") == 0) {
                 Expr *sc9 = PsLow_call_rt(self, (strcmp(e->text, "__sys_argv") == 0 ? "ps_sys_argv" : "ps_sys_env"), e->pos);
@@ -2221,6 +2369,35 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         }
         return bc;
     }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_CONN) {
+        const char *cmn = e->lhs->text;
+        Expr *cc7 = NULL;
+        if (strcmp(cmn, "accept") == 0) {
+            cc7 = PsLow_call_rt(self, "ps_net_accept", e->pos);
+        } else if (strcmp(cmn, "read") == 0) {
+            cc7 = PsLow_call_rt(self, "ps_conn_read", e->pos);
+        } else if (strcmp(cmn, "write") == 0) {
+            PsType *cwa = e->args[0]->type;
+            cc7 = PsLow_call_rt(self, (cwa != NULL && cwa->kind == PT_LIST ? "ps_conn_write_bytes" : "ps_conn_write"), e->pos);
+        } else if (strcmp(cmn, "close") == 0) {
+            cc7 = PsLow_call_rt(self, "ps_conn_close", e->pos);
+        } else {
+            cc7 = PsLow_call_rt(self, "ps_conn_port", e->pos);
+            PsLow_push_arg(self, cc7, PsLow_expr(self, e->lhs->lhs));
+            return cc7;
+        }
+        PsLow_push_arg(self, cc7, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, cc7, PsLow_expr(self, e->lhs->lhs));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, cc7, PsLow_expr(self, e->args[i]));
+        }
+        if (strcmp(cmn, "close") != 0) {
+            self->raised = 1;
+            self->allocs = 1;
+        }
+        return cc7;
+    }
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_FILE) {
         const char *fmn = e->lhs->text;
         const char *want = NULL;
@@ -2420,8 +2597,8 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         }
         return c1;
     }
-    if (strcmp(name, "print") == 0) {
-        Expr *c = PsLow_call_rt(self, "ps_print", e->pos);
+    if (strcmp(name, "print") == 0 || strcmp(name, "aprint") == 0) {
+        Expr *c = PsLow_call_rt(self, (strcmp(name, "aprint") == 0 ? "ps_aprint" : "ps_print"), e->pos);
         PsLow_push_arg(self, c, PsLow_ctx_arg(self, e->pos));
         Expr *prep = NULL;
         Expr **ovp = PsLow_lower_ordered(self, e->args, e->nargs, &prep);
@@ -2602,6 +2779,14 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->raised = 1;
         return gc9;
     }
+    if (strcmp(name, "gather_settled") == 0 || strcmp(name, "first_ok") == 0) {
+        Expr *sc9 = PsLow_call_rt(self, (strcmp(name, "gather_settled") == 0 ? "ps_gather_settled_task" : "ps_first_ok_task"), e->pos);
+        PsLow_push_arg(self, sc9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, sc9, PsLow_expr(self, e->args[0]));
+        self->allocs = 1;
+        self->raised = 1;
+        return sc9;
+    }
     if (strcmp(name, "sorted") == 0 && e->nargs == 2) {
         int32_t ki = -1;
         size_t i;
@@ -2645,6 +2830,17 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     }
     if (strcmp(name, "__sys_time") == 0) {
         return PsLow_call_rt(self, "ps_sys_time", e->pos);
+    }
+    if (starts_with(name, "__net_")) {
+        Expr *nc = PsLow_call_rt(self, Arena_printf(self->a, "ps_net_%s", name + 6), e->pos);
+        PsLow_push_arg(self, nc, PsLow_ctx_arg(self, e->pos));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, nc, PsLow_expr(self, e->args[i]));
+        }
+        self->raised = 1;
+        self->allocs = 1;
+        return nc;
     }
     if (strcmp(name, "__json_parse") == 0) {
         Expr *jc = PsLow_call_rt(self, "ps_json_parse", e->pos);
@@ -4220,6 +4416,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                         Vec_pStmt_push(out, PsLow_guard(self, s->pos));
                     }
                 }
+                PsLow_async_cleanup(self, out, s->pos);
                 Stmt *ds = st_new(self->a, ST_ASSIGN, s->pos);
                 Expr *df = ex_new(self->a, EX_FIELD, s->pos);
                 df->op = TK_ARROW;
@@ -4470,7 +4667,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 PsLow_push_arg(self, cl9, rcv9);
                 PsLow_push_arg(self, cl9, PsLow_ctx_arg(self, s->pos));
             } else {
-                cl9 = PsLow_call_rt(self, (wk9 == PT_BUFFER ? "ps_buffer_close" : "ps_file_close"), s->pos);
+                cl9 = PsLow_call_rt(self, (wk9 == PT_BUFFER ? "ps_buffer_close" : (wk9 == PT_CONN ? "ps_conn_close" : "ps_file_close")), s->pos);
                 PsLow_push_arg(self, cl9, PsLow_ctx_arg(self, s->pos));
                 PsLow_push_arg(self, cl9, PsLow_ident(self, s->name, s->pos));
             }
@@ -5860,6 +6057,10 @@ static void async_slots_s(PsLow *L, PsStmt *s, Vec_PsField *v, int32_t *n);
 
 static void async_slots_e(PsLow *L, PsExpr *e, Vec_PsField *v, int32_t *n);
 
+const char *ps_cleanup_flag(Arena *a, Pos pos) {
+    return Arena_printf(a, "__cl_%d_%d", pos.line, pos.col);
+}
+
 const char *ps_for_cursor(Arena *a, Pos pos) {
     return Arena_printf(a, "__afi_%d_%d", pos.line, pos.col);
 }
@@ -5984,6 +6185,22 @@ static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file
                 PsType *er = ps_type(L->a, PT_NAME, s->pos);
                 er->name = "Error";
                 async_add_field(L, v, s->name, er, s->pos, file);
+            }
+            if (s->finally_block != NULL) {
+                async_add_field(L, v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file);
+            }
+            break;
+        }
+        case PS_DEFER: {
+            async_add_field(L, v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file);
+            break;
+        }
+        case PS_WITH: {
+            if (s->name != NULL && s->expr != NULL) {
+                async_add_field(L, v, s->name, s->expr->type, s->pos, file);
+            }
+            if (has_await_b(s->body)) {
+                async_add_field(L, v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file);
             }
             break;
         }
@@ -6224,8 +6441,66 @@ static void ab_plain(AsyncB *B, PsStmt *s) {
     }
 }
 
+static void ab_defer(AsyncB *B, PsStmt *s) {
+    if (has_await_b(s->body)) {
+        fatal_at(B->file, s->pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1)");
+    }
+    ab_arm(B, ps_cleanup_flag(B->L->a, s->pos), s->body, NULL, NULL, s->pos);
+}
+
+static void ab_arm(AsyncB *B, const char *fl, PsBlock *body, const char *name, PsType *t, Pos pos) {
+    B->L->acl_flag = vec_grow(B->L->acl_flag, B->L->nacl, &B->L->cacl1, sizeof(*B->L->acl_flag));
+    B->L->acl_body = vec_grow(B->L->acl_body, B->L->nacl, &B->L->cacl2, sizeof(*B->L->acl_body));
+    B->L->acl_name = vec_grow(B->L->acl_name, B->L->nacl, &B->L->cacl3, sizeof(*B->L->acl_name));
+    B->L->acl_type = vec_grow(B->L->acl_type, B->L->nacl, &B->L->cacl4, sizeof(*B->L->acl_type));
+    B->L->acl_flag[B->L->nacl] = (char *)fl;
+    B->L->acl_body[B->L->nacl] = body;
+    B->L->acl_name[B->L->nacl] = (char *)name;
+    B->L->acl_type[B->L->nacl] = t;
+    B->L->nacl += 1;
+    Stmt *arm = st_new(B->L->a, ST_ASSIGN, pos);
+    arm->lhs = PsLow_async_field(B->L, fl, pos);
+    arm->op = TK_ASSIGN;
+    arm->rhs = ex_new(B->L->a, EX_TRUE, pos);
+    ab_emit(B, arm);
+}
+
+static void ab_with(AsyncB *B, PsStmt *s) {
+    Stmt *bind = st_new(B->L->a, ST_ASSIGN, s->pos);
+    bind->lhs = PsLow_async_field(B->L, s->name, s->pos);
+    bind->op = TK_ASSIGN;
+    if (has_await_e(s->expr)) {
+        ab_split_e(B, s->expr);
+    }
+    bind->rhs = PsLow_expr(B->L, s->expr);
+    size_t i;
+    for (i = 0; i < B->L->pre.len; i += 1) {
+        ab_emit(B, B->L->pre.data[i]);
+    }
+    Vec_pStmt_init(&B->L->pre);
+    ab_emit(B, bind);
+    ab_emit(B, PsLow_guard(B->L, s->pos));
+    ab_arm(B, ps_cleanup_flag(B->L->a, s->pos), NULL, s->name, s->expr->type, s->pos);
+    ab_block(B, s->body);
+    Vec_pStmt out;
+    Vec_pStmt_init(&out);
+    PsLow_async_cleanup_one(B->L, &out, B->L->nacl - 1, s->pos);
+    for (i = 0; i < out.len; i += 1) {
+        ab_emit(B, out.data[i]);
+    }
+    B->L->nacl -= 1;
+}
+
 static void ab_stmt(AsyncB *B, PsStmt *s) {
     if (s == NULL) {
+        return;
+    }
+    if (s->kind == PS_DEFER) {
+        ab_defer(B, s);
+        return;
+    }
+    if (s->kind == PS_WITH && (has_await_b(s->body) || has_await_e(s->expr))) {
+        ab_with(B, s);
         return;
     }
     if (!has_await_s(s)) {
@@ -6419,8 +6694,9 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             break;
         }
         case PS_TRY: {
-            if (s->finally_block != NULL) {
-                fatal_at(B->file, s->pos, "a `finally` around an `await` is not compiled yet: its cleanup has to survive a suspension, and that is the same hole `with` and `defer` have inside an `async def` (50.1)");
+            int hasfin = s->finally_block != NULL;
+            if (hasfin) {
+                ab_arm(B, ps_cleanup_flag(B->L->a, s->pos), s->finally_block, NULL, NULL, s->pos);
             }
             int32_t cst = ab_state(B);
             int32_t aft = ab_state(B);
@@ -6454,6 +6730,16 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             ab_block(B, s->catch_block);
             ab_goto(B, aft, s->pos);
             B->cur = aft;
+            if (hasfin) {
+                Vec_pStmt fv9;
+                Vec_pStmt_init(&fv9);
+                PsLow_async_cleanup_one(B->L, &fv9, B->L->nacl - 1, s->pos);
+                size_t fi;
+                for (fi = 0; fi < fv9.len; fi += 1) {
+                    ab_emit(B, fv9.data[fi]);
+                }
+                B->L->nacl -= 1;
+            }
             break;
         }
         case PS_BREAK: {
@@ -6486,7 +6772,7 @@ static PsDecl *async_frame_decl(PsLow *L, PsFunc *f, const char *owner, const ch
     Vec_PsField_init(&fields);
     PsField r = {0};
     r.name = "__ret";
-    r.type = (f->ret != NULL ? f->ret : ps_type(L->a, PT_INT, f->pos));
+    r.type = (f->ret != NULL && f->ret->kind != PT_VOID ? f->ret : ps_type(L->a, PT_INT, f->pos));
     r.pos = f->pos;
     Vec_PsField_push(&fields, r);
     size_t i;
@@ -6634,6 +6920,8 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
     L->ret_ps = f->ret;
     L->zret = NULL;
     L->in_main = 0;
+    L->nacl = 0;
+    L->in_cleanup = 0;
     AsyncB B = {0};
     B.L = L;
     B.t = "__t";
@@ -6645,9 +6933,17 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
     ab_block(&B, f->body);
     int ends = B.states[B.cur].len > 0 && B.states[B.cur].data[B.states[B.cur].len - 1]->kind == ST_RETURN;
     if (!ends) {
+        Vec_pStmt cv;
+        Vec_pStmt_init(&cv);
+        PsLow_async_cleanup(L, &cv, f->pos);
+        size_t ci;
+        for (ci = 0; ci < cv.len; ci += 1) {
+            ab_emit(&B, cv.data[ci]);
+        }
         ab_emit(&B, ab_set_state(&B, -1, f->pos));
         ab_ret(&B, 1, f->pos);
     }
+    L->nacl = 0;
     Vec_pStmt body;
     Vec_pStmt_init(&body);
     Expr *fc = ex_new(L->a, EX_CAST, f->pos);
@@ -7476,7 +7772,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_STR || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_STR || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

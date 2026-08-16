@@ -124,6 +124,12 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
 | Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
+| Socket e DNS (`net`) | 77.1 | `net_socket` | ✅ `net.listen/connect/lookup`, `accept/read/write/close/port`; accept/read/write POLLED no mesmo `poll` do escalonador, connect e DNS no pool |
+| Limpeza dentro de `async def` | 50.1, 80.2 | `async_cleanup` | ✅ `defer`, `with` e `finally` armam um bit no frame e rodam em toda saída de verdade — nunca numa suspensão (era bug: rodavam ao estacionar) |
+| `try`/`catch` dentro de `async def` | 50.1 | `aio_files` | ✅ o guarda salta para o estado do catch |
+| `gather_settled` / `first_ok` | 79.4 | `async_sugar` | ✅ (`at_most` não: com começo quente a task já roda quando é criada — o limite pertence a quem CRIA) |
+| Bloco `async:` | 78.3 | `async_sugar` | ✅ vira `async def` cujos parâmetros são a captura (por valor, como o lambda). `async lambda` ainda não |
+| `aprint`, `sys.out`, `sys.err` | 78.2 | `async_sugar` | ✅ `print` segue síncrono; `close()` num stream padrão é no-op |
 | I/O de ARQUIVO pelo pool de threads | 76.1, 76.3 | `aio_files` | ✅ um pool por processo, preguiçoso (N=núcleos, teto 8, `PSCRIPT_POOL`); a thread do pool só toca o item malloc'ado e a libc, e quem constrói o valor no heap é o escalonador de quem pediu |
 | Todo I/O é aguardável | 76.2, 79.1, 79.2 | `aio_files`, `files` | ✅ `await open/read(n)/read_all/text/readlines/write/close`; `read(n)` dá até n bytes e vazio é fim; `text()` valida UTF-8 |
 | Método `async def` | 50.1 | `aio_files`, `pstudio/ps` | ✅ é função com receptor: `self` mora no frame como qualquer parâmetro |

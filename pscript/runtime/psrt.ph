@@ -20,6 +20,11 @@ include <string.h>
 include <unistd.h>
 include <fcntl.h>
 include <poll.h>
+include <sys/socket.h>
+include <netinet/in.h>
+include <netdb.h>
+include <arpa/inet.h>
+include <signal.h>
 
 # ---------- object model ----------
 # Every collected object starts with this header. `ty` is the type id; 50.2
@@ -41,6 +46,7 @@ enum PsTyId:
     PS_TY_ANY = 12     # a NUMBER, bool or None inside an `any` (39.2)
     PS_TY_BUFFER = 13  # a block of bytes every worker can write into (52.3)
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
+    PS_TY_CONN = 15    # a socket, listening or connected (77.1)
 
 struct PsObj:
     ty: i32
@@ -302,6 +308,8 @@ struct PsFile:
     obj: PsObj
     fp: *FILE
     is_open: i32
+    is_std: i32     # stdout or stderr (78.2): closing one does nothing, because
+                    #   they belong to the process and not to the program
 
 # ---------- workers (35.1/36.1) ----------
 # A worker is an OS thread with its OWN heap, collector and context (18.1): one
@@ -353,6 +361,14 @@ struct PsWorkerBlk:
     dn_r: int            # the worker waits here for messages going DOWN
     dn_w: int
     next: *PsWorkerBlk   # the spawning context keeps them all, to join at exit
+
+# 77.1: a socket, listening or connected. The descriptor is an int and nothing
+# collected lives inside, so the handle is as cheap as a file's.
+struct PsConn:
+    obj: PsObj
+    fd: int
+    is_open: i32
+    listening: i32
 
 # what the program holds: a collected handle with nothing collected inside
 struct PsWorker:
@@ -433,6 +449,7 @@ enum PsIoWant:
     PS_W_STR
     PS_W_LINES
     PS_W_INT
+    PS_W_CONN
 
 enum PsIoOp:
     PS_IO_OPEN = 0
@@ -440,6 +457,16 @@ enum PsIoOp:
     PS_IO_READALL      # everything that is left
     PS_IO_WRITE
     PS_IO_CLOSE
+    # 77.1: the SOCKET half. These never go to the pool — a socket has a real
+    # non-blocking mode, so the scheduler waits for the descriptor in the same
+    # `poll` it already runs and the syscall happens inline, here, when it can
+    # no longer block. That is the split libuv makes, and it is not a matter of
+    # taste: it is what the operating system offers.
+    PS_IO_ACCEPT
+    PS_IO_RECV
+    PS_IO_SEND
+    PS_IO_CONNECT
+    PS_IO_LOOKUP       # ... except this one: `getaddrinfo` blocks, so it does
 
 struct PsWork:
     next: *PsWork
@@ -459,6 +486,10 @@ struct PsWork:
     done: i32          # finished (written under the pool's mutex)
     orphan: i32        # 76.4: the waiter gave up — whoever finishes frees this
     wake: int          # descriptor of the context waiting for it
+    fd: int            # SOCKET ops: the descriptor to wait on, -1 otherwise
+    events: i16        # ... and what to wait for (POLLIN / POLLOUT)
+    off: usize         # a send that went out in pieces: how much already did
+    port: i32          # connect: where to
 
 struct PsCtx:
     blocks: *PsBlock     # newest first; allocation bumps in this one
@@ -527,6 +558,13 @@ def ps_task_step(ctx: *PsCtx, t: *PsTask)
 # Park `waiter` on `on`, which is not done yet. The step function returns right
 # after calling this, and the scheduler resumes it when `on` finishes.
 def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask)
+# 79.4: the siblings of `gather` and `race`. `gather_settled` waits for every
+# task and hands back the error of each (None where it worked); `first_ok`
+# gives the index of the first that SUCCEEDED and cancels the rest.
+def ps_gather_settled(ctx: *PsCtx, ts: *PsList) -> *PsList
+def ps_gather_settled_task(ctx: *PsCtx, ts: *PsList) -> *PsTask
+def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64
+def ps_first_ok_task(ctx: *PsCtx, ts: *PsList) -> *PsTask
 # From code that is NOT a task (the entry point): run the scheduler until this
 # task finishes. It is the only place the runtime ever blocks.
 def ps_task_wait(ctx: *PsCtx, t: *PsTask)
@@ -738,6 +776,28 @@ def ps_work_new(op: i32) -> *PsWork
 def ps_pool_submit(ctx: *PsCtx, w: *PsWork)
 def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
 def ps_utf8_valid(b: const *char, n: usize) -> bool
+def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> *PsStr
+def ps_aprint(ctx: *PsCtx, s: *PsStr) -> *PsTask
+def ps_std_file(ctx: *PsCtx, which: i32) -> *PsFile
+
+# ---------- the network (77.1) ----------
+# `net.listen(port)` gives a server, `await srv.accept()` a connection, and a
+# connection reads and writes bytes. socket/bind/listen/setsockopt stay behind
+# it, because they are ceremony and not what the program is about.
+#
+# Accept, recv and send are POLLED: a socket has a real non-blocking mode, so
+# the scheduler waits for the descriptor in the `poll` it already runs (74.1)
+# and the syscall happens inline when it can no longer block. Connect and DNS
+# go to the POOL instead — `getaddrinfo` blocks and cannot be talked out of it.
+def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn
+def ps_net_accept(ctx: *PsCtx, srv: *PsConn) -> *PsTask
+def ps_net_connect(ctx: *PsCtx, host: *PsStr, port: i64) -> *PsTask
+def ps_net_lookup(ctx: *PsCtx, host: *PsStr) -> *PsTask
+def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask
+def ps_conn_write(ctx: *PsCtx, c: *PsConn, s: *PsStr) -> *PsTask
+def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask
+def ps_conn_close(ctx: *PsCtx, c: *PsConn)
+def ps_conn_port(c: *PsConn) -> i64
 def ps_file_write(ctx: *PsCtx, f: *PsFile, s: *PsStr, file: const *char, line: i32) -> i64
 def ps_file_read(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsStr
 def ps_file_readlines(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsList

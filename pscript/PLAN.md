@@ -1433,6 +1433,95 @@ o PRIMEIRO frame da lista, gerando código que referencia locais que não existe
 ali. Agora a busca usa o mesmo nome que a criação, e não achar é erro interno
 em vez de palpite.
 
+### 50.1 — limpeza dentro de `async def`: `defer`, `with`, `finally` — FEITO
+
+Uma função `async` vira máquina de estados, e o passo dela RETORNA toda vez que
+a task suspende. Por isso ela não pode usar o `defer` do P: o P roda o corpo do
+defer em cada `return`, e a limpeza disparava numa SUSPENSÃO — medido, o corpo
+do defer aparecia antes do `return` do estacionamento. Era um bug anterior a
+esta fase, e é por causa dele que `with` era recusado dentro de `async def`.
+
+A saída: cada limpeza arma um BIT no frame, e toda saída DE VERDADE — `return`,
+falha, o fim do corpo — roda as armadas em ordem inversa. Uma suspensão não
+roda nada. O `with` fecha ao sair do bloco e desarma o bit, então uma saída
+posterior não fecha de novo; se a saída for por erro ou por `return` de dentro
+do bloco, quem fecha é o caminho da saída. O `finally` é a mesma máquina.
+
+E o fechamento continua sendo o BLOQUEANTE mesmo com `await f.close()`
+existindo (80.2), porque a limpeza também roda com exceção pendente.
+
+Teste: `tests/pscript/run/async_cleanup.psc`.
+
+### 77.1 — o módulo `net`: socket e DNS — FEITO
+
+    import net
+
+    srv = net.listen(0)          # 0 = o sistema escolhe; `srv.port()` diz qual
+    c = await srv.accept()
+    dados = await c.read(4096)   # list<u8>, até n, vazio = o outro lado fechou
+    await c.write("pong")
+    c.close()                    # e `with` fecha sozinho
+
+    c2 = await net.connect("exemplo.com", 80)
+    ip = await net.lookup("exemplo.com")
+
+`accept`, `read` e `write` são POLLED: o descritor entra no mesmo `poll` que o
+escalonador já roda desde a 74.1, e a chamada de sistema acontece quando ela
+não pode mais bloquear. `connect` e `lookup` vão ao POOL, porque
+`getaddrinfo` bloqueia e não há como convencê-lo. O teste é um servidor e dois
+clientes no MESMO processo e na mesma thread — o que só funciona porque cada
+espera estaciona.
+
+Coisas que a implementação obrigou:
+
+  * **prontidão vem do `poll`, não do `errno`**: errno é macro (o P não a
+    enxerga) e é por thread. Perguntar ao `poll` custa uma chamada e responde a
+    única pergunta que importa;
+  * **SIGPIPE** é desarmado com um handler VAZIO, porque `SIG_IGN` é macro de
+    cast e `MSG_NOSIGNAL` é só do Linux;
+  * **`INADDR_ANY` também é macro de cast** — e vale zero, que é o que se
+    escreve;
+  * **o `fd` de um trabalho começa em -1 e não em zero**: zero é um descritor
+    perfeitamente válido (stdin), e é exatamente por esse campo que o
+    escalonador distingue socket de trabalho de pool. (Custou uma suíte
+    inteira travada para descobrir.)
+
+### 79.4 — `gather_settled` e `first_ok` — FEITOS
+
+`gather_settled(ts)` espera todas e devolve `list<Error?>`: o erro de cada uma,
+None onde deu certo. Os valores se leem das próprias tasks, que já terminaram.
+`first_ok(ts)` devolve o índice da primeira que deu certo e cancela o resto;
+se todas falharem, lança.
+
+**O `at_most` NÃO foi implementado, e por um motivo de desenho:** com o começo
+QUENTE da 35.3, a task já está rodando no instante em que é criada. Um limite
+no `gather` chegaria tarde — não há o que estrangular. O lugar de limitar
+concorrência é onde as tasks são CRIADAS, o que pede outra forma (algo como
+`gather_map(f, itens, at_most=8)`, que cria em lotes). Fica registrado.
+
+### 78.2 — `aprint`, `sys.out` e `sys.err` — FEITOS
+
+`print` continua síncrono. `await aprint(...)` tem os mesmos argumentos e a
+mesma junção por espaço, e vai ao pool. `sys.out`/`sys.err` são arquivos
+comuns, então `await sys.out.write(b)` é a mesma operação de escrever em
+qualquer arquivo — e `close()` neles não faz nada, porque pertencem ao
+processo e não ao programa.
+
+### 78.3 — o bloco `async:` — FEITO
+
+    t = async:
+        await busca()
+        registra()
+
+Vira um `async def` cujos PARÂMETROS são o que o bloco capturou, e a análise de
+captura é a mesma do lambda (19.2): um nome de fora, lido dentro, viaja por
+valor. Sozinho no topo é fire-and-forget que a drenagem da 77.3 termina.
+
+**`async lambda` ainda não**: um lambda é um VALOR que se guarda e chama
+depois, então ele precisa do ambiente de captura E da máquina de estados ao
+mesmo tempo — as duas coisas compostas. O bloco cobre o caso real; a forma de
+expressão fica registrada.
+
 ### A ordem de implementação
 
   1. escalonador: `await` cede sempre (78.4) e o laço drena no fim (77.3);

@@ -3079,6 +3079,10 @@ struct Sema:
                         cdiag_at(self->file, e->pos, "pointer-arith", wd_pedantic(), "invalid application of 'sizeof' to a void type (GNU: sizeof(void) == 1)")
                     e->args[0]->kind = EX_TYPEREF
                     e->args[0]->cast_type = ty_name(self->a, e->args[0]->text)
+                    # resolved like any other type: without this, `sizeof(x)`
+                    # where x is a C TAG (`struct pollfd`, with no typedef)
+                    # emitted a bare `pollfd`, which is not C
+                    self->resolve_type(e->args[0]->cast_type)
                     return
                 # sizeof of a FUNCTION designator, of void, or of a never-defined
                 # struct tag — all incomplete (checked only with positive knowledge)
@@ -3345,6 +3349,10 @@ struct Sema:
                         return
                     e->cast_tentative = False
                 self->check_expr(e->lhs)
+                # the cast TYPE is resolved too: a C tag with no typedef has to
+                # be spelled `struct X` in the cast, exactly as in a declaration
+                if e->cast_type != None:
+                    self->resolve_type(e->cast_type)
                 cct: *Type = e->cast_type
                 cet: *Type = self->type_of(e->lhs)
                 if cct != None and not self->in_chdr:

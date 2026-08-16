@@ -1,0 +1,9 @@
+quantas 3
+0 deu 3
+1 falhou: caiu: b
+2 deu 1
+primeira que deu certo: 1
+escrito pelo pool 42
+aprint devolveu 21 bytes
+direto no stdout
+stdout continua vivo, porque ele é do processo

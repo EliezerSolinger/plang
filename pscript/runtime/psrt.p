@@ -290,6 +290,13 @@ static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg)
 static def ps_recvs_poll(ctx: *PsCtx) -> bool
 static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
 static def ps_io_run(w: *PsWork)
+static def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool
+static def ps_sigpipe_noop(sig: int)
+static def ps_sock_nonblock(fd: int)
+static def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
+static def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool
+static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
+static def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask
 static def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool
 def ps_utf8_valid(b: const *char, n: usize) -> bool
 static def ps_work_free(w: *PsWork)
@@ -837,6 +844,39 @@ static def ps_io_run(w: *PsWork):
                     w->err = 1
                 w->fp = None
             w->rc = 0
+        case PS_IO_LOOKUP:
+            hints: addrinfo
+            memset(&hints, 0, sizeof(hints))
+            hints.ai_family = AF_INET
+            hints.ai_socktype = SOCK_STREAM
+            res: *addrinfo = None
+            if getaddrinfo(w->path, None, &hints, &res) != 0 or res == None:
+                w->err = 1
+            else:
+                sa: *sockaddr_in = (*sockaddr_in)(res->ai_addr)
+                txt: const *char = inet_ntoa(sa->sin_addr)
+                w->buf = ps_dupn(txt, strlen(txt))
+                w->n = strlen(txt)
+                freeaddrinfo(res)
+        case PS_IO_CONNECT:
+            hints2: addrinfo
+            memset(&hints2, 0, sizeof(hints2))
+            hints2.ai_family = AF_INET
+            hints2.ai_socktype = SOCK_STREAM
+            res2: *addrinfo = None
+            port: char[16]
+            snprintf(port, 16, "%d", w->port)
+            if getaddrinfo(w->path, port, &hints2, &res2) != 0 or res2 == None:
+                w->err = 1
+            else:
+                fd: int = socket(res2->ai_family, res2->ai_socktype, res2->ai_protocol)
+                if fd < 0 or connect(fd, res2->ai_addr, res2->ai_addrlen) != 0:
+                    if fd >= 0:
+                        close(fd)
+                    w->err = 1
+                else:
+                    w->rc = i64(fd)
+                freeaddrinfo(res2)
         case _:
             w->rc = 0
 
@@ -864,6 +904,9 @@ def ps_work_new(op: i32) -> *PsWork:
     w: *PsWork = (*PsWork)(malloc(sizeof(PsWork)))
     memset(w, 0, sizeof(PsWork))
     w->op = op
+    # NOT zero: zero is a perfectly good descriptor (stdin), and the scheduler
+    # tells a polled socket job from a pool job by exactly this field
+    w->fd = -1
     return w
 
 # The task an I/O job hands back: parked from the start, with a frame of the
@@ -893,6 +936,166 @@ def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     t->next = ctx->waiters
     ctx->waiters = t
     return t
+
+# ---------- the network (77.1) ----------
+# Writing to a socket the other side closed raises SIGPIPE, which kills the
+# process by default. `SIG_IGN` is a cast macro (P cannot see it) and
+# MSG_NOSIGNAL is Linux-only, so what we install is an EMPTY handler: the
+# signal is delivered and ignored, and `send` returns -1 the way we want.
+static def ps_sigpipe_noop(sig: int):
+    pass
+
+static g_sigpipe_done: i32 = 0
+
+static def ps_sock_nonblock(fd: int):
+    if g_sigpipe_done == 0:
+        g_sigpipe_done = 1
+        signal(SIGPIPE, ps_sigpipe_noop)
+    fcntl(fd, F_SETFL, O_NONBLOCK)
+
+# A polled job: no pool thread, no queue. The scheduler puts the descriptor in
+# its `poll` and runs the syscall here when it says ready — which is what a
+# socket makes possible and a file does not.
+static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_REFMSG_DESC if isref else &PS_POD_DESC
+    memset(fr + sizeof(PsUser), 0, size)
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = 0
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
+    t->next = None
+    ps_task_clear_recv(t)
+    t->is_io = 1
+    t->work = w
+    t->rsize = size
+    t->next = ctx->waiters
+    ctx->waiters = t
+    return t
+
+static def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
+    c: *PsConn = (*PsConn)(ps_alloc(ctx, sizeof(PsConn), PS_TY_CONN))
+    c->fd = fd
+    c->is_open = 1 if fd >= 0 else 0
+    c->listening = listening
+    return c
+
+def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
+    fd: int = socket(AF_INET, SOCK_STREAM, 0)
+    if fd < 0:
+        ps_raise(ctx, "could not make a socket", PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 1)
+    one: int = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, u32(sizeof(int)))
+    a: sockaddr_in
+    memset(&a, 0, sizeof(a))
+    a.sin_family = u16(AF_INET)
+    a.sin_port = htons(u16(port))
+    a.sin_addr.s_addr = htonl(u32(0))   # INADDR_ANY is a cast macro, and 0 is what it says
+    if bind(fd, (*sockaddr)(&a), u32(sizeof(a))) != 0:
+        close(fd)
+        msg: char[128]
+        snprintf(msg, 128, "could not bind port %ld", port)
+        ps_raise(ctx, msg, PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 1)
+    if listen(fd, 128) != 0:
+        close(fd)
+        ps_raise(ctx, "could not listen", PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 1)
+    ps_sock_nonblock(fd)
+    return ps_conn_new(ctx, fd, 1)
+
+# which port it really got, so `listen(0)` is usable in a test
+def ps_conn_port(c: *PsConn) -> i64:
+    if c == None or c->is_open == 0:
+        return 0
+    a: sockaddr_in
+    n: u32 = u32(sizeof(a))
+    memset(&a, 0, sizeof(a))
+    if getsockname(c->fd, (*sockaddr)(&a), &n) != 0:
+        return 0
+    return i64(ntohs(a.sin_port))
+
+static def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool:
+    if c == None or c->is_open == 0:
+        msg: char[128]
+        snprintf(msg, 128, "%s on a socket that is not open", what)
+        ps_raise(ctx, msg, PS_CAT_IO, "<net>", 0)
+        return False
+    return True
+
+def ps_net_accept(ctx: *PsCtx, srv: *PsConn) -> *PsTask:
+    if not ps_conn_live(ctx, srv, "accept"):
+        return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    w: *PsWork = ps_work_new(PS_IO_ACCEPT)
+    w->want = PS_W_CONN
+    w->fd = srv->fd
+    w->events = i16(POLLIN)
+    return ps_fd_task(ctx, w, True, sizeof(PsStrPtr))
+
+def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask:
+    if not ps_conn_live(ctx, c, "read"):
+        return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    w: *PsWork = ps_work_new(PS_IO_RECV)
+    w->want = PS_W_BYTES
+    w->fd = c->fd
+    w->events = i16(POLLIN)
+    w->n = usize(n if n > 0 else 0)
+    w->buf = (*char)(malloc(w->n if w->n > 0 else usize(1)))
+    return ps_fd_task(ctx, w, True, sizeof(PsStrPtr))
+
+static def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask:
+    w: *PsWork = ps_work_new(PS_IO_SEND)
+    w->want = PS_W_INT
+    w->fd = c->fd
+    w->events = i16(POLLOUT)
+    w->n = n
+    w->off = 0
+    w->buf = (*char)(malloc(n + 1))
+    if n > 0:
+        memcpy(w->buf, bytes, n)
+    return ps_fd_task(ctx, w, False, sizeof(i64))
+
+def ps_conn_write(ctx: *PsCtx, c: *PsConn, s: *PsStr) -> *PsTask:
+    if not ps_conn_live(ctx, c, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    return ps_send_task(ctx, c, s->data if s != None else "", usize(s->len) if s != None else usize(0))
+
+def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask:
+    if not ps_conn_live(ctx, c, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    n: usize = usize(l->len) if l != None else usize(0)
+    return ps_send_task(ctx, c, ps_list_base(l) if n > 0 else "", n)
+
+def ps_conn_close(ctx: *PsCtx, c: *PsConn):
+    if c != None and c->is_open != 0:
+        close(c->fd)
+        c->is_open = 0
+        c->fd = -1
+
+# connect and DNS go to the POOL: `getaddrinfo` blocks, and a connect that
+# waits for a handshake on the other side of the world blocks with it
+def ps_net_connect(ctx: *PsCtx, host: *PsStr, port: i64) -> *PsTask:
+    w: *PsWork = ps_work_new(PS_IO_CONNECT)
+    w->want = PS_W_CONN
+    w->path = ps_dupn(host->data, usize(host->len))
+    w->port = i32(port)
+    w->fd = -1
+    return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
+
+def ps_net_lookup(ctx: *PsCtx, host: *PsStr) -> *PsTask:
+    w: *PsWork = ps_work_new(PS_IO_LOOKUP)
+    w->want = PS_W_STR
+    w->path = ps_dupn(host->data, usize(host->len))
+    w->fd = -1
+    return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
 
 # ---------- the file, now awaitable (76.2) ----------
 # Every one of these hands back a PARKED task: the call itself does nothing but
@@ -962,6 +1165,8 @@ def ps_aio_write_bytes(ctx: *PsCtx, f: *PsFile, l: *PsList) -> *PsTask:
 def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask:
     w: *PsWork = ps_work_new(PS_IO_CLOSE)
     w->want = PS_W_NONE
+    if f != None and f->is_std != 0:
+        return ps_io_task(ctx, w, False, sizeof(i64))
     if f != None and f->is_open != 0:
         w->fp = f->fp
         f->is_open = 0
@@ -1120,6 +1325,13 @@ static def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             whole: *PsStr = ps_str_new(ctx, w->buf, w->n)
             nl: *PsStr = ps_str_new(ctx, "\n", 1)
             *(**PsList)(ps_task_ret(t)) = ps_str_split(ctx, whole, nl)
+        case PS_W_CONN:
+            c: *PsConn = (*PsConn)(ps_alloc(ctx, sizeof(PsConn), PS_TY_CONN))
+            c->fd = int(w->rc)
+            c->is_open = 1
+            c->listening = 0
+            ps_sock_nonblock(c->fd)
+            *(**PsConn)(ps_task_ret(t)) = c
         case PS_W_INT:
             *(*i64)(ps_task_ret(t)) = w->rc
         case _:
@@ -1128,6 +1340,46 @@ static def ps_io_finish(ctx: *PsCtx, t: *PsTask):
     t->work = None
     if t->state != -2:
         t->state = -1
+
+# A POLLED job: try the syscall, once, and say whether it finished. Readiness
+# is asked of `poll` rather than read off `errno` — errno is a macro P cannot
+# see, and it is per-thread besides. Asking costs one syscall and answers the
+# only question that matters: can this run without blocking?
+static def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
+    w: *PsWork = t->work
+    pf: pollfd[1]
+    pf[0].fd = w->fd
+    pf[0].events = w->events
+    pf[0].revents = 0
+    if poll(pf, u64(1), 0) <= 0:
+        return False
+    match w->op:
+        case PS_IO_ACCEPT:
+            fd2: int = accept(w->fd, None, None)
+            if fd2 < 0:
+                return False       # the queue emptied between poll and accept
+            w->rc = i64(fd2)
+            return True
+        case PS_IO_RECV:
+            got: i64 = i64(recv(w->fd, w->buf, w->n, 0))
+            if got < 0:
+                w->err = 1
+                w->n = 0
+            else:
+                w->n = usize(got)   # 79.2: zero means the other side closed
+            return True
+        case PS_IO_SEND:
+            put: i64 = i64(send(w->fd, w->buf + w->off, w->n - w->off, 0))
+            if put < 0:
+                w->err = 1
+                return True
+            w->off += usize(put)
+            if w->off < w->n:
+                return False        # partial: wait for room and send the rest
+            w->rc = i64(w->n)
+            return True
+        case _:
+            return True
 
 # Every parked receive that can finish now, does. Returns whether any did.
 static def ps_recvs_poll(ctx: *PsCtx) -> bool:
@@ -1139,13 +1391,16 @@ static def ps_recvs_poll(ctx: *PsCtx) -> bool:
             # a pool job: cancelling releases the waiter at once and lets the
             # call finish alone (76.4) — a `read(2)` does not stop halfway
             if t->cancelled != 0:
-                pthread_mutex_lock(&g_pool.mu)
-                if t->work->done != 0:
-                    pthread_mutex_unlock(&g_pool.mu)
-                    ps_work_free(t->work)
+                if t->work->fd >= 0:
+                    ps_work_free(t->work)      # polled: nothing is in flight
                 else:
-                    t->work->orphan = 1
-                    pthread_mutex_unlock(&g_pool.mu)
+                    pthread_mutex_lock(&g_pool.mu)
+                    if t->work->done != 0:
+                        pthread_mutex_unlock(&g_pool.mu)
+                        ps_work_free(t->work)
+                    else:
+                        t->work->orphan = 1
+                        pthread_mutex_unlock(&g_pool.mu)
                 t->work = None
                 t->state = -1
                 iw: *PsTask = t->waiter
@@ -1154,6 +1409,17 @@ static def ps_recvs_poll(ctx: *PsCtx) -> bool:
                     iw->waiting_on = None
                     ps_sched_push(ctx, iw)
                 any = True
+            elif t->work->fd >= 0:
+                # 77.1: a socket. No pool, no queue — the syscall happens here,
+                # when `poll` says it can no longer block.
+                if ps_fd_try(ctx, t):
+                    ps_io_finish(ctx, t)
+                    fw: *PsTask = t->waiter
+                    t->waiter = None
+                    if fw != None:
+                        fw->waiting_on = None
+                        ps_sched_push(ctx, fw)
+                    any = True
             else:
                 pthread_mutex_lock(&g_pool.mu)
                 fin: bool = t->work->done != 0
@@ -1205,7 +1471,9 @@ static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
     t: *PsTask = ctx->waiters
     while t != None:
         if t->state == 0:
-            if t->is_io != 0:
+            if t->is_io != 0 and t->work != None and t->work->fd >= 0:
+                cnt += 1           # a socket waits on its own descriptor
+            elif t->is_io != 0:
                 io = True          # every pool job wakes the SAME descriptor
             else:
                 fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
@@ -1939,6 +2207,8 @@ def ps_file_readlines(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> 
     return ps_str_split(ctx, whole, nl)
 
 def ps_file_close(ctx: *PsCtx, f: *PsFile):
+    if f != None and f->is_std != 0:
+        return
     if f != None and f->is_open != 0:
         fclose(f->fp)
         f->is_open = 0
@@ -2442,7 +2712,12 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         t2: *PsTask = ctx->waiters
         while t2 != None and k < PS_POLL_MAX:
             if t2->state == 0:
-                if t2->is_io != 0:
+                if t2->is_io != 0 and t2->work != None and t2->work->fd >= 0:
+                    fds[k].fd = t2->work->fd
+                    fds[k].events = t2->work->events
+                    fds[k].revents = 0
+                    k += 1
+                elif t2->is_io != 0:
                     anyio = True
                 else:
                     fd: int = t2->rblk->up_r if t2->rdir == 0 else t2->rblk->dn_r
@@ -2600,6 +2875,75 @@ def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
     t->next = None
     ps_task_clear_recv(t)
     return t
+
+# 79.4 — `gather_settled` (= allSettled): every task finishes, and the FIRST
+# failure does not take the rest down. What comes back is the error of each
+# one, None where it worked; the values are read from the tasks themselves,
+# which are done by then and hand them over without waiting.
+def ps_gather_settled(ctx: *PsCtx, ts: *PsList) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, ts->len if ts != None else 0)
+    i: i64 = 0
+    while ts != None and i < ts->len:
+        base: **PsTask = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
+        t: *PsTask = *base
+        while not ps_task_done(t):
+            if not ps_sched_progress(ctx):
+                break
+            # an error that reached THIS context while stepping belongs to
+            # whoever raised it, not to us: park it and carry on
+            if ctx->exc != None:
+                ps_exc_take(ctx)
+        base = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
+        dst: *char = ps_list_push(ctx, out)
+        *(**PsErr)(dst) = (*base)->err
+        i += 1
+    return out
+
+def ps_gather_settled_task(ctx: *PsCtx, ts: *PsList) -> *PsTask:
+    out: *PsList = ps_gather_settled(ctx, ts)
+    t: *PsTask = ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    ((*PsUser)(t->frame))->desc = &PS_REFMSG_DESC
+    *(**PsList)(ps_task_ret(t)) = out
+    return t
+
+# 79.4 — `first_ok` (= any): the first that SUCCEEDS wins, and failures are
+# ignored until there are only failures left, which is itself the answer.
+def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64:
+    if ts == None or ts->len == 0:
+        ps_raise(ctx, "first_ok() needs at least one task", PS_CAT_VALUE, "<first_ok>", 0)
+        return -1
+    while True:
+        alldone: bool = True
+        i: i64 = 0
+        while i < ts->len:
+            base: **PsTask = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
+            t: *PsTask = *base
+            if ps_task_done(t):
+                if t->state != -2 and t->err == None:
+                    # a winner: everyone else stops, as in `race`
+                    j: i64 = 0
+                    while j < ts->len:
+                        if j != i:
+                            lose: **PsTask = (**PsTask)(ps_list_base(ts) + usize(j) * usize(ts->esize))
+                            ps_task_cancel(ctx, *lose)
+                        j += 1
+                    return i
+            else:
+                alldone = False
+            i += 1
+        if alldone:
+            ps_raise(ctx, "first_ok(): every task failed", PS_CAT_VALUE, "<first_ok>", 0)
+            return -1
+        if not ps_sched_progress(ctx):
+            ps_raise(ctx, "deadlock: nothing can finish these tasks", PS_CAT_VALUE, "<first_ok>", 0)
+            return -1
+        if ctx->exc != None:
+            ps_exc_take(ctx)
+    return -1
+
+def ps_first_ok_task(ctx: *PsCtx, ts: *PsList) -> *PsTask:
+    v: i64 = ps_first_ok(ctx, ts)
+    return ps_task_of_int(ctx, v)
 
 def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask):
     waiter->waiting_on = on
@@ -2759,8 +3103,8 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
                 tk->waiter = (*PsTask)(ps_forward(to, (*PsObj)(tk->waiter)))
             if tk->next != None:
                 tk->next = (*PsTask)(ps_forward(to, (*PsObj)(tk->next)))
-        case PS_TY_WORKER:
-            pass          # the control block is malloc'd and never moves
+        case PS_TY_WORKER, PS_TY_CONN:
+            pass          # a descriptor is an int; nothing inside to follow
         case PS_TY_FILE:
             pass          # the FILE belongs to libc, not to the collector
         case PS_TY_ANY:
@@ -3167,6 +3511,17 @@ def ps_str_new(ctx: *PsCtx, bytes: const *char, len: usize) -> *PsStr:
     s->nchars = ps_utf8_count(s->data, len)
     return s
 
+# 79.1/83.2: bytes become text HERE, and only if they really are text. A `str`
+# promises codepoints — `len()` counts them and `s[i]` is one — so a string
+# built out of invalid UTF-8 would be a string that lies about itself.
+def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> *PsStr:
+    n: usize = usize(l->len) if l != None else usize(0)
+    p: const *char = ps_list_base(l) if n > 0 else ""
+    if not ps_utf8_valid(p, n):
+        ps_raise(ctx, "these bytes are not valid UTF-8: keep them as bytes, or decode them yourself", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    return ps_str_new(ctx, p, n)
+
 def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr:
     n: usize = usize(a->len) + usize(b->len)
     s: *PsStr = ps_alloc(ctx, sizeof(PsStr) + n + 1, PS_TY_STR)
@@ -3558,6 +3913,33 @@ def ps_fmt_str(ctx: *PsCtx, s: *PsStr, width: i32, align: char) -> *PsStr:
     return ps_pad(ctx, s->data, usize(s->len), width, align, False)
 
 # ---------- output ----------
+# 78.2: the same text `print` would write, handed to the pool instead. What it
+# buys is a program that keeps running while a full pipe or a slow terminal
+# takes its time; what it costs is an `await`, which is why `print` itself was
+# left alone.
+# 78.2: stdout and stderr as ordinary files. They belong to the process, so
+# `close()` on one does nothing — a program that closed the world's stdout
+# would be a program nobody could debug.
+def ps_std_file(ctx: *PsCtx, which: i32) -> *PsFile:
+    f: *PsFile = (*PsFile)(ps_alloc(ctx, sizeof(PsFile), PS_TY_FILE))
+    f->fp = stdout if which == 0 else stderr
+    f->is_open = 1
+    f->is_std = 1
+    return f
+
+def ps_aprint(ctx: *PsCtx, s: *PsStr) -> *PsTask:
+    if ctx->exc != None:
+        return ps_task_of_int(ctx, 0)
+    w: *PsWork = ps_work_new(PS_IO_WRITE)
+    w->want = PS_W_INT
+    w->fp = stdout
+    w->n = usize(s->len) + 1
+    w->buf = (*char)(malloc(w->n + 1))
+    if s->len > 0:
+        memcpy(w->buf, s->data, usize(s->len))
+    w->buf[s->len] = '\n'
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
 def ps_print(ctx: *PsCtx, s: *PsStr):
     # 49.2: once an exception is pending, every call is a no-op until the check
     # at the end of the statement sees it. Printing here would be printing a
