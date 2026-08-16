@@ -276,11 +276,11 @@ print(f"P3 {WIDTH} {HEIGHT} 255 ({len(pixels)} components)")
 # battery 52 asks for: a path tracer that renders and does not save is a
 # benchmark, not a program.
 written = 0
-with open("smallpt.ppm", "w") as f:
-    written += f.write(f"P3\n{WIDTH} {HEIGHT}\n255\n")
+with await open("smallpt.ppm", "w") as f:
+    written += await f.write(f"P3\n{WIDTH} {HEIGHT}\n255\n")
     i = 0
     while i < len(pixels):
-        written += f.write(f"{pixels[i]} {pixels[i + 1]} {pixels[i + 2]}\n")
+        written += await f.write(f"{pixels[i]} {pixels[i + 1]} {pixels[i + 2]}\n")
         i += 3
 print(f"wrote smallpt.ppm ({written} bytes)")
 

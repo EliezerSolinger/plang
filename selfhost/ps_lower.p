@@ -47,6 +47,7 @@ static def ps_is_const_init(e: *PsExpr) -> bool
 static def block_uses(b: *PsBlock, name: const *char) -> bool
 static def expr_uses(e: *PsExpr, name: const *char) -> bool
 static def opt_is_ref(t: *PsType) -> bool
+static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32
 static def sh_mangle(L: *PsLow, t: *PsType) -> const *char
 static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
 static def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
@@ -105,6 +106,9 @@ struct PsLow:
     # through it, and a raise ends the STEP instead of the function.
     async_frame: const *char
     async_task: const *char
+    async_catch: i32     # inside a `try` in a step function (50.1): the state
+                         #   the machine goes to when something raises. -1 when
+                         #   there is no `try` around this point.
     async_names: StrSet
     frame_names: StrSet  # the generated async frames: collected like any struct
     fnvals: Vec<*PsFunc> # functions used as VALUES: each needs one adapter, so
@@ -393,6 +397,31 @@ struct PsLow:
             ts->nconds = 1
             ts->if_sel = -1
             return ts
+        if self->async_task != None and self->async_catch >= 0:
+            # inside a `try` in a step function: the raise ends the try body and
+            # the machine goes to the CATCH state. It cannot fall through the
+            # way the plain lowering does — between the raise and the catch
+            # there may be a suspension, and the two are different states.
+            sv: *Stmt = st_new(self->a, ST_ASSIGN, pos)
+            sv->lhs = ex_new(self->a, EX_FIELD, pos)
+            sv->lhs->op = TK_ARROW
+            sv->lhs->lhs = self->ident(self->async_task, pos)
+            sv->lhs->field = "state"
+            sv->op = TK_ASSIGN
+            sv->rhs = self->num(self->a->printf("%d", self->async_catch), pos)
+            cb2: *Block = self->a->alloc(sizeof(Block))
+            cb2->stmts = self->a->alloc(usize(2) * sizeof(*cb2->stmts))
+            cb2->stmts[0] = sv
+            cb2->stmts[1] = st_new(self->a, ST_CONTINUE, pos)
+            cb2->n = 2
+            cs2: *Stmt = st_new(self->a, ST_IF, pos)
+            cs2->conds = self->a->alloc(sizeof(*cs2->conds))
+            cs2->conds[0] = chk
+            cs2->blocks = self->a->alloc(sizeof(*cs2->blocks))
+            cs2->blocks[0] = cb2
+            cs2->nconds = 1
+            cs2->if_sel = -1
+            return cs2
         if self->async_task != None:
             # inside a step function (50.1): the task takes the error and the
             # step ends. Whoever awaits it gets the error raised again (19.3).
@@ -1876,20 +1905,33 @@ struct PsLow:
                 self->pos_args(bc, e->pos)
                 self->raised = True
             return bc
-        # a file (48.1): every one of them is a runtime call with the position,
-        # because every one of them can raise
+        # a file (48.1/76.2): every one of them describes a job for the pool and
+        # hands back a parked task. What used to be a call that blocked the
+        # thread is now a call that returns immediately with something to await
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_FILE:
-            fc: *Expr = self->call_rt(self->a->printf("ps_file_%s", e->lhs->text), e->pos)
-            self->push_arg(fc, self->ctx_arg(e->pos))
-            self->push_arg(fc, self->expr(e->lhs->lhs))
+            fmn: const *char = e->lhs->text
+            want: const *char = None
+            rt7: *Expr = None
+            if strcmp(fmn, "read") == 0:
+                rt7 = self->call_rt("ps_aio_read", e->pos)
+            elif strcmp(fmn, "write") == 0:
+                wa: *PsType = e->args[0]->type
+                bytes7: bool = wa != None and wa->kind == PT_LIST
+                rt7 = self->call_rt("ps_aio_write_bytes" if bytes7 else "ps_aio_write", e->pos)
+            elif strcmp(fmn, "close") == 0:
+                rt7 = self->call_rt("ps_aio_close", e->pos)
+            else:
+                rt7 = self->call_rt("ps_aio_readall", e->pos)
+                want = "PS_W_STR" if strcmp(fmn, "text") == 0 else ("PS_W_LINES" if strcmp(fmn, "readlines") == 0 else "PS_W_BYTES")
+            self->push_arg(rt7, self->ctx_arg(e->pos))
+            self->push_arg(rt7, self->expr(e->lhs->lhs))
             for i in range(e->nargs):
-                self->push_arg(fc, self->expr(e->args[i]))
-            if strcmp(e->lhs->text, "close") != 0:
-                self->pos_args(fc, e->pos)
-                self->raised = True
-            if strcmp(e->lhs->text, "read") == 0 or strcmp(e->lhs->text, "readlines") == 0:
-                self->allocs = True
-            return fc
+                self->push_arg(rt7, self->expr(e->args[i]))
+            if want != None:
+                self->push_arg(rt7, self->ident(want, e->pos))
+            self->raised = True
+            self->allocs = True
+            return rt7
         # `w.send(x)` / `w.recv()` and the `parent` side of the same pipe (36.1)
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_WORKER:
             wt8: *PsType = e->lhs->type
@@ -2289,11 +2331,10 @@ struct PsLow:
             self->allocs = True
             return bf
         if strcmp(name, "open") == 0:
-            op: *Expr = self->call_rt("ps_file_open", e->pos)
+            op: *Expr = self->call_rt("ps_aio_open", e->pos)
             self->push_arg(op, self->ctx_arg(e->pos))
             self->push_arg(op, self->expr(e->args[0]))
             self->push_arg(op, self->expr(e->args[1]))
-            self->pos_args(op, e->pos)
             self->raised = True
             self->allocs = True
             return op
@@ -5116,6 +5157,7 @@ static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *
     else:
         L->async_frame = None
     L->async_task = None
+    L->async_catch = -1
     L->ret = pf->ret
     L->ret_ps = e->type->inner
     L->zret = None
@@ -5293,9 +5335,31 @@ static def lower_worker_thunk(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
             L->push_arg(call, im)
         else:
             L->push_arg(call, fa)
-    cs: *Stmt = st_new(L->a, ST_EXPR, f->pos)
-    cs->expr = call
-    body.push(cs)
+    if f->is_async:
+        # 76.1: a worker entry may be an `async def`. The thread has a scheduler
+        # of its own, so it drives its own entry the way the top level does —
+        # which is what makes "every worker can use async/await" true rather
+        # than a slogan.
+        wtv: *Stmt = st_new(L->a, ST_VAR, f->pos)
+        wtv->name = "__wtask"
+        wtv->type = ty_ptr(L->a, ty_name(L->a, "PsTask"))
+        wtv->init = call
+        body.push(wtv)
+        ww: *Stmt = st_new(L->a, ST_EXPR, f->pos)
+        ww->expr = L->call_rt("ps_task_wait", f->pos)
+        L->push_arg(ww->expr, L->addr_of("__wctx", f->pos))
+        L->push_arg(ww->expr, L->ident("__wtask", f->pos))
+        body.push(ww)
+    else:
+        cs: *Stmt = st_new(L->a, ST_EXPR, f->pos)
+        cs->expr = call
+        body.push(cs)
+    # 77.3: this thread's loop drains too — a task the worker started and never
+    # awaited finishes before the thread ends, exactly as at the top level
+    dr: *Stmt = st_new(L->a, ST_EXPR, f->pos)
+    dr->expr = L->call_rt("ps_sched_drain", f->pos)
+    L->push_arg(dr->expr, L->addr_of("__wctx", f->pos))
+    body.push(dr)
     fin: *Stmt = st_new(L->a, ST_EXPR, f->pos)
     fin->expr = L->call_rt("ps_worker_finish", f->pos)
     L->push_arg(fin->expr, L->addr_of("__wctx", f->pos))
@@ -5537,7 +5601,18 @@ static def ab_ret(ref B: AsyncB, v: bool, pos: Pos):
     r->expr = ex_new(B.L->a, EX_TRUE if v else EX_FALSE, pos)
     ab_emit(ref B, r)
 
-# `if (!ps_task_done(F->slot)) { ps_task_park(ctx, t, F->slot); return false; }`
+# ```
+# if (!ps_task_done(F->slot)) ps_task_park(ctx, t, F->slot);
+# else                        ps_task_yield(ctx, t);
+# return false;
+# ```
+#
+# 78.4: the step returns EITHER WAY. A value that is already there does not let
+# this task carry straight on — it goes to the back of the ready queue first,
+# which is what gives every other task a turn. Without that, a loop of awaits
+# that always finds its answer ready (a fast client, in a server) would never
+# let anything else run. It is the rule of the JS microtask, and the reason its
+# ordering is predictable.
 static def ab_park(ref B: AsyncB, slot: const *char, pos: Pos):
     dn: *Expr = B.L->call_rt("ps_task_done", pos)
     B.L->push_arg(dn, B.L->async_field(slot, pos))
@@ -5550,21 +5625,31 @@ static def ab_park(ref B: AsyncB, slot: const *char, pos: Pos):
     B.L->push_arg(pk, B.L->async_field(slot, pos))
     ps: *Stmt = st_new(B.L->a, ST_EXPR, pos)
     ps->expr = pk
-    rr: *Stmt = st_new(B.L->a, ST_RETURN, pos)
-    rr->expr = ex_new(B.L->a, EX_FALSE, pos)
     bb: *Block = B.L->a->alloc(sizeof(Block))
-    bb->stmts = B.L->a->alloc(usize(2) * sizeof(*bb->stmts))
+    bb->stmts = B.L->a->alloc(sizeof(*bb->stmts))
     bb->stmts[0] = ps
-    bb->stmts[1] = rr
-    bb->n = 2
+    bb->n = 1
+    yd: *Expr = B.L->call_rt("ps_task_yield", pos)
+    B.L->push_arg(yd, B.L->ctx_arg(pos))
+    B.L->push_arg(yd, B.L->ident(B.t, pos))
+    ys: *Stmt = st_new(B.L->a, ST_EXPR, pos)
+    ys->expr = yd
+    eb: *Block = B.L->a->alloc(sizeof(Block))
+    eb->stmts = B.L->a->alloc(sizeof(*eb->stmts))
+    eb->stmts[0] = ys
+    eb->n = 1
     ifs: *Stmt = st_new(B.L->a, ST_IF, pos)
     ifs->conds = B.L->a->alloc(sizeof(*ifs->conds))
     ifs->conds[0] = nt
     ifs->blocks = B.L->a->alloc(sizeof(*ifs->blocks))
     ifs->blocks[0] = bb
     ifs->nconds = 1
+    ifs->else_block = eb
     ifs->if_sel = -1
     ab_emit(ref B, ifs)
+    rr: *Stmt = st_new(B.L->a, ST_RETURN, pos)
+    rr->expr = ex_new(B.L->a, EX_FALSE, pos)
+    ab_emit(ref B, rr)
 
 # every await inside one statement, split off before the statement itself is
 # lowered: the task is started, the state is bumped, and the step returns if the
@@ -5818,12 +5903,50 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             B.brk = fob
             B.cont = foc
             B.cur = fafter
+        case PS_TRY:
+            # `try` with an await inside: the body runs in its own states with
+            # the guard pointing at the CATCH state, so a raise anywhere in it
+            # — including after a suspension — lands in the handler instead of
+            # ending the task. Which is the whole point of catching.
+            if s->finally_block != None:
+                fatal_at(B.file, s->pos, "a `finally` around an `await` is not compiled yet: its cleanup has to survive a suspension, and that is the same hole `with` and `defer` have inside an `async def` (50.1)")
+            cst: i32 = ab_state(ref B)
+            aft: i32 = ab_state(ref B)
+            sc: i32 = B.L->async_catch
+            B.L->async_catch = cst
+            ab_block(ref B, s->body)
+            B.L->async_catch = sc
+            ab_goto(ref B, aft, s->pos)
+            B.cur = cst
+            # the error becomes the catch variable, or is simply taken
+            tk9: *Expr = B.L->call_rt("ps_take_exc", s->pos)
+            B.L->push_arg(tk9, B.L->ctx_arg(s->pos))
+            if s->name != None and block_uses(s->catch_block, s->name):
+                if B.L->in_frame(s->name):
+                    bn: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
+                    bn->lhs = B.L->async_field(s->name, s->pos)
+                    bn->op = TK_ASSIGN
+                    bn->rhs = tk9
+                    ab_emit(ref B, bn)
+                else:
+                    bd: *Stmt = st_new(B.L->a, ST_VAR, s->pos)
+                    bd->name = ps_cname(B.L->a, s->name)
+                    bd->type = ty_ptr(B.L->a, ty_name(B.L->a, "PsErr"))
+                    bd->init = tk9
+                    ab_emit(ref B, bd)
+            else:
+                cl9: *Stmt = st_new(B.L->a, ST_EXPR, s->pos)
+                cl9->expr = tk9
+                ab_emit(ref B, cl9)
+            ab_block(ref B, s->catch_block)
+            ab_goto(ref B, aft, s->pos)
+            B.cur = aft
         case PS_BREAK:
             ab_goto(ref B, B.brk, s->pos)
         case PS_CONTINUE:
             ab_goto(ref B, B.cont, s->pos)
         case _:
-            fatal_at(B.file, s->pos, "an `await` inside this statement is not compiled yet — the state machine takes apart `if`, `while` and `for` so far (50.1)")
+            fatal_at(B.file, s->pos, "an `await` inside this statement is not compiled yet — the state machine takes apart `if`, `while`, `for` and `try` so far (50.1)")
 
 static def ab_block(ref B: AsyncB, b: *PsBlock):
     if b == None:
@@ -5835,7 +5958,7 @@ static def ab_block(ref B: AsyncB, b: *PsBlock):
 # ---------- what comes out ----------
 # the frame: a `struct` in every way that matters, so it gets the same
 # declaration, descriptor and trace function every other collected type gets
-static def async_frame_decl(L: *PsLow, f: *PsFunc, file: const *char) -> *PsDecl:
+static def async_frame_decl(L: *PsLow, f: *PsFunc, owner: const *char, file: const *char) -> *PsDecl:
     fields: Vec<PsField>
     fields.init()
     # the RESULT first, always: `ps_task_ret` points at the frame's first user
@@ -5852,7 +5975,7 @@ static def async_frame_decl(L: *PsLow, f: *PsFunc, file: const *char) -> *PsDecl
     nslot: i32 = 0
     async_slots_b(L, f->body, ref fields, ref nslot)
     d: *PsDecl = ps_decl(L->a, PD_STRUCT, f->pos)
-    d->name = L->a->printf("%s__frame", ps_cname(L->a, f->name))
+    d->name = L->a->printf("%s__frame", ps_cname(L->a, f->name)) if owner == None else L->a->printf("%s_%s__frame", owner, f->name)
     L->frame_names.add(d->name)
     d->src_name = d->name
     d->fields = fields.data
@@ -5860,20 +5983,30 @@ static def async_frame_decl(L: *PsLow, f: *PsFunc, file: const *char) -> *PsDecl
     return d
 
 # `static PsTask *f(PsCtx *ctx, T a) { F *fr = ps_new(...); fr->a = a; return ps_task_new(ctx, f__step, fr); }`
-static def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, with_body: bool) -> *Decl:
+static def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *char, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
-    pf->name = ps_cname(L->a, f->name)
+    pf->name = ps_cname(L->a, f->name) if owner == None else L->a->printf("%s_%s", owner, f->name)
     pf->cname = pf->name
-    pf->is_static = f->is_static
+    pf->is_static = f->is_static and owner == None
     pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask"))
-    pf->params = L->a->alloc(usize(f->nparams + 1) * sizeof(*pf->params))
-    pf->params[0].name = CTX
-    pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
-    pf->params[0].pos = f->pos
-    for i in range(f->nparams):
-        L->fill_param(&pf->params[i + 1], &f->params[i])
-    pf->nparams = f->nparams + 1
+    # a METHOD keeps the receiver first, exactly as `lower_func` puts it, so an
+    # async method is called the same way a plain one is (50.1 with a `self`
+    # that lives in the frame like every other parameter)
+    recv9: bool = owner != None and f->nparams > 0 and strcmp(f->params[0].name, "self") == 0
+    pf->params = L->a->alloc(usize(f->nparams + 2) * sizeof(*pf->params))
+    np9: i32 = 0
+    if recv9:
+        L->fill_param(&pf->params[0], &f->params[0])
+        np9 = 1
+    pf->params[np9].name = CTX
+    pf->params[np9].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    pf->params[np9].pos = f->pos
+    np9 += 1
+    for i in range(1 if recv9 else 0, f->nparams):
+        L->fill_param(&pf->params[np9], &f->params[i])
+        np9 += 1
+    pf->nparams = np9
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_FUNC
     d->pos = f->pos
@@ -5927,7 +6060,7 @@ static def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, with_body: bool
     ca2->text = CTX
     L->push_arg(nt, ca2)
     stp: *Expr = ex_new(L->a, EX_IDENT, f->pos)
-    stp->text = L->a->printf("%s__step", ps_cname(L->a, f->name))
+    stp->text = L->a->printf("%s__step", ps_cname(L->a, f->name)) if owner == None else L->a->printf("%s_%s__step", owner, f->name)
     L->push_arg(nt, stp)
     ob: *Expr = ex_new(L->a, EX_CAST, f->pos)
     ob->cast_type = ty_ptr(L->a, ty_name(L->a, "PsObj"))
@@ -5944,10 +6077,10 @@ static def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, with_body: bool
     return d
 
 # `static bool f__step(PsCtx *ctx, PsTask *t) { F *fr = ...; while (1) match ... }`
-static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, file: const *char, with_body: bool) -> *Decl:
+static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *char, file: const *char, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
-    pf->name = L->a->printf("%s__step", ps_cname(L->a, f->name))
+    pf->name = L->a->printf("%s__step", ps_cname(L->a, f->name)) if owner == None else L->a->printf("%s_%s__step", owner, f->name)
     pf->cname = pf->name
     pf->is_static = True
     pf->ret = ty_name(L->a, "bool")
@@ -6060,6 +6193,7 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, file: const *cha
 
     L->async_frame = None
     L->async_task = None
+    L->async_catch = -1
     return d
 
 # ---------- `struct`: the collected reference type (20.1) ----------
@@ -6743,6 +6877,16 @@ static def expr_uses(e: *PsExpr, name: const *char) -> bool:
 # the collector moves, so it decides three things at once: how `T?` is
 # represented (9.4), whether a list traces its elements, and whether a dict
 # traces its keys or values. A type missing here is one the collector loses.
+# which frame belongs to this function, by name
+static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32:
+    for i in range(afr.len):
+        if strcmp(afr.data[i]->name, name) == 0:
+            return i32(i)
+    # never silently: the frame of one function used for another produces code
+    # that references locals which are not there, far from the cause
+    fatal("internal: no async frame named '%s'", name)
+    return 0
+
 static def opt_is_ref(t: *PsType) -> bool:
     if t == None:
         return False
@@ -6819,6 +6963,7 @@ static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool
 
 def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L: PsLow = {0}
+    L.async_catch = -1   # no `try` around anything, until a step says otherwise
     L.a = a
     L.file = m->path
     L.m = m
@@ -6886,7 +7031,13 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     for i in range(m->ndecls):
         d5: *PsDecl = m->decls[i]
         if d5->kind == PD_FUNC and d5->func != None and d5->func->is_async:
-            afr.push(async_frame_decl(&L, d5->func, m->path))
+            afr.push(async_frame_decl(&L, d5->func, None, m->path))
+        elif d5->kind == PD_RECORD or d5->kind == PD_STRUCT:
+            # an async METHOD needs its own frame, named after the pair so two
+            # types may have a method with the same name
+            for j5 in range(d5->nmethods):
+                if d5->methods[j5]->is_async:
+                    afr.push(async_frame_decl(&L, d5->methods[j5], d5->name, m->path))
 
     # every function a `spawn` names needs an argument struct and a thread thunk
     spw: Vec<*PsFunc>
@@ -6967,17 +7118,23 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]
         if d->kind == PD_FUNC and d->func->ntparams == 0 and d->func->is_async:
-            k6: i32 = 0
-            for j in range(afr.len):
-                if strcmp(afr.data[j]->name, L.a->printf("%s__frame", d->func->name)) == 0:
-                    k6 = j
-            L.out.push(lower_async_step(&L, d->func, afr.data[k6], m->path, False))
-            L.out.push(lower_async_start(&L, d->func, afr.data[k6], False))
+            # the frame is named with the C-SAFE name, because that is what
+            # `async_frame_decl` used: an `async def main` becomes `main_` (C
+            # already owns `main`), and looking it up under the raw name found
+            # nothing and silently used the first frame in the list
+            k6: i32 = frame_index(ref afr, L.a->printf("%s__frame", ps_cname(L.a, d->func->name)))
+            L.out.push(lower_async_step(&L, d->func, afr.data[k6], None, m->path, False))
+            L.out.push(lower_async_start(&L, d->func, afr.data[k6], None, False))
         elif d->kind == PD_FUNC and d->func->ntparams == 0:
             L.out.push(lower_func(&L, d->func, None, False))
         elif d->kind == PD_RECORD or d->kind == PD_STRUCT:
             for j in range(d->nmethods):
-                L.out.push(lower_func(&L, d->methods[j], d->name, False))
+                if d->methods[j]->is_async:
+                    ka: i32 = frame_index(ref afr, L.a->printf("%s_%s__frame", d->name, d->methods[j]->name))
+                    L.out.push(lower_async_step(&L, d->methods[j], afr.data[ka], d->name, m->path, False))
+                    L.out.push(lower_async_start(&L, d->methods[j], afr.data[ka], d->name, False))
+                else:
+                    L.out.push(lower_func(&L, d->methods[j], d->name, False))
 
     for i in range(L.keyads.len):
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, False))
@@ -7049,19 +7206,21 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]
         if d->kind == PD_FUNC and d->func->ntparams == 0 and d->func->is_async:
-            k7: i32 = 0
-            for j in range(afr.len):
-                if strcmp(afr.data[j]->name, L.a->printf("%s__frame", d->func->name)) == 0:
-                    k7 = j
-            L.out.push(lower_async_step(&L, d->func, afr.data[k7], m->path, True))
-            L.out.push(lower_async_start(&L, d->func, afr.data[k7], True))
+            k7: i32 = frame_index(ref afr, L.a->printf("%s__frame", ps_cname(L.a, d->func->name)))
+            L.out.push(lower_async_step(&L, d->func, afr.data[k7], None, m->path, True))
+            L.out.push(lower_async_start(&L, d->func, afr.data[k7], None, True))
         elif d->kind == PD_FUNC and d->func->ntparams == 0:
             # a generic template has no code of its own: its INSTANCES were
             # appended by the sema and are lowered like any other function
             L.out.push(lower_func(&L, d->func, None, True))
         elif d->kind == PD_RECORD or d->kind == PD_STRUCT:
             for j in range(d->nmethods):
-                L.out.push(lower_func(&L, d->methods[j], d->name, True))
+                if d->methods[j]->is_async:
+                    kb: i32 = frame_index(ref afr, L.a->printf("%s_%s__frame", d->name, d->methods[j]->name))
+                    L.out.push(lower_async_step(&L, d->methods[j], afr.data[kb], d->name, m->path, True))
+                    L.out.push(lower_async_start(&L, d->methods[j], afr.data[kb], d->name, True))
+                else:
+                    L.out.push(lower_func(&L, d->methods[j], d->name, True))
 
     if sv.len > 0:
         L.out.push(lower_shared_init(&L, sv, True))

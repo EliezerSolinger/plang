@@ -124,6 +124,12 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
 | Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
+| I/O de ARQUIVO pelo pool de threads | 76.1, 76.3 | `aio_files` | ✅ um pool por processo, preguiçoso (N=núcleos, teto 8, `PSCRIPT_POOL`); a thread do pool só toca o item malloc'ado e a libc, e quem constrói o valor no heap é o escalonador de quem pediu |
+| Todo I/O é aguardável | 76.2, 79.1, 79.2 | `aio_files`, `files` | ✅ `await open/read(n)/read_all/text/readlines/write/close`; `read(n)` dá até n bytes e vazio é fim; `text()` valida UTF-8 |
+| Método `async def` | 50.1 | `aio_files`, `pstudio/ps` | ✅ é função com receptor: `self` mora no frame como qualquer parâmetro |
+| Entrada de worker `async def` | 76.1 | `smallpt_full` | ✅ a thread tem escalonador próprio e dirige a própria entrada, como o topo |
+| `try`/`catch` dentro de `async def` | 50.1 | `aio_files` | ✅ o guarda salta para o estado do catch, então erro nascido DEPOIS de suspender ainda é pego. `with`/`defer`/`finally` em volta de await: ainda não |
+| Laço drena no fim; `await` cede sempre | 77.3, 78.4 | `loop_drain` | ✅ task órfã termina; awaits que sempre acham resposta pronta intercalam |
 | `await w.recv()` ESTACIONA | 74.1, 18.4 | `recv_parks` | ✅ receber é uma task sem passo, como o timer: o escalonador espera nos DESCRITORES das filas (pipe por direção) com o prazo mais próximo como timeout, então mensagem e relógio convivem |
 | `send` para worker morto devolve `bool` | 45.3 | — | ✅ |
 | `async`/`await`; task quente; await no topo | 17.4, 35.3, 39.4 | `cancel_race` | ✅ e o `await sleep()` ESTACIONA: duas tasks se intercalam de verdade (antes o timer parava a thread e uma rodava inteira antes da outra) |

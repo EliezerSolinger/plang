@@ -643,8 +643,12 @@ struct PsSema:
                 if not self->funcs.has(wn):
                     fatal_at(self->file, e->pos, "spawn needs a function of this program: '%s' is not one (35.1)", ps_disp(wn))
                 wf: *PsFunc = self->funcs.get_or(wn, None)
-                if wf->is_async or wf->ntparams > 0:
-                    fatal_at(self->file, e->pos, "a worker starts in a plain function: '%s' is %s", ps_disp(wn), "generic" if wf->ntparams > 0 else "async")
+                if wf->ntparams > 0:
+                    fatal_at(self->file, e->pos, "a worker starts in a plain function: '%s' is generic", ps_disp(wn))
+                # an `async def` IS allowed as a worker entry (76.1): the thread
+                # has a scheduler of its own and drives it the way the top level
+                # does. That is what lets a worker do I/O without stopping the
+                # tasks it started itself.
                 at6: *PsExpr = e->lhs->args[1]
                 nsent: i32 = at6->nargs if at6->kind == PE_TUPLE else 1
                 if nsent != wf->nparams:
@@ -1223,26 +1227,55 @@ struct PsSema:
                     return vl
                 fatal_at(self->file, e->pos, "a buffer has get_f64, set_f64, size and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
             # a file (48.1): read, write, readlines, close
+            # 48.1 + 76.2: every one of these is a TASK now. The names say what
+            # comes back, because the return type follows the name and not the
+            # number of arguments: `read(n)` gives BYTES (up to n, empty at the
+            # end — the semantics of recv, 79.2), `text()` gives the whole
+            # thing decoded, `read_all()` gives the whole thing as bytes.
             if rt != None and rt->kind == PT_FILE:
                 fm: const *char = e->lhs->text
                 e->lhs->type = rt
+                ftk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 if strcmp(fm, "write") == 0:
                     if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "write() takes one string")
+                        fatal_at(self->file, e->pos, "write() takes one string or one list<u8>")
                     wat: *PsType = self->check_expr(e->args[0])
-                    self->want(e->args[0], wat, ps_type(self->a, PT_STR, e->pos), "write()")
-                    return ps_type(self->a, PT_INT, e->pos)
+                    if wat == None or not (wat->kind == PT_STR or (wat->kind == PT_LIST and wat->inner != None and wat->inner->kind == PT_INT and wat->inner->width == 8)):
+                        fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, wat))
+                    ftk->inner = ps_type(self->a, PT_INT, e->pos)
+                    return ftk
+                if strcmp(fm, "read") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "read(n) takes the number of BYTES to read at most (79.2); the whole file is `text()` (as str) or `read_all()` (as bytes)")
+                    rnt: *PsType = self->check_expr(e->args[0])
+                    self->want(e->args[0], rnt, ps_type(self->a, PT_INT, e->pos), "read()")
+                    rb: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    rb->inner = ps_type(self->a, PT_INT, e->pos)
+                    rb->inner->width = 8
+                    rb->inner->uns = True
+                    ftk->inner = rb
+                    return ftk
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "'%s' takes no arguments", fm)
-                if strcmp(fm, "read") == 0:
-                    return ps_type(self->a, PT_STR, e->pos)
+                if strcmp(fm, "read_all") == 0:
+                    ra: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    ra->inner = ps_type(self->a, PT_INT, e->pos)
+                    ra->inner->width = 8
+                    ra->inner->uns = True
+                    ftk->inner = ra
+                    return ftk
+                if strcmp(fm, "text") == 0:
+                    ftk->inner = ps_type(self->a, PT_STR, e->pos)
+                    return ftk
                 if strcmp(fm, "readlines") == 0:
                     lr: *PsType = ps_type(self->a, PT_LIST, e->pos)
                     lr->inner = ps_type(self->a, PT_STR, e->pos)
-                    return lr
+                    ftk->inner = lr
+                    return ftk
                 if strcmp(fm, "close") == 0:
-                    return ps_type(self->a, PT_VOID, e->pos)
-                fatal_at(self->file, e->pos, "a file has read, readlines, write and close (48.1), not '%s'", fm)
+                    ftk->inner = ps_type(self->a, PT_VOID, e->pos)
+                    return ftk
+                fatal_at(self->file, e->pos, "a file has read(n), read_all, text, readlines, write and close (48.1/76.2), not '%s'", fm)
             # `w.send(x)` / `await w.recv()` — the worker IS the channel (36.1),
             # and one worker is one pipe in both directions.
             if rt != None and rt->kind == PT_WORKER:
@@ -1320,7 +1353,15 @@ struct PsSema:
                 at: *PsType = self->check_expr(e->args[i])
                 self->want(e->args[i], at, mth->params[i + nrecv].type, self->a->printf("parameter '%s'", mth->params[i + nrecv].name))
             e->lhs->type = rt
-            return mth->ret if mth->ret != None else ps_type(self->a, PT_VOID, e->pos)
+            mret: *PsType = mth->ret if mth->ret != None else ps_type(self->a, PT_VOID, e->pos)
+            if mth->is_async:
+                # 35.3: calling it STARTS it and hands back the task, exactly as
+                # a free `async def` does. A method is not a different kind of
+                # function — it is a function with a receiver.
+                mtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                mtk->inner = mret
+                return mtk
+            return mret
         # a VALUE of function type, called (28.1): a local, a parameter, an
         # element of a `dict<str, def(...)>`, the result of an index
         sig7: *PsType = None
@@ -1911,7 +1952,12 @@ struct PsSema:
             for i in range(2):
                 oat: *PsType = self->check_expr(e->args[i])
                 self->want(e->args[i], oat, ps_type(self->a, PT_STR, e->pos), "open()")
-            return ps_type(self->a, PT_FILE, e->pos)
+            # 76.2: opening can take a while (a slow disk, a network mount), so
+            # it goes to the pool like every other file operation and what comes
+            # back is a TASK: `f = await open("x", "r")`
+            ot: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            ot->inner = ps_type(self->a, PT_FILE, e->pos)
+            return ot
         if strcmp(name, "len") == 0 and e->nargs == 1:
             lat: *PsType = self->check_expr(e->args[0])
             if lat != None and lat->kind == PT_ARRAY:
@@ -2751,6 +2797,9 @@ struct PsSema:
         self->depth = 0
         self->fn_nonlocals.init()
         self->fn_globals.init()
+        # a method may be `async def` too (50.1): it is a function with a
+        # receiver, and `await` inside it means what it means anywhere else
+        self->in_async = f->is_async
         self->cur_ret = self->resolve_type(f->ret)
         self->cur_fn = self->a->printf("%s.%s", d->name, f->name)
         start: i32 = 0

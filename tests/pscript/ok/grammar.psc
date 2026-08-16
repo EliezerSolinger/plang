@@ -78,8 +78,8 @@ def kitchen_sink(items: list<int>, table: dict<str, def>, maybe: int?) -> (int, 
         raise error(f"index {total} out of range", "bounds")
     finally:
         total = 0
-    with open("x") as f:
-        line = f.read()
+    with await open("x", "r") as f:
+        line = await f.text()
     defer:
         total = 0
     unsafe:

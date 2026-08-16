@@ -2,3 +2,5 @@ wrote 13
 read 13
 lines 3 first first
 caught cannot open 'no/such/place/at/all.txt'
+head 5 first 102 rest 8 eof 0
+wrote bytes 5

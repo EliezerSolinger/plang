@@ -1365,6 +1365,74 @@ representação, coletor, concatenação (converter larguras), `pack`, mensagem
 entre heaps e fronteira com o P — é uma leva inteira sozinha, e vem depois do
 I/O.
 
+## O que já está FEITO desta fase
+
+### 78.4 / 77.3 — o escalonador: cede sempre, e drena no fim — FEITO
+
+`await` de um valor já pronto agora passa pelo escalonador antes de continuar
+(a task vai para o fim da fila), e ao chegar ao fim do programa o laço roda até
+não haver mais nada pronto, nem prazo, nem I/O em voo. Medido antes: uma task
+órfã imprimia `orphan:start` e nunca `orphan:end`; agora termina. Teste:
+`tests/pscript/run/loop_drain.psc`, onde duas tasks cujos awaits SEMPRE acham
+resposta pronta intercalam em vez de uma monopolizar.
+
+O worker também drena o laço dele antes de terminar a thread.
+
+### 76.1/76.2/76.3/76.4 + 79.1/79.2 — arquivo pelo POOL — FEITO
+
+Um pool por processo, preguiçoso, N = núcleos (teto 8, `PSCRIPT_POOL` manda
+diferente), threads destacadas. Uma thread do pool só toca o item de trabalho
+(malloc'ado) e a libc — esse é o contrato inteiro, e é o que deixa o coletor
+sem saber que o pool existe. A conclusão acorda o contexto por um PIPE por
+contexto, e o `poll` do escalonador já esperava em descritores desde a 74.1.
+
+A superfície ficou:
+
+    f = await open(caminho, "r")     # abrir também vai ao pool
+    b = await f.read(4096)           # list<u8>, até n, vazio = fim
+    t = await f.text()               # tudo, decodificado e VALIDADO
+    r = await f.read_all()           # tudo, cru
+    ls = await f.readlines()
+    n = await f.write(x)             # str ou list<u8>
+    await f.close()                  # e `with`/`defer` fecham SÍNCRONO (80.2)
+
+`read()` sem argumento deixou de existir: o nome diz o que volta, e não o
+número de argumentos. Cancelar solta quem espera na hora e deixa a chamada
+terminar sozinha (76.4) — `read(2)` não para no meio.
+
+Três coisas que a implementação obrigou, e que valem registro:
+
+  * **`errno` não atravessa**: é macro (o P não a enxerga) e é POR THREAD — a
+    thread que leria não é a que falhou. A mensagem vem da OPERAÇÃO;
+  * **método `async def`** passou a existir (não existia: o parser aceitava e a
+    sema ignorava). Sem ele, um método que lê arquivo é impossível de escrever;
+  * **entrada de worker pode ser `async def`**: a thread tem escalonador
+    próprio e dirige a própria entrada como o topo faz. É o que torna "todo
+    worker usa async/await" verdade e não slogan.
+
+### `try`/`catch` DENTRO de `async def` — FEITO
+
+Era recusado ("o partidor só sabe if, while e for"), e sem ele nada que faça
+I/O consegue tratar erro. Agora o corpo do `try` roda em estados próprios com o
+guarda de exceção apontando para o estado do CATCH — então um erro que nasce
+DEPOIS de uma suspensão ainda cai no handler, em vez de encerrar a task.
+
+**O que continua faltando, e é o próximo:** `with`, `defer` e `finally` em volta
+de um `await`. E há um BUG anterior a esta fase: hoje o corpo de um `defer`
+dentro de um `async def` é emitido antes do `return` do ESTACIONAMENTO — ou
+seja, a limpeza roda quando a task apenas suspende. O conserto certo é a seção
+de limpeza: cada `defer` arma um bit no frame, e toda saída de verdade (return,
+falha, fim) roda os armados em ordem inversa; o estacionamento não roda nada.
+
+### Um bug de nome achado no caminho
+
+`main` está na lista de nomes que o C já tem, então `ps_cname("main")` é
+`main_` — e a busca do frame do `async def main` procurava `main__frame`
+enquanto o frame se chamava `main___frame`. Não achava e usava silenciosamente
+o PRIMEIRO frame da lista, gerando código que referencia locais que não existem
+ali. Agora a busca usa o mesmo nome que a criação, e não achar é erro interno
+em vez de palpite.
+
 ### A ordem de implementação
 
   1. escalonador: `await` cede sempre (78.4) e o laço drena no fim (77.3);

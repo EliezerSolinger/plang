@@ -46,11 +46,14 @@ def ps_ctx_init(out ctx: PsCtx):
     # never run, and a budget of noise would raise out of nowhere.
     ctx.timers = None
     ctx.waiters = None
+    ctx.io_r = -1
+    ctx.io_w = -1
     ctx.nogc = 0
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
 
 def ps_ctx_done(ctx: *PsCtx) -> int:
+    ps_sched_drain(ctx)
     ps_join_all(ctx)
     # An exception that reaches the top of the program is reported and becomes
     # the exit status — the same shape CPython gives an uncaught error.
@@ -286,6 +289,15 @@ static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, 
 static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg)
 static def ps_recvs_poll(ctx: *PsCtx) -> bool
 static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
+static def ps_io_run(w: *PsWork)
+static def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool
+def ps_utf8_valid(b: const *char, n: usize) -> bool
+static def ps_work_free(w: *PsWork)
+static def ps_pool_start()
+static def ps_io_finish(ctx: *PsCtx, t: *PsTask)
+static def ps_pool_thread(arg: *void) -> *void
+static def ps_io_ready(ctx: *PsCtx)
+static def ps_dupn(p: const *char, n: usize) -> *char
 static def ps_sched_push(ctx: *PsCtx, t: *PsTask)
 static def ps_pipe_open(rp: *int, wp: *int)
 static def ps_pipe_wake(fd: int)
@@ -692,6 +704,270 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     ps_task_clear_recv(t)
     return t
 
+# ---------- the thread pool (76.3) ----------
+# What a pool thread may touch: the work item (malloc'd) and libc. That is the
+# whole contract, and it is what lets the collector go on knowing nothing about
+# any of this. The value only becomes an object when the OWNING context builds
+# it, in `ps_ios_poll`, on its own thread.
+static const PS_POOL_MAX: const i32 = 8
+
+struct PsPool:
+    mu: pthread_mutex_t
+    cv: pthread_cond_t
+    head: *PsWork
+    tail: *PsWork
+    n: i32
+    started: i32
+
+static g_pool: PsPool = {0}
+
+static def ps_pool_thread(arg: *void) -> *void:
+    while True:
+        pthread_mutex_lock(&g_pool.mu)
+        while g_pool.head == None:
+            pthread_cond_wait(&g_pool.cv, &g_pool.mu)
+        w: *PsWork = g_pool.head
+        g_pool.head = w->next
+        if g_pool.head == None:
+            g_pool.tail = None
+        w->next = None
+        pthread_mutex_unlock(&g_pool.mu)
+        ps_io_run(w)
+        pthread_mutex_lock(&g_pool.mu)
+        if w->orphan != 0:
+            # 76.4: whoever was waiting gave up. The call ran to the end anyway
+            # — a `read(2)` does not stop halfway — and the result is dropped
+            # here, which is the only place that knows nobody wants it.
+            pthread_mutex_unlock(&g_pool.mu)
+            ps_work_free(w)
+            continue
+        w->done = 1
+        fd: int = w->wake
+        pthread_mutex_unlock(&g_pool.mu)
+        ps_pipe_wake(fd)
+    return None
+
+# lazily, on the first asynchronous operation: a program that never waits for
+# I/O never pays for a thread
+static def ps_pool_start():
+    if g_pool.started != 0:
+        return
+    pthread_mutex_init(&g_pool.mu, None)
+    pthread_cond_init(&g_pool.cv, None)
+    n: i32 = i32(sysconf(_SC_NPROCESSORS_ONLN))
+    if n < 1:
+        n = 1
+    if n > PS_POOL_MAX:
+        n = PS_POOL_MAX
+    env: const *char = getenv("PSCRIPT_POOL")
+    if env != None:
+        v: i64 = strtoll(env, None, 10)
+        if v >= 1 and v <= 64:
+            n = i32(v)
+    g_pool.n = n
+    g_pool.started = 1
+    for i in range(n):
+        th: pthread_t
+        pthread_create(&th, None, ps_pool_thread, None)
+        pthread_detach(th)
+
+static def ps_work_free(w: *PsWork):
+    if w == None:
+        return
+    if w->path != None:
+        free(w->path)
+    if w->mode != None:
+        free(w->mode)
+    if w->buf != None:
+        free(w->buf)
+    free(w)
+
+static def ps_dupn(p: const *char, n: usize) -> *char:
+    q: *char = (*char)(malloc(n + 1))
+    if n > 0:
+        memcpy(q, p, n)
+    q[n] = '\0'
+    return q
+
+# THE work: everything here is libc on malloc'd memory, and nothing else
+static def ps_io_run(w: *PsWork):
+    w->err = 0
+    match w->op:
+        case PS_IO_OPEN:
+            f: *FILE = fopen(w->path, w->mode)
+            if f == None:
+                w->err = 1
+                w->rc = 0
+            else:
+                w->fp = f
+                w->rc = 1
+        case PS_IO_READ:
+            b: *char = (*char)(malloc(w->n if w->n > 0 else usize(1)))
+            got: usize = fread(b, 1, w->n, w->fp)
+            w->buf = b
+            w->n = got
+            w->rc = i64(got)
+            if got == 0 and ferror(w->fp) != 0:
+                w->err = 1
+        case PS_IO_READALL:
+            cap: usize = 8192
+            acc: *char = (*char)(malloc(cap))
+            len: usize = 0
+            while True:
+                if len == cap:
+                    cap *= 2
+                    acc = (*char)(realloc(acc, cap))
+                k: usize = fread(acc + len, 1, cap - len, w->fp)
+                len += k
+                if k == 0:
+                    break
+            if ferror(w->fp) != 0:
+                w->err = 1
+            w->buf = acc
+            w->n = len
+            w->rc = i64(len)
+        case PS_IO_WRITE:
+            put: usize = fwrite(w->buf, 1, w->n, w->fp)
+            w->rc = i64(put)
+            if put != w->n:
+                w->err = 1
+        case PS_IO_CLOSE:
+            if w->fp != None:
+                if fclose(w->fp) != 0:
+                    w->err = 1
+                w->fp = None
+            w->rc = 0
+        case _:
+            w->rc = 0
+
+# the completion pipe of THIS context, made on demand
+static def ps_io_ready(ctx: *PsCtx):
+    ps_pool_start()
+    if ctx->io_r < 0 or (ctx->io_r == 0 and ctx->io_w == 0):
+        ps_pipe_open(&ctx->io_r, &ctx->io_w)
+
+def ps_pool_submit(ctx: *PsCtx, w: *PsWork):
+    ps_io_ready(ctx)
+    w->wake = ctx->io_w
+    w->next = None
+    pthread_mutex_lock(&g_pool.mu)
+    if g_pool.tail == None:
+        g_pool.head = w
+        g_pool.tail = w
+    else:
+        g_pool.tail->next = w
+        g_pool.tail = w
+    pthread_cond_signal(&g_pool.cv)
+    pthread_mutex_unlock(&g_pool.mu)
+
+def ps_work_new(op: i32) -> *PsWork:
+    w: *PsWork = (*PsWork)(malloc(sizeof(PsWork)))
+    memset(w, 0, sizeof(PsWork))
+    w->op = op
+    return w
+
+# The task an I/O job hands back: parked from the start, with a frame of the
+# right shape, waiting for the pool. Same shape as a parked receive (74.1),
+# because from the scheduler's side they ARE the same thing.
+def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_REFMSG_DESC if isref else &PS_POD_DESC
+    memset(fr + sizeof(PsUser), 0, size)
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = 0
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
+    t->next = None
+    ps_task_clear_recv(t)
+    t->is_io = 1
+    t->work = w
+    t->rsize = size
+    ps_pool_submit(ctx, w)
+    t->next = ctx->waiters
+    ctx->waiters = t
+    return t
+
+# ---------- the file, now awaitable (76.2) ----------
+# Every one of these hands back a PARKED task: the call itself does nothing but
+# describe the job and give it to the pool. What the program writes is
+# `await f.read(4096)`, and what makes that not stop the world is that the
+# waiting happens in the scheduler, next to the clock and the queues.
+def ps_aio_open(ctx: *PsCtx, path: *PsStr, mode: *PsStr) -> *PsTask:
+    w: *PsWork = ps_work_new(PS_IO_OPEN)
+    w->want = PS_W_FILE
+    w->path = ps_dupn(path->data, usize(path->len))
+    w->mode = ps_dupn(mode->data, usize(mode->len))
+    return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
+
+static def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool:
+    if f == None or f->is_open == 0:
+        msg: char[128]
+        snprintf(msg, 128, "%s on a file that is not open", what)
+        ps_raise(ctx, msg, PS_CAT_IO, "<io>", 0)
+        return False
+    return True
+
+def ps_aio_read(ctx: *PsCtx, f: *PsFile, n: i64) -> *PsTask:
+    if not ps_file_live(ctx, f, "read"):
+        return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    w: *PsWork = ps_work_new(PS_IO_READ)
+    w->want = PS_W_BYTES
+    w->fp = f->fp
+    w->n = usize(n if n > 0 else 0)
+    return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
+
+def ps_aio_readall(ctx: *PsCtx, f: *PsFile, want: i32) -> *PsTask:
+    if not ps_file_live(ctx, f, "read"):
+        return ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    w: *PsWork = ps_work_new(PS_IO_READALL)
+    w->want = want
+    w->fp = f->fp
+    return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
+
+def ps_aio_write(ctx: *PsCtx, f: *PsFile, s: *PsStr) -> *PsTask:
+    if not ps_file_live(ctx, f, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    w: *PsWork = ps_work_new(PS_IO_WRITE)
+    w->want = PS_W_INT
+    w->fp = f->fp
+    w->n = usize(s->len)
+    w->buf = ps_dupn(s->data, usize(s->len))
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
+def ps_aio_write_bytes(ctx: *PsCtx, f: *PsFile, l: *PsList) -> *PsTask:
+    if not ps_file_live(ctx, f, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    n: usize = usize(l->len) if l != None else usize(0)
+    w: *PsWork = ps_work_new(PS_IO_WRITE)
+    w->want = PS_W_INT
+    w->fp = f->fp
+    w->n = n
+    w->buf = (*char)(malloc(n + 1))
+    i: usize = 0
+    while i < n:
+        w->buf[i] = *(ps_list_base(l) + i)
+        i += 1
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
+# `await f.close()`. The handle is marked shut HERE, before the job is queued:
+# whatever happens on the pool, this file is not to be read again, and a second
+# close must not reach `fclose` twice.
+def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask:
+    w: *PsWork = ps_work_new(PS_IO_CLOSE)
+    w->want = PS_W_NONE
+    if f != None and f->is_open != 0:
+        w->fp = f->fp
+        f->is_open = 0
+        f->fp = None
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
 # ---------- receiving without stopping the world (74.1) ----------
 # `await w.recv()` used to block the thread in a condition variable. Every
 # other task in this context stopped with it — which made `async` and workers
@@ -787,13 +1063,110 @@ static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
         w->waiting_on = None
         ps_sched_push(ctx, w)
 
+# A finished pool job becomes a value HERE, on the owning thread — which is the
+# whole reason the pool hands back malloc'd bytes instead of objects.
+static def ps_io_finish(ctx: *PsCtx, t: *PsTask):
+    w: *PsWork = t->work
+    if w->err != 0:
+        # the message comes from the OPERATION, never from `errno`: errno is
+        # per-thread, and the thread that would read it here is not the one
+        # that failed
+        msg: char[512]
+        match w->op:
+            case PS_IO_OPEN:
+                snprintf(msg, 512, "cannot open '%s'", w->path if w->path != None else "?")
+            case PS_IO_READ, PS_IO_READALL:
+                snprintf(msg, 512, "read failed")
+            case PS_IO_WRITE:
+                snprintf(msg, 512, "could not write the whole buffer")
+            case PS_IO_CLOSE:
+                snprintf(msg, 512, "close failed")
+            case _:
+                snprintf(msg, 512, "the operation failed")
+        ps_raise(ctx, msg, PS_CAT_IO, "<io>", 0)
+        ps_task_fail(ctx, t)
+        ps_work_free(w)
+        t->work = None
+        return
+    match w->want:
+        case PS_W_FILE:
+            f: *PsFile = (*PsFile)(ps_alloc(ctx, sizeof(PsFile), PS_TY_FILE))
+            f->fp = w->fp
+            f->is_open = 1
+            *(**PsFile)(ps_task_ret(t)) = f
+        case PS_W_BYTES:
+            l: *PsList = ps_list_new(ctx, 1, False, i64(w->n))
+            i: usize = 0
+            while i < w->n:
+                dst: *char = ps_list_push(ctx, l)
+                *dst = w->buf[i]
+                i += 1
+            *(**PsList)(ps_task_ret(t)) = l
+        case PS_W_STR:
+            if not ps_utf8_valid(w->buf, w->n):
+                ps_raise(ctx, "these bytes are not valid UTF-8: read them as bytes, or decode them yourself", PS_CAT_VALUE, "<io>", 0)
+                ps_task_fail(ctx, t)
+                ps_work_free(w)
+                t->work = None
+                return
+            *(**PsStr)(ps_task_ret(t)) = ps_str_new(ctx, w->buf, w->n)
+        case PS_W_LINES:
+            if not ps_utf8_valid(w->buf, w->n):
+                ps_raise(ctx, "these bytes are not valid UTF-8: read them as bytes, or decode them yourself", PS_CAT_VALUE, "<io>", 0)
+                ps_task_fail(ctx, t)
+                ps_work_free(w)
+                t->work = None
+                return
+            whole: *PsStr = ps_str_new(ctx, w->buf, w->n)
+            nl: *PsStr = ps_str_new(ctx, "\n", 1)
+            *(**PsList)(ps_task_ret(t)) = ps_str_split(ctx, whole, nl)
+        case PS_W_INT:
+            *(*i64)(ps_task_ret(t)) = w->rc
+        case _:
+            pass
+    ps_work_free(w)
+    t->work = None
+    if t->state != -2:
+        t->state = -1
+
 # Every parked receive that can finish now, does. Returns whether any did.
 static def ps_recvs_poll(ctx: *PsCtx) -> bool:
     any: bool = False
     t: *PsTask = ctx->waiters
     while t != None:
         n: *PsTask = t->next
-        if t->state == 0:
+        if t->state == 0 and t->is_io != 0:
+            # a pool job: cancelling releases the waiter at once and lets the
+            # call finish alone (76.4) — a `read(2)` does not stop halfway
+            if t->cancelled != 0:
+                pthread_mutex_lock(&g_pool.mu)
+                if t->work->done != 0:
+                    pthread_mutex_unlock(&g_pool.mu)
+                    ps_work_free(t->work)
+                else:
+                    t->work->orphan = 1
+                    pthread_mutex_unlock(&g_pool.mu)
+                t->work = None
+                t->state = -1
+                iw: *PsTask = t->waiter
+                t->waiter = None
+                if iw != None:
+                    iw->waiting_on = None
+                    ps_sched_push(ctx, iw)
+                any = True
+            else:
+                pthread_mutex_lock(&g_pool.mu)
+                fin: bool = t->work->done != 0
+                pthread_mutex_unlock(&g_pool.mu)
+                if fin:
+                    ps_io_finish(ctx, t)
+                    dw: *PsTask = t->waiter
+                    t->waiter = None
+                    if dw != None:
+                        dw->waiting_on = None
+                        ps_sched_push(ctx, dw)
+                    any = True
+        elif t->state == 0:
             if t->cancelled != 0:
                 # 37.2: a cancelled receive takes NOTHING out of the queue. A
                 # message swallowed here would be a message nobody ever reads —
@@ -827,16 +1200,25 @@ static def ps_recvs_poll(ctx: *PsCtx) -> bool:
 # How many descriptors the parked receives are waiting on, and which.
 static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
     cnt: i32 = 0
+    io: bool = False
     *out_bad = False
     t: *PsTask = ctx->waiters
     while t != None:
         if t->state == 0:
-            fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
-            if fd < 0:
-                *out_bad = True
+            if t->is_io != 0:
+                io = True          # every pool job wakes the SAME descriptor
             else:
-                cnt += 1
+                fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
+                if fd < 0:
+                    *out_bad = True
+                else:
+                    cnt += 1
         t = t->next
+    if io:
+        if ctx->io_r < 0:
+            *out_bad = True
+        else:
+            cnt += 1
     return cnt
 
 def ps_worker_recv(ctx: *PsCtx, w: *PsWorker, size: usize) -> *PsTask:
@@ -2056,16 +2438,25 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         # path that is supposed to be the cheap one
         fds: pollfd[PS_POLL_MAX]
         k: i32 = 0
+        anyio: bool = False
         t2: *PsTask = ctx->waiters
         while t2 != None and k < PS_POLL_MAX:
             if t2->state == 0:
-                fd: int = t2->rblk->up_r if t2->rdir == 0 else t2->rblk->dn_r
-                if fd >= 0:
-                    fds[k].fd = fd
-                    fds[k].events = POLLIN
-                    fds[k].revents = 0
-                    k += 1
+                if t2->is_io != 0:
+                    anyio = True
+                else:
+                    fd: int = t2->rblk->up_r if t2->rdir == 0 else t2->rblk->dn_r
+                    if fd >= 0:
+                        fds[k].fd = fd
+                        fds[k].events = POLLIN
+                        fds[k].revents = 0
+                        k += 1
             t2 = t2->next
+        if anyio and ctx->io_r >= 0 and k < PS_POLL_MAX:
+            fds[k].fd = ctx->io_r
+            fds[k].events = POLLIN
+            fds[k].revents = 0
+            k += 1
         if nfd > PS_POLL_MAX and (ms < 0 or ms > 2):
             ms = 2
         poll(fds, u64(k), ms)
@@ -2083,6 +2474,31 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
     # something IS pending — a queue, a clock — so waiting again is progress,
     # and returning False here would call a slow worker a deadlock
     return True
+
+# 78.4: `await` CEDE SEMPRE, mesmo quando o valor já está pronto. Sem isso, um
+# laço de awaits que sempre acha resposta pronta — um cliente rápido num
+# servidor — nunca deixa outra task rodar. É a regra do JS, e é dela que vem a
+# ordem previsível dele.
+def ps_task_yield(ctx: *PsCtx, t: *PsTask):
+    ps_sched_push(ctx, t)
+
+# One step, but only if something is READY: never waits on the clock or on a
+# descriptor. This is what an `await` at the top level gives the others.
+def ps_sched_yield(ctx: *PsCtx) -> bool:
+    n: *PsTask = ps_sched_pop(ctx)
+    if n == None:
+        return False
+    ps_task_step(ctx, n)
+    return True
+
+# 77.3: at the end of the program the loop DRAINS — the scheduler runs until
+# there is nothing ready, no deadline and no I/O in flight. A task nobody
+# awaited used to die half-finished; now it finishes, which is what everyone
+# expects and what lets a server live at the top level without a `while True`.
+def ps_sched_drain(ctx: *PsCtx):
+    while ps_sched_progress(ctx):
+        if ctx->exc != None:
+            return
 
 def ps_task_of_int(ctx: *PsCtx, v: i64) -> *PsTask:
     t: *PsTask = ps_msg_task(ctx, None, sizeof(i64))
@@ -2207,6 +2623,8 @@ def ps_task_ret(t: *PsTask) -> *void:
 # queue until the task is finished — and if the queue empties first, nothing can
 # ever finish it, which is a deadlock and says so.
 def ps_task_wait(ctx: *PsCtx, t: *PsTask):
+    # 78.4: even a finished task gives the others a turn first
+    ps_sched_yield(ctx)
     n: *PsTask = None
     slots: **PsObj[2]
     slots[0] = (**PsObj)(&t)
@@ -2689,6 +3107,45 @@ static def ps_utf8_count(b: const *char, n: usize) -> u32:
         if (u8(b[i]) & 0xC0) != 0x80:
             c += 1
     return c
+
+# 83.2: bytes that come from the outside are CHECKED before they become a
+# `str`, because a `str` promises codepoints — `len()` counts them and `s[i]`
+# is one. A string that lies about that is worse than an error.
+def ps_utf8_valid(b: const *char, n: usize) -> bool:
+    i: usize = 0
+    while i < n:
+        c: u8 = u8(b[i])
+        need: i32 = 0
+        lo: u32 = 0
+        cp: u32 = 0
+        if c < 0x80:
+            i += 1
+            continue
+        elif (c & 0xE0) == 0xC0:
+            need = 1
+            cp = u32(c & 0x1F)
+            lo = 0x80
+        elif (c & 0xF0) == 0xE0:
+            need = 2
+            cp = u32(c & 0x0F)
+            lo = 0x800
+        elif (c & 0xF8) == 0xF0:
+            need = 3
+            cp = u32(c & 0x07)
+            lo = 0x10000
+        else:
+            return False
+        if i + usize(need) >= n + usize(0) and i + usize(need) > n - 1:
+            return False
+        for k in range(need):
+            cc: u8 = u8(b[i + usize(k) + 1])
+            if (cc & 0xC0) != 0x80:
+                return False
+            cp = (cp << 6) | u32(cc & 0x3F)
+        if cp < lo or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
+            return False
+        i += usize(need) + 1
+    return True
 
 # byte offset of codepoint `k`, or `n` when k is past the end
 static def ps_utf8_off(b: const *char, n: usize, k: i64) -> usize:

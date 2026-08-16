@@ -124,6 +124,11 @@ struct PsTask:
     # this context; now it parks like `sleep` does and the scheduler completes
     # it, so a program can await a message and a clock at the same time.
     is_recv: i32
+    is_io: i32           # ... and the third: a job the thread pool is running
+                         #   (76.3). The work item is malloc'd and carries no
+                         #   collected pointer, so a pool thread can finish it
+                         #   without knowing this task exists.
+    work: *PsWork
     rblk: *PsWorkerBlk   # whose queue (malloc'd, never moves)
     rdir: i32            # 0 = the UP queue (a parent reading its worker),
                          #   1 = the DOWN queue (a worker reading its parent)
@@ -409,6 +414,52 @@ struct PsShape:
     des: def(ctx: *PsCtx, d: *PsDes, o: *void) # STRUCT: read them back
     desc: const *PsDesc                        # STRUCT: what to allocate
 
+# ---------- the thread pool (76.3) ----------
+# A socket has a real non-blocking mode and goes in the `poll` that 74.1 already
+# runs; a FILE does not — `read(2)` blocks, always — and neither does
+# `getaddrinfo`. Those go to threads. It is libuv's split, and it is not a
+# matter of taste: it is what the operating system offers.
+#
+# ONE pool for the whole process, created on the first asynchronous operation,
+# with N threads (cores, capped at 8; `PSCRIPT_POOL` overrides). A pool thread
+# NEVER touches anyone's heap: it works on malloc'd bytes and hands malloc'd
+# bytes back, and the value is built in the collected heap by the scheduler of
+# the context that asked — exactly as a received message is (74.1).
+# what to build in the collected heap when the job comes back
+enum PsIoWant:
+    PS_W_NONE = 0
+    PS_W_FILE
+    PS_W_BYTES
+    PS_W_STR
+    PS_W_LINES
+    PS_W_INT
+
+enum PsIoOp:
+    PS_IO_OPEN = 0
+    PS_IO_READ         # up to n bytes
+    PS_IO_READALL      # everything that is left
+    PS_IO_WRITE
+    PS_IO_CLOSE
+
+struct PsWork:
+    next: *PsWork
+    op: i32
+    fp: *FILE
+    path: *char        # malloc'd: a pool thread may not read collected memory
+    mode: *char
+    buf: *char         # malloc'd, in (write) or out (read)
+    n: usize           # bytes asked for, then bytes produced
+    want: i32          # what the WAITER wants built out of this: the syscall
+                       #   and the shape of the answer are two questions, and a
+                       #   `read all` may become a str, a list of bytes or a
+                       #   list of lines
+    rc: i64            # what the call returned
+    err: i32           # it failed (the message comes from the op: `errno` is
+                       #   per-thread and this is not that thread)
+    done: i32          # finished (written under the pool's mutex)
+    orphan: i32        # 76.4: the waiter gave up — whoever finishes frees this
+    wake: int          # descriptor of the context waiting for it
+
 struct PsCtx:
     blocks: *PsBlock     # newest first; allocation bumps in this one
     frames: *PsFrame     # shadow stack head (49.4)
@@ -430,7 +481,10 @@ struct PsCtx:
     timers: *PsTask      # tasks waiting on the CLOCK (48.2): when nothing is
                          #   ready, the thread waits exactly until the nearest
                          #   deadline
-    waiters: *PsTask     # tasks waiting on a MESSAGE (74.1). Together with the
+    io_r: int            # completion pipe of THIS context (76.3): a pool thread
+    io_w: int            #   writes a byte here when a job of ours finishes
+    waiters: *PsTask     # tasks waiting on a MESSAGE (74.1) or on the POOL
+                         #   (76.3). Together with the
                          #   timers these are the whole of the wait: the loop
                          #   polls the queues' descriptors with the nearest
                          #   deadline as its timeout, which is the shape 18.4
@@ -476,6 +530,13 @@ def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask)
 # From code that is NOT a task (the entry point): run the scheduler until this
 # task finishes. It is the only place the runtime ever blocks.
 def ps_task_wait(ctx: *PsCtx, t: *PsTask)
+# 78.4: an `await` whose value is already there still gives the others a turn —
+# the generated step calls this and returns, instead of carrying on.
+def ps_task_yield(ctx: *PsCtx, t: *PsTask)
+def ps_sched_yield(ctx: *PsCtx) -> bool
+# 77.3: run until nothing is ready, no deadline is pending and no I/O is in
+# flight. Called once, at the end of the program.
+def ps_sched_drain(ctx: *PsCtx)
 # the step function calls this when the body raised: the error travels to
 # whoever awaits (19.3)
 def ps_task_fail(ctx: *PsCtx, t: *PsTask)
@@ -664,6 +725,19 @@ def ps_is_kind(v: *PsObj, ty: i32, kind: i32) -> bool
 
 # ---------- files (48.1) ----------
 def ps_file_open(ctx: *PsCtx, path: *PsStr, mode: *PsStr, file: const *char, line: i32) -> *PsFile
+# 76.2: the same operations, as TASKS. The call describes the job and gives it
+# to the pool; the waiting happens in the scheduler, next to the clock and the
+# message queues, so nothing else in this context stops.
+def ps_aio_open(ctx: *PsCtx, path: *PsStr, mode: *PsStr) -> *PsTask
+def ps_aio_read(ctx: *PsCtx, f: *PsFile, n: i64) -> *PsTask
+def ps_aio_readall(ctx: *PsCtx, f: *PsFile, want: i32) -> *PsTask
+def ps_aio_write(ctx: *PsCtx, f: *PsFile, s: *PsStr) -> *PsTask
+def ps_aio_write_bytes(ctx: *PsCtx, f: *PsFile, l: *PsList) -> *PsTask
+def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask
+def ps_work_new(op: i32) -> *PsWork
+def ps_pool_submit(ctx: *PsCtx, w: *PsWork)
+def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
+def ps_utf8_valid(b: const *char, n: usize) -> bool
 def ps_file_write(ctx: *PsCtx, f: *PsFile, s: *PsStr, file: const *char, line: i32) -> i64
 def ps_file_read(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsStr
 def ps_file_readlines(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsList

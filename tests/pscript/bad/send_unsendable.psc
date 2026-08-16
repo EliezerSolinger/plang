@@ -6,7 +6,7 @@ struct Job:
 
 
 def worker(n: int) -> Job:
-    return Job("x", open("/dev/null", "w"))
+    return Job("x", await open("/dev/null", "w"))
 
 
 w = spawn(worker, (1,))

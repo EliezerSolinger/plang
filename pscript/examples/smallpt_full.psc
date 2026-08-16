@@ -171,12 +171,15 @@ def sphere_from(v: any) -> Sphere:
                   vec_from(m["color"]), kind)
 
 
-def load_scene(path: str) -> list<Sphere>:
+async def load_scene(path: str) -> list<Sphere>:
     """JSON in, spheres out (41.1). Failure raises with the io category and the
     program says which file it could not read."""
-    nonlocal text
-    with open(path, "r") as f:
-        text = f.read()
+    # no `with` here: cleanup inside an `async def` is still emitted at the
+    # wrong moment (it runs when the task SUSPENDS), so the close is explicit
+    # until the state machine learns to unwind — see the PLAN
+    f = await open(path, "r")
+    text = await f.text()
+    await f.close()
     doc = json.parse(text) as list<any>
     out: list<Sphere> = []
     i = 0
@@ -279,7 +282,7 @@ def radiance(spheres: list<Sphere>, in r: Ray, depth: int) -> Vec:
 
 # ---------------------------------------------------------------- the worker
 
-def render(wid: int, nworkers: int, width: int, height: int, spp: int,
+async def render(wid: int, nworkers: int, width: int, height: int, spp: int,
            scene_path: str, fb: buffer) -> Stat:
     """One worker's share: the rows y = wid, wid+n, wid+2n, …
 
@@ -290,7 +293,7 @@ def render(wid: int, nworkers: int, width: int, height: int, spp: int,
     seed(9781 + wid * 7919)
     spheres = cornell()
     if len(scene_path) > 0:
-        spheres = load_scene(scene_path)
+        spheres = await load_scene(scene_path)
     rays = 0
     rows = 0
 
@@ -409,13 +412,14 @@ with buffer(width * height * 3 * 8) as fb:
     print(f"rows {rows_done} rays {total_rays}")
 
     written = 0
-    with open(out_path, "w") as f:
-        written += f.write(f"P3\n{width} {height}\n255\n")
-        p = 0
-        while p < width * height * 3:
-            r = int(255.0 * tone(fb.get_f64(p)) + 0.5)
-            g = int(255.0 * tone(fb.get_f64(p + 1)) + 0.5)
-            b = int(255.0 * tone(fb.get_f64(p + 2)) + 0.5)
-            written += f.write(f"{r} {g} {b}\n")
-            p += 3
+    f = await open(out_path, "w")
+    written += await f.write(f"P3\n{width} {height}\n255\n")
+    p = 0
+    while p < width * height * 3:
+        r = int(255.0 * tone(fb.get_f64(p)) + 0.5)
+        g = int(255.0 * tone(fb.get_f64(p + 1)) + 0.5)
+        b = int(255.0 * tone(fb.get_f64(p + 2)) + 0.5)
+        written += await f.write(f"{r} {g} {b}\n")
+        p += 3
+    await f.close()
     print(f"wrote {out_path} ({written} bytes)")

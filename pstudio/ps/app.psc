@@ -199,10 +199,14 @@ struct Editor:
 
     # ---------- files ----------
 
-    def open_file(self, path: str):
+    # 76.2: reading a file is a job for the pool, so this is an `async def` and
+    # the caller awaits it. What used to be a call that stopped the whole
+    # program while the disk answered now stops only this task.
+    async def open_file(self, path: str):
         try:
-            with open(path, "r") as f:
-                self.buf.load(f.read())
+            f = await open(path, "r")
+            self.buf.load(await f.text())
+            await f.close()
             self.path = path
             self.top = 0
             self.say("opened " + path)
@@ -211,13 +215,14 @@ struct Editor:
             self.path = path
             self.say("new file: " + path)
 
-    def save(self):
+    async def save(self):
         if len(self.path) == 0:
             self.say("no file name")
             return
         try:
-            with open(self.path, "w") as f:
-                f.write(self.buf.text())
+            f = await open(self.path, "w")
+            await f.write(self.buf.text())
+            await f.close()
             self.buf.mark_saved()
             self.say("saved " + self.path)
         catch e:
@@ -225,7 +230,7 @@ struct Editor:
 
     # ---------- input ----------
 
-    def on_key(self, key: int, mods: int, now: int):
+    async def on_key(self, key: int, mods: int, now: int):
         ctrl = (mods & MOD_CTRL) != 0
         shift = (mods & MOD_SHIFT) != 0
 
@@ -245,7 +250,7 @@ struct Editor:
             return
 
         if ctrl and key == 115:            # ctrl+s
-            self.save()
+            await self.save()
         elif ctrl and key == 113:          # ctrl+q
             self.running = False
         elif ctrl and key == 122:          # ctrl+z
@@ -340,12 +345,12 @@ def str_of_cp(cp: int) -> str:
 # move, select, undo, draw and save. It is what `tests/pstudio/` does for the P
 # editor — the editor is exercised, not mocked — and it is what makes this port
 # provable without a screen.
-def selftest(path: str) -> int:
+async def selftest(path: str) -> int:
     if shim_open(400, 240) == 0:
         print("no window")
         return 1
     ed = Editor(core.new_buffer(), "", 0, 0, "", 0, True, False, "")
-    ed.open_file(path)
+    await ed.open_file(path)
     print("loaded", ed.buf.nlines(), "lines")
 
     ed.buf.move_to(0, 0)
@@ -353,31 +358,31 @@ def selftest(path: str) -> int:
     ed.on_text(ord("Y"), 20)
     print("typed", ed.buf.line_text(0))
 
-    ed.on_key(K_END, 0, 30)
-    ed.on_key(K_LEFT, MOD_SHIFT, 40)
-    ed.on_key(K_LEFT, MOD_SHIFT, 50)
+    await ed.on_key(K_END, 0, 30)
+    await ed.on_key(K_LEFT, MOD_SHIFT, 40)
+    await ed.on_key(K_LEFT, MOD_SHIFT, 50)
     print("selected", "[" + ed.buf.sel_text(0) + "]")
 
-    ed.on_key(122, MOD_CTRL, 60)          # ctrl+z
+    await ed.on_key(122, MOD_CTRL, 60)          # ctrl+z
     print("undone", ed.buf.line_text(0))
 
     ed.buf.move_to(1, 0)
-    ed.on_key(100, MOD_CTRL, 70)          # ctrl+d
+    await ed.on_key(100, MOD_CTRL, 70)          # ctrl+d
     print("carets", ed.buf.ncarets())
 
     ed.draw()                             # the whole paint path, atlas included
     print("drew", shim_width(), "x", shim_height(), "cell", shim_cell_w(), "x", shim_cell_h())
 
     ed.path = path + ".out"
-    ed.save()
-    with open(ed.path, "r") as f:
-        # a block is a SCOPE (64.1), so what it reads is printed inside it
-        print("saved", len(f.read()), "bytes; dirty", ed.buf.dirty)
+    await ed.save()
+    f = await open(ed.path, "r")
+    print("saved", len(await f.text()), "bytes; dirty", ed.buf.dirty)
+    await f.close()
     shim_close()
     return 0
 
 
-def main(path: str):
+async def main(path: str):
     # a `bool` returned by P is an `int` in the C header, and the frontier
     # believes the signature (45.5) — so the test is against zero
     if shim_open(1100, 720) == 0:
@@ -385,7 +390,7 @@ def main(path: str):
         return
     ed = Editor(core.new_buffer(), "", 0, 0, "", 0, True, False, "")
     if len(path) > 0:
-        ed.open_file(path)
+        await ed.open_file(path)
     ed.draw()
     while ed.running:
         kind = shim_poll()
@@ -395,7 +400,7 @@ def main(path: str):
         if kind == SHIM_QUIT:
             ed.running = False
         elif kind == SHIM_KEY:
-            ed.on_key(shim_ev_key(), shim_ev_mods(), now)
+            await ed.on_key(shim_ev_key(), shim_ev_mods(), now)
         elif kind == SHIM_TEXT:
             ed.on_text(shim_ev_cp(), now)
         elif kind == SHIM_MOUSE_DOWN:
@@ -410,5 +415,5 @@ def main(path: str):
 
 args = sys.argv
 if len(args) > 2 and args[1] == "--selftest":
-    sys.exit(selftest(args[2]))
-main(args[1] if len(args) > 1 else "")
+    sys.exit(await selftest(args[2]))
+await main(args[1] if len(args) > 1 else "")
