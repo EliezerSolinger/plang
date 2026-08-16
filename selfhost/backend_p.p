@@ -711,6 +711,8 @@ def p_decl(b: *StrBuf, d: *Decl):
                 b->putc('\n')
         case DL_TRAIT:
             b->printf("trait %s:\n", d->name)
+            if d->assoc != None:
+                b->printf("    type %s\n", d->assoc)   # the associated type (72.5)
             for i in range(d->nmethods):
                 p_func(b, d->methods[i], 1)
         case DL_DECLARE, DL_IMPLEMENT:
@@ -718,6 +720,10 @@ def p_decl(b: *StrBuf, d: *Decl):
             # same word; the `for` is what tells them apart, here as in the parser
             if d->trait_for != None:
                 b->printf("implement %s for %s:\n", d->name, d->trait_for)
+                if d->assoc_type != None:
+                    b->printf("    type %s = ", d->assoc if d->assoc != None else "Item")
+                    p_type(b, d->assoc_type)
+                    b->putc('\n')
                 for i in range(d->nmethods):
                     p_func(b, d->methods[i], 1)
                 return

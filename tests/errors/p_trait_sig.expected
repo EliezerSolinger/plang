@@ -1,0 +1,1 @@
+'shrink' returns i64 in trait 'Shrinker', and f64 here

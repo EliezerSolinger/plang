@@ -24,9 +24,15 @@ trait Comparable:
 # The protocol of 40.3: `has_next()` then `next()`, and NOT a `next()` that
 # returns an option — with an option, iterating a sequence of options cannot
 # tell the end from an element that is empty.
+#
+# What it yields is the ASSOCIATED type (72.5): the trait says there IS one and
+# each implementation says what it is. Without that, this contract would have
+# to name a concrete type — and an `Iterable` that only ever yields `i64` is a
+# contract with a general name and a narrow promise.
 trait Iterable:
+    type Item
     def has_next(self: *Iterable) -> bool
-    def next(self: *Iterable) -> i64
+    def next(self: *Iterable) -> Item
 
 # 67.4: writing into a buffer, because P has no string to return that someone
 # else has to free. `ref` and not `out`: the buffer is the CALLER's, already

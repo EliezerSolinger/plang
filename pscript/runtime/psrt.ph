@@ -17,6 +17,9 @@ include <regex.h>
 include <regex.h>
 include <stdlib.h>
 include <string.h>
+include <unistd.h>
+include <fcntl.h>
+include <poll.h>
 
 # ---------- object model ----------
 # Every collected object starts with this header. `ty` is the type id; 50.2
@@ -115,6 +118,18 @@ struct PsTask:
                          #   gets there, and until then whoever awaits it is
                          #   parked and everything else runs.
     is_timer: i32
+    # A RECEIVE task (74.1), the other kind with no step: it finishes when a
+    # message lands in the queue it names. `await w.recv()` used to block the
+    # thread inside a condition variable, which stopped every other task in
+    # this context; now it parks like `sleep` does and the scheduler completes
+    # it, so a program can await a message and a clock at the same time.
+    is_recv: i32
+    rblk: *PsWorkerBlk   # whose queue (malloc'd, never moves)
+    rdir: i32            # 0 = the UP queue (a parent reading its worker),
+                         #   1 = the DOWN queue (a worker reading its parent)
+    rkind: i32           # 0 = raw bytes, 1 = a graph to rebuild (74.2)
+    rsize: usize         # how many bytes the frame's slot holds
+    rshape: const *PsShape   # ... and, for a graph, what shape it has
 
 # `dyn Trait` (66.3): the DYNAMIC half of the dispatch, and the only one that
 # costs anything. The value is boxed — a record is a value type and has no fixed
@@ -321,12 +336,78 @@ struct PsWorkerBlk:
                          #   at the end. Nothing is killed — the thread runs on
                          #   until the process goes, which is the only shutdown
                          #   that never cuts work in half.
+    # 74.1: a queue also has a DESCRIPTOR, one per direction, so that a
+    # scheduler waiting for a message can wait for several things at once —
+    # which a condition variable cannot do. A byte goes in when a message is
+    # pushed (and when the worker finishes, which is also news); the reader
+    # drains it and looks at the queue itself, so a spurious wakeup costs
+    # nothing. A pipe rather than an eventfd because a pipe is POSIX and the
+    # eventfd is Linux, and this runtime compiles on both.
+    up_r: int            # parent waits here for messages coming UP
+    up_w: int
+    dn_r: int            # the worker waits here for messages going DOWN
+    dn_w: int
     next: *PsWorkerBlk   # the spawning context keeps them all, to join at exit
 
 # what the program holds: a collected handle with nothing collected inside
 struct PsWorker:
     obj: PsObj
     blk: *PsWorkerBlk
+
+# ---------- a message that is a GRAPH (34.3/74.2) ----------
+# Bytes cross by memcpy, and that covers a number, a record, an array of them.
+# Everything else the collector owns — a string, a list, a dict, a set, a
+# `struct` with references inside — is a graph, and a graph crosses by being
+# WRITTEN OUT here and BUILT AGAIN there. Copying the objects straight across
+# would put one heap's addresses in another heap and set two collectors moving
+# the same memory, which 18.1 rules out.
+#
+# The shape of the value comes from the compiler, because the compiler is what
+# knows the type: one static `PsShape` per type that travels, and for a
+# `struct` a pair of generated functions that walk its fields. The runtime
+# holds the format and the cycle guard; the compiler holds the types. Neither
+# needs to learn the other's job.
+#
+# Every reference gets a TAG: absent, new, or one already written. The third is
+# what makes a cycle finite — the second time an object shows up it travels as
+# the number it got the first time, and the reader, which registers each object
+# BEFORE reading its contents, already has it to point at.
+enum PsShKind:
+    PS_SH_POD = 0      # bytes: numbers, bools, enums, records, fixed arrays
+    PS_SH_STR = 1
+    PS_SH_LIST = 2
+    PS_SH_SET = 3
+    PS_SH_DICT = 4
+    PS_SH_STRUCT = 5   # a collected object, with a generated pair to walk it
+
+struct PsSer:
+    buf: *char
+    len: usize
+    cap: usize
+    keys: **void       # objects already written: an open-addressed table, so a
+    vals: *i32         #   graph with many nodes does not cost quadratic time
+    nslots: usize      # a power of two, or 0 while the table is empty
+    used: i32
+    count: i32         # how many objects have been written, = the next index
+
+struct PsDes:
+    buf: const *char
+    len: usize
+    pos: usize
+    built: **void      # by index, in the order the writer registered them
+    nbuilt: i32
+    cbuilt: i32
+    bad: i32           # the bytes ran short or said something impossible
+
+struct PsShape:
+    kind: i32
+    size: u32                 # POD: how many bytes; STRUCT: sizeof(S)
+    inner: const *PsShape     # LIST/SET element, DICT value
+    key: const *PsShape       # DICT key
+    kkind: i32                # DICT: how the key hashes (PS_K_*)
+    ser: def(s: *PsSer, o: *void)              # STRUCT: write the fields
+    des: def(ctx: *PsCtx, d: *PsDes, o: *void) # STRUCT: read them back
+    desc: const *PsDesc                        # STRUCT: what to allocate
 
 struct PsCtx:
     blocks: *PsBlock     # newest first; allocation bumps in this one
@@ -346,10 +427,14 @@ struct PsCtx:
                          #   runtime only carries the pointer.
     parent: *PsWorkerBlk # inside a worker: the pipe back to whoever spawned it
     workers: *PsWorkerBlk# the workers spawned from HERE, joined at exit (36.3)
-    timers: *PsTask      # tasks waiting on the CLOCK, soonest first (48.2).
-                         #   With no descriptor to wait on yet (18.4), this is
-                         #   the whole of the loop: when nothing is ready, the
-                         #   thread sleeps exactly until the next deadline.
+    timers: *PsTask      # tasks waiting on the CLOCK (48.2): when nothing is
+                         #   ready, the thread waits exactly until the nearest
+                         #   deadline
+    waiters: *PsTask     # tasks waiting on a MESSAGE (74.1). Together with the
+                         #   timers these are the whole of the wait: the loop
+                         #   polls the queues' descriptors with the nearest
+                         #   deadline as its timeout, which is the shape 18.4
+                         #   asks for — a socket would join this same list.
     nogc: i64            # `nogc:` blocks in flight (26.5.3): a COUNTER, so a
                          #   function with one can be called from inside another
     nogc_budget: usize   # bytes the innermost budgeted block promised (26.2);
@@ -454,16 +539,16 @@ def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool
 # way out and rebuilt in the RECEIVER's heap on the way in. That is not an
 # optimisation to skip — copying a graph straight across would allocate in
 # another thread's heap and set its collector running, which is exactly what
-# 18.1 forbids. `str` and `list<T>` of bytes travel this way; a `record` and a
-# number still go by memcpy, because they ARE bytes (21.1).
-def ps_worker_send_str_up(ctx: *PsCtx, s: *PsStr) -> bool
-def ps_worker_send_str_down(w: *PsWorker, s: *PsStr) -> bool
-def ps_worker_recv_str(ctx: *PsCtx, w: *PsWorker) -> *PsTask
-def ps_parent_recv_str(ctx: *PsCtx) -> *PsTask
-def ps_worker_send_list_up(ctx: *PsCtx, l: *PsList) -> bool
-def ps_worker_send_list_down(w: *PsWorker, l: *PsList) -> bool
-def ps_worker_recv_list(ctx: *PsCtx, w: *PsWorker, esize: i32, eref: bool) -> *PsTask
-def ps_parent_recv_list(ctx: *PsCtx, esize: i32, eref: bool) -> *PsTask
+# 18.1 forbids. A `record` and a number still go by memcpy, because they ARE
+# bytes (21.1); a string, a list, a dict, a set and a `struct` are graphs and
+# go through the shape the compiler wrote for them (74.2).
+def ps_send_obj_up(ctx: *PsCtx, sh: const *PsShape, slot: const *void) -> bool
+def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool
+def ps_worker_recv_obj(ctx: *PsCtx, w: *PsWorker, sh: const *PsShape, size: usize) -> *PsTask
+def ps_parent_recv_obj(ctx: *PsCtx, sh: const *PsShape, size: usize) -> *PsTask
+# what a generated `S__ser` / `S__des` calls, once per field
+def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void)
+def ps_des_value(ctx: *PsCtx, d: *PsDes, sh: const *PsShape, slot: *void)
 def ps_worker_send_down(w: *PsWorker, p: const *void, size: usize) -> bool
 # `await w.recv()` / `await parent.recv()`: blocks until a message arrives or
 # the other side is gone, and hands back a task that is already finished — the

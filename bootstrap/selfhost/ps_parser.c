@@ -1334,7 +1334,11 @@ static int is_float_lexeme(const char *t);
 
 static int is_ps_assign_op(TokKind k);
 
+static int has_suffix_ps(const char *s, const char *suf);
+
 static void ps_retag(PsExpr *e, Pos pos);
+
+static PsExpr *ps_clone_expr(Arena *a, PsExpr *e, const char *file);
 
 static const char *ps_module_name(Arena *a, const char *path);
 
@@ -1344,6 +1348,11 @@ struct PsP {
     size_t i;
     const char *file;
     Arena *a;
+    int sub;
+    char **sk;
+    PsExpr **sv;
+    int *su;
+    int32_t sn;
 };
 
 static Token *PsP_pk(PsP *self);
@@ -1451,6 +1460,8 @@ static PsExpr *PsP_fs_lit(PsP *self, const char *bytes, size_t n, Pos pos);
 static PsExpr *PsP_fs_join(PsP *self, PsExpr *acc, PsExpr *one, Pos pos);
 
 static PsExpr *PsP_fs_hole(PsP *self, const char *etext, const char *spec, Pos pos);
+
+static PsExpr *PsP_fs_key(PsP *self, const char *etext, Pos pos);
 
 static PsExpr *PsP_fs_num(PsP *self, int32_t v, Pos pos);
 
@@ -2274,12 +2285,17 @@ static PsExpr *PsP_fs_join(PsP *self, PsExpr *acc, PsExpr *one, Pos pos) {
 }
 
 static PsExpr *PsP_fs_hole(PsP *self, const char *etext, const char *spec, Pos pos) {
-    TokenList tl = ps_lex(self->file, etext, strlen(etext), self->a);
-    PsP sub = {tl.toks, tl.n, 0, self->file, self->a};
-    PsExpr *inner = PsP_parse_expr(&sub);
-    ps_retag(inner, pos);
-    if (!PsP_at(&sub, TK_NEWLINE) && !PsP_at(&sub, TK_EOF)) {
-        fatal_at(self->file, pos, "trailing text in an f-string hole: '%s'", etext);
+    PsExpr *inner;
+    if (self->sub) {
+        inner = PsP_fs_key(self, etext, pos);
+    } else {
+        TokenList tl = ps_lex(self->file, etext, strlen(etext), self->a);
+        PsP sub = {tl.toks, tl.n, 0, self->file, self->a};
+        inner = PsP_parse_expr(&sub);
+        ps_retag(inner, pos);
+        if (!PsP_at(&sub, TK_NEWLINE) && !PsP_at(&sub, TK_EOF)) {
+            fatal_at(self->file, pos, "trailing text in an f-string hole: '%s'", etext);
+        }
     }
     char align = '\0';
     int zero = 0;
@@ -2326,6 +2342,39 @@ static PsExpr *PsP_fs_hole(PsP *self, const char *etext, const char *spec, Pos p
     c->args[4] = PsP_fs_num(self, (zero ? 1 : 0) * 256 + (int32_t)ty, pos);
     c->nargs = 5;
     return c;
+}
+
+static PsExpr *PsP_fs_key(PsP *self, const char *etext, Pos pos) {
+    const char *s = etext;
+    while (*s == ' ' || *s == '\t') {
+        s += 1;
+    }
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) {
+        n -= 1;
+    }
+    if (n == 0) {
+        fatal_at(self->file, pos, "an empty hole in a template: `{}` has no key to look up (75.2)");
+    }
+    size_t i;
+    for (i = 0; i < self->sn; i += 1) {
+        if (strlen(self->sk[i]) == n && strncmp(self->sk[i], s, n) == 0) {
+            if (self->su[i]) {
+                return ps_clone_expr(self->a, self->sv[i], self->file);
+            }
+            self->su[i] = 1;
+            return self->sv[i];
+        }
+    }
+    StrBuf have = {0};
+    for (i = 0; i < self->sn; i += 1) {
+        if (i > 0) {
+            StrBuf_puts(&have, ", ");
+        }
+        StrBuf_puts(&have, self->sk[i]);
+    }
+    fatal_at(self->file, pos, "the template asks for '%.*s', which the dict does not have (it has: %s)", (int32_t)n, s, (have.len > 0 ? have.data : "nothing"));
+    return NULL;
 }
 
 static PsExpr *PsP_fs_num(PsP *self, int32_t v, Pos pos) {
@@ -2897,6 +2946,18 @@ static PsDecl *PsP_parse_enum(PsP *self) {
 
 static PsDecl *PsP_parse_import(PsP *self) {
     Pos pos = PsP_expect(self, TK_IMPORT, "import")->pos;
+    if (PsP_at(self, TK_STRING)) {
+        PsDecl *pd = ps_decl(self->a, PD_INCLUDE, pos);
+        const char *raw = PsP_adv(self)->text;
+        size_t rl = strlen(raw);
+        pd->path = Arena_strndup(self->a, raw + 1, (rl >= 2 ? rl - 2 : 0));
+        pd->is_pmod = 1;
+        if (!has_suffix_ps(pd->path, ".ph")) {
+            fatal_at(self->file, pos, "`import \"...\"` names a P module by its header: `import \"shim.ph\"` (75.3). A C header is `include \"shim.h\"` (45.5)");
+        }
+        PsP_expect(self, TK_NEWLINE, "import");
+        return pd;
+    }
     PsDecl *d = ps_decl(self->a, PD_IMPORT, pos);
     d->path = PsP_expect(self, TK_IDENT, "module name")->text;
     if (PsP_accept(self, TK_AS)) {
@@ -2997,10 +3058,49 @@ static void ps_retag(PsExpr *e, Pos pos) {
     }
 }
 
+static int has_suffix_ps(const char *s, const char *suf) {
+    size_t n = strlen(s);
+    size_t m = strlen(suf);
+    return n >= m && strcmp(s + n - m, suf) == 0;
+}
+
 PsExpr *ps_template(Arena *a, const char *file, const char *lexeme, Pos pos) {
     TokenList tl = ps_lex(file, "", 0, a);
     PsP p = {tl.toks, tl.n, 0, file, a};
     return PsP_fstring(&p, lexeme, pos);
+}
+
+PsExpr *ps_template_dict(Arena *a, const char *file, const char *lexeme, Pos pos, char **keys, PsExpr **vals, int *used, int32_t n) {
+    TokenList tl = ps_lex(file, "", 0, a);
+    PsP p = {tl.toks, tl.n, 0, file, a};
+    p.sub = 1;
+    p.sk = keys;
+    p.sv = vals;
+    p.su = used;
+    p.sn = n;
+    return PsP_fstring(&p, lexeme, pos);
+}
+
+static PsExpr *ps_clone_expr(Arena *a, PsExpr *e, const char *file) {
+    if (e == NULL) {
+        return NULL;
+    }
+    if (e->body != NULL || e->params != NULL) {
+        fatal_at(file, e->pos, "a lambda cannot be the value of a template key that two holes ask for (75.2)");
+    }
+    PsExpr *c = Arena_alloc(a, sizeof(PsExpr));
+    *c = *e;
+    c->lhs = ps_clone_expr(a, e->lhs, file);
+    c->rhs = ps_clone_expr(a, e->rhs, file);
+    c->cond = ps_clone_expr(a, e->cond, file);
+    if (e->nargs > 0 && e->args != NULL) {
+        c->args = Arena_alloc(a, (size_t)e->nargs * sizeof(*c->args));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            c->args[i] = ps_clone_expr(a, e->args[i], file);
+        }
+    }
+    return c;
 }
 
 PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {

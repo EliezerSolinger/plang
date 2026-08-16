@@ -10,3 +10,8 @@ def ps_width_name(n: const *char) -> i32
 # a template file read as an f-string (63.2): the bytes come in as a string
 # LITERAL spelling, and what comes back is the same tree `f"..."` would give
 def ps_template(a: *Arena, file: const *char, lexeme: const *char, pos: Pos) -> *PsExpr
+# The same template, with the values coming from a dict literal instead of the
+# scope (75.2): `keys[i]` is what a hole may ask for and `vals[i]` is what gets
+# spliced there. `used[i]` comes back True when some hole asked for that key,
+# so the caller can complain about the ones nobody used.
+def ps_template_dict(a: *Arena, file: const *char, lexeme: const *char, pos: Pos, keys: **char, vals: **PsExpr, used: *bool, n: i32) -> *PsExpr

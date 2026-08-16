@@ -538,15 +538,29 @@ suite_pscript() {
         [ -f "tests/pscript/run/$name.exit" ] && want_exit=$(cat "tests/pscript/run/$name.exit")
         local expfile="tests/pscript/run/$name.expected"
         local ok=1
+        # `import "x.ph"` (75.3) makes the compiler emit the P module too, in
+        # the same mirrored tree — those are the pmod_*.c linked in alongside
         if [ "$BACKEND" = qbe ]; then
+            rm -f "$d"/pmod_*.ssa "$d"/pmod_*.s
             $PLANGC --backend qbe --out-dir "$rt" pscript/runtime/psrt.p 2>"$err" &&
             $PLANGC --backend qbe "$src" -o "$d/$name.ssa" 2>>"$err" &&
             $QBE "$d/$name.ssa" -o "$d/$name.s" 2>>"$err" &&
-            $QBE "$rt/pscript/runtime/psrt.ssa" -o "$d/psrt.s" 2>>"$err" &&
-            $CC "$d/$name.s" "$d/psrt.s" -o "$d/$name" -lm -pthread 2>>"$err" || ok=0
+            $QBE "$rt/pscript/runtime/psrt.ssa" -o "$d/psrt.s" 2>>"$err" || ok=0
+            local qextra=""
+            for pm in "$d"/pmod_*.ssa; do
+                [ -f "$pm" ] || continue
+                $QBE "$pm" -o "${pm%.ssa}.s" 2>>"$err" || ok=0
+                qextra="$qextra ${pm%.ssa}.s"
+            done
+            [ $ok = 1 ] && { $CC "$d/$name.s" "$d/psrt.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         else
-            $PLANGC $PFLAGS --out-dir "$rt" "$src" 2>"$err" &&
-            $CC $CSTD -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt.c" -o "$d/$name" -lm -pthread 2>>"$err" || ok=0
+            $PLANGC $PFLAGS --out-dir "$rt" "$src" 2>"$err" || ok=0
+            local cextra=""
+            for pm in "$rt/$(dirname "$src")"/pmod_*.c; do
+                [ -f "$pm" ] || continue
+                cextra="$cextra $pm"
+            done
+            [ $ok = 1 ] && { $CC $CSTD -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt.c" $cextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         fi
         if [ $ok = 0 ]; then
             echo "  FAIL $name (build): $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1)); continue

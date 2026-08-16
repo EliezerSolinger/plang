@@ -50,6 +50,25 @@ static def preprocess_c(cc: *Cc, path: const *char, out out_len: usize) -> *char
     b.deinit()
     return res
 
+# one more file for this build, unless it is already there (75.3)
+def add_input(v: *Vec<*char>, w: *Vec<*char>, path: const *char):
+    for i in range(v->len):
+        if strcmp(v->get(i), path) == 0:
+            return
+    v->push((*char)(path))
+    w->push((*char)(path))
+
+def is_pulled(w: *Vec<*char>, path: const *char) -> bool:
+    for i in range(w->len):
+        if strcmp(w->get(i), path) == 0:
+            return True
+    return False
+
+# the last component of a path
+def path_base(path: const *char) -> const *char:
+    slash: const *char = strrchr(path, '/')
+    return slash + 1 if slash != None else path
+
 def has_suffix(s: const *char, suf: const *char) -> bool:
     n: usize = strlen(s)
     m: usize = strlen(suf)
@@ -223,6 +242,8 @@ def main(argc: int, argv: **char) -> int:
         cpp_cmd = "cc"
     inputs: Vec<*char>
     inputs.init()
+    pulled: Vec<*char>      # inputs an `import "x.ph"` brought in (75.3)
+    pulled.init()
     defines: Vec<*char>   # -D NAME=VALUE: comptime consts injected from outside
     defines.init()
 
@@ -336,8 +357,18 @@ def main(argc: int, argv: **char) -> int:
             dump_tokens(inputs.get(j), &cc)
         return 0
 
-    for k in range(inputs.len):
-        path: const *char = inputs.get(k)
+    # a WHILE, not a `for`: compiling a pscript program that imports a P module
+    # (75.3) appends that module to the list, and the loop has to see it
+    k: i32 = -1
+    while usize(k + 1) < inputs.len:
+        # incremented HERE, at the top: the body has `continue`s, and a loop
+        # whose step is at the bottom would spin on the first of them
+        k += 1
+        path: const *char = inputs.get(usize(k))
+        # a `.ph` pulled in by `import "x.ph"` (75.3) exists to be READ; only a
+        # back end with headers has anything to write for it, and QBE has none
+        if is_pulled(&pulled, path) and has_suffix(path, ".ph") and be->hdr_ext == None:
+            continue
         m: *Module
         if has_suffix(path, ".psc"):
             # pscript front end (50.3: one binary, the extension picks the
@@ -349,6 +380,22 @@ def main(argc: int, argv: **char) -> int:
             defer free(psbytes)
             pstl: TokenList = ps_lex(path, psbytes, pslen, &cc.arena)
             psm: *PsModule = ps_parse(&cc.arena, path, pstl)
+            # 75.3/2.4: `import "shim.ph"` pulls the P module into THIS build.
+            # The header gives the declarations (45.5) and the `.p` beside it
+            # gives the code; both are compiled into the same mirrored tree, so
+            # one command covers what used to take two.
+            for j in range(psm->ndecls):
+                pdc: *PsDecl = psm->decls[j]
+                if pdc->kind != PD_INCLUDE or not pdc->is_pmod:
+                    continue
+                hp: const *char = path_join(&cc.arena, path_dir(&cc.arena, path), pdc->path)
+                sp: const *char = cc.arena.printf("%.*s", i32(strlen(hp) - 1), hp)
+                add_input(&inputs, &pulled, hp)
+                slen: usize = 0
+                sbytes: *char = read_entire_file_opt(sp, out slen)
+                if sbytes != None:
+                    free(sbytes)
+                    add_input(&inputs, &pulled, sp)
             if parse_only:
                 continue
             ps_sema_run(&cc.arena, psm, cc.cpp)
@@ -394,7 +441,11 @@ def main(argc: int, argv: **char) -> int:
         defer out.deinit()
         backend_emit(be, m, &out)
 
-        dest: const *char = out_path if out_path != None else derive_output(&cc.arena, inputs.get(k), be)
+        dest: const *char = out_path if out_path != None else derive_output(&cc.arena, inputs.get(usize(k)), be)
+        if out_path != None and is_pulled(&pulled, path):
+            # `-o` names ONE file, and this one was not asked for by name: it
+            # goes beside what was, under the name its own source gives it
+            dest = cc.arena.printf("%s/%s", path_dir(&cc.arena, out_path), path_base(derive_output(&cc.arena, path, be)))
         if out_dir != None:
             # the output tree MIRRORS the source tree under --out-dir, so the
             # emitted file-relative includes ("../stl/x.h") resolve inside it

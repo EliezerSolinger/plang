@@ -1,0 +1,9 @@
+rows 3 0 20 22
+names 3 name0 name2
+counts 3 2 4
+set 3 True False
+tree root 2 2
+kid kid1 1 twice
+cycle root True
+shared string True
+records 3 2 -2

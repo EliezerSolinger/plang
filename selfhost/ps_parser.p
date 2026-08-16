@@ -45,7 +45,9 @@ implement Vec<PsEnumItem>
 
 static def is_float_lexeme(t: const *char) -> bool
 static def is_ps_assign_op(k: TokKind) -> bool
+static def has_suffix_ps(s: const *char, suf: const *char) -> bool
 static def ps_retag(e: *PsExpr, pos: Pos)
+static def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr
 static def ps_module_name(a: *Arena, path: const *char) -> const *char
 
 struct PsP:
@@ -54,6 +56,17 @@ struct PsP:
     i: usize
     file: const *char
     a: *Arena
+
+    # A template rendered from a DICT (75.2). Then a hole is not an expression
+    # read against the scope of the line — it is a KEY of the literal written
+    # at the call, and what gets spliced is the expression written for that
+    # key. Zero-initialized for every ordinary f-string, where `sub` is False
+    # and none of the rest is looked at.
+    sub: bool
+    sk: **char          # the keys, decoded
+    sv: **PsExpr        # what was written for each one
+    su: *bool           # which ones a hole has already asked for
+    sn: i32
 
     static def pk(self: *PsP) -> *Token
     static def pk1(self: *PsP) -> *Token
@@ -108,6 +121,7 @@ struct PsP:
     static def fs_lit(self: *PsP, bytes: const *char, n: usize, pos: Pos) -> *PsExpr
     static def fs_join(self: *PsP, acc: *PsExpr, one: *PsExpr, pos: Pos) -> *PsExpr
     static def fs_hole(self: *PsP, etext: const *char, spec: const *char, pos: Pos) -> *PsExpr
+    static def fs_key(self: *PsP, etext: const *char, pos: Pos) -> *PsExpr
     static def fs_num(self: *PsP, v: i32, pos: Pos) -> *PsExpr
 
     # ---------- primitives ----------
@@ -891,15 +905,25 @@ struct PsP:
     # `{expr:spec}` becomes `__fmt(expr, width, prec, align, zero, type)`, with
     # every part of the spec already a constant
     static def fs_hole(self: *PsP, etext: const *char, spec: const *char, pos: Pos) -> *PsExpr:
-        tl: TokenList = ps_lex(self->file, etext, strlen(etext), self->a)
-        sub: PsP = {tl.toks, tl.n, 0, self->file, self->a}
-        inner: *PsExpr = sub.parse_expr()
-        # The hole was lexed on its own, so its positions start at line 1 — and
-        # an error inside it would point at the top of the file. They all get
-        # the f-string's position: it is where the reader has to look anyway.
-        ps_retag(inner, pos)
-        if not sub.at(TK_NEWLINE) and not sub.at(TK_EOF):
-            fatal_at(self->file, pos, "trailing text in an f-string hole: '%s'", etext)
+        inner: *PsExpr
+        if self->sub:
+            # 75.2: the hole names a key, and what goes there is the expression
+            # the call wrote for it. Nothing is looked up at run time — the key
+            # set of a template is fixed the moment the file is spliced, so it
+            # has to be fixed at the call too, and a hole nobody wrote a value
+            # for is an error HERE rather than a hole in the output later.
+            inner = self->fs_key(etext, pos)
+        else:
+            tl: TokenList = ps_lex(self->file, etext, strlen(etext), self->a)
+            sub: PsP = {tl.toks, tl.n, 0, self->file, self->a}
+            inner = sub.parse_expr()
+            # The hole was lexed on its own, so its positions start at line 1 —
+            # and an error inside it would point at the top of the file. They
+            # all get the f-string's position: it is where the reader has to
+            # look anyway.
+            ps_retag(inner, pos)
+            if not sub.at(TK_NEWLINE) and not sub.at(TK_EOF):
+                fatal_at(self->file, pos, "trailing text in an f-string hole: '%s'", etext)
         align: char = '\0'
         zero: bool = False
         width: i32 = 0
@@ -938,6 +962,33 @@ struct PsP:
         c->args[4] = self->fs_num((1 if zero else 0) * 256 + i32(ty), pos)
         c->nargs = 5
         return c
+
+    # `{nome}` in a template rendered from a dict (75.2): the text between the
+    # braces is a key, spaces around it forgiven, and the answer is what the
+    # call wrote for that key. A key two holes ask for is CLONED, because the
+    # same node spliced twice would be checked twice and lowered twice.
+    static def fs_key(self: *PsP, etext: const *char, pos: Pos) -> *PsExpr:
+        s: const *char = etext
+        while *s == ' ' or *s == '\t':
+            s += 1
+        n: usize = strlen(s)
+        while n > 0 and (s[n - 1] == ' ' or s[n - 1] == '\t'):
+            n -= 1
+        if n == 0:
+            fatal_at(self->file, pos, "an empty hole in a template: `{}` has no key to look up (75.2)")
+        for i in range(self->sn):
+            if strlen(self->sk[i]) == n and strncmp(self->sk[i], s, n) == 0:
+                if self->su[i]:
+                    return ps_clone_expr(self->a, self->sv[i], self->file)
+                self->su[i] = True
+                return self->sv[i]
+        have: StrBuf = {0}
+        for i in range(self->sn):
+            if i > 0:
+                have.puts(", ")
+            have.puts(self->sk[i])
+        fatal_at(self->file, pos, "the template asks for '%.*s', which the dict does not have (it has: %s)", i32(n), s, have.data if have.len > 0 else "nothing")
+        return None
 
     static def fs_num(self: *PsP, v: i32, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_INT, pos)
@@ -1459,6 +1510,20 @@ struct PsP:
 
     static def parse_import(self: *PsP) -> *PsDecl:
         pos: Pos = self->expect(TK_IMPORT, "import")->pos
+        if self->at(TK_STRING):
+            # `import "shim.ph"` (75.3/2.4): a P module, not a pscript one. It
+            # crosses by the rule of 45.5 — pointer-free signatures, enums and
+            # scalar constants — and the compiler pulls its `.p` into this
+            # build, so one command covers both halves.
+            pd: *PsDecl = ps_decl(self->a, PD_INCLUDE, pos)
+            raw: const *char = self->adv()->text
+            rl: usize = strlen(raw)
+            pd->path = self->a->strndup(raw + 1, rl - 2 if rl >= 2 else 0)
+            pd->is_pmod = True
+            if not has_suffix_ps(pd->path, ".ph"):
+                fatal_at(self->file, pos, "`import \"...\"` names a P module by its header: `import \"shim.ph\"` (75.3). A C header is `include \"shim.h\"` (45.5)")
+            self->expect(TK_NEWLINE, "import")
+            return pd
         d: *PsDecl = ps_decl(self->a, PD_IMPORT, pos)
         d->path = self->expect(TK_IDENT, "module name")->text
         if self->accept(TK_AS):
@@ -1556,10 +1621,46 @@ static def ps_retag(e: *PsExpr, pos: Pos):
 # escapes, same mini-language of formats, and resolved entirely at compile time
 # against the scope of the place that asked for it. This is the door the sema
 # uses — it has the bytes, and the f-string machinery is here.
+static def has_suffix_ps(s: const *char, suf: const *char) -> bool:
+    n: usize = strlen(s)
+    m: usize = strlen(suf)
+    return n >= m and strcmp(s + n - m, suf) == 0
+
 def ps_template(a: *Arena, file: const *char, lexeme: const *char, pos: Pos) -> *PsExpr:
     tl: TokenList = ps_lex(file, "", 0, a)
     p: PsP = {tl.toks, tl.n, 0, file, a}
     return p.fstring(lexeme, pos)
+
+def ps_template_dict(a: *Arena, file: const *char, lexeme: const *char, pos: Pos, keys: **char, vals: **PsExpr, used: *bool, n: i32) -> *PsExpr:
+    tl: TokenList = ps_lex(file, "", 0, a)
+    p: PsP = {tl.toks, tl.n, 0, file, a}
+    p.sub = True
+    p.sk = keys
+    p.sv = vals
+    p.su = used
+    p.sn = n
+    return p.fstring(lexeme, pos)
+
+# A deep copy of an expression, for the one place that needs the same value in
+# two spots of one tree (75.2). Everything that is not a child is copied as it
+# stands; a lambda is refused, because cloning one means cloning a block and
+# the capture list that the sema will fill — and a lambda as a template value
+# has no use that a second name would not serve better.
+static def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr:
+    if e == None:
+        return None
+    if e->body != None or e->params != None:
+        fatal_at(file, e->pos, "a lambda cannot be the value of a template key that two holes ask for (75.2)")
+    c: *PsExpr = a->alloc(sizeof(PsExpr))
+    *c = *e
+    c->lhs = ps_clone_expr(a, e->lhs, file)
+    c->rhs = ps_clone_expr(a, e->rhs, file)
+    c->cond = ps_clone_expr(a, e->cond, file)
+    if e->nargs > 0 and e->args != None:
+        c->args = a->alloc(usize(e->nargs) * sizeof(*c->args))
+        for i in range(e->nargs):
+            c->args[i] = ps_clone_expr(a, e->args[i], file)
+    return c
 
 def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
     p: PsP = {tl.toks, tl.n, 0, file, a}

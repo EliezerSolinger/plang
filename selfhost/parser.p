@@ -1338,8 +1338,18 @@ struct P:
         while not self->at(TK_DEDENT) and not self->at(TK_EOF):
             if self->accept(TK_NEWLINE):
                 continue
+            # `type Item = i64` (72.5): what this implementation fills the
+            # trait's associated type with
+            if self->at(TK_IDENT) and self->pk()->text == "type":
+                self->adv()
+                an2: *Token = self->expect(TK_IDENT, "associated type name")
+                self->expect(TK_ASSIGN, "type Name = T")
+                d->assoc = an2->text
+                d->assoc_type = self->parse_type()
+                self->expect(TK_NEWLINE, "associated type")
+                continue
             if not self->at(TK_DEF):
-                fatal_at(self->file, self->pk()->pos, "an `implement ... for` block holds method bodies")
+                fatal_at(self->file, self->pk()->pos, "an `implement ... for` block holds method bodies, and `type Name = T` when the trait asks for one")
             ms.push(self->parse_func(False, False, ty->text))
         self->expect(TK_DEDENT, "implement ... for")
         d->methods = ms.data
@@ -1361,8 +1371,20 @@ struct P:
         while not self->at(TK_DEDENT) and not self->at(TK_EOF):
             if self->accept(TK_NEWLINE):
                 continue
+            # `type Item` (72.5): the associated type. A name the trait's own
+            # signatures may use, and every implementation says what it is —
+            # which is what keeps `Iterable` from being an i64 contract with a
+            # general-sounding name.
+            if self->at(TK_IDENT) and self->pk()->text == "type":
+                self->adv()
+                an: *Token = self->expect(TK_IDENT, "associated type name")
+                if d->assoc != None:
+                    fatal_at(self->file, an->pos, "a trait declares at most one associated type ('%s' is already there)", d->assoc)
+                d->assoc = an->text
+                self->expect(TK_NEWLINE, "associated type")
+                continue
             if not self->at(TK_DEF):
-                fatal_at(self->file, self->pk()->pos, "a trait holds method signatures: `def name(...) -> T`")
+                fatal_at(self->file, self->pk()->pos, "a trait holds method signatures: `def name(...) -> T`, and at most one `type Name`")
             f: *Func = self->parse_func(False, False, name->text)
             if f->body != None:
                 fatal_at(self->file, f->pos, "a trait method has no body — `implement %s for T:` supplies it", name->text)

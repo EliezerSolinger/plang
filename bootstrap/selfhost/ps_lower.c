@@ -211,6 +211,16 @@ static int expr_uses(PsExpr *e, const char *name);
 
 static int opt_is_ref(PsType *t);
 
+static const char *sh_mangle(PsLow *L, PsType *t);
+
+static const char *shape_of(PsLow *L, PsType *t, Pos pos);
+
+static Expr *sh_ref(PsLow *L, const char *name, Pos pos);
+
+static Expr *sh_field_addr(PsLow *L, const char *sname, const char *fname, Pos pos);
+
+static Decl *lower_struct_walk(PsLow *L, PsDecl *d, int writing, int with_body);
+
 static int is_scalar_pname(const char *n);
 
 static Pos zero_pos(void);
@@ -239,6 +249,16 @@ struct PsLow {
     char **tups;
     int32_t ntups;
     int32_t ctups;
+    char **shk;
+    char **shv;
+    int32_t nsh;
+    int32_t csh;
+    int32_t csh2;
+    char **shzn;
+    Type **shzt;
+    int32_t nshz;
+    int32_t cshz;
+    int32_t cshz2;
     int32_t tmp_ctr;
     Vec_pStmt pre;
     const char *try_flag;
@@ -2202,14 +2222,26 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             return dt8;
         }
         PsTypeKind mk8 = (wt8->inner != NULL ? wt8->inner->kind : PT_UNKNOWN);
-        if (strcmp(e->lhs->text, "send") == 0 && (mk8 == PT_STR || mk8 == PT_LIST)) {
-            Expr *ss8 = PsLow_call_rt(self, (mk8 == PT_STR ? (to_parent ? "ps_worker_send_str_up" : "ps_worker_send_str_down") : (to_parent ? "ps_worker_send_list_up" : "ps_worker_send_list_down")), e->pos);
+        int graph8 = opt_is_ref(wt8->inner);
+        if (strcmp(e->lhs->text, "send") == 0 && graph8) {
+            const char *gn = Arena_printf(self->a, "__mg%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            Stmt *gd = st_new(self->a, ST_VAR, e->pos);
+            gd->name = gn;
+            gd->type = PsLow_ty(self, wt8->inner);
+            gd->init = PsLow_expr(self, e->args[0]);
+            Vec_pStmt_push(&self->pre, gd);
+            Expr *ss8 = PsLow_call_rt(self, (to_parent ? "ps_send_obj_up" : "ps_send_obj_down"), e->pos);
             if (to_parent) {
                 PsLow_push_arg(self, ss8, PsLow_ctx_arg(self, e->pos));
             } else {
                 PsLow_push_arg(self, ss8, PsLow_expr(self, e->lhs->lhs));
             }
-            PsLow_push_arg(self, ss8, PsLow_expr(self, e->args[0]));
+            Expr *shp8 = ex_new(self->a, EX_UNARY, e->pos);
+            shp8->op = TK_AMP;
+            shp8->lhs = PsLow_ident(self, shape_of(self, wt8->inner, e->pos), e->pos);
+            PsLow_push_arg(self, ss8, shp8);
+            PsLow_push_arg(self, ss8, PsLow_addr_of(self, gn, e->pos));
             return ss8;
         }
         if (strcmp(e->lhs->text, "send") == 0) {
@@ -2241,16 +2273,21 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->allocs = 1;
             return ec;
         }
-        if (mk8 == PT_STR || mk8 == PT_LIST) {
-            Expr *rs8 = PsLow_call_rt(self, (mk8 == PT_STR ? (to_parent ? "ps_parent_recv_str" : "ps_worker_recv_str") : (to_parent ? "ps_parent_recv_list" : "ps_worker_recv_list")), e->pos);
+        if (graph8) {
+            Expr *rs8 = PsLow_call_rt(self, (to_parent ? "ps_parent_recv_obj" : "ps_worker_recv_obj"), e->pos);
             PsLow_push_arg(self, rs8, PsLow_ctx_arg(self, e->pos));
             if (!to_parent) {
                 PsLow_push_arg(self, rs8, PsLow_expr(self, e->lhs->lhs));
             }
-            if (mk8 == PT_LIST) {
-                PsLow_push_arg(self, rs8, PsLow_elem_size(self, wt8->inner->inner, e->pos));
-                PsLow_push_arg(self, rs8, ex_new(self->a, (opt_is_ref(wt8->inner->inner) ? EX_TRUE : EX_FALSE), e->pos));
-            }
+            Expr *shp9 = ex_new(self->a, EX_UNARY, e->pos);
+            shp9->op = TK_AMP;
+            shp9->lhs = PsLow_ident(self, shape_of(self, wt8->inner, e->pos), e->pos);
+            PsLow_push_arg(self, rs8, shp9);
+            Expr *szg = PsLow_call_rt(self, "sizeof", e->pos);
+            Expr *trg = ex_new(self->a, EX_TYPEREF, e->pos);
+            trg->cast_type = PsLow_ty(self, wt8->inner);
+            PsLow_push_arg(self, szg, trg);
+            PsLow_push_arg(self, rs8, szg);
             self->allocs = 1;
             return rs8;
         }
@@ -2662,7 +2699,15 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         Expr *cc2 = PsLow_call_rt(self, name, e->pos);
         size_t i;
         for (i = 0; i < e->nargs; i += 1) {
-            PsLow_push_arg(self, cc2, PsLow_expr(self, e->args[i]));
+            Expr *a9 = PsLow_expr(self, e->args[i]);
+            if (e->args[i]->is_in) {
+                Expr *ad9 = ex_new(self->a, EX_UNARY, e->pos);
+                ad9->op = TK_AMP;
+                ad9->byref = PK_IN;
+                ad9->lhs = a9;
+                a9 = ad9;
+            }
+            PsLow_push_arg(self, cc2, a9);
         }
         return cc2;
     }
@@ -6690,6 +6735,262 @@ static Decl *lower_struct_desc(PsLow *L, PsDecl *d, int has_trace) {
     return v;
 }
 
+static const char *sh_mangle(PsLow *L, PsType *t) {
+    if (t == NULL) {
+        return "v";
+    }
+    switch (t->kind) {
+        case PT_STR: {
+            return "str";
+        }
+        case PT_LIST: {
+            return Arena_printf(L->a, "l_%s", sh_mangle(L, t->inner));
+        }
+        case PT_SET: {
+            return Arena_printf(L->a, "e_%s", sh_mangle(L, t->inner));
+        }
+        case PT_DICT: {
+            return Arena_printf(L->a, "d_%s_%s", sh_mangle(L, t->key), sh_mangle(L, t->inner));
+        }
+        case PT_BOOL: {
+            return "b";
+        }
+        case PT_FLOAT: {
+            return (t->width == 32 ? "f32" : "f64");
+        }
+        case PT_INT: {
+            if (t->width == 0) {
+                return "int";
+            }
+            return Arena_printf(L->a, "%s%d", (t->uns ? "u" : "i"), t->width);
+        }
+        case PT_NAME: {
+            return Arena_printf(L->a, "%s_%s", (opt_is_ref(t) ? "s" : "p"), ps_cname(L->a, t->name));
+        }
+        default: {
+            ;
+            break;
+        }
+    }
+    return "v";
+}
+
+static Expr *sh_field_addr(PsLow *L, const char *sname, const char *fname, Pos pos) {
+    Expr *fl = ex_new(L->a, EX_FIELD, pos);
+    fl->op = TK_ARROW;
+    fl->lhs = ex_new(L->a, EX_IDENT, pos);
+    fl->lhs->text = sname;
+    fl->field = fname;
+    Expr *ad = ex_new(L->a, EX_UNARY, pos);
+    ad->op = TK_AMP;
+    ad->lhs = fl;
+    return ad;
+}
+
+static Decl *lower_struct_walk(PsLow *L, PsDecl *d, int writing, int with_body) {
+    Func *f = Arena_alloc(L->a, sizeof(Func));
+    f->pos = d->pos;
+    f->name = Arena_printf(L->a, "%s__%s", ps_cname(L->a, d->name), (writing ? "ser" : "des"));
+    f->cname = f->name;
+    f->is_static = 1;
+    f->ret = ty_name(L->a, "void");
+    int32_t np = (writing ? 2 : 3);
+    f->params = Arena_alloc(L->a, (size_t)np * sizeof(*f->params));
+    if (writing) {
+        f->params[0].name = "__s";
+        f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsSer"));
+        f->params[0].pos = d->pos;
+    } else {
+        f->params[0].name = CTX;
+        f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"));
+        f->params[0].pos = d->pos;
+        f->params[1].name = "__d";
+        f->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsDes"));
+        f->params[1].pos = d->pos;
+    }
+    f->params[np - 1].name = "__o";
+    f->params[np - 1].type = ty_ptr(L->a, ty_name(L->a, "void"));
+    f->params[np - 1].pos = d->pos;
+    f->nparams = np;
+    Decl *dc = Arena_alloc(L->a, sizeof(Decl));
+    dc->kind = DL_FUNC;
+    dc->pos = d->pos;
+    dc->func = f;
+    if (!with_body) {
+        return dc;
+    }
+    Vec_pStmt body;
+    Vec_pStmt_init(&body);
+    Expr *cast = ex_new(L->a, EX_CAST, d->pos);
+    cast->cast_type = ty_ptr(L->a, ty_name(L->a, d->name));
+    cast->lhs = ex_new(L->a, EX_IDENT, d->pos);
+    cast->lhs->text = "__o";
+    Stmt *vd = st_new(L->a, ST_VAR, d->pos);
+    vd->name = "__x";
+    vd->type = ty_ptr(L->a, ty_name(L->a, d->name));
+    vd->init = cast;
+    Vec_pStmt_push(&body, vd);
+    size_t i;
+    for (i = 0; i < d->nfields; i += 1) {
+        const char *sn = shape_of(L, d->fields[i].type, d->pos);
+        Expr *cl = PsLow_call_rt(L, (writing ? "ps_ser_value" : "ps_des_value"), d->pos);
+        if (writing) {
+            PsLow_push_arg(L, cl, PsLow_ident(L, "__s", d->pos));
+        } else {
+            PsLow_push_arg(L, cl, PsLow_ident(L, CTX, d->pos));
+            PsLow_push_arg(L, cl, PsLow_ident(L, "__d", d->pos));
+        }
+        Expr *shr = ex_new(L->a, EX_UNARY, d->pos);
+        shr->op = TK_AMP;
+        shr->lhs = PsLow_ident(L, sn, d->pos);
+        PsLow_push_arg(L, cl, shr);
+        PsLow_push_arg(L, cl, sh_field_addr(L, "__x", d->fields[i].name, d->pos));
+        Stmt *es = st_new(L->a, ST_EXPR, d->pos);
+        es->expr = cl;
+        Vec_pStmt_push(&body, es);
+    }
+    Block *b = Arena_alloc(L->a, sizeof(Block));
+    b->stmts = body.data;
+    b->n = body.len;
+    f->body = b;
+    return dc;
+}
+
+static const char *shape_of(PsLow *L, PsType *t, Pos pos) {
+    const char *key = sh_mangle(L, t);
+    size_t i;
+    for (i = 0; i < L->nsh; i += 1) {
+        if (strcmp(L->shk[i], key) == 0) {
+            return L->shv[i];
+        }
+    }
+    const char *name = Arena_printf(L->a, "__sh_%s", key);
+    L->shk = vec_grow(L->shk, L->nsh, &L->csh, sizeof(*L->shk));
+    L->shv = vec_grow(L->shv, L->nsh, &L->csh2, sizeof(*L->shv));
+    L->shk[L->nsh] = (char *)key;
+    L->shv[L->nsh] = (char *)name;
+    L->nsh += 1;
+    PsDecl *sd = NULL;
+    if (t != NULL && t->kind == PT_NAME && opt_is_ref(t)) {
+        sd = PsLow_records_by_name(L, t->name);
+    }
+    if (sd != NULL) {
+        Decl *fw = Arena_alloc(L->a, sizeof(Decl));
+        fw->kind = DL_VAR;
+        fw->pos = pos;
+        fw->name = name;
+        fw->type = ty_name(L->a, "PsShape");
+        fw->is_static = 1;
+        Vec_pDecl_push(&L->out, fw);
+    }
+    int32_t kind = 0;
+    const char *inner = NULL;
+    const char *kname = NULL;
+    int32_t kk = 0;
+    if (t != NULL) {
+        switch (t->kind) {
+            case PT_STR: {
+                kind = 1;
+                break;
+            }
+            case PT_LIST: {
+                kind = 2;
+                inner = shape_of(L, t->inner, pos);
+                break;
+            }
+            case PT_SET: {
+                kind = 3;
+                inner = shape_of(L, t->inner, pos);
+                kk = (t->inner != NULL && t->inner->kind == PT_STR ? 1 : 0);
+                break;
+            }
+            case PT_DICT: {
+                kind = 4;
+                kname = shape_of(L, t->key, pos);
+                inner = shape_of(L, t->inner, pos);
+                kk = (t->key != NULL && t->key->kind == PT_STR ? 1 : 0);
+                break;
+            }
+            case PT_NAME: {
+                if (sd != NULL) {
+                    kind = 5;
+                }
+                break;
+            }
+            default: {
+                ;
+                break;
+            }
+        }
+    }
+    Decl *v = Arena_alloc(L->a, sizeof(Decl));
+    v->kind = DL_VAR;
+    v->pos = pos;
+    v->name = name;
+    v->type = ty_name(L->a, "PsShape");
+    v->is_static = 1;
+    Expr *init = ex_new(L->a, EX_INITLIST, pos);
+    init->args = Arena_alloc(L->a, (size_t)8 * sizeof(*init->args));
+    Expr *kn = ex_new(L->a, EX_NUMBER, pos);
+    kn->text = Arena_printf(L->a, "%d", kind);
+    init->args[0] = kn;
+    Expr *z = ex_new(L->a, EX_NUMBER, pos);
+    z->text = "0";
+    init->args[1] = z;
+    if (kind == 0 || kind == 5) {
+        L->shzn = vec_grow(L->shzn, L->nshz, &L->cshz, sizeof(*L->shzn));
+        L->shzt = vec_grow(L->shzt, L->nshz, &L->cshz2, sizeof(*L->shzt));
+        L->shzn[L->nshz] = (char *)name;
+        L->shzt[L->nshz] = (kind == 5 ? ty_name(L->a, t->name) : PsLow_ty(L, t));
+        L->nshz += 1;
+    }
+    init->args[2] = sh_ref(L, inner, pos);
+    init->args[3] = sh_ref(L, kname, pos);
+    Expr *kke = ex_new(L->a, EX_NUMBER, pos);
+    kke->text = Arena_printf(L->a, "%d", kk);
+    init->args[4] = kke;
+    if (kind == 5) {
+        Expr *se = ex_new(L->a, EX_IDENT, pos);
+        se->text = Arena_printf(L->a, "%s__ser", ps_cname(L->a, t->name));
+        init->args[5] = se;
+        Expr *de = ex_new(L->a, EX_IDENT, pos);
+        de->text = Arena_printf(L->a, "%s__des", ps_cname(L->a, t->name));
+        init->args[6] = de;
+        Expr *dsc = ex_new(L->a, EX_UNARY, pos);
+        dsc->op = TK_AMP;
+        dsc->lhs = ex_new(L->a, EX_IDENT, pos);
+        dsc->lhs->text = Arena_printf(L->a, "%s__desc", ps_cname(L->a, t->name));
+        init->args[7] = dsc;
+    } else {
+        init->args[5] = ex_new(L->a, EX_NONE, pos);
+        init->args[6] = ex_new(L->a, EX_NONE, pos);
+        init->args[7] = ex_new(L->a, EX_NONE, pos);
+    }
+    init->nargs = 8;
+    v->init = init;
+    if (sd != NULL) {
+        Vec_pDecl_push(&L->out, lower_struct_walk(L, sd, 1, 0));
+        Vec_pDecl_push(&L->out, lower_struct_walk(L, sd, 0, 0));
+    }
+    Vec_pDecl_push(&L->out, v);
+    if (sd != NULL) {
+        Vec_pDecl_push(&L->out, lower_struct_walk(L, sd, 1, 1));
+        Vec_pDecl_push(&L->out, lower_struct_walk(L, sd, 0, 1));
+    }
+    return name;
+}
+
+static Expr *sh_ref(PsLow *L, const char *name, Pos pos) {
+    if (name == NULL) {
+        return ex_new(L->a, EX_NONE, pos);
+    }
+    Expr *r = ex_new(L->a, EX_UNARY, pos);
+    r->op = TK_AMP;
+    r->lhs = ex_new(L->a, EX_IDENT, pos);
+    r->lhs->text = name;
+    return r;
+}
+
 static Decl *lower_struct_new(PsLow *L, PsDecl *d, int with_body) {
     Func *f = Arena_alloc(L->a, sizeof(Func));
     f->pos = d->pos;
@@ -7150,6 +7451,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
             ic2->pos = m->decls[i]->pos;
             ic2->import_path = m->decls[i]->path;
             ic2->import_system = m->decls[i]->import_system;
+            if (m->decls[i]->is_pmod) {
+                ic2->is_include = 0;
+            }
             Vec_pDecl_push(&L.out, ic2);
         }
     }
@@ -7212,7 +7516,7 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         }
     }
     for (i = 0; i < m->ndecls; i += 1) {
-        if (m->decls[i]->kind == PD_RECORD) {
+        if (m->decls[i]->kind == PD_RECORD && !m->decls[i]->from_hdr) {
             Vec_pDecl_push(&L.out, lower_record_impl(&L, m->decls[i]));
         } else if (m->decls[i]->kind == PD_STRUCT) {
             Vec_pDecl_push(&L.out, lower_struct_impl(&L, m->decls[i]));
@@ -7476,8 +7780,23 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
             PsLow_stmt(&L, m->main->stmts[j], &top);
         }
     }
-    Block *tb = PsLow_frame_wrap(&L, &top, NULL, 0, zp);
     size_t j;
+    for (j = 0; j < L.nshz; j += 1) {
+        Stmt *fx = st_new(a, ST_ASSIGN, zp);
+        Expr *fl9 = ex_new(a, EX_FIELD, zp);
+        fl9->op = TK_DOT;
+        fl9->lhs = PsLow_ident(&L, L.shzn[j], zp);
+        fl9->field = "size";
+        fx->lhs = fl9;
+        fx->op = TK_ASSIGN;
+        Expr *sz9 = PsLow_call_rt(&L, "sizeof", zp);
+        Expr *tr9 = ex_new(a, EX_TYPEREF, zp);
+        tr9->cast_type = L.shzt[j];
+        PsLow_push_arg(&L, sz9, tr9);
+        fx->rhs = sz9;
+        Vec_pStmt_push(&mb, fx);
+    }
+    Block *tb = PsLow_frame_wrap(&L, &top, NULL, 0, zp);
     for (j = 0; j < tb->n; j += 1) {
         Vec_pStmt_push(&mb, tb->stmts[j]);
     }

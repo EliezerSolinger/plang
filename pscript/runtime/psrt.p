@@ -45,6 +45,7 @@ def ps_ctx_init(out ctx: PsCtx):
     # like it were inside a block that nobody opened — the collector would
     # never run, and a budget of noise would raise out of nowhere.
     ctx.timers = None
+    ctx.waiters = None
     ctx.nogc = 0
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
@@ -117,6 +118,12 @@ static def ps_gather_trace(o: *void, to: *PsBlock):
 
 static const PS_GATHER_DESC: const PsDesc = {"gather", ps_gather_trace}
 
+# a message frame whose one field IS a reference — a `str` or a `list` rebuilt
+# in this heap (34.3). It has the same shape as a gathered result, and needs
+# the same trace: the frame of a task that is parked outlives collections, and
+# a POD descriptor there would leave the collector with a stale pointer.
+static const PS_REFMSG_DESC: const PsDesc = {"message", ps_gather_trace}
+
 # `strdup` is POSIX, not C: under `-std=c11` glibc hides it, and a call with no
 # prototype comes back as an `int` — which on a 64-bit machine is a pointer with
 # its top half gone. Two lines of our own cost nothing and depend on nothing.
@@ -151,11 +158,49 @@ static def ps_msg_pop(head: **PsMsg, tail: **PsMsg) -> *PsMsg:
     m->next = None
     return m
 
+# 74.1: the descriptor half of a queue. One byte says "look at the queue"; the
+# reader drains whatever is there and then reads the queue itself, so losing
+# count is harmless and a full pipe is already the news it carries. Both ends
+# are non-blocking: the writer must never wait on the reader, and the reader
+# must never wait at all — it polls.
+static def ps_pipe_open(rp: *int, wp: *int):
+    fds: int[2]
+    fds[0] = -1
+    fds[1] = -1
+    if pipe(fds) != 0:
+        *rp = -1
+        *wp = -1
+        return
+    fcntl(fds[0], F_SETFL, O_NONBLOCK)
+    fcntl(fds[1], F_SETFL, O_NONBLOCK)
+    *rp = fds[0]
+    *wp = fds[1]
+
+static def ps_pipe_wake(fd: int):
+    if fd < 0:
+        return
+    one: char = 'x'
+    if write(fd, &one, usize(1)) < 0:
+        pass          # full or closed: either way the reader has news already
+
+static def ps_pipe_drain(fd: int):
+    if fd < 0:
+        return
+    buf: char[64]
+    while read(fd, buf, sizeof(buf)) > 0:
+        pass
+
+static def ps_pipe_close(fd: int):
+    if fd >= 0:
+        close(fd)
+
 def ps_worker_new(ctx: *PsCtx, entry: def(p: *void) -> *void, args: *void, nargs: usize) -> *PsWorker:
     blk: *PsWorkerBlk = (*PsWorkerBlk)(malloc(sizeof(PsWorkerBlk)))
     memset(blk, 0, sizeof(PsWorkerBlk))
     pthread_mutex_init(&blk->mu, None)
     pthread_cond_init(&blk->cv, None)
+    ps_pipe_open(&blk->up_r, &blk->up_w)
+    ps_pipe_open(&blk->dn_r, &blk->dn_w)
     blk->nargs = nargs
     blk->args = malloc(nargs if nargs > 0 else 1)
     if nargs > 0:
@@ -226,149 +271,375 @@ def ps_worker_finish(ctx: *PsCtx, blk: *void):
         ctx->exc = None
     b->done = 1
     pthread_cond_broadcast(&b->cv)
+    ps_pipe_wake(b->up_w)
     pthread_mutex_unlock(&b->mu)
 
 static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
-static def ps_list_bytes(l: *PsList, out_n: *usize) -> *char
-static def ps_str_msg_task(ctx: *PsCtx, m: *PsMsg) -> *PsTask
-static def ps_list_msg_task(ctx: *PsCtx, m: *PsMsg, esize: i32, eref: bool) -> *PsTask
+static def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask
+static def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize)
+static def ps_sh_slot(sh: const *PsShape) -> i32
+static def ps_sh_isref(sh: const *PsShape) -> bool
+def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
+static def ps_task_clear_recv(t: *PsTask)
+static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg
+static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
+static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg)
+static def ps_recvs_poll(ctx: *PsCtx) -> bool
+static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
+static def ps_sched_push(ctx: *PsCtx, t: *PsTask)
+static def ps_pipe_open(rp: *int, wp: *int)
+static def ps_pipe_wake(fd: int)
+static def ps_pipe_drain(fd: int)
+static def ps_pipe_close(fd: int)
 
-# ---------- messages that are not pure bytes (34.3) ----------
-# A string travels as its BYTES and is rebuilt where it lands; a list travels as
-# a count followed by its elements. Nothing of one heap ever reaches another.
-def ps_worker_send_str_up(ctx: *PsCtx, s: *PsStr) -> bool:
-    b: *PsWorkerBlk = ctx->parent
-    if b == None:
+# what a parked receive is waiting to rebuild (74.1)
+# how many queues one wait can watch at once (74.1)
+static const PS_POLL_MAX: const i32 = 64
+
+static const PS_RECV_RAW: const i32 = 0
+static const PS_RECV_OBJ: const i32 = 1
+
+# ---------- a message that is a GRAPH (34.3/74.2) ----------
+# Bytes cross by memcpy; everything the collector owns crosses by being written
+# out here and built again there. The compiler hands over a `PsShape` — the
+# static description of the type — and for a `struct` a pair of generated
+# functions that walk its fields. What lives here is the FORMAT and the cycle
+# guard; what lives in the compiler is the types. Neither has to learn the
+# other's job, which is the same division the trace functions already use.
+#
+# The format, for one value:
+#
+#   POD          the bytes, as they are
+#   reference    a tag: 0 absent, 1 new, 2 one already written
+#                  1 is followed by the body; 2 by the number it got before
+#     str          i64 length, then the bytes
+#     list/set     i64 count, then each element
+#     dict         i64 count, then each key and value
+#     struct       whatever the generated writer writes
+#
+# The reader registers each new object BEFORE reading its body, in the same
+# order the writer registered it. That is the whole of the cycle guard: a list
+# that contains itself writes its own number the second time round, and the
+# reader has the (still empty) list to point at.
+static def ps_ser_grow(s: *PsSer, n: usize):
+    if s->len + n <= s->cap:
+        return
+    cap: usize = s->cap * 2 if s->cap > 0 else usize(256)
+    while cap < s->len + n:
+        cap *= 2
+    s->buf = (*char)(realloc(s->buf, cap))
+    s->cap = cap
+
+static def ps_ser_bytes(s: *PsSer, p: const *void, n: usize):
+    if n == 0:
+        return
+    ps_ser_grow(s, n)
+    memcpy(s->buf + s->len, p, n)
+    s->len += n
+
+static def ps_ser_u8(s: *PsSer, v: i32):
+    b: char = char(v)
+    ps_ser_bytes(s, &b, usize(1))
+
+static def ps_ser_i32(s: *PsSer, v: i32):
+    ps_ser_bytes(s, &v, sizeof(i32))
+
+static def ps_ser_i64(s: *PsSer, v: i64):
+    ps_ser_bytes(s, &v, sizeof(i64))
+
+# the table of what has already been written: open addressing on the ADDRESS of
+# the object, because a graph of ten thousand nodes must not cost ten thousand
+# comparisons per node
+static def ps_ptr_hash(o: *void) -> usize:
+    h: usize = usize(o)
+    h = h >> 4
+    h *= usize(2654435761)
+    return h
+
+static def ps_ser_rehash(s: *PsSer):
+    ns: usize = s->nslots * 2 if s->nslots > 0 else usize(64)
+    nk: **void = (**void)(calloc(ns, sizeof(*nk)))
+    nv: *i32 = (*i32)(calloc(ns, sizeof(*nv)))
+    i: usize = 0
+    while i < s->nslots:
+        if s->keys[i] != None:
+            j: usize = ps_ptr_hash(s->keys[i]) & (ns - 1)
+            while nk[j] != None:
+                j = (j + 1) & (ns - 1)
+            nk[j] = s->keys[i]
+            nv[j] = s->vals[i]
+        i += 1
+    free(s->keys)
+    free(s->vals)
+    s->keys = nk
+    s->vals = nv
+    s->nslots = ns
+
+static def ps_ser_seen(s: *PsSer, o: *void, idx: *i32) -> bool:
+    if s->nslots == 0:
         return False
-    pthread_mutex_lock(&b->mu)
-    ps_msg_push(&b->up_head, &b->up_tail, s->data if s != None else "", usize(s->len) if s != None else usize(0))
-    pthread_cond_broadcast(&b->cv)
-    pthread_mutex_unlock(&b->mu)
-    return True
+    j: usize = ps_ptr_hash(o) & (s->nslots - 1)
+    while s->keys[j] != None:
+        if s->keys[j] == o:
+            *idx = s->vals[j]
+            return True
+        j = (j + 1) & (s->nslots - 1)
+    return False
 
-def ps_worker_send_str_down(w: *PsWorker, s: *PsStr) -> bool:
-    if w == None or w->blk == None:
-        return False
-    b: *PsWorkerBlk = w->blk
-    if b->done != 0:
-        return False
-    pthread_mutex_lock(&b->mu)
-    ps_msg_push(&b->down_head, &b->down_tail, s->data if s != None else "", usize(s->len) if s != None else usize(0))
-    pthread_cond_broadcast(&b->cv)
-    pthread_mutex_unlock(&b->mu)
-    return True
+static def ps_ser_add(s: *PsSer, o: *void) -> i32:
+    if s->nslots == 0 or usize(s->used + 1) * 2 > s->nslots:
+        ps_ser_rehash(s)
+    j: usize = ps_ptr_hash(o) & (s->nslots - 1)
+    while s->keys[j] != None:
+        j = (j + 1) & (s->nslots - 1)
+    s->keys[j] = o
+    s->vals[j] = s->count
+    s->used += 1
+    s->count += 1
+    return s->count - 1
 
-# the string is BUILT here, in the receiver's own heap — which is the whole
-# reason the bytes crossed instead of the object
-static def ps_str_msg_task(ctx: *PsCtx, m: *PsMsg) -> *PsTask:
-    v: *PsStr = ps_str_new(ctx, m->data if m != None else "", m->size if m != None else usize(0))
-    if m != None:
-        free(m->data)
-        free(m)
-    t: *PsTask = ps_msg_task(ctx, None, sizeof(PsStrPtr))
-    *(**PsStr)(ps_task_ret(t)) = v
-    return t
+# how wide the SLOT of a value of this shape is, and whether it holds a
+# reference: a list of numbers stores them inline, a list of anything the
+# collector owns stores pointers
+static def ps_sh_slot(sh: const *PsShape) -> i32:
+    return i32(sh->size) if sh->kind == PS_SH_POD else i32(sizeof(PsStrPtr))
 
-def ps_worker_recv_str(ctx: *PsCtx, w: *PsWorker) -> *PsTask:
-    if w == None or w->blk == None:
-        return ps_str_msg_task(ctx, None)
-    b: *PsWorkerBlk = w->blk
-    pthread_mutex_lock(&b->mu)
-    while b->up_head == None and b->done == 0:
-        pthread_cond_wait(&b->cv, &b->mu)
-    m: *PsMsg = ps_msg_pop(&b->up_head, &b->up_tail)
-    pthread_mutex_unlock(&b->mu)
-    return ps_str_msg_task(ctx, m)
+static def ps_sh_isref(sh: const *PsShape) -> bool:
+    return sh->kind != PS_SH_POD
 
-def ps_parent_recv_str(ctx: *PsCtx) -> *PsTask:
-    b: *PsWorkerBlk = ctx->parent
-    if b == None:
-        return ps_str_msg_task(ctx, None)
-    pthread_mutex_lock(&b->mu)
-    while b->down_head == None:
-        pthread_cond_wait(&b->cv, &b->mu)
-    m: *PsMsg = ps_msg_pop(&b->down_head, &b->down_tail)
-    pthread_mutex_unlock(&b->mu)
-    return ps_str_msg_task(ctx, m)
+def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void):
+    if sh->kind == PS_SH_POD:
+        ps_ser_bytes(s, slot, usize(sh->size))
+        return
+    o: *void = *(**void)(slot)
+    if o == None:
+        ps_ser_u8(s, 0)
+        return
+    seen: i32 = 0
+    if ps_ser_seen(s, o, &seen):
+        ps_ser_u8(s, 2)
+        ps_ser_i32(s, seen)
+        return
+    ps_ser_u8(s, 1)
+    ps_ser_add(s, o)
+    match sh->kind:
+        case PS_SH_STR:
+            st: *PsStr = (*PsStr)(o)
+            ps_ser_i64(s, i64(st->len))
+            ps_ser_bytes(s, st->data, usize(st->len))
+        case PS_SH_LIST:
+            l: *PsList = (*PsList)(o)
+            ps_ser_i64(s, l->len)
+            i: i64 = 0
+            while i < l->len:
+                ps_ser_value(s, sh->inner, ps_list_base(l) + usize(i) * usize(l->esize))
+                i += 1
+        case PS_SH_SET:
+            d1: *PsDict = (*PsDict)(o)
+            ps_ser_i64(s, ps_dict_len(d1))
+            k1: i64 = 0
+            while k1 < ps_dict_cap(d1):
+                if ps_dict_live(d1, k1):
+                    ps_ser_value(s, sh->inner, ps_dict_key_at(d1, k1))
+                k1 += 1
+        case PS_SH_DICT:
+            d2: *PsDict = (*PsDict)(o)
+            ps_ser_i64(s, ps_dict_len(d2))
+            k2: i64 = 0
+            while k2 < ps_dict_cap(d2):
+                if ps_dict_live(d2, k2):
+                    ps_ser_value(s, sh->key, ps_dict_key_at(d2, k2))
+                    ps_ser_value(s, sh->inner, ps_dict_val_at(d2, k2))
+                k2 += 1
+        case PS_SH_STRUCT:
+            if sh->ser != None:
+                sh->ser(s, o)
+        case _:
+            pass
 
-# a list of pure bytes: the count and then the elements, one block
-static def ps_list_bytes(l: *PsList, out_n: *usize) -> *char:
-    n: i64 = l->len if l != None else 0
-    es: usize = usize(l->esize) if l != None else usize(1)
-    total: usize = sizeof(i64) + usize(n) * es
-    buf: *char = (*char)(malloc(total))
-    memcpy(buf, &n, sizeof(i64))
-    if n > 0:
-        memcpy(buf + sizeof(i64), ps_list_base(l), usize(n) * es)
-    *out_n = total
-    return buf
+# ---------- and back ----------
+static def ps_des_take(d: *PsDes, n: usize) -> const *char:
+    if d->pos + n > d->len:
+        d->bad = 1
+        return None
+    p: const *char = d->buf + d->pos
+    d->pos += n
+    return p
 
-def ps_worker_send_list_up(ctx: *PsCtx, l: *PsList) -> bool:
+static def ps_des_u8(d: *PsDes) -> i32:
+    p: const *char = ps_des_take(d, usize(1))
+    return i32(*p) if p != None else 0
+
+static def ps_des_i32(d: *PsDes) -> i32:
+    v: i32 = 0
+    p: const *char = ps_des_take(d, sizeof(i32))
+    if p != None:
+        memcpy(&v, p, sizeof(i32))
+    return v
+
+static def ps_des_i64(d: *PsDes) -> i64:
+    v: i64 = 0
+    p: const *char = ps_des_take(d, sizeof(i64))
+    if p != None:
+        memcpy(&v, p, sizeof(i64))
+    return v
+
+# reserve the number this object is going to have, before its body is read: an
+# object inside it may point back here, and then it is this slot it finds
+static def ps_des_reserve(d: *PsDes) -> i32:
+    if d->nbuilt >= d->cbuilt:
+        d->cbuilt = d->cbuilt * 2 if d->cbuilt > 0 else 32
+        d->built = (**void)(realloc(d->built, usize(d->cbuilt) * sizeof(*d->built)))
+    d->built[d->nbuilt] = None
+    d->nbuilt += 1
+    return d->nbuilt - 1
+
+def ps_des_value(ctx: *PsCtx, d: *PsDes, sh: const *PsShape, slot: *void):
+    if sh->kind == PS_SH_POD:
+        p: const *char = ps_des_take(d, usize(sh->size))
+        if p != None:
+            memcpy(slot, p, usize(sh->size))
+        else:
+            memset(slot, 0, usize(sh->size))
+        return
+    out: **void = (**void)(slot)
+    tag: i32 = ps_des_u8(d)
+    if tag == 0 or d->bad != 0:
+        *out = None
+        return
+    if tag == 2:
+        i0: i32 = ps_des_i32(d)
+        *out = d->built[i0] if i0 >= 0 and i0 < d->nbuilt else None
+        return
+    id: i32 = ps_des_reserve(d)
+    match sh->kind:
+        case PS_SH_STR:
+            n1: i64 = ps_des_i64(d)
+            b1: const *char = ps_des_take(d, usize(n1))
+            v1: *PsStr = ps_str_new(ctx, b1 if b1 != None else "", usize(n1) if b1 != None else usize(0))
+            d->built[id] = (*void)(v1)
+            *out = (*void)(v1)
+        case PS_SH_LIST:
+            n2: i64 = ps_des_i64(d)
+            l2: *PsList = ps_list_new(ctx, ps_sh_slot(sh->inner), ps_sh_isref(sh->inner), n2)
+            d->built[id] = (*void)(l2)
+            *out = (*void)(l2)
+            i2: i64 = 0
+            while i2 < n2 and d->bad == 0:
+                dst: *char = ps_list_push(ctx, l2)
+                ps_des_value(ctx, d, sh->inner, dst)
+                i2 += 1
+        case PS_SH_SET:
+            n3: i64 = ps_des_i64(d)
+            ks3: i32 = ps_sh_slot(sh->inner)
+            s3: *PsDict = ps_dict_new(ctx, ks3, 0, sh->kkind, ps_sh_isref(sh->inner), False)
+            d->built[id] = (*void)(s3)
+            *out = (*void)(s3)
+            kb3: *char = (*char)(malloc(usize(ks3)))
+            i3: i64 = 0
+            while i3 < n3 and d->bad == 0:
+                ps_des_value(ctx, d, sh->inner, kb3)
+                ps_dict_put(ctx, s3, kb3)
+                i3 += 1
+            free(kb3)
+        case PS_SH_DICT:
+            n4: i64 = ps_des_i64(d)
+            ks4: i32 = ps_sh_slot(sh->key)
+            vs4: i32 = ps_sh_slot(sh->inner)
+            d4: *PsDict = ps_dict_new(ctx, ks4, vs4, sh->kkind, ps_sh_isref(sh->key), ps_sh_isref(sh->inner))
+            d->built[id] = (*void)(d4)
+            *out = (*void)(d4)
+            # key and value are built OUTSIDE the table first: inserting can
+            # rehash it, and a value that inserts into this same dict would
+            # otherwise be written into a slot that has moved
+            kb4: *char = (*char)(malloc(usize(ks4)))
+            vb4: *char = (*char)(malloc(usize(vs4)))
+            i4: i64 = 0
+            while i4 < n4 and d->bad == 0:
+                ps_des_value(ctx, d, sh->key, kb4)
+                ps_des_value(ctx, d, sh->inner, vb4)
+                memcpy(ps_dict_put(ctx, d4, kb4), vb4, usize(vs4))
+                i4 += 1
+            free(kb4)
+            free(vb4)
+        case PS_SH_STRUCT:
+            o5: *void = ps_new(ctx, sh->desc, usize(sh->size))
+            d->built[id] = o5
+            *out = o5
+            if sh->des != None:
+                sh->des(ctx, d, o5)
+        case _:
+            *out = None
+
+# ---------- the two ends ----------
+static def ps_ser_run(sh: const *PsShape, slot: const *void, out_n: *usize) -> *char:
+    s: PsSer = {None, 0, 0, None, None, 0, 0, 0}
+    ps_ser_value(&s, sh, slot)
+    free(s.keys)
+    free(s.vals)
+    *out_n = s.len
+    return s.buf
+
+def ps_send_obj_up(ctx: *PsCtx, sh: const *PsShape, slot: const *void) -> bool:
     b: *PsWorkerBlk = ctx->parent
     if b == None:
         return False
     n: usize = 0
-    buf: *char = ps_list_bytes(l, &n)
+    buf: *char = ps_ser_run(sh, slot, &n)
     pthread_mutex_lock(&b->mu)
     ps_msg_push(&b->up_head, &b->up_tail, buf, n)
     pthread_cond_broadcast(&b->cv)
+    ps_pipe_wake(b->up_w)
     pthread_mutex_unlock(&b->mu)
     free(buf)
     return True
 
-def ps_worker_send_list_down(w: *PsWorker, l: *PsList) -> bool:
+def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool:
     if w == None or w->blk == None:
         return False
     b: *PsWorkerBlk = w->blk
     if b->done != 0:
         return False
     n: usize = 0
-    buf: *char = ps_list_bytes(l, &n)
+    buf: *char = ps_ser_run(sh, slot, &n)
     pthread_mutex_lock(&b->mu)
     ps_msg_push(&b->down_head, &b->down_tail, buf, n)
     pthread_cond_broadcast(&b->cv)
+    ps_pipe_wake(b->dn_w)
     pthread_mutex_unlock(&b->mu)
     free(buf)
     return True
 
-static def ps_list_msg_task(ctx: *PsCtx, m: *PsMsg, esize: i32, eref: bool) -> *PsTask:
-    cnt: i64 = 0
-    if m != None and m->size >= sizeof(i64):
-        memcpy(&cnt, m->data, sizeof(i64))
-    v: *PsList = ps_list_new(ctx, esize, eref, cnt)
-    i: i64 = 0
-    while i < cnt:
-        dst: *char = ps_list_push(ctx, v)
-        memcpy(dst, m->data + sizeof(i64) + usize(i) * usize(esize), usize(esize))
-        i += 1
+# The value is BUILT here, in the receiver's own heap — which is the whole
+# reason the bytes crossed instead of the objects. Building allocates and
+# allocation never collects, so nothing moves while the graph is going up.
+static def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize):
+    memset(slot, 0, size)
+    if m == None:
+        return
+    d: PsDes = {m->data, m->size, 0, None, 0, 0, 0}
+    ps_des_value(ctx, &d, sh, slot)
+    free(d.built)
+
+static def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask:
+    t: *PsTask = ps_msg_task(ctx, None, size)
+    ((*PsUser)(t->frame))->desc = &PS_REFMSG_DESC
+    ps_des_run(ctx, m, sh, ps_task_ret(t), size)
     if m != None:
         free(m->data)
         free(m)
-    t: *PsTask = ps_msg_task(ctx, None, sizeof(PsStrPtr))
-    *(**PsList)(ps_task_ret(t)) = v
     return t
 
-def ps_worker_recv_list(ctx: *PsCtx, w: *PsWorker, esize: i32, eref: bool) -> *PsTask:
+def ps_worker_recv_obj(ctx: *PsCtx, w: *PsWorker, sh: const *PsShape, size: usize) -> *PsTask:
     if w == None or w->blk == None:
-        return ps_list_msg_task(ctx, None, esize, eref)
-    b: *PsWorkerBlk = w->blk
-    pthread_mutex_lock(&b->mu)
-    while b->up_head == None and b->done == 0:
-        pthread_cond_wait(&b->cv, &b->mu)
-    m: *PsMsg = ps_msg_pop(&b->up_head, &b->up_tail)
-    pthread_mutex_unlock(&b->mu)
-    return ps_list_msg_task(ctx, m, esize, eref)
+        return ps_obj_msg_task(ctx, None, sh, size)
+    return ps_recv_task(ctx, w->blk, 0, PS_RECV_OBJ, sh, size)
 
-def ps_parent_recv_list(ctx: *PsCtx, esize: i32, eref: bool) -> *PsTask:
-    b: *PsWorkerBlk = ctx->parent
-    if b == None:
-        return ps_list_msg_task(ctx, None, esize, eref)
-    pthread_mutex_lock(&b->mu)
-    while b->down_head == None:
-        pthread_cond_wait(&b->cv, &b->mu)
-    m: *PsMsg = ps_msg_pop(&b->down_head, &b->down_tail)
-    pthread_mutex_unlock(&b->mu)
-    return ps_list_msg_task(ctx, m, esize, eref)
+def ps_parent_recv_obj(ctx: *PsCtx, sh: const *PsShape, size: usize) -> *PsTask:
+    if ctx->parent == None:
+        return ps_obj_msg_task(ctx, None, sh, size)
+    return ps_recv_task(ctx, ctx->parent, 1, PS_RECV_OBJ, sh, size)
+
 
 def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool:
     b: *PsWorkerBlk = ctx->parent
@@ -377,6 +648,7 @@ def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool:
     pthread_mutex_lock(&b->mu)
     ps_msg_push(&b->up_head, &b->up_tail, p, size)
     pthread_cond_broadcast(&b->cv)
+    ps_pipe_wake(b->up_w)
     pthread_mutex_unlock(&b->mu)
     return True
 
@@ -390,6 +662,7 @@ def ps_worker_send_down(w: *PsWorker, p: const *void, size: usize) -> bool:
         return False        # 45.3: sending to a worker that is gone is `False`
     ps_msg_push(&b->down_head, &b->down_tail, p, size)
     pthread_cond_broadcast(&b->cv)
+    ps_pipe_wake(b->dn_w)
     pthread_mutex_unlock(&b->mu)
     return True
 
@@ -416,29 +689,165 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     t->deadline = 0.0
     t->is_timer = 0
     t->next = None
+    ps_task_clear_recv(t)
     return t
+
+# ---------- receiving without stopping the world (74.1) ----------
+# `await w.recv()` used to block the thread in a condition variable. Every
+# other task in this context stopped with it — which made `async` and workers
+# two things that could not be used together. Now a receive is a TASK with no
+# step, exactly like a timer (48.2): it parks, the scheduler completes it when
+# a message lands, and everything else keeps running in the meantime.
+#
+# A condition variable cannot serve this, because the scheduler waits for
+# SEVERAL things at once — three workers and a clock — and a condvar belongs to
+# one queue. Hence the descriptor on each queue, and a `poll` with the nearest
+# deadline as its timeout. That is the loop 18.4 describes; a socket would join
+# the same list without changing the shape.
+static def ps_task_clear_recv(t: *PsTask):
+    t->is_recv = 0
+    t->rblk = None
+    t->rdir = 0
+    t->rkind = 0
+    t->rsize = 0
+    t->rshape = None
+
+# Takes the next message of the queue this task names, if there is one. `ended`
+# comes back True when there will never be another: the worker finished and its
+# queue is empty, which is how a receive that nobody will answer still returns
+# (an empty message) instead of hanging forever. The DOWN queue has no such
+# end — a worker reading from a parent that never writes is a deadlock, and it
+# is reported as one.
+static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
+    m: *PsMsg = None
+    *ended = False
+    pthread_mutex_lock(&b->mu)
+    if dir == 0:
+        m = ps_msg_pop(&b->up_head, &b->up_tail)
+        if m == None and b->done != 0:
+            *ended = True
+    else:
+        m = ps_msg_pop(&b->down_head, &b->down_tail)
+    pthread_mutex_unlock(&b->mu)
+    return m
+
+static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask:
+    if kind == PS_RECV_OBJ:
+        return ps_obj_msg_task(ctx, m, sh, size)
+    return ps_msg_task(ctx, m, size)
+
+def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *PsShape, size: usize) -> *PsTask:
+    ended: bool = False
+    m: *PsMsg = ps_recv_pop(b, dir, &ended)
+    if m != None or ended:
+        # already there: the same finished task the old code returned, and the
+        # common case never touches the scheduler at all
+        return ps_recv_build(ctx, m, kind, sh, size)
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_POD_DESC if kind == PS_RECV_RAW else &PS_REFMSG_DESC
+    memset(fr + sizeof(PsUser), 0, size)
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = 0
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiting_on = None
+    t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
+    t->next = None
+    ps_task_clear_recv(t)
+    t->is_recv = 1
+    t->rblk = b
+    t->rdir = dir
+    t->rkind = kind
+    t->rsize = size
+    t->rshape = sh
+    t->next = ctx->waiters
+    ctx->waiters = t
+    return t
+
+# The message landed: build the value in THIS heap and wake whoever awaited.
+# Building allocates, and allocation never collects (that is the safepoint
+# rule), so nothing here can move under our feet.
+static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
+    if t->rkind == PS_RECV_OBJ:
+        ps_des_run(ctx, m, t->rshape, ps_task_ret(t), t->rsize)
+    elif m != None:
+        memcpy((*char)(t->frame) + sizeof(PsUser), m->data, m->size if m->size < t->rsize else t->rsize)
+    if m != None:
+        free(m->data)
+        free(m)
+    t->state = -1
+    w: *PsTask = t->waiter
+    t->waiter = None
+    if w != None:
+        w->waiting_on = None
+        ps_sched_push(ctx, w)
+
+# Every parked receive that can finish now, does. Returns whether any did.
+static def ps_recvs_poll(ctx: *PsCtx) -> bool:
+    any: bool = False
+    t: *PsTask = ctx->waiters
+    while t != None:
+        n: *PsTask = t->next
+        if t->state == 0:
+            if t->cancelled != 0:
+                # 37.2: a cancelled receive takes NOTHING out of the queue. A
+                # message swallowed here would be a message nobody ever reads —
+                # which is exactly what `timeout(w.recv(), ms)` must not do.
+                t->state = -1
+                cw: *PsTask = t->waiter
+                t->waiter = None
+                if cw != None:
+                    cw->waiting_on = None
+                    ps_sched_push(ctx, cw)
+                any = True
+            else:
+                ended: bool = False
+                m: *PsMsg = ps_recv_pop(t->rblk, t->rdir, &ended)
+                if m != None or ended:
+                    ps_recv_finish(ctx, t, m)
+                    any = True
+        t = n
+    prev: **PsTask = &ctx->waiters
+    cur: *PsTask = ctx->waiters
+    while cur != None:
+        nx: *PsTask = cur->next
+        if cur->state != 0:
+            *prev = nx
+            cur->next = None
+        else:
+            prev = &cur->next
+        cur = nx
+    return any
+
+# How many descriptors the parked receives are waiting on, and which.
+static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
+    cnt: i32 = 0
+    *out_bad = False
+    t: *PsTask = ctx->waiters
+    while t != None:
+        if t->state == 0:
+            fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
+            if fd < 0:
+                *out_bad = True
+            else:
+                cnt += 1
+        t = t->next
+    return cnt
 
 def ps_worker_recv(ctx: *PsCtx, w: *PsWorker, size: usize) -> *PsTask:
     if w == None or w->blk == None:
         return ps_msg_task(ctx, None, size)
-    b: *PsWorkerBlk = w->blk
-    pthread_mutex_lock(&b->mu)
-    while b->up_head == None and b->done == 0:
-        pthread_cond_wait(&b->cv, &b->mu)
-    m: *PsMsg = ps_msg_pop(&b->up_head, &b->up_tail)
-    pthread_mutex_unlock(&b->mu)
-    return ps_msg_task(ctx, m, size)
+    return ps_recv_task(ctx, w->blk, 0, PS_RECV_RAW, None, size)
 
 def ps_parent_recv(ctx: *PsCtx, size: usize) -> *PsTask:
-    b: *PsWorkerBlk = ctx->parent
-    if b == None:
+    if ctx->parent == None:
         return ps_msg_task(ctx, None, size)
-    pthread_mutex_lock(&b->mu)
-    while b->down_head == None:
-        pthread_cond_wait(&b->cv, &b->mu)
-    m: *PsMsg = ps_msg_pop(&b->down_head, &b->down_tail)
-    pthread_mutex_unlock(&b->mu)
-    return ps_msg_task(ctx, m, size)
+    return ps_recv_task(ctx, ctx->parent, 1, PS_RECV_RAW, None, size)
 
 def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
     if w == None or w->blk == None:
@@ -472,6 +881,16 @@ def ps_join_all(ctx: *PsCtx):
         if b->started != 0 and b->joined == 0 and b->detached == 0:
             pthread_join(b->thread, None)
             b->joined = 1
+            # 74.1: joined means nothing can write to the queue any more, so
+            # the descriptors go back to the system here rather than at exit
+            ps_pipe_close(b->up_r)
+            ps_pipe_close(b->up_w)
+            ps_pipe_close(b->dn_r)
+            ps_pipe_close(b->dn_w)
+            b->up_r = -1
+            b->up_w = -1
+            b->dn_r = -1
+            b->dn_w = -1
         if b->failed != 0 and b->collected == 0 and b->err != None:
             fprintf(stderr, "worker error: %s\n", b->err)
         b = b->next
@@ -1465,6 +1884,7 @@ def ps_task_new(ctx: *PsCtx, step: def(ctx: *PsCtx, t: *PsTask) -> bool, frame: 
     t->deadline = 0.0
     t->is_timer = 0
     t->next = None
+    ps_task_clear_recv(t)
     # the first step runs here and can collect, so the task travels on the
     # shadow stack like everything else
     slots: **PsObj[1]
@@ -1549,6 +1969,7 @@ def ps_timer_task(ctx: *PsCtx, at: f64) -> *PsTask:
     t->cancelled = 0
     t->is_timer = 1
     t->deadline = at
+    ps_task_clear_recv(t)
     t->next = ctx->timers          # order does not matter: the earliest is found
     ctx->timers = t
     return t
@@ -1600,16 +2021,68 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         return True
     if ps_timers_fire(ctx, ps_sys_time()):
         return True
+    if ps_recvs_poll(ctx):
+        return True
     soon: f64 = ps_timer_soonest(ctx)
-    if soon < 0.0:
-        return False
-    wait: f64 = soon - ps_sys_time()
-    if wait > 0.0:
-        ts: timespec
-        ts.tv_sec = i64(wait)
-        ts.tv_nsec = i64((wait - f64(i64(wait))) * 1000000000.0)
-        nanosleep(&ts, None)
-    return ps_timers_fire(ctx, ps_sys_time())
+    bad: bool = False
+    nfd: i32 = ps_recv_fds(ctx, &bad)
+    if nfd == 0 and not bad:
+        # nothing but the clock, which is the loop 48.2 already had
+        if soon < 0.0:
+            return False
+        wait: f64 = soon - ps_sys_time()
+        if wait > 0.0:
+            ts: timespec
+            ts.tv_sec = i64(wait)
+            ts.tv_nsec = i64((wait - f64(i64(wait))) * 1000000000.0)
+            nanosleep(&ts, None)
+        return ps_timers_fire(ctx, ps_sys_time())
+    # 74.1/18.4: wait for a MESSAGE or the clock, whichever comes first. The
+    # descriptors are the queues' and the timeout is the nearest deadline, so
+    # a program that awaits a worker and a `sleep` at once wakes for the one
+    # that actually happened and burns nothing in between.
+    ms: int = -1
+    if soon >= 0.0:
+        w2: f64 = (soon - ps_sys_time()) * 1000.0
+        ms = int(w2) + 1 if w2 > 0.0 else 0
+    if bad and (ms < 0 or ms > 2):
+        # a queue whose pipe could not be opened has to be looked at by hand;
+        # 2ms is slow enough to cost nothing and quick enough to feel instant
+        ms = 2
+    if nfd > 0:
+        # PS_POLL_MAX at a time: a context with more parked receives than that
+        # polls the first ones and looks at the rest after a couple of
+        # milliseconds, which bounds the latency without an allocation on the
+        # path that is supposed to be the cheap one
+        fds: pollfd[PS_POLL_MAX]
+        k: i32 = 0
+        t2: *PsTask = ctx->waiters
+        while t2 != None and k < PS_POLL_MAX:
+            if t2->state == 0:
+                fd: int = t2->rblk->up_r if t2->rdir == 0 else t2->rblk->dn_r
+                if fd >= 0:
+                    fds[k].fd = fd
+                    fds[k].events = POLLIN
+                    fds[k].revents = 0
+                    k += 1
+            t2 = t2->next
+        if nfd > PS_POLL_MAX and (ms < 0 or ms > 2):
+            ms = 2
+        poll(fds, u64(k), ms)
+        for i in range(k):
+            if fds[i].revents != 0:
+                ps_pipe_drain(fds[i].fd)
+    elif ms > 0:
+        ts2: timespec
+        ts2.tv_sec = 0
+        ts2.tv_nsec = i64(ms) * 1000000
+        nanosleep(&ts2, None)
+    if ps_recvs_poll(ctx):
+        return True
+    ps_timers_fire(ctx, ps_sys_time())
+    # something IS pending — a queue, a clock — so waiting again is progress,
+    # and returning False here would call a slow worker a deadlock
+    return True
 
 def ps_task_of_int(ctx: *PsCtx, v: i64) -> *PsTask:
     t: *PsTask = ps_msg_task(ctx, None, sizeof(i64))
@@ -1709,6 +2182,7 @@ def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
     t->deadline = 0.0
     t->is_timer = 0
     t->next = None
+    ps_task_clear_recv(t)
     return t
 
 def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask):
@@ -1920,6 +2394,14 @@ def ps_gc(ctx: *PsCtx):
         ctx->ready = (*PsTask)(ps_forward(to, (*PsObj)(ctx->ready)))
     if ctx->ready_tail != None:
         ctx->ready_tail = (*PsTask)(ps_forward(to, (*PsObj)(ctx->ready_tail)))
+    # so are the two WAIT lists: a task parked on the clock (48.2) or on a
+    # message (74.1) is going to finish, and the scheduler reaches it only
+    # through these heads. Forwarding the head is enough — a task forwards its
+    # own `next`, so the chain follows.
+    if ctx->timers != None:
+        ctx->timers = (*PsTask)(ps_forward(to, (*PsObj)(ctx->timers)))
+    if ctx->waiters != None:
+        ctx->waiters = (*PsTask)(ps_forward(to, (*PsObj)(ctx->waiters)))
 
     # Cheney's scan: everything already copied is the work list
     scan: usize = 0

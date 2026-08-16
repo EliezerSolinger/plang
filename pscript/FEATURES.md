@@ -80,6 +80,8 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | 4 eixos garantidos | 9.1 | o programa compila sem `unsafe` | ✅ |
 | `unsafe` | 11-12 | — **medalha: o raytracer não precisa** | ⏳ precisa antes de um tipo PONTEIRO no pscript (é o que `unsafe` destrava); registrado no PLAN |
 | Regra de fronteira: assinatura sem ponteiro = segura | 31.1, 45.5 | `sqrt`/`cos`/`sin`/`fabs` | ✅ |
+| `import "x.ph"`: módulo P no mesmo build | 2.4, 75.3 | `pmodule` | ✅ o `.ph` é lido com o front-end do P, o `.p` irmão entra no build, e a baixada importa como P importa (a sema do P confere a chamada) |
+| `const` record atravessa por REFERÊNCIA | 72.6 | `const_record` | ✅ tipo declarado no header (uma declaração só), lado P recebe `in` (const), argumento tem de ser um `const` de módulo — conferido no sítio da chamada |
 | Falha pscript = exceção | 12.4 | try/catch | ✅ |
 
 ## Erros
@@ -121,7 +123,8 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 |---|---|---|---|
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
-| Mensagem POD por memcpy; o resto SERIALIZADO | 34.3 | `workers_full` | ✅ bytes por memcpy; `str` e `list` de bytes serializam e são reconstruídos no heap de QUEM RECEBE |
+| Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
+| `await w.recv()` ESTACIONA | 74.1, 18.4 | `recv_parks` | ✅ receber é uma task sem passo, como o timer: o escalonador espera nos DESCRITORES das filas (pipe por direção) com o prazo mais próximo como timeout, então mensagem e relógio convivem |
 | `send` para worker morto devolve `bool` | 45.3 | — | ✅ |
 | `async`/`await`; task quente; await no topo | 17.4, 35.3, 39.4 | `cancel_race` | ✅ e o `await sleep()` ESTACIONA: duas tasks se intercalam de verdade (antes o timer parava a thread e uma rodava inteira antes da outra) |
 | `gather` | 35.3 | — | ✅ |
@@ -166,7 +169,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | Comprehension | 8.1 | — | ✅ |
 | `embed`/`embed_bytes` (comptime) | 63.1, 63.5 | `embed` | ✅ nas duas línguas; no pscript o binário vira `static` + memcpy, então um megabyte de fonte custa um megabyte de DADO |
 | `pack`/`unpack` binário | 59, 62.4 | `packing` | ✅ denso, campos na ordem da declaração, **ordem de bytes por parâmetro** (LE por padrão, `BE` quando pedido); tamanho é o contrato |
-| Template em arquivo | 63.2 | `template` | ◐ `render("x.tpl")` (o modo SEM header) pronto — f-string que mora num arquivo; o modo com header gera função tipada e falta decidir a superfície |
+| Template em arquivo | 63.2, 75.2 | `template` | ✅ `render("x.tpl")` (buracos contra o escopo) e `render("x.tpl", {"nome": quem})` (buracos são as CHAVES do literal, resolvidos em tempo de compilação, valores de tipos diferentes, chave faltando/sobrando é erro). Não existe modo com header: a 75.2 fechou por aqui |
 | Import de `.ph` de P | 2.4 | — | ⏳ falta decidir como o módulo P entra no BUILD do programa pscript |
 
 ## O que o smallpt completo NÃO usa, e por quê

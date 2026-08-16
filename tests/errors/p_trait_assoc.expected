@@ -1,0 +1,1 @@
+trait 'Feed' has an associated type: this implementation has to say `type Item = <type>`

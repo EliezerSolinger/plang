@@ -48,6 +48,32 @@ static char *preprocess_c(Cc *cc, const char *path, size_t *out_len) {
     return res;
 }
 
+void add_input(Vec_pchar *v, Vec_pchar *w, const char *path) {
+    size_t i;
+    for (i = 0; i < v->len; i += 1) {
+        if (strcmp(Vec_pchar_get(v, i), path) == 0) {
+            return;
+        }
+    }
+    Vec_pchar_push(v, (char *)path);
+    Vec_pchar_push(w, (char *)path);
+}
+
+int is_pulled(Vec_pchar *w, const char *path) {
+    size_t i;
+    for (i = 0; i < w->len; i += 1) {
+        if (strcmp(Vec_pchar_get(w, i), path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+const char *path_base(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return (slash != NULL ? slash + 1 : path);
+}
+
 int has_suffix(const char *s, const char *suf) {
     size_t n = strlen(s);
     size_t m = strlen(suf);
@@ -233,6 +259,8 @@ int main(int argc, char **argv) {
     }
     Vec_pchar inputs;
     Vec_pchar_init(&inputs);
+    Vec_pchar pulled;
+    Vec_pchar_init(&pulled);
     Vec_pchar defines;
     Vec_pchar_init(&defines);
     size_t i;
@@ -360,15 +388,35 @@ int main(int argc, char **argv) {
         }
         return 0;
     }
-    size_t k;
-    for (k = 0; k < inputs.len; k += 1) {
-        const char *path = Vec_pchar_get(&inputs, k);
+    int32_t k = -1;
+    while ((size_t)(k + 1) < inputs.len) {
+        k += 1;
+        const char *path = Vec_pchar_get(&inputs, (size_t)k);
+        if (is_pulled(&pulled, path) && has_suffix(path, ".ph") && be->hdr_ext == NULL) {
+            continue;
+        }
         Module *m;
         if (has_suffix(path, ".psc")) {
             size_t pslen = 0;
             char *psbytes = read_entire_file(path, &pslen);
             TokenList pstl = ps_lex(path, psbytes, pslen, &cc.arena);
             PsModule *psm = ps_parse(&cc.arena, path, pstl);
+            size_t j;
+            for (j = 0; j < psm->ndecls; j += 1) {
+                PsDecl *pdc = psm->decls[j];
+                if (pdc->kind != PD_INCLUDE || !pdc->is_pmod) {
+                    continue;
+                }
+                const char *hp = path_join(&cc.arena, path_dir(&cc.arena, path), pdc->path);
+                const char *sp = Arena_printf(&cc.arena, "%.*s", (int32_t)(strlen(hp) - 1), hp);
+                add_input(&inputs, &pulled, hp);
+                size_t slen = 0;
+                char *sbytes = read_entire_file_opt(sp, &slen);
+                if (sbytes != NULL) {
+                    free(sbytes);
+                    add_input(&inputs, &pulled, sp);
+                }
+            }
             if (parse_only) {
                 {
                     free(psbytes);
@@ -409,7 +457,10 @@ int main(int argc, char **argv) {
         }
         StrBuf out = {0};
         backend_emit(be, m, &out);
-        const char *dest = (out_path != NULL ? out_path : derive_output(&cc.arena, Vec_pchar_get(&inputs, k), be));
+        const char *dest = (out_path != NULL ? out_path : derive_output(&cc.arena, Vec_pchar_get(&inputs, (size_t)k), be));
+        if (out_path != NULL && is_pulled(&pulled, path)) {
+            dest = Arena_printf(&cc.arena, "%s/%s", path_dir(&cc.arena, out_path), path_base(derive_output(&cc.arena, path, be)));
+        }
         if (out_dir != NULL) {
             dest = Arena_printf(&cc.arena, "%s/%s", out_dir, dest);
             mkdirs_for(dest);

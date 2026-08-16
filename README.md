@@ -141,8 +141,11 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 - **Traits**: `trait Comparable:` plus `implement Comparable for T:`, used as
   generic bounds (`def sort<T: Comparable>`) that are checked where the type is
   concrete and then monomorphized — no vtable, no dispatch, nothing at run
-  time. `for v in it` works over any type that implements `Iterable`, and
-  lowers to a cursor and direct calls.
+  time. An implementation has to match the trait's signature *whole*, return
+  type included. A trait may declare an **associated type** (`type Item`) that
+  each implementation fills in (`type Item = f64`), so `Iterable` is a contract
+  about iterating rather than a contract about `i64`. `for v in it` works over
+  any type that implements `Iterable`, and lowers to a cursor and direct calls.
 - **`record`** — a struct the compiler has *checked* to be pure bytes: safe to
   memcpy, to write to disk, and to compare by content.
 - **`embed("f.txt")` / `embed_bytes("f.bin")`** — a file becomes data at
@@ -195,10 +198,32 @@ print(farthest(pts))            # Point(x=3.0, y=4.0)
 It has a **copying garbage collector**, exceptions with `try`/`catch`, real
 strings and `list`/`dict`/`set`, `T?` options with flow narrowing, closures,
 `async`/`await`, and **workers** — OS threads with a heap and a collector each,
-so nothing is shared by accident and messages cross as bytes. Bounds are
-checked, integer overflow raises instead of wrapping (the wrap has its own
-spelling, `%+ %- %*`), and a `shared dict` gives workers named state without a
-pointer ever crossing two heaps.
+so nothing is shared by accident. Bounds are checked, integer overflow raises
+instead of wrapping (the wrap has its own spelling, `%+ %- %*`), and a
+`shared dict` gives workers named state without a pointer ever crossing two
+heaps.
+
+A message crosses as a **copy**: numbers and records by memcpy, and anything
+the collector owns — a string, a list, a dict, a set, a `struct` with
+references — written out on one side and built again on the other, with a
+cycle guard, so an object that appears twice arrives as one object and an
+object that contains itself arrives at all. `await w.recv()` **parks** like
+`await sleep()` does: the scheduler waits on the queues' descriptors with the
+nearest deadline as its timeout, so a program can wait for a message and a
+clock at once and neither is missed.
+
+Talking to Plang is one import:
+
+```python
+import "shim.ph"                 # compiles shim.p into this build too
+
+const WINDOW: Rect = Rect(1280, 720)
+open_window(WINDOW)              # a `const` record crosses by reference, read-only
+```
+
+The boundary is unchanged — pointer-free signatures, enum members, scalar
+constants, plus that one `const` record by reference — but the build is now a
+single command instead of two.
 
 It is not a second compiler: a `.psc` is lowered to **Plang's own AST** and
 from there down the pipeline is the one Plang already had — the same checker

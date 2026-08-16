@@ -1522,8 +1522,17 @@ static Decl *P_parse_trait_impl(P *self, const char *tname, Pos pos) {
         if (P_accept(self, TK_NEWLINE)) {
             continue;
         }
+        if (P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "type") == 0) {
+            P_adv(self);
+            Token *an2 = P_expect(self, TK_IDENT, "associated type name");
+            P_expect(self, TK_ASSIGN, "type Name = T");
+            d->assoc = an2->text;
+            d->assoc_type = P_parse_type(self);
+            P_expect(self, TK_NEWLINE, "associated type");
+            continue;
+        }
         if (!P_at(self, TK_DEF)) {
-            fatal_at(self->file, P_pk(self)->pos, "an `implement ... for` block holds method bodies");
+            fatal_at(self->file, P_pk(self)->pos, "an `implement ... for` block holds method bodies, and `type Name = T` when the trait asks for one");
         }
         Vec_pFunc_push(&ms, P_parse_func(self, 0, 0, ty->text));
     }
@@ -1549,8 +1558,18 @@ static Decl *P_parse_trait(P *self) {
         if (P_accept(self, TK_NEWLINE)) {
             continue;
         }
+        if (P_at(self, TK_IDENT) && strcmp(P_pk(self)->text, "type") == 0) {
+            P_adv(self);
+            Token *an = P_expect(self, TK_IDENT, "associated type name");
+            if (d->assoc != NULL) {
+                fatal_at(self->file, an->pos, "a trait declares at most one associated type ('%s' is already there)", d->assoc);
+            }
+            d->assoc = an->text;
+            P_expect(self, TK_NEWLINE, "associated type");
+            continue;
+        }
         if (!P_at(self, TK_DEF)) {
-            fatal_at(self->file, P_pk(self)->pos, "a trait holds method signatures: `def name(...) -> T`");
+            fatal_at(self->file, P_pk(self)->pos, "a trait holds method signatures: `def name(...) -> T`, and at most one `type Name`");
         }
         Func *f = P_parse_func(self, 0, 0, name->text);
         if (f->body != NULL) {
@@ -1679,18 +1698,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1481_17 = d2;
-                __with_1481_17->kind = DL_VAR;
-                __with_1481_17->pos = name->pos;
-                __with_1481_17->name = name->text;
-                __with_1481_17->is_const = is_const;
-                __with_1481_17->is_extern = is_extern;
+                Decl *__with_1503_17 = d2;
+                __with_1503_17->kind = DL_VAR;
+                __with_1503_17->pos = name->pos;
+                __with_1503_17->name = name->text;
+                __with_1503_17->is_const = is_const;
+                __with_1503_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1481_17->type = P_parse_type(self);
+                    __with_1503_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1481_17->init = P_parse_initializer(self);
-                } else if (__with_1481_17->type == NULL) {
+                    __with_1503_17->init = P_parse_initializer(self);
+                } else if (__with_1503_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");

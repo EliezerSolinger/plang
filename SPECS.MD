@@ -635,17 +635,44 @@ and the module must declare either the trait or the type. Without it two modules
 could implement the same pair differently and the behaviour would depend on who
 linked — with the error landing far from the cause.
 
+**The signature has to match whole** — every parameter type, every parameter
+mode (`in`/`out`/`ref` is part of the contract) and the return type. The trait's
+own name in a signature stands for the implementing type, which is how
+`self: *Comparable` becomes `self: *Point`.
+
+**Associated type.** A trait may declare one type it does not name:
+
+```python
+trait Iterable:
+    type Item
+    def has_next(self: *Iterable) -> bool
+    def next(self: *Iterable) -> Item
+
+implement Iterable for Temps:
+    type Item = f64
+    ...
+```
+
+Every implementation says what `Item` is, and the trait's signatures are
+compared with that substituted in. It costs nothing at run time: P
+monomorphizes, so where there is code the type is already the concrete one.
+Without it a contract that yields values has to name one, and `Iterable` would
+be a promise about `i64` wearing a general name.
+
 ### `for v in it` — iteration over an Iterable implementer
 
 ```python
 trait Iterable:
+    type Item
     def has_next(self: *Iterable) -> bool
-    def next(self: *Iterable) -> i64
+    def next(self: *Iterable) -> Item
 
 struct Countdown:
     at: i64
 
 implement Iterable for Countdown:
+    type Item = i64
+
     def has_next(self: *Countdown) -> bool:
         return self->at > 0
     def next(self: *Countdown) -> i64:
@@ -664,7 +691,9 @@ v = __it->next()`. Every call is direct, nothing allocates, and no back end
 knows the loop was ever a `for` — zero runtime, which is the condition of the
 feature. The cursor and `v` live in the loop's block, so two loops in a row can
 reuse the name. `stl/traits.ph` declares `Iterable` (with `Comparable` and
-`Printable`); a local `trait Iterable:` works the same.
+`Printable`); a local `trait Iterable:` works the same. The element type is the
+trait's associated `Item`, so the loop variable is whatever that
+implementation yields — `f64` above, `i64` here.
 
 ---
 

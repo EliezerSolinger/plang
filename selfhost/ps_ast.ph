@@ -303,6 +303,10 @@ struct PsDecl:
     alias: const *char       # `import x as ns` / `from x import a as b`
     path: const *char        # PD_IMPORT / PD_INCLUDE
     import_system: bool      # <h>
+    is_pmod: bool            # PD_INCLUDE written as `import "x.ph"` (75.3/2.4):
+                             #   a P MODULE, not a C header. The compiler reads
+                             #   the `.ph` for what crosses the 45.5 boundary
+                             #   and pulls its `.p` into this build.
     names: **char            # PD_FROM_IMPORT: the names taken
     aliases: **char          #   and what each was renamed to (None = unchanged)
     nnames: i32
@@ -323,6 +327,11 @@ struct PsDecl:
     init: *PsExpr
     is_const: bool
     is_static: bool
+    from_hdr: bool          # a `record` that came from an imported header
+                            #   (72.6): the type is declared THERE, so nothing
+                            #   is emitted for it here — one declaration, and
+                            #   the two languages cannot disagree about the
+                            #   layout of something they both name
     doc: const *char
     src_name: const *char   # the name AS WRITTEN, before the module rename
                             #   (41.3) — what a diagnostic has to say back

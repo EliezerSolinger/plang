@@ -174,6 +174,7 @@ struct PsDecl {
     const char *alias;
     const char *path;
     int import_system;
+    int is_pmod;
     char **names;
     char **aliases;
     int32_t nnames;
@@ -194,6 +195,7 @@ struct PsDecl {
     PsExpr *init;
     int is_const;
     int is_static;
+    int from_hdr;
     const char *doc;
     const char *src_name;
     PsNs *ns;

@@ -47,6 +47,11 @@ static def ps_is_const_init(e: *PsExpr) -> bool
 static def block_uses(b: *PsBlock, name: const *char) -> bool
 static def expr_uses(e: *PsExpr, name: const *char) -> bool
 static def opt_is_ref(t: *PsType) -> bool
+static def sh_mangle(L: *PsLow, t: *PsType) -> const *char
+static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
+static def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
+static def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr
+static def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl
 static def is_scalar_pname(n: const *char) -> bool
 static def zero_pos() -> Pos
 static def starts_with(s: const *char, p: const *char) -> bool
@@ -68,6 +73,16 @@ struct PsLow:
     tups: **char        # tuple SHAPES already emitted as a P record, by name
     ntups: i32
     ctups: i32
+    shk: **char         # message SHAPES already emitted (74.2): the type, and
+    shv: **char         #   the name of the static that describes it
+    nsh: i32
+    csh: i32            # ... each array with its OWN capacity: vec_grow reads
+    csh2: i32           #     and writes the one it is given
+    shzn: **char        # shapes whose `size` is filled at the top of main: a
+    shzt: **Type        #   `sizeof` is not something the QBE back end can fold
+    nshz: i32           #   into a static initializer, so the C compiler answers
+    cshz: i32           #   it once, at run time, before anything is sent
+    cshz2: i32
     tmp_ctr: i32        # hidden temporaries the lowering needs
     pre: Vec<*Stmt>     # declarations to place BEFORE the statement being built:
                         #   `??` and `?.` read their operand twice, and a temp is
@@ -1884,16 +1899,30 @@ struct PsLow:
                 self->push_arg(dt8, self->expr(e->lhs->lhs))
                 return dt8
             mk8: PsTypeKind = wt8->inner->kind if wt8->inner != None else PT_UNKNOWN
-            if strcmp(e->lhs->text, "send") == 0 and (mk8 == PT_STR or mk8 == PT_LIST):
-                # 34.3: not bytes, so it is SERIALIZED — the runtime writes the
-                # characters (or the count and the elements) into the queue and
-                # rebuilds the value in the receiver's own heap
-                ss8: *Expr = self->call_rt(("ps_worker_send_str_up" if to_parent else "ps_worker_send_str_down") if mk8 == PT_STR else ("ps_worker_send_list_up" if to_parent else "ps_worker_send_list_down"), e->pos)
+            graph8: bool = opt_is_ref(wt8->inner)
+            if strcmp(e->lhs->text, "send") == 0 and graph8:
+                # 34.3/74.2: not bytes, so it is a GRAPH — written out here and
+                # built again in the receiver's own heap, following the shape
+                # the compiler leaves for this type. The value goes through a
+                # temporary because the runtime is handed its ADDRESS: a slot,
+                # like every other place a shape is applied
+                gn: const *char = self->a->printf("__mg%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                gd: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                gd->name = gn
+                gd->type = self->ty(wt8->inner)
+                gd->init = self->expr(e->args[0])
+                self->pre.push(gd)
+                ss8: *Expr = self->call_rt("ps_send_obj_up" if to_parent else "ps_send_obj_down", e->pos)
                 if to_parent:
                     self->push_arg(ss8, self->ctx_arg(e->pos))
                 else:
                     self->push_arg(ss8, self->expr(e->lhs->lhs))
-                self->push_arg(ss8, self->expr(e->args[0]))
+                shp8: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                shp8->op = TK_AMP
+                shp8->lhs = self->ident(shape_of(self, wt8->inner, e->pos), e->pos)
+                self->push_arg(ss8, shp8)
+                self->push_arg(ss8, self->addr_of(gn, e->pos))
                 return ss8
             if strcmp(e->lhs->text, "send") == 0:
                 mn: const *char = self->a->printf("__ms%d", self->tmp_ctr)
@@ -1921,14 +1950,20 @@ struct PsLow:
                 self->push_arg(ec, self->expr(e->lhs->lhs))
                 self->allocs = True
                 return ec
-            if mk8 == PT_STR or mk8 == PT_LIST:
-                rs8: *Expr = self->call_rt(("ps_parent_recv_str" if to_parent else "ps_worker_recv_str") if mk8 == PT_STR else ("ps_parent_recv_list" if to_parent else "ps_worker_recv_list"), e->pos)
+            if graph8:
+                rs8: *Expr = self->call_rt("ps_parent_recv_obj" if to_parent else "ps_worker_recv_obj", e->pos)
                 self->push_arg(rs8, self->ctx_arg(e->pos))
                 if not to_parent:
                     self->push_arg(rs8, self->expr(e->lhs->lhs))
-                if mk8 == PT_LIST:
-                    self->push_arg(rs8, self->elem_size(wt8->inner->inner, e->pos))
-                    self->push_arg(rs8, ex_new(self->a, EX_TRUE if opt_is_ref(wt8->inner->inner) else EX_FALSE, e->pos))
+                shp9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                shp9->op = TK_AMP
+                shp9->lhs = self->ident(shape_of(self, wt8->inner, e->pos), e->pos)
+                self->push_arg(rs8, shp9)
+                szg: *Expr = self->call_rt("sizeof", e->pos)
+                trg: *Expr = ex_new(self->a, EX_TYPEREF, e->pos)
+                trg->cast_type = self->ty(wt8->inner)
+                self->push_arg(szg, trg)
+                self->push_arg(rs8, szg)
                 self->allocs = True
                 return rs8
             rc: *Expr = self->call_rt("ps_parent_recv" if to_parent else "ps_worker_recv", e->pos)
@@ -2303,7 +2338,17 @@ struct PsLow:
         if e->is_cfunc:
             cc2: *Expr = self->call_rt(name, e->pos)
             for i in range(e->nargs):
-                self->push_arg(cc2, self->expr(e->args[i]))
+                a9: *Expr = self->expr(e->args[i])
+                if e->args[i]->is_in:
+                    # 72.6: the one pointer that crosses 45.5 — a `const`
+                    # record by reference. `in x` is P's own spelling for it,
+                    # so what goes out is exactly what a P caller would write
+                    ad9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                    ad9->op = TK_AMP
+                    ad9->byref = PK_IN
+                    ad9->lhs = a9
+                    a9 = ad9
+                self->push_arg(cc2, a9)
             return cc2
         # ---- a pscript function: ctx goes first (49.3) ----
         c3: *Expr = self->call_rt(ps_cname(self->a, name), e->pos)
@@ -6156,6 +6201,242 @@ static def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
     v->init = init
     return v
 
+# ---------- the shape of a message (74.2) ----------
+# A value that is not bytes crosses between heaps by being written out and
+# built again (34.3). The runtime holds the format and the cycle guard; what it
+# cannot hold is the TYPE, so the compiler leaves one static `PsShape` per type
+# that travels — and, for a `struct`, a pair of functions that walk its fields,
+# written here for the same reason the trace functions are.
+#
+# The name is derived from the type, so two sends of the same type share one
+# shape, and a type that contains itself finds its own shape already registered
+# instead of recurring forever.
+static def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
+    if t == None:
+        return "v"
+    match t->kind:
+        case PT_STR:
+            return "str"
+        case PT_LIST:
+            return L->a->printf("l_%s", sh_mangle(L, t->inner))
+        case PT_SET:
+            return L->a->printf("e_%s", sh_mangle(L, t->inner))
+        case PT_DICT:
+            return L->a->printf("d_%s_%s", sh_mangle(L, t->key), sh_mangle(L, t->inner))
+        case PT_BOOL:
+            return "b"
+        case PT_FLOAT:
+            return "f32" if t->width == 32 else "f64"
+        case PT_INT:
+            if t->width == 0:
+                return "int"
+            return L->a->printf("%s%d", "u" if t->uns else "i", t->width)
+        case PT_NAME:
+            return L->a->printf("%s_%s", "s" if opt_is_ref(t) else "p", ps_cname(L->a, t->name))
+        case _:
+            pass
+    return "v"
+
+# `&x->f` for a field of the struct the generated walker was handed
+static def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr:
+    fl: *Expr = ex_new(L->a, EX_FIELD, pos)
+    fl->op = TK_ARROW
+    fl->lhs = ex_new(L->a, EX_IDENT, pos)
+    fl->lhs->text = sname
+    fl->field = fname
+    ad: *Expr = ex_new(L->a, EX_UNARY, pos)
+    ad->op = TK_AMP
+    ad->lhs = fl
+    return ad
+
+# `static void S__ser(PsSer *s, void *o)` / `static void S__des(PsCtx *ctx,
+# PsDes *d, void *o)`: one call per field, with that field's shape. The runtime
+# does the rest — including deciding that a field it has already written is a
+# number rather than a copy.
+static def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl:
+    f: *Func = L->a->alloc(sizeof(Func))
+    f->pos = d->pos
+    f->name = L->a->printf("%s__%s", ps_cname(L->a, d->name), "ser" if writing else "des")
+    f->cname = f->name
+    f->is_static = True
+    f->ret = ty_name(L->a, "void")
+    np: i32 = 2 if writing else 3
+    f->params = L->a->alloc(usize(np) * sizeof(*f->params))
+    if writing:
+        f->params[0].name = "__s"
+        f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsSer"))
+        f->params[0].pos = d->pos
+    else:
+        f->params[0].name = CTX
+        f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+        f->params[0].pos = d->pos
+        f->params[1].name = "__d"
+        f->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsDes"))
+        f->params[1].pos = d->pos
+    f->params[np - 1].name = "__o"
+    f->params[np - 1].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    f->params[np - 1].pos = d->pos
+    f->nparams = np
+    dc: *Decl = L->a->alloc(sizeof(Decl))
+    dc->kind = DL_FUNC
+    dc->pos = d->pos
+    dc->func = f
+    if not with_body:
+        return dc
+    body: Vec<*Stmt>
+    body.init()
+    cast: *Expr = ex_new(L->a, EX_CAST, d->pos)
+    cast->cast_type = ty_ptr(L->a, ty_name(L->a, d->name))
+    cast->lhs = ex_new(L->a, EX_IDENT, d->pos)
+    cast->lhs->text = "__o"
+    vd: *Stmt = st_new(L->a, ST_VAR, d->pos)
+    vd->name = "__x"
+    vd->type = ty_ptr(L->a, ty_name(L->a, d->name))
+    vd->init = cast
+    body.push(vd)
+    for i in range(d->nfields):
+        sn: const *char = shape_of(L, d->fields[i].type, d->pos)
+        cl: *Expr = L->call_rt("ps_ser_value" if writing else "ps_des_value", d->pos)
+        if writing:
+            L->push_arg(cl, L->ident("__s", d->pos))
+        else:
+            L->push_arg(cl, L->ident(CTX, d->pos))
+            L->push_arg(cl, L->ident("__d", d->pos))
+        shr: *Expr = ex_new(L->a, EX_UNARY, d->pos)
+        shr->op = TK_AMP
+        shr->lhs = L->ident(sn, d->pos)
+        L->push_arg(cl, shr)
+        L->push_arg(cl, sh_field_addr(L, "__x", d->fields[i].name, d->pos))
+        es: *Stmt = st_new(L->a, ST_EXPR, d->pos)
+        es->expr = cl
+        body.push(es)
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = body.data
+    b->n = body.len
+    f->body = b
+    return dc
+
+# the static that describes one type, emitted once and reused
+static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
+    key: const *char = sh_mangle(L, t)
+    for i in range(L->nsh):
+        if strcmp(L->shk[i], key) == 0:
+            return L->shv[i]
+    name: const *char = L->a->printf("__sh_%s", key)
+    # registered BEFORE the parts are emitted: a `struct` may contain itself,
+    # directly or through a list, and the second visit has to find this name
+    # rather than start again
+    L->shk = vec_grow(L->shk, L->nsh, ref L->csh, sizeof(*L->shk))
+    L->shv = vec_grow(L->shv, L->nsh, ref L->csh2, sizeof(*L->shv))
+    L->shk[L->nsh] = (*char)(key)
+    L->shv[L->nsh] = (*char)(name)
+    L->nsh += 1
+
+    sd: *PsDecl = None
+    if t != None and t->kind == PT_NAME and opt_is_ref(t):
+        sd = L->records_by_name(t->name)
+    if sd != None:
+        # the forward form, so the shapes of its own fields may point back here
+        fw: *Decl = L->a->alloc(sizeof(Decl))
+        fw->kind = DL_VAR
+        fw->pos = pos
+        fw->name = name
+        fw->type = ty_name(L->a, "PsShape")
+        fw->is_static = True
+        L->out.push(fw)
+
+    kind: i32 = 0
+    inner: const *char = None
+    kname: const *char = None
+    kk: i32 = 0
+    if t != None:
+        match t->kind:
+            case PT_STR:
+                kind = 1
+            case PT_LIST:
+                kind = 2
+                inner = shape_of(L, t->inner, pos)
+            case PT_SET:
+                kind = 3
+                inner = shape_of(L, t->inner, pos)
+                kk = 1 if t->inner != None and t->inner->kind == PT_STR else 0
+            case PT_DICT:
+                kind = 4
+                kname = shape_of(L, t->key, pos)
+                inner = shape_of(L, t->inner, pos)
+                kk = 1 if t->key != None and t->key->kind == PT_STR else 0
+            case PT_NAME:
+                if sd != None:
+                    kind = 5
+            case _:
+                pass
+
+    v: *Decl = L->a->alloc(sizeof(Decl))
+    v->kind = DL_VAR
+    v->pos = pos
+    v->name = name
+    v->type = ty_name(L->a, "PsShape")
+    v->is_static = True
+    init: *Expr = ex_new(L->a, EX_INITLIST, pos)
+    init->args = L->a->alloc(usize(8) * sizeof(*init->args))
+    kn: *Expr = ex_new(L->a, EX_NUMBER, pos)
+    kn->text = L->a->printf("%d", kind)
+    init->args[0] = kn
+    # POD carries its own width; a struct carries what ps_new must allocate.
+    # Neither can be written HERE: `sizeof` in a static initializer is one of
+    # the few things the QBE back end cannot fold (the same reason PsDesc has
+    # no size). So the slot starts at zero and main fills it, once, before the
+    # first message can be sent.
+    z: *Expr = ex_new(L->a, EX_NUMBER, pos)
+    z->text = "0"
+    init->args[1] = z
+    if kind == 0 or kind == 5:
+        L->shzn = vec_grow(L->shzn, L->nshz, ref L->cshz, sizeof(*L->shzn))
+        L->shzt = vec_grow(L->shzt, L->nshz, ref L->cshz2, sizeof(*L->shzt))
+        L->shzn[L->nshz] = (*char)(name)
+        L->shzt[L->nshz] = ty_name(L->a, t->name) if kind == 5 else L->ty(t)
+        L->nshz += 1
+    init->args[2] = sh_ref(L, inner, pos)
+    init->args[3] = sh_ref(L, kname, pos)
+    kke: *Expr = ex_new(L->a, EX_NUMBER, pos)
+    kke->text = L->a->printf("%d", kk)
+    init->args[4] = kke
+    if kind == 5:
+        se: *Expr = ex_new(L->a, EX_IDENT, pos)
+        se->text = L->a->printf("%s__ser", ps_cname(L->a, t->name))
+        init->args[5] = se
+        de: *Expr = ex_new(L->a, EX_IDENT, pos)
+        de->text = L->a->printf("%s__des", ps_cname(L->a, t->name))
+        init->args[6] = de
+        dsc: *Expr = ex_new(L->a, EX_UNARY, pos)
+        dsc->op = TK_AMP
+        dsc->lhs = ex_new(L->a, EX_IDENT, pos)
+        dsc->lhs->text = L->a->printf("%s__desc", ps_cname(L->a, t->name))
+        init->args[7] = dsc
+    else:
+        init->args[5] = ex_new(L->a, EX_NONE, pos)
+        init->args[6] = ex_new(L->a, EX_NONE, pos)
+        init->args[7] = ex_new(L->a, EX_NONE, pos)
+    init->nargs = 8
+    v->init = init
+    if sd != None:
+        L->out.push(lower_struct_walk(L, sd, True, False))
+        L->out.push(lower_struct_walk(L, sd, False, False))
+    L->out.push(v)
+    if sd != None:
+        L->out.push(lower_struct_walk(L, sd, True, True))
+        L->out.push(lower_struct_walk(L, sd, False, True))
+    return name
+
+static def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    if name == None:
+        return ex_new(L->a, EX_NONE, pos)
+    r: *Expr = ex_new(L->a, EX_UNARY, pos)
+    r->op = TK_AMP
+    r->lhs = ex_new(L->a, EX_IDENT, pos)
+    r->lhs->text = name
+    return r
+
 # `static S *S__new(PsCtx *ctx, T a, U b) { S *o = ps_new(ctx, &S__desc); o->a = a; ...; return o; }`
 static def lower_struct_new(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
     f: *Func = L->a->alloc(sizeof(Func))
@@ -6569,6 +6850,14 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
             ic2->pos = m->decls[i]->pos
             ic2->import_path = m->decls[i]->path
             ic2->import_system = m->decls[i]->import_system
+            if m->decls[i]->is_pmod:
+                # 75.3: a P module is imported the way P imports one — by its
+                # `.ph`. P's sema then reads the real declarations (and checks
+                # every call the lowering made against them, which is 49.1
+                # doing its job), and each back end does what it already does
+                # with a P import: the C one includes the generated header,
+                # QBE merges the layouts.
+                ic2->is_include = False
             L.out.push(ic2)
 
     # enums first of all: a record field or a signature may name one. A pscript
@@ -6628,7 +6917,9 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
             lenv.push(None)
 
     for i in range(m->ndecls):
-        if m->decls[i]->kind == PD_RECORD:
+        # 72.6: a record that came from an imported header is declared THERE;
+        # emitting it again here would be a second definition of the same type
+        if m->decls[i]->kind == PD_RECORD and not m->decls[i]->from_hdr:
             L.out.push(lower_record_impl(&L, m->decls[i]))
         elif m->decls[i]->kind == PD_STRUCT:
             L.out.push(lower_struct_impl(&L, m->decls[i]))
@@ -6873,6 +7164,21 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     if m->main != None:
         for j in range(m->main->n):
             L.stmt(m->main->stmts[j], &top)
+    # every shape's size, filled before anything can use one (74.2)
+    for j in range(L.nshz):
+        fx: *Stmt = st_new(a, ST_ASSIGN, zp)
+        fl9: *Expr = ex_new(a, EX_FIELD, zp)
+        fl9->op = TK_DOT
+        fl9->lhs = L.ident(L.shzn[j], zp)
+        fl9->field = "size"
+        fx->lhs = fl9
+        fx->op = TK_ASSIGN
+        sz9: *Expr = L.call_rt("sizeof", zp)
+        tr9: *Expr = ex_new(a, EX_TYPEREF, zp)
+        tr9->cast_type = L.shzt[j]
+        L.push_arg(sz9, tr9)
+        fx->rhs = sz9
+        mb.push(fx)
     tb: *Block = L.frame_wrap(&top, None, 0, zp)
     for j in range(tb->n):
         mb.push(tb->stmts[j])

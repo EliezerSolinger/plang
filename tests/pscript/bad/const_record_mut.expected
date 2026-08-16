@@ -1,0 +1,1 @@
+takes 'r' by reference (72.6), so the argument has to be a module-level `const`

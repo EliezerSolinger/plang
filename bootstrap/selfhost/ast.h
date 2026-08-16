@@ -173,6 +173,8 @@ struct Decl {
     int is_def;
     int is_anon;
     const char *trait_for;
+    const char *assoc;
+    Type *assoc_type;
     int is_record;
     int is_td;
     const char *name;

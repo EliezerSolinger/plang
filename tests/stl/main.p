@@ -64,6 +64,8 @@ struct Countdown:
     at: i64
 
 implement Iterable for Countdown:
+    type Item = i64
+
     def has_next(self: *Countdown) -> bool:
         return self->at > 0
 

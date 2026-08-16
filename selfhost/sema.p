@@ -140,6 +140,7 @@ static def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type
 static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt
 static def block_terminates(b: *Block) -> bool
 static def type_eq_p(a: *Type, b: *Type) -> bool
+static def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char, assoc: const *char, at: *Type) -> *Type
 static def expr_is_negative(e: *Expr) -> bool
 static def type_is_unsigned(t: *Type) -> bool
 # ---------- C header ingestion (`include <h>` / `include "h"`) ----------
@@ -5078,7 +5079,21 @@ struct Sema:
         self->timpls.add(key)
         if not decl_in_module(m, d->name) and not decl_in_module(m, d->trait_for):
             fatal_at(self->file, d->pos, "this module declares neither the trait '%s' nor the type '%s', so it cannot implement one for the other (the orphan rule keeps two modules from disagreeing)", d->name, d->trait_for)
-        # every signature the trait names has to be here, and nothing else
+        # the ASSOCIATED type (72.5): the trait names it, every implementation
+        # says what it is. Checked before the methods, because the methods are
+        # compared with it substituted in.
+        if tr->assoc != None and d->assoc_type == None:
+            fatal_at(self->file, d->pos, "trait '%s' has an associated type: this implementation has to say `type %s = <type>`", d->name, tr->assoc)
+        if tr->assoc == None and d->assoc_type != None:
+            fatal_at(self->file, d->pos, "trait '%s' declares no associated type, so there is no `type %s` to fill in", d->name, d->assoc)
+        if tr->assoc != None and d->assoc != None and strcmp(tr->assoc, d->assoc) != 0:
+            fatal_at(self->file, d->pos, "trait '%s' names its associated type '%s', not '%s'", d->name, tr->assoc, d->assoc)
+        # every signature the trait names has to be here, WHOLE — parameters
+        # and return type, with the trait's own name standing for the type and
+        # the associated type for whatever this implementation chose (72.5).
+        # Checking only the name and the count let an implementation return
+        # something else entirely and be found out much later, inside a
+        # monomorphized body, with the error pointing at the wrong line.
         for i in range(tr->nmethods):
             want: *Func = tr->methods[i]
             got: *Func = None
@@ -5090,6 +5105,15 @@ struct Sema:
                 fatal_at(self->file, d->pos, "'%s' for '%s' is missing '%s'", d->name, d->trait_for, want->name)
             if got->nparams != want->nparams:
                 fatal_at(self->file, got->pos, "'%s' takes %d parameter(s) in trait '%s', %d given", want->name, want->nparams, d->name, got->nparams)
+            for k in range(want->nparams):
+                exp: *Type = trait_sub(self->a, want->params[k].type, d->name, d->trait_for, tr->assoc, d->assoc_type)
+                if not type_eq_p(exp, got->params[k].type):
+                    fatal_at(self->file, got->pos, "'%s': parameter '%s' is %s in trait '%s', and %s here", want->name, want->params[k].name, render_type_p(self->a, exp), d->name, render_type_p(self->a, got->params[k].type))
+                if want->params[k].byref != got->params[k].byref:
+                    fatal_at(self->file, got->pos, "'%s': parameter '%s' is passed differently than trait '%s' declares (`in`/`out`/`ref` is part of the contract)", want->name, want->params[k].name, d->name)
+            rexp: *Type = trait_sub(self->a, want->ret, d->name, d->trait_for, tr->assoc, d->assoc_type)
+            if not type_eq_p(rexp, got->ret):
+                fatal_at(self->file, got->pos, "'%s' returns %s in trait '%s', and %s here", want->name, render_type_p(self->a, rexp), d->name, render_type_p(self->a, got->ret))
         for j in range(d->nmethods):
             found: bool = False
             for i in range(tr->nmethods):
@@ -6500,6 +6524,44 @@ static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
 
 
 # STRUCTURAL equality of types for match type (const/generics already resolved)
+# A trait's signature written with the trait's own name where the implementing
+# type goes, and with its associated type where the implementation's choice
+# goes (72.5). Substituting and then comparing beats a comparison that knows
+# about traits: what comes out is an ordinary type, and the ordinary equality
+# answers for it.
+static def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char, assoc: const *char, at: *Type) -> *Type:
+    if t == None:
+        return None
+    match t->kind:
+        case TY_NAME:
+            if t->name == None:
+                return t
+            if strcmp(t->name, trait) == 0:
+                r: *Type = ty_name(a, forty)
+                r->is_const = t->is_const
+                return r
+            if assoc != None and at != None and strcmp(t->name, assoc) == 0:
+                return at
+            return t
+        case TY_PTR:
+            i1: *Type = trait_sub(a, t->inner, trait, forty, assoc, at)
+            if i1 == t->inner:
+                return t
+            r2: *Type = ty_ptr(a, i1)
+            r2->is_const = t->is_const
+            r2->is_ref = t->is_ref
+            return r2
+        case TY_ARRAY:
+            i2: *Type = trait_sub(a, t->inner, trait, forty, assoc, at)
+            if i2 == t->inner:
+                return t
+            r3: *Type = a->alloc(sizeof(Type))
+            *r3 = *t
+            r3->inner = i2
+            return r3
+        case _:
+            return t
+
 static def type_eq_p(a: *Type, b: *Type) -> bool:
     if a == None or b == None:
         return a == b

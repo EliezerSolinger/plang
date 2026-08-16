@@ -35,6 +35,7 @@ import "ps_parser.ph"
 import "ps_generic.ph"
 import "sema.ph"
 import "cfront.ph"
+import "parser.ph"   # 75.3: a `.ph` is read with P's own front end
 
 declare StrMap<*PsFunc>
 declare StrMap<*PsExpr>
@@ -75,6 +76,11 @@ implement Vec<PsLamF>
 # is no file to find, no path to configure, and the prelude a compiler carries
 # is exactly the one that was compiled into it.
 static const PS_PRELUDE: const *char = embed("ps_prelude.psc")
+
+# how deep a chain of DISTINCT structs a message may nest (74.2). A type that
+# contains itself is not deep — it is caught by the name already on the way
+# down — so this only bounds a genuinely long chain.
+static const PS_SEND_DEPTH: const i32 = 64
 
 # Renamed name -> the name a diagnostic should print (`geom.Vec2`). Module
 # scope because `ps_type_str` is a free function: it is called from everywhere,
@@ -217,6 +223,10 @@ struct PsSema:
                              #   the lowering needs one file-scope variable each
     dseen: StrSet            # dyn traits and pairs already noted
     dtraits: Vec<*PsDecl>    # traits used as `dyn` (66.3)
+    hdrrecs: Vec<*PsDecl>    # records that came from an imported header (72.6):
+                             #   they join the module's declarations so the
+                             #   lowering finds them, and carry `from_hdr` so
+                             #   nothing is emitted for them
     dpairs: Vec<PsDynUse>    # (trait, type) pairs actually boxed
     depth: i32               # current block nesting; 0 = the function's own scope
     fn_nonlocals: StrSet     # `nonlocal x`: the next `x = ...` declares at depth 0
@@ -243,8 +253,11 @@ struct PsSema:
     static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    static def sendable_in(self: *PsSema, t: *PsType, pos: Pos, what: const *char, seen: **char, n: i32)
     static def check_endian(self: *PsSema, e: *PsExpr)
     static def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl)
+    static def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl)
+    static def ingest_cdecls(self: *PsSema, m: *PsModule, cm: *Module)
     static def build_ns(self: *PsSema, m: *PsModule, prefix: const *char, name: const *char) -> *PsNs
     static def builtin_ns(self: *PsSema, name: const *char, path: const *char) -> *PsNs
     static def fresh_prefix(self: *PsSema, name: const *char) -> const *char
@@ -1360,6 +1373,15 @@ struct PsSema:
                 fatal_at(self->file, e->pos, "'%s' takes %d argument(s), %d given", name, cf->nparams, e->nargs)
             for i in range(e->nargs):
                 at4: *PsType = self->check_expr(e->args[i])
+                if cf->params[i].is_in:
+                    # 72.6, checked HERE because only the call site knows what
+                    # it is handing over: a `const` module variable of that
+                    # record type. A const lives in C's file scope — its
+                    # address is stable, the collector never touches it, and
+                    # nothing can change its bytes while the other side reads.
+                    if e->args[i]->kind != PE_NAME or not self->gconst.has(e->args[i]->text):
+                        fatal_at(self->file, e->args[i]->pos, "'%s' takes '%s' by reference (72.6), so the argument has to be a module-level `const` of type %s — a value with an address that is stable and bytes nothing can change", name, cf->params[i].name, ps_type_str(self->a, cf->params[i].type))
+                    e->args[i]->is_in = True
                 self->want(e->args[i], at4, cf->params[i].type, self->a->printf("parameter '%s'", cf->params[i].name))
             e->is_cfunc = True
             return cf->ret
@@ -1766,8 +1788,8 @@ struct PsSema:
             # there is no template engine at run time, and no second language
             # to specify: `{{`/`}}` escape and the format spec is the one
             # f-strings already have.
-            if e->nargs != 1 or e->args[0]->kind != PE_STR:
-                fatal_at(self->file, e->pos, "render() takes one string literal path: `render(\"email.tpl\")` (63.2)")
+            if e->nargs < 1 or e->nargs > 2 or e->args[0]->kind != PE_STR:
+                fatal_at(self->file, e->pos, "render() takes a string literal path and, if the holes are not names in scope, a dict literal with the values: `render(\"email.tpl\", {\"name\": who})` (63.2/75.2)")
             rl8: usize = 0
             rel8: const *char = str_lit_decode(self->a, e->args[0]->text, out rl8)
             p8: const *char = path_join(self->a, path_dir(self->a, self->file), rel8)
@@ -1777,8 +1799,45 @@ struct PsSema:
                 fatal_at(self->file, e->pos, "render(): could not read '%s'", p8)
             if strlen(by8) != n8:
                 fatal_at(self->file, e->pos, "render(): '%s' has a nul byte — a template is text", p8)
-            tpl8: *PsExpr = ps_template(self->a, self->file, c_string_literal(self->a, by8, n8), e->pos)
+            lex8: const *char = c_string_literal(self->a, by8, n8)
             free(by8)
+            tpl8: *PsExpr
+            if e->nargs == 2:
+                # 75.2: the values come in a dict LITERAL written right there.
+                # A dict VARIABLE would mean looking a key up at run time, and
+                # then a template could ask for something that is not in it —
+                # which is the template engine 63.2 refused to have. Written at
+                # the call, the key set is known when the file is spliced, so
+                # every hole is resolved, typed and formatted at compile time,
+                # and the values may be of DIFFERENT types, which a real dict
+                # could not hold.
+                d8: *PsExpr = e->args[1]
+                if d8->kind != PE_DICT:
+                    fatal_at(self->file, e->pos, "render(): the values come in a dict literal written at the call — `render(\"email.tpl\", {\"name\": who})` — because the holes are resolved at compile time (75.2)")
+                nk8: i32 = d8->nargs
+                keys8: **char = None
+                vals8: **PsExpr = None
+                used8: *bool = None
+                keys8 = self->a->alloc(usize(nk8 + 1) * sizeof(*keys8))
+                vals8 = self->a->alloc(usize(nk8 + 1) * sizeof(*vals8))
+                used8 = self->a->alloc(usize(nk8 + 1) * sizeof(*used8))
+                for i8 in range(nk8):
+                    ent8: *PsExpr = d8->args[i8]
+                    if ent8->kind != PE_DESIG or ent8->lhs == None or ent8->lhs->kind != PE_STR:
+                        fatal_at(self->file, ent8->pos if ent8 != None else e->pos, "render(): every key of the values dict is a string literal, because it names a hole of the template (75.2)")
+                    kl8: usize = 0
+                    keys8[i8] = self->a->strdup(str_lit_decode(self->a, ent8->lhs->text, out kl8))
+                    for j8 in range(i8):
+                        if strcmp(keys8[j8], keys8[i8]) == 0:
+                            fatal_at(self->file, ent8->pos, "render(): the key '%s' is given twice", keys8[i8])
+                    vals8[i8] = ent8->rhs
+                    used8[i8] = False
+                tpl8 = ps_template_dict(self->a, self->file, lex8, e->pos, keys8, vals8, used8, nk8)
+                for i8 in range(nk8):
+                    if not used8[i8]:
+                        fatal_at(self->file, d8->args[i8]->pos, "render(): '%s' is in the values, but no hole of the template asks for it", keys8[i8])
+            else:
+                tpl8 = ps_template(self->a, self->file, lex8, e->pos)
             *e = *tpl8
             return self->check_expr(e)
         if strcmp(name, "embed") == 0 or strcmp(name, "embed_bytes") == 0:
@@ -2400,6 +2459,31 @@ struct PsSema:
                 tgt9: *PsExpr = self->cconsts.get_or(av9.data[k9], None)
                 if tgt9 != None and not self->cconsts.has(al9.data[k9]):
                     self->cconsts.put(al9.data[k9], tgt9)
+        self->ingest_cdecls(m, cm)
+
+    # 75.3/2.4: a P MODULE, read with P's own front end. Nothing about the
+    # boundary is loosened — what crosses is what 45.5 always allowed, and the
+    # registration below is the very same one a C header goes through. What the
+    # import adds is the BUILD: the driver sees this declaration and compiles
+    # the module's `.p` alongside, so one command covers both halves instead of
+    # the two-step the pstudio port had to do by hand.
+    static def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl):
+        full: const *char = path_join(self->a, path_dir(self->a, m->path), d->path)
+        n: usize = 0
+        bytes: *char = read_entire_file_opt(full, out n)
+        if bytes == None:
+            fatal_at(m->path, d->pos, "import: could not read '%s'", full)
+        tl: TokenList = lex(full, bytes, n, self->a)
+        pm: *Module = parse_tokens(self->a, full, tl, 1)
+        free(bytes)
+        self->ingest_cdecls(m, pm)
+
+    # what a module of DECLARATIONS gives a pscript program: the functions
+    # whose signature is pointer-free, the members of its enums, and its scalar
+    # constants (45.5/72.4). Everything else is silently not there, which is
+    # the safe default — a name that did not cross is a name the program
+    # cannot spell.
+    static def ingest_cdecls(self: *PsSema, m: *PsModule, cm: *Module):
         for i in range(cm->ndecls):
             cd: *Decl = cm->decls[i]
             # a member of an `enum`, and a `static const` scalar: both are
@@ -2420,6 +2504,40 @@ struct PsSema:
             if cd->kind == DL_VAR and cd->is_static and cd->name != None and cd->init != None and cd->init->kind == EX_NUMBER and cd->type != None and self->c_type(cd->type) != None and self->c_type(cd->type)->kind == PT_INT:
                 self->cconst_put(cd->name, strtoll(cd->init->text, None, 0))
                 continue
+            # 72.6: a P `record` of numbers is a `record` here too. The type
+            # is declared THERE and used HERE, which is the only arrangement in
+            # which the two languages cannot disagree about its layout — and it
+            # is what makes a record able to cross by reference at all.
+            #
+            # A P `record` and not any struct: `record` is the word for a value
+            # the compiler CHECKS to be pure bytes, and it is the one that has
+            # a constructor on both sides — so `Rect(3, 4)` means the same
+            # thing in the program that writes it and in the module that
+            # declared the type.
+            if cd->kind == DL_STRUCT and cd->is_record and cd->nfields > 0 and cd->name != None:
+                if self->records.has(cd->name) or self->enums.has(cd->name) or self->traits.has(cd->name):
+                    continue
+                okr: bool = True
+                fls: *PsField = self->a->alloc(usize(cd->nfields) * sizeof(PsField))
+                for j in range(cd->nfields):
+                    fty: *PsType = self->c_type(cd->fields[j].type)
+                    if fty == None or fty->kind == PT_VOID or cd->fields[j].name == None:
+                        okr = False
+                        break
+                    fls[j].name = cd->fields[j].name
+                    fls[j].type = fty
+                    fls[j].pos = zero_ps_pos()
+                if not okr:
+                    continue
+                rdh: *PsDecl = ps_decl(self->a, PD_RECORD, zero_ps_pos())
+                rdh->name = cd->name
+                rdh->src_name = cd->name
+                rdh->fields = fls
+                rdh->nfields = cd->nfields
+                rdh->from_hdr = True
+                self->records.put(cd->name, rdh)
+                self->hdrrecs.push(rdh)
+                continue
             if cd->kind != DL_FUNC or cd->func == None or cd->func->name == None:
                 continue
             f: *Func = cd->func
@@ -2436,11 +2554,22 @@ struct PsSema:
                 ps->params = self->a->alloc(usize(f->nparams) * sizeof(PsParam))
                 for j in range(f->nparams):
                     pt: *PsType = self->c_type(f->params[j].type)
+                    inp: bool = False
+                    if pt == None:
+                        # 72.6: `const *R` — a record BY REFERENCE, read-only.
+                        # It is the one pointer that crosses 45.5, and it does
+                        # because nothing on the other side can write through
+                        # it and the thing it points at never moves.
+                        ptr: *Type = f->params[j].type
+                        if ptr != None and ptr->kind == TY_PTR and ptr->inner != None and ptr->inner->kind == TY_NAME and ptr->inner->is_const and ptr->inner->name != None and self->records.has(ptr->inner->name):
+                            pt = self->named_type(ptr->inner->name, zero_ps_pos())
+                            inp = True
                     if pt == None or pt->kind == PT_VOID:
                         ok = False
                         break
                     ps->params[j].name = f->params[j].name if f->params[j].name != None else "arg"
                     ps->params[j].type = pt
+                    ps->params[j].is_in = inp
                 ps->nparams = f->nparams
             if ok and not self->cfuncs.has(f->name) and not self->funcs.has(f->name):
                 self->cfuncs.put(f->name, ps)
@@ -2492,16 +2621,54 @@ struct PsSema:
 
     # what a MESSAGE may be (34.3): bytes, a string, or a list of either — the
     # three shapes the runtime knows how to rebuild in the receiver's own heap
+    # 34.3/74.2: what may cross between two heaps. Bytes cross by memcpy;
+    # anything the collector owns is a GRAPH, and a graph crosses by being
+    # written out and built again on the other side. So the question here is
+    # not "is this flat" any more — it is "is every part of this a thing the
+    # shape can describe", and the walk says which part is not.
     static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
-        if t != None and t->kind == PT_STR:
+        if t != None and t->kind == PT_BUFFER:
+            # 52.3: the one thing meant to be SHARED. The bytes are malloc'd
+            # and never move, so the handle crosses and the isolation of 18.1
+            # still holds for everything the collector owns.
             return
-        if t != None and t->kind == PT_LIST and t->inner != None:
-            if t->inner->kind in {PT_INT, PT_FLOAT, PT_BOOL}:
+        seen: **char = self->a->alloc(usize(PS_SEND_DEPTH) * sizeof(*seen))
+        self->sendable_in(t, pos, what, seen, 0)
+
+    static def sendable_in(self: *PsSema, t: *PsType, pos: Pos, what: const *char, seen: **char, n: i32):
+        if t == None:
+            return
+        match t->kind:
+            case PT_INT, PT_FLOAT, PT_BOOL, PT_VOID, PT_STR:
                 return
-            if t->inner->kind == PT_NAME and self->records.has(t->inner->name) and self->records.get_or(t->inner->name, None)->kind == PD_RECORD:
+            case PT_LIST, PT_SET:
+                self->sendable_in(t->inner, pos, self->a->printf("the element of %s in %s", ps_type_str(self->a, t), what), seen, n)
                 return
-            fatal_at(self->file, pos, "%s is %s: a list crosses heaps when its ELEMENTS are bytes — numbers, bools or a `record` (34.3)", what, ps_type_str(self->a, t))
-        self->pod_only(t, pos, what)
+            case PT_DICT:
+                self->key_ok(t->key, pos, self->a->printf("the key of %s in %s", ps_type_str(self->a, t), what))
+                self->sendable_in(t->inner, pos, self->a->printf("the value of %s in %s", ps_type_str(self->a, t), what), seen, n)
+                return
+            case PT_NAME:
+                if self->enums.has(t->name):
+                    return
+                if self->records.has(t->name):
+                    rd6: *PsDecl = self->records.get_or(t->name, None)
+                    if rd6->kind == PD_RECORD:
+                        return          # pure bytes by construction (58.2)
+                    for i in range(n):
+                        if strcmp(seen[i], t->name) == 0:
+                            return      # already on the way down: a type may
+                                        # contain itself, and the cycle guard
+                                        # at run time is what answers for it
+                    if n >= PS_SEND_DEPTH:
+                        fatal_at(self->file, pos, "%s nests structs more than %d deep, which is more than the message walk follows", what, PS_SEND_DEPTH)
+                    seen[n] = (*char)(t->name)
+                    for i in range(rd6->nfields):
+                        self->sendable_in(rd6->fields[i].type, pos, self->a->printf("field '%s' of %s", rd6->fields[i].name, t->name), seen, n + 1)
+                    return
+            case _:
+                pass
+        fatal_at(self->file, pos, "%s is %s, which a message cannot carry (34.3): numbers, bools, enums, records, str, list, set, dict and `struct` cross — a worker, a task, a file, a lambda or an `any` do not, because what they name is not the receiver's to have", what, ps_type_str(self->a, t))
 
     static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t != None and t->kind == PT_STR:
@@ -3649,6 +3816,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "file"
         case PT_BUFFER:
             return "buffer"
+        case PT_TIMER:
+            return "a timer"
         case PT_LIST:
             return a->printf("list<%s>", ps_type_str(a, t->inner))
         case PT_SET:
@@ -3759,6 +3928,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
     s.mvars.init()
     s.dseen.init()
     s.dtraits.init()
+    s.hdrrecs.init()
     s.dpairs.init()
     s.cpp = cpp_cmd
     # imports FIRST (41.3): every imported module is read, its declarations are
@@ -3832,7 +4002,10 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
             case PD_VAR, PD_SHARED:
                 pass   # checked below, in order: an initializer may use a type
             case PD_INCLUDE:
-                s.ingest_header(m, d)
+                if d->is_pmod:
+                    s.ingest_pmodule(m, d)
+                else:
+                    s.ingest_header(m, d)
             case PD_TRAIT:
                 if s.traits.has(d->name) or s.records.has(d->name) or s.enums.has(d->name):
                     fatal_at(m->path, d->pos, "'%s' is declared twice", d->name)
@@ -3841,6 +4014,19 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
                 pass   # checked below, once every type is registered
             case PD_IMPORT, PD_FROM_IMPORT:
                 pass   # already handled by build_ns
+
+    # 72.6: the records an imported header declared join this module, so the
+    # lowering finds them where it finds every other type. They carry
+    # `from_hdr`, and nothing is emitted for them — the declaration stays in
+    # the header, which is what keeps one layout instead of two.
+    if s.hdrrecs.len > 0:
+        nd7: **PsDecl = a->alloc(usize(m->ndecls + i32(s.hdrrecs.len)) * sizeof(*nd7))
+        for k7 in range(m->ndecls):
+            nd7[k7] = m->decls[k7]
+        for k7 in range(i32(s.hdrrecs.len)):
+            nd7[m->ndecls + k7] = s.hdrrecs.data[k7]
+        m->decls = nd7
+        m->ndecls += i32(s.hdrrecs.len)
 
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]

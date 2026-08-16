@@ -1015,24 +1015,86 @@ trabalho a fazer. `unsafe` fica fora por decisão.
 
 Tudo abaixo já é decisão fechada. Falta escrever.
 
-### 74.1 — `await w.recv()` ESTACIONA, com eventfd
+### 74.1 — `await w.recv()` ESTACIONA — FEITO
 
-Hoje `w.recv()` dentro de um `async def` bloqueia a thread na condvar do worker:
-uma task esperando mensagem congela todas as outras. Decidido: a fila do worker
-ganha um DESCRITOR (eventfd no Linux, self-pipe onde não houver), o `await
-w.recv()` estaciona a task como o `sleep` estaciona, e o laço do escalonador
-espera NO descritor em vez de espiar a fila. É deliberadamente a forma da 36.2,
-e já é metade do `epoll` da 18.4 — o loop passa a ter uma lista de descritores
-e um prazo mais próximo, que é exatamente a assinatura de que a 18.4 precisa.
+`w.recv()` bloqueava a thread na condvar do worker: uma task esperando mensagem
+congelava todas as outras, e `async` + worker eram duas coisas que não se
+usavam juntas. Agora receber é uma TASK SEM PASSO, exatamente como o timer da
+48.2: ela estaciona, o escalonador a completa quando a mensagem chega, e o
+resto continua rodando.
 
-### 74.2 — cópia PROFUNDA de grafo em mensagem, com guarda de ciclo (34.3)
+**Como ficou.** Cada fila ganhou um descritor por direção — um `pipe` POSIX, e
+não o eventfd do Linux, porque este runtime compila nos dois lados e o pipe é o
+que existe em ambos. Um byte entra quando uma mensagem é empurrada (e quando o
+worker termina, que também é notícia); quem lê drena e olha a fila de verdade,
+então acordar à toa não custa nada. O escalonador espera num `poll` sobre os
+descritores das recepções estacionadas COM o prazo mais próximo como timeout —
+que é a forma que a 18.4 pede: um socket entraria na mesma lista sem mudar o
+desenho. Uma condvar não serviria: ela pertence a uma fila, e o escalonador
+espera por várias ao mesmo tempo.
 
-Decidido fazer o caso geral: `list<str>`, `dict<K,V>`, `record`/`struct` com
-referências, e ciclo. A serialização anda no grafo do objeto (o mesmo caminho
-que o coletor já sabe andar, como a 18.2 registra) e leva um mapa de
-já-visitados; um objeto revisitado vira uma REFERÊNCIA à posição anterior, e a
-reconstrução no heap do receptor refaz a ligação. Sem isso um grafo cíclico
-serializa para sempre.
+Detalhes que a implementação obrigou a decidir:
+
+  * mensagem já na fila termina a recepção na hora, sem estacionar e sem tocar
+    o escalonador — o caminho comum não paga nada;
+  * uma recepção CANCELADA (37.2) não tira nada da fila: engolir uma mensagem
+    que ninguém vai ler é justamente o que `timeout(w.recv(), ms)` não pode
+    fazer;
+  * `PS_POLL_MAX` (64) filas por espera; acima disso o laço olha as primeiras e
+    revisita o resto em 2ms, o que limita a latência sem alocar no caminho que
+    devia ser o barato.
+
+**Dois bugs que apareceram no caminho**, os dois de coletor: `ctx->timers`
+nunca era encaminhado na coleta (a lista dos timers é raiz tanto quanto a fila
+de prontos), e o frame de uma mensagem que É referência usava o descritor POD,
+deixando o coletor com um ponteiro velho. Os dois consertados; o segundo passou
+a importar de verdade porque uma recepção estacionada vive muitas coletas.
+
+Teste: `tests/pscript/run/recv_parks.psc` — um worker que responde em 60ms e uma
+task local que dorme 6x10ms terminam JUNTAS, e duas tasks esperam em dois
+workers diferentes ao mesmo tempo.
+
+### 74.2 — cópia PROFUNDA de grafo em mensagem — FEITO
+
+O caso geral: `list<str>`, `list<list<T>>`, `dict<K,V>`, `set<T>`, `struct` com
+referências, e ciclo. (Um `record` não entra na lista porque a 58.2 já o
+mantém puro — ele continua atravessando por memcpy, que é o caminho rápido.)
+
+**Como ficou.** A divisão é a mesma das funções de rastreio: o compilador sabe
+os TIPOS, o runtime sabe o FORMATO. O compilador deixa um `PsShape` estático
+por tipo que viaja — e, para um `struct`, um par de funções geradas que andam
+pelos campos (`S__ser`/`S__des`, uma chamada por campo). O runtime tem o
+formato e a guarda de ciclo, e não precisa aprender nada sobre tipos.
+
+O formato de um valor: POD são os bytes; toda referência leva um TAG — ausente,
+nova, ou uma já escrita. A nova vem seguida do corpo; a já escrita, do número
+que recebeu. Quem lê registra cada objeto ANTES de ler o corpo dele, na mesma
+ordem em que quem escreve registrou. Essa é a guarda de ciclo inteira: uma
+lista que contém a si mesma escreve o próprio número na segunda vez, e quem lê
+já tem a lista (ainda vazia) para apontar. O efeito colateral que se ganha de
+graça é o certo: um objeto que aparece duas vezes chega como UM objeto.
+
+Três coisas que a implementação obrigou:
+
+  * a tabela de "já escritos" é endereçamento aberto sobre o ENDEREÇO do
+    objeto — uma varredura linear faria um grafo de dez mil nós custar cem
+    milhões de comparações;
+  * chave e valor de um `dict` são montados FORA da tabela e só então
+    inseridos: inserir pode reorganizá-la, e um valor que se insere no mesmo
+    dict escreveria num slot que já mudou de lugar;
+  * o `size` de um shape não cabe no inicializador estático (`sizeof` é uma das
+    poucas coisas que o QBE não dobra — a mesma razão pela qual `PsDesc` não
+    tem tamanho), então ele começa em zero e o `main` preenche todos antes da
+    primeira mensagem.
+
+O caminho especial de `str` e `list` de bytes FOI REMOVIDO: o geral cobre os
+dois, e duas máquinas para o mesmo trabalho é o que apodrece. A regra do
+`sendable` deixou de perguntar "isto é plano?" e passou a andar no tipo campo a
+campo, dizendo qual parte não atravessa (`field 'log' of Job is file, ...`).
+
+Testes: `tests/pscript/run/deep_messages.psc` (grafo com ciclo, string repetida
+que chega como um objeto só, os cinco formatos) e
+`tests/pscript/bad/send_unsendable.psc`.
 
 ### 74.3 — esperar por task cancelada LANÇA (confirmado)
 
@@ -1070,24 +1132,59 @@ caso real. Se voltar, volta por aí — e depois, no máximo, por um ponteiro
 restrito a memória DE FORA do heap coletado. Deref de objeto coletado pede outro
 coletor, e essa é a conta que nunca fechou.
 
-### 75.2 — template SEM header: passa um dict e renderiza
+### 75.2 — template SEM header: passa um dict e renderiza — FEITO
 
 O usuário fechou a 63.2 pelo outro lado: não existe linha de cabeçalho nem
 função tipada gerada. O template recebe um DICT com os valores e renderiza:
 
-    render("email.tpl", {"nome": "Ana", "valor": "12.50"})
+    render("email.tpl", {"nome": "Ana", "valor": 12.5})
 
 A forma de uma chave só, sem dict, continua sendo o `render(path)` que já
 funciona. O que fica de fora, por decisão: declarar tipos no arquivo e gerar
 `render_email(nome: str, valor: float)`.
 
-### 75.3 — `import "shim.ph"`: o compilador PUXA o módulo P para o build (2.4)
+**Como ficou.** O dict é um LITERAL escrito na chamada, e é isso que mantém a
+promessa da 63.2 de não haver motor de template em tempo de execução: o
+conjunto de chaves fica conhecido no instante em que o arquivo é emendado, os
+buracos são resolvidos, tipados e formatados na compilação, e os valores podem
+ser de tipos DIFERENTES — coisa que um `dict` de verdade, homogêneo, não
+poderia carregar. Um buraco sem valor e um valor sem buraco são erros, os dois
+com a posição certa. Uma chave que dois buracos pedem é clonada
+(`ps_clone_expr`), porque o mesmo nó emendado duas vezes seria conferido e
+baixado duas vezes. Um dict VARIÁVEL é recusado com mensagem própria: ele
+exigiria busca em tempo de execução, e com ela a chance de faltar chave — que
+é exatamente o motor que a 63.2 não quis.
+
+Testes: `tests/pscript/run/template_dict.psc` (+ `twice.tpl`) e os três de
+recusa em `tests/pscript/bad/render_{missing_key,unused_key,dict_var}.psc`.
+
+### 75.3 — `import "shim.ph"`: o compilador PUXA o módulo P para o build — FEITO
 
 `import "shim.ph"` num programa pscript faz o plangc compilar o `.p`
 correspondente e emitir o `.c` ao lado do seu, num comando só. Os tipos que
 atravessam continuam sendo os da fronteira 45.5 — o import não afrouxa nada,
 só tira do usuário o trabalho manual que o porte do pstudio fez à mão
 (compilar o P, incluir o header gerado).
+
+**Como ficou.** O `.ph` é lido com o PRÓPRIO front-end do P — mesmo lexer,
+mesmo parser —, e as declarações passam pela mesmíssima peneira que um header
+C atravessa (`ingest_cdecls`): assinatura sem ponteiro, membro de enum,
+constante escalar. O driver, ao parsear o `.psc`, vê o import e acrescenta o
+`.ph` e o `.p` irmão à lista de entradas, então um comando emite os dois lados
+na mesma árvore espelhada. Do lado da baixada o import vira um import de P
+(não um `include` de C): assim a sema do P confere cada chamada que a baixada
+gerou contra as declarações de verdade — a 49.1 fazendo o trabalho dela — e
+cada back end faz o que já fazia com um módulo P (o C inclui o header gerado,
+o QBE funde os layouts).
+
+Dois detalhes que a implementação obrigou: o laço de entradas do driver virou
+um `while` (um `for` não veria o que foi acrescentado no meio) com o
+incremento no TOPO, porque o corpo tem `continue`s; e um módulo puxado, quando
+existe `-o`, escreve ao LADO do arquivo nomeado, com o nome que o fonte dele
+dá — `-o` nomeia um arquivo, e o módulo puxado não foi nomeado por ninguém.
+
+Testes: `tests/pscript/run/pmodule.psc` + `pmod_mathx.ph`/`.p`, e a suíte passa
+a linkar os `pmod_*.c` que o compilador emitir.
 
 ### 75.4 — escolhas de implementação, CONFIRMADAS
 
@@ -1104,9 +1201,58 @@ Quatro coisas que eu decidi implementando e o usuário ratificou:
 
 ## Pendências de decisão acumuladas
 
-  * **72.5** (decidido, não implementado): `implement Trait for T` deve conferir
-    a assinatura INTEIRA, tipo de retorno incluído, e o P ganha tipo associado
-    (`type Item`) para que `Iterable` não seja preso a `i64`.
-  * **72.6** (decidido, não implementado): um `const` de tipo `record` atravessa
-    a fronteira pscript→P por REFERÊNCIA, somente leitura (`in ref T` do lado
-    P), conferido no ponto da chamada.
+Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da
+bateria.)
+
+## As duas que vinham da bateria 72
+
+### 72.5 — assinatura inteira e tipo associado, no P — FEITO
+
+O lado pscript já conferia tudo (66.4): parâmetros, `in`, retorno e o tipo
+associado. O lado P conferia só o NOME do método e a CONTAGEM de parâmetros —
+uma implementação podia devolver outra coisa e só ser descoberta muito depois,
+dentro de um corpo monomorfizado, com o erro apontando para a linha errada.
+Agora `implement Trait for T:` confere a assinatura inteira: o tipo de cada
+parâmetro, o modo (`in`/`out`/`ref` faz parte do contrato) e o tipo de retorno.
+
+A comparação é por SUBSTITUIÇÃO: o nome do próprio trait vale pelo tipo que
+implementa (é assim que `self: *Comparable` vira `self: *Point`) e o tipo
+associado vale pelo que a implementação escolheu. Substituir e depois comparar
+ganha de uma comparação que saiba de traits — o que sai é um tipo comum, e a
+igualdade comum responde por ele.
+
+E o P ganhou **tipo associado**: `type Item` no trait, `type Item = f64` na
+implementação. Sem ele o `Iterable` da stl era um contrato de `i64` com nome
+geral; com ele o mesmo contrato serve um contador de inteiros e uma série de
+temperaturas, e o genérico que percorre qualquer um dos dois nunca escreve o
+tipo do elemento. Não custa nada em execução: o P monomorfiza, então quando
+existe código o tipo associado já é o concreto e o trait sumiu (67.1).
+
+Testes: `tests/cases/43_assoc_type.p` (dois tipos, dois `Item`, um genérico só
+e o `for v in x` da 68.9 lendo `f64`), `tests/errors/p_trait_sig.p` e
+`tests/errors/p_trait_assoc.p`.
+
+### 72.6 — um `const` record atravessa por referência — FEITO
+
+A 45.5 deixa escalares passarem porque um escalar é uma cópia e uma cópia não
+aliasa nada. Um `record` também é bytes, mas copiá-lo para dentro de uma
+chamada significaria a ABI de struct do C — então o que atravessa é o
+ENDEREÇO, e o endereço só é seguro sob duas condições que o compilador
+confere: o lado P recebe `in` (ponteiro const: lê e não escreve) e o argumento
+é um `const` de módulo, que vive no escopo de arquivo do C e por isso tem
+endereço estável e bytes que nada muda.
+
+O TIPO vem do header (75.3): um `record` do P de números vira um `record` do
+pscript, com o `from_hdr` que impede a baixada de emitir uma segunda
+definição. Uma declaração só — que é o único arranjo em que as duas linguagens
+não podem discordar do layout de algo que as duas nomeiam. Só `record` do P (e
+não qualquer struct): `record` é a palavra para um valor que o compilador
+CONFERE ser bytes puros, e é a que tem construtor nos dois lados, então
+`Rect(3, 4)` quer dizer a mesma coisa em quem escreve e em quem declarou.
+
+A checagem é no PONTO DA CHAMADA porque só ele sabe o que está entregando.
+Alargar depois (aceitar um local, por exemplo) é aditivo; começar largo não
+teria volta.
+
+Testes: `tests/pscript/run/const_record.psc` + `pmod_geom.ph`/`.p` e
+`tests/pscript/bad/const_record_mut.psc`.

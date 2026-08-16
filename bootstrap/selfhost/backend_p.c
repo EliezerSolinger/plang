@@ -971,6 +971,9 @@ void p_decl(StrBuf *b, Decl *d) {
         }
         case DL_TRAIT: {
             StrBuf_printf(b, "trait %s:\n", d->name);
+            if (d->assoc != NULL) {
+                StrBuf_printf(b, "    type %s\n", d->assoc);
+            }
             size_t i;
             for (i = 0; i < d->nmethods; i += 1) {
                 p_func(b, d->methods[i], 1);
@@ -981,6 +984,11 @@ void p_decl(StrBuf *b, Decl *d) {
         case DL_IMPLEMENT: {
             if (d->trait_for != NULL) {
                 StrBuf_printf(b, "implement %s for %s:\n", d->name, d->trait_for);
+                if (d->assoc_type != NULL) {
+                    StrBuf_printf(b, "    type %s = ", (d->assoc != NULL ? d->assoc : "Item"));
+                    p_type(b, d->assoc_type, 0);
+                    StrBuf_putc(b, '\n');
+                }
                 size_t i;
                 for (i = 0; i < d->nmethods; i += 1) {
                     p_func(b, d->methods[i], 1);

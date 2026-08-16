@@ -408,6 +408,13 @@ struct Decl:
     is_anon: bool            # C11 anonymous member definition: inlined at its
                              #   field position, never emitted standalone
     trait_for: const *char   # `implement X for T:` — the TYPE this impl is for
+    assoc: const *char       # DL_TRAIT: `type Item` — the ASSOCIATED type (72.5),
+                             #   a name the trait's own signatures may use and
+                             #   each implementation fills in. Without it a
+                             #   trait like Iterable has to name a concrete
+                             #   element type, and one contract can serve only
+                             #   one element.
+    assoc_type: *Type        # DL_IMPLEMENT: what `type Item = T` says it is
                              #   (67.2: the same word as generic instantiation,
                              #   told apart by the `for`)
     is_record: bool          # `record X:` — a struct the compiler CHECKS to be pure
