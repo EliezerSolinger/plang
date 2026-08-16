@@ -4641,12 +4641,16 @@ static void Qb_emit_match(Qb *self, Stmt *s) {
         }
     }
     StrBuf_printf(self->out, "\tjmp @l%d\n", default_lbl);
+    self->brk[self->nbrk] = end;
+    self->brk_dm[self->nbrk] = self->defers.len;
+    self->nbrk += 1;
     for (i = 0; i < s->ncases; i += 1) {
         MatchCase *mc2 = s->cases[i];
         StrBuf_printf(self->out, "@l%d\n", labels.data[i]);
         Qb_emit_block(self, mc2->body);
         StrBuf_printf(self->out, "\tjmp @l%d\n", end);
     }
+    self->nbrk -= 1;
     StrBuf_printf(self->out, "@l%d\n", end);
     Vec_i32_deinit(&labels);
 }

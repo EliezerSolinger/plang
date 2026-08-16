@@ -291,6 +291,8 @@ struct PsSema:
     static def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType
     static def narrow_from(self: *PsSema, c: *PsExpr) -> i32
     static def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType
+    static def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType)
+    static def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType)
     static def check_binary(self: *PsSema, e: *PsExpr) -> *PsType
 
     # innermost first: an inner block may shadow an outer name, exactly as in P
@@ -701,6 +703,17 @@ struct PsSema:
                 if self->hint == None or self->hint->kind != PT_FUNC:
                     fatal_at(self->file, e->pos, "the type of this lambda cannot be inferred: annotate what receives it, as in `f: def(float) -> float = lambda v: v * 2.0`")
                 lh: *PsType = self->hint
+                if e->is_async_lam:
+                    # 78.3: an `async lambda` is TWO things that already work —
+                    # an `async def` for the body (the state machine) and an
+                    # ordinary lambda that calls it (the closure environment).
+                    # Composing them is what would be new; putting one on top
+                    # of the other is not.
+                    if lh->inner == None or lh->inner->kind != PT_TASK:
+                        fatal_at(self->file, e->pos, "an `async lambda` hands back a task: the type that receives it says so, as in `f: def(int) -> Task<int> = async lambda x: ...`")
+                    self->check_async_lambda(e, lh)
+                    e->type = lh
+                    return lh
                 if lh->nparams != e->nparams:
                     fatal_at(self->file, e->pos, "this lambda takes %d parameter(s); %s asks for %d", e->nparams, ps_type_str(self->a, lh), lh->nparams)
                 fr7: PsLamF = {0}
@@ -3090,6 +3103,106 @@ struct PsSema:
     # The named form must name every field; P's lowering of the same construct
     # explains why (a partial named form needs a designated initializer, which
     # C89 does not have).
+    # `async lambda p: body` becomes an `async def __alam<N>(<caps>, p)` plus a
+    # plain lambda `lambda p: __alam<N>(caps..., p)`. The captures are found the
+    # way a lambda's always are (19.2) and travel as leading PARAMETERS, which
+    # is exactly how the `async:` block does it (78.3).
+    static def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType):
+        fr: PsLamF = {0}
+        fr.base = self->nlocals
+        fr.caps.init()
+        self->lam_fr.push(fr)
+        self->depth += 1
+        prevret: *PsType = self->cur_ret
+        previn: bool = self->in_async
+        self->cur_ret = lh->inner->inner
+        self->in_async = True
+        for i in range(e->nparams):
+            e->params[i].type = lh->params[i]
+            self->add_local(e->params[i].name, lh->params[i], True, True)
+        prevh: *PsType = self->hint
+        self->hint = lh->inner->inner
+        bt: *PsType = self->check_expr(e->lhs)
+        self->hint = prevh
+        if lh->inner->inner != None and lh->inner->inner->kind != PT_VOID:
+            self->want(e->lhs, bt, lh->inner->inner, "the body of this async lambda")
+        self->cur_ret = prevret
+        self->in_async = previn
+        self->pop_scope()
+        self->depth -= 1
+        top: i32 = self->lam_fr.len - 1
+        caps: *PsParam = self->lam_fr.data[top].caps.data
+        nc: i32 = self->lam_fr.data[top].caps.len
+        self->lam_fr.len -= 1
+
+        np: i32 = nc + e->nparams
+        ps: *PsParam = self->a->alloc(usize(np + 1) * sizeof(PsParam))
+        for i in range(nc):
+            ps[i] = caps[i]
+        for i in range(e->nparams):
+            ps[nc + i] = e->params[i]
+        fn: *PsFunc = self->a->alloc(sizeof(PsFunc))
+        fn->name = self->a->printf("__alam%d", self->nablk)
+        self->nablk += 1
+        fn->params = ps
+        fn->nparams = np
+        fn->ret = lh->inner->inner
+        fn->is_async = True
+        fn->pos = e->pos
+        # the body is `return <the expression>`
+        rs: *PsStmt = ps_stmt(self->a, PS_RETURN, e->pos)
+        rs->expr = e->lhs
+        bl: *PsBlock = self->a->alloc(sizeof(PsBlock))
+        bl->stmts = self->a->alloc(sizeof(*bl->stmts))
+        bl->stmts[0] = rs
+        bl->n = 1
+        fn->body = bl
+        d: *PsDecl = ps_decl(self->a, PD_FUNC, e->pos)
+        d->name = fn->name
+        d->func = fn
+        self->ablks.push(d)
+        self->funcs.put(fn->name, fn)
+
+        # ... and this node becomes the plain lambda that calls it
+        args: **PsExpr = self->a->alloc(usize(np + 1) * sizeof(*args))
+        for i in range(np):
+            nm: *PsExpr = ps_expr(self->a, PE_NAME, e->pos)
+            nm->text = ps[i].name
+            nm->type = ps[i].type
+            args[i] = nm
+        callee: *PsExpr = ps_expr(self->a, PE_NAME, e->pos)
+        callee->text = fn->name
+        call: *PsExpr = ps_expr(self->a, PE_CALL, e->pos)
+        call->lhs = callee
+        call->args = args
+        call->nargs = np
+        e->lhs = call
+        e->is_async_lam = False
+        # checked again as an ORDINARY lambda, so its own capture analysis runs
+        # and the call's arguments resolve where they are written
+        self->check_lambda_body(e, lh)
+
+    # the ordinary lambda path, factored so the async one can reuse it
+    static def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType):
+        fr2: PsLamF = {0}
+        fr2.base = self->nlocals
+        fr2.caps.init()
+        self->lam_fr.push(fr2)
+        self->depth += 1
+        for i in range(e->nparams):
+            e->params[i].type = lh->params[i]
+            self->add_local(e->params[i].name, lh->params[i], True, True)
+        prevh2: *PsType = self->hint
+        self->hint = lh->inner
+        self->check_expr(e->lhs)
+        self->hint = prevh2
+        self->pop_scope()
+        self->depth -= 1
+        tp2: i32 = self->lam_fr.len - 1
+        e->caps = self->lam_fr.data[tp2].caps.data
+        e->ncaps = self->lam_fr.data[tp2].caps.len
+        self->lam_fr.len -= 1
+
     static def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType:
         named: bool = False
         positional: bool = False

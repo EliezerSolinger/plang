@@ -1753,6 +1753,12 @@ static PsExpr *PsP_parse_primary(PsP *self) {
             return PsP_parse_lambda(self);
         }
         case TK_ASYNC: {
+            if (PsP_pk1(self)->kind == TK_LAMBDA) {
+                PsP_adv(self);
+                PsExpr *al = PsP_parse_lambda(self);
+                al->is_async_lam = 1;
+                return al;
+            }
             if (PsP_pk1(self)->kind != TK_COLON) {
                 fatal_at(self->file, PsP_pk(self)->pos, "`async` here opens a block: write `async:` and indent what the task does (78.3)");
             }

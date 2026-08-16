@@ -131,7 +131,7 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | Limpeza dentro de `async def` | 50.1, 80.2 | `async_cleanup` | ✅ `defer`, `with` e `finally` armam um bit no frame e rodam em toda saída de verdade — nunca numa suspensão (era bug: rodavam ao estacionar) |
 | `try`/`catch` dentro de `async def` | 50.1 | `aio_files` | ✅ o guarda salta para o estado do catch |
 | `gather_settled` / `first_ok` | 79.4 | `async_sugar` | ✅ (`at_most` não: com começo quente a task já roda quando é criada — o limite pertence a quem CRIA) |
-| Bloco `async:` | 78.3 | `async_sugar` | ✅ vira `async def` cujos parâmetros são a captura (por valor, como o lambda). `async lambda` ainda não |
+| Bloco `async:` e `async lambda` | 78.3 | `async_sugar` | ✅ os dois viram `async def` cujos parâmetros são a captura; o lambda assíncrono é um lambda comum que chama esse `async def`, então a máquina de estados e o ambiente de captura continuam separados |
 | `aprint`, `sys.out`, `sys.err` | 78.2 | `async_sugar` | ✅ `print` segue síncrono; `close()` num stream padrão é no-op |
 | I/O de ARQUIVO pelo pool de threads | 76.1, 76.3 | `aio_files` | ✅ um pool por processo, preguiçoso (N=núcleos, teto 8, `PSCRIPT_POOL`); a thread do pool só toca o item malloc'ado e a libc, e quem constrói o valor no heap é o escalonador de quem pediu |
 | Todo I/O é aguardável | 76.2, 79.1, 79.2 | `aio_files`, `files` | ✅ `await open/read(n)/read_all/text/readlines/write/close`; `read(n)` dá até n bytes e vazio é fim; `text()` valida UTF-8 |

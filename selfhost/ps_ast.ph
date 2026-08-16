@@ -153,6 +153,11 @@ struct PsExpr:
                         #   through the vtable instead of naming a function
     is_cfunc: bool      # PE_CALL to a C function ingested from a header (45.5):
                         #   it takes no context, because it knows nothing about one
+    is_async_lam: bool  # `async lambda x: e` (78.3): the value is a function
+                        #   that hands back a TASK. It becomes an `async def`
+                        #   plus an ordinary lambda that calls it — so the
+                        #   state machine and the closure environment stay two
+                        #   separate machines that already work.
     cstr_arg: i32       # this ARGUMENT crosses as a `CStr`/`CBytes` pair (84.1)
     cstr_ret: i32       # ... and this CALL brings one back
     any_cast: *PsType   # PE_NAME read where `match type(x)` proved the kind

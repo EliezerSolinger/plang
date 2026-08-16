@@ -1722,6 +1722,10 @@ static int32_t PsSema_narrow_from(PsSema *self, PsExpr *c);
 
 static PsType *PsSema_check_ctor(PsSema *self, PsExpr *e, PsDecl *rd);
 
+static void PsSema_check_async_lambda(PsSema *self, PsExpr *e, PsType *lh);
+
+static void PsSema_check_lambda_body(PsSema *self, PsExpr *e, PsType *lh);
+
 static PsType *PsSema_check_binary(PsSema *self, PsExpr *e);
 
 static int32_t PsSema_narrow_from(PsSema *self, PsExpr *c) {
@@ -1769,15 +1773,15 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_333_9 = &self->locals[self->nlocals];
-        __with_333_9->name = name;
-        __with_333_9->type = t;
-        __with_333_9->assigned = assigned;
-        __with_333_9->is_const = is_const;
-        __with_333_9->is_module = 0;
-        __with_333_9->opt_type = NULL;
-        __with_333_9->any_type = NULL;
-        __with_333_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_335_9 = &self->locals[self->nlocals];
+        __with_335_9->name = name;
+        __with_335_9->type = t;
+        __with_335_9->assigned = assigned;
+        __with_335_9->is_const = is_const;
+        __with_335_9->is_module = 0;
+        __with_335_9->opt_type = NULL;
+        __with_335_9->any_type = NULL;
+        __with_335_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2164,6 +2168,14 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 fatal_at(self->file, e->pos, "the type of this lambda cannot be inferred: annotate what receives it, as in `f: def(float) -> float = lambda v: v * 2.0`");
             }
             PsType *lh = self->hint;
+            if (e->is_async_lam) {
+                if (lh->inner == NULL || lh->inner->kind != PT_TASK) {
+                    fatal_at(self->file, e->pos, "an `async lambda` hands back a task: the type that receives it says so, as in `f: def(int) -> Task<int> = async lambda x: ...`");
+                }
+                PsSema_check_async_lambda(self, e, lh);
+                e->type = lh;
+                return lh;
+            }
             if (lh->nparams != e->nparams) {
                 fatal_at(self->file, e->pos, "this lambda takes %d parameter(s); %s asks for %d", e->nparams, ps_type_str(self->a, lh), lh->nparams);
             }
@@ -2237,12 +2249,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_774_17 = e;
-                __with_774_17->kind = PE_CALL;
-                __with_774_17->lhs = cal8;
-                __with_774_17->args = args8;
-                __with_774_17->nargs = nc8;
-                __with_774_17->body = NULL;
+                PsExpr *__with_787_17 = e;
+                __with_787_17->kind = PE_CALL;
+                __with_787_17->lhs = cal8;
+                __with_787_17->args = args8;
+                __with_787_17->nargs = nc8;
+                __with_787_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -3705,26 +3717,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2078_17 = e;
-                __with_2078_17->kind = PE_STR;
-                __with_2078_17->text = lit7;
-                __with_2078_17->lhs = NULL;
-                __with_2078_17->rhs = NULL;
-                __with_2078_17->args = NULL;
-                __with_2078_17->nargs = 0;
+                PsExpr *__with_2091_17 = e;
+                __with_2091_17->kind = PE_STR;
+                __with_2091_17->text = lit7;
+                __with_2091_17->lhs = NULL;
+                __with_2091_17->rhs = NULL;
+                __with_2091_17->args = NULL;
+                __with_2091_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2091_13 = e;
-            __with_2091_13->kind = PE_LOWERED;
-            __with_2091_13->low = ln7;
-            __with_2091_13->lhs = NULL;
-            __with_2091_13->rhs = NULL;
-            __with_2091_13->args = NULL;
-            __with_2091_13->nargs = 0;
+            PsExpr *__with_2104_13 = e;
+            __with_2104_13->kind = PE_LOWERED;
+            __with_2104_13->low = ln7;
+            __with_2104_13->lhs = NULL;
+            __with_2104_13->rhs = NULL;
+            __with_2104_13->args = NULL;
+            __with_2104_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -3914,10 +3926,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2268_17 = &ns->quals[ns->nquals];
-                __with_2268_17->name = q;
-                __with_2268_17->orig = d->path;
-                __with_2268_17->ns = sub;
+                PsNsEnt *__with_2281_17 = &ns->quals[ns->nquals];
+                __with_2281_17->name = q;
+                __with_2281_17->orig = d->path;
+                __with_2281_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -3930,10 +3942,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2280_21 = &ns->ents[ns->nents];
-                    __with_2280_21->name = local;
-                    __with_2280_21->orig = d->names[k];
-                    __with_2280_21->ns = sub;
+                    PsNsEnt *__with_2293_21 = &ns->ents[ns->nents];
+                    __with_2293_21->name = local;
+                    __with_2293_21->orig = d->names[k];
+                    __with_2293_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4294,10 +4306,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2616_9 = e;
-        __with_2616_9->kind = PE_NAME;
-        __with_2616_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2616_9->lhs = NULL;
+        PsExpr *__with_2629_9 = e;
+        __with_2629_9->kind = PE_NAME;
+        __with_2629_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2629_9->lhs = NULL;
     }
     return 1;
 }
@@ -4791,6 +4803,105 @@ static PsFunc *PsSema_find_method(PsSema *self, PsDecl *rd, const char *name) {
         }
     }
     return NULL;
+}
+
+static void PsSema_check_async_lambda(PsSema *self, PsExpr *e, PsType *lh) {
+    PsLamF fr = {0};
+    fr.base = self->nlocals;
+    Vec_PsParam_init(&fr.caps);
+    Vec_PsLamF_push(&self->lam_fr, fr);
+    self->depth += 1;
+    PsType *prevret = self->cur_ret;
+    int previn = self->in_async;
+    self->cur_ret = lh->inner->inner;
+    self->in_async = 1;
+    size_t i;
+    for (i = 0; i < e->nparams; i += 1) {
+        e->params[i].type = lh->params[i];
+        PsSema_add_local(self, e->params[i].name, lh->params[i], 1, 1);
+    }
+    PsType *prevh = self->hint;
+    self->hint = lh->inner->inner;
+    PsType *bt = PsSema_check_expr(self, e->lhs);
+    self->hint = prevh;
+    if (lh->inner->inner != NULL && lh->inner->inner->kind != PT_VOID) {
+        PsSema_want(self, e->lhs, bt, lh->inner->inner, "the body of this async lambda");
+    }
+    self->cur_ret = prevret;
+    self->in_async = previn;
+    PsSema_pop_scope(self);
+    self->depth -= 1;
+    int32_t top = self->lam_fr.len - 1;
+    PsParam *caps = self->lam_fr.data[top].caps.data;
+    int32_t nc = self->lam_fr.data[top].caps.len;
+    self->lam_fr.len -= 1;
+    int32_t np = nc + e->nparams;
+    PsParam *ps = Arena_alloc(self->a, (size_t)(np + 1) * sizeof(PsParam));
+    for (i = 0; i < nc; i += 1) {
+        ps[i] = caps[i];
+    }
+    for (i = 0; i < e->nparams; i += 1) {
+        ps[nc + i] = e->params[i];
+    }
+    PsFunc *fn = Arena_alloc(self->a, sizeof(PsFunc));
+    fn->name = Arena_printf(self->a, "__alam%d", self->nablk);
+    self->nablk += 1;
+    fn->params = ps;
+    fn->nparams = np;
+    fn->ret = lh->inner->inner;
+    fn->is_async = 1;
+    fn->pos = e->pos;
+    PsStmt *rs = ps_stmt(self->a, PS_RETURN, e->pos);
+    rs->expr = e->lhs;
+    PsBlock *bl = Arena_alloc(self->a, sizeof(PsBlock));
+    bl->stmts = Arena_alloc(self->a, sizeof(*bl->stmts));
+    bl->stmts[0] = rs;
+    bl->n = 1;
+    fn->body = bl;
+    PsDecl *d = ps_decl(self->a, PD_FUNC, e->pos);
+    d->name = fn->name;
+    d->func = fn;
+    Vec_pPsDecl_push(&self->ablks, d);
+    StrMap_pPsFunc_put(&self->funcs, fn->name, fn);
+    PsExpr **args = Arena_alloc(self->a, (size_t)(np + 1) * sizeof(*args));
+    for (i = 0; i < np; i += 1) {
+        PsExpr *nm = ps_expr(self->a, PE_NAME, e->pos);
+        nm->text = ps[i].name;
+        nm->type = ps[i].type;
+        args[i] = nm;
+    }
+    PsExpr *callee = ps_expr(self->a, PE_NAME, e->pos);
+    callee->text = fn->name;
+    PsExpr *call = ps_expr(self->a, PE_CALL, e->pos);
+    call->lhs = callee;
+    call->args = args;
+    call->nargs = np;
+    e->lhs = call;
+    e->is_async_lam = 0;
+    PsSema_check_lambda_body(self, e, lh);
+}
+
+static void PsSema_check_lambda_body(PsSema *self, PsExpr *e, PsType *lh) {
+    PsLamF fr2 = {0};
+    fr2.base = self->nlocals;
+    Vec_PsParam_init(&fr2.caps);
+    Vec_PsLamF_push(&self->lam_fr, fr2);
+    self->depth += 1;
+    size_t i;
+    for (i = 0; i < e->nparams; i += 1) {
+        e->params[i].type = lh->params[i];
+        PsSema_add_local(self, e->params[i].name, lh->params[i], 1, 1);
+    }
+    PsType *prevh2 = self->hint;
+    self->hint = lh->inner;
+    PsSema_check_expr(self, e->lhs);
+    self->hint = prevh2;
+    PsSema_pop_scope(self);
+    self->depth -= 1;
+    int32_t tp2 = self->lam_fr.len - 1;
+    e->caps = self->lam_fr.data[tp2].caps.data;
+    e->ncaps = self->lam_fr.data[tp2].caps.len;
+    self->lam_fr.len -= 1;
 }
 
 static PsType *PsSema_check_ctor(PsSema *self, PsExpr *e, PsDecl *rd) {

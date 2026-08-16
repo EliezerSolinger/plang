@@ -3394,11 +3394,20 @@ struct Qb:
                 self->out->printf("\tjnz %%t%d, @l%d, @l%d\n", t, labels.data[i], nxt)
                 self->out->printf("@l%d\n", nxt)
         self->out->printf("\tjmp @l%d\n", default_lbl)
+        # a `break` inside an arm ends the MATCH, which is what the C back end
+        # gives (it prints a `switch`, and there `break` leaves it). Without
+        # this the break stack was empty here and the jump went to a block that
+        # does not exist — the two back ends have to agree, and a `match` is
+        # breakable in both.
+        self->brk[self->nbrk] = end
+        self->brk_dm[self->nbrk] = self->defers.len
+        self->nbrk += 1
         for i in range(s->ncases):
             mc2: *MatchCase = s->cases[i]
             self->out->printf("@l%d\n", labels.data[i])
             self->emit_block(mc2->body)
             self->out->printf("\tjmp @l%d\n", end)
+        self->nbrk -= 1
         self->out->printf("@l%d\n", end)
         labels.deinit()
 

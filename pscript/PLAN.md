@@ -1517,10 +1517,14 @@ Vira um `async def` cujos PARÂMETROS são o que o bloco capturou, e a análise 
 captura é a mesma do lambda (19.2): um nome de fora, lido dentro, viaja por
 valor. Sozinho no topo é fire-and-forget que a drenagem da 77.3 termina.
 
-**`async lambda` ainda não**: um lambda é um VALOR que se guarda e chama
-depois, então ele precisa do ambiente de captura E da máquina de estados ao
-mesmo tempo — as duas coisas compostas. O bloco cobre o caso real; a forma de
-expressão fica registrada.
+**`async lambda` — FEITO**, e sem compor nada: ele vira DUAS coisas que já
+funcionavam, uma em cima da outra. `async lambda x: e` gera um `async def
+__alam<N>(<capturas>, x)` com o corpo, e o próprio nó vira um lambda COMUM cujo
+corpo é a chamada `__alam<N>(capturas..., x)`. A máquina de estados cuida do
+corpo, o ambiente de captura cuida do valor, e nenhuma das duas precisou
+aprender sobre a outra. O tipo que recebe diz que volta uma task:
+
+    f: def(int) -> Task<int> = async lambda x: await busca(x)
 
 ### 81/83/84/85/86 — texto atravessando a fronteira: `CStr` e `CBytes` — FEITOS
 
@@ -1603,6 +1607,14 @@ Se um dia aparecer um programa que sofra com isso — muito texto não-ASCII,
 indexado o tempo todo, sem atravessar nada —, a adaptativa continua registrada
 e o caminho está livre. Teste: `tests/pscript/run/str_index.psc`.
 
+## Onde a fase parou
+
+Tudo o que as baterias 76 a 86 decidiram está implementado, com uma exceção
+registrada e explicada acima (a largura adaptativa do PEP 393, trocada por um
+índice que dá a mesma propriedade sem duplicar toda string que atravessa
+alguma coisa) e uma que a própria decisão não podia prever (`gather(at_most=)`,
+que não faz sentido com começo quente).
+
 ### A ordem de implementação
 
   1. escalonador: `await` cede sempre (78.4) e o laço drena no fim (77.3);
@@ -1612,7 +1624,7 @@ e o caminho está livre. Teste: `tests/pscript/run/str_index.psc`.
   4. `sys.out`/`sys.err` e `aprint` (78.2);
   5. `net`: socket no `poll`, DNS no pool (77.1);
   6. combinadores (79.4);
-  7. `async:` e `async lambda` (78.3);
+  7. `async:` e `async lambda` (78.3) — FEITOS;
   8. strings atravessando a fronteira (80.1a);
   9. largura adaptativa (80.1b);
  10. HTTP em pscript (77.2/78.1).

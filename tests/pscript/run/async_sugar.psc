@@ -1,5 +1,5 @@
-"""O bloco `async:`, os combinadores que faltavam e o console assíncrono
-(78.2/78.3/79.4).
+"""O bloco `async:`, a lambda assíncrona, os combinadores que faltavam e o
+console assíncrono (78.2/78.3/79.4).
 
 `async:` faz uma task ali mesmo, sem precisar batizar uma função para isso —
 e o que ele usa de fora, ele CAPTURA POR VALOR, exatamente como um lambda
@@ -59,6 +59,14 @@ for i in range(len(erros)):
 
 quais = [falha("x"), espera(2, "vencedora"), falha("y")]
 print("primeira que deu certo:", await first_ok(quais))
+
+# ---- a lambda assíncrona ----
+# ela é DUAS coisas que já funcionavam: um `async def` para o corpo (a máquina
+# de estados) e um lambda comum que o chama (o ambiente de captura). Compor as
+# duas seria novo; empilhar uma sobre a outra não é.
+fator = 100
+dobra: def(int) -> Task<int> = async lambda x: await espera(1, "lambda " + str(x)) + fator
+print("lambda:", await dobra(5))
 
 # ---- o console ----
 n = await aprint("escrito pelo pool", 42)

@@ -68,6 +68,7 @@ struct PsExpr {
     PsType *box_to;
     int is_dyn;
     int is_cfunc;
+    int is_async_lam;
     int32_t cstr_arg;
     int32_t cstr_ret;
     PsType *any_cast;

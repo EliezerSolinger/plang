@@ -420,6 +420,11 @@ struct PsP:
                 # `async:` + a block (78.3): a task made right here, without
                 # having to name a function for it. What it captures, it
                 # captures BY VALUE, exactly as a lambda does (19.2).
+                if self->pk1()->kind == TK_LAMBDA:
+                    self->adv()
+                    al: *PsExpr = self->parse_lambda()
+                    al->is_async_lam = True
+                    return al
                 if self->pk1()->kind != TK_COLON:
                     fatal_at(self->file, self->pk()->pos, "`async` here opens a block: write `async:` and indent what the task does (78.3)")
                 ap: Pos = self->adv()->pos
