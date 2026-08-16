@@ -1379,6 +1379,108 @@ I/O.
   9. largura adaptativa (80.1b);
  10. HTTP em pscript (77.2/78.1).
 
+## Baterias 81 a 86 — texto atravessando a fronteira
+
+O `str` do pscript e o `const *char` do P nunca se encontraram: a 45.5 só deixa
+escalar passar. Com socket e HTTP chegando, um shim em P vai querer receber e
+devolver texto. Decidido, e ainda não implementado.
+
+### 84.1 / 85.2 — `CStr` e `CBytes`: um par {ponteiro, tamanho}
+
+Dois tipos de VALOR, do tamanho de dois registradores, que **não alocam nada**:
+
+    CStr    = { ptr: const *char, len: usize }   # texto
+    CBytes  = { ptr: const *u8,   len: usize }   # bytes quaisquer
+
+Eles existem para **carregar o tamanho junto com o ponteiro** e para o
+compilador poder dizer até onde aquele ponteiro é seguro. Não são construtores:
+o `Str` da STL (`init`/`append`/`deinit`, com `realloc`) fica onde está,
+intocado, e continua sendo quem FABRICA texto.
+
+**Por que isso não traz alocação escondida para o P:** o P não tem alocação
+escondida hoje porque não tem operação de string que possa alocar — `a + b`
+entre strings é erro ("cannot add two pointers"), `==` e `in` comparam por
+`strcmp`, e fabricar texto é `snprintf` no seu buffer ou o `Str` da STL, cujo
+`realloc` está dentro de uma função que você chamou. Um tipo valor
+{ponteiro, tamanho} nunca aloca, então a propriedade fica intacta.
+
+### 84.2 — a regra que dá a segurança
+
+Como o `ref T` da 69: `CStr`/`CBytes` podem ser **parâmetro, variável local e
+tipo de retorno**, e NÃO podem ser campo de struct, elemento de array nem
+variável global. Assim nenhum deles sobrevive por acidente ao escopo que o
+criou, e a fronteira fica provada: o pscript copia antes de a chamada voltar.
+Nunca são None.
+
+### 83.1 — posse: o P nunca dá posse
+
+O `CStr` devolvido por uma função P aponta para memória que o P mantém —
+estática, literal, ou um buffer dele válido até a próxima chamada (a convenção
+do `strerror`). O pscript **copia na chegada** e, a partir daí, aquilo é do
+coletor dele. Se o P fez `malloc`, a responsabilidade de liberar continua sendo
+do P; o pscript nunca libera memória do outro lado, e nenhum ponteiro do heap
+coletado escapa.
+
+### 83.2 — bytes que chegam são VALIDADOS
+
+Virando `str`, o pscript confere UTF-8 e **lança** com categoria e posição se os
+bytes não forem válidos — em vez de deixar entrar um `str` que mente sobre o
+próprio `len()`. Virando `list<u8>`, copia como está. A validação fica onde a
+promessa é feita.
+
+### 83.3 — os dois tipos moram no NÚCLEO do P
+
+Não na STL: é o compilador que precisa reconhecê-los nas duas pontas da
+fronteira e na conversão de literal.
+
+### 81.2 — o literal continua `const *char`
+
+`printf("%s", "x")` segue igual. Onde se espera um `CStr`, o literal vira um na
+hora, e o TAMANHO é dobrado em tempo de compilação — a conversão custa zero.
+Uma direção só, nunca o contrário.
+
+### 81.3 — sem garantia de NUL; imprime-se com `%.*s`
+
+O tipo promete TAMANHO, não terminador (uma fatia não termina em NUL). Para a
+libc, o idioma do P passa a ser `printf("%.*s", i32(s.len), s.ptr)`, que já é o
+jeito certo em C. Quem precisar mesmo de um `const char*` copia para um buffer
+seu.
+
+### 81.4 — empresta na ida, copia na volta
+
+pscript→P: o `str` vira `{p, n}` apontando para os próprios bytes — **zero
+cópia**, seguro porque uma chamada C não coleta (só `ps_gc_poll` coleta, e C não
+o chama), então nada se move debaixo dela. P→pscript: cópia na chegada. E,
+quando a largura adaptável da 80.1b existir, o objeto guarda a forma UTF-8 na
+primeira vez que alguém a pede, para que a ida continue sem cópia.
+
+### 86.1 — parâmetro de array NU vira ERRO no P
+
+Medido: `def f(b: u8[8])` emite `uint8_t b[8]`, que **decai**; dentro da função
+`sizeof(b)` dá 8 (o ponteiro) enquanto fora dá 4 para um `u8[4]`; e passar um
+`u8[4]` onde se declarou `u8[8]` compila calado.
+
+Já `def f(in b: u8[8])` emite `uint8_t (*b)[8]` — ponteiro para array, que **não
+decai** (`sizeof(*b)` é o tamanho real), cujo descasamento o compilador acusa, e
+cuja leitura o P já protege (`b[0] = 1` num `in` é erro).
+
+Decidido: em fonte P, a forma nua vira ERRO apontando a saída — `in b: u8[8]`
+(referência conferida) ou `b: *u8, n: usize`. O front-end C continua aceitando,
+porque lá é C de verdade.
+
+**E um achado que salvou um "conserto" errado:** `in b: u8[N]` NÃO deve emitir
+`const uint8_t (*b)[8]`. Passar `&a` (array não-const) para um ponteiro-para-
+array const é **erro em ISO C antes do C2X** — falha em c89, c99 e c11 sob
+`-pedantic-errors`. Sem o `const` funciona nos três. A forma que o P emite hoje
+é a única portável, e a garantia de somente-leitura vem do P, em tempo de
+compilação, e não do tipo em C. Também medido: `CStr` como struct passada e
+devolvida por valor compila limpo em c89.
+
+### 86.2 — na fronteira, texto e bytes são SEMPRE `CStr`/`CBytes`
+
+Inclusive quando o tamanho é fixo. Uma regra só para lembrar. O `in b: u8[N]`
+continua existindo para código P↔P, onde a checagem de tamanho é de graça.
+
 ## Pendências de decisão acumuladas
 
 Nenhuma no momento. (Acrescente aqui conforme aparecerem, com o número da
