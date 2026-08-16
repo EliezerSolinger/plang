@@ -777,6 +777,8 @@ def ps_pool_submit(ctx: *PsCtx, w: *PsWork)
 def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
 def ps_utf8_valid(b: const *char, n: usize) -> bool
 def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> *PsStr
+def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, line: i32) -> *PsStr
+def ps_bytes_new(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList
 def ps_aprint(ctx: *PsCtx, s: *PsStr) -> *PsTask
 def ps_std_file(ctx: *PsCtx, which: i32) -> *PsFile
 
@@ -971,6 +973,8 @@ def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: boo
 def ps_str_split(ctx: *PsCtx, s: *PsStr, sep: *PsStr) -> *PsList
 def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64
 def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool
+def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_startswith(s: *PsStr, p: *PsStr) -> bool
 def ps_str_endswith(s: *PsStr, p: *PsStr) -> bool
 def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr

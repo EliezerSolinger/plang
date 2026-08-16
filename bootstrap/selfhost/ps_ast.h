@@ -68,6 +68,8 @@ struct PsExpr {
     PsType *box_to;
     int is_dyn;
     int is_cfunc;
+    int32_t cstr_arg;
+    int32_t cstr_ret;
     PsType *any_cast;
     Expr *low;
     int is_splat;
@@ -119,12 +121,15 @@ struct PsStmt {
     int is_typematch;
 };
 
+typedef enum { PS_CS_NONE = 0, PS_CS_STR, PS_CS_BYTES } PsCStrKind;
+
 struct PsParam {
     const char *name;
     PsType *type;
     PsExpr *dflt;
     int is_varargs;
     int is_in;
+    int32_t cstr;
     Pos pos;
 };
 
@@ -135,6 +140,7 @@ struct PsTParam {
 };
 
 struct PsFunc {
+    int32_t ret_cstr;
     const char *name;
     PsParam *params;
     int32_t nparams;

@@ -124,6 +124,9 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
 | Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
+| HTTP/1.1 escrito em pscript | 77.2, 78.1 | `http_server`, `lib_http` | ✅ parser incremental (linha, cabeçalhos, content-length, chunked) com as recusas do llhttp; servidor e clientes no mesmo processo |
+| Texto atravessa a fronteira (`CStr`/`CBytes`) | 81, 83, 84, 85, 86 | `text_boundary` | ✅ par {ponteiro, tamanho} que não aloca; ida sem cópia, volta com cópia e UTF-8 conferido; `in s: CStr` passa o endereço |
+| `str.lower()` / `str.upper()` | — | `lib_http` | ✅ ASCII (caixa Unicode depende de língua) |
 | Socket e DNS (`net`) | 77.1 | `net_socket` | ✅ `net.listen/connect/lookup`, `accept/read/write/close/port`; accept/read/write POLLED no mesmo `poll` do escalonador, connect e DNS no pool |
 | Limpeza dentro de `async def` | 50.1, 80.2 | `async_cleanup` | ✅ `defer`, `with` e `finally` armam um bit no frame e rodam em toda saída de verdade — nunca numa suspensão (era bug: rodavam ao estacionar) |
 | `try`/`catch` dentro de `async def` | 50.1 | `aio_files` | ✅ o guarda salta para o estado do catch |

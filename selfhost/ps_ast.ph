@@ -153,6 +153,8 @@ struct PsExpr:
                         #   through the vtable instead of naming a function
     is_cfunc: bool      # PE_CALL to a C function ingested from a header (45.5):
                         #   it takes no context, because it knows nothing about one
+    cstr_arg: i32       # this ARGUMENT crosses as a `CStr`/`CBytes` pair (84.1)
+    cstr_ret: i32       # ... and this CALL brings one back
     any_cast: *PsType   # PE_NAME read where `match type(x)` proved the kind
                         #   (68.5): the variable is still `any`, so the read
                         #   reaches inside — same device as `narrowed`
@@ -236,6 +238,15 @@ struct PsStmt:
                           #   inside each one the subject IS that type
 
 # ---------- declarations ----------
+# 84.1: a parameter or return the P side spells `CStr`/`CBytes` — a pointer and
+# its length, as a value. pscript sees `str` or `list<u8>`; what the compiler
+# keeps here is WHICH of the two, so the call site can build the pair on the way
+# out and copy on the way in.
+enum PsCStrKind:
+    PS_CS_NONE = 0
+    PS_CS_STR
+    PS_CS_BYTES
+
 struct PsParam:
     name: const *char
     type: *PsType
@@ -244,6 +255,8 @@ struct PsParam:
     is_in: bool      # `in x` — read by reference, no copy (55.4). Spelled at
                      #   the CALL SITE too, as in P: the reader of the call can
                      #   see that nothing is being copied.
+    cstr: i32        # the P side spells it `CStr`/`CBytes` (84.1): pscript sees
+                     #   `str` or `list<u8>`, and this says which pair to build
     pos: Pos
 
 # `def sort<T: Comparable>(...)` — a type parameter and the trait it is bound to
@@ -255,6 +268,8 @@ struct PsTParam:
     pos: Pos
 
 struct PsFunc:
+    ret_cstr: i32    # ... and the same for the RETURN (84.1): what comes back
+                     #   is copied into this heap and, for text, checked
     name: const *char
     params: *PsParam
     nparams: i32

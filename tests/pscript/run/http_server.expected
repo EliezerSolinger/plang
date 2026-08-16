@@ -1,0 +1,6 @@
+1: metodo=GET alvo=/ola host=exemplo.local corpo=
+2: metodo=POST alvo=/eco host=exemplo.local corpo=ola mundo
+3: metodo=POST alvo=/pedacos host=exemplo.local corpo=abcdefgh
+atendidos: 3
+recusa 1: espaco antes dos dois-pontos
+recusa 2: content-length e chunked ao mesmo tempo

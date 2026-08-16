@@ -3522,6 +3522,27 @@ def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> 
         return ps_str_new(ctx, "", 0)
     return ps_str_new(ctx, p, n)
 
+# 81.4/83.2: texto que VEM do lado P. Os bytes são copiados na chegada — a
+# memória é de lá e o coletor não a rastreia — e CONFERIDOS, porque um `str`
+# promete codepoints e um que mentisse sobre isso seria pior que um erro.
+def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, line: i32) -> *PsStr:
+    if p == None:
+        return ps_str_new(ctx, "", 0)
+    if not ps_utf8_valid(p, n):
+        ps_raise(ctx, "this text is not valid UTF-8 (it came from the other side of the boundary)", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    return ps_str_new(ctx, p, n)
+
+# ... e bytes, que não prometem nada e por isso não são conferidos
+def ps_bytes_new(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList:
+    l: *PsList = ps_list_new(ctx, 1, False, i64(n))
+    i: usize = 0
+    while i < n:
+        dst: *char = ps_list_push(ctx, l)
+        *dst = char(p[i])
+        i += 1
+    return l
+
 def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr:
     n: usize = usize(a->len) + usize(b->len)
     s: *PsStr = ps_alloc(ctx, sizeof(PsStr) + n + 1, PS_TY_STR)
@@ -3737,6 +3758,33 @@ def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
         if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
             return True
     return False
+
+# ASCII, e dito em voz alta: caixa em Unicode depende de LÍNGUA (o i sem ponto
+# do turco é o exemplo clássico), e um `lower()` que finge saber disso mente.
+# O que HTTP, um cabeçalho e um identificador precisam é exatamente isto.
+def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    n: usize = usize(s->len)
+    out: *PsStr = ps_str_new(ctx, s->data, n)
+    i: usize = 0
+    while i < n:
+        c: char = out->data[i]
+        if c >= 'A' and c <= 'Z':
+            out->data[i] = char(i32(c) + 32)
+        i += 1
+    out->hash = 0
+    return out
+
+def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    n: usize = usize(s->len)
+    out: *PsStr = ps_str_new(ctx, s->data, n)
+    i: usize = 0
+    while i < n:
+        c: char = out->data[i]
+        if c >= 'a' and c <= 'z':
+            out->data[i] = char(i32(c) - 32)
+        i += 1
+    out->hash = 0
+    return out
 
 def ps_str_startswith(s: *PsStr, p: *PsStr) -> bool:
     if p->len > s->len:

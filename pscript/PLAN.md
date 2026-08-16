@@ -1522,6 +1522,56 @@ depois, então ele precisa do ambiente de captura E da máquina de estados ao
 mesmo tempo — as duas coisas compostas. O bloco cobre o caso real; a forma de
 expressão fica registrada.
 
+### 81/83/84/85/86 — texto atravessando a fronteira: `CStr` e `CBytes` — FEITOS
+
+Dois tipos de VALOR no P, `{ponteiro, tamanho}`, que **não alocam nada**:
+`CStr` para texto e `CBytes` para bytes. Eles moram em `stl/cstr.ph` — e aqui
+vale registrar um desvio da 83.3, que dizia "núcleo da linguagem": o
+compilador os RECONHECE por nome (é ele que monta o par no sítio da chamada e
+que copia na volta), mas a DECLARAÇÃO precisa morar num arquivo, porque um
+tipo que o compilador injetasse em cada módulo daria definição duplicada em C
+quando dois headers se encontrassem no mesmo `.c`. Um `import` resolve, e o
+75.3 puxa o header transitivamente, então na prática o programa não escreve
+nada a mais.
+
+Como ficou, medido no teste `text_boundary`:
+
+  * **ida sem cópia**: o compilador monta o par apontando para os próprios
+    bytes do `str`, e isso é seguro porque uma chamada C não coleta;
+  * **volta com cópia e conferência**: o P nunca dá posse (devolve estático ou
+    um buffer seu, a convenção do `strerror`), o pscript copia na chegada, e
+    para texto VALIDA UTF-8 — bytes inválidos lançam;
+  * `in s: CStr` no P é ponteiro const, então o que atravessa é o endereço do
+    par; sem `in`, o par vai por valor. Os dois funcionam;
+  * o teste mostra a diferença que justifica tudo: `texto_tamanho("olá mundo")`
+    dá **10** do lado P (bytes) e `len()` dá **9** aqui (codepoints).
+
+### 77.2 / 78.1 — HTTP/1.1 em pscript — FEITO
+
+`tests/pscript/run/lib_http.psc`: a máquina de estados do llhttp reescrita a
+partir da especificação, em pscript, sem um `.c` de terceiro no runtime. Ela é
+INCREMENTAL (`feed(bytes)` diz se o pedido acabou), entende corpo por
+`content-length` e por PEDAÇOS, e recusa o que o llhttp recusa — espaço antes
+dos dois-pontos e `content-length` junto com `chunked`, que são as duas formas
+clássicas de contrabando de pedido.
+
+`http_server.psc` põe um servidor e três clientes no MESMO processo e na mesma
+thread, conversando por socket de verdade. Isso só funciona porque toda espera
+estaciona.
+
+**Dois bugs de compilador que só apareceram aqui**, ambos no partidor de
+estados e ambos anteriores a esta fase:
+
+  * `break`/`continue` dentro de um laço que virou ESTADOS eram emitidos como
+    `break` do C — que sai do `switch` e volta ao mesmo estado na volta do
+    `while (1)`: laço infinito. Nunca apareceu porque nenhum teste tinha um
+    `break` dentro de um laço async;
+  * sair de um `with` por `break`/`continue` pulava o fechamento. Agora o salto
+    roda as limpezas armadas desde o início do laço.
+
+E `str` ganhou `lower()`/`upper()` (ASCII, e dito em voz alta: caixa em Unicode
+depende de língua, e um `lower()` que fingisse saber disso mentiria).
+
 ### A ordem de implementação
 
   1. escalonador: `await` cede sempre (78.4) e o laço drena no fim (77.3);

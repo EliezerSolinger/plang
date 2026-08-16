@@ -280,6 +280,9 @@ struct PsLow {
     Expr *subst_val;
     const char *async_frame;
     const char *async_task;
+    int32_t async_lnacl;
+    int32_t async_brk;
+    int32_t async_cont;
     int32_t async_catch;
     char **acl_flag;
     PsBlock **acl_body;
@@ -382,6 +385,8 @@ static Expr *PsLow_repr_value(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t 
 static Expr *PsLow_zero_of(PsLow *self, Type *t, Pos pos);
 
 static Stmt *PsLow_guard(PsLow *self, Pos pos);
+
+static Stmt *PsLow_loop_jump(PsLow *self, int32_t target, Pos pos, int is_break);
 
 static void PsLow_async_cleanup(PsLow *self, Vec_pStmt *out, Pos pos);
 
@@ -766,6 +771,34 @@ static void PsLow_async_cleanup_one(PsLow *self, Vec_pStmt *out, int32_t i, Pos 
     g->if_sel = -1;
     Vec_pStmt_push(out, g);
     self->in_cleanup = 0;
+}
+
+static Stmt *PsLow_loop_jump(PsLow *self, int32_t target, Pos pos, int is_break) {
+    if (target < 0) {
+        return st_new(self->a, (is_break ? ST_BREAK : ST_CONTINUE), pos);
+    }
+    Vec_pStmt blk;
+    Vec_pStmt_init(&blk);
+    int32_t i9 = self->nacl - 1;
+    while (i9 >= self->async_lnacl) {
+        PsLow_async_cleanup_one(self, &blk, i9, pos);
+        i9 -= 1;
+    }
+    Stmt *sv = st_new(self->a, ST_ASSIGN, pos);
+    sv->lhs = ex_new(self->a, EX_FIELD, pos);
+    sv->lhs->op = TK_ARROW;
+    sv->lhs->lhs = PsLow_ident(self, self->async_task, pos);
+    sv->lhs->field = "state";
+    sv->op = TK_ASSIGN;
+    sv->rhs = PsLow_num(self, Arena_printf(self->a, "%d", target), pos);
+    Vec_pStmt_push(&blk, sv);
+    Vec_pStmt_push(&blk, st_new(self->a, ST_CONTINUE, pos));
+    Block *b = Arena_alloc(self->a, sizeof(Block));
+    b->stmts = blk.data;
+    b->n = blk.len;
+    Stmt *st = st_new(self->a, ST_BLOCK, pos);
+    st->body = b;
+    return st;
 }
 
 static Stmt *PsLow_guard(PsLow *self, Pos pos) {
@@ -2932,6 +2965,52 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         size_t i;
         for (i = 0; i < e->nargs; i += 1) {
             Expr *a9 = PsLow_expr(self, e->args[i]);
+            int32_t csk9 = e->args[i]->cstr_arg;
+            if (csk9 != 0) {
+                const char *tn9 = Arena_printf(self->a, "__cs%d", self->tmp_ctr);
+                self->tmp_ctr += 1;
+                Stmt *vd9 = st_new(self->a, ST_VAR, e->pos);
+                vd9->name = tn9;
+                vd9->type = ty_name(self->a, (csk9 == 1 ? "CStr" : "CBytes"));
+                Expr *il9 = ex_new(self->a, EX_INITLIST, e->pos);
+                il9->args = Arena_alloc(self->a, (size_t)2 * sizeof(*il9->args));
+                Expr *fp9 = ex_new(self->a, EX_FIELD, e->pos);
+                fp9->op = TK_ARROW;
+                fp9->lhs = a9;
+                fp9->field = (csk9 == 1 ? "data" : "data");
+                if (csk9 == 1) {
+                    il9->args[0] = fp9;
+                } else {
+                    Expr *bp9 = PsLow_call_rt(self, "ps_list_base", e->pos);
+                    PsLow_push_arg(self, bp9, a9);
+                    Expr *cst9 = ex_new(self->a, EX_CAST, e->pos);
+                    cst9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"));
+                    cst9->cast_type->inner->is_const = 1;
+                    cst9->lhs = bp9;
+                    il9->args[0] = cst9;
+                }
+                Expr *ln9 = ex_new(self->a, EX_FIELD, e->pos);
+                ln9->op = TK_ARROW;
+                ln9->lhs = PsLow_expr(self, e->args[i]);
+                ln9->field = "len";
+                Expr *cl9 = ex_new(self->a, EX_CAST, e->pos);
+                cl9->cast_type = ty_name(self->a, "usize");
+                cl9->lhs = ln9;
+                il9->args[1] = cl9;
+                il9->nargs = 2;
+                vd9->init = il9;
+                Vec_pStmt_push(&self->pre, vd9);
+                Expr *pv9 = PsLow_ident(self, tn9, e->pos);
+                if (e->args[i]->is_in) {
+                    Expr *ad9 = ex_new(self->a, EX_UNARY, e->pos);
+                    ad9->op = TK_AMP;
+                    ad9->byref = PK_IN;
+                    ad9->lhs = pv9;
+                    pv9 = ad9;
+                }
+                PsLow_push_arg(self, cc2, pv9);
+                continue;
+            }
             if (e->args[i]->is_in) {
                 Expr *ad9 = ex_new(self->a, EX_UNARY, e->pos);
                 ad9->op = TK_AMP;
@@ -2940,6 +3019,33 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                 a9 = ad9;
             }
             PsLow_push_arg(self, cc2, a9);
+        }
+        if (e->cstr_ret != 0) {
+            const char *rn9 = Arena_printf(self->a, "__cr%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            Stmt *rd9 = st_new(self->a, ST_VAR, e->pos);
+            rd9->name = rn9;
+            rd9->type = ty_name(self->a, (e->cstr_ret == 1 ? "CStr" : "CBytes"));
+            rd9->init = cc2;
+            Vec_pStmt_push(&self->pre, rd9);
+            Expr *mk9 = PsLow_call_rt(self, (e->cstr_ret == 1 ? "ps_str_checked" : "ps_bytes_new"), e->pos);
+            PsLow_push_arg(self, mk9, PsLow_ctx_arg(self, e->pos));
+            Expr *pf9 = ex_new(self->a, EX_FIELD, e->pos);
+            pf9->op = TK_DOT;
+            pf9->lhs = PsLow_ident(self, rn9, e->pos);
+            pf9->field = "ptr";
+            PsLow_push_arg(self, mk9, pf9);
+            Expr *lf9 = ex_new(self->a, EX_FIELD, e->pos);
+            lf9->op = TK_DOT;
+            lf9->lhs = PsLow_ident(self, rn9, e->pos);
+            lf9->field = "len";
+            PsLow_push_arg(self, mk9, lf9);
+            if (e->cstr_ret == 1) {
+                PsLow_pos_args(self, mk9, e->pos);
+                self->raised = 1;
+            }
+            self->allocs = 1;
+            return mk9;
         }
         return cc2;
     }
@@ -4473,29 +4579,59 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         case PS_WHILE: {
             Stmt *w = st_new(self->a, ST_WHILE, s->pos);
             w->cond = PsLow_expr(self, s->cond);
+            int32_t sb9 = self->async_brk;
+            int32_t sc9 = self->async_cont;
+            self->async_brk = -1;
+            self->async_cont = -1;
             w->body = PsLow_block(self, s->body);
+            self->async_brk = sb9;
+            self->async_cont = sc9;
             Vec_pStmt_push(out, w);
             break;
         }
         case PS_FOR: {
+            int32_t sb8 = self->async_brk;
+            int32_t sc8 = self->async_cont;
+            self->async_brk = -1;
+            self->async_cont = -1;
             if (s->iter->type != NULL && s->iter->type->kind == PT_ARRAY) {
                 PsLow_lower_arr_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
                 return;
             }
             if (s->iter->type != NULL && s->iter->type->kind == PT_NAME && PsLow_find_ps_method(self, s->iter->type, "has_next") != NULL) {
                 PsLow_lower_iter_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
                 return;
             }
             if (s->iter->type != NULL && (s->iter->type->kind == PT_DICT || s->iter->type->kind == PT_SET)) {
                 PsLow_lower_dict_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
                 return;
             }
             if (s->iter->type != NULL && s->iter->type->kind == PT_STR) {
                 PsLow_lower_str_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
                 return;
             }
             if (s->iter->type != NULL && s->iter->type->kind == PT_LIST) {
                 PsLow_lower_list_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
                 return;
             }
             Stmt *fr = st_new(self->a, ST_FOR, s->pos);
@@ -4512,6 +4648,10 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
             }
             fr->body = PsLow_block(self, s->body);
             Vec_pStmt_push(out, fr);
+            {
+                self->async_brk = sb8;
+                self->async_cont = sc8;
+            }
             break;
         }
         case PS_RAISE: {
@@ -4562,11 +4702,11 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
             break;
         }
         case PS_BREAK: {
-            Vec_pStmt_push(out, st_new(self->a, ST_BREAK, s->pos));
+            Vec_pStmt_push(out, PsLow_loop_jump(self, self->async_brk, s->pos, 1));
             break;
         }
         case PS_CONTINUE: {
-            Vec_pStmt_push(out, st_new(self->a, ST_CONTINUE, s->pos));
+            Vec_pStmt_push(out, PsLow_loop_jump(self, self->async_cont, s->pos, 0));
             break;
         }
         case PS_PASS: {
@@ -5826,6 +5966,9 @@ static Decl *lower_lam_func(PsLow *L, PsExpr *e, int32_t idx, int with_body) {
     }
     L->async_task = NULL;
     L->async_catch = -1;
+    L->async_brk = -1;
+    L->async_cont = -1;
+    L->async_lnacl = 0;
     L->ret = pf->ret;
     L->ret_ps = e->type->inner;
     L->zret = NULL;
@@ -6495,6 +6638,14 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
     if (s == NULL) {
         return;
     }
+    if (s->kind == PS_BREAK && B->brk >= 0) {
+        ab_goto(B, B->brk, s->pos);
+        return;
+    }
+    if (s->kind == PS_CONTINUE && B->cont >= 0) {
+        ab_goto(B, B->cont, s->pos);
+        return;
+    }
     if (s->kind == PS_DEFER) {
         ab_defer(B, s);
         return;
@@ -6602,11 +6753,18 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             int32_t oc = B->cont;
             B->brk = after;
             B->cont = head;
+            B->L->async_brk = after;
+            B->L->async_cont = head;
+            int32_t ol9 = B->L->async_lnacl;
+            B->L->async_lnacl = B->L->nacl;
             B->cur = body;
             ab_block(B, s->body);
             ab_goto(B, head, s->pos);
             B->brk = ob;
             B->cont = oc;
+            B->L->async_brk = ob;
+            B->L->async_cont = oc;
+            B->L->async_lnacl = ol9;
             B->cur = after;
             break;
         }
@@ -6669,6 +6827,10 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             int32_t foc = B->cont;
             B->brk = fafter;
             B->cont = fstep;
+            B->L->async_brk = fafter;
+            B->L->async_cont = fstep;
+            int32_t of9 = B->L->async_lnacl;
+            B->L->async_lnacl = B->L->nacl;
             B->cur = fbody;
             Stmt *bind = st_new(B->L->a, ST_ASSIGN, s->pos);
             bind->lhs = (PsLow_in_frame(B->L, s->names[0]) ? PsLow_async_field(B->L, s->names[0], s->pos) : PsLow_ident(B->L, ps_cname(B->L->a, s->names[0]), s->pos));
@@ -6690,6 +6852,9 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             ab_goto(B, fhead, s->pos);
             B->brk = fob;
             B->cont = foc;
+            B->L->async_brk = fob;
+            B->L->async_cont = foc;
+            B->L->async_lnacl = of9;
             B->cur = fafter;
             break;
         }
@@ -7008,6 +7173,9 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
     L->async_frame = NULL;
     L->async_task = NULL;
     L->async_catch = -1;
+    L->async_brk = -1;
+    L->async_cont = -1;
+    L->async_lnacl = 0;
     return d;
 }
 
@@ -7844,6 +8012,9 @@ static Decl *lower_func(PsLow *L, PsFunc *f, const char *owner, int with_body) {
 Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     PsLow L = {0};
     L.async_catch = -1;
+    L.async_brk = -1;
+    L.async_cont = -1;
+    L.async_lnacl = 0;
     L.a = a;
     L.file = m->path;
     L.m = m;

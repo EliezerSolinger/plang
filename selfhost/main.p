@@ -427,6 +427,25 @@ def main(argc: int, argv: **char) -> int:
                 sema_run(&cc, m)
         else:
             m = cc_load_module(&cc, path)
+            # 75.3, transitively: a module pulled into this build may import
+            # others, and one command has to mean the whole graph. Only what a
+            # PULLED file needs is pulled — a file the user named keeps the
+            # build they asked for.
+            if is_pulled(&pulled, path):
+                for j in range(m->ndecls):
+                    im: *Decl = m->decls[j]
+                    if im->kind != DL_IMPORT or im->is_include or im->import_path == None:
+                        continue
+                    if not has_suffix(im->import_path, ".ph"):
+                        continue
+                    ip: const *char = path_join(&cc.arena, path_dir(&cc.arena, path), im->import_path)
+                    add_input(&inputs, &pulled, ip)
+                    isp: const *char = cc.arena.printf("%.*s", i32(strlen(ip) - 1), ip)
+                    sl2: usize = 0
+                    sb2: *char = read_entire_file_opt(isp, out sl2)
+                    if sb2 != None:
+                        free(sb2)
+                        add_input(&inputs, &pulled, isp)
             # a pre-sema backend wants the SURFACE tree: printing the source
             # language must not see the lowering (backend_p)
             if not be->pre_sema:

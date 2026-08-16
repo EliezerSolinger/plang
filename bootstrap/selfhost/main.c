@@ -448,6 +448,27 @@ int main(int argc, char **argv) {
             }
         } else {
             m = cc_load_module(&cc, path);
+            if (is_pulled(&pulled, path)) {
+                size_t j;
+                for (j = 0; j < m->ndecls; j += 1) {
+                    Decl *im = m->decls[j];
+                    if (im->kind != DL_IMPORT || im->is_include || im->import_path == NULL) {
+                        continue;
+                    }
+                    if (!has_suffix(im->import_path, ".ph")) {
+                        continue;
+                    }
+                    const char *ip = path_join(&cc.arena, path_dir(&cc.arena, path), im->import_path);
+                    add_input(&inputs, &pulled, ip);
+                    const char *isp = Arena_printf(&cc.arena, "%.*s", (int32_t)(strlen(ip) - 1), ip);
+                    size_t sl2 = 0;
+                    char *sb2 = read_entire_file_opt(isp, &sl2);
+                    if (sb2 != NULL) {
+                        free(sb2);
+                        add_input(&inputs, &pulled, isp);
+                    }
+                }
+            }
             if (!be->pre_sema) {
                 sema_run(&cc, m);
                 if (strcmp(be->name, "qbe") == 0) {

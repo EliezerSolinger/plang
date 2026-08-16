@@ -284,6 +284,8 @@ struct PsSema:
     static def find_trait_named(self: *PsSema, name: const *char, ns: *PsNs, pos: Pos) -> *PsDecl
     static def add_methods(self: *PsSema, rd: *PsDecl, ms: **PsFunc, nms: i32)
     static def c_type(self: *PsSema, t: *Type) -> *PsType
+    static def cstr_kind(self: *PsSema, t: *Type) -> i32
+    static def bytes_type(self: *PsSema, pos: Pos) -> *PsType
     static def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc)
     static def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
     static def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType
@@ -1201,16 +1203,16 @@ struct PsSema:
                     lw2: *PsType = ps_type(self->a, PT_LIST, e->pos)
                     lw2->inner = st5
                     return lw2
-                if strcmp(nm2, "strip") == 0:
+                if strcmp(nm2, "strip") == 0 or strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0:
                     if e->nargs != 0:
-                        fatal_at(self->file, e->pos, "strip() takes no arguments")
+                        fatal_at(self->file, e->pos, "%s() takes no arguments", nm2)
                     return st5
                 if strcmp(nm2, "find") == 0 or strcmp(nm2, "startswith") == 0 or strcmp(nm2, "endswith") == 0 or strcmp(nm2, "contains") == 0:
                     if e->nargs != 1:
                         fatal_at(self->file, e->pos, "%s() takes one string", nm2)
                     self->want(e->args[0], self->check_expr(e->args[0]), st5, "the argument")
                     return ps_type(self->a, PT_INT, e->pos) if strcmp(nm2, "find") == 0 else bl2
-                fatal_at(self->file, e->pos, "a string has split, strip, find, contains, startswith and endswith so far")
+                fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith and endswith so far")
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -1518,7 +1520,14 @@ struct PsSema:
                 fatal_at(self->file, e->pos, "'%s' takes %d argument(s), %d given", name, cf->nparams, e->nargs)
             for i in range(e->nargs):
                 at4: *PsType = self->check_expr(e->args[i])
-                if cf->params[i].is_in:
+                # 84.1: what the lowering needs to know at the call, marked on
+                # the nodes it will see — the same way `is_in` is
+                e->args[i]->cstr_arg = cf->params[i].cstr
+                if cf->params[i].cstr != 0 and cf->params[i].is_in:
+                    # `in s: CStr` on the P side: what goes over is the ADDRESS
+                    # of the pair the call builds, which is P's own spelling
+                    e->args[i]->is_in = True
+                if cf->params[i].is_in and cf->params[i].cstr == 0:
                     # 72.6, checked HERE because only the call site knows what
                     # it is handing over: a `const` module variable of that
                     # record type. A const lives in C's file scope — its
@@ -1529,6 +1538,7 @@ struct PsSema:
                     e->args[i]->is_in = True
                 self->want(e->args[i], at4, cf->params[i].type, self->a->printf("parameter '%s'", cf->params[i].name))
             e->is_cfunc = True
+            e->cstr_ret = cf->ret_cstr
             return cf->ret
         if self->funcs.has(name):
             f: *PsFunc = self->funcs.get_or(name, None)
@@ -2756,18 +2766,31 @@ struct PsSema:
             f: *Func = cd->func
             if f->is_varargs or f->sig_empty:
                 continue      # 12.1: C's variadic ABI does not cross
+            rck: i32 = self->cstr_kind(f->ret)
             rt: *PsType = self->c_type(f->ret)
+            if rck != 0:
+                rt = ps_type(self->a, PT_STR, zero_ps_pos()) if rck == 1 else self->bytes_type(zero_ps_pos())
             if rt == None:
                 continue
             ps: *PsFunc = self->a->alloc(sizeof(PsFunc))
             ps->name = f->name
             ps->ret = rt
+            ps->ret_cstr = rck
             ok: bool = True
             if f->nparams > 0:
                 ps->params = self->a->alloc(usize(f->nparams) * sizeof(PsParam))
                 for j in range(f->nparams):
                     pt: *PsType = self->c_type(f->params[j].type)
                     inp: bool = False
+                    csk: i32 = self->cstr_kind(f->params[j].type)
+                    if csk != 0:
+                        # 84.1: a pointer and its length, as a value. On this
+                        # side it is `str` or `list<u8>`; what crosses is the
+                        # pair, built at the call and valid for its duration.
+                        pt = ps_type(self->a, PT_STR, zero_ps_pos()) if csk == 1 else self->bytes_type(zero_ps_pos())
+                        # `in s: CStr` is P's spelling for a const reference, so
+                        # what the call hands over is the ADDRESS of the pair
+                        inp = f->params[j].type != None and f->params[j].type->kind == TY_PTR
                     if pt == None:
                         # 72.6: `const *R` — a record BY REFERENCE, read-only.
                         # It is the one pointer that crosses 45.5, and it does
@@ -2783,9 +2806,32 @@ struct PsSema:
                     ps->params[j].name = f->params[j].name if f->params[j].name != None else "arg"
                     ps->params[j].type = pt
                     ps->params[j].is_in = inp
+                    ps->params[j].cstr = csk
                 ps->nparams = f->nparams
             if ok and not self->cfuncs.has(f->name) and not self->funcs.has(f->name):
                 self->cfuncs.put(f->name, ps)
+
+    # `CStr` / `CBytes` (84.1), by name and by shape: a struct of exactly a
+    # pointer and a length. The name is what the compiler recognizes, and the
+    # `in` form counts too, because that is how a P signature spells it.
+    static def cstr_kind(self: *PsSema, t: *Type) -> i32:
+        b: *Type = t
+        if b != None and b->kind == TY_PTR:
+            b = b->inner
+        if b == None or b->kind != TY_NAME or b->name == None:
+            return 0
+        if strcmp(b->name, "CStr") == 0:
+            return 1
+        if strcmp(b->name, "CBytes") == 0:
+            return 2
+        return 0
+
+    static def bytes_type(self: *PsSema, pos: Pos) -> *PsType:
+        l: *PsType = ps_type(self->a, PT_LIST, pos)
+        l->inner = ps_type(self->a, PT_INT, pos)
+        l->inner->width = 8
+        l->inner->uns = True
+        return l
 
     # a C type as a pscript type, or None when it cannot cross (45.5)
     static def c_type(self: *PsSema, t: *Type) -> *PsType:

@@ -110,6 +110,14 @@ struct PsLow:
     # through it, and a raise ends the STEP instead of the function.
     async_frame: const *char
     async_task: const *char
+    async_lnacl: i32     # how many cleanups were armed when that loop began:
+                         #   a `break` out of a `with` INSIDE it has to close
+                         #   what the loop armed, and nothing above it
+    async_brk: i32       # inside a step function, in a loop that BECAME STATES:
+    async_cont: i32      #   where `break` and `continue` go. A C `break` there
+                         #   would leave the switch and land back in the same
+                         #   state — an infinite loop. -1 when the nearest loop
+                         #   is an ordinary one, lowered whole inside a state.
     async_catch: i32     # inside a `try` in a step function (50.1): the state
                          #   the machine goes to when something raises. -1 when
                          #   there is no `try` around this point.
@@ -189,6 +197,7 @@ struct PsLow:
     static def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     static def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
     static def guard(self: *PsLow, pos: Pos) -> *Stmt
+    static def loop_jump(self: *PsLow, target: i32, pos: Pos, is_break: bool) -> *Stmt
     static def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos)
     static def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt
     static def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos)
@@ -492,6 +501,36 @@ struct PsLow:
         g->if_sel = -1
         out->push(g)
         self->in_cleanup = False
+
+    # `break`/`continue` where the enclosing loop became STATES (50.1): the jump
+    # is a state assignment plus `continue` of the machine's own `while (1)`.
+    # A C `break` there would leave the switch and come back to the same state.
+    static def loop_jump(self: *PsLow, target: i32, pos: Pos, is_break: bool) -> *Stmt:
+        if target < 0:
+            return st_new(self->a, ST_BREAK if is_break else ST_CONTINUE, pos)
+        blk: Vec<*Stmt>
+        blk.init()
+        # leaving a `with` that is INSIDE the loop closes it on the way out —
+        # the same rule as a `return`, but only down to where the loop began
+        i9: i32 = self->nacl - 1
+        while i9 >= self->async_lnacl:
+            self->async_cleanup_one(&blk, i9, pos)
+            i9 -= 1
+        sv: *Stmt = st_new(self->a, ST_ASSIGN, pos)
+        sv->lhs = ex_new(self->a, EX_FIELD, pos)
+        sv->lhs->op = TK_ARROW
+        sv->lhs->lhs = self->ident(self->async_task, pos)
+        sv->lhs->field = "state"
+        sv->op = TK_ASSIGN
+        sv->rhs = self->num(self->a->printf("%d", target), pos)
+        blk.push(sv)
+        blk.push(st_new(self->a, ST_CONTINUE, pos))
+        b: *Block = self->a->alloc(sizeof(Block))
+        b->stmts = blk.data
+        b->n = blk.len
+        st: *Stmt = st_new(self->a, ST_BLOCK, pos)
+        st->body = b
+        return st
 
     # `if ps_has_exc(&__ctx): return <nothing meaningful>` — the check of 49.2
     static def guard(self: *PsLow, pos: Pos) -> *Stmt:
@@ -2565,6 +2604,54 @@ struct PsLow:
             cc2: *Expr = self->call_rt(name, e->pos)
             for i in range(e->nargs):
                 a9: *Expr = self->expr(e->args[i])
+                csk9: i32 = e->args[i]->cstr_arg
+                if csk9 != 0:
+                    # 84.1/81.4: the pair is built HERE and lives only for this
+                    # call — the pointer is the object's own bytes, and a C call
+                    # cannot collect (only `ps_gc_poll` does), so nothing moves
+                    # under it. Zero copy on the way out.
+                    tn9: const *char = self->a->printf("__cs%d", self->tmp_ctr)
+                    self->tmp_ctr += 1
+                    vd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                    vd9->name = tn9
+                    vd9->type = ty_name(self->a, "CStr" if csk9 == 1 else "CBytes")
+                    il9: *Expr = ex_new(self->a, EX_INITLIST, e->pos)
+                    il9->args = self->a->alloc(usize(2) * sizeof(*il9->args))
+                    fp9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                    fp9->op = TK_ARROW
+                    fp9->lhs = a9
+                    fp9->field = "data" if csk9 == 1 else "data"
+                    if csk9 == 1:
+                        il9->args[0] = fp9
+                    else:
+                        # a `list<u8>` keeps its bytes after the header
+                        bp9: *Expr = self->call_rt("ps_list_base", e->pos)
+                        self->push_arg(bp9, a9)
+                        cst9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                        cst9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"))
+                        cst9->cast_type->inner->is_const = True
+                        cst9->lhs = bp9
+                        il9->args[0] = cst9
+                    ln9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                    ln9->op = TK_ARROW
+                    ln9->lhs = self->expr(e->args[i])
+                    ln9->field = "len"
+                    cl9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                    cl9->cast_type = ty_name(self->a, "usize")
+                    cl9->lhs = ln9
+                    il9->args[1] = cl9
+                    il9->nargs = 2
+                    vd9->init = il9
+                    self->pre.push(vd9)
+                    pv9: *Expr = self->ident(tn9, e->pos)
+                    if e->args[i]->is_in:
+                        ad9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                        ad9->op = TK_AMP
+                        ad9->byref = PK_IN
+                        ad9->lhs = pv9
+                        pv9 = ad9
+                    self->push_arg(cc2, pv9)
+                    continue
                 if e->args[i]->is_in:
                     # 72.6: the one pointer that crosses 45.5 — a `const`
                     # record by reference. `in x` is P's own spelling for it,
@@ -2575,6 +2662,34 @@ struct PsLow:
                     ad9->lhs = a9
                     a9 = ad9
                 self->push_arg(cc2, a9)
+            if e->cstr_ret != 0:
+                # 83.1: what comes back is BORROWED — the P side keeps it — so
+                # it is copied on arrival, and from then on it belongs to the
+                # collector here. Nobody frees anything.
+                rn9: const *char = self->a->printf("__cr%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                rd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                rd9->name = rn9
+                rd9->type = ty_name(self->a, "CStr" if e->cstr_ret == 1 else "CBytes")
+                rd9->init = cc2
+                self->pre.push(rd9)
+                mk9: *Expr = self->call_rt("ps_str_checked" if e->cstr_ret == 1 else "ps_bytes_new", e->pos)
+                self->push_arg(mk9, self->ctx_arg(e->pos))
+                pf9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                pf9->op = TK_DOT
+                pf9->lhs = self->ident(rn9, e->pos)
+                pf9->field = "ptr"
+                self->push_arg(mk9, pf9)
+                lf9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                lf9->op = TK_DOT
+                lf9->lhs = self->ident(rn9, e->pos)
+                lf9->field = "len"
+                self->push_arg(mk9, lf9)
+                if e->cstr_ret == 1:
+                    self->pos_args(mk9, e->pos)
+                    self->raised = True
+                self->allocs = True
+                return mk9
             return cc2
         # ---- a pscript function: ctx goes first (49.3) ----
         c3: *Expr = self->call_rt(ps_cname(self->a, name), e->pos)
@@ -4068,9 +4183,24 @@ struct PsLow:
             case PS_WHILE:
                 w: *Stmt = st_new(self->a, ST_WHILE, s->pos)
                 w->cond = self->expr(s->cond)
+                # an ordinary loop OWNS its `break` and `continue` again: they
+                # belong to it, not to whatever state-split loop is outside
+                sb9: i32 = self->async_brk
+                sc9: i32 = self->async_cont
+                self->async_brk = -1
+                self->async_cont = -1
                 w->body = self->block(s->body)
+                self->async_brk = sb9
+                self->async_cont = sc9
                 out->push(w)
             case PS_FOR:
+                sb8: i32 = self->async_brk
+                sc8: i32 = self->async_cont
+                self->async_brk = -1
+                self->async_cont = -1
+                defer:
+                    self->async_brk = sb8
+                    self->async_cont = sc8
                 if s->iter->type != None and s->iter->type->kind == PT_ARRAY:
                     self->lower_arr_for(s, out)
                     return
@@ -4141,9 +4271,9 @@ struct PsLow:
                 mm->tm_sel = -1
                 out->push(mm)
             case PS_BREAK:
-                out->push(st_new(self->a, ST_BREAK, s->pos))
+                out->push(self->loop_jump(self->async_brk, s->pos, True))
             case PS_CONTINUE:
-                out->push(st_new(self->a, ST_CONTINUE, s->pos))
+                out->push(self->loop_jump(self->async_cont, s->pos, False))
             case PS_PASS:
                 out->push(st_new(self->a, ST_PASS, s->pos))
             case PS_ASSERT:
@@ -5344,6 +5474,9 @@ static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *
         L->async_frame = None
     L->async_task = None
     L->async_catch = -1
+    L->async_brk = -1
+    L->async_cont = -1
+    L->async_lnacl = 0
     L->ret = pf->ret
     L->ret_ps = e->type->inner
     L->zret = None
@@ -5974,6 +6107,17 @@ static def ab_with(ref B: AsyncB, s: *PsStmt):
 static def ab_stmt(ref B: AsyncB, s: *PsStmt):
     if s == None:
         return
+    # `break` and `continue` NEVER carry an await, so the plain lowering would
+    # take them — and inside a step function that emits a C `break`, which
+    # leaves the SWITCH and lands back in the same state on the next turn of
+    # the `while (1)`: an infinite loop. When the loop around them became
+    # states, they are jumps between states and nothing else.
+    if s->kind == PS_BREAK and B.brk >= 0:
+        ab_goto(ref B, B.brk, s->pos)
+        return
+    if s->kind == PS_CONTINUE and B.cont >= 0:
+        ab_goto(ref B, B.cont, s->pos)
+        return
     # a `defer` is armed even when nothing in it awaits: its SCOPE is the whole
     # function, and the function spans states
     if s->kind == PS_DEFER:
@@ -6068,11 +6212,18 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             oc: i32 = B.cont
             B.brk = after
             B.cont = head
+            B.L->async_brk = after
+            B.L->async_cont = head
+            ol9: i32 = B.L->async_lnacl
+            B.L->async_lnacl = B.L->nacl
             B.cur = body
             ab_block(ref B, s->body)
             ab_goto(ref B, head, s->pos)
             B.brk = ob
             B.cont = oc
+            B.L->async_brk = ob
+            B.L->async_cont = oc
+            B.L->async_lnacl = ol9
             B.cur = after
         case PS_FOR:
             # `for` with an await inside. It gets FOUR states, not three: the
@@ -6140,6 +6291,10 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             foc: i32 = B.cont
             B.brk = fafter
             B.cont = fstep
+            B.L->async_brk = fafter
+            B.L->async_cont = fstep
+            of9: i32 = B.L->async_lnacl
+            B.L->async_lnacl = B.L->nacl
             B.cur = fbody
             # the loop variable, at the top of the body
             bind: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
@@ -6161,6 +6316,9 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             ab_goto(ref B, fhead, s->pos)
             B.brk = fob
             B.cont = foc
+            B.L->async_brk = fob
+            B.L->async_cont = foc
+            B.L->async_lnacl = of9
             B.cur = fafter
         case PS_TRY:
             # `try` with an await inside: the body runs in its own states with
@@ -6475,6 +6633,9 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
     L->async_frame = None
     L->async_task = None
     L->async_catch = -1
+    L->async_brk = -1
+    L->async_cont = -1
+    L->async_lnacl = 0
     return d
 
 # ---------- `struct`: the collected reference type (20.1) ----------
@@ -7245,6 +7406,9 @@ static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool
 def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L: PsLow = {0}
     L.async_catch = -1   # no `try` around anything, until a step says otherwise
+    L.async_brk = -1
+    L.async_cont = -1
+    L.async_lnacl = 0
     L.a = a
     L.file = m->path
     L.m = m
