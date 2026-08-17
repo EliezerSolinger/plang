@@ -89,6 +89,19 @@ struct PsLow:
     cshz: i32           #   it once, at run time, before anything is sent
     cshz2: i32
     tmp_ctr: i32        # hidden temporaries the lowering needs
+    # `nonlocal x` (64.1). P hoists such a declaration to FUNCTION scope, which
+    # is right — and it happens after this lowering has already put the variable
+    # in whatever block frame it was first assigned in. The frame is then popped
+    # at the end of that block and the variable is a root no longer, while the
+    # code after it goes on reading it. `globals.psc` printed a screen of 0xDD
+    # under GC stress for exactly this.
+    #
+    # So the lowering stops relying on P's hoist and declares the name itself,
+    # at the top of the function, where the function's own frame registers it.
+    # Every assignment to it is then an ordinary assignment.
+    nl_names: StrSet    # names `nonlocal` made function-scoped
+    nl_done: StrSet     # ... and the ones already declared
+    nl_decls: Vec<*Stmt>
     pre: Vec<*Stmt>     # declarations to place BEFORE the statement being built:
                         #   `??` and `?.` read their operand twice, and a temp is
                         #   the only way to evaluate it once
@@ -104,6 +117,8 @@ struct PsLow:
     frame_ctr: i32      # one Henderson frame per block that has collected locals
     subst_key: *PsExpr  # operand already bound to a temporary (evaluation order)
     subst_val: *Expr
+    subst_key2: *PsExpr # ... and the second one, because a binary operator has
+    subst_val2: *Expr   #   TWO operands and both of them have to be bound
     # While lowering the body of an `async def` (50.1): the frame variable and
     # the task parameter of the step function. Every local of the function
     # lives in the frame, so a name that is one of these is read and written
@@ -252,6 +267,9 @@ struct PsLow:
     static def coerce(self: *PsLow, want: *PsType, e: *PsExpr) -> *Expr
     static def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr
     static def is_trivial(self: *PsLow, e: *PsExpr) -> bool
+    static def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>
+    static def is_collected_ps(self: *PsLow, t: *PsType) -> bool
+    static def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr
     static def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr
     static def lowered_ty(self: *PsLow, e: *PsExpr) -> *PsType
     static def once(self: *PsLow, e: *PsExpr, out assign: *Expr) -> *Expr
@@ -924,7 +942,7 @@ struct PsLow:
 
     static def expr(self: *PsLow, e: *PsExpr) -> *Expr:
         v: *Expr = self->expr_raw(e)
-        if e != None and e == self->subst_key:
+        if e != None and (e == self->subst_key or e == self->subst_key2):
             # already bound to a temporary, and what is IN that temporary is the
             # finished value — boxing it a second time would box the box
             return v
@@ -982,6 +1000,8 @@ struct PsLow:
         # read of it finds the temporary, so it is evaluated exactly once
         if e == self->subst_key:
             return self->subst_val
+        if e == self->subst_key2:
+            return self->subst_val2
         match e->kind:
             case PE_INT:
                 return self->num(e->text, e->pos)
@@ -1733,31 +1753,48 @@ struct PsLow:
         return c
 
     static def binary(self: *PsLow, e: *PsExpr) -> *Expr:
-        # Left to right, when both sides could have an effect: the LEFT one is
-        # bound to a temporary first, and the substitution below makes every
-        # later read of that operand find the temporary instead of lowering it
-        # again. `and`/`or` are excluded on purpose — they short-circuit, so
-        # their right side must NOT be evaluated up front.
-        if not self->is_trivial(e->lhs) and not self->is_trivial(e->rhs) and e->op != TK_AND and e->op != TK_OR:
-            name: const *char = self->a->printf("__ord%d", self->tmp_ctr)
-            self->tmp_ctr += 1
-            d: *Stmt = st_new(self->a, ST_VAR, e->pos)
-            d->name = name
-            d->type = self->ty(e->lhs->type)
-            d->init = self->zero_val(d->type, e->pos)
-            self->pre.push(d)
-            asg: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
-            asg->op = TK_ASSIGN
-            asg->lhs = self->ident(name, e->pos)
-            asg->rhs = self->expr(e->lhs)
-            asg->parened = True
+        # Left to right, and BOTH operands, not just the left one. Binding the left alone fixes the
+        # ORDER — which is what this was written for — and leaves the collector
+        # hazard untouched: `s + f(x)` loads `s` into a register, `f` allocates,
+        # the allocation reaches a safe point, the collector moves the string
+        # and updates the variable, and the concatenation runs on the address
+        # the string used to have. C does not even promise which side it loads
+        # first, so the same source can be right at -O0 and wrong at -O2.
+        #
+        # Bound on both sides, the operator itself allocates nothing between the
+        # two reads, which is the only shape that is safe. `and`/`or` stay out:
+        # they short-circuit, so their right side must NOT be evaluated up front.
+        # ... but only where it can MATTER. Two scalars cannot go stale, and
+        # binding them would push a declaration into contexts that do not flush
+        # one — an `if` condition, for instance — so the collector rule is asked
+        # only of operands the collector owns. Order is still pinned for scalars
+        # by the older rule, which is what it was always for.
+        # a comparison against a bare `None` is a tag test: nothing allocates,
+        # nothing can go stale, and the operand has no type of its own to bind
+        if e->lhs->kind == PE_NONE or e->rhs->kind == PE_NONE:
+            return self->binary_raw(e)
+        lhs_c: bool = self->is_collected_ps(e->lhs->type)
+        rhs_c: bool = self->is_collected_ps(e->rhs->type)
+        need_order: bool = not self->is_trivial(e->lhs) and not self->is_trivial(e->rhs)
+        need_gc: bool = (not self->is_trivial(e->lhs) or not self->is_trivial(e->rhs)) and (lhs_c or rhs_c)
+        if (need_order or need_gc) and e->op != TK_AND and e->op != TK_OR:
+            preB: *Expr = None
+            lv: *Expr = self->bind_val(self->expr(e->lhs), self->ty(self->lowered_ty(e->lhs)), e->pos, ref preB)
             pk: *PsExpr = self->subst_key
             pv: *Expr = self->subst_val
+            pk2: *PsExpr = self->subst_key2
+            pv2: *Expr = self->subst_val2
             self->subst_key = e->lhs
-            self->subst_val = self->ident(name, e->pos)
+            self->subst_val = lv
+            rv: *Expr = self->bind_val(self->expr(e->rhs), self->ty(self->lowered_ty(e->rhs)), e->pos, ref preB)
+            self->subst_key2 = e->rhs
+            self->subst_val2 = rv
             r: *Expr = self->binary_raw(e)
             self->subst_key = pk
             self->subst_val = pv
+            self->subst_key2 = pk2
+            self->subst_val2 = pv2
+            asg: *Expr = preB
             return self->comma2(asg, r, e->pos)
         return self->binary_raw(e)
 
@@ -2280,6 +2317,21 @@ struct PsLow:
             sd: *PsDecl = self->records_by_name(name)
             c9: *Expr = self->call_rt(self->a->printf("%s__new", ps_cname(self->a, name)), e->pos)
             self->push_arg(c9, self->ctx_arg(e->pos))
+            # A CONSTRUCTOR IS A CALL, and its arguments need the same treatment
+            # as any other (see `lower_ordered`): a field value that is already a
+            # collected object goes stale the moment a LATER field allocates, and
+            # then the struct is built around an address that has moved. This is
+            # the one the WPT URL corpus crashed on — `Parser(codepoints(...), 0,
+            # base, blank_url(), ...)` — and the crash was inside the collector,
+            # tracing the corrupt struct, nowhere near the constructor.
+            eff9: bool = False
+            for i in range(sd->nfields):
+                for j in range(e->nargs):
+                    a0: *PsExpr = e->args[j]
+                    q0: *PsExpr = a0->lhs if a0->kind == PE_DESIG else a0
+                    if q0 != None and not self->is_trivial(q0):
+                        eff9 = True
+            pre9: *Expr = None
             for i in range(sd->nfields):
                 v9: *PsExpr = None
                 for j in range(e->nargs):
@@ -2289,8 +2341,16 @@ struct PsLow:
                             v9 = a9->lhs
                     elif j == i:
                         v9 = a9
-                self->push_arg(c9, self->coerce(sd->fields[i].type, v9) if v9 != None else self->zero_val(self->ty(sd->fields[i].type), e->pos))
+                if v9 == None:
+                    self->push_arg(c9, self->zero_val(self->ty(sd->fields[i].type), e->pos))
+                    continue
+                lv9: *Expr = self->coerce(sd->fields[i].type, v9)
+                if eff9 and sd->nfields >= 2:
+                    lv9 = self->bind_val(lv9, self->ty(sd->fields[i].type), e->pos, ref pre9)
+                self->push_arg(c9, lv9)
             self->allocs = True
+            if pre9 != None:
+                return self->comma2(pre9, c9, e->pos)
             return c9
         # a record constructor: P has the same one (65.1), positional or named
         if self->is_record(name):
@@ -3043,6 +3103,51 @@ struct PsLow:
         return e->type
 
     # lowers `es[0..n)` left to right; `pre` collects the bindings
+    # One already-lowered value into a variable the shadow stack holds, with the
+    # assignment chained into `pre` so it happens BEFORE the call it belongs to.
+    # The declaration goes out as its own statement (which is what gets it into
+    # the block's Henderson frame) and the assignment stays in the expression,
+    # which is what keeps the order.
+    # the `nonlocal` declarations this function accumulated, in front of its
+    # body, so the function's own Henderson frame is the one that holds them
+    static def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>:
+        outv: Vec<*Stmt>
+        outv.init()
+        for i in range(self->nl_decls.len):
+            outv.push(self->nl_decls.data[i])
+        for i in range(body->len):
+            outv.push(body->data[i])
+        self->nl_decls.init()
+        self->nl_names.init()
+        self->nl_done.init()
+        return outv
+
+    # Is a pscript type one the collector owns? A bare `None` has no type of
+    # its own (its option carries no inner), and asking `ty()` for one builds an
+    # option record out of nothing — so it is answered here rather than there.
+    static def is_collected_ps(self: *PsLow, t: *PsType) -> bool:
+        if t == None:
+            return False
+        if t->kind == PT_OPT and t->inner == None:
+            return False
+        return self->is_collected(self->ty(t))
+
+    static def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr:
+        name: const *char = self->a->printf("__ord%d", self->tmp_ctr)
+        self->tmp_ctr += 1
+        d: *Stmt = st_new(self->a, ST_VAR, pos)
+        d->name = name
+        d->type = t
+        d->init = self->zero_val(t, pos)
+        self->pre.push(d)
+        asg: *Expr = ex_new(self->a, EX_ASSIGN, pos)
+        asg->op = TK_ASSIGN
+        asg->lhs = self->ident(name, pos)
+        asg->rhs = v
+        asg->parened = True
+        pre = asg if pre == None else self->comma2(pre, asg, pos)
+        return self->ident(name, pos)
+
     static def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr:
         out: **Expr = self->a->alloc(usize(n + 1) * sizeof(*out))
         last_effect: i32 = -1
@@ -3051,23 +3156,35 @@ struct PsLow:
             if not self->is_trivial(es[i]):
                 last_effect = i
                 neffect += 1
+        # THE SAFE POINT INSIDE AN ARGUMENT LIST.
+        #
+        # The rule above orders the arguments, which is what it was written for.
+        # It is not enough to make them SURVIVE. A collection can happen at any
+        # statement of any pscript function, so it can happen inside an argument
+        # — and every argument already evaluated is then a live collected object
+        # sitting in a C temporary the shadow stack knows nothing about. The
+        # collector moves it, updates every root it can see, and the call is
+        # made with the address the object used to have.
+        #
+        # It bites the untouched cases hardest: an argument that is a plain name
+        # was left alone here because reading a name has no side effect — but
+        # the VALUE read from it is what goes stale, and C does not even specify
+        # whether it is read before or after the argument that allocates.
+        #
+        # So when anything in the list can reach a safe point, EVERY argument is
+        # bound first, in source order, into a variable the shadow stack holds.
+        # What the call then sees is nothing but plain reads, and between the
+        # first of them and the last nothing allocates.
+        #
+        # Found by the WPT URL corpus: `Parser(codepoints(clean_input(input)),
+        # 0, base, blank_url(), ...)` built a struct around a list that had
+        # already moved, and what crashed was the next collection, inside the
+        # tracer, nowhere near the cause.
+        bind_all: bool = neffect >= 1 and n >= 2
         for i in range(n):
             v: *Expr = self->expr(es[i])
-            if neffect > 1 and not self->is_trivial(es[i]) and i != last_effect:
-                name: const *char = self->a->printf("__ord%d", self->tmp_ctr)
-                self->tmp_ctr += 1
-                d: *Stmt = st_new(self->a, ST_VAR, es[i]->pos)
-                d->name = name
-                d->type = self->ty(self->lowered_ty(es[i]))
-                d->init = self->zero_val(d->type, es[i]->pos)
-                self->pre.push(d)
-                asg: *Expr = ex_new(self->a, EX_ASSIGN, es[i]->pos)
-                asg->op = TK_ASSIGN
-                asg->lhs = self->ident(name, es[i]->pos)
-                asg->rhs = v
-                asg->parened = True
-                pre = asg if pre == None else self->comma2(pre, asg, es[i]->pos)
-                out[i] = self->ident(name, es[i]->pos)
+            if bind_all or (neffect > 1 and not self->is_trivial(es[i]) and i != last_effect):
+                out[i] = self->bind_val(v, self->ty(self->lowered_ty(es[i])), es[i]->pos, ref pre)
             else:
                 out[i] = v
         return out
@@ -3978,11 +4095,20 @@ struct PsLow:
                     return
                 # 64.1: both languages have BLOCK scope, so a declaration maps
                 # straight to a declaration and nothing has to be hoisted
-                if s->is_assign:
+                if s->is_assign or self->nl_names.has(s->name):
+                    if self->nl_names.has(s->name) and not self->nl_done.has(s->name):
+                        # first assignment: this is where the type is known, so
+                        # this is where the function-scope declaration is made
+                        self->nl_done.add(s->name)
+                        nd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                        nd->name = ps_cname(self->a, s->name)
+                        nd->type = self->ty(s->type)
+                        nd->init = self->zero_val(nd->type, s->pos)
+                        self->nl_decls.push(nd)
                     if s->rhs == None:
                         return
                     asg: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
-                    asg->lhs = self->ident(s->name, s->pos)
+                    asg->lhs = self->ident(ps_cname(self->a, s->name), s->pos)
                     asg->op = TK_ASSIGN
                     asg->rhs = self->coerce(s->type, s->rhs)
                     out->push(asg)
@@ -4463,7 +4589,10 @@ struct PsLow:
                 blk9->body = self->frame_wrap(&wb9, None, 0, s->pos)
                 out->push(blk9)
             case PS_NONLOCAL:
-                out->push(self->nonlocal_stmt(s->name, s->pos))
+                # nothing is emitted here: the declaration goes to the top of
+                # the function, in `nl_decls`, the first time the name is
+                # assigned — which is where its type becomes known
+                self->nl_names.add(s->name)
             case PS_GLOBAL:
                 # nothing to emit: the module variable is a P global already,
                 # and sema marked the assignments that go to it
@@ -4505,11 +4634,20 @@ struct PsLow:
         bd->init = nc
         inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
-        for i in range(body->n):
-            inner.push(body->stmts[i])
-        wb: *Block = self->a->alloc(sizeof(Block))
-        wb->stmts = inner.data
-        wb->n = inner.len
+        # The LOOP VARIABLE is a root like any other. It is declared here, above
+        # the lowered body, so the body's own frame does not cover it — and a
+        # loop whose body allocates before touching the variable would then be
+        # reading the address the element USED to have. `for ch in s` with a
+        # `+` in the body was exactly that, and the WPT URL corpus found it.
+        #
+        # The body goes in as a NESTED block rather than spliced in flat. Flat
+        # would put every one of its declarations in this frame as well as in
+        # its own, and one address in two frames is forwarded twice — which the
+        # collector now survives, but which costs a copy of the world per loop.
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
+        wb: *Block = self->frame_wrap(&inner, None, 0, s->pos)
         w->body = wb
         out->push(w)
 
@@ -4546,11 +4684,20 @@ struct PsLow:
             bd->init = el
             inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
-        for i in range(body->n):
-            inner.push(body->stmts[i])
-        wb: *Block = self->a->alloc(sizeof(Block))
-        wb->stmts = inner.data
-        wb->n = inner.len
+        # The LOOP VARIABLE is a root like any other. It is declared here, above
+        # the lowered body, so the body's own frame does not cover it — and a
+        # loop whose body allocates before touching the variable would then be
+        # reading the address the element USED to have. `for ch in s` with a
+        # `+` in the body was exactly that, and the WPT URL corpus found it.
+        #
+        # The body goes in as a NESTED block rather than spliced in flat. Flat
+        # would put every one of its declarations in this frame as well as in
+        # its own, and one address in two frames is forwarded twice — which the
+        # collector now survives, but which costs a copy of the world per loop.
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
+        wb: *Block = self->frame_wrap(&inner, None, 0, s->pos)
         fr->body = wb
         out->push(fr)
 
@@ -4597,11 +4744,12 @@ struct PsLow:
             bd->init = step
             inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
-        for i in range(body->n):
-            inner.push(body->stmts[i])
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
         wh: *Stmt = st_new(self->a, ST_WHILE, s->pos)
         wh->cond = cond
-        wh->body = self->mk_block(&inner)
+        wh->body = self->frame_wrap(&inner, None, 0, s->pos)
         out->push(wh)
 
     static def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
@@ -4634,11 +4782,20 @@ struct PsLow:
             bd->init = self->elem_at(self->ident(ln, s->pos), self->ident(iv, s->pos), et, s->pos)
             inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
-        for i in range(body->n):
-            inner.push(body->stmts[i])
-        wb: *Block = self->a->alloc(sizeof(Block))
-        wb->stmts = inner.data
-        wb->n = inner.len
+        # The LOOP VARIABLE is a root like any other. It is declared here, above
+        # the lowered body, so the body's own frame does not cover it — and a
+        # loop whose body allocates before touching the variable would then be
+        # reading the address the element USED to have. `for ch in s` with a
+        # `+` in the body was exactly that, and the WPT URL corpus found it.
+        #
+        # The body goes in as a NESTED block rather than spliced in flat. Flat
+        # would put every one of its declarations in this frame as well as in
+        # its own, and one address in two frames is forwarded twice — which the
+        # collector now survives, but which costs a copy of the world per loop.
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
+        wb: *Block = self->frame_wrap(&inner, None, 0, s->pos)
         fr->body = wb
         out->push(fr)
 
@@ -4689,11 +4846,20 @@ struct PsLow:
         bd->init = self->slot_val(ka, kt, s->pos)
         inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
-        for i in range(body->n):
-            inner.push(body->stmts[i])
-        wb: *Block = self->a->alloc(sizeof(Block))
-        wb->stmts = inner.data
-        wb->n = inner.len
+        # The LOOP VARIABLE is a root like any other. It is declared here, above
+        # the lowered body, so the body's own frame does not cover it — and a
+        # loop whose body allocates before touching the variable would then be
+        # reading the address the element USED to have. `for ch in s` with a
+        # `+` in the body was exactly that, and the WPT URL corpus found it.
+        #
+        # The body goes in as a NESTED block rather than spliced in flat. Flat
+        # would put every one of its declarations in this frame as well as in
+        # its own, and one address in two frames is forwarded twice — which the
+        # collector now survives, but which costs a copy of the world per loop.
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
+        wb: *Block = self->frame_wrap(&inner, None, 0, s->pos)
         fr->body = wb
         out->push(fr)
 
@@ -5606,7 +5772,8 @@ static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *
     pp: **Param = L->a->alloc(usize(pf->nparams + 1) * sizeof(*pp))
     for j in range(pf->nparams):
         pp[j] = &pf->params[j]
-    pf->body = L->frame_wrap(&body, pp, pf->nparams, e->pos)
+    nlb: Vec<*Stmt> = L->nl_flush(&body)
+    pf->body = L->frame_wrap(&nlb, pp, pf->nparams, e->pos)
     return d
 
 # `static R __ps_fnval_f(void *env, PsCtx *ctx, T a) { return f(ctx, a); }` —
@@ -6711,10 +6878,19 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
         pc->vals[0] = ex_new(L->a, EX_NUMBER, f->pos)
         pc->vals[0]->text = L->a->printf("%d", i)
         pc->nvals = 1
-        cb: *Block = L->a->alloc(sizeof(Block))
-        cb->stmts = B.states[i].data
-        cb->n = B.states[i].len
-        pc->body = cb
+        # A STATE IS A BLOCK, and it gets its own Henderson frame like any
+        # other. Without this the step function had exactly one frame — `__t`
+        # and `__fr`, pushed at the top — and anything collected that a state
+        # declared for itself was invisible to the collector.
+        #
+        # What that cost, concretely: `for line in text.split("\n")` inside an
+        # `async def` put the split list in a bare C local. The loop body
+        # allocates, allocation reaches a safe point, the collector MOVES the
+        # list, and the next iteration indexes the address where it used to be.
+        # It survived every test we had because none of them collected while
+        # standing in an async loop; llhttp's corpus is 212 messages and it
+        # segfaulted at the first collection.
+        pc->body = L->frame_wrap(&B.states[i], None, 0, f->pos)
         mm->cases[i] = pc
     # anything else is a task that already finished
     dc: *MatchCase = L->a->alloc(sizeof(MatchCase))
@@ -6742,7 +6918,8 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
     pp2: **Param = L->a->alloc(usize(pf->nparams + 1) * sizeof(*pp2))
     for j in range(pf->nparams):
         pp2[j] = &pf->params[j]
-    pf->body = L->frame_wrap(&body, pp2, pf->nparams, f->pos)
+    nlb2: Vec<*Stmt> = L->nl_flush(&body)
+    pf->body = L->frame_wrap(&nlb2, pp2, pf->nparams, f->pos)
 
     L->async_frame = None
     L->async_task = None
@@ -7509,7 +7686,8 @@ static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool
         pp: **Param = L->a->alloc(usize(pf->nparams + 1) * sizeof(*pp))
         for j in range(pf->nparams):
             pp[j] = &pf->params[j]
-        pf->body = L->frame_wrap(&body, pp, pf->nparams, f->pos)
+        nlb3: Vec<*Stmt> = L->nl_flush(&body)
+        pf->body = L->frame_wrap(&nlb3, pp, pf->nparams, f->pos)
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_FUNC
     d->pos = f->pos
@@ -7534,6 +7712,9 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.gmads.init()
     L.keyads.init()
     L.fnvals.init()
+    L.nl_names.init()
+    L.nl_done.init()
+    L.nl_decls.init()
 
     pm: *Module = a->alloc(sizeof(Module))
     pm->path = m->path
@@ -7902,7 +8083,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.push_arg(sz9, tr9)
         fx->rhs = sz9
         mb.push(fx)
-    tb: *Block = L.frame_wrap(&top, None, 0, zp)
+    topnl: Vec<*Stmt> = L.nl_flush(&top)
+    tb: *Block = L.frame_wrap(&topnl, None, 0, zp)
     for j in range(tb->n):
         mb.push(tb->stmts[j])
     fin: *Stmt = st_new(a, ST_RETURN, zp)

@@ -5,6 +5,77 @@ const PS_BLOCK_BYTES = 1 << 20      # 1 MiB per block
 const PS_GC_BYTES = 1 << 21         # collect after 2 MiB since the last one (14.2)
 const PS_GC_OBJECTS = 200000        # ... or after this many objects (14.2)
 
+# ---------- GC STRESS: making the whole bug class visible ----------
+#
+# A copying collector has exactly one way to be wrong, and it is always the same
+# way: somebody held a pointer across a safe point without putting it on the
+# shadow stack. The object MOVES, the holder keeps the old address, and what it
+# reads from then on is whatever the allocator handed that memory to next.
+#
+# The reason this is dangerous is not that it is hard to fix — each one is two
+# lines — it is that it is INVISIBLE. With a 2 MiB threshold a program has to
+# allocate a lot before the first collection, so a stale pointer usually reads
+# memory nothing has reused yet and the program answers correctly. The bug shows
+# up later, on a bigger input, as a wrong answer or a crash nowhere near the
+# cause. Every one of the five we had was of this shape.
+#
+# So the runtime gets a mode that makes them all fire, deterministically, at the
+# instruction that is wrong:
+#
+#   PSCRIPT_GC_STRESS=N   collect at every N-th safe point (1 = every one), and
+#                         do not free the old blocks — POISON them with 0xDD and
+#                         keep them mapped.
+#
+# Keeping them is what makes it deterministic. Freeing poisoned memory lets
+# malloc hand it straight back, and then a stale read finds live data again and
+# the bug hides exactly as before. Held and poisoned, a stale read is either the
+# pointer 0xDDDDDDDDDDDDDDDD (an immediate fault at the guilty line) or the
+# integer 0xDDDDDDDD (never a valid tag, length or state). The memory grows, and
+# that is the correct trade for a mode that only runs under the test suite.
+#
+# N exists because collecting at EVERY safe point is quadratic in the heap: the
+# path tracer allocates millions of times and would take hours at N=1, and a
+# checker nobody can afford to run is a checker nobody runs. Small programs go at
+# 1; the heavy ones go at a few thousand, which is still tens of thousands of
+# collections spread through the whole program instead of a handful at the end.
+#
+# `bash tests/gc-stress.sh` picks N per program and is gating.
+static PS_POISON: const i32 = 0xDD
+
+# How many collections' worth of from-space stays poisoned and mapped. Keeping
+# ALL of it is the most deterministic thing possible and also unbounded: a
+# program that allocates two gigabytes over its life would hold two gigabytes,
+# and the first run of this mode had `nogc.psc` at half a gigabyte and climbing.
+# Sixteen is the useful bound — a pointer held across a safe point is read on
+# the very next statement, not sixteen collections later, so the window that
+# catches anything at all is the recent one.
+static PS_GRAVE_MAX: const i32 = 16
+
+static ps_stress_n: i64 = -1         # -1 = not looked up yet; 0 = off
+static ps_stress_tick: i64 = 0
+static ps_graveyard: *PsBlock = None # poisoned from-space, kept on purpose
+static ps_grave_n: i32 = 0
+
+static def ps_gc_stress() -> i64:
+    if ps_stress_n < 0:
+        e: const *char = getenv("PSCRIPT_GC_STRESS")
+        ps_stress_n = 0
+        if e != None and e[0] != '\0':
+            v: i64 = i64(atoll(e))
+            ps_stress_n = v if v > 0 else 0
+    return ps_stress_n
+
+# true when THIS safe point should collect
+static def ps_stress_due() -> bool:
+    n: i64 = ps_gc_stress()
+    if n == 0:
+        return False
+    ps_stress_tick += 1
+    if ps_stress_tick < n:
+        return False
+    ps_stress_tick = 0
+    return True
+
 static def ps_new_block(min: usize) -> *PsBlock:
     cap: usize = usize(PS_BLOCK_BYTES) if min < usize(PS_BLOCK_BYTES) else min
     b: *PsBlock = malloc(sizeof(PsBlock))
@@ -21,6 +92,36 @@ static def ps_new_block(min: usize) -> *PsBlock:
     return b
 
 static def ps_free_blocks(b: *PsBlock):
+    if ps_gc_stress() != i64(0):
+        # Under stress the from-space is never given back: it is filled with
+        # 0xDD and parked. Anybody still holding a pointer into it now reads a
+        # value that cannot be mistaken for anything real, at the instruction
+        # that should not have been holding it.
+        while b != None:
+            n: *PsBlock = b->next
+            memset(b->base, PS_POISON, b->cap)
+            b->next = ps_graveyard
+            ps_graveyard = b
+            ps_grave_n += 1
+            b = n
+        # drop the oldest beyond the window — the list is pushed at the head, so
+        # the oldest is at the tail
+        while ps_grave_n > PS_GRAVE_MAX:
+            prev: *PsBlock = None
+            cur: *PsBlock = ps_graveyard
+            while cur != None and cur->next != None:
+                prev = cur
+                cur = cur->next
+            if cur == None:
+                break
+            if prev == None:
+                ps_graveyard = None
+            else:
+                prev->next = None
+            free(cur->base)
+            free(cur)
+            ps_grave_n -= 1
+        return
     while b != None:
         n: *PsBlock = b->next
         free(b->base)
@@ -1698,14 +1799,28 @@ def ps_buffer_set_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, v: f64, file: const *ch
 
 # ---------- `json` (41.1) ----------
 # Recursive descent over the text, straight into the values the language already
-# has. Numbers all become float — JSON has one number type and pretending
-# otherwise would be inventing a rule the format does not have.
+# has. RFC 8259 to the letter, which is not pedantry: this parser reads bytes
+# that came from somewhere else, and every place it is lenient is a place where
+# two programs disagree about what a document says.
+#
+# Measured against nst/JSONTestSuite (tests/conformance): 95 documents that must
+# be accepted, 186 that must be refused, 35 the RFC leaves open. Where this
+# parser lands on the open 35 is written down in tests/conformance/json.skips,
+# next to what Python and node answer for the same file.
+#
+# The depth limit is a SECURITY boundary, not a preference. Recursive descent on
+# attacker-supplied text without one is a stack overflow waiting to be asked
+# for, and the corpus asks: `n_structure_100000_opening_arrays.json` is a
+# hundred thousand `[`. The RFC blesses a limit (§9); silently dying does not.
+PS_JSON_MAX_DEPTH: const i32 = 1000
+
 struct PsJson:
     ctx: *PsCtx
     s: const *char
     n: usize
     i: usize
     bad: i32
+    depth: i32
     file: const *char
     line: i32
 
@@ -1723,31 +1838,152 @@ static def js_space(j: *PsJson):
 
 static def js_value(j: *PsJson) -> *PsObj
 
+# four hexadecimal digits, or -1. Advances only when it succeeds, so a caller
+# that fails reports the position of the escape rather than of its tail.
+static def js_hex4(j: *PsJson) -> i32:
+    if j->i + usize(4) > j->n:
+        return -1
+    v: i32 = 0
+    k: usize = 0
+    while k < usize(4):
+        c: char = j->s[j->i + k]
+        d: i32 = -1
+        if c >= '0' and c <= '9':
+            d = i32(c) - 48
+        elif c >= 'a' and c <= 'f':
+            d = i32(c) - 87
+        elif c >= 'A' and c <= 'F':
+            d = i32(c) - 55
+        if d < 0:
+            return -1
+        v = v * 16 + d
+        k += 1
+    j->i += usize(4)
+    return v
+
+# one codepoint, UTF-8, into the buffer. Same shape as `ps_str_chr` because it
+# is the same encoding, and having two of them drift apart would be worse than
+# the four lines of repetition.
+static def js_utf8(buf: *char, k: usize, cp: i32) -> usize:
+    v: u32 = u32(cp)
+    if v < 0x80:
+        buf[k] = char(v)
+        return k + usize(1)
+    if v < 0x800:
+        buf[k] = char(0xC0 | (v >> 6))
+        buf[k + usize(1)] = char(0x80 | (v & 0x3F))
+        return k + usize(2)
+    if v < 0x10000:
+        buf[k] = char(0xE0 | (v >> 12))
+        buf[k + usize(1)] = char(0x80 | ((v >> 6) & 0x3F))
+        buf[k + usize(2)] = char(0x80 | (v & 0x3F))
+        return k + usize(3)
+    buf[k] = char(0xF0 | (v >> 18))
+    buf[k + usize(1)] = char(0x80 | ((v >> 12) & 0x3F))
+    buf[k + usize(2)] = char(0x80 | ((v >> 6) & 0x3F))
+    buf[k + usize(3)] = char(0x80 | (v & 0x3F))
+    return k + usize(4)
+
+# A JSON string is not "bytes until the next quote". Three rules the RFC states
+# and a lenient parser silently drops, each of which is a real disagreement:
+#
+#   * a byte below 0x20 has to be ESCAPED — a raw tab or newline inside a string
+#     is not a string;
+#   * the escape set is CLOSED (`" \ / b f n r t u`) — `\x` is not "x", it is a
+#     malformed document, and a parser that reads it as "x" will disagree with
+#     every other one about the value;
+#   * `\uXXXX` is a codepoint, not the four letters after a `u`. This is the one
+#     that was simply missing: `"é"` used to come back as `u00e9`.
+#
+# A LONE surrogate becomes U+FFFD, because a pscript `str` is valid UTF-8 by
+# construction (83.2) and a surrogate is not encodable. That is what a browser's
+# TextEncoder does with the same input, and the RFC leaves the case open.
 static def js_string(j: *PsJson) -> *PsStr:
     j->i += 1                     # the opening quote
-    buf: *char = (*char)(malloc(j->n - j->i + 1))
+    # an escape never grows: `\uXXXX` is six bytes in and at most four out, a
+    # surrogate PAIR twelve in and four out. So the input length is a ceiling.
+    buf: *char = (*char)(malloc(j->n - j->i + usize(8)))
     k: usize = 0
-    while j->i < j->n and j->s[j->i] != '"':
+    while True:
+        if j->i >= j->n:
+            js_fail(j, "a string that never ends")
+            free(buf)
+            return ps_str_new(j->ctx, "", 0)
         c: char = j->s[j->i]
-        if c == '\\' and j->i + 1 < j->n:
+        if c == '"':
             j->i += 1
-            e: char = j->s[j->i]
-            if e == 'n':
-                c = '\n'
-            elif e == 't':
-                c = '\t'
-            elif e == 'r':
-                c = '\r'
-            else:
-                c = e             # \" \\ \/ and anything else, as itself
-        buf[k] = c
-        k += 1
+            break
+        if u8(c) < 0x20:
+            js_fail(j, "a control character has to be escaped inside a string")
+            free(buf)
+            return ps_str_new(j->ctx, "", 0)
+        if c != '\\':
+            buf[k] = c
+            k += 1
+            j->i += 1
+            continue
         j->i += 1
-    if j->i >= j->n:
-        js_fail(j, "a string that never ends")
-        free(buf)
-        return ps_str_new(j->ctx, "", 0)
-    j->i += 1                     # the closing quote
+        if j->i >= j->n:
+            js_fail(j, "a string that never ends")
+            free(buf)
+            return ps_str_new(j->ctx, "", 0)
+        e: char = j->s[j->i]
+        j->i += 1
+        if e == 'n':
+            buf[k] = '\n'
+            k += 1
+        elif e == 't':
+            buf[k] = '\t'
+            k += 1
+        elif e == 'r':
+            buf[k] = '\r'
+            k += 1
+        elif e == 'b':
+            buf[k] = char(8)
+            k += 1
+        elif e == 'f':
+            buf[k] = char(12)
+            k += 1
+        elif e == '"' or e == '\\' or e == '/':
+            buf[k] = e
+            k += 1
+        elif e == 'u':
+            cp: i32 = js_hex4(j)
+            if cp < 0:
+                js_fail(j, "a \\u escape needs four hexadecimal digits")
+                free(buf)
+                return ps_str_new(j->ctx, "", 0)
+            if cp >= 0xD800 and cp <= 0xDBFF:
+                # a HIGH surrogate: a low one may follow, and together they are
+                # one codepoint above the BMP
+                if j->i + usize(1) < j->n and j->s[j->i] == '\\' and j->s[j->i + usize(1)] == 'u':
+                    j->i += usize(2)
+                    lo: i32 = js_hex4(j)
+                    if lo < 0:
+                        js_fail(j, "a \\u escape needs four hexadecimal digits")
+                        free(buf)
+                        return ps_str_new(j->ctx, "", 0)
+                    if lo >= 0xDC00 and lo <= 0xDFFF:
+                        cp = 0x10000 + ((cp - 0xD800) * 1024) + (lo - 0xDC00)
+                    else:
+                        # the high one stood alone after all; the second escape
+                        # is its own codepoint
+                        k = js_utf8(buf, k, 0xFFFD)
+                        cp = 0xFFFD if (lo >= 0xD800 and lo <= 0xDFFF) else lo
+                else:
+                    cp = 0xFFFD
+            elif cp >= 0xDC00 and cp <= 0xDFFF:
+                cp = 0xFFFD       # a low surrogate with nothing in front of it
+            k = js_utf8(buf, k, cp)
+        else:
+            m: char[64]
+            if u8(e) >= 0x20 and u8(e) < 0x7F:
+                snprintf(m, 64, "'\\%c' is not a JSON escape", e)
+            else:
+                snprintf(m, 64, "byte 0x%02X is not a JSON escape", i32(u8(e)))
+            js_fail(j, m)
+            free(buf)
+            return ps_str_new(j->ctx, "", 0)
     out: *PsStr = ps_str_new(j->ctx, buf, k)
     free(buf)
     return out
@@ -1759,8 +1995,17 @@ static def js_array(j: *PsJson) -> *PsObj:
     if j->i < j->n and j->s[j->i] == ']':
         j->i += 1
         return (*PsObj)(l)
-    while j->i < j->n and j->bad == 0:
+    # the loop condition used to be `j->i < j->n`, and that is exactly how a
+    # TRUNCATED document came back as a value: text that ran out mid-array left
+    # the loop through the top and returned the elements read so far, with no
+    # complaint. Running out of text is now a failure like any other.
+    while j->bad == 0:
+        if j->i >= j->n:
+            js_fail(j, "an array that never ends")
+            return (*PsObj)(l)
         v: *PsObj = js_value(j)
+        if j->bad != 0:
+            return (*PsObj)(l)
         slot: *char = ps_list_push(j->ctx, l)
         p: **PsObj = (**PsObj)(slot)
         *p = v
@@ -1783,12 +2028,14 @@ static def js_object(j: *PsJson) -> *PsObj:
     if j->i < j->n and j->s[j->i] == '}':
         j->i += 1
         return (*PsObj)(d)
-    while j->i < j->n and j->bad == 0:
+    while j->bad == 0:
         js_space(j)
         if j->i >= j->n or j->s[j->i] != '"':
             js_fail(j, "a key has to be a string")
             return (*PsObj)(d)
         k: *PsStr = js_string(j)
+        if j->bad != 0:
+            return (*PsObj)(d)
         js_space(j)
         if j->i >= j->n or j->s[j->i] != ':':
             js_fail(j, "a ':' was expected")
@@ -1796,6 +2043,8 @@ static def js_object(j: *PsJson) -> *PsObj:
         j->i += 1
         js_space(j)
         v: *PsObj = js_value(j)
+        if j->bad != 0:
+            return (*PsObj)(d)
         slot: *char = ps_dict_put(j->ctx, d, (*char)(&k))
         vp: **PsObj = (**PsObj)(slot)
         *vp = v
@@ -1810,16 +2059,97 @@ static def js_object(j: *PsJson) -> *PsObj:
         return (*PsObj)(d)
     return (*PsObj)(d)
 
+# The JSON number grammar, walked by hand (RFC 8259 §6):
+#
+#     -?  (0 | [1-9][0-9]*)  ('.' [0-9]+)?  ([eE] [+-]? [0-9]+)?
+#
+# It used to be `strtod`, and strtod speaks C, not JSON: it takes `01`, `.5`,
+# `2.`, `0x1F`, `NaN` and `Infinity`, none of which are JSON. Handing the text
+# to the C library and trusting whatever it consumed is how a parser ends up
+# accepting a superset nobody wrote down.
+#
+# The integer that does not fit is a REFUSAL, not a wrap. pscript has no bignum
+# and int overflow raises everywhere else (7.2); a document whose number cannot
+# be represented is better refused loudly than read as some other number.
+static def js_number(j: *PsJson) -> *PsObj:
+    start: usize = j->i
+    neg: bool = False
+    if j->s[j->i] == '-':
+        neg = True
+        j->i += 1
+    if j->i >= j->n or j->s[j->i] < '0' or j->s[j->i] > '9':
+        js_fail(j, "a number needs a digit")
+        return ps_any_none(j->ctx)
+    dstart: usize = j->i
+    if j->s[j->i] == '0':
+        j->i += 1
+        if j->i < j->n and j->s[j->i] >= '0' and j->s[j->i] <= '9':
+            js_fail(j, "a number may not have a leading zero")
+            return ps_any_none(j->ctx)
+    else:
+        while j->i < j->n and j->s[j->i] >= '0' and j->s[j->i] <= '9':
+            j->i += 1
+    dend: usize = j->i
+    integral: bool = True
+    if j->i < j->n and j->s[j->i] == '.':
+        integral = False
+        j->i += 1
+        if j->i >= j->n or j->s[j->i] < '0' or j->s[j->i] > '9':
+            js_fail(j, "a fraction needs a digit after the point")
+            return ps_any_none(j->ctx)
+        while j->i < j->n and j->s[j->i] >= '0' and j->s[j->i] <= '9':
+            j->i += 1
+    if j->i < j->n and (j->s[j->i] == 'e' or j->s[j->i] == 'E'):
+        integral = False
+        j->i += 1
+        if j->i < j->n and (j->s[j->i] == '+' or j->s[j->i] == '-'):
+            j->i += 1
+        if j->i >= j->n or j->s[j->i] < '0' or j->s[j->i] > '9':
+            js_fail(j, "an exponent needs a digit")
+            return ps_any_none(j->ctx)
+        while j->i < j->n and j->s[j->i] >= '0' and j->s[j->i] <= '9':
+            j->i += 1
+    if not integral:
+        return ps_any_float(j->ctx, strtod(j->s + start, None))
+    # 68.6: an integral spelling is an int. Accumulate by hand, because
+    # `strtoll` saturates at the edge and says so only through `errno` — which
+    # is a per-thread macro P cannot see, and reading it here would be wrong
+    # anyway. The limit is 2^63-1, or 2^63 when there is a minus in front.
+    lim: u64 = u64(9223372036854775807)
+    if neg:
+        lim = u64(9223372036854775807) + u64(1)
+    acc: u64 = 0
+    p: usize = dstart
+    while p < dend:
+        dv: u64 = u64(i32(j->s[p]) - 48)
+        if acc > (lim - dv) / u64(10):
+            js_fail(j, "this integer does not fit in an int")
+            return ps_any_none(j->ctx)
+        acc = acc * u64(10) + dv
+        p += 1
+    if neg:
+        if acc == u64(9223372036854775807) + u64(1):
+            return ps_any_int(j->ctx, -9223372036854775807 - 1)
+        return ps_any_int(j->ctx, -i64(acc))
+    return ps_any_int(j->ctx, i64(acc))
+
 static def js_value(j: *PsJson) -> *PsObj:
     js_space(j)
     if j->i >= j->n:
         js_fail(j, "the text ended")
         return ps_any_none(j->ctx)
     c: char = j->s[j->i]
-    if c == '{':
-        return js_object(j)
-    if c == '[':
-        return js_array(j)
+    if c == '{' or c == '[':
+        # the depth is counted HERE, in the one place both aggregates pass
+        # through, so neither of them has to remember to give it back
+        j->depth += 1
+        if j->depth > PS_JSON_MAX_DEPTH:
+            js_fail(j, "this JSON nests deeper than the limit")
+            j->depth -= 1
+            return ps_any_none(j->ctx)
+        agg: *PsObj = js_object(j) if c == '{' else js_array(j)
+        j->depth -= 1
+        return agg
     if c == '"':
         return (*PsObj)(js_string(j))
     if strncmp(j->s + j->i, "true", 4) == 0:
@@ -1832,26 +2162,7 @@ static def js_value(j: *PsJson) -> *PsObj:
         j->i += 4
         return ps_any_none(j->ctx)
     if c == '-' or (c >= '0' and c <= '9'):
-        end: *char = None
-        v: f64 = strtod(j->s + j->i, &end)
-        if end == j->s + j->i:
-            js_fail(j, "a number that is not one")
-            return ps_any_none(j->ctx)
-        start: usize = j->i
-        j->i = usize(end - j->s)
-        # Python's rule (68.6): an INTEGRAL literal is an int, anything with a
-        # point or an exponent is a float. The honest cost, taken with eyes
-        # open: the type now depends on the SPELLING in the text — a producer
-        # that writes 16.0 one day and 16 the next changes what `as` accepts.
-        integral: bool = True
-        k: usize = start
-        while k < j->i:
-            if j->s[k] == '.' or j->s[k] == 'e' or j->s[k] == 'E':
-                integral = False
-            k += 1
-        if integral:
-            return ps_any_int(j->ctx, strtoll(j->s + start, None, 10))
-        return ps_any_float(j->ctx, v)
+        return js_number(j)
     js_fail(j, "a value was expected")
     return ps_any_none(j->ctx)
 
@@ -1893,6 +2204,7 @@ def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *P
     j.n = usize(text->len)
     j.i = 0
     j.bad = 0
+    j.depth = 0
     j.file = file
     j.line = line
     v: *PsObj = js_value(&j)
@@ -3016,14 +3328,22 @@ def ps_task_ret(t: *PsTask) -> *void:
 # queue until the task is finished — and if the queue empties first, nothing can
 # ever finish it, which is a deadlock and says so.
 def ps_task_wait(ctx: *PsCtx, t: *PsTask):
-    # 78.4: even a finished task gives the others a turn first
-    ps_sched_yield(ctx)
+    # The frame goes up FIRST, and the order is the whole point: `ps_sched_yield`
+    # below runs somebody else's step, that step allocates, the allocation
+    # reaches a safe point, and the collector moves `t`. Yielding before
+    # registering `t` left this function reading the address the task USED to
+    # have — which the collector had already handed back to the allocator, so
+    # the loop below was reading string bytes as a task and waiting forever for
+    # a `state` that would never be `-1`. It looked like a deadlock and it was a
+    # dangling pointer.
     n: *PsTask = None
     slots: **PsObj[2]
     slots[0] = (**PsObj)(&t)
     slots[1] = (**PsObj)(&n)
     f: PsFrame
     ps_push_frame(ctx, &f, slots, 2)
+    # 78.4: even a finished task gives the others a turn first
+    ps_sched_yield(ctx)
     while not ps_task_done(t):
         if not ps_sched_progress(ctx):
             ps_raise(ctx, "deadlock: awaiting a task that nothing can finish", PS_CAT_VALUE, "<runtime>", 0)
@@ -3083,6 +3403,19 @@ def ps_forward(to: *PsBlock, p: *PsObj) -> *PsObj:
         return None
     if p->ty == PS_TY_MOVED:
         return p->fwd
+    # ALREADY THERE. Without this, forwarding something that has arrived in
+    # to-space copies it a SECOND time — and to-space is sized for exactly one
+    # copy of everything live (`total + PS_BLOCK_BYTES`), so enough duplicates
+    # walk `used` past `cap` and the collector writes off the end of its own
+    # heap. What that looks like from outside is a root that has turned into
+    # garbage, in a program with nothing wrong with it.
+    #
+    # It happens whenever one variable's address is in two frames at once, which
+    # is easy to do by accident and which no caller should have to think about.
+    # The check is two pointer comparisons; the collector is the wrong place to
+    # be clever about saving them.
+    if (*char)(p) >= to->base and (*char)(p) < to->base + to->used:
+        return p
     n: usize = usize(p->size)
     d: *char = to->base + to->used
     to->used += n
@@ -3242,6 +3575,12 @@ def ps_gc_poll(ctx: *PsCtx):
     if ctx->nogc > 0:
         if ctx->nogc_budget != usize(0) and ctx->alloced - ctx->nogc_start > ctx->nogc_budget:
             ps_raise(ctx, "nogc budget exceeded", PS_CAT_VALUE, "<nogc>", 0)
+        return
+    # under stress a safe point collects on its own schedule, so a pointer held
+    # across one is caught the first time it is held rather than the first time
+    # it is unlucky
+    if ps_stress_due():
+        ps_gc(ctx)
         return
     if ctx->alloced < usize(PS_GC_BYTES) and ctx->nalloc < PS_GC_OBJECTS:
         return

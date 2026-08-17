@@ -1,0 +1,8 @@
+# WPT urltestdata.json — what this implementation knows it does not do.
+# One `<case-id> <reason>` per line. A skip is counted and printed, never
+# silently folded into the score, and a skip whose case starts agreeing is
+# reported as STALE so the note gets deleted with the problem.
+#
+# Score without these: 890/891.
+
+730 file://loC𝐀𝐋𝐇𝐨𝐬𝐭/usr/bin — the Mathematical Alphanumeric Symbols block (U+1D400–U+1D7FF) folds to ASCII letters under NFKC, so this host is `localhost`. `domain_to_ascii` does the formulaic parts of UTS-46 (fullwidth ASCII, the three full stops, the ignored zero-width set, the disallowed spaces and noncharacters) but not the compatibility blocks, which are a table with holes rather than an offset. Fixing it means a `unicodedata` module, and that is a decision, not an oversight.

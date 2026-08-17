@@ -1,0 +1,26 @@
+é
+AB
+😀
+1
+True
+invalid JSON: '\x' is not a JSON escape at byte 3
+invalid JSON: '\U' is not a JSON escape at byte 3
+invalid JSON: a control character has to be escaped inside a string at byte 4
+invalid JSON: a number may not have a leading zero at byte 2
+invalid JSON: a number may not have a leading zero at byte 3
+invalid JSON: a value was expected at byte 1
+invalid JSON: a fraction needs a digit after the point at byte 3
+invalid JSON: a fraction needs a digit after the point at byte 3
+invalid JSON: a ',' or a ']' was expected at byte 2
+invalid JSON: a value was expected at byte 1
+invalid JSON: a number needs a digit at byte 2
+invalid JSON: an exponent needs a digit at byte 3
+ok
+invalid JSON: this integer does not fit in an int at byte 31
+9223372036854775807
+-9223372036854775808
+invalid JSON: an array that never ends at byte 1
+invalid JSON: a key has to be a string at byte 1
+invalid JSON: a ',' or a ']' was expected at byte 5
+invalid JSON: a ',' or a '}' was expected at byte 7
+invalid JSON: this JSON nests deeper than the limit at byte 1000
