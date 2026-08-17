@@ -1,28 +1,28 @@
-# cstr.ph — `CStr` e `CBytes`: um PONTEIRO E O TAMANHO DELE, como valor.
+# cstr.ph — `CStr` and `CBytes`: A POINTER AND ITS LENGTH, as a value.
 #
-# O P não tinha tipo de texto: tinha `const *char`, e por isso não tinha
-# alocação escondida — não existe operação de string que possa alocar (`a + b`
-# entre ponteiros é erro, `==` compara por `strcmp`, e fabricar texto é
-# `snprintf` no seu buffer ou o `Str` deste mesmo diretório, cujo `realloc`
-# está dentro de uma função que você chamou).
+# P had no text type: it had `const *char`, and that is exactly why it had no
+# hidden allocation — there is no string operation that could allocate (`a + b`
+# between pointers is an error, `==` compares with `strcmp`, and building text
+# is `snprintf` into your own buffer or the `Str` next door, whose `realloc`
+# sits inside a function you called).
 #
-# Estes dois preservam essa propriedade inteira: são valores do tamanho de dois
-# registradores que **nunca alocam nada**. O que eles trazem é o TAMANHO junto
-# com o ponteiro — sem `strlen`, sem exigir terminador, e com fatia de graça.
+# These two keep that property whole: they are two-register values that
+# **never allocate anything**. What they add is the LENGTH travelling with the
+# pointer — no `strlen`, no terminator required, and slicing for free.
 #
-# O que eles NÃO são: donos. Ninguém libera um `CStr`; ele aponta para bytes de
-# outra pessoa — um literal, um buffer seu, um `Str` construído, os bytes de um
-# `str` do pscript durante uma chamada. Por isso o compilador os deixa viver
-# apenas como PARÂMETRO, LOCAL e RETORNO (84.2, a mesma regra do `ref T` da
-# 69): assim nenhum deles sobrevive por acidente ao escopo que o criou.
+# What they are not: owners. Nobody frees a `CStr`; it points at somebody
+# else's bytes — a literal, a buffer of yours, a built `Str`, the bytes of a
+# pscript `str` for the duration of a call. That is why the compiler lets them
+# live only as PARAMETER, LOCAL and RETURN (84.2, the rule `ref T` already has
+# from 69): so that none of them outlives the scope that made it by accident.
 #
-# Para a libc, o idioma é `%.*s`, que é o jeito certo em C e não pede
-# terminador:
+# For libc the idiom is `%.*s`, which is the right way in C anyway and asks for
+# no terminator:
 #
 #     printf("%.*s\n", i32(s.len), s.ptr)
 #
-# `CStr` promete texto e `CBytes` não promete nada; por dentro são o mesmo par.
-# A separação existe para que a ASSINATURA diga a intenção (85.2).
+# `CStr` promises text and `CBytes` promises nothing; inside they are the same
+# pair. The split exists so that the SIGNATURE says which one is meant (85.2).
 include <string.h>
 
 struct CStr:
@@ -32,8 +32,8 @@ struct CStr:
     def at(in self: CStr, i: usize) -> char:
         return self.ptr[i]
 
-    # uma fatia é outro par apontando para dentro do mesmo lugar: não copia, não
-    # aloca, e não termina em NUL — que é justamente o que o tamanho resolve
+    # a slice is another pair pointing inside the same place: no copy, no
+    # allocation, and no NUL at the end — which is what the length is for
     def slice(in self: CStr, from: usize, to: usize) -> CStr:
         a: usize = from if from < self.len else self.len
         b: usize = to if to < self.len else self.len
@@ -46,8 +46,10 @@ struct CStr:
     def starts_with(in self: CStr, in p: CStr) -> bool:
         return self.len >= p.len and (p.len == 0 or memcmp(self.ptr, p.ptr, p.len) == 0)
 
-    # o índice do primeiro `c`, ou o tamanho quando não há — a convenção que
-    # deixa `slice(0, find(c))` funcionar sem um teste antes
+    # the index of the first `c`, or the LENGTH when there is none — the
+    # convention that lets `slice(0, find(c))` work without a test in front of
+    # it. (pscript's `str.find` answers -1 instead; two conventions, and it is
+    # worth knowing which is which.)
     def find(in self: CStr, c: char) -> usize:
         i: usize = 0
         while i < self.len:
@@ -72,9 +74,9 @@ struct CBytes:
     def eq(in self: CBytes, in other: CBytes) -> bool:
         return self.len == other.len and (self.len == 0 or memcmp(self.ptr, other.ptr, self.len) == 0)
 
-# O literal já sabe o próprio tamanho em tempo de compilação (o compilador
-# dobra o `strlen`); estas duas são para quando o texto vem de um ponteiro que
-# não sabe. `static inline` porque um par de campos não merece uma chamada.
+# A literal already knows its own length at compile time (the compiler folds
+# the `strlen`); these are for when the text arrives as a pointer that does
+# not. `static inline` because a pair of fields does not deserve a call.
 static inline def cstr(s: const *char) -> CStr:
     r: CStr = {s, strlen(s)}
     return r

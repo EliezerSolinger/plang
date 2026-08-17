@@ -1,14 +1,14 @@
-orfa: comecei
-conta 0
-intruso 0
-(pronta do intruso)
-conta 1
-intruso 1
-(pronta do intruso)
-conta 2
-intruso 2
-(pronta do intruso)
-somei 21
-intruso deu 0
-fim do main — o que vier depois disto é a drenagem
-orfa: terminei
+orphan: started
+count 0
+intruder 0
+(the intruder's ready one)
+count 1
+intruder 1
+(the intruder's ready one)
+count 2
+intruder 2
+(the intruder's ready one)
+summed 21
+the intruder gave 0
+end of main — whatever comes after this is the drain
+orphan: finished

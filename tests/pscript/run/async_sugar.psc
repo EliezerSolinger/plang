@@ -1,76 +1,104 @@
-"""O bloco `async:`, a lambda assíncrona, os combinadores que faltavam e o
-console assíncrono (78.2/78.3/79.4).
+"""The `async:` block, the async lambda, the missing combinators and the
+asynchronous console (78.2/78.3/79.4).
 
-`async:` faz uma task ali mesmo, sem precisar batizar uma função para isso —
-e o que ele usa de fora, ele CAPTURA POR VALOR, exatamente como um lambda
-(19.2). Por baixo vira um `async def` cujos parâmetros são o que foi
-capturado, então daí para a frente é uma task como qualquer outra.
+`async:` makes a task right there, without having to name a function for it —
+and what it uses from outside it CAPTURES BY VALUE, exactly as a lambda does
+(19.2). Underneath it becomes an `async def` whose parameters are what was
+captured, so from then on it is a task like any other.
 
-`gather` já era o `Promise.all` (resultados na ordem DADA, não na de chegada).
-Faltavam os irmãos: `gather_settled` espera TODAS e devolve o erro de cada uma
-— None onde deu certo —, e a primeira falha não derruba o conjunto;
-`first_ok` devolve o índice da primeira que deu CERTO e cancela o resto.
+An `async lambda` is two things that already worked, one on top of the other:
+an `async def` for the body (the state machine) and an ordinary lambda that
+calls it (the capture environment).
 
-E `print` continua síncrono, porque é o canal de diagnóstico da linguagem e um
-`await` em cada linha envenenaria todo programa; quem precisa que a escrita
-espere usa `aprint`, ou `sys.out`/`sys.err`, que são arquivos comuns.
+`gather` was already `Promise.all` (results in the order GIVEN, not the order
+they finished). The siblings were missing: `gather_settled` waits for ALL and
+gives back each one's error — None where it worked — and the first failure does
+not bring the set down; `first_ok` gives the index of the first that SUCCEEDED
+and cancels the rest. And `gather_map` is the concurrency limit in the only
+shape that can throttle: over the ITEMS, because with a hot start a task is
+already running by the time a limit at `gather` would see it.
+
+And `print` stays synchronous, because it is the language's diagnostic channel
+and an `await` on every line would poison every program; whoever needs the
+write itself to wait uses `aprint`, or `sys.out`/`sys.err`, which are ordinary
+files.
 """
 
 import sys
 
-feito: list<str> = []
+done: list<str> = []
 
 
-async def espera(ms: int, nome: str) -> int:
+async def wait_ms(ms: int, name: str) -> int:
     await sleep(float(ms) / 1000.0)
-    feito.append(nome)
+    done.append(name)
     return ms
 
 
-async def falha(nome: str) -> int:
+async def fails(name: str) -> int:
     await sleep(0.001)
-    raise error("caiu: " + nome, VALUE)
+    raise error("fell over: " + name, VALUE)
     return 0
 
 
-# ---- o bloco, com captura ----
-def dispara(rotulo: str) -> int:
+# ---- the block, with a capture ----
+def fire(label: str) -> int:
     t = async:
-        await espera(2, "bloco de " + rotulo)
+        await wait_ms(2, "block from " + label)
     return 0
 
 
-dispara("um")
+fire("one")
 
-# no topo também, e sem guardar a task: a drenagem do fim (77.3) termina esta
+# at the top level too, and without keeping the task: the end-of-program drain
+# (77.3) finishes this one
 async:
-    await espera(1, "solta")
+    await wait_ms(1, "loose")
 
-# ---- os combinadores ----
-ts = [espera(3, "a"), falha("b"), espera(1, "c")]
-erros = await gather_settled(ts)
-print("quantas", len(erros))
-for i in range(len(erros)):
-    e = erros[i]
+# ---- the combinators ----
+ts = [wait_ms(3, "a"), fails("b"), wait_ms(1, "c")]
+errors = await gather_settled(ts)
+print("how many", len(errors))
+for i in range(len(errors)):
+    e = errors[i]
     if e != None:
-        print(i, "falhou:", e.message)
+        print(i, "failed:", e.message)
     else:
-        print(i, "deu", await ts[i])
+        print(i, "gave", await ts[i])
 
-quais = [falha("x"), espera(2, "vencedora"), falha("y")]
-print("primeira que deu certo:", await first_ok(quais))
+which = [fails("x"), wait_ms(2, "winner"), fails("y")]
+print("first that worked:", await first_ok(which))
 
-# ---- a lambda assíncrona ----
-# ela é DUAS coisas que já funcionavam: um `async def` para o corpo (a máquina
-# de estados) e um lambda comum que o chama (o ambiente de captura). Compor as
-# duas seria novo; empilhar uma sobre a outra não é.
-fator = 100
-dobra: def(int) -> Task<int> = async lambda x: await espera(1, "lambda " + str(x)) + fator
-print("lambda:", await dobra(5))
+# ---- the concurrency limit, in the shape that can throttle ----
+# `gather(ts, at_most=8)` cannot work: with the HOT start of 35.1 every task in
+# `ts` is already running by the time gather sees it. The limit belongs where
+# the tasks are MADE, so it runs over the ITEMS and calls the function at most
+# `at_most` at a time.
+alive = 0
+peak = 0
 
-# ---- o console ----
-n = await aprint("escrito pelo pool", 42)
-print("aprint devolveu", n, "bytes")
-await sys.out.write("direto no stdout\n")
+async def piece(n: int) -> int:
+    global alive
+    global peak
+    alive += 1
+    if alive > peak:
+        peak = alive
+    await sleep(0.004)
+    alive -= 1
+    return n * n
+
+squares = await gather_map(piece, [1, 2, 3, 4, 5, 6, 7, 8], at_most=3)
+print("squares:", len(squares), squares[0], squares[7])
+print("never more than three at a time:", peak <= 3)
+
+# ---- the async lambda ----
+factor = 100
+twice: def(int) -> Task<int> = async lambda x: await wait_ms(1, "lambda " + str(x)) + factor
+print("lambda:", await twice(5))
+
+# ---- the console ----
+n = await aprint("written by the pool", 42)
+print("aprint gave back", n, "bytes")
+await sys.out.write("straight to stdout\n")
 sys.out.close()
-print("stdout continua vivo, porque ele é do processo")
+print("stdout is still alive, because it belongs to the process")

@@ -1,10 +1,12 @@
-quantas 3
-0 deu 3
-1 falhou: caiu: b
-2 deu 1
-primeira que deu certo: 1
+how many 3
+0 gave 3
+1 failed: fell over: b
+2 gave 1
+first that worked: 1
+squares: 8 1 64
+never more than three at a time: True
 lambda: 101
-escrito pelo pool 42
-aprint devolveu 21 bytes
-direto no stdout
-stdout continua vivo, porque ele é do processo
+written by the pool 42
+aprint gave back 23 bytes
+straight to stdout
+stdout is still alive, because it belongs to the process

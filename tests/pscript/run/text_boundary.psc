@@ -1,31 +1,32 @@
-"""Texto atravessando a fronteira P↔pscript (81/83/84/85/86).
+"""Text crossing the P↔pscript boundary (81/83/84/85/86).
 
-O `str` do pscript e o `const *char` do P nunca se encontravam: a 45.5 só
-deixava escalar passar. Agora existe um par — `CStr` para texto, `CBytes` para
-bytes — que é um PONTEIRO E O TAMANHO DELE, como valor, e que não aloca nada.
+pscript's `str` and P's `const *char` never met: 45.5 only let scalars through.
+Now there is a pair — `CStr` for text, `CBytes` for bytes — which is A POINTER
+AND ITS LENGTH, as a value, and which allocates nothing.
 
-Na IDA é empréstimo: o compilador monta o par apontando para os próprios bytes
-do objeto, e isso é seguro porque uma chamada C não coleta (só `ps_gc_poll`
-coleta, e C não o chama), então nada se move debaixo dela.
+On the WAY OUT it is a loan: the compiler builds the pair pointing at the
+object's own bytes, and that is safe because a C call cannot collect (only
+`ps_gc_poll` collects, and C never calls it), so nothing moves underneath it.
 
-Na VOLTA é cópia, e para texto é cópia CONFERIDA: o P nunca dá posse — devolve
-estático ou um buffer seu — e um `str` promete codepoints, então bytes que não
-são UTF-8 válido lançam em vez de virar uma string que mente sobre si.
+On the WAY BACK it is a copy, and for text a CHECKED copy: P never hands over
+ownership — it returns something static or a buffer of its own — and a `str`
+promises codepoints, so bytes that are not valid UTF-8 raise instead of
+becoming a string that lies about itself.
 """
 
 import "pmod_text.ph"
 
-nome = "olá mundo"
-print("tamanho em BYTES do lado P:", texto_tamanho(nome))
-print("tamanho em CARACTERES aqui:", len(nome))
+name = "olá mundo"
+print("length in BYTES on the P side:", text_length(name))
+print("length in CHARACTERS here:", len(name))
 
-print("maiusculo:", texto_maiusculo("plang e pscript"))
-print("versao:", versao())
+print("upper:", text_upper("plang and pscript"))
+print("version:", version())
 
 b: list<u8> = [1, 2, 3, 250]
-print("soma dos bytes:", bytes_soma(b))
+print("sum of the bytes:", bytes_sum(b))
 
 try:
-    print(nao_utf8())
+    print(not_utf8())
 catch e:
-    print("recusado:", e.message)
+    print("refused:", e.message)

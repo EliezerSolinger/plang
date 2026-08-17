@@ -130,7 +130,8 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | Socket e DNS (`net`) | 77.1 | `net_socket` | ✅ `net.listen/connect/lookup`, `accept/read/write/close/port`; accept/read/write POLLED no mesmo `poll` do escalonador, connect e DNS no pool |
 | Limpeza dentro de `async def` | 50.1, 80.2 | `async_cleanup` | ✅ `defer`, `with` e `finally` armam um bit no frame e rodam em toda saída de verdade — nunca numa suspensão (era bug: rodavam ao estacionar) |
 | `try`/`catch` dentro de `async def` | 50.1 | `aio_files` | ✅ o guarda salta para o estado do catch |
-| `gather_settled` / `first_ok` | 79.4 | `async_sugar` | ✅ (`at_most` não: com começo quente a task já roda quando é criada — o limite pertence a quem CRIA) |
+| `gather_settled` / `first_ok` / `gather_map` | 79.4 | `async_sugar` | ✅ o limite de concorrência é `gather_map(f, itens, at_most=n)`, sobre os ITENS: com começo quente um limite no `gather` chegaria depois de todas começarem |
+| `async def` como VALOR | 28.1, 35.3 | `async_sugar` | ✅ o símbolo por trás é a função de partida, que já devolve uma task |
 | Bloco `async:` e `async lambda` | 78.3 | `async_sugar` | ✅ os dois viram `async def` cujos parâmetros são a captura; o lambda assíncrono é um lambda comum que chama esse `async def`, então a máquina de estados e o ambiente de captura continuam separados |
 | `aprint`, `sys.out`, `sys.err` | 78.2 | `async_sugar` | ✅ `print` segue síncrono; `close()` num stream padrão é no-op |
 | I/O de ARQUIVO pelo pool de threads | 76.1, 76.3 | `aio_files` | ✅ um pool por processo, preguiçoso (N=núcleos, teto 8, `PSCRIPT_POOL`); a thread do pool só toca o item malloc'ado e a libc, e quem constrói o valor no heap é o escalonador de quem pediu |

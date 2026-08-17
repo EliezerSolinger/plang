@@ -1493,11 +1493,24 @@ None onde deu certo. Os valores se leem das próprias tasks, que já terminaram.
 `first_ok(ts)` devolve o índice da primeira que deu certo e cancela o resto;
 se todas falharem, lança.
 
-**O `at_most` NÃO foi implementado, e por um motivo de desenho:** com o começo
-QUENTE da 35.3, a task já está rodando no instante em que é criada. Um limite
-no `gather` chegaria tarde — não há o que estrangular. O lugar de limitar
-concorrência é onde as tasks são CRIADAS, o que pede outra forma (algo como
-`gather_map(f, itens, at_most=8)`, que cria em lotes). Fica registrado.
+**O `at_most` entrou com OUTRA FORMA, e o motivo é de desenho:** com o começo
+QUENTE da 35.1, a task já está rodando no instante em que é criada — um limite
+no `gather` chegaria depois de todas terem começado, e não haveria o que
+estrangular. O lugar de limitar é onde as tasks são CRIADAS:
+
+    quadrados = await gather_map(peça, itens, at_most=3)
+
+Ele anda pelos ITENS e nunca tem mais que `at_most` tasks vivas ao mesmo tempo
+(o teste mede o pico e prende em 3). Os resultados voltam na ordem DADA, que é
+a promessa que o `gather` já fazia. O adaptador é emitido por sítio de chamada,
+como o do `sorted(key=)`, porque só ali se conhece o tipo do elemento — e é
+coletado ANTES da baixada, junto com os lambdas, senão o protótipo não existe
+quando o corpo que o chama é escrito.
+
+Isso destravou duas coisas menores no caminho: um `async def` agora pode ser
+usado como VALOR (o símbolo por trás dele é a função de partida, que já tem a
+forma certa: devolve uma task), e o adaptador de função-valor passou a saber
+disso.
 
 ### 78.2 — `aprint`, `sys.out` e `sys.err` — FEITOS
 
@@ -1609,11 +1622,12 @@ e o caminho está livre. Teste: `tests/pscript/run/str_index.psc`.
 
 ## Onde a fase parou
 
-Tudo o que as baterias 76 a 86 decidiram está implementado, com uma exceção
-registrada e explicada acima (a largura adaptativa do PEP 393, trocada por um
-índice que dá a mesma propriedade sem duplicar toda string que atravessa
-alguma coisa) e uma que a própria decisão não podia prever (`gather(at_most=)`,
-que não faz sentido com começo quente).
+Tudo o que as baterias 76 a 86 decidiram está implementado. Duas coisas saíram
+diferentes do texto da decisão, as duas explicadas acima: a largura adaptativa
+do PEP 393 virou um índice que dá a mesma propriedade sem duplicar toda string
+que atravessa alguma coisa, e o `at_most` mudou de lugar — de `gather` para
+`gather_map` —, porque com começo quente um limite no `gather` chega tarde
+demais para estrangular qualquer coisa.
 
 ### A ordem de implementação
 

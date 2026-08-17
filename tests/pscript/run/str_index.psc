@@ -1,53 +1,53 @@
-"""Indexar uma string em O(1) (80.1b).
+"""Indexing a string in O(1) (80.1b).
 
-A decisão pedia a largura adaptativa do PEP 393 — latin-1/UCS-2/UCS-4 por
-string. Implementá-la ao pé da letra sairia caro de um jeito que só ficou
-visível depois de o resto existir: TUDO neste sistema quer os bytes UTF-8 —
-o socket, o arquivo, a mensagem entre heaps, a fronteira com o P (84.1), o
-`print`. Com o texto guardado em UCS-4, cada travessia teria de materializar o
-UTF-8, e é por isso que o próprio PEP 393 guarda as DUAS formas. O preço real
-seria duas cópias de toda string que atravessa qualquer coisa.
+The decision asked for PEP 393's adaptive width — latin-1/UCS-2/UCS-4 per
+string. Implementing that to the letter would cost in a way that only became
+visible once the rest existed: EVERYTHING in this system wants the UTF-8 bytes
+— the socket, the file, the message between heaps, the boundary with P (84.1),
+`print`. With the text held as UCS-4, every crossing would have to materialize
+the UTF-8, which is why PEP 393 itself keeps BOTH forms. The real price would
+be two copies of every string that crosses anything.
 
-O que está implementado alcança a mesma propriedade observável com uma cópia
-só:
+What is implemented reaches the same observable property with a single copy:
 
-  * ASCII — a esmagadora maioria, e todo texto de protocolo — não precisa de
-    nada: `nchars == len` já É a prova de que cada byte é um caractere. Essa
-    prova estava no cabeçalho desde sempre;
-  * o resto ganha um ÍNDICE DE DESLOCAMENTOS construído na primeira vez que
-    alguém indexa AQUELA string, guardado nela e coletado com ela. O(n) uma
-    vez, O(1) daí em diante, e nada para quem nunca indexa.
+  * ASCII — the overwhelming majority, and all protocol text — needs nothing:
+    `nchars == len` IS the proof that every byte is one character. That proof
+    was in the header all along;
+  * everything else gets an OFFSET INDEX built the first time someone indexes
+    THAT string, kept in it and collected with it. O(n) once, O(1) from then
+    on, and nothing for a string nobody indexes.
 
-Uma `str` é imutável (31.3), então o índice nunca se invalida.
+A `str` is immutable (31.3), so the index never goes stale.
 """
 
 import sys
 
 ascii: str = "abcdefghij"
-misto: str = "áéíóúçãõ ñ"
+mixed: str = "áéíóúçãõ ñ"
 
 print("ascii:", ascii[0], ascii[4], ascii[-1])
-print("misto:", misto[0], misto[4], misto[-1])
-print("fatias:", ascii[2:5], misto[2:5])
-print("tamanhos em CARACTERES:", len(ascii), len(misto))
+print("mixed:", mixed[0], mixed[4], mixed[-1])
+print("slices:", ascii[2:5], mixed[2:5])
+print("lengths in CHARACTERS:", len(ascii), len(mixed))
 
-# o `for ch in s` anda pela mesma máquina
-juntos = ""
-for ch in misto:
-    juntos += ch
-print("remontado igual:", juntos == misto)
+# `for ch in s` walks the same machinery
+joined = ""
+for ch in mixed:
+    joined += ch
+print("rebuilt the same:", joined == mixed)
 
-# muitos acessos na mesma string não-ASCII: o índice é construído uma vez
-grande = ""
+# many accesses to the same non-ASCII string: the index is built once
+big = ""
 for i in range(300):
-    grande += "áb"
-soma = 0
-for i in range(len(grande)):
-    soma += ord(grande[i])
-print("caracteres:", len(grande), "soma:", soma)
+    big += "áb"
+total = 0
+for i in range(len(big)):
+    total += ord(big[i])
+print("characters:", len(big), "sum:", total)
 
-# uma coleta no meio não perde o índice: ele é um objeto coletado como outro
-lixo: list<str> = []
+# a collection in the middle does not lose the index: it is a collected object
+# like any other
+junk: list<str> = []
 for i in range(2000):
-    lixo.append("x" + str(i))
-print("depois da coleta:", grande[599], len(grande))
+    junk.append("x" + str(i))
+print("after the collection:", big[599], len(big))

@@ -2,15 +2,15 @@ import "pmod_text.ph"
 implement CStr
 implement CBytes
 
-def texto_tamanho(in s: CStr) -> i64:
+def text_length(in s: CStr) -> i64:
     return i64(s.len)
 
-# devolve memória DE QUEM CHAMA? não: um buffer estático deste módulo, válido
-# até a próxima chamada — a convenção do `strerror`, e a única que não precisa
-# que alguém libere
+# does it hand back the CALLER's memory? no: a static buffer of this module,
+# valid until the next call — the `strerror` convention, and the only one that
+# needs nobody to free anything
 static g_buf: char[256]
 
-def texto_maiusculo(in s: CStr) -> CStr:
+def text_upper(in s: CStr) -> CStr:
     n: usize = s.len if s.len < usize(255) else usize(255)
     for i in range(n):
         c: char = s.ptr[i]
@@ -18,19 +18,19 @@ def texto_maiusculo(in s: CStr) -> CStr:
     g_buf[n] = '\0'
     return cstr_n(g_buf, n)
 
-def bytes_soma(in b: CBytes) -> i64:
+def bytes_sum(in b: CBytes) -> i64:
     t: i64 = 0
     for i in range(b.len):
         t += i64(b.ptr[i])
     return t
 
-def versao() -> CStr:
+def version() -> CStr:
     return cstr("1.2.3")
 
-# bytes que NÃO são UTF-8: a travessia tem de recusar
+# bytes that are NOT UTF-8: the crossing has to refuse them
 static g_bad: char[4]
 
-def nao_utf8() -> CStr:
+def not_utf8() -> CStr:
     g_bad[0] = char(0xFF)
     g_bad[1] = char(0xFE)
     g_bad[2] = '\0'

@@ -1,7 +1,7 @@
 ascii: a e j
-misto: á ú ñ
-fatias: cde íóú
-tamanhos em CARACTERES: 10 10
-remontado igual: True
-caracteres: 600 soma: 96900
-depois da coleta: b 600
+mixed: á ú ñ
+slices: cde íóú
+lengths in CHARACTERS: 10 10
+rebuilt the same: True
+characters: 600 sum: 96900
+after the collection: b 600

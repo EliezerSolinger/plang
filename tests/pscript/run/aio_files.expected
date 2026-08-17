@@ -1,8 +1,8 @@
-escrevi 32 bytes
+wrote 28 bytes
 ticks 5
-sobrepos True
-li 32 bytes
-acumulado 32
-faltando <cannot open 'nao/existe/isto.txt'>
-bytes 6 108 26 0
-linhas 5 linha 0
+overlapped True
+read 28 bytes
+accumulated 28
+missing <cannot open 'no/such/file.txt'>
+bytes 6 108 22 0
+lines 5 line 0

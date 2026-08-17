@@ -1,7 +1,7 @@
-porta escolhida pelo sistema: True
-cliente 1: ok:ping
+the system chose a port: True
+client 1: ok:ping
 
-cliente 2: ok:pong
+client 2: ok:pong
 
-servidor contou: 208
-localhost resolve para algo: True
+the server counted: 208
+localhost resolves to something: True

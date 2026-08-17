@@ -1,55 +1,56 @@
-"""Arquivo assíncrono: o pool de threads (76.1/76.2/76.3).
+"""Asynchronous files: the thread pool (76.1/76.2/76.3).
 
-Um socket tem modo não-bloqueante de verdade e vive no `poll` que a 74.1 já
-construiu. Um ARQUIVO não tem — `read(2)` bloqueia, sempre — e é por isso que
-ele precisa de thread. A divisão é a da libuv, e não é gosto: é o que o sistema
-operacional oferece.
+A socket has a real non-blocking mode and lives in the `poll` that 74.1 already
+built. A FILE does not — `read(2)` blocks, always — and that is why it needs a
+thread. The split is libuv's, and it is not a matter of taste: it is what the
+operating system offers.
 
-Então toda operação de arquivo virou uma TASK: a chamada descreve o trabalho,
-entrega ao pool e devolve na hora; a espera acontece no escalonador, ao lado do
-relógio e das filas de mensagem. Uma thread do pool nunca toca o heap de
-ninguém — ela trabalha em bytes malloc'ados e devolve bytes malloc'ados, e quem
-constrói o valor no heap coletado é o escalonador do contexto que pediu.
+So every file operation became a TASK: the call describes the work, hands it to
+the pool and returns at once; the waiting happens in the scheduler, next to the
+clock and the message queues. A pool thread never touches anyone's heap — it
+works on malloc'd bytes and hands malloc'd bytes back, and the value is built
+in the collected heap by the scheduler of the context that asked.
 
-Três coisas que este teste prende:
+Three things this pins:
 
-  * o I/O SOBREPÕE com o resto — o arquivo e o relógio andam juntos;
-  * `read(n)` dá até n bytes e o vazio é o fim (79.2), enquanto `text()` dá
-    tudo decodificado e `read_all()` tudo cru (79.1);
-  * `try`/`catch` funciona DENTRO de um `async def`, inclusive pegando um erro
-    que nasce depois de uma suspensão — o que exige que o guarda de exceção
-    salte para o estado do catch em vez de encerrar a task.
+  * the I/O OVERLAPS with the rest — the file and the clock run together;
+  * `read(n)` gives up to n bytes and the empty answer is the end (79.2), while
+    `text()` gives the whole thing decoded and `read_all()` the whole thing raw
+    (79.1);
+  * `try`/`catch` works INSIDE an `async def`, including catching an error born
+    after a suspension — which needs the exception guard to jump to the catch
+    state instead of ending the task.
 """
 
 import sys
 
-CAMINHO: str = "aio_files_demo.txt"
+PATH: str = "aio_files_demo.txt"
 
 
-struct Arquivo:
-    nome: str
-    lidos: int
+struct File:
+    name: str
+    read_bytes: int
 
-    # um método TAMBÉM pode ser `async def` (50.1): é uma função com receptor, e
-    # `self` vive no frame como qualquer outro parâmetro
-    async def escreve(self, linhas: int) -> int:
-        f = await open(self.nome, "w")
+    # a method may be an `async def` too (50.1): it is a function with a
+    # receiver, and `self` lives in the frame like any other parameter
+    async def write_lines(self, lines: int) -> int:
+        f = await open(self.name, "w")
         total = 0
-        for i in range(linhas):
-            total += await f.write("linha " + str(i) + "\n")
+        for i in range(lines):
+            total += await f.write("line " + str(i) + "\n")
         await f.close()
         return total
 
-    async def le_tudo(self) -> str:
-        f = await open(self.nome, "r")
+    async def read_all_text(self) -> str:
+        f = await open(self.name, "r")
         t = await f.text()
         await f.close()
-        self.lidos += len(t)
+        self.read_bytes += len(t)
         return t
 
-    async def le_ou_vazio(self, nome: str) -> str:
+    async def read_or_empty(self, name: str) -> str:
         try:
-            f = await open(nome, "r")
+            f = await open(name, "r")
             t = await f.text()
             await f.close()
             return t
@@ -57,7 +58,7 @@ struct Arquivo:
             return "<" + e.message + ">"
 
 
-async def relogio(n: int) -> int:
+async def clock(n: int) -> int:
     k = 0
     for i in range(n):
         await sleep(0.002)
@@ -65,30 +66,30 @@ async def relogio(n: int) -> int:
     return k
 
 
-a = Arquivo(CAMINHO, 0)
+a = File(PATH, 0)
 
-# o arquivo e o relógio andam JUNTOS: se o I/O bloqueasse a thread, os dois
-# tempos se somariam em vez de se sobreporem
+# the file and the clock run TOGETHER: if the I/O blocked the thread, the two
+# times would add up instead of overlapping
 t0 = sys.time()
-escrita = a.escreve(4)
-tic = relogio(5)
-print("escrevi", await escrita, "bytes")
-print("ticks", await tic)
-print("sobrepos", sys.time() - t0 < 0.05)
+writing = a.write_lines(4)
+tick = clock(5)
+print("wrote", await writing, "bytes")
+print("ticks", await tick)
+print("overlapped", sys.time() - t0 < 0.05)
 
-print("li", len(await a.le_tudo()), "bytes")
-print("acumulado", a.lidos)
+print("read", len(await a.read_all_text()), "bytes")
+print("accumulated", a.read_bytes)
 
-# o que falta não explode: o catch está dentro do `async def`
-print("faltando", await a.le_ou_vazio("nao/existe/isto.txt"))
+# what is missing does not blow up: the catch is inside the `async def`
+print("missing", await a.read_or_empty("no/such/file.txt"))
 
-# bytes: até n, e o vazio é o fim
-f = await open(CAMINHO, "r")
-primeiros = await f.read(6)
-resto = await f.read_all()
-fim = await f.read(8)
-print("bytes", len(primeiros), primeiros[0], len(resto), len(fim))
+# bytes: up to n, and the empty answer is the end
+f = await open(PATH, "r")
+first = await f.read(6)
+rest = await f.read_all()
+end = await f.read(8)
+print("bytes", len(first), first[0], len(rest), len(end))
 await f.close()
 
-linhas = await (await open(CAMINHO, "r")).readlines()
-print("linhas", len(linhas), linhas[0])
+lines = await (await open(PATH, "r")).readlines()
+print("lines", len(lines), lines[0])

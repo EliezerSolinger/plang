@@ -2750,10 +2750,10 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
     # and returning False here would call a slow worker a deadlock
     return True
 
-# 78.4: `await` CEDE SEMPRE, mesmo quando o valor já está pronto. Sem isso, um
-# laço de awaits que sempre acha resposta pronta — um cliente rápido num
-# servidor — nunca deixa outra task rodar. É a regra do JS, e é dela que vem a
-# ordem previsível dele.
+# 78.4: `await` ALWAYS yields, even when the value is already there. Without
+# that, a loop of awaits that always finds its answer ready — a fast client, in
+# a server — never lets another task run. It is the rule of the JS microtask,
+# and the reason its ordering is predictable.
 def ps_task_yield(ctx: *PsCtx, t: *PsTask):
     ps_sched_push(ctx, t)
 
@@ -2940,6 +2940,55 @@ def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64:
         if ctx->exc != None:
             ps_exc_take(ctx)
     return -1
+
+# 79.4, the shape of `at_most` that actually throttles. The decision asked for
+# `gather(ts, at_most=8)`, and that cannot work: with the HOT start of 35.3 a
+# task is already running the moment it is created, so a limit at `gather` time
+# arrives too late — there is nothing left to hold back. The place to throttle
+# is where the tasks are MADE, which is what this does: it walks the items and
+# never has more than `at_most` tasks alive at once.
+#
+# The tasks live in a collected list rather than a malloc'd array, because a
+# task is a collected object and a pointer the collector cannot see is a
+# pointer it will move without telling anyone.
+def ps_gather_map(ctx: *PsCtx, items: *PsList, mk: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsTask, env: *void, esize: i32, eref: bool, at_most: i64) -> *PsList:
+    n: i64 = items->len if items != None else 0
+    out: *PsList = ps_list_new(ctx, esize, eref, n)
+    if n == 0:
+        return out
+    win: i64 = at_most if at_most > 0 else 1
+    pend: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, n)
+    made: i64 = 0
+    taken: i64 = 0
+    while taken < n:
+        # fill the window: how many are alive is what has been made minus what
+        # has already been collected
+        while made < n and made - taken < win:
+            item: *void = (*void)(ps_list_base(items) + usize(made) * usize(items->esize))
+            t: *PsTask = mk(env, ctx, item)
+            slot: *char = ps_list_push(ctx, pend)
+            *(**PsTask)(slot) = t
+            made += 1
+            if ctx->exc != None:
+                return out
+        # the results come back in the order the items were GIVEN, which is the
+        # promise `gather` already makes
+        base: **PsTask = (**PsTask)(ps_list_base(pend) + usize(taken) * usize(pend->esize))
+        ps_task_wait(ctx, *base)
+        if ctx->exc != None:
+            return out
+        base = (**PsTask)(ps_list_base(pend) + usize(taken) * usize(pend->esize))
+        dst: *char = ps_list_push(ctx, out)
+        memcpy(dst, ps_task_ret(*base), usize(esize))
+        taken += 1
+    return out
+
+def ps_gather_map_task(ctx: *PsCtx, items: *PsList, mk: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsTask, env: *void, esize: i32, eref: bool, at_most: i64) -> *PsTask:
+    out: *PsList = ps_gather_map(ctx, items, mk, env, esize, eref, at_most)
+    t: *PsTask = ps_msg_task(ctx, None, sizeof(PsStrPtr))
+    ((*PsUser)(t->frame))->desc = &PS_REFMSG_DESC
+    *(**PsList)(ps_task_ret(t)) = out
+    return t
 
 def ps_first_ok_task(ctx: *PsCtx, ts: *PsList) -> *PsTask:
     v: i64 = ps_first_ok(ctx, ts)
@@ -3495,32 +3544,33 @@ def ps_utf8_valid(b: const *char, n: usize) -> bool:
         i += usize(need) + 1
     return True
 
-# 80.1b — indexar em O(1).
+# 80.1b — indexing in O(1).
 #
-# A decisão pedia a largura adaptativa do PEP 393 (latin-1/UCS-2/UCS-4 por
-# string). Implementá-la LITERALMENTE aqui sairia caro de um jeito que só
-# ficou visível depois: tudo neste sistema quer os bytes UTF-8 — o socket, o
-# arquivo, a mensagem entre heaps, a fronteira com o P (84.1), o `print`. Com o
-# texto guardado em UCS-4, cada uma dessas travessias precisaria MATERIALIZAR o
-# UTF-8, e o PEP 393 resolve isso guardando as DUAS formas. Ou seja: o preço
-# real seria duas cópias de toda string que atravessa qualquer coisa.
+# The decision asked for PEP 393's adaptive width (latin-1/UCS-2/UCS-4 per
+# string). Implementing that LITERALLY here would cost in a way that only
+# became visible once the rest existed: everything in this system wants the
+# UTF-8 bytes — the socket, the file, the message between heaps, the boundary
+# with P (84.1), `print`. With the text held as UCS-4, every one of those
+# crossings would have to MATERIALIZE the UTF-8, which is exactly why PEP 393
+# keeps BOTH forms. The real price would be two copies of every string that
+# crosses anything.
 #
-# O que está aqui alcança a mesma propriedade observável — `s[i]` e fatia em
-# O(1) — com uma cópia só:
+# What is here reaches the same observable property — `s[i]` and slicing in
+# O(1) — with a single copy:
 #
-#   * ASCII (a esmagadora maioria, e TODO texto de protocolo) não precisa de
-#     nada: `nchars == len` já É a prova de que cada byte é um caractere, então
-#     o índice é acesso direto. Repare que essa prova já estava no cabeçalho
-#     desde sempre — só ninguém tinha reparado nela;
-#   * o resto ganha um ÍNDICE DE DESLOCAMENTOS construído na primeira vez que
-#     alguém indexa aquela string, e guardado nela. O(n) uma vez, O(1) daí em
-#     diante, e nada para quem nunca indexa.
+#   * ASCII (the overwhelming majority, and ALL protocol text) needs nothing:
+#     `nchars == len` IS the proof that every byte is one character, so the
+#     index is a direct access. That proof was in the header all along — it
+#     just had never been read as one;
+#   * everything else gets an OFFSET INDEX, built the first time someone
+#     indexes that string and kept in it. O(n) once, O(1) from then on, and
+#     nothing at all for a string nobody indexes.
 #
-# Uma `str` é imutável (31.3), então o índice nunca precisa ser invalidado.
+# A `str` is immutable (31.3), so the index never has to be invalidated.
 static def ps_str_ascii(s: *PsStr) -> bool:
     return s->nchars == s->len
 
-# o índice, construído sob demanda e guardado na própria string
+# the index, built on demand and kept in the string itself
 static def ps_str_index(ctx: *PsCtx, s: *PsStr) -> *PsArr:
     if s->offs != None:
         return s->offs
@@ -3572,9 +3622,10 @@ def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> 
         return ps_str_new(ctx, "", 0)
     return ps_str_new(ctx, p, n)
 
-# 81.4/83.2: texto que VEM do lado P. Os bytes são copiados na chegada — a
-# memória é de lá e o coletor não a rastreia — e CONFERIDOS, porque um `str`
-# promete codepoints e um que mentisse sobre isso seria pior que um erro.
+# 81.4/83.2: text COMING FROM the P side. The bytes are copied on arrival — the
+# memory is theirs and the collector does not track it — and CHECKED, because a
+# `str` promises codepoints and one that lied about that would be worse than an
+# error.
 def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, line: i32) -> *PsStr:
     if p == None:
         return ps_str_new(ctx, "", 0)
@@ -3583,7 +3634,7 @@ def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, lin
         return ps_str_new(ctx, "", 0)
     return ps_str_new(ctx, p, n)
 
-# ... e bytes, que não prometem nada e por isso não são conferidos
+# ... and bytes, which promise nothing and so are not checked
 def ps_bytes_new(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList:
     l: *PsList = ps_list_new(ctx, 1, False, i64(n))
     i: usize = 0
@@ -3818,9 +3869,10 @@ def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
             return True
     return False
 
-# ASCII, e dito em voz alta: caixa em Unicode depende de LÍNGUA (o i sem ponto
-# do turco é o exemplo clássico), e um `lower()` que finge saber disso mente.
-# O que HTTP, um cabeçalho e um identificador precisam é exatamente isto.
+# ASCII, and said out loud: case in Unicode depends on LANGUAGE (Turkish's
+# dotless i is the classic example), and a `lower()` that pretended to know
+# better would be lying. What HTTP, a header and an identifier need is exactly
+# this.
 def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
     n: usize = usize(s->len)
     out: *PsStr = ps_str_new(ctx, s->data, n)

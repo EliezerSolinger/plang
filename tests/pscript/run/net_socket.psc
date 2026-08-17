@@ -1,61 +1,62 @@
-"""Socket (77.1): o outro lado do I/O, e o que ele NÃO precisa do pool.
+"""Sockets (77.1): the other half of I/O, and what it does NOT need the pool for.
 
-Um socket tem modo não-bloqueante de verdade, então `accept`, `read` e `write`
-são POLLED: o escalonador põe o descritor no mesmo `poll` que já roda desde a
-74.1, e a chamada de sistema acontece aqui dentro, quando ela não pode mais
-bloquear. Nada de thread. Já `connect` e a resolução de nome vão ao POOL,
-porque `getaddrinfo` bloqueia e não há como convencê-lo do contrário — é a
-divisão da libuv, e ela não é gosto: é o que o sistema operacional oferece.
+A socket has a real non-blocking mode, so `accept`, `read` and `write` are
+POLLED: the scheduler puts the descriptor in the same `poll` it has been
+running since 74.1, and the system call happens in here, when it can no longer
+block. No thread. `connect` and name resolution go to the POOL instead, because
+`getaddrinfo` blocks and cannot be talked out of it — that is libuv's split,
+and it is not a matter of taste: it is what the operating system offers.
 
-O programa abaixo é um servidor e um cliente no MESMO processo e na mesma
-thread. Isso só funciona porque cada espera estaciona: se `accept` bloqueasse,
-o cliente nunca chegaria a conectar.
+The program below is a server and a client in the SAME process, on the same
+thread. That only works because every wait parks: if `accept` blocked, the
+client would never get to connect.
 
-Duas coisas que o teste prende de propósito:
+Two things it pins on purpose:
 
-  * `read(n)` devolve até n bytes, e o vazio significa que o outro lado fechou
-    (79.2) — a semântica do `recv`, que é o que um parser incremental quer;
-  * `str(b)` é como bytes viram texto, e ele CONFERE: um `str` promete
-    codepoints, então bytes que não são UTF-8 válido lançam em vez de produzir
-    uma string que mente sobre o próprio tamanho (79.1/83.2).
+  * `read(n)` gives back up to n bytes, and the empty answer means the other
+    side closed (79.2) — the semantics of `recv`, which is what an incremental
+    parser wants;
+  * `str(b)` is how bytes become text, and it CHECKS: a `str` promises
+    codepoints, so bytes that are not valid UTF-8 raise instead of producing a
+    string that lies about its own length (79.1/83.2).
 """
 
 import net
 
 
-async def servidor(srv: socket) -> int:
+async def serve(srv: socket) -> int:
     total = 0
     for i in range(2):
         with await srv.accept() as c:
-            pedido = await c.read(4096)
-            total += len(pedido)
-            await c.write("ok:" + str(pedido) + "\n")
-            # o cliente fecha; a próxima leitura vê o fim
-            resto = await c.read(16)
-            if len(resto) == 0:
+            asked = await c.read(4096)
+            total += len(asked)
+            await c.write("ok:" + str(asked) + "\n")
+            # the client closes; the next read sees the end
+            rest = await c.read(16)
+            if len(rest) == 0:
                 total += 100
     return total
 
 
-async def cliente(porta: int, texto: str) -> str:
-    with await net.connect("127.0.0.1", porta) as c:
-        await c.write(texto)
-        resposta = await c.read(256)
-        return str(resposta)
+async def client(port: int, text: str) -> str:
+    with await net.connect("127.0.0.1", port) as c:
+        await c.write(text)
+        answer = await c.read(256)
+        return str(answer)
 
 
 srv = net.listen(0)
-porta = srv.port()
-print("porta escolhida pelo sistema:", porta > 0)
+port = srv.port()
+print("the system chose a port:", port > 0)
 
-s = servidor(srv)
-a = await cliente(porta, "ping")
-b = await cliente(porta, "pong")
-print("cliente 1:", a)
-print("cliente 2:", b)
-print("servidor contou:", await s)
+s = serve(srv)
+a = await client(port, "ping")
+b = await client(port, "pong")
+print("client 1:", a)
+print("client 2:", b)
+print("the server counted:", await s)
 srv.close()
 
-# o nome do próprio computador sempre resolve, com ou sem rede
+# the machine's own name always resolves, network or no network
 ip = await net.lookup("localhost")
-print("localhost resolve para algo:", len(ip) > 0)
+print("localhost resolves to something:", len(ip) > 0)

@@ -1,14 +1,14 @@
-escrevi 10
+wrote 9
 defers 42
-with 10
-erro -1
+with 9
+error -1
 finally ok 1
-finally erro 1
-   defer interno
-   defer externo
-   dentro do with
-   peguei: no meio do with
-   corpo ok
+finally broken 1
+   inner defer
+   outer defer
+   inside the with
+   caught: in the middle of the with
+   body ok
    finally
-   catch: quebrou
+   catch: broke
    finally

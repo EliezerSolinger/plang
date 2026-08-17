@@ -1,19 +1,19 @@
-# pmod_text.ph — texto atravessando a fronteira (81/84/85/86).
+# pmod_text.ph — text crossing the boundary (81/84/85/86).
 #
-# `CStr` é um PONTEIRO E O TAMANHO DELE, como valor: não aloca, não tem dono, e
-# vive só enquanto a chamada dura. O lado pscript vê `str` e o lado P vê o par;
-# quem constrói o par é o compilador, no sítio da chamada, apontando para os
-# próprios bytes do objeto — zero cópia na ida, porque uma chamada C não coleta
-# e portanto nada se move debaixo dela.
+# `CStr` is A POINTER AND ITS LENGTH, as a value: it does not allocate, has no
+# owner, and lives only as long as the call does. The pscript side sees `str`
+# and the P side sees the pair; the compiler is what builds the pair, at the
+# call site, pointing at the object's own bytes — no copy on the way out,
+# because a C call cannot collect and so nothing moves underneath it.
 #
-# Na volta é CÓPIA: a memória é do lado P e o coletor não a rastreia. O que o P
-# devolve é EMPRESTADO — estático, ou um buffer dele válido até a próxima
-# chamada — e ninguém libera nada.
+# On the way back it is a COPY: the memory is P's and the collector does not
+# track it. What P returns is BORROWED — static, or a buffer of its own valid
+# until the next call — and nobody frees anything.
 include <stdio.h>
 import "../../../stl/cstr.ph"
 
-def texto_tamanho(in s: CStr) -> i64
-def texto_maiusculo(in s: CStr) -> CStr
-def bytes_soma(in b: CBytes) -> i64
-def versao() -> CStr
-def nao_utf8() -> CStr
+def text_length(in s: CStr) -> i64
+def text_upper(in s: CStr) -> CStr
+def bytes_sum(in b: CBytes) -> i64
+def version() -> CStr
+def not_utf8() -> CStr

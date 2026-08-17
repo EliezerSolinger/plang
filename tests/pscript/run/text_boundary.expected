@@ -1,6 +1,6 @@
-tamanho em BYTES do lado P: 10
-tamanho em CARACTERES aqui: 9
-maiusculo: PLANG E PSCRIPT
-versao: 1.2.3
-soma dos bytes: 256
-recusado: this text is not valid UTF-8 (it came from the other side of the boundary)
+length in BYTES on the P side: 10
+length in CHARACTERS here: 9
+upper: PLANG AND PSCRIPT
+version: 1.2.3
+sum of the bytes: 256
+refused: this text is not valid UTF-8 (it came from the other side of the boundary)

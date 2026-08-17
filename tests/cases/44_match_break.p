@@ -1,13 +1,13 @@
-# `break` dentro de um braço de `match`.
+# `break` inside a `match` arm.
 #
-# O back end C imprime um `switch`, e ali `break` sai do switch — ou seja,
-# termina o BRAÇO. O back end QBE não tinha alvo de break para um `match`: a
-# pilha estava vazia e o salto ia para um bloco inexistente, o que o `qbe`
-# recusava com "block @l0 is used undefined". Os dois têm de dizer a mesma
-# coisa, e um `match` é interrompível nos dois.
+# The C back end prints a `switch`, and there `break` leaves the switch — that
+# is, it ends the ARM. The QBE back end had no break target for a `match`: the
+# stack was empty and the jump went to a block that does not exist, which `qbe`
+# refused with "block @l0 is used undefined". The two have to say the same
+# thing, and a `match` is breakable in both.
 #
-# (Um `match` do P não cai de um braço para o outro, então este `break` só serve
-# para sair mais cedo — que é exatamente o que ele faz.)
+# (A P `match` does not fall through from one arm to the next, so this `break`
+# only serves to leave early — which is exactly what it does.)
 include <stdio.h>
 
 def classify(n: i32) -> i32:
@@ -16,19 +16,19 @@ def classify(n: i32) -> i32:
         case 1:
             r = 10
             break
-            r = 99          # inalcançável, de propósito
+            r = 99          # unreachable, on purpose
         case 2:
             r = 20
         case _:
             r = 30
     return r
 
-# e dentro de um laço o `break` do braço continua sendo do MATCH, não do laço:
-# quem quiser sair do laço usa uma condição, que é o que o C também faz
-def conta_ate(limite: i32) -> i32:
+# and inside a loop the arm's `break` is still the MATCH's, not the loop's:
+# leaving the loop takes a condition, which is what C does too
+def count_to(limit: i32) -> i32:
     total: i32 = 0
     i: i32 = 0
-    while i < limite:
+    while i < limit:
         match i % 3:
             case 0:
                 total += 1
@@ -40,5 +40,5 @@ def conta_ate(limite: i32) -> i32:
 
 def main() -> int:
     printf("%d %d %d\n", classify(1), classify(2), classify(7))
-    printf("%d\n", conta_ate(6))
+    printf("%d\n", count_to(6))
     return 0

@@ -588,13 +588,23 @@ struct PsSema:
                     # closure with nothing captured
                     if not self->globals.has(e->text) and self->funcs.has(e->text):
                         fv7: *PsFunc = self->funcs.get_or(e->text, None)
-                        if fv7->ntparams == 0 and not fv7->is_async:
+                        if fv7->ntparams == 0:
                             ft7: *PsType = ps_type(self->a, PT_FUNC, e->pos)
                             ft7->params = self->a->alloc(usize(fv7->nparams + 1) * sizeof(*ft7->params))
                             for i in range(fv7->nparams):
                                 ft7->params[i] = fv7->params[i].type
                             ft7->nparams = fv7->nparams
-                            ft7->inner = fv7->ret if fv7->ret != None else ps_type(self->a, PT_VOID, e->pos)
+                            fr7t: *PsType = fv7->ret if fv7->ret != None else ps_type(self->a, PT_VOID, e->pos)
+                            if fv7->is_async:
+                                # an `async def` named but not called is a value
+                                # too (28.1): calling it hands back a task, so
+                                # that is what its type says. The symbol behind
+                                # it is the START function, which already has
+                                # exactly that shape.
+                                at7: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                                at7->inner = fr7t
+                                fr7t = at7
+                            ft7->inner = fr7t
                             e->is_gref = False
                             e->is_fnval = True
                             t = ft7
@@ -1525,7 +1535,7 @@ struct PsSema:
             # `sorted(xs, key=f)` names its second argument, and that name is
             # part of what the builtin IS (28.4) — the general named argument
             # (44.1's `f(x=1)`) is still ahead
-            if e->args[i]->kind == PE_DESIG and strcmp(name, "sorted") != 0 and not self->funcs.has(name) and not self->cfuncs.has(name):
+            if e->args[i]->kind == PE_DESIG and strcmp(name, "sorted") != 0 and strcmp(name, "gather_map") != 0 and not self->funcs.has(name) and not self->cfuncs.has(name):
                 fatal_at(self->file, e->args[i]->pos, "'%s' does not take named arguments", ps_disp(name))
         if self->cfuncs.has(name) and not self->funcs.has(name):
             cf: *PsFunc = self->cfuncs.get_or(name, None)
@@ -1790,6 +1800,34 @@ struct PsSema:
             gk: *PsType = ps_type(self->a, PT_TASK, e->pos)
             gk->inner = gl
             return gk
+        if strcmp(name, "gather_map") == 0:
+            # 79.4: the concurrency limit, in the only shape that can throttle
+            # anything. `gather(ts, at_most=8)` cannot: with the hot start of
+            # 35.1 every task in `ts` is ALREADY running by the time gather
+            # sees it. So the limit belongs where the tasks are MADE — over the
+            # items, calling the function at most `at_most` at a time.
+            if e->nargs != 3:
+                fatal_at(self->file, e->pos, "gather_map(f, items, at_most=8): the function, what to run it over, and how many at a time (79.4)")
+            gm: *PsType = self->check_expr(e->args[0])
+            if gm == None or gm->kind != PT_FUNC or gm->wide or gm->nparams != 1 or gm->inner == None or gm->inner->kind != PT_TASK:
+                fatal_at(self->file, e->pos, "gather_map() takes a function of one argument that hands back a task, as in `def(str) -> Task<int>`, found %s", ps_type_str(self->a, gm))
+            gi: *PsType = self->check_expr(e->args[1])
+            if gi == None or gi->kind != PT_LIST:
+                fatal_at(self->file, e->pos, "gather_map() runs over a list, found %s", ps_type_str(self->a, gi))
+            self->want(e->args[1], gi->inner, gm->params[0], "the element gather_map() hands to the function")
+            lim: *PsExpr = e->args[2]
+            if lim->kind == PE_DESIG:
+                if strcmp(lim->text, "at_most") != 0:
+                    fatal_at(self->file, lim->pos, "gather_map() names its limit `at_most`, not '%s'", lim->text)
+                lim = lim->lhs
+                e->args[2] = lim
+            lt2: *PsType = self->check_expr(lim)
+            self->want(lim, lt2, ps_type(self->a, PT_INT, e->pos), "at_most")
+            gmo: *PsType = ps_type(self->a, PT_LIST, e->pos)
+            gmo->inner = gm->inner->inner
+            gmk: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            gmk->inner = gmo
+            return gmk
         if strcmp(name, "gather_settled") == 0 or strcmp(name, "first_ok") == 0:
             # 79.4: the siblings of `gather` and `race`. `gather_settled` waits
             # for every task and answers with the ERROR of each one, None where
@@ -1919,7 +1957,7 @@ struct PsSema:
             return ps_type(self->a, PT_CONN, e->pos)
         if strcmp(name, "__net_connect") == 0:
             if e->nargs != 2:
-                fatal_at(self->file, e->pos, "net.connect() takes a host and a port: `await net.connect(\"exemplo.com\", 80)`")
+                fatal_at(self->file, e->pos, "net.connect() takes a host and a port: `await net.connect(\"example.com\", 80)`")
             ch: *PsType = self->check_expr(e->args[0])
             self->want(e->args[0], ch, ps_type(self->a, PT_STR, e->pos), "net.connect()")
             cp: *PsType = self->check_expr(e->args[1])

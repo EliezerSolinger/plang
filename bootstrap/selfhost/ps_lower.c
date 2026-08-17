@@ -297,6 +297,7 @@ struct PsLow {
     StrSet async_names;
     StrSet frame_names;
     Vec_pPsFunc fnvals;
+    Vec_pPsExpr gmads;
     Vec_pPsExpr keyads;
     Vec_pPsExpr lams;
     StrSet svars;
@@ -2819,6 +2820,36 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         self->raised = 1;
         return sc9;
+    }
+    if (strcmp(name, "gather_map") == 0) {
+        int32_t gi9 = -1;
+        size_t i;
+        for (i = 0; i < self->gmads.len; i += 1) {
+            if (self->gmads.data[i] == e) {
+                gi9 = i;
+            }
+        }
+        if (gi9 < 0) {
+            gi9 = self->gmads.len;
+            Vec_pPsExpr_push(&self->gmads, e);
+        }
+        PsType *rt9 = e->type->inner->inner;
+        Expr *gc9 = PsLow_call_rt(self, "ps_gather_map_task", e->pos);
+        PsLow_push_arg(self, gc9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, gc9, PsLow_expr(self, e->args[1]));
+        Expr *ga9 = ex_new(self->a, EX_IDENT, e->pos);
+        ga9->text = Arena_printf(self->a, "__ps_gmad%d", gi9);
+        PsLow_push_arg(self, gc9, ga9);
+        Expr *ge9 = ex_new(self->a, EX_CAST, e->pos);
+        ge9->cast_type = ty_ptr(self->a, ty_name(self->a, "void"));
+        ge9->lhs = PsLow_expr(self, e->args[0]);
+        PsLow_push_arg(self, gc9, ge9);
+        PsLow_push_arg(self, gc9, PsLow_elem_size(self, rt9, e->pos));
+        PsLow_push_arg(self, gc9, ex_new(self->a, (opt_is_ref(rt9) ? EX_TRUE : EX_FALSE), e->pos));
+        PsLow_push_arg(self, gc9, PsLow_expr(self, e->args[2]));
+        self->allocs = 1;
+        self->raised = 1;
+        return gc9;
     }
     if (strcmp(name, "sorted") == 0 && e->nargs == 2) {
         int32_t ki = -1;
@@ -5757,6 +5788,9 @@ static void collect_lams_e(PsLow *L, PsExpr *e) {
     if (e->kind == PE_CALL && e->lhs != NULL && e->lhs->kind == PE_NAME && strcmp(e->lhs->text, "sorted") == 0 && e->nargs == 2) {
         Vec_pPsExpr_push(&L->keyads, e);
     }
+    if (e->kind == PE_CALL && e->lhs != NULL && e->lhs->kind == PE_NAME && strcmp(e->lhs->text, "gather_map") == 0 && e->nargs == 3) {
+        Vec_pPsExpr_push(&L->gmads, e);
+    }
     if (e->kind == PE_NAME && e->is_fnval) {
         PsFunc *f9 = PsLow_find_ps_func(L, e->text);
         if (f9 != NULL) {
@@ -5812,6 +5846,84 @@ static void collect_lams_b(PsLow *L, PsBlock *b) {
     for (i = 0; i < b->n; i += 1) {
         collect_lams_s(L, b->stmts[i]);
     }
+}
+
+static Decl *lower_gmad(PsLow *L, PsExpr *e, int32_t idx, int with_body) {
+    PsType *et = e->args[1]->type->inner;
+    PsType *sig = e->args[0]->type;
+    Func *pf = Arena_alloc(L->a, sizeof(Func));
+    pf->pos = e->pos;
+    pf->name = Arena_printf(L->a, "__ps_gmad%d", idx);
+    pf->cname = pf->name;
+    pf->is_static = 1;
+    pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask"));
+    pf->params = Arena_alloc(L->a, (size_t)3 * sizeof(*pf->params));
+    pf->params[0].name = "__envp";
+    pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"));
+    pf->params[0].pos = e->pos;
+    pf->params[1].name = CTX;
+    pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"));
+    pf->params[1].pos = e->pos;
+    pf->params[2].name = "__ep";
+    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"));
+    pf->params[2].pos = e->pos;
+    pf->nparams = 3;
+    Decl *d = Arena_alloc(L->a, sizeof(Decl));
+    d->kind = DL_FUNC;
+    d->pos = e->pos;
+    d->func = pf;
+    if (!with_body) {
+        return d;
+    }
+    Expr *cc = ex_new(L->a, EX_CAST, e->pos);
+    cc->cast_type = ty_ptr(L->a, ty_name(L->a, "PsClosure"));
+    cc->lhs = PsLow_ident(L, "__envp", e->pos);
+    Stmt *cd = st_new(L->a, ST_VAR, e->pos);
+    cd->name = "__c";
+    cd->type = cc->cast_type;
+    cd->init = cc;
+    Vec_pStmt body;
+    Vec_pStmt_init(&body);
+    Vec_pStmt_push(&body, cd);
+    Type *ft = ty_func(L->a, ty_ptr(L->a, ty_name(L->a, "PsTask")));
+    ft->targs = Arena_alloc(L->a, (size_t)3 * sizeof(*ft->targs));
+    ft->targs[0] = ty_ptr(L->a, ty_name(L->a, "void"));
+    ft->targs[1] = ty_ptr(L->a, ty_name(L->a, "PsCtx"));
+    ft->targs[2] = PsLow_ty(L, et);
+    ft->ntargs = 3;
+    Expr *fc = ex_new(L->a, EX_CAST, e->pos);
+    fc->cast_type = ty_ptr(L->a, ft);
+    Expr *ff = ex_new(L->a, EX_FIELD, e->pos);
+    ff->op = TK_ARROW;
+    ff->lhs = PsLow_ident(L, "__c", e->pos);
+    ff->field = "fn";
+    fc->lhs = ff;
+    fc->parened = 1;
+    Expr *call = ex_new(L->a, EX_CALL, e->pos);
+    call->lhs = fc;
+    Expr *ev = ex_new(L->a, EX_FIELD, e->pos);
+    ev->op = TK_ARROW;
+    ev->lhs = PsLow_ident(L, "__c", e->pos);
+    ev->field = "env";
+    PsLow_push_arg(L, call, ev);
+    Expr *ca = ex_new(L->a, EX_IDENT, e->pos);
+    ca->text = CTX;
+    PsLow_push_arg(L, call, ca);
+    Expr *epc = ex_new(L->a, EX_CAST, e->pos);
+    epc->cast_type = ty_ptr(L->a, PsLow_ty(L, et));
+    epc->lhs = PsLow_ident(L, "__ep", e->pos);
+    Expr *epd = ex_new(L->a, EX_UNARY, e->pos);
+    epd->op = TK_STAR;
+    epd->lhs = epc;
+    PsLow_push_arg(L, call, epd);
+    Stmt *rs = st_new(L->a, ST_RETURN, e->pos);
+    rs->expr = call;
+    Vec_pStmt_push(&body, rs);
+    Block *b = Arena_alloc(L->a, sizeof(Block));
+    b->stmts = body.data;
+    b->n = body.len;
+    pf->body = b;
+    return d;
 }
 
 static Decl *lower_keyad(PsLow *L, PsExpr *e, int32_t idx, int with_body) {
@@ -5999,7 +6111,7 @@ static Decl *lower_fnval(PsLow *L, PsFunc *f, int with_body) {
     pf->name = Arena_printf(L->a, "__ps_fnval_%s", ps_cname(L->a, f->name));
     pf->cname = pf->name;
     pf->is_static = 1;
-    pf->ret = PsLow_ty(L, f->ret);
+    pf->ret = (f->is_async ? ty_ptr(L->a, ty_name(L->a, "PsTask")) : PsLow_ty(L, f->ret));
     pf->params = Arena_alloc(L->a, (size_t)(f->nparams + 2) * sizeof(*pf->params));
     pf->params[0].name = "__envp";
     pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"));
@@ -8023,6 +8135,7 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     StrSet_init(&L.gvars);
     StrSet_init(&L.svars);
     Vec_pPsExpr_init(&L.lams);
+    Vec_pPsExpr_init(&L.gmads);
     Vec_pPsExpr_init(&L.keyads);
     Vec_pPsFunc_init(&L.fnvals);
     Module *pm = Arena_alloc(a, sizeof(Module));
@@ -8187,6 +8300,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     for (i = 0; i < L.keyads.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_keyad(&L, L.keyads.data[i], i, 0));
     }
+    for (i = 0; i < L.gmads.len; i += 1) {
+        Vec_pDecl_push(&L.out, lower_gmad(&L, L.gmads.data[i], i, 0));
+    }
     for (i = 0; i < L.fnvals.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_fnval(&L, L.fnvals.data[i], 0));
     }
@@ -8277,6 +8393,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     }
     for (i = 0; i < L.keyads.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_keyad(&L, L.keyads.data[i], i, 1));
+    }
+    for (i = 0; i < L.gmads.len; i += 1) {
+        Vec_pDecl_push(&L.out, lower_gmad(&L, L.gmads.data[i], i, 1));
     }
     for (i = 0; i < L.fnvals.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_fnval(&L, L.fnvals.data[i], 1));

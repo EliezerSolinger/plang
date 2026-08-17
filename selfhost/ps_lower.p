@@ -142,6 +142,10 @@ struct PsLow:
     frame_names: StrSet  # the generated async frames: collected like any struct
     fnvals: Vec<*PsFunc> # functions used as VALUES: each needs one adapter, so
                          #   that a closure call looks the same either way
+    gmads: Vec<*PsExpr>  # `gather_map(f, xs, at_most=n)` call sites (79.4):
+                         #   each needs an adapter of its own, for the same
+                         #   reason `sorted(key=)` does — only the call site
+                         #   knows the element type, and the runtime sees bytes
     keyads: Vec<*PsExpr> # `sorted(..., key=f)` call sites: each needs one
                          #   adapter, because only the site knows the type
     lams: Vec<*PsExpr>   # the lambdas seen: each becomes a top-level function
@@ -2483,6 +2487,31 @@ struct PsLow:
             self->allocs = True
             self->raised = True
             return sc9
+        if strcmp(name, "gather_map") == 0:
+            gi9: i32 = -1
+            for i in range(self->gmads.len):
+                if self->gmads.data[i] == e:
+                    gi9 = i
+            if gi9 < 0:
+                gi9 = self->gmads.len
+                self->gmads.push(e)
+            rt9: *PsType = e->type->inner->inner        # what one call gives back
+            gc9: *Expr = self->call_rt("ps_gather_map_task", e->pos)
+            self->push_arg(gc9, self->ctx_arg(e->pos))
+            self->push_arg(gc9, self->expr(e->args[1]))
+            ga9: *Expr = ex_new(self->a, EX_IDENT, e->pos)
+            ga9->text = self->a->printf("__ps_gmad%d", gi9)
+            self->push_arg(gc9, ga9)
+            ge9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+            ge9->cast_type = ty_ptr(self->a, ty_name(self->a, "void"))
+            ge9->lhs = self->expr(e->args[0])
+            self->push_arg(gc9, ge9)
+            self->push_arg(gc9, self->elem_size(rt9, e->pos))
+            self->push_arg(gc9, ex_new(self->a, EX_TRUE if opt_is_ref(rt9) else EX_FALSE, e->pos))
+            self->push_arg(gc9, self->expr(e->args[2]))
+            self->allocs = True
+            self->raised = True
+            return gc9
         if strcmp(name, "sorted") == 0 and e->nargs == 2:
             # the adapter is emitted per call site, because it is the only place
             # the element type is known; the runtime only ever sees bytes
@@ -5284,6 +5313,10 @@ static def collect_lams_e(L: *PsLow, e: *PsExpr):
         L->lams.push(e)
     if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and strcmp(e->lhs->text, "sorted") == 0 and e->nargs == 2:
         L->keyads.push(e)
+    if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and strcmp(e->lhs->text, "gather_map") == 0 and e->nargs == 3:
+        # collected BEFORE the lowering, like the `sorted` adapter beside it:
+        # its prototype has to exist before any body that calls it
+        L->gmads.push(e)
     if e->kind == PE_NAME and e->is_fnval:
         f9: *PsFunc = L->find_ps_func(e->text)
         if f9 != None:
@@ -5325,6 +5358,85 @@ static def collect_lams_b(L: *PsLow, b: *PsBlock):
 # lets the runtime sort by a key it knows nothing about (28.4). The element
 # arrives by POINTER, because the runtime moves bytes; this adapter is the only
 # place that knows what those bytes are.
+# `static PsTask *__ps_gmadN(void *envp, PsCtx *ctx, void *ep)`: the one call
+# the runtime makes per item. Emitted per call site, because only the call site
+# knows the element type — the runtime moves bytes and nothing else.
+static def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
+    et: *PsType = e->args[1]->type->inner
+    sig: *PsType = e->args[0]->type
+    pf: *Func = L->a->alloc(sizeof(Func))
+    pf->pos = e->pos
+    pf->name = L->a->printf("__ps_gmad%d", idx)
+    pf->cname = pf->name
+    pf->is_static = True
+    pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask"))
+    pf->params = L->a->alloc(usize(3) * sizeof(*pf->params))
+    pf->params[0].name = "__envp"
+    pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[0].pos = e->pos
+    pf->params[1].name = CTX
+    pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    pf->params[1].pos = e->pos
+    pf->params[2].name = "__ep"
+    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[2].pos = e->pos
+    pf->nparams = 3
+    d: *Decl = L->a->alloc(sizeof(Decl))
+    d->kind = DL_FUNC
+    d->pos = e->pos
+    d->func = pf
+    if not with_body:
+        return d
+    cc: *Expr = ex_new(L->a, EX_CAST, e->pos)
+    cc->cast_type = ty_ptr(L->a, ty_name(L->a, "PsClosure"))
+    cc->lhs = L->ident("__envp", e->pos)
+    cd: *Stmt = st_new(L->a, ST_VAR, e->pos)
+    cd->name = "__c"
+    cd->type = cc->cast_type
+    cd->init = cc
+    body: Vec<*Stmt>
+    body.init()
+    body.push(cd)
+    ft: *Type = ty_func(L->a, ty_ptr(L->a, ty_name(L->a, "PsTask")))
+    ft->targs = L->a->alloc(usize(3) * sizeof(*ft->targs))
+    ft->targs[0] = ty_ptr(L->a, ty_name(L->a, "void"))
+    ft->targs[1] = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    ft->targs[2] = L->ty(et)
+    ft->ntargs = 3
+    fc: *Expr = ex_new(L->a, EX_CAST, e->pos)
+    fc->cast_type = ty_ptr(L->a, ft)
+    ff: *Expr = ex_new(L->a, EX_FIELD, e->pos)
+    ff->op = TK_ARROW
+    ff->lhs = L->ident("__c", e->pos)
+    ff->field = "fn"
+    fc->lhs = ff
+    fc->parened = True
+    call: *Expr = ex_new(L->a, EX_CALL, e->pos)
+    call->lhs = fc
+    ev: *Expr = ex_new(L->a, EX_FIELD, e->pos)
+    ev->op = TK_ARROW
+    ev->lhs = L->ident("__c", e->pos)
+    ev->field = "env"
+    L->push_arg(call, ev)
+    ca: *Expr = ex_new(L->a, EX_IDENT, e->pos)
+    ca->text = CTX
+    L->push_arg(call, ca)
+    epc: *Expr = ex_new(L->a, EX_CAST, e->pos)
+    epc->cast_type = ty_ptr(L->a, L->ty(et))
+    epc->lhs = L->ident("__ep", e->pos)
+    epd: *Expr = ex_new(L->a, EX_UNARY, e->pos)
+    epd->op = TK_STAR
+    epd->lhs = epc
+    L->push_arg(call, epd)
+    rs: *Stmt = st_new(L->a, ST_RETURN, e->pos)
+    rs->expr = call
+    body.push(rs)
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = body.data
+    b->n = body.len
+    pf->body = b
+    return d
+
 static def lower_keyad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
     et: *PsType = e->args[0]->type->inner
     sig: *PsType = e->args[1]->type
@@ -5506,7 +5618,9 @@ static def lower_fnval(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
     pf->name = L->a->printf("__ps_fnval_%s", ps_cname(L->a, f->name))
     pf->cname = pf->name
     pf->is_static = True
-    pf->ret = L->ty(f->ret)
+    # an `async def` used as a value hands back a TASK, because that is what
+    # calling one does (28.1 meeting 35.3)
+    pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask")) if f->is_async else L->ty(f->ret)
     pf->params = L->a->alloc(usize(f->nparams + 2) * sizeof(*pf->params))
     pf->params[0].name = "__envp"
     pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
@@ -7417,6 +7531,7 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.gvars.init()
     L.svars.init()
     L.lams.init()
+    L.gmads.init()
     L.keyads.init()
     L.fnvals.init()
 
@@ -7583,6 +7698,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
 
     for i in range(L.keyads.len):
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, False))
+    for i in range(L.gmads.len):
+        L.out.push(lower_gmad(&L, L.gmads.data[i], i, False))
     for i in range(L.fnvals.len):
         L.out.push(lower_fnval(&L, L.fnvals.data[i], False))
     for i in range(L.lams.len):
@@ -7674,6 +7791,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
 
     for i in range(L.keyads.len):
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, True))
+    for i in range(L.gmads.len):
+        L.out.push(lower_gmad(&L, L.gmads.data[i], i, True))
     for i in range(L.fnvals.len):
         L.out.push(lower_fnval(&L, L.fnvals.data[i], True))
     for i in range(L.lams.len):

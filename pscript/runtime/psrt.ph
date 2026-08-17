@@ -67,11 +67,11 @@ struct PsStr:
                     #   Computed once at creation, in the pass that copies the
                     #   bytes anyway, so `len(s)` stays O(1).
     hash: u32       # 0 = not computed yet
-    offs: *PsArr    # 80.1b: o índice de deslocamentos, construído na primeira
-                    #   vez que alguém indexa ESTA string por caractere. ASCII
-                    #   nunca precisa dele (`nchars == len` já prova que cada
-                    #   byte é um caractere), e quem nunca indexa não paga nada.
-                    #   Uma `str` é imutável, então ele nunca se invalida.
+    offs: *PsArr    # 80.1b: the offset index, built the first time someone
+                    #   indexes THIS string by character. ASCII never needs it
+                    #   (`nchars == len` already proves every byte is one
+                    #   character), and a string nobody indexes pays nothing.
+                    #   A `str` is immutable, so it never goes stale.
     data: char[1]   # flexible in practice: allocated with len + 1 bytes
 
 # a heap block: allocation is a bump inside one of these, and the collector
@@ -570,6 +570,11 @@ def ps_gather_settled(ctx: *PsCtx, ts: *PsList) -> *PsList
 def ps_gather_settled_task(ctx: *PsCtx, ts: *PsList) -> *PsTask
 def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64
 def ps_first_ok_task(ctx: *PsCtx, ts: *PsList) -> *PsTask
+# 79.4: the concurrency limit, in the only shape that can throttle anything —
+# over the ITEMS, making at most `at_most` tasks at a time. A limit at `gather`
+# time would arrive after every task had already started (35.1's hot start).
+def ps_gather_map(ctx: *PsCtx, items: *PsList, mk: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsTask, env: *void, esize: i32, eref: bool, at_most: i64) -> *PsList
+def ps_gather_map_task(ctx: *PsCtx, items: *PsList, mk: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsTask, env: *void, esize: i32, eref: bool, at_most: i64) -> *PsTask
 # From code that is NOT a task (the entry point): run the scheduler until this
 # task finishes. It is the only place the runtime ever blocks.
 def ps_task_wait(ctx: *PsCtx, t: *PsTask)
