@@ -995,6 +995,15 @@ def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64
 def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool
 def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_str_repeat(ctx: *PsCtx, s: *PsStr, n: i64, file: const *char, line: i32) -> *PsStr
+def ps_str_replace(ctx: *PsCtx, s: *PsStr, old: *PsStr, new: *PsStr) -> *PsStr
+def ps_str_join(ctx: *PsCtx, sep: *PsStr, parts: *PsList) -> *PsStr
+def ps_abs_int(ctx: *PsCtx, v: i64, file: const *char, line: i32) -> i64
+def ps_abs_float(v: f64) -> f64
+def ps_min_int(a: i64, b: i64) -> i64
+def ps_max_int(a: i64, b: i64) -> i64
+def ps_min_float(a: f64, b: f64) -> f64
+def ps_max_float(a: f64, b: f64) -> f64
 def ps_str_startswith(s: *PsStr, p: *PsStr) -> bool
 def ps_str_endswith(s: *PsStr, p: *PsStr) -> bool
 def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr

@@ -313,7 +313,11 @@ bootstrap/    the C seed generated from selfhost/ (+ bootstrap/stl headers)
 stl/          optional standard library (header-only generic templates, .ph)
 pscript/      the sibling language: its runtime (in Plang), design and examples
 pstudio/      Plang Studio: a code editor in pure Plang (SDL2 only)
-tests/        gating suites, C corpora (c-testsuite, wacct), clang-compare
+tests/        gating suites; corpora somebody else wrote (c-testsuite,
+              wacct, JSONTestSuite, web-platform-tests); clang, python3 and
+              node as oracles; and the collector under stress
+tools/        generators for data that is not written by hand (the Unicode
+              case table)
 Makefile      builds plangc from the seed
 SPECS.MD      language reference
 ```
@@ -333,15 +337,41 @@ passes its test suite on Unix systems with a standard C toolchain. Every gating
 suite runs three times — C, QBE and strict C89 — and `make verify` runs the
 whole battery, from the seed's fixed point to the editor's headless tests.
 
-The C front end is measured against real corpora rather than claims: the
-c-testsuite passes 220/220, 741 wacct programs produce their expected exit
-codes, and 155 diagnostics match clang's text exactly.
+Both front ends are measured against corpora written by other people rather
+than against claims of our own.
 
-pscript is younger. Its front end parses the whole language and a large subset
-compiles and runs — enough for a parallel path tracer with a JSON scene — while
-`unsafe`, the epoll/kqueue I/O loop, and task cancellation (`race`, `timeout`)
-are still ahead; [pscript/PLAN.md](pscript/PLAN.md) says where each stands and
-why.
+For C: the c-testsuite passes 220/220, 741 wacct programs produce their expected
+exit codes, and 155 diagnostics match clang's text exactly.
+
+For pscript, `bash tests/conformance/run.sh` runs the corpora the rest of the
+world is measured on — nst/JSONTestSuite at **318/318**, and the
+web-platform-tests URL corpus at **890/891**, the one exception written down in
+`tests/conformance/url.skips` with what it would take. Neither number was free:
+the JSON parser was not decoding `\uXXXX` at all, took `01` and `NaN` as numbers,
+and had no depth limit — a hundred thousand `[` was a segfault reachable from a
+string somebody else wrote.
+
+`bash tests/oracle/run.sh` measures the other half, the part no downloadable
+corpus can: it runs our own programs twice, once here and once by the
+implementation whose behaviour we said we would copy. `python3` is the oracle for
+the language — the arithmetic and string rules the design keeps stating "as
+Python does", including case mapping compared over all 1 114 112 code points —
+and `node` is the oracle for the runtime model, where the promises are about
+ORDER. It found, among others, that timers with the same deadline were waking in
+the wrong order.
+
+`bash tests/gc-stress.sh` collects at every safe point and poisons the space it
+frees. A copying collector has one way to be wrong — something held a pointer
+across a safe point without telling the collector — and the danger is not the
+fix but the invisibility: with the normal threshold a small program never
+collects at all. The first run turned thirteen green tests red, and every one was
+a real defect. The worst answered wrongly rather than crashing: `in` over a
+collected element is an interior pointer, so a path tracer rendered a different
+image for every collection frequency.
+
+pscript is still younger than the C front end: `unsafe` and the epoll/kqueue I/O
+loop are ahead, and [pscript/PLAN.md](pscript/PLAN.md) says where each piece
+stands and why.
 
 ## License
 

@@ -1139,6 +1139,12 @@ struct PsSema:
                     return icommon
                 return rt if flt and lt->kind == PT_INT else lt
             case TK_MINUS, TK_STAR:
+                # `"ab" * 3` repeats, as Python does — and only in that order:
+                # `3 * "ab"` is refused, because a language with no implicit
+                # conversion (7.3) should not have one operand teaching the
+                # other what the expression means.
+                if e->op == TK_STAR and lt != None and rt != None and lt->kind == PT_STR and rt->kind == PT_INT:
+                    return lt
                 if not num:
                     fatal_at(self->file, e->pos, "'%s' expects numbers, found %s and %s", "-" if e->op == TK_MINUS else "*", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
                 if icommon != None:
@@ -1235,7 +1241,21 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "%s() takes one string", nm2)
                     self->want(e->args[0], self->check_expr(e->args[0]), st5, "the argument")
                     return ps_type(self->a, PT_INT, e->pos) if strcmp(nm2, "find") == 0 else bl2
-                fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith and endswith so far")
+                if strcmp(nm2, "replace") == 0:
+                    if e->nargs != 2:
+                        fatal_at(self->file, e->pos, "replace() takes what to find and what to put there")
+                    self->want(e->args[0], self->check_expr(e->args[0]), st5, "what to find")
+                    self->want(e->args[1], self->check_expr(e->args[1]), st5, "what to put there")
+                    return st5
+                if strcmp(nm2, "join") == 0:
+                    # the SEPARATOR is the receiver, as in Python: `", ".join(xs)`
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "join() takes one list of strings")
+                    jt: *PsType = self->check_expr(e->args[0])
+                    if jt == None or jt->kind != PT_LIST or jt->inner == None or jt->inner->kind != PT_STR:
+                        fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt))
+                    return st5
+                fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith, endswith, replace and join so far")
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -2189,6 +2209,26 @@ struct PsSema:
             if at2 == None or at2->kind not in {PT_STR, PT_LIST, PT_DICT, PT_SET}:
                 fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2))
             return ps_type(self->a, PT_INT, e->pos)
+        if strcmp(name, "abs") == 0:
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "abs() takes one number")
+            ab: *PsType = self->check_expr(e->args[0])
+            if ab == None or ab->kind not in {PT_INT, PT_FLOAT}:
+                fatal_at(self->file, e->pos, "abs() takes a number, not %s", ps_type_str(self->a, ab))
+            return ab
+        if strcmp(name, "min") == 0 or strcmp(name, "max") == 0:
+            # two numbers of the same kind. Python also takes an iterable and any
+            # number of arguments; those are additive and this is the form that
+            # every program actually writes.
+            if e->nargs != 2:
+                fatal_at(self->file, e->pos, "%s() takes two numbers", name)
+            m1: *PsType = self->check_expr(e->args[0])
+            m2: *PsType = self->check_expr(e->args[1])
+            if m1 == None or m1->kind not in {PT_INT, PT_FLOAT}:
+                fatal_at(self->file, e->pos, "%s() takes numbers, not %s", name, ps_type_str(self->a, m1))
+            if m2 == None or m2->kind != m1->kind:
+                fatal_at(self->file, e->pos, "%s() takes two numbers of the SAME kind: %s and %s", name, ps_type_str(self->a, m1), ps_type_str(self->a, m2))
+            return m1
         fatal_at(self->file, e->pos, "unknown function '%s'", name)
         return None
 

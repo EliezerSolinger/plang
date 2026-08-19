@@ -2660,6 +2660,9 @@ static PsType *PsSema_check_binary(PsSema *self, PsExpr *e) {
         }
         case TK_MINUS:
         case TK_STAR: {
+            if (e->op == TK_STAR && lt != NULL && rt != NULL && lt->kind == PT_STR && rt->kind == PT_INT) {
+                return lt;
+            }
             if (!num) {
                 fatal_at(self->file, e->pos, "'%s' expects numbers, found %s and %s", (e->op == TK_MINUS ? "-" : "*"), ps_type_str(self->a, lt), ps_type_str(self->a, rt));
             }
@@ -2786,7 +2789,25 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "the argument");
                 return (strcmp(nm2, "find") == 0 ? ps_type(self->a, PT_INT, e->pos) : bl2);
             }
-            fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith and endswith so far");
+            if (strcmp(nm2, "replace") == 0) {
+                if (e->nargs != 2) {
+                    fatal_at(self->file, e->pos, "replace() takes what to find and what to put there");
+                }
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "what to find");
+                PsSema_want(self, e->args[1], PsSema_check_expr(self, e->args[1]), st5, "what to put there");
+                return st5;
+            }
+            if (strcmp(nm2, "join") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "join() takes one list of strings");
+                }
+                PsType *jt = PsSema_check_expr(self, e->args[0]);
+                if (jt == NULL || jt->kind != PT_LIST || jt->inner == NULL || jt->inner->kind != PT_STR) {
+                    fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt));
+                }
+                return st5;
+            }
+            fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith, endswith, replace and join so far");
         }
         if (rt != NULL && rt->kind == PT_LIST) {
             const char *lm = e->lhs->text;
@@ -3752,26 +3773,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2129_17 = e;
-                __with_2129_17->kind = PE_STR;
-                __with_2129_17->text = lit7;
-                __with_2129_17->lhs = NULL;
-                __with_2129_17->rhs = NULL;
-                __with_2129_17->args = NULL;
-                __with_2129_17->nargs = 0;
+                PsExpr *__with_2149_17 = e;
+                __with_2149_17->kind = PE_STR;
+                __with_2149_17->text = lit7;
+                __with_2149_17->lhs = NULL;
+                __with_2149_17->rhs = NULL;
+                __with_2149_17->args = NULL;
+                __with_2149_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2142_13 = e;
-            __with_2142_13->kind = PE_LOWERED;
-            __with_2142_13->low = ln7;
-            __with_2142_13->lhs = NULL;
-            __with_2142_13->rhs = NULL;
-            __with_2142_13->args = NULL;
-            __with_2142_13->nargs = 0;
+            PsExpr *__with_2162_13 = e;
+            __with_2162_13->kind = PE_LOWERED;
+            __with_2162_13->low = ln7;
+            __with_2162_13->lhs = NULL;
+            __with_2162_13->rhs = NULL;
+            __with_2162_13->args = NULL;
+            __with_2162_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -3819,6 +3840,30 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2));
         }
         return ps_type(self->a, PT_INT, e->pos);
+    }
+    if (strcmp(name, "abs") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "abs() takes one number");
+        }
+        PsType *ab = PsSema_check_expr(self, e->args[0]);
+        if (ab == NULL || !(ab->kind == PT_INT || ab->kind == PT_FLOAT)) {
+            fatal_at(self->file, e->pos, "abs() takes a number, not %s", ps_type_str(self->a, ab));
+        }
+        return ab;
+    }
+    if (strcmp(name, "min") == 0 || strcmp(name, "max") == 0) {
+        if (e->nargs != 2) {
+            fatal_at(self->file, e->pos, "%s() takes two numbers", name);
+        }
+        PsType *m1 = PsSema_check_expr(self, e->args[0]);
+        PsType *m2 = PsSema_check_expr(self, e->args[1]);
+        if (m1 == NULL || !(m1->kind == PT_INT || m1->kind == PT_FLOAT)) {
+            fatal_at(self->file, e->pos, "%s() takes numbers, not %s", name, ps_type_str(self->a, m1));
+        }
+        if (m2 == NULL || m2->kind != m1->kind) {
+            fatal_at(self->file, e->pos, "%s() takes two numbers of the SAME kind: %s and %s", name, ps_type_str(self->a, m1), ps_type_str(self->a, m2));
+        }
+        return m1;
     }
     fatal_at(self->file, e->pos, "unknown function '%s'", name);
     return NULL;
@@ -3961,10 +4006,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2319_17 = &ns->quals[ns->nquals];
-                __with_2319_17->name = q;
-                __with_2319_17->orig = d->path;
-                __with_2319_17->ns = sub;
+                PsNsEnt *__with_2359_17 = &ns->quals[ns->nquals];
+                __with_2359_17->name = q;
+                __with_2359_17->orig = d->path;
+                __with_2359_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -3977,10 +4022,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2331_21 = &ns->ents[ns->nents];
-                    __with_2331_21->name = local;
-                    __with_2331_21->orig = d->names[k];
-                    __with_2331_21->ns = sub;
+                    PsNsEnt *__with_2371_21 = &ns->ents[ns->nents];
+                    __with_2371_21->name = local;
+                    __with_2371_21->orig = d->names[k];
+                    __with_2371_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4341,10 +4386,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2667_9 = e;
-        __with_2667_9->kind = PE_NAME;
-        __with_2667_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2667_9->lhs = NULL;
+        PsExpr *__with_2707_9 = e;
+        __with_2707_9->kind = PE_NAME;
+        __with_2707_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2707_9->lhs = NULL;
     }
     return 1;
 }

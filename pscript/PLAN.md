@@ -1883,6 +1883,76 @@ nosso e vetor de smuggling). Não fechado.
 `tests/gc-stress.sh` + `PSCRIPT_GC_STRESS=N` no runtime. Ver 88.5 do DESIGN para
 a família inteira de defeitos que ele revelou e por que ela era invisível.
 
+## Bateria 89 — `upper`/`lower` completos (2026-08-19) — FEITO
+
+Ver a 89 do DESIGN para as decisões. Aqui está o que ficou:
+
+- `tools/gen_unicode_case.py` → `pscript/runtime/unicase.bin` (22 KB), embutido
+  com `embed_bytes` (63.1). 678 faixas de maiúscula, 102 mapeamentos 1→N, 667
+  faixas de minúscula, 1 mapeamento 1→N, e os conjuntos `Cased` (150 faixas) e
+  `Case_Ignorable` (437) que o sigma final precisa.
+- Busca binária direto no blob: sem inicialização, sem alocação.
+- Sigma final implementado — a única regra condicional que não é de locale.
+- **Conferido contra o Python nos 1.114.112 pontos de código**
+  (`tests/oracle/py/unicase.psc`): 1525 mapeamentos de maiúscula, 1433 de
+  minúscula, mesmo hash dos dois lados.
+- Gate próprio: `tests/pscript/run/unicase.psc`.
+
+## Oráculos e placar — FEITOS
+
+- `tests/oracle/run.sh` — os intérpretes de referência como ORÁCULOS, no molde do
+  `clang-compare.sh`. `py/` compara a semântica da linguagem com o `python3`,
+  `js/` compara o modelo de runtime com o `node`. Um par é `<nome>.psc` ao lado de
+  `<nome>.py`/`.mjs`, escritos para imprimir as mesmas linhas.
+- O que eles acharam de primeira: faltavam `abs`, `min`, `max`, `str.replace`,
+  `str.join` e `"ab" * 3` — implementados; `upper` só fazia ASCII — virou a
+  bateria 89; e **os prazos iguais acordavam em LIFO** porque o timer era
+  empilhado na cabeça da lista, enquanto o JS acorda na ordem de registro. Duas
+  tasks em `await sleep(0)` alternavam de trás para frente.
+- Divergência que fica registrada em vez de escondida: `str()` de uma lista
+  ainda não existe, e o que o Python imprime para uma é um repr com aspas — uma
+  decisão de formatação, não de semântica.
+- `tests/bench.sh` — o mesmo programa aqui, no `python3` e no `node`, com tempo
+  de COMPILAÇÃO à parte. A coluna de compilação é longa de propósito: somos AOT
+  através de C com o compilador do sistema no `-O2`, e node e python não compilam
+  — a coluna é deles por não ter. Não é uma corrida em que estamos.
+
+## O placar de desempenho, como ele saiu
+
+`bash tests/bench.sh`, um núcleo, uma execução cada, respostas conferidas entre
+os três:
+
+| programa | compilar | nosso | python3 | node |
+|---|---|---|---|---|
+| partida (programa vazio) | 2,98 s | **0,003 s** | 0,021 s | 0,035 s |
+| fib(30) recursivo | 2,08 s | **0,020 s** | 0,130 s | 0,069 s |
+| crivo até 2 milhões | 2,29 s | 0,113 s | 0,244 s | **0,082 s** |
+| 200 mil concatenações + join | 2,27 s | 0,243 s | **0,063 s** | 0,095 s |
+
+A coluna de compilar é longa de propósito e é só nossa: somos AOT através de C
+com o compilador do sistema no `-O2`. Não é uma corrida em que estamos.
+
+**A fraqueza está medida e não escondida:** construir texto é 4× mais lento que o
+Python. Cada `"item-" + str(i)` aloca uma string nova e o coletor passa por lá; o
+`str` do CPython tem duas décadas de otimização nesse caminho exato. É o candidato
+óbvio a trabalho de desempenho, e agora existe um número para comparar depois.
+
+**Dois achados de desempenho que o placar destapou**, os dois consertados:
+
+  1. **`f() + g()` avaliava a esquerda DUAS VEZES.** Os slots de substituição que
+     fazem o operador ler os temporários são um par único, e uma baixada aninhada
+     os salva e limpa — então instalar o da esquerda e depois baixar a direita
+     através dele perdia o da esquerda, e a esquerda era baixada de novo dentro do
+     `binary_raw`. `fib(n-1) + fib(n-2)` passou de 2ⁿ para 3ⁿ chamadas: `fib(25)`
+     levava **17,45 s** onde agora leva 0,00. Nenhum teste pegou, porque com
+     operandos puros a resposta é idêntica — só o relógio acusa. Gate novo em
+     `eval_order.psc`, com um contador, que é o que torna isso visível.
+  2. **O `for` e o verificador discordam sobre o escopo.** A 64.1 diz que um nome
+     nascido num bloco morre com ele e que o `for` não vaza a variável — mas a
+     sema ainda conta a variável do laço como da FUNÇÃO, então `for i in ...`
+     seguido de `i = 2` é recusado como redefinição. A regra e a checagem não
+     concordam; registrado aqui em vez de contornado em silêncio.
+
 ## O que a bateria 88 deixou EM ABERTO
 
 - [ ] **HTTP**: fechar o placar do llhttp (88.d).

@@ -43,6 +43,7 @@ import "../stl/vec.ph"
 
 def tuple_is_pure(t: *PsType) -> bool
 static def is_addressable(e: *Expr) -> bool
+static def borrowable(e: *Expr) -> bool
 static def ps_is_const_init(e: *PsExpr) -> bool
 static def block_uses(b: *PsBlock, name: const *char) -> bool
 static def expr_uses(e: *PsExpr, name: const *char) -> bool
@@ -1779,14 +1780,23 @@ struct PsLow:
         need_gc: bool = (not self->is_trivial(e->lhs) or not self->is_trivial(e->rhs)) and (lhs_c or rhs_c)
         if (need_order or need_gc) and e->op != TK_AND and e->op != TK_OR:
             preB: *Expr = None
+            # BOTH operands are lowered and bound BEFORE either substitution is
+            # installed, and the order is the whole point. The substitution slots
+            # are a single pair that nested lowerings save and clear — a call
+            # inside the right operand sets `subst_key` for its own arguments and
+            # puts None back — so installing the left one first and then lowering
+            # the right through it loses it. The left operand was then lowered a
+            # SECOND time inside `binary_raw`, so `fib(n-1) + fib(n-2)` called
+            # `fib(n-1)` twice: the recursion went from 2^n to 3^n, and anything
+            # with a side effect in an operand would have run it twice.
             lv: *Expr = self->bind_val(self->expr(e->lhs), self->ty(self->lowered_ty(e->lhs)), e->pos, ref preB)
+            rv: *Expr = self->bind_val(self->expr(e->rhs), self->ty(self->lowered_ty(e->rhs)), e->pos, ref preB)
             pk: *PsExpr = self->subst_key
             pv: *Expr = self->subst_val
             pk2: *PsExpr = self->subst_key2
             pv2: *Expr = self->subst_val2
             self->subst_key = e->lhs
             self->subst_val = lv
-            rv: *Expr = self->bind_val(self->expr(e->rhs), self->ty(self->lowered_ty(e->rhs)), e->pos, ref preB)
             self->subst_key2 = e->rhs
             self->subst_val2 = rv
             r: *Expr = self->binary_raw(e)
@@ -1836,6 +1846,15 @@ struct PsLow:
                 if both_int:
                     return self->int_op(e, "ps_sub", "ps_usub")
             case TK_STAR:
+                if e->lhs->type != None and e->lhs->type->kind == PT_STR:
+                    rp: *Expr = self->call_rt("ps_str_repeat", e->pos)
+                    self->push_arg(rp, self->ctx_arg(e->pos))
+                    self->push_arg(rp, self->expr(e->lhs))
+                    self->push_arg(rp, self->expr(e->rhs))
+                    self->pos_args(rp, e->pos)
+                    self->raised = True
+                    self->allocs = True
+                    return rp
                 if both_int:
                     return self->int_op(e, "ps_mul", "ps_umul")
             case TK_SLASH:
@@ -2469,6 +2488,26 @@ struct PsLow:
                 self->pre.push(us9.data[i])
             self->raised = True
             return self->ident(on9, e->pos)
+        if strcmp(name, "abs") == 0:
+            isf: bool = e->args[0]->type != None and e->args[0]->type->kind == PT_FLOAT
+            ab9: *Expr = self->call_rt("ps_abs_float" if isf else "ps_abs_int", e->pos)
+            if not isf:
+                self->push_arg(ab9, self->ctx_arg(e->pos))
+            self->push_arg(ab9, self->expr(e->args[0]))
+            if not isf:
+                self->pos_args(ab9, e->pos)
+                self->raised = True
+            return ab9
+        if strcmp(name, "min") == 0 or strcmp(name, "max") == 0:
+            isf2: bool = e->args[0]->type != None and e->args[0]->type->kind == PT_FLOAT
+            mm9: *Expr = self->call_rt(self->a->printf("ps_%s_%s", name, "float" if isf2 else "int"), e->pos)
+            pre9m: *Expr = None
+            ov9m: **Expr = self->lower_ordered(e->args, e->nargs, ref pre9m)
+            self->push_arg(mm9, ov9m[0])
+            self->push_arg(mm9, ov9m[1])
+            if pre9m != None:
+                return self->comma2(pre9m, mm9, e->pos)
+            return mm9
         if strcmp(name, "ord") == 0 or strcmp(name, "chr") == 0:
             oc: *Expr = self->call_rt("ps_str_ord" if strcmp(name, "ord") == 0 else "ps_str_chr", e->pos)
             self->push_arg(oc, self->ctx_arg(e->pos))
@@ -3606,7 +3645,7 @@ struct PsLow:
     # to a pscript function whose parameter is `in` it must be, and at a call
     # into the RUNTIME it must not, because those take a plain pointer.
     static def addr_arg(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, kw: bool) -> *Expr:
-        if not is_addressable(v):
+        if not borrowable(v):
             name: const *char = self->a->printf("__in%d", self->tmp_ctr)
             self->tmp_ctr += 1
             d: *Stmt = st_new(self->a, ST_VAR, pos)
@@ -3640,7 +3679,7 @@ struct PsLow:
         # so it is bound to a hidden variable first. That is the same
         # materialization P does for an `in self` receiver, done here because
         # the lowering no longer goes through P's method sugar.
-        if not is_addressable(v):
+        if not borrowable(v):
             name: const *char = self->a->printf("__in%d", self->tmp_ctr)
             self->tmp_ctr += 1
             d: *Stmt = st_new(self->a, ST_VAR, pos)
@@ -7551,6 +7590,44 @@ def tuple_is_pure(t: *PsType) -> bool:
     return True
 
 # does this emitted expression have an address to take?
+# May this expression be BORROWED, or does its address point INSIDE something
+# the collector moves?
+#
+# `in` is sugar over a pointer (55.4), and a pointer into a `list` element or
+# into a `struct` field is an INTERIOR pointer to a collected object. The callee
+# has statements, statements have safe points, and a safe point moves the object
+# — so the borrow is reading the bytes the element USED to be at. Nothing
+# crashes: the bytes are still mapped and still look like a record. The answer
+# is just wrong.
+#
+# That is how it was found. `smallpt_full` renders the same image twice under
+# the same collector and a DIFFERENT image for every collection frequency —
+# `hit_sphere(in spheres[i], in r)` borrows into the sphere list, and every safe
+# point inside `hit_sphere` invalidates it. Five pixels in one row, silently.
+#
+# So a borrow is direct only from somewhere that does not move: a local
+# (`EX_IDENT`), a field path rooted in one, a temporary the lowering just
+# materialised (`EX_COMPOUND`), or a pointer somebody else already owns
+# (`*p` — which is what an `in` parameter re-borrowed looks like). Everything
+# else is COPIED into a local first, and the local is what gets borrowed.
+#
+# The cost is a copy where `in` promised none. It is the only honest price: the
+# thing `in` promised to borrow does not stay where it was.
+static def borrowable(e: *Expr) -> bool:
+    if e == None:
+        return False
+    match e->kind:
+        case EX_IDENT, EX_COMPOUND:
+            return True
+        case EX_UNARY:
+            return e->op == TK_STAR
+        case EX_FIELD:
+            # `.` on something that does not move is fine; `->` is a pointer to
+            # a collected object by construction here
+            return e->op != TK_ARROW and borrowable(e->lhs)
+        case _:
+            return False
+
 static def is_addressable(e: *Expr) -> bool:
     if e == None:
         return False

@@ -3368,9 +3368,97 @@ Os defeitos que ele achou, todos reais, todos consertados:
      reporta como `double free or corruption`. Agora ele mora no CONTEXTO, como
      os blocos.
 
+ 14. **`in` sobre armazenamento COLETADO não pode ser um empréstimo.** Este é o
+     mais fundo, e o único que não quebra nada — ele responde ERRADO. `in` é
+     açúcar sobre ponteiro (55.4), e um ponteiro para um elemento de `list` ou
+     para um campo de um frame `async` é um ponteiro INTERIOR a um objeto que o
+     coletor move. O callee tem statements, statements têm pontos seguros, e um
+     ponto seguro move o objeto — então o empréstimo lê os bytes onde o valor
+     ESTAVA. Nada estoura: os bytes continuam mapeados e continuam parecendo um
+     record.
+
+     Como apareceu: `smallpt_full` renderiza a MESMA imagem duas vezes com o
+     mesmo coletor e uma imagem DIFERENTE para cada frequência de coleta —
+     `acc.add(d)` dentro de um `async def` vira `Vec_add(&__fr->acc, …)`, e o
+     frame anda. Cinco pixels de uma linha, em silêncio. O `smallpt_core`, que é
+     a mesma matemática numa função comum, é estável — foi essa diferença que
+     apontou para o frame.
+
+     A regra agora: empresta-se DIRETO só de onde não anda — um local, um
+     caminho de campos ancorado num local, um temporário que a baixada acabou de
+     materializar, ou um ponteiro que outro já possui (`*p`, que é o que um
+     parâmetro `in` reemprestado é). Todo o resto é COPIADO para um local
+     primeiro. O preço é uma cópia onde `in` prometia nenhuma, e é o preço
+     honesto: o que `in` prometeu emprestar não fica onde estava.
+
 **Um teste que estava medindo a coisa errada:** `interval.psc` tomava o relógio
 DEPOIS de criar o `interval`, o que assume que criar é de graça. Sob estresse não
 é — uma coleta cai entre as duas linhas e come parte do primeiro período. O teste
 agora mede a partir de antes, que é o que ele sempre quis dizer.
 
 Gate: `bash tests/gc-stress.sh`.
+
+**88.6 Os oráculos, e o que eles cobraram de imediato.** `tests/oracle/run.sh`
+roda os nossos programas DUAS VEZES — aqui e no intérprete cujo comportamento
+dissemos que íamos copiar — e diffa. `python3` para a semântica da linguagem,
+`node` para o modelo de runtime, no molde do `clang-compare.sh`.
+
+Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
+`"ab" * 3` — todos implementados. E dois achados de ordem:
+
+  * **prazos iguais acordavam em LIFO.** O timer era empilhado na cabeça da lista
+    e a lista é percorrida em ordem quando o relógio dispara, então duas tasks em
+    `await sleep(0)` alternavam de trás para frente. O JS acorda na ordem de
+    registro, e qualquer laço que valha a pena imitar também. Agora é acrescentado
+    no fim.
+  * **`f() + g()` avaliava a esquerda duas vezes** — ver o PLAN, achado pelo
+    placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
+    nenhum teste de saída pega porque a resposta não muda.
+
+## Bateria 89 — `upper`/`lower` de verdade, e o que MEDIR mudou (2026-08-19)
+
+Sua pergunta: *"o que precisamos para o upper completo?"* — e depois a saída:
+*"agora a gente tem a ferramenta pra incluir binario aqui no codigo do aplicativo
+em tempo de compilacao podemos resolver isso"*.
+
+**Eu tinha escrito no runtime que a tabela era "centenas de kilobytes". Estava
+errado, e a diferença entre chutar e medir é toda esta bateria.** Dos 1.114.112
+pontos de código, **1423** têm maiúscula diferente de si mesmos, e eles caem em
+**678 faixas contíguas com o mesmo deslocamento**. Com os 102 que viram MAIS de
+um caractere (`ß`→`SS`, `ﬁ`→`FI`) e os dois conjuntos que o sigma final precisa,
+a tabela inteira dá **22 KB**.
+
+**89.1 A tabela é GERADA e EMBUTIDA.** `tools/gen_unicode_case.py` produz
+`pscript/runtime/unicase.bin`, e o runtime a embute com `embed_bytes` (63.1). O
+custo é 22 KB de dados só-leitura e nada em tempo de execução: não há
+inicialização e não há alocação, só busca binária sobre os bytes. Todo número no
+formato é big-endian, para o leitor não depender da máquina.
+
+> **Por que gerada.** Mapeamento de caixa é TABELA, não algoritmo: `é` sobe por
+> deslocamento, `ß` sobe para dois caracteres, e nenhuma regra produz nenhum dos
+> dois. A tabela muda uma vez por ano, quando o Consórcio publica uma versão. Um
+> arquivo gerado com o gerador ao lado é o único arranjo em que "que Unicode é
+> este?" tem resposta — a versão está estampada no cabeçalho do blob.
+
+**89.2 Os dados vêm do PRÓPRIO ORÁCULO.** O gerador lê o `str.upper()`/
+`str.lower()` do Python, que são os mapeamentos PADRÃO do Unicode — os mesmos que
+o `toUpperCase` do JavaScript. É o comportamento que se está copiando, então é
+também a fonte certa; e `tests/oracle/py/unicase.psc` depois compara **todos os
+1,1 milhão** de mapeamentos, dos dois lados, e bate.
+
+**89.3 O sigma final ENTRA.** Aqui houve uma segunda correção minha: eu tinha
+classificado o `Σ`→`ς` como regra de locale. Não é — é condicional mas faz parte
+do mapeamento padrão, e Python e JS a fazem. Ela precisa dos conjuntos `Cased` e
+`Case_Ignorable`, e esses também são **derivados perguntando ao oráculo** em vez
+de lidos de um arquivo de propriedades: se um caractere depois do sigma impede
+que ele seja final é exatamente a definição de "é cased", então a pergunta é
+feita ao Python, uma vez por ponto de código. 150 faixas e 437, 4,6 KB.
+
+**89.4 O que fica FORA, dito e não descoberto depois:** as regras sensíveis a
+LOCALE — o i sem ponto do turco, o ponto acima do lituano. O `str.upper()` do
+Python também não as faz (é para isso que existe o `toLocaleUpperCase`), então os
+dois oráculos continuam honestos. Um programa que precise delas precisa de um
+locale, que é outra decisão.
+
+Gates: `tests/pscript/run/unicase.psc` (os casos que mostram POR QUE uma tabela é
+necessária) e `tests/oracle/py/unicase.psc` (o espaço inteiro, contra o Python).
