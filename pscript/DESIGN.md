@@ -3197,3 +3197,180 @@ prova?
 
 **8.5 Vale reler o runtime C do jaketa?** A lógica dele foi portada para a STL em
 P; a pergunta é se ainda tem coisa lá que interessa.
+
+## Bateria 87 — O que pode ser esperado, e o que `await` NÃO faz (2026-08-17)
+
+Levantada por você ao escolher os corpora: *"temos que discutir se vale a pena
+ou não tornar as Tasks aqui thenable ou não"*.
+
+**87.1 O aguardável é um TRAIT, no formato do `Future` do Rust — não o thenable
+do JS.** `await` aceita `Task<T>` e qualquer tipo que implemente
+`Awaitable<T>`:
+
+```python
+trait Awaitable<T>:
+    def poll(self, w: Waker) -> Poll<T>
+
+struct Pooled implements Awaitable<Conn>:
+    def poll(self, w: Waker) -> Poll<Conn>:
+        ...
+
+c = await pool.get()
+```
+
+> **Por quê essa forma e não a do JS.** O `.then` não é um recurso de design: é
+> uma cicatriz de interoperabilidade. Promise nasceu tendo que conviver com
+> jQuery Deferred e Q, e a saída foi tipagem por pato — "se tem `.then`, é
+> promessa". O preço aparece até hoje: um objeto que por acaso tem um campo
+> `then` vira aguardável sem querer; `Promise<Promise<T>>` não existe porque
+> tudo achata sozinho; e `Promise.resolve(thenable)` custa ticks a mais que
+> ninguém consegue prever. Nada disso tem desculpa histórica aqui. A bateria 66
+> já nos deu traits para exatamente esta necessidade — um protocolo NOMEADO,
+> monomorfizado, com custo zero — e usá-los é o que mantém a promessa de que
+> quem escreve o tipo sabe o que ele faz.
+
+**87.2 `await` sobre `Task<Task<T>>` NÃO achata.** Devolve `Task<T>`; para
+chegar ao `T`, dois `await`. Achatar seria o tipo mentindo: a assinatura diz
+`Task<Task<T>>` e chega `T`. É também a razão pela qual em JS é IMPOSSÍVEL ter
+uma promessa de promessa — uma limitação real que estaríamos importando de
+graça.
+
+**Estado:** DECIDIDA, não implementada. `await` hoje só aceita `Task<T>`, que é
+o subconjunto correto: o trait é aditivo e nada do que existe muda de
+significado quando ele chegar.
+
+## Bateria 88 — Os corpora de fora, e o que eles acharam (2026-08-17)
+
+Pedido seu: *"sera que conseguimos baixar uns programas de testes em javascript
+e portar para aqui? eu digo pacote inteiro de testagem de runtime JS pra ca…
+alem disso veja se implementamos toda a especificacao"*.
+
+**88.1 O que porta, e o que não porta.** Medido antes de escolher:
+
+| corpus | tamanho | licença | porta? |
+|---|---|---|---|
+| llhttp `test/**.md` | 212 casos úteis | MIT | **sim, direto** |
+| JSONTestSuite | 318 | MIT | **sim, direto** |
+| WPT `urltestdata.json` | 891 (267 devem falhar) | BSD-3 | sim, com um parser de URL |
+| test262 | 53.892; `Promise/` = 732 | BSD-3 | **quase nada** |
+| node `test/parallel` | 4.722 | MIT | **quase nada** |
+
+O que o test262 mede é o **modelo de objetos do JS** (`Promise.allSettled.call(
+NotPromise, …)`, atributos de `.name`, `Symbol.species`). Dos 732 do `Promise/`,
+só 115 não citam `Symbol`/`prototype`/`species`/thenable — e mesmo esses são
+`.then()`, que não existe aqui por decisão (87.1). Os 24 `test-promise-*` do
+node são sobre o *warning de unhandled rejection* do node, não sobre semântica.
+Registrado para não se reabrir a discussão sem caso novo.
+
+**88.2 Os três corpora entram, com portão TOTAL** (decisão sua), no molde do
+`tests/clang-compare.sh`: uma divergência sem explicação reprova. O que
+sabidamente não fazemos vive em `tests/conformance/<corpus>.skips`, uma linha
+por caso com o motivo — contado e impresso, nunca dobrado no placar. Um skip
+cujo caso passa a concordar é reportado como STALE.
+
+**88.3 O parser de URL é PORTADO, não escrito do zero** (decisão sua). A fonte é
+o `whatwg-url` (MIT, jsdom), que é transcrição direta da especificação WHATWG —
+e é a especificação que o corpus mede. O `urllib.parse` do Python foi descartado
+como fonte: implementa a RFC 3986, que é OUTRA coisa, e discorda desta sobre
+barra invertida, sobre quantas barras `http:/example.com` precisa, sobre letra
+de unidade do Windows em `file:` e sobre IDNA.
+
+**88.4 O que os corpora acharam.** Esta é a razão de existirem:
+
+- **JSON**: `\uXXXX` NÃO ERA DECODIFICADO (`"é"` voltava como as quatro
+  letras `u00e9`); o conjunto de escapes era aberto (`\x` lia como `x`); byte de
+  controle cru dentro de string era aceito; a gramática de número era o
+  `strtod`, que fala C e não JSON (`01`, `.5`, `2.`, `0x1F`, `NaN`, `Infinity`
+  passavam); documento TRUNCADO virava valor (`[` sozinho devolvia lista vazia);
+  e não havia limite de profundidade, então cem mil `[` era um segfault
+  alcançável a partir de uma string de terceiro. **318/318 depois.**
+- **URL**: dígito do Punycode errado (`xn--n3h` saía `xn--n~h`); `^` no conjunto
+  de escape errado; limite do número IPv4 no lugar errado (`0x100000000` lia
+  como NOME de domínio em vez de endereço fora de faixa). **890/891 depois**, o
+  restante é a tabela NFKC dos símbolos matemáticos.
+
+**88.5 O modo de ESTRESSE do coletor, e a família de bugs que ele revelou.** O
+achado maior não veio de um corpus: veio de rodar os corpora. Um coletor que
+COPIA tem um jeito só de estar errado — alguém segurou um ponteiro através de um
+ponto seguro sem pôr na pilha de sombra. O objeto move, o portador fica com o
+endereço velho, e o que ele lê a partir dali é o que o alocador entregou àquela
+memória depois.
+
+O perigo não é o conserto (duas linhas cada) — é ser INVISÍVEL: com o limiar de
+2 MiB um programa pequeno nunca coleta, então a suíte inteira fica verde com o
+bug ali. Ele aparece depois, numa entrada maior, como resposta errada longe da
+causa.
+
+`PSCRIPT_GC_STRESS=N` coleta a cada N-ésimo ponto seguro e **envenena a
+from-space com 0xDD em vez de liberá-la** (janela de 16 blocos, senão a memória
+não tem fim). Assim um ponteiro velho é ou `0xDDDDDDDDDDDDDDDD` — falha imediata
+na linha culpada — ou `0xDDDDDDDD`, que não é tag, tamanho nem estado válido. É
+o `--stress-gc` do V8 e o `gc.set_threshold(1)` do CPython, pela mesma razão.
+
+Os defeitos que ele achou, todos reais, todos consertados:
+
+  1. **cada ESTADO de uma máquina async é um bloco** e não tinha moldura própria:
+     um temporário coletado nascido ali (o iterável de um `for`) nunca era raiz;
+  2. **`ps_task_wait` cedia a vez ANTES de registrar `t`** — o escalonador rodava,
+     alocava, coletava, e a função lia o endereço que a task tinha antes. Parecia
+     deadlock e era ponteiro pendurado;
+  3. **a variável de iteração de um `for` não era raiz** — o corpo do laço era
+     montado fora da moldura;
+  4. **os argumentos de uma chamada não eram raízes**: o ponto seguro pode cair
+     DENTRO de um argumento, e os já avaliados vivem em temporários de C. Pior:
+     C não especifica a ordem, então qual deles está podre depende do compilador
+     e do nível de otimização. A forma normal segura é avaliar todos primeiro,
+     em ordem, para variáveis que a pilha de sombra segura;
+  5. **o mesmo para o construtor de `struct`** e para os **dois lados de um
+     operador binário** (`s + f(x)` carrega `s`, `f` coleta, `s` está podre);
+  6. **`nonlocal x` registrava a variável na moldura do BLOCO** onde ela era
+     primeiro atribuída, e o P depois iça a declaração para o escopo da FUNÇÃO —
+     a moldura era estourada no fim do bloco e o resto do programa lia lixo;
+  7. **`ps_forward` copiava DUAS VEZES** um objeto já em to-space, e a to-space é
+     dimensionada para uma cópia de tudo — cópias a mais passam do fim;
+  8. **um `defer`/`with`/`finally` de TOPO rodava depois da destruição do
+     contexto.** `ps_ctx_done` era a expressão de retorno do ponto de entrada, e
+     o P avalia a expressão de retorno ANTES dos defers do bloco (SPECS §8, e
+     tem de ser assim — o valor precisa existir antes da limpeza que pode
+     sobrescrever de onde ele veio). Então a sequência era *libera o mundo* e só
+     então `print("bye")`. Agora `ps_ctx_done` só apura o status e a liberação é
+     `ps_ctx_free`, registrada como o PRIMEIRO defer do ponto de entrada — e
+     defers rodam LIFO, então ela é a última coisa a acontecer no processo;
+  9. **os locais de um `try` não eram raízes**: as declarações do corpo são
+     içadas para o topo do bloco do try (têm de ser — o catch e o finally as
+     leem, e o corpo roda sob guarda), e içar tirou-as da moldura do corpo para
+     um bloco que não tinha nenhuma;
+ 10. **a exceção pendente sumia durante a limpeza de um `with`.** O `defer` tira
+     o erro do contexto para fechar num contexto limpo e o põe de volta; entre
+     as duas coisas ele vive num temporário de C, o `close()` aloca, o coletor
+     não enxerga o erro em lugar nenhum, e o que volta para `ctx->exc` é o
+     endereço que ele tinha antes;
+ 11. **NENHUMA das cinco combinadoras** (`gather`, `gather_settled`, `race`,
+     `first_ok`, `gather_map`) registrava moldura. São as funções do runtime
+     MAIS expostas ao coletor — elas dirigem o escalonador, o escalonador roda o
+     passo de outra task, e esse passo aloca. A lista de tasks recebida e a
+     lista sendo construída atravessavam tudo isso em temporários de C. (O
+     `base` relido dentro do laço do `gather` mostra que o perigo era meio
+     conhecido; a metade que faltava é que a própria lista também anda.)
+
+ 12. **a VISTA de um buffer (18.3) mandava o coletor mover o buffer.** Um
+     `PsBuffer` é malloc'ado de propósito — cabeçalho e bytes — porque outra
+     thread segura o ponteiro e um coletor que MOVE não pode ser dono do que
+     outra thread está lendo (19.4/52.3), e o próprio `case PS_TY_BUFFER` do
+     coletor diz isso. Mas o caso da lista encaminhava `l->owner` assim mesmo:
+     copiava um cabeçalho malloc'ado para dentro do heap coletado e apontava a
+     vista para a cópia — uma cópia que a coleta seguinte descartava, porque
+     nada no heap a reivindica. A vista sobrevivia ao buffer por uma coleta;
+ 13. **o próprio modo de estresse tinha um defeito**, e no pior lugar possível:
+     o cemitério era estático do MÓDULO, isto é, compartilhado entre threads.
+     Cada worker tem heap e coletor próprios (18.1), então dois coletores
+     empilhavam e despejavam da mesma lista ligada ao mesmo tempo — que a glibc
+     reporta como `double free or corruption`. Agora ele mora no CONTEXTO, como
+     os blocos.
+
+**Um teste que estava medindo a coisa errada:** `interval.psc` tomava o relógio
+DEPOIS de criar o `interval`, o que assume que criar é de graça. Sob estresse não
+é — uma coleta cai entre as duas linhas e come parte do primeiro período. O teste
+agora mede a partir de antes, que é o que ele sempre quis dizer.
+
+Gate: `bash tests/gc-stress.sh`.

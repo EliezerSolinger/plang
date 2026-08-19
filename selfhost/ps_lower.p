@@ -4555,11 +4555,20 @@ struct PsLow:
                     self->push_arg(pt9, self->ident(svn, s->pos))
                     pts: *Stmt = st_new(self->a, ST_EXPR, s->pos)
                     pts->expr = pt9
-                    db9->stmts = self->a->alloc(usize(3) * sizeof(*db9->stmts))
-                    db9->stmts[0] = svd
-                    db9->stmts[1] = ce9
-                    db9->stmts[2] = pts
-                    db9->n = 3
+                    # THROUGH THE FRAME. The error is parked in `__svN` while
+                    # the close runs — and the close allocates, so it collects,
+                    # and while it does the collector cannot see the error at
+                    # all: it is out of `ctx->exc` and in a C local. It moves,
+                    # `ps_exc_put` writes the address it USED to have back into
+                    # the context, and the next collection walks a pointer into
+                    # freed space. Wrapped, the parked error is a root like
+                    # anything else for exactly as long as it is parked.
+                    dv9: Vec<*Stmt>
+                    dv9.init()
+                    dv9.push(svd)
+                    dv9.push(ce9)
+                    dv9.push(pts)
+                    db9 = self->frame_wrap(&dv9, None, 0, s->pos)
                 else:
                     db9->stmts = self->a->alloc(sizeof(*db9->stmts))
                     db9->stmts[0] = ce9
@@ -4962,12 +4971,19 @@ struct PsLow:
             h->if_sel = -1
             body.push(h)
         # the whole thing in its own block, so the `defer` of the finally runs
-        # at the end of the TRY and not at the end of the function
-        wrap: *Block = self->a->alloc(sizeof(Block))
-        wrap->stmts = body.data
-        wrap->n = body.len
+        # at the end of the TRY and not at the end of the function — and through
+        # `frame_wrap`, because this block DECLARES things.
+        #
+        # The declarations of the try body are hoisted to the top of this block
+        # (they have to be: the catch and the finally can read them, and the
+        # body runs under an `if` guard). Hoisting them out of the body took
+        # them out of the body's frame and put them in a block that had none, so
+        # a collected local of a `try` was a local the collector never saw.
+        # `errors.psc` builds a list inside a `try` and indexes it on the next
+        # line; with a collection in between, the index read a list that had
+        # moved.
         bs: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
-        bs->body = wrap
+        bs->body = self->frame_wrap(&body, None, 0, s->pos)
         out->push(bs)
 
     # `match s:` over a string — an if/elif chain of content comparisons, with
@@ -8083,6 +8099,26 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.push_arg(sz9, tr9)
         fx->rhs = sz9
         mb.push(fx)
+    # THE HEAP IS GIVEN BACK LAST, and the way to say that is a defer registered
+    # FIRST: P runs a block's defers in reverse, so the first one registered is
+    # the last one to run — after every `defer`, `with` and `finally` the program
+    # itself wrote at the top level.
+    #
+    # It used to be the return EXPRESSION (`return ps_ctx_done(ctx)`), and P
+    # evaluates that before the defers (SPECS §8). So a program ending in
+    # `defer: print("bye")` freed the world and only then printed — through a
+    # heap that no longer existed. It read memory nothing had reused yet and
+    # looked correct; under GC stress it printed a screen of 0xDD.
+    fd: *Stmt = st_new(a, ST_DEFER, zp)
+    fdb: *Block = a->alloc(sizeof(Block))
+    fdb->stmts = a->alloc(sizeof(*fdb->stmts))
+    fds: *Stmt = st_new(a, ST_EXPR, zp)
+    fds->expr = L.call_rt("ps_ctx_free", zp)
+    L.push_arg(fds->expr, L.ctx_arg(zp))
+    fdb->stmts[0] = fds
+    fdb->n = 1
+    fd->body = fdb
+    mb.push(fd)
     topnl: Vec<*Stmt> = L.nl_flush(&top)
     tb: *Block = L.frame_wrap(&topnl, None, 0, zp)
     for j in range(tb->n):

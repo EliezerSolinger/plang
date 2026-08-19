@@ -12,8 +12,13 @@ there is nothing else to run.
 
 import sys
 
-t = interval(0.02)
+# the clock starts BEFORE the interval does. Measuring from after it is created
+# quietly assumes that creating it is free, and under `PSCRIPT_GC_STRESS` it is
+# not — a collection lands between the two lines and eats part of the first
+# period, so three ticks arrive in less than three periods measured from here.
+# The test was timing the wrong interval, and only a slow enough machine says so.
 start = sys.time()
+t = interval(0.02)
 n = 0
 while n < 3:
     await t.tick()

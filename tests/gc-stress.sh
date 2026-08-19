@@ -34,7 +34,10 @@ mkdir -p "$OUT"
 stress_n() {
     case $1 in
         smallpt_core|smallpt_full|smallpt_workers) echo 20000 ;;
-        gc|gc_list|async_gc|widths)                echo 1 ;;
+        # the socket programs talk to themselves over a real loopback and spend
+        # their time in `poll`; at N=1 the collection between two reads costs
+        # more than the round trip and the whole thing crawls
+        http_server|net_socket)                    echo 200 ;;
         *)                                          echo 1 ;;
     esac
 }

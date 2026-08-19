@@ -1802,3 +1802,101 @@ teria volta.
 
 Testes: `tests/pscript/run/const_record.psc` + `pmod_geom.ph`/`.p` e
 `tests/pscript/bad/const_record_mut.psc`.
+
+## Bateria 88 — os corpora de fora (2026-08-17)
+
+Decidida na 88 do DESIGN. Aqui é onde a implementação chegou.
+
+### 88.a Infraestrutura — FEITA
+
+- `tests/psbuild.sh` — um `.psc` vira binário, do jeito que o `tests/run.sh` faz.
+  Existe porque três arreios passaram a precisar exatamente disso e nenhum deles
+  deve reinventar a receita: os corpora, os oráculos e o placar de desempenho.
+- `tests/fetch-external.sh` — ganhou os quatro corpora novos (JSONTestSuite,
+  llhttp, WPT url, test262 Promise). Nada disso é distribuído com o repositório.
+- `tests/conformance/run.sh` — o arreio, com portão TOTAL.
+- `tests/conformance/compare.py` — compara WANT×GOT por caso, com `<corpus>.skips`
+  contado e impresso à parte. Um skip cujo caso volta a concordar é reportado
+  como STALE, para a nota morrer junto com o problema.
+
+### 88.b JSON — FEITO, 318/318
+
+`bash tests/conformance/run.sh json`. 95 documentos que têm de ser aceitos, 188
+recusados, 35 que a RFC deixa em aberto e ficam PREGADOS em
+`tests/conformance/json.expected` — assim uma mudança de ideia aparece como
+diff em vez de passar despercebida.
+
+Nos 35 em aberto concordamos com o Python em 32; os três são inteiro grande
+demais, que aqui é RECUSA (não há bignum e estouro lança em todo lugar, 7.2) e
+lá é bignum. Divergimos do node em dez, e não é sobre JSON: o
+`readFileSync(f,"utf8")` do node troca byte inválido por U+FFFD antes de o
+parser ver.
+
+O parser ganhou, além dos consertos da 88.4: **limite de profundidade de 1000**
+(`PS_JSON_MAX_DEPTH`), que é fronteira de segurança e não preferência — descida
+recursiva sobre texto de terceiro sem limite é um estouro de pilha esperando ser
+pedido, e o corpus pede.
+
+Regressão travada em `tests/pscript/run/jsonstrict.psc`.
+
+### 88.c URL — FEITO, 890/891
+
+`pscript/lib/url.psc` — porte do `whatwg-url`, estado por estado. Inclui IPv4
+(com octal e hexadecimal, que é por que `http://0x7f.1` é um jeito válido de
+escrever `127.0.0.1`), IPv6 com compressão e cauda IPv4, os conjuntos de
+percent-encoding aninhados, Punycode (RFC 3492) e a parte FORMULÁVEL do UTS-46:
+o bloco ASCII de largura plena, os três pontos finais, o conjunto ignorado de
+largura zero, e os espaços e não-caracteres proibidos.
+
+O que fica de fora está escrito no `url.skips`: a metade do UTS-46 que é TABELA
+(dobra de caixa fora do ASCII, blocos de compatibilidade, NFC). O único caso que
+falha precisa do bloco de símbolos matemáticos.
+
+### 88.d HTTP — o arreio está de pé, o placar ainda não fecha
+
+`tests/conformance/llhttp_digest.py` lê as fixtures `.md` do llhttp (entrada
+```http`, log de eventos ```log`) e REDUZ o log ao que os dois lados sabem
+dizer: método, alvo, protocolo, versão, cabeçalhos, corpo, completo, erro. Nada
+na redução é generoso conosco — o que ela descarta é o que o llhttp confere e
+nós não modelamos (deslocamento em bytes, fronteira de span, a API de pausa, o
+campo `flags`); o que ela guarda é tudo o que nós modelamos.
+
+212 fixtures aproveitadas, 41 puladas: as `-lenient-*` medem a máquina RELAXADA
+do llhttp (cada uma dessas bandeiras existe para aceitar algo que a RFC recusa,
+por compatibilidade com clientes já implantados — dívida que não carregamos), e
+`-finish`/`pausing` dirigem uma API que não expomos.
+
+`pscript/lib/http.psc` (era `tests/pscript/run/lib_http.psc`) ganhou: parser de
+RESPOSTA, lista `raw` de cabeçalhos na ordem de chegada, junção de repetidos com
+`, ` (RFC 9110 §5.3, e `raw` é o que preserva `set-cookie`), recusa de
+`content-length` duplicado ou não-numérico, separação protocolo/versão, corpo
+que termina com a conexão (`finish()`), e trailers depois do último chunk.
+
+**Onde parou:** o digest e o driver concordam em forma, e as divergências que
+restam são de três tipos — política de CONEXÃO (o llhttp erra quando chega mais
+byte depois de uma mensagem que disse `close`; nós parseamos mensagens, não
+gerimos conexão), `upgrade`, e CR solto dentro de valor de cabeçalho (este é bug
+nosso e vetor de smuggling). Não fechado.
+
+### 88.e O modo de estresse do coletor — FEITO
+
+`tests/gc-stress.sh` + `PSCRIPT_GC_STRESS=N` no runtime. Ver 88.5 do DESIGN para
+a família inteira de defeitos que ele revelou e por que ela era invisível.
+
+## O que a bateria 88 deixou EM ABERTO
+
+- [ ] **HTTP**: fechar o placar do llhttp (88.d).
+- [ ] **test262**: portar à mão as ~40 que medem ORDEM de resolução de
+      `all`/`allSettled`/`any`/`race`, reescritas em `await`.
+- [ ] **Oráculos** (decisão sua): `node` para o modelo de runtime (ordem de
+      microtask, `await` que cede sempre, EOF de socket, ordem de timer) e
+      `python3` para a semântica da linguagem (`-7//2`, `-7%3`, repr de float,
+      fatia, ordem de dict, sort estável, métodos de str) — hoje conferidos À
+      MÃO, caso a caso, no molde do `clang-compare.sh`.
+- [ ] **Placar de desempenho lado a lado** (decisão sua): tempo de execução e
+      tempo de compilação/partida contra node e python. O nosso demora a
+      compilar porque é AOT com otimização máxima, e isso faz parte — não
+      estamos competindo em velocidade de compilação.
+- [ ] **`Awaitable`** (87.1) e a não-achatação (87.2).
+- [ ] **Auditoria da especificação inteira**: varrer as 88 baterias contra a
+      implementação, empiricamente e não pelo `[x]`.

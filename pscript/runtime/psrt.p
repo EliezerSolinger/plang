@@ -52,9 +52,9 @@ static PS_POISON: const i32 = 0xDD
 static PS_GRAVE_MAX: const i32 = 16
 
 static ps_stress_n: i64 = -1         # -1 = not looked up yet; 0 = off
-static ps_stress_tick: i64 = 0
-static ps_graveyard: *PsBlock = None # poisoned from-space, kept on purpose
-static ps_grave_n: i32 = 0
+                                     # (the ENV is read once; the graveyard and
+                                     #  the tick live in the context, because
+                                     #  every thread collects on its own)
 
 static def ps_gc_stress() -> i64:
     if ps_stress_n < 0:
@@ -66,14 +66,14 @@ static def ps_gc_stress() -> i64:
     return ps_stress_n
 
 # true when THIS safe point should collect
-static def ps_stress_due() -> bool:
+static def ps_stress_due(ctx: *PsCtx) -> bool:
     n: i64 = ps_gc_stress()
     if n == 0:
         return False
-    ps_stress_tick += 1
-    if ps_stress_tick < n:
+    ctx->stress_tick += 1
+    if ctx->stress_tick < n:
         return False
-    ps_stress_tick = 0
+    ctx->stress_tick = 0
     return True
 
 static def ps_new_block(min: usize) -> *PsBlock:
@@ -91,7 +91,7 @@ static def ps_new_block(min: usize) -> *PsBlock:
     b->cap = cap
     return b
 
-static def ps_free_blocks(b: *PsBlock):
+static def ps_free_blocks(ctx: *PsCtx, b: *PsBlock):
     if ps_gc_stress() != i64(0):
         # Under stress the from-space is never given back: it is filled with
         # 0xDD and parked. Anybody still holding a pointer into it now reads a
@@ -100,27 +100,27 @@ static def ps_free_blocks(b: *PsBlock):
         while b != None:
             n: *PsBlock = b->next
             memset(b->base, PS_POISON, b->cap)
-            b->next = ps_graveyard
-            ps_graveyard = b
-            ps_grave_n += 1
+            b->next = ctx->graveyard
+            ctx->graveyard = b
+            ctx->grave_n += 1
             b = n
         # drop the oldest beyond the window — the list is pushed at the head, so
         # the oldest is at the tail
-        while ps_grave_n > PS_GRAVE_MAX:
+        while ctx->grave_n > PS_GRAVE_MAX:
             prev: *PsBlock = None
-            cur: *PsBlock = ps_graveyard
+            cur: *PsBlock = ctx->graveyard
             while cur != None and cur->next != None:
                 prev = cur
                 cur = cur->next
             if cur == None:
                 break
             if prev == None:
-                ps_graveyard = None
+                ctx->graveyard = None
             else:
                 prev->next = None
             free(cur->base)
             free(cur)
-            ps_grave_n -= 1
+            ctx->grave_n -= 1
         return
     while b != None:
         n: *PsBlock = b->next
@@ -149,10 +149,33 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.waiters = None
     ctx.io_r = -1
     ctx.io_w = -1
+    ctx.graveyard = None
+    ctx.grave_n = 0
+    ctx.stress_tick = 0
     ctx.nogc = 0
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
 
+# THE END OF THE PROGRAM, IN TWO HALVES — and the split is the whole point.
+#
+# This half drains, joins and turns an uncaught exception into an exit status.
+# It does NOT free the heap, and it used to. The reason it cannot is `defer`:
+#
+#     defer:
+#         print("bye")
+#
+# at the top level of a program is a P `defer` on the entry point's block, and P
+# runs a block's defers AFTER the return expression is evaluated (SPECS §8, and
+# it has to — the value has to exist before the cleanup that may overwrite what
+# it came from). So with the teardown as the return expression, the sequence was
+# `free the world` and only then `print("bye")` — a print through a heap that
+# had already been handed back. Under the normal collector it read memory that
+# nothing had reused yet and looked fine; under GC stress it printed a screen of
+# 0xDD.
+#
+# The fix is not to reorder anything by hand: the entry point registers
+# `ps_ctx_free` as its FIRST defer, and defers run LIFO, so it runs LAST — after
+# every cleanup the program itself asked for, whatever they are and however many.
 def ps_ctx_done(ctx: *PsCtx) -> int:
     ps_sched_drain(ctx)
     ps_join_all(ctx)
@@ -166,15 +189,29 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
         fflush(stdout)
         fprintf(stderr, "%s:%d: error: %s\n", e->file if e->file != None else "?", e->line, e->msg->data if e->msg != None else "")
         rc = 1
-    ps_free_blocks(ctx->blocks)
+    return rc
+
+# ... and this half gives the world back. Called from the entry point's first
+# defer, so it is the last thing that happens in the process.
+def ps_ctx_free(ctx: *PsCtx):
+    ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = None
+    # the graveyard goes too: nothing may reference it any more, and a worker
+    # that came and went must not leave a heap behind
+    g: *PsBlock = ctx->graveyard
+    while g != None:
+        gn: *PsBlock = g->next
+        free(g->base)
+        free(g)
+        g = gn
+    ctx->graveyard = None
+    ctx->grave_n = 0
     r: *PsRoot = ctx->roots
     while r != None:
         nx: *PsRoot = r->next
         free(r)
         r = nx
     ctx->roots = None
-    return rc
 
 # Allocation NEVER collects. When the block is full it chains on another one,
 # and ps_gc_poll does the collecting at a point where no C temporary is live.
@@ -2895,6 +2932,19 @@ def ps_task_step(ctx: *PsCtx, t: *PsTask):
 # which finished first is a program that should not have used `gather`.
 def ps_gather(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsList:
     out: *PsList = ps_list_new(ctx, esize, eref, ts->len)
+    # THE COMBINATORS DRIVE THE SCHEDULER, so they are the runtime functions
+    # most exposed to the collector: everything they hold — the list of tasks
+    # they were given and the list they are building — stays alive across
+    # somebody else's step, and somebody else's step allocates. Without the
+    # frame, both are addresses the collector has already invalidated. The
+    # `base` re-read below shows the hazard was half-known; the half that was
+    # missing is that `ts` and `out` move too.
+    slots: **PsObj[2]
+    slots[0] = (**PsObj)(&ts)
+    slots[1] = (**PsObj)(&out)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 2)
+    defer ps_pop_frame(ctx, &f)
     i: i64 = 0
     while i < ts->len:
         base: **PsTask = (**PsTask)((*char)(ts->data) + sizeof(PsArr) + usize(i) * usize(ts->esize))
@@ -3111,6 +3161,14 @@ def ps_race(ctx: *PsCtx, ts: *PsList) -> i64:
     if ts == None or ts->len == 0:
         ps_raise(ctx, "race() needs at least one task", PS_CAT_VALUE, "<race>", 0)
         return -1
+    # the frame, for the same reason `ps_gather` has one: this drives the
+    # scheduler, the scheduler runs somebody else's step, that step allocates,
+    # and everything held across it moves.
+    slots: **PsObj[1]
+    slots[0] = (**PsObj)(&ts)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 1)
+    defer ps_pop_frame(ctx, &f)
     win: i64 = -1
     while win < 0:
         i: i64 = 0
@@ -3194,6 +3252,15 @@ def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
 # which are done by then and hand them over without waiting.
 def ps_gather_settled(ctx: *PsCtx, ts: *PsList) -> *PsList:
     out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, ts->len if ts != None else 0)
+    # the frame, for the same reason `ps_gather` has one: this drives the
+    # scheduler, the scheduler runs somebody else's step, that step allocates,
+    # and everything held across it moves.
+    slots: **PsObj[2]
+    slots[0] = (**PsObj)(&ts)
+    slots[1] = (**PsObj)(&out)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 2)
+    defer ps_pop_frame(ctx, &f)
     i: i64 = 0
     while ts != None and i < ts->len:
         base: **PsTask = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
@@ -3224,6 +3291,14 @@ def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64:
     if ts == None or ts->len == 0:
         ps_raise(ctx, "first_ok() needs at least one task", PS_CAT_VALUE, "<first_ok>", 0)
         return -1
+    # the frame, for the same reason `ps_gather` has one: this drives the
+    # scheduler, the scheduler runs somebody else's step, that step allocates,
+    # and everything held across it moves.
+    slots: **PsObj[1]
+    slots[0] = (**PsObj)(&ts)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 1)
+    defer ps_pop_frame(ctx, &f)
     while True:
         alldone: bool = True
         i: i64 = 0
@@ -3270,6 +3345,15 @@ def ps_gather_map(ctx: *PsCtx, items: *PsList, mk: def(env: *void, ctx: *PsCtx, 
         return out
     win: i64 = at_most if at_most > 0 else 1
     pend: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, n)
+    # three lists held across the scheduler here — the items, the window of
+    # pending tasks and the results — and `mk` itself allocates before any wait
+    slots: **PsObj[3]
+    slots[0] = (**PsObj)(&items)
+    slots[1] = (**PsObj)(&out)
+    slots[2] = (**PsObj)(&pend)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 3)
+    defer ps_pop_frame(ctx, &f)
     made: i64 = 0
     taken: i64 = 0
     while taken < n:
@@ -3441,10 +3525,17 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
         case PS_TY_LIST:
             l: *PsList = (*PsList)(o)
             if l->raw != None:
-                # a view (18.3): the bytes are the buffer's and never move, so
-                # there is nothing to copy here — only the buffer itself has to
-                # stay reachable while the view does
-                l->owner = (*PsBuffer)(ps_forward(to, (*PsObj)(l->owner)))
+                # A VIEW (18.3), and there is nothing here to forward. The bytes
+                # are the buffer's, and so is the buffer's HEADER: both are
+                # malloc'd on purpose (19.4/52.3), because another thread holds
+                # the pointer and a collector that moves cannot own what another
+                # thread is reading. `PS_TY_BUFFER` in this same switch says so.
+                #
+                # It used to forward `owner` anyway, which copied a malloc'd
+                # header into the collected heap and pointed the view at the
+                # copy — a copy the next collection then dropped, because
+                # nothing in the heap claims it. The view outlived its buffer by
+                # one collection and read whatever came next.
                 return
             l->data = (*PsArr)(ps_forward(to, (*PsObj)(l->data)))
             if l->eref and l->data != None:
@@ -3558,7 +3649,7 @@ def ps_gc(ctx: *PsCtx):
         ps_scan_object(to, o)
         scan += usize(o->size)
 
-    ps_free_blocks(ctx->blocks)
+    ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = to
     ctx->live = to->used
     ctx->alloced = 0
@@ -3579,7 +3670,7 @@ def ps_gc_poll(ctx: *PsCtx):
     # under stress a safe point collects on its own schedule, so a pointer held
     # across one is caught the first time it is held rather than the first time
     # it is unlucky
-    if ps_stress_due():
+    if ps_stress_due(ctx):
         ps_gc(ctx)
         return
     if ctx->alloced < usize(PS_GC_BYTES) and ctx->nalloc < PS_GC_OBJECTS:

@@ -525,6 +525,15 @@ struct PsCtx:
                          #   polls the queues' descriptors with the nearest
                          #   deadline as its timeout, which is the shape 18.4
                          #   asks for — a socket would join this same list.
+    # `PSCRIPT_GC_STRESS` only. The poisoned from-space belongs to the CONTEXT,
+    # not to the process: a worker has its own heap and its own collector
+    # (18.1), and a graveyard shared between threads is a linked list two
+    # collectors push and evict from at once — which glibc reports as
+    # `double free or corruption`, in a debugging mode, which is the worst
+    # possible place for a bug of its own.
+    graveyard: *PsBlock
+    grave_n: i32
+    stress_tick: i64
     nogc: i64            # `nogc:` blocks in flight (26.5.3): a COUNTER, so a
                          #   function with one can be called from inside another
     nogc_budget: usize   # bytes the innermost budgeted block promised (26.2);
@@ -536,6 +545,7 @@ def ps_ctx_init(out ctx: PsCtx)
 # Runs at the end of the entry point: reports an exception that reached the top
 # and turns it into the process exit status.
 def ps_ctx_done(ctx: *PsCtx) -> int
+def ps_ctx_free(ctx: *PsCtx)
 def ps_alloc(ctx: *PsCtx, size: usize, ty: i32) -> *void
 
 # `nogc:` (26): suspends collection for the block. With a budget it also
