@@ -19,3 +19,6 @@ stl/*.h
 tests/external/
 .verify/
 a.out
+# stray build artifacts from tests/psbuild.sh run from the wrong directory
+/rt/
+*_dbg
