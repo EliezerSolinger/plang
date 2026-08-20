@@ -13,7 +13,14 @@ import "ps_parser.ph"
 import "ps_sema.ph"
 import "ps_lower.ph"
 import "../stl/vec.ph"
+import "../stl/hash.ph"
 import "vecs.ph"
+
+# `execv` and `access` are POSIX and <unistd.h> is not included here (the same
+# reason `popen` is declared by hand above): declared with libc's own types so
+# the declaration is compatible wherever the system header is also visible.
+def execv(path: const *char, argv: **char) -> int
+def access(path: const *char, mode: int) -> int
 
 
 # popen/pclose are POSIX and <stdio.h> hides them under strict -std=c11, so the
@@ -97,6 +104,7 @@ static def usage():
     fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n")
     fprintf(stderr, "  --tokens         dump tokens and exit\n")
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n")
+    fprintf(stderr, "  run <f.psc> [args] compile (cached) and RUN it (6.3/15.3); as `pscript f.psc`\n")
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n")
     fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n")
     fprintf(stderr, "  --trace          a frame for EVERY pscript function, so a stack trace names them all (34.2)\n")
@@ -116,6 +124,123 @@ static def mkdirs_for(p: const *char):
             buf[i] = '/'
         i += 1
     free(buf)
+
+# ---------- `plangc run x.psc [args...]` (6.3/15.3/16.2/50.3) ----------
+# Decided in the sixth battery and never built: "compiled, plus a command that
+# RUNS it" — the convenience of a script with the compilation still ahead of
+# time. What makes it usable is the CACHE (15.3): the C is generated every time
+# (tens of milliseconds) and hashed, and `cc` — which is the part that costs
+# tenths of a second — runs only when that hash is new.
+#
+# The binary is keyed by the hash of the C, so two programs that generate the
+# same C share it, and a program whose source changed gets a new one. Nothing
+# is ever invalidated: an entry that stops being reachable is simply never
+# looked up again, which is what a content-addressed cache is.
+static def run_cache_dir(a: *Arena) -> const *char:
+    e: const *char = getenv("PSCRIPT_CACHE")
+    if e != None and e[0] != '\0':
+        return e
+    h: const *char = getenv("HOME")
+    if h != None and h[0] != '\0':
+        return a->printf("%s/.cache/pscript", h)
+    return "/tmp/pscript-cache"
+
+# The manifest that makes a cached `run` cheap (15.3). Keyed by the DIRECT
+# source plus the compiler and the flags, it lists every file the last build
+# read with the hash of its bytes. If they all still match, nothing has to be
+# generated: the binary named in the first line is exec'd straight away.
+#
+# It has to be every file and not just the one named on the command line,
+# because `import` pulls modules in — a cache that ignored them would run
+# yesterday's binary after today's edit, which is the only failure mode of a
+# build cache that actually matters.
+static def hash_file(path: const *char, ref ok: bool) -> u64:
+    n: usize = 0
+    b: *char = read_entire_file_opt(path, out n)
+    if b == None:
+        ok = False
+        return 0
+    h: u64 = hash_bytes(b, n)
+    free(b)
+    return h
+
+static def run_manifest_ok(a: *Arena, man: const *char, out binkey: u64) -> bool:
+    n: usize = 0
+    txt: *char = read_entire_file_opt(man, out n)
+    if txt == None:
+        return False
+    defer free(txt)
+    # first line: the binary's key; then one `<hash> <path>` per source
+    p2: *char = txt
+    key: u64 = strtoull(p2, &p2, 16)
+    binkey = key
+    while *p2 != '\0':
+        while *p2 == '\n' or *p2 == ' ':
+            p2 += 1
+        if *p2 == '\0':
+            break
+        want: u64 = strtoull(p2, &p2, 16)
+        while *p2 == ' ':
+            p2 += 1
+        start: *char = p2
+        while *p2 != '\n' and *p2 != '\0':
+            p2 += 1
+        path: const *char = a->printf("%.*s", i32(p2 - start), start)
+        ok: bool = True
+        got: u64 = hash_file(path, ref ok)
+        if not ok or got != want:
+            return False
+    return True
+
+static def run_manifest_write(a: *Arena, man: const *char, binkey: u64, inputs: *Vec<*char>):
+    mkdirs_for(man)
+    f: *FILE = fopen(man, "wb")
+    if f == None:
+        return          # a cache that cannot be written is not an error
+    fprintf(f, "%016llx\n", binkey)
+    for i in range(inputs->len):
+        ok: bool = True
+        h: u64 = hash_file(inputs->get(usize(i)), ref ok)
+        if ok:
+            fprintf(f, "%016llx %s\n", h, inputs->get(usize(i)))
+    fclose(f)
+
+static def run_exec(binp: const *char, args: **char, nargs: i32) -> int:
+    av: **char = malloc(usize(nargs + 2) * sizeof(*av))
+    av[0] = (*char)(binp)
+    for i in range(nargs):
+        av[i + 1] = args[i]
+    av[nargs + 1] = None
+    execv(binp, av)
+    fatal("could not run '%s'", binp)
+    return 1
+
+static def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *char, args: **char, nargs: i32, std_version: i32) -> int:
+    binp: const *char = cc->arena.printf("%s/bin/%016llx", cachedir, h)
+    mkdirs_for(binp)
+    if access(binp, 0) != 0:
+        # 16.3: the system's `cc` links it, as it does everywhere else here. The
+        # POSIX defines are the ones the runtime needs — glibc hides socket and
+        # getaddrinfo under a strict `-std=`.
+        cmd: StrBuf = {0}
+        defer cmd.deinit()
+        ccname: const *char = getenv("CC")
+        cmd.puts(ccname if ccname != None and ccname[0] != '\0' else "cc")
+        cmd.puts(" -std=c89" if std_version == 89 else " -std=c11")
+        cmd.puts(" -O2 -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE")
+        for i in range(cfiles->len):
+            cmd.puts(" \"")
+            cmd.puts(cfiles->get(usize(i)))
+            cmd.puts("\"")
+        cmd.puts(" -o \"")
+        cmd.puts(binp)
+        cmd.puts("\" -lm -pthread")
+        rc: int = system(cmd.data)
+        if rc != 0:
+            fatal("the C compiler failed while building '%s' (see the errors above)", binp)
+    # exec, so the program's exit status IS this process's and no shell has to
+    # be trusted with the arguments
+    return run_exec(binp, args, nargs)
 
 static def derive_output(a: *Arena, input: const *char, be: const *Backend) -> const *char:
     n: usize = strlen(input)
@@ -251,8 +376,29 @@ def main(argc: int, argv: **char) -> int:
     pulled.init()
     defines: Vec<*char>   # -D NAME=VALUE: comptime consts injected from outside
     defines.init()
+    # `plangc run x.psc [args...]` (6.3): compile and run, with the cache of
+    # 15.3 in between. Everything AFTER the file is the PROGRAM's, the way
+    # `python -O x.py args` reads — so a flag for the compiler goes before it.
+    run_mode: bool = False
+    run_args: **char = None
+    run_nargs: i32 = 0
+    first: i32 = 1
+    if argc > 1 and argv[1] == "run":
+        run_mode = True
+        first = 2
+    # 50.3: `pscript` is the same binary under another name, and under that name
+    # running is what it does — `pscript x.psc args` with no subcommand, the way
+    # `python x.py args` reads. The compiler is still there: `plangc x.psc`
+    # emits C and links nothing, exactly as before.
+    elif has_suffix(argv[0], "pscript") or has_suffix(argv[0], "pscript.exe"):
+        run_mode = True
 
-    for i in range(1, argc):
+    for i in range(first, argc):
+        if run_mode and run_nargs == 0 and inputs.len == 1 and i < argc:
+            # the file is in; from here on the arguments belong to the program
+            run_args = &argv[i]
+            run_nargs = argc - i
+            break
         if strncmp(argv[i], "--std=", 6) == 0:
             std: const *char = argv[i] + 6
             if std in {"c89", "c90"}:
@@ -341,6 +487,8 @@ def main(argc: int, argv: **char) -> int:
             inputs.push(argv[i])
     if inputs.is_empty():
         usage()
+    if run_mode and inputs.len != 1:
+        fatal("`run` takes ONE file: `plangc run program.psc [args...]`")
     if out_path != None and inputs.len > 1:
         fatal("-o can only be used with a single input file")
     if out_path != None and out_dir != None:
@@ -364,6 +512,44 @@ def main(argc: int, argv: **char) -> int:
     cc.cpp = cpp_cmd
     cc.inline_runtime = inline_runtime
     ps_lower_config(strip_asserts, full_trace)
+    # `run` compiles the RUNTIME with the program (16.4): on the command line
+    # that is the caller's job, and in `run` there is no command line left.
+    cachedir: const *char = None
+    cfiles: Vec<*char>      # what `run` will hand to `cc`
+    cfiles.init()
+    run_hash: u64 = 0xcbf29ce484222325
+    manifest: const *char = None
+    if run_mode:
+        cachedir = run_cache_dir(&cc.arena)
+        # The manifest's KEY: the file asked for, the compiler that would
+        # compile it, and the flags that change what it emits. The compiler goes
+        # in as its own bytes' size and time — a rebuilt plangc emits different
+        # C, and a cache that survived that would be a liar.
+        kb: StrBuf = {0}
+        defer kb.deinit()
+        kb.puts(inputs.get(0))
+        kb.puts(argv[0])
+        # The compiler's own BYTES, hashed. Not its size and modification time:
+        # `st_mtime` is a macro on glibc and on macOS, so the member behind it
+        # depends on which feature macros the header was read with — and this
+        # file is read with different ones than it is compiled with. Reading a
+        # megabyte costs a millisecond and cannot be wrong.
+        ok0: bool = True
+        kb.puts(cc.arena.printf("|%016llx", hash_file(argv[0], ref ok0)))
+        kb.puts(cc.arena.printf("|%d|%d|%d|%s", std_version, 1 if strip_asserts else 0, 1 if full_trace else 0, backend_name if backend_name != None else "c"))
+        mkey: u64 = hash_bytes(kb.data, kb.len)
+        manifest = cc.arena.printf("%s/man/%016llx", cachedir, mkey)
+        bkey: u64 = 0
+        if run_manifest_ok(&cc.arena, manifest, out bkey):
+            binp0: const *char = cc.arena.printf("%s/bin/%016llx", cachedir, bkey)
+            if access(binp0, 0) == 0:
+                return run_exec(binp0, run_args, run_nargs)
+        if has_suffix(inputs.get(0), ".psc"):
+            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.ph"))
+            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.p"))
+        # the C goes to the cache too, so a `run` never writes next to the
+        # source — a script that lives in a read-only directory still runs
+        out_dir = cc.arena.printf("%s/obj", cachedir)
     diag_config(werror, wall, pedantic_lvl, wsuppress)
 
     if tokens_only:
@@ -492,4 +678,14 @@ def main(argc: int, argv: **char) -> int:
                 fatal("could not write '%s'", dest)
             fwrite(out.data, 1, out.len, f)
             fclose(f)
+        if run_mode:
+            # the hash is over what will be COMPILED, in the order it will be
+            # given to `cc`: same C, same binary, and nothing else can make two
+            # runs disagree
+            run_hash = run_hash * 0x100000001b3 ^ hash_bytes(out.data if out.data != None else "", out.len)
+            if has_suffix(dest, ".c"):
+                cfiles.push((*char)(dest))
+    if run_mode:
+        run_manifest_write(&cc.arena, manifest, run_hash, &inputs)
+        return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version)
     return 0

@@ -138,6 +138,15 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/gc-stress.sh >$V/gcstress.log 2>&1; then
 else
     bad "gc-stress achou algo (veja $V/gcstress.log)"
 fi
+#   run-cmd      `plangc run` e o cache atrás dele: a única coisa aqui que não é
+#                uma compilação, então o que se mede são COMPORTAMENTOS — que a
+#                segunda vez não chama o `cc`, que editar um módulo importado
+#                invalida, que o status de saída é o do programa.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/run-cmd.sh >$V/runcmd.log 2>&1; then
+    ok "run-cmd $(grep -oE '[0-9]+ ok' $V/runcmd.log | tail -1)"
+else
+    bad "o `run` divergiu (veja $V/runcmd.log)"
+fi
 
 step "7/8 pstudio (compilação do editor: maior consumidor de P)"
 # gating de COMPILAÇÃO do editor inteiro (a suíte funcional roda no passo 4).

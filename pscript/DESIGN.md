@@ -3468,6 +3468,45 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 95 — `run`, e o cache que a 15.3 tinha pedido (2026-08-20)
+
+**95.1 `plangc run x.psc [args...]`, e `pscript x.psc [args...]` sob o alias.**
+A 6.3 pediu "compilado, mais um comando que roda"; a 15.3 pediu o cache; a 16.2
+pediu que só o que mudou recompile; a 50.3 pediu o alias com CLI própria. Nada
+disso existia — compilava-se com o `plangc` e linkava-se com o `cc` à mão, que é
+o que o `tests/psbuild.sh` faz há meses.
+
+Tudo DEPOIS do arquivo é do PROGRAMA, como em `python -O x.py args`: flag de
+compilador vem antes. O `run` faz `execv`, então o status de saída do programa É
+o do processo e nenhum shell precisa ser confiado com os argumentos.
+
+**95.2 O cache é de CONTEÚDO, com manifesto.** A promessa da 15.3 é "guarda por
+hash do fonte e recompila só o que mudou", e o que a torna real é o manifesto:
+uma chave feita do arquivo pedido, dos BYTES do compilador e das flags que mudam
+o que ele emite; e, sob essa chave, a lista de todo arquivo que a última
+construção leu, cada um com o hash do seu conteúdo. Se todos ainda batem, nada é
+gerado — o binário nomeado na primeira linha é exec'd direto.
+
+Tem de ser todo arquivo e não só o da linha de comando, porque `import` traz
+módulos: um cache que os ignorasse rodaria o binário de ontem depois da edição de
+hoje, que é o único modo de falhar que importa num cache de build.
+
+> **Os bytes do compilador, e não o tamanho com a data.** `st_mtime` é MACRO no
+> glibc e no macOS, então o membro atrás dele depende das feature macros com que
+> o header foi lido — e este arquivo é lido com umas e compilado com outras (foi
+> o que aconteceu na primeira tentativa). Ler um megabyte custa um milissegundo e
+> não pode estar errado.
+
+**95.3 Medido:** 2,9s na primeira vez (o `cc` compila o runtime inteiro) e
+**4 ms** nas seguintes. É a diferença entre "linguagem compilada" e "linguagem de
+script", e ela mora inteira nesse cache.
+
+Portão: `tests/run-cmd.sh`, dentro do 6b do `verify-all`. Ele não compara uma
+saída, compara COMPORTAMENTOS — que os argumentos chegam, que a segunda vez não
+chama o `cc` (medido, não presumido), que editar o fonte invalida, que editar um
+módulo IMPORTADO invalida, que o status de saída é o do programa, e que o alias
+faz o mesmo.
+
 ## Bateria 94 — o rastro de pilha, e o NULL que ele desenterrou (2026-08-20)
 
 **94.1 O erro carrega a pilha (15.2/34.2), capturada no RAISE.** Tinha de ser no

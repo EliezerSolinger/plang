@@ -60,7 +60,9 @@ verify-quick:
 selfhost: plangc
 	./plangc --out-dir out stl/*.ph selfhost/*.ph selfhost/*.p
 	$(CC) $(CFLAGS) -w -o plangc2 out/selfhost/*.c
-	@echo "self-host OK: plangc2 rebuilt from Plang source"
+	@mkdir -p out/bin
+	@ln -sf ../../plangc2 out/bin/pscript
+	@echo "self-host OK: plangc2 rebuilt from Plang source (out/bin/pscript is the run-it alias)"
 
 # Plang Studio: o editor em P puro (pstudio/). Precisa de libsdl2-dev; o C sai
 # em out/ (espelho da raiz: imports relativos resolvem lá) e o binário em

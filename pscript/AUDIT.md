@@ -46,7 +46,7 @@ como pergunta.
 | 5.4 | fechamento com captura descartado | **OK** — `def` dentro de `def` é recusado com a razão |
 | 6.1 | lambda sem ambiente | **OK** — `lambda.psc` |
 | 6.2 | código solto no topo roda | **OK** — todo o corpus |
-| 6.3 | `pscript run x.ps` + cache de compilação | **FALTA** — hoje é `plangc x.psc` mais o `cc`; não há subcomando `run` nem cache |
+| 6.3 | `pscript run x.ps` + cache de compilação | **OK** — bateria 95 |
 | 6.4 | indentação, lexer do P por `LexSpec` | **OK** |
 | 7.1 | string de largura adaptativa (PEP 393) | **DIVERGE** — a string é UTF-8 inline com índice de offsets construído sob demanda (o `offs` do `PsStr`); mais simples que a 7.1 e resolve o mesmo problema, mas o DESIGN diz outra coisa |
 | 7.2 | estouro de inteiro lança | **OK** — conferido, `9223372036854775807 + 1` lança |
@@ -113,7 +113,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 14.1 | cache de UTF-8 pendurado na string | **REV** — a forma NATIVA é UTF-8 (51.2); o que existe é o índice de offsets, construído sob demanda |
 | 15.1, 23.1 | copiador de semiespaço (Cheney) | **OK** — `gc-stress.sh` |
 | 15.2 | erro com mensagem, categoria e posição | **OK** — a pilha entrou na bateria 94 |
-| 15.3, 16.2, 6.3, 50.3 | `pscript run` com cache de `.o` | **FALTA** — inteiro |
+| 15.3, 16.2, 6.3, 50.3 | `pscript run` com cache | **OK** — bateria 95: cache de conteúdo com manifesto, 2,9s a frio e 4ms depois |
 | 16.4 | o runtime é fonte P compilada junto | **OK** — `tests/psbuild.sh` é a receita |
 | 17.1, 34.1, 49.4 | shadow stack de ENDEREÇO, com faixa, frame por função | **OK** |
 | 17.3 | `xs[2:5]` é cópia | **OK** |
@@ -230,9 +230,16 @@ UTF-8 com índice sob demanda — as duas decisões certas, tomadas depois, em
 baterias que não riscaram as linhas antigas. É edição de documento, não de
 código, mas quem ler o DESIGN de cima para baixo lê o contrário do que roda.
 
-**D. `pscript run` (6.3).** Decidido, não existe. Hoje se compila com `plangc` e
-se linka com o `cc` à mão (é o que o `tests/psbuild.sh` faz). O subcomando e o
-cache de compilação continuam abertos.
+**D. `epoll`/`kqueue` (18.4) está BLOQUEADO por uma decisão de linguagem, não por
+trabalho.** O loop chama `poll()`, que é textualmente o que a decisão recusou. Só
+que escrever os dois back ends exige escolher entre eles no C EMITIDO — o seed é
+gerado numa máquina e compilado noutra (você compila no macOS), então a escolha
+não pode ser feita na hora de gerar. E o P não tem compilação condicional: não há
+como emitir `#if defined(__APPLE__)`. As saídas são (a) o P ganhar uma forma de
+condicional de plataforma, (b) ficar no `poll()` e riscar a 18.4, ou (c) um
+terceiro mecanismo (uma tabela de ponteiros escolhida em tempo de execução, com
+os dois compilados sempre — o que exige os dois headers presentes em todo lugar,
+e não estão). É decisão sua, e por isso não escrevi nada.
 
 ---
 
@@ -252,13 +259,15 @@ local com literal não compilava, e `in xs: T[N]` não compilava.
 Ordem de valor, na minha leitura — nenhum destes precisa de bateria, só de
 trabalho:
 
-1. **`epoll`/`kqueue` (18.4).** O loop chama `poll()`, textualmente o que a
-   decisão recusou, e paga O(n) por volta em cada espera. O `kqueue` não é
-   testável nesta máquina (Linux), o que é motivo para escrevê-lo com cuidado e
-   dizer que não foi rodado — não para deixar os dois de fora.
-3. **`Sequence<T>` como parâmetro (60.3/62.1)** — a trait do sistema que
-   está declarada e não serve para o que foi declarada. (O `Comparable` no
-   `sorted`, que estava aqui, FECHOU na bateria 93.)
-4. **`const def` (65.10)** — função avaliada em compilação. O resto do
-   comptime da 65.11 fechou na bateria 93.
-5. **`const` de contêiner no topo do módulo (61.3)** — dentro de função vai.
+1. **`Sequence<T>` como parâmetro (60.3/62.1)** — a trait do sistema que está
+   declarada e não serve para o que foi declarada.
+2. **`const def` (65.10)** — função avaliada em compilação.
+3. **`const` de contêiner no topo do módulo (61.3)** — dentro de função vai.
+4. **A LINHA por frame no rastro (34.2).** Hoje um frame diz a função e o
+   arquivo; a linha exigiria uma escrita por instrução que contém chamada. É
+   trabalho pequeno com custo mensurável, e vale medir antes.
+
+O `epoll` saiu desta lista porque não é trabalho: é decisão (ver **D** abaixo).
+
+Também registrado, achado ao conferir: `ps_type_str` imprime `int[]` para
+`int[3]` — o tamanho do array não aparece na mensagem de erro.
