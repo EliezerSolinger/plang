@@ -3468,6 +3468,46 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 96 — `const` no topo, e o congelamento que faltava (2026-08-20)
+
+Duas metades de uma decisão (61.3), e só uma existia.
+
+**96.1 Um `const` que precisa ser CONSTRUÍDO agora existe.** `const NAMES =
+["ada"]` era recusado com "a module-level value that has to be built at run time
+is not compiled yet": um const de módulo virava um `static` do C, e um static
+não segura uma lista. Mas uma variável de módulo MUTÁVEL já mora no conjunto do
+próprio contexto e é construída na ordem do programa — então um const também. O
+que `const` SIGNIFICA é assunto da sema; ONDE ele mora é pergunta sobre o
+contexto, e a resposta já estava escrita ao lado.
+
+O inicializador roda antes das instruções do programa, na ordem da declaração —
+então qualquer instrução pode ler um const, que é o motivo inteiro de existir, e
+o inicializador de um const só pode olhar consts declarados antes dele, que é a
+regra que o P tem para um static.
+
+**96.2 E `const` congela FUNDO.** A 61.3 diz que const proíbe rebinding E
+mutação. Rebinding era recusado; `NAMES.append(x)` não era, nem `NAMES[0] = x`.
+Agora os dois são, onde o const estiver — módulo ou local — e a checagem anda até
+a RAIZ da expressão, porque `cfg.rows.append(x)` muta o que `cfg` tem tanto
+quanto `cfg.append(x)` mutaria.
+
+> **A marca de congelado tem de ser SEPARADA de `is_const`, e descobrir por quê
+> custou um build quebrado.** `self` num método de `struct` é const no sentido de
+> não poder ser reapontado, e mutar o que ele aponta é a razão inteira do método
+> existir (20.1). Com uma marca só, o porte do pstudio parou de compilar na
+> primeira linha que escrevia num campo. O `in self` de um `record` é congelado
+> nos dois sentidos (57.1), e agora a mensagem para esse caso diz isso em vez de
+> falar de const.
+>
+> **E o campo novo tinha de ser inicializado à mão**, porque o vetor de locais
+> vem de `vec_grow`, que devolve memória não inicializada — o comentário que
+> avisa isso está três linhas acima do lugar onde eu esqueci. O sintoma foi um
+> local chamado `out` reportado como const no meio do pstudio.
+
+Portões: `tests/pscript/run/const_deep.psc` e quatro programas em
+`tests/pscript/bad/` (append, escrita indexada, um const local e o `in self` de
+um record).
+
 ## Bateria 95 — `run`, e o cache que a 15.3 tinha pedido (2026-08-20)
 
 **95.1 `plangc run x.psc [args...]`, e `pscript x.psc [args...]` sob o alias.**

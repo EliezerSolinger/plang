@@ -154,6 +154,11 @@ struct PsLocal:
     assigned: bool    # declared without a value: reading it before it gets one
                       #   is an error, the static form of Python's UnboundLocalError
     is_const: bool
+    frozen: bool      # 61.3: `const` freezes DEEP — no rebinding AND no writing
+                      #   through it. `self` in a struct method is const in the
+                      #   first sense and not the second: the receiver cannot be
+                      #   rebound, and mutating what it points at is the whole
+                      #   reason the method exists (20.1).
     is_module: bool   # a top-level declaration: the name is ALSO a module
                       #   variable (42.2), and the two are the same storage
     depth: i32        # block that owns it; `nonlocal` pins a name to depth 0
@@ -256,6 +261,8 @@ struct PsSema:
     static def check_func(self: *PsSema, f: *PsFunc)
     static def check_record_bytes(self: *PsSema, d: *PsDecl)
     static def predef(self: *PsSema, e: *PsExpr) -> *PsType
+    static def const_root(self: *PsSema, e: *PsExpr) -> const *char
+    static def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char)
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char)
     static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
@@ -340,6 +347,12 @@ struct PsSema:
             .type = t
             .assigned = assigned
             .is_const = is_const
+            # NOT `is_const`: freezing is the DEEP half of const (61.3) and the
+            # caller says so — `self` in a struct method is const in the sense
+            # that it cannot be rebound, and mutating what it points at is the
+            # whole reason the method exists. And it has to be written here at
+            # all because of the note below: vec_grow hands back garbage.
+            .frozen = False
             .is_module = False
             # EVERY field, always: the array comes from vec_grow, which hands
             # back uninitialized memory. A stale `opt_type` here reads as
@@ -1283,6 +1296,8 @@ struct PsSema:
                 nm3: const *char = e->lhs->text
                 e->lhs->type = rt
                 kty: *PsType = rt->key if rt->kind == PT_DICT else rt->inner
+                if strcmp(nm3, "add") == 0 or strcmp(nm3, "remove") == 0:
+                    self->deny_const_mut(e->lhs->lhs, self->a->printf("%s()", nm3))
                 if strcmp(nm3, "add") == 0 and rt->kind == PT_SET:
                     if e->nargs != 1:
                         fatal_at(self->file, e->pos, "add() takes one value")
@@ -1360,6 +1375,8 @@ struct PsSema:
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt
+                if lm in {"append", "insert", "remove_at", "reverse"}:
+                    self->deny_const_mut(e->lhs->lhs, self->a->printf("%s()", lm))
                 if strcmp(lm, "append") == 0:
                     if e->nargs != 1:
                         fatal_at(self->file, e->pos, "append() takes one value")
@@ -3295,6 +3312,38 @@ struct PsSema:
             return ps_type(self->a, PT_INT, e->pos)
         return None
 
+    # 61.3: `const` in a REFERENCE freezes deep — `const xs = [1, 2]` forbids
+    # rebinding AND mutation. Rebinding is caught where the assignment is
+    # checked; this is the other half: the NAME a mutation reaches through.
+    #
+    # It walks to the root of the expression, because `cfg.rows.append(x)`
+    # mutates what `cfg` owns just as much as `cfg.append(x)` would.
+    static def const_root(self: *PsSema, e: *PsExpr) -> const *char:
+        cur: *PsExpr = e
+        while cur != None:
+            match cur->kind:
+                case PE_NAME:
+                    return cur->text
+                case PE_FIELD, PE_INDEX, PE_OPTFIELD, PE_OPTINDEX, PE_SLICE:
+                    cur = cur->lhs
+                case _:
+                    return None
+        return None
+
+    static def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char):
+        n: const *char = self->const_root(e)
+        if n == None:
+            return
+        li: i32 = self->find_local(n)
+        if li >= 0:
+            if self->locals[li].frozen:
+                if strcmp(n, "self") == 0:
+                    fatal_at(self->file, e->pos, "a method on a record takes `in self`, which READS the receiver (57.1): %s writes to it — a record is a value, so what a method can do is answer, not change", what)
+                fatal_at(self->file, e->pos, "'%s' is const, and `const` freezes DEEP (61.3): %s is a mutation, and what a const forbids is rebinding AND writing", n, what)
+            return
+        if self->gconst.has(n) or self->gconst.has(self->gname_soft(n)):
+            fatal_at(self->file, e->pos, "'%s' is const, and `const` freezes DEEP (61.3): %s is a mutation, and what a const forbids is rebinding AND writing", n, what)
+
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:
             fatal_at(self->file, pos, "%s has no type", what)
@@ -3368,6 +3417,9 @@ struct PsSema:
             st: *PsType = self->named_type(d->name, f->params[0].pos)
             f->params[0].type = st
             self->add_local("self", st, True, True)
+            if d->kind == PD_RECORD:
+                # `in self` reads and does not write (57.1)
+                self->locals[self->nlocals - 1].frozen = True
             start = 1
         elif not f->is_static:
             fatal_at(self->file, f->pos, "'%s.%s' has no receiver: write `in self` first, or `static def` for a function that needs none", d->name, f->name)
@@ -3662,6 +3714,8 @@ struct PsSema:
                     # the code that follows it, exactly as it did when a
                     # top-level name was nothing but a local.
                     self->add_local(s->name, vt, True, s->is_const)
+                    if s->is_const:
+                        self->locals[self->nlocals - 1].frozen = True
                     self->locals[self->nlocals - 1].is_module = True
                     return
                 here: i32 = self->find_local_here(s->name)
@@ -3687,6 +3741,11 @@ struct PsSema:
                     s->is_assign = True
                     return
                 self->add_local(s->name, vt, s->rhs != None, s->is_const)
+                if s->is_const:
+                    # 61.3: const freezes DEEP, and this is the OTHER declaration
+                    # path — the one an annotated `const xs: list<int> = [...]`
+                    # takes. Two paths, one rule.
+                    self->locals[self->nlocals - 1].frozen = True
                 s->type = vt
             case PS_UNPACK:
                 ut: *PsType = self->check_expr(s->rhs)
@@ -3707,6 +3766,10 @@ struct PsSema:
                     n->type = ut->params[i]
                 s->lhs->type = ut
             case PS_ASSIGN:
+                # 61.3: writing THROUGH a const — `xs[0] = v`, `d[k] = v`,
+                # `obj.field = v` — is a mutation, and a const forbids those too
+                if s->lhs->kind in {PE_INDEX, PE_FIELD, PE_OPTFIELD, PE_OPTINDEX}:
+                    self->deny_const_mut(s->lhs, "writing through it")
                 if s->lhs->kind == PE_INDEX and s->op == TK_ASSIGN:
                     et3: *PsType = self->check_expr(s->lhs)
                     prevhi: *PsType = self->hint

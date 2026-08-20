@@ -1559,6 +1559,7 @@ struct PsLocal {
     PsType *type;
     int assigned;
     int is_const;
+    int frozen;
     int is_module;
     int32_t depth;
     PsType *opt_type;
@@ -1650,6 +1651,10 @@ static void PsSema_check_func(PsSema *self, PsFunc *f);
 static void PsSema_check_record_bytes(PsSema *self, PsDecl *d);
 
 static PsType *PsSema_predef(PsSema *self, PsExpr *e);
+
+static const char *PsSema_const_root(PsSema *self, PsExpr *e);
+
+static void PsSema_deny_const_mut(PsSema *self, PsExpr *e, const char *what);
 
 static void PsSema_key_ok(PsSema *self, PsType *t, Pos pos, const char *what);
 
@@ -1778,15 +1783,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_338_9 = &self->locals[self->nlocals];
-        __with_338_9->name = name;
-        __with_338_9->type = t;
-        __with_338_9->assigned = assigned;
-        __with_338_9->is_const = is_const;
-        __with_338_9->is_module = 0;
-        __with_338_9->opt_type = NULL;
-        __with_338_9->any_type = NULL;
-        __with_338_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_345_9 = &self->locals[self->nlocals];
+        __with_345_9->name = name;
+        __with_345_9->type = t;
+        __with_345_9->assigned = assigned;
+        __with_345_9->is_const = is_const;
+        __with_345_9->frozen = 0;
+        __with_345_9->is_module = 0;
+        __with_345_9->opt_type = NULL;
+        __with_345_9->any_type = NULL;
+        __with_345_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2264,12 +2270,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_803_17 = e;
-                __with_803_17->kind = PE_CALL;
-                __with_803_17->lhs = cal8;
-                __with_803_17->args = args8;
-                __with_803_17->nargs = nc8;
-                __with_803_17->body = NULL;
+                PsExpr *__with_816_17 = e;
+                __with_816_17->kind = PE_CALL;
+                __with_816_17->lhs = cal8;
+                __with_816_17->args = args8;
+                __with_816_17->nargs = nc8;
+                __with_816_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -2814,6 +2820,9 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             const char *nm3 = e->lhs->text;
             e->lhs->type = rt;
             PsType *kty = (rt->kind == PT_DICT ? rt->key : rt->inner);
+            if (strcmp(nm3, "add") == 0 || strcmp(nm3, "remove") == 0) {
+                PsSema_deny_const_mut(self, e->lhs->lhs, Arena_printf(self->a, "%s()", nm3));
+            }
             if (strcmp(nm3, "add") == 0 && rt->kind == PT_SET) {
                 if (e->nargs != 1) {
                     fatal_at(self->file, e->pos, "add() takes one value");
@@ -2907,6 +2916,9 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
         if (rt != NULL && rt->kind == PT_LIST) {
             const char *lm = e->lhs->text;
             e->lhs->type = rt;
+            if (strcmp(lm, "append") == 0 || strcmp(lm, "insert") == 0 || strcmp(lm, "remove_at") == 0 || strcmp(lm, "reverse") == 0) {
+                PsSema_deny_const_mut(self, e->lhs->lhs, Arena_printf(self->a, "%s()", lm));
+            }
             if (strcmp(lm, "append") == 0) {
                 if (e->nargs != 1) {
                     fatal_at(self->file, e->pos, "append() takes one value");
@@ -3946,26 +3958,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2336_17 = e;
-                __with_2336_17->kind = PE_STR;
-                __with_2336_17->text = lit7;
-                __with_2336_17->lhs = NULL;
-                __with_2336_17->rhs = NULL;
-                __with_2336_17->args = NULL;
-                __with_2336_17->nargs = 0;
+                PsExpr *__with_2353_17 = e;
+                __with_2353_17->kind = PE_STR;
+                __with_2353_17->text = lit7;
+                __with_2353_17->lhs = NULL;
+                __with_2353_17->rhs = NULL;
+                __with_2353_17->args = NULL;
+                __with_2353_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2349_13 = e;
-            __with_2349_13->kind = PE_LOWERED;
-            __with_2349_13->low = ln7;
-            __with_2349_13->lhs = NULL;
-            __with_2349_13->rhs = NULL;
-            __with_2349_13->args = NULL;
-            __with_2349_13->nargs = 0;
+            PsExpr *__with_2366_13 = e;
+            __with_2366_13->kind = PE_LOWERED;
+            __with_2366_13->low = ln7;
+            __with_2366_13->lhs = NULL;
+            __with_2366_13->rhs = NULL;
+            __with_2366_13->args = NULL;
+            __with_2366_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4179,10 +4191,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2546_17 = &ns->quals[ns->nquals];
-                __with_2546_17->name = q;
-                __with_2546_17->orig = d->path;
-                __with_2546_17->ns = sub;
+                PsNsEnt *__with_2563_17 = &ns->quals[ns->nquals];
+                __with_2563_17->name = q;
+                __with_2563_17->orig = d->path;
+                __with_2563_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4195,10 +4207,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2558_21 = &ns->ents[ns->nents];
-                    __with_2558_21->name = local;
-                    __with_2558_21->orig = d->names[k];
-                    __with_2558_21->ns = sub;
+                    PsNsEnt *__with_2575_21 = &ns->ents[ns->nents];
+                    __with_2575_21->name = local;
+                    __with_2575_21->orig = d->names[k];
+                    __with_2575_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4559,10 +4571,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2894_9 = e;
-        __with_2894_9->kind = PE_NAME;
-        __with_2894_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2894_9->lhs = NULL;
+        PsExpr *__with_2911_9 = e;
+        __with_2911_9->kind = PE_NAME;
+        __with_2911_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2911_9->lhs = NULL;
     }
     return 1;
 }
@@ -4968,6 +4980,49 @@ static PsType *PsSema_predef(PsSema *self, PsExpr *e) {
     return NULL;
 }
 
+static const char *PsSema_const_root(PsSema *self, PsExpr *e) {
+    PsExpr *cur = e;
+    while (cur != NULL) {
+        switch (cur->kind) {
+            case PE_NAME: {
+                return cur->text;
+            }
+            case PE_FIELD:
+            case PE_INDEX:
+            case PE_OPTFIELD:
+            case PE_OPTINDEX:
+            case PE_SLICE: {
+                cur = cur->lhs;
+                break;
+            }
+            default: {
+                return NULL;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void PsSema_deny_const_mut(PsSema *self, PsExpr *e, const char *what) {
+    const char *n = PsSema_const_root(self, e);
+    if (n == NULL) {
+        return;
+    }
+    int32_t li = PsSema_find_local(self, n);
+    if (li >= 0) {
+        if (self->locals[li].frozen) {
+            if (strcmp(n, "self") == 0) {
+                fatal_at(self->file, e->pos, "a method on a record takes `in self`, which READS the receiver (57.1): %s writes to it — a record is a value, so what a method can do is answer, not change", what);
+            }
+            fatal_at(self->file, e->pos, "'%s' is const, and `const` freezes DEEP (61.3): %s is a mutation, and what a const forbids is rebinding AND writing", n, what);
+        }
+        return;
+    }
+    if (StrSet_has(&self->gconst, n) || StrSet_has(&self->gconst, PsSema_gname_soft(self, n))) {
+        fatal_at(self->file, e->pos, "'%s' is const, and `const` freezes DEEP (61.3): %s is a mutation, and what a const forbids is rebinding AND writing", n, what);
+    }
+}
+
 static void PsSema_key_ok(PsSema *self, PsType *t, Pos pos, const char *what) {
     if (t == NULL) {
         fatal_at(self->file, pos, "%s has no type", what);
@@ -5053,6 +5108,9 @@ static void PsSema_check_method(PsSema *self, PsDecl *d, PsFunc *f) {
         PsType *st = PsSema_named_type(self, d->name, f->params[0].pos);
         f->params[0].type = st;
         PsSema_add_local(self, "self", st, 1, 1);
+        if (d->kind == PD_RECORD) {
+            self->locals[self->nlocals - 1].frozen = 1;
+        }
         start = 1;
     } else if (!f->is_static) {
         fatal_at(self->file, f->pos, "'%s.%s' has no receiver: write `in self` first, or `static def` for a function that needs none", d->name, f->name);
@@ -5364,6 +5422,9 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 s->is_global = 1;
                 Vec_pPsStmt_push(&self->mvars, s);
                 PsSema_add_local(self, s->name, vt, 1, s->is_const);
+                if (s->is_const) {
+                    self->locals[self->nlocals - 1].frozen = 1;
+                }
                 self->locals[self->nlocals - 1].is_module = 1;
                 return;
             }
@@ -5390,6 +5451,9 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 return;
             }
             PsSema_add_local(self, s->name, vt, s->rhs != NULL, s->is_const);
+            if (s->is_const) {
+                self->locals[self->nlocals - 1].frozen = 1;
+            }
             s->type = vt;
             break;
         }
@@ -5420,6 +5484,9 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
             break;
         }
         case PS_ASSIGN: {
+            if (s->lhs->kind == PE_INDEX || s->lhs->kind == PE_FIELD || s->lhs->kind == PE_OPTFIELD || s->lhs->kind == PE_OPTINDEX) {
+                PsSema_deny_const_mut(self, s->lhs, "writing through it");
+            }
             if (s->lhs->kind == PE_INDEX && s->op == TK_ASSIGN) {
                 PsType *et3 = PsSema_check_expr(self, s->lhs);
                 PsType *prevhi = self->hint;

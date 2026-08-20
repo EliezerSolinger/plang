@@ -8531,7 +8531,15 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         if d->init != None and ps_is_const_init(d->init):
             g->init = L.expr(d->init)
         elif d->init != None:
-            fatal_at(m->path, d->pos, "a module-level value that has to be built at run time is not compiled yet (it would need a context before there is one)")
+            # 61.3: a `const` whose value has to be BUILT — a list, a dict, a
+            # string that is not a literal — lives in the context's own set,
+            # like any other module variable, and is built in the same init.
+            # What `const` MEANS is the sema's business (no rebinding, no
+            # mutation, and it freezes deep); WHERE it lives is a question about
+            # the context, and the answer is the same as for a mutable one.
+            gv.push(d)
+            L.gvars.add(d->name)
+            continue
         L.out.push(g)
     if gv.len > 0:
         L.out.push(lower_globals_struct(&L, gv))
@@ -8666,6 +8674,24 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     # context has to be built before anything can reference it
     top: Vec<*Stmt>
     top.init()
+    # 61.3: a `const` whose value has to be BUILT is a module variable that
+    # lives in the context's set, and its initializer is code — so it runs
+    # here, in declaration order, BEFORE the program's own statements. A const
+    # can therefore be read by any of them, which is the whole point of it, and
+    # its initializer may only look at consts declared before it, which is the
+    # rule P has for a static.
+    for j in range(m->ndecls):
+        dc9: *PsDecl = m->decls[j]
+        if dc9->kind != PD_VAR or not dc9->is_const or dc9->init == None:
+            continue
+        if ps_is_const_init(dc9->init):
+            continue        # a C static: already initialized where it is declared
+        cs9: *PsStmt = ps_stmt(a, PS_VAR, dc9->pos)
+        cs9->name = dc9->name
+        cs9->type = dc9->type
+        cs9->rhs = dc9->init
+        cs9->is_global = True
+        L.stmt(cs9, &top)
     if m->main != None:
         for j in range(m->main->n):
             L.stmt(m->main->stmts[j], &top)

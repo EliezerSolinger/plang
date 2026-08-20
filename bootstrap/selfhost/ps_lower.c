@@ -8909,7 +8909,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         if (d->init != NULL && ps_is_const_init(d->init)) {
             g->init = PsLow_expr(&L, d->init);
         } else if (d->init != NULL) {
-            fatal_at(m->path, d->pos, "a module-level value that has to be built at run time is not compiled yet (it would need a context before there is one)");
+            Vec_pPsDecl_push(&gv, d);
+            StrSet_add(&L.gvars, d->name);
+            continue;
         }
         Vec_pDecl_push(&L.out, g);
     }
@@ -9050,13 +9052,27 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     }
     Vec_pStmt top;
     Vec_pStmt_init(&top);
+    size_t j;
+    for (j = 0; j < m->ndecls; j += 1) {
+        PsDecl *dc9 = m->decls[j];
+        if (dc9->kind != PD_VAR || !dc9->is_const || dc9->init == NULL) {
+            continue;
+        }
+        if (ps_is_const_init(dc9->init)) {
+            continue;
+        }
+        PsStmt *cs9 = ps_stmt(a, PS_VAR, dc9->pos);
+        cs9->name = dc9->name;
+        cs9->type = dc9->type;
+        cs9->rhs = dc9->init;
+        cs9->is_global = 1;
+        PsLow_stmt(&L, cs9, &top);
+    }
     if (m->main != NULL) {
-        size_t j;
         for (j = 0; j < m->main->n; j += 1) {
             PsLow_stmt(&L, m->main->stmts[j], &top);
         }
     }
-    size_t j;
     for (j = 0; j < L.nshz; j += 1) {
         Stmt *fx = st_new(a, ST_ASSIGN, zp);
         Expr *fl9 = ex_new(a, EX_FIELD, zp);

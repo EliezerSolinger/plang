@@ -152,7 +152,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 54.2–54.3, 55.1–55.4 | construtor, `raise`, `as`, `in` | **OK** |
 | 59.x, 62.4 | `pack`/`unpack` de record | **OK** |
 | 61.1 | continuação só por parênteses | **OK** — `\` é recusado (a mensagem podia nomear a 61.1) |
-| 61.3 | `const` em referência congela fundo | **PARCIAL** — dentro de função vai; no topo do módulo, "not compiled yet" |
+| 61.3 | `const` em referência congela fundo | **OK** — bateria 96: const de módulo que precisa ser construído, e o congelamento fundo (append/escrita indexada recusados) |
 | 61.4 | `for k in d`, `items`/`keys`/`values`, `x in list`, `"ab" in s` | **OK** — as três views FECHADAS nesta varredura |
 | 33.4, 60.2 | `T[N]` local/parâmetro/campo, e `in` para atravessar | **OK** — três defeitos consertados na bateria 93 (atribuição indexada era escrita selvagem, local com literal não compilava, `in` sobre array não compilava) |
 | 49.2 | exceção por flag, checada por chamada | **OK** — bateria 94: o ZERO de um tipo coletado passou a ser objeto vazio, porque NULL no meio de uma expressão era segfault |
@@ -262,7 +262,7 @@ trabalho:
 1. **`Sequence<T>` como parâmetro (60.3/62.1)** — a trait do sistema que está
    declarada e não serve para o que foi declarada.
 2. **`const def` (65.10)** — função avaliada em compilação.
-3. **`const` de contêiner no topo do módulo (61.3)** — dentro de função vai.
+3. ~~`const` de contêiner no topo do módulo (61.3)~~ — FECHOU na bateria 96.
 4. **A LINHA por frame no rastro (34.2).** Hoje um frame diz a função e o
    arquivo; a linha exigiria uma escrita por instrução que contém chamada. É
    trabalho pequeno com custo mensurável, e vale medir antes.

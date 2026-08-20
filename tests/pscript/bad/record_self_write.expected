@@ -1,0 +1,1 @@
+a method on a record takes `in self`, which READS the receiver (57.1)
