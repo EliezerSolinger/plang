@@ -1,8 +1,21 @@
 Pt(x=1, y=2)
 Line(a=Pt(x=0, y=0), b=Pt(x=3, y=4), tint=BLUE)
 GREEN
-Named(label=origin, at=Pt(x=1, y=2))
+Named(label='origin', at=Pt(x=1, y=2))
 $2
 value: Pt(x=1, y=2) and RED
 in a string: Pt(x=1, y=2) / BLUE / $0
 True
+[1, 2, 3]
+['ada', "it's", 'a "b"']
+{'a': 1, 'bb': 22}
+{3, 1}
+[1.5, 2.0]
+[] {} set()
+[[1, 2], [3]]
+{'a': [1, 2], 'b': []}
+[{1}, {2, 3}]
+Named(label='origin', at=Pt(x=1, y=2))
+[Named(label='a', at=Pt(x=1, y=2))]
+na f-string: [1, 2, 3] / {'a': 1, 'bb': 22}
+True 18

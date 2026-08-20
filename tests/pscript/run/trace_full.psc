@@ -1,4 +1,4 @@
-"""The same file as `trace.psc`, built with `--trace` (see the `.flags` file).
+"""The same file as `trace.psc`, built with `-g` (see the `.flags` file).
 
 The flag gives EVERY pscript function a frame, so the trace names the ones that
 hold nothing collected too — here `<main>`, which holds nothing at all. The

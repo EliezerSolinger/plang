@@ -7,7 +7,7 @@ prints the pscript frames, and then dies exactly as it would have, so the exit
 status and the core file are unchanged. It does not catch anything.
 
 The crash itself is a wild write in P, which is where a pointer can be wrong at
-all (9.2). Built with `--trace` so every frame has a name — see the `.flags`
+all (9.2). Built with `-g` so every frame has a name — see the `.flags`
 file; without it the frames that hold nothing collected are simply not there.
 
 What this CANNOT report is a crash that ran out of stack: the handler would run

@@ -6,7 +6,7 @@ Two things live in this file because one found the other.
 time anyone reports it the stack has unwound — and each frame that belongs to a
 FUNCTION carries its name and file. A function with nothing collected in it has
 no frame at all (the leaf optimisation of 49.4), so it cannot be named: what is
-printed is what the shadow stack knew, never a guess. `--trace` gives every
+printed is what the shadow stack knew, never a guess. `-g` gives every
 function a frame and names them all, at the price of a push and a pop per call.
 
 **The zero value.** Writing the test above crashed the compiler's own output,

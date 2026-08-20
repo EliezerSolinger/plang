@@ -81,3 +81,16 @@ n = 0
 while (room := 3 - n) > 0:
     print("room", room)
     n += 1
+
+# ---- o repr de contêiner (97), contra o Python ----
+print("list", [1, 2, 3])
+print("strs", ["ada", "it's", "a \"b\""])
+print("dict", {"a": 1, "bb": 22})
+print("floats", [1.5, 2.0, -0.25])
+print("nested", [[1, 2], [3]])
+print("dict of list", {"a": [1, 2], "b": []})
+evazia = []
+edict = {}
+print("empty", evazia, edict)
+print("in fstring", f"{[1, 2]} and {edict}")
+print("str()", str([1, 2, 3]), len(str({"a": 1})))

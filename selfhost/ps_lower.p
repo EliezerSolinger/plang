@@ -34,6 +34,7 @@ import "ps_sema.ph"
 import "ps_parser.ph"
 import "vecs.ph"
 
+declare Vec<*PsType>
 declare Vec<PsField>   # implemented in ps_parser.p
 declare Vec<*PsFunc>   # implemented in ps_sema.p
 declare Vec<*PsExpr>   # implemented in ps_parser.p
@@ -178,6 +179,12 @@ struct PsLow:
                          #   each needs an adapter of its own, for the same
                          #   reason `sorted(key=)` does — only the call site
                          #   knows the element type, and the runtime sees bytes
+    reprads: Vec<*PsType> # 97: rendering ONE element of a container. The runtime
+                          #   moves bytes and knows nothing about them, so the
+                          #   adapter is emitted per ELEMENT TYPE — deduped by
+                          #   the mangled name, which is what makes a nested
+                          #   container work: the adapter for `list<int>` calls
+                          #   the one for `int`.
     cmpads: Vec<*PsExpr> # `sorted(xs)` over a `Comparable` type (62.1): one
                          #   adapter per call site, for the same reason the
                          #   `key=` one needs it — only the call site knows what
@@ -240,6 +247,7 @@ struct PsLow:
     static def decl_named(self: *PsLow, name: const *char) -> *PsDecl
     static def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc
     static def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
+    static def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
     static def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     static def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
     static def guard(self: *PsLow, pos: Pos) -> *Stmt
@@ -287,6 +295,9 @@ struct PsLow:
     static def chr(self: *PsLow, e: *PsExpr, pos: Pos) -> *Expr
     static def tuple_record(self: *PsLow, t: *PsType) -> const *char
     static def option_record(self: *PsLow, inner: *PsType) -> const *char
+    static def reprad_name(self: *PsLow, t: *PsType) -> const *char
+    static def reprad_need(self: *PsLow, t: *PsType, depth: i32)
+    static def reprad_add(self: *PsLow, t: *PsType, depth: i32)
     static def elem_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
     static def elem_at(self: *PsLow, lst: *Expr, idx: *Expr, et: *PsType, pos: Pos) -> *Expr
     static def dict_new(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
@@ -951,13 +962,79 @@ struct PsLow:
             out2 = self->str_cat(out2, fs, pos)
         return self->str_cat(out2, self->str_lit(")", pos), pos)
 
+    # 97: the repr of a CONTAINER — `[1, 2]`, `{'a': 1}`, `{1, 2}`. The runtime
+    # walks the bytes and calls back for each element, because only here is it
+    # known what an element IS.
+    static def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
+        match t->kind:
+            case PT_LIST, PT_ARRAY:
+                # an array has no header the runtime can walk, so it becomes a
+                # list first — which is what `str()` of one already did
+                if t->kind == PT_ARRAY:
+                    return None
+                c: *Expr = self->call_rt("ps_repr_seq", pos)
+                self->push_arg(c, self->ctx_arg(pos))
+                self->push_arg(c, v)
+                ob: *Expr = ex_new(self->a, EX_STRING, pos)
+                ob->text = "\"[\""
+                self->push_arg(c, ob)
+                cb: *Expr = ex_new(self->a, EX_STRING, pos)
+                cb->text = "\"]\""
+                self->push_arg(c, cb)
+                ad: *Expr = ex_new(self->a, EX_IDENT, pos)
+                ad->text = self->reprad_name(t->inner)
+                self->push_arg(c, ad)
+                self->push_arg(c, ex_new(self->a, EX_NONE, pos))
+                self->allocs = True
+                self->raised = True
+                return c
+            case PT_SET:
+                sc: *Expr = self->call_rt("ps_repr_dict", pos)
+                self->push_arg(sc, self->ctx_arg(pos))
+                self->push_arg(sc, v)
+                ka: *Expr = ex_new(self->a, EX_IDENT, pos)
+                ka->text = self->reprad_name(t->inner)
+                self->push_arg(sc, ka)
+                self->push_arg(sc, ex_new(self->a, EX_NONE, pos))
+                self->push_arg(sc, ex_new(self->a, EX_NONE, pos))
+                self->allocs = True
+                self->raised = True
+                return sc
+            case PT_DICT:
+                dc: *Expr = self->call_rt("ps_repr_dict", pos)
+                self->push_arg(dc, self->ctx_arg(pos))
+                self->push_arg(dc, v)
+                kb: *Expr = ex_new(self->a, EX_IDENT, pos)
+                kb->text = self->reprad_name(t->key)
+                self->push_arg(dc, kb)
+                vb: *Expr = ex_new(self->a, EX_IDENT, pos)
+                vb->text = self->reprad_name(t->inner)
+                self->push_arg(dc, vb)
+                self->push_arg(dc, ex_new(self->a, EX_NONE, pos))
+                self->allocs = True
+                self->raised = True
+                return dc
+            case _:
+                return None
+
     # one VALUE rendered: the scalars the runtime already formats, a string as
     # itself, and anything named goes back through repr_of
     static def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
         if t == None:
             return None
         match t->kind:
+            case PT_LIST, PT_SET, PT_DICT:
+                return self->repr_container(v, t, pos)
             case PT_STR:
+                # 97.1: INSIDE something, a string is quoted — `['a, b']` and
+                # `['a', 'b']` print the same without it, and one of the two is
+                # a lie. At the top `print(s)` is the string itself.
+                if depth > 0:
+                    q: *Expr = self->call_rt("ps_str_quoted", pos)
+                    self->push_arg(q, self->ctx_arg(pos))
+                    self->push_arg(q, v)
+                    self->allocs = True
+                    return q
                 return v
             case PT_INT:
                 c: *Expr = self->call_rt("ps_str_from_uint" if t->uns and t->width == 64 else "ps_str_from_int", pos)
@@ -999,11 +1076,11 @@ struct PsLow:
                 name = "ps_str_from_float"
             case PT_BOOL:
                 name = "ps_str_from_bool"
-            case PT_LIST:
+            case PT_LIST, PT_SET, PT_DICT:
                 # 79.1: `str(b)` is how bytes become text, and it CHECKS —
                 # a `str` promises codepoints, so bytes that are not valid
                 # UTF-8 raise instead of quietly making one that lies
-                if e->type->inner != None and e->type->inner->kind == PT_INT and e->type->inner->width == 8:
+                if e->type->kind == PT_LIST and e->type->inner != None and e->type->inner->kind == PT_INT and e->type->inner->width == 8:
                     bc: *Expr = self->call_rt("ps_str_from_bytes", e->pos)
                     self->push_arg(bc, self->ctx_arg(e->pos))
                     self->push_arg(bc, v)
@@ -1011,8 +1088,11 @@ struct PsLow:
                     self->raised = True
                     self->allocs = True
                     return bc
-                fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type))
-                return None
+                # 97: every other container renders like Python's
+                rc9: *Expr = self->repr_container(v, e->type, e->pos)
+                if rc9 == None:
+                    fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type))
+                return rc9
             case PT_NAME:
                 # a record, a struct or an enum: the derived form (44.3), or
                 # the type's own `to_str()` when it wrote one
@@ -3639,6 +3719,48 @@ struct PsLow:
     # ---------- options ----------
     # `__PsOpt_<mangled>` — one record per wrapped type, `{has, v}`. A record
     # and not a struct, because it is a value and holds only what T holds.
+    # 97: the name of the adapter that renders one value of this type. Mangled
+    # from the type, so the same type asked for twice is the same function.
+    static def reprad_name(self: *PsLow, t: *PsType) -> const *char:
+        b: StrBuf = {0}
+        b.puts("__ps_reprad_")
+        self->mangle_type(&b, t)
+        n: const *char = self->a->strdup(b.data)
+        b.deinit()
+        return n
+
+    # Registers what a repr of this type will need, BEFORE any body is lowered:
+    # C wants the prototype first, and the set is only knowable by walking the
+    # types. Bounded by the same depth the static expansion of a record uses.
+    static def reprad_need(self: *PsLow, t: *PsType, depth: i32):
+        if t == None or depth > 4:
+            return
+        match t->kind:
+            case PT_LIST, PT_ARRAY, PT_SET:
+                self->reprad_add(t->inner, depth)
+            case PT_DICT:
+                self->reprad_add(t->key, depth)
+                self->reprad_add(t->inner, depth)
+            case PT_OPT:
+                self->reprad_need(t->inner, depth + 1)
+            case PT_NAME:
+                d: *PsDecl = self->decl_named(t->name)
+                if d != None and d->kind != PD_ENUM:
+                    for i in range(d->nfields):
+                        self->reprad_need(d->fields[i].type, depth + 1)
+            case _:
+                pass
+
+    static def reprad_add(self: *PsLow, t: *PsType, depth: i32):
+        if t == None:
+            return
+        n: const *char = self->reprad_name(t)
+        for i in range(self->reprads.len):
+            if strcmp(self->reprad_name(self->reprads.data[i]), n) == 0:
+                return
+        self->reprads.push(t)
+        self->reprad_need(t, depth + 1)
+
     static def option_record(self: *PsLow, inner: *PsType) -> const *char:
         b: StrBuf = {0}
         b.puts("__PsOpt_")
@@ -3797,6 +3919,31 @@ struct PsLow:
                 for i in range(t->nparams):
                     self->mangle_type(b, t->params[i])
                 b.puts("E")
+            # the containers mangle too, because 97 names one repr adapter per
+            # ELEMENT TYPE and an element can be a container itself
+            case PT_LIST:
+                b.puts("L")
+                self->mangle_type(b, t->inner)
+                b.puts("E")
+            case PT_SET:
+                b.puts("S")
+                self->mangle_type(b, t->inner)
+                b.puts("E")
+            case PT_DICT:
+                b.puts("D")
+                self->mangle_type(b, t->key)
+                self->mangle_type(b, t->inner)
+                b.puts("E")
+            case PT_OPT:
+                b.puts("O")
+                self->mangle_type(b, t->inner)
+                b.puts("E")
+            case PT_ARRAY:
+                b.puts("A")
+                self->mangle_type(b, t->inner)
+                b.puts("E")
+            case PT_ANY:
+                b.puts("y")
             case _:
                 fatal_at(self->file, t->pos, "%s cannot be a tuple element yet", ps_type_str(self->a, t))
 
@@ -3806,6 +3953,20 @@ struct PsLow:
     # something already decided.
     static def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr:
         vt: PsTypeKind = e->args[0]->type->kind if e->args[0]->type != None else PT_UNKNOWN
+        if vt == PT_LIST or vt == PT_SET or vt == PT_DICT:
+            # 97: a container in an f-string says exactly what `print` says about
+            # it — same text, one implementation. Width and alignment still
+            # apply, because what arrives at the formatter is a string.
+            rc8: *Expr = self->repr_container(self->expr(e->args[0]), e->args[0]->type, e->pos)
+            if rc8 == None:
+                fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, e->args[0]->type))
+            cs8: *Expr = self->call_rt("ps_fmt_str", e->pos)
+            self->push_arg(cs8, self->ctx_arg(e->pos))
+            self->push_arg(cs8, rc8)
+            self->push_arg(cs8, self->expr(e->args[1]))
+            self->push_arg(cs8, self->chr(e->args[3], e->pos))
+            self->allocs = True
+            return cs8
         if vt == PT_NAME:
             # the derived repr (44.3), then formatted as the STRING it is: an
             # f-string says the same thing `print` does about the same value
@@ -5911,6 +6072,13 @@ static def collect_lams_b(L: *PsLow, b: *PsBlock)
 static def collect_lams_e(L: *PsLow, e: *PsExpr):
     if e == None:
         return
+    # 97: what a repr will need, registered BEFORE any body is lowered — C wants
+    # the prototype first. The trigger points are exactly the three that reach
+    # `to_str`: `print`, `str` and the f-string's `__fmt`.
+    if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and (strcmp(e->lhs->text, "print") == 0 or strcmp(e->lhs->text, "str") == 0 or strcmp(e->lhs->text, "aprint") == 0 or strcmp(e->lhs->text, "__fmt") == 0):
+        for i in range(e->nargs):
+            if e->args[i] != None:
+                L->reprad_need(e->args[i]->type, 0)
     if e->kind == PE_LAMBDA:
         L->lams.push(e)
     if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and strcmp(e->lhs->text, "sorted") == 0 and e->nargs == 2:
@@ -6047,6 +6215,57 @@ static def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl
 # the only place that knows what they are, and it is where the difference
 # between a record (a VALUE in the array) and a struct (a REFERENCE in it)
 # lives.
+# `static PsStr *__ps_reprad_T(void *env, PsCtx *ctx, const void *ep)` — how the
+# runtime renders one element of a container (97). The element arrives by
+# POINTER because the runtime moves bytes; this is the only place that knows
+# what those bytes are, and it is where a string gets its quotes.
+static def lower_reprad(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
+    pf: *Func = L->a->alloc(sizeof(Func))
+    pf->pos = t->pos
+    pf->name = L->reprad_name(t)
+    pf->cname = pf->name
+    pf->is_static = True
+    pf->ret = ty_ptr(L->a, ty_name(L->a, "PsStr"))
+    pf->params = L->a->alloc(usize(3) * sizeof(*pf->params))
+    pf->params[0].name = "__envp"
+    pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[0].pos = t->pos
+    pf->params[1].name = CTX
+    pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    pf->params[1].pos = t->pos
+    pf->params[2].name = "__ep"
+    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[2].pos = t->pos
+    pf->nparams = 3
+    d: *Decl = L->a->alloc(sizeof(Decl))
+    d->kind = DL_FUNC
+    d->pos = t->pos
+    d->func = pf
+    if not with_body:
+        return d
+    # `*(T *)__ep` — the element itself
+    ca: *Expr = ex_new(L->a, EX_CAST, t->pos)
+    ca->cast_type = ty_ptr(L->a, L->ty(t))
+    ca->lhs = L->ident("__ep", t->pos)
+    ca->parened = True
+    dv: *Expr = ex_new(L->a, EX_UNARY, t->pos)
+    dv->op = TK_STAR
+    dv->lhs = ca
+    # depth 1: whatever this is, it is INSIDE a container, so a string quotes
+    body_e: *Expr = L->repr_value(dv, t, t->pos, 1)
+    if body_e == None:
+        fatal_at(L->file, t->pos, "no derived form for an element of type %s (44.3/97)", ps_type_str(L->a, t))
+    rs: *Stmt = st_new(L->a, ST_RETURN, t->pos)
+    rs->expr = body_e
+    body: Vec<*Stmt>
+    body.init()
+    body.push(rs)
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = body.data
+    b->n = body.len
+    pf->body = b
+    return d
+
 static def lower_cmpad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
     et: *PsType = e->args[0]->type->inner
     pf: *Func = L->a->alloc(sizeof(Func))
@@ -8300,6 +8519,7 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.gmads.init()
     L.keyads.init()
     L.cmpads.init()
+    L.reprads.init()
     L.fnvals.init()
     L.nl_names.init()
     L.nl_done.init()
@@ -8470,6 +8690,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, False))
     for i in range(L.cmpads.len):
         L.out.push(lower_cmpad(&L, L.cmpads.data[i], i, False))
+    for i in range(L.reprads.len):
+        L.out.push(lower_reprad(&L, L.reprads.data[i], False))
     for i in range(L.gmads.len):
         L.out.push(lower_gmad(&L, L.gmads.data[i], i, False))
     for i in range(L.fnvals.len):
@@ -8573,6 +8795,11 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, True))
     for i in range(L.cmpads.len):
         L.out.push(lower_cmpad(&L, L.cmpads.data[i], i, True))
+    # the bodies come AFTER the prototypes, and a body may name another adapter
+    # (`list<list<int>>` calls the one for `list<int>`) — which is why the list
+    # is complete before any of them is written
+    for i in range(L.reprads.len):
+        L.out.push(lower_reprad(&L, L.reprads.data[i], True))
     for i in range(L.gmads.len):
         L.out.push(lower_gmad(&L, L.gmads.data[i], i, True))
     for i in range(L.fnvals.len):

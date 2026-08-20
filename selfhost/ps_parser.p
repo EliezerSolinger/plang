@@ -378,6 +378,22 @@ struct PsP:
                 return ps_expr(self->a, PE_NONE, pos)
             case TK_IDENT:
                 self->adv()
+                # `set<T>()` — the empty SET (4.x/38.1). `{}` is the empty DICT,
+                # as in Python, so the empty set needs a spelling of its own, and
+                # the sema has been recommending this one in a message while the
+                # parser could not read it: `set < int > ()` came out as a chain
+                # of comparisons. Recognised by the shape `set` `<`, which is
+                # why `set` stops being usable as the left side of a `<`.
+                if strcmp(tk->text, "set") == 0 and self->at(TK_LT):
+                    self->adv()
+                    st9: *PsType = ps_type(self->a, PT_SET, pos)
+                    st9->inner = self->parse_type()
+                    self->expect_gt("set<T>()")
+                    self->expect(TK_LPAREN, "set<T>()")
+                    self->expect(TK_RPAREN, "set<T>()")
+                    es9: *PsExpr = ps_expr(self->a, PE_SET, pos)
+                    es9->type = st9
+                    return es9
                 # (x := e) — the walrus, at function scope like Python's (45.2)
                 if self->at(TK_WALRUS):
                     self->adv()

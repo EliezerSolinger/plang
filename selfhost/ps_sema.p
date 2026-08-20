@@ -1026,6 +1026,12 @@ struct PsSema:
                 t = dw
             case PE_SET:
                 if e->nargs == 0:
+                    # `set<T>()`: the parser already read the element type onto
+                    # the node, and there is nothing to infer from
+                    if e->type != None and e->type->kind == PT_SET:
+                        t = self->resolve_type(e->type)
+                        e->type = t
+                        return t
                     fatal_at(self->file, e->pos, "`{}` is the empty DICT; an empty set is `set<T>()`")
                 et5: *PsType = self->check_expr(e->args[0])
                 self->key_ok(et5, e->pos, "a set element")
@@ -2167,7 +2173,9 @@ struct PsSema:
             vt2: *PsType = self->check_expr(e->args[0])
             # a record, a struct or an enum formats through its derived repr
             # (44.3) — the same text `print` and `str()` give
-            if vt2 == None or vt2->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_NAME}:
+            # ... and a CONTAINER through its own (97), which is the same text
+            # again: one repr, three ways of asking for it
+            if vt2 == None or vt2->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_NAME, PT_LIST, PT_SET, PT_DICT}:
                 fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, vt2))
             for i in range(1, 5):
                 self->check_expr(e->args[i])

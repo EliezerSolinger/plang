@@ -579,7 +579,9 @@ struct PsCtx:
                          #   function with one can be called from inside another
     nogc_budget: usize   # bytes the innermost budgeted block promised (26.2);
                          #   0 = no budget, and then there is nothing to exceed
-    nogc_start: usize    # `alloced` when that block began, so what it spent is
+    nogc_start: usize
+    repr_depth: i32     # 97.2: how deep a container repr is, so a cycle through
+                        #   one prints `...` instead of running out of stack    # `alloced` when that block began, so what it spent is
                          #   a subtraction
 
 def ps_ctx_init(out ctx: PsCtx)
@@ -994,6 +996,9 @@ def ps_str_new(ctx: *PsCtx, bytes: const *char, len: usize) -> *PsStr
 def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr
 def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr
 def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr
+def ps_str_quoted(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_repr_seq(ctx: *PsCtx, l: *PsList, open: const *char, close: const *char, fn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr
+def ps_repr_dict(ctx: *PsCtx, d: *PsDict, kfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, vfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr
 def ps_str_from_bool(ctx: *PsCtx, v: bool) -> *PsStr
 def ps_str_eq(a: *PsStr, b: *PsStr) -> bool
 # `<` `<=` `>` `>=` between strings compare CONTENT, byte by byte and then by

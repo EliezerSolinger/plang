@@ -3702,22 +3702,20 @@ processo, e o defeito era anterior a tudo o que esta bateria fez.
 bump num caminho que já está desenrolando, e o invariante cabe numa frase. Vale
 para `str` (vazia), `list` e `dict` (vazios) e `struct` (zerado pelo `ps_new`).
 
-**94.4 O que continua PENDENTE e é sua decisão: o rastro completo custa 50%.**
+**94.4 RESPONDIDA na bateria 100: `-g` liga, e o padrão é o rápido.** O texto
+abaixo fica porque é a medição que decidiu.
 Uma função sem nada coletado dentro não tem frame nenhum (a otimização de folha
-que a 49.4 deixou anotada), então não pode ser nomeada. `--trace` dá frame a
+que a 49.4 deixou anotada), então não pode ser nomeada. `-g` dá frame a
 toda função de pscript e nomeia todas — e o preço, medido no fib(35), que é
 nada além de chamada: **0,03s viram 0,05s**. Em código de verdade é ruído; num
 benchmark de chamada é metade.
 
-  * (a) como está: `--trace` é opt-in, e o rastro nomeia o que tinha frame;
-  * (b) `--trace` por padrão, e quem quer o benchmark passa `--no-trace`;
-  * (c) sempre ligado, sem flag.
-
-Não implementei nenhuma mudança de padrão: hoje é (a), que é o que já estava
-valendo por acidente. As três estão medidas; a escolha é sua.
+Sua escolha: **release por padrão, `-g` liga** (100.1) — e o `-g` também pede
+`-g -O0` ao compilador C no `run`, porque um rastro completo com o binário
+otimizado ainda deixa metade da pergunta sem resposta.
 
 Portões: `tests/pscript/run/trace.psc` (o rastro e o zero que não crasha),
-`trace_full.psc` (o mesmo com `--trace`, para ver o que a flag ACRESCENTA) e
+`trace_full.psc` (o mesmo com `-g`, para ver o que a flag ACRESCENTA) e
 `crash_stack.psc` (o handler, com uma escrita selvagem em P e saída 139).
 
 ## Bateria 93 — a varredura, segunda leva: o que estava decidido e não existia (2026-08-20)

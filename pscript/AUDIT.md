@@ -130,7 +130,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 29.x | tipo de função, `any` e `def` separados, `as def(...)` | **ok** |
 | 32.1–32.3 | `int + float` promove, ÷0 lança, `id(x)` | **ok** |
 | 33.3–33.4, 60.x | `T[N]` como tipo completo, `in` para atravessar | **ok** |
-| 34.2 | rastro de pilha `em f (arq.psc)` | **OK** — bateria 94; a LINHA por frame não (custaria uma escrita por chamada), e a função sem frame só aparece com `--trace` |
+| 34.2 | rastro de pilha `em f (arq.psc)` | **OK** — bateria 94; a LINHA por frame não (custaria uma escrita por chamada), e a função sem frame só aparece com `-g` (bateria 100) |
 | 39.1 | divisão do Python (`/` dá float, `//` piso) | **OK** — oráculo `py/arith` |
 | 39.4 | top-level await | **OK** |
 | 40.1 | truthiness só de bool e `T?` | **OK** — `if 1:` é recusado com a razão |
@@ -138,7 +138,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 41.x, 42.x | json, regex, namespace, `shared` | **OK** |
 | 43.x | narrowing, `??`, `?.`, `?[i]`, `finally` | **OK** |
 | 44.1–44.2 | default por chamada, `*args` com splat | **ok** |
-| 44.3 | `print(rect)` mostra `Rect(x=1, y=2)` | **OK** — e `Printable.to_str()` sobrepõe |
+| 44.3 | `print(rect)` mostra `Rect(x=1, y=2)` | **OK** — e `Printable.to_str()` sobrepõe; o repr de CONTÊINER entrou na bateria 97 |
 | 45.1 | f-string com formato | **OK** |
 | 45.2 | walrus e fatia com passo | **OK** — o walrus FECHADO nesta varredura (era "parsed but not compiled") |
 | 46.4 | `assert` strippable por flag de build | **OK** — `-O`/`--no-assert`, bateria 93 |
@@ -212,11 +212,9 @@ comparando `items`/`keys`/`values` e o walrus contra o Python.
 
 ## O que precisa de DECISÃO sua (não implementei, não decidi)
 
-**A. `print` de um contêiner.** Hoje `print([1, 2, 3])` é "str() of list<int> is
-not compiled yet". A 44.3 decidiu o repr derivado de `struct`/`record`/`enum`,
-e não falou de contêiner. O Python imprime `[1, 2, 3]` e `{'a': 1}` — o que
-arrasta decisões (aspas nas strings de dentro, `{}` de dict versus de set, repr
-de float dentro do contêiner). É promessa pública: fica para você.
+**A. `print` de um contêiner — RESPONDIDA (bateria 97) e implementada.** Como o
+Python, com aspas nas strings de dentro. Confere caractere por caractere contra
+o Python no par `tests/oracle/py/collections`.
 
 **B. Tupla no pscript: terminar ou tirar.** A 3.2 diz primeira classe, a 38.2 diz
 imutável, a 54.4 deu a sintaxe do tipo — e o que existe é o tipo e o literal

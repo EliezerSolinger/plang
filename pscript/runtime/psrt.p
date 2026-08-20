@@ -174,6 +174,7 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.nogc = 0
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
+    ctx.repr_depth = 0
 
 # ---------- the crash that says where it was (12.4) ----------
 # 12.4 decided that failure in C is a CRASH and failure in pscript is an
@@ -4516,6 +4517,163 @@ def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr:
 # standard recipe, and the reason `0.1 + 0.2` prints all its digits instead of a
 # tidy lie. A result with no '.', 'e', 'inf' or 'nan' in it gets a ".0", because
 # a float that prints as `2` is indistinguishable from an int.
+# ---------- the repr of a container (97) ----------
+# `print([1, 2, 3])` shows `[1, 2, 3]`, and a string INSIDE shows with quotes.
+# The quotes are the whole reason this is here rather than in the lowering:
+# `['a, b']` and `['a', 'b']` print the same without them, and one of the two is
+# a lie. WHICH quote follows Python's rule exactly — single, unless the string
+# has a single and no double — so an oracle pair can compare the two outputs
+# character for character instead of "close enough".
+static def ps_repr_esc_len(s: *PsStr, q: char) -> usize:
+    n: usize = 2
+    i: usize = 0
+    while i < usize(s->len):
+        c: char = s->data[i]
+        if c == '\\' or c == q:
+            n += 2
+        elif c == '\n' or c == '\r' or c == '\t':
+            n += 2
+        elif u8(c) < 32 or u8(c) == 127:
+            n += 4          # \xNN
+        else:
+            n += 1
+        i += 1
+    return n
+
+def ps_str_quoted(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    # Python picks the quote: single, unless that would need escaping and the
+    # double would not
+    q: char = '\''
+    if memchr(s->data, int('\''), usize(s->len)) != None and memchr(s->data, int('"'), usize(s->len)) == None:
+        q = '"'
+    n: usize = ps_repr_esc_len(s, q)
+    out: *PsStr = ps_alloc(ctx, sizeof(PsStr) + n + 1, PS_TY_STR)
+    out->len = u32(n)
+    out->hash = 0
+    out->offs = None
+    d: *char = out->data
+    k: usize = 0
+    d[k] = q
+    k += 1
+    i: usize = 0
+    while i < usize(s->len):
+        c: char = s->data[i]
+        if c == '\\' or c == q:
+            d[k] = '\\'
+            d[k + 1] = c
+            k += 2
+        elif c == '\n':
+            d[k] = '\\'
+            d[k + 1] = 'n'
+            k += 2
+        elif c == '\r':
+            d[k] = '\\'
+            d[k + 1] = 'r'
+            k += 2
+        elif c == '\t':
+            d[k] = '\\'
+            d[k + 1] = 't'
+            k += 2
+        elif u8(c) < 32 or u8(c) == 127:
+            snprintf(d + k, usize(5), "\\x%02x", int(u8(c)))
+            k += 4
+        else:
+            d[k] = c
+            k += 1
+        i += 1
+    d[k] = q
+    k += 1
+    d[k] = '\0'
+    # the count of CHARACTERS, which is what `len` promises (3.4). The escapes
+    # are ASCII, so what changes is only what was added.
+    out->nchars = s->nchars + u32(n - usize(s->len))
+    return out
+
+# A growing byte buffer, malloc'd and freed here: the pieces are collected
+# strings and joining them with `ps_str_concat` in a loop would be quadratic and
+# would allocate a string per element in the heap the collector walks.
+struct PsRepr:
+    data: *char
+    len: usize
+    cap: usize
+
+static def ps_repr_put(ref b: PsRepr, p: const *char, n: usize):
+    if b.len + n + 1 > b.cap:
+        nc: usize = b.cap * 2 if b.cap > 0 else usize(64)
+        while nc < b.len + n + 1:
+            nc *= 2
+        b.data = (*char)(realloc(b.data, nc))
+        b.cap = nc
+    memcpy(b.data + b.len, p, n)
+    b.len += n
+    b.data[b.len] = '\0'
+
+static def ps_repr_puts(ref b: PsRepr, s: *PsStr):
+    if s != None:
+        ps_repr_put(ref b, s->data, usize(s->len))
+
+# THE CEILING (97.2). A cycle is reachable — `o.pai` is the normal case here, and
+# a struct whose field is a list of itself closes the loop through a container.
+# The static expansion of a record's fields stops at depth 3 on its own; this is
+# the other door, and it is counted in the CONTEXT because the adapter that
+# recurses is a function the compiler emitted, not a parameter it can thread.
+PS_REPR_MAX: const i32 = 8
+
+def ps_repr_seq(ctx: *PsCtx, l: *PsList, open: const *char, close: const *char, fn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr:
+    if ctx->repr_depth >= PS_REPR_MAX:
+        return ps_str_new(ctx, "...", usize(3))
+    ctx->repr_depth += 1
+    defer:
+        ctx->repr_depth -= 1
+    b: PsRepr = {None, 0, 0}
+    ps_repr_put(ref b, open, strlen(open))
+    base: *char = (*char)(l->data) + sizeof(PsArr) if l->data != None else None
+    es: usize = usize(l->esize)
+    i: i64 = 0
+    while i < l->len:
+        if i > 0:
+            ps_repr_put(ref b, ", ", usize(2))
+        ps_repr_puts(ref b, fn(env, ctx, (*void)(base + usize(i) * es)))
+        if ctx->exc != None:
+            break
+        i += 1
+    ps_repr_put(ref b, close, strlen(close))
+    out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
+    free(b.data)
+    return out
+
+# `{k: v, ...}` for a dict and `{a, b}` for a set — and the two empty cases are
+# not symmetric, because Python's are not: `{}` is the empty DICT and the empty
+# set is `set()`, which is the only spelling that reads back as itself.
+def ps_repr_dict(ctx: *PsCtx, d: *PsDict, kfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, vfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr:
+    if vfn == None and d->n == 0:
+        return ps_str_new(ctx, "set()", usize(5))
+    if ctx->repr_depth >= PS_REPR_MAX:
+        return ps_str_new(ctx, "...", usize(3))
+    ctx->repr_depth += 1
+    defer:
+        ctx->repr_depth -= 1
+    b: PsRepr = {None, 0, 0}
+    ps_repr_put(ref b, "{", usize(1))
+    first: bool = True
+    i: i64 = 0
+    while i < d->nent:
+        if ps_dict_live(d, i):
+            if not first:
+                ps_repr_put(ref b, ", ", usize(2))
+            first = False
+            ps_repr_puts(ref b, kfn(env, ctx, (*void)(ps_dict_key_at(d, i))))
+            if vfn != None:
+                ps_repr_put(ref b, ": ", usize(2))
+                ps_repr_puts(ref b, vfn(env, ctx, (*void)(ps_dict_val_at(d, i))))
+            if ctx->exc != None:
+                break
+        i += 1
+    ps_repr_put(ref b, "}", usize(1))
+    out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
+    free(b.data)
+    return out
+
 def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr:
     buf: char[64]
     n: i32 = 0

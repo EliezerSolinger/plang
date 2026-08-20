@@ -107,7 +107,7 @@ static def usage():
     fprintf(stderr, "  run <f.psc> [args] compile (cached) and RUN it (6.3/15.3); as `pscript f.psc`\n")
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n")
     fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n")
-    fprintf(stderr, "  --trace          a frame for EVERY pscript function, so a stack trace names them all (34.2)\n")
+    fprintf(stderr, "  -g, --debug      frame in EVERY pscript function (stack trace names them all), and cc -g in `run`\n")
     fprintf(stderr, "                   (default: pscript/runtime)\n")
     fprintf(stderr, "  -h, --help       this help\n")
     exit(2)
@@ -215,7 +215,7 @@ static def run_exec(binp: const *char, args: **char, nargs: i32) -> int:
     fatal("could not run '%s'", binp)
     return 1
 
-static def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *char, args: **char, nargs: i32, std_version: i32) -> int:
+static def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *char, args: **char, nargs: i32, std_version: i32, debug: bool) -> int:
     binp: const *char = cc->arena.printf("%s/bin/%016llx", cachedir, h)
     mkdirs_for(binp)
     if access(binp, 0) != 0:
@@ -227,7 +227,10 @@ static def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *ch
         ccname: const *char = getenv("CC")
         cmd.puts(ccname if ccname != None and ccname[0] != '\0' else "cc")
         cmd.puts(" -std=c89" if std_version == 89 else " -std=c11")
-        cmd.puts(" -O2 -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE")
+        # 100.1: the mode reaches the C compiler too — debug info and no
+        # optimisation when it is asked for, optimisation when it is not
+        cmd.puts(" -g -O0 -w" if debug else " -O2 -w")
+        cmd.puts(" -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE")
         for i in range(cfiles->len):
             cmd.puts(" \"")
             cmd.puts(cfiles->get(usize(i)))
@@ -441,7 +444,12 @@ def main(argc: int, argv: **char) -> int:
             cpp_cmd = argv[i]
         elif argv[i] == "--inline-runtime":
             inline_runtime = True
-        elif argv[i] == "--trace":
+        elif argv[i] in {"-g", "--debug", "--trace"}:
+            # 100.1: the debug half of the two modes. It gives EVERY pscript
+            # function a frame, so a stack trace names them all (34.2), and in
+            # `run` it also asks the C compiler for debug info instead of
+            # optimisation — `-g` is the spelling everyone already knows, and
+            # `--trace` stays as the name it was born with.
             full_trace = True
         elif argv[i] in {"--no-assert", "-O"}:
             # 46.4: strip `assert` from the build, the way Python's `-O` does.
@@ -687,5 +695,5 @@ def main(argc: int, argv: **char) -> int:
                 cfiles.push((*char)(dest))
     if run_mode:
         run_manifest_write(&cc.arena, manifest, run_hash, &inputs)
-        return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version)
+        return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version, full_trace)
     return 0
