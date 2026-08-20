@@ -1705,26 +1705,87 @@ def ps_join_all(ctx: *PsCtx):
 # `xs[a:b]` — a COPY (17.3). Python's clamping, not an error: a slice past the
 # end trims, which is what makes `xs[1:]` on an empty list an empty list instead
 # of a stopped program.
-def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsList:
-    n: i64 = l->len
-    i: i64 = a if has_a else 0
-    j: i64 = b if has_b else n
-    if i < 0:
-        i += n
-    if j < 0:
-        j += n
-    if i < 0:
+# THE SLICE BOUNDS, Python's rules, with a step. Kept in one place because the
+# list and the string have to answer identically and the rules are fiddly:
+#
+#   * a negative index counts from the end;
+#   * the bounds CLAMP rather than raise — `xs[:99]` is the whole thing;
+#   * a NEGATIVE step walks backwards, and then the defaults flip: the missing
+#     start is the last element and the missing stop is before the first;
+#   * a zero step is an error, because there is no answer.
+#
+# `out i` and `out j` come back already resolved, and `st` is the step.
+static def ps_slice_bounds(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool:
+    if st == 0:
+        ps_raise(ctx, "a slice step may not be zero", PS_CAT_VALUE, file, line)
         i = 0
-    if j > n:
-        j = n
-    out: *PsList = ps_list_new(ctx, l->esize, l->eref, j - i if j > i else 0)
+        j = 0
+        return False
+    if st > 0:
+        i = a if has_a else 0
+        j = b if has_b else n
+        if i < 0:
+            i += n
+        if j < 0:
+            j += n
+        if i < 0:
+            i = 0
+        if i > n:
+            i = n
+        if j > n:
+            j = n
+        if j < i:
+            j = i
+        return True
+    # backwards: the ends are inclusive-of-start, exclusive-of-stop, counting down
+    i = a if has_a else n - 1
+    j = b if has_b else -1
+    if has_a and i < 0:
+        i += n
+    if has_b and j < 0:
+        j += n
+    if i > n - 1:
+        i = n - 1
+    if not has_b and j < -1:
+        j = -1
+    if has_b and j < -1:
+        j = -1
+    return True
+
+def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsList:
+    i: i64 = 0
+    j: i64 = 0
+    if not ps_slice_bounds(ctx, l->len, a, b, st, has_a, has_b, out i, out j, file, line):
+        return ps_list_new(ctx, l->esize, l->eref, 0)
+    out: *PsList = ps_list_new(ctx, l->esize, l->eref, 0)
     k: i64 = i
-    while k < j:
+    while (st > 0 and k < j) or (st < 0 and k > j):
         src: *char = (*char)(l->data) + sizeof(PsArr) + usize(k) * usize(l->esize)
         dst: *char = ps_list_push(ctx, out)
         memcpy(dst, src, usize(l->esize))
-        k += 1
+        k += st
     return out
+
+# `x in xs` over a LIST: a linear scan by VALUE. `kind` says how to compare —
+# the same three kinds a dict key uses, because "equal" has to mean the same
+# thing wherever the language says it. A `str` compares by CONTENT and never by
+# pointer, which is the whole reason this takes a kind at all.
+def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool:
+    if l == None:
+        return False
+    base: *char = (*char)(ps_list_base(l))
+    i: i64 = 0
+    while i < l->len:
+        p: *char = base + usize(i) * usize(l->esize)
+        if kind == PS_K_STR:
+            a: *PsStr = *(**PsStr)(p)
+            b: *PsStr = *(**PsStr)(needle)
+            if ps_str_eq(a, b):
+                return True
+        elif memcmp(p, needle, usize(l->esize)) == 0:
+            return True
+        i += 1
+    return False
 
 def ps_list_insert(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> *char:
     k: i64 = i + l->len if i < 0 else i
@@ -1785,7 +1846,7 @@ static def ps_cmp_str(a: const *void, b: const *void) -> int:
     return strcmp(x->data, y->data)
 
 def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList:
-    out: *PsList = ps_list_slice(ctx, l, 0, 0, False, False)
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
     if out->len < 2:
         return out
     base: *void = (*void)((*char)(out->data) + sizeof(PsArr))
@@ -2300,7 +2361,7 @@ def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, l
 
 def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> f64, env: *void) -> *PsList:
     n: i64 = l->len
-    out: *PsList = ps_list_slice(ctx, l, 0, 0, False, False)
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
     if n < 2:
         return out
     # the key of each element, computed once (28.4)
@@ -4298,29 +4359,50 @@ def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr:
         n = 4
     return ps_str_new(ctx, &b[0], n)
 
-def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsStr:
+def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsStr:
     n: i64 = i64(s->nchars)
-    lo: i64 = a if has_a else 0
-    hi: i64 = b if has_b else n
-    if lo < 0:
-        lo += n
-    if hi < 0:
-        hi += n
-    # a slice CLAMPS instead of raising, as Python's does: `xs[:99]` is the
-    # whole thing, not an error
-    if lo < 0:
-        lo = 0
-    if hi > n:
-        hi = n
-    if lo >= hi:
+    lo: i64 = 0
+    hi: i64 = 0
+    # the bounds are Python's, and they are resolved by the same code the list
+    # uses — the two have to answer identically (see ps_slice_bounds)
+    if not ps_slice_bounds(ctx, n, a, b, st, has_a, has_b, out lo, out hi, file, line):
         return ps_str_new(ctx, "", 0)
-    if ps_str_ascii(s):
-        return ps_str_new(ctx, s->data + usize(lo), usize(hi - lo))
-    idx: *PsArr = ps_str_index(ctx, s)
-    off: *u32 = (*u32)((*char)(idx) + sizeof(PsArr))
-    ba: usize = usize(off[lo])
-    bb: usize = usize(off[hi])
-    return ps_str_new(ctx, s->data + ba, bb - ba)
+    if st == 1:
+        # the common case: a contiguous run, which is one copy
+        if lo >= hi:
+            return ps_str_new(ctx, "", 0)
+        if ps_str_ascii(s):
+            return ps_str_new(ctx, s->data + usize(lo), usize(hi - lo))
+        idx: *PsArr = ps_str_index(ctx, s)
+        off: *u32 = (*u32)((*char)(idx) + sizeof(PsArr))
+        ba: usize = usize(off[lo])
+        bb: usize = usize(off[hi])
+        return ps_str_new(ctx, s->data + ba, bb - ba)
+    # a STEP means the characters are not contiguous, so they are copied one at
+    # a time — and by character, not by byte, which is what makes `s[::-1]` on
+    # text with an accent in it come out as text and not as broken UTF-8
+    buf: *char = (*char)(malloc(usize(s->len) + usize(4)))
+    k: usize = 0
+    ascii: bool = ps_str_ascii(s)
+    ix: *PsArr = None
+    of: *u32 = None
+    if not ascii:
+        ix = ps_str_index(ctx, s)
+        of = (*u32)((*char)(ix) + sizeof(PsArr))
+    q: i64 = lo
+    while (st > 0 and q < hi) or (st < 0 and q > hi):
+        if ascii:
+            buf[k] = s->data[usize(q)]
+            k += 1
+        else:
+            ba2: usize = usize(of[q])
+            bb2: usize = usize(of[q + 1])
+            memcpy(buf + k, s->data + ba2, bb2 - ba2)
+            k += bb2 - ba2
+        q += st
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
 
 def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64:
     if needle->len == 0:

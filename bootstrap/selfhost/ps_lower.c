@@ -1755,6 +1755,20 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 }
                 return sc;
             }
+            if (e->rhs != NULL && e->rhs->type != NULL && e->rhs->type->kind == PT_LIST) {
+                Expr *lh = PsLow_call_rt(self, "ps_list_has", e->pos);
+                PsLow_push_arg(self, lh, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, lh, PsLow_expr(self, e->rhs));
+                PsLow_push_arg(self, lh, PsLow_key_ptr(self, e->lhs, e->rhs->type->inner, e->pos));
+                PsLow_push_arg(self, lh, PsLow_num(self, (e->rhs->type->inner != NULL && e->rhs->type->inner->kind == PT_STR ? "1" : "0"), e->pos));
+                if (e->op == TK_NOT) {
+                    Expr *ln3 = ex_new(self->a, EX_UNARY, e->pos);
+                    ln3->op = TK_NOT;
+                    ln3->lhs = lh;
+                    return ln3;
+                }
+                return lh;
+            }
             if (PsLow_is_sdict(self, e->rhs)) {
                 Expr *sh = PsLow_call_rt(self, "ps_sdict_has", e->pos);
                 PsLow_push_arg(self, sh, PsLow_expr(self, e->rhs));
@@ -1868,8 +1882,11 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, sc, PsLow_expr(self, e->lhs));
             PsLow_push_arg(self, sc, (e->args[0] != NULL ? PsLow_expr(self, e->args[0]) : PsLow_num(self, "0", e->pos)));
             PsLow_push_arg(self, sc, (e->args[1] != NULL ? PsLow_expr(self, e->args[1]) : PsLow_num(self, "0", e->pos)));
+            PsLow_push_arg(self, sc, (e->args[2] != NULL ? PsLow_expr(self, e->args[2]) : PsLow_num(self, "1", e->pos)));
             PsLow_push_arg(self, sc, ex_new(self->a, (e->args[0] != NULL ? EX_TRUE : EX_FALSE), e->pos));
             PsLow_push_arg(self, sc, ex_new(self->a, (e->args[1] != NULL ? EX_TRUE : EX_FALSE), e->pos));
+            PsLow_pos_args(self, sc, e->pos);
+            self->raised = 1;
             self->allocs = 1;
             return sc;
         }

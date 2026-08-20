@@ -1015,8 +1015,6 @@ struct PsSema:
                     if e->args[i] != None:
                         pt4: *PsType = self->check_expr(e->args[i])
                         self->want(e->args[i], pt4, ps_type(self->a, PT_INT, e->pos), "a slice bound")
-                if e->args[2] != None:
-                    fatal_at(self->file, e->pos, "a slice with a step is not compiled yet")
                 t = st4
             case PE_TUPLE:
                 # a tuple is a VALUE (3.2/38.2): immutable, copied, no header.
@@ -1064,8 +1062,18 @@ struct PsSema:
                     t = ps_type(self->a, PT_BOOL, e->pos)
                     e->type = t
                     return t
+                if ht5 != None and ht5->kind == PT_LIST:
+                    # over a LIST `in` is a linear scan by VALUE, as Python's is.
+                    # A set is still the reason a set exists (8.1) — this is O(n)
+                    # and says so — but refusing it would make the obvious
+                    # spelling of "is this in here" an error in a language whose
+                    # north star spells it exactly this way.
+                    self->want(e->lhs, nt5, ht5->inner, "the tested value")
+                    t = ps_type(self->a, PT_BOOL, e->pos)
+                    e->type = t
+                    return t
                 if ht5 == None or ht5->kind not in {PT_DICT, PT_SET}:
-                    fatal_at(self->file, e->pos, "`in` takes a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5))
+                    fatal_at(self->file, e->pos, "`in` takes a list, a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5))
                 self->want(e->lhs, nt5, ht5->key if ht5->kind == PT_DICT else ht5->inner, "the tested value")
                 t = ps_type(self->a, PT_BOOL, e->pos)
             case PE_FIELD:

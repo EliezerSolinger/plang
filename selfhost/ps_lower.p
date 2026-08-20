@@ -1477,6 +1477,20 @@ struct PsLow:
                         sn3->lhs = sc
                         return sn3
                     return sc
+                if e->rhs != None and e->rhs->type != None and e->rhs->type->kind == PT_LIST:
+                    lh: *Expr = self->call_rt("ps_list_has", e->pos)
+                    self->push_arg(lh, self->ctx_arg(e->pos))
+                    self->push_arg(lh, self->expr(e->rhs))
+                    self->push_arg(lh, self->key_ptr(e->lhs, e->rhs->type->inner, e->pos))
+                    # the same 1/0 the dict uses for "is the key a string": content
+                    # comparison for text, memcmp for everything unboxed
+                    self->push_arg(lh, self->num("1" if e->rhs->type->inner != None and e->rhs->type->inner->kind == PT_STR else "0", e->pos))
+                    if e->op == TK_NOT:
+                        ln3: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                        ln3->op = TK_NOT
+                        ln3->lhs = lh
+                        return ln3
+                    return lh
                 if self->is_sdict(e->rhs):
                     sh: *Expr = self->call_rt("ps_sdict_has", e->pos)
                     self->push_arg(sh, self->expr(e->rhs))
@@ -1595,8 +1609,13 @@ struct PsLow:
                 self->push_arg(sc, self->expr(e->lhs))
                 self->push_arg(sc, self->expr(e->args[0]) if e->args[0] != None else self->num("0", e->pos))
                 self->push_arg(sc, self->expr(e->args[1]) if e->args[1] != None else self->num("0", e->pos))
+                # the STEP defaults to 1, and a missing one is not the same as a
+                # zero — zero raises, because there is no answer for it
+                self->push_arg(sc, self->expr(e->args[2]) if e->args[2] != None else self->num("1", e->pos))
                 self->push_arg(sc, ex_new(self->a, EX_TRUE if e->args[0] != None else EX_FALSE, e->pos))
                 self->push_arg(sc, ex_new(self->a, EX_TRUE if e->args[1] != None else EX_FALSE, e->pos))
+                self->pos_args(sc, e->pos)
+                self->raised = True
                 self->allocs = True
                 return sc
             case PE_INDEX:

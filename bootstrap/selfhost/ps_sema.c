@@ -2512,9 +2512,6 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                     PsSema_want(self, e->args[i], pt4, ps_type(self->a, PT_INT, e->pos), "a slice bound");
                 }
             }
-            if (e->args[2] != NULL) {
-                fatal_at(self->file, e->pos, "a slice with a step is not compiled yet");
-            }
             t = st4;
             break;
         }
@@ -2568,8 +2565,14 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 e->type = t;
                 return t;
             }
+            if (ht5 != NULL && ht5->kind == PT_LIST) {
+                PsSema_want(self, e->lhs, nt5, ht5->inner, "the tested value");
+                t = ps_type(self->a, PT_BOOL, e->pos);
+                e->type = t;
+                return t;
+            }
             if (ht5 == NULL || !(ht5->kind == PT_DICT || ht5->kind == PT_SET)) {
-                fatal_at(self->file, e->pos, "`in` takes a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5));
+                fatal_at(self->file, e->pos, "`in` takes a list, a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5));
             }
             PsSema_want(self, e->lhs, nt5, (ht5->kind == PT_DICT ? ht5->key : ht5->inner), "the tested value");
             t = ps_type(self->a, PT_BOOL, e->pos);
@@ -3773,26 +3776,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2149_17 = e;
-                __with_2149_17->kind = PE_STR;
-                __with_2149_17->text = lit7;
-                __with_2149_17->lhs = NULL;
-                __with_2149_17->rhs = NULL;
-                __with_2149_17->args = NULL;
-                __with_2149_17->nargs = 0;
+                PsExpr *__with_2157_17 = e;
+                __with_2157_17->kind = PE_STR;
+                __with_2157_17->text = lit7;
+                __with_2157_17->lhs = NULL;
+                __with_2157_17->rhs = NULL;
+                __with_2157_17->args = NULL;
+                __with_2157_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2162_13 = e;
-            __with_2162_13->kind = PE_LOWERED;
-            __with_2162_13->low = ln7;
-            __with_2162_13->lhs = NULL;
-            __with_2162_13->rhs = NULL;
-            __with_2162_13->args = NULL;
-            __with_2162_13->nargs = 0;
+            PsExpr *__with_2170_13 = e;
+            __with_2170_13->kind = PE_LOWERED;
+            __with_2170_13->low = ln7;
+            __with_2170_13->lhs = NULL;
+            __with_2170_13->rhs = NULL;
+            __with_2170_13->args = NULL;
+            __with_2170_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4006,10 +4009,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2359_17 = &ns->quals[ns->nquals];
-                __with_2359_17->name = q;
-                __with_2359_17->orig = d->path;
-                __with_2359_17->ns = sub;
+                PsNsEnt *__with_2367_17 = &ns->quals[ns->nquals];
+                __with_2367_17->name = q;
+                __with_2367_17->orig = d->path;
+                __with_2367_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4022,10 +4025,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2371_21 = &ns->ents[ns->nents];
-                    __with_2371_21->name = local;
-                    __with_2371_21->orig = d->names[k];
-                    __with_2371_21->ns = sub;
+                    PsNsEnt *__with_2379_21 = &ns->ents[ns->nents];
+                    __with_2379_21->name = local;
+                    __with_2379_21->orig = d->names[k];
+                    __with_2379_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4386,10 +4389,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2707_9 = e;
-        __with_2707_9->kind = PE_NAME;
-        __with_2707_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2707_9->lhs = NULL;
+        PsExpr *__with_2715_9 = e;
+        __with_2715_9->kind = PE_NAME;
+        __with_2715_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2715_9->lhs = NULL;
     }
     return 1;
 }

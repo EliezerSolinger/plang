@@ -2015,3 +2015,48 @@ referências do CPython nesse padrão exato — não é mais um defeito, é a tr
 - [ ] **`Awaitable`** (87.1) e a não-achatação (87.2).
 - [ ] **Auditoria da especificação inteira**: varrer as 88 baterias contra a
       implementação, empiricamente e não pelo `[x]`.
+
+## Pendência de decisão ABERTA — 4.4, achada pelo oráculo (2026-08-20)
+
+**A pergunta 4.4 do DESIGN nunca foi respondida, e a implementação respondeu por
+omissão.** "Iteração de dicionário preserva ordem de inserção?" — as opções eram
+(a) sim, e é garantia da linguagem, (b) sim, mas detalhe de implementação, (c)
+não. A tabela hash respondeu (c) por não ter sido perguntada.
+
+Isso importa porque o Python **garante** ordem de inserção desde a 3.7 e há dez
+anos de código que depende disso: JSON que precisa voltar na mesma ordem,
+configuração, saída de teste. O `Map` do JS garante o mesmo. Uma linguagem que
+diz "ergonomia de Python" e itera em ordem de hash surpreende exatamente onde
+menos deveria.
+
+O que custaria, medido pela forma e não por chute: a tabela ganha uma lista
+append-only de slots em ordem de inserção mais um índice inverso por slot (para
+o `del` invalidar a entrada), a iteração passa a andar por essa lista, e o
+`rehash` a reconstrói compactando. É o desenho do dict compacto do CPython, e lá
+ele deixou o dict MENOR, não maior.
+
+**Não implementado de propósito: a decisão é sua.** Enquanto isso a divergência
+está VISÍVEL e não pulada — `tests/oracle/py/collections.psc` compara o que vale
+sob qualquer resposta (as chaves como conjunto, os valores, o tamanho) e diz no
+comentário por que a comparação ordenada está esperando.
+
+## Lacunas que o oráculo cobrou e foram implementadas (2026-08-20)
+
+Escrever o par de coleções achou três coisas que faltavam, todas do núcleo do
+Python:
+
+- **fatia com passo** — `xs[::2]`, `xs[::-1]`, `xs[1:7:3]`, para lista E string.
+  A de string copia por CARACTERE e não por byte, que é o que faz `s[::-1]` de
+  texto com acento voltar como texto em vez de UTF-8 quebrado. As regras de
+  fronteira (negativo conta do fim, clampa, passo negativo inverte os padrões,
+  passo zero lança) ficaram numa função só, `ps_slice_bounds`, porque lista e
+  string têm de responder idêntico.
+- **`x in xs` sobre lista** — varredura linear por VALOR, com a mesma noção de
+  igualdade que a chave de dict usa (conteúdo para `str`, nunca ponteiro). O
+  `set` continua sendo a razão de o `set` existir (8.1) e isto é O(n) e diz
+  isso — mas recusar faria da grafia óbvia um erro numa linguagem cujo norte a
+  escreve exatamente assim.
+- **`str.lstrip`/`rstrip`**.
+
+E uma que fica registrada e não implementada: **um builtin como VALOR de função**
+(`sorted(xs, key=len)`) não existe; escreve-se `key=lambda w: len(w)`.

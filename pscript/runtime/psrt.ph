@@ -991,7 +991,7 @@ def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *
 def ps_str_ord(ctx: *PsCtx, s: *PsStr, file: const *char, line: i32) -> i64
 def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr
 # `s[a:b]` — a COPY (17.3), so no interior pointer ever exists
-def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsStr
+def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsStr
 def ps_str_split(ctx: *PsCtx, s: *PsStr, sep: *PsStr) -> *PsList
 def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64
 def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool
@@ -1028,8 +1028,9 @@ def ps_list_push(ctx: *PsCtx, l: *PsList) -> *char
 # `xs[a:b]` — a COPY (17.3), with Python's clamping: an out-of-range bound
 # trims instead of raising, which is the one place indexing and slicing
 # deliberately disagree.
-def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, has_a: bool, has_b: bool) -> *PsList
+def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsList
 # `xs.insert(i, v)` returns where to write; `remove_at` drops one element
+def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool
 def ps_list_insert(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> *char
 def ps_list_remove_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32)
 def ps_list_reverse(l: *PsList)
