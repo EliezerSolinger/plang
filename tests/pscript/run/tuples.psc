@@ -1,40 +1,64 @@
-"""Tuples: a VALUE type, immutable and first class (3.2/38.2).
+"""A tupla (98), terminada — a parte que não precisa do coletor.
 
-They were removed from P at the user's request, so this is the one construct
-the lowering SYNTHESIZES instead of renaming: each distinct shape becomes a P
-`record` with fields `_0`, `_1`, … Being a record is not a coincidence — a
-tuple is a value, immutable and pure bytes, which is what `record` means. So it
-inherits content `==` and the constructor for free.
+O que existia: o TIPO `(int, int)`, o literal `(1, 2)`, e o desempacotamento com
+parênteses. O que faltava, e entra aqui:
 
-A tuple holding a `str` needs the collector to trace it, so it arrives with the
-collector; today a tuple holds numbers, bools, records and other such tuples.
+  * `t[0]`, com índice LITERAL. Tem de ser literal e não por preguiça: cada slot
+    tem o seu próprio tipo, então `t[i]` com `i` de runtime não teria tipo
+    nenhum. É a diferença entre tupla e lista, e é por isso que uma se escreve
+    com `(` e a outra com `[`;
+  * `len(t)`, que é constante — quantos slots faz parte do TIPO;
+  * tupla como CHAVE de dict (24.3), que era o caso `d[(linha, coluna)]` que a
+    decisão citava. Funciona porque uma tupla de bytes puros É um record (58.2):
+    o dict copia a chave e compara por conteúdo com a máquina que já tinha;
+  * a IMUTABILIDADE da 38.2 recusada de verdade — `t[0] = x` é o que faria o
+    hash de uma chave-tupla envelhecer;
+  * e `a, b = 1, 2`, a grafia do Python. O lado esquerdo já funcionava (uma
+    lista de vírgulas é uma tupla para o parser); o que faltava era o lado
+    DIREITO, que terminava na primeira vírgula.
+
+Falta o que precisa do coletor: uma tupla que guarda `str`, `list` ou `struct`.
+Ver o fim do AUDIT.
 """
 
-def divmod2(a: int, b: int) -> (int, int):
+t = (1, 2.5)
+print(f"slots {len(t)}: {t[0]} {t[1]}")
+
+
+def divide(a: int, b: int) -> (int, int):
     return (a // b, a % b)
 
 
-q, r = divmod2(17, 5)
-print("17 // 5 = " + str(q) + ", 17 % 5 = " + str(r))
+q, r = divide(17, 5)
+print(f"divide {q} rest {r}")
 
-(w, h) = (800, 600)
-print("dim " + str(w) + "x" + str(h))
+# a grafia com parênteses continua valendo, e é a mesma coisa
+(q2, r2) = divide(9, 4)
+print(f"parens {q2} {r2}")
 
-# the same SHAPE reuses one record, so these two compare
-a = (1, 2)
-b = (1, 2)
-c = (1, 3)
-print(str(a == b) + " " + str(a == c))
+# o lado direito também pode ser uma tupla nua, com três ou mais slots
+x, y = 10, 20
+p, s, u = 1, 2, 3
+print(f"bare {x} {y} / {p}{s}{u}")
 
-# tuples nest
-outer = ((1, 2), 3)
-inner, third = outer
-x, y = inner
-print("nested " + str(x) + " " + str(y) + " " + str(third))
+# tupla dentro de tupla, e o índice composto
+nested = ((1, 2), 3)
+print(f"nested {nested[0][1]} {nested[1]}")
 
-# value semantics: assignment copies
-t = (10, 20)
-u = t
-t = (99, 99)
-p1, p2 = u
-print("copy kept " + str(p1) + " " + str(p2))
+# ---- chave de dict (24.3) ----
+board: dict<(int, int), str> = {}
+board[(0, 0)] = "origin"
+board[(2, 3)] = "far"
+print(f"board {len(board)}: {board[(0, 0)]} {board[(2, 3)]}")
+print(f"in {(2, 3) in board} {(9, 9) in board}")
+board.remove((0, 0))
+print(f"after remove {len(board)}")
+
+# a chave é COPIADA e comparada por conteúdo: duas tuplas iguais são a mesma
+k1 = (5, 6)
+k2 = (5, 6)
+board[k1] = "by content"
+print(f"same key {board[k2]}")
+
+# ---- comparação por conteúdo (22.2) ----
+print(f"eq {(1, 2) == (1, 2)} {(1, 2) == (1, 3)}")

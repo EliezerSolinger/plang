@@ -1,5 +1,10 @@
-17 // 5 = 3, 17 % 5 = 2
-dim 800x600
-True False
-nested 1 2 3
-copy kept 10 20
+slots 2: 1 2.5
+divide 3 rest 2
+parens 2 1
+bare 10 20 / 123
+nested 2 3
+board 2: origin far
+in True False
+after remove 1
+same key by content
+eq True False

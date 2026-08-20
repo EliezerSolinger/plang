@@ -1854,6 +1854,15 @@ struct PsLow:
                 self->allocs = True
                 return sc
             case PE_INDEX:
+                if e->lhs->type != None and e->lhs->type->kind == PT_TUPLE:
+                    # 98.1: a tuple lowers to a record whose slots are `_0`,
+                    # `_1`, … — so an index with a literal IS a field, and costs
+                    # exactly what a field costs
+                    tf9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                    tf9->op = TK_DOT
+                    tf9->lhs = self->expr(e->lhs)
+                    tf9->field = self->a->printf("_%lld", strtoll(e->rhs->text, None, 0))
+                    return tf9
                 if e->lhs->type != None and e->lhs->type->kind == PT_ARRAY:
                     at8: *PsType = e->lhs->type
                     ck8: *Expr = self->call_rt("ps_arr_at", e->pos)
@@ -2987,6 +2996,9 @@ struct PsLow:
             else:
                 self->push_arg(c4, self->num("4", e->pos))   # PS_CAT_VALUE
             return c4
+        if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_TUPLE:
+            # how many slots is part of the TYPE (98.1), so this is a literal
+            return self->num(self->a->printf("%d", e->args[0]->type->nparams), e->pos)
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_ARRAY:
             ac8: *PsType = e->args[0]->type
             return self->num(ac8->count->text if ac8->count != None else "0", e->pos)

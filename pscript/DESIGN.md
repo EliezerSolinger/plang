@@ -3509,6 +3509,27 @@ hash e igualdade por CONTEÚDO derivados dos campos.
 d.items()` deixa de ser forma especial, `d[(linha, coluna)]` funciona, e uma
 função que devolve duas coisas para de precisar de um `record` só para isso.
 
+### 98.4 O que entrou agora, e o que ficou esperando o coletor
+
+**Entrou:** `t[0]` com índice LITERAL (cada slot tem o seu tipo, então `t[i]`
+com `i` de runtime não teria tipo nenhum — é a diferença entre tupla e lista, e o
+motivo de uma se escrever com `(` e a outra com `[`); `len(t)`, que é constante
+porque quantos slots faz parte do TIPO; a tupla como CHAVE de dict (24.3), que
+funciona porque uma tupla de bytes puros É um record (58.2) e o dict já copia e
+compara por conteúdo; a imutabilidade da 38.2 recusada de verdade; e `a, b = 1,
+2` — o lado esquerdo já funcionava (uma lista de vírgulas é uma tupla para o
+parser), faltava o lado DIREITO, que terminava na primeira vírgula.
+
+**Ficou:** uma tupla que guarda `str`, `list`, `dict` ou `struct` — o que
+`d.items()` como VALOR precisa. Não é falta de decisão sobre a tupla: é uma
+pergunta sobre o COLETOR, e tem uma resposta boa que quero medir antes de
+escrever. Hoje uma tupla pura é um `record` (valor, sem cabeçalho); uma tupla com
+referência dentro seria um objeto COLETADO com função de percurso gerada — como
+um `struct`. Cada tipo concreto de tupla teria uma representação só (`(int,int)`
+valor, `(str,int)` referência), então não é o "mesmo tipo com duas formas" que a
+29.5 recusou; mas é o coletor, que é a parte com mais invariantes, e entra com
+teste de estresse próprio.
+
 **98.3 No P ela continua REMOVIDA**, a seu pedido, e isso não muda. É o caso
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.

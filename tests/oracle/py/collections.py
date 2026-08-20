@@ -94,3 +94,22 @@ edict = {}
 print("empty", evazia, edict)
 print("in fstring", f"{[1, 2]} and {edict}")
 print("str()", str([1, 2, 3]), len(str({"a": 1})))
+
+# ---- a tupla (98), contra o Python ----
+def divide(a, b):
+    return (a // b, a % b)
+
+
+q, r = divide(17, 5)
+print("divide", q, r)
+t = (1, 2, 3)
+print("slots", len(t), t[0], t[2])
+x, y = 10, 20
+print("bare", x, y)
+board = {}
+board[(0, 0)] = 7
+board[(2, 3)] = 9
+print("board", len(board), board[(0, 0)], board[(2, 3)])
+k = (2, 3)
+print("by content", board[k], (2, 3) in board, (9, 9) in board)
+print("eq", (1, 2) == (1, 2), (1, 2) == (1, 3))

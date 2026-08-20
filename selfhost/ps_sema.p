@@ -973,6 +973,19 @@ struct PsSema:
                 ct3: *PsType = self->check_expr(e->lhs)
                 it3: *PsType = self->check_expr(e->rhs)
                 self->hint = prevhx
+                if ct3 != None and ct3->kind == PT_TUPLE:
+                    # 98.1: `t[0]`. The index has to be a LITERAL, and not
+                    # because it is easier: each slot of a tuple has its own
+                    # type, so `t[i]` with a runtime `i` has no type at all.
+                    # That is the difference between a tuple and a list, and it
+                    # is why one is written with `(` and the other with `[`.
+                    if e->rhs->kind != PE_INT:
+                        fatal_at(self->file, e->rhs->pos, "the index of a tuple has to be a literal number: each slot has its own type, so `t[i]` with a variable would have no type (98.1)")
+                    ix9: i64 = strtoll(e->rhs->text, None, 0)
+                    if ix9 < 0 or ix9 >= i64(ct3->nparams):
+                        fatal_at(self->file, e->rhs->pos, "this tuple has %d slots, so %lld is out of range", ct3->nparams, ix9)
+                    e->type = ct3->params[ix9]
+                    return e->type
                 if ct3 != None and ct3->kind == PT_ARRAY:
                     # a fixed array knows its size, so the check is a compare
                     # against a constant — indexing still RAISES (5.2)
@@ -2445,6 +2458,10 @@ struct PsSema:
             if e->nargs != 1:
                 fatal_at(self->file, e->pos, "len() takes exactly one argument")
             at2: *PsType = self->check_expr(e->args[0])
+            if at2 != None and at2->kind == PT_TUPLE:
+                # 98.1: how many slots, which is known at compile time — the
+                # length of a tuple is part of its TYPE
+                return ps_type(self->a, PT_INT, e->pos)
             if at2 == None or at2->kind not in {PT_STR, PT_LIST, PT_DICT, PT_SET}:
                 fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2))
             return ps_type(self->a, PT_INT, e->pos)
@@ -3444,6 +3461,16 @@ struct PsSema:
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:
             fatal_at(self->file, pos, "%s has no type", what)
+        if t->kind == PT_TUPLE:
+            # 24.3: a tuple IS a key when its elements are. It is pure bytes
+            # (58.2), so the dict copies it and compares it by content with the
+            # machinery it already has — `d[(row, col)]`, which is the case 24.3
+            # was written for.
+            if not tuple_is_pure(t):
+                fatal_at(self->file, pos, "%s is %s: a tuple is a key when its slots are pure bytes (24.3), and this one holds something the collector owns", what, ps_type_str(self->a, t))
+            for i in range(t->nparams):
+                self->key_ok(t->params[i], pos, "a slot of a tuple used as a key")
+            return
         match t->kind:
             case PT_INT, PT_BOOL, PT_STR:
                 return
@@ -3867,6 +3894,12 @@ struct PsSema:
                 # `obj.field = v` — is a mutation, and a const forbids those too
                 if s->lhs->kind in {PE_INDEX, PE_FIELD, PE_OPTFIELD, PE_OPTINDEX}:
                     self->deny_const_mut(s->lhs, "writing through it")
+                if s->lhs->kind == PE_INDEX:
+                    tgt9: *PsType = self->check_expr(s->lhs->lhs)
+                    if tgt9 != None and tgt9->kind == PT_TUPLE:
+                        # 38.2: a tuple is IMMUTABLE, and that is what makes it
+                        # safe as a dict key — the hash cannot go stale
+                        fatal_at(self->file, s->pos, "a tuple is immutable (38.2): `t[0] = x` is what makes a tuple-key hash go stale, so it is refused — build another tuple")
                 if s->lhs->kind == PE_INDEX and s->op == TK_ASSIGN:
                     et3: *PsType = self->check_expr(s->lhs)
                     prevhi: *PsType = self->hint

@@ -216,7 +216,11 @@ comparando `items`/`keys`/`values` e o walrus contra o Python.
 Python, com aspas nas strings de dentro. Confere caractere por caractere contra
 o Python no par `tests/oracle/py/collections`.
 
-**B. Tupla no pscript: terminar ou tirar.** A 3.2 diz primeira classe, a 38.2 diz
+**B. Tupla no pscript — RESPONDIDA (terminar, bateria 98) e implementada, menos
+a parte que é do coletor.** Índice, `len`, chave de dict, imutabilidade e `a, b =
+1, 2` entraram (98.4). O que falta é a tupla que guarda uma referência (`(str,
+int)`), que é o que `d.items()` como valor precisa — e é pergunta sobre o
+coletor, não sobre a tupla. Fica o registro do que estava pela metade: A 3.2 diz primeira classe, a 38.2 diz
 imutável, a 54.4 deu a sintaxe do tipo — e o que existe é o tipo e o literal
 parseando, sem `len`, sem índice, sem `a, b = f()`. Do P as tuplas foram
 REMOVIDAS a seu pedido; no pscript o estado é meio caminho, que é o pior dos

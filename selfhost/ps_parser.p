@@ -1184,11 +1184,23 @@ struct PsP:
             case _:
                 pass
         s2: *PsStmt = self->parse_simple_stmt()
-        if self->at(TK_COMMA):
-            # `a, b = f()`. The tuple is decided (3.2, 38.2, 54.4) and the type
-            # and the literal parse, but unpacking an assignment is not built —
-            # so say that, instead of pointing at a comma.
-            fatal_at(self->file, self->pk()->pos, "unpacking an assignment (`a, b = ...`) is not implemented yet: the tuple type and literal parse, the multiple binding does not — assign once and index, or return a `record`")
+        # `a, b = 1, 2` (98.1). The LEFT side already worked: `parse_expr` reads a
+        # comma list as a tuple, so `a, b = f()` was the `(a, b) = f()` of 38.2
+        # spelled without the parentheses. What was missing is the RIGHT side —
+        # a bare tuple there ended at the first comma and the rest was a syntax
+        # error, which is a confusing way to say "half of Python's spelling".
+        if self->at(TK_COMMA) and s2->kind == PS_UNPACK:
+            rv9: Vec<*PsExpr>
+            rv9.init()
+            rv9.push(s2->rhs)
+            while self->accept(TK_COMMA):
+                rv9.push(self->parse_expr())
+            rt9: *PsExpr = ps_expr(self->a, PE_TUPLE, s2->rhs->pos)
+            rt9->args = rv9.data
+            rt9->nargs = rv9.len
+            s2->rhs = rt9
+        elif self->at(TK_COMMA):
+            fatal_at(self->file, self->pk()->pos, "a comma here reads as unpacking (`a, b = ...`), and the left side has to be plain names (98.1)")
         # a statement that ENDED IN A BLOCK (`t = async:` and its body) has no
         # newline left to eat: the block took the DEDENT and the line with it
         if self->blocked:
