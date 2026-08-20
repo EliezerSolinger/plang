@@ -3468,6 +3468,98 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 97 — o que um contêiner MOSTRA (2026-08-20)
+
+Pergunta que a varredura achou aberta: `print([1, 2, 3])` era erro, e a 44.3
+tinha decidido o repr derivado de `struct`/`record`/`enum` sem falar de
+contêiner.
+
+**97.1 Como o Python, com aspas dentro.** `[1, 2, 3]`, `{'a': 1}`, `{1, 2}`, e
+uma string DENTRO do contêiner sai com aspas — `['a', 'b']`, não `[a, b]`. O
+motivo de escolher a forma que "volta como código" é que ela é a única que não
+mente: `['a, b']` e `['a', 'b']` são coisas diferentes, e sem as aspas as duas
+imprimem igual.
+
+**97.2 O que isso arrasta, dito antes de doer:**
+
+  * **float dentro segue o repr de float** que a linguagem já tem (`[1.0]`, não
+    `[1]`), porque é o mesmo `str()` de sempre;
+  * **aninhamento com guarda de CICLO.** `o.pai` é caso normal aqui (22.2 já paga
+    essa conta para `==`), então o repr tem um teto de profundidade e imprime
+    `...` ao bater nele, como o Python imprime `[...]`;
+  * **`str` de contêiner é o MESMO texto que `print`.** Uma forma só: sem par
+    `str`/`repr` como o Python tem, porque a diferença entre os dois só se ensina
+    depois de doer, e o caso em que ela importa (string dentro) já está resolvido
+    pela escolha de 97.1.
+
+## Bateria 98 — a tupla TERMINA (2026-08-20)
+
+Estava a meio caminho: o tipo `(int, int)` e o literal `(1, 2)` parseavam, e
+`len`, índice e `a, b = f()` não existiam. Meio caminho é o pior dos dois, e a
+varredura mostrou onde dói: `d.items()` teve de ser estreitado para só existir
+dentro de um `for`, porque como VALOR ele seria uma lista de PARES.
+
+**98.1 Entra o pacote inteiro** que a 3.2 prometeu, a 38.2 congelou e a 54.4
+escreveu: desempacotamento (`a, b = f()`), retorno múltiplo, índice (`t[0]`),
+`len`, imutabilidade (`t[0] = x` é erro), e tupla como CHAVE de dict (24.3), com
+hash e igualdade por CONTEÚDO derivados dos campos.
+
+**98.2 E o que ela desbloqueia, que é o teste de a decisão ser certa:**
+`d.items()` passa a ser um valor de verdade (`list<(K, V)>`), `for k, v in
+d.items()` deixa de ser forma especial, `d[(linha, coluna)]` funciona, e uma
+função que devolve duas coisas para de precisar de um `record` só para isso.
+
+**98.3 No P ela continua REMOVIDA**, a seu pedido, e isso não muda. É o caso
+mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
+por conteúdo, que é runtime; o P é zero-runtime.
+
+## Bateria 99 — `const if`: o P ganha condicional de compilação (2026-08-20)
+
+A 18.4 recusou `poll()` por escrito e pediu `epoll`/`kqueue`; o loop usa
+`poll()`. A varredura mostrou que isso não era trabalho pendente, era decisão
+travada: escrever os dois exige escolher no C EMITIDO, e o P não tinha como.
+
+**99.1 `const if`, com a condição avaliada em compilação.** Sua formulação:
+*"um const if ou comptime if... que eu me lembre ele já avalia if constantes
+durante o processo"*. Fica `const if`, porque a palavra já existe no P para
+exatamente esta ideia (`const def` é função de comptime) e o que ela qualifica é
+a CONDIÇÃO. O ramo não tomado **não é checado** — é isso que permite a um
+caminho nomear símbolo que a outra plataforma não tem.
+
+**99.2 Vale no TOPO também**, não só dentro de função (decisão sua): `include` e
+declaração entram por plataforma, e os layouts vêm do sistema em vez de serem
+copiados à mão. `struct epoll_event` e `struct kevent` são estáveis há quinze
+anos, mas copiar layout é o tipo de erro que o compilador não avisa — e a única
+saída que não copia é deixar o header entrar.
+
+**99.3 De onde vem a plataforma.** Um predefinido do compilador, no formato dos
+que já existem (`__FILE__`, `__DATE__`, `-D`): a máquina que GERA o C é a que vai
+compilá-lo no fluxo normal, então a resposta é a do host. O seed do compilador não
+depende disso — o plangc não usa `epoll`.
+
+**99.4 Consequência aceita:** é construção nova numa linguagem que se quer
+estável, e serve a toda diferença de plataforma futura, não só a esta. É o
+contrário de uma flag de build, que tira a decisão da linguagem e a põe num
+lugar que alguém tem de lembrar.
+
+## Bateria 100 — release por padrão, `-g` para o rastro inteiro (2026-08-20)
+
+**100.1 Três coisas, e o padrão é o rápido.** Sem flag: sem frame de folha (a
+otimização da 49.4), `assert` LIGADO, e o rastro nomeia quem tem frame. `-g` (ou
+`--debug`): frame em TODA função de pscript, e o rastro nomeia todas. `-O`: tira
+o `assert` (46.4). É a divisão que o C tem, e por isso a que quem compila já
+espera — e o número do placar é o do padrão.
+
+Medido no fib(35), que é nada além de chamada: 0,03s sem `-g`, 0,05s com.
+
+**100.2 Pendente de MEDIÇÃO, ideia sua: inlinar função de pscript.** Uma função
+inlinada não tem frame, então o custo do `-g` cai junto — e o do padrão também.
+Não é decisão ainda: é para medir e voltar com número. O que já se sabe é que a
+shadow stack complica o caso (38.3: o endereço de todo local coletado escapa, e
+inlinar move esse endereço para o frame de quem chamou), e que o `cc -O3` já
+inlina o C gerado — então a pergunta real é se inlinar ANTES, no P, tira frame
+que o C não consegue tirar.
+
 ## Bateria 96b — o tamanho de `T[N]` vindo de um `const` (2026-08-20)
 
 Achado ao escrever o teste da 96: `const N: int = 4` seguido de `xs: int[N]`
