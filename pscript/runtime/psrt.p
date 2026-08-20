@@ -4094,6 +4094,31 @@ def ps_dict_key_at(d: *PsDict, i: i64) -> *char:
 def ps_dict_val_at(d: *PsDict, i: i64) -> *char:
     return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
 
+# `d.keys()` and `d.values()` (61.4). A fresh LIST, in insertion order — a copy
+# and not a view, because 17.3 says a slice copies and a view into a dict that
+# moves would be an interior pointer into a moving object (the whole class of
+# bug the stress mode exists to find).
+#
+# The element size and whether it is a reference come from the dict itself, so
+# the lowering does not have to say them twice.
+def ps_dict_keys(ctx: *PsCtx, d: *PsDict) -> *PsList:
+    out: *PsList = ps_list_new(ctx, d->ksize, d->kref, d->n)
+    i: i64 = 0
+    while i < d->nent:
+        if ps_dict_live(d, i):
+            memcpy(ps_list_push(ctx, out), ps_dict_key_at(d, i), usize(d->ksize))
+        i += 1
+    return out
+
+def ps_dict_values(ctx: *PsCtx, d: *PsDict) -> *PsList:
+    out: *PsList = ps_list_new(ctx, d->vsize, d->vref, d->n)
+    i: i64 = 0
+    while i < d->nent:
+        if ps_dict_live(d, i):
+            memcpy(ps_list_push(ctx, out), ps_dict_val_at(d, i), usize(d->vsize))
+        i += 1
+    return out
+
 
 # ---------- strings ----------
 # counts codepoints in UTF-8: every byte that is not a continuation starts one

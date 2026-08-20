@@ -1,0 +1,10 @@
+zebra -> 26
+apple -> 1
+mango -> 13
+keys 3: zebra apple mango
+values 3: 26 1 13
+set keys 2
+sorted apple zebra, dict still zebra
+after remove 2, copy still 3
+async keys abc total 6 set 10
+returned 6

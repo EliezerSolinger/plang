@@ -1074,6 +1074,8 @@ def ps_dict_nent(d: *PsDict) -> i64
 def ps_dict_live(d: *PsDict, i: i64) -> bool
 def ps_dict_key_at(d: *PsDict, i: i64) -> *char
 def ps_dict_val_at(d: *PsDict, i: i64) -> *char
+def ps_dict_keys(ctx: *PsCtx, d: *PsDict) -> *PsList
+def ps_dict_values(ctx: *PsCtx, d: *PsDict) -> *PsList
 
 # ---------- errors ----------
 def ps_raise(ctx: *PsCtx, msg: const *char, cat: i32, file: const *char, line: i32)

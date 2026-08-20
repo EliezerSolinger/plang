@@ -1132,6 +1132,16 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "`in` takes a list, a dict, a set or a string on the right, not %s", ps_type_str(self->a, ht5))
                 self->want(e->lhs, nt5, ht5->key if ht5->kind == PT_DICT else ht5->inner, "the tested value")
                 t = ps_type(self->a, PT_BOOL, e->pos)
+            case PE_WALRUS:
+                # `(n := f())` (45.2): binds and evaluates to what it bound. The
+                # name belongs to the scope that CONTAINS the expression, which
+                # is what makes `if (n := len(xs)) > 2:` able to read `n` in the
+                # branch — and what makes it a declaration and not a temporary.
+                wlt: *PsType = self->check_expr(e->lhs)
+                if wlt == None or wlt->kind == PT_VOID:
+                    fatal_at(self->file, e->pos, "`:=` needs a value to bind, and %s has none", ps_expr_what(e->lhs->kind))
+                self->add_local(e->var, wlt, True, False)
+                t = wlt
             case PE_FIELD:
                 if self->try_mod_qual(e):
                     return self->check_expr(e)
@@ -1283,7 +1293,28 @@ struct PsSema:
                     self->want(e->args[0], self->check_expr(e->args[0]), kty, "the key")
                     self->want(e->args[1], self->check_expr(e->args[1]), rt->inner, "the default")
                     return rt->inner
-                fatal_at(self->file, e->pos, "a %s has %s so far", "dict" if rt->kind == PT_DICT else "set", "get, remove" if rt->kind == PT_DICT else "add, remove")
+                # 61.4: the Python iteration pack. `keys()` and `values()` hand
+                # back a LIST in insertion order — a copy, because a view into
+                # an object that moves is an interior pointer (17.3).
+                if strcmp(nm3, "keys") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "keys() takes no arguments")
+                    kl: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    kl->inner = kty
+                    return kl
+                if strcmp(nm3, "values") == 0 and rt->kind == PT_DICT:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "values() takes no arguments")
+                    vl: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    vl->inner = rt->inner
+                    return vl
+                if strcmp(nm3, "items") == 0 and rt->kind == PT_DICT:
+                    # `items()` exists only where Python uses it: as the thing a
+                    # `for k, v in ...` walks. Making it a VALUE would need a
+                    # tuple, and the tuple is half-built (3.2) — promising a
+                    # pair type that cannot be held is worse than saying so.
+                    fatal_at(self->file, e->pos, "items() is only for `for k, v in d.items():` — as a value it would have to be a list of pairs, and the tuple is not built (3.2)")
+                fatal_at(self->file, e->pos, "a %s has %s so far", "dict" if rt->kind == PT_DICT else "set", "get, remove, keys, values and items() in a for" if rt->kind == PT_DICT else "add, remove, keys")
             if rt != None and rt->kind == PT_STR:
                 nm2: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -3706,6 +3737,30 @@ struct PsSema:
                 # mutable aggregate is `struct`, which is collected — so it
                 # arrives with the collector, not before it.
                 isrange: bool = s->iter != None and s->iter->kind == PE_CALL and s->iter->lhs != None and s->iter->lhs->kind == PE_NAME and strcmp(s->iter->lhs->text, "range") == 0
+                # `for k, v in d.items():` (61.4). Recognised by SHAPE, like
+                # `range`, and for the same reason: the pair it yields would
+                # need a tuple to exist as a value, and the tuple is half-built
+                # (3.2). So the call never becomes a value — the sema replaces
+                # it with the dict and marks the loop.
+                if s->iter != None and s->iter->kind == PE_CALL and s->iter->lhs != None and s->iter->lhs->kind == PE_FIELD and strcmp(s->iter->lhs->text, "items") == 0:
+                    dht: *PsType = self->check_expr(s->iter->lhs->lhs)
+                    if dht != None and dht->kind == PT_DICT:
+                        if s->iter->nargs != 0:
+                            fatal_at(self->file, s->pos, "items() takes no arguments")
+                        if s->nnames != 2:
+                            fatal_at(self->file, s->pos, "`for k, v in d.items():` takes two variables — one name iterates the KEYS, which is `for k in d`")
+                        s->iter = s->iter->lhs->lhs
+                        s->iter->type = dht
+                        s->is_pairs = True
+                        self->depth += 1
+                        self->add_local(s->names[0], dht->key, True, False)
+                        self->add_local(s->names[1], dht->inner, True, False)
+                        self->loop_depth += 1
+                        self->check_block(s->body)
+                        self->loop_depth -= 1
+                        self->pop_scope()
+                        self->depth -= 1
+                        return
                 if not isrange:
                     lit4: *PsType = self->check_expr(s->iter)
                     # a value of a type that implements `Iterable` (40.3/D3):

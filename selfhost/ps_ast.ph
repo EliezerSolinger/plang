@@ -239,6 +239,9 @@ struct PsStmt:
     ncases: i32
     catch_block: *PsBlock # PS_TRY
     finally_block: *PsBlock
+    is_pairs: bool        # `for k, v in d.items():` (61.4) — the sema replaced
+                          #   the iterable with the dict itself and left this
+                          #   mark, so the lowering binds the value too
     is_typematch: bool    # `match type(x):` (68.5) — the cases are TYPES, and
                           #   inside each one the subject IS that type
 

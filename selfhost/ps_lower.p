@@ -1511,6 +1511,29 @@ struct PsLow:
                     n2->lhs = hs
                     return n2
                 return hs
+            case PE_WALRUS:
+                # `(n := f())` (45.2). It binds AND evaluates to the value, and
+                # the way it does both is the same device the comprehension
+                # uses: the binding is hoisted in front of the statement and the
+                # expression becomes the name. Which is exactly why the two
+                # places below are refused instead of quietly moved.
+                if self->lazy_depth > 0:
+                    fatal_at(self->file, e->pos, "`:=` inside a conditional or a short-circuit operand is not compiled: the binding hoists in front of the statement, so it would run even when that side is not taken")
+                if self->in_frame(e->var):
+                    wa: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
+                    wa->lhs = self->async_field(e->var, e->pos)
+                    wa->op = TK_ASSIGN
+                    wa->rhs = self->coerce(e->type, e->lhs)
+                    self->pre.push(wa)
+                    return self->async_field(e->var, e->pos)
+                wd: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                wd->name = ps_cname(self->a, e->var)
+                wd->type = self->ty(e->type)
+                wd->init = self->coerce(e->type, e->lhs)
+                self->pre.push(wd)
+                wr: *Expr = ex_new(self->a, EX_IDENT, e->pos)
+                wr->text = ps_cname(self->a, e->var)
+                return wr
             case PE_COMPREHEND:
                 # A comprehension is a LOOP, and a loop is statements — so the
                 # whole thing is hoisted in front of the statement that contains
@@ -2053,6 +2076,15 @@ struct PsLow:
                 self->push_arg(rm, self->expr(e->lhs->lhs))
                 self->push_arg(rm, self->key_ptr(e->args[0], kt2, e->pos))
                 return rm
+            # 61.4: `keys()` and `values()` — a fresh list in insertion order.
+            # The element size and refness come from the dict object itself, so
+            # there is nothing here to keep in step with the type.
+            if strcmp(nm4, "keys") == 0 or strcmp(nm4, "values") == 0:
+                kv: *Expr = self->call_rt("ps_dict_keys" if strcmp(nm4, "keys") == 0 else "ps_dict_values", e->pos)
+                self->push_arg(kv, self->ctx_arg(e->pos))
+                self->push_arg(kv, self->expr(e->lhs->lhs))
+                self->allocs = True
+                return kv
             # `get(k, default)` — the non-raising read (5.2)
             kp2: *Expr = self->key_ptr(e->args[0], kt2, e->pos)
             hs2: *Expr = self->call_rt("ps_dict_has", e->pos)
@@ -4440,16 +4472,56 @@ struct PsLow:
                 out->push(i2)
             case PS_WHILE:
                 w: *Stmt = st_new(self->a, ST_WHILE, s->pos)
-                w->cond = self->expr(s->cond)
+                # The condition can HOIST: a `:=` binds a name (45.2) and a
+                # comprehension is a loop. Hoisted statements land in front of
+                # the statement that needs them — which for a `while` would run
+                # them ONCE where the condition runs every turn. So when the
+                # condition hoists anything, the loop becomes `while True:` with
+                # the hoisted part and the test INSIDE the body. That is what
+                # makes `while (line := f.readline()) != "":` mean what Python
+                # means by it.
+                wouter: Vec<*Stmt> = self->pre
+                self->pre.init()
+                wcond: *Expr = self->expr(s->cond)
+                wpre: Vec<*Stmt> = self->pre
+                self->pre = wouter
                 # an ordinary loop OWNS its `break` and `continue` again: they
                 # belong to it, not to whatever state-split loop is outside
                 sb9: i32 = self->async_brk
                 sc9: i32 = self->async_cont
                 self->async_brk = -1
                 self->async_cont = -1
-                w->body = self->block(s->body)
+                wbody: *Block = self->block(s->body)
                 self->async_brk = sb9
                 self->async_cont = sc9
+                if wpre.len == 0:
+                    w->cond = wcond
+                    w->body = wbody
+                else:
+                    w->cond = ex_new(self->a, EX_TRUE, s->pos)
+                    winner: Vec<*Stmt>
+                    winner.init()
+                    for wi in range(wpre.len):
+                        winner.push(wpre.data[wi])
+                    nc: *Expr = ex_new(self->a, EX_UNARY, s->pos)
+                    nc->op = TK_NOT
+                    nc->lhs = wcond
+                    brb: *Block = self->a->alloc(sizeof(Block))
+                    brb->stmts = self->a->alloc(sizeof(*brb->stmts))
+                    brb->stmts[0] = st_new(self->a, ST_BREAK, s->pos)
+                    brb->n = 1
+                    gi: *Stmt = st_new(self->a, ST_IF, s->pos)
+                    gi->conds = self->a->alloc(sizeof(*gi->conds))
+                    gi->conds[0] = nc
+                    gi->blocks = self->a->alloc(sizeof(*gi->blocks))
+                    gi->blocks[0] = brb
+                    gi->nconds = 1
+                    gi->if_sel = -1
+                    winner.push(gi)
+                    wbb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+                    wbb->body = wbody
+                    winner.push(wbb)
+                    w->body = self->frame_wrap(&winner, None, 0, s->pos)
                 out->push(w)
             case PS_FOR:
                 sb8: i32 = self->async_brk
@@ -4954,11 +5026,43 @@ struct PsLow:
         ka: *Expr = self->call_rt("ps_dict_key_at", s->pos)
         self->push_arg(ka, self->ident(dn, s->pos))
         self->push_arg(ka, self->ident(iv, s->pos))
-        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-        bd->name = ps_cname(self->a, s->names[0])
-        bd->type = self->ty(kt)
-        bd->init = self->slot_val(ka, kt, s->pos)
-        inner.push(bd)
+        # In an `async def` the loop variable is a FRAME FIELD, so it is
+        # ASSIGNED and not declared — declaring a local of the same name would
+        # shadow nothing (the body reads the field) and leave the field with
+        # whatever the frame was born with. `for k in d` inside an async def
+        # crashed on exactly that, while `for ch in s` next door was right:
+        # the string loop honoured the frame and this one did not.
+        if self->in_frame(s->names[0]):
+            ba: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+            ba->lhs = self->async_field(s->names[0], s->pos)
+            ba->op = TK_ASSIGN
+            ba->rhs = self->slot_val(ka, kt, s->pos)
+            inner.push(ba)
+        else:
+            bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+            bd->name = ps_cname(self->a, s->names[0])
+            bd->type = self->ty(kt)
+            bd->init = self->slot_val(ka, kt, s->pos)
+            inner.push(bd)
+        if s->is_pairs:
+            # `for k, v in d.items():` (61.4) — the value comes from the same
+            # entry number, so it is the dense array's other half and needs no
+            # second lookup
+            va: *Expr = self->call_rt("ps_dict_val_at", s->pos)
+            self->push_arg(va, self->ident(dn, s->pos))
+            self->push_arg(va, self->ident(iv, s->pos))
+            if self->in_frame(s->names[1]):
+                va2: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+                va2->lhs = self->async_field(s->names[1], s->pos)
+                va2->op = TK_ASSIGN
+                va2->rhs = self->slot_val(va, dt->inner, s->pos)
+                inner.push(va2)
+            else:
+                vd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                vd->name = ps_cname(self->a, s->names[1])
+                vd->type = self->ty(dt->inner)
+                vd->init = self->slot_val(va, dt->inner, s->pos)
+                inner.push(vd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
         # The LOOP VARIABLE is a root like any other. It is declared here, above
         # the lowered body, so the body's own frame does not cover it — and a
@@ -6119,6 +6223,7 @@ static def has_await_s(s: *PsStmt) -> bool
 static def has_await_b(b: *PsBlock) -> bool
 static def async_fields_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, file: const *char)
 static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: const *char)
+static def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: const *char)
 static def async_slots_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, ref n: i32)
 static def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32)
 static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
@@ -6190,14 +6295,34 @@ static def async_add_field(L: *PsLow, ref v: Vec<PsField>, name: const *char, t:
     f.pos = pos
     v.push(f)
 
+# A `:=` binds a NAME from inside an EXPRESSION (45.2), so this pass has to walk
+# expressions too. Without it the binding exists in the emitted C and not in the
+# frame, and the step function reads a variable nobody declared.
+static def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: const *char):
+    if e == None:
+        return
+    async_fields_e(L, e->lhs, ref v, file)
+    async_fields_e(L, e->rhs, ref v, file)
+    async_fields_e(L, e->cond, ref v, file)
+    for i in range(e->nargs):
+        async_fields_e(L, e->args[i], ref v, file)
+    if e->kind == PE_WALRUS and e->var != None and e->type != None:
+        async_add_field(L, ref v, e->var, e->type, e->pos, file)
+
 static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: const *char):
     if s == None:
         return
+    for i in range(stmt_ps_nexprs(s)):
+        async_fields_e(L, stmt_ps_expr_at(s, i), ref v, file)
     match s->kind:
         case PS_VAR:
             if not s->is_global and s->name != None and s->type != None:
                 async_add_field(L, ref v, s->name, s->type, s->pos, file)
         case PS_FOR:
+            if s->is_pairs and s->nnames == 2 and s->iter != None and s->iter->type != None and s->iter->type->kind == PT_DICT:
+                # `for k, v in d.items():` (61.4) — two locals, so two fields
+                async_add_field(L, ref v, s->names[0], s->iter->type->key, s->pos, file)
+                async_add_field(L, ref v, s->names[1], s->iter->type->inner, s->pos, file)
             if s->nnames == 1 and s->names[0] != None and s->iter != None:
                 et: *PsType = None
                 it: *PsType = s->iter->type
@@ -6573,6 +6698,14 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             ifs->else_block = eb
             ifs->nconds = s->nconds
             ifs->if_sel = -1
+            # A condition can HOIST: a `:=` binds a name and a comprehension is
+            # a loop, and both land in `pre` in front of the statement that used
+            # them. Outside a state machine the statement lowering flushes that;
+            # here nobody did, so the binding was dropped and the condition read
+            # a field nothing had written.
+            for pi in range(B.L->pre.len):
+                ab_emit(ref B, B.L->pre.data[pi])
+            B.L->pre.init()
             ab_emit(ref B, ifs)
             ab_emit(ref B, st_new(B.L->a, ST_CONTINUE, s->pos))
             for i in range(s->nconds):
@@ -6608,6 +6741,9 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             ifs2->else_block = fb
             ifs2->nconds = 1
             ifs2->if_sel = -1
+            for pw in range(B.L->pre.len):
+                ab_emit(ref B, B.L->pre.data[pw])
+            B.L->pre.init()
             ab_emit(ref B, ifs2)
             ab_emit(ref B, st_new(B.L->a, ST_CONTINUE, s->pos))
             ob: i32 = B.brk

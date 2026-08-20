@@ -119,6 +119,7 @@ struct PsStmt {
     int32_t ncases;
     PsBlock *catch_block;
     PsBlock *finally_block;
+    int is_pairs;
     int is_typematch;
 };
 

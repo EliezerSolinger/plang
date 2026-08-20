@@ -1793,6 +1793,27 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             }
             return hs;
         }
+        case PE_WALRUS: {
+            if (self->lazy_depth > 0) {
+                fatal_at(self->file, e->pos, "`:=` inside a conditional or a short-circuit operand is not compiled: the binding hoists in front of the statement, so it would run even when that side is not taken");
+            }
+            if (PsLow_in_frame(self, e->var)) {
+                Stmt *wa = st_new(self->a, ST_ASSIGN, e->pos);
+                wa->lhs = PsLow_async_field(self, e->var, e->pos);
+                wa->op = TK_ASSIGN;
+                wa->rhs = PsLow_coerce(self, e->type, e->lhs);
+                Vec_pStmt_push(&self->pre, wa);
+                return PsLow_async_field(self, e->var, e->pos);
+            }
+            Stmt *wd = st_new(self->a, ST_VAR, e->pos);
+            wd->name = ps_cname(self->a, e->var);
+            wd->type = PsLow_ty(self, e->type);
+            wd->init = PsLow_coerce(self, e->type, e->lhs);
+            Vec_pStmt_push(&self->pre, wd);
+            Expr *wr = ex_new(self->a, EX_IDENT, e->pos);
+            wr->text = ps_cname(self->a, e->var);
+            return wr;
+        }
         case PE_COMPREHEND: {
             if (self->lazy_depth > 0) {
                 fatal_at(self->file, e->pos, "a comprehension inside a conditional or short-circuit operand is not compiled yet: it would be evaluated even when that side is not taken");
@@ -2324,6 +2345,13 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, rm, PsLow_expr(self, e->lhs->lhs));
             PsLow_push_arg(self, rm, PsLow_key_ptr(self, e->args[0], kt2, e->pos));
             return rm;
+        }
+        if (strcmp(nm4, "keys") == 0 || strcmp(nm4, "values") == 0) {
+            Expr *kv = PsLow_call_rt(self, (strcmp(nm4, "keys") == 0 ? "ps_dict_keys" : "ps_dict_values"), e->pos);
+            PsLow_push_arg(self, kv, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, kv, PsLow_expr(self, e->lhs->lhs));
+            self->allocs = 1;
+            return kv;
         }
         Expr *kp2 = PsLow_key_ptr(self, e->args[0], kt2, e->pos);
         Expr *hs2 = PsLow_call_rt(self, "ps_dict_has", e->pos);
@@ -4786,14 +4814,49 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         }
         case PS_WHILE: {
             Stmt *w = st_new(self->a, ST_WHILE, s->pos);
-            w->cond = PsLow_expr(self, s->cond);
+            Vec_pStmt wouter = self->pre;
+            Vec_pStmt_init(&self->pre);
+            Expr *wcond = PsLow_expr(self, s->cond);
+            Vec_pStmt wpre = self->pre;
+            self->pre = wouter;
             int32_t sb9 = self->async_brk;
             int32_t sc9 = self->async_cont;
             self->async_brk = -1;
             self->async_cont = -1;
-            w->body = PsLow_block(self, s->body);
+            Block *wbody = PsLow_block(self, s->body);
             self->async_brk = sb9;
             self->async_cont = sc9;
+            if (wpre.len == 0) {
+                w->cond = wcond;
+                w->body = wbody;
+            } else {
+                w->cond = ex_new(self->a, EX_TRUE, s->pos);
+                Vec_pStmt winner;
+                Vec_pStmt_init(&winner);
+                size_t wi;
+                for (wi = 0; wi < wpre.len; wi += 1) {
+                    Vec_pStmt_push(&winner, wpre.data[wi]);
+                }
+                Expr *nc = ex_new(self->a, EX_UNARY, s->pos);
+                nc->op = TK_NOT;
+                nc->lhs = wcond;
+                Block *brb = Arena_alloc(self->a, sizeof(Block));
+                brb->stmts = Arena_alloc(self->a, sizeof(*brb->stmts));
+                brb->stmts[0] = st_new(self->a, ST_BREAK, s->pos);
+                brb->n = 1;
+                Stmt *gi = st_new(self->a, ST_IF, s->pos);
+                gi->conds = Arena_alloc(self->a, sizeof(*gi->conds));
+                gi->conds[0] = nc;
+                gi->blocks = Arena_alloc(self->a, sizeof(*gi->blocks));
+                gi->blocks[0] = brb;
+                gi->nconds = 1;
+                gi->if_sel = -1;
+                Vec_pStmt_push(&winner, gi);
+                Stmt *wbb = st_new(self->a, ST_BLOCK, s->pos);
+                wbb->body = wbody;
+                Vec_pStmt_push(&winner, wbb);
+                w->body = PsLow_frame_wrap(self, &winner, NULL, 0, s->pos);
+            }
             Vec_pStmt_push(out, w);
             break;
         }
@@ -5289,11 +5352,37 @@ static void PsLow_lower_dict_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Expr *ka = PsLow_call_rt(self, "ps_dict_key_at", s->pos);
     PsLow_push_arg(self, ka, PsLow_ident(self, dn, s->pos));
     PsLow_push_arg(self, ka, PsLow_ident(self, iv, s->pos));
-    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
-    bd->name = ps_cname(self->a, s->names[0]);
-    bd->type = PsLow_ty(self, kt);
-    bd->init = PsLow_slot_val(self, ka, kt, s->pos);
-    Vec_pStmt_push(&inner, bd);
+    if (PsLow_in_frame(self, s->names[0])) {
+        Stmt *ba = st_new(self->a, ST_ASSIGN, s->pos);
+        ba->lhs = PsLow_async_field(self, s->names[0], s->pos);
+        ba->op = TK_ASSIGN;
+        ba->rhs = PsLow_slot_val(self, ka, kt, s->pos);
+        Vec_pStmt_push(&inner, ba);
+    } else {
+        Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+        bd->name = ps_cname(self->a, s->names[0]);
+        bd->type = PsLow_ty(self, kt);
+        bd->init = PsLow_slot_val(self, ka, kt, s->pos);
+        Vec_pStmt_push(&inner, bd);
+    }
+    if (s->is_pairs) {
+        Expr *va = PsLow_call_rt(self, "ps_dict_val_at", s->pos);
+        PsLow_push_arg(self, va, PsLow_ident(self, dn, s->pos));
+        PsLow_push_arg(self, va, PsLow_ident(self, iv, s->pos));
+        if (PsLow_in_frame(self, s->names[1])) {
+            Stmt *va2 = st_new(self->a, ST_ASSIGN, s->pos);
+            va2->lhs = PsLow_async_field(self, s->names[1], s->pos);
+            va2->op = TK_ASSIGN;
+            va2->rhs = PsLow_slot_val(self, va, dt->inner, s->pos);
+            Vec_pStmt_push(&inner, va2);
+        } else {
+            Stmt *vd = st_new(self->a, ST_VAR, s->pos);
+            vd->name = ps_cname(self->a, s->names[1]);
+            vd->type = PsLow_ty(self, dt->inner);
+            vd->init = PsLow_slot_val(self, va, dt->inner, s->pos);
+            Vec_pStmt_push(&inner, vd);
+        }
+    }
     Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
     Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
     bb->body = body;
@@ -6469,6 +6558,8 @@ static void async_fields_b(PsLow *L, PsBlock *b, Vec_PsField *v, const char *fil
 
 static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file);
 
+static void async_fields_e(PsLow *L, PsExpr *e, Vec_PsField *v, const char *file);
+
 static void async_slots_b(PsLow *L, PsBlock *b, Vec_PsField *v, int32_t *n);
 
 static void async_slots_s(PsLow *L, PsStmt *s, Vec_PsField *v, int32_t *n);
@@ -6562,9 +6653,29 @@ static void async_add_field(PsLow *L, Vec_PsField *v, const char *name, PsType *
     Vec_PsField_push(v, f);
 }
 
+static void async_fields_e(PsLow *L, PsExpr *e, Vec_PsField *v, const char *file) {
+    if (e == NULL) {
+        return;
+    }
+    async_fields_e(L, e->lhs, v, file);
+    async_fields_e(L, e->rhs, v, file);
+    async_fields_e(L, e->cond, v, file);
+    size_t i;
+    for (i = 0; i < e->nargs; i += 1) {
+        async_fields_e(L, e->args[i], v, file);
+    }
+    if (e->kind == PE_WALRUS && e->var != NULL && e->type != NULL) {
+        async_add_field(L, v, e->var, e->type, e->pos, file);
+    }
+}
+
 static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file) {
     if (s == NULL) {
         return;
+    }
+    size_t i;
+    for (i = 0; i < stmt_ps_nexprs(s); i += 1) {
+        async_fields_e(L, stmt_ps_expr_at(s, i), v, file);
     }
     switch (s->kind) {
         case PS_VAR: {
@@ -6574,6 +6685,10 @@ static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file
             break;
         }
         case PS_FOR: {
+            if (s->is_pairs && s->nnames == 2 && s->iter != NULL && s->iter->type != NULL && s->iter->type->kind == PT_DICT) {
+                async_add_field(L, v, s->names[0], s->iter->type->key, s->pos, file);
+                async_add_field(L, v, s->names[1], s->iter->type->inner, s->pos, file);
+            }
             if (s->nnames == 1 && s->names[0] != NULL && s->iter != NULL) {
                 PsType *et = NULL;
                 PsType *it = s->iter->type;
@@ -6631,7 +6746,6 @@ static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file
     async_fields_b(L, s->else_block, v, file);
     async_fields_b(L, s->catch_block, v, file);
     async_fields_b(L, s->finally_block, v, file);
-    size_t i;
     for (i = 0; i < s->nconds; i += 1) {
         async_fields_b(L, s->blocks[i], v, file);
     }
@@ -6982,6 +7096,11 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             ifs->else_block = eb;
             ifs->nconds = s->nconds;
             ifs->if_sel = -1;
+            size_t pi;
+            for (pi = 0; pi < B->L->pre.len; pi += 1) {
+                ab_emit(B, B->L->pre.data[pi]);
+            }
+            Vec_pStmt_init(&B->L->pre);
             ab_emit(B, ifs);
             ab_emit(B, st_new(B->L->a, ST_CONTINUE, s->pos));
             for (i = 0; i < s->nconds; i += 1) {
@@ -7022,6 +7141,11 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             ifs2->else_block = fb;
             ifs2->nconds = 1;
             ifs2->if_sel = -1;
+            size_t pw;
+            for (pw = 0; pw < B->L->pre.len; pw += 1) {
+                ab_emit(B, B->L->pre.data[pw]);
+            }
+            Vec_pStmt_init(&B->L->pre);
             ab_emit(B, ifs2);
             ab_emit(B, st_new(B->L->a, ST_CONTINUE, s->pos));
             int32_t ob = B->brk;

@@ -97,6 +97,117 @@ Portão: onze programas em `tests/pscript/bad/py_*`.
 
 ---
 
+## Baterias 10 a 72 — o que a varredura conferiu (segunda passada)
+
+Aqui a varredura passou a conferir por PROVA: um programa que exercita a
+decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
+
+| # | decisão | veredito |
+|---|---|---|
+| 10.x, 11.x, 12.1–12.2 | `unsafe` e a fronteira | **ok** — a regra da 31.1 é o que a sema aplica |
+| 11.3 | sair de `any` é checado | **OK** — `xs[1] as int` sobre um str lança "this `any` holds str, not int" |
+| 12.4 | falha em pscript é exceção, em C é crash | **ok** — mas ver 34.2 abaixo: o crash não imprime pilha |
+| 13.2–13.4 | caixa opaca, `char*` copia, NUL de cortesia | **ok** |
+| 14.2 | gatilho por bytes E por objetos | **OK** — e proporcional ao vivo desde a 90.2 |
+| 14.3 | arena com bump | **OK** |
+| 14.1 | cache de UTF-8 pendurado na string | **REV** — a forma NATIVA é UTF-8 (51.2); o que existe é o índice de offsets, construído sob demanda |
+| 15.1, 23.1 | copiador de semiespaço (Cheney) | **OK** — `gc-stress.sh` |
+| 15.2 | erro com mensagem, categoria e posição | **OK** — falta a PILHA (34.2) |
+| 15.3, 16.2, 6.3, 50.3 | `pscript run` com cache de `.o` | **FALTA** — inteiro |
+| 16.4 | o runtime é fonte P compilada junto | **OK** — `tests/psbuild.sh` é a receita |
+| 17.1, 34.1, 49.4 | shadow stack de ENDEREÇO, com faixa, frame por função | **OK** |
+| 17.3 | `xs[2:5]` é cópia | **OK** |
+| 17.4 | `async` entra; gerador fica fora | **OK** — e agora o `yield` diz isso |
+| 18.1, 22.3, 35.x, 36.x | workers isolados, canal, join | **ok** — `spawn`, `send`/`recv`, `detach` |
+| 18.4, 22.3, 36.2 | `epoll`/`kqueue`, NÃO `poll()` | **DIVERGE** — o loop chama `poll()`, que é textualmente o que a 18.4 recusou |
+| 19.2, 20.3, 28.1–28.3 | função como valor, lambda, captura por valor, decorador | **OK** |
+| 19.3, 22.4 | exceção guardada na task e relançada no await | **OK** — `tests/oracle/js/promise` |
+| 20.x, 21.x, 52.1, 57.1, 58.2 | `struct` por origem, `record` valor com método | **OK** — `record` recusa método sem `in self`, com a razão |
+| 22.2 | `==` conteúdo, `is` identidade | **OK** |
+| 24.x, 25.x, 38.1 | chave por conteúdo, agregado mutável não é chave | **OK** |
+| 26.x, 31.2 | `nogc:` com orçamento, `await` dentro é erro | **OK** — `nogc(65536):` roda; a grafia `64k` do texto não existe |
+| 27.3 | literal homogêneo infere o elemento | **OK** |
+| 29.x | tipo de função, `any` e `def` separados, `as def(...)` | **ok** |
+| 32.1–32.3 | `int + float` promove, ÷0 lança, `id(x)` | **ok** |
+| 33.3–33.4, 60.x | `T[N]` como tipo completo, `in` para atravessar | **ok** |
+| 34.2 | rastro de pilha `em f (arq.psc:142)` | **FALTA** — o erro imprime `arquivo:linha: error: msg` e nenhum frame |
+| 39.1 | divisão do Python (`/` dá float, `//` piso) | **OK** — oráculo `py/arith` |
+| 39.4 | top-level await | **OK** |
+| 40.1 | truthiness só de bool e `T?` | **OK** — `if 1:` é recusado com a razão |
+| 40.3, 62.1–62.3 | protocolo de iteração, `Iterable` com tipo associado | **OK** — `implements Iterable` + `type Item = int` roda |
+| 41.x, 42.x | json, regex, namespace, `shared` | **OK** |
+| 43.x | narrowing, `??`, `?.`, `?[i]`, `finally` | **OK** |
+| 44.1–44.2 | default por chamada, `*args` com splat | **ok** |
+| 44.3 | `print(rect)` mostra `Rect(x=1, y=2)` | **OK** — e `Printable.to_str()` sobrepõe |
+| 45.1 | f-string com formato | **OK** |
+| 45.2 | walrus e fatia com passo | **OK** — o walrus FECHADO nesta varredura (era "parsed but not compiled") |
+| 46.4 | `assert` strippable por flag de build | **PARCIAL** — o `assert` roda e lança; a flag não existe |
+| 47.1–47.3 | float como chave por bits, `1.0/0.0` lança, literais | **ok** |
+| 47.4, 89.x | case Unicode com tabela embutida | **OK** — conferido contra o Python em 1.114.112 pontos |
+| 48.1–48.3 | arquivo Python-like, `sleep`/`timeout`/`interval`, `sys` | **OK** |
+| 49.1–49.3 | pipeline, exceção por flag, ctx explícito | **OK** |
+| 50.1 | async retoma por `match(state)` | **OK** |
+| 51.x | `interval` com `tick()`, `str` inline, float boxa | **OK** |
+| 54.1 | `%+`/`%-`/`%*` modulares | **OK** — `x %* 2685821657736338717` roda |
+| 54.2–54.3, 55.1–55.4 | construtor, `raise`, `as`, `in` | **OK** |
+| 59.x, 62.4 | `pack`/`unpack` de record | **OK** |
+| 61.1 | continuação só por parênteses | **OK** — `\` é recusado (a mensagem podia nomear a 61.1) |
+| 61.3 | `const` em referência congela fundo | **PARCIAL** — dentro de função vai; no topo do módulo, "not compiled yet" |
+| 61.4 | `for k in d`, `items`/`keys`/`values`, `x in list`, `"ab" in s` | **OK** — as três views FECHADAS nesta varredura |
+| 62.1 | `Comparable` para ordenação custom no `sorted` | **FALTA** — `sorted` recusa e manda usar `key=` |
+| 62.1 | `Sequence<T>` como tipo de parâmetro | **FALTA** — não parseia |
+| 63.x | `embed`, `embed_bytes`, template com `render` | **OK** |
+| 64.1 | escopo de BLOCO nas duas linguagens | **OK** |
+| 65.10 | `const def` (função de comptime) | **FALTA** |
+| 65.11 | comptime `is_defined`/`typestr`/`hasfield`/`__FILE__` | **FALTA** |
+| 65.12 | `out`/`ref` no pscript | **FALTA** — só `in` existe (55.4) |
+| 66.x, 67.x, 72.5 | traits nominais, despacho pelos dois lados, regra órfã | **OK** |
+| 68.x, 69.x | as levas "decidido e feito" | **OK** |
+| 72.1–72.4, 72.6 | `ord`/`chr`, substring, `for ch in s`, constantes de C | **OK** |
+| 87.2 | `Task<Task<T>>` não achata | **OK** — portão nesta varredura |
+| 87.1 | trait `Awaitable` | **FALTA** — e o que falta é decidir `Poll`/`Waker`, não digitar |
+| 88.x, 89.x, 90.x, 91.x | corpora, oráculos, Unicode, orçamento, ordem do dict | **OK** |
+
+## O que esta varredura FECHOU na segunda passada
+
+**`d.items()`, `d.keys()`, `d.values()` (61.4).** Não existiam — o dict tinha
+`get` e `remove`. Agora `keys()` e `values()` devolvem uma LISTA em ordem de
+inserção (uma cópia: uma vista dentro de um objeto que se move é ponteiro
+interior, que é o que a 17.3 recusa), e `items()` existe só onde o Python o usa,
+como o que um `for k, v in ...` percorre. Como VALOR ele teria de ser uma lista
+de PARES, e a tupla está meio construída (3.2) — então a mensagem diz isso em
+vez de prometer um tipo que ninguém consegue segurar.
+
+**O walrus (45.2).** Estava "parsed but not compiled yet". O que faltava não era
+o nó: era decidir o que fazer nos dois lugares onde hoistar muda o significado.
+
+  * **Condição de laço.** A ligação hoistada cai na frente do `while`, então
+    rodaria UMA vez onde a condição roda toda volta. Agora um `while` cuja
+    condição hoista qualquer coisa vira `while True:` com a ligação e o teste
+    DENTRO — e é isso que faz `while (line := next()) != "":` significar o que
+    o Python significa. O mesmo conserto arrumou a comprehension em condição de
+    laço, que era o mesmo defeito esperando.
+  * **Operando preguiçoso** (braço de ternário, direita de `and`/`or`): RECUSADO,
+    porque não há reescrita que preserve a preguiça e a ligação ao mesmo tempo.
+
+**Dois defeitos que ele desenterrou, e que não eram do walrus:**
+
+  1. **`for k in d:` dentro de um `async def` CRASHAVA.** O laço de dict
+     declarava um local com o nome da variável, mas dentro de uma máquina de
+     estados esse nome é CAMPO DO FRAME — então o corpo lia um campo que nada
+     escreveu. O laço de string ao lado (`for ch in s`) estava certo desde
+     sempre: honrava o frame. Agora os dois honram, e o de pares também.
+  2. **Uma condição de `if` dentro de um `async def` DESCARTAVA o que ela
+     hoistava.** O construtor de estados chamava o lowering da condição e nunca
+     esvaziava o `pre`, então uma ligação (ou uma comprehension) na condição
+     desaparecia em silêncio. `if (r := await f()) > 0:` testava um campo que
+     nada tinha escrito.
+
+Portões: `tests/pscript/run/dictviews.psc`, `tests/pscript/run/walrus.psc` (os
+dois com metade async, que é onde os defeitos moravam), três programas em
+`tests/pscript/bad/` para o que continua recusado, e o par do oráculo
+comparando `items`/`keys`/`values` e o walrus contra o Python.
+
 ## O que precisa de DECISÃO sua (não implementei, não decidi)
 
 **A. `print` de um contêiner.** Hoje `print([1, 2, 3])` é "str() of list<int> is
@@ -120,3 +231,30 @@ código, mas quem ler o DESIGN de cima para baixo lê o contrário do que roda.
 **D. `pscript run` (6.3).** Decidido, não existe. Hoje se compila com `plangc` e
 se linka com o `cc` à mão (é o que o `tests/psbuild.sh` faz). O subcomando e o
 cache de compilação continuam abertos.
+
+---
+
+## O que está DECIDIDO, não implementado, e não precisa de decisão nova
+
+Ordem de valor, na minha leitura — nenhum destes precisa de bateria, só de
+trabalho:
+
+1. **O rastro de pilha (34.2/15.2).** A shadow stack já tem os frames e a 12.4
+   já promete "crash e debugável não são opostos". Hoje um erro não capturado
+   imprime `arquivo:linha: error: msg` e nada mais: nenhum frame, e nenhum
+   handler de `SIGSEGV` que leia a pilha antes de morrer. É a maior diferença
+   entre o que o documento promete e o que quem depura recebe.
+2. **`epoll`/`kqueue` (18.4).** O loop chama `poll()`, textualmente o que a
+   decisão recusou, e paga O(n) por volta em cada espera. O `kqueue` não é
+   testável nesta máquina (Linux), o que é motivo para escrevê-lo com cuidado e
+   dizer que não foi rodado — não para deixar os dois de fora.
+3. **`Comparable` no `sorted` (62.1)** e **`Sequence<T>` como parâmetro
+   (60.3/62.1)** — as duas traits do sistema que estão declaradas e não
+   servem para o que foram declaradas.
+4. **`sorted(xs, key=len)` (28.4)**: com uma função ESCRITA funciona; com um
+   builtin não, porque builtin não é valor. É o caso que a 28.4 escreveu.
+5. **`out`/`ref` no pscript (65.12)** — só `in` existe.
+6. **Comptime (65.10/65.11)**: `const def`, `is_defined`, `typestr`,
+   `hasfield`, `__FILE__`/`__LINE__`/`__func__`.
+7. **`assert` strippable (46.4)** — falta a flag de build.
+8. **`const` de contêiner no topo do módulo (61.3)** — dentro de função vai.

@@ -62,3 +62,22 @@ cs = ""
 for c in [c for c in "hi"]:
     cs += c + ","
 print("chars", cs)
+
+# ---- the iteration pack (61.4) and the walrus (45.2) ----
+inv = {"pear": 4, "fig": 1, "plum": 9}
+for k, v in inv.items():
+    print("item", k, v)
+kk = ""
+for k in inv.keys():
+    kk += k
+print("keys", kk)
+sv = 0
+for v in inv.values():
+    sv += v
+print("values", sv)
+if (howmany := len(inv)) > 2:
+    print("walrus", howmany)
+n = 0
+while (room := 3 - n) > 0:
+    print("room", room)
+    n += 1
