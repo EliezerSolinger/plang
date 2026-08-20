@@ -71,6 +71,7 @@ def hexc(c: char) -> i32
 # ---------- files ----------
 def read_entire_file(path: const *char, out out_len: usize) -> *char
 def read_entire_file_opt(path: const *char, out out_len: usize) -> *char
+def plang_host_os() -> const *char
 
 # ---------- paths ----------
 def path_dir(a: *Arena, path: const *char) -> const *char

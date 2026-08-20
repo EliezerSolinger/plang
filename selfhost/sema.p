@@ -4095,6 +4095,15 @@ struct Sema:
                         has_lbl = True
                 if st->else_block != None and (block_find_kind(st->else_block, ST_LABEL) != None or block_find_kind(st->else_block, ST_CASE) != None):
                     has_lbl = True
+                if st->must_fold and undecided:
+                    # 99.1: the whole point is that the branch not taken is
+                    # never CHECKED, and that only holds if the choice is made
+                    # here. A condition that is not constant would silently
+                    # become a run-time branch, and then both sides have to
+                    # compile — which is exactly what a platform guard cannot do.
+                    fatal_at(self->file, st->pos, "a `const if` needs a condition known at compile time: this one is not (a predefined like `__PLANG_LINUX__`, a `const`, a `-D`, or `is_defined(...)`)")
+                if st->must_fold and has_lbl:
+                    fatal_at(self->file, st->pos, "a `const if` cannot hold a label or a `case`: those are reachable by `goto` from outside, so the branch cannot be dropped")
                 if undecided or has_lbl:
                     st->if_sel = -1
                 elif sel >= 0:
@@ -5988,6 +5997,14 @@ struct Sema:
         self->reg_builtin("__PLANG_STD__", cv_int(i64(cc->std_version) if cc->std_version != 0 else 99))
         if cc->backend_name != None:
             self->reg_builtin("__PLANG_BACKEND__", cv_str(self->a->printf("\"%s\"", cc->backend_name)))
+        # 99.3: WHICH platform, for the `const if` that chooses between two ways
+        # of talking to the kernel. It is the host this compiler is RUNNING on,
+        # because in the normal flow that is also the host that will compile the
+        # C it emits — and `-D` overrides it, which is what a cross build needs.
+        osn: const *char = plang_host_os()
+        self->reg_builtin("__PLANG_OS__", cv_str(self->a->printf("\"%s\"", osn)))
+        self->reg_builtin("__PLANG_LINUX__", cv_int(1 if strcmp(osn, "linux") == 0 else 0))
+        self->reg_builtin("__PLANG_MACOS__", cv_int(1 if strcmp(osn, "macos") == 0 else 0))
 
     # injects the consts passed by the driver (-D NAME=VALUE) as if they were
     # `static const NAME = VALUE` at the top of the module: they are inferred, registered

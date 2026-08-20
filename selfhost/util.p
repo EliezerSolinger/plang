@@ -7,6 +7,7 @@ include <stdio.h>
 include <stdlib.h>
 include <string.h>
 include <stdarg.h>
+include <sys/utsname.h>   # 99.3: `uname`, to know the host without a #ifdef
 import "plang.ph"
 
 static def read_open_file(f: *FILE, path: const *char, out out_len: usize) -> *char
@@ -472,3 +473,21 @@ def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *c
     r: const *char = a->strdup(out.data if out.data != None else "")
     out.deinit()
     return r
+
+# 99.3: the host this compiler is running on, named the way a `const if` reads
+# it. `uname` and not a `#ifdef`, for the reason the whole feature exists: this
+# file is compiled from generated C that has no preprocessor of its own, and the
+# answer has to come from somewhere that does not need one.
+#
+# `-D __PLANG_OS__="..."` overrides it, which is what a cross build needs.
+def plang_host_os() -> const *char:
+    u: utsname
+    if uname(&u) != 0:
+        return "other"
+    if strcmp(u.sysname, "Linux") == 0:
+        return "linux"
+    if strcmp(u.sysname, "Darwin") == 0:
+        return "macos"
+    if strstr(u.sysname, "BSD") != None:
+        return "bsd"
+    return "other"

@@ -519,6 +519,8 @@ def main(argc: int, argv: **char) -> int:
     cc.std_version = std_version
     cc.cpp = cpp_cmd
     cc.inline_runtime = inline_runtime
+    # 99.2: what a top-level `const if` may look at, before anything is parsed
+    parser_config_predef(plang_host_os(), defines.data, defines.len)
     ps_lower_config(strip_asserts, full_trace)
     # `run` compiles the RUNTIME with the program (16.4): on the command line
     # that is the caller's job, and in `run` there is no command line left.

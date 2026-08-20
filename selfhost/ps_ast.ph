@@ -241,6 +241,12 @@ struct PsStmt:
     ncases: i32
     catch_block: *PsBlock # PS_TRY
     finally_block: *PsBlock
+    must_fold: bool       # `const if` (99): the condition HAS to be constant,
+                          #   and the branch not taken is never checked — which
+                          #   is what lets one branch name what only its own
+                          #   platform has
+    if_sel: i32           # which branch survived the fold: 0..nconds-1, nconds
+                          #   = else, -2 = none. Only meaningful with must_fold.
     is_pairs: bool        # `for k, v in d.items():` (61.4) — the sema replaced
                           #   the iterable with the dict itself and left this
                           #   mark, so the lowering binds the value too

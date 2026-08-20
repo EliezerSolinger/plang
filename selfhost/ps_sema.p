@@ -268,6 +268,7 @@ struct PsSema:
     static def predef(self: *PsSema, e: *PsExpr) -> *PsType
     static def const_root(self: *PsSema, e: *PsExpr) -> const *char
     static def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char)
+    static def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char)
     static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
@@ -3339,6 +3340,22 @@ struct PsSema:
             e->kind = PE_STR
             e->text = self->a->printf("\"%s\"", self->cur_fn if self->cur_fn != None else "<main>")
             return ps_type(self->a, PT_STR, e->pos)
+        # 99.3: which platform, for the `const if` that chooses between two ways
+        # of talking to the kernel. Same names and same answer as the P side —
+        # one table, asked from two front ends.
+        if strcmp(n, "__PLANG_OS__") == 0:
+            e->kind = PE_STR
+            e->text = self->a->printf("\"%s\"", parser_predef_os())
+            return ps_type(self->a, PT_STR, e->pos)
+        if strcmp(n, "__PLANG_LINUX__") == 0 or strcmp(n, "__PLANG_MACOS__") == 0 or strcmp(n, "__PLANG_BSD__") == 0 or strcmp(n, "__PLANG__") == 0:
+            # BOOL and not int, because here a condition takes a bool and
+            # nothing else (40.1) — "am I on linux" is a yes or a no, and the
+            # `and`/`or` of a `const if` has to read like every other condition
+            pk9: bool = True
+            pv9: i64 = parser_predef_value(n, ref pk9)
+            e->kind = PE_BOOL
+            e->text = "True" if pv9 != 0 else "False"
+            return ps_type(self->a, PT_BOOL, e->pos)
         if strcmp(n, "__COUNTER__") == 0:
             e->kind = PE_INT
             e->text = self->a->printf("%d", self->counter)
@@ -3377,6 +3394,52 @@ struct PsSema:
             return
         if self->gconst.has(n) or self->gconst.has(self->gname_soft(n)):
             fatal_at(self->file, e->pos, "'%s' is const, and `const` freezes DEEP (61.3): %s is a mutation, and what a const forbids is rebinding AND writing", n, what)
+
+    # 99: is this expression TRUE at compile time? Literals, `not`, `and`, `or`
+    # and a comparison between two literals — which is everything a folded
+    # predefine or an `is_defined` can leave behind. Anything else is "unknown",
+    # and a `const if` says so instead of guessing.
+    static def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool:
+        if e == None:
+            ok = False
+            return False
+        match e->kind:
+            case PE_BOOL:
+                return strcmp(e->text, "True") == 0
+            case PE_INT:
+                return strtoll(e->text, None, 0) != 0
+            case PE_STR:
+                return True            # a non-empty literal; `""` is written `== ""`
+            case PE_UNARY:
+                if e->op == TK_NOT:
+                    return not self->const_truth(e->lhs, ref ok)
+                ok = False
+                return False
+            case PE_BINARY:
+                if e->op == TK_AND:
+                    l: bool = self->const_truth(e->lhs, ref ok)
+                    r: bool = self->const_truth(e->rhs, ref ok)
+                    return l and r
+                if e->op == TK_OR:
+                    l2: bool = self->const_truth(e->lhs, ref ok)
+                    r2: bool = self->const_truth(e->rhs, ref ok)
+                    return l2 or r2
+                if e->op == TK_EQ or e->op == TK_NE:
+                    if e->lhs->kind == PE_STR and e->rhs->kind == PE_STR:
+                        l3: usize = 0
+                        r3: usize = 0
+                        a3: *char = str_lit_decode(self->a, e->lhs->text, out l3)
+                        b3: *char = str_lit_decode(self->a, e->rhs->text, out r3)
+                        same: bool = strcmp(a3, b3) == 0
+                        return same if e->op == TK_EQ else not same
+                    if e->lhs->kind == PE_INT and e->rhs->kind == PE_INT:
+                        same2: bool = strtoll(e->lhs->text, None, 0) == strtoll(e->rhs->text, None, 0)
+                        return same2 if e->op == TK_EQ else not same2
+                ok = False
+                return False
+            case _:
+                ok = False
+                return False
 
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:
@@ -3860,6 +3923,35 @@ struct PsSema:
                     fatal_at(self->file, s->pos, "'%s' returns nothing, but a value is returned here", self->cur_fn)
                 self->want(s->expr, et, self->cur_ret, "the return value")
             case PS_IF:
+                # 99: a `const if` decides HERE, and only the branch taken is
+                # checked — that is what lets a branch name what only its own
+                # platform has. The condition has already folded its predefines
+                # to literals, so what is left to evaluate is literals.
+                if s->must_fold:
+                    s->if_sel = -2
+                    for i in range(s->nconds):
+                        self->check_expr(s->conds[i])
+                    for i in range(s->nconds):
+                        cok9: bool = True
+                        cv9: bool = self->const_truth(s->conds[i], ref cok9)
+                        if not cok9:
+                            fatal_at(self->file, s->conds[i]->pos, "a `const if` needs a condition known at compile time: this one is not (a predefine like `__PLANG_LINUX__`, `is_defined(...)`, or a literal)")
+                        if cv9:
+                            s->if_sel = i
+                            break
+                    if s->if_sel == -2 and s->else_block != None:
+                        s->if_sel = s->nconds
+                    if s->if_sel >= 0 and s->if_sel < s->nconds:
+                        self->depth += 1
+                        self->check_block(s->blocks[s->if_sel])
+                        self->pop_scope()
+                        self->depth -= 1
+                    elif s->if_sel == s->nconds:
+                        self->depth += 1
+                        self->check_block(s->else_block)
+                        self->pop_scope()
+                        self->depth -= 1
+                    return
                 # A name assigned in EVERY branch (else included) is assigned
                 # afterwards; anything less leaves it unassigned, which is the
                 # static form of Python's UnboundLocalError that 40.2 bought.

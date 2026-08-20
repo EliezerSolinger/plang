@@ -3542,6 +3542,37 @@ estável, e serve a toda diferença de plataforma futura, não só a esta. É o
 contrário de uma flag de build, que tira a decisão da linguagem e a põe num
 lugar que alguém tem de lembrar.
 
+**99.5 Vai para o pscript também** (decisão sua, 2026-08-20). Mesma grafia, mesma
+regra, mesmo lugar: instrução dentro de função e declaração no topo. No pscript
+os predefinidos de plataforma dobram para BOOL e não para inteiro, porque lá uma
+condição toma bool e nada mais (40.1) — "estou no linux" é um sim ou um não.
+
+### 99.6 Como ficou, e o que já existia
+
+O `if` comum do P **já** dobrava condição constante e **já** checava só o ramo
+vivo (`if_sel`, na sema). Então o trabalho não era a poda: era a GARANTIA. Sem
+ela, um erro de digitação na condição a torna de runtime, os dois ramos passam a
+ter de compilar, e o erro sai do compilador C três camadas adiante.
+
+  * **Dentro de função:** `const if` é a mesma poda, com a sema recusando
+    condição que não dobra — e recusando também um `label`/`case` dentro (esses
+    são alcançáveis por `goto` de fora, então o ramo não pode ser descartado).
+  * **No topo:** respondido no PARSER, porque o que um ramo guarda é o
+    `include <sys/epoll.h>` que o outro sistema não tem — quando a sema roda, o
+    header já foi lido. O que a condição pode olhar é, por isso, restrito ao que
+    o parser sabe: os predefinidos e os `-D`. Um nome, `not`, `and`, `or`, e
+    `__PLANG_OS__ == "..."`.
+  * **De onde vem a plataforma:** `uname`, não `#ifdef` — este arquivo é
+    compilado de C gerado que não tem preprocessador próprio, então a resposta
+    tem de vir de onde não precisa de um. `-D` sobrescreve, que é o que um build
+    cruzado precisa.
+
+Portões: `tests/cases/constif.p` e `tests/pscript/run/constif.psc` — os dois com
+saída IGUAL nas duas plataformas de propósito (um teste de plataforma que só
+passa numa é um teste que a outra não roda), cada um incluindo o header do seu
+sistema e chamando a API que só existe nele; mais
+`tests/errors/p_constif_runtime.p` e dois programas em `tests/pscript/bad/`.
+
 ## Bateria 100 — release por padrão, `-g` para o rastro inteiro (2026-08-20)
 
 **100.1 Três coisas, e o padrão é o rápido.** Sem flag: sem frame de folha (a

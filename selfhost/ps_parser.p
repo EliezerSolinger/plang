@@ -17,6 +17,9 @@
 include <string.h>
 include <stdlib.h>
 import "ps_parser.ph"
+# 99: the predefine table lives in the P parser, and both front ends ask it the
+# same questions — one table, one answer
+import "parser.ph"
 import "vecs.ph"
 import "../stl/vec.ph"
 
@@ -41,6 +44,12 @@ implement Vec<PsParam>
 declare Vec<PsField>
 implement Vec<PsField>
 declare Vec<PsEnumItem>
+
+# 99.2: read below — the two of them are used by the module loop, which comes
+# first in this file
+static def ps_const_if_top(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena)
+static def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena, keep: bool)
+
 implement Vec<PsEnumItem>
 
 static def is_float_lexeme(t: const *char) -> bool
@@ -100,6 +109,7 @@ struct PsP:
     static def parse_stmt(self: *PsP) -> *PsStmt
     static def parse_simple_stmt(self: *PsP) -> *PsStmt
     static def parse_if(self: *PsP) -> *PsStmt
+    static def const_cond(self: *PsP, e: *PsExpr) -> bool
     static def parse_for(self: *PsP) -> *PsStmt
     static def parse_match(self: *PsP) -> *PsStmt
     static def parse_try(self: *PsP) -> *PsStmt
@@ -1118,6 +1128,14 @@ struct PsP:
         if self->at(TK_INDENT):
             fatal_at(self->file, self->pk()->pos, "unexpected indentation")
         self->refuse_python()
+        # `const if` (99): the condition folds and the branch not taken is never
+        # checked. Any OTHER `const` here is a local constant, and the simple
+        # statement below is what reads it.
+        if self->at(TK_CONST) and self->pk1()->kind == TK_IF:
+            self->adv()
+            cif: *PsStmt = self->parse_if()
+            cif->must_fold = True
+            return cif
         match self->pk()->kind:
             case TK_IF:
                 return self->parse_if()
@@ -1274,6 +1292,57 @@ struct PsP:
         ex: *PsStmt = ps_stmt(self->a, PS_EXPR, pos)
         ex->expr = lhs
         return ex
+
+    # ---------- `const if` (99), the pscript half ----------
+    # Same construction, same rule, same reason: the condition is answered at
+    # compile time and the branch not taken is never checked. At the TOP it
+    # guards declarations — including the `import` and the `include <h>` that
+    # only exist on one platform — so it is answered here, in the parser, before
+    # any of them is read.
+    #
+    # What the condition may look at is what the parser can know: the compiler's
+    # predefines and the `-D`s, the same table the P side reads.
+    static def const_cond(self: *PsP, e: *PsExpr) -> bool:
+        if e == None:
+            return False
+        match e->kind:
+            case PE_NAME:
+                k: bool = True
+                v: i64 = parser_predef_value(e->text, ref k)
+                if not k:
+                    fatal_at(self->file, e->pos, "a top-level `const if` can only look at a compiler predefine (`__PLANG_LINUX__`, `__PLANG_MACOS__`, `__PLANG_BSD__`) or a `-D` name: '%s' is neither", e->text)
+                return v != 0
+            case PE_INT:
+                return strtoll(e->text, None, 0) != 0
+            case PE_BOOL:
+                return strcmp(e->text, "True") == 0
+            case PE_UNARY:
+                if e->op == TK_NOT:
+                    return not self->const_cond(e->lhs)
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`")
+                return False
+            case PE_BINARY:
+                if e->op == TK_AND:
+                    return self->const_cond(e->lhs) and self->const_cond(e->rhs)
+                if e->op == TK_OR:
+                    return self->const_cond(e->lhs) or self->const_cond(e->rhs)
+                if e->op == TK_EQ or e->op == TK_NE:
+                    nm: *PsExpr = e->lhs
+                    lit: *PsExpr = e->rhs
+                    if nm->kind != PE_NAME or lit->kind != PE_STR:
+                        nm = e->rhs
+                        lit = e->lhs
+                    if nm->kind != PE_NAME or lit->kind != PE_STR or strcmp(nm->text, "__PLANG_OS__") != 0:
+                        fatal_at(self->file, e->pos, "the only comparison a `const if` at the top takes is `__PLANG_OS__ == \"name\"`")
+                    ln: usize = 0
+                    sv: *char = str_lit_decode(self->a, lit->text, out ln)
+                    same: bool = strcmp(sv, parser_predef_os()) == 0
+                    return same if e->op == TK_EQ else not same
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`")
+                return False
+            case _:
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`")
+                return False
 
     static def parse_if(self: *PsP) -> *PsStmt:
         pos: Pos = self->expect(TK_IF, "if")->pos
@@ -1795,6 +1864,77 @@ static def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr:
             c->args[i] = ps_clone_expr(a, e->args[i], file)
     return c
 
+# 99.2: one indented block of top-level things, kept only if this is the branch
+# that was taken. A pscript file holds DECLARATIONS and STATEMENTS at the top, so
+# both are read here and both are dropped when the branch is not the one.
+static def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena, keep: bool):
+    p->expect(TK_COLON, "const if")
+    p->expect(TK_NEWLINE, "const if")
+    p->expect(TK_INDENT, "const if")
+    while not p->at(TK_DEDENT) and not p->at(TK_EOF):
+        if p->accept(TK_NEWLINE):
+            continue
+        # only the forms that make sense under a platform guard: an import, an
+        # include, a def, and a statement. A nested `const if` too, because a
+        # guard inside a guard is the same question asked twice.
+        if p->at(TK_CONST) and p->pk1()->kind == TK_IF:
+            ps_const_if_top(p, decls, top, a)
+            continue
+        if p->at(TK_IMPORT):
+            d: *PsDecl = p->parse_import()
+            if keep:
+                decls->push(d)
+            continue
+        if p->at(TK_FROM):
+            d2: *PsDecl = p->parse_from()
+            if keep:
+                decls->push(d2)
+            continue
+        if p->at(TK_IDENT) and strcmp(p->pk()->text, "include") == 0:
+            d3: *PsDecl = p->parse_include()
+            if keep:
+                decls->push(d3)
+            continue
+        if p->at(TK_DEF) or p->at(TK_ASYNC):
+            isa: bool = p->accept(TK_ASYNC)
+            fd: *PsDecl = ps_decl(a, PD_FUNC, p->pk()->pos)
+            fd->func = p->parse_func(False, isa, None)
+            fd->name = fd->func->name
+            if keep:
+                decls->push(fd)
+            continue
+        if p->at(TK_STATIC):
+            p->adv()
+            sa: bool = p->accept(TK_ASYNC)
+            sd: *PsDecl = ps_decl(a, PD_FUNC, p->pk()->pos)
+            sd->is_static = True
+            sd->func = p->parse_func(True, sa, None)
+            sd->name = sd->func->name
+            if keep:
+                decls->push(sd)
+            continue
+        st: *PsStmt = p->parse_stmt()
+        if keep:
+            top->push(st)
+    p->expect(TK_DEDENT, "const if")
+
+static def ps_const_if_top(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena):
+    p->adv()                     # const
+    p->adv()                     # if
+    c0: *PsExpr = p->parse_expr()
+    taken: bool = p->const_cond(c0)
+    ps_const_if_block(p, decls, top, a, taken)
+    while p->at(TK_ELIF):
+        p->adv()
+        ce: *PsExpr = p->parse_expr()
+        ve: bool = p->const_cond(ce) and not taken
+        ps_const_if_block(p, decls, top, a, ve)
+        if ve:
+            taken = True
+    if p->at(TK_ELSE):
+        p->adv()
+        ps_const_if_block(p, decls, top, a, not taken)
+
 def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
     p: PsP = {tl.toks, tl.n, 0, file, a}
     m: *PsModule = a->alloc(sizeof(PsModule))
@@ -1865,6 +2005,11 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
                 sfd->name = sfd->func->name
                 decls.push(sfd)
             case TK_CONST:
+                # 99.2: `const if` at the top guards DECLARATIONS — including
+                # the `import` and the `include <h>` that only one platform has
+                if p.pk1()->kind == TK_IF:
+                    ps_const_if_top(&p, &decls, &top, a)
+                    continue
                 # a module-level `const` is a DECLARATION, not a statement: it
                 # is known at compile time and has no place in the run order.
                 # A plain top-level `x = 1` stays a statement — Python's model,

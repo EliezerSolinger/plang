@@ -4829,6 +4829,21 @@ struct PsLow:
                 out->push(r)
                 return
             case PS_IF:
+                # 99: a `const if` was decided by the sema, and only the branch
+                # it kept exists from here on. Emitting the statement at all
+                # would put the other branches through the lowering, which is
+                # the pass that would trip over the symbol they name.
+                if s->must_fold:
+                    kb9: *PsBlock = None
+                    if s->if_sel >= 0 and s->if_sel < s->nconds:
+                        kb9 = s->blocks[s->if_sel]
+                    elif s->if_sel == s->nconds:
+                        kb9 = s->else_block
+                    if kb9 != None:
+                        bs9: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+                        bs9->body = self->block(kb9)
+                        out->push(bs9)
+                    return
                 i2: *Stmt = st_new(self->a, ST_IF, s->pos)
                 i2->conds = self->a->alloc(usize(s->nconds) * sizeof(*i2->conds))
                 i2->blocks = self->a->alloc(usize(s->nconds) * sizeof(*i2->blocks))

@@ -999,6 +999,14 @@ struct P:
             case TK_WITH:
                 return self->parse_with()
             case TK_CONST:
+                # `const if` (99.1): the condition HAS to fold, and the branch
+                # not taken is never checked. Everything else after `const` is a
+                # local constant.
+                if self->pk1()->kind == TK_IF:
+                    self->adv()
+                    cif: *Stmt = self->parse_if()
+                    cif->must_fold = True
+                    return cif
                 self->adv()
                 return self->parse_var_stmt(True)
             case TK_RETURN:
@@ -1520,6 +1528,131 @@ struct P:
                 fatal_at(self->file, t->pos, "invalid top-level declaration (found %s)", tok_kind_name(t->kind))
                 return None
 
+# ---------- `const if` at the TOP of a file (99.2) ----------
+# The condition is answered HERE, in the parser, and only the branch taken
+# becomes part of the module. It has to be here and not in the sema because what
+# a branch holds is `include <sys/epoll.h>` — a header the other platform does
+# not have — and by the time the sema runs, the include has already been read.
+#
+# What the condition may mention is therefore restricted to what the PARSER can
+# know: the compiler's own predefines and the `-D`s. A name, `not`, `and`, `or`,
+# and `== "literal"` on `__PLANG_OS__`. Anything else says so.
+static PRE_OS: const *char = "other"
+static PRE_DEFS: **char = None
+static PRE_NDEFS: i32 = 0
+
+def parser_config_predef(os: const *char, defs: **char, ndefs: i32):
+    PRE_OS = os
+    PRE_DEFS = defs
+    PRE_NDEFS = ndefs
+
+# the value of a name the parser is allowed to know, as an integer (0 = false).
+# `-D NAME` alone is 1, `-D NAME=0` is 0, `-D NAME=x` is 1 (defined).
+def parser_predef_os() -> const *char:
+    return PRE_OS
+
+def parser_predef_value(name: const *char, ref known: bool) -> i64:
+    known = True
+    if strcmp(name, "__PLANG_LINUX__") == 0:
+        return 1 if strcmp(PRE_OS, "linux") == 0 else 0
+    if strcmp(name, "__PLANG_MACOS__") == 0:
+        return 1 if strcmp(PRE_OS, "macos") == 0 else 0
+    if strcmp(name, "__PLANG_BSD__") == 0:
+        return 1 if strcmp(PRE_OS, "bsd") == 0 else 0
+    if strcmp(name, "__PLANG__") == 0:
+        return 1
+    for i in range(PRE_NDEFS):
+        d: const *char = PRE_DEFS[i]
+        eq: const *char = strchr(d, int('='))
+        if eq == None:
+            if strcmp(d, name) == 0:
+                return 1
+        elif strncmp(d, name, usize(eq - d)) == 0 and strlen(name) == usize(eq - d):
+            v: const *char = eq + 1
+            if strcmp(v, "0") == 0:
+                return 0
+            return 1
+    known = False
+    return 0
+
+# the restricted condition: a name, `not`, `and`, `or`, and `==`/`!=` against a
+# string literal. Whatever else appears says what is allowed instead of being
+# quietly false.
+static def pre_cond(self: *P, e: *Expr, file: const *char) -> bool:
+    if e == None:
+        return False
+    match e->kind:
+        case EX_IDENT:
+            k: bool = True
+            v: i64 = parser_predef_value(e->text, ref k)
+            if not k:
+                fatal_at(file, e->pos, "a top-level `const if` can only look at a compiler predefine (`__PLANG_LINUX__`, `__PLANG_MACOS__`, `__PLANG_BSD__`) or a `-D` name: '%s' is neither", e->text)
+            return v != 0
+        case EX_NUMBER:
+            return strtoll(e->text, None, 0) != 0
+        case EX_UNARY:
+            if e->op == TK_NOT:
+                return not pre_cond(self, e->lhs, file)
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`")
+            return False
+        case EX_BINARY:
+            if e->op == TK_AND:
+                return pre_cond(self, e->lhs, file) and pre_cond(self, e->rhs, file)
+            if e->op == TK_OR:
+                return pre_cond(self, e->lhs, file) or pre_cond(self, e->rhs, file)
+            if e->op == TK_EQ or e->op == TK_NE:
+                # `__PLANG_OS__ == "macos"`: the one string comparison, because
+                # naming the platform reads better than three booleans
+                nm: *Expr = e->lhs
+                lit: *Expr = e->rhs
+                if nm->kind != EX_IDENT or lit->kind != EX_STRING:
+                    nm = e->rhs
+                    lit = e->lhs
+                if nm->kind != EX_IDENT or lit->kind != EX_STRING or strcmp(nm->text, "__PLANG_OS__") != 0:
+                    fatal_at(file, e->pos, "the only comparison a top-level `const if` takes is `__PLANG_OS__ == \"name\"`")
+                ln: usize = 0
+                sv: *char = str_lit_decode(self->a, lit->text, out ln)
+                same: bool = strcmp(sv, PRE_OS) == 0
+                return same if e->op == TK_EQ else not same
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`")
+            return False
+        case _:
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`")
+            return False
+
+# reads one indented block of TOP-LEVEL declarations, keeping them only if this
+# is the branch that was taken
+static def pre_block(self: *P, into: *Vec<*Decl>, keep: bool):
+    self->expect(TK_COLON, "const if")
+    self->expect(TK_NEWLINE, "const if")
+    self->expect(TK_INDENT, "const if")
+    while not self->at(TK_DEDENT) and not self->at(TK_EOF):
+        if self->accept(TK_NEWLINE):
+            continue
+        d: *Decl = self->parse_top()
+        if keep and d != None:
+            into->push(d)
+    self->expect(TK_DEDENT, "const if")
+
+static def parse_const_if_top(self: *P, into: *Vec<*Decl>, file: const *char):
+    self->adv()                      # const
+    self->adv()                      # if
+    taken: bool = False
+    c0: *Expr = self->parse_expr()
+    v0: bool = pre_cond(self, c0, file)
+    pre_block(self, into, v0)
+    taken = v0
+    while self->at(TK_ELIF):
+        self->adv()
+        ce: *Expr = self->parse_expr()
+        ve: bool = pre_cond(self, ce, file) and not taken
+        pre_block(self, into, ve)
+        if ve:
+            taken = True
+    if self->at(TK_ELSE):
+        self->adv()
+        pre_block(self, into, not taken)
+
 static def module_basename(a: *Arena, path: const *char) -> const *char:
     slash: const *char = strrchr(path, '/')
     base: const *char = slash + 1 if slash != None else path
@@ -1541,6 +1674,12 @@ def parse_tokens(a: *Arena, file: const *char, tl: TokenList, is_header: i32) ->
             continue
         if p.at(TK_INDENT):
             fatal_at(file, p.pk()->pos, "unexpected indentation at top level")
+        # 99.2: `const if` at the top guards DECLARATIONS — including the
+        # `include` that only exists on one platform — so it is answered here
+        # and only the branch taken enters the module
+        if p.at(TK_CONST) and p.pk1()->kind == TK_IF:
+            parse_const_if_top(&p, &decls, file)
+            continue
         decls.push(p.parse_top())
     m->decls = decls.data
     m->ndecls = decls.len

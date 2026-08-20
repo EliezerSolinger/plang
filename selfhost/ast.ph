@@ -296,6 +296,13 @@ struct Stmt:
     else_block: *Block
     if_sel: i32         # branch resolved at compile-time: 0..nconds-1 = cond's
                         #   block, nconds = else, -1 = runtime (not folded)
+    must_fold: bool     # `const if` (99.1): the condition HAS to be constant.
+                        #   The fold itself is what an ordinary `if` already
+                        #   gets; what this adds is the guarantee — a typo that
+                        #   made the condition run-time would otherwise become a
+                        #   branch that names a symbol the platform does not
+                        #   have, and the error would come from the C compiler
+                        #   three layers away.
     # ST_WHILE / ST_DO / ST_DEFER
     cond: *Expr
     body: *Block
