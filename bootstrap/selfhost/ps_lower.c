@@ -2140,6 +2140,13 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             return sc;
         }
         case PE_INDEX: {
+            if (e->lhs->type != NULL && e->lhs->type->kind == PT_TUPLE) {
+                Expr *tf9 = ex_new(self->a, EX_FIELD, e->pos);
+                tf9->op = TK_DOT;
+                tf9->lhs = PsLow_expr(self, e->lhs);
+                tf9->field = Arena_printf(self->a, "_%lld", strtoll(e->rhs->text, NULL, 0));
+                return tf9;
+            }
             if (e->lhs->type != NULL && e->lhs->type->kind == PT_ARRAY) {
                 PsType *at8 = e->lhs->type;
                 Expr *ck8 = PsLow_call_rt(self, "ps_arr_at", e->pos);
@@ -3334,6 +3341,9 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, c4, PsLow_num(self, "4", e->pos));
         }
         return c4;
+    }
+    if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_TUPLE) {
+        return PsLow_num(self, Arena_printf(self->a, "%d", e->args[0]->type->nparams), e->pos);
     }
     if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_ARRAY) {
         PsType *ac8 = e->args[0]->type;

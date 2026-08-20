@@ -2560,8 +2560,19 @@ static PsStmt *PsP_parse_stmt(PsP *self) {
         }
     }
     PsStmt *s2 = PsP_parse_simple_stmt(self);
-    if (PsP_at(self, TK_COMMA)) {
-        fatal_at(self->file, PsP_pk(self)->pos, "unpacking an assignment (`a, b = ...`) is not implemented yet: the tuple type and literal parse, the multiple binding does not — assign once and index, or return a `record`");
+    if (PsP_at(self, TK_COMMA) && s2->kind == PS_UNPACK) {
+        Vec_pPsExpr rv9;
+        Vec_pPsExpr_init(&rv9);
+        Vec_pPsExpr_push(&rv9, s2->rhs);
+        while (PsP_accept(self, TK_COMMA)) {
+            Vec_pPsExpr_push(&rv9, PsP_parse_expr(self));
+        }
+        PsExpr *rt9 = ps_expr(self->a, PE_TUPLE, s2->rhs->pos);
+        rt9->args = rv9.data;
+        rt9->nargs = rv9.len;
+        s2->rhs = rt9;
+    } else if (PsP_at(self, TK_COMMA)) {
+        fatal_at(self->file, PsP_pk(self)->pos, "a comma here reads as unpacking (`a, b = ...`), and the left side has to be plain names (98.1)");
     }
     if (self->blocked) {
         self->blocked = 0;

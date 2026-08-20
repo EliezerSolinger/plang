@@ -2472,6 +2472,17 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsType *ct3 = PsSema_check_expr(self, e->lhs);
             PsType *it3 = PsSema_check_expr(self, e->rhs);
             self->hint = prevhx;
+            if (ct3 != NULL && ct3->kind == PT_TUPLE) {
+                if (e->rhs->kind != PE_INT) {
+                    fatal_at(self->file, e->rhs->pos, "the index of a tuple has to be a literal number: each slot has its own type, so `t[i]` with a variable would have no type (98.1)");
+                }
+                int64_t ix9 = strtoll(e->rhs->text, NULL, 0);
+                if (ix9 < 0 || ix9 >= (int64_t)ct3->nparams) {
+                    fatal_at(self->file, e->rhs->pos, "this tuple has %d slots, so %lld is out of range", ct3->nparams, ix9);
+                }
+                e->type = ct3->params[ix9];
+                return e->type;
+            }
             if (ct3 != NULL && ct3->kind == PT_ARRAY) {
                 PsSema_want(self, e->rhs, it3, ps_type(self->a, PT_INT, e->pos), "an index");
                 e->type = ct3->inner;
@@ -4017,26 +4028,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2388_17 = e;
-                __with_2388_17->kind = PE_STR;
-                __with_2388_17->text = lit7;
-                __with_2388_17->lhs = NULL;
-                __with_2388_17->rhs = NULL;
-                __with_2388_17->args = NULL;
-                __with_2388_17->nargs = 0;
+                PsExpr *__with_2401_17 = e;
+                __with_2401_17->kind = PE_STR;
+                __with_2401_17->text = lit7;
+                __with_2401_17->lhs = NULL;
+                __with_2401_17->rhs = NULL;
+                __with_2401_17->args = NULL;
+                __with_2401_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2401_13 = e;
-            __with_2401_13->kind = PE_LOWERED;
-            __with_2401_13->low = ln7;
-            __with_2401_13->lhs = NULL;
-            __with_2401_13->rhs = NULL;
-            __with_2401_13->args = NULL;
-            __with_2401_13->nargs = 0;
+            PsExpr *__with_2414_13 = e;
+            __with_2414_13->kind = PE_LOWERED;
+            __with_2414_13->low = ln7;
+            __with_2414_13->lhs = NULL;
+            __with_2414_13->rhs = NULL;
+            __with_2414_13->args = NULL;
+            __with_2414_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4080,6 +4091,9 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "len() takes exactly one argument");
         }
         PsType *at2 = PsSema_check_expr(self, e->args[0]);
+        if (at2 != NULL && at2->kind == PT_TUPLE) {
+            return ps_type(self->a, PT_INT, e->pos);
+        }
         if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_LIST || at2->kind == PT_DICT || at2->kind == PT_SET)) {
             fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2));
         }
@@ -4250,10 +4264,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2598_17 = &ns->quals[ns->nquals];
-                __with_2598_17->name = q;
-                __with_2598_17->orig = d->path;
-                __with_2598_17->ns = sub;
+                PsNsEnt *__with_2615_17 = &ns->quals[ns->nquals];
+                __with_2615_17->name = q;
+                __with_2615_17->orig = d->path;
+                __with_2615_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4266,10 +4280,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2610_21 = &ns->ents[ns->nents];
-                    __with_2610_21->name = local;
-                    __with_2610_21->orig = d->names[k];
-                    __with_2610_21->ns = sub;
+                    PsNsEnt *__with_2627_21 = &ns->ents[ns->nents];
+                    __with_2627_21->name = local;
+                    __with_2627_21->orig = d->names[k];
+                    __with_2627_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4630,10 +4644,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2946_9 = e;
-        __with_2946_9->kind = PE_NAME;
-        __with_2946_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2946_9->lhs = NULL;
+        PsExpr *__with_2963_9 = e;
+        __with_2963_9->kind = PE_NAME;
+        __with_2963_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2963_9->lhs = NULL;
     }
     return 1;
 }
@@ -5155,6 +5169,16 @@ static void PsSema_key_ok(PsSema *self, PsType *t, Pos pos, const char *what) {
     if (t == NULL) {
         fatal_at(self->file, pos, "%s has no type", what);
     }
+    if (t->kind == PT_TUPLE) {
+        if (!tuple_is_pure(t)) {
+            fatal_at(self->file, pos, "%s is %s: a tuple is a key when its slots are pure bytes (24.3), and this one holds something the collector owns", what, ps_type_str(self->a, t));
+        }
+        size_t i;
+        for (i = 0; i < t->nparams; i += 1) {
+            PsSema_key_ok(self, t->params[i], pos, "a slot of a tuple used as a key");
+        }
+        return;
+    }
     switch (t->kind) {
         case PT_INT:
         case PT_BOOL:
@@ -5614,6 +5638,12 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
         case PS_ASSIGN: {
             if (s->lhs->kind == PE_INDEX || s->lhs->kind == PE_FIELD || s->lhs->kind == PE_OPTFIELD || s->lhs->kind == PE_OPTINDEX) {
                 PsSema_deny_const_mut(self, s->lhs, "writing through it");
+            }
+            if (s->lhs->kind == PE_INDEX) {
+                PsType *tgt9 = PsSema_check_expr(self, s->lhs->lhs);
+                if (tgt9 != NULL && tgt9->kind == PT_TUPLE) {
+                    fatal_at(self->file, s->pos, "a tuple is immutable (38.2): `t[0] = x` is what makes a tuple-key hash go stale, so it is refused — build another tuple");
+                }
             }
             if (s->lhs->kind == PE_INDEX && s->op == TK_ASSIGN) {
                 PsType *et3 = PsSema_check_expr(self, s->lhs);
