@@ -2669,9 +2669,6 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 }
             }
             tt->nparams = e->nargs;
-            if (!tuple_is_pure(tt)) {
-                fatal_at(self->file, e->pos, "a tuple holding a collected value does not compile yet — it needs the collector to trace it; a tuple of numbers, bools or records works today");
-            }
             t = tt;
             break;
         }
@@ -2782,6 +2779,9 @@ static PsType *PsSema_check_binary(PsSema *self, PsExpr *e) {
             }
             if (!num && !ps_type_eq(lt, rt)) {
                 fatal_at(self->file, e->pos, "cannot compare %s with %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt));
+            }
+            if (lt != NULL && lt->kind == PT_TUPLE && !tuple_is_pure(lt)) {
+                fatal_at(self->file, e->pos, "`==` on a tuple that holds a reference is not compiled yet (98.4): compare the slots — `a[0] == b[0] and a[1] == b[1]`");
             }
             return bl;
         }
@@ -2932,7 +2932,41 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 return vl;
             }
             if (strcmp(nm3, "items") == 0 && rt->kind == PT_DICT) {
-                fatal_at(self->file, e->pos, "items() is only for `for k, v in d.items():` — as a value it would have to be a list of pairs, and the tuple is not built (3.2)");
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "items() takes no arguments");
+                }
+                PsExpr *recv9 = e->lhs->lhs;
+                if (recv9->kind != PE_NAME && recv9->kind != PE_FIELD) {
+                    fatal_at(self->file, e->pos, "`items()` on something that is not a plain variable would evaluate it twice: put the dict in a variable first");
+                }
+                const char *kv9 = Arena_printf(self->a, "__it%d", self->counter);
+                self->counter += 1;
+                PsExpr *knm = ps_expr(self->a, PE_NAME, e->pos);
+                knm->text = kv9;
+                PsExpr *vix = ps_expr(self->a, PE_INDEX, e->pos);
+                vix->lhs = recv9;
+                vix->rhs = knm;
+                PsExpr *pair = ps_expr(self->a, PE_TUPLE, e->pos);
+                pair->args = Arena_alloc(self->a, (size_t)2 * sizeof(*pair->args));
+                pair->args[0] = knm;
+                pair->args[1] = vix;
+                pair->nargs = 2;
+                PsExpr *cmp9 = ps_expr(self->a, PE_COMPREHEND, e->pos);
+                cmp9->op = TK_RBRACKET;
+                cmp9->var = kv9;
+                cmp9->lhs = pair;
+                cmp9->rhs = recv9;
+                {
+                    PsExpr *__with_1416_21 = e;
+                    __with_1416_21->kind = PE_COMPREHEND;
+                    __with_1416_21->op = TK_RBRACKET;
+                    __with_1416_21->var = kv9;
+                    __with_1416_21->lhs = pair;
+                    __with_1416_21->rhs = recv9;
+                    __with_1416_21->args = NULL;
+                    __with_1416_21->nargs = 0;
+                }
+                return PsSema_check_expr(self, e);
             }
             fatal_at(self->file, e->pos, "a %s has %s so far", (rt->kind == PT_DICT ? "dict" : "set"), (rt->kind == PT_DICT ? "get, remove, keys, values and items() in a for" : "add, remove, keys"));
         }
@@ -3797,7 +3831,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "__fmt is internal to f-strings");
         }
         PsType *vt2 = PsSema_check_expr(self, e->args[0]);
-        if (vt2 == NULL || !(vt2->kind == PT_INT || vt2->kind == PT_FLOAT || vt2->kind == PT_BOOL || vt2->kind == PT_STR || vt2->kind == PT_NAME || vt2->kind == PT_LIST || vt2->kind == PT_SET || vt2->kind == PT_DICT)) {
+        if (vt2 == NULL || !(vt2->kind == PT_INT || vt2->kind == PT_FLOAT || vt2->kind == PT_BOOL || vt2->kind == PT_STR || vt2->kind == PT_NAME || vt2->kind == PT_LIST || vt2->kind == PT_SET || vt2->kind == PT_DICT || vt2->kind == PT_TUPLE)) {
             fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, vt2));
         }
         size_t i;
@@ -4028,26 +4062,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2401_17 = e;
-                __with_2401_17->kind = PE_STR;
-                __with_2401_17->text = lit7;
-                __with_2401_17->lhs = NULL;
-                __with_2401_17->rhs = NULL;
-                __with_2401_17->args = NULL;
-                __with_2401_17->nargs = 0;
+                PsExpr *__with_2442_17 = e;
+                __with_2442_17->kind = PE_STR;
+                __with_2442_17->text = lit7;
+                __with_2442_17->lhs = NULL;
+                __with_2442_17->rhs = NULL;
+                __with_2442_17->args = NULL;
+                __with_2442_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2414_13 = e;
-            __with_2414_13->kind = PE_LOWERED;
-            __with_2414_13->low = ln7;
-            __with_2414_13->lhs = NULL;
-            __with_2414_13->rhs = NULL;
-            __with_2414_13->args = NULL;
-            __with_2414_13->nargs = 0;
+            PsExpr *__with_2455_13 = e;
+            __with_2455_13->kind = PE_LOWERED;
+            __with_2455_13->low = ln7;
+            __with_2455_13->lhs = NULL;
+            __with_2455_13->rhs = NULL;
+            __with_2455_13->args = NULL;
+            __with_2455_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4264,10 +4298,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2615_17 = &ns->quals[ns->nquals];
-                __with_2615_17->name = q;
-                __with_2615_17->orig = d->path;
-                __with_2615_17->ns = sub;
+                PsNsEnt *__with_2656_17 = &ns->quals[ns->nquals];
+                __with_2656_17->name = q;
+                __with_2656_17->orig = d->path;
+                __with_2656_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4280,10 +4314,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2627_21 = &ns->ents[ns->nents];
-                    __with_2627_21->name = local;
-                    __with_2627_21->orig = d->names[k];
-                    __with_2627_21->ns = sub;
+                    PsNsEnt *__with_2668_21 = &ns->ents[ns->nents];
+                    __with_2668_21->name = local;
+                    __with_2668_21->orig = d->names[k];
+                    __with_2668_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4644,10 +4678,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2963_9 = e;
-        __with_2963_9->kind = PE_NAME;
-        __with_2963_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2963_9->lhs = NULL;
+        PsExpr *__with_3004_9 = e;
+        __with_3004_9->kind = PE_NAME;
+        __with_3004_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3004_9->lhs = NULL;
     }
     return 1;
 }
@@ -5862,14 +5896,14 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
         }
         case PS_FOR: {
             int isrange = s->iter != NULL && s->iter->kind == PE_CALL && s->iter->lhs != NULL && s->iter->lhs->kind == PE_NAME && strcmp(s->iter->lhs->text, "range") == 0;
-            if (s->iter != NULL && s->iter->kind == PE_CALL && s->iter->lhs != NULL && s->iter->lhs->kind == PE_FIELD && strcmp(s->iter->lhs->text, "items") == 0) {
+            if (s->nnames == 2 && s->iter != NULL && s->iter->kind == PE_CALL && s->iter->lhs != NULL && s->iter->lhs->kind == PE_FIELD && strcmp(s->iter->lhs->text, "items") == 0) {
                 PsType *dht = PsSema_check_expr(self, s->iter->lhs->lhs);
                 if (dht != NULL && dht->kind == PT_DICT) {
                     if (s->iter->nargs != 0) {
                         fatal_at(self->file, s->pos, "items() takes no arguments");
                     }
                     if (s->nnames != 2) {
-                        fatal_at(self->file, s->pos, "`for k, v in d.items():` takes two variables — one name iterates the KEYS, which is `for k in d`");
+                        ;
                     }
                     s->iter = s->iter->lhs->lhs;
                     s->iter->type = dht;
