@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <sys/utsname.h>
 #include "plang.h"
 
 static char *read_open_file(FILE *f, const char *path, size_t *out_len);
@@ -532,4 +533,21 @@ const char *path_relative(Arena *a, const char *from_dir, const char *to) {
     const char *r = Arena_strdup(a, (out.data != NULL ? out.data : ""));
     StrBuf_deinit(&out);
     return r;
+}
+
+const char *plang_host_os(void) {
+    struct utsname u;
+    if (uname(&u) != 0) {
+        return "other";
+    }
+    if (strcmp(u.sysname, "Linux") == 0) {
+        return "linux";
+    }
+    if (strcmp(u.sysname, "Darwin") == 0) {
+        return "macos";
+    }
+    if (strstr(u.sysname, "BSD") != NULL) {
+        return "bsd";
+    }
+    return "other";
 }

@@ -146,6 +146,10 @@ static def ps_free_blocks(ctx: *PsCtx, b: *PsBlock):
         free(b)
         b = n
 
+# 18.4/99: the multiplexer's two entry points. Declared here because the context
+# teardown below calls the free, and the bodies are per platform, further down.
+def ps_mux_free(ctx: *PsCtx)
+
 def ps_ctx_init(out ctx: PsCtx):
     ctx.blocks = ps_new_block(0)
     ctx.frames = None
@@ -175,6 +179,7 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
     ctx.repr_depth = 0
+    ctx.mux = None
 
 # ---------- the crash that says where it was (12.4) ----------
 # 12.4 decided that failure in C is a CRASH and failure in pscript is an
@@ -296,6 +301,7 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
 # ... and this half gives the world back. Called from the entry point's first
 # defer, so it is the last thing that happens in the process.
 def ps_ctx_free(ctx: *PsCtx):
+    ps_mux_free(ctx)
     ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = None
     # the graveyard goes too: nothing may reference it any more, and a worker
@@ -528,6 +534,9 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg
 static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
 static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg)
 static def ps_recvs_poll(ctx: *PsCtx) -> bool
+# 18.4/99: ONE wait, three ways of sleeping (epoll, kqueue, poll). Declared here
+# because the scheduler above calls it and the bodies are per platform, below.
+static def ps_mux_wait(ctx: *PsCtx, ms: int)
 static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
 static def ps_io_run(w: *PsWork)
 static def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool
@@ -3336,23 +3345,283 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         # 2ms is slow enough to cost nothing and quick enough to feel instant
         ms = 2
     if nfd > 0:
+        if nfd > PS_POLL_MAX and (ms < 0 or ms > 2):
+            ms = 2
+        ps_mux_wait(ctx, ms)
+    elif ms > 0:
+        ts2: timespec
+        ts2.tv_sec = 0
+        ts2.tv_nsec = i64(ms) * 1000000
+        nanosleep(&ts2, None)
+    if ps_recvs_poll(ctx):
+        return True
+    ps_timers_fire(ctx, ps_sys_time())
+    # something IS pending — a queue, a clock — so waiting again is progress,
+    # and returning False here would call a slow worker a deadlock
+    return True
+
+# ---------- the multiplexer (18.4, unblocked by 99) ----------
+# ONE wait: it looks at every descriptor a parked task cares about, sleeps until
+# one of them speaks or the clock runs out, and drains the ones that may be
+# drained. What changes per platform is only HOW it sleeps.
+#
+# 18.4 asked for `epoll` and `kqueue` and refused `poll` in writing, and for
+# months this was `poll` — not because nobody wanted to write the other two, but
+# because choosing between them has to happen in the C that is EMITTED, and the P
+# had no way to say it. The `const if` of bateria 99 is that way.
+#
+# WHICH DESCRIPTOR MAY BE DRAINED is not a platform detail and is the same in all
+# three: the pipe of a queue is a knock on the door and is drained; a SOCKET is
+# where the data is, and draining it eats the message (bateria 101).
+const if __PLANG_LINUX__:
+    include <sys/epoll.h>
+
+    # what this context asked the kernel to watch, so that a turn where nothing
+    # changed costs ZERO syscalls of bookkeeping — which is the whole reason to
+    # prefer `epoll` over `poll`
+    struct PsMuxEnt:
+        fd: int
+        events: i16
+        drain: bool
+        seen: i32
+
+    struct PsMux:
+        efd: int
+        ent: *PsMuxEnt
+        n: i32
+        cap: i32
+        out: *epoll_event
+        nout: i32
+
+    static def ps_mux_get(ctx: *PsCtx) -> *PsMux:
+        if ctx->mux != None:
+            return (*PsMux)(ctx->mux)
+        m: *PsMux = (*PsMux)(calloc(1, sizeof(PsMux)))
+        if m == None:
+            return None
+        m->efd = epoll_create1(0)
+        ctx->mux = (*void)(m)
+        return m
+
+    static def ps_mux_find(m: *PsMux, fd: int) -> i32:
+        for i in range(m->n):
+            if m->ent[i].fd == fd:
+                return i
+        return -1
+
+    static def ps_mux_want(m: *PsMux, fd: int, events: i16, drain: bool):
+        if fd < 0:
+            return
+        k: i32 = ps_mux_find(m, fd)
+        if k >= 0:
+            m->ent[k].seen = 1
+            if m->ent[k].events != events:
+                ev: epoll_event
+                memset(&ev, 0, sizeof(epoll_event))
+                ev.events = u32(EPOLLIN if (int(events) & POLLIN) != 0 else 0) | u32(EPOLLOUT if (int(events) & POLLOUT) != 0 else 0)
+                ev.data.fd = fd
+                epoll_ctl(m->efd, EPOLL_CTL_MOD, fd, &ev)
+                m->ent[k].events = events
+            m->ent[k].drain = drain
+            return
+        if m->n == m->cap:
+            nc: i32 = m->cap * 2 if m->cap > 0 else 8
+            m->ent = (*PsMuxEnt)(realloc(m->ent, usize(nc) * sizeof(PsMuxEnt)))
+            m->out = (*epoll_event)(realloc(m->out, usize(nc) * sizeof(epoll_event)))
+            m->cap = nc
+            m->nout = nc
+        ev2: epoll_event
+        memset(&ev2, 0, sizeof(epoll_event))
+        ev2.events = u32(EPOLLIN if (int(events) & POLLIN) != 0 else 0) | u32(EPOLLOUT if (int(events) & POLLOUT) != 0 else 0)
+        ev2.data.fd = fd
+        if epoll_ctl(m->efd, EPOLL_CTL_ADD, fd, &ev2) != 0:
+            # a descriptor `epoll` will not take (a plain file is the usual one)
+            # is not an error here: the caller's `poll`-free path already treats
+            # "cannot watch" as "look again soon"
+            return
+        m->ent[m->n].fd = fd
+        m->ent[m->n].events = events
+        m->ent[m->n].drain = drain
+        m->ent[m->n].seen = 1
+        m->n += 1
+
+    # everything nobody asked for this turn LEAVES the set: a task that finished
+    # must not keep waking the loop
+    static def ps_mux_sweep(m: *PsMux):
+        i: i32 = 0
+        while i < m->n:
+            if m->ent[i].seen == 0:
+                epoll_ctl(m->efd, EPOLL_CTL_DEL, m->ent[i].fd, None)
+                m->ent[i] = m->ent[m->n - 1]
+                m->n -= 1
+            else:
+                m->ent[i].seen = 0
+                i += 1
+
+    static def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
+
+    # one event loop per worker (22.3) means one of these per context, and a
+    # worker that came and went must not leave a descriptor behind
+    def ps_mux_free(ctx: *PsCtx):
+        if ctx->mux == None:
+            return
+        m: *PsMux = (*PsMux)(ctx->mux)
+        if m->efd >= 0:
+            close(m->efd)
+        free(m->ent)
+        free(m->out)
+        free(m)
+        ctx->mux = None
+
+    static def ps_mux_wait(ctx: *PsCtx, ms: int):
+        m: *PsMux = ps_mux_get(ctx)
+        if m == None or m->efd < 0:
+            return
+        ps_mux_collect(ctx, m)
+        ps_mux_sweep(m)
+        if m->n == 0:
+            return
+        got: int = epoll_wait(m->efd, m->out, m->n, ms)
+        for i in range(got):
+            fd: int = m->out[i].data.fd
+            k: i32 = ps_mux_find(m, fd)
+            if k >= 0 and m->ent[k].drain:
+                ps_pipe_drain(fd)
+elif __PLANG_MACOS__:
+    include <sys/event.h>
+
+    # The kqueue twin. NOT RUN on this machine — everything here was written and
+    # read on Linux, so it is written to be READ: one changelist, one wait, the
+    # same drain rule. If it is wrong, it is wrong in a way a first run on a Mac
+    # shows immediately, and that is said out loud rather than implied by
+    # silence.
+    struct PsMuxEnt:
+        fd: int
+        events: i16
+        drain: bool
+        seen: i32
+
+    struct PsMux:
+        kq: int
+        ent: *PsMuxEnt
+        n: i32
+        cap: i32
+        out: *kevent
+        nout: i32
+
+    static def ps_mux_get(ctx: *PsCtx) -> *PsMux:
+        if ctx->mux != None:
+            return (*PsMux)(ctx->mux)
+        m: *PsMux = (*PsMux)(calloc(1, sizeof(PsMux)))
+        if m == None:
+            return None
+        m->kq = kqueue()
+        ctx->mux = (*void)(m)
+        return m
+
+    static def ps_mux_find(m: *PsMux, fd: int) -> i32:
+        for i in range(m->n):
+            if m->ent[i].fd == fd:
+                return i
+        return -1
+
+    static def ps_mux_change(m: *PsMux, fd: int, events: i16, add: bool):
+        ch: kevent[2]
+        n: i32 = 0
+        if (int(events) & POLLIN) != 0:
+            EV_SET(&ch[n], u64(fd), i16(EVFILT_READ), u16(EV_ADD if add else EV_DELETE), 0, 0, None)
+            n += 1
+        if (int(events) & POLLOUT) != 0:
+            EV_SET(&ch[n], u64(fd), i16(EVFILT_WRITE), u16(EV_ADD if add else EV_DELETE), 0, 0, None)
+            n += 1
+        if n > 0:
+            kevent(m->kq, &ch[0], n, None, 0, None)
+
+    static def ps_mux_want(m: *PsMux, fd: int, events: i16, drain: bool):
+        if fd < 0:
+            return
+        k: i32 = ps_mux_find(m, fd)
+        if k >= 0:
+            m->ent[k].seen = 1
+            if m->ent[k].events != events:
+                ps_mux_change(m, fd, m->ent[k].events, False)
+                ps_mux_change(m, fd, events, True)
+                m->ent[k].events = events
+            m->ent[k].drain = drain
+            return
+        if m->n == m->cap:
+            nc: i32 = m->cap * 2 if m->cap > 0 else 8
+            m->ent = (*PsMuxEnt)(realloc(m->ent, usize(nc) * sizeof(PsMuxEnt)))
+            m->out = (*kevent)(realloc(m->out, usize(nc) * usize(2) * sizeof(kevent)))
+            m->cap = nc
+            m->nout = nc * 2
+        ps_mux_change(m, fd, events, True)
+        m->ent[m->n].fd = fd
+        m->ent[m->n].events = events
+        m->ent[m->n].drain = drain
+        m->ent[m->n].seen = 1
+        m->n += 1
+
+    static def ps_mux_sweep(m: *PsMux):
+        i: i32 = 0
+        while i < m->n:
+            if m->ent[i].seen == 0:
+                ps_mux_change(m, m->ent[i].fd, m->ent[i].events, False)
+                m->ent[i] = m->ent[m->n - 1]
+                m->n -= 1
+            else:
+                m->ent[i].seen = 0
+                i += 1
+
+    static def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
+
+    def ps_mux_free(ctx: *PsCtx):
+        if ctx->mux == None:
+            return
+        m: *PsMux = (*PsMux)(ctx->mux)
+        if m->kq >= 0:
+            close(m->kq)
+        free(m->ent)
+        free(m->out)
+        free(m)
+        ctx->mux = None
+
+    static def ps_mux_wait(ctx: *PsCtx, ms: int):
+        m: *PsMux = ps_mux_get(ctx)
+        if m == None or m->kq < 0:
+            return
+        ps_mux_collect(ctx, m)
+        ps_mux_sweep(m)
+        if m->n == 0:
+            return
+        ts: timespec
+        tsp: *timespec = None
+        if ms >= 0:
+            ts.tv_sec = i64(ms) / 1000
+            ts.tv_nsec = (i64(ms) % 1000) * 1000000
+            tsp = &ts
+        got: int = kevent(m->kq, None, 0, m->out, m->nout, tsp)
+        for i in range(got):
+            fd: int = int(m->out[i].ident)
+            k: i32 = ps_mux_find(m, fd)
+            if k >= 0 and m->ent[k].drain:
+                ps_pipe_drain(fd)
+else:
+    # Where neither exists: `poll`, which is what this was before 99 — and it
+    # stays, because "the platform we have not met yet" still has to run.
+    struct PsMux:
+        unused: i32
+
+    def ps_mux_free(ctx: *PsCtx):
+        return          # `poll` keeps no state of its own
+
+    static def ps_mux_wait(ctx: *PsCtx, ms: int):
         # PS_POLL_MAX at a time: a context with more parked receives than that
         # polls the first ones and looks at the rest after a couple of
         # milliseconds, which bounds the latency without an allocation on the
-        # path that is supposed to be the cheap one
+        # path that is supposed to be the cheap one. `epoll` and `kqueue` have no
+        # such ceiling, which is half of why 18.4 asked for them.
         fds: pollfd[PS_POLL_MAX]
-        # WHICH of these may be DRAINED, and it is not a detail: a pipe is
-        # drained because the byte in it is only a knock on the door, and a
-        # SOCKET must never be, because what is in a socket is the data the
-        # program is waiting for.
-        #
-        # It used to drain everything that fired. A server whose client sent
-        # after a pause therefore lost the message: the loop woke on the socket,
-        # read the bytes into a 64-byte scratch buffer, threw them away, and the
-        # `recv` that followed found nothing. Every test here hid it, because a
-        # client that sends immediately after connecting has its data waiting
-        # before the read is even issued — the syscall succeeds on the first try
-        # and the loop never parks on that descriptor.
         drainable: bool[PS_POLL_MAX]
         k: i32 = 0
         anyio: bool = False
@@ -3371,34 +3640,44 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
                     fd: int = t2->rblk->up_r if t2->rdir == 0 else t2->rblk->dn_r
                     if fd >= 0:
                         fds[k].fd = fd
-                        fds[k].events = POLLIN
+                        fds[k].events = i16(POLLIN)
                         fds[k].revents = 0
                         drainable[k] = True  # a queue's pipe: only a knock
                         k += 1
             t2 = t2->next
         if anyio and ctx->io_r >= 0 and k < PS_POLL_MAX:
             fds[k].fd = ctx->io_r
-            fds[k].events = POLLIN
+            fds[k].events = i16(POLLIN)
             fds[k].revents = 0
             drainable[k] = True
             k += 1
-        if nfd > PS_POLL_MAX and (ms < 0 or ms > 2):
-            ms = 2
         poll(fds, u64(k), ms)
         for i in range(k):
             if fds[i].revents != 0 and drainable[i]:
                 ps_pipe_drain(fds[i].fd)
-    elif ms > 0:
-        ts2: timespec
-        ts2.tv_sec = 0
-        ts2.tv_nsec = i64(ms) * 1000000
-        nanosleep(&ts2, None)
-    if ps_recvs_poll(ctx):
-        return True
-    ps_timers_fire(ctx, ps_sys_time())
-    # something IS pending — a queue, a clock — so waiting again is progress,
-    # and returning False here would call a slow worker a deadlock
-    return True
+
+# The interest set, the same walk for `epoll` and for `kqueue`: what every parked
+# task is waiting on, and whether that descriptor may be drained. Written once
+# and outside the platform blocks, because WHAT to watch is not a platform
+# question — only how to sleep on it is.
+const if __PLANG_LINUX__ or __PLANG_MACOS__:
+    static def ps_mux_collect(ctx: *PsCtx, m: *PsMux):
+        anyio: bool = False
+        t: *PsTask = ctx->waiters
+        while t != None:
+            if t->state == 0:
+                if t->is_io != 0 and t->work != None and t->work->fd >= 0:
+                    ps_mux_want(m, t->work->fd, t->work->events, False)
+                elif t->is_io != 0:
+                    anyio = True
+                else:
+                    fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
+                    ps_mux_want(m, fd, i16(POLLIN), True)
+            t = t->next
+        if anyio and ctx->io_r >= 0:
+            ps_mux_want(m, ctx->io_r, i16(POLLIN), True)
+
+
 
 # 78.4: `await` ALWAYS yields, even when the value is already there. Without
 # that, a loop of awaits that always finds its answer ready — a fast client, in

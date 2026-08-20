@@ -581,7 +581,12 @@ struct PsCtx:
                          #   0 = no budget, and then there is nothing to exceed
     nogc_start: usize
     repr_depth: i32     # 97.2: how deep a container repr is, so a cycle through
-                        #   one prints `...` instead of running out of stack    # `alloced` when that block began, so what it spent is
+                        #   one prints `...` instead of running out of stack
+    mux: *void          # 18.4/99: the multiplexer this context waits on —
+                        #   `epoll` on Linux, `kqueue` on macOS, `poll` where
+                        #   neither exists. Opaque here because its shape is
+                        #   platform's, and one event loop per worker (22.3)
+                        #   means one of these per context.    # `alloced` when that block began, so what it spent is
                          #   a subtraction
 
 def ps_ctx_init(out ctx: PsCtx)

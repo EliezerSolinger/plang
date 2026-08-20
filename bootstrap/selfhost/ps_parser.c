@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "ps_parser.h"
+#include "parser.h"
 #include "vecs.h"
 #include "../stl/vec.h"
 
@@ -1247,6 +1248,10 @@ void Vec_PsEnumItem_clear(Vec_PsEnumItem *self);
 
 void Vec_PsEnumItem_deinit(Vec_PsEnumItem *self);
 
+static void ps_const_if_top(PsP *p, Vec_pPsDecl *decls, Vec_pPsStmt *top, Arena *a);
+
+static void ps_const_if_block(PsP *p, Vec_pPsDecl *decls, Vec_pPsStmt *top, Arena *a, int keep);
+
 
 void Vec_PsEnumItem_init(Vec_PsEnumItem *self) {
     self->data = NULL;
@@ -1417,6 +1422,8 @@ static PsStmt *PsP_parse_stmt(PsP *self);
 static PsStmt *PsP_parse_simple_stmt(PsP *self);
 
 static PsStmt *PsP_parse_if(PsP *self);
+
+static int PsP_const_cond(PsP *self, PsExpr *e);
 
 static PsStmt *PsP_parse_for(PsP *self);
 
@@ -1707,6 +1714,17 @@ static PsExpr *PsP_parse_primary(PsP *self) {
         }
         case TK_IDENT: {
             PsP_adv(self);
+            if (strcmp(tk->text, "set") == 0 && PsP_at(self, TK_LT)) {
+                PsP_adv(self);
+                PsType *st9 = ps_type(self->a, PT_SET, pos);
+                st9->inner = PsP_parse_type(self);
+                PsP_expect_gt(self, "set<T>()");
+                PsP_expect(self, TK_LPAREN, "set<T>()");
+                PsP_expect(self, TK_RPAREN, "set<T>()");
+                PsExpr *es9 = ps_expr(self->a, PE_SET, pos);
+                es9->type = st9;
+                return es9;
+            }
             if (PsP_at(self, TK_WALRUS)) {
                 PsP_adv(self);
                 PsExpr *w = ps_expr(self->a, PE_WALRUS, pos);
@@ -2475,6 +2493,12 @@ static PsStmt *PsP_parse_stmt(PsP *self) {
         fatal_at(self->file, PsP_pk(self)->pos, "unexpected indentation");
     }
     PsP_refuse_python(self);
+    if (PsP_at(self, TK_CONST) && PsP_pk1(self)->kind == TK_IF) {
+        PsP_adv(self);
+        PsStmt *cif = PsP_parse_if(self);
+        cif->must_fold = 1;
+        return cif;
+    }
     switch (PsP_pk(self)->kind) {
         case TK_IF: {
             return PsP_parse_if(self);
@@ -2658,6 +2682,64 @@ static PsStmt *PsP_parse_simple_stmt(PsP *self) {
     PsStmt *ex = ps_stmt(self->a, PS_EXPR, pos);
     ex->expr = lhs;
     return ex;
+}
+
+static int PsP_const_cond(PsP *self, PsExpr *e) {
+    if (e == NULL) {
+        return 0;
+    }
+    switch (e->kind) {
+        case PE_NAME: {
+            int k = 1;
+            int64_t v = parser_predef_value(e->text, &k);
+            if (!k) {
+                fatal_at(self->file, e->pos, "a top-level `const if` can only look at a compiler predefine (`__PLANG_LINUX__`, `__PLANG_MACOS__`, `__PLANG_BSD__`) or a `-D` name: '%s' is neither", e->text);
+            }
+            return v != 0;
+        }
+        case PE_INT: {
+            return strtoll(e->text, NULL, 0) != 0;
+        }
+        case PE_BOOL: {
+            return strcmp(e->text, "True") == 0;
+        }
+        case PE_UNARY: {
+            if (e->op == TK_NOT) {
+                return !PsP_const_cond(self, e->lhs);
+            }
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
+        case PE_BINARY: {
+            if (e->op == TK_AND) {
+                return PsP_const_cond(self, e->lhs) && PsP_const_cond(self, e->rhs);
+            }
+            if (e->op == TK_OR) {
+                return PsP_const_cond(self, e->lhs) || PsP_const_cond(self, e->rhs);
+            }
+            if (e->op == TK_EQ || e->op == TK_NE) {
+                PsExpr *nm = e->lhs;
+                PsExpr *lit = e->rhs;
+                if (nm->kind != PE_NAME || lit->kind != PE_STR) {
+                    nm = e->rhs;
+                    lit = e->lhs;
+                }
+                if (nm->kind != PE_NAME || lit->kind != PE_STR || strcmp(nm->text, "__PLANG_OS__") != 0) {
+                    fatal_at(self->file, e->pos, "the only comparison a `const if` at the top takes is `__PLANG_OS__ == \"name\"`");
+                }
+                size_t ln = 0;
+                char *sv = str_lit_decode(self->a, lit->text, &ln);
+                int same = strcmp(sv, parser_predef_os()) == 0;
+                return (e->op == TK_EQ ? same : !same);
+            }
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
+        default: {
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
+    }
 }
 
 static PsStmt *PsP_parse_if(PsP *self) {
@@ -3197,6 +3279,90 @@ static PsExpr *ps_clone_expr(Arena *a, PsExpr *e, const char *file) {
     return c;
 }
 
+static void ps_const_if_block(PsP *p, Vec_pPsDecl *decls, Vec_pPsStmt *top, Arena *a, int keep) {
+    PsP_expect(p, TK_COLON, "const if");
+    PsP_expect(p, TK_NEWLINE, "const if");
+    PsP_expect(p, TK_INDENT, "const if");
+    while (!PsP_at(p, TK_DEDENT) && !PsP_at(p, TK_EOF)) {
+        if (PsP_accept(p, TK_NEWLINE)) {
+            continue;
+        }
+        if (PsP_at(p, TK_CONST) && PsP_pk1(p)->kind == TK_IF) {
+            ps_const_if_top(p, decls, top, a);
+            continue;
+        }
+        if (PsP_at(p, TK_IMPORT)) {
+            PsDecl *d = PsP_parse_import(p);
+            if (keep) {
+                Vec_pPsDecl_push(decls, d);
+            }
+            continue;
+        }
+        if (PsP_at(p, TK_FROM)) {
+            PsDecl *d2 = PsP_parse_from(p);
+            if (keep) {
+                Vec_pPsDecl_push(decls, d2);
+            }
+            continue;
+        }
+        if (PsP_at(p, TK_IDENT) && strcmp(PsP_pk(p)->text, "include") == 0) {
+            PsDecl *d3 = PsP_parse_include(p);
+            if (keep) {
+                Vec_pPsDecl_push(decls, d3);
+            }
+            continue;
+        }
+        if (PsP_at(p, TK_DEF) || PsP_at(p, TK_ASYNC)) {
+            int isa = PsP_accept(p, TK_ASYNC);
+            PsDecl *fd = ps_decl(a, PD_FUNC, PsP_pk(p)->pos);
+            fd->func = PsP_parse_func(p, 0, isa, NULL);
+            fd->name = fd->func->name;
+            if (keep) {
+                Vec_pPsDecl_push(decls, fd);
+            }
+            continue;
+        }
+        if (PsP_at(p, TK_STATIC)) {
+            PsP_adv(p);
+            int sa = PsP_accept(p, TK_ASYNC);
+            PsDecl *sd = ps_decl(a, PD_FUNC, PsP_pk(p)->pos);
+            sd->is_static = 1;
+            sd->func = PsP_parse_func(p, 1, sa, NULL);
+            sd->name = sd->func->name;
+            if (keep) {
+                Vec_pPsDecl_push(decls, sd);
+            }
+            continue;
+        }
+        PsStmt *st = PsP_parse_stmt(p);
+        if (keep) {
+            Vec_pPsStmt_push(top, st);
+        }
+    }
+    PsP_expect(p, TK_DEDENT, "const if");
+}
+
+static void ps_const_if_top(PsP *p, Vec_pPsDecl *decls, Vec_pPsStmt *top, Arena *a) {
+    PsP_adv(p);
+    PsP_adv(p);
+    PsExpr *c0 = PsP_parse_expr(p);
+    int taken = PsP_const_cond(p, c0);
+    ps_const_if_block(p, decls, top, a, taken);
+    while (PsP_at(p, TK_ELIF)) {
+        PsP_adv(p);
+        PsExpr *ce = PsP_parse_expr(p);
+        int ve = PsP_const_cond(p, ce) && !taken;
+        ps_const_if_block(p, decls, top, a, ve);
+        if (ve) {
+            taken = 1;
+        }
+    }
+    if (PsP_at(p, TK_ELSE)) {
+        PsP_adv(p);
+        ps_const_if_block(p, decls, top, a, !taken);
+    }
+}
+
 PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
     PsP p = {tl.toks, tl.n, 0, file, a};
     PsModule *m = Arena_alloc(a, sizeof(PsModule));
@@ -3282,6 +3448,10 @@ PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
                 break;
             }
             case TK_CONST: {
+                if (PsP_pk1(&p)->kind == TK_IF) {
+                    ps_const_if_top(&p, &decls, &top, a);
+                    continue;
+                }
                 Pos cpos = PsP_adv(&p)->pos;
                 PsDecl *cd = ps_decl(a, PD_VAR, cpos);
                 cd->is_const = 1;

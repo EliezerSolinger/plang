@@ -1162,6 +1162,12 @@ static Stmt *P_parse_stmt(P *self) {
             return P_parse_with(self);
         }
         case TK_CONST: {
+            if (P_pk1(self)->kind == TK_IF) {
+                P_adv(self);
+                Stmt *cif = P_parse_if(self);
+                cif->must_fold = 1;
+                return cif;
+            }
             P_adv(self);
             return P_parse_var_stmt(self, 1);
         }
@@ -1266,16 +1272,16 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     }
     Func *f = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1095_9 = f;
-        __with_1095_9->pos = pos;
-        __with_1095_9->name = name->text;
-        __with_1095_9->owner = owner;
-        __with_1095_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
-        __with_1095_9->is_static = is_static;
-        __with_1095_9->is_inline = is_inline;
-        __with_1095_9->tparams = ftparams.data;
-        __with_1095_9->tbounds = ftbounds.data;
-        __with_1095_9->ntparams = ftparams.len;
+        Func *__with_1103_9 = f;
+        __with_1103_9->pos = pos;
+        __with_1103_9->name = name->text;
+        __with_1103_9->owner = owner;
+        __with_1103_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
+        __with_1103_9->is_static = is_static;
+        __with_1103_9->is_inline = is_inline;
+        __with_1103_9->tparams = ftparams.data;
+        __with_1103_9->tbounds = ftbounds.data;
+        __with_1103_9->ntparams = ftparams.len;
     }
     P_expect(self, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1408,13 +1414,13 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     }
     P_expect(self, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1222_9 = d;
-        __with_1222_9->fields = fields.data;
-        __with_1222_9->nfields = fields.len;
-        __with_1222_9->methods = methods.data;
-        __with_1222_9->nmethods = methods.len;
-        __with_1222_9->tparams = tparams.data;
-        __with_1222_9->ntparams = tparams.len;
+        Decl *__with_1230_9 = d;
+        __with_1230_9->fields = fields.data;
+        __with_1230_9->nfields = fields.len;
+        __with_1230_9->methods = methods.data;
+        __with_1230_9->nmethods = methods.len;
+        __with_1230_9->tparams = tparams.data;
+        __with_1230_9->ntparams = tparams.len;
     }
     return d;
 }
@@ -1698,18 +1704,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1503_17 = d2;
-                __with_1503_17->kind = DL_VAR;
-                __with_1503_17->pos = name->pos;
-                __with_1503_17->name = name->text;
-                __with_1503_17->is_const = is_const;
-                __with_1503_17->is_extern = is_extern;
+                Decl *__with_1511_17 = d2;
+                __with_1511_17->kind = DL_VAR;
+                __with_1511_17->pos = name->pos;
+                __with_1511_17->name = name->text;
+                __with_1511_17->is_const = is_const;
+                __with_1511_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1503_17->type = P_parse_type(self);
+                    __with_1511_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1503_17->init = P_parse_initializer(self);
-                } else if (__with_1503_17->type == NULL) {
+                    __with_1511_17->init = P_parse_initializer(self);
+                } else if (__with_1511_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");
@@ -1722,6 +1728,150 @@ static Decl *P_parse_top(P *self) {
             fatal_at(self->file, t->pos, "invalid top-level declaration (found %s)", tok_kind_name(t->kind));
             return NULL;
         }
+    }
+}
+
+static const char *PRE_OS = "other";
+
+static char **PRE_DEFS = NULL;
+
+static int32_t PRE_NDEFS = 0;
+
+void parser_config_predef(const char *os, char **defs, int32_t ndefs) {
+    PRE_OS = os;
+    PRE_DEFS = defs;
+    PRE_NDEFS = ndefs;
+}
+
+const char *parser_predef_os(void) {
+    return PRE_OS;
+}
+
+int64_t parser_predef_value(const char *name, int *known) {
+    *known = 1;
+    if (strcmp(name, "__PLANG_LINUX__") == 0) {
+        return (strcmp(PRE_OS, "linux") == 0 ? 1 : 0);
+    }
+    if (strcmp(name, "__PLANG_MACOS__") == 0) {
+        return (strcmp(PRE_OS, "macos") == 0 ? 1 : 0);
+    }
+    if (strcmp(name, "__PLANG_BSD__") == 0) {
+        return (strcmp(PRE_OS, "bsd") == 0 ? 1 : 0);
+    }
+    if (strcmp(name, "__PLANG__") == 0) {
+        return 1;
+    }
+    size_t i;
+    for (i = 0; i < PRE_NDEFS; i += 1) {
+        const char *d = PRE_DEFS[i];
+        const char *eq = strchr(d, (int)'=');
+        if (eq == NULL) {
+            if (strcmp(d, name) == 0) {
+                return 1;
+            }
+        } else if (strncmp(d, name, (size_t)(eq - d)) == 0 && strlen(name) == (size_t)(eq - d)) {
+            const char *v = eq + 1;
+            if (strcmp(v, "0") == 0) {
+                return 0;
+            }
+            return 1;
+        }
+    }
+    *known = 0;
+    return 0;
+}
+
+static int pre_cond(P *self, Expr *e, const char *file) {
+    if (e == NULL) {
+        return 0;
+    }
+    switch (e->kind) {
+        case EX_IDENT: {
+            int k = 1;
+            int64_t v = parser_predef_value(e->text, &k);
+            if (!k) {
+                fatal_at(file, e->pos, "a top-level `const if` can only look at a compiler predefine (`__PLANG_LINUX__`, `__PLANG_MACOS__`, `__PLANG_BSD__`) or a `-D` name: '%s' is neither", e->text);
+            }
+            return v != 0;
+        }
+        case EX_NUMBER: {
+            return strtoll(e->text, NULL, 0) != 0;
+        }
+        case EX_UNARY: {
+            if (e->op == TK_NOT) {
+                return !pre_cond(self, e->lhs, file);
+            }
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
+        case EX_BINARY: {
+            if (e->op == TK_AND) {
+                return pre_cond(self, e->lhs, file) && pre_cond(self, e->rhs, file);
+            }
+            if (e->op == TK_OR) {
+                return pre_cond(self, e->lhs, file) || pre_cond(self, e->rhs, file);
+            }
+            if (e->op == TK_EQ || e->op == TK_NE) {
+                Expr *nm = e->lhs;
+                Expr *lit = e->rhs;
+                if (nm->kind != EX_IDENT || lit->kind != EX_STRING) {
+                    nm = e->rhs;
+                    lit = e->lhs;
+                }
+                if (nm->kind != EX_IDENT || lit->kind != EX_STRING || strcmp(nm->text, "__PLANG_OS__") != 0) {
+                    fatal_at(file, e->pos, "the only comparison a top-level `const if` takes is `__PLANG_OS__ == \"name\"`");
+                }
+                size_t ln = 0;
+                char *sv = str_lit_decode(self->a, lit->text, &ln);
+                int same = strcmp(sv, PRE_OS) == 0;
+                return (e->op == TK_EQ ? same : !same);
+            }
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
+        default: {
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
+    }
+}
+
+static void pre_block(P *self, Vec_pDecl *into, int keep) {
+    P_expect(self, TK_COLON, "const if");
+    P_expect(self, TK_NEWLINE, "const if");
+    P_expect(self, TK_INDENT, "const if");
+    while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
+        if (P_accept(self, TK_NEWLINE)) {
+            continue;
+        }
+        Decl *d = P_parse_top(self);
+        if (keep && d != NULL) {
+            Vec_pDecl_push(into, d);
+        }
+    }
+    P_expect(self, TK_DEDENT, "const if");
+}
+
+static void parse_const_if_top(P *self, Vec_pDecl *into, const char *file) {
+    P_adv(self);
+    P_adv(self);
+    int taken = 0;
+    Expr *c0 = P_parse_expr(self);
+    int v0 = pre_cond(self, c0, file);
+    pre_block(self, into, v0);
+    taken = v0;
+    while (P_at(self, TK_ELIF)) {
+        P_adv(self);
+        Expr *ce = P_parse_expr(self);
+        int ve = pre_cond(self, ce, file) && !taken;
+        pre_block(self, into, ve);
+        if (ve) {
+            taken = 1;
+        }
+    }
+    if (P_at(self, TK_ELSE)) {
+        P_adv(self);
+        pre_block(self, into, !taken);
     }
 }
 
@@ -1747,6 +1897,10 @@ Module *parse_tokens(Arena *a, const char *file, TokenList tl, int32_t is_header
         }
         if (P_at(&p, TK_INDENT)) {
             fatal_at(file, P_pk(&p)->pos, "unexpected indentation at top level");
+        }
+        if (P_at(&p, TK_CONST) && P_pk1(&p)->kind == TK_IF) {
+            parse_const_if_top(&p, &decls, file);
+            continue;
         }
         Vec_pDecl_push(&decls, P_parse_top(&p));
     }

@@ -79,6 +79,8 @@ char *read_entire_file(const char *path, size_t *out_len);
 
 char *read_entire_file_opt(const char *path, size_t *out_len);
 
+const char *plang_host_os(void);
+
 const char *path_dir(Arena *a, const char *path);
 
 const char *path_join(Arena *a, const char *dir, const char *rel);

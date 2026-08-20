@@ -119,7 +119,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 17.3 | `xs[2:5]` é cópia | **OK** |
 | 17.4 | `async` entra; gerador fica fora | **OK** — e agora o `yield` diz isso |
 | 18.1, 22.3, 35.x, 36.x | workers isolados, canal, join | **ok** — `spawn`, `send`/`recv`, `detach` |
-| 18.4, 22.3, 36.2 | `epoll`/`kqueue`, NÃO `poll()` | **DIVERGE** — o loop chama `poll()`, que é textualmente o que a 18.4 recusou |
+| 18.4, 22.3, 36.2 | `epoll`/`kqueue`, NÃO `poll()` | **OK** — bateria 102, destravada pelo `const if` da 99. O `kqueue` não foi rodado (esta máquina é Linux) e o `poll` fica como caminho de terceira plataforma |
 | 19.2, 20.3, 28.1–28.3 | função como valor, lambda, captura por valor, decorador | **OK** |
 | 19.3, 22.4 | exceção guardada na task e relançada no await | **OK** — `tests/oracle/js/promise` |
 | 20.x, 21.x, 52.1, 57.1, 58.2 | `struct` por origem, `record` valor com método | **OK** — `record` recusa método sem `in self`, com a razão |
@@ -228,8 +228,8 @@ UTF-8 com índice sob demanda — as duas decisões certas, tomadas depois, em
 baterias que não riscaram as linhas antigas. É edição de documento, não de
 código, mas quem ler o DESIGN de cima para baixo lê o contrário do que roda.
 
-**D. `epoll`/`kqueue` (18.4) está BLOQUEADO por uma decisão de linguagem, não por
-trabalho.** O loop chama `poll()`, que é textualmente o que a decisão recusou. Só
+**D. `epoll`/`kqueue` (18.4) — RESPONDIDA (o P ganhou `const if`, bateria 99) e
+implementada (bateria 102).** Fica o registro do que estava travado: O loop chama `poll()`, que é textualmente o que a decisão recusou. Só
 que escrever os dois back ends exige escolher entre eles no C EMITIDO — o seed é
 gerado numa máquina e compilado noutra (você compila no macOS), então a escolha
 não pode ser feita na hora de gerar. E o P não tem compilação condicional: não há

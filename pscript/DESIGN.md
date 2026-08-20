@@ -3513,6 +3513,43 @@ função que devolve duas coisas para de precisar de um `record` só para isso.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 102 — `epoll` e `kqueue`, finalmente (2026-08-20)
+
+A 18.4 pediu os dois e recusou `poll()` por escrito, em julho. Chegou agora
+porque o que faltava não era o código: era o `const if` da 99.
+
+**102.1 Um `ps_mux_wait`, três corpos.** O que muda por plataforma é só COMO se
+dorme; o que se espera é o mesmo, e por isso a coleta do conjunto de interesse
+(`ps_mux_collect`) é escrita UMA vez, fora dos blocos de plataforma.
+
+  * **Linux, `epoll`:** o conjunto é PERSISTENTE. Cada volta marca o que ainda
+    interessa, o que ninguém pediu sai (`EPOLL_CTL_DEL`), e o que é novo entra —
+    então uma volta em que nada mudou custa **zero** syscall de contabilidade,
+    contra a cópia do vetor inteiro para o kernel que o `poll` paga sempre.
+  * **macOS, `kqueue`:** o mesmo, com changelist. **NÃO foi rodado**: esta
+    máquina é Linux, então este ramo foi escrito para ser LIDO — uma changelist,
+    uma espera, a mesma regra de drenagem. Se estiver errado, erra de um jeito
+    que a primeira execução num Mac mostra na hora, e isso está dito em voz alta
+    em vez de implícito no silêncio.
+  * **Onde nenhum dos dois existe: `poll`**, que é o que havia — e fica, porque
+    "a plataforma que ainda não encontramos" também tem de rodar.
+
+**102.2 O teto de 64 descritores era do `poll`, e sai com ele.** A espera com
+`poll` olhava `PS_POLL_MAX` de cada vez e voltava em 2ms para ver o resto; com
+`epoll`/`kqueue` não há vetor para copiar, então não há teto. Metade do motivo
+pelo qual a 18.4 pediu isso era exatamente essa.
+
+**102.3 Um multiplexador por CONTEXTO** (22.3), criado na primeira espera e
+fechado no `ps_ctx_free` — um worker que veio e foi não deixa descritor atrás.
+
+> **E o que estava escondido atrás do `poll`:** a bateria 101. Fui ler o
+> multiplexador antes de trocá-lo e o achei comendo o dado do socket. O `epoll`
+> tem a mesma regra de drenagem, escrita agora uma vez para os três caminhos.
+
+Portões: os mesmos de sempre, agora rodando sobre `epoll` — a suíte pscript nos
+três modos (223), `net-late.sh`, e o `gc-stress` com 100 programas, dos quais os
+de socket, timer, worker e servidor HTTP são os que exercitam esta espera.
+
 ## Bateria 101 — o laço estava COMENDO o dado do socket (2026-08-20)
 
 Achado ao ir implementar o `epoll` que a 99 destravou: antes de trocar o

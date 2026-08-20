@@ -96,6 +96,7 @@ struct Stmt {
     int32_t nconds;
     Block *else_block;
     int32_t if_sel;
+    int must_fold;
     Expr *cond;
     Block *body;
     const char *var;

@@ -111,7 +111,7 @@ static void usage(void) {
     fprintf(stderr, "  run <f.psc> [args] compile (cached) and RUN it (6.3/15.3); as `pscript f.psc`\n");
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n");
     fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n");
-    fprintf(stderr, "  --trace          a frame for EVERY pscript function, so a stack trace names them all (34.2)\n");
+    fprintf(stderr, "  -g, --debug      frame in EVERY pscript function (stack trace names them all), and cc -g in `run`\n");
     fprintf(stderr, "                   (default: pscript/runtime)\n");
     fprintf(stderr, "  -h, --help       this help\n");
     exit(2);
@@ -229,7 +229,7 @@ static int run_exec(const char *binp, char **args, int32_t nargs) {
     return 1;
 }
 
-static int run_program(Cc *cc, Vec_pchar *cfiles, uint64_t h, const char *cachedir, char **args, int32_t nargs, int32_t std_version) {
+static int run_program(Cc *cc, Vec_pchar *cfiles, uint64_t h, const char *cachedir, char **args, int32_t nargs, int32_t std_version, int debug) {
     const char *binp = Arena_printf(&cc->arena, "%s/bin/%016llx", cachedir, h);
     mkdirs_for(binp);
     if (access(binp, 0) != 0) {
@@ -237,7 +237,8 @@ static int run_program(Cc *cc, Vec_pchar *cfiles, uint64_t h, const char *cached
         const char *ccname = getenv("CC");
         StrBuf_puts(&cmd, (ccname != NULL && ccname[0] != '\0' ? ccname : "cc"));
         StrBuf_puts(&cmd, (std_version == 89 ? " -std=c89" : " -std=c11"));
-        StrBuf_puts(&cmd, " -O2 -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE");
+        StrBuf_puts(&cmd, (debug ? " -g -O0 -w" : " -O2 -w"));
+        StrBuf_puts(&cmd, " -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE");
         size_t i;
         for (i = 0; i < cfiles->len; i += 1) {
             StrBuf_puts(&cmd, " \"");
@@ -465,7 +466,7 @@ int main(int argc, char **argv) {
             cpp_cmd = argv[i];
         } else if (strcmp(argv[i], "--inline-runtime") == 0) {
             inline_runtime = 1;
-        } else if (strcmp(argv[i], "--trace") == 0) {
+        } else if (strcmp(argv[i], "-g") == 0 || strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "--trace") == 0) {
             full_trace = 1;
         } else if (strcmp(argv[i], "--no-assert") == 0 || strcmp(argv[i], "-O") == 0) {
             strip_asserts = 1;
@@ -538,6 +539,7 @@ int main(int argc, char **argv) {
     cc.std_version = std_version;
     cc.cpp = cpp_cmd;
     cc.inline_runtime = inline_runtime;
+    parser_config_predef(plang_host_os(), defines.data, defines.len);
     ps_lower_config(strip_asserts, full_trace);
     const char *cachedir = NULL;
     Vec_pchar cfiles;
@@ -702,7 +704,7 @@ int main(int argc, char **argv) {
     }
     if (run_mode) {
         run_manifest_write(&cc.arena, manifest, run_hash, &inputs);
-        return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version);
+        return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version, full_trace);
     }
     return 0;
 }

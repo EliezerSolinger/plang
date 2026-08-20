@@ -121,6 +121,8 @@ struct PsStmt {
     int32_t ncases;
     PsBlock *catch_block;
     PsBlock *finally_block;
+    int must_fold;
+    int32_t if_sel;
     int is_pairs;
     int is_typematch;
 };
