@@ -82,6 +82,23 @@ print(f"array in {total(in arr)}")
 zero(arr)
 print(f"array written {arr[0]} {total(in arr)}")
 
+# the SIZE may be a named const, which is the shape a real program writes —
+# and it has to be FOLDED, because C says an array size is a constant
+# expression and a `static const int` is not one (that is C++)
+const WIDTH: int = 3
+
+
+def widest(in row: int[WIDTH]) -> int:
+    best = row[0]
+    for v in row:
+        if v > best:
+            best = v
+    return best
+
+
+sized: int[WIDTH] = [4, 9, 2]
+print(f"const size {len(sized)} {widest(in sized)}")
+
 # and a LOCAL array with a literal, which is the third of the three places
 # 33.4 says `T[N]` is a complete type in
 def local_array() -> int:

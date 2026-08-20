@@ -3468,6 +3468,26 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 96b — o tamanho de `T[N]` vindo de um `const` (2026-08-20)
+
+Achado ao escrever o teste da 96: `const N: int = 4` seguido de `xs: int[N]`
+emitia um array de tamanho NENHUM, e o C falava três camadas adiante ("flexible
+array member in a struct with no named members"). A 33.4 diz que `T[N]` é tipo
+completo; escrever o tamanho como um nome é o que um programa de verdade faz.
+
+**A causa é uma regra do C que o C++ não tem:** o tamanho de um array é
+*constant expression*, e um `static const int` NÃO é uma delas — em C++ é, e é
+daí que vem a intuição errada. Então o nome tem de ser dobrado para o número
+aqui, onde o valor é conhecido, em vez de sair como identificador que o C
+recusaria.
+
+Agora um `const` com literal inteiro serve de tamanho, e qualquer outra coisa é
+recusada com a razão: `xs: int[n]` com `n` variável diz que o tamanho tem de ser
+conhecido em compilação, em vez de deixar o C reclamar de outra coisa.
+
+Portões: a linha do `const WIDTH` em `tests/pscript/run/byref.psc` e
+`tests/pscript/bad/array_size_var.psc`.
+
 ## Bateria 96 — `const` no topo, e o congelamento que faltava (2026-08-20)
 
 Duas metades de uma decisão (61.3), e só uma existia.

@@ -154,7 +154,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 61.1 | continuação só por parênteses | **OK** — `\` é recusado (a mensagem podia nomear a 61.1) |
 | 61.3 | `const` em referência congela fundo | **OK** — bateria 96: const de módulo que precisa ser construído, e o congelamento fundo (append/escrita indexada recusados) |
 | 61.4 | `for k in d`, `items`/`keys`/`values`, `x in list`, `"ab" in s` | **OK** — as três views FECHADAS nesta varredura |
-| 33.4, 60.2 | `T[N]` local/parâmetro/campo, e `in` para atravessar | **OK** — três defeitos consertados na bateria 93 (atribuição indexada era escrita selvagem, local com literal não compilava, `in` sobre array não compilava) |
+| 33.4, 60.2 | `T[N]` local/parâmetro/campo, e `in` para atravessar | **OK** — quatro defeitos consertados (93 e 96b: o tamanho vindo de um `const` emitia array sem tamanho) (atribuição indexada era escrita selvagem, local com literal não compilava, `in` sobre array não compilava) |
 | 49.2 | exceção por flag, checada por chamada | **OK** — bateria 94: o ZERO de um tipo coletado passou a ser objeto vazio, porque NULL no meio de uma expressão era segfault |
 | 62.1 | `Comparable` para ordenação custom no `sorted` | **OK** — bateria 93 |
 | 62.1 | `Sequence<T>` como tipo de parâmetro | **FALTA** — não parseia |

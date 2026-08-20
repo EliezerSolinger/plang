@@ -37,6 +37,7 @@ import "sema.ph"
 import "cfront.ph"
 import "parser.ph"   # 75.3: a `.ph` is read with P's own front end
 
+declare StrMap<i64>
 declare StrMap<*PsFunc>
 declare StrMap<*PsExpr>
 declare Vec<const *char>   # implemented in vecs.p
@@ -177,6 +178,10 @@ struct PsSema:
     enumof: StrMap<*PsDecl>    # enum ITEM name -> the enum that declares it
     globals: StrMap<*PsType>
     gconst: StrSet          # module variables declared `const`
+    gconst_num: StrMap<i64> # ... and the VALUE of the ones that are an integer
+                            #   literal, because `xs: int[N]` needs a number:
+                            #   C says an array size is a constant expression,
+                            #   and a `static const int` is not one (that is C++)
     locals: *PsLocal
     nlocals: i32
     clocals: i32
@@ -424,7 +429,28 @@ struct PsSema:
                 if t->inner->kind == PT_OPT:
                     fatal_at(self->file, t->pos, "`T??` does not exist: an option does not nest")
                 t->inner = self->resolve_type(t->inner)
-            case PT_LIST, PT_SET, PT_ARRAY, PT_TASK, PT_WORKER:
+            case PT_ARRAY:
+                t->inner = self->resolve_type(t->inner)
+                # `T[N]`: the size is a CONSTANT EXPRESSION in C, and a
+                # `static const int` is not one — that is C++. So a named const
+                # used as a size is folded to its number here, where the value
+                # is known, instead of being emitted as a name the C compiler
+                # would refuse (it emitted an array of no size at all, which
+                # became "flexible array member in a struct with no named
+                # members" three layers away from the cause).
+                if t->count != None and t->count->kind == PE_NAME:
+                    cn9: const *char = self->gname_soft(t->count->text)
+                    if self->gconst_num.has(cn9):
+                        t->count->kind = PE_INT
+                        t->count->text = self->a->printf("%lld", self->gconst_num.get_or(cn9, 0))
+                    elif self->gconst_num.has(t->count->text):
+                        t->count->kind = PE_INT
+                        t->count->text = self->a->printf("%lld", self->gconst_num.get_or(t->count->text, 0))
+                    else:
+                        fatal_at(self->file, t->count->pos, "the size of `T[N]` has to be known at compile time: '%s' is not a `const` with an integer literal (33.4)", t->count->text)
+                elif t->count != None and t->count->kind != PE_INT:
+                    fatal_at(self->file, t->count->pos, "the size of `T[N]` has to be a number or a `const` with an integer literal, known at compile time (33.4)")
+            case PT_LIST, PT_SET, PT_TASK, PT_WORKER:
                 t->inner = self->resolve_type(t->inner)
             case PT_DICT:
                 t->key = self->resolve_type(t->key)
@@ -4701,6 +4727,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
     s.enumof.init()
     s.globals.init()
     s.gconst.init()
+    s.gconst_num.init()
     s.cfuncs.init()
     s.cconsts.init()
     s.nsof.init()
@@ -4865,6 +4892,9 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
             s.globals.put(d->name, gt)
             if d->is_const:
                 s.gconst.add(d->name)
+                # the value, when it is one a size can be written with
+                if d->init != None and d->init->kind == PE_INT:
+                    s.gconst_num.put(d->name, strtoll(d->init->text, None, 0))
 
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]
