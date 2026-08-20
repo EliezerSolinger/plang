@@ -1,0 +1,5 @@
+caught: integer division by zero
+tests/pscript/run/trace.psc:26: error: integer division by zero
+  in raises (tests/pscript/run/trace.psc)
+  in deeper (tests/pscript/run/trace.psc)
+  in middle (tests/pscript/run/trace.psc)

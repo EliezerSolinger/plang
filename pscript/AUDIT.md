@@ -106,13 +106,13 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 |---|---|---|
 | 10.x, 11.x, 12.1–12.2 | `unsafe` e a fronteira | **ok** — a regra da 31.1 é o que a sema aplica |
 | 11.3 | sair de `any` é checado | **OK** — `xs[1] as int` sobre um str lança "this `any` holds str, not int" |
-| 12.4 | falha em pscript é exceção, em C é crash | **ok** — mas ver 34.2 abaixo: o crash não imprime pilha |
+| 12.4 | falha em pscript é exceção, em C é crash | **OK** — bateria 94: o handler imprime a pilha do pscript e morre igual |
 | 13.2–13.4 | caixa opaca, `char*` copia, NUL de cortesia | **ok** |
 | 14.2 | gatilho por bytes E por objetos | **OK** — e proporcional ao vivo desde a 90.2 |
 | 14.3 | arena com bump | **OK** |
 | 14.1 | cache de UTF-8 pendurado na string | **REV** — a forma NATIVA é UTF-8 (51.2); o que existe é o índice de offsets, construído sob demanda |
 | 15.1, 23.1 | copiador de semiespaço (Cheney) | **OK** — `gc-stress.sh` |
-| 15.2 | erro com mensagem, categoria e posição | **OK** — falta a PILHA (34.2) |
+| 15.2 | erro com mensagem, categoria e posição | **OK** — a pilha entrou na bateria 94 |
 | 15.3, 16.2, 6.3, 50.3 | `pscript run` com cache de `.o` | **FALTA** — inteiro |
 | 16.4 | o runtime é fonte P compilada junto | **OK** — `tests/psbuild.sh` é a receita |
 | 17.1, 34.1, 49.4 | shadow stack de ENDEREÇO, com faixa, frame por função | **OK** |
@@ -130,7 +130,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 29.x | tipo de função, `any` e `def` separados, `as def(...)` | **ok** |
 | 32.1–32.3 | `int + float` promove, ÷0 lança, `id(x)` | **ok** |
 | 33.3–33.4, 60.x | `T[N]` como tipo completo, `in` para atravessar | **ok** |
-| 34.2 | rastro de pilha `em f (arq.psc:142)` | **FALTA** — o erro imprime `arquivo:linha: error: msg` e nenhum frame |
+| 34.2 | rastro de pilha `em f (arq.psc)` | **OK** — bateria 94; a LINHA por frame não (custaria uma escrita por chamada), e a função sem frame só aparece com `--trace` |
 | 39.1 | divisão do Python (`/` dá float, `//` piso) | **OK** — oráculo `py/arith` |
 | 39.4 | top-level await | **OK** |
 | 40.1 | truthiness só de bool e `T?` | **OK** — `if 1:` é recusado com a razão |
@@ -141,7 +141,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 44.3 | `print(rect)` mostra `Rect(x=1, y=2)` | **OK** — e `Printable.to_str()` sobrepõe |
 | 45.1 | f-string com formato | **OK** |
 | 45.2 | walrus e fatia com passo | **OK** — o walrus FECHADO nesta varredura (era "parsed but not compiled") |
-| 46.4 | `assert` strippable por flag de build | **PARCIAL** — o `assert` roda e lança; a flag não existe |
+| 46.4 | `assert` strippable por flag de build | **OK** — `-O`/`--no-assert`, bateria 93 |
 | 47.1–47.3 | float como chave por bits, `1.0/0.0` lança, literais | **ok** |
 | 47.4, 89.x | case Unicode com tabela embutida | **OK** — conferido contra o Python em 1.114.112 pontos |
 | 48.1–48.3 | arquivo Python-like, `sleep`/`timeout`/`interval`, `sys` | **OK** |
@@ -154,13 +154,15 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 61.1 | continuação só por parênteses | **OK** — `\` é recusado (a mensagem podia nomear a 61.1) |
 | 61.3 | `const` em referência congela fundo | **PARCIAL** — dentro de função vai; no topo do módulo, "not compiled yet" |
 | 61.4 | `for k in d`, `items`/`keys`/`values`, `x in list`, `"ab" in s` | **OK** — as três views FECHADAS nesta varredura |
-| 62.1 | `Comparable` para ordenação custom no `sorted` | **FALTA** — `sorted` recusa e manda usar `key=` |
+| 33.4, 60.2 | `T[N]` local/parâmetro/campo, e `in` para atravessar | **OK** — três defeitos consertados na bateria 93 (atribuição indexada era escrita selvagem, local com literal não compilava, `in` sobre array não compilava) |
+| 49.2 | exceção por flag, checada por chamada | **OK** — bateria 94: o ZERO de um tipo coletado passou a ser objeto vazio, porque NULL no meio de uma expressão era segfault |
+| 62.1 | `Comparable` para ordenação custom no `sorted` | **OK** — bateria 93 |
 | 62.1 | `Sequence<T>` como tipo de parâmetro | **FALTA** — não parseia |
 | 63.x | `embed`, `embed_bytes`, template com `render` | **OK** |
 | 64.1 | escopo de BLOCO nas duas linguagens | **OK** |
 | 65.10 | `const def` (função de comptime) | **FALTA** |
-| 65.11 | comptime `is_defined`/`typestr`/`hasfield`/`__FILE__` | **FALTA** |
-| 65.12 | `out`/`ref` no pscript | **FALTA** — só `in` existe (55.4) |
+| 65.11 | comptime `is_defined`/`typestr`/`hasfield`/`__FILE__` | **OK** — bateria 93 |
+| 65.12 | `out`/`ref` no pscript | **OK** — bateria 93, palavras contextuais |
 | 66.x, 67.x, 72.5 | traits nominais, despacho pelos dois lados, regra órfã | **OK** |
 | 68.x, 69.x | as levas "decidido e feito" | **OK** |
 | 72.1–72.4, 72.6 | `ord`/`chr`, substring, `for ch in s`, constantes de C | **OK** |
@@ -250,12 +252,7 @@ local com literal não compilava, e `in xs: T[N]` não compilava.
 Ordem de valor, na minha leitura — nenhum destes precisa de bateria, só de
 trabalho:
 
-1. **O rastro de pilha (34.2/15.2).** A shadow stack já tem os frames e a 12.4
-   já promete "crash e debugável não são opostos". Hoje um erro não capturado
-   imprime `arquivo:linha: error: msg` e nada mais: nenhum frame, e nenhum
-   handler de `SIGSEGV` que leia a pilha antes de morrer. É a maior diferença
-   entre o que o documento promete e o que quem depura recebe.
-2. **`epoll`/`kqueue` (18.4).** O loop chama `poll()`, textualmente o que a
+1. **`epoll`/`kqueue` (18.4).** O loop chama `poll()`, textualmente o que a
    decisão recusou, e paga O(n) por volta em cada espera. O `kqueue` não é
    testável nesta máquina (Linux), o que é motivo para escrevê-lo com cuidado e
    dizer que não foi rodado — não para deixar os dois de fora.

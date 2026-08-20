@@ -105,6 +105,7 @@ static void usage(void) {
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n");
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n");
     fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n");
+    fprintf(stderr, "  --trace          a frame for EVERY pscript function, so a stack trace names them all (34.2)\n");
     fprintf(stderr, "                   (default: pscript/runtime)\n");
     fprintf(stderr, "  -h, --help       this help\n");
     exit(2);
@@ -251,6 +252,7 @@ int main(int argc, char **argv) {
     int pedantic_lvl = 0;
     int inline_runtime = 0;
     int strip_asserts = 0;
+    int full_trace = 0;
     int werror = 0;
     int wall = 0;
     int wsuppress = 0;
@@ -316,6 +318,8 @@ int main(int argc, char **argv) {
             cpp_cmd = argv[i];
         } else if (strcmp(argv[i], "--inline-runtime") == 0) {
             inline_runtime = 1;
+        } else if (strcmp(argv[i], "--trace") == 0) {
+            full_trace = 1;
         } else if (strcmp(argv[i], "--no-assert") == 0 || strcmp(argv[i], "-O") == 0) {
             strip_asserts = 1;
         } else if (strcmp(argv[i], "-pedantic") == 0 || strcmp(argv[i], "--pedantic") == 0 || strcmp(argv[i], "-Wpedantic") == 0) {
@@ -384,7 +388,7 @@ int main(int argc, char **argv) {
     cc.std_version = std_version;
     cc.cpp = cpp_cmd;
     cc.inline_runtime = inline_runtime;
-    ps_lower_config(strip_asserts);
+    ps_lower_config(strip_asserts, full_trace);
     diag_config(werror, wall, pedantic_lvl, wsuppress);
     if (tokens_only) {
         size_t j;

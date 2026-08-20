@@ -175,6 +175,80 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.nogc_budget = usize(0)
     ctx.nogc_start = usize(0)
 
+# ---------- the crash that says where it was (12.4) ----------
+# 12.4 decided that failure in C is a CRASH and failure in pscript is an
+# exception, and added: "crash and debuggable are not opposites — a handler for
+# SIGSEGV/SIGBUS/SIGFPE reads the shadow stack and prints the pscript stack
+# before dying. It does not catch; it says where."
+#
+# That is what this is. It costs nothing until the process is already dying, and
+# what it prints is what the shadow stack knew — a function with nothing
+# collected in it has no frame (49.4), so it cannot be named unless the program
+# was built with `--trace`.
+#
+# Only the MAIN thread's stack is printed, and only when the crash is on it: a
+# worker has its own context and printing the main one's frames would name a
+# stack that has nothing to do with the crash.
+static PS_CRASH_CTX: *PsCtx = None
+static PS_CRASH_TID: pthread_t
+static PS_CRASH_HAVE: i32 = 0
+
+static def ps_crash_name(sig: int) -> const *char:
+    if sig == SIGSEGV:
+        return "SIGSEGV (invalid memory access)"
+    if sig == SIGBUS:
+        return "SIGBUS (misaligned or unmapped access)"
+    if sig == SIGFPE:
+        return "SIGFPE (arithmetic fault)"
+    if sig == SIGILL:
+        return "SIGILL (illegal instruction)"
+    return "a fatal signal"
+
+static def ps_crash_handler(sig: int):
+    fflush(stdout)
+    fprintf(stderr, "pscript: %s\n", ps_crash_name(sig))
+    if PS_CRASH_HAVE != 0 and PS_CRASH_CTX != None and pthread_equal(pthread_self(), PS_CRASH_TID) != 0:
+        f: *PsFrame = PS_CRASH_CTX->frames
+        n: i32 = 0
+        while f != None and n < 64:
+            if f->fn != None:
+                fprintf(stderr, "  in %s (%s)\n", f->fn, f->file if f->file != None else "?")
+                n += 1
+            f = f->prev
+        if n == 0:
+            fprintf(stderr, "  (no pscript frame held anything collected; build with --trace to name them all)\n")
+    else:
+        fprintf(stderr, "  (not the main thread: no stack to read here)\n")
+    fflush(stderr)
+    # back to the default and die properly, so the exit status and the core file
+    # are what they would have been. `None` IS `SIG_DFL` — the macro is a null
+    # function pointer, and a macro that is not a number does not cross the
+    # header boundary (72.4), so the null goes over instead of the name.
+    signal(sig, None)
+    raise(sig)
+    _exit(128 + i32(sig))
+
+# WHAT THIS CANNOT DO, said out loud: a crash that ran out of STACK — infinite
+# recursion — is not reported. The handler would run on the stack that just
+# overflowed and fault again; reporting it needs an alternate stack, which needs
+# `sigaction` with SA_ONSTACK, and the member that holds the handler there is a
+# MACRO over a union whose name differs between glibc and macOS
+# (`__sigaction_handler` against `__sigaction_u`). A macro that is not a number
+# does not cross the header boundary (72.4), and hard-coding either spelling
+# would be a platform `#ifdef` in the middle of the runtime.
+#
+# So `signal` it is, and what it covers is every crash that still has stack: a
+# wild pointer from the unsafe side, a misaligned access, an illegal
+# instruction. Which is what 12.4 was about — the C side failing.
+def ps_install_crash_handler(ctx: *PsCtx):
+    PS_CRASH_CTX = ctx
+    PS_CRASH_TID = pthread_self()
+    PS_CRASH_HAVE = 1
+    signal(SIGSEGV, ps_crash_handler)
+    signal(SIGBUS, ps_crash_handler)
+    signal(SIGFPE, ps_crash_handler)
+    signal(SIGILL, ps_crash_handler)
+
 # THE END OF THE PROGRAM, IN TWO HALVES — and the split is the whole point.
 #
 # This half drains, joins and turns an uncaught exception into an exit status.
@@ -207,6 +281,14 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
         # (a pipe, a file) the error would otherwise overtake it
         fflush(stdout)
         fprintf(stderr, "%s:%d: error: %s\n", e->file if e->file != None else "?", e->line, e->msg->data if e->msg != None else "")
+        # the stack the error was RAISED in (15.2/34.2), innermost first. A
+        # function with nothing collected in it has no frame to be named in
+        # (49.4's leaf optimisation), so what is printed is what the shadow
+        # stack knew — never a guess.
+        for i in range(e->tr_n):
+            fprintf(stderr, "  in %s (%s)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?")
+        if e->tr_lost > 0:
+            fprintf(stderr, "  ... and %d more\n", e->tr_lost)
         rc = 1
     return rc
 
@@ -1673,6 +1755,11 @@ def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
     e->cat = cat
     e->file = None
     e->line = 0
+    # NO trace: this failure happened in the WORKER, and the frames here are the
+    # parent's. Naming them would name the wrong stack — and `ps_alloc` does not
+    # zero, so the counters have to be cleared by hand.
+    e->tr_n = 0
+    e->tr_lost = 0
     free(msg)
     return e
 
@@ -3648,7 +3735,38 @@ def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32):
     f->prev = ctx->frames
     f->nslots = n
     f->slots = slots
+    f->fn = None
+    f->file = None
     ctx->frames = f
+
+# The same push, for the frame that IS a function's (34.2). Two stores more, and
+# only on a function that has a frame at all — a leaf with nothing collected in
+# it still pays nothing, which is why the trace names what it can and says how
+# many it could not.
+def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char):
+    f->prev = ctx->frames
+    f->nslots = n
+    f->slots = slots
+    f->fn = fn
+    f->file = file
+    ctx->frames = f
+
+# Reads the shadow stack into the error, innermost first (15.2/34.2). Called at
+# the RAISE, because a report happens after the unwind and there is nothing left
+# to read by then.
+def ps_trace_capture(ctx: *PsCtx, e: *PsErr):
+    e->tr_n = 0
+    e->tr_lost = 0
+    f: *PsFrame = ctx->frames
+    while f != None:
+        if f->fn != None:
+            if e->tr_n < PS_TRACE_MAX:
+                e->tr_fn[e->tr_n] = f->fn
+                e->tr_file[e->tr_n] = f->file
+                e->tr_n += 1
+            else:
+                e->tr_lost += 1
+        f = f->prev
 
 def ps_pop_frame(ctx: *PsCtx, f: *PsFrame):
     ctx->frames = f->prev
@@ -5060,6 +5178,7 @@ def ps_raise(ctx: *PsCtx, msg: const *char, cat: i32, file: const *char, line: i
     e->cat = cat
     e->file = file
     e->line = line
+    ps_trace_capture(ctx, e)
     ctx->exc = e
 
 def ps_raise_str(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32):
@@ -5070,6 +5189,7 @@ def ps_raise_str(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i3
     e->cat = i32(cat)
     e->file = file
     e->line = line
+    ps_trace_capture(ctx, e)
     ctx->exc = e
 
 def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64) -> *PsErr:
@@ -5078,6 +5198,7 @@ def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64) -> *PsErr:
     e->cat = i32(cat)
     e->file = None
     e->line = 0
+    ps_trace_capture(ctx, e)
     return e
 
 def ps_reraise(ctx: *PsCtx, e: *PsErr):

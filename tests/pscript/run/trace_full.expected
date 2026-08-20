@@ -1,0 +1,6 @@
+caught: integer division by zero
+tests/pscript/run/trace_full.psc:12: error: integer division by zero
+  in raises (tests/pscript/run/trace_full.psc)
+  in deeper (tests/pscript/run/trace_full.psc)
+  in middle (tests/pscript/run/trace_full.psc)
+  in <main> (tests/pscript/run/trace_full.psc)

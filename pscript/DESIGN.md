@@ -3468,6 +3468,67 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 94 — o rastro de pilha, e o NULL que ele desenterrou (2026-08-20)
+
+**94.1 O erro carrega a pilha (15.2/34.2), capturada no RAISE.** Tinha de ser no
+raise: quando alguém reporta, a pilha já desenrolou. Cada frame que pertence a
+uma FUNÇÃO leva o nome e o arquivo; frame de bloco não leva nada, porque um
+rastro que repetisse a mesma função uma vez por bloco seria ruído. Vinte e
+quatro frames num vetor fixo dentro do erro — texto estático, nada para o
+coletor seguir, e reportar não pode precisar de memória.
+
+```
+prog.psc:26: error: integer division by zero
+  in raises (prog.psc)
+  in deeper (prog.psc)
+  in middle (prog.psc)
+```
+
+**94.2 E o crash também diz onde estava (12.4).** Um handler de
+SIGSEGV/SIGBUS/SIGFPE/SIGILL lê a shadow stack, imprime os frames e MORRE do
+mesmo jeito que morreria — o status de saída e o core ficam iguais. Não captura
+nada; diz onde. Era exatamente a frase da 12.4 ("crash e debugável não são
+opostos") e faltava.
+
+> **O que ele não faz, dito em voz alta:** um crash que acabou a PILHA (recursão
+> infinita) não é reportado — o handler rodaria na pilha que acabou de estourar.
+> Reportar isso exige pilha alternativa, que exige `sigaction`, cujo membro do
+> handler é um MACRO sobre uma union com nome diferente no glibc e no macOS. E
+> macro que não é número não atravessa a fronteira de header (72.4). Sem
+> `#ifdef` de plataforma no meio do runtime.
+
+**94.3 O que escrever o teste do 94.1 desenterrou, e é mais grave que ele: o
+ZERO de um tipo coletado era NULL.** Uma função que LANÇA devolve o zero do seu
+tipo, e para `str`/`list`/`dict`/`struct` esse zero era NULL. Só que quem chamou
+está no MEIO de uma expressão quando recebe: `t + deep(n)` entrega o resultado
+direto ao `ps_str_concat`. A promessa da 49.2 — "com exceção pendente, toda
+chamada seguinte volta sem fazer nada" — vale para chamada que CHECA, e uma
+função de runtime que dereferencia o argumento não checa. Então o NULL era um
+segfault em vez de uma exceção pendente. Um programa de sete linhas derrubava o
+processo, e o defeito era anterior a tudo o que esta bateria fez.
+
+**Agora o zero de um tipo coletado é um OBJETO VAZIO válido** — uma alocação de
+bump num caminho que já está desenrolando, e o invariante cabe numa frase. Vale
+para `str` (vazia), `list` e `dict` (vazios) e `struct` (zerado pelo `ps_new`).
+
+**94.4 O que continua PENDENTE e é sua decisão: o rastro completo custa 50%.**
+Uma função sem nada coletado dentro não tem frame nenhum (a otimização de folha
+que a 49.4 deixou anotada), então não pode ser nomeada. `--trace` dá frame a
+toda função de pscript e nomeia todas — e o preço, medido no fib(35), que é
+nada além de chamada: **0,03s viram 0,05s**. Em código de verdade é ruído; num
+benchmark de chamada é metade.
+
+  * (a) como está: `--trace` é opt-in, e o rastro nomeia o que tinha frame;
+  * (b) `--trace` por padrão, e quem quer o benchmark passa `--no-trace`;
+  * (c) sempre ligado, sem flag.
+
+Não implementei nenhuma mudança de padrão: hoje é (a), que é o que já estava
+valendo por acidente. As três estão medidas; a escolha é sua.
+
+Portões: `tests/pscript/run/trace.psc` (o rastro e o zero que não crasha),
+`trace_full.psc` (o mesmo com `--trace`, para ver o que a flag ACRESCENTA) e
+`crash_stack.psc` (o handler, com uma escrita selvagem em P e saída 139).
+
 ## Bateria 93 — a varredura, segunda leva: o que estava decidido e não existia (2026-08-20)
 
 Continuação da 92, mesma regra: nada de novo foi decidido. Cada item abaixo era

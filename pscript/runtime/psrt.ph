@@ -180,12 +180,27 @@ enum PsCat:
 struct PsStrPtr:
     p: *PsStr
 
+# 15.2 asks the error to carry the pscript STACK, and 34.2 says what a frame of
+# it looks like: `at edit (codeview.psc)`. It is captured where the error is
+# RAISED, because by the time anyone reports it the shadow stack has already
+# unwound — and it costs nothing when nothing raises.
+#
+# A fixed array rather than an allocation: these are static strings, so there is
+# nothing for the collector to trace, and a raise inside the collector or out of
+# memory must not need memory to be reportable. Deeper than this and the middle
+# is elided, which is what every runtime does with a thousand-frame stack.
+PS_TRACE_MAX: const i32 = 24
+
 struct PsErr:
     obj: PsObj
     msg: *PsStr
     cat: i32
     file: const *char
     line: i32
+    tr_fn: const *char[24]
+    tr_file: const *char[24]
+    tr_n: i32
+    tr_lost: i32       # frames the array could not hold
 
 # `list<T>` (27.3). Two objects: the header, which is what a variable points at,
 # and the backing storage, which grows by being replaced. Splitting them is what
@@ -269,6 +284,12 @@ struct PsFrame:
     prev: *PsFrame
     nslots: i32
     slots: ***PsObj    # array of slot ADDRESSES: `*slots[i]` is the reference
+    fn: const *char    # 34.2: the FUNCTION this frame belongs to, or None when
+                       #   the frame is a block's (the lowering wraps loop
+                       #   bodies and blocks too, and a trace that repeated the
+                       #   same function once per block would be noise). Static
+                       #   text, so nothing here is ever collected.
+    file: const *char  # ... and where it is written
 
 # ---------- the heap ----------
 # One block. The allocator is a BUMP pointer (14.3) — the shape a copying
@@ -963,6 +984,9 @@ def ps_gc_poll(ctx: *PsCtx)
 def ps_gc(ctx: *PsCtx)
 def ps_add_root(ctx: *PsCtx, slot: **PsObj)
 def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32)
+def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char)
+def ps_trace_capture(ctx: *PsCtx, e: *PsErr)
+def ps_install_crash_handler(ctx: *PsCtx)
 def ps_pop_frame(ctx: *PsCtx, f: *PsFrame)
 
 # ---------- strings ----------

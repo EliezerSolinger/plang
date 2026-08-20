@@ -46,8 +46,15 @@ import "../stl/vec.ph"
 # decides, and the statement lowering stays about the shape of the check.
 static PS_STRIP_ASSERTS: bool = False
 
-def ps_lower_config(strip_asserts: bool):
+# 34.2/15.2: a frame that names its function is what a stack trace is made of.
+# A function with nothing collected in it has NO frame (the leaf optimisation
+# 49.4 left as a note), so it cannot be named — and with this on, every pscript
+# function gets one anyway, at the price of a push and a pop per call.
+static PS_FULL_TRACE: bool = False
+
+def ps_lower_config(strip_asserts: bool, full_trace: bool):
     PS_STRIP_ASSERTS = strip_asserts
+    PS_FULL_TRACE = full_trace
 
 
 def tuple_is_pure(t: *PsType) -> bool
@@ -186,6 +193,12 @@ struct PsLow:
                          #   file scope where every thread would share them
     for_body: *Block    # a body already lowered: what a comprehension hands to
                         #   the `for` lowering instead of a pscript block
+    fr_fn: const *char  # the FUNCTION whose frame the next `frame_wrap` builds
+                        #   (34.2), or None for a block's. Set right before the
+                        #   call and cleared by it, because the alternative was
+                        #   threading two more arguments through a dozen call
+                        #   sites that have nothing to do with tracing.
+    fr_file: const *char
     lazy_depth: i32     # inside a ternary arm or a short-circuit right side,
                         #   where hoisting a comprehension would change WHEN it runs
     in_main: bool       # lowering the implicit entry point (its exit differs)
@@ -438,6 +451,66 @@ struct PsLow:
             z->text = self->zret
             return z
         if t->kind == TY_PTR:
+            # THE ZERO OF A COLLECTED TYPE IS A VALID EMPTY OBJECT, NOT NULL.
+            #
+            # This is the error path: an exception is pending, and whatever is
+            # returned here the caller's guard will throw away. But the caller
+            # is MID-EXPRESSION — `t + deep(n)` hands the result straight to
+            # `ps_str_concat` — and 49.2's promise that "every later call
+            # returns immediately without doing anything" holds only for calls
+            # that CHECK. A runtime call that dereferences its argument does
+            # not check, and a NULL there is a crash instead of a pending
+            # exception. That crash was real: a function that raised, used
+            # inside a concatenation, took the process down.
+            #
+            # An empty OBJECT costs one bump allocation on a path that is about
+            # to unwind, and it makes the invariant sayable in one line.
+            if t->inner != None and t->inner->kind == TY_NAME:
+                zn: const *char = t->inner->name
+                if strcmp(zn, "PsStr") == 0:
+                    zs: *Expr = self->call_rt("ps_str_new", pos)
+                    self->push_arg(zs, self->ctx_arg(pos))
+                    zl: *Expr = ex_new(self->a, EX_STRING, pos)
+                    zl->text = "\"\""
+                    self->push_arg(zs, zl)
+                    self->push_arg(zs, self->num("0", pos))
+                    return zs
+                if strcmp(zn, "PsList") == 0:
+                    zl2: *Expr = self->call_rt("ps_list_new", pos)
+                    self->push_arg(zl2, self->ctx_arg(pos))
+                    self->push_arg(zl2, self->num("8", pos))
+                    self->push_arg(zl2, ex_new(self->a, EX_FALSE, pos))
+                    self->push_arg(zl2, self->num("0", pos))
+                    return zl2
+                if strcmp(zn, "PsDict") == 0:
+                    zd: *Expr = self->call_rt("ps_dict_new", pos)
+                    self->push_arg(zd, self->ctx_arg(pos))
+                    self->push_arg(zd, self->num("8", pos))
+                    self->push_arg(zd, self->num("8", pos))
+                    self->push_arg(zd, self->num("0", pos))
+                    self->push_arg(zd, ex_new(self->a, EX_FALSE, pos))
+                    self->push_arg(zd, ex_new(self->a, EX_FALSE, pos))
+                    return zd
+                if self->is_pstruct(zn):
+                    zo: *Expr = self->call_rt("ps_new", pos)
+                    self->push_arg(zo, self->ctx_arg(pos))
+                    zda: *Expr = ex_new(self->a, EX_UNARY, pos)
+                    zda->op = TK_AMP
+                    zda->lhs = ex_new(self->a, EX_IDENT, pos)
+                    zda->lhs->text = self->a->printf("%s__desc", ps_cname(self->a, zn))
+                    self->push_arg(zo, zda)
+                    zsz: *Expr = ex_new(self->a, EX_CALL, pos)
+                    zsz->lhs = ex_new(self->a, EX_IDENT, pos)
+                    zsz->lhs->text = "sizeof"
+                    zsz->args = self->a->alloc(sizeof(*zsz->args))
+                    zsz->args[0] = ex_new(self->a, EX_IDENT, pos)
+                    zsz->args[0]->text = ps_cname(self->a, zn)
+                    zsz->nargs = 1
+                    self->push_arg(zo, zsz)
+                    zc: *Expr = ex_new(self->a, EX_CAST, pos)
+                    zc->cast_type = t
+                    zc->lhs = zo
+                    return zc
             return ex_new(self->a, EX_NONE, pos)
         if t->kind == TY_NAME and strcmp(t->name, "bool") == 0:
             return ex_new(self->a, EX_FALSE, pos)
@@ -3980,7 +4053,11 @@ struct PsLow:
         for i in range(nparams):
             if self->is_collected(params[i]->type):
                 nslot += 1
-        if nslot == 0:
+        tfn: const *char = self->fr_fn
+        tfile: const *char = self->fr_file
+        self->fr_fn = None
+        self->fr_file = None
+        if nslot == 0 and (tfn == None or not PS_FULL_TRACE):
             r0: *Block = self->a->alloc(sizeof(Block))
             r0->stmts = v->data
             r0->n = v->len
@@ -4012,11 +4089,21 @@ struct PsLow:
         fd->type = ty_name(self->a, "PsFrame")
         out.push(fd)
         pu: *Stmt = st_new(self->a, ST_EXPR, pos)
-        pu->expr = self->call_rt("ps_push_frame", pos)
+        # a FUNCTION's frame carries its name and file, so an error raised under
+        # it can say where it was (34.2); a block's frame carries neither, and a
+        # trace that repeated the same function once per block would be noise
+        pu->expr = self->call_rt("ps_push_fn" if tfn != None else "ps_push_frame", pos)
         self->push_arg(pu->expr, self->ctx_arg(pos))
         self->push_arg(pu->expr, self->addr_of(fr, pos))
         self->push_arg(pu->expr, self->ident(sl, pos))
         self->push_arg(pu->expr, cnt)
+        if tfn != None:
+            fnl: *Expr = ex_new(self->a, EX_STRING, pos)
+            fnl->text = self->a->printf("\"%s\"", tfn)
+            self->push_arg(pu->expr, fnl)
+            fll: *Expr = ex_new(self->a, EX_STRING, pos)
+            fll->text = self->a->printf("\"%s\"", tfile if tfile != None else "?")
+            self->push_arg(pu->expr, fll)
         out.push(pu)
         po: *Stmt = st_new(self->a, ST_DEFER, pos)
         pb: *Block = self->a->alloc(sizeof(Block))
@@ -6198,6 +6285,8 @@ static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *
     for j in range(pf->nparams):
         pp[j] = &pf->params[j]
     nlb: Vec<*Stmt> = L->nl_flush(&body)
+    L->fr_fn = "<lambda>"
+    L->fr_file = L->file
     pf->body = L->frame_wrap(&nlb, pp, pf->nparams, e->pos)
     return d
 
@@ -7376,6 +7465,8 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
     for j in range(pf->nparams):
         pp2[j] = &pf->params[j]
     nlb2: Vec<*Stmt> = L->nl_flush(&body)
+    L->fr_fn = f->name
+    L->fr_file = L->file
     pf->body = L->frame_wrap(&nlb2, pp2, pf->nparams, f->pos)
 
     L->async_frame = None
@@ -8182,6 +8273,8 @@ static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool
         for j in range(pf->nparams):
             pp[j] = &pf->params[j]
         nlb3: Vec<*Stmt> = L->nl_flush(&body)
+        L->fr_fn = f->name
+        L->fr_file = L->file
         pf->body = L->frame_wrap(&nlb3, pp, pf->nparams, f->pos)
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_FUNC
@@ -8544,6 +8637,14 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     outarg->lhs->text = CTX
     L.push_arg(ic->expr, outarg)
     mb.push(ic)
+
+    # 12.4: the crash handler goes in right after the context exists, so a
+    # segfault anywhere below can read the shadow stack and say where it was
+    chs: *Stmt = st_new(L.a, ST_EXPR, zp)
+    chs->expr = L.call_rt("ps_install_crash_handler", zp)
+    L.push_arg(chs->expr, L.ctx_arg(zp))
+    mb.push(chs)
+
     # The MUTABLE module variables are built here — one set for this context,
     # as 42.2 asks — and the collected ones among them become its roots. A
     # `const` needs neither: it is immutable and lives in C's file scope.
@@ -8604,6 +8705,9 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     fd->body = fdb
     mb.push(fd)
     topnl: Vec<*Stmt> = L.nl_flush(&top)
+    # the implicit main (6.2) is where a program IS, so that is what it is called
+    L.fr_fn = "<main>"
+    L.fr_file = m->path
     tb: *Block = L.frame_wrap(&topnl, None, 0, zp)
     for j in range(tb->n):
         mb.push(tb->stmts[j])

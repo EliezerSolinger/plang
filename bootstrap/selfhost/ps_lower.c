@@ -201,8 +201,11 @@ void Vec_Vec_pStmt_deinit(Vec_Vec_pStmt *self);
 
 static int PS_STRIP_ASSERTS = 0;
 
-void ps_lower_config(int strip_asserts) {
+static int PS_FULL_TRACE = 0;
+
+void ps_lower_config(int strip_asserts, int full_trace) {
     PS_STRIP_ASSERTS = strip_asserts;
+    PS_FULL_TRACE = full_trace;
 }
 
 int tuple_is_pure(PsType *t);
@@ -317,6 +320,8 @@ struct PsLow {
     StrSet svars;
     StrSet gvars;
     Block *for_body;
+    const char *fr_fn;
+    const char *fr_file;
     int32_t lazy_depth;
     int in_main;
 };
@@ -687,6 +692,57 @@ static Expr *PsLow_zero_of(PsLow *self, Type *t, Pos pos) {
         return z;
     }
     if (t->kind == TY_PTR) {
+        if (t->inner != NULL && t->inner->kind == TY_NAME) {
+            const char *zn = t->inner->name;
+            if (strcmp(zn, "PsStr") == 0) {
+                Expr *zs = PsLow_call_rt(self, "ps_str_new", pos);
+                PsLow_push_arg(self, zs, PsLow_ctx_arg(self, pos));
+                Expr *zl = ex_new(self->a, EX_STRING, pos);
+                zl->text = "\"\"";
+                PsLow_push_arg(self, zs, zl);
+                PsLow_push_arg(self, zs, PsLow_num(self, "0", pos));
+                return zs;
+            }
+            if (strcmp(zn, "PsList") == 0) {
+                Expr *zl2 = PsLow_call_rt(self, "ps_list_new", pos);
+                PsLow_push_arg(self, zl2, PsLow_ctx_arg(self, pos));
+                PsLow_push_arg(self, zl2, PsLow_num(self, "8", pos));
+                PsLow_push_arg(self, zl2, ex_new(self->a, EX_FALSE, pos));
+                PsLow_push_arg(self, zl2, PsLow_num(self, "0", pos));
+                return zl2;
+            }
+            if (strcmp(zn, "PsDict") == 0) {
+                Expr *zd = PsLow_call_rt(self, "ps_dict_new", pos);
+                PsLow_push_arg(self, zd, PsLow_ctx_arg(self, pos));
+                PsLow_push_arg(self, zd, PsLow_num(self, "8", pos));
+                PsLow_push_arg(self, zd, PsLow_num(self, "8", pos));
+                PsLow_push_arg(self, zd, PsLow_num(self, "0", pos));
+                PsLow_push_arg(self, zd, ex_new(self->a, EX_FALSE, pos));
+                PsLow_push_arg(self, zd, ex_new(self->a, EX_FALSE, pos));
+                return zd;
+            }
+            if (PsLow_is_pstruct(self, zn)) {
+                Expr *zo = PsLow_call_rt(self, "ps_new", pos);
+                PsLow_push_arg(self, zo, PsLow_ctx_arg(self, pos));
+                Expr *zda = ex_new(self->a, EX_UNARY, pos);
+                zda->op = TK_AMP;
+                zda->lhs = ex_new(self->a, EX_IDENT, pos);
+                zda->lhs->text = Arena_printf(self->a, "%s__desc", ps_cname(self->a, zn));
+                PsLow_push_arg(self, zo, zda);
+                Expr *zsz = ex_new(self->a, EX_CALL, pos);
+                zsz->lhs = ex_new(self->a, EX_IDENT, pos);
+                zsz->lhs->text = "sizeof";
+                zsz->args = Arena_alloc(self->a, sizeof(*zsz->args));
+                zsz->args[0] = ex_new(self->a, EX_IDENT, pos);
+                zsz->args[0]->text = ps_cname(self->a, zn);
+                zsz->nargs = 1;
+                PsLow_push_arg(self, zo, zsz);
+                Expr *zc = ex_new(self->a, EX_CAST, pos);
+                zc->cast_type = t;
+                zc->lhs = zo;
+                return zc;
+            }
+        }
         return ex_new(self->a, EX_NONE, pos);
     }
     if (t->kind == TY_NAME && strcmp(t->name, "bool") == 0) {
@@ -4297,7 +4353,11 @@ static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_
             nslot += 1;
         }
     }
-    if (nslot == 0) {
+    const char *tfn = self->fr_fn;
+    const char *tfile = self->fr_file;
+    self->fr_fn = NULL;
+    self->fr_file = NULL;
+    if (nslot == 0 && (tfn == NULL || !PS_FULL_TRACE)) {
         Block *r0 = Arena_alloc(self->a, sizeof(Block));
         r0->stmts = v->data;
         r0->n = v->len;
@@ -4334,11 +4394,19 @@ static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_
     fd->type = ty_name(self->a, "PsFrame");
     Vec_pStmt_push(&out, fd);
     Stmt *pu = st_new(self->a, ST_EXPR, pos);
-    pu->expr = PsLow_call_rt(self, "ps_push_frame", pos);
+    pu->expr = PsLow_call_rt(self, (tfn != NULL ? "ps_push_fn" : "ps_push_frame"), pos);
     PsLow_push_arg(self, pu->expr, PsLow_ctx_arg(self, pos));
     PsLow_push_arg(self, pu->expr, PsLow_addr_of(self, fr, pos));
     PsLow_push_arg(self, pu->expr, PsLow_ident(self, sl, pos));
     PsLow_push_arg(self, pu->expr, cnt);
+    if (tfn != NULL) {
+        Expr *fnl = ex_new(self->a, EX_STRING, pos);
+        fnl->text = Arena_printf(self->a, "\"%s\"", tfn);
+        PsLow_push_arg(self, pu->expr, fnl);
+        Expr *fll = ex_new(self->a, EX_STRING, pos);
+        fll->text = Arena_printf(self->a, "\"%s\"", (tfile != NULL ? tfile : "\?"));
+        PsLow_push_arg(self, pu->expr, fll);
+    }
     Vec_pStmt_push(&out, pu);
     Stmt *po = st_new(self->a, ST_DEFER, pos);
     Block *pb = Arena_alloc(self->a, sizeof(Block));
@@ -6518,6 +6586,8 @@ static Decl *lower_lam_func(PsLow *L, PsExpr *e, int32_t idx, int with_body) {
         pp[j] = &pf->params[j];
     }
     Vec_pStmt nlb = PsLow_nl_flush(L, &body);
+    L->fr_fn = "<lambda>";
+    L->fr_file = L->file;
     pf->body = PsLow_frame_wrap(L, &nlb, pp, pf->nparams, e->pos);
     return d;
 }
@@ -7731,6 +7801,8 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
         pp2[j] = &pf->params[j];
     }
     Vec_pStmt nlb2 = PsLow_nl_flush(L, &body);
+    L->fr_fn = f->name;
+    L->fr_file = L->file;
     pf->body = PsLow_frame_wrap(L, &nlb2, pp2, pf->nparams, f->pos);
     L->async_frame = NULL;
     L->async_task = NULL;
@@ -8583,6 +8655,8 @@ static Decl *lower_func(PsLow *L, PsFunc *f, const char *owner, int with_body) {
             pp[j] = &pf->params[j];
         }
         Vec_pStmt nlb3 = PsLow_nl_flush(L, &body);
+        L->fr_fn = f->name;
+        L->fr_file = L->file;
         pf->body = PsLow_frame_wrap(L, &nlb3, pp, pf->nparams, f->pos);
     }
     Decl *d = Arena_alloc(L->a, sizeof(Decl));
@@ -8955,6 +9029,10 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     outarg->lhs->text = CTX;
     PsLow_push_arg(&L, ic->expr, outarg);
     Vec_pStmt_push(&mb, ic);
+    Stmt *chs = st_new(L.a, ST_EXPR, zp);
+    chs->expr = PsLow_call_rt(&L, "ps_install_crash_handler", zp);
+    PsLow_push_arg(&L, chs->expr, PsLow_ctx_arg(&L, zp));
+    Vec_pStmt_push(&mb, chs);
     if (L.svars.elen > 0) {
         Stmt *si2 = st_new(a, ST_EXPR, zp);
         si2->expr = ex_new(a, EX_CALL, zp);
@@ -9005,6 +9083,8 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     fd->body = fdb;
     Vec_pStmt_push(&mb, fd);
     Vec_pStmt topnl = PsLow_nl_flush(&L, &top);
+    L.fr_fn = "<main>";
+    L.fr_file = m->path;
     Block *tb = PsLow_frame_wrap(&L, &topnl, NULL, 0, zp);
     for (j = 0; j < tb->n; j += 1) {
         Vec_pStmt_push(&mb, tb->stmts[j]);

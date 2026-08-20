@@ -1,0 +1,5 @@
+before
+pscript: SIGSEGV (invalid memory access)
+  in inner (tests/pscript/run/crash_stack.psc)
+  in outer (tests/pscript/run/crash_stack.psc)
+  in <main> (tests/pscript/run/crash_stack.psc)

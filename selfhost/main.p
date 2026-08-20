@@ -99,6 +99,7 @@ static def usage():
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n")
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n")
     fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n")
+    fprintf(stderr, "  --trace          a frame for EVERY pscript function, so a stack trace names them all (34.2)\n")
     fprintf(stderr, "                   (default: pscript/runtime)\n")
     fprintf(stderr, "  -h, --help       this help\n")
     exit(2)
@@ -234,6 +235,8 @@ def main(argc: int, argv: **char) -> int:
     pedantic_lvl = 0      # -pedantic = 1 (warn), -pedantic-errors = 2 (error)
     inline_runtime: bool = False   # --inline-runtime: no libc in injected helpers
     strip_asserts: bool = False    # --no-assert / -O: drop `assert` (46.4)
+    full_trace: bool = False       # --trace: a frame for EVERY pscript function,
+                                   #   so a stack trace can name all of them (34.2)
     werror: bool = False
     wall: bool = False
     wsuppress: bool = False
@@ -292,6 +295,8 @@ def main(argc: int, argv: **char) -> int:
             cpp_cmd = argv[i]
         elif argv[i] == "--inline-runtime":
             inline_runtime = True
+        elif argv[i] == "--trace":
+            full_trace = True
         elif argv[i] in {"--no-assert", "-O"}:
             # 46.4: strip `assert` from the build, the way Python's `-O` does.
             # `-O` is the spelling a Python reader reaches for; it says nothing
@@ -358,7 +363,7 @@ def main(argc: int, argv: **char) -> int:
     cc.std_version = std_version
     cc.cpp = cpp_cmd
     cc.inline_runtime = inline_runtime
-    ps_lower_config(strip_asserts)
+    ps_lower_config(strip_asserts, full_trace)
     diag_config(werror, wall, pedantic_lvl, wsuppress)
 
     if tokens_only:
