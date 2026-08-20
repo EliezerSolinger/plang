@@ -94,8 +94,13 @@ struct PsLow:
     ret: *Type          # P return type of the function being lowered
     ret_ps: *PsType     # and the pscript one, for the option coercion
     tups: **char        # tuple SHAPES already emitted as a P record, by name
+    tuptys: **PsType    # ... and the tuple TYPE behind each one (98.4), because
+                        #   the frame has to know WHERE the references inside a
+                        #   tuple value are — which is compile-time data, and the
+                        #   reason a tuple never has to become an object
     ntups: i32
     ctups: i32
+    ctupt: i32
     shk: **char         # message SHAPES already emitted (74.2): the type, and
     shv: **char         #   the name of the static that describes it
     nsh: i32
@@ -220,6 +225,11 @@ struct PsLow:
     static def is_collected(self: *PsLow, t: *Type) -> bool
     static def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block
     static def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt
+    static def zero_struct(self: *PsLow, pos: Pos) -> *Expr
+    static def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos)
+    static def tuple_type_named(self: *PsLow, t: *Type) -> *PsType
+    static def value_slots(self: *PsLow, t: *Type) -> i32
+    static def value_slot_stores(self: *PsLow, out: *Vec<*Stmt>, arr: const *char, ref k: i32, base: *Expr, t: *Type, pos: Pos)
     static def ident(self: *PsLow, name: const *char, pos: Pos) -> *Expr
     static def async_field(self: *PsLow, name: const *char, pos: Pos) -> *Expr
     static def global_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
@@ -1922,10 +1932,41 @@ struct PsLow:
                 self->raised = True
                 return self->elem_at(self->expr(e->lhs), chk, e->type, e->pos)
             case PE_TUPLE:
-                tc: *Expr = self->call_rt(self->tuple_record(e->type), e->pos)
+                tn9: const *char = self->tuple_record(e->type)
+                if tuple_is_pure(e->type):
+                    # a record: P's own constructor (54.2) builds it
+                    tc: *Expr = self->call_rt(tn9, e->pos)
+                    for i in range(e->nargs):
+                        self->push_arg(tc, self->expr(e->args[i]))
+                    return tc
+                # 98.4: a tuple holding a reference is a plain P struct — still a
+                # VALUE, and P has no constructor for one. So it is a hidden
+                # local filled slot by slot: the declaration is hoisted (which is
+                # also what puts its references in the frame) and the filling
+                # stays where the expression was.
+                tv9: const *char = self->a->printf("__tup%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                td9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                td9->name = tv9
+                td9->type = ty_name(self->a, tn9)
+                td9->init = self->zero_struct(e->pos)
+                if self->lazy_depth > 0:
+                    fatal_at(self->file, e->pos, "a tuple holding a reference inside a conditional or short-circuit operand is not compiled yet: it is filled by statements, and those would run even when that side is not taken")
+                self->pre.push(td9)
+                # the filling goes in `pre` too, as STATEMENTS: a comma
+                # expression would work in C, but P types it by its left side
+                # and the left side here is a field assignment
                 for i in range(e->nargs):
-                    self->push_arg(tc, self->expr(e->args[i]))
-                return tc
+                    fe9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                    fe9->op = TK_DOT
+                    fe9->lhs = self->ident(tv9, e->pos)
+                    fe9->field = self->a->printf("_%d", i)
+                    as9: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
+                    as9->lhs = fe9
+                    as9->op = TK_ASSIGN
+                    as9->rhs = self->coerce(e->type->params[i], e->args[i])
+                    self->pre.push(as9)
+                return self->ident(tv9, e->pos)
             case PE_FIELD:
                 if e->lhs->type != None and e->lhs->type->kind == PT_NAME and strcmp(e->lhs->type->name, "Error") == 0:
                     # the error's metadata goes through the runtime, so the
@@ -3783,7 +3824,9 @@ struct PsLow:
             if strcmp(self->tups[i], name) == 0:
                 return name
         self->tups = vec_grow(self->tups, self->ntups, ref self->ctups, sizeof(*self->tups))
+        self->tuptys = vec_grow(self->tuptys, self->ntups, ref self->ctupt, sizeof(*self->tuptys))
         self->tups[self->ntups] = (*char)(name)
+        self->tuptys[self->ntups] = None   # an option record is not a tuple
         self->ntups += 1
         rd: *Decl = self->a->alloc(sizeof(Decl))
         rd->kind = DL_STRUCT
@@ -3878,15 +3921,24 @@ struct PsLow:
             if strcmp(self->tups[i], name) == 0:
                 return name
         self->tups = vec_grow(self->tups, self->ntups, ref self->ctups, sizeof(*self->tups))
+        self->tuptys = vec_grow(self->tuptys, self->ntups, ref self->ctupt, sizeof(*self->tuptys))
         self->tups[self->ntups] = (*char)(name)
+        # the TYPE behind the name (98.4): the frame reads it to find the
+        # references inside a tuple value
+        self->tuptys[self->ntups] = t
         self->ntups += 1
         rd: *Decl = self->a->alloc(sizeof(Decl))
         rd->kind = DL_STRUCT
         # A tuple of pure bytes IS a record (58.2), so it gets P's content `==`
-        # and its constructor for free. Sema refuses the impure ones for now —
-        # one holding a `str` needs the collector to trace it, and the collector
-        # is the next phase.
-        rd->is_record = True
+        # and its constructor for free.
+        #
+        # One that holds a `str` cannot be a P record — a record is pure bytes by
+        # definition, so that it can be copied, written out and compared as
+        # itself — so it becomes a plain P struct, which is STILL A VALUE (98.4).
+        # It never needs a header: what the collector needs is where the
+        # references inside it are, and the frame registers those (value_slots).
+        # What it gives up is P's derived `==`, and the pscript sema says so.
+        rd->is_record = tuple_is_pure(t)
         rd->is_def = True
         rd->pos = t->pos
         rd->name = name
@@ -4207,13 +4259,21 @@ struct PsLow:
         body.init()
         for i in range(v->len):
             st: *Stmt = v->data[i]
-            if st->kind == ST_VAR and st->name != None and not st->is_static and self->is_collected(st->type):
+            if st->kind == ST_VAR and st->name != None and not st->is_static and (self->is_collected(st->type) or self->value_slots(st->type) > 0):
                 d: *Stmt = st_new(self->a, ST_VAR, st->pos)
                 d->name = st->name
                 d->type = st->type
-                d->init = ex_new(self->a, EX_NONE, st->pos)
+                # a reference starts as None; a tuple VALUE (98.4) starts as
+                # `{0}`, because `= NULL` is not a thing a struct can be — and it
+                # has to start at something, since the frame is about to hand
+                # its slots to the collector
+                d->init = ex_new(self->a, EX_NONE, st->pos) if st->type != None and st->type->kind == TY_PTR else self->zero_struct(st->pos)
                 decls.push(d)
-                if st->init != None:
+                if st->init != None and st->init->kind == EX_INITLIST:
+                    # a BRACE initializer belongs to the declaration and cannot
+                    # become an assignment: `x = {0}` is not an expression in C
+                    d->init = st->init
+                elif st->init != None:
                     a2: *Stmt = st_new(self->a, ST_ASSIGN, st->pos)
                     a2->lhs = ex_new(self->a, EX_IDENT, st->pos)
                     a2->lhs->text = st->name
@@ -4222,10 +4282,20 @@ struct PsLow:
                     body.push(a2)
             else:
                 body.push(st)
-        nslot: i32 = decls.len
+        # one slot per collected local, and for a tuple VALUE one per reference
+        # INSIDE it (98.4) — the frame is what makes a tuple with a `str` in it
+        # visible to the collector without giving it a header
+        nslot: i32 = 0
+        for i in range(decls.len):
+            if self->is_collected(decls.data[i]->type):
+                nslot += 1
+            else:
+                nslot += self->value_slots(decls.data[i]->type)
         for i in range(nparams):
             if self->is_collected(params[i]->type):
                 nslot += 1
+            else:
+                nslot += self->value_slots(params[i]->type)
         tfn: const *char = self->fr_fn
         tfile: const *char = self->fr_file
         self->fr_fn = None
@@ -4254,9 +4324,14 @@ struct PsLow:
             if self->is_collected(params[i]->type):
                 out.push(self->slot_store(sl, k, params[i]->name, pos))
                 k += 1
+            elif self->value_slots(params[i]->type) > 0:
+                self->value_slot_stores(&out, sl, ref k, self->ident(params[i]->name, pos), params[i]->type, pos)
         for i in range(decls.len):
-            out.push(self->slot_store(sl, k, decls.data[i]->name, pos))
-            k += 1
+            if self->is_collected(decls.data[i]->type):
+                out.push(self->slot_store(sl, k, decls.data[i]->name, pos))
+                k += 1
+            else:
+                self->value_slot_stores(&out, sl, ref k, self->ident(decls.data[i]->name, pos), decls.data[i]->type, pos)
         fd: *Stmt = st_new(self->a, ST_VAR, pos)
         fd->name = fr
         fd->type = ty_name(self->a, "PsFrame")
@@ -4295,6 +4370,106 @@ struct PsLow:
         r->stmts = out.data
         r->n = out.len
         return r
+
+    # 98.4: the tuple type behind a generated record name, or None.
+    static def tuple_type_named(self: *PsLow, t: *Type) -> *PsType:
+        if t == None or t->kind != TY_NAME or t->name == None:
+            return None
+        for i in range(self->ntups):
+            if strcmp(self->tups[i], t->name) == 0:
+                return self->tuptys[i]
+        return None
+
+    # How many collected slots a VALUE of this type holds. A tuple is immutable
+    # and has no identity (`is` on a value is refused, 22.2), so copying it is
+    # indistinguishable from sharing it and it never has to become an object:
+    # what the collector needs is not a header but WHERE the references are, and
+    # that is this number and the stores below. A pure tuple answers zero and
+    # costs nothing at all.
+    static def value_slots(self: *PsLow, t: *Type) -> i32:
+        tt: *PsType = self->tuple_type_named(t)
+        if tt == None:
+            return 0
+        n: i32 = 0
+        for i in range(tt->nparams):
+            ft: *Type = self->ty(tt->params[i])
+            if self->is_collected(ft):
+                n += 1
+            else:
+                n += self->value_slots(ft)
+        return n
+
+    # ... and the stores that register them, `&t._0` at a time. A tuple inside a
+    # tuple recurses, because the path is just longer.
+    static def value_slot_stores(self: *PsLow, out: *Vec<*Stmt>, arr: const *char, ref k: i32, base: *Expr, t: *Type, pos: Pos):
+        tt: *PsType = self->tuple_type_named(t)
+        if tt == None:
+            return
+        for i in range(tt->nparams):
+            ft: *Type = self->ty(tt->params[i])
+            fe: *Expr = ex_new(self->a, EX_FIELD, pos)
+            fe->op = TK_DOT
+            fe->lhs = base
+            fe->field = self->a->printf("_%d", i)
+            if self->is_collected(ft):
+                ix: *Expr = ex_new(self->a, EX_INDEX, pos)
+                ix->lhs = self->ident(arr, pos)
+                ix->rhs = ex_new(self->a, EX_NUMBER, pos)
+                ix->rhs->text = self->a->printf("%d", k)
+                ad: *Expr = ex_new(self->a, EX_UNARY, pos)
+                ad->op = TK_AMP
+                ad->lhs = fe
+                cast: *Expr = ex_new(self->a, EX_CAST, pos)
+                cast->cast_type = ty_ptr(self->a, ty_ptr(self->a, ty_name(self->a, "PsObj")))
+                cast->lhs = ad
+                st: *Stmt = st_new(self->a, ST_ASSIGN, pos)
+                st->lhs = ix
+                st->op = TK_ASSIGN
+                st->rhs = cast
+                out->push(st)
+                k += 1
+            else:
+                self->value_slot_stores(out, arr, ref k, fe, ft, pos)
+
+    # `{0}` — what a struct starts as. Not `NULL`, which is what a reference
+    # starts as, and not nothing, because the frame is about to give the
+    # collector the addresses inside it.
+    static def zero_struct(self: *PsLow, pos: Pos) -> *Expr:
+        z: *Expr = ex_new(self->a, EX_INITLIST, pos)
+        z->args = self->a->alloc(sizeof(*z->args))
+        z->args[0] = ex_new(self->a, EX_NUMBER, pos)
+        z->args[0]->text = "0"
+        z->nargs = 1
+        return z
+
+    # `ps_add_root(&__g->t._0)` for each reference inside a module-level tuple
+    # value (98.4). A root and a frame slot are the same idea in two places: the
+    # address of something the collector has to rewrite.
+    static def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos):
+        tt: *PsType = self->tuple_type_named(t)
+        if tt == None:
+            return
+        for i in range(tt->nparams):
+            ft: *Type = self->ty(tt->params[i])
+            fe: *Expr = ex_new(self->a, EX_FIELD, pos)
+            fe->op = TK_DOT
+            fe->lhs = base
+            fe->field = self->a->printf("_%d", i)
+            if self->is_collected(ft):
+                rc: *Expr = self->call_rt("ps_add_root", pos)
+                self->push_arg(rc, self->ctx_arg(pos))
+                ad: *Expr = ex_new(self->a, EX_UNARY, pos)
+                ad->op = TK_AMP
+                ad->lhs = fe
+                cst: *Expr = ex_new(self->a, EX_CAST, pos)
+                cst->cast_type = ty_ptr(self->a, ty_ptr(self->a, ty_name(self->a, "PsObj")))
+                cst->lhs = ad
+                self->push_arg(rc, cst)
+                st: *Stmt = st_new(self->a, ST_EXPR, pos)
+                st->expr = rc
+                out->push(st)
+            else:
+                self->global_value_roots(out, fe, ft, pos)
 
     static def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt:
         ix: *Expr = ex_new(self->a, EX_INDEX, pos)
@@ -6067,6 +6242,17 @@ static def lower_globals_init(L: *PsLow, gv: Vec<*PsDecl>, with_body: bool) -> *
     for i in range(gv.len):
         t: *Type = L->ty(gv.data[i]->type)
         if not L->is_collected(t):
+            # 98.4: a module variable that is a tuple VALUE holding references
+            # needs one root per reference inside it — the same answer the frame
+            # gives for a local, and for the same reason: what the collector
+            # needs is where they are, not a header around them
+            if L->value_slots(t) > 0:
+                gbase: *Expr = ex_new(L->a, EX_FIELD, f->pos)
+                gbase->op = TK_ARROW
+                gbase->lhs = ex_new(L->a, EX_IDENT, f->pos)
+                gbase->lhs->text = "__g"
+                gbase->field = ps_cname(L->a, gv.data[i]->name)
+                L->global_value_roots(&body, gbase, t, f->pos)
             continue
         rc: *Expr = L->call_rt("ps_add_root", f->pos)
         L->push_arg(rc, ex_new(L->a, EX_IDENT, f->pos))

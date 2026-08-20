@@ -1149,8 +1149,12 @@ struct PsSema:
                     if tt->params[i] == None or tt->params[i]->kind == PT_VOID:
                         fatal_at(self->file, e->args[i]->pos, "a tuple element has no value")
                 tt->nparams = e->nargs
-                if not tuple_is_pure(tt):
-                    fatal_at(self->file, e->pos, "a tuple holding a collected value does not compile yet — it needs the collector to trace it; a tuple of numbers, bools or records works today")
+                # 98.4: a tuple that holds a `str` (or a list, or a struct) IS
+                # allowed now, and stays a VALUE — the frame registers the
+                # references INSIDE it, which is what the collector needs and is
+                # compile-time data. What is still refused is such a tuple as a
+                # dict KEY (hash and equality would have to walk it) and inside
+                # a container (the element trace is the next step).
                 t = tt
             case PE_COALESCE:
                 # `a ?? b` (43.2): only for `T?`, so it can never be confused
@@ -1260,6 +1264,12 @@ struct PsSema:
                 # same kind of thing, with the int/float mix allowed
                 if not num and not ps_type_eq(lt, rt):
                     fatal_at(self->file, e->pos, "cannot compare %s with %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
+                if lt != None and lt->kind == PT_TUPLE and not tuple_is_pure(lt):
+                    # a tuple of pure bytes gets P's derived `==` for free; one
+                    # holding a `str` needs a comparison that walks it, and that
+                    # is not written yet (98.4). Comparing slot by slot works
+                    # today and says exactly what it means.
+                    fatal_at(self->file, e->pos, "`==` on a tuple that holds a reference is not compiled yet (98.4): compare the slots — `a[0] == b[0] and a[1] == b[1]`")
                 return bl
             case TK_LT, TK_LE, TK_GT, TK_GE:
                 if num:

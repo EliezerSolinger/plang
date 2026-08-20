@@ -3509,6 +3509,45 @@ hash e igualdade por CONTEÚDO derivados dos campos.
 d.items()` deixa de ser forma especial, `d[(linha, coluna)]` funciona, e uma
 função que devolve duas coisas para de precisar de um `record` só para isso.
 
+### 98.5 A pergunta sua que melhorou o desenho: a tupla NUNCA vira objeto
+
+*"Se a tupla é imutável, conseguimos saber em tempo de compilação se vira valor ou
+se vira objeto?"* Sim — e a resposta é mais forte que a pergunta: **não vira
+objeto nunca.**
+
+O que eu tinha escrito na 98.4 era "tupla pura = valor, tupla com referência =
+objeto coletado com percurso gerado". Está errado, e o que mostra isso é a
+imutabilidade:
+
+  * o que o coletor precisa não é um CABEÇALHO, é saber **onde, dentro daqueles
+    bytes, estão as referências** — e isso é dado de TIPO, conhecido em
+    compilação, não informação por valor;
+  * imutável + sem identidade (`is` sobre valor já é recusado, 22.2) significa
+    que **copiar é indistinguível de compartilhar**: não há mutação para
+    propagar nem identidade para preservar;
+  * sem mutação não há barreira de escrita, que é o outro motivo pelo qual um
+    coletor movedor normalmente quer objetos.
+
+Então a escolha não é "valor ou objeto": é **quantos slots o frame registra**.
+
+  * **local, argumento, retorno:** o frame registra um slot por referência
+    DENTRO do valor (`&t._0`) em vez de um slot para o valor. É a mesma faixa que
+    a 34.1 abriu para array, e custa zero numa tupla pura;
+  * **variável de módulo:** uma RAIZ por referência dentro (`ps_add_root(&__g->t._0)`)
+    — mesma ideia, outro lugar;
+  * **dentro de contêiner** (`list<(str, int)>`, que é o que `d.items()` como
+    valor precisa): falta. O `eref: bool` do contêiner precisa virar "eref ou um
+    ponteiro de percurso", e é um pedaço do coletor com estresse próprio;
+  * **chave de dict:** continua pura. Hash e igualdade profundos são o mesmo
+    percurso, e vêm com ele.
+
+E o que isso ganha contra a versão com objeto: `d.items()` de mil pares é UMA
+lista de 16 KB em vez de mil alocações de 40 bytes mais mil ponteiros; e
+`d[(linha, coluna)]` não aloca nada em nenhuma volta do laço.
+
+O `==` de uma tupla com referência também espera esse percurso, e é recusado com
+a saída escrita na mensagem (comparar slot por slot).
+
 ### 98.4 O que entrou agora, e o que ficou esperando o coletor
 
 **Entrou:** `t[0]` com índice LITERAL (cada slot tem o seu tipo, então `t[i]`
@@ -3520,15 +3559,10 @@ compara por conteúdo; a imutabilidade da 38.2 recusada de verdade; e `a, b = 1,
 2` — o lado esquerdo já funcionava (uma lista de vírgulas é uma tupla para o
 parser), faltava o lado DIREITO, que terminava na primeira vírgula.
 
-**Ficou:** uma tupla que guarda `str`, `list`, `dict` ou `struct` — o que
-`d.items()` como VALOR precisa. Não é falta de decisão sobre a tupla: é uma
-pergunta sobre o COLETOR, e tem uma resposta boa que quero medir antes de
-escrever. Hoje uma tupla pura é um `record` (valor, sem cabeçalho); uma tupla com
-referência dentro seria um objeto COLETADO com função de percurso gerada — como
-um `struct`. Cada tipo concreto de tupla teria uma representação só (`(int,int)`
-valor, `(str,int)` referência), então não é o "mesmo tipo com duas formas" que a
-29.5 recusou; mas é o coletor, que é a parte com mais invariantes, e entra com
-teste de estresse próprio.
+**Ficou** (e a 98.5 acima explica por que menos do que eu pensava): a tupla que
+guarda referência DENTRO DE UM CONTÊINER, que é o que `d.items()` como valor
+precisa, e o `==` dela. Como local, argumento, retorno e variável de módulo ela
+já funciona — e como VALOR, sem cabeçalho.
 
 **98.3 No P ela continua REMOVIDA**, a seu pedido, e isso não muda. É o caso
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade

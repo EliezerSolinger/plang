@@ -17,9 +17,16 @@ parênteses. O que faltava, e entra aqui:
     lista de vírgulas é uma tupla para o parser); o que faltava era o lado
     DIREITO, que terminava na primeira vírgula.
 
-Falta o que precisa do coletor: uma tupla que guarda `str`, `list` ou `struct`.
-Ver o fim do AUDIT.
+E a tupla que guarda REFERÊNCIA (`(str, int)`) também entra, e sem virar objeto:
+imutável e sem identidade, copiar é indistinguível de compartilhar, então o que o
+coletor precisa não é um cabeçalho — é saber ONDE, dentro daqueles bytes, estão
+as referências. Isso é dado de tipo: o frame registra um slot por referência
+dentro do valor (`&t._0`), e uma variável de módulo ganha uma raiz por
+referência. Falta só o que anda DENTRO do elemento de um contêiner
+(`list<(str, int)>`, que é o que `d.items()` como valor precisa) e o `==` dela.
 """
+
+MODULE_TUPLE = ("declared at the top", 99)
 
 t = (1, 2.5)
 print(f"slots {len(t)}: {t[0]} {t[1]}")
@@ -62,3 +69,26 @@ print(f"same key {board[k2]}")
 
 # ---- comparação por conteúdo (22.2) ----
 print(f"eq {(1, 2) == (1, 2)} {(1, 2) == (1, 3)}")
+
+
+# ---- tupla que guarda referência (98.4), ainda como VALOR ----
+def described(i: int) -> (str, int):
+    return (f"item{i}", i * 10)
+
+
+label, value = described(3)
+print(f"ref-tuple {label} {value}")
+
+held = ("kept across a collection", 1)
+# alocar com a tupla viva é o teste de verdade: se o frame não registrasse o
+# campo, o coletor moveria a string e o que sobrasse apontaria para o passado
+i = 0
+noise = ""
+while i < 50:
+    noise = f"n{i}"
+    i += 1
+print(f"still {held[0]} {held[1]} {len(noise)}")
+
+# o slot também é registrado quando a tupla mora numa variável de MÓDULO, que é
+# outro lugar (uma raiz, não um slot de frame) e a mesma ideia
+print(f"module-level {MODULE_TUPLE[0]} {MODULE_TUPLE[1]}")

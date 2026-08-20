@@ -1,1 +1,1 @@
-a tuple holding a collected value does not compile yet
+`==` on a tuple that holds a reference is not compiled yet (98.4)

@@ -8,3 +8,6 @@ in True False
 after remove 1
 same key by content
 eq True False
+ref-tuple item3 30
+still kept across a collection 1 3
+module-level declared at the top 99
