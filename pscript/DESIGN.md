@@ -3264,6 +3264,18 @@ só 115 não citam `Symbol`/`prototype`/`species`/thenable — e mesmo esses sã
 node são sobre o *warning de unhandled rejection* do node, não sobre semântica.
 Registrado para não se reabrir a discussão sem caso novo.
 
+> **Feito em 2026-08-20, e o "quase nada" virou 25 propriedades.** O que não
+> porta é o CORPUS; o que ele mede porta. As perguntas que os 732 casos do
+> `Promise/` existem para fixar foram reescritas em `await` como três pares de
+> oráculo (`tests/oracle/js/promise`, `turns`, `settle`) — a ordem em que o
+> `all` responde contra a ordem em que as tasks terminaram, o `allSettled`
+> mantendo a ordem da entrada com as falhas no lugar, o `any` ignorando as
+> falhas anteriores ao primeiro sucesso, o revezamento de várias tasks prontas,
+> a task criada DENTRO de outra, o `await` que cede mesmo no que já acabou. E
+> duas divergências impressas de propósito: o nosso `race` cancela os
+> perdedores, e o desempate entre duas falhas simultâneas não foi decidido —
+> então nenhuma linha pergunta por ele.
+
 **88.2 Os três corpora entram, com portão TOTAL** (decisão sua), no molde do
 `tests/clang-compare.sh`: uma divergência sem explicação reprova. O que
 sabidamente não fazemos vive em `tests/conformance/<corpus>.skips`, uma linha

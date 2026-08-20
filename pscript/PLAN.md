@@ -2001,8 +2001,25 @@ referências do CPython nesse padrão exato — não é mais um defeito, é a tr
 
 ## O que a bateria 88 deixou EM ABERTO
 
-- [ ] **test262**: portar à mão as ~40 que medem ORDEM de resolução de
-      `all`/`allSettled`/`any`/`race`, reescritas em `await`.
+- [x] **test262**: FEITO em 2026-08-20, como três pares de oráculo em
+      `tests/oracle/js/` (`promise`, `turns`, `settle`) ao lado do `ordering`
+      que já existia — 25 propriedades de ORDEM de resolução de
+      `all`/`allSettled`/`any`/`race`, reescritas em `await` e conferidas
+      contra o node a cada `verify-all`. O que o test262 mede em cima do modelo
+      de objetos do JS (thenable, `Symbol.species`, `.call` com outro `this`)
+      continua fora, e continua sendo o motivo pelo qual isto foi PORTADO em
+      vez de copiado — ver a 88.1.
+
+      As quatro perguntas que valia fazer e as respostas que o node deu:
+      um `raise` ANTES do primeiro `await` sai no await e não na chamada,
+      mesmo com o início quente da 35.1; a mesma task duas vezes numa lista dá
+      dois lugares e uma execução só; um erro dentro de um `gather` aninhado
+      chega ao await de fora inteiro, sem embrulho; e o `first_ok` sem nada
+      para escolher recusa, como o `Promise.any`. As duas divergências reais
+      estão impressas de propósito e não puladas: o nosso `race` CANCELA os
+      perdedores e o do JS não, e a ordem de erro entre DUAS falhas simultâneas
+      é desempate que ninguém decidiu aqui — então nenhuma linha pergunta por
+      ela.
 - [ ] **Oráculos** (decisão sua): `node` para o modelo de runtime (ordem de
       microtask, `await` que cede sempre, EOF de socket, ordem de timer) e
       `python3` para a semântica da linguagem (`-7//2`, `-7%3`, repr de float,
