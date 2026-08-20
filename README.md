@@ -360,6 +360,18 @@ and `node` is the oracle for the runtime model, where the promises are about
 ORDER. It found, among others, that timers with the same deadline were waking in
 the wrong order.
 
+`bash tests/bench.sh` runs the same program here, in `python3` and in `node`,
+with the compile time in a column of its own — long on purpose, and ours to have:
+this is ahead-of-time through C at `-O3 -flto`. None of the speed comes from the
+code generator, which optimises nothing; it comes from GCC plus two policy fixes
+that measurement forced. Link-time optimisation is worth 3.4x on recursion,
+because a program and the runtime are two translation units and every operation
+is a call across that boundary. And the collector's trigger is now proportional
+to what is live rather than a fixed 2 MiB — a fixed trigger makes a copying
+collector quadratic on anything that accumulates, which is why building a list of
+strings cost 0.49 µs an item at fifty thousand and 1.27 at four hundred thousand.
+It is flat now.
+
 `bash tests/gc-stress.sh` collects at every safe point and poisons the space it
 frees. A copying collector has one way to be wrong — something held a pointer
 across a safe point without telling the collector — and the danger is not the

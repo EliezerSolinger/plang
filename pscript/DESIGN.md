@@ -3415,6 +3415,62 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 90 — o orçamento do coletor, e as flags do C (2026-08-20)
+
+Sua pergunta: *"vc testou o benchmark usando as flags de otimizacao do
+llvm/gcc certo?"* e depois *"e pq nao -O3"*. As duas respostas mudaram números.
+
+**90.1 O padrão do placar é `-O3 -flto`, e o LTO é a metade que importa.**
+Medido, melhor de cinco:
+
+| flags | fib | crivo | concat |
+|---|---|---|---|
+| `-O2` | .0189 | .0837 | .1986 |
+| `-O3` | .0170 | .0839 | .1806 |
+| **`-O3 -flto`** | **.0050** | **.0487** | .1774 |
+| `-O3 -flto -march=native` | .0068 | .0489 | .1752 |
+
+`-O3` sozinho quase não faz nada. O `-flto` faz 3,4× no fib e 1,7× no crivo, e a
+razão é estrutural: um programa e o runtime são DUAS unidades de tradução (16.4),
+então todo `ps_add`, `ps_list_at` e `ps_gc_poll` é chamada atravessando essa
+fronteira — e este gerador de código emite muitas. O LTO é o que as inlina.
+
+`-march=native` fica FORA de propósito: não compra nada mensurável, faz um
+binário que só roda na máquina que o construiu, e o node e o python do lado são
+builds genéricos — medir o nosso nativo contra o portável deles seria inclinar a
+mesa.
+
+**90.2 O gatilho do coletor passa a ser PROPORCIONAL ao conjunto vivo. REVISA a
+14.2.** A 14.2 pedia "colete a cada 2 MiB alocados ou 200.000 objetos", os dois
+FIXOS. Um gatilho fixo torna um coletor que copia **quadrático** em qualquer
+programa cujo conjunto vivo cresce: cada coleta copia tudo o que está vivo, e com
+uma quantidade constante alocada no meio, a cópia se repete uma vez por 2 MiB
+para um conjunto que só aumenta.
+
+Medido, construindo uma lista de n strings e juntando — custo por item:
+
+    n =    50.000   0,49 us          n =   400.000   1,27 us
+    n =   100.000   0,61 us          n =   800.000   1,87 us
+    n =   200.000   0,83 us
+
+O Python fica plano em ~0,2. A curva era o coletor, não as strings.
+
+Agora o orçamento é `max(piso, o que está VIVO)` — um programa pode alocar tanto
+quanto já está segurando antes da próxima coleta. É a regra padrão de um heap
+copiador e faz a cópia amortizar para constante por byte alocado. **Os DOIS
+limites escalam**: um contador fixo de objetos é a mesma quadrática na outra
+dimensão, e uma lista de um milhão de strings pequenas bate nele primeiro — o
+degrau em n = 800.000 era exatamente esse.
+
+Depois: 0,46 / 0,39 / 0,37 / 0,43 / 0,37 us por item numa faixa de 16×. Plano. E
+a razão contra o Python parou de crescer: era 4,9× e divergindo, virou 2,2–2,4×
+constante.
+
+> **O que isso custa.** Um heap que pode dobrar antes de coletar usa mais memória
+> em pico — é a troca clássica, e é a que todo coletor copiador faz. O piso de
+> 2 MiB continua sendo o que impede um programa pequeno de coletar a cada poucos
+> quilobytes.
+
 ## Bateria 89 — `upper`/`lower` de verdade, e o que MEDIR mudou (2026-08-19)
 
 Sua pergunta: *"o que precisamos para o upper completo?"* — e depois a saída:

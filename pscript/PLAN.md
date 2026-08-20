@@ -1919,23 +1919,30 @@ Ver a 89 do DESIGN para as decisões. Aqui está o que ficou:
 
 ## O placar de desempenho, como ele saiu
 
-`bash tests/bench.sh`, um núcleo, uma execução cada, respostas conferidas entre
-os três:
+`bash tests/bench.sh`, um núcleo, respostas conferidas entre os três, com
+`-O3 -flto` (ver a bateria 90 para por que essas flags e não outras):
 
 | programa | compilar | nosso | python3 | node |
 |---|---|---|---|---|
-| partida (programa vazio) | 2,98 s | **0,003 s** | 0,021 s | 0,035 s |
-| fib(30) recursivo | 2,08 s | **0,020 s** | 0,130 s | 0,069 s |
-| crivo até 2 milhões | 2,29 s | 0,113 s | 0,244 s | **0,082 s** |
-| 200 mil concatenações + join | 2,27 s | 0,243 s | **0,063 s** | 0,095 s |
+| partida (programa vazio) | 2,3 s | **0,003 s** | 0,028 s | 0,037 s |
+| fib(30) recursivo | 1,5 s | **0,007 s** | 0,124 s | 0,057 s |
+| crivo até 2 milhões | 1,4 s | **0,065 s** | 0,233 s | 0,078 s |
+| 200 mil concatenações + join | 1,5 s | 0,095 s | **0,067 s** | 0,096 s |
 
 A coluna de compilar é longa de propósito e é só nossa: somos AOT através de C
-com o compilador do sistema no `-O2`. Não é uma corrida em que estamos.
+com o compilador do sistema. Não é uma corrida em que estamos.
 
-**A fraqueza está medida e não escondida:** construir texto é 4× mais lento que o
-Python. Cada `"item-" + str(i)` aloca uma string nova e o coletor passa por lá; o
-`str` do CPython tem duas décadas de otimização nesse caminho exato. É o candidato
-óbvio a trabalho de desempenho, e agora existe um número para comparar depois.
+**Nada disso vem do nosso gerador de código, que não otimiza nada** — ele emite
+chamadas de runtime e deixa o resto para o `cc`. Os ganhos acima são do GCC mais
+duas correções de política nossas (a bateria 90): o `-flto`, porque programa e
+runtime são duas unidades de tradução e toda operação é uma chamada atravessando
+essa fronteira; e o orçamento do coletor proporcional ao conjunto vivo, que
+tirou a quadrática de qualquer programa que acumula.
+
+**Onde ainda perdemos, medido:** construir texto. Era 4× mais lento que o Python
+E DIVERGINDO (0,49 → 1,27 us por item de 50 mil para 400 mil); agora é 1,4× e
+plano. O que sobra é o custo próprio de um coletor que copia contra a contagem de
+referências do CPython nesse padrão exato — não é mais um defeito, é a troca.
 
 **Dois achados de desempenho que o placar destapou**, os dois consertados:
 

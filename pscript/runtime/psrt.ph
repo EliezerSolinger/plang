@@ -531,6 +531,8 @@ struct PsCtx:
     # collectors push and evict from at once — which glibc reports as
     # `double free or corruption`, in a debugging mode, which is the worst
     # possible place for a bug of its own.
+    nlive: i64           # objects that survived the last collection — the other
+                         #   half of the budget, for the same reason as `live`
     graveyard: *PsBlock
     grave_n: i32
     stress_tick: i64

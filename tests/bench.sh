@@ -22,7 +22,25 @@ cd "$(dirname "$0")/.."
 
 OUT=tests/out/bench
 mkdir -p "$OUT"
-CCOPT=${CCOPT:--O2}
+# -O3 AND LTO, and the LTO is the half that matters. Measured, best of five:
+#
+#   flags                      fib     sieve   strcat
+#   -O2                      .0189     .0837    .1986
+#   -O3                      .0170     .0839    .1806
+#   -O3 -flto                .0050     .0487    .1774
+#   -O3 -flto -march=native  .0068     .0489    .1752
+#
+# `-O3` on its own is nearly free of effect. `-flto` is 3.4x on fib and 1.7x on
+# the sieve, and the reason is structural rather than lucky: a program and the
+# runtime are TWO translation units (16.4), so every `ps_add`, `ps_list_at` and
+# `ps_gc_poll` is a call across that boundary. Link-time optimisation is what
+# inlines them, and this code generator emits a great many of them.
+#
+# `-march=native` is NOT here on purpose: it buys nothing measurable, it makes a
+# binary that only runs on the machine that built it, and node and python next
+# door are generic builds — measuring our native build against their portable
+# one would be tilting the table.
+CCOPT=${CCOPT:--O3 -flto}
 
 have() { command -v "$1" >/dev/null 2>&1; }
 

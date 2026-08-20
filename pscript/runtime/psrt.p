@@ -2,7 +2,25 @@
 import "psrt.ph"
 
 const PS_BLOCK_BYTES = 1 << 20      # 1 MiB per block
-const PS_GC_BYTES = 1 << 21         # collect after 2 MiB since the last one (14.2)
+# The FLOOR of the collection budget, not the budget. 14.2 asked for a fixed
+# "collect every 2 MiB allocated", and a fixed trigger makes a copying collector
+# QUADRATIC on any program whose live set grows: each collection copies
+# everything alive, and with a constant amount allocated in between, the copying
+# is repeated once per 2 MiB for a live set that keeps getting bigger.
+#
+# Measured, building a list of n strings and joining it — cost per item:
+#
+#      n = 50_000    0.49 us      n = 200_000   0.83 us
+#      n = 100_000   0.61 us      n = 400_000   1.27 us
+#
+# Python stays flat at about 0.2. The curve is the collector, not the strings.
+#
+# So the budget is `max(this floor, what is currently LIVE)`: a program may
+# allocate as much as it is already holding before the next collection. That is
+# the standard rule for a copying heap and it makes the copying amortise to a
+# constant per byte allocated — the total work becomes linear. The floor is what
+# keeps a small program from collecting every few kilobytes.
+const PS_GC_BYTES = 1 << 21
 const PS_GC_OBJECTS = 200000        # ... or after this many objects (14.2)
 
 # ---------- GC STRESS: making the whole bug class visible ----------
@@ -149,6 +167,7 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.waiters = None
     ctx.io_r = -1
     ctx.io_w = -1
+    ctx.nlive = 0
     ctx.graveyard = None
     ctx.grave_n = 0
     ctx.stress_tick = 0
@@ -3658,14 +3677,17 @@ def ps_gc(ctx: *PsCtx):
 
     # Cheney's scan: everything already copied is the work list
     scan: usize = 0
+    nlive: i64 = 0
     while scan < to->used:
         o: *PsObj = (*PsObj)(to->base + scan)
         ps_scan_object(to, o)
         scan += usize(o->size)
+        nlive += 1
 
     ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = to
     ctx->live = to->used
+    ctx->nlive = nlive
     ctx->alloced = 0
     ctx->nalloc = 0
     ctx->ngc += 1
@@ -3687,7 +3709,17 @@ def ps_gc_poll(ctx: *PsCtx):
     if ps_stress_due(ctx):
         ps_gc(ctx)
         return
-    if ctx->alloced < usize(PS_GC_BYTES) and ctx->nalloc < PS_GC_OBJECTS:
+    # proportional to the live set, with a floor — see PS_GC_BYTES. BOTH limits
+    # scale: a fixed object count is the same quadratic in the other dimension,
+    # and a heap of a million small strings hits that one first (the cliff at
+    # n = 800_000 in the measurement above was exactly this).
+    budget: usize = usize(PS_GC_BYTES)
+    if ctx->live > budget:
+        budget = ctx->live
+    nbudget: i64 = PS_GC_OBJECTS
+    if ctx->nlive > nbudget:
+        nbudget = ctx->nlive
+    if ctx->alloced < budget and i64(ctx->nalloc) < nbudget:
         return
     ps_gc(ctx)
 
