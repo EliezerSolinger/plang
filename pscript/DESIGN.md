@@ -3398,6 +3398,35 @@ agora mede a partir de antes, que é o que ele sempre quis dizer.
 
 Gate: `bash tests/gc-stress.sh`.
 
+**88.5b O llhttp FECHADO: 202/202, dez pulados com motivo.** O corpus arrancou
+doze portas de request smuggling que estavam abertas — CR solto e LF solto aceitos
+como fim de linha, `obs-fold`, nome de cabeçalho não conferido como token, valor
+com caractere de controle, `Content-Length` sem limite, as três regras de
+Transfer-Encoding da 6.1, linha de status frouxa, 1xx/204/304 decidindo depois do
+Transfer-Encoding (um `101` ganhava corpo, isto é, o primeiro pacote do protocolo
+seguinte), `CONNECT` ganhando o primeiro pacote do túnel, alvo sem conjunto de
+caracteres, extensão de chunk sem gramática, e o preâmbulo do HTTP/2 lido como
+pedido comum. A lista completa está no PLAN.
+
+Duas reversões de decisão que o corpus forçou, as duas registradas onde estavam
+escritas: **o LF solto passa a ser recusado** (o arquivo dizia "todo servidor
+aceita", o que era verdade e irrelevante — o argumento contra o CR solto é palavra
+por palavra o argumento contra o LF solto), e **`obs-fold` deixa de continuar
+cabeçalho** (RFC 9112 §5.2).
+
+E três erros de modelagem MEUS no arreio, que é o outro lado do exercício: o log
+do llhttp não escapa aspas; ele imprime span de espaço em branco por NOME
+(`span[body]=lf`); e `code=22/23` é `HPE_PAUSED_UPGRADE` — **pausa não é recusa**,
+é o parser entregando o socket, e lê-la como erro transformava quinze parses bem
+sucedidos em falhas.
+
+Os dez que ficam de fora são de três tipos, nenhum deles defeito: o llhttp lê
+TRÊS protocolos (HTTP, RTSP e ICE) e mantém tabela de qual método pertence a qual,
+enquanto a RFC 9110 §9 diz que método é token e a lista é extensível; ele expõe uma
+API de `reset` que duas fixtures medem; e ele é máquina byte a byte, então numa
+entrada TRUNCADA já recusou onde um parser bufferizado por linha ainda está lendo —
+ele disse não e nós não dissemos nada, e nenhum dos dois disse sim.
+
 **88.6 Os oráculos, e o que eles cobraram de imediato.** `tests/oracle/run.sh`
 roda os nossos programas DUAS VEZES — aqui e no intérprete cujo comportamento
 dissemos que íamos copiar — e diffa. `python3` para a semântica da linguagem,

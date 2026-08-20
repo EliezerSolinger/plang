@@ -4727,6 +4727,20 @@ def ps_str_endswith(s: *PsStr, p: *PsStr) -> bool:
         return False
     return memcmp(s->data + (usize(s->len) - usize(p->len)), p->data, usize(p->len)) == 0
 
+# `lstrip` and `rstrip`: the same whitespace as `strip`, one end at a time.
+def ps_str_lstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    a: usize = 0
+    b: usize = usize(s->len)
+    while a < b and (s->data[a] == ' ' or s->data[a] == '\t' or s->data[a] == '\n' or s->data[a] == '\r'):
+        a += 1
+    return ps_str_new(ctx, s->data + a, b - a)
+
+def ps_str_rstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    b: usize = usize(s->len)
+    while b > usize(0) and (s->data[b - 1] == ' ' or s->data[b - 1] == '\t' or s->data[b - 1] == '\n' or s->data[b - 1] == '\r'):
+        b -= 1
+    return ps_str_new(ctx, s->data, b)
+
 def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
     a: usize = 0
     b: usize = usize(s->len)

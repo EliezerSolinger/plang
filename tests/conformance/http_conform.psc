@@ -90,11 +90,18 @@ def run_case(kind: str, data: list<u8>) -> list<str>:
     while True:
         p = http.new_response_parser() if kind == "response" else http.new_parser()
         whole = p.feed(rest)
+        # NO `finish()` HERE, and that was a mistake worth naming: the end of a
+        # corpus case is NOT the peer closing. llhttp only learns about a close
+        # from an explicit call, which is what its `-finish` fixtures are for —
+        # and those are on the skip list. So a response with neither
+        # `content-length` nor `chunked` stays incomplete on both sides, which
+        # is the honest comparison. Calling `finish()` completed messages llhttp
+        # leaves open and made a driver property look like a parser difference.
         digest(p, whole, msg, out)
         if p.state == http.H_ERROR:
             out.append("error")
             return out
-        if not whole:
+        if p.state == http.H_HANDOFF or not whole:
             return out
         left: list<u8> = []
         k = p.pos
@@ -102,6 +109,15 @@ def run_case(kind: str, data: list<u8>) -> list<str>:
             left.append(p.buf[k])
             k += 1
         if len(left) == 0:
+            return out
+        if p.hands_over():
+            # a tunnel or an upgraded protocol: the rest is not ours and not
+            # wrong. llhttp pauses here; we simply stop.
+            return out
+        if not p.keep_alive():
+            # bytes after a message that said `close`: not a second message, an
+            # error — which is what llhttp answers too
+            out.append("error")
             return out
         rest = left
         msg += 1

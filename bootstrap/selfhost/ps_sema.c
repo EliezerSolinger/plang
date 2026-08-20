@@ -2776,7 +2776,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 lw2->inner = st5;
                 return lw2;
             }
-            if (strcmp(nm2, "strip") == 0 || strcmp(nm2, "lower") == 0 || strcmp(nm2, "upper") == 0) {
+            if (strcmp(nm2, "strip") == 0 || strcmp(nm2, "lstrip") == 0 || strcmp(nm2, "rstrip") == 0 || strcmp(nm2, "lower") == 0 || strcmp(nm2, "upper") == 0) {
                 if (e->nargs != 0) {
                     fatal_at(self->file, e->pos, "%s() takes no arguments", nm2);
                 }
@@ -2807,7 +2807,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 return st5;
             }
-            fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith, endswith, replace and join so far");
+            fatal_at(self->file, e->pos, "a string has split, strip, lstrip, rstrip, lower, upper, find, contains, startswith, endswith, replace and join so far");
         }
         if (rt != NULL && rt->kind == PT_LIST) {
             const char *lm = e->lhs->text;

@@ -39,7 +39,7 @@ async def main_task() -> int:
     log.append("made")
     v = await t
     log.append("awaited")
-    print("value", v)
+    print("value " + str(v))
 
     out = ""
     for e in log:

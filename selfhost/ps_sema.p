@@ -1232,7 +1232,7 @@ struct PsSema:
                     lw2: *PsType = ps_type(self->a, PT_LIST, e->pos)
                     lw2->inner = st5
                     return lw2
-                if strcmp(nm2, "strip") == 0 or strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0:
+                if strcmp(nm2, "strip") == 0 or strcmp(nm2, "lstrip") == 0 or strcmp(nm2, "rstrip") == 0 or strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "%s() takes no arguments", nm2)
                     return st5
@@ -1255,7 +1255,7 @@ struct PsSema:
                     if jt == None or jt->kind != PT_LIST or jt->inner == None or jt->inner->kind != PT_STR:
                         fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt))
                     return st5
-                fatal_at(self->file, e->pos, "a string has split, strip, lower, upper, find, contains, startswith, endswith, replace and join so far")
+                fatal_at(self->file, e->pos, "a string has split, strip, lstrip, rstrip, lower, upper, find, contains, startswith, endswith, replace and join so far")
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt

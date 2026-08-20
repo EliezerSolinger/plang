@@ -344,12 +344,18 @@ For C: the c-testsuite passes 220/220, 741 wacct programs produce their expected
 exit codes, and 155 diagnostics match clang's text exactly.
 
 For pscript, `bash tests/conformance/run.sh` runs the corpora the rest of the
-world is measured on — nst/JSONTestSuite at **318/318**, and the
-web-platform-tests URL corpus at **890/891**, the one exception written down in
-`tests/conformance/url.skips` with what it would take. Neither number was free:
-the JSON parser was not decoding `\uXXXX` at all, took `01` and `NaN` as numbers,
-and had no depth limit — a hundred thousand `[` was a segfault reachable from a
-string somebody else wrote.
+world is measured on — nst/JSONTestSuite at **318/318**, the web-platform-tests
+URL corpus at **890/891**, and nodejs/llhttp, the fixtures node itself runs, at
+**202/202**. The exceptions are written down in `tests/conformance/*.skips`, one
+line each with the reason.
+
+None of those numbers was free. The JSON parser was not decoding `\uXXXX` at all,
+took `01` and `NaN` as numbers, and had no depth limit — a hundred thousand `[`
+was a segfault reachable from a string somebody else wrote. The HTTP parser had
+twelve request-smuggling doors open, and the shape of most of them is the same:
+`x:<CR>Transfer-Encoding: chunked` was one header to us and two to the hop next
+door, which is the whole attack. A `101 Switching Protocols` was given a body,
+which means the next protocol's first packet was handed over as one.
 
 `bash tests/oracle/run.sh` measures the other half, the part no downloadable
 corpus can: it runs our own programs twice, once here and once by the

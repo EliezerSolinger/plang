@@ -1008,6 +1008,8 @@ def ps_min_float(a: f64, b: f64) -> f64
 def ps_max_float(a: f64, b: f64) -> f64
 def ps_str_startswith(s: *PsStr, p: *PsStr) -> bool
 def ps_str_endswith(s: *PsStr, p: *PsStr) -> bool
+def ps_str_lstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_str_rstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr
 
 # ---------- lists ----------

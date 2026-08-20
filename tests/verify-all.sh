@@ -12,6 +12,7 @@
 #   4. suítes gating      cases/modules/stl/p-suite/errors em C, QBE e C89
 #   5. fixed point QBE    ssa(s2) == ssa(compilador construído do próprio ssa)
 #   6. scoreboards        c-suite e wacct-valid (informativos, com piso)
+#   6b. conformidade      corpora de fora, oráculos e o coletor sob estresse
 #   7. pstudio            o editor inteiro compila e linka (skip sem SDL2)
 #   7. seed drift         bootstrap/ em dia com os fontes? (informativo)
 #
@@ -106,6 +107,36 @@ if [ "$QUICK" != "quick" ]; then
   fi
 else
   step "6/8 scoreboards — pulados (quick)"
+fi
+
+step "6b/8 conformidade, oráculos e o coletor sob estresse"
+# Os três arreios que medem o pscript contra ALGO QUE NÃO SOMOS NÓS. Não são
+# placar informativo: são portão, do mesmo jeito que o clang-compare é.
+#
+#   conformance  corpora que outros escreveram (JSONTestSuite, llhttp, WPT url).
+#                O que sabidamente não fazemos vive em <corpus>.skips, com o
+#                motivo, e um skip que volta a concordar é reportado como STALE.
+#   oracle       os nossos programas rodam duas vezes, aqui e no intérprete de
+#                referência (python3 para a linguagem, node para o runtime), e a
+#                saída é diffada. Pula com aviso se o intérprete não existir.
+#   gc-stress    coleta em TODO ponto seguro e envenena o que libera. É o único
+#                arreio que acha a família inteira de "alguém segurou um ponteiro
+#                através de um ponto seguro", que a suíte normal não vê porque
+#                um programa pequeno nunca coleta.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/conformance/run.sh >$V/conf.log 2>&1; then
+    ok "conformance $(grep -oE '[0-9]+/[0-9]+ agree' $V/conf.log | tr '\n' ' ')"
+else
+    bad "conformance divergiu (veja $V/conf.log)"
+fi
+if PLANGC=$PWD/$V/plangc_s2 bash tests/oracle/run.sh >$V/oracle.log 2>&1; then
+    ok "oráculos $(grep -oE '[a-z]+: [0-9]+ agree' $V/oracle.log | tr '\n' ' ')"
+else
+    bad "um oráculo divergiu (veja $V/oracle.log)"
+fi
+if PLANGC=$PWD/$V/plangc_s2 bash tests/gc-stress.sh >$V/gcstress.log 2>&1; then
+    ok "gc-stress $(grep -oE '[0-9]+ ok' $V/gcstress.log | tail -1)"
+else
+    bad "gc-stress achou algo (veja $V/gcstress.log)"
 fi
 
 step "7/8 pstudio (compilação do editor: maior consumidor de P)"

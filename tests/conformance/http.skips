@@ -1,0 +1,28 @@
+# nodejs/llhttp — what this parser knowingly does not do.
+#
+# One `<case-id> <reason>` per line. A skip is counted and printed, never folded
+# into the score, and a skip whose case starts agreeing is reported as STALE so
+# the note gets deleted with the problem.
+#
+# Score without these: 202/202.
+#
+# Every line below is one of three things, and none of them is a bug:
+#
+#   1. llhttp is a THREE-protocol parser. It reads HTTP, RTSP and ICE, and it
+#      keeps a table of which methods belong to which. This is an HTTP parser;
+#      the RFC says a method is a token and does not enumerate them.
+#   2. llhttp exposes a RESET api, and two fixtures measure it.
+#   3. llhttp is a byte-at-a-time machine, so on a TRUNCATED input it has
+#      already refused where a line-buffered parser is still reading. It said no
+#      and we said nothing — neither of us said yes.
+
+request/method:372 SOURCE request with ICE :: llhttp reads the ICE protocol (`SOURCE /x ICE/1.0`) as well as HTTP. This parser refuses anything that is not `HTTP/`, which is what "an HTTP parser" means; ICE and RTSP are separate protocols that happen to share a message grammar, and accepting them here would mean accepting `ICE/1.0` from a client that meant to speak HTTP.
+request/method:400 OPTIONS request with RTSP :: the same, for RTSP.
+request/method:430 ANNOUNCE request with RTSP :: the same, for RTSP.
+response/sample:40 RTSP response :: the same, on the response side.
+response/sample:60 ICE response :: the same, on the response side.
+request/invalid:66 HTTP protocol and ANNOUNCE method :: llhttp keeps a table of which methods are legal for which protocol and refuses `ANNOUNCE` over HTTP because ANNOUNCE is RTSP's. RFC 9110 §9 says a method is a token and that the list is extensible; refusing an unknown one would refuse every extension method ever registered, so this parser accepts any token and lets the application decide.
+request/invalid:356 Invalid method :: `MKCOLA` is refused by llhttp because it is not in its method table (it reads `MKCOL` and then chokes on the `A`). Same reason as above: a method is a token here.
+request/content-length:444 Content-Length reset when no body is received :: measures `llhttp_reset()`, an API for reusing a parser across messages without reallocating. There is no such call here: a new message gets a new parser, which is what the driver does.
+response/content-length:123 Content-Length reset when no body is received :: the same, on the response side.
+request/invalid:490 Invalid HTTP version :: `GET / HTTP/5.6` with no line ending at all. llhttp reads byte by byte and has already refused the version; this parser reads a line before deciding anything, so with no line to read it answers nothing. Neither of us accepted it — one refused and one is still waiting — and on a truncated input that is the same outcome for anybody downstream.

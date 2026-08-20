@@ -64,19 +64,35 @@ def normalise(text):
 
 
 def unescape_span(s):
-    """A span's payload in the log is a JS string literal body."""
+    """A span's payload in the log, with only the escapes llhttp's logger writes.
+
+    Those are \\r, \\n, \\t, \\f and \\xNN — and nothing else. A backslash in
+    front of anything else is a LITERAL backslash, which matters: the fixture
+    `GET /with_"lovely"_quotes?foo=\\"bar\\"` really does contain backslashes,
+    and the logger prints quotes raw. Reading \\" as an escaped quote silently
+    deleted them, and the corpus then disagreed about a URL both parsers had
+    read identically.
+    """
     out, i = [], 0
     while i < len(s):
         c = s[i]
         if c == "\\" and i + 1 < len(s):
             e = s[i + 1]
-            if e == "r": out.append("\r"); i += 2; continue
-            if e == "n": out.append("\n"); i += 2; continue
-            if e == "t": out.append("\t"); i += 2; continue
-            if e == "f": out.append("\f"); i += 2; continue
-            if e == "x":
-                out.append(chr(int(s[i + 2:i + 4], 16))); i += 4; continue
-            out.append(e); i += 2; continue
+            if e == "r":
+                out.append("\r"); i += 2; continue
+            if e == "n":
+                out.append("\n"); i += 2; continue
+            if e == "t":
+                out.append("\t"); i += 2; continue
+            if e == "f":
+                out.append("\f"); i += 2; continue
+            if e == "x" and i + 3 < len(s):
+                try:
+                    out.append(chr(int(s[i + 2:i + 4], 16)))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
         out.append(c)
         i += 1
     return "".join(out)
@@ -178,6 +194,16 @@ def digest_log(log):
             continue
         if "message begin" in line:
             continue
+        # llhttp's logger prints a whitespace-only span by NAME and without
+        # quotes — `span[body]=lf`, `span[body]=cr` — so a quoted-only pattern
+        # dropped those bytes from its side entirely, and the corpus then
+        # disagreed about bodies that were identical.
+        m = re.match(r"off=\d+ len=\d+ span\[(\w+)\]=(cr|lf)$", line)
+        if m:
+            k = m.group(1)
+            v = "\r" if m.group(2) == "cr" else "\n"
+            state["spans"][k] = state["spans"].get(k, "") + v
+            continue
         m = re.match(r'off=\d+ len=\d+ span\[(\w+)\]="(.*)"$', line)
         if m:
             k, v = m.group(1), unescape_span(m.group(2))
@@ -205,6 +231,19 @@ def digest_log(log):
                 flush(True)
                 state["msg"] += 1
             continue
+        m = re.search(r'off=\d+ error code=(\d+) reason="([^"]*)"', line)
+        if m:
+            # PAUSE IS NOT A REFUSAL. Codes 22 and 23 are `HPE_PAUSED_UPGRADE`
+            # and `HPE_PAUSED_H2_UPGRADE`: llhttp telling its caller to stop and
+            # take the socket, because after a CONNECT or an Upgrade the bytes
+            # belong to another protocol. The message parsed correctly — the
+            # harness logs the pause through the same channel as an error, and
+            # reading it as one turns fifteen successful parses into failures.
+            if m.group(1) in ("22", "23"):
+                continue
+            flush(False)
+            out.append("error")
+            return out
         if re.search(r"off=\d+ error code=", line):
             flush(False)
             out.append("error")

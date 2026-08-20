@@ -34,6 +34,13 @@ mkdir -p "$OUT"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# node paints numbers in `console.log` when it decides the output is a terminal,
+# and whether it decides that depends on how this script was invoked — so the
+# same pair agreed by hand and differed under `verify-all`. Turned off here
+# rather than filtered afterwards: a colour code in the middle of a diff is a
+# difference nobody meant to test.
+export NO_COLOR=1 FORCE_COLOR=0
+
 run_side() { # run_side <dir> <ext> <cmd...>
     local dir=$1 ext=$2; shift 2
     local pass=0 fail=0 src name ref

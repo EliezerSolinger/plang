@@ -1852,7 +1852,7 @@ O que fica de fora está escrito no `url.skips`: a metade do UTS-46 que é TABEL
 (dobra de caixa fora do ASCII, blocos de compatibilidade, NFC). O único caso que
 falha precisa do bloco de símbolos matemáticos.
 
-### 88.d HTTP — o arreio está de pé, o placar ainda não fecha
+### 88.d HTTP — FECHADO, 202/202 (10 pulados com motivo)
 
 `tests/conformance/llhttp_digest.py` lê as fixtures `.md` do llhttp (entrada
 ```http`, log de eventos ```log`) e REDUZ o log ao que os dois lados sabem
@@ -1872,11 +1872,50 @@ RESPOSTA, lista `raw` de cabeçalhos na ordem de chegada, junção de repetidos 
 `content-length` duplicado ou não-numérico, separação protocolo/versão, corpo
 que termina com a conexão (`finish()`), e trailers depois do último chunk.
 
-**Onde parou:** o digest e o driver concordam em forma, e as divergências que
-restam são de três tipos — política de CONEXÃO (o llhttp erra quando chega mais
-byte depois de uma mensagem que disse `close`; nós parseamos mensagens, não
-gerimos conexão), `upgrade`, e CR solto dentro de valor de cabeçalho (este é bug
-nosso e vetor de smuggling). Não fechado.
+**O que o corpus arrancou do parser.** Cada linha é uma porta de request
+smuggling que estava aberta, e a maioria não é sutil:
+
+  * **CR solto aceito como fim de linha.** `x:<CR>Transfer-Encoding: chunked` era
+    UM cabeçalho para nós e DOIS para quem não para no CR — o payload clássico.
+  * **LF solto aceito**, pela mesma razão exata. Isso REVERTE o que o arquivo
+    dizia ("todo servidor aceita"): era verdade e irrelevante, e o llhttp em modo
+    estrito recusa por este motivo, oferecendo leniência como opt-in.
+  * **`obs-fold` aceito** — `Foo: bar<CRLF><SP>Content-Length: 38` continuava o
+    cabeçalho anterior para nós. RFC 9112 §5.2 mandou parar em 2022.
+  * **nome de cabeçalho não era conferido como token** (`Fo@:`, `en-US
+    Content-Type:`, nome com byte de controle) e **valor aceitava controle**.
+  * **`Content-Length` sem limite** (`1000000000000000000000` passava) e
+    **recusado DEPOIS de registrado**, o que lê como "aceitou e então falhou".
+  * **Transfer-Encoding sem as regras da 6.1**: `chunked` fora do último lugar,
+    TE junto com CL, TE vazio, TE duplicado — cada um é um comprimento que dois
+    hops leem diferente.
+  * **linha de status frouxa**: `HTTP/1.1  200 OK` passava, `HTTP/01.1` passava,
+    tab no lugar do espaço passava.
+  * **1xx/204/304 decidiam DEPOIS do Transfer-Encoding**, então um `101
+    Switching Protocols` com TE ganhava um corpo — o primeiro pacote do
+    protocolo seguinte entregue como corpo da resposta.
+  * **`CONNECT` ganhava corpo** — o primeiro pacote do túnel.
+  * **alvo do pedido sem conjunto de caracteres** (byte cru acima de 0x7E).
+  * **extensão de chunk sem gramática** (`;` sem nada, aspas sem fechar, espaço
+    depois do tamanho).
+  * **preâmbulo do HTTP/2** (`PRI * HTTP/1.1`) era lido como pedido comum, e o
+    que vem depois são frames binários: rebaixamento de protocolo com o parser
+    do lado errado.
+
+E **três erros de modelagem MEUS no arreio**, que é o outro lado do exercício:
+o log do llhttp não escapa aspas (eu apagava barras invertidas reais); ele imprime
+span de espaço em branco por NOME e sem aspas (`span[body]=lf`, e eu perdia o
+byte); e `code=22/23` é `HPE_PAUSED_UPGRADE` — **pausa não é recusa**, é o parser
+dizendo "pare, pegue o socket", e lê-la como erro transformava quinze parses bem
+sucedidos em falhas.
+
+**A regra de comparação, dita explicitamente.** Mensagem que TERMINOU é comparada
+exatamente — campo, valor e ordem. Para a que não terminou quando os bytes
+acabaram, a regra é "nenhuma contradição": o llhttp fecha cada span no byte em que
+o lê, e um parser que lê a linha inteira antes de decidir naturalmente relatou
+menos. Um valor em que um dos lados parou no meio (`protocol=HT` contra
+`protocol=HTP`) conta como concordar, porque prefixo é o que parar no meio parece.
+É a mesma redução que o digest já faz ao jogar fora offsets e fronteiras de span.
 
 ### 88.e O modo de estresse do coletor — FEITO
 
@@ -1962,7 +2001,6 @@ referências do CPython nesse padrão exato — não é mais um defeito, é a tr
 
 ## O que a bateria 88 deixou EM ABERTO
 
-- [ ] **HTTP**: fechar o placar do llhttp (88.d).
 - [ ] **test262**: portar à mão as ~40 que medem ORDEM de resolução de
       `all`/`allSettled`/`any`/`race`, reescritas em `await`.
 - [ ] **Oráculos** (decisão sua): `node` para o modelo de runtime (ordem de

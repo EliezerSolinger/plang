@@ -3,4 +3,4 @@
 3: method=POST target=/chunks host=example.local body=abcdefgh
 served: 3
 refused 1: space before the colon
-refused 2: content-length and chunked at once
+refused 2: both a content-length and a transfer-encoding

@@ -19,6 +19,6 @@ const t = quick(21);
 log.push("made");
 const v = await t;
 log.push("awaited");
-console.log("value", v);
+console.log("value " + v);
 
 console.log("log", log.join(" ") + " ");
