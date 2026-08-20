@@ -1,0 +1,13 @@
+ints 123
+strs apple fig pear
+floats -1.0 2.5
+original 312
+key=len a cc bbb
+key=abs 1 -2 -3
+key=fn 321
+key=lambda bbb a
+stable b1 a1 b2 a2 b3 
+record 123
+record stable 20 10 30
+struct abc
+big 2000 0 1003 2002

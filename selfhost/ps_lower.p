@@ -41,6 +41,15 @@ declare Vec<*PsDecl>   # implemented in ps_sema.p
 declare Vec<Vec<*Stmt>>
 import "../stl/vec.ph"
 
+# 46.4: `assert` is strippable by a build flag, the way Python's `-O` strips it.
+# The switch lives here rather than in the statement lowering so that ONE place
+# decides, and the statement lowering stays about the shape of the check.
+static PS_STRIP_ASSERTS: bool = False
+
+def ps_lower_config(strip_asserts: bool):
+    PS_STRIP_ASSERTS = strip_asserts
+
+
 def tuple_is_pure(t: *PsType) -> bool
 static def is_addressable(e: *Expr) -> bool
 static def borrowable(e: *Expr) -> bool
@@ -162,6 +171,10 @@ struct PsLow:
                          #   each needs an adapter of its own, for the same
                          #   reason `sorted(key=)` does — only the call site
                          #   knows the element type, and the runtime sees bytes
+    cmpads: Vec<*PsExpr> # `sorted(xs)` over a `Comparable` type (62.1): one
+                         #   adapter per call site, for the same reason the
+                         #   `key=` one needs it — only the call site knows what
+                         #   the element is
     keyads: Vec<*PsExpr> # `sorted(..., key=f)` call sites: each needs one
                          #   adapter, because only the site knows the type
     lams: Vec<*PsExpr>   # the lambdas seen: each becomes a top-level function
@@ -255,6 +268,7 @@ struct PsLow:
     static def param_type(self: *PsLow, name: const *char, i: i32) -> *PsType
     static def param_is_in(self: *PsLow, name: const *char, i: i32) -> bool
     static def in_arg(self: *PsLow, v: *Expr, is_in: bool, t: *PsType, pos: Pos) -> *Expr
+    static def byref_arg(self: *PsLow, v: *Expr, kind: i32, pos: Pos) -> *Expr
     static def addr_arg(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, kw: bool) -> *Expr
     static def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr
     static def chr(self: *PsLow, e: *PsExpr, pos: Pos) -> *Expr
@@ -2730,6 +2744,27 @@ struct PsLow:
             self->allocs = True
             self->raised = True
             return kc
+        if strcmp(name, "sorted") == 0 and e->args[0]->type != None and e->args[0]->type->inner != None and e->args[0]->type->inner->kind == PT_NAME:
+            # 62.1: the order is the TYPE's, through its `cmp`. The adapter is
+            # per call site because the runtime moves bytes and only here is it
+            # known what those bytes are.
+            ci: i32 = -1
+            for i in range(self->cmpads.len):
+                if self->cmpads.data[i] == e:
+                    ci = i
+            if ci < 0:
+                ci = self->cmpads.len
+                self->cmpads.push(e)
+            cc9: *Expr = self->call_rt("ps_list_sorted_cmp", e->pos)
+            self->push_arg(cc9, self->ctx_arg(e->pos))
+            self->push_arg(cc9, self->expr(e->args[0]))
+            ad9: *Expr = ex_new(self->a, EX_IDENT, e->pos)
+            ad9->text = self->a->printf("__ps_cmpad%d", ci)
+            self->push_arg(cc9, ad9)
+            self->push_arg(cc9, ex_new(self->a, EX_NONE, e->pos))
+            self->allocs = True
+            self->raised = True
+            return cc9
         if strcmp(name, "sorted") == 0:
             sc: *Expr = self->call_rt("ps_list_sorted", e->pos)
             self->push_arg(sc, self->ctx_arg(e->pos))
@@ -2931,7 +2966,13 @@ struct PsLow:
                 break
             self->subst_key = e->args[i]
             self->subst_val = ov[i]
-            self->push_arg(c3, self->in_arg(self->coerce(self->param_type(name, i), e->args[i]), self->param_is_in(name, i), self->lowered_ty(e->args[i]), e->pos))
+            if e->args[i] != None and (e->args[i]->is_out or e->args[i]->is_ref):
+                # 65.12: the ADDRESS, with the kind P needs — and never the
+                # bound temporary the other arguments may have become, because
+                # writing back into a temporary would write into nothing
+                self->push_arg(c3, self->byref_arg(self->expr(e->args[i]), PK_OUT if e->args[i]->is_out else PK_REF, e->pos))
+            else:
+                self->push_arg(c3, self->in_arg(self->coerce(self->param_type(name, i), e->args[i]), self->param_is_in(name, i), self->lowered_ty(e->args[i]), e->pos))
             self->subst_key = None
             self->subst_val = None
         if vidx >= 0 and e->nargs == vidx + 1 and e->args[vidx] != None and e->args[vidx]->is_splat:
@@ -3109,10 +3150,25 @@ struct PsLow:
         dst->name = ps_cname(self->a, src->name)
         dst->type = self->ty(src->type)
         dst->pos = src->pos
-        if src->is_in:
+        if src->is_in and src->type != None and src->type->kind == PT_ARRAY:
+            # An ARRAY parameter is already a pointer in C — that is what array
+            # decay IS — so `in xs: int[3]` does not add a second level of
+            # indirection. It only says "read, do not write", which is exactly
+            # what 60.2 asks of it (`def blur(in px: ...)`). Wrapping it made a
+            # pointer-to-array parameter that P then refused to initialize from
+            # the array at the call site.
+            dst->type->is_const = True
+        elif src->is_in:
             dst->type->is_const = True
             dst->type = ty_ptr(self->a, dst->type)
             dst->byref = PK_IN
+        elif src->is_out or src->is_ref:
+            # 65.12: P's own sugar, handed straight to P — which is also what
+            # makes its sema the verifier of this lowering (49.1): `out` there
+            # already means "the call initializes it", and it already refuses a
+            # read before the write.
+            dst->type = ty_ptr(self->a, dst->type)
+            dst->byref = PK_OUT if src->is_out else PK_REF
 
     # Evaluates `e` once into a hidden variable and returns (assignment, name).
     # The DECLARATION goes before the statement; the assignment stays where the
@@ -3318,7 +3374,14 @@ struct PsLow:
         bind_all: bool = neffect >= 1 and n >= 2
         for i in range(n):
             v: *Expr = self->expr(es[i])
-            if bind_all or (neffect > 1 and not self->is_trivial(es[i]) and i != last_effect):
+            # An `out`/`ref` argument is never bound (65.12): what goes over is
+            # its ADDRESS, and the address of a temporary is an address the
+            # callee writes into and nobody reads. It is safe to leave alone for
+            # the same reason it is allowed at all — the sema restricted it to a
+            # plain variable, whose address stands still.
+            if es[i] != None and (es[i]->is_out or es[i]->is_ref):
+                out[i] = v
+            elif bind_all or (neffect > 1 and not self->is_trivial(es[i]) and i != last_effect):
                 out[i] = self->bind_val(v, self->ty(self->lowered_ty(es[i])), es[i]->pos, ref pre)
             else:
                 out[i] = v
@@ -3767,8 +3830,22 @@ struct PsLow:
         a->lhs = v
         return a
 
+    # `out x` / `ref x` at a call site (65.12): the address, with the kind P
+    # needs to check initialization. The argument is a designator — the sema
+    # refused anything else — so there is nothing to materialize here, which is
+    # the difference from `in`.
+    static def byref_arg(self: *PsLow, v: *Expr, kind: i32, pos: Pos) -> *Expr:
+        a: *Expr = ex_new(self->a, EX_UNARY, pos)
+        a->op = TK_AMP
+        a->byref = kind
+        a->lhs = v
+        return a
+
     static def in_arg(self: *PsLow, v: *Expr, is_in: bool, t: *PsType, pos: Pos) -> *Expr:
         if not is_in:
+            return v
+        if t != None and t->kind == PT_ARRAY:
+            # see fill_param: an array is handed over as itself
             return v
         # `in` is sugar over a pointer, so the argument has to have an address.
         # `a.add(b).scale(2.0)` chains through a call RESULT, which does not —
@@ -4204,6 +4281,28 @@ struct PsLow:
                     self->push_arg(mc, cnt)
                     self->push_expr_stmt(out, mc, s->pos)
                     return
+                if s->type != None and s->type->kind == PT_ARRAY and s->rhs != None and s->rhs->kind == PE_LIST and not s->is_global and not s->is_assign:
+                    # A LOCAL `xs: int[3] = [1, 2, 3]`. Same reason as the
+                    # module-level case below — C cannot assign an array — with
+                    # the declaration first, because a local has to exist before
+                    # anything is written into it. Without this the declaration
+                    # tried to initialize an array from a `PsList` and the C
+                    # compiler said so, which is why 33.4 ("`T[N]` is a complete
+                    # type — local, parameter, field") was only two thirds true.
+                    ld9: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                    ld9->name = ps_cname(self->a, s->name)
+                    ld9->type = self->ty(s->type)
+                    out->push(ld9)
+                    for i in range(s->rhs->nargs):
+                        la9: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+                        lx9: *Expr = ex_new(self->a, EX_INDEX, s->pos)
+                        lx9->lhs = self->ident(ps_cname(self->a, s->name), s->pos)
+                        lx9->rhs = self->num(self->a->printf("%d", i), s->pos)
+                        la9->lhs = lx9
+                        la9->op = TK_ASSIGN
+                        la9->rhs = self->coerce(s->type->inner, s->rhs->args[i])
+                        out->push(la9)
+                    return
                 if s->is_global and s->type != None and s->type->kind == PT_ARRAY and s->rhs != None and s->rhs->kind == PE_LIST:
                     # C cannot ASSIGN an array, and a module variable is a field
                     # of the context's set — so the literal is written element
@@ -4331,6 +4430,29 @@ struct PsLow:
                     da->rhs = dv2
                     self->allocs = True
                     out->push(da)
+                    return
+                if s->lhs->kind == PE_INDEX and s->lhs->lhs->type != None and s->lhs->lhs->type->kind == PT_ARRAY:
+                    # `xs[i] = v` over a `T[N]` (33.4). It was going through the
+                    # LIST path, which read a `PsList` header out of the array's
+                    # own bytes and wrote through whatever integer it found
+                    # there — a silent wild write that happened to look like
+                    # "the assignment did nothing".
+                    at7: *PsType = s->lhs->lhs->type
+                    ck7: *Expr = self->call_rt("ps_arr_at", s->pos)
+                    self->push_arg(ck7, self->ctx_arg(s->pos))
+                    self->push_arg(ck7, self->expr(s->lhs->rhs))
+                    self->push_arg(ck7, self->num(at7->count->text if at7->count != None else "0", s->pos))
+                    self->pos_args(ck7, s->pos)
+                    self->raised = True
+                    iv7: *Expr = self->value_first(s->rhs, at7->inner, s->pos)
+                    ix7: *Expr = ex_new(self->a, EX_INDEX, s->pos)
+                    ix7->lhs = self->expr(s->lhs->lhs)
+                    ix7->rhs = ck7
+                    ia7: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+                    ia7->lhs = ix7
+                    ia7->op = TK_ASSIGN
+                    ia7->rhs = iv7
+                    out->push(ia7)
                     return
                 if s->lhs->kind == PE_INDEX:
                     chk: *Expr = self->call_rt("ps_list_at", s->pos)
@@ -4609,6 +4731,8 @@ struct PsLow:
             case PS_ASSERT:
                 # `if not cond: raise` — the message says what was expected, and
                 # a build that strips them (46.4) simply does not emit this.
+                if PS_STRIP_ASSERTS:
+                    return
                 nc: *Expr = ex_new(self->a, EX_UNARY, s->pos)
                 nc->op = TK_NOT
                 nc->lhs = self->expr(s->expr)
@@ -5704,6 +5828,8 @@ static def collect_lams_e(L: *PsLow, e: *PsExpr):
         L->lams.push(e)
     if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and strcmp(e->lhs->text, "sorted") == 0 and e->nargs == 2:
         L->keyads.push(e)
+    if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and strcmp(e->lhs->text, "sorted") == 0 and e->nargs == 1 and e->args[0]->type != None and e->args[0]->type->inner != None and e->args[0]->type->inner->kind == PT_NAME:
+        L->cmpads.push(e)
     if e->kind == PE_CALL and e->lhs != None and e->lhs->kind == PE_NAME and strcmp(e->lhs->text, "gather_map") == 0 and e->nargs == 3:
         # collected BEFORE the lowering, like the `sorted` adapter beside it:
         # its prototype has to exist before any body that calls it
@@ -5821,6 +5947,80 @@ static def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl
     L->push_arg(call, epd)
     rs: *Stmt = st_new(L->a, ST_RETURN, e->pos)
     rs->expr = call
+    body.push(rs)
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = body.data
+    b->n = body.len
+    pf->body = b
+    return d
+
+# `static int64_t __ps_cmpadN(void *envp, PsCtx *ctx, const void *ap, const void *bp)`
+# — what lets the runtime sort by an order it knows nothing about (62.1). The
+# elements arrive by POINTER because the runtime moves bytes; this adapter is
+# the only place that knows what they are, and it is where the difference
+# between a record (a VALUE in the array) and a struct (a REFERENCE in it)
+# lives.
+static def lower_cmpad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
+    et: *PsType = e->args[0]->type->inner
+    pf: *Func = L->a->alloc(sizeof(Func))
+    pf->pos = e->pos
+    pf->name = L->a->printf("__ps_cmpad%d", idx)
+    pf->cname = pf->name
+    pf->is_static = True
+    pf->ret = ty_name(L->a, "i64")
+    pf->params = L->a->alloc(usize(4) * sizeof(*pf->params))
+    pf->params[0].name = "__envp"
+    pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[0].pos = e->pos
+    pf->params[1].name = CTX
+    pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    pf->params[1].pos = e->pos
+    pf->params[2].name = "__ap"
+    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[2].pos = e->pos
+    pf->params[3].name = "__bp"
+    pf->params[3].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[3].pos = e->pos
+    pf->nparams = 4
+    d: *Decl = L->a->alloc(sizeof(Decl))
+    d->kind = DL_FUNC
+    d->pos = e->pos
+    d->func = pf
+    if not with_body:
+        return d
+    rd: *PsDecl = L->decl_named(et->name)
+    is_struct: bool = rd != None and rd->kind == PD_STRUCT
+    call: *Expr = ex_new(L->a, EX_CALL, e->pos)
+    call->lhs = ex_new(L->a, EX_IDENT, e->pos)
+    call->lhs->text = L->a->printf("%s_%s", ps_cname(L->a, et->name), "cmp")
+    # the receiver
+    ac: *Expr = ex_new(L->a, EX_CAST, e->pos)
+    ac->cast_type = ty_ptr(L->a, ty_ptr(L->a, ty_name(L->a, et->name))) if is_struct else ty_ptr(L->a, ty_name(L->a, et->name))
+    ac->lhs = L->ident("__ap", e->pos)
+    if is_struct:
+        # the element of the list IS the reference, so read it out
+        ad: *Expr = ex_new(L->a, EX_UNARY, e->pos)
+        ad->op = TK_STAR
+        ad->lhs = ac
+        L->push_arg(call, ad)
+    else:
+        L->push_arg(call, ac)
+    ctxa: *Expr = ex_new(L->a, EX_IDENT, e->pos)
+    ctxa->text = CTX
+    L->push_arg(call, ctxa)
+    # the other one: a struct goes in as the reference it is, a record BY VALUE
+    bc: *Expr = ex_new(L->a, EX_CAST, e->pos)
+    bc->cast_type = ty_ptr(L->a, ty_ptr(L->a, ty_name(L->a, et->name))) if is_struct else ty_ptr(L->a, ty_name(L->a, et->name))
+    bc->lhs = L->ident("__bp", e->pos)
+    bc->parened = True
+    bd: *Expr = ex_new(L->a, EX_UNARY, e->pos)
+    bd->op = TK_STAR
+    bd->lhs = bc
+    L->push_arg(call, bd)
+    rs: *Stmt = st_new(L->a, ST_RETURN, e->pos)
+    rs->expr = call
+    body: Vec<*Stmt>
+    body.init()
     body.push(rs)
     b: *Block = L->a->alloc(sizeof(Block))
     b->stmts = body.data
@@ -8006,6 +8206,7 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.lams.init()
     L.gmads.init()
     L.keyads.init()
+    L.cmpads.init()
     L.fnvals.init()
     L.nl_names.init()
     L.nl_done.init()
@@ -8174,6 +8375,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
 
     for i in range(L.keyads.len):
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, False))
+    for i in range(L.cmpads.len):
+        L.out.push(lower_cmpad(&L, L.cmpads.data[i], i, False))
     for i in range(L.gmads.len):
         L.out.push(lower_gmad(&L, L.gmads.data[i], i, False))
     for i in range(L.fnvals.len):
@@ -8267,6 +8470,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
 
     for i in range(L.keyads.len):
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, True))
+    for i in range(L.cmpads.len):
+        L.out.push(lower_cmpad(&L, L.cmpads.data[i], i, True))
     for i in range(L.gmads.len):
         L.out.push(lower_gmad(&L, L.gmads.data[i], i, True))
     for i in range(L.fnvals.len):

@@ -2359,6 +2359,101 @@ def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, l
     regfree(&rx)
     return out
 
+# ---------- the stable sort, shared by `key=` and by `Comparable` ----------
+# Both sort INDICES and move the elements once at the end, because the runtime
+# does not know what an element is — it moves bytes. `less` decides STRICTLY,
+# and the merge takes from the left whenever the right is not strictly smaller,
+# which is what makes the whole thing stable.
+struct PsKeyCmp:
+    keys: *f64
+
+struct PsFnCmp:
+    fn: def(env: *void, ctx: *PsCtx, a: const *void, b: const *void) -> i64
+    env: *void
+    ctx: *PsCtx
+    base: *char
+    es: usize
+
+static def ps_less_key(env: *void, a: i64, b: i64) -> bool:
+    k: *PsKeyCmp = (*PsKeyCmp)(env)
+    return k->keys[a] < k->keys[b]
+
+static def ps_less_cmp(env: *void, a: i64, b: i64) -> bool:
+    c: *PsFnCmp = (*PsFnCmp)(env)
+    if c->ctx->exc != None:
+        return False
+    return c->fn(c->env, c->ctx, c->base + usize(a) * c->es, c->base + usize(b) * c->es) < 0
+
+static def ps_msort_idx(idx: *i64, n: i64, less: def(env: *void, a: i64, b: i64) -> bool, env: *void):
+    if n < 2:
+        return
+    tmp: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
+    if tmp == None:
+        return
+    width: i64 = 1
+    while width < n:
+        i: i64 = 0
+        while i < n:
+            mid: i64 = i + width
+            if mid > n:
+                mid = n
+            hi: i64 = i + 2 * width
+            if hi > n:
+                hi = n
+            a: i64 = i
+            b: i64 = mid
+            o: i64 = i
+            while a < mid and b < hi:
+                # `not less(b, a)` and not `less(a, b)`: on a tie the LEFT one
+                # goes first, which is the definition of stable
+                if less(env, idx[b], idx[a]):
+                    tmp[o] = idx[b]
+                    b += 1
+                else:
+                    tmp[o] = idx[a]
+                    a += 1
+                o += 1
+            while a < mid:
+                tmp[o] = idx[a]
+                a += 1
+                o += 1
+            while b < hi:
+                tmp[o] = idx[b]
+                b += 1
+                o += 1
+            i += 2 * width
+        memcpy(idx, tmp, usize(n) * sizeof(i64))
+        width *= 2
+    free(tmp)
+
+# `sorted(xs)` over a type that implements `Comparable` (62.1): the order comes
+# from the type's own `cmp`, reached through an adapter the compiler emits per
+# call site — the runtime never learns what the element is.
+def ps_list_sorted_cmp(ctx: *PsCtx, l: *PsList, cmpfn: def(env: *void, ctx: *PsCtx, a: const *void, b: const *void) -> i64, env: *void) -> *PsList:
+    n: i64 = l->len
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
+    if n < 2:
+        return out
+    idx: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
+    if idx == None:
+        return out
+    for i in range(i32(n)):
+        idx[i] = i64(i)
+    base: *char = (*char)(out->data) + sizeof(PsArr)
+    es: usize = usize(out->esize)
+    fenv: PsFnCmp = {cmpfn, env, ctx, base, es}
+    ps_msort_idx(idx, n, ps_less_cmp, &fenv)
+    if ctx->exc != None:
+        free(idx)
+        return out
+    src: *char = (*char)(malloc(usize(n) * es))
+    memcpy(src, base, usize(n) * es)
+    for i2 in range(i32(n)):
+        memcpy(base + usize(i2) * es, src + usize(idx[i2]) * es, es)
+    free(src)
+    free(idx)
+    return out
+
 def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> f64, env: *void) -> *PsList:
     n: i64 = l->len
     out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
@@ -2376,17 +2471,12 @@ def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCt
             free(keys)
             free(idx)
             return out
-    # insertion sort over the INDICES: stable, and n is small in the cases this
-    # is for. The elements move once, at the end.
-    k: i64 = 1
-    while k < n:
-        j: i64 = k
-        while j > 0 and keys[idx[j - 1]] > keys[idx[j]]:
-            t: i64 = idx[j - 1]
-            idx[j - 1] = idx[j]
-            idx[j] = t
-            j -= 1
-        k += 1
+    # STABLE merge sort over the INDICES. It was an insertion sort, which is
+    # also stable and is O(n²) — fine for the ten-element case somebody had in
+    # mind and a trap in a language that says it competes with Python, whose
+    # sort is O(n log n). The elements themselves move once, at the end.
+    kenv: PsKeyCmp = {keys}
+    ps_msort_idx(idx, n, ps_less_key, &kenv)
     src: *char = (*char)(malloc(usize(n) * es))
     memcpy(src, base, usize(n) * es)
     for i2 in range(i32(n)):

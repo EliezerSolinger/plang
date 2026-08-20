@@ -502,6 +502,16 @@ struct PsP:
                             ia->is_in = True
                             ia->pos = ip
                             args.push(ia)
+                        elif self->at(TK_IDENT) and self->pk1()->kind == TK_IDENT and (strcmp(self->pk()->text, "out") == 0 or strcmp(self->pk()->text, "ref") == 0):
+                            # `f(out sb)` / `f(ref n)` (65.12), contextual for
+                            # the same reason the parameter side is
+                            wasout: bool = strcmp(self->pk()->text, "out") == 0
+                            op9: Pos = self->adv()->pos
+                            oa: *PsExpr = self->parse_expr()
+                            oa->is_out = wasout
+                            oa->is_ref = not wasout
+                            oa->pos = op9
+                            args.push(oa)
                         elif self->at(TK_STAR):
                             # `f(*xs)` (44.2): the list IS the rest of the
                             # arguments — the spread, spelled as Python does
@@ -1404,6 +1414,17 @@ struct PsP:
                 # pscript took: `out`/`ref` are how you mutate a caller's
                 # variable, and that is what return values are for here.
                 p.is_in = self->accept(TK_IN)
+                # `out x: T` and `ref x: T` (65.12). CONTEXTUAL words, like
+                # `trait` and `implement` at the top level: recognised only when
+                # an identifier follows, so nobody loses `out` or `ref` as a
+                # name for a variable.
+                if not p.is_in and self->at(TK_IDENT) and self->pk1()->kind == TK_IDENT:
+                    if strcmp(self->pk()->text, "out") == 0:
+                        self->adv()
+                        p.is_out = True
+                    elif strcmp(self->pk()->text, "ref") == 0:
+                        self->adv()
+                        p.is_ref = True
                 p.is_varargs = self->accept(TK_STAR)   # *xs: sugar over list (44.2)
                 p.name = self->expect(TK_IDENT, "parameter name")->text
                 if self->accept(TK_COLON):

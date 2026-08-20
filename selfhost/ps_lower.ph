@@ -6,3 +6,4 @@ import "ps_ast.ph"
 # both being moved and --out-dir mirroring the source tree.
 def tuple_is_pure(t: *PsType) -> bool
 def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module
+def ps_lower_config(strip_asserts: bool)

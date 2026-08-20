@@ -139,6 +139,8 @@ struct PsExpr:
     caps: *PsParam      # PE_LAMBDA: what it captured, BY VALUE (19.2) — the
     ncaps: i32          #   sema collects them, the lowering makes the struct
     is_in: bool         # argument written `in x` at a call site (55.4)
+    is_out: bool        # ... `out x` (65.12)
+    is_ref: bool        # ... `ref x` (65.12)
     is_fnval: bool      # PE_NAME that names a FUNCTION used as a value (28.1):
                         #   what it becomes is a closure with no environment
     is_gref: bool       # PE_NAME that reads a MODULE VARIABLE (42.2): it lives
@@ -263,6 +265,11 @@ struct PsParam:
     is_in: bool      # `in x` — read by reference, no copy (55.4). Spelled at
                      #   the CALL SITE too, as in P: the reader of the call can
                      #   see that nothing is being copied.
+    is_out: bool     # `out x` — the CALL initializes it (65.12)
+    is_ref: bool     # `ref x` — arrives initialized and may be written (65.12).
+                     #   Both are spelled at the call site too, for the same
+                     #   reason `in` is: mutating a caller's variable is visible
+                     #   where it happens.
     cstr: i32        # the P side spells it `CStr`/`CBytes` (84.1): pscript sees
                      #   `str` or `list<u8>`, and this says which pair to build
     pos: Pos

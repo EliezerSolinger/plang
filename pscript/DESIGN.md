@@ -3468,6 +3468,83 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 93 — a varredura, segunda leva: o que estava decidido e não existia (2026-08-20)
+
+Continuação da 92, mesma regra: nada de novo foi decidido. Cada item abaixo era
+decisão fechada sem implementação, e o que a varredura achou de aberto continua
+listado como pergunta no fim do `AUDIT.md`.
+
+**93.1 `sorted` ganhou as duas formas que faltavam.**
+
+  * **`key=len` (28.4, escrito lá com esse nome).** Um builtin não é valor — a
+    29.3 separou os dois universais de propósito, e `len` não tem fechamento
+    para entregar. Então a resposta é escrever a lambda que a pessoa escreveria:
+    `key=len` vira `key=lambda __k: len(__k)`, e toda a máquina que já existia
+    (o fechamento, o adaptador emitido por sítio de chamada) funciona sem
+    mudança.
+  * **`Comparable` (62.1), que era a trait declarada para isso e não fazia
+    isso.** `sorted(xs)` sobre um tipo que a implementa ordena pelo `cmp` DELE,
+    por um adaptador emitido por sítio de chamada — o runtime continua sem
+    saber o que é um elemento. Vale para `record` (valor no array) e para
+    `struct` (referência no array), e a diferença entre os dois mora no
+    adaptador, que é o único lugar que sabe o que os bytes são.
+
+**93.2 E o `sorted(key=)` era QUADRÁTICO.** A ordenação dos índices era por
+inserção — estável e O(n²), o que é razoável para os dez elementos que alguém
+tinha em mente e é uma armadilha numa linguagem que diz competir com o Python,
+cujo sort é O(n log n). Agora é um merge sort estável de baixo para cima,
+compartilhado pelas duas formas (`key=` e `Comparable`), e a estabilidade é
+teste: chaves empatadas mantêm a ordem de chegada, igual ao Python.
+
+**93.3 O comptime da 65.11 e o `-O` da 46.4.** `__FILE__`, `__LINE__`,
+`__func__` e `__COUNTER__` são dobrados para literal pelo front end, exatamente
+como o `fold_predefined` do P faz — não há preprocessador em nenhuma das duas,
+então quem LÊ o nome tem de responder. `is_defined`, `typestr` e `hasfield`
+respondem em compilação, e o primeiro nunca CHECA o argumento: o motivo de
+perguntar é que o nome pode não existir. E `-O` (ou `--no-assert`) tira o
+`assert` do build, como o `-O` do Python.
+
+> Para o `-O` ter portão foi preciso um mecanismo: um `<nome>.flags` ao lado do
+> programa, lido pelo `tests/run.sh` e pelo `gc-stress.sh`. Uma flag que muda o
+> que é EMITIDO só se vê construindo o mesmo programa com ela.
+
+**93.4 `out` e `ref` no pscript (65.12), os dois terços que a 55.4 deixou fora.**
+O motivo de voltarem é o `record`: ele é valor (52.1), então um grande é copiado
+na ida e na volta, e `ref` corta as duas cópias. São palavras CONTEXTUAIS,
+reconhecidas só quando um identificador as segue — quem tem uma variável
+chamada `out` continua tendo, e isso é teste.
+
+Três coisas são recusadas, cada uma por um motivo que a mensagem diz:
+
+  * chamar sem a palavra (`bump(n)` onde `n` é `ref`) — uma chamada que pode
+    escrever na sua variável avisa onde a chamada é LIDA, que é a regra do P;
+  * `str`, `list`, `dict` ou `struct` — já são referências, então escrever
+    através é o que mutar faz, e reapontar o nome do chamador é para o que
+    serve o valor de retorno;
+  * um CAMPO ou um elemento (`ref h.v`) — esse endereço aponta para DENTRO de um
+    objeto que o coletor move, e a 17.2 recusa isso de tabela. Variável simples
+    tem endereço que não anda: local mora na pilha do C, variável de módulo mora
+    no conjunto do contexto.
+
+**93.5 E o `T[N]` estava dois terços quebrado.** A 33.4 diz "tipo completo —
+local, parâmetro, campo" e a 60.2 diz que ele atravessa por `in`. Três defeitos,
+achados por escrever o teste do 93.4:
+
+  1. **`xs[i] = v` sobre um `T[N]` era ESCRITA SELVAGEM.** A atribuição indexada
+     não tinha caso para array e caía no caminho de LISTA: lia um cabeçalho de
+     `PsList` dos bytes do próprio array e escrevia através do inteiro que
+     encontrasse lá. Não crashava — parecia "a atribuição não fez nada".
+  2. **Um array LOCAL com literal não compilava.** `ys: int[3] = [1, 2, 3]`
+     dentro de função tentava inicializar um array a partir de um `PsList`. Só
+     o caso de módulo estava escrito.
+  3. **`in xs: int[3]` não compilava.** O `in` embrulhava o tipo num ponteiro, e
+     um array já É um ponteiro quando é parâmetro — decaimento é isso. Agora o
+     `in` sobre array só diz "não escrevo", que é o que a 60.2 pede.
+
+E daí sai a regra que faltava dizer: **`ref` sobre array é recusado por não
+dizer nada** — um parâmetro de array já é referência nas duas linguagens, e
+escrever nele alcança o array do chamador. Isso agora tem teste também.
+
 ## Bateria 92 — a varredura da especificação, e o que ela cobrou (2026-08-20)
 
 Pedido antigo seu, na 88: *"alem disso veja se implementamos toda a

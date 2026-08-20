@@ -98,6 +98,7 @@ static def usage():
     fprintf(stderr, "  --tokens         dump tokens and exit\n")
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n")
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n")
+    fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n")
     fprintf(stderr, "                   (default: pscript/runtime)\n")
     fprintf(stderr, "  -h, --help       this help\n")
     exit(2)
@@ -232,6 +233,7 @@ def main(argc: int, argv: **char) -> int:
     std_version = 99      # target of the C backend (--std=c89 -> 89)
     pedantic_lvl = 0      # -pedantic = 1 (warn), -pedantic-errors = 2 (error)
     inline_runtime: bool = False   # --inline-runtime: no libc in injected helpers
+    strip_asserts: bool = False    # --no-assert / -O: drop `assert` (46.4)
     werror: bool = False
     wall: bool = False
     wsuppress: bool = False
@@ -290,6 +292,12 @@ def main(argc: int, argv: **char) -> int:
             cpp_cmd = argv[i]
         elif argv[i] == "--inline-runtime":
             inline_runtime = True
+        elif argv[i] in {"--no-assert", "-O"}:
+            # 46.4: strip `assert` from the build, the way Python's `-O` does.
+            # `-O` is the spelling a Python reader reaches for; it says nothing
+            # about optimisation here, and the C compiler is the one that
+            # optimises anyway.
+            strip_asserts = True
         elif argv[i] in {"-pedantic", "--pedantic", "-Wpedantic"}:
             pedantic_lvl = 1
         elif argv[i] in {"-pedantic-errors", "--pedantic-errors"}:
@@ -350,6 +358,7 @@ def main(argc: int, argv: **char) -> int:
     cc.std_version = std_version
     cc.cpp = cpp_cmd
     cc.inline_runtime = inline_runtime
+    ps_lower_config(strip_asserts)
     diag_config(werror, wall, pedantic_lvl, wsuppress)
 
     if tokens_only:

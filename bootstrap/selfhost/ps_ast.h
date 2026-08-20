@@ -60,6 +60,8 @@ struct PsExpr {
     PsParam *caps;
     int32_t ncaps;
     int is_in;
+    int is_out;
+    int is_ref;
     int is_fnval;
     int is_gref;
     const char *spawn_fn;
@@ -131,6 +133,8 @@ struct PsParam {
     PsExpr *dflt;
     int is_varargs;
     int is_in;
+    int is_out;
+    int is_ref;
     int32_t cstr;
     Pos pos;
 };

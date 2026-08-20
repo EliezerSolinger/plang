@@ -1581,6 +1581,7 @@ struct PsSema {
     PsType *cur_ret;
     const char *cur_fn;
     int32_t loop_depth;
+    int32_t counter;
     int32_t nogc_depth;
     PsType *hint;
     const char *cpp;
@@ -1648,7 +1649,11 @@ static void PsSema_check_func(PsSema *self, PsFunc *f);
 
 static void PsSema_check_record_bytes(PsSema *self, PsDecl *d);
 
+static PsType *PsSema_predef(PsSema *self, PsExpr *e);
+
 static void PsSema_key_ok(PsSema *self, PsType *t, Pos pos, const char *what);
+
+static void PsSema_byref_ok(PsSema *self, PsType *t, Pos pos, const char *kw);
 
 static void PsSema_pod_only(PsSema *self, PsType *t, Pos pos, const char *what);
 
@@ -1773,15 +1778,15 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_335_9 = &self->locals[self->nlocals];
-        __with_335_9->name = name;
-        __with_335_9->type = t;
-        __with_335_9->assigned = assigned;
-        __with_335_9->is_const = is_const;
-        __with_335_9->is_module = 0;
-        __with_335_9->opt_type = NULL;
-        __with_335_9->any_type = NULL;
-        __with_335_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_338_9 = &self->locals[self->nlocals];
+        __with_338_9->name = name;
+        __with_338_9->type = t;
+        __with_338_9->assigned = assigned;
+        __with_338_9->is_const = is_const;
+        __with_338_9->is_module = 0;
+        __with_338_9->opt_type = NULL;
+        __with_338_9->any_type = NULL;
+        __with_338_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2110,7 +2115,11 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                     t = ps_type(self->a, PT_NAME, e->pos);
                     t->name = ed->name;
                 } else {
-                    fatal_at(self->file, e->pos, "unknown name '%s'", e->text);
+                    PsType *pdt = PsSema_predef(self, e);
+                    if (pdt == NULL) {
+                        fatal_at(self->file, e->pos, "unknown name '%s'", e->text);
+                    }
+                    t = pdt;
                 }
             }
             break;
@@ -2255,12 +2264,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_797_17 = e;
-                __with_797_17->kind = PE_CALL;
-                __with_797_17->lhs = cal8;
-                __with_797_17->args = args8;
-                __with_797_17->nargs = nc8;
-                __with_797_17->body = NULL;
+                PsExpr *__with_803_17 = e;
+                __with_803_17->kind = PE_CALL;
+                __with_803_17->lhs = cal8;
+                __with_803_17->args = args8;
+                __with_803_17->nargs = nc8;
+                __with_803_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -3220,6 +3229,51 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
     }
     const char *name = PsSema_gname(self, e->lhs->text, e->pos);
     e->lhs->text = name;
+    if (strcmp(name, "is_defined") == 0 && !StrMap_pPsFunc_has(&self->funcs, name)) {
+        if (e->nargs != 1 || e->args[0]->kind != PE_NAME) {
+            fatal_at(self->file, e->pos, "is_defined() takes one NAME, and answers at compile time");
+        }
+        const char *dn6 = e->args[0]->text;
+        const char *dq6 = PsSema_gname(self, dn6, e->pos);
+        int known6 = PsSema_find_local(self, dn6) >= 0 || StrMap_pPsType_has(&self->globals, dq6) || StrMap_pPsFunc_has(&self->funcs, dq6) || StrMap_pPsDecl_has(&self->records, dq6) || StrMap_pPsDecl_has(&self->enums, dq6) || StrMap_pPsDecl_has(&self->enumof, dq6) || StrMap_pPsFunc_has(&self->cfuncs, dn6) || StrMap_pPsExpr_has(&self->cconsts, dn6) || StrMap_pPsDecl_has(&self->traits, dq6);
+        e->kind = PE_BOOL;
+        e->text = (known6 ? "True" : "False");
+        e->nargs = 0;
+        return ps_type(self->a, PT_BOOL, e->pos);
+    }
+    if (strcmp(name, "typestr") == 0 && !StrMap_pPsFunc_has(&self->funcs, name)) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "typestr() takes one value and answers its type as a string, at compile time");
+        }
+        PsType *tt6 = PsSema_check_expr(self, e->args[0]);
+        e->kind = PE_STR;
+        e->text = Arena_printf(self->a, "\"%s\"", ps_type_str(self->a, tt6));
+        e->nargs = 0;
+        return ps_type(self->a, PT_STR, e->pos);
+    }
+    if (strcmp(name, "hasfield") == 0 && !StrMap_pPsFunc_has(&self->funcs, name)) {
+        if (e->nargs != 2 || e->args[0]->kind != PE_NAME || e->args[1]->kind != PE_STR) {
+            fatal_at(self->file, e->pos, "hasfield() takes a TYPE and a field name written as a string: `hasfield(Vec, \"z\")`");
+        }
+        const char *tn6 = PsSema_gname(self, e->args[0]->text, e->pos);
+        PsDecl *rd6 = StrMap_pPsDecl_get_or(&self->records, tn6, NULL);
+        if (rd6 == NULL) {
+            fatal_at(self->file, e->pos, "hasfield(): '%s' is not a record or a struct declared here", e->args[0]->text);
+        }
+        size_t fl6 = 0;
+        const char *fn6 = str_lit_decode(self->a, e->args[1]->text, &fl6);
+        int hit6 = 0;
+        size_t i;
+        for (i = 0; i < rd6->nfields; i += 1) {
+            if (strcmp(rd6->fields[i].name, fn6) == 0) {
+                hit6 = 1;
+            }
+        }
+        e->kind = PE_BOOL;
+        e->text = (hit6 ? "True" : "False");
+        e->nargs = 0;
+        return ps_type(self->a, PT_BOOL, e->pos);
+    }
     if (StrMap_pPsDecl_has(&self->records, name)) {
         return PsSema_check_ctor(self, e, StrMap_pPsDecl_get_or(&self->records, name, NULL));
     }
@@ -3284,6 +3338,19 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             } else if (f->params[pi].is_varargs) {
                 PsSema_check_want(self, e->args[i], pt->inner, Arena_printf(self->a, "an element of '%s'", f->params[pi].name));
             } else {
+                if (f->params[pi].is_out || f->params[pi].is_ref) {
+                    const char *kw5 = (f->params[pi].is_out ? "out" : "ref");
+                    int gv5 = e->args[i] != NULL && (f->params[pi].is_out ? e->args[i]->is_out : e->args[i]->is_ref);
+                    if (!gv5) {
+                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' of '%s' is `%s`, so the argument is written `%s x` (65.12)", f->params[pi].name, ps_disp(name), kw5, kw5);
+                    }
+                    if (e->args[i]->kind != PE_NAME) {
+                        fatal_at(self->file, e->args[i]->pos, "`%s` takes a plain variable: a field or an element would be an address INSIDE an object the collector moves (17.2) — read it out, pass the variable, write it back", kw5);
+                    }
+                    PsSema_byref_ok(self, pt, e->args[i]->pos, kw5);
+                } else if (e->args[i] != NULL && (e->args[i]->is_out || e->args[i]->is_ref)) {
+                    fatal_at(self->file, e->args[i]->pos, "parameter '%s' of '%s' is an ordinary parameter: it takes a value, not `out`/`ref` (65.12)", f->params[pi].name, ps_disp(name));
+                }
                 PsSema_check_want(self, e->args[i], pt, Arena_printf(self->a, "parameter '%s'", f->params[pi].name));
             }
         }
@@ -3566,6 +3633,23 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
                 ka = ka->lhs;
                 e->args[1] = ka;
             }
+            if (ka->kind == PE_NAME && PsSema_find_local(self, ka->text) < 0 && !StrMap_pPsFunc_has(&self->funcs, ka->text) && !StrMap_pPsType_has(&self->globals, ka->text)) {
+                PsExpr *klam = ps_expr(self->a, PE_LAMBDA, ka->pos);
+                klam->params = Arena_alloc(self->a, sizeof(PsParam));
+                klam->params[0].name = "__k";
+                klam->params[0].type = slt->inner;
+                klam->params[0].pos = ka->pos;
+                klam->nparams = 1;
+                PsExpr *kcall = ps_expr(self->a, PE_CALL, ka->pos);
+                kcall->lhs = ka;
+                kcall->args = Arena_alloc(self->a, sizeof(*kcall->args));
+                kcall->args[0] = ps_expr(self->a, PE_NAME, ka->pos);
+                kcall->args[0]->text = "__k";
+                kcall->nargs = 1;
+                klam->lhs = kcall;
+                ka = klam;
+                e->args[1] = klam;
+            }
             PsType *kw = ps_type(self->a, PT_FUNC, e->pos);
             kw->params = Arena_alloc(self->a, sizeof(*kw->params));
             kw->params[0] = slt->inner;
@@ -3580,8 +3664,11 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             return slt;
         }
+        if (slt->inner != NULL && slt->inner->kind == PT_NAME && StrSet_has(&self->timpls, Arena_printf(self->a, "Comparable|%s", slt->inner->name))) {
+            return slt;
+        }
         if (slt->inner == NULL || !(slt->inner->kind == PT_INT || slt->inner->kind == PT_FLOAT || slt->inner->kind == PT_STR)) {
-            fatal_at(self->file, e->pos, "sorted() orders numbers and strings by itself; for anything else give it a `key=` (28.4)");
+            fatal_at(self->file, e->pos, "sorted() orders numbers and strings by itself, and any type that implements `Comparable` (62.1) by its `cmp`; for anything else give it a `key=` (28.4)");
         }
         return slt;
     }
@@ -3859,26 +3946,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2244_17 = e;
-                __with_2244_17->kind = PE_STR;
-                __with_2244_17->text = lit7;
-                __with_2244_17->lhs = NULL;
-                __with_2244_17->rhs = NULL;
-                __with_2244_17->args = NULL;
-                __with_2244_17->nargs = 0;
+                PsExpr *__with_2336_17 = e;
+                __with_2336_17->kind = PE_STR;
+                __with_2336_17->text = lit7;
+                __with_2336_17->lhs = NULL;
+                __with_2336_17->rhs = NULL;
+                __with_2336_17->args = NULL;
+                __with_2336_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2257_13 = e;
-            __with_2257_13->kind = PE_LOWERED;
-            __with_2257_13->low = ln7;
-            __with_2257_13->lhs = NULL;
-            __with_2257_13->rhs = NULL;
-            __with_2257_13->args = NULL;
-            __with_2257_13->nargs = 0;
+            PsExpr *__with_2349_13 = e;
+            __with_2349_13->kind = PE_LOWERED;
+            __with_2349_13->low = ln7;
+            __with_2349_13->lhs = NULL;
+            __with_2349_13->rhs = NULL;
+            __with_2349_13->args = NULL;
+            __with_2349_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4092,10 +4179,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2454_17 = &ns->quals[ns->nquals];
-                __with_2454_17->name = q;
-                __with_2454_17->orig = d->path;
-                __with_2454_17->ns = sub;
+                PsNsEnt *__with_2546_17 = &ns->quals[ns->nquals];
+                __with_2546_17->name = q;
+                __with_2546_17->orig = d->path;
+                __with_2546_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4108,10 +4195,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2466_21 = &ns->ents[ns->nents];
-                    __with_2466_21->name = local;
-                    __with_2466_21->orig = d->names[k];
-                    __with_2466_21->ns = sub;
+                    PsNsEnt *__with_2558_21 = &ns->ents[ns->nents];
+                    __with_2558_21->name = local;
+                    __with_2558_21->orig = d->names[k];
+                    __with_2558_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4472,10 +4559,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2802_9 = e;
-        __with_2802_9->kind = PE_NAME;
-        __with_2802_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2802_9->lhs = NULL;
+        PsExpr *__with_2894_9 = e;
+        __with_2894_9->kind = PE_NAME;
+        __with_2894_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2894_9->lhs = NULL;
     }
     return 1;
 }
@@ -4784,6 +4871,40 @@ static void PsSema_copyable(PsSema *self, PsType *t, Pos pos, const char *what) 
     PsSema_pod_only(self, t, pos, what);
 }
 
+static void PsSema_byref_ok(PsSema *self, PsType *t, Pos pos, const char *kw) {
+    if (t == NULL) {
+        return;
+    }
+    switch (t->kind) {
+        case PT_INT:
+        case PT_FLOAT:
+        case PT_BOOL: {
+            return;
+        }
+        case PT_ARRAY: {
+            fatal_at(self->file, pos, "`%s` on a fixed array says nothing: `xs: %s` is already handed over as a reference, and writing into it reaches the caller's array (33.4)", kw, ps_type_str(self->a, t));
+            break;
+        }
+        case PT_NAME: {
+            if (StrMap_pPsDecl_has(&self->enums, t->name)) {
+                return;
+            }
+            if (StrMap_pPsDecl_has(&self->records, t->name)) {
+                PsDecl *rd8 = StrMap_pPsDecl_get_or(&self->records, t->name, NULL);
+                if (rd8->kind == PD_RECORD) {
+                    return;
+                }
+            }
+            break;
+        }
+        default: {
+            ;
+            break;
+        }
+    }
+    fatal_at(self->file, pos, "`%s` takes a number, a bool, an enum, a `record` or a fixed array of those — %s is already a reference, so writing through it is what mutating it does, and rebinding the caller's name is what a return value is for (65.12)", kw, ps_type_str(self->a, t));
+}
+
 static void PsSema_pod_only(PsSema *self, PsType *t, Pos pos, const char *what) {
     if (t == NULL) {
         return;
@@ -4816,6 +4937,35 @@ static void PsSema_pod_only(PsSema *self, PsType *t, Pos pos, const char *what) 
         }
     }
     fatal_at(self->file, pos, "%s is %s, and a message crosses heaps as BYTES (34.3): numbers, bools, enums and `record` do; anything the collector owns does not (yet)", what, ps_type_str(self->a, t));
+}
+
+static PsType *PsSema_predef(PsSema *self, PsExpr *e) {
+    const char *n = e->text;
+    if (n == NULL || n[0] != '_' || n[1] != '_') {
+        return NULL;
+    }
+    if (strcmp(n, "__FILE__") == 0) {
+        e->kind = PE_STR;
+        e->text = Arena_printf(self->a, "\"%s\"", self->file);
+        return ps_type(self->a, PT_STR, e->pos);
+    }
+    if (strcmp(n, "__LINE__") == 0) {
+        e->kind = PE_INT;
+        e->text = Arena_printf(self->a, "%d", e->pos.line);
+        return ps_type(self->a, PT_INT, e->pos);
+    }
+    if (strcmp(n, "__func__") == 0 || strcmp(n, "__FUNCTION__") == 0) {
+        e->kind = PE_STR;
+        e->text = Arena_printf(self->a, "\"%s\"", (self->cur_fn != NULL ? self->cur_fn : "<main>"));
+        return ps_type(self->a, PT_STR, e->pos);
+    }
+    if (strcmp(n, "__COUNTER__") == 0) {
+        e->kind = PE_INT;
+        e->text = Arena_printf(self->a, "%d", self->counter);
+        self->counter += 1;
+        return ps_type(self->a, PT_INT, e->pos);
+    }
+    return NULL;
 }
 
 static void PsSema_key_ok(PsSema *self, PsType *t, Pos pos, const char *what) {

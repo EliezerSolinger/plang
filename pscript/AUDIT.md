@@ -234,6 +234,17 @@ cache de compilação continuam abertos.
 
 ---
 
+## O que a varredura FECHOU na terceira passada (ver a bateria 93)
+
+`sorted(xs, key=len)` (28.4) e `sorted` por `Comparable` (62.1), com o sort dos
+índices trocado de inserção O(n²) para merge sort estável; o comptime da 65.11
+(`__FILE__`, `__LINE__`, `__func__`, `__COUNTER__`, `is_defined`, `typestr`,
+`hasfield`); o `-O`/`--no-assert` da 46.4, com o mecanismo de `<nome>.flags` que
+dá portão a uma flag; `out`/`ref` da 65.12 como palavras contextuais; e três
+defeitos do `T[N]` (33.4/60.2) que só apareceram porque alguém escreveu o teste:
+atribuição indexada em array era escrita selvagem pelo caminho de lista, array
+local com literal não compilava, e `in xs: T[N]` não compilava.
+
 ## O que está DECIDIDO, não implementado, e não precisa de decisão nova
 
 Ordem de valor, na minha leitura — nenhum destes precisa de bateria, só de
@@ -248,13 +259,9 @@ trabalho:
    decisão recusou, e paga O(n) por volta em cada espera. O `kqueue` não é
    testável nesta máquina (Linux), o que é motivo para escrevê-lo com cuidado e
    dizer que não foi rodado — não para deixar os dois de fora.
-3. **`Comparable` no `sorted` (62.1)** e **`Sequence<T>` como parâmetro
-   (60.3/62.1)** — as duas traits do sistema que estão declaradas e não
-   servem para o que foram declaradas.
-4. **`sorted(xs, key=len)` (28.4)**: com uma função ESCRITA funciona; com um
-   builtin não, porque builtin não é valor. É o caso que a 28.4 escreveu.
-5. **`out`/`ref` no pscript (65.12)** — só `in` existe.
-6. **Comptime (65.10/65.11)**: `const def`, `is_defined`, `typestr`,
-   `hasfield`, `__FILE__`/`__LINE__`/`__func__`.
-7. **`assert` strippable (46.4)** — falta a flag de build.
-8. **`const` de contêiner no topo do módulo (61.3)** — dentro de função vai.
+3. **`Sequence<T>` como parâmetro (60.3/62.1)** — a trait do sistema que
+   está declarada e não serve para o que foi declarada. (O `Comparable` no
+   `sorted`, que estava aqui, FECHOU na bateria 93.)
+4. **`const def` (65.10)** — função avaliada em compilação. O resto do
+   comptime da 65.11 fechou na bateria 93.
+5. **`const` de contêiner no topo do módulo (61.3)** — dentro de função vai.

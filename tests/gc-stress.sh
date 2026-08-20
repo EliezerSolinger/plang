@@ -60,7 +60,11 @@ for src in tests/pscript/run/*.psc pscript/examples/*.psc; do
     want_exit=0
     [ -f "tests/pscript/run/$name.exit" ] && want_exit=$(cat "tests/pscript/run/$name.exit")
 
-    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh "$src" "$OUT/$name" >"$OUT/$name.build" 2>&1; then
+    # a program may need compiler flags to mean what its `.expected` says
+    # (`-O` strips `assert`, 46.4) — the same file `tests/run.sh` reads
+    xflags=""
+    [ -f "tests/pscript/run/$name.flags" ] && xflags=$(cat "tests/pscript/run/$name.flags")
+    if ! PSBUILD_RT="$OUT/rt" PLANGC="${PLANGC:-./plangc2} $xflags" bash tests/psbuild.sh "$src" "$OUT/$name" >"$OUT/$name.build" 2>&1; then
         echo "  FAIL $name (build) — see $OUT/$name.build"; fail=$((fail+1)); continue
     fi
     n=$(stress_n "$name")

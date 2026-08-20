@@ -178,6 +178,7 @@ struct PsSema:
     cur_ret: *PsType
     cur_fn: const *char
     loop_depth: i32
+    counter: i32             # `__COUNTER__` (65.11): a fresh number per read
     nogc_depth: i32          # `nogc:` blocks around the statement being checked
                              #   (26.5.1): `await` inside one is refused
     hint: *PsType            # the type the CONTEXT wants, for the one literal that
@@ -254,7 +255,9 @@ struct PsSema:
     static def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char)
     static def check_func(self: *PsSema, f: *PsFunc)
     static def check_record_bytes(self: *PsSema, d: *PsDecl)
+    static def predef(self: *PsSema, e: *PsExpr) -> *PsType
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    static def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char)
     static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
     static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
@@ -639,7 +642,10 @@ struct PsSema:
                         t = ps_type(self->a, PT_NAME, e->pos)
                         t->name = ed->name
                     else:
-                        fatal_at(self->file, e->pos, "unknown name '%s'", e->text)
+                        pdt: *PsType = self->predef(e)
+                        if pdt == None:
+                            fatal_at(self->file, e->pos, "unknown name '%s'", e->text)
+                        t = pdt
             case PE_AWAIT:
                 # `await t` collects what a task produced (35.3), and raises
                 # again what it raised (19.3). Only an `async def` and the top
@@ -1641,6 +1647,44 @@ struct PsSema:
             fatal_at(self->file, e->pos, "only a plain function name can be called for now")
         name: const *char = self->gname(e->lhs->text, e->pos)
         e->lhs->text = name
+        # 65.11: the comptime intrinsics of the P, answered HERE and gone before
+        # the lowering sees them. `is_defined` never CHECKS its argument — the
+        # whole point of asking is that the name may not exist.
+        if strcmp(name, "is_defined") == 0 and not self->funcs.has(name):
+            if e->nargs != 1 or e->args[0]->kind != PE_NAME:
+                fatal_at(self->file, e->pos, "is_defined() takes one NAME, and answers at compile time")
+            dn6: const *char = e->args[0]->text
+            dq6: const *char = self->gname(dn6, e->pos)
+            known6: bool = self->find_local(dn6) >= 0 or self->globals.has(dq6) or self->funcs.has(dq6) or self->records.has(dq6) or self->enums.has(dq6) or self->enumof.has(dq6) or self->cfuncs.has(dn6) or self->cconsts.has(dn6) or self->traits.has(dq6)
+            e->kind = PE_BOOL
+            e->text = "True" if known6 else "False"
+            e->nargs = 0
+            return ps_type(self->a, PT_BOOL, e->pos)
+        if strcmp(name, "typestr") == 0 and not self->funcs.has(name):
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "typestr() takes one value and answers its type as a string, at compile time")
+            tt6: *PsType = self->check_expr(e->args[0])
+            e->kind = PE_STR
+            e->text = self->a->printf("\"%s\"", ps_type_str(self->a, tt6))
+            e->nargs = 0
+            return ps_type(self->a, PT_STR, e->pos)
+        if strcmp(name, "hasfield") == 0 and not self->funcs.has(name):
+            if e->nargs != 2 or e->args[0]->kind != PE_NAME or e->args[1]->kind != PE_STR:
+                fatal_at(self->file, e->pos, "hasfield() takes a TYPE and a field name written as a string: `hasfield(Vec, \"z\")`")
+            tn6: const *char = self->gname(e->args[0]->text, e->pos)
+            rd6: *PsDecl = self->records.get_or(tn6, None)
+            if rd6 == None:
+                fatal_at(self->file, e->pos, "hasfield(): '%s' is not a record or a struct declared here", e->args[0]->text)
+            fl6: usize = 0
+            fn6: const *char = str_lit_decode(self->a, e->args[1]->text, out fl6)
+            hit6: bool = False
+            for i in range(rd6->nfields):
+                if strcmp(rd6->fields[i].name, fn6) == 0:
+                    hit6 = True
+            e->kind = PE_BOOL
+            e->text = "True" if hit6 else "False"
+            e->nargs = 0
+            return ps_type(self->a, PT_BOOL, e->pos)
         # a type name used as a call CONSTRUCTS (54.2) — checked before the
         # named-argument guard below, because the constructor is where named
         # arguments already work
@@ -1709,6 +1753,26 @@ struct PsSema:
                     # the extra ones are ELEMENTS of the list (44.2)
                     self->check_want(e->args[i], pt->inner, self->a->printf("an element of '%s'", f->params[pi].name))
                 else:
+                    # 65.12: `out`/`ref` are spelled at the CALL SITE too, the
+                    # way P spells them and for the same reason — a call that
+                    # can write to your variable should say so where you read
+                    # it, not only where the function was declared.
+                    if f->params[pi].is_out or f->params[pi].is_ref:
+                        kw5: const *char = "out" if f->params[pi].is_out else "ref"
+                        gv5: bool = e->args[i] != None and (e->args[i]->is_out if f->params[pi].is_out else e->args[i]->is_ref)
+                        if not gv5:
+                            fatal_at(self->file, e->args[i]->pos, "parameter '%s' of '%s' is `%s`, so the argument is written `%s x` (65.12)", f->params[pi].name, ps_disp(name), kw5, kw5)
+                        if e->args[i]->kind != PE_NAME:
+                            # A plain VARIABLE and nothing else. A field of a
+                            # collected object would hand over a pointer INTO
+                            # something the collector moves, which 17.2 refuses
+                            # outright — and a local or a module variable has an
+                            # address that stands still (one is on the C stack,
+                            # the other in the context's own globals).
+                            fatal_at(self->file, e->args[i]->pos, "`%s` takes a plain variable: a field or an element would be an address INSIDE an object the collector moves (17.2) — read it out, pass the variable, write it back", kw5)
+                        self->byref_ok(pt, e->args[i]->pos, kw5)
+                    elif e->args[i] != None and (e->args[i]->is_out or e->args[i]->is_ref):
+                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' of '%s' is an ordinary parameter: it takes a value, not `out`/`ref` (65.12)", f->params[pi].name, ps_disp(name))
                     self->check_want(e->args[i], pt, self->a->printf("parameter '%s'", f->params[pi].name))
             return f->ret if f->ret != None else ps_type(self->a, PT_VOID, e->pos)
         return self->builtin_call(e, name)
@@ -1978,6 +2042,29 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "sorted() knows `key=`, not '%s='", ka->text)
                     ka = ka->lhs
                     e->args[1] = ka
+                # 28.4 writes this case out: `sorted(xs, key=len)`. A BUILTIN is
+                # not a value — `len` has no closure to hand over, and 29.3 kept
+                # the function universal separate on purpose — so the shortest
+                # honest answer is to write the lambda the user would have
+                # written: `key=len` becomes `key=lambda __k: len(__k)`, and
+                # every machine downstream (the closure, the adapter emitted per
+                # call site) works on it unchanged.
+                if ka->kind == PE_NAME and self->find_local(ka->text) < 0 and not self->funcs.has(ka->text) and not self->globals.has(ka->text):
+                    klam: *PsExpr = ps_expr(self->a, PE_LAMBDA, ka->pos)
+                    klam->params = self->a->alloc(sizeof(PsParam))
+                    klam->params[0].name = "__k"
+                    klam->params[0].type = slt->inner
+                    klam->params[0].pos = ka->pos
+                    klam->nparams = 1
+                    kcall: *PsExpr = ps_expr(self->a, PE_CALL, ka->pos)
+                    kcall->lhs = ka
+                    kcall->args = self->a->alloc(sizeof(*kcall->args))
+                    kcall->args[0] = ps_expr(self->a, PE_NAME, ka->pos)
+                    kcall->args[0]->text = "__k"
+                    kcall->nargs = 1
+                    klam->lhs = kcall
+                    ka = klam
+                    e->args[1] = klam
                 kw: *PsType = ps_type(self->a, PT_FUNC, e->pos)
                 kw->params = self->a->alloc(sizeof(*kw->params))
                 kw->params[0] = slt->inner
@@ -1990,8 +2077,13 @@ struct PsSema:
                 if kt == None or kt->kind != PT_FUNC or kt->nparams != 1 or kt->inner == None or kt->inner->kind not in {PT_INT, PT_FLOAT}:
                     fatal_at(self->file, e->pos, "the `key=` of sorted() takes one element and answers a number (28.4)")
                 return slt
+            # 62.1: `Comparable` is the trait for a CUSTOM order, and this is
+            # the place it was declared for — `sorted(xs)` over a type that
+            # implements it sorts by the type's own `cmp`.
+            if slt->inner != None and slt->inner->kind == PT_NAME and self->timpls.has(self->a->printf("Comparable|%s", slt->inner->name)):
+                return slt
             if slt->inner == None or slt->inner->kind not in {PT_INT, PT_FLOAT, PT_STR}:
-                fatal_at(self->file, e->pos, "sorted() orders numbers and strings by itself; for anything else give it a `key=` (28.4)")
+                fatal_at(self->file, e->pos, "sorted() orders numbers and strings by itself, and any type that implements `Comparable` (62.1) by its `cmp`; for anything else give it a `key=` (28.4)")
             return slt
         if ps_width_name(name) != 0 or strcmp(name, "i64") == 0 or strcmp(name, "f64") == 0:
             # the width conversions (68.2): CHECKED — out of range RAISES, in
@@ -3120,6 +3212,36 @@ struct PsSema:
             return
         self->pod_only(t, pos, what)
 
+    # What may cross by `out`/`ref` (65.12). The reason the trio came back is
+    # the RECORD: it is a value (52.1), so a big one is copied in and copied
+    # back, and `ref` is how you skip both copies. A `str`, a `list`, a `dict`
+    # or a `struct` is ALREADY a reference — mutating it in place is what `ref`
+    # would be for, and rebinding the caller's variable is what a return value
+    # is for. So they are refused, and the message says which of the two the
+    # writer probably wants.
+    static def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char):
+        if t == None:
+            return
+        match t->kind:
+            case PT_INT, PT_FLOAT, PT_BOOL:
+                return
+            case PT_ARRAY:
+                # An array parameter is ALREADY a reference in both languages —
+                # C decays it to a pointer, and a write through it reaches the
+                # caller's array. `ref` would be a second level of indirection
+                # that buys nothing.
+                fatal_at(self->file, pos, "`%s` on a fixed array says nothing: `xs: %s` is already handed over as a reference, and writing into it reaches the caller's array (33.4)", kw, ps_type_str(self->a, t))
+            case PT_NAME:
+                if self->enums.has(t->name):
+                    return
+                if self->records.has(t->name):
+                    rd8: *PsDecl = self->records.get_or(t->name, None)
+                    if rd8->kind == PD_RECORD:
+                        return
+            case _:
+                pass
+        fatal_at(self->file, pos, "`%s` takes a number, a bool, an enum, a `record` or a fixed array of those — %s is already a reference, so writing through it is what mutating it does, and rebinding the caller's name is what a return value is for (65.12)", kw, ps_type_str(self->a, t))
+
     static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:
             return
@@ -3142,6 +3264,36 @@ struct PsSema:
             case _:
                 pass
         fatal_at(self->file, pos, "%s is %s, and a message crosses heaps as BYTES (34.3): numbers, bools, enums and `record` do; anything the collector owns does not (yet)", what, ps_type_str(self->a, t))
+
+    # 65.11: the predefined names of the P, folded here to a literal exactly as
+    # `fold_predefined` does over there. There is no preprocessor in either
+    # language, so a name that looks like C's dunder has to be resolved by the
+    # front end that reads it — and a program that logs where it is needs this
+    # more than it needs anything clever.
+    static def predef(self: *PsSema, e: *PsExpr) -> *PsType:
+        n: const *char = e->text
+        if n == None or n[0] != '_' or n[1] != '_':
+            return None
+        if strcmp(n, "__FILE__") == 0:
+            e->kind = PE_STR
+            e->text = self->a->printf("\"%s\"", self->file)
+            return ps_type(self->a, PT_STR, e->pos)
+        if strcmp(n, "__LINE__") == 0:
+            e->kind = PE_INT
+            e->text = self->a->printf("%d", e->pos.line)
+            return ps_type(self->a, PT_INT, e->pos)
+        if strcmp(n, "__func__") == 0 or strcmp(n, "__FUNCTION__") == 0:
+            # at the top level there is no function, and the implicit main is
+            # what the program is in (6.2) — so that is what it says
+            e->kind = PE_STR
+            e->text = self->a->printf("\"%s\"", self->cur_fn if self->cur_fn != None else "<main>")
+            return ps_type(self->a, PT_STR, e->pos)
+        if strcmp(n, "__COUNTER__") == 0:
+            e->kind = PE_INT
+            e->text = self->a->printf("%d", self->counter)
+            self->counter += 1
+            return ps_type(self->a, PT_INT, e->pos)
+        return None
 
     static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:

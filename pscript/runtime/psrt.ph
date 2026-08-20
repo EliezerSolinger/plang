@@ -1059,6 +1059,7 @@ def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList
 # not n log n — and what is sorted is the pairing. The adapter is written by the
 # compiler, which is the only side that knows the element type.
 def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> f64, env: *void) -> *PsList
+def ps_list_sorted_cmp(ctx: *PsCtx, l: *PsList, cmpfn: def(env: *void, ctx: *PsCtx, a: const *void, b: const *void) -> i64, env: *void) -> *PsList
 
 # ---------- dicts and sets ----------
 def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vref: bool) -> *PsDict

@@ -540,6 +540,12 @@ suite_pscript() {
         case $name in lib_*) continue ;; esac   # import fixtures, not programs
         local want_exit=0
         [ -f "tests/pscript/run/$name.exit" ] && want_exit=$(cat "tests/pscript/run/$name.exit")
+        # a program may ask for extra COMPILER flags (`<name>.flags`) — which is
+        # how a flag that changes what is emitted gets a gate at all: `-O`
+        # strips `assert` (46.4), and the only way to see that is to build the
+        # same program with it
+        local xflags=""
+        [ -f "tests/pscript/run/$name.flags" ] && xflags=$(cat "tests/pscript/run/$name.flags")
         local expfile="tests/pscript/run/$name.expected"
         local ok=1
         # `import "x.ph"` (75.3) makes the compiler emit the P module too, in
@@ -547,7 +553,7 @@ suite_pscript() {
         if [ "$BACKEND" = qbe ]; then
             rm -f "$d"/pmod_*.ssa "$d"/pmod_*.s
             $PLANGC --backend qbe --out-dir "$rt" pscript/runtime/psrt.p 2>"$err" &&
-            $PLANGC --backend qbe "$src" -o "$d/$name.ssa" 2>>"$err" &&
+            $PLANGC --backend qbe $xflags "$src" -o "$d/$name.ssa" 2>>"$err" &&
             $QBE "$d/$name.ssa" -o "$d/$name.s" 2>>"$err" &&
             $QBE "$rt/pscript/runtime/psrt.ssa" -o "$d/psrt.s" 2>>"$err" || ok=0
             local qextra=""
@@ -558,7 +564,7 @@ suite_pscript() {
             done
             [ $ok = 1 ] && { $CC $PSDEFS "$d/$name.s" "$d/psrt.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         else
-            $PLANGC $PFLAGS --out-dir "$rt" "$src" 2>"$err" || ok=0
+            $PLANGC $PFLAGS $xflags --out-dir "$rt" "$src" 2>"$err" || ok=0
             local cextra=""
             for pm in "$rt/$(dirname "$src")"/pmod_*.c; do
                 [ -f "$pm" ] || continue

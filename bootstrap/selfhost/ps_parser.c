@@ -1837,6 +1837,14 @@ static PsExpr *PsP_parse_postfix(PsP *self) {
                         ia->is_in = 1;
                         ia->pos = ip;
                         Vec_pPsExpr_push(&args, ia);
+                    } else if (PsP_at(self, TK_IDENT) && PsP_pk1(self)->kind == TK_IDENT && (strcmp(PsP_pk(self)->text, "out") == 0 || strcmp(PsP_pk(self)->text, "ref") == 0)) {
+                        int wasout = strcmp(PsP_pk(self)->text, "out") == 0;
+                        Pos op9 = PsP_adv(self)->pos;
+                        PsExpr *oa = PsP_parse_expr(self);
+                        oa->is_out = wasout;
+                        oa->is_ref = !wasout;
+                        oa->pos = op9;
+                        Vec_pPsExpr_push(&args, oa);
                     } else if (PsP_at(self, TK_STAR)) {
                         Pos sp = PsP_adv(self)->pos;
                         PsExpr *sa = PsP_parse_expr(self);
@@ -2806,6 +2814,15 @@ static PsFunc *PsP_parse_func_head(PsP *self, int is_static, int is_async, const
             PsParam p = {0};
             p.pos = PsP_pk(self)->pos;
             p.is_in = PsP_accept(self, TK_IN);
+            if (!p.is_in && PsP_at(self, TK_IDENT) && PsP_pk1(self)->kind == TK_IDENT) {
+                if (strcmp(PsP_pk(self)->text, "out") == 0) {
+                    PsP_adv(self);
+                    p.is_out = 1;
+                } else if (strcmp(PsP_pk(self)->text, "ref") == 0) {
+                    PsP_adv(self);
+                    p.is_ref = 1;
+                }
+            }
             p.is_varargs = PsP_accept(self, TK_STAR);
             p.name = PsP_expect(self, TK_IDENT, "parameter name")->text;
             if (PsP_accept(self, TK_COLON)) {
