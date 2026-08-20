@@ -11,12 +11,48 @@ regenerado.
 
 ---
 
+## Estado em 2026-08-20 (a varredura da especificação)
+
+`pscript/AUDIT.md` é o arquivo novo desta rodada: uma linha por decisão numerada
+do DESIGN, com veredito conferido por PROVA — um programa que exercita a decisão,
+compilado e rodado. As baterias 91 a 96b registram o que ela fechou.
+
+**Fechado nesta rodada** (tudo era decisão antiga sem implementação):
+
+- dict em ordem de inserção (91), o layout compacto do CPython;
+- test262 portado como 25 propriedades de ordem contra o node (88.1 revisitada);
+- `Task<Task<T>>` não achata, com portão (87.2);
+- as três comprehensions — set, dict, e `range`/string como iterável (92);
+- nove diagnósticos que explicam a DECISÃO em vez de acusar um token (92.3);
+- `items`/`keys`/`values` (61.4) e o walrus (45.2), mais dois defeitos que eles
+  desenterraram: `for k in d` dentro de `async def` crashava, e uma condição de
+  `if` num `async def` descartava o que ela hoistava;
+- `sorted` por `key=len` e por `Comparable`, com o sort dos índices trocado de
+  O(n²) para merge sort estável (93.1/93.2);
+- o comptime da 65.11, o `-O` da 46.4, `out`/`ref` da 65.12, e quatro defeitos do
+  `T[N]` (93.3–93.5, 96b);
+- o rastro de pilha (34.2/15.2) e o handler de crash (12.4) — e o defeito que
+  isso desenterrou, que era o pior de todos: o ZERO de um tipo coletado era NULL,
+  e NULL no meio de uma expressão era segfault em vez de exceção pendente (94.3);
+- `plangc run` com cache de conteúdo: 2,9s a frio, 4ms depois (95);
+- `const` de módulo que precisa ser construído, e o congelamento fundo (96).
+
+**O que ficou, e por quê** — ver o fim do `AUDIT.md`:
+
+- quatro perguntas que são DECISÃO sua (print de contêiner, tupla terminar ou
+  tirar, o `poll()` onde a 18.4 pediu epoll, e o padrão do `--trace`);
+- duas coisas de trabalho: `Sequence<T>` como tipo de parâmetro (60.3/62.1) e
+  `const def` no pscript (65.10);
+- a LINHA por frame no rastro, que custa uma escrita por instrução com chamada.
+
 ## Regras que não se negociam
 
 Vieram do usuário ao longo do projeto e valem para tudo abaixo.
 
-1. **Nunca commitar. Nunca dar push.** Quem commita é o usuário. Deixe a árvore
-   limpa e descreva o que mudou.
+1. **~~Nunca commitar. Nunca dar push.~~** — REVOGADA por você em 2026-08-19: o
+   commit e o push passaram a ser autorizados, e desde então cada leva entra com
+   sua própria mensagem. A regra fica registrada porque explica os primeiros
+   meses do histórico (uma árvore limpa e um resumo por etapa).
 2. **`make verify` tem de dar 8/8 depois de cada etapa**, e o seed tem de ser
    regenerado (`bootstrap/` em dia com os fontes). A receita está no fim deste
    arquivo.
