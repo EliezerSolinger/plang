@@ -1410,6 +1410,8 @@ static PsExpr *PsP_parse_primary(PsP *self);
 
 static PsBlock *PsP_parse_block(PsP *self);
 
+static void PsP_refuse_python(PsP *self);
+
 static PsStmt *PsP_parse_stmt(PsP *self);
 
 static PsStmt *PsP_parse_simple_stmt(PsP *self);
@@ -1723,6 +1725,9 @@ static PsExpr *PsP_parse_primary(PsP *self) {
                 return ps_expr(self->a, PE_TUPLE, pos);
             }
             PsExpr *inner = PsP_parse_expr(self);
+            if (PsP_at(self, TK_FOR)) {
+                fatal_at(self->file, PsP_pk(self)->pos, "there is no generator expression, because there are no generators: write the comprehension in brackets, `[x for x in xs]`, which builds the list in one go");
+            }
             if (PsP_at(self, TK_COMMA)) {
                 Vec_pPsExpr items;
                 Vec_pPsExpr_init(&items);
@@ -2010,9 +2015,14 @@ static PsExpr *PsP_parse_coalesce(PsP *self) {
 
 static PsExpr *PsP_parse_cmp(PsP *self) {
     PsExpr *e = PsP_parse_coalesce(self);
+    int32_t nchain = 0;
     while (1) {
         TokKind k = PsP_pk(self)->kind;
+        if (nchain > 0 && (k == TK_EQ || k == TK_NE || k == TK_LT || k == TK_LE || k == TK_GT || k == TK_GE || k == TK_IN || k == TK_IS || (k == TK_NOT && PsP_pk1(self)->kind == TK_IN))) {
+            fatal_at(self->file, PsP_pk(self)->pos, "a comparison does not chain here: Python reads `a < b < c` as `a < b and b < c`, and reading it left to right would compare a bool with a number — write the `and`");
+        }
         if (k == TK_EQ || k == TK_NE || k == TK_LT || k == TK_LE || k == TK_GT || k == TK_GE) {
+            nchain += 1;
             Token *tk = PsP_adv(self);
             PsExpr *b = ps_expr(self->a, PE_BINARY, tk->pos);
             b->op = tk->kind;
@@ -2020,12 +2030,14 @@ static PsExpr *PsP_parse_cmp(PsP *self) {
             b->rhs = PsP_parse_coalesce(self);
             e = b;
         } else if (k == TK_IN) {
+            nchain += 1;
             Token *tk2 = PsP_adv(self);
             PsExpr *m = ps_expr(self->a, PE_IN, tk2->pos);
             m->lhs = e;
             m->rhs = PsP_parse_coalesce(self);
             e = m;
         } else if (k == TK_IS) {
+            nchain += 1;
             Token *tk3 = PsP_adv(self);
             PsExpr *idn = ps_expr(self->a, PE_IS, tk3->pos);
             idn->op = (PsP_accept(self, TK_NOT) ? TK_NOT : TK_EOF);
@@ -2033,6 +2045,7 @@ static PsExpr *PsP_parse_cmp(PsP *self) {
             idn->rhs = PsP_parse_coalesce(self);
             e = idn;
         } else if (k == TK_NOT && PsP_pk1(self)->kind == TK_IN) {
+            nchain += 1;
             Token *tk4 = PsP_adv(self);
             PsP_adv(self);
             PsExpr *nm = ps_expr(self->a, PE_IN, tk4->pos);
@@ -2163,6 +2176,7 @@ static PsExpr *PsP_parse_list_or_comprehension(PsP *self) {
 static PsExpr *PsP_finish_comprehension(PsP *self, Pos pos, PsExpr *elem, TokKind close) {
     PsP_expect(self, TK_FOR, "comprehension");
     PsExpr *e = ps_expr(self->a, PE_COMPREHEND, pos);
+    e->op = close;
     e->lhs = elem;
     e->var = PsP_expect(self, TK_IDENT, "comprehension variable")->text;
     PsP_expect(self, TK_IN, "comprehension");
@@ -2185,6 +2199,9 @@ static PsExpr *PsP_parse_dict_or_set(PsP *self) {
         PsExpr *pair = ps_expr(self->a, PE_DESIG, first->pos);
         pair->lhs = first;
         pair->rhs = val;
+        if (PsP_at(self, TK_FOR)) {
+            return PsP_finish_comprehension(self, pos, pair, TK_RBRACE);
+        }
         Vec_pPsExpr items;
         Vec_pPsExpr_init(&items);
         Vec_pPsExpr_push(&items, pair);
@@ -2421,10 +2438,35 @@ static PsBlock *PsP_parse_block(PsP *self) {
     return b;
 }
 
+static void PsP_refuse_python(PsP *self) {
+    Token *tk = PsP_pk(self);
+    if (tk->kind == TK_DEF) {
+        fatal_at(self->file, tk->pos, "a function inside a function does not exist here (5.4): there is no capture, so it could not read this one's locals anyway — write it at the top level and pass what it needs, or use a `lambda` for a callback");
+    }
+    if (tk->kind != TK_IDENT) {
+        return;
+    }
+    const char *n = tk->text;
+    TokKind nx = PsP_pk1(self)->kind;
+    if (strcmp(n, "class") == 0 && nx == TK_IDENT) {
+        fatal_at(self->file, tk->pos, "there is no `class` (5.3): the fields come from `record` or `struct`, and behaviour is a function that takes the object — a `struct` may carry methods, and a `trait` says what a type implements");
+    }
+    if (strcmp(n, "yield") == 0 && nx != TK_ASSIGN && nx != TK_COLON) {
+        fatal_at(self->file, tk->pos, "there is no `yield`, because there are no generators: a function returns once, and the thing that suspends and resumes is an `async def` with `await` (35.1)");
+    }
+    if (strcmp(n, "del") == 0 && nx != TK_ASSIGN && nx != TK_COLON) {
+        fatal_at(self->file, tk->pos, "there is no `del`: a dict removes with `d.remove(k)`, a list with `xs.remove_at(i)`, and a variable lives to the end of its scope — the collector decides when the object goes (4.2)");
+    }
+    if (strcmp(n, "except") == 0 && (nx == TK_COLON || nx == TK_IDENT)) {
+        fatal_at(self->file, tk->pos, "the clause is spelled `catch e:` here, not `except` (5.1): there is one error type and no hierarchy to filter by, so there is nothing to name between the two");
+    }
+}
+
 static PsStmt *PsP_parse_stmt(PsP *self) {
     if (PsP_at(self, TK_INDENT)) {
         fatal_at(self->file, PsP_pk(self)->pos, "unexpected indentation");
     }
+    PsP_refuse_python(self);
     switch (PsP_pk(self)->kind) {
         case TK_IF: {
             return PsP_parse_if(self);
@@ -2434,6 +2476,9 @@ static PsStmt *PsP_parse_stmt(PsP *self) {
             PsStmt *s = ps_stmt(self->a, PS_WHILE, pos);
             s->cond = PsP_parse_expr(self);
             s->body = PsP_parse_block(self);
+            if (PsP_at(self, TK_ELSE)) {
+                fatal_at(self->file, PsP_pk(self)->pos, "a loop has no `else` here: Python's runs when the loop ended without a `break`, and the same thing is a bool set before the loop and checked after it");
+            }
             return s;
         }
         case TK_FOR: {
@@ -2483,6 +2528,9 @@ static PsStmt *PsP_parse_stmt(PsP *self) {
         }
     }
     PsStmt *s2 = PsP_parse_simple_stmt(self);
+    if (PsP_at(self, TK_COMMA)) {
+        fatal_at(self->file, PsP_pk(self)->pos, "unpacking an assignment (`a, b = ...`) is not implemented yet: the tuple type and literal parse, the multiple binding does not — assign once and index, or return a `record`");
+    }
     if (self->blocked) {
         self->blocked = 0;
     } else {
@@ -2641,6 +2689,9 @@ static PsStmt *PsP_parse_for(PsP *self) {
     PsP_expect(self, TK_IN, "for");
     s->iter = PsP_parse_expr(self);
     s->body = PsP_parse_block(self);
+    if (PsP_at(self, TK_ELSE)) {
+        fatal_at(self->file, PsP_pk(self)->pos, "a loop has no `else` here: Python's runs when the loop ended without a `break`, and the same thing is a bool set before the loop and checked after it");
+    }
     return s;
 }
 
@@ -2702,6 +2753,9 @@ static PsStmt *PsP_parse_try(PsP *self) {
         s->finally_block = PsP_parse_block(self);
     }
     if (s->catch_block == NULL && s->finally_block == NULL) {
+        if (PsP_at(self, TK_IDENT) && strcmp(PsP_pk(self)->text, "except") == 0) {
+            fatal_at(self->file, PsP_pk(self)->pos, "the clause is spelled `catch e:` here, not `except` (5.1): there is one error type and no hierarchy to filter by");
+        }
         fatal_at(self->file, pos, "try needs a catch or a finally");
     }
     return s;

@@ -1520,17 +1520,25 @@ struct PsLow:
                 # when the language says it must not.
                 if self->lazy_depth > 0:
                     fatal_at(self->file, e->pos, "a comprehension inside a conditional or short-circuit operand is not compiled yet: it would be evaluated even when that side is not taken")
+                # a set or a dict comprehension accumulates into a PsDict —
+                # the same object a `{}` literal builds, so the element goes in
+                # through `ps_dict_put` instead of `ps_list_push`
+                ckind: PsTypeKind = e->type->kind
                 cn: const *char = self->a->printf("__cmp%d", self->tmp_ctr)
                 self->tmp_ctr += 1
                 cd3: *Stmt = st_new(self->a, ST_VAR, e->pos)
                 cd3->name = cn
-                cd3->type = ty_ptr(self->a, ty_name(self->a, "PsList"))
-                mkl: *Expr = self->call_rt("ps_list_new", e->pos)
-                self->push_arg(mkl, self->ctx_arg(e->pos))
-                self->push_arg(mkl, self->elem_size(e->type->inner, e->pos))
-                self->push_arg(mkl, ex_new(self->a, EX_TRUE if opt_is_ref(e->type->inner) else EX_FALSE, e->pos))
-                self->push_arg(mkl, self->num("0", e->pos))
-                cd3->init = mkl
+                if ckind == PT_LIST:
+                    cd3->type = ty_ptr(self->a, ty_name(self->a, "PsList"))
+                    mkl: *Expr = self->call_rt("ps_list_new", e->pos)
+                    self->push_arg(mkl, self->ctx_arg(e->pos))
+                    self->push_arg(mkl, self->elem_size(e->type->inner, e->pos))
+                    self->push_arg(mkl, ex_new(self->a, EX_TRUE if opt_is_ref(e->type->inner) else EX_FALSE, e->pos))
+                    self->push_arg(mkl, self->num("0", e->pos))
+                    cd3->init = mkl
+                else:
+                    cd3->type = ty_ptr(self->a, ty_name(self->a, "PsDict"))
+                    cd3->init = self->dict_new(e->type, e->pos)
                 self->pre.push(cd3)
                 # The element and the filter are lowered with a FRESH `pre`, so
                 # whatever they hoist — another comprehension, a temporary —
@@ -1540,20 +1548,39 @@ struct PsLow:
                 # would build the inner list outside the loop that defines `x`.
                 outer_pre: Vec<*Stmt> = self->pre
                 self->pre.init()
-                # the loop body: `if cond: __cmp.append(elem)`
-                slot2: *Expr = self->call_rt("ps_list_push", e->pos)
-                self->push_arg(slot2, self->ctx_arg(e->pos))
-                self->push_arg(slot2, self->ident(cn, e->pos))
-                ca3: *Expr = ex_new(self->a, EX_CAST, e->pos)
-                ca3->cast_type = ty_ptr(self->a, self->ty(e->type->inner))
-                ca3->lhs = slot2
-                de3: *Expr = ex_new(self->a, EX_UNARY, e->pos)
-                de3->op = TK_STAR
-                de3->lhs = ca3
-                push: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
-                push->lhs = de3
-                push->op = TK_ASSIGN
-                push->rhs = self->expr(e->lhs)
+                # the loop body: `if cond: __cmp.append(elem)`, or the put
+                # that a set or a dict does instead
+                push: *Stmt = None
+                if ckind == PT_LIST:
+                    slot2: *Expr = self->call_rt("ps_list_push", e->pos)
+                    self->push_arg(slot2, self->ctx_arg(e->pos))
+                    self->push_arg(slot2, self->ident(cn, e->pos))
+                    ca3: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                    ca3->cast_type = ty_ptr(self->a, self->ty(e->type->inner))
+                    ca3->lhs = slot2
+                    de3: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                    de3->op = TK_STAR
+                    de3->lhs = ca3
+                    push = st_new(self->a, ST_ASSIGN, e->pos)
+                    push->lhs = de3
+                    push->op = TK_ASSIGN
+                    push->rhs = self->expr(e->lhs)
+                elif ckind == PT_SET:
+                    sput: *Expr = self->call_rt("ps_dict_put", e->pos)
+                    self->push_arg(sput, self->ctx_arg(e->pos))
+                    self->push_arg(sput, self->ident(cn, e->pos))
+                    self->push_arg(sput, self->key_ptr(e->lhs, e->type->inner, e->pos))
+                    push = st_new(self->a, ST_EXPR, e->pos)
+                    push->expr = sput
+                else:
+                    dput: *Expr = self->call_rt("ps_dict_put", e->pos)
+                    self->push_arg(dput, self->ctx_arg(e->pos))
+                    self->push_arg(dput, self->ident(cn, e->pos))
+                    self->push_arg(dput, self->key_ptr(e->lhs->lhs, e->type->key, e->pos))
+                    push = st_new(self->a, ST_ASSIGN, e->pos)
+                    push->lhs = self->slot_val(dput, e->type->inner, e->pos)
+                    push->op = TK_ASSIGN
+                    push->rhs = self->coerce(e->type->inner, e->lhs->rhs)
                 inner2: Vec<*Stmt>
                 inner2.init()
                 if e->cond != None:
@@ -1594,7 +1621,25 @@ struct PsLow:
                 # needs can go on landing before the loop without reordering
                 # anything observable
                 self->for_body = lb
-                if e->rhs->type->kind == PT_LIST:
+                if e->rhs->kind == PE_CALL and e->rhs->lhs != None and e->rhs->lhs->kind == PE_NAME and strcmp(e->rhs->lhs->text, "range") == 0:
+                    # `range(...)` is not a value (there is no range object), so
+                    # this builds the counted loop P already has — the same
+                    # rename the `for` statement does
+                    rf: *Stmt = st_new(self->a, ST_FOR, e->pos)
+                    rf->var = ps_cname(self->a, e->var)
+                    rr2: *PsExpr = e->rhs
+                    if rr2->nargs == 1:
+                        rf->to = self->expr(rr2->args[0])
+                    else:
+                        rf->from = self->expr(rr2->args[0])
+                        rf->to = self->expr(rr2->args[1])
+                        if rr2->nargs == 3:
+                            rf->step = self->expr(rr2->args[2])
+                    rf->body = lb
+                    loop.push(rf)
+                elif e->rhs->type != None and e->rhs->type->kind == PT_STR:
+                    self->lower_str_for(fs, &loop)
+                elif e->rhs->type != None and e->rhs->type->kind == PT_LIST:
                     self->lower_list_for(fs, &loop)
                 else:
                     self->lower_dict_for(fs, &loop)

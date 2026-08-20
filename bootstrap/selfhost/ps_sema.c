@@ -2480,23 +2480,78 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             break;
         }
         case PE_COMPREHEND: {
-            PsType *sit = PsSema_check_expr(self, e->rhs);
-            if (sit == NULL || !(sit->kind == PT_LIST || sit->kind == PT_SET || sit->kind == PT_DICT)) {
-                fatal_at(self->file, e->pos, "a comprehension iterates a list, a dict or a set, not %s", ps_type_str(self->a, sit));
+            int cset = e->op == TK_RBRACE && e->lhs != NULL && e->lhs->kind != PE_DESIG;
+            int cdict = e->op == TK_RBRACE && e->lhs != NULL && e->lhs->kind == PE_DESIG;
+            int crange = e->rhs != NULL && e->rhs->kind == PE_CALL && e->rhs->lhs != NULL && e->rhs->lhs->kind == PE_NAME && strcmp(e->rhs->lhs->text, "range") == 0;
+            PsType *ivt = NULL;
+            if (crange) {
+                if (e->rhs->nargs < 1 || e->rhs->nargs > 3) {
+                    fatal_at(self->file, e->pos, "range() takes one, two or three arguments");
+                }
+                size_t ri;
+                for (ri = 0; ri < e->rhs->nargs; ri += 1) {
+                    PsSema_want(self, e->rhs->args[ri], PsSema_check_expr(self, e->rhs->args[ri]), ps_type(self->a, PT_INT, e->pos), "a bound of range()");
+                }
+                ivt = ps_type(self->a, PT_INT, e->pos);
+            } else {
+                PsType *sit = PsSema_check_expr(self, e->rhs);
+                if (sit == NULL || !(sit->kind == PT_LIST || sit->kind == PT_SET || sit->kind == PT_DICT || sit->kind == PT_STR)) {
+                    fatal_at(self->file, e->pos, "a comprehension iterates a list, a dict, a set, a string or a range, not %s", ps_type_str(self->a, sit));
+                }
+                if (sit->kind == PT_DICT) {
+                    ivt = sit->key;
+                } else if (sit->kind == PT_STR) {
+                    ivt = ps_type(self->a, PT_STR, e->pos);
+                } else {
+                    ivt = sit->inner;
+                }
             }
+            PsType *chint = self->hint;
+            int hit = chint != NULL && ((cdict && chint->kind == PT_DICT) || (cset && chint->kind == PT_SET) || (!cdict && !cset && chint->kind == PT_LIST));
             self->depth += 1;
-            PsSema_add_local(self, e->var, (sit->kind == PT_DICT ? sit->key : sit->inner), 1, 0);
+            PsSema_add_local(self, e->var, ivt, 1, 0);
             if (e->cond != NULL) {
                 PsSema_want(self, e->cond, PsSema_check_expr(self, e->cond), ps_type(self->a, PT_BOOL, e->pos), "a comprehension filter");
             }
-            PsType *elt = PsSema_check_expr(self, e->lhs);
+            PsType *elt = NULL;
+            PsType *cvt = NULL;
+            if (cdict) {
+                if (hit) {
+                    PsSema_check_want(self, e->lhs->lhs, chint->key, "a dict comprehension key");
+                    PsSema_check_want(self, e->lhs->rhs, chint->inner, "a dict comprehension value");
+                    elt = chint->key;
+                    cvt = chint->inner;
+                } else {
+                    elt = PsSema_check_expr(self, e->lhs->lhs);
+                    cvt = PsSema_check_expr(self, e->lhs->rhs);
+                }
+                PsSema_key_ok(self, elt, e->pos, "a dict comprehension key");
+            } else {
+                if (hit) {
+                    PsSema_check_want(self, e->lhs, chint->inner, "a comprehension element");
+                    elt = chint->inner;
+                } else {
+                    elt = PsSema_check_expr(self, e->lhs);
+                }
+                if (cset) {
+                    PsSema_key_ok(self, elt, e->pos, "a set element");
+                }
+            }
             PsSema_pop_scope(self);
             self->depth -= 1;
             if (elt == NULL || elt->kind == PT_VOID) {
                 fatal_at(self->file, e->pos, "a comprehension element has no value");
             }
-            PsType *cw = ps_type(self->a, PT_LIST, e->pos);
-            cw->inner = elt;
+            if (cdict && (cvt == NULL || cvt->kind == PT_VOID)) {
+                fatal_at(self->file, e->pos, "a dict comprehension value has no value");
+            }
+            PsType *cw = ps_type(self->a, (cdict ? PT_DICT : (cset ? PT_SET : PT_LIST)), e->pos);
+            if (cdict) {
+                cw->key = elt;
+                cw->inner = cvt;
+            } else {
+                cw->inner = elt;
+            }
             t = cw;
             break;
         }
@@ -3776,26 +3831,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2157_17 = e;
-                __with_2157_17->kind = PE_STR;
-                __with_2157_17->text = lit7;
-                __with_2157_17->lhs = NULL;
-                __with_2157_17->rhs = NULL;
-                __with_2157_17->args = NULL;
-                __with_2157_17->nargs = 0;
+                PsExpr *__with_2213_17 = e;
+                __with_2213_17->kind = PE_STR;
+                __with_2213_17->text = lit7;
+                __with_2213_17->lhs = NULL;
+                __with_2213_17->rhs = NULL;
+                __with_2213_17->args = NULL;
+                __with_2213_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2170_13 = e;
-            __with_2170_13->kind = PE_LOWERED;
-            __with_2170_13->low = ln7;
-            __with_2170_13->lhs = NULL;
-            __with_2170_13->rhs = NULL;
-            __with_2170_13->args = NULL;
-            __with_2170_13->nargs = 0;
+            PsExpr *__with_2226_13 = e;
+            __with_2226_13->kind = PE_LOWERED;
+            __with_2226_13->low = ln7;
+            __with_2226_13->lhs = NULL;
+            __with_2226_13->rhs = NULL;
+            __with_2226_13->args = NULL;
+            __with_2226_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4009,10 +4064,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2367_17 = &ns->quals[ns->nquals];
-                __with_2367_17->name = q;
-                __with_2367_17->orig = d->path;
-                __with_2367_17->ns = sub;
+                PsNsEnt *__with_2423_17 = &ns->quals[ns->nquals];
+                __with_2423_17->name = q;
+                __with_2423_17->orig = d->path;
+                __with_2423_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4025,10 +4080,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2379_21 = &ns->ents[ns->nents];
-                    __with_2379_21->name = local;
-                    __with_2379_21->orig = d->names[k];
-                    __with_2379_21->ns = sub;
+                    PsNsEnt *__with_2435_21 = &ns->ents[ns->nents];
+                    __with_2435_21->name = local;
+                    __with_2435_21->orig = d->names[k];
+                    __with_2435_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4389,10 +4444,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_2715_9 = e;
-        __with_2715_9->kind = PE_NAME;
-        __with_2715_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_2715_9->lhs = NULL;
+        PsExpr *__with_2771_9 = e;
+        __with_2771_9->kind = PE_NAME;
+        __with_2771_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_2771_9->lhs = NULL;
     }
     return 1;
 }

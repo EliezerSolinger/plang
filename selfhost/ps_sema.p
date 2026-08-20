@@ -990,22 +990,78 @@ struct PsSema:
                 sw->inner = et5
                 t = sw
             case PE_COMPREHEND:
-                # `[e for x in xs if c]` (8.1). The iterable is checked first,
-                # because it is what gives the loop variable its type.
-                sit: *PsType = self->check_expr(e->rhs)
-                if sit == None or sit->kind not in {PT_LIST, PT_SET, PT_DICT}:
-                    fatal_at(self->file, e->pos, "a comprehension iterates a list, a dict or a set, not %s", ps_type_str(self->a, sit))
+                # `[e for x in xs if c]` (8.1) — and the same over braces: a SET
+                # comprehension when the element is one expression, a DICT
+                # comprehension when it is `k: v`. Which of the three it is
+                # comes from the bracket the parser closed with, because `{...}`
+                # cannot tell a set from a dict by looking at the element alone.
+                cset: bool = e->op == TK_RBRACE and e->lhs != None and e->lhs->kind != PE_DESIG
+                cdict: bool = e->op == TK_RBRACE and e->lhs != None and e->lhs->kind == PE_DESIG
+                # The iterable is checked first, because it is what gives the
+                # loop variable its type — and `range(...)` is recognised by
+                # SHAPE here for the same reason it is in a `for` statement
+                # (there is no range object to hold, and `[i for i in
+                # range(n)]` is the most common comprehension there is).
+                crange: bool = e->rhs != None and e->rhs->kind == PE_CALL and e->rhs->lhs != None and e->rhs->lhs->kind == PE_NAME and strcmp(e->rhs->lhs->text, "range") == 0
+                ivt: *PsType = None
+                if crange:
+                    if e->rhs->nargs < 1 or e->rhs->nargs > 3:
+                        fatal_at(self->file, e->pos, "range() takes one, two or three arguments")
+                    for ri in range(e->rhs->nargs):
+                        self->want(e->rhs->args[ri], self->check_expr(e->rhs->args[ri]), ps_type(self->a, PT_INT, e->pos), "a bound of range()")
+                    ivt = ps_type(self->a, PT_INT, e->pos)
+                else:
+                    sit: *PsType = self->check_expr(e->rhs)
+                    if sit == None or sit->kind not in {PT_LIST, PT_SET, PT_DICT, PT_STR}:
+                        fatal_at(self->file, e->pos, "a comprehension iterates a list, a dict, a set, a string or a range, not %s", ps_type_str(self->a, sit))
+                    if sit->kind == PT_DICT:
+                        ivt = sit->key
+                    elif sit->kind == PT_STR:
+                        # 72.3: over a string the loop yields CHARACTERS
+                        ivt = ps_type(self->a, PT_STR, e->pos)
+                    else:
+                        ivt = sit->inner
+                # An annotation on what receives it wins over inference, the
+                # same way a list literal reads its element type from the
+                # variable it is assigned to.
+                chint: *PsType = self->hint
+                hit: bool = chint != None and ((cdict and chint->kind == PT_DICT) or (cset and chint->kind == PT_SET) or (not cdict and not cset and chint->kind == PT_LIST))
                 self->depth += 1
-                self->add_local(e->var, sit->key if sit->kind == PT_DICT else sit->inner, True, False)
+                self->add_local(e->var, ivt, True, False)
                 if e->cond != None:
                     self->want(e->cond, self->check_expr(e->cond), ps_type(self->a, PT_BOOL, e->pos), "a comprehension filter")
-                elt: *PsType = self->check_expr(e->lhs)
+                elt: *PsType = None
+                cvt: *PsType = None
+                if cdict:
+                    if hit:
+                        self->check_want(e->lhs->lhs, chint->key, "a dict comprehension key")
+                        self->check_want(e->lhs->rhs, chint->inner, "a dict comprehension value")
+                        elt = chint->key
+                        cvt = chint->inner
+                    else:
+                        elt = self->check_expr(e->lhs->lhs)
+                        cvt = self->check_expr(e->lhs->rhs)
+                    self->key_ok(elt, e->pos, "a dict comprehension key")
+                else:
+                    if hit:
+                        self->check_want(e->lhs, chint->inner, "a comprehension element")
+                        elt = chint->inner
+                    else:
+                        elt = self->check_expr(e->lhs)
+                    if cset:
+                        self->key_ok(elt, e->pos, "a set element")
                 self->pop_scope()
                 self->depth -= 1
                 if elt == None or elt->kind == PT_VOID:
                     fatal_at(self->file, e->pos, "a comprehension element has no value")
-                cw: *PsType = ps_type(self->a, PT_LIST, e->pos)
-                cw->inner = elt
+                if cdict and (cvt == None or cvt->kind == PT_VOID):
+                    fatal_at(self->file, e->pos, "a dict comprehension value has no value")
+                cw: *PsType = ps_type(self->a, PT_DICT if cdict else (PT_SET if cset else PT_LIST), e->pos)
+                if cdict:
+                    cw->key = elt
+                    cw->inner = cvt
+                else:
+                    cw->inner = elt
                 t = cw
             case PE_SLICE:
                 st4: *PsType = self->check_expr(e->lhs)

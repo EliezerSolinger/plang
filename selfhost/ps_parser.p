@@ -96,6 +96,7 @@ struct PsP:
     static def parse_postfix(self: *PsP) -> *PsExpr
     static def parse_primary(self: *PsP) -> *PsExpr
     static def parse_block(self: *PsP) -> *PsBlock
+    static def refuse_python(self: *PsP)
     static def parse_stmt(self: *PsP) -> *PsStmt
     static def parse_simple_stmt(self: *PsP) -> *PsStmt
     static def parse_if(self: *PsP) -> *PsStmt
@@ -394,6 +395,11 @@ struct PsP:
                     self->adv()
                     return ps_expr(self->a, PE_TUPLE, pos)
                 inner: *PsExpr = self->parse_expr()
+                if self->at(TK_FOR):
+                    # `(x for x in xs)` — a generator expression, which needs a
+                    # generator, which needs `yield`. Neither exists, and the
+                    # honest answer is the comprehension that does.
+                    fatal_at(self->file, self->pk()->pos, "there is no generator expression, because there are no generators: write the comprehension in brackets, `[x for x in xs]`, which builds the list in one go")
                 if self->at(TK_COMMA):
                     items: Vec<*PsExpr>
                     items.init()
@@ -654,9 +660,18 @@ struct PsP:
 
     static def parse_cmp(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_coalesce()
+        # How many comparisons have been read at THIS level. Python chains them
+        # — `0 <= i < n` means `0 <= i and i < n` — and reading the same line
+        # left-associatively gives `(0 <= i) < n`, which compares a bool with a
+        # number. That is a different program, so the second one is refused
+        # here with the rewrite in the message instead of being quietly taken.
+        nchain: i32 = 0
         while True:
             k: TokKind = self->pk()->kind
+            if nchain > 0 and (k in {TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE, TK_IN, TK_IS} or (k == TK_NOT and self->pk1()->kind == TK_IN)):
+                fatal_at(self->file, self->pk()->pos, "a comparison does not chain here: Python reads `a < b < c` as `a < b and b < c`, and reading it left to right would compare a bool with a number — write the `and`")
             if k in {TK_EQ, TK_NE, TK_LT, TK_LE, TK_GT, TK_GE}:
+                nchain += 1
                 tk: *Token = self->adv()
                 b: *PsExpr = ps_expr(self->a, PE_BINARY, tk->pos)
                 b->op = tk->kind
@@ -664,12 +679,14 @@ struct PsP:
                 b->rhs = self->parse_coalesce()
                 e = b
             elif k == TK_IN:
+                nchain += 1
                 tk2: *Token = self->adv()
                 m: *PsExpr = ps_expr(self->a, PE_IN, tk2->pos)
                 m->lhs = e
                 m->rhs = self->parse_coalesce()
                 e = m
             elif k == TK_IS:
+                nchain += 1
                 tk3: *Token = self->adv()
                 idn: *PsExpr = ps_expr(self->a, PE_IS, tk3->pos)
                 idn->op = TK_NOT if self->accept(TK_NOT) else TK_EOF
@@ -677,6 +694,7 @@ struct PsP:
                 idn->rhs = self->parse_coalesce()
                 e = idn
             elif k == TK_NOT and self->pk1()->kind == TK_IN:
+                nchain += 1
                 tk4: *Token = self->adv()
                 self->adv()
                 nm: *PsExpr = ps_expr(self->a, PE_IN, tk4->pos)
@@ -793,6 +811,11 @@ struct PsP:
     static def finish_comprehension(self: *PsP, pos: Pos, elem: *PsExpr, close: TokKind) -> *PsExpr:
         self->expect(TK_FOR, "comprehension")
         e: *PsExpr = ps_expr(self->a, PE_COMPREHEND, pos)
+        # WHICH bracket closed it is part of the meaning: `[...]` builds a list,
+        # `{...}` a set, and `{k: v ...}` a dict. Without this the brace forms
+        # both built a list, and `{x for x in xs}` gave back the duplicates it
+        # was written to remove.
+        e->op = close
         e->lhs = elem
         e->var = self->expect(TK_IDENT, "comprehension variable")->text
         self->expect(TK_IN, "comprehension")
@@ -813,6 +836,11 @@ struct PsP:
             pair: *PsExpr = ps_expr(self->a, PE_DESIG, first->pos)
             pair->lhs = first
             pair->rhs = val
+            if self->at(TK_FOR):
+                # `{k: v for x in xs}` — the pair IS the element, exactly as in
+                # a dict literal, and the closing brace plus the pair is what
+                # tells the sema this is a dict and not a set
+                return self->finish_comprehension(pos, pair, TK_RBRACE)
             items: Vec<*PsExpr>
             items.init()
             items.push(pair)
@@ -1034,9 +1062,36 @@ struct PsP:
         b->n = stmts.len
         return b
 
+    # ---------- the Python this language decided AGAINST ----------
+    # `class`, `yield`, `del` and `except` are not keywords here, so a program
+    # that uses them arrives at the parser as an ordinary identifier and comes
+    # out as "expected end of line, found identifier" — noise that says nothing
+    # about a decision somebody made on purpose. Every word below is a closed
+    # decision, and every one of them now says which.
+    #
+    # Each is recognised by what FOLLOWS it, so none of them stops being a
+    # usable name: `del = 1` is still a variable called `del`.
+    static def refuse_python(self: *PsP):
+        tk: *Token = self->pk()
+        if tk->kind == TK_DEF:
+            fatal_at(self->file, tk->pos, "a function inside a function does not exist here (5.4): there is no capture, so it could not read this one's locals anyway — write it at the top level and pass what it needs, or use a `lambda` for a callback")
+        if tk->kind != TK_IDENT:
+            return
+        n: const *char = tk->text
+        nx: TokKind = self->pk1()->kind
+        if strcmp(n, "class") == 0 and nx == TK_IDENT:
+            fatal_at(self->file, tk->pos, "there is no `class` (5.3): the fields come from `record` or `struct`, and behaviour is a function that takes the object — a `struct` may carry methods, and a `trait` says what a type implements")
+        if strcmp(n, "yield") == 0 and nx != TK_ASSIGN and nx != TK_COLON:
+            fatal_at(self->file, tk->pos, "there is no `yield`, because there are no generators: a function returns once, and the thing that suspends and resumes is an `async def` with `await` (35.1)")
+        if strcmp(n, "del") == 0 and nx != TK_ASSIGN and nx != TK_COLON:
+            fatal_at(self->file, tk->pos, "there is no `del`: a dict removes with `d.remove(k)`, a list with `xs.remove_at(i)`, and a variable lives to the end of its scope — the collector decides when the object goes (4.2)")
+        if strcmp(n, "except") == 0 and (nx == TK_COLON or nx == TK_IDENT):
+            fatal_at(self->file, tk->pos, "the clause is spelled `catch e:` here, not `except` (5.1): there is one error type and no hierarchy to filter by, so there is nothing to name between the two")
+
     static def parse_stmt(self: *PsP) -> *PsStmt:
         if self->at(TK_INDENT):
             fatal_at(self->file, self->pk()->pos, "unexpected indentation")
+        self->refuse_python()
         match self->pk()->kind:
             case TK_IF:
                 return self->parse_if()
@@ -1045,6 +1100,8 @@ struct PsP:
                 s: *PsStmt = ps_stmt(self->a, PS_WHILE, pos)
                 s->cond = self->parse_expr()
                 s->body = self->parse_block()
+                if self->at(TK_ELSE):
+                    fatal_at(self->file, self->pk()->pos, "a loop has no `else` here: Python's runs when the loop ended without a `break`, and the same thing is a bool set before the loop and checked after it")
                 return s
             case TK_FOR:
                 return self->parse_for()
@@ -1083,6 +1140,11 @@ struct PsP:
             case _:
                 pass
         s2: *PsStmt = self->parse_simple_stmt()
+        if self->at(TK_COMMA):
+            # `a, b = f()`. The tuple is decided (3.2, 38.2, 54.4) and the type
+            # and the literal parse, but unpacking an assignment is not built —
+            # so say that, instead of pointing at a comma.
+            fatal_at(self->file, self->pk()->pos, "unpacking an assignment (`a, b = ...`) is not implemented yet: the tuple type and literal parse, the multiple binding does not — assign once and index, or return a `record`")
         # a statement that ENDED IN A BLOCK (`t = async:` and its body) has no
         # newline left to eat: the block took the DEDENT and the line with it
         if self->blocked:
@@ -1223,6 +1285,11 @@ struct PsP:
         self->expect(TK_IN, "for")
         s->iter = self->parse_expr()
         s->body = self->parse_block()
+        if self->at(TK_ELSE):
+            # Python's `for/else` runs the else when the loop was not broken
+            # out of. It is not here, and a silent parse error is the worst way
+            # to say that — the rewrite is one flag.
+            fatal_at(self->file, self->pk()->pos, "a loop has no `else` here: Python's runs when the loop ended without a `break`, and the same thing is a bool set before the loop and checked after it")
         return s
 
     static def parse_match(self: *PsP) -> *PsStmt:
@@ -1279,6 +1346,8 @@ struct PsP:
         if self->accept(TK_FINALLY):
             s->finally_block = self->parse_block()
         if s->catch_block == None and s->finally_block == None:
+            if self->at(TK_IDENT) and strcmp(self->pk()->text, "except") == 0:
+                fatal_at(self->file, self->pk()->pos, "the clause is spelled `catch e:` here, not `except` (5.1): there is one error type and no hierarchy to filter by")
             fatal_at(self->file, pos, "try needs a catch or a finally")
         return s
 

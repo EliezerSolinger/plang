@@ -4,3 +4,12 @@ labels 2: n5 n6
 keys 2
 total 18
 pairs 0 3 5
+range 4: 0 30
+strided 3: 2 5 8
+chars 3: ac
+set 3: has2 True has9 False
+letters 3
+dict 3: 2 3
+squares 3: 9
+annotated 3
+order abbccc

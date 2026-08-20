@@ -3468,6 +3468,62 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
 
+## Bateria 92 — a varredura da especificação, e o que ela cobrou (2026-08-20)
+
+Pedido antigo seu, na 88: *"alem disso veja se implementamos toda a
+especificacao"*. Na hora foi respondido pela metade — os corpora mediram o que
+eles medem e os oráculos mediram o que o Python e o node sabem responder, e
+nenhum dos dois lê este documento. A varredura lê, decisão por decisão, e mora
+em `pscript/AUDIT.md`.
+
+**92.1 Nada de novo foi decidido aqui.** Tudo o que a varredura fechou era
+decisão já tomada e não cumprida; o que ela achou de aberto está listado como
+pergunta no fim do AUDIT, sem implementação nem palpite. Uma varredura que
+decide sozinha é a pior forma de decidir.
+
+**92.2 As três comprehensions, fechando a 8.1.** A 8.1 prometeu comprehension e
+`set`; o que existia era a de LISTA, e as outras duas formas do Python não
+davam erro honesto:
+
+  * `{x for x in xs}` **devolvia uma lista** — com as duplicatas que a chave de
+    set existe para tirar. Silenciosamente, e com a contagem certa para o
+    contêiner errado, que é pior que recusar. A causa era o parser jogar fora
+    QUAL fecho terminou a comprehension: as duas formas de chave viravam a
+    mesma árvore. Agora o fecho é parte do significado.
+  * `{k: v for x in xs}` não parseava.
+  * `[i for i in range(n)]` — a comprehension mais comum que existe — dizia
+    "unknown function 'range'", porque `range` só era reconhecido no `for`
+    statement. Agora é reconhecido pela FORMA nos dois lugares, pelo mesmo
+    motivo: não há objeto range para guardar, nunca houve.
+  * `[c for c in s]` sobre string também não ia; agora vai e itera caracteres,
+    fechando a 72.3 no outro lugar onde ela vale.
+
+**92.3 Nove diagnósticos que explicam uma DECISÃO em vez de acusar um token.**
+`class`, `yield`, `del` e `except` não são palavras reservadas aqui — então um
+programa que as usa chegava ao parser como identificador comum e saía como
+"expected end of line, found identifier", que não diz nada a quem vem do
+Python. Cada uma dessas é uma decisão fechada, e agora cada uma diz qual: a 5.3
+(`class`), a 5.4 (`def` dentro de `def`), a 17.4 (`yield` e a expressão
+geradora), a 5.1 (`except` é `catch`), o `else` de laço, o `del`, a comparação
+em cadeia e o desempacotamento.
+
+> **A comparação em cadeia merece nota**, porque é a única que era um erro de
+> semântica e não de vocabulário. `0 <= i < n` em Python é `0 <= i and i < n`;
+> lido da esquerda para a direita é `(0 <= i) < n`, que compara um bool com um
+> número. Antes disso a sema dizia "cannot order bool and int" — verdade, e
+> inútil. Agora o parser recusa a segunda comparação do mesmo nível e escreve o
+> `and` na mensagem.
+
+Cada palavra é reconhecida pelo que VEM DEPOIS, então nenhuma delas para de ser
+um nome usável: `del = 3` continua sendo uma variável chamada `del`, e isso tem
+teste (`tests/pscript/bad/py_word_names`).
+
+**92.4 O que a varredura achou e NÃO fechou** — as quatro estão no fim do
+AUDIT, com o que cada uma custa: o `print` de um contêiner (que é promessa
+pública e portanto sua), a tupla no pscript (meio caminho entre decidida e
+tirada), o `poll()` onde a 18.4 disse `epoll`/`kqueue`, e o `pscript run` com
+cache (6.3/15.3/16.2), que continua sendo `plangc` mais `cc` à mão.
+
 ## Bateria 91 — 4.4 respondida: o dict itera em ordem de INSERÇÃO (2026-08-20)
 
 Sua resposta: *"implemente. eu concordo."*

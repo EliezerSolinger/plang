@@ -56,3 +56,37 @@ for k in d:
     vs += d[k]
 print(ks, vs, len(d))
 print("a" in d, "q" in d, d["a"])
+
+# ---- the three comprehensions, against Python ----
+# `{x for x in xs}` reading as a LIST is the kind of divergence only an oracle
+# catches: the count was right for the wrong container.
+#
+# The lists are joined by hand on both sides because printing a CONTAINER has
+# no decided representation here yet (44.3 covers struct/record/enum, not
+# `[1, 2, 3]`), and an oracle is no place to invent one.
+src = [3, 1, 2, 3, 1]
+
+
+def shows(xs: list<int>) -> str:
+    out = ""
+    for v in xs:
+        out += str(v) + ","
+    return out
+
+
+print("list", shows([v * 2 for v in src]))
+uniq = {v for v in src}
+print("set size", len(uniq))
+sizes = {w: len(w) for w in ["a", "bb", "ccc"]}
+ks = ""
+vs = 0
+for k in sizes:
+    ks += k
+    vs += sizes[k]
+print("dict", ks, vs)
+print("range", shows([i for i in range(2, 11, 4)]))
+print("filtered", shows([i for i in range(10) if i % 3 == 0]))
+cs = ""
+for c in [c for c in "hi"]:
+    cs += c + ","
+print("chars", cs)

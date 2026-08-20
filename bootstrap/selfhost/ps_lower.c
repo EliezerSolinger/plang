@@ -1797,33 +1797,58 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             if (self->lazy_depth > 0) {
                 fatal_at(self->file, e->pos, "a comprehension inside a conditional or short-circuit operand is not compiled yet: it would be evaluated even when that side is not taken");
             }
+            PsTypeKind ckind = e->type->kind;
             const char *cn = Arena_printf(self->a, "__cmp%d", self->tmp_ctr);
             self->tmp_ctr += 1;
             Stmt *cd3 = st_new(self->a, ST_VAR, e->pos);
             cd3->name = cn;
-            cd3->type = ty_ptr(self->a, ty_name(self->a, "PsList"));
-            Expr *mkl = PsLow_call_rt(self, "ps_list_new", e->pos);
-            PsLow_push_arg(self, mkl, PsLow_ctx_arg(self, e->pos));
-            PsLow_push_arg(self, mkl, PsLow_elem_size(self, e->type->inner, e->pos));
-            PsLow_push_arg(self, mkl, ex_new(self->a, (opt_is_ref(e->type->inner) ? EX_TRUE : EX_FALSE), e->pos));
-            PsLow_push_arg(self, mkl, PsLow_num(self, "0", e->pos));
-            cd3->init = mkl;
+            if (ckind == PT_LIST) {
+                cd3->type = ty_ptr(self->a, ty_name(self->a, "PsList"));
+                Expr *mkl = PsLow_call_rt(self, "ps_list_new", e->pos);
+                PsLow_push_arg(self, mkl, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, mkl, PsLow_elem_size(self, e->type->inner, e->pos));
+                PsLow_push_arg(self, mkl, ex_new(self->a, (opt_is_ref(e->type->inner) ? EX_TRUE : EX_FALSE), e->pos));
+                PsLow_push_arg(self, mkl, PsLow_num(self, "0", e->pos));
+                cd3->init = mkl;
+            } else {
+                cd3->type = ty_ptr(self->a, ty_name(self->a, "PsDict"));
+                cd3->init = PsLow_dict_new(self, e->type, e->pos);
+            }
             Vec_pStmt_push(&self->pre, cd3);
             Vec_pStmt outer_pre = self->pre;
             Vec_pStmt_init(&self->pre);
-            Expr *slot2 = PsLow_call_rt(self, "ps_list_push", e->pos);
-            PsLow_push_arg(self, slot2, PsLow_ctx_arg(self, e->pos));
-            PsLow_push_arg(self, slot2, PsLow_ident(self, cn, e->pos));
-            Expr *ca3 = ex_new(self->a, EX_CAST, e->pos);
-            ca3->cast_type = ty_ptr(self->a, PsLow_ty(self, e->type->inner));
-            ca3->lhs = slot2;
-            Expr *de3 = ex_new(self->a, EX_UNARY, e->pos);
-            de3->op = TK_STAR;
-            de3->lhs = ca3;
-            Stmt *push = st_new(self->a, ST_ASSIGN, e->pos);
-            push->lhs = de3;
-            push->op = TK_ASSIGN;
-            push->rhs = PsLow_expr(self, e->lhs);
+            Stmt *push = NULL;
+            if (ckind == PT_LIST) {
+                Expr *slot2 = PsLow_call_rt(self, "ps_list_push", e->pos);
+                PsLow_push_arg(self, slot2, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, slot2, PsLow_ident(self, cn, e->pos));
+                Expr *ca3 = ex_new(self->a, EX_CAST, e->pos);
+                ca3->cast_type = ty_ptr(self->a, PsLow_ty(self, e->type->inner));
+                ca3->lhs = slot2;
+                Expr *de3 = ex_new(self->a, EX_UNARY, e->pos);
+                de3->op = TK_STAR;
+                de3->lhs = ca3;
+                push = st_new(self->a, ST_ASSIGN, e->pos);
+                push->lhs = de3;
+                push->op = TK_ASSIGN;
+                push->rhs = PsLow_expr(self, e->lhs);
+            } else if (ckind == PT_SET) {
+                Expr *sput = PsLow_call_rt(self, "ps_dict_put", e->pos);
+                PsLow_push_arg(self, sput, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, sput, PsLow_ident(self, cn, e->pos));
+                PsLow_push_arg(self, sput, PsLow_key_ptr(self, e->lhs, e->type->inner, e->pos));
+                push = st_new(self->a, ST_EXPR, e->pos);
+                push->expr = sput;
+            } else {
+                Expr *dput = PsLow_call_rt(self, "ps_dict_put", e->pos);
+                PsLow_push_arg(self, dput, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, dput, PsLow_ident(self, cn, e->pos));
+                PsLow_push_arg(self, dput, PsLow_key_ptr(self, e->lhs->lhs, e->type->key, e->pos));
+                push = st_new(self->a, ST_ASSIGN, e->pos);
+                push->lhs = PsLow_slot_val(self, dput, e->type->inner, e->pos);
+                push->op = TK_ASSIGN;
+                push->rhs = PsLow_coerce(self, e->type->inner, e->lhs->rhs);
+            }
             Vec_pStmt inner2;
             Vec_pStmt_init(&inner2);
             if (e->cond != NULL) {
@@ -1864,7 +1889,24 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             Vec_pStmt loop;
             Vec_pStmt_init(&loop);
             self->for_body = lb;
-            if (e->rhs->type->kind == PT_LIST) {
+            if (e->rhs->kind == PE_CALL && e->rhs->lhs != NULL && e->rhs->lhs->kind == PE_NAME && strcmp(e->rhs->lhs->text, "range") == 0) {
+                Stmt *rf = st_new(self->a, ST_FOR, e->pos);
+                rf->var = ps_cname(self->a, e->var);
+                PsExpr *rr2 = e->rhs;
+                if (rr2->nargs == 1) {
+                    rf->to = PsLow_expr(self, rr2->args[0]);
+                } else {
+                    rf->from = PsLow_expr(self, rr2->args[0]);
+                    rf->to = PsLow_expr(self, rr2->args[1]);
+                    if (rr2->nargs == 3) {
+                        rf->step = PsLow_expr(self, rr2->args[2]);
+                    }
+                }
+                rf->body = lb;
+                Vec_pStmt_push(&loop, rf);
+            } else if (e->rhs->type != NULL && e->rhs->type->kind == PT_STR) {
+                PsLow_lower_str_for(self, fs, &loop);
+            } else if (e->rhs->type != NULL && e->rhs->type->kind == PT_LIST) {
                 PsLow_lower_list_for(self, fs, &loop);
             } else {
                 PsLow_lower_dict_for(self, fs, &loop);
