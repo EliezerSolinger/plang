@@ -5219,7 +5219,7 @@ static void PsLow_lower_dict_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     dd->type = ty_ptr(self->a, ty_name(self->a, "PsDict"));
     dd->init = PsLow_expr(self, s->iter);
     Vec_pStmt_push(out, dd);
-    Expr *cap = PsLow_call_rt(self, "ps_dict_cap", s->pos);
+    Expr *cap = PsLow_call_rt(self, "ps_dict_nent", s->pos);
     PsLow_push_arg(self, cap, PsLow_ident(self, dn, s->pos));
     Stmt *fr = st_new(self->a, ST_FOR, s->pos);
     fr->var = iv;

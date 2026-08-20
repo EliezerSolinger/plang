@@ -1,0 +1,8 @@
+zebra apple mango 
+zebra apple mango  99
+zebra mango  2
+zebra mango apple  3
+grew in order: True 300
+after deleting: 0 3 6 9 12  100 100
+new keys at the end: 327 328 329  130
+one two three  3

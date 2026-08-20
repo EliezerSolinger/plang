@@ -225,19 +225,37 @@ enum PsKeyKind:
     PS_K_BITS = 0      # int, bool, enum: hash the bits
     PS_K_STR = 1       # str: hash the bytes, compare by content
 
+# A COMPACT, INSERTION-ORDERED dict (4.4, answered 2026-08-20).
+#
+# The hash table does not hold the entries. It holds INDICES into a dense array
+# of entries kept in the order they were inserted — CPython's layout since 3.6,
+# and the reason iteration is ordered is that iteration simply walks that array.
+#
+# It also makes the dict SMALLER, which is the part that reads backwards until
+# you count it. Before: every one of `cap` slots carried a whole key and a whole
+# value, and the table runs at 3/4 load, so a quarter of that was empty air. Now
+# the sparse part is one integer per slot and only the dense part is the size of
+# the data, so nothing is duplicated and nothing is reserved twice.
+#
+# What it costs is one more indirection on lookup: hash to a slot, read the entry
+# number, then compare the key. That is the trade CPython took and the same one
+# is right here — a dict that iterates in a surprising order is a dict people
+# write bugs against.
 struct PsDict:
     obj: PsObj
-    n: i64          # live entries
-    used: i64       # live + tombstones, for the load factor
-    cap: i64        # slots, always a power of two
+    n: i64          # LIVE entries
+    nent: i64       # entries used, live plus dead: the dense array's high water
+    ecap: i64       # entries the dense arrays can hold
+    cap: i64        # hash slots, always a power of two
     ksize: i32
     vsize: i32      # 0 for a set
     kkind: i32
     kref: bool      # the key is a collected reference
     vref: bool
-    keys: *PsArr
-    vals: *PsArr
-    state: *PsArr   # one byte per slot: 0 empty, 1 live, 2 tombstone
+    index: *PsArr   # cap * i64: an entry number, or EMPTY / DEAD
+    keys: *PsArr    # ecap * ksize, DENSE and in insertion order
+    vals: *PsArr    # ecap * vsize
+    state: *PsArr   # one byte per ENTRY: 1 live, 0 dead
 
 # ---------- the shadow stack ----------
 # Henderson frame (49.4). The frame holds the ADDRESSES of the collected locals
@@ -1052,7 +1070,7 @@ def ps_dict_get(ctx: *PsCtx, d: *PsDict, key: const *char, file: const *char, li
 def ps_dict_has(d: *PsDict, key: const *char) -> bool
 def ps_dict_del(d: *PsDict, key: const *char) -> bool
 # iteration: walk 0..cap and skip the slots that are not live
-def ps_dict_cap(d: *PsDict) -> i64
+def ps_dict_nent(d: *PsDict) -> i64
 def ps_dict_live(d: *PsDict, i: i64) -> bool
 def ps_dict_key_at(d: *PsDict, i: i64) -> *char
 def ps_dict_val_at(d: *PsDict, i: i64) -> *char

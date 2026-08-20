@@ -4879,7 +4879,9 @@ struct PsLow:
         dd->type = ty_ptr(self->a, ty_name(self->a, "PsDict"))
         dd->init = self->expr(s->iter)
         out->push(dd)
-        cap: *Expr = self->call_rt("ps_dict_cap", s->pos)
+        # the bound is the DENSE high water, so this walks the keys in the
+        # order they were inserted (4.4)
+        cap: *Expr = self->call_rt("ps_dict_nent", s->pos)
         self->push_arg(cap, self->ident(dn, s->pos))
         fr: *Stmt = st_new(self->a, ST_FOR, s->pos)
         fr->var = iv

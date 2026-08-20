@@ -614,7 +614,7 @@ def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void):
             d1: *PsDict = (*PsDict)(o)
             ps_ser_i64(s, ps_dict_len(d1))
             k1: i64 = 0
-            while k1 < ps_dict_cap(d1):
+            while k1 < ps_dict_nent(d1):
                 if ps_dict_live(d1, k1):
                     ps_ser_value(s, sh->inner, ps_dict_key_at(d1, k1))
                 k1 += 1
@@ -622,7 +622,7 @@ def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void):
             d2: *PsDict = (*PsDict)(o)
             ps_ser_i64(s, ps_dict_len(d2))
             k2: i64 = 0
-            while k2 < ps_dict_cap(d2):
+            while k2 < ps_dict_nent(d2):
                 if ps_dict_live(d2, k2):
                     ps_ser_value(s, sh->key, ps_dict_key_at(d2, k2))
                     ps_ser_value(s, sh->inner, ps_dict_val_at(d2, k2))
@@ -3640,12 +3640,15 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
                     base[i] = ps_forward(to, base[i])
         case PS_TY_DICT:
             d: *PsDict = (*PsDict)(o)
+            d->index = (*PsArr)(ps_forward(to, (*PsObj)(d->index)))
             d->keys = (*PsArr)(ps_forward(to, (*PsObj)(d->keys)))
             d->vals = (*PsArr)(ps_forward(to, (*PsObj)(d->vals)))
             d->state = (*PsArr)(ps_forward(to, (*PsObj)(d->state)))
+            # ENTRIES, not slots: the dense array is where the keys and values
+            # live now, and `nent` is how far into it anything has been written
             if (d->kref or d->vref) and d->state != None:
                 stb: *char = (*char)(d->state) + sizeof(PsArr)
-                for i in range(i32(d->cap)):
+                for i in range(i32(d->nent)):
                     if stb[i] != 1:
                         continue
                     if d->kref:
@@ -3910,22 +3913,11 @@ static def ps_key_eq(d: *PsDict, a: const *char, b: const *char) -> bool:
         return ps_str_eq(*(**PsStr)(a), *(**PsStr)(b))
     return memcmp(a, b, usize(d->ksize)) == 0
 
-def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vref: bool) -> *PsDict:
-    d: *PsDict = ps_alloc(ctx, sizeof(PsDict), PS_TY_DICT)
-    d->n = 0
-    d->used = 0
-    d->cap = 0
-    d->ksize = ksize
-    d->vsize = vsize
-    d->kkind = kkind
-    d->kref = kref
-    d->vref = vref
-    d->keys = None
-    d->vals = None
-    d->state = None
-    ps_dict_rehash(ctx, d, 8)
-    return d
-
+# EMPTY and DEAD live in the index, not in a byte array of their own: a slot
+# either names an entry or says why it does not.
+# a raw byte array in the collected heap. Zeroed, because a field that is a
+# reference has to start as None or the collector would follow whatever was
+# there.
 static def ps_arr_new(ctx: *PsCtx, nbytes: usize) -> *PsArr:
     a: *PsArr = ps_alloc(ctx, sizeof(PsArr) + nbytes, PS_TY_ARR)
     a->nbytes = nbytes
@@ -3935,94 +3927,163 @@ static def ps_arr_new(ctx: *PsCtx, nbytes: usize) -> *PsArr:
 static def ps_arr_data(a: *PsArr) -> *char:
     return (*char)(a) + sizeof(PsArr)
 
-static def ps_dict_rehash(ctx: *PsCtx, d: *PsDict, ncap: i64):
+static const PS_IDX_EMPTY: const i64 = -1
+static const PS_IDX_DEAD: const i64 = -2
+
+static def ps_idx_at(d: *PsDict, i: i64) -> i64:
+    return *(*i64)(ps_arr_data(d->index) + usize(i) * sizeof(i64))
+
+static def ps_idx_set(d: *PsDict, i: i64, v: i64):
+    *(*i64)(ps_arr_data(d->index) + usize(i) * sizeof(i64)) = v
+
+# The slot for `key`. Answers the ENTRY it holds, or -1 when the key is not
+# there — and in that case `slot` comes back as the place to write it, which is
+# the first DEAD slot of the probe chain if there was one, so a table that has
+# been deleted from fills its holes instead of growing past them.
+static def ps_dict_find(d: *PsDict, key: const *char, ref slot: i64) -> i64:
+    mask: u64 = u64(d->cap) - 1
+    i: u64 = ps_key_hash(d, key) & mask
+    free: i64 = -1
+    while True:
+        e: i64 = ps_idx_at(d, i64(i))
+        if e == PS_IDX_EMPTY:
+            slot = i64(i) if free < 0 else free
+            return -1
+        if e == PS_IDX_DEAD:
+            if free < 0:
+                free = i64(i)
+        elif ps_key_eq(d, ps_arr_data(d->keys) + usize(e) * usize(d->ksize), key):
+            slot = i64(i)
+            return e
+        i = (i + 1) & mask
+
+# Rebuilds the index from nothing and COMPACTS the entries, keeping their order.
+# This is the only place a dead entry disappears, which is what keeps iteration
+# proportional to what is alive rather than to everything that ever was.
+#
+# Nothing here holds a collected pointer across a safe point: `ps_alloc` never
+# collects (that is the rule the whole moving collector rests on), so the old
+# arrays stay put while the new ones are built.
+static def ps_dict_rebuild(ctx: *PsCtx, d: *PsDict, ncap: i64, necap: i64):
     ok: *PsArr = d->keys
     ov: *PsArr = d->vals
     ost: *PsArr = d->state
-    ocap: i64 = d->cap
-    d->keys = ps_arr_new(ctx, usize(ncap) * usize(d->ksize))
-    d->vals = ps_arr_new(ctx, usize(ncap) * usize(d->vsize if d->vsize > 0 else 1))
-    d->state = ps_arr_new(ctx, usize(ncap))
+    onent: i64 = d->nent
+    d->index = ps_arr_new(ctx, usize(ncap) * sizeof(i64))
+    d->keys = ps_arr_new(ctx, usize(necap) * usize(d->ksize))
+    d->vals = ps_arr_new(ctx, usize(necap) * usize(d->vsize if d->vsize > 0 else 1))
+    d->state = ps_arr_new(ctx, usize(necap))
     d->cap = ncap
+    d->ecap = necap
+    d->nent = 0
     d->n = 0
-    d->used = 0
+    # a fresh array arrives zeroed and zero is a perfectly good entry number, so
+    # every slot has to be written as EMPTY on purpose
+    k: i64 = 0
+    while k < ncap:
+        ps_idx_set(d, k, PS_IDX_EMPTY)
+        k += 1
     if ost == None:
         return
-    ostate: *char = ps_arr_data(ost)
     okeys: *char = ps_arr_data(ok)
     ovals: *char = ps_arr_data(ov)
-    for i in range(i32(ocap)):
-        if ostate[i] != 1:
-            continue
-        kp: *char = okeys + usize(i) * usize(d->ksize)
-        slot: *char = ps_dict_put(ctx, d, kp)
-        if d->vsize > 0:
-            memcpy(slot, ovals + usize(i) * usize(d->vsize), usize(d->vsize))
+    ostate: *char = ps_arr_data(ost)
+    e: i64 = 0
+    while e < onent:
+        if ostate[e] == 1:
+            kp: *char = okeys + usize(e) * usize(d->ksize)
+            slot: i64 = 0
+            ps_dict_find(d, kp, ref slot)
+            ne: i64 = d->nent
+            memcpy(ps_arr_data(d->keys) + usize(ne) * usize(d->ksize), kp, usize(d->ksize))
+            if d->vsize > 0:
+                memcpy(ps_arr_data(d->vals) + usize(ne) * usize(d->vsize), ovals + usize(e) * usize(d->vsize), usize(d->vsize))
+            ps_arr_data(d->state)[ne] = 1
+            ps_idx_set(d, slot, ne)
+            d->nent = ne + 1
+            d->n += 1
+        e += 1
+
+def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vref: bool) -> *PsDict:
+    d: *PsDict = ps_alloc(ctx, sizeof(PsDict), PS_TY_DICT)
+    d->n = 0
+    d->nent = 0
+    d->ecap = 0
+    d->cap = 0
+    d->ksize = ksize
+    d->vsize = vsize
+    d->kkind = kkind
+    d->kref = kref
+    d->vref = vref
+    d->index = None
+    d->keys = None
+    d->vals = None
+    d->state = None
+    ps_dict_rebuild(ctx, d, 8, 6)
+    return d
 
 def ps_dict_len(d: *PsDict) -> i64:
     return d->n
 
-# finds the slot for `key`: the live one that matches, or the first free one
-static def ps_dict_slot(d: *PsDict, key: const *char, ref found: bool) -> i64:
-    st: *char = ps_arr_data(d->state)
-    keys: *char = ps_arr_data(d->keys)
-    mask: u64 = u64(d->cap) - 1
-    i: u64 = ps_key_hash(d, key) & mask
-    first_free: i64 = -1
-    while True:
-        s: char = st[i]
-        if s == 0:
-            found = False
-            return i64(i) if first_free < 0 else first_free
-        if s == 2:
-            if first_free < 0:
-                first_free = i64(i)
-        elif ps_key_eq(d, keys + usize(i) * usize(d->ksize), key):
-            found = True
-            return i64(i)
-        i = (i + 1) & mask
-
 def ps_dict_put(ctx: *PsCtx, d: *PsDict, key: const *char) -> *char:
-    if (d->used + 1) * 4 >= d->cap * 3:      # load factor 3/4
-        ps_dict_rehash(ctx, d, d->cap * 2)
-    found: bool = False
-    i: i64 = ps_dict_slot(d, key, ref found)
-    st: *char = ps_arr_data(d->state)
-    if not found:
-        memcpy(ps_arr_data(d->keys) + usize(i) * usize(d->ksize), key, usize(d->ksize))
-        if st[i] == 0:
-            d->used += 1
-        st[i] = 1
+    # Two things can be full: the dense array of entries, and the index at its
+    # 3/4 load. Either one rebuilds — and the rebuild only GROWS when it is the
+    # live set that filled the table. A table full of dead entries is compacted
+    # in place, which is what keeps delete-and-reinsert from growing for ever.
+    if d->nent + 1 > d->ecap or (d->nent + 1) * 4 >= d->cap * 3:
+        ncap: i64 = d->cap
+        while (d->n + 1) * 4 >= ncap * 3:
+            ncap = ncap * 2
+        necap: i64 = ncap * 3 / 4
+        if necap < 6:
+            necap = 6
+        ps_dict_rebuild(ctx, d, ncap, necap)
+    slot: i64 = 0
+    e: i64 = ps_dict_find(d, key, ref slot)
+    if e < 0:
+        e = d->nent
+        memcpy(ps_arr_data(d->keys) + usize(e) * usize(d->ksize), key, usize(d->ksize))
+        ps_arr_data(d->state)[e] = 1
+        ps_idx_set(d, slot, e)
+        d->nent = e + 1
         d->n += 1
     if d->vsize == 0:
         return None
-    return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+    return ps_arr_data(d->vals) + usize(e) * usize(d->vsize)
 
 def ps_dict_get(ctx: *PsCtx, d: *PsDict, key: const *char, file: const *char, line: i32) -> *char:
-    found: bool = False
-    i: i64 = ps_dict_slot(d, key, ref found)
-    if not found:
+    slot: i64 = 0
+    e: i64 = ps_dict_find(d, key, ref slot)
+    if e < 0:
         # a missing key RAISES (5.2); `get(k, default)` is the other idiom
         ps_raise(ctx, "key not found", PS_CAT_KEY, file, line)
         return ps_arr_data(d->vals)
-    return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+    return ps_arr_data(d->vals) + usize(e) * usize(d->vsize)
 
 def ps_dict_has(d: *PsDict, key: const *char) -> bool:
-    found: bool = False
-    ps_dict_slot(d, key, ref found)
-    return found
+    slot: i64 = 0
+    return ps_dict_find(d, key, ref slot) >= 0
 
 def ps_dict_del(d: *PsDict, key: const *char) -> bool:
-    found: bool = False
-    i: i64 = ps_dict_slot(d, key, ref found)
-    if not found:
+    slot: i64 = 0
+    e: i64 = ps_dict_find(d, key, ref slot)
+    if e < 0:
         return False
-    ps_arr_data(d->state)[i] = 2      # tombstone: the probe chain stays intact
+    # the slot becomes DEAD so the probe chain stays walkable, and the entry
+    # becomes dead so iteration skips it. The entry's room comes back at the
+    # next rebuild and not before — its key may still be somebody's reference
+    # until the collector says otherwise.
+    ps_idx_set(d, slot, PS_IDX_DEAD)
+    ps_arr_data(d->state)[e] = 0
     d->n -= 1
     return True
 
-def ps_dict_cap(d: *PsDict) -> i64:
-    return d->cap
+# ---------- iteration, which is where the order lives ----------
+# `nent` is the high water of the DENSE array, so walking 0..nent and skipping
+# what is dead visits the keys in the order they were inserted. That is the whole
+# implementation of the guarantee.
+def ps_dict_nent(d: *PsDict) -> i64:
+    return d->nent
 
 def ps_dict_live(d: *PsDict, i: i64) -> bool:
     return ps_arr_data(d->state)[i] == 1
@@ -4032,6 +4093,7 @@ def ps_dict_key_at(d: *PsDict, i: i64) -> *char:
 
 def ps_dict_val_at(d: *PsDict, i: i64) -> *char:
     return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+
 
 # ---------- strings ----------
 # counts codepoints in UTF-8: every byte that is not a continuation starts one

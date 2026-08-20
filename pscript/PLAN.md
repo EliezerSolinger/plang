@@ -2016,7 +2016,26 @@ referências do CPython nesse padrão exato — não é mais um defeito, é a tr
 - [ ] **Auditoria da especificação inteira**: varrer as 88 baterias contra a
       implementação, empiricamente e não pelo `[x]`.
 
-## Pendência de decisão ABERTA — 4.4, achada pelo oráculo (2026-08-20)
+## 4.4 RESPONDIDA e implementada — o dict itera em ordem de inserção (2026-08-20)
+
+Ver a bateria 91 do DESIGN para a decisão. O que ficou:
+
+- `PsDict` virou o dict COMPACTO: `index` (cap × i64, número da entrada ou
+  EMPTY/DEAD), `keys`/`vals`/`state` DENSOS em ordem de inserção, `nent` como
+  marca d'água. A iteração anda pelas entradas, então a ordem é a ordem.
+- `ps_dict_cap` virou `ps_dict_nent` — o nome importava, porque o espaço de
+  índices deixou de ser slot de hash e passou a ser entrada.
+- Reconstrução COMPACTA em ordem, e só cresce quando foi o conjunto VIVO que
+  encheu a tabela: uma tabela cheia de mortos é compactada no lugar.
+- O coletor encaminha `index` também, e percorre `nent` entradas em vez de `cap`
+  slots.
+- Bate com o Python nos três casos difíceis: reatribuir mantém a posição,
+  remover-e-reinserir vai para o fim, crescer não reordena.
+
+Gates: `tests/pscript/run/dictorder.psc` e o par do oráculo, que voltou a
+comparar a ordem.
+
+## (histórico) A pendência, como ela foi achada
 
 **A pergunta 4.4 do DESIGN nunca foi respondida, e a implementação respondeu por
 omissão.** "Iteração de dicionário preserva ordem de inserção?" — as opções eram
@@ -2035,10 +2054,9 @@ o `del` invalidar a entrada), a iteração passa a andar por essa lista, e o
 `rehash` a reconstrói compactando. É o desenho do dict compacto do CPython, e lá
 ele deixou o dict MENOR, não maior.
 
-**Não implementado de propósito: a decisão é sua.** Enquanto isso a divergência
-está VISÍVEL e não pulada — `tests/oracle/py/collections.psc` compara o que vale
-sob qualquer resposta (as chaves como conjunto, os valores, o tamanho) e diz no
-comentário por que a comparação ordenada está esperando.
+**Respondida em 2026-08-20 e implementada** — ver acima. Fica registrado como o
+achado apareceu: não foi alguém relendo o documento, foi um par de oráculo que
+divergiu, e a divergência não era bug nem escolha.
 
 ## Lacunas que o oráculo cobrou e foram implementadas (2026-08-20)
 

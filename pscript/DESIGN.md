@@ -3053,7 +3053,9 @@ ou isso é erro?
 > Consequência de (c): a linguagem passa a ter protocolo (`__hash__`, `__eq__`),
 > e todo tipo precisa responder por isso.
 
-**4.4 Iteração de dicionário preserva ordem de inserção?**
+**4.4 Iteração de dicionário preserva ordem de inserção?** **RESPONDIDA na
+bateria 91: (a), e é GARANTIA da linguagem** — implementada com o dict compacto
+do CPython (índices para um vetor denso na ordem de chegada).
 - (a) Sim, e é garantia da linguagem.
 - (b) Sim, mas é detalhe de implementação — não prometido.
 - (c) Não.
@@ -3443,6 +3445,57 @@ Na primeira execução faltavam `abs`, `min`, `max`, `str.replace`, `str.join` e
   * **`f() + g()` avaliava a esquerda duas vezes** — ver o PLAN, achado pelo
     placar de desempenho e não pelo oráculo, mas da mesma família: uma coisa que
     nenhum teste de saída pega porque a resposta não muda.
+
+## Bateria 91 — 4.4 respondida: o dict itera em ordem de INSERÇÃO (2026-08-20)
+
+Sua resposta: *"implemente. eu concordo."*
+
+**91.1 A resposta é (a): sim, e é GARANTIA da linguagem.** Não "sim mas é detalhe
+de implementação" — se não for garantia, um programa não pode se apoiar nela, e o
+motivo inteiro de responder sim é que os programas se apoiam.
+
+A pergunta estava aberta desde a quarta bateria e **a tabela hash tinha
+respondido (c) por não ter sido perguntada**. O oráculo do Python foi quem
+desenterrou isso: um par que iterava um dict divergiu, e a divergência não era
+bug nem escolha — era uma decisão que ninguém tomou.
+
+> **Por que sim.** O Python garante ordem de inserção desde a 3.7 e há uma década
+> de código que se apoia nisso: JSON que precisa voltar na ordem em que foi lido,
+> configuração, saída de teste. O `Map` do JS garante o mesmo. Uma linguagem que
+> diz "ergonomia de Python" e itera em ordem de hash surpreende exatamente onde
+> menos deveria — e a surpresa aparece como teste que passa na sua máquina e
+> falha na do outro, que é a pior forma dela.
+
+**91.2 Como, e por que isso deixa o dict MENOR.** A tabela hash deixa de guardar
+as entradas e passa a guardar ÍNDICES para um vetor DENSO de entradas na ordem em
+que chegaram — o layout do CPython desde a 3.6. A iteração anda por esse vetor, e
+é por isso que a ordem não é *mantida*: ela simplesmente É a ordem.
+
+O tamanho lê ao contrário até a gente contar. Antes: cada um dos `cap` slots
+carregava uma chave inteira e um valor inteiro, e a tabela roda a 3/4 de carga —
+um quarto daquilo era ar. Agora a parte esparsa é um inteiro por slot e só a
+parte densa tem o tamanho do dado. O que se paga é uma indireção a mais na busca:
+hash para o slot, lê o número da entrada, compara a chave. É a troca que o
+CPython fez e é a certa aqui pela mesma razão.
+
+**91.3 Os três casos onde uma implementação ingênua erra**, e os três batem com o
+Python exatamente:
+
+  * **reatribuir mantém a posição** — `d["z"] = 99` sobre um `z` que já existe é a
+    mesma entrada, não uma nova;
+  * **remover e reinserir manda para o FIM** — é uma entrada nova;
+  * **crescer não reordena.** A reconstrução COMPACTA as entradas na ordem em que
+    estão em vez de reespalhá-las por slots, o que também é o único lugar onde uma
+    entrada morta desaparece — e é isso que mantém a iteração proporcional ao que
+    está vivo, e não a tudo o que já esteve.
+
+Uma tabela cheia de entradas MORTAS é compactada no lugar, sem crescer. Sem isso,
+apagar-e-reinserir num laço cresceria para sempre.
+
+Gates: `tests/pscript/run/dictorder.psc` (os três casos, mais crescimento por
+várias reconstruções e um `set`, que é a mesma tabela sem valores) e
+`tests/oracle/py/collections.psc`, que agora compara a ORDEM contra o Python em
+vez de esperar pela decisão.
 
 ## Bateria 90 — o orçamento do coletor, e as flags do C (2026-08-20)
 
