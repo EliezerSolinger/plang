@@ -3536,8 +3536,9 @@ Então a escolha não é "valor ou objeto": é **quantos slots o frame registra*
   * **variável de módulo:** uma RAIZ por referência dentro (`ps_add_root(&__g->t._0)`)
     — mesma ideia, outro lugar;
   * **dentro de contêiner** (`list<(str, int)>`, que é o que `d.items()` como
-    valor precisa): falta. O `eref: bool` do contêiner precisa virar "eref ou um
-    ponteiro de percurso", e é um pedaço do coletor com estresse próprio;
+    valor precisa): o contêiner leva um **ponteiro de percurso** que o compilador
+    escreveu (`etrace` na lista, `vtrace` no dict) e o coletor anda DENTRO de
+    cada elemento em vez de segui-lo. Feito, com estresse;
   * **chave de dict:** continua pura. Hash e igualdade profundos são o mesmo
     percurso, e vêm com ele.
 
@@ -3547,6 +3548,28 @@ lista de 16 KB em vez de mil alocações de 40 bytes mais mil ponteiros; e
 
 O `==` de uma tupla com referência também espera esse percurso, e é recusado com
 a saída escrita na mensagem (comparar slot por slot).
+
+### 98.6 E `d.items()` como VALOR, que era o pagamento disso
+
+Com a tupla podendo guardar referência, `items()` deixou de ser forma especial:
+como valor ele é **a comprehension que alguém escreveria à mão** — `[(k, d[k])
+for k in d]` — construída na sema. Tudo o que vem depois (o laço, a tupla, a
+lista, o percurso que o coletor precisa) é máquina que já existia.
+
+As duas formas coexistem e cada uma é a melhor no seu caso: com DOIS nomes (`for
+k, v in d.items()`) o laço lê o dict direto e **não constrói lista nenhuma**; como
+valor, você tem a lista de pares para guardar, ordenar ou devolver.
+
+E a tupla imprime como o Python imprime — `('ada', 1)` — o que cai de graça do
+97: o número de slots é parte do TIPO, então o repr é concatenação decidida em
+compilação, sem laço, sem adaptador e sem função de runtime.
+
+> **Três coisas que o estresse do coletor achou nesse caminho**, todas do mesmo
+> tipo — um lugar onde as referências dentro de um valor não estavam registradas:
+> a variável de MÓDULO que é tupla (uma raiz por referência dentro), o corpo de
+> uma COMPREHENSION (que não tinha frame próprio, então a tupla que ele constrói
+> era invisível), e o contêiner criado pela comprehension (que não recebia o
+> percurso). Nenhuma das três aparece sem coletar em todo ponto seguro.
 
 ### 98.4 O que entrou agora, e o que ficou esperando o coletor
 

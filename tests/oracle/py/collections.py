@@ -113,3 +113,18 @@ print("board", len(board), board[(0, 0)], board[(2, 3)])
 k = (2, 3)
 print("by content", board[k], (2, 3) in board, (9, 9) in board)
 print("eq", (1, 2) == (1, 2), (1, 2) == (1, 3))
+
+# ---- items() como valor, e o repr de tupla (98.5/97) ----
+inv2 = {"pear": 4, "fig": 1}
+pr = list(inv2.items())
+print("items", len(pr))
+for p in pr:
+    print("pair", p[0], p[1])
+print("items repr", pr)
+print("tuple repr", (1, "two", 3.5))
+rows = []
+i = 0
+while i < 3:
+    rows.append((f"r{i}", i))
+    i += 1
+print("rows", rows)

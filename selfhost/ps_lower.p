@@ -184,6 +184,10 @@ struct PsLow:
                          #   each needs an adapter of its own, for the same
                          #   reason `sorted(key=)` does — only the call site
                          #   knows the element type, and the runtime sees bytes
+    tuptrs: Vec<*PsType>  # 98.5: tuple types that need an element TRACE, because
+                          #   they hold a reference and live inside a container:
+                          #   the collector walks INTO the element, and where the
+                          #   references are is what the compiler knows
     reprads: Vec<*PsType> # 97: rendering ONE element of a container. The runtime
                           #   moves bytes and knows nothing about them, so the
                           #   adapter is emitted per ELEMENT TYPE — deduped by
@@ -306,6 +310,10 @@ struct PsLow:
     static def tuple_record(self: *PsLow, t: *PsType) -> const *char
     static def option_record(self: *PsLow, inner: *PsType) -> const *char
     static def reprad_name(self: *PsLow, t: *PsType) -> const *char
+    static def tuptrace_name(self: *PsLow, t: *PsType) -> const *char
+    static def tuptrace_need(self: *PsLow, t: *PsType) -> const *char
+    static def with_etrace(self: *PsLow, mk: *Expr, et: *PsType, pos: Pos) -> *Expr
+    static def with_vtrace(self: *PsLow, mk: *Expr, vt: *PsType, pos: Pos) -> *Expr
     static def reprad_need(self: *PsLow, t: *PsType, depth: i32)
     static def reprad_add(self: *PsLow, t: *PsType, depth: i32)
     static def elem_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
@@ -1035,6 +1043,26 @@ struct PsLow:
         match t->kind:
             case PT_LIST, PT_SET, PT_DICT:
                 return self->repr_container(v, t, pos)
+            case PT_TUPLE:
+                # `('a', 1)` — the slot count is part of the TYPE, so the whole
+                # thing is concatenation decided at compile time: no loop, no
+                # adapter, no runtime helper. A string inside is quoted, like
+                # everywhere else inside something (97.1).
+                if depth > 3:
+                    return self->str_lit("(...)", pos)
+                out9: *Expr = self->str_lit("(", pos)
+                for i in range(t->nparams):
+                    if i > 0:
+                        out9 = self->str_cat(out9, self->str_lit(", ", pos), pos)
+                    fv9: *Expr = ex_new(self->a, EX_FIELD, pos)
+                    fv9->op = TK_DOT
+                    fv9->lhs = v
+                    fv9->field = self->a->printf("_%d", i)
+                    rs9: *Expr = self->repr_value(fv9, t->params[i], pos, depth + 1)
+                    if rs9 == None:
+                        return None
+                    out9 = self->str_cat(out9, rs9, pos)
+                return self->str_cat(out9, self->str_lit(")", pos), pos)
             case PT_STR:
                 # 97.1: INSIDE something, a string is quoted — `['a, b']` and
                 # `['a', 'b']` print the same without it, and one of the two is
@@ -1086,6 +1114,11 @@ struct PsLow:
                 name = "ps_str_from_float"
             case PT_BOOL:
                 name = "ps_str_from_bool"
+            case PT_TUPLE:
+                tr9: *Expr = self->repr_value(v, e->type, e->pos, 0)
+                if tr9 == None:
+                    fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type))
+                return tr9
             case PT_LIST, PT_SET, PT_DICT:
                 # 79.1: `str(b)` is how bytes become text, and it CHECKS —
                 # a `str` promises codepoints, so bytes that are not valid
@@ -1589,7 +1622,7 @@ struct PsLow:
                 asn: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
                 asn->op = TK_ASSIGN
                 asn->lhs = self->ident(ln, e->pos)
-                asn->rhs = mk
+                asn->rhs = self->with_etrace(mk, e->type->inner, e->pos)
                 asn->parened = True
                 chain: *Expr = asn
                 for i in range(e->nargs):
@@ -1622,7 +1655,7 @@ struct PsLow:
                 mk2: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
                 mk2->op = TK_ASSIGN
                 mk2->lhs = self->ident(dn, e->pos)
-                mk2->rhs = self->dict_new(e->type, e->pos)
+                mk2->rhs = self->dict_new(e->type, e->pos) if isset else self->with_vtrace(self->dict_new(e->type, e->pos), e->type->inner, e->pos)
                 mk2->parened = True
                 ch2: *Expr = mk2
                 for i in range(e->nargs):
@@ -1735,10 +1768,10 @@ struct PsLow:
                     self->push_arg(mkl, self->elem_size(e->type->inner, e->pos))
                     self->push_arg(mkl, ex_new(self->a, EX_TRUE if opt_is_ref(e->type->inner) else EX_FALSE, e->pos))
                     self->push_arg(mkl, self->num("0", e->pos))
-                    cd3->init = mkl
+                    cd3->init = self->with_etrace(mkl, e->type->inner, e->pos)
                 else:
                     cd3->type = ty_ptr(self->a, ty_name(self->a, "PsDict"))
-                    cd3->init = self->dict_new(e->type, e->pos)
+                    cd3->init = self->dict_new(e->type, e->pos) if ckind == PT_SET else self->with_vtrace(self->dict_new(e->type, e->pos), e->type->inner, e->pos)
                 self->pre.push(cd3)
                 # The element and the filter are lowered with a FRESH `pre`, so
                 # whatever they hoist — another comprehension, a temporary —
@@ -1806,9 +1839,11 @@ struct PsLow:
                     merged.push(body_pre.data[i])
                 for i in range(inner2.len):
                     merged.push(inner2.data[i])
-                lb: *Block = self->a->alloc(sizeof(Block))
-                lb->stmts = merged.data
-                lb->n = merged.len
+                # the comprehension's BODY gets its own frame, like any other
+                # block: what it declares — a bound temporary, or the tuple that
+                # `(k, d[k])` builds — has to be visible to the collector while
+                # the loop runs (98.5)
+                lb: *Block = self->frame_wrap(&merged, None, 0, e->pos)
                 # reuse the `for` lowering by building the statement it expects
                 fs: *PsStmt = ps_stmt(self->a, PS_FOR, e->pos)
                 fs->names = self->a->alloc(sizeof(*fs->names))
@@ -3208,7 +3243,7 @@ struct PsLow:
             asn: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
             asn->lhs = self->ident(ln, e->pos)
             asn->op = TK_ASSIGN
-            asn->rhs = mk
+            asn->rhs = self->with_etrace(mk, et, e->pos)
             self->pre.push(asn)
             for i in range(vidx, e->nargs):
                 self->subst_key = e->args[i]
@@ -3774,6 +3809,53 @@ struct PsLow:
     # and not a struct, because it is a value and holds only what T holds.
     # 97: the name of the adapter that renders one value of this type. Mangled
     # from the type, so the same type asked for twice is the same function.
+    # 98.5: the name of the walk-into-this-element function, and the note that
+    # one is needed. Deduped by the mangled type, like the repr adapter.
+    static def tuptrace_name(self: *PsLow, t: *PsType) -> const *char:
+        b: StrBuf = {0}
+        b.puts("__ps_tuptrace_")
+        self->mangle_type(&b, t)
+        n: const *char = self->a->strdup(b.data)
+        b.deinit()
+        return n
+
+    static def tuptrace_need(self: *PsLow, t: *PsType) -> const *char:
+        if t == None or t->kind != PT_TUPLE or tuple_is_pure(t):
+            return None
+        n: const *char = self->tuptrace_name(t)
+        seen: bool = False
+        for i in range(self->tuptrs.len):
+            if strcmp(self->tuptrace_name(self->tuptrs.data[i]), n) == 0:
+                seen = True
+        if not seen:
+            self->tuptrs.push(t)
+        return n
+
+    # `l = ps_list_etrace(ps_list_new(...), __ps_tuptrace_T)` — said in one
+    # expression, at the place the container is built, because that is the only
+    # place the element's shape is known.
+    static def with_etrace(self: *PsLow, mk: *Expr, et: *PsType, pos: Pos) -> *Expr:
+        n: const *char = self->tuptrace_need(et)
+        if n == None:
+            return mk
+        c: *Expr = self->call_rt("ps_list_etrace", pos)
+        self->push_arg(c, mk)
+        fn: *Expr = ex_new(self->a, EX_IDENT, pos)
+        fn->text = n
+        self->push_arg(c, fn)
+        return c
+
+    static def with_vtrace(self: *PsLow, mk: *Expr, vt: *PsType, pos: Pos) -> *Expr:
+        n: const *char = self->tuptrace_need(vt)
+        if n == None:
+            return mk
+        c: *Expr = self->call_rt("ps_dict_vtrace", pos)
+        self->push_arg(c, mk)
+        fn: *Expr = ex_new(self->a, EX_IDENT, pos)
+        fn->text = n
+        self->push_arg(c, fn)
+        return c
+
     static def reprad_name(self: *PsLow, t: *PsType) -> const *char:
         b: StrBuf = {0}
         b.puts("__ps_reprad_")
@@ -4017,6 +4099,18 @@ struct PsLow:
     # something already decided.
     static def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr:
         vt: PsTypeKind = e->args[0]->type->kind if e->args[0]->type != None else PT_UNKNOWN
+        if vt == PT_TUPLE:
+            # 97/98: a tuple in an f-string says what `print` says about it
+            tr8: *Expr = self->repr_value(self->expr(e->args[0]), e->args[0]->type, e->pos, 0)
+            if tr8 == None:
+                fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, e->args[0]->type))
+            ct8: *Expr = self->call_rt("ps_fmt_str", e->pos)
+            self->push_arg(ct8, self->ctx_arg(e->pos))
+            self->push_arg(ct8, tr8)
+            self->push_arg(ct8, self->expr(e->args[1]))
+            self->push_arg(ct8, self->chr(e->args[3], e->pos))
+            self->allocs = True
+            return ct8
         if vt == PT_LIST or vt == PT_SET or vt == PT_DICT:
             # 97: a container in an f-string says exactly what `print` says about
             # it — same text, one implementation. Width and alignment still
@@ -6285,6 +6379,16 @@ static def collect_lams_b(L: *PsLow, b: *PsBlock)
 static def collect_lams_e(L: *PsLow, e: *PsExpr):
     if e == None:
         return
+    # 98.5: a container whose ELEMENT is a tuple holding a reference needs the
+    # walk-into function, and the prototype has to exist before the body that
+    # names it — so the note is taken here, from the type of every expression.
+    if e->type != None:
+        et8: *PsType = None
+        if e->type->kind == PT_LIST or e->type->kind == PT_SET or e->type->kind == PT_ARRAY:
+            et8 = e->type->inner
+        elif e->type->kind == PT_DICT:
+            et8 = e->type->inner
+        L->tuptrace_need(et8)
     # 97: what a repr will need, registered BEFORE any body is lowered — C wants
     # the prototype first. The trigger points are exactly the three that reach
     # `to_str`: `print`, `str` and the f-string's `__fmt`.
@@ -6428,6 +6532,79 @@ static def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl
 # the only place that knows what they are, and it is where the difference
 # between a record (a VALUE in the array) and a struct (a REFERENCE in it)
 # lives.
+# `static void __ps_tuptrace_T(void *o, PsBlock *to)` — walk INTO one element
+# (98.5). A tuple that holds a reference is still a VALUE: it has no header, so
+# the collector cannot ask it anything; what it gets instead is this, which the
+# compiler wrote because only the compiler knows where the references are.
+static def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType, arrow: bool)
+
+static def lower_tuptrace(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
+    pf: *Func = L->a->alloc(sizeof(Func))
+    pf->pos = t->pos
+    pf->name = L->tuptrace_name(t)
+    pf->cname = pf->name
+    pf->is_static = True
+    pf->ret = ty_name(L->a, "void")
+    pf->params = L->a->alloc(usize(2) * sizeof(*pf->params))
+    pf->params[0].name = "__o"
+    pf->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    pf->params[0].pos = t->pos
+    pf->params[1].name = "__to"
+    pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsBlock"))
+    pf->params[1].pos = t->pos
+    pf->nparams = 2
+    d: *Decl = L->a->alloc(sizeof(Decl))
+    d->kind = DL_FUNC
+    d->pos = t->pos
+    d->func = pf
+    if not with_body:
+        return d
+    body: Vec<*Stmt>
+    body.init()
+    # `T *__t = __o;`
+    tn: const *char = L->tuple_record(t)
+    td: *Stmt = st_new(L->a, ST_VAR, t->pos)
+    td->name = "__t"
+    td->type = ty_ptr(L->a, ty_name(L->a, tn))
+    cst: *Expr = ex_new(L->a, EX_CAST, t->pos)
+    cst->cast_type = td->type
+    cst->lhs = L->ident("__o", t->pos)
+    td->init = cst
+    body.push(td)
+    tuptrace_fields(L, &body, L->ident("__t", t->pos), t, True)
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = body.data
+    b->n = body.len
+    pf->body = b
+    return d
+
+# one `x->_i = ps_forward(to, x->_i)` per reference, recursing into a tuple that
+# holds a tuple — the path is just longer
+static def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType, arrow: bool):
+    for i in range(t->nparams):
+        ft: *Type = L->ty(t->params[i])
+        fe: *Expr = ex_new(L->a, EX_FIELD, t->pos)
+        fe->op = TK_ARROW if arrow else TK_DOT
+        fe->lhs = base
+        fe->field = L->a->printf("_%d", i)
+        if L->is_collected(ft):
+            fw: *Expr = L->call_rt("ps_forward", t->pos)
+            L->push_arg(fw, L->ident("__to", t->pos))
+            oc: *Expr = ex_new(L->a, EX_CAST, t->pos)
+            oc->cast_type = ty_ptr(L->a, ty_name(L->a, "PsObj"))
+            oc->lhs = fe
+            L->push_arg(fw, oc)
+            bc: *Expr = ex_new(L->a, EX_CAST, t->pos)
+            bc->cast_type = ft
+            bc->lhs = fw
+            st: *Stmt = st_new(L->a, ST_ASSIGN, t->pos)
+            st->lhs = fe
+            st->op = TK_ASSIGN
+            st->rhs = bc
+            out->push(st)
+        elif t->params[i] != None and t->params[i]->kind == PT_TUPLE:
+            tuptrace_fields(L, out, fe, t->params[i], False)
+
 # `static PsStr *__ps_reprad_T(void *env, PsCtx *ctx, const void *ep)` — how the
 # runtime renders one element of a container (97). The element arrives by
 # POINTER because the runtime moves bytes; this is the only place that knows
@@ -8733,6 +8910,7 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.keyads.init()
     L.cmpads.init()
     L.reprads.init()
+    L.tuptrs.init()
     L.fnvals.init()
     L.nl_names.init()
     L.nl_done.init()
@@ -8905,6 +9083,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.out.push(lower_cmpad(&L, L.cmpads.data[i], i, False))
     for i in range(L.reprads.len):
         L.out.push(lower_reprad(&L, L.reprads.data[i], False))
+    for i in range(L.tuptrs.len):
+        L.out.push(lower_tuptrace(&L, L.tuptrs.data[i], False))
     for i in range(L.gmads.len):
         L.out.push(lower_gmad(&L, L.gmads.data[i], i, False))
     for i in range(L.fnvals.len):
@@ -9013,6 +9193,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     # is complete before any of them is written
     for i in range(L.reprads.len):
         L.out.push(lower_reprad(&L, L.reprads.data[i], True))
+    for i in range(L.tuptrs.len):
+        L.out.push(lower_tuptrace(&L, L.tuptrs.data[i], True))
     for i in range(L.gmads.len):
         L.out.push(lower_gmad(&L, L.gmads.data[i], i, True))
     for i in range(L.fnvals.len):

@@ -4136,6 +4136,17 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
                 # one collection and read whatever came next.
                 return
             l->data = (*PsArr)(ps_forward(to, (*PsObj)(l->data)))
+            if l->etrace != None and l->data != None:
+                # 98.5: the element is a VALUE with references INSIDE it — a
+                # tuple holding a `str` — so the walk goes into each one instead
+                # of following it. Only the live prefix: what is past `len` is
+                # not an element yet, and the bytes there are whatever the block
+                # had.
+                eb: *char = (*char)(l->data) + sizeof(PsArr)
+                ei: i64 = 0
+                while ei < l->len:
+                    l->etrace((*void)(eb + usize(ei) * usize(l->esize)), to)
+                    ei += 1
             if l->eref and l->data != None:
                 # elements that ARE references get forwarded one by one; a list
                 # of records holds bytes and there is nothing inside to follow
@@ -4150,7 +4161,7 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
             d->state = (*PsArr)(ps_forward(to, (*PsObj)(d->state)))
             # ENTRIES, not slots: the dense array is where the keys and values
             # live now, and `nent` is how far into it anything has been written
-            if (d->kref or d->vref) and d->state != None:
+            if (d->kref or d->vref or d->vtrace != None) and d->state != None:
                 stb: *char = (*char)(d->state) + sizeof(PsArr)
                 for i in range(i32(d->nent)):
                     if stb[i] != 1:
@@ -4161,6 +4172,9 @@ static def ps_scan_object(to: *PsBlock, o: *PsObj):
                     if d->vref:
                         vp: **PsObj = (**PsObj)((*char)(d->vals) + sizeof(PsArr) + usize(i) * usize(d->vsize))
                         *vp = ps_forward(to, *vp)
+                    elif d->vtrace != None:
+                        # 98.5: the value is a VALUE with references inside it
+                        d->vtrace((*void)((*char)(d->vals) + sizeof(PsArr) + usize(i) * usize(d->vsize)), to)
         case PS_TY_ARR:
             pass          # raw bytes: whoever owns it knows what is inside
         case PS_TY_DYN:
@@ -4317,12 +4331,26 @@ def ps_gc_resume(ctx: *PsCtx):
 # ---------- lists ----------
 static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64)
 
+# 98.5: "walk INTO each element", for a list whose element is a tuple holding a
+# reference. Returns the list so it can be said in one expression, where the
+# container is built.
+def ps_list_etrace(l: *PsList, fn: def(o: *void, to: *PsBlock)) -> *PsList:
+    if l != None:
+        l->etrace = fn
+    return l
+
+def ps_dict_vtrace(d: *PsDict, fn: def(o: *void, to: *PsBlock)) -> *PsDict:
+    if d != None:
+        d->vtrace = fn
+    return d
+
 def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList:
     l: *PsList = ps_alloc(ctx, sizeof(PsList), PS_TY_LIST)
     l->len = 0
     l->cap = 0
     l->esize = esize
     l->eref = eref
+    l->etrace = None
     l->data = None
     l->raw = None       # an ordinary list OWNS its bytes (18.3 borrows them)
     l->owner = None
@@ -4517,6 +4545,7 @@ def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vre
     d->ksize = ksize
     d->vsize = vsize
     d->kkind = kkind
+    d->vtrace = None
     d->kref = kref
     d->vref = vref
     d->index = None

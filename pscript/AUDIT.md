@@ -32,7 +32,7 @@ como pergunta.
 | 2.3 | reatribuir com outro tipo é erro, salvo `any` | **OK** — `tests/pscript/bad/coerce` |
 | 2.4 | `import` de `.ph` direto | **OK** — `tests/pscript/run/lib_*`, o porte do pstudio |
 | 3.1 | `list` sem parâmetro é `list<any>` | **REV** pela 27.3 (literal homogêneo infere o elemento) |
-| 3.2 | tuplas de primeira classe | **FALTA** (parcial: o TIPO `(int, int)` e o literal `(1, 2)` parseiam; `len`, índice e desempacotamento não existem) |
+| 3.2 | tuplas de primeira classe | **OK** — baterias 98.4/98.5/98.6: índice, `len`, desempacotamento, chave de dict, imutabilidade, referência dentro (ainda como VALOR), contêiner e `d.items()`. Falta o `==` de uma tupla com referência |
 | 3.3 | contêineres próprios com cabeçalho de GC | **OK** — `PsList`/`PsDict`/`PsStr` no runtime |
 | 3.4 | `s[3]` é o quarto CARACTERE | **OK** — conferido: `"áéíóu"[3]` é `ó` e `len` é 5 |
 | 4.1 | literal sem anotação vira `list<any>` | **REV** pela 27.3 |

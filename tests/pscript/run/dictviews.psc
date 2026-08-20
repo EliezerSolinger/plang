@@ -4,10 +4,11 @@
 COPY: a view into a dict that the collector moves would be an interior pointer
 into a moving object, which is the one thing 17.3 refuses.
 
-`items()` is different, and deliberately narrower than Python's: it exists only
-as the thing a `for k, v in ...` walks. As a value it would have to be a list of
-PAIRS, and the tuple is half-built (3.2) — so it says that instead of promising
-a type nobody can hold.
+`items()` is a real list of PAIRS since 98.5 — and the two forms coexist: with
+TWO names (`for k, v in d.items()`) the loop reads the dict directly and builds
+no list at all; as a VALUE it is the comprehension somebody would write by hand,
+and the tuple with a `str` in it is still a VALUE (no header), with the collector
+walking INTO the element.
 
 The async half of this file is here because of what it found: the dict loop did
 not honour the async frame, so `for k in d` inside an `async def` read a field
@@ -58,3 +59,15 @@ async def in_async() -> int:
 
 got = await in_async()
 print(f"returned {got}")
+
+
+# ---- `items()` como VALOR (98.5) ----
+pairs = d.items()
+print(f"pairs {len(pairs)}")
+for p in pairs:
+    print(f"pair {p[0]} {p[1]}")
+first = pairs[0]
+fk, fv = first
+print(f"first {fk} {fv}")
+# e ele imprime como o Python imprime
+print(pairs)

@@ -1386,11 +1386,42 @@ struct PsSema:
                     vl->inner = rt->inner
                     return vl
                 if strcmp(nm3, "items") == 0 and rt->kind == PT_DICT:
-                    # `items()` exists only where Python uses it: as the thing a
-                    # `for k, v in ...` walks. Making it a VALUE would need a
-                    # tuple, and the tuple is half-built (3.2) — promising a
-                    # pair type that cannot be held is worse than saying so.
-                    fatal_at(self->file, e->pos, "items() is only for `for k, v in d.items():` — as a value it would have to be a list of pairs, and the tuple is not built (3.2)")
+                    # 98.5: as a VALUE it is a list of PAIRS, and the tuple now
+                    # holds references — so this is exactly the comprehension
+                    # somebody would write by hand, built here. Everything
+                    # downstream (the loop, the tuple, the element trace the
+                    # collector needs) is machinery that already exists.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "items() takes no arguments")
+                    recv9: *PsExpr = e->lhs->lhs
+                    if recv9->kind != PE_NAME and recv9->kind != PE_FIELD:
+                        fatal_at(self->file, e->pos, "`items()` on something that is not a plain variable would evaluate it twice: put the dict in a variable first")
+                    kv9: const *char = self->a->printf("__it%d", self->counter)
+                    self->counter += 1
+                    knm: *PsExpr = ps_expr(self->a, PE_NAME, e->pos)
+                    knm->text = kv9
+                    vix: *PsExpr = ps_expr(self->a, PE_INDEX, e->pos)
+                    vix->lhs = recv9
+                    vix->rhs = knm
+                    pair: *PsExpr = ps_expr(self->a, PE_TUPLE, e->pos)
+                    pair->args = self->a->alloc(usize(2) * sizeof(*pair->args))
+                    pair->args[0] = knm
+                    pair->args[1] = vix
+                    pair->nargs = 2
+                    cmp9: *PsExpr = ps_expr(self->a, PE_COMPREHEND, e->pos)
+                    cmp9->op = TK_RBRACKET
+                    cmp9->var = kv9
+                    cmp9->lhs = pair
+                    cmp9->rhs = recv9
+                    with e:
+                        .kind = PE_COMPREHEND
+                        .op = TK_RBRACKET
+                        .var = kv9
+                        .lhs = pair
+                        .rhs = recv9
+                        .args = None
+                        .nargs = 0
+                    return self->check_expr(e)
                 fatal_at(self->file, e->pos, "a %s has %s so far", "dict" if rt->kind == PT_DICT else "set", "get, remove, keys, values and items() in a for" if rt->kind == PT_DICT else "add, remove, keys")
             if rt != None and rt->kind == PT_STR:
                 nm2: const *char = e->lhs->text
@@ -2199,7 +2230,7 @@ struct PsSema:
             # (44.3) — the same text `print` and `str()` give
             # ... and a CONTAINER through its own (97), which is the same text
             # again: one repr, three ways of asking for it
-            if vt2 == None or vt2->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_NAME, PT_LIST, PT_SET, PT_DICT}:
+            if vt2 == None or vt2->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_NAME, PT_LIST, PT_SET, PT_DICT, PT_TUPLE}:
                 fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, vt2))
             for i in range(1, 5):
                 self->check_expr(e->args[i])
@@ -4126,13 +4157,18 @@ struct PsSema:
                 # need a tuple to exist as a value, and the tuple is half-built
                 # (3.2). So the call never becomes a value — the sema replaces
                 # it with the dict and marks the loop.
-                if s->iter != None and s->iter->kind == PE_CALL and s->iter->lhs != None and s->iter->lhs->kind == PE_FIELD and strcmp(s->iter->lhs->text, "items") == 0:
+                if s->nnames == 2 and s->iter != None and s->iter->kind == PE_CALL and s->iter->lhs != None and s->iter->lhs->kind == PE_FIELD and strcmp(s->iter->lhs->text, "items") == 0:
                     dht: *PsType = self->check_expr(s->iter->lhs->lhs)
                     if dht != None and dht->kind == PT_DICT:
                         if s->iter->nargs != 0:
                             fatal_at(self->file, s->pos, "items() takes no arguments")
+                        # ONE name over `items()` is not an error any more:
+                        # since 98.5 `items()` is a real value (a list of pairs),
+                        # so `for p in d.items()` iterates the list and `p[0]`
+                        # works. Two names keep the shortcut below, which reads
+                        # the dict directly and builds no list at all.
                         if s->nnames != 2:
-                            fatal_at(self->file, s->pos, "`for k, v in d.items():` takes two variables — one name iterates the KEYS, which is `for k in d`")
+                            pass
                         s->iter = s->iter->lhs->lhs
                         s->iter->type = dht
                         s->is_pairs = True

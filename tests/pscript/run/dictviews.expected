@@ -8,3 +8,8 @@ sorted apple zebra, dict still zebra
 after remove 2, copy still 3
 async keys abc total 6 set 10
 returned 6
+pairs 2
+pair zebra 26
+pair mango 13
+first zebra 26
+[('zebra', 26), ('mango', 13)]

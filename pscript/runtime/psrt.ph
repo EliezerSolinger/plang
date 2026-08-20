@@ -221,6 +221,12 @@ struct PsList:
     cap: i64
     esize: i32      # bytes per element
     eref: bool      # elements are collected references, so the collector traces them
+    # 98.5: an element that is a VALUE with references inside it — a tuple that
+    # holds a `str`. The collector has to walk INTO the element instead of
+    # following it, and where the references are is compile-time data, so this is
+    # a function the compiler wrote. None for every other list, which is almost
+    # all of them, and costs a pointer.
+    etrace: def(o: *void, to: *PsBlock)
     data: *PsArr
     # A VIEW over a shared buffer (18.3): the elements are the buffer's bytes,
     # which live outside every heap and never move, so `data` stays empty and
@@ -267,6 +273,8 @@ struct PsDict:
     kkind: i32
     kref: bool      # the key is a collected reference
     vref: bool
+    vtrace: def(o: *void, to: *PsBlock)   # 98.5: a VALUE with references inside,
+                                          #   for the value half of the dict
     index: *PsArr   # cap * i64: an entry number, or EMPTY / DEAD
     keys: *PsArr    # ecap * ksize, DENSE and in insertion order
     vals: *PsArr    # ecap * vsize
@@ -1066,6 +1074,10 @@ def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr
 
 # ---------- lists ----------
 def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList
+# ... and the two that say "walk INTO the element" (98.5), set right after the
+# container is made because only the call site knows the element's shape
+def ps_list_etrace(l: *PsList, fn: def(o: *void, to: *PsBlock)) -> *PsList
+def ps_dict_vtrace(d: *PsDict, fn: def(o: *void, to: *PsBlock)) -> *PsDict
 def ps_list_len(l: *PsList) -> i64
 # base address of the elements. Valid until the next SAFE POINT, which is why
 # the lowering only ever uses it inside one statement.
