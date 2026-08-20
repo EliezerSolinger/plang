@@ -142,6 +142,15 @@ fi
 #                uma compilação, então o que se mede são COMPORTAMENTOS — que a
 #                segunda vez não chama o `cc`, que editar um módulo importado
 #                invalida, que o status de saída é o do programa.
+#   net-late     dado que chega DEPOIS que o leitor estacionou: dois PROCESSOS,
+#                porque com cliente na mesma thread é impossível reproduzir — o
+#                que ele faz acontece entre dois polls. Foi o que achou o laço
+#                drenando o socket e comendo a mensagem.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/net-late.sh >$V/netlate.log 2>&1; then
+    ok "net-late $(grep -oE '[0-9]+ ok' $V/netlate.log | tail -1)"
+else
+    bad "o dado que chega tarde se perdeu (veja $V/netlate.log)"
+fi
 if PLANGC=$PWD/$V/plangc_s2 bash tests/run-cmd.sh >$V/runcmd.log 2>&1; then
     ok "run-cmd $(grep -oE '[0-9]+ ok' $V/runcmd.log | tail -1)"
 else

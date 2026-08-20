@@ -3341,6 +3341,19 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         # milliseconds, which bounds the latency without an allocation on the
         # path that is supposed to be the cheap one
         fds: pollfd[PS_POLL_MAX]
+        # WHICH of these may be DRAINED, and it is not a detail: a pipe is
+        # drained because the byte in it is only a knock on the door, and a
+        # SOCKET must never be, because what is in a socket is the data the
+        # program is waiting for.
+        #
+        # It used to drain everything that fired. A server whose client sent
+        # after a pause therefore lost the message: the loop woke on the socket,
+        # read the bytes into a 64-byte scratch buffer, threw them away, and the
+        # `recv` that followed found nothing. Every test here hid it, because a
+        # client that sends immediately after connecting has its data waiting
+        # before the read is even issued — the syscall succeeds on the first try
+        # and the loop never parks on that descriptor.
+        drainable: bool[PS_POLL_MAX]
         k: i32 = 0
         anyio: bool = False
         t2: *PsTask = ctx->waiters
@@ -3350,6 +3363,7 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
                     fds[k].fd = t2->work->fd
                     fds[k].events = t2->work->events
                     fds[k].revents = 0
+                    drainable[k] = False     # a socket: the DATA is in there
                     k += 1
                 elif t2->is_io != 0:
                     anyio = True
@@ -3359,18 +3373,20 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
                         fds[k].fd = fd
                         fds[k].events = POLLIN
                         fds[k].revents = 0
+                        drainable[k] = True  # a queue's pipe: only a knock
                         k += 1
             t2 = t2->next
         if anyio and ctx->io_r >= 0 and k < PS_POLL_MAX:
             fds[k].fd = ctx->io_r
             fds[k].events = POLLIN
             fds[k].revents = 0
+            drainable[k] = True
             k += 1
         if nfd > PS_POLL_MAX and (ms < 0 or ms > 2):
             ms = 2
         poll(fds, u64(k), ms)
         for i in range(k):
-            if fds[i].revents != 0:
+            if fds[i].revents != 0 and drainable[i]:
                 ps_pipe_drain(fds[i].fd)
     elif ms > 0:
         ts2: timespec

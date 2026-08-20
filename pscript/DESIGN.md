@@ -3513,6 +3513,35 @@ função que devolve duas coisas para de precisar de um `record` só para isso.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 101 — o laço estava COMENDO o dado do socket (2026-08-20)
+
+Achado ao ir implementar o `epoll` que a 99 destravou: antes de trocar o
+multiplexador, li o que o atual faz.
+
+**101.1 O defeito.** O laço esperava com `poll` e, ao acordar, DRENAVA todo
+descritor que tivesse disparado — `read` até EAGAIN, num buffer de 64 bytes que
+é jogado fora. Isso está certo para o cano de uma fila (o byte lá dentro é só
+uma batida na porta: o dado real está na memória compartilhada) e é destrutivo
+para um SOCKET, onde o que está dentro do descritor É o dado que o programa
+pediu. O servidor perdia a mensagem inteira e via só o fim da conexão.
+
+**101.2 Por que a suíte inteira escondia.** Todo cliente dos nossos testes
+escreve LOGO depois de conectar. Aí o dado já está no socket quando o `read` é
+emitido, o syscall acerta na primeira tentativa, e o laço nunca estaciona
+naquele descritor — o caminho do defeito não é tocado. Basta o cliente pausar
+antes de escrever, que é o que um cliente de verdade faz.
+
+E não dá para reproduzir com o cliente na MESMA thread: qualquer coisa que ele
+faça acontece ENTRE dois polls, então o dado sempre chega antes de o laço
+estacionar. O portão (`tests/net-late.sh`) são por isso dois PROCESSOS, os dois
+em pscript, e o cliente pausa 0,4s depois de conectar. Sem o conserto ele
+imprime `got 0`; com ele, `got 22 data that arrives late`.
+
+**101.3 O conserto.** Cada descritor que entra na espera diz se pode ser
+drenado: cano de fila sim, socket NÃO. É uma linha por caso na coleta e uma
+condição no laço da drenagem — e é a distinção que o código nunca tinha feito
+explícita, porque o único descritor que existia quando ela foi escrita era cano.
+
 ## Bateria 99 — `const if`: o P ganha condicional de compilação (2026-08-20)
 
 A 18.4 recusou `poll()` por escrito e pediu `epoll`/`kqueue`; o loop usa
