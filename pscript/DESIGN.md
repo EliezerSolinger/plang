@@ -3237,9 +3237,19 @@ chegar ao `T`, dois `await`. Achatar seria o tipo mentindo: a assinatura diz
 uma promessa de promessa — uma limitação real que estaríamos importando de
 graça.
 
-**Estado:** DECIDIDA, não implementada. `await` hoje só aceita `Task<T>`, que é
-o subconjunto correto: o trait é aditivo e nada do que existe muda de
-significado quando ele chegar.
+**Estado (2026-08-20).** A **87.2 está VALENDO e agora tem portão**: conferido
+que `await` sobre `Task<Task<int>>` devolve `Task<int>` e que dois níveis a mais
+também não achatam — `tests/pscript/run/task_nest.psc`. É teste para uma
+propriedade que a implementação cumpre por NÃO fazer nada, que é justamente o
+tipo de coisa que começa a falhar em silêncio no dia em que alguém ensina o
+`await` a ser prestativo.
+
+A **87.1 continua decidida e não implementada**, e o `await` só aceita `Task<T>`
+— o subconjunto correto, porque o trait é aditivo e nada do que existe muda de
+significado quando ele chegar. O que falta não é digitar o trait: é decidir a
+forma do `Poll<T>` e do `Waker` **neste** escalonador (o `poll` é chamado por
+quem, e com que garantia de que o acordar não perde um evento), e isso é
+bateria, não tarefa.
 
 ## Bateria 88 — Os corpora de fora, e o que eles acharam (2026-08-17)
 

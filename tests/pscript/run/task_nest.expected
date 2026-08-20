@@ -1,0 +1,3 @@
+one await gives a task, not an int
+two awaits give 42
+three deep 6
