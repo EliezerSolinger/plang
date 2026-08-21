@@ -216,7 +216,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | socket e arquivo dentro de worker; worker aninhado; 64 workers | ✅ |
 | `shared` sob contenção (800 mil incrementos, 12 threads) | ✅ exato |
 | Coletor em estresse com mensagens atravessando | ✅ |
-| Como o receptor sabe que o canal ACABOU | ⏳ **decisão sua** (107.8): hoje é mensagem vazia para sempre |
+| Como o receptor sabe que o canal ACABOU | ✅ predicado: `parent.open()` / `w.alive()`, e `w.close()` para o pai dizer que acabou de mandar (107.8) |
 
 ## O que o smallpt completo NÃO usa, e por quê
 

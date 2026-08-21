@@ -915,6 +915,52 @@ def ps_parent_recv_obj(ctx: *PsCtx, sh: const *PsShape, size: usize) -> *PsTask:
     return ps_recv_task(ctx, ctx->parent, 1, PS_RECV_OBJ, sh, size)
 
 
+# 107.8, a sua decisão: um PREDICADO ao lado, simétrico ao bool que o `send` da
+# 45.3 devolve. `recv` fica como está — mensagem vazia quando não há mais nada — e
+# quem quer parar o laço pergunta antes:
+#
+#     while parent.open():
+#         v = await parent.recv()
+#
+# "Aberto" é "ainda pode chegar mensagem", e isso inclui a fila NÃO VAZIA de um
+# lado que já foi: o que ele mandou antes de terminar continua sendo mensagem, e
+# um laço que parasse na hora perderia o fim da conversa.
+def ps_chan_open(w: *PsWorker) -> bool:
+    if w == None or w->blk == None:
+        return False
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    # do lado do PAI: o worker ainda está rodando, ou deixou coisa na fila
+    ok: bool = b->done == 0 or b->up_head != None
+    pthread_mutex_unlock(&b->mu)
+    return ok
+
+# ... e o outro lado do predicado: o pai diz que ACABOU DE MANDAR sem ter de
+# terminar. Sem isto, `while parent.open():` só fecharia quando o pai saísse — e
+# aí não haveria mais ninguém para ler a resposta do worker, o que tornaria o
+# predicado inútil justamente no laço que ele existe para escrever. O worker do
+# outro lado fecha ao RETORNAR, que é o `done` que a fila de subida sempre teve.
+def ps_chan_close(w: *PsWorker):
+    if w == None or w->blk == None:
+        return
+    b: *PsWorkerBlk = w->blk
+    pthread_mutex_lock(&b->mu)
+    b->pclosed = 1
+    pthread_cond_broadcast(&b->cv)
+    if b->dn_w >= 0:
+        ps_pipe_wake(b->dn_w)
+    pthread_mutex_unlock(&b->mu)
+
+def ps_parent_open(ctx: *PsCtx) -> bool:
+    b: *PsWorkerBlk = ctx->parent
+    if b == None:
+        return False
+    pthread_mutex_lock(&b->mu)
+    # do lado do WORKER: o pai ainda não fechou, ou deixou coisa na fila
+    ok: bool = b->pclosed == 0 or b->down_head != None
+    pthread_mutex_unlock(&b->mu)
+    return ok
+
 def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool:
     b: *PsWorkerBlk = ctx->parent
     if b == None:
@@ -958,6 +1004,7 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     t->frame = (*PsObj)(fr)
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1179,6 +1226,7 @@ def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     t->frame = (*PsObj)(fr)
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1223,6 +1271,7 @@ static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsT
     t->frame = (*PsObj)(fr)
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1487,6 +1536,22 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
     pthread_mutex_unlock(&b->mu)
     return m
 
+# 107: saiu do estacionamento — uma vez só, seja porque a mensagem chegou ou
+# porque a lista de espera foi limpa
+static def ps_recv_unpark(t: *PsTask):
+    if t == None or t->rmarked == 0 or t->rblk == None:
+        return
+    b: *PsWorkerBlk = t->rblk
+    pthread_mutex_lock(&b->mu)
+    if t->rdir == 0:
+        if b->up_parked > 0:
+            b->up_parked -= 1
+    else:
+        if b->dn_parked > 0:
+            b->dn_parked -= 1
+    pthread_mutex_unlock(&b->mu)
+    t->rmarked = 0
+
 static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask:
     if kind == PS_RECV_OBJ:
         return ps_obj_msg_task(ctx, m, sh, size)
@@ -1509,6 +1574,7 @@ def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *P
     t->frame = (*PsObj)(fr)
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1522,6 +1588,15 @@ def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *P
     t->rkind = kind
     t->rsize = size
     t->rshape = sh
+    # 107: entra no estacionamento CONTADO, para que o outro lado possa saber que
+    # este espera por ele
+    pthread_mutex_lock(&b->mu)
+    if dir == 0:
+        b->up_parked += 1
+    else:
+        b->dn_parked += 1
+    pthread_mutex_unlock(&b->mu)
+    t->rmarked = 1
     ps_park(ctx, t)
     return t
 
@@ -1529,6 +1604,7 @@ def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *P
 # Building allocates, and allocation never collects (that is the safepoint
 # rule), so nothing here can move under our feet.
 static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
+    ps_recv_unpark(t)
     if t->rkind == PS_RECV_OBJ:
         ps_des_run(ctx, m, t->rshape, ps_task_ret(t), t->rsize)
     elif m != None:
@@ -1731,6 +1807,7 @@ static def ps_recvs_poll(ctx: *PsCtx) -> bool:
     while cur != None:
         nx: *PsTask = cur->next
         if cur->state != 0:
+            ps_recv_unpark(cur)
             *prev = nx
             cur->next = None
         else:
@@ -3938,6 +4015,7 @@ def ps_task_new(ctx: *PsCtx, step: def(ctx: *PsCtx, t: *PsTask) -> bool, frame: 
     t->frame = frame
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -4037,6 +4115,7 @@ def ps_timer_task(ctx: *PsCtx, at: f64) -> *PsTask:
     t->frame = (*PsObj)(fr)
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->next = None
@@ -4112,7 +4191,7 @@ static def ps_timers_fire(ctx: *PsCtx, now: f64) -> bool:
 # A marca é feita e desfeita sob o mutex do bloco, e a leitura do outro lado
 # acontece com o mutex na mão — então ou os dois se veem, ou um deles ainda não
 # marcou e a próxima volta do laço olha de novo.
-static def ps_recv_mark(ctx: *PsCtx, on: bool, out total: i32, out stuck: i32, out other: i32):
+static def ps_recv_stuck(ctx: *PsCtx, out total: i32, out stuck: i32, out other: i32):
     total = 0
     stuck = 0
     other = 0
@@ -4124,12 +4203,15 @@ static def ps_recv_mark(ctx: *PsCtx, on: bool, out total: i32, out stuck: i32, o
                 b: *PsWorkerBlk = t->rblk
                 pthread_mutex_lock(&b->mu)
                 if t->rdir == 0:
-                    b->up_parked = 1 if on else 0
-                    if on and b->dn_parked != 0 and b->up_head == None and b->down_head == None and b->done == 0:
+                    # Eu sou o PAI esperando o worker, e ele está esperando por
+                    # mim. Não é travamento se eu já FECHEI o canal: a espera
+                    # dele acaba por si na próxima volta (é o fim que a 107.1
+                    # deu à fila de descida), e acusar aqui era acusar o
+                    # protocolo normal de `send`/`close`/`recv`.
+                    if b->dn_parked > 0 and b->up_head == None and b->down_head == None and b->done == 0 and b->pclosed == 0:
                         stuck += 1
                 else:
-                    b->dn_parked = 1 if on else 0
-                    if on and b->up_parked != 0 and b->up_head == None and b->down_head == None and b->pclosed == 0:
+                    if b->up_parked > 0 and b->up_head == None and b->down_head == None and b->pclosed == 0:
                         stuck += 1
                 pthread_mutex_unlock(&b->mu)
             else:
@@ -4182,19 +4264,11 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         tot9: i32 = 0
         stk9: i32 = 0
         oth9: i32 = 0
-        ps_recv_mark(ctx, True, out tot9, out stk9, out oth9)
+        ps_recv_stuck(ctx, out tot9, out stk9, out oth9)
         if ms < 0 and oth9 == 0 and tot9 > 0 and stk9 == tot9:
-            d1: i32 = 0
-            d2: i32 = 0
-            d3: i32 = 0
-            ps_recv_mark(ctx, False, out d1, out d2, out d3)
             ps_raise(ctx, "deadlock: this side is waiting for a message from the other, and the other is waiting for one from this side", PS_CAT_VALUE, "<worker>", 0)
             return False
         ps_mux_wait(ctx, ms)
-        e1: i32 = 0
-        e2: i32 = 0
-        e3: i32 = 0
-        ps_recv_mark(ctx, False, out e1, out e2, out e3)
     elif ms > 0:
         ts2: timespec
         ts2.tv_sec = 0
@@ -4652,6 +4726,7 @@ def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
     t->frame = (*PsObj)(fr)
     t->err = None
     t->lost = None
+    t->rmarked = 0
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -4872,6 +4947,7 @@ def ps_lost_seen(t: *PsTask):
     if t != None and t->lost != None:
         t->lost->live = 0
         t->lost = None
+    t->rmarked = 0
 
 def ps_task_take_err(ctx: *PsCtx, t: *PsTask):
     if t != None and t->err != None and ctx->exc == None:
@@ -4880,6 +4956,7 @@ def ps_task_take_err(ctx: *PsCtx, t: *PsTask):
     if t != None and t->lost != None:
         t->lost->live = 0
         t->lost = None
+    t->rmarked = 0
 
 def ps_task_ret(t: *PsTask) -> *void:
     return (*char)(t->frame) + sizeof(PsUser)
@@ -4921,6 +4998,7 @@ def ps_task_wait(ctx: *PsCtx, t: *PsTask):
     if t->lost != None:
         t->lost->live = 0
         t->lost = None
+    t->rmarked = 0
 
 # `dyn Trait` (66.3). The value is copied INTO the box: what is boxed is often a
 # temporary — `p = Money(5)` — and a box pointing at a dead stack slot would be

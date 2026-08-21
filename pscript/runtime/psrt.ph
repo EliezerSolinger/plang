@@ -144,6 +144,10 @@ struct PsTask:
     # this context; now it parks like `sleep` does and the scheduler completes
     # it, so a program can await a message and a clock at the same time.
     is_recv: i32
+    rmarked: i32         # 107: esta tarefa está contada em up_parked/dn_parked.
+                         #   Torna o desconto idempotente: quem sai do
+                         #   estacionamento desconta uma vez, seja pela mensagem
+                         #   que chegou ou pela limpeza da lista.
     # 107: um erro que ninguém foi buscar. Quando a task falha e não há ninguém
     # esperando por ela, o erro entra numa lista fora do heap e este ponteiro
     # aponta para a entrada — um `await` posterior a apaga. O que sobrar no fim
@@ -412,7 +416,11 @@ struct PsWorkerBlk:
     collected: i32       # the parent took the error (w.error()): the automatic
                          #   stderr line at join stays quiet — whoever collected
                          #   it decides what it means (37.4)
-    # 107: cada lado marca que está PARADO esperando o outro. Com os dois
+    # 107: quantos receptores estão PARADOS em cada direção. É contagem e não
+    # marca, porque duas tarefas podem esperar a mesma fila; e é mantida no
+    # estacionamento (mais um) e na saída dele (menos um), não por varredura —
+    # uma marca deixada por quem já acordou fazia o outro lado acusar um
+    # travamento que não existia. Com os dois
     # marcados e as duas filas vazias, nada pode acontecer nunca mais: é um
     # travamento mútuo, e dizê-lo é melhor do que ficar pendurado para sempre no
     # `poll`. `up_parked` é o pai esperando o worker; `dn_parked` é o worker
@@ -745,6 +753,11 @@ def ps_list_import(ctx: *PsCtx, p: *void) -> *PsList
 def ps_worker_finish(ctx: *PsCtx, blk: *void)
 # `parent.send(x)` from inside; `w.send(x)` from outside. Both answer whether
 # the message went into the queue (45.3) — never an exception, never silence.
+# 107.8: o canal ainda pode entregar? (`w.alive()` do lado do pai,
+# `parent.open()` do lado do worker — a mesma pergunta, dos dois lados)
+def ps_chan_open(w: *PsWorker) -> bool
+def ps_chan_close(w: *PsWorker)
+def ps_parent_open(ctx: *PsCtx) -> bool
 def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool
 
 # 34.3, the general case: a message that is not pure bytes is SERIALIZED on the

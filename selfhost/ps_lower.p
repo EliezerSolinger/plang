@@ -2966,6 +2966,18 @@ struct PsLow:
                 self->push_arg(szm, trm)
                 self->push_arg(sc, szm)
                 return sc
+            if strcmp(e->lhs->text, "close") == 0:
+                cl8: *Expr = self->call_rt("ps_chan_close", e->pos)
+                self->push_arg(cl8, self->expr(e->lhs->lhs))
+                return cl8
+            if strcmp(e->lhs->text, "alive") == 0 or strcmp(e->lhs->text, "open") == 0:
+                # 107.8: o predicado, um por lado do duto
+                oc8: *Expr = self->call_rt("ps_parent_open" if to_parent else "ps_chan_open", e->pos)
+                if to_parent:
+                    self->push_arg(oc8, self->ctx_arg(e->pos))
+                else:
+                    self->push_arg(oc8, self->expr(e->lhs->lhs))
+                return oc8
             if strcmp(e->lhs->text, "error") == 0:
                 ec: *Expr = self->call_rt("ps_worker_error", e->pos)
                 self->push_arg(ec, self->ctx_arg(e->pos))

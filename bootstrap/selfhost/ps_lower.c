@@ -3268,6 +3268,20 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, sc, szm);
             return sc;
         }
+        if (strcmp(e->lhs->text, "close") == 0) {
+            Expr *cl8 = PsLow_call_rt(self, "ps_chan_close", e->pos);
+            PsLow_push_arg(self, cl8, PsLow_expr(self, e->lhs->lhs));
+            return cl8;
+        }
+        if (strcmp(e->lhs->text, "alive") == 0 || strcmp(e->lhs->text, "open") == 0) {
+            Expr *oc8 = PsLow_call_rt(self, (to_parent ? "ps_parent_open" : "ps_chan_open"), e->pos);
+            if (to_parent) {
+                PsLow_push_arg(self, oc8, PsLow_ctx_arg(self, e->pos));
+            } else {
+                PsLow_push_arg(self, oc8, PsLow_expr(self, e->lhs->lhs));
+            }
+            return oc8;
+        }
         if (strcmp(e->lhs->text, "error") == 0) {
             Expr *ec = PsLow_call_rt(self, "ps_worker_error", e->pos);
             PsLow_push_arg(self, ec, PsLow_ctx_arg(self, e->pos));

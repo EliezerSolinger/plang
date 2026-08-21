@@ -8,14 +8,27 @@ o pai que acaba sem mandar nada, spawn aninhado, e o erro que atravessa.
 """
 
 async def eco(n: int) -> int:
-    """A entrada é `async`, e é isso que dá ao worker o direito de `await`."""
+    """A entrada é `async`, e é isso que dá ao worker o direito de `await`.
+
+    O laço pergunta ao CANAL se ainda pode chegar mensagem (107.8) em vez de
+    combinar uma sentinela: `parent.open()` é falso quando o pai fechou — por
+    `w.close()` ou por ter terminado — e a fila já está vazia.
+
+    O `sleep` no começo não é enfeite: `open()` é um RETRATO do instante, então
+    se a checagem correr com o `close` o laço dá uma volta a mais e recebe uma
+    mensagem vazia (que soma zero, mas conta). Dormindo primeiro, as três
+    mensagens e o `close` já chegaram quando o laço começa, e a contagem é 3 sob
+    qualquer velocidade — inclusive com o coletor em estresse, que foi onde a
+    corrida apareceu.
+    """
+    await sleep(0.05)
     total = 0
-    while True:
+    quantas = 0
+    while parent.open():
         v = await parent.recv()
-        if v == 0:
-            break
         total += v
-    parent.send(total)
+        quantas += 1
+    parent.send(total * 100 + quantas)
     return total
 
 
@@ -69,7 +82,8 @@ async def espera_sempre(n: int) -> int:
 
 # ---- 1. ida e volta com entrada async ----
 w = spawn(eco, (0,))
-print(w.send(3), w.send(4), w.send(0))
+print(w.send(3), w.send(4), w.send(5))
+w.close()
 print(f"eco {await w.recv()}")
 
 # ---- 2. recv dentro de uma task, com outra task andando ao lado ----
@@ -94,6 +108,21 @@ f = spawn(falante, (0,))
 a = um(f, "A")
 b = um(f, "B")
 print(f"fila {await a} {await b}")
+
+# ---- 3b. do lado do pai: `alive()` drena o que um worker que já foi deixou ----
+async def fala(n: int) -> int:
+    for i in range(4):
+        parent.send(i + 1)
+    return n
+
+fw = spawn(fala, (0,))
+await sleep(0.1)
+tot = 0
+lidas = 0
+while fw.alive():
+    tot += await fw.recv()
+    lidas += 1
+print(f"drenou {tot} em {lidas}")
 
 # ---- 4. spawn aninhado ----
 nw = spawn(filho, (7,))

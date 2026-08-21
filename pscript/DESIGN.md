@@ -3714,26 +3714,64 @@ porque a próxima pessoa a acrescentar um campo vai cair no mesmo lugar.
 - `w.status()` → `status(w)`, função e não método, porque também responde por um
   worker que já foi.
 
-### 107.8 O que a varredura NÃO conseguiu decidir (é sua)
+### 107.8 Como o receptor sabe que o canal acabou — DECIDIDO: um predicado
 
-**Como o receptor sabe que o canal acabou.** Hoje, um canal fechado ou um worker
-que terminou devolvem mensagem VAZIA para sempre — então `while True: v = await
-parent.recv()` gira sem fim e o programa não termina. A 45.3 decidiu o lado do
-`send` por escrito (*"nem exceção, nem silêncio: o bool diz entregou na fila"*) e
-o lado do `recv` nunca foi decidido. As saídas possíveis:
+O `recv` de um canal fechado (ou de um worker que terminou) devolve mensagem
+VAZIA, e por isso `while True: v = await parent.recv()` girava sem fim e o
+programa não terminava. A 45.3 decidiu o lado do `send` por escrito (*"nem
+exceção, nem silêncio: o bool diz entregou na fila"*); o do `recv` faltava.
 
-1. **`recv` LEVANTA quando o canal acabou e está vazio** — o laço `while True`
-   termina por exceção, e quem quer o outro comportamento usa `try`.
-2. **`recv` devolve `T?`** — `None` é o fim, e o `??`/narrowing da 43.x já
-   existe para tratá-lo.
-3. **Um predicado ao lado** — `w.alive()` / `parent.open()`, simétrico ao bool do
-   `send` da 45.3, e o `recv` continua como está.
-4. **Fica como está** e a documentação diz que o protocolo precisa de sentinela
-   (uma mensagem que significa "acabou"), que é o que o teste `worker_async` faz
-   com o zero.
+**Sua escolha: um PREDICADO ao lado**, simétrico ao bool do `send`, com o `recv`
+intacto — nada do que já estava escrito muda de significado.
 
-Não implementei nenhuma: as quatro mudam o que um programa correto escreve, e
-isso é decisão sua. A 3 é a que menos quebra o que já existe.
+```python
+while parent.open():          # de dentro do worker
+    v = await parent.recv()
+    total += v
+
+while w.alive():              # de fora, do lado do pai
+    v = await w.recv()
+```
+
+Os dois nomes valem nos dois lados (é a mesma pergunta — *ainda pode chegar
+mensagem?*); cada um está no lado em que se lê melhor. **"Aberto" inclui a fila
+NÃO VAZIA de um lado que já foi**: o que ele mandou antes de terminar continua
+sendo mensagem, e um laço que parasse na hora perderia o fim da conversa.
+
+**O predicado é um RETRATO do instante, e isso tem uma consequência que fica
+dita:** se o `close` do outro lado acontecer entre a checagem e o `recv`, o laço
+dá uma volta a mais e recebe uma mensagem VAZIA. É a corrida clássica de
+"perguntar e depois agir" sobre um canal, e ela é inerente a separar as duas
+coisas — o `v, ok := <-ch` do Go junta as duas justamente por isso. Quem precisa
+de contagem exata combina que a mensagem CARREGUE o sentido (um zero soma zero),
+ou fecha antes de o laço começar, que é o que o teste `worker_async` faz. Foi o
+coletor em estresse que mostrou a volta extra — em velocidade normal o `close`
+sempre chegava primeiro.
+
+**E a outra metade, que o predicado obrigou:** `w.close()` — o pai diz que acabou
+de mandar **sem ter de terminar**. Sem isso, `parent.open()` só fecharia quando o
+pai saísse, e aí não haveria mais ninguém para ler a resposta do worker — o
+predicado seria inútil justamente no laço que ele existe para escrever. Do lado
+do worker não existe `parent.close()`: ele fecha ao RETORNAR, que é o `done` que
+a fila de subida sempre teve, e a mensagem de erro diz isso.
+
+O protocolo completo, que é o que o teste `worker_async` agora faz:
+
+```python
+w = spawn(somador, (0,))
+w.send(3); w.send(4); w.send(5)
+w.close()                      # acabei de mandar
+print(await w.recv())          # e a resposta dele chega
+```
+
+### As outras duas respostas da varredura
+
+- **A variável de laço continua com o escopo da 64.1** (ela não sobrevive ao
+  laço), agora igual nas duas máquinas. A divergência com o Python fica, e fica
+  DELIBERADA.
+- **`await` continua só em `async def` e no topo do programa** (39.4). Um worker
+  que precisa esperar declara a entrada como `async def`, e a mensagem de erro já
+  diz onde `await` vale.
 
 ## Bateria 106 — ordenação estável, `bisect` e `heapq` (2026-08-21)
 

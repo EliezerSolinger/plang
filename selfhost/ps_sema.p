@@ -1851,6 +1851,25 @@ struct PsSema:
                     # 45.3: `send` to a worker that is gone answers False —
                     # neither an exception nor silence
                     return ps_type(self->a, PT_BOOL, e->pos)
+                # 107.8: o predicado. `w.alive()` de fora, `parent.open()` de
+                # dentro — a mesma pergunta ("ainda pode chegar mensagem?"), com
+                # o nome que se lê melhor de cada lado. Os dois nomes valem nos
+                # dois, porque recusar um deles seria só decorar.
+                if strcmp(wm, "close") == 0:
+                    # 107.8: o pai diz que acabou de mandar. Do lado do worker
+                    # não existe: ele fecha ao RETORNAR, e é o `done` que a fila
+                    # de subida sempre teve.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "close() takes no arguments")
+                    if e->lhs->lhs->kind == PE_NAME and strcmp(e->lhs->lhs->text, "parent") == 0:
+                        fatal_at(self->file, e->pos, "`parent.close()` does not exist: a worker closes its side by RETURNING, and whoever reads it sees the channel end there (36.4)")
+                    e->lhs->type = rt
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if strcmp(wm, "alive") == 0 or strcmp(wm, "open") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "%s() takes no arguments", wm)
+                    e->lhs->type = rt
+                    return ps_type(self->a, PT_BOOL, e->pos)
                 if strcmp(wm, "error") == 0:
                     # 37.3/37.4: the parent COLLECTS the failure and decides —
                     # relaunch, rethrow, ignore. The object is the same `Error`
@@ -1879,7 +1898,7 @@ struct PsSema:
                     rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                     rtk->inner = rt->inner
                     return rtk
-                fatal_at(self->file, e->pos, "a worker has send, detach, recv and error (36.1/37.3), not '%s' — and what it is DOING is `status(w)`, a function and not a method, because it also answers for a worker that is already gone", wm)
+                fatal_at(self->file, e->pos, "a worker has send, recv, alive (`open` reads better on `parent`), close, detach and error (36.1/37.3/107.8), not '%s' — and what it is DOING is `status(w)`, a function and not a method, because it also answers for a worker that is already gone", wm)
             # a method on a `dyn Trait` (66.3): the call goes through the
             # vtable in the box, and what is checked here is the TRAIT's
             # signature — the concrete type is not known and is not needed
