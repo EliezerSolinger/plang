@@ -149,6 +149,7 @@ static def ps_free_blocks(ctx: *PsCtx, b: *PsBlock):
 # 18.4/99: the multiplexer's two entry points. Declared here because the context
 # teardown below calls the free, and the bodies are per platform, further down.
 def ps_mux_free(ctx: *PsCtx)
+def ps_random_free(ctx: *PsCtx)
 
 def ps_ctx_init(out ctx: PsCtx):
     ctx.blocks = ps_new_block(0)
@@ -180,6 +181,7 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.nogc_start = usize(0)
     ctx.repr_depth = 0
     ctx.mux = None
+    ctx.rng = None
 
 # ---------- the crash that says where it was (12.4) ----------
 # 12.4 decided that failure in C is a CRASH and failure in pscript is an
@@ -302,6 +304,7 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
 # defer, so it is the last thing that happens in the process.
 def ps_ctx_free(ctx: *PsCtx):
     ps_mux_free(ctx)
+    ps_random_free(ctx)
     ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = None
     # the graveyard goes too: nothing may reference it any more, and a worker
@@ -2583,6 +2586,265 @@ def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCt
     free(idx)
     return out
 
+# ---------- `random`: o Mersenne Twister do CPython, portado (103) ----------
+#
+# PORTADO, não inventado: é o MT19937 de `Modules/_randommodule.c` do CPython,
+# que por sua vez é o download de Makoto Matsumoto e Takuji Nishimura
+# (Copyright (C) 1997-2002, licença BSD de três cláusulas, incluída no arquivo
+# original), com a camada Python de `Lib/random.py` — `_randbelow_with_
+# getrandbits`, `randint`, `choice`, `shuffle`, `uniform` — transcrita linha por
+# linha. CPython é PSF-2.0.
+#
+# O motivo de PORTAR em vez de escrever um gerador qualquer: com a mesma semente
+# a sequência tem de ser a MESMA do Python, e aí o oráculo compara número por
+# número em vez de "parece aleatório". Um gerador escrito à mão passaria em
+# qualquer teste que eu mesmo escrevesse.
+#
+# O estado é POR CONTEXTO, alocado na primeira chamada: cada worker tem heap,
+# coletor e laço próprios (18.1), e compartilhar 624 palavras de estado entre
+# threads seria uma corrida de dados com aparência de número aleatório.
+static PS_MT_N: const i32 = 624
+static PS_MT_M: const i32 = 397
+
+struct PsRng:
+    mt: u32[624]
+    index: i32
+    seeded: i32
+    # o par que o método polar produz de uma vez: o `gauss` devolve um e guarda
+    # o outro, e é por guardar que a sequência do Python bate — quem joga o
+    # segundo fora consome o dobro de números e divide na segunda chamada
+    gauss_next: f64
+    has_gauss: i32
+
+static def ps_mt_init_genrand(r: *PsRng, s: u32):
+    r->mt[0] = s
+    mti: i32 = 1
+    while mti < PS_MT_N:
+        # Knuth TAOCP vol. 2, 3rd ed., p. 106 — o multiplicador é do original
+        r->mt[mti] = u32(1812433253) * (r->mt[mti - 1] ^ (r->mt[mti - 1] >> 30)) + u32(mti)
+        mti += 1
+    r->index = mti
+
+static def ps_mt_init_by_array(r: *PsRng, key: *u32, klen: usize):
+    ps_mt_init_genrand(r, u32(19650218))
+    i: usize = 1
+    j: usize = 0
+    k: usize = usize(PS_MT_N) if usize(PS_MT_N) > klen else klen
+    while k > usize(0):
+        r->mt[i] = (r->mt[i] ^ ((r->mt[i - 1] ^ (r->mt[i - 1] >> 30)) * u32(1664525))) + key[j] + u32(j)
+        i += 1
+        j += 1
+        if i >= usize(PS_MT_N):
+            r->mt[0] = r->mt[PS_MT_N - 1]
+            i = 1
+        if j >= klen:
+            j = 0
+        k -= 1
+    k = usize(PS_MT_N - 1)
+    while k > usize(0):
+        r->mt[i] = (r->mt[i] ^ ((r->mt[i - 1] ^ (r->mt[i - 1] >> 30)) * u32(1566083941))) - u32(i)
+        i += 1
+        if i >= usize(PS_MT_N):
+            r->mt[0] = r->mt[PS_MT_N - 1]
+            i = 1
+        k -= 1
+    r->mt[0] = u32(0x80000000)      # o bit alto em 1: garante estado não-nulo
+
+static def ps_mt_u32(r: *PsRng) -> u32:
+    y: u32 = 0
+    if r->index >= PS_MT_N:
+        kk: i32 = 0
+        while kk < PS_MT_N - PS_MT_M:
+            y = (r->mt[kk] & u32(0x80000000)) | (r->mt[kk + 1] & u32(0x7fffffff))
+            r->mt[kk] = r->mt[kk + PS_MT_M] ^ (y >> 1) ^ (u32(0x9908b0df) if (y & u32(1)) != u32(0) else u32(0))
+            kk += 1
+        while kk < PS_MT_N - 1:
+            y = (r->mt[kk] & u32(0x80000000)) | (r->mt[kk + 1] & u32(0x7fffffff))
+            r->mt[kk] = r->mt[kk + (PS_MT_M - PS_MT_N)] ^ (y >> 1) ^ (u32(0x9908b0df) if (y & u32(1)) != u32(0) else u32(0))
+            kk += 1
+        y = (r->mt[PS_MT_N - 1] & u32(0x80000000)) | (r->mt[0] & u32(0x7fffffff))
+        r->mt[PS_MT_N - 1] = r->mt[PS_MT_M - 1] ^ (y >> 1) ^ (u32(0x9908b0df) if (y & u32(1)) != u32(0) else u32(0))
+        r->index = 0
+    y = r->mt[r->index]
+    r->index += 1
+    # o temperamento, que é o que torna a saída equidistribuída
+    y = y ^ (y >> 11)
+    y = y ^ ((y << 7) & u32(0x9d2c5680))
+    y = y ^ ((y << 15) & u32(0xefc60000))
+    y = y ^ (y >> 18)
+    return y
+
+static def ps_rng(ctx: *PsCtx) -> *PsRng:
+    if ctx->rng != None:
+        return (*PsRng)(ctx->rng)
+    r: *PsRng = (*PsRng)(calloc(1, sizeof(PsRng)))
+    ctx->rng = (*void)(r)
+    if r == None:
+        return None
+    # sem semente explícita: hora e pid, que é o caminho de reserva do próprio
+    # CPython quando não consegue ler entropia do sistema
+    key: u32[4]
+    now: f64 = ps_sys_monotonic()
+    key[0] = u32(u64(now * 1000000.0) & u64(0xffffffff))
+    key[1] = u32((u64(now * 1000000.0) >> 32) & u64(0xffffffff))
+    key[2] = u32(getpid())
+    key[3] = u32(0x5bf03635)
+    ps_mt_init_by_array(r, &key[0], usize(4))
+    r->seeded = 1
+    return r
+
+def ps_random_free(ctx: *PsCtx):
+    if ctx->rng != None:
+        free(ctx->rng)
+        ctx->rng = None
+
+# `random.seed(n)`: os pedaços de 32 bits do VALOR ABSOLUTO, do menos
+# significativo para o mais, que é o que o CPython faz — e é o que faz a
+# sequência ser a mesma dele
+def ps_random_seed(ctx: *PsCtx, n: i64):
+    r: *PsRng = ps_rng(ctx)
+    if r == None:
+        return
+    un: u64 = u64(n) if n >= 0 else u64(-n)
+    key: u32[2]
+    key[0] = u32(un & u64(0xffffffff))
+    key[1] = u32((un >> 32) & u64(0xffffffff))
+    used: usize = usize(2) if key[1] != u32(0) else usize(1)
+    ps_mt_init_by_array(r, &key[0], used)
+    r->seeded = 1
+    # semear repõe TUDO: com o par do `gauss` pendente, a mesma semente daria
+    # números diferentes conforme o que tivesse sido sorteado antes dela
+    r->has_gauss = 0
+    r->gauss_next = 0.0
+
+# 53 bits de resolução, exatamente como o `genrand_res53` do original: 27 bits
+# deslocados 26 mais 26 bits embaixo
+def ps_random_random(ctx: *PsCtx) -> f64:
+    r: *PsRng = ps_rng(ctx)
+    if r == None:
+        return 0.0
+    a: u32 = ps_mt_u32(r) >> 5
+    b: u32 = ps_mt_u32(r) >> 6
+    return (f64(a) * 67108864.0 + f64(b)) * (1.0 / 9007199254740992.0)
+
+def ps_random_getrandbits(ctx: *PsCtx, k: i64, file: const *char, line: i32) -> i64:
+    r: *PsRng = ps_rng(ctx)
+    if r == None:
+        return 0
+    if k < 0:
+        ps_raise(ctx, "getrandbits() takes a non-negative number of bits", PS_CAT_VALUE, file, line)
+        return 0
+    if k == 0:
+        return 0
+    if k > 63:
+        # o Python devolveria um inteiro grande; aqui int é 64 bits (7.2), então
+        # o limite é dito em voz alta em vez de truncar em silêncio
+        ps_raise(ctx, "getrandbits() above 63 bits would need a big integer, and int is 64 bits here (7.2)", PS_CAT_VALUE, file, line)
+        return 0
+    if k <= 32:
+        return i64(ps_mt_u32(r) >> u32(32 - i32(k)))
+    lo: u64 = u64(ps_mt_u32(r))
+    hi: u64 = u64(ps_mt_u32(r) >> u32(64 - i32(k)))
+    return i64(lo | (hi << 32))
+
+# `Lib/random.py`: `_randbelow_with_getrandbits` — k bits, e sorteia de novo
+# enquanto cair fora. É o que dá uniformidade sem viés de módulo.
+def ps_random_below(ctx: *PsCtx, n: i64, file: const *char, line: i32) -> i64:
+    if n <= 0:
+        ps_raise(ctx, "there is nothing to choose from an empty range", PS_CAT_VALUE, file, line)
+        return 0
+    # `k = n.bit_length()` — de N, não de n-1. A diferença aparece exatamente na
+    # potência de dois: `bit_length(4)` é 3, então o Python sorteia 3 bits e
+    # descarta metade. Contar os bits de n-1 dá 2 e a sequência divergiria da
+    # dele na primeira lista de tamanho 4 — que foi como o `shuffle` me pegou.
+    k: i64 = 0
+    m: u64 = u64(n)
+    while m > u64(0):
+        k += 1
+        m = m >> 1
+    if k == 0:
+        return 0
+    v: i64 = ps_random_getrandbits(ctx, k, file, line)
+    while v >= n:
+        if ctx->exc != None:
+            return 0
+        v = ps_random_getrandbits(ctx, k, file, line)
+    return v
+
+# `randrange(start, stop, step)`: o Python conta quantos itens o range tem e
+# sorteia um índice — não sorteia até cair dentro, senão a distribuição
+# dependeria do passo. As três formas chegam aqui já normalizadas.
+def ps_random_randrange(ctx: *PsCtx, start: i64, stop: i64, step: i64, file: const *char, line: i32) -> i64:
+    if step == 0:
+        ps_raise(ctx, "randrange() step may not be zero", PS_CAT_VALUE, file, line)
+        return 0
+    n: i64 = 0
+    if step > 0:
+        if stop > start:
+            n = (stop - start + step - 1) / step
+    else:
+        if stop < start:
+            n = (start - stop + (-step) - 1) / (-step)
+    if n <= 0:
+        ps_raise(ctx, "empty range for randrange()", PS_CAT_VALUE, file, line)
+        return 0
+    return start + step * ps_random_below(ctx, n, file, line)
+
+def ps_random_randint(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b < a:
+        ps_raise(ctx, "randint(a, b) needs b >= a", PS_CAT_VALUE, file, line)
+        return 0
+    return a + ps_random_below(ctx, b - a + 1, file, line)
+
+def ps_random_uniform(ctx: *PsCtx, a: f64, b: f64) -> f64:
+    return a + (b - a) * ps_random_random(ctx)
+
+# `Lib/random.py`, `gauss`: o método polar de Box-Muller, que sai aos pares.
+# `sigma` é o desvio padrão, não a variância.
+def ps_random_gauss(ctx: *PsCtx, mu: f64, sigma: f64) -> f64:
+    r: *PsRng = ps_rng(ctx)
+    z: f64 = 0.0
+    if r->has_gauss != 0:
+        z = r->gauss_next
+        r->has_gauss = 0
+    else:
+        x2pi: f64 = ps_random_random(ctx) * 6.283185307179586
+        g2rad: f64 = sqrt(-2.0 * log(1.0 - ps_random_random(ctx)))
+        z = cos(x2pi) * g2rad
+        r->gauss_next = sin(x2pi) * g2rad
+        r->has_gauss = 1
+    return mu + z * sigma
+
+# `1.0 - random()` e não `random()`: o sorteio inclui o zero e excluí-lo aqui é
+# o que impede o log de -0.0
+def ps_random_expovariate(ctx: *PsCtx, lambd: f64, file: const *char, line: i32) -> f64:
+    if lambd == 0.0:
+        ps_raise(ctx, "expovariate() lambda may not be zero", PS_CAT_VALUE, file, line)
+        return 0.0
+    return -log(1.0 - ps_random_random(ctx)) / lambd
+
+# `Lib/random.py`: Fisher-Yates de trás para frente, com o mesmo `_randbelow` —
+# então a permutação de uma semente dada é a mesma do Python
+def ps_random_shuffle(ctx: *PsCtx, l: *PsList, file: const *char, line: i32):
+    if l == None or l->len < 2:
+        return
+    es: usize = usize(l->esize)
+    tmp: *char = (*char)(malloc(es))
+    if tmp == None:
+        return
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    i: i64 = l->len - 1
+    while i > 0:
+        j: i64 = ps_random_below(ctx, i + 1, file, line)
+        if ctx->exc != None:
+            break
+        if j != i:
+            memcpy(tmp, base + usize(i) * es, es)
+            memcpy(base + usize(i) * es, base + usize(j) * es, es)
+            memcpy(base + usize(j) * es, tmp, es)
+        i -= 1
+    free(tmp)
+
 # ---------- `sys` (48.3) ----------
 static PS_ARGC: int = 0
 static PS_ARGV: **char = None
@@ -2643,12 +2905,36 @@ def ps_worker_status(w: *PsWorker) -> i64:
 # is what makes two `async def`s actually interleave instead of running one
 # after the other.
 def ps_sleep(ctx: *PsCtx, seconds: f64) -> *PsTask:
-    return ps_timer_task(ctx, ps_sys_time() + (seconds if seconds > 0.0 else 0.0))
+    return ps_timer_task(ctx, ps_sys_monotonic() + (seconds if seconds > 0.0 else 0.0))
 
-def ps_sys_time() -> f64:
+# Dois relógios, e a diferença importa (103). O MONOTÔNICO nunca anda para
+# trás e é o único que serve para medir duração — é dele que vivem todos os
+# prazos do laço de eventos. O de PAREDE é o que diz que hora é, e pode saltar
+# quando o ntp corrige a máquina; medir um trecho com ele dá um tempo negativo
+# no dia em que o salto acontece. `time.monotonic()` é o primeiro,
+# `time.time()` é o segundo, e nenhum dos dois substitui o outro.
+# `math.inf` e `math.nan` (103): a libm esconde INFINITY e NAN atrás de feature
+# macros e o C que geramos é compilado com um `-std=` que pode não as ter, então
+# os dois valores nascem aqui — de uma divisão que o compilador não constanteia
+# porque os operandos vêm de variáveis, e assim nenhum back end vê um literal.
+def ps_math_inf() -> f64:
+    one: f64 = 1.0
+    zero: f64 = 0.0
+    return one / zero
+
+def ps_math_nan() -> f64:
+    zero: f64 = 0.0
+    return zero / zero
+
+def ps_sys_monotonic() -> f64:
     ts: timespec
     clock_gettime(CLOCK_MONOTONIC, &ts)
     return f64(ts.tv_sec) + f64(ts.tv_nsec) / 1000000000.0
+
+def ps_sys_time() -> f64:
+    tw: timespec
+    clock_gettime(CLOCK_REALTIME, &tw)
+    return f64(tw.tv_sec) + f64(tw.tv_nsec) / 1000000000.0
 
 # ---------- function values (28.1/19.2) ----------
 def ps_closure_new(ctx: *PsCtx, fn: *void, env: *PsObj, sig: const *char) -> *PsClosure:
@@ -2875,14 +3161,14 @@ def ps_interval_new(ctx: *PsCtx, seconds: f64, file: const *char, line: i32) -> 
         return None
     t: *PsTimer = (*PsTimer)(ps_alloc(ctx, sizeof(PsTimer), PS_TY_TIMER))
     t->period = seconds
-    t->next = ps_sys_time() + seconds
+    t->next = ps_sys_monotonic() + seconds
     return t
 
 # A tick COALESCES (51.1): a program that fell behind gets ONE tick and the
 # clock is set forward from NOW — a queue of missed ticks is never what the
 # program wanted, and would make a slow loop spin instead of settle.
 def ps_timer_tick(ctx: *PsCtx, t: *PsTimer) -> *PsTask:
-    now: f64 = ps_sys_time()
+    now: f64 = ps_sys_monotonic()
     at: f64 = t->next
     if now < t->next:
         t->next = t->next + t->period
@@ -3314,7 +3600,7 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
     if n != None:
         ps_task_step(ctx, n)
         return True
-    if ps_timers_fire(ctx, ps_sys_time()):
+    if ps_timers_fire(ctx, ps_sys_monotonic()):
         return True
     if ps_recvs_poll(ctx):
         return True
@@ -3325,20 +3611,20 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         # nothing but the clock, which is the loop 48.2 already had
         if soon < 0.0:
             return False
-        wait: f64 = soon - ps_sys_time()
+        wait: f64 = soon - ps_sys_monotonic()
         if wait > 0.0:
             ts: timespec
             ts.tv_sec = i64(wait)
             ts.tv_nsec = i64((wait - f64(i64(wait))) * 1000000000.0)
             nanosleep(&ts, None)
-        return ps_timers_fire(ctx, ps_sys_time())
+        return ps_timers_fire(ctx, ps_sys_monotonic())
     # 74.1/18.4: wait for a MESSAGE or the clock, whichever comes first. The
     # descriptors are the queues' and the timeout is the nearest deadline, so
     # a program that awaits a worker and a `sleep` at once wakes for the one
     # that actually happened and burns nothing in between.
     ms: int = -1
     if soon >= 0.0:
-        w2: f64 = (soon - ps_sys_time()) * 1000.0
+        w2: f64 = (soon - ps_sys_monotonic()) * 1000.0
         ms = int(w2) + 1 if w2 > 0.0 else 0
     if bad and (ms < 0 or ms > 2):
         # a queue whose pipe could not be opened has to be looked at by hand;
@@ -3355,7 +3641,7 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
         nanosleep(&ts2, None)
     if ps_recvs_poll(ctx):
         return True
-    ps_timers_fire(ctx, ps_sys_time())
+    ps_timers_fire(ctx, ps_sys_monotonic())
     # something IS pending — a queue, a clock — so waiting again is progress,
     # and returning False here would call a slow worker a deadlock
     return True
@@ -3768,7 +4054,7 @@ def ps_race(ctx: *PsCtx, ts: *PsList) -> i64:
 # descriptor to wait on, so the deadline is checked between steps — which is
 # exactly where a cooperative task can be stopped anyway.
 def ps_timeout(ctx: *PsCtx, t: *PsTask, seconds: f64) -> bool:
-    deadline: f64 = ps_sys_time() + seconds
+    deadline: f64 = ps_sys_monotonic() + seconds
     # its own deadline joins the clock, so the scheduler never sleeps PAST it
     ps_timer_task(ctx, deadline)
     slots: **PsObj[1]
@@ -3776,7 +4062,7 @@ def ps_timeout(ctx: *PsCtx, t: *PsTask, seconds: f64) -> bool:
     f: PsFrame
     ps_push_frame(ctx, &f, slots, 1)
     while not ps_task_done(t):
-        if ps_sys_time() >= deadline:
+        if ps_sys_monotonic() >= deadline:
             ps_pop_frame(ctx, &f)
             ps_task_cancel(ctx, t)
             return False

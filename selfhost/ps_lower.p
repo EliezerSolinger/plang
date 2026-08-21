@@ -1504,6 +1504,25 @@ struct PsLow:
                     self->push_arg(sf9, self->num("0" if strcmp(e->text, "__sys_out") == 0 else "1", e->pos))
                     self->allocs = True
                     return sf9
+                if strncmp(e->text, "__math_", 7) == 0:
+                    # 103: as constantes de `math` são VALORES; a libm tem M_PI e
+                    # M_E sob feature macros, então o número entra literal — com
+                    # os dígitos que um double aguenta
+                    cn9: const *char = e->text + 7
+                    # `inf` e `nan` NÃO têm literal: escrevê-los como um trecho
+                    # de C (`1.0/0.0`) funcionava no back end de C e saía no IL
+                    # do QBE como `d_((double)(1.0/0.0))`, que não é um número.
+                    # Então vêm do runtime, iguais nos dois back ends.
+                    if strcmp(cn9, "inf") == 0 or strcmp(cn9, "nan") == 0:
+                        return self->call_rt(self->a->printf("ps_math_%s", cn9), e->pos)
+                    lit9: *Expr = ex_new(self->a, EX_NUMBER, e->pos)
+                    if strcmp(cn9, "pi") == 0:
+                        lit9->text = "3.141592653589793"
+                    elif strcmp(cn9, "e") == 0:
+                        lit9->text = "2.718281828459045"
+                    else:
+                        lit9->text = "6.283185307179586"
+                    return lit9
                 if strcmp(e->text, "__sys_argv") == 0 or strcmp(e->text, "__sys_env") == 0:
                     sc9: *Expr = self->call_rt("ps_sys_argv" if strcmp(e->text, "__sys_argv") == 0 else "ps_sys_env", e->pos)
                     self->push_arg(sc9, self->ctx_arg(e->pos))
@@ -3011,13 +3030,58 @@ struct PsLow:
             self->push_arg(sc, self->num("0" if et9 == PT_INT else ("1" if et9 == PT_FLOAT else "2"), e->pos))
             self->allocs = True
             return sc
+        # ---- 103: random, math, time ----
+        if strncmp(name, "__random_", 9) == 0:
+            rf: const *char = name + 9
+            rc: *Expr = self->call_rt(self->a->printf("ps_random_%s", rf), e->pos)
+            self->push_arg(rc, self->ctx_arg(e->pos))
+            if strcmp(rf, "randrange") == 0:
+                # (stop) -> (0, stop, 1); (start, stop) -> (start, stop, 1)
+                if e->nargs == 1:
+                    self->push_arg(rc, self->num("0", e->pos))
+                    self->push_arg(rc, self->expr(e->args[0]))
+                else:
+                    self->push_arg(rc, self->expr(e->args[0]))
+                    self->push_arg(rc, self->expr(e->args[1]))
+                if e->nargs == 3:
+                    self->push_arg(rc, self->expr(e->args[2]))
+                else:
+                    self->push_arg(rc, self->num("1", e->pos))
+                self->pos_args(rc, e->pos)
+                self->raised = True
+                return rc
+            # os que tomam float tomam float: um `uniform(0, 1)` chega aqui como
+            # int e o `as_f64` é que o converte, em vez de deixar para o back end
+            rfl: bool = strcmp(rf, "uniform") == 0 or strcmp(rf, "gauss") == 0 or strcmp(rf, "expovariate") == 0
+            for i in range(e->nargs):
+                self->push_arg(rc, self->as_f64(e->args[i]) if rfl else self->expr(e->args[i]))
+            # os que podem recusar levam a posição, como todo o resto que lança
+            if strcmp(rf, "getrandbits") == 0 or strcmp(rf, "below") == 0 or strcmp(rf, "randint") == 0 or strcmp(rf, "shuffle") == 0 or strcmp(rf, "expovariate") == 0:
+                self->pos_args(rc, e->pos)
+                self->raised = True
+            return rc
+        if strncmp(name, "__math_", 7) == 0:
+            mf: const *char = name + 7
+            # a libm tem os nomes: `math.pow` é `pow`, `math.log2` é `log2`
+            mc: *Expr = self->call_rt(mf, e->pos)
+            for i in range(e->nargs):
+                self->push_arg(mc, self->as_f64(e->args[i]))
+            if strcmp(mf, "floor") == 0 or strcmp(mf, "ceil") == 0 or strcmp(mf, "trunc") == 0:
+                # o Python devolve int nesses três, e um índice é o uso normal
+                ic9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                ic9->cast_type = ty_name(self->a, "i64")
+                ic9->lhs = mc
+                return ic9
+            return mc
+        if strncmp(name, "__time_", 7) == 0:
+            return self->call_rt("ps_sys_time" if strcmp(name + 7, "time") == 0 else "ps_sys_monotonic", e->pos)
         if strcmp(name, "__sys_exit") == 0:
             xc: *Expr = self->call_rt("ps_sys_exit", e->pos)
             self->push_arg(xc, self->ctx_arg(e->pos))
             self->push_arg(xc, self->expr(e->args[0]))
             return xc
         if strcmp(name, "__sys_time") == 0:
-            return self->call_rt("ps_sys_time", e->pos)
+            return self->call_rt("ps_sys_monotonic", e->pos)
         if starts_with(name, "__net_"):
             nc: *Expr = self->call_rt(self->a->printf("ps_net_%s", name + 6), e->pos)
             self->push_arg(nc, self->ctx_arg(e->pos))

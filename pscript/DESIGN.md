@@ -3591,6 +3591,84 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 103 — `random`, `math` e `time`: portados, não inventados (2026-08-21)
+
+Os três primeiros módulos da biblioteca, e o primeiro caso em que a resposta foi
+**buscar o código do CPython** em vez de escrever o nosso. Você levantou isso
+textualmente: *"algumas coisas dessas talvez conseguimos até mesmo portar do
+cpython né"*.
+
+**103.1 `math` não tem nada a portar, e isso é o resultado.** É a libm, que já é
+a implementação de referência do Python — `math.sqrt` do CPython é `sqrt(3)`. As
+22 funções descem para a chamada direta, sem função de runtime no meio. O que
+sobrou para DECIDIR ali é o contrato, não o cálculo:
+
+- **`floor`, `ceil` e `trunc` devolvem `int`**, como no Python, e é por isso que
+  `xs[math.floor(2.7)]` indexa. As outras devolvem `float`. Devolver float em
+  todas seria mais simples e transformaria todo índice num cast à mão.
+- **`inf` e `nan` vêm do RUNTIME**, não de um literal. Escrevê-los como um
+  trecho de C (`((double)(1.0/0.0))`) funcionou no back end de C e saiu no IL do
+  QBE como `d_((double)(1.0/0.0))`, que não é um número — o back end de C
+  perdoou o que o outro não perdoa, que é exatamente o defeito que validar nos
+  três modos existe para pegar. `INFINITY` e `NAN` da libm não servem porque
+  estão sob feature macros que o `-std=` do C gerado pode não ter.
+- **`pi`, `e` e `tau` são literais** com os dígitos que um double aguenta.
+
+**103.2 `random` é o MT19937 do CPython, transcrito.** `Modules/_randommodule.c`
+(que é o download de Matsumoto e Nishimura, BSD de três cláusulas) mais a camada
+de `Lib/random.py` — `_randbelow_with_getrandbits`, `randint`, `randrange`,
+`choice`, `shuffle`, `uniform`, `gauss`, `expovariate`. Atribuição no cabeçalho
+do arquivo: PSF-2.0 e a licença do MT.
+
+**O motivo de portar em vez de escrever um gerador qualquer** é que ele fica
+TESTÁVEL: com a mesma semente a sequência tem de ser a MESMA do Python, e aí
+`tests/oracle/py/rng.psc` compara número por número — 10 doubles crus, cada
+largura de `getrandbits`, `randint`, as três formas de `randrange`, `shuffle` de
+seis tamanhos, `choice`, `uniform`, `gauss`, `expovariate`, semente grande,
+negativa e zero. Um gerador escrito à mão passaria em qualquer teste que eu
+mesmo escrevesse.
+
+E foi o que aconteceu na prática — três defeitos que só um oráculo pega:
+
+> **`k = n.bit_length()` é de `n`, não de `n-1`.** Contar os bits de `n-1`
+> distribui perfeitamente e diverge do Python exatamente na POTÊNCIA DE DOIS:
+> `bit_length(4)` é 3, então o Python sorteia 3 bits e descarta metade dos
+> sorteios. A minha versão sorteava 2 bits e nunca descartava. Passa em qualquer
+> teste de aleatoriedade; foi pega pelo primeiro `shuffle` de uma lista de
+> quatro.
+>
+> **O `gauss` guarda o par.** O método polar produz DOIS normais de uma vez e o
+> Python devolve um e guarda o outro. Jogar o segundo fora consome o dobro de
+> uniformes e diverge da segunda chamada em diante — e `seed()` tem de jogar o
+> par pendente fora, senão a mesma semente dá números diferentes conforme o que
+> foi sorteado antes dela.
+>
+> **`time.time()` estava devolvendo tempo de máquina ligada.** O `ps_sys_time`
+> que já existia era `CLOCK_MONOTONIC` — certo para os prazos do laço de
+> eventos, que é para o que ele foi escrito, e errado para `time.time()`, que
+> respondeu 32 mil em vez de 1,7 bilhão. Agora são dois relógios com dois nomes:
+> `ps_sys_monotonic` (o de dentro, todos os prazos, `time.monotonic()`) e
+> `ps_sys_time` (`CLOCK_REALTIME`, só `time.time()`). Nenhum substitui o outro:
+> medir duração com o de parede dá tempo negativo no dia em que o ntp corrige a
+> máquina.
+
+**103.3 O estado do gerador é POR CONTEXTO**, alocado na primeira chamada e
+semeado de `time`+`pid` se ninguém semeou. Cada worker tem heap, coletor e laço
+próprios (18.1); compartilhar 624 palavras de estado entre threads seria uma
+corrida de dados com aparência de número aleatório.
+
+**103.4 `getrandbits` acima de 63 bits é RECUSADO** em tempo de execução, e não
+truncado: o Python devolve um inteiro grande e aqui `int` são 64 bits (7.2).
+`randrange` com passo zero ou intervalo vazio também levanta, como no Python.
+
+**103.5 O que ficou de fora e por quê.** `sample` e `choices` (devolvem lista
+nova, entram com a varredura do toolkit de sequências), `normalvariate` (no
+CPython 3.11+ é o método da razão de Kinderman-Monahan, um algoritmo diferente
+do `gauss`, e portar por metade não dá paridade), `betavariate` e companhia. A
+semente aceita só `int` — o Python aceita `str`/`bytes` passando por sha512, o
+que arrastaria hash criptográfico para dentro do runtime por causa de
+`random.seed("abc")`.
+
 ## Bateria 102 — `epoll` e `kqueue`, finalmente (2026-08-20)
 
 A 18.4 pediu os dois e recusou `poll()` por escrito, em julho. Chegou agora

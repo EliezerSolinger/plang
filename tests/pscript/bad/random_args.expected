@@ -1,0 +1,1 @@
+random.randint(a, b) takes two numbers, and BOTH ends are included, as in Python

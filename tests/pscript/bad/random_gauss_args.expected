@@ -1,0 +1,1 @@
+random.gauss(mu, sigma) takes the mean and the STANDARD DEVIATION, not the variance

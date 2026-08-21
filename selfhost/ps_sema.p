@@ -656,7 +656,10 @@ struct PsSema:
                                 e->type = t
                                 return t
                     # `sys.argv` and `sys.env` are VALUES, not calls (48.3)
-                    if strcmp(e->text, "__sys_argv") == 0:
+                    if strncmp(e->text, "__math_", 7) == 0 and (strcmp(e->text + 7, "pi") == 0 or strcmp(e->text + 7, "e") == 0 or strcmp(e->text + 7, "tau") == 0 or strcmp(e->text + 7, "inf") == 0 or strcmp(e->text + 7, "nan") == 0):
+                        # 103: as constantes são VALORES, como `sys.argv` é
+                        t = ps_type(self->a, PT_FLOAT, e->pos)
+                    elif strcmp(e->text, "__sys_argv") == 0:
                         av: *PsType = ps_type(self->a, PT_LIST, e->pos)
                         av->inner = ps_type(self->a, PT_STR, e->pos)
                         t = av
@@ -2294,6 +2297,124 @@ struct PsSema:
             jt: *PsType = self->check_expr(e->args[0])
             self->want(e->args[0], jt, ps_type(self->a, PT_STR, e->pos), "json.parse()")
             return ps_type(self->a, PT_ANY, e->pos)
+        # ---- 103: random, math, time ----
+        if strncmp(name, "__random_", 9) == 0:
+            fn9: const *char = name + 9
+            it9: *PsType = ps_type(self->a, PT_INT, e->pos)
+            ft9: *PsType = ps_type(self->a, PT_FLOAT, e->pos)
+            if strcmp(fn9, "random") == 0:
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "random.random() takes no arguments")
+                return ft9
+            if strcmp(fn9, "seed") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "random.seed(n) takes one number")
+                self->want(e->args[0], self->check_expr(e->args[0]), it9, "the seed")
+                return ps_type(self->a, PT_VOID, e->pos)
+            if strcmp(fn9, "getrandbits") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "random.getrandbits(n) takes one number")
+                self->want(e->args[0], self->check_expr(e->args[0]), it9, "the argument")
+                return it9
+            if strcmp(fn9, "randrange") == 0:
+                # as três formas do Python: (stop), (start, stop), (start, stop, step)
+                if e->nargs < 1 or e->nargs > 3:
+                    fatal_at(self->file, e->pos, "random.randrange takes (stop), (start, stop) or (start, stop, step), and the stop is EXCLUDED — randint includes it")
+                for i in range(e->nargs):
+                    self->want(e->args[i], self->check_expr(e->args[i]), it9, "an end of the range")
+                return it9
+            if strcmp(fn9, "randint") == 0:
+                if e->nargs != 2:
+                    fatal_at(self->file, e->pos, "random.randint(a, b) takes two numbers, and BOTH ends are included, as in Python")
+                for i in range(2):
+                    self->want(e->args[i], self->check_expr(e->args[i]), it9, "an end of the range")
+                return it9
+            if strcmp(fn9, "gauss") == 0:
+                if e->nargs != 2:
+                    fatal_at(self->file, e->pos, "random.gauss(mu, sigma) takes the mean and the STANDARD DEVIATION, not the variance")
+                for i in range(2):
+                    self->check_want(e->args[i], ft9, "an argument")
+                return ft9
+            if strcmp(fn9, "expovariate") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "random.expovariate(lambd) takes the rate")
+                self->check_want(e->args[0], ft9, "the rate")
+                return ft9
+            if strcmp(fn9, "uniform") == 0:
+                if e->nargs != 2:
+                    fatal_at(self->file, e->pos, "random.uniform(a, b) takes two numbers")
+                for i in range(2):
+                    self->check_want(e->args[i], ft9, "an end of the range")
+                return ft9
+            if strcmp(fn9, "choice") == 0:
+                # `Lib/random.py`: `seq[self._randbelow(len(seq))]`. Written HERE
+                # as exactly that, so there is no generic to instantiate and the
+                # element type comes out of the list itself.
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "random.choice(xs) takes one list")
+                cl9: *PsType = self->check_expr(e->args[0])
+                if cl9 == None or cl9->kind != PT_LIST:
+                    fatal_at(self->file, e->pos, "random.choice() takes a list, found %s", ps_type_str(self->a, cl9))
+                if e->args[0]->kind != PE_NAME and e->args[0]->kind != PE_FIELD:
+                    fatal_at(self->file, e->pos, "random.choice() on something that is not a plain variable would evaluate it twice: put the list in a variable first")
+                lenc: *PsExpr = ps_expr(self->a, PE_CALL, e->pos)
+                lenc->lhs = ps_expr(self->a, PE_NAME, e->pos)
+                lenc->lhs->text = "len"
+                lenc->args = self->a->alloc(sizeof(*lenc->args))
+                lenc->args[0] = e->args[0]
+                lenc->nargs = 1
+                below: *PsExpr = ps_expr(self->a, PE_CALL, e->pos)
+                below->lhs = ps_expr(self->a, PE_NAME, e->pos)
+                below->lhs->text = "__random_below"
+                below->args = self->a->alloc(sizeof(*below->args))
+                below->args[0] = lenc
+                below->nargs = 1
+                with e:
+                    .kind = PE_INDEX
+                    .lhs = e->args[0]
+                    .rhs = below
+                    .args = None
+                    .nargs = 0
+                return self->check_expr(e)
+            if strcmp(fn9, "below") == 0:
+                # o interno que o `choice` acima usa
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "internal: __random_below takes one number")
+                self->want(e->args[0], self->check_expr(e->args[0]), it9, "the bound")
+                return it9
+            if strcmp(fn9, "shuffle") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "random.shuffle(xs) takes one list")
+                sl9: *PsType = self->check_expr(e->args[0])
+                if sl9 == None or sl9->kind != PT_LIST:
+                    fatal_at(self->file, e->pos, "random.shuffle() takes a list, found %s", ps_type_str(self->a, sl9))
+                return ps_type(self->a, PT_VOID, e->pos)
+            fatal_at(self->file, e->pos, "random has seed, random, getrandbits, randint, randrange, uniform, gauss, expovariate, choice and shuffle")
+        if strncmp(name, "__math_", 7) == 0:
+            mf: const *char = name + 7
+            mft: *PsType = ps_type(self->a, PT_FLOAT, e->pos)
+            if strcmp(mf, "isnan") == 0 or strcmp(mf, "isinf") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "math.%s(x) takes one number", mf)
+                self->check_want(e->args[0], mft, "the argument")
+                return ps_type(self->a, PT_BOOL, e->pos)
+            # `floor`, `ceil` e `trunc` devolvem INT no Python, e é o que um
+            # índice espera — os outros devolvem float
+            if strcmp(mf, "floor") == 0 or strcmp(mf, "ceil") == 0 or strcmp(mf, "trunc") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "math.%s(x) takes one number", mf)
+                self->check_want(e->args[0], mft, "the argument")
+                return ps_type(self->a, PT_INT, e->pos)
+            n2: i32 = 2 if (strcmp(mf, "pow") == 0 or strcmp(mf, "atan2") == 0 or strcmp(mf, "hypot") == 0 or strcmp(mf, "fmod") == 0) else 1
+            if e->nargs != n2:
+                fatal_at(self->file, e->pos, "math.%s takes %d number(s)", mf, n2)
+            for i in range(n2):
+                self->check_want(e->args[i], mft, "the argument")
+            return mft
+        if strncmp(name, "__time_", 7) == 0:
+            if e->nargs != 0:
+                fatal_at(self->file, e->pos, "time.%s() takes no arguments", name + 7)
+            return ps_type(self->a, PT_FLOAT, e->pos)
         if strcmp(name, "__re_match") == 0:
             # 41.2: the groups, or None. [0] is the whole match.
             if e->nargs != 2:
@@ -2628,7 +2749,7 @@ struct PsSema:
             # `sys` is the one module that is not a file (48.3): what it names
             # is the program's own surroundings, which only the runtime can
             # answer. Its members are BUILTINS, so there is nothing to load.
-            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0):
+            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0 or strcmp(d->path, "random") == 0 or strcmp(d->path, "math") == 0 or strcmp(d->path, "time") == 0):
                 sub = self->builtin_ns(d->path, path)
             if sub == None:
                 n: usize = 0
@@ -2931,6 +3052,51 @@ struct PsSema:
             ns->sym.add("match")
         elif strcmp(name, "json") == 0:
             ns->sym.add("parse")
+        elif strcmp(name, "random") == 0:
+            # 103: portado do CPython, então a mesma semente dá a mesma
+            # sequência — e é isso que o oráculo confere
+            ns->sym.add("seed")
+            ns->sym.add("random")
+            ns->sym.add("getrandbits")
+            ns->sym.add("randint")
+            ns->sym.add("randrange")
+            ns->sym.add("gauss")
+            ns->sym.add("expovariate")
+            ns->sym.add("uniform")
+            ns->sym.add("choice")
+            ns->sym.add("shuffle")
+        elif strcmp(name, "math") == 0:
+            # casca fina sobre a libm, que é o que o `mathmodule.c` do CPython
+            # também é — não há o que portar, e a 27.1 diz que a libc É o runtime
+            ns->sym.add("sqrt")
+            ns->sym.add("floor")
+            ns->sym.add("ceil")
+            ns->sym.add("trunc")
+            ns->sym.add("fabs")
+            ns->sym.add("exp")
+            ns->sym.add("log")
+            ns->sym.add("log2")
+            ns->sym.add("log10")
+            ns->sym.add("pow")
+            ns->sym.add("sin")
+            ns->sym.add("cos")
+            ns->sym.add("tan")
+            ns->sym.add("asin")
+            ns->sym.add("acos")
+            ns->sym.add("atan")
+            ns->sym.add("atan2")
+            ns->sym.add("hypot")
+            ns->sym.add("fmod")
+            ns->sym.add("isnan")
+            ns->sym.add("isinf")
+            ns->sym.add("pi")
+            ns->sym.add("e")
+            ns->sym.add("tau")
+            ns->sym.add("inf")
+            ns->sym.add("nan")
+        elif strcmp(name, "time") == 0:
+            ns->sym.add("time")
+            ns->sym.add("monotonic")
         else:
             ns->sym.add("argv")
             ns->sym.add("env")

@@ -2153,7 +2153,9 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                         }
                     }
                 }
-                if (strcmp(e->text, "__sys_argv") == 0) {
+                if (strncmp(e->text, "__math_", 7) == 0 && (strcmp(e->text + 7, "pi") == 0 || strcmp(e->text + 7, "e") == 0 || strcmp(e->text + 7, "tau") == 0 || strcmp(e->text + 7, "inf") == 0 || strcmp(e->text + 7, "nan") == 0)) {
+                    t = ps_type(self->a, PT_FLOAT, e->pos);
+                } else if (strcmp(e->text, "__sys_argv") == 0) {
                     PsType *av = ps_type(self->a, PT_LIST, e->pos);
                     av->inner = ps_type(self->a, PT_STR, e->pos);
                     t = av;
@@ -2324,12 +2326,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_843_17 = e;
-                __with_843_17->kind = PE_CALL;
-                __with_843_17->lhs = cal8;
-                __with_843_17->args = args8;
-                __with_843_17->nargs = nc8;
-                __with_843_17->body = NULL;
+                PsExpr *__with_846_17 = e;
+                __with_846_17->kind = PE_CALL;
+                __with_846_17->lhs = cal8;
+                __with_846_17->args = args8;
+                __with_846_17->nargs = nc8;
+                __with_846_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -2957,14 +2959,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1416_21 = e;
-                    __with_1416_21->kind = PE_COMPREHEND;
-                    __with_1416_21->op = TK_RBRACKET;
-                    __with_1416_21->var = kv9;
-                    __with_1416_21->lhs = pair;
-                    __with_1416_21->rhs = recv9;
-                    __with_1416_21->args = NULL;
-                    __with_1416_21->nargs = 0;
+                    PsExpr *__with_1419_21 = e;
+                    __with_1419_21->kind = PE_COMPREHEND;
+                    __with_1419_21->op = TK_RBRACKET;
+                    __with_1419_21->var = kv9;
+                    __with_1419_21->lhs = pair;
+                    __with_1419_21->rhs = recv9;
+                    __with_1419_21->args = NULL;
+                    __with_1419_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -3908,6 +3910,162 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         PsSema_want(self, e->args[0], jt, ps_type(self->a, PT_STR, e->pos), "json.parse()");
         return ps_type(self->a, PT_ANY, e->pos);
     }
+    if (strncmp(name, "__random_", 9) == 0) {
+        const char *fn9 = name + 9;
+        PsType *it9 = ps_type(self->a, PT_INT, e->pos);
+        PsType *ft9 = ps_type(self->a, PT_FLOAT, e->pos);
+        if (strcmp(fn9, "random") == 0) {
+            if (e->nargs != 0) {
+                fatal_at(self->file, e->pos, "random.random() takes no arguments");
+            }
+            return ft9;
+        }
+        if (strcmp(fn9, "seed") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "random.seed(n) takes one number");
+            }
+            PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), it9, "the seed");
+            return ps_type(self->a, PT_VOID, e->pos);
+        }
+        if (strcmp(fn9, "getrandbits") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "random.getrandbits(n) takes one number");
+            }
+            PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), it9, "the argument");
+            return it9;
+        }
+        if (strcmp(fn9, "randrange") == 0) {
+            if (e->nargs < 1 || e->nargs > 3) {
+                fatal_at(self->file, e->pos, "random.randrange takes (stop), (start, stop) or (start, stop, step), and the stop is EXCLUDED — randint includes it");
+            }
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsSema_want(self, e->args[i], PsSema_check_expr(self, e->args[i]), it9, "an end of the range");
+            }
+            return it9;
+        }
+        if (strcmp(fn9, "randint") == 0) {
+            if (e->nargs != 2) {
+                fatal_at(self->file, e->pos, "random.randint(a, b) takes two numbers, and BOTH ends are included, as in Python");
+            }
+            size_t i;
+            for (i = 0; i < 2; i += 1) {
+                PsSema_want(self, e->args[i], PsSema_check_expr(self, e->args[i]), it9, "an end of the range");
+            }
+            return it9;
+        }
+        if (strcmp(fn9, "gauss") == 0) {
+            if (e->nargs != 2) {
+                fatal_at(self->file, e->pos, "random.gauss(mu, sigma) takes the mean and the STANDARD DEVIATION, not the variance");
+            }
+            size_t i;
+            for (i = 0; i < 2; i += 1) {
+                PsSema_check_want(self, e->args[i], ft9, "an argument");
+            }
+            return ft9;
+        }
+        if (strcmp(fn9, "expovariate") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "random.expovariate(lambd) takes the rate");
+            }
+            PsSema_check_want(self, e->args[0], ft9, "the rate");
+            return ft9;
+        }
+        if (strcmp(fn9, "uniform") == 0) {
+            if (e->nargs != 2) {
+                fatal_at(self->file, e->pos, "random.uniform(a, b) takes two numbers");
+            }
+            size_t i;
+            for (i = 0; i < 2; i += 1) {
+                PsSema_check_want(self, e->args[i], ft9, "an end of the range");
+            }
+            return ft9;
+        }
+        if (strcmp(fn9, "choice") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "random.choice(xs) takes one list");
+            }
+            PsType *cl9 = PsSema_check_expr(self, e->args[0]);
+            if (cl9 == NULL || cl9->kind != PT_LIST) {
+                fatal_at(self->file, e->pos, "random.choice() takes a list, found %s", ps_type_str(self->a, cl9));
+            }
+            if (e->args[0]->kind != PE_NAME && e->args[0]->kind != PE_FIELD) {
+                fatal_at(self->file, e->pos, "random.choice() on something that is not a plain variable would evaluate it twice: put the list in a variable first");
+            }
+            PsExpr *lenc = ps_expr(self->a, PE_CALL, e->pos);
+            lenc->lhs = ps_expr(self->a, PE_NAME, e->pos);
+            lenc->lhs->text = "len";
+            lenc->args = Arena_alloc(self->a, sizeof(*lenc->args));
+            lenc->args[0] = e->args[0];
+            lenc->nargs = 1;
+            PsExpr *below = ps_expr(self->a, PE_CALL, e->pos);
+            below->lhs = ps_expr(self->a, PE_NAME, e->pos);
+            below->lhs->text = "__random_below";
+            below->args = Arena_alloc(self->a, sizeof(*below->args));
+            below->args[0] = lenc;
+            below->nargs = 1;
+            {
+                PsExpr *__with_2372_17 = e;
+                __with_2372_17->kind = PE_INDEX;
+                __with_2372_17->lhs = e->args[0];
+                __with_2372_17->rhs = below;
+                __with_2372_17->args = NULL;
+                __with_2372_17->nargs = 0;
+            }
+            return PsSema_check_expr(self, e);
+        }
+        if (strcmp(fn9, "below") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "internal: __random_below takes one number");
+            }
+            PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), it9, "the bound");
+            return it9;
+        }
+        if (strcmp(fn9, "shuffle") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "random.shuffle(xs) takes one list");
+            }
+            PsType *sl9 = PsSema_check_expr(self, e->args[0]);
+            if (sl9 == NULL || sl9->kind != PT_LIST) {
+                fatal_at(self->file, e->pos, "random.shuffle() takes a list, found %s", ps_type_str(self->a, sl9));
+            }
+            return ps_type(self->a, PT_VOID, e->pos);
+        }
+        fatal_at(self->file, e->pos, "random has seed, random, getrandbits, randint, randrange, uniform, gauss, expovariate, choice and shuffle");
+    }
+    if (strncmp(name, "__math_", 7) == 0) {
+        const char *mf = name + 7;
+        PsType *mft = ps_type(self->a, PT_FLOAT, e->pos);
+        if (strcmp(mf, "isnan") == 0 || strcmp(mf, "isinf") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "math.%s(x) takes one number", mf);
+            }
+            PsSema_check_want(self, e->args[0], mft, "the argument");
+            return ps_type(self->a, PT_BOOL, e->pos);
+        }
+        if (strcmp(mf, "floor") == 0 || strcmp(mf, "ceil") == 0 || strcmp(mf, "trunc") == 0) {
+            if (e->nargs != 1) {
+                fatal_at(self->file, e->pos, "math.%s(x) takes one number", mf);
+            }
+            PsSema_check_want(self, e->args[0], mft, "the argument");
+            return ps_type(self->a, PT_INT, e->pos);
+        }
+        int32_t n2 = (strcmp(mf, "pow") == 0 || strcmp(mf, "atan2") == 0 || strcmp(mf, "hypot") == 0 || strcmp(mf, "fmod") == 0 ? 2 : 1);
+        if (e->nargs != n2) {
+            fatal_at(self->file, e->pos, "math.%s takes %d number(s)", mf, n2);
+        }
+        size_t i;
+        for (i = 0; i < n2; i += 1) {
+            PsSema_check_want(self, e->args[i], mft, "the argument");
+        }
+        return mft;
+    }
+    if (strncmp(name, "__time_", 7) == 0) {
+        if (e->nargs != 0) {
+            fatal_at(self->file, e->pos, "time.%s() takes no arguments", name + 7);
+        }
+        return ps_type(self->a, PT_FLOAT, e->pos);
+    }
     if (strcmp(name, "__re_match") == 0) {
         if (e->nargs != 2) {
             fatal_at(self->file, e->pos, "re.match() takes a pattern and a string");
@@ -4062,26 +4220,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2442_17 = e;
-                __with_2442_17->kind = PE_STR;
-                __with_2442_17->text = lit7;
-                __with_2442_17->lhs = NULL;
-                __with_2442_17->rhs = NULL;
-                __with_2442_17->args = NULL;
-                __with_2442_17->nargs = 0;
+                PsExpr *__with_2563_17 = e;
+                __with_2563_17->kind = PE_STR;
+                __with_2563_17->text = lit7;
+                __with_2563_17->lhs = NULL;
+                __with_2563_17->rhs = NULL;
+                __with_2563_17->args = NULL;
+                __with_2563_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2455_13 = e;
-            __with_2455_13->kind = PE_LOWERED;
-            __with_2455_13->low = ln7;
-            __with_2455_13->lhs = NULL;
-            __with_2455_13->rhs = NULL;
-            __with_2455_13->args = NULL;
-            __with_2455_13->nargs = 0;
+            PsExpr *__with_2576_13 = e;
+            __with_2576_13->kind = PE_LOWERED;
+            __with_2576_13->low = ln7;
+            __with_2576_13->lhs = NULL;
+            __with_2576_13->rhs = NULL;
+            __with_2576_13->args = NULL;
+            __with_2576_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4266,7 +4424,7 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
         }
         const char *path = path_join(self->a, dir, Arena_printf(self->a, "%s.psc", d->path));
         PsNs *sub = StrMap_pPsNs_get_or(&self->nsof, path, NULL);
-        if (sub == NULL && (strcmp(d->path, "sys") == 0 || strcmp(d->path, "re") == 0 || strcmp(d->path, "json") == 0 || strcmp(d->path, "net") == 0)) {
+        if (sub == NULL && (strcmp(d->path, "sys") == 0 || strcmp(d->path, "re") == 0 || strcmp(d->path, "json") == 0 || strcmp(d->path, "net") == 0 || strcmp(d->path, "random") == 0 || strcmp(d->path, "math") == 0 || strcmp(d->path, "time") == 0)) {
             sub = PsSema_builtin_ns(self, d->path, path);
         }
         if (sub == NULL) {
@@ -4298,10 +4456,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2656_17 = &ns->quals[ns->nquals];
-                __with_2656_17->name = q;
-                __with_2656_17->orig = d->path;
-                __with_2656_17->ns = sub;
+                PsNsEnt *__with_2777_17 = &ns->quals[ns->nquals];
+                __with_2777_17->name = q;
+                __with_2777_17->orig = d->path;
+                __with_2777_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4314,10 +4472,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2668_21 = &ns->ents[ns->nents];
-                    __with_2668_21->name = local;
-                    __with_2668_21->orig = d->names[k];
-                    __with_2668_21->ns = sub;
+                    PsNsEnt *__with_2789_21 = &ns->ents[ns->nents];
+                    __with_2789_21->name = local;
+                    __with_2789_21->orig = d->names[k];
+                    __with_2789_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4606,6 +4764,47 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "match");
     } else if (strcmp(name, "json") == 0) {
         StrSet_add(&ns->sym, "parse");
+    } else if (strcmp(name, "random") == 0) {
+        StrSet_add(&ns->sym, "seed");
+        StrSet_add(&ns->sym, "random");
+        StrSet_add(&ns->sym, "getrandbits");
+        StrSet_add(&ns->sym, "randint");
+        StrSet_add(&ns->sym, "randrange");
+        StrSet_add(&ns->sym, "gauss");
+        StrSet_add(&ns->sym, "expovariate");
+        StrSet_add(&ns->sym, "uniform");
+        StrSet_add(&ns->sym, "choice");
+        StrSet_add(&ns->sym, "shuffle");
+    } else if (strcmp(name, "math") == 0) {
+        StrSet_add(&ns->sym, "sqrt");
+        StrSet_add(&ns->sym, "floor");
+        StrSet_add(&ns->sym, "ceil");
+        StrSet_add(&ns->sym, "trunc");
+        StrSet_add(&ns->sym, "fabs");
+        StrSet_add(&ns->sym, "exp");
+        StrSet_add(&ns->sym, "log");
+        StrSet_add(&ns->sym, "log2");
+        StrSet_add(&ns->sym, "log10");
+        StrSet_add(&ns->sym, "pow");
+        StrSet_add(&ns->sym, "sin");
+        StrSet_add(&ns->sym, "cos");
+        StrSet_add(&ns->sym, "tan");
+        StrSet_add(&ns->sym, "asin");
+        StrSet_add(&ns->sym, "acos");
+        StrSet_add(&ns->sym, "atan");
+        StrSet_add(&ns->sym, "atan2");
+        StrSet_add(&ns->sym, "hypot");
+        StrSet_add(&ns->sym, "fmod");
+        StrSet_add(&ns->sym, "isnan");
+        StrSet_add(&ns->sym, "isinf");
+        StrSet_add(&ns->sym, "pi");
+        StrSet_add(&ns->sym, "e");
+        StrSet_add(&ns->sym, "tau");
+        StrSet_add(&ns->sym, "inf");
+        StrSet_add(&ns->sym, "nan");
+    } else if (strcmp(name, "time") == 0) {
+        StrSet_add(&ns->sym, "time");
+        StrSet_add(&ns->sym, "monotonic");
     } else {
         StrSet_add(&ns->sym, "argv");
         StrSet_add(&ns->sym, "env");
@@ -4678,10 +4877,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_3004_9 = e;
-        __with_3004_9->kind = PE_NAME;
-        __with_3004_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_3004_9->lhs = NULL;
+        PsExpr *__with_3170_9 = e;
+        __with_3170_9->kind = PE_NAME;
+        __with_3170_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3170_9->lhs = NULL;
     }
     return 1;
 }

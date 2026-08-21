@@ -1,0 +1,21 @@
+random 0.11911988496396309
+bits 2058
+dado 5
+range 41 11 5
+uniform 1.8948071345763702
+shuffle ['as', 'rei', 'dama', 'valete', 'dez']
+shuffle ['rei', 'dama', 'as', 'valete', 'dez']
+choice dez
+objetos cbda
+gauss 0.4451143045616876 -0.9981445269978525
+expo 0.8430587551638086
+indexa 30 20
+sqrt 12.0 hypot 5.0
+pow 65536.0 log2 8.0
+pi 3.141592653589793 e 2.718281828459045
+inf True nan True
+soma 4999950000 durou True
+epoca True
+bits demais
+vazio: empty range for randrange()
+passo: randrange() step may not be zero

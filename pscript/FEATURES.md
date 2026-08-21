@@ -181,6 +181,9 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | Regex POSIX (ERE) | 41.2 | `--dim 800x600` | ✅ |
 | `open()` + `with` | 48.1 | cena e PPM | ✅ (síncrono; o pool da 38.4 falta) |
 | `sys.argv` / `sys.env` / `sys.exit` / `sys.time` | 48.3 | CLI inteira | ✅ |
+| `math` (22 funções + `pi`/`e`/`tau`/`inf`/`nan`) | 103.1 | `stdmod`, `rng` | ✅ é a libm direta; `floor`/`ceil`/`trunc` devolvem **int** como no Python, `inf`/`nan` vêm do runtime (literal de C quebra o QBE) |
+| `random` (MT19937) | 103.2 | `stdmod`, `rng` | ✅ **portado** de `_randommodule.c` + `Lib/random.py`: a mesma semente dá a MESMA sequência do Python, comparada número por número no oráculo. `seed`/`random`/`getrandbits`/`randint`/`randrange`/`uniform`/`gauss`/`expovariate`/`choice`/`shuffle` |
+| `time.time` / `time.monotonic` | 103.2 | `stdmod` | ✅ dois relógios: parede (`CLOCK_REALTIME`) e monotônico (todos os prazos do laço) |
 | f-string com spec | 45.1 | tudo | ✅ |
 | Comprehension | 8.1 | — | ✅ |
 | `embed`/`embed_bytes` (comptime) | 63.1, 63.5 | `embed` | ✅ nas duas línguas; no pscript o binário vira `static` + memcpy, então um megabyte de fonte custa um megabyte de DADO |

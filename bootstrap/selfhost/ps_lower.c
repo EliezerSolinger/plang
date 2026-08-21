@@ -1802,6 +1802,21 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 self->allocs = 1;
                 return sf9;
             }
+            if (strncmp(e->text, "__math_", 7) == 0) {
+                const char *cn9 = e->text + 7;
+                if (strcmp(cn9, "inf") == 0 || strcmp(cn9, "nan") == 0) {
+                    return PsLow_call_rt(self, Arena_printf(self->a, "ps_math_%s", cn9), e->pos);
+                }
+                Expr *lit9 = ex_new(self->a, EX_NUMBER, e->pos);
+                if (strcmp(cn9, "pi") == 0) {
+                    lit9->text = "3.141592653589793";
+                } else if (strcmp(cn9, "e") == 0) {
+                    lit9->text = "2.718281828459045";
+                } else {
+                    lit9->text = "6.283185307179586";
+                }
+                return lit9;
+            }
             if (strcmp(e->text, "__sys_argv") == 0 || strcmp(e->text, "__sys_env") == 0) {
                 Expr *sc9 = PsLow_call_rt(self, (strcmp(e->text, "__sys_argv") == 0 ? "ps_sys_argv" : "ps_sys_env"), e->pos);
                 PsLow_push_arg(self, sc9, PsLow_ctx_arg(self, e->pos));
@@ -3342,6 +3357,56 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         return sc;
     }
+    if (strncmp(name, "__random_", 9) == 0) {
+        const char *rf = name + 9;
+        Expr *rc = PsLow_call_rt(self, Arena_printf(self->a, "ps_random_%s", rf), e->pos);
+        PsLow_push_arg(self, rc, PsLow_ctx_arg(self, e->pos));
+        if (strcmp(rf, "randrange") == 0) {
+            if (e->nargs == 1) {
+                PsLow_push_arg(self, rc, PsLow_num(self, "0", e->pos));
+                PsLow_push_arg(self, rc, PsLow_expr(self, e->args[0]));
+            } else {
+                PsLow_push_arg(self, rc, PsLow_expr(self, e->args[0]));
+                PsLow_push_arg(self, rc, PsLow_expr(self, e->args[1]));
+            }
+            if (e->nargs == 3) {
+                PsLow_push_arg(self, rc, PsLow_expr(self, e->args[2]));
+            } else {
+                PsLow_push_arg(self, rc, PsLow_num(self, "1", e->pos));
+            }
+            PsLow_pos_args(self, rc, e->pos);
+            self->raised = 1;
+            return rc;
+        }
+        int rfl = strcmp(rf, "uniform") == 0 || strcmp(rf, "gauss") == 0 || strcmp(rf, "expovariate") == 0;
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, rc, (rfl ? PsLow_as_f64(self, e->args[i]) : PsLow_expr(self, e->args[i])));
+        }
+        if (strcmp(rf, "getrandbits") == 0 || strcmp(rf, "below") == 0 || strcmp(rf, "randint") == 0 || strcmp(rf, "shuffle") == 0 || strcmp(rf, "expovariate") == 0) {
+            PsLow_pos_args(self, rc, e->pos);
+            self->raised = 1;
+        }
+        return rc;
+    }
+    if (strncmp(name, "__math_", 7) == 0) {
+        const char *mf = name + 7;
+        Expr *mc = PsLow_call_rt(self, mf, e->pos);
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, mc, PsLow_as_f64(self, e->args[i]));
+        }
+        if (strcmp(mf, "floor") == 0 || strcmp(mf, "ceil") == 0 || strcmp(mf, "trunc") == 0) {
+            Expr *ic9 = ex_new(self->a, EX_CAST, e->pos);
+            ic9->cast_type = ty_name(self->a, "i64");
+            ic9->lhs = mc;
+            return ic9;
+        }
+        return mc;
+    }
+    if (strncmp(name, "__time_", 7) == 0) {
+        return PsLow_call_rt(self, (strcmp(name + 7, "time") == 0 ? "ps_sys_time" : "ps_sys_monotonic"), e->pos);
+    }
     if (strcmp(name, "__sys_exit") == 0) {
         Expr *xc = PsLow_call_rt(self, "ps_sys_exit", e->pos);
         PsLow_push_arg(self, xc, PsLow_ctx_arg(self, e->pos));
@@ -3349,7 +3414,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         return xc;
     }
     if (strcmp(name, "__sys_time") == 0) {
-        return PsLow_call_rt(self, "ps_sys_time", e->pos);
+        return PsLow_call_rt(self, "ps_sys_monotonic", e->pos);
     }
     if (starts_with(name, "__net_")) {
         Expr *nc = PsLow_call_rt(self, Arena_printf(self->a, "ps_net_%s", name + 6), e->pos);

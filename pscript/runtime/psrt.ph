@@ -590,6 +590,11 @@ struct PsCtx:
     nogc_start: usize
     repr_depth: i32     # 97.2: how deep a container repr is, so a cycle through
                         #   one prints `...` instead of running out of stack
+    rng: *void          # 103: o estado do Mersenne Twister deste contexto,
+                        #   alocado na primeira chamada. Por CONTEXTO porque um
+                        #   worker é outro heap e outro laço (18.1), e estado de
+                        #   gerador compartilhado entre threads é corrida de
+                        #   dados com cara de número aleatório.
     mux: *void          # 18.4/99: the multiplexer this context waits on —
                         #   `epoll` on Linux, `kqueue` on macOS, `poll` where
                         #   neither exists. Opaque here because its shape is
@@ -809,6 +814,9 @@ def ps_sys_args(argc: int, argv: **char)
 def ps_sys_argv(ctx: *PsCtx) -> *PsList
 def ps_sys_env(ctx: *PsCtx) -> *PsDict
 def ps_sys_exit(ctx: *PsCtx, code: i64)
+def ps_math_inf() -> f64
+def ps_math_nan() -> f64
+def ps_sys_monotonic() -> f64
 def ps_sys_time() -> f64
 # `await sleep(s)` (48.2). Until the I/O loop of 18.4 exists this really sleeps
 # the thread: at the TOP LEVEL that is exactly right — the main thread has
@@ -1009,6 +1017,17 @@ def ps_str_new(ctx: *PsCtx, bytes: const *char, len: usize) -> *PsStr
 def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr
 def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr
 def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr
+# 103: `random`, portado do CPython (MT19937 + a camada de Lib/random.py)
+def ps_random_seed(ctx: *PsCtx, n: i64)
+def ps_random_random(ctx: *PsCtx) -> f64
+def ps_random_getrandbits(ctx: *PsCtx, k: i64, file: const *char, line: i32) -> i64
+def ps_random_below(ctx: *PsCtx, n: i64, file: const *char, line: i32) -> i64
+def ps_random_randrange(ctx: *PsCtx, start: i64, stop: i64, step: i64, file: const *char, line: i32) -> i64
+def ps_random_randint(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64
+def ps_random_uniform(ctx: *PsCtx, a: f64, b: f64) -> f64
+def ps_random_gauss(ctx: *PsCtx, mu: f64, sigma: f64) -> f64
+def ps_random_expovariate(ctx: *PsCtx, lambd: f64, file: const *char, line: i32) -> f64
+def ps_random_shuffle(ctx: *PsCtx, l: *PsList, file: const *char, line: i32)
 def ps_str_quoted(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_repr_seq(ctx: *PsCtx, l: *PsList, open: const *char, close: const *char, fn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr
 def ps_repr_dict(ctx: *PsCtx, d: *PsDict, kfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, vfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr
