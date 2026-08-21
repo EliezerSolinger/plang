@@ -15,6 +15,10 @@
 #
 # CACHE: the runtime C is generated once per out-dir and reused, because
 # regenerating it for each of 318 JSON files would dominate the wall clock.
+#
+# 108: o runtime são CINCO módulos em camadas (memória, valores, o que roda, a
+# biblioteca, o epílogo) mais o header de tipos. O programa gerado continua
+# incluindo UM header — `psrt.ph` é o guarda-chuva.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -28,8 +32,12 @@ RT=${PSBUILD_RT:-tests/out/psbuild-rt}
 src=$1; out=$2; shift 2
 
 mkdir -p "$RT"
-if [ ! -f "$RT/pscript/runtime/psrt.c" ]; then
-    $PLANGC --out-dir "$RT" pscript/runtime/psrt.ph pscript/runtime/psrt.p
+RTSRC=""
+for m in psrt.ph psrt_types.ph psrt_mem.ph psrt_val.ph psrt_rt.ph psrt_std.ph psrt_top.ph psrt_mem.p psrt_val.p psrt_rt.p psrt_std.p psrt_top.p; do RTSRC="$RTSRC pscript/runtime/$m"; done
+RTC=""
+for c in psrt_mem.c psrt_val.c psrt_rt.c psrt_std.c psrt_top.c; do RTC="$RTC $RT/pscript/runtime/$c"; done
+if [ ! -f "$RT/pscript/runtime/psrt_mem.c" ]; then
+    $PLANGC --out-dir "$RT" $RTSRC
 fi
 
 $PLANGC --out-dir "$RT" "$src"
@@ -41,5 +49,5 @@ for pm in "$RT/$(dirname "$src")"/pmod_*.c; do
     [ -f "$pm" ] && extra="$extra $pm"
 done
 
-$CC $CSTD $CCOPT $PSDEFS -w "$RT/${src%.psc}.c" "$RT/pscript/runtime/psrt.c" \
+$CC $CSTD $CCOPT $PSDEFS -w "$RT/${src%.psc}.c" $RTC \
     $extra -o "$out" "$@" -lm -pthread

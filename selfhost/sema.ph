@@ -5,6 +5,15 @@ import "plang.ph"
 import "ast.ph"
 
 # Global compiler context: arena + cache of parsed modules.
+# 109: o dump de macros de um header do sistema, guardado por caminho. Um PAR
+# num vetor só, e não dois vetores paralelos: `vec_grow` recebe UMA capacidade
+# por referência, então dois vetores com a mesma capacidade fazem o segundo nunca
+# crescer — o primeiro cresce, escreve a capacidade nova, e o segundo se acha
+# grande. Foi exatamente o defeito que a suíte pegou aqui.
+struct MacroDump:
+    path: const *char
+    text: const *char
+
 struct Cc:
     arena: Arena
     mods: **Module
@@ -19,6 +28,15 @@ struct Cc:
     inline_runtime: bool # --inline-runtime: compiler-injected helpers (the `in`
                          #   lowering's strcmp) become SELF-CONTAINED inline P
                          #   functions — no libc dependency in the output
+    # 109: o texto do dump de macros de cada header do sistema, por caminho. O
+    # PARSE do header já era cacheado; o dump (`cc -E -dM`) rodava uma vez por
+    # MÓDULO que o inclui, e num programa de vários módulos isso é meio segundo
+    # cada. Medido ao dividir o runtime em cinco camadas: 0,94 s viraram 4,08 s,
+    # e 2,5 s eram cpp repetido. O registro em si continua por módulo (as
+    # constantes são estado da sema); o que se guarda aqui é a CAPTURA.
+    macs: *MacroDump
+    nmac: i32
+    cmac: i32
 
 # Reads, decodes, lexes and parses a file (with cache by path).
 def cc_load_module(cc: *Cc, path: const *char) -> *Module

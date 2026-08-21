@@ -4997,7 +4997,19 @@ struct Sema:
     # have no typed value (that's cpp territory; in the C backend they still pass
     # through and the emitted #include resolves them).
     static def ingest_macros(self: *Sema, path: const *char, is_sys: bool, dir: const *char):
-        src: const *char = self->cpp_capture("-E -dM", path, is_sys, dir)
+        # 109: a captura do dump é cacheada no Cc — o mesmo header incluído por
+        # cinco módulos rodava o cpp cinco vezes
+        src: const *char = None
+        for mi in range(self->cc->nmac):
+            if strcmp(self->cc->macs[mi].path, path) == 0:
+                src = self->cc->macs[mi].text
+                break
+        if src == None:
+            src = self->cpp_capture("-E -dM", path, is_sys, dir)
+            self->cc->macs = vec_grow(self->cc->macs, self->cc->nmac, ref self->cc->cmac, sizeof(*self->cc->macs))
+            md: MacroDump = {path, src}
+            self->cc->macs[self->cc->nmac] = md
+            self->cc->nmac += 1
         an: **char = None    # alias macros (NAME -> IDENT): resolved after the scan
         av: **char = None
         nal = 0; cal = 0; cav = 0

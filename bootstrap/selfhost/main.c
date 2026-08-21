@@ -311,9 +311,9 @@ static void qbe_merge_types(Cc *cc, Module *m) {
             DeclKind dk = dd->kind;
             if (dk == DL_STRUCT || dk == DL_UNION || dk == DL_ENUM) {
                 extra += 1;
-            } else if (dk == DL_FUNC && (dd->func->body == NULL || dd->func->is_inline || dd->func->is_static)) {
+            } else if (dk == DL_FUNC && (dd->func->body == NULL || ((dd->func->is_inline || dd->func->is_static) && has_suffix(md->path, ".ph")))) {
                 extra += 1;
-            } else if (dk == DL_VAR && dd->init != NULL && (dd->is_const || (dd->type != NULL && dd->type->is_const))) {
+            } else if (dk == DL_VAR && dd->init != NULL && (dd->is_const || (dd->type != NULL && dd->type->is_const)) && has_suffix(md->path, ".ph")) {
                 extra += 1;
             }
         }
@@ -353,10 +353,10 @@ static void qbe_merge_types(Cc *cc, Module *m) {
             } else if (d->kind == DL_ENUM) {
                 nd[p] = d;
                 p += 1;
-            } else if (d->kind == DL_FUNC && (d->func->body == NULL || d->func->is_inline || d->func->is_static)) {
+            } else if (d->kind == DL_FUNC && (d->func->body == NULL || ((d->func->is_inline || d->func->is_static) && has_suffix(md2->path, ".ph")))) {
                 nd[p] = d;
                 p += 1;
-            } else if (d->kind == DL_VAR && d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const))) {
+            } else if (d->kind == DL_VAR && d->init != NULL && (d->is_const || (d->type != NULL && d->type->is_const)) && has_suffix(md2->path, ".ph")) {
                 Decl *cv = Arena_alloc(&cc->arena, sizeof(Decl));
                 *cv = *d;
                 cv->is_static = 1;
@@ -568,8 +568,11 @@ int main(int argc, char **argv) {
             }
         }
         if (has_suffix(Vec_pchar_get(&inputs, 0), ".psc")) {
-            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.ph"));
-            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.p"));
+            const char *RT_SRCS[12] = {"psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_val.ph", "psrt_rt.ph", "psrt_std.ph", "psrt_top.ph", "psrt_mem.p", "psrt_val.p", "psrt_rt.p", "psrt_std.p", "psrt_top.p"};
+            size_t ri;
+            for (ri = 0; ri < (int32_t)(sizeof(RT_SRCS) / sizeof(RT_SRCS[0])); ri += 1) {
+                add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, RT_SRCS[ri]));
+            }
         }
         out_dir = Arena_printf(&cc.arena, "%s/obj", cachedir);
         {

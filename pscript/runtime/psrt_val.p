@@ -1,0 +1,3166 @@
+# psrt_val.p — CAMADA 2: os valores da linguagem. Erro, aritmética, `str`,
+# `list`, `dict`/`set`, tupla, `repr`, ordenação, as tabelas Unicode, formatação,
+# `any`, buffer, `pack`.
+#
+# Chama a camada da memória (alocar, o safe point, a pilha-sombra) e mais nada:
+# não sabe que existem tasks, workers ou sockets.
+import "psrt_types.ph"
+import "psrt_mem.ph"
+import "psrt_val.ph"
+
+# ---------- the crash that says where it was (12.4) ----------
+# 12.4 decided that failure in C is a CRASH and failure in pscript is an
+# exception, and added: "crash and debuggable are not opposites — a handler for
+# SIGSEGV/SIGBUS/SIGFPE reads the shadow stack and prints the pscript stack
+# before dying. It does not catch; it says where."
+#
+# That is what this is. It costs nothing until the process is already dying, and
+# what it prints is what the shadow stack knew — a function with nothing
+# collected in it has no frame (49.4), so it cannot be named unless the program
+# was built with `--trace`.
+#
+# Only the MAIN thread's stack is printed, and only when the crash is on it: a
+# worker has its own context and printing the main one's frames would name a
+# stack that has nothing to do with the crash.
+static PS_CRASH_CTX: *PsCtx = None
+static PS_CRASH_TID: pthread_t
+static PS_CRASH_HAVE: i32 = 0
+
+static def ps_crash_name(sig: int) -> const *char:
+    if sig == SIGSEGV:
+        return "SIGSEGV (invalid memory access)"
+    if sig == SIGBUS:
+        return "SIGBUS (misaligned or unmapped access)"
+    if sig == SIGFPE:
+        return "SIGFPE (arithmetic fault)"
+    if sig == SIGILL:
+        return "SIGILL (illegal instruction)"
+    return "a fatal signal"
+
+static def ps_crash_handler(sig: int):
+    fflush(stdout)
+    fprintf(stderr, "pscript: %s\n", ps_crash_name(sig))
+    if PS_CRASH_HAVE != 0 and PS_CRASH_CTX != None and pthread_equal(pthread_self(), PS_CRASH_TID) != 0:
+        f: *PsFrame = PS_CRASH_CTX->frames
+        n: i32 = 0
+        while f != None and n < 64:
+            if f->fn != None:
+                fprintf(stderr, "  in %s (%s)\n", f->fn, f->file if f->file != None else "?")
+                n += 1
+            f = f->prev
+        if n == 0:
+            fprintf(stderr, "  (no pscript frame held anything collected; build with --trace to name them all)\n")
+    else:
+        fprintf(stderr, "  (not the main thread: no stack to read here)\n")
+    fflush(stderr)
+    # back to the default and die properly, so the exit status and the core file
+    # are what they would have been. `None` IS `SIG_DFL` — the macro is a null
+    # function pointer, and a macro that is not a number does not cross the
+    # header boundary (72.4), so the null goes over instead of the name.
+    signal(sig, None)
+    raise(sig)
+    _exit(128 + i32(sig))
+
+# WHAT THIS CANNOT DO, said out loud: a crash that ran out of STACK — infinite
+# recursion — is not reported. The handler would run on the stack that just
+# overflowed and fault again; reporting it needs an alternate stack, which needs
+# `sigaction` with SA_ONSTACK, and the member that holds the handler there is a
+# MACRO over a union whose name differs between glibc and macOS
+# (`__sigaction_handler` against `__sigaction_u`). A macro that is not a number
+# does not cross the header boundary (72.4), and hard-coding either spelling
+# would be a platform `#ifdef` in the middle of the runtime.
+#
+# So `signal` it is, and what it covers is every crash that still has stack: a
+# wild pointer from the unsafe side, a misaligned access, an illegal
+# instruction. Which is what 12.4 was about — the C side failing.
+def ps_install_crash_handler(ctx: *PsCtx):
+    PS_CRASH_CTX = ctx
+    PS_CRASH_TID = pthread_self()
+    PS_CRASH_HAVE = 1
+    signal(SIGSEGV, ps_crash_handler)
+    signal(SIGBUS, ps_crash_handler)
+    signal(SIGFPE, ps_crash_handler)
+    signal(SIGILL, ps_crash_handler)
+
+
+
+
+
+
+
+
+
+
+# `xs[a:b]` — a COPY (17.3). Python's clamping, not an error: a slice past the
+# end trims, which is what makes `xs[1:]` on an empty list an empty list instead
+# of a stopped program.
+# THE SLICE BOUNDS, Python's rules, with a step. Kept in one place because the
+# list and the string have to answer identically and the rules are fiddly:
+#
+#   * a negative index counts from the end;
+#   * the bounds CLAMP rather than raise — `xs[:99]` is the whole thing;
+#   * a NEGATIVE step walks backwards, and then the defaults flip: the missing
+#     start is the last element and the missing stop is before the first;
+#   * a zero step is an error, because there is no answer.
+#
+# `out i` and `out j` come back already resolved, and `st` is the step.
+static def ps_slice_bounds(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool:
+    if st == 0:
+        ps_raise(ctx, "a slice step may not be zero", PS_CAT_VALUE, file, line)
+        i = 0
+        j = 0
+        return False
+    if st > 0:
+        i = a if has_a else 0
+        j = b if has_b else n
+        if i < 0:
+            i += n
+        if j < 0:
+            j += n
+        if i < 0:
+            i = 0
+        if i > n:
+            i = n
+        if j > n:
+            j = n
+        if j < i:
+            j = i
+        return True
+    # backwards: the ends are inclusive-of-start, exclusive-of-stop, counting down
+    i = a if has_a else n - 1
+    j = b if has_b else -1
+    if has_a and i < 0:
+        i += n
+    if has_b and j < 0:
+        j += n
+    if i > n - 1:
+        i = n - 1
+    if not has_b and j < -1:
+        j = -1
+    if has_b and j < -1:
+        j = -1
+    return True
+def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsList:
+    i: i64 = 0
+    j: i64 = 0
+    if not ps_slice_bounds(ctx, l->len, a, b, st, has_a, has_b, out i, out j, file, line):
+        return ps_list_new(ctx, l->esize, l->eref, 0)
+    out: *PsList = ps_list_new(ctx, l->esize, l->eref, 0)
+    k: i64 = i
+    while (st > 0 and k < j) or (st < 0 and k > j):
+        src: *char = (*char)(l->data) + sizeof(PsArr) + usize(k) * usize(l->esize)
+        dst: *char = ps_list_push(ctx, out)
+        memcpy(dst, src, usize(l->esize))
+        k += st
+    return out
+# ---------- 104: o resto dos métodos de lista ----------
+#
+# `index`, `count` e `remove` procuram por CONTEÚDO, com a mesma regra do `in`
+# (55.4) e do dict: texto compara texto, o resto compara bytes. Procurar por
+# ponteiro daria "não achei" para duas strings iguais escritas em lugares
+# diferentes, que é o erro que a 55.4 já tinha proibido.
+static def ps_list_find(l: *PsList, needle: const *void, kind: i32) -> i64:
+    if l == None:
+        return -1
+    base: *char = ps_list_base(l)
+    i: i64 = 0
+    while i < l->len:
+        p: *char = base + usize(i) * usize(l->esize)
+        if kind == PS_K_STR:
+            if ps_str_eq(*(**PsStr)(p), *(**PsStr)(needle)):
+                return i
+        elif memcmp(p, needle, usize(l->esize)) == 0:
+            return i
+        i += 1
+    return -1
+
+def ps_list_index(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32, file: const *char, line: i32) -> i64:
+    i: i64 = ps_list_find(l, needle, kind)
+    if i < 0:
+        ps_raise(ctx, "index(): the value is not in the list", PS_CAT_VALUE, file, line)
+        return 0
+    return i
+
+def ps_list_count(l: *PsList, needle: const *void, kind: i32) -> i64:
+    if l == None:
+        return 0
+    base: *char = ps_list_base(l)
+    n: i64 = 0
+    i: i64 = 0
+    while i < l->len:
+        p: *char = base + usize(i) * usize(l->esize)
+        if kind == PS_K_STR:
+            if ps_str_eq(*(**PsStr)(p), *(**PsStr)(needle)):
+                n += 1
+        elif memcmp(p, needle, usize(l->esize)) == 0:
+            n += 1
+        i += 1
+    return n
+
+def ps_list_remove(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32, file: const *char, line: i32):
+    i: i64 = ps_list_find(l, needle, kind)
+    if i < 0:
+        ps_raise(ctx, "remove(): the value is not in the list", PS_CAT_VALUE, file, line)
+        return
+    ps_list_remove_at(ctx, l, i, file, line)
+
+def ps_list_clear(l: *PsList):
+    if l != None:
+        l->len = 0
+
+# `pop` devolve o elemento E o tira, então a ORDEM importa: o índice é
+# normalizado aqui (é onde a lista vazia levanta), o valor é lido no chamador
+# com esse índice, e só depois o buraco é fechado. Fazer o contrário lê o
+# elemento que veio depois — ou, no último, memória de ninguém.
+def ps_list_pop_at(ctx: *PsCtx, l: *PsList, i: i64, has_i: bool, file: const *char, line: i32) -> i64:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "pop() from an empty list", PS_CAT_INDEX, file, line)
+        return 0
+    if not has_i:
+        return l->len - 1
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k >= l->len:
+        ps_raise(ctx, "pop index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return k
+
+# `a + b` e `a * n` (a lista, como o Python): uma lista NOVA, com os mesmos
+# bytes de elemento — o que copia é a lista, não os objetos dentro dela
+def ps_list_concat(ctx: *PsCtx, a: *PsList, b: *PsList) -> *PsList:
+    out: *PsList = ps_list_slice(ctx, a, 0, 0, 1, False, False, "<concat>", 0)
+    if b != None and b->len > 0:
+        i: i64 = 0
+        base: *char = ps_list_base(b)
+        while i < b->len:
+            memcpy(ps_list_push(ctx, out), base + usize(i) * usize(b->esize), usize(b->esize))
+            # `ps_list_push` pode COLETAR, e coletar move `b`: a base tem de ser
+            # relida a cada volta em vez de guardada antes do laço
+            base = ps_list_base(b)
+            i += 1
+    return out
+
+def ps_list_repeat(ctx: *PsCtx, l: *PsList, n: i64) -> *PsList:
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<repeat>", 0)
+    if n <= 0:
+        out->len = 0
+        return out
+    k: i64 = 1
+    while k < n:
+        i: i64 = 0
+        while i < l->len:
+            memcpy(ps_list_push(ctx, out), ps_list_base(l) + usize(i) * usize(l->esize), usize(l->esize))
+            i += 1
+        k += 1
+    return out
+
+def ps_list_extend(ctx: *PsCtx, l: *PsList, b: *PsList):
+    if l == None or b == None or b->len == 0:
+        return
+    if l == b:
+        # `xs.extend(xs)` no Python duplica a lista, e o laço ingênuo não para:
+        # cada push aumenta o limite que ele está testando
+        n: i64 = b->len
+        i: i64 = 0
+        while i < n:
+            memcpy(ps_list_push(ctx, l), ps_list_base(l) + usize(i) * usize(l->esize), usize(l->esize))
+            i += 1
+        return
+    i2: i64 = 0
+    while i2 < b->len:
+        memcpy(ps_list_push(ctx, l), ps_list_base(b) + usize(i2) * usize(b->esize), usize(b->esize))
+        i2 += 1
+
+def ps_list_insert(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> *char:
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k > l->len:
+        ps_raise(ctx, "insert position out of range", PS_CAT_INDEX, file, line)
+        return ps_list_push(ctx, l)
+    ps_list_push(ctx, l)          # grows by one; the slot moves below
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    es: usize = usize(l->esize)
+    m: i64 = l->len - 1
+    while m > k:
+        memcpy(base + usize(m) * es, base + usize(m - 1) * es, es)
+        m -= 1
+    return base + usize(k) * es
+
+def ps_list_remove_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32):
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k >= l->len:
+        ps_raise(ctx, "list index out of range", PS_CAT_INDEX, file, line)
+        return
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    es: usize = usize(l->esize)
+    m: i64 = k
+    while m + 1 < l->len:
+        memcpy(base + usize(m) * es, base + usize(m + 1) * es, es)
+        m += 1
+    l->len -= 1
+
+def ps_list_reverse(l: *PsList):
+    base: *char = (*char)(l->data) + sizeof(PsArr)
+    es: usize = usize(l->esize)
+    tmp: char[64]
+    i: i64 = 0
+    j: i64 = l->len - 1
+    while i < j and es <= 64:
+        memcpy(tmp, base + usize(i) * es, es)
+        memcpy(base + usize(i) * es, base + usize(j) * es, es)
+        memcpy(base + usize(j) * es, tmp, es)
+        i += 1
+        j -= 1
+
+# `sorted(xs)` (28.4): a COPY, in natural order. Sorting IN PLACE would be the
+# other half of the pair and is not what the name says — Python has both, and
+# this is the one whose meaning is unambiguous.
+def ps_cmp_int(a: const *void, b: const *void) -> int:
+    x: i64 = *(*i64)(a)
+    y: i64 = *(*i64)(b)
+    return -1 if x < y else (1 if x > y else 0)
+
+def ps_cmp_float(a: const *void, b: const *void) -> int:
+    x: f64 = *(*f64)(a)
+    y: f64 = *(*f64)(b)
+    return -1 if x < y else (1 if x > y else 0)
+
+def ps_cmp_str(a: const *void, b: const *void) -> int:
+    x: *PsStr = *(**PsStr)(a)
+    y: *PsStr = *(**PsStr)(b)
+    return strcmp(x->data, y->data)
+
+# Merge sort ESTÁVEL sobre os próprios valores, com detecção de corridas (106).
+#
+# Por que não `qsort`: a estabilidade dele não é especificada. O da glibc é um
+# merge sort e sai estável por acidente; o do macOS é um introsort e não sai. O
+# que se vê disso é pequeno mas é real — `sorted([0.0, -0.0])` imprime
+# `[0.0, -0.0]` aqui e podia imprimir o contrário lá, e duas strings de mesmo
+# conteúdo trocariam de identidade. Uma ordem que depende de qual libc compilou
+# é uma resposta diferente por plataforma, e é isso que isto remove. Os
+# caminhos com `key=` e `cmp=` já eram estáveis (ordenam ÍNDICES); este é o que
+# faltava.
+#
+# A detecção de corridas é a metade do Timsort que paga por si: uma lista já
+# ordenada (ou já ordenada ao contrário) sai numa passada, que é o caso comum de
+# quem chama `sorted` sobre algo que veio de um `sorted`. A outra metade dele —
+# o merge galopante — fica de fora: ela muda o CUSTO em padrões específicos e
+# não muda a ordem, que é o que se observa.
+static def ps_run_end(base: *char, n: i64, es: usize, i: i64, cmp: def(a: const *void, b: const *void) -> int) -> i64:
+    # quanto do vetor, a partir de `i`, já está em ordem — e se estiver em ordem
+    # DECRESCENTE ESTRITA, inverte no lugar e devolve o fim (inverter só o
+    # estrito é o que mantém a estabilidade: com iguais no meio, a inversão
+    # trocaria a ordem original deles)
+    if i + 1 >= n:
+        return n
+    j: i64 = i + 1
+    if cmp((*void)(base + usize(j) * es), (*void)(base + usize(i) * es)) < 0:
+        while j + 1 < n and cmp((*void)(base + usize(j + 1) * es), (*void)(base + usize(j) * es)) < 0:
+            j += 1
+        a: i64 = i
+        b: i64 = j
+        tmp: char[64]
+        while a < b:
+            if es <= sizeof(tmp):
+                memcpy(&tmp[0], base + usize(a) * es, es)
+                memcpy(base + usize(a) * es, base + usize(b) * es, es)
+                memcpy(base + usize(b) * es, &tmp[0], es)
+            a += 1
+            b -= 1
+        return j + 1
+    while j + 1 < n and cmp((*void)(base + usize(j + 1) * es), (*void)(base + usize(j) * es)) >= 0:
+        j += 1
+    return j + 1
+
+static def ps_msort_vals(base: *char, n: i64, es: usize, cmp: def(a: const *void, b: const *void) -> int) -> bool:
+    if n < 2:
+        return True
+    # uma passada de corridas: se a primeira cobre tudo, não há nada a fazer
+    first: i64 = ps_run_end(base, n, es, 0, cmp)
+    if first == n:
+        return True
+    tmp: *char = (*char)(malloc(usize(n) * es))
+    if tmp == None:
+        return False
+    # insertion sort binário nas corridas curtas, para que o merge tenha blocos
+    # de tamanho decente — é o `minrun` do Timsort, com um valor fixo
+    MINRUN: const i64 = 32
+    i: i64 = 0
+    while i < n:
+        e: i64 = ps_run_end(base, n, es, i, cmp)
+        stop: i64 = i + MINRUN
+        if stop > n:
+            stop = n
+        # estende a corrida até MINRUN inserindo um por um, para trás
+        k: i64 = e
+        while k < stop:
+            memcpy(tmp, base + usize(k) * es, es)
+            j2: i64 = k
+            while j2 > i and cmp((*void)(tmp), (*void)(base + usize(j2 - 1) * es)) < 0:
+                memcpy(base + usize(j2) * es, base + usize(j2 - 1) * es, es)
+                j2 -= 1
+            memcpy(base + usize(j2) * es, tmp, es)
+            k += 1
+        i = stop if stop > e else e
+    width: i64 = MINRUN
+    while width < n:
+        p: i64 = 0
+        while p < n:
+            mid: i64 = p + width
+            if mid >= n:
+                break
+            hi: i64 = p + 2 * width
+            if hi > n:
+                hi = n
+            # já em ordem entre os dois blocos: nada a fundir
+            if cmp((*void)(base + usize(mid) * es), (*void)(base + usize(mid - 1) * es)) >= 0:
+                p = hi
+                continue
+            memcpy(tmp, base + usize(p) * es, usize(hi - p) * es)
+            a2: i64 = 0
+            b2: i64 = mid - p
+            o: i64 = p
+            lena: i64 = mid - p
+            lenb: i64 = hi - p
+            while a2 < lena and b2 < lenb:
+                # `< 0` e não `<= 0`: no empate vai o da ESQUERDA, que é a
+                # definição de estável
+                if cmp((*void)(tmp + usize(b2) * es), (*void)(tmp + usize(a2) * es)) < 0:
+                    memcpy(base + usize(o) * es, tmp + usize(b2) * es, es)
+                    b2 += 1
+                else:
+                    memcpy(base + usize(o) * es, tmp + usize(a2) * es, es)
+                    a2 += 1
+                o += 1
+            while a2 < lena:
+                memcpy(base + usize(o) * es, tmp + usize(a2) * es, es)
+                a2 += 1
+                o += 1
+            while b2 < lenb:
+                memcpy(base + usize(o) * es, tmp + usize(b2) * es, es)
+                b2 += 1
+                o += 1
+            p = hi
+        width *= 2
+    free(tmp)
+    return True
+
+def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList:
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
+    if out->len < 2:
+        return out
+    base: *char = (*char)(out->data) + sizeof(PsArr)
+    es: usize = usize(out->esize)
+    cmp: def(a: const *void, b: const *void) -> int = ps_cmp_int
+    if kind == 1:
+        cmp = ps_cmp_float
+    elif kind == 2:
+        cmp = ps_cmp_str
+    if not ps_msort_vals(base, out->len, es, cmp):
+        # sem memória para o temporário: ordena no lugar, sem prometer
+        # estabilidade, em vez de devolver a lista fora de ordem
+        qsort((*void)(base), usize(out->len), es, cmp)
+    return out
+
+# ---------- 104: `sum`, `any`, `all`, `round`, e min/max de uma lista ----------
+#
+# Todos percorrem a lista aqui e não numa comprehension gerada: o percurso é o
+# mesmo, e o que se ganha é o COMPORTAMENTO do Python nas bordas — `sum([])` é
+# 0, `all([])` é True (não há contraexemplo), `any([])` é False, e `min([])`
+# levanta em vez de devolver um zero que parece resposta.
+def ps_sum_int(ctx: *PsCtx, l: *PsList, start: i64, file: const *char, line: i32) -> i64:
+    t: i64 = start
+    if l == None:
+        return t
+    b: *i64 = (*i64)(ps_list_base(l))
+    for i in range(l->len):
+        t = ps_add(ctx, t, b[i], file, line)
+    return t
+
+def ps_sum_float(ctx: *PsCtx, l: *PsList, start: f64) -> f64:
+    t: f64 = start
+    if l == None:
+        return t
+    b: *f64 = (*f64)(ps_list_base(l))
+    for i in range(l->len):
+        t += b[i]
+    return t
+
+def ps_any(l: *PsList) -> bool:
+    if l == None:
+        return False
+    b: *bool = (*bool)(ps_list_base(l))
+    for i in range(l->len):
+        if b[i]:
+            return True
+    return False
+
+def ps_all(l: *PsList) -> bool:
+    if l == None:
+        return True
+    b: *bool = (*bool)(ps_list_base(l))
+    for i in range(l->len):
+        if not b[i]:
+            return False
+    return True
+
+# `round` do Python é MEIO PARA O PAR: round(2.5) é 2 e round(3.5) é 4. É o modo
+# de arredondamento padrão do IEEE, então `rint` faz exatamente isso — escrever
+# `floor(x + 0.5)` daria 3 em round(2.5) e divergiria em todo meio exato.
+def ps_round(x: f64) -> i64:
+    return i64(rint(x))
+
+# Com casas decimais o Python devolve FLOAT, e arredonda o valor DECIMAL — o que
+# não é a mesma coisa que escalar por 10^n e arredondar em binário. O caso que
+# mostra a diferença é `round(2.675, 2)`: o double mais próximo de 2.675 é
+# 2.674999999999999822..., logo a resposta certa é 2.67, mas `2.675 * 100` dá
+# exatamente 267.5 (os erros se cancelam) e o arredondamento binário devolve
+# 2.68. É o caminho que o CPython usa quando não tem o dtoa de David Gay:
+# imprimir com n casas — a libc arredonda corretamente, pelo valor exato — e ler
+# de volta. Custa um snprintf e acerta todos os meios.
+def ps_round_n(x: f64, n: i64) -> f64:
+    if n < 0:
+        # casas NEGATIVAS arredondam para a dezena/centena: aí não há texto com
+        # n casas para pedir, e escalar é exato porque 10^k é exato até 10^22
+        p2: f64 = pow(10.0, f64(-n))
+        return rint(x / p2) * p2
+    if n > 100 or x != x or x - x != 0.0:
+        # mais casas do que um double distingue, ou nan/inf: o valor é ele mesmo
+        return x
+    buf: char[512]
+    snprintf(buf, sizeof(buf), "%.*f", int(n), x)
+    return strtod(buf, None)
+
+def ps_list_min_int(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> i64:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "min() or max() of an empty list", PS_CAT_VALUE, file, line)
+        return 0
+    b: *i64 = (*i64)(ps_list_base(l))
+    v: i64 = b[0]
+    for i in range(1, l->len):
+        if (b[i] > v) if want_max else (b[i] < v):
+            v = b[i]
+    return v
+
+def ps_list_min_float(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> f64:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "min() or max() of an empty list", PS_CAT_VALUE, file, line)
+        return 0.0
+    b: *f64 = (*f64)(ps_list_base(l))
+    v: f64 = b[0]
+    for i in range(1, l->len):
+        if (b[i] > v) if want_max else (b[i] < v):
+            v = b[i]
+    return v
+
+def ps_list_min_str(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> *PsStr:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "min() or max() of an empty list", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    b: **PsStr = (**PsStr)(ps_list_base(l))
+    v: *PsStr = b[0]
+    for i in range(1, l->len):
+        # `ps_str_lt` devolve -1/0/1 e compara BYTES, que em UTF-8 é a mesma
+        # ordem dos pontos de código — é o que o Python compara
+        c: i32 = ps_str_lt(b[i], v)
+        if (c > 0) if want_max else (c < 0):
+            v = b[i]
+    return v
+
+# ---------- buffers (19.4/52.3) ----------
+def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer:
+    # malloc'd, not collected: a worker holds this pointer, and the collector
+    # that owns this context would move the object out from under it
+    b: *PsBuffer = (*PsBuffer)(calloc(1, sizeof(PsBuffer)))
+    b->obj.ty = PS_TY_BUFFER
+    b->obj.size = u32(sizeof(PsBuffer))
+    b->gone_from = None
+    b->data = None
+    b->nbytes = 0
+    b->open = 0
+    if nbytes < 0:
+        ps_raise(ctx, "a buffer cannot have a negative size", PS_CAT_VALUE, file, line)
+        return b
+    b->data = (*char)(calloc(usize(nbytes) if nbytes > 0 else 1, 1))
+    if b->data == None:
+        ps_raise(ctx, "out of memory for the buffer", PS_CAT_VALUE, file, line)
+        return b
+    b->nbytes = usize(nbytes)
+    b->open = 1
+    return b
+
+def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer):
+    if b != None and b->open != 0:
+        free(b->data)
+        b->data = None
+        b->open = 0
+
+def ps_buffer_size(b: *PsBuffer) -> i64:
+    return i64(b->nbytes) if b != None else 0
+
+def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool
+
+static def ps_buffer_slot(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> *f64:
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return None
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return None
+    n: i64 = i64(b->nbytes / 8)
+    k: i64 = i + n if i < 0 else i
+    if k < 0 or k >= n:
+        ps_raise(ctx, "buffer index out of range", PS_CAT_INDEX, file, line)
+        return None
+    return (*f64)(b->data + usize(k) * 8)
+
+def ps_buffer_get_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> f64:
+    p: *f64 = ps_buffer_slot(ctx, b, i, file, line)
+    return *p if p != None else 0.0
+
+def ps_buffer_set_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, v: f64, file: const *char, line: i32):
+    p: *f64 = ps_buffer_slot(ctx, b, i, file, line)
+    if p != None:
+        *p = v
+
+# has THIS context given the buffer away? (18.2)
+def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool:
+    return b != None and b->gone_from != None and b->gone_from == (*void)(ctx)
+# ---------- the stable sort, shared by `key=` and by `Comparable` ----------
+# Both sort INDICES and move the elements once at the end, because the runtime
+# does not know what an element is — it moves bytes. `less` decides STRICTLY,
+# and the merge takes from the left whenever the right is not strictly smaller,
+# which is what makes the whole thing stable.
+struct PsKeyCmp:
+    keys: *f64
+
+struct PsFnCmp:
+    fn: def(env: *void, ctx: *PsCtx, a: const *void, b: const *void) -> i64
+    env: *void
+    ctx: *PsCtx
+    base: *char
+    es: usize
+
+static def ps_less_key(env: *void, a: i64, b: i64) -> bool:
+    k: *PsKeyCmp = (*PsKeyCmp)(env)
+    return k->keys[a] < k->keys[b]
+
+static def ps_less_cmp(env: *void, a: i64, b: i64) -> bool:
+    c: *PsFnCmp = (*PsFnCmp)(env)
+    if c->ctx->exc != None:
+        return False
+    return c->fn(c->env, c->ctx, c->base + usize(a) * c->es, c->base + usize(b) * c->es) < 0
+
+static def ps_msort_idx(idx: *i64, n: i64, less: def(env: *void, a: i64, b: i64) -> bool, env: *void):
+    if n < 2:
+        return
+    tmp: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
+    if tmp == None:
+        return
+    width: i64 = 1
+    while width < n:
+        i: i64 = 0
+        while i < n:
+            mid: i64 = i + width
+            if mid > n:
+                mid = n
+            hi: i64 = i + 2 * width
+            if hi > n:
+                hi = n
+            a: i64 = i
+            b: i64 = mid
+            o: i64 = i
+            while a < mid and b < hi:
+                # `not less(b, a)` and not `less(a, b)`: on a tie the LEFT one
+                # goes first, which is the definition of stable
+                if less(env, idx[b], idx[a]):
+                    tmp[o] = idx[b]
+                    b += 1
+                else:
+                    tmp[o] = idx[a]
+                    a += 1
+                o += 1
+            while a < mid:
+                tmp[o] = idx[a]
+                a += 1
+                o += 1
+            while b < hi:
+                tmp[o] = idx[b]
+                b += 1
+                o += 1
+            i += 2 * width
+        memcpy(idx, tmp, usize(n) * sizeof(i64))
+        width *= 2
+    free(tmp)
+
+# `sorted(xs)` over a type that implements `Comparable` (62.1): the order comes
+# from the type's own `cmp`, reached through an adapter the compiler emits per
+# call site — the runtime never learns what the element is.
+def ps_list_sorted_cmp(ctx: *PsCtx, l: *PsList, cmpfn: def(env: *void, ctx: *PsCtx, a: const *void, b: const *void) -> i64, env: *void) -> *PsList:
+    n: i64 = l->len
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
+    if n < 2:
+        return out
+    idx: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
+    if idx == None:
+        return out
+    for i in range(i32(n)):
+        idx[i] = i64(i)
+    base: *char = (*char)(out->data) + sizeof(PsArr)
+    es: usize = usize(out->esize)
+    fenv: PsFnCmp = {cmpfn, env, ctx, base, es}
+    ps_msort_idx(idx, n, ps_less_cmp, &fenv)
+    if ctx->exc != None:
+        free(idx)
+        return out
+    src: *char = (*char)(malloc(usize(n) * es))
+    memcpy(src, base, usize(n) * es)
+    for i2 in range(i32(n)):
+        memcpy(base + usize(i2) * es, src + usize(idx[i2]) * es, es)
+    free(src)
+    free(idx)
+    return out
+
+def ps_list_sorted_by(ctx: *PsCtx, l: *PsList, keyfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> f64, env: *void) -> *PsList:
+    n: i64 = l->len
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
+    if n < 2:
+        return out
+    # the key of each element, computed once (28.4)
+    keys: *f64 = (*f64)(malloc(usize(n) * sizeof(f64)))
+    idx: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
+    base: *char = (*char)(out->data) + sizeof(PsArr)
+    es: usize = usize(out->esize)
+    for i in range(i32(n)):
+        keys[i] = keyfn(env, ctx, (*void)(base + usize(i) * es))
+        idx[i] = i64(i)
+        if ctx->exc != None:
+            free(keys)
+            free(idx)
+            return out
+    # STABLE merge sort over the INDICES. It was an insertion sort, which is
+    # also stable and is O(n²) — fine for the ten-element case somebody had in
+    # mind and a trap in a language that says it competes with Python, whose
+    # sort is O(n log n). The elements themselves move once, at the end.
+    kenv: PsKeyCmp = {keys}
+    ps_msort_idx(idx, n, ps_less_key, &kenv)
+    src: *char = (*char)(malloc(usize(n) * es))
+    memcpy(src, base, usize(n) * es)
+    for i2 in range(i32(n)):
+        memcpy(base + usize(i2) * es, src + usize(idx[i2]) * es, es)
+    free(src)
+    free(keys)
+    free(idx)
+    return out
+
+def ps_sys_monotonic() -> f64:
+    ts: timespec
+    clock_gettime(CLOCK_MONOTONIC, &ts)
+    return f64(ts.tv_sec) + f64(ts.tv_nsec) / 1000000000.0
+def ps_sys_time() -> f64:
+    tw: timespec
+    clock_gettime(CLOCK_REALTIME, &tw)
+    return f64(tw.tv_sec) + f64(tw.tv_nsec) / 1000000000.0
+# ---------- function values (28.1/19.2) ----------
+def ps_closure_new(ctx: *PsCtx, fn: *void, env: *PsObj, sig: const *char) -> *PsClosure:
+    c: *PsClosure = (*PsClosure)(ps_alloc(ctx, sizeof(PsClosure), PS_TY_CLOSURE))
+    c->fn = fn
+    c->env = env
+    c->sig = sig
+    return c
+
+# 29.4: the signature has to agree. The spellings are written by the compiler
+# from the same canonical form on both sides, so a comparison of the text is a
+# comparison of the TYPES — and it happens once, before the call.
+def ps_closure_narrow(ctx: *PsCtx, c: *PsClosure, want: const *char, file: const *char, line: i32) -> *PsClosure:
+    if c == None:
+        ps_raise(ctx, "there is no function here to narrow", PS_CAT_VALUE, file, line)
+        return None
+    if c->sig == None or strcmp(c->sig, want) != 0:
+        ps_raise_str(ctx, ps_str_concat(ctx, ps_str_new(ctx, "this function is ", 17), ps_str_concat(ctx, ps_str_new(ctx, c->sig if c->sig != None else "of unknown shape", strlen(c->sig) if c->sig != None else usize(16)), ps_str_concat(ctx, ps_str_new(ctx, ", not ", 6), ps_str_new(ctx, want, strlen(want))))), i64(PS_CAT_TYPE), file, line)
+        return None
+    return c
+
+# ---------- `any` (39.2) and `as` (55.2) ----------
+static def ps_any_new(ctx: *PsCtx, kind: i32) -> *PsAny:
+    a: *PsAny = (*PsAny)(ps_alloc(ctx, sizeof(PsAny), PS_TY_ANY))
+    a->kind = kind
+    a->i = 0
+    a->f = 0.0
+    return a
+
+def ps_any_int(ctx: *PsCtx, v: i64) -> *PsObj:
+    a: *PsAny = ps_any_new(ctx, PS_ANY_INT)
+    a->i = v
+    return (*PsObj)(a)
+
+def ps_any_float(ctx: *PsCtx, v: f64) -> *PsObj:
+    a: *PsAny = ps_any_new(ctx, PS_ANY_FLOAT)
+    a->f = v
+    return (*PsObj)(a)
+
+def ps_any_bool(ctx: *PsCtx, v: bool) -> *PsObj:
+    a: *PsAny = ps_any_new(ctx, PS_ANY_BOOL)
+    a->i = 1 if v else 0
+    return (*PsObj)(a)
+
+def ps_any_none(ctx: *PsCtx) -> *PsObj:
+    return (*PsObj)(ps_any_new(ctx, PS_ANY_NONE))
+
+# what an `any` says it is, in words, for the message a failed `as` prints
+static def ps_any_what(v: *PsObj) -> const *char:
+    if v == None:
+        return "nothing"
+    match v->ty:
+        case PS_TY_STR:
+            return "str"
+        case PS_TY_LIST:
+            return "list"
+        case PS_TY_DICT:
+            return "dict"
+        case PS_TY_ANY:
+            a: *PsAny = (*PsAny)(v)
+            if a->kind == PS_ANY_INT:
+                return "int"
+            if a->kind == PS_ANY_FLOAT:
+                return "float"
+            if a->kind == PS_ANY_BOOL:
+                return "bool"
+            return "None"
+        case _:
+            return "a value of another type"
+
+static def ps_as_fail(ctx: *PsCtx, v: *PsObj, want: const *char, file: const *char, line: i32):
+    msg: char[160]
+    snprintf(msg, 160, "this `any` holds %s, not %s", ps_any_what(v), want)
+    ps_raise(ctx, msg, PS_CAT_TYPE, file, line)
+
+def ps_as_int(ctx: *PsCtx, v: *PsObj, file: const *char, line: i32) -> i64:
+    if v == None or v->ty != PS_TY_ANY or ((*PsAny)(v))->kind != PS_ANY_INT:
+        ps_as_fail(ctx, v, "int", file, line)
+        return 0
+    return ((*PsAny)(v))->i
+
+def ps_as_float(ctx: *PsCtx, v: *PsObj, file: const *char, line: i32) -> f64:
+    if v != None and v->ty == PS_TY_ANY:
+        a: *PsAny = (*PsAny)(v)
+        if a->kind == PS_ANY_FLOAT:
+            return a->f
+        if a->kind == PS_ANY_INT:
+            return f64(a->i)      # int promotes to float, as everywhere (32.1)
+    ps_as_fail(ctx, v, "float", file, line)
+    return 0.0
+
+def ps_as_bool(ctx: *PsCtx, v: *PsObj, file: const *char, line: i32) -> bool:
+    if v == None or v->ty != PS_TY_ANY or ((*PsAny)(v))->kind != PS_ANY_BOOL:
+        ps_as_fail(ctx, v, "bool", file, line)
+        return False
+    return ((*PsAny)(v))->i != 0
+
+def ps_as_ref(ctx: *PsCtx, v: *PsObj, want: i32, what: const *char, file: const *char, line: i32) -> *PsObj:
+    if v == None or v->ty != want:
+        ps_as_fail(ctx, v, what, file, line)
+        return None
+    return v
+
+def ps_is_kind(v: *PsObj, ty: i32, kind: i32) -> bool:
+    if v == None:
+        return False
+    if ty != PS_TY_ANY:
+        return v->ty == ty
+    return v->ty == PS_TY_ANY and ((*PsAny)(v))->kind == kind
+
+def ps_exc_take(ctx: *PsCtx) -> *PsErr:
+    e: *PsErr = ctx->exc
+    ctx->exc = None
+    return e
+
+def ps_exc_put(ctx: *PsCtx, e: *PsErr):
+    if e != None:
+        ctx->exc = e
+
+# ---------- pack / unpack (59) ----------
+# One field at a time, least significant byte first. Reading and writing go
+# through the same shift ladder, so the format does not depend on how this
+# machine happens to store an integer — and a float travels as the bits it is.
+def ps_pack_int(ctx: *PsCtx, l: *PsList, v: u64, nbytes: i32, be: i32):
+    for i in range(nbytes):
+        # the shift ladder decides the order, so neither side depends on how
+        # THIS machine happens to store an integer
+        k: i32 = (nbytes - 1 - i) if be != 0 else i
+        p: *char = ps_list_push(ctx, l)
+        *(*u8)(p) = u8((v >> u64(k * 8)) & u64(255))
+
+def ps_unpack_int(l: *PsList, off: i64, nbytes: i32, be: i32) -> u64:
+    v: u64 = 0
+    base: *u8 = (*u8)(ps_list_base(l))
+    for i in range(nbytes):
+        k: i32 = (nbytes - 1 - i) if be != 0 else i
+        v = v | (u64(base[off + i64(i)]) << u64(k * 8))
+    return v
+
+def ps_pack_f64(ctx: *PsCtx, l: *PsList, v: f64, be: i32):
+    b: u64 = 0
+    memcpy(&b, &v, sizeof(b))
+    ps_pack_int(ctx, l, b, 8, be)
+
+def ps_unpack_f64(l: *PsList, off: i64, be: i32) -> f64:
+    b: u64 = ps_unpack_int(l, off, 8, be)
+    v: f64 = 0.0
+    memcpy(&v, &b, sizeof(v))
+    return v
+
+def ps_pack_f32(ctx: *PsCtx, l: *PsList, v: f32, be: i32):
+    b: u32 = 0
+    memcpy(&b, &v, sizeof(b))
+    ps_pack_int(ctx, l, u64(b), 4, be)
+
+def ps_unpack_f32(l: *PsList, off: i64, be: i32) -> f32:
+    b: u32 = u32(ps_unpack_int(l, off, 4, be))
+    v: f32 = 0.0
+    memcpy(&v, &b, sizeof(v))
+    return v
+
+def ps_unpack_check(ctx: *PsCtx, l: *PsList, want: i64, file: const *char, line: i32):
+    if l == None or l->len != want:
+        ps_raise(ctx, "these bytes are not the right length for this record", PS_CAT_VALUE, file, line)
+
+# ---------- lists ----------
+static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64)
+
+# 98.5: "walk INTO each element", for a list whose element is a tuple holding a
+# reference. Returns the list so it can be said in one expression, where the
+# container is built.
+def ps_list_etrace(l: *PsList, fn: def(o: *void, to: *PsBlock)) -> *PsList:
+    if l != None:
+        l->etrace = fn
+    return l
+
+def ps_dict_vtrace(d: *PsDict, fn: def(o: *void, to: *PsBlock)) -> *PsDict:
+    if d != None:
+        d->vtrace = fn
+    return d
+
+def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList:
+    l: *PsList = ps_alloc(ctx, sizeof(PsList), PS_TY_LIST)
+    l->len = 0
+    l->cap = 0
+    l->esize = esize
+    l->eref = eref
+    l->etrace = None
+    l->data = None
+    l->raw = None       # an ordinary list OWNS its bytes (18.3 borrows them)
+    l->owner = None
+    if cap > 0:
+        ps_list_grow(ctx, l, cap)
+    return l
+
+# Replaces the backing storage with a bigger one. The HEADER does not move, so
+# every reference to the list survives a growth untouched.
+static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64):
+    if need <= l->cap:
+        return
+    ncap: i64 = 8 if l->cap == 0 else l->cap * 2
+    while ncap < need:
+        ncap *= 2
+    nb: usize = usize(ncap) * usize(l->esize)
+    a: *PsArr = ps_alloc(ctx, sizeof(PsArr) + nb, PS_TY_ARR)
+    a->nbytes = nb
+    if l->data != None and l->len > 0:
+        memcpy((*char)(a) + sizeof(PsArr), (*char)(l->data) + sizeof(PsArr), usize(l->len) * usize(l->esize))
+    l->data = a
+    l->cap = ncap
+
+def ps_list_len(l: *PsList) -> i64:
+    return l->len
+
+# The base of the elements. A list with no storage yet answers a SCRATCH slot
+# instead of None: after an index that raised, the generated code still performs
+# the read whose value the exception check is about to throw away, and reading
+# from nowhere would take the program down before the check ever runs.
+static PS_SCRATCH: char[64]
+
+def ps_list_base(l: *PsList) -> *char:
+    # a view (18.3) borrows the buffer's bytes: they are where they always
+    # were, and indexing, iterating and slicing all go through here
+    if l->raw != None:
+        return l->raw
+    if l->data == None:
+        return PS_SCRATCH
+    return (*char)(l->data) + sizeof(PsArr)
+
+def ps_arr_at(ctx: *PsCtx, i: i64, n: i64, file: const *char, line: i32) -> i64:
+    k: i64 = i + n if i < 0 else i
+    if k < 0 or k >= n:
+        ps_raise(ctx, "array index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return k
+
+def ps_list_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> i64:
+    # negative counts from the end (31.4), and out of range RAISES (5.2) rather
+    # than reading whatever is there
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k >= l->len:
+        ps_raise(ctx, "list index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return k
+
+def ps_list_push(ctx: *PsCtx, l: *PsList) -> *char:
+    if l->raw != None:
+        # 18.3: the window has exactly the elements the buffer has room for.
+        # Growing would mean allocating, and then it would not be the same
+        # bytes the other threads are looking at.
+        ps_raise(ctx, "a view over a buffer has a fixed size", PS_CAT_VALUE, "<view>", 0)
+        return PS_SCRATCH
+    ps_list_grow(ctx, l, l->len + 1)
+    p: *char = ps_list_base(l) + usize(l->len) * usize(l->esize)
+    l->len += 1
+    memset(p, 0, usize(l->esize))
+    return p
+
+# ---------- dicts and sets ----------
+static def ps_dict_rehash(ctx: *PsCtx, d: *PsDict, ncap: i64)
+
+def ps_hash_bytes(b: const *char, n: usize) -> u64:
+    h: u64 = 1469598103934665603     # FNV-1a
+    for i in range(n):
+        h ^= u64(u8(b[i]))
+        h *= 1099511628211
+    return h
+
+# the hash and the equality of ONE key, by kind. A `str` key hashes its BYTES
+# and compares by content (22.2); everything else is bits, which is also what
+# makes a float key compare `+0.0` and `-0.0` apart (47.1).
+static def ps_key_hash(d: *PsDict, k: const *char) -> u64:
+    if d->kkind == PS_K_STR:
+        s: *PsStr = *(**PsStr)(k)
+        return ps_hash_bytes(s->data, usize(s->len))
+    return ps_hash_bytes(k, usize(d->ksize))
+
+static def ps_key_eq(d: *PsDict, a: const *char, b: const *char) -> bool:
+    if d->kkind == PS_K_STR:
+        return ps_str_eq(*(**PsStr)(a), *(**PsStr)(b))
+    return memcmp(a, b, usize(d->ksize)) == 0
+
+# EMPTY and DEAD live in the index, not in a byte array of their own: a slot
+# either names an entry or says why it does not.
+# a raw byte array in the collected heap. Zeroed, because a field that is a
+# reference has to start as None or the collector would follow whatever was
+# there.
+static def ps_arr_new(ctx: *PsCtx, nbytes: usize) -> *PsArr:
+    a: *PsArr = ps_alloc(ctx, sizeof(PsArr) + nbytes, PS_TY_ARR)
+    a->nbytes = nbytes
+    memset((*char)(a) + sizeof(PsArr), 0, nbytes)
+    return a
+
+static def ps_arr_data(a: *PsArr) -> *char:
+    return (*char)(a) + sizeof(PsArr)
+
+static const PS_IDX_EMPTY: const i64 = -1
+static const PS_IDX_DEAD: const i64 = -2
+
+static def ps_idx_at(d: *PsDict, i: i64) -> i64:
+    return *(*i64)(ps_arr_data(d->index) + usize(i) * sizeof(i64))
+
+static def ps_idx_set(d: *PsDict, i: i64, v: i64):
+    *(*i64)(ps_arr_data(d->index) + usize(i) * sizeof(i64)) = v
+
+# The slot for `key`. Answers the ENTRY it holds, or -1 when the key is not
+# there — and in that case `slot` comes back as the place to write it, which is
+# the first DEAD slot of the probe chain if there was one, so a table that has
+# been deleted from fills its holes instead of growing past them.
+static def ps_dict_find(d: *PsDict, key: const *char, ref slot: i64) -> i64:
+    mask: u64 = u64(d->cap) - 1
+    i: u64 = ps_key_hash(d, key) & mask
+    free: i64 = -1
+    while True:
+        e: i64 = ps_idx_at(d, i64(i))
+        if e == PS_IDX_EMPTY:
+            slot = i64(i) if free < 0 else free
+            return -1
+        if e == PS_IDX_DEAD:
+            if free < 0:
+                free = i64(i)
+        elif ps_key_eq(d, ps_arr_data(d->keys) + usize(e) * usize(d->ksize), key):
+            slot = i64(i)
+            return e
+        i = (i + 1) & mask
+
+# Rebuilds the index from nothing and COMPACTS the entries, keeping their order.
+# This is the only place a dead entry disappears, which is what keeps iteration
+# proportional to what is alive rather than to everything that ever was.
+#
+# Nothing here holds a collected pointer across a safe point: `ps_alloc` never
+# collects (that is the rule the whole moving collector rests on), so the old
+# arrays stay put while the new ones are built.
+static def ps_dict_rebuild(ctx: *PsCtx, d: *PsDict, ncap: i64, necap: i64):
+    ok: *PsArr = d->keys
+    ov: *PsArr = d->vals
+    ost: *PsArr = d->state
+    onent: i64 = d->nent
+    d->index = ps_arr_new(ctx, usize(ncap) * sizeof(i64))
+    d->keys = ps_arr_new(ctx, usize(necap) * usize(d->ksize))
+    d->vals = ps_arr_new(ctx, usize(necap) * usize(d->vsize if d->vsize > 0 else 1))
+    d->state = ps_arr_new(ctx, usize(necap))
+    d->cap = ncap
+    d->ecap = necap
+    d->nent = 0
+    d->n = 0
+    # a fresh array arrives zeroed and zero is a perfectly good entry number, so
+    # every slot has to be written as EMPTY on purpose
+    k: i64 = 0
+    while k < ncap:
+        ps_idx_set(d, k, PS_IDX_EMPTY)
+        k += 1
+    if ost == None:
+        return
+    okeys: *char = ps_arr_data(ok)
+    ovals: *char = ps_arr_data(ov)
+    ostate: *char = ps_arr_data(ost)
+    e: i64 = 0
+    while e < onent:
+        if ostate[e] == 1:
+            kp: *char = okeys + usize(e) * usize(d->ksize)
+            slot: i64 = 0
+            ps_dict_find(d, kp, ref slot)
+            ne: i64 = d->nent
+            memcpy(ps_arr_data(d->keys) + usize(ne) * usize(d->ksize), kp, usize(d->ksize))
+            if d->vsize > 0:
+                memcpy(ps_arr_data(d->vals) + usize(ne) * usize(d->vsize), ovals + usize(e) * usize(d->vsize), usize(d->vsize))
+            ps_arr_data(d->state)[ne] = 1
+            ps_idx_set(d, slot, ne)
+            d->nent = ne + 1
+            d->n += 1
+        e += 1
+
+def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vref: bool) -> *PsDict:
+    d: *PsDict = ps_alloc(ctx, sizeof(PsDict), PS_TY_DICT)
+    d->n = 0
+    d->nent = 0
+    d->ecap = 0
+    d->cap = 0
+    d->ksize = ksize
+    d->vsize = vsize
+    d->kkind = kkind
+    d->vtrace = None
+    d->kref = kref
+    d->vref = vref
+    d->index = None
+    d->keys = None
+    d->vals = None
+    d->state = None
+    ps_dict_rebuild(ctx, d, 8, 6)
+    return d
+
+def ps_dict_len(d: *PsDict) -> i64:
+    return d->n
+
+def ps_dict_put(ctx: *PsCtx, d: *PsDict, key: const *char) -> *char:
+    # Two things can be full: the dense array of entries, and the index at its
+    # 3/4 load. Either one rebuilds — and the rebuild only GROWS when it is the
+    # live set that filled the table. A table full of dead entries is compacted
+    # in place, which is what keeps delete-and-reinsert from growing for ever.
+    if d->nent + 1 > d->ecap or (d->nent + 1) * 4 >= d->cap * 3:
+        ncap: i64 = d->cap
+        while (d->n + 1) * 4 >= ncap * 3:
+            ncap = ncap * 2
+        necap: i64 = ncap * 3 / 4
+        if necap < 6:
+            necap = 6
+        ps_dict_rebuild(ctx, d, ncap, necap)
+    slot: i64 = 0
+    e: i64 = ps_dict_find(d, key, ref slot)
+    if e < 0:
+        e = d->nent
+        memcpy(ps_arr_data(d->keys) + usize(e) * usize(d->ksize), key, usize(d->ksize))
+        ps_arr_data(d->state)[e] = 1
+        ps_idx_set(d, slot, e)
+        d->nent = e + 1
+        d->n += 1
+    if d->vsize == 0:
+        return None
+    return ps_arr_data(d->vals) + usize(e) * usize(d->vsize)
+
+def ps_dict_get(ctx: *PsCtx, d: *PsDict, key: const *char, file: const *char, line: i32) -> *char:
+    slot: i64 = 0
+    e: i64 = ps_dict_find(d, key, ref slot)
+    if e < 0:
+        # a missing key RAISES (5.2); `get(k, default)` is the other idiom
+        ps_raise(ctx, "key not found", PS_CAT_KEY, file, line)
+        return ps_arr_data(d->vals)
+    return ps_arr_data(d->vals) + usize(e) * usize(d->vsize)
+
+def ps_dict_has(d: *PsDict, key: const *char) -> bool:
+    slot: i64 = 0
+    return ps_dict_find(d, key, ref slot) >= 0
+
+def ps_dict_del(d: *PsDict, key: const *char) -> bool:
+    slot: i64 = 0
+    e: i64 = ps_dict_find(d, key, ref slot)
+    if e < 0:
+        return False
+    # the slot becomes DEAD so the probe chain stays walkable, and the entry
+    # becomes dead so iteration skips it. The entry's room comes back at the
+    # next rebuild and not before — its key may still be somebody's reference
+    # until the collector says otherwise.
+    ps_idx_set(d, slot, PS_IDX_DEAD)
+    ps_arr_data(d->state)[e] = 0
+    d->n -= 1
+    return True
+
+# ---------- iteration, which is where the order lives ----------
+# `nent` is the high water of the DENSE array, so walking 0..nent and skipping
+# what is dead visits the keys in the order they were inserted. That is the whole
+# implementation of the guarantee.
+def ps_dict_nent(d: *PsDict) -> i64:
+    return d->nent
+
+def ps_dict_live(d: *PsDict, i: i64) -> bool:
+    return ps_arr_data(d->state)[i] == 1
+
+def ps_dict_key_at(d: *PsDict, i: i64) -> *char:
+    return ps_arr_data(d->keys) + usize(i) * usize(d->ksize)
+
+def ps_dict_val_at(d: *PsDict, i: i64) -> *char:
+    return ps_arr_data(d->vals) + usize(i) * usize(d->vsize)
+
+# `d.keys()` and `d.values()` (61.4). A fresh LIST, in insertion order — a copy
+# and not a view, because 17.3 says a slice copies and a view into a dict that
+# moves would be an interior pointer into a moving object (the whole class of
+# bug the stress mode exists to find).
+#
+# The element size and whether it is a reference come from the dict itself, so
+# the lowering does not have to say them twice.
+# ---------- 104: os operadores de conjunto ----------
+#
+# `|`, `&`, `-` e `^` entre sets, como no Python: um set NOVO, e a ordem do
+# resultado é a de inserção (91.1) — primeiro o que veio do lado esquerdo, na
+# ordem dele, depois o do direito. Python não promete ordem em set, mas ter uma
+# ordem definida é melhor do que ter uma que depende do hash.
+static def ps_set_add_all(ctx: *PsCtx, out: *PsDict, d: *PsDict, only_in: *PsDict, want: bool):
+    if d == None:
+        return
+    i: i64 = 0
+    while i < ps_dict_nent(d):
+        if ps_dict_live(d, i):
+            kp: *char = ps_dict_key_at(d, i)
+            if only_in == None or ps_dict_has(only_in, kp) == want:
+                ps_dict_put(ctx, out, kp)
+        i += 1
+
+def ps_set_op(ctx: *PsCtx, a: *PsDict, b: *PsDict, op: i32) -> *PsDict:
+    out: *PsDict = ps_dict_new(ctx, a->ksize, a->vsize, a->kkind, a->kref, a->vref)
+    if op == 0:
+        # união
+        ps_set_add_all(ctx, out, a, None, False)
+        ps_set_add_all(ctx, out, b, None, False)
+    elif op == 1:
+        # interseção: os de A que estão em B
+        ps_set_add_all(ctx, out, a, b, True)
+    elif op == 2:
+        # diferença: os de A que NÃO estão em B
+        ps_set_add_all(ctx, out, a, b, False)
+    else:
+        # diferença simétrica: os que estão num só dos dois
+        ps_set_add_all(ctx, out, a, b, False)
+        ps_set_add_all(ctx, out, b, a, False)
+    return out
+
+# `<=` é subconjunto e `>=` é superconjunto, os nomes que o Python usa nos
+# operadores. `<` e `>` são os próprios, ESTRITOS.
+def ps_set_subset(a: *PsDict, b: *PsDict, strict: bool) -> bool:
+    if a == None:
+        return True
+    if b == None:
+        return a->n == 0
+    if a->n > b->n or (strict and a->n == b->n):
+        return False
+    i: i64 = 0
+    while i < ps_dict_nent(a):
+        if ps_dict_live(a, i):
+            if not ps_dict_has(b, ps_dict_key_at(a, i)):
+                return False
+        i += 1
+    return True
+
+# ---------- 104: `clear`, `copy` e `update` de dict/set ----------
+def ps_dict_clear(d: *PsDict):
+    if d == None:
+        return
+    d->nent = 0
+    d->n = 0
+    # a tabela de índices volta a VAZIA inteira, que é o estado em que ela nasce
+    # — zero é um número de entrada perfeitamente válido, então cada slot tem de
+    # ser escrito de propósito
+    k: i64 = 0
+    while k < d->cap:
+        ps_idx_set(d, k, PS_IDX_EMPTY)
+        k += 1
+
+# Uma cópia RASA, como a do Python: as chaves e os valores são os mesmos bytes,
+# então dois dicts passam a apontar para os mesmos objetos. O que não é
+# compartilhado é a tabela — pôr no novo não mexe no velho.
+def ps_dict_copy(ctx: *PsCtx, d: *PsDict) -> *PsDict:
+    if d == None:
+        return None
+    out: *PsDict = ps_dict_new(ctx, d->ksize, d->vsize, d->kkind, d->kref, d->vref)
+    out->vtrace = d->vtrace
+    i: i64 = 0
+    while i < ps_dict_nent(d):
+        if ps_dict_live(d, i):
+            kp: *char = ps_dict_key_at(d, i)
+            slot: *char = ps_dict_put(ctx, out, kp)
+            if d->vsize > 0:
+                memcpy(slot, ps_dict_val_at(d, i), usize(d->vsize))
+        i += 1
+    return out
+
+# `a.update(b)`: as chaves de b entram em a, e as que já existem são
+# SOBRESCRITAS — a ordem de inserção de uma chave que já estava não muda (91.1),
+# porque `ps_dict_put` devolve o slot que já existia.
+def ps_dict_update(ctx: *PsCtx, a: *PsDict, b: *PsDict):
+    if a == None or b == None or a == b:
+        return
+    i: i64 = 0
+    while i < ps_dict_nent(b):
+        if ps_dict_live(b, i):
+            slot: *char = ps_dict_put(ctx, a, ps_dict_key_at(b, i))
+            if b->vsize > 0 and a->vsize > 0:
+                memcpy(slot, ps_dict_val_at(b, i), usize(b->vsize))
+        i += 1
+
+def ps_dict_keys(ctx: *PsCtx, d: *PsDict) -> *PsList:
+    out: *PsList = ps_list_new(ctx, d->ksize, d->kref, d->n)
+    i: i64 = 0
+    while i < d->nent:
+        if ps_dict_live(d, i):
+            memcpy(ps_list_push(ctx, out), ps_dict_key_at(d, i), usize(d->ksize))
+        i += 1
+    return out
+
+def ps_dict_values(ctx: *PsCtx, d: *PsDict) -> *PsList:
+    out: *PsList = ps_list_new(ctx, d->vsize, d->vref, d->n)
+    i: i64 = 0
+    while i < d->nent:
+        if ps_dict_live(d, i):
+            memcpy(ps_list_push(ctx, out), ps_dict_val_at(d, i), usize(d->vsize))
+        i += 1
+    return out
+
+
+# ---------- strings ----------
+# counts codepoints in UTF-8: every byte that is not a continuation starts one
+static def ps_utf8_count(b: const *char, n: usize) -> u32:
+    c: u32 = 0
+    for i in range(n):
+        if (u8(b[i]) & 0xC0) != 0x80:
+            c += 1
+    return c
+
+# 83.2: bytes that come from the outside are CHECKED before they become a
+# `str`, because a `str` promises codepoints — `len()` counts them and `s[i]`
+# is one. A string that lies about that is worse than an error.
+def ps_utf8_valid(b: const *char, n: usize) -> bool:
+    i: usize = 0
+    while i < n:
+        c: u8 = u8(b[i])
+        need: i32 = 0
+        lo: u32 = 0
+        cp: u32 = 0
+        if c < 0x80:
+            i += 1
+            continue
+        elif (c & 0xE0) == 0xC0:
+            need = 1
+            cp = u32(c & 0x1F)
+            lo = 0x80
+        elif (c & 0xF0) == 0xE0:
+            need = 2
+            cp = u32(c & 0x0F)
+            lo = 0x800
+        elif (c & 0xF8) == 0xF0:
+            need = 3
+            cp = u32(c & 0x07)
+            lo = 0x10000
+        else:
+            return False
+        if i + usize(need) >= n + usize(0) and i + usize(need) > n - 1:
+            return False
+        for k in range(need):
+            cc: u8 = u8(b[i + usize(k) + 1])
+            if (cc & 0xC0) != 0x80:
+                return False
+            cp = (cp << 6) | u32(cc & 0x3F)
+        if cp < lo or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
+            return False
+        i += usize(need) + 1
+    return True
+
+# 80.1b — indexing in O(1).
+#
+# The decision asked for PEP 393's adaptive width (latin-1/UCS-2/UCS-4 per
+# string). Implementing that LITERALLY here would cost in a way that only
+# became visible once the rest existed: everything in this system wants the
+# UTF-8 bytes — the socket, the file, the message between heaps, the boundary
+# with P (84.1), `print`. With the text held as UCS-4, every one of those
+# crossings would have to MATERIALIZE the UTF-8, which is exactly why PEP 393
+# keeps BOTH forms. The real price would be two copies of every string that
+# crosses anything.
+#
+# What is here reaches the same observable property — `s[i]` and slicing in
+# O(1) — with a single copy:
+#
+#   * ASCII (the overwhelming majority, and ALL protocol text) needs nothing:
+#     `nchars == len` IS the proof that every byte is one character, so the
+#     index is a direct access. That proof was in the header all along — it
+#     just had never been read as one;
+#   * everything else gets an OFFSET INDEX, built the first time someone
+#     indexes that string and kept in it. O(n) once, O(1) from then on, and
+#     nothing at all for a string nobody indexes.
+#
+# A `str` is immutable (31.3), so the index never has to be invalidated.
+static def ps_str_ascii(s: *PsStr) -> bool:
+    return s->nchars == s->len
+
+# the index, built on demand and kept in the string itself
+static def ps_str_index(ctx: *PsCtx, s: *PsStr) -> *PsArr:
+    if s->offs != None:
+        return s->offs
+    n: usize = usize(s->len)
+    cnt: usize = usize(s->nchars)
+    a: *PsArr = (*PsArr)(ps_alloc(ctx, sizeof(PsArr) + (cnt + 1) * sizeof(u32), PS_TY_ARR))
+    a->nbytes = (cnt + 1) * sizeof(u32)
+    off: *u32 = (*u32)((*char)(a) + sizeof(PsArr))
+    k: usize = 0
+    i: usize = 0
+    while i < n:
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            off[k] = u32(i)
+            k += 1
+        i += 1
+    off[cnt] = u32(n)
+    s->offs = a
+    return a
+
+# byte offset of codepoint `k`, or `n` when k is past the end
+static def ps_utf8_off(b: const *char, n: usize, k: i64) -> usize:
+    seen: i64 = 0
+    for i in range(n):
+        if (u8(b[i]) & 0xC0) != 0x80:
+            if seen == k:
+                return usize(i)
+            seen += 1
+    return n
+
+def ps_str_new(ctx: *PsCtx, bytes: const *char, len: usize) -> *PsStr:
+    s: *PsStr = ps_alloc(ctx, sizeof(PsStr) + len + 1, PS_TY_STR)
+    s->len = u32(len)
+    s->hash = 0
+    if len > 0:
+        memcpy(s->data, bytes, len)
+    s->data[len] = '\0'
+    s->nchars = ps_utf8_count(s->data, len)
+    s->offs = None
+    return s
+
+# 79.1/83.2: bytes become text HERE, and only if they really are text. A `str`
+# promises codepoints — `len()` counts them and `s[i]` is one — so a string
+# built out of invalid UTF-8 would be a string that lies about itself.
+def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> *PsStr:
+    n: usize = usize(l->len) if l != None else usize(0)
+    p: const *char = ps_list_base(l) if n > 0 else ""
+    if not ps_utf8_valid(p, n):
+        ps_raise(ctx, "these bytes are not valid UTF-8: keep them as bytes, or decode them yourself", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    return ps_str_new(ctx, p, n)
+
+# 81.4/83.2: text COMING FROM the P side. The bytes are copied on arrival — the
+# memory is theirs and the collector does not track it — and CHECKED, because a
+# `str` promises codepoints and one that lied about that would be worse than an
+# error.
+def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, line: i32) -> *PsStr:
+    if p == None:
+        return ps_str_new(ctx, "", 0)
+    if not ps_utf8_valid(p, n):
+        ps_raise(ctx, "this text is not valid UTF-8 (it came from the other side of the boundary)", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    return ps_str_new(ctx, p, n)
+
+# ... and bytes, which promise nothing and so are not checked
+def ps_bytes_new(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList:
+    l: *PsList = ps_list_new(ctx, 1, False, i64(n))
+    i: usize = 0
+    while i < n:
+        dst: *char = ps_list_push(ctx, l)
+        *dst = char(p[i])
+        i += 1
+    return l
+
+def ps_str_concat(ctx: *PsCtx, a: *PsStr, b: *PsStr) -> *PsStr:
+    n: usize = usize(a->len) + usize(b->len)
+    s: *PsStr = ps_alloc(ctx, sizeof(PsStr) + n + 1, PS_TY_STR)
+    s->len = u32(n)
+    # CHARACTERS too (3.4): `len()` is O(1) because every constructor sets this,
+    # and concatenation is the one that used to forget — a joined string
+    # reported length 0 while printing perfectly.
+    s->nchars = a->nchars + b->nchars
+    s->hash = 0
+    memcpy(s->data, a->data, usize(a->len))
+    memcpy(s->data + a->len, b->data, usize(b->len))
+    s->data[n] = '\0'
+    s->offs = None
+    return s
+
+# The digits by hand rather than snprintf: `%lld` versus `%ld` for an i64 is a
+# portability question with no good answer in a header meant to compile
+# anywhere, and a runtime that warns is a runtime nobody trusts. Works in the
+# NEGATIVES so that the most negative integer, which has no positive
+# counterpart, needs no special case.
+def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr:
+    buf: char[24]
+    i: i32 = 24
+    neg: bool = v < 0
+    n: i64 = v if neg else -v
+    do:
+        i -= 1
+        buf[i] = char(i32('0') - i32(n % 10))
+        n /= 10
+    while n != 0
+    if neg:
+        i -= 1
+        buf[i] = '-'
+    return ps_str_new(ctx, buf + i, usize(24 - i))
+
+# Python's repr: the SHORTEST form that reads back as the same double. Tries 15,
+# then 16, then 17 significant digits and keeps the first that round-trips — the
+# standard recipe, and the reason `0.1 + 0.2` prints all its digits instead of a
+# tidy lie. A result with no '.', 'e', 'inf' or 'nan' in it gets a ".0", because
+# a float that prints as `2` is indistinguishable from an int.
+# ---------- the repr of a container (97) ----------
+# `print([1, 2, 3])` shows `[1, 2, 3]`, and a string INSIDE shows with quotes.
+# The quotes are the whole reason this is here rather than in the lowering:
+# `['a, b']` and `['a', 'b']` print the same without them, and one of the two is
+# a lie. WHICH quote follows Python's rule exactly — single, unless the string
+# has a single and no double — so an oracle pair can compare the two outputs
+# character for character instead of "close enough".
+static def ps_repr_esc_len(s: *PsStr, q: char) -> usize:
+    n: usize = 2
+    i: usize = 0
+    while i < usize(s->len):
+        c: char = s->data[i]
+        if c == '\\' or c == q:
+            n += 2
+        elif c == '\n' or c == '\r' or c == '\t':
+            n += 2
+        elif u8(c) < 32 or u8(c) == 127:
+            n += 4          # \xNN
+        else:
+            n += 1
+        i += 1
+    return n
+
+def ps_str_quoted(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    # Python picks the quote: single, unless that would need escaping and the
+    # double would not
+    q: char = '\''
+    if memchr(s->data, int('\''), usize(s->len)) != None and memchr(s->data, int('"'), usize(s->len)) == None:
+        q = '"'
+    n: usize = ps_repr_esc_len(s, q)
+    out: *PsStr = ps_alloc(ctx, sizeof(PsStr) + n + 1, PS_TY_STR)
+    out->len = u32(n)
+    out->hash = 0
+    out->offs = None
+    d: *char = out->data
+    k: usize = 0
+    d[k] = q
+    k += 1
+    i: usize = 0
+    while i < usize(s->len):
+        c: char = s->data[i]
+        if c == '\\' or c == q:
+            d[k] = '\\'
+            d[k + 1] = c
+            k += 2
+        elif c == '\n':
+            d[k] = '\\'
+            d[k + 1] = 'n'
+            k += 2
+        elif c == '\r':
+            d[k] = '\\'
+            d[k + 1] = 'r'
+            k += 2
+        elif c == '\t':
+            d[k] = '\\'
+            d[k + 1] = 't'
+            k += 2
+        elif u8(c) < 32 or u8(c) == 127:
+            snprintf(d + k, usize(5), "\\x%02x", int(u8(c)))
+            k += 4
+        else:
+            d[k] = c
+            k += 1
+        i += 1
+    d[k] = q
+    k += 1
+    d[k] = '\0'
+    # the count of CHARACTERS, which is what `len` promises (3.4). The escapes
+    # are ASCII, so what changes is only what was added.
+    out->nchars = s->nchars + u32(n - usize(s->len))
+    return out
+
+# A growing byte buffer, malloc'd and freed here: the pieces are collected
+# strings and joining them with `ps_str_concat` in a loop would be quadratic and
+# would allocate a string per element in the heap the collector walks.
+struct PsRepr:
+    data: *char
+    len: usize
+    cap: usize
+
+static def ps_repr_put(ref b: PsRepr, p: const *char, n: usize):
+    if b.len + n + 1 > b.cap:
+        nc: usize = b.cap * 2 if b.cap > 0 else usize(64)
+        while nc < b.len + n + 1:
+            nc *= 2
+        b.data = (*char)(realloc(b.data, nc))
+        b.cap = nc
+    memcpy(b.data + b.len, p, n)
+    b.len += n
+    b.data[b.len] = '\0'
+
+static def ps_repr_puts(ref b: PsRepr, s: *PsStr):
+    if s != None:
+        ps_repr_put(ref b, s->data, usize(s->len))
+
+# THE CEILING (97.2). A cycle is reachable — `o.pai` is the normal case here, and
+# a struct whose field is a list of itself closes the loop through a container.
+# The static expansion of a record's fields stops at depth 3 on its own; this is
+# the other door, and it is counted in the CONTEXT because the adapter that
+# recurses is a function the compiler emitted, not a parameter it can thread.
+PS_REPR_MAX: const i32 = 8
+
+def ps_repr_seq(ctx: *PsCtx, l: *PsList, open: const *char, close: const *char, fn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr:
+    if ctx->repr_depth >= PS_REPR_MAX:
+        return ps_str_new(ctx, "...", usize(3))
+    ctx->repr_depth += 1
+    defer:
+        ctx->repr_depth -= 1
+    b: PsRepr = {None, 0, 0}
+    ps_repr_put(ref b, open, strlen(open))
+    base: *char = (*char)(l->data) + sizeof(PsArr) if l->data != None else None
+    es: usize = usize(l->esize)
+    i: i64 = 0
+    while i < l->len:
+        if i > 0:
+            ps_repr_put(ref b, ", ", usize(2))
+        ps_repr_puts(ref b, fn(env, ctx, (*void)(base + usize(i) * es)))
+        if ctx->exc != None:
+            break
+        i += 1
+    ps_repr_put(ref b, close, strlen(close))
+    out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
+    free(b.data)
+    return out
+
+# `{k: v, ...}` for a dict and `{a, b}` for a set — and the two empty cases are
+# not symmetric, because Python's are not: `{}` is the empty DICT and the empty
+# set is `set()`, which is the only spelling that reads back as itself.
+def ps_repr_dict(ctx: *PsCtx, d: *PsDict, kfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, vfn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr:
+    if vfn == None and d->n == 0:
+        return ps_str_new(ctx, "set()", usize(5))
+    if ctx->repr_depth >= PS_REPR_MAX:
+        return ps_str_new(ctx, "...", usize(3))
+    ctx->repr_depth += 1
+    defer:
+        ctx->repr_depth -= 1
+    b: PsRepr = {None, 0, 0}
+    ps_repr_put(ref b, "{", usize(1))
+    first: bool = True
+    i: i64 = 0
+    while i < d->nent:
+        if ps_dict_live(d, i):
+            if not first:
+                ps_repr_put(ref b, ", ", usize(2))
+            first = False
+            ps_repr_puts(ref b, kfn(env, ctx, (*void)(ps_dict_key_at(d, i))))
+            if vfn != None:
+                ps_repr_put(ref b, ": ", usize(2))
+                ps_repr_puts(ref b, vfn(env, ctx, (*void)(ps_dict_val_at(d, i))))
+            if ctx->exc != None:
+                break
+        i += 1
+    ps_repr_put(ref b, "}", usize(1))
+    out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
+    free(b.data)
+    return out
+
+def ps_str_from_float(ctx: *PsCtx, v: f64) -> *PsStr:
+    buf: char[64]
+    n: i32 = 0
+    prec: i32 = 15
+    while prec <= 17:
+        n = snprintf(buf, 64, "%.*g", prec, v)
+        if strtod(buf, None) == v:
+            break
+        prec += 1
+    if strpbrk(buf, ".eEni") == None:
+        buf[n] = '.'
+        buf[n + 1] = '0'
+        n += 2
+        buf[n] = '\0'
+    return ps_str_new(ctx, buf, usize(n))
+
+def ps_str_from_bool(ctx: *PsCtx, v: bool) -> *PsStr:
+    return ps_str_new(ctx, "True" if v else "False", usize(4 if v else 5))
+
+# negative, zero or positive — C's convention, which is what the neighbourhood
+# already speaks (and what `sorted` compares with)
+def ps_str_nbytes(s: *PsStr) -> i64:
+    return i64(s->len) if s != None else 0
+
+def ps_str_step(ctx: *PsCtx, s: *PsStr, off: *i64) -> *PsStr:
+    if s == None or *off >= i64(s->len):
+        return ps_str_new(ctx, "", 0)
+    a: usize = usize(*off)
+    n: usize = 1
+    c: u8 = u8(s->data[a])
+    if (c & 0xF8) == 0xF0:
+        n = 4
+    elif (c & 0xF0) == 0xE0:
+        n = 3
+    elif (c & 0xE0) == 0xC0:
+        n = 2
+    if a + n > usize(s->len):
+        n = usize(s->len) - a          # truncated tail: hand back what is there
+    *off = i64(a + n)
+    return ps_str_new(ctx, s->data + a, n)
+
+def ps_str_has(hay: *PsStr, needle: *PsStr) -> bool:
+    if hay == None or needle == None:
+        return False
+    n: usize = usize(needle->len)
+    if n == usize(0):
+        return True
+    if n > usize(hay->len):
+        return False
+    limit: usize = usize(hay->len) - n
+    i: usize = 0
+    while i <= limit:
+        if memcmp(hay->data + i, needle->data, n) == 0:
+            return True
+        i += 1
+    return False
+
+def ps_str_lt(a: *PsStr, b: *PsStr) -> i32:
+    if a == None or b == None:
+        return 0
+    na: usize = usize(a->len)
+    nb: usize = usize(b->len)
+    n: usize = na if na < nb else nb
+    r: int = memcmp(a->data, b->data, n)
+    if r != 0:
+        return -1 if r < 0 else 1
+    if na == nb:
+        return 0
+    return -1 if na < nb else 1
+
+def ps_str_eq(a: *PsStr, b: *PsStr) -> bool:
+    if a == b:
+        return True
+    if a->len != b->len:
+        return False
+    return memcmp(a->data, b->data, usize(a->len)) == 0
+
+def ps_str_cstr(s: *PsStr) -> const *char:
+    return s->data if s != None else ""
+
+def ps_str_len(ctx: *PsCtx, s: *PsStr) -> i64:
+    # CHARACTERS, as 3.4 asks — counted once at creation, so this is O(1)
+    return i64(s->nchars)
+
+def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *PsStr:
+    k: i64 = i + i64(s->nchars) if i < 0 else i
+    if k < 0 or k >= i64(s->nchars):
+        ps_raise(ctx, "string index out of range", PS_CAT_INDEX, file, line)
+        return ps_str_new(ctx, "", 0)
+    if ps_str_ascii(s):
+        return ps_str_new(ctx, s->data + usize(k), usize(1))
+    idx: *PsArr = ps_str_index(ctx, s)
+    off: *u32 = (*u32)((*char)(idx) + sizeof(PsArr))
+    a: usize = usize(off[k])
+    b: usize = usize(off[k + 1])
+    return ps_str_new(ctx, s->data + a, b - a)
+
+def ps_str_ord(ctx: *PsCtx, s: *PsStr, file: const *char, line: i32) -> i64:
+    if s == None or s->nchars != 1:
+        ps_raise(ctx, "ord() takes a string of exactly one character", PS_CAT_VALUE, file, line)
+        return 0
+    b: *u8 = (*u8)(s->data)
+    c: u32 = u32(b[0])
+    if c < 0x80:
+        return i64(c)
+    if (c & 0xE0) == 0xC0:
+        return i64(((c & 0x1F) << 6) | (u32(b[1]) & 0x3F))
+    if (c & 0xF0) == 0xE0:
+        return i64(((c & 0x0F) << 12) | ((u32(b[1]) & 0x3F) << 6) | (u32(b[2]) & 0x3F))
+    return i64(((c & 0x07) << 18) | ((u32(b[1]) & 0x3F) << 12) | ((u32(b[2]) & 0x3F) << 6) | (u32(b[3]) & 0x3F))
+
+def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr:
+    if cp < 0 or cp > 1114111:
+        ps_raise(ctx, "chr() takes a codepoint between 0 and 0x10FFFF", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    b: char[5]
+    n: usize = 0
+    v: u32 = u32(cp)
+    if v < 0x80:
+        b[0] = char(v)
+        n = 1
+    elif v < 0x800:
+        b[0] = char(0xC0 | (v >> 6))
+        b[1] = char(0x80 | (v & 0x3F))
+        n = 2
+    elif v < 0x10000:
+        b[0] = char(0xE0 | (v >> 12))
+        b[1] = char(0x80 | ((v >> 6) & 0x3F))
+        b[2] = char(0x80 | (v & 0x3F))
+        n = 3
+    else:
+        b[0] = char(0xF0 | (v >> 18))
+        b[1] = char(0x80 | ((v >> 12) & 0x3F))
+        b[2] = char(0x80 | ((v >> 6) & 0x3F))
+        b[3] = char(0x80 | (v & 0x3F))
+        n = 4
+    return ps_str_new(ctx, &b[0], n)
+
+def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsStr:
+    n: i64 = i64(s->nchars)
+    lo: i64 = 0
+    hi: i64 = 0
+    # the bounds are Python's, and they are resolved by the same code the list
+    # uses — the two have to answer identically (see ps_slice_bounds)
+    if not ps_slice_bounds(ctx, n, a, b, st, has_a, has_b, out lo, out hi, file, line):
+        return ps_str_new(ctx, "", 0)
+    if st == 1:
+        # the common case: a contiguous run, which is one copy
+        if lo >= hi:
+            return ps_str_new(ctx, "", 0)
+        if ps_str_ascii(s):
+            return ps_str_new(ctx, s->data + usize(lo), usize(hi - lo))
+        idx: *PsArr = ps_str_index(ctx, s)
+        off: *u32 = (*u32)((*char)(idx) + sizeof(PsArr))
+        ba: usize = usize(off[lo])
+        bb: usize = usize(off[hi])
+        return ps_str_new(ctx, s->data + ba, bb - ba)
+    # a STEP means the characters are not contiguous, so they are copied one at
+    # a time — and by character, not by byte, which is what makes `s[::-1]` on
+    # text with an accent in it come out as text and not as broken UTF-8
+    buf: *char = (*char)(malloc(usize(s->len) + usize(4)))
+    k: usize = 0
+    ascii: bool = ps_str_ascii(s)
+    ix: *PsArr = None
+    of: *u32 = None
+    if not ascii:
+        ix = ps_str_index(ctx, s)
+        of = (*u32)((*char)(ix) + sizeof(PsArr))
+    q: i64 = lo
+    while (st > 0 and q < hi) or (st < 0 and q > hi):
+        if ascii:
+            buf[k] = s->data[usize(q)]
+            k += 1
+        else:
+            ba2: usize = usize(of[q])
+            bb2: usize = usize(of[q + 1])
+            memcpy(buf + k, s->data + ba2, bb2 - ba2)
+            k += bb2 - ba2
+        q += st
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64:
+    if needle->len == 0:
+        return 0
+    if needle->len > s->len:
+        return -1
+    chars: i64 = 0
+    for i in range(usize(s->len) - usize(needle->len) + 1):
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+                return chars
+            chars += 1
+    return -1
+
+# `uc_decode` mora com a tabela de caixa, mais abaixo; as funções daqui
+# precisam dele para andar de carácter em carácter
+static def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32
+
+# ---------- 104: o resto dos métodos de str ----------
+#
+# Todo índice que sai daqui é de CARÁCTER, não de byte, porque é o que `s[i]`
+# indexa e o que `len` conta (3.4) — a busca acha em bytes e conta caracteres
+# pelo caminho, que é o que `ps_str_find` já fazia.
+def ps_str_count(s: *PsStr, needle: *PsStr) -> i64:
+    if needle->len == 0:
+        # o Python conta as POSIÇÕES entre caracteres, que são len+1
+        return ps_str_nchars(s) + 1
+    if needle->len > s->len:
+        return 0
+    n: i64 = 0
+    i: usize = 0
+    while i + usize(needle->len) <= usize(s->len):
+        if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+            n += 1
+            # NÃO sobrepostas, como no Python: "aaa".count("aa") é 1
+            i += usize(needle->len)
+        else:
+            i += 1
+    return n
+
+# quantos CARACTERES tem
+def ps_str_nchars(s: *PsStr) -> i64:
+    # o número de caracteres já está no objeto, contado uma vez na criação (3.4)
+    return i64(s->nchars)
+
+def ps_str_rfind(s: *PsStr, needle: *PsStr) -> i64:
+    if needle->len == 0:
+        return ps_str_nchars(s)
+    if needle->len > s->len:
+        return -1
+    best: i64 = -1
+    chars: i64 = 0
+    for i in range(usize(s->len) - usize(needle->len) + 1):
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+                best = chars
+            chars += 1
+    return best
+
+# `find` a partir de um começo, contado em CARACTERES (o `find(sub, start)` do
+# Python). Um começo negativo conta do fim, como uma fatia.
+def ps_str_find_from(ctx: *PsCtx, s: *PsStr, needle: *PsStr, start: i64) -> i64:
+    nch: i64 = ps_str_nchars(s)
+    st: i64 = start + nch if start < 0 else start
+    if st < 0:
+        st = 0
+    if st > nch:
+        return -1 if needle->len > 0 else nch
+    # onde esse carácter começa, em bytes
+    boff: usize = usize(s->len)
+    seen: i64 = 0
+    for i in range(usize(s->len)):
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            if seen == st:
+                boff = i
+                break
+            seen += 1
+    if st == nch:
+        boff = usize(s->len)
+    if needle->len == 0:
+        return st
+    if usize(needle->len) > usize(s->len) - boff:
+        return -1
+    chars: i64 = st
+    i2: usize = boff
+    while i2 + usize(needle->len) <= usize(s->len):
+        if (u8(s->data[i2]) & 0xC0) != 0x80:
+            if memcmp(s->data + i2, needle->data, usize(needle->len)) == 0:
+                return chars
+            chars += 1
+        i2 += 1
+    return -1
+
+def ps_str_index_of(ctx: *PsCtx, s: *PsStr, needle: *PsStr, from_right: bool, file: const *char, line: i32) -> i64:
+    i: i64 = ps_str_rfind(s, needle) if from_right else ps_str_find(ctx, s, needle)
+    if i < 0:
+        ps_raise(ctx, "substring not found", PS_CAT_VALUE, file, line)
+        return 0
+    return i
+
+# O espaço em branco do Python, que é um conjunto FECHADO de 29 pontos de código
+# (`str.isspace()` para todo o intervalo, conferido contra o Python 3 / Unicode
+# 15). Está aqui à mão em vez de numa tabela gerada porque 29 pontos em 8 faixas
+# não justificam uma tabela — e o oráculo compara os dois de qualquer forma.
+def ps_str_is_space_cp(cp: i32) -> bool:
+    if cp == 0x20 or (cp >= 0x09 and cp <= 0x0D) or (cp >= 0x1C and cp <= 0x1F):
+        return True
+    if cp == 0x85 or cp == 0xA0 or cp == 0x1680:
+        return True
+    if cp >= 0x2000 and cp <= 0x200A:
+        return True
+    if cp == 0x2028 or cp == 0x2029 or cp == 0x202F or cp == 0x205F or cp == 0x3000:
+        return True
+    return False
+
+# `split()` SEM separador: parte em CORRIDAS de espaço, e não devolve pedaço
+# vazio nenhum — nem no começo nem no fim. É outra função e não o `split(sep)`
+# com um espaço porque o resultado é diferente: `" a  b ".split()` dá dois
+# pedaços e `" a  b ".split(" ")` dá cinco.
+def ps_str_split_ws(ctx: *PsCtx, s: *PsStr) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 0)
+    i: usize = 0
+    n: usize = usize(s->len)
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        if ps_str_is_space_cp(cp):
+            i += w
+            continue
+        st: usize = i
+        while i < n:
+            w2: usize = 1
+            cp2: i32 = uc_decode(s, i, ref w2)
+            if ps_str_is_space_cp(cp2):
+                break
+            i += w2
+        piece: *PsStr = ps_str_new(ctx, s->data + st, i - st)
+        *(**PsStr)(ps_list_push(ctx, out)) = piece
+    return out
+
+# `splitlines()`: as fronteiras de linha do Python, que são MAIS do que `\n` —
+# `\r`, `\r\n`, e os separadores que o Unicode define. O terminador não vem no
+# pedaço, e um terminador final NÃO produz um pedaço vazio.
+static def ps_line_break(cp: i32) -> bool:
+    if cp == 0x0A or cp == 0x0B or cp == 0x0C or cp == 0x0D or cp == 0x1C or cp == 0x1D or cp == 0x1E:
+        return True
+    return cp == 0x85 or cp == 0x2028 or cp == 0x2029
+
+def ps_str_splitlines(ctx: *PsCtx, s: *PsStr) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 0)
+    i: usize = 0
+    n: usize = usize(s->len)
+    st: usize = 0
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        if ps_line_break(cp):
+            *(**PsStr)(ps_list_push(ctx, out)) = ps_str_new(ctx, s->data + st, i - st)
+            i += w
+            if cp == 0x0D and i < n and s->data[i] == '\n':
+                i += 1
+            st = i
+        else:
+            i += w
+    if st < n:
+        *(**PsStr)(ps_list_push(ctx, out)) = ps_str_new(ctx, s->data + st, n - st)
+    return out
+
+def ps_str_removeaffix(ctx: *PsCtx, s: *PsStr, p: *PsStr, suffix: bool) -> *PsStr:
+    if p->len == 0 or p->len > s->len:
+        return s
+    if suffix:
+        if memcmp(s->data + usize(s->len) - usize(p->len), p->data, usize(p->len)) != 0:
+            return s
+        return ps_str_new(ctx, s->data, usize(s->len) - usize(p->len))
+    if memcmp(s->data, p->data, usize(p->len)) != 0:
+        return s
+    return ps_str_new(ctx, s->data + usize(p->len), usize(s->len) - usize(p->len))
+
+# `strip(chars)`: tira qualquer um dos CARACTERES do conjunto, das duas pontas —
+# não é um prefixo. mode 0 as duas, 1 só à esquerda, 2 só à direita.
+static def ps_chars_has(set: *PsStr, cp: i32) -> bool:
+    i: usize = 0
+    while i < usize(set->len):
+        w: usize = 1
+        c: i32 = uc_decode(set, i, ref w)
+        if c == cp:
+            return True
+        i += w
+    return False
+
+def ps_str_strip_chars(ctx: *PsCtx, s: *PsStr, set: *PsStr, mode: i32) -> *PsStr:
+    a: usize = 0
+    b: usize = usize(s->len)
+    if mode != 2:
+        while a < b:
+            w: usize = 1
+            cp: i32 = uc_decode(s, a, ref w)
+            if not ps_chars_has(set, cp):
+                break
+            a += w
+    if mode != 1:
+        while b > a:
+            # anda para trás até o começo do último carácter
+            e: usize = b - usize(1)
+            while e > a and (u8(s->data[e]) & 0xC0) == 0x80:
+                e -= usize(1)
+            w2: usize = 1
+            cp2: i32 = uc_decode(s, e, ref w2)
+            if not ps_chars_has(set, cp2):
+                break
+            b = e
+    return ps_str_new(ctx, s->data + a, b - a)
+
+# `ljust`, `rjust`, `center` e `zfill`: a largura conta CARACTERES, e o
+# preenchimento é um carácter. mode 0 esquerda (ljust), 1 direita (rjust),
+# 2 centro. No centro o Python põe a sobra à DIREITA.
+def ps_str_pad(ctx: *PsCtx, s: *PsStr, width: i64, fill: *PsStr, mode: i32, file: const *char, line: i32) -> *PsStr:
+    if fill->len == 0 or ps_str_nchars(fill) != 1:
+        ps_raise(ctx, "the fill has to be exactly one character", PS_CAT_VALUE, file, line)
+        return s
+    have: i64 = ps_str_nchars(s)
+    if width <= have:
+        return s
+    total: i64 = width - have
+    left: i64 = 0
+    if mode == 1:
+        left = total
+    elif mode == 2:
+        # A regra do `center` do CPython, com o termo de correção e tudo:
+        # `left = marg // 2 + (marg & width & 1)`. Metade para cada lado deixa
+        # a sobra à direita, mas quando a folga E a largura são ímpares o
+        # Python a joga para a ESQUERDA — `"hi".center(7, "*")` é `***hi**`.
+        # Sem esse termo o resultado difere em metade dos casos ímpares.
+        left = total / 2 + (total & width & 1)
+    right: i64 = total - left
+    fl: usize = usize(fill->len)
+    nb: usize = usize(s->len) + usize(left + right) * fl
+    buf: *char = (*char)(malloc(nb + usize(1)))
+    k: usize = 0
+    for i in range(left):
+        memcpy(buf + k, fill->data, fl)
+        k += fl
+    memcpy(buf + k, s->data, usize(s->len))
+    k += usize(s->len)
+    for i in range(right):
+        memcpy(buf + k, fill->data, fl)
+        k += fl
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+# `zfill`: zeros à esquerda, mas o SINAL fica na frente deles — `"-42".zfill(5)`
+# é `"-0042"` e não `"00-42"`
+def ps_str_zfill(ctx: *PsCtx, s: *PsStr, width: i64) -> *PsStr:
+    have: i64 = ps_str_nchars(s)
+    if width <= have:
+        return s
+    pad: i64 = width - have
+    has_sign: bool = s->len > 0 and (s->data[0] == '+' or s->data[0] == '-')
+    nb: usize = usize(s->len) + usize(pad)
+    buf: *char = (*char)(malloc(nb + usize(1)))
+    k: usize = 0
+    if has_sign:
+        buf[0] = s->data[0]
+        k = 1
+    for i in range(pad):
+        buf[k] = '0'
+        k += 1
+    memcpy(buf + k, s->data + (usize(1) if has_sign else usize(0)), usize(s->len) - (usize(1) if has_sign else usize(0)))
+    k += usize(s->len) - (usize(1) if has_sign else usize(0))
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
+    if needle->len == 0:
+        return True
+    if needle->len > s->len:
+        return False
+    for i in range(usize(s->len) - usize(needle->len) + 1):
+        if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+            return True
+    return False
+
+# ASCII, and said out loud: case in Unicode depends on LANGUAGE (Turkish's
+# dotless i is the classic example), and a `lower()` that pretended to know
+# better would be lying. What HTTP, a header and an identifier need is exactly
+# this.
+# ---------- case mapping (Unicode default, table-driven) ----------
+#
+# Case mapping is a TABLE, not an algorithm: `é` uppercases by an offset, `ß`
+# uppercases to `SS` — two characters — and no rule produces either. The table
+# is generated by `tools/gen_unicode_case.py` from the Unicode DEFAULT mappings
+# and embedded at compile time (63.1), so it costs 17 KB of read-only data and
+# nothing at run time: there is no initialisation and no allocation, only a
+# binary search over the bytes.
+#
+# Not covered, said here rather than discovered later: the LOCALE-sensitive
+# rules (Turkish dotless i, Lithuanian dot above) and the CONDITIONAL ones
+# (Greek final sigma, which depends on position in the word). Python's
+# `str.upper()` and JavaScript's `toUpperCase()` do not do them either — they
+# are what `toLocaleUpperCase` is for — so the two oracles stay honest.
+#
+# Format, every number big-endian so the reader does not depend on the machine:
+# "PSUC", 8 bytes of Unicode version, four counts, then the range tables and the
+# one-to-many tables. See the generator for the full layout.
+PS_CASE: const u8[] = embed_bytes("unicase.bin")
+
+# os índices de tabela do arquivo da CAIXA, na ordem em que o gerador as escreve
+static const UC_UP: const i32 = 0        # faixas de maiúscula
+static const UC_UPM: const i32 = 1       # maiúscula de um-para-muitos
+static const UC_LO: const i32 = 2
+static const UC_LOM: const i32 = 3
+static const UC_CASED: const i32 = 4     # Cased
+static const UC_IGN: const i32 = 5       # Case_Ignorable
+
+static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
+
+# ---------- 108: UM leitor para as tabelas geradas ----------
+#
+# Havia dois, quase iguais: um para `unicase.bin` (caixa) e um para
+# `unicat.bin` (categorias). Cada um trazia o tamanho de entrada de cada tabela
+# CRAVADO numa cadeia de ifs e três buscas binárias quase idênticas — 154 linhas
+# entre os dois, e a aritmética de offset dos dois para manter em sincronia à
+# mão. Foi onde a bateria 105 quase me pegou.
+#
+# Agora os dois arquivos se DESCREVEM: depois do cabeçalho vem um diretório com
+# (quantas entradas, tamanho da entrada) por tabela, e toda entrada começa com
+# `lo` e `hi` — um mapeamento de um-para-muitos repete o ponto de código, então
+# `lo == hi`. Com isso o leitor não sabe quantas tabelas existem nem de que
+# tamanho: calcula tudo do arquivo, e UMA busca binária serve as quinze.
+#
+#   magic 4 | versão 8 | ntab u32 | ntab × (count u32, esize u32) | tabelas
+static const TB_HDR: const i32 = 4 + 8 + 4     # magic, versão, ntab
+
+static def tb_u32(b: const *u8, off: i32) -> u32:
+    return (u32(b[off]) << 24) | (u32(b[off + 1]) << 16) | (u32(b[off + 2]) << 8) | u32(b[off + 3])
+
+static def tb_count(b: const *u8, i: i32) -> i32:
+    return i32(tb_u32(b, TB_HDR + i * 8))
+
+static def tb_esize(b: const *u8, i: i32) -> i32:
+    return i32(tb_u32(b, TB_HDR + i * 8 + 4))
+
+# onde a tabela `which` começa: o fim do diretório mais o tamanho das anteriores
+static def tb_off(b: const *u8, which: i32) -> i32:
+    ntab: i32 = i32(tb_u32(b, 4 + 8))
+    o: i32 = TB_HDR + ntab * 8
+    for i in range(which):
+        o += tb_count(b, i) * tb_esize(b, i)
+    return o
+
+# a ENTRADA que contém `cp`, ou -1. É a única busca binária do módulo: as faixas,
+# os conjuntos e os mapeamentos de um-para-muitos têm todos `lo`/`hi` na frente.
+static def tb_find(b: const *u8, which: i32, cp: i32) -> i32:
+    base: i32 = tb_off(b, which)
+    es: i32 = tb_esize(b, which)
+    lo: i32 = 0
+    hi: i32 = tb_count(b, which) - 1
+    while lo <= hi:
+        mid: i32 = (lo + hi) / 2
+        off: i32 = base + mid * es
+        if cp < i32(tb_u32(b, off)):
+            hi = mid - 1
+        elif cp > i32(tb_u32(b, off + 4)):
+            lo = mid + 1
+        else:
+            return off
+    return -1
+
+# está no conjunto?
+static def tb_in(b: const *u8, which: i32, cp: i32) -> bool:
+    return tb_find(b, which, cp) >= 0
+
+# o mapeamento de um-para-um da tabela de faixas, ou o próprio ponto de código
+static def tb_map(b: const *u8, which: i32, cp: i32) -> i32:
+    off: i32 = tb_find(b, which, cp)
+    if off < 0:
+        return cp
+    return cp + i32(tb_u32(b, off + 8))
+
+# o de um-para-muitos: quantos saíram (0 = não está na tabela), escritos em `out`
+static def tb_multi(b: const *u8, which: i32, cp: i32, out: *i32) -> i32:
+    off: i32 = tb_find(b, which, cp)
+    if off < 0:
+        return 0
+    n: i32 = 0
+    for k in range(3):
+        v: i32 = i32(tb_u32(b, off + 8 + k * 4))
+        if v != 0:
+            out[n] = v
+            n += 1
+    return n
+
+# FINAL SIGMA (Unicode SpecialCasing, the non-locale conditional half): `Σ`
+# lowercases to `ς` when a cased letter comes BEFORE it and none comes after,
+# with case-ignorable characters in between not counting either way. It is the
+# one conditional rule that is not about locale, and Python and JavaScript both
+# do it — so it is here.
+# one code point at byte offset `at`, and how wide it is. A `str` is valid UTF-8
+# by construction (83.2), so there is no error path — a lone byte answers as
+# itself, which is what keeps the caller simple.
+static def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32:
+    n: usize = usize(s->len)
+    c0: u8 = u8(s->data[at])
+    if c0 < 0x80:
+        w = 1
+        return i32(c0)
+    if (c0 & 0xE0) == 0xC0 and at + usize(1) < n:
+        w = 2
+        return i32((u32(c0 & 0x1F) << 6) | (u32(u8(s->data[at + usize(1)])) & 0x3F))
+    if (c0 & 0xF0) == 0xE0 and at + usize(2) < n:
+        w = 3
+        return i32((u32(c0 & 0x0F) << 12) | ((u32(u8(s->data[at + usize(1)])) & 0x3F) << 6) | (u32(u8(s->data[at + usize(2)])) & 0x3F))
+    if (c0 & 0xF8) == 0xF0 and at + usize(3) < n:
+        w = 4
+        return i32((u32(c0 & 0x07) << 18) | ((u32(u8(s->data[at + usize(1)])) & 0x3F) << 12) | ((u32(u8(s->data[at + usize(2)])) & 0x3F) << 6) | (u32(u8(s->data[at + usize(3)])) & 0x3F))
+    w = 1
+    return i32(c0)
+
+# start of the character before `at`, walking back over continuation bytes
+static def uc_prev(s: *PsStr, at: usize) -> usize:
+    k: usize = at
+    while k > usize(0):
+        k -= 1
+        if (u8(s->data[k]) & 0xC0) != 0x80:
+            return k
+    return usize(0)
+
+# Is the `Σ` at byte offset `at` FINAL? Cased before, not cased after, and
+# case-ignorable characters on either side are skipped rather than counted.
+static def uc_final_sigma(s: *PsStr, at: usize) -> bool:
+    # before
+    before: bool = False
+    k: usize = at
+    while k > usize(0):
+        k = uc_prev(s, k)
+        w: usize = 0
+        cp: i32 = uc_decode(s, k, ref w)
+        if tb_in(&PS_CASE[0], UC_IGN, cp):
+            continue
+        before = tb_in(&PS_CASE[0], UC_CASED, cp)
+        break
+    if not before:
+        return False
+    # after
+    w2: usize = 0
+    uc_decode(s, at, ref w2)
+    j: usize = at + w2
+    while j < usize(s->len):
+        w3: usize = 0
+        cp2: i32 = uc_decode(s, j, ref w3)
+        if tb_in(&PS_CASE[0], UC_IGN, cp2):
+            j += w3
+            continue
+        return not tb_in(&PS_CASE[0], UC_CASED, cp2)
+    return True
+
+# `upper` is table 0/1, `lower` is table 2/3. One walk of the string, decoding
+# each character, mapping it, and encoding what comes back — which is the only
+# shape that works once one character can become three.
+static def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
+    rng: i32 = UC_UP if upper else UC_LO
+    mul: i32 = UC_UPM if upper else UC_LOM
+    # three code points out per one in, four bytes each, is the ceiling
+    buf: *char = (*char)(malloc(usize(s->len) * usize(12) + usize(4)))
+    k: usize = 0
+    i: usize = 0
+    n: usize = usize(s->len)
+    while i < n:
+        cp: i32 = 0
+        w: usize = 1
+        c0: u8 = u8(s->data[i])
+        if c0 < 0x80:
+            cp = i32(c0)
+        elif (c0 & 0xE0) == 0xC0 and i + usize(1) < n:
+            cp = i32((u32(c0 & 0x1F) << 6) | (u32(u8(s->data[i + usize(1)])) & 0x3F))
+            w = 2
+        elif (c0 & 0xF0) == 0xE0 and i + usize(2) < n:
+            cp = i32((u32(c0 & 0x0F) << 12) | ((u32(u8(s->data[i + usize(1)])) & 0x3F) << 6) | (u32(u8(s->data[i + usize(2)])) & 0x3F))
+            w = 3
+        elif (c0 & 0xF8) == 0xF0 and i + usize(3) < n:
+            cp = i32((u32(c0 & 0x07) << 18) | ((u32(u8(s->data[i + usize(1)])) & 0x3F) << 12) | ((u32(u8(s->data[i + usize(2)])) & 0x3F) << 6) | (u32(u8(s->data[i + usize(3)])) & 0x3F))
+            w = 4
+        else:
+            # a `str` is valid UTF-8 by construction (83.2), so this cannot
+            # happen — and if it ever does, the byte travels through untouched
+            # rather than becoming something else
+            buf[k] = s->data[i]
+            k += 1
+            i += 1
+            continue
+        outs: i32[4]
+        cnt: i32 = 0
+        if not upper and cp == 0x03A3:
+            # `Σ` is the one character whose lowercase depends on WHERE it is
+            outs[0] = 0x03C2 if uc_final_sigma(s, i) else 0x03C3
+            cnt = 1
+        else:
+            cnt = tb_multi(&PS_CASE[0], mul, cp, &outs[0])
+        if cnt == 0:
+            outs[0] = tb_map(&PS_CASE[0], rng, cp)
+            cnt = 1
+        for q in range(cnt):
+            k = ps_utf8_put(buf, k, outs[q])
+        i += w
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+# one code point, UTF-8, into a buffer. The same encoder `ps_str_chr` has, in
+# the shape a loop can use.
+static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
+    v: u32 = u32(cp)
+    if v < 0x80:
+        buf[k] = char(v)
+        return k + usize(1)
+    if v < 0x800:
+        buf[k] = char(0xC0 | (v >> 6))
+        buf[k + usize(1)] = char(0x80 | (v & 0x3F))
+        return k + usize(2)
+    if v < 0x10000:
+        buf[k] = char(0xE0 | (v >> 12))
+        buf[k + usize(1)] = char(0x80 | ((v >> 6) & 0x3F))
+        buf[k + usize(2)] = char(0x80 | (v & 0x3F))
+        return k + usize(3)
+    buf[k] = char(0xF0 | (v >> 18))
+    buf[k + usize(1)] = char(0x80 | ((v >> 12) & 0x3F))
+    buf[k + usize(2)] = char(0x80 | ((v >> 6) & 0x3F))
+    buf[k + usize(3)] = char(0x80 | (v & 0x3F))
+    return k + usize(4)
+
+def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_case(ctx, s, False)
+
+# ---------- 105: as CATEGORIAS do Unicode, também numa tabela ----------
+#
+# `isdigit`, `isalpha` e companhia não seguem de regra nenhuma: `"٣"` é dígito
+# (três arábico-índico), `"³"` também (sobrescrito), `"三"` é `isnumeric` mas não
+# `isdecimal`. É a base de caracteres do Unicode, que muda uma vez por ano — a
+# mesma situação da caixa (89), e a mesma solução: uma tabela gerada do Python
+# por `tools/gen_unicode_cat.py`, embutida em tempo de compilação (63.1), lida
+# por busca binária. 27 KB de dado só-leitura e nada em tempo de execução.
+#
+# Fazer METADE disso é o que esta tabela existe para impedir: um predicado que
+# responde para ASCII e discorda do Python no primeiro dígito não-latino, em
+# silêncio, é pior do que um que não existe.
+#
+# A tabela traz também o mapeamento de TÍTULO, que é um terceiro mapeamento e
+# não o de maiúscula: `ǳ` sobe para `Ǳ` e titula para `ǲ`, e `ß` titula para
+# `Ss`. É dele que vivem `title()` e `capitalize()`.
+PS_CAT: const u8[] = embed_bytes("unicat.bin")
+
+# ... e os do arquivo das CATEGORIAS
+static const CA_ALPHA: const i32 = 0
+static const CA_DIGIT: const i32 = 1
+static const CA_DECIMAL: const i32 = 2
+static const CA_NUMERIC: const i32 = 3
+static const CA_UPPER: const i32 = 4
+static const CA_LOWER: const i32 = 5
+# os caracteres de TÍTULO (categoria Lt): `ǅ` e uns trinta outros, que não são
+# maiúsculos nem minúsculos. Têm conjunto próprio porque `isupper` tem de
+# RECUSÁ-LOS e `istitle` tem de ACEITÁ-LOS — foi a varredura exaustiva do
+# oráculo que cobrou isso, e nenhum exemplo escolhido à mão teria cobrado.
+static const CA_TITLECHAR: const i32 = 6
+static const CA_TIRANGE: const i32 = 7
+static const CA_TIMULTI: const i32 = 8
+
+
+# Os predicados do Python sobre a STRING INTEIRA, com a regra dele: todos os
+# caracteres têm de satisfazer, e a string vazia é sempre False (não há
+# caractere que sirva de contraexemplo, mas também não há nenhum que sirva de
+# exemplo — e o Python escolheu False).
+#
+# `which` é o conjunto; -1 é `isspace`, que não vem da tabela (são 29 pontos de
+# código, e o conjunto está escrito à mão em `ps_str_is_space_cp`); -2 é
+# `isalnum`, que o Python define como alpha OU decimal OU digit OU numeric.
+def ps_str_all_of(s: *PsStr, which: i32) -> bool:
+    if s == None or s->len == 0:
+        return False
+    i: usize = 0
+    n: usize = usize(s->len)
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        ok: bool = False
+        if which == -1:
+            ok = ps_str_is_space_cp(cp)
+        elif which == -2:
+            ok = tb_in(&PS_CAT[0], CA_ALPHA, cp) or tb_in(&PS_CAT[0], CA_DECIMAL, cp) or tb_in(&PS_CAT[0], CA_DIGIT, cp) or tb_in(&PS_CAT[0], CA_NUMERIC, cp)
+        else:
+            ok = tb_in(&PS_CAT[0], which, cp)
+        if not ok:
+            return False
+        i += w
+    return True
+
+# `isupper` NÃO é "todo caractere é maiúsculo": é "não há minúsculo nem título,
+# e há pelo menos um maiúsculo" — `"ABC1"` é True e `"1"` é False. O Python
+# define os dois assim, sobre os caracteres COM caixa.
+def ps_str_is_case(s: *PsStr, want_upper: bool) -> bool:
+    if s == None or s->len == 0:
+        return False
+    i: usize = 0
+    n: usize = usize(s->len)
+    seen: bool = False
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        # o de TÍTULO nunca serve: nem para `isupper` nem para `islower`
+        if tb_in(&PS_CAT[0], CA_TITLECHAR, cp):
+            return False
+        if tb_in(&PS_CAT[0], CA_LOWER if want_upper else CA_UPPER, cp):
+            return False
+        if tb_in(&PS_CAT[0], CA_UPPER if want_upper else CA_LOWER, cp):
+            seen = True
+        i += w
+    return seen
+
+# `istitle`: cada palavra começa com maiúscula (ou título) e segue em minúscula.
+# A definição do Python é sobre o caractere ANTERIOR ter caixa: depois de um
+# caractere com caixa, um maiúsculo é erro; depois de um sem caixa, um minúsculo
+# é erro. E precisa de pelo menos um caractere com caixa.
+def ps_str_is_title(s: *PsStr) -> bool:
+    if s == None or s->len == 0:
+        return False
+    i: usize = 0
+    n: usize = usize(s->len)
+    prev_cased: bool = False
+    seen: bool = False
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        # para o `istitle`, o de TÍTULO conta como maiúsculo (é o que ele é)
+        up: bool = tb_in(&PS_CAT[0], CA_UPPER, cp) or tb_in(&PS_CAT[0], CA_TITLECHAR, cp)
+        low: bool = tb_in(&PS_CAT[0], CA_LOWER, cp)
+        if up:
+            if prev_cased:
+                return False
+            seen = True
+        elif low:
+            if not prev_cased:
+                return False
+            seen = True
+        prev_cased = up or low or tb_in(&PS_CASE[0], UC_CASED, cp)
+        i += w
+    return seen
+
+# `title`, `capitalize` e `swapcase` (105). Os três são o MESMO percurso da
+# caixa, com uma decisão por caractere:
+#
+#   title       o primeiro de cada palavra vira TÍTULO, o resto minúscula — e
+#               "palavra" é definido pelo caractere anterior ter caixa, que é
+#               como o CPython faz (`do_title`), não por espaço
+#   capitalize  o primeiro caractere vira título, TODO o resto minúscula
+#   swapcase    maiúsculo desce, minúsculo sobe, o resto passa
+#
+# `mode`: 0 title, 1 capitalize, 2 swapcase.
+static def ps_str_recase(ctx: *PsCtx, s: *PsStr, mode: i32) -> *PsStr:
+    if s == None or s->len == 0:
+        return ps_str_new(ctx, "", 0)
+    buf: *char = (*char)(malloc(usize(s->len) * usize(12) + usize(4)))
+    k: usize = 0
+    i: usize = 0
+    n: usize = usize(s->len)
+    prev_cased: bool = False
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        outs: i32[4]
+        cnt: i32 = 0
+        if mode == 2:
+            # swapcase: quem é maiúsculo desce, quem é minúsculo sobe
+            if tb_in(&PS_CAT[0], CA_UPPER, cp):
+                cnt = tb_multi(&PS_CASE[0], UC_LOM, cp, &outs[0])
+                if cnt == 0:
+                    outs[0] = tb_map(&PS_CASE[0], UC_LO, cp)
+                    cnt = 1
+            elif tb_in(&PS_CAT[0], CA_LOWER, cp):
+                cnt = tb_multi(&PS_CASE[0], UC_UPM, cp, &outs[0])
+                if cnt == 0:
+                    outs[0] = tb_map(&PS_CASE[0], UC_UP, cp)
+                    cnt = 1
+            else:
+                outs[0] = cp
+                cnt = 1
+        else:
+            first: bool = (i == 0) if mode == 1 else (not prev_cased)
+            if first:
+                # o mapeamento de TÍTULO: um-para-muitos e, se não estiver lá,
+                # a faixa de um-para-um
+                cnt = tb_multi(&PS_CAT[0], CA_TIMULTI, cp, &outs[0])
+                if cnt == 0:
+                    outs[0] = tb_map(&PS_CAT[0], CA_TIRANGE, cp)
+                    cnt = 1
+            else:
+                # minúscula, com o sigma final que a 89 já resolve
+                if cp == 0x03A3:
+                    outs[0] = 0x03C2 if uc_final_sigma(s, i) else 0x03C3
+                    cnt = 1
+                else:
+                    cnt = tb_multi(&PS_CASE[0], UC_LOM, cp, &outs[0])
+                    if cnt == 0:
+                        outs[0] = tb_map(&PS_CASE[0], UC_LO, cp)
+                        cnt = 1
+        for q in range(cnt):
+            k = ps_utf8_put(buf, k, outs[q])
+        prev_cased = tb_in(&PS_CAT[0], CA_UPPER, cp) or tb_in(&PS_CAT[0], CA_LOWER, cp) or tb_in(&PS_CASE[0], UC_CASED, cp)
+        i += w
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+def ps_str_title(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_recase(ctx, s, 0)
+
+def ps_str_capitalize(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_recase(ctx, s, 1)
+
+def ps_str_swapcase(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_recase(ctx, s, 2)
+
+# `casefold` é o `lower` do Python para COMPARAR, e difere dele em uns poucos
+# lugares — `ß` dobra para `ss`, `ﬁ` para `fi`. Sem a tabela de CaseFolding não
+# dá para prometer isso, e prometer errado é o que a 105 existe para evitar: o
+# que está aqui é o `lower`, e o nome não é oferecido. Ver 105.4.
+
+def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_case(ctx, s, True)
+
+# `s * n` — Python's repetition. A negative or zero count is the empty string,
+# as there, and an overflow of the product is a raise rather than a wrap (7.2).
+def ps_str_repeat(ctx: *PsCtx, s: *PsStr, n: i64, file: const *char, line: i32) -> *PsStr:
+    if n <= 0 or s->len == 0:
+        return ps_str_new(ctx, "", 0)
+    if usize(s->len) > usize(0) and usize(n) > usize(2147483647) / usize(s->len):
+        ps_raise(ctx, "the repeated string does not fit", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    total: usize = usize(s->len) * usize(n)
+    buf: *char = (*char)(malloc(total + usize(1)))
+    i: i64 = 0
+    while i < n:
+        memcpy(buf + usize(i) * usize(s->len), s->data, usize(s->len))
+        i += 1
+    out: *PsStr = ps_str_new(ctx, buf, total)
+    free(buf)
+    return out
+
+# `s.replace(old, new)` — every occurrence, left to right, non-overlapping.
+# An empty `old` is a no-op rather than Python's "insert between every
+# character": that reading is a curiosity, not a use, and the loop that
+# implements it is the one that never terminates when it is wrong.
+def ps_str_replace(ctx: *PsCtx, s: *PsStr, old: *PsStr, new: *PsStr) -> *PsStr:
+    if old->len == 0 or old->len > s->len:
+        return s
+    hits: usize = 0
+    i: usize = 0
+    while i + usize(old->len) <= usize(s->len):
+        if memcmp(s->data + i, old->data, usize(old->len)) == 0:
+            hits += 1
+            i += usize(old->len)
+        else:
+            i += 1
+    if hits == 0:
+        return s
+    outn: usize = usize(s->len) + hits * usize(new->len) - hits * usize(old->len)
+    buf: *char = (*char)(malloc(outn + usize(1)))
+    k: usize = 0
+    i = 0
+    while i < usize(s->len):
+        if i + usize(old->len) <= usize(s->len) and memcmp(s->data + i, old->data, usize(old->len)) == 0:
+            if new->len > 0:
+                memcpy(buf + k, new->data, usize(new->len))
+            k += usize(new->len)
+            i += usize(old->len)
+        else:
+            buf[k] = s->data[i]
+            k += 1
+            i += 1
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+# `sep.join(parts)` — the separator is the receiver, as in Python. The whole
+# length is known before anything is built, so this is ONE allocation rather
+# than one per element, which is the entire reason `join` exists instead of a
+# loop of `+`.
+def ps_str_join(ctx: *PsCtx, sep: *PsStr, parts: *PsList) -> *PsStr:
+    n: i64 = parts->len if parts != None else 0
+    if n == 0:
+        return ps_str_new(ctx, "", 0)
+    base: **PsStr = (**PsStr)(ps_list_base(parts))
+    total: usize = usize(sep->len) * usize(n - 1)
+    i: i64 = 0
+    while i < n:
+        total += usize(base[i]->len)
+        i += 1
+    buf: *char = (*char)(malloc(total + usize(1)))
+    k: usize = 0
+    i = 0
+    while i < n:
+        if i > 0 and sep->len > 0:
+            memcpy(buf + k, sep->data, usize(sep->len))
+            k += usize(sep->len)
+        if base[i]->len > 0:
+            memcpy(buf + k, base[i]->data, usize(base[i]->len))
+        k += usize(base[i]->len)
+        i += 1
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+# `abs`, `min`, `max`. Two forms each because pscript has two numeric types and
+# no promotion at the call site would be free. `abs` of the smallest int RAISES:
+# there is no positive counterpart of it in i64, and the alternative is to
+# answer itself, which is the C behaviour and a lie (7.2).
+def ps_abs_int(ctx: *PsCtx, v: i64, file: const *char, line: i32) -> i64:
+    if v == -9223372036854775807 - 1:
+        ps_raise(ctx, "abs() of the smallest int does not fit in an int", PS_CAT_VALUE, file, line)
+        return 0
+    return -v if v < 0 else v
+
+def ps_abs_float(v: f64) -> f64:
+    return -v if v < 0.0 else v
+
+def ps_min_int(a: i64, b: i64) -> i64:
+    return a if a < b else b
+
+def ps_max_int(a: i64, b: i64) -> i64:
+    return a if a > b else b
+
+def ps_min_float(a: f64, b: f64) -> f64:
+    return a if a < b else b
+
+def ps_max_float(a: f64, b: f64) -> f64:
+    return a if a > b else b
+
+def ps_str_startswith(s: *PsStr, p: *PsStr) -> bool:
+    if p->len > s->len:
+        return False
+    return memcmp(s->data, p->data, usize(p->len)) == 0
+
+def ps_str_endswith(s: *PsStr, p: *PsStr) -> bool:
+    if p->len > s->len:
+        return False
+    return memcmp(s->data + (usize(s->len) - usize(p->len)), p->data, usize(p->len)) == 0
+
+# `lstrip` and `rstrip`: the same whitespace as `strip`, one end at a time.
+def ps_str_lstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    a: usize = 0
+    b: usize = usize(s->len)
+    while a < b and (s->data[a] == ' ' or s->data[a] == '\t' or s->data[a] == '\n' or s->data[a] == '\r'):
+        a += 1
+    return ps_str_new(ctx, s->data + a, b - a)
+
+def ps_str_rstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    b: usize = usize(s->len)
+    while b > usize(0) and (s->data[b - 1] == ' ' or s->data[b - 1] == '\t' or s->data[b - 1] == '\n' or s->data[b - 1] == '\r'):
+        b -= 1
+    return ps_str_new(ctx, s->data, b)
+
+def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    a: usize = 0
+    b: usize = usize(s->len)
+    while a < b and (s->data[a] == ' ' or s->data[a] == '\t' or s->data[a] == '\n' or s->data[a] == '\r'):
+        a += 1
+    while b > a and (s->data[b - 1] == ' ' or s->data[b - 1] == '\t' or s->data[b - 1] == '\n' or s->data[b - 1] == '\r'):
+        b -= 1
+    return ps_str_new(ctx, s->data + a, b - a)
+
+# splits on a NON-EMPTY separator, like Python's `s.split(sep)`
+def ps_str_split(ctx: *PsCtx, s: *PsStr, sep: *PsStr) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 4)
+    if sep->len == 0:
+        ps_raise(ctx, "split() needs a non-empty separator", PS_CAT_VALUE, "<split>", 0)
+        return out
+    start: usize = 0
+    i: usize = 0
+    n: usize = usize(s->len)
+    m: usize = usize(sep->len)
+    while i + m <= n:
+        if memcmp(s->data + i, sep->data, m) == 0:
+            piece: *PsStr = ps_str_new(ctx, s->data + start, i - start)
+            slot: **PsStr = (**PsStr)(ps_list_push(ctx, out))
+            *slot = piece
+            i += m
+            start = i
+        else:
+            i += 1
+    last: *PsStr = ps_str_new(ctx, s->data + start, n - start)
+    slot2: **PsStr = (**PsStr)(ps_list_push(ctx, out))
+    *slot2 = last
+    return out
+
+def ps_str_to_int(ctx: *PsCtx, s: *PsStr) -> i64:
+    end: *char = None
+    v: i64 = strtoll(s->data, &end, 10)
+    if end == s->data or *end != '\0':
+        ps_raise(ctx, "int(): the string is not a number", PS_CAT_VALUE, "<int>", 0)
+        return 0
+    return v
+
+def ps_str_to_float(ctx: *PsCtx, s: *PsStr) -> f64:
+    end: *char = None
+    v: f64 = strtod(s->data, &end)
+    if end == s->data or *end != '\0':
+        ps_raise(ctx, "float(): the string is not a number", PS_CAT_VALUE, "<float>", 0)
+        return 0.0
+    return v
+
+# ---------- errors ----------
+def ps_raise(ctx: *PsCtx, msg: const *char, cat: i32, file: const *char, line: i32):
+    # The FIRST exception wins: a raise while one is already pending would lose
+    # the original, and the original is the one that explains what happened.
+    if ctx->exc != None:
+        return
+    e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
+    e->msg = ps_str_new(ctx, msg, strlen(msg))
+    e->cat = cat
+    e->file = file
+    e->line = line
+    ps_trace_capture(ctx, e)
+    ctx->exc = e
+
+def ps_raise_str(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32):
+    if ctx->exc != None:
+        return
+    e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
+    e->msg = msg
+    e->cat = i32(cat)
+    e->file = file
+    e->line = line
+    ps_trace_capture(ctx, e)
+    ctx->exc = e
+
+def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32) -> *PsErr:
+    e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
+    e->msg = msg
+    e->cat = i32(cat)
+    # 107: onde o erro foi CONSTRUÍDO. `raise e` passa a mesma falha adiante e
+    # por isso não toca na posição — então ela tem de nascer aqui, senão o erro
+    # que o programa levanta é o único do sistema sem arquivo e linha.
+    e->file = file
+    e->line = line
+    ps_trace_capture(ctx, e)
+    return e
+
+def ps_reraise(ctx: *PsCtx, e: *PsErr):
+    # re-raising keeps the ORIGINAL position and category: the point of
+    # `raise e` is to pass the same failure on, not to report a new one here
+    if ctx->exc != None or e == None:
+        return
+    ctx->exc = e
+
+def ps_has_exc(ctx: *PsCtx) -> bool:
+    return ctx->exc != None
+
+def ps_take_exc(ctx: *PsCtx) -> *PsErr:
+    e: *PsErr = ctx->exc
+    ctx->exc = None
+    return e
+
+def ps_err_message(e: *PsErr) -> *PsStr:
+    return e->msg
+
+def ps_err_category(e: *PsErr) -> i64:
+    return i64(e->cat)
+
+# ---------- formatting ----------
+# pads `src` to `width` according to `align`; `zero` fills with '0' after any
+# sign, which is what `08d` means
+static def ps_pad(ctx: *PsCtx, src: const *char, n: usize, width: i32, align: char, zero: bool) -> *PsStr:
+    if width <= 0 or usize(width) <= n:
+        return ps_str_new(ctx, src, n)
+    total: usize = usize(width)
+    pad: usize = total - n
+    out: *PsStr = ps_alloc(ctx, sizeof(PsStr) + total + 1, PS_TY_STR)
+    out->len = u32(total)
+    out->hash = 0
+    out->offs = None
+    # padding is ASCII spaces or zeros, so the character count grows with it
+    out->nchars = u32(pad) + ps_utf8_count(src, n)
+    d: *char = out->data
+    if zero and align != '^':
+        # the sign stays in front of the zeros: -0042, never 00-42
+        lead: usize = 1 if n > 0 and (src[0] == '-' or src[0] == '+') else 0
+        memcpy(d, src, lead)
+        memset(d + lead, '0', pad)
+        memcpy(d + lead + pad, src + lead, n - lead)
+    elif align == '<':
+        memcpy(d, src, n)
+        memset(d + n, ' ', pad)
+    elif align == '^':
+        left: usize = pad / 2
+        memset(d, ' ', left)
+        memcpy(d + left, src, n)
+        memset(d + left + n, ' ', pad - left)
+    else:
+        memset(d, ' ', pad)
+        memcpy(d + pad, src, n)
+    d[total] = '\0'
+    return out
+
+def ps_fmt_int(ctx: *PsCtx, v: i64, width: i32, align: char, zero: bool, ty: char) -> *PsStr:
+    buf: char[32]
+    n: usize = 0
+    if ty == 'x' or ty == 'X' or ty == 'b' or ty == 'o':
+        base: i64 = 16 if (ty == 'x' or ty == 'X') else (2 if ty == 'b' else 8)
+        digits: const *char = "0123456789abcdef" if ty != 'X' else "0123456789ABCDEF"
+        i: i32 = 32
+        u: u64 = u64(v)
+        do:
+            i -= 1
+            buf[i] = digits[usize(u % u64(base))]
+            u /= u64(base)
+        while u != 0
+        n = usize(32 - i)
+        return ps_pad(ctx, buf + i, n, width, align, zero)
+    t: *PsStr = ps_str_from_int(ctx, v)
+    return ps_pad(ctx, t->data, usize(t->len), width, align, zero)
+
+def ps_fmt_float(ctx: *PsCtx, v: f64, width: i32, prec: i32, align: char, zero: bool) -> *PsStr:
+    if prec < 0:
+        t: *PsStr = ps_str_from_float(ctx, v)
+        return ps_pad(ctx, t->data, usize(t->len), width, align, zero)
+    buf: char[64]
+    n: i32 = snprintf(buf, 64, "%.*f", prec, v)
+    return ps_pad(ctx, buf, usize(n), width, align, zero)
+
+def ps_fmt_str(ctx: *PsCtx, s: *PsStr, width: i32, align: char) -> *PsStr:
+    return ps_pad(ctx, s->data, usize(s->len), width, align, False)
+
+# ---------- output ----------
+# 78.2: the same text `print` would write, handed to the pool instead. What it
+# buys is a program that keeps running while a full pipe or a slow terminal
+# takes its time; what it costs is an `await`, which is why `print` itself was
+# left alone.
+# 78.2: stdout and stderr as ordinary files. They belong to the process, so
+# `close()` on one does nothing — a program that closed the world's stdout
+# would be a program nobody could debug.
+def ps_std_file(ctx: *PsCtx, which: i32) -> *PsFile:
+    f: *PsFile = (*PsFile)(ps_alloc(ctx, sizeof(PsFile), PS_TY_FILE))
+    f->fp = stdout if which == 0 else stderr
+    f->is_open = 1
+    f->is_std = 1
+    return f
+
+
+def ps_print(ctx: *PsCtx, s: *PsStr):
+    # 49.2: once an exception is pending, every call is a no-op until the check
+    # at the end of the statement sees it. Printing here would be printing a
+    # value that was never really computed.
+    if ctx->exc != None:
+        return
+    # UMA escrita, não duas (107). `fwrite` do texto seguido de `fputc('\n')`
+    # são duas chamadas de stdio, cada uma trancando o FILE por si — e como
+    # stdout é o MESMO arquivo de todos os workers (cada um tem heap, coletor e
+    # loop próprios, mas não uma saída própria), a linha de um saía no meio da
+    # linha do outro. Medido: oito workers imprimindo 200 linhas cada davam 66
+    # linhas costuradas e vazias. Com o texto e o `\n` na mesma chamada, o
+    # trinco do stdio cobre a linha inteira e a saída volta a ser linhas.
+    n: usize = usize(s->len)
+    buf: char[1024]
+    if n + usize(1) <= sizeof(buf):
+        memcpy(&buf[0], s->data, n)
+        buf[n] = '\n'
+        fwrite(&buf[0], 1, n + usize(1), stdout)
+        return
+    p: *char = (*char)(malloc(n + usize(1)))
+    if p == None:
+        fwrite(s->data, 1, n, stdout)
+        fputc('\n', stdout)
+        return
+    memcpy(p, s->data, n)
+    p[n] = '\n'
+    fwrite(p, 1, n + usize(1), stdout)
+    free(p)
+
+# ---------- arithmetic ----------
+# Overflow raises (7.2). The checks are the portable ones: detect before the
+# operation, so nothing ever relies on signed overflow, which is undefined in C
+# and would let the target compiler delete the check.
+def ps_add(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b > 0 and a > 9223372036854775807 - b:
+        ps_raise(ctx, "integer overflow in +", PS_CAT_OVERFLOW, file, line)
+        return 0
+    if b < 0 and a < (-9223372036854775807 - 1) - b:
+        ps_raise(ctx, "integer overflow in +", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a + b
+
+def ps_sub(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b < 0 and a > 9223372036854775807 + b:
+        ps_raise(ctx, "integer overflow in -", PS_CAT_OVERFLOW, file, line)
+        return 0
+    if b > 0 and a < (-9223372036854775807 - 1) + b:
+        ps_raise(ctx, "integer overflow in -", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a - b
+
+def ps_mul(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if a != 0:
+        r: i64 = a * b
+        # the division check: exact for every case except the one below
+        if b != 0 and (r / a != b or (a == -1 and b == (-9223372036854775807 - 1))):
+            ps_raise(ctx, "integer overflow in *", PS_CAT_OVERFLOW, file, line)
+            return 0
+        return r
+    return 0
+
+def ps_neg(ctx: *PsCtx, a: i64, file: const *char, line: i32) -> i64:
+    if a == (-9223372036854775807 - 1):
+        ps_raise(ctx, "integer overflow in unary -", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return -a
+
+def ps_div(ctx: *PsCtx, a: f64, b: f64, file: const *char, line: i32) -> f64:
+    # `/` is float even between ints (39.1), and dividing by zero RAISES the
+    # way Python does (47.2) rather than producing inf
+    if b == 0.0:
+        ps_raise(ctx, "division by zero", PS_CAT_ZERO, file, line)
+        return 0.0
+    return a / b
+
+def ps_floordiv(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b == 0:
+        ps_raise(ctx, "integer division by zero", PS_CAT_ZERO, file, line)
+        return 0
+    if a == (-9223372036854775807 - 1) and b == -1:
+        ps_raise(ctx, "integer overflow in //", PS_CAT_OVERFLOW, file, line)
+        return 0
+    q: i64 = a / b            # C truncates toward zero
+    if (a % b != 0) and ((a < 0) != (b < 0)):
+        q -= 1                # Python floors
+    return q
+
+def ps_mod(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    if b == 0:
+        ps_raise(ctx, "integer modulo by zero", PS_CAT_ZERO, file, line)
+        return 0
+    if a == (-9223372036854775807 - 1) and b == -1:
+        return 0
+    r: i64 = a % b            # C keeps the DIVIDEND's sign
+    if r != 0 and ((r < 0) != (b < 0)):
+        r += b                # Python takes the DIVISOR's, preserving
+    return r                  #   a == (a//b)*b + a%b
+
+def ps_fpow(a: f64, b: f64) -> f64:
+    return pow(a, b)
+
+# Python's `//` and `%` on floats are the same RULE as on integers: the quotient
+# floors and the remainder carries the divisor's sign, so `a == (a//b)*b + a%b`
+# holds there too. Dividing by zero raises, as it does everywhere else (32.2).
+def ps_ffloordiv(ctx: *PsCtx, a: f64, b: f64, file: const *char, line: i32) -> f64:
+    if b == 0.0:
+        ps_raise(ctx, "float division by zero", PS_CAT_ZERO, file, line)
+        return 0.0
+    return floor(a / b)
+
+def ps_fmod(ctx: *PsCtx, a: f64, b: f64, file: const *char, line: i32) -> f64:
+    if b == 0.0:
+        ps_raise(ctx, "float modulo by zero", PS_CAT_ZERO, file, line)
+        return 0.0
+    return a - floor(a / b) * b
+
+# ---------- exact widths (68.2) ----------
+def ps_fitw(ctx: *PsCtx, v: i64, lo: i64, hi: i64, what: const *char, file: const *char, line: i32) -> i64:
+    if v < lo or v > hi:
+        msg: char[96]
+        snprintf(msg, 96, "overflow of %s", what)
+        ps_raise(ctx, msg, PS_CAT_OVERFLOW, file, line)
+        return 0
+    return v
+
+def ps_f_to_iw(ctx: *PsCtx, v: f64, lo: i64, hi: i64, what: const *char, file: const *char, line: i32) -> i64:
+    if v != v or v < f64(lo) or v > f64(hi):
+        msg: char[96]
+        snprintf(msg, 96, "%f does not fit %s", v, what)
+        ps_raise(ctx, msg, PS_CAT_OVERFLOW, file, line)
+        return 0
+    return i64(v)
+
+def ps_uadd(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if a > ~u64(0) - b:
+        ps_raise(ctx, "overflow of u64 in +", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a + b
+
+def ps_usub(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if b > a:
+        ps_raise(ctx, "overflow of u64 in - (the result would be negative)", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a - b
+
+def ps_umul(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if a != 0 and b > (~u64(0)) / a:
+        ps_raise(ctx, "overflow of u64 in *", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a * b
+
+def ps_udiv(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if b == 0:
+        ps_raise(ctx, "integer division by zero", PS_CAT_ZERO, file, line)
+        return 0
+    return a / b
+
+def ps_umod(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    if b == 0:
+        ps_raise(ctx, "integer modulo by zero", PS_CAT_ZERO, file, line)
+        return 0
+    return a % b
+
+def ps_upow(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64:
+    r: u64 = 1
+    base: u64 = a
+    e: u64 = b
+    while e > 0:
+        if e & 1 == 1:
+            r = ps_umul(ctx, r, base, file, line)
+            if ctx->exc != None:
+                return 0
+        e >>= 1
+        if e > 0:
+            base = ps_umul(ctx, base, base, file, line)
+            if ctx->exc != None:
+                return 0
+    return r
+
+def ps_u_to_i(ctx: *PsCtx, v: u64, file: const *char, line: i32) -> i64:
+    if v > u64(9223372036854775807):
+        ps_raise(ctx, "this u64 does not fit int", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return i64(v)
+
+def ps_i_to_u64(ctx: *PsCtx, v: i64, file: const *char, line: i32) -> u64:
+    if v < 0:
+        ps_raise(ctx, "a negative int does not fit u64", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return u64(v)
+
+def ps_f_to_u64(ctx: *PsCtx, v: f64, file: const *char, line: i32) -> u64:
+    if v != v or v < 0.0 or v >= 18446744073709551616.0:
+        ps_raise(ctx, "this float does not fit u64", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return u64(v)
+
+def ps_wrapw(v: i64, bits: i32, uns: bool) -> i64:
+    u: u64 = u64(v)
+    if bits < 64:
+        u &= (u64(1) << u64(bits)) - 1
+    if not uns and bits < 64 and (u & (u64(1) << u64(bits - 1))) != 0:
+        u |= ~((u64(1) << u64(bits)) - 1)      # sign-extend the wrapped value
+    return i64(u)
+
+def ps_str_from_uint(ctx: *PsCtx, v: u64) -> *PsStr:
+    buf: char[24]
+    i: i32 = 24
+    n: u64 = v
+    do:
+        i -= 1
+        buf[i] = char('0' + int(n % 10))
+        n /= 10
+    while n != 0
+    return ps_str_new(ctx, buf + i, usize(24 - i))
+
+def ps_fmt_uint(ctx: *PsCtx, v: u64, width: i32, align: char, zero: bool, ty: char) -> *PsStr:
+    s: *PsStr = ps_str_from_uint(ctx, v)
+    return ps_pad(ctx, s->data, usize(s->len), width, align, zero)
+
+def ps_pow(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
+    # A variable exponent cannot change the static type of the result (47.3), so
+    # a negative one raises instead of quietly becoming a float. A constant
+    # negative exponent is folded to a float long before it reaches here.
+    if b < 0:
+        ps_raise(ctx, "negative exponent on integers (write a float base for that)", PS_CAT_VALUE, file, line)
+        return 0
+    r: i64 = 1
+    base: i64 = a
+    e: i64 = b
+    while e > 0:
+        if e & 1 == 1:
+            r = ps_mul(ctx, r, base, file, line)
+            if ctx->exc != None:
+                return 0
+        e >>= 1
+        if e > 0:
+            base = ps_mul(ctx, base, base, file, line)
+            if ctx->exc != None:
+                return 0
+    return r

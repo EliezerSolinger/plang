@@ -287,11 +287,23 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
             dk: DeclKind = dd->kind
             if dk in {DL_STRUCT, DL_UNION, DL_ENUM}:
                 extra += 1
-            elif dk == DL_FUNC and (dd->func->body == None or dd->func->is_inline or dd->func->is_static):
+            elif dk == DL_FUNC and (dd->func->body == None or ((dd->func->is_inline or dd->func->is_static) and has_suffix(md->path, ".ph"))):
                 # prototype (registers signature) OR header-only free function
-                # (static/inline with body, §8.5): this one is emitted per-TU
+                # (static/inline with body, §8.5): essa é emitida por TU.
+                #
+                # 108: e só se ela vier de um `.ph`. Uma `static def` num `.p` é
+                # privada DAQUELE TU: copiar o corpo dela para outro módulo
+                # levava junto uma leitura de global que não foi copiada, e o
+                # emissor morria com "unknown struct type field" numa linha que
+                # nem era a certa. Apareceu ao dividir o runtime em camadas —
+                # com um arquivo só, nunca havia um segundo módulo para onde
+                # copiar.
                 extra += 1
-            elif dk == DL_VAR and dd->init != None and (dd->is_const or (dd->type != None and dd->type->is_const)):
+            elif dk == DL_VAR and dd->init != None and (dd->is_const or (dd->type != None and dd->type->is_const)) and has_suffix(md->path, ".ph"):
+                # 108: só de header, pela mesma razão das `static def` acima — o
+                # inicializador de uma const num `.p` pode nomear coisas
+                # privadas daquele TU (um descritor cujo campo é um ponteiro
+                # para função `static`), e aí o outro módulo não consegue dobrá-lo
                 extra += 1
     if extra == 0:
         return
@@ -329,15 +341,17 @@ static def qbe_merge_types(cc: *Cc, m: *Module):
             elif d->kind == DL_ENUM:
                 nd[p] = d
                 p += 1
-            elif d->kind == DL_FUNC and (d->func->body == None or d->func->is_inline or d->func->is_static):
+            elif d->kind == DL_FUNC and (d->func->body == None or ((d->func->is_inline or d->func->is_static) and has_suffix(md2->path, ".ph"))):
                 # prototype (emit_func skips body==None) OR header-only free
                 # function (static/inline): emitted per-TU, not exported
-                # (local symbol, no link collision between TUs)
+                # (local symbol, no link collision between TUs). A regra do
+                # `.ph` é a da 108, acima.
                 nd[p] = d
                 p += 1
-            elif d->kind == DL_VAR and d->init != None and (d->is_const or (d->type != None and d->type->is_const)):
+            elif d->kind == DL_VAR and d->init != None and (d->is_const or (d->type != None and d->type->is_const)) and has_suffix(md2->path, ".ph"):
                 # a .ph const: TU-local data (the same rule the C backend
-                # applies with `static const` in the .h) — no link collision
+                # applies with `static const` in the .h) — no link collision.
+                # Só de header (108): ver a nota na contagem.
                 cv: *Decl = cc->arena.alloc(sizeof(Decl))
                 *cv = *d
                 cv->is_static = True
@@ -555,8 +569,15 @@ def main(argc: int, argv: **char) -> int:
             if access(binp0, 0) == 0:
                 return run_exec(binp0, run_args, run_nargs)
         if has_suffix(inputs.get(0), ".psc"):
-            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.ph"))
-            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.p"))
+            # 108: o runtime são cinco módulos em camadas mais os headers; o
+            # guarda-chuva `psrt.ph` entra primeiro porque é o que o programa
+            # gerado inclui
+            RT_SRCS: const *char[] = {"psrt.ph", "psrt_types.ph", "psrt_mem.ph",
+                                      "psrt_val.ph", "psrt_rt.ph", "psrt_std.ph",
+                                      "psrt_top.ph", "psrt_mem.p", "psrt_val.p",
+                                      "psrt_rt.p", "psrt_std.p", "psrt_top.p"}
+            for ri in range(i32(sizeof(RT_SRCS) / sizeof(RT_SRCS[0]))):
+                add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, RT_SRCS[ri]))
         # the C goes to the cache too, so a `run` never writes next to the
         # source — a script that lives in a read-only directory still runs
         out_dir = cc.arena.printf("%s/obj", cachedir)

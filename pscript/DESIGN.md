@@ -3591,6 +3591,83 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 109 — o runtime em cinco camadas, e o que a divisão desenterrou (2026-08-21)
+
+A quebra que a 108 mediu e você aprovou. O runtime era um arquivo de 7 590
+linhas; agora são cinco módulos numa PILHA, e a fronteira é o compilador que a
+cobra: um módulo que não importa a camada de cima simplesmente não a alcança.
+
+| módulo | linhas | o que é |
+|---|---|---|
+| `psrt_types.ph` | 775 | as 31 structs, enums e constantes — só tipos |
+| `psrt_mem.p` | 539 | blocos, `ps_alloc`, o coletor, a pilha-sombra, o estresse |
+| `psrt_val.p` | 3 166 | erro, aritmética, `str`, `list`, `dict`/`set`, `repr`, ordenação, tabelas Unicode, formatação, `any`, buffer, `pack` |
+| `psrt_rt.p` | 3 026 | tasks, escalonador, multiplexador, `recv`, pool, socket, arquivo, workers, compartilhados |
+| `psrt_std.p` | 833 | `json`, `re`, `random`, `bisect`/`heapq` |
+| `psrt_top.p` | 79 | o epílogo: `ps_ctx_done`/`ps_ctx_free` |
+| `psrt.ph` | 12 | o guarda-chuva — o programa gerado continua incluindo UM header |
+
+**109.1 Por que os tipos ficam num header só.** O coletor percorre os CAMPOS de
+cada tipo da linguagem, então a camada da memória precisa das declarações de
+`PsStr`, `PsList`, `PsTask`... sem chamar nada delas. Fronteira de CHAMADA é o
+que os módulos garantem; acesso a campo, não. Está dito para não parecer
+descuido.
+
+**109.2 As duas exceções, nomeadas.** A memória chama `ps_raise` (o orçamento de
+um `nogc` estourado é um erro da linguagem, e erro carrega um `str`, que é da
+camada de cima) — uma declaração antecipada com o motivo escrito ao lado. E o
+epílogo conhece todo subsistema por definição, que é por isso que ele é uma
+camada própria em vez de a memória chamar para cima.
+
+**109.3 O que a divisão achou de código no lugar errado.** Nove funções, e cada
+uma explica um susto passado: `ps_alloc`, `ps_new` e `ps_dup` moravam dentro da
+seção do HANDLER DE CRASH; `ps_list_slice` e `ps_slice_bounds`, dentro da seção
+do `recv`; `ps_buffer_gone`, dentro do `json`; `ps_task_of_int` e
+`ps_report_lost`, dentro do multiplexador; `ps_sys_monotonic`, no `sys` (e o
+`random` precisava dele, o que fazia a biblioteca chamar o runtime).
+
+Sete funções que eram privadas do arquivo único tiveram de virar públicas
+(`ps_dup`, `ps_hash_bytes`, `ps_free_blocks`, `ps_buffer_gone`, os três
+comparadores) — de 140, o que confirma a medição da 108: a divisão quase não
+alarga a superfície.
+
+**109.4 Um defeito do back end QBE que só um segundo módulo podia mostrar.** Com
+vários módulos numa invocação, o QBE morria com *"unknown struct type field"*
+numa linha que não era a certa. A causa: `qbe_merge_types` copia para o TU de um
+módulo as `static`/`inline` COM CORPO dos outros (§8.5, funções de header
+emitidas por TU) — e copiava também as `static def` de um `.p`, que são privadas
+DAQUELE TU. O corpo copiado lia uma global que não foi copiada, e o emissor não
+tinha o tipo dela. O mesmo valia para uma `const` cujo inicializador nomeia um
+ponteiro para função `static`.
+
+A regra passou a ser a que o `.ph` já significava: **corpo de `static`/`inline`
+atravessa TU só se vier de um header**. Com um arquivo só nunca houve um segundo
+módulo para onde copiar, e por isso ninguém tinha visto.
+
+**109.5 E o achado que valeu mais que a divisão: o cpp rodava repetido.** A
+divisão fez o `P -> C` do runtime ir de 0,94 s para **4,08 s**, e cinco módulos
+com ~0,55 s cada, todos iguais, não é tamanho — é custo fixo. Era o dump de
+macros (`cc -E -dM`) de cada `include <h>`: o PARSE do header já era cacheado, o
+DUMP não, e ele roda a cada registro de módulo.
+
+Cacheado por caminho no `Cc`:
+
+| | antes | depois |
+|---|---|---|
+| runtime em um arquivo | 0,94 s | — |
+| runtime em cinco módulos | 4,08 s | **0,58 s** |
+
+Ou seja: a divisão saiu **38% mais rápida que o arquivo único**, e o ganho vale
+para todo programa de vários módulos (o pstudio tem seis camadas). E o `cc` das
+cinco unidades ainda pode ir em paralelo: 0,72 s em série, 0,28 s com `&`.
+
+> **E um defeito meu no caminho, registrado porque é fácil de repetir:** dois
+> vetores paralelos crescendo com a MESMA variável de capacidade. `vec_grow`
+> recebe a capacidade por referência; o primeiro cresce e escreve a capacidade
+> nova, e o segundo se acha grande e nunca cresce. Virou um par num vetor só. A
+> suíte pegou na primeira rodada — o compilador saía com status não-zero e
+> stderr vazio.
+
 ## Bateria 108 — o runtime usando o P que ele mesmo compila (2026-08-21)
 
 Sua pergunta: *"por que o runtime tem tantas linhas? se a gente usasse os

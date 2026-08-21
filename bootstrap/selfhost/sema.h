@@ -5,7 +5,13 @@
 #include "plang.h"
 #include "ast.h"
 
+typedef struct MacroDump MacroDump;
 typedef struct Cc Cc;
+
+struct MacroDump {
+    const char *path;
+    const char *text;
+};
 
 struct Cc {
     Arena arena;
@@ -18,6 +24,9 @@ struct Cc {
     int32_t std_version;
     const char *cpp;
     int inline_runtime;
+    MacroDump *macs;
+    int32_t nmac;
+    int32_t cmac;
 };
 
 Module *cc_load_module(Cc *cc, const char *path);
