@@ -3591,6 +3591,77 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 105 — as categorias do Unicode, e a varredura que cobrou o `ǅ` (2026-08-21)
+
+O que a 104.5 tinha deixado em aberto: `isalpha`, `isdigit`, `isdecimal`,
+`isnumeric`, `isalnum`, `isspace`, `isupper`, `islower`, `istitle`, e os
+mapeamentos `title`, `capitalize` e `swapcase`.
+
+**105.1 São uma TABELA, e a decisão é a mesma da 89.** `"٣".isdigit()` é True
+(três arábico-índico), `"³".isdigit()` também (sobrescrito), `"三".isnumeric()`
+é True mas `.isdecimal()` é False. Nada disso segue de regra nenhuma — é a base
+de caracteres do Unicode. Então: gerador ao lado (`tools/gen_unicode_cat.py`),
+que pergunta ao **Python**, ponto de código por ponto de código, e escreve
+`unicat.bin`; o runtime embute (63.1) e faz busca binária. 27 KB, Unicode 15.0.0
+estampado no cabeçalho.
+
+**A alternativa que NÃO foi tomada, dita:** responder só para ASCII. Um
+`isdigit` que acerta `"7"` e erra `"٣"` em silêncio é pior do que um que não
+existe — o programa parece certo e a resposta está errada exatamente onde
+ninguém testa.
+
+**105.2 A varredura EXAUSTIVA, e o que ela cobrou.** O par de oráculo
+(`tests/oracle/py/unicat.psc`) não escolhe exemplos: percorre todo ponto de
+código até U+3000 e depois de 31 em 31 até o fim do último plano, imprimindo os
+nove predicados e os cinco mapeamentos de cada um, e o `python3` roda o mesmo
+programa. Foi assim que apareceu o defeito que nenhum exemplo escolhido à mão
+teria mostrado:
+
+> **Os caracteres de TÍTULO (categoria Lt)** — `ǅ`, `ǈ`, `ǋ`, `ǲ` e uns trinta
+> outros — não são maiúsculos nem minúsculos. `"ǅ".isupper()` é False,
+> `"ǅ".islower()` é False, `"ǅ".istitle()` é True. Sem um conjunto próprio para
+> eles, `isupper` os aceitava (não achava minúsculo nenhum) e `istitle` os
+> recusava. Dez faixas na tabela, 84 bytes, e 62 linhas de diff a menos.
+
+**105.3 As definições do Python, que não são as óbvias.**
+
+- **A string VAZIA é False em todos.** Não há contraexemplo, mas também não há
+  exemplo, e o Python escolheu False.
+- **`isupper` não é "todo caractere é maiúsculo"**: é "nenhum é minúsculo nem de
+  título, e ao menos um é maiúsculo". `"ABC1"` é True e `"1"` é False.
+- **`istitle`** é sobre o caractere ANTERIOR ter caixa: depois de um com caixa,
+  um maiúsculo é erro; depois de um sem caixa, um minúsculo é erro. É por isso
+  que `"O'Neill"` é título e `"Hello world"` não é.
+- **`title()` não quebra em espaço**, quebra onde o caractere anterior não tem
+  caixa — o `do_title` do CPython. Daí `"hello-world".title()` ser
+  `"Hello-World"` e `"o'neill".title()` ser `"O'Neill"`.
+- **O mapeamento de TÍTULO é um terceiro mapeamento**, nem maiúscula nem
+  minúscula: `ǳ` sobe para `Ǳ` e titula para `ǲ`; `ß` titula para `Ss` (dois
+  caracteres) e sobe para `SS`. Está na mesma tabela gerada.
+
+**105.4 `casefold` NÃO entrou.** Ele é o `lower` de COMPARAR e difere dele em
+uns poucos lugares (`ß` dobra para `ss`, `ﬁ` para `fi`), o que pede a tabela
+`CaseFolding.txt`. Oferecer `casefold` como apelido de `lower` seria prometer
+uma comparação que ele não faz — o mesmo erro que a 105.1 recusou. Fica fora
+até virar decisão sua, e o nome não é aceito (a mensagem lista o que existe).
+Também ficaram fora `isprintable` (711 faixas para algo que ninguém pediu — o
+formato tem espaço) e `isidentifier` (é uma gramática, não um conjunto).
+
+**105.5 O custo, MEDIDO.** As duas tabelas somam 50 KB de dado só-leitura, e o
+runtime é compilado junto de todo programa (16.4) — então um programa que não
+usa nenhuma delas parecia pagar as duas. Medido em `dictorder`, que não toca em
+caixa nem em categoria:
+
+| como foi compilado | binário |
+|---|---|
+| `-O0` (o padrão dos testes) | 226 KB |
+| `-Os -ffunction-sections -fdata-sections -Wl,--gc-sections` | 41 KB |
+| `-Os -flto` | 40 KB |
+
+Ou seja: quem não usa não paga, desde que o build peça — e é o mesmo par de
+flags que a 90 já tinha medido para o resto. O `-O0` continua pagando, e isso é
+aceitável porque `-O0` é o modo de depurar.
+
 ## Bateria 104 — o ferramental de sequência, e quatro defeitos que ele desenterrou (2026-08-21)
 
 A resposta a *"o que falta"*: não era um recurso da linguagem, era o ferramental

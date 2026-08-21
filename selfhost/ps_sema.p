@@ -1544,10 +1544,16 @@ struct PsSema:
                     if e->nargs == 1:
                         self->want(e->args[0], self->check_expr(e->args[0]), st5, "the characters to strip")
                     return st5
-                if strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0:
+                if strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0 or strcmp(nm2, "title") == 0 or strcmp(nm2, "capitalize") == 0 or strcmp(nm2, "swapcase") == 0:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "%s() takes no arguments", nm2)
                     return st5
+                # 105: os predicados, sobre a string INTEIRA e com as
+                # categorias do Unicode — a string vazia é False em todos
+                if nm2 in {"isalpha", "isdigit", "isdecimal", "isnumeric", "isalnum", "isspace", "isupper", "islower", "istitle"}:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "%s() takes no arguments", nm2)
+                    return bl2
                 if strcmp(nm2, "find") == 0 and e->nargs == 2:
                     # `find(sub, start)`: o começo conta em CARACTERES
                     self->want(e->args[0], self->check_expr(e->args[0]), st5, "what to look for")
@@ -1606,7 +1612,7 @@ struct PsSema:
                     if jt == None or jt->kind != PT_LIST or jt->inner == None or jt->inner->kind != PT_STR:
                         fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt))
                     return st5
-                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center and zfill")
+                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt

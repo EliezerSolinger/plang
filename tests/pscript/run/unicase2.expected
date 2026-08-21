@@ -1,0 +1,17 @@
+[  ana maria  ] -> [Ana Maria]
+[josé da silva] -> [José Da Silva]
+[x9] -> [tem o que não é letra]
+[] -> [vazio]
+[   ] -> [vazio]
+[ÁGUEDA] -> [Águeda]
+[42] True
+[007] True
+[4a] False
+[] False
+[ 4] False
+[١٢٣] True
+letras 9 digitos 6 espacos 4 outros 2
+False False False False False
+False False True ǅ Ǆ ǆ
+STRASSE Straße strasse
+Hello World Hello-World O'Neill

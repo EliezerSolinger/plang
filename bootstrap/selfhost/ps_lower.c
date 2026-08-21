@@ -2868,6 +2868,35 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->allocs = 1;
             return pd5;
         }
+        if (strcmp(nm5, "isalpha") == 0 || strcmp(nm5, "isdigit") == 0 || strcmp(nm5, "isdecimal") == 0 || strcmp(nm5, "isnumeric") == 0 || strcmp(nm5, "isalnum") == 0 || strcmp(nm5, "isspace") == 0) {
+            const char *wch = "0";
+            if (strcmp(nm5, "isdigit") == 0) {
+                wch = "1";
+            } else if (strcmp(nm5, "isdecimal") == 0) {
+                wch = "2";
+            } else if (strcmp(nm5, "isnumeric") == 0) {
+                wch = "3";
+            } else if (strcmp(nm5, "isspace") == 0) {
+                wch = "-1";
+            } else if (strcmp(nm5, "isalnum") == 0) {
+                wch = "-2";
+            }
+            Expr *pc5 = PsLow_call_rt(self, "ps_str_all_of", e->pos);
+            PsLow_push_arg(self, pc5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, pc5, PsLow_num(self, wch, e->pos));
+            return pc5;
+        }
+        if (strcmp(nm5, "isupper") == 0 || strcmp(nm5, "islower") == 0) {
+            Expr *cc5 = PsLow_call_rt(self, "ps_str_is_case", e->pos);
+            PsLow_push_arg(self, cc5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, cc5, ex_new(self->a, (strcmp(nm5, "isupper") == 0 ? EX_TRUE : EX_FALSE), e->pos));
+            return cc5;
+        }
+        if (strcmp(nm5, "istitle") == 0) {
+            Expr *tc5 = PsLow_call_rt(self, "ps_str_is_title", e->pos);
+            PsLow_push_arg(self, tc5, PsLow_expr(self, e->lhs->lhs));
+            return tc5;
+        }
         if (strcmp(nm5, "splitlines") == 0 || strcmp(nm5, "zfill") == 0) {
             Expr *z5 = PsLow_call_rt(self, Arena_printf(self->a, "ps_str_%s", nm5), e->pos);
             PsLow_push_arg(self, z5, PsLow_ctx_arg(self, e->pos));

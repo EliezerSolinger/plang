@@ -1096,6 +1096,12 @@ def ps_str_pad(ctx: *PsCtx, s: *PsStr, width: i64, fill: *PsStr, mode: i32, file
 def ps_str_zfill(ctx: *PsCtx, s: *PsStr, width: i64) -> *PsStr
 def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool
 def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_str_all_of(s: *PsStr, which: i32) -> bool
+def ps_str_is_case(s: *PsStr, want_upper: bool) -> bool
+def ps_str_is_title(s: *PsStr) -> bool
+def ps_str_title(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_str_capitalize(ctx: *PsCtx, s: *PsStr) -> *PsStr
+def ps_str_swapcase(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_repeat(ctx: *PsCtx, s: *PsStr, n: i64, file: const *char, line: i32) -> *PsStr
 def ps_str_replace(ctx: *PsCtx, s: *PsStr, old: *PsStr, new: *PsStr) -> *PsStr

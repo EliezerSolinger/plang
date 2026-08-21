@@ -192,7 +192,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | Métodos de dict: `pop`/`setdefault`/`update`/`clear`/`copy` | 104.3 | `toolkit` | ✅ |
 | Set: `discard`/`update`/`clear`/`copy` e `\|` `&` `-` `^` `<=` `<` `>=` `>` | 104.3 | `toolkit` | ✅ ordem do resultado é a de INSERÇÃO (91.1), não a do hash |
 | Métodos de str: `count`/`rfind`/`index`/`rindex`/`find(sub,start)`/`split()`/`splitlines`/`removeprefix`/`removesuffix`/`strip(chars)`/`ljust`/`rjust`/`center`/`zfill` | 104.3 | `toolkit` | ✅ índice em CARACTERES; `center` com a regra torta do CPython |
-| `isdigit`/`isalpha`/`title`/`capitalize`/`swapcase` | 104.5 | — | ⏳ precisam da tabela de CATEGORIAS do Unicode (como a 89 fez para a caixa) |
+| `isalpha`/`isdigit`/`isdecimal`/`isnumeric`/`isalnum`/`isspace`/`isupper`/`islower`/`istitle`, `title`/`capitalize`/`swapcase` | 105 | `unicat`, `unicase2` | ✅ tabela de CATEGORIAS gerada do Python (`tools/gen_unicode_cat.py`, 27 KB, Unicode 15.0.0); oráculo varre TODO ponto de código. `casefold` fora (105.4) |
 | `embed`/`embed_bytes` (comptime) | 63.1, 63.5 | `embed` | ✅ nas duas línguas; no pscript o binário vira `static` + memcpy, então um megabyte de fonte custa um megabyte de DADO |
 | `pack`/`unpack` binário | 59, 62.4 | `packing` | ✅ denso, campos na ordem da declaração, **ordem de bytes por parâmetro** (LE por padrão, `BE` quando pedido); tamanho é o contrato |
 | Template em arquivo | 63.2, 75.2 | `template` | ✅ `render("x.tpl")` (buracos contra o escopo) e `render("x.tpl", {"nome": quem})` (buracos são as CHAVES do literal, resolvidos em tempo de compilação, valores de tipos diferentes, chave faltando/sobrando é erro). Não existe modo com header: a 75.2 fechou por aqui |

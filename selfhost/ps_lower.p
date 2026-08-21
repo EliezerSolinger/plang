@@ -2582,6 +2582,34 @@ struct PsLow:
                 self->raised = True
                 self->allocs = True
                 return pd5
+            # 105: os predicados. Um número de conjunto, uma função — e os
+            # três que não são conjunto (space, alnum, e os de caixa) levam o
+            # código negativo ou a função própria.
+            if nm5 in {"isalpha", "isdigit", "isdecimal", "isnumeric", "isalnum", "isspace"}:
+                wch: const *char = "0"
+                if strcmp(nm5, "isdigit") == 0:
+                    wch = "1"
+                elif strcmp(nm5, "isdecimal") == 0:
+                    wch = "2"
+                elif strcmp(nm5, "isnumeric") == 0:
+                    wch = "3"
+                elif strcmp(nm5, "isspace") == 0:
+                    wch = "-1"
+                elif strcmp(nm5, "isalnum") == 0:
+                    wch = "-2"
+                pc5: *Expr = self->call_rt("ps_str_all_of", e->pos)
+                self->push_arg(pc5, self->expr(e->lhs->lhs))
+                self->push_arg(pc5, self->num(wch, e->pos))
+                return pc5
+            if strcmp(nm5, "isupper") == 0 or strcmp(nm5, "islower") == 0:
+                cc5: *Expr = self->call_rt("ps_str_is_case", e->pos)
+                self->push_arg(cc5, self->expr(e->lhs->lhs))
+                self->push_arg(cc5, ex_new(self->a, EX_TRUE if strcmp(nm5, "isupper") == 0 else EX_FALSE, e->pos))
+                return cc5
+            if strcmp(nm5, "istitle") == 0:
+                tc5: *Expr = self->call_rt("ps_str_is_title", e->pos)
+                self->push_arg(tc5, self->expr(e->lhs->lhs))
+                return tc5
             if strcmp(nm5, "splitlines") == 0 or strcmp(nm5, "zfill") == 0:
                 z5: *Expr = self->call_rt(self->a->printf("ps_str_%s", nm5), e->pos)
                 self->push_arg(z5, self->ctx_arg(e->pos))

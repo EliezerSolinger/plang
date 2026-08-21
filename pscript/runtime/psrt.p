@@ -6333,6 +6333,271 @@ static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
 def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
     return ps_str_case(ctx, s, False)
 
+# ---------- 105: as CATEGORIAS do Unicode, também numa tabela ----------
+#
+# `isdigit`, `isalpha` e companhia não seguem de regra nenhuma: `"٣"` é dígito
+# (três arábico-índico), `"³"` também (sobrescrito), `"三"` é `isnumeric` mas não
+# `isdecimal`. É a base de caracteres do Unicode, que muda uma vez por ano — a
+# mesma situação da caixa (89), e a mesma solução: uma tabela gerada do Python
+# por `tools/gen_unicode_cat.py`, embutida em tempo de compilação (63.1), lida
+# por busca binária. 27 KB de dado só-leitura e nada em tempo de execução.
+#
+# Fazer METADE disso é o que esta tabela existe para impedir: um predicado que
+# responde para ASCII e discorda do Python no primeiro dígito não-latino, em
+# silêncio, é pior do que um que não existe.
+#
+# A tabela traz também o mapeamento de TÍTULO, que é um terceiro mapeamento e
+# não o de maiúscula: `ǳ` sobe para `Ǳ` e titula para `ǲ`, e `ß` titula para
+# `Ss`. É dele que vivem `title()` e `capitalize()`.
+PS_CAT: const u8[] = embed_bytes("unicat.bin")
+
+static def ca_u32(off: i32) -> u32:
+    return (u32(PS_CAT[off]) << 24) | (u32(PS_CAT[off + 1]) << 16) | (u32(PS_CAT[off + 2]) << 8) | u32(PS_CAT[off + 3])
+
+static const CA_HDR: const i32 = 4 + 8      # magic e versão
+static const CA_NTAB: const i32 = 9         # quantas contagens vêm depois
+static const CA_SET: const i32 = 8          # lo, hi
+static const CA_RANGE: const i32 = 12       # lo, hi, delta
+static const CA_MULTI: const i32 = 16       # cp e até três saídas
+
+# os conjuntos, na ordem em que o gerador os escreve
+static const CA_ALPHA: const i32 = 0
+static const CA_DIGIT: const i32 = 1
+static const CA_DECIMAL: const i32 = 2
+static const CA_NUMERIC: const i32 = 3
+static const CA_UPPER: const i32 = 4
+static const CA_LOWER: const i32 = 5
+# os caracteres de TÍTULO (categoria Lt): `ǅ` e uns trinta outros, que não são
+# maiúsculos nem minúsculos. Têm conjunto próprio porque `isupper` tem de
+# RECUSÁ-LOS e `istitle` tem de ACEITÁ-LOS — foi a varredura exaustiva do
+# oráculo que cobrou isso, e nenhum exemplo escolhido à mão teria cobrado.
+static const CA_TITLECHAR: const i32 = 6
+static const CA_TIRANGE: const i32 = 7
+static const CA_TIMULTI: const i32 = 8
+
+static def ca_n(i: i32) -> i32:
+    return i32(ca_u32(CA_HDR + i * 4))
+
+static def ca_off(which: i32) -> i32:
+    o: i32 = CA_HDR + CA_NTAB * 4
+    i: i32 = 0
+    while i < which and i < 7:
+        o += ca_n(i) * CA_SET
+        i += 1
+    if which <= CA_TIRANGE:
+        return o
+    return o + ca_n(CA_TIRANGE) * CA_RANGE
+
+static def ca_in(which: i32, cp: i32) -> bool:
+    base: i32 = ca_off(which)
+    lo: i32 = 0
+    hi: i32 = ca_n(which) - 1
+    while lo <= hi:
+        mid: i32 = (lo + hi) / 2
+        off: i32 = base + mid * CA_SET
+        a: i32 = i32(ca_u32(off))
+        b: i32 = i32(ca_u32(off + 4))
+        if cp < a:
+            hi = mid - 1
+        elif cp > b:
+            lo = mid + 1
+        else:
+            return True
+    return False
+
+# o mapeamento de título: um para um por faixa, ou um para muitos na outra
+# tabela. Devolve quantos pontos de código saíram.
+static def ca_title(cp: i32, out: *i32) -> i32:
+    base: i32 = ca_off(CA_TIMULTI)
+    lo: i32 = 0
+    hi: i32 = ca_n(CA_TIMULTI) - 1
+    while lo <= hi:
+        mid: i32 = (lo + hi) / 2
+        off: i32 = base + mid * CA_MULTI
+        a: i32 = i32(ca_u32(off))
+        if cp < a:
+            hi = mid - 1
+        elif cp > a:
+            lo = mid + 1
+        else:
+            n: i32 = 0
+            for k in range(3):
+                v: i32 = i32(ca_u32(off + 4 + k * 4))
+                if v != 0:
+                    out[n] = v
+                    n += 1
+            return n
+    rbase: i32 = ca_off(CA_TIRANGE)
+    rlo: i32 = 0
+    rhi: i32 = ca_n(CA_TIRANGE) - 1
+    while rlo <= rhi:
+        rmid: i32 = (rlo + rhi) / 2
+        roff: i32 = rbase + rmid * CA_RANGE
+        a2: i32 = i32(ca_u32(roff))
+        b2: i32 = i32(ca_u32(roff + 4))
+        if cp < a2:
+            rhi = rmid - 1
+        elif cp > b2:
+            rlo = rmid + 1
+        else:
+            out[0] = cp + i32(ca_u32(roff + 8))
+            return 1
+    out[0] = cp
+    return 1
+
+# Os predicados do Python sobre a STRING INTEIRA, com a regra dele: todos os
+# caracteres têm de satisfazer, e a string vazia é sempre False (não há
+# caractere que sirva de contraexemplo, mas também não há nenhum que sirva de
+# exemplo — e o Python escolheu False).
+#
+# `which` é o conjunto; -1 é `isspace`, que não vem da tabela (são 29 pontos de
+# código, e o conjunto está escrito à mão em `ps_str_is_space_cp`); -2 é
+# `isalnum`, que o Python define como alpha OU decimal OU digit OU numeric.
+def ps_str_all_of(s: *PsStr, which: i32) -> bool:
+    if s == None or s->len == 0:
+        return False
+    i: usize = 0
+    n: usize = usize(s->len)
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        ok: bool = False
+        if which == -1:
+            ok = ps_str_is_space_cp(cp)
+        elif which == -2:
+            ok = ca_in(CA_ALPHA, cp) or ca_in(CA_DECIMAL, cp) or ca_in(CA_DIGIT, cp) or ca_in(CA_NUMERIC, cp)
+        else:
+            ok = ca_in(which, cp)
+        if not ok:
+            return False
+        i += w
+    return True
+
+# `isupper` NÃO é "todo caractere é maiúsculo": é "não há minúsculo nem título,
+# e há pelo menos um maiúsculo" — `"ABC1"` é True e `"1"` é False. O Python
+# define os dois assim, sobre os caracteres COM caixa.
+def ps_str_is_case(s: *PsStr, want_upper: bool) -> bool:
+    if s == None or s->len == 0:
+        return False
+    i: usize = 0
+    n: usize = usize(s->len)
+    seen: bool = False
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        # o de TÍTULO nunca serve: nem para `isupper` nem para `islower`
+        if ca_in(CA_TITLECHAR, cp):
+            return False
+        if ca_in(CA_LOWER if want_upper else CA_UPPER, cp):
+            return False
+        if ca_in(CA_UPPER if want_upper else CA_LOWER, cp):
+            seen = True
+        i += w
+    return seen
+
+# `istitle`: cada palavra começa com maiúscula (ou título) e segue em minúscula.
+# A definição do Python é sobre o caractere ANTERIOR ter caixa: depois de um
+# caractere com caixa, um maiúsculo é erro; depois de um sem caixa, um minúsculo
+# é erro. E precisa de pelo menos um caractere com caixa.
+def ps_str_is_title(s: *PsStr) -> bool:
+    if s == None or s->len == 0:
+        return False
+    i: usize = 0
+    n: usize = usize(s->len)
+    prev_cased: bool = False
+    seen: bool = False
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        # para o `istitle`, o de TÍTULO conta como maiúsculo (é o que ele é)
+        up: bool = ca_in(CA_UPPER, cp) or ca_in(CA_TITLECHAR, cp)
+        low: bool = ca_in(CA_LOWER, cp)
+        if up:
+            if prev_cased:
+                return False
+            seen = True
+        elif low:
+            if not prev_cased:
+                return False
+            seen = True
+        prev_cased = up or low or uc_in_set(4, cp)
+        i += w
+    return seen
+
+# `title`, `capitalize` e `swapcase` (105). Os três são o MESMO percurso da
+# caixa, com uma decisão por caractere:
+#
+#   title       o primeiro de cada palavra vira TÍTULO, o resto minúscula — e
+#               "palavra" é definido pelo caractere anterior ter caixa, que é
+#               como o CPython faz (`do_title`), não por espaço
+#   capitalize  o primeiro caractere vira título, TODO o resto minúscula
+#   swapcase    maiúsculo desce, minúsculo sobe, o resto passa
+#
+# `mode`: 0 title, 1 capitalize, 2 swapcase.
+static def ps_str_recase(ctx: *PsCtx, s: *PsStr, mode: i32) -> *PsStr:
+    if s == None or s->len == 0:
+        return ps_str_new(ctx, "", 0)
+    buf: *char = (*char)(malloc(usize(s->len) * usize(12) + usize(4)))
+    k: usize = 0
+    i: usize = 0
+    n: usize = usize(s->len)
+    prev_cased: bool = False
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        outs: i32[4]
+        cnt: i32 = 0
+        if mode == 2:
+            # swapcase: quem é maiúsculo desce, quem é minúsculo sobe
+            if ca_in(CA_UPPER, cp):
+                cnt = uc_multi(3, cp, &outs[0])
+                if cnt == 0:
+                    outs[0] = uc_range(2, cp)
+                    cnt = 1
+            elif ca_in(CA_LOWER, cp):
+                cnt = uc_multi(1, cp, &outs[0])
+                if cnt == 0:
+                    outs[0] = uc_range(0, cp)
+                    cnt = 1
+            else:
+                outs[0] = cp
+                cnt = 1
+        else:
+            first: bool = (i == 0) if mode == 1 else (not prev_cased)
+            if first:
+                cnt = ca_title(cp, &outs[0])
+            else:
+                # minúscula, com o sigma final que a 89 já resolve
+                if cp == 0x03A3:
+                    outs[0] = 0x03C2 if uc_final_sigma(s, i) else 0x03C3
+                    cnt = 1
+                else:
+                    cnt = uc_multi(3, cp, &outs[0])
+                    if cnt == 0:
+                        outs[0] = uc_range(2, cp)
+                        cnt = 1
+        for q in range(cnt):
+            k = ps_utf8_put(buf, k, outs[q])
+        prev_cased = ca_in(CA_UPPER, cp) or ca_in(CA_LOWER, cp) or uc_in_set(4, cp)
+        i += w
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+def ps_str_title(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_recase(ctx, s, 0)
+
+def ps_str_capitalize(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_recase(ctx, s, 1)
+
+def ps_str_swapcase(ctx: *PsCtx, s: *PsStr) -> *PsStr:
+    return ps_str_recase(ctx, s, 2)
+
+# `casefold` é o `lower` do Python para COMPARAR, e difere dele em uns poucos
+# lugares — `ß` dobra para `ss`, `ﬁ` para `fi`. Sem a tabela de CaseFolding não
+# dá para prometer isso, e prometer errado é o que a 105 existe para evitar: o
+# que está aqui é o `lower`, e o nome não é oferecido. Ver 105.4.
+
 def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr:
     return ps_str_case(ctx, s, True)
 
