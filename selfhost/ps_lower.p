@@ -282,6 +282,7 @@ struct PsLow:
     static def fitw_wrap(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
     static def as_f64(self: *PsLow, e: *PsExpr) -> *Expr
     static def as_u64(self: *PsLow, e: *PsExpr) -> *Expr
+    static def set_op(self: *PsLow, e: *PsExpr, op: i32) -> *Expr
     static def call(self: *PsLow, e: *PsExpr) -> *Expr
     static def convert(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
     static def convert_width(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
@@ -1800,6 +1801,20 @@ struct PsLow:
                 # would build the inner list outside the loop that defines `x`.
                 outer_pre: Vec<*Stmt> = self->pre
                 self->pre.init()
+                # 104: as amarrações de `enumerate`/`zip`/`reversed` entram como
+                # os PRIMEIROS statements do corpo, com o `pre` que elas mesmas
+                # gerarem na frente delas — o do ELEMENTO vem depois, porque o
+                # elemento pode falar dos nomes que estas acabaram de amarrar
+                sugd: Vec<*Stmt>
+                sugd.init()
+                for si in range(e->nsug):
+                    sd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                    sd9->name = ps_cname(self->a, e->sug_names[si])
+                    sd9->type = self->ty(e->sug_vals[si]->type)
+                    sd9->init = self->expr(e->sug_vals[si])
+                    sugd.push(sd9)
+                sug_pre: Vec<*Stmt> = self->pre
+                self->pre.init()
                 # the loop body: `if cond: __cmp.append(elem)`, or the put
                 # that a set or a dict does instead
                 push: *Stmt = None
@@ -1854,6 +1869,10 @@ struct PsLow:
                 self->pre = outer_pre
                 merged: Vec<*Stmt>
                 merged.init()
+                for i in range(sug_pre.len):
+                    merged.push(sug_pre.data[i])
+                for i in range(sugd.len):
+                    merged.push(sugd.data[i])
                 for i in range(body_pre.len):
                     merged.push(body_pre.data[i])
                 for i in range(inner2.len):
@@ -1874,6 +1893,15 @@ struct PsLow:
                 # `pre` only ever collects DECLARATIONS, so anything the body
                 # needs can go on landing before the loop without reordering
                 # anything observable
+                #
+                # `for_body` é SALVO e reposto, não zerado no fim. O iterável é
+                # lowerado daqui de dentro (é `lower_list_for` que o faz), e se
+                # ele for OUTRA comprehension — `[x for x in [y for y in ys]]`,
+                # ou `for k, v in d.items()` sem variável no meio, que é a mesma
+                # coisa depois da reescrita da 61.4 — a de dentro zerava este
+                # campo ao terminar e a de FORA construía um laço de corpo
+                # vazio. Resultado: lista vazia, sem erro nenhum.
+                prev_fb: *Block = self->for_body
                 self->for_body = lb
                 if e->rhs->kind == PE_CALL and e->rhs->lhs != None and e->rhs->lhs->kind == PE_NAME and strcmp(e->rhs->lhs->text, "range") == 0:
                     # `range(...)` is not a value (there is no range object), so
@@ -1897,7 +1925,7 @@ struct PsLow:
                     self->lower_list_for(fs, &loop)
                 else:
                     self->lower_dict_for(fs, &loop)
-                self->for_body = None
+                self->for_body = prev_fb
                 for i in range(loop.len):
                     self->pre.push(loop.data[i])
                 self->allocs = True
@@ -2198,12 +2226,29 @@ struct PsLow:
                     self->push_arg(c, self->expr(e->lhs))
                     self->push_arg(c, self->expr(e->rhs))
                     return c
+                if lk == PT_LIST:
+                    # 104: uma lista nova com os elementos das duas
+                    lc4: *Expr = self->call_rt("ps_list_concat", e->pos)
+                    self->push_arg(lc4, self->ctx_arg(e->pos))
+                    self->push_arg(lc4, self->expr(e->lhs))
+                    self->push_arg(lc4, self->expr(e->rhs))
+                    self->allocs = True
+                    return lc4
                 if both_int:
                     return self->int_op(e, "ps_add", "ps_uadd")
             case TK_MINUS:
+                if lk == PT_SET:
+                    return self->set_op(e, 2)
                 if both_int:
                     return self->int_op(e, "ps_sub", "ps_usub")
             case TK_STAR:
+                if lk == PT_LIST:
+                    lr4: *Expr = self->call_rt("ps_list_repeat", e->pos)
+                    self->push_arg(lr4, self->ctx_arg(e->pos))
+                    self->push_arg(lr4, self->expr(e->lhs))
+                    self->push_arg(lr4, self->expr(e->rhs))
+                    self->allocs = True
+                    return lr4
                 if e->lhs->type != None and e->lhs->type->kind == PT_STR:
                     rp: *Expr = self->call_rt("ps_str_repeat", e->pos)
                     self->push_arg(rp, self->ctx_arg(e->pos))
@@ -2215,6 +2260,9 @@ struct PsLow:
                     return rp
                 if both_int:
                     return self->int_op(e, "ps_mul", "ps_umul")
+            case TK_AMP, TK_PIPE, TK_CARET:
+                if lk == PT_SET:
+                    return self->set_op(e, 1 if e->op == TK_AMP else (0 if e->op == TK_PIPE else 3))
             case TK_SLASH:
                 # `/` is float even between ints (39.1), so both sides are
                 # widened and the runtime raises on a zero divisor
@@ -2239,6 +2287,15 @@ struct PsLow:
                     return fp
                 return self->int_op(e, "ps_pow", "ps_upow")
             case TK_LT, TK_LE, TK_GT, TK_GE:
+                if lk == PT_SET:
+                    # 104: subconjunto. `a >= b` é `b <= a`, então os dois lados
+                    # trocam de lugar e sobra uma função.
+                    gt4: bool = e->op == TK_GT or e->op == TK_GE
+                    ss4: *Expr = self->call_rt("ps_set_subset", e->pos)
+                    self->push_arg(ss4, self->expr(e->rhs if gt4 else e->lhs))
+                    self->push_arg(ss4, self->expr(e->lhs if gt4 else e->rhs))
+                    self->push_arg(ss4, ex_new(self->a, EX_TRUE if (e->op == TK_LT or e->op == TK_GT) else EX_FALSE, e->pos))
+                    return ss4
                 if is_str:
                     # ordering strings compares CONTENT, like `==` does (22.2):
                     # `ps_str_lt` answers negative/zero/positive and the operator
@@ -2310,6 +2367,16 @@ struct PsLow:
             b->rhs = self->expr(e->rhs)
         return b
 
+    # 104: um operador de conjunto vira uma chamada com o código da operação
+    static def set_op(self: *PsLow, e: *PsExpr, op: i32) -> *Expr:
+        c: *Expr = self->call_rt("ps_set_op", e->pos)
+        self->push_arg(c, self->ctx_arg(e->pos))
+        self->push_arg(c, self->expr(e->lhs))
+        self->push_arg(c, self->expr(e->rhs))
+        self->push_arg(c, self->num(self->a->printf("%d", op), e->pos))
+        self->allocs = True
+        return c
+
     static def as_u64(self: *PsLow, e: *PsExpr) -> *Expr:
         c: *Expr = ex_new(self->a, EX_CAST, e->pos)
         c->cast_type = ty_name(self->a, "u64")
@@ -2356,6 +2423,84 @@ struct PsLow:
                 self->push_arg(kv, self->expr(e->lhs->lhs))
                 self->allocs = True
                 return kv
+            # ---- 104 ----
+            if strcmp(nm4, "clear") == 0:
+                cd4: *Expr = self->call_rt("ps_dict_clear", e->pos)
+                self->push_arg(cd4, self->expr(e->lhs->lhs))
+                return cd4
+            if strcmp(nm4, "copy") == 0:
+                cy4: *Expr = self->call_rt("ps_dict_copy", e->pos)
+                self->push_arg(cy4, self->ctx_arg(e->pos))
+                self->push_arg(cy4, self->expr(e->lhs->lhs))
+                self->allocs = True
+                return cy4
+            if strcmp(nm4, "update") == 0:
+                up4: *Expr = self->call_rt("ps_dict_update", e->pos)
+                self->push_arg(up4, self->ctx_arg(e->pos))
+                self->push_arg(up4, self->expr(e->lhs->lhs))
+                self->push_arg(up4, self->expr(e->args[0]))
+                self->allocs = True
+                return up4
+            if strcmp(nm4, "discard") == 0:
+                dc4: *Expr = self->call_rt("ps_dict_del", e->pos)
+                self->push_arg(dc4, self->expr(e->lhs->lhs))
+                self->push_arg(dc4, self->key_ptr(e->args[0], kt2, e->pos))
+                return dc4
+            if strcmp(nm4, "pop") == 0:
+                # LÊ o valor, depois apaga. A chave é amarrada uma vez, e o
+                # `has` decide entre o valor e o padrão (ou o levantar, que é o
+                # que `ps_dict_get` faz sozinho quando não há padrão).
+                pk4: *Expr = self->key_ptr(e->args[0], kt2, e->pos)
+                pre5: *Expr = None
+                db4: *Expr = self->bind_val(self->expr(e->lhs->lhs), ty_ptr(self->a, ty_name(self->a, "PsDict")), e->pos, ref pre5)
+                gp4: *Expr = self->call_rt("ps_dict_get", e->pos)
+                self->push_arg(gp4, self->ctx_arg(e->pos))
+                self->push_arg(gp4, db4)
+                self->push_arg(gp4, pk4)
+                self->pos_args(gp4, e->pos)
+                self->raised = True
+                vb4: *Expr = self->bind_val(self->slot_val(gp4, dt2->inner, e->pos), self->ty(dt2->inner), e->pos, ref pre5)
+                dl4: *Expr = self->call_rt("ps_dict_del", e->pos)
+                self->push_arg(dl4, db4)
+                self->push_arg(dl4, pk4)
+                got4: *Expr = self->comma2(self->comma2(pre5, dl4, e->pos), vb4, e->pos)
+                if e->nargs == 1:
+                    return got4
+                hp4: *Expr = self->call_rt("ps_dict_has", e->pos)
+                self->push_arg(hp4, self->expr(e->lhs->lhs))
+                self->push_arg(hp4, pk4)
+                tp4: *Expr = ex_new(self->a, EX_TERNARY, e->pos)
+                tp4->cond = hp4
+                tp4->lhs = got4
+                tp4->rhs = self->coerce(dt2->inner, e->args[1])
+                return tp4
+            if strcmp(nm4, "setdefault") == 0:
+                # se a chave está lá, devolve o que está; se não, PÕE o valor e
+                # devolve ele — e é `ps_dict_put` que dá o slot nos dois casos
+                sk4: *Expr = self->key_ptr(e->args[0], kt2, e->pos)
+                hs4: *Expr = self->call_rt("ps_dict_has", e->pos)
+                self->push_arg(hs4, self->expr(e->lhs->lhs))
+                self->push_arg(hs4, sk4)
+                gs4: *Expr = self->call_rt("ps_dict_get", e->pos)
+                self->push_arg(gs4, self->ctx_arg(e->pos))
+                self->push_arg(gs4, self->expr(e->lhs->lhs))
+                self->push_arg(gs4, sk4)
+                self->pos_args(gs4, e->pos)
+                ps4: *Expr = self->call_rt("ps_dict_put", e->pos)
+                self->push_arg(ps4, self->ctx_arg(e->pos))
+                self->push_arg(ps4, self->expr(e->lhs->lhs))
+                self->push_arg(ps4, sk4)
+                st4: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
+                st4->op = TK_ASSIGN
+                st4->lhs = self->slot_val(ps4, dt2->inner, e->pos)
+                st4->rhs = self->coerce(dt2->inner, e->args[1])
+                st4->parened = True
+                ts4: *Expr = ex_new(self->a, EX_TERNARY, e->pos)
+                ts4->cond = hs4
+                ts4->lhs = self->slot_val(gs4, dt2->inner, e->pos)
+                ts4->rhs = st4
+                self->allocs = True
+                return ts4
             # `get(k, default)` — the non-raising read (5.2)
             kp2: *Expr = self->key_ptr(e->args[0], kt2, e->pos)
             hs2: *Expr = self->call_rt("ps_dict_has", e->pos)
@@ -2372,6 +2517,79 @@ struct PsLow:
             tr3->rhs = self->coerce(dt2->inner, e->args[1])
             return tr3
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_STR:
+            nm5: const *char = e->lhs->text
+            # ---- 104: os que não são só "chama ps_str_<nome>" ----
+            if strcmp(nm5, "split") == 0 and e->nargs == 0:
+                ws5: *Expr = self->call_rt("ps_str_split_ws", e->pos)
+                self->push_arg(ws5, self->ctx_arg(e->pos))
+                self->push_arg(ws5, self->expr(e->lhs->lhs))
+                self->allocs = True
+                return ws5
+            if strcmp(nm5, "find") == 0 and e->nargs == 2:
+                ff5: *Expr = self->call_rt("ps_str_find_from", e->pos)
+                self->push_arg(ff5, self->ctx_arg(e->pos))
+                self->push_arg(ff5, self->expr(e->lhs->lhs))
+                self->push_arg(ff5, self->expr(e->args[0]))
+                self->push_arg(ff5, self->expr(e->args[1]))
+                return ff5
+            if strcmp(nm5, "index") == 0 or strcmp(nm5, "rindex") == 0:
+                ix5: *Expr = self->call_rt("ps_str_index_of", e->pos)
+                self->push_arg(ix5, self->ctx_arg(e->pos))
+                self->push_arg(ix5, self->expr(e->lhs->lhs))
+                self->push_arg(ix5, self->expr(e->args[0]))
+                self->push_arg(ix5, ex_new(self->a, EX_TRUE if strcmp(nm5, "rindex") == 0 else EX_FALSE, e->pos))
+                self->pos_args(ix5, e->pos)
+                self->raised = True
+                return ix5
+            if strcmp(nm5, "rfind") == 0 or strcmp(nm5, "count") == 0:
+                rf5: *Expr = self->call_rt(self->a->printf("ps_str_%s", nm5), e->pos)
+                self->push_arg(rf5, self->expr(e->lhs->lhs))
+                self->push_arg(rf5, self->expr(e->args[0]))
+                return rf5
+            if strcmp(nm5, "removeprefix") == 0 or strcmp(nm5, "removesuffix") == 0:
+                ra5: *Expr = self->call_rt("ps_str_removeaffix", e->pos)
+                self->push_arg(ra5, self->ctx_arg(e->pos))
+                self->push_arg(ra5, self->expr(e->lhs->lhs))
+                self->push_arg(ra5, self->expr(e->args[0]))
+                self->push_arg(ra5, ex_new(self->a, EX_TRUE if strcmp(nm5, "removesuffix") == 0 else EX_FALSE, e->pos))
+                self->allocs = True
+                return ra5
+            if (strcmp(nm5, "strip") == 0 or strcmp(nm5, "lstrip") == 0 or strcmp(nm5, "rstrip") == 0) and e->nargs == 1:
+                sc5: *Expr = self->call_rt("ps_str_strip_chars", e->pos)
+                self->push_arg(sc5, self->ctx_arg(e->pos))
+                self->push_arg(sc5, self->expr(e->lhs->lhs))
+                self->push_arg(sc5, self->expr(e->args[0]))
+                self->push_arg(sc5, self->num("1" if strcmp(nm5, "lstrip") == 0 else ("2" if strcmp(nm5, "rstrip") == 0 else "0"), e->pos))
+                self->allocs = True
+                return sc5
+            if strcmp(nm5, "ljust") == 0 or strcmp(nm5, "rjust") == 0 or strcmp(nm5, "center") == 0:
+                pd5: *Expr = self->call_rt("ps_str_pad", e->pos)
+                self->push_arg(pd5, self->ctx_arg(e->pos))
+                self->push_arg(pd5, self->expr(e->lhs->lhs))
+                self->push_arg(pd5, self->expr(e->args[0]))
+                if e->nargs == 2:
+                    self->push_arg(pd5, self->expr(e->args[1]))
+                else:
+                    fl5: *Expr = self->call_rt("ps_str_new", e->pos)
+                    self->push_arg(fl5, self->ctx_arg(e->pos))
+                    sp5: *Expr = ex_new(self->a, EX_STRING, e->pos)
+                    sp5->text = "\" \""
+                    self->push_arg(fl5, sp5)
+                    self->push_arg(fl5, self->num("1", e->pos))
+                    self->push_arg(pd5, fl5)
+                self->push_arg(pd5, self->num("0" if strcmp(nm5, "ljust") == 0 else ("1" if strcmp(nm5, "rjust") == 0 else "2"), e->pos))
+                self->pos_args(pd5, e->pos)
+                self->raised = True
+                self->allocs = True
+                return pd5
+            if strcmp(nm5, "splitlines") == 0 or strcmp(nm5, "zfill") == 0:
+                z5: *Expr = self->call_rt(self->a->printf("ps_str_%s", nm5), e->pos)
+                self->push_arg(z5, self->ctx_arg(e->pos))
+                self->push_arg(z5, self->expr(e->lhs->lhs))
+                for i in range(e->nargs):
+                    self->push_arg(z5, self->expr(e->args[i]))
+                self->allocs = True
+                return z5
             sm: *Expr = self->call_rt(self->a->printf("ps_str_%s", e->lhs->text), e->pos)
             nm: const *char = e->lhs->text
             if strcmp(nm, "contains") != 0 and strcmp(nm, "startswith") != 0 and strcmp(nm, "endswith") != 0:
@@ -2394,6 +2612,79 @@ struct PsLow:
                     self->pos_args(rc9, e->pos)
                     self->raised = True
                 return rc9
+            # ---- 104 ----
+            if strcmp(lm9, "clear") == 0 or strcmp(lm9, "extend") == 0:
+                cc4: *Expr = self->call_rt(self->a->printf("ps_list_%s", lm9), e->pos)
+                if strcmp(lm9, "extend") == 0:
+                    self->push_arg(cc4, self->ctx_arg(e->pos))
+                self->push_arg(cc4, self->expr(e->lhs->lhs))
+                for i in range(e->nargs):
+                    self->push_arg(cc4, self->expr(e->args[i]))
+                if strcmp(lm9, "extend") == 0:
+                    self->allocs = True
+                return cc4
+            if strcmp(lm9, "copy") == 0:
+                cp4: *Expr = self->call_rt("ps_list_slice", e->pos)
+                self->push_arg(cp4, self->ctx_arg(e->pos))
+                self->push_arg(cp4, self->expr(e->lhs->lhs))
+                self->push_arg(cp4, self->num("0", e->pos))
+                self->push_arg(cp4, self->num("0", e->pos))
+                self->push_arg(cp4, self->num("1", e->pos))
+                self->push_arg(cp4, ex_new(self->a, EX_FALSE, e->pos))
+                self->push_arg(cp4, ex_new(self->a, EX_FALSE, e->pos))
+                self->pos_args(cp4, e->pos)
+                self->allocs = True
+                return cp4
+            if strcmp(lm9, "index") == 0 or strcmp(lm9, "count") == 0 or strcmp(lm9, "remove") == 0:
+                ic4: *Expr = self->call_rt(self->a->printf("ps_list_%s", lm9), e->pos)
+                if strcmp(lm9, "count") != 0:
+                    self->push_arg(ic4, self->ctx_arg(e->pos))
+                self->push_arg(ic4, self->expr(e->lhs->lhs))
+                self->push_arg(ic4, self->key_ptr(e->args[0], e->lhs->type->inner, e->pos))
+                self->push_arg(ic4, self->num("1" if e->lhs->type->inner != None and e->lhs->type->inner->kind == PT_STR else "0", e->pos))
+                if strcmp(lm9, "count") != 0:
+                    self->pos_args(ic4, e->pos)
+                    self->raised = True
+                return ic4
+            if strcmp(lm9, "sort") == 0:
+                # `xs = sorted(xs)` por dentro: a mesma ordenação, e a lista
+                # ordenada volta para a mesma variável
+                sk4: i32 = 0
+                if e->lhs->type->inner->kind == PT_FLOAT:
+                    sk4 = 1
+                elif e->lhs->type->inner->kind == PT_STR:
+                    sk4 = 2
+                so4: *Expr = self->call_rt("ps_list_sorted", e->pos)
+                self->push_arg(so4, self->ctx_arg(e->pos))
+                self->push_arg(so4, self->expr(e->lhs->lhs))
+                self->push_arg(so4, self->num(self->a->printf("%d", sk4), e->pos))
+                asg4: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
+                asg4->op = TK_ASSIGN
+                asg4->lhs = self->expr(e->lhs->lhs)
+                asg4->rhs = so4
+                asg4->parened = True
+                self->allocs = True
+                return asg4
+            if strcmp(lm9, "pop") == 0:
+                # a ORDEM é o ponto: normaliza o índice (é onde a lista vazia
+                # levanta), LÊ o elemento, e só então fecha o buraco
+                pre4: *Expr = None
+                lb4: *Expr = self->bind_val(self->expr(e->lhs->lhs), ty_ptr(self->a, ty_name(self->a, "PsList")), e->pos, ref pre4)
+                pa4: *Expr = self->call_rt("ps_list_pop_at", e->pos)
+                self->push_arg(pa4, self->ctx_arg(e->pos))
+                self->push_arg(pa4, lb4)
+                self->push_arg(pa4, self->expr(e->args[0]) if e->nargs == 1 else self->num("0", e->pos))
+                self->push_arg(pa4, ex_new(self->a, EX_TRUE if e->nargs == 1 else EX_FALSE, e->pos))
+                self->pos_args(pa4, e->pos)
+                self->raised = True
+                ix4: *Expr = self->bind_val(pa4, ty_name(self->a, "i64"), e->pos, ref pre4)
+                vv4: *Expr = self->bind_val(self->elem_at(lb4, ix4, e->lhs->type->inner, e->pos), self->ty(e->lhs->type->inner), e->pos, ref pre4)
+                rm4: *Expr = self->call_rt("ps_list_remove_at", e->pos)
+                self->push_arg(rm4, self->ctx_arg(e->pos))
+                self->push_arg(rm4, lb4)
+                self->push_arg(rm4, ix4)
+                self->pos_args(rm4, e->pos)
+                return self->comma2(self->comma2(pre4, rm4, e->pos), vv4, e->pos)
             if strcmp(lm9, "insert") == 0:
                 # the position first, then the value, then the store: the
                 # runtime opens the gap and hands back where to write
@@ -2865,6 +3156,69 @@ struct PsLow:
                 self->pos_args(ab9, e->pos)
                 self->raised = True
             return ab9
+        if strcmp(name, "divmod") == 0:
+            # `(a // b, a % b)`, com cada lado amarrado UMA vez: `divmod(f(), 5)`
+            # não pode chamar `f` duas vezes, e a tupla é construída pelo
+            # caminho normal de `(x, y)` — nada de novo aqui embaixo
+            a5: *PsExpr = self->bind_once_ps(e->args[0], e->pos)
+            b5: *PsExpr = self->bind_once_ps(e->args[1], e->pos)
+            it5: *PsType = ps_type(self->a, PT_INT, e->pos)
+            q5: *PsExpr = ps_expr(self->a, PE_BINARY, e->pos)
+            q5->op = TK_FLOORDIV
+            q5->lhs = a5
+            q5->rhs = b5
+            q5->type = it5
+            r5: *PsExpr = ps_expr(self->a, PE_BINARY, e->pos)
+            r5->op = TK_PERCENT
+            r5->lhs = a5
+            r5->rhs = b5
+            r5->type = it5
+            tp5: *PsExpr = ps_expr(self->a, PE_TUPLE, e->pos)
+            tp5->args = self->a->alloc(2 * sizeof(*tp5->args))
+            tp5->args[0] = q5
+            tp5->args[1] = r5
+            tp5->nargs = 2
+            tp5->type = e->type
+            return self->expr(tp5)
+
+        # ---- 104: sum, any, all, round, e min/max de uma lista ----
+        if strcmp(name, "sum") == 0:
+            isf3: bool = e->type != None and e->type->kind == PT_FLOAT
+            sc3: *Expr = self->call_rt("ps_sum_float" if isf3 else "ps_sum_int", e->pos)
+            self->push_arg(sc3, self->ctx_arg(e->pos))
+            self->push_arg(sc3, self->expr(e->args[0]))
+            if e->nargs == 2:
+                self->push_arg(sc3, self->as_f64(e->args[1]) if isf3 else self->expr(e->args[1]))
+            else:
+                self->push_arg(sc3, self->num("0.0" if isf3 else "0", e->pos))
+            if not isf3:
+                self->pos_args(sc3, e->pos)
+                self->raised = True
+            return sc3
+        if strcmp(name, "any") == 0 or strcmp(name, "all") == 0:
+            ac3: *Expr = self->call_rt(self->a->printf("ps_%s", name), e->pos)
+            self->push_arg(ac3, self->expr(e->args[0]))
+            return ac3
+        if strcmp(name, "round") == 0:
+            rc3: *Expr = self->call_rt("ps_round_n" if e->nargs == 2 else "ps_round", e->pos)
+            self->push_arg(rc3, self->as_f64(e->args[0]))
+            if e->nargs == 2:
+                self->push_arg(rc3, self->expr(e->args[1]))
+            return rc3
+        if (strcmp(name, "min") == 0 or strcmp(name, "max") == 0) and e->nargs == 1:
+            lk3: *PsType = e->args[0]->type
+            kn3: const *char = "ps_list_min_int"
+            if lk3 != None and lk3->inner != None and lk3->inner->kind == PT_FLOAT:
+                kn3 = "ps_list_min_float"
+            elif lk3 != None and lk3->inner != None and lk3->inner->kind == PT_STR:
+                kn3 = "ps_list_min_str"
+            mc3: *Expr = self->call_rt(kn3, e->pos)
+            self->push_arg(mc3, self->ctx_arg(e->pos))
+            self->push_arg(mc3, self->expr(e->args[0]))
+            self->push_arg(mc3, ex_new(self->a, EX_TRUE if strcmp(name, "max") == 0 else EX_FALSE, e->pos))
+            self->pos_args(mc3, e->pos)
+            self->raised = True
+            return mc3
         if strcmp(name, "min") == 0 or strcmp(name, "max") == 0:
             isf2: bool = e->args[0]->type != None and e->args[0]->type->kind == PT_FLOAT
             mm9: *Expr = self->call_rt(self->a->printf("ps_%s_%s", name, "float" if isf2 else "int"), e->pos)
@@ -4980,6 +5334,18 @@ struct PsLow:
                         out->push(ud)
                 return
             case PS_ASSIGN:
+                # 104: `xs += ys` numa lista ESTENDE no lugar, como no Python —
+                # não é `xs = xs + ys`. A diferença aparece com dois nomes para
+                # a mesma lista: `b = a; a += [3]` deixa `b` com o 3 também, e
+                # rebindar deixaria `b` para trás.
+                if s->op == TK_PLUS_EQ and s->lhs->type != None and s->lhs->type->kind == PT_LIST:
+                    ex4: *Expr = self->call_rt("ps_list_extend", s->pos)
+                    self->push_arg(ex4, self->ctx_arg(s->pos))
+                    self->push_arg(ex4, self->expr(s->lhs))
+                    self->push_arg(ex4, self->expr(s->rhs))
+                    self->allocs = True
+                    self->push_expr_stmt(out, ex4, s->pos)
+                    return
                 # `xs[i] op= v` / `d[k] op= v`: the element has to be READ, the
                 # operator applied and the result written back. The container
                 # and the index are bound to temporaries first so each is
@@ -7746,6 +8112,14 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             init->lhs = B.L->async_field(iv, s->pos)
             init->op = TK_ASSIGN
             init->rhs = B.L->expr(ip->args[0]) if is_range and ip->nargs > 1 else B.L->num("0", s->pos)
+            # Um limite pode precisar de DECLARAÇÃO: `zip(a, b)` vira
+            # `min(len(a), len(b))`, e o `min` amarra os dois argumentos em
+            # temporários antes de chamar. Fora do async o `pre` é despejado no
+            # bloco; aqui tem de ser despejado no ESTADO, e faltava — o C saía
+            # com `__ord2` sem declaração nenhuma.
+            for pf in range(B.L->pre.len):
+                ab_emit(ref B, B.L->pre.data[pf])
+            B.L->pre.init()
             ab_emit(ref B, init)
             limit: *Expr = None
             if is_range:
@@ -7755,6 +8129,9 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
                 li->lhs = B.L->async_field(lv, s->pos)
                 li->op = TK_ASSIGN
                 li->rhs = B.L->expr(ip)
+                for pf2 in range(B.L->pre.len):
+                    ab_emit(ref B, B.L->pre.data[pf2])
+                B.L->pre.init()
                 ab_emit(ref B, li)
                 ln: *Expr = B.L->call_rt("ps_list_len", s->pos)
                 B.L->push_arg(ln, B.L->async_field(lv, s->pos))
@@ -7765,6 +8142,11 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             fafter: i32 = ab_state(ref B)
             ab_goto(ref B, fhead, s->pos)
             B.cur = fhead
+            # o que o limite declarou entra no estado que o TESTA: a cabeça é
+            # reentrada a cada volta, e uma declaração ali é local dela
+            for pf3 in range(B.L->pre.len):
+                ab_emit(ref B, B.L->pre.data[pf3])
+            B.L->pre.init()
             fcond: *Expr = ex_new(B.L->a, EX_BINARY, s->pos)
             fcond->op = TK_LT
             fcond->lhs = B.L->async_field(iv, s->pos)
@@ -8746,8 +9128,16 @@ def tuple_is_pure(t: *PsType) -> bool:
         if e == None:
             return False
         match e->kind:
-            case PT_INT, PT_FLOAT, PT_BOOL, PT_NAME:
-                pass    # PT_NAME here is a record, and records are pure bytes
+            case PT_INT, PT_FLOAT, PT_BOOL:
+                pass
+            case PT_NAME:
+                # um PT_NAME é RECORD (bytes puros) ou STRUCT (uma referência
+                # que o coletor move). Tratar os dois como puros fazia a tupla
+                # nascer `record` com um ponteiro dentro: o P recusava com uma
+                # mensagem sobre pureza, e se não recusasse o coletor não veria
+                # a referência.
+                if e->is_ref:
+                    return False
             case PT_TUPLE:
                 if not tuple_is_pure(e):
                     return False

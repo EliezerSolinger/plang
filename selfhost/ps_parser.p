@@ -853,7 +853,17 @@ struct PsP:
         # was written to remove.
         e->op = close
         e->lhs = elem
-        e->var = self->expect(TK_IDENT, "comprehension variable")->text
+        # os nomes: `for x in ...`, e desde a 104 também `for i, v in ...` — o
+        # que amarra dois é o `enumerate`/`zip`, e é a sema que diz se a forma
+        # escrita amarra tantos quanto o iterável rende
+        cv: Vec<*char>
+        cv.init()
+        cv.push((*char)(self->expect(TK_IDENT, "comprehension variable")->text))
+        while self->accept(TK_COMMA):
+            cv.push((*char)(self->expect(TK_IDENT, "comprehension variable")->text))
+        e->cvars = cv.data
+        e->ncvars = cv.len
+        e->var = cv.data[0]
         self->expect(TK_IN, "comprehension")
         e->rhs = self->parse_as_chain(self->parse_or())
         if self->accept(TK_IF):

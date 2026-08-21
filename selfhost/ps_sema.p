@@ -253,6 +253,19 @@ struct PsSema:
     static def pop_scope(self: *PsSema)
     static def add_local(self: *PsSema, name: const *char, t: *PsType, assigned: bool, is_const: bool)
     static def check_block(self: *PsSema, b: *PsBlock)
+    static def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr
+    static def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr
+    static def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr
+    static def sug_bin(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
+    static def sug_index(self: *PsSema, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
+    static def sug_bind(self: *PsSema, name: const *char, val: *PsExpr, pos: Pos) -> *PsStmt
+    static def sug_kind(self: *PsSema, s: *PsStmt) -> i32
+    static def sug_hoist(self: *PsSema, b: *PsBlock)
+    static def sug_deny(self: *PsSema, a: *PsExpr, outer: const *char)
+    static def sug_comp(self: *PsSema, e: *PsExpr)
+    static def sug_unpack(self: *PsSema, s: *PsStmt) -> bool
+    static def sug_body(self: *PsSema, s: *PsStmt, names: **char, vals: **PsExpr, n: i32)
+    static def sug_for(self: *PsSema, s: *PsStmt, k: i32)
     static def check_stmt(self: *PsSema, s: *PsStmt)
     static def check_expr(self: *PsSema, e: *PsExpr) -> *PsType
     static def resolve_type(self: *PsSema, t: *PsType) -> *PsType
@@ -542,6 +555,8 @@ struct PsSema:
     static def check_expr(self: *PsSema, e: *PsExpr) -> *PsType:
         if e == None:
             return None
+        if e->sug_done:
+            return e->type
         if e->dflt_bound:
             # a substituted default (44.1): already checked where it was
             # WRITTEN, and looking again here would resolve its names in the
@@ -1058,6 +1073,9 @@ struct PsSema:
                 sw->inner = et5
                 t = sw
             case PE_COMPREHEND:
+                # 104: `enumerate`/`zip`/`reversed` aqui também — a reescrita
+                # troca o iterável por um range e deixa as amarrações no nó
+                self->sug_comp(e)
                 # `[e for x in xs if c]` (8.1) — and the same over braces: a SET
                 # comprehension when the element is one expression, a DICT
                 # comprehension when it is `k: v`. Which of the three it is
@@ -1096,6 +1114,13 @@ struct PsSema:
                 hit: bool = chint != None and ((cdict and chint->kind == PT_DICT) or (cset and chint->kind == PT_SET) or (not cdict and not cset and chint->kind == PT_LIST))
                 self->depth += 1
                 self->add_local(e->var, ivt, True, False)
+                # as amarrações da 104 são locais do CORPO, tipadas aqui: o
+                # lowering só as emite, e por isso não precisa saber indexar
+                for si in range(e->nsug):
+                    svt: *PsType = self->check_expr(e->sug_vals[si])
+                    if svt == None or svt->kind == PT_VOID:
+                        fatal_at(self->file, e->pos, "internal: the comprehension binding for '%s' has no type", e->sug_names[si])
+                    self->add_local(e->sug_names[si], svt, True, False)
                 if e->cond != None:
                     self->want(e->cond, self->check_expr(e->cond), ps_type(self->a, PT_BOOL, e->pos), "a comprehension filter")
                 elt: *PsType = None
@@ -1279,9 +1304,22 @@ struct PsSema:
                     return bl
                 if lt != None and rt != None and lt->kind == PT_STR and rt->kind == PT_STR:
                     return bl
+                # 104: entre conjuntos, `<=` é subconjunto e `<` é subconjunto
+                # ESTRITO, como no Python
+                if lt != None and rt != None and lt->kind == PT_SET and rt->kind == PT_SET:
+                    if not ps_type_eq(lt->inner, rt->inner):
+                        fatal_at(self->file, e->pos, "cannot compare %s with %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
+                    return bl
                 fatal_at(self->file, e->pos, "cannot order %s and %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
             case TK_PLUS:
                 if lt != None and rt != None and lt->kind == PT_STR and rt->kind == PT_STR:
+                    return lt
+                # 104: `a + b` de listas é uma lista NOVA, como no Python. O que
+                # ela copia são os ELEMENTOS (os bytes); dois objetos apontados
+                # continuam sendo os mesmos dois objetos.
+                if lt != None and rt != None and lt->kind == PT_LIST and rt->kind == PT_LIST:
+                    if not ps_type_eq(lt->inner, rt->inner):
+                        fatal_at(self->file, e->pos, "cannot add %s and %s: the elements would have two different types", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
                     return lt
                 if not num:
                     # the classic: 7.3 says no implicit coercion, so say which
@@ -1291,11 +1329,18 @@ struct PsSema:
                     return icommon
                 return rt if flt and lt->kind == PT_INT else lt
             case TK_MINUS, TK_STAR:
+                # 104: `a - b` entre conjuntos é a diferença
+                if e->op == TK_MINUS and lt != None and rt != None and lt->kind == PT_SET and rt->kind == PT_SET:
+                    if not ps_type_eq(lt->inner, rt->inner):
+                        fatal_at(self->file, e->pos, "cannot subtract %s from %s: the elements would have two different types", ps_type_str(self->a, rt), ps_type_str(self->a, lt))
+                    return lt
                 # `"ab" * 3` repeats, as Python does — and only in that order:
                 # `3 * "ab"` is refused, because a language with no implicit
                 # conversion (7.3) should not have one operand teaching the
                 # other what the expression means.
                 if e->op == TK_STAR and lt != None and rt != None and lt->kind == PT_STR and rt->kind == PT_INT:
+                    return lt
+                if e->op == TK_STAR and lt != None and rt != None and lt->kind == PT_LIST and rt->kind == PT_INT:
                     return lt
                 if not num:
                     fatal_at(self->file, e->pos, "'%s' expects numbers, found %s and %s", "-" if e->op == TK_MINUS else "*", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
@@ -1331,6 +1376,12 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "the wrapping operators expect integers, found %s and %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
                 return icommon if icommon != None else lt
             case TK_AMP, TK_PIPE, TK_CARET, TK_SHL, TK_SHR:
+                # 104: entre conjuntos, `|`, `&` e `^` são união, interseção e
+                # diferença simétrica — os mesmos símbolos do Python
+                if e->op != TK_SHL and e->op != TK_SHR and lt != None and rt != None and lt->kind == PT_SET and rt->kind == PT_SET:
+                    if not ps_type_eq(lt->inner, rt->inner):
+                        fatal_at(self->file, e->pos, "cannot combine %s and %s: the elements would have two different types", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
+                    return lt
                 if lt == None or rt == None or lt->kind != PT_INT or rt->kind != PT_INT:
                     fatal_at(self->file, e->pos, "bitwise operators expect integers, found %s and %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
                 if e->op == TK_SHL or e->op == TK_SHR:
@@ -1367,6 +1418,48 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "remove() takes one key")
                     self->want(e->args[0], self->check_expr(e->args[0]), kty, "the removed key")
                     return ps_type(self->a, PT_BOOL, e->pos)
+                # ---- 104: o resto do que um dict/set faz no Python ----
+                if strcmp(nm3, "clear") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "clear() takes no arguments")
+                    self->deny_const_mut(e->lhs->lhs, "clear()")
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if strcmp(nm3, "copy") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "copy() takes no arguments")
+                    return rt
+                if strcmp(nm3, "update") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "update() takes one %s", "dict" if rt->kind == PT_DICT else "set")
+                    self->deny_const_mut(e->lhs->lhs, "update()")
+                    self->check_want(e->args[0], rt, "the update")
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if strcmp(nm3, "pop") == 0 and rt->kind == PT_DICT:
+                    # `pop(k)` levanta se não houver, `pop(k, d)` devolve `d` —
+                    # como no Python, e a mesma divisão de `d[k]` contra `get`
+                    if e->nargs < 1 or e->nargs > 2:
+                        fatal_at(self->file, e->pos, "pop(key) or pop(key, default)")
+                    self->deny_const_mut(e->lhs->lhs, "pop()")
+                    self->want(e->args[0], self->check_expr(e->args[0]), kty, "the key")
+                    if e->nargs == 2:
+                        self->check_want(e->args[1], rt->inner, "the default")
+                    return rt->inner
+                if strcmp(nm3, "setdefault") == 0 and rt->kind == PT_DICT:
+                    if e->nargs != 2:
+                        fatal_at(self->file, e->pos, "setdefault(key, value) takes both: the value is what goes in when the key is NOT there")
+                    self->deny_const_mut(e->lhs->lhs, "setdefault()")
+                    self->want(e->args[0], self->check_expr(e->args[0]), kty, "the key")
+                    self->check_want(e->args[1], rt->inner, "the value")
+                    return rt->inner
+                if strcmp(nm3, "discard") == 0 and rt->kind == PT_SET:
+                    # o `remove` do Python levanta e o `discard` não; aqui o
+                    # `remove` já devolve bool, então `discard` é o mesmo com o
+                    # resultado jogado fora — e existe para o código ler igual
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "discard() takes one value")
+                    self->deny_const_mut(e->lhs->lhs, "discard()")
+                    self->want(e->args[0], self->check_expr(e->args[0]), kty, "the discarded value")
+                    return ps_type(self->a, PT_VOID, e->pos)
                 if strcmp(nm3, "get") == 0 and rt->kind == PT_DICT:
                     if e->nargs != 2:
                         fatal_at(self->file, e->pos, "get() takes a key and a default (5.2: plain indexing raises)")
@@ -1425,23 +1518,41 @@ struct PsSema:
                         .args = None
                         .nargs = 0
                     return self->check_expr(e)
-                fatal_at(self->file, e->pos, "a %s has %s so far", "dict" if rt->kind == PT_DICT else "set", "get, remove, keys, values and items() in a for" if rt->kind == PT_DICT else "add, remove, keys")
+                fatal_at(self->file, e->pos, "a %s has %s", "dict" if rt->kind == PT_DICT else "set", "get, pop, setdefault, remove, update, clear, copy, keys, values and items" if rt->kind == PT_DICT else "add, remove, discard, update, clear, copy and keys")
             if rt != None and rt->kind == PT_STR:
                 nm2: const *char = e->lhs->text
                 e->lhs->type = rt
                 st5: *PsType = ps_type(self->a, PT_STR, e->pos)
                 bl2: *PsType = ps_type(self->a, PT_BOOL, e->pos)
                 if strcmp(nm2, "split") == 0:
-                    if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "split() takes one separator")
-                    self->want(e->args[0], self->check_expr(e->args[0]), st5, "the separator")
+                    # sem separador parte em CORRIDAS de espaço e não devolve
+                    # pedaço vazio: `" a  b ".split()` dá dois, e
+                    # `" a  b ".split(" ")` dá cinco. São duas funções porque
+                    # são dois resultados.
+                    if e->nargs > 1:
+                        fatal_at(self->file, e->pos, "split() takes one separator, or nothing (which splits on runs of whitespace)")
+                    if e->nargs == 1:
+                        self->want(e->args[0], self->check_expr(e->args[0]), st5, "the separator")
                     lw2: *PsType = ps_type(self->a, PT_LIST, e->pos)
                     lw2->inner = st5
                     return lw2
-                if strcmp(nm2, "strip") == 0 or strcmp(nm2, "lstrip") == 0 or strcmp(nm2, "rstrip") == 0 or strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0:
+                if strcmp(nm2, "strip") == 0 or strcmp(nm2, "lstrip") == 0 or strcmp(nm2, "rstrip") == 0:
+                    # com um argumento tira qualquer um daqueles CARACTERES das
+                    # pontas (não é um prefixo), como no Python
+                    if e->nargs > 1:
+                        fatal_at(self->file, e->pos, "%s() takes nothing (whitespace) or the set of characters to strip", nm2)
+                    if e->nargs == 1:
+                        self->want(e->args[0], self->check_expr(e->args[0]), st5, "the characters to strip")
+                    return st5
+                if strcmp(nm2, "lower") == 0 or strcmp(nm2, "upper") == 0:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "%s() takes no arguments", nm2)
                     return st5
+                if strcmp(nm2, "find") == 0 and e->nargs == 2:
+                    # `find(sub, start)`: o começo conta em CARACTERES
+                    self->want(e->args[0], self->check_expr(e->args[0]), st5, "what to look for")
+                    self->want(e->args[1], self->check_expr(e->args[1]), ps_type(self->a, PT_INT, e->pos), "where to start")
+                    return ps_type(self->a, PT_INT, e->pos)
                 if strcmp(nm2, "find") == 0 or strcmp(nm2, "startswith") == 0 or strcmp(nm2, "endswith") == 0 or strcmp(nm2, "contains") == 0:
                     if e->nargs != 1:
                         fatal_at(self->file, e->pos, "%s() takes one string", nm2)
@@ -1453,6 +1564,40 @@ struct PsSema:
                     self->want(e->args[0], self->check_expr(e->args[0]), st5, "what to find")
                     self->want(e->args[1], self->check_expr(e->args[1]), st5, "what to put there")
                     return st5
+                # ---- 104: o resto do que uma str faz no Python ----
+                if strcmp(nm2, "count") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "count() takes one string")
+                    self->want(e->args[0], self->check_expr(e->args[0]), st5, "what to count")
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(nm2, "rfind") == 0 or strcmp(nm2, "index") == 0 or strcmp(nm2, "rindex") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "%s() takes one string", nm2)
+                    self->want(e->args[0], self->check_expr(e->args[0]), st5, "what to look for")
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(nm2, "removeprefix") == 0 or strcmp(nm2, "removesuffix") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "%s() takes one string", nm2)
+                    self->want(e->args[0], self->check_expr(e->args[0]), st5, "the affix")
+                    return st5
+                if strcmp(nm2, "splitlines") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "splitlines() takes no arguments")
+                    sl5: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    sl5->inner = st5
+                    return sl5
+                if strcmp(nm2, "ljust") == 0 or strcmp(nm2, "rjust") == 0 or strcmp(nm2, "center") == 0:
+                    if e->nargs < 1 or e->nargs > 2:
+                        fatal_at(self->file, e->pos, "%s(width) or %s(width, fill)", nm2, nm2)
+                    self->want(e->args[0], self->check_expr(e->args[0]), ps_type(self->a, PT_INT, e->pos), "the width")
+                    if e->nargs == 2:
+                        self->want(e->args[1], self->check_expr(e->args[1]), st5, "the fill")
+                    return st5
+                if strcmp(nm2, "zfill") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "zfill(width) takes the width")
+                    self->want(e->args[0], self->check_expr(e->args[0]), ps_type(self->a, PT_INT, e->pos), "the width")
+                    return st5
                 if strcmp(nm2, "join") == 0:
                     # the SEPARATOR is the receiver, as in Python: `", ".join(xs)`
                     if e->nargs != 1:
@@ -1461,11 +1606,11 @@ struct PsSema:
                     if jt == None or jt->kind != PT_LIST or jt->inner == None or jt->inner->kind != PT_STR:
                         fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt))
                     return st5
-                fatal_at(self->file, e->pos, "a string has split, strip, lstrip, rstrip, lower, upper, find, contains, startswith, endswith, replace and join so far")
+                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center and zfill")
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt
-                if lm in {"append", "insert", "remove_at", "reverse"}:
+                if lm in {"append", "insert", "remove_at", "reverse", "pop", "extend", "clear", "remove", "sort"}:
                     self->deny_const_mut(e->lhs->lhs, self->a->printf("%s()", lm))
                 if strcmp(lm, "append") == 0:
                     if e->nargs != 1:
@@ -1487,7 +1632,47 @@ struct PsSema:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "reverse() takes no arguments")
                     return ps_type(self->a, PT_VOID, e->pos)
-                fatal_at(self->file, e->pos, "a list has append, insert, remove_at and reverse so far, not '%s'", lm)
+                # ---- 104: o resto do que uma lista faz no Python ----
+                if strcmp(lm, "pop") == 0:
+                    # sem argumento tira o ÚLTIMO, como no Python
+                    if e->nargs > 1:
+                        fatal_at(self->file, e->pos, "pop() takes nothing (the last element) or one position")
+                    if e->nargs == 1:
+                        self->want(e->args[0], self->check_expr(e->args[0]), ps_type(self->a, PT_INT, e->pos), "the position")
+                    return rt->inner
+                if strcmp(lm, "extend") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "extend() takes one list")
+                    self->check_want(e->args[0], rt, "the extension")
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if strcmp(lm, "clear") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "clear() takes no arguments")
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if strcmp(lm, "copy") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "copy() takes no arguments")
+                    return rt
+                if strcmp(lm, "index") == 0 or strcmp(lm, "count") == 0 or strcmp(lm, "remove") == 0:
+                    # por CONTEÚDO, como o `in` (55.4): duas strings iguais são a
+                    # mesma para procurar, mesmo escritas em lugares diferentes
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "%s() takes one value", lm)
+                    self->key_ok(rt->inner, e->pos, self->a->printf("what %s() looks for", lm))
+                    self->check_want(e->args[0], rt->inner, self->a->printf("what %s() looks for", lm))
+                    if strcmp(lm, "remove") == 0:
+                        return ps_type(self->a, PT_VOID, e->pos)
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(lm, "sort") == 0:
+                    # `sort()` ordena NO LUGAR e `sorted(xs)` devolve outra —
+                    # a mesma divisão do Python. Aqui é `xs = sorted(xs)` escrito
+                    # por dentro, então a comparação é a mesma e há uma só.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "sort() takes no arguments here; for a key write `xs = sorted(xs, key=...)`")
+                    if rt->inner == None or rt->inner->kind not in {PT_INT, PT_FLOAT, PT_STR}:
+                        fatal_at(self->file, e->pos, "sort() orders numbers or strings; for anything else write `sorted(xs, key=...)` (which says WHAT to compare)")
+                    return ps_type(self->a, PT_VOID, e->pos)
+                fatal_at(self->file, e->pos, "a list has append, insert, remove_at, reverse, pop, extend, clear, copy, index, count, remove and sort, not '%s'", lm)
             # a task can be asked to stop (37.2). It is not a kill: the next
             # step of THAT task raises inside it, so its `defer` and its `with`
             # unwind exactly as they would for any other error.
@@ -2634,7 +2819,58 @@ struct PsSema:
             if ab == None or ab->kind not in {PT_INT, PT_FLOAT}:
                 fatal_at(self->file, e->pos, "abs() takes a number, not %s", ps_type_str(self->a, ab))
             return ab
+        # ---- 104: sum, any, all, round, divmod ----
+        if strcmp(name, "sum") == 0:
+            if e->nargs < 1 or e->nargs > 2:
+                fatal_at(self->file, e->pos, "sum(xs) or sum(xs, start)")
+            slt: *PsType = self->check_expr(e->args[0])
+            if slt == None or slt->kind != PT_LIST or slt->inner == None or slt->inner->kind not in {PT_INT, PT_FLOAT}:
+                fatal_at(self->file, e->pos, "sum() takes a list of numbers, not %s", ps_type_str(self->a, slt))
+            if e->nargs == 2:
+                self->want(e->args[1], self->check_expr(e->args[1]), slt->inner, "the start of sum()")
+            return slt->inner
+        if strcmp(name, "any") == 0 or strcmp(name, "all") == 0:
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "%s(xs) takes one list", name)
+            alt: *PsType = self->check_expr(e->args[0])
+            if alt == None or alt->kind != PT_LIST or alt->inner == None or alt->inner->kind != PT_BOOL:
+                fatal_at(self->file, e->pos, "%s() takes a list<bool> — write the test in a comprehension: %s([x > 0 for x in xs]). There is no truthiness here (39.3), so a list of numbers has no answer", name, name)
+            return ps_type(self->a, PT_BOOL, e->pos)
+        if strcmp(name, "round") == 0:
+            if e->nargs < 1 or e->nargs > 2:
+                fatal_at(self->file, e->pos, "round(x) or round(x, digits)")
+            self->check_want(e->args[0], ps_type(self->a, PT_FLOAT, e->pos), "the number")
+            if e->nargs == 2:
+                self->want(e->args[1], self->check_expr(e->args[1]), ps_type(self->a, PT_INT, e->pos), "the number of digits")
+                return ps_type(self->a, PT_FLOAT, e->pos)
+            # sem casas, o Python devolve INT — e arredonda meio para o PAR
+            return ps_type(self->a, PT_INT, e->pos)
+        if strcmp(name, "divmod") == 0:
+            # `divmod(a, b)` é `(a // b, a % b)`, e é escrito aqui como
+            # exatamente isso: a tupla já é um valor (98.5), então não há função
+            # de runtime nem par de saída por ponteiro
+            if e->nargs != 2:
+                fatal_at(self->file, e->pos, "divmod(a, b) takes two numbers")
+            dt1: *PsType = self->check_expr(e->args[0])
+            dt2: *PsType = self->check_expr(e->args[1])
+            if dt1 == None or dt1->kind != PT_INT or dt2 == None or dt2->kind != PT_INT:
+                fatal_at(self->file, e->pos, "divmod() takes two ints (the float form is `x // y` and `x %% y` written out)")
+            # o TIPO é a tupla; quem a constrói é o lowering, que sabe amarrar
+            # cada lado num temporário para não avaliar duas vezes
+            dtt: *PsType = ps_type(self->a, PT_TUPLE, e->pos)
+            dtt->params = self->a->alloc(2 * sizeof(*dtt->params))
+            dtt->params[0] = ps_type(self->a, PT_INT, e->pos)
+            dtt->params[1] = ps_type(self->a, PT_INT, e->pos)
+            dtt->nparams = 2
+            return dtt
         if strcmp(name, "min") == 0 or strcmp(name, "max") == 0:
+            # a forma de UMA lista: `max(xs)`, que o Python tem e que levanta
+            # com a lista vazia em vez de devolver um zero com cara de resposta
+            if e->nargs == 1:
+                mlt: *PsType = self->check_expr(e->args[0])
+                if mlt == None or mlt->kind != PT_LIST or mlt->inner == None or mlt->inner->kind not in {PT_INT, PT_FLOAT, PT_STR}:
+                    fatal_at(self->file, e->pos, "%s() takes two numbers, or one list of numbers or strings, not %s", name, ps_type_str(self->a, mlt))
+                return mlt->inner
             # two numbers of the same kind. Python also takes an iterable and any
             # number of arguments; those are additive and this is the form that
             # every program actually writes.
@@ -2647,6 +2883,11 @@ struct PsSema:
             if m2 == None or m2->kind != m1->kind:
                 fatal_at(self->file, e->pos, "%s() takes two numbers of the SAME kind: %s and %s", name, ps_type_str(self->a, m1), ps_type_str(self->a, m2))
             return m1
+        # 104: os três chegam aqui quando foram escritos onde NÃO são um laço.
+        # São açúcar sobre o laço de índice (não há objeto iterador), então
+        # dizer isso é melhor do que "função desconhecida".
+        if strcmp(name, "enumerate") == 0 or strcmp(name, "zip") == 0 or strcmp(name, "reversed") == 0:
+            fatal_at(self->file, e->pos, "%s() is not a value: it only appears as the iterable of a `for` (it is the index loop written out, not an iterator object)", name)
         fatal_at(self->file, e->pos, "unknown function '%s'", name)
         return None
 
@@ -3955,9 +4196,353 @@ struct PsSema:
     # ---------- statements ----------
     # A block is a SCOPE (64.1): what it declares dies with it, and a name it
     # pinned with `nonlocal` does not.
+    # ---------- 104: `enumerate`, `zip` e `reversed` ----------
+    #
+    # Os três são AÇÚCAR, reescrito para o laço de índice que já funciona — pela
+    # mesma razão que `range` e `d.items()` são reconhecidos por FORMA e não são
+    # valores: um iterador de verdade precisaria de um objeto com cursor, e o par
+    # que `enumerate` rende precisaria da tupla como valor dentro de contêiner.
+    # Reescrever aqui custa zero de runtime e dá o mesmo que o Python dá.
+    static def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr:
+        e: *PsExpr = ps_expr(self->a, PE_NAME, pos)
+        e->text = t
+        return e
+
+    static def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr:
+        e: *PsExpr = ps_expr(self->a, PE_INT, pos)
+        e->text = self->a->printf("%d", v)
+        return e
+
+    static def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr:
+        c: *PsExpr = ps_expr(self->a, PE_CALL, pos)
+        c->lhs = self->sug_name(fn, pos)
+        c->args = self->a->alloc(sizeof(*c->args))
+        c->args[0] = a1
+        c->nargs = 1
+        return c
+
+    static def sug_bin(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
+        e: *PsExpr = ps_expr(self->a, PE_BINARY, pos)
+        e->op = op
+        e->lhs = l
+        e->rhs = r
+        return e
+
+    static def sug_index(self: *PsSema, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
+        e: *PsExpr = ps_expr(self->a, PE_INDEX, pos)
+        e->lhs = l
+        e->rhs = r
+        return e
+
+    static def sug_bind(self: *PsSema, name: const *char, val: *PsExpr, pos: Pos) -> *PsStmt:
+        v: *PsStmt = ps_stmt(self->a, PS_VAR, pos)
+        v->name = name
+        v->rhs = val
+        return v
+
+    # Qual dos três (0 = nenhum): reconhecido pela FORMA da chamada, sem tipos.
+    static def sug_kind(self: *PsSema, s: *PsStmt) -> i32:
+        if s->kind != PS_FOR or s->iter == None or s->iter->kind != PE_CALL:
+            return 0
+        f: *PsExpr = s->iter->lhs
+        if f == None or f->kind != PE_NAME:
+            return 0
+        if strcmp(f->text, "enumerate") == 0:
+            return 1
+        if strcmp(f->text, "zip") == 0:
+            return 2
+        if strcmp(f->text, "reversed") == 0:
+            return 3
+        return 0
+
+    # `range` e os próprios açúcares não são VALORES, então não dá para guardá-los
+    # num temporário — o que se pode dar aqui é o motivo, no lugar onde a pessoa
+    # escreveu, em vez de "função desconhecida" depois da reescrita.
+    static def sug_deny(self: *PsSema, a: *PsExpr, outer: const *char):
+        if a->kind != PE_CALL or a->lhs == None or a->lhs->kind != PE_NAME:
+            return
+        w: const *char = a->lhs->text
+        if strcmp(w, "range") == 0:
+            if strcmp(outer, "zip") == 0:
+                fatal_at(self->file, a->pos, "zip() over a range: `for i, x in enumerate(xs)` IS that loop, and it needs no zip")
+            fatal_at(self->file, a->pos, "%s() over a range: a range is not a value here — `for i in range(...)` iterates it, and `range(hi - 1, lo - 1, -1)` walks it backwards", outer)
+        if strcmp(w, "enumerate") == 0 or strcmp(w, "zip") == 0 or strcmp(w, "reversed") == 0:
+            fatal_at(self->file, a->pos, "%s(%s(...)): the two are sugar over the index loop, not iterator objects, so they do not nest — put the inner result in a list first (a list has `reverse`)", outer, w)
+
+    # As amarrações entram como PRIMEIROS statements do corpo do laço, e por
+    # isso nascem e morrem no escopo dele, como a variável de laço (64.1).
+    static def sug_body(self: *PsSema, s: *PsStmt, names: **char, vals: **PsExpr, n: i32):
+        old: i32 = s->body->n if s->body != None else 0
+        body: **PsStmt = self->a->alloc(usize(n + old) * sizeof(*body))
+        for j in range(n):
+            body[j] = self->sug_bind(names[j], vals[j], s->pos)
+        for i in range(old):
+            body[n + i] = s->body->stmts[i]
+        nb: *PsBlock = self->a->alloc(sizeof(PsBlock))
+        nb->stmts = body
+        nb->n = n + old
+        s->body = nb
+
+    # `for k, v in pares:` sobre uma lista de TUPLAS (104). O laço não muda —
+    # ele continua andando a lista — e o que a reescrita faz é amarrar os nomes
+    # aos slots da tupla, que é o que o Python chama de desempacotar. Vale para
+    # `d.items()`, que desde a 98.5 é um valor: uma lista de pares.
+    static def sug_unpack(self: *PsSema, s: *PsStmt) -> bool:
+        t: *PsType = self->check_expr(s->iter)
+        s->iter->sug_done = True
+        if t == None or t->kind != PT_LIST or t->inner == None or t->inner->kind != PT_TUPLE:
+            return False
+        if t->inner->nparams != s->nnames:
+            fatal_at(self->file, s->pos, "unpacking a %s takes %d names, found %d", ps_type_str(self->a, t->inner), t->inner->nparams, s->nnames)
+        pn: const *char = self->a->printf("__sugp%d", self->counter)
+        self->counter += 1
+        names: **char = self->a->alloc(usize(s->nnames) * sizeof(*names))
+        vals: **PsExpr = self->a->alloc(usize(s->nnames) * sizeof(*vals))
+        for j in range(s->nnames):
+            names[j] = s->names[j]
+            vals[j] = self->sug_index(self->sug_name(pn, s->pos), self->sug_int(j, s->pos), s->pos)
+        self->sug_body(s, names, vals, s->nnames)
+        s->names = self->a->alloc(sizeof(*s->names))
+        s->names[0] = (*char)(pn)
+        s->nnames = 1
+        return True
+
+    # A mesma reescrita, na COMPREHENSION (104). Ela não tem corpo de statements
+    # onde amarrar nomes, então a sema guarda as amarrações no nó — tipadas — e o
+    # lowering as emite como os primeiros statements do laço que ele já constrói.
+    #
+    # Diferença honesta com a forma de statement: aqui o iterável tem de ser um
+    # NOME (ou um campo), porque a reescrita o menciona duas vezes — no `len` do
+    # limite e no índice do corpo — e não há statement anterior onde guardar um
+    # temporário. É a mesma regra do `random.choice`.
+    static def sug_comp(self: *PsSema, e: *PsExpr):
+        it: *PsExpr = e->rhs
+        k: i32 = 0
+        if it != None and it->kind == PE_CALL and it->lhs != None and it->lhs->kind == PE_NAME:
+            if strcmp(it->lhs->text, "enumerate") == 0:
+                k = 1
+            elif strcmp(it->lhs->text, "zip") == 0:
+                k = 2
+            elif strcmp(it->lhs->text, "reversed") == 0:
+                k = 3
+        if k == 0:
+            if e->ncvars > 1:
+                # `{v: k for k, v in d.items()}` — desempacotar a tupla, igual
+                # ao que o `for` statement faz: o laço continua andando a lista
+                ut: *PsType = self->check_expr(e->rhs)
+                e->rhs->sug_done = True
+                if ut == None or ut->kind != PT_LIST or ut->inner == None or ut->inner->kind != PT_TUPLE:
+                    fatal_at(self->file, e->pos, "a comprehension binds ONE name per element; two names come from `enumerate(xs)`, `zip(a, b)` or a list of tuples (`d.items()`), not from %s", ps_type_str(self->a, ut))
+                if ut->inner->nparams != e->ncvars:
+                    fatal_at(self->file, e->pos, "unpacking a %s takes %d names, found %d", ps_type_str(self->a, ut->inner), ut->inner->nparams, e->ncvars)
+                pn0: const *char = self->a->printf("__sugc%d", self->counter)
+                self->counter += 1
+                un: **char = self->a->alloc(usize(e->ncvars) * sizeof(*un))
+                uv: **PsExpr = self->a->alloc(usize(e->ncvars) * sizeof(*uv))
+                for j in range(e->ncvars):
+                    un[j] = e->cvars[j]
+                    uv[j] = self->sug_index(self->sug_name(pn0, e->pos), self->sug_int(j, e->pos), e->pos)
+                e->sug_names = un
+                e->sug_vals = uv
+                e->nsug = e->ncvars
+                e->var = pn0
+            return
+        w: const *char = it->lhs->text
+        start: *PsExpr = None
+        want: i32 = 1
+        if k == 1:
+            if it->nargs < 1 or it->nargs > 2:
+                fatal_at(self->file, e->pos, "enumerate(xs) or enumerate(xs, start)")
+            if it->nargs == 2:
+                start = it->args[1]
+            want = 2
+        elif k == 2:
+            if it->nargs < 2:
+                fatal_at(self->file, e->pos, "zip(a, b) takes two or more iterables")
+            want = it->nargs
+        else:
+            if it->nargs != 1:
+                fatal_at(self->file, e->pos, "reversed(xs) takes one iterable")
+        if e->ncvars != want:
+            fatal_at(self->file, e->pos, "`for ... in %s(...)` binds %d name(s), found %d", w, want, e->ncvars)
+        nit: i32 = 1 if k == 1 else it->nargs
+        for j in range(nit):
+            a: *PsExpr = it->args[j]
+            self->sug_deny(a, w)
+            if a->kind not in {PE_NAME, PE_FIELD, PE_INDEX, PE_STR}:
+                fatal_at(self->file, e->pos, "%s() in a comprehension takes a plain variable: the rewrite reads it twice (its length and each element) and there is no statement before the comprehension to hold a temporary — put it in a variable first", w)
+            at: *PsType = self->check_expr(a)
+            if at == None or at->kind not in {PT_LIST, PT_STR, PT_ARRAY}:
+                if at != None and at->kind == PT_DICT:
+                    fatal_at(self->file, e->pos, "%s() over a dict: a dict is not indexed by position — write %s(d.keys()) or %s(d.values())", w, w, w)
+                if at != None and at->kind == PT_SET:
+                    fatal_at(self->file, e->pos, "%s() over a set: a set has no order to index — build a list from it first", w)
+                fatal_at(self->file, e->pos, "%s() takes a list, a string or an array, found %s", w, ps_type_str(self->a, at))
+        if start != None:
+            self->check_want(start, ps_type(self->a, PT_INT, e->pos), "the start of enumerate()")
+        cnt: *PsExpr = self->sug_call1("len", it->args[0], e->pos)
+        if k == 2:
+            for j in range(1, it->nargs):
+                mn: *PsExpr = ps_expr(self->a, PE_CALL, e->pos)
+                mn->lhs = self->sug_name("min", e->pos)
+                mn->args = self->a->alloc(2 * sizeof(*mn->args))
+                mn->args[0] = cnt
+                mn->args[1] = self->sug_call1("len", it->args[j], e->pos)
+                mn->nargs = 2
+                cnt = mn
+        # o nome do laço: no `enumerate` SEM start é o próprio índice que a
+        # pessoa escreveu, e aí sobra uma amarração só
+        iv: const *char = e->cvars[0] if (k == 1 and start == None) else self->a->printf("__sugc%d", self->counter)
+        self->counter += 1
+        names: **char = self->a->alloc(usize(want) * sizeof(*names))
+        vals: **PsExpr = self->a->alloc(usize(want) * sizeof(*vals))
+        ns: i32 = 0
+        if k == 1:
+            if start != None:
+                names[ns] = e->cvars[0]
+                vals[ns] = self->sug_bin(TK_PLUS, self->sug_name(iv, e->pos), start, e->pos)
+                ns += 1
+            names[ns] = e->cvars[1]
+            vals[ns] = self->sug_index(it->args[0], self->sug_name(iv, e->pos), e->pos)
+            ns += 1
+        elif k == 2:
+            for j in range(it->nargs):
+                names[ns] = e->cvars[j]
+                vals[ns] = self->sug_index(it->args[j], self->sug_name(iv, e->pos), e->pos)
+                ns += 1
+        else:
+            back: *PsExpr = self->sug_bin(TK_MINUS, self->sug_bin(TK_MINUS, self->sug_call1("len", it->args[0], e->pos), self->sug_int(1, e->pos), e->pos), self->sug_name(iv, e->pos), e->pos)
+            names[ns] = e->cvars[0]
+            vals[ns] = self->sug_index(it->args[0], back, e->pos)
+            ns += 1
+        e->sug_names = names
+        e->sug_vals = vals
+        e->nsug = ns
+        e->var = iv
+        e->rhs = self->sug_call1("range", cnt, e->pos)
+
+    # O iterável entra num TEMPORÁRIO antes do laço quando não é já um nome: a
+    # reescrita o menciona duas vezes (`len(xs)` e `xs[i]`), e `enumerate(f())`
+    # chamaria `f` a cada volta. Isto é puramente sintático — roda antes de
+    # qualquer tipo existir — e por isso mora aqui e não na reescrita tipada.
+    static def sug_hoist(self: *PsSema, b: *PsBlock):
+        extra: i32 = 0
+        for i in range(b->n):
+            k: i32 = self->sug_kind(b->stmts[i])
+            if k == 0:
+                continue
+            for j in range(b->stmts[i]->iter->nargs):
+                a: *PsExpr = b->stmts[i]->iter->args[j]
+                self->sug_deny(a, b->stmts[i]->iter->lhs->text)
+                if a->kind != PE_NAME:
+                    extra += 1
+        if extra == 0:
+            return
+        out: **PsStmt = self->a->alloc(usize(b->n + extra) * sizeof(*out))
+        n2: i32 = 0
+        for i in range(b->n):
+            st: *PsStmt = b->stmts[i]
+            if self->sug_kind(st) != 0:
+                for j in range(st->iter->nargs):
+                    a: *PsExpr = st->iter->args[j]
+                    if a->kind == PE_NAME:
+                        continue
+                    tn: const *char = self->a->printf("__sug%d", self->counter)
+                    self->counter += 1
+                    out[n2] = self->sug_bind(tn, a, st->pos)
+                    n2 += 1
+                    st->iter->args[j] = self->sug_name(tn, a->pos)
+            out[n2] = st
+            n2 += 1
+        b->stmts = out
+        b->n = n2
+
+    # A reescrita, agora COM tipos: o iterável é um nome em escopo, então dá
+    # para dizer o que ele é e recusar com a mensagem certa.
+    static def sug_for(self: *PsSema, s: *PsStmt, k: i32):
+        it: *PsExpr = s->iter
+        w: const *char = it->lhs->text
+        start: *PsExpr = None
+        if k == 1:
+            if it->nargs < 1 or it->nargs > 2:
+                fatal_at(self->file, s->pos, "enumerate(xs) or enumerate(xs, start)")
+            if s->nnames != 2:
+                fatal_at(self->file, s->pos, "`for i, x in enumerate(xs)` takes TWO variables — the index and the element (there is no tuple to bind to one)")
+            if it->nargs == 2:
+                start = it->args[1]
+        elif k == 2:
+            if it->nargs < 2:
+                fatal_at(self->file, s->pos, "zip(a, b) takes two or more iterables")
+            if s->nnames != it->nargs:
+                fatal_at(self->file, s->pos, "`for ... in zip(...)`: %d iterables need %d variables, found %d", it->nargs, it->nargs, s->nnames)
+        else:
+            if it->nargs != 1:
+                fatal_at(self->file, s->pos, "reversed(xs) takes one iterable")
+            if s->nnames != 1:
+                fatal_at(self->file, s->pos, "`for x in reversed(xs)` takes one variable")
+    # cada iterável tem de ser INDEXÁVEL: é o que a reescrita usa, e é o que
+    # separa uma lista de um dict (que indexa por chave) ou de um set
+        for j in range(1 if k == 1 else it->nargs):
+            at: *PsType = self->check_expr(it->args[j])
+            if at == None or at->kind not in {PT_LIST, PT_STR, PT_ARRAY}:
+                if at != None and at->kind == PT_DICT:
+                    fatal_at(self->file, s->pos, "%s() over a dict: a dict is not indexed by position — write %s(d.keys()) or %s(d.values())", w, w, w)
+                if at != None and at->kind == PT_SET:
+                    fatal_at(self->file, s->pos, "%s() over a set: a set has no order to index — build a list from it first", w)
+                fatal_at(self->file, s->pos, "%s() takes a list, a string or an array, found %s", w, ps_type_str(self->a, at))
+        if start != None:
+            self->check_want(start, ps_type(self->a, PT_INT, s->pos), "the start of enumerate()")
+        # o número de voltas: len do único iterável, ou o MENOR dos len (o `zip`
+        # do Python para no mais curto)
+        cnt: *PsExpr = self->sug_call1("len", it->args[0], s->pos)
+        if k == 2:
+            for j in range(1, it->nargs):
+                mn: *PsExpr = ps_expr(self->a, PE_CALL, s->pos)
+                mn->lhs = self->sug_name("min", s->pos)
+                mn->args = self->a->alloc(2 * sizeof(*mn->args))
+                mn->args[0] = cnt
+                mn->args[1] = self->sug_call1("len", it->args[j], s->pos)
+                mn->nargs = 2
+                cnt = mn
+        iv: const *char = self->a->printf("__sugi%d", self->counter)
+        self->counter += 1
+        # as amarrações entram como PRIMEIROS statements do corpo, então elas
+        # nascem e morrem no escopo do laço, como a variável de laço (64.1)
+        nb: i32 = s->nnames
+        sn: **char = self->a->alloc(usize(nb) * sizeof(*sn))
+        sv: **PsExpr = self->a->alloc(usize(nb) * sizeof(*sv))
+        bn: i32 = 0
+        if k == 1:
+            ix: *PsExpr = self->sug_name(iv, s->pos)
+            if start != None:
+                ix = self->sug_bin(TK_PLUS, ix, start, s->pos)
+            sn[bn] = s->names[0]
+            sv[bn] = ix
+            bn += 1
+            sn[bn] = s->names[1]
+            sv[bn] = self->sug_index(it->args[0], self->sug_name(iv, s->pos), s->pos)
+            bn += 1
+        elif k == 2:
+            for j in range(it->nargs):
+                sn[bn] = s->names[j]
+                sv[bn] = self->sug_index(it->args[j], self->sug_name(iv, s->pos), s->pos)
+                bn += 1
+        else:
+            # de trás para frente: `xs[len(xs) - 1 - i]`
+            back: *PsExpr = self->sug_bin(TK_MINUS, self->sug_bin(TK_MINUS, self->sug_call1("len", it->args[0], s->pos), self->sug_int(1, s->pos), s->pos), self->sug_name(iv, s->pos), s->pos)
+            sn[bn] = s->names[0]
+            sv[bn] = self->sug_index(it->args[0], back, s->pos)
+            bn += 1
+        self->sug_body(s, sn, sv, bn)
+        s->iter = self->sug_call1("range", cnt, s->pos)
+        s->names = self->a->alloc(sizeof(*s->names))
+        s->names[0] = iv
+        s->nnames = 1
+
     static def check_block(self: *PsSema, b: *PsBlock):
         if b == None:
             return
+        self->sug_hoist(b)
         self->depth += 1
         for i in range(b->n):
             self->check_stmt(b->stmts[i])
@@ -4313,6 +4898,11 @@ struct PsSema:
                 # FUNCTION's scope, so it survives the block that assigns it
                 self->fn_nonlocals.add(s->name)
             case PS_FOR:
+                sk: i32 = self->sug_kind(s)
+                if sk != 0:
+                    # 104: `enumerate`/`zip`/`reversed` viram o laço de índice, e
+                    # o que segue é o mesmo caminho do `range`
+                    self->sug_for(s, sk)
                 # v1 iterates a RANGE. The general protocol of 40.3
                 # (`has_next()`/`next()`) needs a mutable cursor, and the only
                 # mutable aggregate is `struct`, which is collected — so it
@@ -4347,6 +4937,11 @@ struct PsSema:
                         self->pop_scope()
                         self->depth -= 1
                         return
+                # 104: `for k, v in pares` sobre uma lista de TUPLAS — o
+                # desempacotar do Python, amarrando os slots aos nomes
+                if not isrange and s->nnames > 1:
+                    if not self->sug_unpack(s):
+                        fatal_at(self->file, s->pos, "`for a, b in ...` unpacks a list of tuples (or `d.items()`); over %s the loop binds one name", ps_type_str(self->a, s->iter->type))
                 if not isrange:
                     lit4: *PsType = self->check_expr(s->iter)
                     # a value of a type that implements `Iterable` (40.3/D3):

@@ -1109,15 +1109,15 @@ static void emit_stmt(StrBuf *b, Stmt *s, int32_t ind) {
             indent(b, ind);
             StrBuf_printf(b, "for (%s = ", s->var);
             if (s->from != NULL) {
-                emit_expr(b, s->from, 0);
+                emit_expr(b, s->from, PR_ASSIGN);
             } else {
                 StrBuf_putc(b, '0');
             }
             StrBuf_printf(b, "; %s %s ", s->var, (step_is_negative(s->step) ? ">" : "<"));
-            emit_expr(b, s->to, 0);
+            emit_expr(b, s->to, PR_REL + 1);
             StrBuf_printf(b, "; %s += ", s->var);
             if (s->step != NULL) {
-                emit_expr(b, s->step, 0);
+                emit_expr(b, s->step, PR_ASSIGN);
             } else {
                 StrBuf_putc(b, '1');
             }

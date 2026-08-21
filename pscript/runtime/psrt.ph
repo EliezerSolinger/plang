@@ -775,6 +775,15 @@ struct PsBuffer:
     gone_from: *void     # the context that gave it away, or nothing
 
 # ---------- buffers (19.4/52.3) ----------
+def ps_sum_int(ctx: *PsCtx, l: *PsList, start: i64, file: const *char, line: i32) -> i64
+def ps_sum_float(ctx: *PsCtx, l: *PsList, start: f64) -> f64
+def ps_any(l: *PsList) -> bool
+def ps_all(l: *PsList) -> bool
+def ps_round(x: f64) -> i64
+def ps_round_n(x: f64, n: i64) -> f64
+def ps_list_min_int(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> i64
+def ps_list_min_float(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> f64
+def ps_list_min_str(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> *PsStr
 def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer
 def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer)
 def ps_buffer_size(b: *PsBuffer) -> i64
@@ -1073,6 +1082,18 @@ def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr
 def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsStr
 def ps_str_split(ctx: *PsCtx, s: *PsStr, sep: *PsStr) -> *PsList
 def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64
+def ps_str_count(s: *PsStr, needle: *PsStr) -> i64
+def ps_str_nchars(s: *PsStr) -> i64
+def ps_str_rfind(s: *PsStr, needle: *PsStr) -> i64
+def ps_str_find_from(ctx: *PsCtx, s: *PsStr, needle: *PsStr, start: i64) -> i64
+def ps_str_index_of(ctx: *PsCtx, s: *PsStr, needle: *PsStr, from_right: bool, file: const *char, line: i32) -> i64
+def ps_str_is_space_cp(cp: i32) -> bool
+def ps_str_split_ws(ctx: *PsCtx, s: *PsStr) -> *PsList
+def ps_str_splitlines(ctx: *PsCtx, s: *PsStr) -> *PsList
+def ps_str_removeaffix(ctx: *PsCtx, s: *PsStr, p: *PsStr, suffix: bool) -> *PsStr
+def ps_str_strip_chars(ctx: *PsCtx, s: *PsStr, set: *PsStr, mode: i32) -> *PsStr
+def ps_str_pad(ctx: *PsCtx, s: *PsStr, width: i64, fill: *PsStr, mode: i32, file: const *char, line: i32) -> *PsStr
+def ps_str_zfill(ctx: *PsCtx, s: *PsStr, width: i64) -> *PsStr
 def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool
 def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_upper(ctx: *PsCtx, s: *PsStr) -> *PsStr
@@ -1114,6 +1135,14 @@ def ps_list_push(ctx: *PsCtx, l: *PsList) -> *char
 def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsList
 # `xs.insert(i, v)` returns where to write; `remove_at` drops one element
 def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool
+def ps_list_index(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32, file: const *char, line: i32) -> i64
+def ps_list_count(l: *PsList, needle: const *void, kind: i32) -> i64
+def ps_list_remove(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32, file: const *char, line: i32)
+def ps_list_clear(l: *PsList)
+def ps_list_pop_at(ctx: *PsCtx, l: *PsList, i: i64, has_i: bool, file: const *char, line: i32) -> i64
+def ps_list_concat(ctx: *PsCtx, a: *PsList, b: *PsList) -> *PsList
+def ps_list_repeat(ctx: *PsCtx, l: *PsList, n: i64) -> *PsList
+def ps_list_extend(ctx: *PsCtx, l: *PsList, b: *PsList)
 def ps_list_insert(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> *char
 def ps_list_remove_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32)
 def ps_list_reverse(l: *PsList)
@@ -1140,6 +1169,11 @@ def ps_dict_nent(d: *PsDict) -> i64
 def ps_dict_live(d: *PsDict, i: i64) -> bool
 def ps_dict_key_at(d: *PsDict, i: i64) -> *char
 def ps_dict_val_at(d: *PsDict, i: i64) -> *char
+def ps_set_op(ctx: *PsCtx, a: *PsDict, b: *PsDict, op: i32) -> *PsDict
+def ps_set_subset(a: *PsDict, b: *PsDict, strict: bool) -> bool
+def ps_dict_clear(d: *PsDict)
+def ps_dict_copy(ctx: *PsCtx, d: *PsDict) -> *PsDict
+def ps_dict_update(ctx: *PsCtx, a: *PsDict, b: *PsDict)
 def ps_dict_keys(ctx: *PsCtx, d: *PsDict) -> *PsList
 def ps_dict_values(ctx: *PsCtx, d: *PsDict) -> *PsList
 

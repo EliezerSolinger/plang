@@ -1887,6 +1887,123 @@ def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool
         i += 1
     return False
 
+# ---------- 104: o resto dos métodos de lista ----------
+#
+# `index`, `count` e `remove` procuram por CONTEÚDO, com a mesma regra do `in`
+# (55.4) e do dict: texto compara texto, o resto compara bytes. Procurar por
+# ponteiro daria "não achei" para duas strings iguais escritas em lugares
+# diferentes, que é o erro que a 55.4 já tinha proibido.
+static def ps_list_find(l: *PsList, needle: const *void, kind: i32) -> i64:
+    if l == None:
+        return -1
+    base: *char = ps_list_base(l)
+    i: i64 = 0
+    while i < l->len:
+        p: *char = base + usize(i) * usize(l->esize)
+        if kind == PS_K_STR:
+            if ps_str_eq(*(**PsStr)(p), *(**PsStr)(needle)):
+                return i
+        elif memcmp(p, needle, usize(l->esize)) == 0:
+            return i
+        i += 1
+    return -1
+
+def ps_list_index(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32, file: const *char, line: i32) -> i64:
+    i: i64 = ps_list_find(l, needle, kind)
+    if i < 0:
+        ps_raise(ctx, "index(): the value is not in the list", PS_CAT_VALUE, file, line)
+        return 0
+    return i
+
+def ps_list_count(l: *PsList, needle: const *void, kind: i32) -> i64:
+    if l == None:
+        return 0
+    base: *char = ps_list_base(l)
+    n: i64 = 0
+    i: i64 = 0
+    while i < l->len:
+        p: *char = base + usize(i) * usize(l->esize)
+        if kind == PS_K_STR:
+            if ps_str_eq(*(**PsStr)(p), *(**PsStr)(needle)):
+                n += 1
+        elif memcmp(p, needle, usize(l->esize)) == 0:
+            n += 1
+        i += 1
+    return n
+
+def ps_list_remove(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32, file: const *char, line: i32):
+    i: i64 = ps_list_find(l, needle, kind)
+    if i < 0:
+        ps_raise(ctx, "remove(): the value is not in the list", PS_CAT_VALUE, file, line)
+        return
+    ps_list_remove_at(ctx, l, i, file, line)
+
+def ps_list_clear(l: *PsList):
+    if l != None:
+        l->len = 0
+
+# `pop` devolve o elemento E o tira, então a ORDEM importa: o índice é
+# normalizado aqui (é onde a lista vazia levanta), o valor é lido no chamador
+# com esse índice, e só depois o buraco é fechado. Fazer o contrário lê o
+# elemento que veio depois — ou, no último, memória de ninguém.
+def ps_list_pop_at(ctx: *PsCtx, l: *PsList, i: i64, has_i: bool, file: const *char, line: i32) -> i64:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "pop() from an empty list", PS_CAT_INDEX, file, line)
+        return 0
+    if not has_i:
+        return l->len - 1
+    k: i64 = i + l->len if i < 0 else i
+    if k < 0 or k >= l->len:
+        ps_raise(ctx, "pop index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return k
+
+# `a + b` e `a * n` (a lista, como o Python): uma lista NOVA, com os mesmos
+# bytes de elemento — o que copia é a lista, não os objetos dentro dela
+def ps_list_concat(ctx: *PsCtx, a: *PsList, b: *PsList) -> *PsList:
+    out: *PsList = ps_list_slice(ctx, a, 0, 0, 1, False, False, "<concat>", 0)
+    if b != None and b->len > 0:
+        i: i64 = 0
+        base: *char = ps_list_base(b)
+        while i < b->len:
+            memcpy(ps_list_push(ctx, out), base + usize(i) * usize(b->esize), usize(b->esize))
+            # `ps_list_push` pode COLETAR, e coletar move `b`: a base tem de ser
+            # relida a cada volta em vez de guardada antes do laço
+            base = ps_list_base(b)
+            i += 1
+    return out
+
+def ps_list_repeat(ctx: *PsCtx, l: *PsList, n: i64) -> *PsList:
+    out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<repeat>", 0)
+    if n <= 0:
+        out->len = 0
+        return out
+    k: i64 = 1
+    while k < n:
+        i: i64 = 0
+        while i < l->len:
+            memcpy(ps_list_push(ctx, out), ps_list_base(l) + usize(i) * usize(l->esize), usize(l->esize))
+            i += 1
+        k += 1
+    return out
+
+def ps_list_extend(ctx: *PsCtx, l: *PsList, b: *PsList):
+    if l == None or b == None or b->len == 0:
+        return
+    if l == b:
+        # `xs.extend(xs)` no Python duplica a lista, e o laço ingênuo não para:
+        # cada push aumenta o limite que ele está testando
+        n: i64 = b->len
+        i: i64 = 0
+        while i < n:
+            memcpy(ps_list_push(ctx, l), ps_list_base(l) + usize(i) * usize(l->esize), usize(l->esize))
+            i += 1
+        return
+    i2: i64 = 0
+    while i2 < b->len:
+        memcpy(ps_list_push(ctx, l), ps_list_base(b) + usize(i2) * usize(b->esize), usize(b->esize))
+        i2 += 1
+
 def ps_list_insert(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> *char:
     k: i64 = i + l->len if i < 0 else i
     if k < 0 or k > l->len:
@@ -1957,6 +2074,111 @@ def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList:
     else:
         qsort(base, usize(out->len), usize(out->esize), ps_cmp_str)
     return out
+
+# ---------- 104: `sum`, `any`, `all`, `round`, e min/max de uma lista ----------
+#
+# Todos percorrem a lista aqui e não numa comprehension gerada: o percurso é o
+# mesmo, e o que se ganha é o COMPORTAMENTO do Python nas bordas — `sum([])` é
+# 0, `all([])` é True (não há contraexemplo), `any([])` é False, e `min([])`
+# levanta em vez de devolver um zero que parece resposta.
+def ps_sum_int(ctx: *PsCtx, l: *PsList, start: i64, file: const *char, line: i32) -> i64:
+    t: i64 = start
+    if l == None:
+        return t
+    b: *i64 = (*i64)(ps_list_base(l))
+    for i in range(l->len):
+        t = ps_add(ctx, t, b[i], file, line)
+    return t
+
+def ps_sum_float(ctx: *PsCtx, l: *PsList, start: f64) -> f64:
+    t: f64 = start
+    if l == None:
+        return t
+    b: *f64 = (*f64)(ps_list_base(l))
+    for i in range(l->len):
+        t += b[i]
+    return t
+
+def ps_any(l: *PsList) -> bool:
+    if l == None:
+        return False
+    b: *bool = (*bool)(ps_list_base(l))
+    for i in range(l->len):
+        if b[i]:
+            return True
+    return False
+
+def ps_all(l: *PsList) -> bool:
+    if l == None:
+        return True
+    b: *bool = (*bool)(ps_list_base(l))
+    for i in range(l->len):
+        if not b[i]:
+            return False
+    return True
+
+# `round` do Python é MEIO PARA O PAR: round(2.5) é 2 e round(3.5) é 4. É o modo
+# de arredondamento padrão do IEEE, então `rint` faz exatamente isso — escrever
+# `floor(x + 0.5)` daria 3 em round(2.5) e divergiria em todo meio exato.
+def ps_round(x: f64) -> i64:
+    return i64(rint(x))
+
+# Com casas decimais o Python devolve FLOAT, e arredonda o valor DECIMAL — o que
+# não é a mesma coisa que escalar por 10^n e arredondar em binário. O caso que
+# mostra a diferença é `round(2.675, 2)`: o double mais próximo de 2.675 é
+# 2.674999999999999822..., logo a resposta certa é 2.67, mas `2.675 * 100` dá
+# exatamente 267.5 (os erros se cancelam) e o arredondamento binário devolve
+# 2.68. É o caminho que o CPython usa quando não tem o dtoa de David Gay:
+# imprimir com n casas — a libc arredonda corretamente, pelo valor exato — e ler
+# de volta. Custa um snprintf e acerta todos os meios.
+def ps_round_n(x: f64, n: i64) -> f64:
+    if n < 0:
+        # casas NEGATIVAS arredondam para a dezena/centena: aí não há texto com
+        # n casas para pedir, e escalar é exato porque 10^k é exato até 10^22
+        p2: f64 = pow(10.0, f64(-n))
+        return rint(x / p2) * p2
+    if n > 100 or x != x or x - x != 0.0:
+        # mais casas do que um double distingue, ou nan/inf: o valor é ele mesmo
+        return x
+    buf: char[512]
+    snprintf(buf, sizeof(buf), "%.*f", int(n), x)
+    return strtod(buf, None)
+
+def ps_list_min_int(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> i64:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "min() or max() of an empty list", PS_CAT_VALUE, file, line)
+        return 0
+    b: *i64 = (*i64)(ps_list_base(l))
+    v: i64 = b[0]
+    for i in range(1, l->len):
+        if (b[i] > v) if want_max else (b[i] < v):
+            v = b[i]
+    return v
+
+def ps_list_min_float(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> f64:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "min() or max() of an empty list", PS_CAT_VALUE, file, line)
+        return 0.0
+    b: *f64 = (*f64)(ps_list_base(l))
+    v: f64 = b[0]
+    for i in range(1, l->len):
+        if (b[i] > v) if want_max else (b[i] < v):
+            v = b[i]
+    return v
+
+def ps_list_min_str(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> *PsStr:
+    if l == None or l->len == 0:
+        ps_raise(ctx, "min() or max() of an empty list", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    b: **PsStr = (**PsStr)(ps_list_base(l))
+    v: *PsStr = b[0]
+    for i in range(1, l->len):
+        # `ps_str_lt` devolve -1/0/1 e compara BYTES, que em UTF-8 é a mesma
+        # ordem dos pontos de código — é o que o Python compara
+        c: i32 = ps_str_lt(b[i], v)
+        if (c > 0) if want_max else (c < 0):
+            v = b[i]
+    return v
 
 # ---------- buffers (19.4/52.3) ----------
 def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer:
@@ -4920,6 +5142,104 @@ def ps_dict_val_at(d: *PsDict, i: i64) -> *char:
 #
 # The element size and whether it is a reference come from the dict itself, so
 # the lowering does not have to say them twice.
+# ---------- 104: os operadores de conjunto ----------
+#
+# `|`, `&`, `-` e `^` entre sets, como no Python: um set NOVO, e a ordem do
+# resultado é a de inserção (91.1) — primeiro o que veio do lado esquerdo, na
+# ordem dele, depois o do direito. Python não promete ordem em set, mas ter uma
+# ordem definida é melhor do que ter uma que depende do hash.
+static def ps_set_add_all(ctx: *PsCtx, out: *PsDict, d: *PsDict, only_in: *PsDict, want: bool):
+    if d == None:
+        return
+    i: i64 = 0
+    while i < ps_dict_nent(d):
+        if ps_dict_live(d, i):
+            kp: *char = ps_dict_key_at(d, i)
+            if only_in == None or ps_dict_has(only_in, kp) == want:
+                ps_dict_put(ctx, out, kp)
+        i += 1
+
+def ps_set_op(ctx: *PsCtx, a: *PsDict, b: *PsDict, op: i32) -> *PsDict:
+    out: *PsDict = ps_dict_new(ctx, a->ksize, a->vsize, a->kkind, a->kref, a->vref)
+    if op == 0:
+        # união
+        ps_set_add_all(ctx, out, a, None, False)
+        ps_set_add_all(ctx, out, b, None, False)
+    elif op == 1:
+        # interseção: os de A que estão em B
+        ps_set_add_all(ctx, out, a, b, True)
+    elif op == 2:
+        # diferença: os de A que NÃO estão em B
+        ps_set_add_all(ctx, out, a, b, False)
+    else:
+        # diferença simétrica: os que estão num só dos dois
+        ps_set_add_all(ctx, out, a, b, False)
+        ps_set_add_all(ctx, out, b, a, False)
+    return out
+
+# `<=` é subconjunto e `>=` é superconjunto, os nomes que o Python usa nos
+# operadores. `<` e `>` são os próprios, ESTRITOS.
+def ps_set_subset(a: *PsDict, b: *PsDict, strict: bool) -> bool:
+    if a == None:
+        return True
+    if b == None:
+        return a->n == 0
+    if a->n > b->n or (strict and a->n == b->n):
+        return False
+    i: i64 = 0
+    while i < ps_dict_nent(a):
+        if ps_dict_live(a, i):
+            if not ps_dict_has(b, ps_dict_key_at(a, i)):
+                return False
+        i += 1
+    return True
+
+# ---------- 104: `clear`, `copy` e `update` de dict/set ----------
+def ps_dict_clear(d: *PsDict):
+    if d == None:
+        return
+    d->nent = 0
+    d->n = 0
+    # a tabela de índices volta a VAZIA inteira, que é o estado em que ela nasce
+    # — zero é um número de entrada perfeitamente válido, então cada slot tem de
+    # ser escrito de propósito
+    k: i64 = 0
+    while k < d->cap:
+        ps_idx_set(d, k, PS_IDX_EMPTY)
+        k += 1
+
+# Uma cópia RASA, como a do Python: as chaves e os valores são os mesmos bytes,
+# então dois dicts passam a apontar para os mesmos objetos. O que não é
+# compartilhado é a tabela — pôr no novo não mexe no velho.
+def ps_dict_copy(ctx: *PsCtx, d: *PsDict) -> *PsDict:
+    if d == None:
+        return None
+    out: *PsDict = ps_dict_new(ctx, d->ksize, d->vsize, d->kkind, d->kref, d->vref)
+    out->vtrace = d->vtrace
+    i: i64 = 0
+    while i < ps_dict_nent(d):
+        if ps_dict_live(d, i):
+            kp: *char = ps_dict_key_at(d, i)
+            slot: *char = ps_dict_put(ctx, out, kp)
+            if d->vsize > 0:
+                memcpy(slot, ps_dict_val_at(d, i), usize(d->vsize))
+        i += 1
+    return out
+
+# `a.update(b)`: as chaves de b entram em a, e as que já existem são
+# SOBRESCRITAS — a ordem de inserção de uma chave que já estava não muda (91.1),
+# porque `ps_dict_put` devolve o slot que já existia.
+def ps_dict_update(ctx: *PsCtx, a: *PsDict, b: *PsDict):
+    if a == None or b == None or a == b:
+        return
+    i: i64 = 0
+    while i < ps_dict_nent(b):
+        if ps_dict_live(b, i):
+            slot: *char = ps_dict_put(ctx, a, ps_dict_key_at(b, i))
+            if b->vsize > 0 and a->vsize > 0:
+                memcpy(slot, ps_dict_val_at(b, i), usize(b->vsize))
+        i += 1
+
 def ps_dict_keys(ctx: *PsCtx, d: *PsDict) -> *PsList:
     out: *PsList = ps_list_new(ctx, d->ksize, d->kref, d->n)
     i: i64 = 0
@@ -5479,6 +5799,267 @@ def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64:
                 return chars
             chars += 1
     return -1
+
+# `uc_decode` mora com a tabela de caixa, mais abaixo; as funções daqui
+# precisam dele para andar de carácter em carácter
+static def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32
+
+# ---------- 104: o resto dos métodos de str ----------
+#
+# Todo índice que sai daqui é de CARÁCTER, não de byte, porque é o que `s[i]`
+# indexa e o que `len` conta (3.4) — a busca acha em bytes e conta caracteres
+# pelo caminho, que é o que `ps_str_find` já fazia.
+def ps_str_count(s: *PsStr, needle: *PsStr) -> i64:
+    if needle->len == 0:
+        # o Python conta as POSIÇÕES entre caracteres, que são len+1
+        return ps_str_nchars(s) + 1
+    if needle->len > s->len:
+        return 0
+    n: i64 = 0
+    i: usize = 0
+    while i + usize(needle->len) <= usize(s->len):
+        if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+            n += 1
+            # NÃO sobrepostas, como no Python: "aaa".count("aa") é 1
+            i += usize(needle->len)
+        else:
+            i += 1
+    return n
+
+# quantos CARACTERES tem
+def ps_str_nchars(s: *PsStr) -> i64:
+    # o número de caracteres já está no objeto, contado uma vez na criação (3.4)
+    return i64(s->nchars)
+
+def ps_str_rfind(s: *PsStr, needle: *PsStr) -> i64:
+    if needle->len == 0:
+        return ps_str_nchars(s)
+    if needle->len > s->len:
+        return -1
+    best: i64 = -1
+    chars: i64 = 0
+    for i in range(usize(s->len) - usize(needle->len) + 1):
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            if memcmp(s->data + i, needle->data, usize(needle->len)) == 0:
+                best = chars
+            chars += 1
+    return best
+
+# `find` a partir de um começo, contado em CARACTERES (o `find(sub, start)` do
+# Python). Um começo negativo conta do fim, como uma fatia.
+def ps_str_find_from(ctx: *PsCtx, s: *PsStr, needle: *PsStr, start: i64) -> i64:
+    nch: i64 = ps_str_nchars(s)
+    st: i64 = start + nch if start < 0 else start
+    if st < 0:
+        st = 0
+    if st > nch:
+        return -1 if needle->len > 0 else nch
+    # onde esse carácter começa, em bytes
+    boff: usize = usize(s->len)
+    seen: i64 = 0
+    for i in range(usize(s->len)):
+        if (u8(s->data[i]) & 0xC0) != 0x80:
+            if seen == st:
+                boff = i
+                break
+            seen += 1
+    if st == nch:
+        boff = usize(s->len)
+    if needle->len == 0:
+        return st
+    if usize(needle->len) > usize(s->len) - boff:
+        return -1
+    chars: i64 = st
+    i2: usize = boff
+    while i2 + usize(needle->len) <= usize(s->len):
+        if (u8(s->data[i2]) & 0xC0) != 0x80:
+            if memcmp(s->data + i2, needle->data, usize(needle->len)) == 0:
+                return chars
+            chars += 1
+        i2 += 1
+    return -1
+
+def ps_str_index_of(ctx: *PsCtx, s: *PsStr, needle: *PsStr, from_right: bool, file: const *char, line: i32) -> i64:
+    i: i64 = ps_str_rfind(s, needle) if from_right else ps_str_find(ctx, s, needle)
+    if i < 0:
+        ps_raise(ctx, "substring not found", PS_CAT_VALUE, file, line)
+        return 0
+    return i
+
+# O espaço em branco do Python, que é um conjunto FECHADO de 29 pontos de código
+# (`str.isspace()` para todo o intervalo, conferido contra o Python 3 / Unicode
+# 15). Está aqui à mão em vez de numa tabela gerada porque 29 pontos em 8 faixas
+# não justificam uma tabela — e o oráculo compara os dois de qualquer forma.
+def ps_str_is_space_cp(cp: i32) -> bool:
+    if cp == 0x20 or (cp >= 0x09 and cp <= 0x0D) or (cp >= 0x1C and cp <= 0x1F):
+        return True
+    if cp == 0x85 or cp == 0xA0 or cp == 0x1680:
+        return True
+    if cp >= 0x2000 and cp <= 0x200A:
+        return True
+    if cp == 0x2028 or cp == 0x2029 or cp == 0x202F or cp == 0x205F or cp == 0x3000:
+        return True
+    return False
+
+# `split()` SEM separador: parte em CORRIDAS de espaço, e não devolve pedaço
+# vazio nenhum — nem no começo nem no fim. É outra função e não o `split(sep)`
+# com um espaço porque o resultado é diferente: `" a  b ".split()` dá dois
+# pedaços e `" a  b ".split(" ")` dá cinco.
+def ps_str_split_ws(ctx: *PsCtx, s: *PsStr) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 0)
+    i: usize = 0
+    n: usize = usize(s->len)
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        if ps_str_is_space_cp(cp):
+            i += w
+            continue
+        st: usize = i
+        while i < n:
+            w2: usize = 1
+            cp2: i32 = uc_decode(s, i, ref w2)
+            if ps_str_is_space_cp(cp2):
+                break
+            i += w2
+        piece: *PsStr = ps_str_new(ctx, s->data + st, i - st)
+        *(**PsStr)(ps_list_push(ctx, out)) = piece
+    return out
+
+# `splitlines()`: as fronteiras de linha do Python, que são MAIS do que `\n` —
+# `\r`, `\r\n`, e os separadores que o Unicode define. O terminador não vem no
+# pedaço, e um terminador final NÃO produz um pedaço vazio.
+static def ps_line_break(cp: i32) -> bool:
+    if cp == 0x0A or cp == 0x0B or cp == 0x0C or cp == 0x0D or cp == 0x1C or cp == 0x1D or cp == 0x1E:
+        return True
+    return cp == 0x85 or cp == 0x2028 or cp == 0x2029
+
+def ps_str_splitlines(ctx: *PsCtx, s: *PsStr) -> *PsList:
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 0)
+    i: usize = 0
+    n: usize = usize(s->len)
+    st: usize = 0
+    while i < n:
+        w: usize = 1
+        cp: i32 = uc_decode(s, i, ref w)
+        if ps_line_break(cp):
+            *(**PsStr)(ps_list_push(ctx, out)) = ps_str_new(ctx, s->data + st, i - st)
+            i += w
+            if cp == 0x0D and i < n and s->data[i] == '\n':
+                i += 1
+            st = i
+        else:
+            i += w
+    if st < n:
+        *(**PsStr)(ps_list_push(ctx, out)) = ps_str_new(ctx, s->data + st, n - st)
+    return out
+
+def ps_str_removeaffix(ctx: *PsCtx, s: *PsStr, p: *PsStr, suffix: bool) -> *PsStr:
+    if p->len == 0 or p->len > s->len:
+        return s
+    if suffix:
+        if memcmp(s->data + usize(s->len) - usize(p->len), p->data, usize(p->len)) != 0:
+            return s
+        return ps_str_new(ctx, s->data, usize(s->len) - usize(p->len))
+    if memcmp(s->data, p->data, usize(p->len)) != 0:
+        return s
+    return ps_str_new(ctx, s->data + usize(p->len), usize(s->len) - usize(p->len))
+
+# `strip(chars)`: tira qualquer um dos CARACTERES do conjunto, das duas pontas —
+# não é um prefixo. mode 0 as duas, 1 só à esquerda, 2 só à direita.
+static def ps_chars_has(set: *PsStr, cp: i32) -> bool:
+    i: usize = 0
+    while i < usize(set->len):
+        w: usize = 1
+        c: i32 = uc_decode(set, i, ref w)
+        if c == cp:
+            return True
+        i += w
+    return False
+
+def ps_str_strip_chars(ctx: *PsCtx, s: *PsStr, set: *PsStr, mode: i32) -> *PsStr:
+    a: usize = 0
+    b: usize = usize(s->len)
+    if mode != 2:
+        while a < b:
+            w: usize = 1
+            cp: i32 = uc_decode(s, a, ref w)
+            if not ps_chars_has(set, cp):
+                break
+            a += w
+    if mode != 1:
+        while b > a:
+            # anda para trás até o começo do último carácter
+            e: usize = b - usize(1)
+            while e > a and (u8(s->data[e]) & 0xC0) == 0x80:
+                e -= usize(1)
+            w2: usize = 1
+            cp2: i32 = uc_decode(s, e, ref w2)
+            if not ps_chars_has(set, cp2):
+                break
+            b = e
+    return ps_str_new(ctx, s->data + a, b - a)
+
+# `ljust`, `rjust`, `center` e `zfill`: a largura conta CARACTERES, e o
+# preenchimento é um carácter. mode 0 esquerda (ljust), 1 direita (rjust),
+# 2 centro. No centro o Python põe a sobra à DIREITA.
+def ps_str_pad(ctx: *PsCtx, s: *PsStr, width: i64, fill: *PsStr, mode: i32, file: const *char, line: i32) -> *PsStr:
+    if fill->len == 0 or ps_str_nchars(fill) != 1:
+        ps_raise(ctx, "the fill has to be exactly one character", PS_CAT_VALUE, file, line)
+        return s
+    have: i64 = ps_str_nchars(s)
+    if width <= have:
+        return s
+    total: i64 = width - have
+    left: i64 = 0
+    if mode == 1:
+        left = total
+    elif mode == 2:
+        # A regra do `center` do CPython, com o termo de correção e tudo:
+        # `left = marg // 2 + (marg & width & 1)`. Metade para cada lado deixa
+        # a sobra à direita, mas quando a folga E a largura são ímpares o
+        # Python a joga para a ESQUERDA — `"hi".center(7, "*")` é `***hi**`.
+        # Sem esse termo o resultado difere em metade dos casos ímpares.
+        left = total / 2 + (total & width & 1)
+    right: i64 = total - left
+    fl: usize = usize(fill->len)
+    nb: usize = usize(s->len) + usize(left + right) * fl
+    buf: *char = (*char)(malloc(nb + usize(1)))
+    k: usize = 0
+    for i in range(left):
+        memcpy(buf + k, fill->data, fl)
+        k += fl
+    memcpy(buf + k, s->data, usize(s->len))
+    k += usize(s->len)
+    for i in range(right):
+        memcpy(buf + k, fill->data, fl)
+        k += fl
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
+
+# `zfill`: zeros à esquerda, mas o SINAL fica na frente deles — `"-42".zfill(5)`
+# é `"-0042"` e não `"00-42"`
+def ps_str_zfill(ctx: *PsCtx, s: *PsStr, width: i64) -> *PsStr:
+    have: i64 = ps_str_nchars(s)
+    if width <= have:
+        return s
+    pad: i64 = width - have
+    has_sign: bool = s->len > 0 and (s->data[0] == '+' or s->data[0] == '-')
+    nb: usize = usize(s->len) + usize(pad)
+    buf: *char = (*char)(malloc(nb + usize(1)))
+    k: usize = 0
+    if has_sign:
+        buf[0] = s->data[0]
+        k = 1
+    for i in range(pad):
+        buf[k] = '0'
+        k += 1
+    memcpy(buf + k, s->data + (usize(1) if has_sign else usize(0)), usize(s->len) - (usize(1) if has_sign else usize(0)))
+    k += usize(s->len) - (usize(1) if has_sign else usize(0))
+    out: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return out
 
 def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
     if needle->len == 0:

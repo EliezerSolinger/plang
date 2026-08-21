@@ -944,18 +944,26 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             emit_expr(b, s->cond, 0)
             b->puts(");\n")
         case ST_FOR:
+            # The three expressions of a `for` are each printed INSIDE a larger
+            # one — `v = <from>`, `v < <to>`, `v += <step>` — so none of them may
+            # be emitted at precedence 0. A COMMA expression there reassociates
+            # and the meaning changes silently: `v < (a, b)` printed flat reads
+            # as `(v < a), b`, whose value is `b`, so the loop compares against
+            # the wrong thing and never stops. The lowering produces exactly that
+            # shape whenever a bound needs a temporary — `zip(a, b)` becomes
+            # `min(len(a), len(b))`, and `min` binds its arguments first.
             indent(b, ind)
             b->printf("for (%s = ", s->var)
             if s->from != None:
-                emit_expr(b, s->from, 0)
+                emit_expr(b, s->from, PR_ASSIGN)
             else:
                 b->putc('0')
             # a negative literal step reverses the comparison (spec §7.3)
             b->printf("; %s %s ", s->var, ">" if step_is_negative(s->step) else "<")
-            emit_expr(b, s->to, 0)
+            emit_expr(b, s->to, PR_REL + 1)
             b->printf("; %s += ", s->var)
             if s->step != None:
-                emit_expr(b, s->step, 0)
+                emit_expr(b, s->step, PR_ASSIGN)
             else:
                 b->putc('1')
             b->puts(") {\n")

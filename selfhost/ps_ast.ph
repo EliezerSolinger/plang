@@ -136,6 +136,15 @@ struct PsExpr:
     params: *PsParam    # PE_LAMBDA
     nparams: i32
     var: const *char    # PE_COMPREHEND / PE_WALRUS binding
+    cvars: **char       # PE_COMPREHEND: TODOS os nomes que ela amarra, na ordem
+    ncvars: i32         #   escrita — `for i, v in enumerate(xs)` amarra dois.
+                        #   `var` continua sendo o do LAÇO (o que o range anda)
+    sug_done: bool      # já TIPADO por uma reescrita da 104 (o desempacotar de
+                        #   `for k, v in pares`): olhar de novo não é errado, é
+                        #   desnecessário, e em `d.items()` seria re-reescrever
+    sug_names: **char   # amarrações que entram como primeiros statements do
+    sug_vals: **PsExpr  #   corpo da comprehension (104): `v = xs[__k]`. A sema
+    nsug: i32           #   as constrói e TIPA, então o lowering só as emite
     caps: *PsParam      # PE_LAMBDA: what it captured, BY VALUE (19.2) — the
     ncaps: i32          #   sema collects them, the lowering makes the struct
     is_in: bool         # argument written `in x` at a call site (55.4)

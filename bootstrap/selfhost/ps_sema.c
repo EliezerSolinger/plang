@@ -1661,6 +1661,32 @@ static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assi
 
 static void PsSema_check_block(PsSema *self, PsBlock *b);
 
+static PsExpr *PsSema_sug_name(PsSema *self, const char *t, Pos pos);
+
+static PsExpr *PsSema_sug_int(PsSema *self, int32_t v, Pos pos);
+
+static PsExpr *PsSema_sug_call1(PsSema *self, const char *fn, PsExpr *a1, Pos pos);
+
+static PsExpr *PsSema_sug_bin(PsSema *self, int32_t op, PsExpr *l, PsExpr *r, Pos pos);
+
+static PsExpr *PsSema_sug_index(PsSema *self, PsExpr *l, PsExpr *r, Pos pos);
+
+static PsStmt *PsSema_sug_bind(PsSema *self, const char *name, PsExpr *val, Pos pos);
+
+static int32_t PsSema_sug_kind(PsSema *self, PsStmt *s);
+
+static void PsSema_sug_hoist(PsSema *self, PsBlock *b);
+
+static void PsSema_sug_deny(PsSema *self, PsExpr *a, const char *outer);
+
+static void PsSema_sug_comp(PsSema *self, PsExpr *e);
+
+static int PsSema_sug_unpack(PsSema *self, PsStmt *s);
+
+static void PsSema_sug_body(PsSema *self, PsStmt *s, char **names, PsExpr **vals, int32_t n);
+
+static void PsSema_sug_for(PsSema *self, PsStmt *s, int32_t k);
+
 static void PsSema_check_stmt(PsSema *self, PsStmt *s);
 
 static PsType *PsSema_check_expr(PsSema *self, PsExpr *e);
@@ -1820,16 +1846,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_351_9 = &self->locals[self->nlocals];
-        __with_351_9->name = name;
-        __with_351_9->type = t;
-        __with_351_9->assigned = assigned;
-        __with_351_9->is_const = is_const;
-        __with_351_9->frozen = 0;
-        __with_351_9->is_module = 0;
-        __with_351_9->opt_type = NULL;
-        __with_351_9->any_type = NULL;
-        __with_351_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_364_9 = &self->locals[self->nlocals];
+        __with_364_9->name = name;
+        __with_364_9->type = t;
+        __with_364_9->assigned = assigned;
+        __with_364_9->is_const = is_const;
+        __with_364_9->frozen = 0;
+        __with_364_9->is_module = 0;
+        __with_364_9->opt_type = NULL;
+        __with_364_9->any_type = NULL;
+        __with_364_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2046,6 +2072,9 @@ static void PsSema_want(PsSema *self, PsExpr *e, PsType *got, PsType *expect, co
 static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
     if (e == NULL) {
         return NULL;
+    }
+    if (e->sug_done) {
+        return e->type;
     }
     if (e->dflt_bound) {
         return e->type;
@@ -2326,12 +2355,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_846_17 = e;
-                __with_846_17->kind = PE_CALL;
-                __with_846_17->lhs = cal8;
-                __with_846_17->args = args8;
-                __with_846_17->nargs = nc8;
-                __with_846_17->body = NULL;
+                PsExpr *__with_861_17 = e;
+                __with_861_17->kind = PE_CALL;
+                __with_861_17->lhs = cal8;
+                __with_861_17->args = args8;
+                __with_861_17->nargs = nc8;
+                __with_861_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -2567,6 +2596,7 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             break;
         }
         case PE_COMPREHEND: {
+            PsSema_sug_comp(self, e);
             int cset = e->op == TK_RBRACE && e->lhs != NULL && e->lhs->kind != PE_DESIG;
             int cdict = e->op == TK_RBRACE && e->lhs != NULL && e->lhs->kind == PE_DESIG;
             int crange = e->rhs != NULL && e->rhs->kind == PE_CALL && e->rhs->lhs != NULL && e->rhs->lhs->kind == PE_NAME && strcmp(e->rhs->lhs->text, "range") == 0;
@@ -2597,6 +2627,14 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             int hit = chint != NULL && ((cdict && chint->kind == PT_DICT) || (cset && chint->kind == PT_SET) || (!cdict && !cset && chint->kind == PT_LIST));
             self->depth += 1;
             PsSema_add_local(self, e->var, ivt, 1, 0);
+            size_t si;
+            for (si = 0; si < e->nsug; si += 1) {
+                PsType *svt = PsSema_check_expr(self, e->sug_vals[si]);
+                if (svt == NULL || svt->kind == PT_VOID) {
+                    fatal_at(self->file, e->pos, "internal: the comprehension binding for '%s' has no type", e->sug_names[si]);
+                }
+                PsSema_add_local(self, e->sug_names[si], svt, 1, 0);
+            }
             if (e->cond != NULL) {
                 PsSema_want(self, e->cond, PsSema_check_expr(self, e->cond), ps_type(self->a, PT_BOOL, e->pos), "a comprehension filter");
             }
@@ -2797,11 +2835,23 @@ static PsType *PsSema_check_binary(PsSema *self, PsExpr *e) {
             if (lt != NULL && rt != NULL && lt->kind == PT_STR && rt->kind == PT_STR) {
                 return bl;
             }
+            if (lt != NULL && rt != NULL && lt->kind == PT_SET && rt->kind == PT_SET) {
+                if (!ps_type_eq(lt->inner, rt->inner)) {
+                    fatal_at(self->file, e->pos, "cannot compare %s with %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt));
+                }
+                return bl;
+            }
             fatal_at(self->file, e->pos, "cannot order %s and %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt));
             break;
         }
         case TK_PLUS: {
             if (lt != NULL && rt != NULL && lt->kind == PT_STR && rt->kind == PT_STR) {
+                return lt;
+            }
+            if (lt != NULL && rt != NULL && lt->kind == PT_LIST && rt->kind == PT_LIST) {
+                if (!ps_type_eq(lt->inner, rt->inner)) {
+                    fatal_at(self->file, e->pos, "cannot add %s and %s: the elements would have two different types", ps_type_str(self->a, lt), ps_type_str(self->a, rt));
+                }
                 return lt;
             }
             if (!num) {
@@ -2814,7 +2864,16 @@ static PsType *PsSema_check_binary(PsSema *self, PsExpr *e) {
         }
         case TK_MINUS:
         case TK_STAR: {
+            if (e->op == TK_MINUS && lt != NULL && rt != NULL && lt->kind == PT_SET && rt->kind == PT_SET) {
+                if (!ps_type_eq(lt->inner, rt->inner)) {
+                    fatal_at(self->file, e->pos, "cannot subtract %s from %s: the elements would have two different types", ps_type_str(self->a, rt), ps_type_str(self->a, lt));
+                }
+                return lt;
+            }
             if (e->op == TK_STAR && lt != NULL && rt != NULL && lt->kind == PT_STR && rt->kind == PT_INT) {
+                return lt;
+            }
+            if (e->op == TK_STAR && lt != NULL && rt != NULL && lt->kind == PT_LIST && rt->kind == PT_INT) {
                 return lt;
             }
             if (!num) {
@@ -2866,6 +2925,12 @@ static PsType *PsSema_check_binary(PsSema *self, PsExpr *e) {
         case TK_CARET:
         case TK_SHL:
         case TK_SHR: {
+            if (e->op != TK_SHL && e->op != TK_SHR && lt != NULL && rt != NULL && lt->kind == PT_SET && rt->kind == PT_SET) {
+                if (!ps_type_eq(lt->inner, rt->inner)) {
+                    fatal_at(self->file, e->pos, "cannot combine %s and %s: the elements would have two different types", ps_type_str(self->a, lt), ps_type_str(self->a, rt));
+                }
+                return lt;
+            }
             if (lt == NULL || rt == NULL || lt->kind != PT_INT || rt->kind != PT_INT) {
                 fatal_at(self->file, e->pos, "bitwise operators expect integers, found %s and %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt));
             }
@@ -2908,6 +2973,55 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), kty, "the removed key");
                 return ps_type(self->a, PT_BOOL, e->pos);
+            }
+            if (strcmp(nm3, "clear") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "clear() takes no arguments");
+                }
+                PsSema_deny_const_mut(self, e->lhs->lhs, "clear()");
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            if (strcmp(nm3, "copy") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "copy() takes no arguments");
+                }
+                return rt;
+            }
+            if (strcmp(nm3, "update") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "update() takes one %s", (rt->kind == PT_DICT ? "dict" : "set"));
+                }
+                PsSema_deny_const_mut(self, e->lhs->lhs, "update()");
+                PsSema_check_want(self, e->args[0], rt, "the update");
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            if (strcmp(nm3, "pop") == 0 && rt->kind == PT_DICT) {
+                if (e->nargs < 1 || e->nargs > 2) {
+                    fatal_at(self->file, e->pos, "pop(key) or pop(key, default)");
+                }
+                PsSema_deny_const_mut(self, e->lhs->lhs, "pop()");
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), kty, "the key");
+                if (e->nargs == 2) {
+                    PsSema_check_want(self, e->args[1], rt->inner, "the default");
+                }
+                return rt->inner;
+            }
+            if (strcmp(nm3, "setdefault") == 0 && rt->kind == PT_DICT) {
+                if (e->nargs != 2) {
+                    fatal_at(self->file, e->pos, "setdefault(key, value) takes both: the value is what goes in when the key is NOT there");
+                }
+                PsSema_deny_const_mut(self, e->lhs->lhs, "setdefault()");
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), kty, "the key");
+                PsSema_check_want(self, e->args[1], rt->inner, "the value");
+                return rt->inner;
+            }
+            if (strcmp(nm3, "discard") == 0 && rt->kind == PT_SET) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "discard() takes one value");
+                }
+                PsSema_deny_const_mut(self, e->lhs->lhs, "discard()");
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), kty, "the discarded value");
+                return ps_type(self->a, PT_VOID, e->pos);
             }
             if (strcmp(nm3, "get") == 0 && rt->kind == PT_DICT) {
                 if (e->nargs != 2) {
@@ -2959,18 +3073,18 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1419_21 = e;
-                    __with_1419_21->kind = PE_COMPREHEND;
-                    __with_1419_21->op = TK_RBRACKET;
-                    __with_1419_21->var = kv9;
-                    __with_1419_21->lhs = pair;
-                    __with_1419_21->rhs = recv9;
-                    __with_1419_21->args = NULL;
-                    __with_1419_21->nargs = 0;
+                    PsExpr *__with_1512_21 = e;
+                    __with_1512_21->kind = PE_COMPREHEND;
+                    __with_1512_21->op = TK_RBRACKET;
+                    __with_1512_21->var = kv9;
+                    __with_1512_21->lhs = pair;
+                    __with_1512_21->rhs = recv9;
+                    __with_1512_21->args = NULL;
+                    __with_1512_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
-            fatal_at(self->file, e->pos, "a %s has %s so far", (rt->kind == PT_DICT ? "dict" : "set"), (rt->kind == PT_DICT ? "get, remove, keys, values and items() in a for" : "add, remove, keys"));
+            fatal_at(self->file, e->pos, "a %s has %s", (rt->kind == PT_DICT ? "dict" : "set"), (rt->kind == PT_DICT ? "get, pop, setdefault, remove, update, clear, copy, keys, values and items" : "add, remove, discard, update, clear, copy and keys"));
         }
         if (rt != NULL && rt->kind == PT_STR) {
             const char *nm2 = e->lhs->text;
@@ -2978,19 +3092,35 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             PsType *st5 = ps_type(self->a, PT_STR, e->pos);
             PsType *bl2 = ps_type(self->a, PT_BOOL, e->pos);
             if (strcmp(nm2, "split") == 0) {
-                if (e->nargs != 1) {
-                    fatal_at(self->file, e->pos, "split() takes one separator");
+                if (e->nargs > 1) {
+                    fatal_at(self->file, e->pos, "split() takes one separator, or nothing (which splits on runs of whitespace)");
                 }
-                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "the separator");
+                if (e->nargs == 1) {
+                    PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "the separator");
+                }
                 PsType *lw2 = ps_type(self->a, PT_LIST, e->pos);
                 lw2->inner = st5;
                 return lw2;
             }
-            if (strcmp(nm2, "strip") == 0 || strcmp(nm2, "lstrip") == 0 || strcmp(nm2, "rstrip") == 0 || strcmp(nm2, "lower") == 0 || strcmp(nm2, "upper") == 0) {
+            if (strcmp(nm2, "strip") == 0 || strcmp(nm2, "lstrip") == 0 || strcmp(nm2, "rstrip") == 0) {
+                if (e->nargs > 1) {
+                    fatal_at(self->file, e->pos, "%s() takes nothing (whitespace) or the set of characters to strip", nm2);
+                }
+                if (e->nargs == 1) {
+                    PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "the characters to strip");
+                }
+                return st5;
+            }
+            if (strcmp(nm2, "lower") == 0 || strcmp(nm2, "upper") == 0) {
                 if (e->nargs != 0) {
                     fatal_at(self->file, e->pos, "%s() takes no arguments", nm2);
                 }
                 return st5;
+            }
+            if (strcmp(nm2, "find") == 0 && e->nargs == 2) {
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "what to look for");
+                PsSema_want(self, e->args[1], PsSema_check_expr(self, e->args[1]), ps_type(self->a, PT_INT, e->pos), "where to start");
+                return ps_type(self->a, PT_INT, e->pos);
             }
             if (strcmp(nm2, "find") == 0 || strcmp(nm2, "startswith") == 0 || strcmp(nm2, "endswith") == 0 || strcmp(nm2, "contains") == 0) {
                 if (e->nargs != 1) {
@@ -3007,6 +3137,52 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 PsSema_want(self, e->args[1], PsSema_check_expr(self, e->args[1]), st5, "what to put there");
                 return st5;
             }
+            if (strcmp(nm2, "count") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "count() takes one string");
+                }
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "what to count");
+                return ps_type(self->a, PT_INT, e->pos);
+            }
+            if (strcmp(nm2, "rfind") == 0 || strcmp(nm2, "index") == 0 || strcmp(nm2, "rindex") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "%s() takes one string", nm2);
+                }
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "what to look for");
+                return ps_type(self->a, PT_INT, e->pos);
+            }
+            if (strcmp(nm2, "removeprefix") == 0 || strcmp(nm2, "removesuffix") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "%s() takes one string", nm2);
+                }
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), st5, "the affix");
+                return st5;
+            }
+            if (strcmp(nm2, "splitlines") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "splitlines() takes no arguments");
+                }
+                PsType *sl5 = ps_type(self->a, PT_LIST, e->pos);
+                sl5->inner = st5;
+                return sl5;
+            }
+            if (strcmp(nm2, "ljust") == 0 || strcmp(nm2, "rjust") == 0 || strcmp(nm2, "center") == 0) {
+                if (e->nargs < 1 || e->nargs > 2) {
+                    fatal_at(self->file, e->pos, "%s(width) or %s(width, fill)", nm2, nm2);
+                }
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), ps_type(self->a, PT_INT, e->pos), "the width");
+                if (e->nargs == 2) {
+                    PsSema_want(self, e->args[1], PsSema_check_expr(self, e->args[1]), st5, "the fill");
+                }
+                return st5;
+            }
+            if (strcmp(nm2, "zfill") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "zfill(width) takes the width");
+                }
+                PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), ps_type(self->a, PT_INT, e->pos), "the width");
+                return st5;
+            }
             if (strcmp(nm2, "join") == 0) {
                 if (e->nargs != 1) {
                     fatal_at(self->file, e->pos, "join() takes one list of strings");
@@ -3017,12 +3193,12 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 return st5;
             }
-            fatal_at(self->file, e->pos, "a string has split, strip, lstrip, rstrip, lower, upper, find, contains, startswith, endswith, replace and join so far");
+            fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center and zfill");
         }
         if (rt != NULL && rt->kind == PT_LIST) {
             const char *lm = e->lhs->text;
             e->lhs->type = rt;
-            if (strcmp(lm, "append") == 0 || strcmp(lm, "insert") == 0 || strcmp(lm, "remove_at") == 0 || strcmp(lm, "reverse") == 0) {
+            if (strcmp(lm, "append") == 0 || strcmp(lm, "insert") == 0 || strcmp(lm, "remove_at") == 0 || strcmp(lm, "reverse") == 0 || strcmp(lm, "pop") == 0 || strcmp(lm, "extend") == 0 || strcmp(lm, "clear") == 0 || strcmp(lm, "remove") == 0 || strcmp(lm, "sort") == 0) {
                 PsSema_deny_const_mut(self, e->lhs->lhs, Arena_printf(self->a, "%s()", lm));
             }
             if (strcmp(lm, "append") == 0) {
@@ -3053,7 +3229,55 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 return ps_type(self->a, PT_VOID, e->pos);
             }
-            fatal_at(self->file, e->pos, "a list has append, insert, remove_at and reverse so far, not '%s'", lm);
+            if (strcmp(lm, "pop") == 0) {
+                if (e->nargs > 1) {
+                    fatal_at(self->file, e->pos, "pop() takes nothing (the last element) or one position");
+                }
+                if (e->nargs == 1) {
+                    PsSema_want(self, e->args[0], PsSema_check_expr(self, e->args[0]), ps_type(self->a, PT_INT, e->pos), "the position");
+                }
+                return rt->inner;
+            }
+            if (strcmp(lm, "extend") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "extend() takes one list");
+                }
+                PsSema_check_want(self, e->args[0], rt, "the extension");
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            if (strcmp(lm, "clear") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "clear() takes no arguments");
+                }
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            if (strcmp(lm, "copy") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "copy() takes no arguments");
+                }
+                return rt;
+            }
+            if (strcmp(lm, "index") == 0 || strcmp(lm, "count") == 0 || strcmp(lm, "remove") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "%s() takes one value", lm);
+                }
+                PsSema_key_ok(self, rt->inner, e->pos, Arena_printf(self->a, "what %s() looks for", lm));
+                PsSema_check_want(self, e->args[0], rt->inner, Arena_printf(self->a, "what %s() looks for", lm));
+                if (strcmp(lm, "remove") == 0) {
+                    return ps_type(self->a, PT_VOID, e->pos);
+                }
+                return ps_type(self->a, PT_INT, e->pos);
+            }
+            if (strcmp(lm, "sort") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "sort() takes no arguments here; for a key write `xs = sorted(xs, key=...)`");
+                }
+                if (rt->inner == NULL || !(rt->inner->kind == PT_INT || rt->inner->kind == PT_FLOAT || rt->inner->kind == PT_STR)) {
+                    fatal_at(self->file, e->pos, "sort() orders numbers or strings; for anything else write `sorted(xs, key=...)` (which says WHAT to compare)");
+                }
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            fatal_at(self->file, e->pos, "a list has append, insert, remove_at, reverse, pop, extend, clear, copy, index, count, remove and sort, not '%s'", lm);
         }
         if (rt != NULL && rt->kind == PT_TASK) {
             const char *tm9 = e->lhs->text;
@@ -4005,12 +4229,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_2372_17 = e;
-                __with_2372_17->kind = PE_INDEX;
-                __with_2372_17->lhs = e->args[0];
-                __with_2372_17->rhs = below;
-                __with_2372_17->args = NULL;
-                __with_2372_17->nargs = 0;
+                PsExpr *__with_2557_17 = e;
+                __with_2557_17->kind = PE_INDEX;
+                __with_2557_17->lhs = e->args[0];
+                __with_2557_17->rhs = below;
+                __with_2557_17->args = NULL;
+                __with_2557_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -4220,26 +4444,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2563_17 = e;
-                __with_2563_17->kind = PE_STR;
-                __with_2563_17->text = lit7;
-                __with_2563_17->lhs = NULL;
-                __with_2563_17->rhs = NULL;
-                __with_2563_17->args = NULL;
-                __with_2563_17->nargs = 0;
+                PsExpr *__with_2748_17 = e;
+                __with_2748_17->kind = PE_STR;
+                __with_2748_17->text = lit7;
+                __with_2748_17->lhs = NULL;
+                __with_2748_17->rhs = NULL;
+                __with_2748_17->args = NULL;
+                __with_2748_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2576_13 = e;
-            __with_2576_13->kind = PE_LOWERED;
-            __with_2576_13->low = ln7;
-            __with_2576_13->lhs = NULL;
-            __with_2576_13->rhs = NULL;
-            __with_2576_13->args = NULL;
-            __with_2576_13->nargs = 0;
+            PsExpr *__with_2761_13 = e;
+            __with_2761_13->kind = PE_LOWERED;
+            __with_2761_13->low = ln7;
+            __with_2761_13->lhs = NULL;
+            __with_2761_13->rhs = NULL;
+            __with_2761_13->args = NULL;
+            __with_2761_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4301,7 +4525,64 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         }
         return ab;
     }
+    if (strcmp(name, "sum") == 0) {
+        if (e->nargs < 1 || e->nargs > 2) {
+            fatal_at(self->file, e->pos, "sum(xs) or sum(xs, start)");
+        }
+        PsType *slt = PsSema_check_expr(self, e->args[0]);
+        if (slt == NULL || slt->kind != PT_LIST || slt->inner == NULL || !(slt->inner->kind == PT_INT || slt->inner->kind == PT_FLOAT)) {
+            fatal_at(self->file, e->pos, "sum() takes a list of numbers, not %s", ps_type_str(self->a, slt));
+        }
+        if (e->nargs == 2) {
+            PsSema_want(self, e->args[1], PsSema_check_expr(self, e->args[1]), slt->inner, "the start of sum()");
+        }
+        return slt->inner;
+    }
+    if (strcmp(name, "any") == 0 || strcmp(name, "all") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "%s(xs) takes one list", name);
+        }
+        PsType *alt = PsSema_check_expr(self, e->args[0]);
+        if (alt == NULL || alt->kind != PT_LIST || alt->inner == NULL || alt->inner->kind != PT_BOOL) {
+            fatal_at(self->file, e->pos, "%s() takes a list<bool> — write the test in a comprehension: %s([x > 0 for x in xs]). There is no truthiness here (39.3), so a list of numbers has no answer", name, name);
+        }
+        return ps_type(self->a, PT_BOOL, e->pos);
+    }
+    if (strcmp(name, "round") == 0) {
+        if (e->nargs < 1 || e->nargs > 2) {
+            fatal_at(self->file, e->pos, "round(x) or round(x, digits)");
+        }
+        PsSema_check_want(self, e->args[0], ps_type(self->a, PT_FLOAT, e->pos), "the number");
+        if (e->nargs == 2) {
+            PsSema_want(self, e->args[1], PsSema_check_expr(self, e->args[1]), ps_type(self->a, PT_INT, e->pos), "the number of digits");
+            return ps_type(self->a, PT_FLOAT, e->pos);
+        }
+        return ps_type(self->a, PT_INT, e->pos);
+    }
+    if (strcmp(name, "divmod") == 0) {
+        if (e->nargs != 2) {
+            fatal_at(self->file, e->pos, "divmod(a, b) takes two numbers");
+        }
+        PsType *dt1 = PsSema_check_expr(self, e->args[0]);
+        PsType *dt2 = PsSema_check_expr(self, e->args[1]);
+        if (dt1 == NULL || dt1->kind != PT_INT || dt2 == NULL || dt2->kind != PT_INT) {
+            fatal_at(self->file, e->pos, "divmod() takes two ints (the float form is `x // y` and `x %% y` written out)");
+        }
+        PsType *dtt = ps_type(self->a, PT_TUPLE, e->pos);
+        dtt->params = Arena_alloc(self->a, 2 * sizeof(*dtt->params));
+        dtt->params[0] = ps_type(self->a, PT_INT, e->pos);
+        dtt->params[1] = ps_type(self->a, PT_INT, e->pos);
+        dtt->nparams = 2;
+        return dtt;
+    }
     if (strcmp(name, "min") == 0 || strcmp(name, "max") == 0) {
+        if (e->nargs == 1) {
+            PsType *mlt = PsSema_check_expr(self, e->args[0]);
+            if (mlt == NULL || mlt->kind != PT_LIST || mlt->inner == NULL || !(mlt->inner->kind == PT_INT || mlt->inner->kind == PT_FLOAT || mlt->inner->kind == PT_STR)) {
+                fatal_at(self->file, e->pos, "%s() takes two numbers, or one list of numbers or strings, not %s", name, ps_type_str(self->a, mlt));
+            }
+            return mlt->inner;
+        }
         if (e->nargs != 2) {
             fatal_at(self->file, e->pos, "%s() takes two numbers", name);
         }
@@ -4314,6 +4595,9 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "%s() takes two numbers of the SAME kind: %s and %s", name, ps_type_str(self->a, m1), ps_type_str(self->a, m2));
         }
         return m1;
+    }
+    if (strcmp(name, "enumerate") == 0 || strcmp(name, "zip") == 0 || strcmp(name, "reversed") == 0) {
+        fatal_at(self->file, e->pos, "%s() is not a value: it only appears as the iterable of a `for` (it is the index loop written out, not an iterator object)", name);
     }
     fatal_at(self->file, e->pos, "unknown function '%s'", name);
     return NULL;
@@ -4456,10 +4740,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_2777_17 = &ns->quals[ns->nquals];
-                __with_2777_17->name = q;
-                __with_2777_17->orig = d->path;
-                __with_2777_17->ns = sub;
+                PsNsEnt *__with_3018_17 = &ns->quals[ns->nquals];
+                __with_3018_17->name = q;
+                __with_3018_17->orig = d->path;
+                __with_3018_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4472,10 +4756,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_2789_21 = &ns->ents[ns->nents];
-                    __with_2789_21->name = local;
-                    __with_2789_21->orig = d->names[k];
-                    __with_2789_21->ns = sub;
+                    PsNsEnt *__with_3030_21 = &ns->ents[ns->nents];
+                    __with_3030_21->name = local;
+                    __with_3030_21->orig = d->names[k];
+                    __with_3030_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -4877,10 +5161,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_3170_9 = e;
-        __with_3170_9->kind = PE_NAME;
-        __with_3170_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_3170_9->lhs = NULL;
+        PsExpr *__with_3411_9 = e;
+        __with_3411_9->kind = PE_NAME;
+        __with_3411_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3411_9->lhs = NULL;
     }
     return 1;
 }
@@ -5722,10 +6006,399 @@ static PsType *PsSema_check_ctor(PsSema *self, PsExpr *e, PsDecl *rd) {
     return __defer_ret0;
 }
 
+static PsExpr *PsSema_sug_name(PsSema *self, const char *t, Pos pos) {
+    PsExpr *e = ps_expr(self->a, PE_NAME, pos);
+    e->text = t;
+    return e;
+}
+
+static PsExpr *PsSema_sug_int(PsSema *self, int32_t v, Pos pos) {
+    PsExpr *e = ps_expr(self->a, PE_INT, pos);
+    e->text = Arena_printf(self->a, "%d", v);
+    return e;
+}
+
+static PsExpr *PsSema_sug_call1(PsSema *self, const char *fn, PsExpr *a1, Pos pos) {
+    PsExpr *c = ps_expr(self->a, PE_CALL, pos);
+    c->lhs = PsSema_sug_name(self, fn, pos);
+    c->args = Arena_alloc(self->a, sizeof(*c->args));
+    c->args[0] = a1;
+    c->nargs = 1;
+    return c;
+}
+
+static PsExpr *PsSema_sug_bin(PsSema *self, int32_t op, PsExpr *l, PsExpr *r, Pos pos) {
+    PsExpr *e = ps_expr(self->a, PE_BINARY, pos);
+    e->op = op;
+    e->lhs = l;
+    e->rhs = r;
+    return e;
+}
+
+static PsExpr *PsSema_sug_index(PsSema *self, PsExpr *l, PsExpr *r, Pos pos) {
+    PsExpr *e = ps_expr(self->a, PE_INDEX, pos);
+    e->lhs = l;
+    e->rhs = r;
+    return e;
+}
+
+static PsStmt *PsSema_sug_bind(PsSema *self, const char *name, PsExpr *val, Pos pos) {
+    PsStmt *v = ps_stmt(self->a, PS_VAR, pos);
+    v->name = name;
+    v->rhs = val;
+    return v;
+}
+
+static int32_t PsSema_sug_kind(PsSema *self, PsStmt *s) {
+    if (s->kind != PS_FOR || s->iter == NULL || s->iter->kind != PE_CALL) {
+        return 0;
+    }
+    PsExpr *f = s->iter->lhs;
+    if (f == NULL || f->kind != PE_NAME) {
+        return 0;
+    }
+    if (strcmp(f->text, "enumerate") == 0) {
+        return 1;
+    }
+    if (strcmp(f->text, "zip") == 0) {
+        return 2;
+    }
+    if (strcmp(f->text, "reversed") == 0) {
+        return 3;
+    }
+    return 0;
+}
+
+static void PsSema_sug_deny(PsSema *self, PsExpr *a, const char *outer) {
+    if (a->kind != PE_CALL || a->lhs == NULL || a->lhs->kind != PE_NAME) {
+        return;
+    }
+    const char *w = a->lhs->text;
+    if (strcmp(w, "range") == 0) {
+        if (strcmp(outer, "zip") == 0) {
+            fatal_at(self->file, a->pos, "zip() over a range: `for i, x in enumerate(xs)` IS that loop, and it needs no zip");
+        }
+        fatal_at(self->file, a->pos, "%s() over a range: a range is not a value here — `for i in range(...)` iterates it, and `range(hi - 1, lo - 1, -1)` walks it backwards", outer);
+    }
+    if (strcmp(w, "enumerate") == 0 || strcmp(w, "zip") == 0 || strcmp(w, "reversed") == 0) {
+        fatal_at(self->file, a->pos, "%s(%s(...)): the two are sugar over the index loop, not iterator objects, so they do not nest — put the inner result in a list first (a list has `reverse`)", outer, w);
+    }
+}
+
+static void PsSema_sug_body(PsSema *self, PsStmt *s, char **names, PsExpr **vals, int32_t n) {
+    int32_t old = (s->body != NULL ? s->body->n : 0);
+    PsStmt **body = Arena_alloc(self->a, (size_t)(n + old) * sizeof(*body));
+    size_t j;
+    for (j = 0; j < n; j += 1) {
+        body[j] = PsSema_sug_bind(self, names[j], vals[j], s->pos);
+    }
+    size_t i;
+    for (i = 0; i < old; i += 1) {
+        body[n + i] = s->body->stmts[i];
+    }
+    PsBlock *nb = Arena_alloc(self->a, sizeof(PsBlock));
+    nb->stmts = body;
+    nb->n = n + old;
+    s->body = nb;
+}
+
+static int PsSema_sug_unpack(PsSema *self, PsStmt *s) {
+    PsType *t = PsSema_check_expr(self, s->iter);
+    s->iter->sug_done = 1;
+    if (t == NULL || t->kind != PT_LIST || t->inner == NULL || t->inner->kind != PT_TUPLE) {
+        return 0;
+    }
+    if (t->inner->nparams != s->nnames) {
+        fatal_at(self->file, s->pos, "unpacking a %s takes %d names, found %d", ps_type_str(self->a, t->inner), t->inner->nparams, s->nnames);
+    }
+    const char *pn = Arena_printf(self->a, "__sugp%d", self->counter);
+    self->counter += 1;
+    char **names = Arena_alloc(self->a, (size_t)s->nnames * sizeof(*names));
+    PsExpr **vals = Arena_alloc(self->a, (size_t)s->nnames * sizeof(*vals));
+    size_t j;
+    for (j = 0; j < s->nnames; j += 1) {
+        names[j] = s->names[j];
+        vals[j] = PsSema_sug_index(self, PsSema_sug_name(self, pn, s->pos), PsSema_sug_int(self, j, s->pos), s->pos);
+    }
+    PsSema_sug_body(self, s, names, vals, s->nnames);
+    s->names = Arena_alloc(self->a, sizeof(*s->names));
+    s->names[0] = (char *)pn;
+    s->nnames = 1;
+    return 1;
+}
+
+static void PsSema_sug_comp(PsSema *self, PsExpr *e) {
+    PsExpr *it = e->rhs;
+    int32_t k = 0;
+    if (it != NULL && it->kind == PE_CALL && it->lhs != NULL && it->lhs->kind == PE_NAME) {
+        if (strcmp(it->lhs->text, "enumerate") == 0) {
+            k = 1;
+        } else if (strcmp(it->lhs->text, "zip") == 0) {
+            k = 2;
+        } else if (strcmp(it->lhs->text, "reversed") == 0) {
+            k = 3;
+        }
+    }
+    if (k == 0) {
+        if (e->ncvars > 1) {
+            PsType *ut = PsSema_check_expr(self, e->rhs);
+            e->rhs->sug_done = 1;
+            if (ut == NULL || ut->kind != PT_LIST || ut->inner == NULL || ut->inner->kind != PT_TUPLE) {
+                fatal_at(self->file, e->pos, "a comprehension binds ONE name per element; two names come from `enumerate(xs)`, `zip(a, b)` or a list of tuples (`d.items()`), not from %s", ps_type_str(self->a, ut));
+            }
+            if (ut->inner->nparams != e->ncvars) {
+                fatal_at(self->file, e->pos, "unpacking a %s takes %d names, found %d", ps_type_str(self->a, ut->inner), ut->inner->nparams, e->ncvars);
+            }
+            const char *pn0 = Arena_printf(self->a, "__sugc%d", self->counter);
+            self->counter += 1;
+            char **un = Arena_alloc(self->a, (size_t)e->ncvars * sizeof(*un));
+            PsExpr **uv = Arena_alloc(self->a, (size_t)e->ncvars * sizeof(*uv));
+            size_t j;
+            for (j = 0; j < e->ncvars; j += 1) {
+                un[j] = e->cvars[j];
+                uv[j] = PsSema_sug_index(self, PsSema_sug_name(self, pn0, e->pos), PsSema_sug_int(self, j, e->pos), e->pos);
+            }
+            e->sug_names = un;
+            e->sug_vals = uv;
+            e->nsug = e->ncvars;
+            e->var = pn0;
+        }
+        return;
+    }
+    const char *w = it->lhs->text;
+    PsExpr *start = NULL;
+    int32_t want = 1;
+    if (k == 1) {
+        if (it->nargs < 1 || it->nargs > 2) {
+            fatal_at(self->file, e->pos, "enumerate(xs) or enumerate(xs, start)");
+        }
+        if (it->nargs == 2) {
+            start = it->args[1];
+        }
+        want = 2;
+    } else if (k == 2) {
+        if (it->nargs < 2) {
+            fatal_at(self->file, e->pos, "zip(a, b) takes two or more iterables");
+        }
+        want = it->nargs;
+    } else {
+        if (it->nargs != 1) {
+            fatal_at(self->file, e->pos, "reversed(xs) takes one iterable");
+        }
+    }
+    if (e->ncvars != want) {
+        fatal_at(self->file, e->pos, "`for ... in %s(...)` binds %d name(s), found %d", w, want, e->ncvars);
+    }
+    int32_t nit = (k == 1 ? 1 : it->nargs);
+    size_t j;
+    for (j = 0; j < nit; j += 1) {
+        PsExpr *a = it->args[j];
+        PsSema_sug_deny(self, a, w);
+        if (!(a->kind == PE_NAME || a->kind == PE_FIELD || a->kind == PE_INDEX || a->kind == PE_STR)) {
+            fatal_at(self->file, e->pos, "%s() in a comprehension takes a plain variable: the rewrite reads it twice (its length and each element) and there is no statement before the comprehension to hold a temporary — put it in a variable first", w);
+        }
+        PsType *at = PsSema_check_expr(self, a);
+        if (at == NULL || !(at->kind == PT_LIST || at->kind == PT_STR || at->kind == PT_ARRAY)) {
+            if (at != NULL && at->kind == PT_DICT) {
+                fatal_at(self->file, e->pos, "%s() over a dict: a dict is not indexed by position — write %s(d.keys()) or %s(d.values())", w, w, w);
+            }
+            if (at != NULL && at->kind == PT_SET) {
+                fatal_at(self->file, e->pos, "%s() over a set: a set has no order to index — build a list from it first", w);
+            }
+            fatal_at(self->file, e->pos, "%s() takes a list, a string or an array, found %s", w, ps_type_str(self->a, at));
+        }
+    }
+    if (start != NULL) {
+        PsSema_check_want(self, start, ps_type(self->a, PT_INT, e->pos), "the start of enumerate()");
+    }
+    PsExpr *cnt = PsSema_sug_call1(self, "len", it->args[0], e->pos);
+    if (k == 2) {
+        for (j = 1; j < it->nargs; j += 1) {
+            PsExpr *mn = ps_expr(self->a, PE_CALL, e->pos);
+            mn->lhs = PsSema_sug_name(self, "min", e->pos);
+            mn->args = Arena_alloc(self->a, 2 * sizeof(*mn->args));
+            mn->args[0] = cnt;
+            mn->args[1] = PsSema_sug_call1(self, "len", it->args[j], e->pos);
+            mn->nargs = 2;
+            cnt = mn;
+        }
+    }
+    const char *iv = (k == 1 && start == NULL ? e->cvars[0] : Arena_printf(self->a, "__sugc%d", self->counter));
+    self->counter += 1;
+    char **names = Arena_alloc(self->a, (size_t)want * sizeof(*names));
+    PsExpr **vals = Arena_alloc(self->a, (size_t)want * sizeof(*vals));
+    int32_t ns = 0;
+    if (k == 1) {
+        if (start != NULL) {
+            names[ns] = e->cvars[0];
+            vals[ns] = PsSema_sug_bin(self, TK_PLUS, PsSema_sug_name(self, iv, e->pos), start, e->pos);
+            ns += 1;
+        }
+        names[ns] = e->cvars[1];
+        vals[ns] = PsSema_sug_index(self, it->args[0], PsSema_sug_name(self, iv, e->pos), e->pos);
+        ns += 1;
+    } else if (k == 2) {
+        for (j = 0; j < it->nargs; j += 1) {
+            names[ns] = e->cvars[j];
+            vals[ns] = PsSema_sug_index(self, it->args[j], PsSema_sug_name(self, iv, e->pos), e->pos);
+            ns += 1;
+        }
+    } else {
+        PsExpr *back = PsSema_sug_bin(self, TK_MINUS, PsSema_sug_bin(self, TK_MINUS, PsSema_sug_call1(self, "len", it->args[0], e->pos), PsSema_sug_int(self, 1, e->pos), e->pos), PsSema_sug_name(self, iv, e->pos), e->pos);
+        names[ns] = e->cvars[0];
+        vals[ns] = PsSema_sug_index(self, it->args[0], back, e->pos);
+        ns += 1;
+    }
+    e->sug_names = names;
+    e->sug_vals = vals;
+    e->nsug = ns;
+    e->var = iv;
+    e->rhs = PsSema_sug_call1(self, "range", cnt, e->pos);
+}
+
+static void PsSema_sug_hoist(PsSema *self, PsBlock *b) {
+    int32_t extra = 0;
+    size_t i;
+    for (i = 0; i < b->n; i += 1) {
+        int32_t k = PsSema_sug_kind(self, b->stmts[i]);
+        if (k == 0) {
+            continue;
+        }
+        size_t j;
+        for (j = 0; j < b->stmts[i]->iter->nargs; j += 1) {
+            PsExpr *a = b->stmts[i]->iter->args[j];
+            PsSema_sug_deny(self, a, b->stmts[i]->iter->lhs->text);
+            if (a->kind != PE_NAME) {
+                extra += 1;
+            }
+        }
+    }
+    if (extra == 0) {
+        return;
+    }
+    PsStmt **out = Arena_alloc(self->a, (size_t)(b->n + extra) * sizeof(*out));
+    int32_t n2 = 0;
+    for (i = 0; i < b->n; i += 1) {
+        PsStmt *st = b->stmts[i];
+        if (PsSema_sug_kind(self, st) != 0) {
+            size_t j;
+            for (j = 0; j < st->iter->nargs; j += 1) {
+                PsExpr *a = st->iter->args[j];
+                if (a->kind == PE_NAME) {
+                    continue;
+                }
+                const char *tn = Arena_printf(self->a, "__sug%d", self->counter);
+                self->counter += 1;
+                out[n2] = PsSema_sug_bind(self, tn, a, st->pos);
+                n2 += 1;
+                st->iter->args[j] = PsSema_sug_name(self, tn, a->pos);
+            }
+        }
+        out[n2] = st;
+        n2 += 1;
+    }
+    b->stmts = out;
+    b->n = n2;
+}
+
+static void PsSema_sug_for(PsSema *self, PsStmt *s, int32_t k) {
+    PsExpr *it = s->iter;
+    const char *w = it->lhs->text;
+    PsExpr *start = NULL;
+    if (k == 1) {
+        if (it->nargs < 1 || it->nargs > 2) {
+            fatal_at(self->file, s->pos, "enumerate(xs) or enumerate(xs, start)");
+        }
+        if (s->nnames != 2) {
+            fatal_at(self->file, s->pos, "`for i, x in enumerate(xs)` takes TWO variables — the index and the element (there is no tuple to bind to one)");
+        }
+        if (it->nargs == 2) {
+            start = it->args[1];
+        }
+    } else if (k == 2) {
+        if (it->nargs < 2) {
+            fatal_at(self->file, s->pos, "zip(a, b) takes two or more iterables");
+        }
+        if (s->nnames != it->nargs) {
+            fatal_at(self->file, s->pos, "`for ... in zip(...)`: %d iterables need %d variables, found %d", it->nargs, it->nargs, s->nnames);
+        }
+    } else {
+        if (it->nargs != 1) {
+            fatal_at(self->file, s->pos, "reversed(xs) takes one iterable");
+        }
+        if (s->nnames != 1) {
+            fatal_at(self->file, s->pos, "`for x in reversed(xs)` takes one variable");
+        }
+    }
+    size_t j;
+    for (j = 0; j < (k == 1 ? 1 : it->nargs); j += 1) {
+        PsType *at = PsSema_check_expr(self, it->args[j]);
+        if (at == NULL || !(at->kind == PT_LIST || at->kind == PT_STR || at->kind == PT_ARRAY)) {
+            if (at != NULL && at->kind == PT_DICT) {
+                fatal_at(self->file, s->pos, "%s() over a dict: a dict is not indexed by position — write %s(d.keys()) or %s(d.values())", w, w, w);
+            }
+            if (at != NULL && at->kind == PT_SET) {
+                fatal_at(self->file, s->pos, "%s() over a set: a set has no order to index — build a list from it first", w);
+            }
+            fatal_at(self->file, s->pos, "%s() takes a list, a string or an array, found %s", w, ps_type_str(self->a, at));
+        }
+    }
+    if (start != NULL) {
+        PsSema_check_want(self, start, ps_type(self->a, PT_INT, s->pos), "the start of enumerate()");
+    }
+    PsExpr *cnt = PsSema_sug_call1(self, "len", it->args[0], s->pos);
+    if (k == 2) {
+        for (j = 1; j < it->nargs; j += 1) {
+            PsExpr *mn = ps_expr(self->a, PE_CALL, s->pos);
+            mn->lhs = PsSema_sug_name(self, "min", s->pos);
+            mn->args = Arena_alloc(self->a, 2 * sizeof(*mn->args));
+            mn->args[0] = cnt;
+            mn->args[1] = PsSema_sug_call1(self, "len", it->args[j], s->pos);
+            mn->nargs = 2;
+            cnt = mn;
+        }
+    }
+    const char *iv = Arena_printf(self->a, "__sugi%d", self->counter);
+    self->counter += 1;
+    int32_t nb = s->nnames;
+    char **sn = Arena_alloc(self->a, (size_t)nb * sizeof(*sn));
+    PsExpr **sv = Arena_alloc(self->a, (size_t)nb * sizeof(*sv));
+    int32_t bn = 0;
+    if (k == 1) {
+        PsExpr *ix = PsSema_sug_name(self, iv, s->pos);
+        if (start != NULL) {
+            ix = PsSema_sug_bin(self, TK_PLUS, ix, start, s->pos);
+        }
+        sn[bn] = s->names[0];
+        sv[bn] = ix;
+        bn += 1;
+        sn[bn] = s->names[1];
+        sv[bn] = PsSema_sug_index(self, it->args[0], PsSema_sug_name(self, iv, s->pos), s->pos);
+        bn += 1;
+    } else if (k == 2) {
+        for (j = 0; j < it->nargs; j += 1) {
+            sn[bn] = s->names[j];
+            sv[bn] = PsSema_sug_index(self, it->args[j], PsSema_sug_name(self, iv, s->pos), s->pos);
+            bn += 1;
+        }
+    } else {
+        PsExpr *back = PsSema_sug_bin(self, TK_MINUS, PsSema_sug_bin(self, TK_MINUS, PsSema_sug_call1(self, "len", it->args[0], s->pos), PsSema_sug_int(self, 1, s->pos), s->pos), PsSema_sug_name(self, iv, s->pos), s->pos);
+        sn[bn] = s->names[0];
+        sv[bn] = PsSema_sug_index(self, it->args[0], back, s->pos);
+        bn += 1;
+    }
+    PsSema_sug_body(self, s, sn, sv, bn);
+    s->iter = PsSema_sug_call1(self, "range", cnt, s->pos);
+    s->names = Arena_alloc(self->a, sizeof(*s->names));
+    s->names[0] = iv;
+    s->nnames = 1;
+}
+
 static void PsSema_check_block(PsSema *self, PsBlock *b) {
     if (b == NULL) {
         return;
     }
+    PsSema_sug_hoist(self, b);
     self->depth += 1;
     size_t i;
     for (i = 0; i < b->n; i += 1) {
@@ -6094,6 +6767,10 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
             break;
         }
         case PS_FOR: {
+            int32_t sk = PsSema_sug_kind(self, s);
+            if (sk != 0) {
+                PsSema_sug_for(self, s, sk);
+            }
             int isrange = s->iter != NULL && s->iter->kind == PE_CALL && s->iter->lhs != NULL && s->iter->lhs->kind == PE_NAME && strcmp(s->iter->lhs->text, "range") == 0;
             if (s->nnames == 2 && s->iter != NULL && s->iter->kind == PE_CALL && s->iter->lhs != NULL && s->iter->lhs->kind == PE_FIELD && strcmp(s->iter->lhs->text, "items") == 0) {
                 PsType *dht = PsSema_check_expr(self, s->iter->lhs->lhs);
@@ -6116,6 +6793,11 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                     PsSema_pop_scope(self);
                     self->depth -= 1;
                     return;
+                }
+            }
+            if (!isrange && s->nnames > 1) {
+                if (!PsSema_sug_unpack(self, s)) {
+                    fatal_at(self->file, s->pos, "`for a, b in ...` unpacks a list of tuples (or `d.items()`); over %s the loop binds one name", ps_type_str(self->a, s->iter->type));
                 }
             }
             if (!isrange) {

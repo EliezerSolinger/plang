@@ -2204,7 +2204,15 @@ static PsExpr *PsP_finish_comprehension(PsP *self, Pos pos, PsExpr *elem, TokKin
     PsExpr *e = ps_expr(self->a, PE_COMPREHEND, pos);
     e->op = close;
     e->lhs = elem;
-    e->var = PsP_expect(self, TK_IDENT, "comprehension variable")->text;
+    Vec_pchar cv;
+    Vec_pchar_init(&cv);
+    Vec_pchar_push(&cv, (char *)PsP_expect(self, TK_IDENT, "comprehension variable")->text);
+    while (PsP_accept(self, TK_COMMA)) {
+        Vec_pchar_push(&cv, (char *)PsP_expect(self, TK_IDENT, "comprehension variable")->text);
+    }
+    e->cvars = cv.data;
+    e->ncvars = cv.len;
+    e->var = cv.data[0];
     PsP_expect(self, TK_IN, "comprehension");
     e->rhs = PsP_parse_as_chain(self, PsP_parse_or(self));
     if (PsP_accept(self, TK_IF)) {

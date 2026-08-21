@@ -185,7 +185,14 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | `random` (MT19937) | 103.2 | `stdmod`, `rng` | ✅ **portado** de `_randommodule.c` + `Lib/random.py`: a mesma semente dá a MESMA sequência do Python, comparada número por número no oráculo. `seed`/`random`/`getrandbits`/`randint`/`randrange`/`uniform`/`gauss`/`expovariate`/`choice`/`shuffle` |
 | `time.time` / `time.monotonic` | 103.2 | `stdmod` | ✅ dois relógios: parede (`CLOCK_REALTIME`) e monotônico (todos os prazos do laço) |
 | f-string com spec | 45.1 | tudo | ✅ |
-| Comprehension | 8.1 | — | ✅ |
+| Comprehension | 8.1 | — | ✅ também `for i, v in ...` (104) |
+| `enumerate` / `zip` / `reversed` / desempacotar | 104.1 | `iterate`, `seqsugar` | ✅ AÇÚCAR sobre o laço de índice (não são valores); statement e comprehension |
+| `sum` / `any` / `all` / `round` / `divmod` / `min`-`max` de lista | 104.2 | `toolkit` | ✅ bordas do Python: `all([])` é True, `round` é meio-para-o-par e devolve int, `min([])` levanta |
+| Métodos de lista: `pop`/`extend`/`clear`/`copy`/`index`/`count`/`remove`/`sort`, `+`, `*` | 104.3 | `toolkit` | ✅ `xs += ys` estende NO LUGAR, como no Python |
+| Métodos de dict: `pop`/`setdefault`/`update`/`clear`/`copy` | 104.3 | `toolkit` | ✅ |
+| Set: `discard`/`update`/`clear`/`copy` e `\|` `&` `-` `^` `<=` `<` `>=` `>` | 104.3 | `toolkit` | ✅ ordem do resultado é a de INSERÇÃO (91.1), não a do hash |
+| Métodos de str: `count`/`rfind`/`index`/`rindex`/`find(sub,start)`/`split()`/`splitlines`/`removeprefix`/`removesuffix`/`strip(chars)`/`ljust`/`rjust`/`center`/`zfill` | 104.3 | `toolkit` | ✅ índice em CARACTERES; `center` com a regra torta do CPython |
+| `isdigit`/`isalpha`/`title`/`capitalize`/`swapcase` | 104.5 | — | ⏳ precisam da tabela de CATEGORIAS do Unicode (como a 89 fez para a caixa) |
 | `embed`/`embed_bytes` (comptime) | 63.1, 63.5 | `embed` | ✅ nas duas línguas; no pscript o binário vira `static` + memcpy, então um megabyte de fonte custa um megabyte de DADO |
 | `pack`/`unpack` binário | 59, 62.4 | `packing` | ✅ denso, campos na ordem da declaração, **ordem de bytes por parâmetro** (LE por padrão, `BE` quando pedido); tamanho é o contrato |
 | Template em arquivo | 63.2, 75.2 | `template` | ✅ `render("x.tpl")` (buracos contra o escopo) e `render("x.tpl", {"nome": quem})` (buracos são as CHAVES do literal, resolvidos em tempo de compilação, valores de tipos diferentes, chave faltando/sobrando é erro). Não existe modo com header: a 75.2 fechou por aqui |

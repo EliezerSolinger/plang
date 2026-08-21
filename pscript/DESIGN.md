@@ -3591,6 +3591,140 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 104 — o ferramental de sequência, e quatro defeitos que ele desenterrou (2026-08-21)
+
+A resposta a *"o que falta"*: não era um recurso da linguagem, era o ferramental
+que todo programa Python usa na primeira página — `enumerate`, `zip`, `sum`,
+`xs.pop()`, `d.update()`, `a | b`, `s.count()`. Tudo aqui é **paridade com o
+Python medida contra o Python**: `tests/oracle/py/iterate.psc` e
+`tests/oracle/py/toolkit.psc` rodam duas vezes, aqui e no `python3`, e as saídas
+são diffadas.
+
+### 104.1 `enumerate`, `zip`, `reversed` e o desempacotar são AÇÚCAR
+
+Os quatro viram o laço de índice que já existia. Não há objeto iterador, pela
+mesma razão que `range` e `d.items()` são reconhecidos por FORMA (3.2/61.4): um
+cursor mutável precisaria de `struct` — coletado — e o par que o `enumerate`
+rende precisaria da tupla como valor dentro de contêiner. A reescrita custa zero
+de runtime e dá o mesmo resultado:
+
+| escrito | vira |
+|---|---|
+| `for i, v in enumerate(xs)` | `for i in range(len(xs))` + `v = xs[i]` |
+| `for i, v in enumerate(xs, 1)` | idem, com `i = __k + 1` |
+| `for a, b in zip(A, B)` | `for k in range(min(len(A), len(B)))` + os dois índices |
+| `for v in reversed(xs)` | `for k in range(len(xs))` + `v = xs[len(xs) - 1 - k]` |
+| `for k, v in pares` | o laço da lista + `k = p[0]`, `v = p[1]` |
+
+E valem os dois lugares: statement e **comprehension** — para a comprehension o
+parser passou a aceitar `for i, v in ...`, e a sema guarda as amarrações no nó
+(tipadas) para o lowering só as emitir.
+
+**Onde eles NÃO são valor, e por quê.** `zip(a, b)` fora de um `for` é recusado
+com essa frase: não existe objeto para guardar. `enumerate(reversed(xs))` também
+— açúcar não aninha. O iterável de um `for` pode ser qualquer expressão (a sema
+guarda um temporário antes do laço, então `enumerate(txt.split())` chama uma
+vez); numa comprehension tem de ser um nome, porque não há statement anterior
+onde pôr o temporário.
+
+**A divergência, dita:** sobre um dict, `enumerate` é recusado (um dict não
+indexa por posição) com a saída à mão — `enumerate(d.keys())`.
+
+### 104.2 Os builtins que faltavam
+
+`sum(xs[, start])`, `any(xs)`, `all(xs)`, `round(x[, n])`, `divmod(a, b)` e
+`min`/`max` de UMA lista. As bordas são as do Python e estão no oráculo:
+`sum([])` é 0, `all([])` é True (não há contraexemplo), `min([])` LEVANTA.
+
+- **`any`/`all` tomam `list<bool>`**, não uma lista de números: não há
+  veracidade implícita (39.3), então `any([x > 0 for x in xs])` é a forma — e a
+  mensagem de erro diz isso.
+- **`round` é meio para o PAR** (`round(2.5)` é 2), e sem casas devolve **int**.
+  Com casas devolve float e o valor é o do arredondamento DECIMAL: escalar por
+  10^n e arredondar em binário dá 2.68 para `round(2.675, 2)`, e a resposta é
+  2.67, porque o double mais próximo de 2.675 é 2.67499999...  O caminho é o do
+  CPython quando ele não tem o dtoa de David Gay: imprimir com n casas (a libc
+  arredonda pelo valor exato) e ler de volta.
+- **`divmod` é `(a // b, a % b)`** construído no lowering, com cada lado
+  amarrado uma vez — a tupla é valor desde a 98.5, então não há função de
+  runtime nem par de saída por ponteiro.
+
+### 104.3 Os métodos que faltavam
+
+- **lista**: `pop([i])`, `extend`, `clear`, `copy`, `index`, `count`, `remove`,
+  `sort`, e os operadores `a + b` e `a * n`. `index`/`count`/`remove` procuram
+  por CONTEÚDO, com a regra do `in` (55.4). `pop` LÊ antes de tirar, e a ordem
+  importa: normalizar o índice (onde a lista vazia levanta), ler, e só então
+  fechar o buraco.
+- **`xs += ys` ESTENDE no lugar**, não é `xs = xs + ys` — a diferença aparece
+  com dois nomes para a mesma lista, e o Python estende.
+- **dict**: `pop(k[, d])`, `setdefault`, `update`, `clear`, `copy`. `pop(k)`
+  levanta e `pop(k, d)` não, a mesma divisão de `d[k]` contra `get`.
+- **set**: `discard`, `update`, `clear`, `copy`, e os operadores `|`, `&`, `-`,
+  `^`, `<=`, `<`, `>=`, `>` (subconjunto, estrito nos dois abertos).
+- **str**: `count`, `rfind`, `index`, `rindex`, `find(sub, start)`, `split()`
+  sem separador (corridas de espaço, sem pedaço vazio — outra função, porque
+  `" a  b ".split()` dá dois pedaços e `.split(" ")` dá cinco), `splitlines`
+  (com TODAS as fronteiras de linha do Python, `\r\n` e as do Unicode),
+  `removeprefix`, `removesuffix`, `strip(chars)` nas três direções, `ljust`,
+  `rjust`, `center` e `zfill`. Todo índice que sai é de CARÁCTER, como `s[i]`
+  indexa (3.4).
+- **`center` tem uma regra torta e ela foi copiada**: o CPython faz
+  `left = folga // 2 + (folga & largura & 1)`, então `"hi".center(7, "*")` é
+  `***hi**` e não `**hi***`. Metade para cada lado erra metade dos casos ímpares.
+- **`zfill` põe o sinal antes dos zeros**: `"-42".zfill(5)` é `"-0042"`.
+
+### 104.4 Quatro defeitos que a reescrita desenterrou
+
+Nenhum deles era novo, e três davam RESPOSTA ERRADA em silêncio:
+
+> **1. Uma expressão-vírgula como limite de `for` no back end de C.** As três
+> partes do `for` são impressas dentro de uma expressão maior (`v = <from>`,
+> `v < <to>`, `v += <step>`) e eram emitidas com precedência 0. Uma vírgula ali
+> reassocia: `v < (a, b)` sai como `(v < a), b`, cujo valor é `b` — o laço
+> compara com a coisa errada e **não para**. O `zip` produz exatamente essa
+> forma (`min(len(a), len(b))` amarra os argumentos primeiro). O QBE não tinha o
+> problema: é texto de C, e só o back end de C reassocia.
+>
+> **2. Uma comprehension cujo ITERÁVEL é outra comprehension perdia o corpo.**
+> `[x for x in [y * 2 for y in ys]]` devolvia `[]`. O campo com o corpo já
+> lowerado era ZERADO no fim em vez de reposto, então a de dentro apagava o da
+> de fora e o laço externo saía vazio. Sem erro nenhum — lista vazia.
+> `{v: k for k, v in d.items()}` é a mesma coisa depois da reescrita da 61.4.
+>
+> **3. Um limite de laço com temporário dentro de um `async def`.** O `pre` (as
+> declarações que o limite precisa) não era despejado no ESTADO da máquina, e o
+> C saía com `__ord2` sem declaração — erro de compilação, não resposta errada,
+> mas apontando para um arquivo que ninguém escreveu.
+>
+> **4. Uma tupla com `struct` dentro era classificada como PURA.** Um `PT_NAME`
+> é record (bytes puros) ou struct (referência que o coletor move), e a pureza
+> olhava só o kind. A tupla nascia `record` com um ponteiro dentro: o P recusou
+> com uma mensagem sobre pureza — e se não tivesse recusado, o coletor não veria
+> a referência.
+
+E um quinto, no P e não no pscript: **um nome que é palavra-chave do C** (`signed`,
+`register`, `union`) era declarado sem reclamação e o `cc` recusava o arquivo
+gerado. Agora o P recusa no lugar onde a pessoa escreveu.
+
+### 104.5 O que ficou de fora, e por quê
+
+- **`isdigit`/`isalpha`/`isspace`/`isupper`/`islower`/`isalnum`, `title`,
+  `capitalize`, `swapcase`, `casefold`**: precisam das CATEGORIAS do Unicode, que
+  são uma tabela — a mesma decisão da 89, que gerou `unicase.bin` do Python com
+  um script ao lado. Fazer metade (só ASCII) daria uma resposta diferente da do
+  Python para o primeiro dígito arábico, em silêncio. Fica como bateria própria,
+  com gerador e oráculo. (`ps_str_is_space_cp` existe e está completo: o
+  conjunto do Python são 29 pontos de código, conferidos contra ele.)
+- **`partition`/`rpartition`** (devolvem tupla de três), **`rsplit`**,
+  **`expandtabs`**, **`translate`**: ninguém pediu ainda.
+- **`map`/`filter`**: são preguiçosos no Python e a comprehension faz o mesmo
+  sem objeto intermediário — se entrarem, entram como açúcar, e isso é decisão
+  sua.
+- **`sort(key=...)`** no lugar: `sorted(xs, key=...)` existe e devolve outra
+  lista; ordenar no lugar com chave pede o mesmo adaptador com uma escrita de
+  volta, e o valor disso ainda não apareceu.
+
 ## Bateria 103 — `random`, `math` e `time`: portados, não inventados (2026-08-21)
 
 Os três primeiros módulos da biblioteca, e o primeiro caso em que a resposta foi

@@ -493,6 +493,8 @@ static Expr *PsLow_as_f64(PsLow *self, PsExpr *e);
 
 static Expr *PsLow_as_u64(PsLow *self, PsExpr *e);
 
+static Expr *PsLow_set_op(PsLow *self, PsExpr *e, int32_t op);
+
 static Expr *PsLow_call(PsLow *self, PsExpr *e);
 
 static Expr *PsLow_convert(PsLow *self, PsExpr *e, const char *name);
@@ -2089,6 +2091,18 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             Vec_pStmt_push(&self->pre, cd3);
             Vec_pStmt outer_pre = self->pre;
             Vec_pStmt_init(&self->pre);
+            Vec_pStmt sugd;
+            Vec_pStmt_init(&sugd);
+            size_t si;
+            for (si = 0; si < e->nsug; si += 1) {
+                Stmt *sd9 = st_new(self->a, ST_VAR, e->pos);
+                sd9->name = ps_cname(self->a, e->sug_names[si]);
+                sd9->type = PsLow_ty(self, e->sug_vals[si]->type);
+                sd9->init = PsLow_expr(self, e->sug_vals[si]);
+                Vec_pStmt_push(&sugd, sd9);
+            }
+            Vec_pStmt sug_pre = self->pre;
+            Vec_pStmt_init(&self->pre);
             Stmt *push = NULL;
             if (ckind == PT_LIST) {
                 Expr *slot2 = PsLow_call_rt(self, "ps_list_push", e->pos);
@@ -2144,6 +2158,12 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             Vec_pStmt merged;
             Vec_pStmt_init(&merged);
             size_t i;
+            for (i = 0; i < sug_pre.len; i += 1) {
+                Vec_pStmt_push(&merged, sug_pre.data[i]);
+            }
+            for (i = 0; i < sugd.len; i += 1) {
+                Vec_pStmt_push(&merged, sugd.data[i]);
+            }
             for (i = 0; i < body_pre.len; i += 1) {
                 Vec_pStmt_push(&merged, body_pre.data[i]);
             }
@@ -2158,6 +2178,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             fs->iter = e->rhs;
             Vec_pStmt loop;
             Vec_pStmt_init(&loop);
+            Block *prev_fb = self->for_body;
             self->for_body = lb;
             if (e->rhs->kind == PE_CALL && e->rhs->lhs != NULL && e->rhs->lhs->kind == PE_NAME && strcmp(e->rhs->lhs->text, "range") == 0) {
                 Stmt *rf = st_new(self->a, ST_FOR, e->pos);
@@ -2181,7 +2202,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             } else {
                 PsLow_lower_dict_for(self, fs, &loop);
             }
-            self->for_body = NULL;
+            self->for_body = prev_fb;
             for (i = 0; i < loop.len; i += 1) {
                 Vec_pStmt_push(&self->pre, loop.data[i]);
             }
@@ -2458,18 +2479,37 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
                 PsLow_push_arg(self, c, PsLow_expr(self, e->rhs));
                 return c;
             }
+            if (lk == PT_LIST) {
+                Expr *lc4 = PsLow_call_rt(self, "ps_list_concat", e->pos);
+                PsLow_push_arg(self, lc4, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, lc4, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, lc4, PsLow_expr(self, e->rhs));
+                self->allocs = 1;
+                return lc4;
+            }
             if (both_int) {
                 return PsLow_int_op(self, e, "ps_add", "ps_uadd");
             }
             break;
         }
         case TK_MINUS: {
+            if (lk == PT_SET) {
+                return PsLow_set_op(self, e, 2);
+            }
             if (both_int) {
                 return PsLow_int_op(self, e, "ps_sub", "ps_usub");
             }
             break;
         }
         case TK_STAR: {
+            if (lk == PT_LIST) {
+                Expr *lr4 = PsLow_call_rt(self, "ps_list_repeat", e->pos);
+                PsLow_push_arg(self, lr4, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, lr4, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, lr4, PsLow_expr(self, e->rhs));
+                self->allocs = 1;
+                return lr4;
+            }
             if (e->lhs->type != NULL && e->lhs->type->kind == PT_STR) {
                 Expr *rp = PsLow_call_rt(self, "ps_str_repeat", e->pos);
                 PsLow_push_arg(self, rp, PsLow_ctx_arg(self, e->pos));
@@ -2482,6 +2522,14 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
             }
             if (both_int) {
                 return PsLow_int_op(self, e, "ps_mul", "ps_umul");
+            }
+            break;
+        }
+        case TK_AMP:
+        case TK_PIPE:
+        case TK_CARET: {
+            if (lk == PT_SET) {
+                return PsLow_set_op(self, e, (e->op == TK_AMP ? 1 : (e->op == TK_PIPE ? 0 : 3)));
             }
             break;
         }
@@ -2513,6 +2561,14 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
         case TK_LE:
         case TK_GT:
         case TK_GE: {
+            if (lk == PT_SET) {
+                int gt4 = e->op == TK_GT || e->op == TK_GE;
+                Expr *ss4 = PsLow_call_rt(self, "ps_set_subset", e->pos);
+                PsLow_push_arg(self, ss4, PsLow_expr(self, (gt4 ? e->rhs : e->lhs)));
+                PsLow_push_arg(self, ss4, PsLow_expr(self, (gt4 ? e->lhs : e->rhs)));
+                PsLow_push_arg(self, ss4, ex_new(self->a, (e->op == TK_LT || e->op == TK_GT ? EX_TRUE : EX_FALSE), e->pos));
+                return ss4;
+            }
             if (is_str) {
                 Expr *cl = PsLow_call_rt(self, "ps_str_lt", e->pos);
                 PsLow_push_arg(self, cl, PsLow_expr(self, e->lhs));
@@ -2588,6 +2644,16 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
     return b;
 }
 
+static Expr *PsLow_set_op(PsLow *self, PsExpr *e, int32_t op) {
+    Expr *c = PsLow_call_rt(self, "ps_set_op", e->pos);
+    PsLow_push_arg(self, c, PsLow_ctx_arg(self, e->pos));
+    PsLow_push_arg(self, c, PsLow_expr(self, e->lhs));
+    PsLow_push_arg(self, c, PsLow_expr(self, e->rhs));
+    PsLow_push_arg(self, c, PsLow_num(self, Arena_printf(self->a, "%d", op), e->pos));
+    self->allocs = 1;
+    return c;
+}
+
 static Expr *PsLow_as_u64(PsLow *self, PsExpr *e) {
     Expr *c = ex_new(self->a, EX_CAST, e->pos);
     c->cast_type = ty_name(self->a, "u64");
@@ -2635,6 +2701,85 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->allocs = 1;
             return kv;
         }
+        if (strcmp(nm4, "clear") == 0) {
+            Expr *cd4 = PsLow_call_rt(self, "ps_dict_clear", e->pos);
+            PsLow_push_arg(self, cd4, PsLow_expr(self, e->lhs->lhs));
+            return cd4;
+        }
+        if (strcmp(nm4, "copy") == 0) {
+            Expr *cy4 = PsLow_call_rt(self, "ps_dict_copy", e->pos);
+            PsLow_push_arg(self, cy4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, cy4, PsLow_expr(self, e->lhs->lhs));
+            self->allocs = 1;
+            return cy4;
+        }
+        if (strcmp(nm4, "update") == 0) {
+            Expr *up4 = PsLow_call_rt(self, "ps_dict_update", e->pos);
+            PsLow_push_arg(self, up4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, up4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, up4, PsLow_expr(self, e->args[0]));
+            self->allocs = 1;
+            return up4;
+        }
+        if (strcmp(nm4, "discard") == 0) {
+            Expr *dc4 = PsLow_call_rt(self, "ps_dict_del", e->pos);
+            PsLow_push_arg(self, dc4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, dc4, PsLow_key_ptr(self, e->args[0], kt2, e->pos));
+            return dc4;
+        }
+        if (strcmp(nm4, "pop") == 0) {
+            Expr *pk4 = PsLow_key_ptr(self, e->args[0], kt2, e->pos);
+            Expr *pre5 = NULL;
+            Expr *db4 = PsLow_bind_val(self, PsLow_expr(self, e->lhs->lhs), ty_ptr(self->a, ty_name(self->a, "PsDict")), e->pos, &pre5);
+            Expr *gp4 = PsLow_call_rt(self, "ps_dict_get", e->pos);
+            PsLow_push_arg(self, gp4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, gp4, db4);
+            PsLow_push_arg(self, gp4, pk4);
+            PsLow_pos_args(self, gp4, e->pos);
+            self->raised = 1;
+            Expr *vb4 = PsLow_bind_val(self, PsLow_slot_val(self, gp4, dt2->inner, e->pos), PsLow_ty(self, dt2->inner), e->pos, &pre5);
+            Expr *dl4 = PsLow_call_rt(self, "ps_dict_del", e->pos);
+            PsLow_push_arg(self, dl4, db4);
+            PsLow_push_arg(self, dl4, pk4);
+            Expr *got4 = PsLow_comma2(self, PsLow_comma2(self, pre5, dl4, e->pos), vb4, e->pos);
+            if (e->nargs == 1) {
+                return got4;
+            }
+            Expr *hp4 = PsLow_call_rt(self, "ps_dict_has", e->pos);
+            PsLow_push_arg(self, hp4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, hp4, pk4);
+            Expr *tp4 = ex_new(self->a, EX_TERNARY, e->pos);
+            tp4->cond = hp4;
+            tp4->lhs = got4;
+            tp4->rhs = PsLow_coerce(self, dt2->inner, e->args[1]);
+            return tp4;
+        }
+        if (strcmp(nm4, "setdefault") == 0) {
+            Expr *sk4 = PsLow_key_ptr(self, e->args[0], kt2, e->pos);
+            Expr *hs4 = PsLow_call_rt(self, "ps_dict_has", e->pos);
+            PsLow_push_arg(self, hs4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, hs4, sk4);
+            Expr *gs4 = PsLow_call_rt(self, "ps_dict_get", e->pos);
+            PsLow_push_arg(self, gs4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, gs4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, gs4, sk4);
+            PsLow_pos_args(self, gs4, e->pos);
+            Expr *ps4 = PsLow_call_rt(self, "ps_dict_put", e->pos);
+            PsLow_push_arg(self, ps4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ps4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, ps4, sk4);
+            Expr *st4 = ex_new(self->a, EX_ASSIGN, e->pos);
+            st4->op = TK_ASSIGN;
+            st4->lhs = PsLow_slot_val(self, ps4, dt2->inner, e->pos);
+            st4->rhs = PsLow_coerce(self, dt2->inner, e->args[1]);
+            st4->parened = 1;
+            Expr *ts4 = ex_new(self->a, EX_TERNARY, e->pos);
+            ts4->cond = hs4;
+            ts4->lhs = PsLow_slot_val(self, gs4, dt2->inner, e->pos);
+            ts4->rhs = st4;
+            self->allocs = 1;
+            return ts4;
+        }
         Expr *kp2 = PsLow_key_ptr(self, e->args[0], kt2, e->pos);
         Expr *hs2 = PsLow_call_rt(self, "ps_dict_has", e->pos);
         PsLow_push_arg(self, hs2, PsLow_expr(self, e->lhs->lhs));
@@ -2651,6 +2796,89 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         return tr3;
     }
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_STR) {
+        const char *nm5 = e->lhs->text;
+        if (strcmp(nm5, "split") == 0 && e->nargs == 0) {
+            Expr *ws5 = PsLow_call_rt(self, "ps_str_split_ws", e->pos);
+            PsLow_push_arg(self, ws5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ws5, PsLow_expr(self, e->lhs->lhs));
+            self->allocs = 1;
+            return ws5;
+        }
+        if (strcmp(nm5, "find") == 0 && e->nargs == 2) {
+            Expr *ff5 = PsLow_call_rt(self, "ps_str_find_from", e->pos);
+            PsLow_push_arg(self, ff5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ff5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, ff5, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, ff5, PsLow_expr(self, e->args[1]));
+            return ff5;
+        }
+        if (strcmp(nm5, "index") == 0 || strcmp(nm5, "rindex") == 0) {
+            Expr *ix5 = PsLow_call_rt(self, "ps_str_index_of", e->pos);
+            PsLow_push_arg(self, ix5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ix5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, ix5, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, ix5, ex_new(self->a, (strcmp(nm5, "rindex") == 0 ? EX_TRUE : EX_FALSE), e->pos));
+            PsLow_pos_args(self, ix5, e->pos);
+            self->raised = 1;
+            return ix5;
+        }
+        if (strcmp(nm5, "rfind") == 0 || strcmp(nm5, "count") == 0) {
+            Expr *rf5 = PsLow_call_rt(self, Arena_printf(self->a, "ps_str_%s", nm5), e->pos);
+            PsLow_push_arg(self, rf5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, rf5, PsLow_expr(self, e->args[0]));
+            return rf5;
+        }
+        if (strcmp(nm5, "removeprefix") == 0 || strcmp(nm5, "removesuffix") == 0) {
+            Expr *ra5 = PsLow_call_rt(self, "ps_str_removeaffix", e->pos);
+            PsLow_push_arg(self, ra5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ra5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, ra5, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, ra5, ex_new(self->a, (strcmp(nm5, "removesuffix") == 0 ? EX_TRUE : EX_FALSE), e->pos));
+            self->allocs = 1;
+            return ra5;
+        }
+        if ((strcmp(nm5, "strip") == 0 || strcmp(nm5, "lstrip") == 0 || strcmp(nm5, "rstrip") == 0) && e->nargs == 1) {
+            Expr *sc5 = PsLow_call_rt(self, "ps_str_strip_chars", e->pos);
+            PsLow_push_arg(self, sc5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, sc5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, sc5, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, sc5, PsLow_num(self, (strcmp(nm5, "lstrip") == 0 ? "1" : (strcmp(nm5, "rstrip") == 0 ? "2" : "0")), e->pos));
+            self->allocs = 1;
+            return sc5;
+        }
+        if (strcmp(nm5, "ljust") == 0 || strcmp(nm5, "rjust") == 0 || strcmp(nm5, "center") == 0) {
+            Expr *pd5 = PsLow_call_rt(self, "ps_str_pad", e->pos);
+            PsLow_push_arg(self, pd5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, pd5, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, pd5, PsLow_expr(self, e->args[0]));
+            if (e->nargs == 2) {
+                PsLow_push_arg(self, pd5, PsLow_expr(self, e->args[1]));
+            } else {
+                Expr *fl5 = PsLow_call_rt(self, "ps_str_new", e->pos);
+                PsLow_push_arg(self, fl5, PsLow_ctx_arg(self, e->pos));
+                Expr *sp5 = ex_new(self->a, EX_STRING, e->pos);
+                sp5->text = "\" \"";
+                PsLow_push_arg(self, fl5, sp5);
+                PsLow_push_arg(self, fl5, PsLow_num(self, "1", e->pos));
+                PsLow_push_arg(self, pd5, fl5);
+            }
+            PsLow_push_arg(self, pd5, PsLow_num(self, (strcmp(nm5, "ljust") == 0 ? "0" : (strcmp(nm5, "rjust") == 0 ? "1" : "2")), e->pos));
+            PsLow_pos_args(self, pd5, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return pd5;
+        }
+        if (strcmp(nm5, "splitlines") == 0 || strcmp(nm5, "zfill") == 0) {
+            Expr *z5 = PsLow_call_rt(self, Arena_printf(self->a, "ps_str_%s", nm5), e->pos);
+            PsLow_push_arg(self, z5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, z5, PsLow_expr(self, e->lhs->lhs));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, z5, PsLow_expr(self, e->args[i]));
+            }
+            self->allocs = 1;
+            return z5;
+        }
         Expr *sm = PsLow_call_rt(self, Arena_printf(self->a, "ps_str_%s", e->lhs->text), e->pos);
         const char *nm = e->lhs->text;
         if (strcmp(nm, "contains") != 0 && strcmp(nm, "startswith") != 0 && strcmp(nm, "endswith") != 0) {
@@ -2681,6 +2909,86 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                 self->raised = 1;
             }
             return rc9;
+        }
+        if (strcmp(lm9, "clear") == 0 || strcmp(lm9, "extend") == 0) {
+            Expr *cc4 = PsLow_call_rt(self, Arena_printf(self->a, "ps_list_%s", lm9), e->pos);
+            if (strcmp(lm9, "extend") == 0) {
+                PsLow_push_arg(self, cc4, PsLow_ctx_arg(self, e->pos));
+            }
+            PsLow_push_arg(self, cc4, PsLow_expr(self, e->lhs->lhs));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, cc4, PsLow_expr(self, e->args[i]));
+            }
+            if (strcmp(lm9, "extend") == 0) {
+                self->allocs = 1;
+            }
+            return cc4;
+        }
+        if (strcmp(lm9, "copy") == 0) {
+            Expr *cp4 = PsLow_call_rt(self, "ps_list_slice", e->pos);
+            PsLow_push_arg(self, cp4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, cp4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, cp4, PsLow_num(self, "0", e->pos));
+            PsLow_push_arg(self, cp4, PsLow_num(self, "0", e->pos));
+            PsLow_push_arg(self, cp4, PsLow_num(self, "1", e->pos));
+            PsLow_push_arg(self, cp4, ex_new(self->a, EX_FALSE, e->pos));
+            PsLow_push_arg(self, cp4, ex_new(self->a, EX_FALSE, e->pos));
+            PsLow_pos_args(self, cp4, e->pos);
+            self->allocs = 1;
+            return cp4;
+        }
+        if (strcmp(lm9, "index") == 0 || strcmp(lm9, "count") == 0 || strcmp(lm9, "remove") == 0) {
+            Expr *ic4 = PsLow_call_rt(self, Arena_printf(self->a, "ps_list_%s", lm9), e->pos);
+            if (strcmp(lm9, "count") != 0) {
+                PsLow_push_arg(self, ic4, PsLow_ctx_arg(self, e->pos));
+            }
+            PsLow_push_arg(self, ic4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, ic4, PsLow_key_ptr(self, e->args[0], e->lhs->type->inner, e->pos));
+            PsLow_push_arg(self, ic4, PsLow_num(self, (e->lhs->type->inner != NULL && e->lhs->type->inner->kind == PT_STR ? "1" : "0"), e->pos));
+            if (strcmp(lm9, "count") != 0) {
+                PsLow_pos_args(self, ic4, e->pos);
+                self->raised = 1;
+            }
+            return ic4;
+        }
+        if (strcmp(lm9, "sort") == 0) {
+            int32_t sk4 = 0;
+            if (e->lhs->type->inner->kind == PT_FLOAT) {
+                sk4 = 1;
+            } else if (e->lhs->type->inner->kind == PT_STR) {
+                sk4 = 2;
+            }
+            Expr *so4 = PsLow_call_rt(self, "ps_list_sorted", e->pos);
+            PsLow_push_arg(self, so4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, so4, PsLow_expr(self, e->lhs->lhs));
+            PsLow_push_arg(self, so4, PsLow_num(self, Arena_printf(self->a, "%d", sk4), e->pos));
+            Expr *asg4 = ex_new(self->a, EX_ASSIGN, e->pos);
+            asg4->op = TK_ASSIGN;
+            asg4->lhs = PsLow_expr(self, e->lhs->lhs);
+            asg4->rhs = so4;
+            asg4->parened = 1;
+            self->allocs = 1;
+            return asg4;
+        }
+        if (strcmp(lm9, "pop") == 0) {
+            Expr *pre4 = NULL;
+            Expr *lb4 = PsLow_bind_val(self, PsLow_expr(self, e->lhs->lhs), ty_ptr(self->a, ty_name(self->a, "PsList")), e->pos, &pre4);
+            Expr *pa4 = PsLow_call_rt(self, "ps_list_pop_at", e->pos);
+            PsLow_push_arg(self, pa4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, pa4, lb4);
+            PsLow_push_arg(self, pa4, (e->nargs == 1 ? PsLow_expr(self, e->args[0]) : PsLow_num(self, "0", e->pos)));
+            PsLow_push_arg(self, pa4, ex_new(self->a, (e->nargs == 1 ? EX_TRUE : EX_FALSE), e->pos));
+            PsLow_pos_args(self, pa4, e->pos);
+            self->raised = 1;
+            Expr *ix4 = PsLow_bind_val(self, pa4, ty_name(self->a, "i64"), e->pos, &pre4);
+            Expr *vv4 = PsLow_bind_val(self, PsLow_elem_at(self, lb4, ix4, e->lhs->type->inner, e->pos), PsLow_ty(self, e->lhs->type->inner), e->pos, &pre4);
+            Expr *rm4 = PsLow_call_rt(self, "ps_list_remove_at", e->pos);
+            PsLow_push_arg(self, rm4, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, rm4, lb4);
+            PsLow_push_arg(self, rm4, ix4);
+            PsLow_pos_args(self, rm4, e->pos);
+            return PsLow_comma2(self, PsLow_comma2(self, pre4, rm4, e->pos), vv4, e->pos);
         }
         if (strcmp(lm9, "insert") == 0) {
             Expr *iv9 = PsLow_value_first(self, e->args[1], e->lhs->type->inner, e->pos);
@@ -3172,6 +3480,73 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->raised = 1;
         }
         return ab9;
+    }
+    if (strcmp(name, "divmod") == 0) {
+        PsExpr *a5 = PsLow_bind_once_ps(self, e->args[0], e->pos);
+        PsExpr *b5 = PsLow_bind_once_ps(self, e->args[1], e->pos);
+        PsType *it5 = ps_type(self->a, PT_INT, e->pos);
+        PsExpr *q5 = ps_expr(self->a, PE_BINARY, e->pos);
+        q5->op = TK_FLOORDIV;
+        q5->lhs = a5;
+        q5->rhs = b5;
+        q5->type = it5;
+        PsExpr *r5 = ps_expr(self->a, PE_BINARY, e->pos);
+        r5->op = TK_PERCENT;
+        r5->lhs = a5;
+        r5->rhs = b5;
+        r5->type = it5;
+        PsExpr *tp5 = ps_expr(self->a, PE_TUPLE, e->pos);
+        tp5->args = Arena_alloc(self->a, 2 * sizeof(*tp5->args));
+        tp5->args[0] = q5;
+        tp5->args[1] = r5;
+        tp5->nargs = 2;
+        tp5->type = e->type;
+        return PsLow_expr(self, tp5);
+    }
+    if (strcmp(name, "sum") == 0) {
+        int isf3 = e->type != NULL && e->type->kind == PT_FLOAT;
+        Expr *sc3 = PsLow_call_rt(self, (isf3 ? "ps_sum_float" : "ps_sum_int"), e->pos);
+        PsLow_push_arg(self, sc3, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, sc3, PsLow_expr(self, e->args[0]));
+        if (e->nargs == 2) {
+            PsLow_push_arg(self, sc3, (isf3 ? PsLow_as_f64(self, e->args[1]) : PsLow_expr(self, e->args[1])));
+        } else {
+            PsLow_push_arg(self, sc3, PsLow_num(self, (isf3 ? "0.0" : "0"), e->pos));
+        }
+        if (!isf3) {
+            PsLow_pos_args(self, sc3, e->pos);
+            self->raised = 1;
+        }
+        return sc3;
+    }
+    if (strcmp(name, "any") == 0 || strcmp(name, "all") == 0) {
+        Expr *ac3 = PsLow_call_rt(self, Arena_printf(self->a, "ps_%s", name), e->pos);
+        PsLow_push_arg(self, ac3, PsLow_expr(self, e->args[0]));
+        return ac3;
+    }
+    if (strcmp(name, "round") == 0) {
+        Expr *rc3 = PsLow_call_rt(self, (e->nargs == 2 ? "ps_round_n" : "ps_round"), e->pos);
+        PsLow_push_arg(self, rc3, PsLow_as_f64(self, e->args[0]));
+        if (e->nargs == 2) {
+            PsLow_push_arg(self, rc3, PsLow_expr(self, e->args[1]));
+        }
+        return rc3;
+    }
+    if ((strcmp(name, "min") == 0 || strcmp(name, "max") == 0) && e->nargs == 1) {
+        PsType *lk3 = e->args[0]->type;
+        const char *kn3 = "ps_list_min_int";
+        if (lk3 != NULL && lk3->inner != NULL && lk3->inner->kind == PT_FLOAT) {
+            kn3 = "ps_list_min_float";
+        } else if (lk3 != NULL && lk3->inner != NULL && lk3->inner->kind == PT_STR) {
+            kn3 = "ps_list_min_str";
+        }
+        Expr *mc3 = PsLow_call_rt(self, kn3, e->pos);
+        PsLow_push_arg(self, mc3, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, mc3, PsLow_expr(self, e->args[0]));
+        PsLow_push_arg(self, mc3, ex_new(self->a, (strcmp(name, "max") == 0 ? EX_TRUE : EX_FALSE), e->pos));
+        PsLow_pos_args(self, mc3, e->pos);
+        self->raised = 1;
+        return mc3;
     }
     if (strcmp(name, "min") == 0 || strcmp(name, "max") == 0) {
         int isf2 = e->args[0]->type != NULL && e->args[0]->type->kind == PT_FLOAT;
@@ -5343,6 +5718,15 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
             return;
         }
         case PS_ASSIGN: {
+            if (s->op == TK_PLUS_EQ && s->lhs->type != NULL && s->lhs->type->kind == PT_LIST) {
+                Expr *ex4 = PsLow_call_rt(self, "ps_list_extend", s->pos);
+                PsLow_push_arg(self, ex4, PsLow_ctx_arg(self, s->pos));
+                PsLow_push_arg(self, ex4, PsLow_expr(self, s->lhs));
+                PsLow_push_arg(self, ex4, PsLow_expr(self, s->rhs));
+                self->allocs = 1;
+                PsLow_push_expr_stmt(self, out, ex4, s->pos);
+                return;
+            }
             if (s->op != TK_ASSIGN && s->lhs->kind == PE_INDEX) {
                 PsExpr *rc = PsLow_bind_once_ps(self, s->lhs->lhs, s->pos);
                 PsExpr *ri = PsLow_bind_once_ps(self, s->lhs->rhs, s->pos);
@@ -8146,6 +8530,11 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             init->lhs = PsLow_async_field(B->L, iv, s->pos);
             init->op = TK_ASSIGN;
             init->rhs = (is_range && ip->nargs > 1 ? PsLow_expr(B->L, ip->args[0]) : PsLow_num(B->L, "0", s->pos));
+            size_t pf;
+            for (pf = 0; pf < B->L->pre.len; pf += 1) {
+                ab_emit(B, B->L->pre.data[pf]);
+            }
+            Vec_pStmt_init(&B->L->pre);
             ab_emit(B, init);
             Expr *limit = NULL;
             if (is_range) {
@@ -8155,6 +8544,11 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
                 li->lhs = PsLow_async_field(B->L, lv, s->pos);
                 li->op = TK_ASSIGN;
                 li->rhs = PsLow_expr(B->L, ip);
+                size_t pf2;
+                for (pf2 = 0; pf2 < B->L->pre.len; pf2 += 1) {
+                    ab_emit(B, B->L->pre.data[pf2]);
+                }
+                Vec_pStmt_init(&B->L->pre);
                 ab_emit(B, li);
                 Expr *ln = PsLow_call_rt(B->L, "ps_list_len", s->pos);
                 PsLow_push_arg(B->L, ln, PsLow_async_field(B->L, lv, s->pos));
@@ -8166,6 +8560,11 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             int32_t fafter = ab_state(B);
             ab_goto(B, fhead, s->pos);
             B->cur = fhead;
+            size_t pf3;
+            for (pf3 = 0; pf3 < B->L->pre.len; pf3 += 1) {
+                ab_emit(B, B->L->pre.data[pf3]);
+            }
+            Vec_pStmt_init(&B->L->pre);
             Expr *fcond = ex_new(B->L->a, EX_BINARY, s->pos);
             fcond->op = TK_LT;
             fcond->lhs = PsLow_async_field(B->L, iv, s->pos);
@@ -9160,9 +9559,14 @@ int tuple_is_pure(PsType *t) {
         switch (e->kind) {
             case PT_INT:
             case PT_FLOAT:
-            case PT_BOOL:
-            case PT_NAME: {
+            case PT_BOOL: {
                 ;
+                break;
+            }
+            case PT_NAME: {
+                if (e->is_ref) {
+                    return 0;
+                }
                 break;
             }
             case PT_TUPLE: {

@@ -1,0 +1,19 @@
+min: min() or max() of an empty list
+max: min() or max() of an empty list
+pop: pop() from an empty list
+index: index(): the value is not in the list
+remove: remove(): the value is not in the list
+pop 7: pop index out of range
+dict pop: key not found
+str index: substring not found
+center: the fill has to be exactly one character
+divmod: integer division by zero
+sum: integer overflow in +
+['ana', 'bruno', 'carla']
+60 10 30
+bruno 3
+6 ana carla
+{'ana': 10, 'carla': 30, 'davi': 40}
+10 99
+['ana', 'bruno', 'carla']
+ana, bruno, carla, zebra

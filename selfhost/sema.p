@@ -365,6 +365,7 @@ struct Sema:
     static def scope_push(self: *Sema)
     static def scope_pop(self: *Sema)
     static def scope_add_x(self: *Sema, name: const *char, t: *Type, is_extern: bool)
+    static def deny_c_keyword(self: *Sema, name: const *char, pos: Pos)
     static def scope_add(self: *Sema, name: const *char, t: *Type)
     static def scope_find_cur(self: *Sema, name: const *char, was_extern: *bool) -> bool
     static def sym_index(self: *Sema, name: const *char) -> i32
@@ -3838,9 +3839,35 @@ struct Sema:
             return
         fatal_at(self->file, st->pos, "match type: no case matches the subject's static type")
 
+    # Um nome que é PALAVRA-CHAVE DO C não pode ser declarado: o C que sai daqui
+    # não compilaria, e o erro chegaria como uma linha do arquivo gerado em vez
+    # do lugar onde a pessoa escreveu. A lista é a das palavras que o C reserva e
+    # o P não — as que o P também reserva (`if`, `struct`, `const`) o lexer já
+    # não deixa passar como nome, e as que o P usa como TIPO (`int`, `char`,
+    # `void`) valem como nome de tipo mas não como nome de variável.
+    #
+    # Achado ao escrever `signed: bool = ...` no runtime do pscript: saiu
+    # `int signed = ...;` e o cc reclamou de um arquivo que ninguém escreveu.
+    static def deny_c_keyword(self: *Sema, name: const *char, pos: Pos):
+        if name == None:
+            return
+        C_KW: const *char[] = {"auto", "register", "signed", "unsigned", "extern",
+                               "typedef", "union", "volatile", "restrict", "goto",
+                               "switch", "default", "do", "short", "long", "double",
+                               "float", "inline", "int", "char", "void", "_Bool",
+                               "_Complex", "_Imaginary", "_Atomic", "_Generic",
+                               "_Noreturn", "_Static_assert", "_Thread_local",
+                               "complex", "imaginary", "noreturn", "thread_local",
+                               "static_assert", "alignas", "alignof", "bool"}
+        for i in range(i32(sizeof(C_KW) / sizeof(C_KW[0]))):
+            if strcmp(name, C_KW[i]) == 0:
+                fatal_at(self->file, pos, "'%s' is a keyword in C, so a declaration with that name would emit C that does not compile: pick another name", name)
+
     static def check_stmt(self: *Sema, st: *Stmt):
         match st->kind:
             case ST_VAR:
+                if not self->c_mod:
+                    self->deny_c_keyword(st->name, st->pos)
                 # same-scope redeclaration: C and P both forbid it (shadowing needs
                 # a NEW block). `extern` after `extern` is a redeclaration — legal.
                 rex: bool = False

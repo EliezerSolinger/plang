@@ -57,6 +57,12 @@ struct PsExpr {
     PsParam *params;
     int32_t nparams;
     const char *var;
+    char **cvars;
+    int32_t ncvars;
+    int sug_done;
+    char **sug_names;
+    struct PsExpr **sug_vals;
+    int32_t nsug;
     PsParam *caps;
     int32_t ncaps;
     int is_in;
