@@ -569,13 +569,13 @@ def main(argc: int, argv: **char) -> int:
             if access(binp0, 0) == 0:
                 return run_exec(binp0, run_args, run_nargs)
         if has_suffix(inputs.get(0), ".psc"):
-            # 108: o runtime são cinco módulos em camadas mais os headers; o
+            # 108/111: o runtime são SEIS módulos em camadas mais os headers; o
             # guarda-chuva `psrt.ph` entra primeiro porque é o que o programa
             # gerado inclui
             RT_SRCS: const *char[] = {"psrt.ph", "psrt_types.ph", "psrt_mem.ph",
-                                      "psrt_val.ph", "psrt_rt.ph", "psrt_std.ph",
+                                      "psrt_val.ph", "psrt_rt.ph", "psrt_std.ph", "psrt_os.ph",
                                       "psrt_top.ph", "psrt_mem.p", "psrt_val.p",
-                                      "psrt_rt.p", "psrt_std.p", "psrt_top.p"}
+                                      "psrt_rt.p", "psrt_std.p", "psrt_os.p", "psrt_top.p"}
             for ri in range(i32(sizeof(RT_SRCS) / sizeof(RT_SRCS[0]))):
                 add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, RT_SRCS[ri]))
         # the C goes to the cache too, so a `run` never writes next to the

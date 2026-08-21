@@ -401,10 +401,10 @@ suite_pstudio() {
     local C=$OUT/pstudio_pscore errc=$OUT/pstudio_pscore.err
     rm -rf "$C"; mkdir -p "$C"; : >"$errc"
     ok=1
-    $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_top.p 2>>"$errc" || ok=0
+    $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$errc" || ok=0
     [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/core_test.psc 2>>"$errc" || ok=0; }
     [ $ok = 1 ] && { $CC $CSTD -w -o "$C/core_test" "$C/pstudio/ps/core_test.c" \
-                         "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_top.c" $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
+                         "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_os.c" "$C/pscript/runtime/psrt_top.c" $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
     if [ $ok = 1 ] && check_run "$C/core_test" tests/pstudio/ps_core.expected "pstudio-ps-core"; then
         pass=$((pass+1))
     else
@@ -428,9 +428,9 @@ suite_pstudio() {
         for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/ps/shim; do
             [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
         done
-        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_top.p 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$err2" || ok=0; }
         [ $ok = 1 ] && { $PLANGC $PFLAGS --cpp "$CC -I$P/pstudio/ps" --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -I"$P/pstudio/ps" -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/ps/shim.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/pstudio/psys.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -I"$P/pstudio/ps" -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/ps/shim.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/pstudio/psys.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
         printf 'line one\nline two\nline three\n' > "$P/sample.txt"
         if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
            diff -q "$P/out" tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then
@@ -531,7 +531,7 @@ suite_pscript() {
     #    exception is part of what a program does.
     local rt="$d/rt"
     rm -rf "$rt"; mkdir -p "$rt"
-    if ! $PLANGC $PFLAGS --out-dir "$rt" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_top.p 2>"$d/rt.err"; then
+    if ! $PLANGC $PFLAGS --out-dir "$rt" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>"$d/rt.err"; then
         echo "  FAIL runtime: $(sed 's/.*error: //' "$d/rt.err" | head -1)"; fail=$((fail+1))
     else
       for src in tests/pscript/run/*.psc pscript/examples/vec3.psc pscript/examples/smallpt_core.psc pscript/examples/smallpt_workers.psc pscript/examples/smallpt_full.psc; do
@@ -552,20 +552,20 @@ suite_pscript() {
         # the same mirrored tree — those are the pmod_*.c linked in alongside
         if [ "$BACKEND" = qbe ]; then
             rm -f "$d"/pmod_*.ssa "$d"/pmod_*.s
-            # 108: as cinco camadas numa invocação — o QBE aceita a lista desde
+            # 108/111: as seis camadas numa invocação — o QBE aceita a lista desde
             # que o merge de tipos não arraste `static` de outro `.p` (era o
             # defeito que a divisão desenterrou)
-            $PLANGC --backend qbe --out-dir "$rt" pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_top.p 2>"$err" &&
+            $PLANGC --backend qbe --out-dir "$rt" pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>"$err" &&
             $PLANGC --backend qbe $xflags "$src" -o "$d/$name.ssa" 2>>"$err" &&
             $QBE "$d/$name.ssa" -o "$d/$name.s" 2>>"$err" &&
-            for m in mem val rt std top; do $QBE "$rt/pscript/runtime/psrt_$m.ssa" -o "$d/psrt_$m.s" 2>>"$err" || ok=0; done
+            for m in mem val rt std os top; do $QBE "$rt/pscript/runtime/psrt_$m.ssa" -o "$d/psrt_$m.s" 2>>"$err" || ok=0; done
             local qextra=""
             for pm in "$d"/pmod_*.ssa; do
                 [ -f "$pm" ] || continue
                 $QBE "$pm" -o "${pm%.ssa}.s" 2>>"$err" || ok=0
                 qextra="$qextra ${pm%.ssa}.s"
             done
-            [ $ok = 1 ] && { $CC $PSDEFS "$d/$name.s" "$d/psrt_mem.s" "$d/psrt_val.s" "$d/psrt_rt.s" "$d/psrt_std.s" "$d/psrt_top.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
+            [ $ok = 1 ] && { $CC $PSDEFS "$d/$name.s" "$d/psrt_mem.s" "$d/psrt_val.s" "$d/psrt_rt.s" "$d/psrt_std.s" "$d/psrt_os.s" "$d/psrt_top.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         else
             $PLANGC $PFLAGS $xflags --out-dir "$rt" "$src" 2>"$err" || ok=0
             local cextra=""
@@ -573,7 +573,7 @@ suite_pscript() {
                 [ -f "$pm" ] || continue
                 cextra="$cextra $pm"
             done
-            [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt_mem.c" "$rt/pscript/runtime/psrt_val.c" "$rt/pscript/runtime/psrt_rt.c" "$rt/pscript/runtime/psrt_std.c" "$rt/pscript/runtime/psrt_top.c" $cextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
+            [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w "$rt/${src%.psc}.c" "$rt/pscript/runtime/psrt_mem.c" "$rt/pscript/runtime/psrt_val.c" "$rt/pscript/runtime/psrt_rt.c" "$rt/pscript/runtime/psrt_std.c" "$rt/pscript/runtime/psrt_os.c" "$rt/pscript/runtime/psrt_top.c" $cextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         fi
         if [ $ok = 0 ]; then
             echo "  FAIL $name (build): $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1)); continue

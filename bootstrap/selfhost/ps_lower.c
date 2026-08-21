@@ -3907,6 +3907,52 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strncmp(name, "__time_", 7) == 0) {
         return PsLow_call_rt(self, (strcmp(name + 7, "time") == 0 ? "ps_sys_time" : "ps_sys_monotonic"), e->pos);
     }
+    if (strncmp(name, "__os_", 5) == 0 || strncmp(name, "__path_", 7) == 0) {
+        int isos0 = strncmp(name, "__os_", 5) == 0;
+        const char *of0 = name + (isos0 ? 5 : 7);
+        if (strcmp(of0, "join") == 0) {
+            Expr *acc = PsLow_expr(self, e->args[0]);
+            size_t i;
+            for (i = 1; i < e->nargs; i += 1) {
+                Expr *jc0 = PsLow_call_rt(self, "ps_os_join", e->pos);
+                PsLow_push_arg(self, jc0, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, jc0, acc);
+                PsLow_push_arg(self, jc0, PsLow_expr(self, e->args[i]));
+                acc = jc0;
+            }
+            self->allocs = 1;
+            return acc;
+        }
+        const char *rtn = Arena_printf(self->a, "ps_os_%s", of0);
+        int32_t kind0 = -1;
+        int32_t parents0 = -1;
+        if (isos0 && (strcmp(of0, "mkdir") == 0 || strcmp(of0, "makedirs") == 0)) {
+            rtn = "ps_os_mkdir";
+            parents0 = (strcmp(of0, "makedirs") == 0 ? 1 : 0);
+        } else if (!isos0 && (strcmp(of0, "exists") == 0 || strcmp(of0, "isdir") == 0 || strcmp(of0, "isfile") == 0)) {
+            rtn = "ps_os_exists";
+            kind0 = (strcmp(of0, "isdir") == 0 ? 1 : (strcmp(of0, "isfile") == 0 ? 2 : 0));
+        }
+        Expr *oc0 = PsLow_call_rt(self, rtn, e->pos);
+        PsLow_push_arg(self, oc0, PsLow_ctx_arg(self, e->pos));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, oc0, PsLow_expr(self, e->args[i]));
+        }
+        if (parents0 >= 0) {
+            PsLow_push_arg(self, oc0, ex_new(self->a, (parents0 == 1 ? EX_TRUE : EX_FALSE), e->pos));
+        }
+        if (kind0 >= 0) {
+            PsLow_push_arg(self, oc0, PsLow_num(self, Arena_printf(self->a, "%d", kind0), e->pos));
+        }
+        self->allocs = 1;
+        if (!isos0 && (strcmp(of0, "dirname") == 0 || strcmp(of0, "basename") == 0 || strcmp(of0, "normpath") == 0)) {
+            return oc0;
+        }
+        PsLow_pos_args(self, oc0, e->pos);
+        self->raised = 1;
+        return oc0;
+    }
     if (strncmp(name, "__gc_", 5) == 0) {
         const char *gf0 = name + 5;
         if (strcmp(gf0, "collect") == 0) {

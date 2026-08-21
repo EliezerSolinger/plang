@@ -83,20 +83,22 @@ mecanismo nenhum: o grafo é um `dict` e o pscript já lê json (41.1).
 | rodar N comandos em paralelo | ✅ `spawn` de worker (35.1) e `gather`/`race`/`at_most` (79.4) |
 | esperar I/O sem parar o resto | ✅ o laço com epoll/kqueue/poll (102) e o `recv` estacionado (74.1) |
 | hash de conteúdo | ✅ `ps_hash_bytes` no runtime (não exposto à linguagem) |
-| **listar diretório** | ❌ |
-| **`stat`: existe? mtime? tamanho?** | ❌ |
-| **criar diretório (`mkdir -p`)** | ❌ |
-| **apagar / renomear arquivo** | ❌ |
-| **RODAR UM PROCESSO** (status + saída) | ❌ |
-| **caminho: juntar, dirname, basename, normalizar** | ❌ |
+| listar diretório | ✅ `os.listdir` (111), e ORDENADO |
+| `stat`: existe? mtime? tamanho? | ✅ `path.exists`/`isdir`/`isfile`/`getmtime`/`getsize` (111) |
+| criar diretório (`mkdir -p`) | ✅ `os.makedirs` (111); `os.mkdir` para um só |
+| apagar / renomear arquivo | ✅ `os.remove`/`os.rmdir`/`os.rename` (111) |
+| **RODAR UM PROCESSO** (status + saída) | ❌ — é a 1.2, e é sua |
+| caminho: juntar, dirname, basename, normalizar | ✅ `path.join`/`dirname`/`basename`/`normpath`/`abspath` (111) |
 | variáveis de ambiente | ✅ `sys.env` |
 | argumentos | ✅ `sys.argv` |
 
-**Do lado do P**, a camada de SO já está escrita — `pstudio/psys.p`, para o
+**Do lado do P**, a camada de SO já estava escrita — `pstudio/psys.p`, para o
 editor: `vfs_read_all`, `vfs_write_all`, `vfs_list_dir`, `vfs_stat` (com mtime),
 `ps_run(cmd, out output) -> i32` (roda e captura), `ps_millis`, `ps_path_join`,
 `ps_path_dirname`, `ps_path_basename`. Ou seja: **o trabalho não é descobrir como
-fazer, é decidir onde isso mora e como o pscript o alcança.**
+fazer, é decidir onde isso mora e como o pscript o alcança.** *(Feito na bateria
+111 do pscript, menos rodar processo: `os` e `path` são módulos da stdlib, em P,
+no runtime — `pscript/runtime/psrt_os.p`.)*
 
 ## O que precisa de decisão sua
 
@@ -111,6 +113,13 @@ pscript (implementados em P, como `random` e `time` — 108.4), e o `psys.p` do
 pstudio deixa de ser a casa deles: ele é a fonte de onde eles saem. O pbuild e o
 pstudio passam a usar a MESMA camada, que é o teste de que ela está no lugar
 certo — dois consumidores diferentes, um deles gráfico e o outro paralelo.
+
+**Estado (2026-08-21): FEITO** na bateria 111 do pscript, menos `os.run` (que é a
+1.2, abaixo). O que existe: `os.listdir`, `os.mkdir`, `os.makedirs`, `os.remove`,
+`os.rmdir`, `os.rename`, `os.getcwd`, e `path.join`/`dirname`/`basename`/
+`normpath`/`abspath`/`exists`/`isdir`/`isfile`/`getsize`/`getmtime`. As contas
+sobre o nome são o `posixpath` do CPython conferido por varredura (mil caminhos);
+não tem `chdir` de propósito (o cwd é do processo e um worker é uma thread).
 
 O "onde for possível" tem um limite nomeado: o que é do EDITOR (SDL, janela,
 teclado) não é da stdlib de ninguém e continua no pstudio.

@@ -3591,6 +3591,117 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 111 — a camada de sistema: `os` e `path` saem do editor e entram na stdlib (2026-08-21)
+
+Sua decisão: *"o pstudio temos que migrar ele totalmente para PScript e a parte
+de sistema vai pra lib/runtime do PScript onde for possível"* — que é a 1.1 do
+`pbuild/DESIGN.md`. Esta bateria é o primeiro passo dela, e o passo que os DOIS
+projetos seguintes esperavam: o pbuild precisa listar diretório e ler mtime, e o
+pstudio migrado precisa das mesmas coisas.
+
+**Nada aqui foi inventado.** O `pstudio/psys.p` já tinha a camada escrita em P —
+`vfs_list_dir`, `vfs_stat` com mtime, `ps_path_join`/`dirname`/`basename` — e o
+que a bateria faz é mudá-la de casa e dar-lhe a forma do Python. Onde o editor
+tinha "quase" o comportamento do Python, o oráculo cobrou a diferença (ver
+111.3).
+
+**111.1 Dois módulos, com os nomes do Python: `os` e `path`.** `os` é o que MUDA
+o sistema de arquivos — `listdir`, `mkdir`, `makedirs`, `remove`, `rmdir`,
+`rename`, `getcwd`. `path` é o `os.path` do Python importado direto — `join`,
+`dirname`, `basename`, `normpath`, `abspath`, `exists`, `isdir`, `isfile`,
+`getsize`, `getmtime`.
+
+> **Por que `path` e não `os.path`.** Um módulo aninhado seria a primeira
+> hierarquia de módulos da linguagem, e ela não existe (48.3: um módulo é um
+> arquivo, ou é builtin). `from os import path` daria o mesmo nome sem a
+> hierarquia, mas `import path` é uma linha mais curta e já é como todo mundo
+> escreve o alias. Se um dia houver hierarquia, `os.path` passa a existir sem
+> quebrar isto — o nome curto continua valendo.
+
+> **Por que NÃO tem um `stat` que devolve tudo de uma vez.** Quatro perguntas ao
+> disco são quatro `stat`, e um build que percorre mil arquivos sentiria. Mas a
+> forma de devolver "tudo" é um record novo ou um dict de tipos mistos, e nenhum
+> dos dois é óbvio — então fica para quando o pbuild MEDIR que dói. O que existe
+> hoje é o que o editor usava.
+
+**111.2 Sem `chdir`, e o motivo é o modelo de workers.** O diretório de trabalho
+é do PROCESSO e um worker é uma THREAD (18.1): um `chdir` num worker mudaria o
+caminho debaixo de todos os outros. Um caminho absoluto — que é o que `abspath`
+dá — resolve o mesmo problema sem corrida. E rodar um processo (`os.run`) NÃO
+entrou: é a pergunta 1.2 do pbuild, e é sua.
+
+**111.3 O `posixpath` conferido por VARREDURA, e o "quase" que ele pegou.** O
+`ps_path_dirname` do editor devolvia `"."` para um nome sem barra; o Python
+devolve `""`. Ninguém tinha notado porque o editor sempre lhe passava caminho com
+diretório. `tests/oracle/py/paths.psc` monta **mil caminhos** — prefixo de zero a
+três barras (`//a` é preservado, `///a` colapsa, e isso é POSIX), três
+componentes tirados de `{vazio, ., .., a, b}`, com e sem barra final — e mais 729
+combinações de `join` de dois e de três pedaços, e compara os 3813 resultados com
+o `posixpath` do CPython. Batem todos.
+
+> `normpath` é transcrito do `posixpath.normpath`, inclusive a parte que
+> surpreende: `..` come o componente anterior, mas um `..` sem o que comer só
+> desaparece se o caminho for ABSOLUTO (`/..` é `/`, e `../x` continua `../x`).
+> A pilha de componentes é a pilha de OFFSETS no buffer de saída — empilhar é
+> escrever, desempilhar é truncar — então não há segundo array nem cópia.
+
+**111.4 O que a varredura desenterrou, e que NÃO é desta bateria: `f.close()`
+sem `await` é uma task PENDENTE.** O primeiro teste que escreve um arquivo e
+depois pergunta o tamanho dele viu `0`, de forma intermitente. Não é defeito do
+`getsize`: `f.close()` devolve uma task, e sem `await` ela só roda quando alguém
+entra no escalonador — no fim do programa, na drenagem. Até lá os bytes estão no
+buffer do stdio e o `stat` vê o arquivo vazio.
+
+Não há perda de dado (a drenagem do fim executa a task, e foi medido: um `write`
+sem `await` também acontece), mas `f.close()` LÊ como "fechei agora" e não é isso.
+Três saídas, e a escolha é sua:
+
+  a) fica como está, e a documentação diz que quem escreve e depois LÊ precisa de
+     `await f.close()` (é o modelo de tasks a funcionar, sem exceção nenhuma);
+  b) `.close()` sem `await` vira o close BLOQUEANTE — que é o que o `with` já
+     faz na limpeza, e o que `conn.close()` de socket já é hoje. A forma de
+     statement passa a significar o que ela lê, e `await f.close()` continua
+     existindo para quem não quer bloquear;
+  c) descartar uma task vira AVISO do compilador (`-Wunawaited-task`), o que
+     pega `f.write(...)` esquecido também — mas transforma em erro de compilação
+     um idioma de fire-and-forget que hoje é legítimo.
+
+O `syslayer.psc` desta bateria usa `await f.close()` para não depender da
+resposta.
+
+**111.5 O `listdir` devolve ORDENADO — divergência deliberada.** O Python devolve
+na ordem do sistema de arquivos, que muda de máquina para máquina e de ext4 para
+APFS. Um build e um editor querem a MESMA lista em toda máquina, e quem tem a
+lista ordenada não pode recuperar a do disco — o contrário (`sorted(os.listdir())`)
+é uma linha. Está aqui escrito porque é a única coisa em que estes dois módulos
+não são o Python.
+
+**111.6 O runtime passou a SEIS módulos** (`psrt_os.p`, camada 4 ao lado da
+biblioteca portada), e isso custou **seis** listas de módulos editadas à mão:
+`Makefile`, `tests/run.sh` (três lugares), `tests/psbuild.sh`, `selfhost/main.p`.
+A 109 já tinha medido esse preço em quatro; agora são seis, e a primeira vez que
+esqueci uma delas o QBE disse `can't open psrt_os.s`. **É o argumento da 1.5 do
+pbuild** (definição de módulo/TU na linguagem) medido pela terceira vez.
+
+De passagem, uma corrente de dez `strcmp` que decidia quais módulos são builtin
+virou `ps_builtin_mod()`, com a lista num lugar só: esquecer de acrescentar ali
+dava `cannot find module 'os'`, que não diz nada a quem escreveu o import.
+
+**111.7 O LINK do `pstudio-ps` cobrou o prefixo.** As funções de caminho nasceram
+com o nome que tinham no editor — `ps_path_join`, `ps_path_dirname`,
+`ps_path_basename` — e o `pstudio-ps` (o porte da 71, que junta o runtime do
+pscript com o `psys.p` do editor no MESMO link) parou com `multiple definition of
+'ps_path_join'`. Só ali, porque é o único programa do projeto que linka os dois
+lados. Agora todo o módulo usa **um prefixo por módulo do runtime** —
+`ps_os_join`, `ps_os_dirname`, ... — como `ps_random_`, `ps_json_` e `ps_str_` já
+fazem. Vale como regra: um `.p` de aplicação e o runtime compartilham o espaço de
+nomes do C, e o linker é o único que avisa.
+
+Gates: `tests/pscript/run/syslayer.psc` (o que toca o disco, com os seis erros
+que ele levanta), `tests/oracle/py/paths.psc` (as contas sobre o nome, mil
+caminhos contra o CPython) e quatro `tests/pscript/bad/` (aridade, tipo, membro
+que não existe, `join` de um pedaço só). Três modos verdes: 269 cada.
+
 ## Bateria 110 — os valores cravados: `-D` para o que dimensiona, chamada para o que se ajusta (2026-08-21)
 
 Sua observação: *"alguns valores do gc e da linguagem poderiam ser constantes em

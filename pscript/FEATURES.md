@@ -184,6 +184,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | `math` (22 funções + `pi`/`e`/`tau`/`inf`/`nan`) | 103.1 | `stdmod`, `rng` | ✅ é a libm direta; `floor`/`ceil`/`trunc` devolvem **int** como no Python, `inf`/`nan` vêm do runtime (literal de C quebra o QBE) |
 | `random` (MT19937) | 103.2 | `stdmod`, `rng` | ✅ **portado** de `_randommodule.c` + `Lib/random.py`: a mesma semente dá a MESMA sequência do Python, comparada número por número no oráculo. `seed`/`random`/`getrandbits`/`randint`/`randrange`/`uniform`/`gauss`/`expovariate`/`choice`/`shuffle` |
 | `time.time` / `time.monotonic` | 103.2 | `stdmod` | ✅ dois relógios: parede (`CLOCK_REALTIME`) e monotônico (todos os prazos do laço) |
+| `os` / `path` (camada de sistema) | 111.1 | `syslayer`, `paths` | ✅ `os.listdir` (ORDENADO, 111.5) `mkdir`/`makedirs`/`remove`/`rmdir`/`rename`/`getcwd`; `path.join`/`dirname`/`basename`/`normpath`/`abspath`/`exists`/`isdir`/`isfile`/`getsize`/`getmtime` — o `posixpath` do CPython conferido por varredura (mil caminhos). Sem `chdir` (o cwd é do processo, o worker é thread); rodar processo é a 1.2 do pbuild |
 | `bisect` / `heapq` | 106.3 | `algos` | ✅ **portados** de `Lib/bisect.py` e `Lib/heapq.py`: o oráculo compara o ARRAY do heap passo a passo com o do Python. int, float e str |
 | `sorted` ESTÁVEL nos três caminhos | 106.1 | `algos` | ✅ merge sort nosso com detecção de corridas; `qsort` deixava a estabilidade por conta da libc (a do macOS não é estável) |
 | f-string com spec | 45.1 | tudo | ✅ |

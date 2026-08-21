@@ -261,9 +261,10 @@ O que isso quer dizer, camada por camada:
 | hoje | depois |
 |---|---|
 | `psys.p` (P): arquivo, diretório, `stat`, `ps_run`, caminho, tempo | vira **stdlib do pscript** (um módulo `os`/`path`, implementado em P como `random` e `time` — 108.4). O pstudio passa a IMPORTAR, não a conter |
-| `pgfx.p`, `pgfx_raster.p`, `font_atlas.p` (P) | pscript, com o que for de SDL ficando na fronteira |
-| `pui.p`, `core.p`, `app.p` (P) | pscript |
-| o shim escalar da bateria 71 (`pstudio/ps/shim.p`) | deixa de existir: ele só existe porque a lógica em pscript precisava chamar o P |
+| `pgfx.p`, `pgfx_raster.p`, `font_atlas.p` (P) | **ficam em P**: são pixels e ponteiro do começo ao fim, e a 45.5 não deixa isso atravessar. Passam a ser o DRIVER, chamado só pelo shim |
+| `pui.p`, `core.p`, `app.p`, `codeview.p`, `complete.p` (P) | pscript |
+| o shim escalar da bateria 71 (`pstudio/ps/shim.p`) | **fica, e é a fronteira**: janela, evento, pixel e glifo, com assinatura de escalares. É o que "totalmente em pscript" quer dizer num programa que fala SDL — a lógica inteira em pscript, e uma página de P a tocar o ponteiro |
+| o realce, que usa o lexer DO COMPILADOR (`lex_ex`, core.p:1464) | o lexer continua em P (é o do compilador, e um segundo lexer em pscript ia divergir dele). Atravessa como escalar: os codepoints entram um a um, e o que volta é a classe por coluna. **Registrado como pergunta, não decidido** |
 
 O ganho não é estético: **o pstudio é o maior consumidor de P do projeto** (é o
 que a bateria 7/8 do `verify-all` mede), e ele em pscript é o maior programa
@@ -274,3 +275,9 @@ o teste de que ela está no lugar certo.
 
 O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor não
 é stdlib de ninguém.
+
+**Estado (2026-08-21).** O primeiro passo está feito: a bateria 111 do pscript
+tirou a camada de sistema daqui e pôs na stdlib (`os` e `path`), com o `psys.p`
+como fonte do porte. O que falta é o porte das camadas de cima — `pui`,
+`codeview`, `complete` e o `app` inteiro — e o realce, que precisa da resposta à
+pergunta da última linha da tabela.

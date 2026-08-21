@@ -37,6 +37,18 @@ import "sema.ph"
 import "cfront.ph"
 import "parser.ph"   # 75.3: a `.ph` is read with P's own front end
 
+# 111: os módulos que NÃO são arquivo — `sys` e os portados. A lista mora aqui,
+# num lugar só: quem resolve o import pergunta a ela, e `builtin_ns` (embaixo)
+# diz quais nomes cada um tem. Esquecer de acrescentar um módulo novo AQUI dá
+# "cannot find module 'os'", que não diz nada a quem escreveu o import.
+static def ps_builtin_mod(name: const *char) -> bool:
+    MODS: const *char[] = {"sys", "re", "json", "net", "random", "math", "time",
+                           "bisect", "heapq", "gc", "os", "path"}
+    for i in range(i32(sizeof(MODS) / sizeof(MODS[0]))):
+        if strcmp(name, MODS[i]) == 0:
+            return True
+    return False
+
 declare StrMap<i64>
 declare StrMap<*PsFunc>
 declare StrMap<*PsExpr>
@@ -2709,6 +2721,41 @@ struct PsSema:
             if e->nargs != 0:
                 fatal_at(self->file, e->pos, "time.%s() takes no arguments", name + 7)
             return ps_type(self->a, PT_FLOAT, e->pos)
+        # ---- 111: `os` e `path`, a camada de sistema ----
+        if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
+            isos: bool = strncmp(name, "__os_", 5) == 0
+            of: const *char = name + (5 if isos else 7)
+            st1: *PsType = ps_type(self->a, PT_STR, e->pos)
+            # `getcwd()` é a única sem caminho; `rename` e `join` querem dois; e
+            # `join` aceita MAIS de dois, como no Python (`path.join(a, b, c)`)
+            lo: i32 = 1
+            hi: i32 = 1
+            if strcmp(of, "getcwd") == 0:
+                lo = 0
+                hi = 0
+            elif strcmp(of, "rename") == 0:
+                lo = 2
+                hi = 2
+            elif strcmp(of, "join") == 0:
+                lo = 2
+                hi = 64
+            if e->nargs < lo or e->nargs > hi:
+                if lo == hi:
+                    fatal_at(self->file, e->pos, "%s.%s() takes %d argument(s)", "os" if isos else "path", of, lo)
+                fatal_at(self->file, e->pos, "path.join() joins two or more pieces: `path.join(dir, name)`")
+            for i in range(e->nargs):
+                self->check_want(e->args[i], st1, "the path")
+            if strcmp(of, "listdir") == 0:
+                dl: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                dl->inner = ps_type(self->a, PT_STR, e->pos)
+                return dl
+            if strcmp(of, "exists") == 0 or strcmp(of, "isdir") == 0 or strcmp(of, "isfile") == 0:
+                return ps_type(self->a, PT_BOOL, e->pos)
+            if strcmp(of, "getsize") == 0 or strcmp(of, "getmtime") == 0:
+                return ps_type(self->a, PT_INT, e->pos)
+            if isos and strcmp(of, "getcwd") != 0:
+                return ps_type(self->a, PT_VOID, e->pos)
+            return st1
         if strcmp(name, "__re_match") == 0:
             # 41.2: the groups, or None. [0] is the whole match.
             if e->nargs != 2:
@@ -3099,7 +3146,7 @@ struct PsSema:
             # `sys` is the one module that is not a file (48.3): what it names
             # is the program's own surroundings, which only the runtime can
             # answer. Its members are BUILTINS, so there is nothing to load.
-            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0 or strcmp(d->path, "random") == 0 or strcmp(d->path, "math") == 0 or strcmp(d->path, "time") == 0 or strcmp(d->path, "bisect") == 0 or strcmp(d->path, "heapq") == 0 or strcmp(d->path, "gc") == 0):
+            if sub == None and ps_builtin_mod(d->path):
                 sub = self->builtin_ns(d->path, path)
             if sub == None:
                 n: usize = 0
@@ -3375,6 +3422,10 @@ struct PsSema:
         rd->methods = nw
         rd->nmethods = rd->nmethods + nms
 
+    # 111: os módulos que NÃO são arquivo, numa lista só. Estava escrito como
+    # uma corrente de `strcmp` no lugar onde o import resolve, e cada módulo novo
+    # tinha de ser acrescentado LÁ e aqui embaixo — esquecer um dos dois dá
+    # "cannot find module 'os'", que não diz nada.
     # A module with no file behind it (48.3). Its members resolve to names the
     # sema knows by hand — `__sys_argv` and friends — which is what lets the
     # program spell it `sys.argv` while the runtime answers.
@@ -3467,6 +3518,28 @@ struct PsSema:
             ns->sym.add("heappush")
             ns->sym.add("heappop")
             ns->sym.add("heapify")
+        elif strcmp(name, "os") == 0:
+            # 111: a camada de sistema, com os nomes do Python. O que MUDA o
+            # sistema de arquivos fica em `os`; o que é conta sobre o nome fica
+            # em `path` (que é o `os.path` do Python, importado direto).
+            ns->sym.add("listdir")
+            ns->sym.add("mkdir")
+            ns->sym.add("makedirs")
+            ns->sym.add("remove")
+            ns->sym.add("rmdir")
+            ns->sym.add("rename")
+            ns->sym.add("getcwd")
+        elif strcmp(name, "path") == 0:
+            ns->sym.add("join")
+            ns->sym.add("dirname")
+            ns->sym.add("basename")
+            ns->sym.add("normpath")
+            ns->sym.add("abspath")
+            ns->sym.add("exists")
+            ns->sym.add("isdir")
+            ns->sym.add("isfile")
+            ns->sym.add("getsize")
+            ns->sym.add("getmtime")
         else:
             ns->sym.add("argv")
             ns->sym.add("env")

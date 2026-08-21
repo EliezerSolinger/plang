@@ -3559,6 +3559,55 @@ struct PsLow:
             return mc
         if strncmp(name, "__time_", 7) == 0:
             return self->call_rt("ps_sys_time" if strcmp(name + 7, "time") == 0 else "ps_sys_monotonic", e->pos)
+        # ---- 111: `os` e `path` ----
+        #
+        # Um por um e não por tabela, porque três deles não são a forma comum:
+        # `mkdir`/`makedirs` são a MESMA função do runtime com um bool a decidir,
+        # as três perguntas ao disco também (um `kind`), e `join` de N pedaços é
+        # a chamada de dois ANINHADA, que é o que o `posixpath` faz também.
+        if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
+            isos0: bool = strncmp(name, "__os_", 5) == 0
+            of0: const *char = name + (5 if isos0 else 7)
+            if strcmp(of0, "join") == 0:
+                acc: *Expr = self->expr(e->args[0])
+                for i in range(1, e->nargs):
+                    jc0: *Expr = self->call_rt("ps_os_join", e->pos)
+                    self->push_arg(jc0, self->ctx_arg(e->pos))
+                    self->push_arg(jc0, acc)
+                    self->push_arg(jc0, self->expr(e->args[i]))
+                    acc = jc0
+                self->allocs = True
+                return acc
+            # o nome do runtime é `ps_os_<função>` nos dois módulos: um prefixo
+            # por módulo do runtime, como `ps_random_`/`ps_json_`. Foi o LINK do
+            # pstudio-ps que cobrou isto — ele junta o runtime com um `.p` do
+            # editor, e `ps_path_join` existia nos dois (111.7)
+            rtn: const *char = self->a->printf("ps_os_%s", of0)
+            kind0: i32 = -1
+            parents0: i32 = -1
+            if isos0 and (strcmp(of0, "mkdir") == 0 or strcmp(of0, "makedirs") == 0):
+                rtn = "ps_os_mkdir"
+                parents0 = 1 if strcmp(of0, "makedirs") == 0 else 0
+            elif not isos0 and (strcmp(of0, "exists") == 0 or strcmp(of0, "isdir") == 0 or strcmp(of0, "isfile") == 0):
+                rtn = "ps_os_exists"
+                kind0 = 1 if strcmp(of0, "isdir") == 0 else (2 if strcmp(of0, "isfile") == 0 else 0)
+            oc0: *Expr = self->call_rt(rtn, e->pos)
+            self->push_arg(oc0, self->ctx_arg(e->pos))
+            for i in range(e->nargs):
+                self->push_arg(oc0, self->expr(e->args[i]))
+            if parents0 >= 0:
+                self->push_arg(oc0, ex_new(self->a, EX_TRUE if parents0 == 1 else EX_FALSE, e->pos))
+            if kind0 >= 0:
+                self->push_arg(oc0, self->num(self->a->printf("%d", kind0), e->pos))
+            self->allocs = True
+            # `dirname`/`basename`/`normpath` são conta sobre o NOME: não tocam o
+            # disco, não têm o que levantar, e por isso não levam posição nem
+            # deixam uma checagem de exceção atrás de si
+            if not isos0 and (strcmp(of0, "dirname") == 0 or strcmp(of0, "basename") == 0 or strcmp(of0, "normpath") == 0):
+                return oc0
+            self->pos_args(oc0, e->pos)
+            self->raised = True
+            return oc0
         # ---- 110: o módulo `gc` e `sys.pool` ----
         if strncmp(name, "__gc_", 5) == 0:
             gf0: const *char = name + 5

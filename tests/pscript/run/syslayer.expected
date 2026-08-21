@@ -1,0 +1,19 @@
+makedirs again ok: True
+['a.txt', 'b.txt', 'sub']
+['deep']
+size a=11 b=3
+mtime recente: True
+isfile/isdir/exists: True False True
+ausente: False False False
+['b.txt', 'c.txt', 'sub']
+cwd absoluto: True
+abspath('.') == getcwd(): True
+abspath junta e normaliza: True
+listdir: cannot list the directory 'syslayer_demo/nope' (io? True)
+getsize: cannot stat 'syslayer_demo/nope'
+mkdir: cannot create the directory 'syslayer_demo/sub'
+remove: cannot remove 'syslayer_demo/nope'
+rmdir: cannot remove the directory 'syslayer_demo'
+rename: cannot rename 'syslayer_demo/nope' to 'syslayer_demo/n2'
+nul: this path has a NUL byte in it
+limpo: False

@@ -115,11 +115,11 @@ pstudio-ps: plangc
 	@pkg-config --exists sdl2 || { echo "pstudio-ps: falta libsdl2-dev"; exit 1; }
 	./plangc --out-dir out stl/*.ph selfhost/plang.ph pstudio/*.ph pstudio/ps/shim.ph \
 	         pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p pstudio/psys.p \
-	         pstudio/ps/shim.p pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_top.p
+	         pstudio/ps/shim.p pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p
 	./plangc --cpp "$(CC) -Iout/pstudio/ps" --out-dir out pstudio/ps/app.psc
 	@mkdir -p out/bin
 	$(CC) $(CFLAGS) -w $(PSDEFS) -Iout/pstudio/ps -o out/bin/pstudio-ps \
-	      out/pstudio/ps/app.c out/pscript/runtime/psrt_mem.c out/pscript/runtime/psrt_val.c out/pscript/runtime/psrt_rt.c out/pscript/runtime/psrt_std.c out/pscript/runtime/psrt_top.c out/pstudio/ps/shim.c \
+	      out/pstudio/ps/app.c out/pscript/runtime/psrt_mem.c out/pscript/runtime/psrt_val.c out/pscript/runtime/psrt_rt.c out/pscript/runtime/psrt_std.c out/pscript/runtime/psrt_os.c out/pscript/runtime/psrt_top.c out/pstudio/ps/shim.c \
 	      out/pstudio/pgfx.c out/pstudio/pgfx_raster.c out/pstudio/font_atlas.c out/pstudio/psys.c \
 	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm -pthread
 	@echo "pstudio-ps pronto: ./out/bin/pstudio-ps [arquivo]"
