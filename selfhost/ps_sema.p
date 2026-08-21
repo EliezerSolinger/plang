@@ -187,6 +187,7 @@ struct PsSema:
     clocals: i32
     cur_ret: *PsType
     cur_fn: const *char
+    fn_gone: StrSet          # 107: nomes que já morreram com o bloco nesta função
     loop_depth: i32
     counter: i32             # `__COUNTER__` (65.11): a fresh number per read
     nogc_depth: i32          # `nogc:` blocks around the statement being checked
@@ -388,6 +389,11 @@ struct PsSema:
         n: i32 = self->nlocals
         while n > 0 and self->locals[n - 1].depth >= self->depth:
             n -= 1
+            # 107: o nome morreu com o bloco. Guardar que ele EXISTIU nesta
+            # função é o que permite dizer, quando ele for usado depois, que o
+            # problema é escopo de bloco (64.1) e não um nome inventado — e
+            # apontar o `nonlocal`, que é o opt-in que a própria 64.1 desenhou.
+            self->fn_gone.add(self->locals[n].name)
         self->nlocals = n
 
     # ---------- types ----------
@@ -409,6 +415,12 @@ struct PsSema:
                         fatal_at(self->file, t->pos, "unknown type '%s'", t->name)
                     t->is_ref = self->is_struct_name(t->name)
                 elif strcmp(t->name, "Error") != 0:
+                    # 107: os dois tipos que se escrevem com maiúscula e que a
+                    # pessoa tenta escrever minúsculos, porque `spawn` e a
+                    # chamada de um `async def` os produzem sem nunca serem
+                    # escritos — dizer qual é a forma custa uma linha
+                    if strcmp(t->name, "worker") == 0 or strcmp(t->name, "task") == 0:
+                        fatal_at(self->file, t->pos, "unknown type '%s': it is written `%s<T>`, with the T that crosses the channel — `Worker<int>` for a `spawn` of a function returning int", t->name, "Worker" if strcmp(t->name, "worker") == 0 else "Task")
                     t->name = self->gname(t->name, t->pos)
                     if not self->records.has(t->name) and not self->enums.has(t->name):
                         fatal_at(self->file, t->pos, "unknown type '%s'", t->name)
@@ -702,6 +714,8 @@ struct PsSema:
                     else:
                         pdt: *PsType = self->predef(e)
                         if pdt == None:
+                            if self->fn_gone.has(e->text):
+                                fatal_at(self->file, e->pos, "'%s' was declared inside a block and died with it (64.1): write `nonlocal %s` before the block, and the assignment there lives at the function's scope", e->text, e->text)
                             fatal_at(self->file, e->pos, "unknown name '%s'", e->text)
                         t = pdt
             case PE_AWAIT:
@@ -1865,7 +1879,7 @@ struct PsSema:
                     rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                     rtk->inner = rt->inner
                     return rtk
-                fatal_at(self->file, e->pos, "a worker has send, detach, recv and error (36.1/37.3), not '%s'", wm)
+                fatal_at(self->file, e->pos, "a worker has send, detach, recv and error (36.1/37.3), not '%s' — and what it is DOING is `status(w)`, a function and not a method, because it also answers for a worker that is already gone", wm)
             # a method on a `dyn Trait` (66.3): the call goes through the
             # vtable in the box, and what is checked here is the TRAIT's
             # signature — the concrete type is not known and is not needed
@@ -4008,6 +4022,7 @@ struct PsSema:
     static def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc):
         self->nlocals = 0
         self->depth = 0
+        self->fn_gone.init()
         self->fn_nonlocals.init()
         self->fn_globals.init()
         # a method may be `async def` too (50.1): it is a function with a
@@ -5175,6 +5190,7 @@ struct PsSema:
         self->in_async = f->is_async
         self->nlocals = 0
         self->depth = 0
+        self->fn_gone.init()
         self->fn_nonlocals.init()
         self->fn_globals.init()
         self->cur_ret = self->resolve_type(f->ret)
@@ -5775,6 +5791,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
         m->ndecls = np2 + m->ndecls
     s.root_ns = s.build_ns(m, "", m->name if m->name != None else m->path)
     s.cur_ns = s.root_ns
+    s.fn_gone.init()
     s.fn_nonlocals.init()
     s.fn_globals.init()
 

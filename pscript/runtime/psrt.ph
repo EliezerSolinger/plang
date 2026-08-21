@@ -113,6 +113,15 @@ struct PsUser:
 # involved, which is what lets a P function with `defer` hold one. The locals
 # that have to survive an await live in a FRAME — a compiler-generated struct,
 # collected like any other, with its own trace function.
+# 107: a entrada da lista de erros que ninguém foi buscar. Fora do heap coletado
+# (malloc), porque ela sobrevive ao dono e é lida no fim do programa.
+struct PsLost:
+    msg: *char
+    file: *char
+    line: i32
+    live: i32
+    next: *PsLost
+
 struct PsTask:
     obj: PsObj
     state: i32           # 0 = not started; -1 = done; -2 = failed
@@ -135,6 +144,12 @@ struct PsTask:
     # this context; now it parks like `sleep` does and the scheduler completes
     # it, so a program can await a message and a clock at the same time.
     is_recv: i32
+    # 107: um erro que ninguém foi buscar. Quando a task falha e não há ninguém
+    # esperando por ela, o erro entra numa lista fora do heap e este ponteiro
+    # aponta para a entrada — um `await` posterior a apaga. O que sobrar no fim
+    # do programa é impresso: um erro que ninguém viu é pior do que um erro, e é
+    # a mesma decisão que a 37.4 tomou para o worker.
+    lost: *PsLost
     is_io: i32           # ... and the third: a job the thread pool is running
                          #   (76.3). The work item is malloc'd and carries no
                          #   collected pointer, so a pool thread can finish it
@@ -397,6 +412,20 @@ struct PsWorkerBlk:
     collected: i32       # the parent took the error (w.error()): the automatic
                          #   stderr line at join stays quiet — whoever collected
                          #   it decides what it means (37.4)
+    # 107: cada lado marca que está PARADO esperando o outro. Com os dois
+    # marcados e as duas filas vazias, nada pode acontecer nunca mais: é um
+    # travamento mútuo, e dizê-lo é melhor do que ficar pendurado para sempre no
+    # `poll`. `up_parked` é o pai esperando o worker; `dn_parked` é o worker
+    # esperando o pai.
+    up_parked: i32
+    dn_parked: i32
+    pclosed: i32         # 107: o PAI não vai mandar mais nada. Marcado quando
+                         #   ele chega ao fim (antes de esperar os workers) e
+                         #   quando ele solta este worker. Sem isto, um worker
+                         #   parado em `await parent.recv()` esperava para
+                         #   sempre uma mensagem que ninguém mais podia mandar,
+                         #   e o programa inteiro travava no join — o mesmo fim
+                         #   que a fila de SUBIDA já tinha com `done`.
     detached: i32        # `w.detach()` (36.3): the program does not wait for it
                          #   at the end. Nothing is killed — the thread runs on
                          #   until the process goes, which is the only shutdown
@@ -544,6 +573,7 @@ struct PsWork:
     port: i32          # connect: where to
 
 struct PsCtx:
+    lost: *PsLost        # 107: os erros que ninguém foi buscar (ver PsLost)
     blocks: *PsBlock     # newest first; allocation bumps in this one
     frames: *PsFrame     # shadow stack head (49.4)
     roots: *PsRoot       # module-level collected variables
@@ -659,7 +689,9 @@ def ps_sched_drain(ctx: *PsCtx)
 # the step function calls this when the body raised: the error travels to
 # whoever awaits (19.3)
 def ps_task_fail(ctx: *PsCtx, t: *PsTask)
+def ps_report_lost(ctx: *PsCtx)
 # 19.3: at the await, the error the task finished with is raised again
+def ps_lost_seen(t: *PsTask)
 def ps_task_take_err(ctx: *PsCtx, t: *PsTask)
 # where the result of a finished task lives: the frame's first user field, at a
 # fixed offset, which is what lets an await read it without knowing which
@@ -1199,7 +1231,7 @@ def ps_exc_put(ctx: *PsCtx, e: *PsErr)
 # `raise error(msg, cat)` — the message is already a pscript string
 def ps_raise_str(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32)
 # builds an error WITHOUT raising it: `error(...)` is a value until `raise`
-def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64) -> *PsErr
+def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32) -> *PsErr
 # re-raises an error that was caught: `raise e`
 def ps_reraise(ctx: *PsCtx, e: *PsErr)
 def ps_has_exc(ctx: *PsCtx) -> bool

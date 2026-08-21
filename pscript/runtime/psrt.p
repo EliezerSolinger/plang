@@ -170,6 +170,7 @@ def ps_ctx_init(out ctx: PsCtx):
     # never run, and a budget of noise would raise out of nowhere.
     ctx.timers = None
     ctx.waiters = None
+    ctx.lost = None
     ctx.io_r = -1
     ctx.io_w = -1
     ctx.nlive = 0
@@ -303,6 +304,7 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
 # ... and this half gives the world back. Called from the entry point's first
 # defer, so it is the last thing that happens in the process.
 def ps_ctx_free(ctx: *PsCtx):
+    ps_report_lost(ctx)
     ps_mux_free(ctx)
     ps_random_free(ctx)
     ps_free_blocks(ctx, ctx->blocks)
@@ -532,6 +534,7 @@ static def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, s
 static def ps_sh_slot(sh: const *PsShape) -> i32
 static def ps_sh_isref(sh: const *PsShape) -> bool
 def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
+static def ps_park(ctx: *PsCtx, t: *PsTask)
 static def ps_task_clear_recv(t: *PsTask)
 static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg
 static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
@@ -954,6 +957,7 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     t->step = None
     t->frame = (*PsObj)(fr)
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1174,6 +1178,7 @@ def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     t->step = None
     t->frame = (*PsObj)(fr)
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1185,8 +1190,7 @@ def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     t->work = w
     t->rsize = size
     ps_pool_submit(ctx, w)
-    t->next = ctx->waiters
-    ctx->waiters = t
+    ps_park(ctx, t)
     return t
 
 # ---------- the network (77.1) ----------
@@ -1218,6 +1222,7 @@ static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsT
     t->step = None
     t->frame = (*PsObj)(fr)
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1228,8 +1233,7 @@ static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsT
     t->is_io = 1
     t->work = w
     t->rsize = size
-    t->next = ctx->waiters
-    ctx->waiters = t
+    ps_park(ctx, t)
     return t
 
 static def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
@@ -1425,6 +1429,21 @@ def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask:
         f->fp = None
     return ps_io_task(ctx, w, False, sizeof(i64))
 
+# 107: a lista de estacionados é uma FILA, não uma pilha. Ela era montada pela
+# cabeça e percorrida da cabeça, então com duas tarefas esperando a MESMA fila de
+# mensagens a segunda a estacionar recebia a primeira mensagem. Duas leituras
+# concorrentes do mesmo canal são o caso normal de um servidor, e a ordem certa é
+# a de chegada — quem esperou primeiro recebe primeiro.
+static def ps_park(ctx: *PsCtx, t: *PsTask):
+    t->next = None
+    if ctx->waiters == None:
+        ctx->waiters = t
+        return
+    p: *PsTask = ctx->waiters
+    while p->next != None:
+        p = p->next
+    p->next = t
+
 # ---------- receiving without stopping the world (74.1) ----------
 # `await w.recv()` used to block the thread in a condition variable. Every
 # other task in this context stopped with it — which made `async` and workers
@@ -1461,6 +1480,10 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
             *ended = True
     else:
         m = ps_msg_pop(&b->down_head, &b->down_tail)
+        # 107: a fila de DESCIDA também acaba — quando o pai chegou ao fim, não
+        # há mais mensagem possível, e continuar esperando é travar o programa
+        if m == None and b->pclosed != 0:
+            *ended = True
     pthread_mutex_unlock(&b->mu)
     return m
 
@@ -1485,6 +1508,7 @@ def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *P
     t->step = None
     t->frame = (*PsObj)(fr)
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -1498,8 +1522,7 @@ def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *P
     t->rkind = kind
     t->rsize = size
     t->rshape = sh
-    t->next = ctx->waiters
-    ctx->waiters = t
+    ps_park(ctx, t)
     return t
 
 # The message landed: build the value in THIS heap and wake whoever awaited.
@@ -1779,7 +1802,25 @@ def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
 # 36.3: join by default — nothing is ever killed from outside, so the program
 # ends when every worker has ended. A failure nobody COLLECTED is reported here:
 # silence would hide it, and whoever did collect it already decided (37.4).
+# 107: o pai chegou ao fim. Antes de ESPERAR os workers, diz a cada um que não
+# vem mais mensagem nenhuma — senão um worker parado em `await parent.recv()`
+# espera para sempre e o `pthread_join` abaixo nunca volta. É o mesmo fim que a
+# fila de subida já tinha (`done`), do outro lado do duto: quem manda avisa que
+# acabou. E é o desligamento cooperativo da 36.4 chegando por si — o worker vê
+# o canal fechar, sai do laço e termina, sem ninguém matar ninguém.
+static def ps_close_down(ctx: *PsCtx):
+    b: *PsWorkerBlk = ctx->workers
+    while b != None:
+        pthread_mutex_lock(&b->mu)
+        b->pclosed = 1
+        pthread_cond_broadcast(&b->cv)
+        if b->dn_w >= 0:
+            ps_pipe_wake(b->dn_w)
+        pthread_mutex_unlock(&b->mu)
+        b = b->next
+
 def ps_join_all(ctx: *PsCtx):
+    ps_close_down(ctx)
     b: *PsWorkerBlk = ctx->workers
     while b != None:
         # a DETACHED worker is not waited for (36.3): the program ends when its
@@ -3896,6 +3937,7 @@ def ps_task_new(ctx: *PsCtx, step: def(ctx: *PsCtx, t: *PsTask) -> bool, frame: 
     t->step = step
     t->frame = frame
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -3994,6 +4036,7 @@ def ps_timer_task(ctx: *PsCtx, at: f64) -> *PsTask:
     t->step = None
     t->frame = (*PsObj)(fr)
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->next = None
@@ -4059,6 +4102,42 @@ static def ps_timers_fire(ctx: *PsCtx, now: f64) -> bool:
 
 # ONE step of the world: run something that is ready, or — when nothing is —
 # wait for the clock. False means neither was possible, which is a deadlock.
+# 107: TRAVAMENTO MÚTUO entre o pai e um worker. Cada lado, antes de dormir no
+# `poll`, marca no bloco que está esperando o outro; se ao marcar ele vê que o
+# outro também está esperando por ELE e as duas filas estão vazias, nada pode
+# acontecer nunca mais — o `poll` dos dois ficaria pendurado para sempre e o
+# programa travava calado. Dizer o que aconteceu é a única resposta útil: não há
+# como um dos dois "ceder", porque nenhum tem o que mandar.
+#
+# A marca é feita e desfeita sob o mutex do bloco, e a leitura do outro lado
+# acontece com o mutex na mão — então ou os dois se veem, ou um deles ainda não
+# marcou e a próxima volta do laço olha de novo.
+static def ps_recv_mark(ctx: *PsCtx, on: bool, out total: i32, out stuck: i32, out other: i32):
+    total = 0
+    stuck = 0
+    other = 0
+    t: *PsTask = ctx->waiters
+    while t != None:
+        if t->state == 0:
+            if t->is_recv != 0 and t->rblk != None:
+                total += 1
+                b: *PsWorkerBlk = t->rblk
+                pthread_mutex_lock(&b->mu)
+                if t->rdir == 0:
+                    b->up_parked = 1 if on else 0
+                    if on and b->dn_parked != 0 and b->up_head == None and b->down_head == None and b->done == 0:
+                        stuck += 1
+                else:
+                    b->dn_parked = 1 if on else 0
+                    if on and b->up_parked != 0 and b->up_head == None and b->down_head == None and b->pclosed == 0:
+                        stuck += 1
+                pthread_mutex_unlock(&b->mu)
+            else:
+                # um trabalho do pool ou um socket: alguém de fora ainda pode
+                # acordar este contexto, então não há travamento a declarar
+                other += 1
+        t = t->next
+
 def ps_sched_progress(ctx: *PsCtx) -> bool:
     n: *PsTask = ps_sched_pop(ctx)
     if n != None:
@@ -4097,7 +4176,25 @@ def ps_sched_progress(ctx: *PsCtx) -> bool:
     if nfd > 0:
         if nfd > PS_POLL_MAX and (ms < 0 or ms > 2):
             ms = 2
+        # 107: travamento mútuo. Só conta se TODA espera deste contexto estiver
+        # presa: com um segundo worker vivo, ou um socket, ou um relógio, alguém
+        # ainda pode acordar — e acusar aí seria acusar um programa correto.
+        tot9: i32 = 0
+        stk9: i32 = 0
+        oth9: i32 = 0
+        ps_recv_mark(ctx, True, out tot9, out stk9, out oth9)
+        if ms < 0 and oth9 == 0 and tot9 > 0 and stk9 == tot9:
+            d1: i32 = 0
+            d2: i32 = 0
+            d3: i32 = 0
+            ps_recv_mark(ctx, False, out d1, out d2, out d3)
+            ps_raise(ctx, "deadlock: this side is waiting for a message from the other, and the other is waiting for one from this side", PS_CAT_VALUE, "<worker>", 0)
+            return False
         ps_mux_wait(ctx, ms)
+        e1: i32 = 0
+        e2: i32 = 0
+        e3: i32 = 0
+        ps_recv_mark(ctx, False, out e1, out e2, out e3)
     elif ms > 0:
         ts2: timespec
         ts2.tv_sec = 0
@@ -4554,6 +4651,7 @@ def ps_gather_task(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsTask:
     t->step = None
     t->frame = (*PsObj)(fr)
     t->err = None
+    t->lost = None
     t->waiting_on = None
     t->waiter = None
     t->cancelled = 0
@@ -4592,6 +4690,7 @@ def ps_gather_settled(ctx: *PsCtx, ts: *PsList) -> *PsList:
         base = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
         dst: *char = ps_list_push(ctx, out)
         *(**PsErr)(dst) = (*base)->err
+        ps_lost_seen(*base)   # 107: o erro foi ENTREGUE ao programa
         i += 1
     return out
 
@@ -4623,6 +4722,9 @@ def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64:
             base: **PsTask = (**PsTask)(ps_list_base(ts) + usize(i) * usize(ts->esize))
             t: *PsTask = *base
             if ps_task_done(t):
+                # 107: `first_ok` DECIDE pela falha das outras — o programa
+                # perguntou por elas, então nenhuma é um erro que ninguém viu
+                ps_lost_seen(t)
                 if t->state != -2 and t->err == None:
                     # a winner: everyone else stops, as in `race`
                     j: i64 = 0
@@ -4630,6 +4732,7 @@ def ps_first_ok(ctx: *PsCtx, ts: *PsList) -> i64:
                         if j != i:
                             lose: **PsTask = (**PsTask)(ps_list_base(ts) + usize(j) * usize(ts->esize))
                             ps_task_cancel(ctx, *lose)
+                            ps_lost_seen(*lose)
                         j += 1
                     return i
             else:
@@ -4711,16 +4814,72 @@ def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask):
     waiter->waiting_on = on
     on->waiter = waiter
 
+static def ps_lost_note(ctx: *PsCtx, t: *PsTask)
+
 def ps_task_fail(ctx: *PsCtx, t: *PsTask):
     # the task CAPTURES the error: the flag is cleared here so the rest of the
     # program keeps running, and it is raised again at the await (19.3)
     t->err = ctx->exc
     ctx->exc = None
     t->state = -2
+    ps_lost_note(ctx, t)
+
+# 107: um erro que ninguém foi buscar. Uma task que ninguém espera captura o erro
+# dela e o programa terminava sem dizer nada — o mesmo desaparecimento que a 37.4
+# já tinha resolvido para o worker (linha no stderr quando ninguém coletou). O
+# Python diz "Task exception was never retrieved" e o node avisa da promessa
+# rejeitada; a razão é a mesma nos três: um erro que ninguém viu é pior do que um
+# erro.
+#
+# A entrada nasce aqui, quando a task falha e ninguém está esperando por ela, e
+# morre no `await` que a colhe. O que sobrar é impresso no fim.
+static def ps_lost_note(ctx: *PsCtx, t: *PsTask):
+    if t == None or t->err == None or t->waiter != None:
+        return
+    # uma task CANCELADA falhou porque alguém pediu que ela parasse (37.2): o
+    # erro dela é a resposta ao pedido, não um erro que ninguém viu. `race`
+    # cancela os perdedores por definição, e avisar sobre eles seria ruído em
+    # todo programa que usa `race`.
+    if t->cancelled != 0:
+        return
+    n: *PsLost = (*PsLost)(malloc(sizeof(PsLost)))
+    if n == None:
+        return
+    n->msg = ps_dup(t->err->msg->data if t->err->msg != None else "?")
+    n->file = ps_dup(t->err->file if t->err->file != None else "?")
+    n->line = t->err->line
+    n->live = 1
+    n->next = ctx->lost
+    ctx->lost = n
+    t->lost = n
+
+def ps_report_lost(ctx: *PsCtx):
+    n: *PsLost = ctx->lost
+    while n != None:
+        if n->live != 0:
+            fprintf(stderr, "pscript: %s:%d: an error nobody awaited: %s\n", n->file, n->line, n->msg)
+        nx: *PsLost = n->next
+        free(n->msg)
+        free(n->file)
+        free(n)
+        n = nx
+    ctx->lost = None
+
+# 107: o runtime olhou o erro EM NOME DO PROGRAMA — `gather_settled` devolve a
+# lista de erros, `first_ok` escolhe pelo sucesso. Em todos, quem perguntou foi o
+# programa, então o erro não é um erro perdido.
+def ps_lost_seen(t: *PsTask):
+    if t != None and t->lost != None:
+        t->lost->live = 0
+        t->lost = None
 
 def ps_task_take_err(ctx: *PsCtx, t: *PsTask):
     if t != None and t->err != None and ctx->exc == None:
         ctx->exc = t->err
+    # alguém veio buscar: a entrada da 107 sai da lista
+    if t != None and t->lost != None:
+        t->lost->live = 0
+        t->lost = None
 
 def ps_task_ret(t: *PsTask) -> *void:
     return (*char)(t->frame) + sizeof(PsUser)
@@ -4758,6 +4917,10 @@ def ps_task_wait(ctx: *PsCtx, t: *PsTask):
     if t->err != None and ctx->exc == None:
         # 19.3: the error the task finished with is raised again where it is awaited
         ctx->exc = t->err
+    # alguém veio buscar (107): a entrada de "erro que ninguém viu" sai da lista
+    if t->lost != None:
+        t->lost->live = 0
+        t->lost = None
 
 # `dyn Trait` (66.3). The value is copied INTO the box: what is boxed is often a
 # temporary — `p = Money(5)` — and a box pointing at a dead stack slot would be
@@ -7048,12 +7211,15 @@ def ps_raise_str(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i3
     ps_trace_capture(ctx, e)
     ctx->exc = e
 
-def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64) -> *PsErr:
+def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32) -> *PsErr:
     e: *PsErr = ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR)
     e->msg = msg
     e->cat = i32(cat)
-    e->file = None
-    e->line = 0
+    # 107: onde o erro foi CONSTRUÍDO. `raise e` passa a mesma falha adiante e
+    # por isso não toca na posição — então ela tem de nascer aqui, senão o erro
+    # que o programa levanta é o único do sistema sem arquivo e linha.
+    e->file = file
+    e->line = line
     ps_trace_capture(ctx, e)
     return e
 
@@ -7176,8 +7342,29 @@ def ps_print(ctx: *PsCtx, s: *PsStr):
     # value that was never really computed.
     if ctx->exc != None:
         return
-    fwrite(s->data, 1, usize(s->len), stdout)
-    fputc('\n', stdout)
+    # UMA escrita, não duas (107). `fwrite` do texto seguido de `fputc('\n')`
+    # são duas chamadas de stdio, cada uma trancando o FILE por si — e como
+    # stdout é o MESMO arquivo de todos os workers (cada um tem heap, coletor e
+    # loop próprios, mas não uma saída própria), a linha de um saía no meio da
+    # linha do outro. Medido: oito workers imprimindo 200 linhas cada davam 66
+    # linhas costuradas e vazias. Com o texto e o `\n` na mesma chamada, o
+    # trinco do stdio cobre a linha inteira e a saída volta a ser linhas.
+    n: usize = usize(s->len)
+    buf: char[1024]
+    if n + usize(1) <= sizeof(buf):
+        memcpy(&buf[0], s->data, n)
+        buf[n] = '\n'
+        fwrite(&buf[0], 1, n + usize(1), stdout)
+        return
+    p: *char = (*char)(malloc(n + usize(1)))
+    if p == None:
+        fwrite(s->data, 1, n, stdout)
+        fputc('\n', stdout)
+        return
+    memcpy(p, s->data, n)
+    p[n] = '\n'
+    fwrite(p, 1, n + usize(1), stdout)
+    free(p)
 
 # ---------- arithmetic ----------
 # Overflow raises (7.2). The checks are the portable ones: detect before the

@@ -151,6 +151,15 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/net-late.sh >$V/netlate.log 2>&1; then
 else
     bad "o dado que chega tarde se perdeu (veja $V/netlate.log)"
 fi
+#   print-atomic uma linha de `print` sai INTEIRA com oito workers imprimindo ao
+#                mesmo tempo. Não cabe num `.expected` (a ordem é indeterminada),
+#                e o que quebrava era a forma: `print` fazia duas chamadas de
+#                stdio e stdout é o mesmo arquivo de todos os workers.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/print-atomic.sh >$V/printatomic.log 2>&1; then
+    ok "print-atomic $(grep -oE '[0-9]+ linhas' $V/printatomic.log | tail -1)"
+else
+    bad "o print de workers concorrentes costurou linhas (veja $V/printatomic.log)"
+fi
 if PLANGC=$PWD/$V/plangc_s2 bash tests/run-cmd.sh >$V/runcmd.log 2>&1; then
     ok "run-cmd $(grep -oE '[0-9]+ ok' $V/runcmd.log | tail -1)"
 else

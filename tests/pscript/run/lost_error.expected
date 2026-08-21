@@ -1,0 +1,6 @@
+pscript: tests/pscript/run/lost_error.psc:16: an error nobody awaited: caiu: orfa
+peguei caiu: await
+settled viu caiu: settled
+first_ok 1
+cancelada task cancelled
+fim

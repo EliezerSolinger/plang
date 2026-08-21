@@ -3591,6 +3591,150 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 107 — a varredura de worker + async, e os oito defeitos dela (2026-08-21)
+
+Você pediu uma varredura das bordas e armadilhas da linguagem, **principalmente
+worker e async ao mesmo tempo**. Foram ~40 programas adversariais, cada um com
+timeout (um travamento não pode travar a varredura). O modelo se manteve — a
+74.1 já tinha tirado o `recv` do condvar, e `timeout`, `race`, `cancel`,
+`gather`, socket dentro de worker, worker aninhado, 64 workers, `shared` sob
+contenção de 800 mil incrementos e o coletor em estresse passaram todos. O que
+caiu foi outra coisa.
+
+### 107.1 Os dois travamentos do canal
+
+> **O pai acabava e o programa ficava pendurado para sempre.** Um worker parado
+> em `await parent.recv()`, o pai chega ao fim, o `join` do 36.3 espera o worker
+> e o worker espera uma mensagem que já não pode chegar. A fila de SUBIDA sempre
+> teve fim (`done`, quando o worker termina); a de DESCIDA não tinha. Agora o
+> fim do pai FECHA o canal antes de esperar, e o `recv` do worker termina — que é
+> o desligamento cooperativo da 36.4 chegando por si, sem ninguém matar ninguém.
+>
+> **Os dois esperando um ao outro ficava pendurado calado.** Cada lado agora
+> MARCA no bloco que está parado esperando o outro, antes de dormir; se ao marcar
+> vê o outro também marcado e as duas filas vazias, nada pode acontecer nunca
+> mais e o runtime diz isso. Só é declarado quando TODA espera do contexto está
+> presa: com um segundo worker vivo, um socket ou um relógio, alguém ainda pode
+> acordar, e acusar aí seria acusar um programa correto.
+
+### 107.2 O `print` de vários workers saía costurado
+
+`print` fazia duas chamadas de stdio — o texto e depois o `\n` — e cada uma
+tranca o FILE por si. Cada worker tem heap, coletor e laço próprios (18.1), mas
+**não** uma saída própria: stdout é o mesmo arquivo dos nove. Medido: oito
+workers imprimindo 200 linhas cada davam **66 linhas costuradas ou vazias** em
+1801 — `worker-0-linha-38worker-1-linha-14`. Agora o texto e o `\n` vão na mesma
+chamada e o trinco do stdio cobre a linha inteira.
+
+Isto virou gate: `tests/print-atomic.sh` roda a tormenta e confere a FORMA de
+cada linha, porque a ORDEM é indeterminada por natureza e não cabe num
+`.expected`.
+
+### 107.3 O `for` dentro de `async def` não andava a variável
+
+O pior da varredura, porque era **resposta errada em silêncio**:
+
+```python
+async def f() -> int:
+    t = 0
+    for i in range(3):     # o laço roda três vezes
+        t += i             # e `i` vale 0 nas três
+    return t               # devolvia 0
+```
+
+O laço andava um local do C e o corpo lia o campo do frame, que ninguém
+escrevia. Só acontecia SEM `await` dentro do laço — com `await` o laço vai pela
+máquina de estados, que já amarrava o campo — e é por isso que a suíte inteira
+de async passava: um teste de async naturalmente põe um `await` no meio.
+
+Consertar isso desenterrou o resto da família:
+
+- **`for i in range(3)` deixava `i` valendo 3.** O `for` do P anda a variável
+  DELE, e depois do laço ela fica com o cursor. Não é nem o último valor (2, que
+  é o que o Python deixa) nem o de fora (que é o que a 64.1 pede). Agora o laço
+  anda um cursor próprio e a variável é amarrada no topo do corpo, como os laços
+  de lista, string e dict já faziam.
+- **A variável de laço de um `async def` era a variável da função de mesmo
+  nome.** O frame guarda um campo por NOME, e a 64.1 diz que a do laço é uma
+  variável NOVA. Agora ela tem campo próprio, nomeado pela POSIÇÃO do laço — o
+  mesmo truque do cursor da máquina de estados, em que as duas passadas chegam ao
+  mesmo nome sem combinar nada.
+- **A variável de uma comprehension era a homônima de fora**, nas duas máquinas:
+  no caminho síncrono a comprehension ESCREVIA nela (e deixava 3 lá), e no async
+  o elemento LIA a de fora — `[i * 2 for i in range(3)]` numa função com `i = 7`
+  dava `[14, 14, 14]`. A comprehension tem escopo próprio (o do Python) e agora
+  tem nome próprio.
+
+> **O que ficou igual e é uma divergência DELIBERADA:** a 64.1 (escopo de bloco)
+> diz que a variável do laço não sobrevive a ele, e o Python diz que sobrevive.
+> As duas máquinas agora concordam entre si e com a 64.1. Um `x = 2` dentro de um
+> bloco quando `x` já existe continua ATRIBUINDO o de fora, como no Python — é
+> só o nome NOVO que morre com o bloco, e é para isso que existe o `nonlocal`.
+
+### 107.4 Um erro que ninguém foi buscar desaparecia
+
+Uma task captura o erro dela para o `await`. Se ninguém aguarda, o programa
+terminava calado. O Python diz *"Task exception was never retrieved"* e o node
+avisa da promessa rejeitada; a razão é a mesma nos três, e a 37.4 já tinha
+tomado essa decisão para o worker. Agora sai uma linha no stderr, com posição.
+
+E ela **não** sai quando o erro foi realmente colhido: por `await`, por
+`gather_settled` (que devolve a lista de erros), por `first_ok` (que decide pela
+falha das outras), nem quando a task foi CANCELADA — o erro de uma task
+cancelada é a resposta ao pedido de parar, e `race` cancela os perdedores por
+definição.
+
+> **Ao consertar isso apareceu outro:** `raise error("x")` — que é como um
+> programa relata a própria falha — chegava ao topo dizendo `?:0`, enquanto todo
+> erro do runtime dizia arquivo e linha. `error(...)` não capturava posição
+> nenhuma, e `raise e` preserva a original de propósito. Agora ela nasce na
+> construção.
+
+### 107.5 A fila de espera era uma pilha
+
+Duas tarefas esperando a MESMA fila de mensagens: a segunda a estacionar recebia
+a primeira mensagem. A lista de estacionados era montada pela cabeça e percorrida
+pela cabeça. Duas leituras concorrentes do mesmo canal são o caso normal de um
+servidor, e a ordem certa é a de chegada.
+
+### 107.6 Um campo novo numa struct do runtime tem de ser inicializado
+
+O alocador do runtime **não zera**: cada função que cria um objeto atribui campo
+por campo. Acrescentar `lost` a `PsTask` e esquecer sete sítios de criação deu um
+SIGSEGV bonito dentro de um `async def` sob pressão de coletor — o campo tinha
+lixo e o `if t->lost != None` escrevia num endereço qualquer. Fica registrado
+porque a próxima pessoa a acrescentar um campo vai cair no mesmo lugar.
+
+### 107.7 As três mensagens que passaram a dizer o que fazer
+
+- `unknown name 'x'` depois de um `if/else` que atribui `x` → agora diz que o
+  nome morreu com o bloco (64.1) e que o opt-in é `nonlocal x`, que é
+  exactamente o que a 64.1 desenhou.
+- `unknown type 'worker'` → `Worker<T>`, com o T que atravessa o canal.
+- `w.status()` → `status(w)`, função e não método, porque também responde por um
+  worker que já foi.
+
+### 107.8 O que a varredura NÃO conseguiu decidir (é sua)
+
+**Como o receptor sabe que o canal acabou.** Hoje, um canal fechado ou um worker
+que terminou devolvem mensagem VAZIA para sempre — então `while True: v = await
+parent.recv()` gira sem fim e o programa não termina. A 45.3 decidiu o lado do
+`send` por escrito (*"nem exceção, nem silêncio: o bool diz entregou na fila"*) e
+o lado do `recv` nunca foi decidido. As saídas possíveis:
+
+1. **`recv` LEVANTA quando o canal acabou e está vazio** — o laço `while True`
+   termina por exceção, e quem quer o outro comportamento usa `try`.
+2. **`recv` devolve `T?`** — `None` é o fim, e o `??`/narrowing da 43.x já
+   existe para tratá-lo.
+3. **Um predicado ao lado** — `w.alive()` / `parent.open()`, simétrico ao bool do
+   `send` da 45.3, e o `recv` continua como está.
+4. **Fica como está** e a documentação diz que o protocolo precisa de sentinela
+   (uma mensagem que significa "acabou"), que é o que o teste `worker_async` faz
+   com o zero.
+
+Não implementei nenhuma: as quatro mudam o que um programa correto escreve, e
+isso é decisão sua. A 3 é a que menos quebra o que já existe.
+
 ## Bateria 106 — ordenação estável, `bisect` e `heapq` (2026-08-21)
 
 Três coisas que vieram do CPython, e uma que veio de olhar o que o `qsort`

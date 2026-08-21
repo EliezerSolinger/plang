@@ -177,6 +177,19 @@ struct PsLow:
     in_cleanup: bool     # lowering a cleanup body: its own guard must not try
                          #   to run the cleanups again
     async_names: StrSet
+    # 107: RENOMES em vigor. A variável de uma comprehension tem escopo próprio
+    # (o do Python), então enquanto o corpo dela é lowerado o nome dela aponta
+    # para uma variável só dela. Sem isto, `[i * 2 for i in range(3)]` numa
+    # função que também tem um `i` usava o `i` DE FORA: no caminho síncrono a
+    # comprehension escrevia nele (e deixava 3 lá depois), e no async as
+    # leituras do elemento iam para o campo do frame enquanto o laço andava um
+    # local que ninguém lia — `[198, 198, 198]` onde o Python dá `[0, 2, 4]`.
+    # (pilha de renomes: `rn_from[i]` é o nome escrito, `rn_to[i]` o nome do C.
+    #  É pilha e não mapa porque comprehensions se aninham e a de dentro tem de
+    #  poder esconder a de fora, e a profundidade é sempre pequena.)
+    rn_from: Vec<*char>
+    rn_to: Vec<*char>
+    rn_fld: Vec<*char>  # não-None = o destino é um CAMPO do frame
     frame_names: StrSet  # the generated async frames: collected like any struct
     fnvals: Vec<*PsFunc> # functions used as VALUES: each needs one adapter, so
                          #   that a closure call looks the same either way
@@ -247,6 +260,11 @@ struct PsLow:
     static def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr
     static def shared_lock(self: *PsLow, name: const *char, unlock: bool, pos: Pos) -> *Stmt
     static def in_frame(self: *PsLow, name: const *char) -> bool
+    static def rn_find(self: *PsLow, name: const *char) -> const *char
+    static def rn_is_field(self: *PsLow, name: const *char) -> bool
+    static def rn_push(self: *PsLow, name: const *char, to: const *char, is_field: bool)
+    static def rn_pop(self: *PsLow)
+    static def vname(self: *PsLow, name: const *char) -> const *char
     static def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr
     static def stmt(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     static def stmt_inner(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
@@ -1571,7 +1589,7 @@ struct PsLow:
                     id = self->global_ref(e->text, e->pos)
                 else:
                     id = ex_new(self->a, EX_IDENT, e->pos)
-                    id->text = ps_cname(self->a, e->text)
+                    id->text = self->vname(e->text)
                 if e->narrowed:
                     # the branch proved it present (43.1); the variable is still
                     # the option, so this read reaches inside it
@@ -1801,6 +1819,12 @@ struct PsLow:
                 # would build the inner list outside the loop that defines `x`.
                 outer_pre: Vec<*Stmt> = self->pre
                 self->pre.init()
+                # 107: a variável da comprehension tem escopo PRÓPRIO (o do
+                # Python). Enquanto o corpo dela é lowerado, esse nome não é o
+                # campo do frame de mesmo nome — é um local do laço.
+                cvn: const *char = self->a->printf("__cv%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                self->rn_push(e->var, cvn, False)
                 # 104: as amarrações de `enumerate`/`zip`/`reversed` entram como
                 # os PRIMEIROS statements do corpo, com o `pre` que elas mesmas
                 # gerarem na frente delas — o do ELEMENTO vem depois, porque o
@@ -1908,7 +1932,7 @@ struct PsLow:
                     # this builds the counted loop P already has — the same
                     # rename the `for` statement does
                     rf: *Stmt = st_new(self->a, ST_FOR, e->pos)
-                    rf->var = ps_cname(self->a, e->var)
+                    rf->var = self->vname(e->var)
                     rr2: *PsExpr = e->rhs
                     if rr2->nargs == 1:
                         rf->to = self->expr(rr2->args[0])
@@ -1926,6 +1950,7 @@ struct PsLow:
                 else:
                     self->lower_dict_for(fs, &loop)
                 self->for_body = prev_fb
+                self->rn_pop()
                 for i in range(loop.len):
                     self->pre.push(loop.data[i])
                 self->allocs = True
@@ -3582,6 +3607,12 @@ struct PsLow:
                 self->push_arg(c4, self->expr(e->args[1]))
             else:
                 self->push_arg(c4, self->num("4", e->pos))   # PS_CAT_VALUE
+            # 107: a POSIÇÃO onde o erro foi construído. Sem ela, `raise
+            # error("x")` — que é como um programa relata a própria falha —
+            # chegava ao topo dizendo `?:0`, enquanto todo erro do runtime dizia
+            # arquivo e linha. O `raise e` preserva a posição original, e a
+            # original é esta.
+            self->pos_args(c4, e->pos)
             return c4
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_TUPLE:
             # how many slots is part of the TYPE (98.1), so this is a literal
@@ -5191,15 +5222,59 @@ struct PsLow:
         f->op = TK_ARROW
         f->lhs = ex_new(self->a, EX_IDENT, pos)
         f->lhs->text = self->async_frame
-        f->field = ps_cname(self->a, name)
+        # com um renome para CAMPO em vigor (107), é o campo do renome
+        r: const *char = self->rn_find(name)
+        f->field = ps_cname(self->a, r) if r != None and self->rn_is_field(name) else ps_cname(self->a, name)
         return f
 
     static def in_frame(self: *PsLow, name: const *char) -> bool:
+        if name != None and self->rn_find(name) != None:
+            return self->rn_is_field(name)
         return self->async_frame != None and name != None and self->async_names.has(name)
+
+    # o renome em vigor para este nome, ou None. De trás para frente: a
+    # comprehension de dentro esconde a de fora.
+    static def rn_find(self: *PsLow, name: const *char) -> const *char:
+        if name == None:
+            return None
+        i: i32 = self->rn_from.len - 1
+        while i >= 0:
+            if strcmp(self->rn_from.data[i], name) == 0:
+                return self->rn_to.data[i]
+            i -= 1
+        return None
+
+    # o renome em vigor é para um CAMPO do frame?
+    static def rn_is_field(self: *PsLow, name: const *char) -> bool:
+        if name == None:
+            return False
+        i: i32 = self->rn_from.len - 1
+        while i >= 0:
+            if strcmp(self->rn_from.data[i], name) == 0:
+                return self->rn_fld.data[i] != None
+            i -= 1
+        return False
+
+    static def rn_push(self: *PsLow, name: const *char, to: const *char, is_field: bool):
+        self->rn_from.push((*char)(name))
+        self->rn_to.push((*char)(to))
+        self->rn_fld.push((*char)(to) if is_field else None)
+
+    static def rn_pop(self: *PsLow):
+        self->rn_from.len -= 1
+        self->rn_to.len -= 1
+        self->rn_fld.len -= 1
+
+    # o nome do C de uma variável do pscript, com os renomes em vigor (107)
+    static def vname(self: *PsLow, name: const *char) -> const *char:
+        r: const *char = self->rn_find(name)
+        if r != None:
+            return r
+        return ps_cname(self->a, name)
 
     static def ident(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         e: *Expr = ex_new(self->a, EX_IDENT, pos)
-        e->text = ps_cname(self->a, name)
+        e->text = self->vname(name)
         return e
 
     static def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
@@ -5738,7 +5813,25 @@ struct PsLow:
                 # P has `for x in range(a, b, step)` already, with the same
                 # meaning — so this is a rename, not a lowering (65)
                 fr: *Stmt = st_new(self->a, ST_FOR, s->pos)
-                fr->var = ps_cname(self->a, s->names[0])
+                # Dentro de um `async def` a variável de laço é CAMPO DO FRAME, e
+                # aí o `for` do P não pode andá-la direto: `for (i = 0; ...)`
+                # anda um local do C que ninguém lê, enquanto o corpo lê
+                # `__fr->i`, que fica em zero para sempre. O laço rodava o número
+                # certo de voltas com o valor errado — resposta errada em
+                # silêncio, e só quando NÃO havia `await` dentro (com `await` o
+                # laço vai pela máquina de estados, que já amarrava o campo).
+                # Os caminhos de lista, string, dict e array já faziam isto; era
+                # o `range` que não fazia. Achado varrendo worker+async (107).
+                # O `for` do P anda a variável DELE, e depois do laço ela fica
+                # com o valor do CURSOR — `for i in range(3)` deixava `i` em 3,
+                # que não é nem o último valor (2, que é o que o Python deixa)
+                # nem o de fora (que é o que a 64.1 pede). Então o laço anda um
+                # cursor próprio e a variável do pscript é amarrada no topo do
+                # corpo, que é exactamente o que os laços de lista, string e
+                # dict já faziam.
+                fcur: const *char = self->a->printf("__fc%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                fr->var = fcur
                 r: *PsExpr = s->iter
                 if r->nargs == 1:
                     fr->to = self->expr(r->args[0])
@@ -5747,7 +5840,25 @@ struct PsLow:
                     fr->to = self->expr(r->args[1])
                     if r->nargs == 3:
                         fr->step = self->expr(r->args[2])
-                fr->body = self->block(s->body)
+                # o renome (107): dentro do corpo, este nome é o LOCAL do laço e
+                # não o campo da função que por acaso se chama igual
+                self->rn_push(s->names[0], self->vname(s->names[0]), False)
+                fbody: *Block = self->block(s->body)
+                self->rn_pop()
+                # uma DECLARAÇÃO no topo do corpo, que é o que dá à variável o
+                # escopo do laço (64.1) — ver a nota da 107 nos outros laços
+                fbind: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                fbind->name = self->vname(s->names[0])
+                fbind->type = ty_name(self->a, "i64")
+                fbind->init = self->ident(fcur, s->pos)
+                nst: **Stmt = self->a->alloc(usize(fbody->n + 1) * sizeof(*nst))
+                nst[0] = fbind
+                for bi in range(fbody->n):
+                    nst[bi + 1] = fbody->stmts[bi]
+                nb2: *Block = self->a->alloc(sizeof(Block))
+                nb2->stmts = nst
+                nb2->n = fbody->n + 1
+                fr->body = nb2
                 out->push(fr)
             case PS_RAISE:
                 rs: *Stmt = st_new(self->a, ST_EXPR, s->pos)
@@ -6004,11 +6115,12 @@ struct PsLow:
         self->push_arg(nc, self->ident(cn, s->pos))
         self->push_arg(nc, self->ctx_arg(s->pos))
         bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-        bd->name = ps_cname(self->a, s->names[0])
+        bd->name = self->vname(s->names[0])
         bd->type = self->ty(nx->ret)
         bd->init = nc
         inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
         # The LOOP VARIABLE is a root like any other. It is declared here, above
         # the lowered body, so the body's own frame does not cover it — and a
         # loop whose body allocates before touching the variable would then be
@@ -6046,19 +6158,19 @@ struct PsLow:
         el: *Expr = ex_new(self->a, EX_INDEX, s->pos)
         el->lhs = self->ident(an, s->pos)
         el->rhs = self->ident(iv, s->pos)
-        if self->in_frame(s->names[0]):
-            ba: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
-            ba->lhs = self->async_field(s->names[0], s->pos)
-            ba->op = TK_ASSIGN
-            ba->rhs = el
-            inner.push(ba)
-        else:
-            bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-            bd->name = ps_cname(self->a, s->names[0])
-            bd->type = self->ty(at->inner)
-            bd->init = el
-            inner.push(bd)
+        self->rn_push(s->names[0], self->vname(s->names[0]), False)
+        # 107: a variável de um `for` é uma variável NOVA a cada laço (64.1),
+        # e neste caminho o corpo não tem `await` — quem tem vai pela máquina de
+        # estados, que lhe dá um CAMPO PRÓPRIO (`ps_for_slot`). Então aqui ela é
+        # sempre um local do C: escrever no campo do NOME atropelaria a variável
+        # da função que por acaso se chama igual, e era isso que acontecia.
+        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bd->name = self->vname(s->names[0])
+        bd->type = self->ty(at->inner)
+        bd->init = el
+        inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
         # The LOOP VARIABLE is a root like any other. It is declared here, above
         # the lowered body, so the body's own frame does not cover it — and a
         # loop whose body allocates before touching the variable would then be
@@ -6106,19 +6218,19 @@ struct PsLow:
         self->push_arg(step, self->addr_of(on, s->pos))
         inner: Vec<*Stmt>
         inner.init()
-        if self->in_frame(s->names[0]):
-            ba: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
-            ba->lhs = self->async_field(s->names[0], s->pos)
-            ba->op = TK_ASSIGN
-            ba->rhs = step
-            inner.push(ba)
-        else:
-            bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-            bd->name = ps_cname(self->a, s->names[0])
-            bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
-            bd->init = step
-            inner.push(bd)
+        self->rn_push(s->names[0], self->vname(s->names[0]), False)
+        # 107: a variável de um `for` é uma variável NOVA a cada laço (64.1),
+        # e neste caminho o corpo não tem `await` — quem tem vai pela máquina de
+        # estados, que lhe dá um CAMPO PRÓPRIO (`ps_for_slot`). Então aqui ela é
+        # sempre um local do C: escrever no campo do NOME atropelaria a variável
+        # da função que por acaso se chama igual, e era isso que acontecia.
+        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bd->name = self->vname(s->names[0])
+        bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
+        bd->init = step
+        inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
         bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
         bb->body = body
         inner.push(bb)
@@ -6144,19 +6256,19 @@ struct PsLow:
         fr->to = cnt
         inner: Vec<*Stmt>
         inner.init()
-        if self->in_frame(s->names[0]):
-            ba: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
-            ba->lhs = self->async_field(s->names[0], s->pos)
-            ba->op = TK_ASSIGN
-            ba->rhs = self->elem_at(self->ident(ln, s->pos), self->ident(iv, s->pos), et, s->pos)
-            inner.push(ba)
-        else:
-            bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-            bd->name = ps_cname(self->a, s->names[0])
-            bd->type = self->ty(et)
-            bd->init = self->elem_at(self->ident(ln, s->pos), self->ident(iv, s->pos), et, s->pos)
-            inner.push(bd)
+        self->rn_push(s->names[0], self->vname(s->names[0]), False)
+        # 107: a variável de um `for` é uma variável NOVA a cada laço (64.1),
+        # e neste caminho o corpo não tem `await` — quem tem vai pela máquina de
+        # estados, que lhe dá um CAMPO PRÓPRIO (`ps_for_slot`). Então aqui ela é
+        # sempre um local do C: escrever no campo do NOME atropelaria a variável
+        # da função que por acaso se chama igual, e era isso que acontecia.
+        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bd->name = self->vname(s->names[0])
+        bd->type = self->ty(et)
+        bd->init = self->elem_at(self->ident(ln, s->pos), self->ident(iv, s->pos), et, s->pos)
+        inner.push(bd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
         # The LOOP VARIABLE is a root like any other. It is declared here, above
         # the lowered body, so the body's own frame does not cover it — and a
         # loop whose body allocates before touching the variable would then be
@@ -6223,18 +6335,17 @@ struct PsLow:
         # whatever the frame was born with. `for k in d` inside an async def
         # crashed on exactly that, while `for ch in s` next door was right:
         # the string loop honoured the frame and this one did not.
-        if self->in_frame(s->names[0]):
-            ba: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
-            ba->lhs = self->async_field(s->names[0], s->pos)
-            ba->op = TK_ASSIGN
-            ba->rhs = self->slot_val(ka, kt, s->pos)
-            inner.push(ba)
-        else:
-            bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-            bd->name = ps_cname(self->a, s->names[0])
-            bd->type = self->ty(kt)
-            bd->init = self->slot_val(ka, kt, s->pos)
-            inner.push(bd)
+        self->rn_push(s->names[0], self->vname(s->names[0]), False)
+        # 107: a variável de um `for` é uma variável NOVA a cada laço (64.1),
+        # e neste caminho o corpo não tem `await` — quem tem vai pela máquina de
+        # estados, que lhe dá um CAMPO PRÓPRIO (`ps_for_slot`). Então aqui ela é
+        # sempre um local do C: escrever no campo do NOME atropelaria a variável
+        # da função que por acaso se chama igual, e era isso que acontecia.
+        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bd->name = self->vname(s->names[0])
+        bd->type = self->ty(kt)
+        bd->init = self->slot_val(ka, kt, s->pos)
+        inner.push(bd)
         if s->is_pairs:
             # `for k, v in d.items():` (61.4) — the value comes from the same
             # entry number, so it is the dense array's other half and needs no
@@ -6242,19 +6353,16 @@ struct PsLow:
             va: *Expr = self->call_rt("ps_dict_val_at", s->pos)
             self->push_arg(va, self->ident(dn, s->pos))
             self->push_arg(va, self->ident(iv, s->pos))
-            if self->in_frame(s->names[1]):
-                va2: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
-                va2->lhs = self->async_field(s->names[1], s->pos)
-                va2->op = TK_ASSIGN
-                va2->rhs = self->slot_val(va, dt->inner, s->pos)
-                inner.push(va2)
-            else:
-                vd: *Stmt = st_new(self->a, ST_VAR, s->pos)
-                vd->name = ps_cname(self->a, s->names[1])
-                vd->type = self->ty(dt->inner)
-                vd->init = self->slot_val(va, dt->inner, s->pos)
-                inner.push(vd)
+            self->rn_push(s->names[1], self->vname(s->names[1]), False)
+            vd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+            vd->name = self->vname(s->names[1])
+            vd->type = self->ty(dt->inner)
+            vd->init = self->slot_val(va, dt->inner, s->pos)
+            inner.push(vd)
         body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
+        if s->is_pairs:
+            self->rn_pop()
         # The LOOP VARIABLE is a root like any other. It is declared here, above
         # the lowered body, so the body's own frame does not cover it — and a
         # loop whose body allocates before touching the variable would then be
@@ -7659,6 +7767,15 @@ static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
 def ps_cleanup_flag(a: *Arena, pos: Pos) -> const *char:
     return a->printf("__cl_%d_%d", pos.line, pos.col)
 
+# 107: o CAMPO da variável de um `for` dentro de um `async def`. Ela é uma
+# variável NOVA a cada laço (64.1: escopo de bloco), então não pode ser o campo
+# do nome — se a função de fora também tem um `i`, o laço escrevia no `i` dela.
+# O nome sai da POSIÇÃO do laço, pelo mesmo motivo do cursor logo abaixo: a
+# passada que monta o frame e a que escreve os estados chegam ao mesmo nome sem
+# combinar nada.
+def ps_for_slot(a: *Arena, name: const *char, pos: Pos) -> const *char:
+    return a->printf("%s__l%d_%d", name, pos.line, pos.col)
+
 def ps_for_cursor(a: *Arena, pos: Pos) -> const *char:
     return a->printf("__afi_%d_%d", pos.line, pos.col)
 
@@ -7742,8 +7859,8 @@ static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: cons
         case PS_FOR:
             if s->is_pairs and s->nnames == 2 and s->iter != None and s->iter->type != None and s->iter->type->kind == PT_DICT:
                 # `for k, v in d.items():` (61.4) — two locals, so two fields
-                async_add_field(L, ref v, s->names[0], s->iter->type->key, s->pos, file)
-                async_add_field(L, ref v, s->names[1], s->iter->type->inner, s->pos, file)
+                async_add_field(L, ref v, ps_for_slot(L->a, s->names[0], s->pos), s->iter->type->key, s->pos, file)
+                async_add_field(L, ref v, ps_for_slot(L->a, s->names[1], s->pos), s->iter->type->inner, s->pos, file)
             if s->nnames == 1 and s->names[0] != None and s->iter != None:
                 et: *PsType = None
                 it: *PsType = s->iter->type
@@ -7756,7 +7873,7 @@ static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: cons
                 elif it != None and it->kind == PT_SET:
                     et = it->inner
                 if et != None:
-                    async_add_field(L, ref v, s->names[0], et, s->pos, file)
+                    async_add_field(L, ref v, ps_for_slot(L->a, s->names[0], s->pos), et, s->pos, file)
                 # a `for` with an await inside becomes a state machine, and its
                 # CURSOR has to survive between steps like every other local.
                 # The name is derived from where the loop is written, because
@@ -8271,9 +8388,15 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
             of9: i32 = B.L->async_lnacl
             B.L->async_lnacl = B.L->nacl
             B.cur = fbody
-            # the loop variable, at the top of the body
+            # A variável de laço tem CAMPO PRÓPRIO, nomeado pela posição do laço
+            # (107): ela é uma variável nova a cada laço (64.1), e usar o campo do
+            # NOME fazia o laço escrever na variável da função que se chamasse
+            # igual. O renome vale enquanto o corpo é lowerado, então tudo que lê
+            # o nome lá dentro lê este campo.
+            fslot: const *char = ps_for_slot(B.L->a, s->names[0], s->pos)
+            B.L->rn_push(s->names[0], fslot, True)
             bind: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
-            bind->lhs = B.L->async_field(s->names[0], s->pos) if B.L->in_frame(s->names[0]) else B.L->ident(ps_cname(B.L->a, s->names[0]), s->pos)
+            bind->lhs = B.L->async_field(s->names[0], s->pos)
             bind->op = TK_ASSIGN
             if is_range:
                 bind->rhs = B.L->async_field(iv, s->pos)
@@ -8281,6 +8404,7 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
                 bind->rhs = B.L->elem_at(B.L->async_field(lv, s->pos), B.L->async_field(iv, s->pos), ip->type->inner, s->pos)
             ab_emit(ref B, bind)
             ab_block(ref B, s->body)
+            B.L->rn_pop()
             ab_goto(ref B, fstep, s->pos)
             B.cur = fstep
             inc: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
@@ -9449,6 +9573,9 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.file = m->path
     L.m = m
     L.out.init()
+    L.rn_from.init()
+    L.rn_to.init()
+    L.rn_fld.init()
     L.frame_names.init()
     L.gvars.init()
     L.svars.init()

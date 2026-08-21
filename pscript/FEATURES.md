@@ -200,6 +200,24 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | Template em arquivo | 63.2, 75.2 | `template` | ✅ `render("x.tpl")` (buracos contra o escopo) e `render("x.tpl", {"nome": quem})` (buracos são as CHAVES do literal, resolvidos em tempo de compilação, valores de tipos diferentes, chave faltando/sobrando é erro). Não existe modo com header: a 75.2 fechou por aqui |
 | Import de `.ph` de P | 2.4 | — | ⏳ falta decidir como o módulo P entra no BUILD do programa pscript |
 
+## Worker e async ao mesmo tempo (varredura 107)
+
+| Situação | Estado |
+|---|---|
+| Entrada do worker sendo `async def` (e `await parent.recv()` lá dentro) | ✅ |
+| `recv` dentro de uma task (não no topo), com outras tasks andando | ✅ 74.1 |
+| Dois esperando a MESMA fila | ✅ FIFO: quem esperou primeiro recebe primeiro (107.5) |
+| O pai acaba sem mandar nada | ✅ o canal FECHA e o `recv` termina — travava para sempre (107.1) |
+| Os dois esperando um ao outro | ✅ declarado como travamento, com a checagem de que TODA espera está presa (107.1) |
+| `print` de N workers ao mesmo tempo | ✅ uma linha é uma linha; gate em `tests/print-atomic.sh` (107.2) |
+| `for` dentro de `async def` sem `await` no corpo | ✅ **dava 0 em silêncio** (107.3) |
+| Erro de task que ninguém aguarda | ✅ linha no stderr, com posição (107.4) |
+| `timeout`/`race`/`cancel`/`gather` sobre um `recv` estacionado | ✅ |
+| socket e arquivo dentro de worker; worker aninhado; 64 workers | ✅ |
+| `shared` sob contenção (800 mil incrementos, 12 threads) | ✅ exato |
+| Coletor em estresse com mensagens atravessando | ✅ |
+| Como o receptor sabe que o canal ACABOU | ⏳ **decisão sua** (107.8): hoje é mensagem vazia para sempre |
+
 ## O que o smallpt completo NÃO usa, e por quê
 
 `unsafe` e `nogc` (o programa não precisa — é o resultado desejado, não lacuna); import

@@ -1,1 +1,1 @@
-unknown name 'label'
+was declared inside a block and died with it (64.1): write `nonlocal label`

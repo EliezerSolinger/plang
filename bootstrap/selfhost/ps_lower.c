@@ -350,6 +350,9 @@ struct PsLow {
     int32_t cacl4;
     int in_cleanup;
     StrSet async_names;
+    Vec_pchar rn_from;
+    Vec_pchar rn_to;
+    Vec_pchar rn_fld;
     StrSet frame_names;
     Vec_pPsFunc fnvals;
     Vec_pPsExpr gmads;
@@ -422,6 +425,16 @@ static Expr *PsLow_addr_of_shared(PsLow *self, const char *name, Pos pos);
 static Stmt *PsLow_shared_lock(PsLow *self, const char *name, int unlock, Pos pos);
 
 static int PsLow_in_frame(PsLow *self, const char *name);
+
+static const char *PsLow_rn_find(PsLow *self, const char *name);
+
+static int PsLow_rn_is_field(PsLow *self, const char *name);
+
+static void PsLow_rn_push(PsLow *self, const char *name, const char *to, int is_field);
+
+static void PsLow_rn_pop(PsLow *self);
+
+static const char *PsLow_vname(PsLow *self, const char *name);
 
 static Expr *PsLow_addr_of(PsLow *self, const char *name, Pos pos);
 
@@ -1857,7 +1870,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 id = PsLow_global_ref(self, e->text, e->pos);
             } else {
                 id = ex_new(self->a, EX_IDENT, e->pos);
-                id->text = ps_cname(self->a, e->text);
+                id->text = PsLow_vname(self, e->text);
             }
             if (e->narrowed) {
                 PsType *w = ps_type(self->a, PT_OPT, e->pos);
@@ -2091,6 +2104,9 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             Vec_pStmt_push(&self->pre, cd3);
             Vec_pStmt outer_pre = self->pre;
             Vec_pStmt_init(&self->pre);
+            const char *cvn = Arena_printf(self->a, "__cv%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            PsLow_rn_push(self, e->var, cvn, 0);
             Vec_pStmt sugd;
             Vec_pStmt_init(&sugd);
             size_t si;
@@ -2182,7 +2198,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             self->for_body = lb;
             if (e->rhs->kind == PE_CALL && e->rhs->lhs != NULL && e->rhs->lhs->kind == PE_NAME && strcmp(e->rhs->lhs->text, "range") == 0) {
                 Stmt *rf = st_new(self->a, ST_FOR, e->pos);
-                rf->var = ps_cname(self->a, e->var);
+                rf->var = PsLow_vname(self, e->var);
                 PsExpr *rr2 = e->rhs;
                 if (rr2->nargs == 1) {
                     rf->to = PsLow_expr(self, rr2->args[0]);
@@ -2203,6 +2219,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 PsLow_lower_dict_for(self, fs, &loop);
             }
             self->for_body = prev_fb;
+            PsLow_rn_pop(self);
             for (i = 0; i < loop.len; i += 1) {
                 Vec_pStmt_push(&self->pre, loop.data[i]);
             }
@@ -3948,6 +3965,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         } else {
             PsLow_push_arg(self, c4, PsLow_num(self, "4", e->pos));
         }
+        PsLow_pos_args(self, c4, e->pos);
         return c4;
     }
     if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_TUPLE) {
@@ -5580,17 +5598,69 @@ static Expr *PsLow_async_field(PsLow *self, const char *name, Pos pos) {
     f->op = TK_ARROW;
     f->lhs = ex_new(self->a, EX_IDENT, pos);
     f->lhs->text = self->async_frame;
-    f->field = ps_cname(self->a, name);
+    const char *r = PsLow_rn_find(self, name);
+    f->field = (r != NULL && PsLow_rn_is_field(self, name) ? ps_cname(self->a, r) : ps_cname(self->a, name));
     return f;
 }
 
 static int PsLow_in_frame(PsLow *self, const char *name) {
+    if (name != NULL && PsLow_rn_find(self, name) != NULL) {
+        return PsLow_rn_is_field(self, name);
+    }
     return self->async_frame != NULL && name != NULL && StrSet_has(&self->async_names, name);
+}
+
+static const char *PsLow_rn_find(PsLow *self, const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    int32_t i = self->rn_from.len - 1;
+    while (i >= 0) {
+        if (strcmp(self->rn_from.data[i], name) == 0) {
+            return self->rn_to.data[i];
+        }
+        i -= 1;
+    }
+    return NULL;
+}
+
+static int PsLow_rn_is_field(PsLow *self, const char *name) {
+    if (name == NULL) {
+        return 0;
+    }
+    int32_t i = self->rn_from.len - 1;
+    while (i >= 0) {
+        if (strcmp(self->rn_from.data[i], name) == 0) {
+            return self->rn_fld.data[i] != NULL;
+        }
+        i -= 1;
+    }
+    return 0;
+}
+
+static void PsLow_rn_push(PsLow *self, const char *name, const char *to, int is_field) {
+    Vec_pchar_push(&self->rn_from, (char *)name);
+    Vec_pchar_push(&self->rn_to, (char *)to);
+    Vec_pchar_push(&self->rn_fld, (is_field ? (char *)to : NULL));
+}
+
+static void PsLow_rn_pop(PsLow *self) {
+    self->rn_from.len -= 1;
+    self->rn_to.len -= 1;
+    self->rn_fld.len -= 1;
+}
+
+static const char *PsLow_vname(PsLow *self, const char *name) {
+    const char *r = PsLow_rn_find(self, name);
+    if (r != NULL) {
+        return r;
+    }
+    return ps_cname(self->a, name);
 }
 
 static Expr *PsLow_ident(PsLow *self, const char *name, Pos pos) {
     Expr *e = ex_new(self->a, EX_IDENT, pos);
-    e->text = ps_cname(self->a, name);
+    e->text = PsLow_vname(self, name);
     return e;
 }
 
@@ -6129,7 +6199,9 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 return;
             }
             Stmt *fr = st_new(self->a, ST_FOR, s->pos);
-            fr->var = ps_cname(self->a, s->names[0]);
+            const char *fcur = Arena_printf(self->a, "__fc%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            fr->var = fcur;
             PsExpr *r = s->iter;
             if (r->nargs == 1) {
                 fr->to = PsLow_expr(self, r->args[0]);
@@ -6140,7 +6212,23 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                     fr->step = PsLow_expr(self, r->args[2]);
                 }
             }
-            fr->body = PsLow_block(self, s->body);
+            PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+            Block *fbody = PsLow_block(self, s->body);
+            PsLow_rn_pop(self);
+            Stmt *fbind = st_new(self->a, ST_VAR, s->pos);
+            fbind->name = PsLow_vname(self, s->names[0]);
+            fbind->type = ty_name(self->a, "i64");
+            fbind->init = PsLow_ident(self, fcur, s->pos);
+            Stmt **nst = Arena_alloc(self->a, (size_t)(fbody->n + 1) * sizeof(*nst));
+            nst[0] = fbind;
+            size_t bi;
+            for (bi = 0; bi < fbody->n; bi += 1) {
+                nst[bi + 1] = fbody->stmts[bi];
+            }
+            Block *nb2 = Arena_alloc(self->a, sizeof(Block));
+            nb2->stmts = nst;
+            nb2->n = fbody->n + 1;
+            fr->body = nb2;
             Vec_pStmt_push(out, fr);
             {
                 self->async_brk = sb8;
@@ -6398,11 +6486,12 @@ static void PsLow_lower_iter_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     PsLow_push_arg(self, nc, PsLow_ident(self, cn, s->pos));
     PsLow_push_arg(self, nc, PsLow_ctx_arg(self, s->pos));
     Stmt *bd = st_new(self->a, ST_VAR, s->pos);
-    bd->name = ps_cname(self->a, s->names[0]);
+    bd->name = PsLow_vname(self, s->names[0]);
     bd->type = PsLow_ty(self, nx->ret);
     bd->init = nc;
     Vec_pStmt_push(&inner, bd);
     Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
     Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
     bb->body = body;
     Vec_pStmt_push(&inner, bb);
@@ -6429,20 +6518,14 @@ static void PsLow_lower_arr_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Expr *el = ex_new(self->a, EX_INDEX, s->pos);
     el->lhs = PsLow_ident(self, an, s->pos);
     el->rhs = PsLow_ident(self, iv, s->pos);
-    if (PsLow_in_frame(self, s->names[0])) {
-        Stmt *ba = st_new(self->a, ST_ASSIGN, s->pos);
-        ba->lhs = PsLow_async_field(self, s->names[0], s->pos);
-        ba->op = TK_ASSIGN;
-        ba->rhs = el;
-        Vec_pStmt_push(&inner, ba);
-    } else {
-        Stmt *bd = st_new(self->a, ST_VAR, s->pos);
-        bd->name = ps_cname(self->a, s->names[0]);
-        bd->type = PsLow_ty(self, at->inner);
-        bd->init = el;
-        Vec_pStmt_push(&inner, bd);
-    }
+    PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+    bd->name = PsLow_vname(self, s->names[0]);
+    bd->type = PsLow_ty(self, at->inner);
+    bd->init = el;
+    Vec_pStmt_push(&inner, bd);
     Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
     Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
     bb->body = body;
     Vec_pStmt_push(&inner, bb);
@@ -6477,20 +6560,14 @@ static void PsLow_lower_str_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     PsLow_push_arg(self, step, PsLow_addr_of(self, on, s->pos));
     Vec_pStmt inner;
     Vec_pStmt_init(&inner);
-    if (PsLow_in_frame(self, s->names[0])) {
-        Stmt *ba = st_new(self->a, ST_ASSIGN, s->pos);
-        ba->lhs = PsLow_async_field(self, s->names[0], s->pos);
-        ba->op = TK_ASSIGN;
-        ba->rhs = step;
-        Vec_pStmt_push(&inner, ba);
-    } else {
-        Stmt *bd = st_new(self->a, ST_VAR, s->pos);
-        bd->name = ps_cname(self->a, s->names[0]);
-        bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"));
-        bd->init = step;
-        Vec_pStmt_push(&inner, bd);
-    }
+    PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+    bd->name = PsLow_vname(self, s->names[0]);
+    bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"));
+    bd->init = step;
+    Vec_pStmt_push(&inner, bd);
     Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
     Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
     bb->body = body;
     Vec_pStmt_push(&inner, bb);
@@ -6517,20 +6594,14 @@ static void PsLow_lower_list_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     fr->to = cnt;
     Vec_pStmt inner;
     Vec_pStmt_init(&inner);
-    if (PsLow_in_frame(self, s->names[0])) {
-        Stmt *ba = st_new(self->a, ST_ASSIGN, s->pos);
-        ba->lhs = PsLow_async_field(self, s->names[0], s->pos);
-        ba->op = TK_ASSIGN;
-        ba->rhs = PsLow_elem_at(self, PsLow_ident(self, ln, s->pos), PsLow_ident(self, iv, s->pos), et, s->pos);
-        Vec_pStmt_push(&inner, ba);
-    } else {
-        Stmt *bd = st_new(self->a, ST_VAR, s->pos);
-        bd->name = ps_cname(self->a, s->names[0]);
-        bd->type = PsLow_ty(self, et);
-        bd->init = PsLow_elem_at(self, PsLow_ident(self, ln, s->pos), PsLow_ident(self, iv, s->pos), et, s->pos);
-        Vec_pStmt_push(&inner, bd);
-    }
+    PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+    bd->name = PsLow_vname(self, s->names[0]);
+    bd->type = PsLow_ty(self, et);
+    bd->init = PsLow_elem_at(self, PsLow_ident(self, ln, s->pos), PsLow_ident(self, iv, s->pos), et, s->pos);
+    Vec_pStmt_push(&inner, bd);
     Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
     Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
     bb->body = body;
     Vec_pStmt_push(&inner, bb);
@@ -6578,38 +6649,28 @@ static void PsLow_lower_dict_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Expr *ka = PsLow_call_rt(self, "ps_dict_key_at", s->pos);
     PsLow_push_arg(self, ka, PsLow_ident(self, dn, s->pos));
     PsLow_push_arg(self, ka, PsLow_ident(self, iv, s->pos));
-    if (PsLow_in_frame(self, s->names[0])) {
-        Stmt *ba = st_new(self->a, ST_ASSIGN, s->pos);
-        ba->lhs = PsLow_async_field(self, s->names[0], s->pos);
-        ba->op = TK_ASSIGN;
-        ba->rhs = PsLow_slot_val(self, ka, kt, s->pos);
-        Vec_pStmt_push(&inner, ba);
-    } else {
-        Stmt *bd = st_new(self->a, ST_VAR, s->pos);
-        bd->name = ps_cname(self->a, s->names[0]);
-        bd->type = PsLow_ty(self, kt);
-        bd->init = PsLow_slot_val(self, ka, kt, s->pos);
-        Vec_pStmt_push(&inner, bd);
-    }
+    PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+    bd->name = PsLow_vname(self, s->names[0]);
+    bd->type = PsLow_ty(self, kt);
+    bd->init = PsLow_slot_val(self, ka, kt, s->pos);
+    Vec_pStmt_push(&inner, bd);
     if (s->is_pairs) {
         Expr *va = PsLow_call_rt(self, "ps_dict_val_at", s->pos);
         PsLow_push_arg(self, va, PsLow_ident(self, dn, s->pos));
         PsLow_push_arg(self, va, PsLow_ident(self, iv, s->pos));
-        if (PsLow_in_frame(self, s->names[1])) {
-            Stmt *va2 = st_new(self->a, ST_ASSIGN, s->pos);
-            va2->lhs = PsLow_async_field(self, s->names[1], s->pos);
-            va2->op = TK_ASSIGN;
-            va2->rhs = PsLow_slot_val(self, va, dt->inner, s->pos);
-            Vec_pStmt_push(&inner, va2);
-        } else {
-            Stmt *vd = st_new(self->a, ST_VAR, s->pos);
-            vd->name = ps_cname(self->a, s->names[1]);
-            vd->type = PsLow_ty(self, dt->inner);
-            vd->init = PsLow_slot_val(self, va, dt->inner, s->pos);
-            Vec_pStmt_push(&inner, vd);
-        }
+        PsLow_rn_push(self, s->names[1], PsLow_vname(self, s->names[1]), 0);
+        Stmt *vd = st_new(self->a, ST_VAR, s->pos);
+        vd->name = PsLow_vname(self, s->names[1]);
+        vd->type = PsLow_ty(self, dt->inner);
+        vd->init = PsLow_slot_val(self, va, dt->inner, s->pos);
+        Vec_pStmt_push(&inner, vd);
     }
     Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
+    if (s->is_pairs) {
+        PsLow_rn_pop(self);
+    }
     Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
     bb->body = body;
     Vec_pStmt_push(&inner, bb);
@@ -8014,6 +8075,10 @@ const char *ps_cleanup_flag(Arena *a, Pos pos) {
     return Arena_printf(a, "__cl_%d_%d", pos.line, pos.col);
 }
 
+const char *ps_for_slot(Arena *a, const char *name, Pos pos) {
+    return Arena_printf(a, "%s__l%d_%d", name, pos.line, pos.col);
+}
+
 const char *ps_for_cursor(Arena *a, Pos pos) {
     return Arena_printf(a, "__afi_%d_%d", pos.line, pos.col);
 }
@@ -8130,8 +8195,8 @@ static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file
         }
         case PS_FOR: {
             if (s->is_pairs && s->nnames == 2 && s->iter != NULL && s->iter->type != NULL && s->iter->type->kind == PT_DICT) {
-                async_add_field(L, v, s->names[0], s->iter->type->key, s->pos, file);
-                async_add_field(L, v, s->names[1], s->iter->type->inner, s->pos, file);
+                async_add_field(L, v, ps_for_slot(L->a, s->names[0], s->pos), s->iter->type->key, s->pos, file);
+                async_add_field(L, v, ps_for_slot(L->a, s->names[1], s->pos), s->iter->type->inner, s->pos, file);
             }
             if (s->nnames == 1 && s->names[0] != NULL && s->iter != NULL) {
                 PsType *et = NULL;
@@ -8146,7 +8211,7 @@ static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file
                     et = it->inner;
                 }
                 if (et != NULL) {
-                    async_add_field(L, v, s->names[0], et, s->pos, file);
+                    async_add_field(L, v, ps_for_slot(L->a, s->names[0], s->pos), et, s->pos, file);
                 }
                 if (has_await_b(s->body) || has_await_e(s->iter)) {
                     async_add_field(L, v, ps_for_cursor(L->a, s->pos), ps_type(L->a, PT_INT, s->pos), s->pos, file);
@@ -8690,8 +8755,10 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             int32_t of9 = B->L->async_lnacl;
             B->L->async_lnacl = B->L->nacl;
             B->cur = fbody;
+            const char *fslot = ps_for_slot(B->L->a, s->names[0], s->pos);
+            PsLow_rn_push(B->L, s->names[0], fslot, 1);
             Stmt *bind = st_new(B->L->a, ST_ASSIGN, s->pos);
-            bind->lhs = (PsLow_in_frame(B->L, s->names[0]) ? PsLow_async_field(B->L, s->names[0], s->pos) : PsLow_ident(B->L, ps_cname(B->L->a, s->names[0]), s->pos));
+            bind->lhs = PsLow_async_field(B->L, s->names[0], s->pos);
             bind->op = TK_ASSIGN;
             if (is_range) {
                 bind->rhs = PsLow_async_field(B->L, iv, s->pos);
@@ -8700,6 +8767,7 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             }
             ab_emit(B, bind);
             ab_block(B, s->body);
+            PsLow_rn_pop(B->L);
             ab_goto(B, fstep, s->pos);
             B->cur = fstep;
             Stmt *inc = st_new(B->L->a, ST_ASSIGN, s->pos);
@@ -9906,6 +9974,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     L.file = m->path;
     L.m = m;
     Vec_pDecl_init(&L.out);
+    Vec_pchar_init(&L.rn_from);
+    Vec_pchar_init(&L.rn_to);
+    Vec_pchar_init(&L.rn_fld);
     StrSet_init(&L.frame_names);
     StrSet_init(&L.gvars);
     StrSet_init(&L.svars);
