@@ -1590,10 +1590,34 @@ static def pre_cond(self: *P, e: *Expr, file: const *char) -> bool:
             return v != 0
         case EX_NUMBER:
             return strtoll(e->text, None, 0) != 0
+        case EX_CALL:
+            # `defined(NOME)` (110): verdadeiro quando o nome EXISTE — um
+            # predefinido ou um `-D`. É o que permite escrever "use o valor de
+            # fora, senão o padrão" sem que o nome ausente seja erro:
+            #
+            #     const if defined(PSRT_GC_BYTES):
+            #         const PS_GC_BYTES = PSRT_GC_BYTES
+            #     else:
+            #         const PS_GC_BYTES = 1 << 21
+            #
+            # O nome NU continua estrito de propósito: é o que pega
+            # `__PLANG_LINUXX__` escrito errado, e um typo que compila pelo ramo
+            # errado é pior do que um erro.
+            # `is_defined` é como a sema chama a mesma pergunta dentro de uma
+            # função (65.11); as duas grafias valem aqui, para ninguém ter de
+            # lembrar qual é a de cada lugar
+            if e->lhs != None and e->lhs->kind == EX_IDENT and (strcmp(e->lhs->text, "defined") == 0 or strcmp(e->lhs->text, "is_defined") == 0):
+                if e->nargs != 1 or e->args[0]->kind != EX_IDENT:
+                    fatal_at(file, e->pos, "`defined(NAME)` takes one name")
+                known: bool = True
+                parser_predef_value(e->args[0]->text, ref known)
+                return known
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
+            return False
         case EX_UNARY:
             if e->op == TK_NOT:
                 return not pre_cond(self, e->lhs, file)
-            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`")
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
             return False
         case EX_BINARY:
             if e->op == TK_AND:
@@ -1614,10 +1638,10 @@ static def pre_cond(self: *P, e: *Expr, file: const *char) -> bool:
                 sv: *char = str_lit_decode(self->a, lit->text, out ln)
                 same: bool = strcmp(sv, PRE_OS) == 0
                 return same if e->op == TK_EQ else not same
-            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`")
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
             return False
         case _:
-            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`")
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
             return False
 
 # reads one indented block of TOP-LEVEL declarations, keeping them only if this

@@ -3907,6 +3907,52 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strncmp(name, "__time_", 7) == 0) {
         return PsLow_call_rt(self, (strcmp(name + 7, "time") == 0 ? "ps_sys_time" : "ps_sys_monotonic"), e->pos);
     }
+    if (strncmp(name, "__gc_", 5) == 0) {
+        const char *gf0 = name + 5;
+        if (strcmp(gf0, "collect") == 0) {
+            Expr *gc0 = PsLow_call_rt(self, "ps_gc_collect", e->pos);
+            PsLow_push_arg(self, gc0, PsLow_ctx_arg(self, e->pos));
+            return gc0;
+        }
+        if (strcmp(gf0, "stats") == 0) {
+            Expr *gs0 = PsLow_call_rt(self, "ps_gc_stats", e->pos);
+            PsLow_push_arg(self, gs0, PsLow_ctx_arg(self, e->pos));
+            self->allocs = 1;
+            return gs0;
+        }
+        Expr *gb = NULL;
+        Expr *go = NULL;
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsExpr *a0 = e->args[i];
+            if (a0->kind == PE_DESIG) {
+                if (strcmp(a0->text, "bytes") == 0) {
+                    gb = PsLow_expr(self, a0->lhs);
+                } else {
+                    go = PsLow_expr(self, a0->lhs);
+                }
+            } else if (gb == NULL) {
+                gb = PsLow_expr(self, a0);
+            } else {
+                go = PsLow_expr(self, a0);
+            }
+        }
+        Expr *gt = PsLow_call_rt(self, "ps_gc_tune", e->pos);
+        PsLow_push_arg(self, gt, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, gt, (gb != NULL ? gb : PsLow_num(self, "0", e->pos)));
+        PsLow_push_arg(self, gt, (go != NULL ? go : PsLow_num(self, "0", e->pos)));
+        PsLow_pos_args(self, gt, e->pos);
+        self->raised = 1;
+        return gt;
+    }
+    if (strcmp(name, "__sys_pool") == 0) {
+        Expr *sp0 = PsLow_call_rt(self, "ps_pool_want", e->pos);
+        PsLow_push_arg(self, sp0, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, sp0, PsLow_expr(self, e->args[0]));
+        PsLow_pos_args(self, sp0, e->pos);
+        self->raised = 1;
+        return sp0;
+    }
     if (strcmp(name, "__sys_exit") == 0) {
         Expr *xc = PsLow_call_rt(self, "ps_sys_exit", e->pos);
         PsLow_push_arg(self, xc, PsLow_ctx_arg(self, e->pos));

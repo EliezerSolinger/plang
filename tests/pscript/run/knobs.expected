@@ -1,0 +1,10 @@
+orcamento padrao 2097152 contagem 200000
+depois de tune(bytes) 4194304 contagem intacta 200000
+depois de tune(objects) 50000 orcamento intacto 4194304
+posicional 2097152 12345
+coletou mais True e o vivo é maior que zero: True
+medidas ['alloced', 'budget', 'budget_objects', 'collections', 'live', 'objects']
+pool pedido
+worker afinou para 1048576/1000, e o meu continua True
+negativo: gc.tune() takes sizes that are not negative (0 = leave as it is)
+zero: sys.pool(n) takes between 1 and the compile-time ceiling PSRT_POOL_MAX

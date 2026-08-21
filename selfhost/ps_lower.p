@@ -3559,6 +3559,46 @@ struct PsLow:
             return mc
         if strncmp(name, "__time_", 7) == 0:
             return self->call_rt("ps_sys_time" if strcmp(name + 7, "time") == 0 else "ps_sys_monotonic", e->pos)
+        # ---- 110: o módulo `gc` e `sys.pool` ----
+        if strncmp(name, "__gc_", 5) == 0:
+            gf0: const *char = name + 5
+            if strcmp(gf0, "collect") == 0:
+                gc0: *Expr = self->call_rt("ps_gc_collect", e->pos)
+                self->push_arg(gc0, self->ctx_arg(e->pos))
+                return gc0
+            if strcmp(gf0, "stats") == 0:
+                gs0: *Expr = self->call_rt("ps_gc_stats", e->pos)
+                self->push_arg(gs0, self->ctx_arg(e->pos))
+                self->allocs = True
+                return gs0
+            # tune: os dois limites, na ordem, com 0 = "deixa como está"
+            gb: *Expr = None
+            go: *Expr = None
+            for i in range(e->nargs):
+                a0: *PsExpr = e->args[i]
+                if a0->kind == PE_DESIG:
+                    if strcmp(a0->text, "bytes") == 0:
+                        gb = self->expr(a0->lhs)
+                    else:
+                        go = self->expr(a0->lhs)
+                elif gb == None:
+                    gb = self->expr(a0)
+                else:
+                    go = self->expr(a0)
+            gt: *Expr = self->call_rt("ps_gc_tune", e->pos)
+            self->push_arg(gt, self->ctx_arg(e->pos))
+            self->push_arg(gt, gb if gb != None else self->num("0", e->pos))
+            self->push_arg(gt, go if go != None else self->num("0", e->pos))
+            self->pos_args(gt, e->pos)
+            self->raised = True
+            return gt
+        if strcmp(name, "__sys_pool") == 0:
+            sp0: *Expr = self->call_rt("ps_pool_want", e->pos)
+            self->push_arg(sp0, self->ctx_arg(e->pos))
+            self->push_arg(sp0, self->expr(e->args[0]))
+            self->pos_args(sp0, e->pos)
+            self->raised = True
+            return sp0
         if strcmp(name, "__sys_exit") == 0:
             xc: *Expr = self->call_rt("ps_sys_exit", e->pos)
             self->push_arg(xc, self->ctx_arg(e->pos))

@@ -8382,9 +8382,12 @@ static void Sema_register_decl(Sema *self, Module *m, Decl *d, int check_bodies)
             }
             if (d->init != NULL && !self->in_chdr) {
                 if (StrSet_has(&self->gdefs, d->name)) {
-                    fatal_at(self->file, d->pos, "redefinition of '%s' (already defined with an initializer)", d->name);
+                    if (!d->is_define) {
+                        fatal_at(self->file, d->pos, "redefinition of '%s' (already defined with an initializer)", d->name);
+                    }
+                } else {
+                    StrSet_add(&self->gdefs, d->name);
                 }
-                StrSet_add(&self->gdefs, d->name);
             }
             if (!self->in_chdr && StrMap_pFunc_has(&self->funcs, d->name) && StrMap_pType_get_or(&self->globals, d->name, NULL) == NULL) {
                 fatal_at(self->file, d->pos, "'%s' redeclared as a different kind of symbol", d->name);
@@ -8666,13 +8669,14 @@ static void Sema_inject_defines(Sema *self, Cc *cc, Module *m) {
         }
         Decl *dc = Arena_alloc(self->a, sizeof(Decl));
         {
-            Decl *__with_6081_13 = dc;
-            __with_6081_13->kind = DL_VAR;
-            __with_6081_13->pos = zp;
-            __with_6081_13->name = name;
-            __with_6081_13->is_const = 1;
-            __with_6081_13->is_static = 1;
-            __with_6081_13->init = ini;
+            Decl *__with_6087_13 = dc;
+            __with_6087_13->kind = DL_VAR;
+            __with_6087_13->pos = zp;
+            __with_6087_13->name = name;
+            __with_6087_13->is_const = 1;
+            __with_6087_13->is_static = 1;
+            __with_6087_13->is_define = 1;
+            __with_6087_13->init = ini;
         }
         nd[np] = dc;
         np += 1;

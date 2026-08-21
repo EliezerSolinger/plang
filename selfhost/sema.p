@@ -5810,8 +5810,14 @@ struct Sema:
                 # definition of the same object is invalid (tentative decls are fine)
                 if d->init != None and not self->in_chdr:
                     if self->gdefs.has(d->name):
-                        fatal_at(self->file, d->pos, "redefinition of '%s' (already defined with an initializer)", d->name)
-                    self->gdefs.add(d->name)
+                        # 110: uma const de `-D` entra em toda unidade E no
+                        # header que a usa, então quem importa o header vê a
+                        # mesma definição duas vezes. É a única repetição
+                        # permitida, e é permitida porque é a MESMA.
+                        if not d->is_define:
+                            fatal_at(self->file, d->pos, "redefinition of '%s' (already defined with an initializer)", d->name)
+                    else:
+                        self->gdefs.add(d->name)
                 if not self->in_chdr and self->funcs.has(d->name) and self->globals.get_or(d->name, None) == None:
                     fatal_at(self->file, d->pos, "'%s' redeclared as a different kind of symbol", d->name)
                 if d->type != None and d->type->is_ref:
@@ -6084,6 +6090,7 @@ struct Sema:
                 .name = name
                 .is_const = True
                 .is_static = True   # internal linkage: no collision between TUs
+                .is_define = True   # 110: a marca que deixa a repetição passar
                 .init = ini
             nd[np] = dc
             np += 1

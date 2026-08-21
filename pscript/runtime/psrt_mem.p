@@ -17,7 +17,12 @@ import "psrt_mem.ph"
 # Uma linha, e o resto da fronteira continua valendo.
 def ps_raise(ctx: *PsCtx, msg: const *char, cat: i32, file: const *char, line: i32)
 
-const PS_BLOCK_BYTES = 1 << 20      # 1 MiB per block
+# 110: o tamanho do bloco do heap. `-D PSRT_BLOCK_BYTES=N` para quem sabe o
+# perfil do próprio programa; o padrão é 1 MiB.
+const if defined(PSRT_BLOCK_BYTES):
+    const PS_BLOCK_BYTES = PSRT_BLOCK_BYTES
+else:
+    const PS_BLOCK_BYTES = 1 << 20      # 1 MiB per block
 # The FLOOR of the collection budget, not the budget. 14.2 asked for a fixed
 # "collect every 2 MiB allocated", and a fixed trigger makes a copying collector
 # QUADRATIC on any program whose live set grows: each collection copies
@@ -36,8 +41,14 @@ const PS_BLOCK_BYTES = 1 << 20      # 1 MiB per block
 # the standard rule for a copying heap and it makes the copying amortise to a
 # constant per byte allocated — the total work becomes linear. The floor is what
 # keeps a small program from collecting every few kilobytes.
-const PS_GC_BYTES = 1 << 21
-const PS_GC_OBJECTS = 200000        # ... or after this many objects (14.2)
+const if defined(PSRT_GC_BYTES):
+    const PS_GC_BYTES = PSRT_GC_BYTES
+else:
+    const PS_GC_BYTES = 1 << 21
+const if defined(PSRT_GC_OBJECTS):
+    const PS_GC_OBJECTS = PSRT_GC_OBJECTS
+else:
+    const PS_GC_OBJECTS = 200000    # ... or after this many objects (14.2)
 
 # ---------- GC STRESS: making the whole bug class visible ----------
 #
@@ -83,7 +94,12 @@ static PS_POISON: const i32 = 0xDD
 # Sixteen is the useful bound — a pointer held across a safe point is read on
 # the very next statement, not sixteen collections later, so the window that
 # catches anything at all is the recent one.
-static PS_GRAVE_MAX: const i32 = 16
+# 110: quantas coletas de from-space ficam envenenadas no modo de estresse
+# (`-D PSRT_GRAVE_MAX=N`).
+const if defined(PSRT_GRAVE_MAX):
+    static PS_GRAVE_MAX: const i32 = PSRT_GRAVE_MAX
+else:
+    static PS_GRAVE_MAX: const i32 = 16
 
 static ps_stress_n: i64 = -1         # -1 = not looked up yet; 0 = off
                                      # (the ENV is read once; the graveyard and
@@ -172,6 +188,10 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.alloced = 0
     ctx.nalloc = 0
     ctx.ngc = 0
+    # 110: os limites nascem dos padrões de compilação e podem ser ajustados em
+    # runtime por `gc.tune` (deste contexto — cada worker tem o seu)
+    ctx.gc_bytes = usize(PS_GC_BYTES)
+    ctx.gc_objects = PS_GC_OBJECTS
     ctx.ready = None
     ctx.ready_tail = None
     ctx.globals = None
@@ -505,15 +525,35 @@ def ps_gc_poll(ctx: *PsCtx):
     # scale: a fixed object count is the same quadratic in the other dimension,
     # and a heap of a million small strings hits that one first (the cliff at
     # n = 800_000 in the measurement above was exactly this).
-    budget: usize = usize(PS_GC_BYTES)
+    budget: usize = ctx->gc_bytes
     if ctx->live > budget:
         budget = ctx->live
-    nbudget: i64 = PS_GC_OBJECTS
+    nbudget: i64 = ctx->gc_objects
     if ctx->nlive > nbudget:
         nbudget = ctx->nlive
     if ctx->alloced < budget and i64(ctx->nalloc) < nbudget:
         return
     ps_gc(ctx)
+
+# ---------- 110: os knobs de RUNTIME do coletor (o módulo `gc`) ----------
+#
+# O que dimensiona array é knob de compilação (`-D PSRT_*`); o que se ajusta com
+# a CARGA é chamada, e a chamada vale para o contexto de quem chamou — cada
+# worker tem heap e coletor próprios (18.1), então ajustar num não ajusta no
+# outro. Isso é a resposta certa, não uma limitação: um worker que processa
+# imagens e outro que serve texto não querem o mesmo orçamento.
+def ps_gc_collect(ctx: *PsCtx):
+    ps_gc(ctx)
+
+def ps_gc_tune(ctx: *PsCtx, bytes: i64, objects: i64, file: const *char, line: i32):
+    if bytes < 0 or objects < 0:
+        ps_raise(ctx, "gc.tune() takes sizes that are not negative (0 = leave as it is)", 4, file, line)
+        return
+    # zero é "deixa como está": `gc.tune(bytes=...)` não mexe na contagem
+    if bytes > 0:
+        ctx->gc_bytes = usize(bytes)
+    if objects > 0:
+        ctx->gc_objects = objects
 
 # `nogc:` begins (26.1). With a budget it PRE-RESERVES: the collector runs
 # first, so the block starts on a clean heap and what it may spend is measured

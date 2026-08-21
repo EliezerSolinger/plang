@@ -205,7 +205,12 @@ static def ps_pipe_close(fd: int)
 
 # what a parked receive is waiting to rebuild (74.1)
 # how many queues one wait can watch at once (74.1)
-static const PS_POLL_MAX: const i32 = 64
+# 110: quantos descritores um `poll` acompanha de uma vez
+# (`-D PSRT_POLL_MAX=N`). Dimensiona array: é knob de COMPILAÇÃO.
+const if defined(PSRT_POLL_MAX):
+    static const PS_POLL_MAX: const i32 = PSRT_POLL_MAX
+else:
+    static const PS_POLL_MAX: const i32 = 64
 
 static const PS_RECV_RAW: const i32 = 0
 static const PS_RECV_OBJ: const i32 = 1
@@ -653,7 +658,12 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
 # whole contract, and it is what lets the collector go on knowing nothing about
 # any of this. The value only becomes an object when the OWNING context builds
 # it, in `ps_ios_poll`, on its own thread.
-static const PS_POOL_MAX: const i32 = 8
+# 110: o TETO de threads do pool de I/O (`-D PSRT_POOL_MAX=N`). Quantas de
+# fato subir é ajuste de runtime — ver `sys.pool`.
+const if defined(PSRT_POOL_MAX):
+    static const PS_POOL_MAX: const i32 = PSRT_POOL_MAX
+else:
+    static const PS_POOL_MAX: const i32 = 8
 
 struct PsPool:
     mu: pthread_mutex_t
@@ -662,6 +672,7 @@ struct PsPool:
     tail: *PsWork
     n: i32
     started: i32
+    want: i32            # 110: o que `sys.pool(n)` pediu (0 = ninguém pediu)
 
 static g_pool: PsPool = {0}
 
@@ -708,12 +719,31 @@ static def ps_pool_start():
         v: i64 = strtoll(env, None, 10)
         if v >= 1 and v <= 64:
             n = i32(v)
+    # 110: e o que o PROGRAMA pediu vence o ambiente e o número de CPUs — quem
+    # escreveu o programa sabe mais sobre a carga dele do que qualquer padrão
+    if g_pool.want > 0:
+        n = g_pool.want
+    if n > PS_POOL_MAX:
+        n = PS_POOL_MAX
     g_pool.n = n
     g_pool.started = 1
     for i in range(n):
         th: pthread_t
         pthread_create(&th, None, ps_pool_thread, None)
         pthread_detach(th)
+
+# 110: `sys.pool(n)` — quantas threads de I/O subir. Tem de ser ANTES da
+# primeira operação assíncrona: o pool sobe uma vez e não encolhe (76.3), e
+# fingir que muda depois seria mentir. Então depois de subir isto LEVANTA, com a
+# frase que diz o que fazer, em vez de aceitar calado e não ter efeito.
+def ps_pool_want(ctx: *PsCtx, n: i64, file: const *char, line: i32):
+    if n < 1 or n > i64(PS_POOL_MAX):
+        ps_raise(ctx, "sys.pool(n) takes between 1 and the compile-time ceiling PSRT_POOL_MAX", 4, file, line)
+        return
+    if g_pool.started != 0:
+        ps_raise(ctx, "sys.pool(n): the pool has already started — call it before the first `await` on I/O", 4, file, line)
+        return
+    g_pool.want = i32(n)
 
 static def ps_work_free(w: *PsWork):
     if w == None:
@@ -1139,6 +1169,17 @@ static def ps_park(ctx: *PsCtx, t: *PsTask):
 # one queue. Hence the descriptor on each queue, and a `poll` with the nearest
 # deadline as its timeout. That is the loop 18.4 describes; a socket would join
 # the same list without changing the shape.
+# Zera TODO campo de espera de uma task recém-nascida. O alocador não zera, e
+# quem cria uma task chama isto — então acrescentar um campo de espera aqui é o
+# que impede o próximo defeito desta família.
+#
+# 110: `is_io` e `work` NÃO estavam aqui, e por isso toda task nascia com lixo
+# neles. Quando o lixo tinha `is_io != 0`, o escalonador seguia `t->work` — um
+# ponteiro que nunca existiu — e o programa morria dentro de `ps_recvs_poll`. Só
+# aparecia com o coletor em estresse E heap grande, porque aí o lixo do bloco
+# novo é o veneno 0xDD do cemitério: `0xdddddddddddde35` foi o endereço que o
+# valgrind mostrou. É a mesma família da 107.6 (campo novo sem inicializar em
+# todos os sítios), e desta vez o campo tinha ANOS.
 static def ps_task_clear_recv(t: *PsTask):
     t->is_recv = 0
     t->rblk = None
@@ -1146,6 +1187,8 @@ static def ps_task_clear_recv(t: *PsTask):
     t->rkind = 0
     t->rsize = 0
     t->rshape = None
+    t->is_io = 0
+    t->work = None
 
 # Takes the next message of the queue this task names, if there is one. `ended`
 # comes back True when there will never be another: the worker finished and its

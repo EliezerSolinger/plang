@@ -3591,6 +3591,96 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 110 — os valores cravados: `-D` para o que dimensiona, chamada para o que se ajusta (2026-08-21)
+
+Sua observação: *"alguns valores do gc e da linguagem poderiam ser constantes em
+tempo de compilação e outros parâmetros em runtime chamados pelo próprio
+usuário"*. Suas três respostas na bateria de perguntas fecharam o desenho.
+
+**110.1 `defined(NOME)` no `const if` de topo.** O padrão de um knob é *"use o
+valor de fora, senão o padrão"*, e ele não era escrevível: um nome desconhecido
+num `const if` de topo é ERRO — de propósito, porque é o que pega
+`__PLANG_LINUXX__` escrito errado. Agora o nome NU segue estrito e
+`defined(NOME)` responde se o nome existe:
+
+```python
+const if defined(PSRT_GC_BYTES):
+    const PS_GC_BYTES = PSRT_GC_BYTES
+else:
+    const PS_GC_BYTES = 1 << 21
+```
+
+`is_defined(NOME)` — como a sema chama a mesma pergunta dentro de uma função
+(65.11) — vale também, para ninguém ter de lembrar qual é a grafia de cada lugar.
+Nas duas linguagens.
+
+**110.2 O que virou `-D PSRT_*`** (o que dimensiona array ou é limite estrutural,
+porque tem de ser conhecido ao compilar):
+
+| knob | padrão | o que é |
+|---|---|---|
+| `PSRT_BLOCK_BYTES` | 1 MiB | o bloco do heap |
+| `PSRT_GC_BYTES` | 2 MiB | o piso do orçamento de coleta |
+| `PSRT_GC_OBJECTS` | 200 000 | o disparo por contagem de objetos |
+| `PSRT_TRACE_MAX` | 24 | frames no rastro de um erro (array DENTRO do `PsErr`) |
+| `PSRT_POLL_MAX` | 64 | descritores num `poll` |
+| `PSRT_POOL_MAX` | 8 | o TETO de threads de I/O |
+| `PSRT_REPR_MAX` | 8 | a profundidade do `repr` |
+| `PSRT_JSON_DEPTH` | 1000 | a profundidade que o json aceita |
+| `PSRT_RE_GROUPS` | 16 | grupos de captura de uma regex |
+| `PSRT_GRAVE_MAX` | 16 | blocos envenenados no modo de estresse |
+
+**110.3 O que virou CHAMADA** (o que depende da carga, e só o programa sabe):
+o módulo **`gc`** — `gc.collect()`, `gc.tune(bytes=..., objects=...)`,
+`gc.stats()` — e **`sys.pool(n)`**.
+
+- **`gc.stats()` devolve `dict<str, int>`** (live, alloced, objects,
+  collections, budget, budget_objects). Um dict e não um record: nenhum tipo novo
+  para a linguagem aprender, o `print` já sabe imprimi-lo, e acrescentar uma
+  medida depois não quebra programa nenhum.
+- **`gc.tune` afina o coletor DE QUEM CHAMA.** Cada worker tem heap e coletor
+  próprios (18.1), então afinar num não afina no outro — e isso é a resposta
+  certa: um worker que processa imagens e outro que serve texto não querem o
+  mesmo orçamento. Zero em qualquer campo é "deixa como está".
+- **`sys.pool(n)` tem de vir ANTES da primeira operação de I/O.** O pool sobe uma
+  vez e não encolhe (76.3); depois de subir, a chamada LEVANTA com a frase que
+  diz o que fazer, em vez de aceitar calada e não ter efeito. O que o programa
+  pede vence o ambiente (`PSCRIPT_POOL`) e o número de CPUs, e o teto continua
+  sendo o de compilação.
+
+**110.4 Três defeitos no caminho.** Os dois primeiros são do mecanismo de `-D`,
+que ninguém tinha exercitado com vários módulos:
+
+> **A const de `-D` era injetada em toda unidade E no header**, e aí quem
+> importava o header via a mesma definição duas vezes — "redefinition". Ela
+> precisa estar no header (para um header poder USAR o valor) e não pode ser
+> emitida nele (senão um `.c` que inclui dois headers define duas vezes em C).
+> Agora ela é marcada, a repetição no escopo é a única permitida, e o back end de
+> C não a escreve no `.h`.
+
+E o terceiro é o achado da bateria, encontrado porque a suíte de estresse do
+coletor rodou sobre o teste novo:
+
+> **`ps_task_clear_recv` não zerava `is_io` nem `work`.** Toda task nascia com
+> lixo nesses dois campos; quando o lixo tinha `is_io != 0`, o escalonador seguia
+> `t->work` — um ponteiro que nunca existiu — e o programa morria dentro de
+> `ps_recvs_poll`. Só aparecia com estresse E heap grande, porque só aí o lixo do
+> bloco novo é o veneno `0xDD` do cemitério: `0xdddddddddddde35` foi o endereço
+> que o valgrind mostrou. É a mesma família da 107.6 — campo acrescentado depois,
+> não inicializado em todos os sítios — e desta vez o campo tinha ANOS. O
+> conserto é uma linha em cada caso, no ÚNICO lugar que toda criação de task
+> chama.
+>
+> Por que ninguém tinha visto: com o heap pequeno o lixo era zero, e o
+> `gdb`/ASan mudam o layout o suficiente para o programa passar. Quem apontou o
+> dedo foi `valgrind --fair-sched` sobre o binário de estresse.
+
+**110.5 O portão.** `tests/knobs.sh` compila o MESMO programa três vezes — padrão,
+com `-D PSRT_REPR_MAX=2` (a saída muda de `[[[[[1, 2]]]]]` para `[[...]]`, que é
+knob visível sem medir nada) e com os dez knobs de fora ao mesmo tempo — e entrou
+no `verify-all`. O que os outros knobs mudam é dimensão de array, e para eles o
+teste é continuar compilando e rodando com o valor de fora.
+
 ## Bateria 109 — o runtime em cinco camadas, e o que a divisão desenterrou (2026-08-21)
 
 A quebra que a 108 mediu e você aprovou. O runtime era um arquivo de 7 590

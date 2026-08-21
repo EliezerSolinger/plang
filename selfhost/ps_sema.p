@@ -2025,7 +2025,7 @@ struct PsSema:
             # `sorted(xs, key=f)` names its second argument, and that name is
             # part of what the builtin IS (28.4) — the general named argument
             # (44.1's `f(x=1)`) is still ahead
-            if e->args[i]->kind == PE_DESIG and strcmp(name, "sorted") != 0 and strcmp(name, "gather_map") != 0 and not self->funcs.has(name) and not self->cfuncs.has(name):
+            if e->args[i]->kind == PE_DESIG and strcmp(name, "sorted") != 0 and strcmp(name, "gather_map") != 0 and strcmp(name, "__gc_tune") != 0 and not self->funcs.has(name) and not self->cfuncs.has(name):
                 fatal_at(self->file, e->args[i]->pos, "'%s' does not take named arguments", ps_disp(name))
         if self->cfuncs.has(name) and not self->funcs.has(name):
             cf: *PsFunc = self->cfuncs.get_or(name, None)
@@ -2477,6 +2477,54 @@ struct PsSema:
             r: *PsType = ps_type(self->a, PT_NAME, e->pos)
             r->name = "Error"
             return r
+        # ---- 110: o módulo `gc` e `sys.pool` ----
+        if strncmp(name, "__gc_", 5) == 0:
+            gf: const *char = name + 5
+            if strcmp(gf, "collect") == 0:
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "gc.collect() takes no arguments")
+                return ps_type(self->a, PT_VOID, e->pos)
+            if strcmp(gf, "stats") == 0:
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "gc.stats() takes no arguments")
+                # dict<str, int>: nenhum tipo novo para a linguagem aprender, e
+                # o `print` já sabe imprimi-lo
+                gd: *PsType = ps_type(self->a, PT_DICT, e->pos)
+                gd->key = ps_type(self->a, PT_STR, e->pos)
+                gd->inner = ps_type(self->a, PT_INT, e->pos)
+                return gd
+            if strcmp(gf, "tune") == 0:
+                # `gc.tune(bytes=..., objects=...)`: os dois por nome, cada um
+                # opcional — o que não vier fica como está. Aceita posicional
+                # também, na mesma ordem.
+                if e->nargs < 1 or e->nargs > 2:
+                    fatal_at(self->file, e->pos, "gc.tune(bytes=..., objects=...) takes one or both")
+                seen_b: bool = False
+                seen_o: bool = False
+                for i in range(e->nargs):
+                    a: *PsExpr = e->args[i]
+                    if a->kind == PE_DESIG:
+                        nm: const *char = a->text
+                        if strcmp(nm, "bytes") == 0:
+                            if seen_b:
+                                fatal_at(self->file, e->pos, "gc.tune(): 'bytes' given twice")
+                            seen_b = True
+                        elif strcmp(nm, "objects") == 0:
+                            if seen_o:
+                                fatal_at(self->file, e->pos, "gc.tune(): 'objects' given twice")
+                            seen_o = True
+                        else:
+                            fatal_at(self->file, e->pos, "gc.tune() takes 'bytes' (the budget floor, in bytes) and 'objects' (the object count), not '%s'", nm)
+                        self->want(a->lhs, self->check_expr(a->lhs), ps_type(self->a, PT_INT, e->pos), "a limit of gc.tune()")
+                    else:
+                        self->want(a, self->check_expr(a), ps_type(self->a, PT_INT, e->pos), "a limit of gc.tune()")
+                return ps_type(self->a, PT_VOID, e->pos)
+            fatal_at(self->file, e->pos, "gc has collect, tune and stats")
+        if strcmp(name, "__sys_pool") == 0:
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "sys.pool(n) takes the number of I/O threads")
+            self->want(e->args[0], self->check_expr(e->args[0]), ps_type(self->a, PT_INT, e->pos), "the thread count")
+            return ps_type(self->a, PT_VOID, e->pos)
         if strcmp(name, "__sys_exit") == 0:
             if e->nargs != 1:
                 fatal_at(self->file, e->pos, "sys.exit() takes a status")
@@ -3051,7 +3099,7 @@ struct PsSema:
             # `sys` is the one module that is not a file (48.3): what it names
             # is the program's own surroundings, which only the runtime can
             # answer. Its members are BUILTINS, so there is nothing to load.
-            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0 or strcmp(d->path, "random") == 0 or strcmp(d->path, "math") == 0 or strcmp(d->path, "time") == 0 or strcmp(d->path, "bisect") == 0 or strcmp(d->path, "heapq") == 0):
+            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0 or strcmp(d->path, "random") == 0 or strcmp(d->path, "math") == 0 or strcmp(d->path, "time") == 0 or strcmp(d->path, "bisect") == 0 or strcmp(d->path, "heapq") == 0 or strcmp(d->path, "gc") == 0):
                 sub = self->builtin_ns(d->path, path)
             if sub == None:
                 n: usize = 0
@@ -3399,6 +3447,13 @@ struct PsSema:
         elif strcmp(name, "time") == 0:
             ns->sym.add("time")
             ns->sym.add("monotonic")
+        elif strcmp(name, "gc") == 0:
+            # 110: os knobs de RUNTIME do coletor. Módulo próprio, como no
+            # Python — o que dimensiona array é `-D PSRT_*`, o que se ajusta com
+            # a carga é chamada.
+            ns->sym.add("collect")
+            ns->sym.add("tune")
+            ns->sym.add("stats")
         elif strcmp(name, "bisect") == 0:
             # 106: portado de `Lib/bisect.py`, com os dois nomes que o Python
             # tem para cada um (o sem sufixo é o `right`)
@@ -3416,6 +3471,7 @@ struct PsSema:
             ns->sym.add("argv")
             ns->sym.add("env")
             ns->sym.add("exit")
+            ns->sym.add("pool")
             ns->sym.add("time")
             ns->sym.add("out")
             ns->sym.add("err")

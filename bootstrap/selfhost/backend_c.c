@@ -1483,6 +1483,9 @@ static void emit_decl(StrBuf *b, Decl *d) {
             break;
         }
         case DL_VAR: {
+            if (d->is_define && g_in_header) {
+                return;
+            }
             if (d->is_extern) {
                 StrBuf_puts(b, "extern ");
             } else if (d->is_static) {

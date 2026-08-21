@@ -232,11 +232,22 @@ the same three build modes. The runtime is Plang source compiled alongside your
 program, so there is still no library to install:
 
 ```sh
-plangc --out-dir out pscript/runtime/psrt.ph pscript/runtime/psrt.p   # once
+# the runtime, once: five layered modules (memory, values, what runs, the
+# ported library, the epilogue) plus the type header and the umbrella
+plangc --out-dir out pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph \
+   pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph \
+   pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph \
+   pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p \
+   pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p \
+   pscript/runtime/psrt_std.p pscript/runtime/psrt_top.p
 plangc --out-dir out hello.psc
 cc -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE \
-   out/hello.c out/pscript/runtime/psrt.c -o hello -lm -pthread
+   out/hello.c out/pscript/runtime/psrt_*.c -o hello -lm -pthread
 ```
+
+Your program still includes ONE header (`psrt.h`, the umbrella). And the engine
+has knobs: `-D PSRT_GC_BYTES=...` and friends at compile time, `import gc` /
+`sys.pool(n)` at run time — see bateria 110.
 
 (`--ps-runtime <dir>` says where the runtime lives if it is not in
 `pscript/runtime`.)

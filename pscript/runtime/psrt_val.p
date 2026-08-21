@@ -622,6 +622,29 @@ def ps_buffer_set_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, v: f64, file: const *ch
         *p = v
 
 # has THIS context given the buffer away? (18.2)
+# 110: `gc.stats()` — o estado do coletor DESTE contexto, como `dict<str, int>`.
+#
+# Um dict e não um record: assim não há tipo novo para a linguagem aprender, o
+# `print` já sabe imprimi-lo, e acrescentar uma medida depois não quebra
+# programa nenhum. Mora aqui (camada dos valores) porque constrói dict e str; a
+# memória só guarda os números.
+def ps_gc_stats(ctx: *PsCtx) -> *PsDict:
+    d: *PsDict = ps_dict_new(ctx, i32(sizeof(PsStrPtr)), i32(sizeof(i64)), 1, True, False)
+    NAMES: const *char[] = {"live", "alloced", "objects", "collections", "budget", "budget_objects"}
+    vals: i64[6]
+    vals[0] = i64(ctx->live)
+    vals[1] = i64(ctx->alloced)
+    vals[2] = ctx->nalloc
+    vals[3] = ctx->ngc
+    vals[4] = i64(ctx->gc_bytes)
+    vals[5] = ctx->gc_objects
+    for i in range(6):
+        k: *PsStr = ps_str_new(ctx, NAMES[i], strlen(NAMES[i]))
+        kp: *PsStr = k
+        slot: *char = ps_dict_put(ctx, d, (*char)(&kp))
+        *(*i64)(slot) = vals[i]
+    return d
+
 def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool:
     return b != None and b->gone_from != None and b->gone_from == (*void)(ctx)
 # ---------- the stable sort, shared by `key=` and by `Comparable` ----------
@@ -1634,7 +1657,12 @@ static def ps_repr_puts(ref b: PsRepr, s: *PsStr):
 # The static expansion of a record's fields stops at depth 3 on its own; this is
 # the other door, and it is counted in the CONTEXT because the adapter that
 # recurses is a function the compiler emitted, not a parameter it can thread.
-PS_REPR_MAX: const i32 = 8
+# 110: a profundidade que o `repr` desce antes de escrever `...`
+# (`-D PSRT_REPR_MAX=N`).
+const if defined(PSRT_REPR_MAX):
+    PS_REPR_MAX: const i32 = PSRT_REPR_MAX
+else:
+    PS_REPR_MAX: const i32 = 8
 
 def ps_repr_seq(ctx: *PsCtx, l: *PsList, open: const *char, close: const *char, fn: def(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr, env: *void) -> *PsStr:
     if ctx->repr_depth >= PS_REPR_MAX:

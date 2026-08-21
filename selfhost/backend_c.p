@@ -1274,6 +1274,13 @@ static def emit_decl(b: *StrBuf, d: *Decl):
                 b->printf("#include \"%s\"\n", path)
             free(fixed)
         case DL_VAR:
+            # 110: a const de `-D` NÃO vai para o .h. Ela é injetada em toda
+            # unidade e também no header (para que um header possa USAR o
+            # valor), e um `.c` que inclui dois headers veria a mesma definição
+            # duas vezes — o cc recusa. No `.c` de cada módulo ela está, que é
+            # onde precisa estar.
+            if d->is_define and g_in_header:
+                return
             if d->is_extern:
                 # `extern` must survive the round-trip: dropping it would turn a
                 # declaration into a DEFINITION — e.g. glibc's `extern FILE

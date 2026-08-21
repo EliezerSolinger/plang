@@ -1338,10 +1338,24 @@ struct PsP:
                 return strtoll(e->text, None, 0) != 0
             case PE_BOOL:
                 return strcmp(e->text, "True") == 0
+            case PE_CALL:
+                # `defined(NOME)` / `is_defined(NOME)` (110): verdadeiro quando o
+                # nome EXISTE (um predefinido ou um `-D`). É o que permite "use o
+                # valor de fora, senão o padrão" sem que o nome ausente seja
+                # erro. O nome NU segue estrito, que é o que pega o predefinido
+                # escrito errado.
+                if e->lhs != None and e->lhs->kind == PE_NAME and (strcmp(e->lhs->text, "defined") == 0 or strcmp(e->lhs->text, "is_defined") == 0):
+                    if e->nargs != 1 or e->args[0]->kind != PE_NAME:
+                        fatal_at(self->file, e->pos, "`defined(NAME)` takes one name")
+                    known: bool = True
+                    parser_predef_value(e->args[0]->text, ref known)
+                    return known
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
+                return False
             case PE_UNARY:
                 if e->op == TK_NOT:
                     return not self->const_cond(e->lhs)
-                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`")
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
                 return False
             case PE_BINARY:
                 if e->op == TK_AND:
@@ -1360,10 +1374,10 @@ struct PsP:
                     sv: *char = str_lit_decode(self->a, lit->text, out ln)
                     same: bool = strcmp(sv, parser_predef_os()) == 0
                     return same if e->op == TK_EQ else not same
-                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`")
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
                 return False
             case _:
-                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`")
+                fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
                 return False
 
     static def parse_if(self: *PsP) -> *PsStmt:

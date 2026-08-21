@@ -1797,11 +1797,23 @@ static int pre_cond(P *self, Expr *e, const char *file) {
         case EX_NUMBER: {
             return strtoll(e->text, NULL, 0) != 0;
         }
+        case EX_CALL: {
+            if (e->lhs != NULL && e->lhs->kind == EX_IDENT && (strcmp(e->lhs->text, "defined") == 0 || strcmp(e->lhs->text, "is_defined") == 0)) {
+                if (e->nargs != 1 || e->args[0]->kind != EX_IDENT) {
+                    fatal_at(file, e->pos, "`defined(NAME)` takes one name");
+                }
+                int known = 1;
+                parser_predef_value(e->args[0]->text, &known);
+                return known;
+            }
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
         case EX_UNARY: {
             if (e->op == TK_NOT) {
                 return !pre_cond(self, e->lhs, file);
             }
-            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
             return 0;
         }
         case EX_BINARY: {
@@ -1826,11 +1838,11 @@ static int pre_cond(P *self, Expr *e, const char *file) {
                 int same = strcmp(sv, PRE_OS) == 0;
                 return (e->op == TK_EQ ? same : !same);
             }
-            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
             return 0;
         }
         default: {
-            fatal_at(file, e->pos, "a top-level `const if` takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            fatal_at(file, e->pos, "a top-level `const if` takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
             return 0;
         }
     }

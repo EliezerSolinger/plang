@@ -37,3 +37,6 @@ def ps_pop_frame(ctx: *PsCtx, f: *PsFrame)
 def ps_dup(s: const *char) -> *char
 # 108: era privada do arquivo único; a divisão em camadas a tornou pública
 def ps_free_blocks(ctx: *PsCtx, b: *PsBlock)
+# 110: os knobs de runtime do coletor — o módulo `gc` do pscript
+def ps_gc_collect(ctx: *PsCtx)
+def ps_gc_tune(ctx: *PsCtx, bytes: i64, objects: i64, file: const *char, line: i32)

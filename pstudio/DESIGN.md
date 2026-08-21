@@ -248,3 +248,29 @@ SDL_VIDEODRIVER=dummy ./out/bin/pstudio --size 1000x620 --shot /tmp/e.ppm . core
 Testes: `tests/pstudio/*.p` — 6 programas headless (psys, raster, pgfx com
 driver dummy, pui, core, e **app_flow**, que dirige o editor inteiro por
 eventos sintéticos e compara um "screenshot" ASCII do frame).
+
+---
+
+## Migração total para pscript (decidido 2026-08-21)
+
+Suas palavras: *"o pstudio temos que migrar ele totalmente para PScript e a parte
+de sistema vai pra lib/runtime do PScript onde for possível"*.
+
+O que isso quer dizer, camada por camada:
+
+| hoje | depois |
+|---|---|
+| `psys.p` (P): arquivo, diretório, `stat`, `ps_run`, caminho, tempo | vira **stdlib do pscript** (um módulo `os`/`path`, implementado em P como `random` e `time` — 108.4). O pstudio passa a IMPORTAR, não a conter |
+| `pgfx.p`, `pgfx_raster.p`, `font_atlas.p` (P) | pscript, com o que for de SDL ficando na fronteira |
+| `pui.p`, `core.p`, `app.p` (P) | pscript |
+| o shim escalar da bateria 71 (`pstudio/ps/shim.p`) | deixa de existir: ele só existe porque a lógica em pscript precisava chamar o P |
+
+O ganho não é estético: **o pstudio é o maior consumidor de P do projeto** (é o
+que a bateria 7/8 do `verify-all` mede), e ele em pscript é o maior programa
+gráfico em pscript que existe — com o coletor, os workers e o laço de eventos
+sob carga real. E a camada de sistema, ao sair daqui para a stdlib, ganha um
+segundo consumidor: o **pbuild** (ver `pbuild/DESIGN.md`, 1.1), que é justamente
+o teste de que ela está no lugar certo.
+
+O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor não
+é stdlib de ninguém.

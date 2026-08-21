@@ -399,6 +399,11 @@ enum DeclKind:
 struct Decl:
     kind: DeclKind
     pos: Pos
+    is_define: bool     # 110: const injetada por `-D NAME=VAL`. Ela entra em TODA
+                        #   unidade (é `static`), e um header também a recebe para
+                        #   poder USAR o valor — então a MESMA definição aparece
+                        #   duas vezes no escopo de quem importa o header, e é
+                        #   essa repetição (e só ela) que a sema deixa passar.
     inline_inst: bool   # `inline X<T>`: instantiate here with internal linkage
     # DL_IMPORT
     import_system: bool      # <h> or bare -> #include <...>

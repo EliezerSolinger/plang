@@ -209,3 +209,5 @@ def ps_dyn_data(ctx: *PsCtx, d: *PsDyn) -> *void
 def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool
 # 108: definida nos três corpos de plataforma do multiplexador
 def ps_mux_free(ctx: *PsCtx)
+# 110: quantas threads de I/O o programa quer (antes da primeira operação)
+def ps_pool_want(ctx: *PsCtx, n: i64, file: const *char, line: i32)

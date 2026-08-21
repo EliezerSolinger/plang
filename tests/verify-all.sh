@@ -160,6 +160,15 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/print-atomic.sh >$V/printatomic.log 2>&1;
 else
     bad "o print de workers concorrentes costurou linhas (veja $V/printatomic.log)"
 fi
+#   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
+#                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
+#                que se vê sem medir), e com TODOS os knobs de fora ele ainda
+#                compila e roda.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/knobs.sh >$V/knobs.log 2>&1; then
+    ok "knobs $(grep -oE '[0-9]+ builds ok' $V/knobs.log | tail -1)"
+else
+    bad "um knob de compilação não pegou (veja $V/knobs.log)"
+fi
 if PLANGC=$PWD/$V/plangc_s2 bash tests/run-cmd.sh >$V/runcmd.log 2>&1; then
     ok "run-cmd $(grep -oE '[0-9]+ ok' $V/runcmd.log | tail -1)"
 else

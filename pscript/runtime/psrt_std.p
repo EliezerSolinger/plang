@@ -146,7 +146,11 @@ def ps_heapify(l: *PsList, kind: i32):
 # attacker-supplied text without one is a stack overflow waiting to be asked
 # for, and the corpus asks: `n_structure_100000_opening_arrays.json` is a
 # hundred thousand `[`. The RFC blesses a limit (§9); silently dying does not.
-PS_JSON_MAX_DEPTH: const i32 = 1000
+# 110: a profundidade máxima que o json aceita (`-D PSRT_JSON_DEPTH=N`).
+const if defined(PSRT_JSON_DEPTH):
+    PS_JSON_MAX_DEPTH: const i32 = PSRT_JSON_DEPTH
+else:
+    PS_JSON_MAX_DEPTH: const i32 = 1000
 
 struct PsJson:
     ctx: *PsCtx
@@ -545,7 +549,11 @@ def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *P
     return v
 
 # ---------- `re` (41.2) ----------
-PS_RE_MAX_GROUPS: const i32 = 16
+# 110: quantos grupos de captura uma regex devolve (`-D PSRT_RE_GROUPS=N`).
+const if defined(PSRT_RE_GROUPS):
+    PS_RE_MAX_GROUPS: const i32 = PSRT_RE_GROUPS
+else:
+    PS_RE_MAX_GROUPS: const i32 = 16
 
 def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
     rx: regex_t

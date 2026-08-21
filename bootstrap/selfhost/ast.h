@@ -165,6 +165,7 @@ typedef enum { DL_IMPORT = 0, DL_VAR, DL_FUNC, DL_TRAIT, DL_STRUCT, DL_ENUM, DL_
 struct Decl {
     DeclKind kind;
     Pos pos;
+    int is_define;
     int inline_inst;
     int import_system;
     const char *import_path;

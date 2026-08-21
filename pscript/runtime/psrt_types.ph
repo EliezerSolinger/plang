@@ -215,7 +215,12 @@ struct PsStrPtr:
 # nothing for the collector to trace, and a raise inside the collector or out of
 # memory must not need memory to be reportable. Deeper than this and the middle
 # is elided, which is what every runtime does with a thousand-frame stack.
-PS_TRACE_MAX: const i32 = 24
+# 110: quantos frames o rastro de um erro carrega (`-D PSRT_TRACE_MAX=N`).
+# Dimensiona um array DENTRO do PsErr, então é knob de compilação.
+const if defined(PSRT_TRACE_MAX):
+    PS_TRACE_MAX: const i32 = PSRT_TRACE_MAX
+else:
+    PS_TRACE_MAX: const i32 = 24
 
 struct PsErr:
     obj: PsObj
@@ -597,6 +602,11 @@ struct PsCtx:
     alloced: usize       # bytes allocated since then       (14.2)
     nalloc: i64          # objects allocated since then     (14.2)
     ngc: i64             # collections so far
+    # 110: os dois limites do coletor são do CONTEXTO, não constantes: cada
+    # worker tem heap e coletor próprios (18.1), então `gc.tune` ajusta o de quem
+    # chamou. Nascem dos padrões de compilação (`PSRT_GC_BYTES`/`PSRT_GC_OBJECTS`).
+    gc_bytes: usize      # piso do orçamento por coleta
+    gc_objects: i64      # ... ou esta contagem de objetos, o que vier primeiro
     ready: *PsTask       # run queue head: tasks that can take a step now
     ready_tail: *PsTask
     globals: *void       # the program's MUTABLE module variables, one set per

@@ -2722,11 +2722,23 @@ static int PsP_const_cond(PsP *self, PsExpr *e) {
         case PE_BOOL: {
             return strcmp(e->text, "True") == 0;
         }
+        case PE_CALL: {
+            if (e->lhs != NULL && e->lhs->kind == PE_NAME && (strcmp(e->lhs->text, "defined") == 0 || strcmp(e->lhs->text, "is_defined") == 0)) {
+                if (e->nargs != 1 || e->args[0]->kind != PE_NAME) {
+                    fatal_at(self->file, e->pos, "`defined(NAME)` takes one name");
+                }
+                int known = 1;
+                parser_predef_value(e->args[0]->text, &known);
+                return known;
+            }
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
+            return 0;
+        }
         case PE_UNARY: {
             if (e->op == TK_NOT) {
                 return !PsP_const_cond(self, e->lhs);
             }
-            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
             return 0;
         }
         case PE_BINARY: {
@@ -2751,11 +2763,11 @@ static int PsP_const_cond(PsP *self, PsExpr *e) {
                 int same = strcmp(sv, parser_predef_os()) == 0;
                 return (e->op == TK_EQ ? same : !same);
             }
-            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
             return 0;
         }
         default: {
-            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `not`, `and`, `or`, or `== \"...\"`");
+            fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`");
             return 0;
         }
     }
