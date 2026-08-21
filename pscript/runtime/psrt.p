@@ -515,6 +515,7 @@ def ps_worker_args(blk: *void) -> *void:
 def ps_worker_finish(ctx: *PsCtx, blk: *void):
     b: *PsWorkerBlk = (*PsWorkerBlk)(blk)
     pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
     if ctx->exc != None:
         # 37.4: a worker that dies with an uncaught error becomes STATE plus a
         # message for the parent; the program keeps going and whoever spawned it
@@ -526,7 +527,6 @@ def ps_worker_finish(ctx: *PsCtx, blk: *void):
     b->done = 1
     pthread_cond_broadcast(&b->cv)
     ps_pipe_wake(b->up_w)
-    pthread_mutex_unlock(&b->mu)
 
 static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
 static def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask
@@ -854,35 +854,48 @@ static def ps_ser_run(sh: const *PsShape, slot: const *void, out_n: *usize) -> *
     *out_n = s.len
     return s.buf
 
+# 108: pôr uma mensagem na fila e acordar o outro lado aparecia quatro vezes,
+# cada uma com o seu par de trinco. Aqui é uma vez, e o trinco sai por `defer`:
+# o P roda o defer em TODA saída do bloco (fim, return, break), então um `return`
+# novo no meio não pode mais vazar o mutex — que é o defeito que não dá para
+# depurar, porque o programa simplesmente para.
+#
+# A checagem de `done` é DENTRO do trinco: fora dele, o worker pode terminar
+# entre o teste e o push, e a mensagem fica numa fila que ninguém mais lê.
+static def ps_queue_put(b: *PsWorkerBlk, down: bool, p: const *void, size: usize) -> bool:
+    pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
+    if down:
+        if b->done != 0:
+            return False        # 45.3: para um worker que já foi, a resposta é False
+        ps_msg_push(&b->down_head, &b->down_tail, p, size)
+        pthread_cond_broadcast(&b->cv)
+        ps_pipe_wake(b->dn_w)
+        return True
+    ps_msg_push(&b->up_head, &b->up_tail, p, size)
+    pthread_cond_broadcast(&b->cv)
+    ps_pipe_wake(b->up_w)
+    return True
+
 def ps_send_obj_up(ctx: *PsCtx, sh: const *PsShape, slot: const *void) -> bool:
     b: *PsWorkerBlk = ctx->parent
     if b == None:
         return False
     n: usize = 0
     buf: *char = ps_ser_run(sh, slot, &n)
-    pthread_mutex_lock(&b->mu)
-    ps_msg_push(&b->up_head, &b->up_tail, buf, n)
-    pthread_cond_broadcast(&b->cv)
-    ps_pipe_wake(b->up_w)
-    pthread_mutex_unlock(&b->mu)
+    ok: bool = ps_queue_put(b, False, buf, n)
     free(buf)
-    return True
+    return ok
 
 def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool:
     if w == None or w->blk == None:
         return False
     b: *PsWorkerBlk = w->blk
-    if b->done != 0:
-        return False
     n: usize = 0
     buf: *char = ps_ser_run(sh, slot, &n)
-    pthread_mutex_lock(&b->mu)
-    ps_msg_push(&b->down_head, &b->down_tail, buf, n)
-    pthread_cond_broadcast(&b->cv)
-    ps_pipe_wake(b->dn_w)
-    pthread_mutex_unlock(&b->mu)
+    ok: bool = ps_queue_put(b, True, buf, n)
     free(buf)
-    return True
+    return ok
 
 # The value is BUILT here, in the receiver's own heap — which is the whole
 # reason the bytes crossed instead of the objects. Building allocates and
@@ -930,10 +943,9 @@ def ps_chan_open(w: *PsWorker) -> bool:
         return False
     b: *PsWorkerBlk = w->blk
     pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
     # do lado do PAI: o worker ainda está rodando, ou deixou coisa na fila
-    ok: bool = b->done == 0 or b->up_head != None
-    pthread_mutex_unlock(&b->mu)
-    return ok
+    return b->done == 0 or b->up_head != None
 
 # ... e o outro lado do predicado: o pai diz que ACABOU DE MANDAR sem ter de
 # terminar. Sem isto, `while parent.open():` só fecharia quando o pai saísse — e
@@ -945,46 +957,31 @@ def ps_chan_close(w: *PsWorker):
         return
     b: *PsWorkerBlk = w->blk
     pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
     b->pclosed = 1
     pthread_cond_broadcast(&b->cv)
     if b->dn_w >= 0:
         ps_pipe_wake(b->dn_w)
-    pthread_mutex_unlock(&b->mu)
 
 def ps_parent_open(ctx: *PsCtx) -> bool:
     b: *PsWorkerBlk = ctx->parent
     if b == None:
         return False
     pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
     # do lado do WORKER: o pai ainda não fechou, ou deixou coisa na fila
-    ok: bool = b->pclosed == 0 or b->down_head != None
-    pthread_mutex_unlock(&b->mu)
-    return ok
+    return b->pclosed == 0 or b->down_head != None
 
 def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool:
     b: *PsWorkerBlk = ctx->parent
     if b == None:
         return False
-    pthread_mutex_lock(&b->mu)
-    ps_msg_push(&b->up_head, &b->up_tail, p, size)
-    pthread_cond_broadcast(&b->cv)
-    ps_pipe_wake(b->up_w)
-    pthread_mutex_unlock(&b->mu)
-    return True
+    return ps_queue_put(b, False, p, size)
 
 def ps_worker_send_down(w: *PsWorker, p: const *void, size: usize) -> bool:
     if w == None or w->blk == None:
         return False
-    b: *PsWorkerBlk = w->blk
-    pthread_mutex_lock(&b->mu)
-    if b->done != 0:
-        pthread_mutex_unlock(&b->mu)
-        return False        # 45.3: sending to a worker that is gone is `False`
-    ps_msg_push(&b->down_head, &b->down_tail, p, size)
-    pthread_cond_broadcast(&b->cv)
-    ps_pipe_wake(b->dn_w)
-    pthread_mutex_unlock(&b->mu)
-    return True
+    return ps_queue_put(w->blk, True, p, size)
 
 # a finished task carrying `size` bytes of message: the shape `await` wants,
 # with the blocking done here. When the I/O loop of 18.4 exists, this is where
@@ -1194,6 +1191,7 @@ def ps_pool_submit(ctx: *PsCtx, w: *PsWork):
     w->wake = ctx->io_w
     w->next = None
     pthread_mutex_lock(&g_pool.mu)
+    defer pthread_mutex_unlock(&g_pool.mu)
     if g_pool.tail == None:
         g_pool.head = w
         g_pool.tail = w
@@ -1201,7 +1199,6 @@ def ps_pool_submit(ctx: *PsCtx, w: *PsWork):
         g_pool.tail->next = w
         g_pool.tail = w
     pthread_cond_signal(&g_pool.cv)
-    pthread_mutex_unlock(&g_pool.mu)
 
 def ps_work_new(op: i32) -> *PsWork:
     w: *PsWork = (*PsWork)(malloc(sizeof(PsWork)))
@@ -1523,6 +1520,7 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
     m: *PsMsg = None
     *ended = False
     pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
     if dir == 0:
         m = ps_msg_pop(&b->up_head, &b->up_tail)
         if m == None and b->done != 0:
@@ -1533,7 +1531,6 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
         # há mais mensagem possível, e continuar esperando é travar o programa
         if m == None and b->pclosed != 0:
             *ended = True
-    pthread_mutex_unlock(&b->mu)
     return m
 
 # 107: saiu do estacionamento — uma vez só, seja porque a mensagem chegou ou
@@ -1541,16 +1538,18 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
 static def ps_recv_unpark(t: *PsTask):
     if t == None or t->rmarked == 0 or t->rblk == None:
         return
+    # a marca cai ANTES do trinco: é a mesma thread que a pôs, então não há
+    # corrida — e assim o trinco vive até o fim do bloco e sai por `defer`
+    t->rmarked = 0
     b: *PsWorkerBlk = t->rblk
     pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
     if t->rdir == 0:
         if b->up_parked > 0:
             b->up_parked -= 1
     else:
         if b->dn_parked > 0:
             b->dn_parked -= 1
-    pthread_mutex_unlock(&b->mu)
-    t->rmarked = 0
 
 static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask:
     if kind == PS_RECV_OBJ:
@@ -1745,13 +1744,18 @@ static def ps_recvs_poll(ctx: *PsCtx) -> bool:
                 if t->work->fd >= 0:
                     ps_work_free(t->work)      # polled: nothing is in flight
                 else:
+                    # a decisão é sob o trinco, o `free` é FORA dele (108): eram
+                    # duas destrancadas em dois caminhos, e uma delas era fácil
+                    # de esquecer ao mexer aqui
+                    freeit: bool = False
                     pthread_mutex_lock(&g_pool.mu)
                     if t->work->done != 0:
-                        pthread_mutex_unlock(&g_pool.mu)
-                        ps_work_free(t->work)
+                        freeit = True
                     else:
                         t->work->orphan = 1
-                        pthread_mutex_unlock(&g_pool.mu)
+                    pthread_mutex_unlock(&g_pool.mu)
+                    if freeit:
+                        ps_work_free(t->work)
                 t->work = None
                 t->state = -1
                 iw: *PsTask = t->waiter
@@ -1851,18 +1855,26 @@ def ps_parent_recv(ctx: *PsCtx, size: usize) -> *PsTask:
         return ps_msg_task(ctx, None, size)
     return ps_recv_task(ctx, ctx->parent, 1, PS_RECV_RAW, None, size)
 
+# 108: a parte que precisa do trinco, num bloco só dela — o resto (que ALOCA no
+# heap deste contexto) fica fora, que é onde sempre esteve. Eram duas
+# destrancadas em dois caminhos de saída.
+static def ps_blk_take_err(b: *PsWorkerBlk, out cat: i32) -> *char:
+    pthread_mutex_lock(&b->mu)
+    defer pthread_mutex_unlock(&b->mu)
+    cat = 0
+    if b->done == 0 or b->failed == 0:
+        return None
+    b->collected = 1
+    cat = b->err_cat
+    return ps_dup(b->err if b->err != None else "?")
+
 def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
     if w == None or w->blk == None:
         return None
-    b: *PsWorkerBlk = w->blk
-    pthread_mutex_lock(&b->mu)
-    if b->done == 0 or b->failed == 0:
-        pthread_mutex_unlock(&b->mu)
+    cat: i32 = 0
+    msg: *char = ps_blk_take_err(w->blk, out cat)
+    if msg == None:
         return None
-    b->collected = 1
-    msg: *char = ps_dup(b->err if b->err != None else "?")
-    cat: i32 = b->err_cat
-    pthread_mutex_unlock(&b->mu)
     e: *PsErr = (*PsErr)(ps_alloc(ctx, sizeof(PsErr), PS_TY_ERR))
     e->msg = ps_str_new(ctx, msg, strlen(msg))
     e->cat = cat
@@ -1888,12 +1900,15 @@ def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
 static def ps_close_down(ctx: *PsCtx):
     b: *PsWorkerBlk = ctx->workers
     while b != None:
-        pthread_mutex_lock(&b->mu)
-        b->pclosed = 1
-        pthread_cond_broadcast(&b->cv)
-        if b->dn_w >= 0:
-            ps_pipe_wake(b->dn_w)
-        pthread_mutex_unlock(&b->mu)
+        # o local amarrado por volta, e não `b` direto: o `defer` do P avalia o
+        # que ele guarda na hora de RODAR, e `b` já andou para o próximo (108)
+        cur: *PsWorkerBlk = b
+        pthread_mutex_lock(&cur->mu)
+        defer pthread_mutex_unlock(&cur->mu)
+        cur->pclosed = 1
+        pthread_cond_broadcast(&cur->cv)
+        if cur->dn_w >= 0:
+            ps_pipe_wake(cur->dn_w)
         b = b->next
 
 def ps_join_all(ctx: *PsCtx):
@@ -4202,6 +4217,7 @@ static def ps_recv_stuck(ctx: *PsCtx, out total: i32, out stuck: i32, out other:
                 total += 1
                 b: *PsWorkerBlk = t->rblk
                 pthread_mutex_lock(&b->mu)
+                defer pthread_mutex_unlock(&b->mu)
                 if t->rdir == 0:
                     # Eu sou o PAI esperando o worker, e ele está esperando por
                     # mim. Não é travamento se eu já FECHEI o canal: a espera
@@ -4213,7 +4229,6 @@ static def ps_recv_stuck(ctx: *PsCtx, out total: i32, out stuck: i32, out other:
                 else:
                     if b->up_parked > 0 and b->up_head == None and b->down_head == None and b->pclosed == 0:
                         stuck += 1
-                pthread_mutex_unlock(&b->mu)
             else:
                 # um trabalho do pool ou um socket: alguém de fora ainda pode
                 # acordar este contexto, então não há travamento a declarar
@@ -6578,108 +6593,97 @@ def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
 # one-to-many tables. See the generator for the full layout.
 PS_CASE: const u8[] = embed_bytes("unicase.bin")
 
+# os índices de tabela do arquivo da CAIXA, na ordem em que o gerador as escreve
+static const UC_UP: const i32 = 0        # faixas de maiúscula
+static const UC_UPM: const i32 = 1       # maiúscula de um-para-muitos
+static const UC_LO: const i32 = 2
+static const UC_LOM: const i32 = 3
+static const UC_CASED: const i32 = 4     # Cased
+static const UC_IGN: const i32 = 5       # Case_Ignorable
+
 static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
 
-static def uc_u32(off: i32) -> u32:
-    return (u32(PS_CASE[off]) << 24) | (u32(PS_CASE[off + 1]) << 16) | (u32(PS_CASE[off + 2]) << 8) | u32(PS_CASE[off + 3])
+# ---------- 108: UM leitor para as tabelas geradas ----------
+#
+# Havia dois, quase iguais: um para `unicase.bin` (caixa) e um para
+# `unicat.bin` (categorias). Cada um trazia o tamanho de entrada de cada tabela
+# CRAVADO numa cadeia de ifs e três buscas binárias quase idênticas — 154 linhas
+# entre os dois, e a aritmética de offset dos dois para manter em sincronia à
+# mão. Foi onde a bateria 105 quase me pegou.
+#
+# Agora os dois arquivos se DESCREVEM: depois do cabeçalho vem um diretório com
+# (quantas entradas, tamanho da entrada) por tabela, e toda entrada começa com
+# `lo` e `hi` — um mapeamento de um-para-muitos repete o ponto de código, então
+# `lo == hi`. Com isso o leitor não sabe quantas tabelas existem nem de que
+# tamanho: calcula tudo do arquivo, e UMA busca binária serve as quinze.
+#
+#   magic 4 | versão 8 | ntab u32 | ntab × (count u32, esize u32) | tabelas
+static const TB_HDR: const i32 = 4 + 8 + 4     # magic, versão, ntab
 
-static def uc_i32(off: i32) -> i32:
-    return i32(uc_u32(off))
+static def tb_u32(b: const *u8, off: i32) -> u32:
+    return (u32(b[off]) << 24) | (u32(b[off + 1]) << 16) | (u32(b[off + 2]) << 8) | u32(b[off + 3])
 
-static const UC_HDR: const i32 = 4 + 8         # magic and version
-static const UC_NTAB: const i32 = 6            # how many counts follow it
-static const UC_RANGE: const i32 = 12          # lo, hi, delta
-static const UC_MULTI: const i32 = 16          # cp and up to three outputs
-static const UC_SET: const i32 = 8             # lo, hi — a set as ranges
+static def tb_count(b: const *u8, i: i32) -> i32:
+    return i32(tb_u32(b, TB_HDR + i * 8))
 
-static def uc_n(i: i32) -> i32:
-    return i32(uc_u32(UC_HDR + i * 4))
+static def tb_esize(b: const *u8, i: i32) -> i32:
+    return i32(tb_u32(b, TB_HDR + i * 8 + 4))
 
-# where each table starts: 0 upper ranges, 1 upper multi, 2 lower ranges,
-# 3 lower multi, 4 Cased, 5 Case_Ignorable
-static def uc_off(which: i32) -> i32:
-    o: i32 = UC_HDR + UC_NTAB * 4
-    if which == 0:
-        return o
-    o += uc_n(0) * UC_RANGE
-    if which == 1:
-        return o
-    o += uc_n(1) * UC_MULTI
-    if which == 2:
-        return o
-    o += uc_n(2) * UC_RANGE
-    if which == 3:
-        return o
-    o += uc_n(3) * UC_MULTI
-    if which == 4:
-        return o
-    return o + uc_n(4) * UC_SET
+# onde a tabela `which` começa: o fim do diretório mais o tamanho das anteriores
+static def tb_off(b: const *u8, which: i32) -> i32:
+    ntab: i32 = i32(tb_u32(b, 4 + 8))
+    o: i32 = TB_HDR + ntab * 8
+    for i in range(which):
+        o += tb_count(b, i) * tb_esize(b, i)
+    return o
+
+# a ENTRADA que contém `cp`, ou -1. É a única busca binária do módulo: as faixas,
+# os conjuntos e os mapeamentos de um-para-muitos têm todos `lo`/`hi` na frente.
+static def tb_find(b: const *u8, which: i32, cp: i32) -> i32:
+    base: i32 = tb_off(b, which)
+    es: i32 = tb_esize(b, which)
+    lo: i32 = 0
+    hi: i32 = tb_count(b, which) - 1
+    while lo <= hi:
+        mid: i32 = (lo + hi) / 2
+        off: i32 = base + mid * es
+        if cp < i32(tb_u32(b, off)):
+            hi = mid - 1
+        elif cp > i32(tb_u32(b, off + 4)):
+            lo = mid + 1
+        else:
+            return off
+    return -1
+
+# está no conjunto?
+static def tb_in(b: const *u8, which: i32, cp: i32) -> bool:
+    return tb_find(b, which, cp) >= 0
+
+# o mapeamento de um-para-um da tabela de faixas, ou o próprio ponto de código
+static def tb_map(b: const *u8, which: i32, cp: i32) -> i32:
+    off: i32 = tb_find(b, which, cp)
+    if off < 0:
+        return cp
+    return cp + i32(tb_u32(b, off + 8))
+
+# o de um-para-muitos: quantos saíram (0 = não está na tabela), escritos em `out`
+static def tb_multi(b: const *u8, which: i32, cp: i32, out: *i32) -> i32:
+    off: i32 = tb_find(b, which, cp)
+    if off < 0:
+        return 0
+    n: i32 = 0
+    for k in range(3):
+        v: i32 = i32(tb_u32(b, off + 8 + k * 4))
+        if v != 0:
+            out[n] = v
+            n += 1
+    return n
 
 # FINAL SIGMA (Unicode SpecialCasing, the non-locale conditional half): `Σ`
 # lowercases to `ς` when a cased letter comes BEFORE it and none comes after,
 # with case-ignorable characters in between not counting either way. It is the
 # one conditional rule that is not about locale, and Python and JavaScript both
 # do it — so it is here.
-static def uc_in_set(which: i32, cp: i32) -> bool:
-    base: i32 = uc_off(which)
-    lo: i32 = 0
-    hi: i32 = uc_n(which) - 1
-    while lo <= hi:
-        mid: i32 = (lo + hi) / 2
-        off: i32 = base + mid * UC_SET
-        a: i32 = i32(uc_u32(off))
-        b: i32 = i32(uc_u32(off + 4))
-        if cp < a:
-            hi = mid - 1
-        elif cp > b:
-            lo = mid + 1
-        else:
-            return True
-    return False
-
-# the one-to-one mapping, or the code point itself. `which` is 0 for upper and
-# 2 for lower — the two range tables.
-static def uc_range(which: i32, cp: i32) -> i32:
-    base: i32 = uc_off(which)
-    lo: i32 = 0
-    hi: i32 = uc_n(which) - 1
-    while lo <= hi:
-        mid: i32 = (lo + hi) / 2
-        off: i32 = base + mid * UC_RANGE
-        a: i32 = i32(uc_u32(off))
-        b: i32 = i32(uc_u32(off + 4))
-        if cp < a:
-            hi = mid - 1
-        elif cp > b:
-            lo = mid + 1
-        else:
-            return cp + uc_i32(off + 8)
-    return cp
-
-# the one-to-MANY mapping. Answers how many code points came out (0 when this
-# one is not in the table) and writes them into `out`.
-static def uc_multi(which: i32, cp: i32, out: *i32) -> i32:
-    base: i32 = uc_off(which)
-    lo: i32 = 0
-    hi: i32 = uc_n(which) - 1
-    while lo <= hi:
-        mid: i32 = (lo + hi) / 2
-        off: i32 = base + mid * UC_MULTI
-        a: i32 = i32(uc_u32(off))
-        if cp < a:
-            hi = mid - 1
-        elif cp > a:
-            lo = mid + 1
-        else:
-            n: i32 = 0
-            for k in range(3):
-                v: i32 = i32(uc_u32(off + 4 + k * 4))
-                if v != 0:
-                    out[n] = v
-                    n += 1
-            return n
-    return 0
-
 # one code point at byte offset `at`, and how wide it is. A `str` is valid UTF-8
 # by construction (83.2), so there is no error path — a lone byte answers as
 # itself, which is what keeps the caller simple.
@@ -6720,9 +6724,9 @@ static def uc_final_sigma(s: *PsStr, at: usize) -> bool:
         k = uc_prev(s, k)
         w: usize = 0
         cp: i32 = uc_decode(s, k, ref w)
-        if uc_in_set(5, cp):
+        if tb_in(&PS_CASE[0], UC_IGN, cp):
             continue
-        before = uc_in_set(4, cp)
+        before = tb_in(&PS_CASE[0], UC_CASED, cp)
         break
     if not before:
         return False
@@ -6733,18 +6737,18 @@ static def uc_final_sigma(s: *PsStr, at: usize) -> bool:
     while j < usize(s->len):
         w3: usize = 0
         cp2: i32 = uc_decode(s, j, ref w3)
-        if uc_in_set(5, cp2):
+        if tb_in(&PS_CASE[0], UC_IGN, cp2):
             j += w3
             continue
-        return not uc_in_set(4, cp2)
+        return not tb_in(&PS_CASE[0], UC_CASED, cp2)
     return True
 
 # `upper` is table 0/1, `lower` is table 2/3. One walk of the string, decoding
 # each character, mapping it, and encoding what comes back — which is the only
 # shape that works once one character can become three.
 static def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
-    rng: i32 = 0 if upper else 2
-    mul: i32 = 1 if upper else 3
+    rng: i32 = UC_UP if upper else UC_LO
+    mul: i32 = UC_UPM if upper else UC_LOM
     # three code points out per one in, four bytes each, is the ceiling
     buf: *char = (*char)(malloc(usize(s->len) * usize(12) + usize(4)))
     k: usize = 0
@@ -6780,9 +6784,9 @@ static def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
             outs[0] = 0x03C2 if uc_final_sigma(s, i) else 0x03C3
             cnt = 1
         else:
-            cnt = uc_multi(mul, cp, &outs[0])
+            cnt = tb_multi(&PS_CASE[0], mul, cp, &outs[0])
         if cnt == 0:
-            outs[0] = uc_range(rng, cp)
+            outs[0] = tb_map(&PS_CASE[0], rng, cp)
             cnt = 1
         for q in range(cnt):
             k = ps_utf8_put(buf, k, outs[q])
@@ -6834,16 +6838,7 @@ def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
 # `Ss`. É dele que vivem `title()` e `capitalize()`.
 PS_CAT: const u8[] = embed_bytes("unicat.bin")
 
-static def ca_u32(off: i32) -> u32:
-    return (u32(PS_CAT[off]) << 24) | (u32(PS_CAT[off + 1]) << 16) | (u32(PS_CAT[off + 2]) << 8) | u32(PS_CAT[off + 3])
-
-static const CA_HDR: const i32 = 4 + 8      # magic e versão
-static const CA_NTAB: const i32 = 9         # quantas contagens vêm depois
-static const CA_SET: const i32 = 8          # lo, hi
-static const CA_RANGE: const i32 = 12       # lo, hi, delta
-static const CA_MULTI: const i32 = 16       # cp e até três saídas
-
-# os conjuntos, na ordem em que o gerador os escreve
+# ... e os do arquivo das CATEGORIAS
 static const CA_ALPHA: const i32 = 0
 static const CA_DIGIT: const i32 = 1
 static const CA_DECIMAL: const i32 = 2
@@ -6858,75 +6853,6 @@ static const CA_TITLECHAR: const i32 = 6
 static const CA_TIRANGE: const i32 = 7
 static const CA_TIMULTI: const i32 = 8
 
-static def ca_n(i: i32) -> i32:
-    return i32(ca_u32(CA_HDR + i * 4))
-
-static def ca_off(which: i32) -> i32:
-    o: i32 = CA_HDR + CA_NTAB * 4
-    i: i32 = 0
-    while i < which and i < 7:
-        o += ca_n(i) * CA_SET
-        i += 1
-    if which <= CA_TIRANGE:
-        return o
-    return o + ca_n(CA_TIRANGE) * CA_RANGE
-
-static def ca_in(which: i32, cp: i32) -> bool:
-    base: i32 = ca_off(which)
-    lo: i32 = 0
-    hi: i32 = ca_n(which) - 1
-    while lo <= hi:
-        mid: i32 = (lo + hi) / 2
-        off: i32 = base + mid * CA_SET
-        a: i32 = i32(ca_u32(off))
-        b: i32 = i32(ca_u32(off + 4))
-        if cp < a:
-            hi = mid - 1
-        elif cp > b:
-            lo = mid + 1
-        else:
-            return True
-    return False
-
-# o mapeamento de título: um para um por faixa, ou um para muitos na outra
-# tabela. Devolve quantos pontos de código saíram.
-static def ca_title(cp: i32, out: *i32) -> i32:
-    base: i32 = ca_off(CA_TIMULTI)
-    lo: i32 = 0
-    hi: i32 = ca_n(CA_TIMULTI) - 1
-    while lo <= hi:
-        mid: i32 = (lo + hi) / 2
-        off: i32 = base + mid * CA_MULTI
-        a: i32 = i32(ca_u32(off))
-        if cp < a:
-            hi = mid - 1
-        elif cp > a:
-            lo = mid + 1
-        else:
-            n: i32 = 0
-            for k in range(3):
-                v: i32 = i32(ca_u32(off + 4 + k * 4))
-                if v != 0:
-                    out[n] = v
-                    n += 1
-            return n
-    rbase: i32 = ca_off(CA_TIRANGE)
-    rlo: i32 = 0
-    rhi: i32 = ca_n(CA_TIRANGE) - 1
-    while rlo <= rhi:
-        rmid: i32 = (rlo + rhi) / 2
-        roff: i32 = rbase + rmid * CA_RANGE
-        a2: i32 = i32(ca_u32(roff))
-        b2: i32 = i32(ca_u32(roff + 4))
-        if cp < a2:
-            rhi = rmid - 1
-        elif cp > b2:
-            rlo = rmid + 1
-        else:
-            out[0] = cp + i32(ca_u32(roff + 8))
-            return 1
-    out[0] = cp
-    return 1
 
 # Os predicados do Python sobre a STRING INTEIRA, com a regra dele: todos os
 # caracteres têm de satisfazer, e a string vazia é sempre False (não há
@@ -6948,9 +6874,9 @@ def ps_str_all_of(s: *PsStr, which: i32) -> bool:
         if which == -1:
             ok = ps_str_is_space_cp(cp)
         elif which == -2:
-            ok = ca_in(CA_ALPHA, cp) or ca_in(CA_DECIMAL, cp) or ca_in(CA_DIGIT, cp) or ca_in(CA_NUMERIC, cp)
+            ok = tb_in(&PS_CAT[0], CA_ALPHA, cp) or tb_in(&PS_CAT[0], CA_DECIMAL, cp) or tb_in(&PS_CAT[0], CA_DIGIT, cp) or tb_in(&PS_CAT[0], CA_NUMERIC, cp)
         else:
-            ok = ca_in(which, cp)
+            ok = tb_in(&PS_CAT[0], which, cp)
         if not ok:
             return False
         i += w
@@ -6969,11 +6895,11 @@ def ps_str_is_case(s: *PsStr, want_upper: bool) -> bool:
         w: usize = 1
         cp: i32 = uc_decode(s, i, ref w)
         # o de TÍTULO nunca serve: nem para `isupper` nem para `islower`
-        if ca_in(CA_TITLECHAR, cp):
+        if tb_in(&PS_CAT[0], CA_TITLECHAR, cp):
             return False
-        if ca_in(CA_LOWER if want_upper else CA_UPPER, cp):
+        if tb_in(&PS_CAT[0], CA_LOWER if want_upper else CA_UPPER, cp):
             return False
-        if ca_in(CA_UPPER if want_upper else CA_LOWER, cp):
+        if tb_in(&PS_CAT[0], CA_UPPER if want_upper else CA_LOWER, cp):
             seen = True
         i += w
     return seen
@@ -6993,8 +6919,8 @@ def ps_str_is_title(s: *PsStr) -> bool:
         w: usize = 1
         cp: i32 = uc_decode(s, i, ref w)
         # para o `istitle`, o de TÍTULO conta como maiúsculo (é o que ele é)
-        up: bool = ca_in(CA_UPPER, cp) or ca_in(CA_TITLECHAR, cp)
-        low: bool = ca_in(CA_LOWER, cp)
+        up: bool = tb_in(&PS_CAT[0], CA_UPPER, cp) or tb_in(&PS_CAT[0], CA_TITLECHAR, cp)
+        low: bool = tb_in(&PS_CAT[0], CA_LOWER, cp)
         if up:
             if prev_cased:
                 return False
@@ -7003,7 +6929,7 @@ def ps_str_is_title(s: *PsStr) -> bool:
             if not prev_cased:
                 return False
             seen = True
-        prev_cased = up or low or uc_in_set(4, cp)
+        prev_cased = up or low or tb_in(&PS_CASE[0], UC_CASED, cp)
         i += w
     return seen
 
@@ -7032,15 +6958,15 @@ static def ps_str_recase(ctx: *PsCtx, s: *PsStr, mode: i32) -> *PsStr:
         cnt: i32 = 0
         if mode == 2:
             # swapcase: quem é maiúsculo desce, quem é minúsculo sobe
-            if ca_in(CA_UPPER, cp):
-                cnt = uc_multi(3, cp, &outs[0])
+            if tb_in(&PS_CAT[0], CA_UPPER, cp):
+                cnt = tb_multi(&PS_CASE[0], UC_LOM, cp, &outs[0])
                 if cnt == 0:
-                    outs[0] = uc_range(2, cp)
+                    outs[0] = tb_map(&PS_CASE[0], UC_LO, cp)
                     cnt = 1
-            elif ca_in(CA_LOWER, cp):
-                cnt = uc_multi(1, cp, &outs[0])
+            elif tb_in(&PS_CAT[0], CA_LOWER, cp):
+                cnt = tb_multi(&PS_CASE[0], UC_UPM, cp, &outs[0])
                 if cnt == 0:
-                    outs[0] = uc_range(0, cp)
+                    outs[0] = tb_map(&PS_CASE[0], UC_UP, cp)
                     cnt = 1
             else:
                 outs[0] = cp
@@ -7048,20 +6974,25 @@ static def ps_str_recase(ctx: *PsCtx, s: *PsStr, mode: i32) -> *PsStr:
         else:
             first: bool = (i == 0) if mode == 1 else (not prev_cased)
             if first:
-                cnt = ca_title(cp, &outs[0])
+                # o mapeamento de TÍTULO: um-para-muitos e, se não estiver lá,
+                # a faixa de um-para-um
+                cnt = tb_multi(&PS_CAT[0], CA_TIMULTI, cp, &outs[0])
+                if cnt == 0:
+                    outs[0] = tb_map(&PS_CAT[0], CA_TIRANGE, cp)
+                    cnt = 1
             else:
                 # minúscula, com o sigma final que a 89 já resolve
                 if cp == 0x03A3:
                     outs[0] = 0x03C2 if uc_final_sigma(s, i) else 0x03C3
                     cnt = 1
                 else:
-                    cnt = uc_multi(3, cp, &outs[0])
+                    cnt = tb_multi(&PS_CASE[0], UC_LOM, cp, &outs[0])
                     if cnt == 0:
-                        outs[0] = uc_range(2, cp)
+                        outs[0] = tb_map(&PS_CASE[0], UC_LO, cp)
                         cnt = 1
         for q in range(cnt):
             k = ps_utf8_put(buf, k, outs[q])
-        prev_cased = ca_in(CA_UPPER, cp) or ca_in(CA_LOWER, cp) or uc_in_set(4, cp)
+        prev_cased = tb_in(&PS_CAT[0], CA_UPPER, cp) or tb_in(&PS_CAT[0], CA_LOWER, cp) or tb_in(&PS_CASE[0], UC_CASED, cp)
         i += w
     out: *PsStr = ps_str_new(ctx, buf, k)
     free(buf)

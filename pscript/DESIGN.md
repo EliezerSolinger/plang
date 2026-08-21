@@ -3591,6 +3591,101 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 108 — o runtime usando o P que ele mesmo compila (2026-08-21)
+
+Sua pergunta: *"por que o runtime tem tantas linhas? se a gente usasse os
+recursos da linguagem P poderíamos melhorar o código?"*. Medido antes de opinar.
+
+### 108.1 O tamanho é SUPERFÍCIE, não gordura
+
+`psrt.p` tinha 7 658 linhas — 5 831 de código e 1 298 de comentário (17%), 503
+funções, **mediana de 6 linhas de código por função**, a maior com 82. Não há
+função monstro nem código morto. Por assunto: escalonador+tasks+await 1 715,
+strings+Unicode 1 251, stdlib portada 1 069, contêineres 624,
+workers+serialização 522, coletor 463, I/O 450, erros/trace/crash 329. É um
+coletor com cópia, um escalonador com epoll/kqueue/poll, workers com
+serialização, UTF-8 com duas tabelas Unicode, dict compacto, json, MT19937,
+sort/heap/bisect, traceback e handler de crash. Cortar linha ali é cortar
+recurso. (Para escala: o compilador são 38 312 linhas.)
+
+O que a medição mostrou de verdade é outra coisa: **o runtime estava escrito em P
+como se fosse C**. Zero funções genéricas, 3 métodos, 0 traits, 0 `with`, 7
+`defer` — contra 18 funções que trancavam mutex. E o C emitido tinha 1:1 com o
+fonte, o que confirma: nenhuma abstração em uso.
+
+### 108.2 `defer` nos mutex: 24 destrancadas explícitas viraram 7
+
+Não é estética. Dez daquelas 18 funções trancavam e destrancavam em VÁRIOS
+caminhos de saída, e um `return` novo no lugar errado é um mutex vazado — o
+defeito que não dá para depurar, porque o programa simplesmente para. O `defer`
+do P roda em toda saída do bloco (fim, `return`, `break`, `continue`), então o
+par fica escrito uma vez.
+
+Duas coisas aprendidas e registradas:
+
+> **O `defer` do P avalia o que ele guarda na hora de RODAR**, não onde é
+> escrito. Num laço que anda um ponteiro, `defer pthread_mutex_unlock(&b->mu)`
+> destrancaria o mutex do PRÓXIMO — o local tem de ser amarrado por volta.
+> Conferido com um programa de três linhas antes de usar.
+>
+> **Onde a seção crítica termina ANTES do fim da função, `defer` está errado.**
+> `ps_pool_thread` destranca de propósito para rodar a operação de I/O fora do
+> trinco; `ps_recvs_poll` liberta a memória fora dele. Esses ficaram explícitos —
+> o que mudou é que agora são um lock e um unlock, com a decisão sob o trinco e o
+> trabalho fora, em vez de duas destrancadas em dois caminhos.
+
+E as quatro cópias de *"põe a mensagem na fila, avisa o outro lado"* viraram uma
+função (`ps_queue_put`), que de passagem corrigiu uma assimetria: o `send_obj`
+testava `done` FORA do trinco, e o worker pode terminar entre o teste e o push.
+
+### 108.3 Um leitor para as duas tabelas geradas, e o formato que se descreve
+
+`unicase.bin` (caixa) e `unicat.bin` (categorias) tinham **dois leitores quase
+idênticos**: 154 linhas, cada um com o tamanho de entrada de cada tabela cravado
+numa cadeia de ifs e três buscas binárias. Eu tive de manter a aritmética de
+offset dos dois em sincronia à mão, e foi onde a 105 quase me pegou.
+
+Agora os arquivos **se descrevem**: depois do cabeçalho vem um diretório com
+`(quantas entradas, tamanho da entrada)` por tabela, e **toda entrada começa com
+`lo` e `hi`** — um mapeamento de um-para-muitos repete o ponto de código, então
+`lo == hi`. Com isso o leitor calcula os offsets a partir do arquivo e **uma**
+busca binária serve as quinze tabelas dos dois arquivos.
+
+| | antes | depois |
+|---|---|---|
+| funções de leitura | 11, em dois esquemas | 7, em um |
+| buscas binárias | 6 (3 por arquivo) | 1 |
+| linhas | 154 | 57 |
+| bytes dos dois `.bin` | 50 296 | 50 968 (+672) |
+
+Os 672 bytes são o `lo`/`hi` repetido nas entradas de um-para-muitos. É o preço
+de ter uma busca em vez de três, e está pago.
+
+### 108.4 A stdlib fica em P — sua decisão
+
+Eu havia proposto mover `json`, `bisect`/`heapq` e a camada Python do `random`
+(~600 linhas) para módulos em **pscript**, compilados junto do programa que os
+importa. Você decidiu que **não**: eles ficam em P. Fica registrado para não ser
+reproposto — e a consequência é que o runtime segue sendo o lugar da stdlib, com
+o preço de cada programa levá-la (o que a 105.5 já mediu: com `--gc-sections` ou
+LTO, quem não usa não paga).
+
+### 108.5 O saldo, e o que NÃO valeu
+
+−102 linhas de código, 24 destrancadas → 7, dois leitores → um. E o que eu
+recusei, com o motivo:
+
+- **trait/`dyn` para comparador de ordenação**: põe uma vtable no caminho quente
+  do sort para trocar três funções por uma;
+- **métodos no lugar de funções** (`l.len()` em vez de `ps_list_len(l)`): o nome
+  é a ABI que o lowering emite — renomearia tudo para ganhar estética;
+- **genéricos nos trios `_int`/`_float`/`_str`**: o P TEM funções genéricas
+  (`def max<T>` com `inline max<int>` virando `max_int`, que é o mesmo esquema de
+  nome que o lowering já usa), mas os trios só PARECEM duplicados: `ps_sum_int`
+  carrega checagem de estouro que `ps_sum_float` não tem, `ps_abs_int` idem.
+  Sobrariam umas 40 linhas em troca de uma indireção de instanciação. Fica
+  anotado como possível, não como pendência.
+
 ## Bateria 107 — a varredura de worker + async, e os oito defeitos dela (2026-08-21)
 
 Você pediu uma varredura das bordas e armadilhas da linguagem, **principalmente

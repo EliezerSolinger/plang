@@ -31,22 +31,32 @@ do them either — they are what `toLocaleUpperCase` exists for — so the oracl
 stay honest, and a program that needs them needs a locale, which is a different
 decision.
 
-FORMAT — every number big-endian, so the reader does not depend on the machine:
+FORMAT (bateria 108) — the file DESCRIBES ITSELF, and every number is
+big-endian so the reader does not depend on the machine:
 
     magic   "PSUC"                       4 bytes
     unidata version, as text, NUL-padded 8 bytes  (e.g. "15.0.0\0\0")
-    n_up_ranges  u32
-    n_up_multi   u32
-    n_lo_ranges  u32
-    n_lo_multi   u32
-    n_cased      u32
-    n_ignorable  u32
-    up_ranges[]  lo:u32 hi:u32 delta:i32       (sorted by lo — binary search)
-    up_multi[]   cp:u32 a:u32 b:u32 c:u32      (sorted by cp; 0 = no character)
-    lo_ranges[]  ...
-    lo_multi[]   ...
-    cased[]      lo:u32 hi:u32                 (a set, as ranges)
-    ignorable[]  lo:u32 hi:u32
+    ntab                                 u32
+    ntab × (count:u32, esize:u32)        the DIRECTORY
+    the tables, in that order
+
+    table 0  upper ranges   lo:u32 hi:u32 delta:i32
+    table 1  upper multi    lo:u32 hi:u32 a:u32 b:u32 c:u32   (lo == hi)
+    table 2  lower ranges   ...
+    table 3  lower multi    ...
+    table 4  Cased          lo:u32 hi:u32                     (a set, as ranges)
+    table 5  Case_Ignorable lo:u32 hi:u32
+
+WHY THE DIRECTORY, and why every entry starts with lo AND hi. There were two
+generated tables (this one and `unicode_cat`), each with its own reader in the
+runtime, and each reader had the entry size of every table WRITTEN INTO a chain
+of ifs plus three near-identical binary searches. Two formats, two readers, six
+searches — and I had to keep the offset arithmetic of both in step by hand.
+
+With the directory the reader computes offsets from the FILE, and with `lo`/`hi`
+first in every entry (a one-to-many mapping repeats the code point: `lo == hi`)
+ONE binary search serves all six tables. The four bytes per multi entry that
+this costs are 400 bytes in the whole file.
 
 A RANGE is a run of consecutive code points whose mapping is the same offset,
 which is what makes 1423 mappings fit in 678 records.
@@ -120,18 +130,21 @@ def main():
     up_r, up_m = build(str.upper)
     lo_r, lo_m = build(str.lower)
     cased, ign = sets()
+    # o diretório: quantas entradas e de que tamanho, tabela por tabela (108)
+    tables = [(up_r, 12), (up_m, 20), (lo_r, 12), (lo_m, 20), (cased, 8), (ign, 8)]
     out = bytearray(b"PSUC")
     out += unicodedata.unidata_version.encode().ljust(8, b"\0")[:8]
-    out += struct.pack(">IIIIII", len(up_r), len(up_m), len(lo_r), len(lo_m),
-                       len(cased), len(ign))
+    out += struct.pack(">I", len(tables))
+    for rows, esize in tables:
+        out += struct.pack(">II", len(rows), esize)
     for lo, hi, d in up_r:
         out += struct.pack(">IIi", lo, hi, d)
     for cp, v in up_m:
-        out += struct.pack(">IIII", cp, v[0], v[1], v[2])
+        out += struct.pack(">IIIII", cp, cp, v[0], v[1], v[2])
     for lo, hi, d in lo_r:
         out += struct.pack(">IIi", lo, hi, d)
     for cp, v in lo_m:
-        out += struct.pack(">IIII", cp, v[0], v[1], v[2])
+        out += struct.pack(">IIIII", cp, cp, v[0], v[1], v[2])
     for lo, hi in cased:
         out += struct.pack(">II", lo, hi)
     for lo, hi in ign:

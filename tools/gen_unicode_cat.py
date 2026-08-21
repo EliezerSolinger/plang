@@ -37,22 +37,20 @@ FORMAT — every number big-endian, so the reader does not depend on the machine
 
     magic   "PSCA"                        4 bytes
     unidata version, as text, NUL-padded  8 bytes  (e.g. "15.0.0\0\0")
-    n_alpha    u32
-    n_digit    u32
-    n_decimal  u32
-    n_numeric  u32
-    n_upper    u32
-    n_lower    u32
-    n_titlechar u32
-    n_ti_range u32
-    n_ti_multi u32
-    then, in that order:
-      seven SETS, each n * (lo u32, hi u32)        — the predicates
-      title ranges,  n * (lo u32, hi u32, delta i32)
-      title multi,   n * (cp u32, out0, out1, out2)  — 0 pads the unused slots
+    ntab                                  u32
+    ntab × (count:u32, esize:u32)         the DIRECTORY (bateria 108)
+    then the tables, in this order:
+      0..6  the predicate SETS       lo:u32 hi:u32
+      7     title ranges             lo:u32 hi:u32 delta:i32
+      8     title multi              lo:u32 hi:u32 out0 out1 out2   (lo == hi)
 
-The sets are sorted and disjoint, so the reader is a binary search. The multi
-table is sorted by code point, same reason.
+The directory is what lets ONE reader in the runtime serve this file and
+`unicase.bin` both: it computes every offset from the file instead of carrying
+each table's entry size in its own code. And every entry starting with lo AND hi
+— a one-to-many mapping repeating the code point — is what lets ONE binary
+search serve all nine tables. See the note in `gen_unicode_case.py`.
+
+The sets are sorted and disjoint, so the reader is a binary search.
 """
 import sys
 import unicodedata
@@ -128,17 +126,19 @@ def main():
     if len(ver) > 8:
         raise SystemExit("the Unicode version does not fit in eight bytes")
     out += ver + b"\0" * (8 - len(ver))
+    # o diretório (108): o leitor calcula os offsets a partir do ARQUIVO
+    out += be32(len(sets) + 2)
     for s in sets:
-        out += be32(len(s))
-    out += be32(len(ti_rng))
-    out += be32(len(ti_multi))
+        out += be32(len(s)) + be32(8)
+    out += be32(len(ti_rng)) + be32(12)
+    out += be32(len(ti_multi)) + be32(20)
     for s in sets:
         for lo, hi in s:
             out += be32(lo) + be32(hi)
     for lo, hi, d in ti_rng:
         out += be32(lo) + be32(hi) + be32(d)
     for cp, outs in ti_multi:
-        out += be32(cp)
+        out += be32(cp) + be32(cp)
         for k in range(3):
             out += be32(outs[k] if k < len(outs) else 0)
 
