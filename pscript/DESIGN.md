@@ -3591,6 +3591,64 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 106 — ordenação estável, `bisect` e `heapq` (2026-08-21)
+
+Três coisas que vieram do CPython, e uma que veio de olhar o que o `qsort`
+prometia.
+
+**106.1 O `sorted` simples não era estável — era estável NA GLIBC.** Os caminhos
+com `key=` e `cmp=` sempre ordenaram ÍNDICES com um merge sort escrito aqui, que
+é estável por construção. O caminho simples (list de int, float ou str) chamava
+`qsort`, e a estabilidade do `qsort` **não é especificada**: o da glibc é um
+merge sort e sai estável por acidente, o do macOS é um introsort e não sai. O que
+se observa disso é pequeno e é real:
+
+- `sorted([0.0, -0.0])` imprime `[0.0, -0.0]` aqui e podia imprimir o contrário
+  no Mac — `0.0` e `-0.0` comparam IGUAIS e imprimem DIFERENTE;
+- duas strings de mesmo conteúdo trocariam de identidade.
+
+Uma ordem que depende de qual libc compilou é uma resposta diferente por
+plataforma. Agora é um merge sort nosso, sobre os valores, com o empate sempre
+para a esquerda.
+
+**106.2 Metade do Timsort, e a metade que ficou fora.** O que entrou é a
+DETECÇÃO DE CORRIDAS (com o `minrun` de 32 e insertion sort binário nas curtas):
+uma lista já ordenada — ou já ordenada ao contrário — sai numa passada, que é o
+caso comum de quem chama `sorted` sobre algo que já veio de um `sorted`. Medido
+em um milhão de inteiros:
+
+| | aqui | python3 |
+|---|---|---|
+| aleatório | 0,243 s | 0,306 s |
+| já ordenado | 0,017 s | 0,011 s |
+
+O que ficou fora é o **merge galopante**. Ele muda o CUSTO em padrões
+específicos e não muda a ORDEM, que é o que se observa — e é onde vivia o defeito
+de invariante que a verificação formal do Java achou em 2015. Se o custo
+aparecer num programa de verdade, entra com medição.
+
+**106.3 `bisect` e `heapq`, portados de `Lib/bisect.py` e `Lib/heapq.py`.** São
+os dois módulos do Python que são algoritmo puro — não há nada de específico da
+linguagem dentro deles, então portar é transcrever. `bisect_left`,
+`bisect_right`/`bisect`, `insort_left`, `insort_right`/`insort`, `heappush`,
+`heappop`, `heapify`.
+
+**O teste é o ARRAY INTEIRO, não a ordem de saída.** Um heap correto pode ter
+mil formas e só uma é a que o `heapq` do CPython produz; o oráculo
+(`tests/oracle/py/algos.psc`) imprime o array a cada `heapify`, `heappush` e
+`heappop` e o `python3` faz o mesmo. Eles batem passo a passo — o que prova que
+a ordem de peneira é a de lá, e não um heap qualquer que acerta o mínimo.
+
+**Sobre int, float e str**, e dito na mensagem de erro: a ordem que o `bisect`
+assume é a que o `sorted` produz, e essa está definida para os três. Para os
+seus tipos, o caminho é `sorted(xs, key=...)` — `Comparable` (62.1) resolve a
+ordenação mas não dá um `<` que o heap possa chamar sem adaptador, e esse
+adaptador é uma decisão sua.
+
+**106.4 O que não entrou:** `heapreplace`, `heappushpop`, `nlargest`/`nsmallest`
+(estes dois tomam `key=` e um iterável, e é meio módulo novo), `bisect` com
+`lo`/`hi` (os dois recortes existem com fatia), `functools`, `itertools`.
+
 ## Bateria 105 — as categorias do Unicode, e a varredura que cobrou o `ǅ` (2026-08-21)
 
 O que a 104.5 tinha deixado em aberto: `isalpha`, `isdigit`, `isdecimal`,

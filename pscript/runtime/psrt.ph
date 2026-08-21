@@ -784,6 +784,11 @@ def ps_round_n(x: f64, n: i64) -> f64
 def ps_list_min_int(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> i64
 def ps_list_min_float(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> f64
 def ps_list_min_str(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, line: i32) -> *PsStr
+def ps_bisect(l: *PsList, v: const *void, kind: i32, right: bool) -> i64
+def ps_insort(ctx: *PsCtx, l: *PsList, v: const *void, kind: i32, right: bool, file: const *char, line: i32)
+def ps_heappush(ctx: *PsCtx, l: *PsList, v: const *void, kind: i32, file: const *char, line: i32)
+def ps_heappop(ctx: *PsCtx, l: *PsList, out: *void, kind: i32, file: const *char, line: i32)
+def ps_heapify(l: *PsList, kind: i32)
 def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer
 def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer)
 def ps_buffer_size(b: *PsBuffer) -> i64

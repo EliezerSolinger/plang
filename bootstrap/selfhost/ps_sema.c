@@ -4263,6 +4263,34 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         }
         fatal_at(self->file, e->pos, "random has seed, random, getrandbits, randint, randrange, uniform, gauss, expovariate, choice and shuffle");
     }
+    if (strncmp(name, "__bisect_", 9) == 0 || strncmp(name, "__heapq_", 8) == 0) {
+        const char *bh = name + (strncmp(name, "__bisect_", 9) == 0 ? 9 : 8);
+        int ins = strncmp(bh, "insort", 6) == 0;
+        int push = strcmp(bh, "heappush") == 0;
+        int pop = strcmp(bh, "heappop") == 0;
+        int heapi = strcmp(bh, "heapify") == 0;
+        int32_t want = (pop || heapi ? 1 : 2);
+        if (e->nargs != want) {
+            fatal_at(self->file, e->pos, "%s takes %d argument(s)", bh, want);
+        }
+        PsType *blt = PsSema_check_expr(self, e->args[0]);
+        if (blt == NULL || blt->kind != PT_LIST || blt->inner == NULL || !(blt->inner->kind == PT_INT || blt->inner->kind == PT_FLOAT || blt->inner->kind == PT_STR)) {
+            fatal_at(self->file, e->pos, "%s takes a list of numbers or strings, not %s — the order it assumes is the one `sorted` produces, and that is defined for those three (106.3)", bh, ps_type_str(self->a, blt));
+        }
+        if (ins || push || heapi) {
+            PsSema_deny_const_mut(self, e->args[0], bh);
+        }
+        if (want == 2) {
+            PsSema_check_want(self, e->args[1], blt->inner, "the value");
+        }
+        if (pop) {
+            return blt->inner;
+        }
+        if (ins || push || heapi) {
+            return ps_type(self->a, PT_VOID, e->pos);
+        }
+        return ps_type(self->a, PT_INT, e->pos);
+    }
     if (strncmp(name, "__math_", 7) == 0) {
         const char *mf = name + 7;
         PsType *mft = ps_type(self->a, PT_FLOAT, e->pos);
@@ -4450,26 +4478,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_2754_17 = e;
-                __with_2754_17->kind = PE_STR;
-                __with_2754_17->text = lit7;
-                __with_2754_17->lhs = NULL;
-                __with_2754_17->rhs = NULL;
-                __with_2754_17->args = NULL;
-                __with_2754_17->nargs = 0;
+                PsExpr *__with_2776_17 = e;
+                __with_2776_17->kind = PE_STR;
+                __with_2776_17->text = lit7;
+                __with_2776_17->lhs = NULL;
+                __with_2776_17->rhs = NULL;
+                __with_2776_17->args = NULL;
+                __with_2776_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_2767_13 = e;
-            __with_2767_13->kind = PE_LOWERED;
-            __with_2767_13->low = ln7;
-            __with_2767_13->lhs = NULL;
-            __with_2767_13->rhs = NULL;
-            __with_2767_13->args = NULL;
-            __with_2767_13->nargs = 0;
+            PsExpr *__with_2789_13 = e;
+            __with_2789_13->kind = PE_LOWERED;
+            __with_2789_13->low = ln7;
+            __with_2789_13->lhs = NULL;
+            __with_2789_13->rhs = NULL;
+            __with_2789_13->args = NULL;
+            __with_2789_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4714,7 +4742,7 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
         }
         const char *path = path_join(self->a, dir, Arena_printf(self->a, "%s.psc", d->path));
         PsNs *sub = StrMap_pPsNs_get_or(&self->nsof, path, NULL);
-        if (sub == NULL && (strcmp(d->path, "sys") == 0 || strcmp(d->path, "re") == 0 || strcmp(d->path, "json") == 0 || strcmp(d->path, "net") == 0 || strcmp(d->path, "random") == 0 || strcmp(d->path, "math") == 0 || strcmp(d->path, "time") == 0)) {
+        if (sub == NULL && (strcmp(d->path, "sys") == 0 || strcmp(d->path, "re") == 0 || strcmp(d->path, "json") == 0 || strcmp(d->path, "net") == 0 || strcmp(d->path, "random") == 0 || strcmp(d->path, "math") == 0 || strcmp(d->path, "time") == 0 || strcmp(d->path, "bisect") == 0 || strcmp(d->path, "heapq") == 0)) {
             sub = PsSema_builtin_ns(self, d->path, path);
         }
         if (sub == NULL) {
@@ -4746,10 +4774,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3024_17 = &ns->quals[ns->nquals];
-                __with_3024_17->name = q;
-                __with_3024_17->orig = d->path;
-                __with_3024_17->ns = sub;
+                PsNsEnt *__with_3046_17 = &ns->quals[ns->nquals];
+                __with_3046_17->name = q;
+                __with_3046_17->orig = d->path;
+                __with_3046_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -4762,10 +4790,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3036_21 = &ns->ents[ns->nents];
-                    __with_3036_21->name = local;
-                    __with_3036_21->orig = d->names[k];
-                    __with_3036_21->ns = sub;
+                    PsNsEnt *__with_3058_21 = &ns->ents[ns->nents];
+                    __with_3058_21->name = local;
+                    __with_3058_21->orig = d->names[k];
+                    __with_3058_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5095,6 +5123,17 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
     } else if (strcmp(name, "time") == 0) {
         StrSet_add(&ns->sym, "time");
         StrSet_add(&ns->sym, "monotonic");
+    } else if (strcmp(name, "bisect") == 0) {
+        StrSet_add(&ns->sym, "bisect");
+        StrSet_add(&ns->sym, "bisect_left");
+        StrSet_add(&ns->sym, "bisect_right");
+        StrSet_add(&ns->sym, "insort");
+        StrSet_add(&ns->sym, "insort_left");
+        StrSet_add(&ns->sym, "insort_right");
+    } else if (strcmp(name, "heapq") == 0) {
+        StrSet_add(&ns->sym, "heappush");
+        StrSet_add(&ns->sym, "heappop");
+        StrSet_add(&ns->sym, "heapify");
     } else {
         StrSet_add(&ns->sym, "argv");
         StrSet_add(&ns->sym, "env");
@@ -5167,10 +5206,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_3417_9 = e;
-        __with_3417_9->kind = PE_NAME;
-        __with_3417_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_3417_9->lhs = NULL;
+        PsExpr *__with_3452_9 = e;
+        __with_3452_9->kind = PE_NAME;
+        __with_3452_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3452_9->lhs = NULL;
     }
     return 1;
 }

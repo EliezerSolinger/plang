@@ -2062,17 +2062,136 @@ static def ps_cmp_str(a: const *void, b: const *void) -> int:
     y: *PsStr = *(**PsStr)(b)
     return strcmp(x->data, y->data)
 
+# Merge sort ESTÁVEL sobre os próprios valores, com detecção de corridas (106).
+#
+# Por que não `qsort`: a estabilidade dele não é especificada. O da glibc é um
+# merge sort e sai estável por acidente; o do macOS é um introsort e não sai. O
+# que se vê disso é pequeno mas é real — `sorted([0.0, -0.0])` imprime
+# `[0.0, -0.0]` aqui e podia imprimir o contrário lá, e duas strings de mesmo
+# conteúdo trocariam de identidade. Uma ordem que depende de qual libc compilou
+# é uma resposta diferente por plataforma, e é isso que isto remove. Os
+# caminhos com `key=` e `cmp=` já eram estáveis (ordenam ÍNDICES); este é o que
+# faltava.
+#
+# A detecção de corridas é a metade do Timsort que paga por si: uma lista já
+# ordenada (ou já ordenada ao contrário) sai numa passada, que é o caso comum de
+# quem chama `sorted` sobre algo que veio de um `sorted`. A outra metade dele —
+# o merge galopante — fica de fora: ela muda o CUSTO em padrões específicos e
+# não muda a ordem, que é o que se observa.
+static def ps_run_end(base: *char, n: i64, es: usize, i: i64, cmp: def(a: const *void, b: const *void) -> int) -> i64:
+    # quanto do vetor, a partir de `i`, já está em ordem — e se estiver em ordem
+    # DECRESCENTE ESTRITA, inverte no lugar e devolve o fim (inverter só o
+    # estrito é o que mantém a estabilidade: com iguais no meio, a inversão
+    # trocaria a ordem original deles)
+    if i + 1 >= n:
+        return n
+    j: i64 = i + 1
+    if cmp((*void)(base + usize(j) * es), (*void)(base + usize(i) * es)) < 0:
+        while j + 1 < n and cmp((*void)(base + usize(j + 1) * es), (*void)(base + usize(j) * es)) < 0:
+            j += 1
+        a: i64 = i
+        b: i64 = j
+        tmp: char[64]
+        while a < b:
+            if es <= sizeof(tmp):
+                memcpy(&tmp[0], base + usize(a) * es, es)
+                memcpy(base + usize(a) * es, base + usize(b) * es, es)
+                memcpy(base + usize(b) * es, &tmp[0], es)
+            a += 1
+            b -= 1
+        return j + 1
+    while j + 1 < n and cmp((*void)(base + usize(j + 1) * es), (*void)(base + usize(j) * es)) >= 0:
+        j += 1
+    return j + 1
+
+static def ps_msort_vals(base: *char, n: i64, es: usize, cmp: def(a: const *void, b: const *void) -> int) -> bool:
+    if n < 2:
+        return True
+    # uma passada de corridas: se a primeira cobre tudo, não há nada a fazer
+    first: i64 = ps_run_end(base, n, es, 0, cmp)
+    if first == n:
+        return True
+    tmp: *char = (*char)(malloc(usize(n) * es))
+    if tmp == None:
+        return False
+    # insertion sort binário nas corridas curtas, para que o merge tenha blocos
+    # de tamanho decente — é o `minrun` do Timsort, com um valor fixo
+    MINRUN: const i64 = 32
+    i: i64 = 0
+    while i < n:
+        e: i64 = ps_run_end(base, n, es, i, cmp)
+        stop: i64 = i + MINRUN
+        if stop > n:
+            stop = n
+        # estende a corrida até MINRUN inserindo um por um, para trás
+        k: i64 = e
+        while k < stop:
+            memcpy(tmp, base + usize(k) * es, es)
+            j2: i64 = k
+            while j2 > i and cmp((*void)(tmp), (*void)(base + usize(j2 - 1) * es)) < 0:
+                memcpy(base + usize(j2) * es, base + usize(j2 - 1) * es, es)
+                j2 -= 1
+            memcpy(base + usize(j2) * es, tmp, es)
+            k += 1
+        i = stop if stop > e else e
+    width: i64 = MINRUN
+    while width < n:
+        p: i64 = 0
+        while p < n:
+            mid: i64 = p + width
+            if mid >= n:
+                break
+            hi: i64 = p + 2 * width
+            if hi > n:
+                hi = n
+            # já em ordem entre os dois blocos: nada a fundir
+            if cmp((*void)(base + usize(mid) * es), (*void)(base + usize(mid - 1) * es)) >= 0:
+                p = hi
+                continue
+            memcpy(tmp, base + usize(p) * es, usize(hi - p) * es)
+            a2: i64 = 0
+            b2: i64 = mid - p
+            o: i64 = p
+            lena: i64 = mid - p
+            lenb: i64 = hi - p
+            while a2 < lena and b2 < lenb:
+                # `< 0` e não `<= 0`: no empate vai o da ESQUERDA, que é a
+                # definição de estável
+                if cmp((*void)(tmp + usize(b2) * es), (*void)(tmp + usize(a2) * es)) < 0:
+                    memcpy(base + usize(o) * es, tmp + usize(b2) * es, es)
+                    b2 += 1
+                else:
+                    memcpy(base + usize(o) * es, tmp + usize(a2) * es, es)
+                    a2 += 1
+                o += 1
+            while a2 < lena:
+                memcpy(base + usize(o) * es, tmp + usize(a2) * es, es)
+                a2 += 1
+                o += 1
+            while b2 < lenb:
+                memcpy(base + usize(o) * es, tmp + usize(b2) * es, es)
+                b2 += 1
+                o += 1
+            p = hi
+        width *= 2
+    free(tmp)
+    return True
+
 def ps_list_sorted(ctx: *PsCtx, l: *PsList, kind: i32) -> *PsList:
     out: *PsList = ps_list_slice(ctx, l, 0, 0, 1, False, False, "<copy>", 0)
     if out->len < 2:
         return out
-    base: *void = (*void)((*char)(out->data) + sizeof(PsArr))
-    if kind == 0:
-        qsort(base, usize(out->len), usize(out->esize), ps_cmp_int)
-    elif kind == 1:
-        qsort(base, usize(out->len), usize(out->esize), ps_cmp_float)
-    else:
-        qsort(base, usize(out->len), usize(out->esize), ps_cmp_str)
+    base: *char = (*char)(out->data) + sizeof(PsArr)
+    es: usize = usize(out->esize)
+    cmp: def(a: const *void, b: const *void) -> int = ps_cmp_int
+    if kind == 1:
+        cmp = ps_cmp_float
+    elif kind == 2:
+        cmp = ps_cmp_str
+    if not ps_msort_vals(base, out->len, es, cmp):
+        # sem memória para o temporário: ordena no lugar, sem prometer
+        # estabilidade, em vez de devolver a lista fora de ordem
+        qsort((*void)(base), usize(out->len), es, cmp)
     return out
 
 # ---------- 104: `sum`, `any`, `all`, `round`, e min/max de uma lista ----------
@@ -2179,6 +2298,129 @@ def ps_list_min_str(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, 
         if (c > 0) if want_max else (c < 0):
             v = b[i]
     return v
+
+# ---------- 106: `bisect` e `heapq`, portados do CPython ----------
+#
+# São os dois módulos do Python que são ALGORITMO PURO — `Lib/bisect.py` e
+# `Lib/heapq.py` não têm nada de específico da linguagem dentro, então portar é
+# transcrever. E são os dois que uma lista ordenada pede: `bisect` acha onde uma
+# coisa entra sem quebrar a ordem, `heapq` mantém o menor no topo por 30 linhas
+# em vez de reordenar a cada inserção.
+#
+# `kind` é o mesmo do `sorted`: 0 int, 1 float, 2 str — o comparador vem daí, e
+# é o mesmo em todos os três caminhos, então a ordem que o `bisect` assume é
+# exatamente a que o `sorted` produz.
+static def ps_cmp_of(kind: i32) -> def(a: const *void, b: const *void) -> int:
+    if kind == 1:
+        return ps_cmp_float
+    if kind == 2:
+        return ps_cmp_str
+    return ps_cmp_int
+
+# `bisect_left`/`bisect_right`: o ponto de inserção. A diferença entre os dois é
+# só o lado dos IGUAIS — `left` põe antes deles, `right` depois — e é por isso
+# que os dois existem em vez de um.
+def ps_bisect(l: *PsList, v: const *void, kind: i32, right: bool) -> i64:
+    if l == None:
+        return 0
+    cmp: def(a: const *void, b: const *void) -> int = ps_cmp_of(kind)
+    base: *char = ps_list_base(l)
+    es: usize = usize(l->esize)
+    lo: i64 = 0
+    hi: i64 = l->len
+    while lo < hi:
+        # `(lo + hi) / 2` e não `lo + (hi - lo) / 2` porque o comprimento de uma
+        # lista aqui já não cabe perto do estouro de i64
+        mid: i64 = (lo + hi) / 2
+        c: int = cmp((*void)(base + usize(mid) * es), v)
+        if (c <= 0) if right else (c < 0):
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+def ps_insort(ctx: *PsCtx, l: *PsList, v: const *void, kind: i32, right: bool, file: const *char, line: i32):
+    at: i64 = ps_bisect(l, v, kind, right)
+    slot: *char = ps_list_insert(ctx, l, at, file, line)
+    if slot != None:
+        memcpy(slot, v, usize(l->esize))
+
+# `heapq`: um heap mínimo binário no próprio vetor, com a mesma estrutura do
+# `Lib/heapq.py` — `_siftdown` sobe o buraco, `_siftup` desce. A tradução
+# conserva os nomes de lá porque a discussão que explica por que o `_siftup` do
+# Python desce (e não sobe, como o nome sugere) está no comentário DELE.
+static def ps_sift_down(base: *char, es: usize, startpos: i64, pos: i64, cmp: def(a: const *void, b: const *void) -> int, tmp: *char):
+    # o novo item está em `pos`; sobe enquanto for menor que o pai
+    memcpy(tmp, base + usize(pos) * es, es)
+    p: i64 = pos
+    while p > startpos:
+        parent: i64 = (p - 1) / 2
+        if cmp((*void)(tmp), (*void)(base + usize(parent) * es)) < 0:
+            memcpy(base + usize(p) * es, base + usize(parent) * es, es)
+            p = parent
+        else:
+            break
+    memcpy(base + usize(p) * es, tmp, es)
+
+static def ps_sift_up(base: *char, n: i64, es: usize, pos: i64, cmp: def(a: const *void, b: const *void) -> int, tmp: *char):
+    # o buraco em `pos` desce sempre pelo FILHO MENOR até o fim, e só então o
+    # item guardado sobe de volta pelo caminho — é o truque do heapq, que faz
+    # uma comparação por nível em vez de duas
+    startpos: i64 = pos
+    memcpy(tmp, base + usize(pos) * es, es)
+    child: i64 = 2 * pos + 1
+    p: i64 = pos
+    while child < n:
+        right: i64 = child + 1
+        if right < n and cmp((*void)(base + usize(child) * es), (*void)(base + usize(right) * es)) >= 0:
+            child = right
+        memcpy(base + usize(p) * es, base + usize(child) * es, es)
+        p = child
+        child = 2 * p + 1
+    memcpy(base + usize(p) * es, tmp, es)
+    ps_sift_down(base, es, startpos, p, cmp, tmp)
+
+def ps_heappush(ctx: *PsCtx, l: *PsList, v: const *void, kind: i32, file: const *char, line: i32):
+    slot: *char = ps_list_push(ctx, l)
+    if slot == None:
+        return
+    memcpy(slot, v, usize(l->esize))
+    tmp: char[64]
+    if usize(l->esize) > sizeof(tmp):
+        return
+    ps_sift_down(ps_list_base(l), usize(l->esize), 0, l->len - 1, ps_cmp_of(kind), &tmp[0])
+
+# `heappop` devolve o menor E o tira: o menor sai para `out` (o chamador
+# declarou onde), o último vai para a raiz e desce. Levanta na lista vazia,
+# como o `IndexError` do Python.
+def ps_heappop(ctx: *PsCtx, l: *PsList, out: *void, kind: i32, file: const *char, line: i32):
+    if l == None or l->len == 0:
+        ps_raise(ctx, "pop from an empty heap", PS_CAT_INDEX, file, line)
+        return
+    es: usize = usize(l->esize)
+    base: *char = ps_list_base(l)
+    memcpy(out, base, es)
+    l->len -= 1
+    if l->len > 0:
+        memcpy(base, base + usize(l->len) * es, es)
+        tmp: char[64]
+        if es <= sizeof(tmp):
+            ps_sift_up(base, l->len, es, 0, ps_cmp_of(kind), &tmp[0])
+
+def ps_heapify(l: *PsList, kind: i32):
+    if l == None or l->len < 2:
+        return
+    es: usize = usize(l->esize)
+    tmp: char[64]
+    if es > sizeof(tmp):
+        return
+    cmp: def(a: const *void, b: const *void) -> int = ps_cmp_of(kind)
+    base: *char = ps_list_base(l)
+    # de trás para frente a partir do último pai, como no `heapify` do Python
+    i: i64 = l->len / 2 - 1
+    while i >= 0:
+        ps_sift_up(base, l->len, es, i, cmp, &tmp[0])
+        i -= 1
 
 # ---------- buffers (19.4/52.3) ----------
 def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer:

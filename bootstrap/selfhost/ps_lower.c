@@ -3793,6 +3793,71 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         }
         return rc;
     }
+    if (strncmp(name, "__bisect_", 9) == 0 || strncmp(name, "__heapq_", 8) == 0) {
+        const char *bh6 = name + (strncmp(name, "__bisect_", 9) == 0 ? 9 : 8);
+        PsType *lt6 = e->args[0]->type;
+        PsType *et6 = lt6->inner;
+        const char *kd6 = "0";
+        if (et6 != NULL && et6->kind == PT_FLOAT) {
+            kd6 = "1";
+        } else if (et6 != NULL && et6->kind == PT_STR) {
+            kd6 = "2";
+        }
+        if (strcmp(bh6, "heapify") == 0) {
+            Expr *hf6 = PsLow_call_rt(self, "ps_heapify", e->pos);
+            PsLow_push_arg(self, hf6, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, hf6, PsLow_num(self, kd6, e->pos));
+            return hf6;
+        }
+        if (strcmp(bh6, "heappop") == 0) {
+            const char *nm6 = Arena_printf(self->a, "__hp%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            Stmt *d6 = st_new(self->a, ST_VAR, e->pos);
+            d6->name = nm6;
+            d6->type = PsLow_ty(self, et6);
+            d6->init = PsLow_zero_val(self, d6->type, e->pos);
+            Vec_pStmt_push(&self->pre, d6);
+            Expr *pc6 = PsLow_call_rt(self, "ps_heappop", e->pos);
+            PsLow_push_arg(self, pc6, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, pc6, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, pc6, PsLow_addr_of(self, nm6, e->pos));
+            PsLow_push_arg(self, pc6, PsLow_num(self, kd6, e->pos));
+            PsLow_pos_args(self, pc6, e->pos);
+            self->raised = 1;
+            return PsLow_comma2(self, pc6, PsLow_ident(self, nm6, e->pos), e->pos);
+        }
+        Expr *vp6 = PsLow_key_ptr(self, e->args[1], et6, e->pos);
+        if (strcmp(bh6, "heappush") == 0) {
+            Expr *hp6 = PsLow_call_rt(self, "ps_heappush", e->pos);
+            PsLow_push_arg(self, hp6, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, hp6, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, hp6, vp6);
+            PsLow_push_arg(self, hp6, PsLow_num(self, kd6, e->pos));
+            PsLow_pos_args(self, hp6, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return hp6;
+        }
+        int right6 = strcmp(bh6, "bisect_left") != 0 && strcmp(bh6, "insort_left") != 0;
+        if (strncmp(bh6, "insort", 6) == 0) {
+            Expr *is6 = PsLow_call_rt(self, "ps_insort", e->pos);
+            PsLow_push_arg(self, is6, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, is6, PsLow_expr(self, e->args[0]));
+            PsLow_push_arg(self, is6, vp6);
+            PsLow_push_arg(self, is6, PsLow_num(self, kd6, e->pos));
+            PsLow_push_arg(self, is6, ex_new(self->a, (right6 ? EX_TRUE : EX_FALSE), e->pos));
+            PsLow_pos_args(self, is6, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return is6;
+        }
+        Expr *bs6 = PsLow_call_rt(self, "ps_bisect", e->pos);
+        PsLow_push_arg(self, bs6, PsLow_expr(self, e->args[0]));
+        PsLow_push_arg(self, bs6, vp6);
+        PsLow_push_arg(self, bs6, PsLow_num(self, kd6, e->pos));
+        PsLow_push_arg(self, bs6, ex_new(self->a, (right6 ? EX_TRUE : EX_FALSE), e->pos));
+        return bs6;
+    }
     if (strncmp(name, "__math_", 7) == 0) {
         const char *mf = name + 7;
         Expr *mc = PsLow_call_rt(self, mf, e->pos);

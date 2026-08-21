@@ -2581,6 +2581,28 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "random.shuffle() takes a list, found %s", ps_type_str(self->a, sl9))
                 return ps_type(self->a, PT_VOID, e->pos)
             fatal_at(self->file, e->pos, "random has seed, random, getrandbits, randint, randrange, uniform, gauss, expovariate, choice and shuffle")
+        # ---- 106: bisect e heapq ----
+        if strncmp(name, "__bisect_", 9) == 0 or strncmp(name, "__heapq_", 8) == 0:
+            bh: const *char = name + (9 if strncmp(name, "__bisect_", 9) == 0 else 8)
+            ins: bool = strncmp(bh, "insort", 6) == 0
+            push: bool = strcmp(bh, "heappush") == 0
+            pop: bool = strcmp(bh, "heappop") == 0
+            heapi: bool = strcmp(bh, "heapify") == 0
+            want: i32 = 1 if (pop or heapi) else 2
+            if e->nargs != want:
+                fatal_at(self->file, e->pos, "%s takes %d argument(s)", bh, want)
+            blt: *PsType = self->check_expr(e->args[0])
+            if blt == None or blt->kind != PT_LIST or blt->inner == None or blt->inner->kind not in {PT_INT, PT_FLOAT, PT_STR}:
+                fatal_at(self->file, e->pos, "%s takes a list of numbers or strings, not %s — the order it assumes is the one `sorted` produces, and that is defined for those three (106.3)", bh, ps_type_str(self->a, blt))
+            if ins or push or heapi:
+                self->deny_const_mut(e->args[0], bh)
+            if want == 2:
+                self->check_want(e->args[1], blt->inner, "the value")
+            if pop:
+                return blt->inner
+            if ins or push or heapi:
+                return ps_type(self->a, PT_VOID, e->pos)
+            return ps_type(self->a, PT_INT, e->pos)
         if strncmp(name, "__math_", 7) == 0:
             mf: const *char = name + 7
             mft: *PsType = ps_type(self->a, PT_FLOAT, e->pos)
@@ -2996,7 +3018,7 @@ struct PsSema:
             # `sys` is the one module that is not a file (48.3): what it names
             # is the program's own surroundings, which only the runtime can
             # answer. Its members are BUILTINS, so there is nothing to load.
-            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0 or strcmp(d->path, "random") == 0 or strcmp(d->path, "math") == 0 or strcmp(d->path, "time") == 0):
+            if sub == None and (strcmp(d->path, "sys") == 0 or strcmp(d->path, "re") == 0 or strcmp(d->path, "json") == 0 or strcmp(d->path, "net") == 0 or strcmp(d->path, "random") == 0 or strcmp(d->path, "math") == 0 or strcmp(d->path, "time") == 0 or strcmp(d->path, "bisect") == 0 or strcmp(d->path, "heapq") == 0):
                 sub = self->builtin_ns(d->path, path)
             if sub == None:
                 n: usize = 0
@@ -3344,6 +3366,19 @@ struct PsSema:
         elif strcmp(name, "time") == 0:
             ns->sym.add("time")
             ns->sym.add("monotonic")
+        elif strcmp(name, "bisect") == 0:
+            # 106: portado de `Lib/bisect.py`, com os dois nomes que o Python
+            # tem para cada um (o sem sufixo é o `right`)
+            ns->sym.add("bisect")
+            ns->sym.add("bisect_left")
+            ns->sym.add("bisect_right")
+            ns->sym.add("insort")
+            ns->sym.add("insort_left")
+            ns->sym.add("insort_right")
+        elif strcmp(name, "heapq") == 0:
+            ns->sym.add("heappush")
+            ns->sym.add("heappop")
+            ns->sym.add("heapify")
         else:
             ns->sym.add("argv")
             ns->sym.add("env")

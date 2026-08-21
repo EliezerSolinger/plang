@@ -3442,6 +3442,71 @@ struct PsLow:
                 self->pos_args(rc, e->pos)
                 self->raised = True
             return rc
+        # ---- 106: bisect e heapq ----
+        if strncmp(name, "__bisect_", 9) == 0 or strncmp(name, "__heapq_", 8) == 0:
+            bh6: const *char = name + (9 if strncmp(name, "__bisect_", 9) == 0 else 8)
+            lt6: *PsType = e->args[0]->type
+            et6: *PsType = lt6->inner
+            kd6: const *char = "0"
+            if et6 != None and et6->kind == PT_FLOAT:
+                kd6 = "1"
+            elif et6 != None and et6->kind == PT_STR:
+                kd6 = "2"
+            if strcmp(bh6, "heapify") == 0:
+                hf6: *Expr = self->call_rt("ps_heapify", e->pos)
+                self->push_arg(hf6, self->expr(e->args[0]))
+                self->push_arg(hf6, self->num(kd6, e->pos))
+                return hf6
+            if strcmp(bh6, "heappop") == 0:
+                # o menor sai para um temporário que o chamador declarou: a
+                # função de runtime não pode DEVOLVER um valor de tipo que ela
+                # não conhece, então ela escreve onde disserem
+                nm6: const *char = self->a->printf("__hp%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                d6: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                d6->name = nm6
+                d6->type = self->ty(et6)
+                d6->init = self->zero_val(d6->type, e->pos)
+                self->pre.push(d6)
+                pc6: *Expr = self->call_rt("ps_heappop", e->pos)
+                self->push_arg(pc6, self->ctx_arg(e->pos))
+                self->push_arg(pc6, self->expr(e->args[0]))
+                self->push_arg(pc6, self->addr_of(nm6, e->pos))
+                self->push_arg(pc6, self->num(kd6, e->pos))
+                self->pos_args(pc6, e->pos)
+                self->raised = True
+                return self->comma2(pc6, self->ident(nm6, e->pos), e->pos)
+            vp6: *Expr = self->key_ptr(e->args[1], et6, e->pos)
+            if strcmp(bh6, "heappush") == 0:
+                hp6: *Expr = self->call_rt("ps_heappush", e->pos)
+                self->push_arg(hp6, self->ctx_arg(e->pos))
+                self->push_arg(hp6, self->expr(e->args[0]))
+                self->push_arg(hp6, vp6)
+                self->push_arg(hp6, self->num(kd6, e->pos))
+                self->pos_args(hp6, e->pos)
+                self->raised = True
+                self->allocs = True
+                return hp6
+            # bisect / insort: o sufixo diz o lado dos iguais, e sem sufixo é
+            # `right`, como no Python
+            right6: bool = strcmp(bh6, "bisect_left") != 0 and strcmp(bh6, "insort_left") != 0
+            if strncmp(bh6, "insort", 6) == 0:
+                is6: *Expr = self->call_rt("ps_insort", e->pos)
+                self->push_arg(is6, self->ctx_arg(e->pos))
+                self->push_arg(is6, self->expr(e->args[0]))
+                self->push_arg(is6, vp6)
+                self->push_arg(is6, self->num(kd6, e->pos))
+                self->push_arg(is6, ex_new(self->a, EX_TRUE if right6 else EX_FALSE, e->pos))
+                self->pos_args(is6, e->pos)
+                self->raised = True
+                self->allocs = True
+                return is6
+            bs6: *Expr = self->call_rt("ps_bisect", e->pos)
+            self->push_arg(bs6, self->expr(e->args[0]))
+            self->push_arg(bs6, vp6)
+            self->push_arg(bs6, self->num(kd6, e->pos))
+            self->push_arg(bs6, ex_new(self->a, EX_TRUE if right6 else EX_FALSE, e->pos))
+            return bs6
         if strncmp(name, "__math_", 7) == 0:
             mf: const *char = name + 7
             # a libm tem os nomes: `math.pow` é `pow`, `math.log2` é `log2`
