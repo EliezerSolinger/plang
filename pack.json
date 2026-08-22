@@ -1,4 +1,4 @@
 {
-  "members": ["packages/stl", "packages/pui"],
+  "members": ["packages/stl", "packages/pui", "packages/sha2"],
   "default": "build/bin/ppack"
 }

@@ -497,7 +497,17 @@ async def main() -> int:
     keep = 1
     dry = False
     verbose = False
-    query = "./plangc"
+    # o compilador que responde ao protocolo. O padrão não é um nome fixo: é o
+    # melhor que existir na árvore, do mais adiantado para o mais atrasado. Um
+    # padrão apontando para um caminho que o build já não produz é uma armadilha
+    # que só aparece muito depois, com uma mensagem que não fala do problema.
+    query = ""
+    for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
+        if path.isfile(cand):
+            query = cand
+            break
+    if query == "":
+        query = "build/bin/plangc_seed"
     i = 1
     # tudo depois de `--` é do PROGRAMA, não nosso. Sem isto, `ppack run p
     # --version` engoliria o `--version` como opção do ppack — e um `run` que

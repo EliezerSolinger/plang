@@ -370,15 +370,28 @@ async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
         if not path.isdir(tdir):
             continue
         nome = path.basename(dir)
-        for src in T.glob(tdir, ".psc"):
+        # um teste de pacote pode estar em qualquer das duas linguagens: o `pui`
+        # é pscript e o `sha2` é P. A diferença é só como se constrói.
+        fontes: list<str> = []
+        for a in T.glob(tdir, ".psc"):
+            fontes.append(a)
+        for b in T.glob(tdir, ".p"):
+            fontes.append(b)
+        for src in sorted(fontes):
             base = path.basename(src)
-            n = base[0:len(base) - 4]
+            corte = 4 if src.endswith(".psc") else 2
+            n = base[0:len(base) - corte]
             esperado = path.join(tdir, n + ".expected")
             if not path.isfile(esperado):
                 continue
             rot = nome + "/" + n
-            binario = await T.psc_program(c, src, path.join(BUILD, "t/pkg", nome + "-" + n),
-                                          path.join(BUILD, "t/obj"), [], [])
+            alvo = path.join(BUILD, "t/pkg", nome + "-" + n)
+            odir = path.join(BUILD, "t/obj")
+            binario = ""
+            if src.endswith(".psc"):
+                binario = await T.psc_program(c, src, alvo, odir, [], [])
+            else:
+                binario = await T.p_program(c, src, alvo, odir, [], [])
             casos.append(T.Caso(rot, binario, esperado, 0,
                                 path.join(BUILD, "t/run", nome + "-" + n)))
     return T.suite(c, "pacotes", casos, verdict, path.join(BUILD, "t/stamp"))

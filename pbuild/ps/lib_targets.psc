@@ -513,6 +513,18 @@ async def tem_pkg(lib: str) -> bool:
     return r.status() == 0
 
 
+async def p_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, libs: list<str>) -> str:
+    """Um programa em P: o fecho dele a objeto, e um link. Sem runtime nenhum —
+    é a diferença inteira entre as duas linguagens, e ela aparece aqui como a
+    ausência de uma linha."""
+    ger = await p_module(c, src, c.outdir, flags)
+    cab: list<str> = only(ger, ".h")
+    objs: list<str> = []
+    for cf in only(ger, ".c"):
+        objs.append(c_object(c, cf, obj_for(objdir, cf), [], cab))
+    return executable(c, out, objs, libs)
+
+
 # ---------- suítes ----------
 struct Caso:
     """Um caso de teste: o que rodar, o que se espera dele, e onde ele roda.
