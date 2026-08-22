@@ -29,10 +29,12 @@ private const P_KEYWORDS: Keyword[] = {
     {"lambda", TK_LAMBDA},
     {None, TK_EOF}}
 
-# P reads f-strings (65.2: resolved entirely at compile time, in the argument of
-# a variadic call) but not triple quotes, and `?`/`@`/`**`/`//` are not operators
-# at all — the one `?` spelling P has is the coalesce pair, in the table below.
-private P_LEXSPEC: const LexSpec = {P_KEYWORDS, True, False, False}
+# P reads f-strings (65.2: resolved entirely at compile time, no argumento de uma
+# chamada variádica) e AGORA também aspas triplas — a docstring é a mesma coisa
+# nas duas linguagens, e o que a lexa é a mesma máquina. `?`/`@`/`**`/`//` não são
+# operadores em P: a única grafia com `?` que ele tem é o par de coalescência, na
+# tabela abaixo.
+private P_LEXSPEC: const LexSpec = {P_KEYWORDS, True, True, False}
 
 # reconstructs a `<...>` header path from tokens. `include` is a CONTEXTUAL
 # word in both languages, not a keyword, so the lexer cannot special-case `<h>`

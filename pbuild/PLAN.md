@@ -65,8 +65,14 @@ sozinho. Estado encontrado e restrição que ele impõe:
       modules, stl, errors (101), p-suite (192) e roundtrip (234) verdes.
       FALTA (bloqueado pelo outro agente): regenerar o seed e rodar `verify`
       inteiro, e ligar o `protocol.sh` ao `verify-all.sh`.
-- [~] **F1 — 1.5(d) e `import <>` FEITAS** (2026-08-22); faltam a docstring e a
-      1.5(a) para a forma relativa.
+- [~] **F1 — 1.5(d), `import <>` e a DOCSTRING feitas** (2026-08-22); falta a
+      1.5(a) para a forma relativa, e a docstring de PROTÓTIPO (decisão sua).
+
+      **A docstring** existe agora nas duas linguagens, com a regra posicional
+      do Python e sem palavra nova. Não gera um byte, e no `--api` sai DEPOIS do
+      hash — mudar um texto de documentação não pode acordar quem só depende da
+      interface. Portão: `tests/cases/docstring.p` e três checagens novas no
+      `protocol.sh`.
 
       **`import <pkg/mod.ph>`**: o compilador recebe raízes de busca
       (`--pkg-path`, repetível) e procura nelas, na ordem — e continua sem saber
@@ -339,7 +345,7 @@ fino e vira o lugar do teste).
 
 ### Entregas
 
-- [ ] **Docstring `"""..."""` nas duas linguagens**
+- [x] **Docstring `"""..."""` nas duas linguagens** (FEITA)
   - lexer: ligar `triple_str` no `P_LEXSPEC` (`lexer.p:33` — a máquina já
     existe, o pscript já a usa; conferir interação com f-string: em P não há
     prefixo de interpolação, então `"""` é sempre literal cru)
@@ -349,9 +355,11 @@ fino e vira o lugar do teste).
   - P: a docstring vai para o AST e **não gera código** (dropada no backend —
     zero byte no binário, decidido); pscript: mantém a 46.3 (acessível em
     runtime)
-  - precedência: para um módulo P com `.ph` e `.p`, a docstring do **`.ph`
-    vence** na API (é a interface); a do `.p` documenta a implementação e não
-    sai na resposta 5
+  - precedência: PENDENTE, e por um motivo concreto — um protótipo não tem
+    corpo, então uma função declarada num `.ph` ainda não tem onde pôr a
+    docstring dela. A forma que caberia (um corpo só com a docstring) é
+    inequívoca num header e ambígua num `.p`, e é **decisão sua**; está escrita
+    em `pbuild/BATERIAS.md`
   - **resposta 5 do protocolo**: a lista canónica da F0 ganha a docstring de
     cada símbolo (a doc NÃO entra no hash — teste de invariância já preso na F0)
 - [x] **`import <pkg/mod.ph>`** (FEITA)

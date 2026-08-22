@@ -391,6 +391,10 @@ struct Func:
                          #   (67.1). Checked at INSTANTIATION, where the concrete type
                          #   is known — so the call is direct and there is no vtable.
     ntparams: i32        # 0 = ordinary function; >0 = template (monomorphized via declare)
+    doc: const *char     # a docstring (`"""..."""` como PRIMEIRA instrução do
+                         #   corpo). Ela vai para a árvore e NÃO gera código: um
+                         #   binário não carrega documentação. Quem a lê é a
+                         #   resposta 5 do protocolo (`--api`) e a IDE.
 
 struct Field:
     name: const *char
@@ -421,6 +425,9 @@ enum DeclKind:
 struct Decl:
     kind: DeclKind
     pos: Pos
+    doc: const *char    # docstring do `struct`/`record`/`union`/`enum`, e a do
+                        #   MÓDULO quando ela é a primeira coisa do arquivo. Não
+                        #   gera código (ver `Func.doc`).
     is_define: bool     # 110: const injetada por `-D NAME=VAL`. Ela entra em TODA
                         #   unidade (é `static`), e um header também a recebe para
                         #   poder USAR o valor — então a MESMA definição aparece
@@ -484,6 +491,8 @@ struct Decl:
 struct Module:
     path: const *char  # source file path
     name: const *char  # basename without extension
+    doc: const *char   # a docstring do módulo: uma string sozinha antes de tudo.
+                       #   Não gera código; quem a lê é a resposta 5 (`--api`).
     is_header: bool    # .ph
     is_c: bool         # produced by the C front end (c_parse): round-tripped C
                        #   has no #include left, so va_arg etc. emit as builtins

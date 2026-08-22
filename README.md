@@ -9,9 +9,10 @@ raw pointers, structs, manual memory, and direct C interop. The compiler
 so a Plang program is exactly as fast and as portable as the C it becomes.
 
 ```python
-import <stdio.h>
+include <stdio.h>
 
 def main() -> int:
+    """Say hello, and say it in C."""
     printf("hello from Plang\n")
     return 0
 ```
@@ -171,8 +172,17 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 - **Default and named arguments**, resolved at compile time.
 - **Clang-compatible warnings:** `-W<group>`, `-Wall`, `-Werror`,
   `-pedantic-errors` — same group names and defaults as clang.
-- **First-class C interop:** `import <stdio.h>` becomes `#include`; call libc
+- **First-class C interop:** `include <stdio.h>` becomes `#include`; call libc
   directly; the emitted C is clean enough to read and diff.
+- **Three ways to name a dependency, none of them ambiguous:**
+  `include <stdio.h>` is a C header, `import "neighbour.ph"` is a module beside
+  the file, and `import <pkg/mod.ph>` is a module of a PACKAGE, looked up in the
+  roots given by `--pkg-path` (repeatable). A `<>` that is not found is an
+  error — it never falls back to the relative form.
+- **Docstrings** (`"""..."""` as the first thing in a module, a body, a
+  `struct`, an `enum` or a `trait`): they reach the AST and emit no code, and
+  `plangc --api` prints them *after* the interface hash — so changing what a
+  function's documentation says never changes what its interface hashes to.
 
 ### Optional standard library (STL)
 

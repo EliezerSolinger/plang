@@ -8804,6 +8804,9 @@ private def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *
     pf->pos = f->pos
     pf->name = ps_cname(L->a, f->name) if owner == None else L->a->printf("%s_%s", owner, f->name)
     pf->cname = pf->name
+    # a docstring atravessa a baixa (46.3 -> resposta 5): ela não gera código
+    # nenhum, e o que a lê é o `--api` do módulo, que já vê a árvore do P
+    pf->doc = f->doc
     pf->is_static = f->is_private   # `private` in pscript is `static` in the C we emit
     pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask"))
     # a METHOD keeps the receiver first, exactly as `lower_func` puts it, so an
@@ -9826,6 +9829,9 @@ private def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: boo
     pf->pos = f->pos
     pf->name = ps_cname(L->a, f->name) if owner == None else L->a->printf("%s_%s", owner, f->name)
     pf->cname = pf->name
+    # a docstring atravessa a baixa (46.3 -> resposta 5): ela não gera código
+    # nenhum, e o que a lê é o `--api` do módulo, que já vê a árvore do P
+    pf->doc = f->doc
     pf->is_static = f->is_private   # `private` in pscript is `static` in the C we emit
     pf->ret = L->ty(f->ret)
     recv: bool = owner != None and f->nparams > 0 and strcmp(f->params[0].name, "self") == 0

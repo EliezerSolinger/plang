@@ -10,6 +10,8 @@
 
 static void a_type(StrBuf *b, Type *t, int no_const);
 
+static void a_doc(StrBuf *b, const char *owner, const char *name, const char *doc);
+
 static void a_expr(StrBuf *b, Expr *e);
 
 static const char *a_op(int32_t op) {
@@ -462,6 +464,41 @@ static int a_is_public(Decl *d, int is_header) {
     }
 }
 
+static void a_doc(StrBuf *b, const char *owner, const char *name, const char *doc) {
+    if (doc == NULL || doc[0] == '\0') {
+        return;
+    }
+    size_t n0 = strlen(doc);
+    if (n0 >= 6 && doc[0] == '"' && doc[1] == '"' && doc[2] == '"') {
+        doc = doc + 3;
+        n0 -= 6;
+    } else if (n0 >= 2 && doc[0] == '"') {
+        doc = doc + 1;
+        n0 -= 2;
+    } else {
+        n0 = strlen(doc);
+    }
+    if (owner != NULL) {
+        StrBuf_printf(b, "#doc %s.%s ", owner, name);
+    } else {
+        StrBuf_printf(b, "#doc %s ", name);
+    }
+    size_t i = 0;
+    size_t n = n0;
+    while (i < n) {
+        char c = doc[i];
+        if (c == '\n') {
+            StrBuf_puts(b, "\\n");
+        } else if (c == '\\') {
+            StrBuf_puts(b, "\\\\");
+        } else {
+            StrBuf_putc(b, c);
+        }
+        i += 1;
+    }
+    StrBuf_putc(b, '\n');
+}
+
 void api_dump(Module *m, StrBuf *b) {
     StrBuf_printf(b, "== %s\n", m->path);
     size_t start = b->len;
@@ -575,4 +612,26 @@ void api_dump(Module *m, StrBuf *b) {
     }
     uint64_t h = hash_bytes(b->data + start, b->len - start);
     StrBuf_printf(b, "#hash %016llx\n", h);
+    a_doc(b, NULL, ".", m->doc);
+    for (i = 0; i < m->ndecls; i += 1) {
+        Decl *d = m->decls[i];
+        if (!a_is_public(d, m->is_header)) {
+            continue;
+        }
+        if (d->kind == DL_FUNC && d->func != NULL) {
+            if (d->func->body == NULL && !m->is_header) {
+                continue;
+            }
+            a_doc(b, NULL, d->func->name, d->func->doc);
+            continue;
+        }
+        if (d->name == NULL) {
+            continue;
+        }
+        a_doc(b, NULL, d->name, d->doc);
+        size_t j;
+        for (j = 0; j < d->nmethods; j += 1) {
+            a_doc(b, d->name, d->methods[j]->name, d->methods[j]->doc);
+        }
+    }
 }

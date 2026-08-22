@@ -11,6 +11,7 @@ import "api.ph"
 import "../stl/hash.ph"
 
 private def a_type(b: *StrBuf, t: *Type, no_const: bool = False)
+private def a_doc(b: *StrBuf, owner: const *char, name: const *char, doc: const *char)
 private def a_expr(b: *StrBuf, e: *Expr)
 
 # ---------- operadores ----------
@@ -339,6 +340,39 @@ private def a_is_public(d: *Decl, is_header: bool) -> bool:
         case _:
             return True
 
+# `#doc <símbolo> <texto>` — uma linha, com a quebra escapada. Sem docstring,
+# nenhuma linha: um símbolo sem documentação não ocupa espaço no relatório.
+private def a_doc(b: *StrBuf, owner: const *char, name: const *char, doc: const *char):
+    if doc == None or doc[0] == '\0':
+        return
+    # o front end do pscript guarda a docstring COM as aspas (46.3) e o do P sem
+    # elas; aqui a resposta é uma só, então as aspas caem de qualquer um dos dois
+    n0: usize = strlen(doc)
+    if n0 >= 6 and doc[0] == '"' and doc[1] == '"' and doc[2] == '"':
+        doc = doc + 3
+        n0 -= 6
+    elif n0 >= 2 and doc[0] == '"':
+        doc = doc + 1
+        n0 -= 2
+    else:
+        n0 = strlen(doc)
+    if owner != None:
+        b->printf("#doc %s.%s ", owner, name)
+    else:
+        b->printf("#doc %s ", name)
+    i: usize = 0
+    n: usize = n0
+    while i < n:
+        c: char = doc[i]
+        if c == '\n':
+            b->puts("\\n")
+        elif c == '\\':
+            b->puts("\\\\")
+        else:
+            b->putc(c)
+        i += 1
+    b->putc('\n')
+
 def api_dump(m: *Module, b: *StrBuf):
     b->printf("== %s\n", m->path)
     start: usize = b->len
@@ -420,3 +454,29 @@ def api_dump(m: *Module, b: *StrBuf):
     # dizer "a interface não mudou" sem comparar texto nenhum
     h: u64 = hash_bytes(b->data + start, b->len - start)
     b->printf("#hash %016llx\n", h)
+    # As DOCSTRINGS vêm DEPOIS do hash, e é essa a decisão que importa: mudar a
+    # documentação de uma função não muda a interface dela, e um consumidor que
+    # só quer saber "o que eu uso mudou?" não pode ser acordado por uma vírgula
+    # num comentário. Elas ficam aqui para quem QUER a documentação — a IDE, o
+    # `ppack doc`, o gerador de site — e o hash acima continua estrutural.
+    #
+    # Uma linha por símbolo, com a quebra escapada: o formato é de linhas, e uma
+    # docstring de dez linhas não pode virar dez registros.
+    a_doc(b, None, ".", m->doc)
+    for i in range(m->ndecls):
+        d: *Decl = m->decls[i]
+        if not a_is_public(d, m->is_header):
+            continue
+        if d->kind == DL_FUNC and d->func != None:
+            # a baixa do pscript emite PROTÓTIPO e definição para a mesma
+            # função, e as duas carregam a docstring — sem esta linha ela sairia
+            # duas vezes. Num header, porém, o protótipo É a declaração.
+            if d->func->body == None and not m->is_header:
+                continue
+            a_doc(b, None, d->func->name, d->func->doc)
+            continue
+        if d->name == None:
+            continue
+        a_doc(b, None, d->name, d->doc)
+        for j in range(d->nmethods):
+            a_doc(b, d->name, d->methods[j]->name, d->methods[j]->doc)

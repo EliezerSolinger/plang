@@ -24,6 +24,10 @@ set -u
 cd "$(dirname "$0")/.."
 
 PLANGC=${PLANGC:-./plangc2}
+
+# o hash sai numa linha PROPRIA (`#hash ...`), e as docstrings vem DEPOIS dela —
+# entao e a linha que se procura, e nao a ultima do relatorio
+apihash() { $PLANGC --api "$1" 2>&1 | grep '^#hash '; }
 OUT=tests/out/protocol
 rm -rf "$OUT"; mkdir -p "$OUT"
 fail=0
@@ -111,7 +115,7 @@ apip=$($PLANGC --api "$OUT/geom.p" 2>&1)
 check "--api: o público do .p" "1" "$(echo "$apip" | grep -c 'def area(i32, i32) -> i64')"
 check "--api: o private fica de fora" "0" "$(echo "$apip" | grep -c 'helper_that_is_not_interface')"
 
-h0=$($PLANGC --api "$OUT/geom.ph" 2>&1 | tail -1)
+h0=$(apihash "$OUT/geom.ph")
 
 # ---- a INVARIÂNCIA: comentário e nome de parâmetro não são interface ----
 cp "$OUT/geom.ph" "$OUT/geom.ph.orig"
@@ -122,7 +126,7 @@ s = s.replace('def area(w: i32, h: i32) -> i64',
               '# um comentário que não muda interface nenhuma\ndef area(largura: i32, altura: i32) -> i64', 1)
 open(p, 'w').write(s)
 PY
-check "hash: comentário e parâmetro renomeado NÃO mudam" "$h0" "$($PLANGC --api "$OUT/geom.ph" 2>&1 | tail -1)"
+check "hash: comentário e parâmetro renomeado NÃO mudam" "$h0" "$(apihash "$OUT/geom.ph")"
 
 # ---- a SENSIBILIDADE: tipo, layout e valor SÃO interface ----
 for mudanca in 's/def area(w: i32, h: i32) -> i64/def area(w: i32, h: i32) -> i32/' \
@@ -138,12 +142,36 @@ s = open(p).read()
 assert pat in s, "a mudança não achou o alvo: " + pat
 open(p, 'w').write(s.replace(pat, rep, 1))
 PY
-    checkne "hash muda: $mudanca" "$h0" "$($PLANGC --api "$OUT/geom.ph" 2>&1 | tail -1)"
+    checkne "hash muda: $mudanca" "$h0" "$(apihash "$OUT/geom.ph")"
 done
 
 # ---- a resposta é estável entre execuções (é chave de cache) ----
 cp "$OUT/geom.ph.orig" "$OUT/geom.ph"
-check "hash: mesma entrada, mesma resposta" "$h0" "$($PLANGC --api "$OUT/geom.ph" 2>&1 | tail -1)"
+check "hash: mesma entrada, mesma resposta" "$h0" "$(apihash "$OUT/geom.ph")"
+
+# ---- a DOCSTRING: sai na resposta, e NÃO entra no hash ----
+# É a decisão que faz `--api` servir para as duas perguntas ao mesmo tempo: "a
+# interface mudou?" (o hash, que é estrutural) e "o que isto faz?" (a doc).
+# Mudar um texto de documentação não pode acordar quem só depende da interface.
+cp "$OUT/geom.ph.orig" "$OUT/geom.ph"
+h0=$(apihash "$OUT/geom.ph")
+printf '"""O pacote de geometria.\n\nCom uma segunda linha."""\n' > "$OUT/geom2.ph"
+cat "$OUT/geom.ph" >> "$OUT/geom2.ph"
+mv "$OUT/geom2.ph" "$OUT/geom.ph"
+check "hash: a docstring do módulo NÃO muda a interface" "$h0" "$(apihash "$OUT/geom.ph")"
+
+doc=$($PLANGC --api "$OUT/geom.ph" 2>&1 | grep '^#doc \. ')
+esperado='#doc . O pacote de geometria.\n\nCom uma segunda linha.'
+check "doc: sai na resposta, com a quebra escapada" "$esperado" "$doc"
+
+# e ela vem DEPOIS do hash — é o que permite ler uma sem ler a outra
+lh=$($PLANGC --api "$OUT/geom.ph" 2>&1 | grep -n '^#hash ' | cut -d: -f1)
+ld=$($PLANGC --api "$OUT/geom.ph" 2>&1 | grep -n '^#doc ' | head -1 | cut -d: -f1)
+if [ -n "$lh" ] && [ -n "$ld" ] && [ "$lh" -lt "$ld" ]; then
+    ok=$((ok+1))
+else
+    echo "  FAIL doc: a doc não vem depois do hash ($lh vs $ld)"; fail=$((fail+1))
+fi
 
 echo "   protocol: $ok ok, $fail failed"
 [ $fail = 0 ] || exit 1

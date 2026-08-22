@@ -145,6 +145,7 @@ struct Func {
     char **tparams;
     char **tbounds;
     int32_t ntparams;
+    const char *doc;
 };
 
 struct Field {
@@ -166,6 +167,7 @@ typedef enum { DL_IMPORT = 0, DL_VAR, DL_FUNC, DL_TRAIT, DL_STRUCT, DL_ENUM, DL_
 struct Decl {
     DeclKind kind;
     Pos pos;
+    const char *doc;
     int is_define;
     int inline_inst;
     int import_system;
@@ -201,6 +203,7 @@ struct Decl {
 struct Module {
     const char *path;
     const char *name;
+    const char *doc;
     int is_header;
     int is_c;
     char **tdnames;

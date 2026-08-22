@@ -72,6 +72,9 @@ struct P:
     private def parse_initializer(self: *P) -> *Expr
     private def end_stmt(self: *P, what: const *char)
     private def parse_block(self: *P) -> *Block
+    private def parse_block_body(self: *P) -> *Block
+    private def doc_text(self: *P, t: *Token) -> const *char
+    private def take_doc(self: *P) -> const *char
     private def parse_var_stmt(self: *P, is_const: bool) -> *Stmt
     private def parse_if(self: *P) -> *Stmt
     private def parse_while(self: *P) -> *Stmt
@@ -408,6 +411,15 @@ struct P:
             case TK_STRING:
                 e = ex_new(self->a, EX_STRING, t->pos)
                 e->text = self->adv()->text
+                # `"""..."""` atravessa linhas, e uma quebra CRUA não é uma
+                # string de C. Aqui ela vira uma literal normal, com as seis
+                # aspas fora e a quebra escapada — a partir deste ponto o resto
+                # do compilador vê uma string como qualquer outra, e nenhum back
+                # end precisa saber que aspas triplas existem.
+                if e->text != None and e->text[0] == '"' and e->text[1] == '"' and e->text[2] == '"':
+                    dn: usize = 0
+                    dec: *char = str_lit_decode(self->a, e->text, out dn)
+                    e->text = c_string_literal(self->a, dec, dn)
                 return e
             case TK_CHARLIT:
                 e = ex_new(self->a, EX_CHARLIT, t->pos)
@@ -830,6 +842,11 @@ struct P:
     private def parse_block(self: *P) -> *Block:
         self->expect(TK_NEWLINE, "start of block (after ':')")
         self->expect(TK_INDENT, "indented block")
+        return self->parse_block_body()
+
+    # o corpo DEPOIS do `INDENT`: existe separado porque a docstring de uma
+    # função é lida entre o `INDENT` e a primeira instrução
+    private def parse_block_body(self: *P) -> *Block:
         v: Vec<*Stmt>
         v.init()
         while not self->at(TK_DEDENT) and not self->at(TK_EOF):
@@ -1231,7 +1248,10 @@ struct P:
         f->nparams = params.len
 
         if self->accept(TK_COLON):
-            f->body = self->parse_block()
+            self->expect(TK_NEWLINE, "start of block (after ':')")
+            self->expect(TK_INDENT, "indented block")
+            f->doc = self->take_doc()
+            f->body = self->parse_block_body()
         else:
             self->expect(TK_NEWLINE, "function prototype")
         return f
@@ -1261,6 +1281,7 @@ struct P:
         d->is_record = is_record
         d->pos = pos
         d->name = name->text
+        d->doc = self->take_doc()
 
         fields: Vec<Field>
         methods: Vec<*Func>
@@ -1319,6 +1340,7 @@ struct P:
         d->kind = DL_ENUM
         d->pos = pos
         d->name = name->text
+        d->doc = self->take_doc()
 
         items: Vec<EnumItem>
         items.init()
@@ -1361,6 +1383,30 @@ struct P:
         if self->at(TK_IDENT) and self->pk()->text == "as":
             fatal_at(self->file, self->pk()->pos, "`include ... as` is not a thing: a C header has no namespace to qualify (`as` is for `import \"module.ph\"`)")
         self->expect(TK_NEWLINE, "include")
+        return d
+
+    # O CONTEÚDO de uma string literal, sem as aspas. As sequências de escape
+    # ficam como estão: este texto nunca chega ao back end (uma docstring não
+    # gera código), e quem o lê — a resposta 5 e a IDE — quer o que foi escrito.
+    private def doc_text(self: *P, t: *Token) -> const *char:
+        raw: const *char = t->text
+        n: usize = strlen(raw)
+        if n >= 6 and raw[0] == '"' and raw[1] == '"' and raw[2] == '"':
+            return self->a->strndup(raw + 3, n - 6)
+        if n >= 2 and raw[0] == '"':
+            return self->a->strndup(raw + 1, n - 2)
+        return raw
+
+    # A docstring de um CORPO: uma string sozinha, como primeira instrução. Em
+    # qualquer outro lugar do corpo ela continua sendo uma expressão comum — a
+    # regra é posicional, é a mesma do pscript (55.1) e a do Python, e não
+    # precisa de palavra nova nenhuma.
+    private def take_doc(self: *P) -> const *char:
+        if not self->at(TK_STRING) or self->pk1()->kind != TK_NEWLINE:
+            return None
+        d: const *char = self->doc_text(self->pk())
+        self->adv()
+        self->expect(TK_NEWLINE, "docstring")
         return d
 
     private def parse_import(self: *P) -> *Decl:
@@ -1464,6 +1510,7 @@ struct P:
         d->kind = DL_TRAIT
         d->pos = name->pos
         d->name = name->text
+        d->doc = self->take_doc()
         ms: Vec<*Func>
         ms.init()
         while not self->at(TK_DEDENT) and not self->at(TK_EOF):
@@ -1796,6 +1843,17 @@ def parse_tokens(a: *Arena, file: const *char, tl: TokenList, is_header: i32) ->
 
     decls: Vec<*Decl>
     decls.init()
+    # a DOCSTRING do módulo: uma string sozinha, antes de qualquer declaração.
+    # Em qualquer outro lugar do topo uma string continua sendo o que sempre foi
+    # — nada, e o erro de "declaração inválida" continua a sair. A regra é
+    # posicional de propósito: é a mesma do pscript (55.1), é a do Python, e não
+    # precisa de palavra nova nenhuma.
+    while p.accept(TK_NEWLINE):
+        pass
+    if p.at(TK_STRING) and p.pk1()->kind == TK_NEWLINE:
+        m->doc = p.doc_text(p.pk())
+        p.adv()
+        p.expect(TK_NEWLINE, "docstring do módulo")
     while not p.at(TK_EOF):
         if p.accept(TK_NEWLINE):
             continue

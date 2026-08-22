@@ -110,6 +110,12 @@ static void P_end_stmt(P *self, const char *what);
 
 static Block *P_parse_block(P *self);
 
+static Block *P_parse_block_body(P *self);
+
+static const char *P_doc_text(P *self, Token *t);
+
+static const char *P_take_doc(P *self);
+
 static Stmt *P_parse_var_stmt(P *self, int is_const);
 
 static Stmt *P_parse_if(P *self);
@@ -351,13 +357,13 @@ static Type *P_parse_type(P *self) {
         }
         t = ty_name(self->a, name);
         {
-            Type *__with_285_13 = t;
-            __with_285_13->is_const = is_const;
-            __with_285_13->is_volatile = is_volatile;
-            __with_285_13->is_restrict = is_restrict;
-            __with_285_13->ns_qual = ns_qual;
-            __with_285_13->targs = targs.data;
-            __with_285_13->ntargs = targs.len;
+            Type *__with_288_13 = t;
+            __with_288_13->is_const = is_const;
+            __with_288_13->is_volatile = is_volatile;
+            __with_288_13->is_restrict = is_restrict;
+            __with_288_13->ns_qual = ns_qual;
+            __with_288_13->targs = targs.data;
+            __with_288_13->ntargs = targs.len;
         }
     }
     int32_t k;
@@ -484,6 +490,11 @@ static Expr *P_parse_primary(P *self) {
         case TK_STRING: {
             e = ex_new(self->a, EX_STRING, t->pos);
             e->text = P_adv(self)->text;
+            if (e->text != NULL && e->text[0] == '"' && e->text[1] == '"' && e->text[2] == '"') {
+                size_t dn = 0;
+                char *dec = str_lit_decode(self->a, e->text, &dn);
+                e->text = c_string_literal(self->a, dec, dn);
+            }
             return e;
         }
         case TK_CHARLIT: {
@@ -965,6 +976,10 @@ static void P_end_stmt(P *self, const char *what) {
 static Block *P_parse_block(P *self) {
     P_expect(self, TK_NEWLINE, "start of block (after ':')");
     P_expect(self, TK_INDENT, "indented block");
+    return P_parse_block_body(self);
+}
+
+static Block *P_parse_block_body(P *self) {
     Vec_pStmt v;
     Vec_pStmt_init(&v);
     while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
@@ -1344,16 +1359,16 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     }
     Func *f = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1174_9 = f;
-        __with_1174_9->pos = pos;
-        __with_1174_9->name = name->text;
-        __with_1174_9->owner = owner;
-        __with_1174_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
-        __with_1174_9->is_static = is_static;
-        __with_1174_9->is_inline = is_inline;
-        __with_1174_9->tparams = ftparams.data;
-        __with_1174_9->tbounds = ftbounds.data;
-        __with_1174_9->ntparams = ftparams.len;
+        Func *__with_1191_9 = f;
+        __with_1191_9->pos = pos;
+        __with_1191_9->name = name->text;
+        __with_1191_9->owner = owner;
+        __with_1191_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
+        __with_1191_9->is_static = is_static;
+        __with_1191_9->is_inline = is_inline;
+        __with_1191_9->tparams = ftparams.data;
+        __with_1191_9->tbounds = ftbounds.data;
+        __with_1191_9->ntparams = ftparams.len;
     }
     P_expect(self, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1411,7 +1426,10 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     f->params = params.data;
     f->nparams = params.len;
     if (P_accept(self, TK_COLON)) {
-        f->body = P_parse_block(self);
+        P_expect(self, TK_NEWLINE, "start of block (after ':')");
+        P_expect(self, TK_INDENT, "indented block");
+        f->doc = P_take_doc(self);
+        f->body = P_parse_block_body(self);
     } else {
         P_expect(self, TK_NEWLINE, "function prototype");
     }
@@ -1444,6 +1462,7 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     d->is_record = is_record;
     d->pos = pos;
     d->name = name->text;
+    d->doc = P_take_doc(self);
     Vec_Field fields;
     Vec_pFunc methods;
     Vec_Field_init(&fields);
@@ -1487,13 +1506,13 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     }
     P_expect(self, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1302_9 = d;
-        __with_1302_9->fields = fields.data;
-        __with_1302_9->nfields = fields.len;
-        __with_1302_9->methods = methods.data;
-        __with_1302_9->nmethods = methods.len;
-        __with_1302_9->tparams = tparams.data;
-        __with_1302_9->ntparams = tparams.len;
+        Decl *__with_1323_9 = d;
+        __with_1323_9->fields = fields.data;
+        __with_1323_9->nfields = fields.len;
+        __with_1323_9->methods = methods.data;
+        __with_1323_9->nmethods = methods.len;
+        __with_1323_9->tparams = tparams.data;
+        __with_1323_9->ntparams = tparams.len;
     }
     return d;
 }
@@ -1508,6 +1527,7 @@ static Decl *P_parse_enum(P *self) {
     d->kind = DL_ENUM;
     d->pos = pos;
     d->name = name->text;
+    d->doc = P_take_doc(self);
     Vec_EnumItem items;
     Vec_EnumItem_init(&items);
     while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
@@ -1553,6 +1573,28 @@ static Decl *P_parse_c_include(P *self) {
         fatal_at(self->file, P_pk(self)->pos, "`include ... as` is not a thing: a C header has no namespace to qualify (`as` is for `import \"module.ph\"`)");
     }
     P_expect(self, TK_NEWLINE, "include");
+    return d;
+}
+
+static const char *P_doc_text(P *self, Token *t) {
+    const char *raw = t->text;
+    size_t n = strlen(raw);
+    if (n >= 6 && raw[0] == '"' && raw[1] == '"' && raw[2] == '"') {
+        return Arena_strndup(self->a, raw + 3, n - 6);
+    }
+    if (n >= 2 && raw[0] == '"') {
+        return Arena_strndup(self->a, raw + 1, n - 2);
+    }
+    return raw;
+}
+
+static const char *P_take_doc(P *self) {
+    if (!P_at(self, TK_STRING) || P_pk1(self)->kind != TK_NEWLINE) {
+        return NULL;
+    }
+    const char *d = P_doc_text(self, P_pk(self));
+    P_adv(self);
+    P_expect(self, TK_NEWLINE, "docstring");
     return d;
 }
 
@@ -1646,6 +1688,7 @@ static Decl *P_parse_trait(P *self) {
     d->kind = DL_TRAIT;
     d->pos = name->pos;
     d->name = name->text;
+    d->doc = P_take_doc(self);
     Vec_pFunc ms;
     Vec_pFunc_init(&ms);
     while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
@@ -1794,18 +1837,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1602_17 = d2;
-                __with_1602_17->kind = DL_VAR;
-                __with_1602_17->pos = name->pos;
-                __with_1602_17->name = name->text;
-                __with_1602_17->is_const = is_const;
-                __with_1602_17->is_extern = is_extern;
+                Decl *__with_1649_17 = d2;
+                __with_1649_17->kind = DL_VAR;
+                __with_1649_17->pos = name->pos;
+                __with_1649_17->name = name->text;
+                __with_1649_17->is_const = is_const;
+                __with_1649_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1602_17->type = P_parse_type(self);
+                    __with_1649_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1602_17->init = P_parse_initializer(self);
-                } else if (__with_1602_17->type == NULL) {
+                    __with_1649_17->init = P_parse_initializer(self);
+                } else if (__with_1649_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");
@@ -2007,6 +2050,14 @@ Module *parse_tokens(Arena *a, const char *file, TokenList tl, int32_t is_header
     m->is_header = is_header;
     Vec_pDecl decls;
     Vec_pDecl_init(&decls);
+    while (P_accept(&p, TK_NEWLINE)) {
+        ;
+    }
+    if (P_at(&p, TK_STRING) && P_pk1(&p)->kind == TK_NEWLINE) {
+        m->doc = P_doc_text(&p, P_pk(&p));
+        P_adv(&p);
+        P_expect(&p, TK_NEWLINE, "docstring do módulo");
+    }
     while (!P_at(&p, TK_EOF)) {
         if (P_accept(&p, TK_NEWLINE)) {
             continue;

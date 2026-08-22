@@ -121,3 +121,46 @@ emitir um `#include` que não resolve.
 Portão: `tests/packages.sh`, 14 checagens — o programa que usa dois pacotes (um
 deles dependendo do outro), as respostas 1 e 3 a enxergarem o pacote, as três
 formas de erro, e o mesmo do lado do pscript.
+
+---
+
+## A docstring, agora nas duas linguagens
+
+`"""..."""` passou a existir em P, e a regra é POSICIONAL — a mesma do pscript
+(46.3), a mesma do Python, e sem palavra nova nenhuma: uma string sozinha como
+primeira coisa de um MÓDULO, de um CORPO de função, de um `struct`/`record`/
+`union`, de um `enum` ou de um `trait`. Em qualquer outro lugar `"""..."""` é só
+uma string literal que atravessa linhas, o que também é novo em P.
+
+**Ela não gera um byte.** Vai para a árvore, e o back end nunca a vê como
+instrução — um binário não carrega documentação. Quem a lê é a resposta 5 do
+protocolo e a IDE.
+
+**No `--api` ela sai DEPOIS do hash**, e essa é a decisão que faz a resposta
+servir para duas perguntas ao mesmo tempo:
+
+  * *"a interface mudou?"* — o hash, que é estrutural, e que uma vírgula num
+    texto de documentação não pode mudar. Quem só depende da interface não pode
+    ser acordado por uma correção de português;
+  * *"o que isto faz?"* — as linhas `#doc <símbolo> <texto>`, uma por símbolo,
+    com a quebra de linha escapada porque o formato é de linhas e uma docstring
+    de dez linhas não pode virar dez registros.
+
+Uma consequência boa: `plangc --api` já é o alimento do `ppack doc` e do gerador
+de site, sem nenhum formato novo.
+
+**Uma coisa que ficou de fora, e é decisão sua:** um PROTÓTIPO não tem corpo,
+então uma função declarada num `.ph` não tem onde pôr a docstring dela — e o
+`.ph` é justamente onde a interface mora. A forma que caberia é um corpo com a
+docstring e nada mais:
+
+    def area(w: i32, h: i32) -> i64:
+        """A área do retângulo."""
+
+Ela é inequívoca num header (onde um corpo não faz sentido) e ambígua num `.p`
+(onde seria uma função vazia). Está por decidir, e é o que falta para a regra de
+precedência do plano (`a docstring do .ph vence na API`) ter o que comparar.
+
+Portão: `tests/cases/docstring.p` (as cinco posições, e a string tripla que NÃO
+é docstring) e três checagens novas em `tests/protocol.sh` — a doc sai, vem
+depois do hash, e NÃO muda o hash.
