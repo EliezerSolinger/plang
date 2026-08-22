@@ -264,7 +264,7 @@ O que isso quer dizer, camada por camada:
 | `pgfx.p`, `pgfx_raster.p`, `font_atlas.p` (P) | **ficam em P**: são pixels e ponteiro do começo ao fim, e a 45.5 não deixa isso atravessar. Passam a ser o DRIVER, chamado só pelo shim |
 | `pui.p`, `core.p`, `app.p`, `codeview.p`, `complete.p` (P) | pscript |
 | o shim escalar da bateria 71 (`pstudio/ps/shim.p`) | **fica, e é a fronteira**: janela, evento, pixel e glifo, com assinatura de escalares. É o que "totalmente em pscript" quer dizer num programa que fala SDL — a lógica inteira em pscript, e uma página de P a tocar o ponteiro |
-| o realce, que usa o lexer DO COMPILADOR (`lex_ex`, core.p:1464) | o lexer continua em P (é o do compilador, e um segundo lexer em pscript ia divergir dele). Atravessa como escalar: os codepoints entram um a um, e o que volta é a classe por coluna. **Registrado como pergunta, não decidido** |
+| o realce, que usa o lexer DO COMPILADOR (`lex_ex`, core.p:1464) | **DECIDIDO (113)**: o lexer continua em P, num adaptador (`pstudio/ps/hl.p`) que recebe o texto inteiro como `CStr` e devolve os tokens como NÚMEROS. A lógica (classe, comentário, índice de completamento) fica em pscript. Um segundo lexer em pscript divergiria do do compilador, que é justamente o que o realce serve para mostrar |
 
 O ganho não é estético: **o pstudio é o maior consumidor de P do projeto** (é o
 que a bateria 7/8 do `verify-all` mede), e ele em pscript é o maior programa
@@ -276,8 +276,19 @@ o teste de que ela está no lugar certo.
 O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor não
 é stdlib de ninguém.
 
-**Estado (2026-08-21).** O primeiro passo está feito: a bateria 111 do pscript
-tirou a camada de sistema daqui e pôs na stdlib (`os` e `path`), com o `psys.p`
-como fonte do porte. O que falta é o porte das camadas de cima — `pui`,
-`codeview`, `complete` e o `app` inteiro — e o realce, que precisa da resposta à
-pergunta da última linha da tabela.
+**Estado (2026-08-21).** Dois passos feitos:
+
+  1. a bateria 111 do pscript tirou a camada de SISTEMA daqui e pôs na stdlib
+     (`os` e `path`), com o `psys.p` como fonte do porte;
+  2. a bateria 112 portou o `pui` — `pstudio/ps/lib_pui.psc`, com o teste
+     headless imprimindo os MESMOS retângulos que o teste do pui em P;
+  3. a bateria 113 respondeu a pergunta do REALCE e portou o resto do miolo: o
+     lexer do compilador fica em P e atravessa por um adaptador de escalares
+     (`pstudio/ps/hl.p`, aprovado por você), e com ele vieram `lib_hl.psc`,
+     `lib_complete.psc` e `lib_cv.psc` — o `codeview` inteiro, imprimindo as
+     mesmas sete linhas do teste de dobra do editor em P.
+
+O que falta: o `app` (abas, árvore de arquivos, paleta de comandos, busca, laço
+de eventos) e a troca do `make pstudio` para a versão em pscript. A camada de
+sistema que o `app` vai querer — listar diretório, mtime — já está na stdlib
+desde a 111.

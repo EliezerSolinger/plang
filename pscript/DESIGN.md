@@ -3591,6 +3591,210 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 113 — o lexer do compilador atravessando a fronteira, e o `codeview` em pscript (2026-08-21)
+
+Sua pergunta e a sua aprovação: *"ou seja eu teria que fazer uma interface/header/
+camada no compilador em P pra isso né"* → *"aprovado, faz o adaptador junto com o
+porte do codeview"*.
+
+**113.1 O adaptador: `pstudio/ps/hl.p`, 141 linhas, e NÃO é mexer no compilador.**
+O lexer já é um header (`selfhost/lexer.ph`), e o adaptador mora ao lado do
+editor — do mesmo tipo que o `shim.p` é para o SDL. Duas correções ao que eu
+tinha dito antes de olhar:
+
+  * o texto atravessa INTEIRO numa chamada, porque o `CStr` (81/84/85) é
+    ponteiro mais comprimento, como valor, e não aloca nada. Nada de codepoint
+    por codepoint;
+  * o que volta são NÚMEROS: `hl_lex(in text: CStr) -> i32` e cinco acessores
+    (`linha`, `coluna`, `comprimento`, `classe`, `kind`), com a posição em base
+    zero e em CODEPOINTS, que é a unidade em que o editor mede.
+
+> **O que o adaptador NÃO faz, de propósito.** Não classifica comentário, não
+> monta span por linha, não recupera declaração, não ordena candidato. Isso é
+> LÓGICA e mora no pscript (`lib_hl.psc`, `lib_complete.psc`). E o TEXTO do token
+> não volta: quem quer o nome de um identificador fatia o próprio buffer pela
+> (linha, coluna, comprimento) — o buffer já está do lado de cá, e assim nenhuma
+> cadeia atravessa de volta.
+
+**113.2 O realce em pscript** (`lib_hl.psc`): spans por linha a partir dos tokens,
+e a única regra que não é do lexer — o comentário, porque o lexer do compilador
+come comentário — feita aqui, onde se sabe quais spans são cadeia.
+
+**113.3 O índice de completamento em pscript** (`lib_complete.psc`, porte do
+`complete.p`), com uma mudança de LAYERING: em P ele lia os `.ph` importados, ele
+mesmo, com o `psys`. Aqui ele não faz I/O — `imports_of` DIZ quais arquivos são, e
+quem tem o laço de eventos (que é quem pode esperar) lê e passa os textos. O
+índice deixa de ter opinião sobre arquivo e continua SÍNCRONO: o `codeview` chama
+sem ser `async`.
+
+**113.4 O `codeview` em pscript** (`lib_cv.psc`, 1167 linhas; o original em P tem
+1369). Três diferenças, todas de layering e todas para o mesmo fim — que a lógica
+do editor rode sem driver, e portanto seja testável:
+
+| em P | em pscript | por quê |
+|---|---|---|
+| `Gutter` com ponteiros de função | `enum GutKind` + `match` | é a 28.5 ("despacho é dado") onde ela cabe; as três sarjetas que existem são as três que o editor usa |
+| `pgfx_clipboard_get/set` dentro do widget | `copy()` DEVOLVE o texto, `paste(texto)` RECEBE | quem fala com o sistema é o app, que é quem tem o driver — e o multi-cursor (N pedaços para N cursores) continua aqui |
+| `load_file`/`save_file` com `vfs` | `load_text`/`text_to_save` | I/O no pscript é `await` (76.2), e quem espera é o laço de eventos |
+
+**A prova é o mesmo diff da 112:** `pstudio/ps/cv_test.psc` imprime as SETE
+linhas de `tests/pstudio/cv_fold_scroll.expected` byte por byte — `top=20` que
+não se move ao dobrar pela sarjeta, `fold_all: inner=22 -> top=20`,
+`at_caret: top=24 caret=40 folded=1`. Mais o realce e o completamento pelo
+adaptador: `kw=1 ident=0 num=3 comment=4`, e `soma` completado com a assinatura
+inteira mais `owner_of(x)=i32`.
+
+**113.5 O `lib_core` ganhou o que faltava** para o widget: o mapa de linhas
+visíveis (`visible_count`/`next_visible`/`to_visible`/`from_visible`/
+`visible_at_or_before`), `fold_all`/`unfold_all`, `next_mark`, `is_blank`,
+`insert_each`, `move_lines`, `join_lines` e `find_re` (a ERE do POSIX, que é o
+`re` do pscript).
+
+### Os quatro defeitos do compilador que o porte cobrou
+
+**113.6 Uma `const` num `.ph` atravessava por `include "x.h"` e desaparecia por
+`import "x.ph"`.** As duas portas existem por razões diferentes — o `include` lê
+o header com o C, o `import` lê com o front end do P (75.3) — e uma função de
+`CStr` OBRIGA a segunda. Só que a ingestão de declarações reconhecia a constante
+na forma que o C mostra (`static const i32 X = 0;`) e não na forma que o P
+escreve (`X: const i32 = 0`, com o `const` no TIPO). Resultado: `HLC_TEXT` não
+existia. Agora as duas grafias entram.
+
+**113.7 Uma lambda que devolve um RECORD gerava P inválido.** A guarda de exceção
+de uma função devolve um zero declarado (`return {0}` não é C), e o caminho da
+lambda não o declarava — então `lambda ui, id: Size(a, b)` virava `return 0` numa
+função que devolve record, e o P respondia `incompatible types in assignment`.
+
+**113.8 O renome de nome reservado do C valia na DECLARAÇÃO e não nos usos.** Um
+campo chamado `index` (ou `time`, `log`, `remove`, `rename`...) vira `index_` no C
+emitido, porque a libc já tomou o nome. Mas só o `struct` era renomeado: o
+CONSTRUTOR, o TRACE do coletor, o `repr` derivado, o `pack`, o acesso `a?.f`, o
+argumento nomeado de record e a vtable de trait usavam o nome original. Um campo
+com um desses nomes dava `has no member named 'index'` — e o do TRACE era pior,
+porque um campo coletado que o trace não vê é objeto perdido. Oito sítios
+corrigidos com a mesma função.
+
+**113.9 E o grande: o par do `CStr` era baixado DUAS vezes.** O par é
+`{ponteiro, comprimento}`, e o lowering escrevia a expressão do argumento uma vez
+para cada metade:
+
+```c
+CStr __cs = {Buffer_text(b, ctx)->data, (size_t)Buffer_text(b, ctx)->len};
+```
+
+`b.text()` rodava duas vezes, o par ficava com os BYTES da primeira cadeia e o
+TAMANHO da segunda, e — o pior — a alocação da segunda podia coletar a primeira.
+O "zero cópia" da 84.1 virava ponteiro para o cemitério: `ptr` num endereço
+desmapeado, `len = 2440`. Agora o valor vai para uma variável declarada primeiro
+(que o frame recolhe como RAIZ, então o empréstimo vive) e as duas metades leem
+essa variável.
+
+> Isto valia para TODA chamada de fronteira cujo argumento não fosse uma variável
+> simples — `text_length(nome + "!")`, `bytes_sum(build())`. Passava no teste da
+> 84 porque lá o argumento é sempre uma variável, e uma variável avaliada duas
+> vezes dá o mesmo endereço.
+
+Gates: `tests/pstudio/ps_cv.expected` (o widget portado, headless, com o lexer do
+compilador do outro lado da fronteira — a suíte do pstudio vai a 14) e as sete
+linhas idênticas às do teste em P. Três modos: 273 no pscript.
+
+## Bateria 112 — o `pui` em pscript, e os cinco defeitos que o porte cobrou (2026-08-21)
+
+Segundo passo da migração do pstudio (a 111 foi o primeiro). O `pui.p` — 1158
+linhas de P: a árvore de widgets, as duas fases do layout do Godot, o desenho
+retido, a entrada — virou `pstudio/ps/lib_pui.psc`, 1136 linhas de pscript.
+
+**A prova é um diff.** `pstudio/ps/pui_test.psc` é o gêmeo de
+`tests/pstudio/pui_layout.p`, e as **oito linhas de retângulo são idênticas** —
+`[4] 24,21 216x29` nos dois. Duas linhas diferem de propósito e o teste diz
+quais: `changes=5` em vez de 3 (o evento de texto do shim carrega UM codepoint,
+não uma cadeia — é a fronteira de escalares da 45.5) e `draw_cmds` em vez de
+`draw_lit` (sem framebuffer não há pixel para contar; conta-se o comando).
+
+**112.1 O que o porte SIMPLIFICOU, e por quê.** Não é estilo:
+
+| em P | em pscript | o que sai |
+|---|---|---|
+| `BoxData`/`SplitData`/`TextData`/`ScrollData`/`InputData` | campos do próprio nó | cinco structs, cinco `malloc`, e o `node_release` que tinha de saber de todos |
+| `flags: u32` com `UF_VISIBLE\|UF_DIRTY` | `visible`, `dirty`, ... | a máscara existia para caber num `u32`; um bool custa o mesmo e não se lê ao contrário |
+| `font: PgFont` dentro do `Ui` | `cell_w`/`cell_h` passados no construtor | o toolkit deixa de conhecer o driver — e é isso que o torna MEDÍVEL sem janela |
+| `draw(ref fb: PgFb)` | `draw(p: Painter)` (cinco funções) | o mesmo desenho retido serve tela, teste e o que vier |
+| `UiSignal {fn, ctx}` | `def(int, int)?` | o `ctx` existia porque função livre não captura; uma lambda captura (28.1/19.2) |
+
+**112.2 Função em CAMPO é chamável.** A 28.1 diz que função é valor e que valor
+vive em contêiner; um campo é contêiner. `x.f(a)` era SEMPRE lido como método, e
+`'lib_pui__Node' has no method 'c_min'` era o erro — num toolkit em que o
+comportamento do widget do app mora justamente em campos do nó. Agora, quando o
+método não existe e o campo existe com tipo de função, a chamada é do VALOR.
+
+> **E o campo OPCIONAL não é chamável direto, de propósito.** A prova de não-nulo
+> é sobre LOCAL (43.1): `if x.f != None:` não prova nada sobre a leitura seguinte.
+> A mensagem diz o que fazer — `f = x.f` e depois `if f != None: f(...)` — e é o
+> que o `lib_pui.psc` faz nos quatro lugares. Um campo que narrows precisaria de
+> análise de fluxo sobre CAMPOS, que é outra bateria e não esta.
+
+**112.3 Contexto de lambda: faltava em dois lugares.** Uma lambda não tem
+anotação (a forma do Python), então o tipo vem de quem a recebe. Funcionava para
+função livre; **não** para (a) parâmetro de MÉTODO — `check_expr` + `want` em vez
+de `check_want`, e o `want` chega tarde demais — nem para (b) um `def(...)?`, que
+é o tipo de um sinal que ninguém ligou. Os dois consertados; o (b) é o que faz
+`ui.on_click(id, lambda i, a: ...)` compilar.
+
+**112.4 `return <expressão sem valor>` gerava P inválido.** O corpo de uma lambda
+de tipo `def(int, int)` não devolve nada, e o `return` implícito dela virava
+`return print(...)` no P — que responde `void value cannot be assigned`. Agora a
+expressão vira STATEMENT e o `return` fica nu. Sob a guarda de exceção, a guarda
+vem depois dela (e não há `__ret` de tipo void, que C não declara).
+
+**112.5 E o compilador MORREU: `None` sozinho tem tipo.** O tipo de um `None`
+solto é `nothing?` — um opcional SEM dentro. Quando um argumento literal precisa
+de temporário (o `bind_all` do `lower_ordered`, que ordena a avaliação), o
+lowering pede o tipo C dele, e `option_record(None)` leu `inner->pos`: SIGSEGV,
+sem mensagem nenhuma. Não havia record a sintetizar — não se sabe de quê — e a
+representação certa é a que o valor já tem: o ponteiro nulo.
+
+> **Como foi achado, que é a parte reusável.** O teste da 112 travou o compilador
+> sem uma linha de saída. `gdb -batch -ex run -ex bt` sobre o binário de `-O2`
+> deu a pilha em nomes de função (`option_record` ← `ty` ← `lower_ordered`), e um
+> `cc -g -O0` sobre o mesmo C gerado deu a LINHA. Dois minutos, e nenhum palpite:
+> o `plangc` compila para C, então o depurador de C é o depurador dele.
+
+**112.6 E o gc-stress cobrou um defeito do COLETOR que já existia: opcional de
+referência dentro de contêiner não era seguido.** O teste da 112 passava, e sob
+`PSCRIPT_GC_STRESS=1` morria com SIGSEGV — o objeto que o `ps_forward` tentava
+copiar estava com `0xdd` em todo campo, o veneno do cemitério.
+
+A causa: `T?` de referência É o ponteiro nu (a representação que a 9.4 escolheu,
+e que custa zero), mas o predicado que responde "isto é referência" não tinha
+caso para `PT_OPT`. Então um `dict<str, def(int,int)?>` nascia com `vref =
+False`: o coletor não seguia os valores, e depois de uma coleta o dict devolvia
+ponteiro para o cemitério. **Não é só função:** o mesmo predicado decide o
+`eref` de `list<str?>`, o `kref`/`vref` de todo dict e set, e as marcas de
+"grafo" das mensagens de worker. Um campo de struct escapava (aquele caminho
+pergunta pelo tipo C, e `str?` já chegava lá como `PsStr *`).
+
+> Um programa com `list<str?>` corrompia memória sob pressão de coleta desde que
+> `T?` existe, e nenhum teste tinha as duas coisas ao mesmo tempo — opcional de
+> referência num contêiner E alocação suficiente para coletar no meio. O
+> `tests/pscript/run/optref.psc` agora tem: 200 opcionais em lista, dois dicts,
+> uma lista encadeada de 200 structs, 3000 alocações de pressão, e a leitura de
+> tudo depois. Ele vai para a suíte E para o gc-stress, que é onde ele fala.
+
+**112.7 `None if x else "a"` passou a ser aceito.** Os dois lados de um
+condicional tinham de ter o MESMO tipo, e o tipo de `None` é `nothing?` — então a
+forma mais natural de escrever "isto pode não ter valor" era recusada, e o jeito
+era um `if` de três linhas. Agora, se um lado é `None` e o outro é `T`, o
+resultado é `T?`. Apareceu escrevendo o teste da 112.6, que é o tipo de coisa que
+só aparece quando se escreve programa de verdade na linguagem.
+
+Gates: `tests/pstudio/ps_pui.expected` (o pui portado, headless, na suíte do
+pstudio — 13 agora), `tests/pscript/run/fnfield.psc` (campo chamado direto,
+sinal opcional ligado e desligado, tabela de despacho em dict, lambda por
+método) e dois `tests/pscript/bad/` (o campo opcional chamado direto, com a
+mensagem que ensina; a aridade do campo), `tests/pscript/run/optref.psc`
+(contêiner de opcional de referência sob o coletor). Três modos: 273 cada, e
+gc-stress 113.
+
 ## Bateria 111 — a camada de sistema: `os` e `path` saem do editor e entram na stdlib (2026-08-21)
 
 Sua decisão: *"o pstudio temos que migrar ele totalmente para PScript e a parte

@@ -402,16 +402,35 @@ suite_pstudio() {
     rm -rf "$C"; mkdir -p "$C"; : >"$errc"
     ok=1
     $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$errc" || ok=0
-    [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/core_test.psc 2>>"$errc" || ok=0; }
-    [ $ok = 1 ] && { $CC $CSTD -w -o "$C/core_test" "$C/pstudio/ps/core_test.c" \
-                         "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_os.c" "$C/pscript/runtime/psrt_top.c" $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
-    if [ $ok = 1 ] && check_run "$C/core_test" tests/pstudio/ps_core.expected "pstudio-ps-core"; then
-        pass=$((pass+1))
-    else
-        echo "  FAIL pstudio-ps-core (the ported buffer)"
-        [ -s "$errc" ] && sed 's/^/       /' "$errc" | head -3
-        fail=$((fail+1))
+    # 112: o `pui` portado entra aqui do mesmo jeito — headless, sem driver,
+    # porque a métrica da fonte é PARÂMETRO do toolkit em pscript. As oito
+    # linhas de retângulo dele são as mesmas do teste em P ao lado
+    # (tests/pstudio/pui_layout.expected), que é o ponto do porte.
+    # 113: o `codeview` portado precisa do ADAPTADOR do lexer (pstudio/ps/hl.p)
+    # e, com ele, do lexer do compilador — que é o ponto: o editor em pscript
+    # realça com o mesmo lexer que o compilador usa, e não com um segundo.
+    local HLC=""
+    if $PLANGC $PFLAGS --out-dir "$C" stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph pstudio/ps/hl.ph 2>>"$errc" &&
+       $PLANGC $PFLAGS --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/ps/hl.p 2>>"$errc"; then
+        HLC="$C/pstudio/ps/hl.c $C/selfhost/lexer.c $C/selfhost/util.c $C/selfhost/utf8.c"
     fi
+    for psprog in core_test:ps_core.expected:"the ported buffer" pui_test:ps_pui.expected:"the ported toolkit" cv_test:ps_cv.expected:"the ported editing widget"; do
+        pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
+        ok=1
+        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }
+        local extraobj=""
+        [ "$pname" = cv_test ] && extraobj="$HLC"
+        [ "$pname" = cv_test ] && [ -z "$HLC" ] && ok=0
+        [ $ok = 1 ] && { $CC $CSTD -w -o "$C/$pname" "$C/pstudio/ps/$pname.c" \
+                             "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_os.c" "$C/pscript/runtime/psrt_top.c" $extraobj $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
+        if [ $ok = 1 ] && check_run "$C/$pname" tests/pstudio/$pexp "pstudio-ps-${pname%_test}"; then
+            pass=$((pass+1))
+        else
+            echo "  FAIL pstudio-ps-${pname%_test} ($pwhat)"
+            [ -s "$errc" ] && sed 's/^/       /' "$errc" | head -3
+            fail=$((fail+1))
+        fi
+    done
 
     # the pscript PORT of the editor: the logic in pscript, the driver in P.
     # It is built the way a user would build one — the runtime and the shim

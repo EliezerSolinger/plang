@@ -431,6 +431,14 @@ struct PsLow:
                 #     bit pattern to mean "absent" — every int is a valid int —
                 #     so it gets a wrapper record `{has: bool, v: T}`.
                 # Choosing per kind is what keeps the common `str?` free.
+                # 112: `None` sozinho tem tipo — `nothing?`, um opcional SEM
+                # dentro — e ele chega aqui quando um argumento literal precisa
+                # de temporário. Não há record a sintetizar (não se sabe de
+                # quê), e a representação certa é a que o valor já tem: o
+                # ponteiro nulo. Antes disto, `option_record(None)` lia
+                # `inner->pos` e o compilador MORRIA com SIGSEGV.
+                if t->inner == None:
+                    return ty_ptr(self->a, ty_name(self->a, "void"))
                 if opt_is_ref(t->inner):
                     return self->ty(t->inner)
                 return ty_name(self->a, self->option_record(t->inner))
@@ -820,7 +828,7 @@ struct PsLow:
                 fv: *Expr = ex_new(self->a, EX_FIELD, pos)
                 fv->op = TK_DOT
                 fv->lhs = base
-                fv->field = d->fields[i].name
+                fv->field = ps_cname(self->a, d->fields[i].name)
                 self->pack_fields(out, lst, fv, d->fields[i].type, pos, unpk, be, ref off)
             return
         if t != None and t->kind == PT_ARRAY:
@@ -992,7 +1000,7 @@ struct PsLow:
             fv: *Expr = ex_new(self->a, EX_FIELD, pos)
             fv->op = TK_ARROW if d->kind == PD_STRUCT else TK_DOT
             fv->lhs = v
-            fv->field = d->fields[i].name
+            fv->field = ps_cname(self->a, d->fields[i].name)
             fs: *Expr = self->repr_value(fv, d->fields[i].type, pos, depth + 1)
             if fs == None:
                 fatal_at(self->file, pos, "no derived form for '%s.%s', which is %s — write `to_str()` on '%s' (44.3)", ps_disp(d->name), d->fields[i].name, ps_type_str(self->a, d->fields[i].type), ps_disp(d->name))
@@ -1636,7 +1644,7 @@ struct PsLow:
                 fld: *Expr = ex_new(self->a, EX_FIELD, e->pos)
                 fld->op = TK_DOT
                 fld->lhs = self->opt_value(ot2, base2, e->pos)
-                fld->field = e->text
+                fld->field = ps_cname(self->a, e->text)
                 tr2: *Expr = ex_new(self->a, EX_TERNARY, e->pos)
                 tr2->cond = self->opt_present(ot2, base2, e->pos)
                 tr2->lhs = self->some_of(e->type, fld, e->pos)
@@ -2782,7 +2790,7 @@ struct PsLow:
         # is where the signature comes back — the closure itself is one shape
         # for every function type, which is what lets a `dict<str, def>` hold
         # them side by side.
-        if e->lhs != None and e->lhs->type != None and e->lhs->type->kind == PT_FUNC and e->lhs->kind in {PE_NAME, PE_INDEX, PE_CALL}:
+        if e->lhs != None and e->lhs->type != None and e->lhs->type->kind == PT_FUNC and e->lhs->kind in {PE_NAME, PE_INDEX, PE_CALL, PE_FIELD}:
             sig8: *PsType = e->lhs->type
             cn8: const *char = self->a->printf("__cl%d", self->tmp_ctr)
             self->tmp_ctr += 1
@@ -3101,7 +3109,7 @@ struct PsLow:
                 a: *PsExpr = e->args[i]
                 if a->kind == PE_DESIG:
                     d: *Expr = ex_new(self->a, EX_DESIG, a->pos)
-                    d->field = a->text
+                    d->field = ps_cname(self->a, a->text)
                     d->lhs = self->expr(a->lhs)
                     self->push_arg(c1, d)
                 else:
@@ -3755,6 +3763,21 @@ struct PsLow:
                     # under it. Zero copy on the way out.
                     tn9: const *char = self->a->printf("__cs%d", self->tmp_ctr)
                     self->tmp_ctr += 1
+                    # 113: o VALOR primeiro, numa variável. O par pede o
+                    # ponteiro E o comprimento do mesmo objeto, e a expressão
+                    # era baixada DUAS vezes — `hl_lex(b.text())` chamava
+                    # `text()` duas vezes, tomava os bytes da primeira cadeia e
+                    # o tamanho da segunda, e a alocação da segunda podia
+                    # coletar a primeira. O ponteiro apontava para o cemitério.
+                    # A variável declarada aqui também é RAIZ (o frame recolhe
+                    # os locais de tipo coletado), então o empréstimo vive.
+                    sn9: const *char = self->a->printf("__csv%d", self->tmp_ctr)
+                    self->tmp_ctr += 1
+                    sv9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                    sv9->name = sn9
+                    sv9->type = ty_ptr(self->a, ty_name(self->a, "PsStr" if csk9 == 1 else "PsList"))
+                    sv9->init = a9
+                    self->pre.push(sv9)
                     vd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
                     vd9->name = tn9
                     vd9->type = ty_name(self->a, "CStr" if csk9 == 1 else "CBytes")
@@ -3762,14 +3785,14 @@ struct PsLow:
                     il9->args = self->a->alloc(usize(2) * sizeof(*il9->args))
                     fp9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
                     fp9->op = TK_ARROW
-                    fp9->lhs = a9
+                    fp9->lhs = self->ident(sn9, e->pos)
                     fp9->field = "data" if csk9 == 1 else "data"
                     if csk9 == 1:
                         il9->args[0] = fp9
                     else:
                         # a `list<u8>` keeps its bytes after the header
                         bp9: *Expr = self->call_rt("ps_list_base", e->pos)
-                        self->push_arg(bp9, a9)
+                        self->push_arg(bp9, self->ident(sn9, e->pos))
                         cst9: *Expr = ex_new(self->a, EX_CAST, e->pos)
                         cst9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"))
                         cst9->cast_type->inner->is_const = True
@@ -3777,7 +3800,7 @@ struct PsLow:
                         il9->args[0] = cst9
                     ln9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
                     ln9->op = TK_ARROW
-                    ln9->lhs = self->expr(e->args[i])
+                    ln9->lhs = self->ident(sn9, e->pos)
                     ln9->field = "len"
                     cl9: *Expr = ex_new(self->a, EX_CAST, e->pos)
                     cl9->cast_type = ty_name(self->a, "usize")
@@ -4360,7 +4383,7 @@ struct PsLow:
         slot: *Expr = ex_new(self->a, EX_FIELD, e->pos)
         slot->op = TK_ARROW
         slot->lhs = cast
-        slot->field = e->lhs->text
+        slot->field = ps_cname(self->a, e->lhs->text)
         call: *Expr = ex_new(self->a, EX_CALL, e->pos)
         call->lhs = slot
         data: *Expr = self->call_rt("ps_dyn_data", e->pos)
@@ -5787,19 +5810,34 @@ struct PsLow:
                     return
                 r: *Stmt = st_new(self->a, ST_RETURN, s->pos)
                 r->expr = self->coerce(self->ret_ps, s->expr) if s->expr != None else None
+                # 112: `return <expressão sem valor>` — que é o corpo de uma
+                # lambda de tipo `def(int, int)`, onde o `return` é implícito e
+                # o corpo não devolve nada. Não há o que devolver: a expressão
+                # vira STATEMENT e o `return` fica nu. Sem isto o P recebia
+                # `return print(...)` e dizia "void value cannot be assigned".
+                void_ret: bool = self->ret == None or (self->ret->kind == TY_NAME and strcmp(self->ret->name, "void") == 0)
+                if void_ret and r->expr != None:
+                    es2: *Stmt = st_new(self->a, ST_EXPR, s->pos)
+                    es2->expr = r->expr
+                    out->push(es2)
+                    r->expr = None
                 if self->raised:
                     # the value is computed first, then checked: returning it
                     # while an exception is pending would smuggle a garbage
-                    # result past the caller's check
-                    tmp2: *Stmt = st_new(self->a, ST_VAR, s->pos)
-                    tmp2->name = "__ret"
-                    tmp2->type = self->ret
-                    tmp2->init = r->expr
-                    out->push(tmp2)
-                    out->push(self->guard(s->pos))
-                    rid: *Expr = ex_new(self->a, EX_IDENT, s->pos)
-                    rid->text = "__ret"
-                    r->expr = rid
+                    # result past the caller's check — e quando não HÁ valor, a
+                    # guarda vem depois da expressão que já foi emitida acima
+                    if void_ret:
+                        out->push(self->guard(s->pos))
+                    else:
+                        tmp2: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                        tmp2->name = "__ret"
+                        tmp2->type = self->ret
+                        tmp2->init = r->expr
+                        out->push(tmp2)
+                        out->push(self->guard(s->pos))
+                        rid: *Expr = ex_new(self->a, EX_IDENT, s->pos)
+                        rid->text = "__ret"
+                        r->expr = rid
                 if self->try_flag != None:
                     # inside a try the guard clears the flag instead of leaving
                     # the function, so the return itself has to be skipped too —
@@ -7550,7 +7588,7 @@ static def lower_lam_env(L: *PsLow, e: *PsExpr, idx: i32) -> *PsDecl:
     d->src_name = d->name
     d->fields = L->a->alloc(usize(e->ncaps) * sizeof(PsField))
     for i in range(e->ncaps):
-        d->fields[i].name = e->caps[i].name
+        d->fields[i].name = ps_cname(L->a, e->caps[i].name)
         d->fields[i].type = e->caps[i].type
         d->fields[i].pos = e->caps[i].pos
     d->nfields = e->ncaps
@@ -7610,7 +7648,11 @@ static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *
     L->async_lnacl = 0
     L->ret = pf->ret
     L->ret_ps = e->type->inner
-    L->zret = None
+    # 113: a lambda que devolve um RECORD precisa do zero declarado, igual a
+    # uma função — a guarda de exceção devolve esse zero, e `return {0}` não é C.
+    # Sem isto, o corpo `lambda v: Size(a, b)` gerava `return 0` numa função que
+    # devolve record, e o P dizia "incompatible types in assignment".
+    L->zret = zret_decl(L, pf->ret, e->pos, &body)
     L->in_main = False
     one: Vec<*Stmt>
     one.init()
@@ -8940,7 +8982,7 @@ static def lower_struct_trace(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
         fl->op = TK_ARROW
         fl->lhs = ex_new(L->a, EX_IDENT, d->pos)
         fl->lhs->text = "__s"
-        fl->field = d->fields[i].name
+        fl->field = ps_cname(L->a, d->fields[i].name)
         fw: *Expr = ex_new(L->a, EX_CALL, d->pos)
         fw->lhs = ex_new(L->a, EX_IDENT, d->pos)
         fw->lhs->text = "ps_forward"
@@ -9238,7 +9280,7 @@ static def lower_struct_new(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
     f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
     f->params[0].pos = d->pos
     for i in range(d->nfields):
-        f->params[i + 1].name = d->fields[i].name
+        f->params[i + 1].name = ps_cname(L->a, d->fields[i].name)
         f->params[i + 1].type = L->ty(d->fields[i].type)
         f->params[i + 1].pos = d->fields[i].pos
     f->nparams = d->nfields + 1
@@ -9282,11 +9324,11 @@ static def lower_struct_new(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
         fl->op = TK_ARROW
         fl->lhs = ex_new(L->a, EX_IDENT, d->pos)
         fl->lhs->text = "__o"
-        fl->field = d->fields[i].name
+        fl->field = ps_cname(L->a, d->fields[i].name)
         asg->lhs = fl
         asg->op = TK_ASSIGN
         asg->rhs = ex_new(L->a, EX_IDENT, d->pos)
-        asg->rhs->text = d->fields[i].name
+        asg->rhs->text = ps_cname(L->a, d->fields[i].name)
         body.push(asg)
     rt: *Stmt = st_new(L->a, ST_RETURN, d->pos)
     rt->expr = ex_new(L->a, EX_IDENT, d->pos)
@@ -9345,7 +9387,7 @@ static def lower_vt_struct(L: *PsLow, td: *PsDecl) -> *Decl:
     d->name = vt_struct_name(L->a, td)
     d->fields = L->a->alloc(usize(td->nmethods) * sizeof(Field))
     for i in range(td->nmethods):
-        d->fields[i].name = td->methods[i]->name
+        d->fields[i].name = ps_cname(L->a, td->methods[i]->name)
         d->fields[i].type = ty_ptr(L->a, vt_slot_type(L, td->methods[i]))
         d->fields[i].pos = td->pos
         d->fields[i].bit_width = -1
@@ -9590,6 +9632,14 @@ static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32:
 static def opt_is_ref(t: *PsType) -> bool:
     if t == None:
         return False
+    # 113: um `T?` cujo T É referência TAMBÉM é uma referência nua — é essa a
+    # representação escolhida na 9.4 (None é o ponteiro nulo, e custa zero). Sem
+    # esta linha, um `dict<str, def(int,int)?>` nascia com `vref = False`: o
+    # coletor não seguia os valores, e depois de uma coleta o dict devolvia um
+    # ponteiro para o CEMITÉRIO. Vale para toda referência dentro de opcional —
+    # `list<str?>`, `dict<str, Node?>` — e foi o gc-stress que cobrou.
+    if t->kind == PT_OPT:
+        return opt_is_ref(t->inner)
     # `Error` is the one BUILTIN reference spelled as a plain name: a pointer to
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:

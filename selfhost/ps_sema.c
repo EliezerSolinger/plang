@@ -6243,11 +6243,11 @@ static PsType *PsSema_check_ctor(PsSema *self, PsExpr *e, PsDecl *rd) {
             }
         }
     }
-    PsType *__defer_ret0 = PsSema_named_type(self, rd->name, e->pos);
+    PsType *__defer_ret3 = PsSema_named_type(self, rd->name, e->pos);
     {
         free(seen);
     }
-    return __defer_ret0;
+    return __defer_ret3;
 }
 
 static PsExpr *PsSema_sug_name(PsSema *self, const char *t, Pos pos) {

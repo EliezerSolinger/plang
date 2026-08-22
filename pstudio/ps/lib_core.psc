@@ -23,6 +23,9 @@ The model is the same one the P version fixed:
 Everything here is headless and therefore testable: no window, no drawing.
 """
 
+import re     # 113: `find_re` — a ERE do POSIX, que é o `re` do pscript (41.2)
+
+
 const TAB_WIDTH: int = 4
 const UNDO_PAUSE_MS: int = 700
 
@@ -905,6 +908,225 @@ struct Buffer:
         l = self.lines[line]
         l.mark = l.mark ^ mark
         self.version += 1
+
+    def clear_marks(self, mark: int):
+        for l in self.lines:
+            l.mark = l.mark & ~mark
+        self.version += 1
+
+    def next_mark(self, from_line: int, mark: int, forward: bool) -> int:
+        """A próxima linha marcada, circulando. -1 = não há nenhuma."""
+        n = len(self.lines)
+        for step in range(1, n + 1):
+            i = (from_line + step) % n if forward else (from_line - step + n * 2) % n
+            if (self.lines[i].mark & mark) != 0:
+                return i
+        return -1
+
+    def is_blank(self, line: int) -> bool:
+        return len(self.lines[line].text.strip()) == 0
+
+    def fold_all(self):
+        for i in range(len(self.lines)):
+            if self.can_fold(i):
+                self.fold(i)      # `can_fold` é falso em linha escondida: nível 1
+
+    def unfold_all(self):
+        for l in self.lines:
+            l.hidden = False
+            l.folded = False
+        self.version += 1
+
+    # ---------- o mapa de linhas VISÍVEIS ----------
+    # Uma dobra encurta o documento, e toda coordenada de tela passa por aqui: a
+    # barra de rolagem, a roda e o clique pensam em LINHAS DE TELA.
+
+    def visible_count(self) -> int:
+        n = 0
+        for l in self.lines:
+            if not l.hidden:
+                n += 1
+        return n
+
+    def next_visible(self, line: int, delta: int) -> int:
+        l = 0 if line < 0 else (len(self.lines) - 1 if line >= len(self.lines) else line)
+        if delta > 0:
+            for step in range(delta):
+                i = l + 1
+                while i < len(self.lines) and self.lines[i].hidden:
+                    i += 1
+                if i >= len(self.lines):
+                    break
+                l = i
+        elif delta < 0:
+            for step in range(-delta):
+                j = l - 1
+                while j >= 0 and self.lines[j].hidden:
+                    j -= 1
+                if j < 0:
+                    break
+                l = j
+        while l > 0 and self.lines[l].hidden:
+            l -= 1        # a própria linha de partida pode ter sido dobrada
+        return l
+
+    def to_visible(self, line: int) -> int:
+        n = 0
+        top = line if line < len(self.lines) else len(self.lines)
+        for i in range(top):
+            if not self.lines[i].hidden:
+                n += 1
+        return n
+
+    def from_visible(self, vidx: int) -> int:
+        n = 0
+        for i in range(len(self.lines)):
+            if self.lines[i].hidden:
+                continue
+            if n >= vidx:
+                return i
+            n += 1
+        return len(self.lines) - 1
+
+    def visible_at_or_before(self, line: int) -> int:
+        """Depois de uma dobra: a linha visível mais próxima ANDANDO PARA TRÁS.
+        Andar para frente (o que `from_visible(to_visible(l))` faz) cairia
+        depois do bloco e levaria a vista embora da dobra que se acabou de
+        fechar."""
+        i = line if line < len(self.lines) else len(self.lines) - 1
+        # a linha 0 nunca é escondida: uma dobra esconde o que VEM DEPOIS dela
+        while i > 0 and self.lines[i].hidden:
+            i -= 1
+        return i if i > 0 else 0
+
+    # ---------- comandos de linha que faltavam ----------
+
+    def insert_each(self, texts: list<str>, now_ms: int):
+        """N pedaços para N cursores (o modelo do Sublime). De baixo para cima,
+        para as posições ainda não usadas continuarem valendo."""
+        if len(texts) != len(self.carets):
+            return
+        self.group_begin(False, now_ms)
+        k = len(self.carets) - 1
+        while k >= 0:
+            c = self.carets[k]
+            self.raw_insert(c.line, c.col, texts[k])
+            self.op_push(OP_INSERT, c.line, c.col, texts[k])
+            e = text_end(c.line, c.col, texts[k])
+            self.carets[k] = Caret(e.l1, e.c1, e.l1, e.c1, -1)
+            self.adj_after_insert(k, Span(c.line, c.col, e.l1, e.c1))
+            k -= 1
+        self.group_open = False
+        self.group_end()
+
+    def move_lines(self, dir: int, now_ms: int):
+        """Sobe ou desce os blocos dos cursores. Nada se move se um bloco cairia
+        fora do arquivo — e o cursor vai COM o texto."""
+        blocks = self.line_span()
+        for b in blocks:
+            if dir < 0 and b.l0 == 0:
+                return
+            if dir > 0 and b.l1 >= len(self.lines) - 1:
+                return
+        self.group_begin(False, now_ms)
+        i = len(blocks) - 1
+        while i >= 0:
+            b = blocks[i]
+            if dir < 0:
+                # a linha de cima passa para depois do bloco
+                r = Span(b.l0 - 1, 0, b.l0, 0)
+                gone = self.raw_delete(r)
+                self.op_push(OP_DELETE, r.l0, r.c0, gone)
+                at = b.l1
+                if at >= len(self.lines):
+                    self.raw_insert(b.l1 - 1, self.line_cp(b.l1 - 1), "\n" + gone[0:len(gone) - 1])
+                    self.op_push(OP_INSERT, b.l1 - 1, self.line_cp(b.l1 - 1), "\n" + gone[0:len(gone) - 1])
+                else:
+                    self.raw_insert(at, 0, gone)
+                    self.op_push(OP_INSERT, at, 0, gone)
+            else:
+                # a linha de baixo passa para antes do bloco. `nonlocal` porque
+                # o valor nasce dentro dos dois ramos e é usado depois deles —
+                # o escopo é do BLOCO nas duas linguagens (64.1)
+                nonlocal gone2
+                nxt = b.l1 + 1
+                if nxt + 1 < len(self.lines):
+                    r2 = Span(nxt, 0, nxt + 1, 0)
+                    gone2 = self.raw_delete(r2)
+                    self.op_push(OP_DELETE, r2.l0, r2.c0, gone2)
+                else:
+                    r2 = Span(nxt - 1, self.line_cp(nxt - 1), nxt, self.line_cp(nxt))
+                    cut = self.raw_delete(r2)
+                    self.op_push(OP_DELETE, r2.l0, r2.c0, cut)
+                    gone2 = cut[1:len(cut)] + "\n"
+                self.raw_insert(b.l0, 0, gone2)
+                self.op_push(OP_INSERT, b.l0, 0, gone2)
+            i -= 1
+        for k in range(len(self.carets)):
+            c = self.carets[k]
+            self.carets[k] = Caret(c.line + dir, c.col, c.aline + dir, c.acol, -1)
+        self.carets_sort()
+        self.group_open = False
+        self.group_end()
+
+    def join_lines(self, now_ms: int):
+        """Junta a linha seguinte à do cursor, com UM espaço entre as duas —
+        menos quando um dos lados está vazio ou a linha já acaba em espaço (o
+        ctrl+j do Sublime)."""
+        self.group_begin(False, now_ms)
+        k = len(self.carets) - 1
+        while k >= 0:
+            c = self.carets[k]
+            l = c.line
+            if l + 1 < len(self.lines):
+                nx = self.lines[l + 1].text
+                ind = len(nx) - len(nx.lstrip())
+                endc = self.line_cp(l)
+                cur = self.lines[l].text
+                glue = " "
+                if endc == 0 or len(nx.strip()) == 0:
+                    glue = ""
+                elif cur.endswith(" ") or cur.endswith("\t"):
+                    glue = ""
+                r = Span(l, endc, l + 1, ind)
+                gone = self.raw_delete(r)
+                self.op_push(OP_DELETE, r.l0, r.c0, gone)
+                if len(glue) > 0:
+                    self.raw_insert(l, endc, glue)
+                    self.op_push(OP_INSERT, l, endc, glue)
+                self.carets[k] = Caret(l, endc, l, endc, -1)
+            k -= 1
+        self.group_open = False
+        self.group_end()
+
+    def find_re(self, pattern: str, from_line: int, from_col: int, forward: bool) -> Span?:
+        """Busca por expressão regular (a ERE do POSIX, que é o `re` do
+        pscript — 41.2). Linha por linha, porque um padrão do editor não
+        atravessa a quebra de linha."""
+        n = len(self.lines)
+        for step in range(n):
+            l = (from_line + step) % n if forward else (from_line - step + n * 2) % n
+            s = self.lines[l].text
+            base = 0
+            if step == 0:
+                if forward:
+                    base = from_col
+                    if base > len(s):
+                        continue
+                    s = s[base:len(s)]
+                else:
+                    if from_col <= 0:
+                        continue
+                    s = s[0:from_col]
+            m = re.match(pattern, s)
+            # a prova de não-nulo vale DENTRO do ramo (43.1): um `continue` no
+            # ramo do None não estreita o que vem depois dele
+            if m != None:
+                hit = m[0]
+                if len(hit) > 0:
+                    at = s.find(hit)
+                    return Span(l, base + at, l, base + at + len(hit))
+        return None
 
 
 def new_buffer() -> Buffer:

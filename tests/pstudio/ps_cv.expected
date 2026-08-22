@@ -1,0 +1,11 @@
+lines=161 visible_rows=17
+top=20 caret=0
+folded=1 top=20 (era 20) caret=0
+unfold: top=20 (era 20) folded=0
+fold_all: inner=22 -> top=20 hidden(inner)=1 caret=0
+unfold_all: top=20
+at_caret: top=24 caret=40 folded=1
+hl: kw=1 ident=0 num=3 comment=4 fora=0
+cmp: soma detalhe=[def soma(a: i32, b: i32) -> i32:]
+owner_of(x)=i32
+fold-scroll-ok

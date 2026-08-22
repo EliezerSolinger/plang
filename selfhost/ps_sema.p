@@ -289,6 +289,7 @@ struct PsSema:
     static def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
     static def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char)
     static def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char)
+    static def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType
     static def check_func(self: *PsSema, f: *PsFunc)
     static def check_record_bytes(self: *PsSema, d: *PsDecl)
     static def predef(self: *PsSema, e: *PsExpr) -> *PsType
@@ -501,6 +502,12 @@ struct PsSema:
             case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN:
                 pass
         return t
+
+    # `T` -> `T?`, para quando o tipo do resultado é "isto pode faltar"
+    static def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType:
+        o: *PsType = ps_type(self->a, PT_OPT, pos)
+        o->inner = t
+        return o
 
     # Check an expression while SAYING what is wanted. A lambda has no
     # annotations, so the context is the only place its parameter types can come
@@ -800,9 +807,16 @@ struct PsSema:
                 # parameter types come from the CONTEXT: the annotation on the
                 # variable, the field, the parameter it is passed to. Without
                 # one there is nothing to infer from, and the message says so.
-                if self->hint == None or self->hint->kind != PT_FUNC:
+                # 112: um `def(...)?` também é contexto — a lambda vai para
+                # dentro do opcional. Um SINAL que ninguém ligou é ausente, e é
+                # por isso que o campo é opcional; quem liga passa a lambda, e
+                # ela não deixa de ter contexto por causa do `?`.
+                lhint: *PsType = self->hint
+                if lhint != None and lhint->kind == PT_OPT and lhint->inner != None:
+                    lhint = lhint->inner
+                if lhint == None or lhint->kind != PT_FUNC:
                     fatal_at(self->file, e->pos, "the type of this lambda cannot be inferred: annotate what receives it, as in `f: def(float) -> float = lambda v: v * 2.0`")
-                lh: *PsType = self->hint
+                lh: *PsType = lhint
                 if e->is_async_lam:
                     # 78.3: an `async lambda` is TWO things that already work —
                     # an `async def` for the body (the state machine) and an
@@ -955,6 +969,14 @@ struct PsSema:
                     t = bt
                 elif at != None and bt != None and at->kind == PT_FLOAT and bt->kind == PT_INT:
                     t = at
+                # 113: um dos lados é `None`, o outro é um tipo — o resultado é
+                # o OPCIONAL desse tipo. `None if x else "a"` é como se escreve
+                # "isto pode não ter valor" numa expressão, e recusá-lo obrigava
+                # a um `if` de três linhas para dizer o mesmo.
+                elif at != None and at->kind == PT_OPT and at->inner == None and bt != None:
+                    t = bt if bt->kind == PT_OPT else self->opt_of(bt, e->pos)
+                elif bt != None and bt->kind == PT_OPT and bt->inner == None and at != None:
+                    t = at if at->kind == PT_OPT else self->opt_of(at, e->pos)
                 else:
                     fatal_at(self->file, e->pos, "the two arms of a conditional expression differ: %s and %s", ps_type_str(self->a, at), ps_type_str(self->a, bt))
             case PE_LIST:
@@ -1926,8 +1948,7 @@ struct PsSema:
                 if e->nargs != dm->nparams - 1:
                     fatal_at(self->file, e->pos, "'%s.%s' takes %d argument(s), %d given", ps_disp(td3->name), dm->name, dm->nparams - 1, e->nargs)
                 for i in range(e->nargs):
-                    dat: *PsType = self->check_expr(e->args[i])
-                    self->want(e->args[i], dat, self->sig_type(td3->ns, dm->params[i + 1].type, None), self->a->printf("parameter '%s'", dm->params[i + 1].name))
+                    self->check_want(e->args[i], self->sig_type(td3->ns, dm->params[i + 1].type, None), self->a->printf("parameter '%s'", dm->params[i + 1].name))
                 e->lhs->type = rt
                 e->is_dyn = True
                 return self->sig_type(td3->ns, dm->ret, None)
@@ -1936,15 +1957,42 @@ struct PsSema:
             rd: *PsDecl = self->records.get_or(rt->name, None)
             mth: *PsFunc = self->find_method(rd, e->lhs->text)
             if mth == None:
+                # 112: um CAMPO que guarda função é chamável. A 28.1 diz que
+                # função é valor e que valor vive em contêiner, e um campo é
+                # contêiner — `x.f(a)` só é método quando o método existe. É o
+                # que um toolkit de widgets pede: o comportamento do widget do
+                # app mora em campos do nó.
+                fty7: *PsType = None
+                for fi in range(rd->nfields):
+                    if strcmp(rd->fields[fi].name, e->lhs->text) == 0:
+                        fty7 = self->resolve_type(rd->fields[fi].type)
+                        break
+                if fty7 != None and fty7->kind == PT_OPT and fty7->inner != None and fty7->inner->kind == PT_FUNC:
+                    # a prova de não-nulo é sobre LOCAL (43.1), então a saída é
+                    # tirar o campo para uma variável — e a mensagem diz como
+                    fatal_at(self->file, e->pos, "'%s.%s' may be None: take it out first — `f = x.%s` and then `if f != None: f(...)` (43.1 proves it on a LOCAL, not on a field)", rt->name, e->lhs->text, e->lhs->text)
+                if fty7 != None and fty7->kind == PT_FUNC:
+                    if fty7->wide:
+                        fatal_at(self->file, e->pos, "'%s.%s' is a bare `def`: narrow it before calling — `f as def(str) -> bool` (29.4)", rt->name, e->lhs->text)
+                    if e->nargs != fty7->nparams:
+                        fatal_at(self->file, e->pos, "'%s.%s' takes %d argument(s), %d given", rt->name, e->lhs->text, fty7->nparams, e->nargs)
+                    for i in range(e->nargs):
+                        self->check_want(e->args[i], fty7->params[i], "an argument")
+                    e->lhs->type = fty7        # é o CAMPO, não o receptor: a
+                    return fty7->inner         #   lowering vê a função e não um método
                 fatal_at(self->file, e->pos, "'%s' has no method '%s'", rt->name, e->lhs->text)
             nrecv: i32 = 1 if not mth->is_static else 0
             if mth->nparams - nrecv > 0:
                 self->bind_call_args(e, &mth->params[nrecv], mth->nparams - nrecv, self->a->printf("'%s.%s'", rt->name, mth->name))
             if e->nargs != mth->nparams - nrecv:
                 fatal_at(self->file, e->pos, "'%s.%s' takes %d argument(s), %d given", rt->name, mth->name, mth->nparams - nrecv, e->nargs)
+            # 112: `check_want` e não `check_expr` + `want`: o argumento de um
+            # MÉTODO também é contexto. Uma lambda não tem anotação (a forma do
+            # Python), então o tipo do parâmetro é o único lugar de onde os
+            # tipos dela podem vir — e uma lista vazia está na mesma posição.
+            # Era o que faltava para `ui.on_click(id, lambda i, a: ...)`.
             for i in range(e->nargs):
-                at: *PsType = self->check_expr(e->args[i])
-                self->want(e->args[i], at, mth->params[i + nrecv].type, self->a->printf("parameter '%s'", mth->params[i + nrecv].name))
+                self->check_want(e->args[i], mth->params[i + nrecv].type, self->a->printf("parameter '%s'", mth->params[i + nrecv].name))
             e->lhs->type = rt
             mret: *PsType = mth->ret if mth->ret != None else ps_type(self->a, PT_VOID, e->pos)
             if mth->is_async:
@@ -3722,7 +3770,15 @@ struct PsSema:
             # what any header writes when it wants a named number. A mutable
             # `static` in a header is a per-includer COPY, so reading its
             # initializer says exactly as much as reading the variable would.
-            if cd->kind == DL_VAR and cd->is_static and cd->name != None and cd->init != None and cd->init->kind == EX_NUMBER and cd->type != None and self->c_type(cd->type) != None and self->c_type(cd->type)->kind == PT_INT:
+            # 113: `const` também. `X: const i32 = 0` num `.ph` é a forma que
+            # um número nomeado tem quando o header é LIDO pelo front end do P
+            # (75.3) em vez de pelo C — o `static` só aparece no `.h` que o
+            # compilador emite. Sem esta linha, uma constante atravessava por
+            # `include "x.h"` e desaparecia por `import "x.ph"`, que é a porta
+            # que uma função de `CStr` obriga a usar. O `const` pode estar no
+            # DECL (`const X = 0`) ou no TIPO (`X: const i32 = 0`) — as duas
+            # grafias existem no P, e o `.ph` do editor usa a segunda.
+            if cd->kind == DL_VAR and (cd->is_static or cd->is_const or (cd->type != None and cd->type->is_const)) and cd->name != None and cd->init != None and cd->init->kind == EX_NUMBER and cd->type != None and self->c_type(cd->type) != None and self->c_type(cd->type)->kind == PT_INT:
                 self->cconst_put(cd->name, strtoll(cd->init->text, None, 0))
                 continue
             # 72.6: a P `record` of numbers is a `record` here too. The type
@@ -5585,6 +5641,10 @@ def ps_is_ref_type(t: *PsType) -> bool:
             return True
         case PT_NAME:
             return t->is_ref
+        case PT_OPT:
+            # 113: `T?` de referência É referência nua (9.4) — a mesma correção
+            # que o `opt_is_ref` do lowering, no predicado que a sema usa
+            return ps_is_ref_type(t->inner)
         case _:
             return False
 

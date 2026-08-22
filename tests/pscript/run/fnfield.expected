@@ -1,0 +1,5 @@
+draw botao 3
+click 5 7
+again 6
+b ligado: False
+a
