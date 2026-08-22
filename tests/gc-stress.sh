@@ -24,7 +24,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PLANGC=${PLANGC:-./plangc2}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
 OUT=tests/out/gcstress
 FAIL=0
@@ -64,7 +64,7 @@ for src in tests/pscript/run/*.psc pscript/examples/*.psc; do
     # (`-O` strips `assert`, 46.4) — the same file `tests/run.sh` reads
     xflags=""
     [ -f "tests/pscript/run/$name.flags" ] && xflags=$(cat "tests/pscript/run/$name.flags")
-    if ! PSBUILD_RT="$OUT/rt" PLANGC="${PLANGC:-./plangc2} $xflags" bash tests/psbuild.sh "$src" "$OUT/$name" >"$OUT/$name.build" 2>&1; then
+    if ! PSBUILD_RT="$OUT/rt" PLANGC="${PLANGC:-build/bin/plangc_s2} $xflags" bash tests/psbuild.sh "$src" "$OUT/$name" >"$OUT/$name.build" 2>&1; then
         echo "  FAIL $name (build) — see $OUT/$name.build"; fail=$((fail+1)); continue
     fi
     n=$(stress_n "$name")

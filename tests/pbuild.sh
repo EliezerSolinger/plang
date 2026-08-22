@@ -11,7 +11,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PLANGC=${PLANGC:-./plangc2}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 OUT=tests/out/pbuild-bin
 mkdir -p "$OUT"
 

@@ -226,7 +226,7 @@ async def cmd_test(jobs: int, query: str, verbose: bool) -> int:
     g = await BP.montar(query)
     st = on_start_verbose if verbose else on_start
     rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
-    ok = await B.build(g, LOG, [BP.SUITE_PSCRIPT], B.Opts(jobs, 1000000, False, False), rep)
+    ok = await B.build(g, LOG, [BP.TESTE], B.Opts(jobs, 1000000, False, False), rep)
     return 0 if ok else 1
 
 async def cmd_explain(alvos: list<str>, query: str) -> int:

@@ -48,8 +48,21 @@ compiler and want either a nicer language or a way to run modern C on it.
 You only need a C compiler (`cc`/`gcc`/`clang`) and `make`:
 
 ```sh
-make            # builds ./plangc from the C seed in bootstrap/
-make check      # builds, then compiles & runs a hello-world
+make            # the whole thing: the bootstrap ladder, the editor, the tools
+make check      # ... and then compile & run a hello-world with it
+```
+
+`make` takes about 70 seconds on a clean tree and seconds afterwards. It builds
+the C seed in `bootstrap/` with your `cc`, uses that to build **ppack** — this
+repository's own build system, written in pscript — and from then on the build
+is a graph: `build/bin/plangc_s2` is the compiler, and everything lands under
+`build/`.
+
+```sh
+make test       # the corpus in C plus the pscript suite, case by case
+make verify     # the whole battery (5 min from scratch, 9 s when nothing moved)
+make doc <mod>  # a module's interface, with its documentation
+make ninja      # a build.ninja, for bootstrapping on a machine without ppack
 ```
 
 `plangc` has no runtime and no dependencies — it reads a `.p`/`.ph` file and
@@ -299,8 +312,8 @@ software rasterizer are ours too — no widget library involved.
 
 ```sh
 sudo apt install libsdl2-dev     # the only dependency
-make pstudio                     # -> out/bin/pstudio
-./out/bin/pstudio .              # open the tree in the current directory
+make pstudio                     # -> build/bin/pstudio
+./build/bin/pstudio .            # open the tree in the current directory
 ```
 
 **It is written in pscript, and the split was decided by the boundary rule
@@ -361,8 +374,13 @@ real example of idiomatic Plang. To rebuild the compiler from the Plang source
 (and confirm it still self-hosts on your machine):
 
 ```sh
-make selfhost   # rebuilds plangc from selfhost/ using the seed compiler
+make selfhost   # the ladder: seed -> s1 -> s2 -> s3, with s2 == s3 checked
 ```
+
+That *is* the default build's first half: the seed compiles the sources, the
+result compiles them again, and the third pass has to produce byte-identical C.
+A compiler that reproduces itself is the only kind you can trust to have
+compiled itself correctly.
 
 ## Status
 

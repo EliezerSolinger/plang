@@ -229,6 +229,10 @@ private async def ler(p: str) -> str:
 # do `tests/run.sh` no mesmo lugar se atropelam — e o relatório das duas fica
 # ilegível. Isto já custou uma investigação.
 const VERIFY: str = "build/t/stamp/verify"
+# o alvo de `ppack test`: a suíte do pscript caso a caso MAIS a leitura em C do
+# corpus (cases, modules, stl, p-suite, errors, pstudio, roundtrip). É o que o
+# `make test` sempre significou, e por isso é o que ele continua a significar.
+const TESTE: str = "build/t/stamp/test"
 
 def suites_de_fora() -> list<str>:
     # a MESMA lista do `verify-all.sh`, e por isso `pstudio` e `roundtrip` estão
@@ -268,9 +272,27 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str)
                           {"PLANGC": plangc}, [plangc], logdir, "print atômico"))
     logs.append(T.harness(c, "run-cmd", ["bash", "tests/run-cmd.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "run-cmd"))
+    # os três arreios que medem o pscript contra ALGO QUE NÃO SOMOS NÓS: corpora
+    # que outros escreveram, e os nossos programas rodados também no intérprete
+    # de referência. Não são placar: são portão.
+    logs.append(T.harness(c, "conformance", ["bash", "tests/conformance/run.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "conformidade"))
+    logs.append(T.harness(c, "oracle", ["bash", "tests/oracle/run.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "oráculos"))
+    # e o ponto fixo do OUTRO back end: um back end pode passar em todos os
+    # casos e ainda gerar um compilador que diverge num canto que nenhum caso
+    # toca
+    logs.append(T.harness(c, "qbe-fixpoint", ["bash", "tests/qbe-fixpoint.sh"],
+                          {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/qbefp")},
+                          [plangc], logdir, "ponto fixo do QBE"))
     logs.append(T.harness(c, "packages", ["bash", "tests/packages.sh"],
                           {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/packages")},
                           [plangc], logdir, "pacotes (import <>)"))
+
+    # `ppack test` é a leitura em C do corpus mais a suíte caso a caso: as duas
+    # medem a mesma coisa por caminhos diferentes, e juntas são o que `make
+    # test` sempre quis dizer. O resto (QBE, C89, oráculos, coletor) é `verify`.
+    T.junta(c, TESTE, [logs[0], suite], "test: o corpus em C e a suíte caso a caso")
 
     # a suíte do pscript como GRAFO entra junto: ela é a mesma coisa que a
     # `suite-c` mede, por outro caminho e caso a caso — e é a que roda rápido

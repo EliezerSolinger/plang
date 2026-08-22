@@ -714,14 +714,20 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 
 ### Parte D — a TROCA (um commit, repo verde antes e depois)
 
-> **Preparada, e não feita.** Os alvos novos já existem no `Makefile` e são
-> ADITIVOS: `make ppack` (2,5 s), `make build` (68 s), `make ptest`,
-> `make pverify`, `make pninja`. Nada acima deles mudou, e quem estiver a
-> trabalhar com `make test` continua com o mesmo `make test` — que foi rodado
-> depois da mudança e continua verde. A TROCA em si (o Makefile virar casca,
-> `out/` virar `build/`, os arreios chamarem o `ppack`) fica para um commit
-> próprio, com o outro agente ciente: mudar o significado de `make test`
-> debaixo de quem está a usá-lo é a única coisa aqui que não se faz sozinho.
+> **FEITA** (2026-08-22, por decisão sua). O `Makefile` é uma casca de sessenta
+> linhas: ele nasce o compilador do C comitado, constrói o `ppack` com ele, e
+> daí em diante quem manda é o grafo. `out/` desapareceu, `./plangc` e
+> `./plangc2` desapareceram da raiz, e todo arreio aponta para
+> `build/bin/plangc_s2`.
+>
+> Os nomes que as pessoas conhecem continuam a funcionar e a querer dizer a
+> mesma coisa: `make` constrói, `make test` roda o corpus em C mais a suíte caso
+> a caso, `make verify` roda a bateria inteira, `make check` compila um
+> hello-world, `make selfhost` é a escada com ponto fixo, `make pstudio` é o
+> editor. `make clean` deixa a árvore como o `git clone` a entrega.
+>
+> Medido numa árvore limpa: `make` 84 s · `make test` 4m29 (9 s sem mudança) ·
+> `make verify` 5m16 (8,7 s sem mudança).
 
 - [ ] `tests/psbuild.sh` reimplementado como chamada de `ppack` (ou os
       harnesses que o usam passam a chamar `ppack` direto)

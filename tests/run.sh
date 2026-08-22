@@ -20,7 +20,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PLANGC=${PLANGC:-./plangc}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 # the runtime speaks POSIX (socket, getaddrinfo, poll, pipe, pthread) and glibc
 # hides those under a strict `-std=`; asking for them explicitly is what every
 # project that uses them does

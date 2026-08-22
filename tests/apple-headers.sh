@@ -23,7 +23,7 @@
 #   bash tests/apple-headers.sh
 set -eu
 cd "$(dirname "$0")/.."
-PLANGC=${PLANGC:-./plangc}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 D=tests/external/apple
 CPPBIN=${CPPBIN:-clang}
 

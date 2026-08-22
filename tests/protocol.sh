@@ -23,7 +23,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PLANGC=${PLANGC:-./plangc2}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 
 # o hash sai numa linha PROPRIA (`#hash ...`), e as docstrings vem DEPOIS dela —
 # entao e a linha que se procura, e nao a ultima do relatorio

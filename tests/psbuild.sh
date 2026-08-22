@@ -22,7 +22,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-PLANGC=${PLANGC:-./plangc2}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
 CSTD=${CSTD:--std=c11}
 CCOPT=${CCOPT:--O0}

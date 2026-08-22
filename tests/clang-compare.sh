@@ -12,7 +12,7 @@
 # O placar conta MATCHES; divergências são listadas com os dois vereditos.
 set -u
 cd "$(dirname "$0")/.."
-PLANGC=${PLANGC:-$PWD/plangc}
+PLANGC=${PLANGC:-$PWD/build/bin/plangc_s2}
 CLANG=${CLANG:-clang}
 command -v "$CLANG" >/dev/null || { echo "clang não encontrado"; exit 2; }
 [ -x "$PLANGC" ] || { echo "plangc não encontrado em $PLANGC (build primeiro ou PLANGC=...)"; exit 2; }

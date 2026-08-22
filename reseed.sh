@@ -20,5 +20,5 @@ diff -rq $V/out2 $V/out3 >/dev/null || { echo "FIXED POINT FAILED"; exit 1; }
 cp $V/out2/*.c $V/out2/*.h bootstrap/selfhost/
 cp $V/packages/stl/*.h bootstrap/packages/stl/
 rm -rf $V
-make plangc >/dev/null
+make seed >/dev/null
 echo "SEED UPDATED"

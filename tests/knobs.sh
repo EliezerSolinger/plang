@@ -13,7 +13,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PLANGC=${PLANGC:-./plangc2}
+PLANGC=${PLANGC:-build/bin/plangc_s2}
 OUT=tests/out/knobs
 rm -rf "$OUT"; mkdir -p "$OUT"
 fail=0
