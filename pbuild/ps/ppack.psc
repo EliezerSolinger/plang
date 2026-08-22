@@ -11,6 +11,9 @@ que faz o motor ser reutilizável em vez de ser um script com `print` no meio.
     ppack explain <saída>     por que ESTA saída está suja
     ppack graph               o grafo em JSON, para inspecionar ou versionar
     ppack ninja [arquivo]     escreve o `build.ninja` do bootstrap (padrão: -)
+    ppack doc <alvo> [nome]   a interface de um módulo (ou de um pacote), com a
+                              documentação — `alvo` é um arquivo ou o nome de um
+                              pacote do workspace
     ppack clean               apaga o que o build produziu
     ppack help
 
@@ -25,6 +28,8 @@ import lib_graph as G
 import lib_build as B
 import lib_targets as T
 import lib_ninja as N
+import lib_api as A
+import lib_manifest as MF
 import build_plang as BP
 
 const LOG: str = "build/log/build.log"
@@ -162,6 +167,80 @@ async def cmd_graph(query: str) -> int:
     print(G.to_json(g).rstrip())
     return 0
 
+# ---------- doc ----------
+private async def modulo_do_pacote(alvo: str) -> str:
+    """O módulo RAIZ de um pacote do workspace, se `alvo` for um nome de pacote.
+
+    É para isto que o campo `root` do manifesto existe: a interface do pacote é
+    UM módulo, e quem quer a documentação dele não tem de saber em que arquivo
+    ela mora."""
+    raizes = await BP.raizes_do_workspace("pack.json")
+    for r in raizes:
+        man = path.join(r, alvo, "pack.json")
+        if path.isfile(man):
+            m = await MF.ler(man)
+            return path.join(r, alvo, m.raiz)
+    return ""
+
+private def parede(t: str) -> str:
+    """A docstring, indentada. Sem isto, uma docstring de várias linhas
+    encosta na margem e some no meio da lista."""
+    out = ""
+    for l in t.split("\n"):
+        out += "    " + l.rstrip() + "\n"
+    return out.rstrip()
+
+async def cmd_doc(alvos: list<str>, query: str) -> int:
+    """`ppack doc` — a documentação no TERMINAL, do que já existe.
+
+    Nada é construído e nada é gerado: a fonte é a resposta 5 do compilador
+    (`--api`), que já traz a interface canónica e as docstrings. É o que o
+    `go doc` acertou — offline, sem site, sem serviço — e aqui sai de graça
+    porque o formato já estava lá."""
+    if len(alvos) == 0:
+        print("uso: ppack doc <arquivo|pacote> [símbolo]")
+        return 2
+    alvo = alvos[0]
+    if not path.isfile(alvo):
+        p2 = await modulo_do_pacote(alvo)
+        if len(p2) == 0:
+            print("não achei '" + alvo + "': nem arquivo, nem pacote do workspace")
+            return 1
+        alvo = p2
+    r = await os.run([query, "--api", alvo])
+    if r.status() != 0:
+        print(r.output().rstrip())
+        return 1
+    mods = A.parse(r.output())
+    if len(mods) == 0:
+        print("o compilador não devolveu interface nenhuma para '" + alvo + "'")
+        return 1
+    m = mods[0]
+    if len(alvos) > 1:
+        i = m.acha(alvos[1])
+        if i < 0:
+            print("'" + alvos[1] + "' não está na interface de " + m.caminho)
+            return 1
+        s = m.simbolos[i]
+        if len(s.linha) > 0:
+            print(s.linha)
+        else:
+            print(s.nome)
+        if len(s.doc) > 0:
+            print(parede(s.doc))
+        return 0
+    print("== " + m.caminho + "  [" + m.hash + "]")
+    if len(m.doc) > 0:
+        print(parede(m.doc))
+        print("")
+    for s2 in m.simbolos:
+        if len(s2.linha) == 0:
+            continue
+        print(s2.linha)
+        if len(s2.doc) > 0:
+            print(parede(s2.doc))
+    return 0
+
 async def cmd_ninja(alvos: list<str>, query: str) -> int:
     """A exportação para ninja (ver `lib_ninja.psc`): o bootstrap numa máquina
     que ainda não tem `ppack`, e o `compile_commands.json` de graça
@@ -201,7 +280,7 @@ def rmtree(d: str) -> int:
     return n
 
 def uso():
-    print("uso: ppack <build|test|verify|run|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("uso: ppack <build|test|verify|run|doc|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
 
 async def main() -> int:
     args = sys.argv[1:]
@@ -272,6 +351,8 @@ async def main() -> int:
         return await cmd_graph(query)
     if cmd == "ninja":
         return await cmd_ninja(alvos, query)
+    if cmd == "doc":
+        return await cmd_doc(alvos, query)
     if cmd == "clean":
         return await cmd_clean()
     if cmd == "help":

@@ -16,6 +16,7 @@ import lib_build as B
 import lib_ninja as N
 import lib_targets as T
 import lib_manifest as M
+import lib_api as A
 import build_plang as BP
 
 const DIR: str = "tests/out/pbuild"
@@ -554,6 +555,44 @@ async def caso_ninja():
     # comitado que muda de ordem a cada corrida é um diff por nada
     check("ninja: determinista", "True", str(N.emit(g) == txt))
 
+async def caso_api():
+    """A resposta 5 lida de volta (`lib_api.psc`): é o que faz o `ppack doc`
+    existir sem um segundo leitor da linguagem — e um segundo leitor divergiria,
+    que é o pior resultado possível."""
+    reset()
+    dump = ("== geom.ph\n"
+            + "include <stdio.h>\n"
+            + "struct Ponto {x: i32, y: i32}\n"
+            + "def area(i32, i32) -> i64\n"
+            + "const MAX: i32 = 64\n"
+            + "#hash 0123456789abcdef\n"
+            + "#doc . O módulo.\\nCom segunda linha.\n"
+            + "#doc area A área.\n"
+            + "#doc Ponto.soma A soma.\n"
+            + "== outro.p\n"
+            + "def f() -> void\n"
+            + "#hash fedcba9876543210\n")
+    ms = A.parse(dump)
+    check("api: dois módulos", "2", str(len(ms)))
+    check("api: o caminho e o hash", "geom.ph 0123456789abcdef", ms[0].caminho + " " + ms[0].hash)
+    check("api: a doc do módulo, desescapada", "O módulo.\nCom segunda linha.", ms[0].doc)
+    check("api: acha um símbolo", "True", str(ms[0].acha("area") >= 0))
+    check("api: e a doc dele", "A área.", ms[0].simbolos[ms[0].acha("area")].doc)
+    check("api: o método entra mesmo sem linha própria", "A soma.",
+          ms[0].simbolos[ms[0].acha("Ponto.soma")].doc)
+    check("api: o segundo módulo", "outro.p", ms[1].caminho)
+
+    # o NOME de cada forma de declaração
+    check("api: nome de def", "area", A.nome_da("def area(i32, i32) -> i64"))
+    check("api: nome de struct", "Ponto", A.nome_da("struct Ponto {x: i32}"))
+    check("api: nome de enum", "Forma", A.nome_da("enum Forma {A, B}"))
+    check("api: nome de const", "MAX", A.nome_da("const MAX: i32 = 64"))
+    check("api: import não é símbolo", "", A.nome_da("import \"x.ph\""))
+
+    # a indentação do CÓDIGO sai da docstring (o `cleandoc` do Python)
+    check("api: cleandoc", "Primeira.\n\nSegunda.",
+          A.limpa("Primeira.\n\n    Segunda.\n    "))
+
 async def caso_manifesto():
     """O `pack.json`: pacote, workspace, e o erro COM POSIÇÃO (F4).
 
@@ -670,6 +709,7 @@ async def go():
     await caso_grafo_reusado()
     await caso_json()
     await caso_ninja()
+    await caso_api()
     await caso_manifesto()
     await caso_limite_de_bracos()
     await caso_portao_negativo()

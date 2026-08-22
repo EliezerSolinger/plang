@@ -68,3 +68,22 @@ if grep '^  command = ' "$OUT/build.ninja" | grep -q '[^$]\$\([^$]\|$\)'; then
     echo "  FAIL: há um \$ solto num comando do build.ninja"; exit 1
 fi
 echo "   pbuild-ninja: $regras regras, determinista, sem \$ solto"
+
+# ---- `ppack doc`: a documentação do que já existe, sem gerar nada ----
+# A fonte é a resposta 5 do compilador, que já traz interface e docstring. O que
+# se confere aqui é a cadeia inteira: o compilador responde, o `lib_api` lê, e o
+# `ppack` formata.
+d=$("$OUT/ppack" doc tests/cases/docstring.p dobro --query "$PLANGC" 2>&1)
+case $d in
+    *"def dobro(i32) -> i32"*"O dobro de x."*) ;;
+    *) echo "  FAIL: ppack doc não achou a docstring"; echo "$d" | head -3; exit 1 ;;
+esac
+d=$("$OUT/ppack" doc tests/cases/docstring.p --query "$PLANGC" 2>&1)
+case $d in
+    *"Um par de inteiros."*) ;;
+    *) echo "  FAIL: ppack doc do módulo inteiro"; echo "$d" | head -3; exit 1 ;;
+esac
+if "$OUT/ppack" doc nao_existe_nenhum --query "$PLANGC" >/dev/null 2>&1; then
+    echo "  FAIL: ppack doc devia recusar um alvo que não existe"; exit 1
+fi
+echo "   pbuild-doc: a documentação sai do --api, e o alvo inexistente é recusado"

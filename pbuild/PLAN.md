@@ -68,6 +68,9 @@ sozinho. Estado encontrado e restrição que ele impõe:
 - [~] **F1 — 1.5(d), `import <>` e a DOCSTRING feitas** (2026-08-22); falta a
       1.5(a) para a forma relativa, e a docstring de PROTÓTIPO (decisão sua).
 
+      A docstring rendeu na hora: `ppack doc` (abaixo) lê a resposta 5 e mostra
+      a documentação no terminal, sem um segundo leitor da linguagem.
+
       **A docstring** existe agora nas duas linguagens, com a regra posicional
       do Python e sem palavra nova. Não gera um byte, e no `--api` sai DEPOIS do
       hash — mudar um texto de documentação não pode acordar quem só depende da
@@ -641,6 +644,14 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 - [x] `ppack clean` — apaga o que o build produziu, MANTÉM `build/pkg`
 - [x] `ppack explain <saída>` e `ppack graph` (JSON); `why`/`tree`/`lock` são
       de F4 e ficam com ela
+- [x] **`ppack doc <arquivo|pacote> [símbolo]`** — a documentação no TERMINAL,
+      do que já existe. Nada é construído e nada é gerado: a fonte é a resposta
+      5 do compilador, que já traz a interface canónica e as docstrings, e
+      `pbuild/ps/lib_api.psc` a lê de volta. É o que o `go doc` acertou —
+      offline, sem site, sem serviço — e aqui saiu quase de graça porque o
+      formato já estava lá. Um nome de PACOTE resolve pelo campo `root` do
+      manifesto: quem quer a documentação de um pacote não tem de saber em que
+      arquivo a interface dele mora. O `--html` para uma pasta fica para depois.
 - [x] **`ppack ninja`**: desce a aresta gorda para texto ninja — aspeamento
       GERADO (nós sabemos onde cada argumento começa); `restat`/`generator`/
       `pool console` mapeiam 1:1; `env`/`cwd` viram wrapper explícito no
