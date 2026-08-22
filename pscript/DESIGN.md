@@ -2412,7 +2412,8 @@ nas duas linguagens. Ganha `==`/`!=` por conteúdo (campo a campo, código gerad
 memcmp, que compararia o padding) e o construtor `Vec(1.0, 2.0)` posicional e nomeado.
 Fica de fora do P o `pack`/`unpack` (59), por decisão sua.
 
-**65.2 f-string no P, resolvida inteiramente em compilação.** No pscript ela constrói
+**65.2 f-string no P, resolvida inteiramente em compilação — ABERTO, e o primeiro
+dos dois que sobraram no Grupo A (117.5: vale 158 linhas de síntese).** No pscript ela constrói
 um `str`; no P ela teria de baixar para o que o C tem — uma string de formato mais os
 argumentos. Forma possível: `printf(f"{n} itens")` vira `printf("%d itens", n)`.
 - (a) Sim, só em posição de argumento de função variádica (printf/snprintf).
@@ -2424,23 +2425,25 @@ argumentos. Forma possível: `printf(f"{n} itens")` vira `printf("%d itens", n)`
 > estranha para uma expressão. Consequência de (c): a divergência de superfície entre
 > as duas linguagens fica maior justo no lugar mais visível do dia a dia.
 
-**65.3 `T?` não-nulo por padrão, com `??` e `?.`, no P.** Zero runtime — é um teste de
-nulo e um sistema de tipos. Seria o maior ganho de segurança que o P pode ter sem
-runtime, e o maior acréscimo de superfície.
+**65.3 `T?` não-nulo por padrão, com `??` e `?.`, no P — FECHADO DE OUTRA FORMA
+pela 69 (ver 117.5).** O que entrou não foi nenhuma das três: `ref T` é o tipo
+não-nulável (local e retorno), `*T` continua anulável para a fronteira com o C,
+`??` é o único açúcar (69.3) e o `-Wnull-dereference` cobra a prova. `T?` no P
+**não se repropõe**.
 - (a) Sim, igual ao do pscript (9.4, 43.1-43.3), com narrowing por fluxo.
 - (b) Só `??` e `?.` como açúcar, sem tipo anulável (sem garantia, só ergonomia).
 - (c) Não: o P interopera com C, onde todo ponteiro é anulável, e a garantia seria
       falsa na fronteira.
 
-**65.4 Lambda sem captura no P.** A 20.3 já diz que o compilador escolhe entre ponteiro
+**65.4 Lambda sem captura no P — ABERTO, o segundo dos dois (117.5: vale 202
+linhas de síntese, e hoje o P não tem `lambda` nenhum).** A 20.3 já diz que o compilador escolhe entre ponteiro
 puro e `{fp, env}`; a forma SEM captura é literalmente um ponteiro de função, que o P já
 tem. `sorted(xs, key=lambda v: v.x)` sem alocar nada.
 - (a) Sim, e capturar vira erro de compilação com mensagem que diz por quê.
 - (b) Não: o P tem `def` aninhado nenhum, e uma função nomeada resolve.
 
-**65.5 Interfaces estruturais estáticas no P.** No pscript elas têm vtable (runtime); a
-versão estática — "este tipo tem estes métodos, checado em compilação" — é o que os
-genéricos do P já fazem por monomorfização, sem nome.
+**65.5 Interfaces estruturais estáticas no P — FEITO pela (a)**, na 67.1 (`trait`
+no P, só na forma estática) mais o limite nominal da 68.1. Ver 117.5.
 - (a) Sim, como restrição nomeada de genérico (`def sort<T: Comparable>`).
 - (b) Não: `declare`/`implement` já resolve, e a mensagem de erro é boa o bastante.
 
@@ -3590,6 +3593,97 @@ já funciona — e como VALOR, sem cabeçalho.
 **98.3 No P ela continua REMOVIDA**, a seu pedido, e isso não muda. É o caso
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
+
+## Bateria 117 — o fork do front end, medido (2026-08-22)
+
+*"vc consegue descobrir pra mim se mantermos 2 lexer, 2 asts etc 2 compiladores
+dentro do selfhost ali vale a pena mesmo? [...] talvez valeria a pena ser apenas
+1 compilador que compila 3 níveis de linguagens diferentes, uma ast de 3
+níveis... já que não tenho planejamento de adicionar mais nenhuma linguagem, o
+pscript é o auge"*
+
+A tabela "o que é compartilhado / o que é fork" acima diz o DESENHO. Esta bateria
+mede o CUSTO, porque a pergunta é sobre custo e não sobre desenho.
+
+**117.1 Dois dos três itens da pergunta não existem.** O `selfhost` já é *um*
+compilador com três front ends e um miolo só:
+
+```
+.c/.i  → cfront    ─┐
+.p/.ph → parser    ─┼→  árvore do P → sema.p → backend C/QBE/P
+.psc   → ps_parser → ps_sema → ps_lower ─┘
+```
+
+| | linhas |
+|---|---|
+| **compartilhado** (infra, lexer, árvore do P, `sema.p`, três back ends, driver) | **16 280** |
+| front end do P (`parser.p`) | 1 723 |
+| front end do C (`cfront.p`) | 2 845 |
+| front end do pscript (spec léxico, parser, árvore, sema, lowering) | 19 479 |
+
+Não há dois lexers: há uma máquina e duas tabelas, e a do pscript tem **46
+linhas** (`ps_lexer.p` — palavras e três flags). Não há dois back ends nem duas
+semas de codegen. O fork é a **árvore** (498 linhas de header), a **sema**
+(6 360) e o **lowering** (10 219).
+
+**117.2 Quanto código IGUAL existe, medido e não estimado.** Extraí toda função
+com 6 linhas ou mais dos dois lados — 220 do lado P/C, 263 do lado pscript —
+normalizei (fora comentário e indentação) e comparei os **57 860 pares**:
+
+- com **70% ou mais** de linhas idênticas: **um** par, `parse_if` (22 vs 18);
+- com **50% ou mais**: **oito** pares, e metade é falso positivo semântico
+  (`is_lvalue` do C contra `borrowable` do coletor);
+- total recuperável no melhor caso: **~89 linhas**.
+
+Os nomes enganam, e é por isso que a inspeção a olho dá a resposta errada. Os
+dois parsers têm **32 funções de mesmo nome** (`parse_add`, `parse_mul`,
+`parse_or`…) e só **21% das linhas coincidem**: `parse_stmt` é 126 contra 71 com
+10% em comum, `parse_func` é 79 contra 17 com 2%. As duas semas têm **6 nomes em
+comum de 182 e 110**. No histórico, de 77 commits **um** implementou o mesmo
+recurso nas duas linguagens (`const if`, 99).
+
+**117.3 O que a fusão custaria, também em número.** A raiz é o reticulado de
+tipos: `TypeKind` do P tem **quatro** kinds (`PTR`, `ARRAY`, `FUNC`, `NAME`)
+porque um tipo do P é um tipo do C; `PsTypeKind` tem **22**. Uma árvore só
+significa **52 kinds novos** (22 de expressão, 6 de comando, 19 de tipo, 5 de
+declaração) nos enums que o código compartilhado percorre — e ali há **352 braços
+de `case`** sobre kind, em ~55 `match`, dentro da sema e dos três back ends. Com
+`-Wswitch-enum` ligado (a 102 fez o compilador cobrar isso de si mesmo), cada
+kind novo bate em todos.
+
+**117.4 E o custo que não é linha: a fusão apaga o verificador.** Hoje o
+`ps_lower` produz árvore do P e o `main.p` roda `sema_run` em cima dela — a sema
+do P é o **verificador do lowering** (49.1), o mesmo checador que guarda P
+escrito à mão. Se a árvore do pscript FOR a do P, esse teste desaparece: erro de
+lowering deixa de ser erro de compilação e passa a ser código errado emitido em
+silêncio. Foi essa verificação que forçou o escopo de bloco na 64.1 e que apanhou
+boa parte dos quinze defeitos que o porte do pstudio revelou (112-116).
+
+**117.5 DECIDIDO (2026-08-22): o fork fica, e o esforço vai para o Grupo A.** Sua
+escolha, com a medição na mesa. O que rende não é fundir árvore: é **empurrar
+semântica de zero-runtime para baixo, para o P** — cada item convertido troca
+*síntese confiada* por *código verificado*, que é o mecanismo da 65 e o que a
+65.1 já provou (`record` com `==` por conteúdo e construtor no P: o lowering
+emite `a == b` e `Vec(1.0, 2.0)` em vez de sintetizar temporário e comparação
+campo a campo).
+
+Estado real do Grupo A depois das baterias 67-69, que fecharam parte dele sem
+que a seção fosse atualizada:
+
+| item | estado |
+|---|---|
+| 65.1 `record` no P | **feito** (2026-08-14) — 106 linhas de síntese saíram do `ps_lower` |
+| 65.3 `T?` no P | **fechado de outra forma** pela 69: `ref T` não-nulável, `*T` segue anulável, narrowing e `-Wnull-dereference`. `T?` no P não se repropõe |
+| 65.5 interface estática no P | **feito** pela 67.1 (`trait` no P) + 68.1 (limite nominal) |
+| 65.2 f-string no P | **aberto** — a máquina já existe no lexer atrás da flag `fstrings`; vale 158 linhas de `fmt_call`/`to_str` no `ps_lower` |
+| 65.4 lambda no P | **aberto** — o P não tem `TK_LAMBDA` nenhum; vale 202 linhas (`lower_lam_env`, `lower_lam_func`, `collect_lams_*`, `lower_fnval`) |
+| 65.15 superset de fonte ou de capacidade | **aberto**, e (a) é o que vale na prática |
+
+**117.6 Uma deriva que a medição achou, e é decisão sua.** A sema do P tem **40**
+sítios de grupo de warning (`cdiag_at`); a do pscript tem **3**. Na prática o
+pscript é erro duro em tudo, sem `-W` opcional. Pode ser exatamente o contrato
+que se quer — linguagem segura não negocia — mas hoje é consequência da ordem em
+que as coisas foram feitas, e não escolha registrada.
 
 ## Bateria 116 — o editor em P aposentado (2026-08-22)
 
