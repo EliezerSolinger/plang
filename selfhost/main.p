@@ -300,6 +300,50 @@ private def deps_walk(cc: *Cc, path: const *char):
         if not seen:
             deps_walk(cc, ip)
 
+# 1.5(d): os módulos P que um programa em pscript puxa, no FECHAMENTO inteiro.
+#
+# `import "x.ph"` dentro de um módulo importado tem o mesmo peso do que está no
+# arquivo de cima, e a resolução é relativa ao arquivo QUE O ESCREVEU — por isso
+# a recursão carrega o caminho de cada módulo em vez de reusar o de cima. A sema
+# do pscript resolve o mesmo grafo de imports (`ps_sema.p`), mas ela não roda
+# quando a pergunta é `--outputs`, e a resposta 3 tem de valer sem compilar.
+private def psc_pmods(cc: *Cc, path: const *char, m: *PsModule, inputs: *Vec<*char>,
+                      pulled: *Vec<*char>, seen: *Vec<*char>):
+    for i in range(seen->len):
+        if strcmp(seen->get(i), path) == 0:
+            return
+    seen->push((*char)(path))
+    dir: const *char = path_dir(&cc->arena, path)
+    for j in range(m->ndecls):
+        d: *PsDecl = m->decls[j]
+        if d->kind == PD_INCLUDE and d->is_pmod:
+            hp: const *char = path_join(&cc->arena, dir, d->path)
+            add_input(inputs, pulled, hp)
+            # o `.p` irmão do header, quando existe: o `.ph` sozinho é uma
+            # declaração (o stl é assim), e nesse caso não há o que compilar
+            sp: const *char = cc->arena.printf("%.*s", i32(strlen(hp) - 1), hp)
+            slen: usize = 0
+            sbytes: *char = read_entire_file_opt(sp, out slen)
+            if sbytes != None:
+                free(sbytes)
+                add_input(inputs, pulled, sp)
+            continue
+        if d->kind != PD_IMPORT and d->kind != PD_FROM_IMPORT:
+            continue
+        if d->path == None:
+            continue
+        sub: const *char = path_join(&cc->arena, dir, cc->arena.printf("%s.psc", d->path))
+        n2: usize = 0
+        b2: *char = read_entire_file_opt(sub, out n2)
+        if b2 == None:
+            # `sys` e companhia não são arquivos (48.3), e um módulo que não
+            # existe é erro da SEMA, com posição e mensagem — não daqui
+            continue
+        tl2: TokenList = ps_lex(sub, b2, n2, &cc->arena)
+        sm: *PsModule = ps_parse(&cc->arena, sub, tl2)
+        free(b2)
+        psc_pmods(cc, sub, sm, inputs, pulled, seen)
+
 private def dest_for(cc: *Cc, out_path: const *char, out_dir: const *char, path: const *char, be: const *Backend, pulled: *Vec<*char>) -> const *char:
     dest: const *char = out_path if out_path != None else derive_output(&cc->arena, path, be)
     if out_path != None and is_pulled(pulled, path):
@@ -698,18 +742,18 @@ def main(argc: int, argv: **char) -> int:
             # The header gives the declarations (45.5) and the `.p` beside it
             # gives the code; both are compiled into the same mirrored tree, so
             # one command covers what used to take two.
-            for j in range(psm->ndecls):
-                pdc: *PsDecl = psm->decls[j]
-                if pdc->kind != PD_INCLUDE or not pdc->is_pmod:
-                    continue
-                hp: const *char = path_join(&cc.arena, path_dir(&cc.arena, path), pdc->path)
-                sp: const *char = cc.arena.printf("%.*s", i32(strlen(hp) - 1), hp)
-                add_input(&inputs, &pulled, hp)
-                slen: usize = 0
-                sbytes: *char = read_entire_file_opt(sp, out slen)
-                if sbytes != None:
-                    free(sbytes)
-                    add_input(&inputs, &pulled, sp)
+            #
+            # 1.5(d): a varredura é do FECHAMENTO, não do arquivo nomeado. Um
+            # `import "x.ph"` escrito dentro de um MÓDULO importado conta tanto
+            # quanto um escrito no arquivo de cima — a alternativa era o que
+            # havia: silêncio, um `#include` órfão no C gerado, e um arreio de
+            # build compensando à mão (o `hl.p` do editor no `Makefile`).
+            # A varredura mora aqui e não na sema porque `--outputs` não roda a
+            # sema: a resposta 3 tem de saber o que vai ser emitido sem
+            # compilar nada.
+            psc_seen: Vec<*char>
+            psc_seen.init()
+            psc_pmods(&cc, path, psm, &inputs, &pulled, &psc_seen)
             # `--deps` e `--api` precisam do front end do pscript: é ELE que
             # resolve `import lib_core` e lê o módulo importado (ps_sema.p:3237).
             # `--outputs` sozinho não precisa de nada disso.

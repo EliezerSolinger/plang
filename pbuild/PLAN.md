@@ -65,7 +65,17 @@ sozinho. Estado encontrado e restrição que ele impõe:
       modules, stl, errors (101), p-suite (192) e roundtrip (234) verdes.
       FALTA (bloqueado pelo outro agente): regenerar o seed e rodar `verify`
       inteiro, e ligar o `protocol.sh` ao `verify-all.sh`.
-- [ ] F1 (BLOQUEADA: mexe em lexer/parser/sema, área dele)
+- [~] **F1 — 1.5(d) FEITA** (2026-08-22); o resto continua bloqueado (mexe em
+      lexer/parser/sema, área do outro agente). `import "x.ph"` dentro de um
+      MÓDULO importado passou a valer por inteiro: a varredura é do FECHAMENTO,
+      e o `.p` irmão entra na compilação. Mora em `main.p` e não na sema, porque
+      `--outputs` não roda a sema — e a resposta 3 tem de dizer o que vai ser
+      emitido sem compilar nada. Medida: o descritor do editor precisava nomear
+      dezanove arquivos copiados do Makefile; ficou com dois, e os dois não são
+      falha de fechamento (`plang.ph` declara o que `util.p` implementa — dois
+      nomes sem aresta entre si). Portão: `tests/pscript/run/import_fundo.psc`.
+      Seed regenerado. A bateria está em `pbuild/BATERIAS.md`, à espera de o
+      `pscript/DESIGN.md` ficar livre.
 - [x] **F2A — `os.run`, `os.nproc`, `path.getmtime_ns`** (2026-08-22, commit
       af97427): `await os.run(argv, env=, cwd=, stdout=) -> proc` com
       `status()`/`output()`; sem shell (`execvp` recebe o vetor); stderr junto;
@@ -310,11 +320,13 @@ fino e vira o lugar do teste).
   - prova da fase: compilar `tests/pscript/run/hello.psc` (ou equivalente)
     nomeando SÓ ele + `--pkg-path pscript/runtime` → o runtime inteiro vem por
     import. As seis listas ficam REDUNDANTES (removê-las é F3/F7)
-- [ ] **1.5(d) — `import "x.ph"` dentro de módulo pscript importado**
-  - hoje: o import de `.ph` só é honrado quando está no arquivo NOMEADO;
-    num módulo importado, silêncio + `#include` órfão (medido). Corrigir em
-    `ps_sema`/`ps_lower`: o `.ph` importado por QUALQUER módulo do fechamento
-    entra na compilação e nas respostas 1/3
+- [x] **1.5(d) — `import "x.ph"` dentro de módulo pscript importado** (FEITA)
+  - era: o import de `.ph` só era honrado quando estava no arquivo NOMEADO;
+    num módulo importado, silêncio + `#include` órfão. Agora a varredura é do
+    FECHAMENTO e o `.p` irmão entra na compilação e nas respostas 1/3
+  - mora em `main.p`, e NÃO em `ps_sema`/`ps_lower` como este plano supunha: a
+    sema resolve o mesmo grafo de imports, mas não roda quando a pergunta é
+    `--outputs` — e a resposta 3 tem de valer sem compilar
   - o contorno do `hl` em `tests/run.sh` (compilar `hl.p`+lexer+util+utf8 à
     mão) vira o teste de regressão: apagar o contorno, o build do editor tem
     de continuar passando

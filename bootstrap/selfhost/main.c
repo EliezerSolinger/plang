@@ -317,6 +317,49 @@ static void deps_walk(Cc *cc, const char *path) {
     }
 }
 
+static void psc_pmods(Cc *cc, const char *path, PsModule *m, Vec_pchar *inputs, Vec_pchar *pulled, Vec_pchar *seen) {
+    size_t i;
+    for (i = 0; i < seen->len; i += 1) {
+        if (strcmp(Vec_pchar_get(seen, i), path) == 0) {
+            return;
+        }
+    }
+    Vec_pchar_push(seen, (char *)path);
+    const char *dir = path_dir(&cc->arena, path);
+    size_t j;
+    for (j = 0; j < m->ndecls; j += 1) {
+        PsDecl *d = m->decls[j];
+        if (d->kind == PD_INCLUDE && d->is_pmod) {
+            const char *hp = path_join(&cc->arena, dir, d->path);
+            add_input(inputs, pulled, hp);
+            const char *sp = Arena_printf(&cc->arena, "%.*s", (int32_t)(strlen(hp) - 1), hp);
+            size_t slen = 0;
+            char *sbytes = read_entire_file_opt(sp, &slen);
+            if (sbytes != NULL) {
+                free(sbytes);
+                add_input(inputs, pulled, sp);
+            }
+            continue;
+        }
+        if (d->kind != PD_IMPORT && d->kind != PD_FROM_IMPORT) {
+            continue;
+        }
+        if (d->path == NULL) {
+            continue;
+        }
+        const char *sub = path_join(&cc->arena, dir, Arena_printf(&cc->arena, "%s.psc", d->path));
+        size_t n2 = 0;
+        char *b2 = read_entire_file_opt(sub, &n2);
+        if (b2 == NULL) {
+            continue;
+        }
+        TokenList tl2 = ps_lex(sub, b2, n2, &cc->arena);
+        PsModule *sm = ps_parse(&cc->arena, sub, tl2);
+        free(b2);
+        psc_pmods(cc, sub, sm, inputs, pulled, seen);
+    }
+}
+
 static const char *dest_for(Cc *cc, const char *out_path, const char *out_dir, const char *path, const Backend *be, Vec_pchar *pulled) {
     const char *dest = (out_path != NULL ? out_path : derive_output(&cc->arena, path, be));
     if (out_path != NULL && is_pulled(pulled, path)) {
@@ -672,22 +715,9 @@ int main(int argc, char **argv) {
             char *psbytes = read_entire_file(path, &pslen);
             TokenList pstl = ps_lex(path, psbytes, pslen, &cc.arena);
             PsModule *psm = ps_parse(&cc.arena, path, pstl);
-            size_t j;
-            for (j = 0; j < psm->ndecls; j += 1) {
-                PsDecl *pdc = psm->decls[j];
-                if (pdc->kind != PD_INCLUDE || !pdc->is_pmod) {
-                    continue;
-                }
-                const char *hp = path_join(&cc.arena, path_dir(&cc.arena, path), pdc->path);
-                const char *sp = Arena_printf(&cc.arena, "%.*s", (int32_t)(strlen(hp) - 1), hp);
-                add_input(&inputs, &pulled, hp);
-                size_t slen = 0;
-                char *sbytes = read_entire_file_opt(sp, &slen);
-                if (sbytes != NULL) {
-                    free(sbytes);
-                    add_input(&inputs, &pulled, sp);
-                }
-            }
+            Vec_pchar psc_seen;
+            Vec_pchar_init(&psc_seen);
+            psc_pmods(&cc, path, psm, &inputs, &pulled, &psc_seen);
             if (parse_only || (query_mode && !api_mode && !deps_mode)) {
                 {
                     free(psbytes);
