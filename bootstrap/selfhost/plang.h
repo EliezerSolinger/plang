@@ -96,6 +96,12 @@ const char *path_join(Arena *a, const char *dir, const char *rel);
 
 const char *path_relative(Arena *a, const char *from_dir, const char *to);
 
+void diag_json_enable(const char *path);
+
+void diag_json_flush(void);
+
+void diag_record(const char *file, int32_t line, int32_t col, int32_t sev, const char *group, const char *msg);
+
 const char *pkg_find(Arena *a, char **roots, int32_t nroots, const char *rel);
 
 const char *pkg_where(Arena *a, char **roots, int32_t nroots);

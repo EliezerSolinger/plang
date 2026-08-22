@@ -85,6 +85,10 @@ def plang_host_os() -> const *char
 def path_dir(a: *Arena, path: const *char) -> const *char
 def path_join(a: *Arena, dir: const *char, rel: const *char) -> const *char
 def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *char
+# resposta 6: o diagnóstico como DADO, além do texto (que continua a referência)
+def diag_json_enable(path: const *char)
+def diag_json_flush()
+def diag_record(file: const *char, line: i32, col: i32, sev: i32, group: const *char, msg: const *char)
 # `import <pkg/mod.ph>` nas raízes de `--pkg-path`: o caminho, ou None
 def pkg_find(a: *Arena, roots: **char, nroots: i32, rel: const *char) -> const *char
 def pkg_where(a: *Arena, roots: **char, nroots: i32) -> const *char

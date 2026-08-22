@@ -164,3 +164,37 @@ precedência do plano (`a docstring do .ph vence na API`) ter o que comparar.
 Portão: `tests/cases/docstring.p` (as cinco posições, e a string tripla que NÃO
 é docstring) e três checagens novas em `tests/protocol.sh` — a doc sai, vem
 depois do hash, e NÃO muda o hash.
+
+---
+
+## Resposta 6: o diagnóstico como DADO
+
+O compilador já fala uma língua só de diagnóstico —
+`arquivo:linha:coluna: gravidade: mensagem [-Wgrupo]` — e há 692 casos que medem
+esse TEXTO. Ele fica exatamente como está: é a referência, e mexer nele seria
+trocar a coisa medida.
+
+O que se acrescenta é um SEGUNDO destino, ligado por `--diag-json <arquivo>`: os
+mesmos diagnósticos, como dado, para quem os CONSOME em vez de os ler. A IDE
+quer sublinhar a coluna certa sem reparsear texto; o `ppack` quer contar e
+agrupar. Nenhum dos dois devia ter de escrever uma expressão regular para uma
+informação que o compilador tem estruturada na mão.
+
+Três detalhes decidem se isto serve ou não:
+
+  * **o arquivo é escrito também antes de um `exit` por erro.** Um diagnóstico
+    que mata a compilação é justamente o que a IDE mais quer, e perdê-lo por o
+    processo ter saído seria o único caso que não pode falhar.
+  * **sem diagnóstico nenhum sai uma lista VAZIA**, e não a ausência de arquivo.
+    "Não houve aviso" é uma resposta, e quem consome tem de a distinguir de "o
+    compilador nem chegou a correr".
+  * **a mensagem é escapada de verdade.** Uma aspa dentro de uma mensagem de
+    erro é comum (`'x' is not declared`), e um JSON que quebra na primeira delas
+    seria pior que nenhum.
+
+Uma consequência de forma: o texto passou a ser formatado num buffer antes de ir
+para o `stderr`, para o MESMO texto poder ir aos dois destinos sem percorrer a
+lista variádica duas vezes.
+
+Portão: 7 checagens em `tests/protocol.sh`, e a paridade com o clang (155/155)
+como prova de que o texto não se mexeu.

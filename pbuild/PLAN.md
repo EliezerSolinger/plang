@@ -811,11 +811,19 @@ doctest.
 - [ ] **`json.stringify` genérico** pela tabela (record/struct/list/dict/
       primitivos); ciclo → erro com caminho (`a.b[2].c`); `any` → pelo tipo
       dinâmico; `def` → erro
-- [ ] **resposta 6 — diagnóstico estruturado**: o funil `fatal_at`/`warn_at`
-      (`util.p:150`) ganha um sink que acumula {arquivo, linha, coluna,
-      gravidade, grupo -W, mensagem}; uma flag despeja em JSON no fim; **o
-      TEXTO continua a referência** (clang-parity e os 692 casos medem o texto
-      — gate intocado)
+- [x] **resposta 6 — diagnóstico estruturado** (FEITA): `--diag-json <arquivo>`
+      liga um segundo destino no funil (`fatal_at`/`warn_at`/`cdiag_at`), com
+      {arquivo, linha, coluna, gravidade, grupo -W, mensagem}. O TEXTO continua
+      intocado — clang-parity 155/155 e os 692 casos medem o texto.
+      Três detalhes que fazem a diferença entre servir e não servir:
+      o arquivo é escrito TAMBÉM antes de um `exit` por erro (um diagnóstico que
+      mata a compilação é justamente o que a IDE mais quer, e perdê-lo por o
+      processo ter saído seria o único caso que não pode falhar); sem
+      diagnóstico nenhum sai uma lista VAZIA e não a ausência de arquivo ("não
+      houve aviso" é uma resposta, e quem consome tem de a distinguir de "o
+      compilador nem correu"); e a mensagem é escapada de verdade, então uma
+      aspa dentro dela não quebra o JSON.
+      Portão: 7 checagens novas em `tests/protocol.sh` (31 agora).
 - [ ] **`--json` em toda a CLI** que produz informação (build/test/verify/
       explain/why/tree/search/doc): serialização dos MESMOS dados dos eventos
       e consultas — agora de graça pela reflexão

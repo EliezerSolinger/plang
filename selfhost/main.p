@@ -571,6 +571,14 @@ def main(argc: int, argv: **char) -> int:
             if i >= argc:
                 usage()
             cpp_cmd = argv[i]
+        elif argv[i] == "--diag-json":
+            # resposta 6: os MESMOS diagnósticos, como dado, num arquivo. O
+            # texto no `stderr` continua igual — ele é a referência, e há 692
+            # casos que o medem.
+            i += 1
+            if i >= argc:
+                usage()
+            diag_json_enable(argv[i])
         elif argv[i] == "--pkg-path":
             # uma RAIZ de pacote, repetível. Um `import <pkg/mod.ph>` é
             # procurado em cada uma, na ordem — a mesma regra do `-I` do C.
@@ -912,8 +920,13 @@ def main(argc: int, argv: **char) -> int:
         # seguido: o laço acima CRESCE enquanto descobre
         for di in range(deps_count()):
             printf("%s\n", deps_get(di))
+        diag_json_flush()
         return 0
     if run_mode:
         run_manifest_write(&cc.arena, manifest, run_hash, &inputs)
+        diag_json_flush()
         return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version, full_trace)
+    # a compilação acabou bem: os avisos que houve saem aqui, e o arquivo existe
+    # mesmo quando não houve nenhum (uma lista vazia é uma resposta)
+    diag_json_flush()
     return 0

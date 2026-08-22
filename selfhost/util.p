@@ -137,32 +137,139 @@ struct StrBuf:
         self->len = 0
         self->cap = 0
 
+# ---------- o diagnóstico como DADO (resposta 6) ----------
+# O compilador já fala uma língua só de diagnóstico: `arquivo:linha:coluna:
+# gravidade: mensagem [-Wgrupo]`, e há 692 casos que medem esse TEXTO. Ele fica
+# como está — é a referência, e mexer nele seria trocar a coisa medida.
+#
+# O que se acrescenta é um SEGUNDO destino, ligado por `--diag-json <arquivo>`:
+# os mesmos diagnósticos, como dado, para quem os consome em vez de os ler. A
+# IDE quer sublinhar a coluna certa sem reparsear texto; o `ppack` quer contar e
+# agrupar. Nenhum dos dois devia ter de escrever uma expressão regular para uma
+# informação que o compilador tem estruturada na mão.
+#
+# Desligado por padrão, como o registro de leituras: um compilador normal não
+# paga por isto.
+struct Diag:
+    file: const *char
+    line: i32
+    col: i32
+    sev: i32            # 1 aviso, 2 erro
+    group: const *char  # "" quando não há grupo -W
+    msg: const *char
+
+private def ps_dupstr(s: const *char) -> const *char
+private def json_escape(f: *FILE, s: const *char)
+
+g_diags: *Diag = None
+g_ndiag: i32 = 0
+g_diag_cap: i32 = 0
+g_diag_path: const *char = None
+
+def diag_json_enable(path: const *char):
+    g_diag_path = path
+
+def diag_record(file: const *char, line: i32, col: i32, sev: i32, group: const *char, msg: const *char):
+    if g_diag_path == None:
+        return
+    if g_ndiag >= g_diag_cap:
+        g_diag_cap = 32 if g_diag_cap == 0 else g_diag_cap * 2
+        g_diags = (*Diag)(realloc(g_diags, usize(g_diag_cap) * sizeof(Diag)))
+    g_diags[g_ndiag].file = ps_dupstr(file)
+    g_diags[g_ndiag].line = line
+    g_diags[g_ndiag].col = col
+    g_diags[g_ndiag].sev = sev
+    g_diags[g_ndiag].group = ps_dupstr(group)
+    g_diags[g_ndiag].msg = ps_dupstr(msg)
+    g_ndiag += 1
+
+private def ps_dupstr(s: const *char) -> const *char:
+    if s == None:
+        return ""
+    n: usize = strlen(s)
+    p: *char = (*char)(malloc(n + 1))
+    memcpy(p, s, n + 1)
+    return p
+
+private def json_escape(f: *FILE, s: const *char):
+    i: usize = 0
+    while s[i] != '\0':
+        c: u8 = u8(s[i])
+        if c == u8('"') or c == u8('\\'):
+            fprintf(f, "\\%c", int(c))
+        elif c == u8('\n'):
+            fprintf(f, "\\n")
+        elif c == u8('\t'):
+            fprintf(f, "\\t")
+        elif c < 0x20:
+            fprintf(f, "\\u%04x", int(c))
+        else:
+            fputc(int(c), f)
+        i += 1
+
+# Chamado no fim, e TAMBÉM antes de um `exit` por erro: um diagnóstico que mata
+# a compilação é justamente o que a IDE mais quer, e perdê-lo por o processo ter
+# saído seria o único caso que não pode falhar.
+def diag_json_flush():
+    if g_diag_path == None:
+        return
+    f: *FILE = fopen(g_diag_path, "w")
+    if f == None:
+        g_diag_path = None
+        return
+    fprintf(f, "[")
+    for i in range(g_ndiag):
+        if i > 0:
+            fprintf(f, ",")
+        fprintf(f, "\n {\"file\": \"")
+        json_escape(f, g_diags[i].file)
+        fprintf(f, "\", \"line\": %d, \"col\": %d, \"severity\": \"%s\", \"group\": \"",
+                g_diags[i].line, g_diags[i].col, "error" if g_diags[i].sev == 2 else "warning")
+        json_escape(f, g_diags[i].group)
+        fprintf(f, "\", \"message\": \"")
+        json_escape(f, g_diags[i].msg)
+        fprintf(f, "\"}")
+    fprintf(f, "\n]\n")
+    fclose(f)
+    g_diag_path = None      # uma só vez: o `flush` do erro já escreveu tudo
+
 # ---------- errors ----------
+# O texto vai primeiro para um buffer, e só depois para o `stderr`: é o que
+# permite o MESMO texto ir também para o registro estruturado, sem percorrer a
+# lista variádica duas vezes. O tamanho é folgado — a mensagem mais longa deste
+# compilador tem algumas centenas de bytes.
+const DIAG_BUF: const usize = 8192
+
 def fatal(fmt: const *char, ...):
+    buf: char[8192]
     ap: va_list
     va_start(ap, fmt)
-    fprintf(stderr, "plangc: error: ")
-    vfprintf(stderr, fmt, ap)
-    fprintf(stderr, "\n")
+    vsnprintf(buf, DIAG_BUF, fmt, ap)
     va_end(ap)
+    fprintf(stderr, "plangc: error: %s\n", buf)
+    diag_record("", 0, 0, 2, "", buf)
+    diag_json_flush()
     exit(1)
 
 def fatal_at(file: const *char, pos: Pos, fmt: const *char, ...):
+    buf: char[8192]
     ap: va_list
     va_start(ap, fmt)
-    fprintf(stderr, "%s:%d:%d: error: ", file, pos.line, pos.col)
-    vfprintf(stderr, fmt, ap)
-    fprintf(stderr, "\n")
+    vsnprintf(buf, DIAG_BUF, fmt, ap)
     va_end(ap)
+    fprintf(stderr, "%s:%d:%d: error: %s\n", file, pos.line, pos.col, buf)
+    diag_record(file, pos.line, pos.col, 2, "", buf)
+    diag_json_flush()
     exit(1)
 
 def warn_at(file: const *char, pos: Pos, fmt: const *char, ...):
+    buf: char[8192]
     ap: va_list
     va_start(ap, fmt)
-    fprintf(stderr, "%s:%d:%d: warning: ", file, pos.line, pos.col)
-    vfprintf(stderr, fmt, ap)
-    fprintf(stderr, "\n")
+    vsnprintf(buf, DIAG_BUF, fmt, ap)
     va_end(ap)
+    fprintf(stderr, "%s:%d:%d: warning: %s\n", file, pos.line, pos.col, buf)
+    diag_record(file, pos.line, pos.col, 1, "", buf)
 
 # ---------- clang-style warning groups ----------
 # Each diagnostic call site names its GROUP (-Wincompatible-pointer-types...)
@@ -246,13 +353,16 @@ def cdiag_at(file: const *char, pos: Pos, group: const *char, wdef: i32, fmt: co
         return
     if sev == 1 and g_wsuppress:
         return
+    buf: char[8192]
     ap: va_list
     va_start(ap, fmt)
-    fprintf(stderr, "%s:%d:%d: %s: ", file, pos.line, pos.col, "error" if sev == 2 else "warning")
-    vfprintf(stderr, fmt, ap)
-    fprintf(stderr, " [-W%s]\n", group)
+    vsnprintf(buf, DIAG_BUF, fmt, ap)
     va_end(ap)
+    fprintf(stderr, "%s:%d:%d: %s: %s [-W%s]\n", file, pos.line, pos.col,
+            "error" if sev == 2 else "warning", buf, group)
+    diag_record(file, pos.line, pos.col, sev, group, buf)
     if sev == 2:
+        diag_json_flush()
         exit(1)
     g_warn_count += 1
 

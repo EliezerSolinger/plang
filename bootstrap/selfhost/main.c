@@ -567,6 +567,12 @@ int main(int argc, char **argv) {
                 usage();
             }
             cpp_cmd = argv[i];
+        } else if (strcmp(argv[i], "--diag-json") == 0) {
+            i += 1;
+            if (i >= argc) {
+                usage();
+            }
+            diag_json_enable(argv[i]);
         } else if (strcmp(argv[i], "--pkg-path") == 0) {
             i += 1;
             if (i >= argc) {
@@ -861,11 +867,14 @@ int main(int argc, char **argv) {
         for (di = 0; di < deps_count(); di += 1) {
             printf("%s\n", deps_get(di));
         }
+        diag_json_flush();
         return 0;
     }
     if (run_mode) {
         run_manifest_write(&cc.arena, manifest, run_hash, &inputs);
+        diag_json_flush();
         return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version, full_trace);
     }
+    diag_json_flush();
     return 0;
 }

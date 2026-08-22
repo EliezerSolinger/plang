@@ -173,5 +173,56 @@ else
     echo "  FAIL doc: a doc não vem depois do hash ($lh vs $ld)"; fail=$((fail+1))
 fi
 
+# ---- resposta 6: o diagnóstico como DADO ----
+# O texto no `stderr` continua sendo a referência (há 692 casos que o medem);
+# o que se acrescenta é um segundo destino para quem CONSOME em vez de ler.
+cat > "$OUT/warn.p" <<'EOP'
+include <stdio.h>
+
+def main() -> int:
+    x: i32 = 1
+    p: *char = None
+    x = i32(p)
+    printf("%d\n", x)
+    return 0
+EOP
+$PLANGC --diag-json "$OUT/d1.json" "$OUT/warn.p" -o "$OUT/warn.c" >/dev/null 2>&1
+if [ -f "$OUT/d1.json" ]; then ok=$((ok+1)); else echo "  FAIL diag-json: nada foi escrito"; fail=$((fail+1)); fi
+
+# um ERRO mata a compilação, e é justamente o diagnóstico que a IDE mais quer:
+# perdê-lo por o processo ter saído seria o único caso que não pode falhar
+cat > "$OUT/bad.p" <<'EOP'
+def main() -> int:
+    return "isto não é um int"
+EOP
+$PLANGC --diag-json "$OUT/d2.json" "$OUT/bad.p" -o "$OUT/bad.c" >/dev/null 2>&1
+if [ -f "$OUT/d2.json" ]; then ok=$((ok+1)); else echo "  FAIL diag-json: o erro fatal não foi gravado"; fail=$((fail+1)); fi
+sev=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d[0]['severity'] if d else 'vazio')" "$OUT/d2.json" 2>/dev/null)
+check "diag-json: o erro sai como error" "error" "$sev"
+lin=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d[0]['line'] if d else 0)" "$OUT/d2.json" 2>/dev/null)
+check "diag-json: com a linha certa" "2" "$lin"
+grp=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d[0]['group'] if d else '')" "$OUT/d2.json" 2>/dev/null)
+[ -n "$grp" ] && ok=$((ok+1)) || { echo "  FAIL diag-json: sem grupo -W"; fail=$((fail+1)); }
+
+# sem diagnóstico nenhum, a resposta é uma lista VAZIA — e não a ausência de
+# arquivo: "não houve aviso" é uma resposta, e quem consome tem de a distinguir
+# de "o compilador nem chegou a correr"
+$PLANGC --diag-json "$OUT/d3.json" "$OUT/geom.ph.orig" -o "$OUT/geom.h" >/dev/null 2>&1
+n=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$OUT/d3.json" 2>/dev/null)
+check "diag-json: sem diagnóstico, lista vazia" "0" "$n"
+
+# e o JSON é JSON mesmo com aspas e barras na mensagem
+cat > "$OUT/q.p" <<'EOP'
+def main() -> int:
+    naoexiste("a\"b")
+    return 0
+EOP
+$PLANGC --diag-json "$OUT/d4.json" "$OUT/q.p" -o "$OUT/q.c" >/dev/null 2>&1
+if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT/d4.json" 2>/dev/null; then
+    ok=$((ok+1))
+else
+    echo "  FAIL diag-json: a mensagem com aspas quebrou o JSON"; fail=$((fail+1))
+fi
+
 echo "   protocol: $ok ok, $fail failed"
 [ $fail = 0 ] || exit 1

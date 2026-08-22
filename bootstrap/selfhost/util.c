@@ -154,36 +154,143 @@ void StrBuf_deinit(StrBuf *self) {
     self->cap = 0;
 }
 
+typedef struct Diag Diag;
+typedef struct WGroup WGroup;
+
+struct Diag {
+    const char *file;
+    int32_t line;
+    int32_t col;
+    int32_t sev;
+    const char *group;
+    const char *msg;
+};
+
+static const char *ps_dupstr(const char *s);
+
+static void json_escape(FILE *f, const char *s);
+
+Diag *g_diags = NULL;
+
+int32_t g_ndiag = 0;
+
+int32_t g_diag_cap = 0;
+
+const char *g_diag_path = NULL;
+
+void diag_json_enable(const char *path) {
+    g_diag_path = path;
+}
+
+void diag_record(const char *file, int32_t line, int32_t col, int32_t sev, const char *group, const char *msg) {
+    if (g_diag_path == NULL) {
+        return;
+    }
+    if (g_ndiag >= g_diag_cap) {
+        g_diag_cap = (g_diag_cap == 0 ? 32 : g_diag_cap * 2);
+        g_diags = (Diag *)realloc(g_diags, (size_t)g_diag_cap * sizeof(Diag));
+    }
+    g_diags[g_ndiag].file = ps_dupstr(file);
+    g_diags[g_ndiag].line = line;
+    g_diags[g_ndiag].col = col;
+    g_diags[g_ndiag].sev = sev;
+    g_diags[g_ndiag].group = ps_dupstr(group);
+    g_diags[g_ndiag].msg = ps_dupstr(msg);
+    g_ndiag += 1;
+}
+
+static const char *ps_dupstr(const char *s) {
+    if (s == NULL) {
+        return "";
+    }
+    size_t n = strlen(s);
+    char *p = (char *)malloc(n + 1);
+    memcpy(p, s, n + 1);
+    return p;
+}
+
+static void json_escape(FILE *f, const char *s) {
+    size_t i = 0;
+    while (s[i] != '\0') {
+        uint8_t c = (uint8_t)s[i];
+        if (c == (uint8_t)'"' || c == (uint8_t)'\\') {
+            fprintf(f, "\\%c", (int)c);
+        } else if (c == (uint8_t)'\n') {
+            fprintf(f, "\\n");
+        } else if (c == (uint8_t)'\t') {
+            fprintf(f, "\\t");
+        } else if (c < 0x20) {
+            fprintf(f, "\\u%04x", (int)c);
+        } else {
+            fputc((int)c, f);
+        }
+        i += 1;
+    }
+}
+
+void diag_json_flush(void) {
+    if (g_diag_path == NULL) {
+        return;
+    }
+    FILE *f = fopen(g_diag_path, "w");
+    if (f == NULL) {
+        g_diag_path = NULL;
+        return;
+    }
+    fprintf(f, "[");
+    size_t i;
+    for (i = 0; i < g_ndiag; i += 1) {
+        if (i > 0) {
+            fprintf(f, ",");
+        }
+        fprintf(f, "\n {\"file\": \"");
+        json_escape(f, g_diags[i].file);
+        fprintf(f, "\", \"line\": %d, \"col\": %d, \"severity\": \"%s\", \"group\": \"", g_diags[i].line, g_diags[i].col, (g_diags[i].sev == 2 ? "error" : "warning"));
+        json_escape(f, g_diags[i].group);
+        fprintf(f, "\", \"message\": \"");
+        json_escape(f, g_diags[i].msg);
+        fprintf(f, "\"}");
+    }
+    fprintf(f, "\n]\n");
+    fclose(f);
+    g_diag_path = NULL;
+}
+
+const const size_t DIAG_BUF = 8192;
+
 void fatal(const char *fmt, ...) {
+    char buf[8192];
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "plangc: error: ");
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
+    vsnprintf(buf, DIAG_BUF, fmt, ap);
     va_end(ap);
+    fprintf(stderr, "plangc: error: %s\n", buf);
+    diag_record("", 0, 0, 2, "", buf);
+    diag_json_flush();
     exit(1);
 }
 
 void fatal_at(const char *file, Pos pos, const char *fmt, ...) {
+    char buf[8192];
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "%s:%d:%d: error: ", file, pos.line, pos.col);
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
+    vsnprintf(buf, DIAG_BUF, fmt, ap);
     va_end(ap);
+    fprintf(stderr, "%s:%d:%d: error: %s\n", file, pos.line, pos.col, buf);
+    diag_record(file, pos.line, pos.col, 2, "", buf);
+    diag_json_flush();
     exit(1);
 }
 
 void warn_at(const char *file, Pos pos, const char *fmt, ...) {
+    char buf[8192];
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "%s:%d:%d: warning: ", file, pos.line, pos.col);
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
+    vsnprintf(buf, DIAG_BUF, fmt, ap);
     va_end(ap);
+    fprintf(stderr, "%s:%d:%d: warning: %s\n", file, pos.line, pos.col, buf);
+    diag_record(file, pos.line, pos.col, 1, "", buf);
 }
-
-typedef struct WGroup WGroup;
 
 struct WGroup {
     const char *name;
@@ -285,13 +392,15 @@ void cdiag_at(const char *file, Pos pos, const char *group, int32_t wdef, const 
     if (sev == 1 && g_wsuppress) {
         return;
     }
+    char buf[8192];
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "%s:%d:%d: %s: ", file, pos.line, pos.col, (sev == 2 ? "error" : "warning"));
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, " [-W%s]\n", group);
+    vsnprintf(buf, DIAG_BUF, fmt, ap);
     va_end(ap);
+    fprintf(stderr, "%s:%d:%d: %s: %s [-W%s]\n", file, pos.line, pos.col, (sev == 2 ? "error" : "warning"), buf, group);
+    diag_record(file, pos.line, pos.col, sev, group, buf);
     if (sev == 2) {
+        diag_json_flush();
         exit(1);
     }
     g_warn_count += 1;
