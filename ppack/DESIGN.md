@@ -270,3 +270,304 @@ tarball**, dependências (nome + faixa), dependências de sistema (2.7), a faixa
 toolchain que ele exige — e **o hash de interface** (fato 2), que é o que permite
 ao resolvedor dizer "este `patch` mudou a API pública" **antes de baixar
 qualquer coisa**. Isso último ninguém faz, e para nós é uma coluna no índice.
+
+## Como os três interagem (o cenário completo, 2026-08-22)
+
+Suas palavras: *"agora vemos como vamos casar isso com o compilador e com o
+pbuild... não bem casar, mas eles vão interagir entre si"*. Casar é a palavra
+errada mesmo: **um comando, três fases, e a rede só existe na primeira.**
+
+```
+ fase 1  RESOLVER   ppack    lê o manifesto + o lock, fala com os repositórios,
+                             baixa e VERIFICA, materializa uma árvore de pacotes
+                             ---- daqui para frente, ZERO rede ----
+ fase 2  PLANEJAR   pbuild   pergunta ao plangc (o que você lê? o que vai emitir?
+                             qual o hash de cada interface? quem você é?) e monta o grafo
+ fase 3  CONSTRUIR  pbuild   decide o que está velho, ordena, roda em paralelo
+```
+
+A regra da fase 1 é o que dá reprodutibilidade de verdade: **depois do
+`resolver`, o build é offline por construção**. É o `apt update` / `apt install`
+separados, e é o que o Cargo não tem (um `build.rs` pode ir à rede no meio da
+compilação).
+
+### As três fronteiras, e o que atravessa cada uma
+
+**`ppack` → `pbuild`: duas arestas novas e um tipo de nó novo.** O `ppack` não
+tem motor: ele acrescenta ao grafo que já existe a aresta **baixar** e a aresta
+**verificar**. E traz um nó de tipo diferente de tudo que o grafo tinha: um
+**arquivo cujo hash se conhece ANTES de existir**. Isso simplifica em vez de
+complicar — se o conteúdo daquele hash já está no armazém, a aresta não roda, e
+não há mtime nenhum para comparar. É o armazém endereçado por conteúdo que o
+`plangc run` já mantém em `~/.cache/pscript`, servindo agora a dois donos.
+
+**`ppack` → `plangc`: o compilador NUNCA ouve a palavra "versão".** A saída da
+fase 1 é uma **árvore de diretórios mais um caminho de busca**. O compilador
+resolve `import` procurando ali, como já faz com caminhos relativos, e não sabe o
+que é um pacote, um lock ou um semver. É a fronteira que impede o erro do
+`cabal`/`ghc` (o compilador aprendendo o que é uma versão) e o do `go build` (o
+compilador virando o gerenciador). Um efeito prático: **testar um pacote local é
+trocar um diretório**, sem publicar nada — o que a pesquisa lista como o ponto que
+o pip erra há vinte anos (`editable installs`).
+
+**`plangc` → `ppack`: a mesma resposta que ele já dá ao `pbuild`.** O hash de
+interface serve ao `pbuild` para não recompilar e ao `ppack` para dizer se um
+`patch` é honesto; o hash dos próprios bytes do compilador serve de chave de
+sujeira e de **trava de toolchain no lock**. Um mecanismo, três consumidores — e
+nenhum deles pede ao compilador uma decisão.
+
+### O que ainda não tem resposta, e apareceu justamente ao cruzar os três
+
+**2.7 A dependência de SISTEMA.** Um pacote P que embrulha SDL2 precisa dizer
+`-lSDL2`, os `-D` que o `plangc` usa para pré-processar o header, e o
+`pkg-config` que acha isso em cada máquina. Hoje isso está à mão no `Makefile`,
+com vinte linhas de comentário sobre o macOS. Não é código, é declaração — e é
+onde o Cargo usa `build.rs`, que decidimos não ter.
+
+**2.11 O que o build de um pacote pode RODAR.** A 1.6 (argv, sem shell) e a 2.3
+(só fonte) tiraram o script de instalação do caminho — mas se um pacote pode
+declarar uma aresta com qualquer `argv`, o vetor voltou pela porta da frente com
+outro nome. E o caso legítimo existe e está neste repositório: as tabelas Unicode
+do runtime são **geradas** (`unicase.bin`, `unicat.bin`) e entram por `embed()`.
+Então: um pacote pode declarar arestas com **ferramenta livre** (qualquer
+programa), com **ferramenta da lista** (só `plangc` e `cc`), ou **nenhuma** (só
+compilar o que existe, e quem gera commita o gerado, como nós fazemos)?
+
+**2.4 O lock e o log do build: um arquivo ou dois?** O manifest do `plangc run`
+já é os dois misturados — a chave do binário mais o hash de cada fonte lida.
+
+**2.6 A quinta pergunta do protocolo** (doc-comments + API pública em JSON, os
+pontos 1 e 3 da seção de documentação da pesquisa): entra agora, junto do hash de
+interface, ou depois? Ela tem três consumidores esperando (sujeira, semver, doc
+offline) e é a mesma travessia do compilador.
+
+## 2.4, 2.6, 2.7 e 2.11 — DECIDIDAS (2026-08-22)
+
+**2.11 — um pacote NÃO tem build próprio.** Um pacote é fonte, e o grafo dele é
+derivado dos imports. Nenhuma aresta declarada, nenhuma ferramenta, nenhum
+gerador. O vetor de `postinstall`/`setup.py`/`build.rs` não é confinado: **ele
+não existe no vocabulário**. Quem precisa de codegen publica o resultado — que é
+o que este repositório já faz com as tabelas Unicode do runtime
+(`unicase.bin`/`unicat.bin`, geradas offline e comitadas) e com o `bootstrap/`.
+
+**2.7 — a dependência de sistema é DECLARAÇÃO no manifesto, e `pkg-config` é um
+dos resolvedores dela.**
+
+E aqui há uma linha fina que vale escrever antes que ela se apague, porque a 2.11
+e a 2.7 parecem se contradizer e não se contradizem:
+
+> **O pacote declara O QUE; as nossas ferramentas decidem COMO.** Um pacote diz
+> "preciso da lib `sdl2`". Quem chama o `pkg-config` é o `ppack`/`pbuild`, não o
+> pacote — e **a lista de programas que as nossas ferramentas podem invocar é
+> fixa** (`plangc`, `cc`, `pkg-config`), não extensível por um pacote. É por isso
+> que 2.11 continua valendo: nada que venha de um pacote de terceiro decide o que
+> é executado.
+
+**2.4 — dois arquivos, um armazém.** O lock é humano, comitado e estável (o que
+resolveu, de onde, com que hash, com que toolchain); o log do build é de máquina,
+local e descartável (o que rodou, quando, quanto durou — a 1.7). Os dois apontam
+para o **mesmo** armazém endereçado por conteúdo. A razão de não unificar é
+simples: um vai para o git e o outro não.
+
+**2.6 — a quinta resposta entra junto do hash de interface.** O compilador já vai
+calcular a interface para dar o hash; devolver também a **lista** (símbolos,
+assinaturas, doc-comments) custa a serialização e resolve três coisas de uma vez:
+sujeira de build, semver **com diagnóstico** (não "mudou", e sim *o que* mudou), e
+doc offline. É a diferença entre o modelo do docs.rs (doc no caminho da
+publicação) e o do javadoc (doc como artefato opcional que alguém esquece).
+
+Consequência de escopo, e é grande: **doc-comments passam a ser sintaxe
+reconhecida pelo compilador** nas duas linguagens — o ponto 1 da seção de
+documentação da pesquisa. Isso é uma decisão de LINGUAGEM, como as quatro da 1.5,
+e precisa da sua bateria própria (qual a grafia, o que é exemplo testável, o que
+entra no JSON).
+
+### O pacote zero
+
+Simetria que cai bem e que não é enfeite: o `bootstrap/` é o pacote zero do
+**compilador** (o C gerado, comitado, que constrói o plangc numa máquina que não
+tem plangc), e o **runtime do pscript** é o pacote zero da **linguagem** — seis
+módulos e duas tabelas geradas, tudo comitado, sem build próprio, exatamente
+como a 2.11 manda. Os dois já obedecem às regras que acabamos de escrever, sem
+saber. É o melhor sinal de que as regras estão no lugar.
+
+## 2.8 e 2.9 — DECIDIDAS (2026-08-22)
+
+**2.8 — nome GLOBAL no repositório padrão, nome QUALIFICADO nos secundários.**
+`json` é o `json` do repo padrão (o nosso, quando existir); `fulano/json` é o de
+qualquer outro. O precedente exato é o Docker Hub (`nginx` vs `usuario/nginx`), e
+ele traz um erro conhecido que vale evitar de propósito:
+
+- **o problema dos nomes curtos** (o caso do podman, que virou debate de
+  segurança): se o repositório padrão é *configurável*, um nome não qualificado
+  significa "o que o SEU padrão disser" — e o mesmo `json` resolve para coisas
+  diferentes em duas máquinas. **A nossa defesa já está decidida**: o lock grava
+  o repositório resolvido e o hash, então um nome global é *fixado na primeira
+  resolução*; e trocar o padrão com um lock existente é aviso, não silêncio.
+
+E uma consequência que vem do fato 1 e que precisa estar escrita, porque é
+contraintuitiva: **qualificar resolve QUEM PUBLICA, não coexistência.**
+`oficial/json` e `fulano/json` continuam sendo, no link, dois conjuntos de
+símbolos C com os mesmos nomes — o P não decora. A 2.2 (versão única no grafo)
+continua valendo entre pacotes qualificados diferentes que exportem os mesmos
+módulos: é erro de resolução, com mensagem.
+
+**2.9 — SHA-256 e índice ASSINADO na v1.** O modelo apt completo: assina-se o
+**índice**, e cada pacote herda integridade de uma assinatura só, verificada
+contra o hash que o índice declara. Custa ~200 linhas de SHA-256 e ~500 de
+Ed25519 em P, sem dependência nova — e é o que torna HTTP simples seguro, o que
+aqui não é preferência: **não temos TLS** e, neste modelo, não precisamos.
+
+Duas coisas que essa decisão traz junto e que ainda não têm resposta:
+
+- **como a primeira chave chega** (o problema do chaveiro de distro): a chave
+  pública do repo padrão vem embutida no `ppack` — o que é honesto e faz do
+  binário do gerenciador a raiz de confiança. Chave de repo de terceiro é
+  adicionada explicitamente pelo usuário, como `apt-key`/`pacman-key`.
+- **o que exatamente é assinado**: o índice inteiro, ou o índice mais a lista de
+  hashes dos tarballs? (No apt são dois arquivos justamente por isso: o `Release`
+  assina os hashes dos `Packages`.) Vira a 2.12, e é detalhe de formato — não
+  muda mecanismo.
+
+## O que cabe dentro de um pacote (2026-08-22)
+
+Suas palavras: *"o pacote P/PSCRIPT também pode incluir arquivos C. Mas o pacote
+P não pode ter pscript; o PScript pode ter os 3."*
+
+```
+pacote C-em-P        P + C          — sem runtime
+pacote P             P + C          — sem runtime
+pacote pscript       pscript + P + C — arrasta os 6 módulos do runtime
+```
+
+**A hierarquia de conteúdo é exatamente a hierarquia de RUNTIME**, e isso não é
+coincidência: C não tem runtime, P não tem runtime, pscript tem. Então o TIPO do
+pacote é uma propriedade *verificável*, não uma convenção:
+
+- um pacote declarado P que contenha um `.psc` é **erro**, não estilo — e o
+  gerenciador pode dizer isso na publicação, não no build de quem consome;
+- daí sai um invariante do grafo de dependências: **um pacote P só pode depender
+  de pacotes P** (e do C dentro deles). O subgrafo P é sempre livre de runtime, e
+  pode ser construído sem o runtime existir. É a promessa central do P, agora
+  válida no nível de pacote e não só de arquivo.
+
+**O que o C dentro de um pacote acrescenta, e onde isso mora.** C é portátil, mas
+não é uniforme: um `.c` precisa de `-D`, `-I`, `-std`, e às vezes de um `-D` por
+sistema operacional (o `Makefile` daqui tem vinte linhas de comentário sobre os
+headers do SDL2 no macOS e os intrínsecos SIMD do Apple Silicon). Isso vai no
+mesmo lugar da 2.7 — **declaração no manifesto** — e continua não sendo build
+próprio (2.11): o pacote diz as flags, as nossas ferramentas rodam o `cc`.
+
+Vale notar um caso que já existe e que passa a ter nome: `include <stdio.h>` num
+pacote P faz o `plangc` **pré-processar** aquele header com um `cc` externo
+(`--cpp`/`PLANGC_CPP`). Ou seja, mesmo um pacote sem um único `.c` pode precisar
+de flags de pré-processador declaradas — é o que o alvo `pstudio` do `Makefile`
+faz à mão hoje.
+
+**E uma pergunta nova, que só aparece agora (2.13): quem compila o C de um
+pacote?** O `plangc` **é** um front end de C completo — aceita `.c`/`.i`, tem
+paridade de diagnósticos com o clang (155/155) e emite C89 ou QBE. Então há duas
+respostas honestas, e elas dão ecossistemas diferentes.
+
+## 2.13 — DECIDIDA: o C de um pacote é compilado pelo `plangc` (2026-08-22)
+
+Ele **já é** um front end de C completo — paridade de diagnósticos com o clang
+(155/155, com portão em `tests/clang-compare.sh`), 220/220 na c-suite, e emite
+C89 ou QBE. Então o C que vem dentro de um pacote entra pelo nosso front end, e
+isso compra três coisas que o `cc` do sistema não daria:
+
+- **o mesmo hash de interface** vale para o `.h` daquele C, e a verificação
+  automática de compatibilidade (fato 2) passa a cobrir o C do pacote também;
+- **os nossos diagnósticos** alcançam código de terceiro — o `-Wall` de quem
+  consome não para na fronteira do pacote;
+- **C89 e QBE** ficam disponíveis para o pacote inteiro, não só para a parte em P.
+
+O preço, dito com precisão: **o que o nosso front end não aceitar, não entra.** O
+placar de hoje é 220/220 na c-suite com 7 skips deliberados (documentados em
+`tests/…` como política GNU), e a máquina de referência é o clang. Um pacote que
+use uma extensão que não ingerimos falha na publicação — o que é melhor do que
+falhar na máquina de quem instala.
+
+## A árvore de pacotes na pasta de build (E, decidida)
+
+`build/pkg/<nome>-<versão>-<hash>/`, extraída uma vez do tarball verificado, e o
+`plangc` recebe isso como caminho de busca. O hash no diretório é o que faz "a
+mesma versão com conteúdo diferente" ser impossível de confundir — o furo que a
+pesquisa aponta no `requirements.txt` — e é o que permite dois checkouts do mesmo
+projeto coexistirem sem se contaminar.
+
+## 2.12 — DECIDIDA (2026-08-22): dois modos de confiança
+
+**Modo seguro (o padrão): índice assinado pelo REPO + cada versão assinada pelo
+AUTOR.** As duas assinaturas dizem coisas diferentes, e é a diferença que importa:
+a do repo diz *"este índice é meu"*, a do autor diz *"este tarball é meu"* — e com
+a segunda **o operador do repositório não pode adulterar o que hospeda**. É a
+procedência que o npm e o PyPI foram buscar depois do `event-stream`, e que a
+pesquisa lista como problema que ninguém resolveu bem.
+
+**Modo unsafe (explícito): instalar de origem desconhecida.** Suas palavras:
+*"mas um modo unsafe pra instalar de qualquer origem desconhecida (e também
+desenvolvimento)"*. É o que o `apt` tem (`--allow-unauthenticated`, repositório
+sem chave) e o cargo **não** tem — e a falta disso no cargo é o que faz todo mundo
+usar `path = "../foo"` e `[patch]` como gambiarra.
+
+O que o modo unsafe **desliga** e o que ele **mantém**:
+
+| | seguro | unsafe |
+|---|---|---|
+| assinatura do índice | exigida | dispensada |
+| assinatura do autor | exigida | dispensada |
+| **hash SHA-256 no lock** | **exigido** | **exigido** — sempre |
+| aviso na saída de cada build | — | sim, e nomeando o pacote |
+| gravado no lock | — | **sim**: um pacote unsafe fica marcado no lock, então entra em diff e em revisão |
+
+A regra que mantém isso honesto: **o hash nunca é dispensado.** Sem assinatura,
+perde-se saber *quem* publicou; não se perde saber que o conteúdo é o mesmo de
+ontem. E "unsafe" aparece no lock — quem revisa um PR vê.
+
+## O manifesto e o descritor — DECIDIDO: dois arquivos
+
+- **manifesto, DECLARATIVO** — nome, versão, dependências, dependências de
+  sistema (2.7), faixa de toolchain. É **dado**: resolver nunca executa nada;
+- **descritor, PROGRAMA** (`build.psc`) — alvos e arestas. Existe só num projeto
+  que constrói; **um pacote tem apenas o manifesto** (2.11).
+
+O precedente é exato e vale citar: o **Zig começou com `build.zig` sozinho e teve
+de acrescentar o `build.zig.zon`** declarativo — justamente porque resolução de
+dependência não pode rodar código. Nós entramos já com os dois.
+
+## Doc-comments — DECIDIDO: `"""docstring"""` nas duas linguagens
+
+A 46.3 do pscript já decidiu docstring de verdade (string como primeira instrução
+de `def`/`struct`/módulo, viva em runtime). O **P passa a ter a mesma grafia** —
+e para isso ganha string tripla, que hoje ele não tem (o `LexSpec.triple_str` do
+lexer compartilhado existe e está **desligado** para P: `selfhost/lexer.p:745`).
+
+Em P a docstring é **dropada do binário por padrão** — a promessa de zero runtime
+não admite uma `str` viva que ninguém pediu; ela vive no JSON de doc que o
+compilador responde (2.6). Duas consequências para anotar na bateria da linguagem:
+
+- **ligar `triple_str` no P** muda o lexer das duas linguagens no mesmo lugar, o
+  que é bom (uma implementação) e exige cuidado (o P é a linguagem do seed);
+- **o `.ph` continua sendo a interface** — então a docstring de uma função pública
+  em P pode aparecer no `.ph` e no `.p`, e é preciso dizer qual vale (proposta: a
+  do `.ph` vence, porque é a interface; a do `.p` documenta a implementação).
+
+## Versão — DECIDIDO: só versão EXATA na v1
+
+Cada dependência declara um número exato; atualizar é comando explícito
+(`ppack up foo`). **Não há resolvedor na v1** — e com versão única no grafo (2.2),
+um conflito é uma mensagem de erro legível ("A pede 1.2.0, B pede 1.3.0"), não uma
+busca. O que isso custa, dito na cara: **correção de segurança não chega sozinha**
+— quem publica um `1.2.1` depende de cada projeto subir à mão. O caminho de
+crescimento existe e é aditivo: MVS (o mínimo do Go) entra depois sem mudar o
+formato do lock, porque um número exato **é** um mínimo satisfeito.
+
+## 1.5(c) — DECIDIDO: público é o que não é `static`
+
+Quando um módulo pscript virar unidade de tradução, a interface é **derivada**: a
+44.4 já usa `static` para privar um nome ao módulo, e essa regra passa a valer
+também para fora. Sem sintaxe nova, e **a mesma regra do P** — uma regra a menos
+na cabeça de quem escreve nas duas linguagens. O risco assumido é exportar por
+esquecimento; o antídoto já está decidido e é automático: a **lista canónica da
+API** (o hash de interface) mostra num diff tudo que passou a ser público.

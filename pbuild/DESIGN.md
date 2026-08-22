@@ -92,8 +92,8 @@ mecanismo nenhum: o grafo é um `dict` e o pscript já lê json (41.1).
 | variáveis de ambiente | ✅ `sys.env` |
 | argumentos | ✅ `sys.argv` |
 
-**Do lado do P**, a camada de SO já estava escrita — `pstudio/psys.p`, para o
-editor: `vfs_read_all`, `vfs_write_all`, `vfs_list_dir`, `vfs_stat` (com mtime),
+**Do lado do P**, a camada de SO já estava escrita — era o `pstudio/psys.p` do
+editor (que saiu na 116, depois de virar stdlib): `vfs_read_all`, `vfs_write_all`, `vfs_list_dir`, `vfs_stat` (com mtime),
 `ps_run(cmd, out output) -> i32` (roda e captura), `ps_millis`, `ps_path_join`,
 `ps_path_dirname`, `ps_path_basename`. Ou seja: **o trabalho não é descobrir como
 fazer, é decidir onde isso mora e como o pscript o alcança.** *(Feito na bateria
@@ -110,7 +110,8 @@ do PScript onde for possível"*.
 Ou seja: `os.listdir`, `os.stat`, `os.mkdir`, `os.remove`, `os.rename`,
 `os.run` e `path.join`/`dirname`/`basename` nascem como módulos da stdlib do
 pscript (implementados em P, como `random` e `time` — 108.4), e o `psys.p` do
-pstudio deixa de ser a casa deles: ele é a fonte de onde eles saem. O pbuild e o
+pstudio deixou de ser a casa deles: ele foi a FONTE de onde eles saíram, e o
+arquivo já não existe (116). O pbuild e o
 pstudio passam a usar a MESMA camada, que é o teste de que ela está no lugar
 certo — dois consumidores diferentes, um deles gráfico e o outro paralelo.
 
@@ -573,3 +574,386 @@ E as duas regras que mantêm essa conversa saudável:
    chamada que devolve a estrutura; fora dela, uma linha por arquivo em stdout ou
    um JSON. O formato não é o mecanismo — foi essa confusão que deu ao ninja
    três formatos de arquivo para uma informação só.
+
+## 1.6b–1.6e — o modelo de `argv`, resolvido (2026-08-22)
+
+A 1.6 disse "sem shell" e não disse o resto. Medido antes de decidir: os
+harnesses de hoje usam **205 redirecionamentos, 154 pipes, 70 globs, 14 `cd`** e
+2 comandos com variável na frente — mas a maior parte disso é **relatório do
+harness**, não aresta de build: as arestas de verdade (`plangc -o`, `cc -o`,
+`qbe -o`) não precisam de `>` nenhum.
+
+**1.6b — argv LIVRE em qualquer lugar, com aprovação gravada no lock.** Uma
+aresta pode invocar qualquer programa (este repositório precisa de `qbe`, e as
+suítes usam `python3`/`node`/`clang` como oráculo — uma lista fixa deixaria tudo
+isso fora do grafo). A primeira vez que um `argv` novo aparece, ele é mostrado e
+aprovado, e a aprovação fica **no lock** — versionada, revisável em diff, e não
+uma caixinha que alguém clica e esquece.
+
+Como isso conversa com a 2.11 do ppack (*"pacote não tem build próprio"*): a
+liberdade é do mecanismo, o portão é a aprovação, e **um pacote de terceiro
+continua não declarando aresta nenhuma**. Um pacote declara O QUE precisa; as
+nossas ferramentas decidem COMO. Se algum dia um pacote puder declarar uma
+aresta, ela nasce precisando de aprovação registrada — o vetor do `postinstall`
+não tem como voltar sem passar por um diff.
+
+**1.6c — o executor já captura; a aresta diz onde gravar.** A 1.2 devolve
+`(status, saída)` de cada comando e o samurai já guarda a saída em buffer para
+não costurar linhas de jobs concorrentes. Então `> x` é um **campo da aresta**
+(`stdout: x`) que o pbuild escreve — sem shell, e sem mecanismo novo: ele já
+existe por outros dois motivos.
+
+**1.6d — glob só no DESCRITOR, com `os.listdir` ordenado; nunca na aresta.** O
+descritor é um programa: ele lista o diretório e escreve a lista no grafo. A 111
+fez o `os.listdir` ordenar de propósito ("um build e um editor querem a mesma
+lista sempre"), então o grafo sai determinístico e auditável. Um padrão dentro da
+aresta faria o hash do comando **mentir**: duas execuções com arquivos diferentes
+no disco seriam builds diferentes com o mesmo grafo.
+
+**1.6e — `env` e `cwd` declarados na aresta, e o `env` ENTRA no hash do comando.**
+O executor os aplica no spawn do filho — seguro porque ali é processo, não thread
+(a proibição de `chdir` da 111 vale para a stdlib dentro de um worker, não para
+um filho). E o `env` no hash conserta um furo que o ninja tem de verdade: hoje,
+trocar `CC=clang` por `CC=gcc` pode reaproveitar artefato silenciosamente, porque
+o hash cobre a linha de comando e não o ambiente em que ela rodou.
+
+---
+
+# O caminho QBE, o linker e o "JIT" (2026-08-22)
+
+Suas palavras: *"mais pra frente vamos incluir um linker aqui dentro também, pra
+conseguir tornar isso mais parecido com um JIT, pq já temos o QBE aqui pra
+compilar, e o pbuild deve saber compilar com qbe gerando qbe no lugar de C
+também"* — e depois: *"vou anexar o qbe com o plangc sem passar pela linguagem QBE
+em si, direto pela memória do processo (...) talvez passando a AST de um pro
+outro, ainda não decidi"*.
+
+## Medido nesta máquina: o caminho QBE já é 4× o caminho C
+
+Construindo o compilador inteiro (19 módulos), tudo **serial**:
+
+| etapa | tempo |
+|---|---|
+| `plangc --backend qbe` (19 × `.p` → `.ssa`) | 2,394 s |
+| `qbe` (19 × `.ssa` → `.s`) | 1,710 s |
+| `as` (19 × `.s` → `.o`) | 0,356 s |
+| link (`cc` dos 19 `.o`) | 0,036 s |
+| **total** | **4,50 s** |
+
+Contra o caminho C: **18,5 s serial** (0,47 de geração + 18,0 de `cc`) e **5,0 s
+com 8 núcleos**. Ou seja:
+
+> **O caminho QBE serial (4,50 s) é mais rápido que o caminho C com oito núcleos
+> (5,0 s), e 4× mais rápido que o C serial.** E ele paraleliza igual, por módulo.
+
+O binário resultante foi verificado: `plangc_qbe` compila um programa e ele roda.
+*(Nota de ruído: o `as` avisa "0xcbf29ce484222325 shortened to 0x84222325" —
+conferido, é correto: o QBE emite constante de 64 bits como dois `movl`, um com
+os 32 bits de baixo e outro com `>>32`. É aviso, não defeito; mas vai poluir o
+log de qualquer build no caminho QBE.)*
+
+## O que o linker interno compra — e o que ele NÃO compra
+
+Honestamente: **o link já custa 0,036 s.** Um linker nosso não é uma decisão de
+desempenho de build. O que ele compra é outra coisa, e é medida:
+
+| `plangc run` de um `hello.psc` | tempo |
+|---|---|
+| **frio** (gera o programa, gera os 6 módulos do runtime, `cc`, link) | **3,32 s** |
+| quente (confere o manifest e `exec`) | 0,006 s |
+
+Os 3,32 s do frio são o que separa "isto é um script" de "isto é um compilador
+que espera". No caminho QBE, com o QBE dentro do processo e o link dentro do
+processo, esse número cai para a ordem de **décimos** — e aí `plangc run` deixa
+de ser "compila e roda" e passa a ser o que você chamou de JIT. **É o caso de uso
+do linker interno: latência de invocação, não tempo de build.**
+
+E o que ele compra do lado da independência é nomeável com precisão. Hoje o
+caminho QBE precisa de **três** ferramentas externas: `qbe`, `as` e o `cc` que
+linka. O QBE dentro do processo tira uma; o linker interno tira a segunda; **o
+`as` é a última que sobra** — e só sai se o QBE ganhar emissão de objeto ou se
+escrevermos um assembler. Vale saber que `as` custa 0,356 s nos 19 módulos: é
+questão de independência, nunca de velocidade.
+
+## Anexar o QBE: as quatro formas, e o que cada uma custa
+
+O QBE são ~18 mil linhas de C (com testes e o `minic`). Ele **não tem API**: é um
+programa com estado global e um parser de texto (`parse.c`) que constrói `Fn`,
+`Blk`, `Ins`. Então "anexar" tem quatro leituras, e elas não custam o mesmo:
+
+| forma | o que muda | custo |
+|---|---|---|
+| **(1) processo separado, arquivo** (hoje) | nada | um `fork`+`exec` e dois arquivos por módulo |
+| **(2) o C do QBE compilado pelo `plangc` e linkado dentro** | um binário só; ninguém precisa de `qbe` no PATH | o nosso front end de C tem de engolir o QBE — e ele já engole a c-suite (220/220), então é medível hoje |
+| **(3) o IL vai por MEMÓRIA para o parser do QBE** | acaba o arquivo e o processo; o formato de texto continua | pequeno: o `parse.c` lê de um `FILE*`, e um buffer de memória serve |
+| **(4) passar a AST/IR direto** (a sua ideia) | acaba também o texto | welda o nosso backend às estruturas internas do QBE, que mudam entre versões dele — é um FORK mantido por nós |
+
+A minha recomendação, e o motivo é medido: **(2) + (3) compram quase tudo por
+quase nada** — um binário só, sem arquivo e sem processo — e mantêm o QBE
+*upstream*, atualizável. A (4) só se paga se o **parse** do texto for uma fatia
+grande do 1,71 s do QBE, e ele é uma fração disso (o resto é SSA, alocação de
+registrador, emissão). Ou seja: a (4) otimiza a menor parte do menor termo.
+
+Vale dizer o que (4) tem de bom e que não é velocidade: passar IR estruturado
+elimina uma classe de bug — o texto que a gente imprime e o QBE reparseia é uma
+fronteira onde erro de grafia vira erro de compilação estranho. Se algum dia o
+`.ssa` gerado divergir do que o QBE aceita, é (4) que fecha a porta.
+
+## O que isso exige do pbuild (e é uma regra, não um detalhe)
+
+**O grafo NÃO pode ter o pipeline embutido.** Os dois caminhos têm formas
+diferentes, e um deles muda de forma com a decisão acima:
+
+```
+caminho C     .p -> .c + .h -> .o -> bin      (tem header: depfile e restat valem)
+caminho QBE   .p -> .ssa -> .s -> .o -> bin   (NÃO tem header nenhum)
+QBE dentro    .p ------------> .o -> bin      (nem .ssa, nem .s)
+QBE + linker  .p ------------------> bin      (uma aresta, zero arquivo intermediário)
+```
+
+Duas consequências:
+
+- **as arestas são declaradas pelo descritor, por backend** — o executor não sabe
+  o que é "compilar", só sabe rodar aresta. É o que o Ninja acerta e o que um
+  build system com "regra de C embutida" erra;
+- **no caminho QBE não existe `.h`, logo o `depfile` não existe** — e então o
+  **hash de interface (1.5b) é o ÚNICO mecanismo de interface que sobra**. A
+  decisão que tomamos para ganhar 18 s no caminho C é a que torna o caminho QBE
+  incremental. As duas frentes convergem no mesmo mecanismo, o que é um bom sinal
+  de que ele é o certo.
+
+---
+
+# 1.3 — o esquema do grafo, com as contas na mesa (2026-08-22)
+
+Você pediu as vantagens e desvantagens de verdade. Elas dependem de dois números
+que ninguém tinha medido, então medi primeiro.
+
+## Quantas arestas tem o grafo DESTE repositório
+
+| o que | quantidade |
+|---|---|
+| fontes P/pscript (compilador, runtime, pstudio) | 78 |
+| programas de teste `.p`/`.psc` (cases, errors, pscript run/bad) | 393 |
+| c-testsuite | 220 |
+| p-suite | 192 |
+| wacct (corpus de C válido) | 1 630 |
+| **total de programas** | **~2 500** |
+
+Cada programa é 2 a 3 arestas (gerar, compilar, rodar-e-comparar). O grafo real
+deste repositório é da ordem de **6 000 arestas** — não 50, e não um milhão.
+
+## Quanto custa LER um grafo de aresta gorda (medido, em pscript)
+
+Programa de medição rodado com o `plangc run`: 2 000 arestas gordas, cada uma com
+`argv` de 8 itens, 8 entradas, 1 saída, `env` e `restat`:
+
+```
+bytes:          583 571        (583 KB de JSON para 2 000 arestas)
+gerar     (ms):       5
+json.parse(ms):      13
+percorrer (ms):       0        (2 000 arestas + 16 000 itens de argv)
+```
+
+Extrapolando para as ~6 000 arestas daqui: **~1,7 MB e ~40 ms**. Contra 0,47 s de
+geração de C e 5 a 18 s de `cc`, **ler o grafo é ruído** — 0,2 % do build mais
+rápido que existe aqui.
+
+## As três formas, agora com consequência e não com gosto
+
+### (1) Aresta gorda e autônoma
+
+Cada aresta carrega tudo: `argv`, entradas (normais/implícitas/order-only),
+saídas, `env`, `cwd`, `stdout`, `restat`, `generator`, `pool`.
+
+- **o que TIRA do motor**: a expansão de variável com escopo — as 921 linhas de
+  `parse.c`+`scan.c`+`env.c` do samurai — deixa de existir. O motor fica só com
+  grafo, sujeira, escalonador e log (os 1 546 que eu medi);
+- **fatoração**: acontece no descritor, que já decidimos ser um **programa**. Uma
+  função pscript fatora repetição melhor que qualquer mecanismo de variável, e
+  não precisa de regra de escopo nenhuma. Um segundo mecanismo de fatoração dentro
+  do grafo seria abstração duplicada;
+- **diff**: dois grafos se comparam linha a linha e a diferença é literal. No
+  modelo de regras, mudar uma regra altera mil arestas **invisivelmente** — e é
+  por isso que o ninja precisa do hash do comando no log para perceber;
+- **legibilidade**: cada aresta se explica sozinha, e "por que isto rodou?" se
+  responde lendo **um** objeto. O preço é a repetição visível: as mesmas flags
+  aparecem 6 000 vezes;
+- **custo medido**: 1,7 MB e 40 ms.
+
+### (2) Regras + arestas, como o ninja
+
+`rule cc: command = cc $ARGS -c $in -o $out`, e arestas que instanciam.
+
+- **compacto**: o grafo cai para talvez 400 KB, e é agradável de ler à mão;
+- **o que TRAZ para o motor**: expansão com escopo (variável de regra, de aresta,
+  de arquivo) — as 921 linhas. E o samurai **divergiu do ninja de propósito**
+  nessa ordem de resolução, com o README documentando a esquisitice do ninja
+  (#1516). Ou seja: é a parte da referência onde as duas implementações não
+  concordam entre si;
+- **e um detalhe que muda tudo aqui**: com as nossas decisões (`argv` em vez de
+  string de shell, `env` na aresta e no hash, `cwd`, `stdout`) uma regra teria de
+  expandir para um **vetor de argumentos** — coisa que o ninja não faz, porque
+  lá o comando é uma string para o `/bin/sh`. Seríamos obrigados a **inventar uma
+  variante** do modelo, em vez de reusar um provado;
+- **o que se perde**: a diffabilidade acima.
+
+### (3) Aresta gorda com tabela de strings
+
+Autonomia da (1), e as strings repetidas viram índices.
+
+- **economiza**: talvez 1,7 MB → 400 KB, e alguns dos 40 ms;
+- **custa**: o JSON deixa de ser legível a olho nu — que era **metade do motivo**
+  de a v1 ser JSON — e passa a existir uma segunda representação (a tabela) para
+  manter coerente;
+- **veredicto honesto**: otimiza justo o que a medição diz ser grátis.
+
+## A recomendação, e por que ela não fecha porta nenhuma
+
+**(1), aresta gorda.** Ela é a única das três que *remove* mecanismo do motor em
+vez de acrescentar, está alinhada com "o descritor é um programa", e o seu único
+custo foi medido em 40 ms num grafo de 6 000 arestas.
+
+E ela **não impede a linguagem do Ninja depois**: pela 1.8, a entrada do executor
+é a **estrutura**, e ler JSON é apenas um dos construtores dela. Um dia, um front
+end da linguagem do ninja expande regras **para arestas gordas** e o motor não
+sabe a diferença — que é exatamente a ordem certa: primeiro o mecanismo provado,
+depois o açúcar.
+
+## 1.7 — DECIDIDA: a duração entra no log, e a fila ordena por ela
+
+O ninja grava `start_time`/`end_time` por saída (`build_log.h:63`) e **não os usa
+para ordenar**: ordena por caminho crítico em **número de arestas**
+(`EdgeWeightHeuristic` devolve 1). No grafo raso deste repositório isso dá empate
+em tudo, e o `ps_lower.c` — 4,96 s de um build de 5,0 s — pode ir por último.
+Com a duração da última vez como peso, o ganho medido é de ~4 s em 5. É uma
+coluna no log e um `sort` na fila.
+
+## QBE — DECIDIDA: forma (2)+(3)
+
+O C do QBE entra pelo **nosso** front end (um binário só; ninguém precisa de
+`qbe` no PATH) e o IL vai por **buffer de memória** para o parser dele (sem
+arquivo, sem processo), mantendo o QBE *upstream* e atualizável. A forma (4)
+(passar IR estruturado) fica de fora por ora: ela otimiza o parse, que é fração
+do menor termo (1,71 s), e cobraria um fork do QBE mantido por nós.
+
+## E se em vez de JSON gerássemos NINJA? (sua pergunta, 2026-08-22)
+
+> *"se ao invés de json realmente gerássemos um código ninja junto com o C, isso
+> resolveria o bootstrap também?"*
+
+**Resolve — mas não o bootstrap que parece.** Vale separar os dois, porque a
+intuição acerta um e o outro já está resolvido:
+
+**O bootstrap do COMPILADOR não precisa disso.** Ele é hoje um comando:
+`cc bootstrap/selfhost/*.c -o plangc`. Nenhum sistema de build participa, e é a
+forma mais forte que existe. Trocar o `Makefile` de 130 linhas por um
+`build.ninja` comitado **troca `make` por `ninja`** — lateral, e `make` está em
+mais máquinas. Zerar a ferramenta externa exigiria **vendorizar o samurai** (4 306
+linhas de C, que o nosso próprio front end compila) — o que é uma decisão sobre
+carregar código de terceiro, não sobre formato.
+
+**O bootstrap do PBUILD é o que a sua ideia resolve, e resolve bem.** O pbuild é
+escrito em pscript: para construí-lo é preciso o `plangc` **e** o runtime — e se o
+pbuild fosse o único jeito de construir qualquer coisa, ele precisaria de si
+mesmo. Com um `build.ninja` **gerado e comitado**, uma máquina limpa faz:
+
+```
+cc bootstrap/selfhost/*.c -o plangc      # o seed do compilador, como hoje
+ninja      (ou samu)                     # constrói TUDO, inclusive o pbuild
+```
+
+É o mesmo truque do seed de C, um nível acima: **o artefato gerado é comitado
+para quebrar o ovo e a galinha.** Isso é bom o bastante para valer sozinho.
+
+**E tem um bônus que eu conferi na fonte dos dois:** emitir ninja dá de graça
+`-t compdb` (base de compilação em JSON, que é o que clangd e IDE consomem),
+`-t graph` (graphviz), `-t query`, `-t targets` e `-t commands` — no ninja **e** no
+samurai. Ferramental de inspeção que não custa uma linha nossa.
+
+**O custo, e é o que decide a FORMA:** no ninja, o comando é uma **string
+executada pelo `/bin/sh`**. Emitir ninja reimporta o shell, o aspeamento, o `>` e
+o `env` — tudo o que a 1.6 tirou. Mas há uma assimetria que salva o desenho:
+
+> **Gerar aspeamento é seguro; interpretar aspeamento é onde moram os bugs.**
+> Se a nossa verdade é o `argv` (vetor exato), descer para ninja é mecânico e
+> correto — nós sabemos exatamente onde cada argumento começa e termina. Se a
+> verdade fosse o texto ninja, teríamos de **parsear** de volta, e herdaríamos
+> junto a divergência documentada entre ninja e samurai na resolução de variável.
+
+Então a resposta não é "JSON ou ninja", é uma ordem:
+
+- **a verdade é a aresta gorda** (estrutura em memória; JSON quando pedido);
+- **`--emit-ninja` é uma exportação** — e é ela que quebra o bootstrap do pbuild,
+  que dá o `compdb` de graça, e que permite **usar ninja/samu como executor
+  enquanto o nosso não existe**.
+
+Essa última linha é a consequência mais prática de todas: **a v1 do pbuild pode
+ser só o DESCRITOR.** É exatamente o caminho do Meson (que nunca teve executor) e
+do muon (que emite ninja e carrega o samurai dentro). E é o recorte certo, porque
+o descritor é a metade **específica deste repositório** — a que sabe a escada, as
+seis listas e os cinco harnesses — enquanto o executor é a metade genérica, que já
+está lida e medida (1 546 linhas).
+
+## 1.3 — DECIDIDA (2026-08-22): aresta gorda é a verdade; ninja é exportação
+
+A aresta carrega tudo — `argv`, entradas nas três faixas (normal, implícita,
+order-only), saídas, `env`, `cwd`, `stdout`, `restat`, `generator`, `pool` — e o
+motor fica sem uma linha de expansão de variável. A verdade é a **estrutura**
+(JSON quando pedido, memória quando é a mesma execução — 1.8), e `--emit-ninja`
+desce dela para o texto do ninja: aspeamento **gerado** por quem sabe onde cada
+argumento começa, nunca interpretado.
+
+O que a exportação continua valendo mesmo com o executor pronto na v1: o
+`build.ninja` comitado quebra o ovo-e-galinha do pbuild numa máquina limpa, e o
+`-t compdb` de graça é o que clangd e IDE consomem.
+
+## A v1 — DECIDIDA: descritor E executor
+
+Independência desde o primeiro dia: construir este repositório não vai depender de
+`make` nem de `ninja`. O executor é a metade genérica — e ela está lida, medida e
+com desenho escolhido peça por peça:
+
+| peça do executor | de onde vem o desenho |
+|---|---|
+| nó, aresta, três faixas de entrada, dois contadores (`nblock`/`nprune`) | `samurai/graph.h`, lido |
+| os seis testes de sujeira | `ninja/src/graph.cc:222`, lido na fonte |
+| `restat` e poda | `samurai/build.c:shouldprune` + `nodedone`, ~40 linhas |
+| fila de prioridade por caminho crítico | `ninja/src/graph.h:465` — **com o nosso peso: a duração da última vez (1.7)** |
+| laço de execução | `poll` sobre um pipe por job + self-pipe de sinal → aqui é o laço da 102 com `await os.run` (1.2) |
+| saída inteira, sem costura | `samurai/build.c:jobdone` — e é o achado da 107 |
+| log | duas colunas a mais que o samurai: duração e hash de `env` |
+| `pool` | 7 linhas em `queue()` |
+
+Nada aí é pesquisa. O que é específico deste repositório — e por isso o trabalho
+de verdade — é o **descritor**: a escada `seed → s1 → s2 → out3` com ponto fixo,
+as seis listas de módulos, os cinco harnesses, os dois backends, o pstudio com
+SDL2 e os corpora de conformidade.
+
+## O hash de interface — DECIDIDO: a lista canónica da API (2026-08-22)
+
+O que se hasheia é a **lista de símbolos e assinaturas** que o compilador já vai
+emitir pela 2.6 — sem comentário, sem formatação, com ordem estável. Duas
+decisões convergem num artefato só, e a consequência prática é a que salva a
+decisão anterior: **editar uma docstring no `.ph` não recompila os 9 dependentes
+de `vecs.ph`.** É o comportamento do GHC — o `.hi` é comparado por hash de
+interface, não de arquivo.
+
+Detalhe que vale escrever porque é fino: o `.h` **continua** sendo entrada de
+arquivo da aresta de `cc` (é o que o `cc` lê, e ele não sabe distinguir
+comentário). Então mexer numa docstring **suja** a aresta de `cc` daquele módulo;
+o que o hash de API evita é a **avalanche** — os outros nove módulos não são
+tocados, e o `restat` corta o relink porque o `.o` sai idêntico.
+
+## A API do descritor — DECIDIDA: alvos de alto nível (`executable()`)
+
+O `build.psc` fala em alvos, no espírito do meson: `executable(...)`,
+`library(...)`, e o caso comum fica curto.
+
+E aqui vai o guarda-corpo, porque é justo onde o muon acumulou 1 679 linhas de
+`toolchains.c` e onde o CMake se perdeu: **a inteligência de alvo mora na
+BIBLIOTECA do descritor (pscript), não no motor.** O executor continua sabendo
+uma coisa só — rodar aresta — e `executable()` é uma função pscript que devolve
+arestas. Isso mantém o motor nos 1 546 linhas medidos, deixa o conhecimento de
+toolchain num módulo que se lê e se testa como qualquer outro, e permite (se um
+dia fizer falta) expor a aresta crua como escapatória **sem** mudar mecanismo.
