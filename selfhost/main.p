@@ -758,6 +758,9 @@ def main(argc: int, argv: **char) -> int:
         if outputs_mode:
             printf("%s\n", dest_for(&cc, out_path, out_dir, path, be, &pulled))
         m: *Module
+        # a árvore da PRÓPRIA linguagem, quando a entrada é pscript: é dela que
+        # a resposta 5 sai, e não da baixa (ver `ps_api_dump`)
+        psm_api: *PsModule = None
         if has_suffix(path, ".psc"):
             # pscript front end (50.3: one binary, the extension picks the
             # language). Its own lexer spec, grammar, tree and sema, and then it
@@ -789,6 +792,14 @@ def main(argc: int, argv: **char) -> int:
             # `--outputs` sozinho não precisa de nada disso.
             if parse_only or (query_mode and not api_mode and not deps_mode):
                 continue
+            if api_mode:
+                # UMA CÓPIA RASA, antes da sema. A sema prepende o prelúdio e
+                # funde os módulos importados no array de decls — e a interface
+                # de um módulo é o que ELE declara, não o que ele vê. A cópia
+                # guarda o array de agora; a sema troca o do original.
+                snap: *PsModule = cc.arena.alloc(sizeof(PsModule))
+                *snap = *psm
+                psm_api = snap
             ps_sema_run(&cc.arena, psm, cc.cpp, cc.pkgroots, cc.npkgroots)
             m = ps_lower(&cc.arena, psm, ps_runtime)
             if not be->pre_sema and not query_mode:
@@ -895,7 +906,10 @@ def main(argc: int, argv: **char) -> int:
         # lowering do pscript produziu
         if api_mode:
             ab: StrBuf = {0}
-            api_dump(m, &ab)
+            if psm_api != None:
+                ps_api_dump(psm_api, &ab)
+            else:
+                api_dump(m, &ab)
             fwrite(ab.data, 1, ab.len, stdout)
             ab.deinit()
         if query_mode:

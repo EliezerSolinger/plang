@@ -14,6 +14,8 @@ que faz o motor ser reutilizável em vez de ser um script com `print` no meio.
     ppack doc <alvo> [nome]   a interface de um módulo (ou de um pacote), com a
                               documentação — `alvo` é um arquivo ou o nome de um
                               pacote do workspace
+    ppack tree                os pacotes do workspace, e o que cada um puxa
+    ppack why <pacote>        quem puxou este pacote
     ppack clean               apaga o que o build produziu
     ppack help
 
@@ -30,6 +32,7 @@ import lib_targets as T
 import lib_ninja as N
 import lib_api as A
 import lib_manifest as MF
+import lib_pkg as PK
 import build_plang as BP
 
 const LOG: str = "build/log/build.log"
@@ -257,6 +260,75 @@ async def cmd_graph(query: str) -> int:
     print(G.to_json(g).rstrip())
     return 0
 
+# ---------- os pacotes ----------
+private async def mundo() -> PK.Mundo:
+    return await PK.ler_mundo(await BP.membros_do_workspace("pack.json"))
+
+async def cmd_tree() -> int:
+    """`ppack tree` — o que este projeto usa, e por dentro de quê."""
+    m = await mundo()
+    if len(m.pacotes) == 0:
+        print("nenhum pacote: este projeto não tem `pack.json` de workspace, ou ele não lista membros")
+        return 1
+    if saida_json:
+        partes: list<str> = []
+        for p in m.pacotes:
+            ds: list<str> = []
+            i = 0
+            while i < len(p.deps):
+                ds.append('{"name": ' + G.jstr(p.deps[i]) + ', "range": ' + G.jstr(p.faixas[i]) + '}')
+                i += 1
+            partes.append('{"name": ' + G.jstr(p.nome) + ', "version": ' + G.jstr(p.versao)
+                          + ', "lang": ' + G.jstr(p.lang) + ', "dir": ' + G.jstr(p.dir)
+                          + ', "deps": [' + ", ".join(ds) + ']}')
+        print('{"packages": [' + ", ".join(partes) + ']}')
+        return 0
+    print(PK.arvore(m).rstrip())
+    if len(m.faltando) > 0:
+        print("")
+        for f in m.faltando:
+            print("   FALTA: " + f)
+        return 1
+    return 0
+
+async def cmd_why(alvos: list<str>) -> int:
+    """`ppack why <pacote>` — quem o puxou.
+
+    É a pergunta que todo lock grande acaba por provocar, e a resposta tem de
+    dizer o CAMINHO e não só o nome: saber que `hash` está lá porque `map` o
+    pediu, e `map` porque o compilador o pediu, é o que permite decidir o que
+    fazer."""
+    if len(alvos) == 0:
+        print("uso: ppack why <pacote>")
+        return 2
+    alvo = alvos[0]
+    m = await mundo()
+    if m.acha(alvo) < 0:
+        print("'" + alvo + "' não é um pacote deste workspace")
+        return 1
+    quem = m.quem_puxa(alvo)
+    if saida_json:
+        ns: list<str> = []
+        for q in quem:
+            ns.append(G.jstr(q))
+        print('{"package": ' + G.jstr(alvo) + ', "pulled_by": [' + ", ".join(ns) + ']}')
+        return 0
+    p = m.pacotes[m.acha(alvo)]
+    print(p.nome + " " + p.versao + "  (" + p.lang + ", em " + p.dir + ")")
+    if len(quem) == 0:
+        print("   ninguém o puxa: ele é um membro do workspace por si")
+        return 0
+    for q in quem:
+        i = m.acha(q)
+        faixa = ""
+        j = 0
+        while j < len(m.pacotes[i].deps):
+            if m.pacotes[i].deps[j] == alvo:
+                faixa = m.pacotes[i].faixas[j]
+            j += 1
+        print("   <- " + q + " pede " + faixa)
+    return 0
+
 # ---------- doc ----------
 private async def modulo_do_pacote(alvo: str) -> str:
     """O módulo RAIZ de um pacote do workspace, se `alvo` for um nome de pacote.
@@ -411,7 +483,7 @@ def rmtree(d: str) -> int:
     return n
 
 def uso():
-    print("uso: ppack <build|test|verify|run|doc|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
 
 async def main() -> int:
     args = sys.argv[1:]
@@ -487,6 +559,10 @@ async def main() -> int:
         return await cmd_ninja(alvos, query)
     if cmd == "doc":
         return await cmd_doc(alvos, query)
+    if cmd == "tree":
+        return await cmd_tree()
+    if cmd == "why":
+        return await cmd_why(alvos)
     if cmd == "clean":
         return await cmd_clean()
     if cmd == "help":

@@ -232,5 +232,63 @@ else
     echo "  FAIL diag-json: a mensagem com aspas quebrou o JSON"; fail=$((fail+1))
 fi
 
+# ---- a resposta 5 de um módulo PSCRIPT sai da PRÓPRIA linguagem ----
+# A baixa não é a interface: ela funde o prelúdio e os módulos importados,
+# inventa um `struct` de quadro por `async def`, troca `str` por `*PsStr` e põe
+# um `*PsCtx` na frente de toda assinatura. Um hash sobre isso mudaria quando o
+# RUNTIME mudasse — e a pergunta "a minha interface mudou?" responderia errado.
+cat > "$OUT/mod.psc" <<'EOP'
+"""Um módulo de teste."""
+import path
+
+record Ponto:
+    x: int
+    y: int
+
+def area(p: Ponto, escala: float) -> int:
+    """A área."""
+    return p.x * p.y
+
+private def escondido() -> str:
+    return "não sai na API"
+
+async def tarde(n: int) -> list<str>:
+    await sleep(0.0)
+    return []
+EOP
+api=$($PLANGC --api "$OUT/mod.psc" 2>&1)
+case $api in
+    *"record Ponto {x: int, y: int}"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL api pscript: o record veio errado"; echo "$api" | head -4; fail=$((fail+1)) ;;
+esac
+case $api in
+    *"def area(Ponto, float) -> int"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL api pscript: a assinatura veio errada"; fail=$((fail+1)) ;;
+esac
+case $api in
+    *"async def tarde(int) -> list<str>"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL api pscript: o async veio errado"; fail=$((fail+1)) ;;
+esac
+# `private` não é interface
+case $api in
+    *escondido*) echo "  FAIL api pscript: um `private` saiu na API"; fail=$((fail+1)) ;;
+    *) ok=$((ok+1)) ;;
+esac
+# nem o prelúdio, nem o runtime, nem os quadros que a baixa inventa
+for ruido in "Category" "PsCtx" "PsStr" "__frame"; do
+    case $api in
+        *"$ruido"*) echo "  FAIL api pscript: '$ruido' vazou para a interface"; fail=$((fail+1)) ;;
+        *) ok=$((ok+1)) ;;
+    esac
+done
+# e a docstring continua a sair, depois do hash
+case $api in
+    *"#doc area A área."*) ok=$((ok+1)) ;;
+    *) echo "  FAIL api pscript: sem a docstring"; fail=$((fail+1)) ;;
+esac
+h1=$(echo "$api" | grep '^#hash ')
+printf '\n# um comentário no fim não muda interface nenhuma\n' >> "$OUT/mod.psc"
+check "hash pscript: um comentário NÃO muda" "$h1" "$($PLANGC --api "$OUT/mod.psc" 2>&1 | grep '^#hash ')"
+
 echo "   protocol: $ok ok, $fail failed"
 [ $fail = 0 ] || exit 1

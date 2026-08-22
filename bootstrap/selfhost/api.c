@@ -6,6 +6,7 @@
 #include "plang.h"
 #include "ast.h"
 #include "api.h"
+#include "ps_ast.h"
 #include "../packages/stl/hash.h"
 
 static void a_type(StrBuf *b, Type *t, int no_const);
@@ -497,6 +498,283 @@ static void a_doc(StrBuf *b, const char *owner, const char *name, const char *do
         i += 1;
     }
     StrBuf_putc(b, '\n');
+}
+
+static void p_type(StrBuf *b, PsType *t);
+
+static void p_func(StrBuf *b, PsFunc *f, const char *owner);
+
+static void p_type(StrBuf *b, PsType *t) {
+    if (t == NULL) {
+        StrBuf_puts(b, "void");
+        return;
+    }
+    switch (t->kind) {
+        case PT_INT: {
+            if (t->width == 0) {
+                StrBuf_puts(b, "int");
+            } else {
+                StrBuf_printf(b, "%c%d", (t->uns ? 'u' : 'i'), t->width);
+            }
+            break;
+        }
+        case PT_FLOAT: {
+            StrBuf_puts(b, (t->width == 0 ? "float" : "f32"));
+            break;
+        }
+        case PT_BOOL: {
+            StrBuf_puts(b, "bool");
+            break;
+        }
+        case PT_STR: {
+            StrBuf_puts(b, "str");
+            break;
+        }
+        case PT_ANY: {
+            StrBuf_puts(b, "any");
+            break;
+        }
+        case PT_VOID: {
+            StrBuf_puts(b, "void");
+            break;
+        }
+        case PT_NAME: {
+            if (t->qual != NULL) {
+                StrBuf_printf(b, "%s.", t->qual);
+            }
+            StrBuf_puts(b, (t->name != NULL ? t->name : "\?"));
+            break;
+        }
+        case PT_LIST: {
+            StrBuf_puts(b, "list<");
+            p_type(b, t->inner);
+            StrBuf_putc(b, '>');
+            break;
+        }
+        case PT_SET: {
+            StrBuf_puts(b, "set<");
+            p_type(b, t->inner);
+            StrBuf_putc(b, '>');
+            break;
+        }
+        case PT_DICT: {
+            StrBuf_puts(b, "dict<");
+            p_type(b, t->key);
+            StrBuf_puts(b, ", ");
+            p_type(b, t->inner);
+            StrBuf_putc(b, '>');
+            break;
+        }
+        case PT_OPT: {
+            p_type(b, t->inner);
+            StrBuf_putc(b, '\?');
+            break;
+        }
+        case PT_ARRAY: {
+            p_type(b, t->inner);
+            StrBuf_puts(b, "[]");
+            break;
+        }
+        case PT_TUPLE: {
+            StrBuf_putc(b, '(');
+            size_t i;
+            for (i = 0; i < t->nparams; i += 1) {
+                if (i > 0) {
+                    StrBuf_puts(b, ", ");
+                }
+                p_type(b, t->params[i]);
+            }
+            StrBuf_putc(b, ')');
+            break;
+        }
+        case PT_FUNC: {
+            StrBuf_puts(b, "def(");
+            size_t i;
+            for (i = 0; i < t->nparams; i += 1) {
+                if (i > 0) {
+                    StrBuf_puts(b, ", ");
+                }
+                p_type(b, t->params[i]);
+            }
+            StrBuf_puts(b, ") -> ");
+            p_type(b, t->inner);
+            break;
+        }
+        case PT_TASK: {
+            StrBuf_puts(b, "Task<");
+            p_type(b, t->inner);
+            StrBuf_putc(b, '>');
+            break;
+        }
+        case PT_WORKER: {
+            StrBuf_puts(b, "Worker<");
+            p_type(b, t->inner);
+            StrBuf_putc(b, '>');
+            break;
+        }
+        case PT_FILE: {
+            StrBuf_puts(b, "file");
+            break;
+        }
+        case PT_BUFFER: {
+            StrBuf_puts(b, "buffer");
+            break;
+        }
+        case PT_CONN: {
+            StrBuf_puts(b, "socket");
+            break;
+        }
+        case PT_PROC: {
+            StrBuf_puts(b, "proc");
+            break;
+        }
+        case PT_TIMER: {
+            StrBuf_puts(b, "timer");
+            break;
+        }
+        case PT_DYN: {
+            StrBuf_puts(b, "dyn ");
+            StrBuf_puts(b, (t->name != NULL ? t->name : "\?"));
+            break;
+        }
+        default: {
+            StrBuf_puts(b, "\?");
+            break;
+        }
+    }
+}
+
+static void p_func(StrBuf *b, PsFunc *f, const char *owner) {
+    StrBuf_puts(b, (f->is_async ? "async def " : "def "));
+    if (owner != NULL) {
+        StrBuf_printf(b, "%s.", owner);
+    }
+    StrBuf_puts(b, (f->name != NULL ? f->name : "\?"));
+    StrBuf_putc(b, '(');
+    int first = 1;
+    size_t i;
+    for (i = 0; i < f->nparams; i += 1) {
+        if (owner != NULL && i == 0 && f->params[i].name != NULL && strcmp(f->params[i].name, "self") == 0) {
+            continue;
+        }
+        if (!first) {
+            StrBuf_puts(b, ", ");
+        }
+        first = 0;
+        p_type(b, f->params[i].type);
+    }
+    StrBuf_puts(b, ") -> ");
+    p_type(b, f->ret);
+    StrBuf_putc(b, '\n');
+}
+
+static int ps_public(PsDecl *d) {
+    if (d->kind == PD_FUNC && d->func != NULL) {
+        return !d->func->is_private;
+    }
+    return !d->is_private;
+}
+
+void ps_api_dump(PsModule *m, StrBuf *b) {
+    StrBuf_printf(b, "== %s\n", m->path);
+    size_t start = b->len;
+    size_t i;
+    for (i = 0; i < m->ndecls; i += 1) {
+        PsDecl *d = m->decls[i];
+        if (!ps_public(d)) {
+            continue;
+        }
+        switch (d->kind) {
+            case PD_IMPORT: {
+                StrBuf_printf(b, "import %s\n", (d->path != NULL ? d->path : "\?"));
+                break;
+            }
+            case PD_INCLUDE: {
+                if (d->is_pmod) {
+                    StrBuf_printf(b, "import \"%s\"\n", (d->path != NULL ? d->path : "\?"));
+                } else {
+                    StrBuf_printf(b, "include <%s>\n", (d->path != NULL ? d->path : "\?"));
+                }
+                break;
+            }
+            case PD_ENUM: {
+                StrBuf_printf(b, "enum %s {", d->name);
+                size_t j;
+                for (j = 0; j < d->nitems; j += 1) {
+                    if (j > 0) {
+                        StrBuf_puts(b, ", ");
+                    }
+                    StrBuf_puts(b, d->items[j].name);
+                }
+                StrBuf_puts(b, "}\n");
+                break;
+            }
+            case PD_RECORD:
+            case PD_STRUCT: {
+                StrBuf_printf(b, "%s %s {", (d->kind == PD_RECORD ? "record" : "struct"), d->name);
+                size_t j;
+                for (j = 0; j < d->nfields; j += 1) {
+                    if (j > 0) {
+                        StrBuf_puts(b, ", ");
+                    }
+                    StrBuf_printf(b, "%s: ", d->fields[j].name);
+                    p_type(b, d->fields[j].type);
+                }
+                StrBuf_puts(b, "}\n");
+                for (j = 0; j < d->nmethods; j += 1) {
+                    if (!d->methods[j]->is_private) {
+                        p_func(b, d->methods[j], d->name);
+                    }
+                }
+                break;
+            }
+            case PD_TRAIT: {
+                StrBuf_printf(b, "trait %s\n", d->name);
+                size_t j;
+                for (j = 0; j < d->nmethods; j += 1) {
+                    p_func(b, d->methods[j], d->name);
+                }
+                break;
+            }
+            case PD_FUNC: {
+                if (d->func != NULL) {
+                    p_func(b, d->func, NULL);
+                }
+                break;
+            }
+            case PD_VAR: {
+                StrBuf_printf(b, "%s %s: ", (d->is_const ? "const" : "var"), d->name);
+                p_type(b, d->type);
+                StrBuf_putc(b, '\n');
+                break;
+            }
+            default: {
+                ;
+                break;
+            }
+        }
+    }
+    uint64_t h = hash_bytes(b->data + start, b->len - start);
+    StrBuf_printf(b, "#hash %016llx\n", h);
+    a_doc(b, NULL, ".", m->doc);
+    for (i = 0; i < m->ndecls; i += 1) {
+        PsDecl *d2 = m->decls[i];
+        if (!ps_public(d2)) {
+            continue;
+        }
+        if (d2->kind == PD_FUNC && d2->func != NULL) {
+            a_doc(b, NULL, d2->func->name, d2->func->doc);
+            continue;
+        }
+        if (d2->name == NULL) {
+            continue;
+        }
+        a_doc(b, NULL, d2->name, d2->doc);
+        size_t j;
+        for (j = 0; j < d2->nmethods; j += 1) {
+            a_doc(b, d2->name, d2->methods[j]->name, d2->methods[j]->doc);
+        }
+    }
 }
 
 void api_dump(Module *m, StrBuf *b) {

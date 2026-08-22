@@ -111,3 +111,30 @@ assert d["name"] == "dobro", d
 assert "O dobro de x." in d["doc"], d
 PY2
 echo "   pbuild-json: o fluxo de eventos e a consulta saem em JSON"
+
+# ---- `ppack tree` e `ppack why`: as consultas de PACOTE ----
+# Rodam sobre o workspace deste repositório (`packages/stl`, `packages/pui`), que
+# é o caso mais simples: dois pacotes, nenhuma dependência entre eles. A forma
+# interessante — um pacote que puxa outro — tem portão na suíte do motor, sobre a
+# fixture de `tests/pkg`.
+t=$("$OUT/ppack" tree 2>&1)
+case $t in
+    *"stl 0.1.0"*"pui 0.1.0"*) ;;
+    *) echo "  FAIL: ppack tree"; echo "$t" | head -3; exit 1 ;;
+esac
+w=$("$OUT/ppack" why pui 2>&1)
+case $w in
+    *"pui 0.1.0"*"packages/pui"*) ;;
+    *) echo "  FAIL: ppack why"; echo "$w" | head -3; exit 1 ;;
+esac
+if "$OUT/ppack" why naoexiste >/dev/null 2>&1; then
+    echo "  FAIL: ppack why devia recusar um pacote que não existe"; exit 1
+fi
+"$OUT/ppack" tree --json > "$OUT/tree.json" 2>&1
+python3 - "$OUT/tree.json" <<'PY2' || { echo "  FAIL: ppack tree --json"; exit 1; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+nomes = sorted(p["name"] for p in d["packages"])
+assert nomes == ["pui", "stl"], nomes
+PY2
+echo "   pbuild-pacotes: tree e why, no texto e em JSON"

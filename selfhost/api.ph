@@ -20,6 +20,11 @@
 # conteúdo). A lista é para semver e doc; o `.h` é do que a compilação depende.
 import "plang.ph"
 import "ast.ph"
+import "ps_ast.ph"
 
 # escreve a lista canónica de `m` em `b`, terminando com a linha `#hash <16 hex>`
 def api_dump(m: *Module, b: *StrBuf)
+# A resposta 5 de um módulo PSCRIPT, da árvore da própria linguagem: a baixa não
+# é a interface (ela funde o prelúdio, inventa quadros e põe um `*PsCtx` em toda
+# assinatura), e um hash sobre ela mudaria quando o runtime mudasse.
+def ps_api_dump(m: *PsModule, b: *StrBuf)

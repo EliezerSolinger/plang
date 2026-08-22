@@ -312,3 +312,31 @@ só se paga quando um braço está PARADO.
 
 Medido depois: `-j 8` e `-j 16` sem travar, `make build` em 70 s e
 `make pverify` em 5m27 com `-j nproc`.
+
+---
+
+## A resposta 5 de um módulo pscript sai da PRÓPRIA linguagem
+
+A API de um `.psc` era calculada sobre a árvore BAIXADA, e isso trazia três
+coisas que não são a interface de ninguém: o prelúdio e os módulos importados
+(que a baixa funde no módulo), um `struct` de quadro por `async def`, e toda
+assinatura com um `*PsCtx` na frente e `*PsStr` no lugar de `str`.
+
+Duas consequências, e a segunda é a séria:
+
+  * `ppack doc` mostrava o C, e não o pscript — o que faz a documentação de um
+    módulo pscript ser quase inútil;
+  * **o hash de interface mudava quando o RUNTIME mudava.** A pergunta que a
+    resposta 5 existe para responder — "a minha interface mudou?" — respondia
+    errado, e um consumidor que dependesse dela seria acordado por uma edição
+    no coletor.
+
+Agora há um dumper por linguagem, e o do pscript lê a árvore da própria
+linguagem: `record Rect {x: int, y: int, w: int, h: int}`,
+`async def tarde(int) -> list<str>`, `private` fora. É uma cópia rasa do módulo
+tirada ANTES da sema — a interface de um módulo é o que ELE declara, não o que
+ele vê.
+
+Portão: nove checagens em `tests/protocol.sh` — o record, a assinatura, o
+`async`, o `private` que não sai, os quatro ruídos que não podem vazar
+(`Category`, `PsCtx`, `PsStr`, `__frame`), a docstring, e a invariância do hash.

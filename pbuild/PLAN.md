@@ -93,10 +93,11 @@ funciona, e quem o instala pode rodá-la.
 **O que ainda espera decisão sua**: os campos do `pack.json`, que estão
 implementados como a proposta e são baratos de mudar.
 
-**Um limite conhecido do `ppack doc` num módulo pscript**: a resposta 5 de um
-`.psc` traz também os símbolos do runtime e do prelúdio, porque a baixa os funde
-no módulo. Para separá-los seria preciso marcar, na sema, o que veio de um
-import — está anotado e não feito.
+**A resposta 5 de um módulo pscript** passou a sair da árvore da própria
+linguagem, e não da baixa. Além de fazer o `ppack doc` mostrar pscript em vez de
+C, conserta uma coisa séria: o hash de interface de um `.psc` mudava quando o
+RUNTIME mudava, o que fazia a pergunta "a minha interface mudou?" responder
+errado.
 
 **Progresso** (atualizar a cada passo):
 

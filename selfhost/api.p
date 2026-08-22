@@ -8,6 +8,7 @@ include <string.h>
 import "plang.ph"
 import "ast.ph"
 import "api.ph"
+import "ps_ast.ph"
 import <stl/hash.ph>
 
 private def a_type(b: *StrBuf, t: *Type, no_const: bool = False)
@@ -372,6 +373,192 @@ private def a_doc(b: *StrBuf, owner: const *char, name: const *char, doc: const 
             b->putc(c)
         i += 1
     b->putc('\n')
+
+# ---------- a API de um módulo PSCRIPT ----------
+# A resposta 5 de um `.psc` sai da árvore da PRÓPRIA LINGUAGEM, e não da baixa.
+#
+# A razão é que a baixa não é a interface: ela funde o prelúdio e os módulos
+# importados, inventa um `struct` de quadro por `async def`, troca `str` por
+# `*PsStr` e põe um `*PsCtx` na frente de toda assinatura. Nada disso é o que
+# quem usa o módulo escreve, e o hash de tudo isso mudava quando o RUNTIME
+# mudava — o que faz a pergunta "a minha interface mudou?" responder errado.
+#
+# Aqui sai o que o módulo declara, com a grafia com que foi declarado.
+private def p_type(b: *StrBuf, t: *PsType)
+private def p_func(b: *StrBuf, f: *PsFunc, owner: const *char)
+
+private def p_type(b: *StrBuf, t: *PsType):
+    if t == None:
+        b->puts("void")
+        return
+    match t->kind:
+        case PT_INT:
+            if t->width == 0:
+                b->puts("int")
+            else:
+                b->printf("%c%d", 'u' if t->uns else 'i', t->width)
+        case PT_FLOAT:
+            b->puts("float" if t->width == 0 else "f32")
+        case PT_BOOL:
+            b->puts("bool")
+        case PT_STR:
+            b->puts("str")
+        case PT_ANY:
+            b->puts("any")
+        case PT_VOID:
+            b->puts("void")
+        case PT_NAME:
+            if t->qual != None:
+                b->printf("%s.", t->qual)
+            b->puts(t->name if t->name != None else "?")
+        case PT_LIST:
+            b->puts("list<")
+            p_type(b, t->inner)
+            b->putc('>')
+        case PT_SET:
+            b->puts("set<")
+            p_type(b, t->inner)
+            b->putc('>')
+        case PT_DICT:
+            b->puts("dict<")
+            p_type(b, t->key)
+            b->puts(", ")
+            p_type(b, t->inner)
+            b->putc('>')
+        case PT_OPT:
+            p_type(b, t->inner)
+            b->putc('?')
+        case PT_ARRAY:
+            p_type(b, t->inner)
+            b->puts("[]")
+        case PT_TUPLE:
+            b->putc('(')
+            for i in range(t->nparams):
+                if i > 0:
+                    b->puts(", ")
+                p_type(b, t->params[i])
+            b->putc(')')
+        case PT_FUNC:
+            b->puts("def(")
+            for i in range(t->nparams):
+                if i > 0:
+                    b->puts(", ")
+                p_type(b, t->params[i])
+            b->puts(") -> ")
+            p_type(b, t->inner)
+        case PT_TASK:
+            b->puts("Task<")
+            p_type(b, t->inner)
+            b->putc('>')
+        case PT_WORKER:
+            b->puts("Worker<")
+            p_type(b, t->inner)
+            b->putc('>')
+        case PT_FILE:
+            b->puts("file")
+        case PT_BUFFER:
+            b->puts("buffer")
+        case PT_CONN:
+            b->puts("socket")
+        case PT_PROC:
+            b->puts("proc")
+        case PT_TIMER:
+            b->puts("timer")
+        case PT_DYN:
+            b->puts("dyn ")
+            b->puts(t->name if t->name != None else "?")
+        case _:
+            b->puts("?")
+
+private def p_func(b: *StrBuf, f: *PsFunc, owner: const *char):
+    b->puts("async def " if f->is_async else "def ")
+    if owner != None:
+        b->printf("%s.", owner)
+    b->puts(f->name if f->name != None else "?")
+    b->putc('(')
+    first: bool = True
+    for i in range(f->nparams):
+        # o receptor não é parte da assinatura de quem chama
+        if owner != None and i == 0 and f->params[i].name != None and strcmp(f->params[i].name, "self") == 0:
+            continue
+        if not first:
+            b->puts(", ")
+        first = False
+        p_type(b, f->params[i].type)
+    b->puts(") -> ")
+    p_type(b, f->ret)
+    b->putc('\n')
+
+# público de um módulo pscript é o que NÃO é `private` (44.4) — a mesma noção
+# que o resto do compilador usa, e uma só para tudo
+private def ps_public(d: *PsDecl) -> bool:
+    if d->kind == PD_FUNC and d->func != None:
+        return not d->func->is_private
+    return not d->is_private
+
+def ps_api_dump(m: *PsModule, b: *StrBuf):
+    b->printf("== %s\n", m->path)
+    start: usize = b->len
+    for i in range(m->ndecls):
+        d: *PsDecl = m->decls[i]
+        if not ps_public(d):
+            continue
+        match d->kind:
+            case PD_IMPORT:
+                b->printf("import %s\n", d->path if d->path != None else "?")
+            case PD_INCLUDE:
+                if d->is_pmod:
+                    b->printf("import \"%s\"\n", d->path if d->path != None else "?")
+                else:
+                    b->printf("include <%s>\n", d->path if d->path != None else "?")
+            case PD_ENUM:
+                b->printf("enum %s {", d->name)
+                for j in range(d->nitems):
+                    if j > 0:
+                        b->puts(", ")
+                    b->puts(d->items[j].name)
+                b->puts("}\n")
+            case PD_RECORD, PD_STRUCT:
+                b->printf("%s %s {", "record" if d->kind == PD_RECORD else "struct", d->name)
+                for j in range(d->nfields):
+                    if j > 0:
+                        b->puts(", ")
+                    b->printf("%s: ", d->fields[j].name)
+                    p_type(b, d->fields[j].type)
+                b->puts("}\n")
+                for j in range(d->nmethods):
+                    if not d->methods[j]->is_private:
+                        p_func(b, d->methods[j], d->name)
+            case PD_TRAIT:
+                b->printf("trait %s\n", d->name)
+                for j in range(d->nmethods):
+                    p_func(b, d->methods[j], d->name)
+            case PD_FUNC:
+                if d->func != None:
+                    p_func(b, d->func, None)
+            case PD_VAR:
+                b->printf("%s %s: ", "const" if d->is_const else "var", d->name)
+                p_type(b, d->type)
+                b->putc('\n')
+            case _:
+                pass
+    h: u64 = hash_bytes(b->data + start, b->len - start)
+    b->printf("#hash %016llx\n", h)
+    # as docstrings DEPOIS do hash, pela mesma razão do lado P: mudar um texto
+    # de documentação não muda a interface
+    a_doc(b, None, ".", m->doc)
+    for i in range(m->ndecls):
+        d2: *PsDecl = m->decls[i]
+        if not ps_public(d2):
+            continue
+        if d2->kind == PD_FUNC and d2->func != None:
+            a_doc(b, None, d2->func->name, d2->func->doc)
+            continue
+        if d2->name == None:
+            continue
+        a_doc(b, None, d2->name, d2->doc)
+        for j in range(d2->nmethods):
+            a_doc(b, d2->name, d2->methods[j]->name, d2->methods[j]->doc)
 
 def api_dump(m: *Module, b: *StrBuf):
     b->printf("== %s\n", m->path)

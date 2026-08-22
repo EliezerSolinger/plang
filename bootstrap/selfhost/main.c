@@ -731,6 +731,7 @@ int main(int argc, char **argv) {
             printf("%s\n", dest_for(&cc, out_path, out_dir, path, be, &pulled));
         }
         Module *m;
+        PsModule *psm_api = NULL;
         if (has_suffix(path, ".psc")) {
             size_t pslen = 0;
             char *psbytes = read_entire_file(path, &pslen);
@@ -744,6 +745,11 @@ int main(int argc, char **argv) {
                     free(psbytes);
                 }
                 continue;
+            }
+            if (api_mode) {
+                PsModule *snap = Arena_alloc(&cc.arena, sizeof(PsModule));
+                *snap = *psm;
+                psm_api = snap;
             }
             ps_sema_run(&cc.arena, psm, cc.cpp, cc.pkgroots, cc.npkgroots);
             m = ps_lower(&cc.arena, psm, ps_runtime);
@@ -825,7 +831,11 @@ int main(int argc, char **argv) {
         }
         if (api_mode) {
             StrBuf ab = {0};
-            api_dump(m, &ab);
+            if (psm_api != NULL) {
+                ps_api_dump(psm_api, &ab);
+            } else {
+                api_dump(m, &ab);
+            }
             fwrite(ab.data, 1, ab.len, stdout);
             StrBuf_deinit(&ab);
         }

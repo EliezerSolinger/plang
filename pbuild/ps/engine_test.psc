@@ -17,6 +17,7 @@ import lib_ninja as N
 import lib_targets as T
 import lib_manifest as M
 import lib_api as A
+import lib_pkg as PK
 import build_plang as BP
 
 const DIR: str = "tests/out/pbuild"
@@ -555,6 +556,32 @@ async def caso_ninja():
     # comitado que muda de ordem a cada corrida é um diff por nada
     check("ninja: determinista", "True", str(N.emit(g) == txt))
 
+async def caso_pacotes():
+    """O grafo de PACOTES: a árvore e o "quem puxou" (F4).
+
+    São as duas perguntas que todo lock grande acaba por provocar, e a fixture
+    tem exactamente a forma que as torna interessantes: `txt` depende de `geo`,
+    e `cor` de ninguém."""
+    reset()
+    membros: list<str> = ["tests/pkg/geo", "tests/pkg/txt", "tests/pkg/cor"]
+    m = await PK.ler_mundo(membros)
+    check("pacotes: os três", "3", str(len(m.pacotes)))
+    check("pacotes: nada falta", "0", str(len(m.faltando)))
+    check("pacotes: quem puxa o geo", "txt", " ".join(m.quem_puxa("geo")))
+    check("pacotes: ninguém puxa o txt", "", " ".join(m.quem_puxa("txt")))
+
+    # a ÁRVORE: as raízes primeiro, e o que elas puxam por baixo
+    t = PK.arvore(m)
+    check("árvore: o txt é raiz", "True", str(t.find("txt 0.2.0") >= 0))
+    check("árvore: e o geo pendura nele", "True", str(t.find("└─ geo 0.1.0") >= 0))
+    check("árvore: o cor também é raiz", "True", str(t.find("cor 0.1.0") >= 0))
+
+    # uma dependência que ninguém oferece é dita UMA vez, com o nome de quem
+    # pediu — e não em silêncio, que é como um build começa a mentir
+    m2 = await PK.ler_mundo(["tests/pkg/txt"])
+    check("pacotes: o que falta é dito", "1", str(len(m2.faltando)))
+    check("pacotes: e diz quem pediu", "True", str(m2.faltando[0].find("geo") >= 0 and m2.faltando[0].find("txt") >= 0))
+
 async def caso_api():
     """A resposta 5 lida de volta (`lib_api.psc`): é o que faz o `ppack doc`
     existir sem um segundo leitor da linguagem — e um segundo leitor divergiria,
@@ -718,6 +745,7 @@ async def go():
     await caso_grafo_reusado()
     await caso_json()
     await caso_ninja()
+    await caso_pacotes()
     await caso_api()
     await caso_manifesto()
     await caso_limite_de_bracos()
