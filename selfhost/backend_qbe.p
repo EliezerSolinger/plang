@@ -18,9 +18,9 @@ include <stdlib.h>
 import "backend.ph"
 import "lexer.ph"
 import "vecs.ph"
-import "../stl/vec.ph"
-import "../stl/map.ph"
-import "../stl/set.ph"
+import <stl/vec.ph>
+import <stl/map.ph>
+import <stl/set.ph>
 
 def arena_qcmp(base: const *char, cls: char) -> const *char
 

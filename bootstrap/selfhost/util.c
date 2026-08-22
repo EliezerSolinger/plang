@@ -418,6 +418,15 @@ void deps_enable(void) {
     g_deps_on = 1;
 }
 
+static void path_norm_into(char *dst, const char *src);
+
+const char *path_norm(Arena *a, const char *src) {
+    size_t n = strlen(src);
+    char *dst = Arena_alloc(a, n + 2);
+    path_norm_into(dst, src);
+    return dst;
+}
+
 static void path_norm_into(char *dst, const char *src) {
     size_t cstart[256];
     size_t clen[256];

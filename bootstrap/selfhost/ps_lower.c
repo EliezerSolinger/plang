@@ -234,7 +234,7 @@ void Vec_Vec_pStmt_clear(Vec_Vec_pStmt *self);
 
 void Vec_Vec_pStmt_deinit(Vec_Vec_pStmt *self);
 
-#include "../stl/vec.h"
+#include "../packages/stl/vec.h"
 
 static int PS_STRIP_ASSERTS = 0;
 

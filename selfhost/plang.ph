@@ -85,6 +85,8 @@ def plang_host_os() -> const *char
 def path_dir(a: *Arena, path: const *char) -> const *char
 def path_join(a: *Arena, dir: const *char, rel: const *char) -> const *char
 def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *char
+# `a/../b` e `b` são o mesmo arquivo: a forma canónica de um caminho
+def path_norm(a: *Arena, src: const *char) -> const *char
 # resposta 6: o diagnóstico como DADO, além do texto (que continua a referência)
 def diag_json_enable(path: const *char)
 def diag_json_flush()

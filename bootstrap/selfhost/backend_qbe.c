@@ -8,9 +8,9 @@
 #include "backend.h"
 #include "lexer.h"
 #include "vecs.h"
-#include "../stl/vec.h"
-#include "../stl/map.h"
-#include "../stl/set.h"
+#include "../packages/stl/vec.h"
+#include "../packages/stl/map.h"
+#include "../packages/stl/set.h"
 
 const char *arena_qcmp(const char *base, char cls);
 

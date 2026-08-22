@@ -21,7 +21,7 @@ import "ps_parser.ph"
 # same questions — one table, one answer
 import "parser.ph"
 import "vecs.ph"
-import "../stl/vec.ph"
+import <stl/vec.ph>
 
 declare Vec<*PsExpr>
 implement Vec<*PsExpr>

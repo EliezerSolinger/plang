@@ -665,8 +665,8 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
       acha o `bash`.
       FALTA: os PISOS de placar (c-suite ≥ 220, wacct ≥ 741), que precisam de um
       veredicto que leia o número do placar.
-- [ ] `pack.json` de WORKSPACE na raiz (membros: `packages/*` quando existirem;
-      alvo padrão; é DADO — o painel da IDE o edita em F6)
+- [x] `pack.json` de WORKSPACE na raiz, com `packages/stl` como membro. É de lá
+      que sai a raiz de busca que TODA invocação do compilador recebe.
 
 ### Parte C — a CLI `ppack` (frente da biblioteca)
 
@@ -728,8 +728,12 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 - [ ] `Makefile` vira casca: `make` → build do seed + `ppack build`;
       `make verify` → `ppack verify`; alvos antigos apontam e avisam
 - [ ] `out/` → `build/{obj,bin,log,pkg}`; `.gitignore`; docs atualizados
-- [ ] as CINCO listas de módulos somem dos harnesses (a sexta, `RT_SRCS` no
-      compilador, morre em F7)
+- [x] **as SEIS listas de módulos do runtime morreram** — as cinco dos arreios e
+      a que vivia dentro do compilador. Todas viraram `pscript/runtime/psrt.ph`:
+      o guarda-chuva importa os headers das seis camadas e cada um tem o `.p`
+      irmão, então nomear UM arquivo traz o runtime inteiro (1.5a). A única que
+      resta é a do QBE, que não emite headers e por isso nomeia dois `.p` —
+      e a razão está escrita ao lado dela.
 
 ### Decisões finas a confirmar
 

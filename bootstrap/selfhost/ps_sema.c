@@ -7,9 +7,9 @@
 #include <ctype.h>
 #include <stdio.h>
 #include "ps_sema.h"
-#include "../stl/vec.h"
-#include "../stl/map.h"
-#include "../stl/set.h"
+#include "../packages/stl/vec.h"
+#include "../packages/stl/map.h"
+#include "../packages/stl/set.h"
 #include "ps_lower.h"
 #include "ps_parser.h"
 #include "ps_generic.h"

@@ -5,8 +5,8 @@ include <stdlib.h>
 import "backend.ph"
 import "lexer.ph"
 import "vecs.ph"
-import "../stl/vec.ph"
-import "../stl/set.ph"
+import <stl/vec.ph>
+import <stl/set.ph>
 
 
 # ---------- C precedence (parenthesizes only when needed) ----------

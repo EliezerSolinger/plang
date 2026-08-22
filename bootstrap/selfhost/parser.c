@@ -5,7 +5,7 @@
 #include <string.h>
 #include "parser.h"
 #include "vecs.h"
-#include "../stl/vec.h"
+#include "../packages/stl/vec.h"
 
 static int is_type_modifier(const char *s) {
     return strcmp(s, "unsigned") == 0 || strcmp(s, "signed") == 0 || strcmp(s, "long") == 0 || strcmp(s, "short") == 0;

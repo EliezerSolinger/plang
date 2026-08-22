@@ -15,8 +15,8 @@ import "lexer.ph"
 import "parser.ph"
 import "cfront.ph"
 import "embed.ph"
-import "../stl/map.ph"
-import "../stl/set.ph"
+import <stl/map.ph>
+import <stl/set.ph>
 
 struct Sym:
     name: const *char
@@ -6503,7 +6503,12 @@ def pkg_resolve(cc: *Cc, file: const *char, d: *Decl) -> const *char:
              d->import_path, pkg_where(&cc->arena, cc->pkgroots, cc->npkgroots))
     return ""
 
-def cc_load_module(cc: *Cc, path: const *char) -> *Module:
+def cc_load_module(cc: *Cc, path0: const *char) -> *Module:
+    # o caminho é NORMALIZADO à entrada: `selfhost/../packages/stl/vec.ph` e
+    # `packages/stl/vec.ph` são o mesmo arquivo, e carregá-lo duas vezes daria
+    # um "redefinido" que não tem nada de errado com o fonte. As duas grafias
+    # aparecem desde que um `import <pkg/x.ph>` é reescrito para relativo.
+    path: const *char = path_norm(&cc->arena, path0)
     for i in range(cc->nmods):
         if strcmp(cc->mods[i]->path, path) == 0:
             return cc->mods[i]

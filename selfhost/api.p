@@ -8,7 +8,7 @@ include <string.h>
 import "plang.ph"
 import "ast.ph"
 import "api.ph"
-import "../stl/hash.ph"
+import <stl/hash.ph>
 
 private def a_type(b: *StrBuf, t: *Type, no_const: bool = False)
 private def a_doc(b: *StrBuf, owner: const *char, name: const *char, doc: const *char)

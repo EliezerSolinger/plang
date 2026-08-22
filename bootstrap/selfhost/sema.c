@@ -12,8 +12,8 @@
 #include "parser.h"
 #include "cfront.h"
 #include "embed.h"
-#include "../stl/map.h"
-#include "../stl/set.h"
+#include "../packages/stl/map.h"
+#include "../packages/stl/set.h"
 
 typedef struct Sym Sym;
 typedef struct SInfo SInfo;
@@ -9115,7 +9115,8 @@ const char *pkg_resolve(Cc *cc, const char *file, Decl *d) {
     return "";
 }
 
-Module *cc_load_module(Cc *cc, const char *path) {
+Module *cc_load_module(Cc *cc, const char *path0) {
+    const char *path = path_norm(&cc->arena, path0);
     size_t i;
     for (i = 0; i < cc->nmods; i += 1) {
         if (strcmp(cc->mods[i]->path, path) == 0) {

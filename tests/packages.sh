@@ -98,8 +98,8 @@ print("perim:", geo_perim(3, 4))
 EOP
 RT="$OUT/rt"
 mkdir -p "$RT"
-RTSRC=""
-for m in psrt.ph psrt_types.ph psrt_mem.ph psrt_val.ph psrt_rt.ph psrt_std.ph psrt_os.ph psrt_top.ph psrt_mem.p psrt_val.p psrt_rt.p psrt_std.p psrt_os.p psrt_top.p; do RTSRC="$RTSRC pscript/runtime/$m"; done
+# 1.5(a): o guarda-chuva basta (ver a checagem 8, que é sobre isto mesmo)
+RTSRC="pscript/runtime/psrt.ph"
 if $PLANGC --out-dir "$RT" $RTSRC 2>"$OUT/rt.err" &&
    $PLANGC --pkg-path "$PKG" --out-dir "$RT" "$OUT/pprog.psc" 2>"$OUT/ps.err"; then
     if $CC -std=c11 -O0 $PSDEFS -w -o "$OUT/pprog" "$RT/$OUT/pprog.c" \
@@ -138,7 +138,7 @@ print(tons.escuro(), t2.escuro())
 EOP
 RT2="$OUT/rt2"
 mkdir -p "$RT2"
-if $PLANGC --out-dir "$RT2" pscript/runtime/psrt.ph 2>"$OUT/rt2.err" &&
+if $PLANGC --pkg-path packages --out-dir "$RT2" pscript/runtime/psrt.ph 2>"$OUT/rt2.err" &&
    $PLANGC --pkg-path "$PKG" --out-dir "$RT2" "$OUT/usa.psc" 2>"$OUT/usa.err"; then
     if $CC -std=c11 -O0 $PSDEFS -w -o "$OUT/usa" "$RT2/$OUT/usa.c" \
            "$RT2"/pscript/runtime/psrt_*.c -lm -pthread 2>>"$OUT/usa.err"; then
@@ -160,7 +160,7 @@ echo "$e" | grep -q "not found in any package root" && ok || bad "<pkg> pscript 
 # É o que faz as seis listas de módulos espalhadas pelos arreios ficarem
 # redundantes: o runtime inteiro do pscript sai de nomear o guarda-chuva dele.
 rm -rf "$OUT/fecho"
-$PLANGC --out-dir "$OUT/fecho" pscript/runtime/psrt.ph 2>"$OUT/fecho.err"
+$PLANGC --pkg-path packages --out-dir "$OUT/fecho" pscript/runtime/psrt.ph 2>"$OUT/fecho.err"
 n=$(ls "$OUT/fecho"/pscript/runtime/*.c 2>/dev/null | wc -l)
 check "1.5(a): o runtime inteiro vem de um arquivo" "6" "$n"
 

@@ -35,18 +35,18 @@ ok()   { printf '   \033[32mOK\033[0m %s\n' "${1:-}"; }
 bad()  { printf '   \033[31mFAIL\033[0m %s\n' "${1:-}"; FAIL=1; }
 
 rm -rf tests/out              # nunca deixar artefatos velhos enganarem o diagnóstico
-mkdir -p $V/{out1,out2,out3,qb1,qb2,stl}
+mkdir -p $V/{out1,out2,out3,qb1,qb2} $V/packages/stl
 
 step "1/8 seed: bootstrap C -> plangc_seed"
 if $CC $CFLAGS -o $V/plangc_seed bootstrap/selfhost/*.c 2>$V/seed.err; then ok; else bad "$(head -2 $V/seed.err)"; exit 1; fi
 
 gen() { # gen <plangc> <outdir>  — gera stl headers + selfhost C
-  # os .c gerados incluem "../stl/x.h" relativo ao próprio diretório, então os
-  # headers da stl vão para $V/stl (irmão dos outN) — o repo não é tocado
+  # os .c gerados incluem "../packages/stl/x.h" relativo ao próprio diretório,
+  # então os headers da stl vão para $V/packages/stl — o repo não é tocado
   local bin=$1 out=$2 f b
-  for f in stl/*.ph; do $bin "$f" -o $V/stl/$(basename "${f%.ph}").h 2>/dev/null || return 1; done
-  for f in selfhost/*.ph; do b=$(basename "${f%.ph}"); $bin "$f" -o $out/$b.h 2>$V/gen.err || { head -2 $V/gen.err; return 1; }; done
-  for f in selfhost/*.p;  do b=$(basename "${f%.p}");  $bin "$f" -o $out/$b.c 2>$V/gen.err || { head -2 $V/gen.err; return 1; }; done
+  for f in packages/stl/*.ph; do $bin --pkg-path packages "$f" -o $V/packages/stl/$(basename "${f%.ph}").h 2>/dev/null || return 1; done
+  for f in selfhost/*.ph; do b=$(basename "${f%.ph}"); $bin --pkg-path packages "$f" -o $out/$b.h 2>$V/gen.err || { head -2 $V/gen.err; return 1; }; done
+  for f in selfhost/*.p;  do b=$(basename "${f%.p}");  $bin --pkg-path packages "$f" -o $out/$b.c 2>$V/gen.err || { head -2 $V/gen.err; return 1; }; done
 }
 
 step "2/8 escada: seed -> s1 -> s2 -> out3"
@@ -63,7 +63,7 @@ if diff -rq $V/out2 $V/out3 >/dev/null 2>&1; then ok; else bad "$(diff -rq $V/ou
 # (é como os backends aprendem o layout); quem tem de imprimir o typedef é o
 # backend C, via Module.tdrev_*. Este gate é o que impede a volta da regressão:
 # em glibc a build passa dos dois jeitos, então o teste tem de ser sobre o TEXTO.
-leak=$(grep -l '_IO_FILE\|__sFILE\|_G_config\|__gnuc_va_list' $V/out2/*.c $V/out2/*.h $V/stl/*.h 2>/dev/null | head -3)
+leak=$(grep -l '_IO_FILE\|__sFILE\|_G_config\|__gnuc_va_list' $V/out2/*.c $V/out2/*.h $V/packages/stl/*.h 2>/dev/null | head -3)
 if [ -z "$leak" ]; then ok "sem tag interna de libc no C gerado"
 else bad "tag interna de libc no C gerado: $leak"; fi
 
@@ -80,12 +80,12 @@ done
 step "5/8 fixed point QBE"
 qfp=1
 for f in selfhost/*.p; do b=$(basename "${f%.p}")
-  $V/plangc_s2 --backend qbe "$f" -o $V/qb1/$b.ssa 2>/dev/null || qfp=0
+  $V/plangc_s2 --pkg-path packages --backend qbe "$f" -o $V/qb1/$b.ssa 2>/dev/null || qfp=0
   ./qbe/qbe $V/qb1/$b.ssa -o $V/qb1/$b.s 2>/dev/null || qfp=0
 done
 if [ $qfp = 1 ] && $CC $V/qb1/*.s -o $V/plangc_qbe 2>$V/qbe.err; then
   for f in selfhost/*.p; do b=$(basename "${f%.p}")
-    $V/plangc_qbe --backend qbe "$f" -o $V/qb2/$b.ssa 2>/dev/null || qfp=0
+    $V/plangc_qbe --pkg-path packages --backend qbe "$f" -o $V/qb2/$b.ssa 2>/dev/null || qfp=0
     diff -q $V/qb1/$b.ssa $V/qb2/$b.ssa >/dev/null 2>&1 || { qfp=0; echo "   diverge: $b.ssa"; }
   done
 else qfp=0; fi
@@ -203,13 +203,15 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
 -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H \
 -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
   export PLANGC_CPP="$CC $(pkg-config --cflags sdl2) $nosimd"
-  RT_ARGS="pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p"
-  if $V/plangc_s2 --out-dir $V/pst stl/*.ph selfhost/plang.ph selfhost/ast.ph \
+  # 1.5(a): o guarda-chuva basta — ele importa os headers das seis camadas e
+  # cada um tem o `.p` irmão
+  RT_ARGS="pscript/runtime/psrt.ph"
+  if $V/plangc_s2 --pkg-path packages --out-dir $V/pst selfhost/plang.ph selfhost/ast.ph \
        selfhost/lexer.ph pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph \
        pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p \
        pstudio/ps/shim.p pstudio/ps/hl.p selfhost/lexer.p selfhost/utf8.p selfhost/util.p \
        $RT_ARGS >$V/pstudio.log 2>&1 &&
-     $V/plangc_s2 --out-dir $V/pst pstudio/ps/app.psc >>$V/pstudio.log 2>&1 &&
+     $V/plangc_s2 --pkg-path packages --out-dir $V/pst pstudio/ps/app.psc >>$V/pstudio.log 2>&1 &&
      $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -o $V/pstudio_bin \
        $V/pst/pstudio/ps/app.c $V/pst/pscript/runtime/psrt_*.c \
        $V/pst/pstudio/ps/shim.c $V/pst/pstudio/ps/hl.c \
@@ -238,9 +240,9 @@ for f in $V/out2/*.c $V/out2/*.h; do
   b=$(basename "$f")
   cmp -s "$f" "bootstrap/selfhost/$b" || { drift=1; break; }
 done
-for f in $V/stl/*.h; do
+for f in $V/packages/stl/*.h; do
   b=$(basename "$f")
-  cmp -s "$f" "bootstrap/stl/$b" || { drift=1; break; }
+  cmp -s "$f" "bootstrap/packages/stl/$b" || { drift=1; break; }
 done
 if [ $drift = 0 ]; then ok "bootstrap/ em dia com os fontes"
 else printf '   \033[33mDRIFT\033[0m bootstrap/ difere dos fontes — regenere com: cp %s/out2/* bootstrap/selfhost/\n' "$V"; fi

@@ -18,7 +18,7 @@
 # error a pscript program gets is printed by the same code that prints P's.
 import "plang.ph"
 import "ast.ph"            # TokKind (shared vocabulary) and the P tree we lower INTO
-import "../stl/set.ph"
+import <stl/set.ph>
 
 # ---------- types ----------
 # pscript's type LATTICE is nothing like C's: `int` is arbitrary-width-checked

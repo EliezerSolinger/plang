@@ -15,8 +15,8 @@
 #include "ps_sema.h"
 #include "ps_lower.h"
 #include "api.h"
-#include "../stl/vec.h"
-#include "../stl/hash.h"
+#include "../packages/stl/vec.h"
+#include "../packages/stl/hash.h"
 #include "vecs.h"
 
 int execv(const char *path, char **argv);
@@ -93,7 +93,7 @@ static void usage(void) {
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -o <file>        output (single input only; '-' = stdout)\n");
-    fprintf(stderr, "  --out-dir <dir>  mirror each input's path under <dir> (out/stl/x.h,\n");
+    fprintf(stderr, "  --out-dir <dir>  mirror each input's path under <dir> (out/packages/stl/x.h,\n");
     fprintf(stderr, "                   out/selfhost/x.c ...): builds never touch the sources\n");
     fprintf(stderr, "  -D NAME[=VAL]    define a compile-time const (int/float/\"str\")\n");
     fprintf(stderr, "  --std=c89        emit strict C89 (C backend; default: c99)\n");

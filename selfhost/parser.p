@@ -3,7 +3,7 @@
 include <string.h>
 import "parser.ph"
 import "vecs.ph"
-import "../stl/vec.ph"
+import <stl/vec.ph>
 
 # Vec instances from the STL used by the compiler: the implements live here;
 # other modules that need them just do the declare (links against these bodies)

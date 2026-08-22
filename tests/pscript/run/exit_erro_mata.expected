@@ -1,0 +1,3 @@
+tests/pscript/run/exit_erro_mata.psc:13: error: um código negativo não é um status
+  in escolhe (tests/pscript/run/exit_erro_mata.psc)
+  in <main> (tests/pscript/run/exit_erro_mata.psc)

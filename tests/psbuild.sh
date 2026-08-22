@@ -32,15 +32,17 @@ RT=${PSBUILD_RT:-tests/out/psbuild-rt}
 src=$1; out=$2; shift 2
 
 mkdir -p "$RT"
-RTSRC=""
-for m in psrt.ph psrt_types.ph psrt_mem.ph psrt_val.ph psrt_rt.ph psrt_std.ph psrt_os.ph psrt_top.ph psrt_mem.p psrt_val.p psrt_rt.p psrt_std.p psrt_os.p psrt_top.p; do RTSRC="$RTSRC pscript/runtime/$m"; done
+# 1.5(a): o guarda-chuva basta. `psrt.ph` importa os headers das seis camadas e
+# cada um tem o `.p` irmão, então nomear UM arquivo traz o runtime inteiro — era
+# a última cópia desta lista a viver num arreio.
+RTSRC="pscript/runtime/psrt.ph"
 RTC=""
 for c in psrt_mem.c psrt_val.c psrt_rt.c psrt_std.c psrt_os.c psrt_top.c; do RTC="$RTC $RT/pscript/runtime/$c"; done
 if [ ! -f "$RT/pscript/runtime/psrt_mem.c" ]; then
-    $PLANGC --out-dir "$RT" $RTSRC
+    $PLANGC --pkg-path packages --out-dir "$RT" $RTSRC
 fi
 
-$PLANGC --out-dir "$RT" "$src"
+$PLANGC --pkg-path packages --out-dir "$RT" "$src"
 
 # `import "x.ph"` (75.3) makes the compiler emit the P module too, in the same
 # mirrored tree — those get linked in alongside

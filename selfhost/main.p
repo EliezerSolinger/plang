@@ -13,8 +13,8 @@ import "ps_parser.ph"
 import "ps_sema.ph"
 import "ps_lower.ph"
 import "api.ph"
-import "../stl/vec.ph"
-import "../stl/hash.ph"
+import <stl/vec.ph>
+import <stl/hash.ph>
 import "vecs.ph"
 
 # `execv` and `access` are POSIX and <unistd.h> is not included here (the same
@@ -60,6 +60,9 @@ private def preprocess_c(cc: *Cc, path: const *char, out out_len: usize) -> *cha
 
 # one more file for this build, unless it is already there (75.3)
 def add_input(v: *Vec<*char>, w: *Vec<*char>, path: const *char):
+    # (a normalização de caminho vive em `cc_load_module`, que é por onde todo
+    # módulo passa; aqui basta a comparação de texto, porque quem acrescenta já
+    # dá a grafia canónica)
     for i in range(v->len):
         if strcmp(v->get(i), path) == 0:
             return
@@ -94,7 +97,7 @@ private def usage():
     fprintf(stderr, "\n")
     fprintf(stderr, "options:\n")
     fprintf(stderr, "  -o <file>        output (single input only; '-' = stdout)\n")
-    fprintf(stderr, "  --out-dir <dir>  mirror each input's path under <dir> (out/stl/x.h,\n")
+    fprintf(stderr, "  --out-dir <dir>  mirror each input's path under <dir> (out/packages/stl/x.h,\n")
     fprintf(stderr, "                   out/selfhost/x.c ...): builds never touch the sources\n")
     fprintf(stderr, "  -D NAME[=VAL]    define a compile-time const (int/float/\"str\")\n")
     fprintf(stderr, "  --std=c89        emit strict C89 (C backend; default: c99)\n")
@@ -364,7 +367,7 @@ private def dest_for(cc: *Cc, out_path: const *char, out_dir: const *char, path:
         dest = cc->arena.printf("%s/%s", path_dir(&cc->arena, out_path), path_base(derive_output(&cc->arena, path, be)))
     if out_dir != None:
         # a árvore de saída ESPELHA a de fontes sob --out-dir, para os includes
-        # relativos do C emitido ("../stl/x.h") resolverem lá dentro
+        # relativos do C emitido ("../packages/stl/x.h") resolverem lá dentro
         dest = cc->arena.printf("%s/%s", out_dir, dest)
     return dest
 

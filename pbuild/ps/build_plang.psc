@@ -43,8 +43,9 @@ async def escada(c: T.Ctx) -> str:
 
     # 2) as fontes do compilador, na ordem que o `--out-dir` espelha
     fontes: list<str> = []
-    for f in T.glob("stl", ".ph"):
-        fontes.append(f)
+    # o `stl` NÃO é nomeado: ele é um pacote (`packages/stl`), os fontes o
+    # importam por `<stl/vec.ph>`, e o fecho da 1.5(a) traz os headers dele.
+    # Era a maior das listas que este descritor carregava.
     for f2 in T.glob("selfhost", ".ph"):
         fontes.append(f2)
     for f3 in T.glob("selfhost", ".p"):
@@ -52,23 +53,17 @@ async def escada(c: T.Ctx) -> str:
 
     # 3) os três degraus. Cada um usa o compilador do anterior, e é ISSO que a
     #    entrada implícita expressa.
-    c1 = T.new_ctx(c.g, BUILD, seed)
-    c1.plangc_is_built = True
-    c1.query = c.query
+    c1 = T.derivar(c, BUILD, seed)
     s1all = await T.p_modules(c1, fontes, path.join(BUILD, "s1"), [])
     s1c = T.only(s1all, ".c")
     p1 = T.cc_program(c1, path.join(BUILD, "bin/plangc_s1"), s1c, T.only(s1all, ".h"), [], [])
 
-    c2 = T.new_ctx(c.g, BUILD, p1)
-    c2.plangc_is_built = True
-    c2.query = c.query
+    c2 = T.derivar(c, BUILD, p1)
     s2all = await T.p_modules(c2, fontes, path.join(BUILD, "s2"), [])
     s2c = T.only(s2all, ".c")
     p2 = T.cc_program(c2, path.join(BUILD, "bin/plangc_s2"), s2c, T.only(s2all, ".h"), [], [])
 
-    c3 = T.new_ctx(c.g, BUILD, p2)
-    c3.plangc_is_built = True
-    c3.query = c.query
+    c3 = T.derivar(c, BUILD, p2)
     s3all = await T.p_modules(c3, fontes, path.join(BUILD, "s3"), [])
 
     # 4) o PONTO FIXO: o que o s1 gerou e o que o s2 gerou têm de ser o mesmo
@@ -337,10 +332,7 @@ async def montar(query: str) -> G.Graph:
     # UM contexto para tudo o que é pscript: o runtime é gerado e compilado uma
     # vez só, e todos os programas o compartilham. Dois contextos gerariam o
     # mesmo `.c` em dois lugares — trabalho dobrado por nada.
-    cps = T.new_ctx(g, path.join(BUILD, "psc"), PLANGC_S2)
-    cps.plangc_is_built = True
-    cps.query = query
-    cps.pkgroots = raizes
+    cps = T.derivar(c, path.join(BUILD, "psc"), PLANGC_S2)
     bins = await pscript_tudo(cps)
     editor = await pstudio(cps)
     suite = await suite_pscript(cps, bins["verdict"])

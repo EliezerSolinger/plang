@@ -77,7 +77,7 @@ struct Build:
     op: Opts
     rep: Rep
     ready: list<int>       # arestas prontas, a mais cara na frente
-    alive: int             # quantos braços estão trabalhando agora
+    rodando: int           # quantas arestas estão EM VOO agora
     fails: int
     total: int             # quantas arestas o plano vai rodar
     errs: list<str>        # higiene: o que impede o build de ser confiável
@@ -474,14 +474,18 @@ private async def finish(b: Build, e: G.Edge, ok: bool, dur_ms: int):
 # até o limite — é o que impede o paralelismo de desabar para um quando uma
 # aresta longa destranca várias.
 private async def pump(b: Build) -> int:
-    # o braço já foi CONTADO por quem o criou — ver a nota do laço lá embaixo
-    kids: list<Task<int>> = []
     while True:
         if b.fails >= b.op.keep_going:
             break
         eid = take_ready(b)
         if eid < 0:
-            break
+            # Nada PRONTO agora. Duas coisas diferentes se parecem com isto: o
+            # build acabou, ou alguém ainda está a correr e vai destrancar mais
+            # arestas quando terminar. Só a primeira é motivo para sair.
+            if b.rodando == 0:
+                break
+            await sleep(0.001)
+            continue
         e = b.g.edges[eid]
         # o diretório de uma saída tem de existir ANTES de a ferramenta rodar.
         # Ninguém declara isso num arquivo de build — nem o ninja obriga —, e o
@@ -497,6 +501,9 @@ private async def pump(b: Build) -> int:
                 if len(d2) > 0 and not path.isdir(d2):
                     os.makedirs(d2)
         b.rep.on_start(e.id, e.label())
+        # `rodando` é quantas arestas estão EM VOO. Um braço que não acha
+        # trabalho olha para ele para saber se espera ou se vai embora.
+        b.rodando += 1
         if b.op.dry_run:
             b.rep.on_end(e.id, 0, "", 0)
             await finish(b, e, True, 0)
@@ -508,23 +515,7 @@ private async def pump(b: Build) -> int:
             if r.status() != 0:
                 b.fails += 1
             await finish(b, e, r.status() == 0, ms)
-        # o pool `console` fala com o terminal e roda SOZINHO na vez dele: não
-        # acorda ninguém enquanto ele está de pé
-        if e.pool != "console":
-            while b.alive < b.op.jobs and len(b.ready) > 0 and b.fails < b.op.keep_going:
-                # o braço é contado AO SER CRIADO, e não quando ele começa a
-                # rodar. A diferença não é de estilo: criar uma tarefa não a põe
-                # a correr, então contar lá dentro deixava `alive` em 1 durante
-                # todo este laço — e o laço criava um braço POR ARESTA PRONTA.
-                # Num build limpo isso são centenas de `os.run` ao mesmo tempo,
-                # mais canos abertos do que o `poll` do runtime acompanha, e o
-                # build terminava em "deadlock: awaiting a task that nothing can
-                # finish". O `-j` não limitava nada.
-                b.alive += 1
-                kids.append(pump(b))
-    b.alive -= 1
-    if len(kids) > 0:
-        await gather(kids)
+        b.rodando -= 1
     return 0
 
 private def time_ms() -> int:
@@ -577,8 +568,24 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
     # quem decide se há trabalho é a FILA, e não o contador: o contador é
     # relatório (e a poda o diminui enquanto o build corre)
     if len(b.ready) > 0:
-        b.alive += 1        # o primeiro braço, contado aqui como todos os outros
-        await pump(b)
+        # OS BRAÇOS SÃO CRIADOS DE UMA VEZ, e não uns pelos outros.
+        #
+        # A primeira forma tinha cada braço a multiplicar-se e depois a esperar
+        # pelos filhos, o que fazia uma CADEIA de esperas aninhadas — treze
+        # `pump` na pilha com `-j 8`. Além de não limitar nada, ela travava: no
+        # fundo da cadeia alguém esperava por quem já tinha terminado, e o
+        # programa morria com "deadlock: awaiting a task that nothing can
+        # finish" depois de imprimir tudo como verde.
+        #
+        # Um POOL PLANO não tem cadeia: N braços iguais, cada um a tirar da fila
+        # até não haver mais nada em voo. Quem não acha trabalho e vê alguém a
+        # correr espera um milissegundo e olha de novo — é o preço de não ter
+        # sinalização, e ele só se paga quando um braço está OCIOSO.
+        bracos: list<Task<int>> = []
+        n = b.op.jobs if b.op.jobs > 0 else 1
+        for i in range(n):
+            bracos.append(pump(b))
+        await gather(bracos)
     await L.save(b.lg)
     ok = b.fails == 0 and len(b.errs) == 0
     rep.on_done(ok, b.fails + len(b.errs))

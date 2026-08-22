@@ -269,8 +269,33 @@ private async def modulo_do_pacote(alvo: str) -> str:
         man = path.join(r, alvo, "pack.json")
         if path.isfile(man):
             m = await MF.ler(man)
+            if len(m.raiz) == 0:
+                return ""       # pacote sem raiz: quem chama LISTA os módulos
             return path.join(r, alvo, m.raiz)
     return ""
+
+
+private async def lista_do_pacote(alvo: str) -> int:
+    """Um pacote SEM raiz é um conjunto de módulos, e o que se mostra dele é a
+    lista. O `stl` é assim: dez headers independentes, e eleger um como "a
+    interface" seria arbitrário."""
+    raizes = await BP.raizes_do_workspace("pack.json")
+    for r in raizes:
+        dir = path.join(r, alvo)
+        if not path.isfile(path.join(dir, "pack.json")):
+            continue
+        m = await MF.ler(path.join(dir, "pack.json"))
+        print("== " + alvo + " " + m.versao + "  (" + m.lang + ")")
+        if len(m.descricao) > 0:
+            print("   " + m.descricao)
+        print("")
+        for nome in sorted(os.listdir(dir)):
+            if nome.endswith(".ph") or nome.endswith(".psc"):
+                print("   " + alvo + "/" + nome)
+        print("")
+        print("   ppack doc " + alvo + "/<módulo> para a interface de um deles")
+        return 0
+    return 1
 
 private def parede(t: str) -> str:
     """A docstring, indentada. Sem isto, uma docstring de várias linhas
@@ -294,6 +319,10 @@ async def cmd_doc(alvos: list<str>, query: str) -> int:
     if not path.isfile(alvo):
         p2 = await modulo_do_pacote(alvo)
         if len(p2) == 0:
+            # pode ser um pacote SEM raiz (um conjunto de módulos), e aí o que
+            # se mostra é a lista deles
+            if len(alvos) == 1 and await lista_do_pacote(alvo) == 0:
+                return 0
             print("não achei '" + alvo + "': nem arquivo, nem pacote do workspace")
             return 1
         alvo = p2

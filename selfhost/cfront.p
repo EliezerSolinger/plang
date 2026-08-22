@@ -4,9 +4,9 @@ include <string.h>
 include <stdlib.h>
 import "cfront.ph"
 import "vecs.ph"
-import "../stl/vec.ph"
-import "../stl/set.ph"
-import "../stl/map.ph"
+import <stl/vec.ph>
+import <stl/set.ph>
+import <stl/map.ph>
 
 # type tables for the C frontend. StrSet is not generic (just import
 # set.ph; bodies come from the implement in sema.p). StrMap<*Type> is generic -> declare.

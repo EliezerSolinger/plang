@@ -10,7 +10,7 @@
 # track it. What P returns is BORROWED — static, or a buffer of its own valid
 # until the next call — and nobody frees anything.
 include <stdio.h>
-import "../../../stl/cstr.ph"
+import <stl/cstr.ph>
 
 def text_length(in s: CStr) -> i64
 def text_upper(in s: CStr) -> CStr

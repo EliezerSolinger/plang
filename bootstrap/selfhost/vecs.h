@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #include "ast.h"
-#include "../stl/vec.h"
+#include "../packages/stl/vec.h"
 
 typedef struct Vec_pExpr Vec_pExpr;
 typedef struct Vec_pStmt Vec_pStmt;

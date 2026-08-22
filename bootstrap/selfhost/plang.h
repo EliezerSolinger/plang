@@ -96,6 +96,8 @@ const char *path_join(Arena *a, const char *dir, const char *rel);
 
 const char *path_relative(Arena *a, const char *from_dir, const char *to);
 
+const char *path_norm(Arena *a, const char *src);
+
 void diag_json_enable(const char *path);
 
 void diag_json_flush(void);

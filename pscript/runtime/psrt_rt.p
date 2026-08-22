@@ -1816,8 +1816,16 @@ def ps_sys_env(ctx: *PsCtx) -> *PsDict:
     return d
 
 def ps_sys_exit(ctx: *PsCtx, code: i64):
-    # an explicit exit is an explicit exit: whatever is still running does not
-    # get a say, which is exactly what the program asked for
+    # Um erro PENDENTE não sai por esta porta em silêncio.
+    #
+    # `sys.exit(await f())` avalia o argumento antes de chamar; se `f` falhou, o
+    # código que se ia devolver nem chegou a existir, e sair com ele era sair
+    # com zero — sucesso — sem uma linha de mensagem. Um programa que morre tem
+    # de o dizer, e por qualquer porta que use.
+    if ctx != None and ps_has_exc(ctx):
+        exit(ps_report_exc(ctx))
+    # fora isso, um exit explícito é um exit explícito: o que ainda estiver a
+    # correr não tem voto, que é exactamente o que o programa pediu
     exit(int(code))
 
 # 0 running, 1 done, 2 error, 3 gone (37.3)

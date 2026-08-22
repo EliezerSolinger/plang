@@ -8,8 +8,8 @@
 #include "backend.h"
 #include "lexer.h"
 #include "vecs.h"
-#include "../stl/vec.h"
-#include "../stl/set.h"
+#include "../packages/stl/vec.h"
+#include "../packages/stl/set.h"
 
 typedef enum { PR_COMMA = 0, PR_ASSIGN = 1, PR_TERN = 2, PR_OR = 3, PR_AND = 4, PR_BOR = 5, PR_BXOR = 6, PR_BAND = 7, PR_EQ = 8, PR_REL = 9, PR_SHIFT = 10, PR_ADD = 11, PR_MUL = 12, PR_UNARY = 13, PR_POST = 14, PR_PRIM = 15 } CPrec;
 

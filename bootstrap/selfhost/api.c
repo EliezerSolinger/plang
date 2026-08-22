@@ -6,7 +6,7 @@
 #include "plang.h"
 #include "ast.h"
 #include "api.h"
-#include "../stl/hash.h"
+#include "../packages/stl/hash.h"
 
 static void a_type(StrBuf *b, Type *t, int no_const);
 

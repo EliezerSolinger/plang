@@ -261,3 +261,54 @@ tem umbrellas cujas implementações têm outro nome (`plang.ph` declara o que
 `util.p` implementa; `backend.ph` declara o que os quatro `backend_*.p`
 implementam). Não há aresta de import entre eles, então nenhuma regra de fecho os
 acha — e é para carregar esse tipo de conhecimento que um descritor existe.
+
+---
+
+## `sys.exit` com um erro pendente saía com ZERO
+
+Um erro que ninguém apanha tinha DUAS portas para sair do programa, e só uma
+delas o reportava.
+
+`sys.exit(await f())` avalia o argumento e depois chama. Se a avaliação levantou,
+o código que se ia devolver nem chegou a existir — e sair com ele era sair com
+zero, isto é, com **sucesso**, sem uma linha de mensagem. Um `ppack` que morresse
+a montar o grafo devolvia 0, e um arreio que só olhasse o status dizia que estava
+tudo bem. Custou uma investigação nesta sessão, e teria custado muitas mais
+depois.
+
+O conserto mora no runtime, e o que ele tem de bom é ter **uma mensagem só**: o
+relatório de um erro não apanhado saiu do epílogo para uma função própria
+(`ps_report_exc`), e as duas portas — o fim normal e o `sys.exit` — chamam a
+mesma. Duas portas, um relatório.
+
+O caminho normal não muda: `sys.exit(0)` continua a devolver o número pedido, que
+é o que faz uma ferramenta de linha de comando ser usável dentro de um script.
+
+Portões: `tests/pscript/run/exit_erro.psc` (o caminho normal e o erro apanhado) e
+`exit_erro_mata.psc` (o par: a mensagem com a pilha, e o status 1 — com um
+arquivo `.exit` a cobrar o status).
+
+---
+
+## Os braços do executor: de uma CADEIA para um pool plano
+
+A primeira forma tinha cada braço a multiplicar-se e depois a esperar pelos
+filhos. Com `-j 8` isso não dava oito braços lado a lado: dava uma CADEIA de
+esperas aninhadas — treze `pump` na pilha, cada um à espera do de baixo. E no
+fundo dela alguém esperava por quem já tinha terminado: o programa morria com
+"deadlock: awaiting a task that nothing can finish" **depois de imprimir todas
+as arestas como verdes**.
+
+O conserto de contar o braço ao ser CRIADO (e não quando ele começa a correr)
+resolveu o limite, mas não a cadeia. A forma certa é a que todo executor usa: um
+POOL PLANO. N braços iguais, criados de uma vez, cada um a tirar da fila até não
+haver mais nada em voo.
+
+Um braço que não acha trabalho tem de distinguir duas coisas que se parecem: o
+build acabou, ou alguém ainda está a correr e vai destrancar mais arestas. É o
+que o contador `rodando` responde. Quando há trabalho em voo, o braço ocioso
+espera um milissegundo e olha de novo — é o preço de não ter sinalização, e ele
+só se paga quando um braço está PARADO.
+
+Medido depois: `-j 8` e `-j 16` sem travar, `make build` em 70 s e
+`make pverify` em 5m27 com `-j nproc`.

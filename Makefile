@@ -60,9 +60,11 @@ verify-quick:
 # rebuild the compiler from its own Plang source using the seed compiler,
 # then build that — proves the release still self-hosts on this machine.
 # out/ espelha a raiz do projeto (imports relativos ao arquivo resolvem no
-# espelho): out/selfhost/*.c+h e out/stl/*.h — os fontes nunca são tocados
+# espelho): out/selfhost/*.c+h e out/packages/stl/*.h — os fontes nunca são
+# tocados. O `stl` já não é nomeado: ele é um PACOTE, e vem pelo fecho dos
+# imports (`import <stl/vec.ph>` + 1.5a)
 selfhost: plangc
-	./plangc --out-dir out stl/*.ph selfhost/*.ph selfhost/*.p
+	./plangc --pkg-path packages --out-dir out selfhost/*.ph selfhost/*.p
 	$(CC) $(CFLAGS) -w -o plangc2 out/selfhost/*.c
 	@mkdir -p out/bin
 	@ln -sf ../../plangc2 out/bin/pscript
@@ -86,11 +88,11 @@ PSTUDIO_DEPS = selfhost/lexer.p selfhost/utf8.p selfhost/util.p
 pstudio pstudio-ps: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS) $(SDL2_NOSIMD)
 pstudio pstudio-ps: plangc
 	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
-	./plangc --out-dir out stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph \
+	./plangc --pkg-path packages --out-dir out selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph \
 	         pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph \
 	         $(PSTUDIO_DRIVER) $(PSTUDIO_DEPS) \
-	         pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p
-	./plangc --out-dir out pstudio/ps/app.psc
+	         pscript/runtime/psrt.ph
+	./plangc --pkg-path packages --out-dir out pstudio/ps/app.psc
 	@mkdir -p out/bin
 	$(CC) $(CFLAGS) -w $(PSDEFS) -o out/bin/pstudio-ps \
 	      out/pstudio/ps/app.c out/pscript/runtime/psrt_mem.c out/pscript/runtime/psrt_val.c out/pscript/runtime/psrt_rt.c out/pscript/runtime/psrt_std.c out/pscript/runtime/psrt_os.c out/pscript/runtime/psrt_top.c \
@@ -138,7 +140,7 @@ pninja: $(PPACK)
 	./$(PPACK) ninja build.ninja --query ./plangc
 
 clean:
-	rm -rf plangc plangc2 out build tests/out stl/*.h .hello .hello.p .hello.c
+	rm -rf plangc plangc2 out build tests/out .hello .hello.p .hello.c
 
 .PHONY: check test test-qbe test-c89 verify verify-quick selfhost pstudio pstudio-ps \
         ppack build ptest pverify pninja clean

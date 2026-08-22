@@ -40,7 +40,7 @@ declare Vec<*PsFunc>   # implemented in ps_sema.p
 declare Vec<*PsExpr>   # implemented in ps_parser.p
 declare Vec<*PsDecl>   # implemented in ps_sema.p
 declare Vec<Vec<*Stmt>>
-import "../stl/vec.ph"
+import <stl/vec.ph>
 
 # 46.4: `assert` is strippable by a build flag, the way Python's `-O` strips it.
 # The switch lives here rather than in the statement lowering so that ONE place

@@ -59,6 +59,22 @@ def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # que o bootstrap já faz: o seed compila os fontes de hoje.
     return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [])
 
+def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
+    """Um contexto FILHO: outro diretório, outro compilador, e o resto herdado.
+
+    Existe porque o resto se esquece. As raízes de pacote, o alvo e as flags do
+    `cc` são do PROJETO, não do degrau — e um contexto novo que não as herdasse
+    perguntaria ao compilador sem lhe dizer onde estão os pacotes, o que dá uma
+    resposta vazia e um grafo que constrói nada com sucesso. Foi exatamente o
+    que aconteceu no dia em que o `stl` virou pacote."""
+    n = new_ctx(c.g, outdir, plangc)
+    n.query = c.query
+    n.pkgroots = c.pkgroots
+    n.target = c.target
+    n.cflags = c.cflags
+    n.plangc_is_built = True
+    return n
+
 # ---------- perguntar ao compilador ----------
 # As respostas 1 e 3 do protocolo, usadas onde elas existem para ser usadas: o
 # descritor não reimplementa a resolução de `import` — ele PERGUNTA. Uma segunda
@@ -228,8 +244,17 @@ async def p_modules(c: Ctx, srcs: list<str>, outdir: str, flags: list<str>) -> l
     antes, e o build falharia na primeira compilação — ou pior, usaria um header
     velho que sobrou."""
     out: list<str> = []
+    vistos: dict<str, int> = {}
     for s in srcs:
         for o in await p_module(c, s, outdir, flags):
+            # a lista é um CONJUNTO. Desde a 1.5(a) o mesmo arquivo aparece por
+            # dois caminhos — compilar `psrt.ph` já emite os seis `.c` das
+            # camadas, e compilar cada `.p` deles devolve o seu outra vez —, e
+            # uma repetição aqui vira uma segunda aresta a produzir o mesmo `.o`,
+            # que é o grafo que o motor recusa.
+            if o in vistos:
+                continue
+            vistos[o] = 1
             out.append(o)
     return out
 

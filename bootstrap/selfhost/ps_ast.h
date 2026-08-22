@@ -4,7 +4,7 @@
 
 #include "plang.h"
 #include "ast.h"
-#include "../stl/set.h"
+#include "../packages/stl/set.h"
 
 typedef enum { PT_UNKNOWN = 0, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_NAME, PT_LIST, PT_DICT, PT_SET, PT_ARRAY, PT_TUPLE, PT_OPT, PT_FUNC, PT_TASK, PT_WORKER, PT_FILE, PT_BUFFER, PT_CONN, PT_PROC, PT_TIMER, PT_DYN, PT_VOID } PsTypeKind;
 

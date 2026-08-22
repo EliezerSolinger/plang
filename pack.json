@@ -1,0 +1,4 @@
+{
+  "members": ["packages/stl"],
+  "default": "build/bin/ppack"
+}

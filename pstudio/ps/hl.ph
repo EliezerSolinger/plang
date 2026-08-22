@@ -22,7 +22,7 @@
 # números — e o texto do token não volta: quem quer o nome de um identificador
 # fatia o próprio texto pela (linha, coluna, comprimento), que ele já tem.
 include <stddef.h>
-import "../../stl/cstr.ph"
+import <stl/cstr.ph>
 
 # ---- as classes de EXIBIÇÃO ----
 HLC_TEXT: const i32 = 0

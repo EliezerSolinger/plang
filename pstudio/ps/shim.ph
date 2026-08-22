@@ -9,7 +9,7 @@
 # The editor's LOGIC lives on the other side, in pscript: buffer, carets, undo,
 # search, layout, key bindings. This file is the hand that holds the screen.
 include <stddef.h>
-import "../../stl/cstr.ph"
+import <stl/cstr.ph>
 
 # ---- the window ----
 def shim_open(w: i32, h: i32) -> bool

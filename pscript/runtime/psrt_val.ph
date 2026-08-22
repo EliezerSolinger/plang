@@ -216,6 +216,8 @@ def ps_err_new(ctx: *PsCtx, msg: *PsStr, cat: i64, file: const *char, line: i32)
 # re-raises an error that was caught: `raise e`
 def ps_reraise(ctx: *PsCtx, e: *PsErr)
 def ps_has_exc(ctx: *PsCtx) -> bool
+# o relatório de um erro não apanhado, e o status que ele vira (1)
+def ps_report_exc(ctx: *PsCtx) -> int
 # CLEARS the flag and hands the error over — what `catch` does
 def ps_take_exc(ctx: *PsCtx) -> *PsErr
 def ps_err_message(e: *PsErr) -> *PsStr

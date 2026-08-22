@@ -2859,6 +2859,28 @@ def ps_reraise(ctx: *PsCtx, e: *PsErr):
 def ps_has_exc(ctx: *PsCtx) -> bool:
     return ctx->exc != None
 
+# O RELATÓRIO de um erro que ninguém apanhou, e o status que ele vira.
+#
+# Mora aqui, e não no epílogo, porque há DUAS portas por onde um programa sai
+# com um erro pendente: o fim normal (`ps_ctx_done`) e um `sys.exit` explícito.
+# A segunda passava direto — o `exit` corria com o código que o programa ia
+# devolver e que nem chegou a ser calculado, e o processo saía com 0 e sem
+# mensagem nenhuma. Um `sys.exit(await f())` em que `f` falha reportava SUCESSO.
+def ps_report_exc(ctx: *PsCtx) -> int:
+    if ctx == None or ctx->exc == None:
+        return 0
+    e: *PsErr = ctx->exc
+    # o que o programa imprimiu vem primeiro: com o stdout em blocos (um cano,
+    # um arquivo) o erro ultrapassá-lo-ia
+    fflush(stdout)
+    fprintf(stderr, "%s:%d: error: %s\n", e->file if e->file != None else "?", e->line, e->msg->data if e->msg != None else "")
+    # a pilha em que o erro NASCEU (15.2/34.2), de dentro para fora
+    for i in range(e->tr_n):
+        fprintf(stderr, "  in %s (%s)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?")
+    if e->tr_lost > 0:
+        fprintf(stderr, "  ... and %d more\n", e->tr_lost)
+    return 1
+
 def ps_take_exc(ctx: *PsCtx) -> *PsErr:
     e: *PsErr = ctx->exc
     ctx->exc = None

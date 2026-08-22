@@ -7,7 +7,7 @@
 #include "ps_parser.h"
 #include "parser.h"
 #include "vecs.h"
-#include "../stl/vec.h"
+#include "../packages/stl/vec.h"
 
 typedef struct Vec_pPsExpr Vec_pPsExpr;
 typedef struct Vec_pPsStmt Vec_pPsStmt;

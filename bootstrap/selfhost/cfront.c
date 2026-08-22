@@ -6,9 +6,9 @@
 #include <stdlib.h>
 #include "cfront.h"
 #include "vecs.h"
-#include "../stl/vec.h"
-#include "../stl/set.h"
-#include "../stl/map.h"
+#include "../packages/stl/vec.h"
+#include "../packages/stl/set.h"
+#include "../packages/stl/map.h"
 
 typedef struct StrMap_pType StrMap_pType;
 typedef struct StrMap_i64 StrMap_i64;

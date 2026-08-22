@@ -27,9 +27,9 @@ include <stdlib.h>
 include <ctype.h>
 include <stdio.h>
 import "ps_sema.ph"
-import "../stl/vec.ph"
-import "../stl/map.ph"
-import "../stl/set.ph"
+import <stl/vec.ph>
+import <stl/map.ph>
+import <stl/set.ph>
 import "ps_lower.ph"
 import "ps_parser.ph"
 import "ps_generic.ph"

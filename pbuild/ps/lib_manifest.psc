@@ -167,14 +167,18 @@ async def ler(caminho: str) -> Manifesto:
         erro(m, raw, "version", "versão: três números, `x.y.z` (veio '" + m.versao + "')")
     if m.lang != "p" and m.lang != "pscript":
         erro(m, raw, "lang", "lang: `p` ou `pscript` (veio '" + m.lang + "')")
-    if len(m.raiz) == 0:
-        erro(m, raw, "root", "root: o módulo que é a INTERFACE do pacote")
-    if m.lang == "p" and m.raiz.endswith(".psc"):
-        # a regra que faz um pacote P ser utilizável por quem não tem runtime
-        erro(m, raw, "root", "um pacote `p` não tem módulo pscript: a raiz é um `.ph`")
+    # `root` é OPCIONAL, e o `stl` é a razão: são dez `.ph` independentes
+    # (vec, str, dict, map, set, list, queue, slice, hash, traits) e nenhum deles
+    # é "a interface". Eleger um seria arbitrário e confundiria quem lesse. Um
+    # pacote pode ser um CONJUNTO de módulos — e quem quiser `import <pkg>` (a
+    # forma curta) é que precisa de uma raiz com o nome do pacote.
     dirp = path.dirname(caminho)
-    if not path.isfile(path.join(dirp, m.raiz)):
-        erro(m, raw, "root", "a raiz '" + m.raiz + "' não existe em " + dirp)
+    if len(m.raiz) > 0:
+        if m.lang == "p" and m.raiz.endswith(".psc"):
+            # a regra que faz um pacote P ser utilizável por quem não tem runtime
+            erro(m, raw, "root", "um pacote `p` não tem módulo pscript: a raiz é um `.ph`")
+        if not path.isfile(path.join(dirp, m.raiz)):
+            erro(m, raw, "root", "a raiz '" + m.raiz + "' não existe em " + dirp)
     for dp in m.deps:
         if not nome_ok(dp.nome):
             erro(m, raw, "deps", "dependência com nome inválido: '" + dp.nome + "'")

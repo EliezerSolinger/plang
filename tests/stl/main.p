@@ -1,15 +1,15 @@
 # teste da STL: Vec<T>, Map<K,V>, StrMap<V>, Str, hash — tudo header-only
 include <stdio.h>
 include <string.h>
-import "../../stl/vec.ph"
-import "../../stl/map.ph"
-import "../../stl/str.ph"
-import "../../stl/set.ph"
-import "../../stl/queue.ph"
-import "../../stl/slice.ph"
-import "../../stl/dict.ph"
-import "../../stl/list.ph"
-import "../../stl/traits.ph"
+import <stl/vec.ph>
+import <stl/map.ph>
+import <stl/str.ph>
+import <stl/set.ph>
+import <stl/queue.ph>
+import <stl/slice.ph>
+import <stl/dict.ph>
+import <stl/list.ph>
+import <stl/traits.ph>
 
 declare Vec<int>
 implement Vec<int>

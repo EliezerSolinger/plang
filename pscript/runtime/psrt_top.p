@@ -36,23 +36,9 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
     ps_join_all(ctx)
     # An exception that reaches the top of the program is reported and becomes
     # the exit status — the same shape CPython gives an uncaught error.
-    rc: int = 0
-    if ctx->exc != None:
-        e: *PsErr = ctx->exc
-        # whatever the program printed comes first: with stdout block-buffered
-        # (a pipe, a file) the error would otherwise overtake it
-        fflush(stdout)
-        fprintf(stderr, "%s:%d: error: %s\n", e->file if e->file != None else "?", e->line, e->msg->data if e->msg != None else "")
-        # the stack the error was RAISED in (15.2/34.2), innermost first. A
-        # function with nothing collected in it has no frame to be named in
-        # (49.4's leaf optimisation), so what is printed is what the shadow
-        # stack knew — never a guess.
-        for i in range(e->tr_n):
-            fprintf(stderr, "  in %s (%s)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?")
-        if e->tr_lost > 0:
-            fprintf(stderr, "  ... and %d more\n", e->tr_lost)
-        rc = 1
-    return rc
+    # o relatório é o mesmo do `sys.exit` com erro pendente, e por isso mora num
+    # sítio só (`ps_report_exc`, em `psrt_val.p`): duas portas, uma mensagem.
+    return ps_report_exc(ctx)
 # ... and this half gives the world back. Called from the entry point's first
 # defer, so it is the last thing that happens in the process.
 def ps_ctx_free(ctx: *PsCtx):

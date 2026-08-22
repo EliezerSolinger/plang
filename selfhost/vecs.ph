@@ -3,7 +3,7 @@
 # the bodies (`implement`) live in vecs.p (one per binary). This decouples:
 # the C frontend and the backends use these Vecs without depending on P's parser.
 import "ast.ph"
-import "../stl/vec.ph"
+import <stl/vec.ph>
 
 declare Vec<*Expr>
 declare Vec<*Stmt>

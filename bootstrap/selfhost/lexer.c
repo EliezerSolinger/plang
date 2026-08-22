@@ -4,7 +4,7 @@
 
 #include <string.h>
 #include "lexer.h"
-#include "../stl/vec.h"
+#include "../packages/stl/vec.h"
 
 typedef struct Vec_Token Vec_Token;
 typedef struct Lx Lx;

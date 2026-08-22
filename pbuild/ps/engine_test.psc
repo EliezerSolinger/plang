@@ -612,12 +612,21 @@ async def caso_manifesto():
 
     w = await M.ler("tests/pkg/pack.json")
     check("manifesto: workspace se conhece", "True", str(w.eh_workspace))
-    check("manifesto: os membros", "geo txt", " ".join(w.membros))
+    check("manifesto: os membros", "geo txt cor", " ".join(w.membros))
 
     # a RAIZ de busca sai do workspace: é o diretório que CONTÉM os membros,
     # porque é assim que `import <geo/geo.ph>` resolve
     rs = await BP.raizes_do_workspace("tests/pkg/pack.json")
     check("workspace: uma raiz, a que contém os membros", "tests/pkg", " ".join(rs))
+
+    # e o do REPOSITÓRIO: `packages` é a raiz, porque é lá que o `stl` mora
+    rp = await BP.raizes_do_workspace("pack.json")
+    check("workspace: a raiz deste repositório", "packages", " ".join(rp))
+
+    # um pacote sem `root` é legítimo: o `stl` são dez headers independentes e
+    # nenhum deles é "a interface"
+    st = await M.ler("packages/stl/pack.json")
+    check("manifesto: pacote sem raiz", "stl 0.1.0 p ", st.nome + " " + st.versao + " " + st.lang + " " + st.raiz)
 
     # e o erro tem linha e coluna
     nonlocal msg

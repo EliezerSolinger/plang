@@ -2,7 +2,7 @@
 # (port of src/lexer.c, using structs with P methods)
 include <string.h>
 import "lexer.ph"
-import "../stl/vec.ph"
+import <stl/vec.ph>
 
 declare Vec<Token>
 implement Vec<Token>

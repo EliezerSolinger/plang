@@ -384,11 +384,24 @@ g_deps_on: bool = False
 def deps_enable():
     g_deps_on = True
 
-# `selfhost/../stl/vec.ph` e `stl/vec.ph` são o MESMO arquivo, e um grafo de
+# `a/../packages/stl/vec.ph` e `packages/stl/vec.ph` são o MESMO arquivo, e um grafo de
 # build que os visse como dois nós recompilaria o mundo por nada. A conta é
 # léxica (não pergunta ao disco), como o `normpath` do posixpath: `.` some, `..`
 # sobe um componente quando há um para subir, e `..` no começo de um caminho
 # relativo fica — porque ali ele significa alguma coisa.
+# `a/../b/c.ph` e `b/c.ph` são o MESMO arquivo, e quem os visse como dois
+# carregaria o módulo duas vezes — que é um erro de "redefinido" a explicar. É a
+# mesma conta que o registro de leituras já fazia; aqui ela ganha nome próprio
+# porque o carregador de módulos passou a precisar dela: desde que um `import
+# <pkg/x.ph>` é reescrito para relativo, o mesmo header chega por duas grafias.
+private def path_norm_into(dst: *char, src: const *char)
+
+def path_norm(a: *Arena, src: const *char) -> const *char:
+    n: usize = strlen(src)
+    dst: *char = a->alloc(n + 2)
+    path_norm_into(dst, src)
+    return dst
+
 private def path_norm_into(dst: *char, src: const *char):
     cstart: usize[256]
     clen: usize[256]

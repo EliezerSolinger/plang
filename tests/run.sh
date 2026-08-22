@@ -32,6 +32,10 @@ STD=${STD:-}
 # ao mesmo tempo (a suíte C e a QBE, por exemplo). Duas corridas no mesmo `OUT`
 # se atropelam e o relatório das duas fica ilegível — aconteceu.
 OUT=${OUT:-tests/out}
+# o `stl` é um PACOTE (`packages/stl`), e um `import <stl/vec.ph>` procura nas
+# raízes que o compilador recebe. Toda invocação do arreio passa a raiz do
+# workspace, que é onde os pacotes deste repositório moram.
+PKGP="--pkg-path packages"
 QBE=qbe/qbe
 
 # ---------- setup ----------
@@ -89,11 +93,11 @@ build_bin() {
     # resolve in the mirror.)
     local sdir="-I$(dirname "$src")"
     if [ "$BACKEND" = qbe ]; then
-        $PLANGC $xf --backend qbe "$src" -o "$bin.ssa" 2>"$err" &&
+        $PLANGC $PKGP $xf --backend qbe "$src" -o "$bin.ssa" 2>"$err" &&
         $QBE "$bin.ssa" -o "$bin.s" 2>>"$err" &&
         $CC "$bin.s" -o "$bin" "$@" -lm 2>>"$err"
     else
-        $PLANGC $PFLAGS $xf "$src" -o "$bin.c" 2>"$err" &&
+        $PLANGC $PFLAGS $PKGP $xf "$src" -o "$bin.c" 2>"$err" &&
         $CC $CSTD -w $sdir "$bin.c" -o "$bin" "$@" -lm 2>>"$err"
     fi
 }
@@ -162,17 +166,17 @@ suite_modules() {
 
 suite_stl() {
     echo "== stl (header-only library) =="
-    # o repo NUNCA é tocado: os headers da stl vão para $OUT/stl e a TU de
-    # teste para $OUT/stlrun/tu — o #include "../../stl/x.h" emitido resolve
-    # para $OUT/stl (espelho do layout dos fontes dentro do workdir)
+    # o repo NUNCA é tocado: os headers da stl vão para o espelho e a TU de
+    # teste para $OUT/stlrun/tu — o #include "../../packages/stl/x.h" emitido
+    # resolve dentro do workdir (o `stl` é um PACOTE desde a migração)
     # --out-dir espelha a raiz dentro do workdir ($OUT/mirror): a TU sai em
-    # mirror/tests/stl/main.c e o include "../../stl/x.h" resolve em mirror/stl
+    # mirror/tests/stl/main.c e o include resolve em mirror/packages/stl
     local err=$OUT/stl_main.err ok=1 M=$OUT/mirror
-    $PLANGC $PFLAGS --out-dir "$M" stl/*.ph tests/stl/main.p 2>"$err" || ok=0
+    $PLANGC $PFLAGS $PKGP --out-dir "$M" tests/stl/main.p 2>"$err" || ok=0
     if [ "$BACKEND" = qbe ]; then
         ok=1
-        $PLANGC --out-dir "$M" stl/*.ph 2>"$err" || ok=0
-        $PLANGC --backend qbe tests/stl/main.p -o "$M/stl_main.ssa" 2>>"$err" &&
+        $PLANGC $PKGP --out-dir "$M" packages/stl/*.ph 2>"$err" || ok=0
+        $PLANGC $PKGP --backend qbe tests/stl/main.p -o "$M/stl_main.ssa" 2>>"$err" &&
         $QBE "$M/stl_main.ssa" -o "$M/stl_main.s" 2>>"$err" &&
         $CC "$M/stl_main.s" -o "$OUT/stl_main" -lm 2>>"$err" || ok=0
     else
@@ -211,7 +215,7 @@ suite_errors() {
         name=$(basename "$src"); name=${name%.*}; err=$OUT/errors_$name.err
         # optional per-test extra flags (e.g. --pedantic) in <name>.flags
         xflags=""; [ -f "tests/errors/$name.flags" ] && xflags=$(cat "tests/errors/$name.flags")
-        if $PLANGC $PFLAGS $xflags "$src" -o /dev/null 2>"$err"; then
+        if $PLANGC $PFLAGS $PKGP $xflags "$src" -o /dev/null 2>"$err"; then
             echo "  FAIL $name (compiled; expected an error)"; fail=$((fail+1))
         elif ! grep -qF "$(cat "tests/errors/$name.expected")" "$err"; then
             echo "  FAIL $name (wrong message):"; sed 's/^/       /' "$err" | head -2
@@ -234,7 +238,7 @@ run_reject_dir() {
     while IFS= read -r f; do
         # must-reject corpora model a MAX-CONFORMANCE compiler: promote all
         # warnings and GNU extensions to errors (like clang -Werror -pedantic-errors)
-        timeout 5 $PLANGC -Werror -pedantic-errors "$f" -o /dev/null 2>/dev/null
+        timeout 5 $PLANGC $PKGP -Werror -pedantic-errors "$f" -o /dev/null 2>/dev/null
         local rc=$?
         if [ $rc -eq 139 ] || [ $rc -eq 134 ]; then crash=$((crash+1))
         elif [ $rc -ne 0 ]; then rej=$((rej+1))
@@ -325,7 +329,7 @@ suite_cinvalid() {
         while IFS= read -r f; do
             # max-conformance mode, like clang -Werror -pedantic-errors: the
             # wacct reference compiler rejects all of these
-            timeout 5 $PLANGC -Werror -pedantic-errors "$f" -o /dev/null 2>/dev/null; rc=$?
+            timeout 5 $PLANGC $PKGP -Werror -pedantic-errors "$f" -o /dev/null 2>/dev/null; rc=$?
             if [ $rc -eq 139 ] || [ $rc -eq 134 ]; then c=$((c+1))
             elif [ $rc -ne 0 ]; then r=$((r+1)); else a=$((a+1)); fi
         done < <(find $files -name "*.c" | sort)
@@ -369,23 +373,25 @@ suite_pstudio() {
         if [ "$BACKEND" = qbe ]; then
             for d in $deps; do
                 dn=$(echo "$d" | tr '/' '_')
-                $PLANGC --backend qbe $d.p -o "$bin.$dn.ssa" 2>>"$err" &&
+                $PLANGC $PKGP --backend qbe $d.p -o "$bin.$dn.ssa" 2>>"$err" &&
                 $QBE "$bin.$dn.ssa" -o "$bin.$dn.s" 2>>"$err" || { ok=0; break; }
                 cobjs="$cobjs $bin.$dn.s"
             done
-            [ $ok = 1 ] && { $PLANGC --backend qbe "$src" -o "$bin.ssa" 2>>"$err" &&
+            [ $ok = 1 ] && { $PLANGC $PKGP --backend qbe "$src" -o "$bin.ssa" 2>>"$err" &&
                              $QBE "$bin.ssa" -o "$bin.s" 2>>"$err" || ok=0; }
             [ $ok = 1 ] && { $CC "$bin.s" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
         else
             # headers: o driver inteiro + as interfaces que ele reusa
-            for d in pstudio/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph stl/*.ph; do
-                $PLANGC $PFLAGS --out-dir "$M" "$d" 2>>"$err" || ok=0
+            # o `stl` já não é nomeado: ele é um pacote, e o fecho da 1.5(a)
+            # traz os headers dele
+            for d in pstudio/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph; do
+                $PLANGC $PFLAGS $PKGP --out-dir "$M" "$d" 2>>"$err" || ok=0
             done
             for d in $deps; do
-                $PLANGC $PFLAGS --out-dir "$M" $d.p 2>>"$err" || ok=0
+                $PLANGC $PFLAGS $PKGP --out-dir "$M" $d.p 2>>"$err" || ok=0
                 cobjs="$cobjs $M/$d.c"
             done
-            [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$M" "$src" 2>>"$err" || ok=0; }
+            [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$M" "$src" 2>>"$err" || ok=0; }
             # -D_DEFAULT_SOURCE: o POSIX que o -std=c11 estrito da suíte esconde
             # (o ingest do plangc vê modo GNU)
             [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -w "$M/tests/pstudio/$name.c" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
@@ -403,7 +409,7 @@ suite_pstudio() {
     local C=$OUT/pstudio_pscore errc=$OUT/pstudio_pscore.err
     rm -rf "$C"; mkdir -p "$C"; : >"$errc"
     ok=1
-    $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$errc" || ok=0
+    $PLANGC $PFLAGS $PKGP --out-dir "$C" pscript/runtime/psrt.ph 2>>"$errc" || ok=0
     # 112: o `pui` portado entra aqui do mesmo jeito — headless, sem driver,
     # porque a métrica da fonte é PARÂMETRO do toolkit em pscript. As oito
     # linhas de retângulo dele foram conferidas contra o teste do pui em P
@@ -413,14 +419,14 @@ suite_pstudio() {
     # e, com ele, do lexer do compilador — que é o ponto: o editor em pscript
     # realça com o mesmo lexer que o compilador usa, e não com um segundo.
     local HLC=""
-    if $PLANGC $PFLAGS --out-dir "$C" stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph pstudio/ps/hl.ph 2>>"$errc" &&
-       $PLANGC $PFLAGS --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/ps/hl.p 2>>"$errc"; then
+    if $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph pstudio/ps/hl.ph 2>>"$errc" &&
+       $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/ps/hl.p 2>>"$errc"; then
         HLC="$C/pstudio/ps/hl.c $C/selfhost/lexer.c $C/selfhost/util.c $C/selfhost/utf8.c"
     fi
     for psprog in core_test:ps_core.expected:"the ported buffer" pui_test:ps_pui.expected:"the ported toolkit" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
-        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }
         local extraobj=""
         case $pname in cv_test|app_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
         [ $ok = 1 ] && { $CC $CSTD -w -o "$C/$pname" "$C/pstudio/ps/$pname.c" \
@@ -445,14 +451,14 @@ suite_pstudio() {
         ok=1
         # 114: o driver em P é SDL + o lexer do compilador. O `psys` saiu: a
         # camada de sistema é a da stdlib do pscript desde a 111.
-        for d in pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph; do
-            $PLANGC $PFLAGS --out-dir "$P" "$d" 2>>"$err2" || ok=0
+        for d in pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph; do
+            $PLANGC $PFLAGS $PKGP --out-dir "$P" "$d" 2>>"$err2" || ok=0
         done
         for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/ps/shim pstudio/ps/hl selfhost/lexer selfhost/util selfhost/utf8; do
-            [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
+            [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
         done
-        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pscript/runtime/psrt.ph 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
         [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/ps/shim.c" "$P/pstudio/ps/hl.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/selfhost/lexer.c" "$P/selfhost/util.c" "$P/selfhost/utf8.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
         printf 'line one\nline two\nline three\n' > "$P/sample.txt"
         if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
@@ -542,7 +548,7 @@ suite_pscript() {
     for src in tests/pscript/ok/*.psc pscript/examples/*.psc; do
         [ -f "$src" ] || continue
         name=$(basename "$src"); err=$OUT/pscript_${name%.psc}.err
-        if $PLANGC --parse-only "$src" 2>"$err"; then
+        if $PLANGC $PKGP --parse-only "$src" 2>"$err"; then
             pass=$((pass+1))
         else
             echo "  FAIL $src: $(sed 's/.*error: //' "$err" | head -1)"; fail=$((fail+1))
@@ -554,7 +560,7 @@ suite_pscript() {
     #    exception is part of what a program does.
     local rt="$d/rt"
     rm -rf "$rt"; mkdir -p "$rt"
-    if ! $PLANGC $PFLAGS --out-dir "$rt" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>"$d/rt.err"; then
+    if ! $PLANGC $PFLAGS $PKGP --out-dir "$rt" pscript/runtime/psrt.ph 2>"$d/rt.err"; then
         echo "  FAIL runtime: $(sed 's/.*error: //' "$d/rt.err" | head -1)"; fail=$((fail+1))
     else
       for src in tests/pscript/run/*.psc pscript/examples/vec3.psc pscript/examples/smallpt_core.psc pscript/examples/smallpt_workers.psc pscript/examples/smallpt_full.psc; do
@@ -578,8 +584,12 @@ suite_pscript() {
             # 108/111: as seis camadas numa invocação — o QBE aceita a lista desde
             # que o merge de tipos não arraste `static` de outro `.p` (era o
             # defeito que a divisão desenterrou)
-            $PLANGC --backend qbe --out-dir "$rt" pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>"$err" &&
-            $PLANGC --backend qbe $xflags "$src" -o "$d/$name.ssa" 2>>"$err" &&
+            # o QBE não emite headers, então o guarda-chuva `psrt.ph` não pode
+            # ser nomeado aqui — mas o fecho da 1.5(a) continua a valer, e dois
+            # `.p` bastam para trazer as seis camadas (o `os` é o único que
+            # ninguém importa de dentro)
+            $PLANGC $PKGP --backend qbe --out-dir "$rt" pscript/runtime/psrt_top.p pscript/runtime/psrt_os.p 2>"$err" &&
+            $PLANGC $PKGP --backend qbe $xflags "$src" -o "$d/$name.ssa" 2>>"$err" &&
             $QBE "$d/$name.ssa" -o "$d/$name.s" 2>>"$err" &&
             for m in mem val rt std os top; do $QBE "$rt/pscript/runtime/psrt_$m.ssa" -o "$d/psrt_$m.s" 2>>"$err" || ok=0; done
             local qextra=""
@@ -590,7 +600,7 @@ suite_pscript() {
             done
             [ $ok = 1 ] && { $CC $PSDEFS "$d/$name.s" "$d/psrt_mem.s" "$d/psrt_val.s" "$d/psrt_rt.s" "$d/psrt_std.s" "$d/psrt_os.s" "$d/psrt_top.s" $qextra -o "$d/$name" -lm -pthread 2>>"$err" || ok=0; }
         else
-            $PLANGC $PFLAGS $xflags --out-dir "$rt" "$src" 2>"$err" || ok=0
+            $PLANGC $PFLAGS $PKGP $xflags --out-dir "$rt" "$src" 2>"$err" || ok=0
             local cextra=""
             for pm in "$rt/$(dirname "$src")"/pmod_*.c; do
                 [ -f "$pm" ] || continue
