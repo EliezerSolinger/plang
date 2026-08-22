@@ -690,11 +690,11 @@ int main(int argc, char **argv) {
         if (run_manifest_ok(&cc.arena, manifest, &bkey)) {
             const char *binp0 = Arena_printf(&cc.arena, "%s/bin/%016llx", cachedir, bkey);
             if (access(binp0, 0) == 0) {
-                int __defer_ret2 = run_exec(binp0, run_args, run_nargs);
+                int __defer_ret0 = run_exec(binp0, run_args, run_nargs);
                 {
                     StrBuf_deinit(&kb);
                 }
-                return __defer_ret2;
+                return __defer_ret0;
             }
         }
         if (has_suffix(Vec_pchar_get(&inputs, 0), ".psc")) {

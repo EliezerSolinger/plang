@@ -5534,6 +5534,9 @@ static const char *PsSema_gname_x(PsSema *self, const char *name, Pos pos, int h
     if (e != NULL) {
         return Arena_printf(self->a, "%s%s", e->ns->prefix, e->orig);
     }
+    if (StrSet_has(&self->preludes, name) && self->root_ns != NULL && StrSet_has(&self->root_ns->sym, name)) {
+        return Arena_printf(self->a, "%s%s", self->root_ns->prefix, name);
+    }
     if (hard && ns != self->root_ns && self->root_ns != NULL && StrSet_has(&self->root_ns->sym, name)) {
         fatal_at(ns->m->path, pos, "unknown name '%s' (it belongs to the module being compiled, which '%s' does not import)", name, ns->name);
     }
@@ -5553,10 +5556,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_3812_9 = e;
-        __with_3812_9->kind = PE_NAME;
-        __with_3812_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_3812_9->lhs = NULL;
+        PsExpr *__with_3820_9 = e;
+        __with_3820_9->kind = PE_NAME;
+        __with_3820_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3820_9->lhs = NULL;
     }
     return 1;
 }

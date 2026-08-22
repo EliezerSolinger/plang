@@ -299,6 +299,17 @@ private def is_digit(c: u32) -> bool:
 private def is_hex(c: u32) -> bool:
     return is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
 
+private def sem_underscore(a: *Arena, s: const *char) -> const *char:
+    n: usize = strlen(s)
+    out: *char = a->alloc(n + usize(1))
+    k: usize = 0
+    for i in range(n):
+        if s[i] != '_':
+            out[k] = s[i]
+            k += 1
+    out[k] = '\0'
+    return out
+
 struct Lx:
     file: const *char
     bytes: const *char
@@ -445,18 +456,69 @@ struct Lx:
             self->i += 1
         self->push_tok(kind, p, self->slice(start, self->i))
 
+    # 0o… / 0b… — os dígitos, e o valor já em decimal no texto do token
+    private def lex_radix(self: *Lx, p: Pos, bin: bool):
+        start: usize = self->i
+        self->i += 2
+        base: u64 = u64(2) if bin else u64(8)
+        top: u32 = '1' if bin else '7'
+        v: u64 = u64(0)
+        ndig: i32 = 0
+        while (self->cur() >= '0' and self->cur() <= top) or self->cur() == '_':
+            if self->cur() != '_':
+                v = v * base + u64(self->cur() - u32('0'))
+                ndig += 1
+            self->i += 1
+        if ndig == 0 or is_ident_cont(self->cur()) or is_digit(self->cur()):
+            # `0o` sozinho, `0o8`, `0b2`, `0o7x`: nada disto tem leitura óbvia
+            while is_ident_cont(self->cur()):
+                self->i += 1
+            if not self->tolerant:
+                fatal_at(self->file, p, "invalid %s number: %s", "binary" if bin else "octal", self->slice(start, self->i))
+            self->push_tok(TK_NUMBER, p, self->slice(start, self->i))
+            return
+        self->push_tok(TK_NUMBER, p, self->a->printf("%llu", v))
+
     private def lex_number(self: *Lx):
         p: Pos = self->here()
         start: usize = self->i
+        under: bool = False
         if self->cur() == '0' and (self->peek(1) == 'x' or self->peek(1) == 'X'):
             self->i += 2
             if not is_hex(self->cur()) and not self->tolerant:
                 fatal_at(self->file, p, "invalid hexadecimal number")
-            while is_hex(self->cur()):
+            while is_hex(self->cur()) or self->cur() == '_':
+                if self->cur() == '_':
+                    under = True
                 self->i += 1
+        elif self->cur() == '0' and (self->peek(1) == 'o' or self->peek(1) == 'O' or self->peek(1) == 'b' or self->peek(1) == 'B'):
+            # 0o755 e 0b1010, do Python. O texto do token é NORMALIZADO para
+            # decimal aqui, e não é arrumação: o texto do token é o que sai no C
+            # gerado e o que o backend QBE lê, e `0b` não é C. Um só lugar
+            # converte, e os dois lados recebem um número que ambos entendem.
+            self->lex_radix(p, self->peek(1) == 'b' or self->peek(1) == 'B')
+            return
         else:
-            while is_digit(self->cur()):
+            while is_digit(self->cur()) or self->cur() == '_':
+                if self->cur() == '_':
+                    under = True
                 self->i += 1
+            # 0755 NÃO é octal aqui, e também não é setecentos e cinquenta e
+            # cinco: é um erro. Em C aquilo vale 493 em silêncio, e esta é uma
+            # linguagem de sintaxe Python — onde é erro de sintaxe pela mesma
+            # razão. Quem quer octal escreve `0o755`, que é o que a mensagem diz.
+            if self->i - start > 1 and self->cp[start] == '0' and self->cur() != '.' and self->cur() != 'e' and self->cur() != 'E' and not self->tolerant:
+                so_zeros: bool = True
+                octal_ok: bool = True
+                for z in range(start, self->i):
+                    if self->cp[z] != '0':
+                        so_zeros = False
+                    if self->cp[z] > '7':
+                        octal_ok = False
+                if not so_zeros:
+                    if octal_ok:
+                        fatal_at(self->file, p, "a leading zero is not octal here: write `0o%s` for octal, or drop the zero", self->slice(start + 1, self->i))
+                    fatal_at(self->file, p, "a decimal number does not start with zero: write `%s`", self->slice(start + 1, self->i))
             if self->cur() == '.' and is_digit(self->peek(1)):
                 self->i += 1
                 while is_digit(self->cur()):
@@ -474,6 +536,11 @@ struct Lx:
         # C suffixes (u, l, f) are passed through verbatim
         while self->cur() == 'u' or self->cur() == 'U' or self->cur() == 'l' or self->cur() == 'L' or self->cur() == 'f' or self->cur() == 'F':
             self->i += 1
+        # `1_000_000`, `0xff_ff`: o separador é do LEITOR, não do número. Sai
+        # aqui, porque daqui para baixo o texto do token é o que o C recebe.
+        if under:
+            self->push_tok(TK_NUMBER, p, sem_underscore(self->a, self->slice(start, self->i)))
+            return
         self->push_tok(TK_NUMBER, p, self->slice(start, self->i))
 
     private def lex_op(self: *Lx):

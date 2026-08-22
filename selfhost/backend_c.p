@@ -1229,6 +1229,13 @@ private def emit_func(b: *StrBuf, f: *Func):
         return   # generic template (def foo<T>): only its monomorphizations are emitted
     g_cur_ret = f->ret
     g_defers.len = 0
+    # o contador do temporário de `defer` ZERA A CADA FUNÇÃO, e não uma vez por
+    # processo. Global, ele fazia o C gerado depender de QUANTOS arquivos vieram
+    # antes na mesma invocação: `plangc a.p b.p` e `plangc a.p; plangc b.p`
+    # davam textos diferentes para o mesmo `b.p`. Duas escadas de bootstrap que
+    # invocam o compilador de maneiras diferentes divergiam por isso — e um
+    # `restat` que compara CONTEÚDO passa a ver mudança onde não houve.
+    g_ret_tmp_counter = 0
     if f->is_static:
         b->puts("static ")
     if f->is_inline and not g_std89:

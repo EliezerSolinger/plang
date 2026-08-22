@@ -542,11 +542,11 @@ char *read_entire_file_opt(const char *path, size_t *out_len) {
         return NULL;
     }
     deps_add(path);
-    char *__defer_ret1 = read_open_file(f, path, out_len);
+    char *__defer_ret0 = read_open_file(f, path, out_len);
     {
         fclose(f);
     }
-    return __defer_ret1;
+    return __defer_ret0;
 }
 
 static char *read_open_file(FILE *f, const char *path, size_t *out_len) {
@@ -875,9 +875,9 @@ FStrParts fstr_split(Arena *a, const char *body, size_t nbody, const char *file,
     }
     r.lits[r.n] = (lit.len > 0 ? Arena_strndup(a, lit.data, lit.len) : "");
     r.lit_lens[r.n] = lit.len;
-    FStrParts __defer_ret2 = r;
+    FStrParts __defer_ret0 = r;
     {
         StrBuf_deinit(&lit);
     }
-    return __defer_ret2;
+    return __defer_ret0;
 }

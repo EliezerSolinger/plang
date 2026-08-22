@@ -3792,6 +3792,14 @@ struct PsSema:
         e: *PsNsEnt = ns_find(ns->ents, ns->nents, name)
         if e != None:
             return self->a->printf("%s%s", e->ns->prefix, e->orig)
+        # O PRELÚDIO É DA LINGUAGEM, e por isso é de TODO módulo e não só do
+        # programa. Ele é prependido ao módulo de cima (é lá que o shadowing da
+        # 68.3 se decide), o que o punha no namespace da raiz — e um módulo
+        # importado que escrevesse `error(msg, VALUE)` ouvia que `VALUE`
+        # "pertence ao módulo sendo compilado, que este não importa". Ninguém
+        # importa o prelúdio; era a mensagem certa para a pergunta errada.
+        if self->preludes.has(name) and self->root_ns != None and self->root_ns->sym.has(name):
+            return self->a->printf("%s%s", self->root_ns->prefix, name)
         if hard and ns != self->root_ns and self->root_ns != None and self->root_ns->sym.has(name):
             fatal_at(ns->m->path, pos, "unknown name '%s' (it belongs to the module being compiled, which '%s' does not import)", name, ns->name)
         return name

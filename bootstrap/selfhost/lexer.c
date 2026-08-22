@@ -520,6 +520,21 @@ static int is_hex(uint32_t c) {
     return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
+static const char *sem_underscore(Arena *a, const char *s) {
+    size_t n = strlen(s);
+    char *out = Arena_alloc(a, n + (size_t)1);
+    size_t k = 0;
+    size_t i;
+    for (i = 0; i < n; i += 1) {
+        if (s[i] != '_') {
+            out[k] = s[i];
+            k += 1;
+        }
+    }
+    out[k] = '\0';
+    return out;
+}
+
 struct Lx {
     const char *file;
     const char *bytes;
@@ -690,20 +705,76 @@ static void Lx_lex_triple_at(Lx *self, size_t start, Pos p, uint32_t quote, TokK
     Lx_push_tok(self, kind, p, Lx_slice(self, start, self->i));
 }
 
+static void Lx_lex_radix(Lx *self, Pos p, int bin) {
+    size_t start = self->i;
+    self->i += 2;
+    uint64_t base = (bin ? (uint64_t)2 : (uint64_t)8);
+    uint32_t top = (bin ? '1' : '7');
+    uint64_t v = (uint64_t)0;
+    int32_t ndig = 0;
+    while ((Lx_cur(self) >= '0' && Lx_cur(self) <= top) || Lx_cur(self) == '_') {
+        if (Lx_cur(self) != '_') {
+            v = v * base + (uint64_t)(Lx_cur(self) - (uint32_t)'0');
+            ndig += 1;
+        }
+        self->i += 1;
+    }
+    if (ndig == 0 || is_ident_cont(Lx_cur(self)) || is_digit(Lx_cur(self))) {
+        while (is_ident_cont(Lx_cur(self))) {
+            self->i += 1;
+        }
+        if (!self->tolerant) {
+            fatal_at(self->file, p, "invalid %s number: %s", (bin ? "binary" : "octal"), Lx_slice(self, start, self->i));
+        }
+        Lx_push_tok(self, TK_NUMBER, p, Lx_slice(self, start, self->i));
+        return;
+    }
+    Lx_push_tok(self, TK_NUMBER, p, Arena_printf(self->a, "%llu", v));
+}
+
 static void Lx_lex_number(Lx *self) {
     Pos p = Lx_here(self);
     size_t start = self->i;
+    int under = 0;
     if (Lx_cur(self) == '0' && (Lx_peek(self, 1) == 'x' || Lx_peek(self, 1) == 'X')) {
         self->i += 2;
         if (!is_hex(Lx_cur(self)) && !self->tolerant) {
             fatal_at(self->file, p, "invalid hexadecimal number");
         }
-        while (is_hex(Lx_cur(self))) {
+        while (is_hex(Lx_cur(self)) || Lx_cur(self) == '_') {
+            if (Lx_cur(self) == '_') {
+                under = 1;
+            }
             self->i += 1;
         }
+    } else if (Lx_cur(self) == '0' && (Lx_peek(self, 1) == 'o' || Lx_peek(self, 1) == 'O' || Lx_peek(self, 1) == 'b' || Lx_peek(self, 1) == 'B')) {
+        Lx_lex_radix(self, p, Lx_peek(self, 1) == 'b' || Lx_peek(self, 1) == 'B');
+        return;
     } else {
-        while (is_digit(Lx_cur(self))) {
+        while (is_digit(Lx_cur(self)) || Lx_cur(self) == '_') {
+            if (Lx_cur(self) == '_') {
+                under = 1;
+            }
             self->i += 1;
+        }
+        if (self->i - start > 1 && self->cp[start] == '0' && Lx_cur(self) != '.' && Lx_cur(self) != 'e' && Lx_cur(self) != 'E' && !self->tolerant) {
+            int so_zeros = 1;
+            int octal_ok = 1;
+            size_t z;
+            for (z = start; z < self->i; z += 1) {
+                if (self->cp[z] != '0') {
+                    so_zeros = 0;
+                }
+                if (self->cp[z] > '7') {
+                    octal_ok = 0;
+                }
+            }
+            if (!so_zeros) {
+                if (octal_ok) {
+                    fatal_at(self->file, p, "a leading zero is not octal here: write `0o%s` for octal, or drop the zero", Lx_slice(self, start + 1, self->i));
+                }
+                fatal_at(self->file, p, "a decimal number does not start with zero: write `%s`", Lx_slice(self, start + 1, self->i));
+            }
         }
         if (Lx_cur(self) == '.' && is_digit(Lx_peek(self, 1))) {
             self->i += 1;
@@ -728,6 +799,10 @@ static void Lx_lex_number(Lx *self) {
     }
     while (Lx_cur(self) == 'u' || Lx_cur(self) == 'U' || Lx_cur(self) == 'l' || Lx_cur(self) == 'L' || Lx_cur(self) == 'f' || Lx_cur(self) == 'F') {
         self->i += 1;
+    }
+    if (under) {
+        Lx_push_tok(self, TK_NUMBER, p, sem_underscore(self->a, Lx_slice(self, start, self->i)));
+        return;
     }
     Lx_push_tok(self, TK_NUMBER, p, Lx_slice(self, start, self->i));
 }

@@ -1432,6 +1432,7 @@ static void emit_func(StrBuf *b, Func *f) {
     }
     g_cur_ret = f->ret;
     g_defers.len = 0;
+    g_ret_tmp_counter = 0;
     if (f->is_static) {
         StrBuf_puts(b, "static ");
     }

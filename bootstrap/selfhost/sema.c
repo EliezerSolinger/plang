@@ -9131,11 +9131,11 @@ Module *cc_load_module(Cc *cc, const char *path0) {
     cc->mods = vec_grow(cc->mods, cc->nmods, &cc->cmods, sizeof(*cc->mods));
     cc->mods[cc->nmods] = m;
     cc->nmods += 1;
-    Module *__defer_ret1 = m;
+    Module *__defer_ret0 = m;
     {
         free(bytes);
     }
-    return __defer_ret1;
+    return __defer_ret0;
 }
 
 static Func *sinfo_method(SInfo *si, const char *name) {
