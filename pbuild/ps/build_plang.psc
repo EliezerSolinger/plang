@@ -24,6 +24,7 @@ import path
 import lib_graph as G
 import lib_targets as T
 import lib_manifest as M
+import lib_repo as R
 
 const BUILD: str = "build"
 
@@ -410,6 +411,11 @@ async def montar(query: str) -> G.Graph:
     expressável."""
     g = G.new_graph()
     raizes = await raizes_do_workspace("pack.json")
+    # ... e as que o `ppack install` materializou, DEPOIS das do workspace: o que
+    # está na árvore ganha de o que veio de fora, que é o que permite trabalhar
+    # numa cópia local de uma dependência sem mexer no lock.
+    for ri in R.raizes_instaladas():
+        raizes.append(ri)
     c = T.new_ctx(g, BUILD, query)
     c.pkgroots = raizes
     stamp = await escada(c)

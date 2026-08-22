@@ -44,10 +44,15 @@ fi
 
 $PLANGC --pkg-path packages --out-dir "$RT" "$src"
 
-# `import "x.ph"` (75.3) makes the compiler emit the P module too, in the same
-# mirrored tree — those get linked in alongside
+# `import "x.ph"` (75.3) e a 1.5(a) fazem o compilador emitir MÓDULOS EM P junto
+# com o programa — o do lado (`pmod_x.p`) e o de um PACOTE (`packages/sha2/sha2.p`).
+# Quais são não se adivinha por glob: pergunta-se (resposta 3), que é a mesma
+# fonte que o `pbuild` usa. O glob que havia aqui só via `pmod_*.c` ao lado do
+# fonte, e um programa que usasse um pacote em P não linkava.
 extra=""
-for pm in "$RT/$(dirname "$src")"/pmod_*.c; do
+for pm in $($PLANGC --pkg-path packages --outputs --out-dir "$RT" "$src" | grep '\.c$'); do
+    case " $RTC " in *" $pm "*) continue;; esac
+    [ "$pm" = "$RT/${src%.psc}.c" ] && continue
     [ -f "$pm" ] && extra="$extra $pm"
 done
 

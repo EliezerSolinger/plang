@@ -184,6 +184,15 @@ else
     bad "import <pkg> divergiu (veja $V/packages.log)"
 fi
 
+# repo: publish -> update -> search -> add -> install -> compilar contra o que
+# foi instalado, tudo sobre `file://`. Um repositório é um FORMATO: aqui ele é
+# um diretório, e quando o HTTP entrar nada disto muda.
+if PPACK=$PWD/build/bin/ppack PLANGC=$PWD/$V/plangc_s2 bash tests/repo.sh >$V/repo.log 2>&1; then
+    ok "repo $(grep -oE '[0-9]+ ok' $V/repo.log | tail -1)"
+else
+    bad "o repositório divergiu (veja $V/repo.log)"
+fi
+
 step "7/8 pstudio (o editor: pscript por cima, driver em P por baixo)"
 # 116: o editor em P foi aposentado (a paridade foi medida método por método na
 # 115). O que este passo mede agora é o programa GRÁFICO inteiro: o driver em P

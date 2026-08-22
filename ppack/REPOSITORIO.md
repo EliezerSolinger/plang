@@ -209,17 +209,53 @@ hash de interface bate com o que vai declarar. **Não roda os testes** (decidido
 
 Cada passo é útil sozinho, e nenhum precisa do seguinte:
 
-1. **SHA-256** — sem ele nada mais tem sentido. Portão: os vetores do FIPS 180-4
-   mais o corpus que já usamos para oráculo.
-2. **tar** — ler e escrever, com a recusa do que não se entende. Portão: escrever,
-   ler de volta, e o `tar` do sistema a abrir o nosso.
-3. **`ppack publish` e um repositório `file://`** — o formato inteiro provado sem
-   rede nenhuma, com o `packages/stl` e o `packages/pui` como primeiros pacotes.
-4. **`ppack update`/`search`/`add`/`install` sobre `file://`** — a fase 1 completa.
+1. ✅ **SHA-256** — `packages/sha2`, FIPS 180-4 §6.2 em P. Os quatro vetores
+   oficiais mais os cinco tamanhos onde o padding decide, e o mesmo hash visto
+   do pscript pela fronteira da 45.5 (`sha256_of(in data: CBytes) -> CStr`), o
+   que prova que não há uma segunda implementação.
+2. ✅ **tar** — `packages/tar`, `ustar` e nada mais. O portão é o `tar` do
+   sistema a listar e EXTRAIR o nosso; a metade que importa é a leitura, que
+   recusa caminho absoluto, `..`, link simbólico, checksum errado e tarball
+   cortado. Escrever é reprodutível por decisão (data zero, modo fixo): o hash
+   do tarball É a identidade.
+3. ✅ **`ppack publish` e um repositório `file://`** — `publish <pacote> --to
+   <dir>` produz o `.tar`, o hash e a entrada no índice, com a lista canónica de
+   símbolos de cada módulo DO pacote. Uma versão publicada é imutável.
+4. ✅ **`ppack update`/`search`/`add`/`install` sobre `file://`** — a fase 1
+   completa, prendida de ponta a ponta em `tests/repo.sh` (18 verificações, do
+   `publish` até um programa que usa o pacote instalado e roda). O `add` traz as
+   dependências pela versão EXATA que o índice declara — seguir um pino não é
+   resolver —, e discordância vira mensagem.
 5. **HTTP** — o mesmo caminho com outro transporte. É aqui que a rede entra, e
-   nada acima muda.
+   nada acima muda: o único ponto por onde bytes de fora entram é `R.buscar`.
 6. **Ed25519 e as duas assinaturas** — o modo seguro. Até aqui tudo corre em modo
    unsafe, que é explícito, avisa em cada build e fica gravado no lock.
+
+### O que os quatro primeiros passos ensinaram
+
+Construir isto para valer achou cinco defeitos que nenhuma leitura acharia:
+
+* **o motor do build mentia duas vezes** — a pergunta `--deps` era feita sem o
+  modo (`--out-dir`), então a 1.5(a) não aparecia na resposta e editar o lexer do
+  compilador não reconstruía nada; e os dois contadores de `node_done` não se
+  encontravam quando as entradas de uma aresta eram MISTURADAS, o que deixava o
+  build "terminar com sucesso" com trabalho por fazer;
+* **o C gerado não era função só do fonte** — o contador do temporário de `defer`
+  era global ao processo, então duas escadas de bootstrap que invocam o
+  compilador de maneiras diferentes divergiam;
+* **o prelúdio não chegava aos módulos importados** — `error(msg, VALUE)` dentro
+  de um pacote não compilava;
+* **uma chamada que levanta no meio de uma instrução deixava rasto** —
+  `xs.append(item as str)` num `try` reservava o lugar na lista antes de o valor
+  existir, e o segfault aparecia longe do `catch`;
+* **`--ps-runtime` absoluto com fontes relativos** emitia um `#include` para fora
+  do espelho. Agora é recusado com a mesma regra que os pacotes já tinham.
+
+E deixou uma lacuna anotada, para uma bateria: **pscript não tem teste de tipo**.
+`as` é checado e LEVANTA (55.2), o que serve para o nosso formato — um índice com
+a forma errada é um índice corrompido — mas ler um documento de fora obriga a
+usar `try` como controlo de fluxo. `is` é identidade e não serve. É a única coisa
+que se escreveu aqui torcendo a linguagem em vez de a usar.
 
 ## 7. `search`, e o que ele mostra
 

@@ -49,9 +49,15 @@ struct Manifesto:
     # workspace
     membros: list<str>
     padrao: str
+    # ... e de onde vêm as dependências que NÃO estão na árvore. A lista é do
+    # PROJETO e não da máquina: dois projetos no mesmo computador podem usar
+    # repositórios diferentes, e um projeto que se clona traz consigo de onde as
+    # suas dependências vêm. A ordem é a de busca; sem a lista, entra o padrão.
+    repos: list<str>
+    repos_unsafe: list<bool>
 
 def vazio(caminho: str) -> Manifesto:
-    return Manifesto(caminho, False, "", "", "", "", [], [], "", "", [], "")
+    return Manifesto(caminho, False, "", "", "", "", [], [], "", "", [], "", [], [])
 
 # ---------- a posição de uma chave ----------
 def onde(raw: str, chave: str) -> str:
@@ -148,6 +154,27 @@ async def ler(caminho: str) -> Manifesto:
         for x in root["members"] as list<any>:
             m.membros.append(x as str)
         m.padrao = texto(root, "default", "")
+        # o workspace também declara as dependências EXTERNAS do projeto, que
+        # não são membros: um membro é código deste repositório, uma dependência
+        # é código de fora com nome, versão e hash
+        m.deps = pares(root, "deps")
+        if "repos" in root:
+            for rv in root["repos"] as list<any>:
+                # duas formas, e a curta é a comum: um URL. A longa existe para
+                # o espelho de desenvolvimento sem chave, que é `unsafe` inteiro.
+                # `as` levanta quando não é do tipo, então tentar a curta e cair
+                # na longa é a leitura — e o que não for nenhuma das duas cai no
+                # erro com a posição da chave.
+                try:
+                    m.repos.append(rv as str)
+                    m.repos_unsafe.append(False)
+                catch e2:
+                    try:
+                        rd = rv as dict<str, any>
+                        m.repos.append(texto(rd, "url", ""))
+                        m.repos_unsafe.append(("unsafe" in rd) and (rd["unsafe"] as bool))
+                    catch e3:
+                        erro(m, raw, "repos", "um repositório é um URL, ou {\"url\": ..., \"unsafe\": true}")
         if len(m.membros) == 0:
             erro(m, raw, "members", "um workspace sem membros não é um workspace")
         return m

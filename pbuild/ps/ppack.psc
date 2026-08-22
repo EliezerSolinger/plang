@@ -34,6 +34,8 @@ import lib_api as A
 import lib_manifest as MF
 import lib_pkg as PK
 import build_plang as BP
+import lib_repo as R
+import lib_lock as LK
 
 const LOG: str = "build/log/build.log"
 
@@ -377,6 +379,400 @@ private def parede(t: str) -> str:
         out += "    " + l.rstrip() + "\n"
     return out.rstrip()
 
+# ---------- o repositório ----------
+
+private async def api_do_pacote(dir: str, m: MF.Manifesto, query: str,
+                                api: dict<str, list<str>>, hashes: dict<str, str>):
+    """A lista canónica de símbolos de cada módulo do pacote, no índice.
+
+    Ela não é enfeite: é o que faz `ppack search draw_rect` procurar POR SÍMBOLO
+    sem baixar nada, e o que torna a honestidade de semver verificável a partir
+    do índice — a interface de 0.1.0 e a de 0.1.1 estão as duas lá, e comparar é
+    uma subtração. E sai de graça, porque o compilador já a produz (resposta 5)."""
+    mods: list<str> = []
+    if len(m.raiz) > 0:
+        mods.append(path.join(dir, m.raiz))
+    else:
+        # um pacote SEM raiz é um conjunto de módulos independentes (o `stl` é
+        # assim): todos entram
+        for nome in sorted(os.listdir(dir)):
+            if nome.endswith(".ph") or nome.endswith(".psc"):
+                mods.append(path.join(dir, nome))
+    raizes = await BP.raizes_do_workspace("pack.json")
+    for mod in mods:
+        argv: list<str> = [query]
+        for r in raizes:
+            argv.append("--pkg-path")
+            argv.append(r)
+        argv.append("--api")
+        argv.append(mod)
+        res = await os.run(argv)
+        if res.status() != 0:
+            raise error("o compilador não conseguiu ler a interface de " + mod + ":\n" + res.output())
+        for a in A.parse(res.output()):
+            # SÓ os módulos DESTE pacote. A resposta 5 traz o fecho inteiro —
+            # o `sha2` importa `stl/cstr.ph` e a interface do `stl` vinha junto —
+            # e um índice que declarasse a interface dos outros diria que o
+            # `sha2` oferece `CStr.slice`, que não é dele.
+            if not a.caminho.startswith(dir + "/"):
+                continue
+            rel = a.caminho[len(dir) + 1:len(a.caminho)]
+            simb: list<str> = []
+            for sb in a.simbolos:
+                simb.append(sb.linha)
+            api[rel] = simb
+            hashes[rel] = a.hash
+
+
+private async def repos_do_projeto() -> list<R.Repo>:
+    """Os repositórios deste projeto, na ordem de busca."""
+    out: list<R.Repo> = []
+    if not path.isfile("pack.json"):
+        return out
+    m = await MF.ler("pack.json")
+    i = 0
+    while i < len(m.repos):
+        out.append(R.repo(m.repos[i], m.repos_unsafe[i]))
+        i += 1
+    return out
+
+
+private async def indice_guardado(r: R.Repo) -> R.Indice:
+    alvo = path.join(R.dir_indices(), r.id + ".json")
+    if not path.isfile(alvo):
+        raise error("sem índice de " + r.url + " — rode `ppack update` primeiro", IO)
+    f = await open(alvo, "r")
+    raw = await f.text()
+    await f.close()
+    return R.ler_indice(raw, alvo)
+
+
+async def cmd_update() -> int:
+    """`ppack update` — baixa os índices e guarda-os. É a ÚNICA operação que
+    toca a rede sem alguém a pedir um pacote, e é de propósito: um build que
+    resolve versões pela rede é um build que muda de resultado sem que nada no
+    projeto tenha mudado."""
+    repos = await repos_do_projeto()
+    if len(repos) == 0:
+        print("nenhum repositório: acrescente \"repos\": [...] ao pack.json do workspace")
+        return 1
+    lk = await LK.ler("pack.lock")
+    n = 0
+    for r in repos:
+        bs = await R.buscar(r, "index.json")
+        alvo = path.join(R.dir_indices(), r.id + ".json")
+        await R.escrever_bytes(alvo, bs)
+        ix = R.ler_indice(str(bs), alvo)
+        quantos = 0
+        for nome in ix.nomes():
+            quantos += len(ix.versoes(nome))
+        # TOFU: a primeira vez que se vê um repositório, ele entra no LOCK — que
+        # é comitado, e é por isso que a confiança fica versionada. Enquanto não
+        # há assinatura a chave é vazia, e o campo existe já para que o dia em
+        # que deixar de ser vazio apareça no diff.
+        if lk.repo_conhecido(r.url) < 0:
+            lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
+            print(f"   novo repositório, aceite agora (TOFU): {r.url}")
+        print(f"{ix.nome if len(ix.nome) > 0 else r.url}: {len(ix.pacotes)} pacote(s), {quantos} versão(ões)")
+        n += 1
+    await LK.gravar(lk, "pack.lock")
+    return 0 if n > 0 else 1
+
+
+async def cmd_search(alvos: list<str>) -> int:
+    """`ppack search <termo>` — OFFLINE, no índice guardado, e por SÍMBOLO
+    também.
+
+    Procurar por símbolo sem baixar nada é coisa que nenhum gerenciador faz, e
+    aqui sai de graça: a lista canónica já está no índice porque o compilador já
+    a produz. Cada linha diz de onde veio o acerto, que é o que permite entender
+    por que um pacote apareceu."""
+    if len(alvos) == 0:
+        print("uso: ppack search <termo>")
+        return 2
+    termo = alvos[0].lower()
+    repos = await repos_do_projeto()
+    achou = 0
+    for r in repos:
+        ix = await indice_guardado(r)
+        for nome in ix.nomes():
+            for versao in ix.versoes(nome):
+                u = ix.pega(nome, versao)
+                linhas: list<str> = []
+                if termo in nome.lower():
+                    linhas.append("[nome]     " + (u.descricao if len(u.descricao) > 0 else "—"))
+                if termo in u.descricao.lower():
+                    linhas.append("[descrição] " + u.descricao)
+                mods: list<str> = []
+                for mk in u.api:
+                    mods.append(mk)
+                for mod in sorted(mods):
+                    for sb in u.api[mod]:
+                        if termo in sb.lower():
+                            linhas.append("[símbolo]  " + sb)
+                for ln in linhas:
+                    achou += 1
+                    print(f"{nome} {versao}   {ln}")
+    if achou == 0:
+        print("nada encontrado para '" + alvos[0] + "'")
+        return 1
+    return 0
+
+
+private def parte_em_arroba(spec: str) -> list<str>:
+    i = spec.find("@")
+    if i < 0:
+        return [spec, ""]
+    return [spec[0:i], spec[i + 1:len(spec)]]
+
+
+async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
+    """`ppack add <nome>@<versão>` — escreve no manifesto e no lock.
+
+    `add` e `build` são comandos diferentes DE PROPÓSITO: um mexe no manifesto e
+    no lock, o outro compila. O diff do commit fica legível — duas linhas, uma em
+    cada arquivo — em vez de "o build mudou o mundo e agora há vinte arquivos
+    novos".
+
+    As dependências do que se pede vêm JUNTO, e isto não é resolver versões: o
+    índice traz a versão EXATA de cada uma, e o que se faz é segui-la. Quando
+    duas exigências discordam, o resultado é uma mensagem — não uma busca."""
+    if len(alvos) == 0:
+        print("uso: ppack add <nome>@<versão> [--unsafe]")
+        return 2
+    pedido = parte_em_arroba(alvos[0])
+    nome = pedido[0]
+    versao = pedido[1]
+    if len(versao) == 0:
+        print("a v1 não tem resolvedor: a versão é EXATA — `ppack add " + nome + "@0.1.0`")
+        return 2
+    repos = await repos_do_projeto()
+    lk = await LK.ler("pack.lock")
+    fila: list<str> = [nome + "@" + versao]
+    porque: dict<str, str> = {}
+    postos: list<str> = []
+    while len(fila) > 0:
+        atual = parte_em_arroba(fila[0])
+        fila = fila[1:len(fila)]
+        n = atual[0]
+        v = atual[1]
+        ja = lk.acha(n)
+        if ja >= 0 and lk.pacotes[ja].versao == v:
+            continue
+        if ja >= 0:
+            quem = porque[n] if n in porque else "pedido na linha de comando"
+            print(f"conflito em {n}: o lock tem {lk.pacotes[ja].versao} e {quem} pede {v}.")
+            print("a v1 não busca uma versão que sirva às duas — resolva à mão, subindo uma das pontas")
+            return 1
+        achou = False
+        for r in repos:
+            ix = await indice_guardado(r)
+            if not ix.tem(n, v):
+                continue
+            u = ix.pega(n, v)
+            bs = await R.buscar(r, u.arquivo)
+            sha = R.hash_de(bs)
+            if sha != u.sha256:
+                print(f"o hash NÃO bate para {n}@{v}:")
+                print(f"   o índice diz {u.sha256}")
+                print(f"   o que chegou {sha}")
+                return 1
+            await R.escrever_bytes(path.join(R.dir_paks(), sha), bs)
+            lk.pacotes.append(LK.Travado(n, v, sha, r.url, u.arquivo,
+                                         inseguro or r.inseguro or len(u.autor) == 0, u.toolchain))
+            if lk.repo_conhecido(r.url) < 0:
+                lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
+            postos.append(n + " " + v + "  sha256 " + sha[0:16] + "…")
+            for d in u.deps:
+                porque[d.nome] = n + "@" + v
+                fila.append(d.nome + "@" + d.faixa)
+            achou = True
+            break
+        if not achou:
+            print(f"não achei {n}@{v} em nenhum índice guardado — `ppack update` primeiro?")
+            if n != nome:
+                print(f"   (é dependência de {porque[n] if n in porque else nome})")
+            return 1
+    await LK.gravar(lk, "pack.lock")
+    await escrever_dep_no_manifesto(nome, versao)
+    for linha in postos:
+        print(linha)
+    if len(postos) > 1:
+        print(f"   {len(postos) - 1} vieram como dependência; `ppack why <nome>` diz de quem")
+    print("   `ppack install` para os materializar")
+    return 0
+
+
+private async def escrever_dep_no_manifesto(nome: str, versao: str):
+    """A dependência entra no `pack.json` do workspace, à mão e preservando o
+    resto do arquivo. Reescrever o JSON inteiro a partir da estrutura perderia
+    comentários de formatação e reordenaria o que a pessoa escreveu — um
+    gerenciador que estraga o arquivo de quem o usa é um gerenciador de que se
+    desconfia."""
+    f = await open("pack.json", "r")
+    raw = await f.text()
+    await f.close()
+    linha = "    " + G.jstr(nome) + ": " + G.jstr(versao)
+    if "\"deps\"" in raw:
+        i = raw.find("\"deps\"")
+        j = raw.find("{", i)
+        if j < 0:
+            raise error("pack.json: `deps` tem de ser um objeto", VALUE)
+        k = raw.find("}", j)
+        dentro = raw[j + 1:k].strip()
+        novo = "{\n" + linha + ("\n  }" if len(dentro) == 0 else ",\n" + raw[j + 1:k].rstrip() + "\n  }")
+        if len(dentro) == 0:
+            novo = "{\n" + linha + "\n  }"
+        else:
+            novo = "{" + raw[j + 1:k].rstrip() + ",\n" + linha + "\n  }"
+        raw = raw[0:j] + novo + raw[k + 1:len(raw)]
+    else:
+        i = raw.rfind("}")
+        antes = raw[0:i].rstrip()
+        if antes.endswith(","):
+            antes = antes[0:len(antes) - 1]
+        raw = antes + ",\n  \"deps\": {\n" + linha + "\n  }\n}\n"
+    await R.escrever_bytes("pack.json", R.bytes_de_texto(raw))
+
+
+async def cmd_install() -> int:
+    """`ppack install` — materializa o que o lock diz.
+
+    O que ele NÃO faz é decidir: as versões já estão decididas, no lock. Ele
+    baixa o que falta, confere o hash SEMPRE, e abre a árvore em
+    `build/pkg/<nome>-<versão>-<hash>/`. O hash no nome é o que torna "a mesma
+    versão com conteúdo diferente" impossível de confundir."""
+    lk = await LK.ler("pack.lock")
+    if len(lk.pacotes) == 0:
+        print("o lock não tem pacotes: `ppack add <nome>@<versão>` primeiro")
+        return 0
+    repos = await repos_do_projeto()
+    n = 0
+    for t in lk.pacotes:
+        destino = R.dir_do_pacote(t.nome, t.versao, t.sha256)
+        if path.isdir(path.join(destino, t.nome)):
+            continue
+        pak = path.join(R.dir_paks(), t.sha256)
+        bs: list<u8> = []
+        if path.isfile(pak):
+            bs = await R.ler_bytes(pak)
+        else:
+            achou = False
+            for r in repos:
+                if r.url != t.repo:
+                    continue
+                bs = await R.buscar(r, t.arquivo)
+                achou = True
+            if not achou:
+                print(f"{t.nome}: o lock diz que veio de {t.repo}, e esse repositório não está no pack.json")
+                return 1
+            await R.escrever_bytes(pak, bs)
+        sha = R.hash_de(bs)
+        if sha != t.sha256:
+            print(f"o hash NÃO bate para {t.nome}@{t.versao}: o lock diz {t.sha256}, o que há diz {sha}")
+            return 1
+        quantos = await R.extrair_pacote(bs, destino, t.nome)
+        print(f"{t.nome} {t.versao}  {quantos} arquivo(s) em {destino}")
+        if t.inseguro:
+            print("   (unsafe: sem assinatura — o hash bateu)")
+        n += 1
+    if n == 0:
+        print("nada a instalar: tudo o que o lock diz já está aberto")
+    return 0
+
+
+async def cmd_publish(alvos: list<str>, para: str, query: str) -> int:
+    """`ppack publish <pacote> --to <dir>` — o `.tar`, o hash e a entrada no
+    índice, no repositório local do autor.
+
+    Ele NÃO ENVIA NADA, e isso é a consequência direta de um repositório ser um
+    formato: enviar é `rsync`, `scp` ou `git push`, e nenhuma dessas é coisa que
+    um gerenciador de pacotes tenha de reimplementar mal.
+
+    O que ele confere antes de escrever:
+
+      * o manifesto é válido (nome, versão, campos);
+      * a versão AINDA NÃO EXISTE no índice — uma versão publicada é imutável, e
+        essa é a regra que faz um lock com hash valer alguma coisa;
+      * a interface bate com o que vai declarar (é o compilador que a dá).
+
+    O que ele NÃO faz é rodar os testes: publicar e testar são decisões
+    diferentes, e juntá-las faria `publish` falhar por razões que não são sobre
+    publicar."""
+    if len(alvos) == 0:
+        print("uso: ppack publish <pacote> [--to <dir>]")
+        return 2
+    if len(para) == 0:
+        print("ppack publish precisa de um repositório de destino: --to <dir>")
+        return 2
+    alvo = alvos[0]
+    dir = ""
+    for r in await BP.raizes_do_workspace("pack.json"):
+        cand = path.join(r, alvo)
+        if path.isfile(path.join(cand, "pack.json")):
+            dir = cand
+            break
+    if len(dir) == 0 and path.isfile(path.join(alvo, "pack.json")):
+        dir = alvo
+    if len(dir) == 0:
+        print("não achei o pacote '" + alvo + "' (nem no workspace, nem como diretório)")
+        return 1
+    m = await MF.ler(path.join(dir, "pack.json"))
+    if m.eh_workspace:
+        print(dir + "/pack.json é um workspace, não um pacote")
+        return 1
+    if len(m.nome) == 0 or len(m.versao) == 0:
+        print(dir + "/pack.json: um pacote publicado precisa de `name` e `version`")
+        return 1
+
+    ixp = path.join(para, "index.json")
+    ix = R.indice_novo(path.basename(para))
+    if path.isfile(ixp):
+        f = await open(ixp, "r")
+        ix = R.ler_indice(await f.text(), ixp)
+        await f.close()
+    if ix.tem(m.nome, m.versao):
+        print(f"{m.nome}@{m.versao} já está publicado em {para} — uma versão publicada é IMUTÁVEL.")
+        print("suba a versão no pack.json, ou apague a entrada do índice se ela nunca saiu daqui")
+        return 1
+
+    bs = await R.empacotar(dir, m.nome + "-" + m.versao)
+    sha = R.hash_de(bs)
+    rel = "pkg/" + m.nome + "/" + m.nome + "-" + m.versao + ".tar"
+    await R.escrever_bytes(path.join(para, rel), bs)
+
+    u = R.vazia()
+    u.nome = m.nome
+    u.versao = m.versao
+    u.arquivo = rel
+    u.tamanho = len(bs)
+    u.sha256 = sha
+    u.autor = ""           # até haver Ed25519, ninguém assinou: modo unsafe
+    u.lang = m.lang
+    u.raiz = m.raiz
+    u.deps = m.deps
+    u.toolchain = m.toolchain
+    u.descricao = m.descricao
+    await api_do_pacote(dir, m, query, u.api, u.api_hash)
+    if m.nome not in ix.pacotes:
+        vazio: dict<str, R.Versao> = {}
+        ix.pacotes[m.nome] = vazio
+    ix.pacotes[m.nome][m.versao] = u
+    ix.atualizado = R.agora_iso()
+    await R.escrever_bytes(ixp, R.bytes_de_texto(R.escrever_indice(ix)))
+
+    if saida_json:
+        print('{"name": ' + G.jstr(m.nome) + ', "version": ' + G.jstr(m.versao)
+              + ', "file": ' + G.jstr(path.join(para, rel)) + ', "sha256": ' + G.jstr(sha)
+              + ', "size": ' + str(len(bs)) + '}')
+        return 0
+    print(f"{m.nome} {m.versao} -> {path.join(para, rel)}")
+    print(f"   sha256 {sha}")
+    print(f"   {len(bs)} bytes, {len(u.api)} módulo(s) de interface no índice")
+    print("   SEM ASSINATURA: até haver Ed25519 tudo aqui é modo unsafe, e o hash é o que garante o conteúdo")
+    return 0
+
+
 async def cmd_doc(alvos: list<str>, query: str) -> int:
     """`ppack doc` — a documentação no TERMINAL, do que já existe.
 
@@ -484,6 +880,11 @@ def rmtree(d: str) -> int:
 
 def uso():
     print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("     ppack publish <pacote> --to <dir>    o .tar, o hash e a entrada no índice")
+    print("     ppack update                         baixa os índices dos repositórios do projeto")
+    print("     ppack search <termo>                 procura nome, descrição e SÍMBOLO, offline")
+    print("     ppack add <nome>@<versão> [--unsafe] escreve no manifesto e no lock")
+    print("     ppack install                        materializa o que o lock diz")
 
 async def main() -> int:
     args = sys.argv[1:]
@@ -501,6 +902,8 @@ async def main() -> int:
     # melhor que existir na árvore, do mais adiantado para o mais atrasado. Um
     # padrão apontando para um caminho que o build já não produz é uma armadilha
     # que só aparece muito depois, com uma mensagem que não fala do problema.
+    para = ""
+    inseguro = False
     query = ""
     for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
         if path.isfile(cand):
@@ -545,6 +948,11 @@ async def main() -> int:
         elif a == "--query" and i + 1 < len(args):
             i += 1
             query = args[i]
+        elif a == "--unsafe":
+            inseguro = True
+        elif a == "--to" and i + 1 < len(args):
+            i += 1
+            para = args[i]
         elif a.startswith("-"):
             print("opção desconhecida:", a)
             return 2
@@ -569,6 +977,16 @@ async def main() -> int:
         return await cmd_ninja(alvos, query)
     if cmd == "doc":
         return await cmd_doc(alvos, query)
+    if cmd == "publish":
+        return await cmd_publish(alvos, para, query)
+    if cmd == "update":
+        return await cmd_update()
+    if cmd == "search":
+        return await cmd_search(alvos)
+    if cmd == "add":
+        return await cmd_add(alvos, inseguro)
+    if cmd == "install":
+        return await cmd_install()
     if cmd == "tree":
         return await cmd_tree()
     if cmd == "why":
