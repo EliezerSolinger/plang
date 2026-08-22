@@ -51,6 +51,41 @@ sozinho. Estado encontrado e restrição que ele impõe:
 > e F3 (`build.psc`, `ppack` — arquivos novos) são não-colidentes e é por onde eu
 > vou.
 
+## O estado no fim da noite de 2026-08-22
+
+Onze commits, e o repositório fecha verde de ponta a ponta. O que dá para fazer
+hoje, numa máquina que só tem um compilador de C:
+
+```
+cc -O2 -o plangc bootstrap/selfhost/*.c          # 2 s
+PLANGC=./plangc bash tests/psbuild.sh pbuild/ps/ppack.psc ./ppack   # 2,5 s
+./ppack build -j 6 --query ./plangc              # 68 s: a escada, o pstudio, o ppack
+./ppack verify -j 6 --query ./plangc             # 664 arestas, todas verdes
+./ppack doc pbuild/ps/lib_manifest.psc nome_ok   # a documentação, do --api
+```
+
+**Medido numa árvore limpa**: `ppack build` 68 s; `ppack verify` 5m48 do zero e
+7,7 s quando nada mudou (o `verify-all.sh` leva ~20 min em TODA corrida); a
+suíte do pscript, caso a caso, 585 arestas e 72 s do zero; tocar um fonte cujo C
+sai igual custa 4 arestas e 7,7 s.
+
+**Cinco defeitos consertados no caminho**, todos achados por construir de
+verdade: dois do coletor (um campo por escrever num `PsFile`, e a escrita num
+campo do quadro com o endereço calculado antes da chamada), o `-j` que não
+limitava nada (e terminava em deadlock num build limpo), e o `restat` que não
+atravessava corridas (nas duas pontas: a aresta rodava para sempre, e a poda se
+perdia).
+
+**O que espera VOCÊ** (está detalhado em cada secção, e resumido aqui):
+
+  1. a forma de importar um módulo PSCRIPT de um pacote (`import <pui/pui.psc>`?)
+     — sem ela o `pui` não pode virar pacote;
+  2. a docstring de um PROTÓTIPO (um corpo só com a docstring, num `.ph`?) — sem
+     ela a interface de um pacote P não se documenta;
+  3. quando mover o `stl` (41 referências, ciclo de seed);
+  4. a TROCA do Makefile (parte D da F3) — ela está pronta para ser feita, e
+     ficou de fora porque o outro agente depende do Makefile enquanto trabalha.
+
 **Progresso** (atualizar a cada passo):
 
 - [x] tarefas do agente criadas (9, com dependências)
