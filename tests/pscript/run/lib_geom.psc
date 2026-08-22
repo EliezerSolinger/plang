@@ -19,7 +19,7 @@ def area(w: float, h: float) -> float:
 
 # private to this module (44.4) — nobody outside may name it, and the module's
 # own code still calls it, which is what makes the rule mean something
-static def secret() -> int:
+private def secret() -> int:
     return 42
 
 

@@ -20,7 +20,7 @@ import "psrt_os.ph"
 # Uma str do pscript pode conter o byte 0 no meio; um caminho não pode. Se
 # passasse assim, a chamada veria o caminho CORTADO no zero e agiria sobre outro
 # arquivo — então isto levanta em vez de deixar passar.
-static def os_cstr(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> const *char:
+private def os_cstr(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> const *char:
     if p == None:
         ps_raise(ctx, "a path cannot be None", PS_CAT_VALUE, file, line)
         return None
@@ -30,7 +30,7 @@ static def os_cstr(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> cons
     return p->data
 
 # a mensagem diz O QUE se estava fazendo e COM QUAL caminho
-static def os_fail(ctx: *PsCtx, what: const *char, p: *PsStr, file: const *char, line: i32):
+private def os_fail(ctx: *PsCtx, what: const *char, p: *PsStr, file: const *char, line: i32):
     msg: char[512]
     snprintf(msg, 512, "%s '%s'", what, p->data)
     ps_raise(ctx, msg, PS_CAT_IO, file, line)
@@ -70,10 +70,10 @@ def ps_os_listdir(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *P
 
 # 511 é 0777, que é o modo que o Python passa: o `umask` do processo recorta o
 # que sobra, e é o mesmo resultado de um `mkdir` na linha de comando.
-static def os_mkdir_one(cs: const *char) -> bool:
+private def os_mkdir_one(cs: const *char) -> bool:
     return mkdir(cs, 511) == 0
 
-static def os_is_dir(cs: const *char) -> bool:
+private def os_is_dir(cs: const *char) -> bool:
     sb: stat
     if stat(cs, &sb) != 0:
         return False

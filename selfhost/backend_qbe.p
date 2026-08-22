@@ -390,96 +390,96 @@ struct Qb:
 
     # prototypes: methods call each other mutually (rvalue<->addr<->binary...),
     # so we declare them first so the generated C has the forward declarations
-    static def tmp(self: *Qb) -> i32
-    static def lbl(self: *Qb) -> i32
-    static def cls_of(self: *Qb, t: *Type) -> char
-    static def td_resolve(self: *Qb, name: const *char) -> const *char
-    static def size_of(self: *Qb, t: *Type) -> i32
-    static def type_align(self: *Qb, t: *Type) -> i32
-    static def struct_align(self: *Qb, d: *Decl) -> i32
-    static def struct_size(self: *Qb, d: *Decl) -> i32
-    static def slayout(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type, ref out_boff: i32, ref out_bw: i32) -> i32
-    static def field_offset(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type) -> i32
-    static def struct_of(self: *Qb, t: *Type) -> *Decl
-    static def emit_anon_data(self: *Qb, ty: *Type, e: *Expr) -> const *char
-    static def data_scalar(self: *Qb, db: *StrBuf, ty: *Type, e: *Expr) -> i32
-    static def data_fill(self: *Qb, db: *StrBuf, ty: *Type, items: **Expr, nitems: i32, ref idx: i32) -> i32
-    static def data_fill_body(self: *Qb, db: *StrBuf, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32
-    static def data_fill_slots_arr(self: *Qb, db: *StrBuf, ty: *Type, count: i32, esz: i32, items: **Expr, nitems: i32, ref idx: i32) -> i32
-    static def data_fill_slots_struct(self: *Qb, db: *StrBuf, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32
-    static def is_agg(self: *Qb, t: *Type) -> bool
-    static def qtype_member(self: *Qb, out: *StrBuf, ft: *Type, count: i32) -> bool
-    static def emit_qtype(self: *Qb, out: *StrBuf, name: const *char, done: *StrSet)
-    static def is_valist(self: *Qb, t: *Type) -> bool
-    static def is_signed(self: *Qb, t: *Type) -> bool
-    static def op_signed(self: *Qb, e: *Expr) -> bool
-    static def find_var(self: *Qb, name: const *char) -> *QVar
-    static def bind_decl(self: *Qb, s: *Stmt)
-    static def emit_block_body(self: *Qb, b: *Block)
-    static def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool
-    static def qtype_of(self: *Qb, e: *Expr) -> *Type
-    static def gtype_of(self: *Qb, e: *Expr) -> *Type
-    static def glvconv(self: *Qb, t: *Type) -> *Type
-    static def type_eq_gen(self: *Qb, a: *Type, b: *Type) -> bool
-    static def gen_select(self: *Qb, e: *Expr) -> *Expr
-    static def ecls(self: *Qb, e: *Expr) -> char
-    static def emit_string(self: *Qb, lex: const *char) -> i32
-    static def emit_addr(self: *Qb, e: *Expr) -> i32
-    static def load_op(self: *Qb, t: *Type) -> const *char
-    static def store_op(self: *Qb, t: *Type) -> const *char
-    static def store_cls(self: *Qb, t: *Type) -> char
-    static def emit_coerce(self: *Qb, val: i32, frm: char, to: char) -> i32
-    static def try_ptr_arith(self: *Qb, op: i32, l: i32, lt: *Type, lcls: char, r: i32, rt: *Type, rcls: char) -> i32
-    static def bf_lookup(self: *Qb, e: *Expr, ref out_ft: *Type, ref out_bo: i32, ref out_bw: i32) -> bool
-    static def emit_bf_load(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32) -> i32
-    static def emit_bf_store(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32, val: i32, vcls: char)
-    static def emit_rvalue(self: *Qb, e: *Expr) -> i32
-    static def charval(self: *Qb, lex: const *char) -> i32
-    static def emit_cast(self: *Qb, e: *Expr) -> i32
-    static def emit_unary(self: *Qb, e: *Expr) -> i32
-    static def binop_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char
-    static def cmp_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char
-    static def emit_binary(self: *Qb, e: *Expr) -> i32
-    static def emit_cond(self: *Qb, e: *Expr) -> i32
-    static def emit_logical(self: *Qb, e: *Expr) -> i32
-    static def emit_ternary(self: *Qb, e: *Expr) -> i32
-    static def emit_incdec(self: *Qb, e: *Expr) -> i32
-    static def emit_call(self: *Qb, e: *Expr) -> i32
-    static def emit_block(self: *Qb, b: *Block)
-    static def emit_stmt(self: *Qb, s: *Stmt)
-    static def emit_assign(self: *Qb, s: *Stmt)
-    static def emit_store_to(self: *Qb, lhs: *Expr, op: i32, rhs: *Expr) -> i32
-    static def emit_var_init(self: *Qb, v: *QVar, init: *Expr)
-    static def emit_wstr_to_addr(self: *Qb, addr: i32, lex: const *char)
-    static def emit_compound(self: *Qb, e: *Expr) -> i32
-    static def emit_zero(self: *Qb, addr: i32, size: i32)
-    static def emit_struct_copy(self: *Qb, dst: i32, src: i32, size: i32)
-    static def emit_init_addr(self: *Qb, addr: i32, ty: *Type, init: *Expr)
-    static def emit_fill(self: *Qb, addr: i32, ty: *Type, items: **Expr, nitems: i32, ref idx: i32)
-    static def emit_fill_body(self: *Qb, addr: i32, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32)
-    static def emit_str_to_addr(self: *Qb, addr: i32, lex: const *char, cap: i32)
-    static def compound_base(self: *Qb, op: i32) -> i32
-    static def emit_if(self: *Qb, s: *Stmt)
-    static def emit_while(self: *Qb, s: *Stmt)
-    static def emit_do(self: *Qb, s: *Stmt)
-    static def emit_for(self: *Qb, s: *Stmt)
-    static def emit_cfor(self: *Qb, s: *Stmt)
-    static def collect_cases(self: *Qb, b: *Block, acc: *Vec<*Stmt>)
-    static def collect_evars(self: *Qb, e: *Expr)
-    static def emit_switch(self: *Qb, s: *Stmt)
-    static def emit_match(self: *Qb, s: *Stmt)
-    static def collect_vars(self: *Qb, b: *Block)
-    static def add_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt)
-    static def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr, decl: *Stmt)
-    static def add_extern_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt)
-    static def static_fix_len(self: *Qb, ty: *Type, total: i32)
-    static def emit_func(self: *Qb, f: *Func)
+    private def tmp(self: *Qb) -> i32
+    private def lbl(self: *Qb) -> i32
+    private def cls_of(self: *Qb, t: *Type) -> char
+    private def td_resolve(self: *Qb, name: const *char) -> const *char
+    private def size_of(self: *Qb, t: *Type) -> i32
+    private def type_align(self: *Qb, t: *Type) -> i32
+    private def struct_align(self: *Qb, d: *Decl) -> i32
+    private def struct_size(self: *Qb, d: *Decl) -> i32
+    private def slayout(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type, ref out_boff: i32, ref out_bw: i32) -> i32
+    private def field_offset(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type) -> i32
+    private def struct_of(self: *Qb, t: *Type) -> *Decl
+    private def emit_anon_data(self: *Qb, ty: *Type, e: *Expr) -> const *char
+    private def data_scalar(self: *Qb, db: *StrBuf, ty: *Type, e: *Expr) -> i32
+    private def data_fill(self: *Qb, db: *StrBuf, ty: *Type, items: **Expr, nitems: i32, ref idx: i32) -> i32
+    private def data_fill_body(self: *Qb, db: *StrBuf, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32
+    private def data_fill_slots_arr(self: *Qb, db: *StrBuf, ty: *Type, count: i32, esz: i32, items: **Expr, nitems: i32, ref idx: i32) -> i32
+    private def data_fill_slots_struct(self: *Qb, db: *StrBuf, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32
+    private def is_agg(self: *Qb, t: *Type) -> bool
+    private def qtype_member(self: *Qb, out: *StrBuf, ft: *Type, count: i32) -> bool
+    private def emit_qtype(self: *Qb, out: *StrBuf, name: const *char, done: *StrSet)
+    private def is_valist(self: *Qb, t: *Type) -> bool
+    private def is_signed(self: *Qb, t: *Type) -> bool
+    private def op_signed(self: *Qb, e: *Expr) -> bool
+    private def find_var(self: *Qb, name: const *char) -> *QVar
+    private def bind_decl(self: *Qb, s: *Stmt)
+    private def emit_block_body(self: *Qb, b: *Block)
+    private def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool
+    private def qtype_of(self: *Qb, e: *Expr) -> *Type
+    private def gtype_of(self: *Qb, e: *Expr) -> *Type
+    private def glvconv(self: *Qb, t: *Type) -> *Type
+    private def type_eq_gen(self: *Qb, a: *Type, b: *Type) -> bool
+    private def gen_select(self: *Qb, e: *Expr) -> *Expr
+    private def ecls(self: *Qb, e: *Expr) -> char
+    private def emit_string(self: *Qb, lex: const *char) -> i32
+    private def emit_addr(self: *Qb, e: *Expr) -> i32
+    private def load_op(self: *Qb, t: *Type) -> const *char
+    private def store_op(self: *Qb, t: *Type) -> const *char
+    private def store_cls(self: *Qb, t: *Type) -> char
+    private def emit_coerce(self: *Qb, val: i32, frm: char, to: char) -> i32
+    private def try_ptr_arith(self: *Qb, op: i32, l: i32, lt: *Type, lcls: char, r: i32, rt: *Type, rcls: char) -> i32
+    private def bf_lookup(self: *Qb, e: *Expr, ref out_ft: *Type, ref out_bo: i32, ref out_bw: i32) -> bool
+    private def emit_bf_load(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32) -> i32
+    private def emit_bf_store(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32, val: i32, vcls: char)
+    private def emit_rvalue(self: *Qb, e: *Expr) -> i32
+    private def charval(self: *Qb, lex: const *char) -> i32
+    private def emit_cast(self: *Qb, e: *Expr) -> i32
+    private def emit_unary(self: *Qb, e: *Expr) -> i32
+    private def binop_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char
+    private def cmp_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char
+    private def emit_binary(self: *Qb, e: *Expr) -> i32
+    private def emit_cond(self: *Qb, e: *Expr) -> i32
+    private def emit_logical(self: *Qb, e: *Expr) -> i32
+    private def emit_ternary(self: *Qb, e: *Expr) -> i32
+    private def emit_incdec(self: *Qb, e: *Expr) -> i32
+    private def emit_call(self: *Qb, e: *Expr) -> i32
+    private def emit_block(self: *Qb, b: *Block)
+    private def emit_stmt(self: *Qb, s: *Stmt)
+    private def emit_assign(self: *Qb, s: *Stmt)
+    private def emit_store_to(self: *Qb, lhs: *Expr, op: i32, rhs: *Expr) -> i32
+    private def emit_var_init(self: *Qb, v: *QVar, init: *Expr)
+    private def emit_wstr_to_addr(self: *Qb, addr: i32, lex: const *char)
+    private def emit_compound(self: *Qb, e: *Expr) -> i32
+    private def emit_zero(self: *Qb, addr: i32, size: i32)
+    private def emit_struct_copy(self: *Qb, dst: i32, src: i32, size: i32)
+    private def emit_init_addr(self: *Qb, addr: i32, ty: *Type, init: *Expr)
+    private def emit_fill(self: *Qb, addr: i32, ty: *Type, items: **Expr, nitems: i32, ref idx: i32)
+    private def emit_fill_body(self: *Qb, addr: i32, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32)
+    private def emit_str_to_addr(self: *Qb, addr: i32, lex: const *char, cap: i32)
+    private def compound_base(self: *Qb, op: i32) -> i32
+    private def emit_if(self: *Qb, s: *Stmt)
+    private def emit_while(self: *Qb, s: *Stmt)
+    private def emit_do(self: *Qb, s: *Stmt)
+    private def emit_for(self: *Qb, s: *Stmt)
+    private def emit_cfor(self: *Qb, s: *Stmt)
+    private def collect_cases(self: *Qb, b: *Block, acc: *Vec<*Stmt>)
+    private def collect_evars(self: *Qb, e: *Expr)
+    private def emit_switch(self: *Qb, s: *Stmt)
+    private def emit_match(self: *Qb, s: *Stmt)
+    private def collect_vars(self: *Qb, b: *Block)
+    private def add_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt)
+    private def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr, decl: *Stmt)
+    private def add_extern_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt)
+    private def static_fix_len(self: *Qb, ty: *Type, total: i32)
+    private def emit_func(self: *Qb, f: *Func)
 
-    static def tmp(self: *Qb) -> i32:
+    private def tmp(self: *Qb) -> i32:
         self->ntmp += 1
         return self->ntmp
 
-    static def lbl(self: *Qb) -> i32:
+    private def lbl(self: *Qb) -> i32:
         self->nlbl += 1
         return self->nlbl
 
@@ -489,7 +489,7 @@ struct Qb:
     # it for four bytes corrupts every offset after it in the struct. The C back
     # end never has this problem — it prints the typedef and the system header
     # answers — so the map is filled only for the back ends that need it.
-    static def td_resolve(self: *Qb, name: const *char) -> const *char:
+    private def td_resolve(self: *Qb, name: const *char) -> const *char:
         if name == None:
             return None
         n: const *char = name
@@ -502,7 +502,7 @@ struct Qb:
             d += 1
         return n
 
-    static def cls_of(self: *Qb, t: *Type) -> char:
+    private def cls_of(self: *Qb, t: *Type) -> char:
         if t == None:
             return 'w'
         if t->kind in {TY_PTR, TY_ARRAY, TY_FUNC}:
@@ -518,7 +518,7 @@ struct Qb:
 
     # evaluates a constant integer expression (array dimensions, e.g. 5*32,
     # N+1, enum). Returns the value; *ok=False if not reducible at compile time.
-    static def const_int(self: *Qb, e: *Expr, ref ok: bool) -> i64:
+    private def const_int(self: *Qb, e: *Expr, ref ok: bool) -> i64:
         if e == None:
             ok = False
             return 0
@@ -613,7 +613,7 @@ struct Qb:
                 ok = False
                 return 0
 
-    static def size_of(self: *Qb, t: *Type) -> i32:
+    private def size_of(self: *Qb, t: *Type) -> i32:
         if t == None:
             return 4
         if t->kind == TY_PTR or t->kind == TY_FUNC:
@@ -646,14 +646,14 @@ struct Qb:
     # Allocated dynamically on the stack (alloc with a runtime size) at the
     # declaration point, not in the @start prologue. (Under --std=c89 sema has
     # already lowered it to pointer+malloc.)
-    static def is_vla_type(self: *Qb, t: *Type) -> bool:
+    private def is_vla_type(self: *Qb, t: *Type) -> bool:
         if t == None or t->kind != TY_ARRAY or t->arr_len == None:
             return False
         ok: bool = True
         self->const_int(t->arr_len, ref ok)
         return not ok
 
-    static def type_align(self: *Qb, t: *Type) -> i32:
+    private def type_align(self: *Qb, t: *Type) -> i32:
         if t == None:
             return 4
         if t->kind == TY_PTR:
@@ -665,7 +665,7 @@ struct Qb:
             return self->struct_align(d)
         return self->size_of(t)  # scalar: alignment == size
 
-    static def struct_align(self: *Qb, d: *Decl) -> i32:
+    private def struct_align(self: *Qb, d: *Decl) -> i32:
         a = 1
         i: i32
         for i in range(d->nfields):
@@ -681,7 +681,7 @@ struct Qb:
     # bit_off/bit_width (bw = -1 for a normal field), descending into
     # anonymous members. fname == None: returns the end of the struct
     # (without rounding).
-    static def slayout(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type, ref out_boff: i32, ref out_bw: i32) -> i32:
+    private def slayout(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type, ref out_boff: i32, ref out_bw: i32) -> i32:
         off = 0
         ubase = -1   # open bitfield unit (-1 = none)
         usz = 0; ubits = 0
@@ -744,7 +744,7 @@ struct Qb:
             return 0
         return off
 
-    static def struct_size(self: *Qb, d: *Decl) -> i32:
+    private def struct_size(self: *Qb, d: *Decl) -> i32:
         # union: all fields at offset 0; size = the largest field
         if d->kind == DL_UNION:
             mx = 0
@@ -759,7 +759,7 @@ struct Qb:
         return align_up(end, self->struct_align(d))
 
     # offset of field `fname` in `d` (unit, for bitfield); type in out_ty
-    static def field_offset(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type) -> i32:
+    private def field_offset(self: *Qb, d: *Decl, fname: const *char, ref out_ty: *Type) -> i32:
         db = 0; dw = 0
         return self->slayout(d, fname, ref out_ty, ref db, ref dw)
 
@@ -771,7 +771,7 @@ struct Qb:
     # module's buffer and returns the symbol's name ($qadN). Used for an
     # array compound literal as a static POINTER value:
     # `uchar *m[] = { (uchar[]){...} }`.
-    static def emit_anon_data(self: *Qb, ty: *Type, e: *Expr) -> const *char:
+    private def emit_anon_data(self: *Qb, ty: *Type, e: *Expr) -> const *char:
         adb: StrBuf = {0}
         one: *Expr = e
         ix = 0
@@ -789,7 +789,7 @@ struct Qb:
         adb.deinit()
         return nm
 
-    static def data_scalar(self: *Qb, db: *StrBuf, ty: *Type, e: *Expr) -> i32:
+    private def data_scalar(self: *Qb, db: *StrBuf, ty: *Type, e: *Expr) -> i32:
         if e == None:
             return -1
         sz: i32 = self->size_of(ty)
@@ -839,7 +839,7 @@ struct Qb:
     # Fills ONE value of `ty` consuming exprs from the flat stream items[idx..)
     # — C brace-elision semantics: sub-aggregate WITHOUT braces consumes from
     # the parent's stream; WITH braces opens its own stream. Returns bytes or -1.
-    static def data_fill(self: *Qb, db: *StrBuf, ty: *Type, items: **Expr, nitems: i32, ref idx: i32) -> i32:
+    private def data_fill(self: *Qb, db: *StrBuf, ty: *Type, items: **Expr, nitems: i32, ref idx: i32) -> i32:
         sd: *Decl = None
         if ty != None and ty->kind == TY_NAME and ty->name != None:
             sd = self->structs.get_or(ty->name, None)
@@ -883,7 +883,7 @@ struct Qb:
     # With DESIGNATORS at this level ([i]=/.f=): slot-mode — resolves each
     # position (last write wins, as in C) and emits in order; positions with
     # no value become zero. Without designators: streaming (preserves brace elision).
-    static def data_fill_body(self: *Qb, db: *StrBuf, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32:
+    private def data_fill_body(self: *Qb, db: *StrBuf, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32:
         # is there a designator at this level?
         has_desig: bool = False
         for di in range(idx, nitems):
@@ -1013,7 +1013,7 @@ struct Qb:
 
     # slot-mode for array with designators: resolves positions (override = last
     # write wins), then emits each slot (empty -> z)
-    static def data_fill_slots_arr(self: *Qb, db: *StrBuf, ty: *Type, count: i32, esz: i32, items: **Expr, nitems: i32, ref idx: i32) -> i32:
+    private def data_fill_slots_arr(self: *Qb, db: *StrBuf, ty: *Type, count: i32, esz: i32, items: **Expr, nitems: i32, ref idx: i32) -> i32:
         # 1st pass: size (if inferred) = max(position) + 1
         cur = 0; mx = 0
         for k in range(idx, nitems):
@@ -1056,7 +1056,7 @@ struct Qb:
         return emitted
 
     # slot-mode for struct with designators (.f=): resolves field by field
-    static def data_fill_slots_struct(self: *Qb, db: *StrBuf, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32:
+    private def data_fill_slots_struct(self: *Qb, db: *StrBuf, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32) -> i32:
         slots: **Expr = calloc(usize(sd->nfields), sizeof(items[0]))
         cur = 0
         for k in range(idx, nitems):
@@ -1140,7 +1140,7 @@ struct Qb:
     # ---------- emission of aggregate types (type :Name = ...) ----------
     # a type MEMBER: letter per size/class, :sub for struct, with array
     # count. Returns False if the shape is not representable (falls back to opaque).
-    static def qtype_member(self: *Qb, out: *StrBuf, ft: *Type, count: i32) -> bool:
+    private def qtype_member(self: *Qb, out: *StrBuf, ft: *Type, count: i32) -> bool:
         while ft != None and ft->kind == TY_ARRAY:
             c = 0
             if ft->arr_len != None:
@@ -1183,7 +1183,7 @@ struct Qb:
         return True
 
     # emits `type :Name` with dependencies FIRST (QBE requires subtypes defined)
-    static def emit_qtype(self: *Qb, out: *StrBuf, name: const *char, done: *StrSet):
+    private def emit_qtype(self: *Qb, out: *StrBuf, name: const *char, done: *StrSet):
         if done->has(name):
             return
         done->add(name)
@@ -1252,18 +1252,18 @@ struct Qb:
         db.deinit()
 
     # is t a struct/union passed BY VALUE (QBE aggregate)? (non-pointer)
-    static def is_agg(self: *Qb, t: *Type) -> bool:
+    private def is_agg(self: *Qb, t: *Type) -> bool:
         if t == None or t->kind != TY_NAME:
             return False
         return self->structs.get_or(t->name, None) != None
 
-    static def is_valist(self: *Qb, t: *Type) -> bool:
+    private def is_valist(self: *Qb, t: *Type) -> bool:
         if t == None or t->kind != TY_NAME:
             return False
         return t->name in {"va_list", "__builtin_va_list"}
 
     # if t (after deref) is a known struct, returns the DL_STRUCT; else None
-    static def struct_of(self: *Qb, t: *Type) -> *Decl:
+    private def struct_of(self: *Qb, t: *Type) -> *Decl:
         if t == None:
             return None
         if t->kind == TY_PTR or t->kind == TY_ARRAY:
@@ -1272,7 +1272,7 @@ struct Qb:
             return None
         return self->structs.get_or(t->name, None)
 
-    static def is_signed(self: *Qb, t: *Type) -> bool:
+    private def is_signed(self: *Qb, t: *Type) -> bool:
         # pointer/array (name == None) -> treated as signed (only matters
         # for div/rem/shift/comparison, where pointer behaves as signed)
         if t == None or t->kind != TY_NAME or t->name == None:
@@ -1286,13 +1286,13 @@ struct Qb:
 
     # signedness of an operand (from its declared/ingested type; an unprototyped
     # call has no type and defaults to signed, like C's implicit int)
-    static def op_signed(self: *Qb, e: *Expr) -> bool:
+    private def op_signed(self: *Qb, e: *Expr) -> bool:
         return self->is_signed(self->qtype_of(e))
 
     # lexical name resolution: walk the ACTIVE bindings innermost-first. Two
     # declarations may share a name with different types (sibling/nested blocks);
     # a flat name search would fuse them — wrong offsets and store classes.
-    static def find_var(self: *Qb, name: const *char) -> *QVar:
+    private def find_var(self: *Qb, name: const *char) -> *QVar:
         k: i32
         for k in range(self->binds.len - 1, -1, -1):
             idx: i32 = self->binds.get(k)
@@ -1303,7 +1303,7 @@ struct Qb:
     # activates the binding of a declaration at its emission point: ties the
     # emitted ST_VAR/ST_WITH to the QVar the collect pre-pass created for it
     # (identity by Stmt pointer, immune to name collisions)
-    static def bind_decl(self: *Qb, s: *Stmt):
+    private def bind_decl(self: *Qb, s: *Stmt):
         i: i32
         for i in range(self->vars.len):
             if self->vars.data[i].decl == s:
@@ -1311,7 +1311,7 @@ struct Qb:
                 return
 
     # enum constant -> integer value (QBE has no enum); *out receives the value
-    static def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool:
+    private def enum_lookup(self: *Qb, name: const *char, out: *i64) -> bool:
         i: i32
         for i in range(self->enumc.len):
             if strcmp(self->enumc.data[i].name, name) == 0:
@@ -1320,7 +1320,7 @@ struct Qb:
         return False
 
     # ---------- local type inference (mirrors sema, best-effort) ----------
-    static def qtype_of(self: *Qb, e: *Expr) -> *Type:
+    private def qtype_of(self: *Qb, e: *Expr) -> *Type:
         if e == None:
             return None
         match e->kind:
@@ -1420,7 +1420,7 @@ struct Qb:
     # ---------- _Generic (C11): compile-time type-based selection ----------
     # type for matching: like qtype_of, but with literals, strings, functions
     # and arithmetic promotion resolved (the fidelity the dispatch requires)
-    static def gtype_of(self: *Qb, e: *Expr) -> *Type:
+    private def gtype_of(self: *Qb, e: *Expr) -> *Type:
         if e == None:
             return None
         match e->kind:
@@ -1477,7 +1477,7 @@ struct Qb:
 
     # C11 lvalue conversion on the controlling expr: drops the top qualifier;
     # array decays to pointer; function to function-pointer
-    static def glvconv(self: *Qb, t: *Type) -> *Type:
+    private def glvconv(self: *Qb, t: *Type) -> *Type:
         if t == None:
             return None
         if t->kind == TY_ARRAY:
@@ -1493,7 +1493,7 @@ struct Qb:
 
     # structural equality for associations: const is significant (except at
     # the top level, already stripped by glvconv); function params ignored (F1)
-    static def type_eq_gen(self: *Qb, a: *Type, b: *Type) -> bool:
+    private def type_eq_gen(self: *Qb, a: *Type, b: *Type) -> bool:
         if a == None or b == None:
             return False
         if a->kind != b->kind:
@@ -1521,7 +1521,7 @@ struct Qb:
                 return False
 
     # picks the association's expression that matches the controlling type
-    static def gen_select(self: *Qb, e: *Expr) -> *Expr:
+    private def gen_select(self: *Qb, e: *Expr) -> *Expr:
         ct: *Type = self->glvconv(self->gtype_of(e->lhs))
         dflt: *Expr = None
         i: i32
@@ -1536,7 +1536,7 @@ struct Qb:
         return None
 
     # QBE class of an expression (with the special ptr/string cases)
-    static def ecls(self: *Qb, e: *Expr) -> char:
+    private def ecls(self: *Qb, e: *Expr) -> char:
         if e == None:
             return 'w'
         if e->kind == EX_GENERIC:
@@ -1610,7 +1610,7 @@ struct Qb:
     # decodes ALL escapes into explicit bytes (b V, b V, ...) — robust and
     # without QBE escape ambiguity. Handles \n\t\r\\\"\' \a\b\f\v, octal
     # \NNN and hex \xNN.
-    static def emit_string(self: *Qb, lex: const *char) -> i32:
+    private def emit_string(self: *Qb, lex: const *char) -> i32:
         id: i32 = self->nstr
         self->nstr += 1
         if lit_is_wide(lex):
@@ -1627,7 +1627,7 @@ struct Qb:
         return id
 
     # ---------- lvalue: returns id of the temp holding the ADDRESS ----------
-    static def emit_addr(self: *Qb, e: *Expr) -> i32:
+    private def emit_addr(self: *Qb, e: *Expr) -> i32:
         match e->kind:
             case EX_IDENT:
                 v: *QVar = self->find_var(e->text)
@@ -1704,7 +1704,7 @@ struct Qb:
                 fatal_at(self->file, e->pos, "qbe backend: expression is not a valid lvalue (F1: struct fields pending)")
         return 0
 
-    static def load_op(self: *Qb, t: *Type) -> const *char:
+    private def load_op(self: *Qb, t: *Type) -> const *char:
         sz: i32 = self->size_of(t)
         cls: char = self->cls_of(t)
         if cls == 'l':
@@ -1719,7 +1719,7 @@ struct Qb:
             return "loadsh" if self->is_signed(t) else "loaduh"
         return "loadw"
 
-    static def store_op(self: *Qb, t: *Type) -> const *char:
+    private def store_op(self: *Qb, t: *Type) -> const *char:
         sz: i32 = self->size_of(t)
         cls: char = self->cls_of(t)
         if cls == 'l':
@@ -1735,7 +1735,7 @@ struct Qb:
         return "storew"
 
     # QBE class of the operand expected by the store (b/h/w use 'w'; l uses 'l')
-    static def store_cls(self: *Qb, t: *Type) -> char:
+    private def store_cls(self: *Qb, t: *Type) -> char:
         c: char = self->cls_of(t)
         if c in {'l', 'd', 's'}:
             return c
@@ -1743,7 +1743,7 @@ struct Qb:
 
     # coerces a value from class `frm` to `to`. Covers int<->int, int<->float
     # (assumes signed — dominant case) and float<->float. Same class = no-op.
-    static def emit_coerce(self: *Qb, val: i32, frm: char, to: char) -> i32:
+    private def emit_coerce(self: *Qb, val: i32, frm: char, to: char) -> i32:
         if frm == to:
             return val
         t: i32 = self->tmp()
@@ -1766,7 +1766,7 @@ struct Qb:
         return t
 
     # ---------- rvalue: returns id of the temp holding the VALUE ----------
-    static def emit_rvalue(self: *Qb, e: *Expr) -> i32:
+    private def emit_rvalue(self: *Qb, e: *Expr) -> i32:
         match e->kind:
             case EX_NUMBER:
                 # float: QBE constant is <cls>_<number> (d_1.5 / s_1.5)
@@ -1940,7 +1940,7 @@ struct Qb:
 
     # ++x / x++ : addr=lval; old=load; new=old±step; store new; returns
     # old (post) or new (pre). step = sizeof(*p) for pointer, else 1.
-    static def emit_incdec(self: *Qb, e: *Expr) -> i32:
+    private def emit_incdec(self: *Qb, e: *Expr) -> i32:
         ty: *Type = self->qtype_of(e->lhs)
         cls: char = self->cls_of(ty)
         addr: i32 = self->emit_addr(e->lhs)
@@ -1959,7 +1959,7 @@ struct Qb:
         self->out->printf("\t%s %%t%d, %%t%d\n", self->store_op(ty), nw, addr)
         return old if e->incdec_post else nw
 
-    static def charval(self: *Qb, lex: const *char) -> i32:
+    private def charval(self: *Qb, lex: const *char) -> i32:
         # lex = 'x' with quotes; handles escapes (includes octal \NNN and hex \xNN)
         # wide/unicode prefix (L'x', u'x', U'x'): skip it (value = ASCII codepoint)
         if lex[0] in {'L', 'u', 'U'}:
@@ -2019,7 +2019,7 @@ struct Qb:
                     return ov
                 return i32(c)
 
-    static def emit_cast(self: *Qb, e: *Expr) -> i32:
+    private def emit_cast(self: *Qb, e: *Expr) -> i32:
         # cast to struct type ((struct S)expr): reinterpretation — the rvalue of
         # an aggregate is the address, which stays unchanged
         if self->is_agg(e->cast_type):
@@ -2044,7 +2044,7 @@ struct Qb:
                 return tx
         return r
 
-    static def emit_unary(self: *Qb, e: *Expr) -> i32:
+    private def emit_unary(self: *Qb, e: *Expr) -> i32:
         match e->op:
             case TK_STAR:
                 addr: i32 = self->emit_rvalue(e->lhs)
@@ -2097,7 +2097,7 @@ struct Qb:
                 fatal_at(self->file, e->pos, "qbe backend: unsupported unary operator")
         return 0
 
-    static def binop_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char:
+    private def binop_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char:
         match op:
             case TK_PLUS:
                 return "add"
@@ -2123,7 +2123,7 @@ struct Qb:
                 return None
 
     # comparison: prefix c + (s/u)? + cmp + class
-    static def cmp_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char:
+    private def cmp_name(self: *Qb, op: i32, cls: char, sgn: bool) -> const *char:
         # float: no sign prefix (cltd/cled/cgtd/cged/ceqd/cned)
         if cls == 's' or cls == 'd':
             match op:
@@ -2159,7 +2159,7 @@ struct Qb:
 
     # POINTER arithmetic (+/-): scales the integer side by the element
     # size; ptr-ptr divides by the width. Returns -1 if not applicable.
-    static def try_ptr_arith(self: *Qb, op: i32, l: i32, lt: *Type, lcls: char, r: i32, rt: *Type, rcls: char) -> i32:
+    private def try_ptr_arith(self: *Qb, op: i32, l: i32, lt: *Type, lcls: char, r: i32, rt: *Type, rcls: char) -> i32:
         if op != TK_PLUS and op != TK_MINUS:
             return -1
         lp: bool = lt != None and (lt->kind == TY_PTR or lt->kind == TY_ARRAY)
@@ -2195,7 +2195,7 @@ struct Qb:
     # integer literal whose value fits in 32 bits (<= 0xffffffff), e.g. the
     # `unsigned int` 0xffffffff. (ecls classifies it 'l' to zero-extend when
     # widening, but in a comparison with a 32-bit value it should stay 32-bit.)
-    static def is_u32_lit(self: *Qb, e: *Expr) -> bool:
+    private def is_u32_lit(self: *Qb, e: *Expr) -> bool:
         if e == None or e->kind != EX_NUMBER or is_float_lit(e->text):
             return False
         s: const *char = e->text
@@ -2205,7 +2205,7 @@ struct Qb:
             s += 1
         return strtoull(e->text, None, 0) <= 0xffffffff
 
-    static def emit_binary(self: *Qb, e: *Expr) -> i32:
+    private def emit_binary(self: *Qb, e: *Expr) -> i32:
         op: i32 = e->op
         # short-circuit for and/or
         if op == TK_AND or op == TK_OR:
@@ -2244,7 +2244,7 @@ struct Qb:
 
     # branch condition: rvalue normalized to 'w' (jnz requires word) —
     # pointer/long/float become compare != 0
-    static def emit_cond(self: *Qb, e: *Expr) -> i32:
+    private def emit_cond(self: *Qb, e: *Expr) -> i32:
         v: i32 = self->emit_rvalue(e)
         c: char = self->ecls(e)
         if c == 'w':
@@ -2261,11 +2261,11 @@ struct Qb:
     # emits an `alloc` in the PROLOGUE (@start block), not inline. Crucial: an
     # alloc inside a loop is re-executed every iteration (it's alloca in
     # QBE) and leaks the stack — ternary/&&/|| in a loop overflowed the stack.
-    static def emit_slot(self: *Qb, res: i32, align: i32, bytes: i32):
+    private def emit_slot(self: *Qb, res: i32, align: i32, bytes: i32):
         dst: *StrBuf = self->slots if self->slots != None else self->out
         dst->printf("\t%%r%d =l alloc%d %d\n", res, align, bytes)
 
-    static def emit_logical(self: *Qb, e: *Expr) -> i32:
+    private def emit_logical(self: *Qb, e: *Expr) -> i32:
         # result in a temporary slot via blocks (short-circuit)
         res: i32 = self->tmp()
         self->emit_slot(res, 4, 4)
@@ -2293,7 +2293,7 @@ struct Qb:
         self->out->printf("\t%%t%d =w loadw %%r%d\n", t, res)
         return t
 
-    static def emit_ternary(self: *Qb, e: *Expr) -> i32:
+    private def emit_ternary(self: *Qb, e: *Expr) -> i32:
         cls: char = qpromote(self->ecls(e->lhs), self->ecls(e->rhs))
         sop: const *char = "storew"
         lop: const *char = "loadw"
@@ -2325,7 +2325,7 @@ struct Qb:
         self->out->printf("\t%%t%d =%c %s %%r%d\n", t, cls, lop, res)
         return t
 
-    static def emit_call(self: *Qb, e: *Expr) -> i32:
+    private def emit_call(self: *Qb, e: *Expr) -> i32:
         fname: const *char = e->lhs->text if e->lhs->kind == EX_IDENT else None
         # sizeof: compile-time constant (size_t = class 'l')
         if fname != None and fname == "sizeof" and e->nargs == 1:
@@ -2470,7 +2470,7 @@ struct Qb:
     # order). Does not pop: the caller repositions defers.len (end of block)
     # or is at an exit (return/break/continue) where the rest of the block
     # is dead.
-    static def emit_defers_downto(self: *Qb, mark: i32):
+    private def emit_defers_downto(self: *Qb, mark: i32):
         i: i32
         for i in range(self->defers.len - 1, mark - 1, -1):
             self->emit_block(self->defers.data[i]->body)
@@ -2478,7 +2478,7 @@ struct Qb:
     # statements + end-of-block defers WITHOUT closing the lexical scope — the
     # caller controls binds (emit_block pops; statement-expressions pop only
     # after emitting their value expression, which sees the block's names)
-    static def emit_block_body(self: *Qb, b: *Block):
+    private def emit_block_body(self: *Qb, b: *Block):
         mark: i32 = self->defers.len
         i: i32
         for i in range(b->n):
@@ -2490,12 +2490,12 @@ struct Qb:
             self->emit_defers_downto(mark)
         self->defers.len = mark
 
-    static def emit_block(self: *Qb, b: *Block):
+    private def emit_block(self: *Qb, b: *Block):
         bmark: i32 = self->binds.len   # lexical scope: bindings die with the block
         self->emit_block_body(b)
         self->binds.len = bmark        # allocas stay valid; only the NAMES go out of scope
 
-    static def emit_stmt(self: *Qb, s: *Stmt):
+    private def emit_stmt(self: *Qb, s: *Stmt):
         match s->kind:
             case ST_VAR:
                 self->bind_decl(s)   # the name is visible from HERE to block end
@@ -2592,14 +2592,14 @@ struct Qb:
             case _:
                 fatal_at(self->file, s->pos, "qbe backend: statement not supported in this phase")
 
-    static def emit_assign(self: *Qb, s: *Stmt):
+    private def emit_assign(self: *Qb, s: *Stmt):
         self->emit_store_to(s->lhs, s->op, s->rhs)
 
     # core shared by ST_ASSIGN (statement) and EX_ASSIGN (expression):
     # evaluates `lhs op= rhs`, stores it and returns the stored value.
     # is `e` an EX_FIELD naming a BITFIELD? writes unit type/bit_off/
     # width and returns True
-    static def bf_lookup(self: *Qb, e: *Expr, ref out_ft: *Type, ref out_bo: i32, ref out_bw: i32) -> bool:
+    private def bf_lookup(self: *Qb, e: *Expr, ref out_ft: *Type, ref out_bo: i32, ref out_bw: i32) -> bool:
         if e == None or e->kind != EX_FIELD:
             return False
         d: *Decl = self->struct_of(self->qtype_of(e->lhs))
@@ -2611,7 +2611,7 @@ struct Qb:
 
     # reads a bitfield: loads the unit and extracts [bo, bo+bw) with shift/mask
     # (arithmetic for signed type)
-    static def emit_bf_load(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32) -> i32:
+    private def emit_bf_load(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32) -> i32:
         usz: i32 = self->size_of(ft)
         ucl: char = 'l' if usz == 8 else 'w'
         bits: i32 = usz * 8
@@ -2641,7 +2641,7 @@ struct Qb:
         return s
 
     # writes a bitfield (RMW): clears [bo, bo+bw) in the unit and ORs the value
-    static def emit_bf_store(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32, val: i32, vcls: char):
+    private def emit_bf_store(self: *Qb, addr: i32, ft: *Type, bo: i32, bw: i32, val: i32, vcls: char):
         usz: i32 = self->size_of(ft)
         ucl: char = 'l' if usz == 8 else 'w'
         mask: i64 = (i64(1) << bw) - 1
@@ -2671,7 +2671,7 @@ struct Qb:
         self->out->printf("\t%%t%d =%c or %%t%d, %%t%d\n", u2, ucl, c1, m2)
         self->out->printf("\t%s %%t%d, %%t%d\n", sop, u2, addr)
 
-    static def emit_store_to(self: *Qb, lhs: *Expr, op: i32, rhs: *Expr) -> i32:
+    private def emit_store_to(self: *Qb, lhs: *Expr, op: i32, rhs: *Expr) -> i32:
         lt: *Type = self->qtype_of(lhs)
         # AGGREGATE assignment (s1 = s2, arr[i] = s, p->field = s): byte copy
         # (rvalue of an aggregate = address)
@@ -2715,7 +2715,7 @@ struct Qb:
 
     # initializes a local variable from its initializer (scalar,
     # string for char[], or a { } list of array/struct, recursively).
-    static def emit_var_init(self: *Qb, v: *QVar, init: *Expr):
+    private def emit_var_init(self: *Qb, v: *QVar, init: *Expr):
         ty: *Type = v->ty
         # char arr[] = "..."  -> copies the bytes to the slot
         if init->kind == EX_STRING and ty != None and ty->kind == TY_ARRAY:
@@ -2743,7 +2743,7 @@ struct Qb:
 
     # compound literal (type){...}: allocates an anonymous slot, zeroes it,
     # initializes it and returns the temp with the object's ADDRESS
-    static def emit_compound(self: *Qb, e: *Expr) -> i32:
+    private def emit_compound(self: *Qb, e: *Expr) -> i32:
         ty: *Type = e->cast_type
         sz: i32 = self->size_of(ty)
         # (T[]){...}: array without a dimension — infers the size from the number of items
@@ -2769,7 +2769,7 @@ struct Qb:
         return slot
 
     # zeroes `size` bytes starting from the address in temp `addr` (8/4/1-byte chunks)
-    static def emit_zero(self: *Qb, addr: i32, size: i32):
+    private def emit_zero(self: *Qb, addr: i32, size: i32):
         off = 0
         while off + 8 <= size:
             a: i32 = self->tmp()
@@ -2788,7 +2788,7 @@ struct Qb:
             off += 1
 
     # copies `size` bytes from src to dst (addresses in temps); 8/4/1-byte chunks
-    static def emit_struct_copy(self: *Qb, dst: i32, src: i32, size: i32):
+    private def emit_struct_copy(self: *Qb, dst: i32, src: i32, size: i32):
         off = 0
         while off + 8 <= size:
             sp: i32 = self->tmp()
@@ -2820,7 +2820,7 @@ struct Qb:
 
     # fills the value of `init` at address `addr` with type `ty` (recursive);
     # does NOT zero (the caller zeroes the top-level aggregate once).
-    static def emit_init_addr(self: *Qb, addr: i32, ty: *Type, init: *Expr):
+    private def emit_init_addr(self: *Qb, addr: i32, ty: *Type, init: *Expr):
         one: *Expr = init
         ix = 0
         self->emit_fill(addr, ty, &one, 1, ref ix)
@@ -2828,7 +2828,7 @@ struct Qb:
     # local mirror of data_fill: fills ONE value consuming exprs from the flat
     # stream (C brace elision); designators jump to the position and overrides
     # work by store order (the last one wins, as in C)
-    static def emit_fill(self: *Qb, addr: i32, ty: *Type, items: **Expr, nitems: i32, ref idx: i32):
+    private def emit_fill(self: *Qb, addr: i32, ty: *Type, items: **Expr, nitems: i32, ref idx: i32):
         if idx >= nitems or items[idx] == None:
             return
         sd: *Decl = None
@@ -2873,7 +2873,7 @@ struct Qb:
     # local aggregate body: array = positions (designator [i] jumps);
     # struct = fields in order (designator .f jumps); union = 1st member (or
     # the designated one, descending into an anonymous member)
-    static def emit_fill_body(self: *Qb, addr: i32, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32):
+    private def emit_fill_body(self: *Qb, addr: i32, ty: *Type, sd: *Decl, items: **Expr, nitems: i32, ref idx: i32):
         if ty != None and ty->kind == TY_ARRAY:
             elem: *Type = ty->inner
             esz: i32 = self->size_of(elem)
@@ -3002,7 +3002,7 @@ struct Qb:
     # copies the bytes of string `lex` to the address in `addr`, limited to
     # `cap` bytes (including the nul if it fits). Decodes escapes (same logic
     # as cstr_bytes, but emitting storeb).
-    static def emit_str_to_addr(self: *Qb, addr: i32, lex: const *char, cap: i32):
+    private def emit_str_to_addr(self: *Qb, addr: i32, lex: const *char, cap: i32):
         off = 0
         i: usize = 1
         n: usize = strlen(lex)
@@ -3065,7 +3065,7 @@ struct Qb:
 
     # wchar_t s[] = L"...": decode UTF-8 from the lexeme into codepoints (at compile
     # time) and store each one as a word (4 bytes) + codepoint 0 at the end.
-    static def emit_wstr_to_addr(self: *Qb, addr: i32, lex: const *char):
+    private def emit_wstr_to_addr(self: *Qb, addr: i32, lex: const *char):
         off = 0
         i: usize = lit_prefix_len(lex) + 1   # skip prefix (L/u/U) and the quote
         n: usize = strlen(lex)
@@ -3125,7 +3125,7 @@ struct Qb:
         self->out->printf("\t%%t%d =l add %%t%d, %d\n", az, addr, off)
         self->out->printf("\tstorew 0, %%t%d\n", az)
 
-    static def compound_base(self: *Qb, op: i32) -> i32:
+    private def compound_base(self: *Qb, op: i32) -> i32:
         match op:
             case TK_PLUS_EQ:
                 return TK_PLUS
@@ -3150,7 +3150,7 @@ struct Qb:
             case _:
                 return TK_PLUS
 
-    static def emit_if(self: *Qb, s: *Stmt):
+    private def emit_if(self: *Qb, s: *Stmt):
         # folded at compile-time: emit only the live branch (no jumps)
         if s->if_sel != -1:
             if s->if_sel >= 0 and s->if_sel < s->nconds:
@@ -3174,7 +3174,7 @@ struct Qb:
         self->out->printf("\tjmp @l%d\n", end)
         self->out->printf("@l%d\n", end)
 
-    static def emit_while(self: *Qb, s: *Stmt):
+    private def emit_while(self: *Qb, s: *Stmt):
         cond: i32 = self->lbl()
         body: i32 = self->lbl()
         end: i32 = self->lbl()
@@ -3195,7 +3195,7 @@ struct Qb:
         self->out->printf("\tjmp @l%d\n", cond)
         self->out->printf("@l%d\n", end)
 
-    static def emit_do(self: *Qb, s: *Stmt):
+    private def emit_do(self: *Qb, s: *Stmt):
         body: i32 = self->lbl()
         cond: i32 = self->lbl()
         end: i32 = self->lbl()
@@ -3215,7 +3215,7 @@ struct Qb:
         self->out->printf("\tjnz %%t%d, @l%d, @l%d\n", c, body, end)
         self->out->printf("@l%d\n", end)
 
-    static def emit_for(self: *Qb, s: *Stmt):
+    private def emit_for(self: *Qb, s: *Stmt):
         # counter is an already-declared variable (slot exists)
         v: *QVar = self->find_var(s->var)
         # init: i = from (or 0)
@@ -3270,7 +3270,7 @@ struct Qb:
         self->out->printf("@l%d\n", end)
 
     # for(init; cond; post) in C style — faithful: continue jumps to the post step
-    static def emit_cfor(self: *Qb, s: *Stmt):
+    private def emit_cfor(self: *Qb, s: *Stmt):
         fmark: i32 = self->binds.len   # C99: the for-init declaration scopes to the loop
         if s->for_init != None:
             self->emit_stmt(s->for_init)
@@ -3310,7 +3310,7 @@ struct Qb:
     # collects the ST_CASE from a switch's body, descending into nested blocks
     # (if/while/do/for) — cases can live inside loops (Duff's device).
     # does NOT descend into ST_SWITCH: those cases belong to the inner switch.
-    static def collect_cases(self: *Qb, b: *Block, acc: *Vec<*Stmt>):
+    private def collect_cases(self: *Qb, b: *Block, acc: *Vec<*Stmt>):
         if b == None:
             return
         i: i32
@@ -3328,7 +3328,7 @@ struct Qb:
     # of tests -> jmp to the case's label (assigned in case_lbl); the body is
     # emitted as a normal block and each ST_CASE becomes its own inline label — jumping
     # into a loop is just a jmp (QBE accepts an arbitrary CFG).
-    static def emit_switch(self: *Qb, s: *Stmt):
+    private def emit_switch(self: *Qb, s: *Stmt):
         subj: i32 = self->emit_rvalue(s->subject)
         scls: char = self->ecls(s->subject)
         end: i32 = self->lbl()
@@ -3365,7 +3365,7 @@ struct Qb:
 
     # P's match (WITHOUT fallthrough): each case has values (OR) and a body; after
     # the body, jump to the end. Two passes: chain of tests -> labeled bodies.
-    static def emit_match(self: *Qb, s: *Stmt):
+    private def emit_match(self: *Qb, s: *Stmt):
         # match type(x): resolved at compile-time — emit only the chosen block
         if s->is_typematch:
             if s->tm_sel >= 0:
@@ -3414,7 +3414,7 @@ struct Qb:
     # ---------- collect locals (params + ST_VAR) ----------
     # descends into expressions behind EX_STMTEXPR: the inner block's ST_VAR
     # need a slot like any local (otherwise they become an unknown symbol)
-    static def collect_evars(self: *Qb, e: *Expr):
+    private def collect_evars(self: *Qb, e: *Expr):
         if e == None:
             return
         if e->kind == EX_STMTEXPR:
@@ -3425,7 +3425,7 @@ struct Qb:
         for j in range(expr_nexprs(e)):
             self->collect_evars(expr_expr_at(e, j))
 
-    static def collect_vars(self: *Qb, b: *Block):
+    private def collect_vars(self: *Qb, b: *Block):
         i: i32
         for i in range(b->n):
             st: *Stmt = b->stmts[i]
@@ -3508,21 +3508,21 @@ struct Qb:
     # sibling/nested blocks are DISTINCT variables (types may differ); fusing
     # them corrupts field offsets and store classes. Resolution is lexical,
     # via the binds stack (see find_var/bind_decl).
-    static def add_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt):
+    private def add_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt):
         slot: i32 = self->tmp()
         qv: QVar = {name, slot, self->cls_of(ty), ty, False, 0, 0, False, decl}
         self->vars.push(qv)
 
     # block-scope `extern T x;`: no storage of its own — addressing uses the
     # global symbol $name (the object with external linkage)
-    static def add_extern_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt):
+    private def add_extern_var(self: *Qb, name: const *char, ty: *Type, decl: *Stmt):
         qv: QVar = {name, 0, self->cls_of(ty), ty, False, 0, 0, True, decl}
         self->vars.push(qv)
 
     # static local: global storage $sl<sid> with a single init (data), no alloc.
     # No dedup either: two same-named statics in different blocks are distinct
     # objects in C — each gets its own storage.
-    static def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr, decl: *Stmt):
+    private def add_static_var(self: *Qb, name: const *char, ty: *Type, init: *Expr, decl: *Stmt):
         sid: i32 = self->nstatic
         self->nstatic += 1
         qv: QVar = {name, 0, self->cls_of(ty), ty, True, sid, 0, False, decl}
@@ -3597,7 +3597,7 @@ struct Qb:
 
     # records the real size of an inferred ([]) array static local:
     # nbytes for decay and synthetic arr_len for sizeof
-    static def static_fix_len(self: *Qb, ty: *Type, total: i32):
+    private def static_fix_len(self: *Qb, ty: *Type, total: i32):
         # applies to the var JUST registered by add_static_var (the last one) —
         # this runs during collect, before any lexical binding exists
         if self->vars.len > 0:
@@ -3612,7 +3612,7 @@ struct Qb:
                 ne->text = nt
                 ty->arr_len = ne
 
-    static def emit_func(self: *Qb, f: *Func):
+    private def emit_func(self: *Qb, f: *Func):
         if f->body == None:
             return  # prototype: nothing to emit in QBE
         self->vars.init()

@@ -13,7 +13,7 @@ import "ps_lexer.ph"
 #   `declare`/`implement` — P's generic instantiation protocol, which is a
 #       zero-runtime device; pscript's generics live in its own sema.
 #   `do` — P's do/while; pscript's loops are Python's.
-static const PS_KEYWORDS: Keyword[] = {
+private const PS_KEYWORDS: Keyword[] = {
     # shared with P, same meaning
     {"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF},
     {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE},
@@ -22,7 +22,8 @@ static const PS_KEYWORDS: Keyword[] = {
     {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM},
     {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR},
     {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE},
-    {"None", TK_NONE}, {"static", TK_STATIC}, {"defer", TK_DEFER},
+    {"None", TK_NONE}, {"static", TK_STATIC}, {"private", TK_PRIVATE},
+    {"defer", TK_DEFER},
     {"with", TK_WITH},
     # pscript's own
     {"record", TK_RECORD}, {"shared", TK_SHARED}, {"spawn", TK_SPAWN},
@@ -36,7 +37,7 @@ static const PS_KEYWORDS: Keyword[] = {
 
 # f-strings, triple quotes and the extended operator set: all three are things
 # pscript's surface has and P's does not.
-static PS_LEXSPEC: const LexSpec = {PS_KEYWORDS, True, True, True}
+private PS_LEXSPEC: const LexSpec = {PS_KEYWORDS, True, True, True}
 
 def ps_lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> TokenList:
     return lex_with(file, bytes, nbytes, a, False, &PS_LEXSPEC)

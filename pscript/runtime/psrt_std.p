@@ -19,7 +19,7 @@ import "psrt_std.ph"
 # `kind` é o mesmo do `sorted`: 0 int, 1 float, 2 str — o comparador vem daí, e
 # é o mesmo em todos os três caminhos, então a ordem que o `bisect` assume é
 # exatamente a que o `sorted` produz.
-static def ps_cmp_of(kind: i32) -> def(a: const *void, b: const *void) -> int:
+private def ps_cmp_of(kind: i32) -> def(a: const *void, b: const *void) -> int:
     if kind == 1:
         return ps_cmp_float
     if kind == 2:
@@ -58,7 +58,7 @@ def ps_insort(ctx: *PsCtx, l: *PsList, v: const *void, kind: i32, right: bool, f
 # `Lib/heapq.py` — `_siftdown` sobe o buraco, `_siftup` desce. A tradução
 # conserva os nomes de lá porque a discussão que explica por que o `_siftup` do
 # Python desce (e não sobe, como o nome sugere) está no comentário DELE.
-static def ps_sift_down(base: *char, es: usize, startpos: i64, pos: i64, cmp: def(a: const *void, b: const *void) -> int, tmp: *char):
+private def ps_sift_down(base: *char, es: usize, startpos: i64, pos: i64, cmp: def(a: const *void, b: const *void) -> int, tmp: *char):
     # o novo item está em `pos`; sobe enquanto for menor que o pai
     memcpy(tmp, base + usize(pos) * es, es)
     p: i64 = pos
@@ -71,7 +71,7 @@ static def ps_sift_down(base: *char, es: usize, startpos: i64, pos: i64, cmp: de
             break
     memcpy(base + usize(p) * es, tmp, es)
 
-static def ps_sift_up(base: *char, n: i64, es: usize, pos: i64, cmp: def(a: const *void, b: const *void) -> int, tmp: *char):
+private def ps_sift_up(base: *char, n: i64, es: usize, pos: i64, cmp: def(a: const *void, b: const *void) -> int, tmp: *char):
     # o buraco em `pos` desce sempre pelo FILHO MENOR até o fim, e só então o
     # item guardado sobe de volta pelo caminho — é o truque do heapq, que faz
     # uma comparação por nível em vez de duas
@@ -162,7 +162,7 @@ struct PsJson:
     file: const *char
     line: i32
 
-static def js_fail(j: *PsJson, what: const *char):
+private def js_fail(j: *PsJson, what: const *char):
     if j->bad != 0:
         return
     j->bad = 1
@@ -170,15 +170,15 @@ static def js_fail(j: *PsJson, what: const *char):
     snprintf(msg, 160, "invalid JSON: %s at byte %d", what, int(j->i))
     ps_raise(j->ctx, msg, PS_CAT_VALUE, j->file, j->line)
 
-static def js_space(j: *PsJson):
+private def js_space(j: *PsJson):
     while j->i < j->n and (j->s[j->i] == ' ' or j->s[j->i] == '\t' or j->s[j->i] == '\n' or j->s[j->i] == '\r'):
         j->i += 1
 
-static def js_value(j: *PsJson) -> *PsObj
+private def js_value(j: *PsJson) -> *PsObj
 
 # four hexadecimal digits, or -1. Advances only when it succeeds, so a caller
 # that fails reports the position of the escape rather than of its tail.
-static def js_hex4(j: *PsJson) -> i32:
+private def js_hex4(j: *PsJson) -> i32:
     if j->i + usize(4) > j->n:
         return -1
     v: i32 = 0
@@ -202,7 +202,7 @@ static def js_hex4(j: *PsJson) -> i32:
 # one codepoint, UTF-8, into the buffer. Same shape as `ps_str_chr` because it
 # is the same encoding, and having two of them drift apart would be worse than
 # the four lines of repetition.
-static def js_utf8(buf: *char, k: usize, cp: i32) -> usize:
+private def js_utf8(buf: *char, k: usize, cp: i32) -> usize:
     v: u32 = u32(cp)
     if v < 0x80:
         buf[k] = char(v)
@@ -236,7 +236,7 @@ static def js_utf8(buf: *char, k: usize, cp: i32) -> usize:
 # A LONE surrogate becomes U+FFFD, because a pscript `str` is valid UTF-8 by
 # construction (83.2) and a surrogate is not encodable. That is what a browser's
 # TextEncoder does with the same input, and the RFC leaves the case open.
-static def js_string(j: *PsJson) -> *PsStr:
+private def js_string(j: *PsJson) -> *PsStr:
     j->i += 1                     # the opening quote
     # an escape never grows: `\uXXXX` is six bytes in and at most four out, a
     # surrogate PAIR twelve in and four out. So the input length is a ceiling.
@@ -326,7 +326,7 @@ static def js_string(j: *PsJson) -> *PsStr:
     free(buf)
     return out
 
-static def js_array(j: *PsJson) -> *PsObj:
+private def js_array(j: *PsJson) -> *PsObj:
     j->i += 1
     l: *PsList = ps_list_new(j->ctx, i32(sizeof(PsStrPtr)), True, 0)
     js_space(j)
@@ -359,7 +359,7 @@ static def js_array(j: *PsJson) -> *PsObj:
         return (*PsObj)(l)
     return (*PsObj)(l)
 
-static def js_object(j: *PsJson) -> *PsObj:
+private def js_object(j: *PsJson) -> *PsObj:
     j->i += 1
     d: *PsDict = ps_dict_new(j->ctx, i32(sizeof(PsStrPtr)), i32(sizeof(PsStrPtr)), PS_K_STR, True, True)
     js_space(j)
@@ -409,7 +409,7 @@ static def js_object(j: *PsJson) -> *PsObj:
 # The integer that does not fit is a REFUSAL, not a wrap. pscript has no bignum
 # and int overflow raises everywhere else (7.2); a document whose number cannot
 # be represented is better refused loudly than read as some other number.
-static def js_number(j: *PsJson) -> *PsObj:
+private def js_number(j: *PsJson) -> *PsObj:
     start: usize = j->i
     neg: bool = False
     if j->s[j->i] == '-':
@@ -471,7 +471,7 @@ static def js_number(j: *PsJson) -> *PsObj:
         return ps_any_int(j->ctx, -i64(acc))
     return ps_any_int(j->ctx, i64(acc))
 
-static def js_value(j: *PsJson) -> *PsObj:
+private def js_value(j: *PsJson) -> *PsObj:
     js_space(j)
     if j->i >= j->n:
         js_fail(j, "the text ended")
@@ -598,8 +598,8 @@ def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, l
 # O estado é POR CONTEXTO, alocado na primeira chamada: cada worker tem heap,
 # coletor e laço próprios (18.1), e compartilhar 624 palavras de estado entre
 # threads seria uma corrida de dados com aparência de número aleatório.
-static PS_MT_N: const i32 = 624
-static PS_MT_M: const i32 = 397
+private PS_MT_N: const i32 = 624
+private PS_MT_M: const i32 = 397
 
 struct PsRng:
     mt: u32[624]
@@ -611,7 +611,7 @@ struct PsRng:
     gauss_next: f64
     has_gauss: i32
 
-static def ps_mt_init_genrand(r: *PsRng, s: u32):
+private def ps_mt_init_genrand(r: *PsRng, s: u32):
     r->mt[0] = s
     mti: i32 = 1
     while mti < PS_MT_N:
@@ -620,7 +620,7 @@ static def ps_mt_init_genrand(r: *PsRng, s: u32):
         mti += 1
     r->index = mti
 
-static def ps_mt_init_by_array(r: *PsRng, key: *u32, klen: usize):
+private def ps_mt_init_by_array(r: *PsRng, key: *u32, klen: usize):
     ps_mt_init_genrand(r, u32(19650218))
     i: usize = 1
     j: usize = 0
@@ -645,7 +645,7 @@ static def ps_mt_init_by_array(r: *PsRng, key: *u32, klen: usize):
         k -= 1
     r->mt[0] = u32(0x80000000)      # o bit alto em 1: garante estado não-nulo
 
-static def ps_mt_u32(r: *PsRng) -> u32:
+private def ps_mt_u32(r: *PsRng) -> u32:
     y: u32 = 0
     if r->index >= PS_MT_N:
         kk: i32 = 0
@@ -669,7 +669,7 @@ static def ps_mt_u32(r: *PsRng) -> u32:
     y = y ^ (y >> 18)
     return y
 
-static def ps_rng(ctx: *PsCtx) -> *PsRng:
+private def ps_rng(ctx: *PsCtx) -> *PsRng:
     if ctx->rng != None:
         return (*PsRng)(ctx->rng)
     r: *PsRng = (*PsRng)(calloc(1, sizeof(PsRng)))

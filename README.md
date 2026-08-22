@@ -130,6 +130,11 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 - **Systems types:** `i8..i64`, `u8..u64`, `f32/f64`, `bool`, `char`, pointers
   (`*T`), fixed arrays (`T[N]`), `usize`/`isize`; plus the native C spellings.
 - **Structs with methods**, unions, enums, bitfields, function pointers.
+- **`private`** on a `def`, a struct method or a module-level variable keeps
+  the name inside the translation unit — it emits C's `static`. It replaced
+  `static` as the spelling for privacy, so each word now means one thing:
+  `private` is privacy in both languages, and `static` is left to pscript's
+  static method inside a struct.
 - **`out` / `ref` / `in` parameters** — sugar over plain pointers
   (`divmod(17, 5, out r)`; `in` emits `const T*`). The ABI stays a raw
   pointer; C calls it as always.
@@ -149,7 +154,7 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
 - **`record`** — a struct the compiler has *checked* to be pure bytes: safe to
   memcpy, to write to disk, and to compare by content.
 - **`embed("f.txt")` / `embed_bytes("f.bin")`** — a file becomes data at
-  compile time (a `static const` array), so a program ships as one binary.
+  compile time (a `private const` array), so a program ships as one binary.
 - **`in` / `not in`**, string `==` by content (`strcmp`; identity is `is`),
   and `match` on strings.
 - **Default and named arguments**, resolved at compile time.

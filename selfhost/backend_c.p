@@ -28,7 +28,7 @@ enum CPrec:
     PR_POST = 14
     PR_PRIM = 15
 
-static def binop_prec(op: i32) -> i32:
+private def binop_prec(op: i32) -> i32:
     match op:
         case TK_OR:
             return PR_OR
@@ -51,7 +51,7 @@ static def binop_prec(op: i32) -> i32:
         case _:
             return PR_MUL
 
-static def expr_prec(e: *Expr) -> i32:
+private def expr_prec(e: *Expr) -> i32:
     match e->kind:
         case EX_BINARY:
             return binop_prec(e->op)
@@ -78,7 +78,7 @@ static def expr_prec(e: *Expr) -> i32:
         case _:
             return PR_PRIM
 
-static def op_cstr(op: i32) -> const *char:
+private def op_cstr(op: i32) -> const *char:
     match op:
         case TK_AND:
             return "&&"
@@ -204,13 +204,13 @@ def backend_c_config(std89: bool, i64_mode: i32):
     g_std89 = std89
     g_i64 = i64_mode
 
-static def is_i64_name(n: const *char) -> bool:
+private def is_i64_name(n: const *char) -> bool:
     return n in {"i64", "int64_t", "long long", "long long int"}
 
-static def is_u64_name(n: const *char) -> bool:
+private def is_u64_name(n: const *char) -> bool:
     return n in {"u64", "uint64_t", "unsigned long long"}
 
-static def base_cname(n: const *char) -> const *char:
+private def base_cname(n: const *char) -> const *char:
     if g_std89:
         # 64 bits don't exist in strict C89: error by default; --i64-downgrade
         # downgrades to 32; --i64-longlong uses the old compilers' extension
@@ -243,7 +243,7 @@ static def base_cname(n: const *char) -> const *char:
 # tag came from the header's internals — `FILE` is `struct _IO_FILE` on glibc and
 # `struct __sFILE` on macOS — so a P module must print the typedef, which is what
 # its emitted `#include` actually declares.
-static def tdrev_lookup(tag: const *char) -> const *char:
+private def tdrev_lookup(tag: const *char) -> const *char:
     if g_c_mod or tag == None:
         return None
     for i in range(g_ntdrev):
@@ -254,7 +254,7 @@ static def tdrev_lookup(tag: const *char) -> const *char:
 # base type name. A type SPELLED `struct X`/`union X` in C source (tag_kind)
 # is re-emitted with its keyword — tags live in their own namespace, and a bare
 # `X` may name something else entirely (C front end preserves the spelling).
-static def emit_type_name(b: *StrBuf, t: *Type):
+private def emit_type_name(b: *StrBuf, t: *Type):
     if t->tag_kind == TAG_STRUCT or t->tag_kind == TAG_UNION:
         td: const *char = tdrev_lookup(t->name)
         if td != None:
@@ -268,13 +268,13 @@ static def emit_type_name(b: *StrBuf, t: *Type):
         return
     b->puts(base_cname(t->name))
 
-static def indent(b: *StrBuf, n: i32):
+private def indent(b: *StrBuf, n: i32):
     for i in range(n):
         b->puts("    ")
 
 # ---------- expressions ----------
-static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32)
-static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: const *char)
+private def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32)
+private def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: const *char)
 
 # Copies a string/char literal, escaping every `?` as `\?`.
 #
@@ -283,7 +283,7 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
 # mode — which is exactly what `-std=c11` is. The compiler found this in its own
 # message text: `"'??' takes an option"` was printing as `'^ takes an option`.
 # Escaping every `?` is idempotent and costs one byte each.
-static def emit_literal_notrigraph(b: *StrBuf, lex: const *char):
+private def emit_literal_notrigraph(b: *StrBuf, lex: const *char):
     i: usize = 0
     n: usize = strlen(lex)
     while i < n:
@@ -300,13 +300,13 @@ static def emit_literal_notrigraph(b: *StrBuf, lex: const *char):
 
 # operands of "confusable" operators get extra parentheses to
 # generate C without -Wparentheses: arithmetic/shift inside & | ^, and && in ||
-static def op_is_confusable(op: i32) -> bool:
+private def op_is_confusable(op: i32) -> bool:
     return op in {TK_AMP, TK_PIPE, TK_CARET, TK_SHL, TK_SHR}
 
-static def op_is_relational(op: i32) -> bool:
+private def op_is_relational(op: i32) -> bool:
     return op in {TK_LT, TK_LE, TK_GT, TK_GE}
 
-static def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_op: i32):
+private def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_op: i32):
     force: bool = False
     if child->kind == EX_BINARY and child->op != parent_op:
         if op_is_confusable(parent_op):
@@ -326,7 +326,7 @@ static def emit_binary_operand(b: *StrBuf, child: *Expr, min_prec: i32, parent_o
     else:
         emit_expr(b, child, min_prec)
 
-static def emit_args(b: *StrBuf, args: **Expr, n: i32):
+private def emit_args(b: *StrBuf, args: **Expr, n: i32):
     for i in range(n):
         if i != 0:
             b->puts(", ")
@@ -340,7 +340,7 @@ static def emit_args(b: *StrBuf, args: **Expr, n: i32):
 # Emits recursively: builds this level's declarator "(<inner>)(params)" and
 # passes it as the NAME to the return type — this way a return type that is
 # itself a function pointer nests correctly: Ret (*(*p)(a))(b).
-static def emit_fnptr_decl(b: *StrBuf, ft: *Type, inner: const *char):
+private def emit_fnptr_decl(b: *StrBuf, ft: *Type, inner: const *char):
     frag: StrBuf = {0}
     frag.puts("(")
     frag.puts(inner)
@@ -365,7 +365,7 @@ static def emit_fnptr_decl(b: *StrBuf, ft: *Type, inner: const *char):
 #   ptr->arr        int (*)[2]
 #   arr->ptr->arr   double (*[3][4])[2]
 #   ptr->func       int (*)(void)
-static def emit_typename_decl(b: *StrBuf, t: *Type, decl: const *char):
+private def emit_typename_decl(b: *StrBuf, t: *Type, decl: const *char):
     if t->kind == TY_PTR:
         s: StrBuf = {0}
         s.putc('*')
@@ -411,10 +411,10 @@ static def emit_typename_decl(b: *StrBuf, t: *Type, decl: const *char):
         b->putc(' ')
         b->puts(decl)
 
-static def emit_cast_typename(b: *StrBuf, t: *Type):
+private def emit_cast_typename(b: *StrBuf, t: *Type):
     emit_typename_decl(b, t, "")
 
-static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
+private def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
     prec: i32 = expr_prec(e)
     paren: bool = prec < min_prec or e->kind == EX_TERNARY  # ternary: always ()
     if paren:
@@ -567,7 +567,7 @@ static def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
 # ---------- declarators ----------
 # C qualifiers of the base type (const/volatile). 'restrict' qualifies the
 # pointer, not the base type — emitted after the '*' (see emit_var_decl).
-static def emit_type_quals(b: *StrBuf, t: *Type):
+private def emit_type_quals(b: *StrBuf, t: *Type):
     if t->is_const:
         b->puts("const ")
     if t->is_volatile:
@@ -578,10 +578,10 @@ static def emit_type_quals(b: *StrBuf, t: *Type):
 # --std=c89: a genuine VLA is already barred in the semantic pass (fold_const_dims);
 # the non-literal dims left here are enum constants (a valid ICE in C89), so
 # there's nothing to do — kept as a no-op to document the policy.
-static def c89_dim_check(e: *Expr, name: const *char):
+private def c89_dim_check(e: *Expr, name: const *char):
     return
 
-static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: const *char):
+private def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: const *char):
     dims: *Expr[16]
     nd = 0
     while t->kind == TY_ARRAY:
@@ -671,10 +671,10 @@ static def emit_var_decl(b: *StrBuf, t: *Type, name: const *char, self_struct: c
         b->putc(']')
 
 # ---------- statements ----------
-static def emit_block_body(b: *StrBuf, blk: *Block, ind: i32)
-static def emit_simple_inline(b: *StrBuf, s: *Stmt)
+private def emit_block_body(b: *StrBuf, blk: *Block, ind: i32)
+private def emit_simple_inline(b: *StrBuf, s: *Stmt)
 
-static def stmt_exits(s: *Stmt) -> bool:
+private def stmt_exits(s: *Stmt) -> bool:
     if s->kind == ST_BLOCK:   # a bare block exits if its last statement does
         return s->body != None and s->body->n > 0 and stmt_exits(s->body->stmts[s->body->n - 1])
     return s->kind in {ST_RETURN, ST_BREAK, ST_CONTINUE, ST_GOTO}
@@ -693,7 +693,7 @@ g_cur_ret: *Type = None
 g_ret_tmp_counter: i32 = 0
 g_in_header: bool = False  # emitting a .ph -> .h?
 
-static def emit_defers_downto(b: *StrBuf, mark: i32, ind: i32):
+private def emit_defers_downto(b: *StrBuf, mark: i32, ind: i32):
     i: i32
     for i in range(g_defers.len - 1, mark - 1, -1):
         # own braces: isolates the defer body's declarations
@@ -703,11 +703,11 @@ static def emit_defers_downto(b: *StrBuf, mark: i32, ind: i32):
         indent(b, ind)
         b->puts("}\n")
 
-static def step_is_negative(step: *Expr) -> bool:
+private def step_is_negative(step: *Expr) -> bool:
     return step != None and step->kind == EX_UNARY and step->op == TK_MINUS
 
-static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32)
-static def emit_func_sig(b: *StrBuf, f: *Func)
+private def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32)
+private def emit_func_sig(b: *StrBuf, f: *Func)
 
 # ---------- GNU statement expressions in statement position ----------
 # `({ stmts; v })` with declarations/control flow has no expression-level
@@ -719,7 +719,7 @@ static def emit_func_sig(b: *StrBuf, f: *Func)
 
 # does this statement expression need a real block? (simple expression-only
 # bodies lower to the comma operator in emit_expr)
-static def stmtexpr_complex(e: *Expr) -> bool:
+private def stmtexpr_complex(e: *Expr) -> bool:
     if e == None or e->kind != EX_STMTEXPR:
         return False
     for si in range(e->xblock->n if e->xblock != None else 0):
@@ -729,7 +729,7 @@ static def stmtexpr_complex(e: *Expr) -> bool:
 
 # emits `({ stmts; v })` as a block; `tail` (e.g. "x = " / "return ") consumes
 # the final value — None discards it (bare expression statement)
-static def emit_stmtexpr_block(b: *StrBuf, e: *Expr, ind: i32, tail: const *char):
+private def emit_stmtexpr_block(b: *StrBuf, e: *Expr, ind: i32, tail: const *char):
     indent(b, ind)
     b->puts("{\n")
     for si in range(e->xblock->n if e->xblock != None else 0):
@@ -748,7 +748,7 @@ static def emit_stmtexpr_block(b: *StrBuf, e: *Expr, ind: i32, tail: const *char
 
 # statement-position lowering for expressions containing complex statement
 # expressions. Returns True when handled (nothing more to emit).
-static def emit_expr_stmt_lowered(b: *StrBuf, e: *Expr, ind: i32) -> bool:
+private def emit_expr_stmt_lowered(b: *StrBuf, e: *Expr, ind: i32) -> bool:
     if e == None:
         return False
     if e->kind == EX_STMTEXPR and stmtexpr_complex(e):
@@ -786,7 +786,7 @@ static def emit_expr_stmt_lowered(b: *StrBuf, e: *Expr, ind: i32) -> bool:
 
 # a block whose statements all emit nothing (P's `global`/`nonlocal` are scope
 # declarations, not code): its braces would be pure noise
-static def block_is_silent(blk: *Block) -> bool:
+private def block_is_silent(blk: *Block) -> bool:
     if blk == None:
         return True
     for i in range(blk->n):
@@ -794,7 +794,7 @@ static def block_is_silent(blk: *Block) -> bool:
             return False
     return True
 
-static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
+private def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
     match s->kind:
         case ST_VAR:
             if stmtexpr_complex(s->init):
@@ -1115,7 +1115,7 @@ static def emit_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             return
 
 # emits the for's init/post inline (no indentation, no trailing ';')
-static def emit_simple_inline(b: *StrBuf, s: *Stmt):
+private def emit_simple_inline(b: *StrBuf, s: *Stmt):
     match s->kind:
         case ST_VAR:
             emit_var_decl(b, s->type, s->name, None)
@@ -1131,7 +1131,7 @@ static def emit_simple_inline(b: *StrBuf, s: *Stmt):
         case _:
             return
 
-static def emit_block_body(b: *StrBuf, blk: *Block, ind: i32):
+private def emit_block_body(b: *StrBuf, blk: *Block, ind: i32):
     mark: i32 = g_defers.len
     # --std=c89: a declaration in the MIDDLE of a block doesn't exist in C89. Instead of
     # hoisting (which would separate the decl from its initialization), we open a new
@@ -1162,7 +1162,7 @@ static def emit_block_body(b: *StrBuf, blk: *Block, ind: i32):
 
 # ---------- top-level declarations ----------
 # emits a function's parameter list (inside the parentheses)
-static def emit_func_params(b: *StrBuf, f: *Func):
+private def emit_func_params(b: *StrBuf, f: *Func):
     if f->nparams == 0:
         b->puts("void")
         return
@@ -1175,7 +1175,7 @@ static def emit_func_params(b: *StrBuf, f: *Func):
 
 # signature only:  Ret cname(params) — with the nested declarators a return
 # type of function-pointer or pointer-to-array demands
-static def emit_func_sig(b: *StrBuf, f: *Func):
+private def emit_func_sig(b: *StrBuf, f: *Func):
     # return type is a function pointer? nested declarator:
     #   InnerRet (*cname(func-params))(fnptr-params)
     rt: *Type = f->ret
@@ -1214,7 +1214,7 @@ static def emit_func_sig(b: *StrBuf, f: *Func):
         emit_func_params(b, f)
         b->putc(')')
 
-static def emit_func(b: *StrBuf, f: *Func):
+private def emit_func(b: *StrBuf, f: *Func):
     if f->is_comptime:
         return   # `const def`: evaluated at compile time, doesn't end up in the binary
     if f->ntparams > 0:
@@ -1240,7 +1240,7 @@ static def emit_func(b: *StrBuf, f: *Func):
 # emits a struct/union's fields; a C11 anonymous member carries its nested
 # definition on the field (Field.anon) and is inlined RECURSIVELY, so member
 # access through it (`v.b1`) works natively in the emitted C
-static def emit_struct_fields(b: *StrBuf, d: *Decl, ind: i32):
+private def emit_struct_fields(b: *StrBuf, d: *Decl, ind: i32):
     for i in range(d->nfields):
         if d->fields[i].anon != None:
             sub: *Decl = d->fields[i].anon
@@ -1256,7 +1256,7 @@ static def emit_struct_fields(b: *StrBuf, d: *Decl, ind: i32):
             b->printf(" : %d", d->fields[i].bit_width)
         b->puts(";\n")
 
-static def emit_decl(b: *StrBuf, d: *Decl):
+private def emit_decl(b: *StrBuf, d: *Decl):
     match d->kind:
         case DL_IMPORT:
             path: const *char = d->import_path

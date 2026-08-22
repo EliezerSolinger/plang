@@ -95,7 +95,7 @@ def rnd() -> float:
 
 # ------------------------------------------------------------------ intersection
 
-static def intersect_sphere(in s: Sphere, in r: Ray) -> float:
+private def intersect_sphere(in s: Sphere, in r: Ray) -> float:
     """Distance to the hit, or 0.0 if the ray misses.
     `in`: read by reference, no 104-byte Sphere copy (55.4/56)."""
     op = s.pos.sub(r.org)              # record method (57.1)
@@ -112,7 +112,7 @@ static def intersect_sphere(in s: Sphere, in r: Ray) -> float:
         return t
     return 0.0
 
-static def intersect(scene: list<Sphere>, in r: Ray) -> (float, int)?:
+private def intersect(scene: list<Sphere>, in r: Ray) -> (float, int)?:
     """(distance, index) of the nearest hit, or None (9.4)."""
     best = 1e20
     found = -1
@@ -265,11 +265,11 @@ def render(wid: int, n_workers: int, width: int, height: int, spp: int,
 
 # ------------------------------------------------------------------ JSON scene
 
-static def vec_from(o: any) -> Vec:
+private def vec_from(o: any) -> Vec:
     trio = o as list<any>                      # unboxing is `as`, checked (55.2)
     return Vec(trio[0] as float, trio[1] as float, trio[2] as float)
 
-static def sphere_from(o: any) -> Sphere:
+private def sphere_from(o: any) -> Sphere:
     m = o as dict<str, any>
     kind_s = m["kind"] as str
     if kind_s not in MATERIALS:                # set + not in (8.1)

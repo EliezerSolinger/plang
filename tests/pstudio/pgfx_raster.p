@@ -3,7 +3,7 @@ import "../../pstudio/pgfx_raster.ph"
 
 # renders the region as ASCII art: '#' a text pixel, '+' the frame,
 # '.' the rect's fill, ' ' the cleared background — readable AND deterministic
-static def dump(ref fb: PgFb, r: PgRect):
+private def dump(ref fb: PgFb, r: PgRect):
     for y in range(r.y, r.y + r.h):
         for x in range(r.x, r.x + r.w):
             c: u32 = fb.px[usize(y) * usize(fb.w) + usize(x)]

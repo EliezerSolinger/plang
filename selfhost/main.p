@@ -35,7 +35,7 @@ def pclose(stream: *FILE) -> int
 # runs the configured C preprocessor over a RAW .c file (cpp resolves
 # #include/#define/#if); the cpp's stderr flows through to the user. A cpp
 # failure is a compile error — invalid preprocessing IS invalid input.
-static def preprocess_c(cc: *Cc, path: const *char, out out_len: usize) -> *char:
+private def preprocess_c(cc: *Cc, path: const *char, out out_len: usize) -> *char:
     cpp: const *char = cc->cpp if cc->cpp != None else "cc"
     cmd: const *char = cc->arena.printf("%s -E -P -x c \"%s\"", cpp, path)
     f: *FILE = popen(cmd, "r")
@@ -81,7 +81,7 @@ def has_suffix(s: const *char, suf: const *char) -> bool:
     m: usize = strlen(suf)
     return n >= m and strcmp(s + n - m, suf) == 0
 
-static def usage():
+private def usage():
     fprintf(stderr, "usage: plangc [options] file.p [file2.ph ...]\n")
     fprintf(stderr, "\n")
     fprintf(stderr, "options:\n")
@@ -113,7 +113,7 @@ static def usage():
     exit(2)
 
 # creates every directory in the path of `p` (the file part is skipped)
-static def mkdirs_for(p: const *char):
+private def mkdirs_for(p: const *char):
     buf: *char = malloc(strlen(p) + 1)   # (strdup is POSIX — hidden under -std=c11)
     strcpy(buf, p)
     i: usize = 1
@@ -136,7 +136,7 @@ static def mkdirs_for(p: const *char):
 # same C share it, and a program whose source changed gets a new one. Nothing
 # is ever invalidated: an entry that stops being reachable is simply never
 # looked up again, which is what a content-addressed cache is.
-static def run_cache_dir(a: *Arena) -> const *char:
+private def run_cache_dir(a: *Arena) -> const *char:
     e: const *char = getenv("PSCRIPT_CACHE")
     if e != None and e[0] != '\0':
         return e
@@ -154,7 +154,7 @@ static def run_cache_dir(a: *Arena) -> const *char:
 # because `import` pulls modules in — a cache that ignored them would run
 # yesterday's binary after today's edit, which is the only failure mode of a
 # build cache that actually matters.
-static def hash_file(path: const *char, ref ok: bool) -> u64:
+private def hash_file(path: const *char, ref ok: bool) -> u64:
     n: usize = 0
     b: *char = read_entire_file_opt(path, out n)
     if b == None:
@@ -164,7 +164,7 @@ static def hash_file(path: const *char, ref ok: bool) -> u64:
     free(b)
     return h
 
-static def run_manifest_ok(a: *Arena, man: const *char, out binkey: u64) -> bool:
+private def run_manifest_ok(a: *Arena, man: const *char, out binkey: u64) -> bool:
     n: usize = 0
     txt: *char = read_entire_file_opt(man, out n)
     if txt == None:
@@ -192,7 +192,7 @@ static def run_manifest_ok(a: *Arena, man: const *char, out binkey: u64) -> bool
             return False
     return True
 
-static def run_manifest_write(a: *Arena, man: const *char, binkey: u64, inputs: *Vec<*char>):
+private def run_manifest_write(a: *Arena, man: const *char, binkey: u64, inputs: *Vec<*char>):
     mkdirs_for(man)
     f: *FILE = fopen(man, "wb")
     if f == None:
@@ -205,7 +205,7 @@ static def run_manifest_write(a: *Arena, man: const *char, binkey: u64, inputs: 
             fprintf(f, "%016llx %s\n", h, inputs->get(usize(i)))
     fclose(f)
 
-static def run_exec(binp: const *char, args: **char, nargs: i32) -> int:
+private def run_exec(binp: const *char, args: **char, nargs: i32) -> int:
     av: **char = malloc(usize(nargs + 2) * sizeof(*av))
     av[0] = (*char)(binp)
     for i in range(nargs):
@@ -215,7 +215,7 @@ static def run_exec(binp: const *char, args: **char, nargs: i32) -> int:
     fatal("could not run '%s'", binp)
     return 1
 
-static def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *char, args: **char, nargs: i32, std_version: i32, debug: bool) -> int:
+private def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *char, args: **char, nargs: i32, std_version: i32, debug: bool) -> int:
     binp: const *char = cc->arena.printf("%s/bin/%016llx", cachedir, h)
     mkdirs_for(binp)
     if access(binp, 0) != 0:
@@ -245,7 +245,7 @@ static def run_program(cc: *Cc, cfiles: *Vec<*char>, h: u64, cachedir: const *ch
     # be trusted with the arguments
     return run_exec(binp, args, nargs)
 
-static def derive_output(a: *Arena, input: const *char, be: const *Backend) -> const *char:
+private def derive_output(a: *Arena, input: const *char, be: const *Backend) -> const *char:
     n: usize = strlen(input)
     if n > 3 and input + n - 3 == ".ph":
         if be->hdr_ext == None:
@@ -262,7 +262,7 @@ static def derive_output(a: *Arena, input: const *char, be: const *Backend) -> c
     fatal("'%s': unknown extension (expected .p, .ph, .psc, .c or .i)", input)
     return None
 
-static def dump_tokens(path: const *char, cc: *Cc):
+private def dump_tokens(path: const *char, cc: *Cc):
     len: usize = 0
     bytes: *char = read_entire_file(path, out len)
     defer free(bytes)
@@ -276,7 +276,7 @@ static def dump_tokens(path: const *char, cc: *Cc):
 # included headers. Structs/unions/enums don't emit code in QBE, so merging
 # them into the top module is safe (it only populates the layout tables).
 # Doing this in the C backend would duplicate typedefs.
-static def qbe_merge_types(cc: *Cc, m: *Module):
+private def qbe_merge_types(cc: *Cc, m: *Module):
     extra = 0
     for i in range(cc->nmods):
         md: *Module = cc->mods[i]

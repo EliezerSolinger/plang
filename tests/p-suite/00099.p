@@ -1,7 +1,7 @@
 struct Vec:
     n: int
 
-static def vecresize(v: *Vec, cap: int) -> void:
+private def vecresize(v: *Vec, cap: int) -> void:
     return
 
 def main() -> int:

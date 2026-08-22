@@ -97,52 +97,52 @@ struct Subst:
 
 # forward declarations of the module-level helpers (the methods below
 # come first in the file, inside the struct)
-static def ends_with(s: const *char, suf: const *char) -> bool
+private def ends_with(s: const *char, suf: const *char) -> bool
 def cc_load_module(cc: *Cc, path: const *char) -> *Module
-static def sinfo_method(si: *SInfo, name: const *char) -> *Func
-static def sinfo_field(si: *SInfo, name: const *char) -> *Field
+private def sinfo_method(si: *SInfo, name: const *char) -> *Func
+private def sinfo_field(si: *SInfo, name: const *char) -> *Field
 # ---------- scopes ----------
-static def is_arith_type(t: *Type) -> bool
-static def mangle_type_into(sb: *StrBuf, t: *Type)
-static def subst_lookup(sub: *Subst, name: const *char) -> *Type
-static def is_void_val(t: *Type) -> bool
-static def strip_ptr_or_array(t: *Type) -> *Type
-static def ceval_char(lex: const *char) -> i64
-static def names_own_type(t: *Type, init: *Expr) -> bool
-static def is_designator(e: *Expr) -> bool
-static def decl_in_module(m: *Module, name: const *char) -> bool
-static def cv_int(v: i64) -> CVal
-static def cv_flt(v: f64) -> CVal
-static def cv_str(v: const *char) -> CVal
-static def cv_asf(v: CVal) -> f64
-static def cfloat_text(a: *Arena, v: f64) -> const *char
-static def ceval_num(txt: const *char) -> CVal
-static def ctype_width(n: const *char) -> i32
-static def ctype_unsigned(n: const *char) -> bool
-static def ctype_width(n: const *char) -> i32
-static def ctype_unsigned(n: const *char) -> bool
-static def render_type_p(a: *Arena, t: *Type) -> const *char   # p/ typestr comptime
-static def edit_dist(a: const *char, b: const *char) -> i32
-static def is_c_arith_words(n: const *char) -> bool
-static def is_lvalue(e: *Expr) -> bool
-static def mk_ident(a: *Arena, name: const *char, pos: Pos) -> *Expr
-static def mk_call1(a: *Arena, fn: const *char, arg: *Expr, pos: Pos) -> *Expr
-static def is_byref_deref(x: *Expr) -> bool
-static def take_addr(a: *Arena, x: *Expr) -> *Expr
-static def render_type_p(a: *Arena, t: *Type) -> const *char
-static def is_void_val(t: *Type) -> bool
-static def is_float_type(t: *Type) -> bool
-static def is_arith_type(t: *Type) -> bool
-static def is_float_type(t: *Type) -> bool
-static def init_str_units(lex: const *char) -> i32
-static def init_skip_field(f: *Field) -> bool
-static def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type
-static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt
-static def block_terminates(b: *Block) -> bool
-static def type_eq_p(a: *Type, b: *Type) -> bool
-static def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char, assoc: const *char, at: *Type) -> *Type
-static def expr_is_negative(e: *Expr) -> bool
-static def type_is_unsigned(t: *Type) -> bool
+private def is_arith_type(t: *Type) -> bool
+private def mangle_type_into(sb: *StrBuf, t: *Type)
+private def subst_lookup(sub: *Subst, name: const *char) -> *Type
+private def is_void_val(t: *Type) -> bool
+private def strip_ptr_or_array(t: *Type) -> *Type
+private def ceval_char(lex: const *char) -> i64
+private def names_own_type(t: *Type, init: *Expr) -> bool
+private def is_designator(e: *Expr) -> bool
+private def decl_in_module(m: *Module, name: const *char) -> bool
+private def cv_int(v: i64) -> CVal
+private def cv_flt(v: f64) -> CVal
+private def cv_str(v: const *char) -> CVal
+private def cv_asf(v: CVal) -> f64
+private def cfloat_text(a: *Arena, v: f64) -> const *char
+private def ceval_num(txt: const *char) -> CVal
+private def ctype_width(n: const *char) -> i32
+private def ctype_unsigned(n: const *char) -> bool
+private def ctype_width(n: const *char) -> i32
+private def ctype_unsigned(n: const *char) -> bool
+private def render_type_p(a: *Arena, t: *Type) -> const *char   # p/ typestr comptime
+private def edit_dist(a: const *char, b: const *char) -> i32
+private def is_c_arith_words(n: const *char) -> bool
+private def is_lvalue(e: *Expr) -> bool
+private def mk_ident(a: *Arena, name: const *char, pos: Pos) -> *Expr
+private def mk_call1(a: *Arena, fn: const *char, arg: *Expr, pos: Pos) -> *Expr
+private def is_byref_deref(x: *Expr) -> bool
+private def take_addr(a: *Arena, x: *Expr) -> *Expr
+private def render_type_p(a: *Arena, t: *Type) -> const *char
+private def is_void_val(t: *Type) -> bool
+private def is_float_type(t: *Type) -> bool
+private def is_arith_type(t: *Type) -> bool
+private def is_float_type(t: *Type) -> bool
+private def init_str_units(lex: const *char) -> i32
+private def init_skip_field(f: *Field) -> bool
+private def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type
+private def block_find_kind(b: *Block, k: StmtKind) -> *Stmt
+private def block_terminates(b: *Block) -> bool
+private def type_eq_p(a: *Type, b: *Type) -> bool
+private def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char, assoc: const *char, at: *Type) -> *Type
+private def expr_is_negative(e: *Expr) -> bool
+private def type_is_unsigned(t: *Type) -> bool
 # ---------- C header ingestion (`include <h>` / `include "h"`) ----------
 # `include` is transparent: the header's declarations (types, prototypes) become
 # known to P via register_module, while the backend still emits a plain #include.
@@ -157,7 +157,7 @@ def popen(cmd: const *char, mode: const *char) -> *FILE
 def pclose(stream: *FILE) -> int
 # exported: pscript's boundary reads the same #define literals (72.4)
 def macro_int_val(txt: const *char, out: *i64) -> bool
-static def inject_inline_runtime(cc: *Cc, m: *Module)
+private def inject_inline_runtime(cc: *Cc, m: *Module)
 def sema_run(cc: *Cc, m: *Module)
 
 # ---------- compile-time interpreter (CTFE) ----------
@@ -178,7 +178,7 @@ struct CFrame:
 
     # a POINTER receiver: the env of an expression evaluated outside any
     # `const def` is None, and looking a name up in it must simply say no
-    static def find(self: *CFrame, name: const *char, out val: CVal) -> bool:
+    private def find(self: *CFrame, name: const *char, out val: CVal) -> bool:
         if self == None:
             return False
         for i in range(self->n):
@@ -235,7 +235,7 @@ builtins: const *char[] = {
 # --inline-runtime: the P source of the self-contained helpers. Parsed and
 # PREPENDED to the module, so both backends emit them like ordinary code and
 # the output carries no libc dependency for compiler-injected calls.
-INLINE_RUNTIME_SRC: const *char = "static def __plang_strcmp(a: const *char, b: const *char) -> i32:\n    i: usize = 0\n    while a[i] != '\\0' and a[i] == b[i]:\n        i += 1\n    return i32(u8(a[i])) - i32(u8(b[i]))\n"
+INLINE_RUNTIME_SRC: const *char = "private def __plang_strcmp(a: const *char, b: const *char) -> i32:\n    i: usize = 0\n    while a[i] != '\\0' and a[i] == b[i]:\n        i += 1\n    return i32(u8(a[i])) - i32(u8(b[i]))\n"
 
 # The same, without a Sema: pscript's own front end ingests C headers too (45.5),
 # and it has no reason to build a P sema to do it.
@@ -357,160 +357,160 @@ struct Sema:
     nwith: i32
     cwith: i32
 
-    static def is_type_name(self: *Sema, n: const *char) -> bool
-    static def add_type(self: *Sema, n: const *char)
-    static def find_struct(self: *Sema, n: const *char) -> *SInfo
-    static def find_func(self: *Sema, cname: const *char) -> *Func
-    static def is_enum_const(self: *Sema, n: const *char) -> bool
-    static def scope_push(self: *Sema)
-    static def scope_pop(self: *Sema)
-    static def scope_add_x(self: *Sema, name: const *char, t: *Type, is_extern: bool)
-    static def deny_c_keyword(self: *Sema, name: const *char, pos: Pos)
-    static def scope_add(self: *Sema, name: const *char, t: *Type)
-    static def scope_find_cur(self: *Sema, name: const *char, was_extern: *bool) -> bool
-    static def sym_index(self: *Sema, name: const *char) -> i32
-    static def scope_find(self: *Sema, name: const *char) -> *Type
-    static def find_template(self: *Sema, n: const *char) -> *Decl
-    static def mangle_instance(self: *Sema, g: *Type) -> *char
-    static def resolve_type(self: *Sema, t: *Type)
-    static def check_pure_bytes(self: *Sema, si: *SInfo, d: *Decl)
-    static def record_ctor(self: *Sema, e: *Expr, si: *SInfo)
-    static def flatten_complit(self: *Sema, t: *Type, init: *Expr)
-    static def complit_to_temp(self: *Sema, e: *Expr, si: *SInfo)
-    static def fill_field(self: *Sema, dst: *Expr, t: *Type, src: *Expr, pos: Pos) -> *Expr
-    static def comma_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr
-    static def record_eq(self: *Sema, e: *Expr) -> bool
-    static def eq_operand(self: *Sema, e: *Expr, ref pre: *Expr) -> *Expr
-    static def record_eq_chain(self: *Sema, si: *SInfo, a: *Expr, b: *Expr, pos: Pos) -> *Expr
-    static def record_eq_value(self: *Sema, t: *Type, a: *Expr, b: *Expr, pos: Pos) -> *Expr
-    static def eq_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr
-    static def mk_field(self: *Sema, base: *Expr, name: const *char, pos: Pos) -> *Expr
-    static def const_len(self: *Sema, e: *Expr, ref out_n: i64) -> bool
-    static def ns_module(self: *Sema, name: const *char) -> *Module
-    static def ns_shadowed(self: *Sema, name: const *char) -> bool
-    static def ns_has(self: *Sema, m: *Module, member: const *char) -> bool
-    static def ns_plain(self: *Sema, dotted: const *char, pos: Pos) -> const *char
-    static def try_ns_ref(self: *Sema, e: *Expr) -> bool
-    static def clone_type(self: *Sema, sub: *Subst, t: *Type) -> *Type
-    static def clone_expr(self: *Sema, sub: *Subst, e: *Expr) -> *Expr
-    static def clone_stmt(self: *Sema, sub: *Subst, st: *Stmt) -> *Stmt
-    static def clone_block(self: *Sema, sub: *Subst, b: *Block) -> *Block
-    static def clone_func(self: *Sema, sub: *Subst, f: *Func, owner: const *char, with_body: bool) -> *Func
-    static def type_of(self: *Sema, e: *Expr) -> *Type
-    static def czero_expr(self: *Sema, t: *Type, pos: Pos) -> *Expr
-    static def lower_designators(self: *Sema, e: *Expr, t: *Type)
-    static def ceval_cast(self: *Sema, t: *Type, v: CVal) -> CVal
-    static def ceval_val(self: *Sema, e: *Expr, env: *CFrame, ref ok: bool) -> CVal
-    static def ccall(self: *Sema, f: *Func, e: *Expr, env: *CFrame, ref ok: bool) -> CVal
-    static def cexec_block(self: *Sema, b: *Block, env: *CFrame, out ret: CVal, ref returned: bool, ref ok: bool)
-    static def ceval(self: *Sema, e: *Expr, ref ok: bool) -> i64
-    static def infer_type(self: *Sema, e: *Expr) -> *Type
-    static def sugg_text(self: *Sema, sg: *Sugg) -> const *char
-    static def hasfield_of(self: *Sema, e: *Expr) -> bool
-    static def macro_alias_rewrite(self: *Sema, e: *Expr) -> bool
-    static def known_type_name(self: *Sema, n: const *char) -> bool
-    static def is_check_ptr(self: *Sema, e: *Expr)
-    static def is_wrap_voidp(self: *Sema, e: *Expr) -> *Expr
-    static def infer_array_len(self: *Sema, t: *Type, init: *Expr)
-    static def require_complete(self: *Sema, t: *Type, pos: Pos)
-    static def fold_const_dims(self: *Sema, t: *Type)
-    static def vla_hoist_add(self: *Sema, st: *Stmt)
-    static def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr
-    static def ensure_libc_proto(self: *Sema, name: const *char, ret: *Type)
-    static def lower_vla_c89(self: *Sema, st: *Stmt) -> bool
-    static def fold_predefined(self: *Sema, e: *Expr)
-    static def fix_field_op(self: *Sema, e: *Expr)
-    static def val_struct(self: *Sema, t: *Type) -> *SInfo
-    static def check_void_array(self: *Sema, t: *Type, pos: Pos)
-    static def require_scalar(self: *Sema, e: *Expr, what: const *char)
-    static def static_const_ok(self: *Sema, e: *Expr) -> bool
-    static def type_compat(self: *Sema, a: *Type, b: *Type) -> bool
-    static def sinfo_field_deep(self: *Sema, si: *SInfo, name: const *char, depth: i32) -> bool
-    static def check_cond_assign(self: *Sema, cond: *Expr)
-    static def expr_no_effect(self: *Sema, e: *Expr) -> bool
-    static def stmt_exits_c(self: *Sema, st: *Stmt) -> bool
-    static def in_one_cmp(self: *Sema, needle: *Expr, elt: *Expr, str_needle: bool, pos: Pos) -> *Expr
-    static def type_is_string(self: *Sema, t: *Type) -> bool
-    static def in_or_chain(self: *Sema, cmps: **Expr, n: i32, pos: Pos) -> *Expr
-    static def lower_in(self: *Sema, e: *Expr)
-    static def lower_match_strings(self: *Sema, st: *Stmt)
-    static def resolve_call_args(self: *Sema, e: *Expr, fn: *Func, skip: i32)
-    static def check_byref_kw(self: *Sema, a: *Expr, fn: *Func, pi: i32)
-    static def byref_write_base(self: *Sema, e: *Expr) -> i32
-    static def func_designator(self: *Sema, e: *Expr) -> *Func
-    static def nn_save(self: *Sema) -> *i32
-    static def nn_restore(self: *Sema, snap: *i32)
-    static def nn_clear_all(self: *Sema)
-    static def nn_of_expr(self: *Sema, e: *Expr) -> i32
-    static def nn_assign(self: *Sema, lhs: *Expr, v: i32)
-    static def apply_cond_facts(self: *Sema, e: *Expr, branch_true: bool)
-    static def nn_kill_writes(self: *Sema, b: *Block)
-    static def null_deref_check(self: *Sema, base: *Expr, pos: Pos)
-    static def bind_ref(self: *Sema, e: *Expr, reft: *Type, pos: Pos, what: const *char) -> *Expr
-    static def check_ref_var(self: *Sema, st: *Stmt)
-    static def lower_coalesce(self: *Sema, e: *Expr)
-    static def check_assign_types(self: *Sema, pos: Pos, lt: *Type, rt: *Type, rhs: *Expr)
-    static def init_leaf(self: *Sema, t: *Type, e: *Expr)
-    static def init_arg_class(self: *Sema, e: *Expr) -> i32
-    static def init_walkable(self: *Sema, t: *Type) -> bool
-    static def init_fill_flat(self: *Sema, t: *Type, args: **Expr, nargs: i32, ref idx: i32)
-    static def check_init(self: *Sema, t: *Type, init: *Expr, pos: Pos)
-    static def require_defined(self: *Sema, t: *Type, pos: Pos)
-    static def check_compound_types(self: *Sema, pos: Pos, op: i32, lhs: *Expr, rhs: *Expr)
-    static def check_binop_types(self: *Sema, e: *Expr)
-    static def resolve_gcall(self: *Sema, e: *Expr)
-    static def check_expr(self: *Sema, e: *Expr)
-    static def check_defer_body(self: *Sema, b: *Block, loop_depth: i32, break_depth: i32)
-    static def tm_decay(self: *Sema, t: *Type) -> *Type
-    static def resolve_typematch(self: *Sema, st: *Stmt)
-    static def check_stmt(self: *Sema, st: *Stmt)
-    static def block_prepend(self: *Sema, b: *Block, st: *Stmt)
-    static def lower_for_iter(self: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt)
-    static def lower_for_iterable(self: *Sema, st: *Stmt, at: *Type, d1: **Stmt, d2: **Stmt)
-    static def check_stmts(self: *Sema, b: *Block)
-    static def check_block(self: *Sema, b: *Block)
-    static def walk_labels(self: *Sema, b: *Block, ref names: **char, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32)
-    static def walk_gotos(self: *Sema, b: *Block, names: **char, n: i32)
-    static def switch_collect_cases(self: *Sema, b: *Block, ref vals: *i64, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32, ref ndef: i32, ref defpos: Pos, mask: u64)
-    static def check_switch_dups(self: *Sema, b: *Block)
-    static def check_enum_exhaustive(self: *Sema, pos: Pos, subj: *Type, vals: *i64, n: i32, has_default: bool, what: const *char)
-    static def check_func_body(self: *Sema, f: *Func)
-    static def register_func(self: *Sema, f: *Func)
-    static def cpp_capture(self: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char
-    static def macro_put(self: *Sema, name: const *char, v: CVal)
-    static def ingest_macros(self: *Sema, path: const *char, is_sys: bool, dir: const *char)
-    static def ingest_c_header(self: *Sema, m: *Module, d: *Decl)
-    static def instantiate(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
-    static def trait_impl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
-    static def check_bound(self: *Sema, t: *Type, trait: const *char, tparam: const *char, pos: Pos)
-    static def register_decl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
-    static def register_module(self: *Sema, m: *Module, check_bodies: bool)
-    static def reg_builtin(self: *Sema, name: const *char, v: CVal)
-    static def inject_predefined(self: *Sema, cc: *Cc)
-    static def inject_defines(self: *Sema, cc: *Cc, m: *Module)
+    private def is_type_name(self: *Sema, n: const *char) -> bool
+    private def add_type(self: *Sema, n: const *char)
+    private def find_struct(self: *Sema, n: const *char) -> *SInfo
+    private def find_func(self: *Sema, cname: const *char) -> *Func
+    private def is_enum_const(self: *Sema, n: const *char) -> bool
+    private def scope_push(self: *Sema)
+    private def scope_pop(self: *Sema)
+    private def scope_add_x(self: *Sema, name: const *char, t: *Type, is_extern: bool)
+    private def deny_c_keyword(self: *Sema, name: const *char, pos: Pos)
+    private def scope_add(self: *Sema, name: const *char, t: *Type)
+    private def scope_find_cur(self: *Sema, name: const *char, was_extern: *bool) -> bool
+    private def sym_index(self: *Sema, name: const *char) -> i32
+    private def scope_find(self: *Sema, name: const *char) -> *Type
+    private def find_template(self: *Sema, n: const *char) -> *Decl
+    private def mangle_instance(self: *Sema, g: *Type) -> *char
+    private def resolve_type(self: *Sema, t: *Type)
+    private def check_pure_bytes(self: *Sema, si: *SInfo, d: *Decl)
+    private def record_ctor(self: *Sema, e: *Expr, si: *SInfo)
+    private def flatten_complit(self: *Sema, t: *Type, init: *Expr)
+    private def complit_to_temp(self: *Sema, e: *Expr, si: *SInfo)
+    private def fill_field(self: *Sema, dst: *Expr, t: *Type, src: *Expr, pos: Pos) -> *Expr
+    private def comma_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr
+    private def record_eq(self: *Sema, e: *Expr) -> bool
+    private def eq_operand(self: *Sema, e: *Expr, ref pre: *Expr) -> *Expr
+    private def record_eq_chain(self: *Sema, si: *SInfo, a: *Expr, b: *Expr, pos: Pos) -> *Expr
+    private def record_eq_value(self: *Sema, t: *Type, a: *Expr, b: *Expr, pos: Pos) -> *Expr
+    private def eq_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr
+    private def mk_field(self: *Sema, base: *Expr, name: const *char, pos: Pos) -> *Expr
+    private def const_len(self: *Sema, e: *Expr, ref out_n: i64) -> bool
+    private def ns_module(self: *Sema, name: const *char) -> *Module
+    private def ns_shadowed(self: *Sema, name: const *char) -> bool
+    private def ns_has(self: *Sema, m: *Module, member: const *char) -> bool
+    private def ns_plain(self: *Sema, dotted: const *char, pos: Pos) -> const *char
+    private def try_ns_ref(self: *Sema, e: *Expr) -> bool
+    private def clone_type(self: *Sema, sub: *Subst, t: *Type) -> *Type
+    private def clone_expr(self: *Sema, sub: *Subst, e: *Expr) -> *Expr
+    private def clone_stmt(self: *Sema, sub: *Subst, st: *Stmt) -> *Stmt
+    private def clone_block(self: *Sema, sub: *Subst, b: *Block) -> *Block
+    private def clone_func(self: *Sema, sub: *Subst, f: *Func, owner: const *char, with_body: bool) -> *Func
+    private def type_of(self: *Sema, e: *Expr) -> *Type
+    private def czero_expr(self: *Sema, t: *Type, pos: Pos) -> *Expr
+    private def lower_designators(self: *Sema, e: *Expr, t: *Type)
+    private def ceval_cast(self: *Sema, t: *Type, v: CVal) -> CVal
+    private def ceval_val(self: *Sema, e: *Expr, env: *CFrame, ref ok: bool) -> CVal
+    private def ccall(self: *Sema, f: *Func, e: *Expr, env: *CFrame, ref ok: bool) -> CVal
+    private def cexec_block(self: *Sema, b: *Block, env: *CFrame, out ret: CVal, ref returned: bool, ref ok: bool)
+    private def ceval(self: *Sema, e: *Expr, ref ok: bool) -> i64
+    private def infer_type(self: *Sema, e: *Expr) -> *Type
+    private def sugg_text(self: *Sema, sg: *Sugg) -> const *char
+    private def hasfield_of(self: *Sema, e: *Expr) -> bool
+    private def macro_alias_rewrite(self: *Sema, e: *Expr) -> bool
+    private def known_type_name(self: *Sema, n: const *char) -> bool
+    private def is_check_ptr(self: *Sema, e: *Expr)
+    private def is_wrap_voidp(self: *Sema, e: *Expr) -> *Expr
+    private def infer_array_len(self: *Sema, t: *Type, init: *Expr)
+    private def require_complete(self: *Sema, t: *Type, pos: Pos)
+    private def fold_const_dims(self: *Sema, t: *Type)
+    private def vla_hoist_add(self: *Sema, st: *Stmt)
+    private def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr
+    private def ensure_libc_proto(self: *Sema, name: const *char, ret: *Type)
+    private def lower_vla_c89(self: *Sema, st: *Stmt) -> bool
+    private def fold_predefined(self: *Sema, e: *Expr)
+    private def fix_field_op(self: *Sema, e: *Expr)
+    private def val_struct(self: *Sema, t: *Type) -> *SInfo
+    private def check_void_array(self: *Sema, t: *Type, pos: Pos)
+    private def require_scalar(self: *Sema, e: *Expr, what: const *char)
+    private def static_const_ok(self: *Sema, e: *Expr) -> bool
+    private def type_compat(self: *Sema, a: *Type, b: *Type) -> bool
+    private def sinfo_field_deep(self: *Sema, si: *SInfo, name: const *char, depth: i32) -> bool
+    private def check_cond_assign(self: *Sema, cond: *Expr)
+    private def expr_no_effect(self: *Sema, e: *Expr) -> bool
+    private def stmt_exits_c(self: *Sema, st: *Stmt) -> bool
+    private def in_one_cmp(self: *Sema, needle: *Expr, elt: *Expr, str_needle: bool, pos: Pos) -> *Expr
+    private def type_is_string(self: *Sema, t: *Type) -> bool
+    private def in_or_chain(self: *Sema, cmps: **Expr, n: i32, pos: Pos) -> *Expr
+    private def lower_in(self: *Sema, e: *Expr)
+    private def lower_match_strings(self: *Sema, st: *Stmt)
+    private def resolve_call_args(self: *Sema, e: *Expr, fn: *Func, skip: i32)
+    private def check_byref_kw(self: *Sema, a: *Expr, fn: *Func, pi: i32)
+    private def byref_write_base(self: *Sema, e: *Expr) -> i32
+    private def func_designator(self: *Sema, e: *Expr) -> *Func
+    private def nn_save(self: *Sema) -> *i32
+    private def nn_restore(self: *Sema, snap: *i32)
+    private def nn_clear_all(self: *Sema)
+    private def nn_of_expr(self: *Sema, e: *Expr) -> i32
+    private def nn_assign(self: *Sema, lhs: *Expr, v: i32)
+    private def apply_cond_facts(self: *Sema, e: *Expr, branch_true: bool)
+    private def nn_kill_writes(self: *Sema, b: *Block)
+    private def null_deref_check(self: *Sema, base: *Expr, pos: Pos)
+    private def bind_ref(self: *Sema, e: *Expr, reft: *Type, pos: Pos, what: const *char) -> *Expr
+    private def check_ref_var(self: *Sema, st: *Stmt)
+    private def lower_coalesce(self: *Sema, e: *Expr)
+    private def check_assign_types(self: *Sema, pos: Pos, lt: *Type, rt: *Type, rhs: *Expr)
+    private def init_leaf(self: *Sema, t: *Type, e: *Expr)
+    private def init_arg_class(self: *Sema, e: *Expr) -> i32
+    private def init_walkable(self: *Sema, t: *Type) -> bool
+    private def init_fill_flat(self: *Sema, t: *Type, args: **Expr, nargs: i32, ref idx: i32)
+    private def check_init(self: *Sema, t: *Type, init: *Expr, pos: Pos)
+    private def require_defined(self: *Sema, t: *Type, pos: Pos)
+    private def check_compound_types(self: *Sema, pos: Pos, op: i32, lhs: *Expr, rhs: *Expr)
+    private def check_binop_types(self: *Sema, e: *Expr)
+    private def resolve_gcall(self: *Sema, e: *Expr)
+    private def check_expr(self: *Sema, e: *Expr)
+    private def check_defer_body(self: *Sema, b: *Block, loop_depth: i32, break_depth: i32)
+    private def tm_decay(self: *Sema, t: *Type) -> *Type
+    private def resolve_typematch(self: *Sema, st: *Stmt)
+    private def check_stmt(self: *Sema, st: *Stmt)
+    private def block_prepend(self: *Sema, b: *Block, st: *Stmt)
+    private def lower_for_iter(self: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt)
+    private def lower_for_iterable(self: *Sema, st: *Stmt, at: *Type, d1: **Stmt, d2: **Stmt)
+    private def check_stmts(self: *Sema, b: *Block)
+    private def check_block(self: *Sema, b: *Block)
+    private def walk_labels(self: *Sema, b: *Block, ref names: **char, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32)
+    private def walk_gotos(self: *Sema, b: *Block, names: **char, n: i32)
+    private def switch_collect_cases(self: *Sema, b: *Block, ref vals: *i64, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32, ref ndef: i32, ref defpos: Pos, mask: u64)
+    private def check_switch_dups(self: *Sema, b: *Block)
+    private def check_enum_exhaustive(self: *Sema, pos: Pos, subj: *Type, vals: *i64, n: i32, has_default: bool, what: const *char)
+    private def check_func_body(self: *Sema, f: *Func)
+    private def register_func(self: *Sema, f: *Func)
+    private def cpp_capture(self: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char
+    private def macro_put(self: *Sema, name: const *char, v: CVal)
+    private def ingest_macros(self: *Sema, path: const *char, is_sys: bool, dir: const *char)
+    private def ingest_c_header(self: *Sema, m: *Module, d: *Decl)
+    private def instantiate(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
+    private def trait_impl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
+    private def check_bound(self: *Sema, t: *Type, trait: const *char, tparam: const *char, pos: Pos)
+    private def register_decl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool)
+    private def register_module(self: *Sema, m: *Module, check_bodies: bool)
+    private def reg_builtin(self: *Sema, name: const *char, v: CVal)
+    private def inject_predefined(self: *Sema, cc: *Cc)
+    private def inject_defines(self: *Sema, cc: *Cc, m: *Module)
 
     # ---------- tables ----------
-    static def is_type_name(self: *Sema, n: const *char) -> bool:
+    private def is_type_name(self: *Sema, n: const *char) -> bool:
         return self->types.has(n)
 
-    static def add_type(self: *Sema, n: const *char):
+    private def add_type(self: *Sema, n: const *char):
         self->types.add(n)
 
-    static def find_struct(self: *Sema, n: const *char) -> *SInfo:
+    private def find_struct(self: *Sema, n: const *char) -> *SInfo:
         return self->structs.get_or(n, None)
 
-    static def find_func(self: *Sema, cname: const *char) -> *Func:
+    private def find_func(self: *Sema, cname: const *char) -> *Func:
         return self->funcs.get_or(cname, None)
 
-    static def is_enum_const(self: *Sema, n: const *char) -> bool:
+    private def is_enum_const(self: *Sema, n: const *char) -> bool:
         return self->enumconsts.has(n)
 
-    static def scope_push(self: *Sema):
+    private def scope_push(self: *Sema):
         self->scopes = vec_grow(self->scopes, self->nscopes, ref self->cscopes, sizeof(*self->scopes))
         self->scopes[self->nscopes] = self->nlocals
         self->nscopes += 1
 
-    static def scope_pop(self: *Sema):
+    private def scope_pop(self: *Sema):
         self->nscopes -= 1
         base: i32 = self->scopes[self->nscopes]
         # -Wunused-variable (-Wall): tracked locals (pos set by ST_VAR) that were
@@ -536,18 +536,18 @@ struct Sema:
                         cdiag_at(self->file, self->locals[ui].pos, "unused-but-set-variable", WD_WALL, "variable '%s' set but not used", self->locals[ui].name)
         self->nlocals = base
 
-    static def scope_add_x(self: *Sema, name: const *char, t: *Type, is_extern: bool):
+    private def scope_add_x(self: *Sema, name: const *char, t: *Type, is_extern: bool):
         sym: Sym = {name, t, is_extern}
         self->locals = vec_grow(self->locals, self->nlocals, ref self->clocals, sizeof(*self->locals))
         self->locals[self->nlocals] = sym
         self->nlocals += 1
 
-    static def scope_add(self: *Sema, name: const *char, t: *Type):
+    private def scope_add(self: *Sema, name: const *char, t: *Type):
         self->scope_add_x(name, t, False)
 
     # is `name` declared in the CURRENT (innermost) scope? Used to reject
     # same-scope redeclaration; *was_extern reports the found decl's linkage.
-    static def scope_find_cur(self: *Sema, name: const *char, was_extern: *bool) -> bool:
+    private def scope_find_cur(self: *Sema, name: const *char, was_extern: *bool) -> bool:
         lo: i32 = self->scopes[self->nscopes - 1] if self->nscopes > 0 else 0
         i: i32
         for i in range(self->nlocals - 1, lo - 1, -1):
@@ -556,14 +556,14 @@ struct Sema:
                 return True
         return False
 
-    static def sym_index(self: *Sema, name: const *char) -> i32:
+    private def sym_index(self: *Sema, name: const *char) -> i32:
         j: i32
         for j in range(self->nlocals - 1, -1, -1):
             if strcmp(self->locals[j].name, name) == 0:
                 return j
         return -1
 
-    static def scope_find(self: *Sema, name: const *char) -> *Type:
+    private def scope_find(self: *Sema, name: const *char) -> *Type:
         i: i32
         for i in range(self->nlocals - 1, -1, -1):
             if strcmp(self->locals[i].name, name) == 0:
@@ -576,11 +576,11 @@ struct Sema:
         return self->globals.get_or(name, None)
 
     # ---------- generics: mangling, resolution and cloning ----------
-    static def find_template(self: *Sema, n: const *char) -> *Decl:
+    private def find_template(self: *Sema, n: const *char) -> *Decl:
         return self->templates.get_or(n, None)
 
     # Vec<int> -> "Vec_int"; Vec<*char> -> "Vec_pchar"; Map<int, u32> -> "Map_int_u32"
-    static def mangle_instance(self: *Sema, g: *Type) -> *char:
+    private def mangle_instance(self: *Sema, g: *Type) -> *char:
         sb: StrBuf = {0}
         defer sb.deinit()
         sb.puts(g->name)
@@ -591,7 +591,7 @@ struct Sema:
 
     # resolves generic references in types: Vec<int> becomes the mangled name
     # Vec_int (which must have been instantiated with declare)
-    static def resolve_type(self: *Sema, t: *Type):
+    private def resolve_type(self: *Sema, t: *Type):
         if t == None:
             return
         if t->kind == TY_PTR or t->kind == TY_ARRAY:
@@ -642,7 +642,7 @@ struct Sema:
         t->targs = None
         t->ntargs = 0
 
-    static def clone_type(self: *Sema, sub: *Subst, t: *Type) -> *Type:
+    private def clone_type(self: *Sema, sub: *Subst, t: *Type) -> *Type:
         if t == None:
             return None
         if t->kind == TY_PTR:
@@ -667,7 +667,7 @@ struct Sema:
             nt->ntargs = t->ntargs
         return nt
 
-    static def clone_expr(self: *Sema, sub: *Subst, e: *Expr) -> *Expr:
+    private def clone_expr(self: *Sema, sub: *Subst, e: *Expr) -> *Expr:
         if e == None:
             return None
         # the name of a type parameter used as an expression (sizeof(T), T(x))
@@ -696,7 +696,7 @@ struct Sema:
             .cast_tentative = e->cast_tentative
         return ne
 
-    static def clone_stmt(self: *Sema, sub: *Subst, st: *Stmt) -> *Stmt:
+    private def clone_stmt(self: *Sema, sub: *Subst, st: *Stmt) -> *Stmt:
         ns: *Stmt = st_new(self->a, st->kind, st->pos)
         with ns:
             .name = st->name
@@ -748,7 +748,7 @@ struct Sema:
             .label = st->label
         return ns
 
-    static def clone_block(self: *Sema, sub: *Subst, b: *Block) -> *Block:
+    private def clone_block(self: *Sema, sub: *Subst, b: *Block) -> *Block:
         if b == None:
             return None
         nb: *Block = self->a->alloc(sizeof(Block))
@@ -759,7 +759,7 @@ struct Sema:
         nb->n = b->n
         return nb
 
-    static def clone_func(self: *Sema, sub: *Subst, f: *Func, owner: const *char, with_body: bool) -> *Func:
+    private def clone_func(self: *Sema, sub: *Subst, f: *Func, owner: const *char, with_body: bool) -> *Func:
         nf: *Func = self->a->alloc(sizeof(Func))
         *nf = *f
         nf->owner = owner
@@ -778,7 +778,7 @@ struct Sema:
         nf->body = self->clone_block(sub, f->body) if with_body else None
         return nf
 
-    static def type_of(self: *Sema, e: *Expr) -> *Type:
+    private def type_of(self: *Sema, e: *Expr) -> *Type:
         if e == None:
             return None
         match e->kind:
@@ -932,7 +932,7 @@ struct Sema:
     # Designators in an initializer are C99. Under --std=c89 sema lowers them to
     # positional form: values in layout order, with zeros in the gaps that
     # PRECEDE explicit values (C89 already zeroes the rest). "{0}" zeroes aggregates.
-    static def czero_expr(self: *Sema, t: *Type, pos: Pos) -> *Expr:
+    private def czero_expr(self: *Sema, t: *Type, pos: Pos) -> *Expr:
         z: *Expr = ex_new(self->a, EX_NUMBER, pos)
         z->text = "0"
         if t != None and (t->kind == TY_ARRAY or (t->kind == TY_NAME and self->find_struct(t->name) != None)):
@@ -943,7 +943,7 @@ struct Sema:
             return w
         return z
 
-    static def lower_designators(self: *Sema, e: *Expr, t: *Type):
+    private def lower_designators(self: *Sema, e: *Expr, t: *Type):
         if e == None or e->kind != EX_INITLIST or t == None:
             return
         if t->kind == TY_ARRAY:
@@ -1041,7 +1041,7 @@ struct Sema:
     # constant-fold a cast: an integer cast to a narrower type must TRUNCATE
     # ((char)300 == 44), and int<->float conversions must round toward zero, or a
     # compile-time `if ((char)300 != 44)` prunes the wrong branch (00216, chars).
-    static def ceval_cast(self: *Sema, t: *Type, v: CVal) -> CVal:
+    private def ceval_cast(self: *Sema, t: *Type, v: CVal) -> CVal:
         if t == None or t->kind != TY_NAME:
             return v   # cast to pointer/array/etc: value unchanged
         n: const *char = t->name
@@ -1061,7 +1061,7 @@ struct Sema:
         return cv_int(iv)            # 8 bytes or unknown: no truncation
 
     # evaluates `e` to a compile-time value. *ok=False if not computable.
-    static def ceval_val(self: *Sema, e: *Expr, env: *CFrame, ref ok: bool) -> CVal:
+    private def ceval_val(self: *Sema, e: *Expr, env: *CFrame, ref ok: bool) -> CVal:
         self->csteps += 1
         if self->csteps > 8000000:
             fatal_at(self->file, e->pos, "const evaluation exceeded step budget (infinite loop in a 'const def'?)")
@@ -1235,7 +1235,7 @@ struct Sema:
 
     # executes a `const def`: binds params to args (evaluated by the caller) and runs
     # the body in a new frame. Returns the return value.
-    static def ccall(self: *Sema, f: *Func, e: *Expr, env: *CFrame, ref ok: bool) -> CVal:
+    private def ccall(self: *Sema, f: *Func, e: *Expr, env: *CFrame, ref ok: bool) -> CVal:
         if f->body == None or e->nargs != f->nparams:
             ok = False
             return cv_int(0)
@@ -1250,7 +1250,7 @@ struct Sema:
         return ret
 
     # executes a block of statements in a CTFE frame
-    static def cexec_block(self: *Sema, b: *Block, env: *CFrame, out ret: CVal, ref returned: bool, ref ok: bool):
+    private def cexec_block(self: *Sema, b: *Block, env: *CFrame, out ret: CVal, ref returned: bool, ref ok: bool):
         if b == None:
             return
         for i in range(b->n):
@@ -1354,7 +1354,7 @@ struct Sema:
                     return
 
     # evaluates `e` as a constant integer (context requiring int: dim, case, if).
-    static def ceval(self: *Sema, e: *Expr, ref ok: bool) -> i64:
+    private def ceval(self: *Sema, e: *Expr, ref ok: bool) -> i64:
         v: CVal = self->ceval_val(e, None, ref ok)
         if v.kind == CV_FLOAT:
             return i64(v.fval)
@@ -1365,7 +1365,7 @@ struct Sema:
 
     # type inferred for an initializer; an integer-constant expression (refs to
     # `const`) that type_of can't resolve falls back to `int`.
-    static def infer_type(self: *Sema, e: *Expr) -> *Type:
+    private def infer_type(self: *Sema, e: *Expr) -> *Type:
         t: *Type = self->type_of(e)
         if t != None:
             return t
@@ -1376,7 +1376,7 @@ struct Sema:
         return None
 
     # " (did you mean 'X'?)" when a candidate is close enough, else ""
-    static def sugg_text(self: *Sema, sg: *Sugg) -> const *char:
+    private def sugg_text(self: *Sema, sg: *Sugg) -> const *char:
         lim: i32 = 1 + i32(strlen(sg->name)) / 4
         if lim > 3:
             lim = 3
@@ -1392,7 +1392,7 @@ struct Sema:
     # Called from BOTH check_expr (which folds the node to True/False) and ceval
     # (which is what the ST_IF pruning consults) — the fold in ST_IF runs before
     # check_expr ever sees the condition, so handling only one is not enough.
-    static def hasfield_of(self: *Sema, e: *Expr) -> bool:
+    private def hasfield_of(self: *Sema, e: *Expr) -> bool:
         ht: *Type = e->args[0]->cast_type if e->args[0]->kind == EX_TYPEREF else self->type_of(e->args[0])
         while ht != None and ht->kind == TY_PTR:   # hasfield(p, "x") asks about *p
             ht = ht->inner
@@ -1416,7 +1416,7 @@ struct Sema:
     # shadow a real declaration. Both a plain reference and a CALL need it — the
     # call path checks its callee separately and would otherwise report an
     # implicit function declaration.
-    static def macro_alias_rewrite(self: *Sema, e: *Expr) -> bool:
+    private def macro_alias_rewrite(self: *Sema, e: *Expr) -> bool:
         if e == None or e->kind != EX_IDENT or e->text == None:
             return False
         # follows a CHAIN (`#define a b` / `#define b c`), bounded the same way the
@@ -1435,14 +1435,14 @@ struct Sema:
             hop += 1
         return False
 
-    static def known_type_name(self: *Sema, n: const *char) -> bool:
+    private def known_type_name(self: *Sema, n: const *char) -> bool:
         if self->types.has(n):
             return True
         return is_c_arith_words(n)
 
     # `is` operates on POINTERS (identity): a value operand of a known non-pointer
     # type gets a friendly error steering to ==
-    static def is_check_ptr(self: *Sema, e: *Expr):
+    private def is_check_ptr(self: *Sema, e: *Expr):
         if e == None or e->kind == EX_NONE or e->kind == EX_STRING:
             return
         t: *Type = self->type_of(e)
@@ -1453,7 +1453,7 @@ struct Sema:
         tn: const *char = t->name if t->name != None else "?"
         fatal_at(self->file, e->pos, "'is' compares pointer IDENTITY, but this operand is a value of type '%s' — use == for value equality (or compare &addresses)", tn)
 
-    static def is_wrap_voidp(self: *Sema, e: *Expr) -> *Expr:
+    private def is_wrap_voidp(self: *Sema, e: *Expr) -> *Expr:
         if e == None or e->kind == EX_NONE:
             return e   # None is already the untyped null pointer
         c: *Expr = ex_new(self->a, EX_CAST, e->pos)
@@ -1464,7 +1464,7 @@ struct Sema:
     # `xs: T[] = {a, b, c}` — the element COUNT is right there in the initializer:
     # fill in arr_len so the type is complete (len(xs), comptime sizes). Skipped
     # when a designator is present (the count is not simply nargs).
-    static def infer_array_len(self: *Sema, t: *Type, init: *Expr):
+    private def infer_array_len(self: *Sema, t: *Type, init: *Expr):
         if t == None or t->kind != TY_ARRAY or t->arr_len != None:
             return
         if init == None:
@@ -1501,7 +1501,7 @@ struct Sema:
         lit->text = self->a->printf("%d", init->nargs)
         t->arr_len = lit
 
-    static def require_complete(self: *Sema, t: *Type, pos: Pos):
+    private def require_complete(self: *Sema, t: *Type, pos: Pos):
         if self->in_chdr or t == None:
             return
         self->check_void_array(t, pos)
@@ -1524,7 +1524,7 @@ struct Sema:
     # folds array dimensions that reference constants to literals — this way the
     # C backend emits `a[4]` (fixed array) instead of `a[N]` (VLA). Recursive on
     # the element type (multi-dim arrays / pointer to array).
-    static def fold_const_dims(self: *Sema, t: *Type):
+    private def fold_const_dims(self: *Sema, t: *Type):
         while t != None:
             if t->kind == TY_ARRAY and t->arr_len != None and t->arr_len->kind != EX_NUMBER:
                 cok: bool = True
@@ -1553,7 +1553,7 @@ struct Sema:
             else:
                 break
 
-    static def vla_hoist_add(self: *Sema, st: *Stmt):
+    private def vla_hoist_add(self: *Sema, st: *Stmt):
         self->vla_hoist = vec_grow(self->vla_hoist, self->vla_nhoist, ref self->vla_choist, sizeof(*self->vla_hoist))
         self->vla_hoist[self->vla_nhoist] = st
         self->vla_nhoist += 1
@@ -1564,7 +1564,7 @@ struct Sema:
     # the C backend used to emit it and only the C compiler complained.
     # `({ ... })` whose block holds anything other than expressions: there is no
     # standard-C form for it (the comma operator only sequences expressions)
-    static def stmtexpr_needs_hoist(self: *Sema, e: *Expr) -> bool:
+    private def stmtexpr_needs_hoist(self: *Sema, e: *Expr) -> bool:
         if e == None or e->kind != EX_STMTEXPR or e->xblock == None or e->lhs == None:
             return False
         for i in range(e->xblock->n):
@@ -1575,7 +1575,7 @@ struct Sema:
     # hoists `e`'s block in front of the enclosing statement and rewrites `e`
     # into the temporary that receives its value. Must be called with `e`'s own
     # scope still pushed: the value expression refers to the block's locals.
-    static def hoist_stmtexpr(self: *Sema, e: *Expr):
+    private def hoist_stmtexpr(self: *Sema, e: *Expr):
         t: *Type = self->type_of(e->lhs)
         if t == None:
             t = self->infer_type(e->lhs)
@@ -1612,7 +1612,7 @@ struct Sema:
         idn: *Expr = mk_ident(self->a, name, e->pos)
         *e = *idn
 
-    static def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr:
+    private def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr:
         t: *Type = self->type_of(e)
         if t == None:
             t = self->infer_type(e)
@@ -1655,7 +1655,7 @@ struct Sema:
     # the c89 VLA lowering INJECTS malloc/free calls — make sure the sema knows
     # them (the emitted C includes <stdlib.h> for this), or the injected calls
     # would trip -Wimplicit-function-declaration in modules without stdlib
-    static def ensure_libc_proto(self: *Sema, name: const *char, ret: *Type):
+    private def ensure_libc_proto(self: *Sema, name: const *char, ret: *Type):
         if self->funcs.has(name):
             return
         lf: *Func = self->a->alloc(sizeof(Func))
@@ -1667,7 +1667,7 @@ struct Sema:
             .sig_empty = True   # signature left open
         self->funcs.put(name, lf)
 
-    static def lower_vla_c89(self: *Sema, st: *Stmt) -> bool:
+    private def lower_vla_c89(self: *Sema, st: *Stmt) -> bool:
         if self->cc->std_version != 89 or st->type == None:
             return False
         if st->type->kind != TY_ARRAY or st->type->arr_len == None or st->init != None:
@@ -1723,7 +1723,7 @@ struct Sema:
     # literal in sema. Positional: __FILE__/__LINE__ (node position), __func__/
     # __FUNCTION__ (current function), __COUNTER__ (increments on each use). The
     # other dunders (__DATE__/__TIME__/__PLANG__*/-D __X) come from constvals.
-    static def fold_predefined(self: *Sema, e: *Expr):
+    private def fold_predefined(self: *Sema, e: *Expr):
         n: const *char = e->text
         if n == None or n[0] != '_' or n[1] != '_':
             return
@@ -1753,7 +1753,7 @@ struct Sema:
                 e->kind = EX_NUMBER; e->text = self->a->printf("%lld", cp->ival)
 
     # normalizes . / -> depending on whether the receiver is a value or a pointer
-    static def fix_field_op(self: *Sema, e: *Expr):
+    private def fix_field_op(self: *Sema, e: *Expr):
         # `(*p).f` IS `p->f` — the auto-deref on a byref parameter would otherwise
         # surface in the output for every field it touches (take_addr is the twin
         # of this fold for the address-of side)
@@ -1772,14 +1772,14 @@ struct Sema:
     # the struct/union SInfo when `t` is a struct/union VALUE type (not ptr/array).
     # Unresolved generic references (Vec<T> with targs) are skipped — only the
     # monomorphized instances behave as concrete struct values here.
-    static def val_struct(self: *Sema, t: *Type) -> *SInfo:
+    private def val_struct(self: *Sema, t: *Type) -> *SInfo:
         if t == None or t->kind != TY_NAME or t->ntargs > 0:
             return None
         return self->find_struct(t->name)
 
     # an ARRAY may never have void elements, at any nesting/pointer level:
     # void a[3], void (*p)[3], void *x[2][2] is fine (pointer elem), void x[2][2] not
-    static def check_void_array(self: *Sema, t: *Type, pos: Pos):
+    private def check_void_array(self: *Sema, t: *Type, pos: Pos):
         w: *Type = t
         while w != None and (w->kind == TY_PTR or w->kind == TY_ARRAY):
             if w->kind == TY_ARRAY:
@@ -1799,7 +1799,7 @@ struct Sema:
 
     # rejects a struct/union/void VALUE where C/P require a scalar (conditions,
     # arithmetic operands, ++/--). Pointers and unknown types pass.
-    static def require_scalar(self: *Sema, e: *Expr, what: const *char):
+    private def require_scalar(self: *Sema, e: *Expr, what: const *char):
         if e == None:
             return
         t: *Type = self->type_of(e)
@@ -1814,7 +1814,7 @@ struct Sema:
     # the other positively scalar) -> incompatible. Unknowns stay permissive.
     # is `e` usable as a STATIC-storage initializer (a constant expression or an
     # address constant, C11 6.7.9p4)? Conservative on unknown node kinds.
-    static def static_const_ok(self: *Sema, e: *Expr) -> bool:
+    private def static_const_ok(self: *Sema, e: *Expr) -> bool:
         if e == None:
             return True
         match e->kind:
@@ -1863,7 +1863,7 @@ struct Sema:
     # STRUCTURAL compatibility of two resolved types (canonical arith names,
     # struct identities, pointee recursion, array dims when both are literal).
     # Unknown parts are permissive.
-    static def type_compat(self: *Sema, a: *Type, b: *Type) -> bool:
+    private def type_compat(self: *Sema, a: *Type, b: *Type) -> bool:
         if a == None or b == None:
             return True
         if a->kind == TY_NAME and b->kind == TY_NAME:
@@ -1902,7 +1902,7 @@ struct Sema:
 
     # does the struct have this member, INCLUDING inside C11 anonymous
     # struct/union members (fields named "" whose type is the nested tag)?
-    static def sinfo_field_deep(self: *Sema, si: *SInfo, name: const *char, depth: i32) -> bool:
+    private def sinfo_field_deep(self: *Sema, si: *SInfo, name: const *char, depth: i32) -> bool:
         if si == None or depth > 8:
             return False
         if sinfo_field(si, name) != None:
@@ -1917,12 +1917,12 @@ struct Sema:
 
     # -Wparentheses: a bare assignment used as a condition (`if (x = 3)`) — an
     # extra set of parens (`if ((x = y))`) is the idiomatic "yes, I mean it"
-    static def check_cond_assign(self: *Sema, cond: *Expr):
+    private def check_cond_assign(self: *Sema, cond: *Expr):
         if cond != None and cond->kind == EX_ASSIGN and not cond->parened:
             cdiag_at(self->file, cond->pos, "parentheses", WD_WARN, "using the result of an assignment as a condition without parentheses")
 
     # -Wunused-value: does evaluating this expression have NO side effect?
-    static def expr_no_effect(self: *Sema, e: *Expr) -> bool:
+    private def expr_no_effect(self: *Sema, e: *Expr) -> bool:
         if e == None:
             return False
         match e->kind:
@@ -1948,7 +1948,7 @@ struct Sema:
     # missing return (-Wreturn-type warning): does the block END by leaving the
     # function? Conservative — anything uncertain counts as exiting (never a
     # false warning; a switch or a while(1) is trusted).
-    static def stmt_exits_c(self: *Sema, st: *Stmt) -> bool:
+    private def stmt_exits_c(self: *Sema, st: *Stmt) -> bool:
         if st == None:
             return False
         match st->kind:
@@ -1986,7 +1986,7 @@ struct Sema:
 
     # builds one comparison of the chain: needle == elt, or strcmp(needle, elt) == 0
     # when both sides are strings (CONTENT equality — never pointer comparison)
-    static def in_one_cmp(self: *Sema, needle: *Expr, elt: *Expr, str_needle: bool, pos: Pos) -> *Expr:
+    private def in_one_cmp(self: *Sema, needle: *Expr, elt: *Expr, str_needle: bool, pos: Pos) -> *Expr:
         elt_str: bool = elt->kind == EX_STRING
         if elt_str or (str_needle and elt != None and self->type_is_string(self->type_of(elt))):
             cmpfn: const *char = "strcmp"
@@ -2014,12 +2014,12 @@ struct Sema:
         eq->rhs = elt
         return eq
 
-    static def type_is_string(self: *Sema, t: *Type) -> bool:
+    private def type_is_string(self: *Sema, t: *Type) -> bool:
         if t == None or (t->kind != TY_PTR and t->kind != TY_ARRAY) or t->inner == None:
             return False
         return t->inner->kind == TY_NAME and t->inner->name != None and (t->inner->name == "char" or ctype_width(t->inner->name) == 1)
 
-    static def in_or_chain(self: *Sema, cmps: **Expr, n: i32, pos: Pos) -> *Expr:
+    private def in_or_chain(self: *Sema, cmps: **Expr, n: i32, pos: Pos) -> *Expr:
         if n == 0:
             return ex_new(self->a, EX_FALSE, pos)
         acc: *Expr = cmps[0]
@@ -2033,7 +2033,7 @@ struct Sema:
 
     # lowers EX_IN in place: `x in {a,b}` -> x==a or x==b (strings via strcmp);
     # `c in "aeiou"` unrolls the literal's bytes; `x in arr[N]` unrolls the array.
-    static def lower_in(self: *Sema, e: *Expr):
+    private def lower_in(self: *Sema, e: *Expr):
         needle: *Expr = e->lhs
         hay: *Expr = e->rhs
         negated: bool = e->op == TK_NOT
@@ -2121,7 +2121,7 @@ struct Sema:
     # `match` over a STRING subject: C's switch can't take strings, so the match
     # becomes an if/elif chain of strcmp comparisons (content equality — the same
     # rule as `in`). The subject is duplicated per case: it must be pure.
-    static def lower_match_strings(self: *Sema, st: *Stmt):
+    private def lower_match_strings(self: *Sema, st: *Stmt):
         if not self->expr_no_effect(st->subject):
             fatal_at(self->file, st->pos, "'match' on a string expands into strcmp comparisons — assign the subject to a variable first")
         conds: **Expr = None
@@ -2171,7 +2171,7 @@ struct Sema:
     # omitted trailing parameters from their comptime DEFAULTS — the call leaves
     # here in plain positional form (zero runtime cost). `skip` = leading params
     # not present in e->args (a method's self).
-    static def resolve_call_args(self: *Sema, e: *Expr, fn: *Func, skip: i32):
+    private def resolve_call_args(self: *Sema, e: *Expr, fn: *Func, skip: i32):
         want: i32 = fn->nparams - skip
         named: bool = False
         for ci in range(e->nargs):
@@ -2222,7 +2222,7 @@ struct Sema:
 
     # a call-site byref keyword (`out x`/`ref x`/`in x`) must match the parameter
     # it lands on. Raw `&x` (no keyword) stays valid — C-interop compatibility.
-    static def check_byref_kw(self: *Sema, a: *Expr, fn: *Func, pi: i32):
+    private def check_byref_kw(self: *Sema, a: *Expr, fn: *Func, pi: i32):
         if a == None or a->kind != EX_UNARY or a->op != TK_AMP or a->byref == PK_NONE:
             return
         kw: const *char = "out" if a->byref == PK_OUT else ("ref" if a->byref == PK_REF else "in")
@@ -2236,7 +2236,7 @@ struct Sema:
     # the byref-parameter SYM this lvalue writes into (or -1). Walks value hops
     # only: .field on the deref'd param, [i] on value arrays. A hop through a
     # LOADED pointer (p.next.x) leaves the pointee — not a write into the param.
-    static def byref_write_base(self: *Sema, e: *Expr) -> i32:
+    private def byref_write_base(self: *Sema, e: *Expr) -> i32:
         w: *Expr = e
         while w != None:
             if w->kind == EX_FIELD and w->op == TK_DOT:
@@ -2266,7 +2266,7 @@ struct Sema:
     # a FUNCTION DESIGNATOR: an identifier that names a function and is not
     # shadowed by any variable — it only carries a value DECAYED to a function
     # pointer, so arithmetic on it or assigning it to a non-pointer is an error
-    static def func_designator(self: *Sema, e: *Expr) -> *Func:
+    private def func_designator(self: *Sema, e: *Expr) -> *Func:
         if e == None or e->kind != EX_IDENT or e->text == None:
             return None
         if self->scope_find(e->text) != None or self->globals.get_or(e->text, None) != None:
@@ -2280,23 +2280,23 @@ struct Sema:
     # loop could replay, and dropped entirely at labels and escaped addresses.
     # Two consumers only: -Wnull-dereference (fires on a proven None) and the
     # proof `ref T` demands before stealing the place behind a pointer.
-    static def nn_save(self: *Sema) -> *i32:
+    private def nn_save(self: *Sema) -> *i32:
         snap: *i32 = self->a->alloc(usize(self->nlocals + 1) * sizeof(i32))
         snap[0] = self->nlocals
         for i in range(self->nlocals):
             snap[i + 1] = self->locals[i].nn
         return snap
 
-    static def nn_restore(self: *Sema, snap: *i32):
+    private def nn_restore(self: *Sema, snap: *i32):
         for i in range(self->nlocals):
             self->locals[i].nn = snap[i + 1] if i < snap[0] else 0
 
-    static def nn_clear_all(self: *Sema):
+    private def nn_clear_all(self: *Sema):
         for i in range(self->nlocals):
             self->locals[i].nn = 0
 
     # what a fresh value proves about the pointer it lands in
-    static def nn_of_expr(self: *Sema, e: *Expr) -> i32:
+    private def nn_of_expr(self: *Sema, e: *Expr) -> i32:
         if e == None:
             return 0
         if e->kind == EX_NONE:
@@ -2319,7 +2319,7 @@ struct Sema:
 
     # record a fact on a pointer local being assigned (idents only: a fact on
     # p->f or a[i] would need an alias analysis this deliberately isn't)
-    static def nn_assign(self: *Sema, lhs: *Expr, v: i32):
+    private def nn_assign(self: *Sema, lhs: *Expr, v: i32):
         if lhs == None or lhs->kind != EX_IDENT:
             return
         ai: i32 = self->sym_index(lhs->text)
@@ -2330,7 +2330,7 @@ struct Sema:
         self->locals[ai].nn = v
 
     # facts a condition proves inside the branch where it was `branch_true`
-    static def apply_cond_facts(self: *Sema, e: *Expr, branch_true: bool):
+    private def apply_cond_facts(self: *Sema, e: *Expr, branch_true: bool):
         if e == None:
             return
         if e->kind == EX_UNARY and e->op == TK_NOT:
@@ -2363,7 +2363,7 @@ struct Sema:
 
     # a loop body runs again after its own writes: any local it assigns cannot
     # keep a fact from BEFORE the loop (the back edge would smuggle it in)
-    static def nn_kill_writes(self: *Sema, b: *Block):
+    private def nn_kill_writes(self: *Sema, b: *Block):
         if b == None:
             return
         for i in range(b->n):
@@ -2387,7 +2387,7 @@ struct Sema:
 
     # -Wnull-dereference (69.7): only a PROVEN fact fires — the pointer was
     # None on every path that reaches this dereference, so it always crashes
-    static def null_deref_check(self: *Sema, base: *Expr, pos: Pos):
+    private def null_deref_check(self: *Sema, base: *Expr, pos: Pos):
         if self->in_chdr or self->uneval > 0 or base == None or base->kind != EX_IDENT or base->out_done:
             return
         di: i32 = self->sym_index(base->text)
@@ -2400,7 +2400,7 @@ struct Sema:
     # turns a CHECKED place expression into the pointer a `ref T` stores,
     # demanding the flow's proof when the place lives behind a raw pointer.
     # Returns the expression the declaration/return actually keeps.
-    static def bind_ref(self: *Sema, e: *Expr, reft: *Type, pos: Pos, what: const *char) -> *Expr:
+    private def bind_ref(self: *Sema, e: *Expr, reft: *Type, pos: Pos, what: const *char) -> *Expr:
         it: *Type = self->type_of(e)
         # a value that is already a ref (another ref, a ref-returning call):
         # the pointer it carries is non-None by construction — copy it
@@ -2427,7 +2427,7 @@ struct Sema:
     # `a ?? b` (69.3): b when a is None. Lowered to a hoisted temp + comma so
     # `a` is evaluated exactly once and `b` stays behind the branch — plain
     # C89 (?:), identical in both backends.
-    static def lower_coalesce(self: *Sema, e: *Expr):
+    private def lower_coalesce(self: *Sema, e: *Expr):
         self->check_expr(e->lhs)
         clt: *Type = self->type_of(e->lhs)
         if clt == None or clt->kind != TY_PTR:
@@ -2469,7 +2469,7 @@ struct Sema:
     # same rail a `ref v: T` parameter rides. The local's stored type is the
     # pointer; byref=PK_REF makes every later use of the name a load/store
     # through the referent, which is exactly why a rebind cannot be spelled.
-    static def check_ref_var(self: *Sema, st: *Stmt):
+    private def check_ref_var(self: *Sema, st: *Stmt):
         if st->is_extern or st->is_static:
             fatal_at(self->file, st->pos, "a ref cannot have a storage class: it binds at a moment in the flow")
         self->resolve_type(st->type)
@@ -2485,7 +2485,7 @@ struct Sema:
         self->locals[self->nlocals - 1].byref = PK_REF
         self->locals[self->nlocals - 1].nn = 1
 
-    static def check_assign_types(self: *Sema, pos: Pos, lt: *Type, rt: *Type, rhs: *Expr):
+    private def check_assign_types(self: *Sema, pos: Pos, lt: *Type, rt: *Type, rhs: *Expr):
         # a ref where a VALUE of T is expected: load through it (69.1) — the
         # pointer is non-None by construction, so the load is always safe
         if rt != None and rt->kind == TY_PTR and rt->is_ref and lt != None and lt->kind != TY_PTR and lt->kind != TY_ARRAY and rhs != None and type_eq_p(lt, rt->inner):
@@ -2550,7 +2550,7 @@ struct Sema:
                     cdiag_at(self->file, pos, "incompatible-pointer-types", WD_EXTWARN, "incompatible pointer types in assignment")
 
     # a scalar LEAF of an initializer: assignment compatibility applies
-    static def init_leaf(self: *Sema, t: *Type, e: *Expr):
+    private def init_leaf(self: *Sema, t: *Type, e: *Expr):
         if e == None:
             return
         self->check_assign_types(e->pos, t, self->type_of(e), e)
@@ -2558,7 +2558,7 @@ struct Sema:
     # is this ARG a complete aggregate VALUE (compound literal, cast, struct-typed
     # expression)? It initializes the whole field — elision is for plain scalars.
     # None = unknowable (untyped expr): the caller bails out permissive.
-    static def init_arg_class(self: *Sema, e: *Expr) -> i32:
+    private def init_arg_class(self: *Sema, e: *Expr) -> i32:
         if e == None:
             return 0
         if e->kind == EX_COMPOUND or e->kind == EX_CAST:
@@ -2580,7 +2580,7 @@ struct Sema:
         return 0        # positively scalar: brace elision applies
 
     # aggregate we can WALK for elision purposes (defined struct/union or array)
-    static def init_walkable(self: *Sema, t: *Type) -> bool:
+    private def init_walkable(self: *Sema, t: *Type) -> bool:
         if t == None:
             return False
         if t->kind == TY_ARRAY:
@@ -2589,7 +2589,7 @@ struct Sema:
         return si != None and si->defined
 
     # consume from a FLAT stream (brace elision): fills `t` from args[idx..]
-    static def init_fill_flat(self: *Sema, t: *Type, args: **Expr, nargs: i32, ref idx: i32):
+    private def init_fill_flat(self: *Sema, t: *Type, args: **Expr, nargs: i32, ref idx: i32):
         if idx >= nargs or t == None:
             return
         if t->kind == TY_ARRAY:
@@ -2673,7 +2673,7 @@ struct Sema:
         idx = nargs   # unknown type: bail permissive
 
     # `t` initialized by its own initializer (brace list, string or expression)
-    static def check_init(self: *Sema, t: *Type, init: *Expr, pos: Pos):
+    private def check_init(self: *Sema, t: *Type, init: *Expr, pos: Pos):
         if init == None or t == None or self->in_chdr:
             return
         if init->kind == EX_STRING:
@@ -2844,7 +2844,7 @@ struct Sema:
     # a VALUE of a forward-declared-but-never-defined struct/union cannot exist.
     # Arrays of it either (walks to the base). Pointers stay opaque (legal), and
     # ingested headers are skipped (in_chdr) like the rest of the strict checks.
-    static def require_defined(self: *Sema, t: *Type, pos: Pos):
+    private def require_defined(self: *Sema, t: *Type, pos: Pos):
         if self->in_chdr:
             return
         base: *Type = t
@@ -2862,7 +2862,7 @@ struct Sema:
     # invalid. Comparisons are left alone (p == 0 is idiomatic).
     # compound assignment (+=, -=, *=, ...) shares the binary operators' typing
     # rules: pointer arithmetic only via ptr +=/-= integer; the rest scalar-only
-    static def check_compound_types(self: *Sema, pos: Pos, op: i32, lhs: *Expr, rhs: *Expr):
+    private def check_compound_types(self: *Sema, pos: Pos, op: i32, lhs: *Expr, rhs: *Expr):
         self->require_scalar(lhs, "compound assignment")
         self->require_scalar(rhs, "compound assignment")
         lt: *Type = self->type_of(lhs)
@@ -2887,7 +2887,7 @@ struct Sema:
             if (op in {TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ}) and (is_float_type(lt) or is_float_type(rt)):
                 fatal_at(self->file, pos, "operator requires integer operands (floating value given)")
 
-    static def check_binop_types(self: *Sema, e: *Expr):
+    private def check_binop_types(self: *Sema, e: *Expr):
         if self->func_designator(e->lhs) != None or self->func_designator(e->rhs) != None:
             # functions decay to pointers: comparisons are fine, arithmetic is not
             if e->op in {TK_PLUS, TK_MINUS, TK_STAR, TK_SLASH, TK_PERCENT, TK_AMP, TK_PIPE, TK_CARET, TK_SHL, TK_SHR}:
@@ -2967,7 +2967,7 @@ struct Sema:
             case _:
                 return
 
-    static def resolve_gcall(self: *Sema, e: *Expr):
+    private def resolve_gcall(self: *Sema, e: *Expr):
         callee: *Expr = e->lhs
         if callee == None or callee->kind != EX_IDENT:
             return
@@ -3002,7 +3002,7 @@ struct Sema:
             fatal_at(self->file, e->pos, "generic function '%s' not instantiated for these types — 'declare %s<...>' and 'implement %s<...>' before use", callee->text, callee->text, callee->text)
         callee->text = mangled
 
-    static def check_expr(self: *Sema, e: *Expr):
+    private def check_expr(self: *Sema, e: *Expr):
         if e == None:
             return
         match e->kind:
@@ -3787,7 +3787,7 @@ struct Sema:
                 return
 
     # defer body: no return; break/continue only in a loop/match of the body itself
-    static def check_defer_body(self: *Sema, b: *Block, loop_depth: i32, break_depth: i32):
+    private def check_defer_body(self: *Sema, b: *Block, loop_depth: i32, break_depth: i32):
         for i in range(b->n):
             st: *Stmt = b->stmts[i]
             match st->kind:
@@ -3815,14 +3815,14 @@ struct Sema:
                     continue
 
     # lvalue conversion of the match type subject: array decays to pointer
-    static def tm_decay(self: *Sema, t: *Type) -> *Type:
+    private def tm_decay(self: *Sema, t: *Type) -> *Type:
         if t != None and t->kind == TY_ARRAY:
             return ty_ptr(self->a, t->inner)
         return t
 
     # chooses, at compile time, the case whose type matches the static type of the
     # subject. In a template, runs at instantiation (T already concrete). tm_sel = index.
-    static def resolve_typematch(self: *Sema, st: *Stmt):
+    private def resolve_typematch(self: *Sema, st: *Stmt):
         subj: *Type = self->tm_decay(self->type_of(st->subject))
         dflt = -1
         for i in range(st->ncases):
@@ -3848,7 +3848,7 @@ struct Sema:
     #
     # Achado ao escrever `signed: bool = ...` no runtime do pscript: saiu
     # `int signed = ...;` e o cc reclamou de um arquivo que ninguém escreveu.
-    static def deny_c_keyword(self: *Sema, name: const *char, pos: Pos):
+    private def deny_c_keyword(self: *Sema, name: const *char, pos: Pos):
         if name == None:
             return
         C_KW: const *char[] = {"auto", "register", "signed", "unsigned", "extern",
@@ -3863,7 +3863,7 @@ struct Sema:
             if strcmp(name, C_KW[i]) == 0:
                 fatal_at(self->file, pos, "'%s' is a keyword in C, so a declaration with that name would emit C that does not compile: pick another name", name)
 
-    static def check_stmt(self: *Sema, st: *Stmt):
+    private def check_stmt(self: *Sema, st: *Stmt):
         match st->kind:
             case ST_VAR:
                 if not self->c_mod:
@@ -4418,7 +4418,7 @@ struct Sema:
             case ST_GOTO, ST_PASS:
                 return
 
-    static def block_prepend(self: *Sema, b: *Block, st: *Stmt):
+    private def block_prepend(self: *Sema, b: *Block, st: *Stmt):
         ns: **Stmt = self->a->alloc(usize(b->n + 1) * sizeof(*ns))
         ns[0] = st
         for i in range(b->n):
@@ -4442,7 +4442,7 @@ struct Sema:
     # says — and so the whole thing goes through check_block like hand-written
     # code: the method calls resolve through the lookup the impl block filled,
     # and no backend learns anything.
-    static def lower_for_iterable(self: *Sema, st: *Stmt, at: *Type, d1: **Stmt, d2: **Stmt):
+    private def lower_for_iterable(self: *Sema, st: *Stmt, at: *Type, d1: **Stmt, d2: **Stmt):
         base: *Type = at
         nptr: i32 = 0
         while base != None and base->kind == TY_PTR:
@@ -4511,7 +4511,7 @@ struct Sema:
         *d1 = None
         *d2 = None
 
-    static def lower_for_iter(self: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt):
+    private def lower_for_iter(self: *Sema, st: *Stmt, d1: **Stmt, d2: **Stmt):
         *d1 = None
         *d2 = None
         if st->var2 != None:
@@ -4590,7 +4590,7 @@ struct Sema:
     # checks a block's statements, injecting auto-declared `for` iterators as an
     # ST_VAR right before their loop. The caller owns the scope, so the iterator
     # stays visible after the loop. b->stmts is rebuilt only if something was added.
-    static def check_stmts(self: *Sema, b: *Block):
+    private def check_stmts(self: *Sema, b: *Block):
         ns: **Stmt = None
         nn: i32 = 0
         cap: i32 = 0
@@ -4625,7 +4625,7 @@ struct Sema:
             b->stmts = ns
             b->n = nn
 
-    static def check_block(self: *Sema, b: *Block):
+    private def check_block(self: *Sema, b: *Block):
         self->scope_push()
         self->check_stmts(b)
         self->scope_pop()
@@ -4633,7 +4633,7 @@ struct Sema:
     # ---------- function-wide label / case checks ----------
     # collects every ST_LABEL in the function (labels are function-scoped in C);
     # duplicates get a friendly error, then each goto must land on one of them.
-    static def walk_labels(self: *Sema, b: *Block, ref names: **char, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32):
+    private def walk_labels(self: *Sema, b: *Block, ref names: **char, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32):
         if b == None:
             return
         for i in range(b->n):
@@ -4654,7 +4654,7 @@ struct Sema:
             for j in range(st->ncases):
                 self->walk_labels(st->cases[j]->body, ref names, ref n, ref cap, ref poss, ref cap2)
 
-    static def walk_gotos(self: *Sema, b: *Block, names: **char, n: i32):
+    private def walk_gotos(self: *Sema, b: *Block, names: **char, n: i32):
         if b == None:
             return
         for i in range(b->n):
@@ -4683,7 +4683,7 @@ struct Sema:
     # `mask` truncates each case value to the SUBJECT's width before comparing:
     # in C the case converts to the promoted controlling type, so 2^34 and 0
     # collide on an int switch. Full-width mask when the subject type is unknown.
-    static def switch_collect_cases(self: *Sema, b: *Block, ref vals: *i64, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32, ref ndef: i32, ref defpos: Pos, mask: u64):
+    private def switch_collect_cases(self: *Sema, b: *Block, ref vals: *i64, ref n: i32, ref cap: i32, ref poss: *Pos, ref cap2: i32, ref ndef: i32, ref defpos: Pos, mask: u64):
         if b == None:
             return
         for i in range(b->n):
@@ -4741,7 +4741,7 @@ struct Sema:
     # no longer carries the enum's identity and there is nothing to check
     # against. Keeping that identity means giving TAG_ENUM a width/signedness
     # everywhere arithmetic asks — a real change, not a side effect of this one.
-    static def check_enum_exhaustive(self: *Sema, pos: Pos, subj: *Type, vals: *i64, n: i32, has_default: bool, what: const *char):
+    private def check_enum_exhaustive(self: *Sema, pos: Pos, subj: *Type, vals: *i64, n: i32, has_default: bool, what: const *char):
         if self->in_chdr or subj == None or subj->kind != TY_NAME:
             return
         ed: *Decl = self->enums.get_or(subj->name, None)
@@ -4788,7 +4788,7 @@ struct Sema:
             b.deinit()
         free(missing)
 
-    static def check_switch_dups(self: *Sema, b: *Block):
+    private def check_switch_dups(self: *Sema, b: *Block):
         if b == None:
             return
         for i in range(b->n):
@@ -4824,7 +4824,7 @@ struct Sema:
             for j in range(st->ncases):
                 self->check_switch_dups(st->cases[j]->body)
 
-    static def check_func_body(self: *Sema, f: *Func):
+    private def check_func_body(self: *Sema, f: *Func):
         if f->body == None:
             return
         # defer injects code at the exit points; goto could jump over it
@@ -4885,7 +4885,7 @@ struct Sema:
         self->cur_ret = prev_ret
 
     # ---------- declaration registration ----------
-    static def register_func(self: *Sema, f: *Func):
+    private def register_func(self: *Sema, f: *Func):
         # generic free function (def foo<T>): a template — not resolved/emitted as-is;
         # monomorphized on `declare foo<int>`. Its param/ret types mention T.
         if f->ntparams > 0 and f->owner == None:
@@ -4982,10 +4982,10 @@ struct Sema:
                             si2->methods[si2->nmethods] = alias
                             si2->nmethods += 1
 
-    static def cpp_capture(self: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char:
+    private def cpp_capture(self: *Sema, flags: const *char, path: const *char, is_sys: bool, dir: const *char) -> const *char:
         return cpp_capture_ex(self->a, self->cc->cpp, flags, path, is_sys, dir)
 
-    static def macro_put(self: *Sema, name: const *char, v: CVal):
+    private def macro_put(self: *Sema, name: const *char, v: CVal):
         cp: *CVal = self->a->alloc(sizeof(CVal))
         *cp = v
         self->constvals.put(name, cp)
@@ -4996,7 +4996,7 @@ struct Sema:
     # EOF, BUFSIZ, RAND_MAX... Function-like and token/text macros are skipped: they
     # have no typed value (that's cpp territory; in the C backend they still pass
     # through and the emitted #include resolves them).
-    static def ingest_macros(self: *Sema, path: const *char, is_sys: bool, dir: const *char):
+    private def ingest_macros(self: *Sema, path: const *char, is_sys: bool, dir: const *char):
         # 109: a captura do dump é cacheada no Cc — o mesmo header incluído por
         # cinco módulos rodava o cpp cinco vezes
         src: const *char = None
@@ -5078,7 +5078,7 @@ struct Sema:
         free(an)
         free(av)
 
-    static def ingest_c_header(self: *Sema, m: *Module, d: *Decl):
+    private def ingest_c_header(self: *Sema, m: *Module, d: *Decl):
         dir: const *char = path_dir(self->a, m->path)
         key: const *char = self->a->printf("<c>%s", d->import_path)
         # declarations: cache by path (a header is parsed once per compilation)
@@ -5118,7 +5118,7 @@ struct Sema:
     # METHODS, so a call inside a monomorphized generic resolves through the
     # lookup that already exists. No dispatch is invented and no vtable is built:
     # that is exactly what "static form only" (67.1) buys.
-    static def trait_impl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
+    private def trait_impl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         tr: *Decl = self->traits.get_or(d->name, None)
         if tr == None:
             fatal_at(self->file, d->pos, "unknown trait '%s'", d->name)
@@ -5206,7 +5206,7 @@ struct Sema:
     # does `t` satisfy `trait`? It does when it has every method the trait names.
     # The impl block registered them as the type's own methods, so this is the
     # same lookup a hand-written call would do.
-    static def check_bound(self: *Sema, t: *Type, trait: const *char, tparam: const *char, pos: Pos):
+    private def check_bound(self: *Sema, t: *Type, trait: const *char, tparam: const *char, pos: Pos):
         tr: *Decl = self->traits.get_or(trait, None)
         if tr == None:
             fatal_at(self->file, pos, "unknown trait '%s' in the bound on '%s'", trait, tparam)
@@ -5226,7 +5226,7 @@ struct Sema:
             if sinfo_method(si, tr->methods[i]->name) == None:
                 fatal_at(self->file, pos, "'%s' = '%s' does not implement '%s': '%s' is missing (write `implement %s for %s:`)", tparam, si->name, trait, tr->methods[i]->name, trait, si->name)
 
-    static def instantiate(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
+    private def instantiate(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         g: *Type = d->type
 
         # implement Name (no arguments): materializes the method bodies that were
@@ -5381,7 +5381,7 @@ struct Sema:
     # member has to be declared in that module — plus a reader who can see at
     # the call site where a name comes from. The flat spelling keeps working,
     # which is why adding an alias never breaks an existing file.
-    static def ns_module(self: *Sema, name: const *char) -> *Module:
+    private def ns_module(self: *Sema, name: const *char) -> *Module:
         if self->cur_mod == None or name == None:
             return None
         for i in range(self->cur_mod->nns):
@@ -5391,13 +5391,13 @@ struct Sema:
 
     # a real declaration always wins over an alias: `ns` used as a variable,
     # function, type or constant is that thing, exactly as before the import
-    static def ns_shadowed(self: *Sema, name: const *char) -> bool:
+    private def ns_shadowed(self: *Sema, name: const *char) -> bool:
         return self->sym_index(name) >= 0 or self->globals.has(name) or self->funcs.has(name) or self->types.has(name) or self->enumconsts.has(name)
 
     # is `member` declared by module `m` itself? Imports of `m` do NOT re-export
     # (Python's rule): `import "parser.ph" as ps` gives ps.parse_tokens, and the
     # types parser.ph itself imported stay behind their own module.
-    static def ns_has(self: *Sema, m: *Module, member: const *char) -> bool:
+    private def ns_has(self: *Sema, m: *Module, member: const *char) -> bool:
         for i in range(m->ndecls):
             d: *Decl = m->decls[i]
             match d->kind:
@@ -5421,7 +5421,7 @@ struct Sema:
     # Both places a qualified name can appear go through here: as a value, and
     # as a CALLEE — where it has to happen before the dot is read as a method
     # receiver, and before the callee dispatch that turns `T(x)` into a cast.
-    static def try_ns_ref(self: *Sema, e: *Expr) -> bool:
+    private def try_ns_ref(self: *Sema, e: *Expr) -> bool:
         if e == None or e->kind != EX_FIELD or e->op != TK_DOT:
             return False
         if e->lhs == None or e->lhs->kind != EX_IDENT or e->lhs->text == None or e->field == None:
@@ -5437,7 +5437,7 @@ struct Sema:
         return True
 
     # splits "ns.member" and validates it; returns the plain member name
-    static def ns_plain(self: *Sema, dotted: const *char, pos: Pos) -> const *char:
+    private def ns_plain(self: *Sema, dotted: const *char, pos: Pos) -> const *char:
         dot: const *char = strchr(dotted, '.')
         ns: const *char = self->a->strndup(dotted, usize(dot - dotted))
         member: const *char = dot + 1
@@ -5462,7 +5462,7 @@ struct Sema:
     # another process and compared field by field, and none of those silently
     # break the day someone adds a `name: const *char`. That is the whole feature
     # — it costs nothing at run time and it is a guarantee C cannot state.
-    static def check_pure_bytes(self: *Sema, si: *SInfo, d: *Decl):
+    private def check_pure_bytes(self: *Sema, si: *SInfo, d: *Decl):
         for i in range(si->nfields):
             f: *Field = &si->fields[i]
             t: *Type = f->type
@@ -5490,7 +5490,7 @@ struct Sema:
     # memcmp would compare garbage and report a difference that is not there.
     # Returns False when this is not a record comparison, and the normal
     # "structs are not scalars" error follows.
-    static def record_eq(self: *Sema, e: *Expr) -> bool:
+    private def record_eq(self: *Sema, e: *Expr) -> bool:
         lsi: *SInfo = self->val_struct(self->type_of(e->lhs))
         rsi: *SInfo = self->val_struct(self->type_of(e->rhs))
         if lsi == None or rsi == None or not lsi->is_record or lsi != rsi:
@@ -5517,7 +5517,7 @@ struct Sema:
 
     # a side of a record comparison: a plain designator is used as is, anything
     # else is evaluated once into a hidden variable
-    static def eq_operand(self: *Sema, e: *Expr, ref pre: *Expr) -> *Expr:
+    private def eq_operand(self: *Sema, e: *Expr, ref pre: *Expr) -> *Expr:
         if is_designator(e):
             return e
         t: *Type = self->type_of(e)
@@ -5541,7 +5541,7 @@ struct Sema:
     # `a.f0 == b.f0 and a.f1 == b.f1 and ...`, descending into nested records and
     # unrolling fixed arrays (their length is a compile-time constant, and a
     # record is small by construction — it is the thing that crosses boundaries)
-    static def record_eq_chain(self: *Sema, si: *SInfo, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
+    private def record_eq_chain(self: *Sema, si: *SInfo, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
         acc: *Expr = None
         for i in range(si->nfields):
             f: *Field = &si->fields[i]
@@ -5553,7 +5553,7 @@ struct Sema:
             acc = ex_new(self->a, EX_TRUE, pos)
         return acc
 
-    static def record_eq_value(self: *Sema, t: *Type, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
+    private def record_eq_value(self: *Sema, t: *Type, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
         if t != None and t->kind == TY_ARRAY:
             n: i64 = 0
             if t->arr_len == None or not self->const_len(t->arr_len, ref n) or n < 0:
@@ -5582,7 +5582,7 @@ struct Sema:
         cmp->parened = True
         return cmp
 
-    static def eq_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr:
+    private def eq_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr:
         if acc == None:
             return one
         j: *Expr = ex_new(self->a, EX_BINARY, pos)
@@ -5591,14 +5591,14 @@ struct Sema:
         j->rhs = one
         return j
 
-    static def mk_field(self: *Sema, base: *Expr, name: const *char, pos: Pos) -> *Expr:
+    private def mk_field(self: *Sema, base: *Expr, name: const *char, pos: Pos) -> *Expr:
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
         f->op = TK_DOT
         f->lhs = base
         f->field = name
         return f
 
-    static def const_len(self: *Sema, e: *Expr, ref out_n: i64) -> bool:
+    private def const_len(self: *Sema, e: *Expr, ref out_n: i64) -> bool:
         ok: bool = True
         v: i64 = self->ceval(e, ref ok)
         if not ok:
@@ -5610,7 +5610,7 @@ struct Sema:
     # hoisted to the function entry. Valid C89: a comma expression of plain
     # assignments, evaluated where it is written, so a constructor inside a loop
     # still builds a fresh value each turn.
-    static def complit_to_temp(self: *Sema, e: *Expr, si: *SInfo):
+    private def complit_to_temp(self: *Sema, e: *Expr, si: *SInfo):
         name: const *char = self->a->printf("__rc%d", self->rc_ctr)
         self->rc_ctr += 1
         hd: *Stmt = st_new(self->a, ST_VAR, e->pos)
@@ -5633,7 +5633,7 @@ struct Sema:
 
     # one assignment, descending into nested aggregates because C89 cannot
     # assign a brace list to anything but a declaration
-    static def fill_field(self: *Sema, dst: *Expr, t: *Type, src: *Expr, pos: Pos) -> *Expr:
+    private def fill_field(self: *Sema, dst: *Expr, t: *Type, src: *Expr, pos: Pos) -> *Expr:
         agg: bool = src != None and (src->kind == EX_COMPOUND or src->kind == EX_INITLIST)
         if agg and t != None and t->kind == TY_ARRAY:
             n: i64 = 0
@@ -5674,7 +5674,7 @@ struct Sema:
         asg->parened = True
         return asg
 
-    static def comma_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr:
+    private def comma_join(self: *Sema, acc: *Expr, one: *Expr, pos: Pos) -> *Expr:
         if acc == None:
             return one
         c: *Expr = ex_new(self->a, EX_COMMA, pos)
@@ -5684,7 +5684,7 @@ struct Sema:
 
     # a compound literal that IS the whole initializer of a matching declaration
     # is just a brace list wearing a cast
-    static def flatten_complit(self: *Sema, t: *Type, init: *Expr):
+    private def flatten_complit(self: *Sema, t: *Type, init: *Expr):
         if init == None or init->kind != EX_COMPOUND or t == None or init->cast_type == None:
             return
         if t->kind != TY_NAME or init->cast_type->kind != TY_NAME or t->name == None or init->cast_type->name == None:
@@ -5699,7 +5699,7 @@ struct Sema:
     # aggregate VALUE inline: before this, a struct value needed a variable to
     # live in. Named arguments become designated initializers, and P already
     # lowers those to positional under --std=c89.
-    static def record_ctor(self: *Sema, e: *Expr, si: *SInfo):
+    private def record_ctor(self: *Sema, e: *Expr, si: *SInfo):
         named: bool = False
         positional: bool = False
         for i in range(e->nargs):
@@ -5758,7 +5758,7 @@ struct Sema:
         if self->cc != None and self->cc->std_version == 89 and not self->in_complit_init:
             self->complit_to_temp(e, si)
 
-    static def register_decl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
+    private def register_decl(self: *Sema, m: *Module, d: *Decl, check_bodies: bool):
         match d->kind:
             case DL_IMPORT:
                 if d->is_include:
@@ -5959,7 +5959,7 @@ struct Sema:
             case _:
                 return
 
-    static def register_module(self: *Sema, m: *Module, check_bodies: bool):
+    private def register_module(self: *Sema, m: *Module, check_bodies: bool):
         if self->done.has(m->path):
             return
         self->done.add(m->path)
@@ -6021,7 +6021,7 @@ struct Sema:
         self->file = prev
         self->cur_mod = prevm
 
-    static def reg_builtin(self: *Sema, name: const *char, v: CVal):
+    private def reg_builtin(self: *Sema, name: const *char, v: CVal):
         cp: *CVal = self->a->alloc(sizeof(CVal))
         *cp = v
         self->constvals.put(name, cp)
@@ -6029,7 +6029,7 @@ struct Sema:
     # predefined compiler constants (C-style, but WITHOUT emission: the
     # references fold to a literal in fold_predefined — they never become a symbol,
     # so they don't collide with the cc's own macros in the C backend).
-    static def inject_predefined(self: *Sema, cc: *Cc):
+    private def inject_predefined(self: *Sema, cc: *Cc):
         # __DATE__ "Mmm dd yyyy" / __TIME__ "hh:mm:ss", sliced out of ctime
         # ("Www Mmm dd hh:mm:ss yyyy\n" — fixed positions, dd space-padded)
         now: i64 = time(None)
@@ -6056,7 +6056,7 @@ struct Sema:
     # at compile time (is_defined/fold/prune) AND emitted (usable symbol). Without '=',
     # the value is 1 (just "defined"). With '=': int / float / string (a bare word becomes
     # a string literal).
-    static def inject_defines(self: *Sema, cc: *Cc, m: *Module):
+    private def inject_defines(self: *Sema, cc: *Cc, m: *Module):
         if cc->ndefines == 0:
             return
         zp: Pos = {0, 0}
@@ -6102,7 +6102,7 @@ struct Sema:
 
 
 # ---------- module loading ----------
-static def ends_with(s: const *char, suf: const *char) -> bool:
+private def ends_with(s: const *char, suf: const *char) -> bool:
     n: usize = strlen(s)
     m: usize = strlen(suf)
     return n >= m and strcmp(s + n - m, suf) == 0
@@ -6128,13 +6128,13 @@ def cc_load_module(cc: *Cc, path: const *char) -> *Module:
 
 
 
-static def sinfo_method(si: *SInfo, name: const *char) -> *Func:
+private def sinfo_method(si: *SInfo, name: const *char) -> *Func:
     for i in range(si->nmethods):
         if strcmp(si->methods[i]->name, name) == 0:
             return si->methods[i]
     return None
 
-static def sinfo_field(si: *SInfo, name: const *char) -> *Field:
+private def sinfo_field(si: *SInfo, name: const *char) -> *Field:
     for i in range(si->nfields):
         if strcmp(si->fields[i].name, name) == 0:
             return &si->fields[i]
@@ -6150,7 +6150,7 @@ static def sinfo_field(si: *SInfo, name: const *char) -> *Field:
 
 
 
-static def mangle_type_into(sb: *StrBuf, t: *Type):
+private def mangle_type_into(sb: *StrBuf, t: *Type):
     if t->kind == TY_PTR:
         sb->puts("p")
         mangle_type_into(sb, t->inner)
@@ -6164,7 +6164,7 @@ static def mangle_type_into(sb: *StrBuf, t: *Type):
 
 
 
-static def subst_lookup(sub: *Subst, name: const *char) -> *Type:
+private def subst_lookup(sub: *Subst, name: const *char) -> *Type:
     for i in range(sub->n):
         if strcmp(sub->names[i], name) == 0:
             return sub->types[i]
@@ -6177,7 +6177,7 @@ static def subst_lookup(sub: *Subst, name: const *char) -> *Type:
 
 
 
-static def strip_ptr_or_array(t: *Type) -> *Type:
+private def strip_ptr_or_array(t: *Type) -> *Type:
     if t != None and (t->kind == TY_PTR or t->kind == TY_ARRAY):
         return t->inner
     return None
@@ -6186,35 +6186,35 @@ static def strip_ptr_or_array(t: *Type) -> *Type:
 
 
 # integer value of a char literal (with quotes, optional wide prefix)
-static def ceval_char(lex: const *char) -> i64:
+private def ceval_char(lex: const *char) -> i64:
     if lex[0] in {'L', 'u', 'U'}:
         lex += 1
     # single source of truth for escapes (\a \b \f \v \xNN \NNN...): the C
     # front end's evaluator — an incomplete table here PRUNES BRANCHES WRONG
     return i64(cchar_val(lex))
 
-static def cv_int(v: i64) -> CVal:
+private def cv_int(v: i64) -> CVal:
     r: CVal = {CV_INT, v, 0.0, None}
     return r
-static def cv_flt(v: f64) -> CVal:
+private def cv_flt(v: f64) -> CVal:
     r: CVal = {CV_FLOAT, 0, v, None}
     return r
-static def cv_str(v: const *char) -> CVal:
+private def cv_str(v: const *char) -> CVal:
     r: CVal = {CV_STR, 0, 0.0, v}
     return r
-static def cv_asf(v: CVal) -> f64:
+private def cv_asf(v: CVal) -> f64:
     return v.fval if v.kind == CV_FLOAT else f64(v.ival)
 
 # text of a float literal that the lexer re-reads as float (ensures '.'/'e' —
 # otherwise "%.17g" of 7.0 comes out "7" and becomes an int)
-static def cfloat_text(a: *Arena, v: f64) -> const *char:
+private def cfloat_text(a: *Arena, v: f64) -> const *char:
     t: const *char = a->printf("%.17g", v)
     if strpbrk(t, ".eEnN") == None:
         return a->printf("%s.0", t)
     return t
 
 # EX_NUMBER -> CVal (int or float per '.'/exponent/suffix, like type_of)
-static def ceval_num(txt: const *char) -> CVal:
+private def ceval_num(txt: const *char) -> CVal:
     ishex: bool = txt[0] == '0' and (txt[1] == 'x' or txt[1] == 'X')
     isflt: bool = False
     if not ishex:
@@ -6239,7 +6239,7 @@ static def ceval_num(txt: const *char) -> CVal:
 
 
 # width in bytes of a canonical integer type name (0 if not a known integer)
-static def ctype_width(n: const *char) -> i32:
+private def ctype_width(n: const *char) -> i32:
     if n in {"char", "i8", "u8", "_Bool", "bool", "signed char", "unsigned char"}:
         return 1
     if n in {"short", "i16", "u16", "unsigned short"}:
@@ -6250,7 +6250,7 @@ static def ctype_width(n: const *char) -> i32:
         return 8
     return 0
 
-static def ctype_unsigned(n: const *char) -> bool:
+private def ctype_unsigned(n: const *char) -> bool:
     if strncmp(n, "unsigned", 8) == 0:
         return True
     return n in {"u8", "u16", "u32", "u64", "usize", "bool", "_Bool"}
@@ -6263,7 +6263,7 @@ static def ctype_unsigned(n: const *char) -> bool:
 
 # ---------- "did you mean ...?" ----------
 # Levenshtein distance (names are short; capped at 63 chars)
-static def edit_dist(a: const *char, b: const *char) -> i32:
+private def edit_dist(a: const *char, b: const *char) -> i32:
     la: i32 = i32(strlen(a))
     lb: i32 = i32(strlen(b))
     if la > 63 or lb > 63:
@@ -6291,7 +6291,7 @@ static def edit_dist(a: const *char, b: const *char) -> i32:
 # ---------- unknown-type checking ----------
 # multi-word C arithmetic spelling ("unsigned long long int"...): every word
 # must be a C base/modifier keyword
-static def is_c_arith_words(n: const *char) -> bool:
+private def is_c_arith_words(n: const *char) -> bool:
     i: i32 = 0
     words = 0
     while n[i] != '\0':
@@ -6314,7 +6314,7 @@ static def is_c_arith_words(n: const *char) -> bool:
 # can the expression be assigned to / incremented / addressed? (C lvalue rule,
 # on the TOP node: variables, array elements, fields, *deref, compound literals)
 # is `init` a call to exactly the type `t` names? (`v: Vec = Vec(...)`)
-static def names_own_type(t: *Type, init: *Expr) -> bool:
+private def names_own_type(t: *Type, init: *Expr) -> bool:
     if t == None or init == None or t->kind != TY_NAME or t->name == None:
         return False
     if init->kind != EX_CALL or init->lhs == None or init->lhs->kind != EX_IDENT or init->lhs->text == None:
@@ -6323,7 +6323,7 @@ static def names_own_type(t: *Type, init: *Expr) -> bool:
 
 # a plain designator: a name, a field of one, an element of one. Reading it
 # twice costs nothing and has no side effect.
-static def is_designator(e: *Expr) -> bool:
+private def is_designator(e: *Expr) -> bool:
     if e == None:
         return False
     match e->kind:
@@ -6339,14 +6339,14 @@ static def is_designator(e: *Expr) -> bool:
             return False
 
 # does this module declare `name` as a trait or a type? (the orphan rule)
-static def decl_in_module(m: *Module, name: const *char) -> bool:
+private def decl_in_module(m: *Module, name: const *char) -> bool:
     for i in range(m->ndecls):
         d: *Decl = m->decls[i]
         if d->name != None and strcmp(d->name, name) == 0 and d->kind in {DL_TRAIT, DL_STRUCT, DL_UNION, DL_ENUM}:
             return True
     return False
 
-static def is_lvalue(e: *Expr) -> bool:
+private def is_lvalue(e: *Expr) -> bool:
     if e == None:
         return True
     match e->kind:
@@ -6367,12 +6367,12 @@ static def is_lvalue(e: *Expr) -> bool:
 
 
 
-static def mk_ident(a: *Arena, name: const *char, pos: Pos) -> *Expr:
+private def mk_ident(a: *Arena, name: const *char, pos: Pos) -> *Expr:
     e: *Expr = ex_new(a, EX_IDENT, pos)
     e->text = name
     return e
 
-static def mk_call1(a: *Arena, fn: const *char, arg: *Expr, pos: Pos) -> *Expr:
+private def mk_call1(a: *Arena, fn: const *char, arg: *Expr, pos: Pos) -> *Expr:
     c: *Expr = ex_new(a, EX_CALL, pos)
     c->lhs = mk_ident(a, fn, pos)
     args: **Expr = a->alloc(sizeof(*args))
@@ -6392,7 +6392,7 @@ static def mk_call1(a: *Arena, fn: const *char, arg: *Expr, pos: Pos) -> *Expr:
 # `with`, a method on `self` — would spell `& *p`. out_done marks exactly that
 # generated deref, whose operand is a pointer by construction: collapsing the
 # pair preserves the type (an ARRAY operand would not — sizeof would differ).
-static def is_byref_deref(x: *Expr) -> bool:
+private def is_byref_deref(x: *Expr) -> bool:
     if x == None or x->kind != EX_UNARY or x->op != TK_STAR:
         return False
     # out_done on the DEREF node itself: a ref-returning call wrapped by sema
@@ -6401,7 +6401,7 @@ static def is_byref_deref(x: *Expr) -> bool:
         return True
     return x->lhs != None and x->lhs->kind == EX_IDENT and x->lhs->out_done
 
-static def take_addr(a: *Arena, x: *Expr) -> *Expr:
+private def take_addr(a: *Arena, x: *Expr) -> *Expr:
     if is_byref_deref(x):
         return x->lhs
     adr: *Expr = ex_new(a, EX_UNARY, x->pos)
@@ -6414,7 +6414,7 @@ static def take_addr(a: *Arena, x: *Expr) -> *Expr:
 
 
 # renders a type in P's spelling (for typestr): *char, int[4], Point, def()->int
-static def render_type_p(a: *Arena, t: *Type) -> const *char:
+private def render_type_p(a: *Arena, t: *Type) -> const *char:
     if t == None:
         return "?"
     if t->kind == TY_PTR:
@@ -6442,12 +6442,12 @@ static def render_type_p(a: *Arena, t: *Type) -> const *char:
 
 
 
-static def is_void_val(t: *Type) -> bool:
+private def is_void_val(t: *Type) -> bool:
     return t != None and t->kind == TY_NAME and t->name == "void"
 
 
 # positively-known arithmetic scalar (int/char/float families + P aliases)
-static def is_arith_type(t: *Type) -> bool:
+private def is_arith_type(t: *Type) -> bool:
     if t == None or t->kind != TY_NAME:
         return False
     n: const *char = t->name
@@ -6473,7 +6473,7 @@ static def is_arith_type(t: *Type) -> bool:
 
 
 
-static def is_float_type(t: *Type) -> bool:
+private def is_float_type(t: *Type) -> bool:
     if t == None or t->kind != TY_NAME:
         return False
     n: const *char = t->name
@@ -6489,7 +6489,7 @@ static def is_float_type(t: *Type) -> bool:
 
 # units in a string literal (escapes decoded; quotes and L/u/U prefix in lex).
 # -1 when the shape is unexpected (adjacent-literal concat etc.) — caller bails.
-static def init_str_units(lex: const *char) -> i32:
+private def init_str_units(lex: const *char) -> i32:
     i: i32 = 0
     if lex[i] in {'L', 'u', 'U'}:
         i += 1
@@ -6521,7 +6521,7 @@ static def init_str_units(lex: const *char) -> i32:
 
 # an unnamed BITFIELD slot takes no initializer; anonymous struct/union
 # members (name "" with a linked decl) DO
-static def init_skip_field(f: *Field) -> bool:
+private def init_skip_field(f: *Field) -> bool:
     return (f->name == None or f->name[0] == '\0') and f->anon == None
 
 
@@ -6538,7 +6538,7 @@ static def init_skip_field(f: *Field) -> bool:
 # unifies a parameter type (which mentions the type-param `tname`) against a
 # concrete argument type, binding `tname`. Handles T, *T, T[], nested (**T, *T[]),
 # and array<->pointer decay. Returns the bound type or None if `tname` not found.
-static def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type:
+private def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type:
     if pt == None:
         return None
     if pt->kind == TY_NAME:
@@ -6557,13 +6557,13 @@ static def unify_tparam(pt: *Type, at: *Type, tname: const *char) -> *Type:
 # `if p == None: return` idiom leave its proof behind). Only the four
 # statements the language GUARANTEES to leave count; a call that never
 # returns is knowledge sema does not have.
-static def block_terminates(b: *Block) -> bool:
+private def block_terminates(b: *Block) -> bool:
     if b == None or b->n == 0:
         return False
     k: i32 = b->stmts[b->n - 1]->kind
     return k == ST_RETURN or k == ST_BREAK or k == ST_CONTINUE or k == ST_GOTO
 
-static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
+private def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
     if b == None:
         return None
     for i in range(b->n):
@@ -6600,7 +6600,7 @@ static def block_find_kind(b: *Block, k: StmtKind) -> *Stmt:
 # goes (72.5). Substituting and then comparing beats a comparison that knows
 # about traits: what comes out is an ordinary type, and the ordinary equality
 # answers for it.
-static def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char, assoc: const *char, at: *Type) -> *Type:
+private def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char, assoc: const *char, at: *Type) -> *Type:
     if t == None:
         return None
     match t->kind:
@@ -6633,7 +6633,7 @@ static def trait_sub(a: *Arena, t: *Type, trait: const *char, forty: const *char
         case _:
             return t
 
-static def type_eq_p(a: *Type, b: *Type) -> bool:
+private def type_eq_p(a: *Type, b: *Type) -> bool:
     if a == None or b == None:
         return a == b
     if a->kind != b->kind:
@@ -6653,7 +6653,7 @@ static def type_eq_p(a: *Type, b: *Type) -> bool:
 
 
 # `-N` literals parse as EX_UNARY(TK_MINUS): a negative bound/step in a range.
-static def expr_is_negative(e: *Expr) -> bool:
+private def expr_is_negative(e: *Expr) -> bool:
     return e != None and e->kind == EX_UNARY and e->op == TK_MINUS
 
 
@@ -6665,7 +6665,7 @@ static def expr_is_negative(e: *Expr) -> bool:
 #                                 to a range over arr's length + a `v = arr[i]`
 #                                 binding at the top of the body (pure sugar).
 # A plain-range variable that is already in scope is left untouched (legacy).
-static def type_is_unsigned(t: *Type) -> bool:
+private def type_is_unsigned(t: *Type) -> bool:
     if t == None or t->kind != TY_NAME or t->name == None:
         return False
     if strncmp(t->name, "unsigned", 8) == 0:
@@ -6731,7 +6731,7 @@ def macro_int_val(txt: const *char, out: *i64) -> bool:
 
 
 
-static def inject_inline_runtime(cc: *Cc, m: *Module):
+private def inject_inline_runtime(cc: *Cc, m: *Module):
     tl: TokenList = lex("<inline-runtime>", INLINE_RUNTIME_SRC, strlen(INLINE_RUNTIME_SRC), &cc->arena)
     rtm: *Module = parse_tokens(&cc->arena, "<inline-runtime>", tl, 0)
     if rtm == None or rtm->ndecls == 0:

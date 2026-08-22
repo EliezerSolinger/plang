@@ -22,16 +22,16 @@ include <string.h>
 include <stdlib.h>
 import "embed.ph"
 
-static def ex_embed(a: *Arena, file: const *char, dir: const *char, e: *Expr, bin: bool)
-static def walk_func(a: *Arena, file: const *char, dir: const *char, f: *Func)
-static def walk_expr(a: *Arena, file: const *char, dir: const *char, e: *Expr)
-static def walk_block(a: *Arena, file: const *char, dir: const *char, b: *Block)
-static def walk_stmt(a: *Arena, file: const *char, dir: const *char, s: *Stmt)
-static def walk_type(a: *Arena, file: const *char, dir: const *char, t: *Type)
+private def ex_embed(a: *Arena, file: const *char, dir: const *char, e: *Expr, bin: bool)
+private def walk_func(a: *Arena, file: const *char, dir: const *char, f: *Func)
+private def walk_expr(a: *Arena, file: const *char, dir: const *char, e: *Expr)
+private def walk_block(a: *Arena, file: const *char, dir: const *char, b: *Block)
+private def walk_stmt(a: *Arena, file: const *char, dir: const *char, s: *Stmt)
+private def walk_type(a: *Arena, file: const *char, dir: const *char, t: *Type)
 
 # True if the module declares its own `embed`/`embed_bytes`. Like `len` (sema),
 # the builtin is CONTEXTUAL: a user's own definition takes precedence.
-static def is_shadowed(m: *Module, name: const *char) -> bool:
+private def is_shadowed(m: *Module, name: const *char) -> bool:
     for i in range(m->ndecls):
         d: *Decl = m->decls[i]
         if d->kind == DL_FUNC and d->func != None and d->func->name != None and strcmp(d->func->name, name) == 0:
@@ -58,26 +58,26 @@ def expand_embeds(a: *Arena, m: *Module):
         for j in range(d->nmethods):
             walk_func(a, m->path, dir, d->methods[j])
 
-static def walk_func(a: *Arena, file: const *char, dir: const *char, f: *Func):
+private def walk_func(a: *Arena, file: const *char, dir: const *char, f: *Func):
     for i in range(f->nparams):
         walk_type(a, file, dir, f->params[i].type)
         walk_expr(a, file, dir, f->params[i].dflt)
     walk_type(a, file, dir, f->ret)
     walk_block(a, file, dir, f->body)
 
-static def walk_type(a: *Arena, file: const *char, dir: const *char, t: *Type):
+private def walk_type(a: *Arena, file: const *char, dir: const *char, t: *Type):
     if t == None:
         return
     walk_expr(a, file, dir, t->arr_len)
     walk_type(a, file, dir, t->inner)
 
-static def walk_block(a: *Arena, file: const *char, dir: const *char, b: *Block):
+private def walk_block(a: *Arena, file: const *char, dir: const *char, b: *Block):
     if b == None:
         return
     for i in range(b->n):
         walk_stmt(a, file, dir, b->stmts[i])
 
-static def walk_stmt(a: *Arena, file: const *char, dir: const *char, s: *Stmt):
+private def walk_stmt(a: *Arena, file: const *char, dir: const *char, s: *Stmt):
     if s == None:
         return
     # the canonical child enumeration (ast.ph): every *Expr the node can hold,
@@ -94,7 +94,7 @@ static def walk_stmt(a: *Arena, file: const *char, dir: const *char, s: *Stmt):
     walk_stmt(a, file, dir, s->for_init)
     walk_stmt(a, file, dir, s->for_post)
 
-static def walk_expr(a: *Arena, file: const *char, dir: const *char, e: *Expr):
+private def walk_expr(a: *Arena, file: const *char, dir: const *char, e: *Expr):
     if e == None:
         return
     for i in range(expr_nexprs(e)):
@@ -110,7 +110,7 @@ static def walk_expr(a: *Arena, file: const *char, dir: const *char, e: *Expr):
     elif e->lhs->text == "embed_bytes":
         ex_embed(a, file, dir, e, True)
 
-static def ex_embed(a: *Arena, file: const *char, dir: const *char, e: *Expr, bin: bool):
+private def ex_embed(a: *Arena, file: const *char, dir: const *char, e: *Expr, bin: bool):
     name: const *char = "embed_bytes" if bin else "embed"
     if e->nargs != 1 or e->args[0]->kind != EX_STRING:
         fatal_at(file, e->pos, "%s() takes exactly one string literal path", name)

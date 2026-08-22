@@ -3634,7 +3634,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             }
             fatal_at(self->file, e->pos, "'%s' has no method '%s'", rt->name, e->lhs->text);
         }
-        int32_t nrecv = (!mth->is_static ? 1 : 0);
+        int32_t nrecv = (!mth->is_smethod ? 1 : 0);
         if (mth->nparams - nrecv > 0) {
             PsSema_bind_call_args(self, e, &mth->params[nrecv], mth->nparams - nrecv, Arena_printf(self->a, "'%s.%s'", rt->name, mth->name));
         }
@@ -4876,7 +4876,7 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             case PD_SHARED:
             case PD_TRAIT: {
                 StrSet_add(&ns->sym, d->name);
-                if (d->is_static) {
+                if (d->is_private) {
                     StrSet_add(&ns->priv, d->name);
                 }
                 break;
@@ -6064,7 +6064,7 @@ static void PsSema_check_method(PsSema *self, PsDecl *d, PsFunc *f) {
             self->locals[self->nlocals - 1].frozen = 1;
         }
         start = 1;
-    } else if (!f->is_static) {
+    } else if (!f->is_smethod) {
         fatal_at(self->file, f->pos, "'%s.%s' has no receiver: write `in self` first, or `static def` for a function that needs none", d->name, f->name);
     }
     size_t i;
@@ -7463,7 +7463,7 @@ static int32_t ps_assign_binop(int32_t op) {
 
 static void ns_check_visible(PsNs *ns, const char *name, const char *file, Pos pos, const char *spelled) {
     if (StrSet_has(&ns->priv, name)) {
-        fatal_at(file, pos, "'%s' is private to module '%s': it is declared `static` (44.4)", name, spelled);
+        fatal_at(file, pos, "'%s' is private to module '%s': it is declared `private` (44.4)", name, spelled);
     }
     if (!StrSet_has(&ns->sym, name)) {
         fatal_at(file, pos, "module '%s' declares no '%s'", spelled, name);

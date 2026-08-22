@@ -42,6 +42,10 @@ static Token *P_adv(P *self);
 
 static int P_accept(P *self, TokKind k);
 
+static int P_at_priv(P *self);
+
+static void P_retired_static(P *self, Token *t);
+
 static Token *P_expect(P *self, TokKind k, const char *ctx);
 
 static void P_expect_gt(P *self);
@@ -166,6 +170,16 @@ static int P_accept(P *self, TokKind k) {
         return 1;
     }
     return 0;
+}
+
+static int P_at_priv(P *self) {
+    return P_at(self, TK_PRIVATE);
+}
+
+static void P_retired_static(P *self, Token *t) {
+    if (t->kind == TK_STATIC) {
+        fatal_at(self->file, t->pos, "'static' no longer spells module privacy: write 'private' (in pscript 'static' marks a static method inside a struct)");
+    }
 }
 
 static Token *P_expect(P *self, TokKind k, const char *ctx) {
@@ -333,13 +347,13 @@ static Type *P_parse_type(P *self) {
         }
         t = ty_name(self->a, name);
         {
-            Type *__with_269_13 = t;
-            __with_269_13->is_const = is_const;
-            __with_269_13->is_volatile = is_volatile;
-            __with_269_13->is_restrict = is_restrict;
-            __with_269_13->ns_qual = ns_qual;
-            __with_269_13->targs = targs.data;
-            __with_269_13->ntargs = targs.len;
+            Type *__with_282_13 = t;
+            __with_282_13->is_const = is_const;
+            __with_282_13->is_volatile = is_volatile;
+            __with_282_13->is_restrict = is_restrict;
+            __with_282_13->ns_qual = ns_qual;
+            __with_282_13->targs = targs.data;
+            __with_282_13->ntargs = targs.len;
         }
     }
     int32_t k;
@@ -1272,16 +1286,16 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     }
     Func *f = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1103_9 = f;
-        __with_1103_9->pos = pos;
-        __with_1103_9->name = name->text;
-        __with_1103_9->owner = owner;
-        __with_1103_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
-        __with_1103_9->is_static = is_static;
-        __with_1103_9->is_inline = is_inline;
-        __with_1103_9->tparams = ftparams.data;
-        __with_1103_9->tbounds = ftbounds.data;
-        __with_1103_9->ntparams = ftparams.len;
+        Func *__with_1116_9 = f;
+        __with_1116_9->pos = pos;
+        __with_1116_9->name = name->text;
+        __with_1116_9->owner = owner;
+        __with_1116_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
+        __with_1116_9->is_static = is_static;
+        __with_1116_9->is_inline = is_inline;
+        __with_1116_9->tparams = ftparams.data;
+        __with_1116_9->tbounds = ftbounds.data;
+        __with_1116_9->ntparams = ftparams.len;
     }
     P_expect(self, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1377,14 +1391,15 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     Vec_Field_init(&fields);
     Vec_pFunc_init(&methods);
     while (!P_at(self, TK_DEDENT) && !P_at(self, TK_EOF)) {
-        if (P_at(self, TK_DEF) || P_at(self, TK_STATIC) || P_at(self, TK_INLINE)) {
+        P_retired_static(self, P_pk(self));
+        if (P_at(self, TK_DEF) || P_at_priv(self) || P_at(self, TK_INLINE)) {
             if (is_union) {
                 fatal_at(self->file, P_pk(self)->pos, "union cannot have methods");
             }
             int st = 0;
             int inl = 0;
-            while (P_at(self, TK_STATIC) || P_at(self, TK_INLINE)) {
-                if (P_adv(self)->kind == TK_STATIC) {
+            while (P_at_priv(self) || P_at(self, TK_INLINE)) {
+                if (P_adv(self)->kind != TK_INLINE) {
                     st = 1;
                 } else {
                     inl = 1;
@@ -1414,13 +1429,13 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     }
     P_expect(self, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1230_9 = d;
-        __with_1230_9->fields = fields.data;
-        __with_1230_9->nfields = fields.len;
-        __with_1230_9->methods = methods.data;
-        __with_1230_9->nmethods = methods.len;
-        __with_1230_9->tparams = tparams.data;
-        __with_1230_9->ntparams = tparams.len;
+        Decl *__with_1244_9 = d;
+        __with_1244_9->fields = fields.data;
+        __with_1244_9->nfields = fields.len;
+        __with_1244_9->methods = methods.data;
+        __with_1244_9->nmethods = methods.len;
+        __with_1244_9->tparams = tparams.data;
+        __with_1244_9->ntparams = tparams.len;
     }
     return d;
 }
@@ -1646,32 +1661,34 @@ static Decl *P_parse_top(P *self) {
             return P_parse_enum(self);
         }
         case TK_STATIC:
+        case TK_PRIVATE:
         case TK_INLINE:
         case TK_DEF: {
+            P_retired_static(self, t);
             if (t->kind == TK_INLINE && P_pk1(self)->kind == TK_IDENT) {
                 return P_parse_instantiate(self);
             }
             TokKind nxk = P_pk1(self)->kind;
-            if (t->kind == TK_STATIC && (nxk == TK_IDENT || nxk == TK_CONST)) {
+            if (t->kind == TK_PRIVATE && (nxk == TK_IDENT || nxk == TK_CONST)) {
                 P_adv(self);
                 Decl *sg = P_parse_top(self);
                 if (sg == NULL || sg->kind != DL_VAR) {
-                    fatal_at(self->file, t->pos, "'static' here can only precede a global variable or a 'def'");
+                    fatal_at(self->file, t->pos, "'%s' here can only precede a global variable or a 'def'", t->text);
                 }
                 sg->is_static = 1;
                 return sg;
             }
             int st = 0;
             int inl = 0;
-            while (P_at(self, TK_STATIC) || P_at(self, TK_INLINE)) {
-                if (P_adv(self)->kind == TK_STATIC) {
+            while (P_at_priv(self) || P_at(self, TK_INLINE)) {
+                if (P_adv(self)->kind != TK_INLINE) {
                     st = 1;
                 } else {
                     inl = 1;
                 }
             }
             if (!P_at(self, TK_DEF)) {
-                fatal_at(self->file, t->pos, "'%s' at file scope precedes a 'def' or a global variable (found %s)", (st ? "static" : "inline"), tok_kind_name(P_pk(self)->kind));
+                fatal_at(self->file, t->pos, "'%s' at file scope precedes a 'def' or a global variable (found %s)", t->text, tok_kind_name(P_pk(self)->kind));
             }
             Func *f = P_parse_func(self, st, inl, NULL);
             Decl *d = Arena_alloc(self->a, sizeof(Decl));
@@ -1704,18 +1721,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1511_17 = d2;
-                __with_1511_17->kind = DL_VAR;
-                __with_1511_17->pos = name->pos;
-                __with_1511_17->name = name->text;
-                __with_1511_17->is_const = is_const;
-                __with_1511_17->is_extern = is_extern;
+                Decl *__with_1526_17 = d2;
+                __with_1526_17->kind = DL_VAR;
+                __with_1526_17->pos = name->pos;
+                __with_1526_17->name = name->text;
+                __with_1526_17->is_const = is_const;
+                __with_1526_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1511_17->type = P_parse_type(self);
+                    __with_1526_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1511_17->init = P_parse_initializer(self);
-                } else if (__with_1511_17->type == NULL) {
+                    __with_1526_17->init = P_parse_initializer(self);
+                } else if (__with_1526_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");

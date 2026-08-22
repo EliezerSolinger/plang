@@ -9,7 +9,7 @@ import "pgfx.ph"
 SDL_INIT_VIDEO_V: const u32 = 0x20                 # SDL_INIT_VIDEO
 SDL_WINDOWPOS_CENTERED_V: const i32 = 0x2FFF0000   # SDL_WINDOWPOS_CENTERED
 
-static def sdl_mods() -> i32:
+private def sdl_mods() -> i32:
     m: i32 = i32(SDL_GetModState())
     r: i32 = 0
     if (m & i32(KMOD_SHIFT)) != 0:
@@ -21,8 +21,8 @@ static def sdl_mods() -> i32:
     return r
 
 struct PgWindow:
-    static def make_texture(ref self: PgWindow) -> bool
-    static def translate(ref self: PgWindow, e: *SDL_Event, out ev: PgEvent) -> bool
+    private def make_texture(ref self: PgWindow) -> bool
+    private def translate(ref self: PgWindow, e: *SDL_Event, out ev: PgEvent) -> bool
 
     def open(out self: PgWindow, title: const *char, width: i32, height: i32) -> bool:
         self.win = None; self.ren = None; self.tex = None; self.is_open = False
@@ -52,7 +52,7 @@ struct PgWindow:
         return True
 
     # (re)creates the streaming texture at the framebuffer's size
-    static def make_texture(ref self: PgWindow) -> bool:
+    private def make_texture(ref self: PgWindow) -> bool:
         if self.tex != None:
             SDL_DestroyTexture(self.tex)
         self.tex = SDL_CreateTexture(self.ren, SDL_PIXELFORMAT_ARGB8888,
@@ -84,7 +84,7 @@ struct PgWindow:
         SDL_SetWindowTitle(self.win, title)
 
     # translates one SDL_Event; PGE_NONE = uninteresting (keep waiting)
-    static def translate(ref self: PgWindow, e: *SDL_Event, out ev: PgEvent) -> bool:
+    private def translate(ref self: PgWindow, e: *SDL_Event, out ev: PgEvent) -> bool:
         ev.kind = PGE_NONE
         ev.key = 0; ev.mods = 0; ev.x = 0; ev.y = 0
         ev.button = 0; ev.clicks = 0; ev.wheel_y = 0

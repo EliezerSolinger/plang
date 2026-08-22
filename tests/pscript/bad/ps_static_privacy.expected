@@ -1,0 +1,1 @@
+'static' no longer spells module privacy: write 'private'

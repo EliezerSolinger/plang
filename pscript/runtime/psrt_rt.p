@@ -12,20 +12,20 @@ import "psrt_rt.ph"
 
 # every message frame has the same layout question — bytes, nothing inside to
 # follow — so one descriptor serves them all
-static const PS_POD_DESC: const PsDesc = {"message", None}
+private const PS_POD_DESC: const PsDesc = {"message", None}
 # the frame a gathered result lives in holds ONE reference — the list — so it
 # needs a trace of its own
-static def ps_gather_trace(o: *void, to: *PsBlock):
+private def ps_gather_trace(o: *void, to: *PsBlock):
     p: **PsObj = (**PsObj)((*char)(o) + sizeof(PsUser))
     *p = ps_forward(to, *p)
-static const PS_GATHER_DESC: const PsDesc = {"gather", ps_gather_trace}
+private const PS_GATHER_DESC: const PsDesc = {"gather", ps_gather_trace}
 # a message frame whose one field IS a reference — a `str` or a `list` rebuilt
 # in this heap (34.3). It has the same shape as a gathered result, and needs
 # the same trace: the frame of a task that is parked outlives collections, and
 # a POD descriptor there would leave the collector with a stale pointer.
-static const PS_REFMSG_DESC: const PsDesc = {"message", ps_gather_trace}
+private const PS_REFMSG_DESC: const PsDesc = {"message", ps_gather_trace}
 # ---------- workers (35.1/36.1) ----------
-static def ps_msg_push(head: **PsMsg, tail: **PsMsg, p: const *void, size: usize):
+private def ps_msg_push(head: **PsMsg, tail: **PsMsg, p: const *void, size: usize):
     m: *PsMsg = (*PsMsg)(malloc(sizeof(PsMsg)))
     m->next = None
     m->size = size
@@ -39,7 +39,7 @@ static def ps_msg_push(head: **PsMsg, tail: **PsMsg, p: const *void, size: usize
         (*tail)->next = m
         *tail = m
 
-static def ps_msg_pop(head: **PsMsg, tail: **PsMsg) -> *PsMsg:
+private def ps_msg_pop(head: **PsMsg, tail: **PsMsg) -> *PsMsg:
     m: *PsMsg = *head
     if m == None:
         return None
@@ -54,7 +54,7 @@ static def ps_msg_pop(head: **PsMsg, tail: **PsMsg) -> *PsMsg:
 # count is harmless and a full pipe is already the news it carries. Both ends
 # are non-blocking: the writer must never wait on the reader, and the reader
 # must never wait at all — it polls.
-static def ps_pipe_open(rp: *int, wp: *int):
+private def ps_pipe_open(rp: *int, wp: *int):
     fds: int[2]
     fds[0] = -1
     fds[1] = -1
@@ -67,21 +67,21 @@ static def ps_pipe_open(rp: *int, wp: *int):
     *rp = fds[0]
     *wp = fds[1]
 
-static def ps_pipe_wake(fd: int):
+private def ps_pipe_wake(fd: int):
     if fd < 0:
         return
     one: char = 'x'
     if write(fd, &one, usize(1)) < 0:
         pass          # full or closed: either way the reader has news already
 
-static def ps_pipe_drain(fd: int):
+private def ps_pipe_drain(fd: int):
     if fd < 0:
         return
     buf: char[64]
     while read(fd, buf, sizeof(buf)) > 0:
         pass
 
-static def ps_pipe_close(fd: int):
+private def ps_pipe_close(fd: int):
     if fd >= 0:
         close(fd)
 
@@ -165,55 +165,55 @@ def ps_worker_finish(ctx: *PsCtx, blk: *void):
     pthread_cond_broadcast(&b->cv)
     ps_pipe_wake(b->up_w)
 
-static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
-static def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask
-static def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize)
-static def ps_sh_slot(sh: const *PsShape) -> i32
-static def ps_sh_isref(sh: const *PsShape) -> bool
+private def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
+private def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask
+private def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize)
+private def ps_sh_slot(sh: const *PsShape) -> i32
+private def ps_sh_isref(sh: const *PsShape) -> bool
 def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
-static def ps_park(ctx: *PsCtx, t: *PsTask)
-static def ps_task_clear_recv(t: *PsTask)
-static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg
-static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
-static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg)
-static def ps_recvs_poll(ctx: *PsCtx) -> bool
+private def ps_park(ctx: *PsCtx, t: *PsTask)
+private def ps_task_clear_recv(t: *PsTask)
+private def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg
+private def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask
+private def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg)
+private def ps_recvs_poll(ctx: *PsCtx) -> bool
 # 18.4/99: ONE wait, three ways of sleeping (epoll, kqueue, poll). Declared here
 # because the scheduler above calls it and the bodies are per platform, below.
-static def ps_mux_wait(ctx: *PsCtx, ms: int)
-static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
-static def ps_io_run(w: *PsWork)
-static def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool
-static def ps_sigpipe_noop(sig: int)
-static def ps_sock_nonblock(fd: int)
-static def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
-static def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool
-static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
-static def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask
-static def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool
+private def ps_mux_wait(ctx: *PsCtx, ms: int)
+private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
+private def ps_io_run(w: *PsWork)
+private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool
+private def ps_sigpipe_noop(sig: int)
+private def ps_sock_nonblock(fd: int)
+private def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
+private def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool
+private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
+private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask
+private def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool
 def ps_utf8_valid(b: const *char, n: usize) -> bool
-static def ps_work_free(w: *PsWork)
-static def ps_pool_start()
-static def ps_io_finish(ctx: *PsCtx, t: *PsTask)
-static def ps_pool_thread(arg: *void) -> *void
-static def ps_io_ready(ctx: *PsCtx)
-static def ps_dupn(p: const *char, n: usize) -> *char
-static def ps_sched_push(ctx: *PsCtx, t: *PsTask)
-static def ps_pipe_open(rp: *int, wp: *int)
-static def ps_pipe_wake(fd: int)
-static def ps_pipe_drain(fd: int)
-static def ps_pipe_close(fd: int)
+private def ps_work_free(w: *PsWork)
+private def ps_pool_start()
+private def ps_io_finish(ctx: *PsCtx, t: *PsTask)
+private def ps_pool_thread(arg: *void) -> *void
+private def ps_io_ready(ctx: *PsCtx)
+private def ps_dupn(p: const *char, n: usize) -> *char
+private def ps_sched_push(ctx: *PsCtx, t: *PsTask)
+private def ps_pipe_open(rp: *int, wp: *int)
+private def ps_pipe_wake(fd: int)
+private def ps_pipe_drain(fd: int)
+private def ps_pipe_close(fd: int)
 
 # what a parked receive is waiting to rebuild (74.1)
 # how many queues one wait can watch at once (74.1)
 # 110: quantos descritores um `poll` acompanha de uma vez
 # (`-D PSRT_POLL_MAX=N`). Dimensiona array: é knob de COMPILAÇÃO.
 const if defined(PSRT_POLL_MAX):
-    static const PS_POLL_MAX: const i32 = PSRT_POLL_MAX
+    private const PS_POLL_MAX: const i32 = PSRT_POLL_MAX
 else:
-    static const PS_POLL_MAX: const i32 = 64
+    private const PS_POLL_MAX: const i32 = 64
 
-static const PS_RECV_RAW: const i32 = 0
-static const PS_RECV_OBJ: const i32 = 1
+private const PS_RECV_RAW: const i32 = 0
+private const PS_RECV_OBJ: const i32 = 1
 
 # ---------- a message that is a GRAPH (34.3/74.2) ----------
 # Bytes cross by memcpy; everything the collector owns crosses by being written
@@ -237,7 +237,7 @@ static const PS_RECV_OBJ: const i32 = 1
 # order the writer registered it. That is the whole of the cycle guard: a list
 # that contains itself writes its own number the second time round, and the
 # reader has the (still empty) list to point at.
-static def ps_ser_grow(s: *PsSer, n: usize):
+private def ps_ser_grow(s: *PsSer, n: usize):
     if s->len + n <= s->cap:
         return
     cap: usize = s->cap * 2 if s->cap > 0 else usize(256)
@@ -246,33 +246,33 @@ static def ps_ser_grow(s: *PsSer, n: usize):
     s->buf = (*char)(realloc(s->buf, cap))
     s->cap = cap
 
-static def ps_ser_bytes(s: *PsSer, p: const *void, n: usize):
+private def ps_ser_bytes(s: *PsSer, p: const *void, n: usize):
     if n == 0:
         return
     ps_ser_grow(s, n)
     memcpy(s->buf + s->len, p, n)
     s->len += n
 
-static def ps_ser_u8(s: *PsSer, v: i32):
+private def ps_ser_u8(s: *PsSer, v: i32):
     b: char = char(v)
     ps_ser_bytes(s, &b, usize(1))
 
-static def ps_ser_i32(s: *PsSer, v: i32):
+private def ps_ser_i32(s: *PsSer, v: i32):
     ps_ser_bytes(s, &v, sizeof(i32))
 
-static def ps_ser_i64(s: *PsSer, v: i64):
+private def ps_ser_i64(s: *PsSer, v: i64):
     ps_ser_bytes(s, &v, sizeof(i64))
 
 # the table of what has already been written: open addressing on the ADDRESS of
 # the object, because a graph of ten thousand nodes must not cost ten thousand
 # comparisons per node
-static def ps_ptr_hash(o: *void) -> usize:
+private def ps_ptr_hash(o: *void) -> usize:
     h: usize = usize(o)
     h = h >> 4
     h *= usize(2654435761)
     return h
 
-static def ps_ser_rehash(s: *PsSer):
+private def ps_ser_rehash(s: *PsSer):
     ns: usize = s->nslots * 2 if s->nslots > 0 else usize(64)
     nk: **void = (**void)(calloc(ns, sizeof(*nk)))
     nv: *i32 = (*i32)(calloc(ns, sizeof(*nv)))
@@ -291,7 +291,7 @@ static def ps_ser_rehash(s: *PsSer):
     s->vals = nv
     s->nslots = ns
 
-static def ps_ser_seen(s: *PsSer, o: *void, idx: *i32) -> bool:
+private def ps_ser_seen(s: *PsSer, o: *void, idx: *i32) -> bool:
     if s->nslots == 0:
         return False
     j: usize = ps_ptr_hash(o) & (s->nslots - 1)
@@ -302,7 +302,7 @@ static def ps_ser_seen(s: *PsSer, o: *void, idx: *i32) -> bool:
         j = (j + 1) & (s->nslots - 1)
     return False
 
-static def ps_ser_add(s: *PsSer, o: *void) -> i32:
+private def ps_ser_add(s: *PsSer, o: *void) -> i32:
     if s->nslots == 0 or usize(s->used + 1) * 2 > s->nslots:
         ps_ser_rehash(s)
     j: usize = ps_ptr_hash(o) & (s->nslots - 1)
@@ -317,10 +317,10 @@ static def ps_ser_add(s: *PsSer, o: *void) -> i32:
 # how wide the SLOT of a value of this shape is, and whether it holds a
 # reference: a list of numbers stores them inline, a list of anything the
 # collector owns stores pointers
-static def ps_sh_slot(sh: const *PsShape) -> i32:
+private def ps_sh_slot(sh: const *PsShape) -> i32:
     return i32(sh->size) if sh->kind == PS_SH_POD else i32(sizeof(PsStrPtr))
 
-static def ps_sh_isref(sh: const *PsShape) -> bool:
+private def ps_sh_isref(sh: const *PsShape) -> bool:
     return sh->kind != PS_SH_POD
 
 def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void):
@@ -374,7 +374,7 @@ def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void):
             pass
 
 # ---------- and back ----------
-static def ps_des_take(d: *PsDes, n: usize) -> const *char:
+private def ps_des_take(d: *PsDes, n: usize) -> const *char:
     if d->pos + n > d->len:
         d->bad = 1
         return None
@@ -382,18 +382,18 @@ static def ps_des_take(d: *PsDes, n: usize) -> const *char:
     d->pos += n
     return p
 
-static def ps_des_u8(d: *PsDes) -> i32:
+private def ps_des_u8(d: *PsDes) -> i32:
     p: const *char = ps_des_take(d, usize(1))
     return i32(*p) if p != None else 0
 
-static def ps_des_i32(d: *PsDes) -> i32:
+private def ps_des_i32(d: *PsDes) -> i32:
     v: i32 = 0
     p: const *char = ps_des_take(d, sizeof(i32))
     if p != None:
         memcpy(&v, p, sizeof(i32))
     return v
 
-static def ps_des_i64(d: *PsDes) -> i64:
+private def ps_des_i64(d: *PsDes) -> i64:
     v: i64 = 0
     p: const *char = ps_des_take(d, sizeof(i64))
     if p != None:
@@ -402,7 +402,7 @@ static def ps_des_i64(d: *PsDes) -> i64:
 
 # reserve the number this object is going to have, before its body is read: an
 # object inside it may point back here, and then it is this slot it finds
-static def ps_des_reserve(d: *PsDes) -> i32:
+private def ps_des_reserve(d: *PsDes) -> i32:
     if d->nbuilt >= d->cbuilt:
         d->cbuilt = d->cbuilt * 2 if d->cbuilt > 0 else 32
         d->built = (**void)(realloc(d->built, usize(d->cbuilt) * sizeof(*d->built)))
@@ -488,7 +488,7 @@ def ps_des_value(ctx: *PsCtx, d: *PsDes, sh: const *PsShape, slot: *void):
             *out = None
 
 # ---------- the two ends ----------
-static def ps_ser_run(sh: const *PsShape, slot: const *void, out_n: *usize) -> *char:
+private def ps_ser_run(sh: const *PsShape, slot: const *void, out_n: *usize) -> *char:
     s: PsSer = {None, 0, 0, None, None, 0, 0, 0}
     ps_ser_value(&s, sh, slot)
     free(s.keys)
@@ -504,7 +504,7 @@ static def ps_ser_run(sh: const *PsShape, slot: const *void, out_n: *usize) -> *
 #
 # A checagem de `done` é DENTRO do trinco: fora dele, o worker pode terminar
 # entre o teste e o push, e a mensagem fica numa fila que ninguém mais lê.
-static def ps_queue_put(b: *PsWorkerBlk, down: bool, p: const *void, size: usize) -> bool:
+private def ps_queue_put(b: *PsWorkerBlk, down: bool, p: const *void, size: usize) -> bool:
     pthread_mutex_lock(&b->mu)
     defer pthread_mutex_unlock(&b->mu)
     if down:
@@ -542,7 +542,7 @@ def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> boo
 # The value is BUILT here, in the receiver's own heap — which is the whole
 # reason the bytes crossed instead of the objects. Building allocates and
 # allocation never collects, so nothing moves while the graph is going up.
-static def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize):
+private def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize):
     memset(slot, 0, size)
     if m == None:
         return
@@ -550,7 +550,7 @@ static def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, s
     ps_des_value(ctx, &d, sh, slot)
     free(d.built)
 
-static def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask:
+private def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask:
     t: *PsTask = ps_msg_task(ctx, None, size)
     ((*PsUser)(t->frame))->desc = &PS_REFMSG_DESC
     ps_des_run(ctx, m, sh, ps_task_ret(t), size)
@@ -628,7 +628,7 @@ def ps_worker_send_down(w: *PsWorker, p: const *void, size: usize) -> bool:
 # a finished task carrying `size` bytes of message: the shape `await` wants,
 # with the blocking done here. When the I/O loop of 18.4 exists, this is where
 # the task starts PARKED instead.
-static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
+private def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
     u: *PsUser = (*PsUser)(fr)
     u->desc = &PS_POD_DESC
@@ -661,9 +661,9 @@ static def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
 # 110: o TETO de threads do pool de I/O (`-D PSRT_POOL_MAX=N`). Quantas de
 # fato subir é ajuste de runtime — ver `sys.pool`.
 const if defined(PSRT_POOL_MAX):
-    static const PS_POOL_MAX: const i32 = PSRT_POOL_MAX
+    private const PS_POOL_MAX: const i32 = PSRT_POOL_MAX
 else:
-    static const PS_POOL_MAX: const i32 = 8
+    private const PS_POOL_MAX: const i32 = 8
 
 struct PsPool:
     mu: pthread_mutex_t
@@ -674,9 +674,9 @@ struct PsPool:
     started: i32
     want: i32            # 110: o que `sys.pool(n)` pediu (0 = ninguém pediu)
 
-static g_pool: PsPool = {0}
+private g_pool: PsPool = {0}
 
-static def ps_pool_thread(arg: *void) -> *void:
+private def ps_pool_thread(arg: *void) -> *void:
     while True:
         pthread_mutex_lock(&g_pool.mu)
         while g_pool.head == None:
@@ -704,7 +704,7 @@ static def ps_pool_thread(arg: *void) -> *void:
 
 # lazily, on the first asynchronous operation: a program that never waits for
 # I/O never pays for a thread
-static def ps_pool_start():
+private def ps_pool_start():
     if g_pool.started != 0:
         return
     pthread_mutex_init(&g_pool.mu, None)
@@ -745,7 +745,7 @@ def ps_pool_want(ctx: *PsCtx, n: i64, file: const *char, line: i32):
         return
     g_pool.want = i32(n)
 
-static def ps_work_free(w: *PsWork):
+private def ps_work_free(w: *PsWork):
     if w == None:
         return
     if w->path != None:
@@ -756,7 +756,7 @@ static def ps_work_free(w: *PsWork):
         free(w->buf)
     free(w)
 
-static def ps_dupn(p: const *char, n: usize) -> *char:
+private def ps_dupn(p: const *char, n: usize) -> *char:
     q: *char = (*char)(malloc(n + 1))
     if n > 0:
         memcpy(q, p, n)
@@ -764,7 +764,7 @@ static def ps_dupn(p: const *char, n: usize) -> *char:
     return q
 
 # THE work: everything here is libc on malloc'd memory, and nothing else
-static def ps_io_run(w: *PsWork):
+private def ps_io_run(w: *PsWork):
     w->err = 0
     match w->op:
         case PS_IO_OPEN:
@@ -848,7 +848,7 @@ static def ps_io_run(w: *PsWork):
             w->rc = 0
 
 # the completion pipe of THIS context, made on demand
-static def ps_io_ready(ctx: *PsCtx):
+private def ps_io_ready(ctx: *PsCtx):
     ps_pool_start()
     if ctx->io_r < 0 or (ctx->io_r == 0 and ctx->io_w == 0):
         ps_pipe_open(&ctx->io_r, &ctx->io_w)
@@ -910,12 +910,12 @@ def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
 # process by default. `SIG_IGN` is a cast macro (P cannot see it) and
 # MSG_NOSIGNAL is Linux-only, so what we install is an EMPTY handler: the
 # signal is delivered and ignored, and `send` returns -1 the way we want.
-static def ps_sigpipe_noop(sig: int):
+private def ps_sigpipe_noop(sig: int):
     pass
 
-static g_sigpipe_done: i32 = 0
+private g_sigpipe_done: i32 = 0
 
-static def ps_sock_nonblock(fd: int):
+private def ps_sock_nonblock(fd: int):
     if g_sigpipe_done == 0:
         g_sigpipe_done = 1
         signal(SIGPIPE, ps_sigpipe_noop)
@@ -924,7 +924,7 @@ static def ps_sock_nonblock(fd: int):
 # A polled job: no pool thread, no queue. The scheduler puts the descriptor in
 # its `poll` and runs the syscall here when it says ready — which is what a
 # socket makes possible and a file does not.
-static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
+private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
     u: *PsUser = (*PsUser)(fr)
     u->desc = &PS_REFMSG_DESC if isref else &PS_POD_DESC
@@ -949,7 +949,7 @@ static def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsT
     ps_park(ctx, t)
     return t
 
-static def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
+private def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
     c: *PsConn = (*PsConn)(ps_alloc(ctx, sizeof(PsConn), PS_TY_CONN))
     c->fd = fd
     c->is_open = 1 if fd >= 0 else 0
@@ -992,7 +992,7 @@ def ps_conn_port(c: *PsConn) -> i64:
         return 0
     return i64(ntohs(a.sin_port))
 
-static def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool:
+private def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool:
     if c == None or c->is_open == 0:
         msg: char[128]
         snprintf(msg, 128, "%s on a socket that is not open", what)
@@ -1020,7 +1020,7 @@ def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask:
     w->buf = (*char)(malloc(w->n if w->n > 0 else usize(1)))
     return ps_fd_task(ctx, w, True, sizeof(PsStrPtr))
 
-static def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask:
+private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask:
     w: *PsWork = ps_work_new(PS_IO_SEND)
     w->want = PS_W_INT
     w->fd = c->fd
@@ -1078,7 +1078,7 @@ def ps_aio_open(ctx: *PsCtx, path: *PsStr, mode: *PsStr) -> *PsTask:
     w->mode = ps_dupn(mode->data, usize(mode->len))
     return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
 
-static def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool:
+private def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool:
     if f == None or f->is_open == 0:
         msg: char[128]
         snprintf(msg, 128, "%s on a file that is not open", what)
@@ -1147,7 +1147,7 @@ def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask:
 # mensagens a segunda a estacionar recebia a primeira mensagem. Duas leituras
 # concorrentes do mesmo canal são o caso normal de um servidor, e a ordem certa é
 # a de chegada — quem esperou primeiro recebe primeiro.
-static def ps_park(ctx: *PsCtx, t: *PsTask):
+private def ps_park(ctx: *PsCtx, t: *PsTask):
     t->next = None
     if ctx->waiters == None:
         ctx->waiters = t
@@ -1180,7 +1180,7 @@ static def ps_park(ctx: *PsCtx, t: *PsTask):
 # novo é o veneno 0xDD do cemitério: `0xdddddddddddde35` foi o endereço que o
 # valgrind mostrou. É a mesma família da 107.6 (campo novo sem inicializar em
 # todos os sítios), e desta vez o campo tinha ANOS.
-static def ps_task_clear_recv(t: *PsTask):
+private def ps_task_clear_recv(t: *PsTask):
     t->is_recv = 0
     t->rblk = None
     t->rdir = 0
@@ -1196,7 +1196,7 @@ static def ps_task_clear_recv(t: *PsTask):
 # (an empty message) instead of hanging forever. The DOWN queue has no such
 # end — a worker reading from a parent that never writes is a deadlock, and it
 # is reported as one.
-static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
+private def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
     m: *PsMsg = None
     *ended = False
     pthread_mutex_lock(&b->mu)
@@ -1215,7 +1215,7 @@ static def ps_recv_pop(b: *PsWorkerBlk, dir: i32, ended: *bool) -> *PsMsg:
 
 # 107: saiu do estacionamento — uma vez só, seja porque a mensagem chegou ou
 # porque a lista de espera foi limpa
-static def ps_recv_unpark(t: *PsTask):
+private def ps_recv_unpark(t: *PsTask):
     if t == None or t->rmarked == 0 or t->rblk == None:
         return
     # a marca cai ANTES do trinco: é a mesma thread que a pôs, então não há
@@ -1231,7 +1231,7 @@ static def ps_recv_unpark(t: *PsTask):
         if b->dn_parked > 0:
             b->dn_parked -= 1
 
-static def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask:
+private def ps_recv_build(ctx: *PsCtx, m: *PsMsg, kind: i32, sh: const *PsShape, size: usize) -> *PsTask:
     if kind == PS_RECV_OBJ:
         return ps_obj_msg_task(ctx, m, sh, size)
     return ps_msg_task(ctx, m, size)
@@ -1282,7 +1282,7 @@ def ps_recv_task(ctx: *PsCtx, b: *PsWorkerBlk, dir: i32, kind: i32, sh: const *P
 # The message landed: build the value in THIS heap and wake whoever awaited.
 # Building allocates, and allocation never collects (that is the safepoint
 # rule), so nothing here can move under our feet.
-static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
+private def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
     ps_recv_unpark(t)
     if t->rkind == PS_RECV_OBJ:
         ps_des_run(ctx, m, t->rshape, ps_task_ret(t), t->rsize)
@@ -1300,7 +1300,7 @@ static def ps_recv_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
 
 # A finished pool job becomes a value HERE, on the owning thread — which is the
 # whole reason the pool hands back malloc'd bytes instead of objects.
-static def ps_io_finish(ctx: *PsCtx, t: *PsTask):
+private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
     w: *PsWork = t->work
     if w->err != 0:
         # the message comes from the OPERATION, never from `errno`: errno is
@@ -1375,7 +1375,7 @@ static def ps_io_finish(ctx: *PsCtx, t: *PsTask):
 # is asked of `poll` rather than read off `errno` — errno is a macro P cannot
 # see, and it is per-thread besides. Asking costs one syscall and answers the
 # only question that matters: can this run without blocking?
-static def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
+private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
     w: *PsWork = t->work
     pf: pollfd[1]
     pf[0].fd = w->fd
@@ -1412,7 +1412,7 @@ static def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             return True
 
 # Every parked receive that can finish now, does. Returns whether any did.
-static def ps_recvs_poll(ctx: *PsCtx) -> bool:
+private def ps_recvs_poll(ctx: *PsCtx) -> bool:
     any: bool = False
     t: *PsTask = ctx->waiters
     while t != None:
@@ -1500,7 +1500,7 @@ static def ps_recvs_poll(ctx: *PsCtx) -> bool:
     return any
 
 # How many descriptors the parked receives are waiting on, and which.
-static def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
+private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
     cnt: i32 = 0
     io: bool = False
     *out_bad = False
@@ -1538,7 +1538,7 @@ def ps_parent_recv(ctx: *PsCtx, size: usize) -> *PsTask:
 # 108: a parte que precisa do trinco, num bloco só dela — o resto (que ALOCA no
 # heap deste contexto) fica fora, que é onde sempre esteve. Eram duas
 # destrancadas em dois caminhos de saída.
-static def ps_blk_take_err(b: *PsWorkerBlk, out cat: i32) -> *char:
+private def ps_blk_take_err(b: *PsWorkerBlk, out cat: i32) -> *char:
     pthread_mutex_lock(&b->mu)
     defer pthread_mutex_unlock(&b->mu)
     cat = 0
@@ -1577,7 +1577,7 @@ def ps_worker_error(ctx: *PsCtx, w: *PsWorker) -> *PsErr:
 # fila de subida já tinha (`done`), do outro lado do duto: quem manda avisa que
 # acabou. E é o desligamento cooperativo da 36.4 chegando por si — o worker vê
 # o canal fechar, sai do laço e termina, sem ninguém matar ninguém.
-static def ps_close_down(ctx: *PsCtx):
+private def ps_close_down(ctx: *PsCtx):
     b: *PsWorkerBlk = ctx->workers
     while b != None:
         # o local amarrado por volta, e não `b` direto: o `defer` do P avalia o
@@ -1639,8 +1639,8 @@ def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool
     return False
 
 # ---------- `sys` (48.3) ----------
-static PS_ARGC: int = 0
-static PS_ARGV: **char = None
+private PS_ARGC: int = 0
+private PS_ARGV: **char = None
 
 def ps_sys_args(argc: int, argv: **char):
     PS_ARGC = argc
@@ -1784,7 +1784,7 @@ def ps_file_close(ctx: *PsCtx, f: *PsFile):
         f->fp = None
 
 # ---------- `shared` (42.1/42.3) ----------
-static def ps_sstr_set(dst: *PsSStr, s: *PsStr)
+private def ps_sstr_set(dst: *PsSStr, s: *PsStr)
 
 def ps_shared_str_init(slot: *PsSStr, bytes: const *char, n: i64):
     if slot->p != None:
@@ -1817,8 +1817,8 @@ def ps_lock(mu: *void):
 def ps_unlock(mu: *void):
     pthread_mutex_unlock((*pthread_mutex_t)(mu))
 
-static def ps_sdict_grow(d: *PsSDict, ncap: i64)
-static def ps_sdict_slot(d: *PsSDict, key: const *void) -> i64
+private def ps_sdict_grow(d: *PsSDict, ncap: i64)
+private def ps_sdict_slot(d: *PsSDict, key: const *void) -> i64
 
 # ---------- the repeating clock (48.2/51.1) ----------
 def ps_interval_new(ctx: *PsCtx, seconds: f64, file: const *char, line: i32) -> *PsTimer:
@@ -1851,7 +1851,7 @@ def ps_timer_tick(ctx: *PsCtx, t: *PsTimer) -> *PsTask:
 # A string key or value is stored as a `PsSStr`: a length and a malloc'ed copy
 # of the bytes. Reading one back builds a fresh string in the READER's heap, so
 # two workers never look at the same object — 42.1's copy ladder, literally.
-static def ps_sstr_set(dst: *PsSStr, s: *PsStr):
+private def ps_sstr_set(dst: *PsSStr, s: *PsStr):
     if dst->p != None:
         free(dst->p)
     n: usize = usize(s->len)
@@ -1860,13 +1860,13 @@ static def ps_sstr_set(dst: *PsSStr, s: *PsStr):
     dst->p[n] = '\0'
     dst->n = n
 
-static def ps_skey_hash(d: *PsSDict, key: const *void) -> u64:
+private def ps_skey_hash(d: *PsSDict, key: const *void) -> u64:
     if d->kstr:
         ks: *PsStr = (*PsStr)(key)
         return ps_hash_bytes(ks->data, usize(ks->len))
     return ps_hash_bytes((*char)(key), d->ksize)
 
-static def ps_skey_eq(d: *PsSDict, slot: const *char, key: const *void) -> bool:
+private def ps_skey_eq(d: *PsSDict, slot: const *char, key: const *void) -> bool:
     if d->kstr:
         st: *PsSStr = (*PsSStr)(slot)
         ks: *PsStr = (*PsStr)(key)
@@ -1875,7 +1875,7 @@ static def ps_skey_eq(d: *PsSDict, slot: const *char, key: const *void) -> bool:
         return memcmp(st->p, ks->data, st->n) == 0
     return memcmp(slot, (*char)(key), d->ksize) == 0
 
-static def ps_sdict_grow(d: *PsSDict, ncap: i64):
+private def ps_sdict_grow(d: *PsSDict, ncap: i64):
     okeys: *char = d->keys
     ovals: *char = d->vals
     ostate: *char = d->state
@@ -1923,7 +1923,7 @@ def ps_sdict_len(d: *PsSDict) -> i64:
     return n
 
 # the slot a key belongs in, found or free. The caller holds the lock.
-static def ps_sdict_slot(d: *PsSDict, key: const *void) -> i64:
+private def ps_sdict_slot(d: *PsSDict, key: const *void) -> i64:
     j: i64 = i64(ps_skey_hash(d, key) % u64(d->cap))
     while d->state[j] != 0:
         if ps_skey_eq(d, d->keys + usize(j) * d->ksize, key):
@@ -2025,7 +2025,7 @@ def ps_sdict_del(d: *PsSDict, key: const *void) -> bool:
 # The scheduler is a run queue and nothing else: no threads here (that is 35.1,
 # the worker), no I/O yet (18.4). A task steps until it parks on another task or
 # finishes; finishing wakes whoever was parked on it.
-static def ps_sched_push(ctx: *PsCtx, t: *PsTask):
+private def ps_sched_push(ctx: *PsCtx, t: *PsTask):
     t->next = None
     if ctx->ready_tail == None:
         ctx->ready = t
@@ -2034,7 +2034,7 @@ static def ps_sched_push(ctx: *PsCtx, t: *PsTask):
         ctx->ready_tail->next = t
         ctx->ready_tail = t
 
-static def ps_sched_pop(ctx: *PsCtx) -> *PsTask:
+private def ps_sched_pop(ctx: *PsCtx) -> *PsTask:
     t: *PsTask = ctx->ready
     if t == None:
         return None
@@ -2135,8 +2135,8 @@ def ps_gather(ctx: *PsCtx, ts: *PsList, esize: i32, eref: bool) -> *PsList:
         i += 1
     return out
 
-static def ps_sched_push(ctx: *PsCtx, t: *PsTask)
-static def ps_sched_pop(ctx: *PsCtx) -> *PsTask
+private def ps_sched_push(ctx: *PsCtx, t: *PsTask)
+private def ps_sched_pop(ctx: *PsCtx) -> *PsTask
 
 # A task with no step: the CLOCK finishes it (48.2).
 def ps_timer_task(ctx: *PsCtx, at: f64) -> *PsTask:
@@ -2180,7 +2180,7 @@ def ps_timer_task(ctx: *PsCtx, at: f64) -> *PsTask:
     return t
 
 # The earliest deadline still pending, or a negative number when there is none.
-static def ps_timer_soonest(ctx: *PsCtx) -> f64:
+private def ps_timer_soonest(ctx: *PsCtx) -> f64:
     best: f64 = -1.0
     t: *PsTask = ctx->timers
     while t != None:
@@ -2190,7 +2190,7 @@ static def ps_timer_soonest(ctx: *PsCtx) -> f64:
     return best
 
 # Finishes every timer whose moment has come, and wakes whoever waited on it.
-static def ps_timers_fire(ctx: *PsCtx, now: f64) -> bool:
+private def ps_timers_fire(ctx: *PsCtx, now: f64) -> bool:
     any: bool = False
     t: *PsTask = ctx->timers
     while t != None:
@@ -2229,7 +2229,7 @@ static def ps_timers_fire(ctx: *PsCtx, now: f64) -> bool:
 # A marca é feita e desfeita sob o mutex do bloco, e a leitura do outro lado
 # acontece com o mutex na mão — então ou os dois se veem, ou um deles ainda não
 # marcou e a próxima volta do laço olha de novo.
-static def ps_recv_stuck(ctx: *PsCtx, out total: i32, out stuck: i32, out other: i32):
+private def ps_recv_stuck(ctx: *PsCtx, out total: i32, out stuck: i32, out other: i32):
     total = 0
     stuck = 0
     other = 0
@@ -2352,7 +2352,7 @@ const if __PLANG_LINUX__:
         out: *epoll_event
         nout: i32
 
-    static def ps_mux_get(ctx: *PsCtx) -> *PsMux:
+    private def ps_mux_get(ctx: *PsCtx) -> *PsMux:
         if ctx->mux != None:
             return (*PsMux)(ctx->mux)
         m: *PsMux = (*PsMux)(calloc(1, sizeof(PsMux)))
@@ -2362,13 +2362,13 @@ const if __PLANG_LINUX__:
         ctx->mux = (*void)(m)
         return m
 
-    static def ps_mux_find(m: *PsMux, fd: int) -> i32:
+    private def ps_mux_find(m: *PsMux, fd: int) -> i32:
         for i in range(m->n):
             if m->ent[i].fd == fd:
                 return i
         return -1
 
-    static def ps_mux_want(m: *PsMux, fd: int, events: i16, drain: bool):
+    private def ps_mux_want(m: *PsMux, fd: int, events: i16, drain: bool):
         if fd < 0:
             return
         k: i32 = ps_mux_find(m, fd)
@@ -2406,7 +2406,7 @@ const if __PLANG_LINUX__:
 
     # everything nobody asked for this turn LEAVES the set: a task that finished
     # must not keep waking the loop
-    static def ps_mux_sweep(m: *PsMux):
+    private def ps_mux_sweep(m: *PsMux):
         i: i32 = 0
         while i < m->n:
             if m->ent[i].seen == 0:
@@ -2417,7 +2417,7 @@ const if __PLANG_LINUX__:
                 m->ent[i].seen = 0
                 i += 1
 
-    static def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
+    private def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
 
     # one event loop per worker (22.3) means one of these per context, and a
     # worker that came and went must not leave a descriptor behind
@@ -2432,7 +2432,7 @@ const if __PLANG_LINUX__:
         free(m)
         ctx->mux = None
 
-    static def ps_mux_wait(ctx: *PsCtx, ms: int):
+    private def ps_mux_wait(ctx: *PsCtx, ms: int):
         m: *PsMux = ps_mux_get(ctx)
         if m == None or m->efd < 0:
             return
@@ -2468,7 +2468,7 @@ elif __PLANG_MACOS__:
         out: *kevent
         nout: i32
 
-    static def ps_mux_get(ctx: *PsCtx) -> *PsMux:
+    private def ps_mux_get(ctx: *PsCtx) -> *PsMux:
         if ctx->mux != None:
             return (*PsMux)(ctx->mux)
         m: *PsMux = (*PsMux)(calloc(1, sizeof(PsMux)))
@@ -2478,13 +2478,13 @@ elif __PLANG_MACOS__:
         ctx->mux = (*void)(m)
         return m
 
-    static def ps_mux_find(m: *PsMux, fd: int) -> i32:
+    private def ps_mux_find(m: *PsMux, fd: int) -> i32:
         for i in range(m->n):
             if m->ent[i].fd == fd:
                 return i
         return -1
 
-    static def ps_mux_change(m: *PsMux, fd: int, events: i16, add: bool):
+    private def ps_mux_change(m: *PsMux, fd: int, events: i16, add: bool):
         ch: kevent[2]
         n: i32 = 0
         if (int(events) & POLLIN) != 0:
@@ -2496,7 +2496,7 @@ elif __PLANG_MACOS__:
         if n > 0:
             kevent(m->kq, &ch[0], n, None, 0, None)
 
-    static def ps_mux_want(m: *PsMux, fd: int, events: i16, drain: bool):
+    private def ps_mux_want(m: *PsMux, fd: int, events: i16, drain: bool):
         if fd < 0:
             return
         k: i32 = ps_mux_find(m, fd)
@@ -2521,7 +2521,7 @@ elif __PLANG_MACOS__:
         m->ent[m->n].seen = 1
         m->n += 1
 
-    static def ps_mux_sweep(m: *PsMux):
+    private def ps_mux_sweep(m: *PsMux):
         i: i32 = 0
         while i < m->n:
             if m->ent[i].seen == 0:
@@ -2532,7 +2532,7 @@ elif __PLANG_MACOS__:
                 m->ent[i].seen = 0
                 i += 1
 
-    static def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
+    private def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
 
     def ps_mux_free(ctx: *PsCtx):
         if ctx->mux == None:
@@ -2545,7 +2545,7 @@ elif __PLANG_MACOS__:
         free(m)
         ctx->mux = None
 
-    static def ps_mux_wait(ctx: *PsCtx, ms: int):
+    private def ps_mux_wait(ctx: *PsCtx, ms: int):
         m: *PsMux = ps_mux_get(ctx)
         if m == None or m->kq < 0:
             return
@@ -2574,7 +2574,7 @@ else:
     def ps_mux_free(ctx: *PsCtx):
         return          # `poll` keeps no state of its own
 
-    static def ps_mux_wait(ctx: *PsCtx, ms: int):
+    private def ps_mux_wait(ctx: *PsCtx, ms: int):
         # PS_POLL_MAX at a time: a context with more parked receives than that
         # polls the first ones and looks at the rest after a couple of
         # milliseconds, which bounds the latency without an allocation on the
@@ -2620,7 +2620,7 @@ else:
 # and outside the platform blocks, because WHAT to watch is not a platform
 # question — only how to sleep on it is.
 const if __PLANG_LINUX__ or __PLANG_MACOS__:
-    static def ps_mux_collect(ctx: *PsCtx, m: *PsMux):
+    private def ps_mux_collect(ctx: *PsCtx, m: *PsMux):
         anyio: bool = False
         t: *PsTask = ctx->waiters
         while t != None:
@@ -2927,7 +2927,7 @@ def ps_task_park(ctx: *PsCtx, waiter: *PsTask, on: *PsTask):
     waiter->waiting_on = on
     on->waiter = waiter
 
-static def ps_lost_note(ctx: *PsCtx, t: *PsTask)
+private def ps_lost_note(ctx: *PsCtx, t: *PsTask)
 
 def ps_task_fail(ctx: *PsCtx, t: *PsTask):
     # the task CAPTURES the error: the flag is cleared here so the rest of the
@@ -2946,7 +2946,7 @@ def ps_task_fail(ctx: *PsCtx, t: *PsTask):
 #
 # A entrada nasce aqui, quando a task falha e ninguém está esperando por ela, e
 # morre no `await` que a colhe. O que sobrar é impresso no fim.
-static def ps_lost_note(ctx: *PsCtx, t: *PsTask):
+private def ps_lost_note(ctx: *PsCtx, t: *PsTask):
     if t == None or t->err == None or t->waiter != None:
         return
     # uma task CANCELADA falhou porque alguém pediu que ela parasse (37.2): o

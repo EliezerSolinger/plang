@@ -15,11 +15,11 @@ struct HlTok:
     cls: i32
     kind: i32
 
-static g_toks: *HlTok = None
-static g_n: i32 = 0
-static g_cap: i32 = 0
+private g_toks: *HlTok = None
+private g_n: i32 = 0
+private g_cap: i32 = 0
 
-static def cp_count(s: const *char) -> i32:
+private def cp_count(s: const *char) -> i32:
     n: i32 = 0
     for i in range(strlen(s)):
         if (u8(s[i]) & 0xC0) != 0x80:
@@ -27,7 +27,7 @@ static def cp_count(s: const *char) -> i32:
     return n
 
 # a arena que o lexer tolerante enche (os blocos são malloc puro)
-static def arena_drop_hl(a: *Arena):
+private def arena_drop_hl(a: *Arena):
     blk: *ArenaBlock = a->head
     while blk != None:
         nx: *ArenaBlock = blk->next
@@ -35,7 +35,7 @@ static def arena_drop_hl(a: *Arena):
         blk = nx
     a->head = None
 
-static def kind_of(k: TokKind) -> i32:
+private def kind_of(k: TokKind) -> i32:
     match k:
         case TK_EOF:
             return HLK_EOF
@@ -74,10 +74,11 @@ static def kind_of(k: TokKind) -> i32:
         case _:
             return HLK_OTHER
 
-# a classe de EXIBIÇÃO: a mesma regra do `core.p` do editor em P — um token com
-# lexema que não é identificador, número nem cadeia é palavra da linguagem, e
-# pontuação (lexema nenhum) fica à parte
-static def class_of(t: *Token) -> i32:
+# The DISPLAY class, decided structurally instead of from a word list: a token
+# that carries a lexeme and is not an identifier, a number or a string is a word
+# of the language, and punctuation (no lexeme) stands apart. That is why a new
+# keyword — `private`, in 118 — colours itself with no edit here.
+private def class_of(t: *Token) -> i32:
     if t->kind == TK_IDENT:
         return HLC_TEXT
     if t->kind == TK_NUMBER:

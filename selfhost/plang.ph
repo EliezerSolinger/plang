@@ -81,3 +81,21 @@ def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *c
 # ---------- C string literals ----------
 def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char
 def c_string_literal(a: *Arena, bytes: const *char, n: usize) -> const *char
+
+# ---------- f-strings: the brace grammar, shared ----------
+# `{expr}`, `{expr:spec}`, `{{` and `}}` mean the same thing in both languages.
+# What differs is what each front end DOES with the pieces: pscript builds a
+# `str` (45.1), P builds a printf format resolved at compile time (65.2). So the
+# SPLIT lives here and each parser hands the hole text to its own expression
+# parser — the same arrangement as the LexSpec: shared machinery, own language.
+struct FStrParts:
+    lits: const **char    # n+1 literal chunks; lits[i] comes BEFORE hole i
+    lit_lens: *usize      # their lengths (a chunk can hold a NUL from `\0`)
+    holes: const **char   # n hole expressions, as SOURCE TEXT
+    specs: const **char   # n format specs; "" when the hole had none
+    n: i32
+
+# `body` is the DECODED bytes between the quotes (str_lit_decode already ran).
+# Diagnostics point at `pos`, the position of the f-string as a whole: a hole is
+# lexed on its own, so it has no position of its own to offer.
+def fstr_split(a: *Arena, body: const *char, nbody: usize, file: const *char, pos: Pos) -> FStrParts

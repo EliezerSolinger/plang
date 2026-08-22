@@ -10,7 +10,7 @@ include <stdarg.h>
 include <sys/utsname.h>   # 99.3: `uname`, to know the host without a #ifdef
 import "plang.ph"
 
-static def read_open_file(f: *FILE, path: const *char, out out_len: usize) -> *char
+private def read_open_file(f: *FILE, path: const *char, out out_len: usize) -> *char
 
 # ---------- characters ----------
 def is_hexc(c: char) -> bool:
@@ -26,7 +26,7 @@ def hexc(c: char) -> i32:
 # ---------- arena ----------
 const ARENA_MIN_BLOCK = 65536
 
-static def arena_new_block(min: usize) -> *ArenaBlock:
+private def arena_new_block(min: usize) -> *ArenaBlock:
     cap: usize = usize(ARENA_MIN_BLOCK) if min < usize(ARENA_MIN_BLOCK) else min
     b: *ArenaBlock = malloc(sizeof(ArenaBlock) + cap)
     if b == None:
@@ -87,7 +87,7 @@ def vec_grow(arr: *void, len: i32, ref cap: i32, elem: usize) -> *void:
     return arr
 
 struct StrBuf:
-    static def grow(self: *StrBuf, extra: usize):
+    private def grow(self: *StrBuf, extra: usize):
         if self->len + extra + 1 > self->cap:
             nc: usize = 256 if self->cap == 0 else self->cap * 2
             while nc < self->len + extra + 1:
@@ -184,7 +184,7 @@ g_wpedantic: i32 = 0    # 0 off, 1 -pedantic (warn), 2 -pedantic-errors
 g_wsuppress: bool = False   # -w
 g_warn_count: i32 = 0
 
-static def wgroup_idx(name: const *char) -> i32:
+private def wgroup_idx(name: const *char) -> i32:
     for i in range(g_nwgroups):
         if strcmp(g_wgroups[i].name, name) == 0:
             return i
@@ -274,7 +274,7 @@ def read_entire_file_opt(path: const *char, out out_len: usize) -> *char:
     defer fclose(f)
     return read_open_file(f, path, out out_len)
 
-static def read_open_file(f: *FILE, path: const *char, out out_len: usize) -> *char:
+private def read_open_file(f: *FILE, path: const *char, out out_len: usize) -> *char:
     if fseek(f, 0, SEEK_END) != 0:   # SEEK_END: ingested from <stdio.h> via `include`
         fatal("fseek failed on '%s'", path)
     sz: long = ftell(f)
@@ -491,3 +491,66 @@ def plang_host_os() -> const *char:
     if strstr(u.sysname, "BSD") != None:
         return "bsd"
     return "other"
+
+# ---------- f-strings: the brace grammar, shared ----------
+def fstr_split(a: *Arena, body: const *char, nbody: usize, file: const *char, pos: Pos) -> FStrParts:
+    # An upper bound is enough to size the arrays once: a hole needs a '{', so
+    # there can never be more holes than there are open braces.
+    nmax: usize = 1
+    for i in range(nbody):
+        if body[i] == '{':
+            nmax += 1
+    r: FStrParts = {None, None, None, None, 0}
+    r.lits = a->alloc((nmax + 1) * sizeof(*r.lits))
+    r.lit_lens = a->alloc((nmax + 1) * sizeof(*r.lit_lens))
+    r.holes = a->alloc(nmax * sizeof(*r.holes))
+    r.specs = a->alloc(nmax * sizeof(*r.specs))
+
+    lit: StrBuf = {0}
+    defer lit.deinit()
+    i: usize = 0
+    while i < nbody:
+        c: char = body[i]
+        if c == '{' and i + 1 < nbody and body[i + 1] == '{':
+            lit.putc('{')
+            i += 2
+            continue
+        if c == '}' and i + 1 < nbody and body[i + 1] == '}':
+            lit.putc('}')
+            i += 2
+            continue
+        if c != '{':
+            lit.putc(c)
+            i += 1
+            continue
+        # a hole: everything up to the matching '}', split at the LAST ':' that
+        # is not inside brackets
+        j: usize = i + 1
+        depth: i32 = 0
+        colon: usize = 0
+        while j < nbody and (body[j] != '}' or depth > 0):
+            if body[j] == '[' or body[j] == '(':
+                depth += 1
+            elif body[j] == ']' or body[j] == ')':
+                depth -= 1
+            elif body[j] == ':' and depth == 0:
+                colon = j
+            elif body[j] == '{':
+                fatal_at(file, pos, "a nested brace in an f-string spec is not supported")
+            j += 1
+        if j >= nbody:
+            fatal_at(file, pos, "unterminated '{' in an f-string")
+        # the chunk that precedes this hole, even when empty: the consumer walks
+        # lits and holes in lockstep
+        r.lits[r.n] = a->strndup(lit.data, lit.len) if lit.len > 0 else ""
+        r.lit_lens[r.n] = lit.len
+        lit.len = 0
+        if lit.data != None:
+            lit.data[0] = '\0'
+        r.holes[r.n] = a->strndup(body + i + 1, (colon if colon > 0 else j) - i - 1)
+        r.specs[r.n] = a->strndup(body + colon + 1, j - colon - 1) if colon > 0 else ""
+        r.n += 1
+        i = j + 1
+    r.lits[r.n] = a->strndup(lit.data, lit.len) if lit.len > 0 else ""
+    r.lit_lens[r.n] = lit.len
+    return r

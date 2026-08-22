@@ -85,7 +85,7 @@ else:
 # collections spread through the whole program instead of a handful at the end.
 #
 # `bash tests/gc-stress.sh` picks N per program and is gating.
-static PS_POISON: const i32 = 0xDD
+private PS_POISON: const i32 = 0xDD
 
 # How many collections' worth of from-space stays poisoned and mapped. Keeping
 # ALL of it is the most deterministic thing possible and also unbounded: a
@@ -97,16 +97,16 @@ static PS_POISON: const i32 = 0xDD
 # 110: quantas coletas de from-space ficam envenenadas no modo de estresse
 # (`-D PSRT_GRAVE_MAX=N`).
 const if defined(PSRT_GRAVE_MAX):
-    static PS_GRAVE_MAX: const i32 = PSRT_GRAVE_MAX
+    private PS_GRAVE_MAX: const i32 = PSRT_GRAVE_MAX
 else:
-    static PS_GRAVE_MAX: const i32 = 16
+    private PS_GRAVE_MAX: const i32 = 16
 
-static ps_stress_n: i64 = -1         # -1 = not looked up yet; 0 = off
+private ps_stress_n: i64 = -1         # -1 = not looked up yet; 0 = off
                                      # (the ENV is read once; the graveyard and
                                      #  the tick live in the context, because
                                      #  every thread collects on its own)
 
-static def ps_gc_stress() -> i64:
+private def ps_gc_stress() -> i64:
     if ps_stress_n < 0:
         e: const *char = getenv("PSCRIPT_GC_STRESS")
         ps_stress_n = 0
@@ -116,7 +116,7 @@ static def ps_gc_stress() -> i64:
     return ps_stress_n
 
 # true when THIS safe point should collect
-static def ps_stress_due(ctx: *PsCtx) -> bool:
+private def ps_stress_due(ctx: *PsCtx) -> bool:
     n: i64 = ps_gc_stress()
     if n == 0:
         return False
@@ -126,7 +126,7 @@ static def ps_stress_due(ctx: *PsCtx) -> bool:
     ctx->stress_tick = 0
     return True
 
-static def ps_new_block(min: usize) -> *PsBlock:
+private def ps_new_block(min: usize) -> *PsBlock:
     cap: usize = usize(PS_BLOCK_BYTES) if min < usize(PS_BLOCK_BYTES) else min
     b: *PsBlock = malloc(sizeof(PsBlock))
     if b == None:
@@ -339,7 +339,7 @@ def ps_forward(to: *PsBlock, p: *PsObj) -> *PsObj:
 # the references INSIDE one object. Every collected type is listed here, and a
 # type that gains a reference field gains a line here — the one place the
 # collector has to learn about a new type.
-static def ps_scan_object(to: *PsBlock, o: *PsObj):
+private def ps_scan_object(to: *PsBlock, o: *PsObj):
     match o->ty:
         case PS_TY_STR:
             # the bytes are inline (51.2); what CAN be inside is the offset

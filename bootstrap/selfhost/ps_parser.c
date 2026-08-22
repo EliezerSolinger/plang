@@ -1431,9 +1431,9 @@ static PsStmt *PsP_parse_match(PsP *self);
 
 static PsStmt *PsP_parse_try(PsP *self);
 
-static PsFunc *PsP_parse_func(PsP *self, int is_static, int is_async, const char *owner);
+static PsFunc *PsP_parse_func(PsP *self, int no_recv, int is_async, const char *owner);
 
-static PsFunc *PsP_parse_func_head(PsP *self, int is_static, int is_async, const char *owner);
+static PsFunc *PsP_parse_func_head(PsP *self, int no_recv, int is_async, const char *owner);
 
 static PsDecl *PsP_parse_trait(PsP *self);
 
@@ -2893,11 +2893,12 @@ static void PsP_parse_decorators(PsP *self, Vec_pPsExpr *into) {
     }
 }
 
-static PsFunc *PsP_parse_func_head(PsP *self, int is_static, int is_async, const char *owner) {
+static PsFunc *PsP_parse_func_head(PsP *self, int no_recv, int is_async, const char *owner) {
     Pos pos = PsP_expect(self, TK_DEF, "def")->pos;
     PsFunc *f = Arena_alloc(self->a, sizeof(PsFunc));
     f->pos = pos;
-    f->is_static = is_static;
+    f->is_smethod = no_recv && owner != NULL;
+    f->is_private = no_recv && owner == NULL;
     f->is_async = is_async;
     f->owner = owner;
     f->is_method = owner != NULL;
@@ -2956,8 +2957,8 @@ static PsFunc *PsP_parse_func_head(PsP *self, int is_static, int is_async, const
     return f;
 }
 
-static PsFunc *PsP_parse_func(PsP *self, int is_static, int is_async, const char *owner) {
-    PsFunc *f = PsP_parse_func_head(self, is_static, is_async, owner);
+static PsFunc *PsP_parse_func(PsP *self, int no_recv, int is_async, const char *owner) {
+    PsFunc *f = PsP_parse_func_head(self, no_recv, is_async, owner);
     PsP_expect(self, TK_COLON, "def");
     PsP_expect(self, TK_NEWLINE, "def");
     PsP_expect(self, TK_INDENT, "def");
@@ -3353,11 +3354,14 @@ static void ps_const_if_block(PsP *p, Vec_pPsDecl *decls, Vec_pPsStmt *top, Aren
             }
             continue;
         }
-        if (PsP_at(p, TK_STATIC)) {
+        if (PsP_at(p, TK_STATIC) || PsP_at(p, TK_PRIVATE)) {
+            if (PsP_at(p, TK_STATIC)) {
+                fatal_at(p->file, PsP_pk(p)->pos, "'static' no longer spells module privacy: write 'private' (inside a struct it still marks a static method)");
+            }
             PsP_adv(p);
             int sa = PsP_accept(p, TK_ASYNC);
             PsDecl *sd = ps_decl(a, PD_FUNC, PsP_pk(p)->pos);
-            sd->is_static = 1;
+            sd->is_private = 1;
             sd->func = PsP_parse_func(p, 1, sa, NULL);
             sd->name = sd->func->name;
             if (keep) {
@@ -3418,7 +3422,7 @@ PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
         Vec_pPsExpr_init(&decs);
         if (PsP_at(&p, TK_AT)) {
             PsP_parse_decorators(&p, &decs);
-            if (!PsP_at(&p, TK_DEF) && !PsP_at(&p, TK_ASYNC) && !PsP_at(&p, TK_STATIC)) {
+            if (!PsP_at(&p, TK_DEF) && !PsP_at(&p, TK_ASYNC) && !PsP_at(&p, TK_STATIC) && !PsP_at(&p, TK_PRIVATE)) {
                 fatal_at(file, PsP_pk(&p)->pos, "a decorator has to be followed by a def");
             }
         }
@@ -3466,11 +3470,15 @@ PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
                 Vec_pPsDecl_push(&decls, afd);
                 break;
             }
-            case TK_STATIC: {
+            case TK_STATIC:
+            case TK_PRIVATE: {
+                if (PsP_at(&p, TK_STATIC)) {
+                    fatal_at(p.file, PsP_pk(&p)->pos, "'static' no longer spells module privacy: write 'private' (inside a struct it still marks a static method)");
+                }
                 PsP_adv(&p);
                 int sasync = PsP_accept(&p, TK_ASYNC);
                 PsDecl *sfd = ps_decl(a, PD_FUNC, PsP_pk(&p)->pos);
-                sfd->is_static = 1;
+                sfd->is_private = 1;
                 sfd->func = PsP_parse_func(&p, 1, sasync, NULL);
                 sfd->func->decorators = decs.data;
                 sfd->func->ndecorators = decs.len;

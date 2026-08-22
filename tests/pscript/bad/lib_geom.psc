@@ -11,5 +11,5 @@ def area(w: float, h: float) -> float:
     return w * h
 
 
-static def hidden() -> int:
+private def hidden() -> int:
     return 1

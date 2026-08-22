@@ -1770,7 +1770,7 @@ void Sugg_feed(Sugg *self, const char *cand) {
 
 const char *builtins[50] = {"int", "char", "float", "double", "void", "bool", "long", "short", "unsigned", "signed", "va_list", "__builtin_va_list", "__int128", "__int128_t", "__uint128_t", "_Float16", "_Float32", "_Float32x", "_Float64", "_Float64x", "_Float128", "_Decimal32", "_Decimal64", "_Decimal128", "size_t", "ssize_t", "ptrdiff_t", "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "intptr_t", "uintptr_t", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "usize", "isize", NULL};
 
-const char *INLINE_RUNTIME_SRC = "static def __plang_strcmp(a: const *char, b: const *char) -> i32:\n    i: usize = 0\n    while a[i] != '\\0' and a[i] == b[i]:\n        i += 1\n    return i32(u8(a[i])) - i32(u8(b[i]))\n";
+const char *INLINE_RUNTIME_SRC = "private def __plang_strcmp(a: const *char, b: const *char) -> i32:\n    i: usize = 0\n    while a[i] != '\\0' and a[i] == b[i]:\n        i += 1\n    return i32(u8(a[i])) - i32(u8(b[i]))\n";
 
 const char *cpp_capture_ex(Arena *a, const char *cpp_cmd, const char *flags, const char *path, int is_sys, const char *dir) {
     const char *cpp = (cpp_cmd != NULL ? cpp_cmd : "cc");

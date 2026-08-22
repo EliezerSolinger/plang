@@ -39,7 +39,7 @@ const LIMIT = 64
 shared counter: int = 0
 
 
-static def helper(in p: Point, scale: float = 1.0, *rest: list<int>) -> float:
+private def helper(in p: Point, scale: float = 1.0, *rest: list<int>) -> float:
     return p.x * scale
 
 

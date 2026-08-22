@@ -45,13 +45,13 @@ import "../stl/vec.ph"
 # 46.4: `assert` is strippable by a build flag, the way Python's `-O` strips it.
 # The switch lives here rather than in the statement lowering so that ONE place
 # decides, and the statement lowering stays about the shape of the check.
-static PS_STRIP_ASSERTS: bool = False
+private PS_STRIP_ASSERTS: bool = False
 
 # 34.2/15.2: a frame that names its function is what a stack trace is made of.
 # A function with nothing collected in it has NO frame (the leaf optimisation
 # 49.4 left as a note), so it cannot be named — and with this on, every pscript
 # function gets one anyway, at the price of a push and a pop per call.
-static PS_FULL_TRACE: bool = False
+private PS_FULL_TRACE: bool = False
 
 def ps_lower_config(strip_asserts: bool, full_trace: bool):
     PS_STRIP_ASSERTS = strip_asserts
@@ -59,30 +59,30 @@ def ps_lower_config(strip_asserts: bool, full_trace: bool):
 
 
 def tuple_is_pure(t: *PsType) -> bool
-static def is_addressable(e: *Expr) -> bool
-static def borrowable(e: *Expr) -> bool
-static def ps_is_const_init(e: *PsExpr) -> bool
-static def block_uses(b: *PsBlock, name: const *char) -> bool
-static def expr_uses(e: *PsExpr, name: const *char) -> bool
-static def opt_is_ref(t: *PsType) -> bool
+private def is_addressable(e: *Expr) -> bool
+private def borrowable(e: *Expr) -> bool
+private def ps_is_const_init(e: *PsExpr) -> bool
+private def block_uses(b: *PsBlock, name: const *char) -> bool
+private def expr_uses(e: *PsExpr, name: const *char) -> bool
+private def opt_is_ref(t: *PsType) -> bool
 def ps_cleanup_flag(a: *Arena, pos: Pos) -> const *char
-static def ab_defer(ref B: AsyncB, s: *PsStmt)
-static def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos)
-static def ab_with(ref B: AsyncB, s: *PsStmt)
-static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32
-static def sh_mangle(L: *PsLow, t: *PsType) -> const *char
-static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
-static def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
-static def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr
-static def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl
-static def is_scalar_pname(n: const *char) -> bool
-static def zero_pos() -> Pos
-static def starts_with(s: const *char, p: const *char) -> bool
-static def ps_lower_binop(op: i32) -> i32
-static def ps_cname(a: *Arena, name: const *char) -> const *char
-static def vt_struct_name(a: *Arena, td: *PsDecl) -> const *char
-static def vt_value_name(a: *Arena, td: *PsDecl, rd: *PsDecl) -> const *char
-static def vt_thunk_name(a: *Arena, td: *PsDecl, rd: *PsDecl, m: *PsFunc) -> const *char
+private def ab_defer(ref B: AsyncB, s: *PsStmt)
+private def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos)
+private def ab_with(ref B: AsyncB, s: *PsStmt)
+private def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32
+private def sh_mangle(L: *PsLow, t: *PsType) -> const *char
+private def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
+private def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
+private def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr
+private def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl
+private def is_scalar_pname(n: const *char) -> bool
+private def zero_pos() -> Pos
+private def starts_with(s: const *char, p: const *char) -> bool
+private def ps_lower_binop(op: i32) -> i32
+private def ps_cname(a: *Arena, name: const *char) -> const *char
+private def vt_struct_name(a: *Arena, td: *PsDecl) -> const *char
+private def vt_value_name(a: *Arena, td: *PsDecl, rd: *PsDecl) -> const *char
+private def vt_thunk_name(a: *Arena, td: *PsDecl, rd: *PsDecl, m: *PsFunc) -> const *char
 
 CTX: const *char = "__ctx"
 
@@ -232,141 +232,141 @@ struct PsLow:
                         #   where hoisting a comprehension would change WHEN it runs
     in_main: bool       # lowering the implicit entry point (its exit differs)
 
-    static def ty(self: *PsLow, t: *PsType) -> *Type
-    static def expr(self: *PsLow, e: *PsExpr) -> *Expr
-    static def expr_raw(self: *PsLow, e: *PsExpr) -> *Expr
-    static def traits_by_name(self: *PsLow, name: const *char) -> *PsDecl
-    static def records_by_name(self: *PsLow, name: const *char) -> *PsDecl
-    static def dyn_call(self: *PsLow, e: *PsExpr) -> *Expr
-    static def block(self: *PsLow, b: *PsBlock) -> *Block
-    static def is_collected(self: *PsLow, t: *Type) -> bool
-    static def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block
-    static def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt
-    static def zero_struct(self: *PsLow, pos: Pos) -> *Expr
-    static def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos)
-    static def tuple_type_named(self: *PsLow, t: *Type) -> *PsType
-    static def value_slots(self: *PsLow, t: *Type) -> i32
-    static def value_slot_stores(self: *PsLow, out: *Vec<*Stmt>, arr: const *char, ref k: i32, base: *Expr, t: *Type, pos: Pos)
-    static def ident(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def async_field(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def global_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def is_gvar(self: *PsLow, name: const *char) -> bool
-    static def is_svar(self: *PsLow, name: const *char) -> bool
-    static def is_sdict(self: *PsLow, e: *PsExpr) -> bool
-    static def sd_arg(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr
-    static def sdict_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
-    static def shared_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def shared_lock_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def shared_lock(self: *PsLow, name: const *char, unlock: bool, pos: Pos) -> *Stmt
-    static def in_frame(self: *PsLow, name: const *char) -> bool
-    static def rn_find(self: *PsLow, name: const *char) -> const *char
-    static def rn_is_field(self: *PsLow, name: const *char) -> bool
-    static def rn_push(self: *PsLow, name: const *char, to: const *char, is_field: bool)
-    static def rn_pop(self: *PsLow)
-    static def vname(self: *PsLow, name: const *char) -> const *char
-    static def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def stmt(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def stmt_inner(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def call_rt(self: *PsLow, name: const *char, pos: Pos) -> *Expr
-    static def to_str(self: *PsLow, e: *PsExpr) -> *Expr
-    static def sig_lit(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
-    static def task_of_int(self: *PsLow, v: *Expr, pos: Pos) -> *Expr
-    static def pack_fields(self: *PsLow, out: *Vec<*Stmt>, lst: *Expr, base: *Expr, t: *PsType, pos: Pos, unpk: *Expr, be: *Expr, ref off: i64)
-    static def scalar_bytes(self: *PsLow, t: *PsType, pos: Pos) -> i64
-    static def str_lit(self: *PsLow, s: const *char, pos: Pos) -> *Expr
-    static def str_cat(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr
-    static def decl_named(self: *PsLow, name: const *char) -> *PsDecl
-    static def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc
-    static def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
-    static def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
-    static def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
-    static def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
-    static def guard(self: *PsLow, pos: Pos) -> *Stmt
-    static def loop_jump(self: *PsLow, target: i32, pos: Pos, is_break: bool) -> *Stmt
-    static def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos)
-    static def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt
-    static def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos)
-    static def push_arg(self: *PsLow, c: *Expr, e: *Expr)
-    static def ctx_arg(self: *PsLow, pos: Pos) -> *Expr
-    static def pos_args(self: *PsLow, c: *Expr, pos: Pos)
-    static def num(self: *PsLow, v: const *char, pos: Pos) -> *Expr
-    static def unary(self: *PsLow, e: *PsExpr) -> *Expr
-    static def binary(self: *PsLow, e: *PsExpr) -> *Expr
-    static def binary_raw(self: *PsLow, e: *PsExpr) -> *Expr
-    static def rt2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr
-    static def rtf2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr
-    static def int_op(self: *PsLow, e: *PsExpr, iname: const *char, uname: const *char) -> *Expr
-    static def fitw_wrap(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
-    static def as_f64(self: *PsLow, e: *PsExpr) -> *Expr
-    static def as_u64(self: *PsLow, e: *PsExpr) -> *Expr
-    static def set_op(self: *PsLow, e: *PsExpr, op: i32) -> *Expr
-    static def call(self: *PsLow, e: *PsExpr) -> *Expr
-    static def convert(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
-    static def convert_width(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
-    static def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt
-    static def lower_try(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def lower_str_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def lower_iter_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos)
-    static def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt
-    static def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def lower_type_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
-    static def is_record(self: *PsLow, name: const *char) -> bool
-    static def is_pstruct(self: *PsLow, name: const *char) -> bool
-    static def find_ps_func(self: *PsLow, name: const *char) -> *PsFunc
-    static def find_ps_method(self: *PsLow, rt: *PsType, name: const *char) -> *PsFunc
-    static def param_type(self: *PsLow, name: const *char, i: i32) -> *PsType
-    static def param_is_in(self: *PsLow, name: const *char, i: i32) -> bool
-    static def in_arg(self: *PsLow, v: *Expr, is_in: bool, t: *PsType, pos: Pos) -> *Expr
-    static def byref_arg(self: *PsLow, v: *Expr, kind: i32, pos: Pos) -> *Expr
-    static def addr_arg(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, kw: bool) -> *Expr
-    static def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr
-    static def chr(self: *PsLow, e: *PsExpr, pos: Pos) -> *Expr
-    static def tuple_record(self: *PsLow, t: *PsType) -> const *char
-    static def option_record(self: *PsLow, inner: *PsType) -> const *char
-    static def reprad_name(self: *PsLow, t: *PsType) -> const *char
-    static def tuptrace_name(self: *PsLow, t: *PsType) -> const *char
-    static def tuptrace_need(self: *PsLow, t: *PsType) -> const *char
-    static def with_etrace(self: *PsLow, mk: *Expr, et: *PsType, pos: Pos) -> *Expr
-    static def with_vtrace(self: *PsLow, mk: *Expr, vt: *PsType, pos: Pos) -> *Expr
-    static def reprad_need(self: *PsLow, t: *PsType, depth: i32)
-    static def reprad_add(self: *PsLow, t: *PsType, depth: i32)
-    static def elem_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
-    static def elem_at(self: *PsLow, lst: *Expr, idx: *Expr, et: *PsType, pos: Pos) -> *Expr
-    static def dict_new(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
-    static def key_ptr(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr
-    static def slot_val(self: *PsLow, slot: *Expr, vt: *PsType, pos: Pos) -> *Expr
-    static def coerce(self: *PsLow, want: *PsType, e: *PsExpr) -> *Expr
-    static def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr
-    static def is_trivial(self: *PsLow, e: *PsExpr) -> bool
-    static def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>
-    static def is_collected_ps(self: *PsLow, t: *PsType) -> bool
-    static def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr
-    static def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr
-    static def lowered_ty(self: *PsLow, e: *PsExpr) -> *PsType
-    static def once(self: *PsLow, e: *PsExpr, out assign: *Expr) -> *Expr
-    static def with_pre(self: *PsLow, assign: *Expr, body: *Expr, pos: Pos) -> *Expr
-    static def comma2(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr
-    static def push_expr_stmt(self: *PsLow, out: *Vec<*Stmt>, e: *Expr, pos: Pos)
-    static def mk_block(self: *PsLow, v: *Vec<*Stmt>) -> *Block
-    static def bind_once_ps(self: *PsLow, e: *PsExpr, pos: Pos) -> *PsExpr
-    static def none_of(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
-    static def some_of(self: *PsLow, t: *PsType, v: *Expr, pos: Pos) -> *Expr
-    static def opt_present(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr
-    static def opt_value(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr
-    static def zero_val(self: *PsLow, t: *Type, pos: Pos) -> *Expr
-    static def tuple_name(self: *PsLow, t: *PsType) -> const *char
-    static def mangle_type(self: *PsLow, b: *StrBuf, t: *PsType)
-    static def fill_param(self: *PsLow, dst: *Param, src: *PsParam)
+    private def ty(self: *PsLow, t: *PsType) -> *Type
+    private def expr(self: *PsLow, e: *PsExpr) -> *Expr
+    private def expr_raw(self: *PsLow, e: *PsExpr) -> *Expr
+    private def traits_by_name(self: *PsLow, name: const *char) -> *PsDecl
+    private def records_by_name(self: *PsLow, name: const *char) -> *PsDecl
+    private def dyn_call(self: *PsLow, e: *PsExpr) -> *Expr
+    private def block(self: *PsLow, b: *PsBlock) -> *Block
+    private def is_collected(self: *PsLow, t: *Type) -> bool
+    private def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block
+    private def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt
+    private def zero_struct(self: *PsLow, pos: Pos) -> *Expr
+    private def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos)
+    private def tuple_type_named(self: *PsLow, t: *Type) -> *PsType
+    private def value_slots(self: *PsLow, t: *Type) -> i32
+    private def value_slot_stores(self: *PsLow, out: *Vec<*Stmt>, arr: const *char, ref k: i32, base: *Expr, t: *Type, pos: Pos)
+    private def ident(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def async_field(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def global_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def is_gvar(self: *PsLow, name: const *char) -> bool
+    private def is_svar(self: *PsLow, name: const *char) -> bool
+    private def is_sdict(self: *PsLow, e: *PsExpr) -> bool
+    private def sd_arg(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr
+    private def sdict_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
+    private def shared_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def shared_lock_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def shared_lock(self: *PsLow, name: const *char, unlock: bool, pos: Pos) -> *Stmt
+    private def in_frame(self: *PsLow, name: const *char) -> bool
+    private def rn_find(self: *PsLow, name: const *char) -> const *char
+    private def rn_is_field(self: *PsLow, name: const *char) -> bool
+    private def rn_push(self: *PsLow, name: const *char, to: const *char, is_field: bool)
+    private def rn_pop(self: *PsLow)
+    private def vname(self: *PsLow, name: const *char) -> const *char
+    private def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def stmt(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def stmt_inner(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def call_rt(self: *PsLow, name: const *char, pos: Pos) -> *Expr
+    private def to_str(self: *PsLow, e: *PsExpr) -> *Expr
+    private def sig_lit(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
+    private def task_of_int(self: *PsLow, v: *Expr, pos: Pos) -> *Expr
+    private def pack_fields(self: *PsLow, out: *Vec<*Stmt>, lst: *Expr, base: *Expr, t: *PsType, pos: Pos, unpk: *Expr, be: *Expr, ref off: i64)
+    private def scalar_bytes(self: *PsLow, t: *PsType, pos: Pos) -> i64
+    private def str_lit(self: *PsLow, s: const *char, pos: Pos) -> *Expr
+    private def str_cat(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr
+    private def decl_named(self: *PsLow, name: const *char) -> *PsDecl
+    private def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc
+    private def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
+    private def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
+    private def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
+    private def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
+    private def guard(self: *PsLow, pos: Pos) -> *Stmt
+    private def loop_jump(self: *PsLow, target: i32, pos: Pos, is_break: bool) -> *Stmt
+    private def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos)
+    private def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt
+    private def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos)
+    private def push_arg(self: *PsLow, c: *Expr, e: *Expr)
+    private def ctx_arg(self: *PsLow, pos: Pos) -> *Expr
+    private def pos_args(self: *PsLow, c: *Expr, pos: Pos)
+    private def num(self: *PsLow, v: const *char, pos: Pos) -> *Expr
+    private def unary(self: *PsLow, e: *PsExpr) -> *Expr
+    private def binary(self: *PsLow, e: *PsExpr) -> *Expr
+    private def binary_raw(self: *PsLow, e: *PsExpr) -> *Expr
+    private def rt2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr
+    private def rtf2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr
+    private def int_op(self: *PsLow, e: *PsExpr, iname: const *char, uname: const *char) -> *Expr
+    private def fitw_wrap(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
+    private def as_f64(self: *PsLow, e: *PsExpr) -> *Expr
+    private def as_u64(self: *PsLow, e: *PsExpr) -> *Expr
+    private def set_op(self: *PsLow, e: *PsExpr, op: i32) -> *Expr
+    private def call(self: *PsLow, e: *PsExpr) -> *Expr
+    private def convert(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
+    private def convert_width(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
+    private def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt
+    private def lower_try(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_str_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_iter_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos)
+    private def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt
+    private def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_type_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def is_record(self: *PsLow, name: const *char) -> bool
+    private def is_pstruct(self: *PsLow, name: const *char) -> bool
+    private def find_ps_func(self: *PsLow, name: const *char) -> *PsFunc
+    private def find_ps_method(self: *PsLow, rt: *PsType, name: const *char) -> *PsFunc
+    private def param_type(self: *PsLow, name: const *char, i: i32) -> *PsType
+    private def param_is_in(self: *PsLow, name: const *char, i: i32) -> bool
+    private def in_arg(self: *PsLow, v: *Expr, is_in: bool, t: *PsType, pos: Pos) -> *Expr
+    private def byref_arg(self: *PsLow, v: *Expr, kind: i32, pos: Pos) -> *Expr
+    private def addr_arg(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, kw: bool) -> *Expr
+    private def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr
+    private def chr(self: *PsLow, e: *PsExpr, pos: Pos) -> *Expr
+    private def tuple_record(self: *PsLow, t: *PsType) -> const *char
+    private def option_record(self: *PsLow, inner: *PsType) -> const *char
+    private def reprad_name(self: *PsLow, t: *PsType) -> const *char
+    private def tuptrace_name(self: *PsLow, t: *PsType) -> const *char
+    private def tuptrace_need(self: *PsLow, t: *PsType) -> const *char
+    private def with_etrace(self: *PsLow, mk: *Expr, et: *PsType, pos: Pos) -> *Expr
+    private def with_vtrace(self: *PsLow, mk: *Expr, vt: *PsType, pos: Pos) -> *Expr
+    private def reprad_need(self: *PsLow, t: *PsType, depth: i32)
+    private def reprad_add(self: *PsLow, t: *PsType, depth: i32)
+    private def elem_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
+    private def elem_at(self: *PsLow, lst: *Expr, idx: *Expr, et: *PsType, pos: Pos) -> *Expr
+    private def dict_new(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
+    private def key_ptr(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr
+    private def slot_val(self: *PsLow, slot: *Expr, vt: *PsType, pos: Pos) -> *Expr
+    private def coerce(self: *PsLow, want: *PsType, e: *PsExpr) -> *Expr
+    private def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr
+    private def is_trivial(self: *PsLow, e: *PsExpr) -> bool
+    private def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>
+    private def is_collected_ps(self: *PsLow, t: *PsType) -> bool
+    private def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr
+    private def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr
+    private def lowered_ty(self: *PsLow, e: *PsExpr) -> *PsType
+    private def once(self: *PsLow, e: *PsExpr, out assign: *Expr) -> *Expr
+    private def with_pre(self: *PsLow, assign: *Expr, body: *Expr, pos: Pos) -> *Expr
+    private def comma2(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr
+    private def push_expr_stmt(self: *PsLow, out: *Vec<*Stmt>, e: *Expr, pos: Pos)
+    private def mk_block(self: *PsLow, v: *Vec<*Stmt>) -> *Block
+    private def bind_once_ps(self: *PsLow, e: *PsExpr, pos: Pos) -> *PsExpr
+    private def none_of(self: *PsLow, t: *PsType, pos: Pos) -> *Expr
+    private def some_of(self: *PsLow, t: *PsType, v: *Expr, pos: Pos) -> *Expr
+    private def opt_present(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr
+    private def opt_value(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr
+    private def zero_val(self: *PsLow, t: *Type, pos: Pos) -> *Expr
+    private def tuple_name(self: *PsLow, t: *PsType) -> const *char
+    private def mangle_type(self: *PsLow, b: *StrBuf, t: *PsType)
+    private def fill_param(self: *PsLow, dst: *Param, src: *PsParam)
 
     # ---------- types ----------
     # pscript's lattice onto P's. `str` is a POINTER to a collected object;
     # every other type here is a value, which is why v0 needs no shadow stack.
-    static def ty(self: *PsLow, t: *PsType) -> *Type:
+    private def ty(self: *PsLow, t: *PsType) -> *Type:
         if t == None:
             return ty_name(self->a, "void")
         match t->kind:
@@ -453,7 +453,7 @@ struct PsLow:
     # notices that a statement can ALLOCATE — which is what earns it a collector
     # poll afterwards. Named by prefix rather than by a list at each call site:
     # a new `ps_str_*` or `ps_fmt_*` helper is covered the day it is written.
-    static def call_rt(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def call_rt(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         c: *Expr = ex_new(self->a, EX_CALL, pos)
         c->lhs = ex_new(self->a, EX_IDENT, pos)
         c->lhs->text = name
@@ -461,7 +461,7 @@ struct PsLow:
             self->allocs = True
         return c
 
-    static def push_arg(self: *PsLow, c: *Expr, e: *Expr):
+    private def push_arg(self: *PsLow, c: *Expr, e: *Expr):
         c->args = realloc(c->args, usize(c->nargs + 1) * sizeof(*c->args))
         if c->args == None:
             fatal("out of memory")
@@ -472,7 +472,7 @@ struct PsLow:
     # point the context is a VALUE that lives on main's stack, so it goes in by
     # address; inside a lowered function it arrived as a pointer already and
     # passing its address would hand over one indirection too many.
-    static def ctx_arg(self: *PsLow, pos: Pos) -> *Expr:
+    private def ctx_arg(self: *PsLow, pos: Pos) -> *Expr:
         id: *Expr = ex_new(self->a, EX_IDENT, pos)
         id->text = CTX
         if not self->in_main:
@@ -484,7 +484,7 @@ struct PsLow:
 
     # the source position, passed to anything that can raise so the error says
     # where it happened (15.2)
-    static def pos_args(self: *PsLow, c: *Expr, pos: Pos):
+    private def pos_args(self: *PsLow, c: *Expr, pos: Pos):
         f: *Expr = ex_new(self->a, EX_STRING, pos)
         f->text = c_string_literal(self->a, self->file, strlen(self->file))
         self->push_arg(c, f)
@@ -492,12 +492,12 @@ struct PsLow:
         l->text = self->a->printf("%d", pos.line)
         self->push_arg(c, l)
 
-    static def num(self: *PsLow, v: const *char, pos: Pos) -> *Expr:
+    private def num(self: *PsLow, v: const *char, pos: Pos) -> *Expr:
         n: *Expr = ex_new(self->a, EX_NUMBER, pos)
         n->text = v
         return n
 
-    static def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr:
+    private def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr:
         if t == None or (t->kind == TY_NAME and strcmp(t->name, "void") == 0):
             return None
         if self->zret != None and t->kind == TY_NAME and not is_scalar_pname(t->name):
@@ -580,7 +580,7 @@ struct PsLow:
     # is unwinding, and waiting in the middle of an unwind would make the
     # cleanup itself a state of the machine. `close(2)` only takes long in
     # pathological cases, so the price is about zero.
-    static def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt:
+    private def close_stmt(self: *PsLow, name: const *char, t: *PsType, pos: Pos) -> *Stmt:
         k: PsTypeKind = t->kind if t != None else PT_UNKNOWN
         cl: *Expr = None
         if k == PT_NAME:
@@ -604,7 +604,7 @@ struct PsLow:
     # Every cleanup armed so far, newest first, each guarded by its own bit.
     # Called at the TRUE exits of a step function and nowhere else — a
     # suspension is not an exit, and that distinction is the whole point.
-    static def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos):
+    private def async_cleanup(self: *PsLow, out: *Vec<*Stmt>, pos: Pos):
         if self->in_cleanup:
             return
         self->in_cleanup = True
@@ -638,7 +638,7 @@ struct PsLow:
         self->in_cleanup = False
 
     # just one of them, by index: what the ordinary end of a `with` block runs
-    static def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos):
+    private def async_cleanup_one(self: *PsLow, out: *Vec<*Stmt>, i: i32, pos: Pos):
         if i < 0 or i >= self->nacl or self->in_cleanup:
             return
         self->in_cleanup = True
@@ -671,7 +671,7 @@ struct PsLow:
     # `break`/`continue` where the enclosing loop became STATES (50.1): the jump
     # is a state assignment plus `continue` of the machine's own `while (1)`.
     # A C `break` there would leave the switch and come back to the same state.
-    static def loop_jump(self: *PsLow, target: i32, pos: Pos, is_break: bool) -> *Stmt:
+    private def loop_jump(self: *PsLow, target: i32, pos: Pos, is_break: bool) -> *Stmt:
         if target < 0:
             return st_new(self->a, ST_BREAK if is_break else ST_CONTINUE, pos)
         blk: Vec<*Stmt>
@@ -699,7 +699,7 @@ struct PsLow:
         return st
 
     # `if ps_has_exc(&__ctx): return <nothing meaningful>` — the check of 49.2
-    static def guard(self: *PsLow, pos: Pos) -> *Stmt:
+    private def guard(self: *PsLow, pos: Pos) -> *Stmt:
         chk: *Expr = self->call_rt("ps_has_exc", pos)
         self->push_arg(chk, self->ctx_arg(pos))
         if self->try_flag != None:
@@ -799,7 +799,7 @@ struct PsLow:
 
     # `race` and `timeout` answer a NUMBER, and what the language awaits is a
     # task — so the number is wrapped in one that is already finished (36.2)
-    static def task_of_int(self: *PsLow, v: *Expr, pos: Pos) -> *Expr:
+    private def task_of_int(self: *PsLow, v: *Expr, pos: Pos) -> *Expr:
         c: *Expr = self->call_rt("ps_task_of_int", pos)
         self->push_arg(c, self->ctx_arg(pos))
         cv: *Expr = ex_new(self->a, EX_CAST, pos)
@@ -810,7 +810,7 @@ struct PsLow:
 
     # the descriptor a function value carries (29.3): the canonical spelling of
     # its type, which both sides of a narrowing write the same way
-    static def sig_lit(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
+    private def sig_lit(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
         lit: *Expr = ex_new(self->a, EX_STRING, pos)
         lit->text = self->a->printf("\"%s\"", ps_type_str(self->a, t))
         return lit
@@ -821,7 +821,7 @@ struct PsLow:
     # never reaches the bytes and nothing has to be zeroed when one is built.
     # A nested record is walked the same way; a fixed array is unrolled, because
     # its length is known at compile time.
-    static def pack_fields(self: *PsLow, out: *Vec<*Stmt>, lst: *Expr, base: *Expr, t: *PsType, pos: Pos, unpk: *Expr, be: *Expr, ref off: i64):
+    private def pack_fields(self: *PsLow, out: *Vec<*Stmt>, lst: *Expr, base: *Expr, t: *PsType, pos: Pos, unpk: *Expr, be: *Expr, ref off: i64):
         d: *PsDecl = self->decl_named(t->name) if t != None and t->kind == PT_NAME else None
         if d != None and d->kind == PD_RECORD:
             for i in range(d->nfields):
@@ -881,7 +881,7 @@ struct PsLow:
 
     # the number of bytes one scalar takes IN THE FORMAT. It has to be known
     # here, not by the C compiler, because the offsets are what `unpack` reads.
-    static def scalar_bytes(self: *PsLow, t: *PsType, pos: Pos) -> i64:
+    private def scalar_bytes(self: *PsLow, t: *PsType, pos: Pos) -> i64:
         if t == None:
             return 0
         if t->kind == PT_BOOL:
@@ -908,7 +908,7 @@ struct PsLow:
 
     # ---------- derived repr (44.3) ----------
     # a string LITERAL as the runtime wants it: the bytes, and how many
-    static def str_lit(self: *PsLow, s: const *char, pos: Pos) -> *Expr:
+    private def str_lit(self: *PsLow, s: const *char, pos: Pos) -> *Expr:
         c: *Expr = self->call_rt("ps_str_new", pos)
         lit: *Expr = ex_new(self->a, EX_STRING, pos)
         lit->text = self->a->printf("\"%s\"", s)
@@ -918,7 +918,7 @@ struct PsLow:
         self->allocs = True
         return c
 
-    static def str_cat(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
+    private def str_cat(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
         c: *Expr = self->call_rt("ps_str_concat", pos)
         self->push_arg(c, self->ctx_arg(pos))
         self->push_arg(c, a)
@@ -927,14 +927,14 @@ struct PsLow:
         return c
 
     # the declaration a type name stands for, whatever kind it is
-    static def decl_named(self: *PsLow, name: const *char) -> *PsDecl:
+    private def decl_named(self: *PsLow, name: const *char) -> *PsDecl:
         for i in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[i]
             if d->name != None and strcmp(d->name, name) == 0 and d->kind in {PD_RECORD, PD_STRUCT, PD_ENUM}:
                 return d
         return None
 
-    static def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc:
+    private def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc:
         if d == None:
             return None
         for i in range(d->nmethods):
@@ -950,7 +950,7 @@ struct PsLow:
     #
     # `depth` stops a struct that reaches itself: a reference can point back,
     # and a repr that recursed forever would be a compiler that hangs.
-    static def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
+    private def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
         d: *PsDecl = self->decl_named(t->name)
         if d == None:
             return None
@@ -1010,7 +1010,7 @@ struct PsLow:
     # 97: the repr of a CONTAINER — `[1, 2]`, `{'a': 1}`, `{1, 2}`. The runtime
     # walks the bytes and calls back for each element, because only here is it
     # known what an element IS.
-    static def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
+    private def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
         match t->kind:
             case PT_LIST, PT_ARRAY:
                 # an array has no header the runtime can walk, so it becomes a
@@ -1064,7 +1064,7 @@ struct PsLow:
 
     # one VALUE rendered: the scalars the runtime already formats, a string as
     # itself, and anything named goes back through repr_of
-    static def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
+    private def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
         if t == None:
             return None
         match t->kind:
@@ -1125,7 +1125,7 @@ struct PsLow:
                 return None
 
     # ---------- expressions ----------
-    static def to_str(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def to_str(self: *PsLow, e: *PsExpr) -> *Expr:
         v: *Expr = self->expr(e)
         if e->type == None:
             fatal_at(self->file, e->pos, "internal: expression without a type")
@@ -1178,7 +1178,7 @@ struct PsLow:
         self->push_arg(c, v)
         return c
 
-    static def expr(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def expr(self: *PsLow, e: *PsExpr) -> *Expr:
         v: *Expr = self->expr_raw(e)
         if e != None and (e == self->subst_key or e == self->subst_key2):
             # already bound to a temporary, and what is IN that temporary is the
@@ -1233,7 +1233,7 @@ struct PsLow:
         self->allocs = True
         return bx
 
-    static def expr_raw(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def expr_raw(self: *PsLow, e: *PsExpr) -> *Expr:
         # an operand already bound to a temporary for evaluation order: every
         # read of it finds the temporary, so it is evaluated exactly once
         if e == self->subst_key:
@@ -2105,7 +2105,7 @@ struct PsLow:
                 fatal_at(self->file, e->pos, "this expression does not reach the back end yet")
         return None
 
-    static def unary(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def unary(self: *PsLow, e: *PsExpr) -> *Expr:
         if e->op == TK_MINUS and e->type != None and e->type->kind == PT_INT:
             # negating the most negative integer overflows, and overflow raises;
             # a narrow width also range-checks the result back in (68.2)
@@ -2123,7 +2123,7 @@ struct PsLow:
     # a runtime call taking (ctx, lhs, rhs, file, line)
     # the same, for an operation whose operands are floats: the int side is
     # promoted here, which is the one implicit conversion the language has (32.1)
-    static def rtf2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr:
+    private def rtf2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr:
         c: *Expr = self->call_rt(name, e->pos)
         self->push_arg(c, self->ctx_arg(e->pos))
         self->push_arg(c, self->as_f64(e->lhs))
@@ -2136,7 +2136,7 @@ struct PsLow:
     # a narrow width computes in i64 (its operands always fit) and the RESULT
     # is range-checked back into the width, and the default int is what it
     # always was.
-    static def int_op(self: *PsLow, e: *PsExpr, iname: const *char, uname: const *char) -> *Expr:
+    private def int_op(self: *PsLow, e: *PsExpr, iname: const *char, uname: const *char) -> *Expr:
         t: *PsType = e->type
         if t != None and t->kind == PT_INT and t->uns and t->width == 64:
             return self->rt2(uname, e)
@@ -2145,7 +2145,7 @@ struct PsLow:
 
     # `ps_fitw(ctx, v, lo, hi, "u8", file, line)` around a narrow result — the
     # one check that keeps a u8 a u8 (68.2). The bounds are compile-time text.
-    static def fitw_wrap(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
+    private def fitw_wrap(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
         if t == None or t->kind != PT_INT or t->width == 0 or t->width == 64:
             return v
         c: *Expr = self->call_rt("ps_fitw", pos)
@@ -2168,7 +2168,7 @@ struct PsLow:
         self->raised = True
         return c
 
-    static def rt2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr:
+    private def rt2(self: *PsLow, name: const *char, e: *PsExpr) -> *Expr:
         c: *Expr = self->call_rt(name, e->pos)
         self->push_arg(c, self->ctx_arg(e->pos))
         self->push_arg(c, self->expr(e->lhs))
@@ -2177,7 +2177,7 @@ struct PsLow:
         self->raised = True
         return c
 
-    static def binary(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def binary(self: *PsLow, e: *PsExpr) -> *Expr:
         # Left to right, and BOTH operands, not just the left one. Binding the left alone fixes the
         # ORDER — which is what this was written for — and leaves the collector
         # hazard untouched: `s + f(x)` loads `s` into a register, `f` allocates,
@@ -2232,7 +2232,7 @@ struct PsLow:
             return self->comma2(asg, r, e->pos)
         return self->binary_raw(e)
 
-    static def binary_raw(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def binary_raw(self: *PsLow, e: *PsExpr) -> *Expr:
         # `x != None` / `x == None` — the presence test, whatever the option's
         # representation is
         if e->op in {TK_EQ, TK_NE}:
@@ -2406,7 +2406,7 @@ struct PsLow:
         return b
 
     # 104: um operador de conjunto vira uma chamada com o código da operação
-    static def set_op(self: *PsLow, e: *PsExpr, op: i32) -> *Expr:
+    private def set_op(self: *PsLow, e: *PsExpr, op: i32) -> *Expr:
         c: *Expr = self->call_rt("ps_set_op", e->pos)
         self->push_arg(c, self->ctx_arg(e->pos))
         self->push_arg(c, self->expr(e->lhs))
@@ -2415,13 +2415,13 @@ struct PsLow:
         self->allocs = True
         return c
 
-    static def as_u64(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def as_u64(self: *PsLow, e: *PsExpr) -> *Expr:
         c: *Expr = ex_new(self->a, EX_CAST, e->pos)
         c->cast_type = ty_name(self->a, "u64")
         c->lhs = self->expr(e)
         return c
 
-    static def as_f64(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def as_f64(self: *PsLow, e: *PsExpr) -> *Expr:
         v: *Expr = self->expr(e)
         if e->type != None and e->type->kind == PT_FLOAT:
             return v
@@ -2430,7 +2430,7 @@ struct PsLow:
         c->lhs = v
         return c
 
-    static def call(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def call(self: *PsLow, e: *PsExpr) -> *Expr:
         if e->is_dyn:
             return self->dyn_call(e)
         # `v.dot(w)` — a method call. P has methods on a record too, so this is
@@ -3949,7 +3949,7 @@ struct PsLow:
     # CHECKED: out of range raises. The target decides the machinery: a narrow
     # width fits through ps_fitw, u64 crosses through its own gates, f32 is a
     # plain C cast because every f64 value has a nearest f32.
-    static def convert_width(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr:
+    private def convert_width(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr:
         src: *PsExpr = e->args[0]
         st: *PsType = src->type
         tt: *PsType = e->type
@@ -4002,7 +4002,7 @@ struct PsLow:
             v9 = self->expr(src)
         return self->fitw_wrap(v9, tt, e->pos)
 
-    static def convert(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr:
+    private def convert(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr:
         src: *PsExpr = e->args[0]
         sk: PsTypeKind = src->type->kind if src->type != None else PT_UNKNOWN
         if strcmp(name, "int") == 0:
@@ -4058,7 +4058,7 @@ struct PsLow:
     # one P parameter from one pscript parameter. `in x` in P is SUGAR over a
     # pointer: the real type is `const *T` and the body writes `x` with no star,
     # so the lowering builds both halves exactly as P's parser does.
-    static def fill_param(self: *PsLow, dst: *Param, src: *PsParam):
+    private def fill_param(self: *PsLow, dst: *Param, src: *PsParam):
         dst->name = ps_cname(self->a, src->name)
         dst->type = self->ty(src->type)
         dst->pos = src->pos
@@ -4085,7 +4085,7 @@ struct PsLow:
     # Evaluates `e` once into a hidden variable and returns (assignment, name).
     # The DECLARATION goes before the statement; the assignment stays where the
     # expression was, so a temp inside a loop is filled every turn.
-    static def once(self: *PsLow, e: *PsExpr, out assign: *Expr) -> *Expr:
+    private def once(self: *PsLow, e: *PsExpr, out assign: *Expr) -> *Expr:
         if is_ps_designator(e):
             assign = None
             return self->expr(e)
@@ -4108,14 +4108,14 @@ struct PsLow:
         return id
 
     # the statements collected in a vector, as a block
-    static def mk_block(self: *PsLow, v: *Vec<*Stmt>) -> *Block:
+    private def mk_block(self: *PsLow, v: *Vec<*Stmt>) -> *Block:
         b: *Block = self->a->alloc(sizeof(Block))
         b->stmts = v->data
         b->n = v->len
         return b
 
     # an expression evaluated for its EFFECT, as its own statement
-    static def push_expr_stmt(self: *PsLow, out: *Vec<*Stmt>, e: *Expr, pos: Pos):
+    private def push_expr_stmt(self: *PsLow, out: *Vec<*Stmt>, e: *Expr, pos: Pos):
         st: *Stmt = st_new(self->a, ST_EXPR, pos)
         st->expr = e
         out->push(st)
@@ -4129,7 +4129,7 @@ struct PsLow:
     # value_first uses — because two buckets would be two orders: an index
     # bound in one and the value computed in the other read the index before
     # it was set.
-    static def bind_once_ps(self: *PsLow, e: *PsExpr, pos: Pos) -> *PsExpr:
+    private def bind_once_ps(self: *PsLow, e: *PsExpr, pos: Pos) -> *PsExpr:
         low: *Expr = None
         if is_ps_designator(e):
             low = self->expr(e)
@@ -4147,14 +4147,14 @@ struct PsLow:
         r->type = e->type
         return r
 
-    static def comma2(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
+    private def comma2(self: *PsLow, a: *Expr, b: *Expr, pos: Pos) -> *Expr:
         c: *Expr = ex_new(self->a, EX_COMMA, pos)
         c->lhs = a
         c->rhs = b
         c->parened = True
         return c
 
-    static def with_pre(self: *PsLow, assign: *Expr, body: *Expr, pos: Pos) -> *Expr:
+    private def with_pre(self: *PsLow, assign: *Expr, body: *Expr, pos: Pos) -> *Expr:
         if assign == None:
             return body
         c: *Expr = ex_new(self->a, EX_COMMA, pos)
@@ -4179,7 +4179,7 @@ struct PsLow:
     # the expression can reach it; a MODULE variable does NOT — a call sitting
     # next to it may write exactly that name, and then the order decides the
     # answer (which C leaves unspecified and Python fixes left to right).
-    static def is_trivial(self: *PsLow, e: *PsExpr) -> bool:
+    private def is_trivial(self: *PsLow, e: *PsExpr) -> bool:
         if e == None:
             return True
         match e->kind:
@@ -4196,7 +4196,7 @@ struct PsLow:
     # expression had: a record used as a `dyn` is boxed (66.3) and a value used
     # as an `any` is too (39.2). A temporary that holds one has to be declared
     # with the type of what it will actually hold.
-    static def lowered_ty(self: *PsLow, e: *PsExpr) -> *PsType:
+    private def lowered_ty(self: *PsLow, e: *PsExpr) -> *PsType:
         if e == None:
             return None
         if e->box_to != None:
@@ -4213,7 +4213,7 @@ struct PsLow:
     # which is what keeps the order.
     # the `nonlocal` declarations this function accumulated, in front of its
     # body, so the function's own Henderson frame is the one that holds them
-    static def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>:
+    private def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>:
         outv: Vec<*Stmt>
         outv.init()
         for i in range(self->nl_decls.len):
@@ -4228,14 +4228,14 @@ struct PsLow:
     # Is a pscript type one the collector owns? A bare `None` has no type of
     # its own (its option carries no inner), and asking `ty()` for one builds an
     # option record out of nothing — so it is answered here rather than there.
-    static def is_collected_ps(self: *PsLow, t: *PsType) -> bool:
+    private def is_collected_ps(self: *PsLow, t: *PsType) -> bool:
         if t == None:
             return False
         if t->kind == PT_OPT and t->inner == None:
             return False
         return self->is_collected(self->ty(t))
 
-    static def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr:
+    private def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr:
         name: const *char = self->a->printf("__ord%d", self->tmp_ctr)
         self->tmp_ctr += 1
         d: *Stmt = st_new(self->a, ST_VAR, pos)
@@ -4251,7 +4251,7 @@ struct PsLow:
         pre = asg if pre == None else self->comma2(pre, asg, pos)
         return self->ident(name, pos)
 
-    static def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr:
+    private def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr:
         out: **Expr = self->a->alloc(usize(n + 1) * sizeof(*out))
         last_effect: i32 = -1
         neffect: i32 = 0
@@ -4310,7 +4310,7 @@ struct PsLow:
     #
     # Only when the value really can allocate — the flag says so, and the
     # ordinary case emits nothing extra.
-    static def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr:
+    private def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr:
         prev: bool = self->allocs
         self->allocs = False
         v: *Expr = self->coerce(want, e)
@@ -4330,7 +4330,7 @@ struct PsLow:
     # A `T` where a `T?` is wanted gets wrapped here. Non-null is the default
     # (9.4), so the conversion only ever goes this way, and sema already said it
     # is allowed — this is only the code for it.
-    static def coerce(self: *PsLow, want: *PsType, e: *PsExpr) -> *Expr:
+    private def coerce(self: *PsLow, want: *PsType, e: *PsExpr) -> *Expr:
         v: *Expr = self->expr(e)
         if want == None or want->kind != PT_OPT or want->inner == None:
             return v
@@ -4344,14 +4344,14 @@ struct PsLow:
 
     # the declaration behind a resolved name. The lowering does not keep tables
     # of its own: the module is right here and these are asked for once per box.
-    static def traits_by_name(self: *PsLow, name: const *char) -> *PsDecl:
+    private def traits_by_name(self: *PsLow, name: const *char) -> *PsDecl:
         for i in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[i]
             if d->kind == PD_TRAIT and strcmp(d->name, name) == 0:
                 return d
         return None
 
-    static def records_by_name(self: *PsLow, name: const *char) -> *PsDecl:
+    private def records_by_name(self: *PsLow, name: const *char) -> *PsDecl:
         for i in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[i]
             if (d->kind == PD_RECORD or d->kind == PD_STRUCT) and strcmp(d->name, name) == 0:
@@ -4361,7 +4361,7 @@ struct PsLow:
     # `p.show()` on a `dyn` (66.3): through the vtable the box carries. The
     # receiver is read TWICE — once for the vtable, once for the value — so it
     # is bound to a temporary first; anything else would evaluate it twice.
-    static def dyn_call(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def dyn_call(self: *PsLow, e: *PsExpr) -> *Expr:
         recv: *PsExpr = e->lhs->lhs
         td5: *PsDecl = self->traits_by_name(e->lhs->type->name)
         rv: *Expr = self->expr(recv)
@@ -4404,7 +4404,7 @@ struct PsLow:
     # ---------- lists ----------
     # `sizeof(T)` of the ELEMENT, as a P expression the target evaluates. The
     # element is stored inline and by value (52.1), so this is the real stride.
-    static def elem_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
+    private def elem_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
         sz: *Expr = self->call_rt("sizeof", pos)
         tr: *Expr = ex_new(self->a, EX_TYPEREF, pos)
         tr->cast_type = self->ty(t)
@@ -4415,7 +4415,7 @@ struct PsLow:
         return cast
 
     # `((T*)ps_list_base(l))[i]` — the typed element at a checked index
-    static def elem_at(self: *PsLow, lst: *Expr, idx: *Expr, et: *PsType, pos: Pos) -> *Expr:
+    private def elem_at(self: *PsLow, lst: *Expr, idx: *Expr, et: *PsType, pos: Pos) -> *Expr:
         base: *Expr = self->call_rt("ps_list_base", pos)
         self->push_arg(base, lst)
         cast: *Expr = ex_new(self->a, EX_CAST, pos)
@@ -4429,7 +4429,7 @@ struct PsLow:
     # ---------- dicts and sets ----------
     # `set<T>` is a dict with a zero-sized value, so one implementation serves
     # both and the collector has one place to learn about.
-    static def dict_new(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
+    private def dict_new(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
         isset: bool = t->kind == PT_SET
         kt: *PsType = t->inner if isset else t->key
         c: *Expr = self->call_rt("ps_dict_new", pos)
@@ -4447,7 +4447,7 @@ struct PsLow:
 
     # a key has to be addressable, because the runtime takes it by pointer: it
     # is copied on insert (38.1) and the copy is what the table owns
-    static def key_ptr(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr:
+    private def key_ptr(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr:
         name: const *char = self->a->printf("__key%d", self->tmp_ctr)
         self->tmp_ctr += 1
         d: *Stmt = st_new(self->a, ST_VAR, pos)
@@ -4466,7 +4466,7 @@ struct PsLow:
         return self->comma2(asg, cast, pos)
 
     # `*(V*)<slot expression>`
-    static def slot_val(self: *PsLow, slot: *Expr, vt: *PsType, pos: Pos) -> *Expr:
+    private def slot_val(self: *PsLow, slot: *Expr, vt: *PsType, pos: Pos) -> *Expr:
         cast: *Expr = ex_new(self->a, EX_CAST, pos)
         cast->cast_type = ty_ptr(self->a, self->ty(vt))
         cast->lhs = slot
@@ -4482,7 +4482,7 @@ struct PsLow:
     # from the type, so the same type asked for twice is the same function.
     # 98.5: the name of the walk-into-this-element function, and the note that
     # one is needed. Deduped by the mangled type, like the repr adapter.
-    static def tuptrace_name(self: *PsLow, t: *PsType) -> const *char:
+    private def tuptrace_name(self: *PsLow, t: *PsType) -> const *char:
         b: StrBuf = {0}
         b.puts("__ps_tuptrace_")
         self->mangle_type(&b, t)
@@ -4490,7 +4490,7 @@ struct PsLow:
         b.deinit()
         return n
 
-    static def tuptrace_need(self: *PsLow, t: *PsType) -> const *char:
+    private def tuptrace_need(self: *PsLow, t: *PsType) -> const *char:
         if t == None or t->kind != PT_TUPLE or tuple_is_pure(t):
             return None
         n: const *char = self->tuptrace_name(t)
@@ -4505,7 +4505,7 @@ struct PsLow:
     # `l = ps_list_etrace(ps_list_new(...), __ps_tuptrace_T)` — said in one
     # expression, at the place the container is built, because that is the only
     # place the element's shape is known.
-    static def with_etrace(self: *PsLow, mk: *Expr, et: *PsType, pos: Pos) -> *Expr:
+    private def with_etrace(self: *PsLow, mk: *Expr, et: *PsType, pos: Pos) -> *Expr:
         n: const *char = self->tuptrace_need(et)
         if n == None:
             return mk
@@ -4516,7 +4516,7 @@ struct PsLow:
         self->push_arg(c, fn)
         return c
 
-    static def with_vtrace(self: *PsLow, mk: *Expr, vt: *PsType, pos: Pos) -> *Expr:
+    private def with_vtrace(self: *PsLow, mk: *Expr, vt: *PsType, pos: Pos) -> *Expr:
         n: const *char = self->tuptrace_need(vt)
         if n == None:
             return mk
@@ -4527,7 +4527,7 @@ struct PsLow:
         self->push_arg(c, fn)
         return c
 
-    static def reprad_name(self: *PsLow, t: *PsType) -> const *char:
+    private def reprad_name(self: *PsLow, t: *PsType) -> const *char:
         b: StrBuf = {0}
         b.puts("__ps_reprad_")
         self->mangle_type(&b, t)
@@ -4538,7 +4538,7 @@ struct PsLow:
     # Registers what a repr of this type will need, BEFORE any body is lowered:
     # C wants the prototype first, and the set is only knowable by walking the
     # types. Bounded by the same depth the static expansion of a record uses.
-    static def reprad_need(self: *PsLow, t: *PsType, depth: i32):
+    private def reprad_need(self: *PsLow, t: *PsType, depth: i32):
         if t == None or depth > 4:
             return
         match t->kind:
@@ -4557,7 +4557,7 @@ struct PsLow:
             case _:
                 pass
 
-    static def reprad_add(self: *PsLow, t: *PsType, depth: i32):
+    private def reprad_add(self: *PsLow, t: *PsType, depth: i32):
         if t == None:
             return
         n: const *char = self->reprad_name(t)
@@ -4567,7 +4567,7 @@ struct PsLow:
         self->reprads.push(t)
         self->reprad_need(t, depth + 1)
 
-    static def option_record(self: *PsLow, inner: *PsType) -> const *char:
+    private def option_record(self: *PsLow, inner: *PsType) -> const *char:
         b: StrBuf = {0}
         b.puts("__PsOpt_")
         self->mangle_type(&b, inner)
@@ -4601,7 +4601,7 @@ struct PsLow:
         return name
 
     # the empty option of type `t`
-    static def none_of(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
+    private def none_of(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
         if t == None or t->inner == None or opt_is_ref(t->inner):
             return ex_new(self->a, EX_NONE, pos)
         c: *Expr = self->call_rt(self->option_record(t->inner), pos)
@@ -4610,7 +4610,7 @@ struct PsLow:
         return c
 
     # wraps a present value into `T?`
-    static def some_of(self: *PsLow, t: *PsType, v: *Expr, pos: Pos) -> *Expr:
+    private def some_of(self: *PsLow, t: *PsType, v: *Expr, pos: Pos) -> *Expr:
         if t == None or t->inner == None or opt_is_ref(t->inner):
             return v
         c: *Expr = self->call_rt(self->option_record(t->inner), pos)
@@ -4619,7 +4619,7 @@ struct PsLow:
         return c
 
     # `x.has` for a wrapper, `x != None` for a reference
-    static def opt_present(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr:
+    private def opt_present(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr:
         if t == None or t->inner == None or opt_is_ref(t->inner):
             ne: *Expr = ex_new(self->a, EX_BINARY, pos)
             ne->op = TK_NE
@@ -4634,7 +4634,7 @@ struct PsLow:
         return f
 
     # the value inside, once it has been proved present
-    static def opt_value(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr:
+    private def opt_value(self: *PsLow, t: *PsType, x: *Expr, pos: Pos) -> *Expr:
         if t == None or t->inner == None or opt_is_ref(t->inner):
             return x
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
@@ -4644,7 +4644,7 @@ struct PsLow:
         return f
 
     # a literal zero of a P type, for the unused slot of an empty option
-    static def zero_val(self: *PsLow, t: *Type, pos: Pos) -> *Expr:
+    private def zero_val(self: *PsLow, t: *Type, pos: Pos) -> *Expr:
         if t == None:
             return self->num("0", pos)
         if t->kind == TY_PTR:
@@ -4668,7 +4668,7 @@ struct PsLow:
     # a coincidence — a tuple is a value, immutable and pure bytes, which is
     # exactly what `record` means (65.1). It inherits content `==` and the
     # constructor for free.
-    static def tuple_record(self: *PsLow, t: *PsType) -> const *char:
+    private def tuple_record(self: *PsLow, t: *PsType) -> const *char:
         name: const *char = self->tuple_name(t)
         for i in range(self->ntups):
             if strcmp(self->tups[i], name) == 0:
@@ -4706,7 +4706,7 @@ struct PsLow:
         return name
 
     # one name per SHAPE, so `(int, float)` used twice is one record
-    static def tuple_name(self: *PsLow, t: *PsType) -> const *char:
+    private def tuple_name(self: *PsLow, t: *PsType) -> const *char:
         b: StrBuf = {0}
         b.puts("__PsTup")
         for i in range(t->nparams):
@@ -4716,7 +4716,7 @@ struct PsLow:
         b.deinit()
         return r
 
-    static def mangle_type(self: *PsLow, b: *StrBuf, t: *PsType):
+    private def mangle_type(self: *PsLow, b: *StrBuf, t: *PsType):
         if t == None:
             b.puts("v")
             return
@@ -4768,7 +4768,7 @@ struct PsLow:
     # the value's type. The dispatch is HERE and not in the runtime because the
     # type is known at compile time — a run-time dispatch would be paying for
     # something already decided.
-    static def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr:
+    private def fmt_call(self: *PsLow, e: *PsExpr) -> *Expr:
         vt: PsTypeKind = e->args[0]->type->kind if e->args[0]->type != None else PT_UNKNOWN
         if vt == PT_TUPLE:
             # 97/98: a tuple in an f-string says what `print` says about it
@@ -4851,7 +4851,7 @@ struct PsLow:
         return c
 
     # a compile-time integer that stands for a char, emitted as a char cast
-    static def chr(self: *PsLow, e: *PsExpr, pos: Pos) -> *Expr:
+    private def chr(self: *PsLow, e: *PsExpr, pos: Pos) -> *Expr:
         c: *Expr = ex_new(self->a, EX_CAST, pos)
         c->cast_type = ty_name(self->a, "char")
         c->lhs = self->expr(e)
@@ -4866,7 +4866,7 @@ struct PsLow:
     # decides whether the address is spelled with P's `in` keyword: at a call
     # to a pscript function whose parameter is `in` it must be, and at a call
     # into the RUNTIME it must not, because those take a plain pointer.
-    static def addr_arg(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, kw: bool) -> *Expr:
+    private def addr_arg(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, kw: bool) -> *Expr:
         if not borrowable(v):
             name: const *char = self->a->printf("__in%d", self->tmp_ctr)
             self->tmp_ctr += 1
@@ -4897,14 +4897,14 @@ struct PsLow:
     # needs to check initialization. The argument is a designator — the sema
     # refused anything else — so there is nothing to materialize here, which is
     # the difference from `in`.
-    static def byref_arg(self: *PsLow, v: *Expr, kind: i32, pos: Pos) -> *Expr:
+    private def byref_arg(self: *PsLow, v: *Expr, kind: i32, pos: Pos) -> *Expr:
         a: *Expr = ex_new(self->a, EX_UNARY, pos)
         a->op = TK_AMP
         a->byref = kind
         a->lhs = v
         return a
 
-    static def in_arg(self: *PsLow, v: *Expr, is_in: bool, t: *PsType, pos: Pos) -> *Expr:
+    private def in_arg(self: *PsLow, v: *Expr, is_in: bool, t: *PsType, pos: Pos) -> *Expr:
         if not is_in:
             return v
         if t != None and t->kind == PT_ARRAY:
@@ -4939,14 +4939,14 @@ struct PsLow:
         a->lhs = v
         return a
 
-    static def param_is_in(self: *PsLow, name: const *char, i: i32) -> bool:
+    private def param_is_in(self: *PsLow, name: const *char, i: i32) -> bool:
         for k in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[k]
             if d->kind == PD_FUNC and strcmp(d->name, name) == 0:
                 return i < d->func->nparams and d->func->params[i].is_in
         return False
 
-    static def param_type(self: *PsLow, name: const *char, i: i32) -> *PsType:
+    private def param_type(self: *PsLow, name: const *char, i: i32) -> *PsType:
         for k in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[k]
             if d->kind == PD_FUNC and strcmp(d->name, name) == 0:
@@ -4955,7 +4955,7 @@ struct PsLow:
                 return None
         return None
 
-    static def find_ps_method(self: *PsLow, rt: *PsType, name: const *char) -> *PsFunc:
+    private def find_ps_method(self: *PsLow, rt: *PsType, name: const *char) -> *PsFunc:
         if rt == None or rt->kind != PT_NAME:
             return None
         for k in range(self->m->ndecls):
@@ -4966,21 +4966,21 @@ struct PsLow:
                         return d->methods[j]
         return None
 
-    static def find_ps_func(self: *PsLow, name: const *char) -> *PsFunc:
+    private def find_ps_func(self: *PsLow, name: const *char) -> *PsFunc:
         for i in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[i]
             if d->kind == PD_FUNC and d->func != None and strcmp(d->name, name) == 0:
                 return d->func
         return None
 
-    static def is_pstruct(self: *PsLow, name: const *char) -> bool:
+    private def is_pstruct(self: *PsLow, name: const *char) -> bool:
         for i in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[i]
             if d->kind == PD_STRUCT and strcmp(d->name, name) == 0:
                 return True
         return False
 
-    static def is_record(self: *PsLow, name: const *char) -> bool:
+    private def is_record(self: *PsLow, name: const *char) -> bool:
         for i in range(self->m->ndecls):
             d: *PsDecl = self->m->decls[i]
             if d->kind == PD_RECORD and strcmp(d->name, name) == 0:
@@ -4993,7 +4993,7 @@ struct PsLow:
     # here is a local the shadow stack never registers, which the collector
     # then moves without writing the new address back. `PsArr` is deliberately
     # absent — it is storage that another object owns and never a variable.
-    static def is_collected(self: *PsLow, t: *Type) -> bool:
+    private def is_collected(self: *PsLow, t: *Type) -> bool:
         if t == None or t->kind != TY_PTR or t->inner == None or t->inner->kind != TY_NAME or t->inner->name == None:
             return False
         n: const *char = t->inner->name
@@ -5017,7 +5017,7 @@ struct PsLow:
     # not a scope change (they were already this block's) and it is what makes
     # the frame safe: a slot is registered only once it holds either None or a
     # real reference, never whatever was on the stack.
-    static def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block:
+    private def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block:
         decls: Vec<*Stmt>
         decls.init()
         body: Vec<*Stmt>
@@ -5137,7 +5137,7 @@ struct PsLow:
         return r
 
     # 98.4: the tuple type behind a generated record name, or None.
-    static def tuple_type_named(self: *PsLow, t: *Type) -> *PsType:
+    private def tuple_type_named(self: *PsLow, t: *Type) -> *PsType:
         if t == None or t->kind != TY_NAME or t->name == None:
             return None
         for i in range(self->ntups):
@@ -5151,7 +5151,7 @@ struct PsLow:
     # what the collector needs is not a header but WHERE the references are, and
     # that is this number and the stores below. A pure tuple answers zero and
     # costs nothing at all.
-    static def value_slots(self: *PsLow, t: *Type) -> i32:
+    private def value_slots(self: *PsLow, t: *Type) -> i32:
         tt: *PsType = self->tuple_type_named(t)
         if tt == None:
             return 0
@@ -5166,7 +5166,7 @@ struct PsLow:
 
     # ... and the stores that register them, `&t._0` at a time. A tuple inside a
     # tuple recurses, because the path is just longer.
-    static def value_slot_stores(self: *PsLow, out: *Vec<*Stmt>, arr: const *char, ref k: i32, base: *Expr, t: *Type, pos: Pos):
+    private def value_slot_stores(self: *PsLow, out: *Vec<*Stmt>, arr: const *char, ref k: i32, base: *Expr, t: *Type, pos: Pos):
         tt: *PsType = self->tuple_type_named(t)
         if tt == None:
             return
@@ -5199,7 +5199,7 @@ struct PsLow:
     # `{0}` — what a struct starts as. Not `NULL`, which is what a reference
     # starts as, and not nothing, because the frame is about to give the
     # collector the addresses inside it.
-    static def zero_struct(self: *PsLow, pos: Pos) -> *Expr:
+    private def zero_struct(self: *PsLow, pos: Pos) -> *Expr:
         z: *Expr = ex_new(self->a, EX_INITLIST, pos)
         z->args = self->a->alloc(sizeof(*z->args))
         z->args[0] = ex_new(self->a, EX_NUMBER, pos)
@@ -5210,7 +5210,7 @@ struct PsLow:
     # `ps_add_root(&__g->t._0)` for each reference inside a module-level tuple
     # value (98.4). A root and a frame slot are the same idea in two places: the
     # address of something the collector has to rewrite.
-    static def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos):
+    private def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos):
         tt: *PsType = self->tuple_type_named(t)
         if tt == None:
             return
@@ -5236,7 +5236,7 @@ struct PsLow:
             else:
                 self->global_value_roots(out, fe, ft, pos)
 
-    static def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt:
+    private def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt:
         ix: *Expr = ex_new(self->a, EX_INDEX, pos)
         ix->lhs = self->ident(arr, pos)
         ix->rhs = ex_new(self->a, EX_NUMBER, pos)
@@ -5253,7 +5253,7 @@ struct PsLow:
     # `((__PsGlobals *)ctx->globals)->name` — a mutable module variable, which
     # lives in the CONTEXT because a mutable global is worker-local (42.2): two
     # workers that both call `seed()` must not be seeding the same generator.
-    static def global_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def global_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         gf: *Expr = ex_new(self->a, EX_FIELD, pos)
         gf->op = TK_ARROW
         cst: *Expr = ex_new(self->a, EX_CAST, pos)
@@ -5268,24 +5268,24 @@ struct PsLow:
         gf->field = ps_cname(self->a, name)
         return gf
 
-    static def is_gvar(self: *PsLow, name: const *char) -> bool:
+    private def is_gvar(self: *PsLow, name: const *char) -> bool:
         return name != None and self->gvars.has(name)
 
-    static def is_svar(self: *PsLow, name: const *char) -> bool:
+    private def is_svar(self: *PsLow, name: const *char) -> bool:
         return name != None and self->svars.has(name)
 
     # ---------- the shared dict (42.1) ----------
     # It is a `shared` variable whose type is a dict: the table lives outside
     # every heap, so every operation is a runtime call that copies in or out
     # under the table's own lock — none of the collected-dict machinery applies.
-    static def is_sdict(self: *PsLow, e: *PsExpr) -> bool:
+    private def is_sdict(self: *PsLow, e: *PsExpr) -> bool:
         return e != None and e->kind == PE_NAME and e->is_gref and self->is_svar(e->text) and e->type != None and e->type->kind == PT_DICT
 
     # what the table receives as a key or a value: a STRING goes as itself (the
     # table copies its bytes), anything else by address
     # how many bytes one slot takes: a string is kept as a length and a copy of
     # the bytes (a PsSStr), anything else as the value itself
-    static def sdict_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
+    private def sdict_size(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
         if t != None and t->kind == PT_STR:
             c: *Expr = ex_new(self->a, EX_CALL, pos)
             c->lhs = ex_new(self->a, EX_IDENT, pos)
@@ -5295,7 +5295,7 @@ struct PsLow:
             return c
         return self->elem_size(t, pos)
 
-    static def sd_arg(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr:
+    private def sd_arg(self: *PsLow, e: *PsExpr, t: *PsType, pos: Pos) -> *Expr:
         if t != None and t->kind == PT_STR:
             return self->expr(e)
         n: const *char = self->a->printf("__sd%d", self->tmp_ctr)
@@ -5312,20 +5312,20 @@ struct PsLow:
     # per-context struct that everything else lives in
     # the mutex of a shared variable, and the ADDRESS of its slot — what a
     # runtime call needs when the value is not a number it can carry
-    static def shared_lock_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def shared_lock_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
         f->op = TK_DOT
         f->lhs = self->ident("__ps_shared", pos)
         f->field = self->a->printf("%s__lock", ps_cname(self->a, name))
         return f
 
-    static def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def addr_of_shared(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         a: *Expr = ex_new(self->a, EX_UNARY, pos)
         a->op = TK_AMP
         a->lhs = self->shared_ref(name, pos)
         return a
 
-    static def shared_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def shared_ref(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
         f->op = TK_DOT
         f->lhs = ex_new(self->a, EX_IDENT, pos)
@@ -5333,7 +5333,7 @@ struct PsLow:
         f->field = ps_cname(self->a, name)
         return f
 
-    static def shared_lock(self: *PsLow, name: const *char, unlock: bool, pos: Pos) -> *Stmt:
+    private def shared_lock(self: *PsLow, name: const *char, unlock: bool, pos: Pos) -> *Stmt:
         c: *Expr = self->call_rt("ps_unlock" if unlock else "ps_lock", pos)
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
         f->op = TK_DOT
@@ -5346,7 +5346,7 @@ struct PsLow:
         return st
 
     # `F->name` — a frame field, which is what every local of an `async def` is
-    static def async_field(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def async_field(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         f: *Expr = ex_new(self->a, EX_FIELD, pos)
         f->op = TK_ARROW
         f->lhs = ex_new(self->a, EX_IDENT, pos)
@@ -5356,14 +5356,14 @@ struct PsLow:
         f->field = ps_cname(self->a, r) if r != None and self->rn_is_field(name) else ps_cname(self->a, name)
         return f
 
-    static def in_frame(self: *PsLow, name: const *char) -> bool:
+    private def in_frame(self: *PsLow, name: const *char) -> bool:
         if name != None and self->rn_find(name) != None:
             return self->rn_is_field(name)
         return self->async_frame != None and name != None and self->async_names.has(name)
 
     # o renome em vigor para este nome, ou None. De trás para frente: a
     # comprehension de dentro esconde a de fora.
-    static def rn_find(self: *PsLow, name: const *char) -> const *char:
+    private def rn_find(self: *PsLow, name: const *char) -> const *char:
         if name == None:
             return None
         i: i32 = self->rn_from.len - 1
@@ -5374,7 +5374,7 @@ struct PsLow:
         return None
 
     # o renome em vigor é para um CAMPO do frame?
-    static def rn_is_field(self: *PsLow, name: const *char) -> bool:
+    private def rn_is_field(self: *PsLow, name: const *char) -> bool:
         if name == None:
             return False
         i: i32 = self->rn_from.len - 1
@@ -5384,36 +5384,36 @@ struct PsLow:
             i -= 1
         return False
 
-    static def rn_push(self: *PsLow, name: const *char, to: const *char, is_field: bool):
+    private def rn_push(self: *PsLow, name: const *char, to: const *char, is_field: bool):
         self->rn_from.push((*char)(name))
         self->rn_to.push((*char)(to))
         self->rn_fld.push((*char)(to) if is_field else None)
 
-    static def rn_pop(self: *PsLow):
+    private def rn_pop(self: *PsLow):
         self->rn_from.len -= 1
         self->rn_to.len -= 1
         self->rn_fld.len -= 1
 
     # o nome do C de uma variável do pscript, com os renomes em vigor (107)
-    static def vname(self: *PsLow, name: const *char) -> const *char:
+    private def vname(self: *PsLow, name: const *char) -> const *char:
         r: const *char = self->rn_find(name)
         if r != None:
             return r
         return ps_cname(self->a, name)
 
-    static def ident(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def ident(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         e: *Expr = ex_new(self->a, EX_IDENT, pos)
         e->text = self->vname(name)
         return e
 
-    static def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    private def addr_of(self: *PsLow, name: const *char, pos: Pos) -> *Expr:
         a: *Expr = ex_new(self->a, EX_UNARY, pos)
         a->op = TK_AMP
         a->lhs = self->ident(name, pos)
         return a
 
     # ---------- statements ----------
-    static def block(self: *PsLow, b: *PsBlock) -> *Block:
+    private def block(self: *PsLow, b: *PsBlock) -> *Block:
         v: Vec<*Stmt>
         v.init()
         if b != None:
@@ -5421,7 +5421,7 @@ struct PsLow:
                 self->stmt(b->stmts[i], &v)
         return self->frame_wrap(&v, None, 0, b->stmts[0]->pos if b != None and b->n > 0 else zero_pos())
 
-    static def stmt(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def stmt(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         self->raised = False
         self->allocs = False
         # `pre` belongs to the statement being lowered, and lowering a statement
@@ -5453,7 +5453,7 @@ struct PsLow:
             self->push_arg(poll->expr, self->ctx_arg(s->pos))
             out->push(poll)
 
-    static def stmt_inner(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def stmt_inner(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         match s->kind:
             case PS_EXPR:
                 st: *Stmt = st_new(self->a, ST_EXPR, s->pos)
@@ -6238,7 +6238,7 @@ struct PsLow:
     # `for x in it` over a type that implements `Iterable` (40.3): the protocol
     # written out. The cursor is bound ONCE — the expression that produced it
     # may allocate, and it must not run every turn.
-    static def lower_iter_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_iter_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         it: *PsType = s->iter->type
         nx: *PsFunc = self->find_ps_method(it, "next")
         cn: const *char = self->a->printf("__cur%d", self->tmp_ctr)
@@ -6284,7 +6284,7 @@ struct PsLow:
 
     # `for x in xs` over a `T[N]` (33.4): a counted loop over a size the
     # compiler knows, with no runtime call at all
-    static def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         at: *PsType = s->iter->type
         an: const *char = self->a->printf("__ar%d", self->tmp_ctr)
         iv: const *char = self->a->printf("__ai%d", self->tmp_ctr)
@@ -6336,7 +6336,7 @@ struct PsLow:
     # character at a time. A loop by index would recount the UTF-8 offset from
     # the start of the string on every round, which is the quadratic shape the
     # port had to write by hand before this existed.
-    static def lower_str_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_str_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         sn: const *char = self->a->printf("__ss%d", self->tmp_ctr)
         on: const *char = self->a->printf("__so%d", self->tmp_ctr)
         self->tmp_ctr += 1
@@ -6383,7 +6383,7 @@ struct PsLow:
         wh->body = self->frame_wrap(&inner, None, 0, s->pos)
         out->push(wh)
 
-    static def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         et: *PsType = s->iter->type->inner
         ln: const *char = self->a->printf("__it%d", self->tmp_ctr)
         iv: const *char = self->a->printf("__ix%d", self->tmp_ctr)
@@ -6432,7 +6432,7 @@ struct PsLow:
 
     # `for k in d` — walks the slots and skips the ones that are not live.
     # Iterating a dict yields its KEYS, as Python does.
-    static def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         dt: *PsType = s->iter->type
         kt: *PsType = dt->inner if dt->kind == PT_SET else dt->key
         dn: const *char = self->a->printf("__dit%d", self->tmp_ctr)
@@ -6534,7 +6534,7 @@ struct PsLow:
     #
     # `finally` becomes P's `defer`, which is exactly its semantics: it runs on
     # every way out of the block, including a `return` from inside the try.
-    static def lower_try(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_try(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         body: Vec<*Stmt>
         body.init()
         if s->finally_block != None:
@@ -6644,7 +6644,7 @@ struct PsLow:
     # which is the same tag `as` enforces and `ps_is_kind` answers. The subject
     # is evaluated ONCE; inside each case the sema already turned reads of the
     # name into unboxes, so the bodies need nothing from here.
-    static def lower_type_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_type_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         sn: const *char = self->a->printf("__tm%d", self->tmp_ctr)
         self->tmp_ctr += 1
         sd: *Stmt = st_new(self->a, ST_VAR, s->pos)
@@ -6701,7 +6701,7 @@ struct PsLow:
         ifs->if_sel = -1
         out->push(ifs)
 
-    static def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         asg: *Expr = None
         subj: *Expr = self->once(s->subject, out asg)
         if asg != None:
@@ -6739,7 +6739,7 @@ struct PsLow:
             st->nconds += 1
         out->push(st)
 
-    static def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt:
+    private def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt:
         b: *Block = self->a->alloc(sizeof(Block))
         b->stmts = self->a->alloc(sizeof(*b->stmts))
         b->stmts[0] = st
@@ -6757,7 +6757,7 @@ struct PsLow:
     # A function whose every path returns from inside a `try` ends, in the
     # emitted C, with a block the target compiler cannot see through — and it
     # warns about the missing return. One unreachable return closes it.
-    static def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos):
+    private def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos):
         if ret == None or (ret->kind == TY_NAME and strcmp(ret->name, "void") == 0):
             return
         if body->len > 0 and body->data[body->len - 1]->kind == ST_RETURN:
@@ -6768,13 +6768,13 @@ struct PsLow:
 
     # `nonlocal x` (64.1): the opt-in that lets a name assigned inside a block
     # survive it. P has exactly this statement, so it passes straight through.
-    static def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt:
+    private def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt:
         n: *Stmt = st_new(self->a, ST_NONLOCAL, pos)
         n->name = name
         return n
 
 
-static def ps_lower_binop(op: i32) -> i32:
+private def ps_lower_binop(op: i32) -> i32:
     match op:
         case TK_PLUS_EQ:
             return TK_PLUS
@@ -6806,7 +6806,7 @@ static def ps_lower_binop(op: i32) -> i32:
 
 # declares the zero value the exception guard returns, when the function returns
 # a record. Returns the name, or None when the return type is scalar.
-static def zret_decl(L: *PsLow, ret: *Type, pos: Pos, out: *Vec<*Stmt>) -> const *char:
+private def zret_decl(L: *PsLow, ret: *Type, pos: Pos, out: *Vec<*Stmt>) -> const *char:
     if ret == None or ret->kind != TY_NAME or is_scalar_pname(ret->name):
         return None
     d: *Stmt = st_new(L->a, ST_VAR, pos)
@@ -6825,7 +6825,7 @@ static def zret_decl(L: *PsLow, ret: *Type, pos: Pos, out: *Vec<*Stmt>) -> const
 # feature to P — it copies fields across and stops, instead of synthesizing a
 # struct plus a comparison plus an initializer, none of which P's sema would
 # have been able to check.
-static def lower_record_impl(L: *PsLow, d: *PsDecl) -> *Decl:
+private def lower_record_impl(L: *PsLow, d: *PsDecl) -> *Decl:
     rd: *Decl = L->a->alloc(sizeof(Decl))
     rd->kind = DL_STRUCT
     rd->is_record = True
@@ -6854,7 +6854,7 @@ static def lower_record_impl(L: *PsLow, d: *PsDecl) -> *Decl:
 #
 # The rename is a trailing underscore, applied ONLY on a hit, so every other
 # name in the generated C is still the name the programmer wrote.
-static const PS_TAKEN: const *char[] = {
+private const PS_TAKEN: const *char[] = {
     "auto", "break", "case", "char", "const", "continue", "default", "do",
     "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline",
     "int", "long", "register", "restrict", "return", "short", "signed",
@@ -6871,7 +6871,7 @@ static const PS_TAKEN: const *char[] = {
     "floor", "round", "trunc", "fmod", "fabs", "fmin", "fmax", "gamma", "j0",
     "j1", "jn", "y0", "y1", "yn", "time", "clock", "main", None}
 
-static def ps_cname(a: *Arena, name: const *char) -> const *char:
+private def ps_cname(a: *Arena, name: const *char) -> const *char:
     if name == None:
         return None
     i: i32 = 0
@@ -6881,11 +6881,11 @@ static def ps_cname(a: *Arena, name: const *char) -> const *char:
         i += 1
     return name
 
-static def collect_spawns_e(L: *PsLow, e: *PsExpr, ref v: Vec<*PsFunc>)
-static def collect_spawns_s(L: *PsLow, s: *PsStmt, ref v: Vec<*PsFunc>)
-static def collect_spawns_b(L: *PsLow, b: *PsBlock, ref v: Vec<*PsFunc>)
+private def collect_spawns_e(L: *PsLow, e: *PsExpr, ref v: Vec<*PsFunc>)
+private def collect_spawns_s(L: *PsLow, s: *PsStmt, ref v: Vec<*PsFunc>)
+private def collect_spawns_b(L: *PsLow, b: *PsBlock, ref v: Vec<*PsFunc>)
 
-static def collect_spawns_e(L: *PsLow, e: *PsExpr, ref v: Vec<*PsFunc>):
+private def collect_spawns_e(L: *PsLow, e: *PsExpr, ref v: Vec<*PsFunc>):
     if e == None:
         return
     if e->kind == PE_SPAWN and e->spawn_fn != None:
@@ -6903,7 +6903,7 @@ static def collect_spawns_e(L: *PsLow, e: *PsExpr, ref v: Vec<*PsFunc>):
     for i in range(e->nargs):
         collect_spawns_e(L, e->args[i], ref v)
 
-static def collect_spawns_s(L: *PsLow, s: *PsStmt, ref v: Vec<*PsFunc>):
+private def collect_spawns_s(L: *PsLow, s: *PsStmt, ref v: Vec<*PsFunc>):
     if s == None:
         return
     for i in range(stmt_ps_nexprs(s)):
@@ -6918,7 +6918,7 @@ static def collect_spawns_s(L: *PsLow, s: *PsStmt, ref v: Vec<*PsFunc>):
         if s->cases[i] != None:
             collect_spawns_b(L, s->cases[i]->body, ref v)
 
-static def collect_spawns_b(L: *PsLow, b: *PsBlock, ref v: Vec<*PsFunc>):
+private def collect_spawns_b(L: *PsLow, b: *PsBlock, ref v: Vec<*PsFunc>):
     if b == None:
         return
     for i in range(b->n):
@@ -6929,7 +6929,7 @@ static def collect_spawns_b(L: *PsLow, b: *PsBlock, ref v: Vec<*PsFunc>):
 # is the third layer, and the only one that is really shared. Each variable
 # carries its own lock, so two of them never wait on each other, and a compound
 # operation holds one lock for the whole read-modify-write.
-static def lower_shared_struct(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
+private def lower_shared_struct(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_STRUCT
     d->is_def = True
@@ -6957,7 +6957,7 @@ static def lower_shared_struct(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
     d->nfields = sv.len * 2
     return d
 
-static def lower_shared_var(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
+private def lower_shared_var(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
     v: *Decl = L->a->alloc(sizeof(Decl))
     v->kind = DL_VAR
     v->pos = sv.data[0]->pos
@@ -6966,7 +6966,7 @@ static def lower_shared_var(L: *PsLow, sv: Vec<*PsDecl>) -> *Decl:
     v->is_static = True
     return v
 
-static def lower_shared_init(L: *PsLow, sv: Vec<*PsDecl>, with_body: bool) -> *Decl:
+private def lower_shared_init(L: *PsLow, sv: Vec<*PsDecl>, with_body: bool) -> *Decl:
     f: *Func = L->a->alloc(sizeof(Func))
     f->pos = sv.data[0]->pos
     f->name = "__ps_shared_init"
@@ -7035,7 +7035,7 @@ static def lower_shared_init(L: *PsLow, sv: Vec<*PsDecl>, with_body: bool) -> *D
 # MUTABLE module variable is the worker's own, so the set lives in a struct the
 # context points at. It also makes the collector's job simpler: the roots of a
 # context are exactly the fields of its own struct.
-static def lower_globals_struct(L: *PsLow, gv: Vec<*PsDecl>) -> *Decl:
+private def lower_globals_struct(L: *PsLow, gv: Vec<*PsDecl>) -> *Decl:
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_STRUCT
     d->is_def = True
@@ -7053,7 +7053,7 @@ static def lower_globals_struct(L: *PsLow, gv: Vec<*PsDecl>) -> *Decl:
 # `static void __ps_globals_init(PsCtx *ctx)`: one call at the start of the
 # program and one in every worker thunk. Zeroed, and the collected ones become
 # roots of THIS context.
-static def lower_globals_init(L: *PsLow, gv: Vec<*PsDecl>, with_body: bool) -> *Decl:
+private def lower_globals_init(L: *PsLow, gv: Vec<*PsDecl>, with_body: bool) -> *Decl:
     f: *Func = L->a->alloc(sizeof(Func))
     f->pos = gv.data[0]->pos
     f->name = "__ps_globals_init"
@@ -7147,11 +7147,11 @@ static def lower_globals_init(L: *PsLow, gv: Vec<*PsDecl>, with_body: bool) -> *
     f->body = b
     return d
 
-static def collect_lams_e(L: *PsLow, e: *PsExpr)
-static def collect_lams_s(L: *PsLow, s: *PsStmt)
-static def collect_lams_b(L: *PsLow, b: *PsBlock)
+private def collect_lams_e(L: *PsLow, e: *PsExpr)
+private def collect_lams_s(L: *PsLow, s: *PsStmt)
+private def collect_lams_b(L: *PsLow, b: *PsBlock)
 
-static def collect_lams_e(L: *PsLow, e: *PsExpr):
+private def collect_lams_e(L: *PsLow, e: *PsExpr):
     if e == None:
         return
     # 98.5: a container whose ELEMENT is a tuple holding a reference needs the
@@ -7197,7 +7197,7 @@ static def collect_lams_e(L: *PsLow, e: *PsExpr):
         collect_lams_e(L, e->args[i])
     collect_lams_b(L, e->body)
 
-static def collect_lams_s(L: *PsLow, s: *PsStmt):
+private def collect_lams_s(L: *PsLow, s: *PsStmt):
     if s == None:
         return
     for i in range(stmt_ps_nexprs(s)):
@@ -7212,7 +7212,7 @@ static def collect_lams_s(L: *PsLow, s: *PsStmt):
         if s->cases[i] != None:
             collect_lams_b(L, s->cases[i]->body)
 
-static def collect_lams_b(L: *PsLow, b: *PsBlock):
+private def collect_lams_b(L: *PsLow, b: *PsBlock):
     if b == None:
         return
     for i in range(b->n):
@@ -7225,7 +7225,7 @@ static def collect_lams_b(L: *PsLow, b: *PsBlock):
 # `static PsTask *__ps_gmadN(void *envp, PsCtx *ctx, void *ep)`: the one call
 # the runtime makes per item. Emitted per call site, because only the call site
 # knows the element type — the runtime moves bytes and nothing else.
-static def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
+private def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
     et: *PsType = e->args[1]->type->inner
     sig: *PsType = e->args[0]->type
     pf: *Func = L->a->alloc(sizeof(Func))
@@ -7311,9 +7311,9 @@ static def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl
 # (98.5). A tuple that holds a reference is still a VALUE: it has no header, so
 # the collector cannot ask it anything; what it gets instead is this, which the
 # compiler wrote because only the compiler knows where the references are.
-static def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType, arrow: bool)
+private def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType, arrow: bool)
 
-static def lower_tuptrace(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
+private def lower_tuptrace(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = t->pos
     pf->name = L->tuptrace_name(t)
@@ -7355,7 +7355,7 @@ static def lower_tuptrace(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
 
 # one `x->_i = ps_forward(to, x->_i)` per reference, recursing into a tuple that
 # holds a tuple — the path is just longer
-static def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType, arrow: bool):
+private def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType, arrow: bool):
     for i in range(t->nparams):
         ft: *Type = L->ty(t->params[i])
         fe: *Expr = ex_new(L->a, EX_FIELD, t->pos)
@@ -7384,7 +7384,7 @@ static def tuptrace_fields(L: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *PsType,
 # runtime renders one element of a container (97). The element arrives by
 # POINTER because the runtime moves bytes; this is the only place that knows
 # what those bytes are, and it is where a string gets its quotes.
-static def lower_reprad(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
+private def lower_reprad(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = t->pos
     pf->name = L->reprad_name(t)
@@ -7431,7 +7431,7 @@ static def lower_reprad(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
     pf->body = b
     return d
 
-static def lower_cmpad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
+private def lower_cmpad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
     et: *PsType = e->args[0]->type->inner
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = e->pos
@@ -7499,7 +7499,7 @@ static def lower_cmpad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Dec
     pf->body = b
     return d
 
-static def lower_keyad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
+private def lower_keyad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
     et: *PsType = e->args[0]->type->inner
     sig: *PsType = e->args[1]->type
     pf: *Func = L->a->alloc(sizeof(Func))
@@ -7587,7 +7587,7 @@ static def lower_keyad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Dec
 # becomes exactly two things: an ordinary function whose first parameter is the
 # environment, and a struct holding the copies. Nothing is shared, nothing is
 # promoted, and a closure that captured nothing carries no environment at all.
-static def lower_lam_env(L: *PsLow, e: *PsExpr, idx: i32) -> *PsDecl:
+private def lower_lam_env(L: *PsLow, e: *PsExpr, idx: i32) -> *PsDecl:
     d: *PsDecl = ps_decl(L->a, PD_STRUCT, e->pos)
     d->name = L->a->printf("__PsLamEnv%d", idx)
     d->src_name = d->name
@@ -7600,7 +7600,7 @@ static def lower_lam_env(L: *PsLow, e: *PsExpr, idx: i32) -> *PsDecl:
     L->frame_names.add(d->name)
     return d
 
-static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
+private def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = e->pos
     pf->name = L->a->printf("__ps_lam%d", idx)
@@ -7681,7 +7681,7 @@ static def lower_lam_func(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *
 # `static R __ps_fnval_f(void *env, PsCtx *ctx, T a) { return f(ctx, a); }` —
 # the adapter that lets an ordinary function be a closure VALUE (28.1). One per
 # function, and only for the ones actually used that way.
-static def lower_fnval(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
+private def lower_fnval(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
     pf->name = L->a->printf("__ps_fnval_%s", ps_cname(L->a, f->name))
@@ -7730,7 +7730,7 @@ static def lower_fnval(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
 # plain struct, are copied once by the runtime, and are unpacked on the other
 # side by this thunk — which is also where the worker's OWN context is born,
 # because a worker has a heap and a collector of its own (18.1).
-static def lower_worker_args(L: *PsLow, f: *PsFunc) -> *Decl:
+private def lower_worker_args(L: *PsLow, f: *PsFunc) -> *Decl:
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_STRUCT
     d->is_def = True
@@ -7759,7 +7759,7 @@ static def lower_worker_args(L: *PsLow, f: *PsFunc) -> *Decl:
         d->nfields = 1
     return d
 
-static def lower_worker_thunk(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
+private def lower_worker_thunk(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
     pf->name = L->a->printf("%s__thread", ps_cname(L->a, f->name))
@@ -7895,15 +7895,15 @@ static def lower_worker_thunk(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
 # that crosses an await. The minimum needs liveness analysis; this is the
 # version that is obviously correct, and the cost is one heap object per call —
 # which is what a task is anyway.
-static def has_await_e(e: *PsExpr) -> bool
-static def has_await_s(s: *PsStmt) -> bool
-static def has_await_b(b: *PsBlock) -> bool
-static def async_fields_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, file: const *char)
-static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: const *char)
-static def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: const *char)
-static def async_slots_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, ref n: i32)
-static def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32)
-static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
+private def has_await_e(e: *PsExpr) -> bool
+private def has_await_s(s: *PsStmt) -> bool
+private def has_await_b(b: *PsBlock) -> bool
+private def async_fields_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, file: const *char)
+private def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: const *char)
+private def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: const *char)
+private def async_slots_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, ref n: i32)
+private def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32)
+private def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
 
 # The cursor of a `for` that had to become a state machine, and the sequence it
 # walks. Named from the POSITION of the loop so that the pass which builds the
@@ -7930,7 +7930,7 @@ def ps_for_cursor(a: *Arena, pos: Pos) -> const *char:
 def ps_for_seq(a: *Arena, pos: Pos) -> const *char:
     return a->printf("__afs_%d_%d", pos.line, pos.col)
 
-static def has_await_e(e: *PsExpr) -> bool:
+private def has_await_e(e: *PsExpr) -> bool:
     if e == None:
         return False
     if e->kind == PE_AWAIT:
@@ -7942,7 +7942,7 @@ static def has_await_e(e: *PsExpr) -> bool:
             return True
     return False
 
-static def has_await_b(b: *PsBlock) -> bool:
+private def has_await_b(b: *PsBlock) -> bool:
     if b == None:
         return False
     for i in range(b->n):
@@ -7950,7 +7950,7 @@ static def has_await_b(b: *PsBlock) -> bool:
             return True
     return False
 
-static def has_await_s(s: *PsStmt) -> bool:
+private def has_await_s(s: *PsStmt) -> bool:
     if s == None:
         return False
     for i in range(stmt_ps_nexprs(s)):
@@ -7967,7 +7967,7 @@ static def has_await_s(s: *PsStmt) -> bool:
     return False
 
 # one frame, one field per name
-static def async_add_field(L: *PsLow, ref v: Vec<PsField>, name: const *char, t: *PsType, pos: Pos, file: const *char):
+private def async_add_field(L: *PsLow, ref v: Vec<PsField>, name: const *char, t: *PsType, pos: Pos, file: const *char):
     for i in range(v.len):
         if strcmp(v.data[i].name, name) == 0:
             # two declarations of the same name in sibling blocks share the
@@ -7984,7 +7984,7 @@ static def async_add_field(L: *PsLow, ref v: Vec<PsField>, name: const *char, t:
 # A `:=` binds a NAME from inside an EXPRESSION (45.2), so this pass has to walk
 # expressions too. Without it the binding exists in the emitted C and not in the
 # frame, and the step function reads a variable nobody declared.
-static def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: const *char):
+private def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: const *char):
     if e == None:
         return
     async_fields_e(L, e->lhs, ref v, file)
@@ -7995,7 +7995,7 @@ static def async_fields_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, file: cons
     if e->kind == PE_WALRUS and e->var != None and e->type != None:
         async_add_field(L, ref v, e->var, e->type, e->pos, file)
 
-static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: const *char):
+private def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: const *char):
     if s == None:
         return
     for i in range(stmt_ps_nexprs(s)):
@@ -8057,7 +8057,7 @@ static def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: cons
         if s->cases[i] != None:
             async_fields_b(L, s->cases[i]->body, ref v, file)
 
-static def async_fields_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, file: const *char):
+private def async_fields_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, file: const *char):
     if b == None:
         return
     for i in range(b->n):
@@ -8065,7 +8065,7 @@ static def async_fields_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, file: con
 
 # every await gets a frame slot for the task it is waiting on, named here so
 # that the splitter and the expression lowering agree on it
-static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32):
+private def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32):
     if e == None:
         return
     async_slots_e(L, e->lhs, ref v, ref n)
@@ -8082,7 +8082,7 @@ static def async_slots_e(L: *PsLow, e: *PsExpr, ref v: Vec<PsField>, ref n: i32)
         f.pos = e->pos
         v.push(f)
 
-static def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32):
+private def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32):
     if s == None:
         return
     for i in range(stmt_ps_nexprs(s)):
@@ -8097,7 +8097,7 @@ static def async_slots_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, ref n: i32)
         if s->cases[i] != None:
             async_slots_b(L, s->cases[i]->body, ref v, ref n)
 
-static def async_slots_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, ref n: i32):
+private def async_slots_b(L: *PsLow, b: *PsBlock, ref v: Vec<PsField>, ref n: i32):
     if b == None:
         return
     for i in range(b->n):
@@ -8117,16 +8117,16 @@ struct AsyncB:
     file: const *char
     pos: Pos
 
-static def ab_state(ref B: AsyncB) -> i32:
+private def ab_state(ref B: AsyncB) -> i32:
     B.states = vec_grow(B.states, B.nstates, ref B.cstates, sizeof(*B.states))
     B.states[B.nstates].init()
     B.nstates += 1
     return B.nstates - 1
 
-static def ab_emit(ref B: AsyncB, st: *Stmt):
+private def ab_emit(ref B: AsyncB, st: *Stmt):
     B.states[B.cur].push(st)
 
-static def ab_set_state(ref B: AsyncB, n: i32, pos: Pos) -> *Stmt:
+private def ab_set_state(ref B: AsyncB, n: i32, pos: Pos) -> *Stmt:
     a: *Stmt = st_new(B.L->a, ST_ASSIGN, pos)
     f: *Expr = ex_new(B.L->a, EX_FIELD, pos)
     f->op = TK_ARROW
@@ -8139,11 +8139,11 @@ static def ab_set_state(ref B: AsyncB, n: i32, pos: Pos) -> *Stmt:
     a->rhs->text = B.L->a->printf("%d", n)
     return a
 
-static def ab_goto(ref B: AsyncB, n: i32, pos: Pos):
+private def ab_goto(ref B: AsyncB, n: i32, pos: Pos):
     ab_emit(ref B, ab_set_state(ref B, n, pos))
     ab_emit(ref B, st_new(B.L->a, ST_CONTINUE, pos))
 
-static def ab_ret(ref B: AsyncB, v: bool, pos: Pos):
+private def ab_ret(ref B: AsyncB, v: bool, pos: Pos):
     r: *Stmt = st_new(B.L->a, ST_RETURN, pos)
     r->expr = ex_new(B.L->a, EX_TRUE if v else EX_FALSE, pos)
     ab_emit(ref B, r)
@@ -8160,7 +8160,7 @@ static def ab_ret(ref B: AsyncB, v: bool, pos: Pos):
 # that always finds its answer ready (a fast client, in a server) would never
 # let anything else run. It is the rule of the JS microtask, and the reason its
 # ordering is predictable.
-static def ab_park(ref B: AsyncB, slot: const *char, pos: Pos):
+private def ab_park(ref B: AsyncB, slot: const *char, pos: Pos):
     dn: *Expr = B.L->call_rt("ps_task_done", pos)
     B.L->push_arg(dn, B.L->async_field(slot, pos))
     nt: *Expr = ex_new(B.L->a, EX_UNARY, pos)
@@ -8202,9 +8202,9 @@ static def ab_park(ref B: AsyncB, slot: const *char, pos: Pos):
 # lowered: the task is started, the state is bumped, and the step returns if the
 # task is not finished. Evaluation order is left to right, which is the order
 # `async_slots_e` numbered them in.
-static def ab_split_e(ref B: AsyncB, e: *PsExpr)
+private def ab_split_e(ref B: AsyncB, e: *PsExpr)
 
-static def ab_split_e(ref B: AsyncB, e: *PsExpr):
+private def ab_split_e(ref B: AsyncB, e: *PsExpr):
     if e == None or not has_await_e(e):
         return
     if e->kind == PE_AWAIT:
@@ -8255,12 +8255,12 @@ static def ab_split_e(ref B: AsyncB, e: *PsExpr):
     for i in range(e->nargs):
         ab_split_e(ref B, e->args[i])
 
-static def ab_block(ref B: AsyncB, b: *PsBlock)
-static def ab_stmt(ref B: AsyncB, s: *PsStmt)
+private def ab_block(ref B: AsyncB, b: *PsBlock)
+private def ab_stmt(ref B: AsyncB, s: *PsStmt)
 
 # a statement with no await in it is lowered exactly as it would be anywhere
 # else — the state machine only takes apart what it has to
-static def ab_plain(ref B: AsyncB, s: *PsStmt):
+private def ab_plain(ref B: AsyncB, s: *PsStmt):
     out: Vec<*Stmt>
     out.init()
     B.L->stmt(s, &out)
@@ -8269,13 +8269,13 @@ static def ab_plain(ref B: AsyncB, s: *PsStmt):
 
 # `defer` inside a step function: ARM a bit in the frame, and let the exits run
 # it. Never P's own `defer`, which would fire when the task merely suspends.
-static def ab_defer(ref B: AsyncB, s: *PsStmt):
+private def ab_defer(ref B: AsyncB, s: *PsStmt):
     if has_await_b(s->body):
         fatal_at(B.file, s->pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1)")
     ab_arm(ref B, ps_cleanup_flag(B.L->a, s->pos), s->body, None, None, s->pos)
 
 # register a cleanup and emit the statement that arms it
-static def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos):
+private def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos):
     B.L->acl_flag = vec_grow(B.L->acl_flag, B.L->nacl, ref B.L->cacl1, sizeof(*B.L->acl_flag))
     B.L->acl_body = vec_grow(B.L->acl_body, B.L->nacl, ref B.L->cacl2, sizeof(*B.L->acl_body))
     B.L->acl_name = vec_grow(B.L->acl_name, B.L->nacl, ref B.L->cacl3, sizeof(*B.L->acl_name))
@@ -8294,7 +8294,7 @@ static def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *c
 # `with x as f:` whose body suspends. The bind and the release are the same as
 # anywhere else; what changes is WHEN the release runs — at the end of the
 # block, or at whatever exit leaves the block early, and never at a suspension.
-static def ab_with(ref B: AsyncB, s: *PsStmt):
+private def ab_with(ref B: AsyncB, s: *PsStmt):
     bind: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
     bind->lhs = B.L->async_field(s->name, s->pos)
     bind->op = TK_ASSIGN
@@ -8317,7 +8317,7 @@ static def ab_with(ref B: AsyncB, s: *PsStmt):
         ab_emit(ref B, out.data[i])
     B.L->nacl -= 1
 
-static def ab_stmt(ref B: AsyncB, s: *PsStmt):
+private def ab_stmt(ref B: AsyncB, s: *PsStmt):
     if s == None:
         return
     # `break` and `continue` NEVER carry an await, so the plain lowering would
@@ -8622,7 +8622,7 @@ static def ab_stmt(ref B: AsyncB, s: *PsStmt):
         case _:
             fatal_at(B.file, s->pos, "an `await` inside this statement is not compiled yet — the state machine takes apart `if`, `while`, `for` and `try` so far (50.1)")
 
-static def ab_block(ref B: AsyncB, b: *PsBlock):
+private def ab_block(ref B: AsyncB, b: *PsBlock):
     if b == None:
         return
     for i in range(b->n):
@@ -8632,7 +8632,7 @@ static def ab_block(ref B: AsyncB, b: *PsBlock):
 # ---------- what comes out ----------
 # the frame: a `struct` in every way that matters, so it gets the same
 # declaration, descriptor and trace function every other collected type gets
-static def async_frame_decl(L: *PsLow, f: *PsFunc, owner: const *char, file: const *char) -> *PsDecl:
+private def async_frame_decl(L: *PsLow, f: *PsFunc, owner: const *char, file: const *char) -> *PsDecl:
     fields: Vec<PsField>
     fields.init()
     # the RESULT first, always: `ps_task_ret` points at the frame's first user
@@ -8660,12 +8660,12 @@ static def async_frame_decl(L: *PsLow, f: *PsFunc, owner: const *char, file: con
     return d
 
 # `static PsTask *f(PsCtx *ctx, T a) { F *fr = ps_new(...); fr->a = a; return ps_task_new(ctx, f__step, fr); }`
-static def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *char, with_body: bool) -> *Decl:
+private def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *char, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
     pf->name = ps_cname(L->a, f->name) if owner == None else L->a->printf("%s_%s", owner, f->name)
     pf->cname = pf->name
-    pf->is_static = f->is_static and owner == None
+    pf->is_static = f->is_private   # `private` in pscript is `static` in the C we emit
     pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask"))
     # a METHOD keeps the receiver first, exactly as `lower_func` puts it, so an
     # async method is called the same way a plain one is (50.1 with a `self`
@@ -8754,7 +8754,7 @@ static def lower_async_start(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *c
     return d
 
 # `static bool f__step(PsCtx *ctx, PsTask *t) { F *fr = ...; while (1) match ... }`
-static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *char, file: const *char, with_body: bool) -> *Decl:
+private def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *char, file: const *char, with_body: bool) -> *Decl:
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
     pf->name = L->a->printf("%s__step", ps_cname(L->a, f->name)) if owner == None else L->a->printf("%s_%s__step", owner, f->name)
@@ -8911,7 +8911,7 @@ static def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *ch
 #      without looking at, which is the same deal a `record` gets;
 #   3. an allocator, so that building one is a call and not five statements
 #      inlined at every site.
-static def lower_struct_impl(L: *PsLow, d: *PsDecl) -> *Decl:
+private def lower_struct_impl(L: *PsLow, d: *PsDecl) -> *Decl:
     sd: *Decl = L->a->alloc(sizeof(Decl))
     sd->kind = DL_STRUCT
     sd->is_def = True
@@ -8941,7 +8941,7 @@ static def lower_struct_impl(L: *PsLow, d: *PsDecl) -> *Decl:
 # written as CODE rather than a table of offsets because code is what the C
 # compiler type-checks. A struct with nothing collected inside gets no function
 # at all, and its descriptor says so.
-static def lower_struct_trace(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
+private def lower_struct_trace(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
     n: i32 = 0
     for i in range(d->nfields):
         if L->is_collected(L->ty(d->fields[i].type)):
@@ -9013,7 +9013,7 @@ static def lower_struct_trace(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
     return dc
 
 # `static const PsDesc S__desc = {"S", sizeof(S), n, S__refs};`
-static def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
+private def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
     v: *Decl = L->a->alloc(sizeof(Decl))
     v->kind = DL_VAR
     v->pos = d->pos
@@ -9046,7 +9046,7 @@ static def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
 # The name is derived from the type, so two sends of the same type share one
 # shape, and a type that contains itself finds its own shape already registered
 # instead of recurring forever.
-static def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
+private def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
     if t == None:
         return "v"
     match t->kind:
@@ -9073,7 +9073,7 @@ static def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
     return "v"
 
 # `&x->f` for a field of the struct the generated walker was handed
-static def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr:
+private def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr:
     fl: *Expr = ex_new(L->a, EX_FIELD, pos)
     fl->op = TK_ARROW
     fl->lhs = ex_new(L->a, EX_IDENT, pos)
@@ -9088,7 +9088,7 @@ static def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos:
 # PsDes *d, void *o)`: one call per field, with that field's shape. The runtime
 # does the rest — including deciding that a field it has already written is a
 # number rather than a copy.
-static def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl:
+private def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl:
     f: *Func = L->a->alloc(sizeof(Func))
     f->pos = d->pos
     f->name = L->a->printf("%s__%s", ps_cname(L->a, d->name), "ser" if writing else "des")
@@ -9152,7 +9152,7 @@ static def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bo
     return dc
 
 # the static that describes one type, emitted once and reused
-static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
+private def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
     key: const *char = sh_mangle(L, t)
     for i in range(L->nsh):
         if strcmp(L->shk[i], key) == 0:
@@ -9263,7 +9263,7 @@ static def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
         L->out.push(lower_struct_walk(L, sd, False, True))
     return name
 
-static def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr:
+private def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr:
     if name == None:
         return ex_new(L->a, EX_NONE, pos)
     r: *Expr = ex_new(L->a, EX_UNARY, pos)
@@ -9273,7 +9273,7 @@ static def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr:
     return r
 
 # `static S *S__new(PsCtx *ctx, T a, U b) { S *o = ps_new(ctx, &S__desc); o->a = a; ...; return o; }`
-static def lower_struct_new(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
+private def lower_struct_new(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
     f: *Func = L->a->alloc(sizeof(Func))
     f->pos = d->pos
     f->name = L->a->printf("%s__new", ps_cname(L->a, d->name))
@@ -9359,17 +9359,17 @@ static def lower_struct_new(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
 #      does not promise anything about — and this way the C stays readable;
 #   3. one static vtable VALUE per (trait, type), which is what a boxed value
 #      carries.
-static def vt_struct_name(a: *Arena, td: *PsDecl) -> const *char:
+private def vt_struct_name(a: *Arena, td: *PsDecl) -> const *char:
     return a->printf("VT_%s", td->name)
 
-static def vt_value_name(a: *Arena, td: *PsDecl, rd: *PsDecl) -> const *char:
+private def vt_value_name(a: *Arena, td: *PsDecl, rd: *PsDecl) -> const *char:
     return a->printf("VT_%s__%s", td->name, rd->name)
 
-static def vt_thunk_name(a: *Arena, td: *PsDecl, rd: *PsDecl, m: *PsFunc) -> const *char:
+private def vt_thunk_name(a: *Arena, td: *PsDecl, rd: *PsDecl, m: *PsFunc) -> const *char:
     return a->printf("VT_%s__%s__%s", td->name, rd->name, m->name)
 
 # `Ret (*name)(void *self, PsCtx *ctx, ...)` — the type of one vtable slot
-static def vt_slot_type(L: *PsLow, m: *PsFunc) -> *Type:
+private def vt_slot_type(L: *PsLow, m: *PsFunc) -> *Type:
     ft: *Type = ty_func(L->a, L->ty(m->ret))
     n: i32 = m->nparams + 1                    # receiver + ctx + the rest
     ft->targs = L->a->alloc(usize(n) * sizeof(*ft->targs))
@@ -9384,7 +9384,7 @@ static def vt_slot_type(L: *PsLow, m: *PsFunc) -> *Type:
     ft->ntargs = k
     return ft
 
-static def lower_vt_struct(L: *PsLow, td: *PsDecl) -> *Decl:
+private def lower_vt_struct(L: *PsLow, td: *PsDecl) -> *Decl:
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_STRUCT
     d->is_def = True
@@ -9400,7 +9400,7 @@ static def lower_vt_struct(L: *PsLow, td: *PsDecl) -> *Decl:
     return d
 
 # `static Ret VT_T__R__m(void *self, PsCtx *ctx, ...) { return R_m((R*)self, ctx, ...); }`
-static def lower_vt_thunk(L: *PsLow, td: *PsDecl, rd: *PsDecl, tm: *PsFunc, body: bool) -> *Decl:
+private def lower_vt_thunk(L: *PsLow, td: *PsDecl, rd: *PsDecl, tm: *PsFunc, body: bool) -> *Decl:
     m: *PsFunc = None
     for i in range(rd->nmethods):
         if strcmp(rd->methods[i]->name, tm->name) == 0:
@@ -9465,7 +9465,7 @@ static def lower_vt_thunk(L: *PsLow, td: *PsDecl, rd: *PsDecl, tm: *PsFunc, body
     return d
 
 # `static const VT_T VT_T__R = {thunk, ...};`
-static def lower_vt_value(L: *PsLow, td: *PsDecl, rd: *PsDecl) -> *Decl:
+private def lower_vt_value(L: *PsLow, td: *PsDecl, rd: *PsDecl) -> *Decl:
     d: *Decl = L->a->alloc(sizeof(Decl))
     d->kind = DL_VAR
     d->pos = rd->pos
@@ -9534,7 +9534,7 @@ def tuple_is_pure(t: *PsType) -> bool:
 #
 # The cost is a copy where `in` promised none. It is the only honest price: the
 # thing `in` promised to borrow does not stay where it was.
-static def borrowable(e: *Expr) -> bool:
+private def borrowable(e: *Expr) -> bool:
     if e == None:
         return False
     match e->kind:
@@ -9549,7 +9549,7 @@ static def borrowable(e: *Expr) -> bool:
         case _:
             return False
 
-static def is_addressable(e: *Expr) -> bool:
+private def is_addressable(e: *Expr) -> bool:
     if e == None:
         return False
     match e->kind:
@@ -9563,7 +9563,7 @@ static def is_addressable(e: *Expr) -> bool:
             return False
 
 # can this initializer be a C static initializer — no context, no allocation?
-static def ps_is_const_init(e: *PsExpr) -> bool:
+private def ps_is_const_init(e: *PsExpr) -> bool:
     if e == None:
         return False
     match e->kind:
@@ -9587,7 +9587,7 @@ static def ps_is_const_init(e: *PsExpr) -> bool:
 # does this block mention `name`? The catch binding is only emitted when the
 # handler actually reads it — an unused one is a warning in the generated C, and
 # generated C that warns is generated C nobody trusts.
-static def block_uses(b: *PsBlock, name: const *char) -> bool:
+private def block_uses(b: *PsBlock, name: const *char) -> bool:
     if b == None:
         return False
     for i in range(b->n):
@@ -9607,7 +9607,7 @@ static def block_uses(b: *PsBlock, name: const *char) -> bool:
                 return True
     return False
 
-static def expr_uses(e: *PsExpr, name: const *char) -> bool:
+private def expr_uses(e: *PsExpr, name: const *char) -> bool:
     if e == None:
         return False
     if e->kind == PE_NAME and e->text != None and strcmp(e->text, name) == 0:
@@ -9625,7 +9625,7 @@ static def expr_uses(e: *PsExpr, name: const *char) -> bool:
 # represented (9.4), whether a list traces its elements, and whether a dict
 # traces its keys or values. A type missing here is one the collector loses.
 # which frame belongs to this function, by name
-static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32:
+private def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32:
     for i in range(afr.len):
         if strcmp(afr.data[i]->name, name) == 0:
             return i32(i)
@@ -9634,7 +9634,7 @@ static def frame_index(ref afr: Vec<*PsDecl>, name: const *char) -> i32:
     fatal("internal: no async frame named '%s'", name)
     return 0
 
-static def opt_is_ref(t: *PsType) -> bool:
+private def opt_is_ref(t: *PsType) -> bool:
     if t == None:
         return False
     # 113: um `T?` cujo T É referência TAMBÉM é uma referência nua — é essa a
@@ -9651,16 +9651,16 @@ static def opt_is_ref(t: *PsType) -> bool:
         return True
     return t->kind == PT_STR or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
-static def starts_with(s: const *char, p: const *char) -> bool:
+private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)
     return strncmp(s, p, n) == 0
 
-static def zero_pos() -> Pos:
+private def zero_pos() -> Pos:
     p: Pos = {1, 1}
     return p
 
 # the P type names this lowering ever produces for a SCALAR
-static def is_scalar_pname(n: const *char) -> bool:
+private def is_scalar_pname(n: const *char) -> bool:
     return n != None and (strcmp(n, "i64") == 0 or strcmp(n, "f64") == 0 or strcmp(n, "bool") == 0 or strcmp(n, "int") == 0 or strcmp(n, "void") == 0)
 
 # One P function from one pscript function or method.
@@ -9672,7 +9672,7 @@ static def is_scalar_pname(n: const *char) -> bool:
 # prototype be emitted before every body, which makes the order stop mattering —
 # and P's method sugar cannot be prototyped and defined separately inside one
 # file.
-static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool) -> *Decl:
+private def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool) -> *Decl:
     # 114: o ARQUIVO é o do módulo que ESCREVEU a função (41.3), não o do
     # programa principal. Sem isto, uma mensagem de erro em tempo de execução
     # dentro de `lib_pui.psc` dizia `app.psc` com a LINHA do lib_pui — o pior
@@ -9687,7 +9687,7 @@ static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool
     pf->pos = f->pos
     pf->name = ps_cname(L->a, f->name) if owner == None else L->a->printf("%s_%s", owner, f->name)
     pf->cname = pf->name
-    pf->is_static = f->is_static and owner == None
+    pf->is_static = f->is_private   # `private` in pscript is `static` in the C we emit
     pf->ret = L->ty(f->ret)
     recv: bool = owner != None and f->nparams > 0 and strcmp(f->params[0].name, "self") == 0
     pf->params = L->a->alloc(usize(f->nparams + 2) * sizeof(*pf->params))

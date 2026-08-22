@@ -7,6 +7,7 @@ typedef struct Pos Pos;
 typedef struct ArenaBlock ArenaBlock;
 typedef struct Arena Arena;
 typedef struct StrBuf StrBuf;
+typedef struct FStrParts FStrParts;
 
 struct Pos {
     int32_t line;
@@ -90,3 +91,13 @@ const char *path_relative(Arena *a, const char *from_dir, const char *to);
 char *str_lit_decode(Arena *a, const char *lex, size_t *out_len);
 
 const char *c_string_literal(Arena *a, const char *bytes, size_t n);
+
+struct FStrParts {
+    const char **lits;
+    size_t *lit_lens;
+    const char **holes;
+    const char **specs;
+    int32_t n;
+};
+
+FStrParts fstr_split(Arena *a, const char *body, size_t nbody, const char *file, Pos pos);

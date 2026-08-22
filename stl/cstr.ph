@@ -77,14 +77,14 @@ struct CBytes:
 # A literal already knows its own length at compile time (the compiler folds
 # the `strlen`); these are for when the text arrives as a pointer that does
 # not. `static inline` because a pair of fields does not deserve a call.
-static inline def cstr(s: const *char) -> CStr:
+private inline def cstr(s: const *char) -> CStr:
     r: CStr = {s, strlen(s)}
     return r
 
-static inline def cstr_n(s: const *char, n: usize) -> CStr:
+private inline def cstr_n(s: const *char, n: usize) -> CStr:
     r: CStr = {s, n}
     return r
 
-static inline def cbytes(p: const *u8, n: usize) -> CBytes:
+private inline def cbytes(p: const *u8, n: usize) -> CBytes:
     r: CBytes = {p, n}
     return r

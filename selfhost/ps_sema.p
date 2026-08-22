@@ -41,7 +41,7 @@ import "parser.ph"   # 75.3: a `.ph` is read with P's own front end
 # num lugar só: quem resolve o import pergunta a ela, e `builtin_ns` (embaixo)
 # diz quais nomes cada um tem. Esquecer de acrescentar um módulo novo AQUI dá
 # "cannot find module 'os'", que não diz nada a quem escreveu o import.
-static def ps_builtin_mod(name: const *char) -> bool:
+private def ps_builtin_mod(name: const *char) -> bool:
     MODS: const *char[] = {"sys", "re", "json", "net", "random", "math", "time",
                            "bisect", "heapq", "gc", "os", "path"}
     for i in range(i32(sizeof(MODS) / sizeof(MODS[0]))):
@@ -88,20 +88,20 @@ implement Vec<PsLamF>
 # time: the bytes are read at COMPILE time and become a static array, so there
 # is no file to find, no path to configure, and the prelude a compiler carries
 # is exactly the one that was compiled into it.
-static const PS_PRELUDE: const *char = embed("ps_prelude.psc")
+private const PS_PRELUDE: const *char = embed("ps_prelude.psc")
 
 # how deep a chain of DISTINCT structs a message may nest (74.2). A type that
 # contains itself is not deep — it is caught by the name already on the way
 # down — so this only bounds a genuinely long chain.
-static const PS_SEND_DEPTH: const i32 = 64
+private const PS_SEND_DEPTH: const i32 = 64
 
 # Renamed name -> the name a diagnostic should print (`geom.Vec2`). Module
 # scope because `ps_type_str` is a free function: it is called from everywhere,
 # takes only the type, and a message showing `geom__Vec2` would be telling the
 # reader about a rename they never asked for. Rebuilt per run; one map per
 # compiled program.
-static PS_DISP: StrMap<*char>
-static PS_DISP_READY: bool = False
+private PS_DISP: StrMap<*char>
+private PS_DISP_READY: bool = False
 
 # The typed views of 18.3, as a table: the NAME says the element, and the size
 # follows from it. Zero means "not a view method".
@@ -136,29 +136,29 @@ def ps_disp(name: const *char) -> const *char:
     return d if d != None else name
 
 
-static def ps_expr_what(k: PsExprKind) -> const *char
+private def ps_expr_what(k: PsExprKind) -> const *char
 def ps_mangle_type(a: *Arena, t: *PsType) -> const *char
 def ps_type_str(a: *Arena, t: *PsType) -> const *char
 def is_ps_designator(e: *PsExpr) -> bool
 def zero_ps_pos() -> Pos
-static def ns_find(v: *PsNsEnt, n: i32, name: const *char) -> *PsNsEnt
+private def ns_find(v: *PsNsEnt, n: i32, name: const *char) -> *PsNsEnt
 def ps_const_len(e: *PsExpr, ref out: i64) -> bool
-static def ps_prog_shadows(m: *PsModule, name: const *char) -> *PsDecl
+private def ps_prog_shadows(m: *PsModule, name: const *char) -> *PsDecl
 def ps_is_ref_type(t: *PsType) -> bool
-static def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType
-static def ps_lit_fits(file: const *char, e: *PsExpr, t: *PsType)
-static def ps_int_widens(from2: *PsType, to: *PsType) -> bool
-static def ps_adapt_lit(file: const *char, e: *PsExpr, t: *PsType) -> bool
-static def ps_int_common(a: *PsType, b: *PsType) -> *PsType
+private def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType
+private def ps_lit_fits(file: const *char, e: *PsExpr, t: *PsType)
+private def ps_int_widens(from2: *PsType, to: *PsType) -> bool
+private def ps_adapt_lit(file: const *char, e: *PsExpr, t: *PsType) -> bool
+private def ps_int_common(a: *PsType, b: *PsType) -> *PsType
 def opt_is_ref_ps(t: *PsType) -> bool
 def ps_has_await(e: *PsExpr) -> bool
-static def ps_type_clone(a: *Arena, t: *PsType) -> *PsType
-static def ps_subst_self(t: *PsType, name: const *char)
-static def ps_subst_named(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType
-static def ns_check_visible(ns: *PsNs, name: const *char, file: const *char, pos: Pos, spelled: const *char)
-static def ps_stmt_what(k: PsStmtKind) -> const *char
-static def ps_assign_binop(op: i32) -> i32
-static def self_name(a: *Arena, n: const *char) -> const *char
+private def ps_type_clone(a: *Arena, t: *PsType) -> *PsType
+private def ps_subst_self(t: *PsType, name: const *char)
+private def ps_subst_named(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType
+private def ns_check_visible(ns: *PsNs, name: const *char, file: const *char, pos: Pos, spelled: const *char)
+private def ps_stmt_what(k: PsStmtKind) -> const *char
+private def ps_assign_binop(op: i32) -> i32
+private def self_name(a: *Arena, n: const *char) -> const *char
 
 # a local, in the function-wide scope of 40.2
 struct PsLocal:
@@ -261,90 +261,90 @@ struct PsSema:
     fn_nonlocals: StrSet     # `nonlocal x`: the next `x = ...` declares at depth 0
     fn_globals: StrSet       # `global x`: assignments go to the module variable
 
-    static def find_local(self: *PsSema, name: const *char) -> i32
-    static def find_local_here(self: *PsSema, name: const *char) -> i32
-    static def pop_scope(self: *PsSema)
-    static def add_local(self: *PsSema, name: const *char, t: *PsType, assigned: bool, is_const: bool)
-    static def check_block(self: *PsSema, b: *PsBlock)
-    static def blk_exits(self: *PsSema, b: *PsBlock) -> bool
-    static def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr
-    static def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr
-    static def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr
-    static def sug_bin(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
-    static def sug_index(self: *PsSema, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
-    static def sug_bind(self: *PsSema, name: const *char, val: *PsExpr, pos: Pos) -> *PsStmt
-    static def sug_kind(self: *PsSema, s: *PsStmt) -> i32
-    static def sug_hoist(self: *PsSema, b: *PsBlock)
-    static def sug_deny(self: *PsSema, a: *PsExpr, outer: const *char)
-    static def sug_comp(self: *PsSema, e: *PsExpr)
-    static def sug_unpack(self: *PsSema, s: *PsStmt) -> bool
-    static def sug_body(self: *PsSema, s: *PsStmt, names: **char, vals: **PsExpr, n: i32)
-    static def sug_for(self: *PsSema, s: *PsStmt, k: i32)
-    static def check_stmt(self: *PsSema, s: *PsStmt)
-    static def check_expr(self: *PsSema, e: *PsExpr) -> *PsType
-    static def resolve_type(self: *PsSema, t: *PsType) -> *PsType
-    static def check_call(self: *PsSema, e: *PsExpr) -> *PsType
-    static def call_generic(self: *PsSema, e: *PsExpr, f: *PsFunc, name: const *char) -> *PsType
-    static def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char)
-    static def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
-    static def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
-    static def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char)
-    static def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char)
-    static def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType
-    static def check_func(self: *PsSema, f: *PsFunc)
-    static def check_record_bytes(self: *PsSema, d: *PsDecl)
-    static def predef(self: *PsSema, e: *PsExpr) -> *PsType
-    static def const_root(self: *PsSema, e: *PsExpr) -> const *char
-    static def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char)
-    static def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool
-    static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
-    static def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char)
-    static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
-    static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
-    static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
-    static def sendable_in(self: *PsSema, t: *PsType, pos: Pos, what: const *char, seen: **char, n: i32)
-    static def check_endian(self: *PsSema, e: *PsExpr)
-    static def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl)
-    static def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl)
-    static def ingest_cdecls(self: *PsSema, m: *PsModule, cm: *Module)
-    static def build_ns(self: *PsSema, m: *PsModule, prefix: const *char, name: const *char) -> *PsNs
-    static def builtin_ns(self: *PsSema, name: const *char, path: const *char) -> *PsNs
-    static def fresh_prefix(self: *PsSema, name: const *char) -> const *char
-    static def gname(self: *PsSema, name: const *char, pos: Pos) -> const *char
-    static def gname_soft(self: *PsSema, name: const *char) -> const *char
-    static def gname_x(self: *PsSema, name: const *char, pos: Pos, hard: bool) -> const *char
-    static def enter_decl(self: *PsSema, d: *PsDecl)
-    static def enter_func(self: *PsSema, d: *PsDecl, f: *PsFunc)
-    static def check_impl(self: *PsSema, d: *PsDecl)
-    static def check_implements(self: *PsSema, d: *PsDecl)
-    static def conform(self: *PsSema, rd: *PsDecl, td: *PsDecl, ms: **PsFunc, nms: i32, pos: Pos, closed: bool, assoc: *PsType)
-    static def sig_type(self: *PsSema, ns: *PsNs, t: *PsType, selfname: const *char) -> *PsType
-    static def resolve_sig(self: *PsSema, f: *PsFunc)
-    static def find_trait(self: *PsSema, t: *PsType, pos: Pos) -> *PsDecl
-    static def is_struct_name(self: *PsSema, name: const *char) -> bool
-    static def named_type(self: *PsSema, name: const *char, pos: Pos) -> *PsType
-    static def note_dyn(self: *PsSema, tname: const *char, rname: const *char)
-    static def note_dyn_trait(self: *PsSema, td: *PsDecl)
-    static def find_trait_named(self: *PsSema, name: const *char, ns: *PsNs, pos: Pos) -> *PsDecl
-    static def add_methods(self: *PsSema, rd: *PsDecl, ms: **PsFunc, nms: i32)
-    static def c_type(self: *PsSema, t: *Type) -> *PsType
-    static def cstr_kind(self: *PsSema, t: *Type) -> i32
-    static def bytes_type(self: *PsSema, pos: Pos) -> *PsType
-    static def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc)
-    static def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
-    static def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType
-    static def narrow_from(self: *PsSema, c: *PsExpr) -> i32
-    static def narrow_else(self: *PsSema, c: *PsExpr) -> i32
-    static def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32
-    static def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType
-    static def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType)
-    static def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType)
-    static def check_binary(self: *PsSema, e: *PsExpr) -> *PsType
+    private def find_local(self: *PsSema, name: const *char) -> i32
+    private def find_local_here(self: *PsSema, name: const *char) -> i32
+    private def pop_scope(self: *PsSema)
+    private def add_local(self: *PsSema, name: const *char, t: *PsType, assigned: bool, is_const: bool)
+    private def check_block(self: *PsSema, b: *PsBlock)
+    private def blk_exits(self: *PsSema, b: *PsBlock) -> bool
+    private def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr
+    private def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr
+    private def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr
+    private def sug_bin(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
+    private def sug_index(self: *PsSema, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
+    private def sug_bind(self: *PsSema, name: const *char, val: *PsExpr, pos: Pos) -> *PsStmt
+    private def sug_kind(self: *PsSema, s: *PsStmt) -> i32
+    private def sug_hoist(self: *PsSema, b: *PsBlock)
+    private def sug_deny(self: *PsSema, a: *PsExpr, outer: const *char)
+    private def sug_comp(self: *PsSema, e: *PsExpr)
+    private def sug_unpack(self: *PsSema, s: *PsStmt) -> bool
+    private def sug_body(self: *PsSema, s: *PsStmt, names: **char, vals: **PsExpr, n: i32)
+    private def sug_for(self: *PsSema, s: *PsStmt, k: i32)
+    private def check_stmt(self: *PsSema, s: *PsStmt)
+    private def check_expr(self: *PsSema, e: *PsExpr) -> *PsType
+    private def resolve_type(self: *PsSema, t: *PsType) -> *PsType
+    private def check_call(self: *PsSema, e: *PsExpr) -> *PsType
+    private def call_generic(self: *PsSema, e: *PsExpr, f: *PsFunc, name: const *char) -> *PsType
+    private def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char)
+    private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
+    private def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
+    private def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char)
+    private def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char)
+    private def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType
+    private def check_func(self: *PsSema, f: *PsFunc)
+    private def check_record_bytes(self: *PsSema, d: *PsDecl)
+    private def predef(self: *PsSema, e: *PsExpr) -> *PsType
+    private def const_root(self: *PsSema, e: *PsExpr) -> const *char
+    private def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char)
+    private def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool
+    private def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    private def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char)
+    private def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    private def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    private def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char)
+    private def sendable_in(self: *PsSema, t: *PsType, pos: Pos, what: const *char, seen: **char, n: i32)
+    private def check_endian(self: *PsSema, e: *PsExpr)
+    private def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl)
+    private def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl)
+    private def ingest_cdecls(self: *PsSema, m: *PsModule, cm: *Module)
+    private def build_ns(self: *PsSema, m: *PsModule, prefix: const *char, name: const *char) -> *PsNs
+    private def builtin_ns(self: *PsSema, name: const *char, path: const *char) -> *PsNs
+    private def fresh_prefix(self: *PsSema, name: const *char) -> const *char
+    private def gname(self: *PsSema, name: const *char, pos: Pos) -> const *char
+    private def gname_soft(self: *PsSema, name: const *char) -> const *char
+    private def gname_x(self: *PsSema, name: const *char, pos: Pos, hard: bool) -> const *char
+    private def enter_decl(self: *PsSema, d: *PsDecl)
+    private def enter_func(self: *PsSema, d: *PsDecl, f: *PsFunc)
+    private def check_impl(self: *PsSema, d: *PsDecl)
+    private def check_implements(self: *PsSema, d: *PsDecl)
+    private def conform(self: *PsSema, rd: *PsDecl, td: *PsDecl, ms: **PsFunc, nms: i32, pos: Pos, closed: bool, assoc: *PsType)
+    private def sig_type(self: *PsSema, ns: *PsNs, t: *PsType, selfname: const *char) -> *PsType
+    private def resolve_sig(self: *PsSema, f: *PsFunc)
+    private def find_trait(self: *PsSema, t: *PsType, pos: Pos) -> *PsDecl
+    private def is_struct_name(self: *PsSema, name: const *char) -> bool
+    private def named_type(self: *PsSema, name: const *char, pos: Pos) -> *PsType
+    private def note_dyn(self: *PsSema, tname: const *char, rname: const *char)
+    private def note_dyn_trait(self: *PsSema, td: *PsDecl)
+    private def find_trait_named(self: *PsSema, name: const *char, ns: *PsNs, pos: Pos) -> *PsDecl
+    private def add_methods(self: *PsSema, rd: *PsDecl, ms: **PsFunc, nms: i32)
+    private def c_type(self: *PsSema, t: *Type) -> *PsType
+    private def cstr_kind(self: *PsSema, t: *Type) -> i32
+    private def bytes_type(self: *PsSema, pos: Pos) -> *PsType
+    private def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc)
+    private def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
+    private def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType
+    private def narrow_from(self: *PsSema, c: *PsExpr) -> i32
+    private def narrow_else(self: *PsSema, c: *PsExpr) -> i32
+    private def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32
+    private def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType
+    private def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType)
+    private def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType)
+    private def check_binary(self: *PsSema, e: *PsExpr) -> *PsType
 
     # innermost first: an inner block may shadow an outer name, exactly as in P
     # `x != None` on a local of option type: the index of that local, or -1.
     # `None != x` counts too; anything else does not narrow.
-    static def narrow_from(self: *PsSema, c: *PsExpr) -> i32:
+    private def narrow_from(self: *PsSema, c: *PsExpr) -> i32:
         return self->narrow_op(c, TK_NE)
 
     # 114: e o INVERSO — `if x == None: ... else: <aqui x é T>`. É a mesma prova
@@ -352,10 +352,10 @@ struct PsSema:
     # primeiro o caso ausente. O que NÃO se faz aqui é o `if x == None: return`
     # seguido de código: isso pede análise de fluxo, e o ramo `else` é a metade
     # que sai de graça.
-    static def narrow_else(self: *PsSema, c: *PsExpr) -> i32:
+    private def narrow_else(self: *PsSema, c: *PsExpr) -> i32:
         return self->narrow_op(c, TK_EQ)
 
-    static def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32:
+    private def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32:
         # 114: `x != None and <resto>` também prova — o `and` só entra no ramo
         # quando os DOIS lados valem. Só para `!=`: no `==`, o `else` pode ter
         # sido tomado porque o OUTRO lado falhou, e aí nada está provado.
@@ -382,7 +382,7 @@ struct PsSema:
             return -1
         return i
 
-    static def find_local(self: *PsSema, name: const *char) -> i32:
+    private def find_local(self: *PsSema, name: const *char) -> i32:
         i: i32 = self->nlocals - 1
         while i >= 0:
             if strcmp(self->locals[i].name, name) == 0:
@@ -391,7 +391,7 @@ struct PsSema:
         return -1
 
     # only the CURRENT block: redeclaring there is an error, shadowing is not
-    static def find_local_here(self: *PsSema, name: const *char) -> i32:
+    private def find_local_here(self: *PsSema, name: const *char) -> i32:
         i: i32 = self->nlocals - 1
         while i >= 0 and self->locals[i].depth >= self->depth:
             if self->locals[i].depth == self->depth and strcmp(self->locals[i].name, name) == 0:
@@ -399,7 +399,7 @@ struct PsSema:
             i -= 1
         return -1
 
-    static def add_local(self: *PsSema, name: const *char, t: *PsType, assigned: bool, is_const: bool):
+    private def add_local(self: *PsSema, name: const *char, t: *PsType, assigned: bool, is_const: bool):
         self->locals = vec_grow(self->locals, self->nlocals, ref self->clocals, sizeof(*self->locals))
         with self->locals[self->nlocals]:
             .name = name
@@ -424,7 +424,7 @@ struct PsSema:
             .depth = 0 if self->fn_nonlocals.has(name) else self->depth
         self->nlocals += 1
 
-    static def pop_scope(self: *PsSema):
+    private def pop_scope(self: *PsSema):
         n: i32 = self->nlocals
         while n > 0 and self->locals[n - 1].depth >= self->depth:
             n -= 1
@@ -436,7 +436,7 @@ struct PsSema:
         self->nlocals = n
 
     # ---------- types ----------
-    static def resolve_type(self: *PsSema, t: *PsType) -> *PsType:
+    private def resolve_type(self: *PsSema, t: *PsType) -> *PsType:
         if t == None:
             return None
         match t->kind:
@@ -530,7 +530,7 @@ struct PsSema:
         return t
 
     # `T` -> `T?`, para quando o tipo do resultado é "isto pode faltar"
-    static def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType:
+    private def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType:
         o: *PsType = ps_type(self->a, PT_OPT, pos)
         o->inner = t
         return o
@@ -538,14 +538,14 @@ struct PsSema:
     # Check an expression while SAYING what is wanted. A lambda has no
     # annotations, so the context is the only place its parameter types can come
     # from — and an empty list literal is in the same position.
-    static def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char):
+    private def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char):
         prev: *PsType = self->hint
         self->hint = expect
         got: *PsType = self->check_expr(e)
         self->hint = prev
         self->want(e, got, expect, ctx)
 
-    static def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char):
+    private def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char):
         if ps_type_eq(got, expect):
             return
         # a function with a signature fits where SOME function is wanted (29.3):
@@ -609,7 +609,7 @@ struct PsSema:
         fatal_at(self->file, e->pos, "%s expects %s, found %s", ctx, ps_type_str(self->a, expect), ps_type_str(self->a, got))
 
     # ---------- expressions ----------
-    static def check_expr(self: *PsSema, e: *PsExpr) -> *PsType:
+    private def check_expr(self: *PsSema, e: *PsExpr) -> *PsType:
         if e == None:
             return None
         if e->sug_done:
@@ -1322,7 +1322,7 @@ struct PsSema:
         e->type = t
         return t
 
-    static def check_binary(self: *PsSema, e: *PsExpr) -> *PsType:
+    private def check_binary(self: *PsSema, e: *PsExpr) -> *PsType:
         # The context type does NOT reach through an operator. What a `+` needs
         # from its operands is that they agree with EACH OTHER (68.2 decides
         # how); letting the surrounding expectation in would make
@@ -1487,7 +1487,7 @@ struct PsSema:
         return None
 
     # ---------- calls ----------
-    static def check_call(self: *PsSema, e: *PsExpr) -> *PsType:
+    private def check_call(self: *PsSema, e: *PsExpr) -> *PsType:
         # `vec3.f(...)` is a QUALIFIED call, never a method call
         if self->try_mod_qual(e->lhs):
             pass
@@ -2026,7 +2026,7 @@ struct PsSema:
                     e->lhs->type = fty7        # é o CAMPO, não o receptor: a
                     return fty7->inner         #   lowering vê a função e não um método
                 fatal_at(self->file, e->pos, "'%s' has no method '%s'", rt->name, e->lhs->text)
-            nrecv: i32 = 1 if not mth->is_static else 0
+            nrecv: i32 = 1 if not mth->is_smethod else 0
             if mth->nparams - nrecv > 0:
                 self->bind_call_args(e, &mth->params[nrecv], mth->nparams - nrecv, self->a->printf("'%s.%s'", rt->name, mth->name))
             if e->nargs != mth->nparams - nrecv:
@@ -2233,7 +2233,7 @@ struct PsSema:
     # list. It is checked with the caller's locals HIDDEN: a default belongs to
     # the scope that WROTE it, so a caller local that happens to share a name
     # with a module variable cannot capture it.
-    static def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char):
+    private def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char):
         vf: bool = nparams > 0 and params[nparams - 1].is_varargs
         named: bool = False
         for i in range(e->nargs):
@@ -2286,7 +2286,7 @@ struct PsSema:
         e->args = slots
         e->nargs = nparams
 
-    static def call_generic(self: *PsSema, e: *PsExpr, f: *PsFunc, name: const *char) -> *PsType:
+    private def call_generic(self: *PsSema, e: *PsExpr, f: *PsFunc, name: const *char) -> *PsType:
         if f->ntparams != 1:
             fatal_at(self->file, e->pos, "'%s' has %d type parameters; one is what is compiled so far", ps_disp(name), f->ntparams)
         if e->nargs != f->nparams:
@@ -2326,7 +2326,7 @@ struct PsSema:
     # The builtins that have to exist on day one. `print` needs *args (44.2) to
     # be what Python's is; until that is compiled, one argument is the honest
     # subset and the error says so.
-    static def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType:
+    private def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType:
         if strcmp(name, "print") == 0 or strcmp(name, "aprint") == 0:
             # Python's `print`: as many values as you like, joined by spaces
             # (44.2). The general `*args` is still ahead; this is the one place
@@ -3160,7 +3160,7 @@ struct PsSema:
     #
     # Declarations still all end up in ONE module — the renaming is what makes
     # that safe — because the backend emits one file.
-    static def build_ns(self: *PsSema, m: *PsModule, prefix: const *char, name: const *char) -> *PsNs:
+    private def build_ns(self: *PsSema, m: *PsModule, prefix: const *char, name: const *char) -> *PsNs:
         ns: *PsNs = self->a->alloc(sizeof(*ns))
         ns->name = name
         ns->prefix = prefix
@@ -3184,7 +3184,7 @@ struct PsSema:
             match d->kind:
                 case PD_FUNC, PD_RECORD, PD_STRUCT, PD_VAR, PD_SHARED, PD_TRAIT:
                     ns->sym.add(d->name)
-                    if d->is_static:
+                    if d->is_private:
                         ns->priv.add(d->name)    # 44.4
                 case PD_ENUM:
                     ns->sym.add(d->name)
@@ -3294,14 +3294,14 @@ struct PsSema:
     # Enter the namespace a declaration came from: the flat list holds every
     # module's declarations, and a body has to be checked — and its errors
     # reported — in the module that WROTE it.
-    static def enter_decl(self: *PsSema, d: *PsDecl):
+    private def enter_decl(self: *PsSema, d: *PsDecl):
         self->cur_ns = d->ns if d != None and d->ns != None else self->root_ns
         self->file = self->cur_ns->m->path
 
     # A METHOD's namespace, which is not always its type's: an
     # `implement Trait for Point:` block in another module writes methods that
     # end up on `Point`, and their bodies belong where they were written.
-    static def enter_func(self: *PsSema, d: *PsDecl, f: *PsFunc):
+    private def enter_func(self: *PsSema, d: *PsDecl, f: *PsFunc):
         ns: *PsNs = f->ns if f != None and f->ns != None else None
         if ns == None:
             ns = d->ns if d != None and d->ns != None else self->root_ns
@@ -3314,7 +3314,7 @@ struct PsSema:
     # methods are registered as methods OF THE TYPE, so every call resolves
     # through the method lookup that already existed and no dispatch is
     # invented. The trait is a CONTRACT, checked here and then gone.
-    static def check_impl(self: *PsSema, d: *PsDecl):
+    private def check_impl(self: *PsSema, d: *PsDecl):
         self->enter_decl(d)
         td: *PsDecl = self->find_trait(d->trait_type, d->pos)
         ft: *PsType = self->resolve_type(d->for_type)
@@ -3338,7 +3338,7 @@ struct PsSema:
     # `record R implements Printable:` — the same contract, declared where the
     # type is (66.1). Nominal either way (66.2): having the methods is not
     # enough, and this is the line that says so.
-    static def check_implements(self: *PsSema, d: *PsDecl):
+    private def check_implements(self: *PsSema, d: *PsDecl):
         self->enter_decl(d)
         for i in range(d->nimplements):
             tt: *PsType = ps_type(self->a, PT_NAME, d->pos)
@@ -3355,13 +3355,13 @@ struct PsSema:
     # The two lists the lowering needs: which traits are used as a `dyn` (one
     # vtable STRUCT each) and which pairs are actually boxed (one vtable VALUE
     # each). Kept here because the sema is where both halves are known.
-    static def note_dyn_trait(self: *PsSema, td: *PsDecl):
+    private def note_dyn_trait(self: *PsSema, td: *PsDecl):
         if self->dseen.has(td->name):
             return
         self->dseen.add(td->name)
         self->dtraits.push(td)
 
-    static def note_dyn(self: *PsSema, tname: const *char, rname: const *char):
+    private def note_dyn(self: *PsSema, tname: const *char, rname: const *char):
         key: const *char = self->a->printf("%s|%s", tname, rname)
         if self->dseen.has(key):
             return
@@ -3373,13 +3373,13 @@ struct PsSema:
 
     # a `struct` is the collected REFERENCE type (20.1); a `record` is the value
     # one (52.1). Everything downstream reads this off the type node.
-    static def is_struct_name(self: *PsSema, name: const *char) -> bool:
+    private def is_struct_name(self: *PsSema, name: const *char) -> bool:
         if name == None or not self->records.has(name):
             return False
         d: *PsDecl = self->records.get_or(name, None)
         return d != None and d->kind == PD_STRUCT
 
-    static def named_type(self: *PsSema, name: const *char, pos: Pos) -> *PsType:
+    private def named_type(self: *PsSema, name: const *char, pos: Pos) -> *PsType:
         t: *PsType = ps_type(self->a, PT_NAME, pos)
         t->name = name
         t->is_ref = self->is_struct_name(name)
@@ -3387,7 +3387,7 @@ struct PsSema:
 
     # a bound is written as a bare name, and it is resolved in the namespace of
     # the function that WROTE it, not of the call site
-    static def find_trait_named(self: *PsSema, name: const *char, ns: *PsNs, pos: Pos) -> *PsDecl:
+    private def find_trait_named(self: *PsSema, name: const *char, ns: *PsNs, pos: Pos) -> *PsDecl:
         save: *PsNs = self->cur_ns
         if ns != None:
             self->cur_ns = ns
@@ -3397,7 +3397,7 @@ struct PsSema:
         self->cur_ns = save
         return td
 
-    static def find_trait(self: *PsSema, t: *PsType, pos: Pos) -> *PsDecl:
+    private def find_trait(self: *PsSema, t: *PsType, pos: Pos) -> *PsDecl:
         name: const *char = t->name
         if t->qual != None:
             q: *PsNsEnt = ns_find(self->cur_ns->quals, self->cur_ns->nquals, t->qual) if self->cur_ns != None else None
@@ -3415,7 +3415,7 @@ struct PsSema:
     # WHOLE of what was written for this trait: an `implement` block holds
     # nothing else, so a method the trait never asked for is a mistake there —
     # while a record with `implements` naturally has methods of its own.
-    static def conform(self: *PsSema, rd: *PsDecl, td: *PsDecl, ms: **PsFunc, nms: i32, pos: Pos, closed: bool, assoc: *PsType):
+    private def conform(self: *PsSema, rd: *PsDecl, td: *PsDecl, ms: **PsFunc, nms: i32, pos: Pos, closed: bool, assoc: *PsType):
         # the associated type (66.4): the trait names it, the implementation
         # says what it IS, and from here on the two signatures are compared with
         # that name standing for that type — exactly like `Self`
@@ -3473,7 +3473,7 @@ struct PsSema:
     # standing for the implementing type (66.4). It resolves a COPY: the same
     # trait signature is compared against every type that implements it.
     # the types a signature names, resolved in the namespace that WROTE it
-    static def resolve_sig(self: *PsSema, f: *PsFunc):
+    private def resolve_sig(self: *PsSema, f: *PsFunc):
         if f == None:
             return
         f->ret = self->resolve_type(f->ret)
@@ -3481,7 +3481,7 @@ struct PsSema:
             if f->params[i].type != None:
                 f->params[i].type = self->resolve_type(f->params[i].type)
 
-    static def sig_type(self: *PsSema, ns: *PsNs, t: *PsType, selfname: const *char) -> *PsType:
+    private def sig_type(self: *PsSema, ns: *PsNs, t: *PsType, selfname: const *char) -> *PsType:
         if t == None:
             return None
         c: *PsType = ps_type_clone(self->a, t)
@@ -3501,7 +3501,7 @@ struct PsSema:
 
     # the trait's methods become the TYPE's: no new dispatch, and the lowering
     # emits them exactly like the ones written inside the record
-    static def add_methods(self: *PsSema, rd: *PsDecl, ms: **PsFunc, nms: i32):
+    private def add_methods(self: *PsSema, rd: *PsDecl, ms: **PsFunc, nms: i32):
         if nms == 0:
             return
         nw: **PsFunc = self->a->alloc(usize(rd->nmethods + nms) * sizeof(*nw))
@@ -3522,7 +3522,7 @@ struct PsSema:
     # A module with no file behind it (48.3). Its members resolve to names the
     # sema knows by hand — `__sys_argv` and friends — which is what lets the
     # program spell it `sys.argv` while the runtime answers.
-    static def builtin_ns(self: *PsSema, name: const *char, path: const *char) -> *PsNs:
+    private def builtin_ns(self: *PsSema, name: const *char, path: const *char) -> *PsNs:
         ns: *PsNs = self->a->alloc(sizeof(PsNs))
         ns->name = name
         ns->prefix = self->a->printf("__%s_", name)
@@ -3646,7 +3646,7 @@ struct PsSema:
 
     # a prefix no other module took. Two files named `util.psc` in different
     # directories are different modules and must not collide.
-    static def fresh_prefix(self: *PsSema, name: const *char) -> const *char:
+    private def fresh_prefix(self: *PsSema, name: const *char) -> const *char:
         base: const *char = name
         i: i32 = i32(strlen(name)) - 1
         while i >= 0:
@@ -3667,18 +3667,18 @@ struct PsSema:
     # imported stays as written — it is a builtin or a C function — EXCEPT when
     # it belongs to the module being compiled, which an imported module must
     # not be able to reach: that is the visibility rule doing its job.
-    static def gname(self: *PsSema, name: const *char, pos: Pos) -> const *char:
+    private def gname(self: *PsSema, name: const *char, pos: Pos) -> const *char:
         return self->gname_x(name, pos, True)
 
     # `soft` is for a name that is about to be BOUND, not read: a local of an
     # imported module may perfectly well share its spelling with a variable of
     # the program that imports it, and refusing that would make a module's
     # locals depend on who imports it.
-    static def gname_soft(self: *PsSema, name: const *char) -> const *char:
+    private def gname_soft(self: *PsSema, name: const *char) -> const *char:
         zp: Pos = {0}
         return self->gname_x(name, zp, False)
 
-    static def gname_x(self: *PsSema, name: const *char, pos: Pos, hard: bool) -> const *char:
+    private def gname_x(self: *PsSema, name: const *char, pos: Pos, hard: bool) -> const *char:
         ns: *PsNs = self->cur_ns
         if ns == None:
             return name
@@ -3695,7 +3695,7 @@ struct PsSema:
     # renamed global. Called from BOTH places a qualified name can appear: as a
     # value, and as a CALLEE, where it has to happen before the dot would be
     # read as a method receiver.
-    static def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool:
+    private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool:
         if e == None or e->kind != PE_FIELD or e->lhs == None or e->lhs->kind != PE_NAME:
             return False
         if self->cur_ns == None or self->find_local(e->lhs->text) >= 0:
@@ -3722,14 +3722,14 @@ struct PsSema:
     # make the rule useless.
     # A constant the header gave: kept as the LITERAL it is, so a read becomes
     # the number and nothing of the header survives into the program (72.4).
-    static def cconst_put(self: *PsSema, name: const *char, v: i64):
+    private def cconst_put(self: *PsSema, name: const *char, v: i64):
         if name == None or self->cconsts.has(name) or self->cfuncs.has(name):
             return
         lit: *PsExpr = ps_expr(self->a, PE_INT, zero_ps_pos())
         lit->text = self->a->printf("%lld", v)
         self->cconsts.put(name, lit)
 
-    static def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl):
+    private def ingest_header(self: *PsSema, m: *PsModule, d: *PsDecl):
         dir: const *char = path_dir(self->a, m->path)
         src: const *char = cpp_capture_ex(self->a, self->cpp, "-E -P", d->path, d->import_system, dir)
         cm: *Module = c_parse(self->a, d->path, src, strlen(src), False)
@@ -3781,7 +3781,7 @@ struct PsSema:
     # import adds is the BUILD: the driver sees this declaration and compiles
     # the module's `.p` alongside, so one command covers both halves instead of
     # the two-step the pstudio port had to do by hand.
-    static def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl):
+    private def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl):
         full: const *char = path_join(self->a, path_dir(self->a, m->path), d->path)
         n: usize = 0
         bytes: *char = read_entire_file_opt(full, out n)
@@ -3797,7 +3797,7 @@ struct PsSema:
     # constants (45.5/72.4). Everything else is silently not there, which is
     # the safe default — a name that did not cross is a name the program
     # cannot spell.
-    static def ingest_cdecls(self: *PsSema, m: *PsModule, cm: *Module):
+    private def ingest_cdecls(self: *PsSema, m: *PsModule, cm: *Module):
         for i in range(cm->ndecls):
             cd: *Decl = cm->decls[i]
             # a member of an `enum`, and a `static const` scalar: both are
@@ -3913,7 +3913,7 @@ struct PsSema:
     # `CStr` / `CBytes` (84.1), by name and by shape: a struct of exactly a
     # pointer and a length. The name is what the compiler recognizes, and the
     # `in` form counts too, because that is how a P signature spells it.
-    static def cstr_kind(self: *PsSema, t: *Type) -> i32:
+    private def cstr_kind(self: *PsSema, t: *Type) -> i32:
         b: *Type = t
         if b != None and b->kind == TY_PTR:
             b = b->inner
@@ -3925,7 +3925,7 @@ struct PsSema:
             return 2
         return 0
 
-    static def bytes_type(self: *PsSema, pos: Pos) -> *PsType:
+    private def bytes_type(self: *PsSema, pos: Pos) -> *PsType:
         l: *PsType = ps_type(self->a, PT_LIST, pos)
         l->inner = ps_type(self->a, PT_INT, pos)
         l->inner->width = 8
@@ -3933,7 +3933,7 @@ struct PsSema:
         return l
 
     # a C type as a pscript type, or None when it cannot cross (45.5)
-    static def c_type(self: *PsSema, t: *Type) -> *PsType:
+    private def c_type(self: *PsSema, t: *Type) -> *PsType:
         if t == None:
             return ps_type(self->a, PT_VOID, zero_ps_pos())
         if t->kind != TY_NAME or t->name == None:
@@ -3972,7 +3972,7 @@ struct PsSema:
     # the byte order of pack/unpack (59.2, extended): an `Endian` — LE, which is
     # the default, or BE. It is a value like any other, so it can be computed
     # (a program that reads the order out of a header file is the point).
-    static def check_endian(self: *PsSema, e: *PsExpr):
+    private def check_endian(self: *PsSema, e: *PsExpr):
         et: *PsType = self->check_expr(e)
         if et == None or et->kind != PT_NAME or et->name == None or strcmp(ps_disp(et->name), "Endian") != 0:
             fatal_at(self->file, e->pos, "the byte order is an `Endian` — `LE` or `BE` — found %s", ps_type_str(self->a, et))
@@ -3984,7 +3984,7 @@ struct PsSema:
     # written out and built again on the other side. So the question here is
     # not "is this flat" any more — it is "is every part of this a thing the
     # shape can describe", and the walk says which part is not.
-    static def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
+    private def sendable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t != None and t->kind == PT_BUFFER:
             # 52.3: the one thing meant to be SHARED. The bytes are malloc'd
             # and never move, so the handle crosses and the isolation of 18.1
@@ -3993,7 +3993,7 @@ struct PsSema:
         seen: **char = self->a->alloc(usize(PS_SEND_DEPTH) * sizeof(*seen))
         self->sendable_in(t, pos, what, seen, 0)
 
-    static def sendable_in(self: *PsSema, t: *PsType, pos: Pos, what: const *char, seen: **char, n: i32):
+    private def sendable_in(self: *PsSema, t: *PsType, pos: Pos, what: const *char, seen: **char, n: i32):
         if t == None:
             return
         match t->kind:
@@ -4028,7 +4028,7 @@ struct PsSema:
                 pass
         fatal_at(self->file, pos, "%s is %s, which a message cannot carry (34.3): numbers, bools, enums, records, str, list, set, dict and `struct` cross — a worker, a task, a file, a lambda or an `any` do not, because what they name is not the receiver's to have", what, ps_type_str(self->a, t))
 
-    static def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
+    private def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t != None and t->kind == PT_STR:
             return
         self->pod_only(t, pos, what)
@@ -4040,7 +4040,7 @@ struct PsSema:
     # would be for, and rebinding the caller's variable is what a return value
     # is for. So they are refused, and the message says which of the two the
     # writer probably wants.
-    static def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char):
+    private def byref_ok(self: *PsSema, t: *PsType, pos: Pos, kw: const *char):
         if t == None:
             return
         match t->kind:
@@ -4063,7 +4063,7 @@ struct PsSema:
                 pass
         fatal_at(self->file, pos, "`%s` takes a number, a bool, an enum, a `record` or a fixed array of those — %s is already a reference, so writing through it is what mutating it does, and rebinding the caller's name is what a return value is for (65.12)", kw, ps_type_str(self->a, t))
 
-    static def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
+    private def pod_only(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:
             return
         match t->kind:
@@ -4091,7 +4091,7 @@ struct PsSema:
     # language, so a name that looks like C's dunder has to be resolved by the
     # front end that reads it — and a program that logs where it is needs this
     # more than it needs anything clever.
-    static def predef(self: *PsSema, e: *PsExpr) -> *PsType:
+    private def predef(self: *PsSema, e: *PsExpr) -> *PsType:
         n: const *char = e->text
         if n == None or n[0] != '_' or n[1] != '_':
             return None
@@ -4138,7 +4138,7 @@ struct PsSema:
     #
     # It walks to the root of the expression, because `cfg.rows.append(x)`
     # mutates what `cfg` owns just as much as `cfg.append(x)` would.
-    static def const_root(self: *PsSema, e: *PsExpr) -> const *char:
+    private def const_root(self: *PsSema, e: *PsExpr) -> const *char:
         cur: *PsExpr = e
         while cur != None:
             match cur->kind:
@@ -4150,7 +4150,7 @@ struct PsSema:
                     return None
         return None
 
-    static def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char):
+    private def deny_const_mut(self: *PsSema, e: *PsExpr, what: const *char):
         n: const *char = self->const_root(e)
         if n == None:
             return
@@ -4168,7 +4168,7 @@ struct PsSema:
     # and a comparison between two literals — which is everything a folded
     # predefine or an `is_defined` can leave behind. Anything else is "unknown",
     # and a `const if` says so instead of guessing.
-    static def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool:
+    private def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool:
         if e == None:
             ok = False
             return False
@@ -4210,7 +4210,7 @@ struct PsSema:
                 ok = False
                 return False
 
-    static def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
+    private def key_ok(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t == None:
             fatal_at(self->file, pos, "%s has no type", what)
         if t->kind == PT_TUPLE:
@@ -4242,7 +4242,7 @@ struct PsSema:
     #
     # P checks the same rule on the lowered declaration (65.1), so this is not
     # the only guard; it is the one that points at the .psc line.
-    static def check_record_bytes(self: *PsSema, d: *PsDecl):
+    private def check_record_bytes(self: *PsSema, d: *PsDecl):
         for i in range(d->nfields):
             f: *PsField = &d->fields[i]
             t: *PsType = f->type
@@ -4268,7 +4268,7 @@ struct PsSema:
     # A method on a value type takes `in self` (57.1): reads the receiver without
     # copying it and never mutates it. Producing a new value returns one — the
     # functional style the smallpt already uses.
-    static def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc):
+    private def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc):
         self->nlocals = 0
         self->depth = 0
         self->fn_gone.init()
@@ -4298,7 +4298,7 @@ struct PsSema:
                 # `in self` reads and does not write (57.1)
                 self->locals[self->nlocals - 1].frozen = True
             start = 1
-        elif not f->is_static:
+        elif not f->is_smethod:
             fatal_at(self->file, f->pos, "'%s.%s' has no receiver: write `in self` first, or `static def` for a function that needs none", d->name, f->name)
         for i in range(start, f->nparams):
             p: *PsParam = &f->params[i]
@@ -4326,7 +4326,7 @@ struct PsSema:
             self->add_local(p->name, self->resolve_type(p->type), True, False)
         self->check_block(f->body)
 
-    static def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType:
+    private def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType:
         if rt != None and rt->kind == PT_NAME and strcmp(rt->name, "Error") == 0:
             if strcmp(name, "message") == 0:
                 return ps_type(self->a, PT_STR, pos)
@@ -4347,7 +4347,7 @@ struct PsSema:
         fatal_at(self->file, pos, "'%s' has no field '%s'", rt->name, name)
         return None
 
-    static def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc:
+    private def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc:
         for i in range(rd->nmethods):
             if strcmp(rd->methods[i]->name, name) == 0:
                 return rd->methods[i]
@@ -4361,7 +4361,7 @@ struct PsSema:
     # plain lambda `lambda p: __alam<N>(caps..., p)`. The captures are found the
     # way a lambda's always are (19.2) and travel as leading PARAMETERS, which
     # is exactly how the `async:` block does it (78.3).
-    static def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType):
+    private def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType):
         fr: PsLamF = {0}
         fr.base = self->nlocals
         fr.caps.init()
@@ -4437,7 +4437,7 @@ struct PsSema:
         self->check_lambda_body(e, lh)
 
     # the ordinary lambda path, factored so the async one can reuse it
-    static def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType):
+    private def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType):
         fr2: PsLamF = {0}
         fr2.base = self->nlocals
         fr2.caps.init()
@@ -4457,7 +4457,7 @@ struct PsSema:
         e->ncaps = self->lam_fr.data[tp2].caps.len
         self->lam_fr.len -= 1
 
-    static def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType:
+    private def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType:
         named: bool = False
         positional: bool = False
         for i in range(e->nargs):
@@ -4508,17 +4508,17 @@ struct PsSema:
     # valores: um iterador de verdade precisaria de um objeto com cursor, e o par
     # que `enumerate` rende precisaria da tupla como valor dentro de contêiner.
     # Reescrever aqui custa zero de runtime e dá o mesmo que o Python dá.
-    static def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr:
+    private def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_NAME, pos)
         e->text = t
         return e
 
-    static def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr:
+    private def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_INT, pos)
         e->text = self->a->printf("%d", v)
         return e
 
-    static def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr:
+    private def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr:
         c: *PsExpr = ps_expr(self->a, PE_CALL, pos)
         c->lhs = self->sug_name(fn, pos)
         c->args = self->a->alloc(sizeof(*c->args))
@@ -4526,27 +4526,27 @@ struct PsSema:
         c->nargs = 1
         return c
 
-    static def sug_bin(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
+    private def sug_bin(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_BINARY, pos)
         e->op = op
         e->lhs = l
         e->rhs = r
         return e
 
-    static def sug_index(self: *PsSema, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
+    private def sug_index(self: *PsSema, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_INDEX, pos)
         e->lhs = l
         e->rhs = r
         return e
 
-    static def sug_bind(self: *PsSema, name: const *char, val: *PsExpr, pos: Pos) -> *PsStmt:
+    private def sug_bind(self: *PsSema, name: const *char, val: *PsExpr, pos: Pos) -> *PsStmt:
         v: *PsStmt = ps_stmt(self->a, PS_VAR, pos)
         v->name = name
         v->rhs = val
         return v
 
     # Qual dos três (0 = nenhum): reconhecido pela FORMA da chamada, sem tipos.
-    static def sug_kind(self: *PsSema, s: *PsStmt) -> i32:
+    private def sug_kind(self: *PsSema, s: *PsStmt) -> i32:
         if s->kind != PS_FOR or s->iter == None or s->iter->kind != PE_CALL:
             return 0
         f: *PsExpr = s->iter->lhs
@@ -4563,7 +4563,7 @@ struct PsSema:
     # `range` e os próprios açúcares não são VALORES, então não dá para guardá-los
     # num temporário — o que se pode dar aqui é o motivo, no lugar onde a pessoa
     # escreveu, em vez de "função desconhecida" depois da reescrita.
-    static def sug_deny(self: *PsSema, a: *PsExpr, outer: const *char):
+    private def sug_deny(self: *PsSema, a: *PsExpr, outer: const *char):
         if a->kind != PE_CALL or a->lhs == None or a->lhs->kind != PE_NAME:
             return
         w: const *char = a->lhs->text
@@ -4576,7 +4576,7 @@ struct PsSema:
 
     # As amarrações entram como PRIMEIROS statements do corpo do laço, e por
     # isso nascem e morrem no escopo dele, como a variável de laço (64.1).
-    static def sug_body(self: *PsSema, s: *PsStmt, names: **char, vals: **PsExpr, n: i32):
+    private def sug_body(self: *PsSema, s: *PsStmt, names: **char, vals: **PsExpr, n: i32):
         old: i32 = s->body->n if s->body != None else 0
         body: **PsStmt = self->a->alloc(usize(n + old) * sizeof(*body))
         for j in range(n):
@@ -4592,7 +4592,7 @@ struct PsSema:
     # ele continua andando a lista — e o que a reescrita faz é amarrar os nomes
     # aos slots da tupla, que é o que o Python chama de desempacotar. Vale para
     # `d.items()`, que desde a 98.5 é um valor: uma lista de pares.
-    static def sug_unpack(self: *PsSema, s: *PsStmt) -> bool:
+    private def sug_unpack(self: *PsSema, s: *PsStmt) -> bool:
         t: *PsType = self->check_expr(s->iter)
         s->iter->sug_done = True
         if t == None or t->kind != PT_LIST or t->inner == None or t->inner->kind != PT_TUPLE:
@@ -4620,7 +4620,7 @@ struct PsSema:
     # NOME (ou um campo), porque a reescrita o menciona duas vezes — no `len` do
     # limite e no índice do corpo — e não há statement anterior onde guardar um
     # temporário. É a mesma regra do `random.choice`.
-    static def sug_comp(self: *PsSema, e: *PsExpr):
+    private def sug_comp(self: *PsSema, e: *PsExpr):
         it: *PsExpr = e->rhs
         k: i32 = 0
         if it != None and it->kind == PE_CALL and it->lhs != None and it->lhs->kind == PE_NAME:
@@ -4730,7 +4730,7 @@ struct PsSema:
     # reescrita o menciona duas vezes (`len(xs)` e `xs[i]`), e `enumerate(f())`
     # chamaria `f` a cada volta. Isto é puramente sintático — roda antes de
     # qualquer tipo existir — e por isso mora aqui e não na reescrita tipada.
-    static def sug_hoist(self: *PsSema, b: *PsBlock):
+    private def sug_hoist(self: *PsSema, b: *PsBlock):
         extra: i32 = 0
         for i in range(b->n):
             k: i32 = self->sug_kind(b->stmts[i])
@@ -4764,7 +4764,7 @@ struct PsSema:
 
     # A reescrita, agora COM tipos: o iterável é um nome em escopo, então dá
     # para dizer o que ele é e recusar com a mensagem certa.
-    static def sug_for(self: *PsSema, s: *PsStmt, k: i32):
+    private def sug_for(self: *PsSema, s: *PsStmt, k: i32):
         it: *PsExpr = s->iter
         w: const *char = it->lhs->text
         start: *PsExpr = None
@@ -4847,7 +4847,7 @@ struct PsSema:
     # 114: este bloco SEMPRE sai? (return, raise, break, continue, ou um `if`
     # em que todos os ramos saem). É o que autoriza estreitar depois de uma
     # guarda — `if x == None: return` e o resto da função já sabe.
-    static def blk_exits(self: *PsSema, b: *PsBlock) -> bool:
+    private def blk_exits(self: *PsSema, b: *PsBlock) -> bool:
         if b == None or b->n == 0:
             return False
         last: *PsStmt = b->stmts[b->n - 1]
@@ -4860,7 +4860,7 @@ struct PsSema:
             return self->blk_exits(last->else_block)
         return False
 
-    static def check_block(self: *PsSema, b: *PsBlock):
+    private def check_block(self: *PsSema, b: *PsBlock):
         if b == None:
             return
         self->sug_hoist(b)
@@ -4882,7 +4882,7 @@ struct PsSema:
         self->pop_scope()
         self->depth -= 1
 
-    static def check_stmt(self: *PsSema, s: *PsStmt):
+    private def check_stmt(self: *PsSema, s: *PsStmt):
         match s->kind:
             case PS_EXPR:
                 self->check_expr(s->expr)
@@ -5504,7 +5504,7 @@ struct PsSema:
                 fatal_at(self->file, s->pos, "%s is parsed but not compiled yet", ps_stmt_what(s->kind))
 
     # ---------- declarations ----------
-    static def check_func(self: *PsSema, f: *PsFunc):
+    private def check_func(self: *PsSema, f: *PsFunc):
         self->in_async = f->is_async
         self->nlocals = 0
         self->depth = 0
@@ -5540,7 +5540,7 @@ struct PsSema:
         self->check_block(f->body)
 
 
-static def ps_assign_binop(op: i32) -> i32:
+private def ps_assign_binop(op: i32) -> i32:
     match op:
         case TK_PLUS_EQ:
             return TK_PLUS
@@ -5571,12 +5571,12 @@ static def ps_assign_binop(op: i32) -> i32:
 
 # names for the diagnostics, so "not compiled yet" always says WHAT
 # a plain designator: reading it twice costs nothing and has no side effect
-# what another module is allowed to name. `static` at the top level is private
+# what another module is allowed to name. `private` at the top level is private
 # to the module (44.4) — the same rule P has, and the message says so instead of
 # pretending the name is not there.
-static def ns_check_visible(ns: *PsNs, name: const *char, file: const *char, pos: Pos, spelled: const *char):
+private def ns_check_visible(ns: *PsNs, name: const *char, file: const *char, pos: Pos, spelled: const *char):
     if ns->priv.has(name):
-        fatal_at(file, pos, "'%s' is private to module '%s': it is declared `static` (44.4)", name, spelled)
+        fatal_at(file, pos, "'%s' is private to module '%s': it is declared `private` (44.4)", name, spelled)
     if not ns->sym.has(name):
         fatal_at(file, pos, "module '%s' declares no '%s'", spelled, name)
 
@@ -5601,7 +5601,7 @@ def ps_mangle_type(a: *Arena, t: *PsType) -> const *char:
     return b if n > 0 else "x"
 
 # a type, copied so that resolving it does not write on the original
-static def ps_type_clone(a: *Arena, t: *PsType) -> *PsType:
+private def ps_type_clone(a: *Arena, t: *PsType) -> *PsType:
     if t == None:
         return None
     c: *PsType = a->alloc(sizeof(PsType))
@@ -5617,7 +5617,7 @@ static def ps_type_clone(a: *Arena, t: *PsType) -> *PsType:
 # `Self` in a trait signature is the implementing type (66.4) — without it,
 # `Comparable` would have to name the type twice and leak it into the signature,
 # which is the F-bounded shape Java is stuck with.
-static def ps_subst_self(t: *PsType, name: const *char):
+private def ps_subst_self(t: *PsType, name: const *char):
     if t == None:
         return
     if t->kind == PT_NAME and t->qual == None and strcmp(t->name, "Self") == 0:
@@ -5629,7 +5629,7 @@ static def ps_subst_self(t: *PsType, name: const *char):
 
 # the associated type, substituted by NODE: `list<Item>` with `Item = int` has
 # to become `list<int>`, so every site takes back what this returns
-static def ps_subst_named(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType:
+private def ps_subst_named(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType:
     if t == None:
         return None
     if t->kind == PT_NAME and t->qual == None and strcmp(t->name, name) == 0:
@@ -5661,7 +5661,7 @@ def opt_is_ref_ps(t: *PsType) -> bool:
 # a `match type` case, read off its spelling: the kinds an `any` can hold.
 # `list` and `dict` come back with `any` inside, because that is the only thing
 # a list INSIDE an any can hold (39.2).
-static def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType:
+private def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType:
     if e->kind == PE_NONE:
         return ps_type(a, PT_OPT, pos)      # the empty: what a boxed None is
     n: const *char = e->text
@@ -5686,7 +5686,7 @@ static def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType:
 
 # does this integer LITERAL fit the width? Checked at compile time (68.2):
 # `x: u8 = 300` is a mistake the compiler can see whole, so it says so here.
-static def ps_lit_fits(file: const *char, e: *PsExpr, t: *PsType):
+private def ps_lit_fits(file: const *char, e: *PsExpr, t: *PsType):
     neg: bool = e->kind == PE_UNARY
     lex: const *char = e->lhs->text if neg else e->text
     uv: u64 = strtoull(lex, None, 0)
@@ -5705,7 +5705,7 @@ static def ps_lit_fits(file: const *char, e: *PsExpr, t: *PsType):
 # lossless WIDENING (68.2): signed grows into wider signed, unsigned into wider
 # unsigned or into STRICTLY wider signed. Nothing narrows implicitly, and i64
 # never becomes u64 by itself — those are the conversions, written by name.
-static def ps_int_widens(from2: *PsType, to: *PsType) -> bool:
+private def ps_int_widens(from2: *PsType, to: *PsType) -> bool:
     if from2 == None or to == None or from2->kind != PT_INT or to->kind != PT_INT:
         return False
     fw: i32 = 64 if from2->width == 0 else from2->width
@@ -5722,7 +5722,7 @@ static def ps_int_widens(from2: *PsType, to: *PsType) -> bool:
 # widens losslessly into the other; nothing otherwise. Mixed signedness of the
 # same width has no lossless common ground, so it converts by name — which is
 # the rule that keeps `u32 + i32` from silently meaning something.
-static def ps_int_common(a: *PsType, b: *PsType) -> *PsType:
+private def ps_int_common(a: *PsType, b: *PsType) -> *PsType:
     if ps_type_eq(a, b):
         return a
     if ps_int_widens(a, b):
@@ -5734,7 +5734,7 @@ static def ps_int_common(a: *PsType, b: *PsType) -> *PsType:
 # a bare integer literal (or its negation) used against an exact width: retype
 # it in place, with the range checked. It is what makes `x + 1` work on a u8
 # without a cast on the 1.
-static def ps_adapt_lit(file: const *char, e: *PsExpr, t: *PsType) -> bool:
+private def ps_adapt_lit(file: const *char, e: *PsExpr, t: *PsType) -> bool:
     if t == None or t->kind != PT_INT or t->width == 0:
         return False
     if e == None:
@@ -5765,7 +5765,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
 # does the PROGRAM declare this name? — a decl, one of its enum items, or a
 # `from ... import` binding. Used to decide what the prelude steps aside for,
 # and the decl that comes back is where the shadow warning points.
-static def ps_prog_shadows(m: *PsModule, name: const *char) -> *PsDecl:
+private def ps_prog_shadows(m: *PsModule, name: const *char) -> *PsDecl:
     for j in range(m->ndecls):
         d: *PsDecl = m->decls[j]
         # an `implement X for T:` USES the name X, it does not declare it —
@@ -5793,7 +5793,7 @@ def ps_const_len(e: *PsExpr, ref out: i64) -> bool:
     return True
 
 # a namespace entry by the spelling used at the import site
-static def ns_find(v: *PsNsEnt, n: i32, name: const *char) -> *PsNsEnt:
+private def ns_find(v: *PsNsEnt, n: i32, name: const *char) -> *PsNsEnt:
     for i in range(n):
         if strcmp(v[i].name, name) == 0:
             return v + i
@@ -5814,7 +5814,7 @@ def is_ps_designator(e: *PsExpr) -> bool:
         case _:
             return False
 
-static def ps_expr_what(k: PsExprKind) -> const *char:
+private def ps_expr_what(k: PsExprKind) -> const *char:
     match k:
         case PE_FSTR:
             return "an f-string"
@@ -5859,7 +5859,7 @@ static def ps_expr_what(k: PsExprKind) -> const *char:
         case _:
             return "this expression"
 
-static def ps_stmt_what(k: PsStmtKind) -> const *char:
+private def ps_stmt_what(k: PsStmtKind) -> const *char:
     match k:
         case PS_UNPACK:
             return "tuple unpacking"
@@ -5998,7 +5998,7 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
 #
 # The bindings go FIRST in the top-level block: a `def` is visible before its
 # line in pscript, so its decorated form has to be too.
-static def ps_apply_decorators(a: *Arena, m: *PsModule):
+private def ps_apply_decorators(a: *Arena, m: *PsModule):
     binds: Vec<*PsStmt>
     binds.init()
     for i in range(m->ndecls):
@@ -6356,5 +6356,5 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
     m->dtraits = s.dtraits.data
     m->ndtraits = s.dtraits.len
 
-static def self_name(a: *Arena, n: const *char) -> const *char:
+private def self_name(a: *Arena, n: const *char) -> const *char:
     return a->printf("'%s'", n)

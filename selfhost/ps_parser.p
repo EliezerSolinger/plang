@@ -47,17 +47,17 @@ declare Vec<PsEnumItem>
 
 # 99.2: read below — the two of them are used by the module loop, which comes
 # first in this file
-static def ps_const_if_top(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena)
-static def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena, keep: bool)
+private def ps_const_if_top(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena)
+private def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena, keep: bool)
 
 implement Vec<PsEnumItem>
 
-static def is_float_lexeme(t: const *char) -> bool
-static def is_ps_assign_op(k: TokKind) -> bool
-static def has_suffix_ps(s: const *char, suf: const *char) -> bool
-static def ps_retag(e: *PsExpr, pos: Pos)
-static def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr
-static def ps_module_name(a: *Arena, path: const *char) -> const *char
+private def is_float_lexeme(t: const *char) -> bool
+private def is_ps_assign_op(k: TokKind) -> bool
+private def has_suffix_ps(s: const *char, suf: const *char) -> bool
+private def ps_retag(e: *PsExpr, pos: Pos)
+private def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr
+private def ps_module_name(a: *Arena, path: const *char) -> const *char
 
 struct PsP:
     t: *Token
@@ -78,87 +78,87 @@ struct PsP:
     su: *bool           # which ones a hole has already asked for
     sn: i32
 
-    static def pk(self: *PsP) -> *Token
-    static def pk1(self: *PsP) -> *Token
-    static def at(self: *PsP, k: TokKind) -> bool
-    static def adv(self: *PsP) -> *Token
-    static def accept(self: *PsP, k: TokKind) -> bool
-    static def expect(self: *PsP, k: TokKind, ctx: const *char) -> *Token
-    static def parse_type(self: *PsP) -> *PsType
-    static def expect_gt(self: *PsP, what: const *char)
-    static def parse_expr(self: *PsP) -> *PsExpr
-    static def parse_ternary(self: *PsP) -> *PsExpr
-    static def parse_as_chain(self: *PsP, e: *PsExpr) -> *PsExpr
-    static def parse_or(self: *PsP) -> *PsExpr
-    static def parse_and(self: *PsP) -> *PsExpr
-    static def parse_not(self: *PsP) -> *PsExpr
-    static def parse_cmp(self: *PsP) -> *PsExpr
-    static def parse_coalesce(self: *PsP) -> *PsExpr
-    static def parse_bitor(self: *PsP) -> *PsExpr
-    static def parse_bitxor(self: *PsP) -> *PsExpr
-    static def parse_bitand(self: *PsP) -> *PsExpr
-    static def parse_shift(self: *PsP) -> *PsExpr
-    static def parse_add(self: *PsP) -> *PsExpr
-    static def parse_mul(self: *PsP) -> *PsExpr
-    static def parse_unary(self: *PsP) -> *PsExpr
-    static def parse_pow(self: *PsP) -> *PsExpr
-    static def parse_postfix(self: *PsP) -> *PsExpr
-    static def parse_primary(self: *PsP) -> *PsExpr
-    static def parse_block(self: *PsP) -> *PsBlock
-    static def refuse_python(self: *PsP)
-    static def parse_stmt(self: *PsP) -> *PsStmt
-    static def parse_simple_stmt(self: *PsP) -> *PsStmt
-    static def parse_if(self: *PsP) -> *PsStmt
-    static def const_cond(self: *PsP, e: *PsExpr) -> bool
-    static def parse_for(self: *PsP) -> *PsStmt
-    static def parse_match(self: *PsP) -> *PsStmt
-    static def parse_try(self: *PsP) -> *PsStmt
-    static def parse_func(self: *PsP, is_static: bool, is_async: bool, owner: const *char) -> *PsFunc
-    static def parse_func_head(self: *PsP, is_static: bool, is_async: bool, owner: const *char) -> *PsFunc
-    static def parse_trait(self: *PsP) -> *PsDecl
-    static def parse_impl(self: *PsP) -> *PsDecl
-    static def parse_aggregate(self: *PsP, is_record: bool) -> *PsDecl
-    static def parse_decorators(self: *PsP, ref into: Vec<*PsExpr>)
-    static def parse_enum(self: *PsP) -> *PsDecl
-    static def parse_import(self: *PsP) -> *PsDecl
-    static def parse_from(self: *PsP) -> *PsDecl
-    static def parse_include(self: *PsP) -> *PsDecl
-    static def parse_lambda(self: *PsP) -> *PsExpr
-    static def parse_list_or_comprehension(self: *PsP) -> *PsExpr
-    static def parse_dict_or_set(self: *PsP) -> *PsExpr
-    static def finish_comprehension(self: *PsP, pos: Pos, elem: *PsExpr, close: TokKind) -> *PsExpr
-    static def docstring(self: *PsP) -> const *char
-    static def member_name(self: *PsP) -> const *char
-    static def fstring(self: *PsP, lex: const *char, pos: Pos) -> *PsExpr
-    static def fs_lit(self: *PsP, bytes: const *char, n: usize, pos: Pos) -> *PsExpr
-    static def fs_join(self: *PsP, acc: *PsExpr, one: *PsExpr, pos: Pos) -> *PsExpr
-    static def fs_hole(self: *PsP, etext: const *char, spec: const *char, pos: Pos) -> *PsExpr
-    static def fs_key(self: *PsP, etext: const *char, pos: Pos) -> *PsExpr
-    static def fs_num(self: *PsP, v: i32, pos: Pos) -> *PsExpr
+    private def pk(self: *PsP) -> *Token
+    private def pk1(self: *PsP) -> *Token
+    private def at(self: *PsP, k: TokKind) -> bool
+    private def adv(self: *PsP) -> *Token
+    private def accept(self: *PsP, k: TokKind) -> bool
+    private def expect(self: *PsP, k: TokKind, ctx: const *char) -> *Token
+    private def parse_type(self: *PsP) -> *PsType
+    private def expect_gt(self: *PsP, what: const *char)
+    private def parse_expr(self: *PsP) -> *PsExpr
+    private def parse_ternary(self: *PsP) -> *PsExpr
+    private def parse_as_chain(self: *PsP, e: *PsExpr) -> *PsExpr
+    private def parse_or(self: *PsP) -> *PsExpr
+    private def parse_and(self: *PsP) -> *PsExpr
+    private def parse_not(self: *PsP) -> *PsExpr
+    private def parse_cmp(self: *PsP) -> *PsExpr
+    private def parse_coalesce(self: *PsP) -> *PsExpr
+    private def parse_bitor(self: *PsP) -> *PsExpr
+    private def parse_bitxor(self: *PsP) -> *PsExpr
+    private def parse_bitand(self: *PsP) -> *PsExpr
+    private def parse_shift(self: *PsP) -> *PsExpr
+    private def parse_add(self: *PsP) -> *PsExpr
+    private def parse_mul(self: *PsP) -> *PsExpr
+    private def parse_unary(self: *PsP) -> *PsExpr
+    private def parse_pow(self: *PsP) -> *PsExpr
+    private def parse_postfix(self: *PsP) -> *PsExpr
+    private def parse_primary(self: *PsP) -> *PsExpr
+    private def parse_block(self: *PsP) -> *PsBlock
+    private def refuse_python(self: *PsP)
+    private def parse_stmt(self: *PsP) -> *PsStmt
+    private def parse_simple_stmt(self: *PsP) -> *PsStmt
+    private def parse_if(self: *PsP) -> *PsStmt
+    private def const_cond(self: *PsP, e: *PsExpr) -> bool
+    private def parse_for(self: *PsP) -> *PsStmt
+    private def parse_match(self: *PsP) -> *PsStmt
+    private def parse_try(self: *PsP) -> *PsStmt
+    private def parse_func(self: *PsP, no_recv: bool, is_async: bool, owner: const *char) -> *PsFunc
+    private def parse_func_head(self: *PsP, no_recv: bool, is_async: bool, owner: const *char) -> *PsFunc
+    private def parse_trait(self: *PsP) -> *PsDecl
+    private def parse_impl(self: *PsP) -> *PsDecl
+    private def parse_aggregate(self: *PsP, is_record: bool) -> *PsDecl
+    private def parse_decorators(self: *PsP, ref into: Vec<*PsExpr>)
+    private def parse_enum(self: *PsP) -> *PsDecl
+    private def parse_import(self: *PsP) -> *PsDecl
+    private def parse_from(self: *PsP) -> *PsDecl
+    private def parse_include(self: *PsP) -> *PsDecl
+    private def parse_lambda(self: *PsP) -> *PsExpr
+    private def parse_list_or_comprehension(self: *PsP) -> *PsExpr
+    private def parse_dict_or_set(self: *PsP) -> *PsExpr
+    private def finish_comprehension(self: *PsP, pos: Pos, elem: *PsExpr, close: TokKind) -> *PsExpr
+    private def docstring(self: *PsP) -> const *char
+    private def member_name(self: *PsP) -> const *char
+    private def fstring(self: *PsP, lex: const *char, pos: Pos) -> *PsExpr
+    private def fs_lit(self: *PsP, bytes: const *char, n: usize, pos: Pos) -> *PsExpr
+    private def fs_join(self: *PsP, acc: *PsExpr, one: *PsExpr, pos: Pos) -> *PsExpr
+    private def fs_hole(self: *PsP, etext: const *char, spec: const *char, pos: Pos) -> *PsExpr
+    private def fs_key(self: *PsP, etext: const *char, pos: Pos) -> *PsExpr
+    private def fs_num(self: *PsP, v: i32, pos: Pos) -> *PsExpr
 
     # ---------- primitives ----------
-    static def pk(self: *PsP) -> *Token:
+    private def pk(self: *PsP) -> *Token:
         return &self->t[self->i]
 
-    static def pk1(self: *PsP) -> *Token:
+    private def pk1(self: *PsP) -> *Token:
         return &self->t[self->i + 1] if self->i + 1 < self->n else &self->t[self->n - 1]
 
-    static def at(self: *PsP, k: TokKind) -> bool:
+    private def at(self: *PsP, k: TokKind) -> bool:
         return self->pk()->kind == k
 
-    static def adv(self: *PsP) -> *Token:
+    private def adv(self: *PsP) -> *Token:
         t: *Token = &self->t[self->i]
         if t->kind != TK_EOF:
             self->i += 1
         return t
 
-    static def accept(self: *PsP, k: TokKind) -> bool:
+    private def accept(self: *PsP, k: TokKind) -> bool:
         if self->at(k):
             self->adv()
             return True
         return False
 
-    static def expect(self: *PsP, k: TokKind, ctx: const *char) -> *Token:
+    private def expect(self: *PsP, k: TokKind, ctx: const *char) -> *Token:
         if not self->at(k):
             fatal_at(self->file, self->pk()->pos, "expected %s in %s, found %s", tok_kind_name(k), ctx, tok_kind_name(self->pk()->kind))
         return self->adv()
@@ -168,7 +168,7 @@ struct PsP:
     # positional — nothing that follows a `.` can start a statement, so there is
     # nothing to be ambiguous with. Recognized by the lexeme, since every
     # keyword token keeps the text it was spelled with.
-    static def member_name(self: *PsP) -> const *char:
+    private def member_name(self: *PsP) -> const *char:
         t: *Token = self->pk()
         c: char = t->text[0] if t->text != None else '\0'
         if (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_':
@@ -180,7 +180,7 @@ struct PsP:
     # a leading string literal on its own line documents what follows (46.3).
     # It is DROPPED from the statement stream, not evaluated: a docstring that
     # ran would be a statement with a value nobody uses.
-    static def docstring(self: *PsP) -> const *char:
+    private def docstring(self: *PsP) -> const *char:
         if self->at(TK_STRING) and self->pk1()->kind == TK_NEWLINE:
             d: const *char = self->adv()->text
             self->adv()
@@ -192,14 +192,14 @@ struct PsP:
     # cannot know it is in a type. The parser splits it — one `>` closes this
     # generic, the other stays for the one outside. Every C++ compiler does the
     # same thing, and doing it here keeps the lexer honest.
-    static def expect_gt(self: *PsP, what: const *char):
+    private def expect_gt(self: *PsP, what: const *char):
         t: *Token = self->pk()
         if t->kind == TK_SHR:
             t->kind = TK_GT
             return
         self->expect(TK_GT, what)
 
-    static def parse_type(self: *PsP) -> *PsType:
+    private def parse_type(self: *PsP) -> *PsType:
         pos: Pos = self->pk()->pos
         t: *PsType
         if self->at(TK_LPAREN):
@@ -356,7 +356,7 @@ struct PsP:
         return t
 
     # ---------- expressions ----------
-    static def parse_primary(self: *PsP) -> *PsExpr:
+    private def parse_primary(self: *PsP) -> *PsExpr:
         tk: *Token = self->pk()
         pos: Pos = tk->pos
         match tk->kind:
@@ -478,7 +478,7 @@ struct PsP:
                 fatal_at(self->file, pos, "expected an expression, found %s", tok_kind_name(tk->kind))
         return None
 
-    static def parse_postfix(self: *PsP) -> *PsExpr:
+    private def parse_postfix(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_primary()
         while True:
             pos: Pos = self->pk()->pos
@@ -596,7 +596,7 @@ struct PsP:
 
     # `**` binds tighter than unary minus on the left and looser on the right,
     # exactly as in Python: -x ** 2 is -(x ** 2), and 2 ** -1 parses (47.3)
-    static def parse_pow(self: *PsP) -> *PsExpr:
+    private def parse_pow(self: *PsP) -> *PsExpr:
         base: *PsExpr = self->parse_postfix()
         if self->at(TK_POW):
             pos: Pos = self->adv()->pos
@@ -607,7 +607,7 @@ struct PsP:
             return e
         return base
 
-    static def parse_unary(self: *PsP) -> *PsExpr:
+    private def parse_unary(self: *PsP) -> *PsExpr:
         if self->at(TK_MINUS) or self->at(TK_PLUS) or self->at(TK_TILDE):
             tk: *Token = self->adv()
             e: *PsExpr = ps_expr(self->a, PE_UNARY, tk->pos)
@@ -616,7 +616,7 @@ struct PsP:
             return e
         return self->parse_pow()
 
-    static def parse_mul(self: *PsP) -> *PsExpr:
+    private def parse_mul(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_unary()
         while self->at(TK_STAR) or self->at(TK_SLASH) or self->at(TK_FLOORDIV) or self->at(TK_PERCENT) or self->at(TK_WRAP_STAR):
             tk: *Token = self->adv()
@@ -627,7 +627,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_add(self: *PsP) -> *PsExpr:
+    private def parse_add(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_mul()
         while self->at(TK_PLUS) or self->at(TK_MINUS) or self->at(TK_WRAP_PLUS) or self->at(TK_WRAP_MINUS):
             tk: *Token = self->adv()
@@ -638,7 +638,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_shift(self: *PsP) -> *PsExpr:
+    private def parse_shift(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_add()
         while self->at(TK_SHL) or self->at(TK_SHR):
             tk: *Token = self->adv()
@@ -649,7 +649,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_bitand(self: *PsP) -> *PsExpr:
+    private def parse_bitand(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_shift()
         while self->at(TK_AMP):
             tk: *Token = self->adv()
@@ -660,7 +660,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_bitxor(self: *PsP) -> *PsExpr:
+    private def parse_bitxor(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_bitand()
         while self->at(TK_CARET):
             tk: *Token = self->adv()
@@ -671,7 +671,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_bitor(self: *PsP) -> *PsExpr:
+    private def parse_bitor(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_bitxor()
         while self->at(TK_PIPE):
             tk: *Token = self->adv()
@@ -684,7 +684,7 @@ struct PsP:
 
     # `??` sits between the bitwise operators and the comparisons: tighter than
     # a comparison (`x ?? 0 > 1` is `(x ?? 0) > 1`) and looser than arithmetic
-    static def parse_coalesce(self: *PsP) -> *PsExpr:
+    private def parse_coalesce(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_bitor()
         while self->at(TK_COALESCE):
             tk: *Token = self->adv()
@@ -694,7 +694,7 @@ struct PsP:
             e = c
         return e
 
-    static def parse_cmp(self: *PsP) -> *PsExpr:
+    private def parse_cmp(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_coalesce()
         # How many comparisons have been read at THIS level. Python chains them
         # — `0 <= i < n` means `0 <= i and i < n` — and reading the same line
@@ -742,7 +742,7 @@ struct PsP:
                 break
         return e
 
-    static def parse_not(self: *PsP) -> *PsExpr:
+    private def parse_not(self: *PsP) -> *PsExpr:
         if self->at(TK_NOT):
             tk: *Token = self->adv()
             e: *PsExpr = ps_expr(self->a, PE_UNARY, tk->pos)
@@ -751,7 +751,7 @@ struct PsP:
             return e
         return self->parse_cmp()
 
-    static def parse_and(self: *PsP) -> *PsExpr:
+    private def parse_and(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_not()
         while self->at(TK_AND):
             tk: *Token = self->adv()
@@ -762,7 +762,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_or(self: *PsP) -> *PsExpr:
+    private def parse_or(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_and()
         while self->at(TK_OR):
             tk: *Token = self->adv()
@@ -773,7 +773,7 @@ struct PsP:
             e = b
         return e
 
-    static def parse_ternary(self: *PsP) -> *PsExpr:
+    private def parse_ternary(self: *PsP) -> *PsExpr:
         e: *PsExpr = self->parse_or()
         if self->at(TK_IF):
             pos: Pos = self->adv()->pos
@@ -790,7 +790,7 @@ struct PsP:
     # separately from parse_expr because two places want the operand WITHOUT it:
     # `with e as name:` and `[... for x in xs]`, where a following `as` belongs
     # to the statement, not to the expression.
-    static def parse_as_chain(self: *PsP, e: *PsExpr) -> *PsExpr:
+    private def parse_as_chain(self: *PsP, e: *PsExpr) -> *PsExpr:
         while self->at(TK_AS):
             pos: Pos = self->adv()->pos
             c: *PsExpr = ps_expr(self->a, PE_CAST, pos)
@@ -799,10 +799,10 @@ struct PsP:
             e = c
         return e
 
-    static def parse_expr(self: *PsP) -> *PsExpr:
+    private def parse_expr(self: *PsP) -> *PsExpr:
         return self->parse_as_chain(self->parse_ternary())
 
-    static def parse_lambda(self: *PsP) -> *PsExpr:
+    private def parse_lambda(self: *PsP) -> *PsExpr:
         pos: Pos = self->expect(TK_LAMBDA, "lambda")->pos
         e: *PsExpr = ps_expr(self->a, PE_LAMBDA, pos)
         ps: Vec<PsParam>
@@ -823,7 +823,7 @@ struct PsP:
         e->lhs = self->parse_expr()   # a lambda is one expression (28.2)
         return e
 
-    static def parse_list_or_comprehension(self: *PsP) -> *PsExpr:
+    private def parse_list_or_comprehension(self: *PsP) -> *PsExpr:
         pos: Pos = self->expect(TK_LBRACKET, "list")->pos
         if self->accept(TK_RBRACKET):
             e0: *PsExpr = ps_expr(self->a, PE_LIST, pos)
@@ -844,7 +844,7 @@ struct PsP:
         e->nargs = items.len
         return e
 
-    static def finish_comprehension(self: *PsP, pos: Pos, elem: *PsExpr, close: TokKind) -> *PsExpr:
+    private def finish_comprehension(self: *PsP, pos: Pos, elem: *PsExpr, close: TokKind) -> *PsExpr:
         self->expect(TK_FOR, "comprehension")
         e: *PsExpr = ps_expr(self->a, PE_COMPREHEND, pos)
         # WHICH bracket closed it is part of the meaning: `[...]` builds a list,
@@ -871,7 +871,7 @@ struct PsP:
         self->expect(close, "comprehension")
         return e
 
-    static def parse_dict_or_set(self: *PsP) -> *PsExpr:
+    private def parse_dict_or_set(self: *PsP) -> *PsExpr:
         pos: Pos = self->expect(TK_LBRACE, "dict or set")->pos
         # `{}` is the empty DICT, as in Python; the empty set is `set()`
         if self->accept(TK_RBRACE):
@@ -932,7 +932,7 @@ struct PsP:
     # `o`). Out: nested braces (`{x:{w}}`), `!r`/`!s`, and a spec built at run
     # time — each of those needs a run-time formatter, which is the thing this
     # design does not want.
-    static def fstring(self: *PsP, lex: const *char, pos: Pos) -> *PsExpr:
+    private def fstring(self: *PsP, lex: const *char, pos: Pos) -> *PsExpr:
         n: usize = 0
         body: *char = str_lit_decode(self->a, lex, out n)
         acc: *PsExpr = None
@@ -984,12 +984,12 @@ struct PsP:
             acc = self->fs_lit("", 0, pos)
         return acc
 
-    static def fs_lit(self: *PsP, bytes: const *char, n: usize, pos: Pos) -> *PsExpr:
+    private def fs_lit(self: *PsP, bytes: const *char, n: usize, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_STR, pos)
         e->text = c_string_literal(self->a, bytes, n)
         return e
 
-    static def fs_join(self: *PsP, acc: *PsExpr, one: *PsExpr, pos: Pos) -> *PsExpr:
+    private def fs_join(self: *PsP, acc: *PsExpr, one: *PsExpr, pos: Pos) -> *PsExpr:
         if acc == None:
             return one
         b: *PsExpr = ps_expr(self->a, PE_BINARY, pos)
@@ -1000,7 +1000,7 @@ struct PsP:
 
     # `{expr:spec}` becomes `__fmt(expr, width, prec, align, zero, type)`, with
     # every part of the spec already a constant
-    static def fs_hole(self: *PsP, etext: const *char, spec: const *char, pos: Pos) -> *PsExpr:
+    private def fs_hole(self: *PsP, etext: const *char, spec: const *char, pos: Pos) -> *PsExpr:
         inner: *PsExpr
         if self->sub:
             # 75.2: the hole names a key, and what goes there is the expression
@@ -1063,7 +1063,7 @@ struct PsP:
     # braces is a key, spaces around it forgiven, and the answer is what the
     # call wrote for that key. A key two holes ask for is CLONED, because the
     # same node spliced twice would be checked twice and lowered twice.
-    static def fs_key(self: *PsP, etext: const *char, pos: Pos) -> *PsExpr:
+    private def fs_key(self: *PsP, etext: const *char, pos: Pos) -> *PsExpr:
         s: const *char = etext
         while *s == ' ' or *s == '\t':
             s += 1
@@ -1086,13 +1086,13 @@ struct PsP:
         fatal_at(self->file, pos, "the template asks for '%.*s', which the dict does not have (it has: %s)", i32(n), s, have.data if have.len > 0 else "nothing")
         return None
 
-    static def fs_num(self: *PsP, v: i32, pos: Pos) -> *PsExpr:
+    private def fs_num(self: *PsP, v: i32, pos: Pos) -> *PsExpr:
         e: *PsExpr = ps_expr(self->a, PE_INT, pos)
         e->text = self->a->printf("%d", v)
         return e
 
     # ---------- statements ----------
-    static def parse_block(self: *PsP) -> *PsBlock:
+    private def parse_block(self: *PsP) -> *PsBlock:
         self->expect(TK_COLON, "block")
         self->expect(TK_NEWLINE, "block")
         self->expect(TK_INDENT, "block")
@@ -1117,7 +1117,7 @@ struct PsP:
     #
     # Each is recognised by what FOLLOWS it, so none of them stops being a
     # usable name: `del = 1` is still a variable called `del`.
-    static def refuse_python(self: *PsP):
+    private def refuse_python(self: *PsP):
         tk: *Token = self->pk()
         if tk->kind == TK_DEF:
             fatal_at(self->file, tk->pos, "a function inside a function does not exist here (5.4): there is no capture, so it could not read this one's locals anyway — write it at the top level and pass what it needs, or use a `lambda` for a callback")
@@ -1134,7 +1134,7 @@ struct PsP:
         if strcmp(n, "except") == 0 and (nx == TK_COLON or nx == TK_IDENT):
             fatal_at(self->file, tk->pos, "the clause is spelled `catch e:` here, not `except` (5.1): there is one error type and no hierarchy to filter by, so there is nothing to name between the two")
 
-    static def parse_stmt(self: *PsP) -> *PsStmt:
+    private def parse_stmt(self: *PsP) -> *PsStmt:
         if self->at(TK_INDENT):
             fatal_at(self->file, self->pk()->pos, "unexpected indentation")
         self->refuse_python()
@@ -1219,7 +1219,7 @@ struct PsP:
             self->expect(TK_NEWLINE, "statement")
         return s2
 
-    static def parse_simple_stmt(self: *PsP) -> *PsStmt:
+    private def parse_simple_stmt(self: *PsP) -> *PsStmt:
         tk: *Token = self->pk()
         pos: Pos = tk->pos
         match tk->kind:
@@ -1324,7 +1324,7 @@ struct PsP:
     #
     # What the condition may look at is what the parser can know: the compiler's
     # predefines and the `-D`s, the same table the P side reads.
-    static def const_cond(self: *PsP, e: *PsExpr) -> bool:
+    private def const_cond(self: *PsP, e: *PsExpr) -> bool:
         if e == None:
             return False
         match e->kind:
@@ -1380,7 +1380,7 @@ struct PsP:
                 fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")
                 return False
 
-    static def parse_if(self: *PsP) -> *PsStmt:
+    private def parse_if(self: *PsP) -> *PsStmt:
         pos: Pos = self->expect(TK_IF, "if")->pos
         s: *PsStmt = ps_stmt(self->a, PS_IF, pos)
         conds: Vec<*PsExpr>
@@ -1400,7 +1400,7 @@ struct PsP:
         s->nconds = conds.len
         return s
 
-    static def parse_for(self: *PsP) -> *PsStmt:
+    private def parse_for(self: *PsP) -> *PsStmt:
         pos: Pos = self->expect(TK_FOR, "for")->pos
         s: *PsStmt = ps_stmt(self->a, PS_FOR, pos)
         # `for i, s in xs` unpacks each element as it goes, exactly as Python
@@ -1423,7 +1423,7 @@ struct PsP:
             fatal_at(self->file, self->pk()->pos, "a loop has no `else` here: Python's runs when the loop ended without a `break`, and the same thing is a bool set before the loop and checked after it")
         return s
 
-    static def parse_match(self: *PsP) -> *PsStmt:
+    private def parse_match(self: *PsP) -> *PsStmt:
         pos: Pos = self->expect(TK_MATCH, "match")->pos
         s: *PsStmt = ps_stmt(self->a, PS_MATCH, pos)
         # `match type(x):` (68.5) — the P device, brought over: the cases are
@@ -1465,7 +1465,7 @@ struct PsP:
         s->ncases = cases.len
         return s
 
-    static def parse_try(self: *PsP) -> *PsStmt:
+    private def parse_try(self: *PsP) -> *PsStmt:
         pos: Pos = self->expect(TK_TRY, "try")->pos
         s: *PsStmt = ps_stmt(self->a, PS_TRY, pos)
         s->body = self->parse_block()
@@ -1485,7 +1485,7 @@ struct PsP:
     # ---------- declarations ----------
     # `@name` / `@name(args)` on their own lines, above the def (28.3). Read
     # here rather than at the top level so a METHOD can carry them too.
-    static def parse_decorators(self: *PsP, ref into: Vec<*PsExpr>):
+    private def parse_decorators(self: *PsP, ref into: Vec<*PsExpr>):
         while self->at(TK_AT):
             self->adv()
             into.push(self->parse_postfix())
@@ -1496,11 +1496,15 @@ struct PsP:
     # The signature alone. A trait holds signatures and nothing else (66), so
     # the header is parsed by the same code that parses a real def — a trait
     # method that drifts from a def is a bug waiting to happen.
-    static def parse_func_head(self: *PsP, is_static: bool, is_async: bool, owner: const *char) -> *PsFunc:
+    private def parse_func_head(self: *PsP, no_recv: bool, is_async: bool, owner: const *char) -> *PsFunc:
         pos: Pos = self->expect(TK_DEF, "def")->pos
         f: *PsFunc = self->a->alloc(sizeof(PsFunc))
         f->pos = pos
-        f->is_static = is_static
+        # one word used to mean both, and `owner` is what told them apart:
+        # inside a struct it is the STATIC METHOD marker, at the top it is
+        # privacy. Now each has its own flag and its own spelling.
+        f->is_smethod = no_recv and owner != None
+        f->is_private = no_recv and owner == None
         f->is_async = is_async
         f->owner = owner
         f->is_method = owner != None
@@ -1561,8 +1565,8 @@ struct PsP:
             f->ret = self->parse_type()
         return f
 
-    static def parse_func(self: *PsP, is_static: bool, is_async: bool, owner: const *char) -> *PsFunc:
-        f: *PsFunc = self->parse_func_head(is_static, is_async, owner)
+    private def parse_func(self: *PsP, no_recv: bool, is_async: bool, owner: const *char) -> *PsFunc:
+        f: *PsFunc = self->parse_func_head(no_recv, is_async, owner)
         self->expect(TK_COLON, "def")
         self->expect(TK_NEWLINE, "def")
         self->expect(TK_INDENT, "def")
@@ -1584,7 +1588,7 @@ struct PsP:
     # else. `trait` is CONTEXTUAL, exactly as in P (67.1): 67.2 asked for zero
     # new words in either language, and a hard keyword would take `trait` away
     # from every program that already uses it as a name.
-    static def parse_trait(self: *PsP) -> *PsDecl:
+    private def parse_trait(self: *PsP) -> *PsDecl:
         pos: Pos = self->adv()->pos                # `trait`
         d: *PsDecl = ps_decl(self->a, PD_TRAIT, pos)
         d->name = self->expect(TK_IDENT, "trait name")->text
@@ -1621,7 +1625,7 @@ struct PsP:
     # `implement Printable for Point:` (66.1) — the implementation as a block of
     # its own, which is what lets a type you do NOT own satisfy a trait you do.
     # Both names may be qualified, because either side can come from elsewhere.
-    static def parse_impl(self: *PsP) -> *PsDecl:
+    private def parse_impl(self: *PsP) -> *PsDecl:
         pos: Pos = self->adv()->pos                # `implement`
         d: *PsDecl = ps_decl(self->a, PD_IMPL, pos)
         d->trait_type = self->parse_type()
@@ -1658,7 +1662,7 @@ struct PsP:
     # `record R:` (value, pure bytes — 52.1/56/58.2) and `struct S:` (collected
     # reference — 20.1) share a body grammar and differ in everything else, so
     # they share a parser and are told apart by one flag.
-    static def parse_aggregate(self: *PsP, is_record: bool) -> *PsDecl:
+    private def parse_aggregate(self: *PsP, is_record: bool) -> *PsDecl:
         pos: Pos = self->adv()->pos
         d: *PsDecl = ps_decl(self->a, PD_RECORD if is_record else PD_STRUCT, pos)
         d->name = self->expect(TK_IDENT, "record/struct name")->text
@@ -1722,7 +1726,7 @@ struct PsP:
         d->nmethods = methods.len
         return d
 
-    static def parse_enum(self: *PsP) -> *PsDecl:
+    private def parse_enum(self: *PsP) -> *PsDecl:
         pos: Pos = self->expect(TK_ENUM, "enum")->pos
         d: *PsDecl = ps_decl(self->a, PD_ENUM, pos)
         d->name = self->expect(TK_IDENT, "enum name")->text
@@ -1746,7 +1750,7 @@ struct PsP:
         d->nitems = items.len
         return d
 
-    static def parse_import(self: *PsP) -> *PsDecl:
+    private def parse_import(self: *PsP) -> *PsDecl:
         pos: Pos = self->expect(TK_IMPORT, "import")->pos
         if self->at(TK_STRING):
             # `import "shim.ph"` (75.3/2.4): a P module, not a pscript one. It
@@ -1769,7 +1773,7 @@ struct PsP:
         self->expect(TK_NEWLINE, "import")
         return d
 
-    static def parse_from(self: *PsP) -> *PsDecl:
+    private def parse_from(self: *PsP) -> *PsDecl:
         pos: Pos = self->expect(TK_FROM, "from")->pos
         d: *PsDecl = ps_decl(self->a, PD_FROM_IMPORT, pos)
         d->path = self->expect(TK_IDENT, "module name")->text
@@ -1796,7 +1800,7 @@ struct PsP:
     # `include <math.h>` — a C header, and ONLY the declarations whose
     # signatures are pointer-free are callable (45.5): with no pointer crossing
     # the boundary there is nothing for the collector to lose track of.
-    static def parse_include(self: *PsP) -> *PsDecl:
+    private def parse_include(self: *PsP) -> *PsDecl:
         pos: Pos = self->adv()->pos
         d: *PsDecl = ps_decl(self->a, PD_INCLUDE, pos)
         if self->at(TK_LT):
@@ -1831,21 +1835,21 @@ def ps_width_name(n: const *char) -> i32:
         return 64
     return 0
 
-static def is_float_lexeme(t: const *char) -> bool:
+private def is_float_lexeme(t: const *char) -> bool:
     if strchr(t, '.') != None:
         return True
     if t[0] == '0' and (t[1] == 'x' or t[1] == 'X'):
         return False
     return strchr(t, 'e') != None or strchr(t, 'E') != None
 
-static def is_ps_assign_op(k: TokKind) -> bool:
+private def is_ps_assign_op(k: TokKind) -> bool:
     return k in {TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ,
                  TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ,
                  TK_SHL_EQ, TK_SHR_EQ, TK_POW_EQ, TK_FLOORDIV_EQ, TK_COALESCE_EQ}
 
 
 # every position in a subtree, set to one place
-static def ps_retag(e: *PsExpr, pos: Pos):
+private def ps_retag(e: *PsExpr, pos: Pos):
     if e == None:
         return
     e->pos = pos
@@ -1859,7 +1863,7 @@ static def ps_retag(e: *PsExpr, pos: Pos):
 # escapes, same mini-language of formats, and resolved entirely at compile time
 # against the scope of the place that asked for it. This is the door the sema
 # uses — it has the bytes, and the f-string machinery is here.
-static def has_suffix_ps(s: const *char, suf: const *char) -> bool:
+private def has_suffix_ps(s: const *char, suf: const *char) -> bool:
     n: usize = strlen(s)
     m: usize = strlen(suf)
     return n >= m and strcmp(s + n - m, suf) == 0
@@ -1884,7 +1888,7 @@ def ps_template_dict(a: *Arena, file: const *char, lexeme: const *char, pos: Pos
 # stands; a lambda is refused, because cloning one means cloning a block and
 # the capture list that the sema will fill — and a lambda as a template value
 # has no use that a second name would not serve better.
-static def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr:
+private def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr:
     if e == None:
         return None
     if e->body != None or e->params != None:
@@ -1903,7 +1907,7 @@ static def ps_clone_expr(a: *Arena, e: *PsExpr, file: const *char) -> *PsExpr:
 # 99.2: one indented block of top-level things, kept only if this is the branch
 # that was taken. A pscript file holds DECLARATIONS and STATEMENTS at the top, so
 # both are read here and both are dropped when the branch is not the one.
-static def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena, keep: bool):
+private def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena, keep: bool):
     p->expect(TK_COLON, "const if")
     p->expect(TK_NEWLINE, "const if")
     p->expect(TK_INDENT, "const if")
@@ -1939,11 +1943,13 @@ static def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, 
             if keep:
                 decls->push(fd)
             continue
-        if p->at(TK_STATIC):
+        if p->at(TK_STATIC) or p->at(TK_PRIVATE):
+            if p->at(TK_STATIC):
+                fatal_at(p->file, p->pk()->pos, "'static' no longer spells module privacy: write 'private' (inside a struct it still marks a static method)")
             p->adv()
             sa: bool = p->accept(TK_ASYNC)
             sd: *PsDecl = ps_decl(a, PD_FUNC, p->pk()->pos)
-            sd->is_static = True
+            sd->is_private = True
             sd->func = p->parse_func(True, sa, None)
             sd->name = sd->func->name
             if keep:
@@ -1954,7 +1960,7 @@ static def ps_const_if_block(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, 
             top->push(st)
     p->expect(TK_DEDENT, "const if")
 
-static def ps_const_if_top(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena):
+private def ps_const_if_top(p: *PsP, decls: *Vec<*PsDecl>, top: *Vec<*PsStmt>, a: *Arena):
     p->adv()                     # const
     p->adv()                     # if
     c0: *PsExpr = p->parse_expr()
@@ -1996,7 +2002,7 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
         decs.init()
         if p.at(TK_AT):
             p.parse_decorators(ref decs)
-            if not p.at(TK_DEF) and not p.at(TK_ASYNC) and not p.at(TK_STATIC):
+            if not p.at(TK_DEF) and not p.at(TK_ASYNC) and not p.at(TK_STATIC) and not p.at(TK_PRIVATE):
                 fatal_at(file, p.pk()->pos, "a decorator has to be followed by a def")
         match p.pk()->kind:
             case TK_IMPORT:
@@ -2030,11 +2036,13 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
                 afd->func->ndecorators = decs.len
                 afd->name = afd->func->name
                 decls.push(afd)
-            case TK_STATIC:
+            case TK_STATIC, TK_PRIVATE:
+                if p.at(TK_STATIC):
+                    fatal_at(p.file, p.pk()->pos, "'static' no longer spells module privacy: write 'private' (inside a struct it still marks a static method)")
                 p.adv()
                 sasync: bool = p.accept(TK_ASYNC)
                 sfd: *PsDecl = ps_decl(a, PD_FUNC, p.pk()->pos)
-                sfd->is_static = True   # 44.4: private to the module
+                sfd->is_private = True   # 44.4: private to the module
                 sfd->func = p.parse_func(True, sasync, None)
                 sfd->func->decorators = decs.data
                 sfd->func->ndecorators = decs.len
@@ -2095,7 +2103,7 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
     return m   # the arrays now belong to the module (the Vecs are not freed)
 
 # basename without the extension, arena-owned
-static def ps_module_name(a: *Arena, path: const *char) -> const *char:
+private def ps_module_name(a: *Arena, path: const *char) -> const *char:
     slash: const *char = strrchr(path, '/')
     base: const *char = slash + 1 if slash != None else path
     dot: const *char = strrchr(base, '.')

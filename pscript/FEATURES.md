@@ -174,7 +174,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | Recurso | Decisão | Exercitado em | Estado |
 |---|---|---|---|
 | Namespace: `import x` / `from x import y` / `as` | 41.3 | — | ✅ (por renomeação; visibilidade do Python) |
-| `static` = privado do módulo | 44.4 | — | ✅ |
+| `private` = privado do módulo | 44.4 | — | ✅ (era `static`; a palavra ficou só para o método estático) |
 | `include <h>` direto (C sem ponteiro = seguro) | 45.5, 7.4 | `include <math.h>` | ✅ |
 | Docstring Python | 46.3 | módulos e defs | ✅ |
 | `json.parse -> any` | 41.1, 68.6 | `--scene arquivo.json` | ✅ número segue o Python: literal inteiro vira int |

@@ -12,11 +12,11 @@ import "shim.ph"
 import "../pgfx.ph"
 import "../pgfx_raster.ph"
 
-static W: PgWindow
-static F: PgFont
-static OPEN: bool = False
-static EV: PgEvent
-static ZOOM: i32 = 0
+private W: PgWindow
+private F: PgFont
+private OPEN: bool = False
+private EV: PgEvent
+private ZOOM: i32 = 0
 
 def shim_open(w: i32, h: i32) -> bool:
     if OPEN:
@@ -49,7 +49,7 @@ def shim_height() -> i32:
 # cross (45.5).
 # a tradução do evento do pgfx para o número que atravessa — uma só, porque
 # `poll` e `wait` (114) devolvem a mesma coisa
-static def kind_of_ev() -> i32:
+private def kind_of_ev() -> i32:
     match EV.kind:
         case PGE_QUIT:
             return SHIM_QUIT
@@ -177,7 +177,7 @@ def shim_clip_set(in s: CStr):
 
 # devolve emprestado: um buffer deste módulo, válido até a próxima chamada (a
 # convenção do `strerror`, que é a da 83.1)
-static G_CLIP: *char = None
+private G_CLIP: *char = None
 
 def shim_clip_get() -> CStr:
     free(G_CLIP)

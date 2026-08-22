@@ -22,11 +22,11 @@ import "psrt_val.ph"
 # Only the MAIN thread's stack is printed, and only when the crash is on it: a
 # worker has its own context and printing the main one's frames would name a
 # stack that has nothing to do with the crash.
-static PS_CRASH_CTX: *PsCtx = None
-static PS_CRASH_TID: pthread_t
-static PS_CRASH_HAVE: i32 = 0
+private PS_CRASH_CTX: *PsCtx = None
+private PS_CRASH_TID: pthread_t
+private PS_CRASH_HAVE: i32 = 0
 
-static def ps_crash_name(sig: int) -> const *char:
+private def ps_crash_name(sig: int) -> const *char:
     if sig == SIGSEGV:
         return "SIGSEGV (invalid memory access)"
     if sig == SIGBUS:
@@ -37,7 +37,7 @@ static def ps_crash_name(sig: int) -> const *char:
         return "SIGILL (illegal instruction)"
     return "a fatal signal"
 
-static def ps_crash_handler(sig: int):
+private def ps_crash_handler(sig: int):
     fflush(stdout)
     fprintf(stderr, "pscript: %s\n", ps_crash_name(sig))
     if PS_CRASH_HAVE != 0 and PS_CRASH_CTX != None and pthread_equal(pthread_self(), PS_CRASH_TID) != 0:
@@ -104,7 +104,7 @@ def ps_install_crash_handler(ctx: *PsCtx):
 #   * a zero step is an error, because there is no answer.
 #
 # `out i` and `out j` come back already resolved, and `st` is the step.
-static def ps_slice_bounds(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool:
+private def ps_slice_bounds(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool:
     if st == 0:
         ps_raise(ctx, "a slice step may not be zero", PS_CAT_VALUE, file, line)
         i = 0
@@ -159,7 +159,7 @@ def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, st: i64, has_a: bool,
 # (55.4) e do dict: texto compara texto, o resto compara bytes. Procurar por
 # ponteiro daria "não achei" para duas strings iguais escritas em lugares
 # diferentes, que é o erro que a 55.4 já tinha proibido.
-static def ps_list_find(l: *PsList, needle: const *void, kind: i32) -> i64:
+private def ps_list_find(l: *PsList, needle: const *void, kind: i32) -> i64:
     if l == None:
         return -1
     base: *char = ps_list_base(l)
@@ -344,7 +344,7 @@ def ps_cmp_str(a: const *void, b: const *void) -> int:
 # quem chama `sorted` sobre algo que veio de um `sorted`. A outra metade dele —
 # o merge galopante — fica de fora: ela muda o CUSTO em padrões específicos e
 # não muda a ordem, que é o que se observa.
-static def ps_run_end(base: *char, n: i64, es: usize, i: i64, cmp: def(a: const *void, b: const *void) -> int) -> i64:
+private def ps_run_end(base: *char, n: i64, es: usize, i: i64, cmp: def(a: const *void, b: const *void) -> int) -> i64:
     # quanto do vetor, a partir de `i`, já está em ordem — e se estiver em ordem
     # DECRESCENTE ESTRITA, inverte no lugar e devolve o fim (inverter só o
     # estrito é o que mantém a estabilidade: com iguais no meio, a inversão
@@ -370,7 +370,7 @@ static def ps_run_end(base: *char, n: i64, es: usize, i: i64, cmp: def(a: const 
         j += 1
     return j + 1
 
-static def ps_msort_vals(base: *char, n: i64, es: usize, cmp: def(a: const *void, b: const *void) -> int) -> bool:
+private def ps_msort_vals(base: *char, n: i64, es: usize, cmp: def(a: const *void, b: const *void) -> int) -> bool:
     if n < 2:
         return True
     # uma passada de corridas: se a primeira cobre tudo, não há nada a fazer
@@ -598,7 +598,7 @@ def ps_buffer_size(b: *PsBuffer) -> i64:
 
 def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool
 
-static def ps_buffer_slot(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> *f64:
+private def ps_buffer_slot(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> *f64:
     if ps_buffer_gone(ctx, b):
         ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
         return None
@@ -662,17 +662,17 @@ struct PsFnCmp:
     base: *char
     es: usize
 
-static def ps_less_key(env: *void, a: i64, b: i64) -> bool:
+private def ps_less_key(env: *void, a: i64, b: i64) -> bool:
     k: *PsKeyCmp = (*PsKeyCmp)(env)
     return k->keys[a] < k->keys[b]
 
-static def ps_less_cmp(env: *void, a: i64, b: i64) -> bool:
+private def ps_less_cmp(env: *void, a: i64, b: i64) -> bool:
     c: *PsFnCmp = (*PsFnCmp)(env)
     if c->ctx->exc != None:
         return False
     return c->fn(c->env, c->ctx, c->base + usize(a) * c->es, c->base + usize(b) * c->es) < 0
 
-static def ps_msort_idx(idx: *i64, n: i64, less: def(env: *void, a: i64, b: i64) -> bool, env: *void):
+private def ps_msort_idx(idx: *i64, n: i64, less: def(env: *void, a: i64, b: i64) -> bool, env: *void):
     if n < 2:
         return
     tmp: *i64 = (*i64)(malloc(usize(n) * sizeof(i64)))
@@ -803,7 +803,7 @@ def ps_closure_narrow(ctx: *PsCtx, c: *PsClosure, want: const *char, file: const
     return c
 
 # ---------- `any` (39.2) and `as` (55.2) ----------
-static def ps_any_new(ctx: *PsCtx, kind: i32) -> *PsAny:
+private def ps_any_new(ctx: *PsCtx, kind: i32) -> *PsAny:
     a: *PsAny = (*PsAny)(ps_alloc(ctx, sizeof(PsAny), PS_TY_ANY))
     a->kind = kind
     a->i = 0
@@ -829,7 +829,7 @@ def ps_any_none(ctx: *PsCtx) -> *PsObj:
     return (*PsObj)(ps_any_new(ctx, PS_ANY_NONE))
 
 # what an `any` says it is, in words, for the message a failed `as` prints
-static def ps_any_what(v: *PsObj) -> const *char:
+private def ps_any_what(v: *PsObj) -> const *char:
     if v == None:
         return "nothing"
     match v->ty:
@@ -851,7 +851,7 @@ static def ps_any_what(v: *PsObj) -> const *char:
         case _:
             return "a value of another type"
 
-static def ps_as_fail(ctx: *PsCtx, v: *PsObj, want: const *char, file: const *char, line: i32):
+private def ps_as_fail(ctx: *PsCtx, v: *PsObj, want: const *char, file: const *char, line: i32):
     msg: char[160]
     snprintf(msg, 160, "this `any` holds %s, not %s", ps_any_what(v), want)
     ps_raise(ctx, msg, PS_CAT_TYPE, file, line)
@@ -947,7 +947,7 @@ def ps_unpack_check(ctx: *PsCtx, l: *PsList, want: i64, file: const *char, line:
         ps_raise(ctx, "these bytes are not the right length for this record", PS_CAT_VALUE, file, line)
 
 # ---------- lists ----------
-static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64)
+private def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64)
 
 # 98.5: "walk INTO each element", for a list whose element is a tuple holding a
 # reference. Returns the list so it can be said in one expression, where the
@@ -978,7 +978,7 @@ def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList:
 
 # Replaces the backing storage with a bigger one. The HEADER does not move, so
 # every reference to the list survives a growth untouched.
-static def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64):
+private def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64):
     if need <= l->cap:
         return
     ncap: i64 = 8 if l->cap == 0 else l->cap * 2
@@ -999,7 +999,7 @@ def ps_list_len(l: *PsList) -> i64:
 # instead of None: after an index that raised, the generated code still performs
 # the read whose value the exception check is about to throw away, and reading
 # from nowhere would take the program down before the check ever runs.
-static PS_SCRATCH: char[64]
+private PS_SCRATCH: char[64]
 
 def ps_list_base(l: *PsList) -> *char:
     # a view (18.3) borrows the buffer's bytes: they are where they always
@@ -1040,7 +1040,7 @@ def ps_list_push(ctx: *PsCtx, l: *PsList) -> *char:
     return p
 
 # ---------- dicts and sets ----------
-static def ps_dict_rehash(ctx: *PsCtx, d: *PsDict, ncap: i64)
+private def ps_dict_rehash(ctx: *PsCtx, d: *PsDict, ncap: i64)
 
 def ps_hash_bytes(b: const *char, n: usize) -> u64:
     h: u64 = 1469598103934665603     # FNV-1a
@@ -1052,13 +1052,13 @@ def ps_hash_bytes(b: const *char, n: usize) -> u64:
 # the hash and the equality of ONE key, by kind. A `str` key hashes its BYTES
 # and compares by content (22.2); everything else is bits, which is also what
 # makes a float key compare `+0.0` and `-0.0` apart (47.1).
-static def ps_key_hash(d: *PsDict, k: const *char) -> u64:
+private def ps_key_hash(d: *PsDict, k: const *char) -> u64:
     if d->kkind == PS_K_STR:
         s: *PsStr = *(**PsStr)(k)
         return ps_hash_bytes(s->data, usize(s->len))
     return ps_hash_bytes(k, usize(d->ksize))
 
-static def ps_key_eq(d: *PsDict, a: const *char, b: const *char) -> bool:
+private def ps_key_eq(d: *PsDict, a: const *char, b: const *char) -> bool:
     if d->kkind == PS_K_STR:
         return ps_str_eq(*(**PsStr)(a), *(**PsStr)(b))
     return memcmp(a, b, usize(d->ksize)) == 0
@@ -1068,29 +1068,29 @@ static def ps_key_eq(d: *PsDict, a: const *char, b: const *char) -> bool:
 # a raw byte array in the collected heap. Zeroed, because a field that is a
 # reference has to start as None or the collector would follow whatever was
 # there.
-static def ps_arr_new(ctx: *PsCtx, nbytes: usize) -> *PsArr:
+private def ps_arr_new(ctx: *PsCtx, nbytes: usize) -> *PsArr:
     a: *PsArr = ps_alloc(ctx, sizeof(PsArr) + nbytes, PS_TY_ARR)
     a->nbytes = nbytes
     memset((*char)(a) + sizeof(PsArr), 0, nbytes)
     return a
 
-static def ps_arr_data(a: *PsArr) -> *char:
+private def ps_arr_data(a: *PsArr) -> *char:
     return (*char)(a) + sizeof(PsArr)
 
-static const PS_IDX_EMPTY: const i64 = -1
-static const PS_IDX_DEAD: const i64 = -2
+private const PS_IDX_EMPTY: const i64 = -1
+private const PS_IDX_DEAD: const i64 = -2
 
-static def ps_idx_at(d: *PsDict, i: i64) -> i64:
+private def ps_idx_at(d: *PsDict, i: i64) -> i64:
     return *(*i64)(ps_arr_data(d->index) + usize(i) * sizeof(i64))
 
-static def ps_idx_set(d: *PsDict, i: i64, v: i64):
+private def ps_idx_set(d: *PsDict, i: i64, v: i64):
     *(*i64)(ps_arr_data(d->index) + usize(i) * sizeof(i64)) = v
 
 # The slot for `key`. Answers the ENTRY it holds, or -1 when the key is not
 # there — and in that case `slot` comes back as the place to write it, which is
 # the first DEAD slot of the probe chain if there was one, so a table that has
 # been deleted from fills its holes instead of growing past them.
-static def ps_dict_find(d: *PsDict, key: const *char, ref slot: i64) -> i64:
+private def ps_dict_find(d: *PsDict, key: const *char, ref slot: i64) -> i64:
     mask: u64 = u64(d->cap) - 1
     i: u64 = ps_key_hash(d, key) & mask
     free: i64 = -1
@@ -1114,7 +1114,7 @@ static def ps_dict_find(d: *PsDict, key: const *char, ref slot: i64) -> i64:
 # Nothing here holds a collected pointer across a safe point: `ps_alloc` never
 # collects (that is the rule the whole moving collector rests on), so the old
 # arrays stay put while the new ones are built.
-static def ps_dict_rebuild(ctx: *PsCtx, d: *PsDict, ncap: i64, necap: i64):
+private def ps_dict_rebuild(ctx: *PsCtx, d: *PsDict, ncap: i64, necap: i64):
     ok: *PsArr = d->keys
     ov: *PsArr = d->vals
     ost: *PsArr = d->state
@@ -1258,7 +1258,7 @@ def ps_dict_val_at(d: *PsDict, i: i64) -> *char:
 # resultado é a de inserção (91.1) — primeiro o que veio do lado esquerdo, na
 # ordem dele, depois o do direito. Python não promete ordem em set, mas ter uma
 # ordem definida é melhor do que ter uma que depende do hash.
-static def ps_set_add_all(ctx: *PsCtx, out: *PsDict, d: *PsDict, only_in: *PsDict, want: bool):
+private def ps_set_add_all(ctx: *PsCtx, out: *PsDict, d: *PsDict, only_in: *PsDict, want: bool):
     if d == None:
         return
     i: i64 = 0
@@ -1371,7 +1371,7 @@ def ps_dict_values(ctx: *PsCtx, d: *PsDict) -> *PsList:
 
 # ---------- strings ----------
 # counts codepoints in UTF-8: every byte that is not a continuation starts one
-static def ps_utf8_count(b: const *char, n: usize) -> u32:
+private def ps_utf8_count(b: const *char, n: usize) -> u32:
     c: u32 = 0
     for i in range(n):
         if (u8(b[i]) & 0xC0) != 0x80:
@@ -1440,11 +1440,11 @@ def ps_utf8_valid(b: const *char, n: usize) -> bool:
 #     nothing at all for a string nobody indexes.
 #
 # A `str` is immutable (31.3), so the index never has to be invalidated.
-static def ps_str_ascii(s: *PsStr) -> bool:
+private def ps_str_ascii(s: *PsStr) -> bool:
     return s->nchars == s->len
 
 # the index, built on demand and kept in the string itself
-static def ps_str_index(ctx: *PsCtx, s: *PsStr) -> *PsArr:
+private def ps_str_index(ctx: *PsCtx, s: *PsStr) -> *PsArr:
     if s->offs != None:
         return s->offs
     n: usize = usize(s->len)
@@ -1464,7 +1464,7 @@ static def ps_str_index(ctx: *PsCtx, s: *PsStr) -> *PsArr:
     return a
 
 # byte offset of codepoint `k`, or `n` when k is past the end
-static def ps_utf8_off(b: const *char, n: usize, k: i64) -> usize:
+private def ps_utf8_off(b: const *char, n: usize, k: i64) -> usize:
     seen: i64 = 0
     for i in range(n):
         if (u8(b[i]) & 0xC0) != 0x80:
@@ -1564,7 +1564,7 @@ def ps_str_from_int(ctx: *PsCtx, v: i64) -> *PsStr:
 # a lie. WHICH quote follows Python's rule exactly — single, unless the string
 # has a single and no double — so an oracle pair can compare the two outputs
 # character for character instead of "close enough".
-static def ps_repr_esc_len(s: *PsStr, q: char) -> usize:
+private def ps_repr_esc_len(s: *PsStr, q: char) -> usize:
     n: usize = 2
     i: usize = 0
     while i < usize(s->len):
@@ -1637,7 +1637,7 @@ struct PsRepr:
     len: usize
     cap: usize
 
-static def ps_repr_put(ref b: PsRepr, p: const *char, n: usize):
+private def ps_repr_put(ref b: PsRepr, p: const *char, n: usize):
     if b.len + n + 1 > b.cap:
         nc: usize = b.cap * 2 if b.cap > 0 else usize(64)
         while nc < b.len + n + 1:
@@ -1648,7 +1648,7 @@ static def ps_repr_put(ref b: PsRepr, p: const *char, n: usize):
     b.len += n
     b.data[b.len] = '\0'
 
-static def ps_repr_puts(ref b: PsRepr, s: *PsStr):
+private def ps_repr_puts(ref b: PsRepr, s: *PsStr):
     if s != None:
         ps_repr_put(ref b, s->data, usize(s->len))
 
@@ -1917,7 +1917,7 @@ def ps_str_find(ctx: *PsCtx, s: *PsStr, needle: *PsStr) -> i64:
 
 # `uc_decode` mora com a tabela de caixa, mais abaixo; as funções daqui
 # precisam dele para andar de carácter em carácter
-static def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32
+private def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32
 
 # ---------- 104: o resto dos métodos de str ----------
 #
@@ -2044,7 +2044,7 @@ def ps_str_split_ws(ctx: *PsCtx, s: *PsStr) -> *PsList:
 # `splitlines()`: as fronteiras de linha do Python, que são MAIS do que `\n` —
 # `\r`, `\r\n`, e os separadores que o Unicode define. O terminador não vem no
 # pedaço, e um terminador final NÃO produz um pedaço vazio.
-static def ps_line_break(cp: i32) -> bool:
+private def ps_line_break(cp: i32) -> bool:
     if cp == 0x0A or cp == 0x0B or cp == 0x0C or cp == 0x0D or cp == 0x1C or cp == 0x1D or cp == 0x1E:
         return True
     return cp == 0x85 or cp == 0x2028 or cp == 0x2029
@@ -2082,7 +2082,7 @@ def ps_str_removeaffix(ctx: *PsCtx, s: *PsStr, p: *PsStr, suffix: bool) -> *PsSt
 
 # `strip(chars)`: tira qualquer um dos CARACTERES do conjunto, das duas pontas —
 # não é um prefixo. mode 0 as duas, 1 só à esquerda, 2 só à direita.
-static def ps_chars_has(set: *PsStr, cp: i32) -> bool:
+private def ps_chars_has(set: *PsStr, cp: i32) -> bool:
     i: usize = 0
     while i < usize(set->len):
         w: usize = 1
@@ -2211,14 +2211,14 @@ def ps_str_contains(s: *PsStr, needle: *PsStr) -> bool:
 PS_CASE: const u8[] = embed_bytes("unicase.bin")
 
 # os índices de tabela do arquivo da CAIXA, na ordem em que o gerador as escreve
-static const UC_UP: const i32 = 0        # faixas de maiúscula
-static const UC_UPM: const i32 = 1       # maiúscula de um-para-muitos
-static const UC_LO: const i32 = 2
-static const UC_LOM: const i32 = 3
-static const UC_CASED: const i32 = 4     # Cased
-static const UC_IGN: const i32 = 5       # Case_Ignorable
+private const UC_UP: const i32 = 0        # faixas de maiúscula
+private const UC_UPM: const i32 = 1       # maiúscula de um-para-muitos
+private const UC_LO: const i32 = 2
+private const UC_LOM: const i32 = 3
+private const UC_CASED: const i32 = 4     # Cased
+private const UC_IGN: const i32 = 5       # Case_Ignorable
 
-static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
+private def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
 
 # ---------- 108: UM leitor para as tabelas geradas ----------
 #
@@ -2235,19 +2235,19 @@ static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
 # tamanho: calcula tudo do arquivo, e UMA busca binária serve as quinze.
 #
 #   magic 4 | versão 8 | ntab u32 | ntab × (count u32, esize u32) | tabelas
-static const TB_HDR: const i32 = 4 + 8 + 4     # magic, versão, ntab
+private const TB_HDR: const i32 = 4 + 8 + 4     # magic, versão, ntab
 
-static def tb_u32(b: const *u8, off: i32) -> u32:
+private def tb_u32(b: const *u8, off: i32) -> u32:
     return (u32(b[off]) << 24) | (u32(b[off + 1]) << 16) | (u32(b[off + 2]) << 8) | u32(b[off + 3])
 
-static def tb_count(b: const *u8, i: i32) -> i32:
+private def tb_count(b: const *u8, i: i32) -> i32:
     return i32(tb_u32(b, TB_HDR + i * 8))
 
-static def tb_esize(b: const *u8, i: i32) -> i32:
+private def tb_esize(b: const *u8, i: i32) -> i32:
     return i32(tb_u32(b, TB_HDR + i * 8 + 4))
 
 # onde a tabela `which` começa: o fim do diretório mais o tamanho das anteriores
-static def tb_off(b: const *u8, which: i32) -> i32:
+private def tb_off(b: const *u8, which: i32) -> i32:
     ntab: i32 = i32(tb_u32(b, 4 + 8))
     o: i32 = TB_HDR + ntab * 8
     for i in range(which):
@@ -2256,7 +2256,7 @@ static def tb_off(b: const *u8, which: i32) -> i32:
 
 # a ENTRADA que contém `cp`, ou -1. É a única busca binária do módulo: as faixas,
 # os conjuntos e os mapeamentos de um-para-muitos têm todos `lo`/`hi` na frente.
-static def tb_find(b: const *u8, which: i32, cp: i32) -> i32:
+private def tb_find(b: const *u8, which: i32, cp: i32) -> i32:
     base: i32 = tb_off(b, which)
     es: i32 = tb_esize(b, which)
     lo: i32 = 0
@@ -2273,18 +2273,18 @@ static def tb_find(b: const *u8, which: i32, cp: i32) -> i32:
     return -1
 
 # está no conjunto?
-static def tb_in(b: const *u8, which: i32, cp: i32) -> bool:
+private def tb_in(b: const *u8, which: i32, cp: i32) -> bool:
     return tb_find(b, which, cp) >= 0
 
 # o mapeamento de um-para-um da tabela de faixas, ou o próprio ponto de código
-static def tb_map(b: const *u8, which: i32, cp: i32) -> i32:
+private def tb_map(b: const *u8, which: i32, cp: i32) -> i32:
     off: i32 = tb_find(b, which, cp)
     if off < 0:
         return cp
     return cp + i32(tb_u32(b, off + 8))
 
 # o de um-para-muitos: quantos saíram (0 = não está na tabela), escritos em `out`
-static def tb_multi(b: const *u8, which: i32, cp: i32, out: *i32) -> i32:
+private def tb_multi(b: const *u8, which: i32, cp: i32, out: *i32) -> i32:
     off: i32 = tb_find(b, which, cp)
     if off < 0:
         return 0
@@ -2304,7 +2304,7 @@ static def tb_multi(b: const *u8, which: i32, cp: i32, out: *i32) -> i32:
 # one code point at byte offset `at`, and how wide it is. A `str` is valid UTF-8
 # by construction (83.2), so there is no error path — a lone byte answers as
 # itself, which is what keeps the caller simple.
-static def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32:
+private def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32:
     n: usize = usize(s->len)
     c0: u8 = u8(s->data[at])
     if c0 < 0x80:
@@ -2323,7 +2323,7 @@ static def uc_decode(s: *PsStr, at: usize, ref w: usize) -> i32:
     return i32(c0)
 
 # start of the character before `at`, walking back over continuation bytes
-static def uc_prev(s: *PsStr, at: usize) -> usize:
+private def uc_prev(s: *PsStr, at: usize) -> usize:
     k: usize = at
     while k > usize(0):
         k -= 1
@@ -2333,7 +2333,7 @@ static def uc_prev(s: *PsStr, at: usize) -> usize:
 
 # Is the `Σ` at byte offset `at` FINAL? Cased before, not cased after, and
 # case-ignorable characters on either side are skipped rather than counted.
-static def uc_final_sigma(s: *PsStr, at: usize) -> bool:
+private def uc_final_sigma(s: *PsStr, at: usize) -> bool:
     # before
     before: bool = False
     k: usize = at
@@ -2363,7 +2363,7 @@ static def uc_final_sigma(s: *PsStr, at: usize) -> bool:
 # `upper` is table 0/1, `lower` is table 2/3. One walk of the string, decoding
 # each character, mapping it, and encoding what comes back — which is the only
 # shape that works once one character can become three.
-static def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
+private def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
     rng: i32 = UC_UP if upper else UC_LO
     mul: i32 = UC_UPM if upper else UC_LOM
     # three code points out per one in, four bytes each, is the ceiling
@@ -2414,7 +2414,7 @@ static def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
 
 # one code point, UTF-8, into a buffer. The same encoder `ps_str_chr` has, in
 # the shape a loop can use.
-static def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
+private def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
     v: u32 = u32(cp)
     if v < 0x80:
         buf[k] = char(v)
@@ -2456,19 +2456,19 @@ def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
 PS_CAT: const u8[] = embed_bytes("unicat.bin")
 
 # ... e os do arquivo das CATEGORIAS
-static const CA_ALPHA: const i32 = 0
-static const CA_DIGIT: const i32 = 1
-static const CA_DECIMAL: const i32 = 2
-static const CA_NUMERIC: const i32 = 3
-static const CA_UPPER: const i32 = 4
-static const CA_LOWER: const i32 = 5
+private const CA_ALPHA: const i32 = 0
+private const CA_DIGIT: const i32 = 1
+private const CA_DECIMAL: const i32 = 2
+private const CA_NUMERIC: const i32 = 3
+private const CA_UPPER: const i32 = 4
+private const CA_LOWER: const i32 = 5
 # os caracteres de TÍTULO (categoria Lt): `ǅ` e uns trinta outros, que não são
 # maiúsculos nem minúsculos. Têm conjunto próprio porque `isupper` tem de
 # RECUSÁ-LOS e `istitle` tem de ACEITÁ-LOS — foi a varredura exaustiva do
 # oráculo que cobrou isso, e nenhum exemplo escolhido à mão teria cobrado.
-static const CA_TITLECHAR: const i32 = 6
-static const CA_TIRANGE: const i32 = 7
-static const CA_TIMULTI: const i32 = 8
+private const CA_TITLECHAR: const i32 = 6
+private const CA_TIRANGE: const i32 = 7
+private const CA_TIMULTI: const i32 = 8
 
 
 # Os predicados do Python sobre a STRING INTEIRA, com a regra dele: todos os
@@ -2560,7 +2560,7 @@ def ps_str_is_title(s: *PsStr) -> bool:
 #   swapcase    maiúsculo desce, minúsculo sobe, o resto passa
 #
 # `mode`: 0 title, 1 capitalize, 2 swapcase.
-static def ps_str_recase(ctx: *PsCtx, s: *PsStr, mode: i32) -> *PsStr:
+private def ps_str_recase(ctx: *PsCtx, s: *PsStr, mode: i32) -> *PsStr:
     if s == None or s->len == 0:
         return ps_str_new(ctx, "", 0)
     buf: *char = (*char)(malloc(usize(s->len) * usize(12) + usize(4)))
@@ -2873,7 +2873,7 @@ def ps_err_category(e: *PsErr) -> i64:
 # ---------- formatting ----------
 # pads `src` to `width` according to `align`; `zero` fills with '0' after any
 # sign, which is what `08d` means
-static def ps_pad(ctx: *PsCtx, src: const *char, n: usize, width: i32, align: char, zero: bool) -> *PsStr:
+private def ps_pad(ctx: *PsCtx, src: const *char, n: usize, width: i32, align: char, zero: bool) -> *PsStr:
     if width <= 0 or usize(width) <= n:
         return ps_str_new(ctx, src, n)
     total: usize = usize(width)

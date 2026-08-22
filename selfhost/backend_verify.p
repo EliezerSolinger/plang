@@ -16,11 +16,11 @@ struct VCtx:
     be: const *Backend
     file: const *char
 
-static def v_expr(cx: *VCtx, e: *Expr)
-static def v_block(cx: *VCtx, blk: *Block)
-static def v_stmt(cx: *VCtx, s: *Stmt)
+private def v_expr(cx: *VCtx, e: *Expr)
+private def v_block(cx: *VCtx, blk: *Block)
+private def v_stmt(cx: *VCtx, s: *Stmt)
 
-static def ekind_name(k: i32) -> const *char:
+private def ekind_name(k: i32) -> const *char:
     match k:
         case EX_INCDEC:
             return "'++'/'--'"
@@ -33,7 +33,7 @@ static def ekind_name(k: i32) -> const *char:
         case _:
             return "this expression"
 
-static def skind_name(k: i32) -> const *char:
+private def skind_name(k: i32) -> const *char:
     match k:
         case ST_CFOR:
             return "C's three-part 'for'"
@@ -48,7 +48,7 @@ static def skind_name(k: i32) -> const *char:
         case _:
             return "this statement"
 
-static def v_type(cx: *VCtx, t: *Type):
+private def v_type(cx: *VCtx, t: *Type):
     if t == None:
         return
     if t->kind == TY_ARRAY and t->arr_len != None:
@@ -57,7 +57,7 @@ static def v_type(cx: *VCtx, t: *Type):
     for i in range(t->ntargs):
         v_type(cx, t->targs[i])
 
-static def v_expr(cx: *VCtx, e: *Expr):
+private def v_expr(cx: *VCtx, e: *Expr):
     if e == None:
         return
     if cx->be->accepts_expr != 0 and (cx->be->accepts_expr & (u64(1) << i32(e->kind))) == 0:
@@ -68,7 +68,7 @@ static def v_expr(cx: *VCtx, e: *Expr):
     v_type(cx, e->cast_type)
     v_block(cx, e->xblock)
 
-static def v_stmt(cx: *VCtx, s: *Stmt):
+private def v_stmt(cx: *VCtx, s: *Stmt):
     if s == None:
         return
     if cx->be->accepts_stmt != 0 and (cx->be->accepts_stmt & (u64(1) << i32(s->kind))) == 0:
@@ -90,13 +90,13 @@ static def v_stmt(cx: *VCtx, s: *Stmt):
         v_type(cx, s->cases[i]->type_pat)
         v_block(cx, s->cases[i]->body)
 
-static def v_block(cx: *VCtx, blk: *Block):
+private def v_block(cx: *VCtx, blk: *Block):
     if blk == None:
         return
     for i in range(blk->n):
         v_stmt(cx, blk->stmts[i])
 
-static def v_func(cx: *VCtx, f: *Func):
+private def v_func(cx: *VCtx, f: *Func):
     if f == None:
         return
     for i in range(f->nparams):

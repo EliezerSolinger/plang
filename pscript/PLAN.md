@@ -231,7 +231,7 @@ lowering encolher e ficar conferido.
       que define a variável.
 
 - [x] **Módulos** (41.3). `import geom`, `import geom as g`, `from geom import Vec2
-      [as V]`, tipo qualificado (`g.Kind`) e privacidade `static` (44.4).
+      [as V]`, tipo qualificado (`g.Kind`) e privacidade `private` (44.4/118).
       **Namespace de verdade, resolvido por RENOMEAÇÃO.** A visibilidade é a do
       Python: um nome de outro módulo só existe aqui se o qualificador o nomear ou o
       `from` o trouxer — nunca por simplesmente existir. Como o alvo é uma unidade de

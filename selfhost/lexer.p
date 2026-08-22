@@ -12,7 +12,7 @@ implement Vec<Token>
 enum LxLimit:
     MAX_INDENT = 64
 
-static const P_KEYWORDS: Keyword[] = {
+private const P_KEYWORDS: Keyword[] = {
     {"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF},
     {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE},
     {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO},
@@ -21,7 +21,8 @@ static const P_KEYWORDS: Keyword[] = {
     {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION},
     {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR},
     {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE},
-    {"None", TK_NONE}, {"static", TK_STATIC}, {"inline", TK_INLINE},
+    {"None", TK_NONE}, {"static", TK_STATIC}, {"private", TK_PRIVATE},
+    {"inline", TK_INLINE},
     {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT},
     {"defer", TK_DEFER}, {"with", TK_WITH},
     {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT},
@@ -29,7 +30,7 @@ static const P_KEYWORDS: Keyword[] = {
 
 # P reads plain strings and plain operators: no interpolation prefix, no triple
 # quote, and `?`/`@`/`**`/`//` are not operators at all.
-static P_LEXSPEC: const LexSpec = {P_KEYWORDS, False, False, False}
+private P_LEXSPEC: const LexSpec = {P_KEYWORDS, False, False, False}
 
 # reconstructs a `<...>` header path from tokens. `include` is a CONTEXTUAL
 # word in both languages, not a keyword, so the lexer cannot special-case `<h>`
@@ -120,6 +121,8 @@ def tok_kind_name(k: TokKind) -> const *char:
             return "'None'"
         case TK_STATIC:
             return "'static'"
+        case TK_PRIVATE:
+            return "'private'"
         case TK_INLINE:
             return "'inline'"
         case TK_DEFER:
@@ -280,16 +283,16 @@ def tok_kind_name(k: TokKind) -> const *char:
         case _:
             return "token"
 
-static def is_ident_start(c: u32) -> bool:
+private def is_ident_start(c: u32) -> bool:
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
 
-static def is_ident_cont(c: u32) -> bool:
+private def is_ident_cont(c: u32) -> bool:
     return is_ident_start(c) or (c >= '0' and c <= '9')
 
-static def is_digit(c: u32) -> bool:
+private def is_digit(c: u32) -> bool:
     return c >= '0' and c <= '9'
 
-static def is_hex(c: u32) -> bool:
+private def is_hex(c: u32) -> bool:
     return is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
 
 struct Lx:
@@ -311,30 +314,30 @@ struct Lx:
     tolerant: bool     # modo editor (lex_ex): NUNCA fatal — recupera e segue
     spec: const *LexSpec  # which language is being read (keywords + extensions)
 
-    static def cur(self: *Lx) -> u32:
+    private def cur(self: *Lx) -> u32:
         return self->cp[self->i] if self->i < self->n else 0
 
-    static def peek(self: *Lx, k: usize) -> u32:
+    private def peek(self: *Lx, k: usize) -> u32:
         return self->cp[self->i + k] if self->i + k < self->n else 0
 
-    static def here(self: *Lx) -> Pos:
+    private def here(self: *Lx) -> Pos:
         p: Pos = {self->line, i32(self->i - self->line_start) + 1}
         return p
 
     # slices the original bytes between codepoints [start, end)
-    static def slice(self: *Lx, start: usize, end: usize) -> const *char:
+    private def slice(self: *Lx, start: usize, end: usize) -> const *char:
         b0: usize = self->off[start]
         b1: usize = self->off[end] if end < self->n else self->nbytes
         return self->a->strndup(self->bytes + b0, b1 - b0)
 
-    static def push_tok(self: *Lx, k: TokKind, pos: Pos, text: const *char):
+    private def push_tok(self: *Lx, k: TokKind, pos: Pos, text: const *char):
         t: Token = {k, pos, text}
         self->toks.push(t)
         self->prev_import = k == TK_IMPORT
 
     # consumes the line break and measures the indentation of the next lines,
     # skipping blank/comment-only lines; emits INDENT/DEDENT
-    static def lex_newline_and_indent(self: *Lx):
+    private def lex_newline_and_indent(self: *Lx):
         while True:
             # we're at the start of a logical line
             save: usize = self->i
@@ -394,7 +397,7 @@ struct Lx:
     # lexes the literal body assuming self->i is positioned ON the opening quote;
     # the token text goes from `start` (which may include an L/u/U/u8 prefix) to
     # the end, verbatim — the C backend emits it as-is, and QBE decodes the wide.
-    static def lex_str_at(self: *Lx, start: usize, p: Pos, quote: u32, kind: TokKind):
+    private def lex_str_at(self: *Lx, start: usize, p: Pos, quote: u32, kind: TokKind):
         self->i += 1  # open quote
         while True:
             c: u32 = self->cur()
@@ -410,13 +413,13 @@ struct Lx:
                 break
         self->push_tok(kind, p, self->slice(start, self->i))
 
-    static def lex_string(self: *Lx, quote: u32, kind: TokKind):
+    private def lex_string(self: *Lx, quote: u32, kind: TokKind):
         self->lex_str_at(self->i, self->here(), quote, kind)
 
     # """...""" (LexSpec.triple_str): the only literal that may contain a raw
     # newline, so it is also the only one that has to keep the line counter
     # honest. The lexeme carries all six quotes; the parser strips them.
-    static def lex_triple_at(self: *Lx, start: usize, p: Pos, quote: u32, kind: TokKind):
+    private def lex_triple_at(self: *Lx, start: usize, p: Pos, quote: u32, kind: TokKind):
         self->i += 3
         while True:
             c: u32 = self->cur()
@@ -438,7 +441,7 @@ struct Lx:
             self->i += 1
         self->push_tok(kind, p, self->slice(start, self->i))
 
-    static def lex_number(self: *Lx):
+    private def lex_number(self: *Lx):
         p: Pos = self->here()
         start: usize = self->i
         if self->cur() == '0' and (self->peek(1) == 'x' or self->peek(1) == 'X'):
@@ -469,7 +472,7 @@ struct Lx:
             self->i += 1
         self->push_tok(TK_NUMBER, p, self->slice(start, self->i))
 
-    static def lex_op(self: *Lx):
+    private def lex_op(self: *Lx):
         p: Pos = self->here()
         c: u32 = self->cur()
         c1: u32 = self->peek(1)

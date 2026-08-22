@@ -532,7 +532,7 @@ static void p_stmt_inline(StrBuf *b, Stmt *s) {
     switch (s->kind) {
         case ST_VAR: {
             if (s->is_static) {
-                StrBuf_puts(b, "static ");
+                StrBuf_puts(b, "private ");
             }
             if (s->is_extern) {
                 StrBuf_puts(b, "extern ");
@@ -823,7 +823,7 @@ static void p_params(StrBuf *b, Func *f) {
 static void p_func_head(StrBuf *b, Func *f, int32_t ind) {
     indent(b, ind);
     if (f->is_static) {
-        StrBuf_puts(b, "static ");
+        StrBuf_puts(b, "private ");
     }
     if (f->is_inline) {
         StrBuf_puts(b, "inline ");
@@ -921,7 +921,7 @@ void p_decl(StrBuf *b, Decl *d) {
         }
         case DL_VAR: {
             if (d->is_static) {
-                StrBuf_puts(b, "static ");
+                StrBuf_puts(b, "private ");
             }
             if (d->is_extern) {
                 StrBuf_puts(b, "extern ");

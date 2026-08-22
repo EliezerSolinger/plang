@@ -59,5 +59,5 @@ def clamp01(x: float) -> float:
 
 
 # static = module-private (44.4): `import vec3` does not see this
-static def len2(in v: Vec) -> float:
+private def len2(in v: Vec) -> float:
     return v.dot(v)

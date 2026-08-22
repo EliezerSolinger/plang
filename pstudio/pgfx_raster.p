@@ -96,7 +96,7 @@ struct PgFont:
 # ---------- framebuffer ----------
 
 # blends src over dst with alpha a (0..255), per channel
-static def blend(dst: u32, src: u32, a: u32) -> u32:
+private def blend(dst: u32, src: u32, a: u32) -> u32:
     if a == 255:
         return src
     ia: u32 = 255 - a

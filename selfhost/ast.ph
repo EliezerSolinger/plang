@@ -42,6 +42,12 @@ enum TokKind:
     TK_FALSE
     TK_NONE
     TK_STATIC
+    TK_PRIVATE     # `private`: module-private, in BOTH languages. `static`
+                   #   was the first spelling and is being retired from the
+                   #   privacy role; in pscript it stays as the STATIC METHOD
+                   #   marker inside a struct, which is what it will mean
+                   #   there alone. The C we EMIT keeps saying `static` —
+                   #   that is C's word for internal linkage, not ours.
     TK_INLINE
     TK_EXTERN
     TK_VOLATILE
@@ -501,38 +507,38 @@ struct Module:
 
 # constructors (arena) — header-only: trivial, hot allocators (one per AST
 # node), so `static inline` in the .ph (§8.5). Avoids a separate ast.p file.
-static inline def ty_name(a: *Arena, name: const *char) -> *Type:
+private inline def ty_name(a: *Arena, name: const *char) -> *Type:
     t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_NAME
     t->name = name
     return t
 
-static inline def ty_ptr(a: *Arena, inner: *Type) -> *Type:
+private inline def ty_ptr(a: *Arena, inner: *Type) -> *Type:
     t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_PTR
     t->inner = inner
     return t
 
-static inline def ty_array(a: *Arena, inner: *Type, len: *Expr) -> *Type:
+private inline def ty_array(a: *Arena, inner: *Type, len: *Expr) -> *Type:
     t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_ARRAY
     t->inner = inner
     t->arr_len = len
     return t
 
-static inline def ty_func(a: *Arena, ret: *Type) -> *Type:
+private inline def ty_func(a: *Arena, ret: *Type) -> *Type:
     t: *Type = a->alloc(sizeof(Type))
     t->kind = TY_FUNC
     t->inner = ret
     return t
 
-static inline def ex_new(a: *Arena, k: ExprKind, pos: Pos) -> *Expr:
+private inline def ex_new(a: *Arena, k: ExprKind, pos: Pos) -> *Expr:
     e: *Expr = a->alloc(sizeof(Expr))
     e->kind = k
     e->pos = pos
     return e
 
-static inline def st_new(a: *Arena, k: StmtKind, pos: Pos) -> *Stmt:
+private inline def st_new(a: *Arena, k: StmtKind, pos: Pos) -> *Stmt:
     s: *Stmt = a->alloc(sizeof(Stmt))
     s->kind = k
     s->pos = pos
@@ -557,7 +563,7 @@ static inline def st_new(a: *Arena, k: StmtKind, pos: Pos) -> *Stmt:
 ST_NEXPR_FIXED: const i32 = 9   # count of the scalar *Expr fields below
 EX_NEXPR_FIXED: const i32 = 3
 
-static inline def stmt_nexprs(s: *Stmt) -> i32:
+private inline def stmt_nexprs(s: *Stmt) -> i32:
     if s == None:
         return 0
     n: i32 = ST_NEXPR_FIXED + s->nconds
@@ -565,7 +571,7 @@ static inline def stmt_nexprs(s: *Stmt) -> i32:
         n += s->cases[i]->nvals
     return n
 
-static inline def stmt_expr_at(s: *Stmt, i: i32) -> *Expr:
+private inline def stmt_expr_at(s: *Stmt, i: i32) -> *Expr:
     match i:
         case 0:
             return s->init
@@ -595,12 +601,12 @@ static inline def stmt_expr_at(s: *Stmt, i: i32) -> *Expr:
         k -= s->cases[j]->nvals
     return None
 
-static inline def expr_nexprs(e: *Expr) -> i32:
+private inline def expr_nexprs(e: *Expr) -> i32:
     if e == None:
         return 0
     return EX_NEXPR_FIXED + e->nargs
 
-static inline def expr_expr_at(e: *Expr, i: i32) -> *Expr:
+private inline def expr_expr_at(e: *Expr, i: i32) -> *Expr:
     match i:
         case 0:
             return e->lhs

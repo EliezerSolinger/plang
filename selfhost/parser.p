@@ -9,14 +9,14 @@ import "../stl/vec.ph"
 # other modules that need them just do the declare (links against these bodies)
 
 # ---------- types ----------
-static def is_type_modifier(s: const *char) -> bool:
+private def is_type_modifier(s: const *char) -> bool:
     return s in {"unsigned", "signed", "long", "short"}
 
-static def is_type_base_word(s: const *char) -> bool:
+private def is_type_base_word(s: const *char) -> bool:
     return s in {"int", "char", "short", "long", "float", "double"}
 
 # ---------- statements ----------
-static def is_assign_op(k: TokKind) -> bool:
+private def is_assign_op(k: TokKind) -> bool:
     return k in {TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ}
 
 struct P:
@@ -31,93 +31,106 @@ struct P:
     # looking like a cast to a type called `p.x`.
     nsv: Vec<*char>
 
-    static def pk(self: *P) -> *Token
-    static def pk1(self: *P) -> *Token
-    static def pk2(self: *P) -> *Token
-    static def at(self: *P, k: TokKind) -> bool
-    static def adv(self: *P) -> *Token
-    static def accept(self: *P, k: TokKind) -> bool
-    static def expect(self: *P, k: TokKind, ctx: const *char) -> *Token
-    static def expect_gt(self: *P)
-    static def parse_type(self: *P) -> *Type
-    static def parse_type_ref(self: *P) -> *Type
-    static def at_ref_type(self: *P) -> bool
-    static def has_ns(self: *P, name: const *char) -> bool
-    static def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr
-    static def parse_stmtexpr(self: *P) -> *Expr
-    static def parse_primary(self: *P) -> *Expr
-    static def parse_postfix(self: *P) -> *Expr
-    static def try_paren_cast(self: *P) -> *Expr
-    static def parse_unary(self: *P) -> *Expr
-    static def parse_mul(self: *P) -> *Expr
-    static def parse_add(self: *P) -> *Expr
-    static def parse_shift(self: *P) -> *Expr
-    static def parse_rel(self: *P) -> *Expr
-    static def parse_eq(self: *P) -> *Expr
-    static def parse_bitand(self: *P) -> *Expr
-    static def parse_bitxor(self: *P) -> *Expr
-    static def parse_bitor(self: *P) -> *Expr
-    static def parse_not(self: *P) -> *Expr
-    static def parse_and(self: *P) -> *Expr
-    static def parse_or(self: *P) -> *Expr
-    static def parse_coalesce(self: *P) -> *Expr
-    static def parse_ternary(self: *P) -> *Expr
-    static def parse_expr(self: *P) -> *Expr
-    static def parse_init_elem(self: *P, out: *Vec<*Expr>)
-    static def parse_initializer(self: *P) -> *Expr
-    static def end_stmt(self: *P, what: const *char)
-    static def parse_block(self: *P) -> *Block
-    static def parse_var_stmt(self: *P, is_const: bool) -> *Stmt
-    static def parse_if(self: *P) -> *Stmt
-    static def parse_while(self: *P) -> *Stmt
-    static def parse_do(self: *P) -> *Stmt
-    static def parse_for(self: *P) -> *Stmt
-    static def parse_match(self: *P) -> *Stmt
-    static def parse_with(self: *P) -> *Stmt
-    static def parse_stmt(self: *P) -> *Stmt
-    static def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func
-    static def parse_struct_or_union(self: *P, is_union: bool, is_record: bool = False) -> *Decl
-    static def parse_enum(self: *P) -> *Decl
-    static def parse_c_include(self: *P) -> *Decl
-    static def parse_import(self: *P) -> *Decl
-    static def parse_instantiate(self: *P) -> *Decl
-    static def parse_trait(self: *P) -> *Decl
-    static def parse_trait_impl(self: *P, tname: const *char, pos: Pos) -> *Decl
-    static def parse_top(self: *P) -> *Decl
+    private def pk(self: *P) -> *Token
+    private def pk1(self: *P) -> *Token
+    private def pk2(self: *P) -> *Token
+    private def at(self: *P, k: TokKind) -> bool
+    private def adv(self: *P) -> *Token
+    private def accept(self: *P, k: TokKind) -> bool
+    private def at_priv(self: *P) -> bool
+    private def retired_static(self: *P, t: *Token)
+    private def expect(self: *P, k: TokKind, ctx: const *char) -> *Token
+    private def expect_gt(self: *P)
+    private def parse_type(self: *P) -> *Type
+    private def parse_type_ref(self: *P) -> *Type
+    private def at_ref_type(self: *P) -> bool
+    private def has_ns(self: *P, name: const *char) -> bool
+    private def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr
+    private def parse_stmtexpr(self: *P) -> *Expr
+    private def parse_primary(self: *P) -> *Expr
+    private def parse_postfix(self: *P) -> *Expr
+    private def try_paren_cast(self: *P) -> *Expr
+    private def parse_unary(self: *P) -> *Expr
+    private def parse_mul(self: *P) -> *Expr
+    private def parse_add(self: *P) -> *Expr
+    private def parse_shift(self: *P) -> *Expr
+    private def parse_rel(self: *P) -> *Expr
+    private def parse_eq(self: *P) -> *Expr
+    private def parse_bitand(self: *P) -> *Expr
+    private def parse_bitxor(self: *P) -> *Expr
+    private def parse_bitor(self: *P) -> *Expr
+    private def parse_not(self: *P) -> *Expr
+    private def parse_and(self: *P) -> *Expr
+    private def parse_or(self: *P) -> *Expr
+    private def parse_coalesce(self: *P) -> *Expr
+    private def parse_ternary(self: *P) -> *Expr
+    private def parse_expr(self: *P) -> *Expr
+    private def parse_init_elem(self: *P, out: *Vec<*Expr>)
+    private def parse_initializer(self: *P) -> *Expr
+    private def end_stmt(self: *P, what: const *char)
+    private def parse_block(self: *P) -> *Block
+    private def parse_var_stmt(self: *P, is_const: bool) -> *Stmt
+    private def parse_if(self: *P) -> *Stmt
+    private def parse_while(self: *P) -> *Stmt
+    private def parse_do(self: *P) -> *Stmt
+    private def parse_for(self: *P) -> *Stmt
+    private def parse_match(self: *P) -> *Stmt
+    private def parse_with(self: *P) -> *Stmt
+    private def parse_stmt(self: *P) -> *Stmt
+    private def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func
+    private def parse_struct_or_union(self: *P, is_union: bool, is_record: bool = False) -> *Decl
+    private def parse_enum(self: *P) -> *Decl
+    private def parse_c_include(self: *P) -> *Decl
+    private def parse_import(self: *P) -> *Decl
+    private def parse_instantiate(self: *P) -> *Decl
+    private def parse_trait(self: *P) -> *Decl
+    private def parse_trait_impl(self: *P, tname: const *char, pos: Pos) -> *Decl
+    private def parse_top(self: *P) -> *Decl
 
     # ---------- primitives ----------
-    static def pk(self: *P) -> *Token:
+    private def pk(self: *P) -> *Token:
         return &self->t[self->i]
 
-    static def pk1(self: *P) -> *Token:
+    private def pk1(self: *P) -> *Token:
         return &self->t[self->i + 1] if self->i + 1 < self->n else &self->t[self->n - 1]
 
-    static def pk2(self: *P) -> *Token:
+    private def pk2(self: *P) -> *Token:
         return &self->t[self->i + 2] if self->i + 2 < self->n else &self->t[self->n - 1]
 
-    static def at(self: *P, k: TokKind) -> bool:
+    private def at(self: *P, k: TokKind) -> bool:
         return self->pk()->kind == k
 
-    static def adv(self: *P) -> *Token:
+    private def adv(self: *P) -> *Token:
         t: *Token = &self->t[self->i]
         if t->kind != TK_EOF:
             self->i += 1
         return t
 
-    static def accept(self: *P, k: TokKind) -> bool:
+    private def accept(self: *P, k: TokKind) -> bool:
         if self->at(k):
             self->adv()
             return True
         return False
 
-    static def expect(self: *P, k: TokKind, ctx: const *char) -> *Token:
+    # `private` is the spelling. `static` is still a keyword — C's
+    # `T x[static N]` declarator needs it — but it no longer means privacy, and
+    # `retired_static` is what says so instead of letting the word turn into an
+    # identifier and change the meaning of old code in silence.
+    private def at_priv(self: *P) -> bool:
+        return self->at(TK_PRIVATE)
+
+    private def retired_static(self: *P, t: *Token):
+        if t->kind == TK_STATIC:
+            fatal_at(self->file, t->pos, "'static' no longer spells module privacy: write 'private' (in pscript 'static' marks a static method inside a struct)")
+
+    private def expect(self: *P, k: TokKind, ctx: const *char) -> *Token:
         if not self->at(k):
             fatal_at(self->file, self->pk()->pos, "expected %s in %s, found %s", tok_kind_name(k), ctx, tok_kind_name(self->pk()->kind))
         return self->adv()
 
     # closes generic type arguments: '>' — splitting '>>', '>>=' and '>=' when
     # needed (Vec<Vec<int>> lexes the end as '>>')
-    static def expect_gt(self: *P):
+    private def expect_gt(self: *P):
         k: TokKind = self->pk()->kind
         if k == TK_GT:
             self->adv()
@@ -130,7 +143,7 @@ struct P:
         else:
             fatal_at(self->file, self->pk()->pos, "expected '>' closing type arguments, found %s", tok_kind_name(k))
 
-    static def has_ns(self: *P, name: const *char) -> bool:
+    private def has_ns(self: *P, name: const *char) -> bool:
         for i in range(self->nsv.len):
             if strcmp(self->nsv.data[i], name) == 0:
                 return True
@@ -138,7 +151,7 @@ struct P:
 
     # `ref` starts a type only when a type actually follows — `x: ref = e`
     # still declares a variable whose TYPE is the (unfortunate) name `ref`
-    static def at_ref_type(self: *P) -> bool:
+    private def at_ref_type(self: *P) -> bool:
         if not self->at(TK_IDENT) or strcmp(self->pk()->text, "ref") != 0:
             return False
         nk: i32 = self->pk1()->kind
@@ -147,7 +160,7 @@ struct P:
     # `ref T` (69.1) is legal ONLY where this wrapper is used: a local
     # declaration and a function return. Everywhere else parse_type itself
     # rejects it with the reason, so the error lands on the exact position.
-    static def parse_type_ref(self: *P) -> *Type:
+    private def parse_type_ref(self: *P) -> *Type:
         if self->at_ref_type():
             self->adv()   # the `ref` keyword
             inner: *Type = self->parse_type()   # `ref ref T` falls into the guard below
@@ -156,7 +169,7 @@ struct P:
             return rt
         return self->parse_type()
 
-    static def parse_type(self: *P) -> *Type:
+    private def parse_type(self: *P) -> *Type:
         if self->at_ref_type():
             fatal_at(self->file, self->pk()->pos, "'ref T' is only a local variable or return type (69.1): a parameter takes the trio (`ref v: T`); fields, globals and inner types hold a pointer (*T)")
         is_const: bool = False
@@ -297,7 +310,7 @@ struct P:
         return t
 
     # ---------- expressions ----------
-    static def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr:
+    private def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr:
         e: *Expr = ex_new(self->a, EX_BINARY, pos)
         e->op = op
         e->lhs = l
@@ -309,7 +322,7 @@ struct P:
     # last item is an expression (no ';' before the '}'), it's the VALUE; otherwise
     # the value is void. The C backend lowers it to the comma operator (exprs only); QBE
     # emits the flow directly (accepts declarations/control).
-    static def parse_stmtexpr(self: *P) -> *Expr:
+    private def parse_stmtexpr(self: *P) -> *Expr:
         pos: Pos = self->pk()->pos
         self->adv()  # '('
         self->adv()  # '{'
@@ -332,7 +345,7 @@ struct P:
         e->lhs = val
         return e
 
-    static def parse_primary(self: *P) -> *Expr:
+    private def parse_primary(self: *P) -> *Expr:
         t: *Token = self->pk()
         e: *Expr
         match t->kind:
@@ -408,7 +421,7 @@ struct P:
                 fatal_at(self->file, t->pos, "invalid expression (found %s)", tok_kind_name(t->kind))
                 return None
 
-    static def parse_postfix(self: *P) -> *Expr:
+    private def parse_postfix(self: *P) -> *Expr:
         e: *Expr = self->parse_primary()
         while True:
             pos: Pos = self->pk()->pos
@@ -477,7 +490,7 @@ struct P:
 
     # tries to recognize the pointer cast "(*type)(expr)"; if the shape doesn't
     # match, backtracks and parses as a normal expression
-    static def try_paren_cast(self: *P) -> *Expr:
+    private def try_paren_cast(self: *P) -> *Expr:
         save: usize = self->i
         pos: Pos = self->pk()->pos
         self->adv()  # '('
@@ -501,7 +514,7 @@ struct P:
         self->i = save
         return None
 
-    static def parse_unary(self: *P) -> *Expr:
+    private def parse_unary(self: *P) -> *Expr:
         t: *Token = self->pk()
         match t->kind:
             case TK_MINUS, TK_PLUS, TK_TILDE, TK_STAR, TK_AMP:
@@ -520,35 +533,35 @@ struct P:
                 return self->parse_postfix()
 
     # binary levels, from strongest to weakest (mirrors the EBNF)
-    static def parse_mul(self: *P) -> *Expr:
+    private def parse_mul(self: *P) -> *Expr:
         e: *Expr = self->parse_unary()
         while self->at(TK_STAR) or self->at(TK_SLASH) or self->at(TK_PERCENT):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_unary())
         return e
 
-    static def parse_add(self: *P) -> *Expr:
+    private def parse_add(self: *P) -> *Expr:
         e: *Expr = self->parse_mul()
         while self->at(TK_PLUS) or self->at(TK_MINUS):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_mul())
         return e
 
-    static def parse_shift(self: *P) -> *Expr:
+    private def parse_shift(self: *P) -> *Expr:
         e: *Expr = self->parse_add()
         while self->at(TK_SHL) or self->at(TK_SHR):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_add())
         return e
 
-    static def parse_rel(self: *P) -> *Expr:
+    private def parse_rel(self: *P) -> *Expr:
         e: *Expr = self->parse_shift()
         while self->at(TK_LT) or self->at(TK_LE) or self->at(TK_GT) or self->at(TK_GE):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_shift())
         return e
 
-    static def parse_eq(self: *P) -> *Expr:
+    private def parse_eq(self: *P) -> *Expr:
         e: *Expr = self->parse_rel()
         while True:
             # `is` / `is not` (contextual, like Python): pointer IDENTITY. Infix
@@ -585,28 +598,28 @@ struct P:
             break
         return e
 
-    static def parse_bitand(self: *P) -> *Expr:
+    private def parse_bitand(self: *P) -> *Expr:
         e: *Expr = self->parse_eq()
         while self->at(TK_AMP):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_eq())
         return e
 
-    static def parse_bitxor(self: *P) -> *Expr:
+    private def parse_bitxor(self: *P) -> *Expr:
         e: *Expr = self->parse_bitand()
         while self->at(TK_CARET):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_bitand())
         return e
 
-    static def parse_bitor(self: *P) -> *Expr:
+    private def parse_bitor(self: *P) -> *Expr:
         e: *Expr = self->parse_bitxor()
         while self->at(TK_PIPE):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_bitxor())
         return e
 
-    static def parse_not(self: *P) -> *Expr:
+    private def parse_not(self: *P) -> *Expr:
         if self->at(TK_NOT):
             op: *Token = self->adv()
             e: *Expr = ex_new(self->a, EX_UNARY, op->pos)
@@ -615,14 +628,14 @@ struct P:
             return e
         return self->parse_bitor()
 
-    static def parse_and(self: *P) -> *Expr:
+    private def parse_and(self: *P) -> *Expr:
         e: *Expr = self->parse_not()
         while self->at(TK_AND):
             op: *Token = self->adv()
             e = self->bin(op->kind, op->pos, e, self->parse_not())
         return e
 
-    static def parse_or(self: *P) -> *Expr:
+    private def parse_or(self: *P) -> *Expr:
         e: *Expr = self->parse_and()
         while self->at(TK_OR):
             op: *Token = self->adv()
@@ -631,7 +644,7 @@ struct P:
 
     # `a ?? b` (69.3): b if a is None. Binds tighter than the ternary and
     # looser than `or`; chains left, which for pointers reads the same either way
-    static def parse_coalesce(self: *P) -> *Expr:
+    private def parse_coalesce(self: *P) -> *Expr:
         e: *Expr = self->parse_or()
         while self->at(TK_COALESCE):
             op: *Token = self->adv()
@@ -639,7 +652,7 @@ struct P:
         return e
 
     # Python-style ternary: value if cond else other
-    static def parse_ternary(self: *P) -> *Expr:
+    private def parse_ternary(self: *P) -> *Expr:
         v: *Expr = self->parse_coalesce()
         if self->at(TK_IF):
             pos: Pos = self->adv()->pos
@@ -653,14 +666,14 @@ struct P:
             return e
         return v
 
-    static def parse_expr(self: *P) -> *Expr:
+    private def parse_expr(self: *P) -> *Expr:
         return self->parse_ternary()
 
     # a list element: [idx]=v / .field=v (C99 designator) or value/nested.
     # Extensions reinterpreted as plain C99 (the GNU form doesn't survive into the AST):
     #   [a ... b] = v  ->  [a]=v, [a+1]=v, ..., [b]=v   (expansion)
     #   .a.j = v / [i][j] = v  ->  .a = {.j = v} / [i] = {[j] = v}  (nesting)
-    static def parse_init_elem(self: *P, out: *Vec<*Expr>):
+    private def parse_init_elem(self: *P, out: *Vec<*Expr>):
         if self->at(TK_LBRACKET) or self->at(TK_DOT):
             pos: Pos = self->pk()->pos
             d: *Expr = ex_new(self->a, EX_DESIG, pos)
@@ -728,7 +741,7 @@ struct P:
             return
         out->push(self->parse_initializer())
 
-    static def parse_initializer(self: *P) -> *Expr:
+    private def parse_initializer(self: *P) -> *Expr:
         if self->at(TK_LBRACE):
             pos: Pos = self->adv()->pos
             e: *Expr = ex_new(self->a, EX_INITLIST, pos)
@@ -746,7 +759,7 @@ struct P:
 
     # end of a simple statement: ';' (more statements on the same line) or newline.
     # a trailing ';' before the newline is accepted, as is ';;'.
-    static def end_stmt(self: *P, what: const *char):
+    private def end_stmt(self: *P, what: const *char):
         if self->at(TK_SEMI):
             while self->at(TK_SEMI):
                 self->adv()
@@ -756,7 +769,7 @@ struct P:
             return  # end of statement expression ({ ... }): '}' is not consumed here
         self->expect(TK_NEWLINE, what)
 
-    static def parse_block(self: *P) -> *Block:
+    private def parse_block(self: *P) -> *Block:
         self->expect(TK_NEWLINE, "start of block (after ':')")
         self->expect(TK_INDENT, "indented block")
         v: Vec<*Stmt>
@@ -769,7 +782,7 @@ struct P:
         b->n = v.len
         return b
 
-    static def parse_var_stmt(self: *P, is_const: bool) -> *Stmt:
+    private def parse_var_stmt(self: *P, is_const: bool) -> *Stmt:
         name: *Token = self->expect(TK_IDENT, "variable declaration")
         s: *Stmt = st_new(self->a, ST_VAR, name->pos)
         s->name = name->text
@@ -787,7 +800,7 @@ struct P:
         self->end_stmt("variable declaration")
         return s
 
-    static def parse_if(self: *P) -> *Stmt:
+    private def parse_if(self: *P) -> *Stmt:
         pos: Pos = self->adv()->pos  # if
         s: *Stmt = st_new(self->a, ST_IF, pos)
         s->if_sel = -1  # -1 = runtime; sema may fold it to one branch
@@ -811,7 +824,7 @@ struct P:
         s->nconds = conds.len
         return s
 
-    static def parse_while(self: *P) -> *Stmt:
+    private def parse_while(self: *P) -> *Stmt:
         pos: Pos = self->adv()->pos
         s: *Stmt = st_new(self->a, ST_WHILE, pos)
         s->cond = self->parse_expr()
@@ -819,7 +832,7 @@ struct P:
         s->body = self->parse_block()
         return s
 
-    static def parse_do(self: *P) -> *Stmt:
+    private def parse_do(self: *P) -> *Stmt:
         pos: Pos = self->adv()->pos
         s: *Stmt = st_new(self->a, ST_DO, pos)
         self->expect(TK_COLON, "do")
@@ -829,7 +842,7 @@ struct P:
         self->expect(TK_NEWLINE, "do-while")
         return s
 
-    static def parse_for(self: *P) -> *Stmt:
+    private def parse_for(self: *P) -> *Stmt:
         pos: Pos = self->adv()->pos
         s: *Stmt = st_new(self->a, ST_FOR, pos)
         s->var = self->expect(TK_IDENT, "for")->text
@@ -885,7 +898,7 @@ struct P:
         s->body = self->parse_block()
         return s
 
-    static def parse_match(self: *P) -> *Stmt:
+    private def parse_match(self: *P) -> *Stmt:
         pos: Pos = self->adv()->pos
         s: *Stmt = st_new(self->a, ST_MATCH, pos)
         s->tm_sel = -1
@@ -931,7 +944,7 @@ struct P:
         s->ncases = cases.len
         return s
 
-    static def parse_with(self: *P) -> *Stmt:
+    private def parse_with(self: *P) -> *Stmt:
         pos: Pos = self->adv()->pos  # with
         s: *Stmt = st_new(self->a, ST_WITH, pos)
         s->expr = self->parse_expr()   # the target (struct or *struct)
@@ -939,7 +952,7 @@ struct P:
         s->body = self->parse_block()
         return s
 
-    static def parse_stmt(self: *P) -> *Stmt:
+    private def parse_stmt(self: *P) -> *Stmt:
         t: *Token = self->pk()
         if t->kind == TK_IDENT and t->text == "pass" and (self->pk1()->kind == TK_NEWLINE or self->pk1()->kind == TK_SEMI):
             self->adv()
@@ -1075,7 +1088,7 @@ struct P:
                 return s3
 
     # ---------- top-level declarations ----------
-    static def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func:
+    private def parse_func(self: *P, is_static: bool, is_inline: bool, owner: const *char) -> *Func:
         pos: Pos = self->expect(TK_DEF, "function")->pos
         name: *Token = self->expect(TK_IDENT, "function name")
         # generic function template: def foo<T, U>(...). Type params usable in the
@@ -1165,7 +1178,7 @@ struct P:
             self->expect(TK_NEWLINE, "function prototype")
         return f
 
-    static def parse_struct_or_union(self: *P, is_union: bool, is_record: bool = False) -> *Decl:
+    private def parse_struct_or_union(self: *P, is_union: bool, is_record: bool = False) -> *Decl:
         pos: Pos = self->adv()->pos  # struct/union/record
         name: *Token = self->expect(TK_IDENT, "union" if is_union else "struct")
         # type parameters: struct Vec<T>: (generic template)
@@ -1197,13 +1210,14 @@ struct P:
         methods.init()
 
         while not self->at(TK_DEDENT) and not self->at(TK_EOF):
-            if self->at(TK_DEF) or self->at(TK_STATIC) or self->at(TK_INLINE):
+            self->retired_static(self->pk())
+            if self->at(TK_DEF) or self->at_priv() or self->at(TK_INLINE):
                 if is_union:
                     fatal_at(self->file, self->pk()->pos, "union cannot have methods")
                 st: bool = False
                 inl: bool = False
-                while self->at(TK_STATIC) or self->at(TK_INLINE):
-                    if self->adv()->kind == TK_STATIC:
+                while self->at_priv() or self->at(TK_INLINE):
+                    if self->adv()->kind != TK_INLINE:
                         st = True
                     else:
                         inl = True
@@ -1236,7 +1250,7 @@ struct P:
             .ntparams = tparams.len
         return d
 
-    static def parse_enum(self: *P) -> *Decl:
+    private def parse_enum(self: *P) -> *Decl:
         pos: Pos = self->adv()->pos
         name: *Token = self->expect(TK_IDENT, "enum")
         self->expect(TK_COLON, "enum")
@@ -1267,7 +1281,7 @@ struct P:
     # contextual `include`: a C header directive. `include` is NOT reserved — it is
     # only special here, at a top-level declaration, when followed by `<...>` or a
     # string (same idea as `range` in a for-loop). Emits #include AND (F2) ingests.
-    static def parse_c_include(self: *P) -> *Decl:
+    private def parse_c_include(self: *P) -> *Decl:
         inc: *Token = self->adv()   # the `include` identifier
         d: *Decl = self->a->alloc(sizeof(Decl))
         d->kind = DL_IMPORT
@@ -1291,7 +1305,7 @@ struct P:
         self->expect(TK_NEWLINE, "include")
         return d
 
-    static def parse_import(self: *P) -> *Decl:
+    private def parse_import(self: *P) -> *Decl:
         pos: Pos = self->adv()->pos
         d: *Decl = self->a->alloc(sizeof(Decl))
         d->kind = DL_IMPORT
@@ -1331,7 +1345,7 @@ struct P:
     # through the method lookup that already exists: no new dispatch, and no
     # vtable, which is the whole point of taking traits to P in the static form
     # only (67.1).
-    static def parse_trait_impl(self: *P, tname: const *char, pos: Pos) -> *Decl:
+    private def parse_trait_impl(self: *P, tname: const *char, pos: Pos) -> *Decl:
         ty: *Token = self->expect(TK_IDENT, "implement <trait> for <type>")
         self->expect(TK_COLON, "implement ... for")
         self->expect(TK_NEWLINE, "implement ... for")
@@ -1364,7 +1378,7 @@ struct P:
         d->nmethods = ms.len
         return d
 
-    static def parse_trait(self: *P) -> *Decl:
+    private def parse_trait(self: *P) -> *Decl:
         self->adv()                       # `trait`
         name: *Token = self->expect(TK_IDENT, "trait name")
         self->expect(TK_COLON, "trait")
@@ -1402,7 +1416,7 @@ struct P:
         d->nmethods = ms.len
         return d
 
-    static def parse_instantiate(self: *P) -> *Decl:
+    private def parse_instantiate(self: *P) -> *Decl:
         kw: *Token = self->adv()
         # `implement Printable for Vec:` (67.2) — the same word as generic
         # instantiation, told apart by the `for`. One word with two forms beats
@@ -1436,7 +1450,7 @@ struct P:
         self->expect(TK_NEWLINE, "declare/implement")
         return d
 
-    static def parse_top(self: *P) -> *Decl:
+    private def parse_top(self: *P) -> *Decl:
         is_extern: bool = self->accept(TK_EXTERN)   # storage class: declaration, not def
         t: *Token = self->pk()
         match t->kind:
@@ -1451,30 +1465,31 @@ struct P:
                 return self->parse_struct_or_union(True)
             case TK_ENUM:
                 return self->parse_enum()
-            case TK_STATIC, TK_INLINE, TK_DEF:
+            case TK_STATIC, TK_PRIVATE, TK_INLINE, TK_DEF:
+                self->retired_static(t)
                 # `inline Vec<int>` (instantiation) vs `inline def f...` (modifier)
                 if t->kind == TK_INLINE and self->pk1()->kind == TK_IDENT:
                     return self->parse_instantiate()
-                # `static name: T = ...` — a module-level table that stays LOCAL to
-                # this translation unit (without it every global is exported and
-                # two modules with the same table name collide at link time)
+                # `private name: T = ...` — a module-level table that stays LOCAL
+                # to this translation unit (without it every global is exported
+                # and two modules with the same table name collide at link time)
                 nxk: TokKind = self->pk1()->kind
-                if t->kind == TK_STATIC and nxk in {TK_IDENT, TK_CONST}:
+                if t->kind == TK_PRIVATE and nxk in {TK_IDENT, TK_CONST}:
                     self->adv()
                     sg: *Decl = self->parse_top()
                     if sg == None or sg->kind != DL_VAR:
-                        fatal_at(self->file, t->pos, "'static' here can only precede a global variable or a 'def'")
+                        fatal_at(self->file, t->pos, "'%s' here can only precede a global variable or a 'def'", t->text)
                     sg->is_static = True
                     return sg
                 st: bool = False
                 inl: bool = False
-                while self->at(TK_STATIC) or self->at(TK_INLINE):
-                    if self->adv()->kind == TK_STATIC:
+                while self->at_priv() or self->at(TK_INLINE):
+                    if self->adv()->kind != TK_INLINE:
                         st = True
                     else:
                         inl = True
                 if not self->at(TK_DEF):
-                    fatal_at(self->file, t->pos, "'%s' at file scope precedes a 'def' or a global variable (found %s)", "static" if st else "inline", tok_kind_name(self->pk()->kind))
+                    fatal_at(self->file, t->pos, "'%s' at file scope precedes a 'def' or a global variable (found %s)", t->text, tok_kind_name(self->pk()->kind))
                 f: *Func = self->parse_func(st, inl, None)
                 d: *Decl = self->a->alloc(sizeof(Decl))
                 d->kind = DL_FUNC
@@ -1537,9 +1552,9 @@ struct P:
 # What the condition may mention is therefore restricted to what the PARSER can
 # know: the compiler's own predefines and the `-D`s. A name, `not`, `and`, `or`,
 # and `== "literal"` on `__PLANG_OS__`. Anything else says so.
-static PRE_OS: const *char = "other"
-static PRE_DEFS: **char = None
-static PRE_NDEFS: i32 = 0
+private PRE_OS: const *char = "other"
+private PRE_DEFS: **char = None
+private PRE_NDEFS: i32 = 0
 
 def parser_config_predef(os: const *char, defs: **char, ndefs: i32):
     PRE_OS = os
@@ -1578,7 +1593,7 @@ def parser_predef_value(name: const *char, ref known: bool) -> i64:
 # the restricted condition: a name, `not`, `and`, `or`, and `==`/`!=` against a
 # string literal. Whatever else appears says what is allowed instead of being
 # quietly false.
-static def pre_cond(self: *P, e: *Expr, file: const *char) -> bool:
+private def pre_cond(self: *P, e: *Expr, file: const *char) -> bool:
     if e == None:
         return False
     match e->kind:
@@ -1646,7 +1661,7 @@ static def pre_cond(self: *P, e: *Expr, file: const *char) -> bool:
 
 # reads one indented block of TOP-LEVEL declarations, keeping them only if this
 # is the branch that was taken
-static def pre_block(self: *P, into: *Vec<*Decl>, keep: bool):
+private def pre_block(self: *P, into: *Vec<*Decl>, keep: bool):
     self->expect(TK_COLON, "const if")
     self->expect(TK_NEWLINE, "const if")
     self->expect(TK_INDENT, "const if")
@@ -1658,7 +1673,7 @@ static def pre_block(self: *P, into: *Vec<*Decl>, keep: bool):
             into->push(d)
     self->expect(TK_DEDENT, "const if")
 
-static def parse_const_if_top(self: *P, into: *Vec<*Decl>, file: const *char):
+private def parse_const_if_top(self: *P, into: *Vec<*Decl>, file: const *char):
     self->adv()                      # const
     self->adv()                      # if
     taken: bool = False
@@ -1677,7 +1692,7 @@ static def parse_const_if_top(self: *P, into: *Vec<*Decl>, file: const *char):
         self->adv()
         pre_block(self, into, not taken)
 
-static def module_basename(a: *Arena, path: const *char) -> const *char:
+private def module_basename(a: *Arena, path: const *char) -> const *char:
     slash: const *char = strrchr(path, '/')
     base: const *char = slash + 1 if slash != None else path
     dot: const *char = strrchr(base, '.')

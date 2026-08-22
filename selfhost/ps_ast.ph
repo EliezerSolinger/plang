@@ -306,7 +306,11 @@ struct PsFunc:
     ret: *PsType
     body: *PsBlock
     is_async: bool
-    is_static: bool   # module-private (44.4)
+    is_private: bool  # module-private (44.4) — written `private`
+    is_smethod: bool  # STATIC METHOD: a def inside a struct with no receiver.
+                      #   The two used to share one flag called `is_static`,
+                      #   disambiguated by `owner`; `private` split the word in
+                      #   the surface language and this splits it in the tree.
     is_method: bool
     owner: const *char
     doc: const *char
@@ -375,7 +379,7 @@ struct PsDecl:
     type: *PsType            # PD_VAR / PD_SHARED annotation
     init: *PsExpr
     is_const: bool
-    is_static: bool
+    is_private: bool        # written `private`: not visible to an importer (44.4)
     from_hdr: bool          # a `record` that came from an imported header
                             #   (72.6): the type is declared THERE, so nothing
                             #   is emitted for it here — one declaration, and
@@ -448,12 +452,12 @@ struct PsNs:
 # updated every time a statement kind gains a field.
 PS_NEXPR_FIXED: const i32 = 6
 
-static inline def stmt_ps_nexprs(s: *PsStmt) -> i32:
+private inline def stmt_ps_nexprs(s: *PsStmt) -> i32:
     if s == None:
         return 0
     return PS_NEXPR_FIXED + s->nconds
 
-static inline def stmt_ps_expr_at(s: *PsStmt, i: i32) -> *PsExpr:
+private inline def stmt_ps_expr_at(s: *PsStmt, i: i32) -> *PsExpr:
     match i:
         case 0:
             return s->lhs
@@ -473,25 +477,25 @@ static inline def stmt_ps_expr_at(s: *PsStmt, i: i32) -> *PsExpr:
     return None
 
 # ---------- constructors (arena) ----------
-static inline def ps_expr(a: *Arena, k: PsExprKind, pos: Pos) -> *PsExpr:
+private inline def ps_expr(a: *Arena, k: PsExprKind, pos: Pos) -> *PsExpr:
     e: *PsExpr = a->alloc(sizeof(PsExpr))
     e->kind = k
     e->pos = pos
     return e
 
-static inline def ps_stmt(a: *Arena, k: PsStmtKind, pos: Pos) -> *PsStmt:
+private inline def ps_stmt(a: *Arena, k: PsStmtKind, pos: Pos) -> *PsStmt:
     s: *PsStmt = a->alloc(sizeof(PsStmt))
     s->kind = k
     s->pos = pos
     return s
 
-static inline def ps_type(a: *Arena, k: PsTypeKind, pos: Pos) -> *PsType:
+private inline def ps_type(a: *Arena, k: PsTypeKind, pos: Pos) -> *PsType:
     t: *PsType = a->alloc(sizeof(PsType))
     t->kind = k
     t->pos = pos
     return t
 
-static inline def ps_decl(a: *Arena, k: PsDeclKind, pos: Pos) -> *PsDecl:
+private inline def ps_decl(a: *Arena, k: PsDeclKind, pos: Pos) -> *PsDecl:
     d: *PsDecl = a->alloc(sizeof(PsDecl))
     d->kind = k
     d->pos = pos

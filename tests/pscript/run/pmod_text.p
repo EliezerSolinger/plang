@@ -8,7 +8,7 @@ def text_length(in s: CStr) -> i64:
 # does it hand back the CALLER's memory? no: a static buffer of this module,
 # valid until the next call — the `strerror` convention, and the only one that
 # needs nobody to free anything
-static g_buf: char[256]
+private g_buf: char[256]
 
 def text_upper(in s: CStr) -> CStr:
     n: usize = s.len if s.len < usize(255) else usize(255)
@@ -28,7 +28,7 @@ def version() -> CStr:
     return cstr("1.2.3")
 
 # bytes that are NOT UTF-8: the crossing has to refuse them
-static g_bad: char[4]
+private g_bad: char[4]
 
 def not_utf8() -> CStr:
     g_bad[0] = char(0xFF)

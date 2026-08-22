@@ -10,7 +10,7 @@ enum Scale:
     SCALE_ONE = 1
     SCALE_TEN = 10
 
-static const MATHX_BASE: const i32 = 7
+private const MATHX_BASE: const i32 = 7
 
 def mathx_add(a: i64, b: i64) -> i64
 def mathx_scaled(v: i64, s: i32) -> i64

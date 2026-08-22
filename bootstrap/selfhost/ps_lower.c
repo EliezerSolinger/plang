@@ -9014,7 +9014,7 @@ static Decl *lower_async_start(PsLow *L, PsFunc *f, PsDecl *fd, const char *owne
     pf->pos = f->pos;
     pf->name = (owner == NULL ? ps_cname(L->a, f->name) : Arena_printf(L->a, "%s_%s", owner, f->name));
     pf->cname = pf->name;
-    pf->is_static = f->is_static && owner == NULL;
+    pf->is_static = f->is_private;
     pf->ret = ty_ptr(L->a, ty_name(L->a, "PsTask"));
     int recv9 = owner != NULL && f->nparams > 0 && strcmp(f->params[0].name, "self") == 0;
     pf->params = Arena_alloc(L->a, (size_t)(f->nparams + 2) * sizeof(*pf->params));
@@ -10048,7 +10048,7 @@ static Decl *lower_func(PsLow *L, PsFunc *f, const char *owner, int with_body) {
     pf->pos = f->pos;
     pf->name = (owner == NULL ? ps_cname(L->a, f->name) : Arena_printf(L->a, "%s_%s", owner, f->name));
     pf->cname = pf->name;
-    pf->is_static = f->is_static && owner == NULL;
+    pf->is_static = f->is_private;
     pf->ret = PsLow_ty(L, f->ret);
     int recv = owner != NULL && f->nparams > 0 && strcmp(f->params[0].name, "self") == 0;
     pf->params = Arena_alloc(L->a, (size_t)(f->nparams + 2) * sizeof(*pf->params));

@@ -15,13 +15,13 @@
 include <string.h>
 import "ps_generic.ph"
 
-static def cl_type(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType
-static def cl_expr(a: *Arena, e: *PsExpr, name: const *char, conc: *PsType) -> *PsExpr
-static def cl_stmt(a: *Arena, s: *PsStmt, name: const *char, conc: *PsType) -> *PsStmt
-static def cl_block(a: *Arena, b: *PsBlock, name: const *char, conc: *PsType) -> *PsBlock
-static def cl_case(a: *Arena, c: *PsCase, name: const *char, conc: *PsType) -> *PsCase
+private def cl_type(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType
+private def cl_expr(a: *Arena, e: *PsExpr, name: const *char, conc: *PsType) -> *PsExpr
+private def cl_stmt(a: *Arena, s: *PsStmt, name: const *char, conc: *PsType) -> *PsStmt
+private def cl_block(a: *Arena, b: *PsBlock, name: const *char, conc: *PsType) -> *PsBlock
+private def cl_case(a: *Arena, c: *PsCase, name: const *char, conc: *PsType) -> *PsCase
 
-static def cl_type(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType:
+private def cl_type(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType:
     if t == None:
         return None
     if t->kind == PT_NAME and t->qual == None and strcmp(t->name, name) == 0:
@@ -37,7 +37,7 @@ static def cl_type(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *
             c->params[i] = cl_type(a, t->params[i], name, conc)
     return c
 
-static def cl_expr(a: *Arena, e: *PsExpr, name: const *char, conc: *PsType) -> *PsExpr:
+private def cl_expr(a: *Arena, e: *PsExpr, name: const *char, conc: *PsType) -> *PsExpr:
     if e == None:
         return None
     c: *PsExpr = a->alloc(sizeof(PsExpr))
@@ -59,7 +59,7 @@ static def cl_expr(a: *Arena, e: *PsExpr, name: const *char, conc: *PsType) -> *
             c->params[i].dflt = cl_expr(a, e->params[i].dflt, name, conc)
     return c
 
-static def cl_case(a: *Arena, c: *PsCase, name: const *char, conc: *PsType) -> *PsCase:
+private def cl_case(a: *Arena, c: *PsCase, name: const *char, conc: *PsType) -> *PsCase:
     if c == None:
         return None
     n: *PsCase = a->alloc(sizeof(PsCase))
@@ -71,7 +71,7 @@ static def cl_case(a: *Arena, c: *PsCase, name: const *char, conc: *PsType) -> *
             n->vals[i] = cl_expr(a, c->vals[i], name, conc)
     return n
 
-static def cl_stmt(a: *Arena, s: *PsStmt, name: const *char, conc: *PsType) -> *PsStmt:
+private def cl_stmt(a: *Arena, s: *PsStmt, name: const *char, conc: *PsType) -> *PsStmt:
     if s == None:
         return None
     c: *PsStmt = a->alloc(sizeof(PsStmt))
@@ -99,7 +99,7 @@ static def cl_stmt(a: *Arena, s: *PsStmt, name: const *char, conc: *PsType) -> *
             c->cases[i] = cl_case(a, s->cases[i], name, conc)
     return c
 
-static def cl_block(a: *Arena, b: *PsBlock, name: const *char, conc: *PsType) -> *PsBlock:
+private def cl_block(a: *Arena, b: *PsBlock, name: const *char, conc: *PsType) -> *PsBlock:
     if b == None:
         return None
     c: *PsBlock = a->alloc(sizeof(PsBlock))

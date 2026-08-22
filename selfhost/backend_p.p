@@ -42,7 +42,7 @@ PP_MUL: const i32 = 13
 PP_UNARY: const i32 = 14
 PP_POSTFIX: const i32 = 15
 
-static def op_pstr(op: i32) -> const *char:
+private def op_pstr(op: i32) -> const *char:
     match op:
         case TK_PLUS:
             return "+"
@@ -115,7 +115,7 @@ static def op_pstr(op: i32) -> const *char:
         case _:
             return "?"
 
-static def binary_prec(op: i32) -> i32:
+private def binary_prec(op: i32) -> i32:
     match op:
         case TK_COALESCE:
             return PP_COALESCE
@@ -146,13 +146,13 @@ static def binary_prec(op: i32) -> i32:
 # statement expression holds statements, and both hold types
 def p_expr(b: *StrBuf, e: *Expr, min_prec: i32)
 def p_stmt(b: *StrBuf, s: *Stmt, ind: i32)
-static def p_stmt_inline(b: *StrBuf, s: *Stmt)
-static def p_type(b: *StrBuf, t: *Type, no_const: bool = False)
+private def p_stmt_inline(b: *StrBuf, s: *Stmt)
+private def p_type(b: *StrBuf, t: *Type, no_const: bool = False)
 
 # ---------- types ----------
 # P spells a pointer prefix (`*T`), qualifiers before the star (`const *char`)
 # and generic arguments in angle brackets (`Vec<Param>`).
-static def p_type(b: *StrBuf, t: *Type, no_const: bool = False):
+private def p_type(b: *StrBuf, t: *Type, no_const: bool = False):
     if t == None:
         b->puts("void")
         return
@@ -222,7 +222,7 @@ static def p_type(b: *StrBuf, t: *Type, no_const: bool = False):
                 b->putc('>')
 
 # ---------- expressions ----------
-static def p_expr_prec(e: *Expr) -> i32:
+private def p_expr_prec(e: *Expr) -> i32:
     match e->kind:
         case EX_TERNARY:
             return PP_TERNARY
@@ -241,7 +241,7 @@ static def p_expr_prec(e: *Expr) -> i32:
 
 # call arguments. An EX_DESIG here is a NAMED argument (`scale=5`) — the same
 # node spells `.field = v` inside an initializer list, so the context decides.
-static def p_args(b: *StrBuf, args: **Expr, n: i32):
+private def p_args(b: *StrBuf, args: **Expr, n: i32):
     for i in range(n):
         if i != 0:
             b->puts(", ")
@@ -384,17 +384,17 @@ def p_expr(b: *StrBuf, e: *Expr, min_prec: i32):
         b->putc(')')
 
 # ---------- statements ----------
-static def indent(b: *StrBuf, n: i32):
+private def indent(b: *StrBuf, n: i32):
     for i in range(n):
         b->puts("    ")
 
 # a statement written on ONE line, no newline: the `for` header parts and the
 # body of a statement expression
-static def p_stmt_inline(b: *StrBuf, s: *Stmt):
+private def p_stmt_inline(b: *StrBuf, s: *Stmt):
     match s->kind:
         case ST_VAR:
             if s->is_static:
-                b->puts("static ")
+                b->puts("private ")
             if s->is_extern:
                 b->puts("extern ")
             # no type = inferred, and then `const` can only go in FRONT
@@ -418,7 +418,7 @@ static def p_stmt_inline(b: *StrBuf, s: *Stmt):
         case _:
             fatal("backend p: statement kind %d cannot be written inline", i32(s->kind))
 
-static def p_block(b: *StrBuf, blk: *Block, ind: i32):
+private def p_block(b: *StrBuf, blk: *Block, ind: i32):
     if blk == None or blk->n == 0:
         indent(b, ind)
         b->puts("pass\n")
@@ -431,7 +431,7 @@ static def p_block(b: *StrBuf, blk: *Block, ind: i32):
 #   `for v in xs`              var == ""   (sema synthesizes the index), var2=v
 #   `for i, v in enumerate(xs)` var=i, var2=v
 #   `for i in range(...)`       var=i, var2=None
-static def p_for_header(b: *StrBuf, s: *Stmt):
+private def p_for_header(b: *StrBuf, s: *Stmt):
     b->puts("for ")
     if s->var != None and s->var[0] == '\0':
         b->puts(s->var2)
@@ -565,7 +565,7 @@ def p_stmt(b: *StrBuf, s: *Stmt, ind: i32):
             fatal("backend p: statement kind %d has no P spelling", i32(s->kind))
 
 # ---------- declarations ----------
-static def p_params(b: *StrBuf, f: *Func):
+private def p_params(b: *StrBuf, f: *Func):
     b->putc('(')
     for i in range(f->nparams):
         if i != 0:
@@ -600,10 +600,10 @@ static def p_params(b: *StrBuf, f: *Func):
         b->puts("...")
     b->putc(')')
 
-static def p_func_head(b: *StrBuf, f: *Func, ind: i32):
+private def p_func_head(b: *StrBuf, f: *Func, ind: i32):
     indent(b, ind)
     if f->is_static:
-        b->puts("static ")
+        b->puts("private ")
     if f->is_inline:
         b->puts("inline ")
     if f->is_comptime:
@@ -622,7 +622,7 @@ static def p_func_head(b: *StrBuf, f: *Func, ind: i32):
         b->puts(" -> ")
         p_type(b, f->ret)
 
-static def p_func(b: *StrBuf, f: *Func, ind: i32):
+private def p_func(b: *StrBuf, f: *Func, ind: i32):
     p_func_head(b, f, ind)
     if f->body == None:
         b->putc('\n')          # bodyless: a forward declaration
@@ -630,7 +630,7 @@ static def p_func(b: *StrBuf, f: *Func, ind: i32):
     b->puts(":\n")
     p_block(b, f->body, ind + 1)
 
-static def p_struct(b: *StrBuf, d: *Decl):
+private def p_struct(b: *StrBuf, d: *Decl):
     b->puts("union " if d->kind == DL_UNION else ("record " if d->is_record else "struct "))
     b->puts(d->name)
     if d->ntparams > 0:
@@ -680,7 +680,7 @@ def p_decl(b: *StrBuf, d: *Decl):
                 b->printf("import \"%s\"\n", d->import_path)
         case DL_VAR:
             if d->is_static:
-                b->puts("static ")
+                b->puts("private ")
             if d->is_extern:
                 b->puts("extern ")
             if d->is_const and d->type == None:

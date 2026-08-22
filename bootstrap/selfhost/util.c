@@ -551,3 +551,73 @@ const char *plang_host_os(void) {
     }
     return "other";
 }
+
+FStrParts fstr_split(Arena *a, const char *body, size_t nbody, const char *file, Pos pos) {
+    size_t nmax = 1;
+    size_t i;
+    for (i = 0; i < nbody; i += 1) {
+        if (body[i] == '{') {
+            nmax += 1;
+        }
+    }
+    FStrParts r = {NULL, NULL, NULL, NULL, 0};
+    r.lits = Arena_alloc(a, (nmax + 1) * sizeof(*r.lits));
+    r.lit_lens = Arena_alloc(a, (nmax + 1) * sizeof(*r.lit_lens));
+    r.holes = Arena_alloc(a, nmax * sizeof(*r.holes));
+    r.specs = Arena_alloc(a, nmax * sizeof(*r.specs));
+    StrBuf lit = {0};
+    i = 0;
+    while (i < nbody) {
+        char c = body[i];
+        if (c == '{' && i + 1 < nbody && body[i + 1] == '{') {
+            StrBuf_putc(&lit, '{');
+            i += 2;
+            continue;
+        }
+        if (c == '}' && i + 1 < nbody && body[i + 1] == '}') {
+            StrBuf_putc(&lit, '}');
+            i += 2;
+            continue;
+        }
+        if (c != '{') {
+            StrBuf_putc(&lit, c);
+            i += 1;
+            continue;
+        }
+        size_t j = i + 1;
+        int32_t depth = 0;
+        size_t colon = 0;
+        while (j < nbody && (body[j] != '}' || depth > 0)) {
+            if (body[j] == '[' || body[j] == '(') {
+                depth += 1;
+            } else if (body[j] == ']' || body[j] == ')') {
+                depth -= 1;
+            } else if (body[j] == ':' && depth == 0) {
+                colon = j;
+            } else if (body[j] == '{') {
+                fatal_at(file, pos, "a nested brace in an f-string spec is not supported");
+            }
+            j += 1;
+        }
+        if (j >= nbody) {
+            fatal_at(file, pos, "unterminated '{' in an f-string");
+        }
+        r.lits[r.n] = (lit.len > 0 ? Arena_strndup(a, lit.data, lit.len) : "");
+        r.lit_lens[r.n] = lit.len;
+        lit.len = 0;
+        if (lit.data != NULL) {
+            lit.data[0] = '\0';
+        }
+        r.holes[r.n] = Arena_strndup(a, body + i + 1, (colon > 0 ? colon : j) - i - 1);
+        r.specs[r.n] = (colon > 0 ? Arena_strndup(a, body + colon + 1, j - colon - 1) : "");
+        r.n += 1;
+        i = j + 1;
+    }
+    r.lits[r.n] = (lit.len > 0 ? Arena_strndup(a, lit.data, lit.len) : "");
+    r.lit_lens[r.n] = lit.len;
+    FStrParts __defer_ret2 = r;
+    {
+        StrBuf_deinit(&lit);
+    }
+    return __defer_ret2;
+}

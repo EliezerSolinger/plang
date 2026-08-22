@@ -161,7 +161,8 @@ struct PsFunc {
     PsType *ret;
     PsBlock *body;
     int is_async;
-    int is_static;
+    int is_private;
+    int is_smethod;
     int is_method;
     const char *owner;
     const char *doc;
@@ -214,7 +215,7 @@ struct PsDecl {
     PsType *type;
     PsExpr *init;
     int is_const;
-    int is_static;
+    int is_private;
     int from_hdr;
     const char *doc;
     const char *src_name;

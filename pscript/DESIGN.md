@@ -1558,6 +1558,10 @@ sobrepõe. É o modelo do dataclass — depuração boa de graça.
 exportado, visível via `util.nome` (41.3). Zero conceito novo, uma regra nas duas
 línguas.
 
+> **A grafia mudou na 118:** a palavra é **`private`**, nas duas linguagens. O
+> `static` continua existindo e significa uma coisa só — **método estático**
+> dentro de um `struct`, em pscript. A regra desta decisão não mudou, só o nome.
+
 ## Bateria 45 — Fidelidade de detalhe e restos (2026-08-13)
 
 **45.1 f-string: subconjunto útil da spec.** `{expr}`, precisão (`.2f`),
@@ -2876,7 +2880,7 @@ saída comparados.
 
 **Módulos com namespace de verdade (41.3), implementados por RENOMEAÇÃO.**
 `import geom`, `import geom as g`, `from geom import Vec2 [as V]`, tipo
-qualificado (`g.Kind`) e `static` privando o nome do módulo (44.4). A
+qualificado (`g.Kind`) e `private` privando o nome do módulo (44.4, grafia da 118). A
 visibilidade é a decidida na 41.3 — a do Python: um nome de outro módulo só
 existe aqui se o qualificador o nomear ou o `from` o trouxer. Como o alvo é uma
 unidade de tradução só, que não tem namespace nenhum, a resolução é feita em
@@ -3593,6 +3597,61 @@ já funciona — e como VALOR, sem cabeçalho.
 **98.3 No P ela continua REMOVIDA**, a seu pedido, e isso não muda. É o caso
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
+
+## Bateria 118 — `static` sai, `private` entra (2026-08-22)
+
+*"vou substituir a keyword `static` pela keyword `private`, na própria linguagem
+P e pscript. Primeiro deixa como alias, compila, e depois edita o código
+trocando tudo por `private`... e depois remove de vez."*
+
+A escada é obrigatória e não preferência: o seed comitado é o compilador que
+compila os fontes, então trocar os fontes antes de o seed entender `private`
+quebra o primeiro degrau. Feita na ordem — alias, reseed, 1 846 linhas editadas,
+reseed, remoção.
+
+**118.1 A troca CONSERTA a sobrecarga, não só renomeia.** Em pscript `static`
+queria dizer duas coisas, e o que as separava era o `owner`: no topo, privado
+(44.4); dentro de um `struct`, **método estático**. Depois desta bateria cada
+palavra tem um sentido só:
+
+| grafia | sentido |
+|---|---|
+| `private def f()` / `private x: T = ...` | privado ao módulo, nas duas linguagens |
+| `static def f()` | método estático — só dentro de struct, só pscript |
+
+E a árvore também: o `is_static` da `PsFunc` virou **`is_private`** e
+**`is_smethod`**, dois campos em vez de um flag desambiguado por `owner`. O sítio
+que mostrava a confusão era o `ps_lower`, onde estava escrito
+`pf->is_static = f->is_static and owner == None` — a desambiguação feita à mão,
+duas vezes no arquivo. Hoje é `pf->is_static = f->is_private`.
+
+**118.2 O que a renomeação NÃO tocou, e por quê.** Não foi um `sed`: `static`
+continua sendo `static` em quatro lugares, cada um por uma razão diferente.
+
+- **O C que emitimos** — é a palavra do C para ligação interna, e ali ela é a
+  verdade. Muda a linguagem de entrada, não a de saída.
+- **O front end de C** (`cfront.p`) — tem lexer próprio; quando a entrada é
+  `.c`/`.i`, `static` é `static`. As tabelas dele são literais no meio da linha,
+  que a regra de reescrita não alcança.
+- **O declarador C99 `T x[static N]`** — é qualificador de parâmetro, não
+  privacidade. `static` segue palavra reservada no P só por causa dele, e é por
+  isso que a remoção do degrau 5 é uma RECUSA com mensagem, e não a palavra
+  virando identificador: código velho não muda de sentido em silêncio.
+- **Os diagnósticos de paridade com o clang** — *"static declaration of 'x'
+  follows non-static declaration"* é a frase do clang, medida pelos 155 casos do
+  `clang-compare`. Renomear ali quebraria a paridade.
+
+**118.3 A regra da reescrita, que é o que fez o `sed` ser seguro.** `static`
+significa privacidade **no começo da linha** — com qualquer indentação em P, e só
+na **coluna 0** em pscript, porque `static def` indentado ali é o método
+estático. No meio da linha nunca é privacidade. Foi o censo que provou a regra
+antes de rodá-la: 647 ocorrências na coluna 0 e 1 188 indentadas nos fontes P
+(1 184 `def` e 4 `const`, todas privacidade), 8 na coluna 0 em pscript e 2
+indentadas — exatamente os dois métodos estáticos do corpus, que ficaram.
+
+Gates: as seis suítes de portão mais o `roundtrip`, que é o que prova a troca no
+`backend_p` — ele imprime o P de volta e o C tem de sair idêntico, então a
+palavra impressa tem de ser a palavra que o parser lê.
 
 ## Bateria 117 — o fork do front end, medido (2026-08-22)
 
