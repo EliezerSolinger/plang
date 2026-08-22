@@ -109,6 +109,31 @@ livre servir pscript, e espera. Quando a vez chegar, **assembler e linker são
 escritos em P**, com `minias`/`neatld` como referência, e com oráculo: `as` byte a
 byte, `ld` mais "o binário roda".
 
+## O que a construção deste repositório ensinou  ·  `F3`
+
+Quatro decisões que não estavam na mesa antes de o descritor existir, e que
+saíram de defeitos reais:
+
+**A resposta do compilador vem por ARQUIVO.** O `os.run` junta a saída de erro
+com a de saída de propósito — é o que faz um relatório se ler na ordem em que
+aconteceu. Uma RESPOSTA, não: um aviso no meio vira uma linha da resposta. Três
+`-Wshadow-prelude` do corpus viraram três "entradas que ninguém produz" e o
+grafo inteiro foi recusado. `stdout=` separa os dois, e o `output()` fica com o
+que o compilador tinha a dizer.
+
+**Um arquivo tem UM produtor — e `--out-dir` desafia isso.** O compilador emite
+o header de todo `.ph` que leu, então dois programas que leem o mesmo `.ph`
+"produzem" o mesmo header. Quando é o MESMO compilador na MESMA árvore, o
+arquivo vira entrada implícita da segunda aresta em vez de saída. Outro
+compilador, outra árvore, outra ferramenta: continua sendo erro.
+
+**O quinto evento.** O motor contava os problemas de higiene sem os dizer.
+`on_error(str)` no relator, e a IDE ganha o mesmo canal.
+
+**`env=` substitui, então `--cpp` ganha da variável de ambiente.** Um comando
+sem `PATH` não acha o `cc`. O que a ferramenta aceita por argumento é sempre
+melhor que o que ela aceita por ambiente — e de quebra entra no hash da aresta.
+
 ## As medições que sustentam tudo isto
 
 | | |
@@ -127,3 +152,7 @@ byte, `ld` mais "o binário roda".
 | a migração `static`→`private` | 1 965 ocorrências (+20 em testes) |
 | mover o `stl` | 41 referências, e **obriga a regerar o seed** |
 | descritores de tipo hoje | 38 no editor portado, ~470 linhas de 24 601 (1,9 %) |
+| **o build do padrão pelo `ppack`** | 68 s com `-j 6` (escada + ppack + pstudio) |
+| **a suíte do pscript como grafo** | 585 arestas · 72 s do zero · 6,6 s sem mudança |
+| **o `build.ninja` exportado** | 639 regras, determinista |
+| o runtime como OBJETO | 6 compilações em vez de 600 (uma por programa) |

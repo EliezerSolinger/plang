@@ -14,7 +14,7 @@ editar e reconstruir dentro do mesmo segundo pode não recompilar. O `mtime` daq
 definitiva — comparar o CONTEÚDO das entradas, como já se faz com as saídas no
 `restat` — está anotada e não feita: ela custa ler a árvore inteira a cada build.
 
-**A biblioteca NÃO imprime.** Ela relata quatro eventos e quem decide o que
+**A biblioteca NÃO imprime.** Ela relata cinco eventos e quem decide o que
 fazer com eles é a frente: a linha de comando imprime, a IDE pinta. É o que
 separa um motor reutilizável de um script com `print` no meio — e é fácil errar
 na primeira linha, então está dito aqui.
@@ -25,7 +25,7 @@ import time
 import lib_graph as G
 import lib_log as L
 
-# ---------- os quatro eventos ----------
+# ---------- os cinco eventos ----------
 # Contrato pequeno é contrato que dá para mudar. O motivo da sujeira e o grafo
 # quem quiser pede (`explain`), em vez de viajarem em todo evento.
 struct Rep:
@@ -33,6 +33,15 @@ struct Rep:
     on_start: def(int, str)              # id, o que se está fazendo
     on_end: def(int, int, str, int)      # id, status, saída INTEIRA, ms
     on_done: def(bool, int)              # deu certo?, quantas falharam
+    # o quinto evento: um problema do GRAFO, não de uma aresta — duas arestas
+    # produzindo o mesmo arquivo, uma entrada que ninguém produz, um ciclo, uma
+    # saída prometida e não criada. Ele existe porque a primeira versão só
+    # contava os problemas, e "build falhou: 3 problema(s)" sem dizer QUAIS é
+    # exatamente o relatório que não serve para nada.
+    on_error: def(str)
+
+private def nop_erro(msg: str):
+    pass
 
 private def nop_plan(total: int):
     pass
@@ -48,7 +57,7 @@ private def nop_done(ok: bool, fails: int):
 
 def quiet() -> Rep:
     """Um relator que não faz nada — para quem só quer o resultado."""
-    return Rep(nop_plan, nop_start, nop_end, nop_done)
+    return Rep(nop_plan, nop_start, nop_end, nop_done, nop_erro)
 
 record Opts:
     jobs: int          # quantos processos em voo
@@ -81,6 +90,7 @@ struct Build:
 # é um grafo que mente sobre o que sabe.
 private def err(b: Build, msg: str):
     b.errs.append(msg)
+    b.rep.on_error(msg)
 
 private def explain(b: Build, node: str, msg: str):
     if b.op.explain:
@@ -231,7 +241,12 @@ private def want_node(b: Build, nid: int, stack: list<int>) -> bool:
             b.g.nodes[od2].dirty = True
         b.total += 1
         ndirty = True
-    stack.pop()
+    # o topo TEM de ser esta aresta: a pilha é o caminho da recursão, e é ela
+    # que detecta o ciclo. Conferir custa nada e o valor do `pop` não se perde —
+    # descartá-lo seria uma expressão sem uso, que o compilador (com razão) avisa
+    topo = stack.pop()
+    if topo != n.gen:
+        err(b, "a pilha do plano saiu de ordem: isto é um defeito do motor")
     return ndirty
 
 # ---------- o caminho crítico ----------
@@ -360,6 +375,15 @@ private def node_done(b: Build, nid: int, prune: bool):
 private async def finish(b: Build, e: G.Edge, ok: bool, dur_ms: int):
     if not ok:
         return
+    if b.op.dry_run:
+        # num ensaio nada foi criado, então não há saída para datar nem para
+        # cobrar. O que ainda vale é DESTRANCAR quem esperava: é o que faz o
+        # ensaio percorrer o grafo inteiro em vez de parar na primeira aresta.
+        for oid0 in e.outs:
+            node_done(b, oid0, False)
+        for oid1 in e.out_implicit:
+            node_done(b, oid1, False)
+        return
     # o `depfile`: o que a ferramenta LEU e nós não sabíamos. Fica no disco e é
     # lido no PLANO da próxima vez (é o que um Makefile faz com `-include`); o
     # ninja o copia para um log binário por velocidade, e aqui isso ainda não se
@@ -406,6 +430,19 @@ private async def pump(b: Build) -> int:
         if eid < 0:
             break
         e = b.g.edges[eid]
+        # o diretório de uma saída tem de existir ANTES de a ferramenta rodar.
+        # Ninguém declara isso num arquivo de build — nem o ninja obriga —, e o
+        # motor o faz porque a alternativa é toda aresta carregar um `mkdir -p`
+        # que não tem nada a ver com o que ela faz.
+        if not b.op.dry_run:
+            for oid in e.outs:
+                d = path.dirname(b.g.nodes[oid].p)
+                if len(d) > 0 and not path.isdir(d):
+                    os.makedirs(d)
+            if len(e.stdout_to) > 0:
+                d2 = path.dirname(e.stdout_to)
+                if len(d2) > 0 and not path.isdir(d2):
+                    os.makedirs(d2)
         b.rep.on_start(e.id, e.label())
         if b.op.dry_run:
             b.rep.on_end(e.id, 0, "", 0)

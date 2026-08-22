@@ -13,6 +13,7 @@ import path
 import sys
 import lib_graph as G
 import lib_build as B
+import lib_ninja as N
 
 const DIR: str = "tests/out/pbuild"
 
@@ -46,16 +47,27 @@ def r_end(id: int, st: int, out: str, ms: int):
 def r_done(ok: bool, fails: int):
     pass
 
+# o quinto evento: os problemas do GRAFO, guardados para os casos de higiene
+# poderem conferir a MENSAGEM e não só a contagem
+erros: list<str> = []
+
+def r_erro(msg: str):
+    global erros
+    erros.append(msg)
+
 def rep() -> B.Rep:
-    return B.Rep(r_plan, r_start, r_end, r_done)
+    return B.Rep(r_plan, r_start, r_end, r_done, r_erro)
 
 def reset():
     global ran
     global order
+    global erros
     novo: list<str> = []
     novo2: list<str> = []
+    novo3: list<str> = []
     ran = novo
     order = novo2
+    erros = novo3
 
 private def opts(jobs: int) -> B.Opts:
     return B.Opts(jobs, 1, False, False)
@@ -431,6 +443,75 @@ async def caso_json():
     check("json: as tres faixas", "1 1 1", str(len(g2.edges[0].ins)) + " " + str(len(g2.edges[0].implicit)) + " " + str(len(g2.edges[0].order)))
     check("json: restat sobreviveu", "True", str(g2.edges[0].restat))
 
+async def caso_ninja():
+    """A exportação para ninja (F3): o ASPEAMENTO, que é onde todo sistema de
+    build que monta linha de comando por concatenação se quebra.
+
+    O caso é montado de propósito com tudo o que morde: um caminho com espaço,
+    um argumento com `$` (que o ninja come e o shell expandiria), um com aspa
+    simples (a única fuga que o aspeamento por aspas simples tem), ambiente,
+    diretório e redirecionamento. E não basta o texto parecer certo: o comando
+    exportado é RODADO por um shell, e o que ele escreve no disco tem de ser o
+    que a aresta prometia."""
+    g = G.new_graph()
+    e = G.new_edge(["/bin/sh", "-c", "printf '%s' \"$UM\" > \"$1\"", "sh", DIR + "/com espaco.txt"])
+    e.env["UM"] = "valor com 'aspa'"
+    e.ins.append(g.node(DIR + "/n.in").id)
+    e.implicit.append(g.node(DIR + "/n.h").id)
+    e.order.append(g.node(DIR).id)
+    e.outs.append(g.node(DIR + "/com espaco.txt").id)
+    e.out_implicit.append(g.node(DIR + "/n.extra").id)
+    e.depfile = DIR + "/n.d"
+    e.restat = True
+    e.generator = True
+    e.pool = "console"
+    e.desc = "gerando com $ no meio"
+    g.add_edge(e)
+    g.default_targets.append(DIR + "/com espaco.txt")
+    txt = N.emit(g)
+
+    # o que o ninja LÊ: espaço e `$` escapados no caminho, as três faixas nos
+    # três separadores, e as quatro chaves da regra
+    check("ninja: espaco no caminho vira '$ '", "True", str(txt.find("com$ espaco.txt") >= 0))
+    check("ninja: as tres faixas", "True", str(txt.find(": e0 ") >= 0 and txt.find(" | ") >= 0 and txt.find(" || ") >= 0))
+    check("ninja: restat", "True", str(txt.find("\n  restat = 1\n") >= 0))
+    check("ninja: generator", "True", str(txt.find("\n  generator = 1\n") >= 0))
+    check("ninja: pool", "True", str(txt.find("\n  pool = console\n") >= 0))
+    check("ninja: depfile e deps", "True", str(txt.find("\n  depfile = ") >= 0 and txt.find("\n  deps = gcc\n") >= 0))
+    check("ninja: default", "True", str(txt.find("\ndefault ") >= 0))
+    check("ninja: env -i (substitui, nao mescla)", "True", str(txt.find("env -i") >= 0))
+    # todo `$` do comando vem em PAR: um `$` solto é uma variável do ninja, e o
+    # `$UM` do nosso argumento viraria vazio antes de o shell o ver
+    linha_cmd = ""
+    for l in txt.split("\n"):
+        if l.startswith("  command = "):
+            linha_cmd = l
+    pares = True
+    ci = 0
+    while ci < len(linha_cmd):
+        if linha_cmd[ci] == "$":
+            if ci + 1 >= len(linha_cmd) or linha_cmd[ci + 1] != "$":
+                pares = False
+                break
+            ci += 1
+        ci += 1
+    check("ninja: todo $ do comando vem em par", "True", str(pares))
+    check("ninja: e o nosso $UM sobreviveu escapado", "True", str(linha_cmd.find("$$UM") >= 0))
+
+    # ... e o que o SHELL lê: o comando exportado, rodado de verdade
+    cmd = N.cmdline(e).replace("$$", "$")
+    r = await os.run(["/bin/sh", "-c", cmd])
+    check("ninja: o comando exportado roda", "0", str(r.status()))
+    f = await open(DIR + "/com espaco.txt", "r")
+    conteudo = await f.text()
+    await f.close()
+    check("ninja: e escreveu o que a aresta prometia", "valor com 'aspa'", conteudo)
+    os.remove(DIR + "/com espaco.txt")
+
+    # duas exportações do mesmo grafo dão o MESMO arquivo: um `build.ninja`
+    # comitado que muda de ordem a cada corrida é um diff por nada
+    check("ninja: determinista", "True", str(N.emit(g) == txt))
+
 async def go():
     os.makedirs(DIR)
     await caso_incremental()
@@ -449,6 +530,7 @@ async def go():
     await caso_dois_produtores()
     await caso_grafo_reusado()
     await caso_json()
+    await caso_ninja()
     print("   pbuild-engine: " + str(ok_count) + " ok, " + str(fail_count) + " failed")
     if fail_count > 0:
         sys.exit(1)

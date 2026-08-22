@@ -87,8 +87,53 @@ sozinho. Estado encontrado e restrição que ele impõe:
       não compilava (`ps_lower`), e `os.run` tratava `cwd=""`/`env={}` como
       valores em vez de "não foi dado" (`psrt_os`), além de o filho morrer mudo
       quando o `chdir`/`exec` falhava (`psrt_rt`).
-- [ ] F3 — o descritor e a CLI (próximo)
-- [ ] F3
+- [x] **Dois defeitos do COLETOR, achados pelo motor** (2026-08-22): rodar a
+      suíte do motor com `PSCRIPT_GC_STRESS=1` derrubou duas checagens, e as
+      duas eram defeitos de verdade — antigos, silenciosos, e do tipo que só
+      aparece quando uma coleta cai no meio.
+      1. **`ps_alloc` não zera, e o `PsFile` faltava um campo.** Quem constrói
+         um objeto do runtime tem de escrever TODOS os campos dele; a abertura
+         assíncrona escrevia dois de três, e o `is_std` — o campo que diz "isto
+         é o stdout, fechar não faz nada" — ficava com o lixo do bloco
+         reciclado. Quando o lixo era != 0, `close` saía cedo sem fechar coisa
+         alguma: `write` dizia ter gravado 144 bytes, `path.getsize` via 0, e os
+         dados só apareciam no `exit`. Consertado nos dois sítios que criam
+         `PsFile` (mais o `etrace` de uma vista de `PsBuffer`, que era lixo sem
+         consequência); varredura feita nos 40 sítios de `ps_alloc` do runtime.
+         Portão: `tests/pscript/run/aio_close.psc`.
+      2. **`__fr->x = f()` escrevia no quadro VELHO.** Dentro de um `async def`
+         todo local mora no quadro, e o quadro é objeto do heap que o coletor
+         MOVE. Em C a ordem entre calcular o endereço da esquerda e chamar a
+         direita não está definida: o gcc carrega `__fr` num registrador, `f`
+         aloca, a coleta conserta a pilha de sombra, e a escrita vai para o
+         endereço antigo. A DECLARAÇÃO de um local já passava por `value_first`;
+         a ATRIBUIÇÃO, o `+=`, o `:=` e o `return` não passavam. Foi assim que o
+         `content_hash` do motor devolveu zero e o `restat` passou a comparar 0
+         com 0 — recompilando tudo, em silêncio. Portão:
+         `tests/pscript/run/async_store.psc` (com o compilador antigo: hash
+         errado e SIGSEGV).
+      Medida depois: motor 31/31 sob `GC_STRESS=1`, `gc-stress` 119/119,
+      `verify-all quick` 8/8 (ladder, ponto fixo C e QBE, C/QBE/C89, conformidade,
+      oráculos, pstudio). Seed regenerado no mesmo commit, como manda a regra.
+      **A escrever em `pscript/DESIGN.md` quando o arquivo estiver livre** (ele
+      carrega a bateria 119 de outra sessão).
+- [x] **F3 — o DESCRITOR, a biblioteca de alvos, a CLI e o ninja** (2026-08-22):
+      `lib_targets.psc` (as funções que devolvem arestas), `build_plang.psc` (o
+      descritor deste repositório), `ppack.psc` (a CLI),
+      `lib_ninja.psc` (a exportação) e `verdict.psc` (o juiz de um caso de
+      teste). O que o descritor cobre hoje: a ESCADA inteira com ponto fixo, o
+      runtime do pscript (a lista dos seis módulos passou a ter um dono), o
+      `ppack` construído por ele mesmo, o `verdict`, a suíte do motor, o
+      `pstudio` (as três linguagens num binário, SDL2 por `pkg-config`) e a
+      suíte do pscript caso a caso.
+      **Medido**: build limpo do padrão em 68 s com `-j 6`; a suíte inteira em
+      585 arestas, 72 s do zero e 6,6 s quando nada mudou; `build.ninja`
+      exportado com 639 regras, determinista. Portão: `tests/pbuild.sh` (44
+      checagens do motor + o ensaio do descritor + a exportação).
+      FALTA (e está dito na secção F3): o `exec` do `ppack run` (decisão de
+      linguagem, do usuário), as suítes de placar com piso, o `build.ninja`
+      comitado, e a **parte D — a TROCA**, que fica esperando o outro agente
+      largar o Makefile.
 
 ---
 
@@ -400,8 +445,9 @@ der 8/8.
 
 ### Parte A — a biblioteca de alvos (alto nível; o motor não aprende nada)
 
-- [ ] funções pscript que DEVOLVEM ARESTAS (o guarda-corpo: conhecimento de
-      toolchain nesta camada, nunca no motor — o erro das 1 679 linhas do muon):
+- [x] funções pscript que DEVOLVEM ARESTAS (`pbuild/ps/lib_targets.psc`, 470
+      linhas — o guarda-corpo: conhecimento de toolchain nesta camada, nunca no
+      motor, que é o erro das 1 679 linhas do muon):
   - `p_modules(fontes, out=, backend=, std=, flags=)` → arestas plangc
     (usando as respostas 1/3 para entradas/saídas implícitas)
   - `c_objects(fontes, cc=, flags=, depfile=True)` → arestas cc -c com -MD
@@ -412,56 +458,103 @@ der 8/8.
     VEREDICTO (rodar binário, comparar com `.expected`; piso de placar aqui —
     c-suite≥220, wacct≥741, decidido)
   - `command(argv, ins, outs, ...)` → a aresta crua, sempre disponível
-  - **alvos nomeados**: `linux-amd64` (default da máquina), `linux-amd64-musl`,
-    `macos-arm64` — a tradução (triplo do cc, `-t` do QBE, flags) vive AQUI;
-    o alvo entra no hash de comando (já previsto no motor)
-- [ ] `pkg-config` como resolvedor de dependência de sistema (o SDL2 do
-      pstudio: cflags/libs + os `-D` NOSIMD que o Makefile documenta)
+  - **alvos nomeados**: o `Target` existe (nome, `cc`, `-t` do QBE) e o nome já
+    entra no hash de toda aresta; só o `host` está preenchido. `musl` e
+    `macos-arm64` ficam para quando houver máquina para os medir — inventar as
+    flags sem poder rodá-las seria escrever o catálogo do muon às cegas.
+- [x] `pkg-config` como resolvedor de dependência de sistema: `pkg_config()` e
+      `tem_pkg()`, perguntados na MONTAGEM do grafo (o que ele responde entra no
+      `argv`, logo no hash — uma aresta que o chamasse por dentro teria sempre o
+      mesmo hash e reaproveitaria artefato de outra versão do SDL2 em silêncio).
+      Os `-D` NOSIMD do Makefile são variáveis VAZIAS lá (medido); não há o que
+      trazer.
+
+**Três coisas que a biblioteca aprendeu construindo este repositório:**
+
+  1. **a resposta tem de vir por ARQUIVO, não pelo cano.** O `os.run` junta a
+     saída de erro com a de saída de propósito; uma RESPOSTA, não. Três avisos
+     `-Wshadow-prelude` do corpus viraram três linhas de `--deps`, e o grafo
+     inteiro foi recusado com "entrada que ninguém produz". Agora a pergunta usa
+     `stdout=` e o `output()` fica só com o que o compilador tinha a dizer.
+  2. **um arquivo tem UM produtor, e `plangc --out-dir` desafia isso.** Ele
+     emite o header de todo `.ph` que leu, então dois programas que leem o mesmo
+     `.ph` "produzem" o mesmo header. Quando a emissão é do MESMO compilador na
+     MESMA árvore, o arquivo vira entrada implícita da segunda aresta em vez de
+     saída — a ordem fica certa e a higiene continua recusando o caso de
+     verdade (outro compilador, outra árvore, outra ferramenta).
+  3. **o quinto evento.** O motor contava os problemas de higiene e não os
+     dizia: "build falhou: 3 problema(s)" e mais nada. `on_error(str)` entrou no
+     relator, e foi o que achou (1) em trinta segundos.
 
 ### Parte B — o `build.psc` deste repositório
 
 Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 
-- [ ] o compilador: seed (`cc bootstrap/*.c`) → **escada** s1 → s2 → out3, em
+- [x] o compilador: seed (`cc bootstrap/*.c`) → **escada** s1 → s2 → out3, em
       que a saída de uma etapa é a FERRAMENTA da seguinte (a aresta de s2 usa
       como `argv[0]` um ARQUIVO produzido por outra aresta — o grafo já
       suporta: é entrada normal; risco nº 1 do plano, atacar primeiro)
-  - ponto fixo: nó de veredicto `out2 == out3` byte a byte (cmp por conteúdo)
-  - o gate de tag de libc (o grep do verify-all vira veredicto)
-- [ ] o runtime do pscript (a lista derivada por import — prova da 1.5a)
-- [ ] o pstudio (driver P + app.psc + SDL2 via pkg-config + PLANGC_CPP)
-- [ ] as suítes com pisos; QBE fixed point; oráculos/conformance/gc-stress
-      como suítes que invocam os harnesses existentes (os `.sh` de corpora
-      NÃO são reescritos nesta fase — são arestas `command()`; reescrevê-los
-      em pscript é trabalho contínuo posterior)
+  - [x] ponto fixo: nó de veredicto `s2 == s3` byte a byte (`diff -rq`, com a
+        saída dele como carimbo — sem shell, porque a saída da aresta vai para
+        arquivo por campo e quem decide é o STATUS)
+  - [ ] o gate de tag de libc (o grep do verify-all vira veredicto)
+- [x] o runtime do pscript, e a lista dos seis módulos em camadas passou a ter
+      UM dono (`RT_MODULOS` em `lib_targets.psc`). Ele vira OBJETO uma vez por
+      contexto: o `psbuild.sh` recompila os seis a partir do C em cada programa,
+      e a suíte tem mais de cem — seiscentas compilações do mesmo texto viraram
+      seis.
+- [x] o pstudio (driver P + `app.psc` + SDL2 por `pkg-config`). Sem
+      `PLANGC_CPP`: a variável de ambiente não serve porque o `env=` de uma
+      aresta SUBSTITUI o ambiente e um comando sem `PATH` não acha o `cc` — o
+      `--cpp` do compilador diz a mesma coisa dentro do `argv`, e de quebra
+      entra no hash. Se a máquina não tem SDL2 o alvo simplesmente não existe,
+      que não é erro.
+- [x] a suíte do pscript: **uma aresta por caso**, cada um no diretório dele
+      (o `run.sh` roda os cento e tantos no mesmo, um de cada vez; em paralelo
+      eles se atropelariam), com `.expected`, `.exit` e `.flags` respeitados —
+      as flags entram no `argv` do compilador, logo no hash, e trocar de flag
+      refaz. Quem julga é o `verdict` (`pbuild/ps/verdict.psc`), porque o status
+      de saída de um caso é DADO e não veredicto.
+      **Medido: 585 arestas, 72 s do zero, 6,6 s quando nada mudou.**
+- [ ] as demais suítes com pisos; QBE fixed point; oráculos/conformance/
+      gc-stress como arestas `command()` sobre os harnesses existentes
 - [ ] `pack.json` de WORKSPACE na raiz (membros: `packages/*` quando existirem;
       alvo padrão; é DADO — o painel da IDE o edita em F6)
 
 ### Parte C — a CLI `ppack` (frente da biblioteca)
 
-- [ ] parsing de argumentos em pscript; erros no formato
+- [x] parsing de argumentos em pscript (com `--` separando o que é do
+      programa); erros no formato
       `arquivo:linha:col: error:` quando têm posição (pack.json inválido),
       mesma forma sem números quando não têm
-- [ ] `ppack build [alvo]` — fases descrever→planejar→decidir→executar;
+- [x] `ppack build [alvo]` — fases descrever→planejar→decidir→executar;
       imprime linha por aresta terminada (saída inteira em falha); `--explain`;
       `-k N`; `-j N` (padrão núcleos); exit 0/1
-- [ ] `ppack run prog [--] args` — constrói o alvo, fecha o relatório, e
-      **`exec`** (o programa É o processo; stdio e status dele); falha de
-      BUILD sai com código distinto (proposta: 101, estilo cargo — decisão
-      fina f3.2)
-- [ ] `ppack test [suítes...]` — roda com `-k` (placar completo), veredicto
-      SEMPRE roda (decidido), placar por suíte, pisos aplicam
+- [~] `ppack run prog [--] args` — constrói e roda, com o status DELE e 101 para
+      falha de build (f3.2 confirmada na prática). O que falta é o `exec`: hoje
+      o programa roda como FILHO e a saída volta capturada, o que serve para
+      quem imprime e não serve para quem lê teclado ou pinta tela. `exec`
+      precisa de uma função nova na camada de sistema do pscript (`os.exec`), e
+      **isso é decisão de linguagem — fica para o usuário**.
+- [x] `ppack test` — `-k` alto por padrão (quem roda teste quer o placar
+      inteiro, não a primeira falha), veredicto SEMPRE roda, e o carimbo da
+      suíte NÃO é alvo padrão: construir não é testar. Falta o placar por suíte
+      e os pisos, que vêm com as outras suítes.
 - [ ] `ppack verify` — o alvo do verify-all inteiro
-- [ ] `ppack clean` — apaga `build/{obj,bin,log}`, MANTÉM `build/pkg`
-- [ ] `ppack explain <saída>` · `ppack why <pacote|arquivo>` · `ppack tree` ·
-      `ppack graph` (dot) · `ppack lock` (F4 usa; aqui só workspace)
-- [ ] **`--emit-ninja`**: desce a aresta gorda para texto ninja — aspeamento
+- [x] `ppack clean` — apaga o que o build produziu, MANTÉM `build/pkg`
+- [x] `ppack explain <saída>` e `ppack graph` (JSON); `why`/`tree`/`lock` são
+      de F4 e ficam com ela
+- [x] **`ppack ninja`**: desce a aresta gorda para texto ninja — aspeamento
       GERADO (nós sabemos onde cada argumento começa); `restat`/`generator`/
       `pool console` mapeiam 1:1; `env`/`cwd` viram wrapper explícito no
-      comando (documentado: a exportação é para bootstrap e compdb, não para
-      fidelidade total) — e `build.ninja` COMITADO na raiz = o bootstrap do
-      pbuild numa máquina limpa (`cc bootstrap/*.c && ninja`)
-- [ ] bootstrap documentado no README (as duas linhas acima)
+      comando (documentado no cabeçalho de `lib_ninja.psc`, com os quatro
+      pontos em que a exportação é conservadora). O aspeamento é GERADO e tem
+      caso próprio na suíte: caminho com espaço, argumento com `$`, aspa simples
+      — e o comando exportado é RODADO por um shell para conferir que escreve o
+      que a aresta prometia. Determinista, conferido duas vezes.
+- [ ] `build.ninja` COMITADO na raiz + bootstrap no README (fica com a TROCA:
+      um `build.ninja` comitado que descreve um `build/` que o Makefile ainda
+      não usa seria um arquivo que mente)
 
 ### Parte D — a TROCA (um commit, repo verde antes e depois)
 
