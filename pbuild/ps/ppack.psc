@@ -46,6 +46,31 @@ def on_plan(total: int):
 
 rotulos: dict<int, str> = {}
 
+# o PLACAR: quantas arestas de cada suíte passaram, e quais falharam. A chave é o
+# que vem antes do primeiro `: ` na descrição — que é como a biblioteca de alvos
+# escreve o rótulo de um caso (`pscript: nome_do_caso`). Um build comum não tem
+# suíte nenhuma e o placar não aparece.
+placar_ok: dict<str, int> = {}
+placar_mal: dict<str, list<str>> = {}
+
+private def suite_de(rot: str) -> str:
+    k = rot.find(": ")
+    return rot[0:k] if k > 0 else ""
+
+private def contar(rot: str, ok: bool):
+    global placar_ok
+    global placar_mal
+    su = suite_de(rot)
+    if len(su) == 0:
+        return
+    if su not in placar_ok:
+        placar_ok[su] = 0
+        placar_mal[su] = []
+    if ok:
+        placar_ok[su] = placar_ok[su] + 1
+    else:
+        placar_mal[su].append(rot[len(su) + 2:])
+
 def on_start(id: int, what: str):
     global rotulos
     rotulos[id] = what
@@ -54,6 +79,7 @@ def on_end(id: int, st: int, out: str, ms: int):
     global feitas
     global falhou
     feitas += 1
+    contar(rotulos[id] if id in rotulos else "", st == 0)
     marca = "[" + str(feitas) + "/" + str(total_arestas) + "]"
     if st == 0:
         print(marca, "ok")
@@ -76,6 +102,27 @@ def on_erro(msg: str):
     print("erro:", msg)
 
 def on_done(ok: bool, fails: int):
+    # o PLACAR, quando houve suíte. Ele existe porque "587 arestas ok" não é o
+    # que quem roda testes quer saber: o que se quer é quantos casos passaram,
+    # e QUAIS falharam — e um build de seiscentas arestas esconde as duas coisas.
+    ks: list<str> = []
+    for k in placar_ok:
+        ks.append(k)
+    for k2 in sorted(ks):
+        maus = placar_mal[k2]
+        # "RODARAM", e não "existem": um caso cujo binário e cujo esperado não
+        # mudaram não roda, e dizer "1 ok" quando cento e catorze estão em dia
+        # seria um placar que mente. Quem quer o total roda com a árvore limpa.
+        total = placar_ok[k2] + len(maus)
+        print("   " + k2 + ": " + str(total) + " rodaram — " + str(placar_ok[k2])
+              + " ok, " + str(len(maus)) + " falharam")
+        n = 0
+        for nome in maus:
+            if n >= 10:
+                print("       (e mais " + str(len(maus) - 10) + ")")
+                break
+            print("       " + nome)
+            n += 1
     if not ok:
         print("build falhou:", fails, "problema(s)")
 
