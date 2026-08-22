@@ -227,3 +227,228 @@ lá. Sem cópia por alvo, sem link simbólico (caminho relativo dentro de link �
 fonte clássica de bug de `include`), e **o hash no nome torna "a mesma versão com
 conteúdo diferente" impossível de confundir** — que é exatamente o furo que a
 pesquisa aponta no `requirements.txt`.
+
+---
+
+## O pstudio por cima (2026-08-22)
+
+Suas palavras: *"o pstudio vai ficar por cima (nada vai depender dele, mas ele vai
+depender das outras ferramentas, talvez até compilando junto). Ele vai orquestrar
+tudo, vai ter um botão de play (igual o NetBeans, que tem uma toolbar com um play e
+uma vassoura), configuração de build etc — uma IDE integrada."* E: *"partes do
+pstudio vão virar pacotes, como a lib de UI."*
+
+Isso acrescenta uma camada e **fecha dois laços de uma vez**:
+
+```
+pstudio   (IDE: play, vassoura, configuração)   ← nada depende dele
+   |
+   v
+ppack     (resolve, e é o comando de cima)
+   |
+   v
+pbuild    (decide e executa)
+   |
+   v
+plangc    (responde e compila)
+```
+
+**Laço 1 — o pstudio é o primeiro CONSUMIDOR e o primeiro PRODUTOR de pacotes.**
+A lib de UI (`lib_pui.psc`, 1 145 linhas), o motor de texto (`lib_core.psc`,
+1 136) e o realce (`lib_hl.psc` + `hl.p`) virando pacotes significa: um pacote
+**pscript que depende de um pacote P** (o shim de SDL) — que é exatamente o caso
+que eu medi quebrado (o `import "hl.ph"` dentro de um módulo pscript importado não
+puxa nada). Ou seja: **a 1.5(d) não é higiene, é o que destrava a lib de UI virar
+pacote.**
+
+**Laço 2 — o `build.psc` ser um PROGRAMA e o manifesto ser DADO ganha o seu
+melhor argumento agora.** A tela de "configuração de build" da IDE precisa
+**editar** o que ela mostra. Um manifesto declarativo se lê e se reescreve sem
+risco; um programa, não — nenhuma IDE do mundo edita um `build.zig` com
+segurança. A decisão de dois arquivos passa a ter dois donos naturais: o
+**manifesto é do painel**, o **descritor é do programador**.
+
+**E "talvez até compilando junto" é o caso que a 1.8 já previu.** Se o pstudio e o
+pbuild são os dois pscript e viram um binário, o botão de play não *invoca* um
+build: ele **chama** o descritor e o executor no mesmo processo, e recebe o grafo
+como `dict` — sem serializar, sem parsear texto, sem processo intermediário. Era
+literalmente a opção (b) da 1.8: *memória quando é a mesma execução, arquivo
+quando não é.*
+
+Duas coisas que já estão decididas e que servem a IDE sem mudança:
+
+- **a saída de cada aresta é capturada inteira** (1.2/1.6c) — para um painel de
+  build isso é melhor que streaming: cada aresta chega completa, e nada se
+  intercala com nada;
+- **`ppack dev`** (reconstruir e reiniciar) é o botão de play com o programa
+  rodando, e o `EVFILT_VNODE`/`inotify` entra no laço de eventos que o editor já
+  tem girando para o teclado e a tela.
+
+## As quatro da camada IDE — DECIDIDAS (2026-08-22)
+
+**Em processo: um binário, o grafo como `dict`.** E isso força uma clarificação
+que vale mais que a decisão em si:
+
+> **O pbuild é uma BIBLIOTECA. O `ppack` e o `pstudio` são as suas duas frentes.**
+
+Consequência dura e boa: **a biblioteca não pode imprimir.** Nada de `print` para
+o terminal dentro do motor — ela **relata eventos** (aresta começou, terminou,
+falhou, com a saída capturada) e quem decide o que fazer com eles é a frente: a
+CLI imprime, a IDE pinta. É o que separa um motor reutilizável de um script com
+`print` no meio, e é fácil errar isso na primeira linha.
+
+**Diagnóstico estruturado: a SEXTA resposta do protocolo.** O `plangc` passa a
+poder devolver diagnóstico como dado — arquivo, linha, coluna, gravidade,
+mensagem, e o grupo `-W` que o sistema de avisos já calcula. A IDE sublinha sem
+parsear texto, e o `--json` da CLI reusa a mesma coisa.
+
+Com um limite explícito: **o TEXTO continua sendo a referência.** A paridade com o
+clang (155/155, com portão em `tests/clang-compare.sh`) e os 692 casos de
+`tests/errors` medem a mensagem impressa; o JSON é uma segunda renderização dos
+mesmos dados, nunca a fonte da verdade.
+
+O protocolo, agora completo:
+
+| # | o pbuild/pstudio pergunta | o plangc responde |
+|---|---|---|
+| 1 | o que você leu? | as fontes, imports transitivos incluídos |
+| 2 | qual o hash de cada interface? | um hash por `.h`, da **lista canónica da API** |
+| 3 | o que você vai emitir? | as saídas, antes de rodar (o `dyndep` sem arquivo) |
+| 4 | quem você é? | o hash dos próprios bytes |
+| 5 | qual a API pública e a doc? | símbolos, assinaturas, docstrings (2.6) |
+| 6 | **quais os diagnósticos?** | **arquivo, linha, coluna, gravidade, grupo `-W`** |
+
+**Workspace: pacote local por caminho, sem publicar.** `pui = { path = "..." }`, e
+o resolvedor trata o diretório como pacote resolvido. Duas consequências a
+anotar: (a) o hash de um pacote por caminho é o **hash do conteúdo do diretório**
+— lista ordenada de arquivos mais o hash de cada um, e o `os.listdir` da 111 já
+ordena de propósito; (b) **publicar um pacote que tem dependência por caminho tem
+de ser recusado** (ou reescrito para versão), senão publica-se algo que só compila
+na máquina do autor — é o erro que o cargo trata como erro.
+
+**A vassoura apaga saídas e mantém os pacotes.** `build/obj`, `build/bin` e o log
+somem; `build/pkg` fica, porque foi verificado e está no lock — apagá-lo custa
+rede para nada. É o que a vassoura do NetBeans faz: limpa o que o build produziu,
+não o que você buscou.
+
+## Mais quatro (2026-08-22)
+
+**Eventos: ciclo de vida da aresta e o total, nada mais.** `plano_pronto(total)`,
+`aresta_iniciou(id)`, `aresta_terminou(id, status, saída, duração)`, `fim(ok,
+falhas)`. Contrato pequeno é contrato que dá para mudar. O motivo da sujeira e o
+grafo a frente pede quando quiser (o `--explain` é consulta, não evento).
+
+**`ppack publish` empacota, assina e RECUSA.** Tarball do fonte, SHA-256,
+assinatura do autor, entrada de índice com a lista canónica da API — e recusa em
+três casos, todos de graça porque o mecanismo já existe por outro motivo:
+dependência por caminho, `.psc` dentro de pacote declarado P, e "minor" cujo hash
+de API mudou.
+
+**Doctest: sim, e os exemplos viram testes da suíte.** A docstring já vai para o
+JSON (2.6) e um teste já é uma aresta do grafo — então "exemplo que não compila há
+três versões" deixa de existir sem mecanismo novo.
+
+**Paralelismo: número de núcleos.** Com a ressalva medida: aqui, com 8 núcleos, o
+build satura em ~4 porque o caminho crítico é **um** arquivo (4,96 s de 5,0 s). O
+padrão ótimo é do projeto, e núcleos é o chute honesto.
+
+## pstudio como servidor, e se isso me serve (2026-08-22)
+
+Sua pergunta: *"podemos usar o próprio pstudio como um servidor, até para você
+mesmo depurar pacotes e código? Tem a http para fazer uma API. Não sei se seria
+útil pra você."*
+
+Resposta honesta: **o HTTP não é a parte útil para mim.** O que me custa tempo
+neste repositório é medível e é outra coisa:
+
+- **os 2,5–3,3 s de compilação fria** em cada sonda que eu escrevo (medido nesta
+  investigação, várias vezes);
+- e **ter de rodar três ou quatro comandos** para descobrir o que uma resposta
+  estruturada diria de uma vez. O caso do `hl.h` foi exatamente isso: rodei o
+  `plangc` duas vezes e um `find` para descobrir o que ele emitia — a **pergunta
+  3 do protocolo** ("o que você vai emitir?") responde em uma chamada.
+
+Ou seja: as duas coisas que me ajudam já estão decididas, por outros motivos — o
+**armazém quente** e o **protocolo com `--json`**. E o meu API universal é o
+**shell**: toda ferramenta que eu tenho é `bash`, então uma CLI que responde em
+JSON vale mais para mim que um servidor que eu teria de subir, manter vivo entre
+chamadas e checar se está de pé.
+
+**Onde um servidor ganha o lugar dele** — e são três usos reais, só não são sobre
+mim:
+
+1. **Protocolo de DEPURAÇÃO.** Inspecionar um programa **parado**: ponto de
+   parada, pilha, variáveis. A infraestrutura existe pela metade — o `-g` põe
+   frame em toda função pscript e a shadow stack já carrega a pilha
+   (`psrt_types.ph:194`). Isso serve o painel de debug da IDE **e** a linha de
+   comando — e este é o único que eu usaria de verdade, porque hoje depurar
+   pscript é acrescentar `print` e recompilar (3,3 s cada vez);
+2. **pstudio no navegador.** A pilha HTTP daqui não é caseira no sentido ruim: foi
+   conferida contra o llhttp (202/202) e o parser de URL contra o WPT (890/891).
+   Uma IDE que abre no navegador é produto, não gambiarra;
+3. **build remoto** para a IDE de outra máquina. Depois.
+
+E uma cautela que vale escrever: **um servidor de vida longa segurando compilador
+e coletor é uma classe nova de bug** (cache velho, memória crescendo, dois builds
+no mesmo processo). Como o armazém torna um processo novo quase grátis, o servidor
+deve ser **frente, nunca autoridade** — o mesmo princípio de "a biblioteca não
+imprime".
+
+## Reflexão em pscript (2026-08-22) — DECISÃO DE LINGUAGEM, a migrar para `pscript/DESIGN.md`
+
+*Registro aqui porque nasceu desta investigação; o lugar definitivo é uma bateria
+própria em `pscript/DESIGN.md`.*
+
+Sua pergunta: *"se o compilador conhece o tipo em tempo de compilação e os membros
+das estruturas, ele pode entregar a estrutura do dado para o runtime quando for
+pedido — um record é grátis. Isso seria uma espécie de reflexão, e o json poderia
+já ser parte do runtime para a maioria dos tipos. Aí qualquer saída em json vira
+trivial, né?"*
+
+**Sim — e o mecanismo já existe pela metade.** O runtime tem:
+
+```
+struct PsDesc:                       # psrt_types.ph
+    name: const *char                # o NOME do tipo já está aqui
+    trace: def(o: *void, to: *PsBlock)   # "o compilador escreve, porque só ele
+                                         #  conhece os campos"
+struct PsUser:                       # todo struct do usuário começa assim
+    obj: PsObj
+    desc: const *PsDesc              # e carrega o descritor
+```
+
+Medido no editor portado: **38 descritores, ~470 linhas de 24 601 (1,9 %)**.
+
+**DECIDIDO: o `PsDesc` ganha tabela de campos** (nome, deslocamento, tipo), para
+**todo** tipo — o compilador já calcula isso para poder emitir o `trace`.
+
+**DECIDIDO: a tabela lista só o PÚBLICO.** E aqui está a convergência que fecha
+três decisões numa:
+
+> **a tabela de campos públicos = a lista canónica da API = o que entra no hash de
+> interface.** Um artefato serve reflexão (json, repr, depuração), verificação de
+> semver (o que mudou na API) e sujeira de build (recompilar só quando a interface
+> muda). Uma noção de "público" para tudo.
+
+O `trace` do coletor continua cobrindo **todos** os campos de referência,
+inclusive privados — mecanismo separado, intocado.
+
+E o seu "um record é grátis" tem uma precisão que vale registrar: um `record` é
+**valor sem cabeçalho**, então não tem ponteiro para descritor. Para ele a
+reflexão é **estática** (o compilador injeta o descritor no sítio da chamada,
+onde ele sabe o tipo); para `struct` coletada é **dinâmica** (o descritor já está
+alcançável pelo objeto). Dois caminhos, e é por isso que o record não paga nada.
+
+**DECIDIDO: `--json` em todos os comandos que produzem informação** — se
+serializar é uma chamada, cada comando não paga nada por isso, e a CLI passa a ser
+a API da IDE, do CI e minha, sem servidor nenhum.
+
+**DECIDIDO: o `repr` passa a ser dado** — uma implementação do runtime percorre a
+tabela, em vez de uma função gerada por tipo.
+
+Com uma ressalva que a evidência impõe, não o gosto: **o escape já existe e já tem
+teste.** Em `tests/pscript/run/repr.psc` o `struct Money` define `to_str(self)` e
+`print(Money(250))` imprime `$2` — está no `.expected`. Então "uma implementação lê
+a tabela" tem de significar *derivado por padrão, `to_str` vence quando existe*,
+senão o teste quebra. É o modelo do Python (`__repr__`) e do Rust (`Debug`
+derivado ou manual), e aqui já está meio implementado.

@@ -571,3 +571,111 @@ também para fora. Sem sintaxe nova, e **a mesma regra do P** — uma regra a me
 na cabeça de quem escreve nas duas linguagens. O risco assumido é exportar por
 esquecimento; o antídoto já está decidido e é automático: a **lista canónica da
 API** (o hash de interface) mostra num diff tudo que passou a ser público.
+
+## O lock — DECIDIDO: JSON com procedência completa
+
+Por pacote: **nome, versão exata, hash SHA-256, o REPOSITÓRIO de onde veio, se
+foi resolvido em modo unsafe (2.12), e a faixa de toolchain exigida**. Mesmo
+parser do grafo — nada de formato novo — e um diff que responde em revisão as
+duas perguntas que importam: *de qual repositório isto veio* e *alguém instalou
+sem verificar assinatura*.
+
+## A faixa de toolchain — DECIDIDO: o ppack confere na fase 1
+
+Ele já vai perguntar ao compilador quem ele é (versão e hash dos próprios bytes,
+que o `run` já calcula em `main.p:551`). Conferir ali dá a melhor mensagem
+possível — *"o pacote `foo` exige plangc >= X, o seu é Y"* — **antes** de gastar um
+segundo compilando, e mantém a fronteira: o compilador continua sem saber o que é
+um pacote ou uma versão.
+
+## Mais quatro decisões (2026-08-22)
+
+**O `index.json` carrega metadado + hash + a LISTA CANÓNICA DA API.** Duas coisas
+que ninguém oferece caem de graça: `ppack search draw_rect` **procura por
+símbolo** sem baixar nada, e a honestidade de semver é verificável a partir do
+índice. Consequência a antecipar: o índice cresce com as listas de API — e é
+**aí** que os dois níveis do apt (um `release` pequeno assinado que aponta para
+índices grandes) passam a se pagar. Não hoje.
+
+**`ppack run`: constrói o que estiver sujo e depois o programa É o processo.**
+stdin, stdout, stderr e código de saída são do programa — a aresta pede o
+`console` e o `exec` substitui o processo, como o `plangc run` já faz hoje. É o
+que permite `ppack run` dentro de um pipe. Duas exigências que isso impõe: o
+relatório do build tem de estar **fechado** antes do `exec`, e uma falha de build
+precisa de código de saída distinguível da falha do programa.
+
+**Os alvos têm nome NOSSO, curto**: `linux-amd64`, `linux-amd64-musl`,
+`macos-arm64`. A tradução para o mundo (o `-t` do QBE, o triplo do `cc`, as flags)
+mora na **biblioteca do descritor**, junto do resto do conhecimento de toolchain —
+o mesmo guarda-corpo da API de alvos. E o alvo entra na chave de sujeira.
+
+**Os pisos de placar vão para o descritor**, junto da suíte que eles medem:
+`c-suite >= 220`, `wacct >= 741`. Com isso o `verify-all.sh` perde a última lógica
+que tinha e vira o que já foi decidido — casca fina sobre `ppack verify`.
+
+## Um furo que apareceu ao conferir a faixa de toolchain
+
+**O `plangc` não tem versão.** `--version` é opção desconhecida e não existe
+constante de versão em `selfhost/main.p`. Ou seja: a faixa de toolchain do
+manifesto (decidida, conferida na fase 1) **não tem contra o que comparar**.
+
+É pequeno e é pré-requisito: uma constante, uma flag, e a decisão de o que a
+versão significa — o que é a pergunta que segue.
+
+## Mais quatro (2026-08-22)
+
+**O `plangc` ganha semver da LINGUAGEM**: `0.1.0`, e `--version` imprime a versão
+**mais** o hash dos próprios bytes. A versão fala sobre o que a linguagem aceita e
+emite (menor = recurso novo, maior = quebra); o hash continua sendo o que a
+sujeira usa. É o que o manifesto já esperava.
+
+**O `run` SAI do compilador de vez.** Consequência maior do que parece, e boa: com
+isso o `plangc` deixa de tomar **qualquer** decisão, e a regra do desenho fica
+absoluta — *o compilador responde, nunca decide*. Morre com ele a sexta lista (o
+`RT_SRCS` dentro do `main.p`) e o alias `pscript` (o `argv[0]` conferido em
+`main.p:410`).
+
+Três coisas para não esquecer na hora de fazer: (a) isso só pode acontecer
+**depois** de o `ppack run` existir e ser bom — é passo tardio, não inicial; (b) o
+`tests/run-cmd.sh` existe para medir exatamente esses comportamentos (cache, o que
+invalida, o status de saída) e passa a medir o `ppack`; (c) rodar um `.psc` passa a
+exigir o `ppack` — a promessa de "um binário, sem dependência" migra para ele.
+
+**O próprio plang vira um workspace**: um `pack.json` na raiz declarando os
+membros (`packages/stl`, `packages/pui`) e o alvo padrão. O repositório passa a
+ser, para o `ppack`, um projeto como qualquer outro — e é assim que o ecossistema
+é testado por quem o escreve, contra o caso mais difícil que existe.
+
+**As mensagens de erro do pbuild/ppack seguem o estilo do compilador**:
+`arquivo:linha:coluna: error: ...`. Então `pack.json:4:12: error: versão inválida`
+é clicável na IDE pelo **mesmo** caminho que um erro de compilação, e há uma forma
+só para tudo. (Erro sem posição — rede, assinatura — usa a mesma forma sem os
+números, não um segundo formato.)
+
+## E mais quatro (2026-08-22)
+
+**Os comandos da v1: o núcleo mais os de INSPEÇÃO.**
+`build run test verify clean dev add up publish search doc lock` — e
+`why tree graph explain`. Os quatro de inspeção não são luxo: são os que salvam a
+tarde quando algo reconstrói sem motivo, e o ninja e o samurai têm todos
+(`-t graph`, `-t query`, `-t targets`, `-explain`). O `ppack why sdl2` responde
+"quem puxou isto", que é a pergunta que todo lock grande acaba provocando.
+
+**`ppack add pui@0.1.0` mexe no manifesto e no lock, e NÃO constrói.** Uma coisa
+por comando: ele resolve, baixa (precisa, para ter o hash), verifica e grava — e o
+diff do commit fica legível, duas linhas, uma em cada arquivo. Construir é do
+`build`.
+
+**Doc: terminal agora e `--html` para uma pasta.** O JSON da 2.6 já traz símbolos e
+docstrings, então `ppack doc pui.draw_rect` no terminal é quase grátis (é o que o
+`go doc` acertou: offline, sem gerar site), e o mesmo JSON rende um site estático
+para consulta navegável — o ponto 3 da pesquisa por inteiro, sem depender de
+internet nem de serviço.
+
+**Higiene do grafo: três erros e alguns avisos.** ERRO — saída declarada e não
+produzida, ciclo, entrada que não existe e ninguém produz (o ninja trata as três
+como erro, e com razão: uma aresta que promete `x.o` e não o cria envenena todo
+build seguinte). AVISO — entrada declarada e nunca lida, aresta que nunca fica
+pronta, saída que ninguém consome. São os avisos que pegam **declaração errada
+antes de ela virar build velho**, que é o único modo de falhar que esta
+investigação passou o tempo todo tentando evitar.

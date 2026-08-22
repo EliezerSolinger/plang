@@ -71,6 +71,14 @@ def hexc(c: char) -> i32
 # ---------- files ----------
 def read_entire_file(path: const *char, out out_len: usize) -> *char
 def read_entire_file_opt(path: const *char, out out_len: usize) -> *char
+
+# o registro de leituras (a pergunta 1 do protocolo): ligado sob demanda, guarda
+# toda fonte que passou pelas duas funções acima — que é por onde TODA fonte
+# passa. Ver o comentário em util.p para o que fica de fora e por quê.
+def deps_enable()
+def deps_add(path: const *char)
+def deps_count() -> i32
+def deps_get(i: i32) -> const *char
 def plang_host_os() -> const *char
 
 # ---------- paths ----------

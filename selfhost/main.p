@@ -12,6 +12,7 @@ import "cfront.ph"
 import "ps_parser.ph"
 import "ps_sema.ph"
 import "ps_lower.ph"
+import "api.ph"
 import "../stl/vec.ph"
 import "../stl/hash.ph"
 import "vecs.ph"
@@ -81,6 +82,13 @@ def has_suffix(s: const *char, suf: const *char) -> bool:
     m: usize = strlen(suf)
     return n >= m and strcmp(s + n - m, suf) == 0
 
+# 0.1.0 — a versão da LINGUAGEM, não do binário: menor = recurso novo, maior =
+# quebra. O manifesto de um pacote declara a faixa que ele exige e o `ppack` a
+# confere ANTES de compilar (a fase 1 do ciclo). O hash dos próprios bytes vai
+# junto porque é ELE que decide sujeira de build: dois compiladores da mesma
+# versão com bytes diferentes emitem C diferente.
+const PLANG_VERSION = "0.1.0"
+
 private def usage():
     fprintf(stderr, "usage: plangc [options] file.p [file2.ph ...]\n")
     fprintf(stderr, "\n")
@@ -102,6 +110,10 @@ private def usage():
     fprintf(stderr, "                   functions - the output has no libc dependency for them\n")
     fprintf(stderr, "  -pedantic        warn on GNU/C23 extensions in C input\n")
     fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n")
+    fprintf(stderr, "  --version        the LANGUAGE version and the compiler's own hash\n")
+    fprintf(stderr, "  --deps           list every source this compilation read, and stop\n")
+    fprintf(stderr, "  --outputs        list what it WOULD emit, without emitting\n")
+    fprintf(stderr, "  --api            the canonical public API of each module, and its hash\n")
     fprintf(stderr, "  --tokens         dump tokens and exit\n")
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n")
     fprintf(stderr, "  run <f.psc> [args] compile (cached) and RUN it (6.3/15.3); as `pscript f.psc`\n")
@@ -262,6 +274,44 @@ private def derive_output(a: *Arena, input: const *char, be: const *Backend) -> 
     fatal("'%s': unknown extension (expected .p, .ph, .psc, .c or .i)", input)
     return None
 
+# onde a saída de um input vai parar, com os argumentos desta invocação. Extraída
+# porque agora tem DOIS leitores: a emissão, que escreve ali, e a pergunta 3 do
+# protocolo ("o que você vai emitir?"), que precisa da resposta sem compilar.
+# A pergunta 1, do lado do P: os `import` de um módulo são seguidos pela SEMA, e
+# a consulta não roda sema — então o caminhamento é aqui, no front end. É o que
+# mantém a resposta barata (o front end sozinho custa 0,12 s no maior arquivo do
+# compilador, contra os segundos de um `cc`), e `cc_load_module` guarda o que já
+# leu, então reentrar num módulo já visto não relê nada.
+private def deps_walk(cc: *Cc, path: const *char):
+    m: *Module = cc_load_module(cc, path)   # lê o arquivo; o funil de util.p anota
+    dir: const *char = path_dir(&cc->arena, path)
+    for i in range(m->ndecls):
+        d: *Decl = m->decls[i]
+        if d->kind != DL_IMPORT or d->is_include or d->import_path == None:
+            continue
+        if not has_suffix(d->import_path, ".ph"):
+            continue
+        ip: const *char = path_join(&cc->arena, dir, d->import_path)
+        seen: bool = False
+        for j in range(deps_count()):
+            if strcmp(deps_get(j), ip) == 0:
+                seen = True
+                break
+        if not seen:
+            deps_walk(cc, ip)
+
+private def dest_for(cc: *Cc, out_path: const *char, out_dir: const *char, path: const *char, be: const *Backend, pulled: *Vec<*char>) -> const *char:
+    dest: const *char = out_path if out_path != None else derive_output(&cc->arena, path, be)
+    if out_path != None and is_pulled(pulled, path):
+        # `-o` nomeia UM arquivo, e este não foi pedido pelo nome: sai ao lado do
+        # que foi, com o nome que o próprio fonte lhe dá
+        dest = cc->arena.printf("%s/%s", path_dir(&cc->arena, out_path), path_base(derive_output(&cc->arena, path, be)))
+    if out_dir != None:
+        # a árvore de saída ESPELHA a de fontes sob --out-dir, para os includes
+        # relativos do C emitido ("../stl/x.h") resolverem lá dentro
+        dest = cc->arena.printf("%s/%s", out_dir, dest)
+    return dest
+
 private def dump_tokens(path: const *char, cc: *Cc):
     len: usize = 0
     bytes: *char = read_entire_file(path, out len)
@@ -369,6 +419,13 @@ def main(argc: int, argv: **char) -> int:
     backend_name: const *char = None
     tokens_only: bool = False
     parse_only: bool = False        # stop after the front end (a syntax check)
+    # As perguntas do protocolo (o compilador RESPONDE; quem decide é o build).
+    # As três rodam o front end e param antes da sema e da emissão: perguntar
+    # custa 0,12 s no maior arquivo do compilador, contra os segundos de um `cc`.
+    show_version: bool = False      # --version: a versão da linguagem + o hash dos bytes
+    deps_mode: bool = False         # --deps: toda fonte que esta compilação leu
+    outputs_mode: bool = False      # --outputs: o que ela emitiria, sem emitir
+    api_mode: bool = False          # --api: a lista canónica da API + o hash dela
     # where the pscript runtime lives (16.4: it is P source compiled with the
     # program). The emitted import is made relative to the .psc, so this is
     # written the way the sources are laid out, not baked in absolute.
@@ -491,6 +548,14 @@ def main(argc: int, argv: **char) -> int:
             diag_set(argv[i] + 5, 0)
         elif argv[i][0] == '-' and argv[i][1] == 'W' and argv[i][2] != '\0':
             diag_set(argv[i] + 2, 1)   # -W<group>: enable as a warning
+        elif argv[i] == "--version":
+            show_version = True
+        elif argv[i] == "--deps":
+            deps_mode = True
+        elif argv[i] == "--outputs":
+            outputs_mode = True
+        elif argv[i] == "--api":
+            api_mode = True
         elif argv[i] == "--tokens":
             tokens_only = True
         elif argv[i] == "--parse-only":
@@ -507,6 +572,10 @@ def main(argc: int, argv: **char) -> int:
             usage()
         else:
             inputs.push(argv[i])
+    if show_version:
+        okv: bool = True
+        printf("plangc %s (%016llx)\n", PLANG_VERSION, hash_file(argv[0], ref okv))
+        return 0
     if inputs.is_empty():
         usage()
     if run_mode and inputs.len != 1:
@@ -582,6 +651,13 @@ def main(argc: int, argv: **char) -> int:
         # source — a script that lives in a read-only directory still runs
         out_dir = cc.arena.printf("%s/obj", cachedir)
     diag_config(werror, wall, pedantic_lvl, wsuppress)
+    # o modo CONSULTA: as três perguntas rodam o front end (é ele que descobre
+    # os imports) e param antes da sema e da emissão. `--api` é a exceção — a
+    # lista de um `.psc` só existe depois do lowering, que é onde os módulos dele
+    # viram um módulo P.
+    query_mode: bool = deps_mode or outputs_mode or api_mode
+    if deps_mode:
+        deps_enable()
 
     if tokens_only:
         for j in range(inputs.len):
@@ -600,6 +676,13 @@ def main(argc: int, argv: **char) -> int:
         # back end with headers has anything to write for it, and QBE has none
         if is_pulled(&pulled, path) and has_suffix(path, ".ph") and be->hdr_ext == None:
             continue
+        # o `.c` é lido pelo PRÉ-PROCESSADOR externo, não por nós, então ele não
+        # passaria pelo funil de `read_entire_file` — anota-se aqui, onde se sabe
+        # que ele entrou na compilação
+        if deps_mode:
+            deps_add(path)
+        if outputs_mode:
+            printf("%s\n", dest_for(&cc, out_path, out_dir, path, be, &pulled))
         m: *Module
         if has_suffix(path, ".psc"):
             # pscript front end (50.3: one binary, the extension picks the
@@ -627,11 +710,14 @@ def main(argc: int, argv: **char) -> int:
                 if sbytes != None:
                     free(sbytes)
                     add_input(&inputs, &pulled, sp)
-            if parse_only:
+            # `--deps` e `--api` precisam do front end do pscript: é ELE que
+            # resolve `import lib_core` e lê o módulo importado (ps_sema.p:3237).
+            # `--outputs` sozinho não precisa de nada disso.
+            if parse_only or (query_mode and not api_mode and not deps_mode):
                 continue
             ps_sema_run(&cc.arena, psm, cc.cpp)
             m = ps_lower(&cc.arena, psm, ps_runtime)
-            if not be->pre_sema:
+            if not be->pre_sema and not query_mode:
                 sema_run(&cc, m)
                 # the runtime's types and signatures come from an imported
                 # header, and QBE needs their LAYOUTS — without this the context
@@ -644,6 +730,11 @@ def main(argc: int, argv: **char) -> int:
             # (designated initializers lowered to positional, VLAs to
             # malloc/free). Sema is deliberately shallow (deep type checking is
             # the target compiler's job), so valid C is untouched.
+            if query_mode and not api_mode:
+                # nada a descobrir: o C não tem import que puxe outro input (o
+                # pré-processador já resolveu os `#include`), e pré-processar
+                # para nada custaria um processo por arquivo
+                continue
             clen: usize = 0
             cbytes: *char
             if has_suffix(path, ".c"):
@@ -654,10 +745,12 @@ def main(argc: int, argv: **char) -> int:
             else:
                 cbytes = read_entire_file(path, out clen)
             m = c_parse(&cc.arena, path, cbytes, clen, True)
-            if not be->pre_sema:
+            if not be->pre_sema and not query_mode:
                 sema_run(&cc, m)
         else:
             m = cc_load_module(&cc, path)
+            if deps_mode:
+                deps_walk(&cc, path)
             # 75.3, transitively: a module pulled into this build may import
             # others, and one command has to mean the whole graph. Only what a
             # PULLED file needs is pulled — a file the user named keeps the
@@ -679,7 +772,7 @@ def main(argc: int, argv: **char) -> int:
                         add_input(&inputs, &pulled, isp)
             # a pre-sema backend wants the SURFACE tree: printing the source
             # language must not see the lowering (backend_p)
-            if not be->pre_sema:
+            if not be->pre_sema and not query_mode:
                 sema_run(&cc, m)
                 # QBE needs the LAYOUTS of imported types (offsets/enum). Imported
                 # structs must not re-emit methods here (materialized via
@@ -687,19 +780,23 @@ def main(argc: int, argv: **char) -> int:
                 if be->name == "qbe":
                     qbe_merge_types(&cc, m)
 
+        # a pergunta 2/5 do protocolo, num lugar só para as três linguagens: a
+        # árvore de superfície de um `.p`/`.ph`, a do `.c` round-trip, e a que o
+        # lowering do pscript produziu
+        if api_mode:
+            ab: StrBuf = {0}
+            api_dump(m, &ab)
+            fwrite(ab.data, 1, ab.len, stdout)
+            ab.deinit()
+        if query_mode:
+            continue
+
         out: StrBuf = {0}
         defer out.deinit()
         backend_emit(be, m, &out)
 
-        dest: const *char = out_path if out_path != None else derive_output(&cc.arena, inputs.get(usize(k)), be)
-        if out_path != None and is_pulled(&pulled, path):
-            # `-o` names ONE file, and this one was not asked for by name: it
-            # goes beside what was, under the name its own source gives it
-            dest = cc.arena.printf("%s/%s", path_dir(&cc.arena, out_path), path_base(derive_output(&cc.arena, path, be)))
+        dest: const *char = dest_for(&cc, out_path, out_dir, path, be, &pulled)
         if out_dir != None:
-            # the output tree MIRRORS the source tree under --out-dir, so the
-            # emitted file-relative includes ("../stl/x.h") resolve inside it
-            dest = cc.arena.printf("%s/%s", out_dir, dest)
             mkdirs_for(dest)
         if dest == "-":
             fwrite(out.data, 1, out.len, stdout)
@@ -716,6 +813,12 @@ def main(argc: int, argv: **char) -> int:
             run_hash = run_hash * 0x100000001b3 ^ hash_bytes(out.data if out.data != None else "", out.len)
             if has_suffix(dest, ".c"):
                 cfiles.push((*char)(dest))
+    if deps_mode:
+        # no fim, porque a lista só está completa quando o último import foi
+        # seguido: o laço acima CRESCE enquanto descobre
+        for di in range(deps_count()):
+            printf("%s\n", deps_get(di))
+        return 0
     if run_mode:
         run_manifest_write(&cc.arena, manifest, run_hash, &inputs)
         return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version, full_trace)

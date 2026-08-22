@@ -257,11 +257,107 @@ def cdiag_at(file: const *char, pos: Pos, group: const *char, wdef: i32, fmt: co
     g_warn_count += 1
 
 # ---------- files ----------
+# ---------- o registro de leituras (a pergunta 1 do protocolo) ----------
+# "o que você leu?" — toda fonte que entrou nesta compilação, para quem monta um
+# grafo de build não ter de adivinhar (nem manter a lista à mão em seis lugares).
+# Fica DESLIGADO por padrão: um compilador normal não paga por isto.
+#
+# O funil é este arquivo: todo `.p`, `.ph`, `.psc`, `.c`, `.i` e todo `embed()`
+# passa por `read_entire_file`/`_opt`. O que NÃO aparece aqui, e é honesto dizer:
+# os headers de sistema por trás de um `include <stdio.h>`, porque quem os
+# resolve é o pré-processador externo (`--cpp`) e só ele os enxerga.
+g_deps: **char = None
+g_ndeps: i32 = 0
+g_deps_cap: i32 = 0
+g_deps_on: bool = False
+
+def deps_enable():
+    g_deps_on = True
+
+# `selfhost/../stl/vec.ph` e `stl/vec.ph` são o MESMO arquivo, e um grafo de
+# build que os visse como dois nós recompilaria o mundo por nada. A conta é
+# léxica (não pergunta ao disco), como o `normpath` do posixpath: `.` some, `..`
+# sobe um componente quando há um para subir, e `..` no começo de um caminho
+# relativo fica — porque ali ele significa alguma coisa.
+private def path_norm_into(dst: *char, src: const *char):
+    cstart: usize[256]
+    clen: usize[256]
+    nc: i32 = 0
+    isabs: bool = src[0] == '/'
+    i: usize = 0
+    while src[i] != '\0':
+        while src[i] == '/':
+            i += 1
+        if src[i] == '\0':
+            break
+        j: usize = i
+        while src[j] != '\0' and src[j] != '/':
+            j += 1
+        l: usize = j - i
+        if l == 1 and src[i] == '.':
+            pass
+        elif l == 2 and src[i] == '.' and src[i + 1] == '.':
+            up: bool = False
+            if nc > 0:
+                pi: usize = cstart[nc - 1]
+                if not (clen[nc - 1] == 2 and src[pi] == '.' and src[pi + 1] == '.'):
+                    up = True
+            if up:
+                nc -= 1
+            elif not isabs and nc < 256:
+                cstart[nc] = i
+                clen[nc] = l
+                nc += 1
+            # num caminho absoluto, `..` na raiz É a raiz: descarta
+        elif nc < 256:
+            cstart[nc] = i
+            clen[nc] = l
+            nc += 1
+        i = j
+    n: usize = 0
+    if isabs:
+        dst[0] = '/'
+        n = 1
+    for k in range(nc):
+        if k > 0:
+            dst[n] = '/'
+            n += 1
+        memcpy(dst + n, src + cstart[k], clen[k])
+        n += clen[k]
+    if n == 0:
+        dst[0] = '.'
+        n = 1
+    dst[n] = '\0'
+
+def deps_add(path: const *char):
+    if not g_deps_on or path == None:
+        return
+    norm: *char = malloc(strlen(path) + 2)
+    path_norm_into(norm, path)
+    for i in range(g_ndeps):
+        if strcmp(g_deps[i], norm) == 0:
+            free(norm)
+            return
+    if g_ndeps == g_deps_cap:
+        g_deps_cap = 32 if g_deps_cap == 0 else g_deps_cap * 2
+        g_deps = realloc(g_deps, usize(g_deps_cap) * sizeof(*g_deps))
+        if g_deps == None:
+            fatal("out of memory")
+    g_deps[g_ndeps] = norm
+    g_ndeps += 1
+
+def deps_count() -> i32:
+    return g_ndeps
+
+def deps_get(i: i32) -> const *char:
+    return g_deps[i]
+
 def read_entire_file(path: const *char, out out_len: usize) -> *char:
     f: *FILE = fopen(path, "rb")
     if f == None:
         fatal("could not open '%s'", path)
     defer fclose(f)
+    deps_add(path)
     return read_open_file(f, path, out out_len)
 
 # same, but the caller reports the failure: embed() wants a diagnostic that
@@ -272,6 +368,7 @@ def read_entire_file_opt(path: const *char, out out_len: usize) -> *char:
         out_len = 0
         return None
     defer fclose(f)
+    deps_add(path)
     return read_open_file(f, path, out out_len)
 
 private def read_open_file(f: *FILE, path: const *char, out out_len: usize) -> *char:

@@ -1,0 +1,112 @@
+# `packages/` — os pacotes deste repositório
+
+**Nada foi movido para cá ainda**: esta pasta e este arquivo registram a
+estrutura decidida (`ppack/DESIGN.md`) e o preço medido de cada migração.
+
+## Duas pastas com nomes parecidos e papéis opostos
+
+| pasta | o que é | vai para o git? |
+|---|---|---|
+| **`packages/`** | os pacotes que **nós escrevemos** — fonte | **sim** |
+| `build/pkg/` | os pacotes que o `ppack` **baixou e verificou** | não |
+
+## A forma de um pacote
+
+O manifesto é **`pack.json`** — dado, nunca programa (é o arquivo que o painel de
+configuração da IDE edita). O grafo de imports É o grafo do pacote (1.5a), então o
+manifesto não repete a lista de arquivos.
+
+```
+packages/<nome>/
+    pack.json         # nome, versão, dependências, dependência de sistema, toolchain
+    <raiz>.ph|.psc    # o módulo RAIZ, que é a interface do pacote
+    ...               # os demais módulos, alcançados por import
+```
+
+| tipo | pode conter | runtime | regra verificável |
+|---|---|---|---|
+| **P** | `.p`, `.ph`, `.c` | nenhum | um `.psc` dentro é **erro**; só depende de pacotes P |
+| **pscript** | `.psc`, `.p`, `.ph`, `.c` | os 6 módulos | pode depender de pacote P |
+
+## Os dois primeiros (decidido 2026-08-22)
+
+Você recortou a lista: **`stl` e a lib de UI são pacotes de verdade; `core`, `hl`,
+`cv` e `complete` são intrínsecos ao pstudio** e ficam lá.
+
+### `stl` — o pacote zero do lado P
+
+Dez `.ph` **sem nenhum `.p`**: só interface, zero dependência, zero sistema. É o
+caso mais simples que existe **e** o mais exigente ao mesmo tempo, porque todo
+módulo do compilador o usa.
+
+**O preço da migração, medido:** `stl/` é referenciado em **41 lugares** —
+`Makefile`, `reseed.sh`, `tests/verify-all.sh`, `tests/run.sh`, corpora de teste, e
+os `import "../stl/vec.ph"` dentro dos fontes do compilador. Como o import é
+**relativo ao arquivo**, mover a pasta muda os fontes do `selfhost`, o que muda o C
+gerado, o que **obriga a regerar o seed**.
+
+> Conclusão de planejamento: **mover o `stl` e renomear `static`→`private` são as
+> duas migrações que exigem ciclo de seed. Fazer as duas no MESMO ciclo.**
+
+### `pui` — o primeiro pacote pscript, e o mais fácil que podia aparecer
+
+Medido: `lib_pui.psc` tem **1 145 linhas e ZERO `import`** — não depende de
+pacote, de módulo ou do SDL (a métrica de fonte é parâmetro do toolkit, decisão
+112). E **já tem teste**: `pui_test.psc` (125 linhas) contra
+`tests/pstudio/ps_pui.expected` (17 linhas), que roda na suíte.
+
+Ou seja, o primeiro pacote pscript do ecossistema nasce com dependência nenhuma e
+com teste próprio — o melhor caso possível para provar o mecanismo antes de ele
+ter de aguentar algo difícil.
+
+*(Nota: com `core`/`hl`/`cv` ficando no pstudio, o caso pscript→P — o defeito que
+eu medi na 1.5(d) — deixa de ser bloqueio dos dois primeiros pacotes. Ele continua
+sendo bloqueio do **editor**, que é onde ele já dói hoje.)*
+
+## O manifesto (PROPOSTA — os campos ainda não foram decididos)
+
+```json
+{
+  "name": "pui",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "pui.psc",
+  "deps":      { },
+  "system":    { },
+  "toolchain": ">= 0.1.0",
+  "description": "toolkit de interface em pscript: layout, foco, desenho por retângulo"
+}
+```
+
+## Como se importa de um pacote — DECIDIDO (2026-08-22)
+
+**`import <stl/vec.ph>`** — o `<>` procura no caminho de pacotes que o `ppack`
+montou; o `"..."` continua sendo relativo ao arquivo. É a distinção do C, que a
+linguagem **já usa** para header de sistema, e agora o vocabulário fica com três
+formas sem uma ambiguidade:
+
+| forma | significa |
+|---|---|
+| `include <stdio.h>` | header de C do sistema (pré-processado pelo `cc`) |
+| `import <stl/vec.ph>` | módulo de um **pacote** (procurado no caminho) |
+| `import "vizinho.ph"` | módulo **relativo ao arquivo**, como hoje |
+
+E o melhor: **o compilador continua sem saber o que é versão** — ele recebe um
+caminho de busca e procura, exatamente como a fronteira decidida em
+`pbuild/ARQUITETURA.md` manda.
+
+Migração: os 41 `import "../stl/vec.ph"` viram `import <stl/vec.ph>` — no **mesmo
+ciclo de seed** do `static`→`private`.
+
+## O teste vive dentro do pacote — DECIDIDO
+
+`packages/pui/test/` viaja com o pacote, e o `ppack test` roda os testes dos
+pacotes do workspace também. Três consequências:
+
+- **um pacote publicado carrega a prova de que funciona** — e quem instala pode
+  rodá-la na própria máquina, que é algo que nenhum ecossistema grande oferece de
+  verdade;
+- some mais um pedaço das seis listas: hoje o `pui_test.psc` e o
+  `tests/pstudio/ps_pui.expected` são citados à mão em `tests/run.sh`;
+- e o `.expected` é dado do pacote, comparado pelo **nó de veredicto** — o mesmo
+  mecanismo, sem nada novo.

@@ -957,3 +957,194 @@ uma coisa só — rodar aresta — e `executable()` é uma função pscript que 
 arestas. Isso mantém o motor nos 1 546 linhas medidos, deixa o conhecimento de
 toolchain num módulo que se lê e se testa como qualquer outro, e permite (se um
 dia fizer falta) expor a aresta crua como escapatória **sem** mudar mecanismo.
+
+## `static` → `private`: a migração (2026-08-22)
+
+Sua decisão: *"vou substituir a keyword `static` pela keyword `private`, na
+própria linguagem P e pscript. Primeiro deixa como alias, compila, e depois edita
+o código trocando tudo por `private`... e depois remove [o `static`] de vez."*
+*(Li a última frase como remover o `static`, não o `private` — se era o contrário,
+me diga.)*
+
+**Medido, para dimensionar:** `static` aparece **1 965 vezes** nos fontes P/pscript
+(1 685 só em `selfhost/*.p`), mais **20 ocorrências** no corpus de testes e **1**
+mensagem `.expected` que o cita.
+
+**ESTADO OBSERVADO (2026-08-22, no meio desta investigação): a migração JÁ
+COMEÇOU.** O lexer tem `{"private", TK_PRIVATE}` ao lado de `{"static",
+TK_STATIC}` (`selfhost/lexer.p:24`) — o passo do alias —, os fontes estão sendo
+convertidos (`private def`, `private const`; o `main.p` tem 10 `static`
+restantes) e o `bootstrap/` foi regenerado (aparece modificado no git). Ou seja:
+os passos 1 e 2 abaixo já aconteceram, e o que resta é terminar a conversão e
+remover a grafia antiga.
+
+**A sua ordem não é preferência, é obrigatória** — e é a escada que a impõe: o seed
+comitado é o compilador que compila os fontes. Trocar os fontes antes de o seed
+entender `private` quebra o degrau 1. Então:
+
+1. **`private` como alias** de `static` no lexer (uma linha na tabela de
+   palavras-chave — a mesma tabela serve P e pscript);
+2. **regerar o seed**, para que o `bootstrap/` comitado aceite `private`;
+3. **editar os 1 985 sítios** (fontes + testes + a mensagem);
+4. **regerar o seed** outra vez;
+5. **remover `static`** como grafia de privacidade.
+
+**E a troca CONSERTA a sobrecarga, não só renomeia.** Em pscript, `static` quer
+dizer duas coisas: privado (no topo) e **método estático** (dentro de um
+`record`/`struct`). Depois da migração cada palavra tem um sentido só:
+
+| grafia | sentido, depois |
+|---|---|
+| `private def f()` | privado ao módulo (nas duas linguagens) |
+| `static def f()` | **método estático** (só dentro de struct, só pscript) |
+
+**Duas coisas que a migração NÃO afeta**, e vale dizer para ninguém se assustar:
+
+- **o C emitido continua usando `static`** — é a palavra do C, e ali ela é a
+  verdade sobre ligação interna. Muda a linguagem de entrada, não a de saída;
+- **o front end de C não é tocado**: ele tem lexer próprio (`Cx`/`CtKind`, em
+  `cfront.p`), então `static` continua sendo `static` quando a entrada é `.c`/`.i`.
+
+## Saída de comando — DECIDIDA: capturada por padrão, console quando pedido
+
+O padrão é a 1.2 (guarda e despeja inteiro — o que impede a costura de linhas de
+jobs concorrentes, o achado da 107). Uma aresta pode declarar que fala com o
+**terminal**: sem captura e sozinha na vez. É o `console` pool do ninja, sete
+linhas em `queue()`, e é o que `ppack run` e o pstudio precisam — um programa
+gráfico não pode ter a saída represada.
+
+## 1.5(c) — o header de um módulo pscript expõe o LAYOUT
+
+Transparente, como o P já faz: o `.h` gerado carrega os campos e quem importa
+acessa campo direto, sem chamada. Mantém a promessa de desempenho da 52.1
+(`record` é tipo de VALOR) e mantém **uma** regra para as duas linguagens.
+
+O preço, dito agora para não surpreender depois: **o layout entra na interface**,
+então mudar um campo — mesmo um que ninguém de fora usa — muda o hash da API e
+recompila os dependentes. É a fragilidade de ABI que o C tem, e nós a herdamos de
+propósito. A porta de saída existe e é aditiva (marcar um tipo como opaco quando
+a fronteira importar mais que o acesso direto), e não precisa ser decidida hoje.
+
+## Compilação cruzada — DECIDIDA: entra na v1 (2026-08-22)
+
+E ela ficou mais interessante do que eu tinha suposto, porque conferi o QBE:
+`qbe -t ?` lista **seis alvos** — `amd64_sysv` (padrão), `amd64_apple`,
+`amd64_win`, `arm64`, `arm64_apple`, `rv64`. Ou seja, os nossos dois back ends dão
+duas histórias de cruzamento **complementares**:
+
+| caminho | como cruza | o que precisa da máquina-alvo |
+|---|---|---|
+| **C** | manda o C (ou o C89) e compila lá | um `cc` do alvo — e o C é o formato mais portátil que existe |
+| **QBE** | `-t <alvo>` emite o assembly do alvo aqui | um `as` e um `ld` do alvo (cross-binutils) |
+| **QBE + o nosso linker** | idem | só um `as` do alvo |
+| **QBE + linker + assembler nossos** | idem | **nada** |
+
+Isso reordena um argumento que eu tinha dado: eu disse que o linker interno se
+paga em **latência de invocação** (o JIT). Ele se paga mais em **cruzamento** —
+cada peça nossa apaga uma exigência da máquina-alvo, e a última linha da tabela é
+uma linguagem que cruza sem toolchain de terceiro nenhum. A latência é o ganho
+diário; o cruzamento é o ganho estrutural.
+
+O que a v1 tem de fazer, e é pequeno: **o alvo entra na chave de sujeira** (junto
+com `argv`, `env` e o hash do compilador), para que artefato de um alvo nunca seja
+confundido com o de outro. O trabalho de verdade não é o grafo, é o de sempre:
+flags por alvo, `pkg-config` do alvo, e a declaração de dependência de sistema
+(2.7) passando a ser por alvo.
+
+## `ppack test` — DECIDIDO: suítes nomeadas
+
+`ppack test cases modules pscript` — as mesmas oito suítes que o `tests/run.sh`
+tem hoje, declaradas no descritor. É o que o `verify-all` precisa para chamar por
+nome, e o que dá placar por grupo. (O piso de placar — `c-suite>=220`,
+`wacct>=741` — fica como está por ora, no arreio; movê-lo para o descritor é
+aditivo e não precisa de decisão hoje.)
+
+## A pasta de build — DECIDIDA: `build/` com `pkg/ obj/ bin/ log/`
+
+Nome óbvio, visível, fácil de apagar e de ignorar no git. Fica uma migração
+nomeada: este repositório usa **`out/`** hoje (e o `plangc --out-dir` espelha a
+raiz lá dentro, com os `.c` gerados incluindo `"../stl/x.h"` relativo ao próprio
+diretório). O caminho é o descritor passar `--out-dir build/obj` e o `out/`
+sumir — mas isso toca o `Makefile` e os cinco harnesses, então acontece **quando
+o pbuild substituir**, não antes.
+
+## Falha, lock e `verify` — DECIDIDOS (2026-08-22)
+
+**Falha: para na primeira, e `-k N` continua.** É o padrão do ninja e do samurai
+(`maxfail = 1`), e a razão é boa: a primeira mensagem é quase sempre a causa, e as
+seguintes são consequência dela.
+
+Uma suposição que fica escrita porque decorre disso: **`ppack test` roda com `-k`
+por padrão**, porque um placar só significa algo completo — 220/220 não se mede
+parando no primeiro. Se você preferir que teste também pare na primeira, é uma
+linha de política e me diga.
+
+**Lock dessincronizado: o `ppack` atualiza sozinho e mostra o diff** do que
+entrou, saiu ou mudou de hash. É o que o cargo faz e o que menos atrapalha o
+trabalho do dia. (O oposto — `--frozen` como padrão — fica disponível como opção
+para CI, sem ser o comportamento normal.)
+
+**`verify-all` vira um ALVO do descritor: `ppack verify`.** A escada
+`seed → s1 → s2 → out3`, o `diff` byte a byte, o ponto fixo do QBE, os placares
+com piso e os oráculos passam a ser alvos e arestas declaradas — com paralelismo e
+sujeira de graça. E isso é o **critério de pronto da v1** dito de outro jeito: se o
+descritor consegue expressar a escada com ponto fixo, ele consegue expressar
+qualquer build; se não consegue, não está pronto.
+
+## Mais quatro decisões (2026-08-22)
+
+**A stdlib e o runtime vêm COM a toolchain.** A versão do compilador é a versão do
+runtime, e o argumento decisivo é técnico: o `ps_lower.p` emite chamadas para
+funções `ps_*` com assinatura exata — um runtime de outra versão quebra a ABI
+interna. E o hash dos bytes do compilador, que já está na chave de sujeira, cobre
+o runtime de graça. É o modelo Go/Python (a stdlib vem junto), e fecha um laço: um
+pacote nunca declara "runtime >= X", declara **faixa de toolchain** (2.7).
+
+**`--explain` sim; linha de status que se atualiza, não.** O diagnóstico de sujeira
+é o que tem valor técnico ("mais velho que a entrada X", "o comando mudou", "sem
+registro no log" — as mensagens que li no samurai e no ninja); saída rolando é o
+que serve em CI, onde `\r` vira lixo no log.
+
+**`ppack dev`: reconstrói E reinicia o programa.** Não é um build que espera: é o
+laço de edição. O `inotify` (Linux) e o `EVFILT_VNODE` do kqueue (macOS) entram no
+laço de eventos que **já existe** (102) — é fonte de fd nova, não mecanismo novo.
+
+**`ppack build --repro` constrói duas vezes e compara.** O `verify-all` já faz
+isso à mão para o compilador (`diff -rq out2 out3` e o ponto fixo do QBE); virar
+comando é pequeno e passa a valer para qualquer projeto.
+
+E aqui uma medição que essa decisão pedia: **o C que geramos não tem data, nem
+caminho absoluto, nem nada aleatório** — conferido nos 19 módulos. A única
+ocorrência de `__DATE__` no C gerado é o compilador *implementando* o `__DATE__`
+para entrada em C (`sema.c:8623`). O que nos dá o limite exato da promessa:
+**o nosso P e pscript são reprodutíveis por construção; um pacote em C que use
+`__DATE__`/`__TIME__` não é** — e a resposta padrão do mundo para isso
+(`SOURCE_DATE_EPOCH`) é a que devemos adotar quando aparecer.
+
+
+## Um achado da IMPLEMENTAÇÃO da F0 (2026-08-22)
+
+Escrever a resposta 2 mostrou que a 1.5(b) tem **dois consumidores com
+necessidades diferentes**, e que um deles já estava resolvido sem ninguém notar:
+
+**No caminho C, o `restat` já entrega o ganho dos 18 s — sem hash de interface
+nenhum.** O compilador emite `x.h` a partir de `x.ph`; se o `.h` sair
+byte-idêntico, o `restat` do grafo poda os consumidores. E como o lexer descarta
+comentário, editar comentário (ou docstring, quando ela chegar) **não muda o
+`.h`** — logo não recompila ninguém. O mecanismo que a F2 traz por outro motivo
+cobre este caso inteiro.
+
+O que a lista canónica da API entrega, então, é o que o `.h` **não** pode dar:
+
+| consumidor | por que precisa da LISTA e não do `.h` |
+|---|---|
+| `ppack publish` | dizer *o que* mudou entre duas versões (semver com diagnóstico), não só *que* mudou |
+| doc (2.6) | símbolos e assinaturas como dado, para o JSON e para `ppack doc` |
+| caminho **QBE** | ali **não existe header**: a lista é a única noção de interface que sobra |
+| `ppack search` | achar por SÍMBOLO sem baixar o pacote |
+
+E há um limite que ficou escrito no `api.ph` para ninguém supor demais: a lista
+cobre a interface DECLARADA, não o **corpo** de uma função de header (`private
+inline def` num `.ph`, que é a stl inteira). No caminho C isso não é buraco — o
+`.h` carrega o corpo e o `restat` compara o `.h`. É a divisão certa: **a lista é
+para semver e doc; o `.h` é do que a compilação depende.**
