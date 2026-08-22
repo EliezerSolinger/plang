@@ -264,6 +264,15 @@ def cpp_capture_ex(a: *Arena, cpp_cmd: const *char, flags: const *char, path: co
     b.deinit()
     return out
 
+
+# A literal chunk of an f-string goes into the FORMAT, so a `%` in the text has
+# to be doubled or printf would read it as a conversion of its own.
+private def fstr_put_lit(b: *StrBuf, s: const *char, n: usize):
+    for i in range(n):
+        if s[i] == '%':
+            b->putc('%')
+        b->putc(s[i])
+
 struct Sema:
     cc: *Cc
     a: *Arena
@@ -325,6 +334,10 @@ struct Sema:
     loop_depth: i32          # nesting of while/do/for around the current stmt
     sw_depth: i32            # nesting of switch/match (break targets)
     vla_ctr: i32             # --std=c89: counter of hidden VLA pointers (__vlaN)
+    lam_ctr: i32             # 65.4: counter for the lifted lambdas' names
+    lam_pend: **Func         # lifted lambdas whose body is still to check
+    nlam_pend: i32
+    clam_pend: i32
     vla_hoist: **Stmt        # statements to hoist to the function entry (decls + defers)
     vla_nhoist: i32
     vla_choist: i32
@@ -418,6 +431,12 @@ struct Sema:
     private def materialize_temp(self: *Sema, e: *Expr, what: const *char) -> *Expr
     private def ensure_libc_proto(self: *Sema, name: const *char, ret: *Type)
     private def lower_vla_c89(self: *Sema, st: *Stmt) -> bool
+    private def lam_fix(self: *Sema, e: *Expr, want: *Type)
+    private def lam_pre_init(self: *Sema, t: *Type, init: *Expr)
+    private def lam_no_capture(self: *Sema, b: *Expr, lam: *Expr)
+    private def fstr_expand(self: *Sema, e: *Expr)
+    private def fstr_conv(self: *Sema, hole: *Expr, spec: const *char, b: *StrBuf) -> *Expr
+    private def fstr_is_str(self: *Sema, t: *Type) -> bool
     private def fold_predefined(self: *Sema, e: *Expr)
     private def fix_field_op(self: *Sema, e: *Expr)
     private def val_struct(self: *Sema, t: *Type) -> *SInfo
@@ -782,6 +801,10 @@ struct Sema:
         if e == None:
             return None
         match e->kind:
+            case EX_LAMBDA:
+                fatal_at(self->file, e->pos, "a lambda needs a function type from what receives it (65.4/68.7): annotate the variable, the parameter or the return, as in `f: def(i32) -> i32 = lambda x: x * 2`")
+            case EX_FSTRING:
+                fatal_at(self->file, e->pos, "an f-string only works as the format argument of a variadic call (65.2): it is resolved at COMPILE TIME into a format plus arguments, and P has no runtime to build a string with")
             case EX_ASSIGN:
                 return self->type_of(e->lhs)
             case EX_COMPOUND:
@@ -1666,6 +1689,322 @@ struct Sema:
             .nparams = 0
             .sig_empty = True   # signature left open
         self->funcs.put(name, lf)
+
+
+
+
+    # 65.4, one step before the ordinary check: a lambda inside a BRACE list has
+    # its context in the field (or element) it initializes, and the ordinary
+    # walk (`check_init`) runs after `check_expr`, which is too late for a node
+    # that has to disappear first. So the brace list is walked here, against the
+    # declared type, and only to lift lambdas — everything else is left to the
+    # real initializer check.
+    private def lam_pre_init(self: *Sema, t: *Type, init: *Expr):
+        if init == None or t == None:
+            return
+        if init->kind != EX_INITLIST:
+            self->lam_fix(init, t)
+            return
+        si: *SInfo = self->val_struct(t)
+        for i in range(init->nargs):
+            it: *Expr = init->args[i]
+            if it == None:
+                continue
+            if it->kind == EX_DESIG:
+                # `.name = value` / `[i] = value`: the designator names the target
+                if it->field != None and si != None:
+                    for fj in range(si->nfields):
+                        if si->fields[fj].name != None and strcmp(si->fields[fj].name, it->field) == 0:
+                            self->lam_pre_init(si->fields[fj].type, it->lhs)
+                            break
+                elif t->kind == TY_ARRAY:
+                    self->lam_pre_init(t->inner, it->lhs)
+                continue
+            if si != None:
+                if i < si->nfields:
+                    self->lam_pre_init(si->fields[i].type, it)
+            elif t->kind == TY_ARRAY:
+                self->lam_pre_init(t->inner, it)
+
+    # ---------- 65.4: a lambda is a function pointer, lifted ----------
+    # P has no closure and wants none: with no capture a lambda IS a function
+    # pointer, which P already has. So sema gives it a name, moves it to the top
+    # level as `private`, and leaves an identifier behind — and the backends
+    # never learn that a lambda existed.
+    #
+    # `want` is the context (68.7): the type of the parameter, the variable or
+    # the return that receives it. Without one there is nothing to type the
+    # parameters with, and the message says so rather than guessing.
+    private def lam_fix(self: *Sema, e: *Expr, want: *Type):
+        if e == None or e->kind != EX_LAMBDA:
+            return
+        ft: *Type = want
+        if ft != None and ft->kind == TY_PTR:
+            ft = ft->inner
+        if ft == None or ft->kind != TY_FUNC:
+            fatal_at(self->file, e->pos, "the type of this lambda cannot be inferred here: what receives it has to be a function pointer, as in `f: def(i32) -> i32 = lambda x: x * 2`")
+        for i in range(ft->ntargs):
+            if ft->targs[i] != None and ft->targs[i]->kind == TY_NAME and ft->targs[i]->name != None and strcmp(ft->targs[i]->name, "...") == 0:
+                fatal_at(self->file, e->pos, "a lambda cannot be variadic: it has no `va_list` to read, and the context asks for one")
+        if e->nargs != ft->ntargs:
+            fatal_at(self->file, e->pos, "this lambda takes %d parameter(s) and the context wants %d", e->nargs, ft->ntargs)
+        # NO CAPTURE, and this is where it is proved: a name in the body that is
+        # a local of the enclosing function would have to be captured, and P
+        # does not capture. Saying which name it was is the whole point of the
+        # message — the fix is to pass it as a parameter.
+        self->lam_no_capture(e->lhs, e)
+        f: *Func = self->a->alloc(sizeof(Func))
+        f->pos = e->pos
+        f->name = self->a->printf("__lambda_%d", self->lam_ctr)
+        f->cname = f->name
+        self->lam_ctr += 1
+        f->is_static = True
+        f->ret = ft->inner
+        if e->nargs > 0:
+            ps: *Param = self->a->alloc(usize(e->nargs) * sizeof(Param))
+            for i in range(e->nargs):
+                # the arena zeroes, so `dflt` and `byref` are already 0
+                ps[i].name = e->args[i]->text
+                ps[i].type = ft->targs[i]
+                ps[i].pos = e->args[i]->pos
+            f->params = ps
+            f->nparams = e->nargs
+        bd: *Block = self->a->alloc(sizeof(Block))
+        st: *Stmt = self->a->alloc(sizeof(Stmt))
+        st->pos = e->pos
+        if f->ret != None and is_void_val(f->ret):
+            st->kind = ST_EXPR       # `-> void` context: the body is the effect
+            st->expr = e->lhs
+        else:
+            st->kind = ST_RETURN
+            st->expr = e->lhs
+        sts: **Stmt = self->a->alloc(sizeof(*sts))
+        sts[0] = st
+        bd->stmts = sts
+        bd->n = 1
+        f->body = bd
+        self->register_func(f)
+        # the BODY is checked at the end of the pass, not here: check_func_body
+        # resets the per-function `global`/`nonlocal` state, and doing that in
+        # the middle of the enclosing function would lose it
+        self->lam_pend = vec_grow(self->lam_pend, self->nlam_pend, ref self->clam_pend, sizeof(*self->lam_pend))
+        self->lam_pend[self->nlam_pend] = f
+        self->nlam_pend += 1
+        # what is left where the lambda was: its name. A function name in C is
+        # already a pointer to it, so there is nothing to take the address of.
+        with e:
+            .kind = EX_IDENT
+            .text = f->name
+            .lhs = None
+            .args = None
+            .nargs = 0
+
+    # a name in the body that is a LOCAL of the enclosing function would need
+    # capture. The lambda's own parameters shadow, so they are excluded.
+    private def lam_no_capture(self: *Sema, b: *Expr, lam: *Expr):
+        if b == None:
+            return
+        if b->kind == EX_IDENT and b->text != None:
+            own: bool = False
+            for i in range(lam->nargs):
+                if lam->args[i]->text != None and strcmp(lam->args[i]->text, b->text) == 0:
+                    own = True
+                    break
+            if not own and self->sym_index(b->text) >= 0:
+                fatal_at(self->file, b->pos, "a lambda in P captures nothing: '%s' is a local of the enclosing function, so it cannot be read here — pass it as a parameter of the lambda, or use a named function", b->text)
+        self->lam_no_capture(b->lhs, lam)
+        self->lam_no_capture(b->rhs, lam)
+        self->lam_no_capture(b->cond, lam)
+        for i in range(b->nargs):
+            self->lam_no_capture(b->args[i], lam)
+
+    # ---------- 65.2: an f-string is a printf format, resolved here ----------
+    # It is expanded at the CALL because that is the only place where both
+    # halves are known: the callee's signature (is it variadic? is this the
+    # format slot?) and the TYPE of every hole, which is what decides `%ld` over
+    # `%s` over `%p`. That is also why the rule and the implementation are the
+    # same thing — an f-string that is not a variadic call's format has nowhere
+    # to expand into, and says so.
+    private def fstr_expand(self: *Sema, e: *Expr):
+        fi: i32 = -1
+        for i in range(e->nargs):
+            if e->args[i] != None and e->args[i]->kind == EX_FSTRING:
+                if fi >= 0:
+                    fatal_at(self->file, e->args[i]->pos, "two f-strings in one call: only the format argument can be one")
+                fi = i
+        if fi < 0:
+            return
+        fe: *Expr = e->args[fi]
+        if fi != e->nargs - 1:
+            fatal_at(self->file, fe->pos, "an f-string has to be the LAST argument of the call: its holes BECOME the arguments after it")
+        callee: *Expr = e->lhs
+        fn: *Func = None
+        nself: i32 = 0
+        if callee != None and callee->kind == EX_IDENT:
+            fn = self->find_func(callee->text)
+        elif callee != None and callee->kind == EX_FIELD and callee->field != None:
+            # a METHOD can be variadic too — `b.printf(f"{x}")` is the call this
+            # feature is for as much as `printf` is. The receiver occupies the
+            # first parameter, so the format slot moves by one.
+            rt: *Type = self->type_of(callee->lhs)
+            sn: const *char = None
+            if rt != None and rt->kind == TY_NAME:
+                sn = rt->name
+            elif rt != None and rt->kind == TY_PTR and rt->inner != None and rt->inner->kind == TY_NAME:
+                sn = rt->inner->name
+            si: *SInfo = self->find_struct(sn) if sn != None else None
+            if si != None:
+                fn = sinfo_method(si, callee->field)
+                nself = 1
+        if fn == None or not fn->is_varargs:
+            fatal_at(self->file, fe->pos, "an f-string in P only works as the format argument of a variadic function (printf, snprintf, fatal_at...): it is resolved at COMPILE TIME into a format plus arguments, and there is no runtime to build a string with")
+        if fn->nparams != fi + 1 + nself:
+            fatal_at(self->file, fe->pos, "an f-string belongs in the format position of '%s' (argument %d), not in the variadic tail", fn->name, fn->nparams - nself)
+        parts: *FStrParts = fe->fstr
+        b: StrBuf = {0}
+        defer b.deinit()
+        holes: **Expr = self->a->alloc(usize(parts->n + 1) * sizeof(*holes))
+        nh: i32 = 0
+        for i in range(parts->n):
+            fstr_put_lit(&b, parts->lits[i], parts->lit_lens[i])
+            self->check_expr(fe->args[i])
+            holes[nh] = self->fstr_conv(fe->args[i], parts->specs[i], &b)
+            nh += 1
+        fstr_put_lit(&b, parts->lits[parts->n], parts->lit_lens[parts->n])
+        # the format takes the f-string's place and the holes follow it
+        fmt: *Expr = ex_new(self->a, EX_STRING, fe->pos)
+        fmt->text = c_string_literal(self->a, b.data if b.data != None else "", b.len)
+        nargs: **Expr = self->a->alloc(usize(fi + 1 + nh) * sizeof(*nargs))
+        for i in range(fi):
+            nargs[i] = e->args[i]
+        nargs[fi] = fmt
+        for i in range(nh):
+            nargs[fi + 1 + i] = holes[i]
+        e->args = nargs
+        e->nargs = fi + 1 + nh
+
+    # ONE hole: appends its printf conversion to `b` and returns the argument to
+    # pass, wrapped in the cast that makes the conversion exact in both C
+    # standards (`long long`/`%lld` normally, `long`/`%ld` under --std=c89,
+    # where 64-bit integers are the backend's policy and not ours).
+    private def fstr_conv(self: *Sema, hole: *Expr, spec: const *char, b: *StrBuf) -> *Expr:
+        pos: Pos = hole->pos
+        t: *Type = self->type_of(hole)
+        # ---- the spec, in Python's mini-language (45.1), parsed once ----
+        align: char = '\0'
+        zero: bool = False
+        width: i32 = 0
+        prec: i32 = -1
+        ty: char = '\0'
+        k: usize = 0
+        m: usize = strlen(spec)
+        if m > 0 and spec[0] in {'<', '>', '^'}:
+            align = spec[0]
+            k = 1
+        if k < m and spec[k] == '0':
+            zero = True
+            k += 1
+        while k < m and spec[k] >= '0' and spec[k] <= '9':
+            width = width * 10 + i32(spec[k] - '0')
+            k += 1
+        if k < m and spec[k] == '.':
+            k += 1
+            prec = 0
+            while k < m and spec[k] >= '0' and spec[k] <= '9':
+                prec = prec * 10 + i32(spec[k] - '0')
+                k += 1
+        if k < m:
+            ty = spec[k]
+            k += 1
+        if k < m:
+            fatal_at(self->file, pos, "unsupported format spec '%s' (align, zero, width, .precision and one of d/x/X/o/f/e/g/c/s)", spec)
+        if align == '^':
+            fatal_at(self->file, pos, "'^' (centre) has no printf conversion: P's f-string IS a printf format, so only '<' and '>' exist here")
+        if ty == 'b':
+            fatal_at(self->file, pos, "'b' (binary) has no printf conversion: P's f-string IS a printf format")
+        # ---- what the hole IS, which decides the cast and the conversion ----
+        is_str: bool = self->fstr_is_str(t)
+        is_flt: bool = is_float_type(t)
+        is_bool: bool = t != None and t->kind == TY_NAME and t->name != None and t->name in {"bool", "_Bool"}
+        is_ptr: bool = t != None and t->kind == TY_PTR and not is_str
+        is_uns: bool = type_is_unsigned(t)
+        conv: char = '\0'
+        cast: const *char = None
+        arg: *Expr = hole
+        if ty in {'f', 'e', 'g'}:
+            conv = ty; cast = "double"
+        elif ty in {'x', 'X', 'o'}:
+            conv = ty; cast = "unsigned long" if self->cc->std_version == 89 else "unsigned long long"
+        elif ty == 'd':
+            conv = 'd'; cast = "long" if self->cc->std_version == 89 else "long long"
+        elif ty == 'c':
+            conv = 'c'; cast = "int"
+        elif ty == 's':
+            if not is_str:
+                fatal_at(self->file, pos, "'{...:s}' needs a string (`const *char`); this hole is not one, and P has no runtime to turn it into one")
+            conv = 's'
+        elif is_str:
+            conv = 's'
+        elif is_bool:
+            # `True`/`False`, the way both languages print it — a ternary over
+            # two literals, which costs nothing at run time
+            conv = 's'
+            tern: *Expr = ex_new(self->a, EX_TERNARY, pos)
+            tern->cond = hole
+            tern->lhs = ex_new(self->a, EX_STRING, pos)
+            tern->lhs->text = "\"True\""
+            tern->rhs = ex_new(self->a, EX_STRING, pos)
+            tern->rhs->text = "\"False\""
+            tern->parened = True
+            arg = tern
+        elif is_flt:
+            conv = 'g'; cast = "double"
+        elif is_ptr:
+            conv = 'p'
+        elif is_uns:
+            conv = 'u'; cast = "unsigned long" if self->cc->std_version == 89 else "unsigned long long"
+        elif t != None and t->kind == TY_NAME and t->name != None and t->name in {"char", "signed char"}:
+            conv = 'c'; cast = "int"
+        else:
+            conv = 'd'; cast = "long" if self->cc->std_version == 89 else "long long"
+        if is_ptr and ty == '\0':
+            cst: *Expr = ex_new(self->a, EX_CAST, pos)
+            cst->cast_type = ty_ptr(self->a, ty_name(self->a, "void"))
+            cst->lhs = hole
+            arg = cst
+        elif cast != None:
+            cst2: *Expr = ex_new(self->a, EX_CAST, pos)
+            cst2->cast_type = ty_name(self->a, cast)
+            cst2->lhs = hole
+            arg = cst2
+        # ---- and now the conversion itself ----
+        b->putc('%')
+        if align == '<':
+            b->putc('-')
+        if zero:
+            b->putc('0')
+        if width > 0:
+            b->printf("%d", width)
+        if prec >= 0:
+            b->printf(".%d", prec)
+        if cast != None and conv not in {'c', 's', 'p'}:
+            if conv in {'f', 'e', 'g'}:
+                pass                      # double needs no length modifier
+            elif self->cc->std_version == 89:
+                b->putc('l')
+            else:
+                b->puts("ll")
+        b->putc(conv)
+        return arg
+
+    private def fstr_is_str(self: *Sema, t: *Type) -> bool:
+        if t == None:
+            return False
+        if t->kind == TY_PTR and t->inner != None and t->inner->kind == TY_NAME and t->inner->name != None:
+            return t->inner->name in {"char", "signed char"}
+        if t->kind == TY_ARRAY and t->inner != None and t->inner->kind == TY_NAME and t->inner->name != None:
+            return t->inner->name in {"char", "signed char"}
+        return False
 
     private def lower_vla_c89(self: *Sema, st: *Stmt) -> bool:
         if self->cc->std_version != 89 or st->type == None:
@@ -3006,6 +3345,14 @@ struct Sema:
         if e == None:
             return
         match e->kind:
+            case EX_LAMBDA:
+                # a legitimate one never gets here: `lam_fix` replaces it the
+                # moment the context type is known
+                fatal_at(self->file, e->pos, "a lambda needs a function type from what receives it (65.4/68.7): annotate the variable, the parameter or the return, as in `f: def(i32) -> i32 = lambda x: x * 2`")
+            case EX_FSTRING:
+                # a legitimate one never gets here: `fstr_expand` replaces it in
+                # the argument list before any argument is checked
+                fatal_at(self->file, e->pos, "an f-string only works as the format argument of a variadic call (65.2): it is resolved at COMPILE TIME into a format plus arguments, and P has no runtime to build a string with")
             case EX_CALL:
                 self->resolve_gcall(e)   # def foo<T> template call -> foo_int
                 # `ns.f(...)` is a QUALIFIED call, never a method call: resolve
@@ -3017,6 +3364,9 @@ struct Sema:
                 # up — otherwise this reads as an implicit function declaration
                 if callee != None and callee->kind == EX_IDENT and self->find_func(callee->text) == None and self->scope_find(callee->text) == None and self->globals.get_or(callee->text, None) == None:
                     self->macro_alias_rewrite(callee)
+                # 65.2: an f-string argument becomes a format plus arguments
+                # BEFORE anything downstream counts arguments or checks types
+                self->fstr_expand(e)
                 # call to a `const def`: evaluated at compile time and folded to a literal.
                 # Comptime-only: args must be constants, otherwise it's an error.
                 if callee->kind == EX_IDENT:
@@ -3227,6 +3577,7 @@ struct Sema:
                             for i in range(e->nargs):
                                 if i + 1 < mth->nparams:
                                     self->check_byref_kw(e->args[i], mth, i + 1)
+                                    self->lam_fix(e->args[i], mth->params[i + 1].type)   # 65.4
                                 self->check_expr(e->args[i])
                                 args = vec_grow(args, n, ref cn, sizeof(*args))
                                 args[n] = e->args[i]
@@ -3296,6 +3647,7 @@ struct Sema:
                                     if pai >= afn->nparams:
                                         break
                                     self->check_byref_kw(e->args[pai], afn, pai)
+                                    self->lam_fix(e->args[pai], afn->params[pai].type)   # 65.4
                                     self->check_expr(e->args[pai])
                                     self->check_assign_types(e->args[pai]->pos, afn->params[pai].type, self->type_of(e->args[pai]), e->args[pai])
                 prevcal: bool = self->in_callee
@@ -3868,6 +4220,11 @@ struct Sema:
             case ST_VAR:
                 if not self->c_mod:
                     self->deny_c_keyword(st->name, st->pos)
+                # 65.4: `f: def(i32) -> i32 = lambda x: x * 2` — the declared
+                # type IS the context the lambda needs, and inside a brace list
+                # it is the field's
+                if st->type != None and st->init != None:
+                    self->lam_pre_init(st->type, st->init)
                 # same-scope redeclaration: C and P both forbid it (shadowing needs
                 # a NEW block). `extern` after `extern` is a redeclaration — legal.
                 rex: bool = False
@@ -4049,6 +4406,9 @@ struct Sema:
                     self->in_wlhs = True   # `x = ...` / `x += ...`: written, not read
                 self->check_expr(st->lhs)
                 self->in_wlhs = False
+                # 65.4: assigning to something already typed gives the lambda
+                # its context too
+                self->lam_fix(st->rhs, self->type_of(st->lhs))
                 self->check_expr(st->rhs)
                 if wsi >= 0:
                     self->locals[wsi].written = True
@@ -4078,6 +4438,8 @@ struct Sema:
                     self->nn_assign(st->lhs, 0)
                 return
             case ST_EXPR, ST_RETURN:
+                if st->kind == ST_RETURN:
+                    self->lam_fix(st->expr, self->cur_ret)   # 65.4
                 self->check_expr(st->expr)
                 if st->kind == ST_RETURN and st->expr != None and self->cur_ret != None and self->cur_ret->kind == TY_PTR and self->cur_ret->is_ref and not self->in_chdr:
                     if st->expr->kind == EX_NONE:
@@ -6779,6 +7141,7 @@ def sema_run(cc: *Cc, m: *Module):
         s.done.deinit()
         s.later_defs.deinit()
         free(s.locals)
+        free(s.lam_pend)
         free(s.scopes)
 
     j = 0
@@ -6789,6 +7152,44 @@ def sema_run(cc: *Cc, m: *Module):
     s.inject_predefined(cc)
     s.inject_defines(cc, m)
     s.register_module(m, True)
+    # 65.4: the lifted lambdas. Their bodies are checked HERE, after every
+    # ordinary body, because check_func_body resets the per-function
+    # `global`/`nonlocal` state and doing that in the middle of the enclosing
+    # function would lose it. The loop re-reads the count on purpose: a lambda
+    # inside a lambda's body appends while this runs.
+    li: i32 = 0
+    while li < s.nlam_pend:
+        s.check_func_body(s.lam_pend[li])
+        li += 1
+    if s.nlam_pend > 0:
+        # PROTOTYPE first, BODY last. The C this back end emits has no forward
+        # declarations — it prints the module in order — so a lifted lambda has
+        # to be announced before the function that names it and defined after
+        # the globals and structs its body reads. That is exactly what a person
+        # writing this C by hand would do.
+        total: i32 = 2 * s.nlam_pend + m->ndecls
+        nld: **Decl = s.a->alloc(usize(total) * sizeof(*nld))
+        for i in range(s.nlam_pend):
+            pf: *Func = s.a->alloc(sizeof(Func))
+            *pf = *s.lam_pend[i]
+            pf->body = None
+            pdc: *Decl = s.a->alloc(sizeof(Decl))
+            pdc->kind = DL_FUNC
+            pdc->pos = pf->pos
+            pdc->func = pf
+            pdc->name = pf->name
+            nld[i] = pdc
+        for j in range(m->ndecls):
+            nld[s.nlam_pend + j] = m->decls[j]
+        for i in range(s.nlam_pend):
+            ldc: *Decl = s.a->alloc(sizeof(Decl))
+            ldc->kind = DL_FUNC
+            ldc->pos = s.lam_pend[i]->pos
+            ldc->func = s.lam_pend[i]
+            ldc->name = s.lam_pend[i]->name
+            nld[s.nlam_pend + m->ndecls + i] = ldc
+        m->decls = nld
+        m->ndecls = total
     # C module under --std=c89 whose VLAs were lowered to malloc/free: the
     # round-tripped C has no #include, and C89's implicit declaration would
     # TRUNCATE malloc's pointer return on LP64 — inject the two prototypes.

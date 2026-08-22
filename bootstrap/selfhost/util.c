@@ -297,11 +297,119 @@ void cdiag_at(const char *file, Pos pos, const char *group, int32_t wdef, const 
     g_warn_count += 1;
 }
 
+char **g_deps = NULL;
+
+int32_t g_ndeps = 0;
+
+int32_t g_deps_cap = 0;
+
+int g_deps_on = 0;
+
+void deps_enable(void) {
+    g_deps_on = 1;
+}
+
+static void path_norm_into(char *dst, const char *src) {
+    size_t cstart[256];
+    size_t clen[256];
+    int32_t nc = 0;
+    int isabs = src[0] == '/';
+    size_t i = 0;
+    while (src[i] != '\0') {
+        while (src[i] == '/') {
+            i += 1;
+        }
+        if (src[i] == '\0') {
+            break;
+        }
+        size_t j = i;
+        while (src[j] != '\0' && src[j] != '/') {
+            j += 1;
+        }
+        size_t l = j - i;
+        if (l == 1 && src[i] == '.') {
+            ;
+        } else if (l == 2 && src[i] == '.' && src[i + 1] == '.') {
+            int up = 0;
+            if (nc > 0) {
+                size_t pi = cstart[nc - 1];
+                if (!(clen[nc - 1] == 2 && src[pi] == '.' && src[pi + 1] == '.')) {
+                    up = 1;
+                }
+            }
+            if (up) {
+                nc -= 1;
+            } else if (!isabs && nc < 256) {
+                cstart[nc] = i;
+                clen[nc] = l;
+                nc += 1;
+            }
+        } else if (nc < 256) {
+            cstart[nc] = i;
+            clen[nc] = l;
+            nc += 1;
+        }
+        i = j;
+    }
+    size_t n = 0;
+    if (isabs) {
+        dst[0] = '/';
+        n = 1;
+    }
+    size_t k;
+    for (k = 0; k < nc; k += 1) {
+        if (k > 0) {
+            dst[n] = '/';
+            n += 1;
+        }
+        memcpy(dst + n, src + cstart[k], clen[k]);
+        n += clen[k];
+    }
+    if (n == 0) {
+        dst[0] = '.';
+        n = 1;
+    }
+    dst[n] = '\0';
+}
+
+void deps_add(const char *path) {
+    if (!g_deps_on || path == NULL) {
+        return;
+    }
+    char *norm = malloc(strlen(path) + 2);
+    path_norm_into(norm, path);
+    size_t i;
+    for (i = 0; i < g_ndeps; i += 1) {
+        if (strcmp(g_deps[i], norm) == 0) {
+            free(norm);
+            return;
+        }
+    }
+    if (g_ndeps == g_deps_cap) {
+        g_deps_cap = (g_deps_cap == 0 ? 32 : g_deps_cap * 2);
+        g_deps = realloc(g_deps, (size_t)g_deps_cap * sizeof(*g_deps));
+        if (g_deps == NULL) {
+            fatal("out of memory");
+        }
+    }
+    g_deps[g_ndeps] = norm;
+    g_ndeps += 1;
+}
+
+int32_t deps_count(void) {
+    return g_ndeps;
+}
+
+const char *deps_get(int32_t i) {
+    return g_deps[i];
+}
+
 char *read_entire_file(const char *path, size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (f == NULL) {
         fatal("could not open '%s'", path);
     }
+    deps_add(path);
     char *__defer_ret0 = read_open_file(f, path, out_len);
     {
         fclose(f);
@@ -315,6 +423,7 @@ char *read_entire_file_opt(const char *path, size_t *out_len) {
         *out_len = 0;
         return NULL;
     }
+    deps_add(path);
     char *__defer_ret1 = read_open_file(f, path, out_len);
     {
         fclose(f);

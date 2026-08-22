@@ -130,9 +130,9 @@ void Vec_Token_deinit(Vec_Token *self) {
 
 typedef enum { MAX_INDENT = 64 } LxLimit;
 
-static const Keyword P_KEYWORDS[36] = {{"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF}, {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE}, {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO}, {"match", TK_MATCH}, {"case", TK_CASE}, {"break", TK_BREAK}, {"continue", TK_CONTINUE}, {"goto", TK_GOTO}, {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION}, {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR}, {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE}, {"None", TK_NONE}, {"static", TK_STATIC}, {"private", TK_PRIVATE}, {"inline", TK_INLINE}, {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT}, {"defer", TK_DEFER}, {"with", TK_WITH}, {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT}, {NULL, TK_EOF}};
+static const Keyword P_KEYWORDS[37] = {{"def", TK_DEF}, {"return", TK_RETURN}, {"if", TK_IF}, {"elif", TK_ELIF}, {"else", TK_ELSE}, {"while", TK_WHILE}, {"for", TK_FOR}, {"in", TK_IN}, {"do", TK_DO}, {"match", TK_MATCH}, {"case", TK_CASE}, {"break", TK_BREAK}, {"continue", TK_CONTINUE}, {"goto", TK_GOTO}, {"const", TK_CONST}, {"struct", TK_STRUCT}, {"enum", TK_ENUM}, {"union", TK_UNION}, {"import", TK_IMPORT}, {"and", TK_AND}, {"or", TK_OR}, {"not", TK_NOT}, {"True", TK_TRUE}, {"False", TK_FALSE}, {"None", TK_NONE}, {"static", TK_STATIC}, {"private", TK_PRIVATE}, {"inline", TK_INLINE}, {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT}, {"defer", TK_DEFER}, {"with", TK_WITH}, {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT}, {"lambda", TK_LAMBDA}, {NULL, TK_EOF}};
 
-static const LexSpec P_LEXSPEC = {P_KEYWORDS, 0, 0, 0};
+static const LexSpec P_LEXSPEC = {P_KEYWORDS, 1, 0, 0};
 
 const char *spell_tok(Token *t) {
     if (t->text != NULL) {

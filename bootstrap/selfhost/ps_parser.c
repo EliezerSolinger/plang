@@ -1601,6 +1601,8 @@ static PsType *PsP_parse_type(PsP *self) {
             t = ps_type(self->a, PT_BUFFER, pos);
         } else if (strcmp(name, "socket") == 0) {
             t = ps_type(self->a, PT_CONN, pos);
+        } else if (strcmp(name, "proc") == 0) {
+            t = ps_type(self->a, PT_PROC, pos);
         } else if (strcmp(name, "list") == 0) {
             t = ps_type(self->a, PT_LIST, pos);
             PsP_expect(self, TK_LT, "list<T>");

@@ -665,6 +665,14 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             fatal("internal: EX_IN reached the C backend unlowered");
             break;
         }
+        case EX_FSTRING: {
+            fatal("internal: EX_FSTRING reached the C backend unexpanded");
+            break;
+        }
+        case EX_LAMBDA: {
+            fatal("internal: EX_LAMBDA reached the C backend unlifted");
+            break;
+        }
     }
     if (paren) {
         StrBuf_putc(b, ')');

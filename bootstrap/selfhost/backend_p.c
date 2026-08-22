@@ -358,12 +358,24 @@ void p_expr(StrBuf *b, Expr *e, int32_t min_prec) {
         case EX_IDENT:
         case EX_NUMBER:
         case EX_STRING:
-        case EX_CHARLIT: {
+        case EX_CHARLIT:
+        case EX_FSTRING: {
             if (e->kind == EX_STRING && e->embed_path != NULL) {
                 StrBuf_printf(b, "%s(%s)", (e->embed_bin ? "embed_bytes" : "embed"), e->embed_path);
             } else {
                 StrBuf_puts(b, (e->text != NULL ? e->text : "\?"));
             }
+            break;
+        }
+        case EX_LAMBDA: {
+            StrBuf_puts(b, "lambda");
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                StrBuf_puts(b, (i == 0 ? " " : ", "));
+                StrBuf_puts(b, e->args[i]->text);
+            }
+            StrBuf_puts(b, ": ");
+            p_expr(b, e->lhs, PP_LOW);
             break;
         }
         case EX_TRUE: {

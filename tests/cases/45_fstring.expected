@@ -1,0 +1,11 @@
+hello world, n=42, big=9007199254740993, u=18446744073709551615, small=200
+pi=3.142 g=1.50 pad=[   42] left=[42   ] zero=00042
+hex=2a HEX=2A oct=52 dec=42
+bool=True/False char=Z
+pct=100% braces={literal}
+expr=85 field=7 deref=w call=5
+ptr_printed=1
+plain
+method who=world n=42
+method again
+said=2

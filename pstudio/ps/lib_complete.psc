@@ -48,7 +48,7 @@ struct CVar:
 # último. Uma cadeia `const` e não uma lista, porque um módulo IMPORTADO é um
 # conjunto de definições e não um programa — ele não tem onde rodar um literal
 # de lista (o `split` acontece na chamada, uma vez por índice construído).
-const KEYWORDS: str = "def return if elif else while for in do match case break continue goto const struct enum union import include and or not True False None static inline extern volatile restrict defer with out ref is pass global nonlocal declare implement sizeof range i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool char void usize isize"
+const KEYWORDS: str = "def return if elif else while for in do match case break continue goto const struct enum union import include and or not True False None private static lambda inline extern volatile restrict defer with out ref is pass global nonlocal declare implement sizeof range i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool char void usize isize"
 
 
 # o texto de um token: fatiado do próprio arquivo pela posição, porque cadeia

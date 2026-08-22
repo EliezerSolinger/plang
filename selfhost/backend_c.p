@@ -561,6 +561,14 @@ private def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
         case EX_IN:
             # sema lowers `x in y` to an ==/strcmp or-chain
             fatal("internal: EX_IN reached the C backend unlowered")
+        case EX_FSTRING:
+            # sema expands the f-string at the call (65.2) into a format literal
+            # plus the hole expressions
+            fatal("internal: EX_FSTRING reached the C backend unexpanded")
+        case EX_LAMBDA:
+            # sema lifts the lambda (65.4) to a private top-level function and
+            # leaves its name in place
+            fatal("internal: EX_LAMBDA reached the C backend unlifted")
     if paren:
         b->putc(')')
 

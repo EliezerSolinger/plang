@@ -683,6 +683,9 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         case PT_CONN: {
             return ty_ptr(self->a, ty_name(self->a, "PsConn"));
         }
+        case PT_PROC: {
+            return ty_ptr(self->a, ty_name(self->a, "PsProc"));
+        }
         case PT_BUFFER: {
             return ty_ptr(self->a, ty_name(self->a, "PsBuffer"));
         }
@@ -3160,6 +3163,12 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         }
         return bc;
     }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_PROC) {
+        const char *pmn = e->lhs->text;
+        Expr *pc7 = PsLow_call_rt(self, (strcmp(pmn, "status") == 0 ? "ps_proc_status" : "ps_proc_output"), e->pos);
+        PsLow_push_arg(self, pc7, PsLow_expr(self, e->lhs->lhs));
+        return pc7;
+    }
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_CONN) {
         const char *cmn = e->lhs->text;
         Expr *cc7 = NULL;
@@ -3913,6 +3922,35 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strncmp(name, "__os_", 5) == 0 || strncmp(name, "__path_", 7) == 0) {
         int isos0 = strncmp(name, "__os_", 5) == 0;
         const char *of0 = name + (isos0 ? 5 : 7);
+        if (isos0 && strcmp(of0, "run") == 0) {
+            Expr *rc0 = PsLow_call_rt(self, "ps_os_run", e->pos);
+            PsLow_push_arg(self, rc0, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, rc0, PsLow_expr(self, e->args[0]));
+            Expr *renv = NULL;
+            Expr *rcwd = NULL;
+            Expr *rout = NULL;
+            size_t ri0;
+            for (ri0 = 1; ri0 < e->nargs; ri0 += 1) {
+                PsExpr *ra0 = e->args[ri0];
+                if (strcmp(ra0->text, "env") == 0) {
+                    renv = PsLow_expr(self, ra0->lhs);
+                } else if (strcmp(ra0->text, "cwd") == 0) {
+                    rcwd = PsLow_expr(self, ra0->lhs);
+                } else {
+                    rout = PsLow_expr(self, ra0->lhs);
+                }
+            }
+            PsLow_push_arg(self, rc0, (renv != NULL ? renv : ex_new(self->a, EX_NONE, e->pos)));
+            PsLow_push_arg(self, rc0, (rcwd != NULL ? rcwd : ex_new(self->a, EX_NONE, e->pos)));
+            PsLow_push_arg(self, rc0, (rout != NULL ? rout : ex_new(self->a, EX_NONE, e->pos)));
+            PsLow_pos_args(self, rc0, e->pos);
+            self->allocs = 1;
+            self->raised = 1;
+            return rc0;
+        }
+        if (isos0 && strcmp(of0, "nproc") == 0) {
+            return PsLow_call_rt(self, "ps_os_nproc", e->pos);
+        }
         if (strcmp(of0, "join") == 0) {
             Expr *acc = PsLow_expr(self, e->args[0]);
             size_t i;
@@ -10022,7 +10060,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_STR || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_STR || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

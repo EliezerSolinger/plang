@@ -263,7 +263,7 @@ def p_expr(b: *StrBuf, e: *Expr, min_prec: i32):
     if paren:
         b->putc('(')
     match e->kind:
-        case EX_IDENT, EX_NUMBER, EX_STRING, EX_CHARLIT:
+        case EX_IDENT, EX_NUMBER, EX_STRING, EX_CHARLIT, EX_FSTRING:
             # an expanded embed prints as the CALL again, not as the file it
             # pulled in: the P this back end emits is source, and source that
             # inlines a megabyte of data is not source anyone can read
@@ -271,6 +271,15 @@ def p_expr(b: *StrBuf, e: *Expr, min_prec: i32):
                 b->printf("%s(%s)", "embed_bytes" if e->embed_bin else "embed", e->embed_path)
             else:
                 b->puts(e->text if e->text != None else "?")
+        case EX_LAMBDA:
+            # printed back as source: sema is what turns it into a function, and
+            # this back end runs BEFORE sema on purpose (pre_sema)
+            b->puts("lambda")
+            for i in range(e->nargs):
+                b->puts(" " if i == 0 else ", ")
+                b->puts(e->args[i]->text)
+            b->puts(": ")
+            p_expr(b, e->lhs, PP_LOW)
         case EX_TRUE:
             b->puts("True")
         case EX_FALSE:

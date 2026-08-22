@@ -80,6 +80,14 @@ char *read_entire_file(const char *path, size_t *out_len);
 
 char *read_entire_file_opt(const char *path, size_t *out_len);
 
+void deps_enable(void);
+
+void deps_add(const char *path);
+
+int32_t deps_count(void);
+
+const char *deps_get(int32_t i);
+
 const char *plang_host_os(void);
 
 const char *path_dir(Arena *a, const char *path);

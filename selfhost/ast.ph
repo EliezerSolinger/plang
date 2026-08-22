@@ -145,7 +145,8 @@ enum TypeKind:
     TY_NAME = 0
     TY_PTR
     TY_ARRAY
-    TY_FUNC    # function type (C): inner = return type; params ignored
+    TY_FUNC    # function type: inner = return type, targs = PARAMETER types
+               #   (a `...` tail is the sentinel TY_NAME "...")
 
 # how a TY_NAME was SPELLED in C source: `struct X` / `union X` / `enum X`.
 # C keeps tags in their own namespace, so the C backend must reproduce the
@@ -208,6 +209,19 @@ enum ExprKind:
                  #   LOWERS it to ==/strcmp or-chains — backends never see it.
                  #   lhs=needle, rhs=haystack ({...} list, string literal or
                  #   fixed array); op=TK_NOT when negated
+    EX_LAMBDA    # `lambda a, b: expr` (P, 65.4): a function VALUE with no
+                 #   capture — so it is a plain function pointer and costs
+                 #   nothing. `args` holds the parameter names as EX_IDENT and
+                 #   `lhs` the body expression; the TYPES come from the context
+                 #   (68.7), and sema LIFTS it to a private top-level function,
+                 #   so the backends never see one.
+    EX_FSTRING   # f"a{x}b" (P, 65.2): resolved ENTIRELY at compile time into a
+                 #   printf format plus the hole expressions, so it is only
+                 #   valid as the format argument of a variadic call. `fstr`
+                 #   holds the literal chunks and the specs, `args` the holes.
+                 #   Sema expands it at the CALL — where the callee's signature
+                 #   and each hole's type are known — and the backends never see
+                 #   one.
 
 struct Expr:
     kind: ExprKind
@@ -234,6 +248,8 @@ struct Expr:
     # of the file's contents. None on every other string.
     embed_path: const *char
     embed_bin: bool       # came from embed_bytes(): size the array WITHOUT the NUL
+    fstr: *FStrParts      # EX_FSTRING: the literal chunks and the per-hole
+                          #   specs (the holes themselves are in `args`)
 
 # ---------- statements ----------
 struct Block:

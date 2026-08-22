@@ -19,6 +19,8 @@ static int is_assign_op(TokKind k) {
     return k == TK_ASSIGN || k == TK_PLUS_EQ || k == TK_MINUS_EQ || k == TK_STAR_EQ || k == TK_SLASH_EQ || k == TK_PERCENT_EQ || k == TK_AMP_EQ || k == TK_PIPE_EQ || k == TK_CARET_EQ || k == TK_SHL_EQ || k == TK_SHR_EQ;
 }
 
+static void retag(Expr *e, Pos pos);
+
 typedef struct P P;
 
 struct P {
@@ -63,6 +65,8 @@ static Expr *P_bin(P *self, int32_t op, Pos pos, Expr *l, Expr *r);
 static Expr *P_parse_stmtexpr(P *self);
 
 static Expr *P_parse_primary(P *self);
+
+static Expr *P_fstring(P *self, const char *spelling, Pos pos);
 
 static Expr *P_parse_postfix(P *self);
 
@@ -347,13 +351,13 @@ static Type *P_parse_type(P *self) {
         }
         t = ty_name(self->a, name);
         {
-            Type *__with_282_13 = t;
-            __with_282_13->is_const = is_const;
-            __with_282_13->is_volatile = is_volatile;
-            __with_282_13->is_restrict = is_restrict;
-            __with_282_13->ns_qual = ns_qual;
-            __with_282_13->targs = targs.data;
-            __with_282_13->ntargs = targs.len;
+            Type *__with_285_13 = t;
+            __with_285_13->is_const = is_const;
+            __with_285_13->is_volatile = is_volatile;
+            __with_285_13->is_restrict = is_restrict;
+            __with_285_13->ns_qual = ns_qual;
+            __with_285_13->targs = targs.data;
+            __with_285_13->ntargs = targs.len;
         }
     }
     int32_t k;
@@ -417,6 +421,37 @@ static Expr *P_parse_stmtexpr(P *self) {
     return e;
 }
 
+static Expr *P_fstring(P *self, const char *spelling, Pos pos) {
+    size_t n = 0;
+    char *body = str_lit_decode(self->a, spelling, &n);
+    FStrParts parts = fstr_split(self->a, body, n, self->file, pos);
+    Expr *e = ex_new(self->a, EX_FSTRING, pos);
+    e->fstr = Arena_alloc(self->a, sizeof(FStrParts));
+    *e->fstr = parts;
+    e->text = spelling;
+    if (parts.n > 0) {
+        e->args = Arena_alloc(self->a, (size_t)parts.n * sizeof(*e->args));
+        e->nargs = parts.n;
+    }
+    size_t i;
+    for (i = 0; i < parts.n; i += 1) {
+        const char *ht = parts.holes[i];
+        if (ht[0] == '\0') {
+            fatal_at(self->file, pos, "an empty '{}' in an f-string: write the expression inside the braces");
+        }
+        TokenList tl = lex(self->file, ht, strlen(ht), self->a);
+        P sub = {tl.toks, tl.n, 0, self->file, self->a};
+        sub.nsv = self->nsv;
+        Expr *inner = P_parse_expr(&sub);
+        retag(inner, pos);
+        if (!P_at(&sub, TK_NEWLINE) && !P_at(&sub, TK_EOF)) {
+            fatal_at(self->file, pos, "trailing text in an f-string hole: '%s'", ht);
+        }
+        e->args[i] = inner;
+    }
+    return e;
+}
+
 static Expr *P_parse_primary(P *self) {
     Token *t = P_pk(self);
     Expr *e;
@@ -455,6 +490,29 @@ static Expr *P_parse_primary(P *self) {
             e = ex_new(self->a, EX_CHARLIT, t->pos);
             e->text = P_adv(self)->text;
             return e;
+        }
+        case TK_FSTRING: {
+            P_adv(self);
+            return P_fstring(self, t->text, t->pos);
+        }
+        case TK_LAMBDA: {
+            P_adv(self);
+            Expr *lam = ex_new(self->a, EX_LAMBDA, t->pos);
+            Vec_pExpr lps;
+            Vec_pExpr_init(&lps);
+            if (!P_at(self, TK_COLON)) {
+                do {
+                    Token *lnm = P_expect(self, TK_IDENT, "lambda parameter name");
+                    Expr *pid = ex_new(self->a, EX_IDENT, lnm->pos);
+                    pid->text = lnm->text;
+                    Vec_pExpr_push(&lps, pid);
+                } while (P_accept(self, TK_COMMA));
+            }
+            P_expect(self, TK_COLON, "lambda");
+            lam->args = lps.data;
+            lam->nargs = lps.len;
+            lam->lhs = P_parse_ternary(self);
+            return lam;
         }
         case TK_TRUE: {
             P_adv(self);
@@ -1286,16 +1344,16 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
     }
     Func *f = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1116_9 = f;
-        __with_1116_9->pos = pos;
-        __with_1116_9->name = name->text;
-        __with_1116_9->owner = owner;
-        __with_1116_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
-        __with_1116_9->is_static = is_static;
-        __with_1116_9->is_inline = is_inline;
-        __with_1116_9->tparams = ftparams.data;
-        __with_1116_9->tbounds = ftbounds.data;
-        __with_1116_9->ntparams = ftparams.len;
+        Func *__with_1174_9 = f;
+        __with_1174_9->pos = pos;
+        __with_1174_9->name = name->text;
+        __with_1174_9->owner = owner;
+        __with_1174_9->cname = (owner != NULL ? Arena_printf(self->a, "%s_%s", owner, name->text) : name->text);
+        __with_1174_9->is_static = is_static;
+        __with_1174_9->is_inline = is_inline;
+        __with_1174_9->tparams = ftparams.data;
+        __with_1174_9->tbounds = ftbounds.data;
+        __with_1174_9->ntparams = ftparams.len;
     }
     P_expect(self, TK_LPAREN, "function parameters");
     Vec_Param params;
@@ -1429,13 +1487,13 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     }
     P_expect(self, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1244_9 = d;
-        __with_1244_9->fields = fields.data;
-        __with_1244_9->nfields = fields.len;
-        __with_1244_9->methods = methods.data;
-        __with_1244_9->nmethods = methods.len;
-        __with_1244_9->tparams = tparams.data;
-        __with_1244_9->ntparams = tparams.len;
+        Decl *__with_1302_9 = d;
+        __with_1302_9->fields = fields.data;
+        __with_1302_9->nfields = fields.len;
+        __with_1302_9->methods = methods.data;
+        __with_1302_9->nmethods = methods.len;
+        __with_1302_9->tparams = tparams.data;
+        __with_1302_9->ntparams = tparams.len;
     }
     return d;
 }
@@ -1721,18 +1779,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1526_17 = d2;
-                __with_1526_17->kind = DL_VAR;
-                __with_1526_17->pos = name->pos;
-                __with_1526_17->name = name->text;
-                __with_1526_17->is_const = is_const;
-                __with_1526_17->is_extern = is_extern;
+                Decl *__with_1584_17 = d2;
+                __with_1584_17->kind = DL_VAR;
+                __with_1584_17->pos = name->pos;
+                __with_1584_17->name = name->text;
+                __with_1584_17->is_const = is_const;
+                __with_1584_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1526_17->type = P_parse_type(self);
+                    __with_1584_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1526_17->init = P_parse_initializer(self);
-                } else if (__with_1526_17->type == NULL) {
+                    __with_1584_17->init = P_parse_initializer(self);
+                } else if (__with_1584_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");
@@ -1901,6 +1959,20 @@ static void parse_const_if_top(P *self, Vec_pDecl *into, const char *file) {
     if (P_at(self, TK_ELSE)) {
         P_adv(self);
         pre_block(self, into, !taken);
+    }
+}
+
+static void retag(Expr *e, Pos pos) {
+    if (e == NULL) {
+        return;
+    }
+    e->pos = pos;
+    retag(e->lhs, pos);
+    retag(e->rhs, pos);
+    retag(e->cond, pos);
+    size_t i;
+    for (i = 0; i < e->nargs; i += 1) {
+        retag(e->args[i], pos);
     }
 }
 

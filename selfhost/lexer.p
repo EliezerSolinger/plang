@@ -26,11 +26,13 @@ private const P_KEYWORDS: Keyword[] = {
     {"extern", TK_EXTERN}, {"volatile", TK_VOLATILE}, {"restrict", TK_RESTRICT},
     {"defer", TK_DEFER}, {"with", TK_WITH},
     {"declare", TK_DECLARE}, {"implement", TK_IMPLEMENT},
+    {"lambda", TK_LAMBDA},
     {None, TK_EOF}}
 
-# P reads plain strings and plain operators: no interpolation prefix, no triple
-# quote, and `?`/`@`/`**`/`//` are not operators at all.
-private P_LEXSPEC: const LexSpec = {P_KEYWORDS, False, False, False}
+# P reads f-strings (65.2: resolved entirely at compile time, in the argument of
+# a variadic call) but not triple quotes, and `?`/`@`/`**`/`//` are not operators
+# at all — the one `?` spelling P has is the coalesce pair, in the table below.
+private P_LEXSPEC: const LexSpec = {P_KEYWORDS, True, False, False}
 
 # reconstructs a `<...>` header path from tokens. `include` is a CONTEXTUAL
 # word in both languages, not a keyword, so the lexer cannot special-case `<h>`

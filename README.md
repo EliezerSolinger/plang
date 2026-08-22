@@ -155,6 +155,17 @@ Plang keeps C's memory model and ABI but adds the ergonomics C never had —
   memcpy, to write to disk, and to compare by content.
 - **`embed("f.txt")` / `embed_bytes("f.bin")`** — a file becomes data at
   compile time (a `private const` array), so a program ships as one binary.
+- **f-strings resolved at compile time** — `printf(f"n={n} hex={n:x}\n")`
+  becomes `printf("n=%lld hex=%llx\n", (long long)n, (unsigned long long)n)`.
+  The hole's TYPE picks the conversion and the spec is Python's, transliterated
+  onto printf's own. It is valid only as the format argument of a variadic
+  function (a method counts), because that is the only place where there is
+  something for it to become — there is no runtime to build a string with.
+- **Lambdas without capture** — `apply(xs, n, lambda v: v + 10)`. With nothing
+  to capture, a lambda IS a function pointer: the compiler lifts it to a
+  `private` top-level function and passes its name. The types come from the
+  context (the declared variable, parameter, assignment, return or field), and
+  reading a local of the enclosing function is an error that names the local.
 - **`in` / `not in`**, string `==` by content (`strcmp`; identity is `is`),
   and `match` on strings.
 - **Default and named arguments**, resolved at compile time.

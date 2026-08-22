@@ -19,6 +19,8 @@ private def is_type_base_word(s: const *char) -> bool:
 private def is_assign_op(k: TokKind) -> bool:
     return k in {TK_ASSIGN, TK_PLUS_EQ, TK_MINUS_EQ, TK_STAR_EQ, TK_SLASH_EQ, TK_PERCENT_EQ, TK_AMP_EQ, TK_PIPE_EQ, TK_CARET_EQ, TK_SHL_EQ, TK_SHR_EQ}
 
+private def retag(e: *Expr, pos: Pos)
+
 struct P:
     t: *Token
     n: usize
@@ -48,6 +50,7 @@ struct P:
     private def bin(self: *P, op: i32, pos: Pos, l: *Expr, r: *Expr) -> *Expr
     private def parse_stmtexpr(self: *P) -> *Expr
     private def parse_primary(self: *P) -> *Expr
+    private def fstring(self: *P, spelling: const *char, pos: Pos) -> *Expr
     private def parse_postfix(self: *P) -> *Expr
     private def try_paren_cast(self: *P) -> *Expr
     private def parse_unary(self: *P) -> *Expr
@@ -345,6 +348,37 @@ struct P:
         e->lhs = val
         return e
 
+    # 65.2 — an f-string in P is resolved ENTIRELY at compile time. The parser
+    # only splits it and parses the holes with P's own expression parser; sema
+    # turns the pieces into a printf format, because choosing `%lld` over `%d`
+    # over `%s` needs the TYPE of each hole, which only sema knows.
+    private def fstring(self: *P, spelling: const *char, pos: Pos) -> *Expr:
+        n: usize = 0
+        body: *char = str_lit_decode(self->a, spelling, out n)
+        parts: FStrParts = fstr_split(self->a, body, n, self->file, pos)
+        e: *Expr = ex_new(self->a, EX_FSTRING, pos)
+        e->fstr = self->a->alloc(sizeof(FStrParts))
+        *e->fstr = parts
+        e->text = spelling   # the spelling, so the P backend can print it back
+        if parts.n > 0:
+            e->args = self->a->alloc(usize(parts.n) * sizeof(*e->args))
+            e->nargs = parts.n
+        for i in range(parts.n):
+            ht: const *char = parts.holes[i]
+            if ht[0] == '\0':
+                fatal_at(self->file, pos, "an empty '{}' in an f-string: write the expression inside the braces")
+            tl: TokenList = lex(self->file, ht, strlen(ht), self->a)
+            sub: P = {tl.toks, tl.n, 0, self->file, self->a}
+            sub.nsv = self->nsv          # `ns.Type` has to keep working in a hole
+            inner: *Expr = sub.parse_expr()
+            # the hole was lexed on its own, so its positions start at line 1;
+            # they all get the f-string's, which is where the reader looks
+            retag(inner, pos)
+            if not sub.at(TK_NEWLINE) and not sub.at(TK_EOF):
+                fatal_at(self->file, pos, "trailing text in an f-string hole: '%s'", ht)
+            e->args[i] = inner
+        return e
+
     private def parse_primary(self: *P) -> *Expr:
         t: *Token = self->pk()
         e: *Expr
@@ -379,6 +413,30 @@ struct P:
                 e = ex_new(self->a, EX_CHARLIT, t->pos)
                 e->text = self->adv()->text
                 return e
+            case TK_FSTRING:
+                self->adv()
+                return self->fstring(t->text, t->pos)
+            case TK_LAMBDA:
+                # `lambda a, b: expr` — no annotation, because the TYPES come
+                # from what receives it (68.7, the same rule as pscript). The
+                # body is one expression and stops at a comma, so it reads
+                # naturally inside an argument list.
+                self->adv()
+                lam: *Expr = ex_new(self->a, EX_LAMBDA, t->pos)
+                lps: Vec<*Expr>
+                lps.init()
+                if not self->at(TK_COLON):
+                    do:
+                        lnm: *Token = self->expect(TK_IDENT, "lambda parameter name")
+                        pid: *Expr = ex_new(self->a, EX_IDENT, lnm->pos)
+                        pid->text = lnm->text
+                        lps.push(pid)
+                    while self->accept(TK_COMMA)
+                self->expect(TK_COLON, "lambda")
+                lam->args = lps.data
+                lam->nargs = lps.len
+                lam->lhs = self->parse_ternary()
+                return lam
             case TK_TRUE:
                 self->adv()
                 return ex_new(self->a, EX_TRUE, t->pos)
@@ -1691,6 +1749,18 @@ private def parse_const_if_top(self: *P, into: *Vec<*Decl>, file: const *char):
     if self->at(TK_ELSE):
         self->adv()
         pre_block(self, into, not taken)
+
+# every node born inside an f-string hole answers for the f-string's position:
+# the hole was lexed on its own, so its own line/column mean nothing to a reader
+private def retag(e: *Expr, pos: Pos):
+    if e == None:
+        return
+    e->pos = pos
+    retag(e->lhs, pos)
+    retag(e->rhs, pos)
+    retag(e->cond, pos)
+    for i in range(e->nargs):
+        retag(e->args[i], pos)
 
 private def module_basename(a: *Arena, path: const *char) -> const *char:
     slash: const *char = strrchr(path, '/')

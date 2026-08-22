@@ -14,6 +14,7 @@
 #include "ps_parser.h"
 #include "ps_sema.h"
 #include "ps_lower.h"
+#include "api.h"
 #include "../stl/vec.h"
 #include "../stl/hash.h"
 #include "vecs.h"
@@ -85,6 +86,8 @@ int has_suffix(const char *s, const char *suf) {
     return n >= m && strcmp(s + n - m, suf) == 0;
 }
 
+const char *PLANG_VERSION = "0.1.0";
+
 static void usage(void) {
     fprintf(stderr, "usage: plangc [options] file.p [file2.ph ...]\n");
     fprintf(stderr, "\n");
@@ -106,6 +109,10 @@ static void usage(void) {
     fprintf(stderr, "                   functions - the output has no libc dependency for them\n");
     fprintf(stderr, "  -pedantic        warn on GNU/C23 extensions in C input\n");
     fprintf(stderr, "  -pedantic-errors reject GNU/C23 extensions in C input\n");
+    fprintf(stderr, "  --version        the LANGUAGE version and the compiler's own hash\n");
+    fprintf(stderr, "  --deps           list every source this compilation read, and stop\n");
+    fprintf(stderr, "  --outputs        list what it WOULD emit, without emitting\n");
+    fprintf(stderr, "  --api            the canonical public API of each module, and its hash\n");
     fprintf(stderr, "  --tokens         dump tokens and exit\n");
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n");
     fprintf(stderr, "  run <f.psc> [args] compile (cached) and RUN it (6.3/15.3); as `pscript f.psc`\n");
@@ -283,6 +290,44 @@ static const char *derive_output(Arena *a, const char *input, const Backend *be)
     return NULL;
 }
 
+static void deps_walk(Cc *cc, const char *path) {
+    Module *m = cc_load_module(cc, path);
+    const char *dir = path_dir(&cc->arena, path);
+    size_t i;
+    for (i = 0; i < m->ndecls; i += 1) {
+        Decl *d = m->decls[i];
+        if (d->kind != DL_IMPORT || d->is_include || d->import_path == NULL) {
+            continue;
+        }
+        if (!has_suffix(d->import_path, ".ph")) {
+            continue;
+        }
+        const char *ip = path_join(&cc->arena, dir, d->import_path);
+        int seen = 0;
+        size_t j;
+        for (j = 0; j < deps_count(); j += 1) {
+            if (strcmp(deps_get(j), ip) == 0) {
+                seen = 1;
+                break;
+            }
+        }
+        if (!seen) {
+            deps_walk(cc, ip);
+        }
+    }
+}
+
+static const char *dest_for(Cc *cc, const char *out_path, const char *out_dir, const char *path, const Backend *be, Vec_pchar *pulled) {
+    const char *dest = (out_path != NULL ? out_path : derive_output(&cc->arena, path, be));
+    if (out_path != NULL && is_pulled(pulled, path)) {
+        dest = Arena_printf(&cc->arena, "%s/%s", path_dir(&cc->arena, out_path), path_base(derive_output(&cc->arena, path, be)));
+    }
+    if (out_dir != NULL) {
+        dest = Arena_printf(&cc->arena, "%s/%s", out_dir, dest);
+    }
+    return dest;
+}
+
 static void dump_tokens(const char *path, Cc *cc) {
     size_t len = 0;
     char *bytes = read_entire_file(path, &len);
@@ -380,6 +425,10 @@ int main(int argc, char **argv) {
     const char *backend_name = NULL;
     int tokens_only = 0;
     int parse_only = 0;
+    int show_version = 0;
+    int deps_mode = 0;
+    int outputs_mode = 0;
+    int api_mode = 0;
     const char *ps_runtime = "pscript/runtime";
     int std_version = 99;
     int pedantic_lvl = 0;
@@ -490,6 +539,14 @@ int main(int argc, char **argv) {
             diag_set(argv[i] + 5, 0);
         } else if (argv[i][0] == '-' && argv[i][1] == 'W' && argv[i][2] != '\0') {
             diag_set(argv[i] + 2, 1);
+        } else if (strcmp(argv[i], "--version") == 0) {
+            show_version = 1;
+        } else if (strcmp(argv[i], "--deps") == 0) {
+            deps_mode = 1;
+        } else if (strcmp(argv[i], "--outputs") == 0) {
+            outputs_mode = 1;
+        } else if (strcmp(argv[i], "--api") == 0) {
+            api_mode = 1;
         } else if (strcmp(argv[i], "--tokens") == 0) {
             tokens_only = 1;
         } else if (strcmp(argv[i], "--parse-only") == 0) {
@@ -508,6 +565,11 @@ int main(int argc, char **argv) {
         } else {
             Vec_pchar_push(&inputs, argv[i]);
         }
+    }
+    if (show_version) {
+        int okv = 1;
+        printf("plangc %s (%016llx)\n", PLANG_VERSION, hash_file(argv[0], &okv));
+        return 0;
     }
     if (Vec_pchar_is_empty(&inputs)) {
         usage();
@@ -580,6 +642,10 @@ int main(int argc, char **argv) {
         }
     }
     diag_config(werror, wall, pedantic_lvl, wsuppress);
+    int query_mode = deps_mode || outputs_mode || api_mode;
+    if (deps_mode) {
+        deps_enable();
+    }
     if (tokens_only) {
         size_t j;
         for (j = 0; j < inputs.len; j += 1) {
@@ -593,6 +659,12 @@ int main(int argc, char **argv) {
         const char *path = Vec_pchar_get(&inputs, (size_t)k);
         if (is_pulled(&pulled, path) && has_suffix(path, ".ph") && be->hdr_ext == NULL) {
             continue;
+        }
+        if (deps_mode) {
+            deps_add(path);
+        }
+        if (outputs_mode) {
+            printf("%s\n", dest_for(&cc, out_path, out_dir, path, be, &pulled));
         }
         Module *m;
         if (has_suffix(path, ".psc")) {
@@ -616,7 +688,7 @@ int main(int argc, char **argv) {
                     add_input(&inputs, &pulled, sp);
                 }
             }
-            if (parse_only) {
+            if (parse_only || (query_mode && !api_mode && !deps_mode)) {
                 {
                     free(psbytes);
                 }
@@ -624,7 +696,7 @@ int main(int argc, char **argv) {
             }
             ps_sema_run(&cc.arena, psm, cc.cpp);
             m = ps_lower(&cc.arena, psm, ps_runtime);
-            if (!be->pre_sema) {
+            if (!be->pre_sema && !query_mode) {
                 sema_run(&cc, m);
                 if (strcmp(be->name, "qbe") == 0) {
                     qbe_merge_types(&cc, m);
@@ -634,6 +706,9 @@ int main(int argc, char **argv) {
                 free(psbytes);
             }
         } else if (has_suffix(path, ".c") || has_suffix(path, ".i")) {
+            if (query_mode && !api_mode) {
+                continue;
+            }
             size_t clen = 0;
             char *cbytes;
             if (has_suffix(path, ".c")) {
@@ -642,11 +717,14 @@ int main(int argc, char **argv) {
                 cbytes = read_entire_file(path, &clen);
             }
             m = c_parse(&cc.arena, path, cbytes, clen, 1);
-            if (!be->pre_sema) {
+            if (!be->pre_sema && !query_mode) {
                 sema_run(&cc, m);
             }
         } else {
             m = cc_load_module(&cc, path);
+            if (deps_mode) {
+                deps_walk(&cc, path);
+            }
             if (is_pulled(&pulled, path)) {
                 size_t j;
                 for (j = 0; j < m->ndecls; j += 1) {
@@ -668,21 +746,26 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-            if (!be->pre_sema) {
+            if (!be->pre_sema && !query_mode) {
                 sema_run(&cc, m);
                 if (strcmp(be->name, "qbe") == 0) {
                     qbe_merge_types(&cc, m);
                 }
             }
         }
+        if (api_mode) {
+            StrBuf ab = {0};
+            api_dump(m, &ab);
+            fwrite(ab.data, 1, ab.len, stdout);
+            StrBuf_deinit(&ab);
+        }
+        if (query_mode) {
+            continue;
+        }
         StrBuf out = {0};
         backend_emit(be, m, &out);
-        const char *dest = (out_path != NULL ? out_path : derive_output(&cc.arena, Vec_pchar_get(&inputs, (size_t)k), be));
-        if (out_path != NULL && is_pulled(&pulled, path)) {
-            dest = Arena_printf(&cc.arena, "%s/%s", path_dir(&cc.arena, out_path), path_base(derive_output(&cc.arena, path, be)));
-        }
+        const char *dest = dest_for(&cc, out_path, out_dir, path, be, &pulled);
         if (out_dir != NULL) {
-            dest = Arena_printf(&cc.arena, "%s/%s", out_dir, dest);
             mkdirs_for(dest);
         }
         if (strcmp(dest, "-") == 0) {
@@ -704,6 +787,13 @@ int main(int argc, char **argv) {
         {
             StrBuf_deinit(&out);
         }
+    }
+    if (deps_mode) {
+        size_t di;
+        for (di = 0; di < deps_count(); di += 1) {
+            printf("%s\n", deps_get(di));
+        }
+        return 0;
     }
     if (run_mode) {
         run_manifest_write(&cc.arena, manifest, run_hash, &inputs);
