@@ -15,7 +15,7 @@ Duas linhas DIFEREM de propósito, e por que:
     e o que se conta é o que o desenho retido produziu — que é a medida mais
     direta do mesmo caminho de código.
 """
-import lib_pui as ui
+import <pui> as ui
 
 
 clicks = 0

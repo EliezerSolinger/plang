@@ -1,7 +1,8 @@
 # `packages/` — os pacotes deste repositório
 
-**Nada foi movido para cá ainda**: esta pasta e este arquivo registram a
-estrutura decidida (`ppack/DESIGN.md`) e o preço medido de cada migração.
+**Os dois primeiros pacotes já moraram para cá** (2026-08-22): `stl` e `pui`.
+Este arquivo registra a estrutura decidida (`ppack/DESIGN.md`), o preço medido de
+cada migração, e o que a migração ensinou.
 
 ## Duas pastas com nomes parecidos e papéis opostos
 
@@ -49,6 +50,15 @@ gerado, o que **obriga a regerar o seed**.
 > duas migrações que exigem ciclo de seed. Fazer as duas no MESMO ciclo.**
 
 ### `pui` — o primeiro pacote pscript, e o mais fácil que podia aparecer
+
+**FEITO.** `packages/pui/` com `pui.psc` (a raiz), `pack.json` e `test/` — e os
+cinco módulos do editor que o usam passaram a escrever `import <pui> as pui`. O
+teste dele saiu de `tests/pstudio/` e foi para `packages/pui/test/`, que é o
+ponto: **um pacote publicado carrega a prova de que funciona**, e quem o instala
+pode rodá-la na própria máquina.
+
+Quem roda os testes dos pacotes é o `ppack test`, e ele os acha por estarem onde
+têm de estar — nenhum arreio os cita.
 
 Medido: `lib_pui.psc` tem **1 145 linhas e ZERO `import`** — não depende de
 pacote, de módulo ou do SDL (a métrica de fonte é parâmetro do toolkit, decisão

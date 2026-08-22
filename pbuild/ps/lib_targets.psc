@@ -548,7 +548,10 @@ def suite(c: Ctx, nome: str, casos: list<Caso>, verdict: str, stampdir: str) -> 
         e.target = c.target.name
         c.g.add_edge(e)
         stamps.append(st)
-    return junta(c, path.join(stampdir, nome + ".suite"), stamps, nome + ": " + str(len(casos)) + " casos")
+    # o travessão e não os dois pontos: o placar da CLI agrupa pelo que vem antes
+    # de `": "`, e um carimbo que dissesse "pacotes: 3 casos" seria contado como
+    # um caso chamado "3 casos"
+    return junta(c, path.join(stampdir, nome + ".suite"), stamps, nome + " — " + str(len(casos)) + " casos")
 
 
 def junta(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:

@@ -12,7 +12,7 @@ O que difere do teste em P, e por quê: lá o "screenshot" é um mapa do
 framebuffer, que precisa do rasterizador; aqui é a contagem dos comandos
 retidos, que é o que existe deste lado da fronteira.
 """
-import lib_pui as pui
+import <pui> as pui
 import lib_app as appm
 import lib_cv as cvm
 import lib_core as core

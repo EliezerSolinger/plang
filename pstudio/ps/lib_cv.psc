@@ -1,6 +1,6 @@
 """O widget de edição, em pscript (porte do `pstudio/codeview.p`).
 
-Amarra as três camadas: o buffer (`lib_core`), o toolkit (`lib_pui`), o realce e
+Amarra as três camadas: o buffer (`lib_core`), o toolkit (`pui` (o pacote)), o realce e
 o completamento (`lib_hl`, `lib_complete`, que falam com o lexer do compilador
 pelo adaptador da 113). Segue o `TextEdit` do Godot onde importa: as barras de
 rolagem são filhos INTERNOS que o widget posiciona, e as sarjetas são plugáveis.
@@ -18,7 +18,7 @@ lógica do editor rode sem driver, e portanto seja testável:
     I/O no pscript é `await` (76.2), e quem espera é o laço de eventos.
 """
 import lib_core as core
-import lib_pui as pui
+import <pui> as pui
 import lib_hl as hlm
 import lib_complete as cmp
 
@@ -1135,7 +1135,7 @@ struct CodeView:
         return True
 
 
-# as teclas que só o codeview usa (as outras vêm do lib_pui)
+# as teclas que só o codeview usa (as outras vêm do pacote `pui`)
 const K_UP: int = 1073741906
 const K_DOWN: int = 1073741905
 const K_PAGEUP: int = 1073741899

@@ -32,7 +32,7 @@ driver — em vez de espalhada.
 """
 import "shim.ph"
 
-import lib_pui as pui
+import <pui> as pui
 import lib_app as appm
 import sys
 import time

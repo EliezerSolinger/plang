@@ -1,0 +1,10 @@
+{
+  "name": "pui",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "pui.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "toolkit de interface em pscript: árvore de nós, layout em duas fases, hit-test, sinais e desenho retido — sem janela, sem SDL, sem dependência nenhuma"
+}

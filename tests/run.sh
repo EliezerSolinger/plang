@@ -423,7 +423,10 @@ suite_pstudio() {
        $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/ps/hl.p 2>>"$errc"; then
         HLC="$C/pstudio/ps/hl.c $C/selfhost/lexer.c $C/selfhost/util.c $C/selfhost/utf8.c"
     fi
-    for psprog in core_test:ps_core.expected:"the ported buffer" pui_test:ps_pui.expected:"the ported toolkit" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor"; do
+    # o `pui_test` saiu daqui: o toolkit virou o pacote `packages/pui`, e o teste
+    # dele viaja COM o pacote (`packages/pui/test/`). Quem o roda é a suíte de
+    # pacotes do `ppack` — um pacote publicado carrega a prova de que funciona.
+    for psprog in core_test:ps_core.expected:"the ported buffer" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
         [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }

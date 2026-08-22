@@ -85,9 +85,18 @@ coletor, o `-j` que não limitava, os braços que formavam uma cadeia e travavam
 o `restat` que não atravessava corridas (nas duas pontas), `sys.exit` a sair com
 ZERO com um erro pendente, e `a/../b` a carregar o mesmo módulo duas vezes.
 
-**O que ainda espera decisão sua**: o `pui` como pacote (precisa de mover os
-módulos do editor), e os campos do `pack.json`, que estão implementados como a
-proposta e são baratos de mudar.
+**Os dois primeiros pacotes existem**: `packages/stl` (dez headers, zero `.p`) e
+`packages/pui` (o toolkit do editor, 1 145 linhas, zero import), com o teste do
+`pui` a viajar COM ele em `packages/pui/test/` — um pacote carrega a prova de que
+funciona, e quem o instala pode rodá-la.
+
+**O que ainda espera decisão sua**: os campos do `pack.json`, que estão
+implementados como a proposta e são baratos de mudar.
+
+**Um limite conhecido do `ppack doc` num módulo pscript**: a resposta 5 de um
+`.psc` traz também os símbolos do runtime e do prelúdio, porque a baixa os funde
+no módulo. Para separá-los seria preciso marcar, na sema, o que veio de um
+import — está anotado e não feito.
 
 **Progresso** (atualizar a cada passo):
 

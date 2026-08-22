@@ -9,7 +9,7 @@ Sem janela: o toolkit recebe a célula da fonte (8 x 17) como parâmetro, e o
 codeview não fala com driver nenhum — nem para arquivo (o texto entra por
 `load_text`) nem para área de transferência (o app é que fala com o sistema).
 """
-import lib_pui as pui
+import <pui> as pui
 import lib_cv as cvm
 
 

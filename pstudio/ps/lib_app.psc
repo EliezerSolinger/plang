@@ -7,12 +7,12 @@ mora no `app.psc` (que fala com o `shim.p`). A ligação entre os dois é feita 
 funções guardadas em campo — `clip_get`, `confirm_close`, `read_file` — que o
 `app.psc` preenche na partida.
 
-Por que assim: é a mesma razão do `Painter` no `lib_pui` e do `load_text` no
+Por que assim: é a mesma razão do `Painter` no `pui` (o pacote) e do `load_text` no
 `lib_cv`. Com o driver de fora, o editor INTEIRO — abas, árvore, paleta, busca,
 atalhos — roda headless num teste, e o que sobra para o `app.psc` é uma página
 que não tem lógica para errar.
 """
-import lib_pui as pui
+import <pui> as pui
 import lib_cv as cvm
 import lib_core as core
 import os

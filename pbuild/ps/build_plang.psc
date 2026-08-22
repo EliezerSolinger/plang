@@ -239,7 +239,7 @@ def suites_de_fora() -> list<str>:
     # aqui: uma verificação que roda menos que a de antes não é a mesma
     return ["cases", "modules", "stl", "p-suite", "errors", "pstudio", "roundtrip", "pscript"]
 
-async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str) -> str:
+async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, fixo: str, editor: str) -> str:
     logs: list<str> = []
     logdir = path.join(BUILD, "t/log")
     gating = suites_de_fora()
@@ -292,7 +292,8 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str)
     # `ppack test` é a leitura em C do corpus mais a suíte caso a caso: as duas
     # medem a mesma coisa por caminhos diferentes, e juntas são o que `make
     # test` sempre quis dizer. O resto (QBE, C89, oráculos, coletor) é `verify`.
-    T.junta(c, TESTE, [logs[0], suite], "test: o corpus em C e a suíte caso a caso")
+    T.junta(c, TESTE, [logs[0], suite, spkg],
+            "test: o corpus em C, a suíte caso a caso e os testes dos pacotes")
 
     # a suíte do pscript como GRAFO entra junto: ela é a mesma coisa que a
     # `suite-c` mede, por outro caminho e caso a caso — e é a que roda rápido
@@ -300,6 +301,7 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str)
     for l in logs:
         tudo.append(l)
     tudo.append(suite)
+    tudo.append(spkg)
     # o PONTO FIXO (o compilador reproduz a si mesmo) e o editor: os passos 2, 3
     # e 7 do `verify-all`, que já são arestas deste grafo
     tudo.append(fixo)
@@ -338,6 +340,50 @@ async def raizes_do_workspace(manifesto: str) -> list<str>:
     return out
 
 
+# ---------- o teste que viaja COM o pacote ----------
+# `packages/<nome>/test/` é do PACOTE, não do projeto. Três consequências, e as
+# três são o ponto:
+#
+#   * um pacote publicado carrega a prova de que funciona, e quem o instala pode
+#     rodá-la na própria máquina;
+#   * o teste não precisa de ser citado à mão em nenhum arreio — ele é achado
+#     porque está onde tem de estar;
+#   * e o `ppack test` do projeto roda os testes dos pacotes do workspace, que é
+#     o que faz mover um pacote para cá não perder cobertura.
+async def membros_do_workspace(manifesto: str) -> list<str>:
+    out: list<str> = []
+    if not path.isfile(manifesto):
+        return out
+    m = await M.ler(manifesto)
+    if not m.eh_workspace:
+        return out
+    base = path.dirname(manifesto)
+    for membro in m.membros:
+        out.append(path.join(base, membro))
+    return out
+
+
+async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
+    casos: list<T.Caso> = []
+    for dir in await membros_do_workspace("pack.json"):
+        tdir = path.join(dir, "test")
+        if not path.isdir(tdir):
+            continue
+        nome = path.basename(dir)
+        for src in T.glob(tdir, ".psc"):
+            base = path.basename(src)
+            n = base[0:len(base) - 4]
+            esperado = path.join(tdir, n + ".expected")
+            if not path.isfile(esperado):
+                continue
+            rot = nome + "/" + n
+            binario = await T.psc_program(c, src, path.join(BUILD, "t/pkg", nome + "-" + n),
+                                          path.join(BUILD, "t/obj"), [], [])
+            casos.append(T.Caso(rot, binario, esperado, 0,
+                                path.join(BUILD, "t/run", nome + "-" + n)))
+    return T.suite(c, "pacotes", casos, verdict, path.join(BUILD, "t/stamp"))
+
+
 async def montar(query: str) -> G.Graph:
     """`query` é o compilador que RESPONDE as perguntas do protocolo enquanto o
     grafo é montado — normalmente o que já está na máquina. Quem RODA em cada
@@ -358,7 +404,8 @@ async def montar(query: str) -> G.Graph:
     bins = await pscript_tudo(cps)
     editor = await pstudio(cps)
     suite = await suite_pscript(cps, bins["verdict"])
-    await verificacao(cps, PLANGC_S2, suite, stamp, editor)
+    spkg = await suite_pacotes(cps, bins["verdict"])
+    await verificacao(cps, PLANGC_S2, suite, spkg, stamp, editor)
 
     # o alvo padrão é o que "está construído" quer dizer: o compilador confere a
     # si mesmo, e as ferramentas de cima existem. As suítes são um alvo que se
