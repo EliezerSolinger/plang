@@ -3591,6 +3591,194 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 116 — o editor em P aposentado (2026-08-22)
+
+*"pode remover o editor de P agora."*
+
+Saíram **6448 linhas de P** — `core.p`, `pui.p`, `codeview.p`, `complete.p`,
+`app.p`, `main.p` e `psys.p` com os seus headers — e os oito testes deles. O que
+ficou em P é o que a 45.5 não deixa atravessar: **820 linhas** de driver
+(`pgfx.p`, `pgfx_raster.p`, `font_atlas.p`, `ps/shim.p`) mais o `ps/hl.p`, a
+ponte para o lexer do compilador.
+
+O que a remoção obrigou a mexer, e é a parte que interessa:
+
+**116.1 O passo 7/8 do `verify-all` mudou de significado — para melhor.** Ele
+era *"compila o editor, que é o maior consumidor de P depois do compilador"*.
+Agora ele **compila, LINKA e RODA**: o driver em P, o runtime do pscript e as
+4200 linhas de pscript do editor num binário, e depois o `--selftest` dele (abre
+um arquivo, digita, desfaz, usa a paleta, dobra, desenha). Deixou de ser um
+teste de compilação e passou a ser um teste de programa.
+
+> A medida que se perdeu — "o maior programa em P" — não era da compilação de P:
+> o compilador tem 38 mil linhas de P e é construído QUATRO vezes nos passos 1 a
+> 3, com ponto fixo por bytes. O editor era um segundo consumidor, não a medida.
+
+**116.2 `make pstudio` é o editor em pscript**, e `pstudio-ps` ficou como apelido
+(quem tinha o nome na memória continua achando). A suíte `tests/pstudio` foi de
+15 gates para 7: dois do driver em P e quatro do editor em pscript, mais o
+binário completo com SDL.
+
+**116.3 O `psys` não tem substituto em pstudio** porque virou stdlib do pscript
+na 111 (`os` e `path`) — o arquivo era a FONTE do porte, e sai agora que os dois
+consumidores (o editor e, em breve, o pbuild) usam a stdlib.
+
+Ficou registrado o que a migração inteira custou e rendeu: quatro baterias
+(111-116), **quinze defeitos do compilador** achados por escrever programa de
+verdade na linguagem, e um editor que agora é 4200 linhas de pscript por cima de
+820 de P — onde antes eram 6448 de P por cima de 820 de P.
+
+## Bateria 115 — a paridade medida, e os três buracos que ela achou (2026-08-22)
+
+Sua condição, e ela é a certa: *"o Editor P vai ser deprecado, só quero garantir
+que o novo PScript vai fazer tudo o que o velho fazia"*.
+
+**O método: varredura pelos HEADERS, não por memória.** Todo `def` público dos
+cinco arquivos de interface do editor em P — `core.ph`, `pui.ph`, `codeview.ph`,
+`complete.ph`, `app.ph` — contra o que existe em pscript. **197 métodos**, um por
+um. A tabela completa está em `pstudio/DESIGN.md`; o resumo é que 24 deles
+mudaram de FORMA (o `init`/`deinit` que o coletor tornou desnecessário, o I/O que
+foi para o driver, as três `*_gutter()` que viraram `add_gutter(GUT_*, n)`) e
+**três estavam FALTANDO de verdade** — nenhum aparecia por nome, os três
+apareceram por comportamento:
+
+**115.1 A dobra não se soltava ao editar dentro dela.** O `core.p` chama
+`unfold_range` no INÍCIO de `raw_insert` e de `raw_delete`, e a razão está no
+comentário dele: *uma edição que alcança um bloco recolhido o solta, porque
+undo/redo alcança*. O porte tinha deixado o invariante atrás, e o efeito era
+linha com conteúdo novo que a vista nunca mostrava. Entrou junto com o
+`unfold_enclosing` de que ele depende — uma linha escondida sem cabeçalho acima é
+REVELADA, porque nunca se deixa uma linha invisível.
+
+**115.2 O zoom não fazia nada.** Os comandos 5/6/7 da paleta e o `ctrl+=`/`-`/`0`
+caíam num ramo que só tratava 11..23 — silenciosamente. E o zoom é do DRIVER: o
+passo é uma grade RASTERIZADA (11..29px), não um multiplicador. Entrou como as
+outras funções de sistema, num campo que o `app.psc` preenche, e o shim passou a
+expor o passo PADRÃO para o reset cair no mesmo lugar que no editor em P.
+
+**115.3 O F2 não existia.** No editor em P ele é atalho SEM ctrl — F2 anda entre
+marcadores, shift+F2 anda para trás, ctrl+F2 põe e tira a marca — e o meu
+`key_shortcut` saía cedo quando não havia ctrl.
+
+De passagem, quatro coisas menores que a mesma varredura cobrou: a linha de
+comando ficou a do editor em P (vários arquivos em abas, `--size LxA`, `--shot`,
+diagnóstico para opção desconhecida e para caminho que não existe), o título da
+janela passou a acompanhar a aba, e os bits de marca passaram a ter os MESMOS
+números (`MARK_BOOK`=1, `MARK_BREAK`=2) — estavam trocados, e trocado é o tipo de
+diferença que ninguém vê até comparar.
+
+O `app_test.psc` cresceu para medir tudo isso: 40 linhas de estado, incluindo o
+clique de sarjeta **por pixel** (que é o caminho que o teste em P exercita, e não
+o comando), o zoom mudando a célula, a dobra que a edição solta, o par que o
+backspace tira, o candidato aceito e o F2. É o gate que autoriza a depreciação.
+
+## Bateria 114 — o editor INTEIRO em pscript, e as cinco provas de não-nulo (2026-08-22)
+
+O último passo da migração do pstudio. O `app.p` (1025 linhas: abas, árvore de
+arquivos, paleta de comandos, busca, atalhos, laço de eventos) virou dois
+arquivos: `lib_app.psc` (a lógica, 950 linhas) e `app.psc` (o driver, 250).
+
+**114.1 O driver é uma página, e a lógica não conhece a janela.** O `lib_app`
+recebe as funções do sistema em CAMPOS — `read_file`, `write_file`, `mtime_of`,
+`clip_get`, `clip_set`, `confirm_close`, `confirm_reload` — e o `app.psc` as
+preenche na partida. É a mesma decisão do `Painter` (112) e do `load_text` (113),
+levada ao fim: com o driver de fora, o editor inteiro roda num teste headless, e
+o que sobra no `app.psc` é tradução de evento e apresentação de quadro.
+
+O gate é `pstudio/ps/app_test.psc`, o gêmeo do `app_flow.p`: monta um projeto em
+disco (com `os`/`path`, a camada da 111), abre arquivos, digita, desfaz, refaz,
+põe dois cursores, usa a paleta de arquivos e a de comandos, vai para a linha,
+busca duas vezes, clica numa aba, expande um diretório, dobra, marca, comenta,
+duplica linha, fecha par automático, abre o popup de completamento, copia para a
+área de transferência, e desenha UM QUADRO inteiro (29 retângulos e 190 glifos,
+contados por um `Painter` de teste). 30 linhas de estado conferidas.
+
+**114.2 A costura que o `async` cobrou, e onde ela está.** Ler e escrever arquivo
+no pscript é `await` (76.2), e o `lib_app` é síncrono de propósito — um índice de
+completamento que espera obrigaria todo chamador dele a esperar. A ponte:
+
+  * LER: o app PEDE (`want_open`) e o driver atende — lê com `await` e chama
+    `open_file` outra vez, com o texto em mão;
+  * ESCREVER: entra numa fila que o laço drena, e a falha vai para a barra de
+    estado.
+
+É o único lugar do editor onde a divisão custa algo, e está no driver em vez de
+espalhada. Registrado aqui porque é uma consequência de desenho, não um detalhe.
+
+**114.3 O shim ganhou o que só o driver pode dar:** `shim_wait(ms)` (UM evento
+bloqueando, com `SHIM_TIMEOUT` quando vence — é o que faz o cursor piscar sem
+girar em vazio), a área de transferência, as duas confirmações modais, o título
+da janela e o `--shot` em PPM. Tudo encaminhamento para o `pgfx`, que já tinha
+todas. E o `psys` SAIU do link: a camada de sistema é a da stdlib desde a 111.
+
+### As cinco provas de não-nulo, e por que elas apareceram todas de uma vez
+
+A 43.1 dava UMA forma: `if x != None:` e dentro do ramo `x` é `T`. Escrever 950
+linhas de lógica de editor cobrou as outras quatro no mesmo dia — cada uma
+apareceu num idioma comum, nenhuma procurando buraco:
+
+| forma | onde apareceu |
+|---|---|
+| `if x == None: return` e o resto da função | toda função que trata o caso ausente primeiro (`find_step`, `reload_cur`) |
+| `if x == None: ... else:` | `update_status` |
+| `if x != None and x.f > 0:` | `palette_accept`, `find_open` |
+| `if x == None or x.f == 0: return` | `reload_cur` |
+| `elif x != None:` | `run_command` |
+
+As cinco entraram (`tests/pscript/run/narrow.psc` mede as cinco mais o `if`
+aninhado que não desfaz a prova de fora). Duas notas do que NÃO se fez: a prova
+é sobre LOCAL, nunca sobre campo (um campo pede análise de fluxo sobre campos,
+que é outra bateria), e num `or` só o `==` prova — num `and` só o `!=`, porque é
+o que o curto-circuito garante em cada caso.
+
+> **O defeito que a implementação disso teve, e que os testes acharam.** A
+> primeira versão restaurava, no fim de cada bloco, TODO local estreitado — e um
+> `if` aninhado dentro do ramo desfazia a prova do bloco que o continha. Agora
+> cada bloco só desfaz o que ELE provou.
+
+### E os outros quatro defeitos que este porte cobrou
+
+**114.4 `void` e "nada" não eram o mesmo tipo.** Um `def(int, int)` escrito num
+tipo tem retorno NULO; o valor de uma função sem retorno tem retorno `PT_VOID`.
+Os dois imprimiam igual e comparavam diferente, e a mensagem era `expects
+def(int, int) -> nothing, found def(int, int) -> nothing` — que não diz nada a
+ninguém.
+
+**114.5 O nome que já existe é CONTEXTO.** `f = lambda v: v * 2` num nome de tipo
+função dizia "não consigo inferir a lambda", com a informação ali do lado: a
+64.1 diz que um nome que já existe é ASSIGNADO, então o tipo dele é quem manda.
+Passou a valer para local e para variável de módulo — e com dois cuidados que os
+testes cobraram: dentro de uma função não se procura global (um local `b` acharia
+o `b` de outro módulo), e o tipo que vale é o DECLARADO, não o estreitado (num
+`while x != None:`, `x = x.next` atribui um `T?`).
+
+**114.6 `P(x) if c else None` para um RECORD.** A 112.7 fez a sema aceitar o
+`None` num braço; o lowering ainda entregava ao P um record de um lado e um zero
+do outro (a representação de `T?` de record é o par `{has, v}`, não um ponteiro).
+Agora, quando o RESULTADO é opcional, cada braço vira o opcional.
+
+**114.7 O arquivo nas mensagens era o do programa PRINCIPAL, com a linha do
+módulo importado.** Um `Pos` tem linha e coluna, e o lowering usava o caminho do
+módulo principal para tudo — então um erro em `lib_pui.psc` dizia `app.psc` com a
+linha do lib_pui, o pior dos dois mundos. Agora cada função é baixada com o
+arquivo do módulo que a ESCREVEU (41.3: o `ns` dela sabe qual é). Foi um aviso do
+compilador apontando para a linha 424 de um arquivo de 250 linhas que o
+desenterrou.
+
+### O estado da migração
+
+O editor em pscript tem agora TODAS as camadas: buffer, toolkit, realce,
+completamento, widget de edição, app e driver. Em P sobrou o que a 45.5 não deixa
+atravessar — SDL (`pgfx`, `pgfx_raster`, `font_atlas`, `shim.p`) e o lexer do
+compilador (`hl.p`) — que é o que "totalmente em pscript" quer dizer num programa
+que fala com uma placa de vídeo.
+
+`make pstudio-ps` constrói o editor completo; `tests/pstudio` mede 15 gates (11 do
+editor em P, 4 do editor em pscript). **O que NÃO decidi: aposentar o editor em
+P.** Ele é o maior programa em P do projeto (8 mil linhas) e é o que o passo 7/8
+do `verify-all` usa para medir a compilação de P; apagá-lo tira essa medida. É sua
+decisão, e as duas versões convivem sem custo até você tomá-la.
+
 ## Bateria 113 — o lexer do compilador atravessando a fronteira, e o `codeview` em pscript (2026-08-21)
 
 Sua pergunta e a sua aprovação: *"ou seja eu teria que fazer uma interface/header/

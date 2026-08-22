@@ -1615,8 +1615,13 @@ struct PsLow:
                 t: *Expr = ex_new(self->a, EX_TERNARY, e->pos)
                 t->cond = self->expr(e->cond)
                 self->lazy_depth += 1     # only ONE arm runs
-                t->lhs = self->expr(e->lhs)
-                t->rhs = self->expr(e->rhs)
+                # 114: quando o RESULTADO é opcional, cada braço vira o
+                # opcional — é o que faz `P(x) if c else None` funcionar para um
+                # record, cuja representação de `T?` é o par {has, v} e não um
+                # ponteiro. Sem isto o P recebia um record de um lado e um zero
+                # do outro, e dizia que os braços misturam struct e escalar.
+                t->lhs = self->coerce(e->type, e->lhs) if e->type != None and e->type->kind == PT_OPT else self->expr(e->lhs)
+                t->rhs = self->coerce(e->type, e->rhs) if e->type != None and e->type->kind == PT_OPT else self->expr(e->rhs)
                 self->lazy_depth -= 1
                 return t
             case PE_CALL:
@@ -9668,6 +9673,16 @@ static def is_scalar_pname(n: const *char) -> bool:
 # and P's method sugar cannot be prototyped and defined separately inside one
 # file.
 static def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: bool) -> *Decl:
+    # 114: o ARQUIVO é o do módulo que ESCREVEU a função (41.3), não o do
+    # programa principal. Sem isto, uma mensagem de erro em tempo de execução
+    # dentro de `lib_pui.psc` dizia `app.psc` com a LINHA do lib_pui — o pior
+    # dos dois mundos, e foi um aviso do compilador apontando para a linha 424
+    # de um arquivo de 250 linhas que o desenterrou.
+    prev_file: const *char = L->file
+    if f->ns != None and f->ns->m != None and f->ns->m->path != None:
+        L->file = f->ns->m->path
+    defer:
+        L->file = prev_file
     pf: *Func = L->a->alloc(sizeof(Func))
     pf->pos = f->pos
     pf->name = ps_cname(L->a, f->name) if owner == None else L->a->printf("%s_%s", owner, f->name)

@@ -28,7 +28,7 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
 
 ## Camadas
 
-### 1. psys — sistema operacional (só OS)
+### 1. psys — sistema operacional (**virou stdlib do pscript na 111**: `os` e `path`)
 - **VFS por interface de function pointers**; backend `local` no v0.1,
   `ssh/sftp` futuro (visão: **editar arquivos remotos**, editor roda local;
   transporte por subprocesso ssh/sftp via pipes — sem libssh2).
@@ -201,14 +201,13 @@ Todas as decisões abaixo foram fechadas em sessão de desambiguação (2026-07-
   passo agora é uma rasterização de verdade da fonte.
 
 ## Verificação
-- `make verify` ganha: **compilação gating do pstudio** (maior consumidor de
-  P depois do compilador) + **suíte `tests/pstudio/*.p`** — programas P
-  headless exercitando core/psys (buffer, undo, highlight, VFS local) com
-  `.expected`, no formato das suítes atuais, rodando nos 3 modos (C/QBE/C89).
-- **SDL2 = dependência com skip gracioso**: com libsdl2-dev presente a
-  bateria compila o pstudio inteiro (gating); sem ele, avisa "skipped: no
-  SDL2" — os testes headless de core/psys rodam SEMPRE (não dependem de SDL).
-- Build: `plangc --out-dir out pstudio/...` (espelho; repo limpo).
+- `make verify` tem o passo **7/8**: compila e LINKA o editor inteiro (driver em
+  P + runtime do pscript + as camadas em pscript) e roda o `--selftest` dele.
+- A suíte `tests/pstudio` roda nos 3 modos (C/QBE/C89): dois testes do driver em
+  P e quatro do editor em pscript, todos headless e com `.expected`.
+- **SDL2 = dependência com skip gracioso**: sem libsdl2-dev o passo 7/8 avisa
+  "skipped: no SDL2" e os testes headless rodam do mesmo jeito.
+- Build: `plangc --out-dir out ...` (espelho; repo limpo).
 
 ## Ordem de construção — v0.1 COMPLETA
 1. ✅ **psys** (VFS local + process + clock) + testes headless
@@ -231,23 +230,43 @@ renderiza UM frame e grava um PPM, e `--size LxA` escolhe a resolução:
 SDL_VIDEODRIVER=dummy ./out/bin/pstudio --size 1000x620 --shot /tmp/e.ppm . core.p
 ```
 
-## Estado da implementação (arquivos)
-| arquivo | o que é |
-|---|---|
-| `psys.ph/.p` | VFS (backend local), processos, clock, paths |
-| `font_atlas.ph/.p` | atlas GERADO (ASCII + Latin-1 + pontuação, □ de fallback) |
-| `pgfx_raster.ph/.p` | `PgRect`/`PgFont`/`PgFb`: rects, clip, blend, texto — headless |
-| `pgfx.ph/.p` | SDL2: janela, textura streaming, eventos, clipboard, diálogos |
-| `pui.ph/.p` | `Ui`: pool de `UINode`, layout 2 fases, cmd lists, sinais, input |
-| `core.ph/.p` | `Buffer`/`Highlight`: linhas UTF-8, multi-caret, undo, busca |
-| `codeview.ph/.p` | o widget de edição: gutters plugáveis + scrollbars internas |
-| `app.ph/.p` | abas, árvore, palette, busca, atalhos, loop de eventos |
-| `main.p` | linha de comando (`--shot`, `--size`) |
-| `tools/mkatlas.c` | gerador do atlas (stb_truetype, offline; nunca linkado) |
+## Estado da implementação (arquivos) — depois da 116
 
-Testes: `tests/pstudio/*.p` — 6 programas headless (psys, raster, pgfx com
-driver dummy, pui, core, e **app_flow**, que dirige o editor inteiro por
-eventos sintéticos e compara um "screenshot" ASCII do frame).
+**O editor é pscript.** Em P sobrou o DRIVER: o que é pixel e ponteiro do começo
+ao fim, e o lexer do compilador. A tabela é o mapa de quem faz o quê.
+
+| arquivo | linguagem | o que é |
+|---|---|---|
+| `ps/lib_core.psc` | pscript | `Buffer`: linhas UTF-8, multi-caret, undo agrupado, busca, dobra, marcas |
+| `ps/lib_pui.psc` | pscript | `Ui`: pool de nós, layout em 2 fases (Godot), listas de comando retidas, sinais, entrada |
+| `ps/lib_hl.psc` | pscript | o realce: spans por linha a partir dos tokens, e o comentário |
+| `ps/lib_complete.psc` | pscript | o índice de completamento (declarações, membros, `self.`) |
+| `ps/lib_cv.psc` | pscript | o widget de edição: sarjetas, barras internas, minimapa, popup |
+| `ps/lib_app.psc` | pscript | abas, árvore, paleta, busca, atalhos, barra de estado |
+| `ps/app.psc` | pscript | o driver do editor: janela, tradução de evento, quadro, linha de comando |
+| `ps/shim.ph/.p` | **P** | a fronteira do SDL2: janela, evento, pixel, glifo, área de transferência — assinatura de ESCALARES (45.5) |
+| `ps/hl.ph/.p` | **P** | a fronteira do LEXER do compilador: o texto entra como `CStr`, os tokens voltam como números (113) |
+| `pgfx.ph/.p` | **P** | SDL2: janela, textura streaming, eventos, diálogos |
+| `pgfx_raster.ph/.p` | **P** | `PgRect`/`PgFont`/`PgFb`: rects, clip, blend, texto — headless |
+| `font_atlas.ph/.p` | **P** | o atlas GERADO (ASCII + Latin-1 + pontuação, □ de fallback) |
+| `tools/mkatlas.c` | C | o gerador do atlas (stb_truetype, offline; nunca linkado) |
+
+Proporção: **4200 linhas de pscript** por cima, **820 de P** por baixo.
+
+Testes (`tests/pstudio/`): dois do driver em P (`pgfx_raster`, `pgfx_smoke` com
+driver dummy) e quatro do editor em pscript, todos headless — `ps_core`
+(buffer), `ps_pui` (toolkit e layout), `ps_cv` (o widget, com o lexer do
+compilador do outro lado da fronteira) e `ps_app` (o editor INTEIRO: abas,
+árvore, paleta, busca, dobra, pares, completamento, um quadro desenhado) — mais
+o `--selftest` do binário completo, com SDL2.
+
+### O que saiu na 116
+
+`core.p`, `pui.p`, `codeview.p`, `complete.p`, `app.p`, `main.p` e `psys.p` com
+os seus headers: **6448 linhas de P**, aposentadas depois de a paridade ter sido
+medida método por método (115) e de os três buracos que ela achou terem sido
+fechados. O `psys` não tem substituto em pstudio porque virou stdlib do pscript
+na 111 (`os` e `path`).
 
 ---
 
@@ -288,7 +307,58 @@ O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor n
      `lib_complete.psc` e `lib_cv.psc` — o `codeview` inteiro, imprimindo as
      mesmas sete linhas do teste de dobra do editor em P.
 
-O que falta: o `app` (abas, árvore de arquivos, paleta de comandos, busca, laço
-de eventos) e a troca do `make pstudio` para a versão em pscript. A camada de
-sistema que o `app` vai querer — listar diretório, mtime — já está na stdlib
-desde a 111.
+  4. a bateria 114 portou o `app` — `lib_app.psc` (a lógica: abas, árvore,
+     paleta, busca, atalhos) e `app.psc` (o driver: janela, eventos, quadro) —
+     e o `make pstudio-ps` constrói o editor COMPLETO.
+
+**A migração está feita, e a paridade está medida** (ver a seção seguinte). Em P sobrou o que a 45.5 não deixa atravessar: SDL
+(`pgfx`, `pgfx_raster`, `font_atlas`, `ps/shim.p`) e o lexer do compilador
+(`ps/hl.p`). É o que "totalmente em pscript" quer dizer num programa que fala com
+uma placa de vídeo — a lógica inteira de um lado, duas páginas de P do outro.
+
+## Paridade: o que o editor em P fazia, e onde está agora (bateria 115)
+
+Sua condição para aposentar o editor em P: *"só quero garantir que o novo PScript
+vai fazer tudo o que o velho fazia"*. Esta é a varredura, feita pelos HEADERS —
+todo `def` público dos cinco arquivos de interface do editor em P, um por um,
+contra o que existe em pscript. 197 métodos.
+
+| camada | métodos em P | em pscript | o que mudou de forma |
+|---|---|---|---|
+| `core.ph` (Buffer, Highlight) | 67 | 67 | `init`/`deinit` viram `new_buffer()` e o coletor; `save_text` é `text()`; `col_byte` não existe porque índice é CODEPOINT (3.4); `line_ranges` é `line_span` |
+| `pui.ph` (Ui) | 52 | 52 | `init`/`deinit` idem; `cmd_text_n` é `cmd_text` com uma fatia |
+| `codeview.ph` (CodeView) | 50 | 50 | `load_file`/`save_file`/`reload` viram `load_text`/`text_to_save` (o I/O é do driver, 114.2); as três `*_gutter()` viram `add_gutter(GUT_*, largura)`; `cv_of` não existe porque `cv_create` devolve o objeto |
+| `complete.ph` (Index) | 7 | 7 | `build` não lê arquivo: `imports_of` diz quais são e quem espera lê (113.3) |
+| `app.ph` (App) | 21 | 21 | `init` é `new_app` + `wire`; `screenshot` é `--shot` pelo shim; `deinit` é o coletor |
+
+**E os três buracos de verdade que a varredura achou** — nenhum deles aparecia
+por nome, os três apareceram por COMPORTAMENTO:
+
+**115.1 A dobra não se soltava ao editar dentro dela.** O `core.p` chamava
+`unfold_range` no início de `raw_insert` e `raw_delete`: uma edição que ALCANÇA um
+bloco recolhido o solta, porque undo/redo alcança. O porte tinha deixado o
+invariante atrás, e o efeito era linha com conteúdo novo que a vista nunca
+mostrava. Portado, com o `unfold_enclosing` que ele usa (uma linha escondida sem
+cabeçalho acima é revelada — nunca se deixa uma linha invisível).
+
+**115.2 O zoom não fazia nada.** Os comandos 5/6/7 da paleta e o `ctrl+=`/`-`/`0`
+caíam num ramo que só tratava 11..23. E o zoom precisa do DRIVER: o passo é uma
+grade RASTERIZADA de verdade (11..29px), não um multiplicador. Entrou como as
+outras funções de sistema — um campo `zoom_step` que o `app.psc` preenche —, e o
+`shim` passou a expor o passo PADRÃO, para o reset cair no mesmo lugar que no
+editor em P.
+
+**115.3 O F2 não existia.** No editor em P ele é atalho SEM ctrl (F2 anda entre
+marcadores, shift+F2 anda para trás, ctrl+F2 põe e tira a marca), e o meu
+`key_shortcut` saía cedo quando não havia ctrl.
+
+De passagem, três coisas menores: a linha de comando ficou a mesma do editor em P
+(vários arquivos em abas, `--size LxA`, `--shot`, e diagnóstico para opção
+desconhecida e caminho que não existe), o título da janela passou a acompanhar a
+aba, e o `app_test.psc` cresceu para medir tudo isto — inclusive o clique de
+sarjeta por PIXEL, que é o caminho que o teste em P exercita.
+
+O que fica para você: **aposentar ou não o editor em P.** Ele são 8 mil linhas e
+é o que o passo 7/8 do `verify-all` usa para medir a compilação de P; apagá-lo
+tira essa medida. As duas versões convivem sem custo (`make pstudio` e
+`make pstudio-ps`), então não há pressa nenhuma nessa decisão.

@@ -29,8 +29,10 @@ import re     # 113: `find_re` — a ERE do POSIX, que é o `re` do pscript (41.
 const TAB_WIDTH: int = 4
 const UNDO_PAUSE_MS: int = 700
 
-const MARK_BREAK: int = 1        # a breakpoint the debugger will want
-const MARK_BOOK: int = 2         # a bookmark
+# 115: os MESMOS números do editor em P (`MARK_BOOKMARK`=1, `MARK_BREAKPOINT`=2),
+# para as duas implementações falarem do mesmo bit quando alguém comparar
+const MARK_BOOK: int = 1         # a bookmark (F2 jumps between them)
+const MARK_BREAK: int = 2        # a breakpoint the debugger will want
 
 
 record Caret:
@@ -238,6 +240,7 @@ struct Buffer:
     # ---------- raw edits (no undo, no caret adjustment) ----------
 
     def raw_insert(self, line: int, col: int, text: str) -> Span:
+        self.unfold_range(line, line)      # 115: editar dentro de uma dobra a solta
         end = text_end(line, col, text)
         cur = self.lines[line]
         head = cur.text[0:col]
@@ -265,6 +268,7 @@ struct Buffer:
         return end
 
     def raw_delete(self, r: Span) -> str:
+        self.unfold_range(r.l0, r.l1)      # 115: o mesmo invariante do insert
         gone = self.range_text(r)
         if r.l0 == r.l1:
             l = self.lines[r.l0]
@@ -648,8 +652,9 @@ struct Buffer:
         hit = self.find(needle, c.line, c.col, True)
         if hit == None:
             return False
-        h = hit ?? Span(0, 0, 0, 0)
-        self.carets.append(Caret(h.l1, h.c1, h.l0, h.c0, -1))
+        # depois da guarda, `hit` É um Span (114): o `?? Span(0,0,0,0)` que
+        # estava aqui existia só porque a prova não passava do `if`
+        self.carets.append(Caret(hit.l1, hit.c1, hit.l0, hit.c0, -1))
         self.carets_sort()
         return True
 
@@ -930,6 +935,42 @@ struct Buffer:
         for i in range(len(self.lines)):
             if self.can_fold(i):
                 self.fold(i)      # `can_fold` é falso em linha escondida: nível 1
+
+    def unfold_enclosing(self, line: int) -> bool:
+        """Solta a dobra que ESCONDE esta linha. Uma linha órfã (escondida sem
+        cabeçalho acima) é revelada — nunca se deixa uma linha invisível."""
+        if line < 0 or line >= len(self.lines) or not self.lines[line].hidden:
+            return False
+        h = line - 1
+        while h >= 0:
+            if self.lines[h].folded:
+                self.unfold(h)
+                return True
+            h -= 1
+        self.lines[line].hidden = False
+        return True
+
+    def unfold_range(self, l0: int, l1: int):
+        """115: uma edição que ALCANÇA um bloco recolhido o solta. O undo/redo
+        alcança (desfazer pode reescrever linhas escondidas), e sem isto ficavam
+        linhas com conteúdo novo que a vista nunca mostrava. Era o único
+        invariante de dobra que o porte tinha deixado atrás."""
+        a = l0 if l0 > 0 else 0
+        b = l1 if l1 < len(self.lines) - 1 else len(self.lines) - 1
+        for i in range(a, b + 1):
+            if self.lines[i].folded:
+                self.unfold(i)
+        guard = 0
+        while guard < 64:
+            hit = False
+            for i in range(a, b + 1):
+                if self.lines[i].hidden:
+                    self.unfold_enclosing(i)
+                    hit = True
+                    break
+            if not hit:
+                return
+            guard += 1
 
     def unfold_all(self):
         for l in self.lines:

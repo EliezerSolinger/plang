@@ -9,7 +9,7 @@
 #   make test-qbe   # same through the QBE backend (needs qbe/)
 #   make test-c89   # same in strict-C89 mode
 #   make selfhost   # rebuild plangc from the Plang source (self-host check)
-#   make pstudio    # build the editor (pstudio/, needs libsdl2-dev)
+#   make pstudio    # build the editor (pstudio/ps/, pscript; needs libsdl2-dev)
 #   make clean
 
 CC     ?= cc
@@ -64,65 +64,37 @@ selfhost: plangc
 	@ln -sf ../../plangc2 out/bin/pscript
 	@echo "self-host OK: plangc2 rebuilt from Plang source (out/bin/pscript is the run-it alias)"
 
-# Plang Studio: o editor em P puro (pstudio/). Precisa de libsdl2-dev; o C sai
-# em out/ (espelho da raiz: imports relativos resolvem lá) e o binário em
-# out/bin/pstudio — a raiz já tem a PASTA pstudio/, daí o out/bin.
-PSTUDIO_SRC = pstudio/font_atlas.p pstudio/psys.p pstudio/pgfx_raster.p \
-              pstudio/pgfx.p pstudio/pui.p pstudio/core.p pstudio/complete.p \
-              pstudio/codeview.p pstudio/app.p pstudio/main.p
+# O driver gráfico (pstudio/pgfx*.p, font_atlas.p): a única parte do editor que
+# continua em P, porque é pixel e ponteiro do começo ao fim e a 45.5 não deixa
+# isso atravessar. Ele é compilado junto com o editor, no alvo `pstudio`.
+PSTUDIO_DRIVER = pstudio/font_atlas.p pstudio/pgfx_raster.p pstudio/pgfx.p \
+                 pstudio/ps/shim.p pstudio/ps/hl.p
 PSTUDIO_DEPS = selfhost/lexer.p selfhost/utf8.p selfhost/util.p
 
-# SDL2's headers are NOT on the default include path everywhere: Homebrew puts
-# them under /opt/homebrew/include (Apple Silicon) or /usr/local/include (Intel),
-# neither of which cc searches. plangc preprocesses `include <SDL2/SDL.h>` with
-# its own cc, so it needs the same -I the final compile gets — otherwise the
-# ingest fails with "failed to preprocess header 'SDL2/SDL.h'" on macOS while
-# building fine on Linux, where /usr/include/SDL2 happens to be found anyway.
-# Via PLANGC_CPP so that EVERY plangc invocation is covered, not just this one.
-# It also passes -D_REENTRANT along, so the declarations plangc ingests are the
-# same ones the C compiler will see.
+# PLANG STUDIO: a lógica inteira em pscript (pstudio/ps/*.psc), e em P só o
+# driver — a mão que toca o SDL2 (`shim.p`) e a que chama o lexer do compilador
+# para o realce (`hl.p`, bateria 113). Construído como qualquer programa em
+# pscript: o runtime compilado ao lado.
 #
-# SDL_cpuinfo.h also pulls in the COMPILER-INTRINSICS headers — immintrin.h on
-# x86, arm_neon.h on Apple Silicon — and SDL ships an opt-out for each, meant for
-# consumers that do not use SIMD. pstudio is one: no vector type appears anywhere
-# in SDL's own API, only in those headers. They are the densest, most
-# compiler-specific C in the tree (arm_neon.h is generated, tens of thousands of
-# lines of target attributes and builtin aliases) and ingesting it on arm64 macOS
-# failed outright. Turning them off also cuts what plangc must parse from ~44k
-# lines to under 5k, and the generated C is byte-identical either way.
-SDL2_CFLAGS = $(shell pkg-config --cflags sdl2 2>/dev/null)
-SDL2_NOSIMD = -DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H \
-              -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H \
-              -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H \
-              -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H
-
-pstudio: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS) $(SDL2_NOSIMD)
-pstudio: plangc
+# 116: o editor em P (core/pui/codeview/complete/app/main/psys, 6448 linhas) foi
+# APOSENTADO depois da paridade medida método por método (115). `pstudio-ps`
+# continua existindo como apelido de `pstudio`.
+pstudio pstudio-ps: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS) $(SDL2_NOSIMD)
+pstudio pstudio-ps: plangc
 	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
 	./plangc --out-dir out stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph \
-	         pstudio/*.ph $(PSTUDIO_SRC) $(PSTUDIO_DEPS)
+	         pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph \
+	         $(PSTUDIO_DRIVER) $(PSTUDIO_DEPS) \
+	         pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p
+	./plangc --out-dir out pstudio/ps/app.psc
 	@mkdir -p out/bin
-	$(CC) $(CFLAGS) -w -D_DEFAULT_SOURCE -o out/bin/pstudio \
-	      $(patsubst %.p,out/%.c,$(PSTUDIO_SRC)) $(patsubst %.p,out/%.c,$(PSTUDIO_DEPS)) \
-	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm
-	@echo "pstudio pronto: ./out/bin/pstudio [pasta|arquivos]"
-
-# The pscript PORT of the editor (pstudio/ps/): the logic in pscript, the hand
-# that touches SDL2 still in P. Built the way anyone would build a pscript
-# program — the runtime compiled alongside — plus the shim it calls through.
-pstudio-ps: export PLANGC_CPP = $(CC) $(SDL2_CFLAGS) $(SDL2_NOSIMD)
-pstudio-ps: plangc
-	@pkg-config --exists sdl2 || { echo "pstudio-ps: falta libsdl2-dev"; exit 1; }
-	./plangc --out-dir out stl/*.ph selfhost/plang.ph pstudio/*.ph pstudio/ps/shim.ph \
-	         pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p pstudio/psys.p \
-	         pstudio/ps/shim.p pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p
-	./plangc --cpp "$(CC) -Iout/pstudio/ps" --out-dir out pstudio/ps/app.psc
-	@mkdir -p out/bin
-	$(CC) $(CFLAGS) -w $(PSDEFS) -Iout/pstudio/ps -o out/bin/pstudio-ps \
-	      out/pstudio/ps/app.c out/pscript/runtime/psrt_mem.c out/pscript/runtime/psrt_val.c out/pscript/runtime/psrt_rt.c out/pscript/runtime/psrt_std.c out/pscript/runtime/psrt_os.c out/pscript/runtime/psrt_top.c out/pstudio/ps/shim.c \
-	      out/pstudio/pgfx.c out/pstudio/pgfx_raster.c out/pstudio/font_atlas.c out/pstudio/psys.c \
+	$(CC) $(CFLAGS) -w $(PSDEFS) -o out/bin/pstudio-ps \
+	      out/pstudio/ps/app.c out/pscript/runtime/psrt_mem.c out/pscript/runtime/psrt_val.c out/pscript/runtime/psrt_rt.c out/pscript/runtime/psrt_std.c out/pscript/runtime/psrt_os.c out/pscript/runtime/psrt_top.c \
+	      out/pstudio/ps/shim.c out/pstudio/ps/hl.c out/selfhost/lexer.c out/selfhost/util.c out/selfhost/utf8.c \
+	      out/pstudio/pgfx.c out/pstudio/pgfx_raster.c out/pstudio/font_atlas.c \
 	      $(SDL2_NOSIMD) `pkg-config --cflags --libs sdl2` -lm -pthread
-	@echo "pstudio-ps pronto: ./out/bin/pstudio-ps [arquivo]"
+	@ln -sf pstudio-ps out/bin/pstudio
+	@echo "pstudio pronto: ./out/bin/pstudio [pasta|arquivos]"
 
 clean:
 	rm -rf plangc plangc2 out tests/out stl/*.h .hello .hello.p .hello.c

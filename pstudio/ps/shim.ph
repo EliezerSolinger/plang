@@ -9,6 +9,7 @@
 # The editor's LOGIC lives on the other side, in pscript: buffer, carets, undo,
 # search, layout, key bindings. This file is the hand that holds the screen.
 include <stddef.h>
+import "../../stl/cstr.ph"
 
 # ---- the window ----
 def shim_open(w: i32, h: i32) -> bool
@@ -30,8 +31,13 @@ SHIM_MOUSE_UP: const i32 = 5
 SHIM_MOUSE_MOVE: const i32 = 6
 SHIM_WHEEL: const i32 = 7
 SHIM_RESIZE: const i32 = 8
+SHIM_TIMEOUT: const i32 = 9      # a espera venceu (é o que faz o cursor piscar)
+SHIM_FOCUS: const i32 = 10       # a janela ganhou o foco (hora de olhar o disco)
 
 def shim_poll() -> i32
+# 114: UM evento, bloqueando até `ms` milissegundos. Devolve SHIM_TIMEOUT quando
+# venceu — é assim que o laço do editor pisca o cursor sem girar em vazio.
+def shim_wait(ms: i32) -> i32
 def shim_ev_key() -> i32                  # SDL keycode
 def shim_ev_mods() -> i32                 # 1=shift 2=ctrl 4=alt 8=gui
 def shim_ev_cp() -> i32                   # SHIM_TEXT: the codepoint typed
@@ -57,6 +63,17 @@ def shim_baseline() -> i32
 def shim_zoom(step: i32)                  # pick another grid (a real raster)
 def shim_zoom_steps() -> i32
 def shim_zoom_at() -> i32
+# o passo PADRÃO da grade (o mesmo que o editor em P usa ao abrir e no reset)
+def shim_zoom_default() -> i32
 
-# ---- the clock ----
-def shim_millis() -> i64
+# ---- 114: o que o app pede ao sistema, e só o driver pode dar ----
+# A área de transferência é do SISTEMA, então ela mora aqui; o texto atravessa
+# como `CStr` (81/84/85), emprestado na ida e copiado na volta.
+def shim_clip_set(in s: CStr)
+def shim_clip_get() -> CStr
+# as duas perguntas modais: 0=salvar 1=descartar 2=cancelar; e recarregar sim/não
+def shim_confirm_close(in name: CStr) -> i32
+def shim_confirm_reload(in name: CStr) -> bool
+def shim_title(in s: CStr)
+# um quadro em PPM, para inspecionar o desenho num servidor sem X
+def shim_shot(in p: CStr) -> bool

@@ -175,8 +175,12 @@ else
     bad "o `run` divergiu (veja $V/runcmd.log)"
 fi
 
-step "7/8 pstudio (compilação do editor: maior consumidor de P)"
-# gating de COMPILAÇÃO do editor inteiro (a suíte funcional roda no passo 4).
+step "7/8 pstudio (o editor: pscript por cima, driver em P por baixo)"
+# 116: o editor em P foi aposentado (a paridade foi medida método por método na
+# 115). O que este passo mede agora é o programa GRÁFICO inteiro: o driver em P
+# (SDL2 + o lexer do compilador para o realce), o runtime do pscript e as 4200
+# linhas de pscript do editor, compilados e LINKADOS juntos — e depois o
+# auto-teste dele, que abre um arquivo, digita, desfaz, usa a paleta e desenha.
 # SDL2 é dependência com skip gracioso — sem libsdl2-dev só avisa.
 if pkg-config --exists sdl2 >/dev/null 2>&1; then
   # o cc que o plangc usa para pré-processar `include <SDL2/SDL.h>` precisa dos
@@ -190,13 +194,28 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
 -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H \
 -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
   export PLANGC_CPP="$CC $(pkg-config --cflags sdl2) $nosimd"
+  RT_ARGS="pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p"
   if $V/plangc_s2 --out-dir $V/pst stl/*.ph selfhost/plang.ph selfhost/ast.ph \
-       selfhost/lexer.ph pstudio/*.ph pstudio/*.p selfhost/lexer.p selfhost/utf8.p \
-       selfhost/util.p >$V/pstudio.log 2>&1 &&
-     $CC -w -D_DEFAULT_SOURCE -o $V/pstudio_bin $V/pst/pstudio/*.c \
+       selfhost/lexer.ph pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph \
+       pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p \
+       pstudio/ps/shim.p pstudio/ps/hl.p selfhost/lexer.p selfhost/utf8.p selfhost/util.p \
+       $RT_ARGS >$V/pstudio.log 2>&1 &&
+     $V/plangc_s2 --out-dir $V/pst pstudio/ps/app.psc >>$V/pstudio.log 2>&1 &&
+     $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -o $V/pstudio_bin \
+       $V/pst/pstudio/ps/app.c $V/pst/pscript/runtime/psrt_*.c \
+       $V/pst/pstudio/ps/shim.c $V/pst/pstudio/ps/hl.c \
+       $V/pst/pstudio/pgfx.c $V/pst/pstudio/pgfx_raster.c $V/pst/pstudio/font_atlas.c \
        $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
-       $nosimd $(pkg-config --cflags --libs sdl2) -lm >>$V/pstudio.log 2>&1; then
-    ok "editor compila e linka"
+       $nosimd $(pkg-config --cflags --libs sdl2) -lm -pthread >>$V/pstudio.log 2>&1; then
+    # o mesmo arquivo de amostra que a suite usa: o auto-teste conta linhas e
+    # dobras, e o .expected e um so para os dois harnesses
+    printf 'line one\nline two\nline three\n' > $V/pst/sample.txt
+    if ( cd $V/pst && SDL_VIDEODRIVER=dummy timeout 30 ../pstudio_bin --selftest sample.txt >saida 2>&1 ) &&
+       diff -q $V/pst/saida tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then
+      ok "editor compila, linka e passa o auto-teste"
+    else
+      bad "o auto-teste do editor falhou (veja $V/pst/saida)"
+    fi
   else
     bad "pstudio nao compilou (veja $V/pstudio.log)"
   fi

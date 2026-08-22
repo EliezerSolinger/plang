@@ -1,0 +1,44 @@
+tree=3 indexed_files=3
+tabs=1 cur=0 title=hello.p
+lines=4 hl=1 gutter=80
+typed=[    x: i32 = 42  # resposta0] dirty=1
+undo=[    x: i32 = 42  # resposta]
+redo=[    x: i32 = 42  # resposta0]
+carets=2
+palette=1 top=sub/notas.txt
+tabs=2 cur=notas.txt hl_txt=0
+cmds=1 top=Zoom In
+goto=3
+find1=1:15
+find2=2:10
+clicked_tab=0
+tree_expanded=4
+can_fold0=1
+fold: folded0=1 visible=2
+unfold: folded0=0 visible=4
+bookmark: mark=1
+comment: 1=[    # x: i32 = 42  # resposta0]
+uncomment: 1=[    x: i32 = 42  # resposta0]
+dup: lines=5
+pair: 1=[    x: i32 = 42  # resposta0()] col=29
+skip: 1=[    x: i32 = 42  # resposta0()] col=30
+popup: open=1 hits=1
+first=main
+clip=[    x: i32 = 42  # resposta0]
+zoom: cell=20
+zoom reset: cell=17
+gutter mark: 2
+gutter unmark: 0
+gutter fold: folded0=1 visible=2
+edit unfolds: folded0=0 hidden1=0
+moved: caret=1 igual=1
+pair_bs: 1=[    x: i32 = 42  # resposta0]
+accepted: 0=[def mainn() -> i32: ] open=0
+f2 mark: 1
+f2 goto: caret=1
+title=[pstudio — hello.p]
+status=[projps/hello.p*   2:1   LF   5 lines   17px]
+draw: rects=29 glyphs=192
+saved=1 dirty=0
+tabs=0
+app-ok

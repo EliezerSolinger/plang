@@ -1,417 +1,308 @@
-"""pstudio, in pscript: the window, the keys and the painting.
+"""pstudio, em pscript: o programa.
 
-The whole editor above the driver is here and in `core.psc` — the buffer, the
-selection, the undo, the layout, the key bindings and the drawing order. What
-is NOT here is anything with a pointer in it: the window, the events and the
-pixels live in `shim.p`, on the P side of the boundary (45.5), and what
-crosses between the two is what a number can say.
+Isto é o DRIVER, e nada mais: abre a janela, traduz o evento do shim para o
+evento do toolkit, lê e escreve arquivo, fala com a área de transferência e
+apresenta o quadro. A lógica inteira do editor — buffer, cursores, desfazer,
+dobra, realce, completamento, abas, árvore, paleta, busca — mora nos módulos
+`lib_*.psc` ao lado, e é por isso que ela roda inteira num teste headless
+(`app_test.psc`).
 
-That split is the whole experiment. If a garbage-collected language with
-checked indexing can hold a real editor together while the hand that touches
-SDL2 stays a page of P, then the two languages are doing exactly what they
-were separated to do.
+A fronteira: `shim.p` é a mão que toca o SDL (45.5 — ponteiro não atravessa), e
+`hl.p` é a que chama o lexer do compilador. Duas páginas de P; o resto é pscript.
+
+Uso:
+    pstudio [diretório-ou-arquivo]
+    pstudio --selftest arquivo     # exercita o editor sem tela e sai
+    pstudio --shot saída.ppm [dir] # um quadro em PPM (servidor sem X)
+
+**Por que `import "shim.ph"` e não `include "shim.h"`:** a porta do `include` lê
+o header com o C, e ali um `CStr` é ponteiro — que não atravessa (45.5). A porta
+do `import` lê o `.ph` com o front end do P (75.3), e por ela passam as três
+coisas de que este arquivo precisa: as funções de `CStr`, as constantes
+`SHIM_*` e o `bool` como bool (pelo `include` ele chegaria como `int`, porque é
+isso que o header emitido escreve).
+
+**A costura que o async cobrou.** Ler e escrever arquivo no pscript é `await`
+(76.2), e o `lib_app` é síncrono de propósito — um índice de completamento que
+espera obrigaria todo chamador dele a esperar. Então o app PEDE e o driver
+atende: `want_open` é o pedido de leitura (o driver lê e chama `open_file` outra
+vez), e a escrita entra numa fila que o laço drena, com a falha indo para a barra
+de estado. É o único lugar do editor onde a divisão custa algo, e está aqui — no
+driver — em vez de espalhada.
 """
+import "shim.ph"
 
-include "shim.h"
-
+import lib_pui as pui
+import lib_app as appm
 import sys
-
-import lib_core as core
-
-
-# ---------- colours (0xAARRGGBB) ----------
-const BG: int = 0xFF1E1E1E
-const BG_GUTTER: int = 0xFF252526
-const BG_STATUS: int = 0xFF007ACC
-const FG: int = 0xFFD4D4D4
-const FG_DIM: int = 0xFF858585
-const FG_STATUS: int = 0xFFFFFFFF
-const SEL: int = 0xFF264F78
-const CARET: int = 0xFFAEAFAD
-const CUR_LINE: int = 0xFF2A2D2E
-const FG_FOLD: int = 0xFFC586C0
-
-# The event kinds come from shim.h itself now (72.4): a `static const` scalar
-# crosses the boundary as the number it is, so there is no second copy here to
-# fall out of step with the first.
-
-const MOD_SHIFT: int = 1
-const MOD_CTRL: int = 2
-const MOD_ALT: int = 4
-
-const K_RETURN: int = 13
-const K_ESCAPE: int = 27
-const K_BACKSPACE: int = 8
-const K_TAB: int = 9
-const K_DELETE: int = 127
-const K_RIGHT: int = 1073741903
-const K_LEFT: int = 1073741904
-const K_DOWN: int = 1073741905
-const K_UP: int = 1073741906
-const K_PAGEUP: int = 1073741899
-const K_PAGEDOWN: int = 1073741902
-const K_END: int = 1073741901
-const K_HOME: int = 1073741898
+import time
+import os
+import path
 
 
-struct Editor:
-    buf: core.Buffer
-    path: str
-    top: int                 # first VISIBLE line (folds skipped)
-    left: int                # horizontal scroll, in columns
-    message: str
-    msg_until: int
-    running: bool
-    find_mode: bool
-    find_text: str
+cache: dict<str, str> = {}
+pending: list<str> = []          # caminhos com escrita pendente (o texto está no cache)
 
-    # ---------- geometry ----------
 
-    def gutter_w(self) -> int:
-        digits = 1
-        n = self.buf.nlines()
-        while n >= 10:
-            digits += 1
-            n = n // 10
-        return (digits + 3) * shim_cell_w()
+async def read_file(p: str) -> str:
+    try:
+        with await open(p, "r") as f:
+            return await f.text()
+    catch e:
+        return ""
 
-    def rows(self) -> int:
-        return (shim_height() - shim_cell_h()) // shim_cell_h()
 
-    def cols(self) -> int:
-        return (shim_width() - self.gutter_w()) // shim_cell_w()
-
-    # the line a screen row shows, skipping what is folded away
-    def line_at_row(self, row: int) -> int:
-        l = self.top
-        seen = 0
-        while l < self.buf.nlines():
-            if not self.buf.is_hidden(l):
-                if seen == row:
-                    return l
-                seen += 1
-            l += 1
-        return -1
-
-    def row_of_line(self, line: int) -> int:
-        row = 0
-        l = self.top
-        while l < line and l < self.buf.nlines():
-            if not self.buf.is_hidden(l):
-                row += 1
-            l += 1
-        return row
-
-    def scroll_to_caret(self):
-        c = self.buf.caret(self.buf.ncarets() - 1)
-        if c.line < self.top:
-            self.top = c.line
-        r = self.row_of_line(c.line)
-        if r >= self.rows():
-            over = r - self.rows() + 1
-            l = self.top
-            while over > 0 and l < self.buf.nlines():
-                if not self.buf.is_hidden(l):
-                    over -= 1
-                l += 1
-            self.top = l
-        if c.col < self.left:
-            self.left = c.col
-        if c.col >= self.left + self.cols():
-            self.left = c.col - self.cols() + 1
-
-    # ---------- painting ----------
-
-    def draw_text(self, s: str, x: int, y: int, color: int) -> int:
-        at = x
-        for ch in s:
-            at += shim_glyph(ord(ch), at, y, color)
-        return at
-
-    def draw(self):
-        cw = shim_cell_w()
-        ch = shim_cell_h()
-        gw = self.gutter_w()
-        shim_clear(BG)
-        shim_rect(0, 0, gw, shim_height() - ch, BG_GUTTER)
-
-        cur_line = self.buf.caret(self.buf.ncarets() - 1).line
-        for row in range(self.rows()):
-            l = self.line_at_row(row)
-            if l < 0:
-                break
-            y = row * ch
-            if l == cur_line:
-                shim_rect(gw, y, shim_width() - gw, ch, CUR_LINE)
-            # the line number, right-aligned in the gutter
-            num = str(l + 1)
-            nx = gw - (len(num) + 2) * cw
-            self.draw_text(num, nx, y, FG_STATUS if l == cur_line else FG_DIM)
-            if self.buf.is_folded(l):
-                self.draw_text("▸", gw - cw, y, FG_FOLD)
-
-            # the selection, then the text over it
-            for k in range(self.buf.ncarets()):
-                r = self.buf.sel_range(k)
-                if r.l0 == r.l1 and r.c0 == r.c1:
-                    continue
-                if l < r.l0 or l > r.l1:
-                    continue
-                a = r.c0 if l == r.l0 else 0
-                b = r.c1 if l == r.l1 else self.buf.line_cp(l) + 1
-                x0 = gw + (a - self.left) * cw
-                shim_rect(x0, y, (b - a) * cw, ch, SEL)
-
-            t = self.buf.line_text(l)
-            x = gw
-            i = self.left
-            while i < len(t) and x < shim_width():
-                x += shim_glyph(cp_of(t[i]), x, y, FG)
-                i += 1
-
-            # every caret on this line
-            for k in range(self.buf.ncarets()):
-                c = self.buf.caret(k)
-                if c.line == l:
-                    shim_rect(gw + (c.col - self.left) * cw, y, 2, ch, CARET)
-
-        # the status bar
-        sy = shim_height() - ch
-        shim_rect(0, sy, shim_width(), ch, BG_STATUS)
-        c = self.buf.caret(self.buf.ncarets() - 1)
-        left = self.path if len(self.path) > 0 else "<no name>"
-        if self.buf.dirty:
-            left += " •"
-        info = str(c.line + 1) + ":" + str(c.col + 1)
-        if self.buf.ncarets() > 1:
-            info += "  " + str(self.buf.ncarets()) + " carets"
-        if self.find_mode:
-            left = "find: " + self.find_text
-        elif len(self.message) > 0 and shim_millis() < self.msg_until:
-            left = self.message
-        self.draw_text(left, shim_cell_w(), sy, FG_STATUS)
-        self.draw_text(info, shim_width() - (len(info) + 1) * shim_cell_w(), sy, FG_STATUS)
-        shim_present()
-
-    def say(self, m: str):
-        self.message = m
-        self.msg_until = shim_millis() + 2500
-
-    # ---------- files ----------
-
-    # 76.2: reading a file is a job for the pool, so this is an `async def` and
-    # the caller awaits it. What used to be a call that stopped the whole
-    # program while the disk answered now stops only this task.
-    async def open_file(self, path: str):
+async def flush_writes(app: appm.App):
+    while len(pending) > 0:
+        p = pending.pop()
         try:
-            with await open(path, "r") as f:
-                self.buf.load(await f.text())
-            self.path = path
-            self.top = 0
-            self.say("opened " + path)
+            f = await open(p, "w")
+            await f.write(cache[p])
+            await f.close()
         catch e:
-            self.buf.load("")
-            self.path = path
-            self.say("new file: " + path)
+            app.want_msg = "could not write " + p
 
-    async def save(self):
-        if len(self.path) == 0:
-            self.say("no file name")
-            return
-        try:
-            with await open(self.path, "w") as f:
-                await f.write(self.buf.text())
-            self.buf.mark_saved()
-            self.say("saved " + self.path)
-        catch e:
-            self.say("could not save: " + e.message)
 
-    # ---------- input ----------
+def read_cached(p: str) -> str:
+    return cache[p] if p in cache else ""
 
-    async def on_key(self, key: int, mods: int, now: int):
-        ctrl = (mods & MOD_CTRL) != 0
-        shift = (mods & MOD_SHIFT) != 0
 
-        if self.find_mode:
-            if key == K_ESCAPE:
-                self.find_mode = False
-            elif key == K_RETURN:
-                c = self.buf.caret(0)
-                hit = self.buf.find(self.find_text, c.line, c.col + 1, True)
-                if hit == None:
-                    self.say("not found")
-                else:
-                    self.buf.select_range(hit ?? core.Span(0, 0, 0, 0))
-                    self.scroll_to_caret()
-            elif key == K_BACKSPACE and len(self.find_text) > 0:
-                self.find_text = self.find_text[0:len(self.find_text) - 1]
-            return
+def queue_write(p: str, text: str) -> bool:
+    cache[p] = text
+    pending.append(p)
+    return True
 
-        if ctrl and key == 115:            # ctrl+s
-            await self.save()
-        elif ctrl and key == 113:          # ctrl+q
-            self.running = False
-        elif ctrl and key == 122:          # ctrl+z
-            self.buf.undo_step()
-        elif ctrl and key == 121:          # ctrl+y
-            self.buf.redo_step()
-        elif ctrl and key == 97:           # ctrl+a
-            self.buf.select_all()
-        elif ctrl and key == 100:          # ctrl+d — one more caret on the word
-            self.buf.ctrl_d()
-        elif ctrl and key == 102:          # ctrl+f
-            self.find_mode = True
-            self.find_text = ""
-        elif ctrl and key == 47:           # ctrl+/ — toggle comment
-            self.buf.toggle_comment("#", now)
-        elif ctrl and key == 1073741911:   # ctrl+plus
-            shim_zoom(shim_zoom_at() + 1)
-        elif ctrl and key == 1073741910:   # ctrl+minus
-            shim_zoom(shim_zoom_at() - 1)
-        elif key == K_ESCAPE:
-            self.buf.collapse()
-        elif key == K_RETURN:
-            self.buf.insert("\n", now)
-        elif key == K_BACKSPACE:
-            self.buf.backspace(now)
-        elif key == K_DELETE:
-            self.buf.delete_fwd(now)
-        elif key == K_TAB:
-            if self.buf.has_sel():
-                self.buf.indent(-1 if shift else 1, now)
-            else:
-                self.buf.insert("    ", now)
-        elif key == K_LEFT:
-            if ctrl:
-                self.buf.move_word(-1, shift)
-            else:
-                self.buf.move_h(-1, shift)
-        elif key == K_RIGHT:
-            if ctrl:
-                self.buf.move_word(1, shift)
-            else:
-                self.buf.move_h(1, shift)
-        elif key == K_UP:
-            self.buf.move_v(-1, shift)
-        elif key == K_DOWN:
-            self.buf.move_v(1, shift)
-        elif key == K_PAGEUP:
-            self.buf.move_v(-self.rows(), shift)
-        elif key == K_PAGEDOWN:
-            self.buf.move_v(self.rows(), shift)
-        elif key == K_HOME:
-            self.buf.home(shift)
-        elif key == K_END:
-            self.buf.end(shift)
-        self.scroll_to_caret()
 
-    def on_text(self, cp: int, now: int):
-        if self.find_mode:
-            self.find_text += str_of_cp(cp)
-            return
-        self.buf.insert(str_of_cp(cp), now)
-        self.scroll_to_caret()
+# ---------- eventos: do shim para o toolkit ----------
 
-    def on_click(self, x: int, y: int, clicks: int, mods: int):
-        row = y // shim_cell_h()
-        l = self.line_at_row(row)
-        if l < 0:
-            return
-        col = (x - self.gutter_w()) // shim_cell_w() + self.left
-        if x < self.gutter_w():
-            self.buf.toggle_fold(l)
-            return
-        if (mods & MOD_ALT) != 0:
-            self.buf.add_caret(l, col)
+def ev_from_shim(kind: int) -> pui.Event:
+    k = pui.EV_NONE
+    if kind == SHIM_KEY:
+        k = pui.EV_KEY
+    elif kind == SHIM_TEXT:
+        k = pui.EV_TEXT
+    elif kind == SHIM_MOUSE_DOWN:
+        k = pui.EV_MOUSE_DOWN
+    elif kind == SHIM_MOUSE_UP:
+        k = pui.EV_MOUSE_UP
+    elif kind == SHIM_MOUSE_MOVE:
+        k = pui.EV_MOUSE_MOVE
+    elif kind == SHIM_WHEEL:
+        k = pui.EV_WHEEL
+    elif kind == SHIM_RESIZE:
+        k = pui.EV_RESIZE
+    elif kind == SHIM_QUIT:
+        k = pui.EV_QUIT
+    return pui.Event(k, shim_ev_key(), shim_ev_mods(), shim_ev_cp(),
+                     shim_ev_x(), shim_ev_y(), shim_ev_button(),
+                     shim_ev_clicks(), shim_ev_wheel())
+
+
+def painter() -> pui.Painter:
+    """O pintor do editor: cinco chamadas do shim, e nada mais."""
+    return pui.Painter(lambda x, y, w, h, c: shim_rect(x, y, w, h, c),
+                       lambda x, y, w, h, c: shim_frame(x, y, w, h, c),
+                       lambda x, y, w, h: shim_clip(x, y, w, h),
+                       lambda: shim_clip_reset(),
+                       lambda cp, x, y, c: shim_glyph(cp, x, y, c))
+
+
+def now_ms() -> int:
+    return int(time.monotonic() * 1000.0)
+
+
+def wire(app: appm.App):
+    """Liga o app ao sistema. Todas as funções do driver, num lugar."""
+    app.read_file = lambda p: read_cached(p)
+    app.write_file = lambda p, t: queue_write(p, t)
+    app.mtime_of = lambda p: path.getmtime(p) if path.exists(p) else 0
+    app.clip_get = lambda: shim_clip_get()
+    app.clip_set = lambda s: shim_clip_set(s)
+    app.confirm_close = lambda name: shim_confirm_close(name)
+    app.confirm_reload = lambda name: shim_confirm_reload(name)
+    app.set_title = lambda t: shim_title(t)
+    app.zoom_step = lambda step: zoom(app, step)
+
+
+def zoom(app: appm.App, step: int):
+    """O passo do zoom é uma GRADE de verdade (11..29px rasterizados), não um
+    multiplicador — por isso o índice é ABSOLUTO e o shim o prende na faixa. O
+    toolkit recebe a célula nova e refaz o layout inteiro.
+
+    `step == 0` volta ao passo PADRÃO — o mesmo que o editor em P usa, e por
+    isso o shim o expõe em vez de o app adivinhar."""
+    at = shim_zoom_at()
+    want = shim_zoom_default() if step == 0 else at + step
+    shim_zoom(want)
+    app.set_cell(shim_cell_w(), shim_cell_h())
+    app.dirty_ui = True
+
+
+async def serve_requests(app: appm.App):
+    """Atende o que o app pediu e não podia fazer: ler arquivo, escrever, e a
+    mensagem de falha."""
+    if len(app.want_open) > 0:
+        p = app.want_open
+        app.want_open = ""
+        cache[p] = await read_file(p)
+        app.open_file(p)
+    await flush_writes(app)
+    if len(app.want_msg) > 0:
+        app.u.set_text(app.status, app.want_msg)
+        app.want_msg = ""
+        app.dirty_ui = True
+
+
+async def open_arg(app: appm.App, arg: str):
+    if path.isfile(arg):
+        cache[arg] = await read_file(arg)
+        app.open_file(arg)
+
+
+# ---------- o laço ----------
+
+async def run(app: appm.App) -> int:
+    blink = now_ms()
+    while app.running:
+        # UM evento bloqueando (o timeout faz o cursor piscar), depois DRENA a
+        # fila: o `present` é por QUADRO, não por evento. Com vsync cada present
+        # segura ~16ms, e um por evento de movimento deixa o arraste atrás do
+        # cursor (medido no editor em P: 200 movimentos = 182ms assim, 1ms
+        # drenando).
+        kind = shim_wait(appm.BLINK_MS)
+        app.now_ms = now_ms()
+        if kind == SHIM_TIMEOUT or kind == SHIM_NONE:
+            blink = app.tick(app.now_ms, blink)
+        elif kind == SHIM_FOCUS:
+            app.check_external()
+        elif kind == SHIM_QUIT:
+            app.try_quit()
+        elif kind == SHIM_RESIZE:
+            app.u.layout(shim_width(), shim_height())
+            app.u.queue_redraw_tree(app.root)
+            app.dirty_ui = True
         else:
-            self.buf.move_to(l, col)
-            if clicks >= 2:
-                self.buf.select_word_at(0)
-
-
-# the codepoint of a one-character string, and back — the two edges where the
-# editor meets a driver that speaks numbers
-def cp_of(ch: str) -> int:
-    return ord(ch)
-
-
-def str_of_cp(cp: int) -> str:
-    return chr(cp)
-
-
-# A headless run through the same code paths the window drives: open, type,
-# move, select, undo, draw and save. It is what `tests/pstudio/` does for the P
-# editor — the editor is exercised, not mocked — and it is what makes this port
-# provable without a screen.
-async def selftest(path: str) -> int:
-    if shim_open(400, 240) == 0:
-        print("no window")
-        return 1
-    ed = Editor(core.new_buffer(), "", 0, 0, "", 0, True, False, "")
-    await ed.open_file(path)
-    print("loaded", ed.buf.nlines(), "lines")
-
-    ed.buf.move_to(0, 0)
-    ed.on_text(ord("X"), 10)
-    ed.on_text(ord("Y"), 20)
-    print("typed", ed.buf.line_text(0))
-
-    await ed.on_key(K_END, 0, 30)
-    await ed.on_key(K_LEFT, MOD_SHIFT, 40)
-    await ed.on_key(K_LEFT, MOD_SHIFT, 50)
-    print("selected", "[" + ed.buf.sel_text(0) + "]")
-
-    await ed.on_key(122, MOD_CTRL, 60)          # ctrl+z
-    print("undone", ed.buf.line_text(0))
-
-    ed.buf.move_to(1, 0)
-    await ed.on_key(100, MOD_CTRL, 70)          # ctrl+d
-    print("carets", ed.buf.ncarets())
-
-    ed.draw()                             # the whole paint path, atlas included
-    print("drew", shim_width(), "x", shim_height(), "cell", shim_cell_w(), "x", shim_cell_h())
-
-    ed.path = path + ".out"
-    await ed.save()
-    with await open(ed.path, "r") as f:
-        # a block is a SCOPE (64.1), so what it reads is printed inside it
-        print("saved", len(await f.text()), "bytes; dirty", ed.buf.dirty)
-    shim_close()
+            app.feed(ev_from_shim(kind))
+        while app.running:
+            k2 = shim_poll()
+            if k2 == SHIM_NONE:
+                break
+            app.now_ms = now_ms()
+            if k2 == SHIM_QUIT:
+                app.try_quit()
+            elif k2 == SHIM_RESIZE:
+                app.u.layout(shim_width(), shim_height())
+                app.u.queue_redraw_tree(app.root)
+                app.dirty_ui = True
+            elif k2 == SHIM_FOCUS:
+                app.check_external()
+            else:
+                app.feed(ev_from_shim(k2))
+        await serve_requests(app)
+        if app.dirty_ui or app.u.needs_draw:
+            shim_clear(app.u.theme.bg)
+            app.u.draw(painter(), shim_width(), shim_height())
+            shim_present()
+            app.dirty_ui = False
     return 0
 
 
-async def main(path: str):
-    # a `bool` returned by P is an `int` in the C header, and the frontier
-    # believes the signature (45.5) — so the test is against zero
-    if shim_open(1100, 720) == 0:
-        print("could not open a window")
-        return
-    ed = Editor(core.new_buffer(), "", 0, 0, "", 0, True, False, "")
-    if len(path) > 0:
-        await ed.open_file(path)
-    ed.draw()
-    while ed.running:
-        kind = shim_poll()
-        if kind == SHIM_NONE:
+# ---------- o auto-teste: o editor inteiro, sem tela ----------
+
+async def selftest(arg: str) -> int:
+    u = pui.new_ui(8, 17)
+    app = appm.new_app(u, path.dirname(arg) if len(path.dirname(arg)) > 0 else ".")
+    wire(app)
+    app.read_file = lambda p: read_cached(p)
+    u.layout(900, 500)
+    await open_arg(app, arg)
+    print("tabs", len(app.tabs))
+    cv = app.cur_cv()
+    if cv == None:
+        print("no file")
+        return 1
+    print("lines", cv.buf.nlines())
+    app.now_ms = now_ms()
+    app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("X"), 0, 0, 0, 0, 0))
+    print("typed", cv.buf.line_text(0))
+    cv.buf.undo_step()
+    print("undone", cv.buf.line_text(0))
+    app.palette_open(appm.PAL_COMMANDS)
+    u.set_text(app.palinput, ">fold all")
+    app.palette_filter()
+    print("palette", len(app.palitems), app.palitems[0].label if len(app.palitems) > 0 else "-")
+    app.palette_accept()
+    print("folded", cv.buf.visible_count())
+    n = app.u.build_all()
+    print("drawn", "yes" if n > 20 else "no")
+    await serve_requests(app)
+    print("selftest ok")
+    return 0
+
+
+# ---------- a entrada ----------
+
+async def main_run() -> int:
+    args = sys.argv
+    if len(args) > 1 and args[1] == "--selftest":
+        return await selftest(args[2] if len(args) > 2 else "")
+    # 115: a mesma linha de comando do editor em P — vários arquivos em abas,
+    # `--size LxA`, `--shot img.ppm`, e diagnóstico para o que não existe
+    shot = ""
+    files: list<str> = []
+    dir = ""
+    win_w = 1100
+    win_h = 720
+    i = 1
+    while i < len(args):
+        a = args[i]
+        if a == "--shot" and i + 1 < len(args):
+            shot = args[i + 1]
+            i += 2
             continue
-        now = shim_millis()
-        if kind == SHIM_QUIT:
-            ed.running = False
-        elif kind == SHIM_KEY:
-            await ed.on_key(shim_ev_key(), shim_ev_mods(), now)
-        elif kind == SHIM_TEXT:
-            ed.on_text(shim_ev_cp(), now)
-        elif kind == SHIM_MOUSE_DOWN:
-            ed.on_click(shim_ev_x(), shim_ev_y(), shim_ev_clicks(), shim_ev_mods())
-        elif kind == SHIM_WHEEL:
-            step = shim_ev_wheel() * 3
-            self_top = ed.top - step
-            ed.top = 0 if self_top < 0 else (ed.buf.nlines() - 1 if self_top >= ed.buf.nlines() else self_top)
-        ed.draw()
+        if a == "--size" and i + 1 < len(args):
+            wh = args[i + 1].split("x")
+            if len(wh) == 2:
+                win_w = int(wh[0])
+                win_h = int(wh[1])
+            i += 2
+            continue
+        if a.startswith("--"):
+            print("pstudio: unknown option '" + a + "'")
+            return 2
+        if path.isdir(a):
+            if len(dir) == 0:
+                dir = path.normpath(a)
+        elif path.isfile(a):
+            files.append(a)
+            if len(dir) == 0:
+                dir = path.dirname(a)
+        else:
+            print("pstudio: '" + a + "' does not exist")
+        i += 1
+    if len(dir) == 0:
+        dir = "."
+    if not shim_open(win_w, win_h):
+        print("could not open a window (SDL). Is DISPLAY set?")
+        return 1
+    u = pui.new_ui(shim_cell_w(), shim_cell_h())
+    app = appm.new_app(u, dir)
+    wire(app)
+    u.layout(shim_width(), shim_height())
+    for fp in files:
+        await open_arg(app, fp)
+    app.update_status()
+    if len(shot) > 0:
+        shim_clear(u.theme.bg)
+        u.draw(painter(), shim_width(), shim_height())
+        shim_present()
+        ok = shim_shot(shot)
+        shim_close()
+        print("shot", "ok" if ok else "failed")
+        return 0 if ok else 1
+    rc = await run(app)
     shim_close()
+    return rc
 
 
-args = sys.argv
-if len(args) > 2 and args[1] == "--selftest":
-    sys.exit(await selftest(args[2]))
-await main(args[1] if len(args) > 1 else "")
+sys.exit(await main_run())

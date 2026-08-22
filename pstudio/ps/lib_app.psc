@@ -23,6 +23,7 @@ const BLINK_MS: int = 500        # o piscar do cursor (DESIGN.md)
 const MAX_SCAN: int = 20000      # teto da varredura do projeto
 const PAL_ROWS: int = 12         # linhas visíveis da paleta
 const TREE_MIN_CP: int = 18      # largura mínima da árvore, em caracteres
+const K_F2: int = 1073741883     # o F2 do SDL
 
 
 enum PalMode:
@@ -123,6 +124,8 @@ struct App:
     running: bool
     dirty_ui: bool     # um quadro precisa ser apresentado
     now_ms: int        # o relógio, que vem do driver
+    want_open: str     # 114: um arquivo que o app quer e o driver tem de LER
+    want_msg: str      # uma mensagem para a barra de estado (falha de escrita)
 
     # ---- o driver, injetado pelo `app.psc` ----
     read_file: (def(str) -> str)?        # "" quando não deu
@@ -133,6 +136,64 @@ struct App:
     confirm_close: (def(str) -> int)?    # 0=salvar 1=descartar 2=cancelar
     confirm_reload: (def(str) -> bool)?
     set_title: def(str)?
+    zoom_step: def(int)?        # 115: +1/-1/0(reset) — o driver troca a grade e
+                                #   devolve a célula nova por `set_cell`
+
+    # ---------- o driver, atrás de um método cada ----------
+    # A prova de não-nulo é sobre LOCAL (43.1), então cada função do driver é
+    # lida para uma variável e chamada DENTRO do ramo. Fazer isso uma vez por
+    # função aqui deixa o resto do arquivo sem um `if` em cada uso.
+
+    def do_read(self, p: str) -> str:
+        f = self.read_file
+        if f != None:
+            return f(p)
+        return ""
+
+    def do_write(self, p: str, text: str) -> bool:
+        f = self.write_file
+        if f != None:
+            return f(p, text)
+        return False
+
+    def do_mtime(self, p: str) -> int:
+        f = self.mtime_of
+        if f != None:
+            return f(p)
+        return 0
+
+    def do_clip_get(self) -> str:
+        f = self.clip_get
+        if f != None:
+            return f()
+        return ""
+
+    def do_clip_set(self, text: str):
+        f = self.clip_set
+        if f != None:
+            f(text)
+
+    def do_confirm_close(self, name: str) -> int:
+        f = self.confirm_close
+        if f != None:
+            return f(name)
+        return 1              # sem driver, descarta (é o que um teste quer)
+
+    def do_confirm_reload(self, name: str) -> bool:
+        f = self.confirm_reload
+        if f != None:
+            return f(name)
+        return True
+
+    def do_zoom(self, step: int):
+        f = self.zoom_step
+        if f != None:
+            f(step)
+
+    def do_title(self, t: str):
+        f = self.set_title
+        if f != None:
+            f(t)
 
     # ---------- abas ----------
 
@@ -146,15 +207,18 @@ struct App:
             if self.tabs[i].cv.path == p:
                 self.select_tab(i)          # já aberto: só ativa
                 return
-        rd = self.read_file
-        if rd == None:
+        text = self.do_read(p)
+        # 114: LER é `await` no pscript (76.2), e este caminho é síncrono de
+        # propósito (um índice que espera obriga todo chamador a esperar). Então
+        # o app PEDE e o driver lê: `want_open` é o pedido, e o driver chama
+        # `open_file` outra vez com o texto já em mão.
+        if len(text) == 0 and path.isfile(p):
+            self.want_open = p
             return
-        text = rd(p)
         if len(text) == 0 and not path.isfile(p):
             return
         cv = cvm.cv_create(self.u, self.cvhost)
-        mt = self.mtime_of
-        cv.load_text(p, text, mt(p) if mt != None else 0)
+        cv.load_text(p, text, self.do_mtime(p))
         self.tabs.append(Tab(cv, path.basename(p)))
         self.select_tab(len(self.tabs) - 1)
 
@@ -162,6 +226,7 @@ struct App:
         if i < 0 or i >= len(self.tabs):
             return
         self.cur = i
+        self.do_title("pstudio — " + self.tabs[i].title)
         for k in range(len(self.tabs)):
             self.u.set_visible(self.tabs[k].cv.id, k == i)
         self.u.focus_set(self.tabs[i].cv.id)
@@ -175,14 +240,13 @@ struct App:
             return
         cv = self.tabs[i].cv
         if cv.buf.dirty:
-            ask = self.confirm_close
-            r = ask(self.tabs[i].title) if ask != None else 1
+            r = self.do_confirm_close(self.tabs[i].title)
             if r == 2:
                 return
             if r == 0 and not self.save_tab(i):
                 return
         self.u.free_node(cv.id)
-        self.tabs.remove(self.tabs[i])
+        self.tabs.remove_at(i)
         self.tab_hover = -1
         self.tab_hover_x = False
         if len(self.tabs) == 0:
@@ -203,15 +267,15 @@ struct App:
         cv = self.tabs[i].cv
         if len(cv.path) == 0:
             return False
-        wr = self.write_file
-        if wr == None or not wr(cv.path, cv.text_to_save()):
+        if not self.do_write(cv.path, cv.text_to_save()):
             return False
-        mt = self.mtime_of
-        cv.mark_saved(mt(cv.path) if mt != None else 0)
+        cv.mark_saved(self.do_mtime(cv.path))
         return True
 
     def save_cur(self):
-        self.save_tab(self.cur)
+        ok = self.save_tab(self.cur)
+        if not ok and self.cur >= 0:
+            self.want_msg = "could not save " + self.tabs[self.cur].cv.path
         self.u.queue_redraw(self.tabbar)
         self.dirty_ui = True
 
@@ -304,7 +368,7 @@ struct App:
                 j += 1
             k = j - 1
             while k > i:
-                self.entries.remove(self.entries[k])
+                self.entries.remove_at(k)
                 k -= 1
             e.expanded = False
         else:
@@ -370,8 +434,8 @@ struct App:
                 self.palitems[k] = self.palitems[k - 1]
                 k -= 1
             self.palitems[k] = t
-        while len(self.palitems) > 200:
-            self.palitems.pop()
+        if len(self.palitems) > 200:
+            self.palitems = self.palitems[0:200]      # o resto não caberia na tela
         self.u.relayout()
         self.u.queue_redraw(self.palette)
         self.dirty_ui = True
@@ -442,7 +506,8 @@ struct App:
             self.save_cur()
         elif cmd == 1:
             for i in range(len(self.tabs)):
-                self.save_tab(i)
+                if not self.save_tab(i):
+                    self.want_msg = "could not save " + self.tabs[i].cv.path
             self.u.queue_redraw(self.tabbar)
         elif cmd == 2:
             self.close_tab(self.cur)
@@ -450,6 +515,12 @@ struct App:
             self.reload_cur()
         elif cmd == 4:
             self.u.set_visible(self.tree_pane, not self.u.is_visible(self.tree_pane))
+        elif cmd == 5:
+            self.do_zoom(1)
+        elif cmd == 6:
+            self.do_zoom(-1)
+        elif cmd == 7:
+            self.do_zoom(0)
         elif cmd == 10:
             self.try_quit()
         elif cmd == 8:
@@ -488,34 +559,28 @@ struct App:
 
     def reload_cur(self):
         cv = self.cur_cv()
-        rd = self.read_file
-        if cv == None or rd == None or len(cv.path) == 0:
+        if cv == None or len(cv.path) == 0:
             return
         keep = cv.top
-        mt = self.mtime_of
-        cv.load_text(cv.path, rd(cv.path), mt(cv.path) if mt != None else 0)
+        cv.load_text(cv.path, self.do_read(cv.path), self.do_mtime(cv.path))
         cv.top = keep
         self.dirty_ui = True
 
     def check_external(self):
         """Um arquivo mudou no disco: recarrega o que está limpo, pergunta o que
         tem edição local."""
-        mt = self.mtime_of
-        if mt == None:
-            return
         for i in range(len(self.tabs)):
             cv = self.tabs[i].cv
             if len(cv.path) == 0 or not path.exists(cv.path):
                 continue
-            m = mt(cv.path)
+            m = self.do_mtime(cv.path)
             if m == cv.mtime:
                 continue
             if not cv.buf.dirty:
                 self.select_tab(i)
                 self.reload_cur()
             else:
-                ask = self.confirm_reload
-                if ask != None and ask(self.tabs[i].title):
+                if self.do_confirm_reload(self.tabs[i].title):
                     self.select_tab(i)
                     self.reload_cur()
                 else:
@@ -526,8 +591,7 @@ struct App:
         for i in range(len(self.tabs)):
             cv = self.tabs[i].cv
             if cv.buf.dirty:
-                ask = self.confirm_close
-                r = ask(self.tabs[i].title) if ask != None else 1
+                r = self.do_confirm_close(self.tabs[i].title)
                 if r == 2:
                     return            # cancelado: continua editando
                 if r == 0 and not self.save_tab(i):
@@ -564,6 +628,16 @@ struct App:
                 self.dirty_ui = True
             return True
         cv = self.cur_cv()
+        # 115: o F2 é atalho SEM ctrl (o ctrl+F2 põe/tira a marca, o shift+F2 vai
+        # para trás) — é a navegação por marcadores do editor em P
+        if ev.key == K_F2 and cv != None:
+            if (ev.mods & 2) != 0:
+                cv.toggle_bookmark()
+            else:
+                cv.goto_mark((ev.mods & 1) == 0)
+            self.update_status()
+            self.dirty_ui = True
+            return True
         if (ev.mods & 2) == 0:              # sem ctrl não é atalho global
             return False
         shift = (ev.mods & 1) != 0
@@ -608,18 +682,15 @@ struct App:
                 cv.buf.select_all()
                 self.u.queue_redraw(cv.id)
             elif k == ord("c"):
-                cs = self.clip_set
                 got = cv.copy()
-                if cs != None and len(got) > 0:
-                    cs(got)
+                if len(got) > 0:
+                    self.do_clip_set(got)
             elif k == ord("x"):
-                cs2 = self.clip_set
                 got2 = cv.cut(now)
-                if cs2 != None and len(got2) > 0:
-                    cs2(got2)
+                if len(got2) > 0:
+                    self.do_clip_set(got2)
             elif k == ord("v"):
-                cg = self.clip_get
-                cv.paste(cg() if cg != None else "", now)
+                cv.paste(self.do_clip_get(), now)
             elif k == ord("d"):
                 if shift:
                     cv.duplicate_lines(now)
@@ -860,8 +931,8 @@ def tab_close_x(u: pui.Ui, x: int, w: int) -> int:
 def new_app(u: pui.Ui, root_dir: str) -> App:
     app = App(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
               [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [],
-              False, True, True, 0,
-              None, None, None, None, None, None, None, None)
+              False, True, True, 0, "", "",
+              None, None, None, None, None, None, None, None, None)
 
     app.root = u.panel(-1)
     col = u.box(app.root, True)

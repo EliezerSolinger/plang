@@ -15,6 +15,7 @@ retidos, que é o que existe deste lado da fronteira.
 import lib_pui as pui
 import lib_app as appm
 import lib_cv as cvm
+import lib_core as core
 import os
 import path
 
@@ -79,6 +80,10 @@ app = appm.new_app(u, D)
 # o "driver": aqui é síncrono e de mentira, o que é exatamente o ponto de ele
 # ser injetado (no editor de verdade quem preenche isto é o `app.psc`)
 saved: dict<str, str> = {}
+clip = ""
+title = ""
+cellw = 8
+cellh = 17
 app.read_file = lambda p: read_now(p)
 app.write_file = lambda p, t: write_now(p, t)
 app.mtime_of = lambda p: path.getmtime(p) if path.exists(p) else 0
@@ -86,8 +91,26 @@ app.clip_get = lambda: clip
 app.clip_set = lambda s: set_clip(s)
 app.confirm_close = lambda name: 1        # descartar, sem perguntar
 app.confirm_reload = lambda name: True
+app.set_title = lambda t: set_title(t)
 
-clip = ""
+
+def set_title(t: str):
+    global title
+    title = t
+
+
+# o "driver" do zoom no teste: uma grade de mentira, mas o efeito é o de
+# verdade — a célula muda e o toolkit refaz o layout inteiro
+def fake_zoom(a: appm.App, step: int):
+    global cellw
+    global cellh
+    if step == 0:
+        cellw = 8
+        cellh = 17
+    else:
+        cellw += step * 2
+        cellh += step * 3
+    a.set_cell(cellw, cellh)
 
 
 def set_clip(s: str):
@@ -219,9 +242,67 @@ if cv.cmp_open and len(cv.cmp_hits) > 0:
 cv.complete_close()
 
 # a área de transferência, pelo atalho (ctrl+c e ctrl+v)
-cv.buf.select_range(cvm.core.Span(2, 0, 2, cv.buf.line_cp(2)))
+cv.buf.select_range(core.Span(2, 0, 2, cv.buf.line_cp(2)))
 app.feed(pui.Event(pui.EV_KEY, ord("c"), 2, 0, 0, 0, 0, 0, 0))
 print("clip=[" + clip + "]")
+
+# ---- 115: o que o teste do editor em P mede e este ainda não media ----
+
+# o zoom: a célula da fonte muda, e o layout inteiro se refaz
+cell = 0
+app.zoom_step = lambda step: fake_zoom(app, step)
+app.run_command(5)                 # Zoom In
+print("zoom: cell=" + str(u.cell_h))
+app.run_command(7)                 # Zoom Reset
+print("zoom reset: cell=" + str(u.cell_h))
+
+# o clique na SARJETA, por pixel: a de marcas põe e tira o ponto de parada
+gx = u.rect_of(cv.id).x + 2
+gy = cv.text_rect().y + 2
+u.input_event(pui.Event(pui.EV_MOUSE_DOWN, 0, 0, 0, gx, gy, 1, 1, 0))
+print("gutter mark: " + str(cv.buf.mark_of(cv.line_at_row(0))))
+u.input_event(pui.Event(pui.EV_MOUSE_DOWN, 0, 0, 0, gx, gy, 1, 1, 0))
+print("gutter unmark: " + str(cv.buf.mark_of(cv.line_at_row(0))))
+
+# o clique na sarjeta de DOBRA (a segunda coluna)
+fx = u.rect_of(cv.id).x + cv.gutters[0].width_cp * u.cell_w + 2
+u.input_event(pui.Event(pui.EV_MOUSE_DOWN, 0, 0, 0, fx, gy, 1, 1, 0))
+print("gutter fold: folded0=" + ("1" if cv.buf.is_folded(0) else "0") +
+      " visible=" + str(cv.buf.visible_count()))
+
+# 115: uma EDIÇÃO dentro do bloco recolhido o solta — o invariante que faltava
+cv.buf.move_to(0, cv.buf.line_cp(0))
+app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord(" "), 0, 0, 0, 0, 0))
+print("edit unfolds: folded0=" + ("1" if cv.buf.is_folded(0) else "0") +
+      " hidden1=" + ("1" if cv.buf.is_hidden(1) else "0"))
+
+# mover linha e o backspace de par
+cv.buf.move_to(2, 0)
+before_line = cv.buf.line_text(2)
+app.run_command(15)                # Move Line Up
+print("moved: caret=" + str(cv.buf.caret(0).line) + " igual=" + ("1" if cv.buf.line_text(1) == before_line else "0"))
+cv.buf.move_to(1, cv.buf.line_cp(1))
+app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("("), 0, 0, 0, 0, 0))
+app.feed(pui.Event(pui.EV_KEY, pui.K_BACKSPACE, 0, 0, 0, 0, 0, 0, 0))
+print("pair_bs: 1=[" + cv.buf.line_text(1) + "]")
+
+# aceitar um candidato do popup
+cv.buf.move_to(0, 7)
+cv.complete_open()
+if cv.cmp_open:
+    cv.complete_accept(app.now_ms)
+print("accepted: 0=[" + cv.buf.line_text(0) + "] open=" + ("1" if cv.cmp_open else "0"))
+
+# o F2: põe a marca (ctrl+F2), anda entre marcas (F2)
+cv.buf.move_to(2, 0)
+app.feed(pui.Event(pui.EV_KEY, appm.K_F2, 2, 0, 0, 0, 0, 0, 0))
+print("f2 mark: " + str(cv.buf.mark_of(2)))
+cv.buf.move_to(0, 0)
+app.feed(pui.Event(pui.EV_KEY, appm.K_F2, 0, 0, 0, 0, 0, 0, 0))
+print("f2 goto: caret=" + str(cv.buf.caret(0).line))
+
+# o título da janela acompanha a aba
+print("title=[" + title + "]")
 
 # a barra de estado
 app.update_status()
@@ -230,7 +311,7 @@ print("status=[" + u.text_of(app.status) + "]")
 # UM QUADRO: o desenho retido inteiro, com um pintor que conta
 p = pui.Painter(count_rect, count_frame, nothing4, nothing0, count_glyph)
 u.draw(p, 1100, 720)
-print("draw: rects>200=" + ("1" if rects > 200 else "0") + " glyphs>300=" + ("1" if glyphs > 300 else "0"))
+print("draw: rects=" + str(rects) + " glyphs=" + str(glyphs))
 
 # salvar e fechar
 app.save_cur()

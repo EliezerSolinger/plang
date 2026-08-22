@@ -1895,8 +1895,8 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             Expr *t = ex_new(self->a, EX_TERNARY, e->pos);
             t->cond = PsLow_expr(self, e->cond);
             self->lazy_depth += 1;
-            t->lhs = PsLow_expr(self, e->lhs);
-            t->rhs = PsLow_expr(self, e->rhs);
+            t->lhs = (e->type != NULL && e->type->kind == PT_OPT ? PsLow_coerce(self, e->type, e->lhs) : PsLow_expr(self, e->lhs));
+            t->rhs = (e->type != NULL && e->type->kind == PT_OPT ? PsLow_coerce(self, e->type, e->rhs) : PsLow_expr(self, e->rhs));
             self->lazy_depth -= 1;
             return t;
         }
@@ -10040,6 +10040,10 @@ static int is_scalar_pname(const char *n) {
 }
 
 static Decl *lower_func(PsLow *L, PsFunc *f, const char *owner, int with_body) {
+    const char *prev_file = L->file;
+    if (f->ns != NULL && f->ns->m != NULL && f->ns->m->path != NULL) {
+        L->file = f->ns->m->path;
+    }
     Func *pf = Arena_alloc(L->a, sizeof(Func));
     pf->pos = f->pos;
     pf->name = (owner == NULL ? ps_cname(L->a, f->name) : Arena_printf(L->a, "%s_%s", owner, f->name));
@@ -10091,7 +10095,11 @@ static Decl *lower_func(PsLow *L, PsFunc *f, const char *owner, int with_body) {
     d->pos = f->pos;
     d->name = pf->name;
     d->func = pf;
-    return d;
+    Decl *__defer_ret0 = d;
+    {
+        L->file = prev_file;
+    }
+    return __defer_ret0;
 }
 
 Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {

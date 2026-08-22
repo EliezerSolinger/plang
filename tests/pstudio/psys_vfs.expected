@@ -1,7 +1,0 @@
-write=1
-read=10 [hello vfs
-]stat: exists=1 dir=0 size=10
-list_root=1
-join=/a/b/c.p dir=/a/b base=c.p
-clock=1
-run rc=0 out=proc-ok

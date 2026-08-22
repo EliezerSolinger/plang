@@ -8,7 +8,7 @@
 # `st_mtim` (POSIX.1-2008), macOS has `st_mtimespec` (__DARWIN_UNIX03), older
 # systems have a plain `st_mtime` — and the one portable NAME, `st_mtime`, is a
 # MACRO on both modern libcs, so it is gone by the time P sees the struct and
-# cannot be spelled. pstudio/psys.p selects with hasfield.
+# cannot be spelled. The pscript runtime (psrt_os.p) selects with hasfield.
 include <stdio.h>
 
 struct Ts:
@@ -27,7 +27,7 @@ struct Velho:
     st_mode: u32
     st_mtime: i64
 
-# the same three-way selection psys.p makes, once per struct. Each call compiles
+# the same three-way selection psrt_os.p makes, once per struct. Each call compiles
 # only ONE of the three bodies; the other two name members the argument's type
 # does not have, and are discarded before checking.
 def secs_l(in s: Linuxish) -> i64:

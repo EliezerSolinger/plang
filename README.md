@@ -263,53 +263,48 @@ The design is written down decision by decision in
 [pscript/FEATURES.md](pscript/FEATURES.md), and what is next in
 [pscript/PLAN.md](pscript/PLAN.md).
 
-### The trial by fire: the editor, ported
+### The trial by fire: the editor
 
-`pstudio/ps/` is Plang Studio's buffer and application **written in pscript**,
-with the hand that touches SDL2 still in Plang:
-
-```sh
-make pstudio-ps          # -> out/bin/pstudio-ps
-```
-
-The boundary rule (only a pointer-free signature crosses) decides the split by
-itself: SDL2 is nothing but pointers, so `shim.p` keeps the window, the events
-and the pixels and exposes them as **scalars** — a handle, a key code, a
-colour, one codepoint at a time — while the editor above it (lines, carets,
-selection, undo, search, folding, layout, key bindings, painting) is pscript.
-The two meet through `include "shim.h"`, the header the compiler itself emits:
-no FFI, no bindings.
-
-It is 933 lines of pscript where the Plang buffer needs 1505, and the
-difference is not style — a line is a `str`, `len(s)` is codepoints, slicing
-copies, and the collector owns the graph, so three UTF-8 helpers, every
-`malloc`/`free` pair and every `deinit` simply are not there.
-
-Both halves are gated: the buffer runs headless in the test suite, and the
-whole editor runs its own self-test with SDL's dummy driver — open, type,
-select, undo, multi-caret, **draw** and save. What the port found on the way
-(six real compiler bugs, three registered gaps) is written down in
-[pstudio/ps/README.md](pstudio/ps/README.md).
-
-## Plang Studio — a code editor written in Plang
-
-`pstudio/` is a GUI code editor written in **pure Plang**, with SDL2 as its
-only dependency: tabs, a file tree, a fuzzy command palette (ctrl+p), multi
-caret editing (ctrl+d), coalesced undo, incremental search (ctrl+f, POSIX
-regex with a `/` prefix), and syntax highlighting that reuses **the
-compiler's own lexer**. The UI toolkit (`pui`) and software rasterizer
-(`pgfx`) are Plang too — no widget library involved.
+Plang Studio is a GUI code editor — tabs, a file tree, a fuzzy command palette
+(ctrl+p), multi-caret editing (ctrl+d), coalesced undo, incremental search
+(ctrl+f, POSIX regex with a `/` prefix), folding, a minimap, and syntax
+highlighting that reuses **the compiler's own lexer**. The UI toolkit and the
+software rasterizer are ours too — no widget library involved.
 
 ```sh
-sudo apt install libsdl2-dev
-make pstudio                 # -> out/bin/pstudio
-./out/bin/pstudio .          # open the tree in the current directory
+sudo apt install libsdl2-dev     # the only dependency
+make pstudio                     # -> out/bin/pstudio
+./out/bin/pstudio .              # open the tree in the current directory
 ```
 
-It doubles as the largest Plang program after the compiler itself, so
-`make verify` compiles it as a gate and runs `tests/pstudio/` — headless
-tests that drive the editor with synthetic events. See
-[pstudio/DESIGN.md](pstudio/DESIGN.md).
+**It is written in pscript, and the split was decided by the boundary rule
+rather than by taste.** Only a pointer-free signature crosses (45.5), so the two
+places that hold a pointer stay in Plang and expose scalars:
+
+| in Plang | why |
+|---|---|
+| `ps/shim.p` + `pgfx*.p` + `font_atlas.p` | SDL2 and the pixels: a window handle, a key code, a colour, one glyph at a time |
+| `ps/hl.p` | the compiler's lexer: the buffer's text goes in as a `CStr` (pointer + length, no copy) and the tokens come back as numbers |
+
+Everything above that — lines, carets, selection, undo, search, folding, the
+widget tree, the layout, the key bindings, the painting, the tabs, the tree, the
+palette — is pscript: **4200 lines of it over 820 of Plang**. The editor in pure
+Plang that came before it was 6448 lines and was retired once parity had been
+measured method by method (197 of them; the three real gaps it found are in
+`pstudio/DESIGN.md`).
+
+The ratio is the interesting part: the buffer needs 914 lines of pscript where
+the Plang one needed 1505, and the difference is not style — a line is a `str`,
+`len(s)` is codepoints, slicing copies, and the collector owns the graph, so
+three UTF-8 helpers, every `malloc`/`free` pair and every `deinit` are simply
+not there. The layout code, which is arithmetic, did not shrink at all.
+
+Everything is gated: `make verify` compiles and links the whole editor and runs
+its self-test with SDL's dummy driver, and `tests/pstudio/` drives the buffer,
+the toolkit, the editing widget and the entire application headless, with
+synthetic events. What the port found on the way — fifteen real compiler bugs
+across four batteries — is written down in
+[pscript/DESIGN.md](pscript/DESIGN.md) (batteries 111-116).
 
 The font atlas shows what `embed_bytes` is for: 263 KB of glyphs used to be
 eleven thousand lines of decimal in a `.p`, and are now one line reading a
@@ -324,7 +319,8 @@ selfhost/     the compiler, written in Plang (.p source, .ph headers)
 bootstrap/    the C seed generated from selfhost/ (+ bootstrap/stl headers)
 stl/          optional standard library (header-only generic templates, .ph)
 pscript/      the sibling language: its runtime (in Plang), design and examples
-pstudio/      Plang Studio: a code editor in pure Plang (SDL2 only)
+pstudio/      Plang Studio: the editor — pscript on top (ps/*.psc),
+              the SDL2 driver and the lexer bridge in Plang
 tests/        gating suites; corpora somebody else wrote (c-testsuite,
               wacct, JSONTestSuite, web-platform-tests); clang, python3 and
               node as oracles; and the collector under stress

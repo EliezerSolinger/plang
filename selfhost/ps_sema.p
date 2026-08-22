@@ -266,6 +266,7 @@ struct PsSema:
     static def pop_scope(self: *PsSema)
     static def add_local(self: *PsSema, name: const *char, t: *PsType, assigned: bool, is_const: bool)
     static def check_block(self: *PsSema, b: *PsBlock)
+    static def blk_exits(self: *PsSema, b: *PsBlock) -> bool
     static def sug_name(self: *PsSema, t: const *char, pos: Pos) -> *PsExpr
     static def sug_int(self: *PsSema, v: i32, pos: Pos) -> *PsExpr
     static def sug_call1(self: *PsSema, fn: const *char, a1: *PsExpr, pos: Pos) -> *PsExpr
@@ -333,6 +334,8 @@ struct PsSema:
     static def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
     static def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType
     static def narrow_from(self: *PsSema, c: *PsExpr) -> i32
+    static def narrow_else(self: *PsSema, c: *PsExpr) -> i32
+    static def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32
     static def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType
     static def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType)
     static def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType)
@@ -342,7 +345,30 @@ struct PsSema:
     # `x != None` on a local of option type: the index of that local, or -1.
     # `None != x` counts too; anything else does not narrow.
     static def narrow_from(self: *PsSema, c: *PsExpr) -> i32:
-        if c == None or c->kind != PE_BINARY or c->op != TK_NE:
+        return self->narrow_op(c, TK_NE)
+
+    # 114: e o INVERSO — `if x == None: ... else: <aqui x é T>`. É a mesma prova
+    # vista do outro lado, e a forma aparece sozinha quando a função trata
+    # primeiro o caso ausente. O que NÃO se faz aqui é o `if x == None: return`
+    # seguido de código: isso pede análise de fluxo, e o ramo `else` é a metade
+    # que sai de graça.
+    static def narrow_else(self: *PsSema, c: *PsExpr) -> i32:
+        return self->narrow_op(c, TK_EQ)
+
+    static def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32:
+        # 114: `x != None and <resto>` também prova — o `and` só entra no ramo
+        # quando os DOIS lados valem. Só para `!=`: no `==`, o `else` pode ter
+        # sido tomado porque o OUTRO lado falhou, e aí nada está provado.
+        if c != None and c->kind == PE_BINARY and c->op == TK_AND and op == TK_NE:
+            l: i32 = self->narrow_op(c->lhs, op)
+            return l if l >= 0 else self->narrow_op(c->rhs, op)
+        # e o DUAL: `x == None or <resto>` como guarda. Se a guarda saiu, nenhum
+        # dos lados valia — então depois dela `x` não é None. É o que autoriza
+        # `if x == None or len(x.f) == 0: return`.
+        if c != None and c->kind == PE_BINARY and c->op == TK_OR and op == TK_EQ:
+            l2: i32 = self->narrow_op(c->lhs, op)
+            return l2 if l2 >= 0 else self->narrow_op(c->rhs, op)
+        if c == None or c->kind != PE_BINARY or c->op != op:
             return -1
         n: *PsExpr = None
         if c->lhs != None and c->lhs->kind == PE_NAME and c->rhs != None and c->rhs->kind == PE_NONE:
@@ -1304,7 +1330,26 @@ struct PsSema:
         prevh: *PsType = self->hint
         self->hint = None
         lt: *PsType = self->check_expr(e->lhs)
+        # 114: `x != None and x.f` — o `and` curto-circuita, então a prova do
+        # lado esquerdo vale ENQUANTO o direito é checado. É a metade que faltava
+        # da 43.1: a prova já valia no corpo do `if`, e não na própria condição.
+        # `and`: o direito é checado com a prova do esquerdo. `or`: o direito é
+        # checado sabendo que o esquerdo foi FALSO, então um `x == None` à
+        # esquerda também prova (114).
+        nand: i32 = -1
+        if e->op == TK_AND:
+            nand = self->narrow_op(e->lhs, TK_NE)
+        elif e->op == TK_OR:
+            nand = self->narrow_op(e->lhs, TK_EQ)
+        if nand >= 0 and (self->locals[nand].opt_type != None or self->locals[nand].type == None or self->locals[nand].type->kind != PT_OPT):
+            nand = -1
+        if nand >= 0:
+            self->locals[nand].opt_type = self->locals[nand].type
+            self->locals[nand].type = self->locals[nand].type->inner
         rt: *PsType = self->check_expr(e->rhs)
+        if nand >= 0 and self->locals[nand].opt_type != None:
+            self->locals[nand].type = self->locals[nand].opt_type
+            self->locals[nand].opt_type = None
         self->hint = prevh
         bl: *PsType = ps_type(self->a, PT_BOOL, e->pos)
         # exact widths (68.2): a literal takes the other side's width (range
@@ -4799,13 +4844,41 @@ struct PsSema:
         s->names[0] = iv
         s->nnames = 1
 
+    # 114: este bloco SEMPRE sai? (return, raise, break, continue, ou um `if`
+    # em que todos os ramos saem). É o que autoriza estreitar depois de uma
+    # guarda — `if x == None: return` e o resto da função já sabe.
+    static def blk_exits(self: *PsSema, b: *PsBlock) -> bool:
+        if b == None or b->n == 0:
+            return False
+        last: *PsStmt = b->stmts[b->n - 1]
+        if last->kind in {PS_RETURN, PS_RAISE, PS_BREAK, PS_CONTINUE}:
+            return True
+        if last->kind == PS_IF and last->else_block != None:
+            for i in range(last->nconds):
+                if not self->blk_exits(last->blocks[i]):
+                    return False
+            return self->blk_exits(last->else_block)
+        return False
+
     static def check_block(self: *PsSema, b: *PsBlock):
         if b == None:
             return
         self->sug_hoist(b)
+        # uma prova de guarda (114) vale até o fim DESTE bloco. O que já estava
+        # estreitado ao ENTRAR é de um escopo de fora e continua valendo — sem
+        # esta distinção, um `if` aninhado desfazia a prova do bloco que o contém.
+        nw0: i32 = self->nlocals
+        pre_narrow: *bool = calloc(usize(nw0 + 1), sizeof(bool))
+        defer free(pre_narrow)
+        for i in range(nw0):
+            pre_narrow[i] = self->locals[i].opt_type != None
         self->depth += 1
         for i in range(b->n):
             self->check_stmt(b->stmts[i])
+        for i in range(self->nlocals):
+            if self->locals[i].opt_type != None and (i >= nw0 or not pre_narrow[i]):
+                self->locals[i].type = self->locals[i].opt_type
+                self->locals[i].opt_type = None
         self->pop_scope()
         self->depth -= 1
 
@@ -4816,6 +4889,27 @@ struct PsSema:
             case PS_VAR:
                 vt: *PsType = self->resolve_type(s->type)
                 prevh: *PsType = self->hint
+                # 114: sem tipo escrito, o CONTEXTO é o do nome que já existe —
+                # a 64.1 diz que um nome que já existe é ASSIGNADO, então o tipo
+                # dele é quem manda. Sem isto, `f = lambda v: v * 2` num nome de
+                # tipo função dizia "não consigo inferir a lambda", que é
+                # exatamente a informação que estava ali do lado.
+                if vt == None:
+                    li9: i32 = self->find_local(s->name)
+                    if li9 >= 0:
+                        # o tipo DECLARADO, não o estreitado: dentro de um
+                        # `while x != None:` o local vale `T`, mas `x = x.next`
+                        # atribui um `T?` — e é o próprio caminho que desfaz a
+                        # prova logo abaixo
+                        vt = self->locals[li9].opt_type if self->locals[li9].opt_type != None else self->locals[li9].type
+                    elif self->at_module:
+                        # a variável de MÓDULO, e só no topo do próprio módulo:
+                        # dentro de uma função o nome é local, e procurar global
+                        # ali acharia o de OUTRO módulo (foi o que quebrou três
+                        # testes do editor — um local `b` contra um global `b`)
+                        gq9: const *char = self->gname_soft(s->name)
+                        if gq9 != None and self->globals.has(gq9):
+                            vt = self->globals.get_or(gq9, None)
                 self->hint = vt
                 it: *PsType = self->check_expr(s->rhs) if s->rhs != None else None
                 self->hint = prevh
@@ -5049,6 +5143,8 @@ struct PsSema:
                 # locals, and an assignment inside the branch takes the proof
                 # away again (check_stmt PS_VAR/PS_ASSIGN restore it).
                 narrowed: i32 = self->narrow_from(s->conds[0]) if s->nconds > 0 else -1
+                # 114: `if x == None: ... else:` estreita no ELSE
+                nelse: i32 = self->narrow_else(s->conds[0]) if s->nconds == 1 and s->else_block != None else -1
                 # A name counts as assigned after the statement only if EVERY
                 # path assigns it — including the implicit empty path when
                 # there is no `else`. That covers names born inside a branch
@@ -5066,15 +5162,33 @@ struct PsSema:
                 for bi in range(nbr):
                     for i in range(before):
                         self->locals[i].assigned = was[i]
-                    if bi == 0 and narrowed >= 0:
-                        self->locals[narrowed].opt_type = self->locals[narrowed].type
-                        self->locals[narrowed].type = self->locals[narrowed].type->inner
+                    # 114: cada ramo é provado pela SUA condição — um `elif x
+                    # != None:` estreita dentro dele, como o `if` sempre fez
+                    nb: i32 = -1
+                    if bi < s->nconds:
+                        nb = narrowed if bi == 0 else self->narrow_from(s->conds[bi])
+                    elif nelse >= 0:
+                        nb = nelse
+                    if nb >= 0 and self->locals[nb].opt_type == None and self->locals[nb].type != None and self->locals[nb].type->kind == PT_OPT:
+                        self->locals[nb].opt_type = self->locals[nb].type
+                        self->locals[nb].type = self->locals[nb].type->inner
+                    else:
+                        nb = -1
                     self->check_block(s->blocks[bi] if bi < s->nconds else s->else_block)
-                    if bi == 0 and narrowed >= 0 and self->locals[narrowed].opt_type != None:
-                        self->locals[narrowed].type = self->locals[narrowed].opt_type
-                        self->locals[narrowed].opt_type = None
+                    if nb >= 0 and self->locals[nb].opt_type != None:
+                        self->locals[nb].type = self->locals[nb].opt_type
+                        self->locals[nb].opt_type = None
                     for i in range(before):
                         merged[i] = merged[i] and self->locals[i].assigned
+                # 114: a GUARDA. `if x == None: return` (ou raise/break/
+                # continue) e o resto do bloco fala de `x` como `T` — é a forma
+                # que toda função com caso ausente tem, e sem isto ela obrigava
+                # a aninhar o corpo inteiro num `else`.
+                if s->nconds == 1 and s->else_block == None and self->blk_exits(s->blocks[0]):
+                    ng: i32 = self->narrow_else(s->conds[0])
+                    if ng >= 0 and self->locals[ng].opt_type == None:
+                        self->locals[ng].opt_type = self->locals[ng].type
+                        self->locals[ng].type = self->locals[ng].type->inner
                 if s->else_block == None:
                     # the path where no branch runs assigns nothing new
                     for i in range(before):
@@ -5777,6 +5891,15 @@ static def ps_stmt_what(k: PsStmtKind) -> const *char:
 def ps_type_eq(x: *PsType, y: *PsType) -> bool:
     if x != None and y != None and x->kind == PT_FUNC and y->kind == PT_FUNC and x->wide != y->wide:
         return False        # a bare `def` and a signed one are not the same type
+    # 114: `void` e "nada" são a MESMA coisa. Um `def(int, int)` escrito num tipo
+    # tem retorno NULO; o valor de uma função sem retorno tem retorno `PT_VOID`.
+    # Os dois imprimiam igual ("-> nothing") e comparavam DIFERENTE, e a
+    # mensagem ficava `expects def(int, int) -> nothing, found def(int, int) ->
+    # nothing` — que não diz nada a ninguém.
+    if x == None and y != None and y->kind == PT_VOID:
+        return True
+    if y == None and x != None and x->kind == PT_VOID:
+        return True
     if x == None or y == None:
         return x == y
     if x->kind != y->kind:

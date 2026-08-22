@@ -6,10 +6,11 @@
 # the point of the port is to REPLACE the logic above this line, not to write
 # a second rasterizer.
 include <string.h>
+include <stdio.h>
+include <stdlib.h>
 import "shim.ph"
 import "../pgfx.ph"
 import "../pgfx_raster.ph"
-import "../psys.ph"
 
 static W: PgWindow
 static F: PgFont
@@ -46,11 +47,9 @@ def shim_height() -> i32:
 # The kind is the return value and the details stay here, read one accessor at
 # a time: a struct would have to cross as a pointer, and a pointer does not
 # cross (45.5).
-def shim_poll() -> i32:
-    if not OPEN:
-        return SHIM_NONE
-    if not W.poll_event(out EV):
-        return SHIM_NONE
+# a tradução do evento do pgfx para o número que atravessa — uma só, porque
+# `poll` e `wait` (114) devolvem a mesma coisa
+static def kind_of_ev() -> i32:
     match EV.kind:
         case PGE_QUIT:
             return SHIM_QUIT
@@ -68,8 +67,19 @@ def shim_poll() -> i32:
             return SHIM_WHEEL
         case PGE_RESIZE:
             return SHIM_RESIZE
+        case PGE_TIMEOUT:
+            return SHIM_TIMEOUT
+        case PGE_FOCUS_GAINED:
+            return SHIM_FOCUS
         case _:
             return SHIM_NONE
+
+def shim_poll() -> i32:
+    if not OPEN:
+        return SHIM_NONE
+    if not W.poll_event(out EV):
+        return SHIM_NONE
+    return kind_of_ev()
 
 def shim_ev_key() -> i32:
     return EV.key
@@ -146,5 +156,78 @@ def shim_zoom_steps() -> i32:
 def shim_zoom_at() -> i32:
     return ZOOM
 
-def shim_millis() -> i64:
-    return ps_millis()
+def shim_zoom_default() -> i32:
+    return pg_font_default_size()
+
+# ---- 114: o resto do sistema ----
+
+def shim_wait(ms: i32) -> i32:
+    if not OPEN:
+        return SHIM_NONE
+    if not W.wait_event(out EV, ms):
+        return SHIM_NONE
+    return kind_of_ev()
+
+def shim_clip_set(in s: CStr):
+    buf: *char = (*char)(malloc(s.len + 1))
+    memcpy(buf, s.ptr, s.len)
+    buf[s.len] = '\0'
+    pgfx_clipboard_set(buf)
+    free(buf)
+
+# devolve emprestado: um buffer deste módulo, válido até a próxima chamada (a
+# convenção do `strerror`, que é a da 83.1)
+static G_CLIP: *char = None
+
+def shim_clip_get() -> CStr:
+    free(G_CLIP)
+    G_CLIP = pgfx_clipboard_get()
+    if G_CLIP == None:
+        return cstr("")
+    return cstr_n(G_CLIP, strlen(G_CLIP))
+
+def shim_confirm_close(in name: CStr) -> i32:
+    buf: char[512]
+    n: usize = name.len if name.len < usize(511) else usize(511)
+    memcpy(buf, name.ptr, n)
+    buf[n] = '\0'
+    return W.confirm_close(buf) if OPEN else 1
+
+def shim_confirm_reload(in name: CStr) -> bool:
+    buf: char[512]
+    n: usize = name.len if name.len < usize(511) else usize(511)
+    memcpy(buf, name.ptr, n)
+    buf[n] = '\0'
+    return W.confirm_reload(buf) if OPEN else True
+
+def shim_title(in s: CStr):
+    buf: char[512]
+    n: usize = s.len if s.len < usize(511) else usize(511)
+    memcpy(buf, s.ptr, n)
+    buf[n] = '\0'
+    if OPEN:
+        W.set_title(buf)
+
+def shim_shot(in p: CStr) -> bool:
+    if not OPEN:
+        return False
+    buf: char[512]
+    n: usize = p.len if p.len < usize(511) else usize(511)
+    memcpy(buf, p.ptr, n)
+    buf[n] = '\0'
+    f: *FILE = fopen(buf, "wb")
+    if f == None:
+        return False
+    fb: *PgFb = &W.fb
+    fprintf(f, "P6\n%d %d\n255\n", fb->w, fb->h)
+    row: *u8 = (*u8)(malloc(usize(fb->w) * 3))
+    for y in range(fb->h):
+        for x in range(fb->w):
+            px: u32 = fb->px[usize(y) * usize(fb->w) + usize(x)]
+            row[usize(x) * 3 + 0] = u8((px >> 16) & 0xFF)
+            row[usize(x) * 3 + 1] = u8((px >> 8) & 0xFF)
+            row[usize(x) * 3 + 2] = u8(px & 0xFF)
+        fwrite(row, 1, usize(fb->w) * 3, f)
+    free(row)
+    fclose(f)
+    return True

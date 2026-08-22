@@ -334,10 +334,13 @@ suite_cinvalid() {
 }
 
 suite_pstudio() {
-    echo "== pstudio (editor em P: headless sempre; SDL com driver dummy) =="
-    # maior consumidor de P depois do compilador: compilar TUDO é gating.
-    # SDL2 é dependência com skip gracioso (DESIGN.md): sem libsdl2-dev os
-    # testes headless (psys, raster) rodam mesmo assim.
+    echo "== pstudio (o editor em pscript, e o driver gráfico em P) =="
+    # 116: o editor virou pscript e o editor em P foi aposentado. O que roda
+    # aqui: os dois testes do DRIVER (rasterizador e janela, que continuam em P
+    # porque são pixel e ponteiro) e os quatro do editor em pscript — buffer,
+    # toolkit, widget de edição e o app inteiro, todos headless.
+    # SDL2 é dependência com skip gracioso: sem libsdl2-dev o teste do
+    # rasterizador roda mesmo assim.
     local M=$OUT/mirror pass=0 fail=0 name src bin err deps d ok cobjs ldext
     local sdl=0; pkg-config --exists sdl2 >/dev/null 2>&1 && sdl=1
     mkdir -p "$OUT"/pstudio
@@ -346,15 +349,11 @@ suite_pstudio() {
     for src in tests/pstudio/*.p; do
         name=$(basename "$src" .p)
         deps=""
+        # 116: o editor em P foi aposentado; o que sobrou em P é o DRIVER
+        # gráfico, e é o que estes dois testes medem
         case $name in
-            psys_vfs)    deps="pstudio/psys" ;;
             pgfx_raster) deps="pstudio/pgfx_raster pstudio/font_atlas" ;;
             pgfx_*)      deps="pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas" ;;
-            pui_*)       deps="pstudio/pui pstudio/pgfx_raster pstudio/font_atlas" ;;
-            core_complete) deps="pstudio/complete pstudio/core pstudio/psys selfhost/lexer selfhost/utf8 selfhost/util" ;;
-            cv_*)        deps="pstudio/codeview pstudio/complete pstudio/core pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys selfhost/lexer selfhost/utf8 selfhost/util" ;;
-            core_*)      deps="pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
-            app_*)       deps="pstudio/app pstudio/codeview pstudio/complete pstudio/pui pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/core selfhost/lexer selfhost/utf8 selfhost/util" ;;
         esac
         if [ $sdl = 0 ] && case " $deps " in *" pgfx "*) true;; *) false;; esac; then
             echo "  skip $name (sem SDL2)"; continue
@@ -375,7 +374,7 @@ suite_pstudio() {
                              $QBE "$bin.ssa" -o "$bin.s" 2>>"$err" || ok=0; }
             [ $ok = 1 ] && { $CC "$bin.s" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
         else
-            # headers: pstudio inteiro + interfaces que o core reusa do compilador
+            # headers: o driver inteiro + as interfaces que ele reusa
             for d in pstudio/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph stl/*.ph; do
                 $PLANGC $PFLAGS --out-dir "$M" "$d" 2>>"$err" || ok=0
             done
@@ -384,8 +383,8 @@ suite_pstudio() {
                 cobjs="$cobjs $M/$d.c"
             done
             [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$M" "$src" 2>>"$err" || ok=0; }
-            # psys é POSIX: -D_DEFAULT_SOURCE reexpõe st_mtim & cia. quando o
-            # -std=c11 estrito da suíte esconde (o ingest do plangc vê modo GNU)
+            # -D_DEFAULT_SOURCE: o POSIX que o -std=c11 estrito da suíte esconde
+            # (o ingest do plangc vê modo GNU)
             [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -w "$M/tests/pstudio/$name.c" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
         fi
         if [ $ok = 1 ] && check_run "$bin" "tests/pstudio/$name.expected" "$name"; then
@@ -396,16 +395,17 @@ suite_pstudio() {
         fi
     done
 
-    # the ported editor's CORE, headless: no window, no SDL — the same shape as
-    # the `core_*` tests beside it, and the part of the port that is pure logic
+    # o editor em pscript, headless: sem janela e sem SDL — buffer, toolkit,
+    # widget de edição e o app inteiro
     local C=$OUT/pstudio_pscore errc=$OUT/pstudio_pscore.err
     rm -rf "$C"; mkdir -p "$C"; : >"$errc"
     ok=1
     $PLANGC $PFLAGS --out-dir "$C" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$errc" || ok=0
     # 112: o `pui` portado entra aqui do mesmo jeito — headless, sem driver,
     # porque a métrica da fonte é PARÂMETRO do toolkit em pscript. As oito
-    # linhas de retângulo dele são as mesmas do teste em P ao lado
-    # (tests/pstudio/pui_layout.expected), que é o ponto do porte.
+    # linhas de retângulo dele foram conferidas contra o teste do pui em P
+    # quando ele existia (bateria 112); o editor em P saiu na 116, e o que
+    # ficou é este número, que não pode mudar.
     # 113: o `codeview` portado precisa do ADAPTADOR do lexer (pstudio/ps/hl.p)
     # e, com ele, do lexer do compilador — que é o ponto: o editor em pscript
     # realça com o mesmo lexer que o compilador usa, e não com um segundo.
@@ -414,13 +414,12 @@ suite_pstudio() {
        $PLANGC $PFLAGS --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/ps/hl.p 2>>"$errc"; then
         HLC="$C/pstudio/ps/hl.c $C/selfhost/lexer.c $C/selfhost/util.c $C/selfhost/utf8.c"
     fi
-    for psprog in core_test:ps_core.expected:"the ported buffer" pui_test:ps_pui.expected:"the ported toolkit" cv_test:ps_cv.expected:"the ported editing widget"; do
+    for psprog in core_test:ps_core.expected:"the ported buffer" pui_test:ps_pui.expected:"the ported toolkit" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
         [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }
         local extraobj=""
-        [ "$pname" = cv_test ] && extraobj="$HLC"
-        [ "$pname" = cv_test ] && [ -z "$HLC" ] && ok=0
+        case $pname in cv_test|app_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
         [ $ok = 1 ] && { $CC $CSTD -w -o "$C/$pname" "$C/pstudio/ps/$pname.c" \
                              "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_os.c" "$C/pscript/runtime/psrt_top.c" $extraobj $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
         if [ $ok = 1 ] && check_run "$C/$pname" tests/pstudio/$pexp "pstudio-ps-${pname%_test}"; then
@@ -441,15 +440,17 @@ suite_pstudio() {
         rm -rf "$P"; mkdir -p "$P"; : >"$err2"
         local sdlflags="-DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H $(pkg-config --cflags --libs sdl2)"
         ok=1
-        for d in pstudio/*.ph pstudio/ps/shim.ph stl/*.ph selfhost/plang.ph; do
+        # 114: o driver em P é SDL + o lexer do compilador. O `psys` saiu: a
+        # camada de sistema é a da stdlib do pscript desde a 111.
+        for d in pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph stl/*.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph; do
             $PLANGC $PFLAGS --out-dir "$P" "$d" 2>>"$err2" || ok=0
         done
-        for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/psys pstudio/ps/shim; do
+        for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/ps/shim pstudio/ps/hl selfhost/lexer selfhost/util selfhost/utf8; do
             [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
         done
         [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $PLANGC $PFLAGS --cpp "$CC -I$P/pstudio/ps" --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -I"$P/pstudio/ps" -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/ps/shim.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/pstudio/psys.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/ps/shim.c" "$P/pstudio/ps/hl.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/selfhost/lexer.c" "$P/selfhost/util.c" "$P/selfhost/utf8.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
         printf 'line one\nline two\nline three\n' > "$P/sample.txt"
         if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
            diff -q "$P/out" tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then

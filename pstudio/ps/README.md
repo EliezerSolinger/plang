@@ -1,13 +1,14 @@
-# pstudio em pscript — a prova de fogo
+# pstudio em pscript — O editor
 
-Este diretório é o editor **portado para pscript**, com a mão que toca o SDL2
-ainda em P. É o exercício que a linguagem precisava: um programa de verdade,
-com estado mutável, edição de texto, desfazer e desenho — não um benchmark de
-laço apertado.
+Este diretório **é** o Plang Studio. A lógica inteira é pscript; em P ficou o
+driver — a mão que toca o SDL2 e a que chama o lexer do compilador. O editor em
+P que existiu antes foi aposentado na bateria 116, depois de a paridade ter sido
+medida método por método (115).
 
 ```sh
-make pstudio-ps            # -> out/bin/pstudio-ps
-./out/bin/pstudio-ps arquivo.txt
+make pstudio               # -> out/bin/pstudio
+./out/bin/pstudio .        # a árvore no diretório atual
+./out/bin/pstudio a.p b.p  # arquivos em abas
 ```
 
 ## A divisão, e por que ela existe
@@ -18,10 +19,16 @@ no pscript — e não deve: é exatamente o tipo de código para o qual o P exis
 
 | arquivo | linguagem | o que é |
 |---|---|---|
-| `shim.ph` / `shim.p` | P | janela, eventos e pixels, com a interface toda em ESCALARES (handles, códigos de tecla, cores, um codepoint por vez) |
+| `shim.ph` / `shim.p` | P | janela, eventos, pixels, área de transferência — a interface toda em ESCALARES (handles, códigos de tecla, cores, um codepoint por vez) |
+| `hl.ph` / `hl.p` | P | o lexer DO COMPILADOR: o texto entra como `CStr` (ponteiro + comprimento, sem cópia) e os tokens voltam como números (113) |
 | `lib_core.psc` | pscript | o buffer: linhas, cursores, seleção, desfazer, busca, dobras, marcas |
-| `app.psc` | pscript | layout, teclas, desenho, arquivos, o laço de eventos |
-| `core_test.psc` | pscript | o núcleo exercitado headless (roda na suíte) |
+| `lib_pui.psc` | pscript | o toolkit: árvore de widgets, layout em duas fases, desenho retido, entrada |
+| `lib_hl.psc` | pscript | o realce: spans por linha, e o comentário |
+| `lib_complete.psc` | pscript | o índice de completamento |
+| `lib_cv.psc` | pscript | o widget de edição: sarjetas, barras, minimapa, popup |
+| `lib_app.psc` | pscript | abas, árvore, paleta, busca, atalhos |
+| `app.psc` | pscript | o driver: janela, eventos, quadro, linha de comando |
+| `core_test.psc`, `pui_test.psc`, `cv_test.psc`, `app_test.psc` | pscript | os quatro testes headless (rodam na suíte) |
 
 O `app.psc` chama o P por `include "shim.h"` — o header que o próprio `plangc`
 emite ao compilar `shim.p`. Não há FFI, não há binding: é a mesma fronteira de
