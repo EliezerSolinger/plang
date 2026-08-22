@@ -51,40 +51,43 @@ sozinho. Estado encontrado e restrição que ele impõe:
 > e F3 (`build.psc`, `ppack` — arquivos novos) são não-colidentes e é por onde eu
 > vou.
 
-## O estado no fim da noite de 2026-08-22
+## O estado (2026-08-22, depois das suas decisões)
 
-Onze commits, e o repositório fecha verde de ponta a ponta. O que dá para fazer
-hoje, numa máquina que só tem um compilador de C:
+Dezasseis commits. O repositório constrói-se, testa-se e verifica-se a si mesmo
+pelo seu próprio sistema de build, e o `Makefile` é uma casca de sessenta linhas.
+Numa máquina que só tem um compilador de C:
 
 ```
-cc -O2 -o plangc bootstrap/selfhost/*.c          # 2 s
-PLANGC=./plangc bash tests/psbuild.sh pbuild/ps/ppack.psc ./ppack   # 2,5 s
-./ppack build -j 6 --query ./plangc              # 68 s: a escada, o pstudio, o ppack
-./ppack verify -j 6 --query ./plangc             # 664 arestas, todas verdes
-./ppack doc pbuild/ps/lib_manifest.psc nome_ok   # a documentação, do --api
+make            a escada com ponto fixo, o editor e as ferramentas    84 s
+make test       o corpus em C mais a suíte caso a caso               4m21  (9 s sem mudança)
+make verify     a bateria inteira, 495 arestas                       5m16  (8,7 s sem mudança)
+make check      compila e roda um hello-world
+make doc <mod>  a interface de um módulo, com a documentação
+make ninja      o build.ninja do bootstrap
+make clean      a árvore como o `git clone` a entrega
 ```
 
-**Medido numa árvore limpa**: `ppack build` 68 s; `ppack verify` 5m48 do zero e
-7,7 s quando nada mudou (o `verify-all.sh` leva ~20 min em TODA corrida); a
-suíte do pscript, caso a caso, 585 arestas e 72 s do zero; tocar um fonte cujo C
-sai igual custa 4 arestas e 7,7 s.
+**As quatro decisões da manhã, todas implementadas:**
 
-**Cinco defeitos consertados no caminho**, todos achados por construir de
-verdade: dois do coletor (um campo por escrever num `PsFile`, e a escrita num
-campo do quadro com o endereço calculado antes da chamada), o `-j` que não
-limitava nada (e terminava em deadlock num build limpo), e o `restat` que não
-atravessava corridas (nas duas pontas: a aresta rodava para sempre, e a poda se
-perdia).
+1. `import <pui>` e `<pui/x.psc>` para módulos pscript de pacote;
+2. a docstring de PROTÓTIPO — um corpo só com a docstring, com o `pass` a
+   desambiguar (a sua observação foi o que destravou);
+3. o `stl` em `packages/stl`, com manifesto, e os 23 imports do compilador a
+   passarem por `<stl/x.ph>`;
+4. a TROCA do Makefile.
 
-**O que espera VOCÊ** (está detalhado em cada secção, e resumido aqui):
+E com elas fechou a **F1** inteira (a 1.5(a) entrou junto) e **morreram as seis
+listas de módulos do runtime** que viviam espalhadas pelos arreios e dentro do
+compilador: nomear `pscript/runtime/psrt.ph` traz o runtime inteiro.
 
-  1. a forma de importar um módulo PSCRIPT de um pacote (`import <pui/pui.psc>`?)
-     — sem ela o `pui` não pode virar pacote;
-  2. a docstring de um PROTÓTIPO (um corpo só com a docstring, num `.ph`?) — sem
-     ela a interface de um pacote P não se documenta;
-  3. quando mover o `stl` (41 referências, ciclo de seed);
-  4. a TROCA do Makefile (parte D da F3) — ela está pronta para ser feita, e
-     ficou de fora porque o outro agente depende do Makefile enquanto trabalha.
+**Nove defeitos consertados**, todos achados por construir de verdade: dois do
+coletor, o `-j` que não limitava, os braços que formavam uma cadeia e travavam,
+o `restat` que não atravessava corridas (nas duas pontas), `sys.exit` a sair com
+ZERO com um erro pendente, e `a/../b` a carregar o mesmo módulo duas vezes.
+
+**O que ainda espera decisão sua**: o `pui` como pacote (precisa de mover os
+módulos do editor), e os campos do `pack.json`, que estão implementados como a
+proposta e são baratos de mudar.
 
 **Progresso** (atualizar a cada passo):
 
