@@ -23,6 +23,7 @@ import os
 import path
 import lib_graph as G
 import lib_targets as T
+import lib_manifest as M
 
 const BUILD: str = "build"
 
@@ -290,13 +291,45 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str)
     return T.junta(c, VERIFY, tudo, "verify: " + str(len(tudo)) + " partes")
 
 
+# ---------- o workspace ----------
+# Um `pack.json` na RAIZ do projeto, com os membros. É o que faz este
+# repositório ser, para o `ppack`, um projeto como qualquer outro — e é assim
+# que o ecossistema é testado por quem o escreve, contra o caso mais difícil que
+# existe.
+#
+# Dele sai uma coisa só para o compilador: as RAÍZES de busca. O diretório que
+# CONTÉM os membros é uma raiz, porque é assim que `import <pui/widget.ph>`
+# resolve — o nome do pacote é o primeiro pedaço do caminho.
+async def raizes_do_workspace(manifesto: str) -> list<str>:
+    out: list<str> = []
+    if not path.isfile(manifesto):
+        return out
+    m = await M.ler(manifesto)
+    if not m.eh_workspace:
+        return out
+    base = path.dirname(manifesto)
+    for membro in m.membros:
+        r = path.dirname(path.join(base, membro))
+        if len(r) == 0:
+            r = "."
+        ja = False
+        for x in out:
+            if x == r:
+                ja = True
+        if not ja:
+            out.append(r)
+    return out
+
+
 async def montar(query: str) -> G.Graph:
     """`query` é o compilador que RESPONDE as perguntas do protocolo enquanto o
     grafo é montado — normalmente o que já está na máquina. Quem RODA em cada
     degrau é o artefato daquele degrau, e a diferença é o que faz a escada ser
     expressável."""
     g = G.new_graph()
+    raizes = await raizes_do_workspace("pack.json")
     c = T.new_ctx(g, BUILD, query)
+    c.pkgroots = raizes
     stamp = await escada(c)
 
     # tudo o que vem por cima roda com o compilador do PONTO FIXO — o mesmo que
@@ -307,6 +340,7 @@ async def montar(query: str) -> G.Graph:
     cps = T.new_ctx(g, path.join(BUILD, "psc"), PLANGC_S2)
     cps.plangc_is_built = True
     cps.query = query
+    cps.pkgroots = raizes
     bins = await pscript_tudo(cps)
     editor = await pstudio(cps)
     suite = await suite_pscript(cps, bins["verdict"])

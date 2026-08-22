@@ -1,0 +1,10 @@
+{
+  "name": "geo",
+  "version": "0.1.0",
+  "lang": "p",
+  "root": "geo.ph",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "área e perímetro: o pacote P mais simples que se pode escrever"
+}

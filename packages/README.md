@@ -63,7 +63,24 @@ ter de aguentar algo difícil.
 eu medi na 1.5(d) — deixa de ser bloqueio dos dois primeiros pacotes. Ele continua
 sendo bloqueio do **editor**, que é onde ele já dói hoje.)*
 
-## O manifesto (PROPOSTA — os campos ainda não foram decididos)
+## O manifesto — IMPLEMENTADO como a proposta abaixo (2026-08-22)
+
+`pbuild/ps/lib_manifest.psc` lê e VALIDA as duas formas, e o erro sai como
+`pack.json:4:12: error: ...` — clicável na IDE pelo mesmo caminho que um erro de
+compilação, que é a razão de valer o trabalho. A posição é a da CHAVE, achada no
+texto cru: o `json.parse` da linguagem devolve a estrutura e não as posições, e
+escrever um segundo leitor de JSON só para as ter seria pagar caro por um número.
+
+O que ele recusa hoje: nome fora de `[a-z][a-z0-9_-]*` (um nome de pacote vira
+nome de diretório, pedaço de caminho de import e — mais tarde — pedaço de URL, e
+esta é a interseção do que não dói em nenhum dos três); versão que não é
+`x.y.z`; `lang` que não é `p` nem `pscript`; raiz que não existe; raiz `.psc` num
+pacote `p`; dependência com nome inválido.
+
+**Os campos continuam sendo os da proposta, e mudá-los é barato** — é um leitor
+de cem linhas com portão próprio (`caso_manifesto` na suíte do motor).
+
+### A forma (proposta implementada)
 
 ```json
 {

@@ -182,6 +182,28 @@ sozinho. Estado encontrado e restrição que ele impõe:
       cujo C sai igual = 4 arestas e 7,7 s. `ppack verify` (o `verify-all`
       inteiro, como grafo) **5m48 do zero e 7,7 s sem mudança** — contra ~20 min
       em toda corrida do `verify-all.sh`.
+- [~] **F4 começou pelo que não depende de decisão sua** (2026-08-22): o
+      MANIFESTO e o WORKSPACE. `pbuild/ps/lib_manifest.psc` lê e valida as duas
+      formas de `pack.json` — a de pacote e a de workspace, que se distinguem
+      por ter ou não `members`, sem campo `kind` e sem um terceiro arquivo — e
+      o erro sai como `pack.json:4:12: error: ...`, clicável pelo mesmo caminho
+      que um erro de compilação. O descritor lê o `pack.json` da raiz, deriva as
+      RAÍZES de busca (o diretório que contém os membros) e as passa a TODA
+      invocação do compilador, pergunta inclusive — `--deps` de um arquivo que
+      importa de um pacote precisa achar o pacote para responder.
+      Portão: `caso_manifesto` na suíte do motor (60 checagens agora).
+
+      **O que falta em F4 depende de VOCÊ, e está listado aqui para a decisão
+      ser fácil:**
+      1. **como um módulo pscript de um pacote é importado.** `import <>` ficou
+         decidido para `.ph` (módulo P); um pacote pscript como o `pui` precisa
+         de uma forma para os `.psc` dele. Proposta: `import <pui/pui.psc>`,
+         mesma regra de busca, e o nome do namespace é o último pedaço sem
+         extensão. Sem isto o `pui` não pode virar pacote.
+      2. **os campos do `pack.json`** estão implementados como a proposta de
+         `packages/README.md`. Mudá-los é barato.
+      3. **mover o `stl`** (41 referências, ciclo de seed) — a decisão de
+         quando, não de se.
 
 ---
 

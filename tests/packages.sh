@@ -115,5 +115,9 @@ echo "$deps" | grep -q "$PKG/geo/geo.p" && ok || bad "pscript --deps não lista 
 e=$($PLANGC --pkg-path "$PWD/$PKG" --out-dir "$OUT/x" "$OUT/prog.p" 2>&1)
 echo "$e" | grep -q "named the same way" && ok || bad "espaços misturados: devia recusar com mensagem"
 
+# (o `pack.json` de workspace e a raiz que sai dele têm portão próprio na suíte
+# do motor — `caso_manifesto` em `pbuild/ps/engine_test.psc` —, porque quem os lê
+# é pscript e o portão vive junto do código que testa)
+
 echo "   packages: $pass ok, $fail failed"
 [ $fail = 0 ]

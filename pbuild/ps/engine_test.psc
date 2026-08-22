@@ -15,6 +15,8 @@ import lib_graph as G
 import lib_build as B
 import lib_ninja as N
 import lib_targets as T
+import lib_manifest as M
+import build_plang as BP
 
 const DIR: str = "tests/out/pbuild"
 
@@ -552,6 +554,44 @@ async def caso_ninja():
     # comitado que muda de ordem a cada corrida é um diff por nada
     check("ninja: determinista", "True", str(N.emit(g) == txt))
 
+async def caso_manifesto():
+    """O `pack.json`: pacote, workspace, e o erro COM POSIÇÃO (F4).
+
+    O manifesto é dado e nunca programa — é o arquivo que o painel da IDE edita
+    —, e por isso o erro dele tem de ser clicável pelo mesmo caminho que um erro
+    de compilação: `arquivo:linha:coluna: error: ...`. Sem isso, configurar um
+    pacote pela IDE seria adivinhar."""
+    reset()
+    g1 = await M.ler("tests/pkg/geo/pack.json")
+    check("manifesto: nome e versão", "geo 0.1.0", g1.nome + " " + g1.versao)
+    check("manifesto: lang e raiz", "p geo.ph", g1.lang + " " + g1.raiz)
+    check("manifesto: sem dependência", "0", str(len(g1.deps)))
+
+    t1 = await M.ler("tests/pkg/txt/pack.json")
+    check("manifesto: a dependência veio", "geo >= 0.1.0",
+          t1.deps[0].nome + " " + t1.deps[0].faixa)
+
+    w = await M.ler("tests/pkg/pack.json")
+    check("manifesto: workspace se conhece", "True", str(w.eh_workspace))
+    check("manifesto: os membros", "geo txt", " ".join(w.membros))
+
+    # a RAIZ de busca sai do workspace: é o diretório que CONTÉM os membros,
+    # porque é assim que `import <geo/geo.ph>` resolve
+    rs = await BP.raizes_do_workspace("tests/pkg/pack.json")
+    check("workspace: uma raiz, a que contém os membros", "tests/pkg", " ".join(rs))
+
+    # e o erro tem linha e coluna
+    nonlocal msg
+    msg = ""
+    try:
+        await M.ler("tests/pkg/ruim/pack.json")
+        msg = "não levantou"
+    catch e:
+        msg = e.message
+    check("manifesto: o erro tem posição", "True",
+          str(msg.find("tests/pkg/ruim/pack.json:2:3: error:") == 0))
+    check("manifesto: e diz o que estava errado", "True", str(msg.find("minúsculas") > 0))
+
 async def caso_limite_de_bracos():
     """O `-j N` limita MESMO: nunca há mais de N arestas em voo.
 
@@ -630,6 +670,7 @@ async def go():
     await caso_grafo_reusado()
     await caso_json()
     await caso_ninja()
+    await caso_manifesto()
     await caso_limite_de_bracos()
     await caso_portao_negativo()
     print("   pbuild-engine: " + str(ok_count) + " ok, " + str(fail_count) + " failed")

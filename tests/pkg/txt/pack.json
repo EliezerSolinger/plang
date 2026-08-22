@@ -1,0 +1,10 @@
+{
+  "name": "txt",
+  "version": "0.2.0",
+  "lang": "p",
+  "root": "txt.ph",
+  "deps": { "geo": ">= 0.1.0" },
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "um pacote que depende de outro, que é o caso que importa"
+}

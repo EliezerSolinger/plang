@@ -45,6 +45,10 @@ struct Ctx:
     rt_h: list<str>
     rt_o: list<str>
     rt_pronto: bool
+    # as raízes de pacote deste projeto (`--pkg-path`), na ordem. Elas entram em
+    # TODA invocação do compilador — inclusive nas PERGUNTAS, porque `--deps` de
+    # um arquivo que importa de um pacote precisa achar o pacote para responder.
+    pkgroots: list<str>
 
 def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # quem RESPONDE e quem RODA podem ser compiladores diferentes, e na escada de
@@ -53,7 +57,7 @@ def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # este arquivo lê?", "o que ele vai emitir?") são sobre o FONTE e podem ser
     # feitas a qualquer compilador que entenda a linguagem. É a mesma suposição
     # que o bootstrap já faz: o seed compila os fontes de hoje.
-    return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False)
+    return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [])
 
 # ---------- perguntar ao compilador ----------
 # As respostas 1 e 3 do protocolo, usadas onde elas existem para ser usadas: o
@@ -97,11 +101,27 @@ private async def ask(c: Ctx, argv: list<str>) -> list<str>:
             out.append(line)
     return out
 
+private def com_raizes(c: Ctx, argv: list<str>) -> list<str>:
+    """O `argv` com as raízes de pacote. Elas vão em toda invocação, pergunta
+    inclusive: `--deps` de um arquivo que importa `<pui/widget.ph>` precisa achar
+    o `pui` para responder — e uma pergunta que não acha é uma resposta vazia,
+    que é o modo de falhar mais perigoso que existe num sistema de build."""
+    out: list<str> = []
+    out.append(argv[0])
+    for r in c.pkgroots:
+        out.append("--pkg-path")
+        out.append(r)
+    i = 1
+    while i < len(argv):
+        out.append(argv[i])
+        i += 1
+    return out
+
 async def deps_of(c: Ctx, src: str) -> list<str>:
-    return await ask(c, [c.query, "--deps", src])
+    return await ask(c, com_raizes(c, [c.query, "--deps", src]))
 
 async def outputs_of(c: Ctx, src: str, outdir: str) -> list<str>:
-    return await ask(c, [c.query, "--outputs", "--out-dir", outdir, src])
+    return await ask(c, com_raizes(c, [c.query, "--outputs", "--out-dir", outdir, src]))
 
 # ---------- P e pscript -> C ----------
 async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>:
@@ -119,6 +139,9 @@ async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>
     ins = await deps_of(c, src)
     outs = await outputs_of(c, src, outdir)
     argv: list<str> = [c.plangc]
+    for r in c.pkgroots:
+        argv.append("--pkg-path")
+        argv.append(r)
     for fl in flags:
         argv.append(fl)
     argv.append("--out-dir")
