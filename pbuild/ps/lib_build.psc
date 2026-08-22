@@ -405,20 +405,31 @@ private def node_done(b: Build, nid: int, prune: bool):
         e = b.g.edges[eid]
         if not e.want:
             continue
-        sujo_para_poda = e.dirty_out if prune else (e.dirty_in or e.dirty_out)
-        if not sujo_para_poda:
+        # OS DOIS CONTADORES ANDAM SEPARADOS, e cada entrada que termina mexe
+        # nos dois: `nblock` é "quantas entradas ainda faltam" e `nprune` é
+        # "quantas ainda podem vir sem mudança". Uma entrada que MUDOU baixa só
+        # o primeiro; uma que veio igual baixa os dois.
+        #
+        # A versão anterior escolhia UM dos contadores por entrada, e por isso
+        # uma aresta com entradas MISTURADAS — uma que mudou e outra que não —
+        # ficava com os dois em 1 e nunca mais saía: nem rodava nem era podada.
+        # O braço que a esperava via a fila vazia, ninguém em voo, e ia embora.
+        # O build terminava com sucesso e o trabalho por fazer, e só a corrida
+        # seguinte é que continuava. Foi assim que uma edição no lexer levou
+        # cinco `make` a chegar ao compilador.
+        podavel = not e.dirty_out
+        if prune and podavel:
             e.nprune -= 1
-            if e.nprune == 0:
-                # ou a aresta já estava limpa, ou tudo que a bloqueava foi
-                # podado: as saídas dela também estão em dia
-                for oid in e.outs:
-                    node_done(b, oid, True)
-                if e.dirty_in or e.dirty_out:
-                    b.total -= 1
-        else:
-            e.nblock -= 1
-            if e.nblock == 0 and (e.dirty_in or e.dirty_out):
-                enqueue(b, eid)
+        e.nblock -= 1
+        if podavel and e.nprune == 0:
+            # TUDO o que a bloqueava veio sem mudança: esta aresta não precisa
+            # rodar, e as saídas dela também não mudaram — a poda segue em frente
+            for oid in e.outs:
+                node_done(b, oid, True)
+            if e.dirty_in or e.dirty_out:
+                b.total -= 1
+        elif e.nblock == 0 and (e.dirty_in or e.dirty_out):
+            enqueue(b, eid)
 
 private async def finish(b: Build, e: G.Edge, ok: bool, dur_ms: int):
     if not ok:

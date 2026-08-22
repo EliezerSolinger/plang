@@ -143,8 +143,17 @@ private def com_raizes(c: Ctx, argv: list<str>) -> list<str>:
         i += 1
     return out
 
-async def deps_of(c: Ctx, src: str) -> list<str>:
-    return await ask(c, com_raizes(c, [c.query, "--deps", src]))
+async def deps_of(c: Ctx, src: str, outdir: str) -> list<str>:
+    """O que esta compilação LÊ — e "esta" é a palavra que importa.
+
+    O `--out-dir` vai na PERGUNTA porque ele muda a resposta: com ele, nomear um
+    `.ph` puxa o `.p` irmão (1.5a) e a compilação lê os dois; com `-o`, não puxa
+    e lê só o header. Perguntar sem o modo e compilar com ele foi um erro real e
+    silencioso — `--outputs selfhost/parser.ph --out-dir build/s1` já dizia que
+    ia ESCREVER `lexer.c`, enquanto `--deps selfhost/parser.ph` não dizia que ia
+    LER `lexer.p`. A aresta ficava sem essa entrada, e editar o lexer do
+    compilador não reconstruía nada."""
+    return await ask(c, com_raizes(c, [c.query, "--deps", "--out-dir", outdir, src]))
 
 async def outputs_of(c: Ctx, src: str, outdir: str) -> list<str>:
     return await ask(c, com_raizes(c, [c.query, "--outputs", "--out-dir", outdir, src]))
@@ -162,7 +171,7 @@ async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>
     importa, transitivamente) mais o próprio compilador quando ele é construído
     aqui. As saídas são o que ele diz que vai emitir. Nada disto é adivinhado.
     """
-    ins = await deps_of(c, src)
+    ins = await deps_of(c, src, outdir)
     outs = await outputs_of(c, src, outdir)
     argv: list<str> = [c.plangc]
     for r in c.pkgroots:
