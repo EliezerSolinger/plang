@@ -590,6 +590,8 @@ static Expr *PsLow_coerce(PsLow *self, PsType *want, PsExpr *e);
 
 static Expr *PsLow_value_first(PsLow *self, PsExpr *e, PsType *want, Pos pos);
 
+static Expr *PsLow_spill(PsLow *self, Expr *v, PsType *t, Pos pos);
+
 static int PsLow_is_trivial(PsLow *self, PsExpr *e);
 
 static Vec_pStmt PsLow_nl_flush(PsLow *self, Vec_pStmt *body);
@@ -2073,7 +2075,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 Stmt *wa = st_new(self->a, ST_ASSIGN, e->pos);
                 wa->lhs = PsLow_async_field(self, e->var, e->pos);
                 wa->op = TK_ASSIGN;
-                wa->rhs = PsLow_coerce(self, e->type, e->lhs);
+                wa->rhs = PsLow_value_first(self, e->lhs, e->type, e->pos);
                 Vec_pStmt_push(&self->pre, wa);
                 return PsLow_async_field(self, e->var, e->pos);
             }
@@ -2369,6 +2371,11 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
 }
 
 static Expr *PsLow_unary(PsLow *self, PsExpr *e) {
+    if (e->op == TK_MINUS && e->lhs != NULL && e->lhs->kind == PE_INT && e->lhs->text != NULL) {
+        if (e->type != NULL && e->type->kind == PT_INT && e->type->width == 0) {
+            return PsLow_num(self, Arena_printf(self->a, "-%s", e->lhs->text), e->pos);
+        }
+    }
     if (e->op == TK_MINUS && e->type != NULL && e->type->kind == PT_INT) {
         Expr *c = PsLow_call_rt(self, "ps_neg", e->pos);
         PsLow_push_arg(self, c, PsLow_ctx_arg(self, e->pos));
@@ -3063,6 +3070,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->allocs = 1;
             return is9;
         }
+        Expr *av = PsLow_value_first(self, e->args[0], e->lhs->type->inner, e->pos);
         Expr *slot = PsLow_call_rt(self, "ps_list_push", e->pos);
         PsLow_push_arg(self, slot, PsLow_ctx_arg(self, e->pos));
         PsLow_push_arg(self, slot, PsLow_expr(self, e->lhs->lhs));
@@ -3075,7 +3083,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         Expr *st = ex_new(self->a, EX_ASSIGN, e->pos);
         st->op = TK_ASSIGN;
         st->lhs = de;
-        st->rhs = PsLow_coerce(self, e->lhs->type->inner, e->args[0]);
+        st->rhs = av;
         self->allocs = 1;
         return st;
     }
@@ -3419,18 +3427,28 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         return c9;
     }
     if (PsLow_is_record(self, name)) {
-        Expr *c1 = PsLow_call_rt(self, name, e->pos);
+        PsExpr **vals = Arena_alloc(self->a, (size_t)(e->nargs + 1) * sizeof(*vals));
         size_t i;
         for (i = 0; i < e->nargs; i += 1) {
-            PsExpr *a = e->args[i];
+            vals[i] = (e->args[i]->kind == PE_DESIG ? e->args[i]->lhs : e->args[i]);
+        }
+        Expr *prer = NULL;
+        Expr **ovr = PsLow_lower_ordered(self, vals, e->nargs, &prer);
+        Expr *c1 = PsLow_call_rt(self, name, e->pos);
+        size_t i2;
+        for (i2 = 0; i2 < e->nargs; i2 += 1) {
+            PsExpr *a = e->args[i2];
             if (a->kind == PE_DESIG) {
                 Expr *d = ex_new(self->a, EX_DESIG, a->pos);
                 d->field = ps_cname(self->a, a->text);
-                d->lhs = PsLow_expr(self, a->lhs);
+                d->lhs = ovr[i2];
                 PsLow_push_arg(self, c1, d);
             } else {
-                PsLow_push_arg(self, c1, PsLow_expr(self, a));
+                PsLow_push_arg(self, c1, ovr[i2]);
             }
+        }
+        if (prer != NULL) {
+            return PsLow_comma2(self, prer, c1, e->pos);
         }
         return c1;
     }
@@ -4645,6 +4663,17 @@ static Expr **PsLow_lower_ordered(PsLow *self, PsExpr **es, int32_t n, Expr **pr
     return out;
 }
 
+static Expr *PsLow_spill(PsLow *self, Expr *v, PsType *t, Pos pos) {
+    const char *n = Arena_printf(self->a, "__st%d", self->tmp_ctr);
+    self->tmp_ctr += 1;
+    Stmt *d = st_new(self->a, ST_VAR, pos);
+    d->name = n;
+    d->type = PsLow_ty(self, t);
+    d->init = v;
+    Vec_pStmt_push(&self->pre, d);
+    return PsLow_ident(self, n, pos);
+}
+
 static Expr *PsLow_value_first(PsLow *self, PsExpr *e, PsType *want, Pos pos) {
     int prev = self->allocs;
     self->allocs = 0;
@@ -5402,7 +5431,7 @@ static int PsLow_is_collected(PsLow *self, Type *t) {
         return 0;
     }
     const char *n = t->inner->name;
-    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0) {
+    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
         return 1;
     }
     if (StrSet_has(&self->frame_names, n)) {
@@ -6148,8 +6177,9 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 Vec_pStmt_push(out, PsLow_shared_lock(self, nm5, 1, s->pos));
                 return;
             }
+            int campo = s->lhs->kind != PE_NAME || (!s->is_global && PsLow_in_frame(self, s->lhs->text));
             Expr *av = NULL;
-            if (s->op == TK_ASSIGN && s->lhs->kind != PE_NAME) {
+            if (s->op == TK_ASSIGN && campo) {
                 av = PsLow_value_first(self, s->rhs, s->lhs->type, s->pos);
             }
             Stmt *a2 = st_new(self->a, ST_ASSIGN, s->pos);
@@ -6174,7 +6204,12 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 tmp->lhs = s->lhs;
                 tmp->rhs = s->rhs;
                 tmp->type = s->lhs->type;
-                a2->rhs = PsLow_binary(self, tmp);
+                int prev8 = self->allocs;
+                self->allocs = 0;
+                Expr *bv8 = PsLow_binary(self, tmp);
+                int mv8 = self->allocs;
+                self->allocs = prev8 || mv8;
+                a2->rhs = (campo && mv8 ? PsLow_spill(self, bv8, s->lhs->type, s->pos) : bv8);
             }
             Vec_pStmt_push(out, a2);
             break;
@@ -6185,7 +6220,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                     Stmt *sa = st_new(self->a, ST_ASSIGN, s->pos);
                     sa->lhs = PsLow_async_field(self, "__ret", s->pos);
                     sa->op = TK_ASSIGN;
-                    sa->rhs = PsLow_coerce(self, self->ret_ps, s->expr);
+                    sa->rhs = PsLow_value_first(self, s->expr, self->ret_ps, s->pos);
                     Vec_pStmt_push(out, sa);
                     if (self->raised) {
                         Vec_pStmt_push(out, PsLow_guard(self, s->pos));
@@ -8848,6 +8883,7 @@ static void ab_stmt(AsyncB *B, PsStmt *s) {
             if (!is_range && !is_list) {
                 fatal_at(B->file, s->pos, "an `await` inside this `for` is not compiled yet: the state machine takes apart `for` over `range(...)` and over a list (50.1)");
             }
+            ab_split_e(B, s->iter);
             const char *iv = ps_for_cursor(B->L->a, s->pos);
             const char *lv = ps_for_seq(B->L->a, s->pos);
             Stmt *init = st_new(B->L->a, ST_ASSIGN, s->pos);

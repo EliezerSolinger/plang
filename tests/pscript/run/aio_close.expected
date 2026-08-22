@@ -1,0 +1,7 @@
+n = 1 -> escrito - no disco = 0
+n = 20 -> escrito - no disco = 0
+n = 50 -> escrito - no disco = 0
+n = 100 -> escrito - no disco = 0
+relido: 900 bytes, 101 linhas
+fechado: write on a file that is not open
+limpo: False

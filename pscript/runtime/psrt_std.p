@@ -527,6 +527,8 @@ def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, lin
     l->cap = l->len
     l->esize = esize
     l->eref = False
+    l->etrace = None    # `ps_alloc` não zera; uma vista não o usa, mas o campo
+                        #   existe e ficar com lixo é uma armadilha à espera
     l->data = None
     l->raw = b->data
     l->owner = b

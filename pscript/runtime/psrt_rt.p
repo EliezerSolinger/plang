@@ -1453,6 +1453,13 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             f: *PsFile = (*PsFile)(ps_alloc(ctx, sizeof(PsFile), PS_TY_FILE))
             f->fp = w->fp
             f->is_open = 1
+            # `ps_alloc` NÃO zera (223), então todo campo do objeto tem de ser
+            # escrito aqui — e `is_std` faltava. O bloco vinha reciclado de uma
+            # coleta, o lixo que estava neste offset era != 0, e `ps_aio_close`
+            # (que sai cedo para stdout/stderr) devolvia sem fechar NADA: a
+            # escrita dizia ter gravado 144 bytes, o arquivo tinha 0, e os dados
+            # só apareciam no `exit` — quando a libc esvazia o que sobrou.
+            f->is_std = 0
             *(**PsFile)(ps_task_ret(t)) = f
         case PS_W_BYTES:
             l: *PsList = ps_list_new(ctx, 1, False, i64(w->n))
@@ -1862,6 +1869,7 @@ def ps_file_open(ctx: *PsCtx, path: *PsStr, mode: *PsStr, file: const *char, lin
     f: *PsFile = (*PsFile)(ps_alloc(ctx, sizeof(PsFile), PS_TY_FILE))
     f->fp = None
     f->is_open = 0
+    f->is_std = 0       # `ps_alloc` não zera: o campo que falta é lixo do bloco
     fp: *FILE = fopen(path->data, mode->data)
     if fp == None:
         # the message says WHICH file: a program that stops has to say what it

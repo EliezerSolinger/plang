@@ -342,6 +342,7 @@ struct PsLow:
     private def slot_val(self: *PsLow, slot: *Expr, vt: *PsType, pos: Pos) -> *Expr
     private def coerce(self: *PsLow, want: *PsType, e: *PsExpr) -> *Expr
     private def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr
+    private def spill(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
     private def is_trivial(self: *PsLow, e: *PsExpr) -> bool
     private def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>
     private def is_collected_ps(self: *PsLow, t: *PsType) -> bool
@@ -1786,7 +1787,7 @@ struct PsLow:
                     wa: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
                     wa->lhs = self->async_field(e->var, e->pos)
                     wa->op = TK_ASSIGN
-                    wa->rhs = self->coerce(e->type, e->lhs)
+                    wa->rhs = self->value_first(e->lhs, e->type, e->pos)
                     self->pre.push(wa)
                     return self->async_field(e->var, e->pos)
                 wd: *Stmt = st_new(self->a, ST_VAR, e->pos)
@@ -2790,7 +2791,17 @@ struct PsLow:
                 self->allocs = True
                 return is9
             # `xs.append(v)` — the runtime grows the list and hands back the
-            # address of the new last element, which the store then fills
+            # address of the new last element, which the store then fills.
+            #
+            # O VALOR primeiro, e não é detalhe: `ps_list_push` devolve um
+            # endereço DENTRO do array da lista, e se calcular `v` alocar, o
+            # coletor move esse array — a escrita iria para a memória velha.
+            # `value_first` só acrescenta um temporário quando o valor realmente
+            # aloca, então `xs.append(1)` continua saindo como antes. Era o
+            # mesmo defeito que a atribuição a campo já tratava (ver o
+            # comentário de `value_first`), e que aqui faltava: apareceu como
+            # SIGSEGV em `parts.append(jstr(x))` sob coleta forçada.
+            av: *Expr = self->value_first(e->args[0], e->lhs->type->inner, e->pos)
             slot: *Expr = self->call_rt("ps_list_push", e->pos)
             self->push_arg(slot, self->ctx_arg(e->pos))
             self->push_arg(slot, self->expr(e->lhs->lhs))
@@ -2803,7 +2814,7 @@ struct PsLow:
             st: *Expr = ex_new(self->a, EX_ASSIGN, e->pos)
             st->op = TK_ASSIGN
             st->lhs = de
-            st->rhs = self->coerce(e->lhs->type->inner, e->args[0])
+            st->rhs = av
             self->allocs = True
             return st
         # calling a function VALUE (28.1): through the pointer the closure
@@ -3132,16 +3143,31 @@ struct PsLow:
             return c9
         # a record constructor: P has the same one (65.1), positional or named
         if self->is_record(name):
-            c1: *Expr = self->call_rt(name, e->pos)
+            # A ORDEM dos campos importa aqui pelo mesmo motivo que numa chamada
+            # (ver o comentário de `lower_ordered`): um campo cujo valor ALOCA
+            # pode mover o objeto que outro campo está lendo, e o C não define a
+            # ordem de avaliação dentro de um inicializador. O caso que apareceu
+            # foi um `record` montado a partir dos pedaços de uma lista com uma
+            # conversão que aloca no meio — sob coleta forçada, metade dos campos
+            # vinha de um array que já tinha se mudado. Silencioso: nenhum
+            # estouro, só valores errados.
+            vals: **PsExpr = self->a->alloc(usize(e->nargs + 1) * sizeof(*vals))
             for i in range(e->nargs):
-                a: *PsExpr = e->args[i]
+                vals[i] = e->args[i]->lhs if e->args[i]->kind == PE_DESIG else e->args[i]
+            prer: *Expr = None
+            ovr: **Expr = self->lower_ordered(vals, e->nargs, ref prer)
+            c1: *Expr = self->call_rt(name, e->pos)
+            for i2 in range(e->nargs):
+                a: *PsExpr = e->args[i2]
                 if a->kind == PE_DESIG:
                     d: *Expr = ex_new(self->a, EX_DESIG, a->pos)
                     d->field = ps_cname(self->a, a->text)
-                    d->lhs = self->expr(a->lhs)
+                    d->lhs = ovr[i2]
                     self->push_arg(c1, d)
                 else:
-                    self->push_arg(c1, self->expr(a))
+                    self->push_arg(c1, ovr[i2])
+            if prer != None:
+                return self->comma2(prer, c1, e->pos)
             return c1
         # ---- builtins ----
         if strcmp(name, "print") == 0 or strcmp(name, "aprint") == 0:
@@ -4364,6 +4390,19 @@ struct PsLow:
     #
     # Only when the value really can allocate — the flag says so, and the
     # ordinary case emits nothing extra.
+    # O par de `value_first` para um valor JÁ baixado: quem chama mediu por si
+    # se a baixa alocou (o `x += e` de um campo, que constrói a soma antes de
+    # saber onde ela vai). Ver o comentário do `campo` na atribuição (118).
+    private def spill(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
+        n: const *char = self->a->printf("__st%d", self->tmp_ctr)
+        self->tmp_ctr += 1
+        d: *Stmt = st_new(self->a, ST_VAR, pos)
+        d->name = n
+        d->type = self->ty(t)
+        d->init = v
+        self->pre.push(d)
+        return self->ident(n, pos)
+
     private def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr:
         prev: bool = self->allocs
         self->allocs = False
@@ -5055,7 +5094,15 @@ struct PsLow:
         # bytes are malloc'd, because another thread holds the pointer and a
         # collector that moves cannot own what another thread is reading. It is
         # a handle, not an object of this heap.
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0:
+        # Todo objeto que o runtime aloca com `ps_alloc` mora no heap COLETADO e
+        # tem de estar nesta lista: um que falte não é rastreado, o coletor o
+        # move, e quem o segurava fica com o endereço antigo. O defeito é
+        # silencioso até o dia em que uma coleta acontece no meio — e foi assim
+        # que `PsConn`, `PsTimer` e `PsProc` apareceram: um `socket` guardado num
+        # `async def` já tinha o problema, e só não estourava porque o
+        # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
+        # seguro custa mais que a volta pela rede).
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -5808,8 +5855,23 @@ struct PsLow:
                     out->push(sa5)
                     out->push(self->shared_lock(nm5, True, s->pos))
                     return
+                # 118: o destino é um CAMPO de um objeto do heap? Um campo de
+                # `struct`, um elemento de lista — e, dentro de um `async def`,
+                # TODO local, porque ali todo local mora no quadro. Nesse caso o
+                # valor tem de ser calculado numa temporária ANTES da escrita.
+                #
+                # O motivo é o C, e é sutil: em `__fr->x = f(...)` a ordem entre
+                # calcular o ENDEREÇO da esquerda e chamar a direita não está
+                # definida. O gcc carrega `__fr` num registrador, `f` aloca, o
+                # coletor MOVE o quadro e conserta a pilha de sombra — e a
+                # escrita vai para o endereço VELHO. O valor some sem erro
+                # nenhum: foi assim que o `restat` do pbuild passou a comparar 0
+                # com 0, e que `hash_str` devolveu zero de dentro de um `await`.
+                # `for x in xs` e as declarações já passavam por aqui; a
+                # ATRIBUIÇÃO a um nome não passava.
+                campo: bool = s->lhs->kind != PE_NAME or (not s->is_global and self->in_frame(s->lhs->text))
                 av: *Expr = None
-                if s->op == TK_ASSIGN and s->lhs->kind != PE_NAME:
+                if s->op == TK_ASSIGN and campo:
                     av = self->value_first(s->rhs, s->lhs->type, s->pos)
                 a2: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
                 a2->lhs = self->expr(s->lhs)
@@ -5836,7 +5898,15 @@ struct PsLow:
                     tmp->lhs = s->lhs
                     tmp->rhs = s->rhs
                     tmp->type = s->lhs->type
-                    a2->rhs = self->binary(tmp)
+                    # `x += e` num campo tem a mesma armadilha da atribuição
+                    # simples, e uma concatenação SEMPRE aloca — é o caso mais
+                    # comum de todos
+                    prev8: bool = self->allocs
+                    self->allocs = False
+                    bv8: *Expr = self->binary(tmp)
+                    mv8: bool = self->allocs
+                    self->allocs = prev8 or mv8
+                    a2->rhs = self->spill(bv8, s->lhs->type, s->pos) if campo and mv8 else bv8
                 out->push(a2)
             case PS_RETURN:
                 # In a step function (50.1) `return` does not leave a C
@@ -5847,7 +5917,10 @@ struct PsLow:
                         sa: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
                         sa->lhs = self->async_field("__ret", s->pos)
                         sa->op = TK_ASSIGN
-                        sa->rhs = self->coerce(self->ret_ps, s->expr)
+                        # o `__ret` é um campo do quadro como outro qualquer
+                        # (118): `return f()` onde `f` aloca escrevia no quadro
+                        # ANTIGO quando a coleta acontecia dentro de `f`
+                        sa->rhs = self->value_first(s->expr, self->ret_ps, s->pos)
                         out->push(sa)
                         if self->raised:
                             out->push(self->guard(s->pos))
@@ -8518,6 +8591,18 @@ private def ab_stmt(ref B: AsyncB, s: *PsStmt):
             is_list: bool = ip != None and ip->type != None and ip->type->kind == PT_LIST
             if not is_range and not is_list:
                 fatal_at(B.file, s->pos, "an `await` inside this `for` is not compiled yet: the state machine takes apart `for` over `range(...)` and over a list (50.1)")
+            # o ITERÁVEL pode ele mesmo carregar um `await` — `for x in await
+            # f():` é a forma óbvia de percorrer o que uma tarefa devolveu. O
+            # await tem de ser PARTIDO em estados aqui, antes de a expressão ser
+            # baixada: `expr()` de um `PE_AWAIT` emite apenas a LEITURA do
+            # resultado (`ps_task_ret(__fr->slot)`), porque a metade que inicia a
+            # tarefa e estaciona é feita de estados, e uma expressão não os tem.
+            #
+            # Sem esta linha o C saía com a leitura de um campo que ninguém
+            # preencheu — e o programa lia o endereço zero. Silencioso na
+            # compilação, SIGSEGV na execução, e o `for` sobre o resultado de uma
+            # tarefa é justamente o que um build escreve o tempo todo.
+            ab_split_e(ref B, s->iter)
             iv: const *char = ps_for_cursor(B.L->a, s->pos)
             lv: const *char = ps_for_seq(B.L->a, s->pos)
             init: *Stmt = st_new(B.L->a, ST_ASSIGN, s->pos)
