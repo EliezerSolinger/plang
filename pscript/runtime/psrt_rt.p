@@ -795,14 +795,29 @@ extern environ: **char
 # de sinal (`dup2`, `close`, `open`, `chdir`, `execvp`, `_exit`). Nada de
 # `malloc`, nada de `snprintf`, nada de levantar exceção — por isso o `argv`, o
 # `envp` e os caminhos já vêm prontos de antes.
+# o filho não pode levantar exceção nem formatar mensagem (nada de `malloc`
+# entre o fork e o exec), mas PODE escrever: `write` é seguro em manipulador de
+# sinal. Sem isto um `chdir` que falha vira um status 127 mudo, e ninguém
+# descobre por quê.
+private def ps_child_say(fd: int, what: const *char, arg: const *char):
+    write(fd, "pbuild: ", 8)
+    write(fd, what, strlen(what))
+    if arg != None:
+        write(fd, " '", 2)
+        write(fd, arg, strlen(arg))
+        write(fd, "'", 1)
+    write(fd, "\n", 1)
+
 private def ps_run_child(w: *PsWork, wfd: int) -> int:
     if w->cwd != None:
         if chdir(w->cwd) != 0:
+            ps_child_say(wfd, "cannot enter directory", w->cwd)
             return 127
     ofd: int = wfd
     if w->outfile != None:
         ofd = open(w->outfile, O_WRONLY | O_CREAT | O_TRUNC, 420)   # 0644
         if ofd < 0:
+            ps_child_say(wfd, "cannot write to", w->outfile)
             return 127
     if dup2(ofd, 1) < 0:
         return 127
@@ -814,7 +829,10 @@ private def ps_run_child(w: *PsWork, wfd: int) -> int:
     if w->envp != None:
         environ = w->envp
     execvp(w->argv[0], w->argv)
-    return 127     # só se chega aqui quando o exec falhou
+    # o exec falhou: o descritor 2 já é o cano, então a mensagem chega a quem
+    # espera pelo mesmo caminho que a saída do programa chegaria
+    ps_child_say(2, "cannot run", w->argv[0])
+    return 127
 
 private def ps_io_run_proc(w: *PsWork):
     fds: int[2]

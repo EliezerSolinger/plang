@@ -2108,6 +2108,20 @@ struct PsLow:
         return None
 
     private def unary(self: *PsLow, e: *PsExpr) -> *Expr:
+        # `-3` é um literal NEGATIVO, e não uma negação em tempo de execução.
+        # Dobrar o sinal aqui tira uma chamada checada de todo `-1` que o
+        # programa escreve — e, o que motivou o conserto, é o que permite
+        # `const X: int = -1` num módulo IMPORTADO: um inicializador de módulo
+        # vira dado estático em C, e dado estático não chama função. Sem isto o
+        # lowering emitia `ps_neg(__ctx, 1)` no escopo do arquivo e o compilador
+        # morria com "use of undeclared identifier '__ctx'" — uma mensagem que
+        # não tem como levar ninguém à causa.
+        #
+        # Só para a largura PADRÃO: numa largura estreita o literal ainda tem de
+        # passar pela checagem de faixa (68.2), e aí a chamada é o certo.
+        if e->op == TK_MINUS and e->lhs != None and e->lhs->kind == PE_INT and e->lhs->text != None:
+            if e->type != None and e->type->kind == PT_INT and e->type->width == 0:
+                return self->num(self->a->printf("-%s", e->lhs->text), e->pos)
         if e->op == TK_MINUS and e->type != None and e->type->kind == PT_INT:
             # negating the most negative integer overflows, and overflow raises;
             # a narrow width also range-checks the result back in (68.2)

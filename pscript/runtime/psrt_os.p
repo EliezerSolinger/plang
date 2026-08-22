@@ -407,7 +407,14 @@ def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *P
             ps_work_free(w)
             return None
         av[i] = c
-    if env != None:
+    # um `env` VAZIO quer dizer "herde", e não "rode sem ambiente nenhum". A
+    # diferença existe no `subprocess` do Python (None vs {}) e aqui foi
+    # deliberadamente colapsada: quem constrói uma aresta de build tem um dict
+    # que às vezes está vazio, e fazer isso significar "sem PATH" transformaria
+    # o caso comum na armadilha. Rodar com ambiente REALMENTE vazio não é
+    # expressável hoje; no dia em que alguém precisar, é uma opção nova e não
+    # uma mudança de significado.
+    if env != None and env->n > 0:
         m: i64 = env->n
         ep: **char = (**char)(malloc(usize(m + 1) * sizeof(*ep)))
         memset(ep, 0, usize(m + 1) * sizeof(*ep))
@@ -431,13 +438,15 @@ def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *P
                 ep[e] = kv
                 e += 1
             k += 1
-    if cwd != None:
+    # caminho vazio é "não foi dado": a string vazia não nomeia diretório nenhum,
+    # e um `chdir("")` falharia com um 127 que não explica nada
+    if cwd != None and cwd->len > 0:
         c2: *char = os_arg_cstr(ctx, cwd, "working directory", file, line)
         if c2 == None:
             ps_work_free(w)
             return None
         w->cwd = c2
-    if outfile != None:
+    if outfile != None and outfile->len > 0:
         c3: *char = os_arg_cstr(ctx, outfile, "stdout path", file, line)
         if c3 == None:
             ps_work_free(w)

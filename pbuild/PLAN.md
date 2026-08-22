@@ -66,8 +66,28 @@ sozinho. Estado encontrado e restrição que ele impõe:
       FALTA (bloqueado pelo outro agente): regenerar o seed e rodar `verify`
       inteiro, e ligar o `protocol.sh` ao `verify-all.sh`.
 - [ ] F1 (BLOQUEADA: mexe em lexer/parser/sema, área dele)
-- [ ] F2A
-- [ ] F2B
+- [x] **F2A — `os.run`, `os.nproc`, `path.getmtime_ns`** (2026-08-22, commit
+      af97427): `await os.run(argv, env=, cwd=, stdout=) -> proc` com
+      `status()`/`output()`; sem shell (`execvp` recebe o vetor); stderr junto;
+      status != 0 é resultado; 128+sinal; `waitpid` no pool; tipo `proc` novo
+      (PT_PROC) com nome escrevível. Portões: os_run.psc + 3 recusas + oráculo
+      contra o `subprocess` do python3; pscript 279, gc-stress 115,
+      print-atomic, net-late, cases 46, pstudio 7 — todos verdes.
+      A bateria 118 ficou escrita em `pscript/DESIGN.md` mas NÃO comitada (o
+      arquivo carrega trabalho de outra sessão).
+- [x] **F2B — o MOTOR do pbuild** (2026-08-22): `pbuild/ps/lib_graph.psc`
+      (aresta gorda, três faixas, hash FNV-1a de 64 bits sobre argv+env+cwd+
+      stdout+alvo, JSON ida e volta), `lib_log.psc` (mtime ns, duração, hash do
+      comando e hash do CONTEÚDO; parser de depfile) e `lib_build.psc` (os seis
+      testes do ninja, restat POR CONTEÚDO com poda transitiva, caminho crítico
+      pesado por duração, executor com braços que se multiplicam até o limite,
+      higiene com três erros, quatro eventos, `--explain` como consulta).
+      Portão: `tests/pbuild.sh` + `pbuild/ps/engine_test.psc`, **31 checagens**.
+      Dois defeitos consertados no caminho: `const` negativo em módulo importado
+      não compilava (`ps_lower`), e `os.run` tratava `cwd=""`/`env={}` como
+      valores em vez de "não foi dado" (`psrt_os`), além de o filho morrer mudo
+      quando o `chdir`/`exec` falhava (`psrt_rt`).
+- [ ] F3 — o descritor e a CLI (próximo)
 - [ ] F3
 
 ---
