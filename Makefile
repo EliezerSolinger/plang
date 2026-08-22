@@ -10,6 +10,10 @@
 #   make test-c89   # same in strict-C89 mode
 #   make selfhost   # rebuild plangc from the Plang source (self-host check)
 #   make pstudio    # build the editor (pstudio/ps/, pscript; needs libsdl2-dev)
+#   make ppack      # build the project's own build system (pbuild/ppack)
+#   make build      # ... and build everything WITH it (escada, pstudio, ppack)
+#   make ptest      # the pscript suite, case by case, as a graph
+#   make pverify    # the whole verification, as a graph (incremental)
 #   make clean
 
 CC     ?= cc
@@ -96,7 +100,45 @@ pstudio pstudio-ps: plangc
 	@ln -sf pstudio-ps out/bin/pstudio
 	@echo "pstudio pronto: ./out/bin/pstudio [pasta|arquivos]"
 
-clean:
-	rm -rf plangc plangc2 out tests/out stl/*.h .hello .hello.p .hello.c
+# ---------------------------------------------------------------------------
+# O SISTEMA DE BUILD PRÓPRIO (pbuild/ppack). Estes alvos são ADITIVOS de
+# propósito: nada acima deles muda, e quem estiver a trabalhar com `make test`
+# continua com o mesmo `make test`. A TROCA — o Makefile virar casca e estes
+# alvos passarem a ser o caminho normal — é um commit à parte, e está descrita
+# em `pbuild/PLAN.md` (parte D da F3).
+#
+# O que eles oferecem hoje, medido nesta máquina numa árvore limpa:
+#
+#   make ppack     ~5 s    (o seed compila o ppack; nada mais é preciso)
+#   make build     ~68 s   a escada com ponto fixo, o pstudio e o ppack
+#   make pverify   5m48    a verificação inteira — e 7,7 s quando nada mudou,
+#                          contra ~20 min do `verify-all.sh` em toda corrida
+#
+# O `--query` é o compilador que RESPONDE as perguntas do protocolo enquanto o
+# grafo é montado; quem RODA em cada degrau é o artefato daquele degrau.
+PPACK = build/bin/ppack
 
-.PHONY: check test test-qbe test-c89 verify verify-quick selfhost pstudio pstudio-ps clean
+$(PPACK): plangc $(wildcard pbuild/ps/*.psc)
+	@mkdir -p $(dir $(PPACK))
+	@PLANGC=./plangc bash tests/psbuild.sh pbuild/ps/ppack.psc $(PPACK)
+	@echo "ppack pronto: $(PPACK)"
+
+ppack: $(PPACK)
+
+build: $(PPACK)
+	./$(PPACK) build -j $(shell nproc 2>/dev/null || echo 4) --query ./plangc
+
+ptest: $(PPACK)
+	./$(PPACK) test -j $(shell nproc 2>/dev/null || echo 4) --query ./plangc
+
+pverify: $(PPACK)
+	./$(PPACK) verify -j $(shell nproc 2>/dev/null || echo 4) --query ./plangc
+
+pninja: $(PPACK)
+	./$(PPACK) ninja build.ninja --query ./plangc
+
+clean:
+	rm -rf plangc plangc2 out build tests/out stl/*.h .hello .hello.p .hello.c
+
+.PHONY: check test test-qbe test-c89 verify verify-quick selfhost pstudio pstudio-ps \
+        ppack build ptest pverify pninja clean

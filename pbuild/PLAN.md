@@ -701,6 +701,15 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 
 ### Parte D — a TROCA (um commit, repo verde antes e depois)
 
+> **Preparada, e não feita.** Os alvos novos já existem no `Makefile` e são
+> ADITIVOS: `make ppack` (2,5 s), `make build` (68 s), `make ptest`,
+> `make pverify`, `make pninja`. Nada acima deles mudou, e quem estiver a
+> trabalhar com `make test` continua com o mesmo `make test` — que foi rodado
+> depois da mudança e continua verde. A TROCA em si (o Makefile virar casca,
+> `out/` virar `build/`, os arreios chamarem o `ppack`) fica para um commit
+> próprio, com o outro agente ciente: mudar o significado de `make test`
+> debaixo de quem está a usá-lo é a única coisa aqui que não se faz sozinho.
+
 - [ ] `tests/psbuild.sh` reimplementado como chamada de `ppack` (ou os
       harnesses que o usam passam a chamar `ppack` direto)
 - [ ] `Makefile` vira casca: `make` → build do seed + `ppack build`;
