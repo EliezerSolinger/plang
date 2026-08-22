@@ -1,5 +1,7 @@
 # A implementação do FIPS 180-4 §6.2. Ver `sha2.ph` para o porquê.
 import <sha2/sha2.ph>
+implement CStr
+implement CBytes
 
 # as raízes cúbicas dos 64 primeiros primos, a parte fracionária em 32 bits
 private const K: const u32[64] = {
@@ -129,3 +131,13 @@ def sha256_hex(data: const *char, n: usize, out_hex: *char):
         out_hex[i * 2] = HEXD[b >> 4]
         out_hex[i * 2 + 1] = HEXD[b & u8(0xf)]
     out_hex[64] = '\0'
+
+# Devolve EMPRESTADO: um buffer deste módulo, válido até à próxima chamada — a
+# convenção do `strerror` (83.1), e a única que não obriga ninguém a libertar
+# nada. Quem atravessa a fronteira copia na hora, então a validade que interessa
+# é a da chamada.
+private g_hex: char[65]
+
+def sha256_of(in data: CBytes) -> CStr:
+    sha256_hex((*char)(data.ptr), data.len, g_hex)
+    return cstr_n(g_hex, usize(64))

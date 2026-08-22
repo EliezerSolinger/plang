@@ -386,7 +386,13 @@ async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
                 continue
             rot = nome + "/" + n
             alvo = path.join(BUILD, "t/pkg", nome + "-" + n)
-            odir = path.join(BUILD, "t/obj")
+            # objetos SEPARADOS por linguagem, e não é arrumação: o mesmo `.c`
+            # gerado de um módulo P é compilado com os `-D` do runtime quando
+            # serve um programa pscript e sem eles quando serve um programa P.
+            # Dois comandos diferentes para o mesmo `.o` é o grafo que o motor
+            # recusa — com razão, porque qual dos dois define o conteúdo
+            # dependeria da ordem.
+            odir = path.join(BUILD, "t/obj" if src.endswith(".psc") else "t/objp")
             binario = ""
             if src.endswith(".psc"):
                 binario = await T.psc_program(c, src, alvo, odir, [], [])

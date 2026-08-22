@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "lang": "p",
   "root": "sha2.ph",
-  "deps": {},
+  "deps": {
+    "stl": "0.1.0"
+  },
   "system": {},
   "toolchain": ">= 0.1.0",
   "description": "SHA-256 (FIPS 180-4): o hash criptográfico que o gerenciador de pacotes usa para verificar conteúdo"

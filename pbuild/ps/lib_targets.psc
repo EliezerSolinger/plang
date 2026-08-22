@@ -49,6 +49,13 @@ struct Ctx:
     # TODA invocação do compilador — inclusive nas PERGUNTAS, porque `--deps` de
     # um arquivo que importa de um pacote precisa achar o pacote para responder.
     pkgroots: list<str>
+    # objetos já emitidos: caminho do `.o` -> a assinatura da aresta que o faz.
+    # O mesmo `.c` compilado no mesmo objdir por dois PROGRAMAS diferentes é
+    # rotina desde que existem pacotes — o `sha2` é lido por um teste em P e por
+    # um em pscript —, e um arquivo tem UM produtor. Se a assinatura bate, a
+    # segunda pedida devolve o objeto que já existe; se não bate, o motor recusa,
+    # que é o que tem de acontecer.
+    objs_feitos: dict<str, str>
 
 def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # quem RESPONDE e quem RODA podem ser compiladores diferentes, e na escada de
@@ -57,7 +64,7 @@ def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # este arquivo lê?", "o que ele vai emitir?") são sobre o FONTE e podem ser
     # feitas a qualquer compilador que entenda a linguagem. É a mesma suposição
     # que o bootstrap já faz: o seed compila os fontes de hoje.
-    return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [])
+    return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [], {})
 
 def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
     """Um contexto FILHO: outro diretório, outro compilador, e o resto herdado.
@@ -68,6 +75,9 @@ def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
     resposta vazia e um grafo que constrói nada com sucesso. Foi exatamente o
     que aconteceu no dia em que o `stl` virou pacote."""
     n = new_ctx(c.g, outdir, plangc)
+    # a MESMA tabela de objetos, e de propósito: o grafo é um só, então "este
+    # `.o` já tem produtor" é um fato do grafo e não do contexto.
+    n.objs_feitos = c.objs_feitos
     n.query = c.query
     n.pkgroots = c.pkgroots
     n.target = c.target
@@ -288,6 +298,13 @@ def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>)
     argv.append(src)
     argv.append("-o")
     argv.append(obj)
+    assinatura = " ".join(argv)
+    if obj in c.objs_feitos:
+        if c.objs_feitos.get(obj, "") == assinatura:
+            return obj
+        # dois comandos DIFERENTES para o mesmo objeto: aqui não se escolhe um.
+        # Cai no motor, que diz quais são as duas arestas.
+    c.objs_feitos[obj] = assinatura
     e = G.new_edge(argv)
     e.ins.append(c.g.node(src).id)
     for x in extra_ins:

@@ -16,6 +16,8 @@ zeros, e o comprimento em bits num inteiro de 64 bits big-endian. Não há aqui
 otimização de que se dependa; há um teste com os vetores oficiais.
 """
 
+import <stl/cstr.ph>
+
 # O estado de um hash em curso: o de quem tem os bytes todos na mão usa
 # `sha256_hex`, e o de quem os tem aos pedaços (um arquivo grande, um socket)
 # usa o trio init/update/final.
@@ -44,3 +46,19 @@ def sha256_hex(data: const *char, n: usize, out_hex: *char):
 
     É esta que o gerenciador de pacotes usa: o hash de um tarball, comparado com
     o que o índice declarou."""
+
+# ---------- a travessia para o pscript (45.5/84.1) ----------
+#
+# A ÚNICA dependência deste pacote, e é só de tipo: `CStr`/`CBytes` são um par
+# ponteiro+comprimento declarado no `stl`, sem código nenhum atrás (o `cstr.ph`
+# não tem `.p`). O miolo — init/update/final/hex — continua sem depender de
+# coisa alguma.
+#
+# Um `CBytes` é um ponteiro e o seu comprimento como VALOR: do lado do pscript
+# isto é `list<u8>`, e o que atravessa é o par, montado na chamada e válido
+# enquanto ela dura. A resposta volta como `CStr`, que do outro lado é `str`.
+#
+# É a mesma implementação — não há uma segunda cópia do SHA-256 em pscript, e
+# essa é a razão de o pacote ser em P: a linguagem sem runtime é a que as duas
+# alcançam.
+def sha256_of(in data: CBytes) -> CStr
