@@ -41,6 +41,24 @@ import "parser.ph"   # 75.3: a `.ph` is read with P's own front end
 # num lugar só: quem resolve o import pergunta a ela, e `builtin_ns` (embaixo)
 # diz quais nomes cada um tem. Esquecer de acrescentar um módulo novo AQUI dá
 # "cannot find module 'os'", que não diz nada a quem escreveu o import.
+# O nome de um módulo de pacote: o último pedaço, sem extensão. `<pui>` -> `pui`,
+# `<pui/layout.psc>` -> `layout`. É o mesmo que o nome de arquivo já diz, e é o
+# que quem escreve `layout.medir(...)` espera.
+private def ps_ends_with(s: const *char, suf: const *char) -> bool:
+    n: usize = strlen(s)
+    m: usize = strlen(suf)
+    return n >= m and strcmp(s + n - m, suf) == 0
+
+def ps_mod_name(a: *Arena, p: const *char) -> const *char:
+    base: const *char = p
+    sl: const *char = strrchr(p, '/')
+    if sl != None:
+        base = sl + 1
+    n: usize = strlen(base)
+    if n > 4 and strcmp(base + n - 4, ".psc") == 0:
+        return a->strndup(base, n - 4)
+    return a->strdup(base)
+
 private def ps_builtin_mod(name: const *char) -> bool:
     MODS: const *char[] = {"sys", "re", "json", "net", "random", "math", "time",
                            "bisect", "heapq", "gc", "os", "path"}
@@ -3299,12 +3317,29 @@ struct PsSema:
             d: *PsDecl = m->decls[i]
             if d->kind != PD_IMPORT and d->kind != PD_FROM_IMPORT:
                 continue
-            path: const *char = path_join(self->a, dir, self->a->printf("%s.psc", d->path))
+            # ONDE o módulo está, e COMO ele se chama aqui — duas coisas
+            # diferentes assim que `<>` entra em jogo. `<pui>` é o pacote (a
+            # raiz dele: `pui/pui.psc`), `<pui/layout.psc>` é um módulo dele, e
+            # nos dois casos o nome do espaço é o último pedaço sem extensão.
+            path: const *char = ""
+            qual: const *char = d->path
+            if d->import_system:
+                rel: const *char = d->path
+                if not ps_ends_with(d->path, ".psc"):
+                    rel = self->a->printf("%s/%s.psc", d->path, d->path)
+                got: const *char = pkg_find(self->a, self->pkgroots, self->npkgroots, rel)
+                if got == None:
+                    fatal_at(m->path, d->pos, "import <%s>: not found in any package root (%s)",
+                             d->path, pkg_where(self->a, self->pkgroots, self->npkgroots))
+                path = got
+                qual = ps_mod_name(self->a, d->path)
+            else:
+                path = path_join(self->a, dir, self->a->printf("%s.psc", d->path))
             sub: *PsNs = self->nsof.get_or(path, None)
             # `sys` is the one module that is not a file (48.3): what it names
             # is the program's own surroundings, which only the runtime can
             # answer. Its members are BUILTINS, so there is nothing to load.
-            if sub == None and ps_builtin_mod(d->path):
+            if sub == None and not d->import_system and ps_builtin_mod(d->path):
                 sub = self->builtin_ns(d->path, path)
             if sub == None:
                 n: usize = 0
@@ -3314,7 +3349,7 @@ struct PsSema:
                 tl: TokenList = ps_lex(path, bytes, n, self->a)
                 sm: *PsModule = ps_parse(self->a, path, tl)
                 free(bytes)
-                sub = self->build_ns(sm, self->fresh_prefix(d->path), d->path)
+                sub = self->build_ns(sm, self->fresh_prefix(qual), qual)
                 for j in range(sm->ndecls):
                     sd: *PsDecl = sm->decls[j]
                     if sd->kind == PD_IMPORT or sd->kind == PD_FROM_IMPORT:
@@ -3325,7 +3360,7 @@ struct PsSema:
             if sub->m->main != None and sub->m->main->n > 0:
                 fatal_at(m->path, d->pos, "module '%s' has top-level statements: an imported module is a set of definitions, not a program to run", d->path)
             if d->kind == PD_IMPORT:
-                q: const *char = d->alias if d->alias != None else d->path
+                q: const *char = d->alias if d->alias != None else qual
                 if ns_find(ns->quals, ns->nquals, q) != None:
                     fatal_at(m->path, d->pos, "'%s' is already imported", q)
                 ns->quals = vec_grow(ns->quals, ns->nquals, ref ns->cquals, sizeof(*ns->quals))

@@ -100,8 +100,16 @@ deps2=$($PLANGC --deps "$OUT/../protocol/geom.p" 2>&1)
 check "--deps: caminho normalizado" "$deps" "$deps2"
 
 # ---- --outputs: o que sairia, sem sair ----
+# Desde a 1.5(a) a resposta é do FECHO, não do arquivo: nomear `geom.p` com
+# `--out-dir` constrói o que ele importa, então o `vecs.h` do header importado
+# entra na lista. É a mudança inteira do ponto de vista de quem consome — e é o
+# que permite a um sistema de build nomear um arquivo em vez de quarenta.
 outs=$($PLANGC --outputs --out-dir "$OUT/build" "$OUT/geom.p" "$OUT/geom.ph" 2>&1)
-check "--outputs: o .c e o .h" "$OUT/build/$OUT/geom.c $OUT/build/$OUT/geom.h" "$(echo $outs)"
+check "--outputs: o .c, o .h e o do header importado" \
+      "$OUT/build/$OUT/geom.c $OUT/build/$OUT/geom.h $OUT/build/$OUT/vecs.h" "$(echo $outs)"
+# e com `-o` o contrato antigo continua: UM artefato, este nome
+outs1=$($PLANGC --outputs -o "$OUT/build/so.c" "$OUT/geom.p" 2>&1)
+check "--outputs: com -o, um só" "$OUT/build/so.c" "$(echo $outs1)"
 check "--outputs: não escreve nada" "0" "$(ls "$OUT/build" 2>/dev/null | wc -l)"
 
 # ---- --api: a interface, e só ela ----

@@ -698,11 +698,7 @@ int main(int argc, char **argv) {
             }
         }
         if (has_suffix(Vec_pchar_get(&inputs, 0), ".psc")) {
-            const char *RT_SRCS[14] = {"psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_val.ph", "psrt_rt.ph", "psrt_std.ph", "psrt_os.ph", "psrt_top.ph", "psrt_mem.p", "psrt_val.p", "psrt_rt.p", "psrt_std.p", "psrt_os.p", "psrt_top.p"};
-            size_t ri;
-            for (ri = 0; ri < (int32_t)(sizeof(RT_SRCS) / sizeof(RT_SRCS[0])); ri += 1) {
-                add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, RT_SRCS[ri]));
-            }
+            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.ph"));
         }
         out_dir = Arena_printf(&cc.arena, "%s/obj", cachedir);
         {
@@ -799,7 +795,7 @@ int main(int argc, char **argv) {
             if (deps_mode) {
                 deps_walk(&cc, path);
             }
-            if (is_pulled(&pulled, path)) {
+            if (out_dir != NULL || is_pulled(&pulled, path)) {
                 size_t j;
                 for (j = 0; j < m->ndecls; j += 1) {
                     Decl *im = m->decls[j];

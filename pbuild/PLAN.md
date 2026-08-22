@@ -100,8 +100,21 @@ perdia).
       modules, stl, errors (101), p-suite (192) e roundtrip (234) verdes.
       FALTA (bloqueado pelo outro agente): regenerar o seed e rodar `verify`
       inteiro, e ligar o `protocol.sh` ao `verify-all.sh`.
-- [~] **F1 — 1.5(d), `import <>` e a DOCSTRING feitas** (2026-08-22); falta a
-      1.5(a) para a forma relativa, e a docstring de PROTÓTIPO (decisão sua).
+- [x] **F1 FECHADA** (2026-08-22, com as decisões da manhã seguinte): 1.5(d),
+      `import <>` nas duas formas, a docstring (módulo, corpo, `struct`, `enum`,
+      `trait` e **protótipo**) e a 1.5(a).
+
+      **A docstring de protótipo** deixou de ser ambígua com uma observação sua:
+      quem quer uma função vazia escreve `pass`. Um corpo só com a docstring é um
+      protótipo documentado, em qualquer arquivo.
+
+      **`import <pui>` e `<pui/x.psc>`**: duas grafias porque são duas perguntas
+      — o pacote (a raiz dele) e um módulo dele. O nome do espaço é o último
+      pedaço sem extensão nos dois.
+
+      **A 1.5(a)** vale com `--out-dir` e não com `-o`. A medida:
+      `plangc --out-dir X pscript/runtime/psrt.ph` emite os SEIS módulos do
+      runtime, e a lista deles que vivia DENTRO do compilador virou uma linha.
 
       A docstring rendeu na hora: `ppack doc` (abaixo) lê a resposta 5 e mostra
       a documentação no terminal, sem um segundo leitor da linguagem.

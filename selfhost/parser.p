@@ -1252,6 +1252,20 @@ struct P:
             self->expect(TK_INDENT, "indented block")
             f->doc = self->take_doc()
             f->body = self->parse_block_body()
+            # UM CORPO SÓ COM A DOCSTRING é um PROTÓTIPO documentado.
+            #
+            # É a única forma de documentar a interface de um pacote: um `.ph` é
+            # feito de protótipos, e um protótipo não tem corpo onde pôr a
+            # docstring. E não é ambígua, porque a linguagem já tem palavra para
+            # "função vazia": quem quer uma escreve `pass` — que é uma
+            # instrução, e por isso este corpo deixa de estar vazio.
+            #
+            #   def area(w: i32, h: i32) -> i64:
+            #       """A área."""            # protótipo: não emite código
+            #   def nada():
+            #       pass                     # função vazia: emite
+            if f->doc != None and f->body != None and f->body->n == 0:
+                f->body = None
         else:
             self->expect(TK_NEWLINE, "function prototype")
         return f

@@ -1772,11 +1772,25 @@ struct PsP:
                     hp = self->a->printf("%s%s", hp, spell_tok(self->adv()))
                 self->expect(TK_GT, "import <pkg/module.ph> (missing '>')")
                 hd->path = hp
-            hd->is_pmod = True
-            hd->import_system = True
-            if not has_suffix_ps(hd->path, ".ph"):
-                fatal_at(self->file, pos, "`import <...>` names a P module of a package by its header: `import <stl/vec.ph>`. A C header is `include <stdio.h>` (45.5)")
-            self->expect(TK_NEWLINE, "import")
+            if has_suffix_ps(hd->path, ".ph"):
+                hd->is_pmod = True
+                hd->import_system = True
+                self->expect(TK_NEWLINE, "import")
+                return hd
+            # `<pui>` ou `<pui/layout.psc>`: um módulo PSCRIPT de um pacote. As
+            # duas grafias existem porque as duas perguntas existem: "dá-me o
+            # pacote" (a raiz dele, que é a interface) e "dá-me este módulo
+            # dele". A raiz é `<pacote>/<pacote>.psc` — o módulo com o nome do
+            # pacote —, que é a mesma convenção que o nome do diretório já usa.
+            if has_suffix_ps(hd->path, ".psc") or strchr(hd->path, '/') == None:
+                d2: *PsDecl = ps_decl(self->a, PD_IMPORT, pos)
+                d2->path = hd->path
+                d2->import_system = True
+                if self->accept(TK_AS):
+                    d2->alias = self->expect(TK_IDENT, "import ... as").text
+                self->expect(TK_NEWLINE, "import")
+                return d2
+            fatal_at(self->file, pos, "`import <%s>`: um módulo de pacote é `<pkg>` (a raiz), `<pkg/mod.psc>` (um módulo pscript) ou `<pkg/mod.ph>` (um módulo P). Um header de C é `include <stdio.h>` (45.5)", hd->path)
             return hd
         if self->at(TK_STRING):
             # `import "shim.ph"` (75.3/2.4): a P module, not a pscript one. It

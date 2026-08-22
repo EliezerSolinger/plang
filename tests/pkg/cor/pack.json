@@ -1,0 +1,10 @@
+{
+  "name": "cor",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "cor.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "um pacote pscript de brincadeira: a raiz e um módulo interno"
+}

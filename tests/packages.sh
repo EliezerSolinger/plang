@@ -29,6 +29,12 @@ pass=0; fail=0
 
 ok()   { pass=$((pass+1)); }
 bad()  { echo "  FAIL $1"; fail=$((fail+1)); }
+# igualdade com mensagem: o que se esperava e o que veio, sem o leitor ter de
+# adivinhar qual é qual
+check() {
+    if [ "$2" = "$3" ]; then pass=$((pass+1))
+    else echo "  FAIL $1: esperava '$2', veio '$3'"; fail=$((fail+1)); fi
+}
 
 # ---- 1. P: um programa que usa dois pacotes, um deles dependendo do outro ----
 cat > "$OUT/prog.p" <<'EOP'
@@ -118,6 +124,58 @@ echo "$e" | grep -q "named the same way" && ok || bad "espaços misturados: devi
 # (o `pack.json` de workspace e a raiz que sai dele têm portão próprio na suíte
 # do motor — `caso_manifesto` em `pbuild/ps/engine_test.psc` —, porque quem os lê
 # é pscript e o portão vive junto do código que testa)
+
+# ---- 7. um pacote PSCRIPT: as duas grafias ----
+# `<cor>` é a raiz do pacote (o módulo com o nome dele); `<cor/tons.psc>` é um
+# módulo interno. O nome do espaço é o último pedaço sem extensão, nos dois.
+cat > "$OUT/usa.psc" <<'EOP'
+import <cor>
+import <cor/tons.psc>
+import <cor/tons.psc> as t2
+
+print(cor.nome(), cor.clarear(10))
+print(tons.escuro(), t2.escuro())
+EOP
+RT2="$OUT/rt2"
+mkdir -p "$RT2"
+if $PLANGC --out-dir "$RT2" pscript/runtime/psrt.ph 2>"$OUT/rt2.err" &&
+   $PLANGC --pkg-path "$PKG" --out-dir "$RT2" "$OUT/usa.psc" 2>"$OUT/usa.err"; then
+    if $CC -std=c11 -O0 $PSDEFS -w -o "$OUT/usa" "$RT2/$OUT/usa.c" \
+           "$RT2"/pscript/runtime/psrt_*.c -lm -pthread 2>>"$OUT/usa.err"; then
+        got=$("$OUT/usa")
+        [ "$got" = "cor 26
+32 32" ] && ok || bad "pacote pscript: saída '$got'"
+    else
+        bad "pacote pscript: não linka"; head -3 "$OUT/usa.err"
+    fi
+else
+    bad "pacote pscript: não compila"; head -3 "$OUT/usa.err"
+fi
+
+# `<pkg>` sem o pacote na raiz é erro, e não uma tentativa relativa
+e=$($PLANGC --out-dir "$OUT/x" "$OUT/usa.psc" 2>&1)
+echo "$e" | grep -q "not found in any package root" && ok || bad "<pkg> pscript recuou para relativo"
+
+# ---- 8. a 1.5(a): nomear UM arquivo constrói o fecho dele ----
+# É o que faz as seis listas de módulos espalhadas pelos arreios ficarem
+# redundantes: o runtime inteiro do pscript sai de nomear o guarda-chuva dele.
+rm -rf "$OUT/fecho"
+$PLANGC --out-dir "$OUT/fecho" pscript/runtime/psrt.ph 2>"$OUT/fecho.err"
+n=$(ls "$OUT/fecho"/pscript/runtime/*.c 2>/dev/null | wc -l)
+check "1.5(a): o runtime inteiro vem de um arquivo" "6" "$n"
+
+# e com `-o` o contrato antigo continua: UM artefato
+rm -rf "$OUT/um"; mkdir -p "$OUT/um"
+$PLANGC -o "$OUT/um/geom.c" "$PKG/geo/geo.p" --pkg-path "$PKG" 2>/dev/null
+n2=$(ls "$OUT/um"/*.c 2>/dev/null | wc -l)
+check "1.5(a): com -o, um só arquivo" "1" "$n2"
+
+# ---- 9. a docstring de um PROTÓTIPO ----
+doc=$($PLANGC --api "$PKG/geo/geo.ph" 2>&1 | grep '^#doc geo_area ')
+case $doc in
+    "#doc geo_area A area do retangulo w x h.") ok ;;
+    *) bad "doc de protótipo: veio '$doc'" ;;
+esac
 
 echo "   packages: $pass ok, $fail failed"
 [ $fail = 0 ]

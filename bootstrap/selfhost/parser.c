@@ -1430,6 +1430,9 @@ static Func *P_parse_func(P *self, int is_static, int is_inline, const char *own
         P_expect(self, TK_INDENT, "indented block");
         f->doc = P_take_doc(self);
         f->body = P_parse_block_body(self);
+        if (f->doc != NULL && f->body != NULL && f->body->n == 0) {
+            f->body = NULL;
+        }
     } else {
         P_expect(self, TK_NEWLINE, "function prototype");
     }
@@ -1506,13 +1509,13 @@ static Decl *P_parse_struct_or_union(P *self, int is_union, int is_record) {
     }
     P_expect(self, TK_DEDENT, "end of struct/union");
     {
-        Decl *__with_1323_9 = d;
-        __with_1323_9->fields = fields.data;
-        __with_1323_9->nfields = fields.len;
-        __with_1323_9->methods = methods.data;
-        __with_1323_9->nmethods = methods.len;
-        __with_1323_9->tparams = tparams.data;
-        __with_1323_9->ntparams = tparams.len;
+        Decl *__with_1337_9 = d;
+        __with_1337_9->fields = fields.data;
+        __with_1337_9->nfields = fields.len;
+        __with_1337_9->methods = methods.data;
+        __with_1337_9->nmethods = methods.len;
+        __with_1337_9->tparams = tparams.data;
+        __with_1337_9->ntparams = tparams.len;
     }
     return d;
 }
@@ -1837,18 +1840,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1649_17 = d2;
-                __with_1649_17->kind = DL_VAR;
-                __with_1649_17->pos = name->pos;
-                __with_1649_17->name = name->text;
-                __with_1649_17->is_const = is_const;
-                __with_1649_17->is_extern = is_extern;
+                Decl *__with_1663_17 = d2;
+                __with_1663_17->kind = DL_VAR;
+                __with_1663_17->pos = name->pos;
+                __with_1663_17->name = name->text;
+                __with_1663_17->is_const = is_const;
+                __with_1663_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1649_17->type = P_parse_type(self);
+                    __with_1663_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1649_17->init = P_parse_initializer(self);
-                } else if (__with_1649_17->type == NULL) {
+                    __with_1663_17->init = P_parse_initializer(self);
+                } else if (__with_1663_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");

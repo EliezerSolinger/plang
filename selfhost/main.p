@@ -713,15 +713,11 @@ def main(argc: int, argv: **char) -> int:
             if access(binp0, 0) == 0:
                 return run_exec(binp0, run_args, run_nargs)
         if has_suffix(inputs.get(0), ".psc"):
-            # 108/111: o runtime são SEIS módulos em camadas mais os headers; o
-            # guarda-chuva `psrt.ph` entra primeiro porque é o que o programa
-            # gerado inclui
-            RT_SRCS: const *char[] = {"psrt.ph", "psrt_types.ph", "psrt_mem.ph",
-                                      "psrt_val.ph", "psrt_rt.ph", "psrt_std.ph", "psrt_os.ph",
-                                      "psrt_top.ph", "psrt_mem.p", "psrt_val.p",
-                                      "psrt_rt.p", "psrt_std.p", "psrt_os.p", "psrt_top.p"}
-            for ri in range(i32(sizeof(RT_SRCS) / sizeof(RT_SRCS[0]))):
-                add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, RT_SRCS[ri]))
+            # 1.5(a): o guarda-chuva basta. `psrt.ph` importa os sete headers das
+            # camadas, e cada um deles tem o `.p` irmão — o fecho traz os seis
+            # módulos sem ninguém os listar. Era a SEXTA (e última) cópia da
+            # lista de módulos do runtime a viver dentro do compilador.
+            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.ph"))
         # the C goes to the cache too, so a `run` never writes next to the
         # source — a script that lives in a read-only directory still runs
         out_dir = cc.arena.printf("%s/obj", cachedir)
@@ -850,11 +846,20 @@ def main(argc: int, argv: **char) -> int:
                     add_input(&inputs, &pulled, ppp)
             if deps_mode:
                 deps_walk(&cc, path)
-            # 75.3, transitively: a module pulled into this build may import
-            # others, and one command has to mean the whole graph. Only what a
-            # PULLED file needs is pulled — a file the user named keeps the
-            # build they asked for.
-            if is_pulled(&pulled, path):
+            # 1.5(a): `import "x.ph"` PUXA o `x.p` irmão, quando ele existe.
+            #
+            # Nomear um arquivo passa a significar "construa o fecho dele", que é
+            # o que quem chama um compilador quase sempre quer — e é o que faz as
+            # seis listas de módulos espalhadas pelos arreios ficarem redundantes.
+            # Um `.ph` sem irmão continua sendo só declaração (o `stl` é assim),
+            # e nada muda para ele.
+            #
+            # A regra vale para `--out-dir`, e NÃO para `-o`: o contrato do `-o`
+            # é "um artefato, este nome", e um comando que passasse a emitir
+            # vários arquivos ao lado dele estaria a quebrar o que prometeu. Um
+            # arquivo PUXADO continua a puxar em qualquer modo, que é o que a
+            # 75.3 já fazia.
+            if out_dir != None or is_pulled(&pulled, path):
                 for j in range(m->ndecls):
                     im: *Decl = m->decls[j]
                     if im->kind != DL_IMPORT or im->is_include or im->import_path == None:

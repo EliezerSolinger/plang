@@ -3169,12 +3169,23 @@ static PsDecl *PsP_parse_import(PsP *self) {
             PsP_expect(self, TK_GT, "import <pkg/module.ph> (missing '>')");
             hd->path = hp;
         }
-        hd->is_pmod = 1;
-        hd->import_system = 1;
-        if (!has_suffix_ps(hd->path, ".ph")) {
-            fatal_at(self->file, pos, "`import <...>` names a P module of a package by its header: `import <stl/vec.ph>`. A C header is `include <stdio.h>` (45.5)");
+        if (has_suffix_ps(hd->path, ".ph")) {
+            hd->is_pmod = 1;
+            hd->import_system = 1;
+            PsP_expect(self, TK_NEWLINE, "import");
+            return hd;
         }
-        PsP_expect(self, TK_NEWLINE, "import");
+        if (has_suffix_ps(hd->path, ".psc") || strchr(hd->path, '/') == NULL) {
+            PsDecl *d2 = ps_decl(self->a, PD_IMPORT, pos);
+            d2->path = hd->path;
+            d2->import_system = 1;
+            if (PsP_accept(self, TK_AS)) {
+                d2->alias = PsP_expect(self, TK_IDENT, "import ... as")->text;
+            }
+            PsP_expect(self, TK_NEWLINE, "import");
+            return d2;
+        }
+        fatal_at(self->file, pos, "`import <%s>`: um módulo de pacote é `<pkg>` (a raiz), `<pkg/mod.psc>` (um módulo pscript) ou `<pkg/mod.ph>` (um módulo P). Um header de C é `include <stdio.h>` (45.5)", hd->path);
         return hd;
     }
     if (PsP_at(self, TK_STRING)) {

@@ -198,3 +198,66 @@ lista variádica duas vezes.
 
 Portão: 7 checagens em `tests/protocol.sh`, e a paridade com o clang (155/155)
 como prova de que o texto não se mexeu.
+
+---
+
+## A docstring de um PROTÓTIPO, e o `pass` que a torna inequívoca
+
+Um `.ph` é feito de protótipos, e um protótipo não tem corpo onde pôr a
+docstring — o que deixava a interface de um pacote sem forma de se documentar,
+que é justamente onde a documentação mais serve.
+
+A regra: **um corpo só com a docstring é um protótipo documentado**, em qualquer
+arquivo. E ela não é ambígua, porque a linguagem já tem palavra para "função
+vazia" — quem quer uma escreve `pass`, que é uma instrução, e por isso o corpo
+deixa de estar vazio:
+
+    def area(w: i32, h: i32) -> i64:
+        """A área."""            # PROTÓTIPO documentado: não emite código
+
+    def nada():
+        pass                     # função VAZIA: emite
+
+    def ainda_nada() -> int:
+        """Por fazer."""
+        pass                     # vazia e documentada (avisa -Wreturn-type)
+
+Foi o usuário quem apontou o `pass` — e é o que transformou uma decisão travada
+por ambiguidade numa regra de uma linha.
+
+---
+
+## `import <pui>` e `<pui/x.psc>`: o módulo pscript de um pacote
+
+Duas grafias porque são duas perguntas: *"dá-me o pacote"* (a raiz dele, que é a
+interface) e *"dá-me este módulo dele"*. A raiz é `<pacote>/<pacote>.psc` — o
+módulo com o nome do pacote —, que é a mesma convenção que o nome do diretório
+já usa.
+
+O nome do espaço é o ÚLTIMO pedaço sem extensão nos dois casos: `<cor>` dá `cor`
+e `<cor/tons.psc>` dá `tons`. `as` continua a valer.
+
+Resolução e recusa são as mesmas do `<pkg/mod.ph>`: procura nas raízes de
+`--pkg-path`, na ordem, e um `<>` não achado é ERRO — nunca uma tentativa
+relativa.
+
+---
+
+## 1.5(a): `import "x.ph"` puxa o `x.p` irmão
+
+Nomear um arquivo passa a significar "construa o fecho dele". A regra vale para
+`--out-dir` e **não** para `-o`: o contrato do `-o` é "um artefato, este nome", e
+um comando que passasse a emitir vários arquivos ao lado dele estaria a quebrar o
+que prometeu.
+
+**A medida que a justifica**: `plangc --out-dir X pscript/runtime/psrt.ph` emite
+os SEIS módulos do runtime. O guarda-chuva importa os sete headers das camadas, e
+cada um tem o `.p` irmão. A lista de módulos do runtime que vivia dentro do
+próprio compilador (a sexta cópia dela) morreu nesse mesmo dia — passou a ser uma
+linha.
+
+E uma coisa que ela NÃO resolve, dita para não se procurar em vão: o compilador
+tem umbrellas cujas implementações têm outro nome (`plang.ph` declara o que
+`util.p` implementa; `backend.ph` declara o que os quatro `backend_*.p`
+implementam). Não há aresta de import entre eles, então nenhuma regra de fecho os
+acha — e é para carregar esse tipo de conhecimento que um descritor existe.
