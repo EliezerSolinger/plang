@@ -87,3 +87,27 @@ if "$OUT/ppack" doc nao_existe_nenhum --query "$PLANGC" >/dev/null 2>&1; then
     echo "  FAIL: ppack doc devia recusar um alvo que não existe"; exit 1
 fi
 echo "   pbuild-doc: a documentação sai do --api, e o alvo inexistente é recusado"
+
+# ---- `--json`: os MESMOS dados, para quem consome em vez de ler ----
+# Um objeto por LINHA no fluxo de eventos (quem lê quer reagir enquanto o build
+# corre), e um documento só nas consultas, que são resposta e não fluxo.
+"$OUT/ppack" build -n --json --query "$PLANGC" > "$OUT/ev.jsonl" 2>&1 || true
+python3 - "$OUT/ev.jsonl" <<'PY2' || { echo "  FAIL: o fluxo de eventos não é JSON por linha"; exit 1; }
+import json, sys
+tipos = set()
+for ln in open(sys.argv[1]):
+    ln = ln.strip()
+    if not ln:
+        continue
+    tipos.add(json.loads(ln)["event"])
+assert "plan" in tipos, tipos
+assert "done" in tipos, tipos
+PY2
+"$OUT/ppack" doc --json tests/cases/docstring.p dobro --query "$PLANGC" > "$OUT/doc.json" 2>&1
+python3 - "$OUT/doc.json" <<'PY2' || { echo "  FAIL: ppack doc --json"; exit 1; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["name"] == "dobro", d
+assert "O dobro de x." in d["doc"], d
+PY2
+echo "   pbuild-json: o fluxo de eventos e a consulta saem em JSON"

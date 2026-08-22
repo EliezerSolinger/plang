@@ -824,9 +824,13 @@ doctest.
       compilador nem correu"); e a mensagem é escapada de verdade, então uma
       aspa dentro dela não quebra o JSON.
       Portão: 7 checagens novas em `tests/protocol.sh` (31 agora).
-- [ ] **`--json` em toda a CLI** que produz informação (build/test/verify/
-      explain/why/tree/search/doc): serialização dos MESMOS dados dos eventos
-      e consultas — agora de graça pela reflexão
+- [~] **`--json` na CLI** (build/test/verify/explain/doc — `why`/`tree`/`search`
+      vêm com F4): os MESMOS dados dos eventos e das consultas. Um objeto por
+      LINHA no fluxo de eventos, porque quem lê quer reagir enquanto o build
+      corre e um documento único só se pode ler no fim; um documento só nas
+      consultas, que são resposta e não fluxo. O escapador é o do grafo
+      (`G.jstr`) — um segundo seria um segundo lugar para errar. Ainda é
+      serialização à mão; quando a reflexão da F5 existir, sai de graça.
 - [ ] **doctest**: exemplos na docstring viram arestas de teste na suíte do
       pacote/projeto (compila + roda + compara saída); sintaxe na decisão fina
       f5.1; entra no `ppack test` e no `publish` (que já roda? NÃO — publish

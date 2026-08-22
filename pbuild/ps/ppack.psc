@@ -41,8 +41,17 @@ falhou: bool = False
 def on_plan(total: int):
     global total_arestas
     total_arestas = total
+    if saida_json:
+        print('{"event": "plan", "total": ' + str(total) + '}')
+        return
     if total == 0:
         print("nada a fazer")
+
+# `--json`: os MESMOS dados dos eventos e das consultas, em JSON. Um objeto por
+# LINHA no fluxo de eventos (quem lê quer reagir enquanto o build corre, e um
+# documento único só se pode ler no fim); um documento só nas consultas, que são
+# uma resposta e não um fluxo.
+saida_json: bool = False
 
 rotulos: dict<int, str> = {}
 
@@ -80,6 +89,13 @@ def on_end(id: int, st: int, out: str, ms: int):
     global falhou
     feitas += 1
     contar(rotulos[id] if id in rotulos else "", st == 0)
+    if saida_json:
+        print('{"event": "end", "id": ' + str(id) + ', "status": ' + str(st)
+              + ', "ms": ' + str(ms) + ', "what": ' + G.jstr(rotulos[id] if id in rotulos else "")
+              + ', "output": ' + G.jstr(out) + '}')
+        if st != 0:
+            falhou = True
+        return
     marca = "[" + str(feitas) + "/" + str(total_arestas) + "]"
     if st == 0:
         print(marca, "ok")
@@ -99,9 +115,26 @@ def on_erro(msg: str):
     comando rodar, porque é o tipo de coisa que invalida o build inteiro."""
     global falhou
     falhou = True
+    if saida_json:
+        print('{"event": "error", "message": ' + G.jstr(msg) + '}')
+        return
     print("erro:", msg)
 
 def on_done(ok: bool, fails: int):
+    if saida_json:
+        partes: list<str> = []
+        ks0: list<str> = []
+        for k0 in placar_ok:
+            ks0.append(k0)
+        for k1 in sorted(ks0):
+            maus0: list<str> = []
+            for nm in placar_mal[k1]:
+                maus0.append(G.jstr(nm))
+            partes.append(G.jstr(k1) + ': {"ok": ' + str(placar_ok[k1])
+                          + ', "failed": [' + ", ".join(maus0) + ']}')
+        print('{"event": "done", "ok": ' + ("true" if ok else "false")
+              + ', "failed": ' + str(fails) + ', "suites": {' + ", ".join(partes) + '}}')
+        return
     # o PLACAR, quando houve suíte. Ele existe porque "587 arestas ok" não é o
     # que quem roda testes quer saber: o que se quer é quantos casos passaram,
     # e QUAIS falharam — e um build de seiscentas arestas esconde as duas coisas.
@@ -200,12 +233,22 @@ async def cmd_explain(alvos: list<str>, query: str) -> int:
     g = await BP.montar(query)
     w = await B.why_dirty(g, LOG, alvos)
     if len(w) == 0:
-        print("nada está sujo")
+        if saida_json:
+            print('{"dirty": {}}')
+        else:
+            print("nada está sujo")
         return 0
     ks: list<str> = []
     for k in w:
         ks.append(k)
-    for k2 in sorted(ks):
+    ks = sorted(ks)
+    if saida_json:
+        partes: list<str> = []
+        for k3 in ks:
+            partes.append(G.jstr(k3) + ": " + G.jstr(w[k3]))
+        print('{"dirty": {' + ", ".join(partes) + '}}')
+        return 0
+    for k2 in ks:
         print(k2 + ": " + w[k2])
     return 0
 
@@ -269,12 +312,24 @@ async def cmd_doc(alvos: list<str>, query: str) -> int:
             print("'" + alvos[1] + "' não está na interface de " + m.caminho)
             return 1
         s = m.simbolos[i]
+        if saida_json:
+            print('{"path": ' + G.jstr(m.caminho) + ', "name": ' + G.jstr(s.nome)
+                  + ', "decl": ' + G.jstr(s.linha) + ', "doc": ' + G.jstr(s.doc) + '}')
+            return 0
         if len(s.linha) > 0:
             print(s.linha)
         else:
             print(s.nome)
         if len(s.doc) > 0:
             print(parede(s.doc))
+        return 0
+    if saida_json:
+        simbs: list<str> = []
+        for s3 in m.simbolos:
+            simbs.append('{"decl": ' + G.jstr(s3.linha) + ', "name": ' + G.jstr(s3.nome)
+                         + ', "doc": ' + G.jstr(s3.doc) + '}')
+        print('{"path": ' + G.jstr(m.caminho) + ', "hash": ' + G.jstr(m.hash)
+              + ', "doc": ' + G.jstr(m.doc) + ', "symbols": [' + ", ".join(simbs) + ']}')
         return 0
     print("== " + m.caminho + "  [" + m.hash + "]")
     if len(m.doc) > 0:
@@ -334,6 +389,7 @@ async def main() -> int:
     if len(args) == 0:
         uso()
         return 2
+    global saida_json
     cmd = args[0]
     alvos: list<str> = []
     jobs = os.nproc()
@@ -373,6 +429,8 @@ async def main() -> int:
             dry = True
         elif a == "-v":
             verbose = True
+        elif a == "--json":
+            saida_json = True
         elif a == "--query" and i + 1 < len(args):
             i += 1
             query = args[i]

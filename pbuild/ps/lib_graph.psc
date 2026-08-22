@@ -271,7 +271,9 @@ def from_json(text: str) -> Graph:
 # um grafo gerado, e alimentar quem não é este processo. Escrita à mão e não por
 # reflexão porque a reflexão genérica é decisão de outra fase (F5) — e porque
 # aqui se sabe exatamente o que cada campo significa.
-private def jstr(s: str) -> str:
+# público: o `ppack --json` fala o mesmo JSON que a exportação do grafo, e um
+# segundo escapador seria um segundo lugar para errar
+def jstr(s: str) -> str:
     out = '"'
     for ch in s:
         if ch == '"':
