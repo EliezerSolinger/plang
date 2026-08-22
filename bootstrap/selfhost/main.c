@@ -302,7 +302,7 @@ static void deps_walk(Cc *cc, const char *path) {
         if (!has_suffix(d->import_path, ".ph")) {
             continue;
         }
-        const char *ip = path_join(&cc->arena, dir, d->import_path);
+        const char *ip = (d->import_system ? pkg_resolve(cc, path, d) : path_join(&cc->arena, dir, d->import_path));
         int seen = 0;
         size_t j;
         for (j = 0; j < deps_count(); j += 1) {
@@ -330,7 +330,16 @@ static void psc_pmods(Cc *cc, const char *path, PsModule *m, Vec_pchar *inputs, 
     for (j = 0; j < m->ndecls; j += 1) {
         PsDecl *d = m->decls[j];
         if (d->kind == PD_INCLUDE && d->is_pmod) {
-            const char *hp = path_join(&cc->arena, dir, d->path);
+            const char *hp = "";
+            if (d->import_system) {
+                const char *got = pkg_find(&cc->arena, cc->pkgroots, cc->npkgroots, d->path);
+                if (got == NULL) {
+                    fatal_at(path, d->pos, "import <%s>: not found in any package root (%s)", d->path, pkg_where(&cc->arena, cc->pkgroots, cc->npkgroots));
+                }
+                hp = got;
+            } else {
+                hp = path_join(&cc->arena, dir, d->path);
+            }
             add_input(inputs, pulled, hp);
             const char *sp = Arena_printf(&cc->arena, "%.*s", (int32_t)(strlen(hp) - 1), hp);
             size_t slen = 0;
@@ -488,6 +497,8 @@ int main(int argc, char **argv) {
     }
     Vec_pchar inputs;
     Vec_pchar_init(&inputs);
+    Vec_pchar pkg_roots;
+    Vec_pchar_init(&pkg_roots);
     Vec_pchar pulled;
     Vec_pchar_init(&pulled);
     Vec_pchar defines;
@@ -556,6 +567,12 @@ int main(int argc, char **argv) {
                 usage();
             }
             cpp_cmd = argv[i];
+        } else if (strcmp(argv[i], "--pkg-path") == 0) {
+            i += 1;
+            if (i >= argc) {
+                usage();
+            }
+            Vec_pchar_push(&pkg_roots, (char *)argv[i]);
         } else if (strcmp(argv[i], "--inline-runtime") == 0) {
             inline_runtime = 1;
         } else if (strcmp(argv[i], "-g") == 0 || strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "--trace") == 0) {
@@ -644,6 +661,8 @@ int main(int argc, char **argv) {
     cc.std_version = std_version;
     cc.cpp = cpp_cmd;
     cc.inline_runtime = inline_runtime;
+    cc.pkgroots = pkg_roots.data;
+    cc.npkgroots = (int32_t)pkg_roots.len;
     parser_config_predef(plang_host_os(), defines.data, defines.len);
     ps_lower_config(strip_asserts, full_trace);
     const char *cachedir = NULL;
@@ -724,7 +743,7 @@ int main(int argc, char **argv) {
                 }
                 continue;
             }
-            ps_sema_run(&cc.arena, psm, cc.cpp);
+            ps_sema_run(&cc.arena, psm, cc.cpp, cc.pkgroots, cc.npkgroots);
             m = ps_lower(&cc.arena, psm, ps_runtime);
             if (!be->pre_sema && !query_mode) {
                 sema_run(&cc, m);
@@ -752,6 +771,25 @@ int main(int argc, char **argv) {
             }
         } else {
             m = cc_load_module(&cc, path);
+            size_t jp;
+            for (jp = 0; jp < m->ndecls; jp += 1) {
+                Decl *ip0 = m->decls[jp];
+                if (ip0->kind != DL_IMPORT || ip0->is_include || !ip0->import_system) {
+                    continue;
+                }
+                if (ip0->import_path == NULL || !has_suffix(ip0->import_path, ".ph")) {
+                    continue;
+                }
+                const char *pph = pkg_resolve(&cc, path, ip0);
+                add_input(&inputs, &pulled, pph);
+                const char *ppp = Arena_printf(&cc.arena, "%.*s", (int32_t)(strlen(pph) - 1), pph);
+                size_t pl0 = 0;
+                char *pb0 = read_entire_file_opt(ppp, &pl0);
+                if (pb0 != NULL) {
+                    free(pb0);
+                    add_input(&inputs, &pulled, ppp);
+                }
+            }
             if (deps_mode) {
                 deps_walk(&cc, path);
             }
@@ -765,7 +803,7 @@ int main(int argc, char **argv) {
                     if (!has_suffix(im->import_path, ".ph")) {
                         continue;
                     }
-                    const char *ip = path_join(&cc.arena, path_dir(&cc.arena, path), im->import_path);
+                    const char *ip = (im->import_system ? pkg_resolve(&cc, path, im) : path_join(&cc.arena, path_dir(&cc.arena, path), im->import_path));
                     add_input(&inputs, &pulled, ip);
                     const char *isp = Arena_printf(&cc.arena, "%.*s", (int32_t)(strlen(ip) - 1), ip);
                     size_t sl2 = 0;

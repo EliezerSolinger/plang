@@ -175,6 +175,15 @@ else
     bad "o `run` divergiu (veja $V/runcmd.log)"
 fi
 
+# packages: `import <pkg/mod.ph>` — o pacote como CAMINHO DE BUSCA, nas duas
+# linguagens, com as respostas do protocolo a enxergá-lo e o erro a dizer onde
+# se procurou
+if PLANGC=$PWD/$V/plangc_s2 bash tests/packages.sh >$V/packages.log 2>&1; then
+    ok "packages $(grep -oE '[0-9]+ ok' $V/packages.log | tail -1)"
+else
+    bad "import <pkg> divergiu (veja $V/packages.log)"
+fi
+
 step "7/8 pstudio (o editor: pscript por cima, driver em P por baixo)"
 # 116: o editor em P foi aposentado (a paridade foi medida método por método na
 # 115). O que este passo mede agora é o programa GRÁFICO inteiro: o driver em P

@@ -71,3 +71,53 @@ carregar conhecimento do repositório que um descritor existe.
 
 Portão: `tests/pscript/run/import_fundo.psc` (com o compilador anterior:
 `#include` órfão e o link falha).
+
+---
+
+## `import <pkg/mod.ph>` — o pacote como CAMINHO DE BUSCA
+
+O compilador NÃO sabe o que é um pacote, e é essa a decisão que o resto depende.
+Ele recebe raízes de busca (`--pkg-path`, repetível) e procura nelas, na ordem
+em que foram dadas — a mesma regra do `-I` do C, e pela mesma razão: é a única
+que dá para explicar numa linha. Quem sabe o que é versão, dependência e
+resolução é o `ppack`, e a fronteira entre os dois é literalmente esta lista de
+diretórios.
+
+Três formas, e nenhuma ambiguidade entre elas:
+
+| forma | significa |
+|---|---|
+| `include <stdio.h>` | header de C do sistema, pré-processado pelo `cc` |
+| `import <stl/vec.ph>` | módulo de um **pacote**, procurado nas raízes |
+| `import "vizinho.ph"` | módulo **ao lado do arquivo**, como sempre |
+
+**Não há recuo de uma para a outra.** Um `<>` que não é achado é ERRO, e não
+vira uma tentativa relativa: um recuo silencioso faria um programa compilar por
+acidente com o arquivo errado, e é o tipo de conveniência que se paga uma vez e
+se lamenta durante anos. O erro diz onde se procurou, porque "não achei" sozinho
+deixa quem lê a adivinhar se o pacote não foi resolvido, se o nome está errado,
+ou se o `--pkg-path` não chegou até ali.
+
+**O pacote é uma UNIDADE, então o `<>` puxa o `.p` irmão.** É a 1.5(a) aplicada
+só à forma com `<>`, e a diferença entre as duas formas é o que a justifica:
+`"x.ph"` é um arquivo ao lado e quem compila diz o que compila (o contrato da
+linha de comando); `<pkg/mod.ph>` é um pacote, e importar a interface e ter de
+nomear a implementação à mão seria pedir que quem usa o pacote soubesse como ele
+é feito por dentro. A 1.5(a) para a forma relativa continua ABERTA.
+
+**Depois de resolvido, ele vira um import relativo comum.** É a única forma de o
+header EMITIDO resolver: o `<>` é relativo a uma raiz que só o compilador
+conhece, e o C gerado tem de incluir o header GERADO, que mora no espelho do
+`--out-dir` no mesmo lugar relativo em que o fonte mora no disco. Reescrever na
+sema faz todo o resto do compilador — back end, deps, espelho — não precisar
+aprender nada sobre pacotes.
+
+**O limite, dito de frente:** a raiz e os fontes têm de ser nomeados do mesmo
+jeito — ambos relativos ao diretório de trabalho, ou ambos absolutos. Com um de
+cada lado não existe caminho relativo entre eles que valha também dentro do
+espelho, e o compilador RECUSA com uma mensagem que explica isso em vez de
+emitir um `#include` que não resolve.
+
+Portão: `tests/packages.sh`, 14 checagens — o programa que usa dois pacotes (um
+deles dependendo do outro), as respostas 1 e 3 a enxergarem o pacote, as três
+formas de erro, e o mesmo do lado do pscript.

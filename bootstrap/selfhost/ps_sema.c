@@ -1615,6 +1615,8 @@ struct PsSema {
     Arena *a;
     const char *file;
     PsModule *m;
+    char **pkgroots;
+    int32_t npkgroots;
     StrMap_pPsFunc funcs;
     StrMap_pPsDecl records;
     StrMap_pPsDecl enums;
@@ -1882,16 +1884,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_404_9 = &self->locals[self->nlocals];
-        __with_404_9->name = name;
-        __with_404_9->type = t;
-        __with_404_9->assigned = assigned;
-        __with_404_9->is_const = is_const;
-        __with_404_9->frozen = 0;
-        __with_404_9->is_module = 0;
-        __with_404_9->opt_type = NULL;
-        __with_404_9->any_type = NULL;
-        __with_404_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_409_9 = &self->locals[self->nlocals];
+        __with_409_9->name = name;
+        __with_409_9->type = t;
+        __with_409_9->assigned = assigned;
+        __with_409_9->is_const = is_const;
+        __with_409_9->frozen = 0;
+        __with_409_9->is_module = 0;
+        __with_409_9->opt_type = NULL;
+        __with_409_9->any_type = NULL;
+        __with_409_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2409,12 +2411,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_927_17 = e;
-                __with_927_17->kind = PE_CALL;
-                __with_927_17->lhs = cal8;
-                __with_927_17->args = args8;
-                __with_927_17->nargs = nc8;
-                __with_927_17->body = NULL;
+                PsExpr *__with_932_17 = e;
+                __with_932_17->kind = PE_CALL;
+                __with_932_17->lhs = cal8;
+                __with_932_17->args = args8;
+                __with_932_17->nargs = nc8;
+                __with_932_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -3148,14 +3150,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1605_21 = e;
-                    __with_1605_21->kind = PE_COMPREHEND;
-                    __with_1605_21->op = TK_RBRACKET;
-                    __with_1605_21->var = kv9;
-                    __with_1605_21->lhs = pair;
-                    __with_1605_21->rhs = recv9;
-                    __with_1605_21->args = NULL;
-                    __with_1605_21->nargs = 0;
+                    PsExpr *__with_1610_21 = e;
+                    __with_1610_21->kind = PE_COMPREHEND;
+                    __with_1610_21->op = TK_RBRACKET;
+                    __with_1610_21->var = kv9;
+                    __with_1610_21->lhs = pair;
+                    __with_1610_21->rhs = recv9;
+                    __with_1610_21->args = NULL;
+                    __with_1610_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -4421,12 +4423,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_2765_17 = e;
-                __with_2765_17->kind = PE_INDEX;
-                __with_2765_17->lhs = e->args[0];
-                __with_2765_17->rhs = below;
-                __with_2765_17->args = NULL;
-                __with_2765_17->nargs = 0;
+                PsExpr *__with_2770_17 = e;
+                __with_2770_17->kind = PE_INDEX;
+                __with_2770_17->lhs = e->args[0];
+                __with_2770_17->rhs = below;
+                __with_2770_17->args = NULL;
+                __with_2770_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -4762,26 +4764,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3057_17 = e;
-                __with_3057_17->kind = PE_STR;
-                __with_3057_17->text = lit7;
-                __with_3057_17->lhs = NULL;
-                __with_3057_17->rhs = NULL;
-                __with_3057_17->args = NULL;
-                __with_3057_17->nargs = 0;
+                PsExpr *__with_3062_17 = e;
+                __with_3062_17->kind = PE_STR;
+                __with_3062_17->text = lit7;
+                __with_3062_17->lhs = NULL;
+                __with_3062_17->rhs = NULL;
+                __with_3062_17->args = NULL;
+                __with_3062_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3070_13 = e;
-            __with_3070_13->kind = PE_LOWERED;
-            __with_3070_13->low = ln7;
-            __with_3070_13->lhs = NULL;
-            __with_3070_13->rhs = NULL;
-            __with_3070_13->args = NULL;
-            __with_3070_13->nargs = 0;
+            PsExpr *__with_3075_13 = e;
+            __with_3075_13->kind = PE_LOWERED;
+            __with_3075_13->low = ln7;
+            __with_3075_13->lhs = NULL;
+            __with_3075_13->rhs = NULL;
+            __with_3075_13->args = NULL;
+            __with_3075_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5058,10 +5060,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3327_17 = &ns->quals[ns->nquals];
-                __with_3327_17->name = q;
-                __with_3327_17->orig = d->path;
-                __with_3327_17->ns = sub;
+                PsNsEnt *__with_3332_17 = &ns->quals[ns->nquals];
+                __with_3332_17->name = q;
+                __with_3332_17->orig = d->path;
+                __with_3332_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5074,10 +5076,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3339_21 = &ns->ents[ns->nents];
-                    __with_3339_21->name = local;
-                    __with_3339_21->orig = d->names[k];
-                    __with_3339_21->ns = sub;
+                    PsNsEnt *__with_3344_21 = &ns->ents[ns->nents];
+                    __with_3344_21->name = local;
+                    __with_3344_21->orig = d->names[k];
+                    __with_3344_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5517,10 +5519,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_3772_9 = e;
-        __with_3772_9->kind = PE_NAME;
-        __with_3772_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_3772_9->lhs = NULL;
+        PsExpr *__with_3777_9 = e;
+        __with_3777_9->kind = PE_NAME;
+        __with_3777_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3777_9->lhs = NULL;
     }
     return 1;
 }
@@ -5586,7 +5588,21 @@ static void PsSema_ingest_header(PsSema *self, PsModule *m, PsDecl *d) {
 }
 
 static void PsSema_ingest_pmodule(PsSema *self, PsModule *m, PsDecl *d) {
-    const char *full = path_join(self->a, path_dir(self->a, m->path), d->path);
+    const char *full = "";
+    if (d->import_system) {
+        const char *got = pkg_find(self->a, self->pkgroots, self->npkgroots, d->path);
+        if (got == NULL) {
+            fatal_at(m->path, d->pos, "import <%s>: not found in any package root (%s)", d->path, pkg_where(self->a, self->pkgroots, self->npkgroots));
+        }
+        full = got;
+        if (!same_space(self->m->path, full)) {
+            fatal_at(m->path, d->pos, "import <%s>: the package root and the sources have to be named the same way — both relative to the current directory, or both absolute. Here the program is '%s' and the package resolved to '%s', and there is no relative path between them that also holds inside the --out-dir mirror", d->path, self->m->path, full);
+        }
+        d->path = path_relative(self->a, path_dir(self->a, self->m->path), full);
+        d->import_system = 0;
+    } else {
+        full = path_join(self->a, path_dir(self->a, m->path), d->path);
+    }
     size_t n = 0;
     char *bytes = read_entire_file_opt(full, &n);
     if (bytes == NULL) {
@@ -8154,12 +8170,14 @@ static void ps_apply_decorators(Arena *a, PsModule *m) {
     m->main->n = binds.len + n;
 }
 
-void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd) {
+void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd, char **roots, int32_t nroots) {
     ps_apply_decorators(a, m);
     PsSema s = {0};
     s.a = a;
     s.file = m->path;
     s.m = m;
+    s.pkgroots = roots;
+    s.npkgroots = nroots;
     StrMap_pPsFunc_init(&s.funcs);
     StrMap_pPsDecl_init(&s.records);
     StrMap_pPsDecl_init(&s.enums);

@@ -27,7 +27,11 @@ struct Cc {
     MacroDump *macs;
     int32_t nmac;
     int32_t cmac;
+    char **pkgroots;
+    int32_t npkgroots;
 };
+
+const char *pkg_resolve(Cc *cc, const char *file, Decl *d);
 
 Module *cc_load_module(Cc *cc, const char *path);
 

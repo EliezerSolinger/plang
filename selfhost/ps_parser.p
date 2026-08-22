@@ -1757,6 +1757,27 @@ struct PsP:
 
     private def parse_import(self: *PsP) -> *PsDecl:
         pos: Pos = self->expect(TK_IMPORT, "import")->pos
+        if self->at(TK_HEADER) or self->at(TK_LT):
+            # `import <pkg/mod.ph>`: um módulo P de um PACOTE. É a mesma coisa
+            # que `import "x.ph"` faz — a fronteira da 45.5, e o `.p` irmão
+            # compilado junto —, com a diferença de onde o arquivo é procurado:
+            # nas raízes de `--pkg-path`, e nunca ao lado de quem importa.
+            hd: *PsDecl = ps_decl(self->a, PD_INCLUDE, pos)
+            if self->at(TK_HEADER):
+                hd->path = self->adv()->text
+            else:
+                self->adv()
+                hp: const *char = ""
+                while not self->at(TK_GT) and not self->at(TK_NEWLINE) and not self->at(TK_EOF):
+                    hp = self->a->printf("%s%s", hp, spell_tok(self->adv()))
+                self->expect(TK_GT, "import <pkg/module.ph> (missing '>')")
+                hd->path = hp
+            hd->is_pmod = True
+            hd->import_system = True
+            if not has_suffix_ps(hd->path, ".ph"):
+                fatal_at(self->file, pos, "`import <...>` names a P module of a package by its header: `import <stl/vec.ph>`. A C header is `include <stdio.h>` (45.5)")
+            self->expect(TK_NEWLINE, "import")
+            return hd
         if self->at(TK_STRING):
             # `import "shim.ph"` (75.3/2.4): a P module, not a pscript one. It
             # crosses by the rule of 45.5 — pointer-free signatures, enums and

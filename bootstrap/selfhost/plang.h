@@ -96,6 +96,12 @@ const char *path_join(Arena *a, const char *dir, const char *rel);
 
 const char *path_relative(Arena *a, const char *from_dir, const char *to);
 
+const char *pkg_find(Arena *a, char **roots, int32_t nroots, const char *rel);
+
+const char *pkg_where(Arena *a, char **roots, int32_t nroots);
+
+int same_space(const char *a, const char *b);
+
 char *str_lit_decode(Arena *a, const char *lex, size_t *out_len);
 
 const char *c_string_literal(Arena *a, const char *bytes, size_t n);

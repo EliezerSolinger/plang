@@ -272,6 +272,9 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str)
                           {"PLANGC": plangc}, [plangc], logdir, "print atômico"))
     logs.append(T.harness(c, "run-cmd", ["bash", "tests/run-cmd.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "run-cmd"))
+    logs.append(T.harness(c, "packages", ["bash", "tests/packages.sh"],
+                          {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/packages")},
+                          [plangc], logdir, "pacotes (import <>)"))
 
     # a suíte do pscript como GRAFO entra junto: ela é a mesma coisa que a
     # `suite-c` mede, por outro caminho e caso a caso — e é a que roda rápido

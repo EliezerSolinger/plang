@@ -1562,8 +1562,23 @@ static Decl *P_parse_import(P *self) {
     d->kind = DL_IMPORT;
     d->is_include = 0;
     d->pos = pos;
-    if (P_at(self, TK_HEADER)) {
-        fatal_at(self->file, P_pk(self)->pos, "'import <%s>' was removed: C headers use `include <%s>` (import is for P modules: import \"x.ph\")", P_pk(self)->text, P_pk(self)->text);
+    if (P_at(self, TK_HEADER) || P_at(self, TK_LT)) {
+        if (P_at(self, TK_HEADER)) {
+            d->import_path = P_adv(self)->text;
+        } else {
+            P_adv(self);
+            const char *p2 = "";
+            while (!P_at(self, TK_GT) && !P_at(self, TK_NEWLINE) && !P_at(self, TK_EOF)) {
+                p2 = Arena_printf(self->a, "%s%s", p2, spell_tok(P_adv(self)));
+            }
+            P_expect(self, TK_GT, "import <pkg/module.ph> (missing '>')");
+            d->import_path = p2;
+        }
+        d->import_system = 1;
+        size_t pl2 = strlen(d->import_path);
+        if (pl2 < 3 || strcmp(d->import_path + pl2 - 3, ".ph") != 0) {
+            fatal_at(self->file, d->pos, "import <%s>: import takes a P header (.ph); for a C header use `include <%s>`", d->import_path, d->import_path);
+        }
     } else if (P_at(self, TK_STRING)) {
         const char *raw = P_adv(self)->text;
         size_t len = strlen(raw);
@@ -1779,18 +1794,18 @@ static Decl *P_parse_top(P *self) {
             Token *name = P_expect(self, TK_IDENT, "global declaration");
             Decl *d2 = Arena_alloc(self->a, sizeof(Decl));
             {
-                Decl *__with_1584_17 = d2;
-                __with_1584_17->kind = DL_VAR;
-                __with_1584_17->pos = name->pos;
-                __with_1584_17->name = name->text;
-                __with_1584_17->is_const = is_const;
-                __with_1584_17->is_extern = is_extern;
+                Decl *__with_1602_17 = d2;
+                __with_1602_17->kind = DL_VAR;
+                __with_1602_17->pos = name->pos;
+                __with_1602_17->name = name->text;
+                __with_1602_17->is_const = is_const;
+                __with_1602_17->is_extern = is_extern;
                 if (P_accept(self, TK_COLON)) {
-                    __with_1584_17->type = P_parse_type(self);
+                    __with_1602_17->type = P_parse_type(self);
                 }
                 if (P_accept(self, TK_ASSIGN)) {
-                    __with_1584_17->init = P_parse_initializer(self);
-                } else if (__with_1584_17->type == NULL) {
+                    __with_1602_17->init = P_parse_initializer(self);
+                } else if (__with_1602_17->type == NULL) {
                     fatal_at(self->file, name->pos, "'%s' needs a type or an initializer to infer from", name->text);
                 } else if (is_const && !is_extern) {
                     fatal_at(self->file, name->pos, "const requires a value");

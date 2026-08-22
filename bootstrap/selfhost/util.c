@@ -588,6 +588,39 @@ const char *c_string_literal(Arena *a, const char *bytes, size_t n) {
     return out;
 }
 
+const char *pkg_find(Arena *a, char **roots, int32_t nroots, const char *rel) {
+    size_t i;
+    for (i = 0; i < nroots; i += 1) {
+        const char *cand = path_join(a, roots[i], rel);
+        size_t n = 0;
+        char *b = read_entire_file_opt(cand, &n);
+        if (b != NULL) {
+            free(b);
+            return cand;
+        }
+    }
+    return NULL;
+}
+
+const char *pkg_where(Arena *a, char **roots, int32_t nroots) {
+    if (nroots == 0) {
+        return Arena_strdup(a, "none was given: `--pkg-path <dir>`, repeatable");
+    }
+    StrBuf sb = {0};
+    StrBuf_puts(&sb, "looked in:");
+    size_t j;
+    for (j = 0; j < nroots; j += 1) {
+        StrBuf_puts(&sb, Arena_printf(a, " %s", roots[j]));
+    }
+    const char *r = Arena_printf(a, "%.*s", (int32_t)sb.len, sb.data);
+    StrBuf_deinit(&sb);
+    return r;
+}
+
+int same_space(const char *a, const char *b) {
+    return a[0] == '/' == (b[0] == '/');
+}
+
 const char *path_relative(Arena *a, const char *from_dir, const char *to) {
     if (from_dir[0] == '/' != (to[0] == '/')) {
         return Arena_strdup(a, to);

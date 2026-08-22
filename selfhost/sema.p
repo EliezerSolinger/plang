@@ -6125,12 +6125,31 @@ struct Sema:
             case DL_IMPORT:
                 if d->is_include:
                     self->ingest_c_header(m, d)
-                elif not d->import_system and ends_with(d->import_path, ".ph"):
-                    dir: const *char = path_dir(self->a, m->path)
-                    # path_join, not printf: an ABSOLUTE import path must be
-                    # taken as it stands, not glued behind the includer's
-                    # directory (which produced `a/b//abs/path`)
-                    full: const *char = path_join(self->a, dir, d->import_path)
+                elif ends_with(d->import_path, ".ph"):
+                    full: const *char = ""
+                    if d->import_system:
+                        # `import <pkg/mod.ph>`: vem de um PACOTE, e procura-se
+                        # nas raízes de `--pkg-path` — nunca ao lado de quem
+                        # importa. Ver a nota do `pkgroots` em `sema.ph`.
+                        full = pkg_resolve(self->cc, self->file, d)
+                        # e a partir daqui ele vira um import RELATIVO comum. É
+                        # a única forma de o header emitido resolver: o `<>` é
+                        # relativo a uma raiz que só o compilador conhece, e o C
+                        # gerado tem de incluir o header GERADO, que mora no
+                        # espelho do `--out-dir` no mesmo lugar relativo em que
+                        # o fonte mora no disco. Reescrever aqui faz todo o
+                        # resto do compilador — back end, deps, espelho — não
+                        # precisar aprender nada sobre pacotes.
+                        if not same_space(m->path, full):
+                            fatal_at(self->file, d->pos, "import <%s>: the package root and the sources have to be named the same way — both relative to the current directory, or both absolute. Here the source is '%s' and the package resolved to '%s', and there is no relative path between them that also holds inside the --out-dir mirror", d->import_path, m->path, full)
+                        d->import_path = path_relative(self->a, path_dir(self->a, m->path), full)
+                        d->import_system = False
+                    else:
+                        dir: const *char = path_dir(self->a, m->path)
+                        # path_join, not printf: an ABSOLUTE import path must be
+                        # taken as it stands, not glued behind the includer's
+                        # directory (which produced `a/b//abs/path`)
+                        full = path_join(self->a, dir, d->import_path)
                     sub: *Module = cc_load_module(self->cc, full)
                     self->register_module(sub, False)
                     if d->import_alias != None:
@@ -6468,6 +6487,21 @@ private def ends_with(s: const *char, suf: const *char) -> bool:
     n: usize = strlen(s)
     m: usize = strlen(suf)
     return n >= m and strcmp(s + n - m, suf) == 0
+
+# A raiz de pacote em que um `import <...>` foi encontrado, ou o erro que diz
+# onde se procurou. É a única função que sabe traduzir a forma com `<>` num
+# caminho, e ela vive aqui porque a sema é quem carrega os módulos.
+#
+# A mensagem lista as raízes porque é a única informação que resolve o problema:
+# "não achei" sozinho deixa quem lê adivinhando se o pacote não foi resolvido, se
+# o nome está errado, ou se o `--pkg-path` não chegou até aqui.
+def pkg_resolve(cc: *Cc, file: const *char, d: *Decl) -> const *char:
+    got: const *char = pkg_find(&cc->arena, cc->pkgroots, cc->npkgroots, d->import_path)
+    if got != None:
+        return got
+    fatal_at(file, d->pos, "import <%s>: not found in any package root (%s)",
+             d->import_path, pkg_where(&cc->arena, cc->pkgroots, cc->npkgroots))
+    return ""
 
 def cc_load_module(cc: *Cc, path: const *char) -> *Module:
     for i in range(cc->nmods):

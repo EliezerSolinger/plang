@@ -37,6 +37,21 @@ struct Cc:
     macs: *MacroDump
     nmac: i32
     cmac: i32
+    # As RAÍZES de pacote (`--pkg-path`, repetível). Um `import <pkg/mod.ph>` é
+    # procurado em cada uma, na ordem em que foram dadas, e a primeira que tiver
+    # o arquivo ganha — a mesma regra do `-I` do C, e pela mesma razão: é a
+    # única que dá para explicar numa linha.
+    #
+    # NÃO há recuo para caminho relativo. `<>` e `"..."` não se misturam: um diz
+    # "isto vem de um pacote", o outro diz "isto está ao meu lado", e deixar o
+    # primeiro cair no segundo faria um programa compilar por acidente com o
+    # arquivo errado. A ambiguidade silenciosa foi recusada de propósito.
+    pkgroots: **char
+    npkgroots: i32
+
+# Onde um `import <pkg/mod.ph>` está, procurando nas raízes de `--pkg-path`.
+# Levanta com a lista das raízes quando não acha.
+def pkg_resolve(cc: *Cc, file: const *char, d: *Decl) -> const *char
 
 # Reads, decodes, lexes and parses a file (with cache by path).
 def cc_load_module(cc: *Cc, path: const *char) -> *Module

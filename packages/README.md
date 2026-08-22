@@ -95,6 +95,20 @@ E o melhor: **o compilador continua sem saber o que é versão** — ele recebe 
 caminho de busca e procura, exatamente como a fronteira decidida em
 `pbuild/ARQUITETURA.md` manda.
 
+**FEITO em 2026-08-22.** `--pkg-path <dir>` (repetível) dá as raízes; a busca é
+na ordem em que foram dadas, e a primeira que tiver o arquivo ganha. `<>` NÃO
+recua para o caminho relativo — um `<>` não achado é erro, com a lista das
+raízes na mensagem. Importar a interface de um pacote PUXA o `.p` dela: um
+pacote é uma unidade, e quem o usa não tem de saber como ele é feito por dentro.
+Vale nas duas linguagens. O portão é `tests/packages.sh`, e a raiz de exemplo
+que ele usa (`tests/pkg/`) mostra a forma mínima de um pacote: uma pasta com um
+nome, um `.ph` e um `.p`.
+
+Um limite que vale saber antes de tropeçar nele: a raiz e os fontes têm de ser
+nomeados do mesmo jeito — ambos relativos ao diretório de trabalho, ou ambos
+absolutos. É o que faz o caminho relativo entre eles valer também dentro do
+espelho do `--out-dir`; com um de cada lado, o compilador recusa e diz por quê.
+
 Migração: os 41 `import "../stl/vec.ph"` viram `import <stl/vec.ph>` — no **mesmo
 ciclo de seed** do `static`→`private`.
 

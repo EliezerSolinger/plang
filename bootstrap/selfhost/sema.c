@@ -8727,9 +8727,19 @@ static void Sema_register_decl(Sema *self, Module *m, Decl *d, int check_bodies)
         case DL_IMPORT: {
             if (d->is_include) {
                 Sema_ingest_c_header(self, m, d);
-            } else if (!d->import_system && ends_with(d->import_path, ".ph")) {
-                const char *dir = path_dir(self->a, m->path);
-                const char *full = path_join(self->a, dir, d->import_path);
+            } else if (ends_with(d->import_path, ".ph")) {
+                const char *full = "";
+                if (d->import_system) {
+                    full = pkg_resolve(self->cc, self->file, d);
+                    if (!same_space(m->path, full)) {
+                        fatal_at(self->file, d->pos, "import <%s>: the package root and the sources have to be named the same way — both relative to the current directory, or both absolute. Here the source is '%s' and the package resolved to '%s', and there is no relative path between them that also holds inside the --out-dir mirror", d->import_path, m->path, full);
+                    }
+                    d->import_path = path_relative(self->a, path_dir(self->a, m->path), full);
+                    d->import_system = 0;
+                } else {
+                    const char *dir = path_dir(self->a, m->path);
+                    full = path_join(self->a, dir, d->import_path);
+                }
                 Module *sub = cc_load_module(self->cc, full);
                 Sema_register_module(self, sub, 0);
                 if (d->import_alias != NULL) {
@@ -9069,14 +9079,14 @@ static void Sema_inject_defines(Sema *self, Cc *cc, Module *m) {
         }
         Decl *dc = Arena_alloc(self->a, sizeof(Decl));
         {
-            Decl *__with_6449_13 = dc;
-            __with_6449_13->kind = DL_VAR;
-            __with_6449_13->pos = zp;
-            __with_6449_13->name = name;
-            __with_6449_13->is_const = 1;
-            __with_6449_13->is_static = 1;
-            __with_6449_13->is_define = 1;
-            __with_6449_13->init = ini;
+            Decl *__with_6468_13 = dc;
+            __with_6468_13->kind = DL_VAR;
+            __with_6468_13->pos = zp;
+            __with_6468_13->name = name;
+            __with_6468_13->is_const = 1;
+            __with_6468_13->is_static = 1;
+            __with_6468_13->is_define = 1;
+            __with_6468_13->init = ini;
         }
         nd[np] = dc;
         np += 1;
@@ -9094,6 +9104,15 @@ static int ends_with(const char *s, const char *suf) {
     size_t n = strlen(s);
     size_t m = strlen(suf);
     return n >= m && strcmp(s + n - m, suf) == 0;
+}
+
+const char *pkg_resolve(Cc *cc, const char *file, Decl *d) {
+    const char *got = pkg_find(&cc->arena, cc->pkgroots, cc->npkgroots, d->import_path);
+    if (got != NULL) {
+        return got;
+    }
+    fatal_at(file, d->pos, "import <%s>: not found in any package root (%s)", d->import_path, pkg_where(&cc->arena, cc->pkgroots, cc->npkgroots));
+    return "";
 }
 
 Module *cc_load_module(Cc *cc, const char *path) {

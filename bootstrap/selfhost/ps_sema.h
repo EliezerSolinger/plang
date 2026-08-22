@@ -4,7 +4,7 @@
 
 #include "ps_ast.h"
 
-void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd);
+void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd, char **roots, int32_t nroots);
 
 const char *ps_type_str(Arena *a, PsType *t);
 

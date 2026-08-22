@@ -1369,9 +1369,27 @@ struct P:
         d->kind = DL_IMPORT
         d->is_include = False
         d->pos = pos
-        # `import` is for P modules only; C headers go through `include`
-        if self->at(TK_HEADER):
-            fatal_at(self->file, self->pk()->pos, "'import <%s>' was removed: C headers use `include <%s>` (import is for P modules: import \"x.ph\")", self->pk()->text, self->pk()->text)
+        # `import <pkg/mod.ph>` — de um PACOTE. A forma com `<>` diz "isto vem de
+        # fora do meu diretório": o compilador a procura nas raízes de
+        # `--pkg-path`, na ordem, e NÃO tenta o caminho relativo se não achar.
+        # As duas formas não se misturam de propósito — `"..."` é "está ao meu
+        # lado" e `<>` é "vem de um pacote" —, porque um recuo silencioso de uma
+        # para a outra faria um programa compilar por acidente com o arquivo
+        # errado. C header continua sendo `include <...>`.
+        if self->at(TK_HEADER) or self->at(TK_LT):
+            if self->at(TK_HEADER):
+                d->import_path = self->adv()->text
+            else:
+                self->adv()
+                p2: const *char = ""
+                while not self->at(TK_GT) and not self->at(TK_NEWLINE) and not self->at(TK_EOF):
+                    p2 = self->a->printf("%s%s", p2, spell_tok(self->adv()))
+                self->expect(TK_GT, "import <pkg/module.ph> (missing '>')")
+                d->import_path = p2
+            d->import_system = True
+            pl2: usize = strlen(d->import_path)
+            if pl2 < 3 or d->import_path + pl2 - 3 != ".ph":
+                fatal_at(self->file, d->pos, "import <%s>: import takes a P header (.ph); for a C header use `include <%s>`", d->import_path, d->import_path)
         elif self->at(TK_STRING):
             raw: const *char = self->adv()->text  # with quotes
             len: usize = strlen(raw)

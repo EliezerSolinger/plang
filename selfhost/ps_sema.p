@@ -184,6 +184,11 @@ struct PsSema:
     a: *Arena
     file: const *char
     m: *PsModule
+    # as raízes de `--pkg-path`, para `import <pkg/mod.ph>`. Vêm do driver e não
+    # do `Cc` porque o front end do pscript não conhece o `Cc` — o que ele
+    # precisa saber é onde procurar, e é só isso que atravessa.
+    pkgroots: **char
+    npkgroots: i32
     funcs: StrMap<*PsFunc>
     records: StrMap<*PsDecl>
     enums: StrMap<*PsDecl>
@@ -3847,7 +3852,27 @@ struct PsSema:
     # the module's `.p` alongside, so one command covers both halves instead of
     # the two-step the pstudio port had to do by hand.
     private def ingest_pmodule(self: *PsSema, m: *PsModule, d: *PsDecl):
-        full: const *char = path_join(self->a, path_dir(self->a, m->path), d->path)
+        # `import <pkg/mod.ph>` vem de um PACOTE e procura-se nas raízes;
+        # `import "x.ph"` está ao lado de quem importa. As duas formas não se
+        # misturam de propósito — ver a nota do `pkgroots` em `sema.ph`.
+        full: const *char = ""
+        if d->import_system:
+            got: const *char = pkg_find(self->a, self->pkgroots, self->npkgroots, d->path)
+            if got == None:
+                fatal_at(m->path, d->pos, "import <%s>: not found in any package root (%s)",
+                         d->path, pkg_where(self->a, self->pkgroots, self->npkgroots))
+            full = got
+            # e a partir daqui ele é um import RELATIVO comum: o C gerado inclui
+            # o header GERADO, que mora no espelho do `--out-dir` no mesmo lugar
+            # relativo em que o fonte mora no disco. A âncora é o arquivo DE
+            # CIMA (`self->m`), porque é lá que o C do programa sai — um módulo
+            # pscript importado não gera arquivo próprio.
+            if not same_space(self->m->path, full):
+                fatal_at(m->path, d->pos, "import <%s>: the package root and the sources have to be named the same way — both relative to the current directory, or both absolute. Here the program is '%s' and the package resolved to '%s', and there is no relative path between them that also holds inside the --out-dir mirror", d->path, self->m->path, full)
+            d->path = path_relative(self->a, path_dir(self->a, self->m->path), full)
+            d->import_system = False
+        else:
+            full = path_join(self->a, path_dir(self->a, m->path), d->path)
         n: usize = 0
         bytes: *char = read_entire_file_opt(full, out n)
         if bytes == None:
@@ -6110,12 +6135,14 @@ private def ps_apply_decorators(a: *Arena, m: *PsModule):
     m->main->stmts = st
     m->main->n = binds.len + n
 
-def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char):
+def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nroots: i32):
     ps_apply_decorators(a, m)
     s: PsSema = {0}
     s.a = a
     s.file = m->path
     s.m = m
+    s.pkgroots = roots
+    s.npkgroots = nroots
     s.funcs.init()
     s.records.init()
     s.enums.init()

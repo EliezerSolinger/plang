@@ -291,7 +291,9 @@ private def deps_walk(cc: *Cc, path: const *char):
             continue
         if not has_suffix(d->import_path, ".ph"):
             continue
-        ip: const *char = path_join(&cc->arena, dir, d->import_path)
+        # `<pkg/mod.ph>` vem de uma raiz de pacote; `"x.ph"` vem do lado de quem
+        # importa. As duas não se misturam — ver a nota do `pkgroots`.
+        ip: const *char = pkg_resolve(cc, path, d) if d->import_system else path_join(&cc->arena, dir, d->import_path)
         seen: bool = False
         for j in range(deps_count()):
             if strcmp(deps_get(j), ip) == 0:
@@ -317,7 +319,17 @@ private def psc_pmods(cc: *Cc, path: const *char, m: *PsModule, inputs: *Vec<*ch
     for j in range(m->ndecls):
         d: *PsDecl = m->decls[j]
         if d->kind == PD_INCLUDE and d->is_pmod:
-            hp: const *char = path_join(&cc->arena, dir, d->path)
+            # `<pkg/mod.ph>` vem de uma raiz de pacote; `"x.ph"` vem do lado de
+            # quem escreveu o import
+            hp: const *char = ""
+            if d->import_system:
+                got: const *char = pkg_find(&cc->arena, cc->pkgroots, cc->npkgroots, d->path)
+                if got == None:
+                    fatal_at(path, d->pos, "import <%s>: not found in any package root (%s)",
+                             d->path, pkg_where(&cc->arena, cc->pkgroots, cc->npkgroots))
+                hp = got
+            else:
+                hp = path_join(&cc->arena, dir, d->path)
             add_input(inputs, pulled, hp)
             # o `.p` irmão do header, quando existe: o `.ph` sozinho é uma
             # declaração (o stl é assim), e nesse caso não há o que compilar
@@ -490,6 +502,8 @@ def main(argc: int, argv: **char) -> int:
         cpp_cmd = "cc"
     inputs: Vec<*char>
     inputs.init()
+    pkg_roots: Vec<*char>       # --pkg-path, na ordem em que foram dadas
+    pkg_roots.init()
     pulled: Vec<*char>      # inputs an `import "x.ph"` brought in (75.3)
     pulled.init()
     defines: Vec<*char>   # -D NAME=VALUE: comptime consts injected from outside
@@ -557,6 +571,13 @@ def main(argc: int, argv: **char) -> int:
             if i >= argc:
                 usage()
             cpp_cmd = argv[i]
+        elif argv[i] == "--pkg-path":
+            # uma RAIZ de pacote, repetível. Um `import <pkg/mod.ph>` é
+            # procurado em cada uma, na ordem — a mesma regra do `-I` do C.
+            i += 1
+            if i >= argc:
+                usage()
+            pkg_roots.push((*char)(argv[i]))
         elif argv[i] == "--inline-runtime":
             inline_runtime = True
         elif argv[i] in {"-g", "--debug", "--trace"}:
@@ -646,6 +667,8 @@ def main(argc: int, argv: **char) -> int:
     cc.std_version = std_version
     cc.cpp = cpp_cmd
     cc.inline_runtime = inline_runtime
+    cc.pkgroots = pkg_roots.data
+    cc.npkgroots = i32(pkg_roots.len)
     # 99.2: what a top-level `const if` may look at, before anything is parsed
     parser_config_predef(plang_host_os(), defines.data, defines.len)
     ps_lower_config(strip_asserts, full_trace)
@@ -759,7 +782,7 @@ def main(argc: int, argv: **char) -> int:
             # `--outputs` sozinho não precisa de nada disso.
             if parse_only or (query_mode and not api_mode and not deps_mode):
                 continue
-            ps_sema_run(&cc.arena, psm, cc.cpp)
+            ps_sema_run(&cc.arena, psm, cc.cpp, cc.pkgroots, cc.npkgroots)
             m = ps_lower(&cc.arena, psm, ps_runtime)
             if not be->pre_sema and not query_mode:
                 sema_run(&cc, m)
@@ -793,6 +816,30 @@ def main(argc: int, argv: **char) -> int:
                 sema_run(&cc, m)
         else:
             m = cc_load_module(&cc, path)
+            # `import <pkg/mod.ph>` PUXA o módulo do pacote, sempre — e não só
+            # quando quem importa já foi puxado.
+            #
+            # É a regra 1.5(a) aplicada à forma com `<>`, e a diferença entre as
+            # duas formas é o que a justifica: `"x.ph"` é um arquivo ao lado, e
+            # quem compila diz o que compila (o contrato do `-o` e da linha de
+            # comando); `<pkg/mod.ph>` é um PACOTE, e um pacote é uma unidade
+            # que se usa inteira — importar a interface e ter de nomear a
+            # implementação à mão seria pedir que quem usa o pacote soubesse
+            # como ele é feito por dentro.
+            for jp in range(m->ndecls):
+                ip0: *Decl = m->decls[jp]
+                if ip0->kind != DL_IMPORT or ip0->is_include or not ip0->import_system:
+                    continue
+                if ip0->import_path == None or not has_suffix(ip0->import_path, ".ph"):
+                    continue
+                pph: const *char = pkg_resolve(&cc, path, ip0)
+                add_input(&inputs, &pulled, pph)
+                ppp: const *char = cc.arena.printf("%.*s", i32(strlen(pph) - 1), pph)
+                pl0: usize = 0
+                pb0: *char = read_entire_file_opt(ppp, out pl0)
+                if pb0 != None:
+                    free(pb0)
+                    add_input(&inputs, &pulled, ppp)
             if deps_mode:
                 deps_walk(&cc, path)
             # 75.3, transitively: a module pulled into this build may import
@@ -806,7 +853,10 @@ def main(argc: int, argv: **char) -> int:
                         continue
                     if not has_suffix(im->import_path, ".ph"):
                         continue
-                    ip: const *char = path_join(&cc.arena, path_dir(&cc.arena, path), im->import_path)
+                    # a forma com `<>` vem de uma raiz de pacote, mesmo aqui —
+                    # um módulo de pacote importa outro módulo de pacote pelo
+                    # mesmo caminho por que quem o usa o importou
+                    ip: const *char = pkg_resolve(&cc, path, im) if im->import_system else path_join(&cc.arena, path_dir(&cc.arena, path), im->import_path)
                     add_input(&inputs, &pulled, ip)
                     isp: const *char = cc.arena.printf("%.*s", i32(strlen(ip) - 1), ip)
                     sl2: usize = 0

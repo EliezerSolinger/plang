@@ -524,6 +524,47 @@ def c_string_literal(a: *Arena, bytes: const *char, n: usize) -> const *char:
 # Used by the pscript lowering to point at its runtime: an absolute path baked
 # into generated C would not survive being moved, and a bare path would not
 # survive --out-dir mirroring the source tree.
+# `import <pkg/mod.ph>`: onde ele está, procurando em cada raiz na ORDEM em que
+# foram dadas — a mesma regra do `-I` do C, e pela mesma razão: é a única que dá
+# para explicar numa linha. Devolve None quando não acha; quem chama é que sabe
+# dizer o erro com a posição certa.
+#
+# Mora aqui, e não na sema, porque as DUAS front ends precisam dela e nenhuma das
+# duas deve aprender a maquinaria da outra.
+def pkg_find(a: *Arena, roots: **char, nroots: i32, rel: const *char) -> const *char:
+    for i in range(nroots):
+        cand: const *char = path_join(a, roots[i], rel)
+        n: usize = 0
+        b: *char = read_entire_file_opt(cand, out n)
+        if b != None:
+            # o arquivo será lido de novo (com cache) por quem o carrega. Ler
+            # duas vezes um header de pacote custa microssegundos e evita
+            # declarar `access` (POSIX) mais uma vez à mão
+            free(b)
+            return cand
+    return None
+
+# A frase que diz ONDE se procurou. Sem ela, "não achei" deixa quem lê a
+# adivinhar se o pacote não foi resolvido, se o nome está errado, ou se o
+# `--pkg-path` não chegou até aqui.
+def pkg_where(a: *Arena, roots: **char, nroots: i32) -> const *char:
+    if nroots == 0:
+        return a->strdup("none was given: `--pkg-path <dir>`, repeatable")
+    sb: StrBuf = {0}
+    sb.puts("looked in:")
+    for j in range(nroots):
+        sb.puts(a->printf(" %s", roots[j]))
+    r: const *char = a->printf("%.*s", i32(sb.len), sb.data)
+    sb.deinit()
+    return r
+
+# Os dois caminhos estão no MESMO espaço (ambos relativos ao diretório de
+# trabalho, ou ambos absolutos)? Um `import <>` resolvido só vira include
+# relativo quando estão: com um de cada lado não há caminho relativo entre eles
+# que valha também dentro do espelho do `--out-dir`.
+def same_space(a: const *char, b: const *char) -> bool:
+    return (a[0] == '/') == (b[0] == '/')
+
 def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *char:
     if (from_dir[0] == '/') != (to[0] == '/'):
         return a->strdup(to)

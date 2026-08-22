@@ -85,6 +85,10 @@ def plang_host_os() -> const *char
 def path_dir(a: *Arena, path: const *char) -> const *char
 def path_join(a: *Arena, dir: const *char, rel: const *char) -> const *char
 def path_relative(a: *Arena, from_dir: const *char, to: const *char) -> const *char
+# `import <pkg/mod.ph>` nas raízes de `--pkg-path`: o caminho, ou None
+def pkg_find(a: *Arena, roots: **char, nroots: i32, rel: const *char) -> const *char
+def pkg_where(a: *Arena, roots: **char, nroots: i32) -> const *char
+def same_space(a: const *char, b: const *char) -> bool
 
 # ---------- C string literals ----------
 def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char

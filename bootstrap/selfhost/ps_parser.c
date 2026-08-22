@@ -3156,6 +3156,27 @@ static PsDecl *PsP_parse_enum(PsP *self) {
 
 static PsDecl *PsP_parse_import(PsP *self) {
     Pos pos = PsP_expect(self, TK_IMPORT, "import")->pos;
+    if (PsP_at(self, TK_HEADER) || PsP_at(self, TK_LT)) {
+        PsDecl *hd = ps_decl(self->a, PD_INCLUDE, pos);
+        if (PsP_at(self, TK_HEADER)) {
+            hd->path = PsP_adv(self)->text;
+        } else {
+            PsP_adv(self);
+            const char *hp = "";
+            while (!PsP_at(self, TK_GT) && !PsP_at(self, TK_NEWLINE) && !PsP_at(self, TK_EOF)) {
+                hp = Arena_printf(self->a, "%s%s", hp, spell_tok(PsP_adv(self)));
+            }
+            PsP_expect(self, TK_GT, "import <pkg/module.ph> (missing '>')");
+            hd->path = hp;
+        }
+        hd->is_pmod = 1;
+        hd->import_system = 1;
+        if (!has_suffix_ps(hd->path, ".ph")) {
+            fatal_at(self->file, pos, "`import <...>` names a P module of a package by its header: `import <stl/vec.ph>`. A C header is `include <stdio.h>` (45.5)");
+        }
+        PsP_expect(self, TK_NEWLINE, "import");
+        return hd;
+    }
     if (PsP_at(self, TK_STRING)) {
         PsDecl *pd = ps_decl(self->a, PD_INCLUDE, pos);
         const char *raw = PsP_adv(self)->text;

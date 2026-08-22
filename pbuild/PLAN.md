@@ -65,8 +65,20 @@ sozinho. Estado encontrado e restrição que ele impõe:
       modules, stl, errors (101), p-suite (192) e roundtrip (234) verdes.
       FALTA (bloqueado pelo outro agente): regenerar o seed e rodar `verify`
       inteiro, e ligar o `protocol.sh` ao `verify-all.sh`.
-- [~] **F1 — 1.5(d) FEITA** (2026-08-22); o resto continua bloqueado (mexe em
-      lexer/parser/sema, área do outro agente). `import "x.ph"` dentro de um
+- [~] **F1 — 1.5(d) e `import <>` FEITAS** (2026-08-22); faltam a docstring e a
+      1.5(a) para a forma relativa.
+
+      **`import <pkg/mod.ph>`**: o compilador recebe raízes de busca
+      (`--pkg-path`, repetível) e procura nelas, na ordem — e continua sem saber
+      o que é versão, que é a fronteira que `pbuild/ARQUITETURA.md` desenhou. As
+      três formas (`include <>` de C, `import <>` de pacote, `import "..."`
+      relativo) não se misturam, e `<>` NÃO recua para relativo. O `<>` puxa o
+      `.p` irmão (a 1.5a aplicada só a ele: um pacote é uma unidade), e depois de
+      resolvido vira um import relativo comum, o que faz o back end, o espelho e
+      as respostas do protocolo não precisarem aprender nada sobre pacotes.
+      Vale nas duas linguagens. Portão: `tests/packages.sh`, 14 checagens.
+
+      **1.5(d)** (a parte anterior): `import "x.ph"` dentro de um
       MÓDULO importado passou a valer por inteiro: a varredura é do FECHAMENTO,
       e o `.p` irmão entra na compilação. Mora em `main.p` e não na sema, porque
       `--outputs` não roda a sema — e a resposta 3 tem de dizer o que vai ser
@@ -320,7 +332,7 @@ fino e vira o lugar do teste).
     sai na resposta 5
   - **resposta 5 do protocolo**: a lista canónica da F0 ganha a docstring de
     cada símbolo (a doc NÃO entra no hash — teste de invariância já preso na F0)
-- [ ] **`import <pkg/mod.ph>`**
+- [x] **`import <pkg/mod.ph>`** (FEITA)
   - reusar o caminho do `include <...>` (contextual, reconstrução de tokens —
     `parser.p:1284`); vale em P e em pscript
   - resolução: procura em cada raiz de `--pkg-path` (repetível; o ppack passa
@@ -330,8 +342,13 @@ fino e vira o lugar do teste).
     recusada)
   - erro quando não acha: listar as raízes procuradas (mensagem no padrão da
     casa: explica a decisão, não acusa o token)
-  - `--out-dir`: módulo de pacote espelha sob `build/obj/<pacote>/...` — a
-    regra de espelhamento ganha uma raiz por origem (decisão fina f1.2)
+  - `--out-dir`: o módulo de pacote espelha o CAMINHO REAL dele, como qualquer
+    outro fonte — a proposta f1.2 (`<out>/pkg/<pacote>/...`) foi descartada na
+    implementação: ela exigiria uma segunda regra de espelhamento e um mapa de
+    caminhos, e o espelho normal já resolve, porque o import é reescrito para
+    RELATIVO assim que é resolvido. O preço: a raiz e os fontes têm de ser
+    nomeados do mesmo jeito (ambos relativos ou ambos absolutos), e o
+    compilador recusa com mensagem quando não são
 - [ ] **1.5(a) — `import` implica o módulo (a regra do `.p` irmão)**
   - ao ler `x.ph` (por `"..."` ou `<>`): se `x.p` existe ao lado, ele entra na
     lista de compilação (o mecanismo é o MESMO do `.psc` que puxa `pmod_*.p`

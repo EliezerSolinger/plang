@@ -4,7 +4,7 @@ import "ps_ast.ph"
 # Annotates the tree in place (every expression gets its `type`) and rejects
 # what the language forbids. Runs before the lowering, so ps_lower can trust
 # that what it walks type-checks.
-def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char)
+def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nroots: i32)
 
 # the resolved type of an expression, valid after ps_sema_run
 def ps_type_str(a: *Arena, t: *PsType) -> const *char

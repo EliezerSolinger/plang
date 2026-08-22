@@ -146,6 +146,23 @@ duas formas estiveram no código, cada uma com o seu defeito.
 ela começa deixa o contador em 1 durante todo o laço que multiplica braços — e
 o `-j` deixa de limitar. Custou um deadlock num build limpo para aparecer.
 
+## O pacote, do lado do compilador  ·  `F1`
+
+`--pkg-path <dir>`, repetível, e mais nada. O compilador procura `<pkg/mod.ph>`
+em cada raiz, na ordem, e a primeira que tiver o arquivo ganha — a regra do `-I`
+do C. **Ele não sabe o que é versão**, e é essa ignorância que faz a fronteira
+com o `ppack` ser uma lista de diretórios em vez de um protocolo.
+
+Três decisões que estão no código e merecem estar aqui:
+
+* **`<>` não recua para relativo.** Um `<>` não achado é erro. O recuo
+  silencioso faria um programa compilar por acidente com o arquivo errado.
+* **`<>` puxa o `.p` irmão.** Um pacote é uma unidade; quem o usa não tem de
+  saber como ele é feito por dentro. Para a forma relativa (`"x.ph"`) o contrato
+  antigo fica: quem compila diz o que compila.
+* **depois de resolvido, vira um import relativo comum.** O back end, o espelho
+  do `--out-dir` e as respostas do protocolo não aprendem nada sobre pacotes.
+
 ## As medições que sustentam tudo isto
 
 | | |
