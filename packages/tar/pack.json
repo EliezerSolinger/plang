@@ -1,0 +1,10 @@
+{
+  "name": "tar",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "tar.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "ustar: ler e escrever o envelope que o ecossistema usa, recusando o que não entende"
+}
