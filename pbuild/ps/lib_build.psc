@@ -118,10 +118,14 @@ private def out_dirty(b: Build, e: G.Edge, n: G.Node, newest: int) -> bool:
         if not e.generator and ent.hash != e.hash:
             explain(b, n.p, "o comando mudou")
             return True
-        if newest >= 0 and ent.mtime < newest:
+        if newest >= 0 and ent.vtime < newest:
             # 5: o mtime do disco pode ser novo e o conteúdo velho — uma corrida
-            # que escreveu a saída e morreu no meio deixa exatamente isso
-            explain(b, n.p, "o mtime gravado é mais velho que a entrada mais nova")
+            # que escreveu a saída e morreu no meio deixa exatamente isso. O que
+            # se compara é o `vtime` (quando esta aresta foi CONFERIDA contra as
+            # entradas dela), e não o `mtime` (quando o conteúdo da saída mudou):
+            # numa aresta `restat` os dois divergem, e usar o errado faz a aresta
+            # rodar para sempre. Ver a nota das duas datas em `lib_log.psc`.
+            explain(b, n.p, "a conferência gravada é mais velha que a entrada mais nova")
             return True
     elif not e.generator:
         explain(b, n.p, "não há registro no log")
@@ -175,6 +179,36 @@ private async def load_depfiles(b: Build):
                 continue
             e.implicit.append(nid)
             b.g.nodes[nid].used.append(e.id)
+
+# ---------- a data que VALE ----------
+# Uma ferramenta reescreve a saída mesmo quando ela sai igual — o nosso `plangc`
+# faz isso, e quase toda ferramenta faz. A data no disco muda, o conteúdo não, e
+# um build que olhasse só a data recompilaria o mundo por nada.
+#
+# É o que o `restat` já resolve DENTRO de uma corrida (a poda). O que faltava era
+# ATRAVESSAR corridas: na corrida seguinte a data do disco é nova de novo, e
+# quem lê o arquivo se acha desatualizado. Aqui isso se fecha: para toda saída de
+# aresta `restat` que tem hash de conteúdo no log, se o conteúdo AINDA é aquele,
+# a data que vale é a do log — não a do disco.
+#
+# O custo é ler esses arquivos uma vez por plano. São as saídas do compilador
+# (dezenas neste repositório, centenas na suíte), e é por isso que este motor
+# pode fazer o que o ninja não faz: o ninja mede projetos com centenas de
+# milhares de arestas, e para ele ler tudo seria proibitivo.
+private async def carimbar(b: Build):
+    for e in b.g.edges:
+        if not e.restat:
+            continue
+        for oid in e.outs:
+            n = b.g.nodes[oid]
+            ent = b.lg.get(n.p)
+            if ent.chash == u64(0):
+                continue
+            n.stat_now()
+            if n.mtime == G.MTIME_MISSING or n.mtime == ent.mtime:
+                continue
+            if await content_hash(n.p) == ent.chash:
+                n.mtime = ent.mtime
 
 # ---------- o plano ----------
 private def want_node(b: Build, nid: int, stack: list<int>) -> bool:
@@ -340,6 +374,20 @@ private async def content_hash(p: str) -> u64:
     return G.hash_str(G.FNV_OFF, txt)
 
 # ---------- terminar uma aresta ----------
+private def newest_de(b: Build, e: G.Edge) -> int:
+    """A data da entrada mais nova desta aresta — a mesma conta que o plano faz,
+    e pelo mesmo motivo (as de ORDEM não contam: elas só precisam existir)."""
+    novo = -1
+    for i in e.ins:
+        n = b.g.nodes[i]
+        if n.mtime != G.MTIME_MISSING and n.mtime > novo:
+            novo = n.mtime
+    for j in e.implicit:
+        n2 = b.g.nodes[j]
+        if n2.mtime != G.MTIME_MISSING and n2.mtime > novo:
+            novo = n2.mtime
+    return novo
+
 private def node_done(b: Build, nid: int, prune: bool):
     """Uma saída ficou pronta. Duas coisas podem acontecer com quem depende dela,
     e a diferença entre as duas é o mecanismo inteiro da poda:
@@ -401,13 +449,18 @@ private async def finish(b: Build, e: G.Edge, ok: bool, dur_ms: int):
         if e.restat:
             ch = await content_hash(n.p)
             if antes.chash != u64(0) and ch == antes.chash:
-                # saiu IDÊNTICA: quem a lê não precisa rodar. Guarda-se o mtime
-                # ANTIGO, para que a próxima corrida também não se engane.
+                # saiu IDÊNTICA: quem a lê não precisa rodar, e o nó guarda a
+                # data ANTIGA para que a poda atravesse esta corrida.
                 podar = True
                 n.mtime = antes.mtime
-                b.lg.put(n.p, antes.mtime, dur_ms, e.hash, ch)
+                # No log vão as DUAS datas: a antiga (o conteúdo não mudou) e a
+                # da entrada mais nova (esta aresta está conferida contra ela).
+                # A primeira é o que impede quem lê de recompilar; a segunda é o
+                # que impede ESTA aresta de rodar de novo para sempre. Ver a
+                # nota das duas datas em `lib_log.psc`.
+                b.lg.put(n.p, antes.mtime, newest_de(b, e), dur_ms, e.hash, ch)
         if not podar:
-            b.lg.put(n.p, n.mtime, dur_ms, e.hash, ch)
+            b.lg.put(n.p, n.mtime, newest_de(b, e), dur_ms, e.hash, ch)
         node_done(b, oid, podar)
     for oid2 in e.out_implicit:
         n2 = b.g.nodes[oid2]
@@ -421,7 +474,7 @@ private async def finish(b: Build, e: G.Edge, ok: bool, dur_ms: int):
 # até o limite — é o que impede o paralelismo de desabar para um quando uma
 # aresta longa destranca várias.
 private async def pump(b: Build) -> int:
-    b.alive += 1
+    # o braço já foi CONTADO por quem o criou — ver a nota do laço lá embaixo
     kids: list<Task<int>> = []
     while True:
         if b.fails >= b.op.keep_going:
@@ -459,6 +512,15 @@ private async def pump(b: Build) -> int:
         # acorda ninguém enquanto ele está de pé
         if e.pool != "console":
             while b.alive < b.op.jobs and len(b.ready) > 0 and b.fails < b.op.keep_going:
+                # o braço é contado AO SER CRIADO, e não quando ele começa a
+                # rodar. A diferença não é de estilo: criar uma tarefa não a põe
+                # a correr, então contar lá dentro deixava `alive` em 1 durante
+                # todo este laço — e o laço criava um braço POR ARESTA PRONTA.
+                # Num build limpo isso são centenas de `os.run` ao mesmo tempo,
+                # mais canos abertos do que o `poll` do runtime acompanha, e o
+                # build terminava em "deadlock: awaiting a task that nothing can
+                # finish". O `-j` não limitava nada.
+                b.alive += 1
                 kids.append(pump(b))
     b.alive -= 1
     if len(kids) > 0:
@@ -488,6 +550,7 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
     for dup in g.dupes:
         err(b, "duas arestas produzem o mesmo arquivo: " + dup)
     await load_depfiles(b)
+    await carimbar(b)
     tl = targets
     if len(tl) == 0:
         tl = g.default_targets
@@ -514,6 +577,7 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
     # quem decide se há trabalho é a FILA, e não o contador: o contador é
     # relatório (e a poda o diminui enquanto o build corre)
     if len(b.ready) > 0:
+        b.alive += 1        # o primeiro braço, contado aqui como todos os outros
         await pump(b)
     await L.save(b.lg)
     ok = b.fails == 0 and len(b.errs) == 0
@@ -530,6 +594,7 @@ async def why_dirty(g: G.Graph, logpath: str, targets: list<str>) -> dict<str, s
     b = Build(g, await L.load(logpath), Opts(1, 1, True, True), quiet(), [], 0, 0, 0, [], {})
     reset_plan(g)
     await load_depfiles(b)
+    await carimbar(b)
     tl = targets
     if len(tl) == 0:
         tl = g.default_targets

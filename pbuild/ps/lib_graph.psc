@@ -40,6 +40,30 @@ def hash_str(seed: u64, s: str) -> u64:
         h = (h ^ u64(ord(ch))) %* FNV_PRIME
     return h
 
+def sh_quote(s: str) -> str:
+    """Aspas SIMPLES em volta de tudo, e a única fuga é a própria aspa simples —
+    que se fecha, se escapa e se reabre. Dentro de aspas simples o shell não
+    expande nada: nem `$`, nem `` ` ``, nem `*`, nem `~`. É a única forma de
+    aspeamento de shell que não tem exceção."""
+    if len(s) == 0:
+        return "''"
+    seguro = True
+    for ch in s:
+        c = ord(ch)
+        ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if not ok and ch != "/" and ch != "." and ch != "_" and ch != "-" and ch != "=" and ch != "+" and ch != ",":
+            seguro = False
+            break
+    if seguro:
+        return s
+    out = "'"
+    for ch2 in s:
+        if ch2 == "'":
+            out += "'\\''"
+        else:
+            out += ch2
+    return out + "'"
+
 # ---------- o nó: um arquivo ----------
 const MTIME_UNKNOWN: int = -1
 const MTIME_MISSING: int = -2

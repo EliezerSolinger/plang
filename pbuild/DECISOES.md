@@ -133,6 +133,18 @@ compilador, outra árvore, outra ferramenta: continua sendo erro.
 **`env=` substitui, então `--cpp` ganha da variável de ambiente.** Um comando
 sem `PATH` não acha o `cc`. O que a ferramenta aceita por argumento é sempre
 melhor que o que ela aceita por ambiente — e de quebra entra no hash da aresta.
+Para o arreio de fora, que só se configura por ambiente, o `/usr/bin/env K=V`
+como argv[0] resolve: ele ACRESCENTA ao que herdou, e não há shell no meio.
+
+**Duas datas no log, não uma.** Numa aresta `restat` a pergunta "quando o
+conteúdo mudou" e a pergunta "contra que entradas isto foi conferido" têm
+respostas diferentes, e uma data só não diz as duas: guardar a antiga faz a
+aresta rodar para sempre, guardar a nova faz quem lê recompilar por nada. As
+duas formas estiveram no código, cada uma com o seu defeito.
+
+**Contar o braço AO CRIAR.** Criar uma tarefa não a põe a correr. Contar quando
+ela começa deixa o contador em 1 durante todo o laço que multiplica braços — e
+o `-j` deixa de limitar. Custou um deadlock num build limpo para aparecer.
 
 ## As medições que sustentam tudo isto
 
@@ -152,7 +164,9 @@ melhor que o que ela aceita por ambiente — e de quebra entra no hash da aresta
 | a migração `static`→`private` | 1 965 ocorrências (+20 em testes) |
 | mover o `stl` | 41 referências, e **obriga a regerar o seed** |
 | descritores de tipo hoje | 38 no editor portado, ~470 linhas de 24 601 (1,9 %) |
-| **o build do padrão pelo `ppack`** | 68 s com `-j 6` (escada + ppack + pstudio) |
+| **o build do padrão pelo `ppack`** | 71 s do zero · 7,3 s sem mudança |
+| **`ppack verify`** (o verify-all inteiro) | **5m48 do zero · 7,7 s sem mudança** |
+| tocar um fonte cujo C sai igual | 4 arestas, 7,7 s (o `restat` a atravessar corridas) |
 | **a suíte do pscript como grafo** | 585 arestas · 72 s do zero · 6,6 s sem mudança |
 | **o `build.ninja` exportado** | 639 regras, determinista |
 | o runtime como OBJETO | 6 compilações em vez de 600 (uma por programa) |

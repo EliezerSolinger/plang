@@ -144,6 +144,32 @@ sozinho. Estado encontrado e restrição que ele impõe:
       linguagem, do usuário), as suítes de placar com piso, o `build.ninja`
       comitado, e a **parte D — a TROCA**, que fica esperando o outro agente
       largar o Makefile.
+- [x] **O motor cresceu três vezes construindo de verdade** (2026-08-22), e as
+      três só apareceram porque o descritor passou a construir o repositório
+      inteiro:
+      1. **o `-j N` não limitava nada.** O contador de braços era incrementado
+         quando o braço COMEÇAVA a rodar, e criar uma tarefa não a põe a correr:
+         o laço que multiplica braços via sempre `alive == 1` e criava um braço
+         POR ARESTA PRONTA. Num build limpo são centenas de processos ao mesmo
+         tempo, mais canos do que o `poll` do runtime acompanha, e o build
+         terminava em "deadlock: awaiting a task that nothing can finish".
+         Passou a contar AO CRIAR. Portão: o relator conta quem começou e quem
+         terminou, e o pico nunca passa do limite.
+      2. **o `restat` não atravessava corridas.** Guardar a data ANTIGA (para
+         não sujar quem lê) fazia o teste 5 responder "estou velho" em toda
+         corrida seguinte — a aresta rodava para sempre, e o `ppack verify`
+         refazia 296 arestas por nada. O log passou a guardar DUAS datas: quando
+         o CONTEÚDO mudou (para quem lê) e quando a aresta foi CONFERIDA contra
+         as entradas (para ela mesma). Formato v2.
+      3. **e a poda passou a atravessar corridas**: no plano, uma saída de
+         aresta `restat` cujo hash de conteúdo ainda bate com o do log vale pela
+         data do LOG, não pela do disco. É ler as saídas do compilador uma vez
+         por plano — o que o ninja não pode fazer (ele mede projetos com
+         centenas de milhares de arestas) e nós podemos.
+      **Medido**: `ppack build` do zero 71 s, sem mudança 7,3 s; tocar um fonte
+      cujo C sai igual = 4 arestas e 7,7 s. `ppack verify` (o `verify-all`
+      inteiro, como grafo) **5m48 do zero e 7,7 s sem mudança** — contra ~20 min
+      em toda corrida do `verify-all.sh`.
 
 ---
 
@@ -509,7 +535,9 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
   - [x] ponto fixo: nó de veredicto `s2 == s3` byte a byte (`diff -rq`, com a
         saída dele como carimbo — sem shell, porque a saída da aresta vai para
         arquivo por campo e quem decide é o STATUS)
-  - [ ] o gate de tag de libc (o grep do verify-all vira veredicto)
+  - [x] o gate de tag de libc: um portão pela NEGATIVA (`nao_acha`), que é o
+        único lugar do descritor onde há um shell — inverter o status de um
+        comando é o que o `!` faz, e o aspeamento é gerado por nós
 - [x] o runtime do pscript, e a lista dos seis módulos em camadas passou a ter
       UM dono (`RT_MODULOS` em `lib_targets.psc`). Ele vira OBJETO uma vez por
       contexto: o `psbuild.sh` recompila os seis a partir do C em cada programa,
@@ -528,8 +556,17 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
       refaz. Quem julga é o `verdict` (`pbuild/ps/verdict.psc`), porque o status
       de saída de um caso é DADO e não veredicto.
       **Medido: 585 arestas, 72 s do zero, 6,6 s quando nada mudou.**
-- [ ] as demais suítes com pisos; QBE fixed point; oráculos/conformance/
-      gc-stress como arestas `command()` sobre os harnesses existentes
+- [x] as demais suítes como arestas `harness()` sobre os arreios existentes —
+      `run.sh` nas três leituras (C, QBE, C89), `gc-stress`, `protocol`,
+      `knobs`, `net-late`, `print-atomic`, `run-cmd`. Eles NÃO foram reescritos,
+      e é decisão: funcionam, são lidos por gente que não vai ler pscript, e
+      reescrevê-los seria trocar risco por nada. Cada um ganha o diretório de
+      trabalho DELE (`OUT=`), porque duas corridas do `run.sh` no mesmo lugar se
+      atropelam. A configuração vai por `/usr/bin/env K=V ...` como argv[0]:
+      o `env=` de uma aresta SUBSTITUI o ambiente, e um arreio sem `PATH` não
+      acha o `bash`.
+      FALTA: os PISOS de placar (c-suite ≥ 220, wacct ≥ 741), que precisam de um
+      veredicto que leia o número do placar.
 - [ ] `pack.json` de WORKSPACE na raiz (membros: `packages/*` quando existirem;
       alvo padrão; é DADO — o painel da IDE o edita em F6)
 
@@ -552,7 +589,8 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
       inteiro, não a primeira falha), veredicto SEMPRE roda, e o carimbo da
       suíte NÃO é alvo padrão: construir não é testar. Falta o placar por suíte
       e os pisos, que vêm com as outras suítes.
-- [ ] `ppack verify` — o alvo do verify-all inteiro
+- [x] `ppack verify` — o `verify-all` inteiro, como GRAFO: o que não depende um
+      do outro roda junto, e o que não mudou não roda
 - [x] `ppack clean` — apaga o que o build produziu, MANTÉM `build/pkg`
 - [x] `ppack explain <saída>` e `ppack graph` (JSON); `why`/`tree`/`lock` são
       de F4 e ficam com ela

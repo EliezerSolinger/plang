@@ -28,7 +28,10 @@ PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
 CC=${CC:-cc}
 BACKEND=${BACKEND:-c}
 STD=${STD:-}
-OUT=tests/out
+# o diretório de trabalho é sobreponível para que DUAS corridas possam existir
+# ao mesmo tempo (a suíte C e a QBE, por exemplo). Duas corridas no mesmo `OUT`
+# se atropelam e o relatório das duas fica ilegível — aconteceu.
+OUT=${OUT:-tests/out}
 QBE=qbe/qbe
 
 # ---------- setup ----------

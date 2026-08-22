@@ -5,7 +5,8 @@ aqui. A IDE (F6) é a outra frente, e pinta os mesmos eventos — é essa separa
 que faz o motor ser reutilizável em vez de ser um script com `print` no meio.
 
     ppack build [alvo...]     constrói (o padrão é o alvo padrão do grafo)
-    ppack test                roda as suítes (constrói o que faltar antes)
+    ppack test                roda a suíte do pscript, caso a caso
+    ppack verify              a verificação inteira (o `verify-all`, como grafo)
     ppack run <alvo> [args]   constrói o alvo e roda-o
     ppack explain <saída>     por que ESTA saída está suja
     ppack graph               o grafo em JSON, para inspecionar ou versionar
@@ -38,8 +39,11 @@ def on_plan(total: int):
     if total == 0:
         print("nada a fazer")
 
+rotulos: dict<int, str> = {}
+
 def on_start(id: int, what: str):
-    pass
+    global rotulos
+    rotulos[id] = what
 
 def on_end(id: int, st: int, out: str, ms: int):
     global feitas
@@ -52,7 +56,10 @@ def on_end(id: int, st: int, out: str, ms: int):
             print(out.rstrip())
     else:
         falhou = True
-        print(marca, "FALHOU (status " + str(st) + ")")
+        # QUAL aresta falhou. Sem isto o relatório diz que algo deu errado e não
+        # diz o quê — e num build de seiscentas arestas isso não é relatório.
+        quem = rotulos[id] if id in rotulos else "?"
+        print(marca, "FALHOU (status " + str(st) + "):", quem)
         if len(out) > 0:
             print(out.rstrip())
 
@@ -71,6 +78,8 @@ def on_done(ok: bool, fails: int):
 # vazio porque a linha só faz sentido junto do resultado quando N rodam ao mesmo
 # tempo — com paralelismo, "começou" e "terminou" se intercalam
 def on_start_verbose(id: int, what: str):
+    global rotulos
+    rotulos[id] = what
     print("  ->", what)
 
 async def cmd_build(alvos: list<str>, jobs: int, keep: int, dry: bool, query: str, verbose: bool) -> int:
@@ -109,6 +118,16 @@ async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int
     if len(saida) > 0:
         print(saida.rstrip())
     return r.status()
+
+async def cmd_verify(jobs: int, query: str, verbose: bool) -> int:
+    """O `verify-all.sh` inteiro, como GRAFO. Os oito passos dele são
+    sequenciais e levam o que levam os oito somados; aqui o que não depende um
+    do outro roda junto, e o que não mudou não roda."""
+    g = await BP.montar(query)
+    st = on_start_verbose if verbose else on_start
+    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
+    ok = await B.build(g, LOG, [BP.VERIFY], B.Opts(jobs, 1000000, False, False), rep)
+    return 0 if ok else 1
 
 async def cmd_test(jobs: int, query: str, verbose: bool) -> int:
     """As suítes. Duas diferenças de `build`, e as duas são deliberadas:
@@ -182,7 +201,7 @@ def rmtree(d: str) -> int:
     return n
 
 def uso():
-    print("uso: ppack <build|test|run|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("uso: ppack <build|test|verify|run|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
 
 async def main() -> int:
     args = sys.argv[1:]
@@ -241,6 +260,8 @@ async def main() -> int:
         return await cmd_build(alvos, jobs, keep, dry, query, verbose)
     if cmd == "test":
         return await cmd_test(jobs, query, verbose)
+    if cmd == "verify":
+        return await cmd_verify(jobs, query, verbose)
     if cmd == "run":
         for x in resto:
             alvos.append(x)

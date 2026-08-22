@@ -40,6 +40,8 @@ argumento começa e acaba, porque nunca houve uma linha — houve um vetor.
 import lib_graph as G
 
 # ---------- as duas gramáticas ----------
+# (o aspeamento de SHELL mora em `lib_graph`, porque a exportação não é a única
+# que precisa dele — ver `G.sh_quote`)
 # O ninja e o shell escapam coisas DIFERENTES, e confundi-las é o defeito
 # clássico. `ninja_path` protege o que o ninja lê (o `$` dele, o `:` que separa
 # saídas de regra, o espaço que separa caminhos); `sh_quote` protege o que o
@@ -58,30 +60,6 @@ def ninja_path(s: str) -> str:
         else:
             out += ch
     return out
-
-def sh_quote(s: str) -> str:
-    """Aspas SIMPLES em volta de tudo, e a única fuga é a própria aspa simples —
-    que se fecha, se escapa e se reabre. Dentro de aspas simples o shell não
-    expande nada: nem `$`, nem `` ` ``, nem `*`, nem `~`. É a única forma de
-    aspeamento de shell que não tem exceção."""
-    if len(s) == 0:
-        return "''"
-    seguro = True
-    for ch in s:
-        c = ord(ch)
-        ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
-        if not ok and ch != "/" and ch != "." and ch != "_" and ch != "-" and ch != "=" and ch != "+" and ch != ",":
-            seguro = False
-            break
-    if seguro:
-        return s
-    out = "'"
-    for ch2 in s:
-        if ch2 == "'":
-            out += "'\\''"
-        else:
-            out += ch2
-    return out + "'"
 
 def esc_command(s: str) -> str:
     """O texto do comando ainda passa pelo leitor do ninja, que come `$`. Uma
@@ -103,10 +81,10 @@ def cmdline(e: G.Edge) -> str:
     redirecionamento se ela mandava a saída para arquivo."""
     partes: list<str> = []
     for a in e.argv:
-        partes.append(sh_quote(a))
+        partes.append(G.sh_quote(a))
     linha = " ".join(partes)
     if len(e.stdout_to) > 0:
-        linha += " > " + sh_quote(e.stdout_to)
+        linha += " > " + G.sh_quote(e.stdout_to)
     if len(e.env) > 0:
         # a MESMA semântica do nosso `os.run`: substitui, não mescla. `env -i`
         # é o que diz isso em shell, e as chaves vão em ordem para que dois
@@ -117,12 +95,12 @@ def cmdline(e: G.Edge) -> str:
         ks = sorted(ks)
         pre: list<str> = ["env", "-i"]
         for k2 in ks:
-            pre.append(sh_quote(k2 + "=" + e.env[k2]))
+            pre.append(G.sh_quote(k2 + "=" + e.env[k2]))
         linha = " ".join(pre) + " " + linha
     if len(e.cwd) > 0:
-        linha = "cd " + sh_quote(e.cwd) + " && " + linha
+        linha = "cd " + G.sh_quote(e.cwd) + " && " + linha
     if len(e.cwd) > 0 or len(e.env) > 0:
-        linha = "sh -c " + sh_quote(linha)
+        linha = "sh -c " + G.sh_quote(linha)
     return esc_command(linha)
 
 private def paths(g: G.Graph, ids: list<int>) -> str:

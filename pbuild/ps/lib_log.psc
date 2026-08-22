@@ -1,11 +1,14 @@
 """O LOG do build, e o `depfile` que o `cc` deixa para trás.
 
-O log é o que faz um build INCREMENTAL ser possível, e ele guarda três coisas por
-saída, cada uma respondendo a uma pergunta que o disco sozinho não responde:
+O log é o que faz um build INCREMENTAL ser possível, e ele guarda por saída
+cinco coisas, cada uma respondendo a uma pergunta que o disco sozinho não
+responde:
 
-  * o **mtime** de quando ela foi produzida — porque o mtime de agora pode ser o
-    de um `touch`, e porque uma corrida que morreu no meio deixa um arquivo novo
-    com conteúdo velho;
+  * o **mtime** de quando o CONTEÚDO dela mudou pela última vez — porque o mtime
+    de agora pode ser o de um `touch`, e porque uma corrida que morreu no meio
+    deixa um arquivo novo com conteúdo velho;
+  * o **vtime**, a data da entrada mais nova quando a aresta foi conferida — que
+    é uma pergunta DIFERENTE da anterior, e a nota logo abaixo diz por quê;
   * o **hash do comando** que a produziu — é o que pega "mudei uma flag", que
     nenhuma comparação de datas pega;
   * o **hash do CONTEÚDO** da saída — que o ninja NÃO guarda, e que é o que faz
@@ -25,13 +28,29 @@ que alguém abre quando o incremental faz algo inesperado.
 import os
 import path
 
-const LOG_HEADER: str = "# pbuild log v1"
+const LOG_HEADER: str = "# pbuild log v2"
 
 record LogEnt:
-    mtime: int
+    mtime: int     # quando o CONTEÚDO desta saída mudou pela última vez
+    vtime: int     # ... e a data da entrada mais nova quando ela foi CONFERIDA
     dur_ms: int
     hash: u64      # o hash do COMANDO que produziu esta saída
     chash: u64     # ... e o hash do CONTEÚDO dela, para o `restat`
+
+# Por que DUAS datas, que é a pergunta que este arquivo tem de responder.
+#
+# Numa aresta `restat` as duas divergem, e é justamente aí que o incremental se
+# ganha ou se perde. O gerador rodou (a entrada mudou), a saída saiu IDÊNTICA:
+#
+#   * quem LÊ a saída não precisa rodar — para ele, ela não mudou, e a data que
+#     vale é a de quando o conteúdo mudou pela última vez. É o `mtime`.
+#   * a ARESTA que a produziu, essa está em dia com as entradas de agora, e não
+#     pode rodar de novo na corrida seguinte. É o `vtime`.
+#
+# Uma data só não consegue dizer as duas coisas. Guardar a antiga fazia a aresta
+# rodar para sempre; guardar a nova fazia quem lê recompilar por nada. As duas
+# formas estiveram no código, cada uma com o seu defeito, e é por isso que a
+# explicação está aqui.
 
 # ---------- hexadecimal, à mão ----------
 # O hash é u64 e não cabe num `int` com sinal, então ele não pode ir ao log em
@@ -76,13 +95,13 @@ struct Log:
         é o que "nunca foi construída" quer dizer para quem decide sujeira."""
         if key in self.ents:
             return self.ents[key]
-        return LogEnt(-2, 0, u64(0), u64(0))
+        return LogEnt(-2, -2, 0, u64(0), u64(0))
 
     def has(self, key: str) -> bool:
         return key in self.ents
 
-    def put(self, key: str, mtime: int, dur_ms: int, h: u64, ch: u64):
-        self.ents[key] = LogEnt(mtime, dur_ms, h, ch)
+    def put(self, key: str, mtime: int, vtime: int, dur_ms: int, h: u64, ch: u64):
+        self.ents[key] = LogEnt(mtime, vtime, dur_ms, h, ch)
         self.dirty = True
 
 async def load(p: str) -> Log:
@@ -100,11 +119,12 @@ async def load(p: str) -> Log:
         if len(line) == 0:
             continue
         parts = line.split("\t")
-        if len(parts) != 5:
+        if len(parts) != 6:
             # uma linha estragada não invalida o log inteiro: ela vira "essa
             # saída nunca foi construída", que é o pior caso seguro
             continue
-        lg.ents[parts[4]] = LogEnt(int(parts[0]), int(parts[1]), from_hex(parts[2]), from_hex(parts[3]))
+        lg.ents[parts[5]] = LogEnt(int(parts[0]), int(parts[1]), int(parts[2]),
+                                   from_hex(parts[3]), from_hex(parts[4]))
     return lg
 
 async def save(lg: Log):
@@ -123,7 +143,8 @@ async def save(lg: Log):
     ks = sorted(ks)     # ordenado: dois builds iguais dão logs iguais
     for k2 in ks:
         e = lg.ents[k2]
-        out += str(e.mtime) + "\t" + str(e.dur_ms) + "\t" + to_hex16(e.hash) + "\t" + to_hex16(e.chash) + "\t" + k2 + "\n"
+        out += (str(e.mtime) + "\t" + str(e.vtime) + "\t" + str(e.dur_ms) + "\t"
+                + to_hex16(e.hash) + "\t" + to_hex16(e.chash) + "\t" + k2 + "\n")
     f = await open(lg.p, "w")
     await f.write(out)
     await f.close()

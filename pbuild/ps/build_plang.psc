@@ -81,7 +81,17 @@ async def escada(c: T.Ctx) -> str:
     stamp = path.join(BUILD, "stamp/fixpoint")
     T.compare_dirs(c, path.join(BUILD, "s2"), path.join(BUILD, "s3"), stamp, todos,
                    "ponto fixo: s2 == s3")
-    return stamp
+
+    # 5) o portão do typedef de libc. O `sema` canonicaliza no TAG de propósito
+    #    (é assim que os back ends aprendem o layout), e quem tem de imprimir o
+    #    typedef é o back end C. Em glibc a build passa dos dois jeitos, então o
+    #    único teste possível é sobre o TEXTO do C gerado — e ele é pela
+    #    negativa: estas quatro palavras não podem aparecer.
+    tag = T.nao_acha(c, "_IO_FILE\\|__sFILE\\|_G_config\\|__gnuc_va_list", s2all,
+                     path.join(BUILD, "stamp/sem-tag-libc"),
+                     "sem tag interna de libc no C gerado")
+    return T.junta(c, path.join(BUILD, "stamp/compilador"), [stamp, tag],
+                   "o compilador confere a si mesmo")
 
 # ---------- o que é escrito em pscript ----------
 # O compilador é P; tudo o que está por cima dele é pscript, e todo programa em
@@ -125,24 +135,19 @@ async def pscript_tudo(c: T.Ctx) -> dict<str, str>:
 # A lista abaixo é a do `Makefile`, e é a última cópia dela: quando a troca
 # acontecer (parte D), o alvo `pstudio` do Makefile vira uma chamada a `ppack`.
 def pstudio_p() -> list<str>:
-    """O que o compilador NÃO emite junto com o `app.psc`.
+    """O que o FECHAMENTO de imports não alcança.
 
-    `import "shim.ph"` no arquivo de cima faz o compilador emitir `shim.c` (e,
-    por ele, `pgfx`, `pgfx_raster` e `font_atlas`) — a resposta 3 já os lista, e
-    quem os pede é o `psc_program_com`. O que sobra é o realce: `lib_hl.psc`
-    importa `"hl.ph"` de dentro de um MÓDULO, e um `import` a essa profundidade
-    não puxa o `.p` para a emissão. É a mesma lista que o `Makefile` carrega, e
-    a assimetria está anotada em `pbuild/PLAN.md` — quando ela se resolver, esta
-    função encolhe para nada."""
-    fontes: list<str> = []
-    for f in T.glob("stl", ".ph"):
-        fontes.append(f)
-    for h in ["selfhost/plang.ph", "selfhost/ast.ph", "selfhost/lexer.ph",
-              "pstudio/ps/hl.ph"]:
-        fontes.append(h)
-    for d in ["pstudio/ps/hl.p", "selfhost/lexer.p", "selfhost/utf8.p", "selfhost/util.p"]:
-        fontes.append(d)
-    return fontes
+    Desde a 1.5(d) o compilador puxa o módulo P de qualquer `import "x.ph"` do
+    fechamento, e não só do arquivo de cima: `lib_hl.psc` importa `"hl.ph"`, e
+    `hl.c` — e o `lexer.c` que ele usa — vêm sozinhos. A lista, que tinha
+    dezanove entradas copiadas do `Makefile`, ficou com duas.
+
+    E as duas que sobram não sobram por falta do compilador: `plang.ph` DECLARA
+    `fatal_at` e quem o implementa é `util.p`, um arquivo com outro nome. Não há
+    aresta de import ligando os dois, e nenhuma regra de fechamento acharia isso
+    — é conhecimento deste repositório, e conhecimento deste repositório é
+    exatamente o que um descritor existe para carregar."""
+    return ["selfhost/util.p", "selfhost/utf8.p"]
 
 
 async def pstudio(c: T.Ctx) -> str:
@@ -217,6 +222,71 @@ private async def ler(p: str) -> str:
     return t
 
 
+# ---------- a verificação inteira ----------
+# O `verify-all.sh` roda oito passos em sequência e leva o que levam os oito
+# somados. Aqui eles são ARESTAS: o que não depende um do outro roda junto, e o
+# que não mudou não roda. O que cada uma faz continua sendo o arreio de sempre —
+# não há nada reescrito, e é assim que se quer: eles funcionam, e são lidos por
+# gente que não vai ler pscript.
+#
+# Cada arreio ganha o diretório de trabalho DELE (`OUT=`), porque duas corridas
+# do `tests/run.sh` no mesmo lugar se atropelam — e o relatório das duas fica
+# ilegível. Isto já custou uma investigação.
+const VERIFY: str = "build/t/stamp/verify"
+
+def suites_de_fora() -> list<str>:
+    # a MESMA lista do `verify-all.sh`, e por isso `pstudio` e `roundtrip` estão
+    # aqui: uma verificação que roda menos que a de antes não é a mesma
+    return ["cases", "modules", "stl", "p-suite", "errors", "pstudio", "roundtrip", "pscript"]
+
+async def verificacao(c: T.Ctx, plangc: str, suite: str, fixo: str, editor: str) -> str:
+    logs: list<str> = []
+    logdir = path.join(BUILD, "t/log")
+    gating = suites_de_fora()
+
+    # as três leituras do mesmo corpus: o C, o QBE e o C89. São a mesma suíte
+    # com o mesmo compilador, e é justamente por isso que valem — o que elas
+    # comparam é o BACK END.
+    for modo in [["c", ""], ["qbe", "qbe"], ["c89", ""]]:
+        vars: dict<str, str> = {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h", modo[0])}
+        if len(modo[1]) > 0:
+            vars["BACKEND"] = modo[1]
+        if modo[0] == "c89":
+            vars["STD"] = "c89"
+        argv: list<str> = ["bash", "tests/run.sh"]
+        for x in gating:
+            argv.append(x)
+        logs.append(T.harness(c, "suite-" + modo[0], argv, vars, [plangc], logdir,
+                              "suíte " + modo[0]))
+
+    # o coletor a cada ponto seguro, e o protocolo que o descritor consome
+    logs.append(T.harness(c, "gc-stress", ["bash", "tests/gc-stress.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "gc-stress"))
+    logs.append(T.harness(c, "protocol", ["bash", "tests/protocol.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "protocolo"))
+    logs.append(T.harness(c, "knobs", ["bash", "tests/knobs.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "knobs"))
+    logs.append(T.harness(c, "net-late", ["bash", "tests/net-late.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "net-late"))
+    logs.append(T.harness(c, "print-atomic", ["bash", "tests/print-atomic.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "print atômico"))
+    logs.append(T.harness(c, "run-cmd", ["bash", "tests/run-cmd.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "run-cmd"))
+
+    # a suíte do pscript como GRAFO entra junto: ela é a mesma coisa que a
+    # `suite-c` mede, por outro caminho e caso a caso — e é a que roda rápido
+    tudo: list<str> = []
+    for l in logs:
+        tudo.append(l)
+    tudo.append(suite)
+    # o PONTO FIXO (o compilador reproduz a si mesmo) e o editor: os passos 2, 3
+    # e 7 do `verify-all`, que já são arestas deste grafo
+    tudo.append(fixo)
+    if len(editor) > 0:
+        tudo.append(editor)
+    return T.junta(c, VERIFY, tudo, "verify: " + str(len(tudo)) + " partes")
+
+
 async def montar(query: str) -> G.Graph:
     """`query` é o compilador que RESPONDE as perguntas do protocolo enquanto o
     grafo é montado — normalmente o que já está na máquina. Quem RODA em cada
@@ -236,7 +306,8 @@ async def montar(query: str) -> G.Graph:
     cps.query = query
     bins = await pscript_tudo(cps)
     editor = await pstudio(cps)
-    await suite_pscript(cps, bins["verdict"])
+    suite = await suite_pscript(cps, bins["verdict"])
+    await verificacao(cps, PLANGC_S2, suite, stamp, editor)
 
     # o alvo padrão é o que "está construído" quer dizer: o compilador confere a
     # si mesmo, e as ferramentas de cima existem. As suítes são um alvo que se

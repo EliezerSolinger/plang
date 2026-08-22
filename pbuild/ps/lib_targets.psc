@@ -517,6 +517,69 @@ def junta(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:
     return stamp
 
 
+# ---------- um arreio de fora ----------
+# Os corpora (`tests/run.sh`, `gc-stress.sh`, os oráculos) NÃO são reescritos
+# aqui, e isso é decisão e não preguiça: eles funcionam, são lidos por gente que
+# não vai ler pscript, e reescrevê-los seria trocar risco por nada. O que muda é
+# que passam a ser ARESTAS — entram no grafo, rodam em paralelo com o resto, e
+# não rodam de novo quando nada que os alimenta mudou.
+#
+# A configuração deles vem por VARIÁVEL DE AMBIENTE (`PLANGC=`, `BACKEND=`), e é
+# aí que mora a única sutileza: o `env=` de uma aresta SUBSTITUI o ambiente, e um
+# arreio sem `PATH` não acha o `bash`. A saída é o `/usr/bin/env` como argv[0]:
+# ele ACRESCENTA ao ambiente que herdou, o vetor de argumentos continua exato, e
+# não há shell no meio para reinterpretar nada.
+def harness(c: Ctx, nome: str, argv: list<str>, vars: dict<str, str>,
+            ins: list<str>, logdir: str, desc: str) -> str:
+    linha: list<str> = ["env"]
+    ks: list<str> = []
+    for k in vars:
+        ks.append(k)
+    ks = sorted(ks)     # ordenado: o hash da aresta não pode depender da ordem
+    for k2 in ks:
+        linha.append(k2 + "=" + vars[k2])
+    for a in argv:
+        linha.append(a)
+    log = path.join(logdir, nome + ".log")
+    e = G.new_edge(linha)
+    for i in ins:
+        e.ins.append(c.g.node(i).id)
+    e.outs.append(c.g.node(log).id)
+    e.stdout_to = log
+    e.desc = desc + " (relatório em " + log + ")"
+    e.target = c.target.name
+    c.g.add_edge(e)
+    return log
+
+
+# ---------- um portão pela NEGATIVA ----------
+def nao_acha(c: Ctx, padrao: str, arquivos: list<str>, stamp: str, desc: str) -> str:
+    """Passa quando o padrão NÃO aparece em nenhum dos arquivos.
+
+    É o formato de vários portões que valem a pena, e o do `verify-all` que
+    guarda a regressão do typedef de libc: em glibc a build passa dos dois
+    jeitos, então o teste tem de ser sobre o TEXTO do C gerado.
+
+    Aqui há um shell, e é o único lugar do descritor onde há: o que se quer é o
+    INVERSO do status de um comando, e inverter status é o que o `!` do shell
+    faz. O aspeamento é gerado por nós (`G.sh_quote`), que é o que o torna
+    correto — e os arquivos são ENTRADAS da aresta, então nenhum deles pode
+    faltar e fazer o `grep` falhar por outro motivo."""
+    cmd = "! grep -l -- " + G.sh_quote(padrao)
+    for f in arquivos:
+        cmd += " " + G.sh_quote(f)
+    cmd += " > /dev/null"
+    e = G.new_edge(["/bin/sh", "-c", cmd])
+    for i in arquivos:
+        e.ins.append(c.g.node(i).id)
+    e.outs.append(c.g.node(stamp).id)
+    e.stdout_to = stamp
+    e.desc = desc
+    e.target = c.target.name
+    c.g.add_edge(e)
+    return stamp
+
+
 # ---------- comandos e verificações ----------
 def command(c: Ctx, argv: list<str>, ins: list<str>, outs: list<str>, desc: str) -> G.Edge:
     """A aresta crua, sempre disponível. Quem precisa de algo que a biblioteca

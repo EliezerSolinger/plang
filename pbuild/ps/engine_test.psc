@@ -14,6 +14,7 @@ import sys
 import lib_graph as G
 import lib_build as B
 import lib_ninja as N
+import lib_targets as T
 
 const DIR: str = "tests/out/pbuild"
 
@@ -32,16 +33,27 @@ def check(what: str, want: str, got: str):
 # ---------- um relator que só CONTA ----------
 ran: list<str> = []
 order: list<str> = []
+# quantas arestas estão EM VOO agora, e quantas chegaram a estar: é como se
+# observa o `-j` de fora, sem olhar para dentro do motor
+em_voo: int = 0
+pico: int = 0
 
 def r_plan(total: int):
     pass
 
 def r_start(id: int, what: str):
     global order
+    global em_voo
+    global pico
     order.append(what)
+    em_voo += 1
+    if em_voo > pico:
+        pico = em_voo
 
 def r_end(id: int, st: int, out: str, ms: int):
     global ran
+    global em_voo
+    em_voo -= 1
     ran.append(str(st))
 
 def r_done(ok: bool, fails: int):
@@ -65,9 +77,13 @@ def reset():
     novo: list<str> = []
     novo2: list<str> = []
     novo3: list<str> = []
+    global em_voo
+    global pico
     ran = novo
     order = novo2
     erros = novo3
+    em_voo = 0
+    pico = 0
 
 private def opts(jobs: int) -> B.Opts:
     return B.Opts(jobs, 1, False, False)
@@ -222,6 +238,30 @@ async def caso_restat():
     # reescreve o arquivo e o mtime muda —, e é por isso que aqui ele compara
     # conteúdo.
     check("restat: so o gerador roda de novo", "1", str(len(ran)))
+
+    # E A CORRIDA SEGUINTE NÃO RODA NADA. Este é o teste que separa "não
+    # recompilei desta vez" de "não recompilo mais": o gerador reescreveu
+    # `d.mid` (data nova no disco, mesmo conteúdo), e a entrada dele ficou mais
+    # nova que a data que o log tinha guardado. Sem os dois consertos — a data
+    # da ENTRADA MAIS NOVA no log, e a data do LOG valendo para uma saída cujo
+    # conteúdo não mudou — o gerador rodava em toda corrida, para sempre, e o
+    # `ppack verify` refazia 296 arestas por nada. Foi assim que apareceu.
+    reset()
+    g3 = G.new_graph()
+    gen3 = G.new_edge(["/bin/sh", "-c", "echo constante > " + DIR + "/d.mid"])
+    gen3.ins.append(g3.node(DIR + "/d.in").id)
+    gen3.outs.append(g3.node(DIR + "/d.mid").id)
+    gen3.restat = True
+    gen3.desc = "gera d.mid"
+    g3.add_edge(gen3)
+    use3 = G.new_edge(["/bin/sh", "-c", "cat " + DIR + "/d.mid > " + DIR + "/d.out"])
+    use3.ins.append(g3.node(DIR + "/d.mid").id)
+    use3.outs.append(g3.node(DIR + "/d.out").id)
+    use3.desc = "usa d.mid"
+    g3.add_edge(use3)
+    g3.default_targets.append(DIR + "/d.out")
+    await B.build(g3, lg, [], opts(1), rep())
+    check("restat: a corrida seguinte nao roda nada", "0", str(len(ran)))
 
 async def caso_paralelo_e_ordem():
     """Oito arestas independentes com quatro braços, e a mais CARA primeiro. O
@@ -512,6 +552,65 @@ async def caso_ninja():
     # comitado que muda de ordem a cada corrida é um diff por nada
     check("ninja: determinista", "True", str(N.emit(g) == txt))
 
+async def caso_limite_de_bracos():
+    """O `-j N` limita MESMO: nunca há mais de N arestas em voo.
+
+    O contador de braços era incrementado quando o braço COMEÇAVA a rodar, e
+    criar uma tarefa não a põe a correr — então o laço que multiplica braços via
+    sempre `alive == 1` e criava um braço por aresta pronta. Num build limpo
+    isso são centenas de processos ao mesmo tempo, mais canos do que o `poll` do
+    runtime acompanha, e o build terminava em deadlock. O `-j` não limitava
+    nada, e ninguém percebia porque o build TERMINAVA — só que rápido demais e,
+    de vez em quando, nunca.
+
+    Aqui se observa de fora: o relator conta quem começou e quem terminou."""
+    reset()
+    g = G.new_graph()
+    for i in range(10):
+        e = G.new_edge(["/bin/sh", "-c", "sleep 0.05; echo " + str(i) + " > " + DIR + "/j" + str(i) + ".out"])
+        e.outs.append(g.node(DIR + "/j" + str(i) + ".out").id)
+        e.desc = "j" + str(i)
+        g.add_edge(e)
+        g.default_targets.append(DIR + "/j" + str(i) + ".out")
+    ok = await B.build(g, DIR + "/log12", [], opts(3), rep())
+    check("limite: as dez rodaram", "10 True", str(len(ran)) + " " + str(ok))
+    check("limite: nunca mais de 3 em voo", "True", str(pico <= 3))
+    check("limite: e chegou a usar o limite", "True", str(pico >= 2))
+
+async def caso_portao_negativo():
+    """Um portão pela NEGATIVA: passa quando o padrão NÃO aparece (F3).
+
+    É o formato do gate que guarda a regressão do typedef de libc, e ele é o
+    único lugar do descritor onde há um shell — porque o que se quer é o INVERSO
+    do status de um comando, e inverter status é o que o `!` faz. O que se prende
+    aqui é que ele inverte MESMO: verde quando não acha, vermelho quando acha."""
+    reset()
+    await write_file(DIR + "/limpo.h", "typedef struct Fila Fila;\n")
+    await write_file(DIR + "/sujo.h", "typedef struct _IO_FILE FILE;\n")
+
+    g = G.new_graph()
+    T.nao_acha(T.new_ctx(g, DIR, "plangc"), "_IO_FILE", [DIR + "/limpo.h"],
+               DIR + "/limpo.ok", "sem tag no arquivo limpo")
+    g.default_targets.append(DIR + "/limpo.ok")
+    ok1 = await B.build(g, DIR + "/log9", [], opts(1), rep())
+    check("portão negativo: verde quando não acha", "True", str(ok1))
+
+    g2 = G.new_graph()
+    T.nao_acha(T.new_ctx(g2, DIR, "plangc"), "_IO_FILE", [DIR + "/sujo.h"],
+               DIR + "/sujo.ok", "tag no arquivo sujo")
+    g2.default_targets.append(DIR + "/sujo.ok")
+    ok2 = await B.build(g2, DIR + "/log10", [], opts(1), rep())
+    check("portão negativo: vermelho quando acha", "False", str(ok2))
+
+    # e o aspeamento: um padrão com aspa simples atravessa inteiro
+    await write_file(DIR + "/aspa.h", "nada aqui\n")
+    g3 = G.new_graph()
+    T.nao_acha(T.new_ctx(g3, DIR, "plangc"), "o'brien", [DIR + "/aspa.h"],
+               DIR + "/aspa.ok", "aspa simples no padrão")
+    g3.default_targets.append(DIR + "/aspa.ok")
+    ok3 = await B.build(g3, DIR + "/log11", [], opts(1), rep())
+    check("portão negativo: aspa simples no padrão", "True", str(ok3))
+
 async def go():
     os.makedirs(DIR)
     await caso_incremental()
@@ -531,6 +630,8 @@ async def go():
     await caso_grafo_reusado()
     await caso_json()
     await caso_ninja()
+    await caso_limite_de_bracos()
+    await caso_portao_negativo()
     print("   pbuild-engine: " + str(ok_count) + " ok, " + str(fail_count) + " failed")
     if fail_count > 0:
         sys.exit(1)
