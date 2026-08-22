@@ -128,6 +128,12 @@ struct PsLow:
     pre: Vec<*Stmt>     # declarations to place BEFORE the statement being built:
                         #   `??` and `?.` read their operand twice, and a temp is
                         #   the only way to evaluate it once
+    # uma das instruções hoisted DESTA instrução leva um guarda de exceção
+    # dentro. Dentro de um `try` o guarda só baixa a bandeira e cai para a
+    # frente, então o que vem DEPOIS dele nesta instrução tem de ficar debaixo
+    # da bandeira — senão o valor que a chamada devolveu ao levantar ainda é
+    # usado. Fora do `try` o guarda SAI (return/continue) e o problema não existe.
+    pre_raise: bool
     try_flag: const *char  # inside a `try` body: the guard clears THIS instead of
                            #   returning, so a raise lands in the catch and not in
                            #   the caller (49.2's check, with a local target)
@@ -4405,10 +4411,26 @@ struct PsLow:
 
     private def value_first(self: *PsLow, e: *PsExpr, want: *PsType, pos: Pos) -> *Expr:
         prev: bool = self->allocs
+        prevr: bool = self->raised
         self->allocs = False
+        self->raised = False
         v: *Expr = self->coerce(want, e)
-        moved: bool = self->allocs
-        self->allocs = prev or moved
+        # DUAS razões para o valor sair primeiro, e a segunda faltava:
+        #
+        #   * ele ALOCA — o coletor pode mover o array por baixo do endereço que
+        #     `ps_list_push` acabou de devolver, e a escrita iria para a memória
+        #     velha;
+        #   * ele pode LEVANTAR — e aí o destino já foi reservado e fica com
+        #     lixo. `xs.append(item as str)` num `try` deixava a lista com um
+        #     elemento a mais apontando para nada, e o segfault só aparecia na
+        #     leitura seguinte, longe do `catch`.
+        #
+        # Em ambos os casos a regra é a mesma: o slot de destino só se pede
+        # depois de o valor existir.
+        moved: bool = self->allocs or self->raised
+        pode_levantar: bool = self->raised
+        self->allocs = prev or self->allocs
+        self->raised = prevr or self->raised
         if not moved:
             return v
         n: const *char = self->a->printf("__st%d", self->tmp_ctr)
@@ -4418,6 +4440,14 @@ struct PsLow:
         d->type = self->ty(want) if want != None else self->ty(e->type)
         d->init = v
         self->pre.push(d)
+        if pode_levantar:
+            self->pre_raise = True
+            # ... e o GUARDA logo a seguir. Tirar o valor para fora não bastava:
+            # o teste de exceção sai no fim da instrução (49.2), então o destino
+            # ainda era reservado e preenchido com o lixo que a chamada devolveu
+            # depois de levantar. Com o guarda aqui, a instrução que usa o valor
+            # nunca chega a correr.
+            self->pre.push(self->guard(pos))
         return self->ident(n, pos)
 
     # A `T` where a `T?` is wanted gets wrapped here. Non-null is the default
@@ -5533,6 +5563,8 @@ struct PsLow:
         # the loop variable from outside it.
         outer: Vec<*Stmt> = self->pre
         self->pre.init()
+        prev_pr: bool = self->pre_raise
+        self->pre_raise = False
         inner: Vec<*Stmt>
         inner.init()
         self->stmt_inner(s, &inner)
@@ -5540,8 +5572,10 @@ struct PsLow:
         for i in range(self->pre.len):
             out->push(self->pre.data[i])
         self->pre = outer
+        guardado: bool = self->pre_raise and self->try_flag != None
+        self->pre_raise = prev_pr
         for i in range(inner.len):
-            out->push(inner.data[i])
+            out->push(self->wrap_if(self->try_flag, inner.data[i], s->pos) if guardado else inner.data[i])
         # The SAFE POINT. Collection happens only here, between statements,
         # where no C temporary holds a reference the shadow stack does not know
         # about. Emitted only after a statement that could allocate, so a loop

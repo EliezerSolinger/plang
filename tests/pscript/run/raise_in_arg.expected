@@ -1,0 +1,11 @@
+4
+[a]
+[<this `any` holds dict, not str>]
+[b]
+[<this `any` holds int, not str>]
+4
+k0 = a
+k1 = ?
+k2 = b
+k3 = ?
+campo intacto: inicial

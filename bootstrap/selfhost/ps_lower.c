@@ -324,6 +324,7 @@ struct PsLow {
     StrSet nl_done;
     Vec_pStmt nl_decls;
     Vec_pStmt pre;
+    int pre_raise;
     const char *try_flag;
     const char *zret;
     int raised;
@@ -4676,10 +4677,14 @@ static Expr *PsLow_spill(PsLow *self, Expr *v, PsType *t, Pos pos) {
 
 static Expr *PsLow_value_first(PsLow *self, PsExpr *e, PsType *want, Pos pos) {
     int prev = self->allocs;
+    int prevr = self->raised;
     self->allocs = 0;
+    self->raised = 0;
     Expr *v = PsLow_coerce(self, want, e);
-    int moved = self->allocs;
-    self->allocs = prev || moved;
+    int moved = self->allocs || self->raised;
+    int pode_levantar = self->raised;
+    self->allocs = prev || self->allocs;
+    self->raised = prevr || self->raised;
     if (!moved) {
         return v;
     }
@@ -4690,6 +4695,10 @@ static Expr *PsLow_value_first(PsLow *self, PsExpr *e, PsType *want, Pos pos) {
     d->type = (want != NULL ? PsLow_ty(self, want) : PsLow_ty(self, e->type));
     d->init = v;
     Vec_pStmt_push(&self->pre, d);
+    if (pode_levantar) {
+        self->pre_raise = 1;
+        Vec_pStmt_push(&self->pre, PsLow_guard(self, pos));
+    }
     return PsLow_ident(self, n, pos);
 }
 
@@ -5871,6 +5880,8 @@ static void PsLow_stmt(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     self->allocs = 0;
     Vec_pStmt outer = self->pre;
     Vec_pStmt_init(&self->pre);
+    int prev_pr = self->pre_raise;
+    self->pre_raise = 0;
     Vec_pStmt inner;
     Vec_pStmt_init(&inner);
     PsLow_stmt_inner(self, s, &inner);
@@ -5879,8 +5890,10 @@ static void PsLow_stmt(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         Vec_pStmt_push(out, self->pre.data[i]);
     }
     self->pre = outer;
+    int guardado = self->pre_raise && self->try_flag != NULL;
+    self->pre_raise = prev_pr;
     for (i = 0; i < inner.len; i += 1) {
-        Vec_pStmt_push(out, inner.data[i]);
+        Vec_pStmt_push(out, (guardado ? PsLow_wrap_if(self, self->try_flag, inner.data[i], s->pos) : inner.data[i]));
     }
     if (self->allocs && !(s->kind == PS_RETURN || s->kind == PS_BREAK || s->kind == PS_CONTINUE || s->kind == PS_RAISE)) {
         Stmt *poll = st_new(self->a, ST_EXPR, s->pos);

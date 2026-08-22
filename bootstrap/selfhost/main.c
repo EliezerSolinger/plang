@@ -733,6 +733,9 @@ int main(int argc, char **argv) {
         Module *m;
         PsModule *psm_api = NULL;
         if (has_suffix(path, ".psc")) {
+            if (out_dir != NULL && !same_space(path, ps_runtime)) {
+                fatal("--ps-runtime '%s' e o programa '%s' têm de ser nomeados do mesmo jeito — os dois relativos ao diretório atual, ou os dois absolutos. Sob --out-dir os dois são espelhados, e o #include do C gerado é a relação entre eles.", ps_runtime, path);
+            }
             size_t pslen = 0;
             char *psbytes = read_entire_file(path, &pslen);
             TokenList pstl = ps_lex(path, psbytes, pslen, &cc.arena);

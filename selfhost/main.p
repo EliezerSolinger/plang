@@ -762,6 +762,15 @@ def main(argc: int, argv: **char) -> int:
         # a resposta 5 sai, e não da baixa (ver `ps_api_dump`)
         psm_api: *PsModule = None
         if has_suffix(path, ".psc"):
+            # o runtime tem de ser nomeado no MESMO espaço que o programa: os
+            # dois são espelhados sob o `--out-dir`, e o `#include` que sai no C
+            # gerado é a relação ENTRE eles dentro do espelho. Um absoluto com o
+            # outro relativo não tem relação nenhuma lá dentro, e o include sai
+            # apontando para fora — um header que ninguém escreveu ali, e um
+            # erro do `cc` que não fala do problema. É a mesma regra que os
+            # pacotes já tinham (`same_space`), dita antes de emitir.
+            if out_dir != None and not same_space(path, ps_runtime):
+                fatal("--ps-runtime '%s' e o programa '%s' têm de ser nomeados do mesmo jeito — os dois relativos ao diretório atual, ou os dois absolutos. Sob --out-dir os dois são espelhados, e o #include do C gerado é a relação entre eles.", ps_runtime, path)
             # pscript front end (50.3: one binary, the extension picks the
             # language). Its own lexer spec, grammar, tree and sema, and then it
             # LOWERS to the P tree — so from here down the pipeline is the one P
