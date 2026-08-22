@@ -124,6 +124,7 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
 | Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
+| `await os.run(argv, env=, cwd=, stdout=)` -> `proc` | 118 | o motor do pbuild | ✅ sem shell (o `execvp` recebe o vetor), stderr junto do stdout, status != 0 é resultado e não exceção, 128+sinal, `waitpid` no pool; `os.nproc` e `path.getmtime_ns` junto |
 | HTTP/1.1 escrito em pscript | 77.2, 78.1 | `http_server`, `lib_http` | ✅ parser incremental (linha, cabeçalhos, content-length, chunked) com as recusas do llhttp; servidor e clientes no mesmo processo |
 | Texto atravessa a fronteira (`CStr`/`CBytes`) | 81, 83, 84, 85, 86 | `text_boundary` | ✅ par {ponteiro, tamanho} que não aloca; ida sem cópia, volta com cópia e UTF-8 conferido; `in s: CStr` passa o endereço |
 | `str.lower()` / `str.upper()` | — | `lib_http` | ✅ ASCII (caixa Unicode depende de língua) |
@@ -191,6 +192,8 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | `bisect` / `heapq` | 106.3 | `algos` | ✅ **portados** de `Lib/bisect.py` e `Lib/heapq.py`: o oráculo compara o ARRAY do heap passo a passo com o do Python. int, float e str |
 | `sorted` ESTÁVEL nos três caminhos | 106.1 | `algos` | ✅ merge sort nosso com detecção de corridas; `qsort` deixava a estabilidade por conta da libc (a do macOS não é estável) |
 | f-string com spec | 45.1 | tudo | ✅ |
+| f-string **no P**, só em argumento de variádica | 65.2/119.1 | — | ✅ resolvida em compilação: vira formato + argumentos, sem alocar |
+| `lambda` **no P**, sem captura | 65.4/119.2 | `lambda` | ✅ levantada para função `private` do topo; tipos vêm do contexto |
 | Comprehension | 8.1 | — | ✅ também `for i, v in ...` (104) |
 | `enumerate` / `zip` / `reversed` / desempacotar | 104.1 | `iterate`, `seqsugar` | ✅ AÇÚCAR sobre o laço de índice (não são valores); statement e comprehension |
 | `sum` / `any` / `all` / `round` / `divmod` / `min`-`max` de lista | 104.2 | `toolkit` | ✅ bordas do Python: `all([])` é True, `round` é meio-para-o-par e devolve int, `min([])` levanta |

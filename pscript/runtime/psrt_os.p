@@ -14,6 +14,7 @@ include <sys/types.h>
 import "psrt_types.ph"
 import "psrt_mem.ph"
 import "psrt_val.ph"
+import "psrt_rt.ph"    # 118: o pool e a task que `os.run` devolve
 import "psrt_os.ph"
 
 # ---------- o caminho como o sistema o quer ----------
@@ -329,3 +330,119 @@ def ps_os_getmtime(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i64:
         return i64(sb.st_mtimespec.tv_sec)
     else:
         return i64(sb.st_mtime)
+
+# 118: o MESMO mtime em nanossegundos. Existe separado, e não no lugar do outro,
+# porque o `getmtime` do Python é segundos e o oráculo (`python3`) confere isso;
+# mas um build compara mtime para decidir recompilação, e num build rápido dois
+# arquivos escritos no mesmo segundo são indistinguíveis — que é exatamente o
+# erro que faz um incremental "esquecer" de refazer alguma coisa. O `timespec`
+# já é lido acima; o que faltava era não jogar fora a parte de baixo.
+def ps_os_getmtime_ns(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i64:
+    cs: const *char = os_cstr(ctx, p, file, line)
+    if cs == None:
+        return 0
+    sb: stat
+    if stat(cs, &sb) != 0:
+        os_fail(ctx, "cannot stat", p, file, line)
+        return 0
+    if hasfield(sb, "st_mtim"):
+        return i64(sb.st_mtim.tv_sec) * 1000000000 + i64(sb.st_mtim.tv_nsec)
+    elif hasfield(sb, "st_mtimespec"):
+        return i64(sb.st_mtimespec.tv_sec) * 1000000000 + i64(sb.st_mtimespec.tv_nsec)
+    else:
+        return i64(sb.st_mtime) * 1000000000
+
+# 118: quantos núcleos a máquina tem. Um build precisa disto para escolher
+# quantos processos manter em voo, e perguntar ao sistema é melhor que um número
+# escrito à mão num arquivo de build.
+def ps_os_nproc() -> i64:
+    n: i64 = i64(sysconf(_SC_NPROCESSORS_ONLN))
+    return n if n >= 1 else i64(1)
+
+# ---------- 118 / pbuild 1.2: rodar um processo ----------
+# A peça que faltava na camada de sistema, e a única que o pbuild não tinha como
+# escrever por fora. É uma TASK: quem chama espera com `await`, N delas ficam em
+# voo ao mesmo tempo, e o limite de concorrência é de quem chama
+# (`gather_map(..., at_most=n)`). O `waitpid` acontece numa thread do pool, que é
+# onde bloquear é o trabalho — a mesma decisão que o `getaddrinfo` já tinha.
+#
+# NÃO passa por shell. O comando é um vetor de argumentos, e é o `execvp` que o
+# recebe: não há aspas para escapar, não há `&&`, não há glob, e nada do que o
+# usuário escreveu pode virar sintaxe. Quem quiser redirecionar diz `stdout=`;
+# quem quiser encadear escreve duas arestas no grafo.
+private def os_dup(s: const *char, n: usize) -> *char:
+    q: *char = (*char)(malloc(n + 1))
+    memcpy(q, s, n)
+    q[n] = '\0'
+    return q
+
+# uma str que vai virar argumento, variável de ambiente ou caminho não pode ter
+# byte zero no meio: o `exec` veria a coisa CORTADA ali
+private def os_arg_cstr(ctx: *PsCtx, s: *PsStr, what: const *char, file: const *char, line: i32) -> *char:
+    if s == None:
+        ps_raise(ctx, "os.run(): a None where a string was expected", PS_CAT_VALUE, file, line)
+        return None
+    if usize(strlen(s->data)) != usize(s->len):
+        msg: char[256]
+        snprintf(msg, 256, "os.run(): this %s has a NUL byte in it", what)
+        ps_raise(ctx, msg, PS_CAT_VALUE, file, line)
+        return None
+    return os_dup(s->data, usize(s->len))
+
+def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, file: const *char, line: i32) -> *PsTask:
+    if argv == None or argv->len < 1:
+        ps_raise(ctx, "os.run() takes the command as a non-empty list: os.run([\"cc\", \"-c\", \"a.c\"])", PS_CAT_VALUE, file, line)
+        return None
+    w: *PsWork = ps_work_new(PS_IO_RUN)
+    w->want = PS_W_PROC
+    n: i64 = argv->len
+    av: **char = (**char)(malloc(usize(n + 1) * sizeof(*av)))
+    memset(av, 0, usize(n + 1) * sizeof(*av))
+    w->argv = av
+    abase: *char = (*char)(argv->data) + sizeof(PsArr)
+    for i in range(n):
+        sp: *PsStr = *(**PsStr)(abase + usize(i) * usize(argv->esize))
+        c: *char = os_arg_cstr(ctx, sp, "argument", file, line)
+        if c == None:
+            ps_work_free(w)
+            return None
+        av[i] = c
+    if env != None:
+        m: i64 = env->n
+        ep: **char = (**char)(malloc(usize(m + 1) * sizeof(*ep)))
+        memset(ep, 0, usize(m + 1) * sizeof(*ep))
+        w->envp = ep
+        k: i64 = 0
+        e: i64 = 0
+        while k < env->nent:
+            if ps_dict_live(env, k):
+                ks: *PsStr = *(**PsStr)(ps_dict_key_at(env, k))
+                vs: *PsStr = *(**PsStr)(ps_dict_val_at(env, k))
+                if ks == None or vs == None or usize(strlen(ks->data)) != usize(ks->len) or usize(strlen(vs->data)) != usize(vs->len):
+                    ps_raise(ctx, "os.run(): an environment name or value has a NUL byte in it", PS_CAT_VALUE, file, line)
+                    ps_work_free(w)
+                    return None
+                # "NOME=VALOR", que é o formato que o `execve` quer
+                kv: *char = (*char)(malloc(usize(ks->len) + usize(vs->len) + 2))
+                memcpy(kv, ks->data, usize(ks->len))
+                kv[usize(ks->len)] = '='
+                memcpy(kv + usize(ks->len) + 1, vs->data, usize(vs->len))
+                kv[usize(ks->len) + usize(vs->len) + 1] = '\0'
+                ep[e] = kv
+                e += 1
+            k += 1
+    if cwd != None:
+        c2: *char = os_arg_cstr(ctx, cwd, "working directory", file, line)
+        if c2 == None:
+            ps_work_free(w)
+            return None
+        w->cwd = c2
+    if outfile != None:
+        c3: *char = os_arg_cstr(ctx, outfile, "stdout path", file, line)
+        if c3 == None:
+            ps_work_free(w)
+            return None
+        w->outfile = c3
+    # um ponteiro é o que a task devolve; `PsStrPtr` é o alias do tamanho de
+    # ponteiro que existe justamente para o `sizeof` poder nomear um TIPO aqui
+    return ps_io_task(ctx, w, True, sizeof(PsStrPtr))

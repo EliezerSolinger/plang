@@ -147,6 +147,12 @@ def ps_aio_readall(ctx: *PsCtx, f: *PsFile, want: i32) -> *PsTask
 def ps_aio_write(ctx: *PsCtx, f: *PsFile, s: *PsStr) -> *PsTask
 def ps_aio_write_bytes(ctx: *PsCtx, f: *PsFile, l: *PsList) -> *PsTask
 def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask
+# 118: os dois membros de um processo terminado (`os.run`)
+def ps_proc_status(p: *PsProc) -> i64
+def ps_proc_output(p: *PsProc) -> *PsStr
+# liberar um trabalho que nem chegou a ser submetido (o caminho de erro de
+# `os.run`, que monta o vetor de argumentos e pode desistir no meio)
+def ps_work_free(w: *PsWork)
 def ps_work_new(op: i32) -> *PsWork
 def ps_pool_submit(ctx: *PsCtx, w: *PsWork)
 def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask

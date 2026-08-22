@@ -5,6 +5,7 @@
 # Chama a memória e os valores. Não é chamada por eles — a única exceção que
 # existia (a fatia de lista morando dentro da seção do `recv`) foi corrigida
 # movendo a função para a camada a que ela pertence.
+include <sys/wait.h>   # 118: `waitpid`, para o processo que `os.run` roda
 import "psrt_types.ph"
 import "psrt_mem.ph"
 import "psrt_val.ph"
@@ -191,7 +192,7 @@ private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *Ps
 private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask
 private def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool
 def ps_utf8_valid(b: const *char, n: usize) -> bool
-private def ps_work_free(w: *PsWork)
+def ps_work_free(w: *PsWork)
 private def ps_pool_start()
 private def ps_io_finish(ctx: *PsCtx, t: *PsTask)
 private def ps_pool_thread(arg: *void) -> *void
@@ -745,9 +746,25 @@ def ps_pool_want(ctx: *PsCtx, n: i64, file: const *char, line: i32):
         return
     g_pool.want = i32(n)
 
-private def ps_work_free(w: *PsWork):
+def ps_work_free(w: *PsWork):
     if w == None:
         return
+    if w->argv != None:
+        i: i32 = 0
+        while w->argv[i] != None:
+            free(w->argv[i])
+            i += 1
+        free(w->argv)
+    if w->envp != None:
+        j: i32 = 0
+        while w->envp[j] != None:
+            free(w->envp[j])
+            j += 1
+        free(w->envp)
+    if w->cwd != None:
+        free(w->cwd)
+    if w->outfile != None:
+        free(w->outfile)
     if w->path != None:
         free(w->path)
     if w->mode != None:
@@ -764,6 +781,81 @@ private def ps_dupn(p: const *char, n: usize) -> *char:
     return q
 
 # THE work: everything here is libc on malloc'd memory, and nothing else
+# 118: o ambiente do FILHO. Escrever `environ` depois do fork é uma atribuição
+# de ponteiro — segura entre o fork e o exec — enquanto `setenv` alocaria, e
+# alocar ali é o clássico travamento de um programa com threads.
+extern environ: **char
+
+# roda um processo até o fim: `fork`, o filho reconfigura e faz `exec`, o pai lê
+# o cano até o EOF e espera. Tudo numa thread do pool, que é onde bloquear é o
+# trabalho dela.
+#
+# A regra do intervalo entre `fork` e `exec` é dura e está escrita aqui porque
+# quebrá-la dá travamento raro e irreproduzível: só chamada segura em manipulador
+# de sinal (`dup2`, `close`, `open`, `chdir`, `execvp`, `_exit`). Nada de
+# `malloc`, nada de `snprintf`, nada de levantar exceção — por isso o `argv`, o
+# `envp` e os caminhos já vêm prontos de antes.
+private def ps_run_child(w: *PsWork, wfd: int) -> int:
+    if w->cwd != None:
+        if chdir(w->cwd) != 0:
+            return 127
+    ofd: int = wfd
+    if w->outfile != None:
+        ofd = open(w->outfile, O_WRONLY | O_CREAT | O_TRUNC, 420)   # 0644
+        if ofd < 0:
+            return 127
+    if dup2(ofd, 1) < 0:
+        return 127
+    if dup2(wfd, 2) < 0:
+        return 127
+    if ofd != wfd:
+        close(ofd)
+    close(wfd)
+    if w->envp != None:
+        environ = w->envp
+    execvp(w->argv[0], w->argv)
+    return 127     # só se chega aqui quando o exec falhou
+
+private def ps_io_run_proc(w: *PsWork):
+    fds: int[2]
+    if pipe(fds) != 0:
+        w->err = 1
+        return
+    pid: int = fork()
+    if pid < 0:
+        close(fds[0])
+        close(fds[1])
+        w->err = 1
+        return
+    if pid == 0:
+        _exit(ps_run_child(w, fds[1]))
+    close(fds[1])
+    cap: usize = 4096
+    buf: *char = (*char)(malloc(cap))
+    n: usize = 0
+    while True:
+        if n + 4096 > cap:
+            cap *= 2
+            buf = (*char)(realloc(buf, cap))
+        got: isize = read(fds[0], buf + n, 4096)
+        if got <= 0:
+            break
+        n += usize(got)
+    close(fds[0])
+    st: int = 0
+    while waitpid(pid, &st, 0) < 0:
+        pass    # EINTR: um sinal interrompeu a espera, não o filho
+    w->buf = buf
+    w->n = n
+    # o status POSIX sem as macros (P não vê macro): os sete bits de baixo são o
+    # sinal que matou, e zero ali quer dizer "saiu por conta própria", com o
+    # código no byte seguinte. Um filho morto por sinal vira 128+sinal, que é a
+    # convenção que todo shell usa e que quem lê o build já conhece.
+    if (st & 0x7f) == 0:
+        w->rc = i64((st >> 8) & 0xff)
+    else:
+        w->rc = i64(128 + (st & 0x7f))
+
 private def ps_io_run(w: *PsWork):
     w->err = 0
     match w->op:
@@ -811,6 +903,8 @@ private def ps_io_run(w: *PsWork):
                     w->err = 1
                 w->fp = None
             w->rc = 0
+        case PS_IO_RUN:
+            ps_io_run_proc(w)
         case PS_IO_LOOKUP:
             hints: addrinfo
             memset(&hints, 0, sizeof(hints))
@@ -879,6 +973,14 @@ def ps_work_new(op: i32) -> *PsWork:
 # The task an I/O job hands back: parked from the start, with a frame of the
 # right shape, waiting for the pool. Same shape as a parked receive (74.1),
 # because from the scheduler's side they ARE the same thing.
+# 118: os dois membros de um processo terminado. Chamadas e não campos, que é a
+# forma que `conn.port()` já tinha — um objeto do runtime fala por métodos.
+def ps_proc_status(p: *PsProc) -> i64:
+    return p->status
+
+def ps_proc_output(p: *PsProc) -> *PsStr:
+    return p->output
+
 def ps_io_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
     u: *PsUser = (*PsUser)(fr)
@@ -1316,6 +1418,11 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
                 snprintf(msg, 512, "could not write the whole buffer")
             case PS_IO_CLOSE:
                 snprintf(msg, 512, "close failed")
+            case PS_IO_RUN:
+                # falhar AQUI é não conseguir nem começar (sem cano, sem
+                # processo). Um programa que roda e sai com status != 0 NÃO é
+                # erro: é resultado, e vem no `status`.
+                snprintf(msg, 512, "could not start '%s'", w->argv[0] if w->argv != None and w->argv[0] != None else "?")
             case _:
                 snprintf(msg, 512, "the operation failed")
         ps_raise(ctx, msg, PS_CAT_IO, "<io>", 0)
@@ -1337,6 +1444,15 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
                 *dst = w->buf[i]
                 i += 1
             *(**PsList)(ps_task_ret(t)) = l
+        case PS_W_PROC:
+            # 118: o par que `os.run` devolve. A saída de uma ferramenta pode não
+            # ser UTF-8 válido (um `cc` que cospe bytes de um arquivo binário no
+            # meio de uma mensagem), e recusá-la seria perder justamente o
+            # relatório de erro — então os bytes inválidos entram como estão.
+            pr: *PsProc = (*PsProc)(ps_alloc(ctx, sizeof(PsProc), PS_TY_PROC))
+            pr->status = w->rc
+            pr->output = ps_str_new(ctx, w->buf if w->buf != None else "", w->n)
+            *(**PsProc)(ps_task_ret(t)) = pr
         case PS_W_STR:
             if not ps_utf8_valid(w->buf, w->n):
                 ps_raise(ctx, "these bytes are not valid UTF-8: read them as bytes, or decode them yourself", PS_CAT_VALUE, "<io>", 0)

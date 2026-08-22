@@ -408,6 +408,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsFile"))
             case PT_CONN:
                 return ty_ptr(self->a, ty_name(self->a, "PsConn"))
+            case PT_PROC:
+                return ty_ptr(self->a, ty_name(self->a, "PsProc"))
             case PT_BUFFER:
                 return ty_ptr(self->a, ty_name(self->a, "PsBuffer"))
             case PT_FUNC:
@@ -2872,6 +2874,13 @@ struct PsLow:
                 self->pos_args(bc, e->pos)
                 self->raised = True
             return bc
+        # 118: um processo que já terminou. Dois membros, os dois leitura pura —
+        # nada a levantar, nada de posição, nada de contexto.
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_PROC:
+            pmn: const *char = e->lhs->text
+            pc7: *Expr = self->call_rt("ps_proc_status" if strcmp(pmn, "status") == 0 else "ps_proc_output", e->pos)
+            self->push_arg(pc7, self->expr(e->lhs->lhs))
+            return pc7
         # a socket (77.1): accept, read and write are POLLED — the syscall runs
         # when the descriptor says it can, inside the scheduler's own `poll`
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_CONN:
@@ -3581,6 +3590,37 @@ struct PsLow:
         if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
             isos0: bool = strncmp(name, "__os_", 5) == 0
             of0: const *char = name + (5 if isos0 else 7)
+            # 118 / pbuild 1.2: `os.run(argv, env=, cwd=, stdout=)`. Os três
+            # opcionais viajam como ponteiro, e o que não veio vai como None —
+            # é o runtime que sabe o que "não veio" significa em cada um (herdar
+            # o ambiente, ficar no diretório de quem chamou, devolver a saída em
+            # vez de gravá-la).
+            if isos0 and strcmp(of0, "run") == 0:
+                rc0: *Expr = self->call_rt("ps_os_run", e->pos)
+                self->push_arg(rc0, self->ctx_arg(e->pos))
+                self->push_arg(rc0, self->expr(e->args[0]))
+                renv: *Expr = None
+                rcwd: *Expr = None
+                rout: *Expr = None
+                for ri0 in range(1, e->nargs):
+                    ra0: *PsExpr = e->args[ri0]
+                    if strcmp(ra0->text, "env") == 0:
+                        renv = self->expr(ra0->lhs)
+                    elif strcmp(ra0->text, "cwd") == 0:
+                        rcwd = self->expr(ra0->lhs)
+                    else:
+                        rout = self->expr(ra0->lhs)
+                self->push_arg(rc0, renv if renv != None else ex_new(self->a, EX_NONE, e->pos))
+                self->push_arg(rc0, rcwd if rcwd != None else ex_new(self->a, EX_NONE, e->pos))
+                self->push_arg(rc0, rout if rout != None else ex_new(self->a, EX_NONE, e->pos))
+                self->pos_args(rc0, e->pos)
+                self->allocs = True
+                self->raised = True
+                return rc0
+            if isos0 and strcmp(of0, "nproc") == 0:
+                # não aloca, não levanta, não precisa de contexto: é um número
+                # que o sistema já sabe
+                return self->call_rt("ps_os_nproc", e->pos)
             if strcmp(of0, "join") == 0:
                 acc: *Expr = self->expr(e->args[0])
                 for i in range(1, e->nargs):
@@ -9649,7 +9689,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

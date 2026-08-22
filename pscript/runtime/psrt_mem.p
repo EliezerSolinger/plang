@@ -429,6 +429,11 @@ private def ps_scan_object(to: *PsBlock, o: *PsObj):
             pass          # a descriptor is an int; nothing inside to follow
         case PS_TY_FILE:
             pass          # the FILE belongs to libc, not to the collector
+        case PS_TY_PROC:
+            # 118: o status é um número, mas a SAÍDA é uma str do coletor
+            pr: *PsProc = (*PsProc)(o)
+            if pr->output != None:
+                pr->output = (*PsStr)(ps_forward(to, (*PsObj)(pr->output)))
         case PS_TY_ANY:
             pass          # a boxed number holds no reference
         case PS_TY_BUFFER:

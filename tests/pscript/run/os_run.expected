@@ -1,0 +1,22 @@
+status: 0 saida: ola mundo
+
+um argumento so: a b "c" $HOME
+
+status: 3 saiu e erro: saiu
+erro
+
+sinal: 137
+env: [sim][]
+
+cwd: /tmp
+
+com stdout=, output tem so o cano: no cano
+
+e o arquivo: no arquivo
+
+oito em paralelo: soma dos status 0 e 8 saidas
+a primeira e a ultima: n0
+ n7
+
+mtime_ns bate com mtime: True
+nproc >= 1: True

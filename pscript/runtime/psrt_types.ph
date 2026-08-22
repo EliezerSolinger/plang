@@ -54,6 +54,7 @@ enum PsTyId:
     PS_TY_BUFFER = 13  # a block of bytes every worker can write into (52.3)
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
     PS_TY_CONN = 15    # a socket, listening or connected (77.1)
+    PS_TY_PROC = 16    # 118: um processo que já terminou (`os.run`)
 
 struct PsObj:
     ty: i32
@@ -551,6 +552,7 @@ enum PsIoWant:
     PS_W_LINES
     PS_W_INT
     PS_W_CONN
+    PS_W_PROC          # 118: o par status+saída que `os.run` devolve
 
 enum PsIoOp:
     PS_IO_OPEN = 0
@@ -568,6 +570,19 @@ enum PsIoOp:
     PS_IO_SEND
     PS_IO_CONNECT
     PS_IO_LOOKUP       # ... except this one: `getaddrinfo` blocks, so it does
+    PS_IO_RUN          # 118: um PROCESSO — `fork`+`exec`, ler o cano até o fim,
+                       #   `waitpid`. Vai para o pool pela mesma razão que o
+                       #   `getaddrinfo`: esperar um filho é bloquear, e não há
+                       #   descritor que o `poll` possa vigiar por ele.
+
+# 118: o que um processo deixou para trás. Um OBJETO do runtime, e não um
+# `record`, porque ele carrega uma `str` — e um record é bytes puros (58.2). É a
+# mesma forma que `file` e `conn` já têm: um tipo que o runtime constrói e a
+# linguagem enxerga com membros (`r.status()`, `r.output()`).
+struct PsProc:
+    obj: PsObj
+    status: i64
+    output: *PsStr
 
 struct PsWork:
     next: *PsWork
@@ -591,6 +606,15 @@ struct PsWork:
     events: i16        # ... and what to wait for (POLLIN / POLLOUT)
     off: usize         # a send that went out in pieces: how much already did
     port: i32          # connect: where to
+    # 118: PS_IO_RUN. Tudo malloc'd e montado ANTES do `fork`, porque entre o
+    # fork e o exec só se pode chamar o que é seguro em manipulador de sinal —
+    # e `malloc` não é (outra thread pode ter o cadeado dele no instante do
+    # fork). `envp` é o ambiente inteiro, já no formato "K=V", terminado em
+    # None; `environ = envp` no filho é uma escrita de ponteiro, e essa é segura.
+    argv: **char       # terminado em None
+    envp: **char       # None = herda o ambiente de quem chamou
+    cwd: *char         # None = o diretório de quem chamou
+    outfile: *char     # None = a saída volta em `buf`; senão vai para o arquivo
 
 struct PsCtx:
     lost: *PsLost        # 107: os erros que ninguém foi buscar (ver PsLost)

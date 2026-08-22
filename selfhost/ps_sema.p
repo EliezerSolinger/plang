@@ -525,7 +525,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN, PT_PROC:
                 pass
         return t
 
@@ -1830,6 +1830,22 @@ struct PsSema:
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
                 fatal_at(self->file, e->pos, "a buffer has get_f64, set_f64, size and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+            # 118: um processo que já terminou (`await os.run(...)`): o status
+            # e tudo que ele imprimiu. Métodos e não campos, que é a forma que
+            # `conn.port()` já tinha.
+            if rt != None and rt->kind == PT_PROC:
+                pm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "'%s' takes no arguments", pm)
+                if strcmp(pm, "status") == 0:
+                    # 0 quando saiu bem, 128+sinal quando um sinal o matou — a
+                    # convenção do shell. Sair com != 0 NÃO é exceção: um `cc`
+                    # que recusa o programa é resultado, e quem chamou decide.
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(pm, "output") == 0:
+                    return ps_type(self->a, PT_STR, e->pos)
+                fatal_at(self->file, e->pos, "a finished process has status() and output() (118), not '%s'", pm)
             # a file (48.1): read, write, readlines, close
             # a socket (77.1): accept, read, write, close, port. Accept, read
             # and write are POLLED — a socket has a real non-blocking mode, so
@@ -2130,7 +2146,7 @@ struct PsSema:
             # `sorted(xs, key=f)` names its second argument, and that name is
             # part of what the builtin IS (28.4) — the general named argument
             # (44.1's `f(x=1)`) is still ahead
-            if e->args[i]->kind == PE_DESIG and strcmp(name, "sorted") != 0 and strcmp(name, "gather_map") != 0 and strcmp(name, "__gc_tune") != 0 and not self->funcs.has(name) and not self->cfuncs.has(name):
+            if e->args[i]->kind == PE_DESIG and strcmp(name, "sorted") != 0 and strcmp(name, "gather_map") != 0 and strcmp(name, "__gc_tune") != 0 and strcmp(name, "__os_run") != 0 and not self->funcs.has(name) and not self->cfuncs.has(name):
                 fatal_at(self->file, e->args[i]->pos, "'%s' does not take named arguments", ps_disp(name))
         if self->cfuncs.has(name) and not self->funcs.has(name):
             cf: *PsFunc = self->cfuncs.get_or(name, None)
@@ -2818,6 +2834,50 @@ struct PsSema:
         if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
             isos: bool = strncmp(name, "__os_", 5) == 0
             of: const *char = name + (5 if isos else 7)
+            # 118 / pbuild 1.2: rodar um processo. Fica ANTES da conta genérica
+            # porque não tem a forma das outras: um vetor de argumentos, três
+            # opções por nome, e o que volta é uma TASK.
+            if isos and strcmp(of, "run") == 0:
+                if e->nargs < 1:
+                    fatal_at(self->file, e->pos, "os.run() takes the command as a list: os.run([\"cc\", \"-c\", \"a.c\"])")
+                if e->args[0]->kind == PE_DESIG:
+                    fatal_at(self->file, e->pos, "os.run(): the command comes first, and by position")
+                at0: *PsType = self->check_expr(e->args[0])
+                if at0 == None or at0->kind != PT_LIST or at0->inner == None or at0->inner->kind != PT_STR:
+                    fatal_at(self->file, e->args[0]->pos, "os.run() takes a list<str> — the program and its arguments, one per element, with NO shell in between (1.6) — found %s", ps_type_str(self->a, at0))
+                seen_env: bool = False
+                seen_cwd: bool = False
+                seen_out: bool = False
+                for ri in range(1, e->nargs):
+                    ra: *PsExpr = e->args[ri]
+                    if ra->kind != PE_DESIG:
+                        fatal_at(self->file, ra->pos, "os.run(): what comes after the command is given BY NAME — env=, cwd=, stdout=")
+                    rn: const *char = ra->text
+                    rv: *PsType = self->check_expr(ra->lhs)
+                    if strcmp(rn, "env") == 0:
+                        if seen_env:
+                            fatal_at(self->file, ra->pos, "os.run(): 'env' given twice")
+                        seen_env = True
+                        if rv == None or rv->kind != PT_DICT or rv->key == None or rv->key->kind != PT_STR or rv->inner == None or rv->inner->kind != PT_STR:
+                            fatal_at(self->file, ra->pos, "os.run(env=): a dict<str, str>, and it REPLACES the environment (it is not merged) — found %s", ps_type_str(self->a, rv))
+                    elif strcmp(rn, "cwd") == 0 or strcmp(rn, "stdout") == 0:
+                        if (strcmp(rn, "cwd") == 0 and seen_cwd) or (strcmp(rn, "stdout") == 0 and seen_out):
+                            fatal_at(self->file, ra->pos, "os.run(): '%s' given twice", rn)
+                        if strcmp(rn, "cwd") == 0:
+                            seen_cwd = True
+                        else:
+                            seen_out = True
+                        if rv == None or rv->kind != PT_STR:
+                            fatal_at(self->file, ra->pos, "os.run(%s=): a path, as str — found %s", rn, ps_type_str(self->a, rv))
+                    else:
+                        fatal_at(self->file, ra->pos, "os.run() knows env=, cwd= and stdout=, not '%s'", rn)
+                rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                rtk->inner = ps_type(self->a, PT_PROC, e->pos)
+                return rtk
+            if isos and strcmp(of, "nproc") == 0:
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "os.nproc() takes no arguments")
+                return ps_type(self->a, PT_INT, e->pos)
             st1: *PsType = ps_type(self->a, PT_STR, e->pos)
             # `getcwd()` é a única sem caminho; `rename` e `join` querem dois; e
             # `join` aceita MAIS de dois, como no Python (`path.join(a, b, c)`)
@@ -2844,7 +2904,7 @@ struct PsSema:
                 return dl
             if strcmp(of, "exists") == 0 or strcmp(of, "isdir") == 0 or strcmp(of, "isfile") == 0:
                 return ps_type(self->a, PT_BOOL, e->pos)
-            if strcmp(of, "getsize") == 0 or strcmp(of, "getmtime") == 0:
+            if strcmp(of, "getsize") == 0 or strcmp(of, "getmtime") == 0 or strcmp(of, "getmtime_ns") == 0:
                 return ps_type(self->a, PT_INT, e->pos)
             if isos and strcmp(of, "getcwd") != 0:
                 return ps_type(self->a, PT_VOID, e->pos)
@@ -3622,6 +3682,10 @@ struct PsSema:
             ns->sym.add("rmdir")
             ns->sym.add("rename")
             ns->sym.add("getcwd")
+            # 118: as duas que o build pediu — rodar um processo, e saber de
+            # quantos núcleos a máquina dispõe
+            ns->sym.add("run")
+            ns->sym.add("nproc")
         elif strcmp(name, "path") == 0:
             ns->sym.add("join")
             ns->sym.add("dirname")
@@ -3633,6 +3697,7 @@ struct PsSema:
             ns->sym.add("isfile")
             ns->sym.add("getsize")
             ns->sym.add("getmtime")
+            ns->sym.add("getmtime_ns")   # 118: o mesmo, em nanossegundos
         else:
             ns->sym.add("argv")
             ns->sym.add("env")
@@ -5751,7 +5816,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_FUNC, PT_DYN:
+        case PT_STR, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -5959,6 +6024,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "buffer"
         case PT_CONN:
             return "socket"
+        case PT_PROC:
+            return "a finished process"
         case PT_TIMER:
             return "a timer"
         case PT_LIST:

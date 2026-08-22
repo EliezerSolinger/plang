@@ -48,3 +48,19 @@ def ps_os_exists(ctx: *PsCtx, p: *PsStr, kind: i32, file: const *char, line: i32
 # reconstrói o mundo ou nada.
 def ps_os_getsize(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i64
 def ps_os_getmtime(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i64
+
+# 118: o mtime em NANOSSEGUNDOS (o `getmtime` acima continua em segundos, que é o
+# que o Python devolve e o que o oráculo confere). Um build que compara mtime em
+# segundos não distingue dois arquivos escritos no mesmo segundo — e é assim que
+# um incremental esquece de refazer alguma coisa.
+def ps_os_getmtime_ns(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i64
+# 118: quantos núcleos a máquina tem, para quem decide quantos processos manter
+# em voo
+def ps_os_nproc() -> i64
+
+# ---------- 118 / pbuild 1.2: rodar um processo ----------
+# `await os.run(argv, env=, cwd=, stdout=)` -> um processo terminado, com o
+# status e tudo que ele imprimiu. Sem shell: o comando é um VETOR, e o `execvp`
+# o recebe como está. Ver o comentário em psrt_os.p para o porquê de cada
+# decisão; o `waitpid` mora numa thread do pool.
+def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, file: const *char, line: i32) -> *PsTask

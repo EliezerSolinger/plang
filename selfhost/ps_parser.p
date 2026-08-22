@@ -268,6 +268,11 @@ struct PsP:
                 # and what `accept` gives are the same kind of thing, and the
                 # program tells them apart by what it does with them
                 t = ps_type(self->a, PT_CONN, pos)
+            elif name == "proc":
+                # 118: um processo que já terminou — o que `await os.run(...)`
+                # devolve. Tem nome escrevível porque um programa precisa
+                # anotá-lo: `async def um(cmd: list<str>) -> proc`.
+                t = ps_type(self->a, PT_PROC, pos)
             elif name == "list":
                 t = ps_type(self->a, PT_LIST, pos)
                 self->expect(TK_LT, "list<T>")

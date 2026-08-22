@@ -47,6 +47,11 @@ enum PsTypeKind:
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
     PT_CONN          # a socket, listening or connected (77.1): `net.listen`
                      #   gives one, `await srv.accept()` gives another
+    PT_PROC          # 118: um processo que JÁ TERMINOU (`await os.run(...)`).
+                     #   Carrega o status e tudo que ele imprimiu, e fala por
+                     #   métodos — `r.status()`, `r.output()` — que é a forma
+                     #   que `conn.port()` já tinha. Não é um `record` porque
+                     #   carrega uma `str`, e record é bytes puros (58.2).
     PT_TIMER         # a repeating clock (48.2/51.1): `await t.tick()` in an
                      #   ordinary loop, and a tick that COALESCES
     PT_DYN           # dyn Trait — the dynamic half of the dispatch (66.3):
