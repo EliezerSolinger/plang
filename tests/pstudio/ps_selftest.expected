@@ -12,5 +12,12 @@ erro posicionado True 2 3
 foi para o erro True
 marca de erro 4
 cursor em 2
+manifesto cmd Manifest: Set Default Target...
+a escolher o alvo padrão True 2
+pediu alvo padrão build/bin/ppack e não construiu False
+a perguntar dependência (nome@versão) 32
+digitado >nada
+recusou sem versão uma dependência é `nome@versão` — a v1 não tem resolvedor
+pediu a dependência tar@0.1.0
 drawn yes
 selftest ok

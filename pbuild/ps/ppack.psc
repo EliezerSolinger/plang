@@ -1087,7 +1087,7 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
     if rc != 0:
         return rc
     await LK.gravar(lk, "pack.lock")
-    await escrever_dep_no_manifesto(nome, versao)
+    await MF.escrever_dep("pack.json", nome, versao)
     if saida_json:
         jadd: list<str> = []
         for t2 in lk.pacotes:
@@ -1102,52 +1102,6 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
         print(f"   {len(postos) - 1} vieram como dependência; `ppack why <nome>` diz de quem")
     print("   `ppack install` para os materializar")
     return 0
-
-
-private async def escrever_dep_no_manifesto(nome: str, versao: str):
-    """A dependência entra no `pack.json` do workspace, à mão e preservando o
-    resto do arquivo. Reescrever o JSON inteiro a partir da estrutura perderia
-    a formatação de quem o escreveu e reordenaria tudo — um gerenciador que
-    estraga o arquivo de quem o usa é um gerenciador de que se desconfia.
-
-    Um nome que já lá está é SUBSTITUÍDO e não repetido: `{"tar": "0.1.0",
-    "tar": "0.2.0"}` é um objeto com a mesma chave duas vezes, que cada leitor
-    de JSON resolve à sua maneira."""
-    f = await open("pack.json", "r")
-    raw = await f.text()
-    await f.close()
-    linha = "    " + G.jstr(nome) + ": " + G.jstr(versao)
-    alvo = G.jstr(nome) + ":"
-    if "\"deps\"" in raw:
-        i = raw.find("\"deps\"")
-        j = raw.find("{", i)
-        if j < 0:
-            raise error("pack.json: `deps` tem de ser um objeto", VALUE)
-        k = raw.find("}", j)
-        dentro = raw[j + 1:k]
-        # o nome já está lá? troca-se a linha dele, e mais nada
-        p0 = dentro.find(alvo)
-        if p0 >= 0:
-            ini = 0
-            for z in range(p0):
-                if dentro[z] == "\n":
-                    ini = z + 1
-            fim = dentro.find("\n", p0)
-            if fim < 0:
-                fim = len(dentro)
-            virg = "," if dentro[ini:fim].rstrip().endswith(",") else ""
-            raw = raw[0:j + 1] + dentro[0:ini] + linha + virg + dentro[fim:] + raw[k:]
-        elif len(dentro.strip()) == 0:
-            raw = raw[0:j] + "{\n" + linha + "\n  }" + raw[k + 1:len(raw)]
-        else:
-            raw = raw[0:j] + "{" + dentro.rstrip() + ",\n" + linha + "\n  }" + raw[k + 1:len(raw)]
-    else:
-        i2 = raw.rfind("}")
-        antes = raw[0:i2].rstrip()
-        if antes.endswith(","):
-            antes = antes[0:len(antes) - 1]
-        raw = antes + ",\n  \"deps\": {\n" + linha + "\n  }\n}\n"
-    await R.escrever_bytes("pack.json", R.bytes_de_texto(raw))
 
 
 async def cmd_up(alvos: list<str>, inseguro: bool) -> int:

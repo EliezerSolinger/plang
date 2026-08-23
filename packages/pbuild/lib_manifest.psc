@@ -239,6 +239,114 @@ async def ler(caminho: str) -> Manifesto:
     return m
 
 
+# ---------- escrever no manifesto, sem o estragar ----------
+async def escrever_dep(caminho: str, nome: str, versao: str):
+    """A dependência entra no `pack.json` do workspace, à mão e preservando o
+    resto do arquivo. Reescrever o JSON inteiro a partir da estrutura perderia
+    a formatação de quem o escreveu e reordenaria tudo — um gerenciador que
+    estraga o arquivo de quem o usa é um gerenciador de que se desconfia.
+
+    Um nome que já lá está é SUBSTITUÍDO e não repetido: `{"tar": "0.1.0",
+    "tar": "0.2.0"}` é um objeto com a mesma chave duas vezes, que cada leitor
+    de JSON resolve à sua maneira."""
+    f = await open(caminho, "r")
+    raw = await f.text()
+    await f.close()
+    linha = "    " + jstr(nome) + ": " + jstr(versao)
+    alvo = jstr(nome) + ":"
+    if "\"deps\"" in raw:
+        i = raw.find("\"deps\"")
+        j = raw.find("{", i)
+        if j < 0:
+            raise error(caminho + ": `deps` tem de ser um objeto", VALUE)
+        k = raw.find("}", j)
+        dentro = raw[j + 1:k]
+        # o nome já está lá? troca-se a linha dele, e mais nada
+        p0 = dentro.find(alvo)
+        if p0 >= 0:
+            ini = 0
+            for z in range(p0):
+                if dentro[z] == "\n":
+                    ini = z + 1
+            fim = dentro.find("\n", p0)
+            if fim < 0:
+                fim = len(dentro)
+            virg = "," if dentro[ini:fim].rstrip().endswith(",") else ""
+            raw = raw[0:j + 1] + dentro[0:ini] + linha + virg + dentro[fim:] + raw[k:]
+        elif len(dentro.strip()) == 0:
+            raw = raw[0:j] + "{\n" + linha + "\n  }" + raw[k + 1:len(raw)]
+        else:
+            raw = raw[0:j] + "{" + dentro.rstrip() + ",\n" + linha + "\n  }" + raw[k + 1:len(raw)]
+    else:
+        i2 = raw.rfind("}")
+        antes = raw[0:i2].rstrip()
+        if antes.endswith(","):
+            antes = antes[0:len(antes) - 1]
+        raw = antes + ",\n  \"deps\": {\n" + linha + "\n  }\n}\n"
+    await gravar_texto(caminho, raw)
+
+
+async def escrever_campo(caminho: str, chave: str, valor: str):
+    """Um campo de TOPO do manifesto, escrito à mão e preservando o resto.
+
+    A mesma cirurgia da `escrever_dep`, e pela mesma razão: reescrever o JSON a
+    partir da estrutura perderia a formatação de quem o escreveu e reordenaria
+    tudo. Uma ferramenta que estraga o arquivo de quem a usa é uma ferramenta de
+    que se desconfia — e um manifesto é um arquivo que se comita.
+
+    A chave que já existe é SUBSTITUÍDA no lugar onde está; a que não existe
+    entra antes da chaveta final."""
+    f = await open(caminho, "r")
+    raw = await f.text()
+    await f.close()
+    alvo = jstr(chave) + ":"
+    k = raw.find(alvo)
+    if k >= 0:
+        ini = 0
+        for z in range(k):
+            if raw[z] == "\n":
+                ini = z + 1
+        fim = raw.find("\n", k)
+        if fim < 0:
+            fim = len(raw)
+        virg = "," if raw[ini:fim].rstrip().endswith(",") else ""
+        raw = raw[0:ini] + "  " + alvo + " " + jstr(valor) + virg + raw[fim:len(raw)]
+    else:
+        i2 = raw.rfind("}")
+        antes = raw[0:i2].rstrip()
+        if antes.endswith(","):
+            antes = antes[0:len(antes) - 1]
+        raw = antes + ",\n  " + alvo + " " + jstr(valor) + "\n}\n"
+    await gravar_texto(caminho, raw)
+
+
+private async def gravar_texto(caminho: str, txt: str):
+    f = await open(caminho, "w")
+    await f.write(txt)
+    await f.close()
+
+
+def jstr(s: str) -> str:
+    """Uma string JSON, escapada. É a mesma conta do `lib_graph`, e está aqui
+    porque um manifesto não pode depender do grafo — quem lê `pack.json` é o
+    gerenciador, e o gerenciador vem antes do build."""
+    out = "\""
+    for c in s:
+        if c == "\"":
+            out += "\\\""
+        elif c == "\\":
+            out += "\\\\"
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\t":
+            out += "\\t"
+        elif c == "\r":
+            out += "\\r"
+        else:
+            out += c
+    return out + "\""
+
+
 def versao_maior(a: str, b: str) -> bool:
     """`a > b`, comparando NÚMERO a número e não texto a texto.
 

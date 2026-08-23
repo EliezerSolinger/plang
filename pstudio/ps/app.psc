@@ -41,6 +41,7 @@ import lib_app as appm
 # build correr no laço de eventos da UI em vez de num processo à parte.
 import <pbuild/lib_build.psc> as B
 import <pbuild/lib_graph.psc> as G
+import <pbuild/lib_manifest.psc> as MF
 import sys
 import time
 import os
@@ -176,8 +177,62 @@ private def on_edge_end(app: appm.App, id: int, st: int, saida: str, ms: int):
     app.dirty_ui = True
 
 
+private def onde_esta_o_ppack() -> str:
+    for cand in ["build/bin/ppack", "ppack"]:
+        if cand == "ppack" or path.isfile(cand):
+            return cand
+    return "ppack"
+
+
+async def serve_manifesto(app: appm.App):
+    """Os dois pedidos que mexem no `pack.json`.
+
+    **O alvo padrão** é escrito aqui, com a cirurgia do `lib_manifest` — a mesma
+    que o `ppack add` usa, e é por isso que ela mora lá e não em nenhum dos
+    dois: um manifesto é um arquivo que alguém comita, e reescrevê-lo a partir
+    da estrutura perderia a formatação e reordenaria tudo.
+
+    **Uma dependência** NÃO é escrita aqui: é pedida ao `ppack`, que a busca,
+    confere o hash, confere a assinatura e trava no `pack.lock`. Escrever a
+    linha à mão daria um manifesto que pede o que ninguém resolveu — e o
+    editor a fingir que é o gerenciador de pacotes."""
+    if len(app.want_manifest_default) > 0:
+        alvo = app.want_manifest_default
+        app.want_manifest_default = ""
+        man = path.join(app.root_dir, "pack.json")
+        if not path.isfile(man):
+            app.build_msg = "não há pack.json em " + app.root_dir
+        else:
+            try:
+                await MF.escrever_campo(man, "default", alvo)
+                app.build_msg = "alvo padrão: " + alvo
+                # o arquivo mudou no DISCO, e é só isso que é preciso: quem
+                # repara é o `check_external`, que já corre no laço e já sabe
+                # a regra difícil (recarrega o que está limpo, pergunta o que
+                # tem edição local). Um caminho próprio para "eu é que escrevi"
+                # seria uma segunda regra a divergir da primeira.
+                app.check_external()
+            catch e:
+                app.build_msg = "não consegui escrever o pack.json: " + e.message
+        app.dirty_ui = True
+    if len(app.want_manifest_dep) > 0:
+        pedido = app.want_manifest_dep
+        app.want_manifest_dep = ""
+        r = await os.run([onde_esta_o_ppack(), "add", pedido], cwd=app.root_dir)
+        if r.status() == 0:
+            app.build_msg = pedido + " entrou no manifesto e no lock"
+            app.check_external()
+        else:
+            # a mensagem do `ppack` é melhor que qualquer paráfrase: ela diz se
+            # o índice não tem a versão, se o hash não bate, ou se ninguém
+            # assinou
+            app.build_msg = r.output().strip().split("\n")[0]
+        app.dirty_ui = True
+
+
 async def serve_build(app: appm.App):
     """O pedido de build do app, atendido aqui. Ele não constrói: PEDE."""
+    await serve_manifesto(app)
     if app.want_stop_run:
         app.want_stop_run = False
         if app.run_pid > 0:
@@ -454,6 +509,42 @@ async def selftest(arg: str) -> int:
     cvx = app.cur_cv()
     if cvx != None:
         print("cursor em", cvx.buf.caret(0).line + 1)
+    # F6, o manifesto pela paleta. As três coisas que se medem aqui são as três
+    # que o "painel" é: abrir o arquivo (um editor edita texto), escolher o alvo
+    # padrão de uma LISTA que veio do grafo (é o que um formulário faria melhor
+    # que o texto: garantir que o alvo existe), e PERGUNTAR o nome de uma
+    # dependência — que não se escreve, resolve-se.
+    app.palette_open(appm.PAL_COMMANDS)
+    u.set_text(app.palinput, ">manifest set")
+    app.palette_filter()
+    print("manifesto cmd", app.palitems[0].label if len(app.palitems) > 0 else "-")
+    app.palette_accept()
+    print("a escolher o alvo padrão", app.pal_build_default, len(app.palitems))
+    u.set_text(app.palinput, "!ppack")
+    app.palette_filter()
+    app.palette_accept()
+    print("pediu alvo padrão", app.want_manifest_default, "e não construiu", app.want_build_on)
+    app.want_manifest_default = ""
+    app.palette_open(appm.PAL_COMMANDS)
+    u.set_text(app.palinput, ">manifest add")
+    app.palette_filter()
+    app.palette_accept()
+    print("a perguntar", app.pal_prompt, app.pal_texto_para)
+    # o que se digita é RESPOSTA: um `>` no meio dela é um caractere, não um modo
+    u.set_text(app.palinput, ">nada")
+    app.palette_filter()
+    print("digitado", app.palitems[0].payload if len(app.palitems) > 0 else "-")
+    app.palette_accept()
+    print("recusou sem versão", app.build_msg)
+    app.palette_open(appm.PAL_COMMANDS)
+    u.set_text(app.palinput, ">manifest add")
+    app.palette_filter()
+    app.palette_accept()
+    u.set_text(app.palinput, "tar@0.1.0")
+    app.palette_filter()
+    app.palette_accept()
+    print("pediu a dependência", app.want_manifest_dep)
+    app.want_manifest_dep = ""
     n = app.u.build_all()
     print("drawn", "yes" if n > 20 else "no")
     await serve_requests(app)
@@ -482,6 +573,51 @@ async def modo_run(alvo: str) -> int:
             await sleep(0.05)
             n += 1
     return 0 if vivo else 1
+
+
+async def modo_manifesto(arg: str) -> int:
+    """`pstudio --manifest <dir>` — a outra metade do painel, sem tela.
+
+    O que a paleta faz é PEDIR; o que se prova aqui é o atendimento: que o alvo
+    padrão é escrito no `pack.json` sem estragar o resto do arquivo, e que uma
+    dependência não é escrita à mão nenhuma — é pedida ao `ppack`, que a
+    resolve, confere e trava."""
+    u = pui.new_ui(8, 17)
+    app = appm.new_app(u, arg)
+    app.want_manifest_default = "build/bin/ppack"
+    await serve_manifesto(app)
+    print(app.build_msg)
+    f = await open(path.join(arg, "pack.json"), "r")
+    txt = await f.text()
+    await f.close()
+    print("no manifesto", "\"default\": \"build/bin/ppack\"" in txt)
+    # e outra vez, com outro alvo: a chave existente é SUBSTITUÍDA no lugar onde
+    # está, e não repetida — um objeto JSON com a mesma chave duas vezes é
+    # resolvido de forma diferente por cada leitor
+    app.want_manifest_default = "build/bin/pstudio"
+    await serve_manifesto(app)
+    f2 = await open(path.join(arg, "pack.json"), "r")
+    txt2 = await f2.text()
+    await f2.close()
+    n = 0
+    i = 0
+    while True:
+        k = txt2.find("\"default\"", i)
+        if k < 0:
+            break
+        n += 1
+        i = k + 1
+    print("uma só vez", n, "e é o novo", "\"default\": \"build/bin/pstudio\"" in txt2)
+    # uma dependência que não existe: o editor NÃO escreve nada, e o que aparece
+    # é a mensagem do `ppack` — que sabe dizer por quê
+    app.want_manifest_dep = "naoexiste@9.9.9"
+    await serve_manifesto(app)
+    print("recusou", len(app.build_msg) > 0)
+    f3 = await open(path.join(arg, "pack.json"), "r")
+    txt3 = await f3.text()
+    await f3.close()
+    print("e não escreveu", "naoexiste" not in txt3)
+    return 0
 
 
 async def modo_build(alvo: str) -> int:
@@ -516,6 +652,8 @@ async def main_run() -> int:
         return await selftest(args[2] if len(args) > 2 else "")
     if len(args) > 1 and args[1] == "--build":
         return await modo_build(args[2] if len(args) > 2 else "")
+    if len(args) > 1 and args[1] == "--manifest":
+        return await modo_manifesto(args[2] if len(args) > 2 else ".")
     if len(args) > 1 and args[1] == "--run":
         return await modo_run(args[2] if len(args) > 2 else "")
     # 115: a mesma linha de comando do editor em P — vários arquivos em abas,

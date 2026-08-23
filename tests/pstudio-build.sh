@@ -43,5 +43,36 @@ esac
 saiu2=$("$PSTUDIO" --run build/bin/verdict 2>&1 | tail -1)
 check "o play lança o programa" "lançou True" "$saiu2"
 
+# 6. O MANIFESTO (o que sobrava da F6). O "painel" não é um formulário: é a
+#    paleta a fazer as duas coisas que são chatas de escrever à mão e fáceis de
+#    escrever errado — escolher um alvo padrão que EXISTE, e acrescentar uma
+#    dependência, que não se escreve mas se resolve. Editar o resto do
+#    `pack.json` é abrir o `pack.json`, que é o que um editor de texto faz.
+MT=$(mktemp -d)
+cat > "$MT/pack.json" <<'EOF'
+{
+  "members": ["nada"],
+  "default": "build/bin/velho",
+  "deps": {}
+}
+EOF
+saiu3=$("$PSTUDIO" --manifest "$MT" 2>&1)
+case $saiu3 in
+    *"no manifesto True"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL o alvo padrão não foi escrito:"; echo "$saiu3" | head -4; fail=$((fail+1)) ;;
+esac
+case $saiu3 in
+    *"uma só vez 1 e é o novo True"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL a chave existente devia ser SUBSTITUÍDA, não repetida"; fail=$((fail+1)) ;;
+esac
+case $saiu3 in
+    *"e não escreveu True"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL uma dependência que não se resolve não pode entrar no manifesto"; fail=$((fail+1)) ;;
+esac
+# e o resto do arquivo ficou como estava — é a promessa que faz isto ser
+# utilizável num arquivo que alguém comita
+grep -q '"members": \["nada"\]' "$MT/pack.json" && ok=$((ok+1)) || { echo "  FAIL o resto do pack.json não sobreviveu"; cat "$MT/pack.json"; fail=$((fail+1)); }
+rm -rf "$MT"
+
 echo "   pstudio-build: $ok ok, $fail failed"
 [ $fail = 0 ]

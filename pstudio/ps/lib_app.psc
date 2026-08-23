@@ -31,6 +31,7 @@ enum PalMode:
     PAL_COMMANDS      # o prefixo '>'
     PAL_GOTO          # o prefixo ':'
     PAL_BUILD         # o prefixo '!': um alvo do grafo
+    PAL_TEXTO         # uma linha DIGITADA, para quem pergunta em vez de listar
 
 
 struct Tab:
@@ -91,7 +92,7 @@ def fuzzy_score(hay: str, needle: str) -> int:
 
 # a paleta de comandos: nome e id, numa cadeia só (módulo importado não roda
 # statement, e uma tabela de duas colunas cabe numa linha por comando)
-const COMMANDS: str = "Save=0;Save All=1;Close Tab=2;Reload File=3;Toggle File Tree=4;Zoom In=5;Zoom Out=6;Zoom Reset=7;Find=8;Go To Line=9;Quit=10;Fold=11;Unfold=11;Fold All=12;Unfold All=13;Toggle Comment=14;Move Line Up=15;Move Line Down=16;Duplicate Line=17;Delete Line=18;Join Lines=19;Toggle Bookmark=20;Next Bookmark=21;Clear Bookmarks=22;Toggle Minimap=23;Build=24;Build Target...=25;Run=26;Clean=27;Stop Build=28;Go To Build Error=29"
+const COMMANDS: str = "Save=0;Save All=1;Close Tab=2;Reload File=3;Toggle File Tree=4;Zoom In=5;Zoom Out=6;Zoom Reset=7;Find=8;Go To Line=9;Quit=10;Fold=11;Unfold=11;Fold All=12;Unfold All=13;Toggle Comment=14;Move Line Up=15;Move Line Down=16;Duplicate Line=17;Delete Line=18;Join Lines=19;Toggle Bookmark=20;Next Bookmark=21;Clear Bookmarks=22;Toggle Minimap=23;Build=24;Build Target...=25;Run=26;Clean=27;Stop Build=28;Go To Build Error=29;Manifest: Open pack.json=30;Manifest: Set Default Target...=31;Manifest: Add Dependency...=32"
 
 
 struct App:
@@ -157,6 +158,19 @@ struct App:
     # PID, porque é isso que `os.spawn` devolve (ver a bateria do `os.spawn`).
     run_pid: int
     want_stop_run: bool
+    # F6: o MANIFESTO. O editor não inventa um formulário — ele já é um editor
+    # de texto, e `pack.json` é texto. O que a paleta acrescenta é o que é chato
+    # de escrever à mão e fácil de escrever errado: o alvo padrão (que tem de
+    # ser um alvo QUE EXISTE, e o grafo sabe quais são) e uma dependência (que
+    # tem de ser resolvida, conferida e travada, e o `ppack` é que sabe fazê-lo).
+    #
+    # Como tudo o mais aqui, o app PEDE e o driver atende.
+    want_manifest_default: str      # "" = nada a pedir
+    want_manifest_dep: str          # "nome@versão"
+    pal_texto_para: int             # o comando à espera do que se digitar
+    pal_prompt: str                 # ... e o que se pergunta a quem digita
+    # quando a paleta de alvos serve para ESCOLHER e não para construir
+    pal_build_default: bool
 
     # ---- o driver, injetado pelo `app.psc` ----
     read_file: (def(str) -> str)?        # "" quando não deu
@@ -424,6 +438,30 @@ struct App:
         self.palette_filter()
         self.dirty_ui = True
 
+    def perguntar(self, prompt: str, para: int):
+        """Abre a paleta a PERGUNTAR, em vez de a oferecer.
+
+        O editor não tem caixas de diálogo, e não é falta: ele tem uma linha de
+        entrada que já serve para procurar arquivo, comando e número de linha —
+        e perguntar é a quarta coisa que se faz com ela. Uma janela modal com um
+        campo e dois botões seria um mecanismo novo para o que já existe, e
+        obrigaria a decidir onde ela fica, quanto mede e o que acontece quando a
+        janela encolhe."""
+        self.pal_prompt = prompt
+        self.pal_texto_para = para
+        self.palette_open(PAL_TEXTO)
+
+    def texto_aceite(self, para: int, txt: str):
+        """O que se digitou, entregue a quem perguntou."""
+        if para == 32:
+            if "@" not in txt:
+                self.build_msg = "uma dependência é `nome@versão` — a v1 não tem resolvedor"
+                self.update_status()
+                return
+            self.want_manifest_dep = txt
+            self.build_msg = "a acrescentar " + txt + "..."
+            self.update_status()
+
     def palette_close(self):
         self.u.set_visible(self.palette, False)
         self.palitems = []
@@ -433,6 +471,15 @@ struct App:
 
     def palette_filter(self):
         q = self.u.text_of(self.palinput)
+        if self.palmode == PAL_TEXTO:
+            # a perguntar: o que se digita é RESPOSTA, e um `>` no meio dela é
+            # um caractere e não um modo
+            self.palitems = []
+            self.palsel = 0
+            self.paltop = 0
+            rot0 = self.pal_prompt + ": " + (q if len(q) > 0 else "…")
+            self.palitems.append(PalItem(rot0, q, 0))
+            return
         # o prefixo escolhe o modo (Sublime): '>' comandos, ':' ir para a linha
         if q.startswith(">"):
             self.palmode = PAL_COMMANDS
@@ -459,6 +506,11 @@ struct App:
                         self.palitems.append(PalItem(parts[0], parts[1], sc))
             case PAL_GOTO:
                 self.palitems.append(PalItem("go to line " + (q if len(q) > 0 else "…"), q, 0))
+            case PAL_TEXTO:
+                # não há lista: o item É o que se está a escrever. Existe para
+                # a paleta poder PERGUNTAR, e não só oferecer.
+                rot = self.pal_prompt + ": " + (q if len(q) > 0 else "…")
+                self.palitems.append(PalItem(rot, q, 0))
             case PAL_BUILD:
                 # os alvos vêm do GRAFO, que o driver pôs aqui: o editor não
                 # sabe o que este projeto constrói, e não devia saber
@@ -496,8 +548,18 @@ struct App:
         match mode:
             case PAL_COMMANDS:
                 self.run_command(int(payload))
+            case PAL_TEXTO:
+                if len(payload) > 0:
+                    self.texto_aceite(self.pal_texto_para, payload)
             case PAL_BUILD:
-                if self.build_busy:
+                if self.pal_build_default:
+                    # escolher o alvo PADRÃO do projeto: o que se pede ao driver
+                    # é uma escrita no manifesto, e não uma construção
+                    self.pal_build_default = False
+                    self.want_manifest_default = payload
+                    self.build_msg = "a gravar o alvo padrão..."
+                    self.update_status()
+                elif self.build_busy:
                     self.build_msg = "build já a correr"
                 else:
                     self.want_build = payload
@@ -641,7 +703,28 @@ struct App:
                     t.cv.buf.clear_marks(core.MARK_ERROR)
             self.update_status()
         elif cmd == 25:
+            self.pal_build_default = False
             self.palette_open(PAL_BUILD)
+        elif cmd == 30:
+            # F6, o "painel" do manifesto: ABRIR o arquivo. Um editor de texto a
+            # oferecer um formulário para editar texto seria uma camada a mais
+            # entre a pessoa e o arquivo que ela vai comitar — e o `pack.json`
+            # é pequeno, declarativo e feito para se ler.
+            self.open_file(path.join(self.root_dir, "pack.json"))
+        elif cmd == 31:
+            # o que um formulário faria melhor que o texto: garantir que o alvo
+            # padrão EXISTE. A lista vem do grafo, e é a mesma do `!`.
+            if len(self.build_targets) == 0:
+                self.build_msg = "não conheço os alvos deste projeto (o grafo ainda não chegou)"
+                self.update_status()
+            else:
+                self.pal_build_default = True
+                self.palette_open(PAL_BUILD)
+        elif cmd == 32:
+            # e a outra: uma dependência não é uma linha que se escreve, é uma
+            # que se RESOLVE — o `ppack` busca, confere o hash, confere a
+            # assinatura e trava no lock. Aqui só se pergunta o nome.
+            self.perguntar("dependência (nome@versão)", 32)
         elif cmd == 27:
             self.want_clean = True
             self.build_msg = "a limpar..."
@@ -1070,6 +1153,7 @@ def new_app(u: pui.Ui, root_dir: str) -> App:
               [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [],
               False, True, True, 0, "", "",
               "", False, False, False, "", False, False, [], 0, 0, "", "", 0, 0, 0, False,
+              "", "", 0, "", False,
               None, None, None, None, None, None, None, None, None)
 
     app.root = u.panel(-1)
