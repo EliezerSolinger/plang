@@ -93,9 +93,14 @@ For a project, `--out-dir` compiles many files at once and mirrors the source
 tree in the output (builds never write next to your sources):
 
 ```sh
-plangc --out-dir out stl/*.ph src/*.ph src/*.p
+plangc --out-dir out src/main.p       # `import` traz o resto: um arquivo basta
 cc out/src/*.c -o prog
 ```
+
+(Naming one file is enough because `import "x.ph"` implies the module: if
+`x.ph` has an `x.p` sibling, the compiler emits both. That is why no list of
+modules lives in a Makefile here — and `plangc --deps`/`--outputs` answer what
+it read and what it will emit, which is what a build system needs.)
 
 For code aimed at very old toolchains, emit strict C89:
 
@@ -370,22 +375,74 @@ eleven thousand lines of decimal in a `.p`, and are now one line reading a
 `.bin` at compile time — same single binary, same static array, a page of
 source instead of a phone book.
 
+## ppack — the build system and the package manager
+
+`ppack` is this project's build system and package manager, written **in
+pscript** and built by the compiler it builds. One binary, three modes:
+*resolve* (the only one that touches the network), *describe* and *execute*.
+
+```sh
+ppack build [target]      # build; -j N, -k N, -n (dry run), --explain
+ppack run x.psc [args]    # build it and BECOME it (stdin, stdout, exit code)
+ppack test / ppack verify # the named suites / the whole battery
+ppack dev [target]        # rebuild and relaunch on every change
+ppack doc <mod> [sym]     # a module's interface and docs; --html for a folder
+ppack why / tree / graph / explain      # why did this rebuild, and who pulled that
+ppack add x@1.0 / lock / install / up   # the manifest and the lock
+ppack publish x --to <dir> --key <k>    # a tarball, a hash and two signatures
+```
+
+The engine is the one the ninja documents describe: a node is a file, an edge
+is a command, and "out of date" is ninja's six tests — with `restat` comparing
+**content** (our compiler rewrites C that is often byte-identical, and then
+nothing downstream needs to run) and the queue ordered by the **duration** the
+log recorded last time. Commands are `argv`, never a shell string.
+
+Two things are unusual and both are deliberate:
+
+- **The compiler answers; the build system decides.** `plangc --deps`,
+  `--outputs`, `--api` and `--version` tell a build system what it read, what
+  it will emit, what its interface is and who it is. What to rebuild, in what
+  order, with how many processes is never the compiler's business — which is
+  what keeps a second build system from growing inside it.
+- **Nothing is global.** Packages, objects, binaries and logs all live in the
+  project's `build/`. A repository is a *format*, not a service: a directory
+  served by anything, with trust coming from content (SHA-256 plus Ed25519),
+  never from the transport.
+
+The design is written down decision by decision in `pbuild/DESIGN.md`,
+`pbuild/ARQUITETURA.md`, `ppack/DESIGN.md` and `ppack/REPOSITORIO.md`, with
+`pbuild/DECISOES.md` as the one-line index and `pbuild/PLAN.md` as the diary.
+
 ## Repository layout
 
 ```
 selfhost/     the compiler, written in Plang (.p source, .ph headers)
               — including the C front end (cfront) and pscript's (ps_*)
-bootstrap/    the C seed generated from selfhost/ (+ bootstrap/stl headers)
-stl/          optional standard library (header-only generic templates, .ph)
+bootstrap/    the C seed generated from selfhost/ (+ bootstrap/packages/stl)
+packages/     what WE publish, each one a package with its own pack.json and
+              its own tests: stl (the generic containers), pui (the editor's
+              toolkit), sha2, tar, ed25519, http, url, and pbuild — the build
+              engine itself
+pbuild/       the build system's documents and its programs: ppack (the CLI),
+              build_plang.psc (THIS repository's descriptor), and the engine's
+              own suite
+ppack/        the package manager's documents (the repository format, the
+              decisions)
 pscript/      the sibling language: its runtime (in Plang), design and examples
 pstudio/      Plang Studio: the editor — pscript on top (ps/*.psc),
               the SDL2 driver and the lexer bridge in Plang
+qbe/          the vendored QBE, as a SUBMODULE (`git submodule update --init`)
 tests/        gating suites; corpora somebody else wrote (c-testsuite,
               wacct, JSONTestSuite, web-platform-tests); clang, python3 and
               node as oracles; and the collector under stress
 tools/        generators for data that is not written by hand (the Unicode
               case table)
-Makefile      builds plangc from the seed
+pack.json     this repository IS a workspace, like any other project ppack
+              builds — which is how the ecosystem is tested by the people who
+              write it, against the hardest case there is
+build.ninja   generated and committed, so a clean machine needs no ppack
+Makefile      a thin shell over ppack (and it builds the seed)
 SPECS.MD      language reference
 ```
 
@@ -459,9 +516,10 @@ a real defect. The worst answered wrongly rather than crashing: `in` over a
 collected element is an interior pointer, so a path tracer rendered a different
 image for every collection frequency.
 
-pscript is still younger than the C front end: `unsafe` and the epoll/kqueue I/O
-loop are ahead, and [pscript/PLAN.md](pscript/PLAN.md) says where each piece
-stands and why.
+pscript is still younger than the C front end — `unsafe` is ahead, and
+[pscript/PLAN.md](pscript/PLAN.md) says where each piece stands and why. The
+awaitable I/O loop (epoll/kqueue/poll) landed and is what the build system runs
+on: `ppack` keeps N compilers in flight through it.
 
 ## License
 
