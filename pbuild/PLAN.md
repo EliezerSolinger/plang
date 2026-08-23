@@ -252,44 +252,24 @@ errado.
       cujo C sai igual = 4 arestas e 7,7 s. `ppack verify` (o `verify-all`
       inteiro, como grafo) **5m48 do zero e 7,7 s sem mudança** — contra ~20 min
       em toda corrida do `verify-all.sh`.
-- [x] **F5 e F7 FECHADAS, e a F6 só falta a tela** (2026-08-23). A reflexão
-      (tabela de campos, `repr` como dado, `json.stringify`), o doctest, o
-      `--json` em tudo, o `run` fora do compilador com `os.exec`, o post-mortem
-      com VALORES e o `ppack dev`. O que resta da F6 precisa de janela: o motor
-      em processo no editor, o painel, o play/vassoura e os erros sublinhados.
-      A releitura das especificações no fim fechou mais quatro buracos: o
-      `ppack check` (a promessa de P através dos pacotes), a faixa de toolchain
-      conferida de verdade, o `up`/`--frozen`, e o `build.ninja` comitado com
-      portão de frescura.
-- [x] **F4 FECHADA** (2026-08-23): o repositório inteiro — `publish`, `keygen`,
-      `update`, `search`, `add`, `install`, `up`, `check` — por `file://` e por
-      `http://`, com as duas assinaturas Ed25519 e o TOFU gravado no
-      `pack.lock`. Oito pacotes (`stl`, `pui`, `sha2`, `tar`, `http`, `url`,
-      `ed25519`), e `pscript/lib/` deixou de existir. Portão: `tests/repo.sh`,
-      **72 verificações** (as três recusas do `publish` e o `ppack lock`
-      entraram na F9).
-- [~] **F4 começou pelo que não depende de decisão sua** (2026-08-22): o
-      MANIFESTO e o WORKSPACE. `pbuild/ps/lib_manifest.psc` lê e valida as duas
-      formas de `pack.json` — a de pacote e a de workspace, que se distinguem
-      por ter ou não `members`, sem campo `kind` e sem um terceiro arquivo — e
-      o erro sai como `pack.json:4:12: error: ...`, clicável pelo mesmo caminho
-      que um erro de compilação. O descritor lê o `pack.json` da raiz, deriva as
-      RAÍZES de busca (o diretório que contém os membros) e as passa a TODA
-      invocação do compilador, pergunta inclusive — `--deps` de um arquivo que
-      importa de um pacote precisa achar o pacote para responder.
-      Portão: `caso_manifesto` na suíte do motor (60 checagens agora).
-
-      **O que falta em F4 depende de VOCÊ, e está listado aqui para a decisão
-      ser fácil:**
-      1. **como um módulo pscript de um pacote é importado.** `import <>` ficou
-         decidido para `.ph` (módulo P); um pacote pscript como o `pui` precisa
-         de uma forma para os `.psc` dele. Proposta: `import <pui/pui.psc>`,
-         mesma regra de busca, e o nome do namespace é o último pedaço sem
-         extensão. Sem isto o `pui` não pode virar pacote.
-      2. **os campos do `pack.json`** estão implementados como a proposta de
-         `packages/README.md`. Mudá-los é barato.
-      3. **mover o `stl`** (41 referências, ciclo de seed) — a decisão de
-         quando, não de se.
+- [x] **TODAS AS FASES FECHADAS, F9 inclusive** (2026-08-23, fim da sessão). A
+      releitura final das especificações — documento a documento, decisão por
+      decisão, contra o código — achou **seis decisões escritas e não feitas**
+      que não apareciam como pendentes em lugar nenhum: o `pool = console` no
+      executor, o `ppack build --repro`, o `ppack doc --html`, os pisos dos
+      placares no descritor, o `ppack lock`, e as três recusas do `publish`. É a
+      lição que vale guardar: **um plano com todas as caixas fechadas não é o
+      mesmo que uma especificação cumprida**, e a única forma de saber a
+      diferença é reler uma contra a outra.
+      Ela achou também três defeitos que não estavam em especificação nenhuma —
+      o corpo de uma string tripla cortado em cada aspa interna, o contador do
+      relatório que não recomeçava entre construções do mesmo processo, e uma
+      suíte de 89 conferências que não estava ligada a portão nenhum (com uma
+      delas já apodrecida).
+      E fechou os dois itens que eu tinha dado como "não fazer": o C escrito à
+      mão dentro de um pacote (2.13) e o painel do manifesto no editor — este
+      último por eu ter descrito a pergunta errada, "onde ficam os campos do
+      formulário", quando o editor não tem formulários e `pack.json` é texto.
 
 ---
 
@@ -347,6 +327,45 @@ comportamento existente muda. É a menor fase e destrava F2 e F4.
 (publish/semver) usa a 2; e a fase não colide com nada — só acrescenta saídas.
 
 ### Entregas
+
+- [x] **F5 e F7 FECHADAS, e a F6 só falta a tela** (2026-08-23). A reflexão
+      (tabela de campos, `repr` como dado, `json.stringify`), o doctest, o
+      `--json` em tudo, o `run` fora do compilador com `os.exec`, o post-mortem
+      com VALORES e o `ppack dev`. O que resta da F6 precisa de janela: o motor
+      em processo no editor, o painel, o play/vassoura e os erros sublinhados.
+      A releitura das especificações no fim fechou mais quatro buracos: o
+      `ppack check` (a promessa de P através dos pacotes), a faixa de toolchain
+      conferida de verdade, o `up`/`--frozen`, e o `build.ninja` comitado com
+      portão de frescura.
+- [x] **F4 FECHADA** (2026-08-23): o repositório inteiro — `publish`, `keygen`,
+      `update`, `search`, `add`, `install`, `up`, `check` — por `file://` e por
+      `http://`, com as duas assinaturas Ed25519 e o TOFU gravado no
+      `pack.lock`. Oito pacotes (`stl`, `pui`, `sha2`, `tar`, `http`, `url`,
+      `ed25519`), e `pscript/lib/` deixou de existir. Portão: `tests/repo.sh`,
+      **72 verificações** (as três recusas do `publish` e o `ppack lock`
+      entraram na F9).
+- [~] **F4 começou pelo que não depende de decisão sua** (2026-08-22): o
+      MANIFESTO e o WORKSPACE. `pbuild/ps/lib_manifest.psc` lê e valida as duas
+      formas de `pack.json` — a de pacote e a de workspace, que se distinguem
+      por ter ou não `members`, sem campo `kind` e sem um terceiro arquivo — e
+      o erro sai como `pack.json:4:12: error: ...`, clicável pelo mesmo caminho
+      que um erro de compilação. O descritor lê o `pack.json` da raiz, deriva as
+      RAÍZES de busca (o diretório que contém os membros) e as passa a TODA
+      invocação do compilador, pergunta inclusive — `--deps` de um arquivo que
+      importa de um pacote precisa achar o pacote para responder.
+      Portão: `caso_manifesto` na suíte do motor (60 checagens agora).
+
+      **O que falta em F4 depende de VOCÊ, e está listado aqui para a decisão
+      ser fácil:**
+      1. **como um módulo pscript de um pacote é importado.** `import <>` ficou
+         decidido para `.ph` (módulo P); um pacote pscript como o `pui` precisa
+         de uma forma para os `.psc` dele. Proposta: `import <pui/pui.psc>`,
+         mesma regra de busca, e o nome do namespace é o último pedaço sem
+         extensão. Sem isto o `pui` não pode virar pacote.
+      2. **os campos do `pack.json`** estão implementados como a proposta de
+         `packages/README.md`. Mudá-los é barato.
+      3. **mover o `stl`** (41 referências, ciclo de seed) — a decisão de
+         quando, não de se.
 
 - [x] **`--version`**
   - constante `PLANG_VERSION = "0.1.0"` em `selfhost/main.p` (semver da
@@ -1010,13 +1029,27 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
       árvore. Montá-lo no editor obrigaria a embutir o descritor de cada
       projeto que se abre, o que só funciona para UM projeto, que seria este.
       O custo é um JSON lido uma vez por build.
-- [ ] **painel de build**: lê e ESCREVE `pack.json` (o manifesto é do painel;
-      `build.psc` é do programador e o painel NÃO o edita — decidido); alvo
-      padrão, `-j`, alvo nomeado (linux-amd64 etc.)
-      **É o que sobra da F6**, e é um FORMULÁRIO: onde ficam os campos, o que é
-      caixa de texto e o que é lista, o que acontece ao gravar. Isso são
-      escolhas de quem vai olhar para elas todos os dias — a escolha do alvo já
-      existe sem formulário nenhum, na paleta (`!`).
+- [x] **painel de build** (FEITO, 2026-08-23) — **e não é um formulário.**
+      Eu tinha-o descrito como um: "onde ficam os campos, o que é caixa de texto
+      e o que é lista". Olhar para o editor desfez a pergunta: ele não tem camada
+      de widgets nem caixas de diálogo, e não é falta — é um editor de TEXTO com
+      uma paleta, e `pack.json` é texto. Um formulário para um arquivo
+      declarativo de vinte linhas seria uma camada entre a pessoa e o arquivo que
+      ela vai comitar, e obrigaria a inventar diálogos modais para o resto do
+      editor não ter.
+      São três comandos, e cada um por um motivo diferente: **Open pack.json**
+      (um editor edita texto), **Set Default Target...** (o que um formulário
+      faria melhor que o texto — garantir que o alvo EXISTE; a lista vem do
+      grafo) e **Add Dependency...** (uma dependência não se escreve, resolve-se:
+      quem busca, confere o hash, confere a assinatura e trava no lock é o
+      `ppack`). A paleta aprendeu a PERGUNTAR (`PAL_TEXTO`), que é a quarta coisa
+      que se faz com a linha de entrada que já procurava arquivo, comando e
+      linha.
+      A cirurgia que escreve no `pack.json` sem o estragar saiu do `ppack` para o
+      `lib_manifest`: o gerenciador e o editor usam a MESMA, e a chave que já
+      existe é substituída no lugar onde está.
+      Portão: `pstudio --manifest <dir>` (o atendimento) e o auto-teste do editor
+      (a paleta).
 - [x] **play/vassoura** (FEITO, 2026-08-23): na PALETA que o editor já tinha,
       sem inventar atalhos — `Build`, `Build Target…`, `Run`, `Clean`, `Stop
       Build` e `Go To Build Error`. A vassoura mantém `build/pkg`, como a do
