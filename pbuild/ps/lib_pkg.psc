@@ -50,6 +50,35 @@ struct Mundo:
         return out
 
 
+def conferir_linguagens(m: Mundo) -> list<str>:
+    """A invariante que mantém P livre de runtime ATRAVÉS dos pacotes.
+
+    Um pacote `lang: p` não pode depender de um pacote `pscript`. A razão não é
+    de arrumação: quem usa um pacote P espera o que P promete — sem coletor, sem
+    alocação escondida, a ABI do C. Um `p` que puxasse um `pscript` traria o
+    runtime inteiro a reboque, e a promessa quebrava-se em silêncio, uma
+    dependência abaixo de onde alguém a leu.
+
+    O outro lado não é simétrico e não devia ser: um pacote pscript PODE depender
+    de um pacote P, e é assim que o `ppack` usa o `sha2` — a travessia da 45.5
+    existe exatamente para isso.
+
+    Devolve a lista de problemas, vazia quando está tudo bem."""
+    out: list<str> = []
+    for p in m.pacotes:
+        if p.lang != "p":
+            continue
+        for d in p.deps:
+            i = m.acha(d)
+            if i < 0:
+                continue
+            if m.pacotes[i].lang != "p":
+                out.append(p.nome + " é `lang: p` e depende de " + d + ", que é `"
+                           + m.pacotes[i].lang + "`: um pacote P que puxa um pacote pscript "
+                           + "traz o runtime a reboque, e quem usa o P espera o contrário")
+    return out
+
+
 async def ler_mundo(membros: list<str>) -> Mundo:
     """Lê o manifesto de cada membro do workspace. Um membro sem `pack.json` é
     ignorado em silêncio — o workspace pode listar uma pasta que ainda não é

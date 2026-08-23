@@ -340,3 +340,117 @@ ele vê.
 Portão: nove checagens em `tests/protocol.sh` — o record, a assinatura, o
 `async`, o `private` que não sai, os quatro ruídos que não podem vazar
 (`Category`, `PsCtx`, `PsStr`, `__frame`), a docstring, e a invariância do hash.
+
+---
+
+## A base escreve-se: `0o`, `0b`, `_`, e o zero à esquerda que sai
+
+Em C um zero à esquerda é octal e ninguém o vê: `0755` vale 493 em silêncio.
+Esta é uma linguagem de sintaxe Python, e o Python fechou essa armadilha por
+uma razão. Então, nas duas linguagens (o lexer é partilhado por `LexSpec`):
+
+  * `0o755` e `0b1010` existem;
+  * `1_000_000` e `0xff_ff` também — o separador é do LEITOR;
+  * `0755` é ERRO, e a mensagem diz como se escreve octal. `09` diz outra coisa,
+    porque `0o9` não existe.
+
+O texto do token é normalizado para DECIMAL na hora de lexar, e isso não é
+arrumação: é o texto do token que sai no C gerado e que o back end QBE lê, e
+`0b` não é C. Um só lugar converte, e os dois lados recebem um número que ambos
+entendem.
+
+## O prelúdio é da LINGUAGEM, logo é de todo MÓDULO
+
+Ele é prependido ao módulo de cima, que é onde o shadowing da 68.3 se decide — e
+isso punha os nomes dele só no namespace da raiz. Um módulo importado que
+escrevesse `error(msg, VALUE)` ouvia que `VALUE` "pertence ao módulo sendo
+compilado, que este não importa". Ninguém importa o prelúdio: era a mensagem
+certa para a pergunta errada.
+
+## O que levanta no meio de uma instrução não pode deixar rasto
+
+`xs.append(item as str)` dentro de um `try`, com um `item` que não é `str`,
+deixava a lista com um elemento a mais apontando para o que a chamada devolveu
+DEPOIS de falhar. O segfault aparecia na leitura seguinte, longe do `catch`.
+
+Duas coisas faltavam, e são a mesma ideia:
+
+  * `value_first` só tirava o valor para fora quando ele ALOCAVA (por causa do
+    coletor). Agora também quando ele pode LEVANTAR — em ambos os casos o lugar
+    de destino só se pede depois de o valor existir;
+  * o teste de exceção sai no fim da instrução (49.2), e dentro de um `try` ele
+    só baixa a bandeira e cai para a frente. O que vem depois dele NA MESMA
+    instrução tem de ficar debaixo da bandeira.
+
+## `from <pkg/mod.psc> import x`
+
+Faltava, e era assimetria sem razão: `import <pkg/mod.psc>` já existia, e um
+pacote cujos nomes só se alcançam por um lado obriga a qualificar tudo. Um
+módulo em P entra INTEIRO (`import <pkg/mod.ph>`), porque o que dele atravessa é
+decidido pela 45.5 e não por uma lista de nomes.
+
+## A TABELA DE CAMPOS, e o que cai dela
+
+O que o compilador sabe e o runtime não: os NOMES dos campos e o que cada um é.
+Sem isso, cada `repr` é uma função gerada POR TIPO, e o C emitido cresce com o
+número de tipos em vez de com o tamanho do programa.
+
+O descritor de cada `struct` e de cada `record` passa a carregar
+`fields`/`nfields`/`at`, e um `PsTy` estático descreve cada tipo distinto que
+aparece num campo. Três decisões de implementação:
+
+  * **o endereço de um campo vem de uma FUNÇÃO gerada** e não de um `offsetof`
+    na tabela: `offsetof` num inicializador estático é das poucas coisas que o
+    back end QBE não dobra (a mesma razão por que o `size` do `PsShape` é
+    enchido no arranque), e uma função é expressável nos dois sem primitiva
+    nova. É também o que faz um `record` — que não tem cabeçalho — andar pelo
+    mesmo caminho;
+  * **o par PsTy/PsDesc é um CICLO**, desfeito com uma atribuição no arranque em
+    vez de uma declaração antecipada de um `const`;
+  * **o `to_str()` do tipo mora no descritor**, num embrulho de duas linhas e
+    não num ponteiro de função convertido.
+
+Dela caem, sem gerador nenhum atrás:
+
+  * **`repr` como dado** — saída IDÊNTICA AO BYTE à da forma gerada, que é a
+    prova de que a troca não mudou a linguagem. O `to_str` do tipo ganha agora a
+    QUALQUER profundidade (a forma gerada só sabia disso no topo). Uma tupla
+    dentro de um contentor ainda usa o adaptador gerado, porque ela vira um
+    `record` e imprime-se `(a, b)` e não `Nome(_0=...)`;
+  * **`json.stringify`** — byte a byte igual ao `json.dumps(separators=(',',':'))`
+    do python nos casos do teste. As diferenças em relação ao `repr` são
+    decisões: um `to_str` NÃO manda aqui (JSON é dado), um enum viaja pelo NOME,
+    um conjunto vira ARRAY, e o que não atravessa LEVANTA com o CAMINHO onde
+    parou;
+  * **o post-mortem** — com `-g`, cada moldura da pilha imprime o que estava em
+    cada variável. Os valores são copiados no RAISE (no relatório a pilha já
+    desenrolou) e como REFERÊNCIAS (renderizar no raise seria formatar um grafo
+    a cada erro). O nome e o tipo são estáticos por moldura e só saem com `-g`.
+
+Custo MEDIDO: +1,4 % no `ppack.c` e +2,6 % no `app.c` do editor, contra um alvo
+de 5 %. gc-stress 128 ok.
+
+## `os.exec`: o programa PASSA A SER o processo
+
+`os.run` cria um filho e espera; `os.exec` não volta. A diferença importa numa
+coisa só, e essa coisa é tudo: um filho tem a saída CAPTURADA, então não pinta a
+tela, não lê o teclado, não sabe o tamanho do terminal e não recebe Ctrl-C.
+Depois da troca não há "depois" — mesmo PID, mesmos descritores, mesmo terminal
+—, e por isso o que estiver por escrever é esvaziado ANTES.
+
+## Duas mensagens que diziam a verdade sobre nada
+
+  * **faltar a palavra numa chamada byref** (`f(x)` onde o parâmetro é `in x`)
+    dava "incompatible types in assignment (scalar from 'Fe')" — verdade, e
+    inútil. Agora diz qual parâmetro e qual palavra, e passar `&x` à mão continua
+    a valer;
+  * **um `out` preenchido campo a campo** era avisado como "nunca atribuído": o
+    analisador via `r = ...` e não via `f(out r.X)`.
+
+## `implement X`: quem DECLARA o tipo é quem o materializa
+
+`implement` emite os corpos que o `.ph` declarou, com ligação externa. Dois
+pacotes que precisassem da fronteira do pscript ao mesmo tempo materializavam
+ambos o `CStr`, e o linker queixava-se de `CStr_at`: uma mensagem sobre um
+método de acesso, a falar de um problema de arquitetura. A regra é uma linha, e
+a 1.5(a) faz o resto sozinha.

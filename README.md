@@ -58,11 +58,25 @@ repository's own build system, written in pscript — and from then on the build
 is a graph: `build/bin/plangc_s2` is the compiler, and everything lands under
 `build/`.
 
+If you would rather not go through `ppack` at all, `build.ninja` is committed
+and describes the same graph:
+
+```sh
+cc -O2 -o plangc bootstrap/selfhost/*.c && ninja
+```
+
+It is generated (`ppack ninja build.ninja`) and a gate in `make verify`
+regenerates it and compares — a committed generated file has exactly one way to
+fail, which is to age in silence.
+
+The QBE back end uses a vendored QBE, which is a **submodule**: `git submodule
+update --init` before `make verify`, or that one suite says so and stops.
+
 ```sh
 make test       # the corpus in C plus the pscript suite, case by case
 make verify     # the whole battery (5 min from scratch, 9 s when nothing moved)
 make doc <mod>  # a module's interface, with its documentation
-make ninja      # a build.ninja, for bootstrapping on a machine without ppack
+make ninja      # regenerate the committed build.ninja
 ```
 
 `plangc` has no runtime and no dependencies — it reads a `.p`/`.ph` file and

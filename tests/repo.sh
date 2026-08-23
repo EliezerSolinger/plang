@@ -200,6 +200,78 @@ EOF
 grep -q "unsafe" un.log && ok || bad "a recusa não disse como se declara unsafe"
 cd "$RAIZ"
 
+# ---- 7b. `up`, o lock desencontrado e as invariantes ----
+#
+# Três coisas que o build não confere porque não são trabalho dele.
+cd "$RAIZ"
+"$PPACK" check >check.log 2>&1 && ok || bad "ppack check devia passar nesta árvore"
+grep -q "nenhum problema" check.log && ok || bad "o check não disse que estava tudo bem"
+rm -f check.log
+
+# um pacote `lang: p` que dependa de um `pscript` tem de ser recusado: é a
+# invariante que mantém P livre de runtime ATRAVÉS dos pacotes
+cp packages/sha2/pack.json "$OUT/sha2-pack.bak"
+python3 - <<'PYX'
+import json
+p = "packages/sha2/pack.json"
+d = json.load(open(p))
+d["deps"]["pui"] = "0.1.0"
+open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PYX
+"$PPACK" check >check2.log 2>&1 && bad "um pacote P que puxa um pscript devia ser recusado" || ok
+grep -q "runtime a reboque" check2.log && ok || bad "a recusa não explicou porquê"
+cp "$OUT/sha2-pack.bak" packages/sha2/pack.json
+rm -f check2.log
+
+# `up` sobe para a mais alta que o índice tem, e o manifesto continua JSON
+cd "$RAIZ/$OUT"
+rm -rf projup && mkdir projup && cd projup
+cat > pack.json <<EOF
+{
+  "members": ["nada"],
+  "repos": [{"url": "file://$RAIZ/$OUT/repo/", "unsafe": true}]
+}
+EOF
+"$PPACK" update >/dev/null 2>&1
+"$PPACK" add sha2@0.1.0 >/dev/null 2>&1 && ok || bad "add no projeto do up"
+# DUAS versões do mesmo pacote no repositório: é isso que dá ao `up` o que
+# escolher, e é a única forma de medir que ele escolhe a mais alta
+cd "$RAIZ"
+"$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
+python3 - <<'PYX'
+import json
+p = "packages/tar/pack.json"
+d = json.load(open(p))
+d["version"] = "0.2.0"
+open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PYX
+"$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
+python3 - <<'PYX'
+import json
+p = "packages/tar/pack.json"
+d = json.load(open(p))
+d["version"] = "0.1.0"
+open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PYX
+cd "$RAIZ/$OUT/projup"
+"$PPACK" update >/dev/null 2>&1
+"$PPACK" add tar@0.1.0 >addtar.log 2>&1 && ok || bad "add tar@0.1.0 (veja $OUT/projup/addtar.log)"
+"$PPACK" up >up.log 2>&1 && ok || bad "ppack up"
+grep -q "0.1.0 -> 0.2.0" up.log && ok || bad "o up não subiu a versão"
+python3 -c "import json,sys; d=json.load(open('pack.json')); sys.exit(0 if d['deps']['tar']=='0.2.0' else 1)" && ok || bad "o manifesto não ficou com a versão nova (ou deixou de ser JSON)"
+
+# o lock desencontrado do manifesto: avisa, e com --frozen recusa
+python3 - <<'PYX'
+import json
+d = json.load(open("pack.json"))
+d["deps"]["naoexiste"] = "9.9.9"
+open("pack.json", "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PYX
+"$PPACK" install >inst.log 2>&1
+grep -q "não corresponde ao pack.json" inst.log && ok || bad "install devia avisar do lock desencontrado"
+"$PPACK" install --frozen >inst2.log 2>&1 && bad "--frozen devia recusar" || ok
+cd "$RAIZ"
+
 # ---- 8b. `--json`: os MESMOS dados, para quem não é uma pessoa ----
 #
 # A IDE e um script consomem isto; o escapador é o mesmo do grafo, para não

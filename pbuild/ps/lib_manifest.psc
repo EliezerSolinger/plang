@@ -210,3 +210,20 @@ async def ler(caminho: str) -> Manifesto:
         if not nome_ok(dp.nome):
             erro(m, raw, "deps", "dependência com nome inválido: '" + dp.nome + "'")
     return m
+
+
+def versao_maior(a: str, b: str) -> bool:
+    """`a > b`, comparando NÚMERO a número e não texto a texto.
+
+    "0.10.0" e "0.9.0": como texto o segundo ganha, e como versão perde. É o
+    erro clássico, e custa três linhas não o cometer."""
+    pa = a.split(".")
+    pb = b.split(".")
+    i = 0
+    while i < 3:
+        na = int(pa[i]) if i < len(pa) else 0
+        nb = int(pb[i]) if i < len(pb) else 0
+        if na != nb:
+            return na > nb
+        i += 1
+    return False

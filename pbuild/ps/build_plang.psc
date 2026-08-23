@@ -273,6 +273,18 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, sdoc: str, f
                           {"PLANGC": plangc}, [plangc], logdir, "net-late"))
     logs.append(T.harness(c, "print-atomic", ["bash", "tests/print-atomic.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "print atômico"))
+    # `ppack check`: as invariantes que o build não confere porque não são
+    # trabalho dele — a principal sendo que P continua livre de runtime ATRAVÉS
+    # dos pacotes
+    logs.append(T.harness(c, "check", ["./" + path.join(BUILD, "bin/ppack"), "check"],
+                          {}, [path.join(BUILD, "bin/ppack"), plangc], logdir,
+                          "as invariantes dos pacotes"))
+    # o `build.ninja` comitado é o bootstrap sem `ppack`, e um arquivo gerado que
+    # fica comitado tem um modo de falhar: envelhecer em silêncio
+    logs.append(T.harness(c, "ninja", ["bash", "tests/ninja.sh"],
+                          {"PPACK": path.join(BUILD, "bin/ppack")},
+                          [path.join(BUILD, "bin/ppack")], logdir,
+                          "o build.ninja comitado"))
     logs.append(T.harness(c, "run-ppack", ["bash", "tests/run-cmd-ppack.sh"],
                           {"PPACK": path.join(BUILD, "bin/ppack")},
                           [path.join(BUILD, "bin/ppack"), plangc], logdir, "run pelo ppack"))

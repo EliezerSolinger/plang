@@ -382,6 +382,72 @@ async def cmd_graph(query: str) -> int:
 private async def mundo() -> PK.Mundo:
     return await PK.ler_mundo(await BP.membros_do_workspace("pack.json"))
 
+async def cmd_check(query: str) -> int:
+    """`ppack check` — as invariantes que o build não confere porque não é
+    trabalho dele.
+
+    Duas, e as duas são sobre a mesma promessa: **P é livre de runtime, e
+    continua a sê-lo através dos pacotes**.
+
+      1. um pacote `lang: p` não depende de um pacote `pscript` (lido dos
+         manifestos, de graça);
+      2. e nenhum `.psc` aparece no FECHO do módulo-raiz de um pacote `p` —
+         que é a mesma coisa dita onde ela realmente acontece, porque um
+         `import` alcança mais longe do que um manifesto.
+
+    O que NÃO é problema, e por isso não é conferido: um pacote P com testes em
+    pscript. O `sha2` tem um, de propósito — é como se prova que a fronteira da
+    45.5 funciona. Ele não está no fecho da raiz, e é por isso que a pergunta é
+    sobre o FECHO e não sobre o diretório."""
+    m = await mundo()
+    problemas = PK.conferir_linguagens(m)
+    raizes = await BP.raizes_do_workspace("pack.json")
+    dcheck = path.join(BP.BUILD, "check")
+    if not path.isdir(dcheck):
+        os.makedirs(dcheck)
+    for p in m.pacotes:
+        if p.lang != "p":
+            continue
+        man = await MF.ler(path.join(p.dir, "pack.json"))
+        if len(man.raiz) == 0:
+            continue
+        argv: list<str> = [query]
+        for r in raizes:
+            argv.append("--pkg-path")
+            argv.append(r)
+        argv.append("--deps")
+        argv.append("--out-dir")
+        argv.append(dcheck)
+        argv.append(path.join(p.dir, man.raiz))
+        res = await os.run(argv, stdout=path.join(dcheck, "deps.txt"))
+        if res.status() != 0:
+            # o compilador é o PRIMEIRO portão desta invariante: um `.ph` que
+            # importe um módulo pscript ele já recusa. Quando isso acontece o
+            # que interessa é o que ELE disse, não a nossa paráfrase.
+            problemas.append(p.nome + ": o fecho de " + man.raiz + " não se deixou ler:\n       "
+                             + res.output().strip().replace("\n", "\n       "))
+            continue
+        f = await open(path.join(dcheck, "deps.txt"), "r")
+        txt = await f.text()
+        await f.close()
+        for ln in txt.split("\n"):
+            if ln.endswith(".psc"):
+                problemas.append(p.nome + " é `lang: p` e o fecho de " + man.raiz
+                                 + " passa por " + ln + ", que é pscript")
+    if saida_json:
+        js: list<str> = []
+        for pr in problemas:
+            js.append(G.jstr(pr))
+        print("[" + ", ".join(js) + "]")
+        return 1 if len(problemas) > 0 else 0
+    if len(problemas) == 0:
+        print(f"check: {len(m.pacotes)} pacote(s), nenhum problema")
+        return 0
+    for pr in problemas:
+        print("erro: " + pr)
+    return 1
+
+
 async def cmd_tree() -> int:
     """`ppack tree` — o que este projeto usa, e por dentro de quê."""
     m = await mundo()
@@ -745,7 +811,18 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
         ja = lk.acha(n)
         if ja >= 0 and lk.pacotes[ja].versao == v:
             continue
-        if ja >= 0:
+        if ja >= 0 and n == nome:
+            # o pacote PEDIDO na linha de comando pode trocar de versão: é
+            # exatamente isso que `ppack add x@0.2.0` e `ppack up` querem dizer.
+            # O que continua a ser conflito é uma DEPENDÊNCIA discordar do que já
+            # está travado — aí ninguém escolheu, e escolher por conta própria
+            # seria a decisão que a v1 não toma.
+            novo: list<LK.Travado> = []
+            for t9 in lk.pacotes:
+                if t9.nome != n:
+                    novo.append(t9)
+            lk.pacotes = novo
+        elif ja >= 0:
             quem = porque[n] if n in porque else "pedido na linha de comando"
             print(f"conflito em {n}: o lock tem {lk.pacotes[ja].versao} e {quem} pede {v}.")
             print("a v1 não busca uma versão que sirva às duas — resolva à mão, subindo uma das pontas")
@@ -815,36 +892,121 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
 private async def escrever_dep_no_manifesto(nome: str, versao: str):
     """A dependência entra no `pack.json` do workspace, à mão e preservando o
     resto do arquivo. Reescrever o JSON inteiro a partir da estrutura perderia
-    comentários de formatação e reordenaria o que a pessoa escreveu — um
-    gerenciador que estraga o arquivo de quem o usa é um gerenciador de que se
-    desconfia."""
+    a formatação de quem o escreveu e reordenaria tudo — um gerenciador que
+    estraga o arquivo de quem o usa é um gerenciador de que se desconfia.
+
+    Um nome que já lá está é SUBSTITUÍDO e não repetido: `{"tar": "0.1.0",
+    "tar": "0.2.0"}` é um objeto com a mesma chave duas vezes, que cada leitor
+    de JSON resolve à sua maneira."""
     f = await open("pack.json", "r")
     raw = await f.text()
     await f.close()
     linha = "    " + G.jstr(nome) + ": " + G.jstr(versao)
+    alvo = G.jstr(nome) + ":"
     if "\"deps\"" in raw:
         i = raw.find("\"deps\"")
         j = raw.find("{", i)
         if j < 0:
             raise error("pack.json: `deps` tem de ser um objeto", VALUE)
         k = raw.find("}", j)
-        dentro = raw[j + 1:k].strip()
-        novo = "{\n" + linha + ("\n  }" if len(dentro) == 0 else ",\n" + raw[j + 1:k].rstrip() + "\n  }")
-        if len(dentro) == 0:
-            novo = "{\n" + linha + "\n  }"
+        dentro = raw[j + 1:k]
+        # o nome já está lá? troca-se a linha dele, e mais nada
+        p0 = dentro.find(alvo)
+        if p0 >= 0:
+            ini = 0
+            for z in range(p0):
+                if dentro[z] == "\n":
+                    ini = z + 1
+            fim = dentro.find("\n", p0)
+            if fim < 0:
+                fim = len(dentro)
+            virg = "," if dentro[ini:fim].rstrip().endswith(",") else ""
+            raw = raw[0:j + 1] + dentro[0:ini] + linha + virg + dentro[fim:] + raw[k:]
+        elif len(dentro.strip()) == 0:
+            raw = raw[0:j] + "{\n" + linha + "\n  }" + raw[k + 1:len(raw)]
         else:
-            novo = "{" + raw[j + 1:k].rstrip() + ",\n" + linha + "\n  }"
-        raw = raw[0:j] + novo + raw[k + 1:len(raw)]
+            raw = raw[0:j] + "{" + dentro.rstrip() + ",\n" + linha + "\n  }" + raw[k + 1:len(raw)]
     else:
-        i = raw.rfind("}")
-        antes = raw[0:i].rstrip()
+        i2 = raw.rfind("}")
+        antes = raw[0:i2].rstrip()
         if antes.endswith(","):
             antes = antes[0:len(antes) - 1]
         raw = antes + ",\n  \"deps\": {\n" + linha + "\n  }\n}\n"
     await R.escrever_bytes("pack.json", R.bytes_de_texto(raw))
 
 
-async def cmd_install() -> int:
+async def cmd_up(alvos: list<str>, inseguro: bool) -> int:
+    """`ppack up [<nome>]` — sobe para a versão mais alta que o índice conhece.
+
+    Sem resolvedor não há "a versão que serve a todos": há a mais alta que
+    existe, e a decisão de a tomar é de quem escreve o comando. Por isso `up` é
+    um comando e não um efeito de `install` — subir de versão é uma escolha, e
+    uma escolha que acontece sozinha é uma escolha que ninguém reviu.
+
+    Ele mexe no manifesto e no lock, como o `add`, e não constrói nada."""
+    if not path.isfile("pack.json"):
+        print("não há pack.json aqui")
+        return 1
+    m = await MF.ler("pack.json")
+    if not m.eh_workspace or len(m.deps) == 0:
+        print("o pack.json deste projeto não pede dependência nenhuma")
+        return 1
+    repos = await repos_do_projeto()
+    quais: list<str> = []
+    for d in m.deps:
+        if len(alvos) == 0 or d.nome in alvos:
+            quais.append(d.nome)
+    if len(quais) == 0:
+        print("'" + alvos[0] + "' não é uma dependência deste projeto")
+        return 1
+    for nome in quais:
+        atual = ""
+        for d2 in m.deps:
+            if d2.nome == nome:
+                atual = d2.faixa
+        melhor = ""
+        for r in repos:
+            ix = await indice_guardado(r)
+            for v in ix.versoes(nome):
+                if len(melhor) == 0 or MF.versao_maior(v, melhor):
+                    melhor = v
+        if len(melhor) == 0:
+            print(nome + ": não está em nenhum índice guardado — `ppack update` primeiro?")
+            continue
+        if melhor == atual:
+            print(nome + " " + atual + " já é a mais alta que o índice tem")
+            continue
+        print(nome + ": " + atual + " -> " + melhor)
+        rc = await cmd_add([nome + "@" + melhor], inseguro)
+        if rc != 0:
+            return rc
+    return 0
+
+
+private async def lock_vs_manifesto(lk: LK.Lock) -> list<str>:
+    """O que o `pack.json` pede e o `pack.lock` tem — e a diferença entre os
+    dois, dita em linhas.
+
+    Um lock que não corresponde ao manifesto é a fonte de "na minha máquina
+    funciona": alguém acrescentou uma dependência, esqueceu-se de comitar o
+    lock, e o build do outro instala outra coisa. Aqui isso é uma LISTA, que o
+    `install` imprime e o `--frozen` recusa."""
+    out: list<str> = []
+    if not path.isfile("pack.json"):
+        return out
+    m = await MF.ler("pack.json")
+    if not m.eh_workspace:
+        return out
+    for d in m.deps:
+        i = lk.acha(d.nome)
+        if i < 0:
+            out.append("+ " + d.nome + "@" + d.faixa + " (o manifesto pede, o lock não tem)")
+        elif lk.pacotes[i].versao != d.faixa:
+            out.append("~ " + d.nome + ": o lock tem " + lk.pacotes[i].versao + ", o manifesto pede " + d.faixa)
+    return out
+
+
+async def cmd_install(frozen: bool) -> int:
     """`ppack install` — materializa o que o lock diz.
 
     O que ele NÃO faz é decidir: as versões já estão decididas, no lock. Ele
@@ -852,6 +1014,21 @@ async def cmd_install() -> int:
     `build/pkg/<nome>-<versão>-<hash>/`. O hash no nome é o que torna "a mesma
     versão com conteúdo diferente" impossível de confundir."""
     lk = await LK.ler("pack.lock")
+    # o lock e o manifesto têm de contar a mesma história. Um `install` que
+    # instalasse o lock velho em silêncio é a fonte do "na minha máquina
+    # funciona": alguém acrescentou uma dependência e não comitou o lock.
+    difs = await lock_vs_manifesto(lk)
+    if len(difs) > 0:
+        if frozen:
+            print("o lock não corresponde ao pack.json, e `--frozen` não deixa arrumá-lo:")
+            for dd in difs:
+                print("   " + dd)
+            print("rode `ppack add <nome>@<versão>` e comite o pack.lock")
+            return 1
+        print("o lock não corresponde ao pack.json:")
+        for dd2 in difs:
+            print("   " + dd2)
+        print("   (`ppack add <nome>@<versão>` acerta-o; `--frozen` recusa em vez de avisar)")
     if len(lk.pacotes) == 0:
         # também aqui: quem pediu JSON recebe JSON. Uma frase em português no
         # meio de um fluxo de objetos é o que faz um consumidor estourar longe
@@ -1136,6 +1313,7 @@ def rmtree(d: str) -> int:
 
 def uso():
     print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("     ppack check                          as invariantes que o build não confere")
     print("     ppack dev [alvo]                     constrói quando alguma coisa muda, até ao Ctrl-C")
     print("     ppack keygen <arquivo>               uma chave nova (privada + .pub)")
     print("     ppack publish <pacote> --to <dir> [--key <arquivo>]")
@@ -1143,7 +1321,8 @@ def uso():
     print("     ppack update                         baixa os índices dos repositórios do projeto")
     print("     ppack search <termo>                 procura nome, descrição e SÍMBOLO, offline")
     print("     ppack add <nome>@<versão> [--unsafe] escreve no manifesto e no lock")
-    print("     ppack install                        materializa o que o lock diz")
+    print("     ppack up [<nome>]                    sobe para a versão mais alta que o índice tem")
+    print("     ppack install [--frozen]             materializa o que o lock diz (--frozen: CI, recusa se ele estiver velho)")
 
 async def main() -> int:
     args = sys.argv[1:]
@@ -1164,6 +1343,7 @@ async def main() -> int:
     para = ""
     chave = ""
     inseguro = False
+    frozen = False
     query = ""
     for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
         if path.isfile(cand):
@@ -1210,6 +1390,8 @@ async def main() -> int:
             query = args[i]
         elif a == "--unsafe":
             inseguro = True
+        elif a == "--frozen":
+            frozen = True
         elif a == "--to" and i + 1 < len(args):
             i += 1
             para = args[i]
@@ -1253,9 +1435,13 @@ async def main() -> int:
     if cmd == "add":
         return await cmd_add(alvos, inseguro)
     if cmd == "install":
-        return await cmd_install()
+        return await cmd_install(frozen)
+    if cmd == "up":
+        return await cmd_up(alvos, inseguro)
     if cmd == "tree":
         return await cmd_tree()
+    if cmd == "check":
+        return await cmd_check(query)
     if cmd == "why":
         return await cmd_why(alvos)
     if cmd == "clean":
