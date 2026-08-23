@@ -995,6 +995,10 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
 - [ ] **painel de build**: lê e ESCREVE `pack.json` (o manifesto é do painel;
       `build.psc` é do programador e o painel NÃO o edita — decidido); alvo
       padrão, `-j`, alvo nomeado (linux-amd64 etc.)
+      **É o que sobra da F6**, e é um FORMULÁRIO: onde ficam os campos, o que é
+      caixa de texto e o que é lista, o que acontece ao gravar. Isso são
+      escolhas de quem vai olhar para elas todos os dias — a escolha do alvo já
+      existe sem formulário nenhum, na paleta (`!`).
 - [x] **play/vassoura** (FEITO, 2026-08-23): na PALETA que o editor já tinha,
       sem inventar atalhos — `Build`, `Build Target…`, `Run`, `Clean`, `Stop
       Build` e `Go To Build Error`. A vassoura mantém `build/pkg`, como a do
@@ -1027,12 +1031,18 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
       num runtime com coletor levanta a pergunta do que acontece quando ele é
       recolhido com o filho a correr, e três funções sobre um número não têm
       essa pergunta.
-- [~] **erros como POSIÇÃO** (2026-08-23): o editor lê
+- [x] **erros como POSIÇÃO E MARCA** (2026-08-23): o editor lê
       `arquivo:linha:coluna: error:` da saída da aresta — o formato que o
       compilador já usa e que o `ppack` copiou de propósito —, abre o arquivo e
       põe o cursor lá (`Go To Build Error`). É o que "clicar no erro" faz, sem
-      precisar do clique. Falta DESENHAR o sublinhado, que é a parte que precisa
-      de olhos; a posição já está no `App`.
+      precisar do clique. E a linha fica MARCADA na sarjeta (`✗`), que é onde a
+      informação continua a ver-se depois de o cursor sair dali.
+      Marca e não sublinhado, por uma razão prática: a sarjeta já é desenhada e
+      já tem duas marcas (ponto de parada, marcador), então a terceira custa uma
+      linha — enquanto um sublinhado ondulado custa um caminho de desenho novo
+      por baixo do texto, e a informação que interessa (QUAL linha) é a mesma.
+      A marca do build anterior sai quando o seguinte começa: uma marca velha é
+      pior do que nenhuma.
 - [x] **post-mortem** (FEITO, 2026-08-23): com `-g`, cada moldura imprime o que
       estava em CADA variável, com o `repr` genérico da F5 — que era a
       dependência real, e por isso a ordem. Uma pilha diz ONDE; a pergunta a
@@ -1051,7 +1061,10 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
           nome declarado duas vezes com tipos diferentes fica de fora: imprimir
           um valor com o tipo errado é pior do que não o imprimir.
       No terminal sempre; o painel do editor é o que falta.
-- [ ] barra de status do build (a lista de arestas + tempo — os eventos bastam)
+- [x] barra de status do build (2026-08-23): a barra mostra `[feitas/total]` com
+      o que está a correr, e no fim `build ok (N arestas)` ou a PRIMEIRA falha —
+      as seguintes são quase sempre consequência dela, e a barra tem uma linha.
+      Em texto e não em gráfico, que num editor de texto é o que combina.
 
 **Pronto quando**: o play constrói e roda o próprio pstudio a partir do
 pstudio; salvar um arquivo no dev-loop reconstrói só o alcançado e reinicia;

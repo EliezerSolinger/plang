@@ -10,6 +10,7 @@ alvos 1 build/bin/ppack
 pediu alvo build/bin/ppack
 erro posicionado True 2 3
 foi para o erro True
+marca de erro 4
 cursor em 2
 drawn yes
 selftest ok

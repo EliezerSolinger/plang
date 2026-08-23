@@ -591,6 +591,10 @@ struct App:
             return False
         cv.buf.move_to(self.build_pos_lin - 1, self.build_pos_col - 1)
         cv.scroll_to_caret()
+        # e a linha fica MARCADA na sarjeta, para continuar a ver-se depois de o
+        # cursor sair dali
+        cv.buf.clear_marks(core.MARK_ERROR)
+        cv.buf.toggle_mark(self.build_pos_lin - 1, core.MARK_ERROR)
         self.update_status()
         return True
 
@@ -631,6 +635,10 @@ struct App:
                 self.want_build_on = True
                 self.want_run = cmd == 26
                 self.build_msg = "a construir..."
+                # o erro anterior sai da sarjeta: ele é de um build que já não é
+                # este, e uma marca velha é pior do que nenhuma
+                for t in self.tabs:
+                    t.cv.buf.clear_marks(core.MARK_ERROR)
             self.update_status()
         elif cmd == 25:
             self.palette_open(PAL_BUILD)

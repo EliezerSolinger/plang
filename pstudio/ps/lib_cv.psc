@@ -208,6 +208,10 @@ struct CodeView:
         match kind:
             case GUT_MARKS:
                 m = self.buf.mark_of(line)
+                # o ERRO ganha das outras: se o build falhou aqui, é isso que
+                # quem olha precisa de ver primeiro
+                if (m & core.MARK_ERROR) != 0:
+                    return "✗"
                 if (m & core.MARK_BREAK) != 0:
                     return "●"
                 if (m & core.MARK_BOOK) != 0:

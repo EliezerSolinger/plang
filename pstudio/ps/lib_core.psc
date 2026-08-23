@@ -33,6 +33,11 @@ const UNDO_PAUSE_MS: int = 700
 # para as duas implementações falarem do mesmo bit quando alguém comparar
 const MARK_BOOK: int = 1         # a bookmark (F2 jumps between them)
 const MARK_BREAK: int = 2        # a breakpoint the debugger will want
+# 119/F6: a linha onde o build falhou. É uma marca e não um sublinhado por uma
+# razão prática: a sarjeta já é desenhada, já tem duas marcas, e uma terceira
+# custa uma linha — enquanto um sublinhado ondulado custa um caminho de desenho
+# novo por baixo do texto. A informação que interessa (QUAL linha) é a mesma.
+const MARK_ERROR: int = 4
 
 
 record Caret:

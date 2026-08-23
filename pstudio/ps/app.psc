@@ -448,6 +448,9 @@ async def selftest(arg: str) -> int:
     achou = app.marcar_erro(arg + ":2:3: error: inventado para o teste\ncc: aviso qualquer\n")
     print("erro posicionado", achou, app.build_pos_lin, app.build_pos_col)
     print("foi para o erro", app.ir_para_erro())
+    cvm2 = app.cur_cv()
+    if cvm2 != None:
+        print("marca de erro", cvm2.buf.mark_of(app.build_pos_lin - 1))
     cvx = app.cur_cv()
     if cvx != None:
         print("cursor em", cvx.buf.caret(0).line + 1)
