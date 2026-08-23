@@ -1,6 +1,4 @@
 import "pmod_text.ph"
-implement CStr
-implement CBytes
 
 def text_length(in s: CStr) -> i64:
     return i64(s.len)

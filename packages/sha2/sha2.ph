@@ -62,3 +62,35 @@ def sha256_hex(data: const *char, n: usize, out_hex: *char):
 # essa é a razão de o pacote ser em P: a linguagem sem runtime é a que as duas
 # alcançam.
 def sha256_of(in data: CBytes) -> CStr
+
+
+# ---------- SHA-512 (FIPS 180-4 §6.4) ----------
+#
+# É o mesmo desenho com o dobro da largura: palavras de 64 bits, blocos de 128
+# bytes, oitenta rondas, e o comprimento no fim ocupa 128 bits em vez de 64. As
+# rotações são outras porque a especificação as escolheu para a largura nova.
+#
+# Existe porque o Ed25519 o exige (RFC 8032): a assinatura é definida sobre
+# SHA-512 e não sobre qualquer hash. Uma implementação que trocasse o hash não
+# seria Ed25519 — seria outra coisa com o mesmo nome, e as chaves de fora não
+# funcionariam.
+
+struct Sha512:
+    h: u64[8]
+    buf: u8[128]
+    nbuf: usize
+    total: u64        # bytes; o campo de 128 bits do padding tem a metade alta a zero
+
+def sha512_init(out s: Sha512):
+    """Começa um hash de 512 bits. Como o de 256: o estado é do chamador."""
+
+def sha512_update(ref s: Sha512, data: const *char, n: usize):
+    """Mais bytes."""
+
+def sha512_final(ref s: Sha512, out_digest: *char):
+    """Fecha e escreve **64 bytes**."""
+
+def sha512_hex(data: const *char, n: usize, out_hex: *char):
+    """O caminho curto: 128 dígitos hexadecimais e o terminador (129 bytes)."""
+
+def sha512_of(in data: CBytes) -> CStr

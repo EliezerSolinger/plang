@@ -5,7 +5,6 @@ include <string.h>
 import "hl.ph"
 import "../../selfhost/lexer.ph"
 
-implement CStr
 
 # um token, só com o que atravessa
 struct HlTok:

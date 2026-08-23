@@ -3649,6 +3649,20 @@ struct Sema:
                                     self->check_byref_kw(e->args[pai], afn, pai)
                                     self->lam_fix(e->args[pai], afn->params[pai].type)   # 65.4
                                     self->check_expr(e->args[pai])
+                                    # o parâmetro é `out`/`ref`/`in` e veio um
+                                    # VALOR: falta a palavra no sítio da chamada.
+                                    # Sem esta linha a queixa vinha da conversão
+                                    # de tipos ("incompatible types in assignment
+                                    # (scalar from 'Fe')") — verdade, e sobre
+                                    # nada: o valor não entra num ponteiro porque
+                                    # falta o `in`, e é isso que se tem de ler.
+                                    # Passar `&x` à mão continua a valer, que é
+                                    # como a `stl` estava escrita antes da 65.12.
+                                    if afn->params[pai].byref != PK_NONE:
+                                        pat: *Type = self->type_of(e->args[pai])
+                                        if pat != None and pat->kind != TY_PTR and pat->kind != TY_ARRAY:
+                                            pkw: const *char = "out" if afn->params[pai].byref == PK_OUT else ("ref" if afn->params[pai].byref == PK_REF else "in")
+                                            fatal_at(self->file, e->args[pai]->pos, "parameter '%s' of '%s' is declared '%s', so the call site says it too: `%s(%s x)` (65.12)", afn->params[pai].name, afn->name, pkw, afn->name, pkw)
                                     self->check_assign_types(e->args[pai]->pos, afn->params[pai].type, self->type_of(e->args[pai]), e->args[pai])
                 prevcal: bool = self->in_callee
                 self->in_callee = True
@@ -3859,6 +3873,18 @@ struct Sema:
                 self->fix_field_op(e)
                 return
             case EX_UNARY:
+                # `out r.X` — o alvo é um CAMPO de um parâmetro byref, e não o
+                # nome dele. Sem isto, uma função que preenche o seu `out` campo
+                # a campo (o que uma biblioteca de aritmética faz o tempo todo)
+                # levava um aviso a dizer que nunca o atribui. O caminho até à
+                # base é o mesmo que a escrita direta já usa.
+                if e->op == TK_AMP and e->byref != PK_NONE and e->lhs != None and e->lhs->kind != EX_IDENT:
+                    fbi: i32 = self->byref_write_base(e->lhs)
+                    if fbi >= 0:
+                        self->locals[fbi].assigned = True
+                        self->locals[fbi].written = True
+                        self->locals[fbi].nn_off = True
+                        self->locals[fbi].nn = 0
                 if e->op == TK_AMP and e->lhs != None and e->lhs->kind == EX_IDENT:
                     awsi: i32 = self->sym_index(e->lhs->text)
                     if awsi >= 0:

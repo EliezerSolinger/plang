@@ -1,7 +1,5 @@
 # A implementação do FIPS 180-4 §6.2. Ver `sha2.ph` para o porquê.
 import <sha2/sha2.ph>
-implement CStr
-implement CBytes
 
 # as raízes cúbicas dos 64 primeiros primos, a parte fracionária em 32 bits
 private const K: const u32[64] = {
@@ -141,3 +139,162 @@ private g_hex: char[65]
 def sha256_of(in data: CBytes) -> CStr:
     sha256_hex((*char)(data.ptr), data.len, g_hex)
     return cstr_n(g_hex, usize(64))
+
+
+# ---------- SHA-512 ----------
+
+# as raízes cúbicas dos 80 primeiros primos, a parte fracionária em 64 bits
+private const K512: const u64[80] = {
+    u64(0x428a2f98d728ae22), u64(0x7137449123ef65cd),
+    u64(0xb5c0fbcfec4d3b2f), u64(0xe9b5dba58189dbbc),
+    u64(0x3956c25bf348b538), u64(0x59f111f1b605d019),
+    u64(0x923f82a4af194f9b), u64(0xab1c5ed5da6d8118),
+    u64(0xd807aa98a3030242), u64(0x12835b0145706fbe),
+    u64(0x243185be4ee4b28c), u64(0x550c7dc3d5ffb4e2),
+    u64(0x72be5d74f27b896f), u64(0x80deb1fe3b1696b1),
+    u64(0x9bdc06a725c71235), u64(0xc19bf174cf692694),
+    u64(0xe49b69c19ef14ad2), u64(0xefbe4786384f25e3),
+    u64(0x0fc19dc68b8cd5b5), u64(0x240ca1cc77ac9c65),
+    u64(0x2de92c6f592b0275), u64(0x4a7484aa6ea6e483),
+    u64(0x5cb0a9dcbd41fbd4), u64(0x76f988da831153b5),
+    u64(0x983e5152ee66dfab), u64(0xa831c66d2db43210),
+    u64(0xb00327c898fb213f), u64(0xbf597fc7beef0ee4),
+    u64(0xc6e00bf33da88fc2), u64(0xd5a79147930aa725),
+    u64(0x06ca6351e003826f), u64(0x142929670a0e6e70),
+    u64(0x27b70a8546d22ffc), u64(0x2e1b21385c26c926),
+    u64(0x4d2c6dfc5ac42aed), u64(0x53380d139d95b3df),
+    u64(0x650a73548baf63de), u64(0x766a0abb3c77b2a8),
+    u64(0x81c2c92e47edaee6), u64(0x92722c851482353b),
+    u64(0xa2bfe8a14cf10364), u64(0xa81a664bbc423001),
+    u64(0xc24b8b70d0f89791), u64(0xc76c51a30654be30),
+    u64(0xd192e819d6ef5218), u64(0xd69906245565a910),
+    u64(0xf40e35855771202a), u64(0x106aa07032bbd1b8),
+    u64(0x19a4c116b8d2d0c8), u64(0x1e376c085141ab53),
+    u64(0x2748774cdf8eeb99), u64(0x34b0bcb5e19b48a8),
+    u64(0x391c0cb3c5c95a63), u64(0x4ed8aa4ae3418acb),
+    u64(0x5b9cca4f7763e373), u64(0x682e6ff3d6b2b8a3),
+    u64(0x748f82ee5defb2fc), u64(0x78a5636f43172f60),
+    u64(0x84c87814a1f0ab72), u64(0x8cc702081a6439ec),
+    u64(0x90befffa23631e28), u64(0xa4506cebde82bde9),
+    u64(0xbef9a3f7b2c67915), u64(0xc67178f2e372532b),
+    u64(0xca273eceea26619c), u64(0xd186b8c721c0c207),
+    u64(0xeada7dd6cde0eb1e), u64(0xf57d4f7fee6ed178),
+    u64(0x06f067aa72176fba), u64(0x0a637dc5a2c898a6),
+    u64(0x113f9804bef90dae), u64(0x1b710b35131c471b),
+    u64(0x28db77f523047d84), u64(0x32caab7b40c72493),
+    u64(0x3c9ebe0a15c9bebc), u64(0x431d67c49c100d4c),
+    u64(0x4cc5d4becb3e42b6), u64(0x597f299cfc657e2a),
+    u64(0x5fcb6fab3ad6faec), u64(0x6c44198c4a475817),}
+
+private def rotr64(x: u64, n: u64) -> u64:
+    return (x >> n) | (x << (u64(64) - n))
+
+private def bloco512(ref h: u64[8], p: const *char):
+    w: u64[80]
+    for i in range(16):
+        v: u64 = u64(0)
+        for j in range(8):
+            v = (v << u64(8)) | u64(u8(p[i * 8 + j]))
+        w[i] = v
+    for i in range(64):
+        t: i32 = i + 16
+        s0: u64 = rotr64(w[t - 15], u64(1)) ^ rotr64(w[t - 15], u64(8)) ^ (w[t - 15] >> u64(7))
+        s1: u64 = rotr64(w[t - 2], u64(19)) ^ rotr64(w[t - 2], u64(61)) ^ (w[t - 2] >> u64(6))
+        w[t] = w[t - 16] + s0 + w[t - 7] + s1
+    a: u64 = h[0]
+    b: u64 = h[1]
+    c: u64 = h[2]
+    d: u64 = h[3]
+    e: u64 = h[4]
+    f: u64 = h[5]
+    g: u64 = h[6]
+    hh: u64 = h[7]
+    for i in range(80):
+        S1: u64 = rotr64(e, u64(14)) ^ rotr64(e, u64(18)) ^ rotr64(e, u64(41))
+        ch: u64 = (e & f) ^ ((~e) & g)
+        t1: u64 = hh + S1 + ch + K512[i] + w[i]
+        S0: u64 = rotr64(a, u64(28)) ^ rotr64(a, u64(34)) ^ rotr64(a, u64(39))
+        maj: u64 = (a & b) ^ (a & c) ^ (b & c)
+        t2: u64 = S0 + maj
+        hh = g
+        g = f
+        f = e
+        e = d + t1
+        d = c
+        c = b
+        b = a
+        a = t1 + t2
+    h[0] += a
+    h[1] += b
+    h[2] += c
+    h[3] += d
+    h[4] += e
+    h[5] += f
+    h[6] += g
+    h[7] += hh
+
+def sha512_init(out s: Sha512):
+    # as raízes QUADRADAS dos 8 primeiros primos, em 64 bits
+    s.h[0] = u64(0x6a09e667f3bcc908)
+    s.h[1] = u64(0xbb67ae8584caa73b)
+    s.h[2] = u64(0x3c6ef372fe94f82b)
+    s.h[3] = u64(0xa54ff53a5f1d36f1)
+    s.h[4] = u64(0x510e527fade682d1)
+    s.h[5] = u64(0x9b05688c2b3e6c1f)
+    s.h[6] = u64(0x1f83d9abfb41bd6b)
+    s.h[7] = u64(0x5be0cd19137e2179)
+    s.nbuf = usize(0)
+    s.total = u64(0)
+
+def sha512_update(ref s: Sha512, data: const *char, n: usize):
+    s.total += u64(n)
+    i: usize = usize(0)
+    while i < n:
+        s.buf[s.nbuf] = u8(data[i])
+        s.nbuf += usize(1)
+        i += usize(1)
+        if s.nbuf == usize(128):
+            bloco512(ref s.h, (*char)(&s.buf[0]))
+            s.nbuf = usize(0)
+
+def sha512_final(ref s: Sha512, out_digest: *char):
+    bits: u64 = s.total * u64(8)
+    s.buf[s.nbuf] = u8(0x80)
+    s.nbuf += usize(1)
+    if s.nbuf > usize(112):
+        while s.nbuf < usize(128):
+            s.buf[s.nbuf] = u8(0)
+            s.nbuf += usize(1)
+        bloco512(ref s.h, (*char)(&s.buf[0]))
+        s.nbuf = usize(0)
+    while s.nbuf < usize(112):
+        s.buf[s.nbuf] = u8(0)
+        s.nbuf += usize(1)
+    # o comprimento é de 128 bits: a metade alta é zero enquanto a mensagem
+    # couber em 2^61 bytes, que é toda a mensagem que existe
+    for i in range(8):
+        s.buf[112 + i] = u8(0)
+    for i in range(8):
+        s.buf[120 + i] = u8((bits >> u64((7 - i) * 8)) & u64(0xff))
+    bloco512(ref s.h, (*char)(&s.buf[0]))
+    for i in range(8):
+        for j in range(8):
+            out_digest[i * 8 + j] = char((s.h[i] >> u64((7 - j) * 8)) & u64(0xff))
+
+def sha512_hex(data: const *char, n: usize, out_hex: *char):
+    s: Sha512
+    sha512_init(out s)
+    sha512_update(ref s, data, n)
+    d: char[64]
+    sha512_final(ref s, d)
+    for i in range(64):
+        b: u8 = u8(d[i])
+        out_hex[i * 2] = HEXD[b >> 4]
+        out_hex[i * 2 + 1] = HEXD[b & u8(0xf)]
+    out_hex[128] = '\0'
+
+private g_hex512: char[129]
+
+def sha512_of(in data: CBytes) -> CStr:
+    sha512_hex((*char)(data.ptr), data.len, g_hex512)
+    return cstr_n(g_hex512, usize(128))
