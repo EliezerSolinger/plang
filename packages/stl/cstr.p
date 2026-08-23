@@ -1,15 +1,15 @@
-# Os corpos dos métodos de `CStr` e `CBytes`, materializados AQUI.
+# The bodies of `CStr`'s and `CBytes`'s methods, materialized HERE.
 #
-# `implement X` emite os corpos que o `.ph` declarou, e emite-os com ligação
-# externa — então DOIS módulos que implementem o mesmo tipo colidem no linker,
-# com uma mensagem que fala de `CStr_at` e não do problema. Aconteceu no dia em
-# que dois pacotes (`sha2` e `ed25519`) precisaram da fronteira do pscript ao
-# mesmo tempo.
+# `implement X` emits the bodies the `.ph` declared, and emits them with external
+# linkage — so TWO modules implementing the same type collide in the linker, with
+# a message that talks about `CStr_at` and not about the problem. It happened the
+# day two packages (`sha2` and `ed25519`) needed the pscript boundary at the same
+# time.
 #
-# A regra que isso ensina é simples e é esta: **quem DECLARA o tipo é quem o
-# materializa**. O `cstr.ph` é do `stl`, então o `cstr.p` também é — e a 1.5(a)
-# faz o resto sozinha: quem escreve `import <stl/cstr.ph>` puxa este arquivo
-# junto, uma vez, sem ter de saber que ele existe.
+# The rule that teaches is simple and it is this: **whoever DECLARES the type is
+# whoever materializes it**. `cstr.ph` belongs to `stl`, so `cstr.p` does too —
+# and 1.5(a) does the rest on its own: whoever writes `import <stl/cstr.ph>`
+# pulls this file in with it, once, without having to know it exists.
 import <stl/cstr.ph>
 implement CStr
 implement CBytes

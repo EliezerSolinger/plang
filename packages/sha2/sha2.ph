@@ -1,26 +1,26 @@
-"""SHA-256, o hash que responde "isto é o que disseram que era?".
+"""SHA-256, the hash that answers "is this what they said it was?".
 
-O `hash_bytes` que este repositório já tinha é FNV-1a: ótimo para decidir se uma
-saída de build mudou, e **inútil contra um adversário** — quem quer forjar uma
-colisão em FNV consegue-a com uma folha de papel. Um gerenciador de pacotes que
-baixa código precisa da outra coisa, e é esta.
+The `hash_bytes` this repository already had is FNV-1a: excellent for deciding
+whether a build output changed, and **useless against an adversary** — anyone who
+wants to forge an FNV collision can do it on a sheet of paper. A package manager
+that downloads code needs the other thing, and this is it.
 
-Escrito em P e sem dependência nenhuma, o que o torna utilizável pelo compilador,
-pelo `ppack`, e por qualquer programa das duas linguagens (o pscript o alcança
-por `import <sha2/sha2.ph>`, que é a fronteira da 45.5: assinaturas sem ponteiro
-atravessam, e estas atravessam).
+Written in P and with no dependencies at all, which makes it usable by the
+compiler, by `ppack`, and by any program in either language (pscript reaches it
+through `import <sha2/sha2.ph>`, which is the 45.5 boundary: signatures without
+pointers cross, and these cross).
 
-A implementação é a do FIPS 180-4 §6.2, sem esperteza nenhuma: as constantes são
-as raízes cúbicas dos primeiros 64 primos, a mensagem é preenchida com um bit 1,
-zeros, e o comprimento em bits num inteiro de 64 bits big-endian. Não há aqui
-otimização de que se dependa; há um teste com os vetores oficiais.
+The implementation is FIPS 180-4 §6.2, with no cleverness whatsoever: the
+constants are the cube roots of the first 64 primes, the message is padded with a
+1 bit, zeros, and the length in bits as a big-endian 64-bit integer. There is no
+optimization here to depend on; there is a test with the official vectors.
 """
 
 import <stl/cstr.ph>
 
-# O estado de um hash em curso: o de quem tem os bytes todos na mão usa
-# `sha256_hex`, e o de quem os tem aos pedaços (um arquivo grande, um socket)
-# usa o trio init/update/final.
+# The state of a hash in progress: whoever has all the bytes in hand uses
+# `sha256_hex`, and whoever has them in pieces (a large file, a socket) uses the
+# init/update/final trio.
 struct Sha256:
     h: u32[8]
     buf: u8[64]
@@ -28,41 +28,42 @@ struct Sha256:
     total: u64
 
 def sha256_init(out s: Sha256):
-    """Começa um hash. O estado é do chamador — não há alocação nem estado
-    global, então dois hashes em curso ao mesmo tempo não se veem."""
+    """Starts a hash. The state belongs to the caller — there is no allocation and
+    no global state, so two hashes in progress at once do not see each other."""
 
 def sha256_update(ref s: Sha256, data: const *char, n: usize):
-    """Mais bytes. Pode ser chamada quantas vezes for preciso, e o resultado é o
-    mesmo que o de uma chamada só com tudo junto — é isso que permite hashear um
-    arquivo grande sem o ter inteiro na memória."""
+    """More bytes. It can be called as many times as needed, and the result is the
+    same as a single call with everything at once — that is what allows hashing a
+    large file without holding it all in memory."""
 
 def sha256_final(ref s: Sha256, out_digest: *char):
-    """Fecha o hash e escreve **32 bytes** em `out_digest`. Depois disto o estado
-    não serve para mais nada."""
+    """Closes the hash and writes **32 bytes** into `out_digest`. After this the
+    state is good for nothing else."""
 
 def sha256_hex(data: const *char, n: usize, out_hex: *char):
-    """O caminho curto: os bytes todos, e sessenta e quatro dígitos hexadecimais
-    minúsculos com o terminador — `out_hex` tem de ter 65 bytes.
+    """The short path: all the bytes, and sixty-four lowercase hexadecimal digits
+    plus the terminator — `out_hex` has to hold 65 bytes.
 
-    É esta que o gerenciador de pacotes usa: o hash de um tarball, comparado com
-    o que o índice declarou."""
+    This is the one the package manager uses: a tarball's hash, compared with what
+    the index declared."""
 
-# ---------- a travessia para o pscript (45.5/84.1) ----------
+# ---------- the crossing into pscript (45.5/84.1) ----------
 #
-# A ÚNICA dependência deste pacote, e é só de tipo: `CStr`/`CBytes` são um par
-# ponteiro+comprimento declarado no `stl`, sem código nenhum atrás (o `cstr.ph`
-# não tem `.p`). O miolo — init/update/final/hex — continua sem depender de
-# coisa alguma.
+# The ONLY dependency of this package, and it is only a type one: `CStr`/`CBytes`
+# are a pointer+length pair declared in `stl`, with no code behind them
+# (`cstr.ph` has no `.p`). The core — init/update/final/hex — still depends on
+# nothing at all.
 #
-# Um `CBytes` é um ponteiro e o seu comprimento como VALOR: do lado do pscript
-# isto é `list<u8>`, e o que atravessa é o par, montado na chamada e válido
-# enquanto ela dura. A resposta volta como `CStr`, que do outro lado é `str`.
+# A `CBytes` is a pointer and its length as a VALUE: on the pscript side this is
+# `list<u8>`, and what crosses is the pair, assembled at the call and valid for as
+# long as it lasts. The answer comes back as a `CStr`, which on the other side is
+# a `str`.
 #
-# É a mesma implementação — não há uma segunda cópia do SHA-256 em pscript, e
-# essa é a razão de o pacote ser em P: a linguagem sem runtime é a que as duas
-# alcançam.
+# It is the same implementation — there is no second copy of SHA-256 in pscript,
+# and that is the reason the package is in P: the language without a runtime is
+# the one both of them reach.
 def sha256_of(in data: CBytes) -> CStr:
-    """O hash de uns bytes, como texto.
+    """The hash of some bytes, as text.
 
     >>> sha256_of([u8(97), u8(98), u8(99)])
     ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
@@ -73,35 +74,36 @@ def sha256_of(in data: CBytes) -> CStr:
 
 # ---------- SHA-512 (FIPS 180-4 §6.4) ----------
 #
-# É o mesmo desenho com o dobro da largura: palavras de 64 bits, blocos de 128
-# bytes, oitenta rondas, e o comprimento no fim ocupa 128 bits em vez de 64. As
-# rotações são outras porque a especificação as escolheu para a largura nova.
+# It is the same design at twice the width: 64-bit words, 128-byte blocks, eighty
+# rounds, and the length at the end takes 128 bits instead of 64. The rotations
+# are different because the specification chose them for the new width.
 #
-# Existe porque o Ed25519 o exige (RFC 8032): a assinatura é definida sobre
-# SHA-512 e não sobre qualquer hash. Uma implementação que trocasse o hash não
-# seria Ed25519 — seria outra coisa com o mesmo nome, e as chaves de fora não
-# funcionariam.
+# It exists because Ed25519 demands it (RFC 8032): the signature is defined over
+# SHA-512 and not over any hash. An implementation that swapped the hash would not
+# be Ed25519 — it would be something else with the same name, and keys from
+# elsewhere would not work.
 
 struct Sha512:
     h: u64[8]
     buf: u8[128]
     nbuf: usize
-    total: u64        # bytes; o campo de 128 bits do padding tem a metade alta a zero
+    total: u64        # bytes; the padding's 128-bit field has its high half zero
 
 def sha512_init(out s: Sha512):
-    """Começa um hash de 512 bits. Como o de 256: o estado é do chamador."""
+    """Starts a 512-bit hash. Like the 256-bit one: the state belongs to the
+    caller."""
 
 def sha512_update(ref s: Sha512, data: const *char, n: usize):
-    """Mais bytes."""
+    """More bytes."""
 
 def sha512_final(ref s: Sha512, out_digest: *char):
-    """Fecha e escreve **64 bytes**."""
+    """Closes and writes **64 bytes**."""
 
 def sha512_hex(data: const *char, n: usize, out_hex: *char):
-    """O caminho curto: 128 dígitos hexadecimais e o terminador (129 bytes)."""
+    """The short path: 128 hexadecimal digits plus the terminator (129 bytes)."""
 
 def sha512_of(in data: CBytes) -> CStr:
-    """O de 512 bits, como texto — 128 dígitos.
+    """The 512-bit one, as text — 128 digits.
 
     >>> len(sha512_of([u8(97)]))
     128

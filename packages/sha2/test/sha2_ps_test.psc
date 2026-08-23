@@ -1,14 +1,14 @@
-"""O mesmo SHA-256, visto do outro lado da fronteira (45.5).
+"""The same SHA-256, seen from the other side of the boundary (45.5).
 
-Este teste existe para provar que não há uma segunda implementação: o pscript
-chama a mesma função em P, com `list<u8>` a virar `CBytes` na ida e `CStr` a
-virar `str` na volta.
+This test exists to prove there is no second implementation: pscript calls the
+same function in P, with `list<u8>` becoming a `CBytes` on the way in and a
+`CStr` becoming a `str` on the way back.
 """
 
 import <sha2/sha2.ph>
 
 
-def bytes_de(s: str) -> list<u8>:
+def bytes_of(s: str) -> list<u8>:
     b: list<u8> = []
     for ch in s:
         b.append(u8(ord(ch)))
@@ -18,32 +18,32 @@ def bytes_de(s: str) -> list<u8>:
 e: list<int> = [0, 0]
 
 
-def conf(nome: str, tem: str, quer: str):
-    if tem == quer:
+def check(name: str, got: str, wants: str):
+    if got == wants:
         e[0] += 1
     else:
         e[1] += 1
-        print(f"  {nome}: deu    {tem}")
-        print(f"  {nome}: queria {quer}")
+        print(f"  {name}: got    {got}")
+        print(f"  {name}: wanted {wants}")
 
 
-vazio: list<u8> = []
-conf("vazio", sha256_of(vazio),
-     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-conf("abc", sha256_of(bytes_de("abc")),
-     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-conf("448 bits", sha256_of(bytes_de("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
-     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+empty: list<u8> = []
+check("empty", sha256_of(empty),
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+check("abc", sha256_of(bytes_of("abc")),
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+check("448 bits", sha256_of(bytes_of("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
+      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
 
-# um milhão de 'a': o caminho de muitos blocos, que é o do tarball de verdade
-mil: list<u8> = []
+# a million 'a': the many-block path, which is the real tarball's
+thousand: list<u8> = []
 for _ in range(1000):
-    mil.append(u8(97))
-grande: list<u8> = []
+    thousand.append(u8(97))
+big: list<u8> = []
 for _ in range(1000):
-    for b in mil:
-        grande.append(b)
-conf("um milhão de 'a'", sha256_of(grande),
-     "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+    for b in thousand:
+        big.append(b)
+check("a million 'a'", sha256_of(big),
+      "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
 
 print(f"sha2/pscript: {e[0]} ok, {e[1]} failed")

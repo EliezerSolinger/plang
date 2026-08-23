@@ -1,27 +1,29 @@
-"""`ppack` — o comando de cima.
+"""`ppack` — the command on top.
 
-Ele é a FRENTE da biblioteca: o motor relata quatro eventos e quem imprime é
-aqui. A IDE (F6) é a outra frente, e pinta os mesmos eventos — é essa separação
-que faz o motor ser reutilizável em vez de ser um script com `print` no meio.
+It is the library's FRONT END: the engine reports events and whoever prints is
+here. The IDE (F6) is the other front end, and paints the same events — it is
+that separation that makes the engine reusable instead of a script with a `print`
+in the middle.
 
-    ppack build [alvo...]     constrói (o padrão é o alvo padrão do grafo)
-    ppack test                roda a suíte do pscript, caso a caso
-    ppack verify              a verificação inteira (o `verify-all`, como grafo)
-    ppack run <alvo> [args]   constrói o alvo e roda-o
-    ppack explain <saída>     por que ESTA saída está suja
-    ppack graph               o grafo em JSON, para inspecionar ou versionar
-    ppack ninja [arquivo]     escreve o `build.ninja` do bootstrap (padrão: -)
-    ppack doc <alvo> [nome]   a interface de um módulo (ou de um pacote), com a
-                              documentação — `alvo` é um arquivo ou o nome de um
-                              pacote do workspace
-    ppack tree                os pacotes do workspace, e o que cada um puxa
-    ppack why <pacote>        quem puxou este pacote
-    ppack clean               apaga o que o build produziu
+    ppack build [target...]   builds (the default is the graph's default target)
+    ppack test                runs the pscript suite, case by case
+    ppack verify              the whole verification (`verify-all`, as a graph)
+    ppack run <target> [args] builds the target and runs it
+    ppack explain <output>    why THIS output is dirty
+    ppack graph               the graph as JSON, to inspect or to version
+    ppack ninja [file]        writes the bootstrap's `build.ninja` (default: -)
+    ppack doc <target> [name] a module's (or a package's) interface, with its
+                              documentation — `target` is a file or the name of a
+                              workspace package
+    ppack tree                the workspace's packages, and what each one pulls in
+    ppack why <package>       who pulled this package in
+    ppack clean               deletes what the build produced
     ppack help
 
-Opções: `-j N` (processos em voo; o padrão é o número de núcleos), `-k N`
-(continuar depois de N falhas; o padrão é parar na primeira), `-n`/`--dry-run`,
-`--query <plangc>` (o compilador que responde as perguntas do protocolo).
+Options: `-j N` (processes in flight; the default is the number of cores), `-k N`
+(keep going after N failures; the default is to stop at the first),
+`-n`/`--dry-run`, `--query <plangc>` (the compiler that answers the protocol's
+questions).
 """
 import os
 import path
@@ -39,786 +41,791 @@ import <pbuild/lib_lock.psc> as LK
 
 const LOG: str = "build/log/build.log"
 
-feitas: int = 0
-total_arestas: int = 0
-falhou: bool = False
+done_count: int = 0
+total_edges: int = 0
+failed: bool = False
 
 def on_plan(total: int):
-    """Um plano novo é uma construção nova, e o relatório recomeça com ele.
+    """A new plan is a new build, and the report restarts with it.
 
-    Isto não é higiene: o `ppack dev` e o `--repro` constroem duas ou vinte
-    vezes no MESMO processo, e um contador que não recomeçasse diria `[64/61]`
-    na segunda — um número maior que o total, que é a forma mais rápida de
-    fazer alguém desconfiar de um relatório inteiro."""
-    global total_arestas
-    global feitas
-    global falhou
-    global rotulos
-    global placar_ok
-    global placar_mal
-    total_arestas = total
-    feitas = 0
-    falhou = False
-    # um literal vazio precisa de tipo, e é bom que precise: `= {}` calado num
-    # global já tipado seria a mesma forma para duas intenções diferentes
-    rot0: dict<int, str> = {}
+    This is not tidiness: `ppack dev` and `--repro` build two or twenty times in
+    the SAME process, and a counter that did not restart would say `[64/61]` on
+    the second one — a number larger than the total, which is the fastest way to
+    make somebody distrust an entire report."""
+    global total_edges
+    global done_count
+    global failed
+    global labels
+    global score_ok
+    global score_bad
+    total_edges = total
+    done_count = 0
+    failed = False
+    # an empty literal needs a type, and it is good that it does: a silent `= {}`
+    # in an already-typed global would be one shape for two different intentions
+    lab0: dict<int, str> = {}
     ok0: dict<str, int> = {}
-    mal0: dict<str, list<str>> = {}
-    rotulos = rot0
-    placar_ok = ok0
-    placar_mal = mal0
-    if saida_json:
+    bad0: dict<str, list<str>> = {}
+    labels = lab0
+    score_ok = ok0
+    score_bad = bad0
+    if json_out:
         print('{"event": "plan", "total": ' + str(total) + '}')
         return
     if total == 0:
-        print("nada a fazer")
+        print("nothing to do")
 
-# `--json`: os MESMOS dados dos eventos e das consultas, em JSON. Um objeto por
-# LINHA no fluxo de eventos (quem lê quer reagir enquanto o build corre, e um
-# documento único só se pode ler no fim); um documento só nas consultas, que são
-# uma resposta e não um fluxo.
-saida_json: bool = False
+# `--json`: the SAME data as the events and the queries, in JSON. One object per
+# LINE in the event stream (whoever reads wants to react while the build runs, and
+# a single document can only be read at the end); one document for the queries,
+# which are an answer and not a stream.
+json_out: bool = False
 
-# o compilador que RESPONDE, guardado aqui porque os comandos do repositório
-# precisam dele para uma pergunta só (a versão da linguagem, contra a faixa de
-# toolchain) e passá-lo por seis assinaturas para isso seria pior
-query_atual: str = ""
+# the compiler that ANSWERS, kept here because the repository commands need it for
+# a single question (the language's version, against the toolchain requirement)
+# and threading it through six signatures for that would be worse
+current_query: str = ""
 
 
 def query_global() -> str:
-    return query_atual
+    return current_query
 
-rotulos: dict<int, str> = {}
+labels: dict<int, str> = {}
 
-# o PLACAR: quantas arestas de cada suíte passaram, e quais falharam. A chave é o
-# que vem antes do primeiro `: ` na descrição — que é como a biblioteca de alvos
-# escreve o rótulo de um caso (`pscript: nome_do_caso`). Um build comum não tem
-# suíte nenhuma e o placar não aparece.
-placar_ok: dict<str, int> = {}
-placar_mal: dict<str, list<str>> = {}
+# the SCOREBOARD: how many edges of each suite passed, and which failed. The key
+# is what comes before the first `: ` in the description — which is how the target
+# library writes a case's label (`pscript: case_name`). An ordinary build has no
+# suite at all and the scoreboard does not appear.
+score_ok: dict<str, int> = {}
+score_bad: dict<str, list<str>> = {}
 
-private def suite_de(rot: str) -> str:
-    k = rot.find(": ")
-    return rot[0:k] if k > 0 else ""
+private def suite_of(label: str) -> str:
+    k = label.find(": ")
+    return label[0:k] if k > 0 else ""
 
-private def contar(rot: str, ok: bool):
-    global placar_ok
-    global placar_mal
-    su = suite_de(rot)
+private def tally(label: str, ok: bool):
+    global score_ok
+    global score_bad
+    su = suite_of(label)
     if len(su) == 0:
         return
-    if su not in placar_ok:
-        placar_ok[su] = 0
-        placar_mal[su] = []
+    if su not in score_ok:
+        score_ok[su] = 0
+        score_bad[su] = []
     if ok:
-        placar_ok[su] = placar_ok[su] + 1
+        score_ok[su] = score_ok[su] + 1
     else:
-        placar_mal[su].append(rot[len(su) + 2:])
+        score_bad[su].append(label[len(su) + 2:])
 
 def on_start(id: int, what: str):
-    global rotulos
-    rotulos[id] = what
+    global labels
+    labels[id] = what
 
 def on_end(id: int, st: int, out: str, ms: int):
-    global feitas
-    global falhou
-    feitas += 1
-    contar(rotulos[id] if id in rotulos else "", st == 0)
-    if saida_json:
+    global done_count
+    global failed
+    done_count += 1
+    tally(labels[id] if id in labels else "", st == 0)
+    if json_out:
         print('{"event": "end", "id": ' + str(id) + ', "status": ' + str(st)
-              + ', "ms": ' + str(ms) + ', "what": ' + G.jstr(rotulos[id] if id in rotulos else "")
+              + ', "ms": ' + str(ms) + ', "what": ' + G.jstr(labels[id] if id in labels else "")
               + ', "output": ' + G.jstr(out) + '}')
         if st != 0:
-            falhou = True
+            failed = True
         return
-    marca = "[" + str(feitas) + "/" + str(total_arestas) + "]"
+    mark = "[" + str(done_count) + "/" + str(total_edges) + "]"
     if st == 0:
-        print(marca, "ok")
+        print(mark, "ok")
         if len(out) > 0:
             print(out.rstrip())
     else:
-        falhou = True
-        # QUAL aresta falhou. Sem isto o relatório diz que algo deu errado e não
-        # diz o quê — e num build de seiscentas arestas isso não é relatório.
-        quem = rotulos[id] if id in rotulos else "?"
-        print(marca, "FALHOU (status " + str(st) + "):", quem)
+        failed = True
+        # WHICH edge failed. Without this the report says something went wrong and
+        # does not say what — and in a six-hundred-edge build that is not a report.
+        who = labels[id] if id in labels else "?"
+        print(mark, "FAILED (status " + str(st) + "):", who)
         if len(out) > 0:
             print(out.rstrip())
 
-def on_erro(msg: str):
-    """Um problema do GRAFO — não de uma aresta. Ele sai ANTES de qualquer
-    comando rodar, porque é o tipo de coisa que invalida o build inteiro."""
-    global falhou
-    falhou = True
-    if saida_json:
+def on_error(msg: str):
+    """A problem with the GRAPH — not with an edge. It comes out BEFORE any
+    command runs, because it is the kind of thing that invalidates the whole
+    build."""
+    global failed
+    failed = True
+    if json_out:
         print('{"event": "error", "message": ' + G.jstr(msg) + '}')
         return
-    print("erro:", msg)
+    print("error:", msg)
 
 def on_done(ok: bool, fails: int):
-    if saida_json:
-        partes: list<str> = []
+    if json_out:
+        parts: list<str> = []
         ks0: list<str> = []
-        for k0 in placar_ok:
+        for k0 in score_ok:
             ks0.append(k0)
         for k1 in sorted(ks0):
-            maus0: list<str> = []
-            for nm in placar_mal[k1]:
-                maus0.append(G.jstr(nm))
-            partes.append(G.jstr(k1) + ': {"ok": ' + str(placar_ok[k1])
-                          + ', "failed": [' + ", ".join(maus0) + ']}')
+            bad0: list<str> = []
+            for nm in score_bad[k1]:
+                bad0.append(G.jstr(nm))
+            parts.append(G.jstr(k1) + ': {"ok": ' + str(score_ok[k1])
+                         + ', "failed": [' + ", ".join(bad0) + ']}')
         print('{"event": "done", "ok": ' + ("true" if ok else "false")
-              + ', "failed": ' + str(fails) + ', "suites": {' + ", ".join(partes) + '}}')
+              + ', "failed": ' + str(fails) + ', "suites": {' + ", ".join(parts) + '}}')
         return
-    # o PLACAR, quando houve suíte. Ele existe porque "587 arestas ok" não é o
-    # que quem roda testes quer saber: o que se quer é quantos casos passaram,
-    # e QUAIS falharam — e um build de seiscentas arestas esconde as duas coisas.
+    # the SCOREBOARD, when there was a suite. It exists because "587 edges ok" is
+    # not what whoever runs tests wants to know: what you want is how many cases
+    # passed, and WHICH failed — and a six-hundred-edge build hides both.
     ks: list<str> = []
-    for k in placar_ok:
+    for k in score_ok:
         ks.append(k)
     for k2 in sorted(ks):
-        maus = placar_mal[k2]
-        # "RODARAM", e não "existem": um caso cujo binário e cujo esperado não
-        # mudaram não roda, e dizer "1 ok" quando cento e catorze estão em dia
-        # seria um placar que mente. Quem quer o total roda com a árvore limpa.
-        total = placar_ok[k2] + len(maus)
-        print("   " + k2 + ": " + str(total) + " rodaram — " + str(placar_ok[k2])
-              + " ok, " + str(len(maus)) + " falharam")
+        bad = score_bad[k2]
+        # "RAN", and not "exist": a case whose binary and whose expected output
+        # did not change does not run, and saying "1 ok" when a hundred and
+        # fourteen are up to date would be a scoreboard that lies. Whoever wants
+        # the total runs with a clean tree.
+        total = score_ok[k2] + len(bad)
+        print("   " + k2 + ": " + str(total) + " ran — " + str(score_ok[k2])
+              + " ok, " + str(len(bad)) + " failed")
         n = 0
-        for nome in maus:
+        for name in bad:
             if n >= 10:
-                print("       (e mais " + str(len(maus) - 10) + ")")
+                print("       (and " + str(len(bad) - 10) + " more)")
                 break
-            print("       " + nome)
+            print("       " + name)
             n += 1
     if not ok:
-        print("build falhou:", fails, "problema(s)")
+        print("build failed:", fails, "problem(s)")
 
-# o relator imprime a DESCRIÇÃO no começo de cada aresta; o `on_start` acima fica
-# vazio porque a linha só faz sentido junto do resultado quando N rodam ao mesmo
-# tempo — com paralelismo, "começou" e "terminou" se intercalam
+# the reporter prints the DESCRIPTION at the start of each edge; the `on_start`
+# above is empty because the line only makes sense next to the result when N run
+# at the same time — with parallelism, "started" and "finished" interleave
 def on_start_verbose(id: int, what: str):
-    global rotulos
-    rotulos[id] = what
+    global labels
+    labels[id] = what
     print("  ->", what)
 
-async def cmd_build(alvos: list<str>, jobs: int, keep: int, dry: bool, query: str,
+async def cmd_build(targets: list<str>, jobs: int, keep: int, dry: bool, query: str,
                     verbose: bool, repro: bool) -> int:
-    g = await BP.montar(query)
+    g = await BP.assemble(query)
     st = on_start_verbose if verbose else on_start
-    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
-    ok = await B.build(g, LOG, alvos, B.Opts(jobs, keep, dry, False), rep)
+    rep = B.Rep(on_plan, st, on_end, on_done, on_error)
+    ok = await B.build(g, LOG, targets, B.Opts(jobs, keep, dry, False), rep)
     if not ok or dry or not repro:
         return 0 if ok else 1
-    return await confere_repro(g, alvos, jobs, keep, query, rep)
+    return await check_repro(g, targets, jobs, keep, query, rep)
 
 
 const REPRO: str = "build/repro"
 
-private async def confere_repro(g: G.Graph, alvos: list<str>, jobs: int, keep: int,
-                                query: str, rep: B.Rep) -> int:
-    """`--repro`: constrói duas vezes e compara byte a byte.
+private async def check_repro(g: G.Graph, targets: list<str>, jobs: int, keep: int,
+                              query: str, rep: B.Rep) -> int:
+    """`--repro`: builds twice and compares byte for byte.
 
-    O `verify-all` já fazia isto à mão para o compilador (`diff -rq out2 out3`,
-    e o ponto fixo do QBE); aqui vira comando, e passa a valer para qualquer
-    projeto e qualquer alvo.
+    `verify-all` already did this by hand for the compiler (`diff -rq out2 out3`,
+    and the QBE fixed point); here it becomes a command, and starts holding for
+    any project and any target.
 
-    A segunda construção começa do ZERO — as saídas e o log do build saem da
-    frente —, porque uma segunda corrida incremental não prova nada: ela não
-    roda aresta nenhuma. O que se compara é o conteúdo, nunca a data: um build
-    reprodutível pode muito bem escrever o mesmo byte num segundo diferente.
+    The second build starts from ZERO — the outputs and the build log get out of
+    the way — because a second incremental run proves nothing: it runs no edge at
+    all. What gets compared is the content, never the date: a reproducible build
+    may well write the same byte in a different second.
 
-    O que a primeira construção fez é **movido** para `build/repro/`, e não
-    copiado. A diferença importa por duas razões, e a segunda custou uma árvore
-    a descobrir: mover preserva o arquivo como ele é (a permissão de execução
-    inclusive, que uma cópia byte a byte pela linguagem perderia), e permite
-    **pôr tudo de volta** quando a segunda construção falha — que é justamente
-    quando não há artefato novo nenhum para ficar no lugar.
+    What the first build made is **moved** to `build/repro/`, and not copied. The
+    difference matters for two reasons, and the second one cost a tree to
+    discover: moving preserves the file as it is (the execute permission included,
+    which a byte-for-byte copy through the language would lose), and it allows
+    **putting everything back** when the second build fails — which is exactly
+    when there is no new artifact to take its place.
 
-    O grafo da segunda construção monta-se antes de mover o que quer que seja:
-    montá-lo é PERGUNTAR ao compilador, e o compilador é uma das saídas.
+    The second build's graph is assembled before anything gets moved: assembling
+    it means ASKING the compiler, and the compiler is one of the outputs.
 
-    O limite honesto disto está medido e escrito: o P e o pscript que geramos
-    não têm data nem caminho absoluto no que emitem, então são reprodutíveis por
-    construção; um pacote em C que use `__DATE__`/`__TIME__` não é, e a resposta
-    do mundo para isso (`SOURCE_DATE_EPOCH`) é a que se adota no dia em que
-    aparecer."""
-    saidas: list<str> = []
+    The honest limit of this is measured and written down: the P and the pscript
+    we generate have no date and no absolute path in what they emit, so they are
+    reproducible by construction; a C package that uses `__DATE__`/`__TIME__` is
+    not, and the world's answer to that (`SOURCE_DATE_EPOCH`) is the one to adopt
+    the day it shows up."""
+    outputs: list<str> = []
     for e in g.edges:
         if not e.want:
             continue
         for oid in e.outs:
             pth = g.nodes[oid].p
             if path.isfile(pth):
-                saidas.append(pth)
-    if len(saidas) == 0:
-        print("--repro: a construção não produziu arquivo nenhum para comparar")
+                outputs.append(pth)
+    if len(outputs) == 0:
+        print("--repro: the build produced no file to compare")
         return 0
     if path.isdir(REPRO):
         rmtree(REPRO)
-    g2 = await BP.montar(query)
-    for p1 in saidas:
-        guarda = path.join(REPRO, p1)
-        d = path.dirname(guarda)
+    g2 = await BP.assemble(query)
+    for p1 in outputs:
+        aside = path.join(REPRO, p1)
+        d = path.dirname(aside)
         if len(d) > 0 and not path.isdir(d):
             os.makedirs(d)
-        os.rename(p1, guarda)
+        os.rename(p1, aside)
     if path.isfile(LOG):
         os.remove(LOG)
-    print("--repro: " + str(len(saidas)) + " saída(s) de lado; construindo outra vez do zero")
-    if not await B.build(g2, LOG, alvos, B.Opts(jobs, keep, False, False), rep):
-        for p9 in saidas:
+    print("--repro: " + str(len(outputs)) + " output(s) moved aside; building again from scratch")
+    if not await B.build(g2, LOG, targets, B.Opts(jobs, keep, False, False), rep):
+        for p9 in outputs:
             if not path.isfile(p9):
                 d9 = path.dirname(p9)
                 if len(d9) > 0 and not path.isdir(d9):
                     os.makedirs(d9)
                 os.rename(path.join(REPRO, p9), p9)
         rmtree(REPRO)
-        print("--repro: a segunda construção FALHOU — e uma construção que só")
-        print("         funciona na primeira vez é o defeito mais caro que existe.")
-        print("         o que a primeira tinha produzido está de volta no lugar.")
+        print("--repro: the second build FAILED — and a build that only works")
+        print("         the first time is the most expensive defect there is.")
+        print("         what the first one had produced is back in place.")
         return 1
-    difs: list<str> = []
-    for p3 in saidas:
+    diffs: list<str> = []
+    for p3 in outputs:
         if not path.isfile(p3):
-            difs.append(p3 + "  (a segunda construção não o produziu)")
+            diffs.append(p3 + "  (the second build did not produce it)")
             continue
-        h1 = R.hash_de(await R.ler_bytes(path.join(REPRO, p3)))
-        h2 = R.hash_de(await R.ler_bytes(p3))
+        h1 = R.hash_of(await R.read_bytes(path.join(REPRO, p3)))
+        h2 = R.hash_of(await R.read_bytes(p3))
         if h1 != h2:
-            difs.append(p3 + "  " + h1[0:16] + "… -> " + h2[0:16] + "…")
-    if saida_json:
+            diffs.append(p3 + "  " + h1[0:16] + "… -> " + h2[0:16] + "…")
+    if json_out:
         jd: list<str> = []
-        for d0 in difs:
+        for d0 in diffs:
             jd.append(G.jstr(d0))
-        print('{"outputs": ' + str(len(saidas)) + ', "reproducible": '
-              + ("true" if len(difs) == 0 else "false") + ', "differ": [' + ", ".join(jd) + ']}')
-    if len(difs) == 0:
+        print('{"outputs": ' + str(len(outputs)) + ', "reproducible": '
+              + ("true" if len(diffs) == 0 else "false") + ', "differ": [' + ", ".join(jd) + ']}')
+    if len(diffs) == 0:
         rmtree(REPRO)
-        if not saida_json:
-            print("--repro: as duas construções deram os MESMOS bytes em " + str(len(saidas)) + " arquivo(s)")
+        if not json_out:
+            print("--repro: both builds gave the SAME bytes in " + str(len(outputs)) + " file(s)")
         return 0
-    if not saida_json:
-        print("--repro: " + str(len(difs)) + " de " + str(len(saidas)) + " arquivo(s) NÃO saíram iguais:")
-        for d2 in difs:
+    if not json_out:
+        print("--repro: " + str(len(diffs)) + " of " + str(len(outputs)) + " file(s) did NOT come out the same:")
+        for d2 in diffs:
             print("   " + d2)
-        print("   a primeira construção está guardada em " + REPRO + "/, para comparar")
+        print("   the first build is kept in " + REPRO + "/, to compare")
     return 1
 
 
-async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool, builddir: str) -> int:
-    """Constrói e roda. Duas coisas que ele aceita, e a segunda é a que fecha a
-    F7:
+async def cmd_run(targets: list<str>, jobs: int, query: str, verbose: bool, builddir: str) -> int:
+    """Builds and runs. Two things it accepts, and the second is the one that
+    closes F7:
 
-      * um ALVO do grafo (`ppack run build/bin/pstudio`);
-      * um ARQUIVO de fonte (`ppack run x.psc`, `ppack run x.p`) — que não está
-        no descritor nenhum, e é construído aqui, em `build/run/`.
+      * a graph TARGET (`ppack run build/bin/pstudio`);
+      * a source FILE (`ppack run x.psc`, `ppack run x.p`) — which is in no
+        descriptor, and is built here, in `build/run/`.
 
-    O segundo caso é o que o `plangc run` fazia, e é a única decisão de POLÍTICA
-    que ainda vivia dentro do compilador: onde guardar o binário, quando é que
-    ele está velho, e o que fazer com os argumentos. Nada disso é sobre traduzir
-    uma linguagem.
+    The second case is what `plangc run` used to do, and it was the only POLICY
+    decision still living inside the compiler: where to keep the binary, when it
+    is stale, and what to do with the arguments. None of that is about translating
+    a language.
 
-    E o programa **passa a ser este processo** (`os.exec`). Antes ele corria como
-    filho com a saída capturada, o que serve para um programa que imprime e para
-    mais nada: sem teclado, sem tela, sem tamanho de terminal, sem Ctrl-C. Por
-    isso o status de saída também deixa de precisar de conversa — ele É o do
-    programa, porque é o mesmo processo.
+    And the program **becomes this process** (`os.exec`). Before, it ran as a
+    child with its output captured, which serves a program that prints and nothing
+    else: no keyboard, no screen, no terminal size, no Ctrl-C. That is why the
+    exit status no longer needs a conversation either — it IS the program's,
+    because it is the same process.
 
-    Um build que falha sai com 101 (a convenção do cargo), para que um script
-    saiba distinguir "o programa recusou" de "o programa nem chegou a existir"."""
-    if len(alvos) == 0:
-        print("uso: ppack run <alvo|arquivo.psc> [args...]")
+    A build that fails exits with 101 (cargo's convention), so a script can tell
+    "the program refused" from "the program never came to exist"."""
+    if len(targets) == 0:
+        print("usage: ppack run <target|file.psc> [args...]")
         return 2
-    alvo = alvos[0]
+    target = targets[0]
     st = on_start_verbose if verbose else on_start
-    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
-    solto: bool = (alvo.endswith(".psc") or alvo.endswith(".p")) and path.isfile(alvo)
-    if solto:
-        # O CAMINHO CURTO, e é ele que faz `ppack run` valer como lançador de
-        # scripts: se o manifesto da última corrida ainda bate — o mesmo
-        # compilador, os mesmos arquivos, as mesmas datas —, não há nada a
-        # perguntar nem a construir, e o processo vira o programa em
-        # milissegundos. Sem isto, cada corrida paga duas invocações do
-        # compilador (meio segundo) para descobrir que não havia nada a fazer.
-        raiz = BP.raiz_de_script(alvo, builddir)
-        pronto = await BP.run_manifesto_ok(alvo, raiz)
-        if len(pronto) > 0:
-            argv0: list<str> = [pronto if pronto.startswith("/") else path.join(os.getcwd(), pronto)]
+    rep = B.Rep(on_plan, st, on_end, on_done, on_error)
+    loose: bool = (target.endswith(".psc") or target.endswith(".p")) and path.isfile(target)
+    if loose:
+        # THE SHORT PATH, and it is what makes `ppack run` worth having as a
+        # script launcher: if the last run's manifest still matches — the same
+        # compiler, the same files, the same dates — there is nothing to ask and
+        # nothing to build, and the process becomes the program in milliseconds.
+        # Without this, every run pays two compiler invocations (half a second) to
+        # find out there was nothing to do.
+        root = BP.script_root(target, builddir)
+        ready = await BP.run_manifest_ok(target, root)
+        if len(ready) > 0:
+            argv0: list<str> = [ready if ready.startswith("/") else path.join(os.getcwd(), ready)]
             i0 = 1
-            while i0 < len(alvos):
-                argv0.append(alvos[i0])
+            while i0 < len(targets):
+                argv0.append(targets[i0])
                 i0 += 1
             os.exec(argv0)
             return 127
     g = G.new_graph()
-    if solto and path.isfile(BP.PLANGC_S2):
-        # O GRAFO MÍNIMO, e é isto que faz o `run` ser rápido: montar o
-        # descritor inteiro custa centenas de perguntas ao compilador (doze
-        # segundos aqui), e nenhuma delas é sobre este arquivo. Quando o
-        # compilador já existe, o que se constrói é só o programa.
-        alvo = await BP.programa_solto(g, query, alvo, BP.raiz_de_script(alvo, builddir))
+    if loose and path.isfile(BP.PLANGC_S2):
+        # THE MINIMAL GRAPH, and this is what makes `run` fast: assembling the
+        # whole descriptor costs hundreds of questions to the compiler (twelve
+        # seconds here), and none of them is about this file. When the compiler
+        # already exists, what gets built is only the program.
+        target = await BP.loose_program(g, query, target, BP.script_root(target, builddir))
     else:
-        g = await BP.montar(query)
-        if alvo not in g.by_path and solto:
-            alvo = await BP.programa_solto(g, query, alvo, BP.raiz_de_script(alvo, builddir))
-        elif alvo not in g.by_path:
-            print("não achei '" + alvo + "' — nem alvo do descritor, nem arquivo")
+        g = await BP.assemble(query)
+        if target not in g.by_path and loose:
+            target = await BP.loose_program(g, query, target, BP.script_root(target, builddir))
+        elif target not in g.by_path:
+            print("I did not find '" + target + "' — neither a descriptor target nor a file")
             return 1
-    if not await B.build(g, LOG, [alvo], B.Opts(jobs, 1, False, False), rep):
+    if not await B.build(g, LOG, [target], B.Opts(jobs, 1, False, False), rep):
         return 101
-    if solto:
-        await BP.run_manifesto_grava(alvos[0], alvo, g, BP.raiz_de_script(alvos[0], builddir))
-    argv: list<str> = [alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)]
+    if loose:
+        await BP.run_manifest_write(targets[0], target, g, BP.script_root(targets[0], builddir))
+    argv: list<str> = [target if target.startswith("/") else path.join(os.getcwd(), target)]
     i = 1
-    while i < len(alvos):
-        argv.append(alvos[i])
+    while i < len(targets):
+        argv.append(targets[i])
         i += 1
-    # daqui não se volta: o processo é o programa
+    # there is no coming back from here: the process is the program
     os.exec(argv)
     return 127
 
-async def cmd_dev(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int:
-    """`ppack dev [alvo]` — constrói, espera que alguma coisa mude, e constrói
-    outra vez. Até alguém carregar em Ctrl-C.
+async def cmd_dev(targets: list<str>, jobs: int, query: str, verbose: bool) -> int:
+    """`ppack dev [target]` — builds, waits for something to change, and builds
+    again. Until somebody presses Ctrl-C.
 
-    **A lista do que se vigia não é adivinhada**: é o GRAFO, que a recebeu do
-    compilador (resposta 1). Um `dev` que vigiasse um diretório inteiro veria
-    salvar de editor, arquivos temporários e o próprio `build/`; este vê
-    exatamente os arquivos que a construção lê, e nada mais.
+    **The list of what gets watched is not guessed**: it is the GRAPH, which got
+    it from the compiler (answer 1). A `dev` that watched a whole directory would
+    see editor saves, temporary files and `build/` itself; this one sees exactly
+    the files the build reads, and nothing else.
 
-    **E não usa inotify nem kqueue**, o que é uma decisão e não uma falta. Os
-    dois existem, são diferentes um do outro, e obrigariam a uma primitiva nova
-    no runtime — para vigiar algumas centenas de arquivos cujas datas se leem em
-    menos de um milissegundo. O laço pergunta a cada 200 ms; o custo não aparece
-    num perfil e o código funciona em todo o lado igual. No dia em que a árvore
-    for grande ao ponto de isto doer, a primitiva entra por baixo e este comando
-    não muda.
+    **And it uses neither inotify nor kqueue**, which is a decision and not a gap.
+    Both exist, they differ from each other, and they would force a new primitive
+    into the runtime — to watch a few hundred files whose dates are read in less
+    than a millisecond. The loop asks every 200 ms; the cost does not show up in a
+    profile and the code works the same everywhere. The day the tree is big enough
+    for this to hurt, the primitive goes in underneath and this command does not
+    change.
 
-    O que ele NÃO faz, e é a outra metade: reiniciar o programa. Matar e
-    relançar um filho precisa de controlo de processo que o `os.run` não dá —
-    ele espera. É uma primitiva a mais (`os.spawn` + `kill`), anotada e não
-    feita."""
-    g = await BP.montar(query)
-    alvo = alvos[0] if len(alvos) > 0 else ""
-    tl: list<str> = [alvo] if len(alvo) > 0 else []
+    **And it RESTARTS the program**: it kills the child, waits for it to leave,
+    builds, relaunches. The `SIGTERM` is a request and not an execution — a
+    `SIGKILL` does not let the program close what it had opened, and a loop that
+    corrupts a file on every save is worse than one that waits half a second."""
+    g = await BP.assemble(query)
+    target = targets[0] if len(targets) > 0 else ""
+    tl: list<str> = [target] if len(target) > 0 else []
     st = on_start_verbose if verbose else on_start
-    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
+    rep = B.Rep(on_plan, st, on_end, on_done, on_error)
     await B.build(g, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
-    # o que vigiar: as ENTRADAS de todas as arestas, que é o que o compilador
-    # disse que lê. Um arquivo que ainda não existe entra na mesma — passar a
-    # existir é uma mudança como outra qualquer.
-    vistos: dict<str, int> = {}
-    alvos_v: list<str> = []
+    # what to watch: the INPUTS of every edge, which is what the compiler said it
+    # reads. A file that does not exist yet goes in just the same — coming into
+    # existence is a change like any other.
+    seen: dict<str, int> = {}
+    watched: list<str> = []
     for e in g.edges:
         for iid in e.ins:
             p = g.nodes[iid].p
-            # o que a construção PRODUZ não se vigia. Um `.c` gerado é entrada
-            # da compilação seguinte, então vigiá-lo faria a construção
-            # disparar-se a si mesma para sempre — e foi exatamente o que ele
-            # fez na primeira vez que correu.
-            if p.startswith(BP.BUILD + "/") or p in vistos:
+            # what the build PRODUCES is not watched. A generated `.c` is an input
+            # of the next compilation, so watching it would make the build trigger
+            # itself forever — and that is exactly what it did the first time it
+            # ran.
+            if p.startswith(BP.BUILD + "/") or p in seen:
                 continue
-            vistos[p] = 1
-            alvos_v.append(p)
-    datas: dict<str, int> = {}
-    for p2 in alvos_v:
-        datas[p2] = path.getmtime_ns(p2) if path.isfile(p2) else 0
-    # o programa, quando o alvo é um: lançado agora e relançado a cada mudança
+            seen[p] = 1
+            watched.append(p)
+    dates: dict<str, int> = {}
+    for p2 in watched:
+        dates[p2] = path.getmtime_ns(p2) if path.isfile(p2) else 0
+    # the program, when the target is one: launched now and relaunched on every
+    # change
     pid = 0
-    if len(alvo) > 0 and path.isfile(alvo):
-        pid = os.spawn([alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)])
-        print("dev: lancei " + alvo + " (pid " + str(pid) + ")")
-    print(f"dev: {len(alvos_v)} arquivo(s) vigiados. Ctrl-C para sair.")
+    if len(target) > 0 and path.isfile(target):
+        pid = os.spawn([target if target.startswith("/") else path.join(os.getcwd(), target)])
+        print("dev: launched " + target + " (pid " + str(pid) + ")")
+    print(f"dev: watching {len(watched)} file(s). Ctrl-C to leave.")
 
     while True:
         await sleep(0.2)
-        mudou: list<str> = []
-        for p3 in alvos_v:
-            agora = path.getmtime_ns(p3) if path.isfile(p3) else 0
-            if agora != datas.get(p3, 0):
-                datas[p3] = agora
-                mudou.append(p3)
-        if len(mudou) == 0:
+        changed: list<str> = []
+        for p3 in watched:
+            now_ns = path.getmtime_ns(p3) if path.isfile(p3) else 0
+            if now_ns != dates.get(p3, 0):
+                dates[p3] = now_ns
+                changed.append(p3)
+        if len(changed) == 0:
             continue
-        # um `salvar` de editor escreve o arquivo em dois tempos (temporário +
-        # rename), e há editores que tocam vários de seguida. Esperar um pouco
-        # depois da primeira mudança junta tudo numa construção só.
+        # an editor's `save` writes the file in two steps (temporary + rename),
+        # and there are editors that touch several in a row. Waiting a little
+        # after the first change gathers everything into one build.
         await sleep(0.15)
-        for p4 in alvos_v:
-            agora2 = path.getmtime_ns(p4) if path.isfile(p4) else 0
-            if agora2 != datas.get(p4, 0):
-                datas[p4] = agora2
-                if p4 not in mudou:
-                    mudou.append(p4)
+        for p4 in watched:
+            now2 = path.getmtime_ns(p4) if path.isfile(p4) else 0
+            if now2 != dates.get(p4, 0):
+                dates[p4] = now2
+                if p4 not in changed:
+                    changed.append(p4)
         print("")
-        print("dev: mudou " + ", ".join(mudou[0:3]) + ("..." if len(mudou) > 3 else ""))
-        # o programa antigo sai ANTES de o novo ser construído: ele está a usar
-        # o binário que a construção vai reescrever
+        print("dev: changed " + ", ".join(changed[0:3]) + ("..." if len(changed) > 3 else ""))
+        # the old program leaves BEFORE the new one is built: it is using the
+        # binary the build is going to rewrite
         if pid > 0:
             os.kill(pid)
-            esperas = 0
-            while os.alive(pid) and esperas < 100:
+            waits = 0
+            while os.alive(pid) and waits < 100:
                 await sleep(0.05)
-                esperas += 1
+                waits += 1
             pid = 0
-        g2 = await BP.montar(query)
+        g2 = await BP.assemble(query)
         ok2 = await B.build(g2, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
-        if ok2 and len(alvo) > 0 and path.isfile(alvo):
-            pid = os.spawn([alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)])
-            print("dev: relancei (pid " + str(pid) + ")")
+        if ok2 and len(target) > 0 and path.isfile(target):
+            pid = os.spawn([target if target.startswith("/") else path.join(os.getcwd(), target)])
+            print("dev: relaunched (pid " + str(pid) + ")")
     return 0
 
 
 async def cmd_verify(jobs: int, query: str, verbose: bool) -> int:
-    """O `verify-all.sh` inteiro, como GRAFO. Os oito passos dele são
-    sequenciais e levam o que levam os oito somados; aqui o que não depende um
-    do outro roda junto, e o que não mudou não roda."""
-    g = await BP.montar(query)
+    """The whole of `verify-all.sh`, as a GRAPH. Its eight steps are sequential
+    and take what all eight take together; here what does not depend on the others
+    runs alongside, and what did not change does not run."""
+    g = await BP.assemble(query)
     st = on_start_verbose if verbose else on_start
-    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
+    rep = B.Rep(on_plan, st, on_end, on_done, on_error)
     ok = await B.build(g, LOG, [BP.VERIFY], B.Opts(jobs, 1000000, False, False), rep)
     return 0 if ok else 1
 
 async def cmd_test(jobs: int, query: str, verbose: bool) -> int:
-    """As suítes. Duas diferenças de `build`, e as duas são deliberadas:
+    """The suites. Two differences from `build`, and both are deliberate:
 
-      * `-k` alto por padrão — quem roda teste quer o PLACAR inteiro, não a
-        primeira falha. Um build para na primeira porque o resto ia falhar
-        junto; uma suíte não;
-      * o alvo é o carimbo da suíte, e ele não é o alvo padrão: construir não é
-        testar, e um `ppack build` que rodasse trezentos casos seria um `build`
-        que ninguém usaria."""
-    g = await BP.montar(query)
+      * a high `-k` by default — whoever runs tests wants the whole SCOREBOARD,
+        not the first failure. A build stops at the first because the rest was
+        going to fail with it; a suite does not;
+      * the target is the suite's stamp, and it is not the default target:
+        building is not testing, and a `ppack build` that ran three hundred cases
+        would be a `build` nobody would use."""
+    g = await BP.assemble(query)
     st = on_start_verbose if verbose else on_start
-    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
-    ok = await B.build(g, LOG, [BP.TESTE], B.Opts(jobs, 1000000, False, False), rep)
+    rep = B.Rep(on_plan, st, on_end, on_done, on_error)
+    ok = await B.build(g, LOG, [BP.TEST], B.Opts(jobs, 1000000, False, False), rep)
     return 0 if ok else 1
 
-async def cmd_explain(alvos: list<str>, query: str) -> int:
-    g = await BP.montar(query)
-    w = await B.why_dirty(g, LOG, alvos)
+async def cmd_explain(targets: list<str>, query: str) -> int:
+    g = await BP.assemble(query)
+    w = await B.why_dirty(g, LOG, targets)
     if len(w) == 0:
-        if saida_json:
+        if json_out:
             print('{"dirty": {}}')
         else:
-            print("nada está sujo")
+            print("nothing is dirty")
         return 0
     ks: list<str> = []
     for k in w:
         ks.append(k)
     ks = sorted(ks)
-    if saida_json:
-        partes: list<str> = []
+    if json_out:
+        parts: list<str> = []
         for k3 in ks:
-            partes.append(G.jstr(k3) + ": " + G.jstr(w[k3]))
-        print('{"dirty": {' + ", ".join(partes) + '}}')
+            parts.append(G.jstr(k3) + ": " + G.jstr(w[k3]))
+        print('{"dirty": {' + ", ".join(parts) + '}}')
         return 0
     for k2 in ks:
         print(k2 + ": " + w[k2])
     return 0
 
 async def cmd_graph(query: str) -> int:
-    g = await BP.montar(query)
+    g = await BP.assemble(query)
     print(G.to_json(g).rstrip())
     return 0
 
-# ---------- os pacotes ----------
-private async def mundo() -> PK.Mundo:
-    return await PK.ler_mundo(await BP.membros_do_workspace("pack.json"))
+# ---------- the packages ----------
+private async def world() -> PK.World:
+    return await PK.read_world(await BP.workspace_members("pack.json"))
 
 async def cmd_check(query: str) -> int:
-    """`ppack check` — as invariantes que o build não confere porque não é
-    trabalho dele.
+    """`ppack check` — the invariants the build does not check because it is not
+    its job.
 
-    Duas, e as duas são sobre a mesma promessa: **P é livre de runtime, e
-    continua a sê-lo através dos pacotes**.
+    Two of them, and both are about the same promise: **P is runtime-free, and
+    stays runtime-free through the packages**.
 
-      1. um pacote `lang: p` não depende de um pacote `pscript` (lido dos
-         manifestos, de graça);
-      2. e nenhum `.psc` aparece no FECHO do módulo-raiz de um pacote `p` —
-         que é a mesma coisa dita onde ela realmente acontece, porque um
-         `import` alcança mais longe do que um manifesto.
+      1. a `lang: p` package does not depend on a `pscript` package (read from the
+         manifests, for free);
+      2. and no `.psc` shows up in the CLOSURE of a `p` package's root module —
+         which is the same thing said where it actually happens, because an
+         `import` reaches further than a manifest.
 
-    O que NÃO é problema, e por isso não é conferido: um pacote P com testes em
-    pscript. O `sha2` tem um, de propósito — é como se prova que a fronteira da
-    45.5 funciona. Ele não está no fecho da raiz, e é por isso que a pergunta é
-    sobre o FECHO e não sobre o diretório."""
-    m = await mundo()
-    problemas = PK.conferir_linguagens(m)
-    raizes = await BP.raizes_do_workspace("pack.json")
+    What is NOT a problem, and therefore is not checked: a P package with tests in
+    pscript. `sha2` has one, on purpose — it is how the 45.5 crossing is proven to
+    work. It is not in the root's closure, and that is why the question is about
+    the CLOSURE and not about the directory."""
+    m = await world()
+    problems = PK.check_languages(m)
+    roots = await BP.workspace_roots("pack.json")
     dcheck = path.join(BP.BUILD, "check")
     if not path.isdir(dcheck):
         os.makedirs(dcheck)
-    for p in m.pacotes:
+    for p in m.packages:
         if p.lang != "p":
             continue
-        man = await MF.ler(path.join(p.dir, "pack.json"))
-        if len(man.raiz) == 0:
+        man = await MF.read(path.join(p.dir, "pack.json"))
+        if len(man.root) == 0:
             continue
         argv: list<str> = [query]
-        for r in raizes:
+        for r in roots:
             argv.append("--pkg-path")
             argv.append(r)
         argv.append("--deps")
         argv.append("--out-dir")
         argv.append(dcheck)
-        argv.append(path.join(p.dir, man.raiz))
+        argv.append(path.join(p.dir, man.root))
         res = await os.run(argv, stdout=path.join(dcheck, "deps.txt"))
         if res.status() != 0:
-            # o compilador é o PRIMEIRO portão desta invariante: um `.ph` que
-            # importe um módulo pscript ele já recusa. Quando isso acontece o
-            # que interessa é o que ELE disse, não a nossa paráfrase.
-            problemas.append(p.nome + ": o fecho de " + man.raiz + " não se deixou ler:\n       "
-                             + res.output().strip().replace("\n", "\n       "))
+            # the compiler is this invariant's FIRST gate: a `.ph` that imports a
+            # pscript module it already refuses. When that happens what matters is
+            # what IT said, not our paraphrase.
+            problems.append(p.name + ": the closure of " + man.root + " would not be read:\n       "
+                            + res.output().strip().replace("\n", "\n       "))
             continue
         f = await open(path.join(dcheck, "deps.txt"), "r")
         txt = await f.text()
         await f.close()
         for ln in txt.split("\n"):
             if ln.endswith(".psc"):
-                problemas.append(p.nome + " é `lang: p` e o fecho de " + man.raiz
-                                 + " passa por " + ln + ", que é pscript")
-    # 2.7: a dependência de SISTEMA é DECLARAÇÃO no manifesto, e o `pkg-config`
-    # é um dos resolvedores dela. Quem o chama somos nós, nunca o pacote — a
-    # lista de programas que estas ferramentas invocam é FIXA (`plangc`, `cc`,
-    # `pkg-config`) e não é extensível por um pacote de terceiro. Aqui a
-    # declaração passa a valer alguma coisa antes de o build começar: se a
-    # biblioteca não está nesta máquina, diz-se agora e com o nome dela.
-    for p2 in m.pacotes:
-        man2 = await MF.ler(path.join(p2.dir, "pack.json"))
+                problems.append(p.name + " is `lang: p` and the closure of " + man.root
+                                + " goes through " + ln + ", which is pscript")
+    # 2.7: a SYSTEM dependency is a DECLARATION in the manifest, and `pkg-config`
+    # is one of its resolvers. Whoever calls it is us, never the package — the
+    # list of programs these tools invoke is FIXED (`plangc`, `cc`, `pkg-config`)
+    # and is not extensible by a third-party package. Here the declaration starts
+    # being worth something before the build begins: if the library is not on this
+    # machine, it is said now and by name.
+    for p2 in m.packages:
+        man2 = await MF.read(path.join(p2.dir, "pack.json"))
         for sd in man2.system:
-            r2 = await os.run(["pkg-config", "--exists", sd.nome])
+            r2 = await os.run(["pkg-config", "--exists", sd.name])
             if r2.status() != 0:
-                problemas.append(p2.nome + " declara a biblioteca de sistema `" + sd.nome
-                                 + "` e o `pkg-config` não a acha nesta máquina")
-    if saida_json:
+                problems.append(p2.name + " declares the system library `" + sd.name
+                                + "` and `pkg-config` does not find it on this machine")
+    if json_out:
         js: list<str> = []
-        for pr in problemas:
+        for pr in problems:
             js.append(G.jstr(pr))
         print("[" + ", ".join(js) + "]")
-        return 1 if len(problemas) > 0 else 0
-    if len(problemas) == 0:
-        print(f"check: {len(m.pacotes)} pacote(s), nenhum problema")
+        return 1 if len(problems) > 0 else 0
+    if len(problems) == 0:
+        print(f"check: {len(m.packages)} package(s), no problems")
         return 0
-    for pr in problemas:
-        print("erro: " + pr)
+    for pr in problems:
+        print("error: " + pr)
     return 1
 
 
 async def cmd_tree() -> int:
-    """`ppack tree` — o que este projeto usa, e por dentro de quê."""
-    m = await mundo()
-    if len(m.pacotes) == 0:
-        print("nenhum pacote: este projeto não tem `pack.json` de workspace, ou ele não lista membros")
+    """`ppack tree` — what this project uses, and through what."""
+    m = await world()
+    if len(m.packages) == 0:
+        print("no packages: this project has no workspace `pack.json`, or it lists no members")
         return 1
-    if saida_json:
-        partes: list<str> = []
-        for p in m.pacotes:
+    if json_out:
+        parts: list<str> = []
+        for p in m.packages:
             ds: list<str> = []
             i = 0
             while i < len(p.deps):
-                ds.append('{"name": ' + G.jstr(p.deps[i]) + ', "range": ' + G.jstr(p.faixas[i]) + '}')
+                ds.append('{"name": ' + G.jstr(p.deps[i]) + ', "range": ' + G.jstr(p.reqs[i]) + '}')
                 i += 1
-            partes.append('{"name": ' + G.jstr(p.nome) + ', "version": ' + G.jstr(p.versao)
-                          + ', "lang": ' + G.jstr(p.lang) + ', "dir": ' + G.jstr(p.dir)
-                          + ', "deps": [' + ", ".join(ds) + ']}')
-        print('{"packages": [' + ", ".join(partes) + ']}')
+            parts.append('{"name": ' + G.jstr(p.name) + ', "version": ' + G.jstr(p.version)
+                         + ', "lang": ' + G.jstr(p.lang) + ', "dir": ' + G.jstr(p.dir)
+                         + ', "deps": [' + ", ".join(ds) + ']}')
+        print('{"packages": [' + ", ".join(parts) + ']}')
         return 0
-    print(PK.arvore(m).rstrip())
-    if len(m.faltando) > 0:
+    print(PK.tree(m).rstrip())
+    if len(m.missing) > 0:
         print("")
-        for f in m.faltando:
-            print("   FALTA: " + f)
+        for f in m.missing:
+            print("   MISSING: " + f)
         return 1
     return 0
 
-async def cmd_why(alvos: list<str>) -> int:
-    """`ppack why <pacote>` — quem o puxou.
+async def cmd_why(targets: list<str>) -> int:
+    """`ppack why <package>` — who pulled it in.
 
-    É a pergunta que todo lock grande acaba por provocar, e a resposta tem de
-    dizer o CAMINHO e não só o nome: saber que `hash` está lá porque `map` o
-    pediu, e `map` porque o compilador o pediu, é o que permite decidir o que
-    fazer."""
-    if len(alvos) == 0:
-        print("uso: ppack why <pacote>")
+    It is the question every large lock eventually provokes, and the answer has to
+    give the PATH and not only the name: knowing that `hash` is there because `map`
+    asked for it, and `map` because the compiler asked for it, is what lets you
+    decide what to do."""
+    if len(targets) == 0:
+        print("usage: ppack why <package>")
         return 2
-    alvo = alvos[0]
-    m = await mundo()
-    if m.acha(alvo) < 0:
-        print("'" + alvo + "' não é um pacote deste workspace")
+    target = targets[0]
+    m = await world()
+    if m.find(target) < 0:
+        print("'" + target + "' is not a package of this workspace")
         return 1
-    quem = m.quem_puxa(alvo)
-    if saida_json:
+    who = m.who_pulls(target)
+    if json_out:
         ns: list<str> = []
-        for q in quem:
+        for q in who:
             ns.append(G.jstr(q))
-        print('{"package": ' + G.jstr(alvo) + ', "pulled_by": [' + ", ".join(ns) + ']}')
+        print('{"package": ' + G.jstr(target) + ', "pulled_by": [' + ", ".join(ns) + ']}')
         return 0
-    p = m.pacotes[m.acha(alvo)]
-    print(p.nome + " " + p.versao + "  (" + p.lang + ", em " + p.dir + ")")
-    if len(quem) == 0:
-        print("   ninguém o puxa: ele é um membro do workspace por si")
+    p = m.packages[m.find(target)]
+    print(p.name + " " + p.version + "  (" + p.lang + ", in " + p.dir + ")")
+    if len(who) == 0:
+        print("   nobody pulls it in: it is a workspace member in its own right")
         return 0
-    for q in quem:
-        i = m.acha(q)
-        faixa = ""
+    for q in who:
+        i = m.find(q)
+        req = ""
         j = 0
-        while j < len(m.pacotes[i].deps):
-            if m.pacotes[i].deps[j] == alvo:
-                faixa = m.pacotes[i].faixas[j]
+        while j < len(m.packages[i].deps):
+            if m.packages[i].deps[j] == target:
+                req = m.packages[i].reqs[j]
             j += 1
-        print("   <- " + q + " pede " + faixa)
+        print("   <- " + q + " asks for " + req)
     return 0
 
 # ---------- doc ----------
-private async def modulo_do_pacote(alvo: str) -> str:
-    """O módulo RAIZ de um pacote do workspace, se `alvo` for um nome de pacote.
+private async def package_module(target: str) -> str:
+    """The ROOT module of a workspace package, if `target` is a package name.
 
-    É para isto que o campo `root` do manifesto existe: a interface do pacote é
-    UM módulo, e quem quer a documentação dele não tem de saber em que arquivo
-    ela mora."""
-    raizes = await BP.raizes_do_workspace("pack.json")
-    for r in raizes:
-        man = path.join(r, alvo, "pack.json")
+    This is what the manifest's `root` field is for: a package's interface is ONE
+    module, and whoever wants its documentation does not have to know which file
+    it lives in."""
+    roots = await BP.workspace_roots("pack.json")
+    for r in roots:
+        man = path.join(r, target, "pack.json")
         if path.isfile(man):
-            m = await MF.ler(man)
-            if len(m.raiz) == 0:
-                return ""       # pacote sem raiz: quem chama LISTA os módulos
-            return path.join(r, alvo, m.raiz)
+            m = await MF.read(man)
+            if len(m.root) == 0:
+                return ""       # a package with no root: the caller LISTS the modules
+            return path.join(r, target, m.root)
     return ""
 
 
-private async def lista_do_pacote(alvo: str) -> int:
-    """Um pacote SEM raiz é um conjunto de módulos, e o que se mostra dele é a
-    lista. O `stl` é assim: dez headers independentes, e eleger um como "a
-    interface" seria arbitrário."""
-    raizes = await BP.raizes_do_workspace("pack.json")
-    for r in raizes:
-        dir = path.join(r, alvo)
+private async def list_package(target: str) -> int:
+    """A package with NO root is a set of modules, and what gets shown of it is
+    the list. `stl` is like that: ten independent headers, and electing one as
+    "the interface" would be arbitrary."""
+    roots = await BP.workspace_roots("pack.json")
+    for r in roots:
+        dir = path.join(r, target)
         if not path.isfile(path.join(dir, "pack.json")):
             continue
-        m = await MF.ler(path.join(dir, "pack.json"))
-        print("== " + alvo + " " + m.versao + "  (" + m.lang + ")")
-        if len(m.descricao) > 0:
-            print("   " + m.descricao)
+        m = await MF.read(path.join(dir, "pack.json"))
+        print("== " + target + " " + m.version + "  (" + m.lang + ")")
+        if len(m.description) > 0:
+            print("   " + m.description)
         print("")
-        for nome in sorted(os.listdir(dir)):
-            if nome.endswith(".ph") or nome.endswith(".psc"):
-                print("   " + alvo + "/" + nome)
+        for name in sorted(os.listdir(dir)):
+            if name.endswith(".ph") or name.endswith(".psc"):
+                print("   " + target + "/" + name)
         print("")
-        print("   ppack doc " + alvo + "/<módulo> para a interface de um deles")
+        print("   ppack doc " + target + "/<module> for the interface of one of them")
         return 0
     return 1
 
-private def parede(t: str) -> str:
-    """A docstring, indentada. Sem isto, uma docstring de várias linhas
-    encosta na margem e some no meio da lista."""
+private def indent(t: str) -> str:
+    """The docstring, indented. Without this, a multi-line docstring hugs the
+    margin and disappears into the list."""
     out = ""
     for l in t.split("\n"):
         out += "    " + l.rstrip() + "\n"
     return out.rstrip()
 
-# ---------- o repositório ----------
+# ---------- the repository ----------
 
-private async def api_do_pacote(dir: str, m: MF.Manifesto, query: str,
-                                api: dict<str, list<str>>, hashes: dict<str, str>):
-    """A lista canónica de símbolos de cada módulo do pacote, no índice.
+private async def package_api(dir: str, m: MF.Manifest, query: str,
+                              api: dict<str, list<str>>, hashes: dict<str, str>):
+    """The canonical symbol list of each of the package's modules, in the index.
 
-    Ela não é enfeite: é o que faz `ppack search draw_rect` procurar POR SÍMBOLO
-    sem baixar nada, e o que torna a honestidade de semver verificável a partir
-    do índice — a interface de 0.1.0 e a de 0.1.1 estão as duas lá, e comparar é
-    uma subtração. E sai de graça, porque o compilador já a produz (resposta 5)."""
+    It is not decoration: it is what makes `ppack search draw_rect` search BY
+    SYMBOL without downloading anything, and what makes semver honesty verifiable
+    from the index — 0.1.0's interface and 0.1.1's are both there, and comparing
+    them is a subtraction. And it comes for free, because the compiler already
+    produces it (answer 5)."""
     mods: list<str> = []
-    if len(m.raiz) > 0:
-        mods.append(path.join(dir, m.raiz))
+    if len(m.root) > 0:
+        mods.append(path.join(dir, m.root))
     else:
-        # um pacote SEM raiz é um conjunto de módulos independentes (o `stl` é
-        # assim): todos entram
-        for nome in sorted(os.listdir(dir)):
-            if nome.endswith(".ph") or nome.endswith(".psc"):
-                mods.append(path.join(dir, nome))
-    raizes = await BP.raizes_do_workspace("pack.json")
+        # a package with NO root is a set of independent modules (`stl` is like
+        # that): all of them go in
+        for name in sorted(os.listdir(dir)):
+            if name.endswith(".ph") or name.endswith(".psc"):
+                mods.append(path.join(dir, name))
+    roots = await BP.workspace_roots("pack.json")
     for mod in mods:
         argv: list<str> = [query]
-        for r in raizes:
+        for r in roots:
             argv.append("--pkg-path")
             argv.append(r)
         argv.append("--api")
         argv.append(mod)
         res = await os.run(argv)
         if res.status() != 0:
-            raise error("o compilador não conseguiu ler a interface de " + mod + ":\n" + res.output())
+            raise error("the compiler could not read the interface of " + mod + ":\n" + res.output())
         for a in A.parse(res.output()):
-            # SÓ os módulos DESTE pacote. A resposta 5 traz o fecho inteiro —
-            # o `sha2` importa `stl/cstr.ph` e a interface do `stl` vinha junto —
-            # e um índice que declarasse a interface dos outros diria que o
-            # `sha2` oferece `CStr.slice`, que não é dele.
-            if not a.caminho.startswith(dir + "/"):
+            # ONLY THIS package's modules. Answer 5 brings the whole closure —
+            # `sha2` imports `stl/cstr.ph` and `stl`'s interface came along — and
+            # an index that declared other people's interfaces would say `sha2`
+            # offers `CStr.slice`, which is not its.
+            if not a.path.startswith(dir + "/"):
                 continue
-            rel = a.caminho[len(dir) + 1:len(a.caminho)]
-            simb: list<str> = []
-            for sb in a.simbolos:
-                simb.append(sb.linha)
-            api[rel] = simb
+            rel = a.path[len(dir) + 1:len(a.path)]
+            syms: list<str> = []
+            for sb in a.symbols:
+                syms.append(sb.decl)
+            api[rel] = syms
             hashes[rel] = a.hash
 
 
-async def cmd_keygen(alvos: list<str>) -> int:
-    """`ppack keygen <arquivo>` — uma chave nova.
+async def cmd_keygen(targets: list<str>) -> int:
+    """`ppack keygen <file>` — a new key.
 
-    Escreve a PRIVADA em `<arquivo>` (32 bytes em hexadecimal, e mais nada) e a
-    PÚBLICA em `<arquivo>.pub`. A privada não vai para `build/`, não vai para o
-    repositório e não é comitada: é a única coisa em todo este sistema que não se
-    partilha. A pública é para pôr no índice e no lock, onde ela é vista por
-    quem revisa."""
-    if len(alvos) == 0:
-        print("uso: ppack keygen <arquivo>")
+    It writes the PRIVATE one into `<file>` (32 bytes in hexadecimal, and nothing
+    else) and the PUBLIC one into `<file>.pub`. The private one does not go into
+    `build/`, does not go into the repository and is not committed: it is the one
+    thing in this whole system that is not shared. The public one is to put into
+    the index and the lock, where whoever reviews can see it."""
+    if len(targets) == 0:
+        print("usage: ppack keygen <file>")
         return 2
-    alvo = alvos[0]
-    if path.isfile(alvo):
-        print(alvo + " já existe. Uma chave que se sobrescreve é uma chave perdida — apague-a à mão se é isso que quer.")
+    target = targets[0]
+    if path.isfile(target):
+        print(target + " already exists. A key you overwrite is a key you lost — delete it by hand if that is what you want.")
         return 1
-    semente = await R.semente_nova()
-    hexa = ""
-    for b in semente:
-        hexa += "0123456789abcdef"[int(b) >> 4] + "0123456789abcdef"[int(b) & 15]
-    pub = R.chave_publica(semente)
-    await R.escrever_bytes(alvo, R.bytes_de_texto(hexa + "\n"))
-    await R.escrever_bytes(alvo + ".pub", R.bytes_de_texto(pub + "\n"))
-    print("privada: " + alvo + "   (NÃO comitar, NÃO partilhar)")
-    print("pública: " + alvo + ".pub")
+    seed = await R.new_seed()
+    hex_text = ""
+    for b in seed:
+        hex_text += "0123456789abcdef"[int(b) >> 4] + "0123456789abcdef"[int(b) & 15]
+    pub = R.public_key(seed)
+    await R.write_bytes(target, R.bytes_of_text(hex_text + "\n"))
+    await R.write_bytes(target + ".pub", R.bytes_of_text(pub + "\n"))
+    print("private: " + target + "   (do NOT commit, do NOT share)")
+    print("public:  " + target + ".pub")
     print("   " + pub)
     return 0
 
 
-private async def versao_do_compilador(query: str) -> str:
-    """A versão da LINGUAGEM que este compilador aceita — `plangc 0.1.0 (hash)`.
+private async def compiler_version(query: str) -> str:
+    """The LANGUAGE version this compiler accepts — `plangc 0.1.0 (hash)`.
 
-    É a pergunta 4 do protocolo, e é a única coisa que a faixa de toolchain de
-    um manifesto tem contra o que comparar.
+    It is question 4 of the protocol, and it is the only thing a manifest's
+    toolchain requirement has to compare against.
 
-    Num projeto que CONSOME pacotes não há `build/bin/plangc_s2`: o compilador
-    dele está instalado, no PATH. Por isso a segunda tentativa é `plangc` sem
-    caminho — e se nem isso houver, devolve-se vazio e quem chama DIZ que não
-    conferiu. Um portão que se desliga em silêncio é pior do que não existir."""
+    In a project that CONSUMES packages there is no `build/bin/plangc_s2`: its
+    compiler is installed, on the PATH. That is why the second attempt is `plangc`
+    with no path — and if there is not even that, an empty string comes back and
+    the caller SAYS it did not check. A gate that switches itself off in silence
+    is worse than one that does not exist."""
     for cand in [query, "plangc"]:
         if len(cand) == 0:
             continue
         r = await os.run([cand, "--version"])
         if r.status() == 0:
-            partes = r.output().strip().split(" ")
-            if len(partes) > 1:
-                return partes[1]
+            parts = r.output().strip().split(" ")
+            if len(parts) > 1:
+                return parts[1]
     return ""
 
 
-private async def repos_do_projeto() -> list<R.Repo>:
-    """Os repositórios deste projeto, na ordem de busca."""
+private async def project_repos() -> list<R.Repo>:
+    """This project's repositories, in search order."""
     out: list<R.Repo> = []
     if not path.isfile("pack.json"):
         return out
-    m = await MF.ler("pack.json")
+    m = await MF.read("pack.json")
     i = 0
     while i < len(m.repos):
         out.append(R.repo(m.repos[i], m.repos_unsafe[i]))
@@ -826,527 +833,532 @@ private async def repos_do_projeto() -> list<R.Repo>:
     return out
 
 
-private async def indice_guardado(r: R.Repo) -> R.Indice:
-    alvo = path.join(R.dir_indices(), r.id + ".json")
-    if not path.isfile(alvo):
-        raise error("sem índice de " + r.url + " — rode `ppack update` primeiro", IO)
-    f = await open(alvo, "r")
+private async def stored_index(r: R.Repo) -> R.Index:
+    target = path.join(R.indexes_dir(), r.id + ".json")
+    if not path.isfile(target):
+        raise error("no index for " + r.url + " — run `ppack update` first", IO)
+    f = await open(target, "r")
     raw = await f.text()
     await f.close()
-    return R.ler_indice(raw, alvo)
+    return R.read_index(raw, target)
 
 
 async def cmd_update() -> int:
-    """`ppack update` — baixa os índices e guarda-os. É a ÚNICA operação que
-    toca a rede sem alguém a pedir um pacote, e é de propósito: um build que
-    resolve versões pela rede é um build que muda de resultado sem que nada no
-    projeto tenha mudado."""
-    repos = await repos_do_projeto()
+    """`ppack update` — downloads the indexes and stores them. It is the ONLY
+    operation that touches the network without somebody asking for a package, and
+    that is on purpose: a build that resolves versions over the network is a build
+    that changes its result without anything in the project having changed."""
+    repos = await project_repos()
     if len(repos) == 0:
-        print("nenhum repositório: acrescente \"repos\": [...] ao pack.json do workspace")
+        print("no repositories: add \"repos\": [...] to the workspace's pack.json")
         return 1
-    lk = await LK.ler("pack.lock")
+    lk = await LK.read("pack.lock")
     n = 0
     for r in repos:
-        bs = await R.buscar(r, "index.json")
-        sig = await R.assinatura_de(r, "index.json")
-        i = lk.repo_conhecido(r.url)
-        conhecida = lk.repos[i].chave if i >= 0 else ""
-        # ---- a assinatura do REPOSITÓRIO, e o TOFU ----
-        if len(conhecida) > 0:
-            # já se conhece a chave: daqui para a frente ela NÃO muda em silêncio
-            if not R.conferir(conhecida, bs, sig):
-                print(f"{r.url}: o índice NÃO confere com a chave que este projeto aceitou.")
-                print(f"   a chave está no pack.lock ({conhecida[0:16]}…) e passou por revisão de código quando lá entrou.")
-                print("   ou o índice foi trocado, ou o repositório mudou de chave — nos dois casos isto para aqui.")
+        bs = await R.fetch(r, "index.json")
+        sig = await R.signature_of(r, "index.json")
+        i = lk.known_repo(r.url)
+        known = lk.repos[i].key if i >= 0 else ""
+        # ---- the REPOSITORY's signature, and TOFU ----
+        if len(known) > 0:
+            # the key is already known: from here on it does NOT change in silence
+            if not R.verify_sig(known, bs, sig):
+                print(f"{r.url}: the index does NOT match the key this project accepted.")
+                print(f"   the key is in pack.lock ({known[0:16]}…) and went through code review when it got there.")
+                print("   either the index was swapped, or the repository changed keys — either way this stops here.")
                 return 1
         elif len(sig) > 0:
-            # TOFU: primeira vez que se vê. A chave que assinou entra no LOCK, que
-            # é COMITADO — é assim que a confiança fica versionada e uma troca
-            # futura aparece num diff em vez de num aviso no terminal de uma
-            # pessoa só. Não se sabe de quem é a chave; sabe-se que a partir de
-            # agora tem de ser a mesma.
-            achou = ""
-            for nome in R.indice_chaves(R.ler_indice(str(bs), "índice")):
-                if R.conferir(nome, bs, sig):
-                    achou = nome
-            if len(achou) == 0:
-                print(f"{r.url}: o índice vem assinado, e a assinatura não bate com nenhuma chave que ele declara.")
-                print("   isto não é uma chave desconhecida: é uma assinatura errada.")
+            # TOFU: the first time it is seen. The key that signed goes into the
+            # LOCK, which is COMMITTED — that is how trust gets versioned and a
+            # future swap shows up in a diff instead of in a warning on one
+            # person's terminal. You do not know whose key it is; you know that
+            # from now on it has to be the same one.
+            found = ""
+            for name in R.index_keys(R.read_index(str(bs), "index")):
+                if R.verify_sig(name, bs, sig):
+                    found = name
+            if len(found) == 0:
+                print(f"{r.url}: the index comes signed, and the signature matches no key it declares.")
+                print("   this is not an unknown key: it is a wrong signature.")
                 return 1
             if i >= 0:
-                lk.repos[i].chave = achou
+                lk.repos[i].key = found
             else:
-                lk.repos.append(LK.RepoConhecido(r.url, achou, R.agora_iso()[0:10]))
-            print(f"   chave do repositório aceite agora (TOFU) e gravada no pack.lock: {achou[0:16]}…")
+                lk.repos.append(LK.KnownRepo(r.url, found, R.now_iso()[0:10]))
+            print(f"   the repository's key accepted now (TOFU) and recorded in pack.lock: {found[0:16]}…")
         else:
-            if not r.inseguro:
-                print(f"{r.url}: o índice NÃO vem assinado.")
-                print("   um repositório sem assinatura tem de o dizer: {\"url\": ..., \"unsafe\": true} no pack.json.")
+            if not r.is_unsafe:
+                print(f"{r.url}: the index does NOT come signed.")
+                print("   a repository with no signature has to say so: {\"url\": ..., \"unsafe\": true} in pack.json.")
                 return 1
             if i < 0:
-                lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
-                print(f"   novo repositório, aceite agora (TOFU) e gravado no pack.lock: {r.url}")
-            print("   UNSAFE: este repositório não assina o índice. O hash de cada pacote continua a ser conferido.")
-        alvo = path.join(R.dir_indices(), r.id + ".json")
-        await R.escrever_bytes(alvo, bs)
-        ix = R.ler_indice(str(bs), alvo)
-        quantos = 0
-        for nome2 in ix.nomes():
-            quantos += len(ix.versoes(nome2))
-        print(f"{ix.nome if len(ix.nome) > 0 else r.url}: {len(ix.pacotes)} pacote(s), {quantos} versão(ões)")
+                lk.repos.append(LK.KnownRepo(r.url, "", R.now_iso()[0:10]))
+                print(f"   new repository, accepted now (TOFU) and recorded in pack.lock: {r.url}")
+            print("   UNSAFE: this repository does not sign its index. Each package's hash is still checked.")
+        target = path.join(R.indexes_dir(), r.id + ".json")
+        await R.write_bytes(target, bs)
+        ix = R.read_index(str(bs), target)
+        count = 0
+        for name2 in ix.names():
+            count += len(ix.versions(name2))
+        print(f"{ix.name if len(ix.name) > 0 else r.url}: {len(ix.packages)} package(s), {count} version(s)")
         n += 1
-    await LK.gravar(lk, "pack.lock")
+    await LK.write(lk, "pack.lock")
     return 0 if n > 0 else 1
 
 
-async def cmd_search(alvos: list<str>) -> int:
-    """`ppack search <termo>` — OFFLINE, no índice guardado, e por SÍMBOLO
-    também.
+async def cmd_search(targets: list<str>) -> int:
+    """`ppack search <term>` — OFFLINE, in the stored index, and BY SYMBOL too.
 
-    Procurar por símbolo sem baixar nada é coisa que nenhum gerenciador faz, e
-    aqui sai de graça: a lista canónica já está no índice porque o compilador já
-    a produz. Cada linha diz de onde veio o acerto, que é o que permite entender
-    por que um pacote apareceu."""
-    if len(alvos) == 0:
-        print("uso: ppack search <termo>")
+    Searching by symbol without downloading anything is something no package
+    manager does, and here it comes for free: the canonical list is already in the
+    index because the compiler already produces it. Every line says where the hit
+    came from, which is what lets you understand why a package showed up."""
+    if len(targets) == 0:
+        print("usage: ppack search <term>")
         return 2
-    termo = alvos[0].lower()
-    repos = await repos_do_projeto()
-    achou = 0
+    term = targets[0].lower()
+    repos = await project_repos()
+    found = 0
     jl: list<str> = []
     for r in repos:
-        ix = await indice_guardado(r)
-        for nome in ix.nomes():
-            for versao in ix.versoes(nome):
-                u = ix.pega(nome, versao)
-                linhas: list<str> = []
-                if termo in nome.lower():
-                    linhas.append("[nome]     " + (u.descricao if len(u.descricao) > 0 else "—"))
-                if termo in u.descricao.lower():
-                    linhas.append("[descrição] " + u.descricao)
+        ix = await stored_index(r)
+        for name in ix.names():
+            for version in ix.versions(name):
+                u = ix.get(name, version)
+                lines: list<str> = []
+                if term in name.lower():
+                    lines.append("[name]        " + (u.description if len(u.description) > 0 else "—"))
+                if term in u.description.lower():
+                    lines.append("[description] " + u.description)
                 mods: list<str> = []
                 for mk in u.api:
                     mods.append(mk)
                 for mod in sorted(mods):
                     for sb in u.api[mod]:
-                        if termo in sb.lower():
-                            linhas.append("[símbolo]  " + sb)
-                for ln in linhas:
-                    achou += 1
-                    if saida_json:
+                        if term in sb.lower():
+                            lines.append("[symbol]      " + sb)
+                for ln in lines:
+                    found += 1
+                    if json_out:
                         k = ln.find("]")
-                        jl.append('{"name": ' + G.jstr(nome) + ', "version": ' + G.jstr(versao)
+                        jl.append('{"name": ' + G.jstr(name) + ', "version": ' + G.jstr(version)
                                   + ', "where": ' + G.jstr(ln[1:k]) + ', "text": ' + G.jstr(ln[k + 1:].strip())
                                   + ', "repo": ' + G.jstr(r.url) + '}')
                     else:
-                        print(f"{nome} {versao}   {ln}")
-    if saida_json:
+                        print(f"{name} {version}   {ln}")
+    if json_out:
         print("[" + ", ".join(jl) + "]")
-        return 0 if achou > 0 else 1
-    if achou == 0:
-        print("nada encontrado para '" + alvos[0] + "'")
+        return 0 if found > 0 else 1
+    if found == 0:
+        print("nothing found for '" + targets[0] + "'")
         return 1
     return 0
 
 
-private def parte_em_arroba(spec: str) -> list<str>:
+private def split_at(spec: str) -> list<str>:
     i = spec.find("@")
     if i < 0:
         return [spec, ""]
     return [spec[0:i], spec[i + 1:len(spec)]]
 
 
-private async def travar(lk: LK.Lock, pedidos: list<str>, trocaveis: list<str>,
-                        inseguro: bool, postos: list<str>) -> int:
-    """A resolução, que é a mesma para `add` e para `lock`: seguir a fila de
-    pedidos, buscar cada um no índice guardado, conferir hash e assinatura,
-    guardar o tarball no armazém e travar a linha no lock.
+private async def resolve_lock(lk: LK.Lock, wanted: list<str>, swappable: list<str>,
+                               unsafe_ok: bool, placed: list<str>) -> int:
+    """The resolution, which is the same for `add` and for `lock`: follow the
+    queue of requests, look each one up in the stored index, check the hash and
+    the signature, keep the tarball in the store and lock the line down.
 
-    Ela NÃO escreve o lock nem o manifesto — quem chama decide isso. Devolve 0,
-    ou o código de saída do problema que a fez parar; `postos` recebe uma linha
-    por pacote que entrou.
+    It does NOT write the lock or the manifest — the caller decides that. Returns
+    0, or the exit code of the problem that stopped it; `placed` gets one line per
+    package that went in.
 
-    `trocaveis` são os nomes que PODEM mudar de versão: o que se pediu na linha
-    de comando. Uma DEPENDÊNCIA que discorda do que já está travado continua a
-    ser conflito — aí ninguém escolheu, e escolher por conta própria seria a
-    decisão que a v1 não toma."""
-    repos = await repos_do_projeto()
-    vcomp = await versao_do_compilador(query_global())
+    `swappable` are the names that MAY change version: whatever was asked for on
+    the command line. A DEPENDENCY that disagrees with what is already locked is
+    still a conflict — there nobody chose, and choosing on our own would be the
+    decision v1 does not take."""
+    repos = await project_repos()
+    vcomp = await compiler_version(query_global())
     if len(vcomp) == 0:
-        print("aviso: não achei um `plangc` para perguntar a versão — a faixa de toolchain não foi conferida")
-        print("       (`--query <caminho>`, ou ponha o `plangc` no PATH)")
-    fila: list<str> = []
-    for pd in pedidos:
-        fila.append(pd)
-    porque: dict<str, str> = {}
-    while len(fila) > 0:
-        atual = parte_em_arroba(fila[0])
-        fila = fila[1:len(fila)]
-        n = atual[0]
-        v = atual[1]
-        ja = lk.acha(n)
-        if ja >= 0 and lk.pacotes[ja].versao == v:
+        print("warning: I did not find a `plangc` to ask the version — the toolchain requirement was not checked")
+        print("         (`--query <path>`, or put `plangc` on the PATH)")
+    queue: list<str> = []
+    for pd in wanted:
+        queue.append(pd)
+    why: dict<str, str> = {}
+    while len(queue) > 0:
+        cur = split_at(queue[0])
+        queue = queue[1:len(queue)]
+        n = cur[0]
+        v = cur[1]
+        already = lk.find(n)
+        if already >= 0 and lk.packages[already].version == v:
             continue
-        if ja >= 0 and n in trocaveis:
-            # o pacote PEDIDO na linha de comando pode trocar de versão: é
-            # exatamente isso que `ppack add x@0.2.0` e `ppack up` querem dizer.
-            # O que continua a ser conflito é uma DEPENDÊNCIA discordar do que já
-            # está travado — aí ninguém escolheu, e escolher por conta própria
-            # seria a decisão que a v1 não toma.
-            novo: list<LK.Travado> = []
-            for t9 in lk.pacotes:
-                if t9.nome != n:
-                    novo.append(t9)
-            lk.pacotes = novo
-        elif ja >= 0:
-            quem = porque[n] if n in porque else "pedido na linha de comando"
-            print(f"conflito em {n}: o lock tem {lk.pacotes[ja].versao} e {quem} pede {v}.")
-            print("a v1 não busca uma versão que sirva às duas — resolva à mão, subindo uma das pontas")
+        if already >= 0 and n in swappable:
+            # the package ASKED FOR on the command line may change version: that
+            # is exactly what `ppack add x@0.2.0` and `ppack up` mean. What
+            # remains a conflict is a DEPENDENCY disagreeing with what is already
+            # locked — there nobody chose, and choosing on our own would be the
+            # decision v1 does not take.
+            kept: list<LK.Locked> = []
+            for t9 in lk.packages:
+                if t9.name != n:
+                    kept.append(t9)
+            lk.packages = kept
+        elif already >= 0:
+            who = why[n] if n in why else "asked for on the command line"
+            print(f"conflict on {n}: the lock has {lk.packages[already].version} and {who} asks for {v}.")
+            print("v1 does not look for a version that serves both — resolve it by hand, raising one of the ends")
             return 1
-        achou = False
+        found = False
         for r in repos:
-            ix = await indice_guardado(r)
-            if not ix.tem(n, v):
+            ix = await stored_index(r)
+            if not ix.has(n, v):
                 continue
-            u = ix.pega(n, v)
-            bs = await R.buscar(r, u.arquivo)
-            sha = R.hash_de(bs)
+            u = ix.get(n, v)
+            bs = await R.fetch(r, u.file)
+            sha = R.hash_of(bs)
             if sha != u.sha256:
-                print(f"o hash NÃO bate para {n}@{v}:")
-                print(f"   o índice diz {u.sha256}")
-                print(f"   o que chegou {sha}")
+                print(f"the hash does NOT match for {n}@{v}:")
+                print(f"   the index says {u.sha256}")
+                print(f"   what arrived   {sha}")
                 return 1
-            # a assinatura do AUTOR, que é a que impede o próprio repositório de
-            # servir um tarball que o autor não fez. O HASH já foi conferido
-            # acima e é conferido SEMPRE — "unsafe" quer dizer que ninguém
-            # assinou, e não que o conteúdo não é olhado.
-            sem_assinatura = len(u.autor) == 0
-            if not sem_assinatura:
-                asg = await R.assinatura_de(r, u.arquivo)
-                if not R.conferir(u.autor, bs, asg):
-                    print(f"{n}@{v}: o índice diz que isto foi assinado por {u.autor[0:16]}…, e a assinatura não confere.")
+            # the AUTHOR's signature, which is what stops the repository itself
+            # from serving a tarball the author did not make. The HASH was checked
+            # above and is checked ALWAYS — "unsafe" means nobody signed, not that
+            # the content goes unexamined.
+            unsigned = len(u.author) == 0
+            if not unsigned:
+                sig = await R.signature_of(r, u.file)
+                if not R.verify_sig(u.author, bs, sig):
+                    print(f"{n}@{v}: the index says this was signed by {u.author[0:16]}…, and the signature does not match.")
                     return 1
-            elif not (inseguro or r.inseguro):
-                print(f"{n}@{v} não vem assinado.")
-                print("   ou `--unsafe` neste comando, ou o repositório declarado `unsafe` no pack.json —")
-                print("   as duas formas gravam `\"unsafe\": true` no lock, para quem revisa o PR ver.")
+            elif not (unsafe_ok or r.is_unsafe):
+                print(f"{n}@{v} does not come signed.")
+                print("   either `--unsafe` on this command, or the repository declared `unsafe` in pack.json —")
+                print("   both forms record `\"unsafe\": true` in the lock, for whoever reviews the PR to see.")
                 return 1
-            # a FAIXA DE TOOLCHAIN, conferida antes de gastar um segundo a
-            # compilar. A mensagem que sai daqui — "o pacote foo exige plangc
-            # >= X, o seu é Y" — é a melhor que existe para este problema; a
-            # alternativa é um erro de sintaxe a meio de um módulo que usa uma
-            # coisa que ainda não existe.
+            # the TOOLCHAIN REQUIREMENT, checked before spending a second
+            # compiling. The message that comes out of here — "package foo
+            # requires plangc >= X, yours is Y" — is the best there is for this
+            # problem; the alternative is a syntax error halfway through a module
+            # that uses something which does not exist yet.
             if len(vcomp) > 0:
-                mau = MF.toolchain_ok(u.toolchain, vcomp)
-                if len(mau) > 0:
-                    print(n + "@" + v + " " + mau)
+                bad = MF.toolchain_ok(u.toolchain, vcomp)
+                if len(bad) > 0:
+                    print(n + "@" + v + " " + bad)
                     return 1
-            await R.escrever_bytes(path.join(R.dir_paks(), sha), bs)
-            lk.pacotes.append(LK.Travado(n, v, sha, r.url, u.arquivo,
-                                         sem_assinatura, u.toolchain))
-            if lk.repo_conhecido(r.url) < 0:
-                lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
-            postos.append(n + " " + v + "  sha256 " + sha[0:16] + "…")
+            await R.write_bytes(path.join(R.tarballs_dir(), sha), bs)
+            lk.packages.append(LK.Locked(n, v, sha, r.url, u.file,
+                                         unsigned, u.toolchain))
+            if lk.known_repo(r.url) < 0:
+                lk.repos.append(LK.KnownRepo(r.url, "", R.now_iso()[0:10]))
+            placed.append(n + " " + v + "  sha256 " + sha[0:16] + "…")
             for d in u.deps:
-                porque[d.nome] = n + "@" + v
-                fila.append(d.nome + "@" + d.faixa)
-            achou = True
+                why[d.name] = n + "@" + v
+                queue.append(d.name + "@" + d.req)
+            found = True
             break
-        if not achou:
-            print(f"não achei {n}@{v} em nenhum índice guardado — `ppack update` primeiro?")
-            if n in porque:
-                print(f"   (é dependência de {porque[n]})")
+        if not found:
+            print(f"I did not find {n}@{v} in any stored index — `ppack update` first?")
+            if n in why:
+                print(f"   (it is a dependency of {why[n]})")
             return 1
     return 0
 
 
-async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
-    """`ppack add <nome>@<versão>` — escreve no manifesto e no lock.
+async def cmd_add(targets: list<str>, unsafe_ok: bool) -> int:
+    """`ppack add <name>@<version>` — writes to the manifest and to the lock.
 
-    `add` e `build` são comandos diferentes DE PROPÓSITO: um mexe no manifesto e
-    no lock, o outro compila. O diff do commit fica legível — duas linhas, uma em
-    cada arquivo — em vez de "o build mudou o mundo e agora há vinte arquivos
-    novos".
+    `add` and `build` are different commands ON PURPOSE: one touches the manifest
+    and the lock, the other compiles. The commit's diff stays readable — two
+    lines, one in each file — instead of "the build changed the world and now
+    there are twenty new files".
 
-    As dependências do que se pede vêm JUNTO, e isto não é resolver versões: o
-    índice traz a versão EXATA de cada uma, e o que se faz é segui-la. Quando
-    duas exigências discordam, o resultado é uma mensagem — não uma busca."""
-    if len(alvos) == 0:
-        print("uso: ppack add <nome>@<versão> [--unsafe]")
+    The dependencies of what you ask for come ALONG, and this is not resolving
+    versions: the index carries the EXACT version of each one, and what happens is
+    following it. When two demands disagree, the result is a message — not a
+    search."""
+    if len(targets) == 0:
+        print("usage: ppack add <name>@<version> [--unsafe]")
         return 2
-    pedido = parte_em_arroba(alvos[0])
-    nome = pedido[0]
-    versao = pedido[1]
-    if len(versao) == 0:
-        print("a v1 não tem resolvedor: a versão é EXATA — `ppack add " + nome + "@0.1.0`")
+    asked = split_at(targets[0])
+    name = asked[0]
+    version = asked[1]
+    if len(version) == 0:
+        print("v1 has no resolver: the version is EXACT — `ppack add " + name + "@0.1.0`")
         return 2
-    lk = await LK.ler("pack.lock")
-    postos: list<str> = []
-    rc = await travar(lk, [nome + "@" + versao], [nome], inseguro, postos)
+    lk = await LK.read("pack.lock")
+    placed: list<str> = []
+    rc = await resolve_lock(lk, [name + "@" + version], [name], unsafe_ok, placed)
     if rc != 0:
         return rc
-    await LK.gravar(lk, "pack.lock")
-    await MF.escrever_dep("pack.json", nome, versao)
-    if saida_json:
+    await LK.write(lk, "pack.lock")
+    await MF.write_dep("pack.json", name, version)
+    if json_out:
         jadd: list<str> = []
-        for t2 in lk.pacotes:
-            jadd.append('{"name": ' + G.jstr(t2.nome) + ', "version": ' + G.jstr(t2.versao)
-                      + ', "sha256": ' + G.jstr(t2.sha256) + ', "repo": ' + G.jstr(t2.repo)
-                      + ', "unsafe": ' + ("true" if t2.inseguro else "false") + '}')
-        print('{"asked": ' + G.jstr(nome + "@" + versao) + ', "locked": [' + ", ".join(jadd) + ']}')
+        for t2 in lk.packages:
+            jadd.append('{"name": ' + G.jstr(t2.name) + ', "version": ' + G.jstr(t2.version)
+                        + ', "sha256": ' + G.jstr(t2.sha256) + ', "repo": ' + G.jstr(t2.repo)
+                        + ', "unsafe": ' + ("true" if t2.is_unsafe else "false") + '}')
+        print('{"asked": ' + G.jstr(name + "@" + version) + ', "locked": [' + ", ".join(jadd) + ']}')
         return 0
-    for linha in postos:
-        print(linha)
-    if len(postos) > 1:
-        print(f"   {len(postos) - 1} vieram como dependência; `ppack why <nome>` diz de quem")
-    print("   `ppack install` para os materializar")
+    for line in placed:
+        print(line)
+    if len(placed) > 1:
+        print(f"   {len(placed) - 1} came in as dependencies; `ppack why <name>` says whose")
+    print("   `ppack install` to materialize them")
     return 0
 
 
-async def cmd_up(alvos: list<str>, inseguro: bool) -> int:
-    """`ppack up [<nome>]` — sobe para a versão mais alta que o índice conhece.
+async def cmd_up(targets: list<str>, unsafe_ok: bool) -> int:
+    """`ppack up [<name>]` — raises to the highest version the index knows.
 
-    Sem resolvedor não há "a versão que serve a todos": há a mais alta que
-    existe, e a decisão de a tomar é de quem escreve o comando. Por isso `up` é
-    um comando e não um efeito de `install` — subir de versão é uma escolha, e
-    uma escolha que acontece sozinha é uma escolha que ninguém reviu.
+    With no resolver there is no "the version that serves everyone": there is the
+    highest one that exists, and the decision to take it belongs to whoever writes
+    the command. That is why `up` is a command and not a side effect of `install`
+    — raising a version is a choice, and a choice that happens on its own is a
+    choice nobody reviewed.
 
-    Ele mexe no manifesto e no lock, como o `add`, e não constrói nada."""
+    It touches the manifest and the lock, like `add`, and builds nothing."""
     if not path.isfile("pack.json"):
-        print("não há pack.json aqui")
+        print("there is no pack.json here")
         return 1
-    m = await MF.ler("pack.json")
-    if not m.eh_workspace or len(m.deps) == 0:
-        print("o pack.json deste projeto não pede dependência nenhuma")
+    m = await MF.read("pack.json")
+    if not m.is_workspace or len(m.deps) == 0:
+        print("this project's pack.json asks for no dependencies")
         return 1
-    repos = await repos_do_projeto()
-    quais: list<str> = []
+    repos = await project_repos()
+    which: list<str> = []
     for d in m.deps:
-        if len(alvos) == 0 or d.nome in alvos:
-            quais.append(d.nome)
-    if len(quais) == 0:
-        print("'" + alvos[0] + "' não é uma dependência deste projeto")
+        if len(targets) == 0 or d.name in targets:
+            which.append(d.name)
+    if len(which) == 0:
+        print("'" + targets[0] + "' is not a dependency of this project")
         return 1
-    for nome in quais:
-        atual = ""
+    for name in which:
+        cur = ""
         for d2 in m.deps:
-            if d2.nome == nome:
-                atual = d2.faixa
-        melhor = ""
+            if d2.name == name:
+                cur = d2.req
+        best = ""
         for r in repos:
-            ix = await indice_guardado(r)
-            for v in ix.versoes(nome):
-                if len(melhor) == 0 or MF.versao_maior(v, melhor):
-                    melhor = v
-        if len(melhor) == 0:
-            print(nome + ": não está em nenhum índice guardado — `ppack update` primeiro?")
+            ix = await stored_index(r)
+            for v in ix.versions(name):
+                if len(best) == 0 or MF.version_greater(v, best):
+                    best = v
+        if len(best) == 0:
+            print(name + ": it is in no stored index — `ppack update` first?")
             continue
-        if melhor == atual:
-            print(nome + " " + atual + " já é a mais alta que o índice tem")
+        if best == cur:
+            print(name + " " + cur + " is already the highest the index has")
             continue
-        print(nome + ": " + atual + " -> " + melhor)
-        rc = await cmd_add([nome + "@" + melhor], inseguro)
+        print(name + ": " + cur + " -> " + best)
+        rc = await cmd_add([name + "@" + best], unsafe_ok)
         if rc != 0:
             return rc
     return 0
 
 
-async def cmd_lock(frozen: bool, inseguro: bool) -> int:
-    """`ppack lock` — põe o `pack.lock` de acordo com o `pack.json`, e mais nada.
+async def cmd_lock(frozen: bool, unsafe_ok: bool) -> int:
+    """`ppack lock` — brings `pack.lock` in line with `pack.json`, and nothing
+    else.
 
-    É o comando que faltava entre `add` (que muda o que se pede) e `install`
-    (que materializa o que já está decidido): aqui não se pede nada de novo nem
-    se abre árvore nenhuma — refaz-se o lock a partir do manifesto.
+    It is the command that was missing between `add` (which changes what you ask
+    for) and `install` (which materializes what is already decided): here nothing
+    new is asked for and no tree is unpacked — the lock is remade from the
+    manifest.
 
-    Ele **recomeça** em vez de remendar, e isso é o que o torna exato: o lock
-    passa a ser o fecho do que o `pack.json` pede, e o que já ninguém puxa sai
-    dele sozinho. O que sobrevive é a secção dos repositórios — as chaves
-    aceites por TOFU não são um resultado da resolução, são a confiança que este
-    projeto já reviu, e recomeçar isso seria aceitar de novo o que já foi aceite
-    uma vez.
+    It **starts over** instead of patching, and that is what makes it exact: the
+    lock becomes the closure of what `pack.json` asks for, and what nobody pulls
+    in any more leaves on its own. What survives is the repositories section — the
+    keys accepted by TOFU are not a result of the resolution, they are the trust
+    this project already reviewed, and starting that over would be accepting again
+    what was accepted once.
 
-    Nada disto toca a rede: o tarball de cada versão já está no armazém, com o
-    hash conferido, e o índice é o que o último `ppack update` guardou.
+    None of this touches the network: each version's tarball is already in the
+    store, with its hash checked, and the index is what the last `ppack update`
+    kept.
 
-    Com `--frozen` ele não escreve: diz o que mudaria e sai com 1, que é o que
-    um CI quer — "o lock que está comitado não é o que este manifesto pede"."""
+    With `--frozen` it does not write: it says what would change and exits with 1,
+    which is what a CI wants — "the lock that is committed is not what this
+    manifest asks for"."""
     if not path.isfile("pack.json"):
-        print("não há pack.json aqui")
+        print("there is no pack.json here")
         return 1
-    m = await MF.ler("pack.json")
-    velho = await LK.ler("pack.lock")
-    difs = await lock_vs_manifesto(velho)
+    m = await MF.read("pack.json")
+    old = await LK.read("pack.lock")
+    diffs = await lock_vs_manifest(old)
     if frozen:
-        if len(difs) == 0:
-            if saida_json:
+        if len(diffs) == 0:
+            if json_out:
                 print('{"changed": false}')
             else:
-                print("o pack.lock corresponde ao pack.json")
+                print("pack.lock matches pack.json")
             return 0
-        print("o lock não corresponde ao pack.json, e `--frozen` não deixa arrumá-lo:")
-        for d0 in difs:
+        print("the lock does not match pack.json, and `--frozen` will not let me fix it:")
+        for d0 in diffs:
             print("   " + d0)
-        print("rode `ppack lock` e comite o pack.lock")
+        print("run `ppack lock` and commit pack.lock")
         return 1
-    novo = await LK.ler("pack.lock")
-    novo.pacotes = []
-    pedidos: list<str> = []
-    trocaveis: list<str> = []
+    fresh = await LK.read("pack.lock")
+    fresh.packages = []
+    wanted: list<str> = []
+    swappable: list<str> = []
     for d in m.deps:
-        pedidos.append(d.nome + "@" + d.faixa)
-        trocaveis.append(d.nome)
-    postos: list<str> = []
-    rc = await travar(novo, pedidos, trocaveis, inseguro, postos)
+        wanted.append(d.name + "@" + d.req)
+        swappable.append(d.name)
+    placed: list<str> = []
+    rc = await resolve_lock(fresh, wanted, swappable, unsafe_ok, placed)
     if rc != 0:
         return rc
-    if len(novo.pacotes) == 0 and not path.isfile("pack.lock"):
-        # um projeto sem dependência de fora não precisa de lock, e criar um
-        # arquivo vazio só para o comando ter feito alguma coisa é ruído num
-        # diretório que alguém vai comitar
-        if saida_json:
+    if len(fresh.packages) == 0 and not path.isfile("pack.lock"):
+        # a project with no outside dependency does not need a lock, and creating
+        # an empty file just so the command did something is noise in a directory
+        # somebody is going to commit
+        if json_out:
             print('{"changed": false, "locked": []}')
         else:
-            print("este projeto não pede dependência nenhuma: não há o que travar")
+            print("this project asks for no dependencies: there is nothing to lock")
         return 0
-    await LK.gravar(novo, "pack.lock")
-    linhas: list<str> = []
-    for t in novo.pacotes:
-        i = velho.acha(t.nome)
+    await LK.write(fresh, "pack.lock")
+    lines: list<str> = []
+    for t in fresh.packages:
+        i = old.find(t.name)
         if i < 0:
-            linhas.append("+ " + t.nome + " " + t.versao)
-        elif velho.pacotes[i].versao != t.versao:
-            linhas.append("~ " + t.nome + " " + velho.pacotes[i].versao + " -> " + t.versao)
-        elif velho.pacotes[i].sha256 != t.sha256:
-            linhas.append("~ " + t.nome + " " + t.versao + " (outro conteúdo)")
-    for t2 in velho.pacotes:
-        if novo.acha(t2.nome) < 0:
-            linhas.append("- " + t2.nome + " " + t2.versao + " (ninguém o pede)")
-    if saida_json:
+            lines.append("+ " + t.name + " " + t.version)
+        elif old.packages[i].version != t.version:
+            lines.append("~ " + t.name + " " + old.packages[i].version + " -> " + t.version)
+        elif old.packages[i].sha256 != t.sha256:
+            lines.append("~ " + t.name + " " + t.version + " (different content)")
+    for t2 in old.packages:
+        if fresh.find(t2.name) < 0:
+            lines.append("- " + t2.name + " " + t2.version + " (nobody asks for it)")
+    if json_out:
         jl: list<str> = []
-        for t3 in novo.pacotes:
-            jl.append('{"name": ' + G.jstr(t3.nome) + ', "version": ' + G.jstr(t3.versao)
+        for t3 in fresh.packages:
+            jl.append('{"name": ' + G.jstr(t3.name) + ', "version": ' + G.jstr(t3.version)
                       + ', "sha256": ' + G.jstr(t3.sha256) + '}')
-        print('{"changed": ' + ("true" if len(linhas) > 0 else "false")
+        print('{"changed": ' + ("true" if len(lines) > 0 else "false")
               + ', "locked": [' + ", ".join(jl) + ']}')
         return 0
-    if len(linhas) == 0:
-        print("o pack.lock já correspondia ao pack.json (" + str(len(novo.pacotes)) + " pacote(s))")
+    if len(lines) == 0:
+        print("pack.lock already matched pack.json (" + str(len(fresh.packages)) + " package(s))")
         return 0
-    for l2 in linhas:
+    for l2 in lines:
         print(l2)
-    print("   `ppack install` para os materializar")
+    print("   `ppack install` to materialize them")
     return 0
 
 
-private async def lock_vs_manifesto(lk: LK.Lock) -> list<str>:
-    """O que o `pack.json` pede e o `pack.lock` tem — e a diferença entre os
-    dois, dita em linhas.
+private async def lock_vs_manifest(lk: LK.Lock) -> list<str>:
+    """What `pack.json` asks for and what `pack.lock` has — and the difference
+    between the two, said in lines.
 
-    Um lock que não corresponde ao manifesto é a fonte de "na minha máquina
-    funciona": alguém acrescentou uma dependência, esqueceu-se de comitar o
-    lock, e o build do outro instala outra coisa. Aqui isso é uma LISTA, que o
-    `install` imprime e o `--frozen` recusa."""
+    A lock that does not match the manifest is the source of "it works on my
+    machine": somebody added a dependency, forgot to commit the lock, and the
+    other person's build installs something else. Here that is a LIST, which
+    `install` prints and `--frozen` refuses."""
     out: list<str> = []
     if not path.isfile("pack.json"):
         return out
-    m = await MF.ler("pack.json")
-    if not m.eh_workspace:
+    m = await MF.read("pack.json")
+    if not m.is_workspace:
         return out
     for d in m.deps:
-        i = lk.acha(d.nome)
+        i = lk.find(d.name)
         if i < 0:
-            out.append("+ " + d.nome + "@" + d.faixa + " (o manifesto pede, o lock não tem)")
-        elif lk.pacotes[i].versao != d.faixa:
-            out.append("~ " + d.nome + ": o lock tem " + lk.pacotes[i].versao + ", o manifesto pede " + d.faixa)
+            out.append("+ " + d.name + "@" + d.req + " (the manifest asks for it, the lock does not have it)")
+        elif lk.packages[i].version != d.req:
+            out.append("~ " + d.name + ": the lock has " + lk.packages[i].version + ", the manifest asks for " + d.req)
     return out
 
 
 async def cmd_install(frozen: bool) -> int:
-    """`ppack install` — materializa o que o lock diz.
+    """`ppack install` — materializes what the lock says.
 
-    O que ele NÃO faz é decidir: as versões já estão decididas, no lock. Ele
-    baixa o que falta, confere o hash SEMPRE, e abre a árvore em
-    `build/pkg/<nome>-<versão>-<hash>/`. O hash no nome é o que torna "a mesma
-    versão com conteúdo diferente" impossível de confundir."""
-    lk = await LK.ler("pack.lock")
-    # o lock e o manifesto têm de contar a mesma história. Um `install` que
-    # instalasse o lock velho em silêncio é a fonte do "na minha máquina
-    # funciona": alguém acrescentou uma dependência e não comitou o lock.
-    difs = await lock_vs_manifesto(lk)
-    if len(difs) > 0:
+    What it does NOT do is decide: the versions are already decided, in the lock.
+    It downloads what is missing, checks the hash ALWAYS, and unpacks the tree into
+    `build/pkg/<name>-<version>-<hash>/`. The hash in the name is what makes "the
+    same version with different content" impossible to confuse."""
+    lk = await LK.read("pack.lock")
+    # the lock and the manifest have to tell the same story. An `install` that
+    # silently installed the old lock is the source of "it works on my machine":
+    # somebody added a dependency and did not commit the lock.
+    diffs = await lock_vs_manifest(lk)
+    if len(diffs) > 0:
         if frozen:
-            print("o lock não corresponde ao pack.json, e `--frozen` não deixa arrumá-lo:")
-            for dd in difs:
+            print("the lock does not match pack.json, and `--frozen` will not let me fix it:")
+            for dd in diffs:
                 print("   " + dd)
-            print("rode `ppack add <nome>@<versão>` e comite o pack.lock")
+            print("run `ppack add <name>@<version>` and commit pack.lock")
             return 1
-        print("o lock não corresponde ao pack.json:")
-        for dd2 in difs:
+        print("the lock does not match pack.json:")
+        for dd2 in diffs:
             print("   " + dd2)
-        print("   (`ppack add <nome>@<versão>` acerta-o; `--frozen` recusa em vez de avisar)")
-    if len(lk.pacotes) == 0:
-        # também aqui: quem pediu JSON recebe JSON. Uma frase em português no
-        # meio de um fluxo de objetos é o que faz um consumidor estourar longe
-        # do sítio onde o problema está.
-        if saida_json:
+        print("   (`ppack add <name>@<version>` fixes it; `--frozen` refuses instead of warning)")
+    if len(lk.packages) == 0:
+        # here too: whoever asked for JSON gets JSON. A sentence in the middle of a
+        # stream of objects is what makes a consumer blow up far from where the
+        # problem is.
+        if json_out:
             print("[]")
             return 0
-        print("o lock não tem pacotes: `ppack add <nome>@<versão>` primeiro")
+        print("the lock has no packages: `ppack add <name>@<version>` first")
         return 0
-    repos = await repos_do_projeto()
-    vcomp = await versao_do_compilador(query_global())
-    if len(vcomp) == 0 and not saida_json:
-        print("aviso: não achei um `plangc` para perguntar a versão — a faixa de toolchain não foi conferida")
+    repos = await project_repos()
+    vcomp = await compiler_version(query_global())
+    if len(vcomp) == 0 and not json_out:
+        print("warning: I did not find a `plangc` to ask the version — the toolchain requirement was not checked")
     n = 0
     ji: list<str> = []
-    for t in lk.pacotes:
+    for t in lk.packages:
         if len(vcomp) > 0:
-            mau = MF.toolchain_ok(t.toolchain, vcomp)
-            if len(mau) > 0:
-                print(t.nome + "@" + t.versao + " " + mau)
+            bad = MF.toolchain_ok(t.toolchain, vcomp)
+            if len(bad) > 0:
+                print(t.name + "@" + t.version + " " + bad)
                 return 1
-        destino = R.dir_do_pacote(t.nome, t.versao, t.sha256)
-        if path.isdir(path.join(destino, t.nome)):
+        dest = R.package_dir(t.name, t.version, t.sha256)
+        if path.isdir(path.join(dest, t.name)):
             continue
-        pak = path.join(R.dir_paks(), t.sha256)
+        pak = path.join(R.tarballs_dir(), t.sha256)
         bs: list<u8> = []
         if path.isfile(pak):
-            bs = await R.ler_bytes(pak)
+            bs = await R.read_bytes(pak)
         else:
-            achou = False
+            found = False
             for r in repos:
                 if r.url != t.repo:
                     continue
-                bs = await R.buscar(r, t.arquivo)
-                achou = True
-            if not achou:
-                print(f"{t.nome}: o lock diz que veio de {t.repo}, e esse repositório não está no pack.json")
+                bs = await R.fetch(r, t.file)
+                found = True
+            if not found:
+                print(f"{t.name}: the lock says it came from {t.repo}, and that repository is not in pack.json")
                 return 1
-            await R.escrever_bytes(pak, bs)
-        sha = R.hash_de(bs)
+            await R.write_bytes(pak, bs)
+        sha = R.hash_of(bs)
         if sha != t.sha256:
-            print(f"o hash NÃO bate para {t.nome}@{t.versao}: o lock diz {t.sha256}, o que há diz {sha}")
+            print(f"the hash does NOT match for {t.name}@{t.version}: the lock says {t.sha256}, what is here says {sha}")
             return 1
-        quantos = await R.extrair_pacote(bs, destino, t.nome)
-        if saida_json:
-            ji.append('{"name": ' + G.jstr(t.nome) + ', "version": ' + G.jstr(t.versao)
-                      + ', "dir": ' + G.jstr(destino) + ', "files": ' + str(quantos)
-                      + ', "unsafe": ' + ("true" if t.inseguro else "false") + '}')
+        count = await R.extract_package(bs, dest, t.name)
+        if json_out:
+            ji.append('{"name": ' + G.jstr(t.name) + ', "version": ' + G.jstr(t.version)
+                      + ', "dir": ' + G.jstr(dest) + ', "files": ' + str(count)
+                      + ', "unsafe": ' + ("true" if t.is_unsafe else "false") + '}')
         else:
-            print(f"{t.nome} {t.versao}  {quantos} arquivo(s) em {destino}")
-            if t.inseguro:
-                print("   (unsafe: sem assinatura — o hash bateu)")
+            print(f"{t.name} {t.version}  {count} file(s) in {dest}")
+            if t.is_unsafe:
+                print("   (unsafe: no signature — the hash matched)")
         n += 1
-    if saida_json:
+    if json_out:
         print("[" + ", ".join(ji) + "]")
         return 0
     if n == 0:
-        print("nada a instalar: tudo o que o lock diz já está aberto")
+        print("nothing to install: everything the lock says is already unpacked")
     return 0
 
 
-private def partes_da_versao(v: str) -> list<int>:
+private def version_parts(v: str) -> list<int>:
     ps = v.split(".")
     out: list<int> = []
     for i in range(3):
@@ -1354,97 +1366,98 @@ private def partes_da_versao(v: str) -> list<int>:
     return out
 
 
-private def psc_fora_do_teste(dir: str, rel: str, achados: list<str>):
-    """Um `.psc` dentro de um pacote declarado `p`, sem contar o que está em
-    `test/`.
+private def psc_outside_test(dir: str, rel: str, found: list<str>):
+    """A `.psc` inside a package declared `p`, not counting what is in `test/`.
 
-    A exceção do teste não é conveniência: um pacote em P pode muito bem ser
-    exercitado a partir do pscript — é assim que o `sha2` prova que atravessa a
-    fronteira dos 45.5 — e o teste não faz parte da interface que alguém importa.
-    O que não pode é um MÓDULO do pacote ser pscript quando o manifesto diz que
-    ele é P: quem o importar como P recebe um erro que não fala do problema."""
-    for nome in sorted(os.listdir(dir)):
-        cheio = path.join(dir, nome)
-        se_rel = nome if len(rel) == 0 else rel + "/" + nome
-        if path.isdir(cheio):
-            if nome == "test" and len(rel) == 0:
+    The test exception is not convenience: a package in P may very well be
+    exercised from pscript — that is how `sha2` proves it crosses the 45.5
+    boundary — and the test is not part of the interface anybody imports. What
+    cannot be is a MODULE of the package being pscript when the manifest says it
+    is P: whoever imports it as P gets an error that does not talk about the
+    problem."""
+    for name in sorted(os.listdir(dir)):
+        full = path.join(dir, name)
+        rel2 = name if len(rel) == 0 else rel + "/" + name
+        if path.isdir(full):
+            if name == "test" and len(rel) == 0:
                 continue
-            psc_fora_do_teste(cheio, se_rel, achados)
-        elif nome.endswith(".psc"):
-            achados.append(se_rel)
+            psc_outside_test(full, rel2, found)
+        elif name.endswith(".psc"):
+            found.append(rel2)
 
 
-private async def recusas_de_publish(ix: R.Indice, m: MF.Manifesto, dir: str,
-                                     u: R.Versao) -> list<str>:
-    """Os três casos em que publicar seria publicar uma coisa que não serve.
+private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
+                                   u: R.Release) -> list<str>:
+    """The three cases where publishing would mean publishing something that does
+    not serve.
 
-    Nenhum deles precisa de mecanismo novo — é essa a razão de existirem: o
-    índice já traz as dependências, o manifesto já diz a linguagem, e a lista
-    canónica da API já está calculada para entrar no índice. Conferir é
-    comparar.
+    None of them needs a new mechanism — that is the reason they exist: the index
+    already carries the dependencies, the manifest already says the language, and
+    the canonical API list is already computed to go into the index. Checking is
+    comparing.
 
-      1. **uma dependência que o destino não resolve.** Publica-se um tarball
-         que só se constrói na máquina do autor, onde a dependência é membro do
-         workspace. Quem o instalar depois recebe "não achei foo@0.1.0" — longe
-         daqui, e sem saber que foi aqui que se decidiu.
+      1. **a dependency the destination does not resolve.** You publish a tarball
+         that only builds on the author's machine, where the dependency is a
+         workspace member. Whoever installs it later gets "I did not find
+         foo@0.1.0" — far from here, and without knowing it was decided here.
 
-      2. **um `.psc` num pacote declarado `p`** (fora de `test/`).
+      2. **a `.psc` in a package declared `p`** (outside `test/`).
 
-      3. **a versão subiu e a interface não bate com o que a subida promete.**
-         Um `patch` diz "nada mudou na interface" e um `minor` diz "só
-         acrescentei" — as duas coisas são verificáveis a partir do índice, e é
-         por isso que a lista canónica da API está lá."""
-    maus: list<str> = []
+      3. **the version went up and the interface does not match what the bump
+         promises.** A `patch` says "nothing changed in the interface" and a
+         `minor` says "I only added" — both are verifiable from the index, and
+         that is why the canonical API list is there."""
+    bad: list<str> = []
     for d in m.deps:
-        if ix.tem(d.nome, d.faixa):
+        if ix.has(d.name, d.req):
             continue
-        maus.append("a dependência " + d.nome + "@" + d.faixa
-                    + " não está neste repositório — publique-a primeiro")
+        bad.append("the dependency " + d.name + "@" + d.req
+                   + " is not in this repository — publish it first")
     if m.lang == "p":
-        achados: list<str> = []
-        psc_fora_do_teste(dir, "", achados)
-        for a in achados:
-            maus.append(a + " é pscript, e o manifesto declara `\"lang\": \"p\"`")
-    anterior = ""
-    for v in ix.versoes(m.nome):
-        if len(anterior) == 0 or MF.versao_maior(v, anterior):
-            anterior = v
-    if len(anterior) == 0:
-        return maus
-    va = partes_da_versao(anterior)
-    vn = partes_da_versao(m.versao)
+        found: list<str> = []
+        psc_outside_test(dir, "", found)
+        for a in found:
+            bad.append(a + " is pscript, and the manifest declares `\"lang\": \"p\"`")
+    prev = ""
+    for v in ix.versions(m.name):
+        if len(prev) == 0 or MF.version_greater(v, prev):
+            prev = v
+    if len(prev) == 0:
+        return bad
+    va = version_parts(prev)
+    vn = version_parts(m.version)
     if vn[0] != va[0]:
-        return maus                      # major: pode mudar o que quiser
-    ant = ix.pega(m.nome, anterior)
+        return bad                       # major: it may change whatever it likes
+    prev_rel = ix.get(m.name, prev)
     if vn[1] == va[1]:
-        # patch: a interface tem de ser a MESMA, módulo a módulo
+        # patch: the interface has to be the SAME, module by module
         for mod in sorted_keys(u.api_hash):
-            if mod not in ant.api_hash:
-                maus.append("o módulo " + mod + " é novo, e " + m.versao
-                            + " só sobe o `patch` de " + anterior)
-            elif ant.api_hash[mod] != u.api_hash[mod]:
-                maus.append("a interface de " + mod + " mudou, e " + m.versao
-                            + " só sobe o `patch` de " + anterior)
-        for mod2 in sorted_keys(ant.api_hash):
+            if mod not in prev_rel.api_hash:
+                bad.append("the module " + mod + " is new, and " + m.version
+                           + " only bumps the `patch` of " + prev)
+            elif prev_rel.api_hash[mod] != u.api_hash[mod]:
+                bad.append("the interface of " + mod + " changed, and " + m.version
+                           + " only bumps the `patch` of " + prev)
+        for mod2 in sorted_keys(prev_rel.api_hash):
             if mod2 not in u.api_hash:
-                maus.append("o módulo " + mod2 + " saiu, e " + m.versao
-                            + " só sobe o `patch` de " + anterior)
-        return maus
-    # minor: pode ACRESCENTAR, e mais nada
-    mods_ant: list<str> = []
-    for k3 in ant.api:
-        mods_ant.append(k3)
-    for mod3 in sorted(mods_ant):
+                bad.append("the module " + mod2 + " left, and " + m.version
+                           + " only bumps the `patch` of " + prev)
+        return bad
+    # minor: it may ADD, and nothing else
+    prev_mods: list<str> = []
+    for k3 in prev_rel.api:
+        prev_mods.append(k3)
+    for mod3 in sorted(prev_mods):
         if mod3 not in u.api:
-            maus.append("o módulo " + mod3 + " saiu, e " + m.versao
-                        + " sobe o `minor` de " + anterior + " (minor acrescenta, não tira)")
+            bad.append("the module " + mod3 + " left, and " + m.version
+                       + " bumps the `minor` of " + prev + " (a minor adds, it does not take away)")
             continue
-        agora: list<str> = u.api[mod3]
-        for linha in ant.api[mod3]:
-            if linha not in agora:
-                maus.append("`" + linha + "` saiu de " + mod3 + ", e " + m.versao
-                            + " sobe o `minor` de " + anterior + " (minor acrescenta, não tira)")
-    return maus
+        now_syms: list<str> = u.api[mod3]
+        for decl in prev_rel.api[mod3]:
+            if decl not in now_syms:
+                bad.append("`" + decl + "` left " + mod3 + ", and " + m.version
+                           + " bumps the `minor` of " + prev + " (a minor adds, it does not take away)")
+    return bad
 
 
 private def sorted_keys(d: dict<str, str>) -> list<str>:
@@ -1454,123 +1467,124 @@ private def sorted_keys(d: dict<str, str>) -> list<str>:
     return sorted(ks)
 
 
-async def cmd_publish(alvos: list<str>, para: str, chave: str, query: str) -> int:
-    """`ppack publish <pacote> --to <dir>` — o `.tar`, o hash e a entrada no
-    índice, no repositório local do autor.
+async def cmd_publish(targets: list<str>, to_dir: str, key_file: str, query: str) -> int:
+    """`ppack publish <package> --to <dir>` — the `.tar`, the hash and the index
+    entry, in the author's local repository.
 
-    Ele NÃO ENVIA NADA, e isso é a consequência direta de um repositório ser um
-    formato: enviar é `rsync`, `scp` ou `git push`, e nenhuma dessas é coisa que
-    um gerenciador de pacotes tenha de reimplementar mal.
+    It SENDS NOTHING, and that is a direct consequence of a repository being a
+    format: sending is `rsync`, `scp` or `git push`, and none of those is
+    something a package manager has to reimplement badly.
 
-    O que ele confere antes de escrever:
+    What it checks before writing:
 
-      * o manifesto é válido (nome, versão, campos);
-      * a versão AINDA NÃO EXISTE no índice — uma versão publicada é imutável, e
-        essa é a regra que faz um lock com hash valer alguma coisa;
-      * a interface bate com o que vai declarar (é o compilador que a dá).
+      * the manifest is valid (name, version, fields);
+      * the version DOES NOT EXIST YET in the index — a published version is
+        immutable, and that is the rule that makes a lock with a hash worth
+        anything;
+      * the interface matches what it is going to declare (the compiler gives it).
 
-    O que ele NÃO faz é rodar os testes: publicar e testar são decisões
-    diferentes, e juntá-las faria `publish` falhar por razões que não são sobre
-    publicar."""
-    if len(alvos) == 0:
-        print("uso: ppack publish <pacote> [--to <dir>]")
+    What it does NOT do is run the tests: publishing and testing are different
+    decisions, and joining them would make `publish` fail for reasons that are not
+    about publishing."""
+    if len(targets) == 0:
+        print("usage: ppack publish <package> [--to <dir>]")
         return 2
-    if len(para) == 0:
-        print("ppack publish precisa de um repositório de destino: --to <dir>")
+    if len(to_dir) == 0:
+        print("ppack publish needs a destination repository: --to <dir>")
         return 2
-    alvo = alvos[0]
+    target = targets[0]
     dir = ""
-    for r in await BP.raizes_do_workspace("pack.json"):
-        cand = path.join(r, alvo)
+    for r in await BP.workspace_roots("pack.json"):
+        cand = path.join(r, target)
         if path.isfile(path.join(cand, "pack.json")):
             dir = cand
             break
-    if len(dir) == 0 and path.isfile(path.join(alvo, "pack.json")):
-        dir = alvo
+    if len(dir) == 0 and path.isfile(path.join(target, "pack.json")):
+        dir = target
     if len(dir) == 0:
-        print("não achei o pacote '" + alvo + "' (nem no workspace, nem como diretório)")
+        print("I did not find the package '" + target + "' (neither in the workspace nor as a directory)")
         return 1
-    m = await MF.ler(path.join(dir, "pack.json"))
-    if m.eh_workspace:
-        print(dir + "/pack.json é um workspace, não um pacote")
+    m = await MF.read(path.join(dir, "pack.json"))
+    if m.is_workspace:
+        print(dir + "/pack.json is a workspace, not a package")
         return 1
-    if len(m.nome) == 0 or len(m.versao) == 0:
-        print(dir + "/pack.json: um pacote publicado precisa de `name` e `version`")
+    if len(m.name) == 0 or len(m.version) == 0:
+        print(dir + "/pack.json: a published package needs `name` and `version`")
         return 1
 
-    ixp = path.join(para, "index.json")
-    ix = R.indice_novo(path.basename(para))
+    ixp = path.join(to_dir, "index.json")
+    ix = R.new_index(path.basename(to_dir))
     if path.isfile(ixp):
         f = await open(ixp, "r")
-        ix = R.ler_indice(await f.text(), ixp)
+        ix = R.read_index(await f.text(), ixp)
         await f.close()
-    if ix.tem(m.nome, m.versao):
-        print(f"{m.nome}@{m.versao} já está publicado em {para} — uma versão publicada é IMUTÁVEL.")
-        print("suba a versão no pack.json, ou apague a entrada do índice se ela nunca saiu daqui")
+    if ix.has(m.name, m.version):
+        print(f"{m.name}@{m.version} is already published in {to_dir} — a published version is IMMUTABLE.")
+        print("bump the version in pack.json, or delete the index entry if it never left here")
         return 1
 
-    u = R.vazia()
-    u.nome = m.nome
-    u.versao = m.versao
-    u.autor = ""
+    u = R.empty_release()
+    u.name = m.name
+    u.version = m.version
+    u.author = ""
     u.lang = m.lang
-    u.raiz = m.raiz
+    u.root = m.root
     u.deps = m.deps
     u.toolchain = m.toolchain
-    u.descricao = m.descricao
-    await api_do_pacote(dir, m, query, u.api, u.api_hash)
-    # a RECUSA acontece antes de um byte ser escrito. Um repositório com um
-    # tarball a mais e nenhuma entrada no índice é um repositório que ninguém
-    # sabe consertar.
-    maus = await recusas_de_publish(ix, m, dir, u)
-    if len(maus) > 0:
-        print(dir + "/pack.json: error: isto não pode ser publicado assim:")
-        for mm in maus:
+    u.description = m.description
+    await package_api(dir, m, query, u.api, u.api_hash)
+    # the REFUSAL happens before a byte is written. A repository with one tarball
+    # too many and no index entry is a repository nobody knows how to fix.
+    bad = await publish_refusals(ix, m, dir, u)
+    if len(bad) > 0:
+        print(dir + "/pack.json: error: this cannot be published as it is:")
+        for mm in bad:
             print("   " + mm)
         return 1
-    bs = await R.empacotar(dir, m.nome + "-" + m.versao)
-    sha = R.hash_de(bs)
-    rel = "pkg/" + m.nome + "/" + m.nome + "-" + m.versao + ".tar"
-    await R.escrever_bytes(path.join(para, rel), bs)
-    u.arquivo = rel
-    u.tamanho = len(bs)
+    bs = await R.pack(dir, m.name + "-" + m.version)
+    sha = R.hash_of(bs)
+    rel = "pkg/" + m.name + "/" + m.name + "-" + m.version + ".tar"
+    await R.write_bytes(path.join(to_dir, rel), bs)
+    u.file = rel
+    u.size = len(bs)
     u.sha256 = sha
-    if m.nome not in ix.pacotes:
-        vazio: dict<str, R.Versao> = {}
-        ix.pacotes[m.nome] = vazio
-    assinado = False
-    if len(chave) > 0:
-        # a assinatura do AUTOR vai ao lado do tarball, e a chave que a fez vai
-        # no índice: quem confere não precisa de a ir buscar a lado nenhum
-        semente = await R.ler_semente(chave)
-        u.autor = R.chave_publica(semente)
-        await R.escrever_bytes(path.join(para, rel + ".sig"),
-                               R.bytes_de_texto(R.assinar(semente, bs) + "\n"))
-        assinado = True
-    ix.pacotes[m.nome][m.versao] = u
-    ix.atualizado = R.agora_iso()
-    texto_ix = R.escrever_indice(ix)
-    await R.escrever_bytes(ixp, R.bytes_de_texto(texto_ix))
-    if len(chave) > 0:
-        # ... e a do REPOSITÓRIO cobre o índice inteiro, que é o que impede uma
-        # lista velha de ser servida como se fosse a de agora
-        semente2 = await R.ler_semente(chave)
-        await R.escrever_bytes(ixp + ".sig",
-                               R.bytes_de_texto(R.assinar(semente2, R.bytes_de_texto(texto_ix)) + "\n"))
+    if m.name not in ix.packages:
+        empty: dict<str, R.Release> = {}
+        ix.packages[m.name] = empty
+    signed = False
+    if len(key_file) > 0:
+        # the AUTHOR's signature goes next to the tarball, and the key that made
+        # it goes into the index: whoever verifies does not have to fetch it from
+        # anywhere
+        seed = await R.read_seed(key_file)
+        u.author = R.public_key(seed)
+        await R.write_bytes(path.join(to_dir, rel + ".sig"),
+                            R.bytes_of_text(R.sign(seed, bs) + "\n"))
+        signed = True
+    ix.packages[m.name][m.version] = u
+    ix.updated = R.now_iso()
+    index_text = R.write_index(ix)
+    await R.write_bytes(ixp, R.bytes_of_text(index_text))
+    if len(key_file) > 0:
+        # ... and the REPOSITORY's covers the whole index, which is what stops an
+        # old list from being served as if it were today's
+        seed2 = await R.read_seed(key_file)
+        await R.write_bytes(ixp + ".sig",
+                            R.bytes_of_text(R.sign(seed2, R.bytes_of_text(index_text)) + "\n"))
 
-    if saida_json:
-        print('{"name": ' + G.jstr(m.nome) + ', "version": ' + G.jstr(m.versao)
-              + ', "file": ' + G.jstr(path.join(para, rel)) + ', "sha256": ' + G.jstr(sha)
+    if json_out:
+        print('{"name": ' + G.jstr(m.name) + ', "version": ' + G.jstr(m.version)
+              + ', "file": ' + G.jstr(path.join(to_dir, rel)) + ', "sha256": ' + G.jstr(sha)
               + ', "size": ' + str(len(bs)) + '}')
         return 0
-    print(f"{m.nome} {m.versao} -> {path.join(para, rel)}")
+    print(f"{m.name} {m.version} -> {path.join(to_dir, rel)}")
     print(f"   sha256 {sha}")
-    print(f"   {len(bs)} bytes, {len(u.api)} módulo(s) de interface no índice")
-    if assinado:
-        print("   assinado por " + u.autor[0:16] + "… (o tarball e o índice)")
+    print(f"   {len(bs)} bytes, {len(u.api)} interface module(s) in the index")
+    if signed:
+        print("   signed by " + u.author[0:16] + "… (the tarball and the index)")
     else:
-        print("   SEM ASSINATURA: isto só serve para um repositório declarado `unsafe`.")
-        print("   `ppack keygen <arquivo>` e depois `--key <arquivo>` para assinar.")
+        print("   NO SIGNATURE: this only serves a repository declared `unsafe`.")
+        print("   `ppack keygen <file>` and then `--key <file>` to sign.")
     return 0
 
 
@@ -1622,255 +1636,256 @@ footer { margin-top: 3rem; color: var(--dim); font-size: .82rem;
 """
 
 
-private def pagina(titulo: str, corpo: str, subida: str) -> str:
-    """A moldura de uma página. Uma folha de estilo INLINE, e não um arquivo ao
-    lado: uma pasta de documentação que se copia para outro lado e continua a
-    ver-se bem vale mais que uma que economiza dois quilobytes."""
-    return ("<!doctype html>\n<html lang=\"pt\">\n<meta charset=\"utf-8\">\n"
+private def page(title: str, body: str, up_link: str) -> str:
+    """A page's frame. An INLINE stylesheet, and not a file next to it: a
+    documentation folder you copy somewhere else and that still looks right is
+    worth more than one that saves two kilobytes."""
+    return ("<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n"
             + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-            + "<title>" + esc_html(titulo) + "</title>\n<style>" + CSS + "</style>\n"
-            + corpo
-            + "\n<footer>gerado por <code>ppack doc --html</code>"
-            + (" · <a href=\"" + subida + "\">índice</a>" if len(subida) > 0 else "")
+            + "<title>" + esc_html(title) + "</title>\n<style>" + CSS + "</style>\n"
+            + body
+            + "\n<footer>generated by <code>ppack doc --html</code>"
+            + (" · <a href=\"" + up_link + "\">index</a>" if len(up_link) > 0 else "")
             + "</footer>\n</html>\n")
 
 
-private async def argv_api(caminho: str, query: str) -> list<str>:
-    """`--api` com as RAÍZES DE PACOTE, que é o que faz a pergunta funcionar num
-    módulo que importa `<pkg/mod.ph>`.
+private async def api_argv(file: str, query: str) -> list<str>:
+    """`--api` with the PACKAGE ROOTS, which is what makes the question work on a
+    module that imports `<pkg/mod.ph>`.
 
-    Sem elas o compilador responde "não achei `<stl/cstr.ph>`" e a documentação
-    de meio workspace fica de fora — em silêncio, porque um módulo que não
-    responde parece um módulo sem interface."""
+    Without them the compiler answers "I did not find `<stl/cstr.ph>`" and half
+    the workspace's documentation is left out — in silence, because a module that
+    does not answer looks like a module with no interface."""
     argv: list<str> = [query, "--api"]
-    raizes = await BP.raizes_do_workspace("pack.json")
-    for ri in R.raizes_instaladas():
-        raizes.append(ri)
-    for r in raizes:
+    roots = await BP.workspace_roots("pack.json")
+    for ri in R.installed_roots():
+        roots.append(ri)
+    for r in roots:
         argv.append("--pkg-path")
         argv.append(r)
-    argv.append(caminho)
+    argv.append(file)
     return argv
 
 
-private async def api_de(caminho: str, query: str) -> list<A.Api>:
-    r = await os.run(await argv_api(caminho, query))
+private async def api_of(file: str, query: str) -> list<A.Api>:
+    r = await os.run(await api_argv(file, query))
     if r.status() != 0:
         return []
     return A.parse(r.output())
 
 
-private def nome_de_arquivo(rel: str) -> str:
+private def file_name_for(rel: str) -> str:
     out = ""
     for c in rel:
         out += "-" if (c == "/" or c == "\\") else c
     return out + ".html"
 
 
-async def cmd_doc_html(alvos: list<str>, destino: str, query: str) -> int:
-    """`ppack doc --html <pasta>` — o mesmo conteúdo do terminal, como site.
+async def cmd_doc_html(targets: list<str>, dest: str, query: str) -> int:
+    """`ppack doc --html <folder>` — the same content as the terminal, as a site.
 
-    A fonte é a MESMA resposta 5 do compilador que o `ppack doc` já lê; o que
-    muda é para onde ela é escrita. É a razão de isto sair barato e de não poder
-    divergir: não há um segundo leitor da linguagem, há um segundo renderizador
-    da mesma lista canónica.
+    The source is the SAME answer 5 from the compiler that `ppack doc` already
+    reads; what changes is where it gets written. That is why this comes out cheap
+    and cannot diverge: there is no second reader of the language, there is a
+    second renderer of the same canonical list.
 
-    Sem alvo, documenta o workspace inteiro — cada pacote e cada módulo dele. O
-    resultado é uma pasta de arquivos estáticos: sem serviço, sem rede, sem
-    JavaScript. Abre-se com dois cliques e copia-se para qualquer lado."""
+    With no target, it documents the whole workspace — every package and every one
+    of its modules. The result is a folder of static files: no service, no
+    network, no JavaScript. It opens with two clicks and copies anywhere."""
     mods: list<str> = []
-    rotulo: dict<str, str> = {}
-    if len(alvos) > 0:
-        for a in alvos:
+    label: dict<str, str> = {}
+    if len(targets) > 0:
+        for a in targets:
             if path.isfile(a):
                 mods.append(a)
-                rotulo[a] = a
+                label[a] = a
                 continue
-            raiz = await modulo_do_pacote(a)
-            if len(raiz) > 0:
-                mods.append(raiz)
-                rotulo[raiz] = a
+            root = await package_module(a)
+            if len(root) > 0:
+                mods.append(root)
+                label[root] = a
                 continue
-            achou = False
-            for r0 in await BP.raizes_do_workspace("pack.json"):
+            found = False
+            for r0 in await BP.workspace_roots("pack.json"):
                 d0 = path.join(r0, a)
                 if not path.isfile(path.join(d0, "pack.json")):
                     continue
-                achou = True
+                found = True
                 for nm in sorted(os.listdir(d0)):
                     if nm.endswith(".ph") or nm.endswith(".psc"):
                         mods.append(path.join(d0, nm))
-                        rotulo[path.join(d0, nm)] = a + "/" + nm
-            if not achou:
-                print("não achei '" + a + "': nem arquivo, nem pacote do workspace")
+                        label[path.join(d0, nm)] = a + "/" + nm
+            if not found:
+                print("I did not find '" + a + "': neither a file nor a workspace package")
                 return 1
     else:
-        for membro in await BP.membros_do_workspace("pack.json"):
-            man = path.join(membro, "pack.json")
+        for member in await BP.workspace_members("pack.json"):
+            man = path.join(member, "pack.json")
             if not path.isfile(man):
                 continue
-            m = await MF.ler(man)
-            if len(m.raiz) > 0:
-                mods.append(path.join(membro, m.raiz))
-                rotulo[path.join(membro, m.raiz)] = m.nome
+            m = await MF.read(man)
+            if len(m.root) > 0:
+                mods.append(path.join(member, m.root))
+                label[path.join(member, m.root)] = m.name
                 continue
-            for nm2 in sorted(os.listdir(membro)):
+            for nm2 in sorted(os.listdir(member)):
                 if nm2.endswith(".ph") or nm2.endswith(".psc"):
-                    mods.append(path.join(membro, nm2))
-                    rotulo[path.join(membro, nm2)] = m.nome + "/" + nm2
+                    mods.append(path.join(member, nm2))
+                    label[path.join(member, nm2)] = m.name + "/" + nm2
     if len(mods) == 0:
-        print("não há módulo nenhum para documentar")
+        print("there is no module to document")
         return 1
-    if not path.isdir(destino):
-        os.makedirs(destino)
-    linhas: list<str> = []
-    escritos = 0
-    simbolos = 0
+    if not path.isdir(dest):
+        os.makedirs(dest)
+    lines: list<str> = []
+    written = 0
+    symbols = 0
     for md in mods:
-        apis = await api_de(md, query)
+        apis = await api_of(md, query)
         if len(apis) == 0:
-            print("aviso: o compilador não devolveu interface para " + md)
+            print("warning: the compiler returned no interface for " + md)
             continue
         api = apis[0]
-        rot = rotulo[md] if md in rotulo else md
-        arq = nome_de_arquivo(rot)
-        corpo = "<h1>" + esc_html(rot) + "</h1>\n<p class=\"sub\">" + esc_html(api.caminho)
-        corpo += " · <span class=\"hash\">" + esc_html(api.hash) + "</span></p>\n"
+        lab = label[md] if md in label else md
+        file = file_name_for(lab)
+        body = "<h1>" + esc_html(lab) + "</h1>\n<p class=\"sub\">" + esc_html(api.path)
+        body += " · <span class=\"hash\">" + esc_html(api.hash) + "</span></p>\n"
         if len(api.doc) > 0:
-            corpo += "<p class=\"doc\">" + esc_html(api.doc) + "</p>\n"
+            body += "<p class=\"doc\">" + esc_html(api.doc) + "</p>\n"
         n = 0
-        for sb in api.simbolos:
-            if len(sb.linha) == 0:
+        for sb in api.symbols:
+            if len(sb.decl) == 0:
                 continue
             n += 1
-            corpo += "<div class=\"decl\">" + esc_html(sb.linha) + "</div>\n"
+            body += "<div class=\"decl\">" + esc_html(sb.decl) + "</div>\n"
             if len(sb.doc) > 0:
-                corpo += "<p class=\"doc\">" + esc_html(sb.doc) + "</p>\n"
+                body += "<p class=\"doc\">" + esc_html(sb.doc) + "</p>\n"
         if n == 0:
-            corpo += "<p class=\"sub\">este módulo não declara nada público</p>\n"
-        await R.escrever_bytes(path.join(destino, arq),
-                               R.bytes_de_texto(pagina(rot, corpo, "index.html")))
-        linhas.append("<li><a href=\"" + esc_html(arq) + "\">" + esc_html(rot)
-                      + "</a> <span>" + str(n) + " símbolo(s)</span></li>")
-        escritos += 1
-        simbolos += n
-    idx = "<h1>documentação</h1>\n<p class=\"sub\">" + str(escritos) + " módulo(s), "
-    idx += str(simbolos) + " símbolo(s)</p>\n<ul class=\"mods\">\n"
-    idx += "\n".join(linhas) + "\n</ul>\n"
-    await R.escrever_bytes(path.join(destino, "index.html"),
-                           R.bytes_de_texto(pagina("documentação", idx, "")))
-    if saida_json:
-        print('{"dir": ' + G.jstr(destino) + ', "modules": ' + str(escritos)
-              + ', "symbols": ' + str(simbolos) + '}')
+            body += "<p class=\"sub\">this module declares nothing public</p>\n"
+        await R.write_bytes(path.join(dest, file),
+                            R.bytes_of_text(page(lab, body, "index.html")))
+        lines.append("<li><a href=\"" + esc_html(file) + "\">" + esc_html(lab)
+                     + "</a> <span>" + str(n) + " symbol(s)</span></li>")
+        written += 1
+        symbols += n
+    idx = "<h1>documentation</h1>\n<p class=\"sub\">" + str(written) + " module(s), "
+    idx += str(symbols) + " symbol(s)</p>\n<ul class=\"mods\">\n"
+    idx += "\n".join(lines) + "\n</ul>\n"
+    await R.write_bytes(path.join(dest, "index.html"),
+                        R.bytes_of_text(page("documentation", idx, "")))
+    if json_out:
+        print('{"dir": ' + G.jstr(dest) + ', "modules": ' + str(written)
+              + ', "symbols": ' + str(symbols) + '}')
         return 0
-    print(str(escritos) + " módulo(s), " + str(simbolos) + " símbolo(s) -> "
-          + path.join(destino, "index.html"))
+    print(str(written) + " module(s), " + str(symbols) + " symbol(s) -> "
+          + path.join(dest, "index.html"))
     return 0
 
 
-async def cmd_doc(alvos: list<str>, query: str) -> int:
-    """`ppack doc` — a documentação no TERMINAL, do que já existe.
+async def cmd_doc(targets: list<str>, query: str) -> int:
+    """`ppack doc` — the documentation in the TERMINAL, of what already exists.
 
-    Nada é construído e nada é gerado: a fonte é a resposta 5 do compilador
-    (`--api`), que já traz a interface canónica e as docstrings. É o que o
-    `go doc` acertou — offline, sem site, sem serviço — e aqui sai de graça
-    porque o formato já estava lá."""
-    if len(alvos) == 0:
-        print("uso: ppack doc <arquivo|pacote> [símbolo]")
+    Nothing is built and nothing is generated: the source is the compiler's answer
+    5 (`--api`), which already carries the canonical interface and the docstrings.
+    It is what `go doc` got right — offline, no site, no service — and here it
+    comes for free because the format was already there."""
+    if len(targets) == 0:
+        print("usage: ppack doc <file|package> [symbol]")
         return 2
-    alvo = alvos[0]
-    if not path.isfile(alvo):
-        p2 = await modulo_do_pacote(alvo)
+    target = targets[0]
+    if not path.isfile(target):
+        p2 = await package_module(target)
         if len(p2) == 0:
-            # pode ser um pacote SEM raiz (um conjunto de módulos), e aí o que
-            # se mostra é a lista deles
-            if len(alvos) == 1 and await lista_do_pacote(alvo) == 0:
+            # it may be a package with NO root (a set of modules), and then what
+            # gets shown is the list of them
+            if len(targets) == 1 and await list_package(target) == 0:
                 return 0
-            print("não achei '" + alvo + "': nem arquivo, nem pacote do workspace")
+            print("I did not find '" + target + "': neither a file nor a workspace package")
             return 1
-        alvo = p2
-    r = await os.run(await argv_api(alvo, query))
+        target = p2
+    r = await os.run(await api_argv(target, query))
     if r.status() != 0:
         print(r.output().rstrip())
         return 1
     mods = A.parse(r.output())
     if len(mods) == 0:
-        print("o compilador não devolveu interface nenhuma para '" + alvo + "'")
+        print("the compiler returned no interface at all for '" + target + "'")
         return 1
     m = mods[0]
-    if len(alvos) > 1:
-        i = m.acha(alvos[1])
+    if len(targets) > 1:
+        i = m.find(targets[1])
         if i < 0:
-            print("'" + alvos[1] + "' não está na interface de " + m.caminho)
+            print("'" + targets[1] + "' is not in the interface of " + m.path)
             return 1
-        s = m.simbolos[i]
-        if saida_json:
-            print('{"path": ' + G.jstr(m.caminho) + ', "name": ' + G.jstr(s.nome)
-                  + ', "decl": ' + G.jstr(s.linha) + ', "doc": ' + G.jstr(s.doc) + '}')
+        s = m.symbols[i]
+        if json_out:
+            print('{"path": ' + G.jstr(m.path) + ', "name": ' + G.jstr(s.name)
+                  + ', "decl": ' + G.jstr(s.decl) + ', "doc": ' + G.jstr(s.doc) + '}')
             return 0
-        if len(s.linha) > 0:
-            print(s.linha)
+        if len(s.decl) > 0:
+            print(s.decl)
         else:
-            print(s.nome)
+            print(s.name)
         if len(s.doc) > 0:
-            print(parede(s.doc))
+            print(indent(s.doc))
         return 0
-    if saida_json:
-        simbs: list<str> = []
-        for s3 in m.simbolos:
-            simbs.append('{"decl": ' + G.jstr(s3.linha) + ', "name": ' + G.jstr(s3.nome)
-                         + ', "doc": ' + G.jstr(s3.doc) + '}')
-        print('{"path": ' + G.jstr(m.caminho) + ', "hash": ' + G.jstr(m.hash)
-              + ', "doc": ' + G.jstr(m.doc) + ', "symbols": [' + ", ".join(simbs) + ']}')
+    if json_out:
+        syms: list<str> = []
+        for s3 in m.symbols:
+            syms.append('{"decl": ' + G.jstr(s3.decl) + ', "name": ' + G.jstr(s3.name)
+                        + ', "doc": ' + G.jstr(s3.doc) + '}')
+        print('{"path": ' + G.jstr(m.path) + ', "hash": ' + G.jstr(m.hash)
+              + ', "doc": ' + G.jstr(m.doc) + ', "symbols": [' + ", ".join(syms) + ']}')
         return 0
-    print("== " + m.caminho + "  [" + m.hash + "]")
+    print("== " + m.path + "  [" + m.hash + "]")
     if len(m.doc) > 0:
-        print(parede(m.doc))
+        print(indent(m.doc))
         print("")
-    for s2 in m.simbolos:
-        if len(s2.linha) == 0:
+    for s2 in m.symbols:
+        if len(s2.decl) == 0:
             continue
-        print(s2.linha)
+        print(s2.decl)
         if len(s2.doc) > 0:
-            print(parede(s2.doc))
+            print(indent(s2.doc))
     return 0
 
-async def cmd_ninja(alvos: list<str>, query: str) -> int:
-    """A exportação para ninja (ver `lib_ninja.psc`): o bootstrap numa máquina
-    que ainda não tem `ppack`, e o `compile_commands.json` de graça
-    (`ninja -t compdb`). Sem argumento sai na saída padrão, para se poder
-    conferir antes de escrever."""
-    g = await BP.montar(query)
+async def cmd_ninja(targets: list<str>, query: str) -> int:
+    """The ninja export (see `lib_ninja.psc`): the bootstrap on a machine that
+    does not have `ppack` yet, and `compile_commands.json` for free (`ninja -t
+    compdb`). With no argument it goes to standard output, so it can be checked
+    before being written."""
+    g = await BP.assemble(query)
     txt = N.emit(g)
-    if len(alvos) == 0 or alvos[0] == "-":
+    if len(targets) == 0 or targets[0] == "-":
         print(txt.rstrip())
         return 0
-    f = await open(alvos[0], "w")
+    f = await open(targets[0], "w")
     await f.write(txt)
     await f.close()
-    print("escrito:", alvos[0], "(" + str(len(g.edges)), "arestas)")
+    print("written:", targets[0], "(" + str(len(g.edges)), "edges)")
     return 0
 
 async def cmd_clean() -> int:
-    """A vassoura: apaga o que o build PRODUZIU e mantém o que ele BAIXOU.
+    """The broom: it deletes what the build PRODUCED and keeps what it
+    DOWNLOADED.
 
-    A linha é a origem: `build/pkg` (os índices, os tarballs e as árvores
-    abertas) veio de fora, e voltar a baixá-lo custa rede e tempo para nada — e
-    risco nenhum, porque o `pack.lock` tem o hash de tudo. Para apagar isso
-    também há `make clean-all`, que é o que se faz para provar que um checkout
-    limpo constrói."""
+    The line is the origin: `build/pkg` (the indexes, the tarballs and the
+    unpacked trees) came from outside, and downloading it again costs network and
+    time for nothing — and no risk at all, because `pack.lock` has the hash of
+    everything. To delete that too there is `make clean-all`, which is what you do
+    to prove a clean checkout builds."""
     n = 0
     if path.isdir("build"):
-        for nome in sorted(os.listdir("build")):
-            if nome == "pkg":
-                continue          # o que veio de fora fica; ver a docstring
-            d = path.join("build", nome)
+        for name in sorted(os.listdir("build")):
+            if name == "pkg":
+                continue          # what came from outside stays; see the docstring
+            d = path.join("build", name)
             if path.isdir(d):
                 n += rmtree(d)
             else:
                 os.remove(d)
                 n += 1
-    print("apagados:", n, "arquivo(s)")
+    print("deleted:", n, "file(s)")
     return 0
 
 def rmtree(d: str) -> int:
@@ -1885,49 +1900,49 @@ def rmtree(d: str) -> int:
     os.rmdir(d)
     return n
 
-def uso():
-    print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
-    print("     --build-dir <dir>                    onde o build de um script SOLTO sai")
-    print("                                          (padrão: ao lado do script)")
-    print("     ppack check                          as invariantes que o build não confere")
-    print("     ppack dev [alvo]                     constrói quando alguma coisa muda, até ao Ctrl-C")
-    print("     ppack keygen <arquivo>               uma chave nova (privada + .pub)")
-    print("     ppack publish <pacote> --to <dir> [--key <arquivo>]")
-    print("                                          o .tar, o hash, o índice e as duas assinaturas")
-    print("     ppack update                         baixa os índices dos repositórios do projeto")
-    print("     ppack search <termo>                 procura nome, descrição e SÍMBOLO, offline")
-    print("     ppack add <nome>@<versão> [--unsafe] escreve no manifesto e no lock")
-    print("     ppack up [<nome>]                    sobe para a versão mais alta que o índice tem")
-    print("     ppack doc --html <pasta> [alvo...]    o mesmo conteúdo como site estático")
-    print("     ppack build --repro [alvo]           constrói duas vezes, do zero, e compara byte a byte")
-    print("     ppack lock [--frozen]                refaz o pack.lock a partir do pack.json, sem construir")
-    print("     ppack install [--frozen]             materializa o que o lock diz (--frozen: CI, recusa se ele estiver velho)")
+def usage():
+    print("usage: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [target...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("     --build-dir <dir>                    where a LOOSE script's build goes")
+    print("                                          (default: next to the script)")
+    print("     ppack check                          the invariants the build does not check")
+    print("     ppack dev [target]                   builds whenever something changes, until Ctrl-C")
+    print("     ppack keygen <file>                  a new key (private + .pub)")
+    print("     ppack publish <package> --to <dir> [--key <file>]")
+    print("                                          the .tar, the hash, the index and both signatures")
+    print("     ppack update                         downloads the project's repository indexes")
+    print("     ppack search <term>                  searches name, description and SYMBOL, offline")
+    print("     ppack add <name>@<version> [--unsafe] writes to the manifest and the lock")
+    print("     ppack up [<name>]                    raises to the highest version the index has")
+    print("     ppack doc --html <folder> [target...] the same content as a static site")
+    print("     ppack build --repro [target]         builds twice, from scratch, and compares byte for byte")
+    print("     ppack lock [--frozen]                remakes pack.lock from pack.json, without building")
+    print("     ppack install [--frozen]             materializes what the lock says (--frozen: CI, refuses if it is stale)")
 
 async def main() -> int:
     args = sys.argv[1:]
     if len(args) == 0:
-        uso()
+        usage()
         return 2
-    global saida_json
-    global query_atual
+    global json_out
+    global current_query
     cmd = args[0]
-    alvos: list<str> = []
+    targets: list<str> = []
     jobs = os.nproc()
     keep = 1
     dry = False
     verbose = False
-    # o compilador que responde ao protocolo. O padrão não é um nome fixo: é o
-    # melhor que existir na árvore, do mais adiantado para o mais atrasado. Um
-    # padrão apontando para um caminho que o build já não produz é uma armadilha
-    # que só aparece muito depois, com uma mensagem que não fala do problema.
-    para = ""
-    chave = ""
-    inseguro = False
+    to_dir = ""
+    key_file = ""
+    unsafe_ok = False
     frozen = False
     repro = False
     html = ""
     builddir = ""
     query = ""
+    # the compiler that answers the protocol. The default is not a fixed name: it
+    # is the best one in the tree, from the most advanced to the least. A default
+    # pointing at a path the build no longer produces is a trap that only shows up
+    # much later, with a message that does not talk about the problem.
     for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
         if path.isfile(cand):
             query = cand
@@ -1935,23 +1950,23 @@ async def main() -> int:
     if query == "":
         query = "build/bin/plangc_seed"
     i = 1
-    # tudo depois de `--` é do PROGRAMA, não nosso. Sem isto, `ppack run p
-    # --version` engoliria o `--version` como opção do ppack — e um `run` que
-    # não sabe passar argumentos não serve para nada.
-    resto: list<str> = []
+    # everything after `--` belongs to the PROGRAM, not to us. Without this, `ppack
+    # run p --version` would swallow the `--version` as an option of ppack's — and
+    # a `run` that cannot pass arguments is good for nothing.
+    rest: list<str> = []
     j = 1
     while j < len(args):
         if args[j] == "--":
             k = j + 1
             while k < len(args):
-                resto.append(args[k])
+                rest.append(args[k])
                 k += 1
-            novos: list<str> = []
+            trimmed: list<str> = []
             m = 0
             while m < j:
-                novos.append(args[m])
+                trimmed.append(args[m])
                 m += 1
-            args = novos
+            args = trimmed
             break
         j += 1
     while i < len(args):
@@ -1967,12 +1982,12 @@ async def main() -> int:
         elif a == "-v":
             verbose = True
         elif a == "--json":
-            saida_json = True
+            json_out = True
         elif a == "--query" and i + 1 < len(args):
             i += 1
             query = args[i]
         elif a == "--unsafe":
-            inseguro = True
+            unsafe_ok = True
         elif a == "--frozen":
             frozen = True
         elif a == "--repro":
@@ -1985,68 +2000,68 @@ async def main() -> int:
             builddir = args[i]
         elif a == "--to" and i + 1 < len(args):
             i += 1
-            para = args[i]
+            to_dir = args[i]
         elif a == "--key" and i + 1 < len(args):
             i += 1
-            chave = args[i]
+            key_file = args[i]
         elif a.startswith("-"):
-            print("opção desconhecida:", a)
+            print("unknown option:", a)
             return 2
         else:
-            alvos.append(a)
+            targets.append(a)
         i += 1
-    query_atual = query
+    current_query = query
     if cmd == "build":
-        return await cmd_build(alvos, jobs, keep, dry, query, verbose, repro)
+        return await cmd_build(targets, jobs, keep, dry, query, verbose, repro)
     if cmd == "test":
         return await cmd_test(jobs, query, verbose)
     if cmd == "verify":
         return await cmd_verify(jobs, query, verbose)
     if cmd == "dev":
-        return await cmd_dev(alvos, jobs, query, verbose)
+        return await cmd_dev(targets, jobs, query, verbose)
     if cmd == "run":
-        for x in resto:
-            alvos.append(x)
-        return await cmd_run(alvos, jobs, query, verbose, builddir)
+        for x in rest:
+            targets.append(x)
+        return await cmd_run(targets, jobs, query, verbose, builddir)
     if cmd == "explain":
-        return await cmd_explain(alvos, query)
+        return await cmd_explain(targets, query)
     if cmd == "graph":
         return await cmd_graph(query)
     if cmd == "ninja":
-        return await cmd_ninja(alvos, query)
+        return await cmd_ninja(targets, query)
     if cmd == "doc":
         if len(html) > 0:
-            return await cmd_doc_html(alvos, html, query)
-        return await cmd_doc(alvos, query)
+            return await cmd_doc_html(targets, html, query)
+        return await cmd_doc(targets, query)
     if cmd == "publish":
-        return await cmd_publish(alvos, para, chave, query)
+        return await cmd_publish(targets, to_dir, key_file, query)
     if cmd == "keygen":
-        return await cmd_keygen(alvos)
+        return await cmd_keygen(targets)
     if cmd == "update":
         return await cmd_update()
     if cmd == "search":
-        return await cmd_search(alvos)
+        return await cmd_search(targets)
     if cmd == "add":
-        return await cmd_add(alvos, inseguro)
+        return await cmd_add(targets, unsafe_ok)
     if cmd == "install":
         return await cmd_install(frozen)
     if cmd == "lock":
-        return await cmd_lock(frozen, inseguro)
+        return await cmd_lock(frozen, unsafe_ok)
     if cmd == "up":
-        return await cmd_up(alvos, inseguro)
+        return await cmd_up(targets, unsafe_ok)
     if cmd == "tree":
         return await cmd_tree()
     if cmd == "check":
         return await cmd_check(query)
     if cmd == "why":
-        return await cmd_why(alvos)
+        return await cmd_why(targets)
     if cmd == "clean":
         return await cmd_clean()
     if cmd == "help":
-        uso()
+        usage()
         return 0
-    print("comando desconhecido:", cmd)
-    uso()
+    print("unknown command:", cmd)
+    usage()
     return 2
 
 sys.exit(await main())

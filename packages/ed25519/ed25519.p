@@ -1,12 +1,12 @@
-# A implementação do RFC 8032. Ver `ed25519.ph` para as escolhas e para o que
-# este pacote NÃO promete.
+# The RFC 8032 implementation. See `ed25519.ph` for the choices and for what
+# this package does NOT promise.
 import <ed25519/ed25519.ph>
 import <sha2/sha2.ph>
 
-# ---------- inteiros de 256 bits, oito palavras de 32 ----------
+# ---------- 256-bit integers, eight 32-bit words ----------
 #
-# Pouco depende da representação: o corpo é F(2^255 - 19) e o escalar é módulo
-# L. Os dois cabem em 256 bits, e o produto de dois cabe em 512.
+# Little depends on the representation: the field is F(2^255 - 19) and the scalar
+# is modulo L. Both fit in 256 bits, and the product of two fits in 512.
 
 struct Fe:
     v: u32[8]        # little-endian: v[0] são os 32 bits mais baixos
@@ -40,7 +40,7 @@ private const P: const u32[8] = {
     0xffffffed, 0xffffffff, 0xffffffff, 0xffffffff,
     0xffffffff, 0xffffffff, 0xffffffff, 0x7fffffff}
 
-# a soma com vai-um, sem reduzir: devolve o vai-um final
+# addition with carry, without reducing: returns the final carry
 private def add_raw(ref r: u32[8], a: Fe, b: Fe) -> u32:
     c: u64 = u64(0)
     for i in range(8):
@@ -49,7 +49,7 @@ private def add_raw(ref r: u32[8], a: Fe, b: Fe) -> u32:
         c >>= u64(32)
     return u32(c)
 
-# a subtração com pede-emprestado: devolve 1 quando a < b
+# subtraction with borrow: returns 1 when a < b
 private def sub_raw(ref r: u32[8], a: Fe, b: Fe) -> u32:
     br: u64 = u64(0)
     for i in range(8):
@@ -82,7 +82,7 @@ private def fe_add(out r: Fe, a: Fe, b: Fe):
     c: u32 = add_raw(ref t, a, b)
     for i in range(8):
         r.v[i] = t[i]
-    # o vai-um de 2^256 vale 38 módulo p (porque 2^255 ≡ 19)
+    # the carry out of 2^256 is worth 38 modulo p (because 2^255 ≡ 19)
     if c != u32(0):
         cc: u64 = u64(38)
         for i in range(8):
@@ -97,9 +97,9 @@ private def fe_sub(out r: Fe, a: Fe, b: Fe):
     for i in range(8):
         r.v[i] = t[i]
     if br != u32(0):
-        # a e b estão os dois em [0, p), então a - b está em (-p, p): somar p UMA
-        # vez chega, e o vai-um que sai de 2^256 é justamente o que cancela o
-        # empréstimo que a subtração deixou
+        # a and b are both in [0, p), so a - b is in (-p, p): adding p ONCE is
+        # enough, and the carry out of 2^256 is exactly what cancels the borrow
+        # the subtraction left behind
         cc: u64 = u64(0)
         for i in range(8):
             cc += u64(r.v[i]) + u64(P[i])
@@ -107,9 +107,9 @@ private def fe_sub(out r: Fe, a: Fe, b: Fe):
             cc >>= u64(32)
     fe_reduce_once(ref r)
 
-# 512 bits -> 256, módulo p, usando 2^256 ≡ 38
+# 512 bits -> 256, modulo p, using 2^256 ≡ 38
 private def reduce512(ref w: u32[16], out r: Fe):
-    # r = lo + 38 * hi, e o resultado disso cabe em 256 bits + uns poucos
+    # r = lo + 38 * hi, and the result of that fits in 256 bits plus a few
     acc: u64 = u64(0)
     t: u32[9]
     for i in range(8):
@@ -117,13 +117,13 @@ private def reduce512(ref w: u32[16], out r: Fe):
         t[i] = u32(acc & u64(0xffffffff))
         acc >>= u64(32)
     t[8] = u32(acc)
-    # ... e outra vez, agora com só uma palavra em cima
+    # ... and again, now with only one word on top
     acc = u64(38) * u64(t[8])
     for i in range(8):
         acc += u64(t[i])
         r.v[i] = u32(acc & u64(0xffffffff))
         acc >>= u64(32)
-    # o que sobrar ainda vale 38, e desta vez não transborda
+    # whatever is left is still worth 38, and this time it does not overflow
     if acc != u64(0):
         acc *= u64(38)
         for i in range(8):
@@ -139,7 +139,7 @@ private def fe_mul(out r: Fe, a: Fe, b: Fe):
     for i in range(8):
         carry: u64 = u64(0)
         for j in range(8):
-            # cabe: (2^32-1)^2 + 2*(2^32-1) < 2^64
+            # it fits: (2^32-1)^2 + 2*(2^32-1) < 2^64
             cur: u64 = u64(w[i + j]) + u64(a.v[i]) * u64(b.v[j]) + carry
             w[i + j] = u32(cur & u64(0xffffffff))
             carry = cur >> u64(32)
@@ -154,14 +154,14 @@ private def fe_mul(out r: Fe, a: Fe, b: Fe):
 private def fe_sq(out r: Fe, a: Fe):
     fe_mul(out r, a, a)
 
-# a^(2^n) — só para encadear no cálculo do inverso
+# a^(2^n) — only to chain in the inverse computation
 private def fe_sq_n(ref a: Fe, n: i32):
     for i in range(n):
         t: Fe
         fe_sq(out t, a)
         fe_copy(out a, t)
 
-# a^(p-2) = a^-1, pela cadeia de adição do RFC (o mesmo caminho do ref10)
+# a^(p-2) = a^-1, by the RFC's addition chain (the same path as ref10)
 private def fe_inv(out r: Fe, z: Fe):
     z2: Fe
     z9: Fe
@@ -198,7 +198,7 @@ private def fe_inv(out r: Fe, z: Fe):
     fe_sq_n(ref t0, 5)
     fe_mul(out r, t0, z11)           # 2^255 - 21 = p - 2
 
-# a^((p-5)/8), o expoente da raiz quadrada
+# a^((p-5)/8), the square root's exponent
 private def fe_pow22523(out r: Fe, z: Fe):
     t0: Fe
     t1: Fe
@@ -243,7 +243,7 @@ private def fe_is_negative(a: Fe) -> bool:
 private def fe_from_bytes(out r: Fe, s: const *char):
     for i in range(8):
         r.v[i] = u32(u8(s[i * 4])) | (u32(u8(s[i * 4 + 1])) << 8) | (u32(u8(s[i * 4 + 2])) << 16) | (u32(u8(s[i * 4 + 3])) << 24)
-    r.v[7] &= u32(0x7fffffff)        # o bit 255 é o sinal de x, não parte de y
+    r.v[7] &= u32(0x7fffffff)        # bit 255 is x's sign, not part of y
     fe_reduce_once(ref r)
 
 private def fe_to_bytes(a: Fe, out_s: *char):
@@ -257,12 +257,13 @@ private def fe_to_bytes(a: Fe, out_s: *char):
         out_s[i * 4 + 3] = char((t.v[i] >> 24) & u32(0xff))
 
 
-# ---------- o grupo: coordenadas estendidas (X : Y : Z : T), com X*Y = Z*T ----------
+# ---------- the group: extended coordinates (X : Y : Z : T), with X*Y = Z*T ----------
 #
-# A curva é -x² + y² = 1 + d·x²·y². As fórmulas são as da "Twisted Edwards
-# Curves Revisited" (Hisil et al.), que é o que a RFC 8032 usa: soma sem casos
-# especiais — o mesmo código serve para P + Q, para P + P e para o neutro —, e
-# é essa ausência de casos especiais que faz uma implementação ser conferível.
+# The curve is -x² + y² = 1 + d·x²·y². The formulas are those of "Twisted Edwards
+# Curves Revisited" (Hisil et al.), which is what RFC 8032 uses: addition with no
+# special cases — the same code serves for P + Q, for P + P and for the identity —
+# and it is that absence of special cases that makes an implementation
+# checkable.
 
 struct Ge:
     X: Fe
@@ -285,7 +286,7 @@ private const SQRTM1_BYTES: const u32[8] = {
     0x4a0ea0b0, 0xc4ee1b27, 0xad2fe478, 0x2f431806,
     0x3dfbd7a7, 0x2b4d0099, 0x4fc1df0b, 0x2b832480}
 
-# o gerador B: y = 4/5, x é o positivo
+# the generator B: y = 4/5, x is the positive one
 private const BX: const u32[8] = {
     0x8f25d51a, 0xc9562d60, 0x9525a7b2, 0x692cc760,
     0xfdd6dc5c, 0xc0a4e231, 0xcd6e53fe, 0x216936d3}
@@ -315,7 +316,7 @@ private def ge_copy(out r: Ge, a: Ge):
     fe_copy(out r.Z, a.Z)
     fe_copy(out r.T, a.T)
 
-# P + Q, sem casos especiais
+# P + Q, with no special cases
 private def ge_add(out r: Ge, p1: Ge, q: Ge):
     d2: Fe
     fe_const(out d2, D2_BYTES)
@@ -351,8 +352,8 @@ private def ge_add(out r: Ge, p1: Ge, q: Ge):
 private def ge_double(out r: Ge, p1: Ge):
     ge_add(out r, p1, p1)
 
-# k*P, duplica-e-soma pelos bits do escalar, do mais alto para o mais baixo.
-# NÃO é de tempo constante — ver a nota no `.ph`.
+# k*P, double-and-add over the scalar's bits, from the highest to the lowest.
+# NOT constant time — see the note in the `.ph`.
 private def ge_scalarmult(out r: Ge, k: const *char, p1: Ge):
     acc: Ge
     ge_zero(out acc)
@@ -374,7 +375,7 @@ private def ge_scalarmult_base(out r: Ge, k: const *char):
     ge_base(out b)
     ge_scalarmult(out r, k, b)
 
-# (X:Y:Z) -> os 32 bytes: y em little-endian, e o bit 255 leva o sinal de x
+# (X:Y:Z) -> the 32 bytes: y in little-endian, and bit 255 carries x's sign
 private def ge_encode(p1: Ge, out_s: *char):
     zi: Fe
     x: Fe
@@ -386,8 +387,8 @@ private def ge_encode(p1: Ge, out_s: *char):
     if fe_is_negative(x):
         out_s[31] = char(u8(out_s[31]) | u8(0x80))
 
-# ... e o caminho de volta: recuperar x a partir de y. Falha quando o ponto não
-# está na curva, que é o que impede uma "chave pública" inventada de ser aceite.
+# ... and the way back: recovering x from y. It fails when the point is not on
+# the curve, which is what stops an invented "public key" from being accepted.
 private def ge_decode(out r: Ge, s: const *char) -> bool:
     y: Fe
     u: Fe
@@ -415,7 +416,7 @@ private def ge_decode(out r: Ge, s: const *char) -> bool:
     fe_pow22523(out pw, t)
     fe_mul(out t, u, v3)
     fe_mul(out x, t, pw)
-    # confere: v·x² == u ? senão tenta x·sqrt(-1)
+    # check: v·x² == u ? otherwise try x·sqrt(-1)
     chk: Fe
     fe_sq(out chk, x)
     fe_mul(out chk, chk, v)
@@ -424,14 +425,14 @@ private def ge_decode(out r: Ge, s: const *char) -> bool:
     if not fe_is_zero(diff):
         fe_add(out diff, chk, u)
         if not fe_is_zero(diff):
-            return False                  # não está na curva
+            return False                  # not on the curve
         sq: Fe
         fe_const(out sq, SQRTM1_BYTES)
         fe_mul(out x, x, sq)
-    # e o sinal tem de bater com o bit que veio
+    # and the sign has to match the bit that came in
     quer_neg: bool = (u8(s[31]) >> u8(7)) != u8(0)
     if fe_is_zero(x) and quer_neg:
-        return False                      # x = 0 com sinal negativo não existe
+        return False                      # x = 0 with a negative sign does not exist
     if fe_is_negative(x) != quer_neg:
         fe_neg(out x, x)
     fe_copy(out r.X, x)
@@ -441,13 +442,14 @@ private def ge_decode(out r: Ge, s: const *char) -> bool:
     return True
 
 
-# ---------- o escalar, módulo L ----------
+# ---------- the scalar, modulo L ----------
 #
-# L = 2^252 + 27742317777372353535851937790883648493 é a ordem do subgrupo. Não
-# tem forma nenhuma que ajude (ao contrário de p), então a redução aqui é a
-# divisão longa bit a bit: quinhentas e doze iterações de "desloca, e subtrai se
-# couber". É a coisa mais lenta deste arquivo e a mais fácil de conferir lendo,
-# e é a troca certa — isto corre meia dúzia de vezes por publicação.
+# L = 2^252 + 27742317777372353535851937790883648493 is the subgroup's order. It
+# has no shape that helps (unlike p), so the reduction here is bit-by-bit long
+# division: five hundred and twelve iterations of "shift, and subtract if it
+# fits". It is the slowest thing in this file and the easiest to check by
+# reading, and it is the right trade — this runs half a dozen times per
+# publication.
 
 private const L: const u32[8] = {
     0x5cf5d3ed, 0x5812631a, 0xa2f79cd6, 0x14def9de,
@@ -468,14 +470,14 @@ private def sc_sub_l(ref r: u32[8]):
         r[i] = u32(d & u64(0xffffffff))
         br = u64(1) if (d >> u64(63)) != u64(0) else u64(0)
 
-# `w` são `nbytes` em little-endian; a saída são 32 bytes com w mod L
+# `w` is `nbytes` in little-endian; the output is 32 bytes holding w mod L
 private def sc_reduce_bytes(w: const *char, nbytes: i32, out_s: *char):
     r: u32[8]
     for z in range(8):
         r[z] = u32(0)
     i: i32 = nbytes * 8 - 1
     while i >= 0:
-        # desloca uma casa
+        # shift one place
         carry: u32 = u32(0)
         for j in range(8):
             nx: u32 = r[j] >> 31
@@ -491,7 +493,7 @@ private def sc_reduce_bytes(w: const *char, nbytes: i32, out_s: *char):
         out_s[k * 4 + 2] = char((r[k] >> 16) & u32(0xff))
         out_s[k * 4 + 3] = char((r[k] >> 24) & u32(0xff))
 
-# (a*b + c) mod L, com a, b e c de 32 bytes
+# (a*b + c) mod L, with a, b and c of 32 bytes
 private def sc_muladd(a: const *char, b: const *char, c: const *char, out_s: *char):
     av: u32[8]
     bv: u32[8]
@@ -534,8 +536,8 @@ private def sc_muladd(a: const *char, b: const *char, c: const *char, out_s: *ch
         bytes[i * 4 + 3] = char((w[i] >> 24) & u32(0xff))
     sc_reduce_bytes(bytes, 68, out_s)
 
-# S < L ? — a RFC 8032 §5.1.7 manda recusar o que não for, e é essa a diferença
-# entre uma assinatura e as suas variantes maleáveis
+# S < L ? — RFC 8032 §5.1.7 requires refusing anything else, and that is the
+# difference between a signature and its malleable variants
 private def sc_lt_l(s: const *char) -> bool:
     i: i32 = 7
     while i >= 0:
@@ -546,11 +548,12 @@ private def sc_lt_l(s: const *char) -> bool:
     return False
 
 
-# ---------- as três operações da RFC ----------
+# ---------- the RFC's three operations ----------
 
 private def clamp(ref a: char[32]):
-    # os três bits de baixo a zero (o cofator é 8) e o bit 254 a um: é o que faz
-    # o escalar cair sempre no subgrupo certo e ter sempre o mesmo comprimento
+    # the low three bits to zero (the cofactor is 8) and bit 254 to one: it is
+    # what makes the scalar always land in the right subgroup and always have the
+    # same length
     a[0] = char(u8(a[0]) & u8(248))
     a[31] = char((u8(a[31]) & u8(127)) | u8(64))
 
@@ -577,8 +580,8 @@ def ed25519_sign(seed: const *char, pub: const *char, msg: const *char, n: usize
     a: char[32]
     memcpy(a, h, usize(32))
     clamp(ref a)
-    # r = H(prefixo || M) mod L — determinístico, e é por isso que não há
-    # gerador de aleatórios nenhum entre a chave e a assinatura
+    # r = H(prefix || M) mod L — deterministic, and that is why there is no
+    # random generator at all between the key and the signature
     rh: char[64]
     s2: Sha512
     sha512_init(out s2)
@@ -620,7 +623,7 @@ def ed25519_verify(pub: const *char, msg: const *char, n: usize, sig: const *cha
     sha512_final(ref s, kh)
     k: char[32]
     sc_reduce_bytes(kh, 64, k)
-    # [S]B == R + [k]A ?  — a forma da RFC, comparando as codificações
+    # [S]B == R + [k]A ?  — the RFC's form, comparing the encodings
     negA: Ge
     fe_neg(out negA.X, A.X)
     fe_copy(out negA.Y, A.Y)
@@ -639,7 +642,7 @@ def ed25519_verify(pub: const *char, msg: const *char, n: usize, sig: const *cha
     return memcmp(e1, e2, usize(32)) == 0
 
 
-# ---------- a travessia para o pscript ----------
+# ---------- the crossing into pscript ----------
 
 private const HEX16: const *char = "0123456789abcdef"
 

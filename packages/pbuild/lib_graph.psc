@@ -1,36 +1,38 @@
-"""O GRAFO: nós, arestas gordas, e como um grafo entra (memória ou JSON).
+"""THE GRAPH: nodes, fat edges, and how a graph gets in (memory or JSON).
 
-A decisão 1.3 do `pbuild/DESIGN.md`: **a aresta é gorda e autônoma**. Ela carrega
-tudo — o `argv`, as entradas nas três faixas, as saídas, o ambiente, o diretório,
-para onde vai a saída padrão, e as marcas (`restat`, `generator`, `pool`). Não há
-"regra" com variáveis a expandir, e é isso que tira do motor as 921 linhas que o
-samurai gasta com escopo de variável.
+Decision 1.3 of `pbuild/DESIGN.md`: **an edge is fat and self-contained**. It
+carries everything — the `argv`, the inputs in their three bands, the outputs,
+the environment, the directory, where standard output goes, and the marks
+(`restat`, `generator`, `pool`). There is no "rule" with variables to expand,
+and that is what keeps the 921 lines samurai spends on variable scoping out of
+the engine.
 
-Quem fatora repetição é o DESCRITOR, que é um programa — uma função pscript
-fatora melhor que qualquer mecanismo de variável, e não precisa de regra de
-escopo nenhuma. E há um ganho que só se vê depois: **dois grafos se comparam
-linha a linha**. No modelo de regras, mudar uma regra altera mil arestas
-invisivelmente, e é por isso que o ninja precisa do hash do comando no log para
-perceber.
+What factors out repetition is the DESCRIPTOR, which is a program — a pscript
+function factors better than any variable mechanism, and needs no scoping rules
+at all. And there is a gain you only see later: **two graphs compare line by
+line**. In the rule model, changing one rule alters a thousand edges invisibly,
+which is exactly why ninja needs the command hash in its log to notice.
 
-As três faixas de entrada, que vêm do ninja e cada uma existe por um motivo:
+The three input bands come from ninja, and each exists for a reason:
 
-  * `ins`      — o que a ferramenta LÊ e o que decide se a saída está velha;
-  * `implicit` — o mesmo, mas descoberto (o `depfile` do `cc -MD`), e por isso
-                 não aparece no `argv`;
-  * `order`    — "tem de existir ANTES", e não suja nada: é o diretório de saída,
-                 que muda de mtime a cada arquivo criado ali dentro e
-                 recompilaria o mundo se contasse como entrada de verdade.
+  * `ins`      — what the tool READS, and what decides whether the output is
+                 stale;
+  * `implicit` — the same, but discovered (the `depfile` from `cc -MD`), which
+                 is why it does not appear in the `argv`;
+  * `order`    — "must exist BEFORE", and dirties nothing: it is the output
+                 directory, whose mtime changes with every file created inside
+                 it and which would rebuild the world if it counted as a real
+                 input.
 """
 import json
 import path
 
-# ---------- o hash ----------
-# FNV-1a de 64 bits. É hash de SUJEIRA — decide se uma aresta precisa rodar de
-# novo —, não defesa contra adversário: o SHA-256 que os pacotes usam (F4) é
-# outra função e outro problema. Escrito aqui porque o runtime tem o dele
-# (`ps_hash_bytes`) e não o expõe à linguagem, e porque dez linhas legíveis
-# valem mais que uma dependência a mais.
+# ---------- the hash ----------
+# 64-bit FNV-1a. This is a DIRTINESS hash — it decides whether an edge has to
+# run again — not a defense against an adversary: the SHA-256 the packages use
+# (F4) is another function for another problem. Written here because the runtime
+# has its own (`ps_hash_bytes`) and does not expose it to the language, and
+# because ten readable lines are worth more than one more dependency.
 const FNV_OFF: u64 = 0xcbf29ce484222325
 const FNV_PRIME: u64 = 0x100000001b3
 
@@ -41,20 +43,20 @@ def hash_str(seed: u64, s: str) -> u64:
     return h
 
 def sh_quote(s: str) -> str:
-    """Aspas SIMPLES em volta de tudo, e a única fuga é a própria aspa simples —
-    que se fecha, se escapa e se reabre. Dentro de aspas simples o shell não
-    expande nada: nem `$`, nem `` ` ``, nem `*`, nem `~`. É a única forma de
-    aspeamento de shell que não tem exceção."""
+    """SINGLE quotes around everything, and the only escape is the single quote
+    itself — which closes, escapes and reopens. Inside single quotes the shell
+    expands nothing: no `$`, no `` ` ``, no `*`, no `~`. It is the one form of
+    shell quoting with no exceptions."""
     if len(s) == 0:
         return "''"
-    seguro = True
+    safe = True
     for ch in s:
         c = ord(ch)
         ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
         if not ok and ch != "/" and ch != "." and ch != "_" and ch != "-" and ch != "=" and ch != "+" and ch != ",":
-            seguro = False
+            safe = False
             break
-    if seguro:
+    if safe:
         return s
     out = "'"
     for ch2 in s:
@@ -64,28 +66,29 @@ def sh_quote(s: str) -> str:
             out += ch2
     return out + "'"
 
-# ---------- o nó: um arquivo ----------
+# ---------- the node: a file ----------
 const MTIME_UNKNOWN: int = -1
 const MTIME_MISSING: int = -2
 
 struct Node:
-    """Um arquivo do grafo. O `mtime` é em NANOSSEGUNDOS, e isso não é preciosismo:
-    num build rápido dois arquivos escritos no mesmo segundo são indistinguíveis
-    em segundos, e é assim que um incremental esquece de refazer alguma coisa.
+    """A file in the graph. The `mtime` is in NANOSECONDS, and that is not
+    fussiness: in a fast build two files written in the same second are
+    indistinguishable at second resolution, and that is how an incremental build
+    forgets to redo something.
     """
     id: int
     p: str
     mtime: int          # ns; MTIME_UNKNOWN / MTIME_MISSING
-    logmtime: int       # o que o log diz que ele tinha quando foi produzido
-    loghash: u64        # ... e o hash do comando que o produziu
-    gen: int            # a aresta que o produz; -1 = é fonte
-    used: list<int>     # as arestas que o consomem
+    logmtime: int       # what the log says it had when it was produced
+    loghash: u64        # ... and the hash of the command that produced it
+    gen: int            # the edge that produces it; -1 = it is a source
+    used: list<int>     # the edges that consume it
     dirty: bool
 
     def stat_now(self):
-        """Pergunta ao disco UMA vez. Depois disso o valor fica: um build que
-        perguntasse duas vezes poderia ver duas respostas diferentes e decidir
-        com meia informação."""
+        """Asks the disk ONCE. After that the value stands: a build that asked
+        twice could see two different answers and decide on half the
+        information."""
         if self.mtime != MTIME_UNKNOWN:
             return
         if path.exists(self.p):
@@ -93,18 +96,18 @@ struct Node:
         else:
             self.mtime = MTIME_MISSING
 
-# ---------- a aresta: um comando ----------
+# ---------- the edge: a command ----------
 struct Edge:
-    """Um comando com o que ele lê e o que ele escreve. Tudo o que muda o
-    resultado entra no `hash` — `argv`, ambiente, diretório, para onde vai a
-    saída, e o ALVO — porque a chave de sujeira tem de responder "isto foi
-    produzido exatamente assim?" e não "por um comando parecido".
+    """A command with what it reads and what it writes. Everything that changes
+    the result goes into the `hash` — `argv`, environment, directory, where the
+    output goes, and the TARGET — because a dirtiness key has to answer "was
+    this produced exactly like that?" and not "by a similar command".
     """
     id: int
     argv: list<str>
-    env: dict<str, str>       # vazio = herda o ambiente de quem chama
-    cwd: str                  # "" = o diretório de quem chama
-    stdout_to: str            # "" = a saída volta capturada
+    env: dict<str, str>       # empty = inherit the caller's environment
+    cwd: str                  # "" = the caller's directory
+    stdout_to: str            # "" = the output comes back captured
     ins: list<int>
     implicit: list<int>
     order: list<int>
@@ -112,19 +115,19 @@ struct Edge:
     out_implicit: list<int>
     restat: bool
     generator: bool
-    pool: str                 # "" = nenhum; "console" = fala com o terminal
-    depfile: str              # "" = nenhum
-    desc: str                 # o que se imprime; "" = o próprio comando
-    target: str               # o alvo de compilação (entra no hash)
-    # estado durante um build
+    pool: str                 # "" = none; "console" = talks to the terminal
+    depfile: str              # "" = none
+    desc: str                 # what gets printed; "" = the command itself
+    target: str               # the compilation target (goes into the hash)
+    # state during a build
     hash: u64
-    nblock: int               # entradas que faltam para esta poder rodar
-    nprune: int               # ... e para as saídas poderem ser podadas
-    want: bool                # está no build pedido
+    nblock: int               # inputs still missing before this one can run
+    nprune: int               # ... and before its outputs can be pruned
+    want: bool                # is in the requested build
     dirty_in: bool
     dirty_out: bool
-    dur_ms: int               # quanto levou da última vez (do log)
-    cpw: int                  # peso do caminho crítico
+    dur_ms: int               # how long it took last time (from the log)
+    cpw: int                  # critical path weight
 
     def label(self) -> str:
         if len(self.desc) > 0:
@@ -132,18 +135,18 @@ struct Edge:
         return " ".join(self.argv)
 
     def compute_hash(self) -> u64:
-        """A chave de sujeira desta aresta. Cobre o ambiente EFETIVO porque o
-        ninja não cobre, e é um furo real dele: trocar `CC=clang` por `CC=gcc`
-        pode reaproveitar artefato em silêncio quando o compilador chega por
-        variável. E cobre o ALVO porque artefato de `linux-amd64` não é artefato
-        de `macos-arm64`.
+        """This edge's dirtiness key. It covers the EFFECTIVE environment
+        because ninja does not, and that is a real hole in it: swapping
+        `CC=clang` for `CC=gcc` can silently reuse an artifact when the compiler
+        arrives through a variable. And it covers the TARGET because an artifact
+        for `linux-amd64` is not an artifact for `macos-arm64`.
         """
         h = FNV_OFF
         for a in self.argv:
             h = hash_str(h, a)
             h = hash_str(h, "\n")
-        # o ambiente em ordem de CHAVE: um dict guarda ordem de inserção, e duas
-        # montagens do mesmo ambiente não têm de inserir na mesma ordem
+        # the environment in KEY order: a dict keeps insertion order, and two
+        # assemblies of the same environment need not insert in the same order
         ks: list<str> = []
         for k in self.env:
             ks.append(k)
@@ -158,18 +161,18 @@ struct Edge:
         h = hash_str(h, self.target)
         return h
 
-# ---------- o grafo ----------
+# ---------- the graph ----------
 struct Graph:
     nodes: list<Node>
     edges: list<Edge>
     by_path: dict<str, int>
     default_targets: list<str>
-    dupes: list<str>          # saídas com DOIS produtores (ver `add_edge`)
+    dupes: list<str>          # outputs with TWO producers (see `add_edge`)
 
     def node(self, p: str) -> Node:
-        """O nó de um caminho, criando-o se for a primeira vez. O caminho é
-        NORMALIZADO na entrada: `a/../b/c.o` e `b/c.o` são o mesmo arquivo, e um
-        grafo que os visse como dois nós recompilaria por nada."""
+        """The node for a path, created if this is the first time. The path is
+        NORMALIZED on the way in: `a/../b/c.o` and `b/c.o` are the same file, and
+        a graph that saw them as two nodes would rebuild for nothing."""
         np = path.normpath(p)
         if np in self.by_path:
             return self.nodes[self.by_path[np]]
@@ -182,10 +185,10 @@ struct Graph:
         e.id = len(self.edges)
         self.edges.append(e)
         for o in e.outs:
-            # duas arestas produzindo o MESMO arquivo é um grafo que não tem
-            # resposta: qual das duas define o conteúdo depende da ordem em que
-            # rodarem, e o incremental passa a depender de sorte. Anota-se aqui,
-            # onde se sabe, e o motor recusa o build.
+            # two edges producing the SAME file is a graph with no answer: which
+            # of the two defines the content depends on the order they run in,
+            # and the incremental build starts depending on luck. It is recorded
+            # here, where it is known, and the engine refuses the build.
             if self.nodes[o].gen >= 0:
                 self.dupes.append(self.nodes[o].p)
             self.nodes[o].gen = e.id
@@ -206,17 +209,18 @@ def new_graph() -> Graph:
     return Graph([], [], {}, [], [])
 
 def new_edge(argv: list<str>) -> Edge:
-    """Uma aresta com tudo no padrão. Existe porque uma aresta tem dezoito campos
-    e construí-la por posição seria ilegível — e porque o padrão de cada campo é
-    uma decisão que merece um lugar só."""
+    """An edge with every default in place. It exists because an edge has
+    eighteen fields and building one by position would be unreadable — and
+    because each field's default is a decision that deserves one home."""
     return Edge(-1, argv, {}, "", "", [], [], [], [], [], False, False, "", "", "", "",
                 u64(0), 0, 0, False, False, False, 0, 0)
 
-# ---------- de JSON para grafo ----------
-# A verdade do grafo é a ESTRUTURA (1.8: memória quando é a mesma execução). Ler
-# JSON é apenas um dos construtores dela — o que serve quando quem descreve e
-# quem executa não são o mesmo processo, e o que deixa a porta aberta para a
-# linguagem do ninja entrar depois sem o motor saber a diferença.
+# ---------- from JSON to graph ----------
+# The truth of a graph is the STRUCTURE (1.8: memory when it is the same
+# execution). Reading JSON is merely one of its constructors — the one that
+# serves when whoever describes and whoever executes are not the same process,
+# and the one that leaves the door open for ninja's language to arrive later
+# without the engine knowing the difference.
 private def getl(d: dict<str, any>, k: str) -> list<str>:
     out: list<str> = []
     if k in d:
@@ -266,13 +270,13 @@ def from_json(text: str) -> Graph:
         g.add_edge(e)
     return g
 
-# ---------- de grafo para JSON ----------
-# A exportação existe para três coisas: inspecionar (`--emit-graph`), versionar
-# um grafo gerado, e alimentar quem não é este processo. Escrita à mão e não por
-# reflexão porque a reflexão genérica é decisão de outra fase (F5) — e porque
-# aqui se sabe exatamente o que cada campo significa.
-# público: o `ppack --json` fala o mesmo JSON que a exportação do grafo, e um
-# segundo escapador seria um segundo lugar para errar
+# ---------- from graph to JSON ----------
+# The export exists for three things: inspecting (`--emit-graph`), versioning a
+# generated graph, and feeding whoever is not this process. Written by hand and
+# not by reflection because generic reflection is another phase's decision (F5)
+# — and because here we know exactly what every field means.
+# public: `ppack --json` speaks the same JSON as the graph export, and a second
+# escaper would be a second place to get it wrong
 def jstr(s: str) -> str:
     out = '"'
     for ch in s:

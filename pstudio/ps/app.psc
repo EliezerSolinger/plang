@@ -204,7 +204,7 @@ async def serve_manifesto(app: appm.App):
             app.build_msg = "não há pack.json em " + app.root_dir
         else:
             try:
-                await MF.escrever_campo(man, "default", alvo)
+                await MF.write_field(man, "default", alvo)
                 app.build_msg = "alvo padrão: " + alvo
                 # o arquivo mudou no DISCO, e é só isso que é preciso: quem
                 # repara é o `check_external`, que já corre no laço e já sabe

@@ -1,23 +1,24 @@
-"""O DESCRITOR deste repositório: o build do plang, como programa.
+"""THE DESCRIPTOR for this repository: plang's build, as a program.
 
-Este é o arquivo que o `pbuild/DESIGN.md` chama de "a metade que ninguém pode
-copiar de fora" — a que sabe a escada, as listas de módulos e os arreios. O
-motor é genérico; isto é específico, e é por isso que ele existe.
+This is the file `pbuild/DESIGN.md` calls "the half nobody can copy from
+elsewhere" — the one that knows the ladder, the module lists and the harnesses.
+The engine is generic; this is specific, and that is why it exists.
 
-**Começa pela ESCADA, e não por ela ser o mais bonito: por ser o mais difícil.**
-Se a aresta gorda não expressar "a saída de uma etapa é a FERRAMENTA da
-seguinte", o desenho está errado — e é melhor descobrir isso na primeira semana
-do que na última. A escada é:
+**It starts with the LADDER, and not because it is the prettiest: because it is
+the hardest.** If the fat edge cannot express "one stage's output is the next
+stage's TOOL", the design is wrong — and it is better to find that out in the
+first week than in the last. The ladder is:
 
     bootstrap/*.c  --cc-->  plangc_seed
-    fontes         --seed-->  s1/*.c  --cc-->  plangc_s1
-    fontes         --s1-->    s2/*.c  --cc-->  plangc_s2
-    fontes         --s2-->    s3/*.c
-    s2/*.c == s3/*.c  (PONTO FIXO: o compilador reproduz a si mesmo)
+    sources        --seed-->  s1/*.c  --cc-->  plangc_s1
+    sources        --s1-->    s2/*.c  --cc-->  plangc_s2
+    sources        --s2-->    s3/*.c
+    s2/*.c == s3/*.c  (FIXED POINT: the compiler reproduces itself)
 
-O que faz isso funcionar no grafo é uma linha só: o compilador de cada etapa
-entra como ENTRADA implícita das arestas que o usam. A partir daí o motor sabe,
-sem que ninguém lhe conte, que mexer no compilador refaz tudo que ele gera.
+What makes that work in the graph is a single line: each stage's compiler enters
+as an implicit INPUT of the edges that use it. From then on the engine knows,
+without anybody telling it, that touching the compiler rebuilds everything it
+generates.
 """
 import os
 import path
@@ -30,612 +31,613 @@ import <pbuild/lib_doctest.psc> as DT
 
 const BUILD: str = "build"
 
-# o compilador do ponto fixo: o que a escada produz no segundo degrau, e o que
-# todo o resto do repositório usa. É o mesmo que o `verify-all` usa para rodar
-# as suítes, e por um motivo: é o primeiro binário da escada que já foi
-# CONFERIDO contra si mesmo.
+# the fixed-point compiler: what the ladder produces on the second rung, and what
+# all the rest of the repository uses. It is the same one `verify-all` uses, and
+# for one reason: it is the first binary on the ladder that has already been
+# CHECKED against itself.
 const PLANGC_S2: str = "build/bin/plangc_s2"
 
-async def escada(c: T.Ctx) -> str:
-    """A escada de bootstrap com ponto fixo. Devolve o carimbo do ponto fixo."""
-    # 1) o seed: o C comitado, compilado pelo `cc` e mais nada. É a única coisa
-    #    aqui que não depende de nós — é assim que o compilador nasce numa
-    #    máquina que ainda não o tem.
+async def ladder(c: T.Ctx) -> str:
+    """The bootstrap ladder with a fixed point. Returns the fixed point's
+    stamp."""
+    # 1) the seed: the committed C, compiled by the `cc` and nothing else. It is
+    #    the only thing here that does not depend on us — it is how the compiler
+    #    is born on a machine that does not have it yet.
     seed_srcs = T.glob("bootstrap/selfhost", ".c")
     seed = T.cc_program(c, path.join(BUILD, "bin/plangc_seed"), seed_srcs, [], [], [])
 
-    # 2) as fontes do compilador, na ordem que o `--out-dir` espelha
-    fontes: list<str> = []
-    # o `stl` NÃO é nomeado: ele é um pacote (`packages/stl`), os fontes o
-    # importam por `<stl/vec.ph>`, e o fecho da 1.5(a) traz os headers dele.
-    # Era a maior das listas que este descritor carregava.
+    # 2) the compiler's sources, in the order the `--out-dir` mirrors
+    sources: list<str> = []
+    # `stl` is NOT named: it is a package (`packages/stl`), the sources import it
+    # through `<stl/vec.ph>`, and 1.5(a)'s closure brings its headers along. It
+    # was the largest of the lists this descriptor used to carry.
     for f2 in T.glob("selfhost", ".ph"):
-        fontes.append(f2)
+        sources.append(f2)
     for f3 in T.glob("selfhost", ".p"):
-        fontes.append(f3)
+        sources.append(f3)
 
-    # 3) os três degraus. Cada um usa o compilador do anterior, e é ISSO que a
-    #    entrada implícita expressa.
-    c1 = T.derivar(c, BUILD, seed)
-    s1all = await T.p_modules(c1, fontes, path.join(BUILD, "s1"), [])
+    # 3) the three rungs. Each one uses the previous one's compiler, and THAT is
+    #    what the implicit input expresses.
+    c1 = T.derive(c, BUILD, seed)
+    s1all = await T.p_modules(c1, sources, path.join(BUILD, "s1"), [])
     s1c = T.only(s1all, ".c")
     p1 = T.cc_program(c1, path.join(BUILD, "bin/plangc_s1"), s1c, T.only(s1all, ".h"), [], [])
 
-    c2 = T.derivar(c, BUILD, p1)
-    s2all = await T.p_modules(c2, fontes, path.join(BUILD, "s2"), [])
+    c2 = T.derive(c, BUILD, p1)
+    s2all = await T.p_modules(c2, sources, path.join(BUILD, "s2"), [])
     s2c = T.only(s2all, ".c")
     p2 = T.cc_program(c2, path.join(BUILD, "bin/plangc_s2"), s2c, T.only(s2all, ".h"), [], [])
 
-    c3 = T.derivar(c, BUILD, p2)
-    s3all = await T.p_modules(c3, fontes, path.join(BUILD, "s3"), [])
+    c3 = T.derive(c, BUILD, p2)
+    s3all = await T.p_modules(c3, sources, path.join(BUILD, "s3"), [])
 
-    # 4) o PONTO FIXO: o que o s1 gerou e o que o s2 gerou têm de ser o mesmo
-    #    texto. É o teste que diz que o compilador reproduz a si mesmo — e a
-    #    razão de a escada ter três degraus e não dois.
-    todos: list<str> = []
+    # 4) the FIXED POINT: what s1 generated and what s2 generated have to be the
+    #    same text. It is the test that says the compiler reproduces itself — and
+    #    the reason the ladder has three rungs and not two.
+    all: list<str> = []
     for x in s2all:
-        todos.append(x)
+        all.append(x)
     for y in s3all:
-        todos.append(y)
+        all.append(y)
     stamp = path.join(BUILD, "stamp/fixpoint")
-    T.compare_dirs(c, path.join(BUILD, "s2"), path.join(BUILD, "s3"), stamp, todos,
-                   "ponto fixo: s2 == s3")
+    T.compare_dirs(c, path.join(BUILD, "s2"), path.join(BUILD, "s3"), stamp, all,
+                   "fixed point: s2 == s3")
 
-    # 5) o portão do typedef de libc. O `sema` canonicaliza no TAG de propósito
-    #    (é assim que os back ends aprendem o layout), e quem tem de imprimir o
-    #    typedef é o back end C. Em glibc a build passa dos dois jeitos, então o
-    #    único teste possível é sobre o TEXTO do C gerado — e ele é pela
-    #    negativa: estas quatro palavras não podem aparecer.
-    tag = T.nao_acha(c, "_IO_FILE\\|__sFILE\\|_G_config\\|__gnuc_va_list", s2all,
-                     path.join(BUILD, "stamp/sem-tag-libc"),
-                     "sem tag interna de libc no C gerado")
-    return T.junta(c, path.join(BUILD, "stamp/compilador"), [stamp, tag],
-                   "o compilador confere a si mesmo")
+    # 5) the libc typedef gate. `sema` canonicalizes on the TAG on purpose (that
+    #    is how the back ends learn the layout), and whoever has to print the
+    #    typedef is the C back end. On glibc the build passes either way, so the
+    #    only possible test is about the TEXT of the generated C — and it is by
+    #    the negative: these four words may not appear.
+    tag = T.must_not_match(c, "_IO_FILE\\|__sFILE\\|_G_config\\|__gnuc_va_list", s2all,
+                     path.join(BUILD, "stamp/no-libc-tag"),
+                     "no internal libc tag in the generated C")
+    return T.phony(c, path.join(BUILD, "stamp/compiler"), [stamp, tag],
+                   "the compiler checks itself")
 
-# ---------- o que é escrito em pscript ----------
-# O compilador é P; tudo o que está por cima dele é pscript, e todo programa em
-# pscript deste repositório é construído da mesma forma: runtime a objeto uma
-# vez, o programa a objeto, e um link. A lista mora aqui porque é o descritor
-# que sabe o que existe — e é justamente a lista que hoje está espalhada por
-# cinco arreios em shell.
-struct Programa:
-    nome: str
-    fonte: str
+# ---------- what is written in pscript ----------
+# The compiler is P; everything above it is pscript, and every pscript program in
+# this repository is built the same way: the runtime to objects once, the program
+# to objects, and one link. The list lives here because it is the descriptor that
+# knows what exists — and it is precisely the list that used to be spread across
+# five shell harnesses.
+struct Program:
+    name: str
+    source: str
     libs: list<str>
 
-def programas() -> list<Programa>:
+def programs() -> list<Program>:
     return [
-        # o próprio sistema de build, construído pelo sistema de build. Não é
-        # exibicionismo: é o teste mais duro que existe para ele, porque uma
-        # aresta errada aqui aparece na corrida seguinte.
-        Programa("ppack", "pbuild/ps/ppack.psc", []),
-        # o veredicto das suítes (ver `verdict.psc`)
-        Programa("verdict", "pbuild/ps/verdict.psc", []),
-        # a suíte do próprio motor
-        Programa("pbuild-engine", "pbuild/ps/engine_test.psc", []),
-        # o PISO de um placar (ver `piso.psc`)
-        Programa("piso", "pbuild/ps/piso.psc", []),
+        # the build system itself, built by the build system. It is not
+        # showing off: it is the hardest test there is for it, because a wrong
+        # edge here shows up on the next run.
+        Program("ppack", "pbuild/ps/ppack.psc", []),
+        # the suites' verdict (see `verdict.psc`)
+        Program("verdict", "pbuild/ps/verdict.psc", []),
+        # the engine's own suite
+        Program("pbuild-engine", "pbuild/ps/engine_test.psc", []),
+        # a scoreboard's FLOOR (see `floor.psc`)
+        Program("floor", "pbuild/ps/floor.psc", []),
     ]
 
 
-async def pscript_tudo(c: T.Ctx) -> dict<str, str>:
-    """Os programas em pscript, e o caminho de cada binário por nome."""
+async def all_pscript(c: T.Ctx) -> dict<str, str>:
+    """The pscript programs, and each binary's path by name."""
     out: dict<str, str> = {}
-    for p in programas():
-        out[p.nome] = await T.psc_program(c, p.fonte, path.join(BUILD, "bin", p.nome),
+    for p in programs():
+        out[p.name] = await T.psc_program(c, p.source, path.join(BUILD, "bin", p.name),
                                           path.join(BUILD, "obj"), [], p.libs)
     return out
 
 
-# ---------- o editor ----------
-# O `pstudio` é o único programa do repositório que mistura as três linguagens
-# num binário só, e por isso é o que melhor prova a biblioteca de alvos: a
-# lógica é pscript, a mão que toca o SDL2 e a que chama o lexer do compilador
-# são P, e o SDL2 é C de fora, achado por `pkg-config`.
-#
-# A lista abaixo é a do `Makefile`, e é a última cópia dela: quando a troca
-# acontecer (parte D), o alvo `pstudio` do Makefile vira uma chamada a `ppack`.
+# ---------- the editor ----------
+# `pstudio` is the only program in the repository that mixes the three languages
+# into one binary, and that is why it proves the target library best: the logic is
+# pscript, the hand that touches SDL2 and the one that calls the compiler's lexer
+# are P, and SDL2 is C from outside, found by `pkg-config`.
 def pstudio_p() -> list<str>:
-    """O que o FECHAMENTO de imports não alcança.
+    """What the import CLOSURE does not reach.
 
-    Desde a 1.5(d) o compilador puxa o módulo P de qualquer `import "x.ph"` do
-    fechamento, e não só do arquivo de cima: `lib_hl.psc` importa `"hl.ph"`, e
-    `hl.c` — e o `lexer.c` que ele usa — vêm sozinhos. A lista, que tinha
-    dezanove entradas copiadas do `Makefile`, ficou com duas.
+    Since 1.5(d) the compiler pulls in the P module of any `import "x.ph"` in the
+    closure, and not only of the top file: `lib_hl.psc` imports `"hl.ph"`, and
+    `hl.c` — and the `lexer.c` it uses — come along on their own. The list, which
+    had nineteen entries copied from the `Makefile`, is down to two.
 
-    E as duas que sobram não sobram por falta do compilador: `plang.ph` DECLARA
-    `fatal_at` e quem o implementa é `util.p`, um arquivo com outro nome. Não há
-    aresta de import ligando os dois, e nenhuma regra de fechamento acharia isso
-    — é conhecimento deste repositório, e conhecimento deste repositório é
-    exatamente o que um descritor existe para carregar."""
+    And the two that remain do not remain for lack of compiler: `plang.ph`
+    DECLARES `fatal_at` and whoever implements it is `util.p`, a file with another
+    name. There is no import edge linking the two, and no closure rule would find
+    that — it is knowledge about this repository, and knowledge about this
+    repository is exactly what a descriptor exists to carry."""
     return ["selfhost/util.p", "selfhost/utf8.p"]
 
 
 async def pstudio(c: T.Ctx) -> str:
-    """Devolve o caminho do binário, ou "" se a máquina não tem SDL2 — e não ter
-    não é erro: é uma máquina sem o que o editor precisa, e o resto do build não
-    tem nada com isso."""
-    if not await T.tem_pkg("sdl2"):
+    """Returns the binary's path, or "" if the machine has no SDL2 — and not
+    having it is not an error: it is a machine without what the editor needs, and
+    the rest of the build has nothing to do with that."""
+    if not await T.has_pkg("sdl2"):
         return ""
     cf = await T.pkg_config(c, "sdl2", "--cflags")
     lb = await T.pkg_config(c, "sdl2", "--libs")
-    # o compilador precisa PRE-PROCESSAR o header do SDL para ingerir
-    # `include <SDL2/SDL.h>` (45.5), e é a mesma resposta do `pkg-config` que
-    # diz onde ele está. `--cpp` em vez da variável de ambiente: o `env=` de uma
-    # aresta SUBSTITUI o ambiente, e um comando sem `PATH` não acha o `cc`.
+    # the compiler needs to PREPROCESS the SDL header in order to ingest
+    # `include <SDL2/SDL.h>` (45.5), and it is the same `pkg-config` answer that
+    # says where it is. `--cpp` instead of the environment variable: an edge's
+    # `env=` REPLACES the environment, and a command with no `PATH` does not find
+    # the `cc`.
     cpp = "cc"
     for x in cf:
         cpp += " " + x
-    return await T.psc_program_com(c, "pstudio/ps/app.psc", path.join(BUILD, "bin/pstudio"),
-                                   path.join(BUILD, "obj"), pstudio_p(),
-                                   ["--cpp", cpp], cf, lb)
+    return await T.psc_program_with(c, "pstudio/ps/app.psc", path.join(BUILD, "bin/pstudio"),
+                                    path.join(BUILD, "obj"), pstudio_p(),
+                                    ["--cpp", cpp], cf, lb)
 
 
-# ---------- a suíte do pscript ----------
-# Cento e tantos programas que compilam, rodam, e cuja saída inteira é comparada
-# com um `.expected`. No `tests/run.sh` isso é um laço em shell que refaz tudo a
-# cada corrida; aqui cada caso é uma aresta, e um caso cujo binário e cujo
-# esperado não mudaram não roda.
+# ---------- the pscript suite ----------
+# A hundred-odd programs that compile, run, and whose whole output is compared
+# against an `.expected`. In `tests/run.sh` that is a shell loop that redoes
+# everything on every run; here each case is an edge, and a case whose binary and
+# whose expected output did not change does not run.
 const CORPUS: str = "tests/pscript/run"
 
-# o carimbo da suíte, que é como se PEDE "roda a suíte" a um grafo que só sabe
-# falar de arquivos (`ppack test`, ou `ppack build <este caminho>`)
+# the suite's stamp, which is how you ASK for "run the suite" from a graph that
+# only knows how to talk about files (`ppack test`, or `ppack build <this path>`)
 const SUITE_PSCRIPT: str = "build/t/stamp/pscript.suite"
 
-async def suite_pscript(c: T.Ctx, verdict: str) -> str:
-    casos: list<T.Caso> = []
+async def pscript_suite(c: T.Ctx, verdict: str) -> str:
+    cases: list<T.Case> = []
     for src in T.glob(CORPUS, ".psc"):
         base = path.basename(src)
-        nome = base[0:len(base) - 4]
-        # `lib_*.psc` são peças de import, não programas
-        if nome.startswith("lib_"):
+        name = base[0:len(base) - 4]
+        # `lib_*.psc` are import pieces, not programs
+        if name.startswith("lib_"):
             continue
-        esperado = path.join(CORPUS, nome + ".expected")
-        if not path.isfile(esperado):
+        expected = path.join(CORPUS, name + ".expected")
+        if not path.isfile(expected):
             continue
         status = 0
-        arq_status = path.join(CORPUS, nome + ".exit")
-        if path.isfile(arq_status):
-            status = int((await ler(arq_status)).strip())
-        # um caso pode pedir FLAGS de compilação (`<nome>.flags`), que é como uma
-        # opção que muda o que se emite ganha portão nenhum: `-O` tira o
-        # `assert` (46.4), e a única forma de ver isso é construir o mesmo
-        # programa com ela
+        status_file = path.join(CORPUS, name + ".exit")
+        if path.isfile(status_file):
+            status = int((await read_text(status_file)).strip())
+        # a case may ask for compilation FLAGS (`<name>.flags`), which is how an
+        # option that changes what gets emitted gets a gate at all: `-O` drops
+        # `assert` (46.4), and the only way to see that is to build the same
+        # program with it
         flags: list<str> = []
-        arq_flags = path.join(CORPUS, nome + ".flags")
-        if path.isfile(arq_flags):
-            for w in (await ler(arq_flags)).strip().split(" "):
+        flags_file = path.join(CORPUS, name + ".flags")
+        if path.isfile(flags_file):
+            for w in (await read_text(flags_file)).strip().split(" "):
                 if len(w) > 0:
                     flags.append(w)
-        binario = await T.psc_program(c, src, path.join(BUILD, "t/bin", nome),
-                                      path.join(BUILD, "t/obj"), flags, [])
-        # cada caso roda no diretório DELE. O `tests/run.sh` roda os cento e
-        # tantos no mesmo, um de cada vez; aqui eles rodam em paralelo, e dois
-        # casos que criassem um arquivo com o mesmo nome se atropelariam.
-        casos.append(T.Caso(nome, binario, esperado, status, path.join(BUILD, "t/run", nome)))
-    return T.suite(c, "pscript", casos, verdict, path.join(BUILD, "t/stamp"))
+        binary = await T.psc_program(c, src, path.join(BUILD, "t/bin", name),
+                                     path.join(BUILD, "t/obj"), flags, [])
+        # each case runs in ITS OWN directory. `tests/run.sh` runs the hundred-odd
+        # of them in the same one, one at a time; here they run in parallel, and
+        # two cases creating a file with the same name would trample each other.
+        cases.append(T.Case(name, binary, expected, status, path.join(BUILD, "t/run", name)))
+    return T.suite(c, "pscript", cases, verdict, path.join(BUILD, "t/stamp"))
 
 
-private async def ler(p: str) -> str:
+private async def read_text(p: str) -> str:
     f = await open(p, "r")
     t = await f.text()
     await f.close()
     return t
 
 
-# ---------- a verificação inteira ----------
-# O `verify-all.sh` roda oito passos em sequência e leva o que levam os oito
-# somados. Aqui eles são ARESTAS: o que não depende um do outro roda junto, e o
-# que não mudou não roda. O que cada uma faz continua sendo o arreio de sempre —
-# não há nada reescrito, e é assim que se quer: eles funcionam, e são lidos por
-# gente que não vai ler pscript.
+# ---------- the whole verification ----------
+# `verify-all.sh` runs eight steps in sequence and takes what all eight take
+# together. Here they are EDGES: what does not depend on the others runs
+# alongside, and what did not change does not run. What each one does is still the
+# usual harness — nothing is rewritten, and that is how it should be: they work,
+# and they are read by people who are not going to read pscript.
 #
-# Cada arreio ganha o diretório de trabalho DELE (`OUT=`), porque duas corridas
-# do `tests/run.sh` no mesmo lugar se atropelam — e o relatório das duas fica
-# ilegível. Isto já custou uma investigação.
+# Each harness gets ITS OWN working directory (`OUT=`), because two runs of
+# `tests/run.sh` in the same place trample each other — and both reports come out
+# unreadable. This has already cost an investigation.
 const VERIFY: str = "build/t/stamp/verify"
-# o alvo de `ppack test`: a suíte do pscript caso a caso MAIS a leitura em C do
-# corpus (cases, modules, stl, p-suite, errors, pstudio, roundtrip). É o que o
-# `make test` sempre significou, e por isso é o que ele continua a significar.
-const TESTE: str = "build/t/stamp/test"
+# the target of `ppack test`: the pscript suite case by case PLUS the C reading of
+# the corpus (cases, modules, stl, p-suite, errors, pstudio, roundtrip). It is
+# what `make test` always meant, and that is why it is what it still means.
+const TEST: str = "build/t/stamp/test"
 
-def suites_de_fora() -> list<str>:
-    # a MESMA lista do `verify-all.sh`, e por isso `pstudio` e `roundtrip` estão
-    # aqui: uma verificação que roda menos que a de antes não é a mesma
+def shell_suites() -> list<str>:
+    # the SAME list as `verify-all.sh`'s, and that is why `pstudio` and
+    # `roundtrip` are here: a verification that runs less than the old one is not
+    # the same verification
     return ["cases", "modules", "stl", "p-suite", "errors", "pstudio", "roundtrip", "pscript"]
 
-async def verificacao(c: T.Ctx, plangc: str, piso: str, suite: str, spkg: str, sdoc: str, fixo: str, editor: str) -> str:
+async def verification(c: T.Ctx, plangc: str, floor_prog: str, suite: str, spkg: str, sdoc: str, fixpoint: str, editor: str) -> str:
     logs: list<str> = []
     logdir = path.join(BUILD, "t/log")
-    gating = suites_de_fora()
+    gating = shell_suites()
 
-    # as três leituras do mesmo corpus: o C, o QBE e o C89. São a mesma suíte
-    # com o mesmo compilador, e é justamente por isso que valem — o que elas
-    # comparam é o BACK END.
-    for modo in [["c", ""], ["qbe", "qbe"], ["c89", ""]]:
-        vars: dict<str, str> = {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h", modo[0])}
-        if len(modo[1]) > 0:
-            vars["BACKEND"] = modo[1]
-        if modo[0] == "c89":
+    # the three readings of the same corpus: C, QBE and C89. They are the same
+    # suite with the same compiler, and that is precisely why they are worth it —
+    # what they compare is the BACK END.
+    for mode in [["c", ""], ["qbe", "qbe"], ["c89", ""]]:
+        vars: dict<str, str> = {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h", mode[0])}
+        if len(mode[1]) > 0:
+            vars["BACKEND"] = mode[1]
+        if mode[0] == "c89":
             vars["STD"] = "c89"
         argv: list<str> = ["bash", "tests/run.sh"]
         for x in gating:
             argv.append(x)
-        logs.append(T.harness(c, "suite-" + modo[0], argv, vars, [plangc], logdir,
-                              "suíte " + modo[0]))
+        logs.append(T.harness(c, "suite-" + mode[0], argv, vars, [plangc], logdir,
+                              "suite " + mode[0]))
 
-    # o coletor a cada ponto seguro, e o protocolo que o descritor consome
+    # the collector at every safe point, and the protocol the descriptor consumes
     logs.append(T.harness(c, "gc-stress", ["bash", "tests/gc-stress.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "gc-stress"))
     logs.append(T.harness(c, "protocol", ["bash", "tests/protocol.sh"],
-                          {"PLANGC": plangc}, [plangc], logdir, "protocolo"))
+                          {"PLANGC": plangc}, [plangc], logdir, "the protocol"))
     logs.append(T.harness(c, "knobs", ["bash", "tests/knobs.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "knobs"))
     logs.append(T.harness(c, "net-late", ["bash", "tests/net-late.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "net-late"))
     logs.append(T.harness(c, "print-atomic", ["bash", "tests/print-atomic.sh"],
-                          {"PLANGC": plangc}, [plangc], logdir, "print atômico"))
-    # `ppack check`: as invariantes que o build não confere porque não são
-    # trabalho dele — a principal sendo que P continua livre de runtime ATRAVÉS
-    # dos pacotes
+                          {"PLANGC": plangc}, [plangc], logdir, "atomic print"))
+    # `ppack check`: the invariants the build does not check because they are not
+    # its job — the main one being that P stays runtime-free THROUGH the packages
     logs.append(T.harness(c, "check", ["./" + path.join(BUILD, "bin/ppack"), "check"],
                           {}, [path.join(BUILD, "bin/ppack"), plangc], logdir,
-                          "as invariantes dos pacotes"))
-    # o `build.ninja` comitado é o bootstrap sem `ppack`, e um arquivo gerado que
-    # fica comitado tem um modo de falhar: envelhecer em silêncio
-    # o MOTOR DENTRO DO EDITOR (F6): sem este arreio, "o build corre no editor"
-    # é uma afirmação que só se confere olhando para uma janela
+                          "the packages' invariants"))
+    # THE ENGINE INSIDE THE EDITOR (F6): without this harness, "the build runs in
+    # the editor" is a claim you can only check by looking at a window
     if len(editor) > 0:
         logs.append(T.harness(c, "pstudio-build", ["bash", "tests/pstudio-build.sh"],
                               {"PSTUDIO": editor}, [editor, path.join(BUILD, "bin/ppack")],
-                              logdir, "o motor dentro do editor"))
+                              logdir, "the engine inside the editor"))
+    # the committed `build.ninja` is the bootstrap without `ppack`, and a
+    # generated file that stays committed has one way to fail: ageing in silence
     logs.append(T.harness(c, "ninja", ["bash", "tests/ninja.sh"],
                           {"PPACK": path.join(BUILD, "bin/ppack")},
                           [path.join(BUILD, "bin/ppack")], logdir,
-                          "o build.ninja comitado"))
+                          "the committed build.ninja"))
     logs.append(T.harness(c, "run-ppack", ["bash", "tests/run-cmd-ppack.sh"],
                           {"PPACK": path.join(BUILD, "bin/ppack")},
-                          [path.join(BUILD, "bin/ppack"), plangc], logdir, "run pelo ppack"))
-    # os três arreios que medem o pscript contra ALGO QUE NÃO SOMOS NÓS: corpora
-    # que outros escreveram, e os nossos programas rodados também no intérprete
-    # de referência. Não são placar: são portão.
+                          [path.join(BUILD, "bin/ppack"), plangc], logdir, "run through ppack"))
+    # the three harnesses that measure pscript against SOMETHING THAT IS NOT US:
+    # corpora other people wrote, and our own programs also run in the reference
+    # interpreter. They are not a scoreboard: they are a gate.
     logs.append(T.harness(c, "conformance", ["bash", "tests/conformance/run.sh"],
-                          {"PLANGC": plangc}, [plangc], logdir, "conformidade"))
+                          {"PLANGC": plangc}, [plangc], logdir, "conformance"))
     logs.append(T.harness(c, "oracle", ["bash", "tests/oracle/run.sh"],
-                          {"PLANGC": plangc}, [plangc], logdir, "oráculos"))
-    # e o ponto fixo do OUTRO back end: um back end pode passar em todos os
-    # casos e ainda gerar um compilador que diverge num canto que nenhum caso
-    # toca
+                          {"PLANGC": plangc}, [plangc], logdir, "the oracles"))
+    # and the OTHER back end's fixed point: a back end can pass every case and
+    # still generate a compiler that diverges in a corner no case touches
     logs.append(T.harness(c, "qbe-fixpoint", ["bash", "tests/qbe-fixpoint.sh"],
                           {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/qbefp")},
-                          [plangc], logdir, "ponto fixo do QBE"))
+                          [plangc], logdir, "the QBE fixed point"))
     logs.append(T.harness(c, "packages", ["bash", "tests/packages.sh"],
                           {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/packages")},
-                          [plangc], logdir, "pacotes (import <>)"))
+                          [plangc], logdir, "packages (import <>)"))
     logs.append(T.harness(c, "pbuild", ["bash", "tests/pbuild.sh"],
-                          {"PLANGC": plangc}, [plangc], logdir, "o motor do pbuild"))
+                          {"PLANGC": plangc}, [plangc], logdir, "the pbuild engine"))
 
-    # ---- os PLACARES, com o piso junto da suíte que o mede ----
+    # ---- the SCOREBOARDS, with the floor next to the suite that measures it ----
     #
-    # `c-suite` e `wacct` não passam nem falham: medem. O que as torna portão é o
-    # PISO, e ele vivia em duas variáveis de shell no topo do `verify-all.sh` —
-    # longe da suíte, e invisível para quem lê o descritor. Aqui cada uma é duas
-    # arestas: uma que roda e escreve o relatório, outra que lê o número dele e o
-    # compara. A segunda é barata e volta a correr sozinha quando alguém baixa o
-    # piso sem querer.
-    for placar in [["c-suite", "c-suite", "score: ", "220"],
-                   ["wacct", "wacct-valid", "wacct-valid: ", "741"]]:
-        lg = T.harness(c, placar[0], ["bash", "tests/run.sh", placar[1]],
-                       {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/" + placar[0])},
-                       [plangc], logdir, "placar " + placar[0])
-        logs.append(T.piso(c, piso, lg, placar[2], placar[3],
-                           path.join(BUILD, "t/stamp", placar[0] + ".piso"),
-                           placar[0] + " >= " + placar[3]))
+    # `c-suite` and `wacct` neither pass nor fail: they measure. What makes them a
+    # gate is the FLOOR, and it used to live in two shell variables at the top of
+    # `verify-all.sh` — far from the suite, and invisible to whoever reads the
+    # descriptor. Here each one is two edges: one that runs and writes the report,
+    # another that reads its number and compares. The second is cheap and runs
+    # again on its own when somebody lowers the floor by accident.
+    for board in [["c-suite", "c-suite", "score: ", "220"],
+                  ["wacct", "wacct-valid", "wacct-valid: ", "741"]]:
+        lg = T.harness(c, board[0], ["bash", "tests/run.sh", board[1]],
+                       {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/" + board[0])},
+                       [plangc], logdir, "scoreboard " + board[0])
+        logs.append(T.score_floor(c, floor_prog, lg, board[2], board[3],
+                                  path.join(BUILD, "t/stamp", board[0] + ".floor"),
+                                  board[0] + " >= " + board[3]))
 
-    # `ppack test` é a leitura em C do corpus mais a suíte caso a caso: as duas
-    # medem a mesma coisa por caminhos diferentes, e juntas são o que `make
-    # test` sempre quis dizer. O resto (QBE, C89, oráculos, coletor) é `verify`.
-    T.junta(c, TESTE, [logs[0], suite, spkg, sdoc],
-            "test: o corpus em C, a suíte caso a caso, os testes dos pacotes e os DOCTESTS")
+    # `ppack test` is the C reading of the corpus plus the case-by-case suite: the
+    # two measure the same thing by different routes, and together they are what
+    # `make test` always meant. The rest (QBE, C89, oracles, collector) is
+    # `verify`.
+    T.phony(c, TEST, [logs[0], suite, spkg, sdoc],
+            "test: the corpus in C, the suite case by case, the packages' tests and the DOCTESTS")
 
-    # a suíte do pscript como GRAFO entra junto: ela é a mesma coisa que a
-    # `suite-c` mede, por outro caminho e caso a caso — e é a que roda rápido
-    tudo: list<str> = []
+    # the pscript suite as a GRAPH comes along: it measures the same thing
+    # `suite-c` does, by another route and case by case — and it is the fast one
+    everything: list<str> = []
     for l in logs:
-        tudo.append(l)
-    tudo.append(suite)
-    tudo.append(spkg)
-    tudo.append(sdoc)
-    # o PONTO FIXO (o compilador reproduz a si mesmo) e o editor: os passos 2, 3
-    # e 7 do `verify-all`, que já são arestas deste grafo
-    tudo.append(fixo)
+        everything.append(l)
+    everything.append(suite)
+    everything.append(spkg)
+    everything.append(sdoc)
+    # the FIXED POINT (the compiler reproduces itself) and the editor: steps 2, 3
+    # and 7 of `verify-all`, which are already edges of this graph
+    everything.append(fixpoint)
     if len(editor) > 0:
-        tudo.append(editor)
-    return T.junta(c, VERIFY, tudo, "verify: " + str(len(tudo)) + " partes")
+        everything.append(editor)
+    return T.phony(c, VERIFY, everything, "verify: " + str(len(everything)) + " parts")
 
 
-# ---------- o workspace ----------
-# Um `pack.json` na RAIZ do projeto, com os membros. É o que faz este
-# repositório ser, para o `ppack`, um projeto como qualquer outro — e é assim
-# que o ecossistema é testado por quem o escreve, contra o caso mais difícil que
-# existe.
+# ---------- the workspace ----------
+# A `pack.json` at the project's ROOT, with the members. It is what makes this
+# repository, to `ppack`, a project like any other — and it is how the ecosystem
+# is tested by the people who write it, against the hardest case there is.
 #
-# Dele sai uma coisa só para o compilador: as RAÍZES de busca. O diretório que
-# CONTÉM os membros é uma raiz, porque é assim que `import <pui/widget.ph>`
-# resolve — o nome do pacote é o primeiro pedaço do caminho.
-async def raizes_do_workspace(manifesto: str) -> list<str>:
+# One thing comes out of it for the compiler: the search ROOTS. The directory that
+# CONTAINS the members is a root, because that is how `import <pui/widget.ph>`
+# resolves — the package's name is the path's first piece.
+async def workspace_roots(manifest: str) -> list<str>:
     out: list<str> = []
-    if not path.isfile(manifesto):
+    if not path.isfile(manifest):
         return out
-    m = await M.ler(manifesto)
-    if not m.eh_workspace:
+    m = await M.read(manifest)
+    if not m.is_workspace:
         return out
-    base = path.dirname(manifesto)
-    for membro in m.membros:
-        r = path.dirname(path.join(base, membro))
+    base = path.dirname(manifest)
+    for member in m.members:
+        r = path.dirname(path.join(base, member))
         if len(r) == 0:
             r = "."
-        ja = False
+        already = False
         for x in out:
             if x == r:
-                ja = True
-        if not ja:
+                already = True
+        if not already:
             out.append(r)
     return out
 
 
-# ---------- o teste que viaja COM o pacote ----------
-# `packages/<nome>/test/` é do PACOTE, não do projeto. Três consequências, e as
-# três são o ponto:
+# ---------- the test that travels WITH the package ----------
+# `packages/<name>/test/` belongs to the PACKAGE, not to the project. Three
+# consequences, and all three are the point:
 #
-#   * um pacote publicado carrega a prova de que funciona, e quem o instala pode
-#     rodá-la na própria máquina;
-#   * o teste não precisa de ser citado à mão em nenhum arreio — ele é achado
-#     porque está onde tem de estar;
-#   * e o `ppack test` do projeto roda os testes dos pacotes do workspace, que é
-#     o que faz mover um pacote para cá não perder cobertura.
-async def membros_do_workspace(manifesto: str) -> list<str>:
+#   * a published package carries the proof that it works, and whoever installs it
+#     can run that proof on their own machine;
+#   * the test does not have to be named by hand in any harness — it is found
+#     because it is where it has to be;
+#   * and the project's `ppack test` runs the workspace packages' tests, which is
+#     what makes moving a package here not lose coverage.
+async def workspace_members(manifest: str) -> list<str>:
     out: list<str> = []
-    if not path.isfile(manifesto):
+    if not path.isfile(manifest):
         return out
-    m = await M.ler(manifesto)
-    if not m.eh_workspace:
+    m = await M.read(manifest)
+    if not m.is_workspace:
         return out
-    base = path.dirname(manifesto)
-    for membro in m.membros:
-        out.append(path.join(base, membro))
+    base = path.dirname(manifest)
+    for member in m.members:
+        out.append(path.join(base, member))
     return out
 
 
-async def suite_doctests(c: T.Ctx, verdict: str) -> str:
-    """Os exemplos das docstrings, a correr.
+async def doctest_suite(c: T.Ctx, verdict: str) -> str:
+    """The docstrings' examples, running.
 
-    Um exemplo numa docstring envelhece em silêncio: parece certo, ninguém o
-    corre, e um dia alguém copia uma linha que já não funciona. Aqui ele é uma
-    aresta do build como qualquer outra.
+    An example in a docstring ages in silence: it looks right, nobody runs it, and
+    one day somebody copies a line that stopped working. Here it is a build edge
+    like any other.
 
-    O programa de cada módulo é GERADO no plano, a partir da resposta 5 do
-    compilador — a mesma lista canónica que o `ppack doc` mostra. Gerar no plano
-    é o que garante que ele está sempre em dia: a docstring mudou, o programa
-    muda, a aresta suja."""
-    casos: list<T.Caso> = []
-    for dir in await membros_do_workspace("pack.json"):
+    Each module's program is GENERATED in the plan, from the compiler's answer 5 —
+    the same canonical list `ppack doc` shows. Generating it in the plan is what
+    guarantees it is always up to date: the docstring changed, the program
+    changes, the edge goes dirty."""
+    cases: list<T.Case> = []
+    for dir in await workspace_members("pack.json"):
         pkg = path.basename(dir)
         mods: list<str> = []
         for f in sorted(os.listdir(dir)):
             if f.endswith(".psc") or f.endswith(".ph"):
                 mods.append(f)
         for mod in mods:
-            alvo_mod = path.join(dir, mod)
-            resp = await T.ask(c, T.com_raizes(c, [c.query, "--api", alvo_mod]))
+            mod_path = path.join(dir, mod)
+            resp = await T.ask(c, T.with_roots(c, [c.query, "--api", mod_path]))
             apis = A.parse("\n".join(resp))
             if len(apis) == 0:
                 continue
             api = apis[0]
             base = mod[0:len(mod) - 4] if mod.endswith(".psc") else mod[0:len(mod) - 3]
-            # um `.ph` entra INTEIRO (`import <pkg/mod.ph>`): o que dele
-            # atravessa é decidido pela 45.5 e não por uma lista de nomes, e os
-            # nomes ficam visíveis sem qualificador. Um `.psc` traz os nomes
-            # públicos pelo `from ... import`.
-            importa = "<" + pkg + "/" + mod + ">"
-            prog = DT.gerar(api, importa) if mod.endswith(".psc") else DT.gerar_ph(api, importa)
-            if prog.quantos == 0:
+            # a `.ph` comes in WHOLE (`import <pkg/mod.ph>`): what crosses from it
+            # is decided by 45.5 and not by a list of names, and the names stay
+            # visible without a qualifier. A `.psc` brings the public names in
+            # through `from ... import`.
+            imports = "<" + pkg + "/" + mod + ">"
+            prog = DT.generate(api, imports) if mod.endswith(".psc") else DT.generate_ph(api, imports)
+            if prog.count == 0:
                 continue
-            rot = pkg + "/" + base
+            label = pkg + "/" + base
             src = path.join(BUILD, "t/doc", pkg + "-" + base + ".psc")
-            esp = path.join(BUILD, "t/doc", pkg + "-" + base + ".expected")
-            await T.escrever(src, prog.fonte)
-            await T.escrever(esp, prog.esperado)
-            binario = await T.psc_program(c, src, path.join(BUILD, "t/doc/bin", pkg + "-" + base),
-                                          path.join(BUILD, "t/obj"), [], [])
-            casos.append(T.Caso(rot, binario, esp, 0,
+            exp = path.join(BUILD, "t/doc", pkg + "-" + base + ".expected")
+            await T.write_file(src, prog.source)
+            await T.write_file(exp, prog.expected)
+            binary = await T.psc_program(c, src, path.join(BUILD, "t/doc/bin", pkg + "-" + base),
+                                         path.join(BUILD, "t/obj"), [], [])
+            cases.append(T.Case(label, binary, exp, 0,
                                 path.join(BUILD, "t/run", "doc-" + pkg + "-" + base)))
-    return T.suite(c, "doctest", casos, verdict, path.join(BUILD, "t/stamp"))
+    return T.suite(c, "doctest", cases, verdict, path.join(BUILD, "t/stamp"))
 
 
-async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
-    casos: list<T.Caso> = []
-    for dir in await membros_do_workspace("pack.json"):
+async def packages_suite(c: T.Ctx, verdict: str) -> str:
+    cases: list<T.Case> = []
+    for dir in await workspace_members("pack.json"):
         tdir = path.join(dir, "test")
         if not path.isdir(tdir):
             continue
-        nome = path.basename(dir)
-        # um teste de pacote pode estar em qualquer das duas linguagens: o `pui`
-        # é pscript e o `sha2` é P. A diferença é só como se constrói.
-        fontes: list<str> = []
+        name = path.basename(dir)
+        # a package's test may be in either language: `pui` is pscript and `sha2`
+        # is P. The difference is only in how it gets built.
+        sources: list<str> = []
         for a in T.glob(tdir, ".psc"):
-            fontes.append(a)
+            sources.append(a)
         for b in T.glob(tdir, ".p"):
-            fontes.append(b)
-        for src in sorted(fontes):
+            sources.append(b)
+        for src in sorted(sources):
             base = path.basename(src)
-            corte = 4 if src.endswith(".psc") else 2
-            n = base[0:len(base) - corte]
-            esperado = path.join(tdir, n + ".expected")
-            if not path.isfile(esperado):
+            cut = 4 if src.endswith(".psc") else 2
+            n = base[0:len(base) - cut]
+            expected = path.join(tdir, n + ".expected")
+            if not path.isfile(expected):
                 continue
-            rot = nome + "/" + n
-            alvo = path.join(BUILD, "t/pkg", nome + "-" + n)
-            # objetos SEPARADOS por linguagem, e não é arrumação: o mesmo `.c`
-            # gerado de um módulo P é compilado com os `-D` do runtime quando
-            # serve um programa pscript e sem eles quando serve um programa P.
-            # Dois comandos diferentes para o mesmo `.o` é o grafo que o motor
-            # recusa — com razão, porque qual dos dois define o conteúdo
-            # dependeria da ordem.
+            label = name + "/" + n
+            target = path.join(BUILD, "t/pkg", name + "-" + n)
+            # objects SEPARATED by language, and that is not tidiness: the same
+            # generated `.c` of a P module is compiled with the runtime's `-D`s
+            # when it serves a pscript program and without them when it serves a P
+            # program. Two different commands for the same `.o` is the graph the
+            # engine refuses — rightly, because which of the two defines the
+            # content would depend on the order.
             odir = path.join(BUILD, "t/obj" if src.endswith(".psc") else "t/objp")
-            binario = ""
+            binary = ""
             if src.endswith(".psc"):
-                binario = await T.psc_program(c, src, alvo, odir, [], [])
+                binary = await T.psc_program(c, src, target, odir, [], [])
             else:
-                binario = await T.p_program(c, src, alvo, odir, [], [])
-            casos.append(T.Caso(rot, binario, esperado, 0,
-                                path.join(BUILD, "t/run", nome + "-" + n)))
-    return T.suite(c, "pacotes", casos, verdict, path.join(BUILD, "t/stamp"))
+                binary = await T.p_program(c, src, target, odir, [], [])
+            cases.append(T.Case(label, binary, expected, 0,
+                                path.join(BUILD, "t/run", name + "-" + n)))
+    return T.suite(c, "packages", cases, verdict, path.join(BUILD, "t/stamp"))
 
 
-# ---------- o manifesto do `run` ----------
+# ---------- the `run` manifest ----------
 #
-# A pergunta que o caminho curto responde é uma só: "o que está no disco ainda é
-# o que foi construído?". A resposta é a lista dos arquivos que a construção LEU
-# (que o compilador disse, não que se adivinhou) com a data de cada um, mais o
-# compilador que a fez. Se tudo bater, não há o que perguntar nem o que fazer.
+# The question the short path answers is a single one: "is what is on disk still
+# what was built?". The answer is the list of files the build READ (which the
+# compiler said, not which anybody guessed) with each one's date, plus the
+# compiler that made it. If everything matches, there is nothing to ask and
+# nothing to do.
 #
-# É a mesma ideia do manifesto que vivia dentro do `plangc run`, mudada de casa:
-# a decisão de onde guardar e quando invalidar é política, e política é do
-# gerenciador. E agora ela mora em `build/run/`, dentro do projeto, e não num
-# `~/.cache` que `make clean` não alcança.
+# It is the same idea as the manifest that lived inside `plangc run`, moved house:
+# the decision of where to keep it and when to invalidate it is policy, and policy
+# belongs to the package manager. And now it lives in `build/run/`, inside the
+# project, and not in a `~/.cache` that `make clean` cannot reach.
 
-private def run_man_path(src: str, raiz: str) -> str:
-    nome = path.basename(src)
-    return path.join(raiz, "run/.man", nome + ".txt")
+private def run_man_path(src: str, root: str) -> str:
+    name = path.basename(src)
+    return path.join(root, "run/.man", name + ".txt")
 
 
-async def run_manifesto_ok(src: str, raiz: str) -> str:
-    """O binário, se ele ainda vale. Vazio quando é preciso construir."""
-    man = run_man_path(src, raiz)
+async def run_manifest_ok(src: str, root: str) -> str:
+    """The binary, if it still holds. Empty when a build is needed."""
+    man = run_man_path(src, root)
     if not path.isfile(man):
         return ""
     f = await open(man, "r")
     txt = await f.text()
     await f.close()
-    linhas = txt.split("\n")
-    if len(linhas) < 2:
+    lines = txt.split("\n")
+    if len(lines) < 2:
         return ""
-    binario = linhas[0]
-    if not path.isfile(binario):
+    binary = lines[0]
+    if not path.isfile(binary):
         return ""
-    for ln in linhas[1:len(linhas)]:
+    for ln in lines[1:len(lines)]:
         if len(ln) == 0:
             continue
         k = ln.rfind(" ")
         if k < 0:
             return ""
-        arq = ln[0:k]
-        if not path.isfile(arq):
+        file = ln[0:k]
+        if not path.isfile(file):
             return ""
-        if str(path.getmtime_ns(arq)) != ln[k + 1:]:
+        if str(path.getmtime_ns(file)) != ln[k + 1:]:
             return ""
-    return binario
+    return binary
 
 
-async def run_manifesto_grava(src: str, binario: str, g: G.Graph, raiz: str):
-    """A lista do que a construção LEU, com as datas. As entradas vêm do GRAFO,
-    que as recebeu do compilador — nada aqui é adivinhado a partir do fonte."""
-    vistos: dict<str, int> = {}
-    linhas: list<str> = [binario]
+async def run_manifest_write(src: str, binary: str, g: G.Graph, root: str):
+    """The list of what the build READ, with the dates. The inputs come from the
+    GRAPH, which got them from the compiler — nothing here is guessed from the
+    source."""
+    seen: dict<str, int> = {}
+    lines: list<str> = [binary]
     for e in g.edges:
         for iid in e.ins:
             p = g.nodes[iid].p
-            if p in vistos or not path.isfile(p):
+            if p in seen or not path.isfile(p):
                 continue
-            vistos[p] = 1
-            linhas.append(p + " " + str(path.getmtime_ns(p)))
+            seen[p] = 1
+            lines.append(p + " " + str(path.getmtime_ns(p)))
         for iid2 in e.implicit:
             p2 = g.nodes[iid2].p
-            if p2 in vistos or not path.isfile(p2):
+            if p2 in seen or not path.isfile(p2):
                 continue
-            vistos[p2] = 1
-            linhas.append(p2 + " " + str(path.getmtime_ns(p2)))
-    await T.escrever(run_man_path(src, raiz), "\n".join(linhas) + "\n")
+            seen[p2] = 1
+            lines.append(p2 + " " + str(path.getmtime_ns(p2)))
+    await T.write_file(run_man_path(src, root), "\n".join(lines) + "\n")
 
 
-def raiz_de_script(src: str, forcada: str) -> str:
-    """Onde vai o build de um script SOLTO — um arquivo que não é alvo de
-    descritor nenhum (arquitetura C′).
+def script_root(src: str, forced: str) -> str:
+    """Where a LOOSE script's build goes — a file that is no descriptor's target
+    (architecture C′).
 
-    Ela nasce AO LADO DO SCRIPT e não no diretório de onde se chamou: `ppack run
-    ../ferramentas/x.psc` de dentro de outro projeto não tem por que sujar o
-    `build/` desse projeto com uma coisa que não é dele. Quem não quiser isso —
-    um diretório somente-leitura, mandar tudo para `/tmp`, partilhar entre dois
-    checkouts — passa `--build-dir`.
+    It is born NEXT TO THE SCRIPT and not in the directory it was called from:
+    `ppack run ../tools/x.psc` from inside another project has no reason to dirty
+    that project's `build/` with something that is not its own. Whoever does not
+    want that — a read-only directory, sending everything to `/tmp`, sharing
+    between two checkouts — passes `--build-dir`.
 
-    O padrão é local e explícito; o global só existe se alguém o digitar, que é
-    a lição que o `pip` levou vinte anos a ensinar."""
-    if len(forcada) > 0:
-        return forcada
+    The default is local and explicit; the global one only exists if somebody
+    types it, which is the lesson `pip` took twenty years to teach."""
+    if len(forced) > 0:
+        return forced
     d = path.dirname(src)
     return path.join(d, BUILD) if len(d) > 0 else BUILD
 
 
-async def programa_solto(g: G.Graph, query: str, src: str, raiz: str) -> str:
-    """Um arquivo que não é alvo de descritor nenhum, construído para ser
-    corrido. É o que o `plangc run` fazia por dentro, e a razão de sair de lá é
-    que nada disto é sobre traduzir uma linguagem: é POLÍTICA — onde guardar o
-    binário, quando é que ele está velho, o que fazer com os argumentos.
+async def loose_program(g: G.Graph, query: str, src: str, root: str) -> str:
+    """A file that is no descriptor's target, built to be run. It is what `plangc
+    run` used to do internally, and the reason it left is that none of this is
+    about translating a language: it is POLICY — where to keep the binary, when it
+    is stale, what to do with the arguments.
 
-    O binário sai em `build/run/`, que é do PROJETO como tudo o mais: `make
-    clean` leva-o e `make clean-all` também. O `~/.cache` do `plangc run` era a
-    última coisa neste sistema que escrevia fora da árvore."""
-    raizes = await raizes_do_workspace("pack.json")
-    for ri in R.raizes_instaladas():
-        raizes.append(ri)
-    c = T.new_ctx(g, path.join(raiz, "run"), PLANGC_S2)
+    The binary comes out in `build/run/`, which belongs to the PROJECT like
+    everything else: `make clean` takes it and so does `make clean-all`. `plangc
+    run`'s `~/.cache` was the last thing in this system that wrote outside the
+    tree."""
+    roots = await workspace_roots("pack.json")
+    for ri in R.installed_roots():
+        roots.append(ri)
+    c = T.new_ctx(g, path.join(root, "run"), PLANGC_S2)
     c.query = query
     c.plangc_is_built = True
-    c.pkgroots = raizes
-    await T.carregar_pacotes(c)
-    nome = path.basename(src)
-    nome = nome[0:len(nome) - 4] if nome.endswith(".psc") else nome[0:len(nome) - 2]
-    saida = path.join(raiz, "run/bin", nome)
+    c.pkgroots = roots
+    await T.load_packages(c)
+    name = path.basename(src)
+    name = name[0:len(name) - 4] if name.endswith(".psc") else name[0:len(name) - 2]
+    out = path.join(root, "run/bin", name)
     if src.endswith(".psc"):
-        return await T.psc_program(c, src, saida, path.join(raiz, "run/obj"), [], [])
-    return await T.p_program(c, src, saida, path.join(raiz, "run/obj"), [], [])
+        return await T.psc_program(c, src, out, path.join(root, "run/obj"), [], [])
+    return await T.p_program(c, src, out, path.join(root, "run/obj"), [], [])
 
 
-async def montar(query: str) -> G.Graph:
-    """`query` é o compilador que RESPONDE as perguntas do protocolo enquanto o
-    grafo é montado — normalmente o que já está na máquina. Quem RODA em cada
-    degrau é o artefato daquele degrau, e a diferença é o que faz a escada ser
-    expressável."""
+async def assemble(query: str) -> G.Graph:
+    """`query` is the compiler that ANSWERS the protocol's questions while the
+    graph is assembled — normally the one already on the machine. Whoever RUNS on
+    each rung is that rung's artifact, and the difference is what makes the ladder
+    expressible."""
     g = G.new_graph()
-    raizes = await raizes_do_workspace("pack.json")
-    # ... e as que o `ppack install` materializou, DEPOIS das do workspace: o que
-    # está na árvore ganha de o que veio de fora, que é o que permite trabalhar
-    # numa cópia local de uma dependência sem mexer no lock.
-    for ri in R.raizes_instaladas():
-        raizes.append(ri)
+    roots = await workspace_roots("pack.json")
+    # ... and the ones `ppack install` materialized, AFTER the workspace's: what
+    # is in the tree wins over what came from outside, which is what allows
+    # working on a local copy of a dependency without touching the lock.
+    for ri in R.installed_roots():
+        roots.append(ri)
     c = T.new_ctx(g, BUILD, query)
-    c.pkgroots = raizes
-    # 2.13: as flags que os pacotes com C declaram, lidas uma vez
-    await T.carregar_pacotes(c)
-    stamp = await escada(c)
+    c.pkgroots = roots
+    # 2.13: the flags the packages with C declare, read once
+    await T.load_packages(c)
+    stamp = await ladder(c)
 
-    # tudo o que vem por cima roda com o compilador do PONTO FIXO — o mesmo que
-    # o `verify-all` usa, e pela mesma razão
-    # UM contexto para tudo o que é pscript: o runtime é gerado e compilado uma
-    # vez só, e todos os programas o compartilham. Dois contextos gerariam o
-    # mesmo `.c` em dois lugares — trabalho dobrado por nada.
-    cps = T.derivar(c, path.join(BUILD, "psc"), PLANGC_S2)
-    bins = await pscript_tudo(cps)
+    # everything above runs with the FIXED-POINT compiler — the same one
+    # `verify-all` uses, and for the same reason.
+    # ONE context for everything pscript: the runtime is generated and compiled
+    # once, and every program shares it. Two contexts would generate the same `.c`
+    # in two places — double work for nothing.
+    cps = T.derive(c, path.join(BUILD, "psc"), PLANGC_S2)
+    bins = await all_pscript(cps)
     editor = await pstudio(cps)
-    suite = await suite_pscript(cps, bins["verdict"])
-    spkg = await suite_pacotes(cps, bins["verdict"])
-    sdoc = await suite_doctests(cps, bins["verdict"])
-    await verificacao(cps, PLANGC_S2, bins["piso"], suite, spkg, sdoc, stamp, editor)
+    suite = await pscript_suite(cps, bins["verdict"])
+    spkg = await packages_suite(cps, bins["verdict"])
+    sdoc = await doctest_suite(cps, bins["verdict"])
+    await verification(cps, PLANGC_S2, bins["floor"], suite, spkg, sdoc, stamp, editor)
 
-    # o alvo padrão é o que "está construído" quer dizer: o compilador confere a
-    # si mesmo, e as ferramentas de cima existem. As suítes são um alvo que se
-    # PEDE (`ppack build <carimbo>`), não o padrão — construir não é testar.
+    # the default target is what "is built" means: the compiler checks itself, and
+    # the tools above it exist. The suites are a target you ASK for (`ppack build
+    # <stamp>`), not the default — building is not testing.
     g.default_targets.append(stamp)
     g.default_targets.append(bins["ppack"])
     if len(editor) > 0:

@@ -1,88 +1,89 @@
-"""O VEREDICTO de um caso de teste, como programa.
+"""A test case's VERDICT, as a program.
 
-Um caso de teste não é uma aresta comum, e a diferença é uma só: o STATUS de
-saída dele é DADO, não é veredicto. Um programa que tem de sair com 1 sai com 1,
-e a aresta que o roda não pode chamar isso de falha — enquanto um programa que
-sai com 0 e imprime a coisa errada falhou, e a aresta tem de dizer.
+A test case is not an ordinary edge, and there is one difference: its exit STATUS
+is DATA, not a verdict. A program that has to exit with 1 exits with 1, and the
+edge that runs it cannot call that a failure — while a program that exits with 0
+and prints the wrong thing has failed, and the edge has to say so.
 
-Então o que a aresta roda não é o caso: é isto. Ele roda o caso, junta a saída
-de erro com a de saída (é a mesma decisão do `os.run`, e é assim que o
-`tests/run.sh` sempre comparou), confere o status contra o esperado, confere o
-texto contra o `.expected`, e só então decide. Quem passa deixa um CARIMBO, que
-é o que o grafo data; quem falha imprime as primeiras linhas da diferença e sai
-com status != 0, que é o que o motor entende.
+So what the edge runs is not the case: it is this. It runs the case, merges
+standard error into standard output (the same decision as `os.run`'s, and how
+`tests/run.sh` has always compared), checks the status against the expected one,
+checks the text against the `.expected`, and only then decides. Whoever passes
+leaves a STAMP, which is what the graph dates; whoever fails prints the first
+lines of the difference and exits with a status != 0, which is what the engine
+understands.
 
-    verdict <binario> <esperado> <status-esperado> <cwd> <carimbo>
+    verdict <binary> <expected> <expected-status> <cwd> <stamp>
 
-O `cwd` existe porque um caso pode escrever arquivos, e ele tem de escrevê-los
-no diretório de saída do build e não na raiz do repositório.
+The `cwd` exists because a case may write files, and it has to write them into the
+build's output directory and not into the repository's root.
 """
 import os
 import sys
 import path
 
-const CONTEXTO: int = 12
+const CONTEXT: int = 12
 
 
-private def primeiras_diferencas(esperado: str, veio: str) -> str:
-    """A primeira linha que difere, com o que se esperava e o que veio. Um diff
-    inteiro num relatório de build é ruído; a primeira divergência é quase sempre
-    a única que importa, e as outras vêm dela."""
-    a = esperado.split("\n")
-    b = veio.split("\n")
+private def first_difference(expected: str, got: str) -> str:
+    """The first line that differs, with what was expected and what came out. A
+    whole diff in a build report is noise; the first divergence is almost always
+    the only one that matters, and the others follow from it."""
+    a = expected.split("\n")
+    b = got.split("\n")
     n = len(a) if len(a) < len(b) else len(b)
     i = 0
     while i < n:
         if a[i] != b[i]:
-            return ("linha " + str(i + 1) + ":\n  esperado: " + a[i] + "\n  veio:     " + b[i])
+            return ("line " + str(i + 1) + ":\n  expected: " + a[i] + "\n  got:      " + b[i])
         i += 1
     if len(a) != len(b):
-        return ("o texto tem " + str(len(b)) + " linha(s) e o esperado tem " + str(len(a)))
+        return ("the text has " + str(len(b)) + " line(s) and the expected one has " + str(len(a)))
     return "?"
 
 
 async def main() -> int:
     args = sys.argv[1:]
     if len(args) != 5:
-        print("uso: verdict <binario> <esperado> <status-esperado> <cwd> <carimbo>")
+        print("usage: verdict <binary> <expected> <expected-status> <cwd> <stamp>")
         return 2
-    binario = args[0]
-    esperado = args[1]
-    quer = int(args[2])
+    binary = args[0]
+    expected = args[1]
+    wants = int(args[2])
     cwd = args[3]
-    carimbo = args[4]
+    stamp = args[4]
 
-    # o caminho do binário é relativo à RAIZ; o processo roda no `cwd` do caso,
-    # então ele tem de virar absoluto antes
-    abs_bin = binario if binario.startswith("/") else path.join(os.getcwd(), binario)
-    # cada caso tem o diretório DELE, e ele é criado aqui: um caso que escreve
-    # arquivos não pode escrevê-los na raiz do repositório, e dois casos em
-    # paralelo não podem escrever no mesmo lugar
+    # the binary's path is relative to the ROOT; the process runs in the case's
+    # `cwd`, so it has to become absolute first
+    abs_bin = binary if binary.startswith("/") else path.join(os.getcwd(), binary)
+    # each case has ITS OWN directory, and it is created here: a case that writes
+    # files cannot write them into the repository's root, and two cases in
+    # parallel cannot write into the same place
     if not path.isdir(cwd):
         os.makedirs(cwd)
     r = await os.run([abs_bin], cwd=cwd)
 
-    f = await open(esperado, "r")
-    quer_txt = await f.text()
+    f = await open(expected, "r")
+    wants_txt = await f.text()
     await f.close()
-    veio = r.output()
+    got = r.output()
 
-    problemas: list<str> = []
-    if r.status() != quer:
-        problemas.append("status " + str(r.status()) + ", esperado " + str(quer))
-    if veio != quer_txt:
-        problemas.append(primeiras_diferencas(quer_txt, veio))
+    problems: list<str> = []
+    if r.status() != wants:
+        problems.append("status " + str(r.status()) + ", expected " + str(wants))
+    if got != wants_txt:
+        problems.append(first_difference(wants_txt, got))
 
-    if len(problemas) > 0:
-        print(path.basename(binario) + ": FALHOU")
-        for p in problemas:
+    if len(problems) > 0:
+        print(path.basename(binary) + ": FAILED")
+        for p in problems:
             print("  " + p)
         return 1
 
-    d = path.dirname(carimbo)
+    d = path.dirname(stamp)
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
-    g = await open(carimbo, "w")
+    g = await open(stamp, "w")
     await g.write("ok\n")
     await g.close()
     return 0

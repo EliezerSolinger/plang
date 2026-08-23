@@ -1,119 +1,119 @@
-"""DOCTEST: o exemplo que está na documentação é o exemplo que corre.
+"""DOCTEST: the example in the documentation is the example that runs.
 
-A ideia é a do Python e vale pela mesma razão: um exemplo numa docstring
-envelhece em silêncio. Ele parece certo, ninguém o corre, e um dia alguém copia
-uma linha que já não funciona. Aqui ele vira uma aresta do build como qualquer
-outra — se a saída mudar, o build fica vermelho.
+The idea is Python's and it holds for the same reason: an example in a docstring
+ages in silence. It looks right, nobody runs it, and one day somebody copies a
+line that stopped working. Here it becomes a build edge like any other — if the
+output changes, the build goes red.
 
-A sintaxe é a que toda a gente já conhece — três sinais de maior, a expressão, e
-a saída esperada na linha seguinte. (O exemplo abaixo está com um sinal a menos
-DE PROPÓSITO: este arquivo é ele próprio um módulo de um pacote, e um exemplo de
-verdade aqui viraria um teste a chamar uma função que não existe. É o gerador a
-apanhar-se a si mesmo, que é o melhor sinal de que funciona.)
+The syntax is the one everybody already knows — three greater-than signs, the
+expression, and the expected output on the next line. (The example below has one
+sign fewer ON PURPOSE: this file is itself a module of a package, and a real
+example here would become a test calling a function that does not exist. It is the
+generator catching itself, which is the best sign that it works.)
 
-    \"\"\"Soma dois números.
+    \"\"\"Adds two numbers.
 
-    >> soma(2, 3)
+    >> add(2, 3)
     5
-    >> soma(-1, 1)
+    >> add(-1, 1)
     0
     \"\"\"
 
-Uma linha `>>> expr` é uma EXPRESSÃO a imprimir; as linhas seguintes, até ao
-próximo `>>>` ou até uma linha vazia, são a saída esperada. Não há `...` de
-continuação e não há blocos: um doctest que precisa de um `for` já não é
-documentação, é teste — e testes têm um sítio, que é `test/`.
+A `>>> expr` line is an EXPRESSION to print; the lines that follow, up to the
+next `>>>` or to a blank line, are the expected output. There is no `...`
+continuation and there are no blocks: a doctest that needs a `for` is no longer
+documentation, it is a test — and tests have a home, which is `test/`.
 
-**De onde vêm as docstrings: da resposta 5** (`plangc --api`), e não de um
-segundo leitor de fontes. É a mesma lista canónica que o `ppack doc` mostra e
-que o índice do repositório carrega, o que quer dizer que o doctest de um pacote
-PUBLICADO se pode correr sem ter o fonte à mão.
+**Where the docstrings come from: answer 5** (`plangc --api`), and not a second
+reader of sources. It is the same canonical list `ppack doc` shows and the
+repository's index carries, which means the doctest of a PUBLISHED package can be
+run without having the source at hand.
 
-**Como corre**: os exemplos de um módulo viram UM programa gerado —
-`from <pkg/mod.psc> import ...` com os nomes públicos do módulo, e um `print`
-por exemplo — que se compila e se corre como qualquer outro teste da suíte. A
-comparação é a de sempre: a saída inteira contra o esperado.
+**How it runs**: a module's examples become ONE generated program —
+`from <pkg/mod.psc> import ...` with the module's public names, and one `print`
+per example — which is compiled and run like any other test in the suite. The
+comparison is the usual one: the whole output against the expected text.
 """
 import path
 import lib_api as A
 
-struct Exemplo:
+struct Example:
     expr: str
-    esperado: list<str>
+    expected: list<str>
 
 
-def extrai(doc: str) -> list<Exemplo>:
-    """Os exemplos de uma docstring, na ordem."""
-    out: list<Exemplo> = []
-    for linha in doc.split("\n"):
-        t = linha.strip()
+def extract(doc: str) -> list<Example>:
+    """A docstring's examples, in order."""
+    out: list<Example> = []
+    for line in doc.split("\n"):
+        t = line.strip()
         if t.startswith(">>>"):
-            out.append(Exemplo(t[3:].strip(), []))
+            out.append(Example(t[3:].strip(), []))
         elif len(out) > 0 and len(t) > 0:
-            out[len(out) - 1].esperado.append(t)
-        elif len(t) == 0 and len(out) > 0 and len(out[len(out) - 1].esperado) > 0:
-            # uma linha vazia FECHA a saída esperada: sem isto, o parágrafo que
-            # vem a seguir ao exemplo virava parte dela
-            out.append(Exemplo("", []))
-    limpos: list<Exemplo> = []
+            out[len(out) - 1].expected.append(t)
+        elif len(t) == 0 and len(out) > 0 and len(out[len(out) - 1].expected) > 0:
+            # a blank line CLOSES the expected output: without this, the
+            # paragraph after the example became part of it
+            out.append(Example("", []))
+    clean: list<Example> = []
     for e in out:
         if len(e.expr) > 0:
-            limpos.append(e)
-    return limpos
+            clean.append(e)
+    return clean
 
 
-struct Programa:
-    fonte: str          # o texto do programa gerado
-    esperado: str       # o que ele tem de imprimir
-    quantos: int
+struct Program:
+    source: str         # the text of the generated program
+    expected: str       # what it has to print
+    count: int
 
 
-def gerar(mod: A.Api, importa: str) -> Programa:
-    """O programa de um módulo. `importa` é o que vai no `from ... import`:
-    `<pkg/mod.psc>` para um pacote, ou o nome do módulo ao lado."""
-    nomes: list<str> = []
-    exemplos: list<Exemplo> = []
-    for e in extrai(mod.doc):
-        exemplos.append(e)
-    for s in mod.simbolos:
-        for e2 in extrai(s.doc):
-            exemplos.append(e2)
-        # só os nomes SIMPLES entram no `from ... import`: um método
-        # (`Struct.metodo`) vem com o tipo dele, e um tipo importado traz os
-        # métodos consigo
-        if len(s.nome) > 0 and "." not in s.nome and s.nome not in nomes:
-            nomes.append(s.nome)
-    if len(exemplos) == 0:
-        return Programa("", "", 0)
-    b = "# GERADO por lib_doctest.psc a partir de " + mod.caminho + " — não editar.\n"
-    if len(nomes) > 0:
-        b += "from " + importa + " import " + ", ".join(sorted(nomes)) + "\n"
+def generate(mod: A.Api, imports: str) -> Program:
+    """A module's program. `imports` is what goes in the `from ... import`:
+    `<pkg/mod.psc>` for a package, or the name of the module next door."""
+    names: list<str> = []
+    examples: list<Example> = []
+    for e in extract(mod.doc):
+        examples.append(e)
+    for s in mod.symbols:
+        for e2 in extract(s.doc):
+            examples.append(e2)
+        # only SIMPLE names go into the `from ... import`: a method
+        # (`Struct.method`) comes with its type, and an imported type brings its
+        # methods with it
+        if len(s.name) > 0 and "." not in s.name and s.name not in names:
+            names.append(s.name)
+    if len(examples) == 0:
+        return Program("", "", 0)
+    b = "# GENERATED by lib_doctest.psc from " + mod.path + " — do not edit.\n"
+    if len(names) > 0:
+        b += "from " + imports + " import " + ", ".join(sorted(names)) + "\n"
     b += "\n"
-    esp = ""
-    for e3 in exemplos:
+    exp = ""
+    for e3 in examples:
         b += "print(" + e3.expr + ")\n"
-        for ln in e3.esperado:
-            esp += ln + "\n"
-    return Programa(b, esp, len(exemplos))
+        for ln in e3.expected:
+            exp += ln + "\n"
+    return Program(b, exp, len(examples))
 
 
-def gerar_ph(mod: A.Api, importa: str) -> Programa:
-    """O mesmo, para um módulo em P: ele entra INTEIRO (`import <pkg/mod.ph>`),
-    porque o que dele atravessa a fronteira é decidido pela 45.5 e não por uma
-    lista de nomes — e os nomes ficam visíveis sem qualificador."""
-    exemplos: list<Exemplo> = []
-    for e in extrai(mod.doc):
-        exemplos.append(e)
-    for s in mod.simbolos:
-        for e2 in extrai(s.doc):
-            exemplos.append(e2)
-    if len(exemplos) == 0:
-        return Programa("", "", 0)
-    b = "# GERADO por lib_doctest.psc a partir de " + mod.caminho + " — não editar.\n"
-    b += "import " + importa + "\n\n"
-    esp = ""
-    for e3 in exemplos:
+def generate_ph(mod: A.Api, imports: str) -> Program:
+    """The same, for a module in P: it comes in WHOLE (`import <pkg/mod.ph>`),
+    because what crosses the boundary from it is decided by 45.5 and not by a list
+    of names — and the names stay visible without a qualifier."""
+    examples: list<Example> = []
+    for e in extract(mod.doc):
+        examples.append(e)
+    for s in mod.symbols:
+        for e2 in extract(s.doc):
+            examples.append(e2)
+    if len(examples) == 0:
+        return Program("", "", 0)
+    b = "# GENERATED by lib_doctest.psc from " + mod.path + " — do not edit.\n"
+    b += "import " + imports + "\n\n"
+    exp = ""
+    for e3 in examples:
         b += "print(" + e3.expr + ")\n"
-        for ln in e3.esperado:
-            esp += ln + "\n"
-    return Programa(b, esp, len(exemplos))
+        for ln in e3.expected:
+            exp += ln + "\n"
+    return Program(b, exp, len(examples))

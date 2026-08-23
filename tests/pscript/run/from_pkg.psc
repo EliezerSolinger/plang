@@ -1,16 +1,17 @@
-"""`from <pkg/mod.psc> import x` — a mesma importação, escrita da outra forma.
+"""`from <pkg/mod.psc> import x` — the same import, written the other way.
 
-Faltava, e era uma assimetria sem razão: `import <pkg/mod.psc>` já existia, e um
-pacote cujos nomes só se alcançam por um lado obriga a qualificar tudo. A grafia
-do caminho é a mesma dos outros `<>`; o que muda é o que se liga no fim.
+It was missing, and it was an asymmetry with no reason: `import <pkg/mod.psc>`
+already existed, and a package whose names can only be reached one way forces you
+to qualify everything. The path's spelling is the same as the other `<>` forms;
+what changes is what gets bound at the end.
 """
 
-from <tar/tar.psc> import octal, bytes_de, nome_seguro
-from <tar/tar.psc> import escrever as empacotar
+from <tar/tar.psc> import octal, bytes_of, safe_name
+from <tar/tar.psc> import write as pack
 
 print(octal(493, 8))
-print(len(bytes_de("olá")))
-print(nome_seguro("a/b.txt") == "")
-print(nome_seguro("/etc/passwd") != "")
-b = empacotar([])
+print(len(bytes_of("olá")))
+print(safe_name("a/b.txt") == "")
+print(safe_name("/etc/passwd") != "")
+b = pack([])
 print(len(b))

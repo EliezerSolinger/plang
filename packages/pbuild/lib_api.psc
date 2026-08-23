@@ -1,60 +1,60 @@
-"""A resposta 5 do compilador, lida de volta.
+"""The compiler's answer 5, read back.
 
-`plangc --api <módulo>` responde a interface canónica de um módulo — imports,
-enums, structs, funções, constantes — seguida do HASH dela e das DOCSTRINGS. É
-uma resposta feita para ser lida por máquina, e este arquivo é a máquina.
+`plangc --api <module>` answers a module's canonical interface — imports, enums,
+structs, functions, constants — followed by its HASH and the DOCSTRINGS. It is
+an answer made to be read by a machine, and this file is the machine.
 
-O formato, de propósito trivial:
+The format, deliberately trivial:
 
-    == <caminho>
-    <uma declaração por linha>
-    #hash <16 hexa>
-    #doc <símbolo> <texto, com \\n escapado>
+    == <path>
+    <one declaration per line>
+    #hash <16 hex digits>
+    #doc <symbol> <text, with \\n escaped>
 
-O que se ganha lendo isto em vez de reparsear o fonte: a lista já está
-CANÓNICA (o compilador a normalizou), a docstring já está separada do código, e
-o hash já responde "isto mudou?" sem comparar texto. Nada disto seria de graça
-num segundo leitor da linguagem — e um segundo leitor divergiria, que é o pior
-resultado possível.
+What you gain by reading this instead of reparsing the source: the list is
+already CANONICAL (the compiler normalized it), the docstring is already
+separated from the code, and the hash already answers "did this change?" without
+comparing text. None of that would be free in a second reader of the language —
+and a second reader would diverge, which is the worst possible outcome.
 """
 
-struct Simbolo:
-    linha: str      # a declaração como o compilador a escreve
-    nome: str       # o nome, extraído para poder ser procurado
+struct Symbol:
+    decl: str       # the declaration as the compiler writes it
+    name: str       # the name, pulled out so it can be searched for
     doc: str
 
 struct Api:
-    caminho: str
+    path: str
     hash: str
-    doc: str            # a do módulo
-    simbolos: list<Simbolo>
+    doc: str            # the module's own
+    symbols: list<Symbol>
 
-    def acha(self, nome: str) -> int:
+    def find(self, name: str) -> int:
         i = 0
-        while i < len(self.simbolos):
-            if self.simbolos[i].nome == nome:
+        while i < len(self.symbols):
+            if self.symbols[i].name == name:
                 return i
             i += 1
         return -1
 
-# ---------- o nome de uma declaração ----------
-# `def area(i32, i32) -> i64` -> `area`; `struct Ponto {...}` -> `Ponto`;
-# `enum Forma {...}` -> `Forma`; `const MAX: i32 = 64` -> `MAX`.
-def nome_da(linha: str) -> str:
-    palavras = linha.split(" ")
-    if len(palavras) < 2:
+# ---------- the name of a declaration ----------
+# `def area(i32, i32) -> i64` -> `area`; `struct Point {...}` -> `Point`;
+# `enum Shape {...}` -> `Shape`; `const MAX: i32 = 64` -> `MAX`.
+def name_of(decl: str) -> str:
+    words = decl.split(" ")
+    if len(words) < 2:
         return ""
-    cabeca = palavras[0]
-    if cabeca == "import" or cabeca == "include":
+    head = words[0]
+    if head == "import" or head == "include":
         return ""
-    bruto = palavras[1]
-    for corte in ["(", "{", ":", "<"]:
-        k = bruto.find(corte)
+    raw = words[1]
+    for cut in ["(", "{", ":", "<"]:
+        k = raw.find(cut)
         if k >= 0:
-            bruto = bruto[0:k]
-    return bruto
+            raw = raw[0:k]
+    return raw
 
-private def desescapa(s: str) -> str:
+private def unescape(s: str) -> str:
     out = ""
     i = 0
     while i < len(s):
@@ -71,79 +71,80 @@ private def desescapa(s: str) -> str:
         i += 1
     return out
 
-def limpa(t: str) -> str:
-    """A docstring sem a indentação do CÓDIGO.
+def cleandoc(t: str) -> str:
+    """The docstring without the CODE's indentation.
 
-    Uma docstring é escrita dentro de um corpo, então da segunda linha em diante
-    ela carrega a indentação da função. Mostrá-la como está põe quatro espaços a
-    mais em tudo e a segunda linha parece um bloco de citação. É o `cleandoc` do
-    Python, e a regra dele: a primeira linha perde o espaço da frente, e das
-    outras se tira o recuo COMUM — o menor de todas as não vazias."""
-    linhas = t.split("\n")
-    if len(linhas) == 0:
+    A docstring is written inside a body, so from the second line on it carries
+    the function's indentation. Showing it as-is puts four extra spaces on
+    everything and makes the second line look like a block quote. This is
+    Python's `cleandoc`, and its rule: the first line loses its leading space,
+    and the others lose the COMMON indent — the smallest of all the non-empty
+    ones."""
+    lines = t.split("\n")
+    if len(lines) == 0:
         return t
-    comum = -1
+    common = -1
     i = 1
-    while i < len(linhas):
-        l = linhas[i]
+    while i < len(lines):
+        l = lines[i]
         if len(l.strip()) > 0:
             k = 0
             while k < len(l) and l[k] == " ":
                 k += 1
-            if comum < 0 or k < comum:
-                comum = k
+            if common < 0 or k < common:
+                common = k
         i += 1
-    if comum < 0:
-        comum = 0
-    out = linhas[0].strip()
+    if common < 0:
+        common = 0
+    out = lines[0].strip()
     j = 1
-    while j < len(linhas):
-        l2 = linhas[j]
-        out += "\n" + (l2[comum:] if len(l2) >= comum else l2.strip())
+    while j < len(lines):
+        l2 = lines[j]
+        out += "\n" + (l2[common:] if len(l2) >= common else l2.strip())
         j += 1
     return out.rstrip()
 
-def parse(texto: str) -> list<Api>:
-    """A resposta inteira: um `Api` por módulo, na ordem em que o compilador os
-    escreveu. Uma linha que não se reconhece é IGNORADA em vez de ser erro —
-    o formato pode ganhar linhas novas, e um leitor que estoura com uma linha
-    que não conhece envelhece mal."""
+def parse(text: str) -> list<Api>:
+    """The whole answer: one `Api` per module, in the order the compiler wrote
+    them. A line that is not recognised is IGNORED rather than being an error —
+    the format may gain new lines, and a reader that blows up on a line it does
+    not know ages badly."""
     out: list<Api> = []
-    atual = Api("", "", "", [])
-    tem = False
-    for linha in texto.split("\n"):
-        if len(linha) == 0:
+    cur = Api("", "", "", [])
+    have = False
+    for line in text.split("\n"):
+        if len(line) == 0:
             continue
-        if linha.startswith("== "):
-            if tem:
-                out.append(atual)
-            atual = Api(linha[3:], "", "", [])
-            tem = True
+        if line.startswith("== "):
+            if have:
+                out.append(cur)
+            cur = Api(line[3:], "", "", [])
+            have = True
             continue
-        if not tem:
+        if not have:
             continue
-        if linha.startswith("#hash "):
-            atual.hash = linha[6:]
+        if line.startswith("#hash "):
+            cur.hash = line[6:]
             continue
-        if linha.startswith("#doc "):
-            resto = linha[5:]
-            k = resto.find(" ")
+        if line.startswith("#doc "):
+            rest = line[5:]
+            k = rest.find(" ")
             if k < 0:
                 continue
-            sym = resto[0:k]
-            txt = limpa(desescapa(resto[k + 1:]))
+            sym = rest[0:k]
+            txt = cleandoc(unescape(rest[k + 1:]))
             if sym == ".":
-                atual.doc = txt
+                cur.doc = txt
                 continue
-            i = atual.acha(sym)
+            i = cur.find(sym)
             if i >= 0:
-                atual.simbolos[i].doc = txt
+                cur.symbols[i].doc = txt
             else:
-                # um símbolo com doc e sem declaração visível: um MÉTODO
-                # (`Struct.metodo`), que não tem linha própria na lista
-                atual.simbolos.append(Simbolo("", sym, txt))
+                # a symbol with a doc and no visible declaration: a METHOD
+                # (`Struct.method`), which has no line of its own in the list
+                cur.symbols.append(Symbol("", sym, txt))
             continue
-        atual.simbolos.append(Simbolo(linha, nome_da(linha), ""))
-    if tem:
-        out.append(atual)
+        cur.symbols.append(Symbol(line, name_of(line), ""))
+    if have:
+        out.append(cur)
     return out

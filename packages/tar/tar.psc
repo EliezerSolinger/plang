@@ -1,61 +1,61 @@
-"""`ustar`: o envelope, ler e escrever.
+"""`ustar`: the envelope, reading and writing.
 
-Um pacote viaja como `.tar` e mais nada — sem compressão, sem formato nosso. A
-razão é uma só e vale a diferença de tamanho: `tar tf pacote.tar` funciona sem
-esta ferramenta, e "o que há dentro deste pacote?" é uma pergunta que ninguém
-precisa de nos pedir licença para fazer.
+A package travels as a `.tar` and nothing else — no compression, no format of our
+own. There is one reason and it is worth the size difference: `tar tf package.tar`
+works without this tool, and "what is inside this package?" is a question nobody
+needs to ask our permission to answer.
 
-O que está aqui é o `ustar` do POSIX e nada mais: cabeçalho de 512 bytes com os
-campos em octal, o conteúdo em blocos de 512, dois blocos de zeros no fim. Sem
-links, sem esparso, sem PAX, sem GNU longname.
+What is here is POSIX's `ustar` and nothing more: a 512-byte header with the
+fields in octal, the content in 512-byte blocks, two blocks of zeros at the end.
+No links, no sparse files, no PAX, no GNU longname.
 
-E a LEITURA RECUSA o que não entende, em vez de adivinhar. Isto não é rigor de
-enfeite — é a fronteira por onde entra código de fora, e cada recusa aqui é um
-ataque conhecido que não acontece:
+And READING REFUSES what it does not understand, instead of guessing. This is not
+decorative rigour — it is the boundary where outside code comes in, and every
+refusal here is a known attack that does not happen:
 
-  * um caminho ABSOLUTO (`/etc/cron.d/x`) escreveria fora da árvore;
-  * um `..` em qualquer componente faz o mesmo por outro caminho — é o
-    *zip slip*, e a defesa é recusar o membro, não normalizar o nome;
-  * um tipo que não seja arquivo comum ou diretório: um link simbólico dentro
-    de um tarball é o mesmo ataque com mais passos (extrai-se `a -> /etc`, e o
-    membro seguinte escreve em `a/passwd`);
-  * um checksum que não bate, um `magic` que não é `ustar`, um tamanho que não
-    é octal, um bloco que acaba a meio.
+  * an ABSOLUTE path (`/etc/cron.d/x`) would write outside the tree;
+  * a `..` in any component does the same by another route — that is *zip slip*,
+    and the defence is to refuse the member, not to normalize the name;
+  * a type that is neither a regular file nor a directory: a symbolic link inside
+    a tarball is the same attack with more steps (you extract `a -> /etc`, and the
+    next member writes into `a/passwd`);
+  * a checksum that does not match, a `magic` that is not `ustar`, a size that is
+    not octal, a block that ends halfway.
 
-Cada uma delas para com um `error(...)` que diz o nome do membro. Um extrator
-que "faz o melhor que pode" com um tarball estranho é um extrator que faz
-exatamente o que o tarball estranho quer.
+Each of them stops with an `error(...)` naming the member. An extractor that
+"does the best it can" with a strange tarball is an extractor that does exactly
+what the strange tarball wants.
 """
 
-# ---------- o que entra e sai ----------
+# ---------- what goes in and comes out ----------
 
-struct Membro:
-    nome: str          # relativo, sem `..`, com `/` como separador
-    tipo: str          # "arquivo" ou "dir"
-    modo: int          # as permissões, em binário (0o644, 0o755)
-    mtime: int         # segundos desde a época
-    dados: list<u8>    # vazio num diretório
-
-
-def arquivo(nome: str, dados: list<u8>, modo: int, mtime: int) -> Membro:
-    return Membro(nome, "arquivo", modo, mtime, dados)
+struct Member:
+    name: str          # relative, no `..`, with `/` as the separator
+    kind: str          # "file" or "dir"
+    mode: int          # the permissions, in binary (0o644, 0o755)
+    mtime: int         # seconds since the epoch
+    data: list<u8>     # empty in a directory
 
 
-def diretorio(nome: str, modo: int, mtime: int) -> Membro:
-    vazio: list<u8> = []
-    return Membro(nome if nome.endswith("/") else nome + "/", "dir", modo, mtime, vazio)
+def file(name: str, data: list<u8>, mode: int, mtime: int) -> Member:
+    return Member(name, "file", mode, mtime, data)
 
 
-# ---------- bytes e texto ----------
+def directory(name: str, mode: int, mtime: int) -> Member:
+    empty: list<u8> = []
+    return Member(name if name.endswith("/") else name + "/", "dir", mode, mtime, empty)
 
-def bytes_de(s: str) -> list<u8>:
-    """O texto como UTF-8. Um nome de arquivo pode ter acento, e o que vai para
-    o cabeçalho são BYTES — contar codepoints daria um comprimento que não é o
-    do disco.
 
-    >>> len(bytes_de("abc"))
+# ---------- bytes and text ----------
+
+def bytes_of(s: str) -> list<u8>:
+    """The text as UTF-8. A file name may carry an accent, and what goes into the
+    header is BYTES — counting codepoints would give a length that is not the
+    disk's.
+
+    >>> len(bytes_of("abc"))
     3
-    >>> len(bytes_de("olá"))
+    >>> len(bytes_of("olá"))
     4
     """
     out: list<u8> = []
@@ -78,11 +78,11 @@ def bytes_de(s: str) -> list<u8>:
     return out
 
 
-# ---------- escrever ----------
+# ---------- writing ----------
 
-def octal(v: int, largura: int) -> str:
-    """Um campo numérico do ustar: octal, alinhado à direita com zeros, e o
-    último byte reservado para o NUL. `largura` é o campo inteiro.
+def octal(v: int, width: int) -> str:
+    """A numeric ustar field: octal, right-aligned with zeros, and the last byte
+    reserved for the NUL. `width` is the whole field.
 
     >>> octal(0o644, 8)
     0000644
@@ -92,220 +92,222 @@ def octal(v: int, largura: int) -> str:
     d = ""
     n = v
     if n < 0:
-        raise error("um campo do tar não é negativo: " + str(v), VALUE)
+        raise error("a tar field is not negative: " + str(v), VALUE)
     while n > 0:
         d = str(n % 8) + d
         n = n // 8
     if d == "":
         d = "0"
-    if len(d) > largura - 1:
-        raise error(f"não cabe em {largura - 1} dígitos octais: {v}", VALUE)
-    while len(d) < largura - 1:
+    if len(d) > width - 1:
+        raise error(f"does not fit in {width - 1} octal digits: {v}", VALUE)
+    while len(d) < width - 1:
         d = "0" + d
     return d
 
 
-private def por_bytes(bloco: list<u8>, pos: int, bs: list<u8>, largura: int):
-    if len(bs) > largura:
-        raise error("um campo do cabeçalho não cabe", VALUE)
+private def put_bytes(block: list<u8>, pos: int, bs: list<u8>, width: int):
+    if len(bs) > width:
+        raise error("a header field does not fit", VALUE)
     i = 0
     for b in bs:
-        bloco[pos + i] = b
+        block[pos + i] = b
         i += 1
 
 
-private def por_texto(bloco: list<u8>, pos: int, s: str, largura: int):
-    por_bytes(bloco, pos, bytes_de(s), largura)
+private def put_text(block: list<u8>, pos: int, s: str, width: int):
+    put_bytes(block, pos, bytes_of(s), width)
 
 
-def cabecalho(m: Membro) -> list<u8>:
-    """Os 512 bytes de um membro. O `prefix` do ustar existe e é usado: um nome
-    até 100 bytes vai inteiro em `name`, e mais do que isso parte-se num
-    separador — o que dá 255 e chega para tudo o que um pacote tem."""
-    nome_b = bytes_de(m.nome)
-    prefixo = ""
-    nome = m.nome
-    if len(nome_b) > 100:
-        # parte no ÚLTIMO `/` que deixe as duas metades dentro dos limites
-        corte = -1
-        i = len(nome) - 1
+def header(m: Member) -> list<u8>:
+    """A member's 512 bytes. The ustar `prefix` exists and is used: a name up to
+    100 bytes goes whole into `name`, and more than that is split at a separator —
+    which gives 255 and is enough for anything a package holds."""
+    name_b = bytes_of(m.name)
+    prefix = ""
+    name = m.name
+    if len(name_b) > 100:
+        # split at the LAST `/` that leaves both halves within the limits
+        cut = -1
+        i = len(name) - 1
         while i > 0:
-            if nome[i] == "/" and len(bytes_de(nome[i + 1:len(nome)])) <= 100 and len(bytes_de(nome[0:i])) <= 155:
-                corte = i
+            if name[i] == "/" and len(bytes_of(name[i + 1:len(name)])) <= 100 and len(bytes_of(name[0:i])) <= 155:
+                cut = i
                 break
             i -= 1
-        if corte < 0:
-            raise error("o nome não cabe no ustar (100 + 155 bytes): " + m.nome, VALUE)
-        prefixo = nome[0:corte]
-        nome = nome[corte + 1:len(nome)]
+        if cut < 0:
+            raise error("the name does not fit in ustar (100 + 155 bytes): " + m.name, VALUE)
+        prefix = name[0:cut]
+        name = name[cut + 1:len(name)]
 
     b: list<u8> = []
     for _ in range(512):
         b.append(u8(0))
-    por_texto(b, 0, nome, 100)
-    por_texto(b, 100, octal(m.modo, 8), 7)
-    por_texto(b, 108, octal(0, 8), 7)          # uid: sempre 0, ver a nota abaixo
-    por_texto(b, 116, octal(0, 8), 7)          # gid
-    por_texto(b, 124, octal(len(m.dados), 12), 11)
-    por_texto(b, 136, octal(m.mtime, 12), 11)
-    # o checksum entra depois; enquanto se soma, o campo são OITO ESPAÇOS
+    put_text(b, 0, name, 100)
+    put_text(b, 100, octal(m.mode, 8), 7)
+    put_text(b, 108, octal(0, 8), 7)          # uid: always 0, see the note below
+    put_text(b, 116, octal(0, 8), 7)          # gid
+    put_text(b, 124, octal(len(m.data), 12), 11)
+    put_text(b, 136, octal(m.mtime, 12), 11)
+    # the checksum goes in afterwards; while it is summed, the field is EIGHT
+    # SPACES
     for i in range(8):
         b[148 + i] = u8(32)
-    b[156] = u8(53) if m.tipo == "dir" else u8(48)   # '5' ou '0'
-    por_texto(b, 257, "ustar", 6)
+    b[156] = u8(53) if m.kind == "dir" else u8(48)   # '5' or '0'
+    put_text(b, 257, "ustar", 6)
     b[262] = u8(0)
-    por_texto(b, 263, "00", 2)
-    # dono e grupo: NOMES vazios e ids 0. Um tarball de código-fonte que carrega
-    # o utilizador de quem o fez é um tarball que muda quando muda de máquina —
-    # e o hash dele é o que garante a distribuição. Reprodutível ou verificável:
-    # escolhe-se uma vez, e escolheu-se aqui.
-    por_texto(b, 329, octal(0, 8), 7)
-    por_texto(b, 337, octal(0, 8), 7)
-    if prefixo != "":
-        por_texto(b, 345, prefixo, 155)
-    soma = 0
+    put_text(b, 263, "00", 2)
+    # owner and group: empty NAMES and ids 0. A source-code tarball carrying the
+    # user of whoever made it is a tarball that changes when it changes machine —
+    # and its hash is what guarantees distribution. Reproducible or verifiable:
+    # you choose once, and it was chosen here.
+    put_text(b, 329, octal(0, 8), 7)
+    put_text(b, 337, octal(0, 8), 7)
+    if prefix != "":
+        put_text(b, 345, prefix, 155)
+    sum = 0
     for x in b:
-        soma += int(x)
-    # seis dígitos octais, NUL, espaço — a forma que todo o mundo lê
-    por_texto(b, 148, octal(soma, 7), 6)
+        sum += int(x)
+    # six octal digits, NUL, space — the shape everyone reads
+    put_text(b, 148, octal(sum, 7), 6)
     b[154] = u8(0)
     b[155] = u8(32)
     return b
 
 
-def escrever(membros: list<Membro>) -> list<u8>:
-    """O tarball inteiro em memória. Um pacote de código-fonte cabe, e ter os
-    bytes todos na mão é o que permite hashear e escrever numa passagem só."""
+def write(members: list<Member>) -> list<u8>:
+    """The whole tarball in memory. A source-code package fits, and having all the
+    bytes in hand is what allows hashing and writing in a single pass."""
     out: list<u8> = []
-    for m in membros:
-        if m.nome == "":
-            raise error("um membro sem nome", VALUE)
-        for b in cabecalho(m):
+    for m in members:
+        if m.name == "":
+            raise error("a member with no name", VALUE)
+        for b in header(m):
             out.append(b)
-        for d in m.dados:
+        for d in m.data:
             out.append(d)
-        resto = len(m.dados) % 512
-        if resto != 0:
-            for _ in range(512 - resto):
+        rest = len(m.data) % 512
+        if rest != 0:
+            for _ in range(512 - rest):
                 out.append(u8(0))
-    # a marca de fim: DOIS blocos de zeros
+    # the end marker: TWO blocks of zeros
     for _ in range(1024):
         out.append(u8(0))
     return out
 
 
-# ---------- ler ----------
+# ---------- reading ----------
 
-private def texto_ate_nul(b: list<u8>, pos: int, largura: int) -> str:
-    fatia: list<u8> = []
+private def text_until_nul(b: list<u8>, pos: int, width: int) -> str:
+    slice: list<u8> = []
     i = 0
-    while i < largura and b[pos + i] != u8(0):
-        fatia.append(b[pos + i])
+    while i < width and b[pos + i] != u8(0):
+        slice.append(b[pos + i])
         i += 1
-    return str(fatia)
+    return str(slice)
 
 
-private def le_octal(b: list<u8>, pos: int, largura: int, campo: str) -> int:
+private def read_octal(b: list<u8>, pos: int, width: int, field: str) -> int:
     v = 0
     i = 0
-    visto = False
-    while i < largura:
+    seen = False
+    while i < width:
         c = int(b[pos + i])
         if c == 0 or c == 32:
-            # espaços e NUL delimitam; depois deles não pode vir mais dígito
+            # spaces and NUL delimit; after them no more digits may come
             i += 1
-            while i < largura:
+            while i < width:
                 c2 = int(b[pos + i])
                 if c2 != 0 and c2 != 32:
-                    raise error(f"o campo {campo} não é octal", VALUE)
+                    raise error(f"the {field} field is not octal", VALUE)
                 i += 1
             break
         if c < 48 or c > 55:
-            raise error(f"o campo {campo} não é octal", VALUE)
+            raise error(f"the {field} field is not octal", VALUE)
         v = v * 8 + (c - 48)
-        visto = True
+        seen = True
         i += 1
-    if not visto:
+    if not seen:
         return 0
     return v
 
 
-def nome_seguro(nome: str) -> str:
-    """A recusa que mais importa. Devolve "" quando o nome é bom, e a razão
-    quando não é — para quem chama poder dizer QUAL membro e PORQUÊ.
+def safe_name(name: str) -> str:
+    """The refusal that matters most. Returns "" when the name is good, and the
+    reason when it is not — so the caller can say WHICH member and WHY.
 
-    >>> nome_seguro("pkg/README.md") == ""
+    >>> safe_name("pkg/README.md") == ""
     True
-    >>> len(nome_seguro("/etc/passwd")) > 0
+    >>> len(safe_name("/etc/passwd")) > 0
     True
-    >>> len(nome_seguro("a/../../etc/passwd")) > 0
+    >>> len(safe_name("a/../../etc/passwd")) > 0
     True
     """
-    if nome == "":
-        return "um membro sem nome"
-    if nome.startswith("/"):
-        return "caminho absoluto: " + nome
-    if len(nome) > 1 and nome[1] == ":":
-        return "caminho com unidade: " + nome
-    for parte in nome.split("/"):
-        if parte == "..":
-            return "o caminho sobe para fora do destino: " + nome
-    if "\\" in nome:
-        return "uma barra invertida num nome de membro: " + nome
+    if name == "":
+        return "a member with no name"
+    if name.startswith("/"):
+        return "absolute path: " + name
+    if len(name) > 1 and name[1] == ":":
+        return "path with a drive letter: " + name
+    for part in name.split("/"):
+        if part == "..":
+            return "the path climbs out of the destination: " + name
+    if "\\" in name:
+        return "a backslash in a member name: " + name
     return ""
 
 
-def ler(dados: list<u8>) -> list<Membro>:
-    """Os membros, em ordem. Levanta na primeira coisa que não entende."""
-    out: list<Membro> = []
+def read(data: list<u8>) -> list<Member>:
+    """The members, in order. Raises at the first thing it does not
+    understand."""
+    out: list<Member> = []
     pos = 0
-    n = len(dados)
+    n = len(data)
     while pos + 512 <= n:
-        # um bloco todo zeros é o fim
-        vazio = True
+        # a block of all zeros is the end
+        empty = True
         for i in range(512):
-            if dados[pos + i] != u8(0):
-                vazio = False
+            if data[pos + i] != u8(0):
+                empty = False
                 break
-        if vazio:
+        if empty:
             break
-        # o checksum, com o campo lido como oito espaços
-        declarado = le_octal(dados, pos + 148, 8, "checksum")
-        soma = 0
+        # the checksum, with the field read as eight spaces
+        declared = read_octal(data, pos + 148, 8, "checksum")
+        sum = 0
         for i in range(512):
-            soma += 32 if i >= 148 and i < 156 else int(dados[pos + i])
-        if soma != declarado:
-            raise error(f"checksum errado no bloco {pos // 512}: {soma} != {declarado}", VALUE)
-        magic = texto_ate_nul(dados, pos + 257, 6)
+            sum += 32 if i >= 148 and i < 156 else int(data[pos + i])
+        if sum != declared:
+            raise error(f"wrong checksum in block {pos // 512}: {sum} != {declared}", VALUE)
+        magic = text_until_nul(data, pos + 257, 6)
         if magic != "ustar":
-            raise error("não é ustar: " + magic, VALUE)
-        nome = texto_ate_nul(dados, pos, 100)
-        prefixo = texto_ate_nul(dados, pos + 345, 155)
-        if prefixo != "":
-            nome = prefixo + "/" + nome
-        tipo_b = int(dados[pos + 156])
-        # '\0' é a grafia antiga de "arquivo comum" e vale; tudo o resto não
-        if tipo_b != 48 and tipo_b != 0 and tipo_b != 53:
-            raise error(f"o membro '{nome}' é do tipo '{chr(tipo_b) if tipo_b > 32 else str(tipo_b)}', e aqui só entram arquivo e diretório", VALUE)
-        mau = nome_seguro(nome)
-        if mau != "":
-            raise error(mau, VALUE)
-        modo = le_octal(dados, pos + 100, 8, "modo")
-        tam = le_octal(dados, pos + 124, 12, "tamanho")
-        mtime = le_octal(dados, pos + 136, 12, "mtime")
+            raise error("not ustar: " + magic, VALUE)
+        name = text_until_nul(data, pos, 100)
+        prefix = text_until_nul(data, pos + 345, 155)
+        if prefix != "":
+            name = prefix + "/" + name
+        kind_b = int(data[pos + 156])
+        # '\0' is the old spelling of "regular file" and counts; nothing else does
+        if kind_b != 48 and kind_b != 0 and kind_b != 53:
+            raise error(f"the member '{name}' is of type '{chr(kind_b) if kind_b > 32 else str(kind_b)}', and only files and directories come in here", VALUE)
+        bad = safe_name(name)
+        if bad != "":
+            raise error(bad, VALUE)
+        mode = read_octal(data, pos + 100, 8, "mode")
+        size = read_octal(data, pos + 124, 12, "size")
+        mtime = read_octal(data, pos + 136, 12, "mtime")
         pos += 512
-        corpo: list<u8> = []
-        if tipo_b == 53:
-            if tam != 0:
-                raise error("um diretório com conteúdo: " + nome, VALUE)
+        body: list<u8> = []
+        if kind_b == 53:
+            if size != 0:
+                raise error("a directory with content: " + name, VALUE)
         else:
-            if pos + tam > n:
-                raise error("o tarball acaba a meio de '" + nome + "'", VALUE)
-            for i in range(tam):
-                corpo.append(dados[pos + i])
-            pos += tam
-            resto = tam % 512
-            if resto != 0:
-                pos += 512 - resto
-        out.append(Membro(nome, "dir" if tipo_b == 53 else "arquivo", modo, mtime, corpo))
+            if pos + size > n:
+                raise error("the tarball ends halfway through '" + name + "'", VALUE)
+            for i in range(size):
+                body.append(data[pos + i])
+            pos += size
+            rest = size % 512
+            if rest != 0:
+                pos += 512 - rest
+        out.append(Member(name, "dir" if kind_b == 53 else "file", mode, mtime, body))
     return out

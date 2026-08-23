@@ -1,31 +1,30 @@
-"""O REPOSITÓRIO: um formato, não um serviço.
+"""THE REPOSITORY: a format, not a service.
 
-O desenho inteiro está em `ppack/REPOSITORIO.md`; o que segue é o que este
-arquivo implementa dele.
+The whole design is in `ppack/REPOSITORIO.md`; what follows is what this file
+implements of it.
 
-Um repositório são quatro nomes e um diretório:
+A repository is four names and a directory:
 
     repo/
-      index.json                            o que dá para pesquisar e resolver
-      index.json.sig                        a assinatura do repo (ainda não)
-      pkg/<nome>/<nome>-<versão>.tar        o fonte
-      pkg/<nome>/<nome>-<versão>.tar.sig    a assinatura do autor (ainda não)
+      index.json                            what you can search and resolve
+      index.json.sig                        the repository's signature
+      pkg/<name>/<name>-<version>.tar       the source
+      pkg/<name>/<name>-<version>.tar.sig   the author's signature
 
-Servível por `python3 -m http.server`, por um bucket, por `file://`, por um pen
-drive. É essa a consequência de ser formato: publicar não envia nada, produz —
-e enviar é `rsync`, `scp` ou `git push`.
+Servable by `python3 -m http.server`, by a bucket, by `file://`, by a USB stick.
+That is the consequence of being a format: publishing sends nothing, it produces
+— and sending is `rsync`, `scp` or `git push`.
 
-**NADA É GLOBAL.** O índice guardado, os tarballs e as árvores abertas moram em
-`build/pkg/` do PROJETO. Não há diretório em `~` que isto escreva, e a
-consequência é que copiar o projeto leva tudo junto, dois checkouts não se
-contaminam, e não existe estado escondido numa máquina que explique um "aqui
-funciona". A CHAVE aceite no TOFU é a exceção que confirma: ela mora no
-`pack.lock`, que é COMITADO — a confiança é versionada e passa por revisão de
-código, em vez de por um aviso no terminal de uma pessoa só.
+**NOTHING IS GLOBAL.** The stored index, the tarballs and the unpacked trees live
+in the PROJECT's `build/pkg/`. There is no directory under `~` that this writes
+to, and the consequence is that copying the project takes everything with it, two
+checkouts do not contaminate each other, and there is no hidden state on a machine
+to explain a "works here". The key accepted by TOFU is the exception that
+confirms it: it lives in `pack.lock`, which is COMMITTED — trust is versioned and
+goes through code review, instead of through a warning on one person's terminal.
 
-Enquanto não há Ed25519, tudo corre em **modo unsafe** — explícito, avisado em
-cada operação e gravado no lock. O hash NUNCA é dispensado: ele é a única coisa
-que impede que o que chegou seja outra coisa.
+The hash is NEVER waived: it is the only thing that stops what arrived from being
+something else.
 """
 import json
 import net
@@ -39,201 +38,203 @@ import <url/url.psc> as U
 import <tar/tar.psc> as tar
 import <sha2/sha2.ph>
 
-# tudo o que este projeto guarda de fora vive aqui, e `make clean` leva junto —
-# é seguro por construção, porque o lock tem o hash de tudo
-const ARMAZEM: str = "build/pkg"
+# everything this project keeps from outside lives here, and `make clean` takes
+# it along — safe by construction, because the lock has the hash of everything
+const STORE: str = "build/pkg"
 
-# o que o `user-agent` diz. Um servidor que queira negar-nos serviço tem o
-# direito de saber quem está a bater à porta.
-const VERSAO: str = "0.1.0"
-
-
-def dir_indices() -> str:
-    return path.join(ARMAZEM, ".index")
+# what the `user-agent` says. A server that wants to deny us service has the
+# right to know who is knocking.
+const UA_VERSION: str = "0.1.0"
 
 
-def dir_paks() -> str:
-    return path.join(ARMAZEM, ".pak")
+def indexes_dir() -> str:
+    return path.join(STORE, ".index")
 
 
-# ---------- o endereço ----------
+def tarballs_dir() -> str:
+    return path.join(STORE, ".pak")
+
+
+# ---------- the address ----------
 
 struct Repo:
-    url: str        # normalizado, sempre a terminar em "/"
-    inseguro: bool
-    id: str         # o hash do URL: um nome estável que ninguém escolhe
+    url: str        # normalized, always ending in "/"
+    is_unsafe: bool
+    id: str         # the URL's hash: a stable name nobody chooses
 
-def normaliza(url: str) -> str:
+def normalize(url: str) -> str:
     return url if url.endswith("/") else url + "/"
 
 
-def id_de(url: str) -> str:
-    """O `<repo-id>`: os 16 primeiros dígitos do SHA-256 do URL normalizado.
+def id_of(url: str) -> str:
+    """The `<repo-id>`: the first 16 digits of the normalized URL's SHA-256.
 
-    Não é um apelido porque um apelido é uma escolha, e duas pessoas escolhem
-    `oficial` para repositórios diferentes. O hash não tem essa liberdade."""
-    return sha256_of(tar.bytes_de(normaliza(url)))[0:16]
-
-
-def repo(url: str, inseguro: bool) -> Repo:
-    n = normaliza(url)
-    return Repo(n, inseguro, id_de(n))
+    Not a nickname, because a nickname is a choice, and two people choose
+    `official` for different repositories. A hash does not have that freedom."""
+    return sha256_of(tar.bytes_of(normalize(url)))[0:16]
 
 
-def eh_arquivo(r: Repo) -> bool:
+def repo(url: str, is_unsafe: bool) -> Repo:
+    n = normalize(url)
+    return Repo(n, is_unsafe, id_of(n))
+
+
+def is_file_repo(r: Repo) -> bool:
     return r.url.startswith("file://")
 
 
-def caminho_local(r: Repo) -> str:
-    """O diretório por trás de um `file://`. Levanta para qualquer outro esquema."""
-    if not eh_arquivo(r):
-        raise error("não é um repositório local: " + r.url, VALUE)
+def local_path(r: Repo) -> str:
+    """The directory behind a `file://`. Raises for any other scheme."""
+    if not is_file_repo(r):
+        raise error("not a local repository: " + r.url, VALUE)
     return r.url[7:len(r.url)]
 
 
-async def buscar(r: Repo, rel: str) -> list<u8>:
-    """UM arquivo do repositório, pelo caminho relativo.
+async def fetch(r: Repo, rel: str) -> list<u8>:
+    """ONE file from the repository, by its relative path.
 
-    É o ÚNICO ponto por onde bytes de fora entram, e é de propósito: o resto do
-    gerenciador não sabe se o pacote veio de um diretório, de um pen drive ou da
-    rede. Trocar de transporte não muda nada acima — foi assim que o HTTP entrou,
-    depois de a fase 1 inteira já estar provada sobre `file://`.
+    It is the ONLY point where bytes from outside come in, and that is on
+    purpose: the rest of the package manager does not know whether the package
+    came from a directory, a USB stick or the network. Changing transports
+    changes nothing above — that is how HTTP came in, after the whole of phase 1
+    had already been proven over `file://`.
 
-    O que NÃO está aqui, e é uma decisão: TLS. A confiança vem do CONTEÚDO (o
-    hash, e um dia a assinatura), não da conexão, e é isso que faz um espelho
-    servido por `python3 -m http.server` num pen drive ser tão bom quanto um
-    bucket com certificado."""
-    if eh_arquivo(r):
-        alvo = path.join(caminho_local(r), rel)
-        if not path.isfile(alvo):
-            raise error("não existe no repositório: " + alvo, IO)
-        f = await open(alvo, "r")
+    What is NOT here, and it is a decision: TLS. Trust comes from the CONTENT
+    (the hash, and the signature), not from the connection, and that is what makes
+    a mirror served by `python3 -m http.server` off a USB stick as good as a
+    bucket with a certificate."""
+    if is_file_repo(r):
+        target = path.join(local_path(r), rel)
+        if not path.isfile(target):
+            raise error("does not exist in the repository: " + target, IO)
+        f = await open(target, "r")
         b = await f.read_all()
         await f.close()
         return b
     if r.url.startswith("http://") or r.url.startswith("https://"):
-        return await buscar_http(r, rel)
-    raise error("não sei buscar de " + r.url + " — os esquemas são file://, http:// e https://", VALUE)
+        return await fetch_http(r, rel)
+    raise error("I do not know how to fetch from " + r.url + " — the schemes are file://, http:// and https://", VALUE)
 
 
-async def buscar_http(r: Repo, rel: str) -> list<u8>:
-    """Um GET, e nada de esperto: sem redireção seguida em silêncio, sem cache,
-    sem sessão. O que se pede é um arquivo imutável num caminho conhecido.
+async def fetch_http(r: Repo, rel: str) -> list<u8>:
+    """A GET, and nothing clever: no silently followed redirect, no cache, no
+    session. What is asked for is an immutable file at a known path.
 
-    A redireção NÃO é seguida, e isso é o oposto de uma limitação: um índice que
-    responde 301 está a mandar-nos a outro sítio, e o URL do repositório é o que
-    o projeto declarou e o lock gravou. Quem quer mudar de sítio muda o
-    `pack.json`, onde o diff se vê."""
-    achou = U.parse(r.url + rel, U.blank_url(), False)
-    if achou == None:
-        raise error("URL que não se entende: " + r.url + rel, VALUE)
-    # `!= None` PROVA não-nulo (43.1): daqui para baixo `achou` É um `Url`
-    u = achou
+    The redirect is NOT followed, and that is the opposite of a limitation: an
+    index that answers 301 is sending us somewhere else, and the repository's URL
+    is what the project declared and the lock recorded. Whoever wants to move
+    changes `pack.json`, where the diff can be seen."""
+    parsed = U.parse(r.url + rel, U.blank_url(), False)
+    if parsed == None:
+        raise error("URL I do not understand: " + r.url + rel, VALUE)
+    # `!= None` PROVES non-null (43.1): from here down `parsed` IS a `Url`
+    u = parsed
     if u.scheme == "https":
-        raise error("https ainda não: falta o TLS. A confiança aqui vem do HASH e não da conexão, "
-                    + "então um espelho em http:// serve — mas dizer que se falou https quando não se falou, não.", VALUE)
-    porta = u.port if u.port > 0 else 80
-    alvo = U.serialize_path(u)
-    if len(alvo) == 0:
-        alvo = "/"
+        raise error("https not yet: TLS is missing. Trust here comes from the HASH and not from the connection, "
+                    + "so a mirror over http:// serves — but saying https was spoken when it was not, does not.", VALUE)
+    port = u.port if u.port > 0 else 80
+    target = U.serialize_path(u)
+    if len(target) == 0:
+        target = "/"
     if u.has_query and len(u.query) > 0:
-        alvo = alvo + "?" + u.query
-    hospedeiro = u.host if porta == 80 else u.host + ":" + str(porta)
-    c = await net.connect(u.host, porta)
-    pedido = "GET " + alvo + " HTTP/1.1\r\n"
-    pedido += "host: " + hospedeiro + "\r\n"
-    pedido += "user-agent: ppack/" + VERSAO + "\r\n"
-    pedido += "accept: */*\r\n"
-    pedido += "connection: close\r\n\r\n"
-    await c.write(pedido)
+        target = target + "?" + u.query
+    hostval = u.host if port == 80 else u.host + ":" + str(port)
+    c = await net.connect(u.host, port)
+    req = "GET " + target + " HTTP/1.1\r\n"
+    req += "host: " + hostval + "\r\n"
+    req += "user-agent: ppack/" + UA_VERSION + "\r\n"
+    req += "accept: */*\r\n"
+    req += "connection: close\r\n\r\n"
+    await c.write(req)
     p = H.new_response_parser()
-    pronto = False
-    while not pronto:
-        pedaco = await c.read(65536)
-        if len(pedaco) == 0:
-            # o par fechou: é a única forma de uma resposta sem `content-length`
-            # nem `chunked` estar completa, e o parser sabe dizê-lo
-            pronto = p.finish()
+    done = False
+    while not done:
+        chunk = await c.read(65536)
+        if len(chunk) == 0:
+            # the peer closed: it is the only way a response with neither
+            # `content-length` nor `chunked` can be complete, and the parser knows
+            # how to say so
+            done = p.finish()
             break
-        pronto = p.feed(pedaco)
+        done = p.feed(chunk)
     c.close()
-    if not pronto:
-        raise error("a resposta de " + r.url + rel + " acabou a meio: " + p.problem, IO)
+    if not done:
+        raise error("the response from " + r.url + rel + " ended halfway: " + p.problem, IO)
     resp = p.response()
     if resp.status != 200:
         raise error(f"{r.url}{rel}: HTTP {resp.status} {resp.reason}", IO)
     return resp.body
 
 
-# ---------- o índice ----------
+# ---------- the index ----------
 
-struct Versao:
-    nome: str
-    versao: str
-    arquivo: str          # o caminho do `.tar` dentro do repositório
-    tamanho: int
+struct Release:
+    name: str
+    version: str
+    file: str             # the `.tar`'s path inside the repository
+    size: int
     sha256: str
-    autor: str            # a chave que assinou o tarball ("" enquanto unsafe)
+    author: str           # the key that signed the tarball ("" while unsafe)
     lang: str
-    raiz: str
+    root: str
     deps: list<M.Dep>
     toolchain: str
-    descricao: str
-    api: dict<str, list<str>>    # módulo -> a lista canónica de símbolos
-    api_hash: dict<str, str>     # módulo -> o hash de interface
+    description: str
+    api: dict<str, list<str>>    # module -> the canonical symbol list
+    api_hash: dict<str, str>     # module -> the interface hash
 
 
-struct Indice:
-    formato: int
-    nome: str
-    atualizado: str
-    # nome -> versão -> a entrada
-    pacotes: dict<str, dict<str, Versao>>
+struct Index:
+    format: int
+    name: str
+    updated: str
+    # name -> version -> the entry
+    packages: dict<str, dict<str, Release>>
 
-    def tem(self, nome: str, versao: str) -> bool:
-        if nome not in self.pacotes:
+    def has(self, name: str, version: str) -> bool:
+        if name not in self.packages:
             return False
-        return versao in self.pacotes[nome]
+        return version in self.packages[name]
 
-    def pega(self, nome: str, versao: str) -> Versao:
-        if not self.tem(nome, versao):
-            raise error(f"{nome}@{versao} não está no índice", KEY)
-        return self.pacotes[nome][versao]
+    def get(self, name: str, version: str) -> Release:
+        if not self.has(name, version):
+            raise error(f"{name}@{version} is not in the index", KEY)
+        return self.packages[name][version]
 
-    def nomes(self) -> list<str>:
+    def names(self) -> list<str>:
         out: list<str> = []
-        for n in self.pacotes:
+        for n in self.packages:
             out.append(n)
         return sorted(out)
 
-    def versoes(self, nome: str) -> list<str>:
+    def versions(self, name: str) -> list<str>:
         out: list<str> = []
-        if nome not in self.pacotes:
+        if name not in self.packages:
             return out
-        for v in self.pacotes[nome]:
+        for v in self.packages[name]:
             out.append(v)
         return sorted(out)
 
 
-def vazia() -> Versao:
-    return Versao("", "", "", 0, "", "", "", "", [], "", "", {}, {})
+def empty_release() -> Release:
+    return Release("", "", "", 0, "", "", "", "", [], "", "", {}, {})
 
 
-def indice_novo(nome: str) -> Indice:
-    return Indice(1, nome, "", {})
+def new_index(name: str) -> Index:
+    return Index(1, name, "", {})
 
 
-# ---------- JSON: ler ----------
+# ---------- JSON: reading ----------
 #
-# Lido com `as`, que é CHECADO e levanta (55.2). Não há aqui a leniência de
-# "ignora o que não entendes": este é o NOSSO formato, escrito pelo `publish`, e
-# um índice com a forma errada é um índice corrompido — seguir em frente com ele
-# daria um build que resolve versões a partir de lixo. O que a leitura faz é
-# emprestar a mensagem o nome do arquivo, para o erro dizer QUAL índice.
+# Read with `as`, which is CHECKED and raises (55.2). There is no leniency of
+# "ignore what you do not understand" here: this is OUR format, written by
+# `publish`, and an index with the wrong shape is a corrupted index — going on
+# with it would give a build that resolves versions out of garbage. What the
+# reader does is lend the message the file's name, so the error says WHICH index.
 
-private def txt(d: dict<str, any>, k: str, padrao: str) -> str:
+private def txt(d: dict<str, any>, k: str, dflt: str) -> str:
     if k not in d:
-        return padrao
+        return dflt
     return d[k] as str
 
 
@@ -243,45 +244,45 @@ private def num(d: dict<str, any>, k: str) -> int:
     return d[k] as int
 
 
-def ler_indice(raw: str, de_onde: str) -> Indice:
+def read_index(raw: str, whence: str) -> Index:
     try:
-        return ler_indice_x(raw)
+        return read_index_x(raw)
     catch e:
-        raise error(de_onde + ": " + e.message, VALUE)
+        raise error(whence + ": " + e.message, VALUE)
 
 
-private def ler_indice_x(raw: str) -> Indice:
+private def read_index_x(raw: str) -> Index:
     d = json.parse(raw) as dict<str, any>
-    ix = indice_novo(txt(d, "name", ""))
-    ix.formato = num(d, "format")
-    if ix.formato != 1:
-        raise error(f"formato de índice {ix.formato}, e esta versão lê 1", VALUE)
-    ix.atualizado = txt(d, "updated", "")
+    ix = new_index(txt(d, "name", ""))
+    ix.format = num(d, "format")
+    if ix.format != 1:
+        raise error(f"index format {ix.format}, and this version reads 1", VALUE)
+    ix.updated = txt(d, "updated", "")
     if "packages" not in d:
         return ix
-    pacotes = d["packages"] as dict<str, any>
-    nomes: list<str> = []
-    for n in pacotes:
-        nomes.append(n)
-    for nome in sorted(nomes):
-        porver = pacotes[nome] as dict<str, any>
-        saida: dict<str, Versao> = {}
+    packages = d["packages"] as dict<str, any>
+    names: list<str> = []
+    for n in packages:
+        names.append(n)
+    for name in sorted(names):
+        byver = packages[name] as dict<str, any>
+        out: dict<str, Release> = {}
         vs: list<str> = []
-        for vn in porver:
+        for vn in byver:
             vs.append(vn)
-        for versao in sorted(vs):
-            e = porver[versao] as dict<str, any>
-            u = vazia()
-            u.nome = nome
-            u.versao = versao
-            u.arquivo = txt(e, "file", "")
-            u.tamanho = num(e, "size")
+        for version in sorted(vs):
+            e = byver[version] as dict<str, any>
+            u = empty_release()
+            u.name = name
+            u.version = version
+            u.file = txt(e, "file", "")
+            u.size = num(e, "size")
             u.sha256 = txt(e, "sha256", "")
-            u.autor = txt(e, "author", "")
+            u.author = txt(e, "author", "")
             u.lang = txt(e, "lang", "")
-            u.raiz = txt(e, "root", "")
+            u.root = txt(e, "root", "")
             u.toolchain = txt(e, "toolchain", "")
-            u.descricao = txt(e, "description", "")
+            u.description = txt(e, "description", "")
             if "deps" in e:
                 dd = e["deps"] as dict<str, any>
                 dns: list<str> = []
@@ -297,21 +298,21 @@ private def ler_indice_x(raw: str) -> Indice:
                 for mod in sorted(mods):
                     mm = aa[mod] as dict<str, any>
                     u.api_hash[mod] = txt(mm, "hash", "")
-                    simb: list<str> = []
+                    syms: list<str> = []
                     if "symbols" in mm:
                         for sv in mm["symbols"] as list<any>:
-                            simb.append(sv as str)
-                    u.api[mod] = simb
-            saida[versao] = u
-        ix.pacotes[nome] = saida
+                            syms.append(sv as str)
+                    u.api[mod] = syms
+            out[version] = u
+        ix.packages[name] = out
     return ix
 
 
-# ---------- JSON: escrever ----------
+# ---------- JSON: writing ----------
 #
-# À mão, e de propósito: a ORDEM é o que faz dois `publish` do mesmo conteúdo
-# darem o mesmo arquivo, e um `dict` despejado sem ordem daria um diff enorme a
-# cada publicação. Tudo aqui sai ordenado por chave.
+# By hand, and on purpose: the ORDER is what makes two `publish` runs over the
+# same content give the same file, and a `dict` dumped without order would give a
+# huge diff on every publication. Everything here comes out sorted by key.
 
 private def esc(s: str) -> str:
     out = "\""
@@ -332,37 +333,37 @@ private def esc(s: str) -> str:
     return out + "\""
 
 
-def escrever_indice(ix: Indice) -> str:
+def write_index(ix: Index) -> str:
     b = "{\n"
     b += "  \"format\": 1,\n"
-    b += "  \"name\": " + esc(ix.nome) + ",\n"
-    b += "  \"updated\": " + esc(ix.atualizado) + ",\n"
+    b += "  \"name\": " + esc(ix.name) + ",\n"
+    b += "  \"updated\": " + esc(ix.updated) + ",\n"
     b += "  \"packages\": {"
-    primeiro = True
-    for nome in ix.nomes():
-        b += "" if primeiro else ","
-        primeiro = False
-        b += "\n    " + esc(nome) + ": {"
+    first = True
+    for name in ix.names():
+        b += "" if first else ","
+        first = False
+        b += "\n    " + esc(name) + ": {"
         pv = True
-        for versao in ix.versoes(nome):
-            u = ix.pega(nome, versao)
+        for version in ix.versions(name):
+            u = ix.get(name, version)
             b += "" if pv else ","
             pv = False
-            b += "\n      " + esc(versao) + ": {\n"
-            b += "        \"file\": " + esc(u.arquivo) + ",\n"
-            b += "        \"size\": " + str(u.tamanho) + ",\n"
+            b += "\n      " + esc(version) + ": {\n"
+            b += "        \"file\": " + esc(u.file) + ",\n"
+            b += "        \"size\": " + str(u.size) + ",\n"
             b += "        \"sha256\": " + esc(u.sha256) + ",\n"
-            b += "        \"author\": " + esc(u.autor) + ",\n"
+            b += "        \"author\": " + esc(u.author) + ",\n"
             b += "        \"lang\": " + esc(u.lang) + ",\n"
-            b += "        \"root\": " + esc(u.raiz) + ",\n"
+            b += "        \"root\": " + esc(u.root) + ",\n"
             b += "        \"toolchain\": " + esc(u.toolchain) + ",\n"
-            b += "        \"description\": " + esc(u.descricao) + ",\n"
+            b += "        \"description\": " + esc(u.description) + ",\n"
             b += "        \"deps\": {"
             pd = True
             for d in u.deps:
                 b += "" if pd else ", "
                 pd = False
-                b += esc(d.nome) + ": " + esc(d.faixa)
+                b += esc(d.name) + ": " + esc(d.req)
             b += "},\n"
             b += "        \"api\": {"
             pa = True
@@ -385,153 +386,155 @@ def escrever_indice(ix: Indice) -> str:
             b += "\n        }" if not pa else "}"
             b += "\n      }"
         b += "\n    }"
-    b += "\n  }" if not primeiro else "}"
+    b += "\n  }" if not first else "}"
     b += "\n}\n"
     return b
 
 
-# ---------- empacotar ----------
+# ---------- packing ----------
 #
-# O que entra no `.tar` é A ÁRVORE INTEIRA menos uma lista FIXA — decidida pelo
-# `ppack` e não pelo pacote. Um manifesto com regras de empacotamento seria uma
-# segunda verdade sobre o que o pacote é, e a primeira (o grafo de imports) já
-# existe. O que a lista tira é o que nunca é fonte: o que o build produziu, o que
-# o controlo de versões guarda, e o lixo de editor.
+# What goes into the `.tar` is THE WHOLE TREE minus a FIXED list — decided by
+# `ppack` and not by the package. A manifest with packaging rules would be a
+# second truth about what the package is, and the first one (the import graph)
+# already exists. What the list takes out is what is never source: what the build
+# produced, what version control keeps, and editor litter.
 
-const DIRS_FORA: list<str> = ["build", ".git", ".hg", ".svn", ".verify",
+const SKIP_DIRS: list<str> = ["build", ".git", ".hg", ".svn", ".verify",
                               "__pycache__", "node_modules", ".idea", ".vscode"]
-const SUFIXOS_FORA: list<str> = [".o", ".a", ".so", ".dylib", ".dll", ".exe",
-                                 ".tar", ".sig", ".orig", ".rej", ".swp", "~"]
-const NOMES_FORA: list<str> = [".DS_Store", "pack.lock", "core"]
+const SKIP_SUFFIXES: list<str> = [".o", ".a", ".so", ".dylib", ".dll", ".exe",
+                                  ".tar", ".sig", ".orig", ".rej", ".swp", "~"]
+const SKIP_NAMES: list<str> = [".DS_Store", "pack.lock", "core"]
 
 
-def fora(nome: str, eh_dir: bool) -> bool:
-    if eh_dir:
-        return nome in DIRS_FORA
-    if nome in NOMES_FORA:
+def skipped(name: str, is_dir: bool) -> bool:
+    if is_dir:
+        return name in SKIP_DIRS
+    if name in SKIP_NAMES:
         return True
-    for s in SUFIXOS_FORA:
-        if nome.endswith(s):
+    for s in SKIP_SUFFIXES:
+        if name.endswith(s):
             return True
     return False
 
 
-private async def andar(raiz: str, rel: str, saida: list<str>):
-    """Os arquivos da árvore, em ordem. A ordem é o que faz dois `publish` do
-    mesmo conteúdo darem o MESMO tarball — e o tarball é a identidade."""
-    aqui = raiz if rel == "" else path.join(raiz, rel)
-    for nome in sorted(os.listdir(aqui)):
-        cheio = path.join(aqui, nome)
-        eh_dir = path.isdir(cheio)
-        if fora(nome, eh_dir):
+private async def walk(root: str, rel: str, out: list<str>):
+    """The tree's files, in order. The order is what makes two `publish` runs
+    over the same content give the SAME tarball — and the tarball is the
+    identity."""
+    here = root if rel == "" else path.join(root, rel)
+    for name in sorted(os.listdir(here)):
+        full = path.join(here, name)
+        is_dir = path.isdir(full)
+        if skipped(name, is_dir):
             continue
-        r2 = nome if rel == "" else rel + "/" + nome
-        if eh_dir:
-            await andar(raiz, r2, saida)
+        r2 = name if rel == "" else rel + "/" + name
+        if is_dir:
+            await walk(root, r2, out)
         else:
-            saida.append(r2)
+            out.append(r2)
 
 
-async def empacotar(dir: str, prefixo: str) -> list<u8>:
-    """A árvore de um pacote como `.tar`, dentro de um diretório `prefixo/`.
+async def pack(dir: str, prefix: str) -> list<u8>:
+    """A package's tree as a `.tar`, inside a `prefix/` directory.
 
-    REPRODUTÍVEL, e isso não é elegância: o hash do tarball É a identidade do
-    pacote no índice e no lock, então dois empacotamentos do mesmo fonte têm de
-    dar o mesmo hash. Por isso a data é ZERO e o modo é fixo — a data de
-    modificação de um arquivo no disco de quem publica não é conteúdo, e deixá-la
-    entrar faria a mesma versão ter dois hashes conforme a máquina.
+    REPRODUCIBLE, and that is not elegance: the tarball's hash IS the package's
+    identity in the index and in the lock, so two packings of the same source have
+    to give the same hash. That is why the date is ZERO and the mode is fixed —
+    the modification date of a file on the publisher's disk is not content, and
+    letting it in would make the same version have two hashes depending on the
+    machine.
 
-    O preço é conhecido e aceite: o bit de execução não sobrevive. Um pacote de
-    CÓDIGO-FONTE não precisa dele, e quem precisar de um script chama `sh x.sh`.
+    The price is known and accepted: the execute bit does not survive. A package
+    of SOURCE CODE does not need it, and whoever needs a script calls `sh x.sh`.
     """
-    arquivos: list<str> = []
-    await andar(dir, "", arquivos)
-    if len(arquivos) == 0:
-        raise error("não há nada para empacotar em " + dir, VALUE)
-    membros: list<tar.Membro> = [tar.diretorio(prefixo, 0o755, 0)]
-    vistos: dict<str, int> = {}
-    for rel in arquivos:
-        # os diretórios intermédios entram antes do primeiro arquivo que os
-        # habita: um `tar` que extrai sem eles depende do comportamento do
-        # extrator, e este formato não depende de bondade alheia
-        partes = rel.split("/")
-        acc = prefixo
+    files: list<str> = []
+    await walk(dir, "", files)
+    if len(files) == 0:
+        raise error("there is nothing to pack in " + dir, VALUE)
+    members: list<tar.Member> = [tar.directory(prefix, 0o755, 0)]
+    seen: dict<str, int> = {}
+    for rel in files:
+        # the intermediate directories go in before the first file that lives in
+        # them: a `tar` that extracts without them depends on the extractor's
+        # behaviour, and this format does not depend on other people's kindness
+        parts = rel.split("/")
+        acc = prefix
         i = 0
-        while i < len(partes) - 1:
-            acc = acc + "/" + partes[i]
-            if acc not in vistos:
-                vistos[acc] = 1
-                membros.append(tar.diretorio(acc, 0o755, 0))
+        while i < len(parts) - 1:
+            acc = acc + "/" + parts[i]
+            if acc not in seen:
+                seen[acc] = 1
+                members.append(tar.directory(acc, 0o755, 0))
             i += 1
         f = await open(path.join(dir, rel), "r")
-        dados = await f.read_all()
+        data = await f.read_all()
         await f.close()
-        membros.append(tar.arquivo(prefixo + "/" + rel, dados, 0o644, 0))
-    return tar.escrever(membros)
+        members.append(tar.file(prefix + "/" + rel, data, 0o644, 0))
+    return tar.write(members)
 
 
-def hash_de(b: list<u8>) -> str:
+def hash_of(b: list<u8>) -> str:
     return sha256_of(b)
 
 
-# ---------- guardar e ler o que veio ----------
+# ---------- storing and reading what arrived ----------
 
-async def escrever_bytes(alvo: str, b: list<u8>):
-    d = path.dirname(alvo)
+async def write_bytes(target: str, b: list<u8>):
+    d = path.dirname(target)
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
-    f = await open(alvo, "w")
+    f = await open(target, "w")
     await f.write(b)
     await f.close()
 
 
-async def ler_bytes(alvo: str) -> list<u8>:
-    f = await open(alvo, "r")
+async def read_bytes(target: str) -> list<u8>:
+    f = await open(target, "r")
     b = await f.read_all()
     await f.close()
     return b
 
 
-async def extrair(b: list<u8>, destino: str) -> int:
-    """Abre um tarball em `destino`. Devolve quantos arquivos saíram.
+async def extract(b: list<u8>, dest: str) -> int:
+    """Unpacks a tarball into `dest`. Returns how many files came out.
 
-    O leitor já recusou caminho absoluto, `..` e o que não é arquivo nem
-    diretório — aqui é só escrever. A recusa acontece ANTES de qualquer byte
-    tocar o disco, que é a ordem que importa: um extrator que valida enquanto
-    escreve já escreveu."""
-    membros = tar.ler(b)
+    The reader has already refused absolute paths, `..`, and anything that is
+    neither a file nor a directory — here it is only writing. The refusal happens
+    BEFORE any byte touches the disk, which is the order that matters: an
+    extractor that validates while it writes has already written."""
+    members = tar.read(b)
     n = 0
-    for m in membros:
-        alvo = path.join(destino, m.nome)
-        if m.tipo == "dir":
-            if not path.isdir(alvo):
-                os.makedirs(alvo)
+    for m in members:
+        target = path.join(dest, m.name)
+        if m.kind == "dir":
+            if not path.isdir(target):
+                os.makedirs(target)
             continue
-        await escrever_bytes(alvo, m.dados)
+        await write_bytes(target, m.data)
         n += 1
     return n
 
 
-def bytes_de_texto(s: str) -> list<u8>:
-    return tar.bytes_de(s)
+def bytes_of_text(s: str) -> list<u8>:
+    return tar.bytes_of(s)
 
 
-# ---------- a data ----------
+# ---------- the date ----------
 #
-# O `time` da linguagem dá segundos desde a época e mais nada, e o índice quer
-# uma data que uma pessoa leia. A conversão é o algoritmo civil-from-days do
-# Hinnant, que é aritmética pura: sem fuso, sem tabela, sem biblioteca — e
-# sempre em UTC, porque uma data com fuso local num arquivo que viaja é uma data
-# que mente para quem a lê do outro lado.
+# The language's `time` gives seconds since the epoch and nothing else, and the
+# index wants a date a person can read. The conversion is Hinnant's
+# civil-from-days algorithm, which is pure arithmetic: no timezone, no table, no
+# library — and always in UTC, because a date with a local timezone in a file
+# that travels is a date that lies to whoever reads it on the other side.
 
-private def dois(n: int) -> str:
+private def two(n: int) -> str:
     return ("0" + str(n)) if n < 10 else str(n)
 
 
 def iso_utc(epoch: int) -> str:
-    dias = epoch // 86400
-    seg = epoch - dias * 86400
-    z = dias + 719468
+    days = epoch // 86400
+    secs = epoch - days * 86400
+    z = days + 719468
     era = (z if z >= 0 else z - 146096) // 146097
     doe = z - era * 146097
     yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
@@ -539,96 +542,98 @@ def iso_utc(epoch: int) -> str:
     doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
     mp = (5 * doy + 2) // 153
     d = doy - (153 * mp + 2) // 5 + 1
-    mes = mp + 3 if mp < 10 else mp - 9
-    ano = y + 1 if mes <= 2 else y
-    return f"{ano}-{dois(mes)}-{dois(d)}T{dois(seg // 3600)}:{dois((seg // 60) % 60)}:{dois(seg % 60)}Z"
+    month = mp + 3 if mp < 10 else mp - 9
+    year = y + 1 if month <= 2 else y
+    return f"{year}-{two(month)}-{two(d)}T{two(secs // 3600)}:{two((secs // 60) % 60)}:{two(secs % 60)}Z"
 
 
-def agora_iso() -> str:
+def now_iso() -> str:
     return iso_utc(int(time.time()))
 
 
-def dir_do_pacote(nome: str, versao: str, sha: str) -> str:
-    """`build/pkg/<nome>-<versão>-<hash>/` — e é ISTO que o `--pkg-path` aponta.
+def package_dir(name: str, version: str, sha: str) -> str:
+    """`build/pkg/<name>-<version>-<hash>/` — and it is THIS that `--pkg-path`
+    points at.
 
-    O hash no nome é o que faz "a mesma versão com conteúdo diferente" ser
-    impossível de confundir, que é o furo apontado em toda análise de
-    `requirements.txt`. Dentro dele fica `<nome>/`, porque uma raiz de pacote é
-    um diretório cujos filhos são nomes de pacote."""
-    return path.join(ARMAZEM, nome + "-" + versao + "-" + sha[0:12])
+    The hash in the name is what makes "the same version with different content"
+    impossible to confuse, which is the hole every analysis of `requirements.txt`
+    points out. Inside it goes `<name>/`, because a package root is a directory
+    whose children are package names."""
+    return path.join(STORE, name + "-" + version + "-" + sha[0:12])
 
 
-async def extrair_pacote(b: list<u8>, destino: str, nome: str) -> int:
-    """Abre o tarball em `<destino>/<nome>/`, tirando o prefixo com que ele foi
-    empacotado (`<nome>-<versão>/`).
+async def extract_package(b: list<u8>, dest: str, name: str) -> int:
+    """Unpacks the tarball into `<dest>/<name>/`, stripping the prefix it was
+    packed with (`<name>-<version>/`).
 
-    A troca do prefixo é o que faz o diretório servir de raiz de pacote sem
-    ninguém ter de saber a versão: `import <sha2/sha2.ph>` procura `sha2/` e é
-    isso que está lá."""
-    membros = tar.ler(b)
+    Swapping the prefix is what lets the directory serve as a package root
+    without anybody having to know the version: `import <sha2/sha2.ph>` looks for
+    `sha2/` and that is what is there."""
+    members = tar.read(b)
     n = 0
-    for m in membros:
-        partes = m.nome.split("/")
-        if len(partes) < 2:
-            continue        # o diretório de topo: quem o substitui é `nome`
-        resto = "/".join(partes[1:len(partes)])
-        alvo = path.join(destino, nome, resto)
-        if m.tipo == "dir":
-            if not path.isdir(alvo):
-                os.makedirs(alvo)
+    for m in members:
+        parts = m.name.split("/")
+        if len(parts) < 2:
+            continue        # the top-level directory: `name` replaces it
+        rest = "/".join(parts[1:len(parts)])
+        target = path.join(dest, name, rest)
+        if m.kind == "dir":
+            if not path.isdir(target):
+                os.makedirs(target)
             continue
-        await escrever_bytes(alvo, m.dados)
+        await write_bytes(target, m.data)
         n += 1
     return n
 
 
-def raizes_instaladas() -> list<str>:
-    """As raízes de pacote que o `install` materializou. Entram no `--pkg-path`
-    ao lado das do workspace — e depois delas, porque o que está na árvore ganha
-    de o que veio de fora."""
+def installed_roots() -> list<str>:
+    """The package roots `install` materialized. They go into `--pkg-path`
+    alongside the workspace's — and after them, because what is in the tree wins
+    over what came from outside."""
     out: list<str> = []
-    if not path.isdir(ARMAZEM):
+    if not path.isdir(STORE):
         return out
-    for nome in sorted(os.listdir(ARMAZEM)):
-        if nome.startswith("."):
+    for name in sorted(os.listdir(STORE)):
+        if name.startswith("."):
             continue
-        d = path.join(ARMAZEM, nome)
+        d = path.join(STORE, name)
         if path.isdir(d):
             out.append(d)
     return out
 
 
-# ---------- as chaves e as duas assinaturas ----------
+# ---------- the keys and the two signatures ----------
 #
-# São DUAS, com donos diferentes e por razões diferentes (DESIGN 2.12):
+# There are TWO, with different owners and for different reasons (DESIGN 2.12):
 #
-#   * o ÍNDICE é assinado pelo REPOSITÓRIO, e é o que impede alguém no meio de
-#     responder com uma lista velha — aquela onde a versão com a falha ainda é a
-#     mais recente. Sem isto, o hash de cada pacote continua a valer e mesmo
-#     assim instala-se a versão errada, de boa fé;
-#   * cada VERSÃO é assinada pelo AUTOR, e é o que impede o próprio repositório
-#     de servir um tarball que o autor não fez.
+#   * the INDEX is signed by the REPOSITORY, and it is what stops somebody in the
+#     middle from answering with an old list — the one where the version with the
+#     flaw is still the most recent. Without this, each package's hash still holds
+#     and you still install the wrong version, in good faith;
+#   * each VERSION is signed by the AUTHOR, and it is what stops the repository
+#     itself from serving a tarball the author did not make.
 #
-# A chave PRIVADA é uma semente de 32 bytes em hexadecimal, num arquivo e mais
-# nada. Não vai para `build/` — não é derivável de nada e `make clean` levá-la-ia
-# —, e não vai para o repositório: é a única coisa aqui que não se comita.
+# The PRIVATE key is a 32-byte seed in hexadecimal, in a file and nothing else. It
+# does not go to `build/` — it is not derivable from anything and `make clean`
+# would take it — and it does not go to the repository: it is the one thing here
+# that is not committed.
 
-async def ler_semente(caminho: str) -> list<u8>:
-    """A chave privada de um arquivo. Aceita o hexadecimal com espaços e quebras
-    de linha à volta, porque um arquivo de chave costuma ser copiado à mão."""
-    if not path.isfile(caminho):
-        raise error("não achei a chave em " + caminho, IO)
-    f = await open(caminho, "r")
+async def read_seed(file: str) -> list<u8>:
+    """The private key from a file. It accepts the hexadecimal with spaces and
+    newlines around it, because a key file tends to be copied by hand."""
+    if not path.isfile(file):
+        raise error("I did not find the key in " + file, IO)
+    f = await open(file, "r")
     t = (await f.text()).strip()
     await f.close()
     if len(t) != 64:
-        raise error(caminho + f": uma chave privada são 64 dígitos hexadecimais (32 bytes), e este tem {len(t)}", VALUE)
+        raise error(file + f": a private key is 64 hexadecimal digits (32 bytes), and this one has {len(t)}", VALUE)
     b: list<u8> = []
     i = 0
     while i < 64:
         v = dehex(t[i]) * 16 + dehex(t[i + 1])
         if v < 0:
-            raise error(caminho + ": isto não é hexadecimal", VALUE)
+            raise error(file + ": this is not hexadecimal", VALUE)
         b.append(u8(v))
         i += 2
     return b
@@ -645,62 +650,62 @@ private def dehex(c: str) -> int:
     return -1000
 
 
-async def semente_nova() -> list<u8>:
-    """Trinta e dois bytes do `/dev/urandom`, e de mais lado nenhum.
+async def new_seed() -> list<u8>:
+    """Thirty-two bytes from `/dev/urandom`, and from nowhere else.
 
-    O `random` da linguagem é um gerador para simulação: rápido, reprodutível e
-    completamente previsível para quem veja duas saídas. Uma chave privada tirada
-    dele é uma chave que se adivinha. Se não houver `/dev/urandom`, isto FALHA —
-    inventar uma alternativa seria a pior coisa que este arquivo podia fazer."""
+    The language's `random` is a generator for simulation: fast, reproducible and
+    completely predictable to anyone who sees two outputs. A private key drawn
+    from it is a key you can guess. If there is no `/dev/urandom`, this FAILS —
+    inventing an alternative would be the worst thing this file could do."""
     f = await open("/dev/urandom", "r")
     b = await f.read(32)
     await f.close()
     if len(b) != 32:
-        raise error("/dev/urandom deu " + str(len(b)) + " bytes em vez de 32", IO)
+        raise error("/dev/urandom gave " + str(len(b)) + " bytes instead of 32", IO)
     return b
 
 
-def chave_publica(semente: list<u8>) -> str:
-    return ed25519_pub_hex(semente)
+def public_key(seed: list<u8>) -> str:
+    return ed25519_pub_hex(seed)
 
 
-def assinar(semente: list<u8>, dados: list<u8>) -> str:
-    return ed25519_sign_hex(semente, dados)
+def sign(seed: list<u8>, data: list<u8>) -> str:
+    return ed25519_sign_hex(seed, data)
 
 
-def conferir(pub_hex: str, dados: list<u8>, sig_hex: str) -> bool:
-    """Do ponto de vista de quem confere, um arquivo estragado, uma assinatura
-    que não é hexadecimal e uma assinatura errada são a MESMA resposta."""
+def verify_sig(pub_hex: str, data: list<u8>, sig_hex: str) -> bool:
+    """From the verifier's point of view, a damaged file, a signature that is not
+    hexadecimal and a wrong signature are the SAME answer."""
     if len(pub_hex) != 64 or len(sig_hex) != 128:
         return False
-    return ed25519_verify_hex(pub_hex, dados, sig_hex)
+    return ed25519_verify_hex(pub_hex, data, sig_hex)
 
 
-async def assinatura_de(r: Repo, rel: str) -> str:
-    """A assinatura que acompanha um arquivo do repositório, ou "" quando não há.
+async def signature_of(r: Repo, rel: str) -> str:
+    """The signature that accompanies a file from the repository, or "" when
+    there is none.
 
-    A ausência NÃO é erro aqui: quem decide o que fazer com ela é quem chamou,
-    porque a resposta depende do modo — em modo seguro é recusa, em modo unsafe
-    é um aviso."""
+    Its absence is NOT an error here: whoever called decides what to do with it,
+    because the answer depends on the mode — in safe mode it is a refusal, in
+    unsafe mode a warning."""
     try:
-        b = await buscar(r, rel + ".sig")
+        b = await fetch(r, rel + ".sig")
         return str(b).strip()
     catch e:
         return ""
 
 
-def indice_chaves(ix: Indice) -> list<str>:
-    """As chaves de autor que o índice declara, sem repetir.
+def index_keys(ix: Index) -> list<str>:
+    """The author keys the index declares, without repetition.
 
-    O TOFU precisa delas por uma razão pequena e importante: aceitar uma chave
-    na primeira vez não é aceitar QUALQUER coisa. A assinatura do índice tem de
-    bater com alguma chave que o próprio índice nomeia — senão o que chegou nem
-    sequer é internamente coerente, e isso não é "chave desconhecida", é
-    assinatura errada."""
+    TOFU needs them for a small and important reason: accepting a key the first
+    time is not accepting ANYTHING. The index's signature has to match some key
+    the index itself names — otherwise what arrived is not even internally
+    coherent, and that is not "an unknown key", it is a wrong signature."""
     out: list<str> = []
-    for nome in ix.nomes():
-        for v in ix.versoes(nome):
-            a = ix.pega(nome, v).autor
+    for name in ix.names():
+        for v in ix.versions(name):
+            a = ix.get(name, v).author
             if len(a) == 64 and a not in out:
                 out.append(a)
     return out

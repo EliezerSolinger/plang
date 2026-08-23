@@ -1,16 +1,17 @@
-"""Os ALVOS: o que se escreve num arquivo de build, e o que vira aresta.
+"""TARGETS: what you write in a build file, and what becomes an edge.
 
-O motor conhece uma coisa só — rodar aresta. Tudo que é *conhecimento de
-ferramenta* mora aqui, e essa fronteira é deliberada: é exatamente onde o muon
-acumulou 1 679 linhas de catálogo de toolchain e onde o CMake se perdeu. Aqui o
-catálogo tem duas entradas (`plangc` e `cc`), e uma delas é nossa.
+The engine knows one thing only — run an edge. Everything that is *tool
+knowledge* lives here, and that boundary is deliberate: it is exactly where muon
+accumulated 1,679 lines of toolchain catalogue and where CMake got lost. Here the
+catalogue has two entries (`plangc` and `cc`), and one of them is ours.
 
-A peça central é o `Ctx`: ele carrega o grafo em construção, para onde vão os
-artefatos, e QUAL COMPILADOR usar — e esse último ponto é o que faz a escada de
-bootstrap ser expressável. Quando o compilador é um arquivo que outra aresta
-produziu, ele entra como ENTRADA das arestas que o usam, e o grafo passa a saber
-que refazer o compilador refaz tudo que ele gerou. É a diferença entre um build
-que sabe o que faz e um script que roda comandos na ordem certa por sorte.
+The central piece is the `Ctx`: it carries the graph under construction, where
+the artifacts go, and WHICH COMPILER to use — and that last point is what makes
+the bootstrap ladder expressible. When the compiler is a file another edge
+produced, it enters as an INPUT of the edges that use it, and the graph comes to
+know that rebuilding the compiler rebuilds everything it generated. It is the
+difference between a build that knows what it is doing and a script that runs
+commands in the right order by luck.
 """
 import os
 import path
@@ -18,12 +19,12 @@ import lib_graph as G
 import lib_manifest as MF
 
 struct Target:
-    """O que muda entre `linux-amd64`, `linux-amd64-musl` e `macos-arm64`. O nome
-    é NOSSO e curto; a tradução para o mundo (o `-t` do QBE, o triplo do `cc`)
-    mora aqui, nesta camada, e não no motor.
+    """What changes between `linux-amd64`, `linux-amd64-musl` and `macos-arm64`.
+    The name is OURS and short; the translation into the world's terms (QBE's
+    `-t`, the `cc` triple) lives here, in this layer, and not in the engine.
 
-    `struct` e não `record` porque carrega `str`, e um record é bytes puros
-    (58.2)."""
+    A `struct` and not a `record` because it carries `str`, and a record is raw
+    bytes (58.2)."""
     name: str
     cc: str
     qbe: str
@@ -33,60 +34,63 @@ def host_target() -> Target:
 
 struct Ctx:
     g: G.Graph
-    outdir: str        # onde os artefatos vão parar (build/obj, build/s1, ...)
-    plangc: str        # o compilador que RODA nas arestas — pode ser um artefato
-    plangc_is_built: bool   # ... e se for, ele entra como entrada das arestas
-    query: str         # o compilador que RESPONDE as perguntas do protocolo
+    outdir: str        # where the artifacts land (build/obj, build/s1, ...)
+    plangc: str        # the compiler that RUNS in the edges — may be an artifact
+    plangc_is_built: bool   # ... and if it is, it enters as an input of the edges
+    query: str         # the compiler that ANSWERS the protocol's questions
     target: Target
     cflags: list<str>
-    # o runtime do pscript, gerado UMA vez por contexto (ver `psrt`): vinte
-    # programas em pscript não são vinte compilações do runtime, e duas arestas
-    # produzindo o mesmo `.c` seriam um grafo que o motor recusa
+    # pscript's runtime, generated ONCE per context (see `psrt`): twenty pscript
+    # programs are not twenty compilations of the runtime, and two edges
+    # producing the same `.c` would be a graph the engine refuses
     rt_c: list<str>
     rt_h: list<str>
     rt_o: list<str>
-    rt_pronto: bool
-    # as raízes de pacote deste projeto (`--pkg-path`), na ordem. Elas entram em
-    # TODA invocação do compilador — inclusive nas PERGUNTAS, porque `--deps` de
-    # um arquivo que importa de um pacote precisa achar o pacote para responder.
+    rt_ready: bool
+    # this project's package roots (`--pkg-path`), in order. They go into EVERY
+    # invocation of the compiler — the QUESTIONS included, because `--deps` of a
+    # file that imports from a package needs to find the package to answer.
     pkgroots: list<str>
-    # 2.13: as flags de PRÉ-PROCESSADOR que os pacotes declaram (`cflags` no
-    # manifesto), já reescritas contra o diretório de cada um. Elas valem para
-    # TODA invocação do compilador e não só para o pacote que as declarou, e a
-    # razão é a assimetria do `include`: quem importa `<crc/crc.ph>` é que vai
-    # pré-processar o `crc32.h` daquele pacote, então é a compilação DELE que
-    # precisa do `-I`. Uma flag de um pacote que ninguém usa não custa nada; o
-    # que a lista NÃO decide é o link — quem entra no binário é o fecho.
+    # 2.13: the PREPROCESSOR flags the packages declare (`cflags` in the
+    # manifest), already rewritten against each one's directory. They apply to
+    # EVERY invocation of the compiler and not only to the package that declared
+    # them, and the reason is the asymmetry of `include`: whoever imports
+    # `<crc/crc.ph>` is the one who will preprocess that package's `crc32.h`, so
+    # it is THEIR compilation that needs the `-I`. A flag from a package nobody
+    # uses costs nothing; what the list does NOT decide is the link — what enters
+    # the binary is the closure.
     pkgcpp: list<str>
-    # objetos já emitidos: caminho do `.o` -> a assinatura da aresta que o faz.
-    # O mesmo `.c` compilado no mesmo objdir por dois PROGRAMAS diferentes é
-    # rotina desde que existem pacotes — o `sha2` é lido por um teste em P e por
-    # um em pscript —, e um arquivo tem UM produtor. Se a assinatura bate, a
-    # segunda pedida devolve o objeto que já existe; se não bate, o motor recusa,
-    # que é o que tem de acontecer.
-    objs_feitos: dict<str, str>
+    # objects already emitted: the `.o` path -> the signature of the edge that
+    # makes it. The same `.c` compiled in the same objdir by two different
+    # PROGRAMS has been routine ever since packages existed — `sha2` is read by a
+    # test in P and by one in pscript — and a file has ONE producer. If the
+    # signature matches, the second request returns the object that already
+    # exists; if it does not, the engine refuses, which is what has to happen.
+    objs_made: dict<str, str>
 
 def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
-    # quem RESPONDE e quem RODA podem ser compiladores diferentes, e na escada de
-    # bootstrap eles SÃO: as arestas rodam o compilador de cada degrau — que
-    # ainda não existe quando o grafo é montado —, enquanto as perguntas ("o que
-    # este arquivo lê?", "o que ele vai emitir?") são sobre o FONTE e podem ser
-    # feitas a qualquer compilador que entenda a linguagem. É a mesma suposição
-    # que o bootstrap já faz: o seed compila os fontes de hoje.
+    # whoever ANSWERS and whoever RUNS may be different compilers, and on the
+    # bootstrap ladder they ARE: the edges run each rung's compiler — which does
+    # not exist yet when the graph is assembled — while the questions ("what does
+    # this file read?", "what will it emit?") are about the SOURCE and can be put
+    # to any compiler that understands the language. It is the same assumption
+    # the bootstrap already makes: the seed compiles today's sources.
     return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [], [], {})
 
-def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
-    """Um contexto FILHO: outro diretório, outro compilador, e o resto herdado.
+def derive(c: Ctx, outdir: str, plangc: str) -> Ctx:
+    """A CHILD context: another directory, another compiler, and the rest
+    inherited.
 
-    Existe porque o resto se esquece. As raízes de pacote, o alvo e as flags do
-    `cc` são do PROJETO, não do degrau — e um contexto novo que não as herdasse
-    perguntaria ao compilador sem lhe dizer onde estão os pacotes, o que dá uma
-    resposta vazia e um grafo que constrói nada com sucesso. Foi exatamente o
-    que aconteceu no dia em que o `stl` virou pacote."""
+    It exists because the rest gets forgotten. The package roots, the target and
+    the `cc` flags belong to the PROJECT, not to the rung — and a new context
+    that did not inherit them would ask the compiler without telling it where the
+    packages are, which gives an empty answer and a graph that builds nothing
+    successfully. That is exactly what happened the day `stl` became a
+    package."""
     n = new_ctx(c.g, outdir, plangc)
-    # a MESMA tabela de objetos, e de propósito: o grafo é um só, então "este
-    # `.o` já tem produtor" é um fato do grafo e não do contexto.
-    n.objs_feitos = c.objs_feitos
+    # the SAME object table, and on purpose: there is one graph, so "this `.o`
+    # already has a producer" is a fact about the graph and not about the context.
+    n.objs_made = c.objs_made
     n.query = c.query
     n.pkgroots = c.pkgroots
     n.pkgcpp = c.pkgcpp
@@ -95,38 +99,39 @@ def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
     n.plangc_is_built = True
     return n
 
-# ---------- perguntar ao compilador ----------
-# As respostas 1 e 3 do protocolo, usadas onde elas existem para ser usadas: o
-# descritor não reimplementa a resolução de `import` — ele PERGUNTA. Uma segunda
-# implementação que divergisse da verdadeira daria build velho depois de editar,
-# que é o único modo de falhar que importa.
+# ---------- asking the compiler ----------
+# Answers 1 and 3 of the protocol, used where they exist to be used: the
+# descriptor does not reimplement `import` resolution — it ASKS. A second
+# implementation that diverged from the real one would give a stale build after
+# an edit, which is the only failure mode that matters.
 async def ask(c: Ctx, argv: list<str>) -> list<str>:
-    """A RESPOSTA vem por arquivo, e não pelo cano.
+    """The ANSWER comes back through a file, not through the pipe.
 
-    O `os.run` junta a saída de erro com a de saída de propósito — é o que faz um
-    relatório de erro se ler na ordem em que aconteceu. Mas uma RESPOSTA não é um
-    relatório: o compilador pode avisar (`-Wshadow-prelude`, por exemplo) no meio
-    de responder, e o aviso, misturado, viraria uma linha da resposta. Foi
-    exatamente o que aconteceu: três avisos do corpus viraram três "entradas que
-    ninguém produz", e o grafo inteiro foi recusado.
+    `os.run` merges standard error into standard output on purpose — that is what
+    makes an error report read in the order it happened. But an ANSWER is not a
+    report: the compiler may warn (`-Wshadow-prelude`, say) in the middle of
+    answering, and the warning, mixed in, would become a line of the answer. That
+    is exactly what happened: three warnings from the corpus became three "inputs
+    nobody produces", and the whole graph was refused.
 
-    Com `stdout=` a resposta vai para o arquivo e o `output()` fica só com o que
-    o compilador tinha a dizer — que é o que se mostra quando ele recusa."""
-    # o nome do arquivo vem da PERGUNTA: duas perguntas diferentes nunca
-    # escrevem no mesmo lugar, e um módulo importado não pode ter variável de
-    # topo (é um conjunto de definições, não um programa) — um contador global
-    # não caberia aqui.
-    resp = path.join(c.outdir, ".ppack-resposta." + str(G.hash_str(G.FNV_OFF, " ".join(argv))))
+    With `stdout=` the answer goes to the file and `output()` is left with only
+    what the compiler had to say — which is what gets shown when it refuses."""
+    # the file name comes from the QUESTION: two different questions never write
+    # to the same place, and an imported module may not have top-level variables
+    # (it is a set of definitions, not a program) — a global counter would not
+    # fit here.
+    resp = path.join(c.outdir, ".ppack-answer." + str(G.hash_str(G.FNV_OFF, " ".join(argv))))
     d = path.dirname(resp)
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
     r = await os.run(argv, stdout=resp)
     if r.status() != 0:
-        # NUNCA em silêncio: uma pergunta que falha e devolve lista vazia produz
-        # um grafo que não menciona nada, e um grafo que não menciona nada
-        # "constrói" tudo com sucesso sem fazer nada. É o modo de falhar mais
-        # perigoso que existe aqui, e custou uma investigação para aparecer.
-        raise error("a pergunta ao compilador falhou: " + " ".join(argv) + "\n" + r.output())
+        # NEVER in silence: a question that fails and returns an empty list
+        # produces a graph that mentions nothing, and a graph that mentions
+        # nothing "builds" everything successfully without doing anything. It is
+        # the most dangerous failure mode there is here, and it took an
+        # investigation to show up.
+        raise error("the question to the compiler failed: " + " ".join(argv) + "\n" + r.output())
     f = await open(resp, "r")
     txt = await f.text()
     await f.close()
@@ -137,11 +142,11 @@ async def ask(c: Ctx, argv: list<str>) -> list<str>:
             out.append(line)
     return out
 
-def com_raizes(c: Ctx, argv: list<str>) -> list<str>:
-    """O `argv` com as raízes de pacote. Elas vão em toda invocação, pergunta
-    inclusive: `--deps` de um arquivo que importa `<pui/widget.ph>` precisa achar
-    o `pui` para responder — e uma pergunta que não acha é uma resposta vazia,
-    que é o modo de falhar mais perigoso que existe num sistema de build."""
+def with_roots(c: Ctx, argv: list<str>) -> list<str>:
+    """The `argv` with the package roots. They go into every invocation, the
+    questions included: `--deps` of a file that imports `<pui/widget.ph>` needs to
+    find `pui` to answer — and a question that does not find is an empty answer,
+    which is the most dangerous failure mode there is in a build system."""
     out: list<str> = []
     out.append(argv[0])
     for r in c.pkgroots:
@@ -154,32 +159,34 @@ def com_raizes(c: Ctx, argv: list<str>) -> list<str>:
     return out
 
 async def deps_of(c: Ctx, src: str, outdir: str) -> list<str>:
-    """O que esta compilação LÊ — e "esta" é a palavra que importa.
+    """What this compilation READS — and "this" is the word that matters.
 
-    O `--out-dir` vai na PERGUNTA porque ele muda a resposta: com ele, nomear um
-    `.ph` puxa o `.p` irmão (1.5a) e a compilação lê os dois; com `-o`, não puxa
-    e lê só o header. Perguntar sem o modo e compilar com ele foi um erro real e
-    silencioso — `--outputs selfhost/parser.ph --out-dir build/s1` já dizia que
-    ia ESCREVER `lexer.c`, enquanto `--deps selfhost/parser.ph` não dizia que ia
-    LER `lexer.p`. A aresta ficava sem essa entrada, e editar o lexer do
-    compilador não reconstruía nada."""
-    return await ask(c, com_raizes(c, [c.query, "--deps", "--out-dir", outdir, src]))
+    The `--out-dir` goes into the QUESTION because it changes the answer: with
+    it, naming a `.ph` pulls in the sibling `.p` (1.5a) and the compilation reads
+    both; with `-o`, it does not pull it in and reads only the header. Asking
+    without the mode and compiling with it was a real, silent bug — `--outputs
+    selfhost/parser.ph --out-dir build/s1` already said it would WRITE `lexer.c`,
+    while `--deps selfhost/parser.ph` did not say it would READ `lexer.p`. The
+    edge was left without that input, and editing the compiler's lexer rebuilt
+    nothing."""
+    return await ask(c, with_roots(c, [c.query, "--deps", "--out-dir", outdir, src]))
 
 async def outputs_of(c: Ctx, src: str, outdir: str) -> list<str>:
-    return await ask(c, com_raizes(c, [c.query, "--outputs", "--out-dir", outdir, src]))
+    return await ask(c, with_roots(c, [c.query, "--outputs", "--out-dir", outdir, src]))
 
-# ---------- P e pscript -> C ----------
+# ---------- P and pscript -> C ----------
 async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>:
-    """Uma aresta: `plangc [flags] --out-dir <dir> <fonte>`.
+    """One edge: `plangc [flags] --out-dir <dir> <source>`.
 
-    As `flags` são as do COMPILADOR, e elas mudam o que ele emite: `-O` tira o
-    `assert` (46.4), `-g` põe o rastro de pilha. Elas entram no `argv`, logo
-    entram no hash da aresta — trocar de flag refaz, que é o mínimo que se
-    espera e o que um Makefile com variável de ambiente não garante.
+    The `flags` are the COMPILER's, and they change what it emits: `-O` drops
+    `assert` (46.4), `-g` adds the stack trace. They go into the `argv`, and
+    therefore into the edge's hash — swapping a flag rebuilds, which is the least
+    one expects and what a Makefile with an environment variable does not
+    guarantee.
 
-    As entradas são o que o COMPILADOR diz que leu (o fonte e os `.ph` que ele
-    importa, transitivamente) mais o próprio compilador quando ele é construído
-    aqui. As saídas são o que ele diz que vai emitir. Nada disto é adivinhado.
+    The inputs are what the COMPILER says it read (the source and the `.ph` files
+    it imports, transitively) plus the compiler itself when it is built here. The
+    outputs are what it says it will emit. None of this is guessed.
     """
     ins = await deps_of(c, src, outdir)
     outs = await outputs_of(c, src, outdir)
@@ -187,103 +194,107 @@ async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>
     for r in c.pkgroots:
         argv.append("--pkg-path")
         argv.append(r)
-    for fl in com_cpp(c, flags):
+    for fl in with_cpp(c, flags):
         argv.append(fl)
     argv.append("--out-dir")
     argv.append(outdir)
     argv.append(src)
-    # ESTA ARESTA JÁ EXISTE? Acontece o tempo todo e não é erro: `import "x.ph"`
-    # (75.3) faz o compilador emitir o módulo P junto com quem o importa, e dois
-    # programas que importam o mesmo módulo pedem a mesma emissão. Um arquivo
-    # tem UM produtor, então a segunda vez não cria aresta nenhuma.
+    # DOES THIS EDGE ALREADY EXIST? It happens all the time and is not an error:
+    # `import "x.ph"` (75.3) makes the compiler emit the P module along with
+    # whoever imports it, and two programs importing the same module ask for the
+    # same emission. A file has ONE producer, so the second time creates no edge
+    # at all.
     #
-    # O que não se pode é aceitar isso quando o comando é OUTRO — aí são duas
-    # emissões diferentes disputando o mesmo arquivo, e é justamente o que a
-    # higiene do motor recusa. Por isso a comparação é do `argv` inteiro.
-    if ja_emitido(c, outs, c.plangc, outdir):
+    # What cannot be accepted is that when the command is DIFFERENT — then there
+    # are two different emissions fighting over the same file, and that is exactly
+    # what the engine's hygiene refuses. Hence the comparison is of the whole
+    # `argv`.
+    if already_emitted(c, outs, c.plangc, outdir):
         return outs
     e = G.new_edge(argv)
     for i in ins:
         e.ins.append(c.g.node(i).id)
     if c.plangc_is_built:
-        # a ESCADA: quando o compilador é um artefato, mexer nele refaz tudo que
-        # ele gera. Entra como entrada implícita porque não é "o que se compila",
-        # é "com o que se compila"
+        # the LADDER: when the compiler is an artifact, touching it rebuilds
+        # everything it generates. It enters as an implicit input because it is
+        # not "what gets compiled", it is "what compiles it"
         e.implicit.append(c.g.node(c.plangc).id)
     for o in outs:
         n = c.g.node(o)
-        if n.gen >= 0 and mesmo_emissor(c, n.gen, c.plangc, outdir):
-            # ESTE arquivo já tem produtor, e é o mesmo compilador escrevendo o
-            # mesmo espelho. Acontece quando dois programas leem o mesmo `.ph`:
-            # cada emissão escreve o header, e o conteúdo é o mesmo. Um arquivo
-            # tem UM produtor, então aqui ele vira ENTRADA — o que também põe a
-            # ordem certa entre os dois.
+        if n.gen >= 0 and same_emitter(c, n.gen, c.plangc, outdir):
+            # THIS file already has a producer, and it is the same compiler
+            # writing the same mirror. It happens when two programs read the same
+            # `.ph`: each emission writes the header, and the content is the same.
+            # A file has ONE producer, so here it becomes an INPUT — which also
+            # puts the right order between the two.
             e.implicit.append(n.id)
             continue
         e.outs.append(n.id)
-    # o C regenerado sai byte a byte igual em quase toda edição, e é isto que
-    # transforma "reescrevi o .c" em "não recompilei o .o"
+    # the regenerated C comes out byte for byte identical on almost every edit,
+    # and this is what turns "I rewrote the .c" into "I did not recompile the .o"
     e.restat = True
-    e.desc = "gerando " + path.basename(src)
+    e.desc = "generating " + path.basename(src)
     e.target = c.target.name
     c.g.add_edge(e)
     return outs
 
-private def valor_de(argv: list<str>, opcao: str) -> str:
+private def value_of(argv: list<str>, option: str) -> str:
     i = 0
     while i + 1 < len(argv):
-        if argv[i] == opcao:
+        if argv[i] == option:
             return argv[i + 1]
         i += 1
     return ""
 
-private def mesmo_emissor(c: Ctx, eid: int, plangc: str, outdir: str) -> bool:
-    velho = c.g.edges[eid]
-    if len(velho.argv) == 0 or velho.argv[0] != plangc:
+private def same_emitter(c: Ctx, eid: int, plangc: str, outdir: str) -> bool:
+    old = c.g.edges[eid]
+    if len(old.argv) == 0 or old.argv[0] != plangc:
         return False
-    return valor_de(velho.argv, "--out-dir") == outdir
+    return value_of(old.argv, "--out-dir") == outdir
 
-private def ja_emitido(c: Ctx, outs: list<str>, plangc: str, outdir: str) -> bool:
-    """Estas saídas já são emitidas — pelo MESMO compilador, na MESMA árvore?
+private def already_emitted(c: Ctx, outs: list<str>, plangc: str, outdir: str) -> bool:
+    """Are these outputs already emitted — by the SAME compiler, into the SAME
+    tree?
 
-    Acontece o tempo todo e não é erro: `plangc --out-dir D x` emite o header de
-    todo `.ph` que ele leu, então compilar `app.psc` já escreve `stl/cstr.h`, e
-    pedir `stl/cstr.ph` depois pediria o mesmo arquivo outra vez. O conteúdo é o
-    mesmo — é o mesmo compilador escrevendo o mesmo espelho a partir do mesmo
-    fonte —, e o que não pode haver é DOIS produtores.
+    It happens all the time and is not an error: `plangc --out-dir D x` emits the
+    header of every `.ph` it read, so compiling `app.psc` already writes
+    `stl/cstr.h`, and asking for `stl/cstr.ph` afterwards would ask for the same
+    file again. The content is the same — it is the same compiler writing the
+    same mirror from the same source — and what there cannot be is TWO producers.
 
-    O que continua sendo recusado (e a higiene do motor o pega) é outro
-    compilador, outra árvore, ou outra ferramenta escrevendo por cima."""
+    What is still refused (and the engine's hygiene catches it) is another
+    compiler, another tree, or another tool writing over it."""
     if len(outs) == 0:
         return False
     for o in outs:
         n = c.g.node(o)
         if n.gen < 0:
             return False
-        if not mesmo_emissor(c, n.gen, plangc, outdir):
+        if not same_emitter(c, n.gen, plangc, outdir):
             return False
     return True
 
 async def p_modules(c: Ctx, srcs: list<str>, outdir: str, flags: list<str>) -> list<str>:
-    """O mesmo, para uma lista. Devolve TUDO que foi gerado — `.c` e `.h`.
+    """The same, for a list. Returns EVERYTHING that was generated — `.c` and
+    `.h`.
 
-    Os dois importam, e por razões diferentes: o `.c` vai para a linha de comando
-    do `cc`, e o `.h` é ENTRADA dele (o C gerado inclui os headers gerados). Um
-    grafo que devolvesse só os `.c` não saberia que o header precisa existir
-    antes, e o build falharia na primeira compilação — ou pior, usaria um header
-    velho que sobrou."""
+    Both matter, and for different reasons: the `.c` goes onto the `cc` command
+    line, and the `.h` is an INPUT of it (the generated C includes the generated
+    headers). A graph that returned only the `.c` files would not know the header
+    has to exist first, and the build would fail on the first compilation — or
+    worse, would use a stale header left over."""
     out: list<str> = []
-    vistos: dict<str, int> = {}
+    seen: dict<str, int> = {}
     for s in srcs:
         for o in await p_module(c, s, outdir, flags):
-            # a lista é um CONJUNTO. Desde a 1.5(a) o mesmo arquivo aparece por
-            # dois caminhos — compilar `psrt.ph` já emite os seis `.c` das
-            # camadas, e compilar cada `.p` deles devolve o seu outra vez —, e
-            # uma repetição aqui vira uma segunda aresta a produzir o mesmo `.o`,
-            # que é o grafo que o motor recusa.
-            if o in vistos:
+            # the list is a SET. Since 1.5(a) the same file shows up by two
+            # routes — compiling `psrt.ph` already emits the six layers' `.c`
+            # files, and compiling each of their `.p` files returns theirs again
+            # — and a repetition here becomes a second edge producing the same
+            # `.o`, which is the graph the engine refuses.
+            if o in seen:
                 continue
-            vistos[o] = 1
+            seen[o] = 1
             out.append(o)
     return out
 
@@ -294,19 +305,19 @@ def only(files: list<str>, suffix: str) -> list<str>:
             out.append(f)
     return out
 
-# ---------- 2.13: o C que um PACOTE traz escrito à mão ----------
+# ---------- 2.13: the C a PACKAGE brings hand-written ----------
 #
-# Ele entra pelo NOSSO front end e não direto no `cc`, e isso compra três coisas
-# que a decisão nomeia: o `-Wall` de quem consome não pára na fronteira do
-# pacote, o C89 e o QBE ficam disponíveis para o pacote inteiro, e os
-# diagnósticos são os mesmos dos dois lados. O preço, dito com precisão: o que o
-# nosso front end não aceitar, não entra.
+# It comes in through OUR front end and not straight into the `cc`, and that buys
+# the three things the decision names: the `-Wall` of whoever consumes it does
+# not stop at the package boundary, C89 and QBE stay available for the whole
+# package, and the diagnostics are the same on both sides. The price, said
+# precisely: whatever our front end does not accept does not get in.
 #
-# Os caminhos do manifesto são relativos ao PACOTE — ele não sabe onde foi
-# extraído (`build/pkg/<nome>-<versão>-<hash>/`) —, e é aqui que passam a valer.
-# O mesmo para o `-I`: uma flag de include relativa é reescrita contra o
-# diretório do pacote, senão apontaria para o diretório de quem constrói.
-def cflags_do_pacote(dir: str, flags: list<str>) -> list<str>:
+# The manifest's paths are relative to the PACKAGE — it does not know where it was
+# extracted (`build/pkg/<name>-<version>-<hash>/`) — and this is where they start
+# to count. The same for `-I`: a relative include flag is rewritten against the
+# package's directory, otherwise it would point at the builder's directory.
+def package_cflags(dir: str, flags: list<str>) -> list<str>:
     out: list<str> = []
     for f in flags:
         if f.startswith("-I") and len(f) > 2 and not f[2:len(f)].startswith("/"):
@@ -316,32 +327,32 @@ def cflags_do_pacote(dir: str, flags: list<str>) -> list<str>:
     return out
 
 
-async def carregar_pacotes(c: Ctx):
-    """Lê o manifesto de cada pacote das raízes e guarda as flags de
-    pré-processador deles no contexto.
+async def load_packages(c: Ctx):
+    """Reads each root package's manifest and keeps their preprocessor flags in
+    the context.
 
-    Uma vez por contexto, e não por programa: são as mesmas raízes para tudo o
-    que este projeto constrói, e reler dez manifestos por alvo seria trabalho
-    repetido para dar sempre a mesma resposta."""
+    Once per context, and not per program: they are the same roots for everything
+    this project builds, and rereading ten manifests per target would be repeated
+    work to always give the same answer."""
     fl: list<str> = []
     for r in c.pkgroots:
         if not path.isdir(r):
             continue
-        for nome in sorted(os.listdir(r)):
-            dir = path.join(r, nome)
+        for name in sorted(os.listdir(r)):
+            dir = path.join(r, name)
             man = path.join(dir, "pack.json")
             if not path.isdir(dir) or not path.isfile(man):
                 continue
-            # um manifesto que não se deixa ler NÃO pára esta varredura, e a
-            # razão é o que ela é: uma coleta de flags opcionais, não um
-            # validador. Quem valida é o `ppack check` e a construção do pacote
-            # em si, onde o erro tem dono e mensagem. Aqui, recusar faria um
-            # diretório que apenas ESTÁ ao lado de um pacote — a fixture de um
-            # manifesto inválido, por exemplo — impedir todo o projeto de
-            # construir, e por um arquivo que ninguém pediu para ler.
+            # a manifest that will not be read does NOT stop this scan, and the
+            # reason is what the scan is: a collection of optional flags, not a
+            # validator. Whoever validates is `ppack check` and the package's own
+            # build, where the error has an owner and a message. Here, refusing
+            # would let a directory that merely SITS next to a package — the
+            # fixture for an invalid manifest, say — stop the whole project from
+            # building, and over a file nobody asked to read.
             try:
-                m = await MF.ler(man)
-                for x in cflags_do_pacote(dir, m.cflags):
+                m = await MF.read(man)
+                for x in package_cflags(dir, m.cflags):
                     if x not in fl:
                         fl.append(x)
             catch e:
@@ -349,93 +360,95 @@ async def carregar_pacotes(c: Ctx):
     c.pkgcpp = fl
 
 
-private def com_cpp(c: Ctx, flags: list<str>) -> list<str>:
-    """As flags do compilador, com as dos pacotes dentro do `--cpp`.
+private def with_cpp(c: Ctx, flags: list<str>) -> list<str>:
+    """The compiler's flags, with the packages' inside the `--cpp`.
 
-    O `plangc` não tem `-I` nem `-D` de C: o que ele tem é `--cpp`, o COMANDO com
-    que ele pré-processa `include <h>` — e é assim que o `pstudio` já passa os
-    `-I` do SDL2 hoje. Um pacote com C entra pela mesma porta, o que é bom sinal:
-    não é mecanismo novo, é a mesma coisa com outro dono.
+    `plangc` has no C `-I` and no `-D`: what it has is `--cpp`, the COMMAND it
+    preprocesses `include <h>` with — and that is how `pstudio` already passes
+    SDL2's `-I` today. A package with C comes in through the same door, which is
+    a good sign: it is not a new mechanism, it is the same one with another
+    owner.
 
-    Quando quem chama já passou um `--cpp` (o editor), as flags dos pacotes são
-    ACRESCENTADAS ao comando dele. Substituí-lo faria o editor deixar de achar o
-    header do SDL2 no dia em que alguém publicasse um pacote com C."""
+    When the caller already passed a `--cpp` (the editor), the packages' flags are
+    APPENDED to their command. Replacing it would make the editor stop finding
+    SDL2's header the day somebody published a package with C."""
     if len(c.pkgcpp) == 0:
         return flags
     extra = " ".join(c.pkgcpp)
     out: list<str> = []
-    achou = False
+    found = False
     i = 0
     while i < len(flags):
         out.append(flags[i])
         if flags[i] == "--cpp" and i + 1 < len(flags):
             out.append(flags[i + 1] + " " + extra)
-            achou = True
+            found = True
             i += 2
             continue
         i += 1
-    if not achou:
+    if not found:
         out.append("--cpp")
         out.append(c.target.cc + " " + extra)
     return out
 
 
 async def pkg_c_objects(c: Ctx, dir: str, csources: list<str>, objdir: str,
-                        cab: list<str>) -> list<str>:
-    """Os objetos do C de um pacote. Duas arestas por arquivo: o `plangc` lê o
-    `.c` e emite `.c`, e o `cc` compila o que saiu.
+                        headers: list<str>) -> list<str>:
+    """The objects for a package's C. Two edges per file: `plangc` reads the `.c`
+    and emits `.c`, and the `cc` compiles what came out.
 
-    O `cc` não recebe as flags do pacote, e não é esquecimento: o que ele compila
-    já é a saída do NOSSO front end, com os `#include` expandidos e os `-D`
-    resolvidos. Passá-las outra vez seria pedir ao `cc` que refizesse um trabalho
-    que já está feito — e daria um resultado diferente do que o front end viu."""
+    The `cc` does not get the package's flags, and that is not an oversight: what
+    it compiles is already our front end's output, with the `#include`s expanded
+    and the `-D`s resolved. Passing them again would be asking the `cc` to redo
+    work that is already done — and would give a different result from the one the
+    front end saw."""
     objs: list<str> = []
     for rel in csources:
         src = path.join(dir, rel)
-        emitidos = await p_module(c, src, c.outdir, [])
-        for gerado in only(emitidos, ".c"):
-            objs.append(c_object(c, gerado, obj_for(objdir, gerado), [], cab))
+        emitted = await p_module(c, src, c.outdir, [])
+        for generated in only(emitted, ".c"):
+            objs.append(c_object(c, generated, obj_for(objdir, generated), [], headers))
     return objs
 
 
-def pacote_de(pkgroots: list<str>, arquivo: str) -> str:
-    """O diretório do pacote a que `arquivo` pertence, ou "" se ele não estiver
-    dentro de raiz nenhuma.
+def package_of(pkgroots: list<str>, file: str) -> str:
+    """The directory of the package `file` belongs to, or "" if it is not inside
+    any root.
 
-    A conta é a do `-I` do C, invertida: se o arquivo está debaixo de uma raiz de
-    busca, o primeiro pedaço depois dela é o NOME do pacote. É a mesma regra que
-    o compilador usa para resolver `<pkg/mod.ph>`, lida ao contrário."""
+    The arithmetic is C's `-I`, inverted: if the file is under a search root, the
+    first piece after it is the package's NAME. It is the same rule the compiler
+    uses to resolve `<pkg/mod.ph>`, read backwards."""
     for r in pkgroots:
         pref = r + "/"
-        if not arquivo.startswith(pref):
+        if not file.startswith(pref):
             continue
-        resto = arquivo[len(pref):len(arquivo)]
-        k = resto.find("/")
+        rest = file[len(pref):len(file)]
+        k = rest.find("/")
         if k <= 0:
             continue
-        return path.join(r, resto[0:k])
+        return path.join(r, rest[0:k])
     return ""
 
 
-# ---------- C -> objeto ----------
+# ---------- C -> object ----------
 def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>) -> str:
-    """`cc -c`, com `-MD` para o compilador dizer que headers leu. O `.d` fica no
-    disco e é lido no plano da corrida seguinte — do lado do C não há protocolo,
-    e este é o preço.
+    """`cc -c`, with `-MD` so the compiler says which headers it read. The `.d`
+    stays on disk and is read in the next run's plan — on the C side there is no
+    protocol, and this is the price.
 
-    O `depfile` só existe DEPOIS da primeira compilação, e é por isso que os
-    headers GERADOS entram como entrada implícita já na primeira: sem eles, a
-    primeira corrida de um build limpo pode compilar um `.c` antes de o `.h` que
-    ele inclui ter sido escrito. Depois da primeira, o `.d` cobre o resto —
-    inclusive os headers do sistema."""
+    The `depfile` only exists AFTER the first compilation, and that is why the
+    GENERATED headers enter as implicit inputs on the first one already: without
+    them, the first run of a clean build could compile a `.c` before the `.h` it
+    includes has been written. After the first, the `.d` covers the rest — the
+    system headers included."""
     argv: list<str> = [c.target.cc]
     for f in c.cflags:
         argv.append(f)
-    # 2.13: as flags dos pacotes com C chegam ao `cc` também, e a razão é uma só
-    # — `include "x.h"` (com aspas) NÃO é ingerido pelo nosso front end: ele
-    # atravessa para o C emitido como `#include "x.h"`, e quem o resolve é o
-    # `cc`. Sem isto o `-I` do pacote valia na leitura e não valia na
-    # compilação, que é a metade que falha longe.
+    # 2.13: the flags of packages with C reach the `cc` too, and there is one
+    # reason — `include "x.h"` (with quotes) is NOT ingested by our front end: it
+    # crosses into the emitted C as `#include "x.h"`, and whoever resolves it is
+    # the `cc`. Without this the package's `-I` counted when reading and did not
+    # count when compiling, which is the half that fails far away.
     for f0 in c.pkgcpp:
         argv.append(f0)
     for f2 in flags:
@@ -447,47 +460,47 @@ def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>)
     argv.append(src)
     argv.append("-o")
     argv.append(obj)
-    assinatura = " ".join(argv)
-    if obj in c.objs_feitos:
-        if c.objs_feitos.get(obj, "") == assinatura:
+    signature = " ".join(argv)
+    if obj in c.objs_made:
+        if c.objs_made.get(obj, "") == signature:
             return obj
-        # DOIS COMANDOS DIFERENTES para o mesmo fonte. Acontece de verdade e não
-        # é erro de ninguém: o mesmo `.c` de um pacote serve um programa que se
-        # compila com os `-D` do runtime e outro que se compila com os do SDL, e
-        # o objeto não pode ser o mesmo arquivo. Em vez de recusar (o que
-        # obrigaria cada arreio a inventar um objdir por combinação de flags), o
-        # objeto ganha o SELO do comando no nome. Determinístico: o mesmo comando
-        # dá sempre o mesmo selo, então o incremental continua a funcionar.
-        obj = obj[0:len(obj) - 2] + "." + selo(assinatura) + ".o"
-        # o `argv` acaba em `-MD -MF <dep> -c <fonte> -o <objeto>`: o objeto é o
-        # último e o `.d` é o quinto a contar do fim. Contar mal aqui trocava o
-        # FONTE pelo `.d`, e o `cc` queixava-se de não conseguir executar um
-        # pedaço do nome — uma mensagem que não tem nada que ver com o problema.
+        # TWO DIFFERENT COMMANDS for the same source. It really happens and it is
+        # nobody's mistake: the same `.c` from a package serves a program compiled
+        # with the runtime's `-D`s and another compiled with SDL's, and the object
+        # cannot be the same file. Instead of refusing (which would force every
+        # harness to invent an objdir per flag combination), the object gets the
+        # command's SEAL in its name. Deterministic: the same command always gives
+        # the same seal, so the incremental build keeps working.
+        obj = obj[0:len(obj) - 2] + "." + seal(signature) + ".o"
+        # the `argv` ends in `-MD -MF <dep> -c <source> -o <object>`: the object is
+        # last and the `.d` is fifth from the end. Miscounting here swapped the
+        # SOURCE for the `.d`, and the `cc` complained that it could not execute a
+        # piece of the name — a message with nothing to do with the problem.
         argv[len(argv) - 1] = obj
         argv[len(argv) - 5] = obj + ".d"
-        assinatura = " ".join(argv)
-        if obj in c.objs_feitos:
+        signature = " ".join(argv)
+        if obj in c.objs_made:
             return obj
-    c.objs_feitos[obj] = assinatura
+    c.objs_made[obj] = signature
     e = G.new_edge(argv)
     e.ins.append(c.g.node(src).id)
     for x in extra_ins:
         e.implicit.append(c.g.node(x).id)
     e.outs.append(c.g.node(obj).id)
     e.depfile = obj + ".d"
-    e.desc = "compilando " + path.basename(src)
+    e.desc = "compiling " + path.basename(src)
     e.target = c.target.name
     c.g.add_edge(e)
     return obj
 
-private def selo(s: str) -> str:
-    """Oito dígitos hexadecimais de FNV-1a. NÃO é criptográfico e não precisa de
-    ser: isto distingue dois comandos, não defende de ninguém — o hash que
-    defende é o do `sha2`, e está no gerenciador de pacotes."""
-    # FNV-1a de 32 bits, e de 32 e não de 64 por uma razão de aritmética: os
-    # inteiros aqui são de 64 bits COM SINAL e o transbordo é erro (não silêncio),
-    # então a constante de 64 bits do FNV nem literal pode ser. A de 32 cabe com
-    # folga no produto.
+private def seal(s: str) -> str:
+    """Eight hexadecimal digits of FNV-1a. It is NOT cryptographic and does not
+    need to be: this tells two commands apart, it does not defend against anyone
+    — the hash that defends is `sha2`'s, and it lives in the package manager."""
+    # 32-bit FNV-1a, and 32 rather than 64 for a reason of arithmetic: the
+    # integers here are 64-bit SIGNED and overflow is an error (not silence), so
+    # FNV's 64-bit constant cannot even be a literal. The 32-bit one fits the
+    # product with room to spare.
     h = 2166136261
     for ch in s:
         h = ((h ^ ord(ch)) * 16777619) & 0xffffffff
@@ -499,10 +512,10 @@ private def selo(s: str) -> str:
 
 
 def obj_for(objdir: str, src: str) -> str:
-    """O objeto de um fonte ESPELHA o caminho dele, e não o nome dele. Dois
-    `app.c` de pastas diferentes com o mesmo `basename` seriam duas arestas
-    produzindo o mesmo `.o` — que é exatamente o grafo que o motor recusa, e com
-    razão: qual das duas define o conteúdo dependeria da ordem."""
+    """A source's object MIRRORS its path, not its name. Two `app.c` files from
+    different folders with the same `basename` would be two edges producing the
+    same `.o` — which is exactly the graph the engine refuses, and rightly so:
+    which of the two defines the content would depend on the order."""
     return path.join(objdir, src + ".o")
 
 def c_objects(c: Ctx, srcs: list<str>, objdir: str, flags: list<str>, extra_ins: list<str>) -> list<str>:
@@ -511,7 +524,7 @@ def c_objects(c: Ctx, srcs: list<str>, objdir: str, flags: list<str>, extra_ins:
         objs.append(c_object(c, s, obj_for(objdir, s), flags, extra_ins))
     return objs
 
-# ---------- objetos -> binário ----------
+# ---------- objects -> binary ----------
 def executable(c: Ctx, out: str, objs: list<str>, libs: list<str>) -> str:
     argv: list<str> = [c.target.cc]
     for f in c.cflags:
@@ -526,14 +539,14 @@ def executable(c: Ctx, out: str, objs: list<str>, libs: list<str>) -> str:
     for o2 in objs:
         e.ins.append(c.g.node(o2).id)
     e.outs.append(c.g.node(out).id)
-    e.desc = "linkando " + path.basename(out)
+    e.desc = "linking " + path.basename(out)
     e.target = c.target.name
     c.g.add_edge(e)
     return out
 
 def cc_program(c: Ctx, out: str, srcs: list<str>, extra_ins: list<str>, flags: list<str>, libs: list<str>) -> str:
-    """Um binário direto dos fontes C, sem objetos intermediários — que é o que
-    o seed do compilador é: um `cc` sobre o C comitado."""
+    """A binary straight from C sources, with no intermediate objects — which is
+    what the compiler's seed is: a `cc` over the committed C."""
     argv: list<str> = [c.target.cc]
     for f in c.cflags:
         argv.append(f)
@@ -548,38 +561,40 @@ def cc_program(c: Ctx, out: str, srcs: list<str>, extra_ins: list<str>, flags: l
     e = G.new_edge(argv)
     for s2 in srcs:
         e.ins.append(c.g.node(s2).id)
-    # o que entra sem estar na linha de comando: os headers gerados, que o C
-    # gerado inclui. São entradas IMPLÍCITAS — a mesma faixa que o `depfile` usa
+    # what comes in without being on the command line: the generated headers,
+    # which the generated C includes. They are IMPLICIT inputs — the same band the
+    # `depfile` uses
     for x in extra_ins:
         e.implicit.append(c.g.node(x).id)
     e.outs.append(c.g.node(out).id)
-    e.desc = "construindo " + path.basename(out)
+    e.desc = "building " + path.basename(out)
     e.target = c.target.name
     c.g.add_edge(e)
     return out
 
-# ---------- pscript -> binário ----------
-# A lista dos módulos do runtime vivia em SEIS lugares (dois blocos do run.sh, o
-# psbuild.sh, o Makefile, o verify-all e o `RT_SRCS` do compilador). Aqui é o
-# lugar dela: o descritor é quem sabe o que compõe um programa em pscript, e as
-# outras cinco cópias somem quando os arreios passarem a chamar o `ppack`.
+# ---------- pscript -> binary ----------
+# The runtime's module list used to live in SIX places (two blocks of run.sh,
+# psbuild.sh, the Makefile, verify-all and the compiler's `RT_SRCS`). Here is its
+# home: the descriptor is what knows what makes up a pscript program, and the
+# other five copies vanish once the harnesses call `ppack`.
 #
-# A ordem importa e não é alfabética: são CAMADAS (memória, valores, o que roda,
-# a biblioteca, o sistema, o epílogo), e o compilador as vê nesta ordem.
-const RT_MODULOS: list<str> = ["psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_val.ph",
+# The order matters and is not alphabetical: these are LAYERS (memory, values,
+# what runs, the library, the system, the epilogue), and the compiler sees them
+# in this order.
+const RT_MODULES: list<str> = ["psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_val.ph",
                                "psrt_rt.ph", "psrt_std.ph", "psrt_os.ph", "psrt_top.ph",
                                "psrt_mem.p", "psrt_val.p", "psrt_rt.p", "psrt_std.p",
                                "psrt_os.p", "psrt_top.p"]
 
-# glibc esconde socket/getaddrinfo/poll/pipe debaixo de um `-std=` estrito, e o
-# runtime fala POSIX do começo ao fim
+# glibc hides socket/getaddrinfo/poll/pipe under a strict `-std=`, and the runtime
+# speaks POSIX from beginning to end
 const PSDEFS: list<str> = ["-D_POSIX_C_SOURCE=200112L", "-D_DEFAULT_SOURCE"]
 
 
 async def psrt(c: Ctx) -> list<str>:
-    """O runtime do pscript, compilado UMA vez por contexto. Devolve tudo o que
-    ele gerou — `.c` e `.h`."""
-    if c.rt_pronto:
+    """pscript's runtime, compiled ONCE per context. Returns everything it
+    generated — `.c` and `.h`."""
+    if c.rt_ready:
         out: list<str> = []
         for x in c.rt_c:
             out.append(x)
@@ -587,229 +602,231 @@ async def psrt(c: Ctx) -> list<str>:
             out.append(y)
         return out
     srcs: list<str> = []
-    for m in RT_MODULOS:
+    for m in RT_MODULES:
         srcs.append(path.join("pscript/runtime", m))
-    todos = await p_modules(c, srcs, c.outdir, [])
-    c.rt_c = only(todos, ".c")
-    c.rt_h = only(todos, ".h")
-    c.rt_pronto = True
-    return todos
+    all = await p_modules(c, srcs, c.outdir, [])
+    c.rt_c = only(all, ".c")
+    c.rt_h = only(all, ".h")
+    c.rt_ready = True
+    return all
 
 
-private async def rt_objetos(c: Ctx, objdir: str) -> list<str>:
-    """O runtime compilado a OBJETO, uma vez só para o contexto inteiro.
+private async def rt_objects(c: Ctx, objdir: str) -> list<str>:
+    """The runtime compiled to OBJECTS, once for the whole context.
 
-    Aqui está a diferença que mais se sente: o `psbuild.sh` relinka os seis
-    módulos do runtime a partir do C em CADA programa, e a suíte do pscript tem
-    mais de cem programas — são seiscentas compilações do mesmo texto. Com
-    objeto, são seis."""
+    Here is the difference you feel most: `psbuild.sh` relinks the runtime's six
+    modules from C in EVERY program, and the pscript suite has more than a hundred
+    programs — that is six hundred compilations of the same text. With objects, it
+    is six."""
     if len(c.rt_o) > 0:
         return c.rt_o
-    todos = await psrt(c)
-    c.rt_o = c_objects(c, only(todos, ".c"), objdir, PSDEFS, only(todos, ".h"))
+    all = await psrt(c)
+    c.rt_o = c_objects(c, only(all, ".c"), objdir, PSDEFS, only(all, ".h"))
     return c.rt_o
 
 
-async def psc_program_com(c: Ctx, src: str, out: str, objdir: str, p_srcs: list<str>,
-                          flags: list<str>, cflags: list<str>, libs: list<str>) -> str:
-    """O mesmo, mais MÓDULOS EM P compilados junto.
+async def psc_program_with(c: Ctx, src: str, out: str, objdir: str, p_srcs: list<str>,
+                           flags: list<str>, cflags: list<str>, libs: list<str>) -> str:
+    """The same, plus P MODULES compiled alongside.
 
-    É o caso do editor: a lógica é pscript, mas a mão que toca o SDL2 e a que
-    chama o lexer do compilador são P — pixel e ponteiro do começo ao fim, que a
-    45.5 não deixa atravessar. Do ponto de vista do grafo não há novidade
-    nenhuma: são mais fontes, mais arestas de geração, mais objetos."""
-    rtos = await rt_objetos(c, objdir)
-    # a árvore é COMPARTILHADA, e tem de ser: o C gerado inclui os headers do
-    # runtime por caminho relativo dentro do espelho (`../../pscript/runtime/
-    # psrt.h`), então um programa numa árvore só dele não acharia o runtime que
-    # está na outra. Quem cuida de dois programas que emitem o mesmo header é o
-    # `p_module` — ver a nota lá.
+    It is the editor's case: the logic is pscript, but the hand that touches SDL2
+    and the one that calls the compiler's lexer are P — pixels and pointers from
+    beginning to end, which 45.5 does not let cross. From the graph's point of
+    view there is nothing new: more sources, more generation edges, more
+    objects."""
+    rtos = await rt_objects(c, objdir)
+    # the tree is SHARED, and it has to be: the generated C includes the
+    # runtime's headers by a relative path inside the mirror
+    # (`../../pscript/runtime/psrt.h`), so a program in a tree of its own would
+    # not find the runtime that is in the other. Who takes care of two programs
+    # emitting the same header is `p_module` — see the note there.
     #
-    # o PROGRAMA primeiro, porque a resposta 3 já inclui os módulos P que ele
-    # importa com `import "x.ph"` (75.3) — o compilador os emite junto. Só o que
-    # sobra depois disso é que precisa de aresta própria: um `.ph` que outro
-    # módulo importa mais fundo, e o `.p` dele.
+    # the PROGRAM first, because answer 3 already includes the P modules it
+    # imports with `import "x.ph"` (75.3) — the compiler emits them alongside.
+    # Only what is left over after that needs an edge of its own: a `.ph` that
+    # another module imports deeper down, and its `.p`.
     prog = await p_module(c, src, c.outdir, flags)
     extras = await p_modules(c, p_srcs, c.outdir, flags)
-    cab: list<str> = []
+    headers: list<str> = []
     for h in c.rt_h:
-        cab.append(h)
+        headers.append(h)
     for h2 in only(extras, ".h"):
-        cab.append(h2)
+        headers.append(h2)
     for h3 in only(prog, ".h"):
-        cab.append(h3)
-    todas_cflags: list<str> = []
+        headers.append(h3)
+    all_cflags: list<str> = []
     for d in PSDEFS:
-        todas_cflags.append(d)
+        all_cflags.append(d)
     for x in cflags:
-        todas_cflags.append(x)
+        all_cflags.append(x)
     objs: list<str> = []
     for o in rtos:
         objs.append(o)
     for cf in only(extras, ".c"):
-        objs.append(c_object(c, cf, obj_for(objdir, cf), todas_cflags, cab))
+        objs.append(c_object(c, cf, obj_for(objdir, cf), all_cflags, headers))
     for cf2 in only(prog, ".c"):
-        objs.append(c_object(c, cf2, obj_for(objdir, cf2), todas_cflags, cab))
-    fecho: list<str> = []
+        objs.append(c_object(c, cf2, obj_for(objdir, cf2), all_cflags, headers))
+    closure: list<str> = []
     for a1 in prog:
-        fecho.append(a1)
+        closure.append(a1)
     for a2 in extras:
-        fecho.append(a2)
-    for co in await c_dos_pacotes(c, fecho, objdir, cab):
+        closure.append(a2)
+    for co in await packages_c(c, closure, objdir, headers):
         objs.append(co)
-    todas_libs: list<str> = []
+    all_libs: list<str> = []
     for l in libs:
-        todas_libs.append(l)
-    todas_libs.append("-lm")
-    todas_libs.append("-pthread")
-    return executable(c, out, objs, todas_libs)
+        all_libs.append(l)
+    all_libs.append("-lm")
+    all_libs.append("-pthread")
+    return executable(c, out, objs, all_libs)
 
 
 async def psc_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, libs: list<str>) -> str:
-    """Um programa em pscript: o runtime ao lado (16.4 — ele é FONTE compilado
-    junto, não uma biblioteca que o compilador linka), o fechamento de imports
-    do próprio programa, e um link que junta tudo.
+    """A pscript program: the runtime alongside (16.4 — it is SOURCE compiled
+    together, not a library the compiler links), the program's own import
+    closure, and one link that joins everything.
 
-    É o que o `tests/psbuild.sh` faz hoje em trinta linhas de shell, com duas
-    diferenças que não são de estilo: as entradas de cada aresta vêm da resposta
-    1 do compilador (editar um `.ph` importado refaz o que precisa, e o shell —
-    que não pergunta nada — refazia tudo ou nada), e o runtime vira objeto uma
-    vez em vez de ser recompilado por programa."""
-    rtos = await rt_objetos(c, objdir)
+    It is what `tests/psbuild.sh` does today in thirty lines of shell, with two
+    differences that are not stylistic: each edge's inputs come from the
+    compiler's answer 1 (editing an imported `.ph` rebuilds what needs it, and the
+    shell — which asks nothing — rebuilt everything or nothing), and the runtime
+    becomes an object once instead of being recompiled per program."""
+    rtos = await rt_objects(c, objdir)
     prog = await p_module(c, src, c.outdir, flags)
-    cabecalhos: list<str> = []
+    headers: list<str> = []
     for h in c.rt_h:
-        cabecalhos.append(h)
+        headers.append(h)
     for h2 in only(prog, ".h"):
-        cabecalhos.append(h2)
+        headers.append(h2)
     objs: list<str> = []
     for o in rtos:
         objs.append(o)
-    # `import "x.ph"` (75.3) faz o compilador emitir o módulo P junto, no mesmo
-    # espelho — e a resposta 3 já o lista, então não há glob nenhum aqui
+    # `import "x.ph"` (75.3) makes the compiler emit the P module alongside, into
+    # the same mirror — and answer 3 already lists it, so there is no glob here
     for cf in only(prog, ".c"):
-        objs.append(c_object(c, cf, obj_for(objdir, cf), PSDEFS, cabecalhos))
-    todas_libs: list<str> = []
+        objs.append(c_object(c, cf, obj_for(objdir, cf), PSDEFS, headers))
+    all_libs: list<str> = []
     for l in libs:
-        todas_libs.append(l)
-    todas_libs.append("-lm")
-    todas_libs.append("-pthread")
-    return executable(c, out, objs, todas_libs)
+        all_libs.append(l)
+    all_libs.append("-lm")
+    all_libs.append("-pthread")
+    return executable(c, out, objs, all_libs)
 
 
-# ---------- dependência do SISTEMA ----------
-# `pkg-config` é o que existe, e ele é perguntado AQUI, na montagem do grafo, e
-# não dentro de uma aresta. A diferença importa: o que ele responde entra no
-# `argv`, logo entra no hash — trocar de versão do SDL2 na máquina refaz o que
-# depende dele. Uma aresta que chamasse `pkg-config` por dentro teria sempre o
-# mesmo comando e o mesmo hash, e o build reaproveitaria artefato de outra
-# biblioteca em silêncio.
-async def pkg_config(c: Ctx, lib: str, que: str) -> list<str>:
-    linhas = await ask(c, ["pkg-config", que, lib])
+# ---------- SYSTEM dependencies ----------
+# `pkg-config` is what exists, and it is asked HERE, while the graph is being
+# assembled, and not inside an edge. The difference matters: what it answers goes
+# into the `argv`, and therefore into the hash — changing the machine's SDL2
+# version rebuilds what depends on it. An edge that called `pkg-config` from
+# inside would always have the same command and the same hash, and the build would
+# silently reuse another library's artifact.
+async def pkg_config(c: Ctx, lib: str, what: str) -> list<str>:
+    lines = await ask(c, ["pkg-config", what, lib])
     out: list<str> = []
-    for l in linhas:
+    for l in lines:
         for w in l.split(" "):
             if len(w) > 0:
                 out.append(w)
     return out
 
 
-async def tem_pkg(lib: str) -> bool:
+async def has_pkg(lib: str) -> bool:
     r = await os.run(["pkg-config", "--exists", lib])
     return r.status() == 0
 
 
-private async def c_dos_pacotes(c: Ctx, ger: list<str>, objdir: str,
-                               cab: list<str>) -> list<str>:
-    """O C escrito à mão dos pacotes que este programa alcança.
+private async def packages_c(c: Ctx, generated: list<str>, objdir: str,
+                             headers: list<str>) -> list<str>:
+    """The hand-written C of the packages this program reaches.
 
-    QUAIS pacotes é a resposta 3 do compilador, não uma lista à mão: o que ele vai
-    emitir diz por que módulos passou, e um módulo debaixo de uma raiz de busca
-    pertence ao pacote cujo nome é o primeiro pedaço. Um pacote que ninguém
-    importa não entra no link — que é a propriedade que faz `deps` no manifesto
-    não custar tamanho de binário.
+    WHICH packages is the compiler's answer 3, not a hand-kept list: what it is
+    going to emit says which modules it went through, and a module under a search
+    root belongs to the package whose name is the first piece. A package nobody
+    imports does not enter the link — which is the property that makes `deps` in
+    the manifest cost no binary size.
 
-    A tradução de "o que ele vai emitir" para "o que ele leu" é o ESPELHO do
-    `--out-dir`: o C de `packages/sha2/sha2.p` sai em `<outdir>/packages/sha2/
-    sha2.c`, com a árvore inteira replicada lá dentro. Tirar o prefixo devolve o
-    caminho do fonte — e é de graça, enquanto perguntar outra vez custaria uma
-    invocação do compilador por programa."""
+    Translating "what it will emit" into "what it read" is the `--out-dir`
+    MIRROR: the C for `packages/sha2/sha2.p` comes out at
+    `<outdir>/packages/sha2/sha2.c`, with the whole tree replicated inside.
+    Stripping the prefix gives back the source path — and it is free, whereas
+    asking again would cost one compiler invocation per program."""
     objs: list<str> = []
-    vistos: dict<str, int> = {}
+    seen: dict<str, int> = {}
     pref = c.outdir + "/"
-    for f in ger:
+    for f in generated:
         rel = f[len(pref):len(f)] if f.startswith(pref) else f
-        dir = pacote_de(c.pkgroots, rel)
-        if len(dir) == 0 or dir in vistos:
+        dir = package_of(c.pkgroots, rel)
+        if len(dir) == 0 or dir in seen:
             continue
-        vistos[dir] = 1
+        seen[dir] = 1
         man = path.join(dir, "pack.json")
         if not path.isfile(man):
             continue
-        m = await MF.ler(man)
-        for o in await pkg_c_objects(c, dir, m.csources, objdir, cab):
+        m = await MF.read(man)
+        for o in await pkg_c_objects(c, dir, m.csources, objdir, headers):
             objs.append(o)
     return objs
 
 
 async def p_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, libs: list<str>) -> str:
-    """Um programa em P: o fecho dele a objeto, e um link. Sem runtime nenhum —
-    é a diferença inteira entre as duas linguagens, e ela aparece aqui como a
-    ausência de uma linha."""
-    ger = await p_module(c, src, c.outdir, flags)
-    cab: list<str> = only(ger, ".h")
+    """A program in P: its closure to objects, and one link. With no runtime at
+    all — that is the whole difference between the two languages, and it shows up
+    here as the absence of a line."""
+    generated = await p_module(c, src, c.outdir, flags)
+    headers: list<str> = only(generated, ".h")
     objs: list<str> = []
-    for cf in only(ger, ".c"):
-        objs.append(c_object(c, cf, obj_for(objdir, cf), [], cab))
-    for co in await c_dos_pacotes(c, ger, objdir, cab):
+    for cf in only(generated, ".c"):
+        objs.append(c_object(c, cf, obj_for(objdir, cf), [], headers))
+    for co in await packages_c(c, generated, objdir, headers):
         objs.append(co)
     return executable(c, out, objs, libs)
 
 
-# ---------- suítes ----------
-struct Caso:
-    """Um caso de teste: o que rodar, o que se espera dele, e onde ele roda.
+# ---------- suites ----------
+struct Case:
+    """A test case: what to run, what is expected of it, and where it runs.
 
-    `struct` e não `record` porque carrega `str` (58.2)."""
-    nome: str
-    binario: str
-    esperado: str
+    A `struct` and not a `record` because it carries `str` (58.2)."""
+    name: str
+    binary: str
+    expected: str
     status: int
     cwd: str
 
 
-def suite(c: Ctx, nome: str, casos: list<Caso>, verdict: str, stampdir: str) -> str:
-    """Uma suíte: uma aresta POR CASO, e um carimbo que junta todos.
+def suite(c: Ctx, name: str, cases: list<Case>, verdict: str, stampdir: str) -> str:
+    """A suite: one edge PER CASE, and a stamp that joins them all.
 
-    Uma aresta por caso é o ponto inteiro, e ele tem duas consequências que um
-    arreio em shell não tem: os casos rodam em PARALELO com o resto do build (a
-    fila é a mesma, o limite é o mesmo), e um caso cujo binário e cujo
-    `.expected` não mudaram NÃO roda de novo. Uma suíte de trezentos casos passa
-    a custar o que custam os casos que mudaram.
+    One edge per case is the whole point, and it has two consequences a shell
+    harness does not have: the cases run in PARALLEL with the rest of the build
+    (the queue is the same, the limit is the same), and a case whose binary and
+    whose `.expected` did not change does NOT run again. A suite of three hundred
+    cases starts costing what the cases that changed cost.
 
-    O que roda não é o caso: é o `verdict` (ver `verdict.psc`), porque o status
-    de saída de um caso é dado e não veredicto."""
+    What runs is not the case: it is the `verdict` (see `verdict.psc`), because a
+    case's exit status is data and not a verdict."""
     stamps: list<str> = []
-    for k in casos:
-        st = path.join(stampdir, nome + "." + k.nome + ".ok")
-        e = G.new_edge([verdict, k.binario, k.esperado, str(k.status), k.cwd, st])
-        e.ins.append(c.g.node(k.binario).id)
-        e.ins.append(c.g.node(k.esperado).id)
+    for k in cases:
+        st = path.join(stampdir, name + "." + k.name + ".ok")
+        e = G.new_edge([verdict, k.binary, k.expected, str(k.status), k.cwd, st])
+        e.ins.append(c.g.node(k.binary).id)
+        e.ins.append(c.g.node(k.expected).id)
         e.implicit.append(c.g.node(verdict).id)
         e.outs.append(c.g.node(st).id)
-        e.desc = nome + ": " + k.nome
+        e.desc = name + ": " + k.name
         e.target = c.target.name
         c.g.add_edge(e)
         stamps.append(st)
-    # o travessão e não os dois pontos: o placar da CLI agrupa pelo que vem antes
-    # de `": "`, e um carimbo que dissesse "pacotes: 3 casos" seria contado como
-    # um caso chamado "3 casos"
-    return junta(c, path.join(stampdir, nome + ".suite"), stamps, nome + " — " + str(len(casos)) + " casos")
+    # an em dash and not a colon: the CLI's scoreboard groups by whatever comes
+    # before `": "`, and a stamp that said "packages: 3 cases" would be counted as
+    # one case named "3 cases"
+    return phony(c, path.join(stampdir, name + ".suite"), stamps, name + " — " + str(len(cases)) + " cases")
 
 
-def junta(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:
-    """Um nó que existe só para ser PEDIDO: depende de tudo, produz um carimbo.
-    É como se pede "a suíte inteira" a um grafo que só sabe falar de arquivos."""
+def phony(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:
+    """A node that exists only to be ASKED FOR: it depends on everything and
+    produces a stamp. It is how you ask for "the whole suite" from a graph that
+    only knows how to talk about files."""
     e = G.new_edge(["/bin/sh", "-c", "exit 0"])
     for i in ins:
         e.ins.append(c.g.node(i).id)
@@ -821,53 +838,56 @@ def junta(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:
     return stamp
 
 
-# ---------- um arreio de fora ----------
-# Os corpora (`tests/run.sh`, `gc-stress.sh`, os oráculos) NÃO são reescritos
-# aqui, e isso é decisão e não preguiça: eles funcionam, são lidos por gente que
-# não vai ler pscript, e reescrevê-los seria trocar risco por nada. O que muda é
-# que passam a ser ARESTAS — entram no grafo, rodam em paralelo com o resto, e
-# não rodam de novo quando nada que os alimenta mudou.
+# ---------- an outside harness ----------
+# The corpora (`tests/run.sh`, `gc-stress.sh`, the oracles) are NOT rewritten
+# here, and that is a decision and not laziness: they work, they are read by
+# people who are not going to read pscript, and rewriting them would be trading
+# risk for nothing. What changes is that they become EDGES — they enter the graph,
+# run in parallel with the rest, and do not run again when nothing that feeds them
+# changed.
 #
-# A configuração deles vem por VARIÁVEL DE AMBIENTE (`PLANGC=`, `BACKEND=`), e é
-# aí que mora a única sutileza: o `env=` de uma aresta SUBSTITUI o ambiente, e um
-# arreio sem `PATH` não acha o `bash`. A saída é o `/usr/bin/env` como argv[0]:
-# ele ACRESCENTA ao ambiente que herdou, o vetor de argumentos continua exato, e
-# não há shell no meio para reinterpretar nada.
-def harness(c: Ctx, nome: str, argv: list<str>, vars: dict<str, str>,
+# Their configuration arrives through ENVIRONMENT VARIABLES (`PLANGC=`,
+# `BACKEND=`), and that is where the one subtlety lives: an edge's `env=`
+# REPLACES the environment, and a harness without `PATH` does not find `bash`. The
+# way out is `/usr/bin/env` as argv[0]: it ADDS to the environment it inherited,
+# the argument vector stays exact, and there is no shell in the middle to
+# reinterpret anything.
+def harness(c: Ctx, name: str, argv: list<str>, vars: dict<str, str>,
             ins: list<str>, logdir: str, desc: str) -> str:
-    linha: list<str> = ["env"]
+    line: list<str> = ["env"]
     ks: list<str> = []
     for k in vars:
         ks.append(k)
-    ks = sorted(ks)     # ordenado: o hash da aresta não pode depender da ordem
+    ks = sorted(ks)     # sorted: the edge's hash cannot depend on the order
     for k2 in ks:
-        linha.append(k2 + "=" + vars[k2])
+        line.append(k2 + "=" + vars[k2])
     for a in argv:
-        linha.append(a)
-    log = path.join(logdir, nome + ".log")
-    e = G.new_edge(linha)
+        line.append(a)
+    log = path.join(logdir, name + ".log")
+    e = G.new_edge(line)
     for i in ins:
         e.ins.append(c.g.node(i).id)
     e.outs.append(c.g.node(log).id)
     e.stdout_to = log
-    e.desc = desc + " (relatório em " + log + ")"
+    e.desc = desc + " (report in " + log + ")"
     e.target = c.target.name
     c.g.add_edge(e)
     return log
 
 
-def piso(c: Ctx, prog: str, log: str, prefixo: str, minimo: str,
-         stamp: str, desc: str) -> str:
-    """O PISO de um placar: uma aresta que lê o número que a suíte imprimiu e o
-    compara com o mínimo aceite.
+def score_floor(c: Ctx, prog: str, log: str, prefix: str, minimum: str,
+                stamp: str, desc: str) -> str:
+    """A scoreboard's FLOOR: an edge that reads the number the suite printed and
+    compares it with the minimum accepted.
 
-    Ela é separada da aresta que RODA a suíte de propósito, e por duas razões: o
-    relatório continua a valer por si (quem quer o número lê o log), e mudar o
-    piso não obriga a re-rodar a suíte — muda só a aresta barata, porque o
-    mínimo entra no `argv` e portanto no hash dela.
+    It is separate from the edge that RUNS the suite on purpose, for two reasons:
+    the report keeps standing on its own (whoever wants the number reads the log),
+    and changing the floor does not force the suite to be re-run — only the cheap
+    edge changes, because the minimum goes into its `argv` and therefore into its
+    hash.
 
-    Ver `pbuild/ps/piso.psc` para o que o programa faz."""
-    e = G.new_edge([prog if prog.startswith("/") else "./" + prog, log, prefixo, minimo, stamp])
+    See `pbuild/ps/floor.psc` for what the program does."""
+    e = G.new_edge([prog if prog.startswith("/") else "./" + prog, log, prefix, minimum, stamp])
     e.ins.append(c.g.node(log).id)
     e.ins.append(c.g.node(prog).id)
     e.outs.append(c.g.node(stamp).id)
@@ -877,25 +897,26 @@ def piso(c: Ctx, prog: str, log: str, prefixo: str, minimo: str,
     return stamp
 
 
-# ---------- um portão pela NEGATIVA ----------
-def nao_acha(c: Ctx, padrao: str, arquivos: list<str>, stamp: str, desc: str) -> str:
-    """Passa quando o padrão NÃO aparece em nenhum dos arquivos.
+# ---------- a gate by the NEGATIVE ----------
+def must_not_match(c: Ctx, pattern: str, files: list<str>, stamp: str, desc: str) -> str:
+    """Passes when the pattern does NOT appear in any of the files.
 
-    É o formato de vários portões que valem a pena, e o do `verify-all` que
-    guarda a regressão do typedef de libc: em glibc a build passa dos dois
-    jeitos, então o teste tem de ser sobre o TEXTO do C gerado.
+    It is the shape of several gates that are worth having, and of the one in
+    `verify-all` that guards the libc typedef regression: on glibc the build
+    passes either way, so the test has to be about the TEXT of the generated C.
 
-    Aqui há um shell, e é o único lugar do descritor onde há: o que se quer é o
-    INVERSO do status de um comando, e inverter status é o que o `!` do shell
-    faz. O aspeamento é gerado por nós (`G.sh_quote`), que é o que o torna
-    correto — e os arquivos são ENTRADAS da aresta, então nenhum deles pode
-    faltar e fazer o `grep` falhar por outro motivo."""
-    cmd = "! grep -l -- " + G.sh_quote(padrao)
-    for f in arquivos:
+    There is a shell here, and it is the only place in the descriptor where there
+    is one: what we want is the INVERSE of a command's status, and inverting a
+    status is what the shell's `!` does. The quoting is generated by us
+    (`G.sh_quote`), which is what makes it correct — and the files are INPUTS of
+    the edge, so none of them can be missing and make the `grep` fail for another
+    reason."""
+    cmd = "! grep -l -- " + G.sh_quote(pattern)
+    for f in files:
         cmd += " " + G.sh_quote(f)
     cmd += " > /dev/null"
     e = G.new_edge(["/bin/sh", "-c", cmd])
-    for i in arquivos:
+    for i in files:
         e.ins.append(c.g.node(i).id)
     e.outs.append(c.g.node(stamp).id)
     e.stdout_to = stamp
@@ -905,10 +926,10 @@ def nao_acha(c: Ctx, padrao: str, arquivos: list<str>, stamp: str, desc: str) ->
     return stamp
 
 
-# ---------- comandos e verificações ----------
+# ---------- commands and checks ----------
 def command(c: Ctx, argv: list<str>, ins: list<str>, outs: list<str>, desc: str) -> G.Edge:
-    """A aresta crua, sempre disponível. Quem precisa de algo que a biblioteca
-    não prevê desce um nível sem sair da linguagem."""
+    """The raw edge, always available. Whoever needs something the library does
+    not foresee drops one level without leaving the language."""
     e = G.new_edge(argv)
     for i in ins:
         e.ins.append(c.g.node(i).id)
@@ -920,11 +941,12 @@ def command(c: Ctx, argv: list<str>, ins: list<str>, outs: list<str>, desc: str)
     return e
 
 def compare_dirs(c: Ctx, a: str, b: str, stamp: str, ins: list<str>, desc: str) -> G.Edge:
-    """Duas árvores têm de ser IDÊNTICAS, e a saída do `diff` vira o carimbo.
+    """Two trees have to be IDENTICAL, and the `diff`'s output becomes the stamp.
 
-    Sem shell não há `&&` nem `>`, e não é preciso: a saída padrão da aresta vai
-    para o arquivo (é um campo da aresta), e quem decide se passou é o STATUS do
-    processo. O carimbo existe para o grafo ter o que datar.
+    With no shell there is no `&&` and no `>`, and none is needed: the edge's
+    standard output goes to the file (it is a field of the edge), and what decides
+    whether it passed is the process's STATUS. The stamp exists so the graph has
+    something to date.
     """
     e = G.new_edge(["diff", "-rq", a, b])
     for i in ins:
@@ -947,13 +969,13 @@ def compare_files(c: Ctx, a: str, b: str, stamp: str, desc: str) -> G.Edge:
     c.g.add_edge(e)
     return e
 
-# ---------- utilidades de arquivo ----------
+# ---------- file helpers ----------
 def glob(dir: str, suffix: str) -> list<str>:
-    """Os arquivos de um diretório com um sufixo, ORDENADOS. O glob vive no
-    DESCRITOR e nunca na aresta (1.6d): um padrão dentro da aresta faria o hash
-    do comando mentir — duas execuções com arquivos diferentes no disco seriam
-    builds diferentes com o mesmo grafo. E `os.listdir` ordena de propósito
-    (111), então o grafo sai igual em toda máquina."""
+    """The files in a directory with a suffix, SORTED. The glob lives in the
+    DESCRIPTOR and never in an edge (1.6d): a pattern inside an edge would make
+    the command's hash lie — two runs with different files on disk would be
+    different builds with the same graph. And `os.listdir` sorts on purpose (111),
+    so the graph comes out the same on every machine."""
     out: list<str> = []
     for n in os.listdir(dir):
         if n.endswith(suffix):
@@ -961,13 +983,13 @@ def glob(dir: str, suffix: str) -> list<str>:
     return out
 
 
-async def escrever(alvo: str, texto: str):
-    """Um arquivo GERADO no plano. É o caminho por onde o doctest entra: o
-    programa de cada módulo é escrito aqui, a partir da resposta 5, e daí para a
-    frente é um fonte como qualquer outro."""
-    d = path.dirname(alvo)
+async def write_file(target: str, text: str):
+    """A file GENERATED in the plan. It is the route the doctest comes in by: each
+    module's program is written here, from answer 5, and from then on it is a
+    source like any other."""
+    d = path.dirname(target)
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
-    f = await open(alvo, "w")
-    await f.write(texto)
+    f = await open(target, "w")
+    await f.write(text)
     await f.close()

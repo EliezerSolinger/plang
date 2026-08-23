@@ -1,8 +1,9 @@
-"""Escrever, ler de volta, e recusar o que tem de ser recusado.
+"""Write, read back, and refuse what has to be refused.
 
-O portão que interessa mais não está aqui: é o `tar` do sistema abrir o nosso
-(`bash packages/tar/test/sistema.sh`). Este confere a volta inteira sem sair de
-casa, e sobretudo confere as RECUSAS — que são a razão de o leitor existir.
+The gate that matters most is not here: it is the system's `tar` opening ours
+(`bash packages/tar/test/sistema.sh`). This one checks the whole round trip
+without leaving home, and above all checks the REFUSALS — which are the reason the
+reader exists.
 """
 
 import <tar/tar.psc> as tar
@@ -10,53 +11,53 @@ import <tar/tar.psc> as tar
 e: list<int> = [0, 0]
 
 
-def conf(nome: str, cond: bool):
+def check(name: str, cond: bool):
     if cond:
         e[0] += 1
     else:
         e[1] += 1
-        print("  FALHOU: " + nome)
+        print("  FAILED: " + name)
 
 
 def bs(s: str) -> list<u8>:
-    return tar.bytes_de(s)
+    return tar.bytes_of(s)
 
 
 def txt(b: list<u8>) -> str:
     return str(b)
 
 
-# ---------- a volta ----------
-ms: list<tar.Membro> = [
-    tar.diretorio("pkg", 0o755, 1700000000),
-    tar.arquivo("pkg/pack.json", bs("{\"name\": \"x\"}"), 0o644, 1700000001),
-    tar.arquivo("pkg/vazio.txt", bs(""), 0o644, 1700000002),
-    # 512 bytes exatos: o tamanho onde o preenchimento é zero e um leitor
-    # desatento acrescenta um bloco a mais
-    tar.arquivo("pkg/exato.bin", bs("z" * 512), 0o600, 1700000003),
-    tar.arquivo("pkg/acentuado-ção.txt", bs("olá"), 0o644, 1700000004),
+# ---------- the round trip ----------
+ms: list<tar.Member> = [
+    tar.directory("pkg", 0o755, 1700000000),
+    tar.file("pkg/pack.json", bs("{\"name\": \"x\"}"), 0o644, 1700000001),
+    tar.file("pkg/empty.txt", bs(""), 0o644, 1700000002),
+    # exactly 512 bytes: the size where the padding is zero and an inattentive
+    # reader adds one block too many
+    tar.file("pkg/exact.bin", bs("z" * 512), 0o600, 1700000003),
+    tar.file("pkg/accented-ção.txt", bs("olá"), 0o644, 1700000004),
 ]
-b = tar.escrever(ms)
-conf("o tarball é múltiplo de 512", len(b) % 512 == 0)
-volta = tar.ler(b)
-conf("o mesmo número de membros", len(volta) == len(ms))
-conf("o diretório voltou como diretório", volta[0].tipo == "dir" and volta[0].nome == "pkg/")
-conf("o conteúdo voltou", txt(volta[1].dados) == "{\"name\": \"x\"}")
-conf("o modo voltou", volta[1].modo == 0o644)
-conf("o mtime voltou", volta[1].mtime == 1700000001)
-conf("um arquivo vazio é um arquivo", volta[2].nome == "pkg/vazio.txt" and len(volta[2].dados) == 0)
-conf("512 bytes exatos", len(volta[3].dados) == 512 and volta[3].modo == 0o600)
-conf("o nome com acento voltou", volta[4].nome == "pkg/acentuado-ção.txt")
-conf("o conteúdo com acento voltou", txt(volta[4].dados) == "olá")
+b = tar.write(ms)
+check("the tarball is a multiple of 512", len(b) % 512 == 0)
+back = tar.read(b)
+check("the same number of members", len(back) == len(ms))
+check("the directory came back as a directory", back[0].kind == "dir" and back[0].name == "pkg/")
+check("the content came back", txt(back[1].data) == "{\"name\": \"x\"}")
+check("the mode came back", back[1].mode == 0o644)
+check("the mtime came back", back[1].mtime == 1700000001)
+check("an empty file is a file", back[2].name == "pkg/empty.txt" and len(back[2].data) == 0)
+check("exactly 512 bytes", len(back[3].data) == 512 and back[3].mode == 0o600)
+check("the accented name came back", back[4].name == "pkg/accented-ção.txt")
+check("the accented content came back", txt(back[4].data) == "olá")
 
-# ---------- o nome longo, pelo prefix ----------
-longo = "pacote-de-nome-comprido/" + ("dir/" * 20) + "arquivo.txt"
-b2 = tar.escrever([tar.arquivo(longo, bs("k"), 0o644, 1700000000)])
-v2 = tar.ler(b2)
-conf("nome de mais de 100 bytes, pelo prefix", v2[0].nome == longo)
+# ---------- the long name, through the prefix ----------
+long_name = "package-with-a-long-name/" + ("dir/" * 20) + "file.txt"
+b2 = tar.write([tar.file(long_name, bs("k"), 0o644, 1700000000)])
+v2 = tar.read(b2)
+check("a name over 100 bytes, through the prefix", v2[0].name == long_name)
 
-# ---------- as recusas ----------
-def recusa(nome: str, f: def() -> int) -> bool:
+# ---------- the refusals ----------
+def refuses(name: str, f: def() -> int) -> bool:
     try:
         f()
         return False
@@ -64,53 +65,53 @@ def recusa(nome: str, f: def() -> int) -> bool:
         return True
 
 
-def caminho_absoluto() -> int:
-    return len(tar.ler(tar.escrever([tar.arquivo("/etc/passwd", bs("x"), 0o644, 1)])))
+def absolute_path() -> int:
+    return len(tar.read(tar.write([tar.file("/etc/passwd", bs("x"), 0o644, 1)])))
 
 
-def sobe() -> int:
-    return len(tar.ler(tar.escrever([tar.arquivo("a/../../etc/passwd", bs("x"), 0o644, 1)])))
+def climbs_out() -> int:
+    return len(tar.read(tar.write([tar.file("a/../../etc/passwd", bs("x"), 0o644, 1)])))
 
 
-def checksum_errado() -> int:
-    mau = tar.escrever([tar.arquivo("a.txt", bs("x"), 0o644, 1)])
-    mau[0] = u8(ord("b"))          # muda o nome sem mexer no checksum
-    return len(tar.ler(mau))
+def wrong_checksum() -> int:
+    bad = tar.write([tar.file("a.txt", bs("x"), 0o644, 1)])
+    bad[0] = u8(ord("b"))          # change the name without touching the checksum
+    return len(tar.read(bad))
 
 
-def magic_errado() -> int:
-    mau = tar.escrever([tar.arquivo("a.txt", bs("x"), 0o644, 1)])
-    mau[257] = u8(ord("g"))
-    return len(tar.ler(mau))
+def wrong_magic() -> int:
+    bad = tar.write([tar.file("a.txt", bs("x"), 0o644, 1)])
+    bad[257] = u8(ord("g"))
+    return len(tar.read(bad))
 
 
-def tipo_recusado() -> int:
-    mau = tar.escrever([tar.arquivo("a.txt", bs("x"), 0o644, 1)])
-    mau[156] = u8(ord("2"))        # link simbólico
-    soma = 0
+def refused_kind() -> int:
+    bad = tar.write([tar.file("a.txt", bs("x"), 0o644, 1)])
+    bad[156] = u8(ord("2"))        # symbolic link
+    sum = 0
     for i in range(512):
-        soma += 32 if i >= 148 and i < 156 else int(mau[i])
-    d = tar.octal(soma, 7)
+        sum += 32 if i >= 148 and i < 156 else int(bad[i])
+    d = tar.octal(sum, 7)
     j = 0
     for ch in d:
-        mau[148 + j] = u8(ord(ch))
+        bad[148 + j] = u8(ord(ch))
         j += 1
-    return len(tar.ler(mau))
+    return len(tar.read(bad))
 
 
-def acaba_a_meio() -> int:
-    inteiro = tar.escrever([tar.arquivo("a.txt", bs("x" * 600), 0o644, 1)])
-    cortado: list<u8> = []
+def ends_halfway() -> int:
+    whole = tar.write([tar.file("a.txt", bs("x" * 600), 0o644, 1)])
+    cut: list<u8> = []
     for i in range(700):
-        cortado.append(inteiro[i])
-    return len(tar.ler(cortado))
+        cut.append(whole[i])
+    return len(tar.read(cut))
 
 
-conf("recusa caminho absoluto", recusa("abs", caminho_absoluto))
-conf("recusa `..`", recusa("..", sobe))
-conf("recusa checksum errado", recusa("cks", checksum_errado))
-conf("recusa magic errado", recusa("magic", magic_errado))
-conf("recusa link simbólico", recusa("link", tipo_recusado))
-conf("recusa tarball cortado", recusa("curto", acaba_a_meio))
+check("refuses an absolute path", refuses("abs", absolute_path))
+check("refuses `..`", refuses("..", climbs_out))
+check("refuses a wrong checksum", refuses("cks", wrong_checksum))
+check("refuses a wrong magic", refuses("magic", wrong_magic))
+check("refuses a symbolic link", refuses("link", refused_kind))
+check("refuses a truncated tarball", refuses("short", ends_halfway))
 
 print(f"tar: {e[0]} ok, {e[1]} failed")

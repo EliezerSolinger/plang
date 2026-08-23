@@ -1,51 +1,51 @@
-"""`--emit-ninja`: a aresta gorda descida para texto ninja.
+"""`--emit-ninja`: the fat edge lowered into ninja text.
 
-Isto NÃO é um segundo motor: é uma EXPORTAÇÃO, e ela existe por dois motivos
-concretos, nenhum dos dois sendo "e se o pbuild não servir".
+This is NOT a second engine: it is an EXPORT, and it exists for two concrete
+reasons, neither of them being "in case pbuild is not good enough".
 
-  * **o bootstrap numa máquina limpa.** Quem clona este repositório sem ter o
-    `plangc` nem o `ppack` construídos consegue `cc bootstrap/selfhost/*.c` e
-    `ninja`, e sai com o compilador inteiro. O `build.ninja` comitado na raiz é
-    a primeira construção, e depois dela o `ppack` toma conta.
-  * **o compdb.** `ninja -t compdb` dá o `compile_commands.json` que todo
-    servidor de linguagem e todo `clang-tidy` do mundo espera. Escrever o nosso
-    seria reescrever um formato que já existe.
+  * **bootstrapping on a clean machine.** Whoever clones this repository without
+    `plangc` or `ppack` built can run `cc bootstrap/selfhost/*.c` and `ninja`, and
+    come out with the whole compiler. The `build.ninja` committed at the root is
+    the first build, and after it `ppack` takes over.
+  * **compdb.** `ninja -t compdb` gives the `compile_commands.json` every language
+    server and every `clang-tidy` in the world expects. Writing our own would be
+    rewriting a format that already exists.
 
-O que a exportação NÃO promete é fidelidade total, e o lugar honesto de dizer
-isso é aqui:
+What the export does NOT promise is total fidelity, and the honest place to say
+so is here:
 
-  * o ninja não tem ambiente por aresta. O nosso `env=` SUBSTITUI o ambiente, e
-    isso desce para um `env -i K=V ... comando` explícito no texto do comando —
-    o que funciona, mas passa a depender de um `env` no PATH;
-  * o ninja não tem diretório por aresta. O `cwd=` desce para um `sh -c 'cd D &&
-    exec ...'`, com o mesmo tipo de dependência;
-  * o `restat` do ninja compara MTIME e o nosso compara CONTEÚDO (ver
-    `lib_log.psc`), então a poda exportada poda MENOS que a nossa. Recompila a
-    mais, nunca a menos: o erro fica do lado seguro;
-  * o hash de comando do ninja não cobre o ambiente; o nosso cobre. Trocar de
-    compilador por variável de ambiente é reaproveitamento silencioso lá, e não
-    é aqui.
+  * ninja has no per-edge environment. Our `env=` REPLACES the environment, and
+    that lowers into an explicit `env -i K=V ... command` in the command text —
+    which works, but starts depending on an `env` in the PATH;
+  * ninja has no per-edge directory. `cwd=` lowers into `sh -c 'cd D && exec
+    ...'`, with the same kind of dependency;
+  * ninja's `restat` compares MTIME and ours compares CONTENT (see
+    `lib_log.psc`), so the exported pruning prunes LESS than ours. It recompiles
+    more, never less: the error stays on the safe side;
+  * ninja's command hash does not cover the environment; ours does. Swapping
+    compilers through an environment variable is silent reuse there, and is not
+    here.
 
-Uma REGRA POR ARESTA, e isto é uma consequência do modelo, não uma preguiça: a
-aresta gorda não tem "regra" separada do comando — o comando dela É o comando
-dela, montado por uma função pscript que já sabia tudo. Um `build.ninja` com
-mil regras é maior que um com dez, e é exatamente igual de rápido: o ninja lê o
-arquivo uma vez e o `build.ninja` deste repositório tem dezenas de kB.
+ONE RULE PER EDGE, and that is a consequence of the model, not laziness: a fat
+edge has no "rule" separate from the command — its command IS its command, built
+by a pscript function that already knew everything. A `build.ninja` with a
+thousand rules is bigger than one with ten, and is exactly as fast: ninja reads
+the file once and this repository's `build.ninja` is tens of kB.
 
-O ASPEAMENTO é gerado, e é por isso que ele está certo. A pergunta "e se o
-caminho tiver um espaço" é a pergunta que derruba todo sistema de build que
-monta linha de comando por concatenação de texto; aqui nós sabemos onde cada
-argumento começa e acaba, porque nunca houve uma linha — houve um vetor.
+THE QUOTING IS GENERATED, and that is why it is correct. "What if the path has a
+space in it" is the question that brings down every build system that assembles a
+command line by concatenating text; here we know where every argument begins and
+ends, because there never was a line — there was a vector.
 """
 import lib_graph as G
 
-# ---------- as duas gramáticas ----------
-# (o aspeamento de SHELL mora em `lib_graph`, porque a exportação não é a única
-# que precisa dele — ver `G.sh_quote`)
-# O ninja e o shell escapam coisas DIFERENTES, e confundi-las é o defeito
-# clássico. `ninja_path` protege o que o ninja lê (o `$` dele, o `:` que separa
-# saídas de regra, o espaço que separa caminhos); `sh_quote` protege o que o
-# shell lê DEPOIS, dentro do valor de `command =`.
+# ---------- the two grammars ----------
+# (SHELL quoting lives in `lib_graph`, because the export is not the only thing
+# that needs it — see `G.sh_quote`)
+# Ninja and the shell escape DIFFERENT things, and confusing them is the classic
+# defect. `ninja_path` protects what ninja reads (its `$`, the `:` that separates
+# outputs from the rule, the space that separates paths); `sh_quote` protects
+# what the shell reads AFTERWARDS, inside the value of `command =`.
 def ninja_path(s: str) -> str:
     out = ""
     for ch in s:
@@ -62,8 +62,8 @@ def ninja_path(s: str) -> str:
     return out
 
 def esc_command(s: str) -> str:
-    """O texto do comando ainda passa pelo leitor do ninja, que come `$`. Uma
-    linha de comando não pode ter quebra de linha, e nenhuma das nossas tem."""
+    """The command text still goes through ninja's reader, which eats `$`. A
+    command line cannot contain a newline, and none of ours does."""
     out = ""
     for ch in s:
         if ch == "$":
@@ -74,21 +74,21 @@ def esc_command(s: str) -> str:
             out += ch
     return out
 
-# ---------- uma aresta ----------
+# ---------- one edge ----------
 def cmdline(e: G.Edge) -> str:
-    """O vetor de argumentos vira UMA linha de shell — com `env -i` na frente se
-    a aresta trouxe ambiente, com um `cd` se ela trouxe diretório, e com um
-    redirecionamento se ela mandava a saída para arquivo."""
-    partes: list<str> = []
+    """The argument vector becomes ONE shell line — with `env -i` in front if the
+    edge carried an environment, with a `cd` if it carried a directory, and with a
+    redirection if it sent its output to a file."""
+    parts: list<str> = []
     for a in e.argv:
-        partes.append(G.sh_quote(a))
-    linha = " ".join(partes)
+        parts.append(G.sh_quote(a))
+    line = " ".join(parts)
     if len(e.stdout_to) > 0:
-        linha += " > " + G.sh_quote(e.stdout_to)
+        line += " > " + G.sh_quote(e.stdout_to)
     if len(e.env) > 0:
-        # a MESMA semântica do nosso `os.run`: substitui, não mescla. `env -i`
-        # é o que diz isso em shell, e as chaves vão em ordem para que dois
-        # `--emit-ninja` do mesmo grafo deem o mesmo arquivo
+        # the SAME semantics as our `os.run`: it replaces, it does not merge.
+        # `env -i` is what says that in shell, and the keys go in order so that
+        # two `--emit-ninja` runs over the same graph give the same file
         ks: list<str> = []
         for k in e.env:
             ks.append(k)
@@ -96,12 +96,12 @@ def cmdline(e: G.Edge) -> str:
         pre: list<str> = ["env", "-i"]
         for k2 in ks:
             pre.append(G.sh_quote(k2 + "=" + e.env[k2]))
-        linha = " ".join(pre) + " " + linha
+        line = " ".join(pre) + " " + line
     if len(e.cwd) > 0:
-        linha = "cd " + G.sh_quote(e.cwd) + " && " + linha
+        line = "cd " + G.sh_quote(e.cwd) + " && " + line
     if len(e.cwd) > 0 or len(e.env) > 0:
-        linha = "sh -c " + G.sh_quote(linha)
-    return esc_command(linha)
+        line = "sh -c " + G.sh_quote(line)
+    return esc_command(line)
 
 private def paths(g: G.Graph, ids: list<int>) -> str:
     out: list<str> = []
@@ -109,32 +109,32 @@ private def paths(g: G.Graph, ids: list<int>) -> str:
         out.append(ninja_path(g.nodes[i].p))
     return " ".join(out)
 
-# ---------- o arquivo ----------
+# ---------- the file ----------
 def emit(g: G.Graph) -> str:
-    out = "# gerado por `ppack ninja` — NÃO editar à mão.\n"
+    out = "# generated by `ppack ninja` — do NOT edit by hand.\n"
     out += "#\n"
-    out += "# Este arquivo é o BOOTSTRAP: numa máquina sem `ppack` construído,\n"
+    out += "# This file is the BOOTSTRAP: on a machine with no `ppack` built,\n"
     out += "#   cc -O2 -o plangc bootstrap/selfhost/*.c && ninja\n"
-    out += "# constrói tudo. Depois disso o `ppack` é quem manda, e ele lê o\n"
-    out += "# descritor em pscript, não este arquivo.\n"
+    out += "# builds everything. After that `ppack` is in charge, and it reads\n"
+    out += "# the descriptor in pscript, not this file.\n"
     out += "#\n"
-    out += "# A exportação é FIEL no que constrói e CONSERVADORA no que poda: o\n"
-    out += "# `restat` daqui compara data e o nosso compara conteúdo, então este\n"
-    out += "# arquivo recompila a mais, nunca a menos.\n"
+    out += "# The export is FAITHFUL in what it builds and CONSERVATIVE in what it\n"
+    out += "# prunes: `restat` here compares dates and ours compares content, so\n"
+    out += "# this file recompiles more, never less.\n"
     out += "\n"
     out += "ninja_required_version = 1.5\n"
     out += "\n"
-    tem_console = False
+    has_console = False
     for e0 in g.edges:
         if e0.pool == "console":
-            tem_console = True
-    if tem_console:
-        out += "# o `pool console` do ninja já existe e tem exatamente o sentido\n"
-        out += "# que o nosso tem: uma aresta por vez, falando com o terminal.\n"
+            has_console = True
+    if has_console:
+        out += "# ninja's `pool console` already exists and means exactly what ours\n"
+        out += "# means: one edge at a time, talking to the terminal.\n"
         out += "\n"
     for e in g.edges:
-        nome = "e" + str(e.id)
-        out += "rule " + nome + "\n"
+        name = "e" + str(e.id)
+        out += "rule " + name + "\n"
         out += "  command = " + cmdline(e) + "\n"
         if len(e.desc) > 0:
             out += "  description = " + esc_command(e.desc) + "\n"
@@ -148,17 +148,17 @@ def emit(g: G.Graph) -> str:
         if e.pool == "console":
             out += "  pool = console\n"
         out += "\n"
-        linha = "build " + paths(g, e.outs)
+        line = "build " + paths(g, e.outs)
         if len(e.out_implicit) > 0:
-            linha += " | " + paths(g, e.out_implicit)
-        linha += ": " + nome
+            line += " | " + paths(g, e.out_implicit)
+        line += ": " + name
         if len(e.ins) > 0:
-            linha += " " + paths(g, e.ins)
+            line += " " + paths(g, e.ins)
         if len(e.implicit) > 0:
-            linha += " | " + paths(g, e.implicit)
+            line += " | " + paths(g, e.implicit)
         if len(e.order) > 0:
-            linha += " || " + paths(g, e.order)
-        out += linha + "\n\n"
+            line += " || " + paths(g, e.order)
+        out += line + "\n\n"
     if len(g.default_targets) > 0:
         ds: list<str> = []
         for d in g.default_targets:

@@ -1,33 +1,34 @@
-"""Ed25519 (RFC 8032): a assinatura que fecha o modo seguro.
+"""Ed25519 (RFC 8032): the signature that closes safe mode.
 
-Um repositório é um formato e a confiança vem do CONTEÚDO, não da conexão. O
-hash já diz "isto é o que disseram que era"; falta a outra metade — "e quem o
-disse foi quem eu penso". São duas assinaturas, com donos diferentes e por
-razões diferentes:
+A repository is a format and trust comes from the CONTENT, not from the
+connection. The hash already says "this is what they said it was"; the other half
+is missing — "and whoever said it is who I think". There are two signatures, with
+different owners and for different reasons:
 
-  * o ÍNDICE é assinado pelo REPOSITÓRIO, e é o que impede alguém no meio de
-    responder com uma lista velha (onde a versão com a falha ainda é a última);
-  * cada VERSÃO é assinada pelo AUTOR, e é o que impede o próprio repositório de
-    servir um tarball que o autor não fez.
+  * the INDEX is signed by the REPOSITORY, and it is what stops somebody in the
+    middle from answering with an old list (where the flawed version is still the
+    latest);
+  * each VERSION is signed by the AUTHOR, and it is what stops the repository
+    itself from serving a tarball the author did not make.
 
-Escolheu-se Ed25519 e não RSA nem ECDSA por três razões que se leem numa linha:
-a chave pública tem 32 bytes e a assinatura 64 (cabem num JSON sem doer); não
-precisa de aleatoriedade na hora de assinar (é determinística, e um gerador mau
-não vaza a chave como vaza no ECDSA); e a verificação não tem casos especiais
-que se possam implementar mal em silêncio.
+Ed25519 was chosen over RSA and ECDSA for three reasons that each read in one
+line: the public key is 32 bytes and the signature 64 (they fit in a JSON without
+hurting); it needs no randomness at signing time (it is deterministic, and a bad
+generator does not leak the key the way it does in ECDSA); and verification has no
+special cases that can be silently implemented wrong.
 
-**O que este pacote NÃO promete: tempo constante.** A multiplicação escalar é
-duplica-e-soma sobre os bits do escalar, e o tempo depende deles. Para VERIFICAR
-isso é irrelevante — não há segredo nenhum na verificação. Para ASSINAR, num
-computador partilhado com um adversário capaz de medir, é uma fraqueza real.
-Está escrito aqui em vez de estar escondido: quem assina versões numa máquina
-dessas tem um problema maior do que este pacote.
+**What this package does NOT promise: constant time.** The scalar multiplication
+is double-and-add over the scalar's bits, and the time depends on them. For
+VERIFYING that is irrelevant — there is no secret in verification at all. For
+SIGNING, on a computer shared with an adversary able to measure, it is a real
+weakness. It is written here instead of being hidden: whoever signs versions on
+such a machine has a bigger problem than this package.
 
-A aritmética é de propósito a mais simples que dá para conferir lendo: inteiros
-de 256 bits em oito palavras de 32, produto escolar, e redução módulo
-2^255 - 19 usando 2^256 ≡ 38. Não há aqui truque de representação (o `ref10`
-usa dez limbos de 25,5 bits) porque isto assina meia dúzia de coisas por
-publicação, e o que se ganharia em velocidade paga-se em quem consegue rever.
+The arithmetic is deliberately the simplest that can be checked by reading:
+256-bit integers in eight 32-bit words, schoolbook multiplication, and reduction
+modulo 2^255 - 19 using 2^256 ≡ 38. There is no representation trick here
+(`ref10` uses ten 25.5-bit limbs) because this signs half a dozen things per
+publication, and what you would gain in speed you pay in who can review it.
 """
 
 import <stl/cstr.ph>
@@ -38,44 +39,44 @@ const ED25519_PUB_LEN: usize = 32
 const ED25519_SIG_LEN: usize = 64
 
 def ed25519_pubkey(seed: const *char, out_pub: *char):
-    """A chave pública que corresponde a uma semente de 32 bytes.
+    """The public key matching a 32-byte seed.
 
-    A semente É a chave privada: o resto (o escalar e o prefixo) sai dela por
-    SHA-512, o que faz uma chave privada ser trinta e dois bytes que se guardam
-    e mais nada."""
+    The seed IS the private key: the rest (the scalar and the prefix) comes out of
+    it through SHA-512, which makes a private key thirty-two bytes you keep and
+    nothing else."""
 
 def ed25519_sign(seed: const *char, pub: const *char, msg: const *char, n: usize, out_sig: *char):
-    """Assina `n` bytes. A assinatura tem 64 bytes e é DETERMINÍSTICA: a mesma
-    mensagem com a mesma chave dá sempre a mesma assinatura, o que também quer
-    dizer que não há gerador de aleatórios nenhum entre a chave e o resultado."""
+    """Signs `n` bytes. The signature is 64 bytes and DETERMINISTIC: the same
+    message with the same key always gives the same signature, which also means
+    there is no random generator at all between the key and the result."""
 
 def ed25519_verify(pub: const *char, msg: const *char, n: usize, sig: const *char) -> bool:
-    """Confere. Devolve `False` para tudo o que não seja uma assinatura válida
-    desta mensagem por esta chave — incluindo uma chave que não é um ponto da
-    curva, um `S` fora do intervalo, e os pontos de ordem pequena que a RFC
-    manda recusar."""
+    """Verifies. Returns `False` for anything that is not a valid signature of
+    this message by this key — including a key that is not a point on the curve, an
+    `S` out of range, and the small-order points the RFC requires to be
+    refused."""
 
-# ---------- a travessia para o pscript (45.5/84.1) ----------
+# ---------- the crossing into pscript (45.5/84.1) ----------
 
 def ed25519_pub_hex(in seed: CBytes) -> CStr:
-    """A chave pública, em hexadecimal. É a forma que vai para o `pack.lock` e
-    para o índice — texto, porque é lá que ela vive.
+    """The public key, in hexadecimal. It is the form that goes into `pack.lock`
+    and into the index — text, because that is where it lives.
 
-    O vetor é o primeiro do RFC 8032 §7.1: a mesma semente dá sempre a mesma
-    chave, porque não há aleatoriedade nenhuma depois da semente.
+    The vector is the first in RFC 8032 §7.1: the same seed always gives the same
+    key, because there is no randomness after the seed.
 
     >>> len(ed25519_pub_hex([u8(0) for _ in range(32)]))
     64
     """
 
 def ed25519_sign_hex(in seed: CBytes, in msg: CBytes) -> CStr:
-    """A assinatura em hexadecimal (128 dígitos)."""
+    """The signature in hexadecimal (128 digits)."""
 
 def ed25519_verify_hex(in pub_hex: CStr, in msg: CBytes, in sig_hex: CStr) -> bool:
-    """Confere, com a chave e a assinatura como texto. Um hexadecimal com o
-    tamanho errado ou com um dígito que não é dígito é `False`, e não um erro:
-    do ponto de vista de quem confere, um ficheiro estragado e uma assinatura
-    errada são a mesma resposta.
+    """Verifies, with the key and the signature as text. A hexadecimal of the
+    wrong length or with a digit that is not a digit is `False`, and not an error:
+    from the verifier's point of view, a damaged file and a wrong signature are
+    the same answer.
 
     >>> ed25519_verify_hex("abc", [u8(1)], "def")
     False

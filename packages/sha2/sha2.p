@@ -1,7 +1,7 @@
-# A implementação do FIPS 180-4 §6.2. Ver `sha2.ph` para o porquê.
+# The FIPS 180-4 §6.2 implementation. See `sha2.ph` for the why.
 import <sha2/sha2.ph>
 
-# as raízes cúbicas dos 64 primeiros primos, a parte fracionária em 32 bits
+# the cube roots of the first 64 primes, the fractional part in 32 bits
 private const K: const u32[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -15,9 +15,9 @@ private const K: const u32[64] = {
 private def rotr(x: u32, n: u32) -> u32:
     return (x >> n) | (x << (32 - n))
 
-# UM bloco de 64 bytes. É aqui que o hash inteiro acontece; o resto do arquivo é
-# contabilidade de quantos bytes já entraram.
-private def bloco(ref h: u32[8], p: const *char):
+# ONE 64-byte block. This is where the whole hash happens; the rest of the file
+# is bookkeeping of how many bytes have come in.
+private def block(ref h: u32[8], p: const *char):
     w: u32[64]
     for i in range(16):
         w[i] = (u32(u8(p[i * 4])) << 24) | (u32(u8(p[i * 4 + 1])) << 16) | (u32(u8(p[i * 4 + 2])) << 8) | u32(u8(p[i * 4 + 3]))
@@ -73,7 +73,7 @@ def sha256_init(out s: Sha256):
 def sha256_update(ref s: Sha256, data: const *char, n: usize):
     s.total += u64(n)
     i: usize = 0
-    # o que sobrou da vez passada primeiro: um bloco só se processa cheio
+    # what was left over from last time first: a block is only processed full
     if s.nbuf > 0:
         while i < n and s.nbuf < 64:
             s.buf[s.nbuf] = u8(data[i])
@@ -81,10 +81,10 @@ def sha256_update(ref s: Sha256, data: const *char, n: usize):
             i += 1
         if s.nbuf < 64:
             return
-        bloco(ref s.h, (*char)(&s.buf[0]))
+        block(ref s.h, (*char)(&s.buf[0]))
         s.nbuf = 0
     while n - i >= 64:
-        bloco(ref s.h, data + i)
+        block(ref s.h, data + i)
         i += 64
     while i < n:
         s.buf[s.nbuf] = u8(data[i])
@@ -92,9 +92,9 @@ def sha256_update(ref s: Sha256, data: const *char, n: usize):
         i += 1
 
 def sha256_final(ref s: Sha256, out_digest: *char):
-    # o preenchimento: um bit 1, zeros, e o COMPRIMENTO EM BITS em 64 bits
-    # big-endian. O comprimento é o que impede duas mensagens diferentes de
-    # terem o mesmo preenchimento.
+    # the padding: a 1 bit, zeros, and the LENGTH IN BITS as a big-endian
+    # 64-bit value. The length is what stops two different messages from having
+    # the same padding.
     bits: u64 = s.total * u64(8)
     s.buf[s.nbuf] = u8(0x80)
     s.nbuf += 1
@@ -102,14 +102,14 @@ def sha256_final(ref s: Sha256, out_digest: *char):
         while s.nbuf < 64:
             s.buf[s.nbuf] = u8(0)
             s.nbuf += 1
-        bloco(ref s.h, (*char)(&s.buf[0]))
+        block(ref s.h, (*char)(&s.buf[0]))
         s.nbuf = 0
     while s.nbuf < 56:
         s.buf[s.nbuf] = u8(0)
         s.nbuf += 1
     for i in range(8):
         s.buf[56 + i] = u8((bits >> u64((7 - i) * 8)) & u64(0xff))
-    bloco(ref s.h, (*char)(&s.buf[0]))
+    block(ref s.h, (*char)(&s.buf[0]))
     for i in range(8):
         out_digest[i * 4] = char((s.h[i] >> 24) & 0xff)
         out_digest[i * 4 + 1] = char((s.h[i] >> 16) & 0xff)
@@ -130,10 +130,10 @@ def sha256_hex(data: const *char, n: usize, out_hex: *char):
         out_hex[i * 2 + 1] = HEXD[b & u8(0xf)]
     out_hex[64] = '\0'
 
-# Devolve EMPRESTADO: um buffer deste módulo, válido até à próxima chamada — a
-# convenção do `strerror` (83.1), e a única que não obriga ninguém a libertar
-# nada. Quem atravessa a fronteira copia na hora, então a validade que interessa
-# é a da chamada.
+# Returns BORROWED: a buffer belonging to this module, valid until the next call
+# — `strerror`'s convention (83.1), and the only one that does not force anybody
+# to free anything. Whoever crosses the boundary copies on the spot, so the
+# validity that matters is the call's.
 private g_hex: char[65]
 
 def sha256_of(in data: CBytes) -> CStr:
@@ -143,7 +143,7 @@ def sha256_of(in data: CBytes) -> CStr:
 
 # ---------- SHA-512 ----------
 
-# as raízes cúbicas dos 80 primeiros primos, a parte fracionária em 64 bits
+# the cube roots of the first 80 primes, the fractional part in 64 bits
 private const K512: const u64[80] = {
     u64(0x428a2f98d728ae22), u64(0x7137449123ef65cd),
     u64(0xb5c0fbcfec4d3b2f), u64(0xe9b5dba58189dbbc),
@@ -189,7 +189,7 @@ private const K512: const u64[80] = {
 private def rotr64(x: u64, n: u64) -> u64:
     return (x >> n) | (x << (u64(64) - n))
 
-private def bloco512(ref h: u64[8], p: const *char):
+private def block512(ref h: u64[8], p: const *char):
     w: u64[80]
     for i in range(16):
         v: u64 = u64(0)
@@ -234,7 +234,7 @@ private def bloco512(ref h: u64[8], p: const *char):
     h[7] += hh
 
 def sha512_init(out s: Sha512):
-    # as raízes QUADRADAS dos 8 primeiros primos, em 64 bits
+    # the SQUARE roots of the first 8 primes, in 64 bits
     s.h[0] = u64(0x6a09e667f3bcc908)
     s.h[1] = u64(0xbb67ae8584caa73b)
     s.h[2] = u64(0x3c6ef372fe94f82b)
@@ -254,7 +254,7 @@ def sha512_update(ref s: Sha512, data: const *char, n: usize):
         s.nbuf += usize(1)
         i += usize(1)
         if s.nbuf == usize(128):
-            bloco512(ref s.h, (*char)(&s.buf[0]))
+            block512(ref s.h, (*char)(&s.buf[0]))
             s.nbuf = usize(0)
 
 def sha512_final(ref s: Sha512, out_digest: *char):
@@ -265,18 +265,18 @@ def sha512_final(ref s: Sha512, out_digest: *char):
         while s.nbuf < usize(128):
             s.buf[s.nbuf] = u8(0)
             s.nbuf += usize(1)
-        bloco512(ref s.h, (*char)(&s.buf[0]))
+        block512(ref s.h, (*char)(&s.buf[0]))
         s.nbuf = usize(0)
     while s.nbuf < usize(112):
         s.buf[s.nbuf] = u8(0)
         s.nbuf += usize(1)
-    # o comprimento é de 128 bits: a metade alta é zero enquanto a mensagem
-    # couber em 2^61 bytes, que é toda a mensagem que existe
+    # the length is 128 bits: the high half is zero as long as the message fits
+    # in 2^61 bytes, which is every message that exists
     for i in range(8):
         s.buf[112 + i] = u8(0)
     for i in range(8):
         s.buf[120 + i] = u8((bits >> u64((7 - i) * 8)) & u64(0xff))
-    bloco512(ref s.h, (*char)(&s.buf[0]))
+    block512(ref s.h, (*char)(&s.buf[0]))
     for i in range(8):
         for j in range(8):
             out_digest[i * 8 + j] = char((s.h[i] >> u64((7 - j) * 8)) & u64(0xff))

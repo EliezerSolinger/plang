@@ -1,29 +1,30 @@
-"""O LOG do build, e o `depfile` que o `cc` deixa para trás.
+"""THE BUILD LOG, and the `depfile` the `cc` leaves behind.
 
-O log é o que faz um build INCREMENTAL ser possível, e ele guarda por saída
-cinco coisas, cada uma respondendo a uma pergunta que o disco sozinho não
-responde:
+The log is what makes an INCREMENTAL build possible, and it keeps five things
+per output, each answering a question the disk alone does not answer:
 
-  * o **mtime** de quando o CONTEÚDO dela mudou pela última vez — porque o mtime
-    de agora pode ser o de um `touch`, e porque uma corrida que morreu no meio
-    deixa um arquivo novo com conteúdo velho;
-  * o **vtime**, a data da entrada mais nova quando a aresta foi conferida — que
-    é uma pergunta DIFERENTE da anterior, e a nota logo abaixo diz por quê;
-  * o **hash do comando** que a produziu — é o que pega "mudei uma flag", que
-    nenhuma comparação de datas pega;
-  * o **hash do CONTEÚDO** da saída — que o ninja NÃO guarda, e que é o que faz
-    o `restat` funcionar aqui: o `restat` dele compara mtime, e uma ferramenta
-    que reescreve o arquivo toda vez (o nosso `plangc` reescreve) muda o mtime
-    mesmo produzindo bytes idênticos. Sem o conteúdo, a poda nunca aconteceria —
-    e a poda é justamente o que transforma "regenerei C igual" em "não
-    recompilei os 18 s";
-  * a **duração** — que o ninja grava e não usa, e que aqui decide a ORDEM da
-    fila: com o caminho crítico pesado por tempo, a aresta mais cara começa
-    primeiro. Neste repositório isso vale ~4 s de 5 (um TU de 4,96 s num build
-    de 5,0 s), e sem ela a aresta cara pode ir por último.
+  * the **mtime** of when its CONTENT last changed — because the mtime you see
+    now may be the one a `touch` left, and because a run that died halfway
+    leaves a new file with old content;
+  * the **vtime**, the date of the newest input when the edge was checked —
+    which is a DIFFERENT question from the previous one, and the note just below
+    says why;
+  * the **command hash** that produced it — this is what catches "I changed a
+    flag", which no date comparison catches;
+  * the hash of the output's **CONTENT** — which ninja does NOT keep, and which
+    is what makes `restat` work here: ninja's `restat` compares mtime, and a
+    tool that rewrites the file every time (our `plangc` does) changes the mtime
+    even when it produces identical bytes. Without the content, pruning would
+    never happen — and pruning is precisely what turns "I regenerated identical
+    C" into "I did not recompile for 18 s";
+  * the **duration** — which ninja records and does not use, and which here
+    decides the ORDER of the queue: with the critical path weighted by time, the
+    most expensive edge starts first. In this repository that is worth ~4 s out
+    of 5 (a 4.96 s TU in a 5.0 s build), and without it the expensive edge can
+    go last.
 
-O formato é texto, uma linha por saída, porque um log de build é a primeira coisa
-que alguém abre quando o incremental faz algo inesperado.
+The format is text, one line per output, because a build log is the first thing
+anyone opens when the incremental build does something unexpected.
 """
 import os
 import path
@@ -31,31 +32,33 @@ import path
 const LOG_HEADER: str = "# pbuild log v2"
 
 record LogEnt:
-    mtime: int     # quando o CONTEÚDO desta saída mudou pela última vez
-    vtime: int     # ... e a data da entrada mais nova quando ela foi CONFERIDA
+    mtime: int     # when this output's CONTENT last changed
+    vtime: int     # ... and the newest input's date when it was CHECKED
     dur_ms: int
-    hash: u64      # o hash do COMANDO que produziu esta saída
-    chash: u64     # ... e o hash do CONTEÚDO dela, para o `restat`
+    hash: u64      # the hash of the COMMAND that produced this output
+    chash: u64     # ... and the hash of its CONTENT, for `restat`
 
-# Por que DUAS datas, que é a pergunta que este arquivo tem de responder.
+# Why TWO dates, which is the question this file has to answer.
 #
-# Numa aresta `restat` as duas divergem, e é justamente aí que o incremental se
-# ganha ou se perde. O gerador rodou (a entrada mudou), a saída saiu IDÊNTICA:
+# On a `restat` edge the two diverge, and that is exactly where an incremental
+# build is won or lost. The generator ran (the input changed), the output came
+# out IDENTICAL:
 #
-#   * quem LÊ a saída não precisa rodar — para ele, ela não mudou, e a data que
-#     vale é a de quando o conteúdo mudou pela última vez. É o `mtime`.
-#   * a ARESTA que a produziu, essa está em dia com as entradas de agora, e não
-#     pode rodar de novo na corrida seguinte. É o `vtime`.
+#   * whoever READS the output does not need to run — for them it did not
+#     change, and the date that counts is when the content last changed. That is
+#     the `mtime`.
+#   * the EDGE that produced it, on the other hand, is up to date with today's
+#     inputs, and must not run again on the next pass. That is the `vtime`.
 #
-# Uma data só não consegue dizer as duas coisas. Guardar a antiga fazia a aresta
-# rodar para sempre; guardar a nova fazia quem lê recompilar por nada. As duas
-# formas estiveram no código, cada uma com o seu defeito, e é por isso que a
-# explicação está aqui.
+# One date cannot say both things. Keeping the old one made the edge run
+# forever; keeping the new one made readers recompile for nothing. Both shapes
+# were in the code, each with its own defect, and that is why the explanation
+# lives here.
 
-# ---------- hexadecimal, à mão ----------
-# O hash é u64 e não cabe num `int` com sinal, então ele não pode ir ao log em
-# decimal e voltar por `int(s)`. Dezasseis dígitos hexa resolvem, e a conversão
-# nos dois sentidos é curta o bastante para não valer uma dependência.
+# ---------- hexadecimal, by hand ----------
+# The hash is u64 and does not fit a signed `int`, so it cannot go to the log in
+# decimal and come back through `int(s)`. Sixteen hex digits solve it, and the
+# conversion both ways is short enough not to be worth a dependency.
 const HEXD: str = "0123456789abcdef"
 
 def to_hex16(v: u64) -> str:
@@ -84,15 +87,15 @@ def from_hex(s: str) -> u64:
         v = (v %* u64(16)) %+ u64(d)
     return v
 
-# ---------- o log ----------
+# ---------- the log ----------
 struct Log:
     p: str
     ents: dict<str, LogEnt>
     dirty: bool
 
     def get(self, key: str) -> LogEnt:
-        """A entrada de uma saída, ou uma vazia — `mtime` ausente, hash zero — que
-        é o que "nunca foi construída" quer dizer para quem decide sujeira."""
+        """An output's entry, or an empty one — no `mtime`, zero hash — which is
+        what "never built" means to whoever decides dirtiness."""
         if key in self.ents:
             return self.ents[key]
         return LogEnt(-2, -2, 0, u64(0), u64(0))
@@ -115,22 +118,22 @@ async def load(p: str) -> Log:
     for line in txt.split("\n"):
         if first:
             first = False
-            continue          # o cabeçalho, que diz a versão do formato
+            continue          # the header, which states the format version
         if len(line) == 0:
             continue
         parts = line.split("\t")
         if len(parts) != 6:
-            # uma linha estragada não invalida o log inteiro: ela vira "essa
-            # saída nunca foi construída", que é o pior caso seguro
+            # one damaged line does not invalidate the whole log: it becomes
+            # "that output was never built", which is the safe worst case
             continue
         lg.ents[parts[5]] = LogEnt(int(parts[0]), int(parts[1]), int(parts[2]),
                                    from_hex(parts[3]), from_hex(parts[4]))
     return lg
 
 async def save(lg: Log):
-    """Reescreve o log inteiro. O ninja acrescenta linha a linha e compacta
-    quando incha; aqui o arquivo tem uma linha por saída do projeto (milhares, não
-    milhões) e reescrever é mais simples e não deixa lixo para trás."""
+    """Rewrites the whole log. Ninja appends line by line and compacts when it
+    grows; here the file has one line per output of the project (thousands, not
+    millions) and rewriting is simpler and leaves no litter behind."""
     if not lg.dirty:
         return
     d = path.dirname(lg.p)
@@ -140,7 +143,7 @@ async def save(lg: Log):
     ks: list<str> = []
     for k in lg.ents:
         ks.append(k)
-    ks = sorted(ks)     # ordenado: dois builds iguais dão logs iguais
+    ks = sorted(ks)     # sorted: two identical builds give identical logs
     for k2 in ks:
         e = lg.ents[k2]
         out += (str(e.mtime) + "\t" + str(e.vtime) + "\t" + str(e.dur_ms) + "\t"
@@ -150,14 +153,15 @@ async def save(lg: Log):
     await f.close()
     lg.dirty = False
 
-# ---------- o depfile ----------
-# O `cc -MD` deixa um arquivo no formato do Makefile: `alvo: dep1 dep2 \` com
-# continuação de linha. O lado C continua sendo estranho para nós (é o `cc` que
-# sabe quais headers leu), e este é o preço — trinta linhas de parser. Do NOSSO
-# lado o compilador responde a pergunta 1 do protocolo e nada disto é preciso.
+# ---------- the depfile ----------
+# `cc -MD` leaves a file in Makefile format: `target: dep1 dep2 \` with line
+# continuations. The C side is still a stranger to us (it is the `cc` that knows
+# which headers it read), and this is the price — thirty lines of parser. On OUR
+# side the compiler answers question 1 of the protocol and none of this is
+# needed.
 def parse_depfile(txt: str) -> list<str>:
     out: list<str> = []
-    # junta as continuações e troca o que separa por espaço
+    # join the continuations and turn every separator into a space
     flat = ""
     i = 0
     n = len(txt)
@@ -168,7 +172,7 @@ def parse_depfile(txt: str) -> list<str>:
             i += 2
             continue
         if ch == "\\" and i + 1 < n and txt[i + 1] == " ":
-            flat += "\x01"      # espaço ESCAPADO: parte do nome, não separador
+            flat += "\x01"      # an ESCAPED space: part of the name, not a separator
             i += 2
             continue
         if ch == "\n" or ch == "\t":
@@ -177,7 +181,8 @@ def parse_depfile(txt: str) -> list<str>:
             continue
         flat += ch
         i += 1
-    # tudo antes do primeiro `:` é o alvo, e o alvo já está no grafo
+    # everything before the first `:` is the target, and the target is already
+    # in the graph
     ci = flat.find(":")
     if ci < 0:
         return out

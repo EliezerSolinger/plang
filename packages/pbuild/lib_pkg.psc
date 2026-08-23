@@ -1,151 +1,154 @@
-"""O grafo de PACOTES do workspace: quem existe, quem puxa quem.
+"""The workspace's PACKAGE graph: who exists, who pulls whom.
 
-É um grafo pequeno e de outra natureza que o grafo de build. O de build fala de
-arquivos e comandos; este fala de nomes e versões, e existe para responder duas
-perguntas que todo lock grande acaba por provocar:
+It is a small graph and of a different nature from the build graph. The build one
+talks about files and commands; this one talks about names and versions, and it
+exists to answer the two questions every large lock eventually provokes:
 
-    ppack tree            o que este projeto usa, e por dentro de quê
-    ppack why <pacote>    quem o puxou
+    ppack tree            what this project uses, and through what
+    ppack why <package>   who pulled it in
 
-Elas não são luxo. São as que salvam a tarde em que algo aparece no build e
-ninguém sabe de onde veio — e o ninja e o samurai têm as duas (`-t graph`,
-`-t query`), o que já diz alguma coisa sobre a frequência com que se precisa
-delas.
+They are not a luxury. They are the ones that save the afternoon when something
+shows up in the build and nobody knows where it came from — and ninja and samurai
+both have them (`-t graph`, `-t query`), which already says something about how
+often they are needed.
 
-O que este arquivo NÃO faz: resolver versões. Hoje os membros do workspace são
-os pacotes, e a faixa que uma dependência pede é conferida contra a versão que
-existe. Quando houver repositório, é aqui que a resolução entra — e o formato do
-que ela produz é o `pack.lock`.
+What this file does NOT do: resolve versions. Today the workspace's members are
+the packages, and the requirement a dependency asks for is checked against the
+version that exists. When there is a repository, this is where resolution comes
+in — and the format of what it produces is `pack.lock`.
 """
 import path
 import lib_manifest as M
 
-struct Pacote:
-    nome: str
-    versao: str
+struct Package:
+    name: str
+    version: str
     lang: str
     dir: str
-    deps: list<str>       # os nomes, na ordem do manifesto
-    faixas: list<str>     # ... e a faixa que cada um pediu
+    deps: list<str>       # the names, in the manifest's order
+    reqs: list<str>       # ... and the requirement each one asked for
 
-struct Mundo:
-    pacotes: list<Pacote>
-    faltando: list<str>   # dependências pedidas que ninguém oferece
+struct World:
+    packages: list<Package>
+    missing: list<str>    # dependencies asked for that nobody offers
 
-    def acha(self, nome: str) -> int:
+    def find(self, name: str) -> int:
         i = 0
-        while i < len(self.pacotes):
-            if self.pacotes[i].nome == nome:
+        while i < len(self.packages):
+            if self.packages[i].name == name:
                 return i
             i += 1
         return -1
 
-    def quem_puxa(self, nome: str) -> list<str>:
-        """Os pacotes que dependem DESTE, na ordem em que aparecem."""
+    def who_pulls(self, name: str) -> list<str>:
+        """The packages that depend on THIS one, in the order they appear."""
         out: list<str> = []
-        for p in self.pacotes:
+        for p in self.packages:
             for d in p.deps:
-                if d == nome:
-                    out.append(p.nome)
+                if d == name:
+                    out.append(p.name)
         return out
 
 
-def conferir_linguagens(m: Mundo) -> list<str>:
-    """A invariante que mantém P livre de runtime ATRAVÉS dos pacotes.
+def check_languages(m: World) -> list<str>:
+    """The invariant that keeps P runtime-free THROUGH the packages.
 
-    Um pacote `lang: p` não pode depender de um pacote `pscript`. A razão não é
-    de arrumação: quem usa um pacote P espera o que P promete — sem coletor, sem
-    alocação escondida, a ABI do C. Um `p` que puxasse um `pscript` traria o
-    runtime inteiro a reboque, e a promessa quebrava-se em silêncio, uma
-    dependência abaixo de onde alguém a leu.
+    A `lang: p` package may not depend on a `pscript` package. The reason is not
+    tidiness: whoever uses a P package expects what P promises — no collector, no
+    hidden allocation, C's ABI. A `p` that pulled in a `pscript` would drag the
+    whole runtime along, and the promise would break in silence, one dependency
+    below where somebody read it.
 
-    O outro lado não é simétrico e não devia ser: um pacote pscript PODE depender
-    de um pacote P, e é assim que o `ppack` usa o `sha2` — a travessia da 45.5
-    existe exatamente para isso.
+    The other direction is not symmetric and should not be: a pscript package MAY
+    depend on a P package, and that is how `ppack` uses `sha2` — the 45.5 crossing
+    exists for exactly that.
 
-    Devolve a lista de problemas, vazia quando está tudo bem."""
+    Returns the list of problems, empty when all is well."""
     out: list<str> = []
-    for p in m.pacotes:
+    for p in m.packages:
         if p.lang != "p":
             continue
         for d in p.deps:
-            i = m.acha(d)
+            i = m.find(d)
             if i < 0:
                 continue
-            if m.pacotes[i].lang != "p":
-                out.append(p.nome + " é `lang: p` e depende de " + d + ", que é `"
-                           + m.pacotes[i].lang + "`: um pacote P que puxa um pacote pscript "
-                           + "traz o runtime a reboque, e quem usa o P espera o contrário")
+            if m.packages[i].lang != "p":
+                out.append(p.name + " is `lang: p` and depends on " + d + ", which is `"
+                           + m.packages[i].lang + "`: a P package that pulls in a pscript "
+                           + "package drags the runtime along, and whoever uses the P expects the opposite")
     return out
 
 
-async def ler_mundo(membros: list<str>) -> Mundo:
-    """Lê o manifesto de cada membro do workspace. Um membro sem `pack.json` é
-    ignorado em silêncio — o workspace pode listar uma pasta que ainda não é
-    pacote, e recusar isso obrigaria a mexer no manifesto para experimentar."""
-    m = Mundo([], [])
-    for dir in membros:
+async def read_world(members: list<str>) -> World:
+    """Reads each workspace member's manifest. A member with no `pack.json` is
+    ignored silently — the workspace may list a folder that is not a package yet,
+    and refusing that would force you to edit the manifest just to experiment."""
+    m = World([], [])
+    for dir in members:
         man = path.join(dir, "pack.json")
         if not path.isfile(man):
             continue
-        pk = await M.ler(man)
-        if pk.eh_workspace:
+        pk = await M.read(man)
+        if pk.is_workspace:
             continue
-        nomes: list<str> = []
-        faixas: list<str> = []
+        names: list<str> = []
+        reqs: list<str> = []
         for d in pk.deps:
-            nomes.append(d.nome)
-            faixas.append(d.faixa)
-        m.pacotes.append(Pacote(pk.nome, pk.versao, pk.lang, dir, nomes, faixas))
-    # o que se pede e não existe: dito UMA vez, com o nome de quem pediu
-    for p in m.pacotes:
+            names.append(d.name)
+            reqs.append(d.req)
+        m.packages.append(Package(pk.name, pk.version, pk.lang, dir, names, reqs))
+    # what is asked for and does not exist: said ONCE, with the name of whoever
+    # asked
+    for p in m.packages:
         for d in p.deps:
-            if m.acha(d) < 0:
-                m.faltando.append(d + " (pedido por " + p.nome + ")")
+            if m.find(d) < 0:
+                m.missing.append(d + " (asked for by " + p.name + ")")
     return m
 
 
-# ---------- a árvore ----------
-private def galho(m: Mundo, nome: str, prefixo: str, ultimo: bool, pilha: list<str>) -> str:
-    i = m.acha(nome)
-    marca = "└─ " if ultimo else "├─ "
+# ---------- the tree ----------
+private def branch(m: World, name: str, prefix: str, last: bool, stack: list<str>) -> str:
+    i = m.find(name)
+    mark = "└─ " if last else "├─ "
     if i < 0:
-        return prefixo + marca + nome + "  (não achado)\n"
-    p = m.pacotes[i]
-    for x in pilha:
-        if x == nome:
-            # um ciclo é dito e cortado, não seguido: seguir seria não parar
-            return prefixo + marca + p.nome + " " + p.versao + "  (ciclo)\n"
-    out = prefixo + marca + p.nome + " " + p.versao + "  (" + p.lang + ")\n"
-    dentro = prefixo + ("   " if ultimo else "│  ")
-    pilha.append(nome)
+        return prefix + mark + name + "  (not found)\n"
+    p = m.packages[i]
+    for x in stack:
+        if x == name:
+            # a cycle is reported and cut, not followed: following it would be not
+            # stopping
+            return prefix + mark + p.name + " " + p.version + "  (cycle)\n"
+    out = prefix + mark + p.name + " " + p.version + "  (" + p.lang + ")\n"
+    inner = prefix + ("   " if last else "│  ")
+    stack.append(name)
     j = 0
     while j < len(p.deps):
-        out += galho(m, p.deps[j], dentro, j == len(p.deps) - 1, pilha)
+        out += branch(m, p.deps[j], inner, j == len(p.deps) - 1, stack)
         j += 1
-    fora = pilha.pop()      # o valor não se usa, mas descartá-lo é expressão sem uso
-    if fora != nome:
-        return out + prefixo + "   (a pilha da árvore saiu de ordem — defeito)\n"
+    popped = stack.pop()    # the value is unused, but discarding it is an unused expression
+    if popped != name:
+        return out + prefix + "   (the tree's stack went out of order — a defect)\n"
     return out
 
 
-def arvore(m: Mundo) -> str:
-    """A árvore do workspace: as RAÍZES primeiro (quem ninguém puxa), e cada uma
-    com o que ela puxa por baixo. Um pacote que aparece em dois ramos aparece
-    duas vezes — é uma árvore, e não um grafo desenhado como árvore, porque o
-    que se quer ver é o CAMINHO até ele."""
+def tree(m: World) -> str:
+    """The workspace's tree: the ROOTS first (whoever nobody pulls in), each with
+    what it pulls in below it. A package that appears in two branches appears
+    twice — it is a tree, and not a graph drawn as a tree, because what you want
+    to see is the PATH to it."""
     out = ""
-    raizes: list<str> = []
-    for p in m.pacotes:
-        if len(m.quem_puxa(p.nome)) == 0:
-            raizes.append(p.nome)
-    if len(raizes) == 0:
-        # tudo é puxado por alguém: um ciclo, ou um workspace de um pacote só
-        for p2 in m.pacotes:
-            raizes.append(p2.nome)
+    roots: list<str> = []
+    for p in m.packages:
+        if len(m.who_pulls(p.name)) == 0:
+            roots.append(p.name)
+    if len(roots) == 0:
+        # everything is pulled in by somebody: a cycle, or a workspace of one
+        # package
+        for p2 in m.packages:
+            roots.append(p2.name)
     k = 0
-    while k < len(raizes):
-        pilha: list<str> = []
-        out += galho(m, raizes[k], "", k == len(raizes) - 1, pilha)
+    while k < len(roots):
+        stack: list<str> = []
+        out += branch(m, roots[k], "", k == len(roots) - 1, stack)
         k += 1
     return out
