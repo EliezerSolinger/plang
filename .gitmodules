@@ -1,0 +1,14 @@
+# O QBE entra como SUBMÓDULO, e não copiado para dentro.
+#
+# Ele é de outra pessoa, tem a sua própria licença (MIT) e o seu próprio ritmo;
+# copiar dezoito mil linhas para cá seria assumir a manutenção delas sem o
+# dizer. O que fica gravado é a versão exata que este repositório usa — o commit
+# que o `git ls-files -s qbe` mostra —, que é a mesma promessa que o `pack.lock`
+# faz para os pacotes.
+#
+# Sem isto, `git clone` deixava `qbe/` vazio e a suíte do back end QBE dizia
+# "could not build qbe/", que manda procurar um erro de compilação que não
+# existe. Agora `git submodule update --init` resolve, e a mensagem diz isso.
+[submodule "qbe"]
+	path = qbe
+	url = git://c9x.me/qbe.git

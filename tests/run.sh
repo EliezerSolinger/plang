@@ -41,6 +41,14 @@ QBE=qbe/qbe
 # ---------- setup ----------
 [ -x "$PLANGC" ] || { echo "building compiler ($PLANGC missing)..."; make >/dev/null || exit 1; }
 if [ "$BACKEND" = qbe ] && [ ! -x "$QBE" ]; then
+    # o QBE é um SUBMÓDULO, e um `git clone` sem `--recurse-submodules` deixa o
+    # diretório vazio. Sem esta mensagem o que se vê é "could not build qbe/",
+    # que manda procurar um erro de compilação que não existe.
+    if [ ! -f qbe/Makefile ]; then
+        echo "error: qbe/ está vazio — ele é um SUBMÓDULO deste repositório."
+        echo "       git submodule update --init"
+        exit 1
+    fi
     echo "building vendored qbe..."
     make -C qbe >/dev/null 2>&1 || { echo "error: could not build qbe/"; exit 1; }
 fi
