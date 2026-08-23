@@ -698,7 +698,7 @@ rule e97
   description = gerando app.psc
   restat = 1
 
-build build/psc/pstudio/ps/app.c build/psc/pstudio/ps/shim.h build/psc/pstudio/ps/shim.c build/psc/pstudio/ps/hl.h build/psc/pstudio/ps/hl.c build/psc/pstudio/pgfx.h build/psc/pstudio/pgfx.c build/psc/pstudio/pgfx_raster.h build/psc/pstudio/pgfx_raster.c build/psc/selfhost/lexer.h build/psc/selfhost/lexer.c build/psc/pstudio/font_atlas.h build/psc/pstudio/font_atlas.c build/psc/selfhost/plang.h build/psc/selfhost/ast.h build/psc/packages/stl/vec.h: e97 pstudio/ps/app.psc pstudio/ps/shim.p packages/pui/pui.psc pstudio/ps/lib_app.psc pstudio/ps/lib_cv.psc pstudio/ps/lib_core.psc pstudio/ps/lib_hl.psc pstudio/ps/hl.p pstudio/ps/lib_complete.psc pstudio/ps/hl.ph pstudio/ps/shim.ph packages/stl/cstr.ph packages/stl/cstr.p pstudio/pgfx.ph pstudio/pgfx_raster.ph pstudio/font_atlas.ph pstudio/pgfx.p pstudio/pgfx_raster.p selfhost/lexer.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.p pstudio/font_atlas.p packages/stl/vec.ph pstudio/font_atlas.bin | build/bin/plangc_s2 build/psc/packages/stl/cstr.h build/psc/packages/stl/cstr.c
+build build/psc/pstudio/ps/app.c build/psc/pstudio/ps/shim.h build/psc/pstudio/ps/shim.c build/psc/pstudio/ps/hl.h build/psc/pstudio/ps/hl.c build/psc/pstudio/pgfx.h build/psc/pstudio/pgfx.c build/psc/pstudio/pgfx_raster.h build/psc/pstudio/pgfx_raster.c build/psc/selfhost/lexer.h build/psc/selfhost/lexer.c build/psc/pstudio/font_atlas.h build/psc/pstudio/font_atlas.c build/psc/selfhost/plang.h build/psc/selfhost/ast.h build/psc/packages/stl/vec.h: e97 pstudio/ps/app.psc pstudio/ps/shim.p packages/pui/pui.psc pstudio/ps/lib_app.psc pstudio/ps/lib_cv.psc pstudio/ps/lib_core.psc pstudio/ps/lib_hl.psc pstudio/ps/hl.p pstudio/ps/lib_complete.psc packages/pbuild/lib_build.psc packages/pbuild/lib_graph.psc packages/pbuild/lib_log.psc pstudio/ps/hl.ph pstudio/ps/shim.ph packages/stl/cstr.ph packages/stl/cstr.p pstudio/pgfx.ph pstudio/pgfx_raster.ph pstudio/font_atlas.ph pstudio/pgfx.p pstudio/pgfx_raster.p selfhost/lexer.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.p pstudio/font_atlas.p packages/stl/vec.ph pstudio/font_atlas.bin | build/bin/plangc_s2 build/psc/packages/stl/cstr.h build/psc/packages/stl/cstr.c
 
 rule e98
   command = build/bin/plangc_s2 --pkg-path packages --cpp 'cc -I/usr/include/SDL2 -D_REENTRANT' --out-dir build/psc selfhost/util.p
@@ -4552,51 +4552,57 @@ rule e665
 build build/t/log/check.log: e665 build/bin/ppack build/bin/plangc_s2
 
 rule e666
+  command = env PSTUDIO=build/bin/pstudio bash tests/pstudio-build.sh > build/t/log/pstudio-build.log
+  description = o motor dentro do editor (relatório em build/t/log/pstudio-build.log)
+
+build build/t/log/pstudio-build.log: e666 build/bin/pstudio build/bin/ppack
+
+rule e667
   command = env PPACK=build/bin/ppack bash tests/ninja.sh > build/t/log/ninja.log
   description = o build.ninja comitado (relatório em build/t/log/ninja.log)
 
-build build/t/log/ninja.log: e666 build/bin/ppack
+build build/t/log/ninja.log: e667 build/bin/ppack
 
-rule e667
+rule e668
   command = env PPACK=build/bin/ppack bash tests/run-cmd-ppack.sh > build/t/log/run-ppack.log
   description = run pelo ppack (relatório em build/t/log/run-ppack.log)
 
-build build/t/log/run-ppack.log: e667 build/bin/ppack build/bin/plangc_s2
+build build/t/log/run-ppack.log: e668 build/bin/ppack build/bin/plangc_s2
 
-rule e668
+rule e669
   command = env PLANGC=build/bin/plangc_s2 bash tests/conformance/run.sh > build/t/log/conformance.log
   description = conformidade (relatório em build/t/log/conformance.log)
 
-build build/t/log/conformance.log: e668 build/bin/plangc_s2
+build build/t/log/conformance.log: e669 build/bin/plangc_s2
 
-rule e669
+rule e670
   command = env PLANGC=build/bin/plangc_s2 bash tests/oracle/run.sh > build/t/log/oracle.log
   description = oráculos (relatório em build/t/log/oracle.log)
 
-build build/t/log/oracle.log: e669 build/bin/plangc_s2
+build build/t/log/oracle.log: e670 build/bin/plangc_s2
 
-rule e670
+rule e671
   command = env OUT=build/t/h/qbefp PLANGC=build/bin/plangc_s2 bash tests/qbe-fixpoint.sh > build/t/log/qbe-fixpoint.log
   description = ponto fixo do QBE (relatório em build/t/log/qbe-fixpoint.log)
 
-build build/t/log/qbe-fixpoint.log: e670 build/bin/plangc_s2
+build build/t/log/qbe-fixpoint.log: e671 build/bin/plangc_s2
 
-rule e671
+rule e672
   command = env OUT=build/t/h/packages PLANGC=build/bin/plangc_s2 bash tests/packages.sh > build/t/log/packages.log
   description = pacotes (import <>) (relatório em build/t/log/packages.log)
 
-build build/t/log/packages.log: e671 build/bin/plangc_s2
+build build/t/log/packages.log: e672 build/bin/plangc_s2
 
-rule e672
+rule e673
   command = /bin/sh -c 'exit 0' > build/t/stamp/test
   description = test: o corpus em C, a suíte caso a caso, os testes dos pacotes e os DOCTESTS
 
-build build/t/stamp/test: e672 build/t/log/suite-c.log build/t/stamp/pscript.suite build/t/stamp/pacotes.suite build/t/stamp/doctest.suite
+build build/t/stamp/test: e673 build/t/log/suite-c.log build/t/stamp/pscript.suite build/t/stamp/pacotes.suite build/t/stamp/doctest.suite
 
-rule e673
+rule e674
   command = /bin/sh -c 'exit 0' > build/t/stamp/verify
-  description = verify: 20 partes
+  description = verify: 21 partes
 
-build build/t/stamp/verify: e673 build/t/log/suite-c.log build/t/log/suite-qbe.log build/t/log/suite-c89.log build/t/log/gc-stress.log build/t/log/protocol.log build/t/log/knobs.log build/t/log/net-late.log build/t/log/print-atomic.log build/t/log/check.log build/t/log/ninja.log build/t/log/run-ppack.log build/t/log/conformance.log build/t/log/oracle.log build/t/log/qbe-fixpoint.log build/t/log/packages.log build/t/stamp/pscript.suite build/t/stamp/pacotes.suite build/t/stamp/doctest.suite build/stamp/compilador build/bin/pstudio
+build build/t/stamp/verify: e674 build/t/log/suite-c.log build/t/log/suite-qbe.log build/t/log/suite-c89.log build/t/log/gc-stress.log build/t/log/protocol.log build/t/log/knobs.log build/t/log/net-late.log build/t/log/print-atomic.log build/t/log/check.log build/t/log/pstudio-build.log build/t/log/ninja.log build/t/log/run-ppack.log build/t/log/conformance.log build/t/log/oracle.log build/t/log/qbe-fixpoint.log build/t/log/packages.log build/t/stamp/pscript.suite build/t/stamp/pacotes.suite build/t/stamp/doctest.suite build/stamp/compilador build/bin/pstudio
 
 default build/stamp/compilador build/bin/ppack build/bin/pstudio

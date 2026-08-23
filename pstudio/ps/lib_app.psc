@@ -30,6 +30,7 @@ enum PalMode:
     PAL_FILES         # busca difusa de arquivo (o padrão)
     PAL_COMMANDS      # o prefixo '>'
     PAL_GOTO          # o prefixo ':'
+    PAL_BUILD         # o prefixo '!': um alvo do grafo
 
 
 struct Tab:
@@ -90,7 +91,7 @@ def fuzzy_score(hay: str, needle: str) -> int:
 
 # a paleta de comandos: nome e id, numa cadeia só (módulo importado não roda
 # statement, e uma tabela de duas colunas cabe numa linha por comando)
-const COMMANDS: str = "Save=0;Save All=1;Close Tab=2;Reload File=3;Toggle File Tree=4;Zoom In=5;Zoom Out=6;Zoom Reset=7;Find=8;Go To Line=9;Quit=10;Fold=11;Unfold=11;Fold All=12;Unfold All=13;Toggle Comment=14;Move Line Up=15;Move Line Down=16;Duplicate Line=17;Delete Line=18;Join Lines=19;Toggle Bookmark=20;Next Bookmark=21;Clear Bookmarks=22;Toggle Minimap=23"
+const COMMANDS: str = "Save=0;Save All=1;Close Tab=2;Reload File=3;Toggle File Tree=4;Zoom In=5;Zoom Out=6;Zoom Reset=7;Find=8;Go To Line=9;Quit=10;Fold=11;Unfold=11;Fold All=12;Unfold All=13;Toggle Comment=14;Move Line Up=15;Move Line Down=16;Duplicate Line=17;Delete Line=18;Join Lines=19;Toggle Bookmark=20;Next Bookmark=21;Clear Bookmarks=22;Toggle Minimap=23;Build=24;Build Target...=25;Run=26;Clean=27;Stop Build=28;Go To Build Error=29"
 
 
 struct App:
@@ -126,6 +127,32 @@ struct App:
     now_ms: int        # o relógio, que vem do driver
     want_open: str     # 114: um arquivo que o app quer e o driver tem de LER
     want_msg: str      # uma mensagem para a barra de estado (falha de escrita)
+    # F6: o BUILD. O app não constrói — ele PEDE, como pede a leitura de um
+    # arquivo, e o driver atende no laço de eventos. A razão é a mesma da 114:
+    # a lógica do editor é síncrona de propósito, e um `await` aqui obrigaria
+    # todo chamador a esperar.
+    #
+    # `want_build` é o alvo ("" = o padrão do grafo), `want_run` diz se depois
+    # de construir o programa deve correr, e `build_msg` é o que a barra de
+    # estado mostra enquanto isso acontece.
+    want_build: str
+    want_build_on: bool
+    want_run: bool
+    want_clean: bool
+    build_msg: str
+    build_busy: bool
+    build_stop: bool
+    # os alvos que este projeto constrói, postos aqui pelo DRIVER a partir do
+    # grafo: o editor não sabe o que um projeto constrói, e não devia saber
+    build_targets: list<str>
+    build_total: int
+    build_feitas: int
+    build_erro: str
+    # F6: para onde o primeiro erro do build aponta. O editor ABRE o arquivo e
+    # põe o cursor lá — que é o que "clicar no erro" faz, sem precisar do clique.
+    build_pos_arq: str
+    build_pos_lin: int
+    build_pos_col: int
 
     # ---- o driver, injetado pelo `app.psc` ----
     read_file: (def(str) -> str)?        # "" quando não deu
@@ -384,6 +411,8 @@ struct App:
             self.u.set_text(self.palinput, ">")
         elif mode == PAL_GOTO:
             self.u.set_text(self.palinput, ":")
+        elif mode == PAL_BUILD:
+            self.u.set_text(self.palinput, "!")
         self.palsel = 0
         self.paltop = 0
         self.u.set_visible(self.palette, True)
@@ -407,6 +436,11 @@ struct App:
         elif q.startswith(":"):
             self.palmode = PAL_GOTO
             q = q[1:len(q)]
+        elif q.startswith("!"):
+            # F6: `!` escolhe um ALVO do grafo. O prefixo é a mesma ideia do
+            # Sublime — quem já sabe o nome escreve-o, quem não sabe vê a lista.
+            self.palmode = PAL_BUILD
+            q = q[1:len(q)]
         else:
             self.palmode = PAL_FILES
         self.palitems = []
@@ -421,6 +455,13 @@ struct App:
                         self.palitems.append(PalItem(parts[0], parts[1], sc))
             case PAL_GOTO:
                 self.palitems.append(PalItem("go to line " + (q if len(q) > 0 else "…"), q, 0))
+            case PAL_BUILD:
+                # os alvos vêm do GRAFO, que o driver pôs aqui: o editor não
+                # sabe o que este projeto constrói, e não devia saber
+                for t in self.build_targets:
+                    sc3 = fuzzy_score(t, q)
+                    if sc3 >= 0:
+                        self.palitems.append(PalItem(t, t, sc3))
             case _:
                 for it in self.files:
                     sc2 = fuzzy_score(it.label, q)
@@ -451,6 +492,15 @@ struct App:
         match mode:
             case PAL_COMMANDS:
                 self.run_command(int(payload))
+            case PAL_BUILD:
+                if self.build_busy:
+                    self.build_msg = "build já a correr"
+                else:
+                    self.want_build = payload
+                    self.want_build_on = True
+                    self.want_run = False
+                    self.build_msg = "a construir " + payload + "..."
+                self.update_status()
             case PAL_GOTO:
                 cv = self.cur_cv()
                 if cv != None and len(payload) > 0:
@@ -497,6 +547,49 @@ struct App:
         self.update_status()
         self.dirty_ui = True
 
+    # ---------- o erro do build, como posição ----------
+
+    def marcar_erro(self, texto: str) -> bool:
+        """`arquivo:linha:coluna: error: mensagem` — o formato que o compilador
+        já usa, e que o `ppack` copiou de propósito para os erros dele.
+
+        Guardar a POSIÇÃO em vez de só o texto é o que separa uma barra de
+        estado de uma IDE: com ela o editor abre o arquivo e põe o cursor lá.
+        Uma linha que não tenha esta forma é ignorada — a saída de um `cc` tem
+        muita coisa que não é diagnóstico."""
+        for linha in texto.split("\n"):
+            partes = linha.split(":")
+            if len(partes) < 4:
+                continue
+            if not partes[1].isdigit() or not partes[2].isdigit():
+                continue
+            resto = ":".join(partes[3:len(partes)]).strip()
+            if not resto.startswith("error") and not resto.startswith("warning"):
+                continue
+            if not resto.startswith("error"):
+                continue           # o primeiro ERRO, não o primeiro aviso
+            self.build_pos_arq = partes[0].strip()
+            self.build_pos_lin = int(partes[1])
+            self.build_pos_col = int(partes[2])
+            return True
+        return False
+
+    def ir_para_erro(self) -> bool:
+        """Abre o arquivo do primeiro erro e põe o cursor nele. Devolve se
+        havia para onde ir."""
+        if len(self.build_pos_arq) == 0:
+            return False
+        if not path.isfile(self.build_pos_arq):
+            return False
+        self.open_file(self.build_pos_arq)
+        cv = self.cur_cv()
+        if cv == None:
+            return False
+        cv.buf.move_to(self.build_pos_lin - 1, self.build_pos_col - 1)
+        cv.scroll_to_caret()
+        self.update_status()
+        return True
+
     # ---------- comandos ----------
 
     def run_command(self, cmd: int):
@@ -523,6 +616,35 @@ struct App:
             self.do_zoom(0)
         elif cmd == 10:
             self.try_quit()
+        elif cmd == 24 or cmd == 26:
+            # F6: play. O app PEDE; quem constrói é o driver, no mesmo laço de
+            # eventos — o motor é uma biblioteca (`packages/pbuild`) e não um
+            # processo, então o grafo é um `dict` e não um fluxo de texto.
+            if self.build_busy:
+                self.build_msg = "build já a correr"
+            else:
+                self.want_build = ""
+                self.want_build_on = True
+                self.want_run = cmd == 26
+                self.build_msg = "a construir..."
+            self.update_status()
+        elif cmd == 25:
+            self.palette_open(PAL_BUILD)
+        elif cmd == 27:
+            self.want_clean = True
+            self.build_msg = "a limpar..."
+            self.update_status()
+        elif cmd == 29:
+            if not self.ir_para_erro():
+                self.build_msg = "nenhum erro de build para onde ir"
+                self.update_status()
+        elif cmd == 28:
+            # parar é um PEDIDO, não uma morte: o executor termina a aresta que
+            # está a correr e não começa outra. Matar um `cc` a meio deixa um
+            # `.o` truncado, que é exatamente o que o motor recusa depois.
+            self.build_stop = True
+            self.build_msg = "a parar depois desta aresta..."
+            self.update_status()
         elif cmd == 8:
             self.find_open()
         elif cmd == 9:
@@ -932,6 +1054,7 @@ def new_app(u: pui.Ui, root_dir: str) -> App:
     app = App(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
               [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [],
               False, True, True, 0, "", "",
+              "", False, False, False, "", False, False, [], 0, 0, "", "", 0, 0,
               None, None, None, None, None, None, None, None, None)
 
     app.root = u.panel(-1)

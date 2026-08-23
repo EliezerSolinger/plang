@@ -13,6 +13,8 @@ A fronteira: `shim.p` é a mão que toca o SDL (45.5 — ponteiro não atravessa
 Uso:
     pstudio [diretório-ou-arquivo]
     pstudio --selftest arquivo     # exercita o editor sem tela e sai
+    pstudio --build [alvo]         # constrói o projeto, sem tela (o motor é
+                                   #   biblioteca: corre DENTRO do editor)
     pstudio --shot saída.ppm [dir] # um quadro em PPM (servidor sem X)
 
 **Por que `import "shim.ph"` e não `include "shim.h"`:** a porta do `include` lê
@@ -34,6 +36,10 @@ import "shim.ph"
 
 import <pui> as pui
 import lib_app as appm
+# F6: o motor de build é uma BIBLIOTECA, e o editor importa-a. É isto que faz o
+# build correr no laço de eventos da UI em vez de num processo à parte.
+import <pbuild/lib_build.psc> as B
+import <pbuild/lib_graph.psc> as G
 import sys
 import time
 import os
@@ -138,15 +144,166 @@ def zoom(app: appm.App, step: int):
     app.dirty_ui = True
 
 
+# ---------- o BUILD, no mesmo laço de eventos (F6) ----------
+#
+# O motor é uma BIBLIOTECA (`packages/pbuild`), não um processo: o editor
+# importa-o e corre o build como uma tarefa no mesmo escalonador que trata o
+# teclado. O grafo é um `dict` na memória — não há nada a serializar, nem um
+# fluxo de texto a analisar do outro lado (1.8).
+#
+# O que o editor ganha com isso, e que um `ppack build` num terminal não dá: o
+# ESTADO. Ele sabe qual aresta está a correr, quantas faltam, e o que cada uma
+# disse — e pode desenhá-lo onde quiser.
+
+private def on_edge_start(app: appm.App, id: int, o_que: str):
+    app.build_feitas += 0
+    app.build_msg = "[" + str(app.build_feitas) + "/" + str(app.build_total) + "] " + o_que
+    app.dirty_ui = True
+
+
+private def on_edge_end(app: appm.App, id: int, st: int, saida: str, ms: int):
+    app.build_feitas += 1
+    if st != 0:
+        # a PRIMEIRA falha é a que interessa: as seguintes são quase sempre
+        # consequência dela, e a barra de estado tem uma linha
+        if len(app.build_erro) == 0:
+            app.build_erro = saida.strip()
+            # ... e a POSIÇÃO dela, que é o que transforma uma mensagem numa
+            # navegação: o editor abre o arquivo e põe o cursor no sítio
+            app.marcar_erro(saida)
+    app.build_msg = "[" + str(app.build_feitas) + "/" + str(app.build_total) + "]"
+    app.dirty_ui = True
+
+
+async def serve_build(app: appm.App):
+    """O pedido de build do app, atendido aqui. Ele não constrói: PEDE."""
+    if app.want_clean:
+        app.want_clean = False
+        n = 0
+        if path.isdir("build"):
+            for nome in sorted(os.listdir("build")):
+                if nome == "pkg":
+                    continue          # o que veio de fora fica (a vassoura do ppack)
+                d = path.join("build", nome)
+                if path.isdir(d):
+                    n += rmtree(d)
+        app.build_msg = "limpo: " + str(n) + " arquivo(s)"
+        app.dirty_ui = True
+        return
+    if not app.want_build_on or app.build_busy:
+        return
+    alvo = app.want_build
+    app.want_build_on = False
+    app.build_busy = True
+    app.build_erro = ""
+    app.build_feitas = 0
+    app.build_total = 0
+    app.build_msg = "a montar o grafo..."
+    app.dirty_ui = True
+    g = await grafo_do_projeto(app)
+    if g == None:
+        app.build_busy = False
+        app.dirty_ui = True
+        return
+    # os alvos, para a paleta `!`: o editor não sabe o que um projeto constrói
+    alvos_v: list<str> = []
+    for nd in g.nodes:
+        if nd.gen >= 0:
+            alvos_v.append(nd.p)
+    app.build_targets = sorted(alvos_v)
+    rep = B.Rep(lambda t: set_total(app, t),
+                lambda i, w: on_edge_start(app, i, w),
+                lambda i, st, o, ms: on_edge_end(app, i, st, o, ms),
+                lambda ok, f: set_done(app, ok, f),
+                lambda m: set_erro(app, m))
+    tl: list<str> = [alvo] if len(alvo) > 0 else []
+    await B.build(g, "build/log/build.log", tl, B.Opts(os.nproc(), 1, False, False), rep)
+    app.build_busy = False
+    app.dirty_ui = True
+
+
+private def set_total(app: appm.App, t: int):
+    app.build_total = t
+    app.build_msg = str(t) + " aresta(s) a construir" if t > 0 else "nada a fazer"
+
+
+private def set_done(app: appm.App, ok: bool, falhas: int):
+    if ok:
+        app.build_msg = "build ok (" + str(app.build_feitas) + " aresta(s))"
+    else:
+        app.build_msg = "build FALHOU: " + (app.build_erro if len(app.build_erro) > 0 else str(falhas) + " problema(s)")
+
+
+private def set_erro(app: appm.App, msg: str):
+    if len(app.build_erro) == 0:
+        app.build_erro = msg
+
+
+private async def grafo_do_projeto(app: appm.App) -> G.Graph?:
+    """O grafo do projeto que está aberto.
+
+    **O descritor é do PROJETO, e o editor não o conhece** — nem devia: ele abre
+    qualquer árvore, e cada uma constrói-se à sua maneira. Quem conhece o
+    descritor é o `ppack` desse projeto, então é a ele que se pergunta:
+    `ppack graph` devolve o grafo em JSON e o editor corre-o com o MOTOR, que é
+    biblioteca (`packages/pbuild`) e está aqui dentro.
+
+    Isto é uma serialização, e a 1.8 preferia não a ter. A troca é deliberada e
+    a favor: sem ela, o editor teria de embutir o descritor de cada projeto que
+    abre — o que só funciona para UM projeto, que seria este. Com ela, o build
+    corre no laço de eventos do editor (que é o que a F6 quer) para qualquer
+    árvore que tenha um `ppack`. O custo é um JSON de alguns megabytes, lido uma
+    vez por build."""
+    pp = ""
+    for cand in ["build/bin/ppack", "ppack"]:
+        if cand == "ppack" or path.isfile(cand):
+            pp = cand
+            break
+    tmp = path.join("build", "t", "editor-grafo.json")
+    d = path.dirname(tmp)
+    if len(d) > 0 and not path.isdir(d):
+        os.makedirs(d)
+    r = await os.run([pp, "graph"], stdout=tmp)
+    if r.status() != 0:
+        app.build_msg = "não consegui o grafo: " + r.output().strip()
+        app.build_erro = app.build_msg
+        return None
+    f = await open(tmp, "r")
+    txt = await f.text()
+    await f.close()
+    try:
+        return G.from_json(txt)
+    catch e:
+        app.build_msg = "o grafo não se deixou ler: " + e.message
+        return None
+
+
+private def rmtree(d: str) -> int:
+    n = 0
+    for name in os.listdir(d):
+        p = path.join(d, name)
+        if path.isdir(p):
+            n += rmtree(p)
+        else:
+            os.remove(p)
+            n += 1
+    os.rmdir(d)
+    return n
+
+
 async def serve_requests(app: appm.App):
-    """Atende o que o app pediu e não podia fazer: ler arquivo, escrever, e a
-    mensagem de falha."""
+    """Atende o que o app pediu e não podia fazer: ler arquivo, escrever, a
+    mensagem de falha — e, desde a F6, o BUILD."""
     if len(app.want_open) > 0:
         p = app.want_open
         app.want_open = ""
         cache[p] = await read_file(p)
         app.open_file(p)
     await flush_writes(app)
+    await serve_build(app)
+    if len(app.build_msg) > 0:
+        app.u.set_text(app.status, app.build_msg)
+        app.dirty_ui = True
     if len(app.want_msg) > 0:
         app.u.set_text(app.status, app.want_msg)
         app.want_msg = ""
@@ -233,11 +390,60 @@ async def selftest(arg: str) -> int:
     print("palette", len(app.palitems), app.palitems[0].label if len(app.palitems) > 0 else "-")
     app.palette_accept()
     print("folded", cv.buf.visible_count())
+    # F6: o build pela paleta. O que se mede aqui é o PEDIDO — o driver atende
+    # em `serve_requests`, e um build inteiro num autoteste levaria minutos.
+    app.palette_open(appm.PAL_COMMANDS)
+    u.set_text(app.palinput, ">build")
+    app.palette_filter()
+    print("build cmd", app.palitems[0].label if len(app.palitems) > 0 else "-")
+    app.palette_accept()
+    print("pediu build", app.want_build_on, "alvo", "(padrão)" if len(app.want_build) == 0 else app.want_build)
+    app.want_build_on = False       # não se constrói o repositório num autoteste
+    app.build_targets = ["build/bin/plangc_s2", "build/bin/ppack"]
+    app.palette_open(appm.PAL_BUILD)
+    u.set_text(app.palinput, "!ppack")
+    app.palette_filter()
+    print("alvos", len(app.palitems), app.palitems[0].label if len(app.palitems) > 0 else "-")
+    app.palette_accept()
+    print("pediu alvo", app.want_build)
+    app.want_build_on = False
+    # F6: o erro do build como POSIÇÃO. É o que transforma uma mensagem numa
+    # navegação — e o formato é o mesmo que o compilador e o ppack já usam.
+    achou = app.marcar_erro(arg + ":2:3: error: inventado para o teste\ncc: aviso qualquer\n")
+    print("erro posicionado", achou, app.build_pos_lin, app.build_pos_col)
+    print("foi para o erro", app.ir_para_erro())
+    cvx = app.cur_cv()
+    if cvx != None:
+        print("cursor em", cvx.buf.caret(0).line + 1)
     n = app.u.build_all()
     print("drawn", "yes" if n > 20 else "no")
     await serve_requests(app)
     print("selftest ok")
     return 0
+
+
+async def modo_build(alvo: str) -> int:
+    """`pstudio --build [alvo]` — o build DENTRO do editor, sem tela.
+
+    Existe para provar (e para medir) o que a F6 promete: o motor é uma
+    biblioteca que o editor importa, e o build corre no mesmo escalonador que
+    trata o teclado. Sem isto, "o build corre no editor" seria uma afirmação que
+    só se pode conferir olhando para uma janela.
+
+    O que ele faz é exatamente o que a paleta faz: põe o pedido, e deixa o
+    driver atendê-lo."""
+    u = pui.new_ui(8, 17)
+    app = appm.new_app(u, ".")
+    app.want_build = alvo
+    app.want_build_on = True
+    await serve_build(app)
+    print(app.build_msg)
+    for t in app.build_targets[0:0]:
+        print(t)
+    print("alvos no grafo:", len(app.build_targets))
+    # o status de saída é o do BUILD, não o do editor: quem chama isto num
+    # script quer saber se construiu
+    return 1 if len(app.build_erro) > 0 or app.build_msg.startswith("build FALHOU") else 0
 
 
 # ---------- a entrada ----------
@@ -246,6 +452,8 @@ async def main_run() -> int:
     args = sys.argv
     if len(args) > 1 and args[1] == "--selftest":
         return await selftest(args[2] if len(args) > 2 else "")
+    if len(args) > 1 and args[1] == "--build":
+        return await modo_build(args[2] if len(args) > 2 else "")
     # 115: a mesma linha de comando do editor em P — vários arquivos em abas,
     # `--size LxA`, `--shot img.ppm`, e diagnóstico para o que não existe
     shot = ""

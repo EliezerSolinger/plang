@@ -281,6 +281,12 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, sdoc: str, f
                           "as invariantes dos pacotes"))
     # o `build.ninja` comitado é o bootstrap sem `ppack`, e um arquivo gerado que
     # fica comitado tem um modo de falhar: envelhecer em silêncio
+    # o MOTOR DENTRO DO EDITOR (F6): sem este arreio, "o build corre no editor"
+    # é uma afirmação que só se confere olhando para uma janela
+    if len(editor) > 0:
+        logs.append(T.harness(c, "pstudio-build", ["bash", "tests/pstudio-build.sh"],
+                              {"PSTUDIO": editor}, [editor, path.join(BUILD, "bin/ppack")],
+                              logdir, "o motor dentro do editor"))
     logs.append(T.harness(c, "ninja", ["bash", "tests/ninja.sh"],
                           {"PPACK": path.join(BUILD, "bin/ppack")},
                           [path.join(BUILD, "bin/ppack")], logdir,

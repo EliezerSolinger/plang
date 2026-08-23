@@ -4,5 +4,12 @@ typed Xline one
 undone line one
 palette 2 Fold All
 folded 4
+build cmd Build
+pediu build True alvo (padrão)
+alvos 1 build/bin/ppack
+pediu alvo build/bin/ppack
+erro posicionado True 2 3
+foi para o erro True
+cursor em 2
 drawn yes
 selftest ok
