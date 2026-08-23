@@ -318,9 +318,25 @@ cd "$RAIZ"
 # qualquer coisa.
 cd "$RAIZ"
 if command -v python3 >/dev/null 2>&1; then
-    PORTA=8731
-    ( cd "$OUT/repo" && python3 -m http.server $PORTA >/dev/null 2>&1 & echo $! > "$RAIZ/$OUT/httpd.pid" )
+    # a porta é escolhida pelo sistema (bind em 0) e escrita num ficheiro: um
+    # número fixo aqui faz duas árvores de teste servirem uma à outra, e o
+    # engano só aparece como um 404 no sítio errado
+    rm -f "$RAIZ/$OUT/httpd.port"
+    ( cd "$OUT/repo" && exec python3 -c '
+import http.server, socketserver, sys
+class H(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *a): pass
+srv = socketserver.TCPServer(("127.0.0.1", 0), H)
+with open(sys.argv[1], "w") as f:
+    f.write(str(srv.server_address[1]))
+srv.serve_forever()
+' "$RAIZ/$OUT/httpd.port" >/dev/null 2>&1 ) &
+    echo $! > "$RAIZ/$OUT/httpd.pid"
     # espera o servidor atender, em vez de dormir um número mágico
+    i=0
+    while [ $i -lt 100 ] && [ ! -s "$RAIZ/$OUT/httpd.port" ]; do i=$((i+1)); sleep 0.1; done
+    PORTA=$(cat "$RAIZ/$OUT/httpd.port" 2>/dev/null)
+    if [ -z "$PORTA" ]; then bad "o servidor de HTTP não subiu"; PORTA=0; fi
     i=0
     while [ $i -lt 50 ] && ! (exec 3<>/dev/tcp/127.0.0.1/$PORTA) 2>/dev/null; do i=$((i+1)); sleep 0.1; done
     mkdir -p "$OUT/proj-http"
@@ -346,8 +362,9 @@ EOF
     "$PPACK" update >u404.log 2>&1 && bad "um índice que não existe devia falhar" || ok
     grep -q "404" u404.log && ok || bad "a falha de HTTP não disse o estado (veja $OUT/proj-http/u404.log)"
     cd "$RAIZ"
+    pkill -P "$(cat "$OUT/httpd.pid")" 2>/dev/null
     kill "$(cat "$OUT/httpd.pid")" 2>/dev/null
-    rm -f "$OUT/httpd.pid"
+    rm -f "$OUT/httpd.pid" "$OUT/httpd.port"
 fi
 
 cd "$RAIZ"
