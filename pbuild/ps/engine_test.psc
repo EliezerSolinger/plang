@@ -45,10 +45,17 @@ pico: int = 0
 def r_plan(total: int):
     pass
 
+# o RÓTULO de cada aresta e o que o evento trouxe dela: é assim que um caso
+# confere a SAÍDA de uma aresta específica, e não só o placar
+rot: dict<int, str> = {}
+saidas: dict<str, str> = {}
+
 def r_start(id: int, what: str):
     global order
     global em_voo
     global pico
+    global rot
+    rot[id] = what
     order.append(what)
     em_voo += 1
     if em_voo > pico:
@@ -57,7 +64,9 @@ def r_start(id: int, what: str):
 def r_end(id: int, st: int, out: str, ms: int):
     global ran
     global em_voo
+    global saidas
     em_voo -= 1
+    saidas[rot[id] if id in rot else str(id)] = out
     ran.append(str(st))
 
 def r_done(ok: bool, fails: int):
@@ -83,9 +92,15 @@ def reset():
     novo3: list<str> = []
     global em_voo
     global pico
+    global rot
+    global saidas
+    novo4: dict<int, str> = {}
+    novo5: dict<str, str> = {}
     ran = novo
     order = novo2
     erros = novo3
+    rot = novo4
+    saidas = novo5
     em_voo = 0
     pico = 0
 
@@ -286,6 +301,58 @@ async def caso_paralelo_e_ordem():
     await B.build(g, lg, [], opts(4), rep())
     check("paralelo: oito rodaram", "8", str(len(ran)))
     check("ordem: a mais cara comecou primeiro", "p7", order[0])
+
+async def caso_pool_console():
+    """`pool = console`: a aresta que fala com o TERMINAL, e sozinha.
+
+    Ela é a única do grafo que não tem a saída capturada — o filho herda os
+    descritores deste processo. É por isso que ela tem de correr sozinha: a
+    captura existe no resto do build para impedir que dois trabalhos costurem as
+    linhas um do outro, e sem captura a única forma de manter essa propriedade é
+    não haver dois ao mesmo tempo.
+
+    As duas coisas ficam presas aqui, e as duas são observáveis de fora:
+
+      * com quatro braços e três arestas de console prontas, o PICO em voo é 1;
+      * a aresta comum traz o que imprimiu no evento (foi capturada) e a de
+        console traz a saída VAZIA — o que ela imprimiu foi para o terminal, e
+        aparece no meio deste relatório, que é a prova que se pode ler."""
+    reset()
+    lg = DIR + "/log_console"
+    g = G.new_graph()
+    i = 0
+    while i < 3:
+        c = G.new_edge(["/bin/sh", "-c", "echo '-- console " + str(i)
+                        + " (esta linha foi para o terminal) --'; printf x > "
+                        + DIR + "/con" + str(i) + ".out"])
+        c.outs.append(g.node(DIR + "/con" + str(i) + ".out").id)
+        c.desc = "console" + str(i)
+        c.pool = "console"
+        g.add_edge(c)
+        g.default_targets.append(DIR + "/con" + str(i) + ".out")
+        i += 1
+    await B.build(g, lg, [], opts(4), rep())
+    check("console: as tres rodaram", "3", str(len(ran)))
+    check("console: nunca duas ao mesmo tempo", "1", str(pico))
+    check("console: o evento nao traz saida nenhuma", "", saidas["console0"])
+
+    # e agora com companhia: a comum é capturada, a de console não
+    reset()
+    g2 = G.new_graph()
+    cm = G.new_edge(["/bin/sh", "-c", "echo capturado; printf y > " + DIR + "/cap.out"])
+    cm.outs.append(g2.node(DIR + "/cap.out").id)
+    cm.desc = "comum"
+    g2.add_edge(cm)
+    g2.default_targets.append(DIR + "/cap.out")
+    cn = G.new_edge(["/bin/sh", "-c", "printf z > " + DIR + "/con9.out"])
+    cn.outs.append(g2.node(DIR + "/con9.out").id)
+    cn.desc = "console9"
+    cn.pool = "console"
+    g2.add_edge(cn)
+    g2.default_targets.append(DIR + "/con9.out")
+    await B.build(g2, DIR + "/log_console2", [], opts(4), rep())
+    check("console: a comum foi capturada", "capturado", saidas["comum"].strip())
+    check("console: a de console nao", "", saidas["console9"])
 
 async def caso_falha_para():
     """Uma falha para o build (o padrão do ninja e do samurai): a primeira
@@ -733,6 +800,7 @@ async def go():
     await caso_ambiente_mudou()
     await caso_restat()
     await caso_paralelo_e_ordem()
+    await caso_pool_console()
     await caso_falha_para()
     await caso_saida_nao_produzida()
     await caso_entrada_orfa()

@@ -80,6 +80,7 @@ struct Build:
     rodando: int           # quantas arestas estão EM VOO agora
     fails: int
     total: int             # quantas arestas o plano vai rodar
+    console: bool          # uma aresta de terminal está a correr: mais nada começa
     errs: list<str>        # higiene: o que impede o build de ser confiável
     why: dict<str, str>    # explain: por que cada saída está suja
 
@@ -353,9 +354,28 @@ private def enqueue(b: Build, eid: int):
     b.ready.insert(i, eid)
 
 private def take_ready(b: Build) -> int:
-    if len(b.ready) == 0:
+    """A próxima aresta a rodar — ou -1, que quer dizer "agora não".
+
+    A fila já vem ordenada pelo caminho crítico; o que se decide aqui é o POOL
+    `console`, e ele é uma regra de exclusão em três linhas:
+
+      * uma aresta de console só começa com o terreno vazio (`rodando == 0`),
+        porque ela fala com o terminal e ninguém mais pode falar ao mesmo tempo;
+      * enquanto ela corre, mais nada começa.
+
+    É o `pool = console` do ninja, e a razão de existir é a mesma da captura no
+    resto do build: duas coisas a escrever no mesmo sítio ao mesmo tempo
+    costuram as linhas uma da outra. A diferença é que aqui o sítio é o terminal
+    de quem chamou, e não um buffer que se despeja no fim."""
+    if len(b.ready) == 0 or b.console:
         return -1
     v = b.ready[0]
+    if b.g.edges[v].pool == "console" and b.rodando > 0:
+        # ela é a mais cara e está pronta, mas o terreno não está livre: espera.
+        # Passar-lhe à frente seria possível e está deliberadamente fora — a
+        # ordem da fila é o caminho crítico, e furá-la por conveniência é como
+        # se perde a propriedade que ela existe para dar.
+        return -1
     b.ready = b.ready[1:len(b.ready)]
     return v
 
@@ -515,9 +535,23 @@ private async def pump(b: Build) -> int:
         # `rodando` é quantas arestas estão EM VOO. Um braço que não acha
         # trabalho olha para ele para saber se espera ou se vai embora.
         b.rodando += 1
+        so = e.pool == "console"
+        if so:
+            b.console = True
         if b.op.dry_run:
             b.rep.on_end(e.id, 0, "", 0)
             await finish(b, e, True, 0)
+        elif so:
+            # sem captura: o filho herda ESTE terminal, e o que volta é só o
+            # status. O evento sai com a saída vazia porque ela já foi vista —
+            # inventar um texto aqui seria repetir o que o utilizador leu.
+            t1 = time_ms()
+            r1 = await os.run(e.argv, env=e.env, cwd=e.cwd, console=True)
+            ms1 = time_ms() - t1
+            b.rep.on_end(e.id, r1.status(), "", ms1)
+            if r1.status() != 0:
+                b.fails += 1
+            await finish(b, e, r1.status() == 0, ms1)
         else:
             t0 = time_ms()
             r = await os.run(e.argv, env=e.env, cwd=e.cwd, stdout=e.stdout_to)
@@ -526,6 +560,8 @@ private async def pump(b: Build) -> int:
             if r.status() != 0:
                 b.fails += 1
             await finish(b, e, r.status() == 0, ms)
+        if so:
+            b.console = False
         b.rodando -= 1
     return 0
 
@@ -541,7 +577,7 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
     As fases estão aqui na ordem em que o desenho as nomeia: PLANEJAR (o que está
     velho), DECIDIR (em que ordem), EXECUTAR (rodar), GRAVAR (o log).
     """
-    b = Build(g, await L.load(logpath), op, rep, [], 0, 0, 0, [], {})
+    b = Build(g, await L.load(logpath), op, rep, [], 0, 0, 0, False, [], {})
     reset_plan(g)
     # o log entra ANTES do plano: é ele que sabe o hash do comando e a duração
     for e0 in g.edges:
@@ -609,7 +645,7 @@ async def why_dirty(g: G.Graph, logpath: str, targets: list<str>) -> dict<str, s
     engordaria o contrato que a IDE vai consumir.
 
     É a pergunta que salva a tarde em que o build reconstrói o que não devia."""
-    b = Build(g, await L.load(logpath), Opts(1, 1, True, True), quiet(), [], 0, 0, 0, [], {})
+    b = Build(g, await L.load(logpath), Opts(1, 1, True, True), quiet(), [], 0, 0, 0, False, [], {})
     reset_plan(g)
     await load_depfiles(b)
     await carimbar(b)

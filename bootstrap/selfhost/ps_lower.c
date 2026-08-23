@@ -4027,6 +4027,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             Expr *renv = NULL;
             Expr *rcwd = NULL;
             Expr *rout = NULL;
+            Expr *rcon = NULL;
             size_t ri0;
             for (ri0 = 1; ri0 < e->nargs; ri0 += 1) {
                 PsExpr *ra0 = e->args[ri0];
@@ -4034,6 +4035,8 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                     renv = PsLow_expr(self, ra0->lhs);
                 } else if (strcmp(ra0->text, "cwd") == 0) {
                     rcwd = PsLow_expr(self, ra0->lhs);
+                } else if (strcmp(ra0->text, "console") == 0) {
+                    rcon = PsLow_expr(self, ra0->lhs);
                 } else {
                     rout = PsLow_expr(self, ra0->lhs);
                 }
@@ -4041,6 +4044,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, rc0, (renv != NULL ? renv : ex_new(self->a, EX_NONE, e->pos)));
             PsLow_push_arg(self, rc0, (rcwd != NULL ? rcwd : ex_new(self->a, EX_NONE, e->pos)));
             PsLow_push_arg(self, rc0, (rout != NULL ? rout : ex_new(self->a, EX_NONE, e->pos)));
+            PsLow_push_arg(self, rc0, (rcon != NULL ? rcon : PsLow_num(self, "0", e->pos)));
             PsLow_pos_args(self, rc0, e->pos);
             self->allocs = 1;
             self->raised = 1;

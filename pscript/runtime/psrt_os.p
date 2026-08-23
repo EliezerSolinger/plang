@@ -392,7 +392,7 @@ private def os_arg_cstr(ctx: *PsCtx, s: *PsStr, what: const *char, file: const *
         return None
     return os_dup(s->data, usize(s->len))
 
-def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, file: const *char, line: i32) -> *PsTask:
+def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, console: bool, file: const *char, line: i32) -> *PsTask:
     if argv == None or argv->len < 1:
         ps_raise(ctx, "os.run() takes the command as a non-empty list: os.run([\"cc\", \"-c\", \"a.c\"])", PS_CAT_VALUE, file, line)
         return None
@@ -455,6 +455,13 @@ def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *P
             ps_work_free(w)
             return None
         w->outfile = c3
+    # `console=True`: o filho herda ESTE terminal. Não é uma forma de capturar
+    # melhor — é a ausência de captura, e é o que separa "um programa que
+    # imprime" de um programa que pinta a tela, lê o teclado, sabe o tamanho da
+    # janela e recebe Ctrl-C. Um `stdout=` junto seria contraditório, e a sema
+    # recusa-o antes de chegar aqui.
+    if console:
+        w->console = 1
     # um ponteiro é o que a task devolve; `PsStrPtr` é o alias do tamanho de
     # ponteiro que existe justamente para o `sizeof` poder nomear um TIPO aqui
     return ps_io_task(ctx, w, True, sizeof(PsStrPtr))

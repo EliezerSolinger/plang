@@ -59,11 +59,15 @@ def ps_os_getmtime_ns(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i
 def ps_os_nproc() -> i64
 
 # ---------- 118 / pbuild 1.2: rodar um processo ----------
-# `await os.run(argv, env=, cwd=, stdout=)` -> um processo terminado, com o
-# status e tudo que ele imprimiu. Sem shell: o comando é um VETOR, e o `execvp`
-# o recebe como está. Ver o comentário em psrt_os.p para o porquê de cada
-# decisão; o `waitpid` mora numa thread do pool.
-def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, file: const *char, line: i32) -> *PsTask
+# `await os.run(argv, env=, cwd=, stdout=, console=)` -> um processo terminado,
+# com o status e tudo que ele imprimiu. Sem shell: o comando é um VETOR, e o
+# `execvp` o recebe como está. Ver o comentário em psrt_os.p para o porquê de
+# cada decisão; o `waitpid` mora numa thread do pool.
+#
+# `console=True` é a ausência de captura: o filho herda ESTE terminal, e o que
+# volta é só o status. É o `pool = console` do ninja visto de baixo, e quem
+# garante que só uma aresta dessas corre de cada vez é o executor.
+def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, console: bool, file: const *char, line: i32) -> *PsTask
 def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32)
 def ps_os_spawn(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32) -> i64
 def ps_os_kill(ctx: *PsCtx, pid: i64)

@@ -834,7 +834,42 @@ private def ps_run_child(w: *PsWork, wfd: int) -> int:
     ps_child_say(2, "cannot run", w->argv[0])
     return 127
 
+# o caso `console`: sem cano nenhum. O filho herda os descritores deste processo,
+# então escreve DIRETO no terminal, e o que volta é só o status. É por isso que
+# ele tem de correr sozinho — duas arestas a falar com o mesmo terminal ao mesmo
+# tempo costuram as linhas uma da outra, que é o defeito que a captura existe
+# para evitar no resto do build. Quem serializa é o executor, não isto aqui.
+private def ps_io_run_console(w: *PsWork):
+    fflush(stdout)
+    fflush(stderr)
+    pid: int = fork()
+    if pid < 0:
+        w->err = 1
+        return
+    if pid == 0:
+        if w->cwd != None:
+            if chdir(w->cwd) != 0:
+                ps_child_say(2, "cannot enter directory", w->cwd)
+                _exit(127)
+        if w->envp != None:
+            environ = w->envp
+        execvp(w->argv[0], w->argv)
+        ps_child_say(2, "cannot run", w->argv[0])
+        _exit(127)
+    st0: int = 0
+    while waitpid(pid, &st0, 0) < 0:
+        pass
+    w->buf = None
+    w->n = usize(0)
+    if (st0 & 0x7f) == 0:
+        w->rc = i64((st0 >> 8) & 0xff)
+    else:
+        w->rc = i64(128 + (st0 & 0x7f))
+
 private def ps_io_run_proc(w: *PsWork):
+    if w->console != 0:
+        ps_io_run_console(w)
+        return
     fds: int[2]
     if pipe(fds) != 0:
         w->err = 1

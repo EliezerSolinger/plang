@@ -3740,17 +3740,21 @@ struct PsLow:
                 renv: *Expr = None
                 rcwd: *Expr = None
                 rout: *Expr = None
+                rcon: *Expr = None
                 for ri0 in range(1, e->nargs):
                     ra0: *PsExpr = e->args[ri0]
                     if strcmp(ra0->text, "env") == 0:
                         renv = self->expr(ra0->lhs)
                     elif strcmp(ra0->text, "cwd") == 0:
                         rcwd = self->expr(ra0->lhs)
+                    elif strcmp(ra0->text, "console") == 0:
+                        rcon = self->expr(ra0->lhs)
                     else:
                         rout = self->expr(ra0->lhs)
                 self->push_arg(rc0, renv if renv != None else ex_new(self->a, EX_NONE, e->pos))
                 self->push_arg(rc0, rcwd if rcwd != None else ex_new(self->a, EX_NONE, e->pos))
                 self->push_arg(rc0, rout if rout != None else ex_new(self->a, EX_NONE, e->pos))
+                self->push_arg(rc0, rcon if rcon != None else self->num("0", e->pos))
                 self->pos_args(rc0, e->pos)
                 self->allocs = True
                 self->raised = True

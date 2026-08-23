@@ -693,6 +693,7 @@ struct PsWork:
     envp: **char       # None = herda o ambiente de quem chamou
     cwd: *char         # None = o diretório de quem chamou
     outfile: *char     # None = a saída volta em `buf`; senão vai para o arquivo
+    console: i32       # 1 = o filho FALA COM O TERMINAL: nem cano, nem captura
 
 struct PsCtx:
     lost: *PsLost        # 107: os erros que ninguém foi buscar (ver PsLost)

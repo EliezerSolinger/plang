@@ -2882,6 +2882,7 @@ struct PsSema:
                 seen_env: bool = False
                 seen_cwd: bool = False
                 seen_out: bool = False
+                seen_con: bool = False
                 for ri in range(1, e->nargs):
                     ra: *PsExpr = e->args[ri]
                     if ra->kind != PE_DESIG:
@@ -2903,8 +2904,22 @@ struct PsSema:
                             seen_out = True
                         if rv == None or rv->kind != PT_STR:
                             fatal_at(self->file, ra->pos, "os.run(%s=): a path, as str — found %s", rn, ps_type_str(self->a, rv))
+                        if strcmp(rn, "stdout") == 0 and seen_con:
+                            fatal_at(self->file, ra->pos, "os.run(): 'console' and 'stdout' say opposite things about where the output goes")
+                    elif strcmp(rn, "console") == 0:
+                        # `console=True` é a AUSÊNCIA de captura: o filho herda
+                        # este terminal. Com `stdout=` junto seriam duas ordens
+                        # contrárias sobre o mesmo descritor, e escolher uma
+                        # delas em silêncio é pior que recusar.
+                        if seen_con:
+                            fatal_at(self->file, ra->pos, "os.run(): 'console' given twice")
+                        seen_con = True
+                        if rv == None or rv->kind != PT_BOOL:
+                            fatal_at(self->file, ra->pos, "os.run(console=): a bool — found %s", ps_type_str(self->a, rv))
+                        if seen_out:
+                            fatal_at(self->file, ra->pos, "os.run(): 'console' and 'stdout' say opposite things about where the output goes")
                     else:
-                        fatal_at(self->file, ra->pos, "os.run() knows env=, cwd= and stdout=, not '%s'", rn)
+                        fatal_at(self->file, ra->pos, "os.run() knows env=, cwd=, stdout= and console=, not '%s'", rn)
                 rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 rtk->inner = ps_type(self->a, PT_PROC, e->pos)
                 return rtk
