@@ -4046,6 +4046,16 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->raised = 1;
             return rc0;
         }
+        if (isos0 && (strcmp(of0, "spawn") == 0 || strcmp(of0, "kill") == 0 || strcmp(of0, "alive") == 0)) {
+            Expr *sc0 = PsLow_call_rt(self, Arena_printf(self->a, "ps_os_%s", of0), e->pos);
+            PsLow_push_arg(self, sc0, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, sc0, PsLow_expr(self, e->args[0]));
+            if (strcmp(of0, "spawn") == 0) {
+                PsLow_pos_args(self, sc0, e->pos);
+                self->raised = 1;
+            }
+            return sc0;
+        }
         if (isos0 && strcmp(of0, "exec") == 0) {
             Expr *ec0 = PsLow_call_rt(self, "ps_os_exec", e->pos);
             PsLow_push_arg(self, ec0, PsLow_ctx_arg(self, e->pos));

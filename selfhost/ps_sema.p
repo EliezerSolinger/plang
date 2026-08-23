@@ -2908,6 +2908,26 @@ struct PsSema:
                 rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 rtk->inner = ps_type(self->a, PT_PROC, e->pos)
                 return rtk
+            if isos and strcmp(of, "spawn") == 0:
+                # F6: o terceiro caso. `run` espera, `exec` vira o filho, e este
+                # LANÇA e segue — que é o que um laço de desenvolvimento precisa.
+                # O que volta é o PID, um número: um objeto vivo num runtime com
+                # coletor levantaria a pergunta do que acontece quando ele é
+                # recolhido com o filho a correr, e três funções sobre um número
+                # não têm essa pergunta.
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "os.spawn() takes the command as a list: os.spawn([\"./meu-programa\"])")
+                sa: *PsType = self->check_expr(e->args[0])
+                if sa == None or sa->kind != PT_LIST or sa->inner == None or sa->inner->kind != PT_STR:
+                    fatal_at(self->file, e->args[0]->pos, "os.spawn() takes a list<str> — o programa e os argumentos, um por elemento (1.6) — found %s", ps_type_str(self->a, sa))
+                return ps_type(self->a, PT_INT, e->pos)
+            if isos and (strcmp(of, "kill") == 0 or strcmp(of, "alive") == 0):
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "os.%s() takes the pid that os.spawn() gave", of)
+                self->check_want(e->args[0], ps_type(self->a, PT_INT, e->pos), "o pid")
+                if strcmp(of, "alive") == 0:
+                    return ps_type(self->a, PT_BOOL, e->pos)
+                return ps_type(self->a, PT_VOID, e->pos)
             if isos and strcmp(of, "exec") == 0:
                 # F7: o programa PASSA A SER este processo. Não devolve, então
                 # não tem tipo de retorno que interesse — e é por isso que ele
@@ -3749,6 +3769,9 @@ struct PsSema:
             ns->sym.add("run")
             ns->sym.add("nproc")
             ns->sym.add("exec")
+            ns->sym.add("spawn")
+            ns->sym.add("kill")
+            ns->sym.add("alive")
         elif strcmp(name, "path") == 0:
             ns->sym.add("join")
             ns->sym.add("dirname")

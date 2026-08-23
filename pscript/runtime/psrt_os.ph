@@ -65,3 +65,6 @@ def ps_os_nproc() -> i64
 # decisão; o `waitpid` mora numa thread do pool.
 def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, file: const *char, line: i32) -> *PsTask
 def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32)
+def ps_os_spawn(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32) -> i64
+def ps_os_kill(ctx: *PsCtx, pid: i64)
+def ps_os_alive(ctx: *PsCtx, pid: i64) -> bool

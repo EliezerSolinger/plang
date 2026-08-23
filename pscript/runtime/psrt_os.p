@@ -11,6 +11,9 @@
 include <dirent.h>
 include <sys/stat.h>
 include <sys/types.h>
+include <sys/wait.h>   # 119/F6: `waitpid` com WNOHANG, para saber se o filho
+                       #   que se lançou ainda está de pé
+include <signal.h>
 import "psrt_types.ph"
 import "psrt_mem.ph"
 import "psrt_val.ph"
@@ -496,3 +499,65 @@ def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32):
     snprintf(msg, usize(512), "os.exec(): não consegui executar '%s' (não existe, ou não é executável)", av[0])
     ps_raise(ctx, msg, PS_CAT_IO, file, line)
     free(av)
+
+
+# ---------- um filho que NÃO se espera (F6) ----------
+#
+# `os.run` cria um filho e espera; `os.exec` vira o filho. Falta o terceiro caso,
+# e é o do laço de desenvolvimento: LANÇAR um programa, deixá-lo correr, e mais
+# tarde matá-lo para o relançar.
+#
+# O que volta é o PID e não um objeto, e isso é decisão: um objeto vivo num
+# runtime com coletor levanta a pergunta do que acontece quando ele é recolhido
+# com o filho ainda a correr, e a resposta certa para essa pergunta não é óbvia.
+# Três funções sobre um número não têm essa pergunta — e o número é o que o
+# sistema operativo já usa.
+#
+# O preço, dito: um PID é reutilizável. Depois de `os.alive` devolver False o
+# número não vale mais nada, e usá-lo é apontar para outro processo. Para um
+# laço que lança e mata o que ele próprio lançou, isso não acontece.
+def ps_os_spawn(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32) -> i64:
+    if argv == None or argv->len < 1:
+        ps_raise(ctx, "os.spawn() takes the command as a non-empty list", PS_CAT_VALUE, file, line)
+        return -1
+    n: i64 = argv->len
+    av: **char = (**char)(malloc(usize(n + 1) * sizeof(*av)))
+    memset(av, 0, usize(n + 1) * sizeof(*av))
+    abase: *char = (*char)(argv->data) + sizeof(PsArr)
+    for i in range(n):
+        sp: *PsStr = *(**PsStr)(abase + usize(i) * usize(argv->esize))
+        c: *char = os_arg_cstr(ctx, sp, "argument", file, line)
+        if c == None:
+            free(av)
+            return -1
+        av[i] = c
+    fflush(stdout)
+    fflush(stderr)
+    pid: i32 = fork()
+    if pid == 0:
+        execvp(av[0], av)
+        _exit(127)
+    for i in range(n):
+        free(av[i])
+    free(av)
+    if pid < 0:
+        ps_raise(ctx, "os.spawn(): não consegui criar o processo", PS_CAT_IO, file, line)
+        return -1
+    return i64(pid)
+
+def ps_os_kill(ctx: *PsCtx, pid: i64):
+    """SIGTERM, que é o pedido. Um `SIGKILL` não deixa o programa fechar o que
+    tinha aberto, e um laço de desenvolvimento que corrompe um arquivo a cada
+    salvar é pior do que um que espera meio segundo."""
+    if pid > 0:
+        kill(i32(pid), SIGTERM)
+
+def ps_os_alive(ctx: *PsCtx, pid: i64) -> bool:
+    """Ainda a correr? E, de caminho, COLHE o que já morreu — sem isto cada
+    programa lançado deixaria um zumbi, e um laço que relança de dez em dez
+    segundos enche a tabela de processos numa tarde."""
+    if pid <= 0:
+        return False
+    st: i32 = 0
+    r: i32 = waitpid(i32(pid), &st, WNOHANG)
+    return r == 0

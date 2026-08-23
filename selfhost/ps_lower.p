@@ -3755,6 +3755,14 @@ struct PsLow:
                 self->allocs = True
                 self->raised = True
                 return rc0
+            if isos0 and (strcmp(of0, "spawn") == 0 or strcmp(of0, "kill") == 0 or strcmp(of0, "alive") == 0):
+                sc0: *Expr = self->call_rt(self->a->printf("ps_os_%s", of0), e->pos)
+                self->push_arg(sc0, self->ctx_arg(e->pos))
+                self->push_arg(sc0, self->expr(e->args[0]))
+                if strcmp(of0, "spawn") == 0:
+                    self->pos_args(sc0, e->pos)
+                    self->raised = True
+                return sc0
             if isos0 and strcmp(of0, "exec") == 0:
                 # não devolve — mas LEVANTA quando a troca não acontece, e é por
                 # isso que ele leva posição

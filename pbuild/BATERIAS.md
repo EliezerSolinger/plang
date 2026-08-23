@@ -454,3 +454,24 @@ pacotes que precisassem da fronteira do pscript ao mesmo tempo materializavam
 ambos o `CStr`, e o linker queixava-se de `CStr_at`: uma mensagem sobre um
 método de acesso, a falar de um problema de arquitetura. A regra é uma linha, e
 a 1.5(a) faz o resto sozinha.
+
+## `os.spawn` / `os.kill` / `os.alive`: o terceiro caso de correr um programa
+
+`os.run` cria um filho e ESPERA; `os.exec` VIRA o filho. Faltava o do laço de
+desenvolvimento: LANÇAR, deixar correr, e mais tarde matar para relançar.
+
+O que volta é o **PID e não um objeto**, e isso é decisão: um objeto vivo num
+runtime com coletor levanta a pergunta do que acontece quando ele é recolhido
+com o filho ainda a correr, e a resposta certa para essa pergunta não é óbvia.
+Três funções sobre um número não têm essa pergunta — e o número é o que o
+sistema operativo já usa. O preço, dito: um PID é reutilizável, e depois de
+`os.alive` devolver False o número não vale mais nada.
+
+Duas coisas que a implementação tem de fazer e que não se veem na assinatura:
+
+* o sinal é **SIGTERM**, que é um pedido. Um `SIGKILL` não deixa o programa
+  fechar o que tinha aberto, e um laço que corrompe um arquivo a cada salvar é
+  pior do que um que espera meio segundo;
+* `os.alive` **COLHE** o que já morreu (`waitpid` com `WNOHANG`). Sem isso cada
+  programa lançado deixava um zumbi, e um laço que relança de dez em dez
+  segundos enche a tabela de processos numa tarde.

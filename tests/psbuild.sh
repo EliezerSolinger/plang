@@ -38,9 +38,18 @@ mkdir -p "$RT"
 RTSRC="pscript/runtime/psrt.ph"
 RTC=""
 for c in psrt_mem.c psrt_val.c psrt_rt.c psrt_std.c psrt_os.c psrt_top.c; do RTC="$RTC $RT/pscript/runtime/$c"; done
-if [ ! -f "$RT/pscript/runtime/psrt_mem.c" ]; then
-    $PLANGC --pkg-path packages --out-dir "$RT" $RTSRC
+# O CACHE DO RUNTIME, e a armadilha que ele tinha: a condição era "o arquivo
+# existe", então mexer no runtime e correr um arreio que reusa o mesmo `$RT`
+# dava um link a falhar por um símbolo que o `.c` velho não tem. Custou uma
+# investigação; a condição agora é a data.
+regen=0
+[ -f "$RT/pscript/runtime/psrt_mem.c" ] || regen=1
+if [ $regen = 0 ]; then
+    for f in pscript/runtime/*.p pscript/runtime/*.ph; do
+        [ "$f" -nt "$RT/pscript/runtime/psrt_mem.c" ] && { regen=1; break; }
+    done
 fi
+[ $regen = 1 ] && $PLANGC --pkg-path packages --out-dir "$RT" $RTSRC
 
 $PLANGC --pkg-path packages --out-dir "$RT" "$src"
 

@@ -1011,9 +1011,19 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
       398 arquivos cujas datas se leem em menos de um milissegundo. O laço
       pergunta a cada 200 ms com um debounce de 150. No dia em que a árvore doer,
       a primitiva entra por baixo e o comando não muda.
-      **Falta a outra metade**: reiniciar o programa. Matar e relançar um filho
-      precisa de controlo de processo que o `os.run` não dá (ele espera) — é uma
-      primitiva a mais (`os.spawn` + `kill`), anotada e não feita.
+      **E ele REINICIA o programa** (2026-08-23): mata o filho, espera que ele
+      saia, constrói, relança. O `SIGTERM` é um pedido e não uma execução — um
+      `SIGKILL` não deixa o programa fechar o que tinha aberto, e um laço que
+      corrompe um arquivo a cada salvar é pior do que um que espera meio
+      segundo. E o filho sai ANTES de a construção começar, porque ele está a
+      usar o binário que ela vai reescrever.
+      Para isso entrou na linguagem o terceiro caso de correr um programa:
+      `os.spawn` (lança e segue), `os.kill` e `os.alive` — que também COLHE o
+      zumbi, senão um laço que relança de dez em dez segundos enche a tabela de
+      processos numa tarde. O que volta é o PID e não um objeto: um objeto vivo
+      num runtime com coletor levanta a pergunta do que acontece quando ele é
+      recolhido com o filho a correr, e três funções sobre um número não têm
+      essa pergunta.
 - [~] **erros como POSIÇÃO** (2026-08-23): o editor lê
       `arquivo:linha:coluna: error:` da saída da aresta — o formato que o
       compilador já usa e que o `ppack` copiou de propósito —, abre o arquivo e
@@ -1047,9 +1057,9 @@ um erro de compilação aparece sublinhado no arquivo certo.
 **Estado em 2026-08-23**: o motor corre dentro do editor, os comandos estão na
 paleta, o erro do build leva o cursor ao sítio, e o `ppack dev` reconstrói ao
 salvar. O que falta é **o que precisa de olhos** — o painel que edita o
-`pack.json`, o sublinhado desenhado, a barra com a lista de arestas — mais a
-primitiva de PROCESSO (`os.spawn` + `kill`) que o "reinicia o programa" exige
-dos dois lados (o `dev` e o `play`). A informação para os três painéis já está
+`pack.json`, o sublinhado desenhado, a barra com a lista de arestas — O `Run` da paleta ainda não relança o
+filho — a primitiva já existe (`os.spawn`/`kill`/`alive`, e o `ppack dev` já a
+usa), falta ligá-la ao botão. A informação para os três painéis já está
 toda no `App`: `build_msg`, `build_total`, `build_feitas`, `build_erro`,
 `build_pos_*` e `build_targets`.
 

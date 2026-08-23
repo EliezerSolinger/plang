@@ -306,6 +306,11 @@ async def cmd_dev(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int
     datas: dict<str, int> = {}
     for p2 in alvos_v:
         datas[p2] = path.getmtime_ns(p2) if path.isfile(p2) else 0
+    # o programa, quando o alvo é um: lançado agora e relançado a cada mudança
+    pid = 0
+    if len(alvo) > 0 and path.isfile(alvo):
+        pid = os.spawn([alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)])
+        print("dev: lancei " + alvo + " (pid " + str(pid) + ")")
     print(f"dev: {len(alvos_v)} arquivo(s) vigiados. Ctrl-C para sair.")
 
     while True:
@@ -330,8 +335,20 @@ async def cmd_dev(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int
                     mudou.append(p4)
         print("")
         print("dev: mudou " + ", ".join(mudou[0:3]) + ("..." if len(mudou) > 3 else ""))
+        # o programa antigo sai ANTES de o novo ser construído: ele está a usar
+        # o binário que a construção vai reescrever
+        if pid > 0:
+            os.kill(pid)
+            esperas = 0
+            while os.alive(pid) and esperas < 100:
+                await sleep(0.05)
+                esperas += 1
+            pid = 0
         g2 = await BP.montar(query)
-        await B.build(g2, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
+        ok2 = await B.build(g2, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
+        if ok2 and len(alvo) > 0 and path.isfile(alvo):
+            pid = os.spawn([alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)])
+            print("dev: relancei (pid " + str(pid) + ")")
     return 0
 
 
