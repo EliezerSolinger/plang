@@ -187,13 +187,28 @@ só. O `build/` ser descartável deixa de importar.
 ## 5. Os comandos
 
 ```
+ppack keygen <arquivo>         uma chave nova: privada + .pub        (local)
 ppack update                   baixa os índices e guarda-os          (rede)
 ppack search <termo>           procura no índice guardado            (offline)
 ppack add <nome>@<versão>      escreve no manifesto e no lock        (rede: só para o hash)
-ppack install                  materializa o que o lock diz          (rede se faltar)
+ppack install [--frozen]       materializa o que o lock diz          (rede se faltar)
 ppack up [<nome>]              sobe a versão e regrava o lock        (rede)
-ppack publish                  faz o .tar, assina, escreve no índice (local)
+ppack publish <pkg> --to <dir> faz o .tar, assina, escreve no índice (local)
+ppack check                    as invariantes dos pacotes            (local)
 ```
+
+**Todos estão feitos**, e `tests/repo.sh` mede-os de ponta a ponta (55
+verificações) por `file://` e por `http://`.
+
+Três que a lista acima não deixa ver:
+
+* `install --frozen` é o do CI: o lock e o manifesto têm de contar a mesma
+  história, e um `install` que instalasse o lock velho em silêncio é a fonte do
+  "na minha máquina funciona". Sem `--frozen` ele imprime o diff e continua.
+* `up` sobe para a mais ALTA que o índice tem, e é um comando e não um efeito do
+  `install`: subir de versão é uma escolha, e uma escolha que acontece sozinha é
+  uma escolha que ninguém reviu.
+* `check` é o que mantém a promessa de P através dos pacotes — ver §9.
 
 `add` e `build` são comandos diferentes de propósito: um mexe no manifesto e no
 lock, o outro compila. O diff do commit fica legível — duas linhas, uma em cada
@@ -309,3 +324,42 @@ sai de graça: a lista já está no índice porque o compilador já a produz.
    serve para o nosso formato, mas ler um documento de fora obriga a usar `try`
    como controlo de fluxo. É a única coisa neste trabalho que se escreveu a
    torcer a linguagem em vez de a usar, e é uma bateria a fazer.
+
+
+## 9. `ppack check`: as invariantes que o build não confere
+
+O build constrói. Estas três perguntas não são sobre construir, e por isso são
+um comando à parte — que corre no `verify`:
+
+1. **um pacote `lang: p` não depende de um pacote `pscript`.** Quem usa um
+   pacote P espera o que P promete: sem coletor, sem alocação escondida, a ABI
+   do C. Um `p` que puxasse um `pscript` traria o runtime a reboque, e a
+   promessa quebrava-se em silêncio uma dependência abaixo de onde alguém a leu.
+   O contrário NÃO é simétrico e não devia ser: um pacote pscript pode depender
+   de um P — a travessia da 45.5 existe exatamente para isso, e é assim que o
+   `ppack` usa o `sha2`.
+
+2. **nenhum `.psc` no FECHO do módulo-raiz de um pacote `p`** — a mesma coisa
+   dita onde ela realmente acontece, porque um `import` alcança mais longe do
+   que um manifesto. O primeiro portão é o próprio compilador (um `.ph` que
+   importe um módulo pscript ele já recusa); quando ele fala, é o que ELE diz
+   que sai, não a nossa paráfrase.
+   O que NÃO é problema: um pacote P com TESTES em pscript. O `sha2` tem um, de
+   propósito — é como se prova que a fronteira funciona. Ele não está no fecho
+   da raiz.
+
+3. **a biblioteca de sistema que um manifesto declara existe nesta máquina.**
+   A 2.7 diz que a dependência de sistema é DECLARAÇÃO e que o `pkg-config` é um
+   dos resolvedores dela; quem o chama somos nós, nunca o pacote — a lista de
+   programas que estas ferramentas invocam é FIXA (`plangc`, `cc`,
+   `pkg-config`). Aqui a declaração passa a valer alguma coisa antes de o build
+   começar.
+
+E há uma quarta, que não vive aqui porque acontece mais cedo: a **faixa de
+toolchain**. `add` e `install` perguntam ao compilador quem ele é (resposta 4) e
+comparam com o `>= x.y.z` do manifesto — antes de gastar um segundo a compilar.
+A mensagem que sai daí ("o pacote foo exige plangc >= X, o seu é Y") é a melhor
+que existe para este problema; a alternativa é um erro de sintaxe a meio de um
+módulo que usa uma coisa que ainda não existe. Se não houver `plangc` nenhum
+para perguntar, ele DIZ que não conferiu — um portão que se desliga em silêncio
+é pior do que não existir.

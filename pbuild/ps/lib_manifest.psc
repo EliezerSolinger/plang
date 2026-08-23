@@ -227,3 +227,27 @@ def versao_maior(a: str, b: str) -> bool:
             return na > nb
         i += 1
     return False
+
+
+def toolchain_ok(faixa: str, versao: str) -> str:
+    """A faixa de toolchain contra a versão que se tem. Devolve "" quando serve,
+    e a RAZÃO quando não serve.
+
+    A faixa é `>= X.Y.Z` e mais nada — a v1 não tem resolvedor e também não tem
+    álgebra de intervalos. Uma faixa vazia é "serve qualquer uma", que é o que um
+    pacote sem exigências quer dizer.
+
+    Conferir isto ANTES de compilar dá a melhor mensagem possível ("o pacote foo
+    exige plangc >= X, o seu é Y") em vez de um erro de sintaxe a meio de um
+    módulo que usa uma coisa que ainda não existe."""
+    f = faixa.strip()
+    if len(f) == 0 or len(versao) == 0:
+        return ""
+    if not f.startswith(">="):
+        return "faixa de toolchain que não se entende: `" + faixa + "` (a v1 lê `>= x.y.z`)"
+    quer = f[2:].strip()
+    if not versao_ok(quer) or not versao_ok(versao):
+        return ""
+    if versao_maior(quer, versao):
+        return "exige plangc " + f + ", e o seu é " + versao
+    return ""

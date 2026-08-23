@@ -721,9 +721,9 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
       caso próprio na suíte: caminho com espaço, argumento com `$`, aspa simples
       — e o comando exportado é RODADO por um shell para conferir que escreve o
       que a aresta prometia. Determinista, conferido duas vezes.
-- [ ] `build.ninja` COMITADO na raiz + bootstrap no README (fica com a TROCA:
-      um `build.ninja` comitado que descreve um `build/` que o Makefile ainda
-      não usa seria um arquivo que mente)
+- [x] `build.ninja` COMITADO na raiz + bootstrap no README (2026-08-23), com um
+      PORTÃO que o regenera e compara: um arquivo gerado que fica comitado tem
+      exatamente um modo de falhar, que é envelhecer em silêncio.
 
 ### Parte D — a TROCA (um commit, repo verde antes e depois)
 
@@ -784,15 +784,19 @@ pacotes, o formato de repositório, publish e a confiança.
       (faixa mínima), `description`
   - validação com erros posicionais (linha/coluna no JSON — o parser de json
     do pscript precisa expor posição de erro; item pequeno, conferir)
-- [ ] **tipos verificáveis**: pacote `lang: p` com `.psc` no fechamento = erro
-      na resolução; pacote P só depende de pacote P (o subgrafo P é livre de
-      runtime — invariante conferido no resolve, não no build)
+- [x] **tipos verificáveis** (2026-08-23): `ppack check`, e ele confere as duas
+      metades — o manifesto (um `p` não depende de um `pscript`) e o FECHO do
+      módulo-raiz (nenhum `.psc` lá dentro). O contrário não é simétrico e não
+      devia ser: um pacote pscript PODE depender de um P. Um pacote P com TESTES
+      em pscript também está certo (o `sha2` tem um, de propósito) — e é por
+      isso que a pergunta é sobre o fecho e não sobre o diretório.
+      No `verify`.
 - [ ] **lock `pack.lock`** (JSON, decidido "dois arquivos, um armazém"): por
       pacote — nome, versão, SHA-256 do tarball, repositório de origem (URL ou
       `path`), `unsafe: true` quando 2.12, faixa de toolchain do manifesto +
       a versão/hash do plangc que resolveu
-  - dessincronizado do manifesto → atualiza sozinho e IMPRIME o diff
-    (entrou/saiu/mudou de hash); `--frozen` para CI recusa
+  - [x] dessincronizado do manifesto → o `install` IMPRIME o diff, e `--frozen`
+    (o CI) recusa em vez de avisar (2026-08-23)
 - [ ] **workspace**: membros por `path`; o hash de um pacote local é o hash do
       DIRETÓRIO (lista ordenada de arquivos + hash de cada — `os.listdir` já
       ordena de propósito); mudou → o lock anota, o build o vê como entrada

@@ -89,8 +89,15 @@ EOF
 saiu4=$("$PPACK" run "$OUT/emp.p" 2>/dev/null | tail -1)
 check "um programa em P corre igual" "em P" "$saiu4"
 
-# 8. o binário vive no PROJETO
-if ls build/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL o binario devia estar em build/run/bin"; fail=$((fail+1)); fi
+# 8. o binário de um script SOLTO nasce AO LADO DELE (arquitetura C′): `ppack run
+#    ../ferramentas/x.psc` de dentro de outro projeto não tem por que sujar o
+#    build desse projeto com uma coisa que não é dele
+if ls "$OUT"/build/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL o binario devia estar em $OUT/build/run/bin"; fail=$((fail+1)); fi
+
+# 8b. ... e `--build-dir` manda-o para outro lado
+rm -rf "$OUT/alhures"
+"$PPACK" run --build-dir "$OUT/alhures" "$OUT/prog.psc" >/dev/null 2>&1
+if ls "$OUT"/alhures/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL --build-dir nao foi respeitado"; fail=$((fail+1)); fi
 
 # 9. um arquivo que não existe é uma mensagem, não um estouro
 "$PPACK" run "$OUT/naoexiste.psc" >/dev/null 2>&1 && { echo "  FAIL um arquivo que nao existe devia falhar"; fail=$((fail+1)); } || ok=$((ok+1))

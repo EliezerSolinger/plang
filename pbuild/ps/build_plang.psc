@@ -478,14 +478,14 @@ async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
 # gerenciador. E agora ela mora em `build/run/`, dentro do projeto, e não num
 # `~/.cache` que `make clean` não alcança.
 
-private def run_man_path(src: str) -> str:
+private def run_man_path(src: str, raiz: str) -> str:
     nome = path.basename(src)
-    return path.join(BUILD, "run/.man", nome + ".txt")
+    return path.join(raiz, "run/.man", nome + ".txt")
 
 
-async def run_manifesto_ok(src: str) -> str:
+async def run_manifesto_ok(src: str, raiz: str) -> str:
     """O binário, se ele ainda vale. Vazio quando é preciso construir."""
-    man = run_man_path(src)
+    man = run_man_path(src, raiz)
     if not path.isfile(man):
         return ""
     f = await open(man, "r")
@@ -511,7 +511,7 @@ async def run_manifesto_ok(src: str) -> str:
     return binario
 
 
-async def run_manifesto_grava(src: str, binario: str, g: G.Graph):
+async def run_manifesto_grava(src: str, binario: str, g: G.Graph, raiz: str):
     """A lista do que a construção LEU, com as datas. As entradas vêm do GRAFO,
     que as recebeu do compilador — nada aqui é adivinhado a partir do fonte."""
     vistos: dict<str, int> = {}
@@ -529,10 +529,28 @@ async def run_manifesto_grava(src: str, binario: str, g: G.Graph):
                 continue
             vistos[p2] = 1
             linhas.append(p2 + " " + str(path.getmtime_ns(p2)))
-    await T.escrever(run_man_path(src), "\n".join(linhas) + "\n")
+    await T.escrever(run_man_path(src, raiz), "\n".join(linhas) + "\n")
 
 
-async def programa_solto(g: G.Graph, query: str, src: str) -> str:
+def raiz_de_script(src: str, forcada: str) -> str:
+    """Onde vai o build de um script SOLTO — um arquivo que não é alvo de
+    descritor nenhum (arquitetura C′).
+
+    Ela nasce AO LADO DO SCRIPT e não no diretório de onde se chamou: `ppack run
+    ../ferramentas/x.psc` de dentro de outro projeto não tem por que sujar o
+    `build/` desse projeto com uma coisa que não é dele. Quem não quiser isso —
+    um diretório somente-leitura, mandar tudo para `/tmp`, partilhar entre dois
+    checkouts — passa `--build-dir`.
+
+    O padrão é local e explícito; o global só existe se alguém o digitar, que é
+    a lição que o `pip` levou vinte anos a ensinar."""
+    if len(forcada) > 0:
+        return forcada
+    d = path.dirname(src)
+    return path.join(d, BUILD) if len(d) > 0 else BUILD
+
+
+async def programa_solto(g: G.Graph, query: str, src: str, raiz: str) -> str:
     """Um arquivo que não é alvo de descritor nenhum, construído para ser
     corrido. É o que o `plangc run` fazia por dentro, e a razão de sair de lá é
     que nada disto é sobre traduzir uma linguagem: é POLÍTICA — onde guardar o
@@ -544,16 +562,16 @@ async def programa_solto(g: G.Graph, query: str, src: str) -> str:
     raizes = await raizes_do_workspace("pack.json")
     for ri in R.raizes_instaladas():
         raizes.append(ri)
-    c = T.new_ctx(g, path.join(BUILD, "run"), PLANGC_S2)
+    c = T.new_ctx(g, path.join(raiz, "run"), PLANGC_S2)
     c.query = query
     c.plangc_is_built = True
     c.pkgroots = raizes
     nome = path.basename(src)
     nome = nome[0:len(nome) - 4] if nome.endswith(".psc") else nome[0:len(nome) - 2]
-    saida = path.join(BUILD, "run/bin", nome)
+    saida = path.join(raiz, "run/bin", nome)
     if src.endswith(".psc"):
-        return await T.psc_program(c, src, saida, path.join(BUILD, "run/obj"), [], [])
-    return await T.p_program(c, src, saida, path.join(BUILD, "run/obj"), [], [])
+        return await T.psc_program(c, src, saida, path.join(raiz, "run/obj"), [], [])
+    return await T.p_program(c, src, saida, path.join(raiz, "run/obj"), [], [])
 
 
 async def montar(query: str) -> G.Graph:

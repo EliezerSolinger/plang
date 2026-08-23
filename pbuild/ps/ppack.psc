@@ -58,6 +58,15 @@ def on_plan(total: int):
 # uma resposta e não um fluxo.
 saida_json: bool = False
 
+# o compilador que RESPONDE, guardado aqui porque os comandos do repositório
+# precisam dele para uma pergunta só (a versão da linguagem, contra a faixa de
+# toolchain) e passá-lo por seis assinaturas para isso seria pior
+query_atual: str = ""
+
+
+def query_global() -> str:
+    return query_atual
+
 rotulos: dict<int, str> = {}
 
 # o PLACAR: quantas arestas de cada suíte passaram, e quais falharam. A chave é o
@@ -179,7 +188,7 @@ async def cmd_build(alvos: list<str>, jobs: int, keep: int, dry: bool, query: st
     ok = await B.build(g, LOG, alvos, B.Opts(jobs, keep, dry, False), rep)
     return 0 if ok else 1
 
-async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int:
+async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool, builddir: str) -> int:
     """Constrói e roda. Duas coisas que ele aceita, e a segunda é a que fecha a
     F7:
 
@@ -214,7 +223,8 @@ async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int
         # perguntar nem a construir, e o processo vira o programa em
         # milissegundos. Sem isto, cada corrida paga duas invocações do
         # compilador (meio segundo) para descobrir que não havia nada a fazer.
-        pronto = await BP.run_manifesto_ok(alvo)
+        raiz = BP.raiz_de_script(alvo, builddir)
+        pronto = await BP.run_manifesto_ok(alvo, raiz)
         if len(pronto) > 0:
             argv0: list<str> = [pronto if pronto.startswith("/") else path.join(os.getcwd(), pronto)]
             i0 = 1
@@ -229,18 +239,18 @@ async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int
         # descritor inteiro custa centenas de perguntas ao compilador (doze
         # segundos aqui), e nenhuma delas é sobre este arquivo. Quando o
         # compilador já existe, o que se constrói é só o programa.
-        alvo = await BP.programa_solto(g, query, alvo)
+        alvo = await BP.programa_solto(g, query, alvo, BP.raiz_de_script(alvo, builddir))
     else:
         g = await BP.montar(query)
         if alvo not in g.by_path and solto:
-            alvo = await BP.programa_solto(g, query, alvo)
+            alvo = await BP.programa_solto(g, query, alvo, BP.raiz_de_script(alvo, builddir))
         elif alvo not in g.by_path:
             print("não achei '" + alvo + "' — nem alvo do descritor, nem arquivo")
             return 1
     if not await B.build(g, LOG, [alvo], B.Opts(jobs, 1, False, False), rep):
         return 101
     if solto:
-        await BP.run_manifesto_grava(alvos[0], alvo, g)
+        await BP.run_manifesto_grava(alvos[0], alvo, g, BP.raiz_de_script(alvos[0], builddir))
     argv: list<str> = [alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)]
     i = 1
     while i < len(alvos):
@@ -434,6 +444,19 @@ async def cmd_check(query: str) -> int:
             if ln.endswith(".psc"):
                 problemas.append(p.nome + " é `lang: p` e o fecho de " + man.raiz
                                  + " passa por " + ln + ", que é pscript")
+    # 2.7: a dependência de SISTEMA é DECLARAÇÃO no manifesto, e o `pkg-config`
+    # é um dos resolvedores dela. Quem o chama somos nós, nunca o pacote — a
+    # lista de programas que estas ferramentas invocam é FIXA (`plangc`, `cc`,
+    # `pkg-config`) e não é extensível por um pacote de terceiro. Aqui a
+    # declaração passa a valer alguma coisa antes de o build começar: se a
+    # biblioteca não está nesta máquina, diz-se agora e com o nome dela.
+    for p2 in m.pacotes:
+        man2 = await MF.ler(path.join(p2.dir, "pack.json"))
+        for sd in man2.system:
+            r2 = await os.run(["pkg-config", "--exists", sd.nome])
+            if r2.status() != 0:
+                problemas.append(p2.nome + " declara a biblioteca de sistema `" + sd.nome
+                                 + "` e o `pkg-config` não a acha nesta máquina")
     if saida_json:
         js: list<str> = []
         for pr in problemas:
@@ -634,6 +657,27 @@ async def cmd_keygen(alvos: list<str>) -> int:
     return 0
 
 
+private async def versao_do_compilador(query: str) -> str:
+    """A versão da LINGUAGEM que este compilador aceita — `plangc 0.1.0 (hash)`.
+
+    É a pergunta 4 do protocolo, e é a única coisa que a faixa de toolchain de
+    um manifesto tem contra o que comparar.
+
+    Num projeto que CONSOME pacotes não há `build/bin/plangc_s2`: o compilador
+    dele está instalado, no PATH. Por isso a segunda tentativa é `plangc` sem
+    caminho — e se nem isso houver, devolve-se vazio e quem chama DIZ que não
+    conferiu. Um portão que se desliga em silêncio é pior do que não existir."""
+    for cand in [query, "plangc"]:
+        if len(cand) == 0:
+            continue
+        r = await os.run([cand, "--version"])
+        if r.status() == 0:
+            partes = r.output().strip().split(" ")
+            if len(partes) > 1:
+                return partes[1]
+    return ""
+
+
 private async def repos_do_projeto() -> list<R.Repo>:
     """Os repositórios deste projeto, na ordem de busca."""
     out: list<R.Repo> = []
@@ -799,6 +843,10 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
         print("a v1 não tem resolvedor: a versão é EXATA — `ppack add " + nome + "@0.1.0`")
         return 2
     repos = await repos_do_projeto()
+    vcomp = await versao_do_compilador(query_global())
+    if len(vcomp) == 0:
+        print("aviso: não achei um `plangc` para perguntar a versão — a faixa de toolchain não foi conferida")
+        print("       (`--query <caminho>`, ou ponha o `plangc` no PATH)")
     lk = await LK.ler("pack.lock")
     fila: list<str> = [nome + "@" + versao]
     porque: dict<str, str> = {}
@@ -855,6 +903,16 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
                 print("   ou `--unsafe` neste comando, ou o repositório declarado `unsafe` no pack.json —")
                 print("   as duas formas gravam `\"unsafe\": true` no lock, para quem revisa o PR ver.")
                 return 1
+            # a FAIXA DE TOOLCHAIN, conferida antes de gastar um segundo a
+            # compilar. A mensagem que sai daqui — "o pacote foo exige plangc
+            # >= X, o seu é Y" — é a melhor que existe para este problema; a
+            # alternativa é um erro de sintaxe a meio de um módulo que usa uma
+            # coisa que ainda não existe.
+            if len(vcomp) > 0:
+                mau = MF.toolchain_ok(u.toolchain, vcomp)
+                if len(mau) > 0:
+                    print(n + "@" + v + " " + mau)
+                    return 1
             await R.escrever_bytes(path.join(R.dir_paks(), sha), bs)
             lk.pacotes.append(LK.Travado(n, v, sha, r.url, u.arquivo,
                                          sem_assinatura, u.toolchain))
@@ -1039,9 +1097,17 @@ async def cmd_install(frozen: bool) -> int:
         print("o lock não tem pacotes: `ppack add <nome>@<versão>` primeiro")
         return 0
     repos = await repos_do_projeto()
+    vcomp = await versao_do_compilador(query_global())
+    if len(vcomp) == 0 and not saida_json:
+        print("aviso: não achei um `plangc` para perguntar a versão — a faixa de toolchain não foi conferida")
     n = 0
     ji: list<str> = []
     for t in lk.pacotes:
+        if len(vcomp) > 0:
+            mau = MF.toolchain_ok(t.toolchain, vcomp)
+            if len(mau) > 0:
+                print(t.nome + "@" + t.versao + " " + mau)
+                return 1
         destino = R.dir_do_pacote(t.nome, t.versao, t.sha256)
         if path.isdir(path.join(destino, t.nome)):
             continue
@@ -1313,6 +1379,8 @@ def rmtree(d: str) -> int:
 
 def uso():
     print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("     --build-dir <dir>                    onde o build de um script SOLTO sai")
+    print("                                          (padrão: ao lado do script)")
     print("     ppack check                          as invariantes que o build não confere")
     print("     ppack dev [alvo]                     constrói quando alguma coisa muda, até ao Ctrl-C")
     print("     ppack keygen <arquivo>               uma chave nova (privada + .pub)")
@@ -1330,6 +1398,7 @@ async def main() -> int:
         uso()
         return 2
     global saida_json
+    global query_atual
     cmd = args[0]
     alvos: list<str> = []
     jobs = os.nproc()
@@ -1344,6 +1413,7 @@ async def main() -> int:
     chave = ""
     inseguro = False
     frozen = False
+    builddir = ""
     query = ""
     for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
         if path.isfile(cand):
@@ -1392,6 +1462,9 @@ async def main() -> int:
             inseguro = True
         elif a == "--frozen":
             frozen = True
+        elif a == "--build-dir" and i + 1 < len(args):
+            i += 1
+            builddir = args[i]
         elif a == "--to" and i + 1 < len(args):
             i += 1
             para = args[i]
@@ -1404,6 +1477,7 @@ async def main() -> int:
         else:
             alvos.append(a)
         i += 1
+    query_atual = query
     if cmd == "build":
         return await cmd_build(alvos, jobs, keep, dry, query, verbose)
     if cmd == "test":
@@ -1415,7 +1489,7 @@ async def main() -> int:
     if cmd == "run":
         for x in resto:
             alvos.append(x)
-        return await cmd_run(alvos, jobs, query, verbose)
+        return await cmd_run(alvos, jobs, query, verbose, builddir)
     if cmd == "explain":
         return await cmd_explain(alvos, query)
     if cmd == "graph":

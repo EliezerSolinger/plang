@@ -260,6 +260,30 @@ cd "$RAIZ/$OUT/projup"
 grep -q "0.1.0 -> 0.2.0" up.log && ok || bad "o up não subiu a versão"
 python3 -c "import json,sys; d=json.load(open('pack.json')); sys.exit(0 if d['deps']['tar']=='0.2.0' else 1)" && ok || bad "o manifesto não ficou com a versão nova (ou deixou de ser JSON)"
 
+# a FAIXA DE TOOLCHAIN: conferida antes de gastar um segundo a compilar
+cd "$RAIZ"
+python3 - <<'PYX'
+import json
+p = "packages/tar/pack.json"
+d = json.load(open(p))
+d["toolchain"] = ">= 9.9.9"
+d["version"] = "0.3.0"
+open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PYX
+"$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
+python3 - <<'PYX'
+import json
+p = "packages/tar/pack.json"
+d = json.load(open(p))
+d["toolchain"] = ">= 0.1.0"
+d["version"] = "0.1.0"
+open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+PYX
+cd "$RAIZ/$OUT/projup"
+"$PPACK" update >/dev/null 2>&1
+"$PPACK" add tar@0.3.0 --query "$PLANGC" >tc.log 2>&1 && bad "um pacote que exige um compilador que não existe devia ser recusado" || ok
+grep -q "exige plangc >= 9.9.9" tc.log && ok || bad "a recusa não disse a faixa e a versão"
+
 # o lock desencontrado do manifesto: avisa, e com --frozen recusa
 python3 - <<'PYX'
 import json
