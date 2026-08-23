@@ -1,6 +1,6 @@
 """An HTTP server and its clients, in one process (77.2/78.1).
 
-The parser lives in `lib_http.psc`, written in pscript from the specification —
+The parser lives in `packages/http`, written in pscript from the specification —
 no `.c` of anyone else's went into the runtime. This program puts both sides
 talking over a real socket, on one thread, which is only possible because every
 wait PARKS: if `accept` blocked, the client would never get to connect.
@@ -16,7 +16,7 @@ What it exercises on purpose:
 """
 
 import net
-import lib_http as http
+import <http/http.psc> as http
 
 
 async def serve(srv: socket, how_many: int) -> int:

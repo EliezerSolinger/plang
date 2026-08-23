@@ -28,16 +28,24 @@ cada operação e gravado no lock. O hash NUNCA é dispensado: ele é a única c
 que impede que o que chegou seja outra coisa.
 """
 import json
+import net
 import os
 import path
 import time
 import lib_manifest as M
+import <ed25519/ed25519.ph>
+import <http/http.psc> as H
+import <url/url.psc> as U
 import <tar/tar.psc> as tar
 import <sha2/sha2.ph>
 
 # tudo o que este projeto guarda de fora vive aqui, e `make clean` leva junto —
 # é seguro por construção, porque o lock tem o hash de tudo
 const ARMAZEM: str = "build/pkg"
+
+# o que o `user-agent` diz. Um servidor que queira negar-nos serviço tem o
+# direito de saber quem está a bater à porta.
+const VERSAO: str = "0.1.0"
 
 
 def dir_indices() -> str:
@@ -84,9 +92,17 @@ def caminho_local(r: Repo) -> str:
 
 
 async def buscar(r: Repo, rel: str) -> list<u8>:
-    """UM arquivo do repositório, pelo caminho relativo. É o único ponto por onde
-    bytes de fora entram, e é de propósito: quando o HTTP entrar, entra aqui e
-    nada acima muda."""
+    """UM arquivo do repositório, pelo caminho relativo.
+
+    É o ÚNICO ponto por onde bytes de fora entram, e é de propósito: o resto do
+    gerenciador não sabe se o pacote veio de um diretório, de um pen drive ou da
+    rede. Trocar de transporte não muda nada acima — foi assim que o HTTP entrou,
+    depois de a fase 1 inteira já estar provada sobre `file://`.
+
+    O que NÃO está aqui, e é uma decisão: TLS. A confiança vem do CONTEÚDO (o
+    hash, e um dia a assinatura), não da conexão, e é isso que faz um espelho
+    servido por `python3 -m http.server` num pen drive ser tão bom quanto um
+    bucket com certificado."""
     if eh_arquivo(r):
         alvo = path.join(caminho_local(r), rel)
         if not path.isfile(alvo):
@@ -95,7 +111,58 @@ async def buscar(r: Repo, rel: str) -> list<u8>:
         b = await f.read_all()
         await f.close()
         return b
-    raise error("transporte ainda não implementado para: " + r.url, VALUE)
+    if r.url.startswith("http://") or r.url.startswith("https://"):
+        return await buscar_http(r, rel)
+    raise error("não sei buscar de " + r.url + " — os esquemas são file://, http:// e https://", VALUE)
+
+
+async def buscar_http(r: Repo, rel: str) -> list<u8>:
+    """Um GET, e nada de esperto: sem redireção seguida em silêncio, sem cache,
+    sem sessão. O que se pede é um arquivo imutável num caminho conhecido.
+
+    A redireção NÃO é seguida, e isso é o oposto de uma limitação: um índice que
+    responde 301 está a mandar-nos a outro sítio, e o URL do repositório é o que
+    o projeto declarou e o lock gravou. Quem quer mudar de sítio muda o
+    `pack.json`, onde o diff se vê."""
+    achou = U.parse(r.url + rel, U.blank_url(), False)
+    if achou == None:
+        raise error("URL que não se entende: " + r.url + rel, VALUE)
+    # `!= None` PROVA não-nulo (43.1): daqui para baixo `achou` É um `Url`
+    u = achou
+    if u.scheme == "https":
+        raise error("https ainda não: falta o TLS. A confiança aqui vem do HASH e não da conexão, "
+                    + "então um espelho em http:// serve — mas dizer que se falou https quando não se falou, não.", VALUE)
+    porta = u.port if u.port > 0 else 80
+    alvo = U.serialize_path(u)
+    if len(alvo) == 0:
+        alvo = "/"
+    if u.has_query and len(u.query) > 0:
+        alvo = alvo + "?" + u.query
+    hospedeiro = u.host if porta == 80 else u.host + ":" + str(porta)
+    c = await net.connect(u.host, porta)
+    pedido = "GET " + alvo + " HTTP/1.1\r\n"
+    pedido += "host: " + hospedeiro + "\r\n"
+    pedido += "user-agent: ppack/" + VERSAO + "\r\n"
+    pedido += "accept: */*\r\n"
+    pedido += "connection: close\r\n\r\n"
+    await c.write(pedido)
+    p = H.new_response_parser()
+    pronto = False
+    while not pronto:
+        pedaco = await c.read(65536)
+        if len(pedaco) == 0:
+            # o par fechou: é a única forma de uma resposta sem `content-length`
+            # nem `chunked` estar completa, e o parser sabe dizê-lo
+            pronto = p.finish()
+            break
+        pronto = p.feed(pedaco)
+    c.close()
+    if not pronto:
+        raise error("a resposta de " + r.url + rel + " acabou a meio: " + p.problem, IO)
+    resp = p.response()
+    if resp.status != 200:
+        raise error(f"{r.url}{rel}: HTTP {resp.status} {resp.reason}", IO)
+    return resp.body
 
 
 # ---------- o índice ----------
@@ -528,4 +595,112 @@ def raizes_instaladas() -> list<str>:
         d = path.join(ARMAZEM, nome)
         if path.isdir(d):
             out.append(d)
+    return out
+
+
+# ---------- as chaves e as duas assinaturas ----------
+#
+# São DUAS, com donos diferentes e por razões diferentes (DESIGN 2.12):
+#
+#   * o ÍNDICE é assinado pelo REPOSITÓRIO, e é o que impede alguém no meio de
+#     responder com uma lista velha — aquela onde a versão com a falha ainda é a
+#     mais recente. Sem isto, o hash de cada pacote continua a valer e mesmo
+#     assim instala-se a versão errada, de boa fé;
+#   * cada VERSÃO é assinada pelo AUTOR, e é o que impede o próprio repositório
+#     de servir um tarball que o autor não fez.
+#
+# A chave PRIVADA é uma semente de 32 bytes em hexadecimal, num arquivo e mais
+# nada. Não vai para `build/` — não é derivável de nada e `make clean` levá-la-ia
+# —, e não vai para o repositório: é a única coisa aqui que não se comita.
+
+async def ler_semente(caminho: str) -> list<u8>:
+    """A chave privada de um arquivo. Aceita o hexadecimal com espaços e quebras
+    de linha à volta, porque um arquivo de chave costuma ser copiado à mão."""
+    if not path.isfile(caminho):
+        raise error("não achei a chave em " + caminho, IO)
+    f = await open(caminho, "r")
+    t = (await f.text()).strip()
+    await f.close()
+    if len(t) != 64:
+        raise error(caminho + f": uma chave privada são 64 dígitos hexadecimais (32 bytes), e este tem {len(t)}", VALUE)
+    b: list<u8> = []
+    i = 0
+    while i < 64:
+        v = dehex(t[i]) * 16 + dehex(t[i + 1])
+        if v < 0:
+            raise error(caminho + ": isto não é hexadecimal", VALUE)
+        b.append(u8(v))
+        i += 2
+    return b
+
+
+private def dehex(c: str) -> int:
+    n = ord(c)
+    if n >= 48 and n <= 57:
+        return n - 48
+    if n >= 97 and n <= 102:
+        return n - 87
+    if n >= 65 and n <= 70:
+        return n - 55
+    return -1000
+
+
+async def semente_nova() -> list<u8>:
+    """Trinta e dois bytes do `/dev/urandom`, e de mais lado nenhum.
+
+    O `random` da linguagem é um gerador para simulação: rápido, reprodutível e
+    completamente previsível para quem veja duas saídas. Uma chave privada tirada
+    dele é uma chave que se adivinha. Se não houver `/dev/urandom`, isto FALHA —
+    inventar uma alternativa seria a pior coisa que este arquivo podia fazer."""
+    f = await open("/dev/urandom", "r")
+    b = await f.read(32)
+    await f.close()
+    if len(b) != 32:
+        raise error("/dev/urandom deu " + str(len(b)) + " bytes em vez de 32", IO)
+    return b
+
+
+def chave_publica(semente: list<u8>) -> str:
+    return ed25519_pub_hex(semente)
+
+
+def assinar(semente: list<u8>, dados: list<u8>) -> str:
+    return ed25519_sign_hex(semente, dados)
+
+
+def conferir(pub_hex: str, dados: list<u8>, sig_hex: str) -> bool:
+    """Do ponto de vista de quem confere, um arquivo estragado, uma assinatura
+    que não é hexadecimal e uma assinatura errada são a MESMA resposta."""
+    if len(pub_hex) != 64 or len(sig_hex) != 128:
+        return False
+    return ed25519_verify_hex(pub_hex, dados, sig_hex)
+
+
+async def assinatura_de(r: Repo, rel: str) -> str:
+    """A assinatura que acompanha um arquivo do repositório, ou "" quando não há.
+
+    A ausência NÃO é erro aqui: quem decide o que fazer com ela é quem chamou,
+    porque a resposta depende do modo — em modo seguro é recusa, em modo unsafe
+    é um aviso."""
+    try:
+        b = await buscar(r, rel + ".sig")
+        return str(b).strip()
+    catch e:
+        return ""
+
+
+def indice_chaves(ix: Indice) -> list<str>:
+    """As chaves de autor que o índice declara, sem repetir.
+
+    O TOFU precisa delas por uma razão pequena e importante: aceitar uma chave
+    na primeira vez não é aceitar QUALQUER coisa. A assinatura do índice tem de
+    bater com alguma chave que o próprio índice nomeia — senão o que chegou nem
+    sequer é internamente coerente, e isso não é "chave desconhecida", é
+    assinatura errada."""
+    out: list<str> = []
+    for nome in ix.nomes():
+        for v in ix.versoes(nome):
+            a = ix.pega(nome, v).autor
+            if len(a) == 64 and a not in out:
+                out.append(a)
     return out

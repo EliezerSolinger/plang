@@ -1,1 +1,1 @@
-../../pscript/lib/http.psc
+../../packages/http/http.psc

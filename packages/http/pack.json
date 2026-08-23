@@ -1,0 +1,10 @@
+{
+  "name": "http",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "http.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "HTTP/1.1 incremental: uma máquina de estados sobre bytes, conferida contra os fixtures do llhttp"
+}

@@ -1,1 +1,1 @@
-../../pscript/lib/url.psc
+../../packages/url/url.psc

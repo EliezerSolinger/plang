@@ -1,0 +1,10 @@
+{
+  "name": "url",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "url.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "URL do WHATWG: parse, normalização e IDNA, conferido contra o corpus do WPT"
+}
