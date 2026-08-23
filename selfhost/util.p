@@ -537,65 +537,90 @@ def path_join(a: *Arena, dir: const *char, rel: const *char) -> const *char:
 # Returns arena memory; `out_len` counts the bytes WITHOUT a terminating nul
 # (the buffer is nul-terminated anyway, so it also works as a C string when the
 # content has no embedded nul).
+# copies `lex[from..end)` into `buf+len0`, resolving backslash escapes, and
+# stops early at an unescaped `q`. Returns the new length; `stop` is where it
+# stopped. Pulled out of `str_lit_decode` because there are now two callers with
+# DIFFERENT stopping rules — a C literal ends at its quote, a triple-quoted one
+# ends where the lexeme does — and one escape table is what keeps them agreeing.
+private def decode_run(buf: *char, len0: usize, lex: const *char, from: usize,
+                       end: usize, q: char, out stop: usize) -> usize:
+    len: usize = len0
+    i: usize = from
+    while i < end and lex[i] != q:
+        if lex[i] != '\\':
+            buf[len] = lex[i]
+            len += 1
+            i += 1
+            continue
+        i += 1
+        if i >= end:
+            break
+        c: char = lex[i]
+        i += 1
+        if c == 'n':
+            buf[len] = '\n'
+        elif c == 't':
+            buf[len] = '\t'
+        elif c == 'r':
+            buf[len] = '\r'
+        elif c == 'a':
+            buf[len] = '\a'
+        elif c == 'b':
+            buf[len] = '\b'
+        elif c == 'f':
+            buf[len] = '\f'
+        elif c == 'v':
+            buf[len] = '\v'
+        elif c == 'e':
+            buf[len] = char(27)          # GNU \e
+        elif c == 'x':
+            v: u32 = 0
+            while i < end and is_hexc(lex[i]):
+                v = v * 16 + u32(hexc(lex[i]))
+                i += 1
+            buf[len] = char(v & 0xFF)
+        elif c >= '0' and c <= '7':
+            o: u32 = u32(c - '0')
+            k: i32 = 1
+            while i < end and k < 3 and lex[i] >= '0' and lex[i] <= '7':
+                o = o * 8 + u32(lex[i] - '0')
+                i += 1
+                k += 1
+            buf[len] = char(o & 0xFF)
+        else:
+            buf[len] = c                 # \\ \" \' \? and anything else
+        len += 1
+    stop = i
+    return len
+
 def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char:
     n: usize = strlen(lex)
     buf: *char = a->alloc(n + 1)
     len: usize = 0
     i: usize = 0
+    stop: usize = 0
     q: char = '"'
     for k in range(n):
         if lex[k] == '"' or lex[k] == '\'':
             q = lex[k]     # whichever quote this literal opened with
             break
+    # a TRIPLE-quoted lexeme carries all six quotes, and everything between them
+    # is body — an inner `"` included. The concatenation rule below is C's, and
+    # applying it here would CUT the body at every inner quote: `"""a "b" c"""`
+    # would come out as `a  c`. The stopping quote is a NUL, which a lexeme
+    # (itself a C string) cannot contain.
+    if n >= 6 and lex[0] == q and lex[1] == q and lex[2] == q:
+        len = decode_run(buf, 0, lex, 3, n - 3, char(0), out stop)
+        buf[len] = '\0'
+        out_len = len
+        return buf
     while i < n:
         if lex[i] != q:        # opening quote (or whitespace between literals)
             i += 1
             continue
         i += 1
-        while i < n and lex[i] != q:
-            if lex[i] != '\\':
-                buf[len] = lex[i]
-                len += 1
-                i += 1
-                continue
-            i += 1
-            if i >= n:
-                break
-            c: char = lex[i]
-            i += 1
-            if c == 'n':
-                buf[len] = '\n'
-            elif c == 't':
-                buf[len] = '\t'
-            elif c == 'r':
-                buf[len] = '\r'
-            elif c == 'a':
-                buf[len] = '\a'
-            elif c == 'b':
-                buf[len] = '\b'
-            elif c == 'f':
-                buf[len] = '\f'
-            elif c == 'v':
-                buf[len] = '\v'
-            elif c == 'e':
-                buf[len] = char(27)          # GNU \e
-            elif c == 'x':
-                v: u32 = 0
-                while i < n and is_hexc(lex[i]):
-                    v = v * 16 + u32(hexc(lex[i]))
-                    i += 1
-                buf[len] = char(v & 0xFF)
-            elif c >= '0' and c <= '7':
-                o: u32 = u32(c - '0')
-                k: i32 = 1
-                while i < n and k < 3 and lex[i] >= '0' and lex[i] <= '7':
-                    o = o * 8 + u32(lex[i] - '0')
-                    i += 1
-                    k += 1
-                buf[len] = char(o & 0xFF)
-            else:
-                buf[len] = c                 # \\ \" \' \? and anything else
-            len += 1
+        len = decode_run(buf, len, lex, i, n, q, out stop)
+        i = stop
         i += 1                               # closing quote
     buf[len] = '\0'
     out_len = len

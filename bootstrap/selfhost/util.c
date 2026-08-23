@@ -594,11 +594,69 @@ const char *path_join(Arena *a, const char *dir, const char *rel) {
     return Arena_printf(a, "%s/%s", dir, rel);
 }
 
+static size_t decode_run(char *buf, size_t len0, const char *lex, size_t from, size_t end, char q, size_t *stop) {
+    size_t len = len0;
+    size_t i = from;
+    while (i < end && lex[i] != q) {
+        if (lex[i] != '\\') {
+            buf[len] = lex[i];
+            len += 1;
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= end) {
+            break;
+        }
+        char c = lex[i];
+        i += 1;
+        if (c == 'n') {
+            buf[len] = '\n';
+        } else if (c == 't') {
+            buf[len] = '\t';
+        } else if (c == 'r') {
+            buf[len] = '\r';
+        } else if (c == 'a') {
+            buf[len] = '\a';
+        } else if (c == 'b') {
+            buf[len] = '\b';
+        } else if (c == 'f') {
+            buf[len] = '\f';
+        } else if (c == 'v') {
+            buf[len] = '\v';
+        } else if (c == 'e') {
+            buf[len] = (char)27;
+        } else if (c == 'x') {
+            uint32_t v = 0;
+            while (i < end && is_hexc(lex[i])) {
+                v = v * 16 + (uint32_t)hexc(lex[i]);
+                i += 1;
+            }
+            buf[len] = (char)(v & 0xFF);
+        } else if (c >= '0' && c <= '7') {
+            uint32_t o = (uint32_t)(c - '0');
+            int32_t k = 1;
+            while (i < end && k < 3 && lex[i] >= '0' && lex[i] <= '7') {
+                o = o * 8 + (uint32_t)(lex[i] - '0');
+                i += 1;
+                k += 1;
+            }
+            buf[len] = (char)(o & 0xFF);
+        } else {
+            buf[len] = c;
+        }
+        len += 1;
+    }
+    *stop = i;
+    return len;
+}
+
 char *str_lit_decode(Arena *a, const char *lex, size_t *out_len) {
     size_t n = strlen(lex);
     char *buf = Arena_alloc(a, n + 1);
     size_t len = 0;
     size_t i = 0;
+    size_t stop = 0;
     char q = '"';
     size_t k;
     for (k = 0; k < n; k += 1) {
@@ -607,62 +665,20 @@ char *str_lit_decode(Arena *a, const char *lex, size_t *out_len) {
             break;
         }
     }
+    if (n >= 6 && lex[0] == q && lex[1] == q && lex[2] == q) {
+        len = decode_run(buf, 0, lex, 3, n - 3, (char)0, &stop);
+        buf[len] = '\0';
+        *out_len = len;
+        return buf;
+    }
     while (i < n) {
         if (lex[i] != q) {
             i += 1;
             continue;
         }
         i += 1;
-        while (i < n && lex[i] != q) {
-            if (lex[i] != '\\') {
-                buf[len] = lex[i];
-                len += 1;
-                i += 1;
-                continue;
-            }
-            i += 1;
-            if (i >= n) {
-                break;
-            }
-            char c = lex[i];
-            i += 1;
-            if (c == 'n') {
-                buf[len] = '\n';
-            } else if (c == 't') {
-                buf[len] = '\t';
-            } else if (c == 'r') {
-                buf[len] = '\r';
-            } else if (c == 'a') {
-                buf[len] = '\a';
-            } else if (c == 'b') {
-                buf[len] = '\b';
-            } else if (c == 'f') {
-                buf[len] = '\f';
-            } else if (c == 'v') {
-                buf[len] = '\v';
-            } else if (c == 'e') {
-                buf[len] = (char)27;
-            } else if (c == 'x') {
-                uint32_t v = 0;
-                while (i < n && is_hexc(lex[i])) {
-                    v = v * 16 + (uint32_t)hexc(lex[i]);
-                    i += 1;
-                }
-                buf[len] = (char)(v & 0xFF);
-            } else if (c >= '0' && c <= '7') {
-                uint32_t o = (uint32_t)(c - '0');
-                int32_t k = 1;
-                while (i < n && k < 3 && lex[i] >= '0' && lex[i] <= '7') {
-                    o = o * 8 + (uint32_t)(lex[i] - '0');
-                    i += 1;
-                    k += 1;
-                }
-                buf[len] = (char)(o & 0xFF);
-            } else {
-                buf[len] = c;
-            }
-            len += 1;
-        }
+        len = decode_run(buf, len, lex, i, n, q, &stop);
+        i = stop;
         i += 1;
     }
     buf[len] = '\0';
