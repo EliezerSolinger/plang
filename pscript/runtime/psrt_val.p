@@ -3214,3 +3214,391 @@ def ps_pow(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
             if ctx->exc != None:
                 return 0
     return r
+
+
+# ---------- O REPR COMO DADO (F5) ----------
+#
+# Um só percurso, guiado pela tabela de campos, no lugar de uma função gerada
+# por tipo. O que ele imprime é EXATAMENTE o que a forma gerada imprimia — os
+# testes do corpus comparam caractere a caractere, e é essa a prova de que a
+# troca não mudou a linguagem, só de onde vem o código.
+#
+# A profundidade é dinâmica e não estática: um tipo que se contém a si mesmo
+# para em `Nome(...)` em vez de descer para sempre. Era um limite que a forma
+# gerada tinha por construção (ela expandia o texto) e que aqui tem de ser dito.
+
+private def ps_repr_dict2(ctx: *PsCtx, d: *PsDict, kt: const *PsTy, vt: const *PsTy) -> *PsStr
+
+private def ps_ty_int(p: *void, ty: const *PsTy) -> i64:
+    w: i32 = ty->width if ty->width != 0 else 64
+    if ty->uns:
+        if w == 8:
+            return i64(*(*u8)(p))
+        if w == 16:
+            return i64(*(*u16)(p))
+        if w == 32:
+            return i64(*(*u32)(p))
+        return i64(*(*u64)(p))
+    if w == 8:
+        return i64(*(*i8)(p))
+    if w == 16:
+        return i64(*(*i16)(p))
+    if w == 32:
+        return i64(*(*i32)(p))
+    return *(*i64)(p)
+
+# a assinatura que `ps_repr_seq` e `ps_repr_dict` pedem: o `env` é o TIPO do
+# elemento, que é o que faltava para o runtime saber o que está a olhar
+private def ps_repr_elem(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr:
+    return ps_repr_ty(ctx, (*void)(ep), (*PsTy)(env), 1)
+
+def ps_repr_ty(ctx: *PsCtx, p: *void, ty: const *PsTy, depth: i32) -> *PsStr:
+    if ty == None or p == None:
+        return ps_str_new(ctx, "?", usize(1))
+    k: i32 = ty->kind
+    if k == 1:
+        if ty->uns and (ty->width == 64 or ty->width == 0):
+            return ps_str_from_uint(ctx, *(*u64)(p))
+        return ps_str_from_int(ctx, ps_ty_int(p, ty))
+    if k == 2:
+        if ty->width == 32:
+            return ps_str_from_float(ctx, f64(*(*f32)(p)))
+        return ps_str_from_float(ctx, *(*f64)(p))
+    if k == 3:
+        return ps_str_from_bool(ctx, *(*i32)(p) != 0)
+    if k == 4:
+        # 97.1: DENTRO de qualquer coisa, uma string sai com aspas. No topo é a
+        # própria string, e quem decide isso é quem chama — aqui é sempre dentro.
+        sp: *PsStr = *(**PsStr)(p)
+        return ps_str_new(ctx, "None", usize(4)) if sp == None else ps_str_quoted(ctx, sp)
+    if k == 5:
+        lp: *PsList = *(**PsList)(p)
+        if lp == None:
+            return ps_str_new(ctx, "[]", usize(2))
+        return ps_repr_seq(ctx, lp, "[", "]", ps_repr_elem, (*void)(ty->inner))
+    if k == 6:
+        sp2: *PsDict = *(**PsDict)(p)
+        if sp2 == None:
+            return ps_str_new(ctx, "set()", usize(5))
+        return ps_repr_dict(ctx, sp2, ps_repr_elem, None, (*void)(ty->inner))
+    if k == 7:
+        dp: *PsDict = *(**PsDict)(p)
+        if dp == None:
+            return ps_str_new(ctx, "{}", usize(2))
+        return ps_repr_dict2(ctx, dp, ty->key, ty->inner)
+    if k == 8:
+        return ps_repr_desc(ctx, p, ty->desc, depth)
+    if k == 9:
+        op: *void = *(**void)(p)
+        if op == None:
+            return ps_str_new(ctx, "None", usize(4))
+        # o descritor do PRÓPRIO objeto: um campo declarado com o tipo de cima
+        # pode guardar um valor de um tipo de baixo, e é o objeto que sabe
+        u: *PsUser = (*PsUser)(op)
+        return ps_repr_desc(ctx, op, u->desc if u->desc != None else ty->desc, depth)
+    if k == 10:
+        v: i32 = *(*i32)(p)
+        if ty->names != None and v >= 0 and v < ty->nnames:
+            return ps_str_new(ctx, ty->names[v], strlen(ty->names[v]))
+        return ps_str_new(ctx, "?", usize(1))
+    return ps_str_new(ctx, "?", usize(1))
+
+# um dict quer DOIS tipos, e a devolução de `ps_repr_dict` só carrega um `env`.
+# Duas chamadas encadeadas resolviam-no com um estado global; um par no stack
+# resolve-o sem nada disso.
+struct PsKV:
+    k: const *PsTy
+    v: const *PsTy
+
+private def ps_repr_kv_k(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr:
+    kv: *PsKV = (*PsKV)(env)
+    return ps_repr_ty(ctx, (*void)(ep), kv->k, 1)
+
+private def ps_repr_kv_v(env: *void, ctx: *PsCtx, ep: const *void) -> *PsStr:
+    kv: *PsKV = (*PsKV)(env)
+    return ps_repr_ty(ctx, (*void)(ep), kv->v, 1)
+
+private def ps_repr_dict2(ctx: *PsCtx, d: *PsDict, kt: const *PsTy, vt: const *PsTy) -> *PsStr:
+    kv: PsKV = {kt, vt}
+    return ps_repr_dict(ctx, d, ps_repr_kv_k, ps_repr_kv_v, (*void)(&kv))
+
+# O MESMO percurso, com a REFERÊNCIA em vez do endereço dela.
+#
+# Um campo de um struct é um endereço (é lá que ele está); uma expressão como
+# `[1, 2]` é um valor sem morada — e pedir-lhe o endereço obrigaria a inventar
+# um local no meio de uma expressão, que é justamente onde a baixa não tem um
+# sítio garantido para o declarar. Duas portas para o mesmo corredor.
+def ps_repr_val(ctx: *PsCtx, o: *void, ty: const *PsTy, depth: i32) -> *PsStr:
+    if ty == None:
+        return ps_str_new(ctx, "?", usize(1))
+    k: i32 = ty->kind
+    if k == 4:
+        return ps_str_new(ctx, "None", usize(4)) if o == None else ps_str_quoted(ctx, (*PsStr)(o))
+    if k == 5:
+        return ps_str_new(ctx, "[]", usize(2)) if o == None else ps_repr_seq(ctx, (*PsList)(o), "[", "]", ps_repr_elem, (*void)(ty->inner))
+    if k == 6:
+        return ps_str_new(ctx, "set()", usize(5)) if o == None else ps_repr_dict(ctx, (*PsDict)(o), ps_repr_elem, None, (*void)(ty->inner))
+    if k == 7:
+        return ps_str_new(ctx, "{}", usize(2)) if o == None else ps_repr_dict2(ctx, (*PsDict)(o), ty->key, ty->inner)
+    if k == 9:
+        if o == None:
+            return ps_str_new(ctx, "None", usize(4))
+        u: *PsUser = (*PsUser)(o)
+        return ps_repr_desc(ctx, o, u->desc if u->desc != None else ty->desc, depth)
+    return ps_repr_ty(ctx, o, ty, depth)
+
+def ps_repr_desc(ctx: *PsCtx, o: *void, d: const *PsDesc, depth: i32) -> *PsStr:
+    if d == None or o == None:
+        return ps_str_new(ctx, "?", usize(1))
+    if d->to_str != None:
+        # o `to_str()` escrito pelo tipo GANHA, a qualquer profundidade (44.3).
+        # A forma gerada só sabia disto no topo; aqui vale sempre.
+        return d->to_str(o, ctx)
+    nb: usize = strlen(d->name)
+    if depth > 3 or d->fields == None or d->at == None:
+        out0: *PsStr = ps_str_concat(ctx, ps_str_new(ctx, d->name, nb), ps_str_new(ctx, "(...)", usize(5)))
+        return out0
+    out: *PsStr = ps_str_concat(ctx, ps_str_new(ctx, d->name, nb), ps_str_new(ctx, "(", usize(1)))
+    for i in range(d->nfields):
+        if i > 0:
+            out = ps_str_concat(ctx, out, ps_str_new(ctx, ", ", usize(2)))
+        fn: const *char = d->fields[i].name
+        out = ps_str_concat(ctx, out, ps_str_new(ctx, fn, strlen(fn)))
+        out = ps_str_concat(ctx, out, ps_str_new(ctx, "=", usize(1)))
+        out = ps_str_concat(ctx, out, ps_repr_ty(ctx, d->at(o, i), d->fields[i].ty, depth + 1))
+    return ps_str_concat(ctx, out, ps_str_new(ctx, ")", usize(1)))
+
+
+# ---------- json.stringify, PELA MESMA TABELA (F5) ----------
+#
+# O `repr` mostra e o JSON transporta, então não são a mesma função: um `to_str`
+# escrito pelo tipo GANHA no repr (é a forma de o tipo se mostrar) e NÃO ganha
+# aqui (JSON é dado, e quem o vai ler do outro lado espera os campos). Um enum
+# viaja pelo NOME da variante e não pelo número, porque o número é uma escolha
+# de compilação e o nome é o que significa alguma coisa do outro lado.
+#
+# O que NÃO atravessa levanta em vez de sair como texto: uma função, um `any`,
+# um dict com chave que não é string. JSON que sai errado em silêncio é pior do
+# que JSON que não sai.
+
+private def ps_json_esc(ref b: PsRepr, s: *PsStr):
+    ps_repr_put(ref b, "\"", usize(1))
+    i: usize = 0
+    while i < usize(s->len):
+        c: char = s->data[i]
+        u: u8 = u8(c)
+        if c == '"' or c == '\\':
+            tmp: char[2]
+            tmp[0] = '\\'
+            tmp[1] = c
+            ps_repr_put(ref b, tmp, usize(2))
+        elif c == '\n':
+            ps_repr_put(ref b, "\\n", usize(2))
+        elif c == '\r':
+            ps_repr_put(ref b, "\\r", usize(2))
+        elif c == '\t':
+            ps_repr_put(ref b, "\\t", usize(2))
+        elif u < u8(32):
+            esc: char[8]
+            snprintf(esc, usize(8), "\\u%04x", int(u))
+            ps_repr_put(ref b, esc, usize(6))
+        else:
+            ps_repr_put(ref b, &c, usize(1))
+        i += usize(1)
+    ps_repr_put(ref b, "\"", usize(1))
+
+private def ps_json_bad(ctx: *PsCtx, what: const *char, caminho: const *char):
+    m: *PsStr = ps_str_new(ctx, "json.stringify: ", usize(16))
+    m = ps_str_concat(ctx, m, ps_str_new(ctx, what, strlen(what)))
+    # o CAMINHO é a metade útil da mensagem: num documento de trezentas linhas,
+    # "isto não atravessa" sem dizer onde não serve para nada. Na raiz não há
+    # caminho a dizer, e a mensagem acaba antes de o prometer.
+    if caminho != None and caminho[0] != '\0':
+        m = ps_str_concat(ctx, m, ps_str_new(ctx, " em ", usize(4)))
+        m = ps_str_concat(ctx, m, ps_str_new(ctx, caminho, strlen(caminho)))
+    ps_raise_str(ctx, m, i64(PS_CAT_VALUE), "json", 0)
+
+private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, caminho: const *char, depth: i32)
+private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, caminho: const *char, depth: i32)
+
+private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, caminho: const *char, depth: i32):
+    if ty == None:
+        ps_json_bad(ctx, "tipo desconhecido", caminho)
+        return
+    k: i32 = ty->kind
+    if k == 4:
+        if o == None:
+            ps_repr_put(ref b, "null", usize(4))
+        else:
+            ps_json_esc(ref b, (*PsStr)(o))
+        return
+    if k == 5 or k == 6:
+        if o == None:
+            ps_repr_put(ref b, "[]", usize(2))
+            return
+        ps_repr_put(ref b, "[", usize(1))
+        if k == 5:
+            l: *PsList = (*PsList)(o)
+            base: *char = ps_list_base(l)
+            es: usize = usize(l->esize)
+            for i in range(l->len):
+                if i > 0:
+                    ps_repr_put(ref b, ",", usize(1))
+                sub: char[64]
+                snprintf(sub, usize(64), "%s[%d]", caminho, int(i))
+                ps_json_ty(ctx, ref b, (*void)(base + usize(i) * es), ty->inner, sub, depth + 1)
+                if ps_has_exc(ctx):
+                    return
+        else:
+            # um conjunto viaja como ARRAY: JSON não tem conjunto, e a
+            # alternativa (um objeto com valores `true`) seria inventar um
+            # formato que o outro lado teria de conhecer
+            d2: *PsDict = (*PsDict)(o)
+            n: i32 = 0
+            i2: i64 = 0
+            while i2 < d2->nent:
+                if not ps_dict_live(d2, i2):
+                    i2 += 1
+                    continue
+                kp: *void = (*void)(ps_dict_key_at(d2, i2))
+                if n > 0:
+                    ps_repr_put(ref b, ",", usize(1))
+                n += 1
+                sub2: char[64]
+                snprintf(sub2, usize(64), "%s[]", caminho)
+                ps_json_ty(ctx, ref b, kp, ty->inner, sub2, depth + 1)
+                if ps_has_exc(ctx):
+                    return
+                i2 += 1
+        ps_repr_put(ref b, "]", usize(1))
+        return
+    if k == 7:
+        if o == None:
+            ps_repr_put(ref b, "{}", usize(2))
+            return
+        if ty->key == None or ty->key->kind != 4:
+            ps_json_bad(ctx, "um objeto JSON só tem chaves de texto", caminho)
+            return
+        d3: *PsDict = (*PsDict)(o)
+        ps_repr_put(ref b, "{", usize(1))
+        n2: i32 = 0
+        i3: i64 = 0
+        while i3 < d3->nent:
+            if not ps_dict_live(d3, i3):
+                i3 += 1
+                continue
+            kp2: *void = (*void)(ps_dict_key_at(d3, i3))
+            if n2 > 0:
+                ps_repr_put(ref b, ",", usize(1))
+            n2 += 1
+            ks: *PsStr = *(**PsStr)(kp2)
+            if ks == None:
+                ps_json_bad(ctx, "uma chave vazia", caminho)
+                return
+            ps_json_esc(ref b, ks)
+            ps_repr_put(ref b, ":", usize(1))
+            sub3: char[128]
+            snprintf(sub3, usize(128), "%s.%.*s", caminho, int(ks->len), ks->data)
+            ps_json_ty(ctx, ref b, (*void)(ps_dict_val_at(d3, i3)), ty->inner, sub3, depth + 1)
+            if ps_has_exc(ctx):
+                return
+            i3 += 1
+        ps_repr_put(ref b, "}", usize(1))
+        return
+    if k == 9:
+        if o == None:
+            ps_repr_put(ref b, "null", usize(4))
+            return
+        u: *PsUser = (*PsUser)(o)
+        ps_json_desc(ctx, ref b, o, u->desc if u->desc != None else ty->desc, caminho, depth)
+        return
+    ps_json_ty(ctx, ref b, o, ty, caminho, depth)
+
+private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, caminho: const *char, depth: i32):
+    if ty == None or p == None:
+        ps_json_bad(ctx, "tipo desconhecido", caminho)
+        return
+    if depth > 64:
+        # 64 níveis não é um limite de gosto: é o que separa "aninhado" de "um
+        # ciclo", e um ciclo tem de parar com o CAMINHO onde parou
+        ps_json_bad(ctx, "fundo demais (um ciclo?)", caminho)
+        return
+    k: i32 = ty->kind
+    if k == 1:
+        num: char[32]
+        if ty->uns and (ty->width == 64 or ty->width == 0):
+            snprintf(num, usize(32), "%llu", *(*u64)(p))
+        else:
+            snprintf(num, usize(32), "%lld", ps_ty_int(p, ty))
+        ps_repr_put(ref b, num, strlen(num))
+        return
+    if k == 2:
+        v: f64 = f64(*(*f32)(p)) if ty->width == 32 else *(*f64)(p)
+        if v != v or v > 1.0e308 or v < -1.0e308:
+            ps_json_bad(ctx, "JSON não tem NaN nem infinito", caminho)
+            return
+        fs: *PsStr = ps_str_from_float(ctx, v)
+        ps_repr_put(ref b, fs->data, usize(fs->len))
+        return
+    if k == 3:
+        if *(*i32)(p) != 0:
+            ps_repr_put(ref b, "true", usize(4))
+        else:
+            ps_repr_put(ref b, "false", usize(5))
+        return
+    if k == 8:
+        ps_json_desc(ctx, ref b, p, ty->desc, caminho, depth)
+        return
+    if k == 10:
+        # o NOME da variante, não o número: o número é uma escolha de
+        # compilação e o nome é o que significa alguma coisa do outro lado
+        ev: i32 = *(*i32)(p)
+        if ty->names != None and ev >= 0 and ev < ty->nnames:
+            nm: *PsStr = ps_str_new(ctx, ty->names[ev], strlen(ty->names[ev]))
+            ps_json_esc(ref b, nm)
+            return
+        ps_json_bad(ctx, "um enum fora das variantes que tem", caminho)
+        return
+    if k == 4 or k == 5 or k == 6 or k == 7 or k == 9:
+        ps_json_val(ctx, ref b, *(**void)(p), ty, caminho, depth)
+        return
+    ps_json_bad(ctx, "isto não atravessa (uma função, um `any`?)", caminho)
+
+private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, caminho: const *char, depth: i32):
+    if d == None or d->fields == None or d->at == None:
+        ps_json_bad(ctx, "um tipo sem campos declarados", caminho)
+        return
+    ps_repr_put(ref b, "{", usize(1))
+    for i in range(d->nfields):
+        if i > 0:
+            ps_repr_put(ref b, ",", usize(1))
+        fn: const *char = d->fields[i].name
+        ns: *PsStr = ps_str_new(ctx, fn, strlen(fn))
+        ps_json_esc(ref b, ns)
+        ps_repr_put(ref b, ":", usize(1))
+        sub: char[128]
+        snprintf(sub, usize(128), "%s.%s", caminho, fn)
+        ps_json_ty(ctx, ref b, d->at(o, i), d->fields[i].ty, sub, depth + 1)
+        if ps_has_exc(ctx):
+            return
+    ps_repr_put(ref b, "}", usize(1))
+
+def ps_json_stringify(ctx: *PsCtx, o: *void, ty: const *PsTy, file: const *char, line: i32) -> *PsStr:
+    b: PsRepr = {None, usize(0), usize(0)}
+    ps_json_val(ctx, ref b, o, ty, "", 0)
+    if ps_has_exc(ctx):
+        free(b.data)
+        return ps_str_new(ctx, "", usize(0))
+    out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
+    free(b.data)
+    return out
+
+def ps_json_stringify_at(ctx: *PsCtx, p: *void, ty: const *PsTy, file: const *char, line: i32) -> *PsStr:
+    b: PsRepr = {None, usize(0), usize(0)}
+    ps_json_ty(ctx, ref b, p, ty, "", 0)
+    if ps_has_exc(ctx):
+        free(b.data)
+        return ps_str_new(ctx, "", usize(0))
+    out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
+    free(b.data)
+    return out

@@ -1,0 +1,17 @@
+{"nome":"a\"b","p":{"x":1,"y":2.5},"tags":["x","y"],"n":7,"cor":"AZUL","ok":true}
+[1,2,3]
+{"a":[1],"b":[]}
+{"x":3,"y":4.0}
+"olá\n\t"
+42
+true
+"VERMELHO"
+[]
+$2 {"centavos":250}
+[3,1]
+[{"x":1,"y":1.0},{"x":2,"y":2.0}]
+{"pontos":[1,2],"vazio":[]}
+recusou: json.stringify: JSON não tem NaN nem infinito em [0]
+recusou: json.stringify: um objeto JSON só tem chaves de texto
+z 9 VERDE
+{"nome":"z","p":{"x":9,"y":0.5},"tags":["t"],"n":1,"cor":"VERDE","ok":false}

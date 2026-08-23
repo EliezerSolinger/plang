@@ -873,7 +873,7 @@ doctest.
 
 ### Entregas
 
-- [ ] **tabela de campos no `PsDesc`** (bateria própria):
+- [x] **tabela de campos no `PsDesc`** (FEITA, 2026-08-23):
       `fields: {nome, offset, kind, desc*}` — SÓ campos públicos (não-`private`;
       a mesma noção da lista canónica da API — UMA noção de público para tudo,
       decidido); o `trace` do coletor continua cobrindo TODAS as referências,
@@ -884,13 +884,30 @@ doctest.
   - kinds: os primitivos, str, list/dict/set (com desc do elemento), record
     aninhado, struct-ref, enum (com nomes das variantes — o repr precisa),
     def/any (opacos na tabela)
-  - custo medido a validar: ~38 descritores no editor, alvo < 5 % do C gerado
-- [ ] **`repr` vira dado**: `ps_repr` genérico no runtime percorre a tabela;
-      `to_str` definido VENCE (o teste `repr.psc`/`Money`/`$2` prende); o
-      gerado por tipo some do `ps_lower` (menos C emitido — medir antes/depois)
-- [ ] **`json.stringify` genérico** pela tabela (record/struct/list/dict/
-      primitivos); ciclo → erro com caminho (`a.b[2].c`); `any` → pelo tipo
-      dinâmico; `def` → erro
+  - custo MEDIDO: +1,4 % no `ppack.c` e +2,6 % no `app.c` do editor — dentro do
+    alvo de 5 %. O endereço de um campo vem de uma FUNÇÃO gerada e não de um
+    `offsetof` na tabela: `offsetof` num inicializador estático é das poucas
+    coisas que o QBE não dobra, e uma função é expressável nos dois back ends
+    sem primitiva nova (é também o que faz um `record`, que não tem cabeçalho,
+    andar pelo mesmo caminho).
+  - o par PsTy/PsDesc é um CICLO, desfeito com uma atribuição no arranque — a
+    mesma técnica que o `size` do `PsShape` já usava
+- [x] **`repr` vira dado** (FEITO): `ps_repr_ty`/`ps_repr_val`/`ps_repr_desc`
+      percorrem a tabela, e a saída é IDÊNTICA AO BYTE à que a forma gerada dava
+      — que é a prova de que a troca não mudou a linguagem, só de onde vem o
+      código. O `to_str` do tipo continua a ganhar, e agora ganha a QUALQUER
+      profundidade (a forma gerada só sabia disso no topo). Uma tupla dentro de
+      um contentor ainda usa o adaptador gerado, porque ela vira um `record` e
+      imprime-se `(a, b)` e não `Nome(_0=...)` — é a única coisa que ainda o usa,
+      e está dito no código.
+- [x] **`json.stringify` genérico** (FEITO), pela MESMA tabela: apareceu sem um
+      gerador atrás, que é o ponto inteiro da F5. Byte a byte igual ao
+      `json.dumps(separators=(',',':'))` do python nos casos do teste, e o que
+      sai volta pelo nosso próprio `parse`. As diferenças em relação ao `repr`
+      são decisões: um `to_str` do tipo NÃO manda aqui (JSON é dado, e quem o lê
+      espera os campos), um enum viaja pelo NOME (f5.2), um conjunto vira ARRAY,
+      e o que não atravessa LEVANTA com o CAMINHO onde parou (`[0]`, `.p.x`) —
+      64 níveis separam "aninhado" de "ciclo".
 - [x] **resposta 6 — diagnóstico estruturado** (FEITA): `--diag-json <arquivo>`
       liga um segundo destino no funil (`fatal_at`/`warn_at`/`cdiag_at`), com
       {arquivo, linha, coluna, gravidade, grupo -W, mensagem}. O TEXTO continua

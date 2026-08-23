@@ -2705,6 +2705,17 @@ struct PsSema:
             lt: *PsType = ps_type(self->a, PT_TASK, e->pos)
             lt->inner = ps_type(self->a, PT_STR, e->pos)
             return lt
+        if strcmp(name, "__json_stringify") == 0:
+            # 41.1 do outro lado: um valor entra e sai TEXTO. Não há esquema a
+            # declarar porque o compilador já sabe a forma do tipo — é a mesma
+            # tabela de campos que o `repr` usa (F5), e é por isso que isto não
+            # custa uma linha de código por tipo.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "json.stringify() takes one value")
+            st9: *PsType = self->check_expr(e->args[0])
+            if st9 == None or st9->kind in {PT_VOID, PT_UNKNOWN, PT_ANY, PT_FUNC, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_DYN}:
+                fatal_at(self->file, e->args[0]->pos, "json.stringify() does not carry %s: JSON has numbers, text, booleans, lists and objects, and what is not one of those would have to be invented", ps_type_str(self->a, st9))
+            return ps_type(self->a, PT_STR, e->pos)
         if strcmp(name, "__json_parse") == 0:
             # 41.1: text in, `any` out. There is no schema to declare — reading
             # it back is `as`, which checks (55.2).
@@ -3646,6 +3657,7 @@ struct PsSema:
             ns->sym.add("match")
         elif strcmp(name, "json") == 0:
             ns->sym.add("parse")
+            ns->sym.add("stringify")
         elif strcmp(name, "random") == 0:
             # 103: portado do CPython, então a mesma semente dá a mesma
             # sequência — e é isso que o oráculo confere

@@ -279,6 +279,20 @@ static Expr *sh_field_addr(PsLow *L, const char *sname, const char *fname, Pos p
 
 static Decl *lower_struct_walk(PsLow *L, PsDecl *d, int writing, int with_body);
 
+static int tem_tupla(PsType *t, int32_t depth);
+
+static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_campos);
+
+static Decl *lower_struct_fields(PsLow *L, PsDecl *d);
+
+static Decl *lower_struct_at(PsLow *L, PsDecl *d, int with_body);
+
+static Decl *lower_struct_tostr(PsLow *L, PsDecl *d, int with_body);
+
+static const char *ty_of(PsLow *L, PsType *t, Pos pos);
+
+static Expr *ty_num(PsLow *L, int32_t v, Pos pos);
+
 static int is_scalar_pname(const char *n);
 
 static Pos zero_pos(void);
@@ -319,6 +333,16 @@ struct PsLow {
     int32_t nshz;
     int32_t cshz;
     int32_t cshz2;
+    char **tyk;
+    char **tyv;
+    int32_t nty;
+    int32_t cty;
+    int32_t cty2;
+    char **tydn;
+    char **tydd;
+    int32_t ntyd;
+    int32_t ctyd;
+    int32_t ctyd2;
     int32_t tmp_ctr;
     StrSet nl_names;
     StrSet nl_done;
@@ -464,6 +488,8 @@ static PsDecl *PsLow_decl_named(PsLow *self, const char *name);
 static PsFunc *PsLow_method_named(PsLow *self, PsDecl *d, const char *name);
 
 static Expr *PsLow_repr_of(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth);
+
+static Expr *PsLow_repr_of_gerado(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth);
 
 static Expr *PsLow_repr_container(PsLow *self, Expr *v, PsType *t, Pos pos);
 
@@ -1252,6 +1278,35 @@ static Expr *PsLow_repr_of(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t dep
         }
         return out;
     }
+    Expr *rc = PsLow_call_rt(self, "ps_repr_desc", pos);
+    PsLow_push_arg(self, rc, PsLow_ctx_arg(self, pos));
+    if (d->kind == PD_STRUCT) {
+        PsLow_push_arg(self, rc, v);
+        Expr *dsc = ex_new(self->a, EX_FIELD, pos);
+        dsc->op = TK_ARROW;
+        dsc->lhs = v;
+        dsc->field = "__desc";
+        PsLow_push_arg(self, rc, dsc);
+    } else {
+        Expr *base = (v->kind == EX_IDENT || v->kind == EX_FIELD || v->kind == EX_INDEX ? v : PsLow_spill(self, v, t, pos));
+        Expr *ad2 = ex_new(self->a, EX_UNARY, pos);
+        ad2->op = TK_AMP;
+        ad2->lhs = base;
+        PsLow_push_arg(self, rc, ad2);
+        Expr *de2 = ex_new(self->a, EX_UNARY, pos);
+        de2->op = TK_AMP;
+        de2->lhs = ex_new(self->a, EX_IDENT, pos);
+        de2->lhs->text = Arena_printf(self->a, "%s__desc", ps_cname(self->a, d->name));
+        PsLow_push_arg(self, rc, de2);
+    }
+    PsLow_push_arg(self, rc, PsLow_num(self, Arena_printf(self->a, "%d", depth), pos));
+    self->allocs = 1;
+    self->raised = 1;
+    return rc;
+}
+
+static Expr *PsLow_repr_of_gerado(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth) {
+    PsDecl *d = PsLow_decl_named(self, t->name);
     PsFunc *um = PsLow_method_named(self, d, "to_str");
     if (um != NULL) {
         Expr *c = PsLow_call_rt(self, Arena_printf(self->a, "%s_%s", d->name, um->name), pos);
@@ -1292,6 +1347,20 @@ static Expr *PsLow_repr_of(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t dep
 }
 
 static Expr *PsLow_repr_container(PsLow *self, Expr *v, PsType *t, Pos pos) {
+    if ((t->kind == PT_LIST || t->kind == PT_SET || t->kind == PT_DICT) && !tem_tupla(t, 0)) {
+        Expr *c0 = PsLow_call_rt(self, "ps_repr_val", pos);
+        PsLow_push_arg(self, c0, PsLow_ctx_arg(self, pos));
+        PsLow_push_arg(self, c0, v);
+        Expr *tr = ex_new(self->a, EX_UNARY, pos);
+        tr->op = TK_AMP;
+        tr->lhs = ex_new(self->a, EX_IDENT, pos);
+        tr->lhs->text = ty_of(self, t, pos);
+        PsLow_push_arg(self, c0, tr);
+        PsLow_push_arg(self, c0, PsLow_num(self, "1", pos));
+        self->allocs = 1;
+        self->raised = 1;
+        return c0;
+    }
     switch (t->kind) {
         case PT_LIST:
         case PT_ARRAY: {
@@ -4078,6 +4147,36 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->raised = 1;
         self->allocs = 1;
         return nc;
+    }
+    if (strcmp(name, "__json_stringify") == 0) {
+        PsType *jt9 = e->args[0]->type;
+        Expr *v9 = PsLow_expr(self, e->args[0]);
+        int ref9 = jt9 != NULL && (jt9->kind == PT_STR || jt9->kind == PT_LIST || jt9->kind == PT_SET || jt9->kind == PT_DICT);
+        if (!ref9 && jt9 != NULL && jt9->kind == PT_NAME) {
+            PsDecl *dd9 = PsLow_decl_named(self, jt9->name);
+            ref9 = dd9 != NULL && dd9->kind == PD_STRUCT;
+        }
+        Expr *jc9 = PsLow_call_rt(self, (ref9 ? "ps_json_stringify" : "ps_json_stringify_at"), e->pos);
+        PsLow_push_arg(self, jc9, PsLow_ctx_arg(self, e->pos));
+        if (ref9) {
+            PsLow_push_arg(self, jc9, v9);
+        } else {
+            int eh_enum = jt9 != NULL && jt9->kind == PT_NAME && PsLow_decl_named(self, jt9->name) != NULL && PsLow_decl_named(self, jt9->name)->kind == PD_ENUM;
+            Expr *base9 = (!eh_enum && (v9->kind == EX_IDENT || v9->kind == EX_FIELD || v9->kind == EX_INDEX) ? v9 : PsLow_spill(self, v9, jt9, e->pos));
+            Expr *ad9 = ex_new(self->a, EX_UNARY, e->pos);
+            ad9->op = TK_AMP;
+            ad9->lhs = base9;
+            PsLow_push_arg(self, jc9, ad9);
+        }
+        Expr *tr9 = ex_new(self->a, EX_UNARY, e->pos);
+        tr9->op = TK_AMP;
+        tr9->lhs = ex_new(self->a, EX_IDENT, e->pos);
+        tr9->lhs->text = ty_of(self, jt9, e->pos);
+        PsLow_push_arg(self, jc9, tr9);
+        PsLow_pos_args(self, jc9, e->pos);
+        self->raised = 1;
+        self->allocs = 1;
+        return jc9;
     }
     if (strcmp(name, "__json_parse") == 0) {
         Expr *jc = PsLow_call_rt(self, "ps_json_parse", e->pos);
@@ -9426,7 +9525,350 @@ static Decl *lower_struct_trace(PsLow *L, PsDecl *d, int with_body) {
     return dc;
 }
 
+static Type *ty_cst(Arena *a, const char *n) {
+    Type *t = ty_name(a, n);
+    t->is_const = 1;
+    return t;
+}
+
+static int tem_tupla(PsType *t, int32_t depth) {
+    if (t == NULL || depth > 4) {
+        return 0;
+    }
+    if (t->kind == PT_TUPLE) {
+        return 1;
+    }
+    if (t->kind == PT_LIST || t->kind == PT_SET || t->kind == PT_ARRAY) {
+        return tem_tupla(t->inner, depth + 1);
+    }
+    if (t->kind == PT_DICT) {
+        return tem_tupla(t->key, depth + 1) || tem_tupla(t->inner, depth + 1);
+    }
+    if (t->kind == PT_OPT) {
+        return tem_tupla(t->inner, depth + 1);
+    }
+    return 0;
+}
+
+static int32_t ty_kind_of(PsLow *L, PsType *t) {
+    if (t == NULL) {
+        return 0;
+    }
+    switch (t->kind) {
+        case PT_INT: {
+            return 1;
+        }
+        case PT_FLOAT: {
+            return 2;
+        }
+        case PT_BOOL: {
+            return 3;
+        }
+        case PT_STR: {
+            return 4;
+        }
+        case PT_LIST: {
+            return 5;
+        }
+        case PT_SET: {
+            return 6;
+        }
+        case PT_DICT: {
+            return 7;
+        }
+        case PT_NAME: {
+            PsDecl *dd = PsLow_decl_named(L, t->name);
+            if (dd == NULL) {
+                return 0;
+            }
+            if (dd->kind == PD_ENUM) {
+                return 10;
+            }
+            if (dd->kind == PD_STRUCT) {
+                return 9;
+            }
+            if (dd->kind == PD_RECORD) {
+                return 8;
+            }
+            return 0;
+        }
+        default: {
+            return 0;
+        }
+    }
+}
+
+static Expr *ty_num(PsLow *L, int32_t v, Pos pos) {
+    Expr *e = ex_new(L->a, EX_NUMBER, pos);
+    e->text = Arena_printf(L->a, "%d", v);
+    return e;
+}
+
+static Expr *ty_ref(PsLow *L, const char *name, Pos pos) {
+    if (name == NULL) {
+        return ex_new(L->a, EX_NONE, pos);
+    }
+    Expr *r = ex_new(L->a, EX_UNARY, pos);
+    r->op = TK_AMP;
+    r->lhs = ex_new(L->a, EX_IDENT, pos);
+    r->lhs->text = name;
+    return r;
+}
+
+static const char *lower_enum_names(PsLow *L, PsDecl *d) {
+    const char *name = Arena_printf(L->a, "__en_%s", ps_cname(L->a, d->name));
+    Decl *v = Arena_alloc(L->a, sizeof(Decl));
+    v->kind = DL_VAR;
+    v->pos = d->pos;
+    v->name = name;
+    v->type = ty_array(L->a, ty_ptr(L->a, ty_cst(L->a, "char")), NULL);
+    v->is_static = 1;
+    Expr *init = ex_new(L->a, EX_INITLIST, d->pos);
+    init->args = Arena_alloc(L->a, (size_t)(d->nitems + 1) * sizeof(*init->args));
+    size_t i;
+    for (i = 0; i < d->nitems; i += 1) {
+        Expr *sl = ex_new(L->a, EX_STRING, d->pos);
+        sl->text = Arena_printf(L->a, "\"%s\"", d->items[i].name);
+        init->args[i] = sl;
+    }
+    init->nargs = d->nitems;
+    v->init = init;
+    Vec_pDecl_push(&L->out, v);
+    return name;
+}
+
+static const char *ty_of(PsLow *L, PsType *t, Pos pos) {
+    const char *key = sh_mangle(L, t);
+    size_t i;
+    for (i = 0; i < L->nty; i += 1) {
+        if (strcmp(L->tyk[i], key) == 0) {
+            return L->tyv[i];
+        }
+    }
+    const char *name = Arena_printf(L->a, "__ty_%s", key);
+    L->tyk = vec_grow(L->tyk, L->nty, &L->cty, sizeof(*L->tyk));
+    L->tyv = vec_grow(L->tyv, L->nty, &L->cty2, sizeof(*L->tyv));
+    L->tyk[L->nty] = (char *)key;
+    L->tyv[L->nty] = (char *)name;
+    L->nty += 1;
+    int32_t kind = ty_kind_of(L, t);
+    const char *inner = NULL;
+    const char *knm = NULL;
+    const char *enames = NULL;
+    int32_t nnames = 0;
+    int32_t width = 0;
+    int uns = 0;
+    if (t != NULL) {
+        if (kind == 1) {
+            width = t->width;
+            uns = t->uns;
+        } else if (kind == 2) {
+            width = t->width;
+        } else if (kind == 5 || kind == 6) {
+            inner = ty_of(L, t->inner, pos);
+        } else if (kind == 7) {
+            knm = ty_of(L, t->key, pos);
+            inner = ty_of(L, t->inner, pos);
+        } else if (kind == 10) {
+            PsDecl *ed = PsLow_decl_named(L, t->name);
+            if (ed != NULL) {
+                enames = lower_enum_names(L, ed);
+                nnames = ed->nitems;
+            }
+        }
+    }
+    Decl *v = Arena_alloc(L->a, sizeof(Decl));
+    v->kind = DL_VAR;
+    v->pos = pos;
+    v->name = name;
+    v->type = ty_name(L->a, "PsTy");
+    v->is_static = 1;
+    Expr *init = ex_new(L->a, EX_INITLIST, pos);
+    init->args = Arena_alloc(L->a, (size_t)8 * sizeof(*init->args));
+    init->args[0] = ty_num(L, kind, pos);
+    init->args[1] = ty_num(L, width, pos);
+    init->args[2] = ty_num(L, (uns ? 1 : 0), pos);
+    init->args[3] = ty_ref(L, inner, pos);
+    init->args[4] = ty_ref(L, knm, pos);
+    init->args[5] = ex_new(L->a, EX_NONE, pos);
+    if (enames == NULL) {
+        init->args[6] = ex_new(L->a, EX_NONE, pos);
+    } else {
+        Expr *en = ex_new(L->a, EX_IDENT, pos);
+        en->text = enames;
+        init->args[6] = en;
+    }
+    init->args[7] = ty_num(L, nnames, pos);
+    init->nargs = 8;
+    v->init = init;
+    Vec_pDecl_push(&L->out, v);
+    if (kind == 8 || kind == 9) {
+        L->tydn = vec_grow(L->tydn, L->ntyd, &L->ctyd, sizeof(*L->tydn));
+        L->tydd = vec_grow(L->tydd, L->ntyd, &L->ctyd2, sizeof(*L->tydd));
+        L->tydn[L->ntyd] = (char *)name;
+        L->tydd[L->ntyd] = (char *)Arena_printf(L->a, "%s__desc", ps_cname(L->a, t->name));
+        L->ntyd += 1;
+    }
+    return name;
+}
+
+static Decl *lower_struct_tostr(PsLow *L, PsDecl *d, int with_body) {
+    PsFunc *um = PsLow_method_named(L, d, "to_str");
+    if (um == NULL) {
+        return NULL;
+    }
+    Func *f = Arena_alloc(L->a, sizeof(Func));
+    f->pos = d->pos;
+    f->name = Arena_printf(L->a, "%s__tostr", ps_cname(L->a, d->name));
+    f->cname = f->name;
+    f->is_static = 1;
+    f->ret = ty_ptr(L->a, ty_name(L->a, "PsStr"));
+    f->params = Arena_alloc(L->a, (size_t)2 * sizeof(*f->params));
+    f->params[0].name = "__o";
+    f->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"));
+    f->params[0].pos = d->pos;
+    f->params[1].name = CTX;
+    f->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"));
+    f->params[1].pos = d->pos;
+    f->nparams = 2;
+    Decl *dc = Arena_alloc(L->a, sizeof(Decl));
+    dc->kind = DL_FUNC;
+    dc->pos = d->pos;
+    dc->func = f;
+    if (!with_body) {
+        return dc;
+    }
+    Expr *cast = ex_new(L->a, EX_CAST, d->pos);
+    cast->cast_type = ty_ptr(L->a, ty_name(L->a, d->name));
+    cast->lhs = ex_new(L->a, EX_IDENT, d->pos);
+    cast->lhs->text = "__o";
+    Expr *call = ex_new(L->a, EX_CALL, d->pos);
+    call->lhs = ex_new(L->a, EX_IDENT, d->pos);
+    call->lhs->text = Arena_printf(L->a, "%s_%s", d->name, um->name);
+    PsLow_push_arg(L, call, cast);
+    PsLow_push_arg(L, call, PsLow_ident(L, CTX, d->pos));
+    Stmt *rs = st_new(L->a, ST_RETURN, d->pos);
+    rs->expr = call;
+    Block *b = Arena_alloc(L->a, sizeof(Block));
+    b->stmts = Arena_alloc(L->a, sizeof(*b->stmts));
+    b->stmts[0] = rs;
+    b->n = 1;
+    f->body = b;
+    return dc;
+}
+
+static Decl *lower_struct_fields(PsLow *L, PsDecl *d) {
+    if (d->nfields == 0) {
+        return NULL;
+    }
+    Decl *v = Arena_alloc(L->a, sizeof(Decl));
+    v->kind = DL_VAR;
+    v->pos = d->pos;
+    v->name = Arena_printf(L->a, "%s__fields", ps_cname(L->a, d->name));
+    v->type = ty_array(L->a, ty_cst(L->a, "PsField"), NULL);
+    v->is_static = 1;
+    Expr *init = ex_new(L->a, EX_INITLIST, d->pos);
+    init->args = Arena_alloc(L->a, (size_t)d->nfields * sizeof(*init->args));
+    size_t i;
+    for (i = 0; i < d->nfields; i += 1) {
+        Expr *one = ex_new(L->a, EX_INITLIST, d->pos);
+        one->args = Arena_alloc(L->a, (size_t)2 * sizeof(*one->args));
+        Expr *nm = ex_new(L->a, EX_STRING, d->pos);
+        nm->text = Arena_printf(L->a, "\"%s\"", d->fields[i].name);
+        one->args[0] = nm;
+        one->args[1] = ty_ref(L, ty_of(L, d->fields[i].type, d->pos), d->pos);
+        one->nargs = 2;
+        init->args[i] = one;
+    }
+    init->nargs = d->nfields;
+    v->init = init;
+    return v;
+}
+
+static Decl *lower_struct_at(PsLow *L, PsDecl *d, int with_body) {
+    if (d->nfields == 0) {
+        return NULL;
+    }
+    Func *f = Arena_alloc(L->a, sizeof(Func));
+    f->pos = d->pos;
+    f->name = Arena_printf(L->a, "%s__at", ps_cname(L->a, d->name));
+    f->cname = f->name;
+    f->is_static = 1;
+    f->ret = ty_ptr(L->a, ty_name(L->a, "void"));
+    f->params = Arena_alloc(L->a, (size_t)2 * sizeof(*f->params));
+    f->params[0].name = "__o";
+    f->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"));
+    f->params[0].pos = d->pos;
+    f->params[1].name = "__i";
+    f->params[1].type = ty_name(L->a, "i32");
+    f->params[1].pos = d->pos;
+    f->nparams = 2;
+    Decl *dc = Arena_alloc(L->a, sizeof(Decl));
+    dc->kind = DL_FUNC;
+    dc->pos = d->pos;
+    dc->func = f;
+    if (!with_body) {
+        return dc;
+    }
+    Vec_pStmt body;
+    Vec_pStmt_init(&body);
+    Expr *cast = ex_new(L->a, EX_CAST, d->pos);
+    cast->cast_type = ty_ptr(L->a, ty_name(L->a, d->name));
+    cast->lhs = ex_new(L->a, EX_IDENT, d->pos);
+    cast->lhs->text = "__o";
+    Stmt *vd = st_new(L->a, ST_VAR, d->pos);
+    vd->name = "__s";
+    vd->type = ty_ptr(L->a, ty_name(L->a, d->name));
+    vd->init = cast;
+    Vec_pStmt_push(&body, vd);
+    size_t i;
+    for (i = 0; i < d->nfields; i += 1) {
+        Expr *cond = ex_new(L->a, EX_BINARY, d->pos);
+        cond->op = TK_EQ;
+        cond->lhs = ex_new(L->a, EX_IDENT, d->pos);
+        cond->lhs->text = "__i";
+        cond->rhs = ty_num(L, i, d->pos);
+        Expr *fl = ex_new(L->a, EX_FIELD, d->pos);
+        fl->op = TK_ARROW;
+        fl->lhs = ex_new(L->a, EX_IDENT, d->pos);
+        fl->lhs->text = "__s";
+        fl->field = ps_cname(L->a, d->fields[i].name);
+        Expr *adr = ex_new(L->a, EX_UNARY, d->pos);
+        adr->op = TK_AMP;
+        adr->lhs = fl;
+        Expr *cv = ex_new(L->a, EX_CAST, d->pos);
+        cv->cast_type = ty_ptr(L->a, ty_name(L->a, "void"));
+        cv->lhs = adr;
+        Stmt *rt = st_new(L->a, ST_RETURN, d->pos);
+        rt->expr = cv;
+        Block *blk = Arena_alloc(L->a, sizeof(Block));
+        blk->stmts = Arena_alloc(L->a, sizeof(*blk->stmts));
+        blk->stmts[0] = rt;
+        blk->n = 1;
+        Stmt *st = st_new(L->a, ST_IF, d->pos);
+        st->conds = Arena_alloc(L->a, sizeof(*st->conds));
+        st->conds[0] = cond;
+        st->blocks = Arena_alloc(L->a, sizeof(*st->blocks));
+        st->blocks[0] = blk;
+        st->nconds = 1;
+        st->if_sel = -1;
+        Vec_pStmt_push(&body, st);
+    }
+    Stmt *r0 = st_new(L->a, ST_RETURN, d->pos);
+    r0->expr = ex_new(L->a, EX_NONE, d->pos);
+    Vec_pStmt_push(&body, r0);
+    Block *b = Arena_alloc(L->a, sizeof(Block));
+    b->stmts = body.data;
+    b->n = body.len;
+    f->body = b;
+    return dc;
+}
+
 static Decl *lower_struct_desc(PsLow *L, PsDecl *d, int has_trace) {
+    return lower_struct_desc_x(L, d, has_trace, 0);
+}
+
+static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_campos) {
     Decl *v = Arena_alloc(L->a, sizeof(Decl));
     v->kind = DL_VAR;
     v->pos = d->pos;
@@ -9435,7 +9877,7 @@ static Decl *lower_struct_desc(PsLow *L, PsDecl *d, int has_trace) {
     v->type->is_const = 1;
     v->is_static = 1;
     Expr *init = ex_new(L->a, EX_INITLIST, d->pos);
-    init->args = Arena_alloc(L->a, (size_t)2 * sizeof(*init->args));
+    init->args = Arena_alloc(L->a, (size_t)6 * sizeof(*init->args));
     Expr *nm = ex_new(L->a, EX_STRING, d->pos);
     nm->text = Arena_printf(L->a, "\"%s\"", d->name);
     init->args[0] = nm;
@@ -9446,7 +9888,27 @@ static Decl *lower_struct_desc(PsLow *L, PsDecl *d, int has_trace) {
     } else {
         init->args[1] = ex_new(L->a, EX_NONE, d->pos);
     }
-    init->nargs = 2;
+    if (com_campos && d->nfields > 0) {
+        Expr *fe = ex_new(L->a, EX_IDENT, d->pos);
+        fe->text = Arena_printf(L->a, "%s__fields", ps_cname(L->a, d->name));
+        init->args[2] = fe;
+        init->args[3] = ty_num(L, d->nfields, d->pos);
+        Expr *ae = ex_new(L->a, EX_IDENT, d->pos);
+        ae->text = Arena_printf(L->a, "%s__at", ps_cname(L->a, d->name));
+        init->args[4] = ae;
+    } else {
+        init->args[2] = ex_new(L->a, EX_NONE, d->pos);
+        init->args[3] = ty_num(L, 0, d->pos);
+        init->args[4] = ex_new(L->a, EX_NONE, d->pos);
+    }
+    if (com_campos && PsLow_method_named(L, d, "to_str") != NULL) {
+        Expr *ts = ex_new(L->a, EX_IDENT, d->pos);
+        ts->text = Arena_printf(L->a, "%s__tostr", ps_cname(L->a, d->name));
+        init->args[5] = ts;
+    } else {
+        init->args[5] = ex_new(L->a, EX_NONE, d->pos);
+    }
+    init->nargs = 6;
     v->init = init;
     return v;
 }
@@ -10341,6 +10803,29 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         Vec_pDecl_push(&L.out, lower_struct_desc(&L, d6, t6 != NULL));
     }
     for (i = 0; i < m->ndecls; i += 1) {
+        PsDecl *dr = m->decls[i];
+        if (dr->kind != PD_STRUCT && dr->kind != PD_RECORD) {
+            continue;
+        }
+        Decl *fl0 = lower_struct_fields(&L, dr);
+        if (fl0 != NULL) {
+            Vec_pDecl_push(&L.out, lower_struct_at(&L, dr, 0));
+            Decl *ts0 = lower_struct_tostr(&L, dr, 0);
+            if (ts0 != NULL) {
+                Vec_pDecl_push(&L.out, ts0);
+            }
+            Vec_pDecl_push(&L.out, fl0);
+            Vec_pDecl_push(&L.out, lower_struct_at(&L, dr, 1));
+        }
+    }
+    for (i = 0; i < m->ndecls; i += 1) {
+        PsDecl *dr2 = m->decls[i];
+        if (dr2->kind != PD_RECORD) {
+            continue;
+        }
+        Vec_pDecl_push(&L.out, lower_struct_desc_x(&L, dr2, 0, 1));
+    }
+    for (i = 0; i < m->ndecls; i += 1) {
         PsDecl *d0 = m->decls[i];
         if (d0->kind != PD_STRUCT) {
             continue;
@@ -10349,7 +10834,7 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         if (tr0 != NULL) {
             Vec_pDecl_push(&L.out, tr0);
         }
-        Vec_pDecl_push(&L.out, lower_struct_desc(&L, d0, tr0 != NULL));
+        Vec_pDecl_push(&L.out, lower_struct_desc_x(&L, d0, tr0 != NULL, 1));
         Vec_pDecl_push(&L.out, lower_struct_new(&L, d0, 0));
     }
     for (i = 0; i < m->ndtraits; i += 1) {
@@ -10490,6 +10975,16 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     for (i = 0; i < L.reprads.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_reprad(&L, L.reprads.data[i], 1));
     }
+    for (i = 0; i < m->ndecls; i += 1) {
+        PsDecl *dts = m->decls[i];
+        if (dts->kind != PD_STRUCT && dts->kind != PD_RECORD) {
+            continue;
+        }
+        Decl *tsb = lower_struct_tostr(&L, dts, 1);
+        if (tsb != NULL) {
+            Vec_pDecl_push(&L.out, tsb);
+        }
+    }
     for (i = 0; i < L.tuptrs.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_tuptrace(&L, L.tuptrs.data[i], 1));
     }
@@ -10613,6 +11108,20 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         for (j = 0; j < m->main->n; j += 1) {
             PsLow_stmt(&L, m->main->stmts[j], &top);
         }
+    }
+    for (j = 0; j < L.ntyd; j += 1) {
+        Stmt *fd = st_new(a, ST_ASSIGN, zp);
+        Expr *fld = ex_new(a, EX_FIELD, zp);
+        fld->op = TK_DOT;
+        fld->lhs = PsLow_ident(&L, L.tydn[j], zp);
+        fld->field = "desc";
+        fd->lhs = fld;
+        fd->op = TK_ASSIGN;
+        Expr *adr = ex_new(a, EX_UNARY, zp);
+        adr->op = TK_AMP;
+        adr->lhs = PsLow_ident(&L, L.tydd[j], zp);
+        fd->rhs = adr;
+        Vec_pStmt_push(&mb, fd);
     }
     for (j = 0; j < L.nshz; j += 1) {
         Stmt *fx = st_new(a, ST_ASSIGN, zp);

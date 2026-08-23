@@ -75,6 +75,13 @@ private def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
 private def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
 private def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr
 private def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl
+private def tem_tupla(t: *PsType, depth: i32) -> bool
+private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_campos: bool) -> *Decl
+private def lower_struct_fields(L: *PsLow, d: *PsDecl) -> *Decl
+private def lower_struct_at(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl
+private def lower_struct_tostr(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl
+private def ty_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
+private def ty_num(L: *PsLow, v: i32, pos: Pos) -> *Expr
 private def is_scalar_pname(n: const *char) -> bool
 private def zero_pos() -> Pos
 private def starts_with(s: const *char, p: const *char) -> bool
@@ -111,6 +118,24 @@ struct PsLow:
     nshz: i32           #   into a static initializer, so the C compiler answers
     cshz: i32           #   it once, at run time, before anything is sent
     cshz2: i32
+    # F5: os TIPOS como dado — um `PsTy` estático por tipo distinto que aparece
+    # num campo, deduplicado pelo mesmo nome que as shapes usam
+    tyk: **char
+    tyv: **char
+    nty: i32
+    cty: i32
+    cty2: i32
+    # ... e o `desc` de cada um, preenchido no arranque. O par PsTy/PsDesc é um
+    # CICLO (o tipo aponta para o descritor, o descritor aponta para os campos,
+    # os campos apontam para tipos), e um inicializador estático não se pode
+    # referir ao que ainda não existe. Uma atribuição no arranque desfaz o nó sem
+    # obrigar a uma declaração antecipada de um `const`, que é coisa que o C não
+    # gosta de ver.
+    tydn: **char
+    tydd: **char
+    ntyd: i32
+    ctyd: i32
+    ctyd2: i32
     tmp_ctr: i32        # hidden temporaries the lowering needs
     # `nonlocal x` (64.1). P hoists such a declaration to FUNCTION scope, which
     # is right — and it happens after this lowering has already put the variable
@@ -285,6 +310,7 @@ struct PsLow:
     private def decl_named(self: *PsLow, name: const *char) -> *PsDecl
     private def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc
     private def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
+    private def repr_of_gerado(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     private def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
     private def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     private def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
@@ -980,6 +1006,42 @@ struct PsLow:
                 tr->parened = True
                 out = tr
             return out
+        # F5: a partir daqui é o RUNTIME que percorre, guiado pela tabela de
+        # campos. O texto é o mesmo — os testes comparam caractere a caractere —,
+        # e o que muda é de onde vem: uma função por tipo deixou de ser emitida.
+        # O `to_str()` do próprio tipo continua a ganhar, e agora ganha a
+        # qualquer profundidade, porque quem decide é o descritor e não o texto.
+        rc: *Expr = self->call_rt("ps_repr_desc", pos)
+        self->push_arg(rc, self->ctx_arg(pos))
+        if d->kind == PD_STRUCT:
+            self->push_arg(rc, v)
+            dsc: *Expr = ex_new(self->a, EX_FIELD, pos)
+            dsc->op = TK_ARROW
+            dsc->lhs = v
+            dsc->field = "__desc"
+            self->push_arg(rc, dsc)
+        else:
+            # um `record` é um VALOR, e o percurso precisa do endereço dele. Um
+            # valor recém-construído (`print(Line(...))`) não tem endereço em C,
+            # então ele passa por um local — que é onde o C o poria de qualquer
+            # maneira, e custa uma cópia de um tipo que é bytes.
+            base: *Expr = v if v->kind in {EX_IDENT, EX_FIELD, EX_INDEX} else self->spill(v, t, pos)
+            ad2: *Expr = ex_new(self->a, EX_UNARY, pos)
+            ad2->op = TK_AMP
+            ad2->lhs = base
+            self->push_arg(rc, ad2)
+            de2: *Expr = ex_new(self->a, EX_UNARY, pos)
+            de2->op = TK_AMP
+            de2->lhs = ex_new(self->a, EX_IDENT, pos)
+            de2->lhs->text = self->a->printf("%s__desc", ps_cname(self->a, d->name))
+            self->push_arg(rc, de2)
+        self->push_arg(rc, self->num(self->a->printf("%d", depth), pos))
+        self->allocs = True
+        self->raised = True
+        return rc
+
+    private def repr_of_gerado(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
+        d: *PsDecl = self->decl_named(t->name)
         um: *PsFunc = self->method_named(d, "to_str")
         if um != None:
             # a `to_str()` written by the type WINS: the derived form is the
@@ -1020,6 +1082,24 @@ struct PsLow:
     # walks the bytes and calls back for each element, because only here is it
     # known what an element IS.
     private def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
+        # F5: também isto vem da tabela. O que havia era um ADAPTADOR gerado por
+        # tipo de elemento (`__ps_reprad_l_int`), que o runtime chamava a cada
+        # elemento; agora o runtime recebe o TIPO como dado e não precisa que
+        # ninguém lhe escreva uma função. `list<list<int>>` deixou de precisar de
+        # duas.
+        if (t->kind == PT_LIST or t->kind == PT_SET or t->kind == PT_DICT) and not tem_tupla(t, 0):
+            c0: *Expr = self->call_rt("ps_repr_val", pos)
+            self->push_arg(c0, self->ctx_arg(pos))
+            self->push_arg(c0, v)
+            tr: *Expr = ex_new(self->a, EX_UNARY, pos)
+            tr->op = TK_AMP
+            tr->lhs = ex_new(self->a, EX_IDENT, pos)
+            tr->lhs->text = ty_of(self, t, pos)
+            self->push_arg(c0, tr)
+            self->push_arg(c0, self->num("1", pos))
+            self->allocs = True
+            self->raised = True
+            return c0
         match t->kind:
             case PT_LIST, PT_ARRAY:
                 # an array has no header the runtime can walk, so it becomes a
@@ -3762,6 +3842,40 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return nc
+        if strcmp(name, "__json_stringify") == 0:
+            jt9: *PsType = e->args[0]->type
+            v9: *Expr = self->expr(e->args[0])
+            # uma REFERÊNCIA vai como está; um VALOR precisa de morada, e um
+            # valor recém-feito não tem nenhuma — passa por um local, que é
+            # onde o C o poria de qualquer maneira
+            ref9: bool = jt9 != None and jt9->kind in {PT_STR, PT_LIST, PT_SET, PT_DICT}
+            if not ref9 and jt9 != None and jt9->kind == PT_NAME:
+                dd9: *PsDecl = self->decl_named(jt9->name)
+                ref9 = dd9 != None and dd9->kind == PD_STRUCT
+            jc9: *Expr = self->call_rt("ps_json_stringify" if ref9 else "ps_json_stringify_at", e->pos)
+            self->push_arg(jc9, self->ctx_arg(e->pos))
+            if ref9:
+                self->push_arg(jc9, v9)
+            else:
+                # um ITEM de enum é um nome e não uma variável: `&VERMELHO`
+                # não existe em C. Como não há como distinguir os dois aqui sem
+                # perguntar à declaração, um enum passa SEMPRE por um local — o
+                # que custa uma cópia de quatro bytes.
+                eh_enum: bool = jt9 != None and jt9->kind == PT_NAME and self->decl_named(jt9->name) != None and self->decl_named(jt9->name)->kind == PD_ENUM
+                base9: *Expr = v9 if (not eh_enum) and v9->kind in {EX_IDENT, EX_FIELD, EX_INDEX} else self->spill(v9, jt9, e->pos)
+                ad9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                ad9->op = TK_AMP
+                ad9->lhs = base9
+                self->push_arg(jc9, ad9)
+            tr9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+            tr9->op = TK_AMP
+            tr9->lhs = ex_new(self->a, EX_IDENT, e->pos)
+            tr9->lhs->text = ty_of(self, jt9, e->pos)
+            self->push_arg(jc9, tr9)
+            self->pos_args(jc9, e->pos)
+            self->raised = True
+            self->allocs = True
+            return jc9
         if strcmp(name, "__json_parse") == 0:
             jc: *Expr = self->call_rt("ps_json_parse", e->pos)
             self->push_arg(jc, self->ctx_arg(e->pos))
@@ -9188,8 +9302,337 @@ private def lower_struct_trace(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
     f->body = b
     return dc
 
+# ---------- A TABELA DE CAMPOS (F5) ----------
+#
+# O que o compilador sabe e o runtime não: os NOMES dos campos e o que cada um
+# é. Emitido como DADO — um `PsTy` por tipo distinto, um `PsField[]` por struct,
+# e uma função de UMA linha por campo que devolve o endereço dele.
+#
+# O endereço vem de uma função e não de um `offsetof` na tabela por uma razão
+# concreta: `offsetof` num inicializador estático é das poucas coisas que o back
+# end QBE não dobra (a mesma razão por que o `size` do `PsShape` é enchido no
+# arranque). Uma função é expressável nos dois back ends sem primitiva nova, e é
+# também o que faz um `record` — que não tem cabeçalho — funcionar pelo mesmo
+# caminho que um `struct`.
+
+private def ty_cst(a: *Arena, n: const *char) -> *Type:
+    t: *Type = ty_name(a, n)
+    t->is_const = True
+    return t
+
+# Uma TUPLA ainda não tem lugar na tabela: ela vira um `record` gerado com campos
+# `_0`, `_1`, e o que se imprime dela não é `Nome(_0=..., _1=...)` mas `(a, b)` —
+# outra forma, que a tabela ainda não sabe distinguir. Enquanto não souber, um
+# contentor com tuplas lá dentro continua pelo adaptador gerado. É a única coisa
+# que ainda o usa, e está dito aqui em vez de descoberto por alguém.
+private def tem_tupla(t: *PsType, depth: i32) -> bool:
+    if t == None or depth > 4:
+        return False
+    if t->kind == PT_TUPLE:
+        return True
+    if t->kind == PT_LIST or t->kind == PT_SET or t->kind == PT_ARRAY:
+        return tem_tupla(t->inner, depth + 1)
+    if t->kind == PT_DICT:
+        return tem_tupla(t->key, depth + 1) or tem_tupla(t->inner, depth + 1)
+    if t->kind == PT_OPT:
+        return tem_tupla(t->inner, depth + 1)
+    return False
+
+# os números são os do `PsTyKind` do runtime, na ordem em que estão lá
+private def ty_kind_of(L: *PsLow, t: *PsType) -> i32:
+    if t == None:
+        return 0
+    match t->kind:
+        case PT_INT:
+            return 1
+        case PT_FLOAT:
+            return 2
+        case PT_BOOL:
+            return 3
+        case PT_STR:
+            return 4
+        case PT_LIST:
+            return 5
+        case PT_SET:
+            return 6
+        case PT_DICT:
+            return 7
+        case PT_NAME:
+            # `decl_named` e não `records_by_name`: o segundo só conhece os
+            # tipos com campos, e um enum é justamente o que não tem nenhum
+            dd: *PsDecl = L->decl_named(t->name)
+            if dd == None:
+                return 0
+            if dd->kind == PD_ENUM:
+                return 10
+            if dd->kind == PD_STRUCT:
+                return 9
+            if dd->kind == PD_RECORD:
+                return 8
+            return 0
+        case _:
+            return 0
+
+private def ty_num(L: *PsLow, v: i32, pos: Pos) -> *Expr:
+    e: *Expr = ex_new(L->a, EX_NUMBER, pos)
+    e->text = L->a->printf("%d", v)
+    return e
+
+private def ty_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr:
+    if name == None:
+        return ex_new(L->a, EX_NONE, pos)
+    r: *Expr = ex_new(L->a, EX_UNARY, pos)
+    r->op = TK_AMP
+    r->lhs = ex_new(L->a, EX_IDENT, pos)
+    r->lhs->text = name
+    return r
+
+# os nomes das variantes de um enum, para o repr os poder imprimir
+private def lower_enum_names(L: *PsLow, d: *PsDecl) -> const *char:
+    name: const *char = L->a->printf("__en_%s", ps_cname(L->a, d->name))
+    v: *Decl = L->a->alloc(sizeof(Decl))
+    v->kind = DL_VAR
+    v->pos = d->pos
+    v->name = name
+    v->type = ty_array(L->a, ty_ptr(L->a, ty_cst(L->a, "char")), None)
+    v->is_static = True
+    init: *Expr = ex_new(L->a, EX_INITLIST, d->pos)
+    init->args = L->a->alloc(usize(d->nitems + 1) * sizeof(*init->args))
+    for i in range(d->nitems):
+        sl: *Expr = ex_new(L->a, EX_STRING, d->pos)
+        sl->text = L->a->printf("\"%s\"", d->items[i].name)
+        init->args[i] = sl
+    init->nargs = d->nitems
+    v->init = init
+    L->out.push(v)
+    return name
+
+private def ty_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
+    key: const *char = sh_mangle(L, t)
+    for i in range(L->nty):
+        if strcmp(L->tyk[i], key) == 0:
+            return L->tyv[i]
+    name: const *char = L->a->printf("__ty_%s", key)
+    # registado ANTES de os pedaços serem emitidos: um tipo pode conter-se a si
+    # mesmo, direta ou indiretamente, e a segunda visita tem de achar este nome
+    L->tyk = vec_grow(L->tyk, L->nty, ref L->cty, sizeof(*L->tyk))
+    L->tyv = vec_grow(L->tyv, L->nty, ref L->cty2, sizeof(*L->tyv))
+    L->tyk[L->nty] = (*char)(key)
+    L->tyv[L->nty] = (*char)(name)
+    L->nty += 1
+
+    kind: i32 = ty_kind_of(L, t)
+    inner: const *char = None
+    knm: const *char = None
+    enames: const *char = None
+    nnames: i32 = 0
+    width: i32 = 0
+    uns: bool = False
+    if t != None:
+        if kind == 1:
+            width = t->width
+            uns = t->uns
+        elif kind == 2:
+            width = t->width
+        elif kind == 5 or kind == 6:
+            inner = ty_of(L, t->inner, pos)
+        elif kind == 7:
+            knm = ty_of(L, t->key, pos)
+            inner = ty_of(L, t->inner, pos)
+        elif kind == 10:
+            ed: *PsDecl = L->decl_named(t->name)
+            if ed != None:
+                enames = lower_enum_names(L, ed)
+                nnames = ed->nitems
+
+    v: *Decl = L->a->alloc(sizeof(Decl))
+    v->kind = DL_VAR
+    v->pos = pos
+    v->name = name
+    v->type = ty_name(L->a, "PsTy")
+    v->is_static = True
+    init: *Expr = ex_new(L->a, EX_INITLIST, pos)
+    init->args = L->a->alloc(usize(8) * sizeof(*init->args))
+    init->args[0] = ty_num(L, kind, pos)
+    init->args[1] = ty_num(L, width, pos)
+    init->args[2] = ty_num(L, 1 if uns else 0, pos)
+    init->args[3] = ty_ref(L, inner, pos)
+    init->args[4] = ty_ref(L, knm, pos)
+    # o `desc` fica a None e é enchido no arranque: ver a nota do `tydn`
+    init->args[5] = ex_new(L->a, EX_NONE, pos)
+    if enames == None:
+        init->args[6] = ex_new(L->a, EX_NONE, pos)
+    else:
+        en: *Expr = ex_new(L->a, EX_IDENT, pos)
+        en->text = enames
+        init->args[6] = en
+    init->args[7] = ty_num(L, nnames, pos)
+    init->nargs = 8
+    v->init = init
+    L->out.push(v)
+    if kind == 8 or kind == 9:
+        L->tydn = vec_grow(L->tydn, L->ntyd, ref L->ctyd, sizeof(*L->tydn))
+        L->tydd = vec_grow(L->tydd, L->ntyd, ref L->ctyd2, sizeof(*L->tydd))
+        L->tydn[L->ntyd] = (*char)(name)
+        L->tydd[L->ntyd] = (*char)(L->a->printf("%s__desc", ps_cname(L->a, t->name)))
+        L->ntyd += 1
+    return name
+
+# `static PsStr *S__tostr(void *o, PsCtx *ctx) { return S_to_str((S *)o, ctx); }`
+#
+# Um EMBRULHO e não um ponteiro convertido: o método recebe o tipo dele e o
+# descritor guarda uma assinatura só, e converter ponteiros de função entre
+# assinaturas é das poucas coisas em C que funciona em toda a parte e continua a
+# não estar escrito em lado nenhum. Duas linhas resolvem-no de vez.
+private def lower_struct_tostr(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
+    um: *PsFunc = L->method_named(d, "to_str")
+    if um == None:
+        return None
+    f: *Func = L->a->alloc(sizeof(Func))
+    f->pos = d->pos
+    f->name = L->a->printf("%s__tostr", ps_cname(L->a, d->name))
+    f->cname = f->name
+    f->is_static = True
+    f->ret = ty_ptr(L->a, ty_name(L->a, "PsStr"))
+    f->params = L->a->alloc(usize(2) * sizeof(*f->params))
+    f->params[0].name = "__o"
+    f->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    f->params[0].pos = d->pos
+    f->params[1].name = CTX
+    f->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    f->params[1].pos = d->pos
+    f->nparams = 2
+    dc: *Decl = L->a->alloc(sizeof(Decl))
+    dc->kind = DL_FUNC
+    dc->pos = d->pos
+    dc->func = f
+    if not with_body:
+        return dc
+    cast: *Expr = ex_new(L->a, EX_CAST, d->pos)
+    cast->cast_type = ty_ptr(L->a, ty_name(L->a, d->name))
+    cast->lhs = ex_new(L->a, EX_IDENT, d->pos)
+    cast->lhs->text = "__o"
+    call: *Expr = ex_new(L->a, EX_CALL, d->pos)
+    call->lhs = ex_new(L->a, EX_IDENT, d->pos)
+    call->lhs->text = L->a->printf("%s_%s", d->name, um->name)
+    L->push_arg(call, cast)
+    L->push_arg(call, L->ident(CTX, d->pos))
+    rs: *Stmt = st_new(L->a, ST_RETURN, d->pos)
+    rs->expr = call
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = L->a->alloc(sizeof(*b->stmts))
+    b->stmts[0] = rs
+    b->n = 1
+    f->body = b
+    return dc
+
+# `static const PsField S__fields[] = {{"a", &__ty_i}, ...};`
+private def lower_struct_fields(L: *PsLow, d: *PsDecl) -> *Decl:
+    if d->nfields == 0:
+        return None
+    v: *Decl = L->a->alloc(sizeof(Decl))
+    v->kind = DL_VAR
+    v->pos = d->pos
+    v->name = L->a->printf("%s__fields", ps_cname(L->a, d->name))
+    v->type = ty_array(L->a, ty_cst(L->a, "PsField"), None)
+    v->is_static = True
+    init: *Expr = ex_new(L->a, EX_INITLIST, d->pos)
+    init->args = L->a->alloc(usize(d->nfields) * sizeof(*init->args))
+    for i in range(d->nfields):
+        one: *Expr = ex_new(L->a, EX_INITLIST, d->pos)
+        one->args = L->a->alloc(usize(2) * sizeof(*one->args))
+        nm: *Expr = ex_new(L->a, EX_STRING, d->pos)
+        nm->text = L->a->printf("\"%s\"", d->fields[i].name)
+        one->args[0] = nm
+        one->args[1] = ty_ref(L, ty_of(L, d->fields[i].type, d->pos), d->pos)
+        one->nargs = 2
+        init->args[i] = one
+    init->nargs = d->nfields
+    v->init = init
+    return v
+
+# `static void *S__at(void *o, int i) { switch (i) { case 0: return &((S*)o)->a; ...`
+private def lower_struct_at(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
+    if d->nfields == 0:
+        return None
+    f: *Func = L->a->alloc(sizeof(Func))
+    f->pos = d->pos
+    f->name = L->a->printf("%s__at", ps_cname(L->a, d->name))
+    f->cname = f->name
+    f->is_static = True
+    f->ret = ty_ptr(L->a, ty_name(L->a, "void"))
+    f->params = L->a->alloc(usize(2) * sizeof(*f->params))
+    f->params[0].name = "__o"
+    f->params[0].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    f->params[0].pos = d->pos
+    f->params[1].name = "__i"
+    f->params[1].type = ty_name(L->a, "i32")
+    f->params[1].pos = d->pos
+    f->nparams = 2
+    dc: *Decl = L->a->alloc(sizeof(Decl))
+    dc->kind = DL_FUNC
+    dc->pos = d->pos
+    dc->func = f
+    if not with_body:
+        return dc
+    body: Vec<*Stmt>
+    body.init()
+    cast: *Expr = ex_new(L->a, EX_CAST, d->pos)
+    cast->cast_type = ty_ptr(L->a, ty_name(L->a, d->name))
+    cast->lhs = ex_new(L->a, EX_IDENT, d->pos)
+    cast->lhs->text = "__o"
+    vd: *Stmt = st_new(L->a, ST_VAR, d->pos)
+    vd->name = "__s"
+    vd->type = ty_ptr(L->a, ty_name(L->a, d->name))
+    vd->init = cast
+    body.push(vd)
+    # uma cadeia de `if`, e não um `match`: o que sai daqui é C, e um `switch`
+    # com um `return` por caso não se lê melhor do que isto
+    for i in range(d->nfields):
+        cond: *Expr = ex_new(L->a, EX_BINARY, d->pos)
+        cond->op = TK_EQ
+        cond->lhs = ex_new(L->a, EX_IDENT, d->pos)
+        cond->lhs->text = "__i"
+        cond->rhs = ty_num(L, i, d->pos)
+        fl: *Expr = ex_new(L->a, EX_FIELD, d->pos)
+        fl->op = TK_ARROW
+        fl->lhs = ex_new(L->a, EX_IDENT, d->pos)
+        fl->lhs->text = "__s"
+        fl->field = ps_cname(L->a, d->fields[i].name)
+        adr: *Expr = ex_new(L->a, EX_UNARY, d->pos)
+        adr->op = TK_AMP
+        adr->lhs = fl
+        cv: *Expr = ex_new(L->a, EX_CAST, d->pos)
+        cv->cast_type = ty_ptr(L->a, ty_name(L->a, "void"))
+        cv->lhs = adr
+        rt: *Stmt = st_new(L->a, ST_RETURN, d->pos)
+        rt->expr = cv
+        blk: *Block = L->a->alloc(sizeof(Block))
+        blk->stmts = L->a->alloc(sizeof(*blk->stmts))
+        blk->stmts[0] = rt
+        blk->n = 1
+        st: *Stmt = st_new(L->a, ST_IF, d->pos)
+        st->conds = L->a->alloc(sizeof(*st->conds))
+        st->conds[0] = cond
+        st->blocks = L->a->alloc(sizeof(*st->blocks))
+        st->blocks[0] = blk
+        st->nconds = 1
+        st->if_sel = -1
+        body.push(st)
+    r0: *Stmt = st_new(L->a, ST_RETURN, d->pos)
+    r0->expr = ex_new(L->a, EX_NONE, d->pos)
+    body.push(r0)
+    b: *Block = L->a->alloc(sizeof(Block))
+    b->stmts = body.data
+    b->n = body.len
+    f->body = b
+    return dc
+
 # `static const PsDesc S__desc = {"S", sizeof(S), n, S__refs};`
 private def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
+    return lower_struct_desc_x(L, d, has_trace, False)
+
+private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_campos: bool) -> *Decl:
     v: *Decl = L->a->alloc(sizeof(Decl))
     v->kind = DL_VAR
     v->pos = d->pos
@@ -9198,7 +9641,7 @@ private def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
     v->type->is_const = True
     v->is_static = True
     init: *Expr = ex_new(L->a, EX_INITLIST, d->pos)
-    init->args = L->a->alloc(usize(2) * sizeof(*init->args))
+    init->args = L->a->alloc(usize(6) * sizeof(*init->args))
     nm: *Expr = ex_new(L->a, EX_STRING, d->pos)
     nm->text = L->a->printf("\"%s\"", d->name)
     init->args[0] = nm
@@ -9208,7 +9651,28 @@ private def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
         init->args[1] = r
     else:
         init->args[1] = ex_new(L->a, EX_NONE, d->pos)
-    init->nargs = 2
+    # a tabela de campos (F5) só vai nos tipos DO PROGRAMA. Um ambiente de lambda
+    # e uma moldura de `async` são maquinaria: ninguém lhes pede o `repr`, e
+    # descrevê-los seria pagar bytes por dado que nunca é lido.
+    if com_campos and d->nfields > 0:
+        fe: *Expr = ex_new(L->a, EX_IDENT, d->pos)
+        fe->text = L->a->printf("%s__fields", ps_cname(L->a, d->name))
+        init->args[2] = fe
+        init->args[3] = ty_num(L, d->nfields, d->pos)
+        ae: *Expr = ex_new(L->a, EX_IDENT, d->pos)
+        ae->text = L->a->printf("%s__at", ps_cname(L->a, d->name))
+        init->args[4] = ae
+    else:
+        init->args[2] = ex_new(L->a, EX_NONE, d->pos)
+        init->args[3] = ty_num(L, 0, d->pos)
+        init->args[4] = ex_new(L->a, EX_NONE, d->pos)
+    if com_campos and L->method_named(d, "to_str") != None:
+        ts: *Expr = ex_new(L->a, EX_IDENT, d->pos)
+        ts->text = L->a->printf("%s__tostr", ps_cname(L->a, d->name))
+        init->args[5] = ts
+    else:
+        init->args[5] = ex_new(L->a, EX_NONE, d->pos)
+    init->nargs = 6
     v->init = init
     return v
 
@@ -10057,6 +10521,27 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         if t6 != None:
             L.out.push(t6)
         L.out.push(lower_struct_desc(&L, d6, t6 != None))
+    # os tipos DO PROGRAMA levam a tabela de campos (F5). Um `record` também: ele
+    # não tem cabeçalho e por isso nunca precisou de descritor, mas o `repr` de
+    # um valor precisa de saber o que ele é tanto quanto o de um objeto — e a
+    # função de endereço, que é como se chega a um campo, funciona igual nos dois.
+    for i in range(m->ndecls):
+        dr: *PsDecl = m->decls[i]
+        if dr->kind != PD_STRUCT and dr->kind != PD_RECORD:
+            continue
+        fl0: *Decl = lower_struct_fields(&L, dr)
+        if fl0 != None:
+            L.out.push(lower_struct_at(&L, dr, False))
+            ts0: *Decl = lower_struct_tostr(&L, dr, False)
+            if ts0 != None:
+                L.out.push(ts0)
+            L.out.push(fl0)
+            L.out.push(lower_struct_at(&L, dr, True))
+    for i in range(m->ndecls):
+        dr2: *PsDecl = m->decls[i]
+        if dr2->kind != PD_RECORD:
+            continue
+        L.out.push(lower_struct_desc_x(&L, dr2, False, True))
     for i in range(m->ndecls):
         d0: *PsDecl = m->decls[i]
         if d0->kind != PD_STRUCT:
@@ -10064,7 +10549,7 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         tr0: *Decl = lower_struct_trace(&L, d0, False)
         if tr0 != None:
             L.out.push(tr0)
-        L.out.push(lower_struct_desc(&L, d0, tr0 != None))
+        L.out.push(lower_struct_desc_x(&L, d0, tr0 != None, True))
         L.out.push(lower_struct_new(&L, d0, False))
 
     # the vtable STRUCTS come right after the records they dispatch over (66.3)
@@ -10212,6 +10697,17 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     # is complete before any of them is written
     for i in range(L.reprads.len):
         L.out.push(lower_reprad(&L, L.reprads.data[i], True))
+    # o embrulho do `to_str` vai AQUI, e não junto do descritor: o corpo dele
+    # chama o método, e o método só está declarado depois de as funções do
+    # módulo terem sido baixadas. O protótipo já foi emitido lá em cima, que é
+    # tudo o que o descritor precisava.
+    for i in range(m->ndecls):
+        dts: *PsDecl = m->decls[i]
+        if dts->kind != PD_STRUCT and dts->kind != PD_RECORD:
+            continue
+        tsb: *Decl = lower_struct_tostr(&L, dts, True)
+        if tsb != None:
+            L.out.push(tsb)
     for i in range(L.tuptrs.len):
         L.out.push(lower_tuptrace(&L, L.tuptrs.data[i], True))
     for i in range(L.gmads.len):
@@ -10336,6 +10832,23 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     if m->main != None:
         for j in range(m->main->n):
             L.stmt(m->main->stmts[j], &top)
+    # o `desc` de cada `PsTy`, que fecha o ciclo tipo -> descritor -> campos ->
+    # tipo. Um inicializador estático não se pode referir ao que ainda não
+    # existe; uma atribuição no arranque pode, e não obriga a declarar um `const`
+    # antes de o definir — coisa que o C não gosta de ver.
+    for j in range(L.ntyd):
+        fd: *Stmt = st_new(a, ST_ASSIGN, zp)
+        fld: *Expr = ex_new(a, EX_FIELD, zp)
+        fld->op = TK_DOT
+        fld->lhs = L.ident(L.tydn[j], zp)
+        fld->field = "desc"
+        fd->lhs = fld
+        fd->op = TK_ASSIGN
+        adr: *Expr = ex_new(a, EX_UNARY, zp)
+        adr->op = TK_AMP
+        adr->lhs = L.ident(L.tydd[j], zp)
+        fd->rhs = adr
+        mb.push(fd)
     # every shape's size, filled before anything can use one (74.2)
     for j in range(L.nshz):
         fx: *Stmt = st_new(a, ST_ASSIGN, zp)

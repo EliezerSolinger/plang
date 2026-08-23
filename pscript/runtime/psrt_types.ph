@@ -98,6 +98,47 @@ struct PsBlock:
 # Only the REFERENCE fields are listed, by byte offset. Everything else is
 # bytes the collector copies without looking at, which is the same deal a
 # `record` gets.
+# ---------- A TABELA DE CAMPOS (F5) ----------
+#
+# O que o compilador sabe sobre um tipo e o runtime não: os NOMES dos campos e o
+# que cada um é. Sem isto, cada `repr` e cada `json.stringify` tem de ser gerado
+# por tipo — e o C emitido cresce com o número de tipos, não com o tamanho do
+# programa.
+#
+# Só campos PÚBLICOS entram, que é a mesma noção de público da lista canónica da
+# API: uma só ideia de "o que este tipo mostra", para a documentação, para o
+# índice do repositório e para o `repr`. O `trace` do coletor continua a cobrir
+# TODAS as referências, privadas incluídas — são mecanismos separados de
+# propósito, porque um esquece campos por desenho e o outro não pode esquecer
+# nenhum.
+
+enum PsTyKind:
+    PS_T_OPAQUE = 0    # def, any, task, worker, file: existem e não se mostram
+    PS_T_INT
+    PS_T_FLOAT
+    PS_T_BOOL
+    PS_T_STR
+    PS_T_LIST
+    PS_T_SET
+    PS_T_DICT
+    PS_T_REC           # `record`: valor, com descritor estático
+    PS_T_OBJ           # `struct`: coletado, com o descritor no próprio objeto
+    PS_T_ENUM
+
+struct PsTy:
+    kind: i32
+    width: i32              # int: 8/16/32/64 (0 = o i64 padrão); float: 32/64
+    uns: bool
+    inner: const *PsTy      # LIST/SET: o elemento. DICT: o valor.
+    key: const *PsTy        # DICT: a chave
+    desc: const *PsDesc     # REC/OBJ: o descritor do tipo
+    names: const **char     # ENUM: os nomes das variantes (o repr precisa deles)
+    nnames: i32
+
+struct PsField:
+    name: const *char
+    ty: const *PsTy
+
 struct PsDesc:
     name: const *char
     # How to follow what is INSIDE one of these. The compiler writes it, because
@@ -105,6 +146,20 @@ struct PsDesc:
     # reference field. None means there is nothing inside to follow, which is the
     # common case and costs nothing.
     trace: def(o: *void, to: *PsBlock)
+    # os campos públicos, e como chegar a cada um.
+    #
+    # O endereço vem de uma FUNÇÃO e não de um `offsetof` na tabela: `offsetof`
+    # num inicializador estático é das poucas coisas que o back end QBE não sabe
+    # dobrar (a mesma razão por que o `PsShape` enche o `size` no arranque), e
+    # uma função é expressável nos dois back ends sem primitiva nova. É também o
+    # que faz um `record` — que não tem cabeçalho — funcionar pelo mesmo caminho.
+    fields: const *PsField
+    nfields: i32
+    at: def(o: *void, i: i32) -> *void
+    # o `to_str()` que o TIPO escreveu, se escreveu. Ele ganha sobre a forma
+    # derivada (44.3) — e agora ganha a QUALQUER profundidade, porque quem
+    # percorre é o runtime e não o texto gerado.
+    to_str: def(o: *void, ctx: *PsCtx) -> *PsStr
 
 # every user struct starts with this, and the compiler lays the fields out after
 struct PsUser:

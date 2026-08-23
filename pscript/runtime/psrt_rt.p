@@ -13,18 +13,18 @@ import "psrt_rt.ph"
 
 # every message frame has the same layout question — bytes, nothing inside to
 # follow — so one descriptor serves them all
-private const PS_POD_DESC: const PsDesc = {"message", None}
+private const PS_POD_DESC: const PsDesc = {"message", None, None, 0, None, None}
 # the frame a gathered result lives in holds ONE reference — the list — so it
 # needs a trace of its own
 private def ps_gather_trace(o: *void, to: *PsBlock):
     p: **PsObj = (**PsObj)((*char)(o) + sizeof(PsUser))
     *p = ps_forward(to, *p)
-private const PS_GATHER_DESC: const PsDesc = {"gather", ps_gather_trace}
+private const PS_GATHER_DESC: const PsDesc = {"gather", ps_gather_trace, None, 0, None, None}
 # a message frame whose one field IS a reference — a `str` or a `list` rebuilt
 # in this heap (34.3). It has the same shape as a gathered result, and needs
 # the same trace: the frame of a task that is parked outlives collections, and
 # a POD descriptor there would leave the collector with a stale pointer.
-private const PS_REFMSG_DESC: const PsDesc = {"message", ps_gather_trace}
+private const PS_REFMSG_DESC: const PsDesc = {"message", ps_gather_trace, None, 0, None, None}
 # ---------- workers (35.1/36.1) ----------
 private def ps_msg_push(head: **PsMsg, tail: **PsMsg, p: const *void, size: usize):
     m: *PsMsg = (*PsMsg)(malloc(sizeof(PsMsg)))

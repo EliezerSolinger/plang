@@ -284,3 +284,10 @@ def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool
 def ps_hash_bytes(b: const *char, n: usize) -> u64
 # 110: o estado do coletor deste contexto, como dict<str, int>
 def ps_gc_stats(ctx: *PsCtx) -> *PsDict
+
+# ---------- o repr como DADO (F5) ----------
+def ps_repr_ty(ctx: *PsCtx, p: *void, ty: const *PsTy, depth: i32) -> *PsStr
+def ps_repr_val(ctx: *PsCtx, o: *void, ty: const *PsTy, depth: i32) -> *PsStr
+def ps_repr_desc(ctx: *PsCtx, o: *void, d: const *PsDesc, depth: i32) -> *PsStr
+def ps_json_stringify(ctx: *PsCtx, o: *void, ty: const *PsTy, file: const *char, line: i32) -> *PsStr
+def ps_json_stringify_at(ctx: *PsCtx, p: *void, ty: const *PsTy, file: const *char, line: i32) -> *PsStr
