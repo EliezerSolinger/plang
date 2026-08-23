@@ -674,6 +674,27 @@ def harness(c: Ctx, nome: str, argv: list<str>, vars: dict<str, str>,
     return log
 
 
+def piso(c: Ctx, prog: str, log: str, prefixo: str, minimo: str,
+         stamp: str, desc: str) -> str:
+    """O PISO de um placar: uma aresta que lê o número que a suíte imprimiu e o
+    compara com o mínimo aceite.
+
+    Ela é separada da aresta que RODA a suíte de propósito, e por duas razões: o
+    relatório continua a valer por si (quem quer o número lê o log), e mudar o
+    piso não obriga a re-rodar a suíte — muda só a aresta barata, porque o
+    mínimo entra no `argv` e portanto no hash dela.
+
+    Ver `pbuild/ps/piso.psc` para o que o programa faz."""
+    e = G.new_edge([prog if prog.startswith("/") else "./" + prog, log, prefixo, minimo, stamp])
+    e.ins.append(c.g.node(log).id)
+    e.ins.append(c.g.node(prog).id)
+    e.outs.append(c.g.node(stamp).id)
+    e.desc = desc
+    e.target = c.target.name
+    c.g.add_edge(e)
+    return stamp
+
+
 # ---------- um portão pela NEGATIVA ----------
 def nao_acha(c: Ctx, padrao: str, arquivos: list<str>, stamp: str, desc: str) -> str:
     """Passa quando o padrão NÃO aparece em nenhum dos arquivos.

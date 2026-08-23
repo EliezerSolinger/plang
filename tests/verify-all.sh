@@ -26,9 +26,13 @@ CC=${CC:-cc}
 CFLAGS="-O2 -std=c11 -w"
 FAIL=0
 
-# pisos dos scoreboards: cair abaixo é regressão (suba-os quando melhorarem)
-CSUITE_FLOOR=220
-WACCT_FLOOR=741
+# Os PISOS dos placares não moram mais aqui: moram no descritor, junto da suíte
+# que os mede (`pbuild/ps/build_plang.psc`, a função `verificacao`), e quem os
+# confere é uma aresta do grafo. Este arreio passou a LER o que o descritor diz,
+# para que exista um lugar só onde o número se sobe.
+piso_de() { grep -oE "\"$1\", \"[a-z-]+\", \"[^\"]+\", \"[0-9]+\"" pbuild/ps/build_plang.psc | grep -oE '[0-9]+"$' | tr -d '"'; }
+CSUITE_FLOOR=$(piso_de c-suite); CSUITE_FLOOR=${CSUITE_FLOOR:-220}
+WACCT_FLOOR=$(piso_de wacct);    WACCT_FLOOR=${WACCT_FLOOR:-741}
 
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 ok()   { printf '   \033[32mOK\033[0m %s\n' "${1:-}"; }

@@ -113,6 +113,8 @@ def programas() -> list<Programa>:
         Programa("verdict", "pbuild/ps/verdict.psc", []),
         # a suíte do próprio motor
         Programa("pbuild-engine", "pbuild/ps/engine_test.psc", []),
+        # o PISO de um placar (ver `piso.psc`)
+        Programa("piso", "pbuild/ps/piso.psc", []),
     ]
 
 
@@ -242,7 +244,7 @@ def suites_de_fora() -> list<str>:
     # aqui: uma verificação que roda menos que a de antes não é a mesma
     return ["cases", "modules", "stl", "p-suite", "errors", "pstudio", "roundtrip", "pscript"]
 
-async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, sdoc: str, fixo: str, editor: str) -> str:
+async def verificacao(c: T.Ctx, plangc: str, piso: str, suite: str, spkg: str, sdoc: str, fixo: str, editor: str) -> str:
     logs: list<str> = []
     logdir = path.join(BUILD, "t/log")
     gating = suites_de_fora()
@@ -310,6 +312,25 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, sdoc: str, f
     logs.append(T.harness(c, "packages", ["bash", "tests/packages.sh"],
                           {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/packages")},
                           [plangc], logdir, "pacotes (import <>)"))
+    logs.append(T.harness(c, "pbuild", ["bash", "tests/pbuild.sh"],
+                          {"PLANGC": plangc}, [plangc], logdir, "o motor do pbuild"))
+
+    # ---- os PLACARES, com o piso junto da suíte que o mede ----
+    #
+    # `c-suite` e `wacct` não passam nem falham: medem. O que as torna portão é o
+    # PISO, e ele vivia em duas variáveis de shell no topo do `verify-all.sh` —
+    # longe da suíte, e invisível para quem lê o descritor. Aqui cada uma é duas
+    # arestas: uma que roda e escreve o relatório, outra que lê o número dele e o
+    # compara. A segunda é barata e volta a correr sozinha quando alguém baixa o
+    # piso sem querer.
+    for placar in [["c-suite", "c-suite", "score: ", "220"],
+                   ["wacct", "wacct-valid", "wacct-valid: ", "741"]]:
+        lg = T.harness(c, placar[0], ["bash", "tests/run.sh", placar[1]],
+                       {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h/" + placar[0])},
+                       [plangc], logdir, "placar " + placar[0])
+        logs.append(T.piso(c, piso, lg, placar[2], placar[3],
+                           path.join(BUILD, "t/stamp", placar[0] + ".piso"),
+                           placar[0] + " >= " + placar[3]))
 
     # `ppack test` é a leitura em C do corpus mais a suíte caso a caso: as duas
     # medem a mesma coisa por caminhos diferentes, e juntas são o que `make
@@ -607,7 +628,7 @@ async def montar(query: str) -> G.Graph:
     suite = await suite_pscript(cps, bins["verdict"])
     spkg = await suite_pacotes(cps, bins["verdict"])
     sdoc = await suite_doctests(cps, bins["verdict"])
-    await verificacao(cps, PLANGC_S2, suite, spkg, sdoc, stamp, editor)
+    await verificacao(cps, PLANGC_S2, bins["piso"], suite, spkg, sdoc, stamp, editor)
 
     # o alvo padrão é o que "está construído" quer dizer: o compilador confere a
     # si mesmo, e as ferramentas de cima existem. As suítes são um alvo que se
