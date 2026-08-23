@@ -311,8 +311,23 @@ def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>)
     if obj in c.objs_feitos:
         if c.objs_feitos.get(obj, "") == assinatura:
             return obj
-        # dois comandos DIFERENTES para o mesmo objeto: aqui não se escolhe um.
-        # Cai no motor, que diz quais são as duas arestas.
+        # DOIS COMANDOS DIFERENTES para o mesmo fonte. Acontece de verdade e não
+        # é erro de ninguém: o mesmo `.c` de um pacote serve um programa que se
+        # compila com os `-D` do runtime e outro que se compila com os do SDL, e
+        # o objeto não pode ser o mesmo arquivo. Em vez de recusar (o que
+        # obrigaria cada arreio a inventar um objdir por combinação de flags), o
+        # objeto ganha o SELO do comando no nome. Determinístico: o mesmo comando
+        # dá sempre o mesmo selo, então o incremental continua a funcionar.
+        obj = obj[0:len(obj) - 2] + "." + selo(assinatura) + ".o"
+        # o `argv` acaba em `-MD -MF <dep> -c <fonte> -o <objeto>`: o objeto é o
+        # último e o `.d` é o quinto a contar do fim. Contar mal aqui trocava o
+        # FONTE pelo `.d`, e o `cc` queixava-se de não conseguir executar um
+        # pedaço do nome — uma mensagem que não tem nada que ver com o problema.
+        argv[len(argv) - 1] = obj
+        argv[len(argv) - 5] = obj + ".d"
+        assinatura = " ".join(argv)
+        if obj in c.objs_feitos:
+            return obj
     c.objs_feitos[obj] = assinatura
     e = G.new_edge(argv)
     e.ins.append(c.g.node(src).id)
@@ -324,6 +339,24 @@ def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>)
     e.target = c.target.name
     c.g.add_edge(e)
     return obj
+
+private def selo(s: str) -> str:
+    """Oito dígitos hexadecimais de FNV-1a. NÃO é criptográfico e não precisa de
+    ser: isto distingue dois comandos, não defende de ninguém — o hash que
+    defende é o do `sha2`, e está no gerenciador de pacotes."""
+    # FNV-1a de 32 bits, e de 32 e não de 64 por uma razão de aritmética: os
+    # inteiros aqui são de 64 bits COM SINAL e o transbordo é erro (não silêncio),
+    # então a constante de 64 bits do FNV nem literal pode ser. A de 32 cabe com
+    # folga no produto.
+    h = 2166136261
+    for ch in s:
+        h = ((h ^ ord(ch)) * 16777619) & 0xffffffff
+    d = ""
+    for i in range(8):
+        n = (h >> ((7 - i) * 4)) & 0xf
+        d += "0123456789abcdef"[n]
+    return d
+
 
 def obj_for(objdir: str, src: str) -> str:
     """O objeto de um fonte ESPELHA o caminho dele, e não o nome dele. Dois

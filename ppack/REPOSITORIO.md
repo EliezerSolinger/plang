@@ -226,14 +226,23 @@ Cada passo é útil sozinho, e nenhum precisa do seguinte:
    `publish` até um programa que usa o pacote instalado e roda). O `add` traz as
    dependências pela versão EXATA que o índice declara — seguir um pino não é
    resolver —, e discordância vira mensagem.
-5. **HTTP** — o mesmo caminho com outro transporte. É aqui que a rede entra, e
-   nada acima muda: o único ponto por onde bytes de fora entram é `R.buscar`.
-6. **Ed25519 e as duas assinaturas** — o modo seguro. Até aqui tudo corre em modo
-   unsafe, que é explícito, avisa em cada build e fica gravado no lock.
+5. ✅ **HTTP** — o mesmo caminho com outro transporte, e nada acima mudou: o
+   único ponto por onde bytes de fora entram é `R.buscar`, e o HTTP é um `if` lá
+   dentro. O `tests/repo.sh` faz a volta inteira duas vezes, por `file://` e por
+   `http://` contra um `python3 -m http.server`, e confere que o hash é o mesmo.
+   Sem TLS, e é decisão: a confiança vem do conteúdo, não da conexão.
+6. ✅ **Ed25519 e as duas assinaturas** — `packages/ed25519`, RFC 8032, com os
+   vetores da própria RFC (incluindo o de 1023 bytes, que é onde um erro de
+   padding do SHA-512 se esconde). `ppack keygen` faz a chave a partir do
+   `/dev/urandom` e de mais lado nenhum; `publish --key` assina o tarball (como
+   AUTOR) e o índice (como REPOSITÓRIO); `update` confere o índice contra a
+   chave gravada no lock e `add` confere cada tarball contra o autor que o
+   índice declara. Um repositório que não assina tem de se declarar `unsafe`, e
+   isso fica no lock para quem revisa o PR ver.
 
-### O que os quatro primeiros passos ensinaram
+### O que construir isto para valer ensinou
 
-Construir isto para valer achou cinco defeitos que nenhuma leitura acharia:
+Nove defeitos que nenhuma leitura acharia:
 
 * **o motor do build mentia duas vezes** — a pergunta `--deps` era feita sem o
   modo (`--out-dir`), então a 1.5(a) não aparecia na resposta e editar o lexer do
@@ -249,13 +258,23 @@ Construir isto para valer achou cinco defeitos que nenhuma leitura acharia:
   `xs.append(item as str)` num `try` reservava o lugar na lista antes de o valor
   existir, e o segfault aparecia longe do `catch`;
 * **`--ps-runtime` absoluto com fontes relativos** emitia um `#include` para fora
-  do espelho. Agora é recusado com a mesma regra que os pacotes já tinham.
+  do espelho. Agora é recusado com a mesma regra que os pacotes já tinham;
+* **faltar a palavra `in` numa chamada** dava "incompatible types in assignment
+  (scalar from 'Fe')" — verdade, e sobre nada. Agora diz qual é o parâmetro e
+  qual é a palavra;
+* **`implement X` colide entre pacotes**: dois pacotes que precisavam da
+  fronteira do pscript materializavam `CStr` os dois, e o linker queixava-se de
+  `CStr_at`. A regra que isso ensinou está agora escrita e aplicada — **quem
+  DECLARA o tipo é quem o materializa** (`packages/stl/cstr.p`), e a 1.5(a) leva
+  o arquivo a reboque de quem importa o header;
+* **um `out` preenchido campo a campo** era avisado como "nunca atribuído": o
+  analisador via `r = ...` e não via `f(out r.X)`;
+* **o mesmo `.c` com duas linhas de comando** (um programa com os `-D` do
+  runtime, outro com os do SDL) queria o mesmo `.o`. Agora o objeto leva o selo
+  do comando no nome, em vez de o grafo recusar e cada arreio inventar um objdir
+  por combinação de flags.
 
-E deixou uma lacuna anotada, para uma bateria: **pscript não tem teste de tipo**.
-`as` é checado e LEVANTA (55.2), o que serve para o nosso formato — um índice com
-a forma errada é um índice corrompido — mas ler um documento de fora obriga a
-usar `try` como controlo de fluxo. `is` é identidade e não serve. É a única coisa
-que se escreveu aqui torcendo a linguagem em vez de a usar.
+
 
 ## 7. `search`, e o que ele mostra
 
@@ -274,9 +293,19 @@ sai de graça: a lista já está no índice porque o compilador já a produz.
 
 ## 8. O que ainda não tem resposta
 
-1. **`make clean` em dois níveis** — hoje ele apaga `build/` inteiro, incluindo
-   os tarballs. A ideia de um segundo nível (limpar a compilação e guardar o que
-   veio de fora) ficou anotada e não decidida.
+1. ✅ **`make clean` em dois níveis** — feito, e a linha é a ORIGEM: `make clean`
+   apaga o que este repositório produziu e guarda `build/pkg` (o que ele
+   baixou), `make clean-all` apaga tudo. Voltar a baixar custa tempo e nunca
+   risco, porque o lock tem o hash.
 2. **O cache do `plangc run`** continua global até o `run` sair do compilador
    (F7); quando sair, vai para `build/run/` como tudo o mais.
-3. **O repositório PADRÃO** — o URL, e se a chave dele viaja no binário.
+3. **O repositório PADRÃO** — o URL, e se a chave dele viaja no binário. Sem
+   servidor não há o que decidir ainda; o que existe hoje é: sem `repos` no
+   `pack.json`, não há repositório nenhum, e a mensagem diz como se declara um.
+4. **HTTPS** — o transporte recusa-o em vez de fingir. A confiança vem do
+   conteúdo, então um espelho em `http://` serve; o que não serve é dizer que se
+   falou TLS quando não se falou.
+5. **pscript não tem teste de tipo.** `as` é checado e LEVANTA (55.2), o que
+   serve para o nosso formato, mas ler um documento de fora obriga a usar `try`
+   como controlo de fluxo. É a única coisa neste trabalho que se escreveu a
+   torcer a linguagem em vez de a usar, e é uma bateria a fazer.

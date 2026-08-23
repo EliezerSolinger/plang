@@ -11,7 +11,8 @@
 #   make check      # compila e roda um hello-world
 #   make doc X      # a documentação de um módulo ou pacote
 #   make ninja      # o build.ninja do bootstrap
-#   make clean
+#   make clean       # apaga o que se compilou, guarda o que se baixou
+#   make clean-all   # apaga build/ inteiro, dependências incluídas
 #
 # Numa máquina que só tem um compilador de C, `make` basta: nada aqui depende de
 # nada que não esteja no repositório.
@@ -108,8 +109,21 @@ test-qbe: build
 test-c89: build
 	STD=c89 bash tests/run.sh cases modules stl p-suite errors pscript
 
+# DOIS níveis, e a diferença é a origem do que se apaga.
+#
+# `clean` apaga o que ESTE repositório produziu e guarda o que ele BAIXOU
+# (`build/pkg`: os índices, os tarballs e as árvores abertas). Voltar a baixar
+# custa rede e tempo para nada — e não custa risco nenhum, porque o `pack.lock`
+# tem o hash de tudo.
+#
+# `clean-all` apaga `build/` inteiro, dependências incluídas. É o que se faz
+# quando se quer provar que um checkout limpo constrói.
 clean:
+	@if [ -d build ]; then find build -mindepth 1 -maxdepth 1 ! -name pkg -exec rm -rf {} + ; fi
+	rm -rf tests/out out plangc plangc2 .hello .hello.p .hello.c
+
+clean-all:
 	rm -rf build tests/out out plangc plangc2 .hello .hello.p .hello.c
 
 .PHONY: seed ppack build test verify ninja explain doc check selfhost \
-        pstudio pstudio-ps test-qbe test-c89 clean
+        pstudio pstudio-ps test-qbe test-c89 clean clean-all

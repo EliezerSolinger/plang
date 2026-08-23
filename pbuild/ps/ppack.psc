@@ -424,6 +424,34 @@ private async def api_do_pacote(dir: str, m: MF.Manifesto, query: str,
             hashes[rel] = a.hash
 
 
+async def cmd_keygen(alvos: list<str>) -> int:
+    """`ppack keygen <arquivo>` — uma chave nova.
+
+    Escreve a PRIVADA em `<arquivo>` (32 bytes em hexadecimal, e mais nada) e a
+    PÚBLICA em `<arquivo>.pub`. A privada não vai para `build/`, não vai para o
+    repositório e não é comitada: é a única coisa em todo este sistema que não se
+    partilha. A pública é para pôr no índice e no lock, onde ela é vista por
+    quem revisa."""
+    if len(alvos) == 0:
+        print("uso: ppack keygen <arquivo>")
+        return 2
+    alvo = alvos[0]
+    if path.isfile(alvo):
+        print(alvo + " já existe. Uma chave que se sobrescreve é uma chave perdida — apague-a à mão se é isso que quer.")
+        return 1
+    semente = await R.semente_nova()
+    hexa = ""
+    for b in semente:
+        hexa += "0123456789abcdef"[int(b) >> 4] + "0123456789abcdef"[int(b) & 15]
+    pub = R.chave_publica(semente)
+    await R.escrever_bytes(alvo, R.bytes_de_texto(hexa + "\n"))
+    await R.escrever_bytes(alvo + ".pub", R.bytes_de_texto(pub + "\n"))
+    print("privada: " + alvo + "   (NÃO comitar, NÃO partilhar)")
+    print("pública: " + alvo + ".pub")
+    print("   " + pub)
+    return 0
+
+
 private async def repos_do_projeto() -> list<R.Repo>:
     """Os repositórios deste projeto, na ordem de busca."""
     out: list<R.Repo> = []
@@ -460,19 +488,51 @@ async def cmd_update() -> int:
     n = 0
     for r in repos:
         bs = await R.buscar(r, "index.json")
+        sig = await R.assinatura_de(r, "index.json")
+        i = lk.repo_conhecido(r.url)
+        conhecida = lk.repos[i].chave if i >= 0 else ""
+        # ---- a assinatura do REPOSITÓRIO, e o TOFU ----
+        if len(conhecida) > 0:
+            # já se conhece a chave: daqui para a frente ela NÃO muda em silêncio
+            if not R.conferir(conhecida, bs, sig):
+                print(f"{r.url}: o índice NÃO confere com a chave que este projeto aceitou.")
+                print(f"   a chave está no pack.lock ({conhecida[0:16]}…) e passou por revisão de código quando lá entrou.")
+                print("   ou o índice foi trocado, ou o repositório mudou de chave — nos dois casos isto para aqui.")
+                return 1
+        elif len(sig) > 0:
+            # TOFU: primeira vez que se vê. A chave que assinou entra no LOCK, que
+            # é COMITADO — é assim que a confiança fica versionada e uma troca
+            # futura aparece num diff em vez de num aviso no terminal de uma
+            # pessoa só. Não se sabe de quem é a chave; sabe-se que a partir de
+            # agora tem de ser a mesma.
+            achou = ""
+            for nome in R.indice_chaves(R.ler_indice(str(bs), "índice")):
+                if R.conferir(nome, bs, sig):
+                    achou = nome
+            if len(achou) == 0:
+                print(f"{r.url}: o índice vem assinado, e a assinatura não bate com nenhuma chave que ele declara.")
+                print("   isto não é uma chave desconhecida: é uma assinatura errada.")
+                return 1
+            if i >= 0:
+                lk.repos[i].chave = achou
+            else:
+                lk.repos.append(LK.RepoConhecido(r.url, achou, R.agora_iso()[0:10]))
+            print(f"   chave do repositório aceite agora (TOFU) e gravada no pack.lock: {achou[0:16]}…")
+        else:
+            if not r.inseguro:
+                print(f"{r.url}: o índice NÃO vem assinado.")
+                print("   um repositório sem assinatura tem de o dizer: {\"url\": ..., \"unsafe\": true} no pack.json.")
+                return 1
+            if i < 0:
+                lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
+                print(f"   novo repositório, aceite agora (TOFU) e gravado no pack.lock: {r.url}")
+            print("   UNSAFE: este repositório não assina o índice. O hash de cada pacote continua a ser conferido.")
         alvo = path.join(R.dir_indices(), r.id + ".json")
         await R.escrever_bytes(alvo, bs)
         ix = R.ler_indice(str(bs), alvo)
         quantos = 0
-        for nome in ix.nomes():
-            quantos += len(ix.versoes(nome))
-        # TOFU: a primeira vez que se vê um repositório, ele entra no LOCK — que
-        # é comitado, e é por isso que a confiança fica versionada. Enquanto não
-        # há assinatura a chave é vazia, e o campo existe já para que o dia em
-        # que deixar de ser vazio apareça no diff.
-        if lk.repo_conhecido(r.url) < 0:
-            lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
-            print(f"   novo repositório, aceite agora (TOFU): {r.url}")
+        for nome2 in ix.nomes():
+            quantos += len(ix.versoes(nome2))
         print(f"{ix.nome if len(ix.nome) > 0 else r.url}: {len(ix.pacotes)} pacote(s), {quantos} versão(ões)")
         n += 1
     await LK.gravar(lk, "pack.lock")
@@ -577,9 +637,24 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
                 print(f"   o índice diz {u.sha256}")
                 print(f"   o que chegou {sha}")
                 return 1
+            # a assinatura do AUTOR, que é a que impede o próprio repositório de
+            # servir um tarball que o autor não fez. O HASH já foi conferido
+            # acima e é conferido SEMPRE — "unsafe" quer dizer que ninguém
+            # assinou, e não que o conteúdo não é olhado.
+            sem_assinatura = len(u.autor) == 0
+            if not sem_assinatura:
+                asg = await R.assinatura_de(r, u.arquivo)
+                if not R.conferir(u.autor, bs, asg):
+                    print(f"{n}@{v}: o índice diz que isto foi assinado por {u.autor[0:16]}…, e a assinatura não confere.")
+                    return 1
+            elif not (inseguro or r.inseguro):
+                print(f"{n}@{v} não vem assinado.")
+                print("   ou `--unsafe` neste comando, ou o repositório declarado `unsafe` no pack.json —")
+                print("   as duas formas gravam `\"unsafe\": true` no lock, para quem revisa o PR ver.")
+                return 1
             await R.escrever_bytes(path.join(R.dir_paks(), sha), bs)
             lk.pacotes.append(LK.Travado(n, v, sha, r.url, u.arquivo,
-                                         inseguro or r.inseguro or len(u.autor) == 0, u.toolchain))
+                                         sem_assinatura, u.toolchain))
             if lk.repo_conhecido(r.url) < 0:
                 lk.repos.append(LK.RepoConhecido(r.url, "", R.agora_iso()[0:10]))
             postos.append(n + " " + v + "  sha256 " + sha[0:16] + "…")
@@ -681,7 +756,7 @@ async def cmd_install() -> int:
     return 0
 
 
-async def cmd_publish(alvos: list<str>, para: str, query: str) -> int:
+async def cmd_publish(alvos: list<str>, para: str, chave: str, query: str) -> int:
     """`ppack publish <pacote> --to <dir>` — o `.tar`, o hash e a entrada no
     índice, no repositório local do autor.
 
@@ -747,7 +822,7 @@ async def cmd_publish(alvos: list<str>, para: str, query: str) -> int:
     u.arquivo = rel
     u.tamanho = len(bs)
     u.sha256 = sha
-    u.autor = ""           # até haver Ed25519, ninguém assinou: modo unsafe
+    u.autor = ""
     u.lang = m.lang
     u.raiz = m.raiz
     u.deps = m.deps
@@ -757,9 +832,25 @@ async def cmd_publish(alvos: list<str>, para: str, query: str) -> int:
     if m.nome not in ix.pacotes:
         vazio: dict<str, R.Versao> = {}
         ix.pacotes[m.nome] = vazio
+    assinado = False
+    if len(chave) > 0:
+        # a assinatura do AUTOR vai ao lado do tarball, e a chave que a fez vai
+        # no índice: quem confere não precisa de a ir buscar a lado nenhum
+        semente = await R.ler_semente(chave)
+        u.autor = R.chave_publica(semente)
+        await R.escrever_bytes(path.join(para, rel + ".sig"),
+                               R.bytes_de_texto(R.assinar(semente, bs) + "\n"))
+        assinado = True
     ix.pacotes[m.nome][m.versao] = u
     ix.atualizado = R.agora_iso()
-    await R.escrever_bytes(ixp, R.bytes_de_texto(R.escrever_indice(ix)))
+    texto_ix = R.escrever_indice(ix)
+    await R.escrever_bytes(ixp, R.bytes_de_texto(texto_ix))
+    if len(chave) > 0:
+        # ... e a do REPOSITÓRIO cobre o índice inteiro, que é o que impede uma
+        # lista velha de ser servida como se fosse a de agora
+        semente2 = await R.ler_semente(chave)
+        await R.escrever_bytes(ixp + ".sig",
+                               R.bytes_de_texto(R.assinar(semente2, R.bytes_de_texto(texto_ix)) + "\n"))
 
     if saida_json:
         print('{"name": ' + G.jstr(m.nome) + ', "version": ' + G.jstr(m.versao)
@@ -769,7 +860,11 @@ async def cmd_publish(alvos: list<str>, para: str, query: str) -> int:
     print(f"{m.nome} {m.versao} -> {path.join(para, rel)}")
     print(f"   sha256 {sha}")
     print(f"   {len(bs)} bytes, {len(u.api)} módulo(s) de interface no índice")
-    print("   SEM ASSINATURA: até haver Ed25519 tudo aqui é modo unsafe, e o hash é o que garante o conteúdo")
+    if assinado:
+        print("   assinado por " + u.autor[0:16] + "… (o tarball e o índice)")
+    else:
+        print("   SEM ASSINATURA: isto só serve para um repositório declarado `unsafe`.")
+        print("   `ppack keygen <arquivo>` e depois `--key <arquivo>` para assinar.")
     return 0
 
 
@@ -857,12 +952,24 @@ async def cmd_ninja(alvos: list<str>, query: str) -> int:
     return 0
 
 async def cmd_clean() -> int:
-    """A vassoura: apaga o que o build produziu e MANTÉM o que ele baixou
-    (`build/pkg`), porque baixar de novo custa rede para nada."""
+    """A vassoura: apaga o que o build PRODUZIU e mantém o que ele BAIXOU.
+
+    A linha é a origem: `build/pkg` (os índices, os tarballs e as árvores
+    abertas) veio de fora, e voltar a baixá-lo custa rede e tempo para nada — e
+    risco nenhum, porque o `pack.lock` tem o hash de tudo. Para apagar isso
+    também há `make clean-all`, que é o que se faz para provar que um checkout
+    limpo constrói."""
     n = 0
-    for d in ["build/obj", "build/bin", "build/log", "build/s1", "build/s2", "build/s3", "build/stamp"]:
-        if path.isdir(d):
-            n += rmtree(d)
+    if path.isdir("build"):
+        for nome in sorted(os.listdir("build")):
+            if nome == "pkg":
+                continue          # o que veio de fora fica; ver a docstring
+            d = path.join("build", nome)
+            if path.isdir(d):
+                n += rmtree(d)
+            else:
+                os.remove(d)
+                n += 1
     print("apagados:", n, "arquivo(s)")
     return 0
 
@@ -880,7 +987,9 @@ def rmtree(d: str) -> int:
 
 def uso():
     print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
-    print("     ppack publish <pacote> --to <dir>    o .tar, o hash e a entrada no índice")
+    print("     ppack keygen <arquivo>               uma chave nova (privada + .pub)")
+    print("     ppack publish <pacote> --to <dir> [--key <arquivo>]")
+    print("                                          o .tar, o hash, o índice e as duas assinaturas")
     print("     ppack update                         baixa os índices dos repositórios do projeto")
     print("     ppack search <termo>                 procura nome, descrição e SÍMBOLO, offline")
     print("     ppack add <nome>@<versão> [--unsafe] escreve no manifesto e no lock")
@@ -903,6 +1012,7 @@ async def main() -> int:
     # padrão apontando para um caminho que o build já não produz é uma armadilha
     # que só aparece muito depois, com uma mensagem que não fala do problema.
     para = ""
+    chave = ""
     inseguro = False
     query = ""
     for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
@@ -953,6 +1063,9 @@ async def main() -> int:
         elif a == "--to" and i + 1 < len(args):
             i += 1
             para = args[i]
+        elif a == "--key" and i + 1 < len(args):
+            i += 1
+            chave = args[i]
         elif a.startswith("-"):
             print("opção desconhecida:", a)
             return 2
@@ -978,7 +1091,9 @@ async def main() -> int:
     if cmd == "doc":
         return await cmd_doc(alvos, query)
     if cmd == "publish":
-        return await cmd_publish(alvos, para, query)
+        return await cmd_publish(alvos, para, chave, query)
+    if cmd == "keygen":
+        return await cmd_keygen(alvos)
     if cmd == "update":
         return await cmd_update()
     if cmd == "search":

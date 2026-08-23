@@ -130,6 +130,116 @@ else
     grep -q "hash NÃO bate" install2.log && ok || bad "a recusa não disse que foi o hash"
 fi
 
+# ---- 8. O MODO SEGURO: as duas assinaturas ----
+#
+# São duas, com donos diferentes: o REPOSITÓRIO assina o índice (contra uma
+# lista velha servida como se fosse a de agora) e o AUTOR assina cada versão
+# (contra o próprio repositório servir um tarball que o autor não fez).
+cd "$RAIZ"
+rm -rf "$OUT/seguro" "$OUT/chaves" "$OUT/projs"
+mkdir -p "$OUT/chaves"
+"$PPACK" keygen "$OUT/chaves/k" >"$OUT/keygen.log" 2>&1 && ok || bad "keygen"
+[ -f "$OUT/chaves/k.pub" ] && ok || bad "keygen não escreveu a pública"
+# uma chave que se sobrescreve é uma chave perdida
+"$PPACK" keygen "$OUT/chaves/k" >/dev/null 2>&1 && bad "keygen devia recusar sobrescrever" || ok
+
+"$PPACK" publish stl  --to "$OUT/seguro" --key "$OUT/chaves/k" >"$OUT/ps1.log" 2>&1 || bad "publish assinado (stl)"
+"$PPACK" publish sha2 --to "$OUT/seguro" --key "$OUT/chaves/k" >"$OUT/ps2.log" 2>&1 || bad "publish assinado (sha2)"
+[ -f "$OUT/seguro/index.json.sig" ] && ok || bad "o índice não foi assinado"
+[ -f "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar.sig" ] && ok || bad "o tarball não foi assinado"
+
+mkdir -p "$OUT/projs"
+cd "$OUT/projs"
+cat > pack.json <<EOF
+{
+  "members": ["nada"],
+  "repos": ["file://$RAIZ/$OUT/seguro/"]
+}
+EOF
+"$PPACK" update >update.log 2>&1 || bad "update em modo seguro"
+grep -q "TOFU" update.log && ok || bad "a primeira vez devia aceitar a chave (TOFU)"
+grep -q '"key": "[0-9a-f]\{64\}"' pack.lock && ok || bad "a chave devia ficar GRAVADA no lock"
+"$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add em modo seguro"
+grep -q '"unsafe": false' pack.lock && ok || bad "assinado não é unsafe"
+
+# a chave já é conhecida: o índice não muda em silêncio
+cp "$RAIZ/$OUT/seguro/index.json" "$RAIZ/$OUT/seguro/index.json.bak"
+sed -i 's/"size": /"size": 1/' "$RAIZ/$OUT/seguro/index.json"
+"$PPACK" update >u2.log 2>&1 && bad "um índice trocado devia ser recusado" || ok
+grep -q "chave que este projeto aceitou" u2.log && ok || bad "a recusa não falou da chave (veja $OUT/projs/u2.log)"
+mv "$RAIZ/$OUT/seguro/index.json.bak" "$RAIZ/$OUT/seguro/index.json"
+
+# um tarball trocado, com a assinatura antiga: o hash pega primeiro
+cd "$RAIZ"
+cp "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar" "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar.bak"
+printf 'x' | dd of="$OUT/seguro/pkg/sha2/sha2-0.1.0.tar" bs=1 seek=700 count=1 conv=notrunc status=none
+cd "$OUT/projs"
+rm -f pack.lock; rm -rf build
+cat > pack.json <<EOF
+{
+  "members": ["nada"],
+  "repos": ["file://$RAIZ/$OUT/seguro/"]
+}
+EOF
+"$PPACK" update >/dev/null 2>&1
+"$PPACK" add sha2@0.1.0 >add2.log 2>&1 && bad "um tarball trocado devia ser recusado" || ok
+grep -q "hash NÃO bate" add2.log && ok || bad "a recusa não falou do hash"
+cd "$RAIZ"
+mv "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar.bak" "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar"
+
+# um repositório SEM assinatura e sem se declarar `unsafe`: recusa
+mkdir -p "$OUT/projn"
+cd "$OUT/projn"
+cat > pack.json <<EOF
+{
+  "members": ["nada"],
+  "repos": ["file://$RAIZ/$OUT/repo/"]
+}
+EOF
+"$PPACK" update >un.log 2>&1 && bad 'um repositório sem assinatura e sem unsafe devia ser recusado' || ok
+grep -q "unsafe" un.log && ok || bad "a recusa não disse como se declara unsafe"
+cd "$RAIZ"
+
+# ---- 9. O MESMO CAMINHO, POR HTTP ----
+#
+# Nada acima muda: o transporte é um `if` dentro de `buscar`, e o resto do
+# gerenciador não sabe de onde vieram os bytes. O servidor é o `http.server` do
+# python, que é precisamente o ponto — um repositório é um diretório servido por
+# qualquer coisa.
+cd "$RAIZ"
+if command -v python3 >/dev/null 2>&1; then
+    PORTA=8731
+    ( cd "$OUT/repo" && python3 -m http.server $PORTA >/dev/null 2>&1 & echo $! > "$RAIZ/$OUT/httpd.pid" )
+    # espera o servidor atender, em vez de dormir um número mágico
+    i=0
+    while [ $i -lt 50 ] && ! (exec 3<>/dev/tcp/127.0.0.1/$PORTA) 2>/dev/null; do i=$((i+1)); sleep 0.1; done
+    mkdir -p "$OUT/proj-http"
+    cd "$OUT/proj-http"
+    cat > pack.json <<EOF
+{
+  "members": ["nada"],
+  "repos": [{"url": "http://127.0.0.1:$PORTA/", "unsafe": true}]
+}
+EOF
+    "$PPACK" update >update.log 2>&1 && ok || bad "update por HTTP"
+    "$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add por HTTP"
+    "$PPACK" install >install.log 2>&1 && ok || bad "install por HTTP"
+    ls -d build/pkg/sha2-0.1.0-* >/dev/null 2>&1 && ok || bad "a árvore não saiu do tarball baixado por HTTP"
+    # e o hash é o MESMO que veio pelo file:// — é isso que faz o transporte não
+    # importar
+    h1=$(grep -o '"sha256": "[0-9a-f]*"' pack.lock | head -1)
+    h2=$(grep -o '"sha256": "[0-9a-f]*"' "$RAIZ/$OUT/proj/pack.lock" | head -1)
+    check "o mesmo pacote, o mesmo hash, outro transporte" "$h2" "$h1"
+    # um caminho que não existe: HTTP 404, e a mensagem tem de o dizer
+    "$PPACK" update >/dev/null 2>&1
+    sed -i "s#127.0.0.1:$PORTA/#127.0.0.1:$PORTA/naoexiste/#" pack.json
+    "$PPACK" update >u404.log 2>&1 && bad "um índice que não existe devia falhar" || ok
+    grep -q "404" u404.log && ok || bad "a falha de HTTP não disse o estado (veja $OUT/proj-http/u404.log)"
+    cd "$RAIZ"
+    kill "$(cat "$OUT/httpd.pid")" 2>/dev/null
+    rm -f "$OUT/httpd.pid"
+fi
+
 cd "$RAIZ"
 echo "   repo: $pass ok, $fail failed"
 [ $fail = 0 ]
