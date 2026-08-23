@@ -45,6 +45,8 @@ o que vou emitir · quem sou · API pública + doc · diagnósticos.
 | — | paralelismo: **núcleos** (aqui satura em ~4: o caminho crítico é um arquivo) |
 | — | `--explain` sim; linha de status que se atualiza, não |
 | — | `ppack dev` reconstrói **e reinicia**; `build --repro` constrói duas vezes e compara |
+| — | `pool = console`: sem captura e SOZINHA na vez (`os.run(console=True)` por baixo) |
+| — | os **pisos** dos placares moram no descritor, junto da suíte que os mede |
 | — | **cruzamento na v1**; o alvo entra na chave de sujeira |
 | — | eventos: ciclo de vida da aresta e o total, nada mais |
 | — | erros do pbuild/ppack no **estilo do compilador** (`arquivo:linha:col:`) |
@@ -88,8 +90,9 @@ o que vou emitir · quem sou · API pública + doc · diagnósticos.
 | — | workspace: **pacote local por caminho**; publicar com dep por caminho é recusado |
 | — | vassoura apaga saídas, **mantém** os pacotes |
 | — | comandos: núcleo + **inspeção** (`why tree graph explain`) |
-| — | `add` mexe em manifesto e lock e **não constrói** |
-| — | doc no terminal e `--html` para uma pasta |
+| — | `add` mexe em manifesto e lock e **não constrói**; `lock` refaz o lock e não constrói |
+| — | `publish` **recusa** três: dep que o destino não resolve, `.psc` fora de `test/` em pacote `p`, e subida de versão que a interface desmente |
+| — | doc no terminal e `--html` para uma pasta (as duas, da mesma resposta 5) |
 | — | higiene: 3 erros (saída não produzida, ciclo, entrada inexistente) + avisos de suspeita |
 | — | o **próprio plang** vira workspace com `pack.json` na raiz |
 

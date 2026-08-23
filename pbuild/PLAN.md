@@ -1115,6 +1115,75 @@ promessa "um binário roda scripts" passou oficialmente ao `ppack`.
 
 ---
 
+# F9 — a releitura das especificações, e os buracos que ela achou
+
+Feita a 2026-08-23, com os documentos abertos ao lado do código: `DESIGN.md`,
+`ARQUITETURA.md`, `DECISOES.md`, `ppack/DESIGN.md` e `ppack/REPOSITORIO.md`,
+decisão por decisão, contra o que existe. **Seis decisões estavam escritas e não
+estavam feitas** — nenhuma delas aparecia como pendente em lugar nenhum, que é o
+que torna esta varredura o passo que faltava.
+
+- [x] **`pool = console` no EXECUTOR.** O campo existia no grafo e a exportação
+      para ninja escrevia-o; o executor ignorava-o. Faltava a metade de baixo:
+      `os.run(..., console=True)` é a AUSÊNCIA de captura — sem cano, o filho
+      herda os descritores deste processo — e a sema recusa `console=` junto com
+      `stdout=`, que seriam duas ordens contrárias sobre o mesmo descritor. Quem
+      serializa é o executor (três linhas no `take_ready`), e a suíte do motor
+      prova as duas metades de fora.
+- [x] **`ppack build --repro`.** Constrói duas vezes, do zero, e compara byte a
+      byte. As saídas da primeira são MOVIDAS para `build/repro/` — mover
+      preserva o arquivo como ele é (a permissão de execução inclusive) e
+      permite pô-lo de volta quando a segunda falha. O grafo da segunda monta-se
+      ANTES de mover fosse o que fosse: montá-lo é perguntar ao compilador, e o
+      compilador é uma das saídas.
+- [x] **`ppack doc --html <pasta>`.** O mesmo conteúdo do terminal como site
+      estático, da mesma resposta 5. A caminho apareceu um defeito com dono: o
+      `--api` do `ppack doc` nunca passava `--pkg-path`, então todo módulo que
+      importa `<pkg/mod.ph>` respondia "não achei".
+- [x] **os PISOS dos placares no descritor.** `c-suite >= 220` e
+      `wacct >= 741` viviam em duas variáveis de shell no topo do
+      `verify-all.sh`. Agora cada placar é duas arestas — uma que roda, outra
+      que lê o número e compara (`pbuild/ps/piso.psc`) — e as duas suítes
+      entram no `ppack verify`. O arreio LÊ o piso do descritor: um lugar só
+      onde se sobe um número.
+- [x] **`ppack lock`.** Estava na lista de comandos da v1 e não existia. Refaz o
+      lock a partir do manifesto, sem construir; recomeça em vez de remendar, e
+      por isso o que já ninguém puxa sai sozinho. A secção dos repositórios
+      sobrevive: as chaves aceites por TOFU não são resultado da resolução.
+- [x] **as três recusas do `publish`.** Dependência que o destino não resolve,
+      `.psc` fora de `test/` num pacote `lang: p`, e subida de versão que não
+      bate com a interface (`patch` não muda nada, `minor` só acrescenta). Todas
+      de graça: o índice já traz as dependências e a lista canónica da API.
+
+E três achados que não estavam em especificação nenhuma:
+
+- [x] **aspas triplas com aspas dentro.** `"""a "b" c"""` saía como `a  c`: o
+      decodificador aplicava a regra do C (literais adjacentes concatenam-se,
+      toda aspa é fronteira) ao corpo de uma string tripla. Ciclo de seed.
+- [x] **o contador do relatório não recomeçava.** `feitas` e o placar são
+      globais, e a segunda construção do mesmo processo dizia `[64/61]` — o
+      `ppack dev` fazia isso a cada mudança.
+- [x] **a suíte do motor não estava ligada a portão nenhum.** 89 conferências
+      que ninguém corria, e uma delas já tinha apodrecido em silêncio (esperava
+      dois pacotes no workspace, que hoje tem nove). Entrou no `verify`.
+
+## O que a releitura decidiu NÃO fazer, e por quê
+
+- [ ] **um pacote que traz `.c` PRÓPRIO** (2.13 e "o que cabe dentro de um
+      pacote"): a decisão diz que o C de um pacote é compilado pelo `plangc` e
+      que as flags dele são declaração no manifesto. O que existe hoje compila o
+      C que o COMPILADOR emite, com flags que o descritor passa — nenhum dos
+      nove pacotes traz um `.c` escrito à mão. Fazer o manifesto declarar
+      `csources`/`cflags` sem um consumidor é escolher a forma no escuro: como
+      se nomeiam os arquivos, se o caminho é relativo ao pacote, o que acontece
+      com a ordem de link, e se as flags valem para quem consome. Fica anotado
+      com o motivo, e não como esquecimento.
+- [ ] **o painel de `pack.json` do pstudio** (o que sobra da F6): é um
+      FORMULÁRIO, e onde ficam os campos é escolha de quem vai olhar para eles
+      todos os dias. A escolha de alvo — a parte útil — já existe na paleta.
+
+---
+
 # F8 — futuro registrado, SEM compromisso de ordem
 
 - [ ] **QBE embutido, forma (2)+(3)**: o C do QBE (18 220 linhas) compilado
