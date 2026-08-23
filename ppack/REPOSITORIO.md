@@ -38,24 +38,30 @@
 
 ## 2. O que existe hoje para pagar por isso (medido)
 
+Esta tabela foi escrita ANTES de o repositório existir, com três `❌` no fim. Ela
+fica aqui com o estado de hoje ao lado, porque a lista do que faltava é o mapa do
+que se fez — e porque as três peças que faltavam eram exactamente as três que
+tinham de ser código nosso.
+
 | peça | estado |
 |---|---|
 | transporte local (`file://`) | ✅ `os`/`path` na stdlib |
-| HTTP/1.1 | ✅ `pscript/lib/http.psc`, 689 linhas, conferido contra o llhttp (202/202) |
-| URL | ✅ `pscript/lib/url.psc`, 1 322 linhas, conferido contra o WPT (890/891) |
+| HTTP/1.1 | ✅ `packages/http`, conferido contra o llhttp (202/202) |
+| URL | ✅ `packages/url`, conferido contra o WPT (890/891) |
 | socket aguardável | ✅ `net.listen`/`connect`/`lookup`, com `poll` no escalonador |
 | índice pesquisável offline | ✅ `json` na stdlib + `dict` |
-| manifesto e workspace | ✅ `pbuild/ps/lib_manifest.psc`, com erro posicionado |
-| grafo de pacotes, `tree`, `why` | ✅ `pbuild/ps/lib_pkg.psc` |
+| manifesto e workspace | ✅ `packages/pbuild/lib_manifest.psc`, com erro posicionado |
+| grafo de pacotes, `tree`, `why` | ✅ `packages/pbuild/lib_pkg.psc` |
 | hash de interface por módulo | ✅ `plangc --api` (resposta 5), agora por linguagem |
 | versão e hash do compilador | ✅ `plangc --version` |
-| cliente HTTP montado | ◐ as peças existem; o embrulho são ~40 linhas |
-| **SHA-256** | ❌ o `hash_str` é FNV — sujeira de build, não adversário |
-| **Ed25519** | ❌ nada |
-| **tar** | ❌ nada |
+| cliente HTTP montado | ✅ `lib_repo.buscar` — o transporte é um `if` |
+| **SHA-256** | ✅ `packages/sha2` (FIPS 180-4 §6.2 e §6.4), em P, e atravessa a fronteira |
+| **Ed25519** | ✅ `packages/ed25519` (RFC 8032), em P; NÃO é de tempo constante, e o `.ph` diz-o |
+| **tar** | ✅ `packages/tar`, ustar, e a lista do que ele RECUSA está no módulo |
 
-**Falta um hash, uma assinatura e um envelope** — os três em código nosso, sem
-dependência nova. É o que os torna possíveis dentro da regra da casa.
+Faltavam um hash, uma assinatura e um envelope. Os três existem, os três são
+nossos, e nenhum trouxe dependência nova — que era a condição para eles serem
+possíveis dentro da regra da casa.
 
 ## 3. A forma de um repositório
 
@@ -312,8 +318,10 @@ sai de graça: a lista já está no índice porque o compilador já a produz.
    apaga o que este repositório produziu e guarda `build/pkg` (o que ele
    baixou), `make clean-all` apaga tudo. Voltar a baixar custa tempo e nunca
    risco, porque o lock tem o hash.
-2. **O cache do `plangc run`** continua global até o `run` sair do compilador
-   (F7); quando sair, vai para `build/run/` como tudo o mais.
+2. ✅ **O cache do `plangc run`** — resolvido: o `run` saiu do compilador (F7) e o
+   armazém foi com ele. Um script solto constrói em `build/run/` ao lado do
+   próprio script (ou onde `--build-dir` disser), e o `~/.cache/pscript` era a
+   última coisa deste sistema que escrevia fora da árvore.
 3. **O repositório PADRÃO** — o URL, e se a chave dele viaja no binário. Sem
    servidor não há o que decidir ainda; o que existe hoje é: sem `repos` no
    `pack.json`, não há repositório nenhum, e a mensagem diz como se declara um.

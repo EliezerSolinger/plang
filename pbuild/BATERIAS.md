@@ -475,3 +475,56 @@ Duas coisas que a implementação tem de fazer e que não se veem na assinatura:
 * `os.alive` **COLHE** o que já morreu (`waitpid` com `WNOHANG`). Sem isso cada
   programa lançado deixava um zumbi, e um laço que relança de dez em dez
   segundos enche a tabela de processos numa tarde.
+
+## Aspas triplas: o corpo é o corpo
+
+`"""a "b c" d"""` saía como `a  d`, e a distância entre o defeito e o sítio onde
+ele mora é o que o torna interessante.
+
+O lexer estava certo desde o princípio: ele guarda as seis aspas e tudo o que
+está entre elas, e é o único literal que pode conter uma quebra de linha crua.
+Quem errava era o decodificador — `str_lit_decode`, o mesmo para as duas
+linguagens e para o front end de C —, que implementa uma regra do C: **literais
+adjacentes concatenam-se**, `"a" "b"` é `ab`, e portanto TODA aspa é uma
+fronteira. Aplicada ao corpo de uma string tripla, essa regra corta-o em cada
+aspa interna e cola os pedaços que sobram.
+
+Duas coisas ficam ditas, porque a correção depende das duas:
+
+* **a regra da concatenação é do C e só do C.** O pscript não a tem (`"a" "b"`
+  é erro de sintaxe lá), e o P herda-a por escrever C. Uma string tripla nunca
+  participou dela;
+* **a tabela de escapes é UMA.** Ela saiu para uma função que os dois caminhos
+  partilham — um literal do C pára na aspa dele, uma tripla pára onde o lexema
+  acaba — porque duas tabelas separadas divergem no dia em que alguém
+  acrescentar um escape a uma delas e esquecer a outra.
+
+O defeito apareceu a escrever uma folha de estilo dentro de uma docstring:
+`"Segoe UI"` chegava ao HTML como nada. Um lugar improvável, que é onde estes
+costumam estar — o corpus de testes da linguagem não tem CSS.
+
+## `os.run(console=True)`: a ausência de captura
+
+O `pool = console` do ninja existia no nosso grafo como palavra: o campo estava
+lá, a exportação para ninja escrevia-o, e o executor ignorava-o. Faltava a
+metade de baixo, e ela não é "capturar de outro jeito" — é **não capturar**.
+
+Sem cano: o filho herda os descritores deste processo. É a diferença entre um
+programa que imprime e um programa que pinta a tela, lê o teclado, sabe o
+tamanho da janela e recebe Ctrl-C — a mesma diferença que o `os.exec` já tinha
+tornado nítida do outro lado.
+
+Três decisões que a implementação obrigou a tomar, e que valem para quem
+escrever a próxima:
+
+* **`console=` e `stdout=` juntos são recusados na sema.** São duas ordens
+  contrárias sobre o mesmo descritor, e escolher uma delas em silêncio é o tipo
+  de gentileza que custa uma tarde;
+* **o evento sai com a saída vazia**, e não com uma paráfrase. O que o programa
+  imprimiu já foi visto por quem estava a olhar; inventar um texto aqui seria
+  repetir o que o utilizador leu;
+* **quem serializa é o EXECUTOR, não o runtime.** A captura existe no resto do
+  build para impedir que dois trabalhos costurem as linhas um do outro (o achado
+  da 107); sem captura, a única forma de manter essa propriedade é não haver
+  dois ao mesmo tempo. São três linhas na função que escolhe a próxima aresta —
+  e o runtime não precisa de saber que existe um grafo.
