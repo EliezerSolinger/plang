@@ -5,5 +5,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "coleções genéricas por header: vec, str, dict, map, set, list, queue, slice, hash, traits"
+  "description": "generic collections by header: vec, str, dict, map, set, list, queue, slice, hash, traits"
 }

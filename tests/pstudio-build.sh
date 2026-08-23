@@ -1,77 +1,77 @@
 #!/usr/bin/env bash
-# pstudio-build.sh — o MOTOR DE BUILD dentro do editor (F6).
+# pstudio-build.sh — the BUILD ENGINE inside the editor (F6).
 #
-# A F6 promete que o editor não fala com um processo de build: ele importa o
-# motor (`packages/pbuild`) e corre-o no mesmo escalonador que trata o teclado.
-# Isso é uma afirmação que, sem este arreio, só se poderia conferir olhando para
-# uma janela — e é justamente o tipo de coisa que apodrece sem ser vista.
+# F6 promises that the editor does not talk to a build process: it imports the
+# engine (`packages/pbuild`) and runs it on the same scheduler that handles the
+# keyboard. That is a claim which, without this harness, could only be checked by
+# looking at a window — and it is exactly the kind of thing that rots unseen.
 #
-# O descritor é do PROJETO e o editor não o conhece (nem devia: ele abre
-# qualquer árvore). Quem o conhece é o `ppack` dessa árvore, então o editor
-# pergunta-lhe o GRAFO e corre-o. A serialização é o preço de o editor servir
-# mais do que um projeto.
+# The descriptor belongs to the PROJECT and the editor does not know it (nor
+# should it: it opens any tree). Who knows it is that tree's `ppack`, so the
+# editor asks IT for the graph and runs it. The serialization is the price of the
+# editor serving more than one project.
 set -u
 cd "$(dirname "$0")/.."
 
 PSTUDIO=${PSTUDIO:-build/bin/pstudio}
 ok=0; fail=0
-check() { if [ "$2" = "$3" ]; then ok=$((ok+1)); else echo "  FAIL $1: esperava '$2', veio '$3'"; fail=$((fail+1)); fi; }
+check() { if [ "$2" = "$3" ]; then ok=$((ok+1)); else echo "  FAIL $1: expected '$2', got '$3'"; fail=$((fail+1)); fi; }
 
-[ -x "$PSTUDIO" ] || { echo "   pstudio-build: sem editor construído — pulado"; exit 0; }
+[ -x "$PSTUDIO" ] || { echo "   pstudio-build: no editor built — skipped"; exit 0; }
 
-# 1. um alvo pequeno: ele constrói, e diz quantas arestas
-saiu=$("$PSTUDIO" --build build/bin/verdict 2>&1 | head -1)
-case $saiu in
-    "build ok"*|"nada a fazer") ok=$((ok+1)) ;;
-    *) echo "  FAIL um alvo simples: veio '$saiu'"; fail=$((fail+1)) ;;
+# 1. a small target: it builds, and says how many edges
+got=$("$PSTUDIO" --build build/bin/verdict 2>&1 | head -1)
+case $got in
+    "build ok"*|"nothing to do") ok=$((ok+1)) ;;
+    *) echo "  FAIL a simple target: got '$got'"; fail=$((fail+1)) ;;
 esac
 
-# 2. o grafo veio inteiro (o editor pergunta-o ao ppack e corre-o com o motor)
-n=$("$PSTUDIO" --build build/bin/verdict 2>&1 | grep -oE 'alvos no grafo: [0-9]+' | grep -oE '[0-9]+')
-if [ "${n:-0}" -gt 100 ]; then ok=$((ok+1)); else echo "  FAIL o grafo devia ter centenas de alvos, veio ${n:-0}"; fail=$((fail+1)); fi
+# 2. the graph came whole (the editor asks ppack for it and runs it with the engine)
+n=$("$PSTUDIO" --build build/bin/verdict 2>&1 | grep -oE 'targets in the graph: [0-9]+' | grep -oE '[0-9]+')
+if [ "${n:-0}" -gt 100 ]; then ok=$((ok+1)); else echo "  FAIL the graph should have hundreds of targets, got ${n:-0}"; fail=$((fail+1)); fi
 
-# 3. um alvo que não existe é uma mensagem, e o status diz que falhou
-"$PSTUDIO" --build naoexisteisto >/dev/null 2>&1 && { echo "  FAIL um alvo inexistente devia falhar"; fail=$((fail+1)); } || ok=$((ok+1))
-msg=$("$PSTUDIO" --build naoexisteisto 2>&1 | head -1)
+# 3. a target that does not exist is a message, and the status says it failed
+"$PSTUDIO" --build nosuchtarget >/dev/null 2>&1 && { echo "  FAIL a nonexistent target should fail"; fail=$((fail+1)); } || ok=$((ok+1))
+msg=$("$PSTUDIO" --build nosuchtarget 2>&1 | head -1)
 case $msg in
-    *"alvo desconhecido"*) ok=$((ok+1)) ;;
-    *) echo "  FAIL a mensagem não disse que o alvo é desconhecido: '$msg'"; fail=$((fail+1)) ;;
+    *"unknown target"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL the message did not say the target is unknown: '$msg'"; fail=$((fail+1)) ;;
 esac
 
-# 5. o PLAY: constrói e LANÇA o programa, e depois consegue matá-lo. É a outra
-#    metade da F6, e a que precisou de uma primitiva nova (`os.spawn`).
-saiu2=$("$PSTUDIO" --run build/bin/verdict 2>&1 | tail -1)
-check "o play lança o programa" "lançou True" "$saiu2"
+# 5. the PLAY: it builds and LAUNCHES the program, and can then kill it. That is
+#    the other half of F6, and the one that needed a new primitive (`os.spawn`).
+got2=$("$PSTUDIO" --run build/bin/verdict 2>&1 | tail -1)
+check "play launches the program" "launched True" "$got2"
 
-# 6. O MANIFESTO (o que sobrava da F6). O "painel" não é um formulário: é a
-#    paleta a fazer as duas coisas que são chatas de escrever à mão e fáceis de
-#    escrever errado — escolher um alvo padrão que EXISTE, e acrescentar uma
-#    dependência, que não se escreve mas se resolve. Editar o resto do
-#    `pack.json` é abrir o `pack.json`, que é o que um editor de texto faz.
+# 6. THE MANIFEST (what was left of F6). The "panel" is not a form: it is the
+#    palette doing the two things that are annoying to write by hand and easy to
+#    write wrong — choosing a default target that EXISTS, and adding a
+#    dependency, which you do not write but resolve. Editing the rest of
+#    `pack.json` is opening `pack.json`, which is what a text editor does.
 MT=$(mktemp -d)
 cat > "$MT/pack.json" <<'EOF'
 {
-  "members": ["nada"],
-  "default": "build/bin/velho",
+  "members": ["nothing"],
+  "default": "build/bin/old",
   "deps": {}
 }
 EOF
-saiu3=$("$PSTUDIO" --manifest "$MT" 2>&1)
-case $saiu3 in
-    *"no manifesto True"*) ok=$((ok+1)) ;;
-    *) echo "  FAIL o alvo padrão não foi escrito:"; echo "$saiu3" | head -4; fail=$((fail+1)) ;;
+got3=$("$PSTUDIO" --manifest "$MT" 2>&1)
+case $got3 in
+    *"in the manifest True"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL the default target was not written:"; echo "$got3" | head -4; fail=$((fail+1)) ;;
 esac
-case $saiu3 in
-    *"uma só vez 1 e é o novo True"*) ok=$((ok+1)) ;;
-    *) echo "  FAIL a chave existente devia ser SUBSTITUÍDA, não repetida"; fail=$((fail+1)) ;;
+case $got3 in
+    *"only once 1 and it is the new one True"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL the existing key should be REPLACED, not repeated"; fail=$((fail+1)) ;;
 esac
-case $saiu3 in
-    *"e não escreveu True"*) ok=$((ok+1)) ;;
-    *) echo "  FAIL uma dependência que não se resolve não pode entrar no manifesto"; fail=$((fail+1)) ;;
+case $got3 in
+    *"and it wrote nothing True"*) ok=$((ok+1)) ;;
+    *) echo "  FAIL a dependency that does not resolve cannot enter the manifest"; fail=$((fail+1)) ;;
 esac
-# e o resto do arquivo ficou como estava — é a promessa que faz isto ser
-# utilizável num arquivo que alguém comita
-grep -q '"members": \["nada"\]' "$MT/pack.json" && ok=$((ok+1)) || { echo "  FAIL o resto do pack.json não sobreviveu"; cat "$MT/pack.json"; fail=$((fail+1)); }
+# and the rest of the file stayed as it was — that is the promise that makes this
+# usable on a file somebody commits
+grep -q '"members": \["nothing"\]' "$MT/pack.json" && ok=$((ok+1)) || { echo "  FAIL the rest of pack.json did not survive"; cat "$MT/pack.json"; fail=$((fail+1)); }
 rm -rf "$MT"
 
 echo "   pstudio-build: $ok ok, $fail failed"

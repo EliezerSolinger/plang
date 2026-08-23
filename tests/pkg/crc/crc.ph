@@ -1,8 +1,8 @@
-"""CRC-32 — e a razão de este pacote existir.
+"""CRC-32 — and the reason this package exists.
 
-Ele é o caso da 2.13: um pacote que traz **C escrito à mão**. O `.p` daqui não
-implementa nada — ele DECLARA o que o C oferece (`include "crc32.h"`) e reexporta
-com um nome de P. Quem constrói é que sabe compilar aquele `.c`, com as flags que
-o manifesto declarou, e ligá-lo ao programa.
+It is 2.13's case: a package that brings **hand-written C**. The `.p` here
+implements nothing — it DECLARES what the C offers (`include "crc32.h"`) and
+re-exports it with a P name. Whoever builds is the one who knows how to compile
+that `.c`, with the flags the manifest declared, and link it into the program.
 """
-def crc32_de(s: const *char) -> u32
+def crc32_of(s: const *char) -> u32

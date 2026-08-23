@@ -6,5 +6,5 @@
   "deps": {"stl": "0.1.0", "sha2": "0.1.0"},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "Ed25519 (RFC 8032): assinar e verificar, para o modo seguro do gerenciador de pacotes"
+  "description": "Ed25519 (RFC 8032): sign and verify, for the package manager's safe mode"
 }

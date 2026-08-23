@@ -6,5 +6,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "ustar: ler e escrever o envelope que o ecossistema usa, recusando o que não entende"
+  "description": "ustar: read and write the envelope the ecosystem uses, refusing what it does not understand"
 }

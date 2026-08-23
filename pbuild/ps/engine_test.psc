@@ -635,9 +635,9 @@ async def case_packages():
 
     They are the two questions every large lock eventually provokes, and the
     fixture has exactly the shape that makes them interesting: `txt` depends on
-    `geo`, and `cor` on nobody."""
+    `geo`, and `color` on nobody."""
     reset()
-    members: list<str> = ["tests/pkg/geo", "tests/pkg/txt", "tests/pkg/cor"]
+    members: list<str> = ["tests/pkg/geo", "tests/pkg/txt", "tests/pkg/color"]
     m = await PK.read_world(members)
     check("packages: all three", "3", str(len(m.packages)))
     check("packages: nothing missing", "0", str(len(m.missing)))
@@ -648,7 +648,7 @@ async def case_packages():
     t = PK.tree(m)
     check("tree: txt is a root", "True", str(t.find("txt 0.2.0") >= 0))
     check("tree: and geo hangs off it", "True", str(t.find("└─ geo 0.1.0") >= 0))
-    check("tree: cor is a root too", "True", str(t.find("cor 0.1.0") >= 0))
+    check("tree: color is a root too", "True", str(t.find("color 0.1.0") >= 0))
 
     # a dependency nobody offers is said ONCE, with the name of whoever asked —
     # and not in silence, which is how a build starts to lie
@@ -677,7 +677,7 @@ async def case_package_with_c():
     f = await open(prog, "w")
     await f.write("include <stdio.h>\nimport <crc/crc.ph>\n\n"
                   + "def main() -> int:\n"
-                  + "    printf(\"%u\\n\", crc32_de(\"123456789\"))\n"
+                  + "    printf(\"%u\\n\", crc32_of(\"123456789\"))\n"
                   + "    return 0\n")
     await f.close()
     g = G.new_graph()
@@ -757,7 +757,7 @@ async def case_manifest():
 
     w = await M.read("tests/pkg/pack.json")
     check("manifest: a workspace knows itself", "True", str(w.is_workspace))
-    check("manifest: the members", "geo txt cor crc", " ".join(w.members))
+    check("manifest: the members", "geo txt color crc", " ".join(w.members))
 
     # the search ROOT comes out of the workspace: it is the directory that
     # CONTAINS the members, because that is how `import <geo/geo.ph>` resolves
@@ -778,12 +778,12 @@ async def case_manifest():
     nonlocal msg
     msg = ""
     try:
-        await M.read("tests/pkg/ruim/pack.json")
+        await M.read("tests/pkg/bad/pack.json")
         msg = "it did not raise"
     catch e:
         msg = e.message
     check("manifest: the error has a position", "True",
-          str(msg.find("tests/pkg/ruim/pack.json:2:3: error:") == 0))
+          str(msg.find("tests/pkg/bad/pack.json:2:3: error:") == 0))
     check("manifest: and it says what was wrong", "True", str(msg.find("lowercase") > 0))
 
 async def case_arm_limit():

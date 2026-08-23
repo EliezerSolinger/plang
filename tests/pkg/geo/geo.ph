@@ -1,7 +1,7 @@
-"""Geometria: area e perimetro."""
+"""Geometry: area and perimeter."""
 
 def geo_area(w: i64, h: i64) -> i64:
-    """A area do retangulo w x h."""
+    """The area of the w x h rectangle."""
 
 def geo_perim(w: i64, h: i64) -> i64:
-    """O perimetro."""
+    """The perimeter."""

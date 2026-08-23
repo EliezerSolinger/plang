@@ -8,5 +8,5 @@
   "csources": ["src/crc32.c"],
   "cflags": ["-DCRC_POLY=0xEDB88320", "-Iinclude"],
   "toolchain": ">= 0.1.0",
-  "description": "CRC-32 com o miolo em C: o pacote que prova que um pacote pode trazer C"
+  "description": "CRC-32 with its core in C: the package that proves a package can bring C"
 }

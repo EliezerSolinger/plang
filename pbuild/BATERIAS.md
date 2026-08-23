@@ -234,8 +234,8 @@ interface) e *"dá-me este módulo dele"*. A raiz é `<pacote>/<pacote>.psc` —
 módulo com o nome do pacote —, que é a mesma convenção que o nome do diretório
 já usa.
 
-O nome do espaço é o ÚLTIMO pedaço sem extensão nos dois casos: `<cor>` dá `cor`
-e `<cor/tons.psc>` dá `tons`. `as` continua a valer.
+O nome do espaço é o ÚLTIMO pedaço sem extensão nos dois casos: `<color>` dá
+`color` e `<color/shades.psc>` dá `shades`. `as` continua a valer.
 
 Resolução e recusa são as mesmas do `<pkg/mod.ph>`: procura nas raízes de
 `--pkg-path`, na ordem, e um `<>` não achado é ERRO — nunca uma tentativa

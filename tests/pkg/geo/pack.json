@@ -6,5 +6,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "área e perímetro: o pacote P mais simples que se pode escrever"
+  "description": "area and perimeter: the simplest P package you can write"
 }

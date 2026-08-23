@@ -1,10 +1,10 @@
 {
-  "name": "cor",
+  "name": "color",
   "version": "0.1.0",
   "lang": "pscript",
-  "root": "cor.psc",
+  "root": "color.psc",
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "um pacote pscript de brincadeira: a raiz e um módulo interno"
+  "description": "a toy pscript package: the root and one internal module"
 }

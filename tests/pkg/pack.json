@@ -1,4 +1,4 @@
 {
-  "members": ["geo", "txt", "cor", "crc"],
+  "members": ["geo", "txt", "color", "crc"],
   "default": "geo"
 }

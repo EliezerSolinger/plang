@@ -1,3 +1,4 @@
-/* a interface do C, achada por `-Iinclude` — que é relativo ao PACOTE e não a
-   quem o constrói. É esta linha que o `cflags_do_pacote` existe para reescrever. */
+/* the C interface, found through `-Iinclude` — which is relative to the PACKAGE
+   and not to whoever builds it. It is this line that `package_cflags` exists to
+   rewrite. */
 unsigned crc32_bytes(const char *data, unsigned n);

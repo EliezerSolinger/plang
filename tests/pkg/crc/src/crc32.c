@@ -1,10 +1,10 @@
-/* CRC-32 (o do zip e do PNG), sem tabela: um pacote pode trazer C, e este é o
-   C mais simples que ainda prova alguma coisa — ele depende de um `-D` que o
-   manifesto declara (CRC_POLY) e de um `-I` que o manifesto declara. */
+/* CRC-32 (zip's and PNG's), with no table: a package can bring C, and this is
+   the simplest C that still proves something — it depends on a `-D` the manifest
+   declares (CRC_POLY) and on an `-I` the manifest declares. */
 #include "crc32.h"
 
 #ifndef CRC_POLY
-#error "CRC_POLY tinha de vir do manifesto"
+#error "CRC_POLY had to come from the manifest"
 #endif
 
 unsigned crc32_bytes(const char *data, unsigned n) {

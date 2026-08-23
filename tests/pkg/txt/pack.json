@@ -6,5 +6,5 @@
   "deps": { "geo": ">= 0.1.0" },
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "um pacote que depende de outro, que é o caso que importa"
+  "description": "a package that depends on another, which is the case that matters"
 }

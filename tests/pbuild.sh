@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# tests/pbuild.sh — o MOTOR do pbuild (F2B), mecanismo por mecanismo.
+# tests/pbuild.sh — pbuild's ENGINE (F2B), mechanism by mechanism.
 #
-# O motor é escrito em pscript (pbuild/ps/lib_{graph,log,build}.psc) e o que
-# este arreio faz é compilá-lo e rodar a suíte que vive ao lado dele — o mesmo
-# arranjo do `pui_test.psc` do editor: o teste mora com o módulo.
+# The engine is written in pscript (pbuild/ps/lib_{graph,log,build}.psc) and what
+# this harness does is compile it and run the suite that lives next to it — the
+# same arrangement as the editor's `pui_test.psc`: the test lives with the module.
 #
-# O que a suíte prende está dito lá dentro, caso a caso, mas a ideia é uma só:
-# um build só tem um defeito que importa, que é NÃO refazer o que mudou. Todo
-# caso aqui é uma forma de isso acontecer.
+# What the suite pins down is stated inside it, case by case, but the idea is a
+# single one: a build has only one defect that matters, which is NOT redoing what
+# changed. Every case here is a way for that to happen.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -16,7 +16,7 @@ OUT=tests/out/pbuild-bin
 mkdir -p "$OUT"
 
 if ! PLANGC="$PLANGC" bash tests/psbuild.sh pbuild/ps/engine_test.psc "$OUT/engine" 2>"$OUT/build.err"; then
-    echo "  FAIL: o motor do pbuild não compila"
+    echo "  FAIL: pbuild's engine does not compile"
     head -5 "$OUT/build.err"
     exit 1
 fi
@@ -25,101 +25,102 @@ rm -rf tests/out/pbuild
 rc=$?
 [ $rc = 0 ] || exit $rc
 
-# ---- F3: o descritor deste repositório, a CLI, e a exportação ----
-# Um ENSAIO (`-n`) percorre o grafo inteiro sem rodar nada: ele prova que o
-# descritor monta, que o compilador responde às quatro perguntas, que o grafo
-# passa na higiene (sem duplicata, sem ciclo, sem entrada órfã) e que a ordem
-# fecha. Custa segundos e cobre a cadeia toda.
+# ---- F3: this repository's descriptor, the CLI, and the export ----
+# A DRY RUN (`-n`) walks the whole graph without running anything: it proves that
+# the descriptor assembles, that the compiler answers the four questions, that
+# the graph passes hygiene (no duplicate, no cycle, no orphan input) and that the
+# order closes. It costs seconds and covers the whole chain.
 if ! PLANGC="$PLANGC" bash tests/psbuild.sh pbuild/ps/ppack.psc "$OUT/ppack" 2>"$OUT/ppack.err"; then
-    echo "  FAIL: o ppack não compila"
+    echo "  FAIL: ppack does not compile"
     head -5 "$OUT/ppack.err"
     exit 1
 fi
-# quantas arestas o ensaio RODA depende do que já está no disco (é um build
-# incremental como outro qualquer); o que se cobra aqui é que ele feche sem
-# reclamar de nada — os erros de higiene saem no quinto evento, com "erro:" na
-# frente, e qualquer um deles invalida o grafo inteiro
-if ! "$OUT/ppack" build -n --query "$PLANGC" >"$OUT/ensaio.log" 2>&1; then
-    echo "  FAIL: o ensaio do descritor não fecha"
-    grep -v '^\[' "$OUT/ensaio.log" | head -5
+# how many edges the dry run RUNS depends on what is already on disk (it is an
+# incremental build like any other); what is demanded here is that it closes
+# without complaining about anything — the hygiene errors come out in the fifth
+# event, with "error:" in front, and any one of them invalidates the whole graph
+if ! "$OUT/ppack" build -n --query "$PLANGC" >"$OUT/dryrun.log" 2>&1; then
+    echo "  FAIL: the descriptor's dry run does not close"
+    grep -v '^\[' "$OUT/dryrun.log" | head -5
     exit 1
 fi
-if grep -q '^erro:' "$OUT/ensaio.log"; then
-    echo "  FAIL: o grafo do descritor não passa na higiene"
-    grep '^erro:' "$OUT/ensaio.log" | head -5
+if grep -q '^error:' "$OUT/dryrun.log"; then
+    echo "  FAIL: the descriptor's graph does not pass hygiene"
+    grep '^error:' "$OUT/dryrun.log" | head -5
     exit 1
 fi
-echo "   pbuild-descritor: o ensaio fecha e o grafo passa na higiene"
+echo "   pbuild-descriptor: the dry run closes and the graph passes hygiene"
 
-# a exportação para ninja, sobre o grafo DE VERDADE: o que se confere aqui é que
-# ela sai, que sai igual duas vezes, e que todo `$` do texto está escapado — o
-# aspeamento fino tem casos próprios na suíte do motor
+# the export to ninja, over the REAL graph: what is checked here is that it comes
+# out, that it comes out the same twice, and that every `$` in the text is
+# escaped — the fine quoting has its own cases in the engine's suite
 "$OUT/ppack" ninja --query "$PLANGC" > "$OUT/build.ninja" 2>"$OUT/ninja.err" || {
     echo "  FAIL: ppack ninja"; head -3 "$OUT/ninja.err"; exit 1; }
 "$OUT/ppack" ninja --query "$PLANGC" > "$OUT/build.ninja.2" 2>/dev/null
 if ! cmp -s "$OUT/build.ninja" "$OUT/build.ninja.2"; then
-    echo "  FAIL: ppack ninja não é determinista"; exit 1
+    echo "  FAIL: ppack ninja is not deterministic"; exit 1
 fi
-regras=$(grep -c '^rule ' "$OUT/build.ninja")
-if [ "$regras" -lt 100 ]; then
-    echo "  FAIL: o build.ninja saiu com $regras regras"; exit 1
+rules=$(grep -c '^rule ' "$OUT/build.ninja")
+if [ "$rules" -lt 100 ]; then
+    echo "  FAIL: the build.ninja came out with $rules rules"; exit 1
 fi
 if grep '^  command = ' "$OUT/build.ninja" | grep -q '[^$]\$\([^$]\|$\)'; then
-    echo "  FAIL: há um \$ solto num comando do build.ninja"; exit 1
+    echo "  FAIL: there is a loose \$ in a build.ninja command"; exit 1
 fi
-echo "   pbuild-ninja: $regras regras, determinista, sem \$ solto"
+echo "   pbuild-ninja: $rules rules, deterministic, no loose \$"
 
-# ---- `ppack doc`: a documentação do que já existe, sem gerar nada ----
-# A fonte é a resposta 5 do compilador, que já traz interface e docstring. O que
-# se confere aqui é a cadeia inteira: o compilador responde, o `lib_api` lê, e o
-# `ppack` formata.
-d=$("$OUT/ppack" doc tests/cases/docstring.p dobro --query "$PLANGC" 2>&1)
+# ---- `ppack doc`: documentation of what already exists, generating nothing ----
+# The source is the compiler's answer 5, which already carries interface and
+# docstring. What is checked here is the whole chain: the compiler answers,
+# `lib_api` reads, and `ppack` formats.
+d=$("$OUT/ppack" doc tests/cases/docstring.p twice --query "$PLANGC" 2>&1)
 case $d in
-    *"def dobro(i32) -> i32"*"O dobro de x."*) ;;
-    *) echo "  FAIL: ppack doc não achou a docstring"; echo "$d" | head -3; exit 1 ;;
+    *"def twice(i32) -> i32"*"Twice x."*) ;;
+    *) echo "  FAIL: ppack doc did not find the docstring"; echo "$d" | head -3; exit 1 ;;
 esac
 d=$("$OUT/ppack" doc tests/cases/docstring.p --query "$PLANGC" 2>&1)
 case $d in
-    *"Um par de inteiros."*) ;;
-    *) echo "  FAIL: ppack doc do módulo inteiro"; echo "$d" | head -3; exit 1 ;;
+    *"A pair of integers."*) ;;
+    *) echo "  FAIL: ppack doc of the whole module"; echo "$d" | head -3; exit 1 ;;
 esac
-if "$OUT/ppack" doc nao_existe_nenhum --query "$PLANGC" >/dev/null 2>&1; then
-    echo "  FAIL: ppack doc devia recusar um alvo que não existe"; exit 1
+if "$OUT/ppack" doc no_such_target_at_all --query "$PLANGC" >/dev/null 2>&1; then
+    echo "  FAIL: ppack doc should refuse a target that does not exist"; exit 1
 fi
-echo "   pbuild-doc: a documentação sai do --api, e o alvo inexistente é recusado"
+echo "   pbuild-doc: the documentation comes out of --api, and a nonexistent target is refused"
 
-# ---- `--json`: os MESMOS dados, para quem consome em vez de ler ----
-# Um objeto por LINHA no fluxo de eventos (quem lê quer reagir enquanto o build
-# corre), e um documento só nas consultas, que são resposta e não fluxo.
+# ---- `--json`: the SAME data, for whoever consumes instead of reading ----
+# One object per LINE in the event stream (whoever reads it wants to react while
+# the build runs), and a single document for the queries, which are an answer and
+# not a stream.
 "$OUT/ppack" build -n --json --query "$PLANGC" > "$OUT/ev.jsonl" 2>&1 || true
-python3 - "$OUT/ev.jsonl" <<'PY2' || { echo "  FAIL: o fluxo de eventos não é JSON por linha"; exit 1; }
+python3 - "$OUT/ev.jsonl" <<'PY2' || { echo "  FAIL: the event stream is not JSON per line"; exit 1; }
 import json, sys
-tipos = set()
+kinds = set()
 for ln in open(sys.argv[1]):
     ln = ln.strip()
     if not ln:
         continue
-    tipos.add(json.loads(ln)["event"])
-assert "plan" in tipos, tipos
-assert "done" in tipos, tipos
+    kinds.add(json.loads(ln)["event"])
+assert "plan" in kinds, kinds
+assert "done" in kinds, kinds
 PY2
-"$OUT/ppack" doc --json tests/cases/docstring.p dobro --query "$PLANGC" > "$OUT/doc.json" 2>&1
+"$OUT/ppack" doc --json tests/cases/docstring.p twice --query "$PLANGC" > "$OUT/doc.json" 2>&1
 python3 - "$OUT/doc.json" <<'PY2' || { echo "  FAIL: ppack doc --json"; exit 1; }
 import json, sys
 d = json.load(open(sys.argv[1]))
-assert d["name"] == "dobro", d
-assert "O dobro de x." in d["doc"], d
+assert d["name"] == "twice", d
+assert "Twice x." in d["doc"], d
 PY2
-echo "   pbuild-json: o fluxo de eventos e a consulta saem em JSON"
+echo "   pbuild-json: the event stream and the query come out as JSON"
 
-# ---- `ppack tree` e `ppack why`: as consultas de PACOTE ----
-# Rodam sobre o workspace DESTE repositório, que deixou de ser o caso simples de
-# dois pacotes independentes: hoje são nove, e um deles (`ed25519`) puxa outro
-# (`sha2`), que por sua vez puxa o `stl`. É por isso que o que se cobra aqui é a
-# ANINHAMENTO e não uma ordem de linhas — um pacote que é dependência de outro
-# aparece por baixo dele, e não como raiz. A ordem das raízes é a do manifesto,
-# e prendê-la aqui faria acrescentar um pacote quebrar um teste que não é sobre
-# isso.
+# ---- `ppack tree` and `ppack why`: the PACKAGE queries ----
+# They run over THIS repository's workspace, which stopped being the simple case
+# of two independent packages: today there are nine, and one of them (`ed25519`)
+# pulls another (`sha2`), which in turn pulls `stl`. That is why what is demanded
+# here is the NESTING and not an order of lines — a package that is another's
+# dependency appears underneath it, and not as a root. The order of the roots is
+# the manifest's, and pinning it here would make adding a package break a test
+# that is not about that.
 t=$("$OUT/ppack" tree 2>&1)
 case $t in
     *"pui 0.1.0"*) ;;
@@ -127,22 +128,22 @@ case $t in
 esac
 case $t in
     *"ed25519 0.1.0"*"sha2 0.1.0"*"stl 0.1.0"*) ;;
-    *) echo "  FAIL: ppack tree não aninhou ed25519 -> sha2 -> stl"; echo "$t" | head -12; exit 1 ;;
+    *) echo "  FAIL: ppack tree did not nest ed25519 -> sha2 -> stl"; echo "$t" | head -12; exit 1 ;;
 esac
 w=$("$OUT/ppack" why pui 2>&1)
 case $w in
     *"pui 0.1.0"*"packages/pui"*) ;;
     *) echo "  FAIL: ppack why"; echo "$w" | head -3; exit 1 ;;
 esac
-if "$OUT/ppack" why naoexiste >/dev/null 2>&1; then
-    echo "  FAIL: ppack why devia recusar um pacote que não existe"; exit 1
+if "$OUT/ppack" why doesnotexist >/dev/null 2>&1; then
+    echo "  FAIL: ppack why should refuse a package that does not exist"; exit 1
 fi
 "$OUT/ppack" tree --json > "$OUT/tree.json" 2>&1
 python3 - "$OUT/tree.json" <<'PY2' || { echo "  FAIL: ppack tree --json"; exit 1; }
 import json, sys
 d = json.load(open(sys.argv[1]))
-nomes = sorted(p["name"] for p in d["packages"])
-# as RAÍZES do workspace: os membros que não são dependência de outro membro
-assert "pui" in nomes and "pbuild" in nomes and "ed25519" in nomes, nomes
+names = sorted(p["name"] for p in d["packages"])
+# the workspace's ROOTS: the members that are not another member's dependency
+assert "pui" in names and "pbuild" in names and "ed25519" in names, names
 PY2
-echo "   pbuild-pacotes: tree e why, no texto e em JSON"
+echo "   pbuild-packages: tree and why, in text and in JSON"

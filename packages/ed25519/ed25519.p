@@ -9,7 +9,7 @@ import <sha2/sha2.ph>
 # is modulo L. Both fit in 256 bits, and the product of two fits in 512.
 
 struct Fe:
-    v: u32[8]        # little-endian: v[0] são os 32 bits mais baixos
+    v: u32[8]        # little-endian: v[0] is the lowest 32 bits
 
 private def fe_zero(out r: Fe):
     for i in range(8):

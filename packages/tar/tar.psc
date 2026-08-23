@@ -55,8 +55,8 @@ def bytes_of(s: str) -> list<u8>:
 
     >>> len(bytes_of("abc"))
     3
-    >>> len(bytes_of("olá"))
-    4
+    >>> len(bytes_of("naïve"))
+    6
     """
     out: list<u8> = []
     for ch in s:

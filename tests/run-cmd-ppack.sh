@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# tests/run-cmd-ppack.sh — `ppack run`, e o cache atrás dele (F7).
+# tests/run-cmd-ppack.sh — `ppack run`, and the cache behind it (F7).
 #
-# É o `tests/run-cmd.sh` medido do outro lado: os MESMOS comportamentos, agora
-# que a decisão saiu do compilador. O que se prende não é uma saída, é um
-# conjunto de comportamentos — e cada um foi decidido numa bateria:
+# It is `tests/run-cmd.sh` measured from the other side: the SAME behaviours, now
+# that the decision has left the compiler. What is pinned down is not an output,
+# it is a set of behaviours — and each one was decided in a battery:
 #
-#   * ele corre, e os argumentos do programa chegam (6.3);
-#   * a segunda corrida não chama o `cc` nem o compilador — MEDIDO, não suposto;
-#   * editar o fonte invalida;
-#   * editar um módulo IMPORTADO invalida também, que é o único modo de falhar
-#     de um cache de build que interessa de verdade;
-#   * editar o COMPILADOR invalida, porque o C que ele gera é outro;
-#   * o status de saída é o do PROCESSO, porque `run` faz `exec` — e é isso que
-#     faz um programa que lê do teclado ou pinta a tela funcionar;
-#   * e um programa em P corre pelo mesmo caminho.
+#   * it runs, and the program's arguments arrive (6.3);
+#   * the second run calls neither `cc` nor the compiler — MEASURED, not assumed;
+#   * editing the source invalidates;
+#   * editing an IMPORTED module invalidates too, which is the only way a build
+#     cache can fail that really matters;
+#   * editing the COMPILER invalidates, because the C it generates is different;
+#   * the exit status is the PROCESS's, because `run` does `exec` — and that is
+#     what makes a program that reads the keyboard or paints the screen work;
+#   * and a program in P runs down the same path.
 #
-# A diferença que fica dita: o binário sai em `build/run/` — dentro do PROJETO,
-# que `make clean` alcança — e não num `~/.cache` que ninguém sabe que existe.
+# The difference that gets stated: the binary comes out in `build/run/` — inside
+# the PROJECT, where `make clean` reaches it — and not in a `~/.cache` nobody
+# knows exists.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -27,80 +28,80 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 fail=0
 ok=0
 
-check() { if [ "$2" = "$3" ]; then ok=$((ok+1)); else echo "  FAIL $1: esperava '$2', veio '$3'"; fail=$((fail+1)); fi; }
+check() { if [ "$2" = "$3" ]; then ok=$((ok+1)); else echo "  FAIL $1: expected '$2', got '$3'"; fail=$((fail+1)); fi; }
 
 cat > "$OUT/lib.psc" <<'EOF'
-def valor() -> int:
+def value() -> int:
     return 7
 EOF
 cat > "$OUT/prog.psc" <<'EOF'
 import sys
 import lib
-print("valor", lib.valor(), sys.argv[1] if len(sys.argv) > 1 else "-")
+print("value", lib.value(), sys.argv[1] if len(sys.argv) > 1 else "-")
 sys.exit(len(sys.argv))
 EOF
 
-# 1. corre, e os argumentos chegam
-saiu=$("$PPACK" run "$OUT/prog.psc" abc 2>/dev/null | tail -1)
-check "corre e recebe os argumentos" "valor 7 abc" "$saiu"
+# 1. it runs, and the arguments arrive
+got=$("$PPACK" run "$OUT/prog.psc" abc 2>/dev/null | tail -1)
+check "it runs and receives the arguments" "value 7 abc" "$got"
 
-# 2. o status de saída é o do PROGRAMA (2 = o próprio + um argumento)
+# 2. the exit status is the PROGRAM's (2 = itself plus one argument)
 "$PPACK" run "$OUT/prog.psc" abc >/dev/null 2>&1
-check "o status é o do programa" "2" "$?"
+check "the status is the program's" "2" "$?"
 
-# 3. a segunda corrida não constrói NADA: nem `cc`, nem compilador. A prova é
-#    que ela não imprime linha de progresso nenhuma.
-linhas=$("$PPACK" run "$OUT/prog.psc" abc 2>/dev/null | grep -c '^\[' || true)
-check "a segunda corrida nao constroi" "0" "$linhas"
+# 3. the second run builds NOTHING: no `cc`, no compiler. The proof is that it
+#    prints no progress line at all.
+lines=$("$PPACK" run "$OUT/prog.psc" abc 2>/dev/null | grep -c '^\[' || true)
+check "the second run builds nothing" "0" "$lines"
 
-# 4. editar o FONTE invalida
+# 4. editing the SOURCE invalidates
 sleep 0.01
 cat > "$OUT/prog.psc" <<'EOF'
 import sys
 import lib
-print("outro", lib.valor())
+print("other", lib.value())
 EOF
-saiu2=$("$PPACK" run "$OUT/prog.psc" 2>/dev/null | tail -1)
-check "editar o fonte invalida" "outro 7" "$saiu2"
+got2=$("$PPACK" run "$OUT/prog.psc" 2>/dev/null | tail -1)
+check "editing the source invalidates" "other 7" "$got2"
 
-# 5. editar um MÓDULO IMPORTADO invalida
+# 5. editing an IMPORTED MODULE invalidates
 sleep 0.01
 cat > "$OUT/lib.psc" <<'EOF'
-def valor() -> int:
+def value() -> int:
     return 99
 EOF
-saiu3=$("$PPACK" run "$OUT/prog.psc" 2>/dev/null | tail -1)
-check "editar o modulo importado invalida" "outro 99" "$saiu3"
+got3=$("$PPACK" run "$OUT/prog.psc" 2>/dev/null | tail -1)
+check "editing the imported module invalidates" "other 99" "$got3"
 
-# 6. editar o COMPILADOR invalida
+# 6. editing the COMPILER invalidates
 sleep 0.01
 touch build/bin/plangc_s2
-linhas2=$("$PPACK" run "$OUT/prog.psc" 2>/dev/null | grep -c '^\[' || true)
-if [ "$linhas2" -gt 0 ]; then ok=$((ok+1)); else echo "  FAIL mexer no compilador devia reconstruir"; fail=$((fail+1)); fi
+lines2=$("$PPACK" run "$OUT/prog.psc" 2>/dev/null | grep -c '^\[' || true)
+if [ "$lines2" -gt 0 ]; then ok=$((ok+1)); else echo "  FAIL touching the compiler should rebuild"; fail=$((fail+1)); fi
 
-# 7. um programa em P pelo mesmo caminho
-cat > "$OUT/emp.p" <<'EOF'
+# 7. a program in P down the same path
+cat > "$OUT/inp.p" <<'EOF'
 include <stdio.h>
 
 def main() -> int:
-    printf("em P\n")
+    printf("in P\n")
     return 0
 EOF
-saiu4=$("$PPACK" run "$OUT/emp.p" 2>/dev/null | tail -1)
-check "um programa em P corre igual" "em P" "$saiu4"
+got4=$("$PPACK" run "$OUT/inp.p" 2>/dev/null | tail -1)
+check "a program in P runs the same" "in P" "$got4"
 
-# 8. o binário de um script SOLTO nasce AO LADO DELE (arquitetura C′): `ppack run
-#    ../ferramentas/x.psc` de dentro de outro projeto não tem por que sujar o
-#    build desse projeto com uma coisa que não é dele
-if ls "$OUT"/build/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL o binario devia estar em $OUT/build/run/bin"; fail=$((fail+1)); fi
+# 8. a LOOSE script's binary is born NEXT TO IT (architecture C′): `ppack run
+#    ../tools/x.psc` from inside another project has no business dirtying that
+#    project's build with something that is not its own
+if ls "$OUT"/build/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL the binary should be in $OUT/build/run/bin"; fail=$((fail+1)); fi
 
-# 8b. ... e `--build-dir` manda-o para outro lado
-rm -rf "$OUT/alhures"
-"$PPACK" run --build-dir "$OUT/alhures" "$OUT/prog.psc" >/dev/null 2>&1
-if ls "$OUT"/alhures/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL --build-dir nao foi respeitado"; fail=$((fail+1)); fi
+# 8b. ... and `--build-dir` sends it elsewhere
+rm -rf "$OUT/elsewhere"
+"$PPACK" run --build-dir "$OUT/elsewhere" "$OUT/prog.psc" >/dev/null 2>&1
+if ls "$OUT"/elsewhere/run/bin/prog >/dev/null 2>&1; then ok=$((ok+1)); else echo "  FAIL --build-dir was not honoured"; fail=$((fail+1)); fi
 
-# 9. um arquivo que não existe é uma mensagem, não um estouro
-"$PPACK" run "$OUT/naoexiste.psc" >/dev/null 2>&1 && { echo "  FAIL um arquivo que nao existe devia falhar"; fail=$((fail+1)); } || ok=$((ok+1))
+# 9. a file that does not exist is a message, not a crash
+"$PPACK" run "$OUT/doesnotexist.psc" >/dev/null 2>&1 && { echo "  FAIL a file that does not exist should fail"; fail=$((fail+1)); } || ok=$((ok+1))
 
 echo "   run-ppack: $ok ok, $fail failed"
 [ $fail = 0 ]

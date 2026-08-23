@@ -1,4 +1,4 @@
-"""Um módulo interno do pacote, alcançado por `import <cor/tons.psc>`."""
+"""An internal module of the package, reached by `import <color/shades.psc>`."""
 
-def escuro() -> int:
+def dark() -> int:
     return 32

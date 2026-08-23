@@ -6,5 +6,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "toolkit de interface em pscript: árvore de nós, layout em duas fases, hit-test, sinais e desenho retido — sem janela, sem SDL, sem dependência nenhuma"
+  "description": "an interface toolkit in pscript: a node tree, two-phase layout, hit-test, signals and retained drawing — no window, no SDL, no dependencies at all"
 }

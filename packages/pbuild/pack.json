@@ -5,5 +5,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "o motor de build: grafo, sujeira, fila, executor, e a biblioteca de alvos que o alimenta"
+  "description": "the build engine: graph, dirtiness, queue, executor, and the target library that feeds it"
 }

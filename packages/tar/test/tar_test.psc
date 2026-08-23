@@ -35,7 +35,7 @@ ms: list<tar.Member> = [
     # exactly 512 bytes: the size where the padding is zero and an inattentive
     # reader adds one block too many
     tar.file("pkg/exact.bin", bs("z" * 512), 0o600, 1700000003),
-    tar.file("pkg/accented-ção.txt", bs("olá"), 0o644, 1700000004),
+    tar.file("pkg/accented-café.txt", bs("naïve"), 0o644, 1700000004),
 ]
 b = tar.write(ms)
 check("the tarball is a multiple of 512", len(b) % 512 == 0)
@@ -47,8 +47,8 @@ check("the mode came back", back[1].mode == 0o644)
 check("the mtime came back", back[1].mtime == 1700000001)
 check("an empty file is a file", back[2].name == "pkg/empty.txt" and len(back[2].data) == 0)
 check("exactly 512 bytes", len(back[3].data) == 512 and back[3].mode == 0o600)
-check("the accented name came back", back[4].name == "pkg/accented-ção.txt")
-check("the accented content came back", txt(back[4].data) == "olá")
+check("the accented name came back", back[4].name == "pkg/accented-café.txt")
+check("the accented content came back", txt(back[4].data) == "naïve")
 
 # ---------- the long name, through the prefix ----------
 long_name = "package-with-a-long-name/" + ("dir/" * 20) + "file.txt"

@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# repo.sh — o REPOSITÓRIO inteiro, de ponta a ponta, sem rede.
+# repo.sh — the whole REPOSITORY, end to end, with no network.
 #
-# O que se prende aqui é a volta completa que `ppack/REPOSITORIO.md` desenha:
+# What is pinned down here is the complete round trip `ppack/REPOSITORIO.md`
+# draws:
 #
-#     publish  ->  um `.tar` e uma entrada no índice, num diretório
-#     update   ->  o índice guardado, e o repositório aceite no lock (TOFU)
-#     search   ->  offline, por nome, descrição e SÍMBOLO
-#     add      ->  o hash conferido, o lock escrito, as dependências junto
-#     install  ->  a árvore aberta em build/pkg/<nome>-<versão>-<hash>/
-#     compilar ->  um programa que usa o pacote instalado, e RODA
+#     publish  ->  a `.tar` and an index entry, in a directory
+#     update   ->  the index stored, and the repository accepted into the lock (TOFU)
+#     search   ->  offline, by name, description and SYMBOL
+#     add      ->  the hash checked, the lock written, the dependencies alongside
+#     install  ->  the tree unpacked into build/pkg/<name>-<version>-<hash>/
+#     compile  ->  a program that uses the installed package, and RUNS
 #
-# Um repositório é um FORMATO, não um serviço: aqui ele é um diretório e o
-# transporte é `file://`. Quando o HTTP entrar, entra por baixo de `buscar` e
-# nada disto muda — é essa a propriedade que este teste fixa.
+# A repository is a FORMAT, not a service: here it is a directory and the
+# transport is `file://`. When HTTP comes in, it comes in underneath `fetch` and
+# none of this changes — that is the property this test fixes.
 #
-# E fixa também a que mais importa: o hash NUNCA é dispensado. O último caso
-# estraga um byte do tarball no armazém e exige que o `install` recuse.
+# And it also fixes the one that matters most: the hash is NEVER waived. The last
+# case corrupts one byte of the tarball in the store and demands that `install`
+# refuse.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -27,70 +29,70 @@ PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
 bad() { fail=$((fail+1)); printf '   FAIL %s\n' "$1"; }
-check() { if [ "$2" = "$3" ]; then ok; else bad "$1: esperava '$2', veio '$3'"; fi; }
+check() { if [ "$2" = "$3" ]; then ok; else bad "$1: expected '$2', got '$3'"; fi; }
 
-RAIZ=$PWD
-# as ferramentas viram ABSOLUTAS uma vez, aqui: este teste muda de diretório
-# várias vezes de propósito (um projeto que só tem manifesto é o ponto), e um
-# caminho relativo a `$PWD` deixaria de valer no primeiro `cd`. Foi o que
-# aconteceu quando o `verify-all` as passou já absolutas e o script as prefixou
-# outra vez.
-case $PPACK in /*) ;; *) PPACK=$RAIZ/$PPACK;; esac
-case $PLANGC in /*) ;; *) PLANGC=$RAIZ/$PLANGC;; esac
+ROOT=$PWD
+# the tools become ABSOLUTE once, here: this test changes directory several times
+# on purpose (a project that has nothing but a manifest is the point), and a path
+# relative to `$PWD` would stop being valid at the first `cd`. That is what
+# happened when `verify-all` passed them already absolute and the script prefixed
+# them again.
+case $PPACK in /*) ;; *) PPACK=$ROOT/$PPACK;; esac
+case $PLANGC in /*) ;; *) PLANGC=$ROOT/$PLANGC;; esac
 rm -rf "$OUT"; mkdir -p "$OUT/repo" "$OUT/proj"
 
-# ---- 1. publish: dois pacotes deste repositório viram tarball ----
+# ---- 1. publish: two packages of this repository become tarballs ----
 "$PPACK" publish stl  --to "$OUT/repo" >"$OUT/pub1.log" 2>&1 || bad "publish stl"
 "$PPACK" publish sha2 --to "$OUT/repo" >"$OUT/pub2.log" 2>&1 || bad "publish sha2"
-[ -f "$OUT/repo/index.json" ] && ok || bad "publish não escreveu o índice"
-[ -f "$OUT/repo/pkg/sha2/sha2-0.1.0.tar" ] && ok || bad "publish não escreveu o tarball"
+[ -f "$OUT/repo/index.json" ] && ok || bad "publish did not write the index"
+[ -f "$OUT/repo/pkg/sha2/sha2-0.1.0.tar" ] && ok || bad "publish did not write the tarball"
 
-# o `tar` do sistema abre o nosso — a razão de ser tar de verdade
+# the system's `tar` opens ours — the reason for being a real tar
 if command -v tar >/dev/null 2>&1; then
     n=$(tar tf "$OUT/repo/pkg/sha2/sha2-0.1.0.tar" | grep -c 'sha2-0.1.0/')
-    [ "$n" -ge 4 ] && ok || bad "o tar do sistema listou $n membros"
+    [ "$n" -ge 4 ] && ok || bad "the system tar listed $n members"
 fi
 
-# uma versão publicada é IMUTÁVEL
+# a published version is IMMUTABLE
 if "$PPACK" publish sha2 --to "$OUT/repo" >"$OUT/pub3.log" 2>&1; then
-    bad "republicar a mesma versão devia ser recusado"
+    bad "republishing the same version should be refused"
 else ok; fi
 
-# ---- 2. um projeto que só tem manifesto ----
+# ---- 2. a project that has nothing but a manifest ----
 cd "$OUT/proj"
 cat > pack.json <<EOF
 {
-  "members": ["nada"],
-  "repos": [{"url": "file://$RAIZ/$OUT/repo/", "unsafe": true}]
+  "members": ["nothing"],
+  "repos": [{"url": "file://$ROOT/$OUT/repo/", "unsafe": true}]
 }
 EOF
 
 "$PPACK" update >update.log 2>&1 || bad "update"
-grep -q "TOFU" update.log && ok || bad "o primeiro update devia dizer que aceitou o repositório"
-[ -f pack.lock ] && ok || bad "update não escreveu o lock"
+grep -q "TOFU" update.log && ok || bad "the first update should say it accepted the repository"
+[ -f pack.lock ] && ok || bad "update did not write the lock"
 
-# ---- 3. search, offline e por símbolo ----
+# ---- 3. search, offline and by symbol ----
 "$PPACK" search sha256_hex >search.log 2>&1
-grep -q '\[símbolo\]' search.log && ok || bad "search não achou por símbolo"
-"$PPACK" search naoexisteisto >search2.log 2>&1 && bad "search de nada devia falhar" || ok
+grep -q '\[symbol\]' search.log && ok || bad "search did not find by symbol"
+"$PPACK" search nosuchthing >search2.log 2>&1 && bad "a search for nothing should fail" || ok
 
-# ---- 4. add: o hash confere, e a dependência vem junto ----
+# ---- 4. add: the hash checks out, and the dependency comes along ----
 "$PPACK" add sha2@0.1.0 >add.log 2>&1 || bad "add"
-grep -q "^stl 0.1.0" add.log && ok || bad 'o stl devia vir como dependência do sha2'
-grep -q '"unsafe": true' pack.lock && ok || bad "o lock devia gravar o modo unsafe"
-grep -q '"sha2": "0.1.0"' pack.json && ok || bad "add devia escrever a dependência no manifesto"
+grep -q "^stl 0.1.0" add.log && ok || bad 'stl should come as a dependency of sha2'
+grep -q '"unsafe": true' pack.lock && ok || bad "the lock should record unsafe mode"
+grep -q '"sha2": "0.1.0"' pack.json && ok || bad "add should write the dependency into the manifest"
 
-# sem versão exata: mensagem, não busca
-"$PPACK" add sha2 >add2.log 2>&1 && bad "add sem versão devia ser recusado" || ok
+# with no exact version: a message, not a search
+"$PPACK" add sha2 >add2.log 2>&1 && bad "add with no version should be refused" || ok
 
-# ---- 5. install: a árvore aberta ----
+# ---- 5. install: the tree unpacked ----
 "$PPACK" install >install.log 2>&1 || bad "install"
 d=$(ls -d build/pkg/sha2-0.1.0-* 2>/dev/null | head -1)
-[ -f "$d/sha2/sha2.ph" ] && ok || bad "install não abriu a árvore do sha2"
-ls -d build/pkg/stl-0.1.0-* >/dev/null 2>&1 && ok || bad "install não abriu o stl"
+[ -f "$d/sha2/sha2.ph" ] && ok || bad "install did not unpack the sha2 tree"
+ls -d build/pkg/stl-0.1.0-* >/dev/null 2>&1 && ok || bad "install did not unpack stl"
 
-# ---- 6. e um programa que o usa COMPILA e RODA ----
-cat > uso.psc <<'EOF'
+# ---- 6. and a program that uses it COMPILES and RUNS ----
+cat > use.psc <<'EOF'
 import <sha2/sha2.ph>
 b: list<u8> = []
 for ch in "abc":
@@ -100,116 +102,121 @@ EOF
 ROOTS=""
 for x in build/pkg/*/; do case "$x" in build/pkg/.*) ;; *) ROOTS="$ROOTS --pkg-path ${x%/}";; esac; done
 mkdir -p rt
-# Daqui em diante o comando corre da RAIZ do plang, e tudo é nomeado relativo a
-# ela — o programa, as raízes de pacote e o `--ps-runtime`. Não é conveniência:
-# sob `--out-dir` todos estes caminhos são espelhados, e o `#include` que sai no
-# C gerado é a relação ENTRE eles. Misturar absoluto com relativo não tem
-# relação nenhuma dentro do espelho, e o compilador diz isso em vez de emitir um
-# include que aponta para fora (é a mesma regra que os pacotes já tinham).
-cd "$RAIZ"
+# From here on the command runs from plang's ROOT, and everything is named
+# relative to it — the program, the package roots and `--ps-runtime`. It is not
+# convenience: under `--out-dir` all these paths are mirrored, and the `#include`
+# that comes out in the generated C is the relation BETWEEN them. Mixing absolute
+# with relative has no relation at all inside the mirror, and the compiler says so
+# instead of emitting an include that points outside (it is the same rule packages
+# already had).
+cd "$ROOT"
 PROJ=$OUT/proj
 ROOTS=""
 for x in "$PROJ"/build/pkg/*/; do case "$(basename "$x")" in .*) ;; *) ROOTS="$ROOTS --pkg-path ${x%/}";; esac; done
 mkdir -p "$PROJ/rt"
 if "$PLANGC" $ROOTS --ps-runtime pscript/runtime --out-dir "$PROJ/rt" pscript/runtime/psrt.ph >"$PROJ/gen.log" 2>&1 \
-   && "$PLANGC" $ROOTS --ps-runtime pscript/runtime --out-dir "$PROJ/rt" "$PROJ/uso.psc" >>"$PROJ/gen.log" 2>&1; then ok; else bad "não compilou contra o pacote instalado (veja $PROJ/gen.log)"; fi
+   && "$PLANGC" $ROOTS --ps-runtime pscript/runtime --out-dir "$PROJ/rt" "$PROJ/use.psc" >>"$PROJ/gen.log" 2>&1; then ok; else bad "it did not compile against the installed package (see $PROJ/gen.log)"; fi
 RT=$(find "$PROJ/rt" -name 'psrt_mem.c' | head -1); RTD=$(dirname "$RT")
-if $CC -O1 -w $PSDEFS "$PROJ/rt/$PROJ/uso.c" "$RTD"/psrt_*.c $(find "$PROJ/rt" -path '*sha2/sha2.c') -o "$PROJ/uso" -lm -pthread >"$PROJ/cc.log" 2>&1; then ok; else bad "não linkou (veja $PROJ/cc.log)"; fi
-saiu=$("$PROJ/uso" 2>&1)
-check "o sha256 de abc, pelo pacote instalado" \
-      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" "$saiu"
+if $CC -O1 -w $PSDEFS "$PROJ/rt/$PROJ/use.c" "$RTD"/psrt_*.c $(find "$PROJ/rt" -path '*sha2/sha2.c') -o "$PROJ/use" -lm -pthread >"$PROJ/cc.log" 2>&1; then ok; else bad "it did not link (see $PROJ/cc.log)"; fi
+got=$("$PROJ/use" 2>&1)
+check "the sha256 of abc, through the installed package" \
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" "$got"
 
-# ---- 7. o hash NUNCA é dispensado ----
-cd "$RAIZ/$OUT/proj"
+# ---- 7. the hash is NEVER waived ----
+cd "$ROOT/$OUT/proj"
 rm -rf build/pkg/sha2-0.1.0-*
-pak=$(ls build/pkg/.pak/* | head -1)
+# the store names each tarball by its sha256, so the one to corrupt is named by
+# the lock — picking the first of the directory would corrupt whichever package
+# happened to sort first, and that one may not even be reinstalled
+h=$(python3 -c "import json;d=json.load(open('pack.lock'));print([p for p in d['packages'] if p['name']=='sha2'][0]['sha256'])")
+pak=build/pkg/.pak/$h
 printf 'x' | dd of="$pak" bs=1 seek=600 count=1 conv=notrunc status=none
 if "$PPACK" install >install2.log 2>&1; then
-    bad "install aceitou um tarball adulterado"
+    bad "install accepted a tampered tarball"
 else
-    grep -q "hash NÃO bate" install2.log && ok || bad "a recusa não disse que foi o hash"
+    grep -q "hash does NOT match" install2.log && ok || bad "the refusal did not say it was the hash"
 fi
 
-# ---- 8. O MODO SEGURO: as duas assinaturas ----
+# ---- 8. SAFE MODE: the two signatures ----
 #
-# São duas, com donos diferentes: o REPOSITÓRIO assina o índice (contra uma
-# lista velha servida como se fosse a de agora) e o AUTOR assina cada versão
-# (contra o próprio repositório servir um tarball que o autor não fez).
-cd "$RAIZ"
-rm -rf "$OUT/seguro" "$OUT/chaves" "$OUT/projs"
-mkdir -p "$OUT/chaves"
-"$PPACK" keygen "$OUT/chaves/k" >"$OUT/keygen.log" 2>&1 && ok || bad "keygen"
-[ -f "$OUT/chaves/k.pub" ] && ok || bad "keygen não escreveu a pública"
-# uma chave que se sobrescreve é uma chave perdida
-"$PPACK" keygen "$OUT/chaves/k" >/dev/null 2>&1 && bad "keygen devia recusar sobrescrever" || ok
+# There are two, with different owners: the REPOSITORY signs the index (against
+# an old list served as if it were today's) and the AUTHOR signs each version
+# (against the repository itself serving a tarball the author did not make).
+cd "$ROOT"
+rm -rf "$OUT/safe" "$OUT/keys" "$OUT/projs"
+mkdir -p "$OUT/keys"
+"$PPACK" keygen "$OUT/keys/k" >"$OUT/keygen.log" 2>&1 && ok || bad "keygen"
+[ -f "$OUT/keys/k.pub" ] && ok || bad "keygen did not write the public key"
+# a key that overwrites itself is a lost key
+"$PPACK" keygen "$OUT/keys/k" >/dev/null 2>&1 && bad "keygen should refuse to overwrite" || ok
 
-"$PPACK" publish stl  --to "$OUT/seguro" --key "$OUT/chaves/k" >"$OUT/ps1.log" 2>&1 || bad "publish assinado (stl)"
-"$PPACK" publish sha2 --to "$OUT/seguro" --key "$OUT/chaves/k" >"$OUT/ps2.log" 2>&1 || bad "publish assinado (sha2)"
-[ -f "$OUT/seguro/index.json.sig" ] && ok || bad "o índice não foi assinado"
-[ -f "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar.sig" ] && ok || bad "o tarball não foi assinado"
+"$PPACK" publish stl  --to "$OUT/safe" --key "$OUT/keys/k" >"$OUT/ps1.log" 2>&1 || bad "signed publish (stl)"
+"$PPACK" publish sha2 --to "$OUT/safe" --key "$OUT/keys/k" >"$OUT/ps2.log" 2>&1 || bad "signed publish (sha2)"
+[ -f "$OUT/safe/index.json.sig" ] && ok || bad "the index was not signed"
+[ -f "$OUT/safe/pkg/sha2/sha2-0.1.0.tar.sig" ] && ok || bad "the tarball was not signed"
 
 mkdir -p "$OUT/projs"
 cd "$OUT/projs"
 cat > pack.json <<EOF
 {
-  "members": ["nada"],
-  "repos": ["file://$RAIZ/$OUT/seguro/"]
+  "members": ["nothing"],
+  "repos": ["file://$ROOT/$OUT/safe/"]
 }
 EOF
-"$PPACK" update >update.log 2>&1 || bad "update em modo seguro"
-grep -q "TOFU" update.log && ok || bad "a primeira vez devia aceitar a chave (TOFU)"
-grep -q '"key": "[0-9a-f]\{64\}"' pack.lock && ok || bad "a chave devia ficar GRAVADA no lock"
-"$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add em modo seguro"
-grep -q '"unsafe": false' pack.lock && ok || bad "assinado não é unsafe"
+"$PPACK" update >update.log 2>&1 || bad "update in safe mode"
+grep -q "TOFU" update.log && ok || bad "the first time should accept the key (TOFU)"
+grep -q '"key": "[0-9a-f]\{64\}"' pack.lock && ok || bad "the key should be RECORDED in the lock"
+"$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add in safe mode"
+grep -q '"unsafe": false' pack.lock && ok || bad "signed is not unsafe"
 
-# a chave já é conhecida: o índice não muda em silêncio
-cp "$RAIZ/$OUT/seguro/index.json" "$RAIZ/$OUT/seguro/index.json.bak"
-sed -i 's/"size": /"size": 1/' "$RAIZ/$OUT/seguro/index.json"
-"$PPACK" update >u2.log 2>&1 && bad "um índice trocado devia ser recusado" || ok
-grep -q "chave que este projeto aceitou" u2.log && ok || bad "a recusa não falou da chave (veja $OUT/projs/u2.log)"
-mv "$RAIZ/$OUT/seguro/index.json.bak" "$RAIZ/$OUT/seguro/index.json"
+# the key is already known: the index does not change in silence
+cp "$ROOT/$OUT/safe/index.json" "$ROOT/$OUT/safe/index.json.bak"
+sed -i 's/"size": /"size": 1/' "$ROOT/$OUT/safe/index.json"
+"$PPACK" update >u2.log 2>&1 && bad "a swapped index should be refused" || ok
+grep -q "key this project accepted" u2.log && ok || bad "the refusal did not mention the key (see $OUT/projs/u2.log)"
+mv "$ROOT/$OUT/safe/index.json.bak" "$ROOT/$OUT/safe/index.json"
 
-# um tarball trocado, com a assinatura antiga: o hash pega primeiro
-cd "$RAIZ"
-cp "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar" "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar.bak"
-printf 'x' | dd of="$OUT/seguro/pkg/sha2/sha2-0.1.0.tar" bs=1 seek=700 count=1 conv=notrunc status=none
+# a swapped tarball, with the old signature: the hash catches it first
+cd "$ROOT"
+cp "$OUT/safe/pkg/sha2/sha2-0.1.0.tar" "$OUT/safe/pkg/sha2/sha2-0.1.0.tar.bak"
+printf 'x' | dd of="$OUT/safe/pkg/sha2/sha2-0.1.0.tar" bs=1 seek=700 count=1 conv=notrunc status=none
 cd "$OUT/projs"
 rm -f pack.lock; rm -rf build
 cat > pack.json <<EOF
 {
-  "members": ["nada"],
-  "repos": ["file://$RAIZ/$OUT/seguro/"]
+  "members": ["nothing"],
+  "repos": ["file://$ROOT/$OUT/safe/"]
 }
 EOF
 "$PPACK" update >/dev/null 2>&1
-"$PPACK" add sha2@0.1.0 >add2.log 2>&1 && bad "um tarball trocado devia ser recusado" || ok
-grep -q "hash NÃO bate" add2.log && ok || bad "a recusa não falou do hash"
-cd "$RAIZ"
-mv "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar.bak" "$OUT/seguro/pkg/sha2/sha2-0.1.0.tar"
+"$PPACK" add sha2@0.1.0 >add2.log 2>&1 && bad "a swapped tarball should be refused" || ok
+grep -q "hash does NOT match" add2.log && ok || bad "the refusal did not mention the hash"
+cd "$ROOT"
+mv "$OUT/safe/pkg/sha2/sha2-0.1.0.tar.bak" "$OUT/safe/pkg/sha2/sha2-0.1.0.tar"
 
-# um repositório SEM assinatura e sem se declarar `unsafe`: recusa
+# a repository with NO signature and not declaring itself `unsafe`: refusal
 mkdir -p "$OUT/projn"
 cd "$OUT/projn"
 cat > pack.json <<EOF
 {
-  "members": ["nada"],
-  "repos": ["file://$RAIZ/$OUT/repo/"]
+  "members": ["nothing"],
+  "repos": ["file://$ROOT/$OUT/repo/"]
 }
 EOF
-"$PPACK" update >un.log 2>&1 && bad 'um repositório sem assinatura e sem unsafe devia ser recusado' || ok
-grep -q "unsafe" un.log && ok || bad "a recusa não disse como se declara unsafe"
-cd "$RAIZ"
+"$PPACK" update >un.log 2>&1 && bad 'a repository with no signature and no unsafe should be refused' || ok
+grep -q "unsafe" un.log && ok || bad "the refusal did not say how to declare unsafe"
+cd "$ROOT"
 
-# ---- 7b. `up`, o lock desencontrado e as invariantes ----
+# ---- 7b. `up`, the mismatched lock and the invariants ----
 #
-# Três coisas que o build não confere porque não são trabalho dele.
-cd "$RAIZ"
-"$PPACK" check >check.log 2>&1 && ok || bad "ppack check devia passar nesta árvore"
-grep -q "nenhum problema" check.log && ok || bad "o check não disse que estava tudo bem"
+# Three things the build does not check because they are not its job.
+cd "$ROOT"
+"$PPACK" check >check.log 2>&1 && ok || bad "ppack check should pass on this tree"
+grep -q "no problems" check.log && ok || bad "check did not say everything was fine"
 rm -f check.log
 
-# um pacote `lang: p` que dependa de um `pscript` tem de ser recusado: é a
-# invariante que mantém P livre de runtime ATRAVÉS dos pacotes
+# a `lang: p` package depending on a `pscript` one has to be refused: it is the
+# invariant that keeps P free of a runtime ACROSS packages
 cp packages/sha2/pack.json "$OUT/sha2-pack.bak"
 python3 - <<'PYX'
 import json
@@ -218,25 +225,26 @@ d = json.load(open(p))
 d["deps"]["pui"] = "0.1.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-"$PPACK" check >check2.log 2>&1 && bad "um pacote P que puxa um pscript devia ser recusado" || ok
-grep -q "runtime a reboque" check2.log && ok || bad "a recusa não explicou porquê"
+"$PPACK" check >check2.log 2>&1 && bad "a P package pulling in a pscript one should be refused" || ok
+grep -q "drags the runtime along" check2.log && ok || bad "the refusal did not explain why"
 cp "$OUT/sha2-pack.bak" packages/sha2/pack.json
 rm -f check2.log
 
-# `up` sobe para a mais alta que o índice tem, e o manifesto continua JSON
-cd "$RAIZ/$OUT"
+# `up` goes up to the highest the index has, and the manifest stays JSON
+cd "$ROOT/$OUT"
 rm -rf projup && mkdir projup && cd projup
 cat > pack.json <<EOF
 {
-  "members": ["nada"],
-  "repos": [{"url": "file://$RAIZ/$OUT/repo/", "unsafe": true}]
+  "members": ["nothing"],
+  "repos": [{"url": "file://$ROOT/$OUT/repo/", "unsafe": true}]
 }
 EOF
 "$PPACK" update >/dev/null 2>&1
-"$PPACK" add sha2@0.1.0 >/dev/null 2>&1 && ok || bad "add no projeto do up"
-# DUAS versões do mesmo pacote no repositório: é isso que dá ao `up` o que
-# escolher, e é a única forma de medir que ele escolhe a mais alta
-cd "$RAIZ"
+"$PPACK" add sha2@0.1.0 >/dev/null 2>&1 && ok || bad "add in the up project"
+# TWO versions of the same package in the repository: that is what gives `up`
+# something to choose from, and it is the only way to measure that it picks the
+# highest
+cd "$ROOT"
 "$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
 python3 - <<'PYX'
 import json
@@ -253,15 +261,15 @@ d = json.load(open(p))
 d["version"] = "0.1.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-cd "$RAIZ/$OUT/projup"
+cd "$ROOT/$OUT/projup"
 "$PPACK" update >/dev/null 2>&1
-"$PPACK" add tar@0.1.0 >addtar.log 2>&1 && ok || bad "add tar@0.1.0 (veja $OUT/projup/addtar.log)"
+"$PPACK" add tar@0.1.0 >addtar.log 2>&1 && ok || bad "add tar@0.1.0 (see $OUT/projup/addtar.log)"
 "$PPACK" up >up.log 2>&1 && ok || bad "ppack up"
-grep -q "0.1.0 -> 0.2.0" up.log && ok || bad "o up não subiu a versão"
-python3 -c "import json,sys; d=json.load(open('pack.json')); sys.exit(0 if d['deps']['tar']=='0.2.0' else 1)" && ok || bad "o manifesto não ficou com a versão nova (ou deixou de ser JSON)"
+grep -q "0.1.0 -> 0.2.0" up.log && ok || bad "up did not raise the version"
+python3 -c "import json,sys; d=json.load(open('pack.json')); sys.exit(0 if d['deps']['tar']=='0.2.0' else 1)" && ok || bad "the manifest did not end up with the new version (or stopped being JSON)"
 
-# a FAIXA DE TOOLCHAIN: conferida antes de gastar um segundo a compilar
-cd "$RAIZ"
+# the TOOLCHAIN RANGE: checked before spending a second compiling
+cd "$ROOT"
 python3 - <<'PYX'
 import json
 p = "packages/tar/pack.json"
@@ -279,49 +287,49 @@ d["toolchain"] = ">= 0.1.0"
 d["version"] = "0.1.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-cd "$RAIZ/$OUT/projup"
+cd "$ROOT/$OUT/projup"
 "$PPACK" update >/dev/null 2>&1
-"$PPACK" add tar@0.3.0 --query "$PLANGC" >tc.log 2>&1 && bad "um pacote que exige um compilador que não existe devia ser recusado" || ok
-grep -q "exige plangc >= 9.9.9" tc.log && ok || bad "a recusa não disse a faixa e a versão"
+"$PPACK" add tar@0.3.0 --query "$PLANGC" >tc.log 2>&1 && bad "a package requiring a compiler that does not exist should be refused" || ok
+grep -q "requires plangc >= 9.9.9" tc.log && ok || bad "the refusal did not state the range and the version"
 
-# o lock desencontrado do manifesto: avisa, e com --frozen recusa
+# the lock mismatched with the manifest: it warns, and with --frozen it refuses
 python3 - <<'PYX'
 import json
 d = json.load(open("pack.json"))
-d["deps"]["naoexiste"] = "9.9.9"
+d["deps"]["doesnotexist"] = "9.9.9"
 open("pack.json", "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
 "$PPACK" install >inst.log 2>&1
-grep -q "não corresponde ao pack.json" inst.log && ok || bad "install devia avisar do lock desencontrado"
-"$PPACK" install --frozen >inst2.log 2>&1 && bad "--frozen devia recusar" || ok
-cd "$RAIZ"
+grep -q "does not match pack.json" inst.log && ok || bad "install should warn about the mismatched lock"
+"$PPACK" install --frozen >inst2.log 2>&1 && bad "--frozen should refuse" || ok
+cd "$ROOT"
 
-# ---- 8b. `--json`: os MESMOS dados, para quem não é uma pessoa ----
+# ---- 8b. `--json`: the SAME data, for whoever is not a person ----
 #
-# A IDE e um script consomem isto; o escapador é o mesmo do grafo, para não
-# haver um segundo sítio onde errar. O teste não confere o texto — confere que é
-# JSON, e quem o diz é o `python3`.
-cd "$RAIZ/$OUT/projs"
+# The IDE and a script consume this; the escaper is the graph's, so that there is
+# no second place to get it wrong. The test does not check the text — it checks
+# that it is JSON, and who says so is `python3`.
+cd "$ROOT/$OUT/projs"
 if command -v python3 >/dev/null 2>&1; then
     "$PPACK" search sha256 --json > s.json 2>/dev/null
-    python3 -c "import json,sys; d=json.load(open('s.json')); sys.exit(0 if isinstance(d, list) and len(d) > 0 and 'name' in d[0] else 1)" && ok || bad "search --json não é uma lista de objetos"
+    python3 -c "import json,sys; d=json.load(open('s.json')); sys.exit(0 if isinstance(d, list) and len(d) > 0 and 'name' in d[0] else 1)" && ok || bad "search --json is not a list of objects"
     "$PPACK" install --json > i.json 2>/dev/null
-    python3 -c "import json,sys; json.load(open('i.json'))" && ok || bad "install --json não é JSON"
+    python3 -c "import json,sys; json.load(open('i.json'))" && ok || bad "install --json is not JSON"
 fi
-cd "$RAIZ"
+cd "$ROOT"
 
-# ---- 9. O MESMO CAMINHO, POR HTTP ----
+# ---- 9. THE SAME PATH, OVER HTTP ----
 #
-# Nada acima muda: o transporte é um `if` dentro de `buscar`, e o resto do
-# gerenciador não sabe de onde vieram os bytes. O servidor é o `http.server` do
-# python, que é precisamente o ponto — um repositório é um diretório servido por
-# qualquer coisa.
-cd "$RAIZ"
+# Nothing above changes: the transport is an `if` inside `fetch`, and the rest of
+# the manager does not know where the bytes came from. The server is python's
+# `http.server`, which is precisely the point — a repository is a directory served
+# by anything.
+cd "$ROOT"
 if command -v python3 >/dev/null 2>&1; then
-    # a porta é escolhida pelo sistema (bind em 0) e escrita num ficheiro: um
-    # número fixo aqui faz duas árvores de teste servirem uma à outra, e o
-    # engano só aparece como um 404 no sítio errado
-    rm -f "$RAIZ/$OUT/httpd.port"
+    # the port is chosen by the system (bind on 0) and written to a file: a
+    # fixed number here makes two test trees serve each other, and the mistake
+    # only shows up as a 404 in the wrong place
+    rm -f "$ROOT/$OUT/httpd.port"
     ( cd "$OUT/repo" && exec python3 -c '
 import http.server, socketserver, sys
 class H(http.server.SimpleHTTPRequestHandler):
@@ -330,145 +338,146 @@ srv = socketserver.TCPServer(("127.0.0.1", 0), H)
 with open(sys.argv[1], "w") as f:
     f.write(str(srv.server_address[1]))
 srv.serve_forever()
-' "$RAIZ/$OUT/httpd.port" >/dev/null 2>&1 ) &
-    echo $! > "$RAIZ/$OUT/httpd.pid"
-    # espera o servidor atender, em vez de dormir um número mágico
+' "$ROOT/$OUT/httpd.port" >/dev/null 2>&1 ) &
+    echo $! > "$ROOT/$OUT/httpd.pid"
+    # wait for the server to answer, instead of sleeping a magic number
     i=0
-    while [ $i -lt 100 ] && [ ! -s "$RAIZ/$OUT/httpd.port" ]; do i=$((i+1)); sleep 0.1; done
-    PORTA=$(cat "$RAIZ/$OUT/httpd.port" 2>/dev/null)
-    if [ -z "$PORTA" ]; then bad "o servidor de HTTP não subiu"; PORTA=0; fi
+    while [ $i -lt 100 ] && [ ! -s "$ROOT/$OUT/httpd.port" ]; do i=$((i+1)); sleep 0.1; done
+    PORT=$(cat "$ROOT/$OUT/httpd.port" 2>/dev/null)
+    if [ -z "$PORT" ]; then bad "the HTTP server did not come up"; PORT=0; fi
     i=0
-    while [ $i -lt 50 ] && ! (exec 3<>/dev/tcp/127.0.0.1/$PORTA) 2>/dev/null; do i=$((i+1)); sleep 0.1; done
+    while [ $i -lt 50 ] && ! (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; do i=$((i+1)); sleep 0.1; done
     mkdir -p "$OUT/proj-http"
     cd "$OUT/proj-http"
     cat > pack.json <<EOF
 {
-  "members": ["nada"],
-  "repos": [{"url": "http://127.0.0.1:$PORTA/", "unsafe": true}]
+  "members": ["nothing"],
+  "repos": [{"url": "http://127.0.0.1:$PORT/", "unsafe": true}]
 }
 EOF
-    "$PPACK" update >update.log 2>&1 && ok || bad "update por HTTP"
-    "$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add por HTTP"
-    "$PPACK" install >install.log 2>&1 && ok || bad "install por HTTP"
-    ls -d build/pkg/sha2-0.1.0-* >/dev/null 2>&1 && ok || bad "a árvore não saiu do tarball baixado por HTTP"
-    # e o hash é o MESMO que veio pelo file:// — é isso que faz o transporte não
-    # importar
+    "$PPACK" update >update.log 2>&1 && ok || bad "update over HTTP"
+    "$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add over HTTP"
+    "$PPACK" install >install.log 2>&1 && ok || bad "install over HTTP"
+    ls -d build/pkg/sha2-0.1.0-* >/dev/null 2>&1 && ok || bad "the tree did not come out of the tarball downloaded over HTTP"
+    # and the hash is the SAME one that came over file:// — that is what makes
+    # the transport not matter
     h1=$(grep -o '"sha256": "[0-9a-f]*"' pack.lock | head -1)
-    h2=$(grep -o '"sha256": "[0-9a-f]*"' "$RAIZ/$OUT/proj/pack.lock" | head -1)
-    check "o mesmo pacote, o mesmo hash, outro transporte" "$h2" "$h1"
-    # um caminho que não existe: HTTP 404, e a mensagem tem de o dizer
+    h2=$(grep -o '"sha256": "[0-9a-f]*"' "$ROOT/$OUT/proj/pack.lock" | head -1)
+    check "the same package, the same hash, another transport" "$h2" "$h1"
+    # a path that does not exist: HTTP 404, and the message has to say so
     "$PPACK" update >/dev/null 2>&1
-    sed -i "s#127.0.0.1:$PORTA/#127.0.0.1:$PORTA/naoexiste/#" pack.json
-    "$PPACK" update >u404.log 2>&1 && bad "um índice que não existe devia falhar" || ok
-    grep -q "404" u404.log && ok || bad "a falha de HTTP não disse o estado (veja $OUT/proj-http/u404.log)"
-    cd "$RAIZ"
+    sed -i "s#127.0.0.1:$PORT/#127.0.0.1:$PORT/doesnotexist/#" pack.json
+    "$PPACK" update >u404.log 2>&1 && bad "an index that does not exist should fail" || ok
+    grep -q "404" u404.log && ok || bad "the HTTP failure did not state the status (see $OUT/proj-http/u404.log)"
+    cd "$ROOT"
     pkill -P "$(cat "$OUT/httpd.pid")" 2>/dev/null
     kill "$(cat "$OUT/httpd.pid")" 2>/dev/null
     rm -f "$OUT/httpd.pid" "$OUT/httpd.port"
 fi
 
-# ---- 10. AS RECUSAS DO PUBLISH ----
+# ---- 10. PUBLISH'S REFUSALS ----
 #
-# Três casos em que publicar seria publicar uma coisa que não serve, e nenhum
-# deles precisa de mecanismo novo: o índice já traz as dependências, o manifesto
-# já diz a linguagem, e a lista canónica da API já está calculada para entrar no
-# índice. Conferir é comparar.
-cd "$RAIZ"
+# Three cases where publishing would be publishing something that is no use, and
+# none of them needs a new mechanism: the index already carries the dependencies,
+# the manifest already says the language, and the API's canonical list is already
+# computed to go into the index. Checking is comparing.
+cd "$ROOT"
 FAKE=$OUT/fake
-rm -rf "$FAKE"; mkdir -p "$FAKE/vazio"
+rm -rf "$FAKE"; mkdir -p "$FAKE/empty"
 
-# (a) uma dependência que o repositório de destino não resolve. O `sha2` depende
-# do `stl`; num repositório vazio ele não existe.
-if "$PPACK" publish sha2 --to "$FAKE/vazio" >"$FAKE/dep.log" 2>&1; then
-    bad "publicar com uma dependência que o destino não tem devia ser recusado"
+# (a) a dependency the destination repository does not resolve. `sha2` depends on
+# `stl`; in an empty repository it does not exist.
+if "$PPACK" publish sha2 --to "$FAKE/empty" >"$FAKE/dep.log" 2>&1; then
+    bad "publishing with a dependency the destination does not have should be refused"
 else ok; fi
-grep -q "publique-a primeiro" "$FAKE/dep.log" && ok || bad "a recusa da dependência não disse o que fazer"
-[ -f "$FAKE/vazio/index.json" ] && bad "a recusa escreveu no repositório" || ok
+grep -q "publish it first" "$FAKE/dep.log" && ok || bad "the dependency refusal did not say what to do"
+[ -f "$FAKE/empty/index.json" ] && bad "the refusal wrote into the repository" || ok
 
-# (b) um `.psc` dentro de um pacote declarado `p` — e o que está em `test/` NÃO
-# conta, que é como o `sha2` prova a travessia da fronteira a partir do pscript
+# (b) a `.psc` inside a package declared `p` — and what is in `test/` does NOT
+# count, which is how `sha2` proves the boundary crossing from pscript
 mkdir -p "$FAKE/pkg/pmod"
 cat > "$FAKE/pkg/pack.json" <<'EOF'
-{ "name": "pmisto", "version": "0.1.0", "lang": "p", "root": "pmisto.ph" }
+{ "name": "pmixed", "version": "0.1.0", "lang": "p", "root": "pmixed.ph" }
 EOF
-cat > "$FAKE/pkg/pmisto.ph" <<'EOF'
-def pmisto_dois() -> i32
+cat > "$FAKE/pkg/pmixed.ph" <<'EOF'
+def pmixed_dois() -> i32
 EOF
-cat > "$FAKE/pkg/pmisto.p" <<'EOF'
-import "pmisto.ph"
-def pmisto_dois() -> i32:
+cat > "$FAKE/pkg/pmixed.p" <<'EOF'
+import "pmixed.ph"
+def pmixed_dois() -> i32:
     return 2
 EOF
 mkdir -p "$FAKE/repo2"
-"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p1.log" 2>&1 && ok || bad "um pacote P simples devia publicar (veja $FAKE/p1.log)"
+"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p1.log" 2>&1 && ok || bad "a simple P package should publish (see $FAKE/p1.log)"
 mkdir -p "$FAKE/pkg/test"
-echo 'print("oi")' > "$FAKE/pkg/test/t.psc"
+echo 'print("hi")' > "$FAKE/pkg/test/t.psc"
 rm -rf "$FAKE/repo3"; mkdir -p "$FAKE/repo3"
-"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo3" >"$FAKE/p2.log" 2>&1 && ok || bad "um .psc em test/ NÃO devia impedir (veja $FAKE/p2.log)"
+"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo3" >"$FAKE/p2.log" 2>&1 && ok || bad "a .psc in test/ should NOT block it (see $FAKE/p2.log)"
 echo 'x: int = 1' > "$FAKE/pkg/extra.psc"
 rm -rf "$FAKE/repo4"; mkdir -p "$FAKE/repo4"
 if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo4" >"$FAKE/p3.log" 2>&1; then
-    bad "um .psc FORA de test/ num pacote `lang: p` devia ser recusado"
+    bad "a .psc OUTSIDE test/ in a `lang: p` package should be refused"
 else ok; fi
-grep -q "extra.psc" "$FAKE/p3.log" && ok || bad "a recusa não nomeou o arquivo"
+grep -q "extra.psc" "$FAKE/p3.log" && ok || bad "the refusal did not name the file"
 rm -f "$FAKE/pkg/extra.psc"
 
-# (c) a versão sobe e a interface não bate com o que a subida promete. O `patch`
-# diz "nada mudou"; o `minor` diz "só acrescentei".
+# (c) the version goes up and the interface does not match what the bump
+# promises. A `patch` says "nothing changed"; a `minor` says "I only added".
 sed -i 's/"version": "0.1.0"/"version": "0.1.1"/' "$FAKE/pkg/pack.json"
-cat > "$FAKE/pkg/pmisto.ph" <<'EOF'
-def pmisto_dois() -> i32
-def pmisto_tres() -> i32
+cat > "$FAKE/pkg/pmixed.ph" <<'EOF'
+def pmixed_dois() -> i32
+def pmixed_tres() -> i32
 EOF
-cat > "$FAKE/pkg/pmisto.p" <<'EOF'
-import "pmisto.ph"
-def pmisto_dois() -> i32:
+cat > "$FAKE/pkg/pmixed.p" <<'EOF'
+import "pmixed.ph"
+def pmixed_dois() -> i32:
     return 2
-def pmisto_tres() -> i32:
+def pmixed_tres() -> i32:
     return 3
 EOF
 if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p4.log" 2>&1; then
-    bad "um patch com a interface mudada devia ser recusado"
+    bad "a patch with a changed interface should be refused"
 else ok; fi
-grep -q "patch" "$FAKE/p4.log" && ok || bad "a recusa do patch não disse por quê"
-# a mesma mudança como MINOR passa: acrescentar é o que um minor promete
+grep -q "patch" "$FAKE/p4.log" && ok || bad "the patch refusal did not say why"
+# the same change as a MINOR passes: adding is what a minor promises
 sed -i 's/"version": "0.1.1"/"version": "0.2.0"/' "$FAKE/pkg/pack.json"
-"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p5.log" 2>&1 && ok || bad "um minor que ACRESCENTA devia publicar (veja $FAKE/p5.log)"
-# e tirar num minor, não
+"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p5.log" 2>&1 && ok || bad "a minor that ADDS should publish (see $FAKE/p5.log)"
+# and taking away in a minor, no
 sed -i 's/"version": "0.2.0"/"version": "0.3.0"/' "$FAKE/pkg/pack.json"
-cat > "$FAKE/pkg/pmisto.ph" <<'EOF'
-def pmisto_tres() -> i32
+cat > "$FAKE/pkg/pmixed.ph" <<'EOF'
+def pmixed_tres() -> i32
 EOF
-cat > "$FAKE/pkg/pmisto.p" <<'EOF'
-import "pmisto.ph"
-def pmisto_tres() -> i32:
+cat > "$FAKE/pkg/pmixed.p" <<'EOF'
+import "pmixed.ph"
+def pmixed_tres() -> i32:
     return 3
 EOF
 if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p6.log" 2>&1; then
-    bad "um minor que TIRA da interface devia ser recusado"
+    bad "a minor that TAKES AWAY from the interface should be refused"
 else ok; fi
-grep -q "acrescenta, não tira" "$FAKE/p6.log" && ok || bad "a recusa do minor não disse por quê"
+grep -q "a minor adds, it does not take away" "$FAKE/p6.log" && ok || bad "the minor refusal did not say why"
 
-# ---- 11. `ppack lock`: o lock a partir do manifesto, sem construir ----
-cd "$RAIZ/$OUT/proj"
-cp pack.lock lock.antes
-# tirar uma linha do lock e mandar refazê-lo: ele volta ao que o manifesto pede
+# ---- 11. `ppack lock`: the lock from the manifest, without building ----
+cd "$ROOT/$OUT/proj"
+cp pack.lock lock.before
+# take a line out of the lock and ask for it to be redone: it comes back to what
+# the manifest asks for
 python3 - <<'PY2'
 import json
 d = json.load(open("pack.lock"))
 d["packages"] = [p for p in d["packages"] if p["name"] != "stl"]
 json.dump(d, open("pack.lock", "w"), indent=2)
 PY2
-"$PPACK" lock >lock.log 2>&1 && ok || bad "ppack lock (veja $OUT/proj/lock.log)"
-grep -q '"name": "stl"' pack.lock && ok || bad "o lock refeito não trouxe o stl de volta"
-# e agora ele já corresponde: `--frozen` aceita
-"$PPACK" lock --frozen >lock2.log 2>&1 && ok || bad "--frozen devia aceitar um lock em dia"
-# um manifesto que pede uma versão que o lock não tem: `--frozen` recusa
+"$PPACK" lock >lock.log 2>&1 && ok || bad "ppack lock (see $OUT/proj/lock.log)"
+grep -q '"name": "stl"' pack.lock && ok || bad "the redone lock did not bring stl back"
+# and now it does match: `--frozen` accepts
+"$PPACK" lock --frozen >lock2.log 2>&1 && ok || bad "--frozen should accept an up-to-date lock"
+# a manifest asking for a version the lock does not have: `--frozen` refuses
 sed -i 's/"sha2": "0.1.0"/"sha2": "0.9.9"/' pack.json
-"$PPACK" lock --frozen >lock3.log 2>&1 && bad "--frozen devia recusar um lock velho" || ok
-grep -q "frozen" lock3.log && ok || bad "a recusa do --frozen não se explicou"
+"$PPACK" lock --frozen >lock3.log 2>&1 && bad "--frozen should refuse a stale lock" || ok
+grep -q "frozen" lock3.log && ok || bad "the --frozen refusal did not explain itself"
 sed -i 's/"sha2": "0.9.9"/"sha2": "0.1.0"/' pack.json
 
-cd "$RAIZ"
+cd "$ROOT"
 echo "   repo: $pass ok, $fail failed"
 [ $fail = 0 ]

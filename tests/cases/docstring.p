@@ -1,53 +1,53 @@
-"""A docstring do MÓDULO: uma string sozinha, antes de tudo.
+"""The MODULE's docstring: a lone string, before everything else.
 
-Ela vai para a árvore e não gera código — um binário não carrega documentação.
-Quem a lê é a resposta 5 do protocolo (`--api`) e a IDE, e é por isso que ela
-sai DEPOIS do hash de interface: mudar um texto não muda o que quem usa vê.
+It goes into the tree and generates no code — a binary does not carry
+documentation. Whoever reads it is the protocol's answer 5 (`--api`) and the IDE,
+and that is why it comes out AFTER the interface hash: changing a text does not
+change what its users see.
 
-A regra é POSICIONAL, e é a mesma do pscript e a do Python: uma string sozinha
-como primeira coisa de um módulo, de um corpo, de um `struct`, de um `enum` ou
-de um `trait`. Em qualquer outro lugar, `\"\"\"...\"\"\"` é apenas uma string
-literal que atravessa linhas — o que também é novo em P, e é o que a última
-função aqui usa.
+The rule is POSITIONAL, and it is the same one as pscript's and Python's: a lone
+string as the first thing in a module, in a body, in a `struct`, in an `enum` or
+in a `trait`. Anywhere else, `\"\"\"...\"\"\"` is just a string literal that spans
+lines — which is also new in P, and is what the last function here uses.
 """
 include <stdio.h>
 
 
-def dobro(x: i32) -> i32:
-    """O dobro de x.
+def twice(x: i32) -> i32:
+    """Twice x.
 
-    A segunda linha existe para provar que a docstring atravessa linhas.
+    The second line exists to prove that a docstring spans lines.
     """
     return x * 2
 
 
-struct Ponto:
-    """Um par de inteiros."""
+struct Point:
+    """A pair of integers."""
     x: i32
     y: i32
 
-    def soma(self: *Ponto) -> i32:
-        """A soma das duas coordenadas — a docstring de um MÉTODO."""
+    def sum(self: *Point) -> i32:
+        """The sum of the two coordinates — a METHOD's docstring."""
         return self->x + self->y
 
 
-enum Forma:
-    """As formas que este módulo conhece."""
-    FORMA_CAIXA = 1
-    FORMA_BOLA = 2
+enum Shape:
+    """The shapes this module knows."""
+    SHAPE_BOX = 1
+    SHAPE_BALL = 2
 
 
-def multilinha() -> const *char:
-    # aqui a string tripla NÃO é docstring: não é a primeira instrução, e o que
-    # ela é, é uma string comum que atravessa linhas
+def multiline() -> const *char:
+    # here the triple string is NOT a docstring: it is not the first statement,
+    # and what it is, is an ordinary string that spans lines
     n: i32 = 1
-    s: const *char = """primeira
-segunda"""
-    return s if n == 1 else "outra"
+    s: const *char = """first
+second"""
+    return s if n == 1 else "other"
 
 
 def main() -> int:
-    p: Ponto = {3, 4}
-    printf("%d %d %d\n", dobro(21), p.soma(), FORMA_BOLA)
-    printf("%s\n", multilinha())
+    p: Point = {3, 4}
+    printf("%d %d %d\n", twice(21), p.sum(), SHAPE_BALL)
+    printf("%s\n", multiline())
     return 0

@@ -1194,7 +1194,7 @@ que torna esta varredura o passo que faltava.
 - [x] **os PISOS dos placares no descritor.** `c-suite >= 220` e
       `wacct >= 741` viviam em duas variáveis de shell no topo do
       `verify-all.sh`. Agora cada placar é duas arestas — uma que roda, outra
-      que lê o número e compara (`pbuild/ps/piso.psc`) — e as duas suítes
+      que lê o número e compara (`pbuild/ps/floor.psc`) — e as duas suítes
       entram no `ppack verify`. O arreio LÊ o piso do descritor: um lugar só
       onde se sobe um número.
 - [x] **`ppack lock`.** Estava na lista de comandos da v1 e não existia. Refaz o

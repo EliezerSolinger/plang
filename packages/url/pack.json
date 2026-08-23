@@ -6,5 +6,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "URL do WHATWG: parse, normalização e IDNA, conferido contra o corpus do WPT"
+  "description": "the WHATWG URL: parsing, normalization and IDNA, checked against the WPT corpus"
 }

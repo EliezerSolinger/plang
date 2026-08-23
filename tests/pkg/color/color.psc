@@ -1,9 +1,9 @@
-"""O módulo RAIZ do pacote `cor` — o que `import <cor>` traz."""
+"""The ROOT module of the `color` package — what `import <color>` brings in."""
 
-def clarear(v: int) -> int:
-    """Um passo mais claro."""
+def lighten(v: int) -> int:
+    """One step lighter."""
     return v + 16
 
 
-def nome() -> str:
-    return "cor"
+def name() -> str:
+    return "color"
