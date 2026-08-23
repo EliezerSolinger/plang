@@ -982,15 +982,24 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
 
 ### Entregas
 
-- [ ] **pbuild em processo**: o editor (pscript) importa a biblioteca do motor
-      e roda o build como TASK no MESMO laço de eventos da UI (o laço já
-      existe — teclado/render; os eventos de aresta chegam como mensagens);
-      o grafo como `dict`, sem serializar (1.8)
+- [x] **pbuild em processo** (FEITO, 2026-08-23): `packages/pbuild` é uma
+      biblioteca, o editor importa-a, e o build corre como tarefa no mesmo
+      escalonador que trata o teclado. `pstudio --build [alvo]` prova-o sem
+      tela, e `tests/pstudio-build.sh` mede-o no `verify`.
+      **Uma coisa saiu diferente do plano, e a favor**: o grafo vem
+      SERIALIZADO (`ppack graph`), e não montado no editor. A razão é que o
+      descritor é do PROJETO e o editor não o conhece — ele abre qualquer
+      árvore. Montá-lo no editor obrigaria a embutir o descritor de cada
+      projeto que se abre, o que só funciona para UM projeto, que seria este.
+      O custo é um JSON lido uma vez por build.
 - [ ] **painel de build**: lê e ESCREVE `pack.json` (o manifesto é do painel;
       `build.psc` é do programador e o painel NÃO o edita — decidido); alvo
       padrão, `-j`, alvo nomeado (linux-amd64 etc.)
-- [ ] **play** = `run` do alvo padrão (constrói; o programa abre; parar/re-play
-      mata o filho); **vassoura** = clean (mantém `build/pkg`)
+- [~] **play/vassoura** (2026-08-23): na PALETA que o editor já tinha, sem
+      inventar atalhos — `Build`, `Build Target…`, `Run`, `Clean` e `Stop
+      Build`. A vassoura mantém `build/pkg`, como a do `ppack`. Falta a metade
+      do `Run` que precisa de controlo de processo (matar e relançar o filho):
+      é a mesma primitiva que falta ao `ppack dev`.
 - [~] **`ppack dev`** (2026-08-23): constrói, espera que alguma coisa mude, e
       constrói outra vez. A lista do que se vigia é o GRAFO — os arquivos que o
       compilador disse que lê —, não um diretório: um `dev` que vigiasse a
@@ -1005,9 +1014,12 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
       **Falta a outra metade**: reiniciar o programa. Matar e relançar um filho
       precisa de controlo de processo que o `os.run` não dá (ele espera) — é uma
       primitiva a mais (`os.spawn` + `kill`), anotada e não feita.
-- [ ] **erros sublinhados**: a resposta 6 consumida pelo editor — clique leva
-      a arquivo:linha:coluna; o formato de erro do próprio ppack (posicional)
-      entra pelo MESMO caminho
+- [~] **erros como POSIÇÃO** (2026-08-23): o editor lê
+      `arquivo:linha:coluna: error:` da saída da aresta — o formato que o
+      compilador já usa e que o `ppack` copiou de propósito —, abre o arquivo e
+      põe o cursor lá (`Go To Build Error`). É o que "clicar no erro" faz, sem
+      precisar do clique. Falta DESENHAR o sublinhado, que é a parte que precisa
+      de olhos; a posição já está no `App`.
 - [x] **post-mortem** (FEITO, 2026-08-23): com `-g`, cada moldura imprime o que
       estava em CADA variável, com o `repr` genérico da F5 — que era a
       dependência real, e por isso a ordem. Uma pilha diz ONDE; a pergunta a
@@ -1031,6 +1043,15 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
 **Pronto quando**: o play constrói e roda o próprio pstudio a partir do
 pstudio; salvar um arquivo no dev-loop reconstrói só o alcançado e reinicia;
 um erro de compilação aparece sublinhado no arquivo certo.
+
+**Estado em 2026-08-23**: o motor corre dentro do editor, os comandos estão na
+paleta, o erro do build leva o cursor ao sítio, e o `ppack dev` reconstrói ao
+salvar. O que falta é **o que precisa de olhos** — o painel que edita o
+`pack.json`, o sublinhado desenhado, a barra com a lista de arestas — mais a
+primitiva de PROCESSO (`os.spawn` + `kill`) que o "reinicia o programa" exige
+dos dois lados (o `dev` e o `play`). A informação para os três painéis já está
+toda no `App`: `build_msg`, `build_total`, `build_feitas`, `build_erro`,
+`build_pos_*` e `build_targets`.
 
 ---
 
