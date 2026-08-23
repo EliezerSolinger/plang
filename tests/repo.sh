@@ -200,6 +200,20 @@ EOF
 grep -q "unsafe" un.log && ok || bad "a recusa não disse como se declara unsafe"
 cd "$RAIZ"
 
+# ---- 8b. `--json`: os MESMOS dados, para quem não é uma pessoa ----
+#
+# A IDE e um script consomem isto; o escapador é o mesmo do grafo, para não
+# haver um segundo sítio onde errar. O teste não confere o texto — confere que é
+# JSON, e quem o diz é o `python3`.
+cd "$RAIZ/$OUT/projs"
+if command -v python3 >/dev/null 2>&1; then
+    "$PPACK" search sha256 --json > s.json 2>/dev/null
+    python3 -c "import json,sys; d=json.load(open('s.json')); sys.exit(0 if isinstance(d, list) and len(d) > 0 and 'name' in d[0] else 1)" && ok || bad "search --json não é uma lista de objetos"
+    "$PPACK" install --json > i.json 2>/dev/null
+    python3 -c "import json,sys; json.load(open('i.json'))" && ok || bad "install --json não é JSON"
+fi
+cd "$RAIZ"
+
 # ---- 9. O MESMO CAMINHO, POR HTTP ----
 #
 # Nada acima muda: o transporte é um `if` dentro de `buscar`, e o resto do

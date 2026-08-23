@@ -553,6 +553,7 @@ async def cmd_search(alvos: list<str>) -> int:
     termo = alvos[0].lower()
     repos = await repos_do_projeto()
     achou = 0
+    jl: list<str> = []
     for r in repos:
         ix = await indice_guardado(r)
         for nome in ix.nomes():
@@ -572,7 +573,16 @@ async def cmd_search(alvos: list<str>) -> int:
                             linhas.append("[símbolo]  " + sb)
                 for ln in linhas:
                     achou += 1
-                    print(f"{nome} {versao}   {ln}")
+                    if saida_json:
+                        k = ln.find("]")
+                        jl.append('{"name": ' + G.jstr(nome) + ', "version": ' + G.jstr(versao)
+                                  + ', "where": ' + G.jstr(ln[1:k]) + ', "text": ' + G.jstr(ln[k + 1:].strip())
+                                  + ', "repo": ' + G.jstr(r.url) + '}')
+                    else:
+                        print(f"{nome} {versao}   {ln}")
+    if saida_json:
+        print("[" + ", ".join(jl) + "]")
+        return 0 if achou > 0 else 1
     if achou == 0:
         print("nada encontrado para '" + alvos[0] + "'")
         return 1
@@ -670,6 +680,14 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
             return 1
     await LK.gravar(lk, "pack.lock")
     await escrever_dep_no_manifesto(nome, versao)
+    if saida_json:
+        jadd: list<str> = []
+        for t2 in lk.pacotes:
+            jadd.append('{"name": ' + G.jstr(t2.nome) + ', "version": ' + G.jstr(t2.versao)
+                      + ', "sha256": ' + G.jstr(t2.sha256) + ', "repo": ' + G.jstr(t2.repo)
+                      + ', "unsafe": ' + ("true" if t2.inseguro else "false") + '}')
+        print('{"asked": ' + G.jstr(nome + "@" + versao) + ', "locked": [' + ", ".join(jadd) + ']}')
+        return 0
     for linha in postos:
         print(linha)
     if len(postos) > 1:
@@ -719,10 +737,17 @@ async def cmd_install() -> int:
     versão com conteúdo diferente" impossível de confundir."""
     lk = await LK.ler("pack.lock")
     if len(lk.pacotes) == 0:
+        # também aqui: quem pediu JSON recebe JSON. Uma frase em português no
+        # meio de um fluxo de objetos é o que faz um consumidor estourar longe
+        # do sítio onde o problema está.
+        if saida_json:
+            print("[]")
+            return 0
         print("o lock não tem pacotes: `ppack add <nome>@<versão>` primeiro")
         return 0
     repos = await repos_do_projeto()
     n = 0
+    ji: list<str> = []
     for t in lk.pacotes:
         destino = R.dir_do_pacote(t.nome, t.versao, t.sha256)
         if path.isdir(path.join(destino, t.nome)):
@@ -747,10 +772,18 @@ async def cmd_install() -> int:
             print(f"o hash NÃO bate para {t.nome}@{t.versao}: o lock diz {t.sha256}, o que há diz {sha}")
             return 1
         quantos = await R.extrair_pacote(bs, destino, t.nome)
-        print(f"{t.nome} {t.versao}  {quantos} arquivo(s) em {destino}")
-        if t.inseguro:
-            print("   (unsafe: sem assinatura — o hash bateu)")
+        if saida_json:
+            ji.append('{"name": ' + G.jstr(t.nome) + ', "version": ' + G.jstr(t.versao)
+                      + ', "dir": ' + G.jstr(destino) + ', "files": ' + str(quantos)
+                      + ', "unsafe": ' + ("true" if t.inseguro else "false") + '}')
+        else:
+            print(f"{t.nome} {t.versao}  {quantos} arquivo(s) em {destino}")
+            if t.inseguro:
+                print("   (unsafe: sem assinatura — o hash bateu)")
         n += 1
+    if saida_json:
+        print("[" + ", ".join(ji) + "]")
+        return 0
     if n == 0:
         print("nada a instalar: tudo o que o lock diz já está aberto")
     return 0
