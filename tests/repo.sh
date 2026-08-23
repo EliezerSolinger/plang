@@ -367,6 +367,108 @@ EOF
     rm -f "$OUT/httpd.pid" "$OUT/httpd.port"
 fi
 
+# ---- 10. AS RECUSAS DO PUBLISH ----
+#
+# Três casos em que publicar seria publicar uma coisa que não serve, e nenhum
+# deles precisa de mecanismo novo: o índice já traz as dependências, o manifesto
+# já diz a linguagem, e a lista canónica da API já está calculada para entrar no
+# índice. Conferir é comparar.
+cd "$RAIZ"
+FAKE=$OUT/fake
+rm -rf "$FAKE"; mkdir -p "$FAKE/vazio"
+
+# (a) uma dependência que o repositório de destino não resolve. O `sha2` depende
+# do `stl`; num repositório vazio ele não existe.
+if "$PPACK" publish sha2 --to "$FAKE/vazio" >"$FAKE/dep.log" 2>&1; then
+    bad "publicar com uma dependência que o destino não tem devia ser recusado"
+else ok; fi
+grep -q "publique-a primeiro" "$FAKE/dep.log" && ok || bad "a recusa da dependência não disse o que fazer"
+[ -f "$FAKE/vazio/index.json" ] && bad "a recusa escreveu no repositório" || ok
+
+# (b) um `.psc` dentro de um pacote declarado `p` — e o que está em `test/` NÃO
+# conta, que é como o `sha2` prova a travessia da fronteira a partir do pscript
+mkdir -p "$FAKE/pkg/pmod"
+cat > "$FAKE/pkg/pack.json" <<'EOF'
+{ "name": "pmisto", "version": "0.1.0", "lang": "p", "root": "pmisto.ph" }
+EOF
+cat > "$FAKE/pkg/pmisto.ph" <<'EOF'
+def pmisto_dois() -> i32
+EOF
+cat > "$FAKE/pkg/pmisto.p" <<'EOF'
+import "pmisto.ph"
+def pmisto_dois() -> i32:
+    return 2
+EOF
+mkdir -p "$FAKE/repo2"
+"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p1.log" 2>&1 && ok || bad "um pacote P simples devia publicar (veja $FAKE/p1.log)"
+mkdir -p "$FAKE/pkg/test"
+echo 'print("oi")' > "$FAKE/pkg/test/t.psc"
+rm -rf "$FAKE/repo3"; mkdir -p "$FAKE/repo3"
+"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo3" >"$FAKE/p2.log" 2>&1 && ok || bad "um .psc em test/ NÃO devia impedir (veja $FAKE/p2.log)"
+echo 'x: int = 1' > "$FAKE/pkg/extra.psc"
+rm -rf "$FAKE/repo4"; mkdir -p "$FAKE/repo4"
+if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo4" >"$FAKE/p3.log" 2>&1; then
+    bad "um .psc FORA de test/ num pacote `lang: p` devia ser recusado"
+else ok; fi
+grep -q "extra.psc" "$FAKE/p3.log" && ok || bad "a recusa não nomeou o arquivo"
+rm -f "$FAKE/pkg/extra.psc"
+
+# (c) a versão sobe e a interface não bate com o que a subida promete. O `patch`
+# diz "nada mudou"; o `minor` diz "só acrescentei".
+sed -i 's/"version": "0.1.0"/"version": "0.1.1"/' "$FAKE/pkg/pack.json"
+cat > "$FAKE/pkg/pmisto.ph" <<'EOF'
+def pmisto_dois() -> i32
+def pmisto_tres() -> i32
+EOF
+cat > "$FAKE/pkg/pmisto.p" <<'EOF'
+import "pmisto.ph"
+def pmisto_dois() -> i32:
+    return 2
+def pmisto_tres() -> i32:
+    return 3
+EOF
+if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p4.log" 2>&1; then
+    bad "um patch com a interface mudada devia ser recusado"
+else ok; fi
+grep -q "patch" "$FAKE/p4.log" && ok || bad "a recusa do patch não disse por quê"
+# a mesma mudança como MINOR passa: acrescentar é o que um minor promete
+sed -i 's/"version": "0.1.1"/"version": "0.2.0"/' "$FAKE/pkg/pack.json"
+"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p5.log" 2>&1 && ok || bad "um minor que ACRESCENTA devia publicar (veja $FAKE/p5.log)"
+# e tirar num minor, não
+sed -i 's/"version": "0.2.0"/"version": "0.3.0"/' "$FAKE/pkg/pack.json"
+cat > "$FAKE/pkg/pmisto.ph" <<'EOF'
+def pmisto_tres() -> i32
+EOF
+cat > "$FAKE/pkg/pmisto.p" <<'EOF'
+import "pmisto.ph"
+def pmisto_tres() -> i32:
+    return 3
+EOF
+if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p6.log" 2>&1; then
+    bad "um minor que TIRA da interface devia ser recusado"
+else ok; fi
+grep -q "acrescenta, não tira" "$FAKE/p6.log" && ok || bad "a recusa do minor não disse por quê"
+
+# ---- 11. `ppack lock`: o lock a partir do manifesto, sem construir ----
+cd "$RAIZ/$OUT/proj"
+cp pack.lock lock.antes
+# tirar uma linha do lock e mandar refazê-lo: ele volta ao que o manifesto pede
+python3 - <<'PY2'
+import json
+d = json.load(open("pack.lock"))
+d["packages"] = [p for p in d["packages"] if p["name"] != "stl"]
+json.dump(d, open("pack.lock", "w"), indent=2)
+PY2
+"$PPACK" lock >lock.log 2>&1 && ok || bad "ppack lock (veja $OUT/proj/lock.log)"
+grep -q '"name": "stl"' pack.lock && ok || bad "o lock refeito não trouxe o stl de volta"
+# e agora ele já corresponde: `--frozen` aceita
+"$PPACK" lock --frozen >lock2.log 2>&1 && ok || bad "--frozen devia aceitar um lock em dia"
+# um manifesto que pede uma versão que o lock não tem: `--frozen` recusa
+sed -i 's/"sha2": "0.1.0"/"sha2": "0.9.9"/' pack.json
+"$PPACK" lock --frozen >lock3.log 2>&1 && bad "--frozen devia recusar um lock velho" || ok
+grep -q "frozen" lock3.log && ok || bad "a recusa do --frozen não se explicou"
+sed -i 's/"sha2": "0.9.9"/"sha2": "0.1.0"/' pack.json
+
 cd "$RAIZ"
 echo "   repo: $pass ok, $fail failed"
 [ $fail = 0 ]

@@ -1392,6 +1392,114 @@ async def cmd_install(frozen: bool) -> int:
     return 0
 
 
+private def partes_da_versao(v: str) -> list<int>:
+    ps = v.split(".")
+    out: list<int> = []
+    for i in range(3):
+        out.append(int(ps[i]) if i < len(ps) else 0)
+    return out
+
+
+private def psc_fora_do_teste(dir: str, rel: str, achados: list<str>):
+    """Um `.psc` dentro de um pacote declarado `p`, sem contar o que está em
+    `test/`.
+
+    A exceção do teste não é conveniência: um pacote em P pode muito bem ser
+    exercitado a partir do pscript — é assim que o `sha2` prova que atravessa a
+    fronteira dos 45.5 — e o teste não faz parte da interface que alguém importa.
+    O que não pode é um MÓDULO do pacote ser pscript quando o manifesto diz que
+    ele é P: quem o importar como P recebe um erro que não fala do problema."""
+    for nome in sorted(os.listdir(dir)):
+        cheio = path.join(dir, nome)
+        se_rel = nome if len(rel) == 0 else rel + "/" + nome
+        if path.isdir(cheio):
+            if nome == "test" and len(rel) == 0:
+                continue
+            psc_fora_do_teste(cheio, se_rel, achados)
+        elif nome.endswith(".psc"):
+            achados.append(se_rel)
+
+
+private async def recusas_de_publish(ix: R.Indice, m: MF.Manifesto, dir: str,
+                                     u: R.Versao) -> list<str>:
+    """Os três casos em que publicar seria publicar uma coisa que não serve.
+
+    Nenhum deles precisa de mecanismo novo — é essa a razão de existirem: o
+    índice já traz as dependências, o manifesto já diz a linguagem, e a lista
+    canónica da API já está calculada para entrar no índice. Conferir é
+    comparar.
+
+      1. **uma dependência que o destino não resolve.** Publica-se um tarball
+         que só se constrói na máquina do autor, onde a dependência é membro do
+         workspace. Quem o instalar depois recebe "não achei foo@0.1.0" — longe
+         daqui, e sem saber que foi aqui que se decidiu.
+
+      2. **um `.psc` num pacote declarado `p`** (fora de `test/`).
+
+      3. **a versão subiu e a interface não bate com o que a subida promete.**
+         Um `patch` diz "nada mudou na interface" e um `minor` diz "só
+         acrescentei" — as duas coisas são verificáveis a partir do índice, e é
+         por isso que a lista canónica da API está lá."""
+    maus: list<str> = []
+    for d in m.deps:
+        if ix.tem(d.nome, d.faixa):
+            continue
+        maus.append("a dependência " + d.nome + "@" + d.faixa
+                    + " não está neste repositório — publique-a primeiro")
+    if m.lang == "p":
+        achados: list<str> = []
+        psc_fora_do_teste(dir, "", achados)
+        for a in achados:
+            maus.append(a + " é pscript, e o manifesto declara `\"lang\": \"p\"`")
+    anterior = ""
+    for v in ix.versoes(m.nome):
+        if len(anterior) == 0 or MF.versao_maior(v, anterior):
+            anterior = v
+    if len(anterior) == 0:
+        return maus
+    va = partes_da_versao(anterior)
+    vn = partes_da_versao(m.versao)
+    if vn[0] != va[0]:
+        return maus                      # major: pode mudar o que quiser
+    ant = ix.pega(m.nome, anterior)
+    if vn[1] == va[1]:
+        # patch: a interface tem de ser a MESMA, módulo a módulo
+        for mod in sorted_keys(u.api_hash):
+            if mod not in ant.api_hash:
+                maus.append("o módulo " + mod + " é novo, e " + m.versao
+                            + " só sobe o `patch` de " + anterior)
+            elif ant.api_hash[mod] != u.api_hash[mod]:
+                maus.append("a interface de " + mod + " mudou, e " + m.versao
+                            + " só sobe o `patch` de " + anterior)
+        for mod2 in sorted_keys(ant.api_hash):
+            if mod2 not in u.api_hash:
+                maus.append("o módulo " + mod2 + " saiu, e " + m.versao
+                            + " só sobe o `patch` de " + anterior)
+        return maus
+    # minor: pode ACRESCENTAR, e mais nada
+    mods_ant: list<str> = []
+    for k3 in ant.api:
+        mods_ant.append(k3)
+    for mod3 in sorted(mods_ant):
+        if mod3 not in u.api:
+            maus.append("o módulo " + mod3 + " saiu, e " + m.versao
+                        + " sobe o `minor` de " + anterior + " (minor acrescenta, não tira)")
+            continue
+        agora: list<str> = u.api[mod3]
+        for linha in ant.api[mod3]:
+            if linha not in agora:
+                maus.append("`" + linha + "` saiu de " + mod3 + ", e " + m.versao
+                            + " sobe o `minor` de " + anterior + " (minor acrescenta, não tira)")
+    return maus
+
+
+private def sorted_keys(d: dict<str, str>) -> list<str>:
+    ks: list<str> = []
+    for k in d:
+        ks.append(k)
+    return sorted(ks)
+
+
 async def cmd_publish(alvos: list<str>, para: str, chave: str, query: str) -> int:
     """`ppack publish <pacote> --to <dir>` — o `.tar`, o hash e a entrada no
     índice, no repositório local do autor.
@@ -1447,17 +1555,9 @@ async def cmd_publish(alvos: list<str>, para: str, chave: str, query: str) -> in
         print("suba a versão no pack.json, ou apague a entrada do índice se ela nunca saiu daqui")
         return 1
 
-    bs = await R.empacotar(dir, m.nome + "-" + m.versao)
-    sha = R.hash_de(bs)
-    rel = "pkg/" + m.nome + "/" + m.nome + "-" + m.versao + ".tar"
-    await R.escrever_bytes(path.join(para, rel), bs)
-
     u = R.vazia()
     u.nome = m.nome
     u.versao = m.versao
-    u.arquivo = rel
-    u.tamanho = len(bs)
-    u.sha256 = sha
     u.autor = ""
     u.lang = m.lang
     u.raiz = m.raiz
@@ -1465,6 +1565,22 @@ async def cmd_publish(alvos: list<str>, para: str, chave: str, query: str) -> in
     u.toolchain = m.toolchain
     u.descricao = m.descricao
     await api_do_pacote(dir, m, query, u.api, u.api_hash)
+    # a RECUSA acontece antes de um byte ser escrito. Um repositório com um
+    # tarball a mais e nenhuma entrada no índice é um repositório que ninguém
+    # sabe consertar.
+    maus = await recusas_de_publish(ix, m, dir, u)
+    if len(maus) > 0:
+        print(dir + "/pack.json: error: isto não pode ser publicado assim:")
+        for mm in maus:
+            print("   " + mm)
+        return 1
+    bs = await R.empacotar(dir, m.nome + "-" + m.versao)
+    sha = R.hash_de(bs)
+    rel = "pkg/" + m.nome + "/" + m.nome + "-" + m.versao + ".tar"
+    await R.escrever_bytes(path.join(para, rel), bs)
+    u.arquivo = rel
+    u.tamanho = len(bs)
+    u.sha256 = sha
     if m.nome not in ix.pacotes:
         vazio: dict<str, R.Versao> = {}
         ix.pacotes[m.nome] = vazio
