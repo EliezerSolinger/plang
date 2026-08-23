@@ -977,11 +977,24 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
 - [ ] **erros sublinhados**: a resposta 6 consumida pelo editor — clique leva
       a arquivo:linha:coluna; o formato de erro do próprio ppack (posicional)
       entra pelo MESMO caminho
-- [ ] **post-mortem**: em `raise` não capturado (e nos traps que o runtime já
-      pega) com `-g`: despejar a pilha COM VALORES — a shadow stack já carrega
-      os frames e o coletor já sabe o que é referência; os valores imprimem
-      com o `ps_repr` genérico da F5 (dependência real: F5 antes); no
-      terminal sempre, e num painel quando dentro do editor
+- [x] **post-mortem** (FEITO, 2026-08-23): com `-g`, cada moldura imprime o que
+      estava em CADA variável, com o `repr` genérico da F5 — que era a
+      dependência real, e por isso a ordem. Uma pilha diz ONDE; a pergunta a
+      seguir é PORQUÊ, e é ela que faz alguém abrir um depurador.
+      Três decisões:
+        * os valores são copiados no RAISE e não no relatório — quando o
+          relatório acontece a pilha já desenrolou e não há lá nada para ler;
+        * são copiados como REFERÊNCIAS (o erro mantém-nas vivas e o coletor
+          percorre-as): renderizar no raise seria formatar um grafo inteiro a
+          cada erro, incluindo os que alguém usa como fluxo de controlo;
+        * o NOME e o TIPO de cada variável são estáticos por moldura, emitidos
+          só com `-g` — a moldura recebe-os por uma função à parte
+          (`ps_push_fn_dbg`), então um build sem `-g` não paga nem os dois
+          stores nem os arrays. A correspondência nome→tipo faz-se do lado da
+          árvore PSCRIPT (na de P `list<int>` já é `*PsList` e mais nada), e um
+          nome declarado duas vezes com tipos diferentes fica de fora: imprimir
+          um valor com o tipo errado é pior do que não o imprimir.
+      No terminal sempre; o painel do editor é o que falta.
 - [ ] barra de status do build (a lista de arestas + tempo — os eventos bastam)
 
 **Pronto quando**: o play constrói e roda o próprio pstudio a partir do

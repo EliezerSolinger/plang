@@ -4,6 +4,10 @@ The flag gives EVERY pscript function a frame, so the trace names the ones that
 hold nothing collected too — here `<main>`, which holds nothing at all. The
 price is a push and a pop per call: on fib(35), the benchmark that is nothing
 but calls, 0.03s becomes 0.05s. Everywhere else it is noise.
+
+Since 119 it also gives the POST-MORTEM (F6): each frame prints what was in each
+variable, which is the question that comes right after "where". See
+`postmortem.psc` for the whole story.
 """
 
 

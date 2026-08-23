@@ -281,6 +281,12 @@ static Decl *lower_struct_walk(PsLow *L, PsDecl *d, int writing, int with_body);
 
 static int tem_tupla(PsType *t, int32_t depth);
 
+static Type *ty_cst(Arena *a, const char *n);
+
+static void dbg_build(PsLow *L, PsFunc *f);
+
+static PsType *dbg_find(PsLow *L, const char *nome);
+
 static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_campos);
 
 static Decl *lower_struct_fields(PsLow *L, PsDecl *d);
@@ -389,6 +395,8 @@ struct PsLow {
     StrSet svars;
     StrSet gvars;
     Block *for_body;
+    Vec_pchar dbg_nm;
+    Vec_pPsType dbg_ty;
     const char *fr_fn;
     const char *fr_file;
     int32_t lazy_depth;
@@ -412,6 +420,8 @@ static Block *PsLow_block(PsLow *self, PsBlock *b);
 static int PsLow_is_collected(PsLow *self, Type *t);
 
 static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_t nparams, Pos pos);
+
+static void PsLow_dbg_slot(PsLow *self, Vec_pExpr *nm, Vec_pExpr *ty, const char *name, Pos pos);
 
 static Stmt *PsLow_slot_store(PsLow *self, const char *arr, int32_t k, const char *name, Pos pos);
 
@@ -5625,20 +5635,45 @@ static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_
     sd->type = ty_array(self->a, ty_ptr(self->a, ty_ptr(self->a, ty_name(self->a, "PsObj"))), cnt);
     Vec_pStmt_push(&out, sd);
     int32_t k = 0;
+    int dbg = PS_FULL_TRACE && tfn != NULL;
+    Vec_pExpr dnm;
+    Vec_pExpr_init(&dnm);
+    Vec_pExpr dty;
+    Vec_pExpr_init(&dty);
     for (i = 0; i < nparams; i += 1) {
         if (PsLow_is_collected(self, params[i]->type)) {
             Vec_pStmt_push(&out, PsLow_slot_store(self, sl, k, params[i]->name, pos));
             k += 1;
+            if (dbg) {
+                PsLow_dbg_slot(self, &dnm, &dty, params[i]->name, pos);
+            }
         } else if (PsLow_value_slots(self, params[i]->type) > 0) {
+            int32_t nvs = PsLow_value_slots(self, params[i]->type);
             PsLow_value_slot_stores(self, &out, sl, &k, PsLow_ident(self, params[i]->name, pos), params[i]->type, pos);
+            if (dbg) {
+                size_t _z;
+                for (_z = 0; _z < nvs; _z += 1) {
+                    PsLow_dbg_slot(self, &dnm, &dty, NULL, pos);
+                }
+            }
         }
     }
     for (i = 0; i < decls.len; i += 1) {
         if (PsLow_is_collected(self, decls.data[i]->type)) {
             Vec_pStmt_push(&out, PsLow_slot_store(self, sl, k, decls.data[i]->name, pos));
             k += 1;
+            if (dbg) {
+                PsLow_dbg_slot(self, &dnm, &dty, decls.data[i]->name, pos);
+            }
         } else {
+            int32_t nvs2 = PsLow_value_slots(self, decls.data[i]->type);
             PsLow_value_slot_stores(self, &out, sl, &k, PsLow_ident(self, decls.data[i]->name, pos), decls.data[i]->type, pos);
+            if (dbg) {
+                size_t _z2;
+                for (_z2 = 0; _z2 < nvs2; _z2 += 1) {
+                    PsLow_dbg_slot(self, &dnm, &dty, NULL, pos);
+                }
+            }
         }
     }
     Stmt *fd = st_new(self->a, ST_VAR, pos);
@@ -5646,7 +5681,7 @@ static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_
     fd->type = ty_name(self->a, "PsFrame");
     Vec_pStmt_push(&out, fd);
     Stmt *pu = st_new(self->a, ST_EXPR, pos);
-    pu->expr = PsLow_call_rt(self, (tfn != NULL ? "ps_push_fn" : "ps_push_frame"), pos);
+    pu->expr = PsLow_call_rt(self, (tfn != NULL ? (dbg ? "ps_push_fn_dbg" : "ps_push_fn") : "ps_push_frame"), pos);
     PsLow_push_arg(self, pu->expr, PsLow_ctx_arg(self, pos));
     PsLow_push_arg(self, pu->expr, PsLow_addr_of(self, fr, pos));
     PsLow_push_arg(self, pu->expr, PsLow_ident(self, sl, pos));
@@ -5658,6 +5693,35 @@ static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_
         Expr *fll = ex_new(self->a, EX_STRING, pos);
         fll->text = Arena_printf(self->a, "\"%s\"", (tfile != NULL ? tfile : "\?"));
         PsLow_push_arg(self, pu->expr, fll);
+    }
+    if (dbg && dnm.len > 0) {
+        Decl *nmv = Arena_alloc(self->a, sizeof(Decl));
+        nmv->kind = DL_VAR;
+        nmv->pos = pos;
+        nmv->name = Arena_printf(self->a, "__nm%d", id);
+        nmv->type = ty_array(self->a, ty_ptr(self->a, ty_cst(self->a, "char")), NULL);
+        nmv->is_static = 1;
+        Expr *ni = ex_new(self->a, EX_INITLIST, pos);
+        ni->args = dnm.data;
+        ni->nargs = (int32_t)dnm.len;
+        nmv->init = ni;
+        Vec_pDecl_push(&self->out, nmv);
+        Decl *tyv = Arena_alloc(self->a, sizeof(Decl));
+        tyv->kind = DL_VAR;
+        tyv->pos = pos;
+        tyv->name = Arena_printf(self->a, "__tv%d", id);
+        tyv->type = ty_array(self->a, ty_ptr(self->a, ty_cst(self->a, "PsTy")), NULL);
+        tyv->is_static = 1;
+        Expr *ti = ex_new(self->a, EX_INITLIST, pos);
+        ti->args = dty.data;
+        ti->nargs = (int32_t)dty.len;
+        tyv->init = ti;
+        Vec_pDecl_push(&self->out, tyv);
+        PsLow_push_arg(self, pu->expr, PsLow_ident(self, nmv->name, pos));
+        PsLow_push_arg(self, pu->expr, PsLow_ident(self, tyv->name, pos));
+    } else if (dbg) {
+        PsLow_push_arg(self, pu->expr, ex_new(self->a, EX_NONE, pos));
+        PsLow_push_arg(self, pu->expr, ex_new(self->a, EX_NONE, pos));
     }
     Vec_pStmt_push(&out, pu);
     Stmt *po = st_new(self->a, ST_DEFER, pos);
@@ -5744,6 +5808,23 @@ static void PsLow_value_slot_stores(PsLow *self, Vec_pStmt *out, const char *arr
             PsLow_value_slot_stores(self, out, arr, k, fe, ft, pos);
         }
     }
+}
+
+static void PsLow_dbg_slot(PsLow *self, Vec_pExpr *nm, Vec_pExpr *ty, const char *name, Pos pos) {
+    PsType *pt = (name != NULL ? dbg_find(self, name) : NULL);
+    if (name == NULL || pt == NULL) {
+        Vec_pExpr_push(nm, ex_new(self->a, EX_NONE, pos));
+        Vec_pExpr_push(ty, ex_new(self->a, EX_NONE, pos));
+        return;
+    }
+    Expr *nl = ex_new(self->a, EX_STRING, pos);
+    nl->text = Arena_printf(self->a, "\"%s\"", name);
+    Vec_pExpr_push(nm, nl);
+    Expr *tr = ex_new(self->a, EX_UNARY, pos);
+    tr->op = TK_AMP;
+    tr->lhs = ex_new(self->a, EX_IDENT, pos);
+    tr->lhs->text = ty_of(self, pt, pos);
+    Vec_pExpr_push(ty, tr);
 }
 
 static Expr *PsLow_zero_struct(PsLow *self, Pos pos) {
@@ -9415,6 +9496,7 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
         pp2[j] = &pf->params[j];
     }
     Vec_pStmt nlb2 = PsLow_nl_flush(L, &body);
+    dbg_build(L, f);
     L->fr_fn = f->name;
     L->fr_file = L->file;
     pf->body = PsLow_frame_wrap(L, &nlb2, pp2, pf->nparams, f->pos);
@@ -9425,6 +9507,83 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
     L->async_cont = -1;
     L->async_lnacl = 0;
     return d;
+}
+
+static void dbg_add(PsLow *L, const char *nome, PsType *t) {
+    if (nome == NULL || t == NULL) {
+        return;
+    }
+    size_t i;
+    for (i = 0; i < L->dbg_nm.len; i += 1) {
+        if (strcmp(L->dbg_nm.data[i], nome) == 0) {
+            if (L->dbg_ty.data[i] != NULL && !ps_type_eq(L->dbg_ty.data[i], t)) {
+                L->dbg_ty.data[i] = NULL;
+            }
+            return;
+        }
+    }
+    Vec_pchar_push(&L->dbg_nm, (char *)nome);
+    Vec_pPsType_push(&L->dbg_ty, t);
+}
+
+static void dbg_scan_b(PsLow *L, PsBlock *b);
+
+static void dbg_scan_s(PsLow *L, PsStmt *s) {
+    if (s == NULL) {
+        return;
+    }
+    if (s->kind == PS_VAR) {
+        dbg_add(L, s->name, (s->type != NULL ? s->type : (s->rhs != NULL ? s->rhs->type : NULL)));
+    }
+    size_t i;
+    for (i = 0; i < s->nconds; i += 1) {
+        dbg_scan_b(L, s->blocks[i]);
+    }
+    dbg_scan_b(L, s->body);
+    dbg_scan_b(L, s->else_block);
+    dbg_scan_b(L, s->catch_block);
+    dbg_scan_b(L, s->finally_block);
+    for (i = 0; i < s->ncases; i += 1) {
+        if (s->cases[i] != NULL) {
+            dbg_scan_b(L, s->cases[i]->body);
+        }
+    }
+}
+
+static void dbg_scan_b(PsLow *L, PsBlock *b) {
+    if (b == NULL) {
+        return;
+    }
+    size_t i;
+    for (i = 0; i < b->n; i += 1) {
+        dbg_scan_s(L, b->stmts[i]);
+    }
+}
+
+static void dbg_build(PsLow *L, PsFunc *f) {
+    L->dbg_nm.len = 0;
+    L->dbg_ty.len = 0;
+    if (!PS_FULL_TRACE || f == NULL) {
+        return;
+    }
+    size_t i;
+    for (i = 0; i < f->nparams; i += 1) {
+        dbg_add(L, f->params[i].name, f->params[i].type);
+    }
+    dbg_scan_b(L, f->body);
+}
+
+static PsType *dbg_find(PsLow *L, const char *nome) {
+    if (nome == NULL) {
+        return NULL;
+    }
+    size_t i;
+    for (i = 0; i < L->dbg_nm.len; i += 1) {
+        if (strcmp(L->dbg_nm.data[i], nome) == 0) {
+            return L->dbg_ty.data[i];
+        }
+    }
+    return NULL;
 }
 
 static Decl *lower_struct_impl(PsLow *L, PsDecl *d) {
@@ -10645,6 +10804,7 @@ static Decl *lower_func(PsLow *L, PsFunc *f, const char *owner, int with_body) {
             pp[j] = &pf->params[j];
         }
         Vec_pStmt nlb3 = PsLow_nl_flush(L, &body);
+        dbg_build(L, f);
         L->fr_fn = f->name;
         L->fr_file = L->file;
         pf->body = PsLow_frame_wrap(L, &nlb3, pp, pf->nparams, f->pos);
@@ -10682,6 +10842,8 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     Vec_pPsExpr_init(&L.keyads);
     Vec_pPsExpr_init(&L.cmpads);
     Vec_pPsType_init(&L.reprads);
+    Vec_pchar_init(&L.dbg_nm);
+    Vec_pPsType_init(&L.dbg_ty);
     Vec_pPsType_init(&L.tuptrs);
     Vec_pPsFunc_init(&L.fnvals);
     StrSet_init(&L.nl_names);

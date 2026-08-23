@@ -288,6 +288,24 @@ struct PsErr:
     tr_file: const *char[24]
     tr_n: i32
     tr_lost: i32       # frames the array could not hold
+    # ---- O POST-MORTEM (F6): os VALORES, e não só os nomes ----
+    #
+    # Uma pilha que diz `em f, em g, em main` responde ONDE. O que se quer saber
+    # é PORQUÊ, e para isso é preciso o que estava nas variáveis. Elas vivem na
+    # pilha-sombra, que o coletor já percorre — o que faltava era o TIPO de cada
+    # uma, e é isso que a tabela de campos (F5) trouxe.
+    #
+    # Os valores são copiados no RAISE e não no relatório: quando o relatório
+    # acontece a pilha já desenrolou e não há lá nada para ler. E são copiados
+    # como REFERÊNCIAS, com o erro a mantê-las vivas — renderizar aqui seria
+    # alocar e formatar a cada `raise`, incluindo os que alguém usa como fluxo
+    # de controlo.
+    #
+    # Só com `-g`: sem ele isto não custa um byte nem um ciclo.
+    tr_nsl: i32[24]           # quantos valores por moldura
+    tr_val: *PsObj[192]       # 24 molduras x 8 valores, achatado
+    tr_name: const *char[192]
+    tr_ty: const *PsTy[192]
 
 # `list<T>` (27.3). Two objects: the header, which is what a variable points at,
 # and the backing storage, which grows by being replaced. Splitting them is what
@@ -385,6 +403,11 @@ struct PsFrame:
                        #   same function once per block would be noise). Static
                        #   text, so nothing here is ever collected.
     file: const *char  # ... and where it is written
+    # 119/F6: o NOME e o TIPO de cada variável desta moldura, para o
+    # post-mortem. Só existem com `-g` — sem ele ficam a None e nada muda,
+    # nem em bytes emitidos nem em trabalho feito.
+    names: const **char
+    tys: const **PsTy
 
 # ---------- the heap ----------
 # One block. The allocator is a BUMP pointer (14.3) — the shape a copying

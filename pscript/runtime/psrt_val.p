@@ -2870,13 +2870,46 @@ def ps_report_exc(ctx: *PsCtx) -> int:
     if ctx == None or ctx->exc == None:
         return 0
     e: *PsErr = ctx->exc
+    # o erro sai do contexto ANTES de se imprimir o que quer que seja: o
+    # post-mortem chama o `repr` de cada variável, e o `repr` pergunta se há
+    # exceção pendente para saber se ele próprio falhou. Com o erro ainda lá,
+    # a primeira variável parecia sempre ter falhado a imprimir — e o `take`
+    # que se seguia apagava o erro que se estava a relatar.
+    ps_take_exc(ctx)
     # o que o programa imprimiu vem primeiro: com o stdout em blocos (um cano,
     # um arquivo) o erro ultrapassá-lo-ia
     fflush(stdout)
     fprintf(stderr, "%s:%d: error: %s\n", e->file if e->file != None else "?", e->line, e->msg->data if e->msg != None else "")
-    # a pilha em que o erro NASCEU (15.2/34.2), de dentro para fora
+    # a pilha em que o erro NASCEU (15.2/34.2), de dentro para fora — e, com
+    # `-g`, O QUE ESTAVA EM CADA VARIÁVEL (F6).
+    #
+    # Uma pilha diz ONDE. O post-mortem diz PORQUÊ, que é a pergunta a seguir e
+    # a razão de alguém abrir um depurador. Aqui ela responde-se sem depurador
+    # nenhum: os valores já foram copiados no `raise`, e o que os imprime é o
+    # `repr` genérico da F5 — a tabela de campos sabe o que cada variável é.
+    nv: i32 = 0
     for i in range(e->tr_n):
         fprintf(stderr, "  in %s (%s)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?")
+        for j in range(e->tr_nsl[i]):
+            if nv >= 192:
+                break
+            nome: const *char = e->tr_name[nv]
+            ty: const *PsTy = e->tr_ty[nv]
+            v: *PsObj = e->tr_val[nv]
+            nv += 1
+            if nome == None:
+                continue
+            if v == None:
+                fprintf(stderr, "      %s = None\n", nome)
+                continue
+            r: *PsStr = ps_repr_val(ctx, (*void)(v), ty, 1)
+            if ps_has_exc(ctx):
+                # o repr de um valor não pode enterrar o erro que se está a
+                # relatar: se ele próprio falhar, diz-se isso e segue-se
+                ps_take_exc(ctx)
+                fprintf(stderr, "      %s = <não se deixou imprimir>\n", nome)
+                continue
+            fprintf(stderr, "      %s = %s\n", nome, r->data)
     if e->tr_lost > 0:
         fprintf(stderr, "  ... and %d more\n", e->tr_lost)
     return 1

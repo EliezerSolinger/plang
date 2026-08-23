@@ -31,6 +31,7 @@ def ps_gc(ctx: *PsCtx)
 def ps_add_root(ctx: *PsCtx, slot: **PsObj)
 def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32)
 def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char)
+def ps_push_fn_dbg(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char, names: const **char, tys: const **PsTy)
 def ps_trace_capture(ctx: *PsCtx, e: *PsErr)
 def ps_pop_frame(ctx: *PsCtx, f: *PsFrame)
 # 108: era privada do arquivo único; a divisão em camadas a tornou pública

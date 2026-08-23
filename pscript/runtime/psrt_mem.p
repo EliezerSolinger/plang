@@ -263,6 +263,8 @@ def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32):
     f->slots = slots
     f->fn = None
     f->file = None
+    f->names = None
+    f->tys = None
     ctx->frames = f
 
 # The same push, for the frame that IS a function's (34.2). Two stores more, and
@@ -275,6 +277,23 @@ def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *cha
     f->slots = slots
     f->fn = fn
     f->file = file
+    f->names = None
+    f->tys = None
+    ctx->frames = f
+
+# 119/F6: a mesma coisa com os NOMES e os TIPOS das variáveis, que é o que o
+# post-mortem precisa para dizer o que estava em cada uma. Só sai com `-g`, e é
+# por isso que é uma função à parte em vez de dois argumentos a mais na de cima:
+# um programa compilado sem `-g` não paga nem os dois stores nem os dois arrays
+# estáticos.
+def ps_push_fn_dbg(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char, names: const **char, tys: const **PsTy):
+    f->prev = ctx->frames
+    f->nslots = n
+    f->slots = slots
+    f->fn = fn
+    f->file = file
+    f->names = names
+    f->tys = tys
     ctx->frames = f
 
 # Reads the shadow stack into the error, innermost first (15.2/34.2). Called at
@@ -284,11 +303,26 @@ def ps_trace_capture(ctx: *PsCtx, e: *PsErr):
     e->tr_n = 0
     e->tr_lost = 0
     f: *PsFrame = ctx->frames
+    nv: i32 = 0
     while f != None:
         if f->fn != None:
             if e->tr_n < PS_TRACE_MAX:
                 e->tr_fn[e->tr_n] = f->fn
                 e->tr_file[e->tr_n] = f->file
+                e->tr_nsl[e->tr_n] = 0
+                # os VALORES, quando o programa foi compilado com `-g`. Copiados
+                # AQUI e não no relatório: quando o relatório acontece a pilha já
+                # desenrolou e não há lá nada para ler. São referências, e o erro
+                # mantém-nas vivas — o coletor percorre-as com o resto.
+                if f->names != None and f->tys != None:
+                    k: i32 = 0
+                    while k < f->nslots and nv < 192 and k < 8:
+                        e->tr_val[nv] = *f->slots[k]
+                        e->tr_name[nv] = f->names[k]
+                        e->tr_ty[nv] = f->tys[k]
+                        nv += 1
+                        k += 1
+                    e->tr_nsl[e->tr_n] = k
                 e->tr_n += 1
             else:
                 e->tr_lost += 1
@@ -350,6 +384,16 @@ private def ps_scan_object(to: *PsBlock, o: *PsObj):
         case PS_TY_ERR:
             e: *PsErr = (*PsErr)(o)
             e->msg = (*PsStr)(ps_forward(to, (*PsObj)(e->msg)))
+            # os valores que o post-mortem vai imprimir são REFERÊNCIAS que o
+            # erro mantém vivas: sem esta linha, uma coleta entre o `raise` e o
+            # relatório deixaria a pilha a apontar para lixo — que é exatamente o
+            # tipo de defeito que só aparece sob pressão de memória
+            nvt: i32 = 0
+            for ti in range(e->tr_n):
+                for tj in range(e->tr_nsl[ti]):
+                    if nvt < 192:
+                        e->tr_val[nvt] = ps_forward(to, e->tr_val[nvt])
+                        nvt += 1
         case PS_TY_LIST:
             l: *PsList = (*PsList)(o)
             if l->raw != None:

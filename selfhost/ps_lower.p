@@ -76,6 +76,9 @@ private def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
 private def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr
 private def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl
 private def tem_tupla(t: *PsType, depth: i32) -> bool
+private def ty_cst(a: *Arena, n: const *char) -> *Type
+private def dbg_build(L: *PsLow, f: *PsFunc)
+private def dbg_find(L: *PsLow, nome: const *char) -> *PsType
 private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_campos: bool) -> *Decl
 private def lower_struct_fields(L: *PsLow, d: *PsDecl) -> *Decl
 private def lower_struct_at(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl
@@ -253,6 +256,14 @@ struct PsLow:
                          #   file scope where every thread would share them
     for_body: *Block    # a body already lowered: what a comprehension hands to
                         #   the `for` lowering instead of a pscript block
+    # 119/F6: o nome e o TIPO PSCRIPT de cada variável da função que está a ser
+    # baixada, para o post-mortem. O `frame_wrap` recebe a árvore de P, onde os
+    # tipos da linguagem de cima já não existem (`list<int>` é `*PsList` e mais
+    # nada), então a correspondência faz-se aqui, pelo NOME — e um nome
+    # declarado duas vezes com tipos diferentes fica de fora, porque imprimir um
+    # valor com o tipo errado é pior do que não o imprimir.
+    dbg_nm: Vec<*char>
+    dbg_ty: Vec<*PsType>
     fr_fn: const *char  # the FUNCTION whose frame the next `frame_wrap` builds
                         #   (34.2), or None for a block's. Set right before the
                         #   call and cleared by it, because the alternative was
@@ -272,6 +283,7 @@ struct PsLow:
     private def block(self: *PsLow, b: *PsBlock) -> *Block
     private def is_collected(self: *PsLow, t: *Type) -> bool
     private def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block
+    private def dbg_slot(self: *PsLow, nm: *Vec<*Expr>, ty: *Vec<*Expr>, name: const *char, pos: Pos)
     private def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt
     private def zero_struct(self: *PsLow, pos: Pos) -> *Expr
     private def global_value_roots(self: *PsLow, out: *Vec<*Stmt>, base: *Expr, t: *Type, pos: Pos)
@@ -5339,18 +5351,37 @@ struct PsLow:
         sd->type = ty_array(self->a, ty_ptr(self->a, ty_ptr(self->a, ty_name(self->a, "PsObj"))), cnt)
         out.push(sd)
         k: i32 = 0
+        # F6: os NOMES e os TIPOS, na mesma ordem dos slots. Só com `-g`, e só
+        # numa moldura de FUNÇÃO — a de um bloco não tem nome para pendurar.
+        dbg: bool = PS_FULL_TRACE and tfn != None
+        dnm: Vec<*Expr>
+        dnm.init()
+        dty: Vec<*Expr>
+        dty.init()
         for i in range(nparams):
             if self->is_collected(params[i]->type):
                 out.push(self->slot_store(sl, k, params[i]->name, pos))
                 k += 1
+                if dbg:
+                    self->dbg_slot(&dnm, &dty, params[i]->name, pos)
             elif self->value_slots(params[i]->type) > 0:
+                nvs: i32 = self->value_slots(params[i]->type)
                 self->value_slot_stores(&out, sl, ref k, self->ident(params[i]->name, pos), params[i]->type, pos)
+                if dbg:
+                    for _z in range(nvs):
+                        self->dbg_slot(&dnm, &dty, None, pos)
         for i in range(decls.len):
             if self->is_collected(decls.data[i]->type):
                 out.push(self->slot_store(sl, k, decls.data[i]->name, pos))
                 k += 1
+                if dbg:
+                    self->dbg_slot(&dnm, &dty, decls.data[i]->name, pos)
             else:
+                nvs2: i32 = self->value_slots(decls.data[i]->type)
                 self->value_slot_stores(&out, sl, ref k, self->ident(decls.data[i]->name, pos), decls.data[i]->type, pos)
+                if dbg:
+                    for _z2 in range(nvs2):
+                        self->dbg_slot(&dnm, &dty, None, pos)
         fd: *Stmt = st_new(self->a, ST_VAR, pos)
         fd->name = fr
         fd->type = ty_name(self->a, "PsFrame")
@@ -5359,7 +5390,7 @@ struct PsLow:
         # a FUNCTION's frame carries its name and file, so an error raised under
         # it can say where it was (34.2); a block's frame carries neither, and a
         # trace that repeated the same function once per block would be noise
-        pu->expr = self->call_rt("ps_push_fn" if tfn != None else "ps_push_frame", pos)
+        pu->expr = self->call_rt(("ps_push_fn_dbg" if dbg else "ps_push_fn") if tfn != None else "ps_push_frame", pos)
         self->push_arg(pu->expr, self->ctx_arg(pos))
         self->push_arg(pu->expr, self->addr_of(fr, pos))
         self->push_arg(pu->expr, self->ident(sl, pos))
@@ -5371,6 +5402,34 @@ struct PsLow:
             fll: *Expr = ex_new(self->a, EX_STRING, pos)
             fll->text = self->a->printf("\"%s\"", tfile if tfile != None else "?")
             self->push_arg(pu->expr, fll)
+        if dbg and dnm.len > 0:
+            nmv: *Decl = self->a->alloc(sizeof(Decl))
+            nmv->kind = DL_VAR
+            nmv->pos = pos
+            nmv->name = self->a->printf("__nm%d", id)
+            nmv->type = ty_array(self->a, ty_ptr(self->a, ty_cst(self->a, "char")), None)
+            nmv->is_static = True
+            ni: *Expr = ex_new(self->a, EX_INITLIST, pos)
+            ni->args = dnm.data
+            ni->nargs = i32(dnm.len)
+            nmv->init = ni
+            self->out.push(nmv)
+            tyv: *Decl = self->a->alloc(sizeof(Decl))
+            tyv->kind = DL_VAR
+            tyv->pos = pos
+            tyv->name = self->a->printf("__tv%d", id)
+            tyv->type = ty_array(self->a, ty_ptr(self->a, ty_cst(self->a, "PsTy")), None)
+            tyv->is_static = True
+            ti: *Expr = ex_new(self->a, EX_INITLIST, pos)
+            ti->args = dty.data
+            ti->nargs = i32(dty.len)
+            tyv->init = ti
+            self->out.push(tyv)
+            self->push_arg(pu->expr, self->ident(nmv->name, pos))
+            self->push_arg(pu->expr, self->ident(tyv->name, pos))
+        elif dbg:
+            self->push_arg(pu->expr, ex_new(self->a, EX_NONE, pos))
+            self->push_arg(pu->expr, ex_new(self->a, EX_NONE, pos))
         out.push(pu)
         po: *Stmt = st_new(self->a, ST_DEFER, pos)
         pb: *Block = self->a->alloc(sizeof(Block))
@@ -5453,6 +5512,25 @@ struct PsLow:
     # `{0}` — what a struct starts as. Not `NULL`, which is what a reference
     # starts as, and not nothing, because the frame is about to give the
     # collector the addresses inside it.
+    # UM slot do post-mortem: o nome como literal e o tipo como ponteiro para o
+    # `PsTy` estático. Sem nome conhecido (um slot que veio de dentro de um
+    # valor, uma variável declarada duas vezes com tipos diferentes) sai None dos
+    # dois lados, e o relatório salta-o.
+    private def dbg_slot(self: *PsLow, nm: *Vec<*Expr>, ty: *Vec<*Expr>, name: const *char, pos: Pos):
+        pt: *PsType = dbg_find(self, name) if name != None else None
+        if name == None or pt == None:
+            nm->push(ex_new(self->a, EX_NONE, pos))
+            ty->push(ex_new(self->a, EX_NONE, pos))
+            return
+        nl: *Expr = ex_new(self->a, EX_STRING, pos)
+        nl->text = self->a->printf("\"%s\"", name)
+        nm->push(nl)
+        tr: *Expr = ex_new(self->a, EX_UNARY, pos)
+        tr->op = TK_AMP
+        tr->lhs = ex_new(self->a, EX_IDENT, pos)
+        tr->lhs->text = ty_of(self, pt, pos)
+        ty->push(tr)
+
     private def zero_struct(self: *PsLow, pos: Pos) -> *Expr:
         z: *Expr = ex_new(self->a, EX_INITLIST, pos)
         z->args = self->a->alloc(sizeof(*z->args))
@@ -9184,6 +9262,7 @@ private def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *c
     for j in range(pf->nparams):
         pp2[j] = &pf->params[j]
     nlb2: Vec<*Stmt> = L->nl_flush(&body)
+    dbg_build(L, f)
     L->fr_fn = f->name
     L->fr_file = L->file
     pf->body = L->frame_wrap(&nlb2, pp2, pf->nparams, f->pos)
@@ -9195,6 +9274,68 @@ private def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *c
     L->async_cont = -1
     L->async_lnacl = 0
     return d
+
+# ---------- o mapa do post-mortem (F6) ----------
+#
+# Nome -> tipo PSCRIPT, para a função que está a ser baixada. Existe porque o
+# `frame_wrap` trabalha na árvore de P, onde `list<int>` já é `*PsList` e mais
+# nada — e sem o tipo de cima o `repr` genérico não sabe o que está a olhar.
+#
+# Um nome declarado DUAS VEZES com tipos diferentes (dois blocos, dois `for`)
+# fica de fora: imprimir um valor com o tipo errado é pior do que não o
+# imprimir, e é o único caso em que a correspondência por nome erra.
+private def dbg_add(L: *PsLow, nome: const *char, t: *PsType):
+    if nome == None or t == None:
+        return
+    for i in range(L->dbg_nm.len):
+        if strcmp(L->dbg_nm.data[i], nome) == 0:
+            if L->dbg_ty.data[i] != None and not ps_type_eq(L->dbg_ty.data[i], t):
+                L->dbg_ty.data[i] = None      # ambíguo: fica de fora
+            return
+    L->dbg_nm.push((*char)(nome))
+    L->dbg_ty.push(t)
+
+private def dbg_scan_b(L: *PsLow, b: *PsBlock)
+
+private def dbg_scan_s(L: *PsLow, s: *PsStmt):
+    if s == None:
+        return
+    if s->kind == PS_VAR:
+        dbg_add(L, s->name, s->type if s->type != None else (s->rhs->type if s->rhs != None else None))
+    # o `for` liga nomes cujo tipo a sema pôs no ITERÁVEL; ficam de fora por
+    # agora — o que se ganha com eles não paga a conta de os deduzir aqui
+    for i in range(s->nconds):
+        dbg_scan_b(L, s->blocks[i])
+    dbg_scan_b(L, s->body)
+    dbg_scan_b(L, s->else_block)
+    dbg_scan_b(L, s->catch_block)
+    dbg_scan_b(L, s->finally_block)
+    for i in range(s->ncases):
+        if s->cases[i] != None:
+            dbg_scan_b(L, s->cases[i]->body)
+
+private def dbg_scan_b(L: *PsLow, b: *PsBlock):
+    if b == None:
+        return
+    for i in range(b->n):
+        dbg_scan_s(L, b->stmts[i])
+
+private def dbg_build(L: *PsLow, f: *PsFunc):
+    L->dbg_nm.len = 0
+    L->dbg_ty.len = 0
+    if not PS_FULL_TRACE or f == None:
+        return
+    for i in range(f->nparams):
+        dbg_add(L, f->params[i].name, f->params[i].type)
+    dbg_scan_b(L, f->body)
+
+private def dbg_find(L: *PsLow, nome: const *char) -> *PsType:
+    if nome == None:
+        return None
+    for i in range(L->dbg_nm.len):
+        if strcmp(L->dbg_nm.data[i], nome) == 0:
+            return L->dbg_ty.data[i]
+    return None
 
 # ---------- `struct`: the collected reference type (20.1) ----------
 #
@@ -10371,6 +10512,7 @@ private def lower_func(L: *PsLow, f: *PsFunc, owner: const *char, with_body: boo
         for j in range(pf->nparams):
             pp[j] = &pf->params[j]
         nlb3: Vec<*Stmt> = L->nl_flush(&body)
+        dbg_build(L, f)
         L->fr_fn = f->name
         L->fr_file = L->file
         pf->body = L->frame_wrap(&nlb3, pp, pf->nparams, f->pos)
@@ -10402,6 +10544,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     L.keyads.init()
     L.cmpads.init()
     L.reprads.init()
+    L.dbg_nm.init()
+    L.dbg_ty.init()
     L.tuptrs.init()
     L.fnvals.init()
     L.nl_names.init()
