@@ -1816,7 +1816,23 @@ struct PsP:
     private def parse_from(self: *PsP) -> *PsDecl:
         pos: Pos = self->expect(TK_FROM, "from")->pos
         d: *PsDecl = ps_decl(self->a, PD_FROM_IMPORT, pos)
-        d->path = self->expect(TK_IDENT, "module name")->text
+        # `from <pkg/mod.psc> import x` — a MESMA importação, escrita da outra
+        # forma. Faltar aqui era uma assimetria sem razão: `import <pkg/mod.psc>`
+        # já existia, e um pacote cujo nome só se alcança por um lado obrigava a
+        # qualificar tudo. A grafia do caminho é a mesma; o que muda é o que se
+        # liga no fim.
+        if self->at(TK_LT):
+            self->adv()
+            hp: const *char = ""
+            while not self->at(TK_GT) and not self->at(TK_NEWLINE) and not self->at(TK_EOF):
+                hp = self->a->printf("%s%s", hp, spell_tok(self->adv()))
+            self->expect(TK_GT, "from <pkg/module.psc> import ... (falta o '>')")
+            if not has_suffix_ps(hp, ".psc") and strchr(hp, '/') != None:
+                fatal_at(self->file, pos, "`from <%s> import`: só um módulo PSCRIPT se importa assim — `<pkg>` ou `<pkg/mod.psc>`. Um módulo P entra inteiro (`import <pkg/mod.ph>`), porque o que dele atravessa é decidido pela 45.5 e não por uma lista de nomes.", hp)
+            d->path = hp
+            d->import_system = True
+        else:
+            d->path = self->expect(TK_IDENT, "module name")->text
         self->expect(TK_IMPORT, "from ... import")
         names: Vec<*char>
         names.init()

@@ -61,7 +61,14 @@ def sha256_hex(data: const *char, n: usize, out_hex: *char):
 # É a mesma implementação — não há uma segunda cópia do SHA-256 em pscript, e
 # essa é a razão de o pacote ser em P: a linguagem sem runtime é a que as duas
 # alcançam.
-def sha256_of(in data: CBytes) -> CStr
+def sha256_of(in data: CBytes) -> CStr:
+    """O hash de uns bytes, como texto.
+
+    >>> sha256_of([u8(97), u8(98), u8(99)])
+    ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    >>> len(sha256_of([u8(0)]))
+    64
+    """
 
 
 # ---------- SHA-512 (FIPS 180-4 §6.4) ----------
@@ -93,4 +100,9 @@ def sha512_final(ref s: Sha512, out_digest: *char):
 def sha512_hex(data: const *char, n: usize, out_hex: *char):
     """O caminho curto: 128 dígitos hexadecimais e o terminador (129 bytes)."""
 
-def sha512_of(in data: CBytes) -> CStr
+def sha512_of(in data: CBytes) -> CStr:
+    """O de 512 bits, como texto — 128 dígitos.
+
+    >>> len(sha512_of([u8(97)]))
+    128
+    """

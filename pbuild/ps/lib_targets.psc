@@ -90,7 +90,7 @@ def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
 # descritor não reimplementa a resolução de `import` — ele PERGUNTA. Uma segunda
 # implementação que divergisse da verdadeira daria build velho depois de editar,
 # que é o único modo de falhar que importa.
-private async def ask(c: Ctx, argv: list<str>) -> list<str>:
+async def ask(c: Ctx, argv: list<str>) -> list<str>:
     """A RESPOSTA vem por arquivo, e não pelo cano.
 
     O `os.run` junta a saída de erro com a de saída de propósito — é o que faz um
@@ -127,7 +127,7 @@ private async def ask(c: Ctx, argv: list<str>) -> list<str>:
             out.append(line)
     return out
 
-private def com_raizes(c: Ctx, argv: list<str>) -> list<str>:
+def com_raizes(c: Ctx, argv: list<str>) -> list<str>:
     """O `argv` com as raízes de pacote. Elas vão em toda invocação, pergunta
     inclusive: `--deps` de um arquivo que importa `<pui/widget.ph>` precisa achar
     o `pui` para responder — e uma pergunta que não acha é uma resposta vazia,
@@ -756,3 +756,15 @@ def glob(dir: str, suffix: str) -> list<str>:
         if n.endswith(suffix):
             out.append(path.join(dir, n))
     return out
+
+
+async def escrever(alvo: str, texto: str):
+    """Um arquivo GERADO no plano. É o caminho por onde o doctest entra: o
+    programa de cada módulo é escrito aqui, a partir da resposta 5, e daí para a
+    frente é um fonte como qualquer outro."""
+    d = path.dirname(alvo)
+    if len(d) > 0 and not path.isdir(d):
+        os.makedirs(d)
+    f = await open(alvo, "w")
+    await f.write(texto)
+    await f.close()

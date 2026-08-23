@@ -51,7 +51,13 @@ def diretorio(nome: str, modo: int, mtime: int) -> Membro:
 def bytes_de(s: str) -> list<u8>:
     """O texto como UTF-8. Um nome de arquivo pode ter acento, e o que vai para
     o cabeçalho são BYTES — contar codepoints daria um comprimento que não é o
-    do disco."""
+    do disco.
+
+    >>> len(bytes_de("abc"))
+    3
+    >>> len(bytes_de("olá"))
+    4
+    """
     out: list<u8> = []
     for ch in s:
         cp = ord(ch)
@@ -76,7 +82,13 @@ def bytes_de(s: str) -> list<u8>:
 
 def octal(v: int, largura: int) -> str:
     """Um campo numérico do ustar: octal, alinhado à direita com zeros, e o
-    último byte reservado para o NUL. `largura` é o campo inteiro."""
+    último byte reservado para o NUL. `largura` é o campo inteiro.
+
+    >>> octal(0o644, 8)
+    0000644
+    >>> octal(0, 12)
+    00000000000
+    """
     d = ""
     n = v
     if n < 0:
@@ -220,7 +232,15 @@ private def le_octal(b: list<u8>, pos: int, largura: int, campo: str) -> int:
 
 def nome_seguro(nome: str) -> str:
     """A recusa que mais importa. Devolve "" quando o nome é bom, e a razão
-    quando não é — para quem chama poder dizer QUAL membro e PORQUÊ."""
+    quando não é — para quem chama poder dizer QUAL membro e PORQUÊ.
+
+    >>> nome_seguro("pkg/README.md") == ""
+    True
+    >>> len(nome_seguro("/etc/passwd")) > 0
+    True
+    >>> len(nome_seguro("a/../../etc/passwd")) > 0
+    True
+    """
     if nome == "":
         return "um membro sem nome"
     if nome.startswith("/"):

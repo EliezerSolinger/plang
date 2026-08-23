@@ -25,6 +25,8 @@ import lib_graph as G
 import lib_targets as T
 import lib_manifest as M
 import lib_repo as R
+import lib_api as A
+import lib_doctest as DT
 
 const BUILD: str = "build"
 
@@ -240,7 +242,7 @@ def suites_de_fora() -> list<str>:
     # aqui: uma verificação que roda menos que a de antes não é a mesma
     return ["cases", "modules", "stl", "p-suite", "errors", "pstudio", "roundtrip", "pscript"]
 
-async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, fixo: str, editor: str) -> str:
+async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, sdoc: str, fixo: str, editor: str) -> str:
     logs: list<str> = []
     logdir = path.join(BUILD, "t/log")
     gating = suites_de_fora()
@@ -293,8 +295,8 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, fixo: str, e
     # `ppack test` é a leitura em C do corpus mais a suíte caso a caso: as duas
     # medem a mesma coisa por caminhos diferentes, e juntas são o que `make
     # test` sempre quis dizer. O resto (QBE, C89, oráculos, coletor) é `verify`.
-    T.junta(c, TESTE, [logs[0], suite, spkg],
-            "test: o corpus em C, a suíte caso a caso e os testes dos pacotes")
+    T.junta(c, TESTE, [logs[0], suite, spkg, sdoc],
+            "test: o corpus em C, a suíte caso a caso, os testes dos pacotes e os DOCTESTS")
 
     # a suíte do pscript como GRAFO entra junto: ela é a mesma coisa que a
     # `suite-c` mede, por outro caminho e caso a caso — e é a que roda rápido
@@ -303,6 +305,7 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, fixo: str, e
         tudo.append(l)
     tudo.append(suite)
     tudo.append(spkg)
+    tudo.append(sdoc)
     # o PONTO FIXO (o compilador reproduz a si mesmo) e o editor: os passos 2, 3
     # e 7 do `verify-all`, que já são arestas deste grafo
     tudo.append(fixo)
@@ -362,6 +365,52 @@ async def membros_do_workspace(manifesto: str) -> list<str>:
     for membro in m.membros:
         out.append(path.join(base, membro))
     return out
+
+
+async def suite_doctests(c: T.Ctx, verdict: str) -> str:
+    """Os exemplos das docstrings, a correr.
+
+    Um exemplo numa docstring envelhece em silêncio: parece certo, ninguém o
+    corre, e um dia alguém copia uma linha que já não funciona. Aqui ele é uma
+    aresta do build como qualquer outra.
+
+    O programa de cada módulo é GERADO no plano, a partir da resposta 5 do
+    compilador — a mesma lista canónica que o `ppack doc` mostra. Gerar no plano
+    é o que garante que ele está sempre em dia: a docstring mudou, o programa
+    muda, a aresta suja."""
+    casos: list<T.Caso> = []
+    for dir in await membros_do_workspace("pack.json"):
+        pkg = path.basename(dir)
+        mods: list<str> = []
+        for f in sorted(os.listdir(dir)):
+            if f.endswith(".psc") or f.endswith(".ph"):
+                mods.append(f)
+        for mod in mods:
+            alvo_mod = path.join(dir, mod)
+            resp = await T.ask(c, T.com_raizes(c, [c.query, "--api", alvo_mod]))
+            apis = A.parse("\n".join(resp))
+            if len(apis) == 0:
+                continue
+            api = apis[0]
+            base = mod[0:len(mod) - 4] if mod.endswith(".psc") else mod[0:len(mod) - 3]
+            # um `.ph` entra INTEIRO (`import <pkg/mod.ph>`): o que dele
+            # atravessa é decidido pela 45.5 e não por uma lista de nomes, e os
+            # nomes ficam visíveis sem qualificador. Um `.psc` traz os nomes
+            # públicos pelo `from ... import`.
+            importa = "<" + pkg + "/" + mod + ">"
+            prog = DT.gerar(api, importa) if mod.endswith(".psc") else DT.gerar_ph(api, importa)
+            if prog.quantos == 0:
+                continue
+            rot = pkg + "/" + base
+            src = path.join(BUILD, "t/doc", pkg + "-" + base + ".psc")
+            esp = path.join(BUILD, "t/doc", pkg + "-" + base + ".expected")
+            await T.escrever(src, prog.fonte)
+            await T.escrever(esp, prog.esperado)
+            binario = await T.psc_program(c, src, path.join(BUILD, "t/doc/bin", pkg + "-" + base),
+                                          path.join(BUILD, "t/obj"), [], [])
+            casos.append(T.Caso(rot, binario, esp, 0,
+                                path.join(BUILD, "t/run", "doc-" + pkg + "-" + base)))
+    return T.suite(c, "doctest", casos, verdict, path.join(BUILD, "t/stamp"))
 
 
 async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
@@ -430,7 +479,8 @@ async def montar(query: str) -> G.Graph:
     editor = await pstudio(cps)
     suite = await suite_pscript(cps, bins["verdict"])
     spkg = await suite_pacotes(cps, bins["verdict"])
-    await verificacao(cps, PLANGC_S2, suite, spkg, stamp, editor)
+    sdoc = await suite_doctests(cps, bins["verdict"])
+    await verificacao(cps, PLANGC_S2, suite, spkg, sdoc, stamp, editor)
 
     # o alvo padrão é o que "está construído" quer dizer: o compilador confere a
     # si mesmo, e as ferramentas de cima existem. As suítes são um alvo que se

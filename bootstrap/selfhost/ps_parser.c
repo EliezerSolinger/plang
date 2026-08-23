@@ -3212,7 +3212,21 @@ static PsDecl *PsP_parse_import(PsP *self) {
 static PsDecl *PsP_parse_from(PsP *self) {
     Pos pos = PsP_expect(self, TK_FROM, "from")->pos;
     PsDecl *d = ps_decl(self->a, PD_FROM_IMPORT, pos);
-    d->path = PsP_expect(self, TK_IDENT, "module name")->text;
+    if (PsP_at(self, TK_LT)) {
+        PsP_adv(self);
+        const char *hp = "";
+        while (!PsP_at(self, TK_GT) && !PsP_at(self, TK_NEWLINE) && !PsP_at(self, TK_EOF)) {
+            hp = Arena_printf(self->a, "%s%s", hp, spell_tok(PsP_adv(self)));
+        }
+        PsP_expect(self, TK_GT, "from <pkg/module.psc> import ... (falta o '>')");
+        if (!has_suffix_ps(hp, ".psc") && strchr(hp, '/') != NULL) {
+            fatal_at(self->file, pos, "`from <%s> import`: só um módulo PSCRIPT se importa assim — `<pkg>` ou `<pkg/mod.psc>`. Um módulo P entra inteiro (`import <pkg/mod.ph>`), porque o que dele atravessa é decidido pela 45.5 e não por uma lista de nomes.", hp);
+        }
+        d->path = hp;
+        d->import_system = 1;
+    } else {
+        d->path = PsP_expect(self, TK_IDENT, "module name")->text;
+    }
     PsP_expect(self, TK_IMPORT, "from ... import");
     Vec_pchar names;
     Vec_pchar_init(&names);

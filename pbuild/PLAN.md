@@ -911,10 +911,15 @@ doctest.
       consultas, que são resposta e não fluxo. O escapador é o do grafo
       (`G.jstr`) — um segundo seria um segundo lugar para errar. Ainda é
       serialização à mão; quando a reflexão da F5 existir, sai de graça.
-- [ ] **doctest**: exemplos na docstring viram arestas de teste na suíte do
-      pacote/projeto (compila + roda + compara saída); sintaxe na decisão fina
-      f5.1; entra no `ppack test` e no `publish` (que já roda? NÃO — publish
-      não roda testes, decidido; o doctest é suíte normal)
+- [x] **doctest** (FEITO, 2026-08-23): `>>> expr` numa docstring vira uma aresta
+      da suíte. O programa de cada módulo é GERADO no plano a partir da RESPOSTA
+      5 (`--api`) — não de um segundo leitor de fontes —, o que quer dizer que o
+      doctest de um pacote publicado se pode correr sem ter o fonte à mão. Um
+      `.psc` traz os nomes por `from <pkg/mod.psc> import ...` (grafia que
+      passou a existir agora: faltava, e era assimetria com `import <>`); um
+      `.ph` entra inteiro, porque o que dele atravessa é decidido pela 45.5 e
+      não por uma lista de nomes. Uma saída errada põe o build vermelho, com o
+      nome do módulo. `publish` continua a NÃO rodar testes.
 - [ ] baterias numeradas no `pscript/DESIGN.md`; gc-stress obrigatório (a
       tabela é dado estático, não raiz nova — conferir com o stress)
 

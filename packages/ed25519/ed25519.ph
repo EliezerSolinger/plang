@@ -59,7 +59,14 @@ def ed25519_verify(pub: const *char, msg: const *char, n: usize, sig: const *cha
 
 def ed25519_pub_hex(in seed: CBytes) -> CStr:
     """A chave pública, em hexadecimal. É a forma que vai para o `pack.lock` e
-    para o índice — texto, porque é lá que ela vive."""
+    para o índice — texto, porque é lá que ela vive.
+
+    O vetor é o primeiro do RFC 8032 §7.1: a mesma semente dá sempre a mesma
+    chave, porque não há aleatoriedade nenhuma depois da semente.
+
+    >>> len(ed25519_pub_hex([u8(0) for _ in range(32)]))
+    64
+    """
 
 def ed25519_sign_hex(in seed: CBytes, in msg: CBytes) -> CStr:
     """A assinatura em hexadecimal (128 dígitos)."""
@@ -68,4 +75,8 @@ def ed25519_verify_hex(in pub_hex: CStr, in msg: CBytes, in sig_hex: CStr) -> bo
     """Confere, com a chave e a assinatura como texto. Um hexadecimal com o
     tamanho errado ou com um dígito que não é dígito é `False`, e não um erro:
     do ponto de vista de quem confere, um ficheiro estragado e uma assinatura
-    errada são a mesma resposta."""
+    errada são a mesma resposta.
+
+    >>> ed25519_verify_hex("abc", [u8(1)], "def")
+    False
+    """
