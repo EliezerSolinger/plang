@@ -82,6 +82,15 @@ for mode in "C:" "QBE:BACKEND=qbe" "C89:STD=c89"; do
 done
 
 step "5/8 fixed point QBE"
+# o `qbe/` é SUBMÓDULO, e um checkout sem `git submodule update --init` não o
+# tem. Sem esta linha, a ausência dele saía como "o compilador QBE-built diverge
+# do C-built" — uma frase alarmante sobre um problema que não existe, e que
+# manda quem a lê procurar um defeito de back end durante uma tarde. É o mesmo
+# tratamento que o SDL2 já tinha no passo 7: uma dependência que falta é uma
+# máquina sem ela, e não uma regressão.
+if [ ! -x ./qbe/qbe ] && ! (cd qbe && make -s >/dev/null 2>&1 && [ -x qbe ]); then
+    printf '   \033[33mSKIP\033[0m sem `qbe/qbe` — `git submodule update --init` e refaça\n'
+else
 qfp=1
 for f in selfhost/*.p; do b=$(basename "${f%.p}")
   $V/plangc_s2 --pkg-path packages --backend qbe "$f" -o $V/qb1/$b.ssa 2>/dev/null || qfp=0
@@ -94,6 +103,7 @@ if [ $qfp = 1 ] && $CC $V/qb1/*.s -o $V/plangc_qbe 2>$V/qbe.err; then
   done
 else qfp=0; fi
 [ $qfp = 1 ] && ok || bad "compilador QBE-built diverge do C-built"
+fi
 
 if [ "$QUICK" != "quick" ]; then
   step "6/8 scoreboards (pisos: c-suite>=$CSUITE_FLOOR, wacct>=$WACCT_FLOOR)"
