@@ -5,13 +5,17 @@ envelhece em silêncio. Ele parece certo, ninguém o corre, e um dia alguém cop
 uma linha que já não funciona. Aqui ele vira uma aresta do build como qualquer
 outra — se a saída mudar, o build fica vermelho.
 
-A sintaxe é a que toda a gente já conhece:
+A sintaxe é a que toda a gente já conhece — três sinais de maior, a expressão, e
+a saída esperada na linha seguinte. (O exemplo abaixo está com um sinal a menos
+DE PROPÓSITO: este arquivo é ele próprio um módulo de um pacote, e um exemplo de
+verdade aqui viraria um teste a chamar uma função que não existe. É o gerador a
+apanhar-se a si mesmo, que é o melhor sinal de que funciona.)
 
     \"\"\"Soma dois números.
 
-    >>> soma(2, 3)
+    >> soma(2, 3)
     5
-    >>> soma(-1, 1)
+    >> soma(-1, 1)
     0
     \"\"\"
 

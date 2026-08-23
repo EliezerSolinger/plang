@@ -11,13 +11,13 @@ compilação de nada.
 import os
 import path
 import sys
-import lib_graph as G
-import lib_build as B
-import lib_ninja as N
-import lib_targets as T
-import lib_manifest as M
-import lib_api as A
-import lib_pkg as PK
+import <pbuild/lib_graph.psc> as G
+import <pbuild/lib_build.psc> as B
+import <pbuild/lib_ninja.psc> as N
+import <pbuild/lib_targets.psc> as T
+import <pbuild/lib_manifest.psc> as M
+import <pbuild/lib_api.psc> as A
+import <pbuild/lib_pkg.psc> as PK
 import build_plang as BP
 
 const DIR: str = "tests/out/pbuild"

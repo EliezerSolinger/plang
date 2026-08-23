@@ -250,7 +250,24 @@ private def psc_pmods(cc: *Cc, path: const *char, m: *PsModule, inputs: *Vec<*ch
             continue
         if d->path == None:
             continue
-        sub: const *char = path_join(&cc->arena, dir, cc->arena.printf("%s.psc", d->path))
+        # o módulo importado, nas DUAS grafias. A relativa (`import lib_x`) sai
+        # do lado de quem escreveu o import; a de PACOTE (`import <pkg/mod.psc>`,
+        # e `<pkg>` para a raiz) sai das raízes de busca.
+        #
+        # Faltar a segunda aqui era um silêncio caro: um módulo de pacote que
+        # importasse um módulo P (`import <sha2/sha2.ph>`) não tinha o `.p` dele
+        # puxado, e o programa compilava com um `#include` para um header que
+        # ninguém emitiu. Apareceu no dia em que o motor de build virou pacote.
+        sub: const *char = None
+        if d->import_system:
+            rel2: const *char = d->path
+            if not has_suffix(d->path, ".psc"):
+                rel2 = cc->arena.printf("%s/%s.psc", d->path, d->path)
+            sub = pkg_find(&cc->arena, cc->pkgroots, cc->npkgroots, rel2)
+            if sub == None:
+                continue        # a SEMA dá a mensagem, com posição
+        else:
+            sub = path_join(&cc->arena, dir, cc->arena.printf("%s.psc", d->path))
         n2: usize = 0
         b2: *char = read_entire_file_opt(sub, out n2)
         if b2 == None:

@@ -240,7 +240,19 @@ static void psc_pmods(Cc *cc, const char *path, PsModule *m, Vec_pchar *inputs, 
         if (d->path == NULL) {
             continue;
         }
-        const char *sub = path_join(&cc->arena, dir, Arena_printf(&cc->arena, "%s.psc", d->path));
+        const char *sub = NULL;
+        if (d->import_system) {
+            const char *rel2 = d->path;
+            if (!has_suffix(d->path, ".psc")) {
+                rel2 = Arena_printf(&cc->arena, "%s/%s.psc", d->path, d->path);
+            }
+            sub = pkg_find(&cc->arena, cc->pkgroots, cc->npkgroots, rel2);
+            if (sub == NULL) {
+                continue;
+            }
+        } else {
+            sub = path_join(&cc->arena, dir, Arena_printf(&cc->arena, "%s.psc", d->path));
+        }
         size_t n2 = 0;
         char *b2 = read_entire_file_opt(sub, &n2);
         if (b2 == NULL) {

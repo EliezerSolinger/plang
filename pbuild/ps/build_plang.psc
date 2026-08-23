@@ -21,12 +21,12 @@ sem que ninguém lhe conte, que mexer no compilador refaz tudo que ele gera.
 """
 import os
 import path
-import lib_graph as G
-import lib_targets as T
-import lib_manifest as M
-import lib_repo as R
-import lib_api as A
-import lib_doctest as DT
+import <pbuild/lib_graph.psc> as G
+import <pbuild/lib_targets.psc> as T
+import <pbuild/lib_manifest.psc> as M
+import <pbuild/lib_repo.psc> as R
+import <pbuild/lib_api.psc> as A
+import <pbuild/lib_doctest.psc> as DT
 
 const BUILD: str = "build"
 

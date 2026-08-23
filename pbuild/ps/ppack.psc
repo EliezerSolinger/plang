@@ -26,16 +26,16 @@ Opções: `-j N` (processos em voo; o padrão é o número de núcleos), `-k N`
 import os
 import path
 import sys
-import lib_graph as G
-import lib_build as B
-import lib_targets as T
-import lib_ninja as N
-import lib_api as A
-import lib_manifest as MF
-import lib_pkg as PK
+import <pbuild/lib_graph.psc> as G
+import <pbuild/lib_build.psc> as B
+import <pbuild/lib_targets.psc> as T
+import <pbuild/lib_ninja.psc> as N
+import <pbuild/lib_api.psc> as A
+import <pbuild/lib_manifest.psc> as MF
+import <pbuild/lib_pkg.psc> as PK
 import build_plang as BP
-import lib_repo as R
-import lib_lock as LK
+import <pbuild/lib_repo.psc> as R
+import <pbuild/lib_lock.psc> as LK
 
 const LOG: str = "build/log/build.log"
 
