@@ -488,6 +488,47 @@ placar de hoje é 220/220 na c-suite com 7 skips deliberados (documentados em
 use uma extensão que não ingerimos falha na publicação — o que é melhor do que
 falhar na máquina de quem instala.
 
+### FEITO (2026-08-23): a forma, e as três coisas que ela obrigou a decidir
+
+O manifesto ganha dois campos, os dois opcionais:
+
+```json
+"csources": ["src/crc32.c"],
+"cflags":   ["-DCRC_POLY=0xEDB88320", "-Iinclude"]
+```
+
+**Os caminhos são relativos ao PACOTE**, e é a ferramenta que os torna
+absolutos — um pacote não sabe onde foi extraído (`build/pkg/<nome>-<versão>-
+<hash>/`). Isso vale para os fontes e vale para o `-I`: uma flag de include
+relativa é reescrita contra o diretório do pacote, senão ela apontaria para o
+diretório de quem constrói. Um `csources` com `..` ou caminho absoluto é
+recusado na leitura do manifesto, pela mesma razão que o leitor de tar os
+recusa.
+
+**As flags entram pelo `--cpp`, que já existia.** O `plangc` não tem `-I` nem
+`-D` de C: o que ele tem é o COMANDO com que pré-processa `include <h>` — e é
+por essa mesma porta que o `pstudio` passa os `-I` do SDL2 hoje. Um pacote com C
+não trouxe mecanismo novo; trouxe outro dono para o mesmo. Quando quem constrói
+já passou um `--cpp`, as flags dos pacotes são ACRESCENTADAS ao comando dele:
+substituí-lo faria o editor deixar de achar o header do SDL2 no dia em que
+alguém publicasse um pacote com C.
+
+**Elas valem para TODA compilação, e o link é que é seletivo.** A assimetria é
+do `include`: quem importa `<crc/crc.ph>` é que vai pré-processar o `crc32.h`
+daquele pacote, então é a compilação DELE que precisa do `-I`. Já o OBJETO só
+entra no binário se o pacote estiver no fecho — que é o que faz uma dependência
+declarada não custar tamanho de binário. E as flags chegam ao `cc` também, por
+uma razão que só aparece construindo: `include "x.h"` com aspas não é ingerido
+pelo nosso front end, ele atravessa para o C emitido, e quem o resolve é o `cc`.
+
+A fixture que prende tudo isto é `tests/pkg/crc`: um `.p` que só declara, um
+`.c` que faz a conta, um header que só se acha pelo `-I` do manifesto, e um
+`#error` que dispara se o `-D` não chegar. Se o programa correr e der
+`0xCBF43926` — o vetor de conferência do CRC-32 —, então as quatro coisas
+aconteceram. O portão está nos dois lados: `tests/packages.sh` mede a metade do
+compilador (e cobra que o `#error` DISPARE sem as flags), e a suíte do motor
+mede a metade do build.
+
 ## A árvore de pacotes na pasta de build (E, decidida)
 
 `build/pkg/<nome>-<versão>-<hash>/`, extraída uma vez do tarball verificado, e o

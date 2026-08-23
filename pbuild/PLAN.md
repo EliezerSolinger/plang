@@ -1167,17 +1167,21 @@ E três achados que não estavam em especificação nenhuma:
       que ninguém corria, e uma delas já tinha apodrecido em silêncio (esperava
       dois pacotes no workspace, que hoje tem nove). Entrou no `verify`.
 
-## O que a releitura decidiu NÃO fazer, e por quê
+## O que a releitura achou depois, e o que decidiu NÃO fazer
 
-- [ ] **um pacote que traz `.c` PRÓPRIO** (2.13 e "o que cabe dentro de um
-      pacote"): a decisão diz que o C de um pacote é compilado pelo `plangc` e
-      que as flags dele são declaração no manifesto. O que existe hoje compila o
-      C que o COMPILADOR emite, com flags que o descritor passa — nenhum dos
-      nove pacotes traz um `.c` escrito à mão. Fazer o manifesto declarar
-      `csources`/`cflags` sem um consumidor é escolher a forma no escuro: como
-      se nomeiam os arquivos, se o caminho é relativo ao pacote, o que acontece
-      com a ordem de link, e se as flags valem para quem consome. Fica anotado
-      com o motivo, e não como esquecimento.
+- [x] **um pacote que traz `.c` PRÓPRIO** (2.13): `csources` e `cflags` no
+      manifesto, caminhos relativos ao pacote, `-I` reescrito contra o diretório
+      dele, e as flags a entrar pelo `--cpp` que já existia — o mesmo caminho
+      dos `-I` do SDL2 no editor. As flags valem para toda compilação (quem
+      IMPORTA é que pré-processa o header do pacote) e o link é que é seletivo
+      (só o fecho entra no binário). Fixture `tests/pkg/crc`, com portão nos dois
+      lados: o compilador em `tests/packages.sh` (que cobra que o `#error`
+      dispare sem as flags) e o build na suíte do motor.
+      **Eu tinha escrito que isto ficava de fora por não ter consumidor.** Estava
+      errado por metade: a forma não era escura, era derivável — e a única
+      pergunta que eu não sabia responder de antemão (as flags valem para quem
+      consome?) tinha resposta na primeira construção, porque o `include "x.h"`
+      com aspas atravessa para o C emitido e o `cc` precisa do `-I`.
 - [ ] **o painel de `pack.json` do pstudio** (o que sobra da F6): é um
       FORMULÁRIO, e onde ficam os campos é escolha de quem vai olhar para eles
       todos os dias. A escolha de alvo — a parte útil — já existe na paleta.

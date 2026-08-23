@@ -46,6 +46,11 @@ struct Manifesto:
     system: list<Dep>
     toolchain: str
     descricao: str
+    # 2.13: o C que o pacote traz ESCRITO À MÃO, e as flags dele. Os caminhos são
+    # relativos ao diretório do pacote — ele não sabe onde foi extraído — e quem
+    # os torna absolutos é a ferramenta, nunca o manifesto.
+    csources: list<str>
+    cflags: list<str>
     # workspace
     membros: list<str>
     padrao: str
@@ -57,7 +62,7 @@ struct Manifesto:
     repos_unsafe: list<bool>
 
 def vazio(caminho: str) -> Manifesto:
-    return Manifesto(caminho, False, "", "", "", "", [], [], "", "", [], "", [], [])
+    return Manifesto(caminho, False, "", "", "", "", [], [], "", "", [], [], [], "", [], [])
 
 # ---------- a posição de uma chave ----------
 def onde(raw: str, chave: str) -> str:
@@ -138,6 +143,15 @@ private def pares(d: dict<str, any>, k: str) -> list<Dep>:
         out.append(Dep(n2, sub[n2] as str))
     return out
 
+private def lista(d: dict<str, any>, chave: str) -> list<str>:
+    out: list<str> = []
+    if chave not in d:
+        return out
+    for x in d[chave] as list<any>:
+        out.append(x as str)
+    return out
+
+
 async def ler(caminho: str) -> Manifesto:
     f = await open(caminho, "r")
     raw = await f.text()
@@ -187,6 +201,8 @@ async def ler(caminho: str) -> Manifesto:
     m.descricao = texto(root, "description", "")
     m.deps = pares(root, "deps")
     m.system = pares(root, "system")
+    m.csources = lista(root, "csources")
+    m.cflags = lista(root, "cflags")
 
     if not nome_ok(m.nome):
         erro(m, raw, "name", "nome de pacote: minúsculas, dígitos, `_` e `-`, começando por letra (veio '" + m.nome + "')")
@@ -209,6 +225,17 @@ async def ler(caminho: str) -> Manifesto:
     for dp in m.deps:
         if not nome_ok(dp.nome):
             erro(m, raw, "deps", "dependência com nome inválido: '" + dp.nome + "'")
+    # 2.13: o C do pacote. Conferir aqui é conferir uma vez — o build, a
+    # publicação e o `ppack check` leem todos este mesmo manifesto.
+    for cs in m.csources:
+        if not cs.endswith(".c"):
+            erro(m, raw, "csources", "csources é C: '" + cs + "' não acaba em `.c`")
+        elif cs.startswith("/") or ".." in cs:
+            # a mesma regra do leitor de tar, e pelo mesmo motivo: um caminho que
+            # sai do pacote é um pacote que lê a árvore de quem o instalou
+            erro(m, raw, "csources", "'" + cs + "': o caminho é relativo ao pacote, e não sai dele")
+        elif not path.isfile(path.join(dirp, cs)):
+            erro(m, raw, "csources", "'" + cs + "' não existe em " + dirp)
     return m
 
 

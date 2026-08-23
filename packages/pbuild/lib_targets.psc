@@ -15,6 +15,7 @@ que sabe o que faz e um script que roda comandos na ordem certa por sorte.
 import os
 import path
 import lib_graph as G
+import lib_manifest as MF
 
 struct Target:
     """O que muda entre `linux-amd64`, `linux-amd64-musl` e `macos-arm64`. O nome
@@ -49,6 +50,14 @@ struct Ctx:
     # TODA invocação do compilador — inclusive nas PERGUNTAS, porque `--deps` de
     # um arquivo que importa de um pacote precisa achar o pacote para responder.
     pkgroots: list<str>
+    # 2.13: as flags de PRÉ-PROCESSADOR que os pacotes declaram (`cflags` no
+    # manifesto), já reescritas contra o diretório de cada um. Elas valem para
+    # TODA invocação do compilador e não só para o pacote que as declarou, e a
+    # razão é a assimetria do `include`: quem importa `<crc/crc.ph>` é que vai
+    # pré-processar o `crc32.h` daquele pacote, então é a compilação DELE que
+    # precisa do `-I`. Uma flag de um pacote que ninguém usa não custa nada; o
+    # que a lista NÃO decide é o link — quem entra no binário é o fecho.
+    pkgcpp: list<str>
     # objetos já emitidos: caminho do `.o` -> a assinatura da aresta que o faz.
     # O mesmo `.c` compilado no mesmo objdir por dois PROGRAMAS diferentes é
     # rotina desde que existem pacotes — o `sha2` é lido por um teste em P e por
@@ -64,7 +73,7 @@ def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # este arquivo lê?", "o que ele vai emitir?") são sobre o FONTE e podem ser
     # feitas a qualquer compilador que entenda a linguagem. É a mesma suposição
     # que o bootstrap já faz: o seed compila os fontes de hoje.
-    return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [], {})
+    return Ctx(g, outdir, plangc, False, plangc, host_target(), ["-O2", "-std=c11", "-w"], [], [], [], False, [], [], {})
 
 def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
     """Um contexto FILHO: outro diretório, outro compilador, e o resto herdado.
@@ -80,6 +89,7 @@ def derivar(c: Ctx, outdir: str, plangc: str) -> Ctx:
     n.objs_feitos = c.objs_feitos
     n.query = c.query
     n.pkgroots = c.pkgroots
+    n.pkgcpp = c.pkgcpp
     n.target = c.target
     n.cflags = c.cflags
     n.plangc_is_built = True
@@ -177,7 +187,7 @@ async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>
     for r in c.pkgroots:
         argv.append("--pkg-path")
         argv.append(r)
-    for fl in flags:
+    for fl in com_cpp(c, flags):
         argv.append(fl)
     argv.append("--out-dir")
     argv.append(outdir)
@@ -284,6 +294,129 @@ def only(files: list<str>, suffix: str) -> list<str>:
             out.append(f)
     return out
 
+# ---------- 2.13: o C que um PACOTE traz escrito à mão ----------
+#
+# Ele entra pelo NOSSO front end e não direto no `cc`, e isso compra três coisas
+# que a decisão nomeia: o `-Wall` de quem consome não pára na fronteira do
+# pacote, o C89 e o QBE ficam disponíveis para o pacote inteiro, e os
+# diagnósticos são os mesmos dos dois lados. O preço, dito com precisão: o que o
+# nosso front end não aceitar, não entra.
+#
+# Os caminhos do manifesto são relativos ao PACOTE — ele não sabe onde foi
+# extraído (`build/pkg/<nome>-<versão>-<hash>/`) —, e é aqui que passam a valer.
+# O mesmo para o `-I`: uma flag de include relativa é reescrita contra o
+# diretório do pacote, senão apontaria para o diretório de quem constrói.
+def cflags_do_pacote(dir: str, flags: list<str>) -> list<str>:
+    out: list<str> = []
+    for f in flags:
+        if f.startswith("-I") and len(f) > 2 and not f[2:len(f)].startswith("/"):
+            out.append("-I" + path.join(dir, f[2:len(f)]))
+        else:
+            out.append(f)
+    return out
+
+
+async def carregar_pacotes(c: Ctx):
+    """Lê o manifesto de cada pacote das raízes e guarda as flags de
+    pré-processador deles no contexto.
+
+    Uma vez por contexto, e não por programa: são as mesmas raízes para tudo o
+    que este projeto constrói, e reler dez manifestos por alvo seria trabalho
+    repetido para dar sempre a mesma resposta."""
+    fl: list<str> = []
+    for r in c.pkgroots:
+        if not path.isdir(r):
+            continue
+        for nome in sorted(os.listdir(r)):
+            dir = path.join(r, nome)
+            man = path.join(dir, "pack.json")
+            if not path.isdir(dir) or not path.isfile(man):
+                continue
+            # um manifesto que não se deixa ler NÃO pára esta varredura, e a
+            # razão é o que ela é: uma coleta de flags opcionais, não um
+            # validador. Quem valida é o `ppack check` e a construção do pacote
+            # em si, onde o erro tem dono e mensagem. Aqui, recusar faria um
+            # diretório que apenas ESTÁ ao lado de um pacote — a fixture de um
+            # manifesto inválido, por exemplo — impedir todo o projeto de
+            # construir, e por um arquivo que ninguém pediu para ler.
+            try:
+                m = await MF.ler(man)
+                for x in cflags_do_pacote(dir, m.cflags):
+                    if x not in fl:
+                        fl.append(x)
+            catch e:
+                pass
+    c.pkgcpp = fl
+
+
+private def com_cpp(c: Ctx, flags: list<str>) -> list<str>:
+    """As flags do compilador, com as dos pacotes dentro do `--cpp`.
+
+    O `plangc` não tem `-I` nem `-D` de C: o que ele tem é `--cpp`, o COMANDO com
+    que ele pré-processa `include <h>` — e é assim que o `pstudio` já passa os
+    `-I` do SDL2 hoje. Um pacote com C entra pela mesma porta, o que é bom sinal:
+    não é mecanismo novo, é a mesma coisa com outro dono.
+
+    Quando quem chama já passou um `--cpp` (o editor), as flags dos pacotes são
+    ACRESCENTADAS ao comando dele. Substituí-lo faria o editor deixar de achar o
+    header do SDL2 no dia em que alguém publicasse um pacote com C."""
+    if len(c.pkgcpp) == 0:
+        return flags
+    extra = " ".join(c.pkgcpp)
+    out: list<str> = []
+    achou = False
+    i = 0
+    while i < len(flags):
+        out.append(flags[i])
+        if flags[i] == "--cpp" and i + 1 < len(flags):
+            out.append(flags[i + 1] + " " + extra)
+            achou = True
+            i += 2
+            continue
+        i += 1
+    if not achou:
+        out.append("--cpp")
+        out.append(c.target.cc + " " + extra)
+    return out
+
+
+async def pkg_c_objects(c: Ctx, dir: str, csources: list<str>, objdir: str,
+                        cab: list<str>) -> list<str>:
+    """Os objetos do C de um pacote. Duas arestas por arquivo: o `plangc` lê o
+    `.c` e emite `.c`, e o `cc` compila o que saiu.
+
+    O `cc` não recebe as flags do pacote, e não é esquecimento: o que ele compila
+    já é a saída do NOSSO front end, com os `#include` expandidos e os `-D`
+    resolvidos. Passá-las outra vez seria pedir ao `cc` que refizesse um trabalho
+    que já está feito — e daria um resultado diferente do que o front end viu."""
+    objs: list<str> = []
+    for rel in csources:
+        src = path.join(dir, rel)
+        emitidos = await p_module(c, src, c.outdir, [])
+        for gerado in only(emitidos, ".c"):
+            objs.append(c_object(c, gerado, obj_for(objdir, gerado), [], cab))
+    return objs
+
+
+def pacote_de(pkgroots: list<str>, arquivo: str) -> str:
+    """O diretório do pacote a que `arquivo` pertence, ou "" se ele não estiver
+    dentro de raiz nenhuma.
+
+    A conta é a do `-I` do C, invertida: se o arquivo está debaixo de uma raiz de
+    busca, o primeiro pedaço depois dela é o NOME do pacote. É a mesma regra que
+    o compilador usa para resolver `<pkg/mod.ph>`, lida ao contrário."""
+    for r in pkgroots:
+        pref = r + "/"
+        if not arquivo.startswith(pref):
+            continue
+        resto = arquivo[len(pref):len(arquivo)]
+        k = resto.find("/")
+        if k <= 0:
+            continue
+        return path.join(r, resto[0:k])
+    return ""
+
+
 # ---------- C -> objeto ----------
 def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>) -> str:
     """`cc -c`, com `-MD` para o compilador dizer que headers leu. O `.d` fica no
@@ -298,6 +431,13 @@ def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>)
     argv: list<str> = [c.target.cc]
     for f in c.cflags:
         argv.append(f)
+    # 2.13: as flags dos pacotes com C chegam ao `cc` também, e a razão é uma só
+    # — `include "x.h"` (com aspas) NÃO é ingerido pelo nosso front end: ele
+    # atravessa para o C emitido como `#include "x.h"`, e quem o resolve é o
+    # `cc`. Sem isto o `-I` do pacote valia na leitura e não valia na
+    # compilação, que é a metade que falha longe.
+    for f0 in c.pkgcpp:
+        argv.append(f0)
     for f2 in flags:
         argv.append(f2)
     argv.append("-MD")
@@ -510,6 +650,13 @@ async def psc_program_com(c: Ctx, src: str, out: str, objdir: str, p_srcs: list<
         objs.append(c_object(c, cf, obj_for(objdir, cf), todas_cflags, cab))
     for cf2 in only(prog, ".c"):
         objs.append(c_object(c, cf2, obj_for(objdir, cf2), todas_cflags, cab))
+    fecho: list<str> = []
+    for a1 in prog:
+        fecho.append(a1)
+    for a2 in extras:
+        fecho.append(a2)
+    for co in await c_dos_pacotes(c, fecho, objdir, cab):
+        objs.append(co)
     todas_libs: list<str> = []
     for l in libs:
         todas_libs.append(l)
@@ -572,6 +719,39 @@ async def tem_pkg(lib: str) -> bool:
     return r.status() == 0
 
 
+private async def c_dos_pacotes(c: Ctx, ger: list<str>, objdir: str,
+                               cab: list<str>) -> list<str>:
+    """O C escrito à mão dos pacotes que este programa alcança.
+
+    QUAIS pacotes é a resposta 3 do compilador, não uma lista à mão: o que ele vai
+    emitir diz por que módulos passou, e um módulo debaixo de uma raiz de busca
+    pertence ao pacote cujo nome é o primeiro pedaço. Um pacote que ninguém
+    importa não entra no link — que é a propriedade que faz `deps` no manifesto
+    não custar tamanho de binário.
+
+    A tradução de "o que ele vai emitir" para "o que ele leu" é o ESPELHO do
+    `--out-dir`: o C de `packages/sha2/sha2.p` sai em `<outdir>/packages/sha2/
+    sha2.c`, com a árvore inteira replicada lá dentro. Tirar o prefixo devolve o
+    caminho do fonte — e é de graça, enquanto perguntar outra vez custaria uma
+    invocação do compilador por programa."""
+    objs: list<str> = []
+    vistos: dict<str, int> = {}
+    pref = c.outdir + "/"
+    for f in ger:
+        rel = f[len(pref):len(f)] if f.startswith(pref) else f
+        dir = pacote_de(c.pkgroots, rel)
+        if len(dir) == 0 or dir in vistos:
+            continue
+        vistos[dir] = 1
+        man = path.join(dir, "pack.json")
+        if not path.isfile(man):
+            continue
+        m = await MF.ler(man)
+        for o in await pkg_c_objects(c, dir, m.csources, objdir, cab):
+            objs.append(o)
+    return objs
+
+
 async def p_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, libs: list<str>) -> str:
     """Um programa em P: o fecho dele a objeto, e um link. Sem runtime nenhum —
     é a diferença inteira entre as duas linguagens, e ela aparece aqui como a
@@ -581,6 +761,8 @@ async def p_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, l
     objs: list<str> = []
     for cf in only(ger, ".c"):
         objs.append(c_object(c, cf, obj_for(objdir, cf), [], cab))
+    for co in await c_dos_pacotes(c, ger, objdir, cab):
+        objs.append(co)
     return executable(c, out, objs, libs)
 
 

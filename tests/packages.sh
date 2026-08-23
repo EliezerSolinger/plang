@@ -177,5 +177,38 @@ case $doc in
     *) bad "doc de protótipo: veio '$doc'" ;;
 esac
 
+# ---- 2.13: um pacote que traz C ESCRITO À MÃO ----
+#
+# Aqui mede-se só a metade do COMPILADOR: que ele resolve `<crc/crc.ph>`, que o
+# `include "crc32.h"` do `.p` atravessa para o C emitido, e que o `.c` do pacote
+# passa pelo nosso front end com as flags que o manifesto declara. A outra
+# metade — quem lê o manifesto, reescreve o `-I` contra o diretório do pacote e
+# liga o objeto — é do sistema de build, e tem portão na suíte do motor.
+cat > "$OUT/usa_crc.p" <<'EOP'
+include <stdio.h>
+import <crc/crc.ph>
+
+def main() -> int:
+    printf("%u\n", crc32_de("123456789"))
+    return 0
+EOP
+CRCFLAGS="-DCRC_POLY=0xEDB88320 -I$PKG/crc/include"
+if $PLANGC --pkg-path "$PKG" --cpp "$CC $CRCFLAGS" --out-dir "$OUT/oc" "$OUT/usa_crc.p" 2>"$OUT/crc.err"; then
+    ok
+    # e o `.c` do pacote pelo NOSSO front end, que é a decisão 2.13
+    if $PLANGC --cpp "$CC $CRCFLAGS" --out-dir "$OUT/oc" "$PKG/crc/src/crc32.c" 2>>"$OUT/crc.err"; then
+        ok
+        if $CC -O2 -w $CRCFLAGS -o "$OUT/usa_crc" $(find "$OUT/oc" -name '*.c') 2>>"$OUT/crc.err"; then
+            check "o CRC-32 de 123456789" "3421780262" "$("$OUT/usa_crc")"
+        else bad "o C do pacote não linkou (veja $OUT/crc.err)"; fi
+    else bad "o .c do pacote não passou pelo nosso front end (veja $OUT/crc.err)"; fi
+else bad "um programa que importa <crc/crc.ph> não compilou (veja $OUT/crc.err)"; fi
+# o `#error` do C do pacote é o portão pela negativa: sem o `-D` do manifesto,
+# ele TEM de recusar — senão o teste acima passaria mesmo que as flags nunca
+# tivessem chegado
+if $PLANGC --out-dir "$OUT/oc2" "$PKG/crc/src/crc32.c" >/dev/null 2>&1; then
+    bad "o .c do pacote devia recusar sem o -D que o manifesto declara"
+else ok; fi
+
 echo "   packages: $pass ok, $fail failed"
 [ $fail = 0 ]

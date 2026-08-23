@@ -649,6 +649,49 @@ async def caso_pacotes():
     check("pacotes: o que falta é dito", "1", str(len(m2.faltando)))
     check("pacotes: e diz quem pediu", "True", str(m2.faltando[0].find("geo") >= 0 and m2.faltando[0].find("txt") >= 0))
 
+async def caso_pacote_com_c():
+    """2.13: um pacote que traz C ESCRITO À MÃO, construído de ponta a ponta.
+
+    A fixture `tests/pkg/crc` é o caso inteiro numa página: um `.p` que só
+    declara, um `.c` que faz a conta, um header que só se acha por um `-I`
+    relativo ao pacote, e um `-D` sem o qual o C se recusa a compilar (`#error`).
+    Se o programa correr e der o CRC certo, então as quatro coisas aconteceram —
+    o C foi achado, as flags do manifesto chegaram nele, o `-I` foi reescrito
+    contra o diretório do pacote, e o objeto entrou no link.
+
+    E o pacote que NINGUÉM importa não entra: é o que faz `deps` no manifesto
+    não custar tamanho de binário."""
+    reset()
+    dir = DIR + "/pkgc"
+    if not path.isdir(dir):
+        os.makedirs(dir)
+    prog = dir + "/usa_crc.p"
+    f = await open(prog, "w")
+    await f.write("include <stdio.h>\nimport <crc/crc.ph>\n\n"
+                  + "def main() -> int:\n"
+                  + "    printf(\"%u\\n\", crc32_de(\"123456789\"))\n"
+                  + "    return 0\n")
+    await f.close()
+    g = G.new_graph()
+    c = T.new_ctx(g, dir + "/o", BP.PLANGC_S2)
+    c.pkgroots = ["tests/pkg"]
+    await T.carregar_pacotes(c)
+    bin = await T.p_program(c, prog, dir + "/usa_crc", dir + "/obj", [], [])
+    g.default_targets.append(bin)
+    okb = await B.build(g, dir + "/log", [], opts(4), rep())
+    check("pacote com C: constrói", "True", str(okb))
+    if not okb:
+        for e in erros:
+            print("      " + e)
+        for k in saidas:
+            if len(saidas[k]) > 0:
+                print("      " + k + ": " + saidas[k].strip())
+        return
+    r = await os.run([path.join(os.getcwd(), bin)])
+    # o CRC-32 de "123456789" é 0xCBF43926 — o vetor de conferência que todo
+    # texto sobre CRC cita, e que um erro de polinómio ou de ordem de bits erra
+    check("pacote com C: e a conta é a certa", "3421780262", r.output().strip())
+
 async def caso_api():
     """A resposta 5 lida de volta (`lib_api.psc`): é o que faz o `ppack doc`
     existir sem um segundo leitor da linguagem — e um segundo leitor divergiria,
@@ -814,6 +857,7 @@ async def go():
     await caso_json()
     await caso_ninja()
     await caso_pacotes()
+    await caso_pacote_com_c()
     await caso_api()
     await caso_manifesto()
     await caso_limite_de_bracos()

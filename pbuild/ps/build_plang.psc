@@ -593,6 +593,7 @@ async def programa_solto(g: G.Graph, query: str, src: str, raiz: str) -> str:
     c.query = query
     c.plangc_is_built = True
     c.pkgroots = raizes
+    await T.carregar_pacotes(c)
     nome = path.basename(src)
     nome = nome[0:len(nome) - 4] if nome.endswith(".psc") else nome[0:len(nome) - 2]
     saida = path.join(raiz, "run/bin", nome)
@@ -615,6 +616,8 @@ async def montar(query: str) -> G.Graph:
         raizes.append(ri)
     c = T.new_ctx(g, BUILD, query)
     c.pkgroots = raizes
+    # 2.13: as flags que os pacotes com C declaram, lidas uma vez
+    await T.carregar_pacotes(c)
     stamp = await escada(c)
 
     # tudo o que vem por cima roda com o compilador do PONTO FIXO — o mesmo que
