@@ -749,7 +749,7 @@ async def caso_manifesto():
 
     w = await M.ler("tests/pkg/pack.json")
     check("manifesto: workspace se conhece", "True", str(w.eh_workspace))
-    check("manifesto: os membros", "geo txt cor", " ".join(w.membros))
+    check("manifesto: os membros", "geo txt cor crc", " ".join(w.membros))
 
     # a RAIZ de busca sai do workspace: é o diretório que CONTÉM os membros,
     # porque é assim que `import <geo/geo.ph>` resolve
