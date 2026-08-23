@@ -15,6 +15,7 @@ Uso:
     pstudio --selftest arquivo     # exercita o editor sem tela e sai
     pstudio --build [alvo]         # constrói o projeto, sem tela (o motor é
                                    #   biblioteca: corre DENTRO do editor)
+    pstudio --run <alvo>           # ... e lança o programa (o play, sem tela)
     pstudio --shot saída.ppm [dir] # um quadro em PPM (servidor sem X)
 
 **Por que `import "shim.ph"` e não `include "shim.h"`:** a porta do `include` lê
@@ -177,6 +178,13 @@ private def on_edge_end(app: appm.App, id: int, st: int, saida: str, ms: int):
 
 async def serve_build(app: appm.App):
     """O pedido de build do app, atendido aqui. Ele não constrói: PEDE."""
+    if app.want_stop_run:
+        app.want_stop_run = False
+        if app.run_pid > 0:
+            os.kill(app.run_pid)
+            app.build_msg = "parei o programa (pid " + str(app.run_pid) + ")"
+            app.run_pid = 0
+            app.dirty_ui = True
     if app.want_clean:
         app.want_clean = False
         n = 0
@@ -217,9 +225,37 @@ async def serve_build(app: appm.App):
                 lambda ok, f: set_done(app, ok, f),
                 lambda m: set_erro(app, m))
     tl: list<str> = [alvo] if len(alvo) > 0 else []
-    await B.build(g, "build/log/build.log", tl, B.Opts(os.nproc(), 1, False, False), rep)
+    ok = await B.build(g, "build/log/build.log", tl, B.Opts(os.nproc(), 1, False, False), rep)
     app.build_busy = False
+    # o PLAY: construiu, agora corre. O programa anterior sai primeiro — ele
+    # está a usar o binário que a construção acabou de reescrever —, e sai por
+    # SIGTERM, que é um pedido: um `SIGKILL` não o deixa fechar o que abriu.
+    if app.want_run:
+        app.want_run = False
+        if app.run_pid > 0:
+            os.kill(app.run_pid)
+            esperas = 0
+            while os.alive(app.run_pid) and esperas < 100:
+                await sleep(0.05)
+                esperas += 1
+            app.run_pid = 0
+        if ok:
+            prog = alvo if len(alvo) > 0 else primeiro_executavel(app)
+            if len(prog) > 0 and path.isfile(prog):
+                app.run_pid = os.spawn([prog if prog.startswith("/") else path.join(os.getcwd(), prog)])
+                app.build_msg = "a correr " + path.basename(prog) + " (pid " + str(app.run_pid) + ")"
+            else:
+                app.build_msg = "construiu, mas não sei o que correr — use `Build Target…`"
     app.dirty_ui = True
+
+
+private def primeiro_executavel(app: appm.App) -> str:
+    """O alvo a correr quando ninguém disse qual: o primeiro `build/bin/` do
+    grafo. É um palpite, e por isso a mensagem diz como se escolhe outro."""
+    for t in app.build_targets:
+        if "/bin/" in t:
+            return t
+    return ""
 
 
 private def set_total(app: appm.App, t: int):
@@ -422,6 +458,29 @@ async def selftest(arg: str) -> int:
     return 0
 
 
+async def modo_run(alvo: str) -> int:
+    """`pstudio --run <alvo>` — o PLAY, sem tela: constrói e lança o programa,
+    depois mata-o. Existe pela mesma razão que o `--build`: sem ele, "o play
+    constrói e corre" é uma afirmação que só se confere olhando para a janela."""
+    u = pui.new_ui(8, 17)
+    app = appm.new_app(u, ".")
+    app.want_build = alvo
+    app.want_build_on = True
+    app.want_run = True
+    await serve_build(app)
+    print(app.build_msg)
+    vivo = app.run_pid > 0 and os.alive(app.run_pid)
+    print("lançou", vivo)
+    if app.run_pid > 0:
+        app.want_stop_run = True
+        await serve_build(app)
+        n = 0
+        while os.alive(app.run_pid) and n < 60:
+            await sleep(0.05)
+            n += 1
+    return 0 if vivo else 1
+
+
 async def modo_build(alvo: str) -> int:
     """`pstudio --build [alvo]` — o build DENTRO do editor, sem tela.
 
@@ -454,6 +513,8 @@ async def main_run() -> int:
         return await selftest(args[2] if len(args) > 2 else "")
     if len(args) > 1 and args[1] == "--build":
         return await modo_build(args[2] if len(args) > 2 else "")
+    if len(args) > 1 and args[1] == "--run":
+        return await modo_run(args[2] if len(args) > 2 else "")
     # 115: a mesma linha de comando do editor em P — vários arquivos em abas,
     # `--size LxA`, `--shot img.ppm`, e diagnóstico para o que não existe
     shot = ""

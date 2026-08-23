@@ -38,5 +38,10 @@ case $msg in
     *) echo "  FAIL a mensagem não disse que o alvo é desconhecido: '$msg'"; fail=$((fail+1)) ;;
 esac
 
+# 5. o PLAY: constrói e LANÇA o programa, e depois consegue matá-lo. É a outra
+#    metade da F6, e a que precisou de uma primitiva nova (`os.spawn`).
+saiu2=$("$PSTUDIO" --run build/bin/verdict 2>&1 | tail -1)
+check "o play lança o programa" "lançou True" "$saiu2"
+
 echo "   pstudio-build: $ok ok, $fail failed"
 [ $fail = 0 ]

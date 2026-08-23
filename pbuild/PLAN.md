@@ -995,11 +995,14 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
 - [ ] **painel de build**: lê e ESCREVE `pack.json` (o manifesto é do painel;
       `build.psc` é do programador e o painel NÃO o edita — decidido); alvo
       padrão, `-j`, alvo nomeado (linux-amd64 etc.)
-- [~] **play/vassoura** (2026-08-23): na PALETA que o editor já tinha, sem
-      inventar atalhos — `Build`, `Build Target…`, `Run`, `Clean` e `Stop
-      Build`. A vassoura mantém `build/pkg`, como a do `ppack`. Falta a metade
-      do `Run` que precisa de controlo de processo (matar e relançar o filho):
-      é a mesma primitiva que falta ao `ppack dev`.
+- [x] **play/vassoura** (FEITO, 2026-08-23): na PALETA que o editor já tinha,
+      sem inventar atalhos — `Build`, `Build Target…`, `Run`, `Clean`, `Stop
+      Build` e `Go To Build Error`. A vassoura mantém `build/pkg`, como a do
+      `ppack`. O `Run` constrói e LANÇA (`os.spawn`), mata o anterior por
+      SIGTERM antes de relançar (ele está a usar o binário que a construção vai
+      reescrever), e o `Stop Build` mata o programa já — ele é do utilizador e
+      não do build. `pstudio --run <alvo>` prova-o sem tela, e o
+      `tests/pstudio-build.sh` mede-o.
 - [~] **`ppack dev`** (2026-08-23): constrói, espera que alguma coisa mude, e
       constrói outra vez. A lista do que se vigia é o GRAFO — os arquivos que o
       compilador disse que lê —, não um diretório: um `dev` que vigiasse a
@@ -1055,11 +1058,9 @@ pstudio; salvar um arquivo no dev-loop reconstrói só o alcançado e reinicia;
 um erro de compilação aparece sublinhado no arquivo certo.
 
 **Estado em 2026-08-23**: o motor corre dentro do editor, os comandos estão na
-paleta, o erro do build leva o cursor ao sítio, e o `ppack dev` reconstrói ao
-salvar. O que falta é **o que precisa de olhos** — o painel que edita o
-`pack.json`, o sublinhado desenhado, a barra com a lista de arestas — O `Run` da paleta ainda não relança o
-filho — a primitiva já existe (`os.spawn`/`kill`/`alive`, e o `ppack dev` já a
-usa), falta ligá-la ao botão. A informação para os três painéis já está
+paleta, o play constrói e lança, o erro do build leva o cursor ao sítio, e o
+`ppack dev` reconstrói e relança ao salvar. O que falta é **o que precisa de olhos** — o painel que edita o
+`pack.json`, o sublinhado desenhado, a barra com a lista de arestas — O `Run` já lança e mata. A informação para os três painéis já está
 toda no `App`: `build_msg`, `build_total`, `build_feitas`, `build_erro`,
 `build_pos_*` e `build_targets`.
 

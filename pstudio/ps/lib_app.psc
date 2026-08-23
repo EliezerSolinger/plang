@@ -153,6 +153,10 @@ struct App:
     build_pos_arq: str
     build_pos_lin: int
     build_pos_col: int
+    # o programa que o `Run` lançou. Zero quando não há nenhum — e o número é o
+    # PID, porque é isso que `os.spawn` devolve (ver a bateria do `os.spawn`).
+    run_pid: int
+    want_stop_run: bool
 
     # ---- o driver, injetado pelo `app.psc` ----
     read_file: (def(str) -> str)?        # "" quando não deu
@@ -642,7 +646,10 @@ struct App:
             # parar é um PEDIDO, não uma morte: o executor termina a aresta que
             # está a correr e não começa outra. Matar um `cc` a meio deixa um
             # `.o` truncado, que é exatamente o que o motor recusa depois.
+            #
+            # O PROGRAMA, esse, morre já: ele é do utilizador e não do build.
             self.build_stop = True
+            self.want_stop_run = True
             self.build_msg = "a parar depois desta aresta..."
             self.update_status()
         elif cmd == 8:
@@ -1054,7 +1061,7 @@ def new_app(u: pui.Ui, root_dir: str) -> App:
     app = App(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
               [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [],
               False, True, True, 0, "", "",
-              "", False, False, False, "", False, False, [], 0, 0, "", "", 0, 0,
+              "", False, False, False, "", False, False, [], 0, 0, "", "", 0, 0, 0, False,
               None, None, None, None, None, None, None, None, None)
 
     app.root = u.panel(-1)
