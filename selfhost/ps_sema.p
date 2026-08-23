@@ -2908,6 +2908,16 @@ struct PsSema:
                 rtk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 rtk->inner = ps_type(self->a, PT_PROC, e->pos)
                 return rtk
+            if isos and strcmp(of, "exec") == 0:
+                # F7: o programa PASSA A SER este processo. Não devolve, então
+                # não tem tipo de retorno que interesse — e é por isso que ele
+                # não é uma `Task`: não há nada por que esperar.
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "os.exec() takes the command as a list: os.exec([\"vim\", \"a.txt\"])")
+                ae: *PsType = self->check_expr(e->args[0])
+                if ae == None or ae->kind != PT_LIST or ae->inner == None or ae->inner->kind != PT_STR:
+                    fatal_at(self->file, e->args[0]->pos, "os.exec() takes a list<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae))
+                return ps_type(self->a, PT_VOID, e->pos)
             if isos and strcmp(of, "nproc") == 0:
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "os.nproc() takes no arguments")
@@ -3738,6 +3748,7 @@ struct PsSema:
             # quantos núcleos a máquina dispõe
             ns->sym.add("run")
             ns->sym.add("nproc")
+            ns->sym.add("exec")
         elif strcmp(name, "path") == 0:
             ns->sym.add("join")
             ns->sym.add("dirname")

@@ -64,3 +64,4 @@ def ps_os_nproc() -> i64
 # o recebe como está. Ver o comentário em psrt_os.p para o porquê de cada
 # decisão; o `waitpid` mora numa thread do pool.
 def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *PsStr, file: const *char, line: i32) -> *PsTask
+def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32)

@@ -273,8 +273,9 @@ async def verificacao(c: T.Ctx, plangc: str, suite: str, spkg: str, sdoc: str, f
                           {"PLANGC": plangc}, [plangc], logdir, "net-late"))
     logs.append(T.harness(c, "print-atomic", ["bash", "tests/print-atomic.sh"],
                           {"PLANGC": plangc}, [plangc], logdir, "print atômico"))
-    logs.append(T.harness(c, "run-cmd", ["bash", "tests/run-cmd.sh"],
-                          {"PLANGC": plangc}, [plangc], logdir, "run-cmd"))
+    logs.append(T.harness(c, "run-ppack", ["bash", "tests/run-cmd-ppack.sh"],
+                          {"PPACK": path.join(BUILD, "bin/ppack")},
+                          [path.join(BUILD, "bin/ppack"), plangc], logdir, "run pelo ppack"))
     # os três arreios que medem o pscript contra ALGO QUE NÃO SOMOS NÓS: corpora
     # que outros escreveram, e os nossos programas rodados também no intérprete
     # de referência. Não são placar: são portão.
@@ -451,6 +452,96 @@ async def suite_pacotes(c: T.Ctx, verdict: str) -> str:
             casos.append(T.Caso(rot, binario, esperado, 0,
                                 path.join(BUILD, "t/run", nome + "-" + n)))
     return T.suite(c, "pacotes", casos, verdict, path.join(BUILD, "t/stamp"))
+
+
+# ---------- o manifesto do `run` ----------
+#
+# A pergunta que o caminho curto responde é uma só: "o que está no disco ainda é
+# o que foi construído?". A resposta é a lista dos arquivos que a construção LEU
+# (que o compilador disse, não que se adivinhou) com a data de cada um, mais o
+# compilador que a fez. Se tudo bater, não há o que perguntar nem o que fazer.
+#
+# É a mesma ideia do manifesto que vivia dentro do `plangc run`, mudada de casa:
+# a decisão de onde guardar e quando invalidar é política, e política é do
+# gerenciador. E agora ela mora em `build/run/`, dentro do projeto, e não num
+# `~/.cache` que `make clean` não alcança.
+
+private def run_man_path(src: str) -> str:
+    nome = path.basename(src)
+    return path.join(BUILD, "run/.man", nome + ".txt")
+
+
+async def run_manifesto_ok(src: str) -> str:
+    """O binário, se ele ainda vale. Vazio quando é preciso construir."""
+    man = run_man_path(src)
+    if not path.isfile(man):
+        return ""
+    f = await open(man, "r")
+    txt = await f.text()
+    await f.close()
+    linhas = txt.split("\n")
+    if len(linhas) < 2:
+        return ""
+    binario = linhas[0]
+    if not path.isfile(binario):
+        return ""
+    for ln in linhas[1:len(linhas)]:
+        if len(ln) == 0:
+            continue
+        k = ln.rfind(" ")
+        if k < 0:
+            return ""
+        arq = ln[0:k]
+        if not path.isfile(arq):
+            return ""
+        if str(path.getmtime_ns(arq)) != ln[k + 1:]:
+            return ""
+    return binario
+
+
+async def run_manifesto_grava(src: str, binario: str, g: G.Graph):
+    """A lista do que a construção LEU, com as datas. As entradas vêm do GRAFO,
+    que as recebeu do compilador — nada aqui é adivinhado a partir do fonte."""
+    vistos: dict<str, int> = {}
+    linhas: list<str> = [binario]
+    for e in g.edges:
+        for iid in e.ins:
+            p = g.nodes[iid].p
+            if p in vistos or not path.isfile(p):
+                continue
+            vistos[p] = 1
+            linhas.append(p + " " + str(path.getmtime_ns(p)))
+        for iid2 in e.implicit:
+            p2 = g.nodes[iid2].p
+            if p2 in vistos or not path.isfile(p2):
+                continue
+            vistos[p2] = 1
+            linhas.append(p2 + " " + str(path.getmtime_ns(p2)))
+    await T.escrever(run_man_path(src), "\n".join(linhas) + "\n")
+
+
+async def programa_solto(g: G.Graph, query: str, src: str) -> str:
+    """Um arquivo que não é alvo de descritor nenhum, construído para ser
+    corrido. É o que o `plangc run` fazia por dentro, e a razão de sair de lá é
+    que nada disto é sobre traduzir uma linguagem: é POLÍTICA — onde guardar o
+    binário, quando é que ele está velho, o que fazer com os argumentos.
+
+    O binário sai em `build/run/`, que é do PROJETO como tudo o mais: `make
+    clean` leva-o e `make clean-all` também. O `~/.cache` do `plangc run` era a
+    última coisa neste sistema que escrevia fora da árvore."""
+    raizes = await raizes_do_workspace("pack.json")
+    for ri in R.raizes_instaladas():
+        raizes.append(ri)
+    c = T.new_ctx(g, path.join(BUILD, "run"), PLANGC_S2)
+    c.query = query
+    c.plangc_is_built = True
+    c.pkgroots = raizes
+    nome = path.basename(src)
+    nome = nome[0:len(nome) - 4] if nome.endswith(".psc") else nome[0:len(nome) - 2]
+    saida = path.join(BUILD, "run/bin", nome)
+    if src.endswith(".psc"):
+        return await T.psc_program(c, src, saida, path.join(BUILD, "run/obj"), [], [])
+    return await T.p_program(c, src, saida, path.join(BUILD, "run/obj"), [], [])
 
 
 async def montar(query: str) -> G.Graph:

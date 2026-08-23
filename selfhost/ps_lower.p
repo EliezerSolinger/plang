@@ -3743,6 +3743,15 @@ struct PsLow:
                 self->allocs = True
                 self->raised = True
                 return rc0
+            if isos0 and strcmp(of0, "exec") == 0:
+                # não devolve — mas LEVANTA quando a troca não acontece, e é por
+                # isso que ele leva posição
+                ec0: *Expr = self->call_rt("ps_os_exec", e->pos)
+                self->push_arg(ec0, self->ctx_arg(e->pos))
+                self->push_arg(ec0, self->expr(e->args[0]))
+                self->pos_args(ec0, e->pos)
+                self->raised = True
+                return ec0
             if isos0 and strcmp(of0, "nproc") == 0:
                 # não aloca, não levanta, não precisa de contexto: é um número
                 # que o sistema já sabe

@@ -115,10 +115,9 @@ static void usage(void) {
     fprintf(stderr, "  --api            the canonical public API of each module, and its hash\n");
     fprintf(stderr, "  --tokens         dump tokens and exit\n");
     fprintf(stderr, "  --parse-only     stop after the front end (a syntax check)\n");
-    fprintf(stderr, "  run <f.psc> [args] compile (cached) and RUN it (6.3/15.3); as `pscript f.psc`\n");
     fprintf(stderr, "  --ps-runtime <d> where pscript's runtime lives, for .psc input\n");
     fprintf(stderr, "  --no-assert, -O  drop `assert` from a .psc build (46.4), as Python's -O does\n");
-    fprintf(stderr, "  -g, --debug      frame in EVERY pscript function (stack trace names them all), and cc -g in `run`\n");
+    fprintf(stderr, "  -g, --debug      frame in EVERY pscript function (stack trace names them all)\n");
     fprintf(stderr, "                   (default: pscript/runtime)\n");
     fprintf(stderr, "  -h, --help       this help\n");
     exit(2);
@@ -139,18 +138,6 @@ static void mkdirs_for(const char *p) {
     free(buf);
 }
 
-static const char *run_cache_dir(Arena *a) {
-    const char *e = getenv("PSCRIPT_CACHE");
-    if (e != NULL && e[0] != '\0') {
-        return e;
-    }
-    const char *h = getenv("HOME");
-    if (h != NULL && h[0] != '\0') {
-        return Arena_printf(a, "%s/.cache/pscript", h);
-    }
-    return "/tmp/pscript-cache";
-}
-
 static uint64_t hash_file(const char *path, int *ok) {
     size_t n = 0;
     char *b = read_entire_file_opt(path, &n);
@@ -161,109 +148,6 @@ static uint64_t hash_file(const char *path, int *ok) {
     uint64_t h = hash_bytes(b, n);
     free(b);
     return h;
-}
-
-static int run_manifest_ok(Arena *a, const char *man, uint64_t *binkey) {
-    size_t n = 0;
-    char *txt = read_entire_file_opt(man, &n);
-    if (txt == NULL) {
-        return 0;
-    }
-    char *p2 = txt;
-    uint64_t key = strtoull(p2, &p2, 16);
-    *binkey = key;
-    while (*p2 != '\0') {
-        while (*p2 == '\n' || *p2 == ' ') {
-            p2 += 1;
-        }
-        if (*p2 == '\0') {
-            break;
-        }
-        uint64_t want = strtoull(p2, &p2, 16);
-        while (*p2 == ' ') {
-            p2 += 1;
-        }
-        char *start = p2;
-        while (*p2 != '\n' && *p2 != '\0') {
-            p2 += 1;
-        }
-        const char *path = Arena_printf(a, "%.*s", (int32_t)(p2 - start), start);
-        int ok = 1;
-        uint64_t got = hash_file(path, &ok);
-        if (!ok || got != want) {
-            int __defer_ret0 = 0;
-            {
-                free(txt);
-            }
-            return __defer_ret0;
-        }
-    }
-    int __defer_ret1 = 1;
-    {
-        free(txt);
-    }
-    return __defer_ret1;
-}
-
-static void run_manifest_write(Arena *a, const char *man, uint64_t binkey, Vec_pchar *inputs) {
-    mkdirs_for(man);
-    FILE *f = fopen(man, "wb");
-    if (f == NULL) {
-        return;
-    }
-    fprintf(f, "%016llx\n", binkey);
-    size_t i;
-    for (i = 0; i < inputs->len; i += 1) {
-        int ok = 1;
-        uint64_t h = hash_file(Vec_pchar_get(inputs, (size_t)i), &ok);
-        if (ok) {
-            fprintf(f, "%016llx %s\n", h, Vec_pchar_get(inputs, (size_t)i));
-        }
-    }
-    fclose(f);
-}
-
-static int run_exec(const char *binp, char **args, int32_t nargs) {
-    char **av = malloc((size_t)(nargs + 2) * sizeof(*av));
-    av[0] = (char *)binp;
-    size_t i;
-    for (i = 0; i < nargs; i += 1) {
-        av[i + 1] = args[i];
-    }
-    av[nargs + 1] = NULL;
-    execv(binp, av);
-    fatal("could not run '%s'", binp);
-    return 1;
-}
-
-static int run_program(Cc *cc, Vec_pchar *cfiles, uint64_t h, const char *cachedir, char **args, int32_t nargs, int32_t std_version, int debug) {
-    const char *binp = Arena_printf(&cc->arena, "%s/bin/%016llx", cachedir, h);
-    mkdirs_for(binp);
-    if (access(binp, 0) != 0) {
-        StrBuf cmd = {0};
-        const char *ccname = getenv("CC");
-        StrBuf_puts(&cmd, (ccname != NULL && ccname[0] != '\0' ? ccname : "cc"));
-        StrBuf_puts(&cmd, (std_version == 89 ? " -std=c89" : " -std=c11"));
-        StrBuf_puts(&cmd, (debug ? " -g -O0 -w" : " -O2 -w"));
-        StrBuf_puts(&cmd, " -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE");
-        size_t i;
-        for (i = 0; i < cfiles->len; i += 1) {
-            StrBuf_puts(&cmd, " \"");
-            StrBuf_puts(&cmd, Vec_pchar_get(cfiles, (size_t)i));
-            StrBuf_puts(&cmd, "\"");
-        }
-        StrBuf_puts(&cmd, " -o \"");
-        StrBuf_puts(&cmd, binp);
-        StrBuf_puts(&cmd, "\" -lm -pthread");
-        int rc = system(cmd.data);
-        if (rc != 0) {
-            fatal("the C compiler failed while building '%s' (see the errors above)", binp);
-        }
-        {
-            StrBuf_deinit(&cmd);
-        }
-    }
-    return run_exec(binp, args, nargs);
 }
 
 static const char *derive_output(Arena *a, const char *input, const Backend *be) {
@@ -503,22 +387,10 @@ int main(int argc, char **argv) {
     Vec_pchar_init(&pulled);
     Vec_pchar defines;
     Vec_pchar_init(&defines);
-    int run_mode = 0;
-    char **run_args = NULL;
-    int32_t run_nargs = 0;
-    int32_t first = 1;
-    if (argc > 1 && strcmp(argv[1], "run") == 0) {
-        run_mode = 1;
-        first = 2;
-    } else if (has_suffix(argv[0], "pscript") || has_suffix(argv[0], "pscript.exe")) {
-        run_mode = 1;
-    }
     size_t i;
-    for (i = first; i < argc; i += 1) {
-        if (run_mode && run_nargs == 0 && inputs.len == 1 && i < argc) {
-            run_args = &argv[i];
-            run_nargs = argc - i;
-            break;
+    for (i = 1; i < argc; i += 1) {
+        if (i == 1 && strcmp(argv[i], "run") == 0) {
+            fatal("`plangc run` mudou-se: agora é `ppack run <arquivo>`.\n  O compilador deixou de escolher onde guardar o binário e quando ele está velho — isso é do\n  gerenciador, e lá o binário fica em `build/run/`, dentro do projeto, em vez de num `~/.cache`.\n  O programa também PASSA A SER o processo (os.exec), então teclado, tela e Ctrl-C funcionam.");
         }
         if (strncmp(argv[i], "--std=", 6) == 0) {
             const char *std = argv[i] + 6;
@@ -640,9 +512,6 @@ int main(int argc, char **argv) {
     if (Vec_pchar_is_empty(&inputs)) {
         usage();
     }
-    if (run_mode && inputs.len != 1) {
-        fatal("`run` takes ONE file: `plangc run program.psc [args...]`");
-    }
     if (out_path != NULL && inputs.len > 1) {
         fatal("-o can only be used with a single input file");
     }
@@ -671,40 +540,6 @@ int main(int argc, char **argv) {
     cc.npkgroots = (int32_t)pkg_roots.len;
     parser_config_predef(plang_host_os(), defines.data, defines.len);
     ps_lower_config(strip_asserts, full_trace);
-    const char *cachedir = NULL;
-    Vec_pchar cfiles;
-    Vec_pchar_init(&cfiles);
-    uint64_t run_hash = 0xcbf29ce484222325;
-    const char *manifest = NULL;
-    if (run_mode) {
-        cachedir = run_cache_dir(&cc.arena);
-        StrBuf kb = {0};
-        StrBuf_puts(&kb, Vec_pchar_get(&inputs, 0));
-        StrBuf_puts(&kb, argv[0]);
-        int ok0 = 1;
-        StrBuf_puts(&kb, Arena_printf(&cc.arena, "|%016llx", hash_file(argv[0], &ok0)));
-        StrBuf_puts(&kb, Arena_printf(&cc.arena, "|%d|%d|%d|%s", std_version, (strip_asserts ? 1 : 0), (full_trace ? 1 : 0), (backend_name != NULL ? backend_name : "c")));
-        uint64_t mkey = hash_bytes(kb.data, kb.len);
-        manifest = Arena_printf(&cc.arena, "%s/man/%016llx", cachedir, mkey);
-        uint64_t bkey = 0;
-        if (run_manifest_ok(&cc.arena, manifest, &bkey)) {
-            const char *binp0 = Arena_printf(&cc.arena, "%s/bin/%016llx", cachedir, bkey);
-            if (access(binp0, 0) == 0) {
-                int __defer_ret0 = run_exec(binp0, run_args, run_nargs);
-                {
-                    StrBuf_deinit(&kb);
-                }
-                return __defer_ret0;
-            }
-        }
-        if (has_suffix(Vec_pchar_get(&inputs, 0), ".psc")) {
-            add_input(&inputs, &pulled, path_join(&cc.arena, ps_runtime, "psrt.ph"));
-        }
-        out_dir = Arena_printf(&cc.arena, "%s/obj", cachedir);
-        {
-            StrBuf_deinit(&kb);
-        }
-    }
     diag_config(werror, wall, pedantic_lvl, wsuppress);
     int query_mode = deps_mode || outputs_mode || api_mode;
     if (deps_mode) {
@@ -861,12 +696,6 @@ int main(int argc, char **argv) {
             fwrite(out.data, 1, out.len, f);
             fclose(f);
         }
-        if (run_mode) {
-            run_hash = (run_hash * 0x100000001b3) ^ hash_bytes((out.data != NULL ? out.data : ""), out.len);
-            if (has_suffix(dest, ".c")) {
-                Vec_pchar_push(&cfiles, (char *)dest);
-            }
-        }
         {
             StrBuf_deinit(&out);
         }
@@ -878,11 +707,6 @@ int main(int argc, char **argv) {
         }
         diag_json_flush();
         return 0;
-    }
-    if (run_mode) {
-        run_manifest_write(&cc.arena, manifest, run_hash, &inputs);
-        diag_json_flush();
-        return run_program(&cc, &cfiles, run_hash, cachedir, run_args, run_nargs, std_version, full_trace);
     }
     diag_json_flush();
     return 0;

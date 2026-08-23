@@ -271,19 +271,25 @@ the same three build modes. The runtime is Plang source compiled alongside your
 program, so there is still no library to install:
 
 ```sh
-# the runtime, once: six layered modules (memory, values, what runs, the
-# ported library, the system layer, the epilogue) plus the types and the umbrella
-plangc --out-dir out pscript/runtime/psrt.ph pscript/runtime/psrt_types.ph \
-   pscript/runtime/psrt_mem.ph pscript/runtime/psrt_val.ph \
-   pscript/runtime/psrt_rt.ph pscript/runtime/psrt_std.ph \
-   pscript/runtime/psrt_os.ph pscript/runtime/psrt_top.ph \
-   pscript/runtime/psrt_mem.p pscript/runtime/psrt_val.p \
-   pscript/runtime/psrt_rt.p pscript/runtime/psrt_std.p \
-   pscript/runtime/psrt_os.p pscript/runtime/psrt_top.p
+# naming the umbrella is enough: `psrt.ph` imports the layers' headers and each
+# one has its `.p` sibling, so the closure brings the whole runtime in
+plangc --out-dir out pscript/runtime/psrt.ph
 plangc --out-dir out hello.psc
 cc -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE \
    out/hello.c out/pscript/runtime/psrt_*.c -o hello -lm -pthread
 ```
+
+Or let the package manager do it — which is what it is for:
+
+```sh
+ppack run hello.psc arg1 arg2   # builds into build/run/ and BECOMES the process
+```
+
+The second run costs about six milliseconds: a manifest lists every file the
+build read with its date, and if they all still match there is nothing to ask
+and nothing to do. (This used to be `plangc run`; it moved because deciding
+where to keep a binary and when it is stale is policy, and policy belongs to
+the package manager — not to the thing that translates a language.)
 
 Your program still includes ONE header (`psrt.h`, the umbrella). And the engine
 has knobs: `-D PSRT_GC_BYTES=...` and friends at compile time, `import gc` /

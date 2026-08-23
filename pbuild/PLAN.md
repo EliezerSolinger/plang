@@ -995,21 +995,34 @@ um erro de compilação aparece sublinhado no arquivo certo.
 **Objetivo.** O `plangc` deixa de tomar a ÚNICA decisão que ainda toma. Só
 depois de `ppack run` maduro.
 
-- [ ] `tests/run-cmd.sh` reescrito para medir `ppack run` (os MESMOS
-      comportamentos: 2ª vez não chama cc; editar módulo importado invalida;
-      editar o compilador invalida; status de saída é o do programa)
-- [ ] paridade de experiência conferida: `ppack run x.psc` frio/quente nos
-      tempos do `plangc run` de hoje (3,3 s / ~10 ms) — sem regressão
-- [ ] remover de `main.p`: o subcomando `run`, `run_cache_dir`,
-      `run_manifest_ok/write`, `run_exec`, `run_program`, o bloco `RT_SRCS`
-      (a SEXTA lista morre), o alias `pscript` por `argv[0]` (`main.p:410`),
-      `--ps-runtime`, `--no-assert`/`-O` se só serviam ao run (conferir: são
-      do build de .psc em geral — ficam)
-- [ ] `~/.cache/pscript` deixa de ser escrito; nota de migração no README
-- [ ] regenerar seed; `verify` 8/8; docs atualizados
+- [x] `tests/run-cmd-ppack.sh` mede `ppack run` (9 checagens, os MESMOS
+      comportamentos: 2ª vez não constrói nada; editar o fonte, um módulo
+      importado ou o COMPILADOR invalida; o status é o do programa; um `.p`
+      corre igual; o binário vive em `build/run/`; um arquivo que não existe é
+      mensagem). `tests/run-cmd.sh` foi apagado.
+- [x] paridade MEDIDA, e melhor dos dois lados: **2,5 s frio / 6 ms quente**,
+      contra 3,3 s / ~10 ms do `plangc run`. O que faz o quente ser quente é o
+      MANIFESTO — a lista dos arquivos que a construção leu (que o compilador
+      disse, não que se adivinhou) com a data de cada um. Sem ele, cada corrida
+      pagava meio segundo em duas perguntas ao compilador para descobrir que não
+      havia nada a fazer; e montar o descritor inteiro custava DOZE segundos, o
+      que o caminho do arquivo solto agora evita construindo um grafo mínimo.
+- [x] removidos de `main.p`: o subcomando `run`, `run_cache_dir`,
+      `run_manifest_ok/write`, `run_exec`, `run_program`, o `RT_SRCS` (já tinha
+      morrido na 1.5a) e o alias `pscript` por `argv[0]`. `--ps-runtime` FICA:
+      um projeto fora desta árvore precisa de dizer onde o runtime está, e a
+      1.5(a) sozinha não responde isso. `plangc run` agora é um erro que diz
+      para onde a coisa se mudou e porquê.
+- [x] `~/.cache/pscript` deixa de ser escrito: o binário vai para `build/run/`,
+      dentro do projeto, que `make clean` alcança. README atualizado.
+- [x] `os.exec` na linguagem (era o que faltava): o programa PASSA A SER o
+      processo. Antes ele corria como filho com a saída capturada, o que serve
+      para um programa que imprime e para mais nada — sem teclado, sem tela, sem
+      tamanho de terminal, sem Ctrl-C.
+- [x] seed regenerado; `verify` verde; docs atualizados
 
-**Pronto quando**: run-cmd verde via ppack, o compilador não tem mais política
-nenhuma, e a promessa "um binário roda scripts" passa oficialmente ao ppack.
+**PRONTO** (2026-08-23): o compilador não tem mais política nenhuma, e a
+promessa "um binário roda scripts" passou oficialmente ao `ppack`.
 
 ---
 

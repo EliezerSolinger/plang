@@ -455,3 +455,44 @@ def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *P
     # um ponteiro é o que a task devolve; `PsStrPtr` é o alias do tamanho de
     # ponteiro que existe justamente para o `sizeof` poder nomear um TIPO aqui
     return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
+
+
+# ---------- `os.exec`: o programa PASSA A SER este processo ----------
+#
+# `os.run` cria um filho e espera; `os.exec` não volta. A diferença importa numa
+# coisa só, e essa coisa é tudo: um programa lançado como filho tem a saída
+# CAPTURADA, então não pinta a tela, não lê o teclado, não sabe o tamanho do
+# terminal e não recebe Ctrl-C. Um lançador (`ppack run`) que use `os.run`
+# consegue correr um programa que imprime, e mais nada.
+#
+# Depois do `execvp` não há "depois": o processo é outro programa, com o mesmo
+# PID, os mesmos descritores e o mesmo terminal. Por isso isto NÃO devolve — e
+# por isso o que ele tem de fazer ANTES é esvaziar o que estiver por escrever,
+# que doutra forma morre no buffer.
+def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32):
+    if argv == None or argv->len < 1:
+        ps_raise(ctx, "os.exec() takes the command as a non-empty list: os.exec([\"vim\", \"a.txt\"])", PS_CAT_VALUE, file, line)
+        return
+    n: i64 = argv->len
+    av: **char = (**char)(malloc(usize(n + 1) * sizeof(*av)))
+    memset(av, 0, usize(n + 1) * sizeof(*av))
+    abase: *char = (*char)(argv->data) + sizeof(PsArr)
+    for i in range(n):
+        sp: *PsStr = *(**PsStr)(abase + usize(i) * usize(argv->esize))
+        c: *char = os_arg_cstr(ctx, sp, "argument", file, line)
+        if c == None:
+            free(av)
+            return
+        av[i] = c
+    fflush(stdout)
+    fflush(stderr)
+    execvp(av[0], av)
+    # só se chega aqui quando NÃO houve troca: o programa não existe, ou não tem
+    # permissão. A mensagem diz o nome, porque "No such file or directory" sem
+    # ele é a mensagem mais inútil do Unix.
+    # a regra do `errno` desta camada vale aqui: a mensagem vem da OPERAÇÃO e do
+    # NOME, e não do `errno` — que é macro, e P não vê macro
+    msg: char[512]
+    snprintf(msg, usize(512), "os.exec(): não consegui executar '%s' (não existe, ou não é executável)", av[0])
+    ps_raise(ctx, msg, PS_CAT_IO, file, line)
+    free(av)

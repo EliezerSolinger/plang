@@ -138,7 +138,7 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/gc-stress.sh >$V/gcstress.log 2>&1; then
 else
     bad "gc-stress achou algo (veja $V/gcstress.log)"
 fi
-#   run-cmd      `plangc run` e o cache atrás dele: a única coisa aqui que não é
+#   run-ppack    `ppack run` e o cache atrás dele: a única coisa aqui que não é
 #                uma compilação, então o que se mede são COMPORTAMENTOS — que a
 #                segunda vez não chama o `cc`, que editar um módulo importado
 #                invalida, que o status de saída é o do programa.
@@ -169,10 +169,12 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/knobs.sh >$V/knobs.log 2>&1; then
 else
     bad "um knob de compilação não pegou (veja $V/knobs.log)"
 fi
-if PLANGC=$PWD/$V/plangc_s2 bash tests/run-cmd.sh >$V/runcmd.log 2>&1; then
-    ok "run-cmd $(grep -oE '[0-9]+ ok' $V/runcmd.log | tail -1)"
+# run pelo ppack: os mesmos comportamentos do `plangc run`, medidos do lado onde
+# a decisão passou a viver (F7)
+if PPACK=$PWD/build/bin/ppack bash tests/run-cmd-ppack.sh >$V/runppack.log 2>&1; then
+    ok "run-ppack $(grep -oE '[0-9]+ ok' $V/runppack.log | tail -1)"
 else
-    bad "o `run` divergiu (veja $V/runcmd.log)"
+    bad "o run do ppack divergiu (veja $V/runppack.log)"
 fi
 
 # packages: `import <pkg/mod.ph>` — o pacote como CAMINHO DE BUSCA, nas duas

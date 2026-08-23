@@ -180,34 +180,75 @@ async def cmd_build(alvos: list<str>, jobs: int, keep: int, dry: bool, query: st
     return 0 if ok else 1
 
 async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int:
-    """Constrói o alvo e roda-o. O status de saída é o DELE; um build que falha
-    sai com 101 (a convenção do cargo), para que um script saiba distinguir "o
-    programa recusou" de "o programa nem chegou a existir".
+    """Constrói e roda. Duas coisas que ele aceita, e a segunda é a que fecha a
+    F7:
 
-    **Limite conhecido, dito de frente:** o programa roda como FILHO e a saída
-    dele volta capturada, em vez de ele SUBSTITUIR este processo (`exec`). Para
-    um programa que só imprime dá no mesmo; para um que lê do teclado ou pinta a
-    tela, não dá. O `exec` depende de uma função nova na camada de sistema do
-    pscript (`os.exec`), que é decisão de linguagem e está anotada no plano."""
+      * um ALVO do grafo (`ppack run build/bin/pstudio`);
+      * um ARQUIVO de fonte (`ppack run x.psc`, `ppack run x.p`) — que não está
+        no descritor nenhum, e é construído aqui, em `build/run/`.
+
+    O segundo caso é o que o `plangc run` fazia, e é a única decisão de POLÍTICA
+    que ainda vivia dentro do compilador: onde guardar o binário, quando é que
+    ele está velho, e o que fazer com os argumentos. Nada disso é sobre traduzir
+    uma linguagem.
+
+    E o programa **passa a ser este processo** (`os.exec`). Antes ele corria como
+    filho com a saída capturada, o que serve para um programa que imprime e para
+    mais nada: sem teclado, sem tela, sem tamanho de terminal, sem Ctrl-C. Por
+    isso o status de saída também deixa de precisar de conversa — ele É o do
+    programa, porque é o mesmo processo.
+
+    Um build que falha sai com 101 (a convenção do cargo), para que um script
+    saiba distinguir "o programa recusou" de "o programa nem chegou a existir"."""
     if len(alvos) == 0:
-        print("uso: ppack run <alvo> [args...]")
+        print("uso: ppack run <alvo|arquivo.psc> [args...]")
         return 2
     alvo = alvos[0]
-    g = await BP.montar(query)
     st = on_start_verbose if verbose else on_start
     rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
+    solto: bool = (alvo.endswith(".psc") or alvo.endswith(".p")) and path.isfile(alvo)
+    if solto:
+        # O CAMINHO CURTO, e é ele que faz `ppack run` valer como lançador de
+        # scripts: se o manifesto da última corrida ainda bate — o mesmo
+        # compilador, os mesmos arquivos, as mesmas datas —, não há nada a
+        # perguntar nem a construir, e o processo vira o programa em
+        # milissegundos. Sem isto, cada corrida paga duas invocações do
+        # compilador (meio segundo) para descobrir que não havia nada a fazer.
+        pronto = await BP.run_manifesto_ok(alvo)
+        if len(pronto) > 0:
+            argv0: list<str> = [pronto if pronto.startswith("/") else path.join(os.getcwd(), pronto)]
+            i0 = 1
+            while i0 < len(alvos):
+                argv0.append(alvos[i0])
+                i0 += 1
+            os.exec(argv0)
+            return 127
+    g = G.new_graph()
+    if solto and path.isfile(BP.PLANGC_S2):
+        # O GRAFO MÍNIMO, e é isto que faz o `run` ser rápido: montar o
+        # descritor inteiro custa centenas de perguntas ao compilador (doze
+        # segundos aqui), e nenhuma delas é sobre este arquivo. Quando o
+        # compilador já existe, o que se constrói é só o programa.
+        alvo = await BP.programa_solto(g, query, alvo)
+    else:
+        g = await BP.montar(query)
+        if alvo not in g.by_path and solto:
+            alvo = await BP.programa_solto(g, query, alvo)
+        elif alvo not in g.by_path:
+            print("não achei '" + alvo + "' — nem alvo do descritor, nem arquivo")
+            return 1
     if not await B.build(g, LOG, [alvo], B.Opts(jobs, 1, False, False), rep):
         return 101
+    if solto:
+        await BP.run_manifesto_grava(alvos[0], alvo, g)
     argv: list<str> = [alvo if alvo.startswith("/") else path.join(os.getcwd(), alvo)]
     i = 1
     while i < len(alvos):
         argv.append(alvos[i])
         i += 1
-    r = await os.run(argv)
-    saida = r.output()
-    if len(saida) > 0:
-        print(saida.rstrip())
-    return r.status()
+    # daqui não se volta: o processo é o programa
+    os.exec(argv)
+    return 127
 
 async def cmd_verify(jobs: int, query: str, verbose: bool) -> int:
     """O `verify-all.sh` inteiro, como GRAFO. Os oito passos dele são

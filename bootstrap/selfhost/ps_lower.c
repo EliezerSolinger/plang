@@ -4036,6 +4036,14 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->raised = 1;
             return rc0;
         }
+        if (isos0 && strcmp(of0, "exec") == 0) {
+            Expr *ec0 = PsLow_call_rt(self, "ps_os_exec", e->pos);
+            PsLow_push_arg(self, ec0, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ec0, PsLow_expr(self, e->args[0]));
+            PsLow_pos_args(self, ec0, e->pos);
+            self->raised = 1;
+            return ec0;
+        }
         if (isos0 && strcmp(of0, "nproc") == 0) {
             return PsLow_call_rt(self, "ps_os_nproc", e->pos);
         }
