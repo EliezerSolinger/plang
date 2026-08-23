@@ -113,14 +113,21 @@ PY2
 echo "   pbuild-json: o fluxo de eventos e a consulta saem em JSON"
 
 # ---- `ppack tree` e `ppack why`: as consultas de PACOTE ----
-# Rodam sobre o workspace deste repositório (`packages/stl`, `packages/pui`), que
-# é o caso mais simples: dois pacotes, nenhuma dependência entre eles. A forma
-# interessante — um pacote que puxa outro — tem portão na suíte do motor, sobre a
-# fixture de `tests/pkg`.
+# Rodam sobre o workspace DESTE repositório, que deixou de ser o caso simples de
+# dois pacotes independentes: hoje são nove, e um deles (`ed25519`) puxa outro
+# (`sha2`), que por sua vez puxa o `stl`. É por isso que o que se cobra aqui é a
+# ANINHAMENTO e não uma ordem de linhas — um pacote que é dependência de outro
+# aparece por baixo dele, e não como raiz. A ordem das raízes é a do manifesto,
+# e prendê-la aqui faria acrescentar um pacote quebrar um teste que não é sobre
+# isso.
 t=$("$OUT/ppack" tree 2>&1)
 case $t in
-    *"stl 0.1.0"*"pui 0.1.0"*) ;;
+    *"pui 0.1.0"*) ;;
     *) echo "  FAIL: ppack tree"; echo "$t" | head -3; exit 1 ;;
+esac
+case $t in
+    *"ed25519 0.1.0"*"sha2 0.1.0"*"stl 0.1.0"*) ;;
+    *) echo "  FAIL: ppack tree não aninhou ed25519 -> sha2 -> stl"; echo "$t" | head -12; exit 1 ;;
 esac
 w=$("$OUT/ppack" why pui 2>&1)
 case $w in
@@ -135,6 +142,7 @@ python3 - "$OUT/tree.json" <<'PY2' || { echo "  FAIL: ppack tree --json"; exit 1
 import json, sys
 d = json.load(open(sys.argv[1]))
 nomes = sorted(p["name"] for p in d["packages"])
-assert nomes == ["pui", "stl"], nomes
+# as RAÍZES do workspace: os membros que não são dependência de outro membro
+assert "pui" in nomes and "pbuild" in nomes and "ed25519" in nomes, nomes
 PY2
 echo "   pbuild-pacotes: tree e why, no texto e em JSON"

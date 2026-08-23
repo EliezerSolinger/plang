@@ -44,8 +44,29 @@ total_arestas: int = 0
 falhou: bool = False
 
 def on_plan(total: int):
+    """Um plano novo é uma construção nova, e o relatório recomeça com ele.
+
+    Isto não é higiene: o `ppack dev` e o `--repro` constroem duas ou vinte
+    vezes no MESMO processo, e um contador que não recomeçasse diria `[64/61]`
+    na segunda — um número maior que o total, que é a forma mais rápida de
+    fazer alguém desconfiar de um relatório inteiro."""
     global total_arestas
+    global feitas
+    global falhou
+    global rotulos
+    global placar_ok
+    global placar_mal
     total_arestas = total
+    feitas = 0
+    falhou = False
+    # um literal vazio precisa de tipo, e é bom que precise: `= {}` calado num
+    # global já tipado seria a mesma forma para duas intenções diferentes
+    rot0: dict<int, str> = {}
+    ok0: dict<str, int> = {}
+    mal0: dict<str, list<str>> = {}
+    rotulos = rot0
+    placar_ok = ok0
+    placar_mal = mal0
     if saida_json:
         print('{"event": "plan", "total": ' + str(total) + '}')
         return
@@ -181,12 +202,109 @@ def on_start_verbose(id: int, what: str):
     rotulos[id] = what
     print("  ->", what)
 
-async def cmd_build(alvos: list<str>, jobs: int, keep: int, dry: bool, query: str, verbose: bool) -> int:
+async def cmd_build(alvos: list<str>, jobs: int, keep: int, dry: bool, query: str,
+                    verbose: bool, repro: bool) -> int:
     g = await BP.montar(query)
     st = on_start_verbose if verbose else on_start
     rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
     ok = await B.build(g, LOG, alvos, B.Opts(jobs, keep, dry, False), rep)
-    return 0 if ok else 1
+    if not ok or dry or not repro:
+        return 0 if ok else 1
+    return await confere_repro(g, alvos, jobs, keep, query, rep)
+
+
+const REPRO: str = "build/repro"
+
+private async def confere_repro(g: G.Graph, alvos: list<str>, jobs: int, keep: int,
+                                query: str, rep: B.Rep) -> int:
+    """`--repro`: constrói duas vezes e compara byte a byte.
+
+    O `verify-all` já fazia isto à mão para o compilador (`diff -rq out2 out3`,
+    e o ponto fixo do QBE); aqui vira comando, e passa a valer para qualquer
+    projeto e qualquer alvo.
+
+    A segunda construção começa do ZERO — as saídas e o log do build saem da
+    frente —, porque uma segunda corrida incremental não prova nada: ela não
+    roda aresta nenhuma. O que se compara é o conteúdo, nunca a data: um build
+    reprodutível pode muito bem escrever o mesmo byte num segundo diferente.
+
+    O que a primeira construção fez é **movido** para `build/repro/`, e não
+    copiado. A diferença importa por duas razões, e a segunda custou uma árvore
+    a descobrir: mover preserva o arquivo como ele é (a permissão de execução
+    inclusive, que uma cópia byte a byte pela linguagem perderia), e permite
+    **pôr tudo de volta** quando a segunda construção falha — que é justamente
+    quando não há artefato novo nenhum para ficar no lugar.
+
+    O grafo da segunda construção monta-se antes de mover o que quer que seja:
+    montá-lo é PERGUNTAR ao compilador, e o compilador é uma das saídas.
+
+    O limite honesto disto está medido e escrito: o P e o pscript que geramos
+    não têm data nem caminho absoluto no que emitem, então são reprodutíveis por
+    construção; um pacote em C que use `__DATE__`/`__TIME__` não é, e a resposta
+    do mundo para isso (`SOURCE_DATE_EPOCH`) é a que se adota no dia em que
+    aparecer."""
+    saidas: list<str> = []
+    for e in g.edges:
+        if not e.want:
+            continue
+        for oid in e.outs:
+            pth = g.nodes[oid].p
+            if path.isfile(pth):
+                saidas.append(pth)
+    if len(saidas) == 0:
+        print("--repro: a construção não produziu arquivo nenhum para comparar")
+        return 0
+    if path.isdir(REPRO):
+        rmtree(REPRO)
+    g2 = await BP.montar(query)
+    for p1 in saidas:
+        guarda = path.join(REPRO, p1)
+        d = path.dirname(guarda)
+        if len(d) > 0 and not path.isdir(d):
+            os.makedirs(d)
+        os.rename(p1, guarda)
+    if path.isfile(LOG):
+        os.remove(LOG)
+    print("--repro: " + str(len(saidas)) + " saída(s) de lado; construindo outra vez do zero")
+    if not await B.build(g2, LOG, alvos, B.Opts(jobs, keep, False, False), rep):
+        for p9 in saidas:
+            if not path.isfile(p9):
+                d9 = path.dirname(p9)
+                if len(d9) > 0 and not path.isdir(d9):
+                    os.makedirs(d9)
+                os.rename(path.join(REPRO, p9), p9)
+        rmtree(REPRO)
+        print("--repro: a segunda construção FALHOU — e uma construção que só")
+        print("         funciona na primeira vez é o defeito mais caro que existe.")
+        print("         o que a primeira tinha produzido está de volta no lugar.")
+        return 1
+    difs: list<str> = []
+    for p3 in saidas:
+        if not path.isfile(p3):
+            difs.append(p3 + "  (a segunda construção não o produziu)")
+            continue
+        h1 = R.hash_de(await R.ler_bytes(path.join(REPRO, p3)))
+        h2 = R.hash_de(await R.ler_bytes(p3))
+        if h1 != h2:
+            difs.append(p3 + "  " + h1[0:16] + "… -> " + h2[0:16] + "…")
+    if saida_json:
+        jd: list<str> = []
+        for d0 in difs:
+            jd.append(G.jstr(d0))
+        print('{"outputs": ' + str(len(saidas)) + ', "reproducible": '
+              + ("true" if len(difs) == 0 else "false") + ', "differ": [' + ", ".join(jd) + ']}')
+    if len(difs) == 0:
+        rmtree(REPRO)
+        if not saida_json:
+            print("--repro: as duas construções deram os MESMOS bytes em " + str(len(saidas)) + " arquivo(s)")
+        return 0
+    if not saida_json:
+        print("--repro: " + str(len(difs)) + " de " + str(len(saidas)) + " arquivo(s) NÃO saíram iguais:")
+        for d2 in difs:
+            print("   " + d2)
+        print("   a primeira construção está guardada em " + REPRO + "/, para comparar")
+    return 1
+
 
 async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool, builddir: str) -> int:
     """Constrói e roda. Duas coisas que ele aceita, e a segunda é a que fecha a
@@ -839,35 +957,29 @@ private def parte_em_arroba(spec: str) -> list<str>:
     return [spec[0:i], spec[i + 1:len(spec)]]
 
 
-async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
-    """`ppack add <nome>@<versão>` — escreve no manifesto e no lock.
+private async def travar(lk: LK.Lock, pedidos: list<str>, trocaveis: list<str>,
+                        inseguro: bool, postos: list<str>) -> int:
+    """A resolução, que é a mesma para `add` e para `lock`: seguir a fila de
+    pedidos, buscar cada um no índice guardado, conferir hash e assinatura,
+    guardar o tarball no armazém e travar a linha no lock.
 
-    `add` e `build` são comandos diferentes DE PROPÓSITO: um mexe no manifesto e
-    no lock, o outro compila. O diff do commit fica legível — duas linhas, uma em
-    cada arquivo — em vez de "o build mudou o mundo e agora há vinte arquivos
-    novos".
+    Ela NÃO escreve o lock nem o manifesto — quem chama decide isso. Devolve 0,
+    ou o código de saída do problema que a fez parar; `postos` recebe uma linha
+    por pacote que entrou.
 
-    As dependências do que se pede vêm JUNTO, e isto não é resolver versões: o
-    índice traz a versão EXATA de cada uma, e o que se faz é segui-la. Quando
-    duas exigências discordam, o resultado é uma mensagem — não uma busca."""
-    if len(alvos) == 0:
-        print("uso: ppack add <nome>@<versão> [--unsafe]")
-        return 2
-    pedido = parte_em_arroba(alvos[0])
-    nome = pedido[0]
-    versao = pedido[1]
-    if len(versao) == 0:
-        print("a v1 não tem resolvedor: a versão é EXATA — `ppack add " + nome + "@0.1.0`")
-        return 2
+    `trocaveis` são os nomes que PODEM mudar de versão: o que se pediu na linha
+    de comando. Uma DEPENDÊNCIA que discorda do que já está travado continua a
+    ser conflito — aí ninguém escolheu, e escolher por conta própria seria a
+    decisão que a v1 não toma."""
     repos = await repos_do_projeto()
     vcomp = await versao_do_compilador(query_global())
     if len(vcomp) == 0:
         print("aviso: não achei um `plangc` para perguntar a versão — a faixa de toolchain não foi conferida")
         print("       (`--query <caminho>`, ou ponha o `plangc` no PATH)")
-    lk = await LK.ler("pack.lock")
-    fila: list<str> = [nome + "@" + versao]
+    fila: list<str> = []
+    for pd in pedidos:
+        fila.append(pd)
     porque: dict<str, str> = {}
-    postos: list<str> = []
     while len(fila) > 0:
         atual = parte_em_arroba(fila[0])
         fila = fila[1:len(fila)]
@@ -876,7 +988,7 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
         ja = lk.acha(n)
         if ja >= 0 and lk.pacotes[ja].versao == v:
             continue
-        if ja >= 0 and n == nome:
+        if ja >= 0 and n in trocaveis:
             # o pacote PEDIDO na linha de comando pode trocar de versão: é
             # exatamente isso que `ppack add x@0.2.0` e `ppack up` querem dizer.
             # O que continua a ser conflito é uma DEPENDÊNCIA discordar do que já
@@ -943,9 +1055,37 @@ async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
             break
         if not achou:
             print(f"não achei {n}@{v} em nenhum índice guardado — `ppack update` primeiro?")
-            if n != nome:
-                print(f"   (é dependência de {porque[n] if n in porque else nome})")
+            if n in porque:
+                print(f"   (é dependência de {porque[n]})")
             return 1
+    return 0
+
+
+async def cmd_add(alvos: list<str>, inseguro: bool) -> int:
+    """`ppack add <nome>@<versão>` — escreve no manifesto e no lock.
+
+    `add` e `build` são comandos diferentes DE PROPÓSITO: um mexe no manifesto e
+    no lock, o outro compila. O diff do commit fica legível — duas linhas, uma em
+    cada arquivo — em vez de "o build mudou o mundo e agora há vinte arquivos
+    novos".
+
+    As dependências do que se pede vêm JUNTO, e isto não é resolver versões: o
+    índice traz a versão EXATA de cada uma, e o que se faz é segui-la. Quando
+    duas exigências discordam, o resultado é uma mensagem — não uma busca."""
+    if len(alvos) == 0:
+        print("uso: ppack add <nome>@<versão> [--unsafe]")
+        return 2
+    pedido = parte_em_arroba(alvos[0])
+    nome = pedido[0]
+    versao = pedido[1]
+    if len(versao) == 0:
+        print("a v1 não tem resolvedor: a versão é EXATA — `ppack add " + nome + "@0.1.0`")
+        return 2
+    lk = await LK.ler("pack.lock")
+    postos: list<str> = []
+    rc = await travar(lk, [nome + "@" + versao], [nome], inseguro, postos)
+    if rc != 0:
+        return rc
     await LK.gravar(lk, "pack.lock")
     await escrever_dep_no_manifesto(nome, versao)
     if saida_json:
@@ -1055,6 +1195,93 @@ async def cmd_up(alvos: list<str>, inseguro: bool) -> int:
         rc = await cmd_add([nome + "@" + melhor], inseguro)
         if rc != 0:
             return rc
+    return 0
+
+
+async def cmd_lock(frozen: bool, inseguro: bool) -> int:
+    """`ppack lock` — põe o `pack.lock` de acordo com o `pack.json`, e mais nada.
+
+    É o comando que faltava entre `add` (que muda o que se pede) e `install`
+    (que materializa o que já está decidido): aqui não se pede nada de novo nem
+    se abre árvore nenhuma — refaz-se o lock a partir do manifesto.
+
+    Ele **recomeça** em vez de remendar, e isso é o que o torna exato: o lock
+    passa a ser o fecho do que o `pack.json` pede, e o que já ninguém puxa sai
+    dele sozinho. O que sobrevive é a secção dos repositórios — as chaves
+    aceites por TOFU não são um resultado da resolução, são a confiança que este
+    projeto já reviu, e recomeçar isso seria aceitar de novo o que já foi aceite
+    uma vez.
+
+    Nada disto toca a rede: o tarball de cada versão já está no armazém, com o
+    hash conferido, e o índice é o que o último `ppack update` guardou.
+
+    Com `--frozen` ele não escreve: diz o que mudaria e sai com 1, que é o que
+    um CI quer — "o lock que está comitado não é o que este manifesto pede"."""
+    if not path.isfile("pack.json"):
+        print("não há pack.json aqui")
+        return 1
+    m = await MF.ler("pack.json")
+    velho = await LK.ler("pack.lock")
+    difs = await lock_vs_manifesto(velho)
+    if frozen:
+        if len(difs) == 0:
+            if saida_json:
+                print('{"changed": false}')
+            else:
+                print("o pack.lock corresponde ao pack.json")
+            return 0
+        print("o lock não corresponde ao pack.json, e `--frozen` não deixa arrumá-lo:")
+        for d0 in difs:
+            print("   " + d0)
+        print("rode `ppack lock` e comite o pack.lock")
+        return 1
+    novo = await LK.ler("pack.lock")
+    novo.pacotes = []
+    pedidos: list<str> = []
+    trocaveis: list<str> = []
+    for d in m.deps:
+        pedidos.append(d.nome + "@" + d.faixa)
+        trocaveis.append(d.nome)
+    postos: list<str> = []
+    rc = await travar(novo, pedidos, trocaveis, inseguro, postos)
+    if rc != 0:
+        return rc
+    if len(novo.pacotes) == 0 and not path.isfile("pack.lock"):
+        # um projeto sem dependência de fora não precisa de lock, e criar um
+        # arquivo vazio só para o comando ter feito alguma coisa é ruído num
+        # diretório que alguém vai comitar
+        if saida_json:
+            print('{"changed": false, "locked": []}')
+        else:
+            print("este projeto não pede dependência nenhuma: não há o que travar")
+        return 0
+    await LK.gravar(novo, "pack.lock")
+    linhas: list<str> = []
+    for t in novo.pacotes:
+        i = velho.acha(t.nome)
+        if i < 0:
+            linhas.append("+ " + t.nome + " " + t.versao)
+        elif velho.pacotes[i].versao != t.versao:
+            linhas.append("~ " + t.nome + " " + velho.pacotes[i].versao + " -> " + t.versao)
+        elif velho.pacotes[i].sha256 != t.sha256:
+            linhas.append("~ " + t.nome + " " + t.versao + " (outro conteúdo)")
+    for t2 in velho.pacotes:
+        if novo.acha(t2.nome) < 0:
+            linhas.append("- " + t2.nome + " " + t2.versao + " (ninguém o pede)")
+    if saida_json:
+        jl: list<str> = []
+        for t3 in novo.pacotes:
+            jl.append('{"name": ' + G.jstr(t3.nome) + ', "version": ' + G.jstr(t3.versao)
+                      + ', "sha256": ' + G.jstr(t3.sha256) + '}')
+        print('{"changed": ' + ("true" if len(linhas) > 0 else "false")
+              + ', "locked": [' + ", ".join(jl) + ']}')
+        return 0
+    if len(linhas) == 0:
+        print("o pack.lock já correspondia ao pack.json (" + str(len(novo.pacotes)) + " pacote(s))")
+        return 0
+    for l2 in linhas:
+        print(l2)
+    print("   `ppack install` para os materializar")
     return 0
 
 
@@ -1277,6 +1504,200 @@ async def cmd_publish(alvos: list<str>, para: str, chave: str, query: str) -> in
     return 0
 
 
+private def esc_html(t: str) -> str:
+    out = ""
+    for c in t:
+        if c == "&":
+            out += "&amp;"
+        elif c == "<":
+            out += "&lt;"
+        elif c == ">":
+            out += "&gt;"
+        elif c == "\"":
+            out += "&quot;"
+        else:
+            out += c
+    return out
+
+
+const CSS: str = """
+:root { --fg:#1b1b1b; --bg:#fdfdfc; --dim:#6a6a68; --acc:#7a3b12; --line:#e3e0da;
+        --code:#f4f2ee; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e6e4df; --bg:#1a1a19; --dim:#9a9894; --acc:#e0a06a; --line:#33322f;
+          --code:#232322; }
+}
+* { box-sizing: border-box; }
+body { margin:0; padding:2rem 1.25rem 4rem; background:var(--bg); color:var(--fg);
+       font: 15px/1.65 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+       max-width: 52rem; margin-inline: auto; }
+a { color: var(--acc); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 1.45rem; margin: 0 0 .2rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; padding-bottom:.3rem;
+     border-bottom: 1px solid var(--line); }
+.sub { color: var(--dim); margin: 0 0 1.6rem; }
+.hash { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+        font-size: .8rem; color: var(--dim); }
+pre, code { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+.decl { background: var(--code); border-left: 3px solid var(--acc);
+        padding: .45rem .7rem; margin: 1.1rem 0 .35rem; overflow-x: auto;
+        white-space: pre; font-size: .88rem; }
+.doc { margin: 0 0 .2rem .75rem; white-space: pre-wrap; color: var(--fg); }
+ul.mods { list-style: none; padding: 0; }
+ul.mods li { padding: .25rem 0; border-bottom: 1px solid var(--line); }
+ul.mods li span { color: var(--dim); float: right; font-size: .85rem; }
+footer { margin-top: 3rem; color: var(--dim); font-size: .82rem;
+         border-top: 1px solid var(--line); padding-top: .8rem; }
+"""
+
+
+private def pagina(titulo: str, corpo: str, subida: str) -> str:
+    """A moldura de uma página. Uma folha de estilo INLINE, e não um arquivo ao
+    lado: uma pasta de documentação que se copia para outro lado e continua a
+    ver-se bem vale mais que uma que economiza dois quilobytes."""
+    return ("<!doctype html>\n<html lang=\"pt\">\n<meta charset=\"utf-8\">\n"
+            + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            + "<title>" + esc_html(titulo) + "</title>\n<style>" + CSS + "</style>\n"
+            + corpo
+            + "\n<footer>gerado por <code>ppack doc --html</code>"
+            + (" · <a href=\"" + subida + "\">índice</a>" if len(subida) > 0 else "")
+            + "</footer>\n</html>\n")
+
+
+private async def argv_api(caminho: str, query: str) -> list<str>:
+    """`--api` com as RAÍZES DE PACOTE, que é o que faz a pergunta funcionar num
+    módulo que importa `<pkg/mod.ph>`.
+
+    Sem elas o compilador responde "não achei `<stl/cstr.ph>`" e a documentação
+    de meio workspace fica de fora — em silêncio, porque um módulo que não
+    responde parece um módulo sem interface."""
+    argv: list<str> = [query, "--api"]
+    raizes = await BP.raizes_do_workspace("pack.json")
+    for ri in R.raizes_instaladas():
+        raizes.append(ri)
+    for r in raizes:
+        argv.append("--pkg-path")
+        argv.append(r)
+    argv.append(caminho)
+    return argv
+
+
+private async def api_de(caminho: str, query: str) -> list<A.Api>:
+    r = await os.run(await argv_api(caminho, query))
+    if r.status() != 0:
+        return []
+    return A.parse(r.output())
+
+
+private def nome_de_arquivo(rel: str) -> str:
+    out = ""
+    for c in rel:
+        out += "-" if (c == "/" or c == "\\") else c
+    return out + ".html"
+
+
+async def cmd_doc_html(alvos: list<str>, destino: str, query: str) -> int:
+    """`ppack doc --html <pasta>` — o mesmo conteúdo do terminal, como site.
+
+    A fonte é a MESMA resposta 5 do compilador que o `ppack doc` já lê; o que
+    muda é para onde ela é escrita. É a razão de isto sair barato e de não poder
+    divergir: não há um segundo leitor da linguagem, há um segundo renderizador
+    da mesma lista canónica.
+
+    Sem alvo, documenta o workspace inteiro — cada pacote e cada módulo dele. O
+    resultado é uma pasta de arquivos estáticos: sem serviço, sem rede, sem
+    JavaScript. Abre-se com dois cliques e copia-se para qualquer lado."""
+    mods: list<str> = []
+    rotulo: dict<str, str> = {}
+    if len(alvos) > 0:
+        for a in alvos:
+            if path.isfile(a):
+                mods.append(a)
+                rotulo[a] = a
+                continue
+            raiz = await modulo_do_pacote(a)
+            if len(raiz) > 0:
+                mods.append(raiz)
+                rotulo[raiz] = a
+                continue
+            achou = False
+            for r0 in await BP.raizes_do_workspace("pack.json"):
+                d0 = path.join(r0, a)
+                if not path.isfile(path.join(d0, "pack.json")):
+                    continue
+                achou = True
+                for nm in sorted(os.listdir(d0)):
+                    if nm.endswith(".ph") or nm.endswith(".psc"):
+                        mods.append(path.join(d0, nm))
+                        rotulo[path.join(d0, nm)] = a + "/" + nm
+            if not achou:
+                print("não achei '" + a + "': nem arquivo, nem pacote do workspace")
+                return 1
+    else:
+        for membro in await BP.membros_do_workspace("pack.json"):
+            man = path.join(membro, "pack.json")
+            if not path.isfile(man):
+                continue
+            m = await MF.ler(man)
+            if len(m.raiz) > 0:
+                mods.append(path.join(membro, m.raiz))
+                rotulo[path.join(membro, m.raiz)] = m.nome
+                continue
+            for nm2 in sorted(os.listdir(membro)):
+                if nm2.endswith(".ph") or nm2.endswith(".psc"):
+                    mods.append(path.join(membro, nm2))
+                    rotulo[path.join(membro, nm2)] = m.nome + "/" + nm2
+    if len(mods) == 0:
+        print("não há módulo nenhum para documentar")
+        return 1
+    if not path.isdir(destino):
+        os.makedirs(destino)
+    linhas: list<str> = []
+    escritos = 0
+    simbolos = 0
+    for md in mods:
+        apis = await api_de(md, query)
+        if len(apis) == 0:
+            print("aviso: o compilador não devolveu interface para " + md)
+            continue
+        api = apis[0]
+        rot = rotulo[md] if md in rotulo else md
+        arq = nome_de_arquivo(rot)
+        corpo = "<h1>" + esc_html(rot) + "</h1>\n<p class=\"sub\">" + esc_html(api.caminho)
+        corpo += " · <span class=\"hash\">" + esc_html(api.hash) + "</span></p>\n"
+        if len(api.doc) > 0:
+            corpo += "<p class=\"doc\">" + esc_html(api.doc) + "</p>\n"
+        n = 0
+        for sb in api.simbolos:
+            if len(sb.linha) == 0:
+                continue
+            n += 1
+            corpo += "<div class=\"decl\">" + esc_html(sb.linha) + "</div>\n"
+            if len(sb.doc) > 0:
+                corpo += "<p class=\"doc\">" + esc_html(sb.doc) + "</p>\n"
+        if n == 0:
+            corpo += "<p class=\"sub\">este módulo não declara nada público</p>\n"
+        await R.escrever_bytes(path.join(destino, arq),
+                               R.bytes_de_texto(pagina(rot, corpo, "index.html")))
+        linhas.append("<li><a href=\"" + esc_html(arq) + "\">" + esc_html(rot)
+                      + "</a> <span>" + str(n) + " símbolo(s)</span></li>")
+        escritos += 1
+        simbolos += n
+    idx = "<h1>documentação</h1>\n<p class=\"sub\">" + str(escritos) + " módulo(s), "
+    idx += str(simbolos) + " símbolo(s)</p>\n<ul class=\"mods\">\n"
+    idx += "\n".join(linhas) + "\n</ul>\n"
+    await R.escrever_bytes(path.join(destino, "index.html"),
+                           R.bytes_de_texto(pagina("documentação", idx, "")))
+    if saida_json:
+        print('{"dir": ' + G.jstr(destino) + ', "modules": ' + str(escritos)
+              + ', "symbols": ' + str(simbolos) + '}')
+        return 0
+    print(str(escritos) + " módulo(s), " + str(simbolos) + " símbolo(s) -> "
+          + path.join(destino, "index.html"))
+    return 0
+
+
 async def cmd_doc(alvos: list<str>, query: str) -> int:
     """`ppack doc` — a documentação no TERMINAL, do que já existe.
 
@@ -1298,7 +1719,7 @@ async def cmd_doc(alvos: list<str>, query: str) -> int:
             print("não achei '" + alvo + "': nem arquivo, nem pacote do workspace")
             return 1
         alvo = p2
-    r = await os.run([query, "--api", alvo])
+    r = await os.run(await argv_api(alvo, query))
     if r.status() != 0:
         print(r.output().rstrip())
         return 1
@@ -1407,6 +1828,9 @@ def uso():
     print("     ppack search <termo>                 procura nome, descrição e SÍMBOLO, offline")
     print("     ppack add <nome>@<versão> [--unsafe] escreve no manifesto e no lock")
     print("     ppack up [<nome>]                    sobe para a versão mais alta que o índice tem")
+    print("     ppack doc --html <pasta> [alvo...]    o mesmo conteúdo como site estático")
+    print("     ppack build --repro [alvo]           constrói duas vezes, do zero, e compara byte a byte")
+    print("     ppack lock [--frozen]                refaz o pack.lock a partir do pack.json, sem construir")
     print("     ppack install [--frozen]             materializa o que o lock diz (--frozen: CI, recusa se ele estiver velho)")
 
 async def main() -> int:
@@ -1430,6 +1854,8 @@ async def main() -> int:
     chave = ""
     inseguro = False
     frozen = False
+    repro = False
+    html = ""
     builddir = ""
     query = ""
     for cand in ["build/bin/plangc_s2", "build/bin/plangc_s1", "build/bin/plangc_seed", "./plangc"]:
@@ -1479,6 +1905,11 @@ async def main() -> int:
             inseguro = True
         elif a == "--frozen":
             frozen = True
+        elif a == "--repro":
+            repro = True
+        elif a == "--html" and i + 1 < len(args):
+            i += 1
+            html = args[i]
         elif a == "--build-dir" and i + 1 < len(args):
             i += 1
             builddir = args[i]
@@ -1496,7 +1927,7 @@ async def main() -> int:
         i += 1
     query_atual = query
     if cmd == "build":
-        return await cmd_build(alvos, jobs, keep, dry, query, verbose)
+        return await cmd_build(alvos, jobs, keep, dry, query, verbose, repro)
     if cmd == "test":
         return await cmd_test(jobs, query, verbose)
     if cmd == "verify":
@@ -1514,6 +1945,8 @@ async def main() -> int:
     if cmd == "ninja":
         return await cmd_ninja(alvos, query)
     if cmd == "doc":
+        if len(html) > 0:
+            return await cmd_doc_html(alvos, html, query)
         return await cmd_doc(alvos, query)
     if cmd == "publish":
         return await cmd_publish(alvos, para, chave, query)
@@ -1527,6 +1960,8 @@ async def main() -> int:
         return await cmd_add(alvos, inseguro)
     if cmd == "install":
         return await cmd_install(frozen)
+    if cmd == "lock":
+        return await cmd_lock(frozen, inseguro)
     if cmd == "up":
         return await cmd_up(alvos, inseguro)
     if cmd == "tree":

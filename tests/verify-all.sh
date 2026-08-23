@@ -177,6 +177,17 @@ else
     bad "o run do ppack divergiu (veja $V/runppack.log)"
 fi
 
+# o MOTOR do pbuild, mecanismo por mecanismo (F2B), mais as consultas da CLI
+# sobre o grafo deste repositório. Ele estava escrito e não estava ligado a
+# portão nenhum — 89 conferências que ninguém corria, e uma delas já tinha
+# apodrecido em silêncio (esperava dois pacotes no workspace, que hoje tem nove).
+# Um teste que não corre não é um teste: é documentação que envelhece.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/pbuild.sh >$V/pbuild.log 2>&1; then
+    ok "pbuild $(grep -oE '[0-9]+ ok' $V/pbuild.log | tail -1)"
+else
+    bad "o motor do pbuild divergiu (veja $V/pbuild.log)"
+fi
+
 # packages: `import <pkg/mod.ph>` — o pacote como CAMINHO DE BUSCA, nas duas
 # linguagens, com as respostas do protocolo a enxergá-lo e o erro a dizer onde
 # se procurou
