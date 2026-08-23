@@ -252,6 +252,21 @@ errado.
       cujo C sai igual = 4 arestas e 7,7 s. `ppack verify` (o `verify-all`
       inteiro, como grafo) **5m48 do zero e 7,7 s sem mudança** — contra ~20 min
       em toda corrida do `verify-all.sh`.
+- [x] **F5 e F7 FECHADAS, e a F6 só falta a tela** (2026-08-23). A reflexão
+      (tabela de campos, `repr` como dado, `json.stringify`), o doctest, o
+      `--json` em tudo, o `run` fora do compilador com `os.exec`, o post-mortem
+      com VALORES e o `ppack dev`. O que resta da F6 precisa de janela: o motor
+      em processo no editor, o painel, o play/vassoura e os erros sublinhados.
+      A releitura das especificações no fim fechou mais quatro buracos: o
+      `ppack check` (a promessa de P através dos pacotes), a faixa de toolchain
+      conferida de verdade, o `up`/`--frozen`, e o `build.ninja` comitado com
+      portão de frescura.
+- [x] **F4 FECHADA** (2026-08-23): o repositório inteiro — `publish`, `keygen`,
+      `update`, `search`, `add`, `install`, `up`, `check` — por `file://` e por
+      `http://`, com as duas assinaturas Ed25519 e o TOFU gravado no
+      `pack.lock`. Oito pacotes (`stl`, `pui`, `sha2`, `tar`, `http`, `url`,
+      `ed25519`), e `pscript/lib/` deixou de existir. Portão: `tests/repo.sh`,
+      55 verificações.
 - [~] **F4 começou pelo que não depende de decisão sua** (2026-08-22): o
       MANIFESTO e o WORKSPACE. `pbuild/ps/lib_manifest.psc` lê e valida as duas
       formas de `pack.json` — a de pacote e a de workspace, que se distinguem
@@ -332,14 +347,14 @@ comportamento existente muda. É a menor fase e destrava F2 e F4.
 
 ### Entregas
 
-- [ ] **`--version`**
+- [x] **`--version`**
   - constante `PLANG_VERSION = "0.1.0"` em `selfhost/main.p` (semver da
     LINGUAGEM: menor = recurso novo, maior = quebra — decidido)
   - imprime `plangc 0.1.0 (<hash-dos-bytes>)`; o hash é o mesmo cálculo que o
     `run` já faz (`hash_file(argv[0])`, `main.p:551`) — extraí-lo para função
     reutilizável, porque F7 vai apagar o `run` e a função fica
   - `-h` menciona; sai com status 0
-- [ ] **Pergunta 1 — "o que você leu?"** (flag de deps)
+- [x] **Pergunta 1 — "o que você leu?"** (flag de deps)
   - lista, uma por linha, TODA fonte aberta na compilação: o arquivo pedido,
     imports transitivos (`.ph` e os `.p`/`pmod` que eles puxarem), `embed()`/
     `embed_bytes()`, e os headers de `include <h>` **depois** do preprocessador
@@ -348,14 +363,14 @@ comportamento existente muda. É a menor fase e destrava F2 e F4.
   - caminhos como foram resolvidos (relativos ao cwd), ordem estável
     (a ordem de descoberta é determinística — o laço de inputs de `main.p`)
   - combinável com `--parse-only` para custar só o front end
-- [ ] **Pergunta 3 — "o que você VAI emitir?"** (flag de outputs)
+- [x] **Pergunta 3 — "o que você VAI emitir?"** (flag de outputs)
   - por entrada: os artefatos que aquela invocação produziria com os mesmos
     argumentos (`x.c`, `x.h` quando `.ph`+backend C, `pmod_*.c` de um `.psc`,
     `.ssa` no backend QBE), SEM rodar sema nem codegen além do necessário
     (front end + resolução de imports — medido: 0,12 s no maior arquivo)
   - o espelhamento do `--out-dir` aplicado aos nomes (o mesmo código de caminho
     que a emissão usa — extrair a função, não duplicar)
-- [ ] **Pergunta 2 — a LISTA CANÓNICA DA API + hash (1.5b)**
+- [x] **Pergunta 2 — a LISTA CANÓNICA DA API + hash (1.5b)**
   - por módulo com interface (um `.ph`, ou um `.p` cujo `.ph` o descreve): a
     lista do que é PÚBLICO — funções (nome + assinatura completa com tipos
     normalizados), structs/records com **campos públicos e layout** (nome,
@@ -370,10 +385,10 @@ comportamento existente muda. É a menor fase e destrava F2 e F4.
     coisa e outra função)
   - **teste que prende**: editar comentário/docstring/nome de parâmetro no
     `.ph` NÃO muda o hash; mudar um tipo, um campo, a ordem de campos MUDA
-- [ ] **Pergunta 4 — "quem é você?"**: já existe (hash dos bytes); ganha saída
+- [x] **Pergunta 4 — "quem é você?"**: já existe (hash dos bytes); ganha saída
       própria na flag de versão e na resposta 2 (o par versão+hash acompanha a
       lista, para o lock de F4 gravar)
-- [ ] formato de saída desta fase: **texto, uma informação por linha** com
+- [x] formato de saída desta fase: **texto, uma informação por linha** com
       prefixo de seção. JSON entra em F5 (quando a serialização for de graça);
       desenhar as linhas para que a troca por JSON não mude o CONTEÚDO
 
@@ -443,7 +458,7 @@ fino e vira o lugar do teste).
     RELATIVO assim que é resolvido. O preço: a raiz e os fontes têm de ser
     nomeados do mesmo jeito (ambos relativos ou ambos absolutos), e o
     compilador recusa com mensagem quando não são
-- [ ] **1.5(a) — `import` implica o módulo (a regra do `.p` irmão)**
+- [x] **1.5(a) — `import` implica o módulo (a regra do `.p` irmão)**
   - ao ler `x.ph` (por `"..."` ou `<>`): se `x.p` existe ao lado, ele entra na
     lista de compilação (o mecanismo é o MESMO do `.psc` que puxa `pmod_*.p`
     hoje — o laço `while` de inputs em `main.p:597`; generalizar, não duplicar)
@@ -467,8 +482,10 @@ fino e vira o lugar do teste).
   - o contorno do `hl` em `tests/run.sh` (compilar `hl.p`+lexer+util+utf8 à
     mão) vira o teste de regressão: apagar o contorno, o build do editor tem
     de continuar passando
-- [ ] **regenerar o seed** (reseed.sh) uma vez, com os quatro itens dentro
-- [ ] baterias registradas no `pscript/DESIGN.md` (número novo, uma por item)
+- [x] **regenerar o seed** (reseed.sh) uma vez, com os quatro itens dentro
+- [~] baterias registradas: em `pbuild/BATERIAS.md`, e não em
+      `pscript/DESIGN.md`, porque esse arquivo carrega trabalho não comitado de
+      outra sessão. Dobrar e apagar quando ele estiver livre.
 
 ### Decisões finas a confirmar
 
@@ -498,7 +515,7 @@ executor — o análogo das 1 546 linhas do samurai, com as nossas decisões.
 
 ### Parte A — `os.run` na stdlib (mexe no runtime; bateria própria)
 
-- [ ] **API**: `await os.run(argv: list<str>, env: dict<str,str>? = None,
+- [x] **API**: `await os.run(argv: list<str>, env: dict<str,str>? = None,
       cwd: str? = None, stdout: str? = None) -> ProcResult`, com `ProcResult`
       um record `(status: int, output: str)`
   - `argv` executado DIRETO (`posix_spawn` ou fork+execv — sem `/bin/sh`,
@@ -515,13 +532,13 @@ executor — o análogo das 1 546 linhas do samurai, com as nossas decisões.
     documentada)
   - paralelismo: N `os.run` em voo = N fds no laço (nenhum mecanismo novo);
     o limite de concorrência é de quem chama (`gather_map(..., at_most=n)`)
-- [ ] **`path.getmtime_ns`**: o timespec já é lido (`psrt_os.p:326`); devolver
+- [x] **`path.getmtime_ns`**: o timespec já é lido (`psrt_os.p:326`); devolver
       `sec*1e9+nsec` numa função nova (não mudar a existente — oráculo python3
       confere `getmtime` em segundos)
-- [ ] armadilhas conhecidas (memória da 107): sondar SEMPRE com timeout;
+- [x] armadilhas conhecidas (memória da 107): sondar SEMPRE com timeout;
       rodar `gc-stress`, `net-late`, `print-atomic` a cada passo; fork numa
       máquina com workers = threads → spawn só do laço principal, documentado
-- [ ] oráculo: casos comparados com `subprocess.run` do python3
+- [x] oráculo: casos comparados com `subprocess.run` do python3
       (`tests/oracle/py/`) — status, captura, env, cwd
 
 ### Parte B — a biblioteca do motor (pscript puro; **não imprime — relata**)
@@ -531,42 +548,42 @@ Módulos propostos (espelham o samurai lido): `lib_graph.psc` (nós/arestas),
 `lib_events.psc` (o contrato com as frentes). Moram em `pbuild/ps/` até
 virarem pacote.
 
-- [ ] **grafo**: nó = arquivo (path canónico, mtime_ns com MISSING/UNKNOWN,
+- [x] **grafo**: nó = arquivo (path canónico, mtime_ns com MISSING/UNKNOWN,
       hash do log, gerador, usos); aresta gorda = `argv`, entradas em TRÊS
       faixas (normais | implícitas | order-only), saídas (+ implícitas),
       `env`, `cwd`, `stdout`, `restat`, `generator`, `pool`, `console`;
       contadores `nblock`/`nprune`
   - construtores: de `dict` (a via em memória, 1.8) e de JSON (mesmo shape)
-- [ ] **sujeira**: os SEIS testes do ninja NA ORDEM (`graph.cc:222`, lidos):
+- [x] **sujeira**: os SEIS testes do ninja NA ORDEM (`graph.cc:222`, lidos):
       falta → restat-log → mais velha que entrada → hash do comando →
       mtime gravado < entrada → sem registro; o hash do comando cobre
       **argv + env efetivo + cwd + stdout + alvo** (as extensões decididas)
-- [ ] **restat e poda**: `shouldprune`/`nodedone(prune)` do samurai (~40
+- [x] **restat e poda**: `shouldprune`/`nodedone(prune)` do samurai (~40
       linhas em cima dos contadores) — é o que transforma "regenerei C
       idêntico" em "não recompilo os 18 s"
-- [ ] **depfile do `cc -MD`** (o lado C continua estranho, decidido): parser do
+- [x] **depfile do `cc -MD`** (o lado C continua estranho, decidido): parser do
       subset Makefile (alvo: os `.d` que gcc/clang emitem; ler o `depsparse`
       do samurai como referência), entradas viram implícitas + gravadas no log
       para a corrida seguinte
-- [ ] **log** em `build/log/build.log`, texto com versão no cabeçalho, uma
+- [x] **log** em `build/log/build.log`, texto com versão no cabeçalho, uma
       linha por saída: `mtime_ns  duração_ms  hash_cmd  hash_env  caminho`
       (o samurai grava `0\t0` na duração; nós usamos — 1.7); releitura na
       carga, rewrite quando inchar (o mecanismo do `loginit` lido)
-- [ ] **fila**: caminho crítico com peso = **duração da última vez** (do log;
+- [x] **fila**: caminho crítico com peso = **duração da última vez** (do log;
       1 s de chute na primeira vez), topo-sort + propagação reversa (o
       `ComputeCriticalPath` lido, trocando o peso-1); desempate por id
-- [ ] **executor**: N=`os.nproc` (precisa expor no `os` — item novo pequeno),
+- [x] **executor**: N=`os.nproc` (precisa expor no `os` — item novo pequeno),
       `-k N` (padrão 1: para na primeira), pool `console` (sem captura,
       sozinho na vez), sinais (matar filhos e sair com 128+sig), saída de cada
       aresta despejada INTEIRA no evento
-- [ ] **higiene**: ERROS — saída declarada e não produzida (stat pós-aresta),
+- [x] **higiene**: ERROS — saída declarada e não produzida (stat pós-aresta),
       ciclo (o marcador FLAG_CYCLE lido), entrada que não existe e ninguém
       produz; AVISOS — entrada declarada nunca lida (via resposta 1 quando a
       ferramenta é o plangc), aresta inalcançável, saída sem consumidor
-- [ ] **eventos**: `plano_pronto(total)`, `aresta_iniciou(id)`,
+- [x] **eventos**: `plano_pronto(total)`, `aresta_iniciou(id)`,
       `aresta_terminou(id, status, saída, duração)`, `fim(ok, falhas)` — e
       NADA mais (decidido); `--explain` é consulta sobre o plano, não evento
-- [ ] **suíte do motor** (`tests/pbuild/`, harness próprio no padrão da casa):
+- [x] **suíte do motor** (`tests/pbuild/`, harness próprio no padrão da casa):
       diamante mínimo; restat que poda; generator; comando mudou (env mudou!);
       alvo mudou; pool serializa; `-k`; falha para; ciclo detectado; saída não
       produzida; entrada órfã; depfile; log sobrevive a rewrite; fila respeita
@@ -742,11 +759,11 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 > Medido numa árvore limpa: `make` 84 s · `make test` 4m29 (9 s sem mudança) ·
 > `make verify` 5m16 (8,7 s sem mudança).
 
-- [ ] `tests/psbuild.sh` reimplementado como chamada de `ppack` (ou os
+- [~] `tests/psbuild.sh` reimplementado como chamada de `ppack` (ou os
       harnesses que o usam passam a chamar `ppack` direto)
-- [ ] `Makefile` vira casca: `make` → build do seed + `ppack build`;
+- [x] `Makefile` vira casca: `make` → build do seed + `ppack build`;
       `make verify` → `ppack verify`; alvos antigos apontam e avisam
-- [ ] `out/` → `build/{obj,bin,log,pkg}`; `.gitignore`; docs atualizados
+- [x] `out/` → `build/{obj,bin,log,pkg}`; `.gitignore`; docs atualizados
 - [x] **as SEIS listas de módulos do runtime morreram** — as cinco dos arreios e
       a que vivia dentro do compilador. Todas viraram `pscript/runtime/psrt.ph`:
       o guarda-chuva importa os headers das seis camadas e cada um tem o `.p`
@@ -777,7 +794,7 @@ pacotes, o formato de repositório, publish e a confiança.
 
 ### Parte A — manifesto, lock, workspace
 
-- [ ] **`pack.json` de pacote**: `name` (minúsculas, [a-z0-9_-]), `version`
+- [x] **`pack.json` de pacote**: `name` (minúsculas, [a-z0-9_-]), `version`
       (semver estrito), `lang` (`p`|`pscript`), `root` (o módulo-interface),
       `deps` (nome → versão EXATA, ou `{path}` para workspace), `system`
       (nome → `{pkg-config}` ou flags literais por alvo), `toolchain`
@@ -791,16 +808,16 @@ pacotes, o formato de repositório, publish e a confiança.
       em pscript também está certo (o `sha2` tem um, de propósito) — e é por
       isso que a pergunta é sobre o fecho e não sobre o diretório.
       No `verify`.
-- [ ] **lock `pack.lock`** (JSON, decidido "dois arquivos, um armazém"): por
+- [x] **lock `pack.lock`** (JSON, decidido "dois arquivos, um armazém"): por
       pacote — nome, versão, SHA-256 do tarball, repositório de origem (URL ou
       `path`), `unsafe: true` quando 2.12, faixa de toolchain do manifesto +
       a versão/hash do plangc que resolveu
   - [x] dessincronizado do manifesto → o `install` IMPRIME o diff, e `--frozen`
     (o CI) recusa em vez de avisar (2026-08-23)
-- [ ] **workspace**: membros por `path`; o hash de um pacote local é o hash do
+- [x] **workspace**: membros por `path`; o hash de um pacote local é o hash do
       DIRETÓRIO (lista ordenada de arquivos + hash de cada — `os.listdir` já
       ordena de propósito); mudou → o lock anota, o build o vê como entrada
-- [ ] resolução (fase 1 do ciclo): ler manifesto+lock → verificar hashes do
+- [x] resolução (fase 1 do ciclo): ler manifesto+lock → verificar hashes do
       que já está em `build/pkg/` → baixar o que falta → verificar → extrair em
       `build/pkg/<nome>-<versão>-<hash>/` → montar `--pkg-path` → conferir
       toolchain ANTES de compilar (mensagem: "o pacote foo exige plangc >= X,
@@ -808,49 +825,49 @@ pacotes, o formato de repositório, publish e a confiança.
 
 ### Parte B — os dois primeiros pacotes (o ciclo de seed)
 
-- [ ] **`packages/stl`**: mover os 10 `.ph`; os imports do selfhost viram
+- [x] **`packages/stl`**: mover os 10 `.ph`; os imports do selfhost viram
       `import <stl/vec.ph>`; as 41 referências externas (Makefile → build.psc,
       harnesses, corpora) atualizadas; **regenerar o seed** — commit isolado,
       repo verde antes e depois (risco nº 4)
-- [ ] **`packages/pui`**: extrair `lib_pui.psc` (zero import — medido) +
+- [x] **`packages/pui`**: extrair `lib_pui.psc` (zero import — medido) +
       `pack.json` + `packages/pui/test/` (o `pui_test.psc` e o `.expected`
       saem de `tests/pstudio/` para dentro do pacote; `ppack test` roda testes
       de pacotes do workspace); o `app.psc` do editor importa `<pui/pui.psc>`
       via workspace — hmm: import de `.psc` por pacote é o caso 1.5(c)-lite;
       enquanto módulo pscript não é TU, o import de pacote pscript é textual
       como o import local já é (mesmo mecanismo de hoje, raiz diferente)
-- [ ] `core`/`hl`/`cv`/`complete` FICAM no pstudio (decidido — intrínsecos)
+- [x] `core`/`hl`/`cv`/`complete` FICAM no pstudio (decidido — intrínsecos)
 
 ### Parte C — repositório, comandos, confiança
 
-- [ ] **SHA-256**: módulo da stdlib implementado em P (o padrão 108.4, como
+- [x] **SHA-256**: módulo da stdlib implementado em P (o padrão 108.4, como
       random/time — `psrt_*` novo ou módulo `hash`), ~200 linhas, vetores de
       teste do NIST no harness
-- [ ] **tarball**: subset ustar (escrever + ler) em pscript — nomes, tamanho,
+- [x] **tarball**: subset ustar (escrever + ler) em pscript — nomes, tamanho,
       conteúdo; sem dono/permissão além do básico; determinístico (ordem
       ordenada, mtime zerado) para o hash ser estável — decisão fina f4.2
-- [ ] **`index.json`**: por pacote/versão — metadado do manifesto + SHA-256 do
+- [x] **`index.json`**: por pacote/versão — metadado do manifesto + SHA-256 do
       tarball + **a lista canónica da API** (da resposta 2/5); gerado por
       `ppack index <dir>` (o comando que mantém um repositório-diretório)
-- [ ] **transportes**: `file://` e `http://` (o cliente HTTP conformante já
+- [x] **transportes**: `file://` e `http://` (o cliente HTTP conformante já
       existe); `ppack update` baixa o índice do(s) repos configurados e guarda
       em `build/pkg/index/` (offline depois)
-- [ ] **`ppack search <termo>`**: por nome, descrição E SÍMBOLO (a lista de API
+- [x] **`ppack search <termo>`**: por nome, descrição E SÍMBOLO (a lista de API
       no índice — o diferencial decidido)
-- [ ] **`ppack add nome@versão`** (mexe manifesto+lock, baixa p/ hash, NÃO
+- [x] **`ppack add nome@versão`** (mexe manifesto+lock, baixa p/ hash, NÃO
       constrói), **`ppack up [nome]`** (versão exata nova, mostra diff de API
       entre as duas versões — as listas estão no índice), **`ppack why`**
-- [ ] **`ppack publish`**: monta o tarball (com `test/`, sem `build/`),
+- [x] **`ppack publish`**: monta o tarball (com `test/`, sem `build/`),
       SHA-256, assinatura do autor, entrada de índice — e RECUSA: dep por
       `path`, `.psc` em pacote P, versão minor/patch cujo hash de API mudou
       (comparado com a versão anterior no índice)
-- [ ] **Ed25519 em P** (~500 linhas, aritmética pura; vetores RFC 8032 no
+- [x] **Ed25519 em P** (~500 linhas, aritmética pura; vetores RFC 8032 no
       harness) + **índice assinado** (`index.json.sig` do repo) + assinatura
       por versão (do autor, no índice); chave do repo padrão embutida no
       binário; `ppack key` gera/instala chaves de terceiros
   - **modo `--unsafe`** (2.12): dispensa assinaturas, NUNCA o hash; marcado no
     lock; aviso nomeando o pacote em todo build
-- [ ] nome global = repo padrão; `fulano/nome` = secundários; o lock fixa a
+- [x] nome global = repo padrão; `fulano/nome` = secundários; o lock fixa a
       origem (o problema dos nomes curtos do podman, registrado)
 
 ### Decisões finas a confirmar
@@ -941,8 +958,9 @@ doctest.
       `.ph` entra inteiro, porque o que dele atravessa é decidido pela 45.5 e
       não por uma lista de nomes. Uma saída errada põe o build vermelho, com o
       nome do módulo. `publish` continua a NÃO rodar testes.
-- [ ] baterias numeradas no `pscript/DESIGN.md`; gc-stress obrigatório (a
-      tabela é dado estático, não raiz nova — conferir com o stress)
+- [~] baterias em `pbuild/BATERIAS.md` (o `pscript/DESIGN.md` carrega trabalho
+      não comitado de outra sessão); gc-stress obrigatório: **128 ok**, e a
+      tabela é dado estático e não raiz nova, como se esperava.
 
 ### Decisões finas a confirmar
 
