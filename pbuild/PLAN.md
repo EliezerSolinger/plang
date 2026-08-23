@@ -266,7 +266,8 @@ errado.
       `http://`, com as duas assinaturas Ed25519 e o TOFU gravado no
       `pack.lock`. Oito pacotes (`stl`, `pui`, `sha2`, `tar`, `http`, `url`,
       `ed25519`), e `pscript/lib/` deixou de existir. Portão: `tests/repo.sh`,
-      55 verificações.
+      **72 verificações** (as três recusas do `publish` e o `ppack lock`
+      entraram na F9).
 - [~] **F4 começou pelo que não depende de decisão sua** (2026-08-22): o
       MANIFESTO e o WORKSPACE. `pbuild/ps/lib_manifest.psc` lê e valida as duas
       formas de `pack.json` — a de pacote e a de workspace, que se distinguem
@@ -707,12 +708,11 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 - [x] `ppack build [alvo]` — fases descrever→planejar→decidir→executar;
       imprime linha por aresta terminada (saída inteira em falha); `--explain`;
       `-k N`; `-j N` (padrão núcleos); exit 0/1
-- [~] `ppack run prog [--] args` — constrói e roda, com o status DELE e 101 para
-      falha de build (f3.2 confirmada na prática). O que falta é o `exec`: hoje
-      o programa roda como FILHO e a saída volta capturada, o que serve para
-      quem imprime e não serve para quem lê teclado ou pinta tela. `exec`
-      precisa de uma função nova na camada de sistema do pscript (`os.exec`), e
-      **isso é decisão de linguagem — fica para o usuário**.
+- [x] `ppack run prog [--] args` — constrói e roda, com o status DELE e 101 para
+      falha de build (f3.2 confirmada na prática). **O `exec` chegou na F7**: o
+      programa PASSA A SER este processo (`os.exec`), então stdin, stdout,
+      stderr, o terminal e o código de saída são dele — e é isso que permite
+      `ppack run` dentro de um pipe, ou a rodar um programa que lê teclado.
 - [x] `ppack test` — `-k` alto por padrão (quem roda teste quer o placar
       inteiro, não a primeira falha), veredicto SEMPRE roda, e o carimbo da
       suíte NÃO é alvo padrão: construir não é testar. Falta o placar por suíte
@@ -759,8 +759,20 @@ Expressa TUDO que o Makefile + run.sh + psbuild.sh + verify-all constroem:
 > Medido numa árvore limpa: `make` 84 s · `make test` 4m29 (9 s sem mudança) ·
 > `make verify` 5m16 (8,7 s sem mudança).
 
-- [~] `tests/psbuild.sh` reimplementado como chamada de `ppack` (ou os
-      harnesses que o usam passam a chamar `ppack` direto)
+- [x] `tests/psbuild.sh` — **fica, e a razão é o bootstrap** (conferido
+      2026-08-23). Ele parecia a última duplicação do recipe: 69 linhas de shell
+      que transformam um `.psc` num binário, com um cache de runtime feito à
+      mão. Mas é ELE que constrói o `ppack` (`$(PPACK): $(SEED) ... bash
+      tests/psbuild.sh pbuild/ps/ppack.psc`), e um `ppack` que precisasse de
+      `ppack` para nascer não nasce. Ou seja: não é uma cópia do sistema de
+      build, é o degrau abaixo dele — o mesmo papel que o `cc bootstrap/selfhost/
+      *.c` faz para o compilador.
+      A alternativa seria comitar o C gerado do `ppack` (a ideia do "seed do
+      ppack" na `ARQUITETURA.md`), e ela é pior: o `bootstrap/` do compilador
+      existe porque não HÁ outra forma de compilar P; para o `ppack` há uma, e
+      são 69 linhas contra cem mil de C gerado num diretório versionado.
+      O que os outros oito arreios ganhariam chamando `ppack` direto é
+      incremental — e eles já correm DENTRO do `ppack verify`, como arestas.
 - [x] `Makefile` vira casca: `make` → build do seed + `ppack build`;
       `make verify` → `ppack verify`; alvos antigos apontam e avisam
 - [x] `out/` → `build/{obj,bin,log,pkg}`; `.gitignore`; docs atualizados
@@ -947,8 +959,14 @@ doctest.
       LINHA no fluxo de eventos, porque quem lê quer reagir enquanto o build
       corre e um documento único só se pode ler no fim; um documento só nas
       consultas, que são resposta e não fluxo. O escapador é o do grafo
-      (`G.jstr`) — um segundo seria um segundo lugar para errar. Ainda é
-      serialização à mão; quando a reflexão da F5 existir, sai de graça.
+      (`G.jstr`) — um segundo seria um segundo lugar para errar. **Feito também
+      para `why`/`tree`/`search`/`add`/`install`/`lock`/`publish` e para o
+      `--repro`** (2026-08-23), e continua a ser serialização à mão: a reflexão
+      da F5 existe e serve para IMPRIMIR um valor qualquer (`repr`, `json` de um
+      objeto), mas o que estes comandos emitem não é o layout de uma estrutura
+      interna — é um formato que outra pessoa vai consumir, e amarrá-lo aos
+      campos de um `struct` faria renomear um campo quebrar quem lê. Fica à mão
+      de propósito.
 - [x] **doctest** (FEITO, 2026-08-23): `>>> expr` numa docstring vira uma aresta
       da suíte. O programa de cada módulo é GERADO no plano a partir da RESPOSTA
       5 (`--api`) — não de um segundo leitor de fontes —, o que quer dizer que o
