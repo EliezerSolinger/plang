@@ -250,6 +250,81 @@ async def cmd_run(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int
     os.exec(argv)
     return 127
 
+async def cmd_dev(alvos: list<str>, jobs: int, query: str, verbose: bool) -> int:
+    """`ppack dev [alvo]` — constrói, espera que alguma coisa mude, e constrói
+    outra vez. Até alguém carregar em Ctrl-C.
+
+    **A lista do que se vigia não é adivinhada**: é o GRAFO, que a recebeu do
+    compilador (resposta 1). Um `dev` que vigiasse um diretório inteiro veria
+    salvar de editor, arquivos temporários e o próprio `build/`; este vê
+    exatamente os arquivos que a construção lê, e nada mais.
+
+    **E não usa inotify nem kqueue**, o que é uma decisão e não uma falta. Os
+    dois existem, são diferentes um do outro, e obrigariam a uma primitiva nova
+    no runtime — para vigiar algumas centenas de arquivos cujas datas se leem em
+    menos de um milissegundo. O laço pergunta a cada 200 ms; o custo não aparece
+    num perfil e o código funciona em todo o lado igual. No dia em que a árvore
+    for grande ao ponto de isto doer, a primitiva entra por baixo e este comando
+    não muda.
+
+    O que ele NÃO faz, e é a outra metade: reiniciar o programa. Matar e
+    relançar um filho precisa de controlo de processo que o `os.run` não dá —
+    ele espera. É uma primitiva a mais (`os.spawn` + `kill`), anotada e não
+    feita."""
+    g = await BP.montar(query)
+    alvo = alvos[0] if len(alvos) > 0 else ""
+    tl: list<str> = [alvo] if len(alvo) > 0 else []
+    st = on_start_verbose if verbose else on_start
+    rep = B.Rep(on_plan, st, on_end, on_done, on_erro)
+    await B.build(g, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
+    # o que vigiar: as ENTRADAS de todas as arestas, que é o que o compilador
+    # disse que lê. Um arquivo que ainda não existe entra na mesma — passar a
+    # existir é uma mudança como outra qualquer.
+    vistos: dict<str, int> = {}
+    alvos_v: list<str> = []
+    for e in g.edges:
+        for iid in e.ins:
+            p = g.nodes[iid].p
+            # o que a construção PRODUZ não se vigia. Um `.c` gerado é entrada
+            # da compilação seguinte, então vigiá-lo faria a construção
+            # disparar-se a si mesma para sempre — e foi exatamente o que ele
+            # fez na primeira vez que correu.
+            if p.startswith(BP.BUILD + "/") or p in vistos:
+                continue
+            vistos[p] = 1
+            alvos_v.append(p)
+    datas: dict<str, int> = {}
+    for p2 in alvos_v:
+        datas[p2] = path.getmtime_ns(p2) if path.isfile(p2) else 0
+    print(f"dev: {len(alvos_v)} arquivo(s) vigiados. Ctrl-C para sair.")
+
+    while True:
+        await sleep(0.2)
+        mudou: list<str> = []
+        for p3 in alvos_v:
+            agora = path.getmtime_ns(p3) if path.isfile(p3) else 0
+            if agora != datas.get(p3, 0):
+                datas[p3] = agora
+                mudou.append(p3)
+        if len(mudou) == 0:
+            continue
+        # um `salvar` de editor escreve o arquivo em dois tempos (temporário +
+        # rename), e há editores que tocam vários de seguida. Esperar um pouco
+        # depois da primeira mudança junta tudo numa construção só.
+        await sleep(0.15)
+        for p4 in alvos_v:
+            agora2 = path.getmtime_ns(p4) if path.isfile(p4) else 0
+            if agora2 != datas.get(p4, 0):
+                datas[p4] = agora2
+                if p4 not in mudou:
+                    mudou.append(p4)
+        print("")
+        print("dev: mudou " + ", ".join(mudou[0:3]) + ("..." if len(mudou) > 3 else ""))
+        g2 = await BP.montar(query)
+        await B.build(g2, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
+    return 0
+
+
 async def cmd_verify(jobs: int, query: str, verbose: bool) -> int:
     """O `verify-all.sh` inteiro, como GRAFO. Os oito passos dele são
     sequenciais e levam o que levam os oito somados; aqui o que não depende um
@@ -1061,6 +1136,7 @@ def rmtree(d: str) -> int:
 
 def uso():
     print("uso: ppack <build|test|verify|run|doc|tree|why|explain|graph|ninja|clean|help> [alvo...] [-j N] [-k N] [-n] [--query <plangc>]")
+    print("     ppack dev [alvo]                     constrói quando alguma coisa muda, até ao Ctrl-C")
     print("     ppack keygen <arquivo>               uma chave nova (privada + .pub)")
     print("     ppack publish <pacote> --to <dir> [--key <arquivo>]")
     print("                                          o .tar, o hash, o índice e as duas assinaturas")
@@ -1152,6 +1228,8 @@ async def main() -> int:
         return await cmd_test(jobs, query, verbose)
     if cmd == "verify":
         return await cmd_verify(jobs, query, verbose)
+    if cmd == "dev":
+        return await cmd_dev(alvos, jobs, query, verbose)
     if cmd == "run":
         for x in resto:
             alvos.append(x)

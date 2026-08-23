@@ -969,11 +969,20 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
       padrão, `-j`, alvo nomeado (linux-amd64 etc.)
 - [ ] **play** = `run` do alvo padrão (constrói; o programa abre; parar/re-play
       mata o filho); **vassoura** = clean (mantém `build/pkg`)
-- [ ] **`ppack dev`** (e o mesmo motor no editor): inotify no Linux /
-      `EVFILT_VNODE` no kqueue do macOS como fonte de fd no multiplexador
-      EXISTENTE (item de runtime: `os.watch(paths) -> canal de eventos`;
-      bateria própria); debounce curto; reconstrói o alcançado; reinicia o
-      programa (mata, espera, relança)
+- [~] **`ppack dev`** (2026-08-23): constrói, espera que alguma coisa mude, e
+      constrói outra vez. A lista do que se vigia é o GRAFO — os arquivos que o
+      compilador disse que lê —, não um diretório: um `dev` que vigiasse a
+      árvore veria salvar de editor, temporários e o próprio `build/`. E o que a
+      construção PRODUZ fica de fora, senão ela dispara-se a si mesma para
+      sempre (o que ela fez na primeira vez que correu).
+      **Sem inotify e sem kqueue, e é decisão**: os dois existem, são diferentes
+      um do outro, e obrigariam a uma primitiva nova no runtime — para vigiar
+      398 arquivos cujas datas se leem em menos de um milissegundo. O laço
+      pergunta a cada 200 ms com um debounce de 150. No dia em que a árvore doer,
+      a primitiva entra por baixo e o comando não muda.
+      **Falta a outra metade**: reiniciar o programa. Matar e relançar um filho
+      precisa de controlo de processo que o `os.run` não dá (ele espera) — é uma
+      primitiva a mais (`os.spawn` + `kill`), anotada e não feita.
 - [ ] **erros sublinhados**: a resposta 6 consumida pelo editor — clique leva
       a arquivo:linha:coluna; o formato de erro do próprio ppack (posicional)
       entra pelo MESMO caminho
