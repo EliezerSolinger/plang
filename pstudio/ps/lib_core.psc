@@ -23,20 +23,22 @@ The model is the same one the P version fixed:
 Everything here is headless and therefore testable: no window, no drawing.
 """
 
-import re     # 113: `find_re` — a ERE do POSIX, que é o `re` do pscript (41.2)
+import re     # 113: `find_re` — POSIX's ERE, which is pscript's `re` (41.2)
 
 
 const TAB_WIDTH: int = 4
 const UNDO_PAUSE_MS: int = 700
 
-# 115: os MESMOS números do editor em P (`MARK_BOOKMARK`=1, `MARK_BREAKPOINT`=2),
-# para as duas implementações falarem do mesmo bit quando alguém comparar
+# 115: the SAME numbers as the editor in P (`MARK_BOOKMARK`=1,
+# `MARK_BREAKPOINT`=2), so both implementations talk about the same bit when
+# somebody compares
 const MARK_BOOK: int = 1         # a bookmark (F2 jumps between them)
 const MARK_BREAK: int = 2        # a breakpoint the debugger will want
-# 119/F6: a linha onde o build falhou. É uma marca e não um sublinhado por uma
-# razão prática: a sarjeta já é desenhada, já tem duas marcas, e uma terceira
-# custa uma linha — enquanto um sublinhado ondulado custa um caminho de desenho
-# novo por baixo do texto. A informação que interessa (QUAL linha) é a mesma.
+# 119/F6: the line where the build failed. It is a mark and not an underline
+# for a practical reason: the gutter is already drawn, it already has two
+# marks, and a third costs one line — while a wavy underline costs a whole new
+# drawing path beneath the text. The information that matters (WHICH line) is
+# the same.
 const MARK_ERROR: int = 4
 
 
@@ -245,7 +247,7 @@ struct Buffer:
     # ---------- raw edits (no undo, no caret adjustment) ----------
 
     def raw_insert(self, line: int, col: int, text: str) -> Span:
-        self.unfold_range(line, line)      # 115: editar dentro de uma dobra a solta
+        self.unfold_range(line, line)      # 115: editing inside a fold releases it
         end = text_end(line, col, text)
         cur = self.lines[line]
         head = cur.text[0:col]
@@ -273,7 +275,7 @@ struct Buffer:
         return end
 
     def raw_delete(self, r: Span) -> str:
-        self.unfold_range(r.l0, r.l1)      # 115: o mesmo invariante do insert
+        self.unfold_range(r.l0, r.l1)      # 115: the same invariant as insert's
         gone = self.range_text(r)
         if r.l0 == r.l1:
             l = self.lines[r.l0]
@@ -657,8 +659,8 @@ struct Buffer:
         hit = self.find(needle, c.line, c.col, True)
         if hit == None:
             return False
-        # depois da guarda, `hit` É um Span (114): o `?? Span(0,0,0,0)` que
-        # estava aqui existia só porque a prova não passava do `if`
+        # after the guard, `hit` IS a Span (114): the `?? Span(0,0,0,0)` that
+        # used to be here existed only because the proof did not survive the `if`
         self.carets.append(Caret(hit.l1, hit.c1, hit.l0, hit.c0, -1))
         self.carets_sort()
         return True
@@ -925,7 +927,7 @@ struct Buffer:
         self.version += 1
 
     def next_mark(self, from_line: int, mark: int, forward: bool) -> int:
-        """A próxima linha marcada, circulando. -1 = não há nenhuma."""
+        """The next marked line, wrapping around. -1 = there is none."""
         n = len(self.lines)
         for step in range(1, n + 1):
             i = (from_line + step) % n if forward else (from_line - step + n * 2) % n
@@ -939,11 +941,11 @@ struct Buffer:
     def fold_all(self):
         for i in range(len(self.lines)):
             if self.can_fold(i):
-                self.fold(i)      # `can_fold` é falso em linha escondida: nível 1
+                self.fold(i)      # `can_fold` is false on a hidden line: level 1
 
     def unfold_enclosing(self, line: int) -> bool:
-        """Solta a dobra que ESCONDE esta linha. Uma linha órfã (escondida sem
-        cabeçalho acima) é revelada — nunca se deixa uma linha invisível."""
+        """Releases the fold that HIDES this line. An orphan line (hidden with no
+        header above it) is revealed — an invisible line is never left behind."""
         if line < 0 or line >= len(self.lines) or not self.lines[line].hidden:
             return False
         h = line - 1
@@ -956,10 +958,10 @@ struct Buffer:
         return True
 
     def unfold_range(self, l0: int, l1: int):
-        """115: uma edição que ALCANÇA um bloco recolhido o solta. O undo/redo
-        alcança (desfazer pode reescrever linhas escondidas), e sem isto ficavam
-        linhas com conteúdo novo que a vista nunca mostrava. Era o único
-        invariante de dobra que o porte tinha deixado atrás."""
+        """115: an edit that REACHES a collapsed block releases it. Undo/redo
+        reaches (undoing may rewrite hidden lines), and without this there were
+        lines with new content the view never showed. It was the one fold
+        invariant the port had left behind."""
         a = l0 if l0 > 0 else 0
         b = l1 if l1 < len(self.lines) - 1 else len(self.lines) - 1
         for i in range(a, b + 1):
@@ -983,9 +985,9 @@ struct Buffer:
             l.folded = False
         self.version += 1
 
-    # ---------- o mapa de linhas VISÍVEIS ----------
-    # Uma dobra encurta o documento, e toda coordenada de tela passa por aqui: a
-    # barra de rolagem, a roda e o clique pensam em LINHAS DE TELA.
+    # ---------- the map of VISIBLE lines ----------
+    # A fold shortens the document, and every screen coordinate goes through
+    # here: the scrollbar, the wheel and the click all think in SCREEN LINES.
 
     def visible_count(self) -> int:
         n = 0
@@ -1013,7 +1015,7 @@ struct Buffer:
                     break
                 l = j
         while l > 0 and self.lines[l].hidden:
-            l -= 1        # a própria linha de partida pode ter sido dobrada
+            l -= 1        # the starting line itself may have been folded
         return l
 
     def to_visible(self, line: int) -> int:
@@ -1035,21 +1037,20 @@ struct Buffer:
         return len(self.lines) - 1
 
     def visible_at_or_before(self, line: int) -> int:
-        """Depois de uma dobra: a linha visível mais próxima ANDANDO PARA TRÁS.
-        Andar para frente (o que `from_visible(to_visible(l))` faz) cairia
-        depois do bloco e levaria a vista embora da dobra que se acabou de
-        fechar."""
+        """After a fold: the nearest visible line WALKING BACKWARDS. Walking
+        forwards (which is what `from_visible(to_visible(l))` does) would land
+        after the block and take the view away from the fold just closed."""
         i = line if line < len(self.lines) else len(self.lines) - 1
-        # a linha 0 nunca é escondida: uma dobra esconde o que VEM DEPOIS dela
+        # line 0 is never hidden: a fold hides what COMES AFTER it
         while i > 0 and self.lines[i].hidden:
             i -= 1
         return i if i > 0 else 0
 
-    # ---------- comandos de linha que faltavam ----------
+    # ---------- the line commands that were missing ----------
 
     def insert_each(self, texts: list<str>, now_ms: int):
-        """N pedaços para N cursores (o modelo do Sublime). De baixo para cima,
-        para as posições ainda não usadas continuarem valendo."""
+        """N pieces for N cursors (Sublime's model). From the bottom up, so the
+        positions not yet used stay valid."""
         if len(texts) != len(self.carets):
             return
         self.group_begin(False, now_ms)
@@ -1066,8 +1067,8 @@ struct Buffer:
         self.group_end()
 
     def move_lines(self, dir: int, now_ms: int):
-        """Sobe ou desce os blocos dos cursores. Nada se move se um bloco cairia
-        fora do arquivo — e o cursor vai COM o texto."""
+        """Moves the cursors' blocks up or down. Nothing moves if a block would
+        fall outside the file — and the cursor goes WITH the text."""
         blocks = self.line_span()
         for b in blocks:
             if dir < 0 and b.l0 == 0:
@@ -1079,7 +1080,7 @@ struct Buffer:
         while i >= 0:
             b = blocks[i]
             if dir < 0:
-                # a linha de cima passa para depois do bloco
+                # the line above moves to after the block
                 r = Span(b.l0 - 1, 0, b.l0, 0)
                 gone = self.raw_delete(r)
                 self.op_push(OP_DELETE, r.l0, r.c0, gone)
@@ -1091,9 +1092,9 @@ struct Buffer:
                     self.raw_insert(at, 0, gone)
                     self.op_push(OP_INSERT, at, 0, gone)
             else:
-                # a linha de baixo passa para antes do bloco. `nonlocal` porque
-                # o valor nasce dentro dos dois ramos e é usado depois deles —
-                # o escopo é do BLOCO nas duas linguagens (64.1)
+                # the line below moves to before the block. `nonlocal` because
+                # the value is born inside both branches and used after them —
+                # the scope is the BLOCK's in both languages (64.1)
                 nonlocal gone2
                 nxt = b.l1 + 1
                 if nxt + 1 < len(self.lines):
@@ -1116,9 +1117,9 @@ struct Buffer:
         self.group_end()
 
     def join_lines(self, now_ms: int):
-        """Junta a linha seguinte à do cursor, com UM espaço entre as duas —
-        menos quando um dos lados está vazio ou a linha já acaba em espaço (o
-        ctrl+j do Sublime)."""
+        """Joins the next line to the cursor's, with ONE space between them —
+        except when one of the sides is empty or the line already ends in a
+        space (Sublime's ctrl+j)."""
         self.group_begin(False, now_ms)
         k = len(self.carets) - 1
         while k >= 0:
@@ -1146,9 +1147,9 @@ struct Buffer:
         self.group_end()
 
     def find_re(self, pattern: str, from_line: int, from_col: int, forward: bool) -> Span?:
-        """Busca por expressão regular (a ERE do POSIX, que é o `re` do
-        pscript — 41.2). Linha por linha, porque um padrão do editor não
-        atravessa a quebra de linha."""
+        """Regular expression search (POSIX's ERE, which is pscript's `re` —
+        41.2). Line by line, because an editor's pattern does not cross the
+        line break."""
         n = len(self.lines)
         for step in range(n):
             l = (from_line + step) % n if forward else (from_line - step + n * 2) % n
@@ -1165,8 +1166,8 @@ struct Buffer:
                         continue
                     s = s[0:from_col]
             m = re.match(pattern, s)
-            # a prova de não-nulo vale DENTRO do ramo (43.1): um `continue` no
-            # ramo do None não estreita o que vem depois dele
+            # the non-null proof holds INSIDE the branch (43.1): a `continue` in
+            # the None branch does not narrow what comes after it
             if m != None:
                 hit = m[0]
                 if len(hit) > 0:

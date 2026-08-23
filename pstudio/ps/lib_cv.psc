@@ -1,21 +1,24 @@
-"""O widget de edição, em pscript (porte do `pstudio/codeview.p`).
+"""The editing widget, in pscript (a port of `pstudio/codeview.p`).
 
-Amarra as três camadas: o buffer (`lib_core`), o toolkit (`pui` (o pacote)), o realce e
-o completamento (`lib_hl`, `lib_complete`, que falam com o lexer do compilador
-pelo adaptador da 113). Segue o `TextEdit` do Godot onde importa: as barras de
-rolagem são filhos INTERNOS que o widget posiciona, e as sarjetas são plugáveis.
+It ties the three layers together: the buffer (`lib_core`), the toolkit (`pui`,
+the package), the highlighting and the completion (`lib_hl`, `lib_complete`,
+which talk to the compiler's lexer through 113's adapter). It follows Godot's
+`TextEdit` where it matters: the scrollbars are INTERNAL children the widget
+positions, and the gutters are pluggable.
 
-Três diferenças do original, todas de LAYERING e todas para o mesmo fim — que a
-lógica do editor rode sem driver, e portanto seja testável:
+Three differences from the original, all about LAYERING and all for the same
+end — that the editor's logic runs without a driver, and is therefore testable:
 
-  * **a sarjeta é DADO, não função.** `enum GutKind` + `match`, que é a 28.5
-    ("despacho é dado") aplicada onde ela cabe. As três que existem (marcas,
-    dobra, números) são as três que o editor usa;
-  * **a área de transferência não mora aqui.** `copy()` DEVOLVE o texto e
-    `paste(texto)` RECEBE: quem fala com o sistema é o app, que é quem tem o
-    driver. O modelo multi-cursor (N pedaços para N cursores) continua aqui;
-  * **arquivo também não.** `load_text`/`text_to_save` em vez de ler e escrever:
-    I/O no pscript é `await` (76.2), e quem espera é o laço de eventos.
+  * **a gutter is DATA, not a function.** `enum GutKind` + `match`, which is
+    28.5 ("dispatch is data") applied where it fits. The three that exist
+    (marks, fold, numbers) are the three the editor uses;
+  * **the clipboard does not live here.** `copy()` RETURNS the text and
+    `paste(text)` RECEIVES it: whoever talks to the system is the app, which is
+    the one with the driver. The multi-cursor model (N pieces for N cursors)
+    stays here;
+  * **files do not either.** `load_text`/`text_to_save` instead of reading and
+    writing: I/O in pscript is `await` (76.2), and whoever waits is the event
+    loop.
 """
 import lib_core as core
 import <pui> as pui
@@ -24,57 +27,56 @@ import lib_complete as cmp
 
 
 const CV_TAB: int = 4              # tab suave (DESIGN.md)
-# o popup de completamento. A caixa é ajustada aos candidatos NA ABERTURA e
-# depois presa à área de texto, então nunca alcança o minimapa nem sai do
-# widget; o que não cabe é elidido (`cmd_text_fit`), não pintado fora.
+# the completion popup. The box is fitted to the candidates AT OPENING and
+# then pinned to the text area, so it never reaches the minimap and never leaves
+# the widget; what does not fit is elided (`cmd_text_fit`), not painted outside.
 const CMP_MAX_ROWS: int = 10
 const CMP_MIN_COLS: int = 16
 const CMP_MAX_COLS: int = 72
 const CMP_PAD: int = 3
-const CMP_MIN_DETAIL: int = 8      # abaixo disto a assinatura sai em vez de virar "…"
-# minimapa: uma fileira de pixels por linha, uma coluna por caractere (o Godot o
-# desenha a partir do REALCE, não de glifos — nesta escala letra é ruído)
+const CMP_MIN_DETAIL: int = 8      # below this the signature goes instead of becoming "…"
+# minimap: one row of pixels per line, one column per character (Godot draws it
+# from the HIGHLIGHTING, not from glyphs — at this scale a letter is noise)
 const MM_COLS: int = 90
 const MM_ROW: int = 2
 
 
-# as cores por classe de realce (tema escuro; o índice é HL_* do lib_hl)
-# as cores por classe de realce (tema escuro; o índice é HL_* do lib_hl). Um
-# `match` e não uma lista de módulo: módulo importado não roda statement.
+# the colours per highlight class (dark theme; the index is lib_hl's HL_*). A
+# `match` and not a module list: an imported module does not run statements.
 def hl_color(cls: int) -> int:
     if cls == 1:
-        return 0xFFC586C0      # palavra da linguagem (roxo)
+        return 0xFFC586C0      # a language keyword (purple)
     if cls == 2:
         return 0xFFCE9178      # cadeia (laranja)
     if cls == 3:
-        return 0xFFB5CEA8      # número (verde claro)
+        return 0xFFB5CEA8      # a number (light green)
     if cls == 4:
-        return 0xFF6A9955      # comentário (verde)
-    return 0xFFD4D4D4          # texto
+        return 0xFF6A9955      # a comment (green)
+    return 0xFFD4D4D4          # plain text
 
 
-# uma cor de realce na força do minimapa (translúcida, para as corridas lerem
-# como textura)
+# a highlight colour at minimap strength (translucent, so the runs read as a
+# texture)
 def mm_tint(cls: int) -> int:
     return (hl_color(cls) & 0x00FFFFFF) | 0xB0000000
 
 
 enum GutKind:
-    GUT_NUMBERS       # o número da linha
-    GUT_FOLD          # ▾ bloco aberto, ▸ recolhido
-    GUT_MARKS         # ● ponto de parada, ◆ marcador
+    GUT_NUMBERS       # the line number
+    GUT_FOLD          # ▾ block open, ▸ collapsed
+    GUT_MARKS         # ● breakpoint, ◆ bookmark
 
 
 record Gutter:
     kind: GutKind
-    width_cp: int     # largura em CARACTERES (fonte monoespaçada)
+    width_cp: int     # width in CHARACTERS (monospaced font)
 
 
 def is_word_ch(c: str) -> bool:
     return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_"
 
 
-# os pares que um editor fecha por você; uma aspa é o próprio fechamento
+# the pairs an editor closes for you; a quote is its own closer
 def pair_close_of(open_ch: str) -> str:
     if open_ch == "(":
         return ")"
@@ -95,38 +97,38 @@ struct CodeView:
     buf: core.Buffer
     hl: hlm.Hl
     index: cmp.Index
-    path: str              # "" = buffer solto, sem arquivo
-    u: pui.Ui              # o toolkit que o desenha
-    id: int                # o id deste widget no pool
-    vsb: int               # a barra vertical (filho interno)
-    hsb: int               # a horizontal
-    top: int               # primeira linha visível
-    left: int              # primeira COLUNA DE TELA visível (tabs expandidos)
+    path: str              # "" = a loose buffer, with no file
+    u: pui.Ui              # the toolkit that draws it
+    id: int                # this widget's id in the pool
+    vsb: int               # the vertical bar (internal child)
+    hsb: int               # the horizontal one
+    top: int               # first visible line
+    left: int              # first visible SCREEN COLUMN (tabs expanded)
     gutters: list<Gutter>
-    cmp_open: bool         # o popup está à mostra
+    cmp_open: bool         # the popup is showing
     cmp_hits: list<int>
     cmp_sel: int
-    cmp_top: int           # primeira linha mostrada no popup
-    cmp_col: int           # coluna onde começa a palavra sendo completada
-    cmp_owner: str         # struct cujos membros se listam (o caso `x.`); "" = nenhum
+    cmp_top: int           # first line shown in the popup
+    cmp_col: int           # column where the word being completed starts
+    cmp_owner: str         # struct whose members are listed (the `x.` case); "" = none
     minimap: bool
     minimap_drag: bool
-    caret_on: bool         # fase do piscar (o app alterna no timeout)
-    mouse_sel: bool        # arrastando uma seleção
-    mtime: int             # o mtime do arquivo na última leitura
-    clip: list<str>        # os pedaços do último copy (um por cursor)
-    dirty_cb: bool         # algo mudou e o app ainda não olhou
-    now_ms: int            # o relógio, posto pelo app a cada quadro — a entrada
-                           #   vem do toolkit, que não sabe de tempo
+    caret_on: bool         # blink phase (the app toggles it on timeout)
+    mouse_sel: bool        # dragging a selection
+    mtime: int             # the file's mtime at the last read
+    clip: list<str>        # the pieces of the last copy (one per cursor)
+    dirty_cb: bool         # something changed and the app has not looked yet
+    now_ms: int            # the clock, set by the app every frame — the input
+                           #   comes from the toolkit, which knows nothing of time
 
-    # ---------- o que o toolkit chama ----------
+    # ---------- what the toolkit calls ----------
 
     def set_now(self, ms: int):
         self.now_ms = ms
 
     def layout(self, r: pui.Rect):
-        """As barras internas (o layout do TextEdit do Godot): a vertical toma a
-        borda direita inteira, a horizontal o rodapé menos essa largura."""
+        """The internal bars (Godot's TextEdit layout): the vertical one takes
+        the whole right edge, the horizontal one the footer minus that width."""
         hs = self.u.theme.handle + 2
         self.u.set_rect(self.vsb, pui.Rect(r.x + r.w - hs, r.y, hs, r.h - hs))
         self.u.set_rect(self.hsb, pui.Rect(r.x + self.gutter_w(), r.y + r.h - hs,
@@ -141,7 +143,7 @@ struct CodeView:
         self.left = v
         self.u.queue_redraw(self.id)
 
-    # ---------- arquivo (sem I/O: quem espera é o app) ----------
+    # ---------- files (no I/O: whoever waits is the app) ----------
 
     def load_text(self, path: str, data: str, mtime: int):
         self.buf.load(data)
@@ -172,7 +174,7 @@ struct CodeView:
         total = 0
         for g in self.gutters:
             total += g.width_cp * self.u.cell_w
-        return total + self.u.cell_w   # um caractere de respiro antes do texto
+        return total + self.u.cell_w   # one character of breathing room before the text
 
     def minimap_rect(self) -> pui.Rect:
         r = self.u.rect_of(self.id)
@@ -181,7 +183,7 @@ struct CodeView:
             return pui.Rect(r.x + r.w - hs, r.y, 0, 0)
         w = MM_COLS
         if w > r.w // 4:
-            w = r.w // 4          # nunca come mais de um quarto da vista
+            w = r.w // 4          # never eats more than a quarter of the view
         return pui.Rect(r.x + r.w - hs - w, r.y, w, r.h - hs)
 
     def text_rect(self) -> pui.Rect:
@@ -203,13 +205,13 @@ struct CodeView:
     def add_gutter(self, kind: GutKind, width_cp: int):
         self.gutters.append(Gutter(kind, width_cp))
 
-    # o texto e a cor de uma célula de sarjeta; "" = célula vazia
+    # a gutter cell's text and colour; "" = an empty cell
     def gutter_cell(self, kind: GutKind, line: int) -> str:
         match kind:
             case GUT_MARKS:
                 m = self.buf.mark_of(line)
-                # o ERRO ganha das outras: se o build falhou aqui, é isso que
-                # quem olha precisa de ver primeiro
+                # the ERROR wins over the others: if the build failed here,
+                # that is what whoever looks needs to see first
                 if (m & core.MARK_ERROR) != 0:
                     return "✗"
                 if (m & core.MARK_BREAK) != 0:
@@ -252,7 +254,7 @@ struct CodeView:
             case _:
                 return False
 
-    # ---------- colunas de TELA (tabs expandidos) ----------
+    # ---------- SCREEN columns (tabs expanded) ----------
 
     def screen_col(self, line: int, col: int) -> int:
         s = self.buf.line_text(line)
@@ -295,7 +297,7 @@ struct CodeView:
         row = (y - tr.y) // self.u.cell_h
         if y < tr.y:
             row = -1
-        l = self.line_at_row(row)      # a dobra é pulada pelo mapeamento
+        l = self.line_at_row(row)      # the fold is skipped by the mapping
         sc = self.left + (x - tr.x + self.u.cell_w // 2) // self.u.cell_w
         if sc < 0:
             sc = 0
@@ -303,8 +305,8 @@ struct CodeView:
         return core.Span(l, c, l, c)
 
     def max_screen_cols(self) -> int:
-        """A linha VISÍVEL mais larga: a barra horizontal acompanha o que está
-        na tela, como o Godot faz — nunca varre o arquivo inteiro."""
+        """The widest VISIBLE line: the horizontal bar follows what is on screen,
+        as Godot does — it never scans the whole file."""
         vis = self.visible_lines()
         mx = 1
         l = self.top
@@ -324,20 +326,20 @@ struct CodeView:
         cols = tr.w // self.u.cell_w
         if cols < 1:
             cols = 1
-        # a barra vertical conta linhas VISÍVEIS (uma dobra encurta o documento)
+        # the vertical bar counts VISIBLE lines (a fold shortens the document)
         self.u.scroll_set(self.vsb, self.buf.visible_count(), vis, self.buf.to_visible(self.top))
         self.top = self.buf.from_visible(self.u.scroll_value(self.vsb))
         mx = self.max_screen_cols()
         self.u.scroll_set(self.hsb, mx + 1, cols, self.left)
         self.left = self.u.scroll_value(self.hsb)
-        # a horizontal só aparece quando precisa (Sublime/Godot)
+        # the horizontal one only appears when needed (Sublime/Godot)
         self.u.set_visible(self.hsb, mx >= cols)
 
-    # ---------- navegação ----------
+    # ---------- navigation ----------
 
     def set_top(self, line: int):
-        """`line` é índice VISÍVEL aqui: a barra e a roda pensam em fileiras, e
-        um documento dobrado tem menos fileiras do que linhas."""
+        """`line` is a VISIBLE index here: the bar and the wheel think in rows,
+        and a folded document has fewer rows than lines."""
         v = line
         mx = self.buf.visible_count() - 1
         if v > mx:
@@ -358,9 +360,9 @@ struct CodeView:
             self.u.queue_redraw(self.id)
 
     def anchor_top(self):
-        """Uma dobra mudou o mapa: mantém a vista onde está. Dobrar pela SARJETA
-        não deve rolar (Godot/Sublime) — o cursor pode estar em qualquer lugar, e
-        correr atrás dele tira o leitor do bloco que ele acabou de dobrar."""
+        """A fold changed the map: keep the view where it is. Folding from the
+        GUTTER must not scroll (Godot/Sublime) — the cursor may be anywhere, and
+        chasing it takes the reader away from the block they just folded."""
         self.top = self.buf.visible_at_or_before(self.top)
         self.changed()
 
@@ -413,13 +415,13 @@ struct CodeView:
 
         self.hl.update(self.buf)
 
-        # a linha atual (só com um cursor e sem seleção, como o Sublime)
+        # the current line (only with one cursor and no selection, like Sublime)
         if self.buf.ncarets() == 1 and not self.buf.has_sel():
             crow = self.row_of_line(self.buf.caret(0).line)
             if crow >= 0 and crow < vis:
                 self.u.cmd_rect(self.id, pui.Rect(tr.x, tr.y + crow * lh, tr.w, lh), 0xFF26282C)
 
-        # as seleções (antes do texto: o replay é em ordem)
+        # the selections (before the text: the replay is in order)
         for k in range(self.buf.ncarets()):
             sr = self.buf.sel_range(k)
             if sr.l0 == sr.l1 and sr.c0 == sr.c1:
@@ -436,31 +438,31 @@ struct CodeView:
                     continue
                 self.u.cmd_rect(self.id, pui.Rect(x0, tr.y + srow * lh, x1 - x0, lh), th.sel)
 
-        # sarjetas e texto, andando pelas fileiras VISÍVEIS (dobra é pulada)
+        # gutters and text, walking the VISIBLE rows (a fold is skipped)
         ln = self.top
         for vi in range(vis + 1):
             if vi > 0:
                 nl = self.buf.next_visible(ln, 1)
                 if nl == ln:
-                    break            # fim do documento
+                    break            # end of the document
                 ln = nl
             y = tr.y + vi * lh
             gx = r.x
             for g in self.gutters:
                 cell = self.gutter_cell(g.kind, ln)
                 if len(cell) > 0:
-                    # alinhado à direita dentro da coluna, medido em CODEPOINTS:
-                    # um marcador como ▾ é um glifo e três bytes
+                    # right-aligned inside the column, measured in CODEPOINTS:
+                    # a marker like ▾ is one glyph and three bytes
                     self.u.cmd_text(self.id, gx + (g.width_cp - len(cell)) * cw, y, cell,
                                     self.gutter_color(g.kind, ln))
                 gx += g.width_cp * cw
-            # guias de indentação: um fio de 1px em cada parada de tabulação
-            # dentro do espaço à esquerda, para o aninhamento ser legível numa
-            # linguagem de indentação
+            # indentation guides: a 1px thread at every tab stop inside the
+            # left-hand space, so the nesting is legible in an indentation-based
+            # language
             ind = self.buf.indent_of(ln)
             if self.buf.is_blank(ln):
-                # uma linha vazia empresta a menor dos vizinhos, para as guias
-                # não quebrarem no meio de um bloco
+                # an empty line borrows the smaller of its neighbours', so the
+                # guides do not break in the middle of a block
                 pv = self.buf.next_visible(ln, -1)
                 nx = self.buf.next_visible(ln, 1)
                 a = self.buf.indent_of(pv) if pv != ln else 0
@@ -486,13 +488,13 @@ struct CodeView:
                 cpi += 1
                 if sc > self.left + cols:
                     break
-            # um bloco recolhido mostra a elipse do Sublime depois do cabeçalho
+            # a collapsed block shows Sublime's ellipsis after the header
             if self.buf.is_folded(ln):
                 ex = tr.x + (sc - self.left + 1) * cw
                 self.u.cmd_rect(self.id, pui.Rect(ex - 2, y, cw + 4, lh), 0xFF3A3D41)
                 self.u.cmd_glyph(self.id, ex, y, pui.CP_ELLIPSIS, th.text_dim)
 
-        # ---- o popup de completamento, ancorado sob o cursor ----
+        # ---- the completion popup, anchored under the cursor ----
         if self.cmp_open and len(self.cmp_hits) > 0 and self.row_of_line(self.buf.caret(0).line) >= 0:
             pr = self.cmp_rect()
             rows2 = self.cmp_rows()
@@ -507,9 +509,9 @@ struct CodeView:
                 ry = pr.y + CMP_PAD + hi * lh
                 if idx2 == self.cmp_sel:
                     self.u.cmd_rect(self.id, pui.Rect(pr.x + 1, ry, pr.w - 2, lh), th.sel)
-                # o NOME é o que se escolhe, então fica com o que precisa; a
-                # assinatura pega o que sobrou e sai de cena quando não sobra o
-                # bastante para dizer algo
+                # the NAME is what gets chosen, so it takes what it needs; the
+                # signature takes what is left and leaves the stage when there is
+                # not enough left to say anything
                 nw = self.u.cmd_text_fit(self.id, pr.x + CMP_PAD, ry, sm.name, inner,
                                          th.text if idx2 == self.cmp_sel else th.text_dim)
                 if len(sm.detail) > 0:
@@ -518,7 +520,7 @@ struct CodeView:
                         self.u.cmd_text_fit(self.id, pr.x + CMP_PAD + nw + 2 * cw, ry,
                                             sm.detail, dw, 0xFF6E7075)
 
-        # ---- o minimapa: uma corrida da mesma classe vira um retângulo ----
+        # ---- the minimap: a run of the same class becomes one rectangle ----
         if self.minimap:
             mr = self.minimap_rect()
             self.u.cmd_rect(self.id, mr, 0xFF1A1B1E)
@@ -554,12 +556,12 @@ struct CodeView:
                     e2 = mc if mc < mr.w else mr.w
                     self.u.cmd_rect(self.id, pui.Rect(mr.x + runs, my, e2 - runs, MM_ROW - 1),
                                     mm_tint(runc))
-            # a janela da vista sobre a tira
+            # the view's window over the strip
             vy = mr.y + (self.buf.to_visible(self.top) - first) * MM_ROW
             self.u.cmd_rect(self.id, pui.Rect(mr.x, vy, mr.w, vis * MM_ROW), 0x18FFFFFF)
             self.u.cmd_frame(self.id, pui.Rect(mr.x, vy, mr.w, vis * MM_ROW), 0xFF3A3D41)
 
-        # os cursores (por cima de tudo)
+        # the cursors (on top of everything)
         if self.caret_on and self.u.focus_get() == self.id:
             for k in range(self.buf.ncarets()):
                 c = self.buf.caret(k)
@@ -572,8 +574,8 @@ struct CodeView:
                 self.u.cmd_rect(self.id, pui.Rect(cx, tr.y + krow * lh, 2, lh), 0xFFE8E8E8)
 
     def mm_first(self, rows: int, vis: int, total: int) -> int:
-        """A primeira fileira que a tira mostra — a conta está aqui porque o
-        desenho e o clique no minimapa precisam da MESMA."""
+        """The first row the strip shows — the arithmetic is here because the
+        drawing and the minimap click need the SAME one."""
         if total <= rows:
             return 0
         topv = self.buf.to_visible(self.top)
@@ -583,18 +585,18 @@ struct CodeView:
         return span if first > span else first
 
     def minimap_jump(self, y: int):
-        """Centra a vista na linha que o pixel `y` do minimapa representa."""
+        """Centres the view on the line that the minimap's pixel `y` stands for."""
         mr = self.minimap_rect()
         vis = self.visible_lines()
         rows = mr.h // MM_ROW
         first = self.mm_first(rows, vis, self.buf.visible_count())
         self.set_top(first + (y - mr.y) // MM_ROW - vis // 2)
 
-    # ---------- área de transferência (o app fala com o sistema) ----------
+    # ---------- clipboard (the app talks to the system) ----------
 
     def copy(self) -> str:
-        """Devolve o texto para o sistema (os pedaços juntados por \\n) e guarda
-        os N pedaços para o paste multi-cursor. "" = não havia seleção."""
+        """Returns the text for the system (the pieces joined by \\n) and keeps the
+        N pieces for the multi-cursor paste. "" = there was no selection."""
         if not self.buf.has_sel():
             return ""
         parts: list<str> = []
@@ -613,8 +615,8 @@ struct CodeView:
         return got
 
     def paste(self, sys_text: str, now_ms: int):
-        # N pedaços para N cursores (Sublime): só enquanto o que veio do sistema
-        # ainda é o que nós copiamos (senão o texto de fora ganha)
+        # N pieces for N cursors (Sublime): only while what came from the system
+        # is still what we copied (otherwise outside text wins)
         if len(self.clip) == self.buf.ncarets() and len(self.clip) > 1 and sys_text == "\n".join(self.clip):
             self.buf.insert_each(self.clip, now_ms)
         elif len(sys_text) > 0:
@@ -624,11 +626,11 @@ struct CodeView:
         self.changed()
         self.scroll_to_caret()
 
-    # ---------- indentação ----------
+    # ---------- indentation ----------
 
     def sel_lines_range(self) -> core.Span:
-        """As linhas que os cursores cobrem, e se ALGUM deles tem seleção de
-        mais de uma linha (o que decide se o tab indenta o bloco)."""
+        """The lines the cursors cover, and whether ANY of them has a selection
+        of more than one line (which decides whether tab indents the block)."""
         l0 = 0
         l1 = -1
         multi = 0
@@ -659,21 +661,21 @@ struct CodeView:
         self.scroll_to_caret()
 
     def newline(self, now_ms: int):
-        """Auto-indentação: repete a indentação da linha, e desce um nível
-        depois de um ':'."""
+        """Auto-indent: repeats the line's indentation, and goes one level deeper
+        after a ':'."""
         c = self.buf.caret(self.buf.ncarets() - 1)
         s = self.buf.line_text(c.line)
         ind = len(s) - len(s.lstrip())
         head = s[0:c.col]
         deeper = head.rstrip().endswith(":")
         if ind > c.col:
-            ind = c.col          # cursor dentro da indentação: não a duplica
+            ind = c.col          # a cursor inside the indentation: do not duplicate it
         total = ind + (CV_TAB if deeper else 0)
         self.buf.insert("\n" + " " * total, now_ms)
         self.changed()
         self.scroll_to_caret()
 
-    # ---------- pares automáticos ----------
+    # ---------- automatic pairs ----------
 
     def char_after(self, c: core.Caret) -> str:
         s = self.buf.line_text(c.line)
@@ -685,17 +687,17 @@ struct CodeView:
         return self.buf.line_text(c.line)[c.col - 1:c.col]
 
     def auto_pair(self, ch: str, now_ms: int) -> bool:
-        """True quando o caractere digitado foi tratado como par."""
+        """True when the typed character was handled as a pair."""
         close = pair_close_of(ch)
         c = self.buf.caret(0)
-        # digitar o fechamento onde ele já está: passa por cima
+        # typing the closer where it already is: step over it
         if pair_is_close(ch) and self.buf.ncarets() == 1 and not self.buf.has_sel():
             if self.char_after(c) == ch:
                 self.buf.move_h(1, False)
                 return True
         if len(close) == 0:
             return False
-        # envolve a seleção em vez de substituí-la
+        # wraps the selection instead of replacing it
         if self.buf.has_sel():
             wrapped = False
             k = self.buf.ncarets() - 1
@@ -708,38 +710,38 @@ struct CodeView:
                     wrapped = True
                 k -= 1
             return wrapped
-        # uma aspa depois de palavra é apóstrofo, não par
+        # a quote after a word is an apostrophe, not a pair
         if (ch == "\"" or ch == "'") and is_word_ch(self.char_before(c)):
             return False
         after = self.char_after(c)
         if len(after) > 0 and not pair_is_close(after) and after != " " and after != "\t":
-            return False          # só forma par numa fronteira
+            return False          # it only forms a pair at a boundary
         self.buf.insert(ch + close, now_ms)
         self.buf.move_h(-1, False)
         return True
 
     def pair_backspace(self, now_ms: int) -> bool:
-        """Backspace entre um par vazio tira os dois lados."""
+        """Backspace between an empty pair takes both sides."""
         if self.buf.ncarets() != 1 or self.buf.has_sel():
             return False
         c = self.buf.caret(0)
         b = self.char_before(c)
         a = self.char_after(c)
         cl = pair_close_of(b)
-        # `b` tem de ser ABERTURA cujo fechamento está logo depois do cursor;
-        # com os dois lados ausentes, dois "" se comparariam iguais e a conta
-        # comeria uma quebra de linha
+        # `b` has to be an OPENER whose closer is right after the cursor; with
+        # both sides absent, two "" would compare equal and the arithmetic would
+        # eat a line break
         if len(cl) == 0 or len(a) == 0 or cl != a:
             return False
         self.buf.delete_fwd(now_ms)
         self.buf.backspace(now_ms)
         return True
 
-    # ---------- completamento ----------
+    # ---------- completion ----------
 
     def word_before(self) -> core.Span:
-        """A palavra sendo digitada antes do cursor: devolve (coluna inicial) em
-        `c0` e o texto vai por `word_text`."""
+        """The word being typed before the cursor: returns the starting column in
+        `c0` and the text goes through `word_text`."""
         c = self.buf.caret(0)
         s = self.buf.line_text(c.line)
         b = c.col
@@ -751,8 +753,8 @@ struct CodeView:
         return self.buf.line_text(r.l0)[r.c0:r.c1]
 
     def owner_before(self, word_start: int) -> str:
-        """A expressão cujos membros listar: o que está antes de um `.` ou `->`
-        à esquerda da palavra. "" quando não há."""
+        """The expression whose members to list: what comes before a `.` or `->`
+        to the left of the word. "" when there is none."""
         c = self.buf.caret(0)
         s = self.buf.line_text(c.line)
         b = word_start
@@ -768,9 +770,9 @@ struct CodeView:
         return "" if b == e else s[b:e]
 
     def cmp_rows(self) -> int:
-        """Quantos candidatos o popup mostra. O desenho e as flechas perguntam
-        AQUI — cada um carregava o seu `8`, e um popup encurtado por um painel
-        baixo rolava contra fileiras que não estavam na tela."""
+        """How many candidates the popup shows. The drawing and the arrow keys ask
+        HERE — each of them used to carry its own `8`, and a popup shortened by a
+        low panel scrolled against rows that were not on screen."""
         n = len(self.cmp_hits)
         if n > CMP_MAX_ROWS:
             n = CMP_MAX_ROWS
@@ -780,8 +782,8 @@ struct CodeView:
         return n if n > 1 else 1
 
     def cmp_rect(self) -> pui.Rect:
-        """A caixa: tão larga quanto os candidatos à mostra pedem, depois presa
-        à área de texto. Todo transbordo se decide aqui, uma vez."""
+        """The box: as wide as the candidates on show ask for, then pinned to the
+        text area. Every overflow is decided here, once."""
         tr = self.text_rect()
         cw = self.u.cell_w
         lh = self.u.cell_h
@@ -800,7 +802,7 @@ struct CodeView:
         w += 2 * CMP_PAD
         if w > CMP_MAX_COLS * cw:
             w = CMP_MAX_COLS * cw
-        if w > tr.w - cw:                  # painel estreito ganha de qualquer mínimo
+        if w > tr.w - cw:                  # a narrow panel beats any minimum
             w = tr.w - cw
         h = rows * lh + 2 * CMP_PAD
         if h > tr.h:
@@ -813,9 +815,9 @@ struct CodeView:
         row = self.row_of_line(self.buf.caret(0).line)
         y = tr.y + (row + 1) * lh
         if y + h > tr.y + tr.h:
-            y = tr.y + row * lh - h        # vira para cima do cursor
-        # nenhum dos dois lados cabe — painel baixo, ou cursor de que a vista
-        # rolou embora. Fica DENTRO da área: cobrir texto é melhor que sair dela.
+            y = tr.y + row * lh - h        # flips above the cursor
+        # neither side fits — a low panel, or a cursor the view has scrolled away
+        # from. It stays INSIDE the area: covering text is better than leaving it.
         if y + h > tr.y + tr.h:
             y = tr.y + tr.h - h
         if y < tr.y:
@@ -838,8 +840,8 @@ struct CodeView:
         self.complete_refresh()
 
     def enclosing_struct(self, line: int) -> str:
-        """O struct em cujo corpo `line` está, pela indentação — é assim que
-        `self.` resolve sem adivinhar (um índice do arquivo não conseguiria)."""
+        """The struct in whose body `line` sits, by indentation — it is how
+        `self.` resolves without guessing (a file index could not)."""
         l = line
         while l >= 0:
             s = self.buf.line_text(l)
@@ -866,7 +868,7 @@ struct CodeView:
             else:
                 owner = self.index.owner_of(self.cmp_owner)
             if len(owner) == 0:
-                self.complete_close()      # receptor desconhecido: nada honesto a oferecer
+                self.complete_close()      # unknown receiver: nothing honest to offer
                 return
         self.cmp_hits = self.index.query(w, owner)
         if len(self.cmp_hits) == 0:
@@ -887,12 +889,12 @@ struct CodeView:
         self.scroll_to_caret()
         return True
 
-    # ---------- dobra e comandos de linha ----------
+    # ---------- folding and line commands ----------
 
     def toggle_fold_at_caret(self):
         l = self.buf.caret(0).line
         if not self.buf.can_fold(l) and not self.buf.is_folded(l):
-            # não é cabeçalho: dobra o bloco que CONTÉM o cursor (Sublime)
+            # not a header: fold the block that CONTAINS the cursor (Sublime)
             h = l - 1
             while h >= 0:
                 if self.buf.can_fold(h) and self.buf.fold_end(h) >= l:
@@ -960,13 +962,13 @@ struct CodeView:
             sl = 0
             sc = 0
         elif forward:
-            sr = self.buf.sel_range(0)     # começa DEPOIS da seleção atual
+            sr = self.buf.sel_range(0)     # starts AFTER the current selection
             sl = sr.l1
             sc = sr.c1
         hit = self.buf.find_re(needle, sl, sc, forward) if use_re else self.buf.find(needle, sl, sc, True)
         if hit != None:
-            # a prova de não-nulo vale DENTRO do ramo (43.1), e é aqui que os
-            # campos do Span existem
+            # the non-null proof holds INSIDE the branch (43.1), and this is where
+            # the Span's fields exist
             end = hit.c1 if use_re else hit.c0 + len(needle)
             self.buf.select_range(core.Span(hit.l0, hit.c0, hit.l0, end))
             self.scroll_to_caret()
@@ -974,7 +976,7 @@ struct CodeView:
             return True
         return False
 
-    # ---------- entrada ----------
+    # ---------- input ----------
 
     def handle_input(self, ev: pui.Event, now: int) -> bool:
         match ev.kind:
@@ -983,13 +985,13 @@ struct CodeView:
                     return False
                 self.u.focus_set(self.id)
                 p = self.pos_from_xy(ev.x, ev.y)
-                # o minimapa: clique ou arraste pula a vista (TextEdit do Godot)
+                # the minimap: a click or a drag jumps the view (Godot's TextEdit)
                 mmr = self.minimap_rect()
                 if self.minimap and pui.rect_has(mmr, ev.x, ev.y):
                     self.minimap_drag = True
                     self.minimap_jump(ev.y)
                     return True
-                # um clique nas sarjetas pertence à sarjeta daquela coluna
+                # a click on the gutters belongs to that column's gutter
                 r0 = self.u.rect_of(self.id)
                 if ev.x < r0.x + self.gutter_w():
                     gx = r0.x
@@ -1038,7 +1040,7 @@ struct CodeView:
                 return True
             case pui.EV_WHEEL:
                 if (ev.mods & 2) != 0:
-                    return False   # ctrl+roda = zoom (é do app)
+                    return False   # ctrl+wheel = zoom (that is the app's)
                 self.set_top(self.buf.to_visible(self.top) - ev.wheel * 3)
                 return True
             case pui.EV_TEXT:
@@ -1053,7 +1055,7 @@ struct CodeView:
                 self.buf.insert(ch, now)
                 self.changed()
                 self.scroll_to_caret()
-                # `.`/`->` oferece membros; com o popup aberto, mantém a lista
+                # `.`/`->` offers members; with the popup open, keeps the list
                 if self.cmp_open:
                     self.complete_refresh()
                 elif ch == "." or ch == ">":
@@ -1069,8 +1071,8 @@ struct CodeView:
         sel = (ev.mods & 1) != 0
         ctrl = (ev.mods & 2) != 0
         self.caret_on = True
-        # ctrl+espaço pede candidatos; com o popup aberto, ele fica com as
-        # flechas, o enter/tab e o escape
+        # ctrl+space asks for candidates; with the popup open, it keeps the
+        # arrows, the enter/tab and the escape
         if ctrl and ev.key == pui.K_SPACE:
             self.complete_open()
             return True
@@ -1088,7 +1090,7 @@ struct CodeView:
                     self.cmp_sel = n2 - 1
                 if self.cmp_sel >= n2:
                     self.cmp_sel = 0
-                rows3 = self.cmp_rows()      # o que está de fato na tela
+                rows3 = self.cmp_rows()      # what is actually on screen
                 if self.cmp_sel < self.cmp_top:
                     self.cmp_top = self.cmp_sel
                 elif self.cmp_sel >= self.cmp_top + rows3:
@@ -1139,7 +1141,7 @@ struct CodeView:
         return True
 
 
-# as teclas que só o codeview usa (as outras vêm do pacote `pui`)
+# the keys only the codeview uses (the others come from the `pui` package)
 const K_UP: int = 1073741906
 const K_DOWN: int = 1073741905
 const K_PAGEUP: int = 1073741899
@@ -1147,8 +1149,8 @@ const K_PAGEDOWN: int = 1073741902
 
 
 def cv_create(u: pui.Ui, parent: int) -> CodeView:
-    """Cria o widget com as barras internas e as três sarjetas, e devolve o
-    CodeView — o id dele está em `.id`."""
+    """Creates the widget with the internal bars and the three gutters, and
+    returns the CodeView — its id is in `.id`."""
     cv = CodeView(core.new_buffer(), hlm.new_hl(True), cmp.new_index(), "",
                   u, -1, -1, -1, 0, 0, [], False, [], 0, 0, 0, "",
                   True, False, True, False, 0, [], False, 0)
@@ -1165,7 +1167,7 @@ def cv_create(u: pui.Ui, parent: int) -> CodeView:
                  lambda ui2, wid: cv.build(),
                  lambda ui2, wid, ev: cv.handle_input(ev, cv.now_ms),
                  lambda ui2, wid, r: cv.layout(r))
-    cv.add_gutter(GUT_MARKS, 2)        # ● / ◆ na ponta esquerda
-    cv.add_gutter(GUT_FOLD, 2)         # depois ▾/▸, depois os números (ordem do Sublime)
+    cv.add_gutter(GUT_MARKS, 2)        # ● / ◆ at the left edge
+    cv.add_gutter(GUT_FOLD, 2)         # then ▾/▸, then the numbers (Sublime's order)
     cv.add_gutter(GUT_NUMBERS, 5)
     return cv

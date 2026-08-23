@@ -31,12 +31,12 @@ SHIM_MOUSE_UP: const i32 = 5
 SHIM_MOUSE_MOVE: const i32 = 6
 SHIM_WHEEL: const i32 = 7
 SHIM_RESIZE: const i32 = 8
-SHIM_TIMEOUT: const i32 = 9      # a espera venceu (é o que faz o cursor piscar)
-SHIM_FOCUS: const i32 = 10       # a janela ganhou o foco (hora de olhar o disco)
+SHIM_TIMEOUT: const i32 = 9      # the wait expired (this is what blinks the caret)
+SHIM_FOCUS: const i32 = 10       # the window took focus (time to look at the disk)
 
 def shim_poll() -> i32
-# 114: UM evento, bloqueando até `ms` milissegundos. Devolve SHIM_TIMEOUT quando
-# venceu — é assim que o laço do editor pisca o cursor sem girar em vazio.
+# 114: ONE event, blocking for up to `ms` milliseconds. Returns SHIM_TIMEOUT when
+# it expired — this is how the editor's loop blinks the caret without spinning.
 def shim_wait(ms: i32) -> i32
 def shim_ev_key() -> i32                  # SDL keycode
 def shim_ev_mods() -> i32                 # 1=shift 2=ctrl 4=alt 8=gui
@@ -63,17 +63,17 @@ def shim_baseline() -> i32
 def shim_zoom(step: i32)                  # pick another grid (a real raster)
 def shim_zoom_steps() -> i32
 def shim_zoom_at() -> i32
-# o passo PADRÃO da grade (o mesmo que o editor em P usa ao abrir e no reset)
+# the grid's DEFAULT step (the same one the editor in P uses on open and on reset)
 def shim_zoom_default() -> i32
 
-# ---- 114: o que o app pede ao sistema, e só o driver pode dar ----
-# A área de transferência é do SISTEMA, então ela mora aqui; o texto atravessa
-# como `CStr` (81/84/85), emprestado na ida e copiado na volta.
+# ---- 114: what the app asks of the system, and only the driver can give ----
+# The clipboard belongs to the SYSTEM, so it lives here; the text crosses as a
+# `CStr` (81/84/85), borrowed on the way in and copied on the way out.
 def shim_clip_set(in s: CStr)
 def shim_clip_get() -> CStr
-# as duas perguntas modais: 0=salvar 1=descartar 2=cancelar; e recarregar sim/não
+# the two modal questions: 0=save 1=discard 2=cancel; and reload yes/no
 def shim_confirm_close(in name: CStr) -> i32
 def shim_confirm_reload(in name: CStr) -> bool
 def shim_title(in s: CStr)
-# um quadro em PPM, para inspecionar o desenho num servidor sem X
+# one frame as PPM, to inspect the drawing on a server with no X
 def shim_shot(in p: CStr) -> bool

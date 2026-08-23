@@ -1,21 +1,22 @@
-"""O índice de completamento, em pscript (porte do `pstudio/complete.p`).
+"""The completion index, in pscript (a port of `pstudio/complete.p`).
 
-Ele se monta com o LEXER DO COMPILADOR, através do adaptador da 113 — que é o
-que o faz funcionar num buffer meio digitado: são tokens de verdade, então
-cadeia, comentário e número nunca entram como candidato. Do fluxo de tokens ele
-recupera declarações (`def f(...)`, `struct S:` e os membros dela, `x: T`) e,
-para o caso `x.`, o TIPO de uma variável — que é o que transforma "palavras do
-arquivo" em completamento de membro.
+It builds itself with THE COMPILER's LEXER, through 113's adapter — which is
+what makes it work on a half-typed buffer: these are real tokens, so a string, a
+comment or a number never enters as a candidate. From the token stream it
+recovers declarations (`def f(...)`, `struct S:` and its members, `x: T`) and,
+for the `x.` case, the TYPE of a variable — which is what turns "words in the
+file" into member completion.
 
-O que ele NÃO é: um verificador de tipos. Tipar expressão inteira precisa de
-parser tolerante mais sema sobre o buffer; quando isso existir, entra atrás da
-mesma API.
+What it is NOT: a type checker. Typing a whole expression needs a tolerant
+parser plus sema over the buffer; when that exists, it comes in behind the same
+door.
 
-**Uma diferença do porte, e é de LAYERING:** em P, `build` lia os `.ph` que o
-buffer importa, ele mesmo, com o `psys`. Aqui ele não faz I/O — `imports_of`
-DIZ quais arquivos são, e quem tem o laço de eventos (que é quem pode esperar)
-lê e passa os textos em `extra`. O índice deixa de ter opinião sobre arquivo, e
-com isso continua SÍNCRONO: o `codeview` chama sem ser `async`.
+**One difference from the port, and it is about LAYERING:** in P, `build` read
+the `.ph` files the buffer imports itself, with `psys`. Here it does no I/O —
+`imports_of` SAYS which files they are, and whoever has the event loop (which is
+whoever can wait) reads them and passes the texts in `extra`. The index stops
+having an opinion about files, and stays SYNCHRONOUS: `codeview` calls it
+without being `async`.
 """
 import "hl.ph"
 
@@ -23,36 +24,36 @@ import lib_core as core
 
 
 enum SymKind:
-    SYM_KEYWORD       # as palavras da própria linguagem
-    SYM_WORD          # um identificador visto no arquivo (a base do Sublime)
+    SYM_KEYWORD       # the language's own words
+    SYM_WORD          # an identifier seen in the file (Sublime's baseline)
     SYM_TYPE          # struct / enum / union
-    SYM_FUNC          # `def` no escopo do arquivo
-    SYM_MEMBER        # campo ou método de um struct
+    SYM_FUNC          # `def` at file scope
+    SYM_MEMBER        # a struct's field or method
 
 
 struct CSym:
-    name: str         # o que entra no texto
-    detail: str       # mostrado apagado à direita (assinatura, tipo); "" = nada
-    owner: str        # SYM_MEMBER: o struct a que pertence; "" = nenhum
+    name: str         # what goes into the text
+    detail: str       # shown dimmed on the right (signature, type); "" = nothing
+    owner: str        # SYM_MEMBER: the struct it belongs to; "" = none
     kind: SymKind
 
 
-# `struct` e não `record`: um record só guarda número (58.2), e estes dois campos
-# são cadeias — que são referência de heap
+# `struct` and not `record`: a record only holds numbers (58.2), and these two
+# fields are strings — which are heap references
 struct CVar:
     name: str
     type_name: str
 
 
-# as palavras da própria linguagem: sempre oferecidas, e classificadas por
-# último. Uma cadeia `const` e não uma lista, porque um módulo IMPORTADO é um
-# conjunto de definições e não um programa — ele não tem onde rodar um literal
-# de lista (o `split` acontece na chamada, uma vez por índice construído).
+# the language's own words: always offered, and ranked last. A `const` string
+# and not a list, because an IMPORTED module is a set of definitions and not a
+# program — it has nowhere to run a list literal (the `split` happens at the
+# call, once per index built).
 const KEYWORDS: str = "def return if elif else while for in do match case break continue goto const struct enum union import include and or not True False None private static lambda inline extern volatile restrict defer with out ref is pass global nonlocal declare implement sizeof range i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool char void usize isize"
 
 
-# o texto de um token: fatiado do próprio arquivo pela posição, porque cadeia
-# não volta pela fronteira (113) — e o buffer já está deste lado
+# a token's text: sliced out of the file itself by position, because a string
+# does not come back across the boundary (113) — the buffer is already on this side
 def tok_text(lines: list<str>, i: int) -> str:
     ln = hl_tok_line(i)
     if ln < 0 or ln >= len(lines):
@@ -65,9 +66,9 @@ def tok_text(lines: list<str>, i: int) -> str:
     return s[c0:c1 if c1 < len(s) else len(s)]
 
 
-# O NOME do tipo a que uma declaração se liga, a partir do token depois do `:`.
-# Passa por cima de `const` e das estrelas: neste código quase toda variável é
-# `x: *Tipo`, e parar no `*` fazia o completamento de membro nunca resolver nada.
+# The NAME of the type a declaration binds to, from the token after the `:`. It
+# steps over `const` and the stars: in this code nearly every variable is
+# `x: *Type`, and stopping at the `*` made member completion resolve nothing.
 def decl_type_name(lines: list<str>, n: int, at: int) -> str:
     i = at
     while i < n and (hl_tok_kind(i) == HLK_STAR or hl_tok_kind(i) == HLK_CONST):
@@ -80,7 +81,7 @@ def decl_type_name(lines: list<str>, n: int, at: int) -> str:
 struct Index:
     syms: list<CSym>
     vars: list<CVar>
-    version: int      # a versão do buffer de que isto saiu
+    version: int      # the buffer version this came out of
     ready: bool
 
     def is_stale(self, b: core.Buffer) -> bool:
@@ -101,21 +102,21 @@ struct Index:
         self.syms.append(CSym(name, detail, owner, kind))
 
     def scan(self, text: str, words: bool) -> list<str>:
-        """Percorre o fluxo de tokens de UM arquivo. `words` = também colhe
-        identificador solto (só para o buffer sendo editado; um import
-        contribui apenas com as declarações dele). Devolve os imports vistos."""
+        """Walks ONE file's token stream. `words` = also collect loose
+        identifiers (only for the buffer being edited; an import contributes only
+        its declarations). Returns the imports it saw."""
         imports: list<str> = []
         lines = text.split("\n")
         n = hl_lex(text)
-        cur_struct = ""     # o struct em cujo corpo estamos
-        depth = 0           # profundidade de INDENT desde aquele cabeçalho
-        paren = 0           # dentro de uma lista de parâmetros?
+        cur_struct = ""     # the struct in whose body we are
+        depth = 0           # INDENT depth since that header
+        paren = 0           # inside a parameter list?
         i = 0
         while i < n:
             k = hl_tok_kind(i)
-            # "primeiro token da sua linha" se pergunta às POSIÇÕES, não a
-            # tokens de NEWLINE: um '(' não fechado suprime esses (continuação
-            # implícita), e um buffer meio digitado é cheio deles.
+            # "first token of its line" is asked of the POSITIONS, not of NEWLINE
+            # tokens: an unclosed '(' suppresses those (implicit continuation),
+            # and a half-typed buffer is full of them.
             pv = i - 1
             while pv >= 0:
                 pk = hl_tok_kind(pv)
@@ -140,7 +141,7 @@ struct Index:
                 continue
             if k == HLK_IMPORT:
                 if i + 1 < n and hl_tok_kind(i + 1) == HLK_STRING:
-                    q = tok_text(lines, i + 1)             # "x.ph" com as aspas
+                    q = tok_text(lines, i + 1)             # "x.ph" with the quotes
                     if len(q) > 2:
                         imports.append(q[1:len(q) - 1])
             elif k == HLK_DEF:
@@ -150,7 +151,7 @@ struct Index:
                         self.add(tok_text(lines, i + 1), sig, cur_struct, SYM_MEMBER)
                     else:
                         self.add(tok_text(lines, i + 1), sig, "", SYM_FUNC)
-                    i += 1        # o nome já entrou: não entra também como palavra
+                    i += 1        # the name is already in: it does not also enter as a word
             elif k == HLK_STRUCT or k == HLK_UNION or k == HLK_ENUM:
                 if i + 1 < n and hl_tok_kind(i + 1) == HLK_IDENT:
                     self.add(tok_text(lines, i + 1), "", "", SYM_TYPE)
@@ -163,13 +164,13 @@ struct Index:
                 if paren > 0:
                     paren -= 1
             elif k == HLK_IDENT:
-                # um parâmetro também é declaração: `def f(p: Point)` é o que
-                # faz `p.` funcionar dentro do corpo
+                # a parameter is a declaration too: `def f(p: Point)` is what
+                # makes `p.` work inside the body
                 if paren > 0 and i + 2 < n and hl_tok_kind(i + 1) == HLK_COLON:
                     ptn = decl_type_name(lines, n, i + 2)
                     if len(ptn) > 0:
                         self.vars.append(CVar(tok_text(lines, i), ptn))
-                # `nome: Tipo` — campo dentro de struct, variável fora
+                # `name: Type` — a field inside a struct, a variable outside
                 if line_start and i + 2 < n and hl_tok_kind(i + 1) == HLK_COLON:
                     tyname = decl_type_name(lines, n, i + 2)
                     if len(cur_struct) > 0:
@@ -183,13 +184,13 @@ struct Index:
         return imports
 
     def imports_of(self, b: core.Buffer) -> list<str>:
-        """Os `.ph` que o buffer importa, sem indexar nada — para quem PODE ler
-        arquivo (o laço de eventos) buscar os textos."""
+        """The `.ph` files the buffer imports, without indexing anything — for
+        whoever CAN read files (the event loop) to fetch the texts."""
         probe = Index([], [], 0, False)
         return probe.scan(b.text(), False)
 
     def build(self, b: core.Buffer, extra: list<str>):
-        """Monta do buffer e dos textos já lidos que vieram com ele."""
+        """Builds from the buffer and from the already-read texts that came with it."""
         self.syms = []
         self.vars = []
         for kw in KEYWORDS.split(" "):
@@ -201,8 +202,8 @@ struct Index:
         self.ready = True
 
     def owner_of(self, expr: str) -> str:
-        """O struct cujos membros `expr` expõe: o tipo declarado de uma
-        variável, ou o próprio nome quando ele JÁ é um tipo. "" = não sei."""
+        """The struct whose members `expr` exposes: a variable's declared type,
+        or the name itself when it ALREADY is a type. "" = I do not know."""
         for v in self.vars:
             if v.name == expr:
                 return v.type_name
@@ -212,8 +213,8 @@ struct Index:
         return ""
 
     def rank(self, i: int, prefix: str) -> int:
-        """Mais alto é melhor: caixa exata, declaração antes de palavra solta,
-        e nome mais curto (o mais perto do que se quis dizer)."""
+        """Higher is better: exact case, a declaration before a loose word, and a
+        shorter name (the closest to what was meant)."""
         s = self.syms[i]
         r = 60
         match s.kind:
@@ -228,12 +229,12 @@ struct Index:
             case _:
                 r = 60
         if s.name.startswith(prefix):
-            r += 50                      # a mesma caixa que se digitou
+            r += 50                      # the same case that was typed
         return r - len(s.name) // 2
 
     def query(self, prefix: str, owner: str) -> list<int>:
-        """Índices em `syms` que completam `prefix`, melhor primeiro. `owner`
-        não vazio restringe aos membros daquele struct (o caso `x.`)."""
+        """Indices in `syms` that complete `prefix`, best first. A non-empty
+        `owner` restricts to that struct's members (the `x.` case)."""
         hits: list<int> = []
         pl = len(prefix)
         low = prefix.lower()
@@ -243,13 +244,13 @@ struct Index:
                 if s.kind != SYM_MEMBER or s.owner != owner:
                     continue
             elif s.kind == SYM_MEMBER:
-                continue                 # membro só depois de `.`/`->`
+                continue                 # a member only after `.`/`->`
             if pl > 0 and not s.name.lower().startswith(low):
                 continue
             if pl > 0 and len(s.name) == pl:
-                continue                 # já digitado inteiro
+                continue                 # already typed in full
             hits.append(i)
-        # ordenação por inserção (as listas são curtas)
+        # insertion sort (the lists are short)
         for i in range(1, len(hits)):
             v = hits[i]
             rv = self.rank(v, prefix)

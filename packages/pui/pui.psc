@@ -1,45 +1,45 @@
-"""pui em pscript: a árvore de widgets, o layout do Godot e o desenho retido.
+"""pui in pscript: the widget tree, Godot's layout and retained drawing.
 
-Porte do `pstudio/pui.p` (1158 linhas de P) para a linguagem em que o editor
-vai morar. A matemática é a MESMA — `BoxContainer::_resort` com acumulador de
-erro fracionário, `SplitContainer` com o offset preso pelos dois mínimos — e é
-por isso que o teste `tests/pstudio/pui_layout_ps.psc` imprime os mesmos
-retângulos que o teste em P: dois programas, duas linguagens, os mesmos números.
+A port of `pstudio/pui.p` (1158 lines of P) into the language the editor is
+going to live in. The arithmetic is the SAME — `BoxContainer::_resort` with a
+fractional error accumulator, `SplitContainer` with the offset pinned by both
+minimums — and that is why the test `tests/pstudio/pui_layout_ps.psc` prints the
+same rectangles as the test in P: two programs, two languages, the same numbers.
 
-O que MUDOU no porte, e por quê:
+What CHANGED in the port, and why:
 
-  * **Um nó, sem payload por tipo.** O P tinha `BoxData`/`SplitData`/`TextData`/
-    `ScrollData`/`InputData`, cada um com `malloc`, `memset` e um `free` no
-    lugar certo. Aqui os campos são do nó, e o coletor é o dono: somem os cinco
-    structs, os cinco `malloc` e o `node_release` que tinha de saber de todos.
-  * **Nada de máscara de bits.** `UF_VISIBLE|UF_DIRTY` virou `visible` e
-    `dirty`. A máscara existia para caber num `u32`; um bool custa o mesmo aqui
-    e não se lê ao contrário.
-  * **A métrica da fonte é PARÂMETRO, não o driver.** O `Ui` recebe a célula
-    (largura e altura) e não conhece SDL nenhum. É o que torna o toolkit
-    testável sem janela — e o teste headless mede o layout de verdade, não uma
-    imitação dele.
-  * **Desenhar é replay num `Painter`.** O P escrevia num `PgFb`; aqui o `draw`
-    recebe cinco funções (retângulo, moldura, recorte, fim do recorte, glifo).
-    O app passa as do shim, o teste passa as que contam — a mesma lista de
-    comandos retidos nos dois casos.
-  * **O sinal é uma função, sem `ctx`.** Em P era `{fn, ctx}` porque uma função
-    livre não captura; aqui uma lambda captura o app (28.1/19.2), então o `ctx`
-    não tem razão de existir.
+  * **One node, no per-type payload.** P had `BoxData`/`SplitData`/`TextData`/
+    `ScrollData`/`InputData`, each with a `malloc`, a `memset` and a `free` in
+    the right place. Here the fields belong to the node and the collector is the
+    owner: gone are the five structs, the five `malloc`s and the `node_release`.
+  * **No bit masks.** `UF_VISIBLE|UF_DIRTY` became `visible` and `dirty`. The
+    mask existed to fit in a `u32`; a bool costs the same here and does not
+    read backwards.
+  * **The font metric is a PARAMETER, not the driver.** The `Ui` receives the
+    cell (width and height) and knows no SDL at all. It is what makes the
+    toolkit testable without a window — and the headless test measures the real
+    layout, not an imitation of it.
+  * **Drawing is replay into a `Painter`.** P wrote into a `PgFb`; here `draw`
+    receives five functions (rectangle, frame, clip, end clip, glyph).
+    The app passes the shim's, the test passes counting ones — the same list of
+    retained commands in both cases.
+  * **A signal is a function, with no `ctx`.** In P it was `{fn, ctx}` because a
+    free function does not capture; here a lambda captures the app (28.1/19.2),
+    so the `ctx` has no reason to exist.
 """
 
-# ---------- o que um widget é ----------
+# ---------- what a widget is ----------
 
 enum WKind:
     WK_NONE
-    WK_PANEL          # fundo; filhos empilhados no retângulo inteiro
-    WK_BOX            # contêiner linear v/h (o algoritmo do BoxContainer)
-    WK_SPLIT          # dois filhos e um divisor arrastável
+    WK_PANEL          # background; children stacked in the whole rectangle
+    WK_BOX            # linear v/h container (BoxContainer's algorithm)
+    WK_SPLIT          # two children and a draggable divider
     WK_LABEL
     WK_BUTTON
     WK_SCROLLBAR
-    WK_INPUT          # entrada de uma linha (paleta, busca)
-    WK_CUSTOM         # widget do app: o comportamento vem das funções do nó
+    WK_INPUT          # one-line input (palette, search)
+    WK_CUSTOM         # the app's widget: behaviour comes from the node's functions
 
 
 enum CmdKind:
@@ -61,8 +61,8 @@ record Size:
     h: int
 
 
-# … de texto elidido e de bloco dobrado. Uma constante porque `chr(0x2026)`
-# num laço de desenho seria uma alocação por quadro.
+# the … of elided text and of a folded block. A constant because `chr(0x2026)`
+# in a drawing loop would be one allocation per frame.
 const CP_ELLIPSIS: int = 0x2026
 
 
@@ -82,7 +82,7 @@ def rect_empty(r: Rect) -> bool:
     return r.w <= 0 or r.h <= 0
 
 
-# um comando de desenho GUARDADO: reescrito só quando o widget suja
+# a drawing command KEPT: rewritten only when the widget goes dirty
 struct Cmd:
     kind: CmdKind
     x: int
@@ -94,30 +94,30 @@ struct Cmd:
     text: str
 
 
-# quem põe pixel na tela. O toolkit não sabe se do outro lado está o SDL, um
-# contador de teste ou um arquivo — só chama.
+# whoever puts pixels on the screen. The toolkit does not know whether SDL, a
+# test counter or a file is on the other side — it just calls.
 struct Painter:
-    rect: def(int, int, int, int, int)        # x, y, w, h, cor
+    rect: def(int, int, int, int, int)        # x, y, w, h, colour
     frame: def(int, int, int, int, int)
     clip: def(int, int, int, int)
     clip_off: def()
-    glyph: def(int, int, int, int)            # codepoint, x, y, cor
+    glyph: def(int, int, int, int)            # codepoint, x, y, colour
 
 
-# o tema (um escuro compilado; arquivo de configuração é outra conversa)
+# the theme (a dark one, compiled in; a config file is another conversation)
 struct Theme:
     bg: int
     panel: int
     panel_hi: int      # hover
-    panel_lo: int      # pressionado / afundado
+    panel_lo: int      # pressed / sunken
     border: int
     text: int
     text_dim: int
     accent: int
     sel: int
-    pad: int           # respiro interno (botão e afins)
-    sep: int           # separação entre filhos de um BOX
-    handle: int        # espessura do divisor e da barra
+    pad: int           # inner breathing room (buttons and the like)
+    sep: int           # separation between a BOX's children
+    handle: int        # thickness of the divider and of the bar
 
 
 def theme_dark() -> Theme:
@@ -125,64 +125,64 @@ def theme_dark() -> Theme:
                  0xFFD4D4D4, 0xFF808080, 0xFF4F9CF7, 0xFF264F78, 6, 4, 6)
 
 
-# Um nó da árvore. Os campos de payload de cada tipo estão todos aqui: um nó
-# vazio custa alguns ponteiros, e o preço disso é não haver cinco structs, cinco
-# alocações e um liberador que precise saber de todos eles.
+# A node of the tree. The payload fields of every type all live here: an empty
+# node costs a few pointers, and the price of that is not having five structs,
+# five allocations and a releaser that has to know about all of them.
 struct Node:
     kind: WKind
     alive: bool
-    parent: int          # -1 = raiz ou solto
-    first_child: int     # -1 = folha
-    next_sibling: int    # a ordem dos irmãos é a ordem de desenho (e o freelist)
+    parent: int          # -1 = root or detached
+    first_child: int     # -1 = leaf
+    next_sibling: int    # sibling order is drawing order (and the freelist)
 
-    rect: Rect           # retângulo FINAL, depois do layout
-    min_w: int           # mínimo pedido pelo app (0 = só o que o tipo calcula)
+    rect: Rect           # the FINAL rectangle, after layout
+    min_w: int           # minimum the app asked for (0 = only what the type computes)
     min_h: int
-    stretch: int         # peso do EXPAND dentro de um box
-    cw: int              # mínimo CALCULADO pela fase 1
+    stretch: int         # the EXPAND weight inside a box
+    cw: int              # the minimum COMPUTED by phase 1
     ch: int
-    bg: int              # pintado antes de tudo; 0 = transparente
-    pad: int             # recuo do texto à esquerda
+    bg: int              # painted before everything; 0 = transparent
+    pad: int             # the text's left indent
 
     visible: bool
     expand_h: bool
     expand_v: bool
-    dirty: bool          # a lista de comandos tem de ser reescrita
+    dirty: bool          # the command list has to be rewritten
     focusable: bool
-    hover: bool          # calculado pela entrada (só leitura para o app)
+    hover: bool          # computed by the input (read-only for the app)
     pressed: bool
 
-    cmds: list<Cmd>      # a lista RETIDA
+    cmds: list<Cmd>      # the RETAINED list
 
     vertical: bool       # box, split, scrollbar
-    offset: int          # split: tamanho do primeiro filho, em pixels do eixo
+    offset: int          # split: the first child's size, in axis pixels
     dragging: bool       # split, scrollbar
-    grab: int            # distância do mouse ao valor quando o arraste começou
+    grab: int            # distance from the mouse to the value when the drag began
     text: str            # label, button, input
-    cursor: int          # input: o caret, em CODEPOINTS
-    total: int           # scrollbar: o conteúdo
-    page: int            #            o visível
-    value: int           #            a posição
+    cursor: int          # input: the caret, in CODEPOINTS
+    total: int           # scrollbar: the content
+    page: int            #            the visible part
+    value: int           #            the position
 
-    # `def(...)?` e não `def(...)`: um sinal que ninguém ligou é AUSENTE, e a
-    # linguagem só deixa isso ser None se o tipo disser (9.4). O parêntese em
-    # `(def(...) -> T)?` existe porque sem ele o `?` cairia no tipo de RETORNO.
+    # `def(...)?` and not `def(...)`: a signal nobody connected is ABSENT, and
+    # the language only lets that be None if the type says so (9.4). The
+    # parenthesis in `(def(...) -> T)?` is there because without it the `?` would land on the RETURN type.
     sig_click: def(int, int)?
     sig_scroll: def(int, int)?
     sig_changed: def(int, int)?
     sig_submit: def(int, int)?
     sig_cancel: def(int, int)?
 
-    c_min: (def(Ui, int) -> Size)?        # o mínimo do widget do app
-    c_build: def(Ui, int)?                # reescreve os comandos (cmd_*)
+    c_min: (def(Ui, int) -> Size)?        # the minimum of the app's widget
+    c_build: def(Ui, int)?                # rewrites the commands (cmd_*)
     c_input: (def(Ui, int, Event) -> bool)?
-    c_layout: def(Ui, int, Rect)?         # posiciona os próprios filhos
-    data: any?                            # o estado do widget do app
+    c_layout: def(Ui, int, Rect)?         # positions its own children
+    data: any?                            # the state of the app's widget
 
 
-# ---------- eventos ----------
-# Os mesmos que o shim entrega, como VALOR: quem testa monta um à mão, e o laço
-# do app monta um a partir dos acessores escalares.
+# ---------- events ----------
+# The same ones the shim delivers, as a VALUE: whoever tests builds one by hand,
+# and the app's loop builds one out of the scalar accessors.
 
 enum EvKind:
     EV_NONE
@@ -200,7 +200,7 @@ record Event:
     kind: EvKind
     key: int
     mods: int
-    cp: int          # EV_TEXT: o codepoint digitado
+    cp: int          # EV_TEXT: the codepoint typed
     x: int
     y: int
     button: int
@@ -208,7 +208,7 @@ record Event:
     wheel: int
 
 
-# as teclas que o toolkit conhece (os códigos do SDL, como no shim)
+# the keys the toolkit knows (SDL's codes, as in the shim)
 const K_RETURN: int = 13
 const K_ESCAPE: int = 27
 const K_BACKSPACE: int = 8
@@ -222,8 +222,8 @@ const K_END: int = 1073741901
 
 
 def new_node_blank() -> Node:
-    """Um nó zerado. Existe porque um `struct` se constrói pela ordem dos campos
-    e essa lista tem de aparecer UMA vez, não em cada construtor de widget."""
+    """A zeroed node. It exists because a `struct` is built by field order and
+    that list has to appear ONCE, not in every widget constructor."""
     return Node(WK_NONE, False, -1, -1, -1,
                 Rect(0, 0, 0, 0), 0, 0, 1, 0, 0, 0, 0,
                 True, False, False, True, False, False, False,
@@ -235,20 +235,20 @@ def new_node_blank() -> Node:
 
 struct Ui:
     nodes: list<Node>
-    free_head: int       # freelist, encadeado pelo next_sibling
+    free_head: int       # freelist, chained through next_sibling
     root: int
-    focus: int           # o foco do teclado: exatamente um (o modelo do Godot)
-    capture: int         # o mouse fica preso a quem apertou até soltar
+    focus: int           # keyboard focus: exactly one (Godot's model)
+    capture: int         # the mouse stays captured by whoever pressed, until release
     hover: int
     theme: Theme
-    cell_w: int          # a célula da fonte, dada de fora
+    cell_w: int          # the font cell, given from outside
     cell_h: int
-    lay_w: int           # o tamanho do último layout (para refazê-lo)
+    lay_w: int           # the size of the last layout (to redo it)
     lay_h: int
-    needs_draw: bool     # sujou algo desde o último draw: o laço olha isto em
-                         #   vez de repintar a cada evento
+    needs_draw: bool     # something went dirty since the last draw: the loop looks at this
+                         #   instead of repainting on every event
 
-    # ---------- a árvore ----------
+    # ---------- the tree ----------
 
     def node(self, id: int) -> Node:
         return self.nodes[id]
@@ -311,7 +311,7 @@ struct Ui:
         return id
 
     def free_node(self, id: int):
-        # um pai pode desenhar em função dos filhos: um deles sai, ele suja
+        # a parent may draw as a function of its children: one leaves, it dirties
         p0 = self.nodes[id].parent
         if p0 >= 0:
             self.queue_redraw(p0)
@@ -348,7 +348,7 @@ struct Ui:
         self.unlink(id)
         self.link_last(id, new_parent)
 
-    # ---------- construtores ----------
+    # ---------- constructors ----------
 
     def panel(self, parent: int) -> int:
         return self.new_node(WK_PANEL, parent)
@@ -386,8 +386,8 @@ struct Ui:
         return id
 
     def custom(self, parent: int, data: any?) -> int:
-        """O widget do app. As funções entram depois (`set_custom`), porque uma
-        delas normalmente precisa do id que este construtor acabou de dar."""
+        """The app's widget. The functions come afterwards (`set_custom`),
+        because one of them normally needs the id this constructor just gave."""
         id = self.new_node(WK_CUSTOM, parent)
         self.nodes[id].data = data
         return id
@@ -400,7 +400,7 @@ struct Ui:
         nd.c_input = c_input
         nd.c_layout = c_layout
 
-    # ---------- propriedades ----------
+    # ---------- properties ----------
 
     def set_expand(self, id: int, h: bool, v: bool):
         self.nodes[id].expand_h = h
@@ -445,7 +445,7 @@ struct Ui:
             nd.cursor = len(text)
         else:
             if nd.text == text:
-                return          # o mesmo texto: nada mudou, e não se repinta
+                return          # the same text: nothing changed, so no repaint
             nd.text = text
         self.queue_redraw(id)
 
@@ -475,7 +475,7 @@ struct Ui:
             self.queue_redraw_tree(c)
             c = self.nodes[c].next_sibling
 
-    # ---------- sinais ----------
+    # ---------- signals ----------
 
     def on_click(self, id: int, fn: def(int, int)?):
         self.nodes[id].sig_click = fn
@@ -492,7 +492,7 @@ struct Ui:
     def on_cancel(self, id: int, fn: def(int, int)?):
         self.nodes[id].sig_cancel = fn
 
-    # ---------- split e scrollbar ----------
+    # ---------- split and scrollbar ----------
 
     def split_set(self, id: int, offset: int):
         self.nodes[id].offset = offset
@@ -514,7 +514,7 @@ struct Ui:
     def scroll_value(self, id: int) -> int:
         return self.nodes[id].value
 
-    # ---------- foco ----------
+    # ---------- focus ----------
 
     def focus_set(self, id: int):
         if self.focus == id:
@@ -529,14 +529,14 @@ struct Ui:
     def focus_get(self) -> int:
         return self.focus
 
-    # ---------- fase 1: o mínimo, que sobe ----------
+    # ---------- phase 1: the minimum, which goes up ----------
 
     def text_w(self, s: str) -> int:
         return len(s) * self.cell_w
 
     def measure(self, id: int):
         c = self.nodes[id].first_child
-        while c >= 0:                     # pós-ordem: os filhos primeiro
+        while c >= 0:                     # post-order: the children first
             self.measure(c)
             c = self.nodes[c].next_sibling
         nd = self.nodes[id]
@@ -614,10 +614,10 @@ struct Ui:
         nd.cw = w
         nd.ch = h
 
-    # ---------- fase 2: o retângulo, que desce ----------
+    # ---------- phase 2: the rectangle, which comes down ----------
 
-    # BoxContainer::_resort: soma os mínimos e reparte o que sobra entre os
-    # filhos com EXPAND, em proporção ao peso, com um acumulador de erro inteiro
+    # BoxContainer::_resort: sums the minimums and shares out what is left among
+    # the children with EXPAND, in proportion to the weight, with an integer error accumulator
     def lay_box(self, id: int, r: Rect):
         nd = self.nodes[id]
         vert = nd.vertical
@@ -662,8 +662,8 @@ struct Ui:
                 pos += size + sep
             c = nx
 
-    # SplitContainer: o offset fica preso entre o mínimo do primeiro filho e o
-    # que sobra depois do mínimo do segundo; o divisor mora entre os dois
+    # SplitContainer: the offset is pinned between the first child's minimum and
+    # what is left after the second's; the divider lives between the two
     def lay_split(self, id: int, r: Rect):
         nd = self.nodes[id]
         vert = nd.vertical
@@ -712,14 +712,14 @@ struct Ui:
             case WK_CUSTOM:
                 flay = nd.c_layout
                 if flay != None:
-                    flay(self, id, r)          # o app posiciona os próprios filhos
+                    flay(self, id, r)          # the app positions its own children
                     return
                 self.lay_stack(id, r)
             case _:
                 self.lay_stack(id, r)
 
     def lay_stack(self, id: int, r: Rect):
-        """PANEL e folhas: os filhos ocupam o retângulo inteiro."""
+        """PANEL and leaves: the children take the whole rectangle."""
         c = self.nodes[id].first_child
         while c >= 0:
             if self.is_vis(c):
@@ -739,7 +739,7 @@ struct Ui:
         if self.lay_w > 0:
             self.layout(self.lay_w, self.lay_h)
 
-    # ---------- os comandos ----------
+    # ---------- the commands ----------
 
     def cmd_rect(self, id: int, r: Rect, color: int):
         self.nodes[id].cmds.append(Cmd(CMD_RECT, r.x, r.y, r.w, r.h, color, 0, ""))
@@ -754,11 +754,11 @@ struct Ui:
         self.nodes[id].cmds.append(Cmd(CMD_GLYPH, x, y, 0, 0, color, cp, ""))
 
     def cmd_text_fit(self, id: int, x: int, y: int, text: str, max_w: int, color: int) -> int:
-        """`text` cortado em `max_w` pixels, terminando em `…` quando não cabe.
-        Devolve a largura desenhada, para quem monta colunas saber onde a
-        próxima pode começar. Quem desenha texto que não mediu passa por aqui:
-        recortar o widget só ESCONDE o excesso, ele ainda pinta por cima da
-        moldura que a caixa devia respeitar."""
+        """`text` cut to `max_w` pixels, ending in `…` when it does not fit.
+        Returns the width drawn, so whoever builds columns knows where the next
+        one can begin. Whoever draws text they did not measure goes through here:
+        clipping the widget only HIDES the excess, it still paints over the
+        frame the box was supposed to respect."""
         cw = self.cell_w
         if max_w < cw or len(text) == 0:
             return 0
@@ -766,13 +766,13 @@ struct Ui:
         if w <= max_w:
             self.cmd_text(id, x, y, text, color)
             return w
-        budget = max_w // cw - 1        # uma célula é do …
+        budget = max_w // cw - 1        # one cell belongs to the …
         if budget > 0:
             self.cmd_text(id, x, y, text[0:budget], color)
         self.cmd_glyph(id, x + budget * cw, y, CP_ELLIPSIS, color)
         return (budget + 1) * cw
 
-    # ---------- a construção, por tipo ----------
+    # ---------- the construction, by type ----------
 
     def scroll_thumb(self, id: int) -> Rect:
         nd = self.nodes[id]
@@ -840,8 +840,8 @@ struct Ui:
         nd.dirty = False
 
     def build_dirty(self, id: int) -> int:
-        """Reescreve quem sujou, e devolve quantos comandos a árvore tem. É o
-        `draw` sem o `Painter` — o que um teste headless pode medir."""
+        """Rewrites whoever went dirty, and returns how many commands the tree
+        has. It is `draw` without the `Painter` — what a headless test measures."""
         if not self.is_vis(id):
             return 0
         if self.nodes[id].dirty:
@@ -856,7 +856,7 @@ struct Ui:
     def build_all(self) -> int:
         return 0 if self.root < 0 else self.build_dirty(self.root)
 
-    # ---------- o desenho ----------
+    # ---------- the drawing ----------
 
     def draw_walk(self, p: Painter, id: int, clip: Rect):
         if not self.is_vis(id):
@@ -894,12 +894,12 @@ struct Ui:
             self.draw_walk(p, self.root, Rect(0, 0, w, h))
         p.clip_off()
 
-    # ---------- a entrada ----------
+    # ---------- the input ----------
 
     def hit_walk(self, id: int, x: int, y: int) -> int:
         if not self.is_vis(id) or not rect_has(self.nodes[id].rect, x, y):
             return -1
-        best = id                  # o último filho que contém o ponto ganha
+        best = id                  # the last child containing the point wins
         c = self.nodes[id].first_child
         while c >= 0:
             got = self.hit_walk(c, x, y)
@@ -912,8 +912,8 @@ struct Ui:
         return -1 if self.root < 0 else self.hit_walk(self.root, x, y)
 
     def emit(self, fn: def(int, int)?, id: int, arg: int):
-        # o parâmetro é LOCAL, então a prova de não-nulo vale aqui (43.1) — é a
-        # razão de o sinal passar por esta função em vez de ser chamado no lugar
+        # the parameter is LOCAL, so the non-null proof holds here (43.1) — it is
+        # the reason the signal goes through this function instead of being called in place
         if fn != None:
             fn(id, arg)
 
@@ -993,7 +993,7 @@ struct Ui:
         return False
 
     def node_input(self, id: int, ev: Event) -> bool:
-        """A entrada dirigida a UM widget; True = consumiu."""
+        """The input aimed at ONE widget; True = consumed."""
         nd = self.nodes[id]
         match nd.kind:
             case WK_BUTTON:
@@ -1030,7 +1030,7 @@ struct Ui:
                         nd.dragging = True
                         nd.grab = pp - (t.y if vert0 else t.x)
                     else:
-                        # clique na trilha: pula uma página para aquele lado
+                        # a click on the track: jump one page that way
                         nv = nd.value - nd.page if pp < (t.y if vert0 else t.x) else nd.value + nd.page
                         self.scroll_set(id, nd.total, nd.page, nv)
                         self.emit(nd.sig_scroll, id, nd.value)
@@ -1089,13 +1089,13 @@ struct Ui:
                 t = self.hit(ev.x, ev.y)
                 if t < 0:
                     return False
-                # foco: o alvo se for focável, senão o ancestral focável mais perto
+                # focus: the target if focusable, else the nearest focusable ancestor
                 f = t
                 while f >= 0 and not self.nodes[f].focusable:
                     f = self.nodes[f].parent
                 if f >= 0:
                     self.focus_set(f)
-                # sobe até alguém consumir (é aqui que o split pega o divisor)
+                # bubbles up until somebody consumes it (this is where the split takes the divider)
                 h = t
                 while h >= 0:
                     if self.node_input(h, ev):
@@ -1115,9 +1115,9 @@ struct Ui:
                     return self.node_input(self.capture, ev)
                 t2 = self.hit(ev.x, ev.y)
                 self.set_hover(t2)
-                # entrega o movimento a quem está sob o cursor, subindo até
-                # consumir (o `_gui_input` do Godot): é assim que uma parte de um
-                # widget composto acende sem prender o mouse
+                # hands the movement to whoever is under the cursor, bubbling up
+                # until it is consumed (Godot's `_gui_input`): it is how one part of
+                # a composite widget lights up without capturing the mouse
                 while t2 >= 0:
                     if self.node_input(t2, ev):
                         return True
@@ -1140,6 +1140,6 @@ struct Ui:
 
 
 def new_ui(cell_w: int, cell_h: int) -> Ui:
-    """A célula da fonte vem de fora: o toolkit não fala com o driver, e é isso
-    que deixa o layout ser medido sem janela."""
+    """The font cell comes from outside: the toolkit does not talk to the driver,
+    and that is what lets the layout be measured without a window."""
     return Ui([], -1, -1, -1, -1, -1, theme_dark(), cell_w, cell_h, 0, 0, False)

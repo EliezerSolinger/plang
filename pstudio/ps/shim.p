@@ -47,8 +47,8 @@ def shim_height() -> i32:
 # The kind is the return value and the details stay here, read one accessor at
 # a time: a struct would have to cross as a pointer, and a pointer does not
 # cross (45.5).
-# a tradução do evento do pgfx para o número que atravessa — uma só, porque
-# `poll` e `wait` (114) devolvem a mesma coisa
+# the translation from a pgfx event to the number that crosses — only one,
+# because `poll` and `wait` (114) return the same thing
 private def kind_of_ev() -> i32:
     match EV.kind:
         case PGE_QUIT:
@@ -175,8 +175,8 @@ def shim_clip_set(in s: CStr):
     pgfx_clipboard_set(buf)
     free(buf)
 
-# devolve emprestado: um buffer deste módulo, válido até a próxima chamada (a
-# convenção do `strerror`, que é a da 83.1)
+# returns a borrow: a buffer of this module's, valid until the next call
+# (`strerror`'s convention, which is 83.1's)
 private G_CLIP: *char = None
 
 def shim_clip_get() -> CStr:

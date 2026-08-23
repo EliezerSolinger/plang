@@ -5,19 +5,19 @@ undone line one
 palette 2 Fold All
 folded 4
 build cmd Build
-pediu build True alvo (padrão)
-alvos 1 build/bin/ppack
-pediu alvo build/bin/ppack
-erro posicionado True 2 3
-foi para o erro True
-marca de erro 4
-cursor em 2
-manifesto cmd Manifest: Set Default Target...
-a escolher o alvo padrão True 2
-pediu alvo padrão build/bin/ppack e não construiu False
-a perguntar dependência (nome@versão) 32
-digitado >nada
-recusou sem versão uma dependência é `nome@versão` — a v1 não tem resolvedor
-pediu a dependência tar@0.1.0
+asked for a build True target (default)
+targets 1 build/bin/ppack
+asked for target build/bin/ppack
+error positioned True 2 3
+went to the error True
+error mark 4
+caret at 2
+manifest cmd Manifest: Set Default Target...
+choosing the default target True 2
+asked for the default target build/bin/ppack and did not build False
+asking dependency (name@version) 32
+typed >nothing
+refused without a version a dependency is `name@version` — v1 has no resolver
+asked for the dependency tar@0.1.0
 drawn yes
 selftest ok

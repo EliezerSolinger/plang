@@ -1,37 +1,38 @@
-# hl.ph — o lexer DO COMPILADOR atravessando a fronteira, como escalares.
+# hl.ph — THE COMPILER's lexer crossing the boundary, as scalars.
 #
-# 113: o realce do editor sempre usou o lexer de verdade (`lex_ex` em modo
-# tolerante), e é isso que faz o editor pintar o que o COMPILADOR vê — não o que
-# um segundo lexer, escrito para exibir, acharia. Migrar o editor para pscript
-# não muda essa decisão: o lexer fica em P, e o que atravessa é escalar.
+# 113: the editor's highlighting has always used the real lexer (`lex_ex` in
+# tolerant mode), and that is what makes the editor paint what the COMPILER sees
+# — not what a second lexer, written for display, would think. Migrating the
+# editor to pscript does not change that decision: the lexer stays in P, and what
+# crosses is scalar.
 #
-# Sua decisão (2026-08-21): *"eu teria que fazer uma interface/header/camada no
-# compilador em P pra isso né"* — sim, e é esta, com duas correções em relação ao
-# que eu tinha dito antes:
+# Your decision (2026-08-21): *"I would have to make an interface/header/layer
+# in the compiler in P for that, right"* — yes, and this is it, with two
+# corrections relative to what that phrase suggests:
 #
-#   * NÃO é mexer no compilador: o lexer já é um header (`selfhost/lexer.ph`), e
-#     este arquivo é um ADAPTADOR ao lado do editor, do mesmo tipo que o
-#     `shim.p` é para o SDL;
-#   * NÃO é conversa de codepoint em codepoint: o `CStr` (81/84/85) é ponteiro
-#     MAIS comprimento, como valor, e não aloca nada — o texto inteiro atravessa
-#     numa chamada.
+#   * it is NOT touching the compiler: the lexer is already a header
+#     (`selfhost/lexer.ph`), and this file is an ADAPTER next to the editor, of
+#     the same kind `shim.p` is for SDL;
+#   * it is NOT a codepoint-by-codepoint conversation: a `CStr` (81/84/85) is a
+#     pointer PLUS a length, as a value, and allocates nothing — the whole text
+#     crosses in one call.
 #
-# O que este adaptador NÃO faz, de propósito: classificar comentário, montar
-# span por linha, recuperar declaração, ordenar candidato. Isso é LÓGICA e mora
-# no pscript (`lib_hl.psc`, `lib_complete.psc`). Aqui só se lexa e se dizem
-# números — e o texto do token não volta: quem quer o nome de um identificador
-# fatia o próprio texto pela (linha, coluna, comprimento), que ele já tem.
+# What this adapter does NOT do, on purpose: classify comments, build per-line
+# spans, recover declarations, rank candidates. That is LOGIC and lives in
+# pscript (`lib_hl.psc`, `lib_complete.psc`). Here it only lexes and states
+# numbers — and a token's text does not come back: whoever wants an identifier's
+# name slices their own text by (line, column, length), which they already have.
 include <stddef.h>
 import <stl/cstr.ph>
 
-# ---- as classes de EXIBIÇÃO ----
+# ---- the DISPLAY classes ----
 HLC_TEXT: const i32 = 0
 HLC_KW: const i32 = 1
 HLC_STR: const i32 = 2
 HLC_NUM: const i32 = 3
-HLC_PUNCT: const i32 = 4       # o comentário é do lado pscript: o lexer os come
+HLC_PUNCT: const i32 = 4       # the comment is the pscript side's: the lexer eats them
 
-# ---- os `kind` que o completamento precisa distinguir (o resto é OTHER) ----
+# ---- the `kind`s completion needs to tell apart (the rest is OTHER) ----
 HLK_OTHER: const i32 = 0
 HLK_EOF: const i32 = 1
 HLK_NEWLINE: const i32 = 2
@@ -51,16 +52,16 @@ HLK_RPAREN: const i32 = 15
 HLK_STAR: const i32 = 16
 HLK_CONST: const i32 = 17
 
-# Lexa o texto inteiro e GUARDA os tokens até a próxima chamada (a convenção do
-# `strerror`, que é a mesma do `pmod_text` da 84: nada para ninguém liberar).
-# Devolve quantos tokens saíram.
+# Lexes the whole text and KEEPS the tokens until the next call (`strerror`'s
+# convention, which is the same as 84's `pmod_text`: nothing for anybody to
+# free). Returns how many tokens came out.
 def hl_lex(in text: CStr) -> i32
-# (linha, coluna, comprimento) em base ZERO e em CODEPOINTS — que é a unidade em
-# que o editor mede, porque `len(s)` no pscript são codepoints (3.4)
+# (line, column, length) ZERO-based and in CODEPOINTS — which is the unit the
+# editor measures in, because `len(s)` in pscript is codepoints (3.4)
 def hl_tok_line(i: i32) -> i32
 def hl_tok_col(i: i32) -> i32
 def hl_tok_cp(i: i32) -> i32
 def hl_tok_class(i: i32) -> i32
 def hl_tok_kind(i: i32) -> i32
-# solta o que a última lexada guardou (o editor chama quando fecha o arquivo)
+# releases what the last lex kept (the editor calls this when it closes the file)
 def hl_release()

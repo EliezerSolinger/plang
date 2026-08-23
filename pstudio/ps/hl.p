@@ -1,12 +1,12 @@
-# hl.p — o adaptador (ver hl.ph). Lexa com o lexer do compilador e responde em
-# números; a lógica de realce e de completamento mora no pscript.
+# hl.p — the adapter (see hl.ph). Lexes with the compiler's lexer and answers in
+# numbers; the highlighting and completion logic lives in pscript.
 include <stdlib.h>
 include <string.h>
 import "hl.ph"
 import "../../selfhost/lexer.ph"
 
 
-# um token, só com o que atravessa
+# one token, with only what crosses
 struct HlTok:
     line: i32
     col: i32
@@ -25,7 +25,7 @@ private def cp_count(s: const *char) -> i32:
             n += 1
     return n
 
-# a arena que o lexer tolerante enche (os blocos são malloc puro)
+# the arena the tolerant lexer fills (the blocks are plain malloc)
 private def arena_drop_hl(a: *Arena):
     blk: *ArenaBlock = a->head
     while blk != None:
@@ -96,9 +96,9 @@ def hl_release():
 
 def hl_lex(in text: CStr) -> i32:
     hl_release()
-    # o lexer quer bytes terminados em zero, e o empréstimo do `CStr` é só o par
-    # (ponteiro, comprimento): a cópia acontece aqui, uma vez por lexada — que é
-    # o que o editor em P também fazia (`save_text`)
+    # the lexer wants zero-terminated bytes, and a `CStr` borrow is only the pair
+    # (pointer, length): the copy happens here, once per lex — which is what the
+    # editor in P did too (`save_text`)
     buf: *char = malloc(text.len + 1)
     if buf == None:
         return 0
@@ -118,8 +118,8 @@ def hl_lex(in text: CStr) -> i32:
         g_toks[g_n].cls = class_of(t)
         g_toks[g_n].kind = kind_of(t->kind)
         g_n += 1
-    # a lista de tokens é do CHAMADOR (lexer.ph) e os lexemas são da arena: os
-    # dois vão embora aqui, porque o que se guarda são só os números copiados
+    # the token list belongs to the CALLER (lexer.ph) and the lexemes to the
+    # arena: both go away here, because what is kept is only the copied numbers
     free(tl.toks)
     arena_drop_hl(&a)
     free(buf)

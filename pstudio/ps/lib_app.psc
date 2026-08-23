@@ -1,16 +1,16 @@
-"""O editor montado, em pscript: abas, árvore de arquivos, paleta de comandos,
-busca e barra de estado (porte do `pstudio/app.p`, camada 5 do DESIGN).
+"""The assembled editor, in pscript: tabs, file tree, command palette,
+search and status bar (a port of `pstudio/app.p`, layer 5 of the DESIGN).
 
-O que NÃO está aqui, de propósito: a janela, o laço de eventos, o relógio, a
-área de transferência e as caixas de confirmação. Tudo isso é DRIVER, e o driver
-mora no `app.psc` (que fala com o `shim.p`). A ligação entre os dois é feita de
-funções guardadas em campo — `clip_get`, `confirm_close`, `read_file` — que o
-`app.psc` preenche na partida.
+What is NOT here, on purpose: the window, the event loop, the clock, the
+clipboard and the confirmation boxes. All of that is DRIVER, and the driver lives
+in `app.psc` (which talks to `shim.p`). The link between the two is made of
+functions kept in fields — `clip_get`, `confirm_close`, `read_file` — which
+`app.psc` fills in at startup.
 
-Por que assim: é a mesma razão do `Painter` no `pui` (o pacote) e do `load_text` no
-`lib_cv`. Com o driver de fora, o editor INTEIRO — abas, árvore, paleta, busca,
-atalhos — roda headless num teste, e o que sobra para o `app.psc` é uma página
-que não tem lógica para errar.
+Why like this: it is the same reason as the `Painter` in `pui` (the package) and
+`load_text` in `lib_cv`. With the driver outside, the WHOLE editor — tabs, tree,
+palette, search, shortcuts — runs headless in a test, and what is left for
+`app.psc` is a page with no logic to get wrong.
 """
 import <pui> as pui
 import lib_cv as cvm
@@ -19,19 +19,19 @@ import os
 import path
 
 
-const BLINK_MS: int = 500        # o piscar do cursor (DESIGN.md)
-const MAX_SCAN: int = 20000      # teto da varredura do projeto
-const PAL_ROWS: int = 12         # linhas visíveis da paleta
-const TREE_MIN_CP: int = 18      # largura mínima da árvore, em caracteres
-const K_F2: int = 1073741883     # o F2 do SDL
+const BLINK_MS: int = 500        # the cursor blink (DESIGN.md)
+const MAX_SCAN: int = 20000      # ceiling on the project scan
+const PAL_ROWS: int = 12         # visible palette rows
+const TREE_MIN_CP: int = 18      # the tree's minimum width, in characters
+const K_F2: int = 1073741883     # SDL's F2
 
 
 enum PalMode:
-    PAL_FILES         # busca difusa de arquivo (o padrão)
-    PAL_COMMANDS      # o prefixo '>'
-    PAL_GOTO          # o prefixo ':'
-    PAL_BUILD         # o prefixo '!': um alvo do grafo
-    PAL_TEXTO         # uma linha DIGITADA, para quem pergunta em vez de listar
+    PAL_FILES         # fuzzy file search (the default)
+    PAL_COMMANDS      # the '>' prefix
+    PAL_GOTO          # the ':' prefix
+    PAL_BUILD         # the '!' prefix: a graph target
+    PAL_TEXT          # a TYPED line, for when it asks instead of offering
 
 
 struct Tab:
@@ -53,15 +53,15 @@ struct PalItem:
     score: int
 
 
-# os nomes escondidos da árvore e do índice da paleta
+# the names hidden from the tree and from the palette's index
 def is_hidden(name: str) -> bool:
     if name.startswith("."):
         return True
     return name == "out" or name == "node_modules" or name == "__pycache__"
 
 
-# difuso: casa como subsequência, com bônus para acerto seguido e para começo de
-# palavra. -1 = não casa. O modelo do ctrl+p do Sublime, simplificado.
+# fuzzy: matches as a subsequence, with a bonus for consecutive hits and for a
+# word start. -1 = no match. Sublime's ctrl+p model, simplified.
 def fuzzy_score(hay: str, needle: str) -> int:
     if len(needle) == 0:
         return 1
@@ -90,19 +90,19 @@ def fuzzy_score(hay: str, needle: str) -> int:
     return score - len(hay) // 4
 
 
-# a paleta de comandos: nome e id, numa cadeia só (módulo importado não roda
-# statement, e uma tabela de duas colunas cabe numa linha por comando)
+# the command palette: name and id, in a single string (an imported module does
+# not run statements, and a two-column table fits one line per command)
 const COMMANDS: str = "Save=0;Save All=1;Close Tab=2;Reload File=3;Toggle File Tree=4;Zoom In=5;Zoom Out=6;Zoom Reset=7;Find=8;Go To Line=9;Quit=10;Fold=11;Unfold=11;Fold All=12;Unfold All=13;Toggle Comment=14;Move Line Up=15;Move Line Down=16;Duplicate Line=17;Delete Line=18;Join Lines=19;Toggle Bookmark=20;Next Bookmark=21;Clear Bookmarks=22;Toggle Minimap=23;Build=24;Build Target...=25;Run=26;Clean=27;Stop Build=28;Go To Build Error=29;Manifest: Open pack.json=30;Manifest: Set Default Target...=31;Manifest: Add Dependency...=32"
 
 
 struct App:
     u: pui.Ui
-    root: int          # painel raiz (empilha o layout e a paleta)
+    root: int          # the root panel (stacks the layout and the palette)
     tabbar: int
-    tree_pane: int     # caixa com o cabeçalho "FOLDERS" e as linhas
-    tree: int          # as linhas (o retângulo dele É a área das linhas)
+    tree_pane: int     # box with the "FOLDERS" header and the rows
+    tree: int          # the rows (its rectangle IS the row area)
     split: int
-    editors: int       # caixa vertical: [cvhost | barra de busca]
+    editors: int       # vertical box: [cvhost | search bar]
     cvhost: int
     findbar: int
     findinput: int
@@ -122,20 +122,20 @@ struct App:
     palsel: int
     paltop: int
     files: list<PalItem>
-    find_re: bool      # busca por regex (a consulta começa com '/')
+    find_re: bool      # regex search (the query starts with '/')
     running: bool
-    dirty_ui: bool     # um quadro precisa ser apresentado
-    now_ms: int        # o relógio, que vem do driver
-    want_open: str     # 114: um arquivo que o app quer e o driver tem de LER
-    want_msg: str      # uma mensagem para a barra de estado (falha de escrita)
-    # F6: o BUILD. O app não constrói — ele PEDE, como pede a leitura de um
-    # arquivo, e o driver atende no laço de eventos. A razão é a mesma da 114:
-    # a lógica do editor é síncrona de propósito, e um `await` aqui obrigaria
-    # todo chamador a esperar.
+    dirty_ui: bool     # a frame needs presenting
+    now_ms: int        # the clock, which comes from the driver
+    want_open: str     # 114: a file the app wants and the driver has to READ
+    want_msg: str      # a message for the status bar (a write failure)
+    # F6: the BUILD. The app does not build — it ASKS, the way it asks for a
+    # file to be read, and the driver serves it in the event loop. The reason is
+    # the same as 114's: the editor's logic is synchronous on purpose, and an
+    # `await` here would force every caller to wait.
     #
-    # `want_build` é o alvo ("" = o padrão do grafo), `want_run` diz se depois
-    # de construir o programa deve correr, e `build_msg` é o que a barra de
-    # estado mostra enquanto isso acontece.
+    # `want_build` is the target ("" = the graph's default), `want_run` says
+    # whether the program should run after building, and `build_msg` is what the
+    # status bar shows while that happens.
     want_build: str
     want_build_on: bool
     want_run: bool
@@ -143,51 +143,52 @@ struct App:
     build_msg: str
     build_busy: bool
     build_stop: bool
-    # os alvos que este projeto constrói, postos aqui pelo DRIVER a partir do
-    # grafo: o editor não sabe o que um projeto constrói, e não devia saber
+    # the targets this project builds, put here by the DRIVER from the graph:
+    # the editor does not know what a project builds, and should not know
     build_targets: list<str>
     build_total: int
-    build_feitas: int
-    build_erro: str
-    # F6: para onde o primeiro erro do build aponta. O editor ABRE o arquivo e
-    # põe o cursor lá — que é o que "clicar no erro" faz, sem precisar do clique.
-    build_pos_arq: str
-    build_pos_lin: int
+    build_done: int
+    build_error: str
+    # F6: where the build's first error points. The editor OPENS the file and
+    # puts the cursor there — which is what "clicking the error" does, without the click.
+    build_pos_file: str
+    build_pos_line: int
     build_pos_col: int
-    # o programa que o `Run` lançou. Zero quando não há nenhum — e o número é o
-    # PID, porque é isso que `os.spawn` devolve (ver a bateria do `os.spawn`).
+    # the program `Run` launched. Zero when there is none — and the number is
+    # the PID, because that is what `os.spawn` returns (see the `os.spawn` battery).
     run_pid: int
     want_stop_run: bool
-    # F6: o MANIFESTO. O editor não inventa um formulário — ele já é um editor
-    # de texto, e `pack.json` é texto. O que a paleta acrescenta é o que é chato
-    # de escrever à mão e fácil de escrever errado: o alvo padrão (que tem de
-    # ser um alvo QUE EXISTE, e o grafo sabe quais são) e uma dependência (que
-    # tem de ser resolvida, conferida e travada, e o `ppack` é que sabe fazê-lo).
+    # F6: the MANIFEST. The editor does not invent a form — it already is a text
+    # editor, and `pack.json` is text. What the palette adds is what is tedious
+    # to write by hand and easy to write wrong: the default target (which has to
+    # be a target THAT EXISTS, and the graph knows which ones do) and a
+    # dependency (which has to be resolved, checked and locked, and `ppack` is
+    # the one that knows how).
     #
-    # Como tudo o mais aqui, o app PEDE e o driver atende.
-    want_manifest_default: str      # "" = nada a pedir
-    want_manifest_dep: str          # "nome@versão"
-    pal_texto_para: int             # o comando à espera do que se digitar
-    pal_prompt: str                 # ... e o que se pergunta a quem digita
-    # quando a paleta de alvos serve para ESCOLHER e não para construir
+    # Like everything else here, the app ASKS and the driver serves.
+    want_manifest_default: str      # "" = nothing to ask for
+    want_manifest_dep: str          # "name@version"
+    pal_text_for: int               # the command waiting for what gets typed
+    pal_prompt: str                 # ... and what is asked of whoever types
+    # when the target palette is for CHOOSING and not for building
     pal_build_default: bool
 
-    # ---- o driver, injetado pelo `app.psc` ----
-    read_file: (def(str) -> str)?        # "" quando não deu
+    # ---- the driver, injected by `app.psc` ----
+    read_file: (def(str) -> str)?        # "" when it did not work
     write_file: (def(str, str) -> bool)?
     mtime_of: (def(str) -> int)?
     clip_get: (def() -> str)?
     clip_set: def(str)?
-    confirm_close: (def(str) -> int)?    # 0=salvar 1=descartar 2=cancelar
+    confirm_close: (def(str) -> int)?    # 0=save 1=discard 2=cancel
     confirm_reload: (def(str) -> bool)?
     set_title: def(str)?
-    zoom_step: def(int)?        # 115: +1/-1/0(reset) — o driver troca a grade e
-                                #   devolve a célula nova por `set_cell`
+    zoom_step: def(int)?        # 115: +1/-1/0(reset) — the driver swaps the grid
+                                #   and returns the new cell through `set_cell`
 
-    # ---------- o driver, atrás de um método cada ----------
-    # A prova de não-nulo é sobre LOCAL (43.1), então cada função do driver é
-    # lida para uma variável e chamada DENTRO do ramo. Fazer isso uma vez por
-    # função aqui deixa o resto do arquivo sem um `if` em cada uso.
+    # ---------- the driver, one method each behind it ----------
+    # The non-null proof is about LOCALS (43.1), so each driver function is read
+    # into a variable and called INSIDE the branch. Doing that once per function
+    # here leaves the rest of the file without an `if` at every use.
 
     def do_read(self, p: str) -> str:
         f = self.read_file
@@ -222,7 +223,7 @@ struct App:
         f = self.confirm_close
         if f != None:
             return f(name)
-        return 1              # sem driver, descarta (é o que um teste quer)
+        return 1              # with no driver, discard (which is what a test wants)
 
     def do_confirm_reload(self, name: str) -> bool:
         f = self.confirm_reload
@@ -250,13 +251,13 @@ struct App:
     def open_file(self, p: str):
         for i in range(len(self.tabs)):
             if self.tabs[i].cv.path == p:
-                self.select_tab(i)          # já aberto: só ativa
+                self.select_tab(i)          # already open: just activate it
                 return
         text = self.do_read(p)
-        # 114: LER é `await` no pscript (76.2), e este caminho é síncrono de
-        # propósito (um índice que espera obriga todo chamador a esperar). Então
-        # o app PEDE e o driver lê: `want_open` é o pedido, e o driver chama
-        # `open_file` outra vez com o texto já em mão.
+        # 114: READING is `await` in pscript (76.2), and this path is synchronous
+        # on purpose (an index that waits forces every caller to wait). So the
+        # app ASKS and the driver reads: `want_open` is the request, and the
+        # driver calls `open_file` again with the text already in hand.
         if len(text) == 0 and path.isfile(p):
             self.want_open = p
             return
@@ -299,8 +300,8 @@ struct App:
             self.u.relayout()
         else:
             self.select_tab(i - 1 if i > 0 else 0)
-        # a barra de abas e a árvore são RETIDAS e o retângulo delas não mudou:
-        # sem sujá-las à mão, a aba fechada ficaria pintada na tela
+        # the tab bar and the tree are RETAINED and their rectangle did not
+        # change: without dirtying them by hand, the closed tab would stay painted
         self.u.queue_redraw(self.tabbar)
         self.u.queue_redraw(self.tree)
         self.update_status()
@@ -339,11 +340,11 @@ struct App:
             self.u.set_text(self.status, s)
         self.dirty_ui = True
 
-    # ---------- a árvore ----------
+    # ---------- the tree ----------
 
     def dir_rows(self, dir: str, depth: int, at: int) -> int:
-        """Insere as linhas de um diretório em `at`, diretório primeiro. Devolve
-        onde a inserção parou."""
+        """Inserts a directory's rows at `at`, directories first. Returns where
+        the insertion stopped."""
         names: list<str> = []
         if not path.isdir(dir):
             return at
@@ -370,7 +371,7 @@ struct App:
         return pos
 
     def scan_files(self, dir: str, depth: int) -> int:
-        """O índice da paleta: uma varredura recursiva, com teto."""
+        """The palette's index: a recursive scan, with a ceiling."""
         if depth > 8 or len(self.files) >= MAX_SCAN:
             return len(self.files)
         names: list<str> = []
@@ -407,7 +408,7 @@ struct App:
         if not e.is_dir:
             return
         if e.expanded:
-            # tira os descendentes (as linhas mais fundas logo abaixo)
+            # removes the descendants (the deeper rows right below)
             j = i + 1
             while j < len(self.entries) and self.entries[j].depth > e.depth:
                 j += 1
@@ -420,7 +421,7 @@ struct App:
             self.dir_rows(e.fullpath, e.depth + 1, i + 1)
             e.expanded = True
 
-    # ---------- a paleta ----------
+    # ---------- the palette ----------
 
     def palette_open(self, mode: PalMode):
         self.palmode = mode
@@ -438,24 +439,24 @@ struct App:
         self.palette_filter()
         self.dirty_ui = True
 
-    def perguntar(self, prompt: str, para: int):
-        """Abre a paleta a PERGUNTAR, em vez de a oferecer.
+    def ask(self, prompt: str, for_cmd: int):
+        """Opens the palette ASKING, instead of offering.
 
-        O editor não tem caixas de diálogo, e não é falta: ele tem uma linha de
-        entrada que já serve para procurar arquivo, comando e número de linha —
-        e perguntar é a quarta coisa que se faz com ela. Uma janela modal com um
-        campo e dois botões seria um mecanismo novo para o que já existe, e
-        obrigaria a decidir onde ela fica, quanto mede e o que acontece quando a
-        janela encolhe."""
+        The editor has no dialog boxes, and that is not a gap: it has an input
+        line that already serves to look for a file, a command and a line number
+        — and asking is the fourth thing you do with it. A modal window with one
+        field and two buttons would be a new mechanism for what already exists,
+        and would force a decision about where it sits, how big it is and what
+        happens when the window shrinks."""
         self.pal_prompt = prompt
-        self.pal_texto_para = para
-        self.palette_open(PAL_TEXTO)
+        self.pal_text_for = for_cmd
+        self.palette_open(PAL_TEXT)
 
-    def texto_aceite(self, para: int, txt: str):
-        """O que se digitou, entregue a quem perguntou."""
-        if para == 32:
+    def text_accepted(self, for_cmd: int, txt: str):
+        """What was typed, handed to whoever asked."""
+        if for_cmd == 32:
             if "@" not in txt:
-                self.build_msg = "uma dependência é `nome@versão` — a v1 não tem resolvedor"
+                self.build_msg = "a dependency is `name@version` — v1 has no resolver"
                 self.update_status()
                 return
             self.want_manifest_dep = txt
@@ -471,16 +472,16 @@ struct App:
 
     def palette_filter(self):
         q = self.u.text_of(self.palinput)
-        if self.palmode == PAL_TEXTO:
-            # a perguntar: o que se digita é RESPOSTA, e um `>` no meio dela é
-            # um caractere e não um modo
+        if self.palmode == PAL_TEXT:
+            # asking: what gets typed is an ANSWER, and a `>` in the middle of
+            # it is a character and not a mode
             self.palitems = []
             self.palsel = 0
             self.paltop = 0
             rot0 = self.pal_prompt + ": " + (q if len(q) > 0 else "…")
             self.palitems.append(PalItem(rot0, q, 0))
             return
-        # o prefixo escolhe o modo (Sublime): '>' comandos, ':' ir para a linha
+        # the prefix picks the mode (Sublime): '>' commands, ':' go to line
         if q.startswith(">"):
             self.palmode = PAL_COMMANDS
             q = q[1:len(q)]
@@ -488,8 +489,8 @@ struct App:
             self.palmode = PAL_GOTO
             q = q[1:len(q)]
         elif q.startswith("!"):
-            # F6: `!` escolhe um ALVO do grafo. O prefixo é a mesma ideia do
-            # Sublime — quem já sabe o nome escreve-o, quem não sabe vê a lista.
+            # F6: `!` picks a graph TARGET. The prefix is Sublime's idea —
+            # whoever knows the name types it, whoever does not sees the list.
             self.palmode = PAL_BUILD
             q = q[1:len(q)]
         else:
@@ -506,14 +507,14 @@ struct App:
                         self.palitems.append(PalItem(parts[0], parts[1], sc))
             case PAL_GOTO:
                 self.palitems.append(PalItem("go to line " + (q if len(q) > 0 else "…"), q, 0))
-            case PAL_TEXTO:
-                # não há lista: o item É o que se está a escrever. Existe para
-                # a paleta poder PERGUNTAR, e não só oferecer.
+            case PAL_TEXT:
+                # there is no list: the item IS what is being typed. It exists
+                # so the palette can ASK, and not only offer.
                 rot = self.pal_prompt + ": " + (q if len(q) > 0 else "…")
                 self.palitems.append(PalItem(rot, q, 0))
             case PAL_BUILD:
-                # os alvos vêm do GRAFO, que o driver pôs aqui: o editor não
-                # sabe o que este projeto constrói, e não devia saber
+                # the targets come from the GRAPH, which the driver put here:
+                # the editor does not know what this project builds, and should not
                 for t in self.build_targets:
                     sc3 = fuzzy_score(t, q)
                     if sc3 >= 0:
@@ -523,7 +524,7 @@ struct App:
                     sc2 = fuzzy_score(it.label, q)
                     if sc2 >= 0:
                         self.palitems.append(PalItem(it.label, it.payload, sc2))
-        # maior pontuação primeiro (inserção: as listas são pequenas)
+        # highest score first (insertion: the lists are small)
         for i in range(1, len(self.palitems)):
             t = self.palitems[i]
             k = i
@@ -532,7 +533,7 @@ struct App:
                 k -= 1
             self.palitems[k] = t
         if len(self.palitems) > 200:
-            self.palitems = self.palitems[0:200]      # o resto não caberia na tela
+            self.palitems = self.palitems[0:200]      # the rest would not fit on screen
         self.u.relayout()
         self.u.queue_redraw(self.palette)
         self.dirty_ui = True
@@ -548,24 +549,24 @@ struct App:
         match mode:
             case PAL_COMMANDS:
                 self.run_command(int(payload))
-            case PAL_TEXTO:
+            case PAL_TEXT:
                 if len(payload) > 0:
-                    self.texto_aceite(self.pal_texto_para, payload)
+                    self.text_accepted(self.pal_text_for, payload)
             case PAL_BUILD:
                 if self.pal_build_default:
-                    # escolher o alvo PADRÃO do projeto: o que se pede ao driver
-                    # é uma escrita no manifesto, e não uma construção
+                    # choosing the project's DEFAULT target: what gets asked of
+                    # the driver is a write to the manifest, not a build
                     self.pal_build_default = False
                     self.want_manifest_default = payload
-                    self.build_msg = "a gravar o alvo padrão..."
+                    self.build_msg = "writing the default target..."
                     self.update_status()
                 elif self.build_busy:
-                    self.build_msg = "build já a correr"
+                    self.build_msg = "a build is already running"
                 else:
                     self.want_build = payload
                     self.want_build_on = True
                     self.want_run = False
-                    self.build_msg = "a construir " + payload + "..."
+                    self.build_msg = "building " + payload + "..."
                 self.update_status()
             case PAL_GOTO:
                 cv = self.cur_cv()
@@ -613,50 +614,50 @@ struct App:
         self.update_status()
         self.dirty_ui = True
 
-    # ---------- o erro do build, como posição ----------
+    # ---------- the build error, as a position ----------
 
-    def marcar_erro(self, texto: str) -> bool:
-        """`arquivo:linha:coluna: error: mensagem` — o formato que o compilador
-        já usa, e que o `ppack` copiou de propósito para os erros dele.
+    def mark_error(self, text: str) -> bool:
+        """`file:line:column: error: message` — the format the compiler already
+        uses, and that `ppack` copied on purpose for its own errors.
 
-        Guardar a POSIÇÃO em vez de só o texto é o que separa uma barra de
-        estado de uma IDE: com ela o editor abre o arquivo e põe o cursor lá.
-        Uma linha que não tenha esta forma é ignorada — a saída de um `cc` tem
-        muita coisa que não é diagnóstico."""
-        for linha in texto.split("\n"):
-            partes = linha.split(":")
-            if len(partes) < 4:
+        Keeping the POSITION instead of only the text is what separates a status
+        bar from an IDE: with it the editor opens the file and puts the cursor
+        there. A line that does not have this shape is ignored — a `cc`'s output
+        has plenty that is not a diagnostic."""
+        for line in text.split("\n"):
+            parts = line.split(":")
+            if len(parts) < 4:
                 continue
-            if not partes[1].isdigit() or not partes[2].isdigit():
+            if not parts[1].isdigit() or not parts[2].isdigit():
                 continue
-            resto = ":".join(partes[3:len(partes)]).strip()
-            if not resto.startswith("error") and not resto.startswith("warning"):
+            rest = ":".join(parts[3:len(parts)]).strip()
+            if not rest.startswith("error") and not rest.startswith("warning"):
                 continue
-            if not resto.startswith("error"):
-                continue           # o primeiro ERRO, não o primeiro aviso
-            self.build_pos_arq = partes[0].strip()
-            self.build_pos_lin = int(partes[1])
-            self.build_pos_col = int(partes[2])
+            if not rest.startswith("error"):
+                continue           # the first ERROR, not the first warning
+            self.build_pos_file = parts[0].strip()
+            self.build_pos_line = int(parts[1])
+            self.build_pos_col = int(parts[2])
             return True
         return False
 
-    def ir_para_erro(self) -> bool:
-        """Abre o arquivo do primeiro erro e põe o cursor nele. Devolve se
-        havia para onde ir."""
-        if len(self.build_pos_arq) == 0:
+    def goto_error(self) -> bool:
+        """Opens the first error's file and puts the cursor in it. Returns
+        whether there was anywhere to go."""
+        if len(self.build_pos_file) == 0:
             return False
-        if not path.isfile(self.build_pos_arq):
+        if not path.isfile(self.build_pos_file):
             return False
-        self.open_file(self.build_pos_arq)
+        self.open_file(self.build_pos_file)
         cv = self.cur_cv()
         if cv == None:
             return False
-        cv.buf.move_to(self.build_pos_lin - 1, self.build_pos_col - 1)
+        cv.buf.move_to(self.build_pos_line - 1, self.build_pos_col - 1)
         cv.scroll_to_caret()
-        # e a linha fica MARCADA na sarjeta, para continuar a ver-se depois de o
+        # and the line stays MARKED in the gutter, so it can still be seen after
         # cursor sair dali
         cv.buf.clear_marks(core.MARK_ERROR)
-        cv.buf.toggle_mark(self.build_pos_lin - 1, core.MARK_ERROR)
+        cv.buf.toggle_mark(self.build_pos_line - 1, core.MARK_ERROR)
         self.update_status()
         return True
 
@@ -687,18 +688,18 @@ struct App:
         elif cmd == 10:
             self.try_quit()
         elif cmd == 24 or cmd == 26:
-            # F6: play. O app PEDE; quem constrói é o driver, no mesmo laço de
-            # eventos — o motor é uma biblioteca (`packages/pbuild`) e não um
-            # processo, então o grafo é um `dict` e não um fluxo de texto.
+            # F6: play. The app ASKS; whoever builds is the driver, in the same
+            # event loop — the engine is a library (`packages/pbuild`) and not a
+            # process, so the graph is a `dict` and not a stream of text.
             if self.build_busy:
-                self.build_msg = "build já a correr"
+                self.build_msg = "a build is already running"
             else:
                 self.want_build = ""
                 self.want_build_on = True
                 self.want_run = cmd == 26
-                self.build_msg = "a construir..."
-                # o erro anterior sai da sarjeta: ele é de um build que já não é
-                # este, e uma marca velha é pior do que nenhuma
+                self.build_msg = "building..."
+                # the previous error leaves the gutter: it belongs to a build
+                # that is no longer this one, and a stale mark is worse than none
                 for t in self.tabs:
                     t.cv.buf.clear_marks(core.MARK_ERROR)
             self.update_status()
@@ -706,42 +707,43 @@ struct App:
             self.pal_build_default = False
             self.palette_open(PAL_BUILD)
         elif cmd == 30:
-            # F6, o "painel" do manifesto: ABRIR o arquivo. Um editor de texto a
-            # oferecer um formulário para editar texto seria uma camada a mais
-            # entre a pessoa e o arquivo que ela vai comitar — e o `pack.json`
-            # é pequeno, declarativo e feito para se ler.
+            # F6, the manifest "panel": OPEN the file. A text editor offering a
+            # form to edit text would be one more layer between the person and
+            # the file they are going to commit — and `pack.json` is small,
+            # declarative and made to be read.
             self.open_file(path.join(self.root_dir, "pack.json"))
         elif cmd == 31:
-            # o que um formulário faria melhor que o texto: garantir que o alvo
-            # padrão EXISTE. A lista vem do grafo, e é a mesma do `!`.
+            # what a form would do better than the text: guarantee the default
+            # target EXISTS. The list comes from the graph, the same as `!`'s.
             if len(self.build_targets) == 0:
-                self.build_msg = "não conheço os alvos deste projeto (o grafo ainda não chegou)"
+                self.build_msg = "I do not know this project's targets (the graph has not arrived yet)"
                 self.update_status()
             else:
                 self.pal_build_default = True
                 self.palette_open(PAL_BUILD)
         elif cmd == 32:
-            # e a outra: uma dependência não é uma linha que se escreve, é uma
-            # que se RESOLVE — o `ppack` busca, confere o hash, confere a
-            # assinatura e trava no lock. Aqui só se pergunta o nome.
-            self.perguntar("dependência (nome@versão)", 32)
+            # and the other one: a dependency is not a line you write, it is one
+            # you RESOLVE — `ppack` fetches, checks the hash, checks the signature
+            # and locks it. Here only the name is asked for.
+            self.ask("dependency (name@version)", 32)
         elif cmd == 27:
             self.want_clean = True
             self.build_msg = "a limpar..."
             self.update_status()
         elif cmd == 29:
-            if not self.ir_para_erro():
-                self.build_msg = "nenhum erro de build para onde ir"
+            if not self.goto_error():
+                self.build_msg = "no build error to go to"
                 self.update_status()
         elif cmd == 28:
-            # parar é um PEDIDO, não uma morte: o executor termina a aresta que
-            # está a correr e não começa outra. Matar um `cc` a meio deixa um
-            # `.o` truncado, que é exatamente o que o motor recusa depois.
+            # stopping is a REQUEST, not a killing: the executor finishes the
+            # edge that is running and does not start another. Killing a `cc`
+            # halfway leaves a truncated `.o`, which is exactly what the engine
+            # refuses afterwards.
             #
-            # O PROGRAMA, esse, morre já: ele é do utilizador e não do build.
+            # The PROGRAM, that one dies now: it is the user's and not the build's.
             self.build_stop = True
             self.want_stop_run = True
-            self.build_msg = "a parar depois desta aresta..."
+            self.build_msg = "stopping after this edge..."
             self.update_status()
         elif cmd == 8:
             self.find_open()
@@ -787,8 +789,8 @@ struct App:
         self.dirty_ui = True
 
     def check_external(self):
-        """Um arquivo mudou no disco: recarrega o que está limpo, pergunta o que
-        tem edição local."""
+        """A file changed on disk: reloads what is clean, asks about what has
+        local edits."""
         for i in range(len(self.tabs)):
             cv = self.tabs[i].cv
             if len(cv.path) == 0 or not path.exists(cv.path):
@@ -804,7 +806,7 @@ struct App:
                     self.select_tab(i)
                     self.reload_cur()
                 else:
-                    cv.mtime = m      # escolheram manter: não pergunta de novo
+                    cv.mtime = m      # they chose to keep it: do not ask again
         self.dirty_ui = True
 
     def try_quit(self):
@@ -819,8 +821,8 @@ struct App:
         self.running = False
 
     def set_cell(self, cw: int, ch: int):
-        """O driver mudou o zoom: a célula da fonte é do toolkit, então ela
-        entra por aqui e o layout se refaz."""
+        """The driver changed the zoom: the font cell belongs to the toolkit, so
+        it comes in here and the layout is redone."""
         self.u.cell_w = cw
         self.u.cell_h = ch
         self.u.relayout()
@@ -830,7 +832,7 @@ struct App:
     # ---------- atalhos globais ----------
 
     def key_shortcut(self, ev: pui.Event) -> bool:
-        """True = consumido, e não chega à árvore de widgets."""
+        """True = consumed, and it does not reach the widget tree."""
         pal_open = self.u.is_visible(self.palette)
         if pal_open and (ev.key == cvm.K_UP or ev.key == cvm.K_DOWN):
             n = len(self.palitems)
@@ -848,8 +850,8 @@ struct App:
                 self.dirty_ui = True
             return True
         cv = self.cur_cv()
-        # 115: o F2 é atalho SEM ctrl (o ctrl+F2 põe/tira a marca, o shift+F2 vai
-        # para trás) — é a navegação por marcadores do editor em P
+        # 115: F2 is a shortcut WITHOUT ctrl (ctrl+F2 sets/clears the mark,
+        # shift+F2 goes backwards) — it is the editor in P's bookmark navigation
         if ev.key == K_F2 and cv != None:
             if (ev.mods & 2) != 0:
                 cv.toggle_bookmark()
@@ -858,7 +860,7 @@ struct App:
             self.update_status()
             self.dirty_ui = True
             return True
-        if (ev.mods & 2) == 0:              # sem ctrl não é atalho global
+        if (ev.mods & 2) == 0:              # without ctrl it is not a global shortcut
             return False
         shift = (ev.mods & 1) != 0
         now = self.now_ms
@@ -949,7 +951,7 @@ struct App:
     # ---------- o quadro ----------
 
     def tick(self, now: int, blink_at: int) -> int:
-        """O piscar do cursor. Devolve o instante do último piscar."""
+        """The cursor blink. Returns the instant of the last blink."""
         self.now_ms = now
         cv = self.cur_cv()
         if now - blink_at < BLINK_MS:
@@ -960,7 +962,7 @@ struct App:
         return now
 
     def feed(self, ev: pui.Event) -> bool:
-        """Um evento: atalho global primeiro, senão a árvore de widgets."""
+        """One event: the global shortcut first, otherwise the widget tree."""
         for t in self.tabs:
             t.cv.set_now(self.now_ms)
         if ev.kind == pui.EV_KEY:
@@ -975,11 +977,11 @@ struct App:
             return True
         return False
 
-    # ---------- os três widgets do app ----------
+    # ---------- the app's three widgets ----------
 
     def tab_at(self, r: pui.Rect, px: int, py: int) -> int:
-        """A aba sob um ponto (-1 = nenhuma); marca em `tab_hover_x` se acertou
-        o ×."""
+        """The tab under a point (-1 = none); marks `tab_hover_x` if it hit the
+        ×."""
         self.tab_hover_x = False
         if not pui.rect_has(r, px, py):
             return -1
@@ -1008,8 +1010,8 @@ struct App:
                 u.cmd_rect(id, pui.Rect(x, r.y + r.h - 2, w, 2), th.accent)
             u.cmd_text(id, x + u.cell_w, r.y + (r.h - u.cell_h) // 2, t.title,
                        th.text if active else th.text_dim)
-            # marca de modificado / botão de fechar: um ponto quando sujo, um ×
-            # quando o cursor está em cima (o modelo do Sublime)
+            # modified mark / close button: a dot when dirty, an × when the
+            # cursor is over it (Sublime's model)
             cx = tab_close_x(u, x, w)
             cy = r.y + (r.h - u.cell_h) // 2
             if self.tab_hover == i and self.tab_hover_x:
@@ -1029,7 +1031,7 @@ struct App:
         was_x = self.tab_hover_x
         hit = self.tab_at(r, ev.x, ev.y)
         if ev.kind == pui.EV_MOUSE_MOVE:
-            # só suja quando o estado MUDA (senão todo movimento repinta)
+            # only dirties when the state CHANGES (otherwise every move repaints)
             if hit != was_hover or self.tab_hover_x != was_x:
                 self.tab_hover = hit
                 self.u.queue_redraw(id)
@@ -1037,7 +1039,7 @@ struct App:
         if ev.kind != pui.EV_MOUSE_DOWN or hit < 0:
             return False
         if ev.button == 2 or self.tab_hover_x:
-            self.close_tab(hit)        # botão do meio ou o × fecham a aba
+            self.close_tab(hit)        # the middle button or the × close the tab
         elif ev.button == 1:
             self.select_tab(hit)
         return True
@@ -1046,8 +1048,8 @@ struct App:
         u = self.u
         r = u.rect_of(id)
         th = u.theme
-        # sem fundo e sem cabeçalho aqui: o painel (uma caixa com bg) carrega os
-        # dois, e o divisor do SPLIT é o separador — este widget é só as linhas
+        # no background and no header here: the panel (a box with a bg) carries
+        # both, and the SPLIT's divider is the separator — this widget is only rows
         cur_path = ""
         cv = self.cur_cv()
         if cv != None:
@@ -1134,11 +1136,12 @@ struct App:
         return False
 
 
-# ---------- a montagem da árvore de widgets ----------
-# É o `init` do `app.p`, e a forma é a mesma: um PAINEL na raiz (que empilha o
-# layout e a paleta flutuante), a barra de abas DENTRO da coluna do editor (não
-# atravessando o topo, para a árvore ocupar a altura inteira, como o Sublime), e
-# a barra de busca como ÚLTIMO filho da coluna — que é o que a prende no rodapé.
+# ---------- assembling the widget tree ----------
+# It is `app.p`'s `init`, and the shape is the same: a PANEL at the root (which
+# stacks the layout and the floating palette), the tab bar INSIDE the editor's
+# column (not crossing the top, so the tree takes the full height, as in
+# Sublime), and the search bar as the column's LAST child — which is what pins it
+# to the footer.
 
 def tab_width(u: pui.Ui, t: Tab) -> int:
     return u.text_w(t.title) + u.cell_w * 4
@@ -1160,9 +1163,9 @@ def new_app(u: pui.Ui, root_dir: str) -> App:
     col = u.box(app.root, True)
     app.split = u.split(col, False)
     u.set_expand(app.split, True, True)
-    # o PAINEL da árvore é uma caixa com fundo: [ FOLDERS | linhas ]. O
-    # cabeçalho é um label de verdade, então é o layout (e não deslocamento
-    # escrito à mão) que decide onde as linhas começam.
+    # the tree's PANEL is a box with a background: [ FOLDERS | rows ]. The
+    # header is a real label, so it is the layout (and not a hand-written offset)
+    # that decides where the rows begin.
     app.tree_pane = u.box(app.split, True)
     u.set_bg(app.tree_pane, u.theme.panel)
     head = u.label(app.tree_pane, "FOLDERS")
@@ -1189,7 +1192,7 @@ def new_app(u: pui.Ui, root_dir: str) -> App:
     app.status = u.label(col, "")
     u.set_pad(app.status, 6)
 
-    # a paleta: último filho da RAIZ, então desenha por cima e ganha o hit-test
+    # the palette: the ROOT's last child, so it draws on top and wins the hit-test
     app.palette = u.custom(app.root, None)
     app.palinput = u.line_input(app.palette)
     u.on_changed(app.palinput, lambda wid, arg: app.palette_filter())
@@ -1197,19 +1200,19 @@ def new_app(u: pui.Ui, root_dir: str) -> App:
     u.on_cancel(app.palinput, lambda wid, arg: app.palette_close())
     u.set_visible(app.palette, False)
 
-    # ---- a barra de abas ----
+    # ---- the tab bar ----
     u.set_custom(app.tabbar,
                  lambda u2, id: pui.Size(0, u2.cell_h + 8),
                  lambda u2, id: app.tabbar_build(id),
                  lambda u2, id, ev: app.tabbar_input(id, ev),
                  None)
-    # ---- a árvore ----
+    # ---- the tree ----
     u.set_custom(app.tree,
                  lambda u2, id: pui.Size(u2.cell_w * TREE_MIN_CP, u2.cell_h),
                  lambda u2, id: app.tree_build(id),
                  lambda u2, id, ev: app.tree_input(id, ev),
                  None)
-    # ---- a paleta ----
+    # ---- the palette ----
     u.set_custom(app.palette,
                  lambda u2, id: pui.Size(0, 0),
                  lambda u2, id: app.pal_build(id),
