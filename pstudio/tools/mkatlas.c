@@ -13,12 +13,20 @@
 #include <string.h>
 #include <math.h>
 
-/* Two contiguous ranges: printable ASCII and Latin-1 (accents and company),
- * plus □ at the last index as the fallback. */
-#define A0 32
-#define A1 126
-#define B0 0xA0
-#define B1 0xFF
+/* The alphabets. Printable ASCII, Latin-1 (accents and company), Greek and
+ * Cyrillic — JetBrains Mono draws all four, and a comment in a language that
+ * uses one of them should not be a row of boxes.
+ *
+ * CJK and emoji are NOT here and will not be: they are thousands of glyphs, they
+ * are not monospaced at this cell width, and a grid atlas is the wrong shape for
+ * them. They render as □, and that is said out loud rather than discovered. */
+static const int ranges[][2] = {
+    {32, 126},          /* ASCII */
+    {0xA0, 0xFF},       /* Latin-1 */
+    {0x370, 0x3FF},     /* Greek and Coptic */
+    {0x400, 0x4FF},     /* Cyrillic */
+};
+#define NRANGES ((int)(sizeof(ranges) / sizeof(ranges[0])))
 /* typographic punctuation that shows up in real code/comments */
 static const int extras[] = {
     0x2013, 0x2014,                  /* – — */
@@ -29,18 +37,22 @@ static const int extras[] = {
     0x25B8, 0x25BE,                  /* ▸ ▾ (fold gutter) */
     0x25CF, 0x25C6, 0x25AA,          /* ● ◆ ▪ (breakpoint/bookmark marks) */
 };
-#define NA (A1 - A0 + 1)
-#define NB (B1 - B0 + 1)
 #define NEX ((int)(sizeof(extras) / sizeof(extras[0])))
-#define NGLYPHS (NA + NB + NEX + 1)
-#define BOX_CP 0x25A1                  /* □ WHITE SQUARE: glyph de fallback */
+#define BOX_CP 0x25A1                  /* □ WHITE SQUARE: the fallback glyph */
+#define MAXGLYPHS 2048
 
-/* codepoint -> index in the grid (the same map as the emitted fa_index) */
-static int cp_of_index(int i) {
-    if (i < NA) return A0 + i;
-    if (i < NA + NB) return B0 + (i - NA);
-    if (i < NA + NB + NEX) return extras[i - NA - NB];
-    return BOX_CP;
+/* The grid holds the codepoints the FONT ACTUALLY DRAWS, and nothing else.
+ *
+ * It used to hold whole ranges and leave a blank cell where the font had no
+ * glyph — which paints nothing at all, so an unsupported character was
+ * invisible instead of being a box. Greek and Coptic is the range that made that
+ * matter: the font draws the Greek half and not the Coptic one. So the generator
+ * ASKS, keeps what it gets, and everything else falls through to □. */
+static int cps[MAXGLYPHS];
+static int NGLYPHS;
+
+static int cmp_cp(const void *a, const void *b) {
+    return *(const int *)a - *(const int *)b;
 }
 
 static unsigned char *read_file(const char *path, long *out_len) {
@@ -97,6 +109,30 @@ int main(int argc, char **argv) {
         fprintf(stderr, "mkatlas: fonte invalida\n");
         return 1;
     }
+    /* the table: every codepoint in the ranges the font really draws, then the
+     * punctuation extras it really draws, then □ last as the fallback */
+    NGLYPHS = 0;
+    for (int r = 0; r < NRANGES; r++)
+        for (int cp = ranges[r][0]; cp <= ranges[r][1] && NGLYPHS < MAXGLYPHS - 1; cp++)
+            if (stbtt_FindGlyphIndex(&fi, cp)) cps[NGLYPHS++] = cp;
+    for (int e = 0; e < NEX && NGLYPHS < MAXGLYPHS - 1; e++)
+        if (stbtt_FindGlyphIndex(&fi, extras[e])) cps[NGLYPHS++] = extras[e];
+    /* SORTED, because `fa_index` binary-searches it and the extras above are
+     * written in the order somebody found them useful, not in numeric order.
+     * The box is appended after the sort and stays last: it is the fallback, so
+     * it is deliberately outside the range that gets searched. */
+    qsort(cps, NGLYPHS, sizeof cps[0], cmp_cp);
+    cps[NGLYPHS++] = BOX_CP;
+
+    /* the ASCII short-circuit in the emitted `fa_index` is only true if ASCII is
+     * whole and first — assert it here rather than emit a wrong index */
+    for (int i = 0; i < 95; i++)
+        if (cps[i] != 32 + i) {
+            fprintf(stderr, "mkatlas: the font is missing U+%04X; the ASCII fast path "
+                            "in fa_index assumes 32..126 are whole and first\n", 32 + i);
+            return 1;
+        }
+
     int ascent, descent, linegap;
     stbtt_GetFontVMetrics(&fi, &ascent, &descent, &linegap);
     int adv_m, lsb_m;
@@ -115,7 +151,7 @@ int main(int argc, char **argv) {
         off[s] = total;
         total += gsz;
         for (int i = 0; i < NGLYPHS; i++) {
-            int cp = cp_of_index(i);
+            int cp = cps[i];
             unsigned char *cell = grids[s] + (size_t)i * cw[s] * chh[s];
             int gi = stbtt_FindGlyphIndex(&fi, cp);
             if (gi == 0) {
@@ -150,10 +186,12 @@ int main(int argc, char **argv) {
         "#   cc pstudio/tools/mkatlas.c -o mkatlas -lm && ./mkatlas <ttf> \\\n"
         "#      pstudio/font_atlas.p pstudio/font_atlas.ph [px...]\n"
         "# %d mono grids (one per zoom step, each a REAL rasterization), %d\n"
-        "# glyphs each: ASCII %d..%d, Latin-1 %d..%d, %d punctuation extras and\n"
-        "# U+25A1 last. Inside a grid, glyph i starts at i*cell_w*cell_h.\n"
+        "# glyphs each: ASCII, Latin-1, Greek, Cyrillic, punctuation, and U+25A1\n"
+        "# last as the fallback. Only what the font REALLY draws is in the grid,\n"
+        "# so `fa_index` is a search over `fa_cps` rather than a range test.\n"
+        "# Inside a grid, glyph i starts at i*cell_w*cell_h.\n"
         "import \"font_atlas.ph\"\n\n",
-        nsizes, NGLYPHS, A0, A1, B0, B1, NEX);
+        nsizes, NGLYPHS);
     /* The pixels go to a BINARY file next to the source and the source embeds
        it (63.5): the data is the same, the .p stops being eleven thousand
        lines of decimal, and the editor still ships as a single binary because
@@ -194,17 +232,38 @@ int main(int argc, char **argv) {
     fprintf(o, "def fa_baseline(size: i32) -> i32:\n    return fa_bl[size]\n\n");
     fprintf(o, "def fa_px(size: i32) -> i32:\n    return fa_px_tbl[size]\n\n");
     fprintf(o, "def fa_count() -> i32:\n    return %d\n\n", NGLYPHS);
+    /* The codepoints, sorted — the ranges are walked in order and the extras
+     * are above all of them, so the table comes out sorted for free. Everything
+     * but the box, which is last on purpose and is the fallback. */
     fprintf(o,
-        "# codepoint -> index inside a grid; outside the ranges it is the box\n"
+        "# The %d codepoints the grid holds, ASCENDING (□ is last and is the\n"
+        "# fallback, so it is not part of the searched range).\n"
+        "fa_cps: const u32[%d] = {", NGLYPHS, NGLYPHS);
+    for (int i = 0; i < NGLYPHS; i++)
+        fprintf(o, "%s%s%d", i ? "," : "", (i % 16) ? " " : "\n    ", cps[i]);
+    fprintf(o, "}\n\n");
+    fprintf(o,
+        "# codepoint -> index in a grid; anything the font does not draw is the box.\n"
+        "#\n"
+        "# ASCII short-circuits because it is what code is made of: one compare and\n"
+        "# a subtraction for the characters that are 99%% of every frame. The rest\n"
+        "# is a binary search over %d entries — ten compares, and it is the only\n"
+        "# shape that survives a font whose coverage has holes in it.\n"
         "def fa_index(cp: u32) -> i32:\n"
         "    if cp >= %d and cp <= %d:\n"
         "        return i32(cp) - %d\n"
-        "    if cp >= %d and cp <= %d:\n"
-        "        return %d + i32(cp) - %d\n",
-        A0, A1, A0, B0, B1, NA, B0);
-    for (int e = 0; e < NEX; e++)
-        fprintf(o, "    if cp == %d:\n        return %d\n", extras[e], NA + NB + e);
-    fprintf(o, "    return %d\n\n", NGLYPHS - 1);
+        "    lo: i32 = 0\n"
+        "    hi: i32 = %d\n"
+        "    while lo < hi:\n"
+        "        mid: i32 = (lo + hi) / 2\n"
+        "        if fa_cps[mid] < cp:\n"
+        "            lo = mid + 1\n"
+        "        else:\n"
+        "            hi = mid\n"
+        "    if lo < %d and fa_cps[lo] == cp:\n"
+        "        return lo\n"
+        "    return %d\n\n",
+        NGLYPHS - 1, cps[0], cps[0] + 94, cps[0], NGLYPHS - 1, NGLYPHS - 1, NGLYPHS - 1);
     fprintf(o, "def fa_pixels(size: i32) -> const *u8:\n    return fa_data + fa_off[size]\n");
     fclose(o);
 
@@ -218,9 +277,11 @@ int main(int argc, char **argv) {
         nsizes);
     for (int s = 0; s < nsizes; s++) fprintf(h, " %d", px[s]);
     fprintf(h,
-        ".\n# Glyphs: ASCII %d..%d, Latin-1 %d..%d (accents), typographic\n"
-        "# punctuation and U+25A1 last; fa_index(cp) gives the index and\n"
-        "# fa_pixels(size) the grid (8-bit alpha, glyph i at i*cw*ch).\n\n"
+        ".\n# Glyphs: %d of them — ASCII, Latin-1, Greek, Cyrillic, typographic\n"
+        "# punctuation, and U+25A1 last as the fallback. ONLY what the font really\n"
+        "# draws is in the grid, so anything else (CJK, emoji) comes back as the\n"
+        "# box. fa_index(cp) gives the index and fa_pixels(size) the grid\n"
+        "# (8-bit alpha, glyph i at i*cw*ch).\n\n"
         "def fa_sizes() -> i32                     # how many zoom steps exist\n"
         "def fa_cell_w(size: i32) -> i32\n"
         "def fa_cell_h(size: i32) -> i32\n"
@@ -229,7 +290,7 @@ int main(int argc, char **argv) {
         "def fa_count() -> i32\n"
         "def fa_index(cp: u32) -> i32\n"
         "def fa_pixels(size: i32) -> const *u8\n",
-        A0, A1, B0, B1);
+        NGLYPHS);
     fclose(h);
 
     fprintf(stderr, "mkatlas: %d sizes, %d glyphs, %zu bytes\n",

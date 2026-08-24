@@ -51,6 +51,7 @@ enum CmdKind:
     CMD_FRAME
     CMD_TEXT
     CMD_GLYPH
+    CMD_ICON          # an icon by ID: the toolkit never sees its pixels
 
 
 # What a row of a list SAYS, without saying how it looks.
@@ -73,6 +74,7 @@ struct TabItem:
     it, and a strip of files marks the one with unsaved changes — the same mark,
     two meanings, and the widget does not need to know which."""
     text: str
+    icon: int        # ICON_NONE = none
     dot: bool        # a small mark: unsaved, or something new arrived
     closable: bool
 
@@ -89,6 +91,7 @@ struct ListRow:
     detail: str      # a dimmer second column, right-aligned. "" = none
     depth: int       # indentation in cells — a tree is a list that uses this
     prefix: str      # before the text: an arrow, a mark, a bullet. "" = none
+    icon: int        # ICON_NONE = none. Drawn between the prefix and the text.
     tone: int
     marked: bool     # the "this is the current one" row (not the SELECTED one)
 
@@ -108,6 +111,10 @@ record Size:
 # the … of elided text and of a folded block. A constant because `chr(0x2026)`
 # in a drawing loop would be one allocation per frame.
 const CP_ELLIPSIS: int = 0x2026
+
+# "this row has no icon". A constant and not a bare -1, because a row that
+# carries no picture is a decision and reads like one.
+const ICON_NONE: int = -1
 
 
 def rect_has(r: Rect, x: int, y: int) -> bool:
@@ -146,6 +153,11 @@ struct Painter:
     clip: def(int, int, int, int)
     clip_off: def()
     glyph: def(int, int, int, int)            # codepoint, x, y, colour
+    # An icon by ID, tinted like the text: the toolkit holds no pixels and no
+    # sheet, only a number somebody else can turn into a picture. It is the same
+    # boundary the glyphs already had, and it is what keeps `pui` publishable
+    # without a hundred kilobytes of one editor's icons in it.
+    icon: def(int, int, int, int)             # icon id, x, y, colour
 
 
 # the theme (a dark one, compiled in; a config file is another conversation)
@@ -187,6 +199,7 @@ struct Node:
     dragging: bool       # split, scrollbar
     grab: int            # distance from the mouse to the value when the drag began
     text: str            # label, button, input
+    icon: int            # button: an icon before the text. ICON_NONE = none.
     cursor: int          # input: the caret, in CODEPOINTS
     total: int           # scrollbar: the content
     page: int            #            the visible part
@@ -266,7 +279,7 @@ def new_node_blank() -> Node:
                 Rect(0, 0, 0, 0), 0, 0, 1, 0, 0, 0, 0,
                 True, False, False, False, True, False, False, False,
                 [],
-                False, 0, False, 0, "", 0, 1, 1, 0, [], 0, -1, [], -1, False,
+                False, 0, False, 0, "", -1, 0, 1, 1, 0, [], 0, -1, [], -1, False,
                 None, None, None, None, None,
                 None, None, None, None, None)
 
@@ -281,6 +294,8 @@ struct Ui:
     theme: th.Theme
     cell_w: int          # the font cell, given from outside
     cell_h: int
+    icon_px: int         # ... and the icon square, likewise. It defaults to the
+                         #   cell height, so a host with no icons still lays out.
     lay_w: int           # the size of the last layout (to redo it)
     lay_h: int
     needs_draw: bool     # something went dirty since the last draw: the loop looks
@@ -515,7 +530,8 @@ struct Ui:
     def tab_w(self, t: TabItem) -> int:
         """Its width: the label, room for the ×, and a cell of breathing room on
         each side."""
-        return self.text_w(t.text) + self.cell_w * (4 if t.closable else 2)
+        n = self.text_w(t.text) + self.cell_w * (4 if t.closable else 2)
+        return n + (self.icon_px + 4 if t.icon != ICON_NONE else 0)
 
     def tab_at(self, id: int, px: int, py: int) -> int:
         """Which tab is at this pixel, and whether the pixel is on its ×. -1 when
@@ -561,6 +577,21 @@ struct Ui:
 
     def set_stretch(self, id: int, weight: int):
         self.nodes[id].stretch = weight if weight > 0 else 1
+
+    def vis_children(self, id: int) -> int:
+        n = 0
+        c = self.nodes[id].first_child
+        while c >= 0:
+            if self.is_vis(c):
+                n += 1
+            c = self.nodes[c].next_sibling
+        return n
+
+    def set_icon(self, id: int, icon: int):
+        """A button's picture. `ICON_NONE` takes it away again."""
+        self.nodes[id].icon = icon
+        self.queue_redraw(id)
+        self.relayout()
 
     def set_bg(self, id: int, color: int):
         self.nodes[id].bg = color
@@ -748,6 +779,12 @@ struct Ui:
             case WK_BUTTON:
                 w = self.text_w(nd.text) + th.pad * 2
                 h = self.cell_h + th.pad * 2
+                if nd.icon != ICON_NONE:
+                    # a toolbar button is usually the picture ALONE, and then
+                    # there is no text to add a gap to
+                    w += self.icon_px + (4 if len(nd.text) > 0 else 0)
+                    if self.icon_px + th.pad * 2 > h:
+                        h = self.icon_px + th.pad * 2
             case WK_INPUT:
                 w = self.cell_w * 8
                 h = self.cell_h + th.pad
@@ -959,6 +996,9 @@ struct Ui:
     def cmd_glyph(self, id: int, x: int, y: int, cp: int, color: int):
         self.nodes[id].cmds.append(Cmd(CMD_GLYPH, x, y, 0, 0, color, cp, ""))
 
+    def cmd_icon(self, id: int, icon: int, x: int, y: int, color: int):
+        self.nodes[id].cmds.append(Cmd(CMD_ICON, x, y, 0, 0, color, icon, ""))
+
     def cmd_text_fit(self, id: int, x: int, y: int, text: str, max_w: int, color: int) -> int:
         """`text` cut to `max_w` pixels, ending in `…` when it does not fit.
         Returns the width drawn, so whoever builds columns knows where the next
@@ -1023,7 +1063,15 @@ struct Ui:
                 self.cmd_rect(id, r, bg)
                 self.cmd_frame(id, r, th.border)
                 tw = self.text_w(nd.text)
-                self.cmd_text(id, r.x + (r.w - tw) // 2, r.y + (r.h - lh) // 2, nd.text, th.text)
+                if nd.icon == ICON_NONE:
+                    self.cmd_text(id, r.x + (r.w - tw) // 2, r.y + (r.h - lh) // 2, nd.text, th.text)
+                else:
+                    gap = 4 if len(nd.text) > 0 else 0
+                    bx = r.x + (r.w - (self.icon_px + gap + tw)) // 2
+                    self.cmd_icon(id, nd.icon, bx, r.y + (r.h - self.icon_px) // 2, th.text)
+                    if len(nd.text) > 0:
+                        self.cmd_text(id, bx + self.icon_px + gap, r.y + (r.h - lh) // 2,
+                                      nd.text, th.text)
             case WK_INPUT:
                 self.cmd_rect(id, r, th.panel_lo)
                 self.cmd_frame(id, r, th.accent if self.focus == id else th.border)
@@ -1033,11 +1081,16 @@ struct Ui:
                 if self.focus == id:
                     self.cmd_rect(id, Rect(tx + nd.cursor * self.cell_w, ty, 1, lh), th.text)
             case WK_SPLIT:
-                hs = th.handle
-                if nd.vertical:
-                    self.cmd_rect(id, Rect(r.x, r.y + nd.offset, r.w, hs), th.border)
-                else:
-                    self.cmd_rect(id, Rect(r.x + nd.offset, r.y, hs, r.h), th.border)
+                # ... but only when there are TWO of them. `lay_split` already
+                # gives the whole rectangle to a lone visible child; drawing the
+                # divider anyway put a line across the middle of a pane whose
+                # neighbour had been collapsed, and there was nothing to drag.
+                if self.vis_children(id) > 1:
+                    hs = th.handle
+                    if nd.vertical:
+                        self.cmd_rect(id, Rect(r.x, r.y + nd.offset, r.w, hs), th.border)
+                    else:
+                        self.cmd_rect(id, Rect(r.x + nd.offset, r.y, hs, r.h), th.border)
             case WK_SCROLLBAR:
                 self.cmd_rect(id, r, th.panel_lo)
                 self.cmd_rect(id, self.scroll_thumb(id), th.panel_hi)
@@ -1093,6 +1146,11 @@ struct Ui:
                 self.cmd_text(id, x, y, row.prefix, t.text_dim)
             x += self.cell_w * 2
             col = self.tone_color(t, row.tone, not row.marked and i != nd.sel)
+            if row.icon != ICON_NONE:
+                # centred on the row and tinted with the row's own colour, so a
+                # dimmed row dims its picture too
+                self.cmd_icon(id, row.icon, x, y + (self.cell_h - self.icon_px) // 2, col)
+                x += self.icon_px + 4
             avail = r.w - (x - r.x) - 8
             if len(row.detail) > 0:
                 dw = self.text_w(row.detail)
@@ -1113,7 +1171,12 @@ struct Ui:
             self.cmd_rect(id, Rect(x, r.y, w, r.h), t.panel if active else t.panel_lo)
             if active:
                 self.cmd_rect(id, Rect(x, r.y + r.h - 2, w, 2), t.accent)
-            self.cmd_text(id, x + self.cell_w, ty, it.text, t.text if active else t.text_dim)
+            fg = t.text if active else t.text_dim
+            tx = x + self.cell_w
+            if it.icon != ICON_NONE:
+                self.cmd_icon(id, it.icon, tx, r.y + (r.h - self.icon_px) // 2, fg)
+                tx += self.icon_px + 4
+            self.cmd_text(id, tx, ty, it.text, fg)
             # the modified mark and the close button share a cell: a dot when
             # there is something to lose, an × when the mouse is over it
             if it.closable:
@@ -1173,6 +1236,8 @@ struct Ui:
                         gx += self.cell_w
                 case CMD_GLYPH:
                     p.glyph(cm.cp, cm.x, cm.y, cm.color)
+                case CMD_ICON:
+                    p.icon(cm.cp, cm.x, cm.y, cm.color)
         c = nd.first_child
         while c >= 0:
             if self.nodes[c].floating:
@@ -1449,6 +1514,11 @@ struct Ui:
                 vert = nd.vertical
                 r = nd.rect
                 hr = Rect(r.x, r.y + nd.offset, r.w, self.theme.handle) if vert else Rect(r.x + nd.offset, r.y, self.theme.handle, r.h)
+                # and with one child there is nothing to drag: without this, a
+                # click in the middle of a pane whose neighbour was collapsed
+                # started a drag that moved nothing and ate the click
+                if self.vis_children(id) < 2:
+                    return False
                 if ev.kind == EV_MOUSE_DOWN and ev.button == 1 and rect_has(hr, ev.x, ev.y):
                     nd.dragging = True
                     nd.grab = (ev.y if vert else ev.x) - nd.offset
@@ -1540,4 +1610,5 @@ struct Ui:
 def new_ui(cell_w: int, cell_h: int) -> Ui:
     """The font cell comes from outside: the toolkit does not talk to the driver,
     and that is what lets the layout be measured without a window."""
-    return Ui([], -1, -1, -1, -1, -1, th.theme_dark(), cell_w, cell_h, 0, 0, False, [])
+    return Ui([], -1, -1, -1, -1, -1, th.theme_dark(), cell_w, cell_h, cell_h,
+              0, 0, False, [])

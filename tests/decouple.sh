@@ -23,6 +23,12 @@ ok=0; fail=0
 # (SDL and the compiler's lexers), the graphics driver, the font atlas, the
 # toolkit, and what the compiler's two front ends need to paint three languages.
 #
+# The icon sheet is here since F6, and it is on the same argument as the font:
+# the tree, the tabs and the palette show pictures, and those three are the
+# EDITOR's. `pcode` therefore carries 137 KB of icons and the ids that name
+# them — and not one line of the toolbar, the outline or the dock that `pstudio`
+# builds out of the same widgets.
+#
 # The C front end is here since F3, and it is the one entry that deserves an
 # argument. The editor paints what the COMPILER sees, so it uses the compiler's
 # lexer — for P through `lexer.p` and for C through `cfront.p`. It costs about
@@ -48,6 +54,10 @@ pstudio/pgfx_raster.ph
 pstudio/font_atlas.p
 pstudio/font_atlas.ph
 pstudio/font_atlas.bin
+pstudio/icons.p
+pstudio/icons.ph
+pstudio/icons.bin
+pstudio/icon_ids.psc
 packages/pui/pui.psc
 packages/pui/theme.psc
 packages/stl/cstr.p
@@ -96,7 +106,7 @@ done
 
 # 3. the IDE and the engine are on the OTHER side. Without this the gate would
 #    pass on the day somebody deleted the IDE.
-for f in pstudio/ide.psc packages/pforge/build.psc packages/pforge/graph.psc packages/pforge/manifest.psc; do
+for f in pstudio/ide.psc pstudio/config.psc packages/pforge/build.psc packages/pforge/graph.psc packages/pforge/manifest.psc; do
     if echo "$studio" | grep -qx "$f"; then ok=$((ok+1))
     else echo "  FAIL pstudio does not read '$f' — is there still an IDE?"; fail=$((fail+1)); fi
     if echo "$pcode" | grep -qx "$f"; then echo "  FAIL pcode reads '$f'"; fail=$((fail+1)); else ok=$((ok+1)); fi

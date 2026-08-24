@@ -28,6 +28,7 @@ import driver
 import <pforge/build.psc> as B
 import <pforge/graph.psc> as G
 import <pforge/manifest.psc> as MF
+import config as cfg
 import sys
 import time
 import os
@@ -275,9 +276,59 @@ async def serve_ide(dv: driver.Driver, sh: appm.Shell, ide: idem.Ide):
     loop, and the only thing `pcode` does not have."""
     await serve_manifest(sh, ide)
     await serve_build(sh, ide)
+    # the outline follows the buffer, and asks the index that already exists
+    ide.outline_sync()
+    if ide.want_conf_save:
+        await save_config(sh, ide)
     if len(ide.build_msg) > 0:
         sh.u.set_text(sh.status, ide.build_msg)
         sh.dirty_ui = True
+
+
+# ---------- F6: `.pstudio.json` ----------
+#
+# It is a project file, so reading and writing it is `await`, so it is here and
+# not in `ide.psc`. The parsing is not: `config.parse` takes the TEXT, which is
+# what lets every way a configuration file can be wrong be a string in a test
+# instead of a file on a disk.
+
+def conf_path(sh: appm.Shell) -> str:
+    return path.join(sh.root_dir, ".pstudio.json")
+
+
+async def load_config(sh: appm.Shell, ide: idem.Ide):
+    """Read once, at startup, and never fatal.
+
+    A file that refuses to load is a file that locks somebody out of their own
+    editor at the worst possible moment. So every problem takes the default and
+    says so in the status bar — and a file that is not there at all is not a
+    problem, it is a project nobody has configured yet."""
+    p = conf_path(sh)
+    txt = ""
+    if path.isfile(p):
+        try:
+            f = await open(p, "r")
+            txt = await f.text()
+            await f.close()
+        catch e:
+            sh.want_msg = ".pstudio.json: " + e.message + " — everything default"
+            return
+    names: list<str> = []
+    for c in sh.commands:
+        names.append(c.name)
+    idem.apply_config(ide, cfg.parse(txt, names))
+
+
+async def save_config(sh: appm.Shell, ide: idem.Ide):
+    """Written back when a pane moved, and it is meant to be COMMITTED: the
+    panes a team works with are a project decision, not a machine one."""
+    ide.want_conf_save = False
+    try:
+        f = await open(conf_path(sh), "w")
+        await f.write(cfg.to_text(idem.snapshot_config(ide)))
+        await f.close()
+    catch e:
+        sh.want_msg = ".pstudio.json: could not write it (" + e.message + ")"
 
 
 # ---------- the self-test: the whole editor, without a screen ----------
@@ -494,6 +545,13 @@ async def main_run() -> int:
     if sh == None:
         return 1
     ide = idem.new_ide(sh)
+    # AFTER the first layout, because what the file remembers is a pane's width
+    # and the widget has to have a rectangle for that to mean anything
+    await load_config(sh, ide)
+    # the outline is filled by the loop's middle line, and a screenshot never
+    # reaches the loop — so a picture of the IDE would show an empty pane that
+    # fills in half a frame later, which is a picture of a bug that is not there
+    ide.outline_sync()
     if len(a.shot) > 0:
         return driver.take_shot(sh, a.shot)
     blink = driver.now_ms()

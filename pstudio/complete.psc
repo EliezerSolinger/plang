@@ -240,6 +240,36 @@ struct Index:
         self.version = b.version
         self.ready = True
 
+    def outline(self) -> list<CSym>:
+        """The BUFFER's own declarations, in the order they appear in it.
+
+        There is no new analysis here and that is the whole point: the completion
+        index already walks the buffer on every relex and records every `def`,
+        `struct`, `enum` and member. An outline is that list ordered by POSITION
+        instead of by relevance — so it costs a filter and a sort, it is right
+        the instant the buffer is, and it works on a file that was never saved.
+
+        Only the buffer: a symbol with a `file` came from the project scan and
+        belongs to another window."""
+        out: list<CSym> = []
+        for sy in self.syms:
+            if len(sy.file) > 0 or sy.line <= 0:
+                continue
+            if sy.kind == SYM_KEYWORD or sy.kind == SYM_WORD:
+                continue
+            out.append(sy)
+        # insertion sort: the scan walks top to bottom, so the list arrives
+        # almost ordered — except where `add` put a declaration at the index of
+        # the loose word it replaced. A few dozen entries, nearly sorted.
+        for i in range(1, len(out)):
+            cur = out[i]
+            j = i - 1
+            while j >= 0 and out[j].line > cur.line:
+                out[j + 1] = out[j]
+                j -= 1
+            out[j + 1] = cur
+        return out
+
     def define_of(self, name: str) -> str:
         """`path:line:1` for a name, or "" when this index has not seen it.
 

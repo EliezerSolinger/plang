@@ -16,6 +16,7 @@ import <pui> as pui
 import codeview as cvm
 import <pui/theme.psc> as thm
 import complete as cmp
+import icon_ids as ico
 import core
 import os
 import path
@@ -73,6 +74,29 @@ struct PalItem:
     label: str
     payload: str
     score: int
+
+
+def icon_of(name: str, is_dir: bool, expanded: bool) -> int:
+    """What a row shows before its text.
+
+    A directory's icon carries open/closed, which is why the tree stopped
+    drawing a `>` and a `v`: two marks for one fact is one of them too many, and
+    the arrow was the one that could disagree with the folder beside it."""
+    if is_dir:
+        return ico.ICO_FOLDER_OPEN if expanded else ico.ICO_FOLDER
+    dot = name.rfind(".")
+    if dot < 0:
+        return ico.ICO_FILE
+    ext = name[dot:]
+    if ext == ".p" or ext == ".ph" or ext == ".psc" or ext == ".c" or ext == ".h":
+        return ico.ICO_FILE_CODE
+    if ext == ".sh" or ext == ".py" or ext == ".js" or ext == ".ninja":
+        return ico.ICO_TERMINAL
+    if ext == ".json" or ext == ".lock":
+        return ico.ICO_BRACES
+    if ext == ".md" or ext == ".txt":
+        return ico.ICO_FILE
+    return ico.ICO_FILE
 
 
 # the names hidden from the tree and from the palette's index
@@ -134,7 +158,20 @@ struct Shell:
     tabbar: int
     tree_pane: int     # box with the "FOLDERS" header and the rows
     tree: int          # the rows (its rectangle IS the row area)
-    split: int
+    split: int         # tree | (editors | side)
+    # The three empty SLOTS. The shell owns the vertical order of the window, so
+    # the shell is where the places are; what goes in them is the IDE's, and
+    # `pcode` leaves all three shut and pays one node each.
+    #
+    # Putting them here rather than letting `ide.psc` graft panes onto a box it
+    # did not build is the difference between a seam and a habit: a `u.box`'s
+    # children are appended, so an IDE that wanted a toolbar ABOVE the editor
+    # would have to know how `new_shell` orders its own column.
+    topbar: int        # above everything: the toolbar
+    vsplit: int        # workspace | dock, with a divider between them
+    dock: int          # below: the tabbed panels
+    rsplit: int        # editors | side
+    side: int          # to the right of the editor: the outline
     editors: int       # vertical box: [cvhost | search bar]
     cvhost: int
     findbar: int
@@ -848,11 +885,17 @@ struct Shell:
                     return
         self.running = False
 
-    def set_cell(self, cw: int, ch: int):
+    def set_cell(self, cw: int, ch: int, ipx: int):
         """The driver changed the zoom: the font cell belongs to the toolkit, so
-        it comes in here and the layout is redone."""
+        it comes in here and the layout is redone.
+
+        The icon square comes with it because it follows the same zoom step —
+        the sheet has a real rasterization per step for exactly this. A toolbar
+        whose pictures stayed put while the text grew is the thing that makes a
+        zoom look broken."""
         self.u.cell_w = cw
         self.u.cell_h = ch
+        self.u.icon_px = ipx
         self.u.relayout()
         self.u.queue_redraw_tree(self.root)
         self.update_status()
@@ -1013,7 +1056,8 @@ struct Shell:
     def tab_items(self) -> list<pui.TabItem>:
         out: list<pui.TabItem> = []
         for t in self.tabs:
-            out.append(pui.TabItem(t.title, t.cv.buf.dirty, True))
+            out.append(pui.TabItem(t.title, icon_of(t.title, False, False),
+                                   t.cv.buf.dirty, True))
         return out
 
     def tabbar_refresh(self):
@@ -1030,8 +1074,8 @@ struct Shell:
         out: list<pui.ListRow> = []
         for e in self.entries:
             mark = not e.is_dir and len(cur) > 0 and cur == e.fullpath
-            out.append(pui.ListRow(e.name, "", e.depth,
-                                   ("v" if e.expanded else ">") if e.is_dir else "",
+            out.append(pui.ListRow(e.name, "", e.depth, "",
+                                   icon_of(e.name, e.is_dir, e.expanded),
                                    pui.TONE_NORMAL if (e.is_dir or mark) else pui.TONE_DIM,
                                    mark))
         return out
@@ -1076,10 +1120,30 @@ struct Shell:
         u.cmd_rect(id, r, u.theme.panel)
         u.cmd_frame(id, r, u.theme.accent)
 
+    def pal_icon(self, it: PalItem) -> int:
+        """The palette shows what KIND of thing it is offering.
+
+        By mode and not by item, except for the files — where the extension is
+        the only thing that distinguishes one row from the next, and where a
+        column of identical pictures would be worse than none."""
+        match self.palmode:
+            case PAL_FILES:
+                return icon_of(it.label, False, False)
+            case PAL_COMMANDS:
+                return ico.ICO_CHEVRON_RIGHT
+            case PAL_GOTO:
+                return ico.ICO_HASH
+            case PAL_LIST:
+                return ico.ICO_LIST
+            case PAL_ASK:
+                return ico.ICO_SEARCH
+        return pui.ICON_NONE
+
     def pal_rows(self) -> list<pui.ListRow>:
         out: list<pui.ListRow> = []
         for it in self.palitems:
-            out.append(pui.ListRow(it.label, "", 0, "", pui.TONE_NORMAL, False))
+            out.append(pui.ListRow(it.label, "", 0, "", self.pal_icon(it),
+                                   pui.TONE_NORMAL, False))
         return out
 
 
@@ -1091,7 +1155,7 @@ struct Shell:
 # to the footer.
 
 def new_shell(u: pui.Ui, root_dir: str) -> Shell:
-    sh = Shell(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    sh = Shell(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
               [], -1, [], 0, root_dir, PAL_FILES, [], -1, [], [],
               [], "", None,
               False, True, True, 0, "", [], "", "",
@@ -1100,7 +1164,13 @@ def new_shell(u: pui.Ui, root_dir: str) -> Shell:
 
     sh.root = u.panel(-1)
     col = u.box(sh.root, True)
-    sh.split = u.split(col, False)
+    # the toolbar's place, empty and shut
+    sh.topbar = u.box(col, False)
+    u.set_visible(sh.topbar, False)
+    # the workspace, and the dock under it
+    sh.vsplit = u.split(col, True)
+    u.set_expand(sh.vsplit, True, True)
+    sh.split = u.split(sh.vsplit, False)
     u.set_expand(sh.split, True, True)
     # the tree's PANEL is a box with a background: [ FOLDERS | rows ]. The
     # header is a real label, so it is the layout (and not a hand-written offset)
@@ -1112,8 +1182,15 @@ def new_shell(u: pui.Ui, root_dir: str) -> Shell:
     u.set_min(head, 0, u.cell_h + 8)
     sh.tree = u.list(sh.tree_pane)
     u.set_expand(sh.tree, True, True)
-    sh.editors = u.box(sh.split, True)
+    # to the right of the tree: the editor, and beside IT the outline's place
+    sh.rsplit = u.split(sh.split, False)
+    u.set_expand(sh.rsplit, True, True)
+    sh.editors = u.box(sh.rsplit, True)
     u.set_expand(sh.editors, True, True)
+    sh.side = u.box(sh.rsplit, True)
+    u.set_bg(sh.side, u.theme.panel)
+    u.set_expand(sh.side, True, True)
+    u.set_visible(sh.side, False)
     u.split_set(sh.split, 220)
     sh.tabbar = u.tabs(sh.editors)
     sh.cvhost = u.box(sh.editors, True)
@@ -1127,6 +1204,12 @@ def new_shell(u: pui.Ui, root_dir: str) -> Shell:
     u.on_submit(sh.findinput, lambda wid, arg: sh.find_step(True))
     u.on_cancel(sh.findinput, lambda wid, arg: sh.find_close())
     u.set_visible(sh.findbar, False)
+
+    # and the dock's place, below the workspace and likewise shut
+    sh.dock = u.box(sh.vsplit, True)
+    u.set_bg(sh.dock, u.theme.panel)
+    u.set_expand(sh.dock, True, True)
+    u.set_visible(sh.dock, False)
 
     sh.status = u.label(col, "")
     u.set_pad(sh.status, 6)

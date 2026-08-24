@@ -49,6 +49,16 @@ def pg_font_default(size: i32) -> PgFont:
         .px = fa_px(s)
     return f
 
+def pg_icons_default(size: i32) -> PgIcons:
+    s: i32 = 0 if size < 0 else (ico_sizes() - 1 if size >= ico_sizes() else size)
+    ic: PgIcons = {0}
+    with ic:
+        .pixels = ico_pixels(s)
+        .px = ico_px(s)
+        .count = ico_count()
+        .size = s
+    return ic
+
 # decodes one UTF-8 codepoint and advances the index; an invalid byte yields
 # U+FFFD and advances by 1 (the atlas draws □ for anything it lacks)
 def pg_utf8_step(s: const *char, ref i: usize) -> u32:
@@ -175,6 +185,34 @@ struct PgFb:
                     continue
                 row[px] = blend(row[px], color, a)
         return adv
+
+    def draw_icon(ref self: PgFb, in ic: PgIcons, id: i32, x: i32, y: i32, color: u32) -> i32:
+        # the same loop as `draw_glyph`, on a square cell and with no advance to
+        # compute. Written out rather than shared with it because the shared
+        # version would take four more parameters than either caller has.
+        n: i32 = ic.px
+        if id < 0 or id >= ic.count:
+            return n
+        if x + n <= self.clip.x or x >= self.clip.x + self.clip.w:
+            return n
+        if y + n <= self.clip.y or y >= self.clip.y + self.clip.h:
+            return n
+        cell: const *u8 = ic.pixels + usize(id) * usize(n) * usize(n)
+        for gy in range(n):
+            py: i32 = y + gy
+            if py < self.clip.y or py >= self.clip.y + self.clip.h:
+                continue
+            arow: const *u8 = cell + usize(gy) * usize(n)
+            row: *u32 = self.px + usize(py) * usize(self.w)
+            for gx in range(n):
+                a: u32 = u32(arow[gx])
+                if a == 0:
+                    continue
+                pxx: i32 = x + gx
+                if pxx < self.clip.x or pxx >= self.clip.x + self.clip.w:
+                    continue
+                row[pxx] = blend(row[pxx], color, a)
+        return n
 
     def draw_text(ref self: PgFb, in f: PgFont, s: const *char, x: i32, y: i32, color: u32) -> i32:
         return self.draw_text_n(in f, s, strlen(s), x, y, color)

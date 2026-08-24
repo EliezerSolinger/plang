@@ -1,5 +1,5 @@
 editor commands=28
-with the IDE=37
+with the IDE=40
 build offered=True first=Build
 asked=True target=[] run=False
 run asked=True and runs=True
@@ -16,4 +16,13 @@ accepted dep=[tar@0.1.0]
 default=[build/bin/pforge] and did not build=True
 stop=True kill=True
 clean=True msg=[cleaning...]
+toolbar=True outline=True dock=True
+outline shut=True
+outline rows=1 first=[main] at=1
+jumped to line=1
+after typing=2 last=[second]
+dock page=2 of 4
+dock shut=True
+and a build reopens it=True at page=0
+remembered: tree=220 outline_open=True dock_open=True target=[build/bin/pcode]
 ide-ok

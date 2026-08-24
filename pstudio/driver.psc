@@ -124,12 +124,13 @@ def ev_from_shim(kind: int) -> pui.Event:
 
 
 def painter() -> pui.Painter:
-    """The editor's painter: five calls into the shim, and nothing else."""
+    """The editor's painter: six calls into the shim, and nothing else."""
     return pui.Painter(lambda x, y, w, h, c: shim_rect(x, y, w, h, c),
                        lambda x, y, w, h, c: shim_frame(x, y, w, h, c),
                        lambda x, y, w, h: shim_clip(x, y, w, h),
                        lambda: shim_clip_reset(),
-                       lambda cp, x, y, c: shim_glyph(cp, x, y, c))
+                       lambda cp, x, y, c: shim_glyph(cp, x, y, c),
+                       lambda ic, x, y, c: shim_icon(ic, x, y, c))
 
 
 def now_ms() -> int:
@@ -159,7 +160,7 @@ def zoom(sh: appm.Shell, step: int):
     at = shim_zoom_at()
     want = shim_zoom_default() if step == 0 else at + step
     shim_zoom(want)
-    sh.set_cell(shim_cell_w(), shim_cell_h())
+    sh.set_cell(shim_cell_w(), shim_cell_h(), shim_icon_px())
     sh.dirty_ui = True
 
 
@@ -459,6 +460,7 @@ async def open_window(dv: Driver, a: Args, dir: str) -> appm.Shell?:
         print("could not open a window (SDL). Is DISPLAY set?")
         return None
     u = pui.new_ui(shim_cell_w(), shim_cell_h())
+    u.icon_px = shim_icon_px()
     sh = appm.new_shell(u, dir)
     wire(dv, sh)
     u.layout(shim_width(), shim_height())

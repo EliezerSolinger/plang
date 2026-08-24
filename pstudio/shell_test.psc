@@ -29,6 +29,7 @@ D: str = "projps"
 rects = 0
 texts = 0
 glyphs = 0
+icons = 0
 
 
 def count_rect(x: int, y: int, w: int, h: int, c: int):
@@ -44,6 +45,11 @@ def count_frame(x: int, y: int, w: int, h: int, c: int):
 def count_glyph(cp: int, x: int, y: int, c: int):
     global glyphs
     glyphs += 1
+
+
+def count_icon(ic: int, x: int, y: int, c: int):
+    global icons
+    icons += 1
 
 
 def nothing4(x: int, y: int, w: int, h: int):
@@ -114,7 +120,7 @@ def fake_zoom(a: appm.Shell, step: int):
     else:
         cellw += step * 2
         cellh += step * 3
-    a.set_cell(cellw, cellh)
+    a.set_cell(cellw, cellh, cellh)
 
 
 def set_clip(s: str):
@@ -345,9 +351,9 @@ sh.update_status()
 print("status=[" + u.text_of(sh.status) + "]")
 
 # ONE FRAME: the whole retained drawing, with a painter that counts
-p = pui.Painter(count_rect, count_frame, nothing4, nothing0, count_glyph)
+p = pui.Painter(count_rect, count_frame, nothing4, nothing0, count_glyph, count_icon)
 u.draw(p, 1100, 720)
-print("draw: rects=" + str(rects) + " glyphs=" + str(glyphs))
+print("draw: rects=" + str(rects) + " glyphs=" + str(glyphs) + " icons=" + str(icons))
 
 # F0: the empty file opens (one line), and the unreadable one does not open at all
 sh.open_file(D + "/empty.p")

@@ -753,3 +753,224 @@ tests/pstudio/perf_test.psc   (selfhost/ps_lower.p, 11 076 linhas)
 # falha com o número medido, não com "lento":
 #   FAIL salvar: 1 340 ms, tecto 50 ms
 ```
+
+---
+
+## Os ícones: SVG na árvore, e um rasterizador de 40 linhas (F6, 2026-08-24)
+
+O plano dizia `icons.png -> stb_image -> icons.bin`. **Não é o que foi feito**, e a
+razão vale ficar escrita, porque foi uma troca de material e não uma economia.
+
+Uma folha de sprites PNG teria de ser produzida por um programa que **ninguém
+neste repositório consegue correr**: abrir um editor de imagem, exportar a 24px,
+colar quarenta ícones numa grelha, e repetir tudo isso da próxima vez que faltar
+um ícone. O ficheiro comitado seria pixels — irreversíveis, não diferenciáveis, e
+sem relação nenhuma com o desenho original.
+
+Então o que está na árvore é a **fonte**: `pstudio/icons/*.svg`, 49 ficheiros do
+Lucide (ISC, licença comitada ao lado), ~4 KB cada, 204 KB no total. Acrescentar
+um ícone é `curl` de um ficheiro e uma linha de comando.
+
+### Porque é que isso não custou um rasterizador de verdade
+
+Porque um ícone do Lucide **não tem preenchimento**. É um traço de 2 unidades numa
+grelha de 24, pontas redondas, junções redondas — e isso é **exactamente um campo
+de distância**:
+
+> a opacidade de um pixel é a distância do seu centro ao ponto mais próximo do
+> traçado.
+
+Pontas e junções redondas não são casos especiais: são o que "distância ao ponto
+mais próximo" **já quer dizer**. Não há preenchimento de polígonos, não há
+ordenação de scanlines, não há geometria de junção. Achatam-se as curvas em
+segmentos (cúbicas em 16 passos, arcos em passos de ~5°) e o desenho inteiro são
+umas quarenta linhas em `pstudio/tools/mkicons.c`.
+
+O que ele **não** suporta, de propósito, por o Lucide não usar: preenchimentos,
+pontas rectas, junções em bico, transformações, gradientes, largura de traço por
+elemento. Cada um seria código a defender-se de um ficheiro que não existe.
+
+### A única discordância deliberada com o vector
+
+Aos 12px, um traço de 2 unidades numa grelha de 24 é **exactamente um pixel** — e
+uma diagonal de um pixel que caia entre dois centros é honestamente desenhada como
+dois pixels a meio acender. Está certo, e parece uma nódoa.
+
+É o mesmo problema que faz um desenhador de tipos *hintar* os corpos pequenos.
+Aqui a dica inteira é **um piso de 1,4px**, que só morde nos três degraus mais
+pequenos e deixa intactos aqueles em que alguém lê código.
+
+### O formato, e porque é igual ao da fonte
+
+Sete folhas quadradas, uma por degrau de zoom (12 14 16 18 20 24 30 px), cada uma
+uma **rasterização real** naquele tamanho — nunca um bitmap duplicado. 137 KB ao
+lado dos 263 KB do atlas, `embed_bytes` na compilação, um binário só. Alfa de 8
+bits tingido por um papel do tema no momento de desenhar, tal como o
+`draw_glyph` já faz com o texto: **um ícone obedece ao tema de graça**.
+
+Os identificadores saem gerados para os dois lados: `pstudio/icons.ph` para o P
+(que tem os pixels) e `pstudio/icon_ids.psc` para o pscript (que é onde o editor
+está escrito). São `const ICO_PLAY` e nunca literais, porque acrescentar um ícone
+renumera a folha — e só o ficheiro gerado tem de concordar com ela.
+
+### Onde o `pui` entra, e onde não entra
+
+O `pui` ganha `CMD_ICON` e um `icon: def(int, int, int, int)` no `Painter`. **Não
+ganha a folha.** O toolkit não sabe o que um ícone é — sabe que quem pinta
+consegue desenhar um, dado um número. É a mesma fronteira que já existia para os
+glifos, e é o que mantém o `pui` publicável sem 137 KB de pixels do editor.
+
+---
+
+## O defeito que a F6 desenterrou: `nonlocal` dentro de um `try` (2026-08-24)
+
+Ao escrever o leitor do `.pstudio.json`, o `parse` devolvia **todas as definições a
+zero** e depois estourava com falha de segmentação na primeira `str`. O ficheiro
+estava certo; o compilador é que estava errado.
+
+O caso mínimo:
+
+```python
+def f() -> int:
+    nonlocal n
+    try:
+        n = 300
+    catch e:
+        return -1
+    return n        # <- devolvia 0
+```
+
+O `try` do pscript não tem `goto`: cada instrução do corpo leva um `if <bandeira>:`
+à volta, e um bloco em P é um escopo — então as declarações do corpo são
+**içadas** para o bloco do próprio `try`, senão um nome declarado numa instrução
+não existiria na seguinte. O içamento não perguntava se o nome já era do escopo
+da FUNÇÃO. Declarava um segundo, a atribuição ia para esse, o bloco acabava, e a
+função lia o zero com que o nome dela tinha nascido.
+
+**É a pior forma que um defeito podia ter aqui**, porque o diagnóstico da 64.1 —
+*"foi declarado dentro de um bloco e morreu com ele: escreva `nonlocal x`"* —
+manda escrever exactamente a coisa que estava partida. Quem seguisse o conselho
+do compilador dentro de um `try` ficava com um valor errado e sem aviso nenhum.
+
+Apanhados na mesma varredura, todos com a mesma raiz:
+
+* o `finally` (que é o `defer` do P, e corre no fim do bloco do `try`) atribuía ao
+  nome sombra;
+* um tipo do coletor voltava NULL em vez de zero, o que é falha de segmentação no
+  primeiro uso em vez de resposta errada;
+* `nonlocal` com desempacotamento (`a, b = ...`) nem sequer compilava — o
+  desempacotamento ignorava a lista de nomes `nonlocal` por inteiro, em qualquer
+  bloco, não só no `try`.
+
+O `if`, o `else`, o `for`, o `while`, o `case` e o corpo do `catch` estavam
+correctos: a varredura era por BLOCO, e é assim que se sabe que a lista está
+completa em vez de se saber que um exemplo passou.
+
+Fica em `tests/pscript/run/trynonlocal.psc`, com o outro lado da regra medido no
+mesmo ficheiro — sem `nonlocal`, o nome continua a morrer com o bloco, que é para
+o que o içamento existe.
+
+---
+
+## A concha da IDE, e o que ela custou (F6, 2026-08-24)
+
+O layout escolhido, agora de pé: **barra de ferramentas em cima, árvore à
+esquerda, editor ao centro, outline à direita, dock de abas em baixo.** Os
+painéis do dock dizem "vazio", de propósito — o objectivo de os construir agora
+era descobrir cedo se um `SPLIT` de duas vias aninhado chega para quatro zonas, e
+o que custa uma delas fechar e voltar.
+
+Custou **um defeito**, e era exactamente o tipo que só aparece quando se
+experimenta: um `SPLIT` desenhava a divisória mesmo quando só um filho estava
+visível. Fechar a árvore deixava uma linha a meio do painel do lado, e —
+pior — um clique nessa coluna começava um arrasto que não movia nada e **comia o
+clique**. Está corrigido no `pui`, que é onde pertence.
+
+### Onde é que a IDE se enxerta
+
+A casca é dona da ordem vertical da janela, então é a casca que tem os LUGARES:
+`topbar`, `vsplit`/`dock` e `rsplit`/`side` nascem no `new_shell`, vazios e
+fechados, e o `pcode` paga um nó por cada um.
+
+Deixar a `ide.psc` enxertar painéis numa caixa que ela não construiu seria a
+diferença entre uma emenda e um hábito: os filhos de uma `u.box` são
+acrescentados por ordem, portanto uma IDE que quisesse uma barra ACIMA do editor
+teria de saber como é que o `new_shell` ordena a coluna dele.
+
+### O outline não custou análise nenhuma
+
+É alimentado pelo **índice de completamento que já existia**: ele já percorre o
+buffer a cada relexagem e recupera cada `def`, `struct`, `enum` e membro. Um
+outline é essa lista ordenada por POSIÇÃO em vez de por relevância — um filtro e
+uma ordenação por inserção sobre uma lista que já vem quase ordenada. Funciona
+num ficheiro que nunca foi salvo, e é o teste que o diz: escreve-se um `def`
+novo no fim do buffer e ele aparece.
+
+### Cada botão da barra é um COMANDO, pelo nome
+
+Foi isto que a tabela da F2 comprou. Um botão é uma imagem mais uma cadeia; a
+paleta oferece a mesma cadeia; o `.pstudio.json` pode ligar-lhe uma tecla. Três
+portas de entrada, uma implementação — e nenhum `if` novo em lado nenhum.
+
+---
+
+## `.pstudio.json`: nada falha, e nada se cala (F6)
+
+Um ficheiro de configuração que se recusa a carregar é um ficheiro de
+configuração que tranca alguém fora do próprio editor no pior momento possível.
+Então **cada problema usa o padrão e diz na barra de estado**:
+
+    .pstudio.json: keys.ctrl+q = 'Deploy To Production' is not a command, ignored
+
+O silêncio seria pior do que o erro — uma tecla que não faz nada em silêncio é um
+defeito em que alguém gasta uma tarde.
+
+E **nada nele toca no disco**: o `parse` recebe o TEXTO. É isso que faz com que
+cada maneira de um ficheiro de configuração estar errado seja uma cadeia num
+teste em vez de um ficheiro num disco, e é por isso que o `config_test.psc` mede
+JSON inválido, tipos trocados, valores fora de alcance, nomes que ninguém
+conhece, teclas que ninguém consegue premir e comandos que não existem — sem
+sistema de ficheiros nenhum.
+
+Os nomes das teclas **fazem a volta**: `key_valid` responde à mesma pergunta que
+o `key_name` escreve, de propósito. Uma ligação que não pode ser produzida por
+uma tecla premida é uma ligação que nunca dispararia, e dizê-lo no arranque é
+melhor do que deixar alguém a adivinhar.
+
+A cadeia vazia tira uma ligação — e tem de existir: um atalho que o gestor de
+janelas de alguém já come seria, de outro modo, impossível de remover.
+
+**O `pcode` não o lê.** Se estiver lá, passa ao lado: zero I/O no arranque é
+metade do que o faz rápido, e um editor que abre qualquer pasta não tem projeto
+de onde ler um ficheiro de projeto. O portão da lista branca mede isso.
+
+---
+
+## O atlas alargado, e a tabela que passou a ser só o que existe (F6)
+
+Grego e cirílico entraram: 209 glifos passaram a **410**, 263 KB a 517 KB. CJK e
+emoji continuam `□`, e isso fica DITO em vez de descoberto.
+
+O que mudou de forma, e é a parte que interessa: a grelha passou a ter **só os
+pontos de código que a fonte realmente desenha**. Antes tinha intervalos
+inteiros e deixava uma célula em branco onde a fonte não tivesse glifo — o que
+não pinta nada, portanto um caractere não suportado era **invisível** em vez de
+ser uma caixa. Grego e Copta foi o intervalo que fez isso importar: a JetBrains
+Mono desenha a metade grega e não a copta.
+
+Então o gerador **PERGUNTA**, guarda o que recebe, e o `fa_index` passou a ser
+uma busca binária sobre a tabela em vez de um teste de intervalos — com atalho
+para ASCII, que é 99% de cada quadro. É a única forma que sobrevive a uma fonte
+cuja cobertura tem buracos.
+
+---
+
+## O portão de desempenho passou a ser o MELHOR de cinco (F6)
+
+O tecto da tecla — 16 ms, um quadro a 60 fps — é um quarto da folga que os outros
+quatro têm. Uma medição única falhou uma vez com 18 ms numa máquina que estava a
+compilar outra coisa, e três repetições logo a seguir deram "ok".
+
+Um portão que grita lobo é um portão que as pessoas aprendem a voltar a correr em
+vez de ler. Passa a medir cinco vezes e a guardar o **mínimo** — que é a corrida
+que o escalonador deixou em paz, porque contenção só faz um número crescer.

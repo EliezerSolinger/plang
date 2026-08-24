@@ -2,21 +2,23 @@
 # OFL). DO NOT EDIT; regenerate with:
 #   cc pstudio/tools/mkatlas.c -o mkatlas -lm && ./mkatlas <ttf> \
 #      pstudio/font_atlas.p pstudio/font_atlas.ph [px...]
-# 7 mono grids (one per zoom step, each a REAL rasterization), 209
-# glyphs each: ASCII 32..126, Latin-1 160..255, 17 punctuation extras and
-# U+25A1 last. Inside a grid, glyph i starts at i*cell_w*cell_h.
+# 7 mono grids (one per zoom step, each a REAL rasterization), 410
+# glyphs each: ASCII, Latin-1, Greek, Cyrillic, punctuation, and U+25A1
+# last as the fallback. Only what the font REALLY draws is in the grid,
+# so `fa_index` is a search over `fa_cps` rather than a range test.
+# Inside a grid, glyph i starts at i*cell_w*cell_h.
 import "font_atlas.ph"
 
-# The 263 549 bytes of the seven grids, EMBEDDED (63.5): the file is the data,
-# read at compile time and emitted as a static array, so the editor still ships
-# as one binary and this source is a page instead of eleven thousand lines.
-# Regenerating the atlas rewrites font_atlas.bin; nothing here changes.
+# The 517010 bytes of the grids, EMBEDDED (63.5): the file is the data,
+# read at compile time and emitted as a static array, so the editor still
+# ships as one binary and this source is a page instead of eleven thousand
+# lines. Regenerating the atlas rewrites the .bin; nothing here changes.
 fa_data: const u8[] = embed_bytes("font_atlas.bin")
 
 fa_cw: const i32[7] = {6, 6, 7, 8, 10, 11, 14}
 fa_ch: const i32[7] = {12, 13, 15, 17, 20, 24, 29}
 fa_bl: const i32[7] = {9, 10, 12, 13, 15, 19, 22}
-fa_off: const usize[7] = {0, 15048, 31350, 53295, 81719, 123519, 178695}
+fa_off: const usize[7] = {0, 29520, 61500, 104550, 160310, 242310, 350550}
 fa_px_tbl: const i32[7] = {11, 13, 15, 17, 20, 24, 29}
 
 def fa_sizes() -> i32:
@@ -35,49 +37,58 @@ def fa_px(size: i32) -> i32:
     return fa_px_tbl[size]
 
 def fa_count() -> i32:
-    return 209
+    return 410
 
-# codepoint -> index inside a grid; outside the ranges it is the box
+# The 410 codepoints the grid holds, ASCENDING (□ is last and is the
+# fallback, so it is not part of the searched range).
+fa_cps: const u32[410] = {
+    32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+    64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+    80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+    96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
+    112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 160,
+    161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
+    177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192,
+    193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208,
+    209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224,
+    225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240,
+    241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 884,
+    885, 894, 900, 901, 902, 903, 904, 905, 906, 908, 910, 911, 912, 913, 914, 915,
+    916, 917, 918, 919, 920, 921, 922, 923, 924, 925, 926, 927, 928, 929, 931, 932,
+    933, 934, 935, 936, 937, 938, 939, 940, 941, 942, 943, 944, 945, 946, 947, 948,
+    949, 950, 951, 952, 953, 954, 955, 956, 957, 958, 959, 960, 961, 962, 963, 964,
+    965, 966, 967, 968, 969, 970, 971, 972, 973, 974, 975, 981, 982, 983, 1025, 1026,
+    1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034, 1035, 1036, 1038, 1039, 1040, 1041, 1042, 1043,
+    1044, 1045, 1046, 1047, 1048, 1049, 1050, 1051, 1052, 1053, 1054, 1055, 1056, 1057, 1058, 1059,
+    1060, 1061, 1062, 1063, 1064, 1065, 1066, 1067, 1068, 1069, 1070, 1071, 1072, 1073, 1074, 1075,
+    1076, 1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087, 1088, 1089, 1090, 1091,
+    1092, 1093, 1094, 1095, 1096, 1097, 1098, 1099, 1100, 1101, 1102, 1103, 1105, 1106, 1107, 1108,
+    1109, 1110, 1111, 1112, 1113, 1114, 1115, 1116, 1118, 1119, 1168, 1169, 1170, 1171, 1178, 1179,
+    1186, 1187, 1198, 1199, 1200, 1201, 1206, 1207, 1210, 1211, 1240, 1241, 1244, 1245, 1246, 1247,
+    1252, 1253, 1254, 1255, 1256, 1257, 1268, 1269, 8211, 8212, 8216, 8217, 8220, 8221, 8226, 8230,
+    8592, 8594, 9642, 9656, 9662, 9670, 9679, 10003, 10007, 9633}
+
+# codepoint -> index in a grid; anything the font does not draw is the box.
+#
+# ASCII short-circuits because it is what code is made of: one compare and
+# a subtraction for the characters that are 99% of every frame. The rest
+# is a binary search over 409 entries — ten compares, and it is the only
+# shape that survives a font whose coverage has holes in it.
 def fa_index(cp: u32) -> i32:
     if cp >= 32 and cp <= 126:
         return i32(cp) - 32
-    if cp >= 160 and cp <= 255:
-        return 95 + i32(cp) - 160
-    if cp == 8211:
-        return 191
-    if cp == 8212:
-        return 192
-    if cp == 8216:
-        return 193
-    if cp == 8217:
-        return 194
-    if cp == 8220:
-        return 195
-    if cp == 8221:
-        return 196
-    if cp == 8226:
-        return 197
-    if cp == 8230:
-        return 198
-    if cp == 8592:
-        return 199
-    if cp == 8594:
-        return 200
-    if cp == 10003:
-        return 201
-    if cp == 10007:
-        return 202
-    if cp == 9656:
-        return 203
-    if cp == 9662:
-        return 204
-    if cp == 9679:
-        return 205
-    if cp == 9670:
-        return 206
-    if cp == 9642:
-        return 207
-    return 208
+    lo: i32 = 0
+    hi: i32 = 409
+    while lo < hi:
+        mid: i32 = (lo + hi) / 2
+        if fa_cps[mid] < cp:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo < 409 and fa_cps[lo] == cp:
+        return lo
+    return 409
 
 def fa_pixels(size: i32) -> const *u8:
     return fa_data + fa_off[size]

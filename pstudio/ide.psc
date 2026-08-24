@@ -19,6 +19,9 @@ keystroke would make every caller wait.
 """
 import <pui> as pui
 import shell as sh_mod
+import icon_ids as ico
+import complete as cmp
+import config as cfg
 import core
 import path
 
@@ -62,6 +65,112 @@ struct Ide:
     # (which has to be resolved, checked and locked, and `pforge` knows how).
     want_manifest_default: str      # "" = nothing to ask for
     want_manifest_dep: str          # "name@version"
+
+    # ---------- F6: the shell ----------
+    # The three slots the editor left empty, filled. `pcode` has the same three
+    # and leaves them shut, which is what the whitelist gate measures.
+    outline: int          # the WK_LIST inside `sh.side`
+    outline_syms: list<cmp.CSym>   # what it is showing, in file order
+    outline_ver: int      # the buffer version it came from
+    outline_path: str     # ... and which file, so a tab change rebuilds it
+    dock_tabs: int        # the strip at the top of the bottom dock
+    dock_body: int        # what is under it
+    dock_page: int        # which panel is up
+    dock_labels: list<int>  # one label per page: F7 and F9 replace them
+    # `.pstudio.json`, read once by the driver and written back when a pane moves
+    conf: cfg.Config
+    want_conf_save: bool
+
+    # ---------- F6: the panes ----------
+
+    def toggle_outline(self):
+        u = self.sh.u
+        u.set_visible(self.sh.side, not u.is_visible(self.sh.side))
+        self.conf.outline_open = u.is_visible(self.sh.side)
+        self.want_conf_save = True
+        self.sh.dirty_ui = True
+
+    def toggle_dock(self):
+        u = self.sh.u
+        u.set_visible(self.sh.dock, not u.is_visible(self.sh.dock))
+        self.conf.dock_open = u.is_visible(self.sh.dock)
+        self.want_conf_save = True
+        self.sh.dirty_ui = True
+
+    def toggle_toolbar(self):
+        u = self.sh.u
+        u.set_visible(self.sh.topbar, not u.is_visible(self.sh.topbar))
+        self.sh.dirty_ui = True
+
+    def dock_refresh(self):
+        names = dock_pages()
+        icons = dock_icons()
+        items: list<pui.TabItem> = []
+        for i in range(len(names)):
+            items.append(pui.TabItem(names[i], icons[i], False, False))
+        self.sh.u.tabs_set(self.dock_tabs, items)
+        self.sh.u.tabs_set_sel(self.dock_tabs, self.dock_page)
+
+    def dock_show(self, i: int):
+        """One page visible at a time. The pages are SIBLINGS and not a stack
+        widget, because a stack would be a fourth container that does what
+        `set_visible` already does."""
+        if i < 0 or i >= len(self.dock_labels):
+            return
+        self.dock_page = i
+        for k in range(len(self.dock_labels)):
+            self.sh.u.set_visible(self.dock_labels[k], k == i)
+        self.sh.u.tabs_set_sel(self.dock_tabs, i)
+        self.sh.dirty_ui = True
+
+    def dock_open_at(self, i: int):
+        """Bring a page up, opening the dock if it was shut. It is what a build
+        does when it starts, and what a failing test does when it lands."""
+        if not self.sh.u.is_visible(self.sh.dock):
+            self.sh.u.set_visible(self.sh.dock, True)
+            self.conf.dock_open = True
+        self.dock_show(i)
+
+    # ---------- F6: the outline ----------
+
+    def outline_sync(self):
+        """Rebuilt when the buffer changed, and not before.
+
+        It is fed by the COMPLETION index, which already scans the buffer and
+        recovers every declaration on each relex. An outline is that list ordered
+        by position instead of by relevance: no new analysis, and it works on a
+        file that was never saved."""
+        cv = self.sh.cur_cv()
+        if cv == None:
+            if len(self.outline_syms) > 0:
+                self.outline_syms = []
+                self.outline_ver = -1
+                self.outline_path = ""
+                self.sh.u.list_set(self.outline, [])
+            return
+        if cv.path == self.outline_path and cv.buf.version == self.outline_ver:
+            return
+        if cv.index.is_stale(cv.buf):
+            cv.index.build(cv.buf, cv.sources)
+        self.outline_path = cv.path
+        self.outline_ver = cv.buf.version
+        self.outline_syms = cv.index.outline()
+        rows: list<pui.ListRow> = []
+        for sy in self.outline_syms:
+            rows.append(pui.ListRow(sy.name, str(sy.line), 1 if sy.kind == cmp.SYM_MEMBER else 0,
+                                    "", outline_icon(sy.kind), pui.TONE_NORMAL, False))
+        self.sh.u.list_set(self.outline, rows)
+
+    def outline_picked(self, i: int):
+        if i < 0 or i >= len(self.outline_syms):
+            return
+        cv = self.sh.cur_cv()
+        if cv == None:
+            return
+        cv.buf.move_to(self.outline_syms[i].line - 1, 0)
+        cv.scroll_to_caret()
+        self.sh.update_status()
+        self.sh.dirty_ui = True
 
     # ---------- the build error, as a position ----------
 
@@ -203,8 +312,10 @@ def new_ide(sh: sh_mod.Shell) -> Ide:
 
     Two lines, and they are the whole seam: `pcode.psc` does not have them."""
     ide = Ide(sh, "", False, False, False, "", False, False, [], 0, 0, "",
-              "", 0, 0, 0, False, "", "")
+              "", 0, 0, 0, False, "", "",
+              -1, [], -1, "", -1, -1, 0, [], cfg.default_config(), False)
     sh.add_commands(ide_commands(ide))
+    build_shell(ide)
     return ide
 
 
@@ -221,4 +332,157 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
         sh_mod.Command("Manifest: Open pack.json", lambda s: ide.open_manifest(), None),
         sh_mod.Command("Manifest: Set Default Target...", lambda s: ide.ask_default_target(), None),
         sh_mod.Command("Manifest: Add Dependency...", lambda s: ide.ask_dependency(), None),
+        sh_mod.Command("Toggle Outline", lambda s: ide.toggle_outline(), None),
+        sh_mod.Command("Toggle Panel", lambda s: ide.toggle_dock(), None),
+        sh_mod.Command("Toggle Toolbar", lambda s: ide.toggle_toolbar(), None),
     ]
+
+
+# ---------- F6: the shell ----------
+#
+# The layout, in the words that chose it: a toolbar on top, the tree on the left,
+# the editor in the middle, the outline on the right, a dock of tabs at the
+# bottom. The panes are EMPTY on purpose — the point of building them now is to
+# find out early whether a two-way `SPLIT` nested twice is enough for four zones,
+# and what it costs for one of them to collapse and come back.
+#
+# It turned out to cost one defect: a split drew its divider even when only one
+# child was visible, so a collapsed pane left a line across the middle of its
+# neighbour with nothing to drag. That is in `pui` now, where it belongs.
+
+# what the bottom dock offers. The pages are labels here and panels later: F7
+# replaces Build, F9 Tests, F10 Packages.
+def dock_pages() -> list<str>:
+    return ["Build", "Problems", "Tests", "Packages"]
+
+
+def dock_icons() -> list<int>:
+    return [ico.ICO_HAMMER, ico.ICO_TRIANGLE_ALERT, ico.ICO_FLASK_CONICAL, ico.ICO_PACKAGE]
+
+
+private def tool(ide: Ide, icon: int, command: str) -> int:
+    """One toolbar button. It runs a COMMAND by name and nothing else.
+
+    That is what the F2 table bought: a button is a picture plus a string, the
+    palette offers the same string, and `.pstudio.json` can bind a key to it.
+    Three ways in, one implementation."""
+    u = ide.sh.u
+    b = u.button(ide.sh.topbar, "")
+    u.set_icon(b, icon)
+    u.on_click(b, lambda id, arg: ide.sh.run_named(command))
+    return b
+
+
+def build_shell(ide: Ide):
+    u = ide.sh.u
+    sh = ide.sh
+
+    # ---- the toolbar ----
+    u.set_visible(sh.topbar, True)
+    u.set_bg(sh.topbar, u.theme.panel)
+    tool(ide, ico.ICO_HAMMER, "Build")
+    tool(ide, ico.ICO_PLAY, "Run")
+    tool(ide, ico.ICO_SQUARE, "Stop Build")
+    tool(ide, ico.ICO_TRASH_2, "Clean")
+    tool(ide, ico.ICO_SEARCH, "Find in Project")
+    tool(ide, ico.ICO_LIST_TREE, "Toggle Outline")
+    tool(ide, ico.ICO_PANEL_BOTTOM, "Toggle Panel")
+    tool(ide, ico.ICO_SUN, "Toggle Theme")
+
+    # ---- the outline, on the right ----
+    head = u.label(sh.side, "OUTLINE")
+    u.set_pad(head, 6)
+    u.set_min(head, 0, u.cell_h + 8)
+    ide.outline = u.list(sh.side)
+    u.set_expand(ide.outline, True, True)
+    u.on_submit(ide.outline, lambda id, row: ide.outline_picked(row))
+    u.set_visible(sh.side, True)
+    u.split_set(sh.rsplit, 700)
+
+    # ---- the dock, at the bottom ----
+    u.set_visible(sh.dock, True)
+    ide.dock_tabs = u.tabs(sh.dock)
+    u.on_submit(ide.dock_tabs, lambda id, i: ide.dock_show(i))
+    ide.dock_body = u.box(sh.dock, True)
+    u.set_expand(ide.dock_body, True, True)
+    names = dock_pages()
+    for i in range(len(names)):
+        lb = u.label(ide.dock_body, "(" + names[i] + " is empty)")
+        u.set_pad(lb, 8)
+        # wide but not tall: a panel's content starts at the TOP of it, and a
+        # label that expanded vertically floated in the middle of the dock
+        u.set_expand(lb, True, False)
+        ide.dock_labels.append(lb)
+    ide.dock_refresh()
+    ide.dock_show(0)
+    u.split_set(sh.vsplit, 420)
+    apply_config(ide, ide.conf)
+
+
+def outline_icon(kind: cmp.SymKind) -> int:
+    match kind:
+        case cmp.SYM_TYPE:
+            return ico.ICO_BOX
+        case cmp.SYM_FUNC:
+            return ico.ICO_BRACES
+        case cmp.SYM_MEMBER:
+            return ico.ICO_VARIABLE
+        case _:
+            # a keyword and a loose word never reach here: `Index.outline`
+            # filters them out, because neither is a declaration
+            return pui.ICON_NONE
+
+
+def apply_config(ide: Ide, c: cfg.Config):
+    """`.pstudio.json` onto the widgets that already exist.
+
+    It runs AFTER the shell is built, never instead of it: a configuration that
+    could prevent a pane from existing would be a configuration that can lock
+    somebody out of their editor, and the whole file was written on the promise
+    that it cannot."""
+    u = ide.sh.u
+    ide.conf = c
+    u.split_set(ide.sh.split, c.tree_w)
+    u.set_visible(ide.sh.tree_pane, c.tree_open)
+    u.set_visible(ide.sh.side, c.outline_open)
+    u.set_visible(ide.sh.dock, c.dock_open)
+    # the two offsets are measured from the LEFT and from the TOP, and what the
+    # file remembers is the pane's own width and height — which is the thing a
+    # person resized, and the only one that survives another window size
+    r = u.rect_of(ide.sh.rsplit)
+    if r.w > c.outline_w:
+        u.split_set(ide.sh.rsplit, r.w - c.outline_w)
+    rv = u.rect_of(ide.sh.vsplit)
+    if rv.h > c.dock_h:
+        u.split_set(ide.sh.vsplit, rv.h - c.dock_h)
+    if len(c.target) > 0:
+        ide.want_build = c.target
+    ide.sh.u.relayout()
+    ide.sh.dirty_ui = True
+    # the status bar has ONE line, and a file with six mistakes in it has six
+    # notes: the first is shown and the rest are counted, because a bar that
+    # flickered through all of them would show the last one, which is never the
+    # one that matters
+    if len(c.notes) > 0:
+        extra = "" if len(c.notes) == 1 else "  (+" + str(len(c.notes) - 1) + " more)"
+        ide.sh.want_msg = c.notes[0] + extra
+
+
+def snapshot_config(ide: Ide) -> cfg.Config:
+    """What the panes are RIGHT NOW, so the driver can write it back.
+
+    The widths and not the offsets, for the same reason `apply_config` reads
+    them that way: an offset is where a divider is on this screen, and a width is
+    what somebody chose."""
+    u = ide.sh.u
+    c = ide.conf
+    c.tree_w = u.split_offset(ide.sh.split)
+    r = u.rect_of(ide.sh.rsplit)
+    c.outline_w = r.w - u.split_offset(ide.sh.rsplit)
+    rv = u.rect_of(ide.sh.vsplit)
+    c.dock_h = rv.h - u.split_offset(ide.sh.vsplit)
+    c.tree_open = u.is_visible(ide.sh.tree_pane)
+    c.outline_open = u.is_visible(ide.sh.side)
+    c.dock_open = u.is_visible(ide.sh.dock)
+    c.target = ide.want_build
+    return c

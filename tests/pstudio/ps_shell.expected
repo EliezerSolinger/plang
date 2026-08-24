@@ -40,7 +40,7 @@ f2 mark: 1
 f2 goto: caret=1
 title=[pstudio — hello.p]
 status=[projps/hello.p*   2:1   LF   5 lines   17px]
-draw: rects=30 glyphs=179
+draw: rects=30 glyphs=178 icons=5
 empty opens=1 lines=1
 unreadable stays out=1 said=[projps/photo.png: these bytes are not valid UTF-8]
 reload asked=1 for=hello.p

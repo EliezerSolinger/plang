@@ -42,7 +42,7 @@ sh.read_file = lambda p: sh_mod.ReadOut(True, files[p], "") if p in files else s
 sh.mtime_of = lambda p: 1
 u.layout(1000, 700)
 
-# ---- the seam itself: the shell has 28 commands, and the IDE adds 9 ----
+# ---- the seam itself: the shell has 28 commands, and the IDE adds 12 ----
 print("editor commands=" + str(len(sh.commands)))
 ide = idem.new_ide(sh)
 print("with the IDE=" + str(len(sh.commands)))
@@ -121,5 +121,51 @@ print("stop=" + str(ide.build_stop) + " kill=" + str(ide.want_stop_run))
 
 sh.run_named("Clean")
 print("clean=" + str(ide.want_clean) + " msg=[" + ide.build_msg + "]")
+
+# ---- F6: the three slots the editor left empty ----
+#
+# `pcode` builds the same three and leaves them shut; everything below is what
+# `ide.psc` put in them, and none of it exists in the other binary.
+print("toolbar=" + str(u.is_visible(sh.topbar)) +
+      " outline=" + str(u.is_visible(sh.side)) +
+      " dock=" + str(u.is_visible(sh.dock)))
+sh.run_named("Toggle Outline")
+print("outline shut=" + str(not u.is_visible(sh.side)))
+sh.run_named("Toggle Outline")
+
+# the outline comes from the COMPLETION index, so it works on a file nobody
+# saved: open one, type into it, and ask again
+sh.open_file(D + "/main.p")
+ide.outline_sync()
+rows = u.list_rows(ide.outline)
+print("outline rows=" + str(len(rows)) +
+      " first=[" + (rows[0].text if len(rows) > 0 else "-") + "]" +
+      " at=" + (rows[0].detail if len(rows) > 0 else "-"))
+ide.outline_picked(0)
+cv2 = sh.cur_cv()
+if cv2 != None:
+    print("jumped to line=" + str(cv2.buf.caret(0).line + 1))
+    # a declaration typed just now, never written to disk
+    cv2.buf.move_to(cv2.buf.nlines() - 1, 0)
+    cv2.buf.insert("def second() -> i32:\n    return 2\n", 1000)
+    ide.outline_sync()
+    rows2 = u.list_rows(ide.outline)
+    print("after typing=" + str(len(rows2)) +
+          " last=[" + (rows2[len(rows2) - 1].text if len(rows2) > 0 else "-") + "]")
+
+# ---- the dock: four pages, one of them up ----
+ide.dock_show(2)
+print("dock page=" + str(ide.dock_page) + " of " + str(len(idem.dock_pages())))
+ide.toggle_dock()
+print("dock shut=" + str(not u.is_visible(sh.dock)))
+ide.dock_open_at(0)
+print("and a build reopens it=" + str(u.is_visible(sh.dock)) +
+      " at page=" + str(ide.dock_page))
+
+# ---- and what the panes look like, as `.pstudio.json` would remember them ----
+u.layout(1000, 700)
+c = idem.snapshot_config(ide)
+print("remembered: tree=" + str(c.tree_w) + " outline_open=" + str(c.outline_open) +
+      " dock_open=" + str(c.dock_open) + " target=[" + c.target + "]")
 
 print("ide-ok")

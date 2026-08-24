@@ -14,6 +14,7 @@ import "pgfx_raster.ph"
 
 private W: PgWindow
 private F: PgFont
+private IC: PgIcons
 private OPEN: bool = False
 private EV: PgEvent
 private ZOOM: i32 = 0
@@ -25,6 +26,7 @@ def shim_open(w: i32, h: i32) -> bool:
         return False
     ZOOM = pg_font_default_size()
     F = pg_font_default(ZOOM)
+    IC = pg_icons_default(ZOOM)
     OPEN = True
     return True
 
@@ -134,6 +136,17 @@ def shim_glyph(cp: i32, x: i32, y: i32, color: i32) -> i32:
         return 0
     return W.fb.draw_glyph(in F, u32(cp), x, y, u32(color))
 
+def shim_icon(id: i32, x: i32, y: i32, color: i32) -> i32:
+    if not OPEN:
+        return 0
+    return W.fb.draw_icon(in IC, id, x, y, u32(color))
+
+def shim_icon_px() -> i32:
+    return IC.px if OPEN else 16
+
+def shim_icon_count() -> i32:
+    return IC.count if OPEN else 0
+
 # ---- the font grid ----
 def shim_cell_w() -> i32:
     return F.cell_w if OPEN else 8
@@ -149,6 +162,10 @@ def shim_zoom(step: i32):
     s: i32 = 0 if step < 0 else (n - 1 if step >= n else step)
     ZOOM = s
     F = pg_font_default(s)
+    # the icons follow the font, always: the sheet has a grid per zoom step for
+    # exactly this, and a toolbar whose icons stayed put while the text grew is
+    # the thing that makes a zoom look broken
+    IC = pg_icons_default(s)
 
 def shim_zoom_steps() -> i32:
     return pg_font_steps()

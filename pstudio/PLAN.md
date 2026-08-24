@@ -435,7 +435,7 @@ prova de desacoplamento**: os dois objectivos empurram na mesma direcção.
 
 ---
 
-## F6 — a concha da IDE, e os ícones
+## F6 — a concha da IDE, e os ícones — **FEITA**
 
 O layout escolhido, ainda vazio: barra de ferramentas em cima, árvore à esquerda,
 editor ao centro, outline à direita, dock de abas em baixo. Vazio de propósito —
@@ -481,6 +481,22 @@ Entra aqui também o **atlas alargado**: JetBrains Mono tem cirílico e grego, s
 `□`, e isso fica DITO em vez de descoberto.
 
 **Fica de pé:** a IDE tem a cara que vai ter. Os painéis dizem "vazio".
+
+**O que custou de verdade:**
+
+* Os ícones **não** vieram de um `icons.png`. Vieram dos SVG do Lucide, que estão
+  na árvore, e de um rasterizador de traço por campo de distância em
+  `pstudio/tools/mkicons.c` — porque um ícone do Lucide é um traço de 2 unidades
+  numa grelha de 24 com pontas e junções redondas, e isso É um campo de
+  distância. 50 ícones, 7 folhas, 140 KB. Ver a secção no `DESIGN.md`.
+* O atlas deu 410 glifos e 517 KB (não ~700 KB): a fonte não desenha o copta nem
+  metade do cirílico estendido, e a grelha passou a ter **só o que ela desenha** —
+  antes um caractere sem glifo saía invisível em vez de sair `□`.
+* Um defeito no `pui`: um `SPLIT` desenhava divisória com um filho só, e o clique
+  nessa coluna começava um arrasto que não movia nada.
+* Um defeito no COMPILADOR, achado a escrever o leitor do `.pstudio.json`:
+  `nonlocal` dentro de um `try` perdia o valor. Ver `DESIGN.md`.
+* O portão de desempenho passou a guardar o melhor de cinco na medição da tecla.
 
 ---
 

@@ -56,6 +56,13 @@ def shim_clip_reset()
 # one codepoint at (x, y) = the cell's top-left; returns the advance
 def shim_glyph(cp: i32, x: i32, y: i32, color: i32) -> i32
 
+# One icon, tinted by a colour the caller chose — the same call as a glyph, with
+# an id instead of a codepoint. The SHEET follows the zoom, so a toolkit that
+# knows nothing about icons can lay one out from `shim_icon_px()` alone.
+def shim_icon(id: i32, x: i32, y: i32, color: i32) -> i32   # returns the side
+def shim_icon_px() -> i32
+def shim_icon_count() -> i32
+
 # ---- the font grid ----
 def shim_cell_w() -> i32
 def shim_cell_h() -> i32
