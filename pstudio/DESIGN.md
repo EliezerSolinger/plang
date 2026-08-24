@@ -547,3 +547,209 @@ Três leituras de custo: **B e C já foram escritos** — mal, três vezes, dent
 `lib_app`; o trabalho é promover, não inventar, e promover deixa o `lib_shell`
 mais fino, o que **fortalece a prova de desacoplamento**. **D deixou de ser
 risco** por decisão. E **E, F, G e H somados são menos trabalho que B sozinho**.
+
+---
+
+## O caminho — baterias 124-130 (2026-08-24)
+
+As 120-123 decidiram O QUÊ. Estas decidem COMO, e o plano fase a fase está em
+`pstudio/PLAN.md`.
+
+### 124 — o seam
+
+**A acoplagem não está nos arquivos, está na `struct`:** 21 dos 52 campos do
+`App` são da IDE, 9 dos 34 comandos, e 320 das 721 linhas do `app.psc`.
+
+`Ide` **TEM** um `Shell` — composição, e a dependência anda num sentido só. Os
+comandos viram **tabela de dados** (`record Command {name, run, when}`), o que
+mata de passagem a string `COMMANDS` com 34 entradas de índice fixo e o
+`run_command` que é um `switch` de 34 casos.
+
+Recusado, e porquê: um campo `ide: any?` dentro do `Shell` seria mudança mínima,
+mas o módulo da IDE continuaria a ser **linkado** para o tipo existir —
+separação de tempo de execução, não de ligação, e o portão falharia com razão.
+
+O driver sai para um componente próprio: janela, eventos, pintor, quadro, zoom,
+cache de arquivos e a CLI comum são iguais nos dois binários.
+
+**O portão é por LISTA BRANCA:** o `pcode` lê exactamente 26 arquivos, e
+qualquer `import` novo falha até ser aprovado. É a única forma que não envelhece.
+Corre no `make verify`; os dois binários entram no `make` por omissão.
+
+### 125 — os nomes
+
+> *"não é idiomático chamar coisas de lib, sem elas serem libs mesmo... esses
+> são componentes do pstudio e não libs"*
+
+O prefixo `lib_` nasceu na migração, quando `core.p` e a versão em pscript
+coexistiam. A 116 aposentou os `.p` e o prefixo ficou órfão; a pasta `ps/`
+("pscript") tem quatro arquivos em P dentro. Cai tudo, e cai também no
+`packages/pbuild`, onde `lib_x` é redundante porque o pacote já é a lib.
+
+Os três `WK_CUSTOM` (abas, árvore, paleta) **promovem-se ao `pui` e o editor
+passa a usar os novos** — não ficam duas listas no mesmo programa.
+
+**C entra cedo, logo depois do corte, e vai para a CASCA** — realce é do editor,
+e os dois binários ganham.
+
+### 126-127 — os ícones
+
+> *"vamos usar bitmaps mesmo que escalem mal. ícones vetoriais irá vir muito
+> mais pra frente"*
+
+**Alfa 8-bit, tingido por um papel do tema.** Exactamente como um glifo: o
+`draw_glyph` (`pgfx_raster.p:154`) já blita uma célula de opacidade com
+`blend(dst, color, a)`. O ícone é a mesma função com largura e altura próprias —
+e obedece à regra do tema de graça, porque a cor vem sempre de um papel.
+
+A cadeia é a que a fonte já tem, com outro gerador:
+
+```
+icons.png  ->  tools/mkicons.c (stb_image.h, offline)  ->  icons.bin
+           ->  embed_bytes("icons.bin")                ->  um binário só
+```
+
+Os **sete tamanhos saem reduzidos do gerador**, não em tempo de execução: o
+editor fica sem código de redução nenhum, e são ~105 KB ao lado dos 263 KB que a
+fonte já embute. O `icons.png` vem de um conjunto livre (Lucide/Feather),
+rasterizado uma vez por ferramenta de fora e comitado — o build não depende dela.
+
+**~40 ícones desde já.** O outline é alimentado pelo **índice de completamento
+que já existe** (`complete.psc` já varre declarações a cada relexagem) — zero
+análise nova, e funciona no arquivo por salvar.
+
+**Build é sempre explícito na v1**: nada de reconstruir ao salvar nem de vigiar o
+disco.
+
+### 128 — estado, testes, janelas
+
+**`.pstudio.json` na raiz do projeto, comitável.** Um arquivo só.
+
+**Os quatro testes headless de hoje viram do `pcode`** (o `app_test.psc` já não
+toca em build nenhum), e a IDE ganha um `ide_test.psc` com um driver de mentira:
+pede build, o falso motor responde, o painel mostra, o erro navega. Cada binário
+mantém o seu `--selftest` com SDL dummy.
+
+**Um projeto por PROCESSO.** Abrir outro é outro `pstudio`.
+
+**O `pcode` não lembra nada** — nem tema, nem zoom, nem abas. Se houver um
+`.pstudio.json` na pasta, ele ignora: aquilo é da IDE. Zero I/O ao arrancar é
+metade do que o faz rápido.
+
+### 129-130 — `pforge`
+
+> *"a ideia inicialmente era, pbuild -> gerenciador de build ninja+meson |
+> ppack -> análogo ao cargo e npm. se um executável apenas faz os dois e esse for
+> o melhor design, o nome deveria englobar os dois conceitos em uma única
+> palavra"*
+
+Um binário é o padrão dominante e provado — `cargo`, `go`, `zig` e `npm` todos
+constroem *e* buscam. A separação meson+ninja não é build-vs-pacotes, é
+gerador-vs-executor, e a nossa já existe por dentro nos três modos (*resolve*,
+*describe*, *execute*).
+
+A palavra é **`pforge`**: uma forja faz coisas a partir de matéria-prima, e
+"forge" também carrega o sentido de onde o código mora.
+
+```
+pforge/                      (hoje pbuild/ + ppack/)
+  DESIGN.md  ARQUITETURA.md  DECISOES.md  PLAN.md
+  BATERIAS.md  LINKER.md  REPOSITORIO.md
+  gerenciador-de-pacotes-ideal.md
+  src/main.psc  build_plang.psc  engine_test.psc
+      floor.psc  verdict.psc
+
+packages/pforge/             o motor E o gerenciador, como biblioteca
+  graph  build  log  targets  ninja  api  doctest      (o motor)
+  manifest  lock  repo  pkg                            (os pacotes)
+
+build/bin/pforge             o binário
+```
+
+A biblioteca muda de nome pela mesma razão que o binário: **4 dos 11 módulos são
+do gerenciador de pacotes**, não do motor de build.
+
+São **463 referências em 45 arquivos** (225 em `.md`, 141 em `.psc`, 52 em
+`.sh`, 23 no `build.ninja`), e por isso a renomeação é a **F0** — tudo antes de
+mais nada, num commit só, no momento mais barato que vai existir.
+
+---
+
+## O editor que EXISTE — baterias 131-134 (2026-08-24)
+
+Ao medir o plano contra o código, apareceram três defeitos presentes e dois
+buracos de funcionalidade que nenhuma decisão anterior cobria.
+
+### Os três defeitos (viram a F0)
+
+**1. `Buffer.text()` é quadrático.** Monta o arquivo com `+=` num laço. Medido:
+
+| linhas | `+=` em laço | `"\n".join` |
+|---|---|---|
+| 8 000 | **672 ms** | 0 ms |
+| 32 000 | **16 972 ms** | 3 ms |
+| 128 000 | — | 682 ms |
+
+E o `text()` é chamado **em todo o `save`** e em **toda a construção do índice de
+completamento**. O nosso maior arquivo (`selfhost/ps_lower.p`, 11 076 linhas)
+congela mais de um segundo em cada um.
+
+**2. Um arquivo VAZIO nunca abre.** `read_file` devolve `""` tanto para "vazio"
+como para "não consegui ler", e o `open_file` (`lib_app.psc:263`) não os
+distingue: pede ao driver que releia, para sempre, de 500 em 500 ms, sem
+mensagem. Verificado com `touch vazio.p` e `--selftest`: `tabs 0`, `no file`. Um
+`.png` aberto por engano cai no mesmo laço — e se abrisse, salvar truncava-o.
+
+→ `read_file` passa a devolver **`str?`**: `None` é falha, `""` é vazio.
+
+**3. O laço de eventos não tem um único `try`** (`app.psc:412`). Em pscript,
+estouro de inteiro e índice fora de faixa LEVANTAM — um defeito de aritmética de
+coluna mata o processo.
+
+→ `try` a envolver o tratamento de cada evento; **ao apanhar, tenta salvar os
+buffers modificados** para rascunho antes de mostrar o erro. Transforma um
+defeito em zero perda, mesmo tendo-se recusado o autosave.
+
+### Os dois buracos
+
+**Busca no projeto inteiro não existe** — `find_changed` busca só no buffer
+aberto. Vai para a **CASCA**, e os dois binários ganham: é o que faz um Zed ser
+um Zed. **Varre a cada busca, em tarefa assíncrona** — sem índice, sem
+invalidação, sem memória; os resultados aparecem à medida que chegam. Este
+repositório são ~58 mil linhas de fonte.
+
+**Ir-para-definição entre arquivos não existe** — o `index.build(buf, [])` tem um
+parâmetro `extra: list<str>` documentado para isto e sempre vazio. Passa a ser um
+**índice do projeto construído sob demanda**: nada ao abrir, e ao pedir "ir para
+definição" de um símbolo desconhecido varre nesse momento e guarda.
+
+### As decisões menores
+
+| assunto | decisão |
+|---|---|
+| **atalhos** | tabela de dados, configurável no `.pstudio.json`. O **`pcode` fica com atalhos fixos** — "zero I/O ao arrancar" é metade do que o faz rápido |
+| **atlas** | cresce até onde a fonte alcança (cirílico e grego, ~300 codepoints, 263 KB → ~700 KB). **CJK e emoji ficam `□`**, e isso fica dito em vez de descoberto |
+| **tamanho de arquivo** | **50 mil linhas confortáveis**; acima disso avisa e abre só leitura, sem índice nem realce |
+| **trabalho por salvar** | nada — salvar é do utilizador. O `try` do laço é a rede |
+| **semver do `pui`** | **0.x é especial**: com major 0, o minor pode quebrar (é o que o semver diz e o que o Cargo faz). O `publish` **aceita e AVISA** — a excepção fica visível em cada publicação |
+| **instalar** | `make install` com `PREFIX` (por omissão `/usr/local`), e mais nada |
+| **scrollback do terminal** | tecto de linhas, anel circular; as velhas caem |
+| **`.pstudio.json` inválido** | ignora e **diz na barra de estado** — um editor nunca deve recusar-se a abrir por causa da configuração, nem calar |
+
+### O portão de desempenho
+
+Nenhum teste media tempo, e é por isso que o quadrático viveu até hoje. Tectos
+**absolutos** sobre um arquivo grande de verdade:
+
+```
+tests/pstudio/perf_test.psc   (selfhost/ps_lower.p, 11 076 linhas)
+
+  abrir                            <  200 ms
+  salvar (text())                  <   50 ms
+  índice de completamento          <  200 ms
+  uma tecla (edição + relexagem)   <   16 ms   (60 fps)
+  busca no arquivo                 <   50 ms
+
+# falha com o número medido, não com "lento":
+#   FAIL salvar: 1 340 ms, tecto 50 ms
+```
