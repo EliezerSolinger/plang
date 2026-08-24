@@ -5832,10 +5832,60 @@ para quem quer ficar com os dois.
 **135.5 — Todas as operações valem nos dois.** `len`, indexar, iterar, comparar,
 `str()` para descodificar. O código que migra muda a ASSINATURA e mais nada.
 
-**136 — O coletor ganha FINALIZADORES.** É maquinaria nova e é a única maneira
-honesta de ter um `bytes` que ninguém fecha: uma lista de objetos com um gancho
-de libertação, e quem não for reencaminhado numa coleta é libertado. Serve para
-isto, para o `mmap` e para tudo o que venha a segurar um recurso do sistema.
+### 136 — os finalizadores, e a regra que diz quando usar cada coisa
+
+O coletor ganha **finalizadores**: uma lista de objetos com um gancho de
+libertação, e quem não for reencaminhado numa coleta é libertado. É maquinaria
+nova e é a única maneira honesta de ter um `bytes` que ninguém fecha.
+
+Mas a pergunta certa não é "finalizador ou `with`" — é **para quê cada um**, e as
+duas respostas saem de uma comparação que vale a pena ter escrita:
+
+| | `with` (determinístico) | finalizador (na coleta) |
+|---|---|---|
+| **quando liberta** | num ponto que se aponta no código | quando o coletor calhar |
+| **funciona para** | um recurso com **um dono e um escopo** | um **valor que circula** — devolvido, guardado num `Dict`, enviado a um worker |
+| **esquecer** | não liberta | impossível esquecer |
+| **custa** | uma linha em cada uso | maquinaria no coletor |
+
+A desvantagem decisiva do `with` é a segunda linha: **ele não compõe com
+valores.** Um `bytes` devolvido por uma função e metido numa lista não tem escopo
+nenhum — só tem alcançabilidade, que é a única coisa que um coletor sabe medir.
+
+A desvantagem decisiva do finalizador é a primeira: **não se sabe quando.** Para
+memória isso não faz mal — o coletor corre exactamente quando há pressão de
+memória. Para tudo o resto faz, e é o erro do `MappedByteBuffer` da 137: mil mapas
+não são pressão que o coletor veja, e descritores esgotam-se muito antes do monte.
+
+> **136.1 — Determinístico para o que é ESCASSO. Coleta para o que é MEMÓRIA.**
+
+| | é | como se liberta |
+|---|---|---|
+| `bytes` | memória, e mais nada — a sua escassez É a pressão do monte | **só finalizador**, e nenhum `close`. É isso que o deixa ser um valor |
+| `Mapping` | espaço de endereçamento, um inode, e no Windows o próprio ficheiro | **`with`** é o plano; o finalizador é a rede |
+| `Buffer` | memória partilhada entre threads e transferível | **`close` explícito**: o tempo de vida é uma decisão, não um facto |
+
+**136.2 — O gancho é do RUNTIME, nunca do utilizador.** Só `free`, `munmap`,
+`close`. Não aloca, não levanta, não chama código escrito por ninguém. Corre
+**depois** da coleta, com a lista do que não sobreviveu — nunca vê um monte a
+meio de mover. Não há `__del__` e não há `Drop`: um gancho de utilizador traz a
+ressurreição, a ordem entre objetos e um finalizador que levanta a meio de uma
+coleta, que são as três perguntas que assombram o Java há vinte anos.
+
+**136.3 — Correm à SAÍDA, numa última passagem.** O `runFinalizersOnExit` do Java
+foi retirado por ser perigoso — mas era perigoso porque corria código do
+utilizador, noutra thread, sobre objetos possivelmente vivos; com a restrição da
+136.2 isso não existe. O que se ganha é o que decidiu: **as fugas passam a ser
+mensuráveis.** Um portão que conte quantos ganchos correram e compare com quantos
+foram registados é um teste de fugas, e é o género de portão que este repositório
+constrói. O custo é a saída demorar proporcionalmente ao que ficou vivo, e isso é
+ruído.
+
+**136.4 — Um finalizador liberta um RECURSO; nunca termina um TRABALHO.** Ele faz
+`close(fd)` — não esvazia um `Buffer` que estava a ser montado, e não corre de
+todo se o processo for morto com `SIGKILL`. O que *tem* de acontecer continua a
+ser do `with` e de quem escreve. Isto fica dito porque "a limpeza é garantida à
+saída" lê-se ao contrário com uma facilidade perigosa.
 
 ### 137 — o mapa de disco
 
