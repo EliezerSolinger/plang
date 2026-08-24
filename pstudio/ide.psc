@@ -771,20 +771,22 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
 
 # what the bottom dock offers. Build is real since F7; Tests and Packages are
 # still labels, and F9 and F10 replace them.
+# The four the dock offers. `Problems` is NOT one of them: the decision says it
+# is v2 ("o sublinhado no editor já avisa"), and a tab that says "(Problems is
+# empty)" is that decision contradicting itself on screen every day.
 const PAGE_BUILD: int = 0
-const PAGE_PROBLEMS: int = 1
-const PAGE_TESTS: int = 2
-const PAGE_PACKAGES: int = 3
-const PAGE_TERMINAL: int = 4
+const PAGE_TESTS: int = 1
+const PAGE_PACKAGES: int = 2
+const PAGE_TERMINAL: int = 3
 
 
 def dock_pages() -> list<str>:
-    return ["Build", "Problems", "Tests", "Packages", "Terminal"]
+    return ["Build", "Tests", "Packages", "Terminal"]
 
 
 def dock_icons() -> list<int>:
-    return [ico.ICO_HAMMER, ico.ICO_TRIANGLE_ALERT, ico.ICO_FLASK_CONICAL,
-            ico.ICO_PACKAGE, ico.ICO_TERMINAL]
+    return [ico.ICO_HAMMER, ico.ICO_FLASK_CONICAL, ico.ICO_PACKAGE,
+            ico.ICO_TERMINAL]
 
 
 private def tool(ide: Ide, icon: int, command: str) -> int:
@@ -889,10 +891,10 @@ def build_shell(ide: Ide):
             u.on_submit(ide.build_list, lambda id, row: ide.build_row_picked(row))
             ide.dock_labels.append(page)
         else:
+            # nothing left in this branch since the `Problems` tab went away; it
+            # stays because the next panel to be born is born here
             lb = u.label(ide.dock_body, "(" + names[i] + " is empty)")
             u.set_pad(lb, 8)
-            # wide but not tall: a panel's content starts at the TOP of it, and
-            # a label that expanded vertically floated in the middle of the dock
             u.set_expand(lb, True, False)
             ide.dock_labels.append(lb)
     ide.build_refresh()

@@ -1225,3 +1225,30 @@ razão por que o grafo o é: resolver uma versão, conferir um hash e verificar 
 assinatura são do `pforge` daquele projeto, e o editor abre qualquer árvore. A
 alternativa seria o editor embeber o resolvedor de um projeto — o que funciona
 para um projeto, que seria este.
+
+---
+
+## A releitura das specs, depois de tudo (2026-08-24)
+
+A prática que a fase do `pforge` deixou escrita — *"a F9 é a releitura das
+specs, que achou 6 decisões escritas e não feitas — vale repetir depois de cada
+fase grande"* — repetida aqui sobre as baterias 120-134. Achou **duas**:
+
+**1. O `pstudio` não exigia projeto.** Estava escrito duas vezes — na resposta a
+uma bateria (*"PStudio exige projeto, PCode abre qualquer pasta"*) e no primeiro
+parágrafo do próprio `pstudio.psc` — e não era verdade: a IDE abria qualquer
+coisa e depois não tinha o que construir.
+
+Agora procura um `pack.json` aqui ou ACIMA, e recusa a apontar para o `pcode` se
+não houver. Subir importa tanto como recusar: `pstudio pstudio/ide.psc` a partir
+da raiz de um repositório deve abrir o PROJETO e mostrar a árvore dele, não o
+diretório onde o ficheiro calha estar. A construção, o manifesto e as suítes são
+todos relativos à raiz, portanto a raiz é o que o editor abre.
+
+**2. Havia uma aba `Problems` que a decisão diz ser da v2.** *"Problemas fica
+para a v2 — o sublinhado no editor já avisa"*. Uma aba que diz "(Problems is
+empty)" é essa decisão a contradizer-se no ecrã todos os dias. Saiu. O dock tem
+quatro páginas e as quatro são reais: Build, Tests, Packages, Terminal.
+
+Nenhuma das duas custou mais de vinte linhas. É esse o argumento para a prática:
+o que ela apanha é barato de corrigir e caro de descobrir tarde.

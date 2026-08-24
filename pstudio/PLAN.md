@@ -631,3 +631,47 @@ o editor que se estava a usar.
    (`pforge dev`) é exactamente o que expõe um PTY mal feito.
 5. **A lista branca vai irritar.** Um `import` legítimo novo no `pcode` falha o
    portão até alguém aprovar. É o preço, e é o ponto.
+
+---
+
+## O plano, fechado (2026-08-24)
+
+As doze fases estão feitas. O que segue é o que elas custaram DE VERDADE — não o
+que estava previsto — porque é essa a parte que serve para o próximo plano.
+
+| fase | o que estava previsto | o que custou a mais |
+|---|---|---|
+| F0 | três defeitos e um portão de desempenho | — |
+| F1 | renomear em 45 arquivos | — |
+| F2 | o corte e a lista branca | — |
+| F3 | realce de C | — |
+| F4 | o tema pelas raízes | uma borda invisível no tema claro, que o teste da invariante apanhou |
+| F5 | widgets no `pui` | um defeito de sombreamento no índice de completamento |
+| F6 | a concha, os ícones, o `.pstudio.json` | **um defeito do compilador** (`nonlocal` dentro de um `try`), uma divisória fantasma no `SPLIT`, e o portão de desempenho a gritar lobo |
+| F7 | o painel de Build | o `Build` apagava o alvo escolhido, desde sempre |
+| F8 | o PTY e o terminal | **três defeitos do runtime e um do compilador** (`catch e:` dentro de um `async def`) |
+| F9 | o painel de Testes | — |
+| F10 | tar avulso, URL, 0.x | o `MF.read` não sabia ler de um texto |
+| F11 | `make install` | — |
+
+**Cinco defeitos que nada disto teria encontrado de outra forma**, e nenhum deles
+estava no editor: dois no compilador, três no runtime. A razão é sempre a mesma —
+o editor usa a linguagem de maneiras que os testes da linguagem não usavam. Um
+`catch e:` numa função assíncrona não aparece numa suíte que apanha erros em
+funções comuns; um descritor que abre e fecha a cada `Run` não aparece numa suíte
+de sockets que vivem muito tempo.
+
+É exactamente o que a frase *"o editor é a prova de fogo"* queria dizer, e é a
+melhor razão que há para o construir na própria linguagem.
+
+### O que ficou dito e NÃO feito, de propósito
+
+Está na tabela "o que não está no plano" acima e continua a valer: depurador,
+painel de Problemas, diagnóstico vivo, navegação em C, ícones vectoriais, várias
+janelas, estado no `pcode`. Nenhum deles foi tocado.
+
+E uma coisa que o plano usava como justificação e que não existe: o **`pforge
+dev`**. A primitiva do PTY foi para o runtime com o argumento de que ele também a
+ganharia; ele não existe, e o segundo consumidor é hoje
+`tests/pscript/run/pty.psc` — um programa em pscript comum, que não sabe o que um
+editor é. O argumento sobrevive; a frase é que era optimista.

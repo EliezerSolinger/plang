@@ -21,7 +21,7 @@ outline shut=True
 outline rows=1 first=[main] at=1
 jumped to line=1
 after typing=2 last=[second]
-dock page=2 of 5
+dock page=2 of 4
 dock shut=True
 and a build reopens it=True at page=0
 remembered: tree=220 outline_open=True dock_open=True target=[build/bin/pcode]

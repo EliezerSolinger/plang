@@ -274,20 +274,40 @@ the compiler does not read — a `.md`, a `.json` — opens as plain text, which
 the honest answer rather than invented colours.
 
 There are **two programs from the same layers**: `pcode` is the editor, and
-`pstudio` is the editor plus the IDE — the build, the run and the manifest, with
-the engine imported as a library rather than called as a process.
+`pstudio` is the editor plus the IDE.
 
 ```sh
 make pcode                     # the editor
 make pstudio                   # ... and the IDE
-./build/bin/pcode .            # open the tree in the current directory
+./build/bin/pcode .            # opens any folder
+./build/bin/pstudio .          # ... and this one wants a project
 ```
+
+`pcode` opens any folder and remembers nothing between runs — zero I/O at startup
+is half of what makes it fast. `pstudio` looks for a `pack.json` here or above
+and refuses without one, because everything it adds needs something to build:
+
+* a **toolbar**, a **file tree**, the editor, an **outline** on the right, and a
+  dock of four panels at the bottom;
+* **Build** — the engine imported as a *library*, not called as a process, so the
+  graph is a `dict` and the build runs in the same event loop as the keyboard.
+  Progress as a bar, one row per edge, the failing one's output under it, and
+  clicking a diagnostic goes to its line;
+* **Tests** — a suite is a target and a case is an edge of it, so the same five
+  callbacks feed a tree of suite → case → what it printed. A green suite collapses
+  to one line; the panel rises **only** on a failure;
+* **Packages** — what `pack.lock` really locks, whether anybody signed for it, and
+  `pforge add` from the palette (a name, a `.tar` path, or a URL);
+* **Terminal** — a real pseudo-terminal, so `Run` gives the program a TTY and it
+  behaves the way it behaves in a shell, stdin included;
+* **`.pstudio.json`** — the panes, the default target and the key bindings, in one
+  committable file. Nothing in it can fail: every problem takes the default and
+  says so in the status bar.
 
 The second one exists twice over: it is the tool, and it is the **proof**. That
 the two share every layer below the entry point is not a claim in a document —
 `tests/decouple.sh` asks the compiler (`plangc --deps`) which files each binary
-reads and fails if the answer changes. Today it is **26 against 31**, and
-`pcode --selftest` prints `commands 25` where `pstudio` has 34.
+reads and fails if the answer changes. Today it is **38 against 45**.
 
 The list is a WHITELIST and not a blacklist, which is the only kind that does not
 age: a blacklist names what may not come in, and a module invented next month
@@ -303,9 +323,10 @@ hold a pointer stay in Plang and expose scalars:
 | `hl.p` | the compiler's lexer: the text goes in as a `CStr` (pointer + length, no copy) and the tokens come back as numbers |
 
 Everything above that — lines, carets, undo, search, folding, the widget tree,
-the layout, the key bindings, the painting — is pscript: **4 671 lines of it over
-1 103 of Plang**. The editor in pure Plang that came before it was 6 448 lines,
-and was retired once parity had been measured method by method.
+the layout, the key bindings, the painting, and everything the IDE adds — is
+pscript: **11 485 lines of it over 1 408 of Plang**. The editor in pure Plang that
+came before it was 6 448 lines, and was retired once parity had been measured
+method by method.
 
 The ratio is the interesting part: the buffer needs 914 lines of pscript where
 the Plang one needed 1 505, and the difference is not style — a line is a `str`,

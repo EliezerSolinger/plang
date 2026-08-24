@@ -308,6 +308,28 @@ async def serve_ide(dv: driver.Driver, sh: appm.Shell, ide: idem.Ide, td: TermDr
         sh.dirty_ui = True
 
 
+private def project_root(start: str) -> str:
+    """The directory with a `pack.json`, here or above. "" when there is none.
+
+    *"PStudio exige projeto, PCode abre qualquer pasta"* — and it was written
+    twice, including in this file's own first paragraph, without being true: the
+    IDE opened anything and then had nothing to build.
+    
+    Walking UP matters as much as refusing: `pstudio pstudio/ide.psc` from the
+    root of a repository should open the PROJECT and show its tree, not the one
+    directory the file happens to be in. The build, the manifest and the suites
+    are all relative to the root, so the root is what the editor opens."""
+    d = path.abspath(start if len(start) > 0 else ".")
+    for i in range(64):
+        if path.isfile(path.join(d, "pack.json")):
+            return d
+        up = path.dirname(d)
+        if up == d:
+            return ""
+        d = up
+    return ""
+
+
 # ---------- F10: the packages ----------
 #
 # READING is a library call — `pack.lock` is a file and `lock.psc` is in here.
@@ -903,8 +925,14 @@ async def main_run() -> int:
     a = driver.parse_args("pstudio", args, 1)
     if not a.ok:
         return 2
+    root = project_root(a.dir)
+    if len(root) == 0:
+        print("pstudio: there is no `pack.json` here or above — this is not a project.")
+        print("   `pcode " + a.dir + "` opens any folder; `pstudio` is the one that")
+        print("   builds, and a build needs something to build.")
+        return 2
     dv = driver.new_driver()
-    sh = await driver.open_window(dv, a, a.dir)
+    sh = await driver.open_window(dv, a, root)
     if sh == None:
         return 1
     ide = idem.new_ide(sh)
