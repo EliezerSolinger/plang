@@ -2175,6 +2175,42 @@ E o que muda não se trata todo da mesma maneira — são **quatro categorias**:
 `sha2`, `ed25519`, `http`, `url` e `pui` mudam de assinatura (F1). São eventos de
 semver — que o `0.x` da F10 do pstudio acabou de destrancar, com aviso.
 
+### O que cada fase toca no código que JÁ EXISTE — medido
+
+E a coluna que interessa não é a do que quebra: é a do que **desaparece**.
+
+| fase | o que muda no que existe | quantos | o que DESAPARECE |
+|---|---|---|---|
+| **FN** | grafia dos tipos em `.psc`; mensagens do compilador; prosa | 933 + 61 + 9 `.md` | — (é só grafia) |
+| **FS** | **`path.isfile/isdir/exists/getsize/getmtime` → `os.*`** | **140** | — |
+| | `path.join/dirname/basename/normpath` (vão para o pacote, mesmo nome) | 216 | |
+| | `bisect` / `heapq` / `random` ganham um import | 3 / 4 / 7 ficheiros | |
+| | os traits `Foreign`/`Shared` | **0** — hoje nenhum tipo de P atravessa | |
+| **FE** | `import <stl/…>` → `import <vec>` (selfhost 14, pstudio 2, pacotes 3, testes 3) | 41 | **o `--pkg-path` obrigatório**: `plangc foo.p` passa a compilar sozinho |
+| **F0** | nada — tipos novos | 0 | — |
+| **F1** | `list<u8>` → `bytes` | 81 em 14 ficheiros | |
+| | **`.read(n)` → `read_into` ou `read_all()`** | **33** | as três cópias por leitura |
+| | `.read_all()` muda de tipo; `.text()` fica | 51 sítios, metade fica | |
+| **F2** | nada quebra | 0 | **7 sítios que trazem um ficheiro inteiro para a memória só para o hashear** |
+| **F3** | `declare Mapping` — a primeira utilização real dos traits | 1 | |
+| **F4** | `os.listdir` passa a poder percorrer | 23 | a lista inteira materializada antes de se olhar para o primeiro nome |
+| **F5** | — | 0 | **a sondagem do `check_external`** (`shell.psc:858`, 7 chamadas a `mtime_of`/`getmtime`) |
+| **F6** | — | 0 | **as 14 linhas de máquina de estados de UTF-8 escritas à mão no `terminal.psc`** |
+| **F7** | — | 0 | — |
+
+**Três coisas que esta contagem revelou e que não estavam no plano:**
+
+1. **A FS é a maior fase mecânica, e não é pelos motivos que estavam escritos.**
+   Partir o `path` são **140 chamadas** a mudar de módulo — mais do que os 81
+   `list<u8>` da F1. Estava escrito como "a metade de sistema junta-se ao `os`",
+   uma linha, e é o maior `sed` do plano inteiro.
+2. **Os traits da 141 custam ZERO migração.** Medido: hoje uma função em P com
+   tipos escalares atravessa para o pscript, e uma que mencione uma struct de P
+   não — portanto **não há um único tipo de P a atravessar hoje** para anotar. Os
+   traits nascem com o `Mapping` da F2 e não têm dívida atrás deles.
+3. **Metade das fases não quebra nada.** A F0, a F2, a F5, a F6 e a F7 só
+   acrescentam. O que elas fazem ao código existente é **apagá-lo**.
+
 ### A consequência de ordem, que não é negociável
 
 Quando uma fase muda o que a linguagem ACEITA, o compilador que compila as fontes
