@@ -551,6 +551,8 @@ static Expr *PsLow_convert(PsLow *self, PsExpr *e, const char *name);
 
 static Expr *PsLow_convert_width(PsLow *self, PsExpr *e, const char *name);
 
+static int PsLow_has_nl_name(PsLow *self, PsExpr *lhs);
+
 static Stmt *PsLow_nonlocal_stmt(PsLow *self, const char *name, Pos pos);
 
 static void PsLow_lower_try(PsLow *self, PsStmt *s, Vec_pStmt *out);
@@ -6262,7 +6264,21 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 fa->lhs = ex_new(self->a, EX_IDENT, s->pos);
                 fa->lhs->text = tn;
                 fa->field = Arena_printf(self->a, "_%d", i);
-                if (s->is_assign) {
+                if (StrSet_has(&self->nl_names, nm->text)) {
+                    if (!StrSet_has(&self->nl_done, nm->text)) {
+                        StrSet_add(&self->nl_done, nm->text);
+                        Stmt *nd2 = st_new(self->a, ST_VAR, s->pos);
+                        nd2->name = ps_cname(self->a, nm->text);
+                        nd2->type = PsLow_ty(self, nm->type);
+                        nd2->init = PsLow_zero_val(self, nd2->type, s->pos);
+                        Vec_pStmt_push(&self->nl_decls, nd2);
+                    }
+                    Stmt *na = st_new(self->a, ST_ASSIGN, s->pos);
+                    na->lhs = PsLow_ident(self, ps_cname(self->a, nm->text), s->pos);
+                    na->op = TK_ASSIGN;
+                    na->rhs = fa;
+                    Vec_pStmt_push(out, na);
+                } else if (s->is_assign) {
                     Stmt *ua = st_new(self->a, ST_ASSIGN, s->pos);
                     ua->lhs = ex_new(self->a, EX_IDENT, s->pos);
                     ua->lhs->text = nm->text;
@@ -7113,7 +7129,7 @@ static void PsLow_lower_try(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         size_t i;
         for (i = 0; i < s->body->n; i += 1) {
             PsStmt *d = s->body->stmts[i];
-            if (d->kind == PS_VAR && !d->is_assign && !d->is_global) {
+            if (d->kind == PS_VAR && !d->is_assign && !d->is_global && !StrSet_has(&self->nl_names, d->name)) {
                 Stmt *hd = st_new(self->a, ST_VAR, d->pos);
                 hd->name = d->name;
                 hd->type = PsLow_ty(self, d->type);
@@ -7121,16 +7137,23 @@ static void PsLow_lower_try(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 Vec_pStmt_push(&body, hd);
                 d->is_assign = 1;
             } else if (d->kind == PS_UNPACK) {
+                int any_block = 0;
                 size_t k;
                 for (k = 0; k < d->lhs->nargs; k += 1) {
                     PsExpr *nm = d->lhs->args[k];
+                    if (StrSet_has(&self->nl_names, nm->text)) {
+                        continue;
+                    }
+                    any_block = 1;
                     Stmt *ud = st_new(self->a, ST_VAR, d->pos);
                     ud->name = nm->text;
                     ud->type = PsLow_ty(self, nm->type);
                     ud->init = PsLow_zero_val(self, ud->type, d->pos);
                     Vec_pStmt_push(&body, ud);
                 }
-                d->is_assign = 1;
+                if (any_block && !PsLow_has_nl_name(self, d->lhs)) {
+                    d->is_assign = 1;
+                }
             }
         }
     }
@@ -7346,6 +7369,16 @@ static void PsLow_tail_return(PsLow *self, Vec_pStmt *body, Type *ret, Pos pos) 
     Stmt *r = st_new(self->a, ST_RETURN, pos);
     r->expr = PsLow_zero_of(self, ret, pos);
     Vec_pStmt_push(body, r);
+}
+
+static int PsLow_has_nl_name(PsLow *self, PsExpr *lhs) {
+    size_t i;
+    for (i = 0; i < lhs->nargs; i += 1) {
+        if (StrSet_has(&self->nl_names, lhs->args[i]->text)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static Stmt *PsLow_nonlocal_stmt(PsLow *self, const char *name, Pos pos) {

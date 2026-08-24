@@ -1,0 +1,11 @@
+try=5
+finally=7
+string=[kept]
+nested=11
+after a raise=1
+two names=12
+block scope still dies=42
+list=4
+unpack in if=30
+unpack in try=[kept2]
+unpack plain=30

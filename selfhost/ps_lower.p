@@ -348,6 +348,7 @@ struct PsLow:
     private def call(self: *PsLow, e: *PsExpr) -> *Expr
     private def convert(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
     private def convert_width(self: *PsLow, e: *PsExpr, name: const *char) -> *Expr
+    private def has_nl_name(self: *PsLow, lhs: *PsExpr) -> bool
     private def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt
     private def lower_try(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def lower_list_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
@@ -5964,7 +5965,23 @@ struct PsLow:
                     fa->lhs = ex_new(self->a, EX_IDENT, s->pos)
                     fa->lhs->text = tn
                     fa->field = self->a->printf("_%d", i)
-                    if s->is_assign:
+                    # the same three cases as PS_VAR, and for the same reason:
+                    # a `nonlocal` name is declared once at the top of the
+                    # function, and everything after it is an assignment
+                    if self->nl_names.has(nm->text):
+                        if not self->nl_done.has(nm->text):
+                            self->nl_done.add(nm->text)
+                            nd2: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                            nd2->name = ps_cname(self->a, nm->text)
+                            nd2->type = self->ty(nm->type)
+                            nd2->init = self->zero_val(nd2->type, s->pos)
+                            self->nl_decls.push(nd2)
+                        na: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+                        na->lhs = self->ident(ps_cname(self->a, nm->text), s->pos)
+                        na->op = TK_ASSIGN
+                        na->rhs = fa
+                        out->push(na)
+                    elif s->is_assign:
                         ua: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
                         ua->lhs = ex_new(self->a, EX_IDENT, s->pos)
                         ua->lhs->text = nm->text
@@ -6927,10 +6944,21 @@ struct PsLow:
         # is a scope — without the hoist, a name declared in one statement would
         # not exist in the next. The pscript scope is unchanged: the name still
         # dies at the end of the try, which is this block.
+        #
+        # EXCEPT a name `nonlocal` pinned to the function (64.1). That one is
+        # declared at the top of the function by `nl_decls`, and hoisting it here
+        # too declared a SECOND one that shadowed it: the assignment went into
+        # the shadow, the block ended, and the function read the zero its own
+        # name was born with. Silently, for an `int`; as a NULL and a
+        # segmentation fault for anything the collector owns.
+        #
+        # It is the worst shape a bug can have here, because 64.1's own
+        # diagnostic tells you to write `nonlocal` — so the fix it recommends was
+        # the one that broke. Hence the check, in both branches.
         if s->body != None:
             for i in range(s->body->n):
                 d: *PsStmt = s->body->stmts[i]
-                if d->kind == PS_VAR and not d->is_assign and not d->is_global:
+                if d->kind == PS_VAR and not d->is_assign and not d->is_global and not self->nl_names.has(d->name):
                     hd: *Stmt = st_new(self->a, ST_VAR, d->pos)
                     hd->name = d->name
                     hd->type = self->ty(d->type)
@@ -6938,14 +6966,21 @@ struct PsLow:
                     body.push(hd)
                     d->is_assign = True
                 elif d->kind == PS_UNPACK:
+                    any_block: bool = False
                     for k in range(d->lhs->nargs):
                         nm: *PsExpr = d->lhs->args[k]
+                        if self->nl_names.has(nm->text):
+                            continue
+                        any_block = True
                         ud: *Stmt = st_new(self->a, ST_VAR, d->pos)
                         ud->name = nm->text
                         ud->type = self->ty(nm->type)
                         ud->init = self->zero_val(ud->type, d->pos)
                         body.push(ud)
-                    d->is_assign = True
+                    # `is_assign` says "every name already exists", so it may
+                    # only go up when this hoist really declared all of them
+                    if any_block and not self->has_nl_name(d->lhs):
+                        d->is_assign = True
         prev: const *char = self->try_flag
         self->try_flag = flag
         if s->body != None:
@@ -7142,6 +7177,13 @@ struct PsLow:
 
     # `nonlocal x` (64.1): the opt-in that lets a name assigned inside a block
     # survive it. P has exactly this statement, so it passes straight through.
+    # does any name of an unpack belong to the function rather than to a block?
+    private def has_nl_name(self: *PsLow, lhs: *PsExpr) -> bool:
+        for i in range(lhs->nargs):
+            if self->nl_names.has(lhs->args[i]->text):
+                return True
+        return False
+
     private def nonlocal_stmt(self: *PsLow, name: const *char, pos: Pos) -> *Stmt:
         n: *Stmt = st_new(self->a, ST_NONLOCAL, pos)
         n->name = name
