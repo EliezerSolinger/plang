@@ -6087,11 +6087,22 @@ Os dois nomes coexistem durante exactamente um commit. Deixá-los coexistir para
 sempre seria a linguagem ficar com duas grafias para tudo, que é a coisa que a
 regra queria acabar.
 
-**Medido: ~1 150 sítios** (`list<` 893, `dict<` 213, `set<` 46, `socket`/`buffer`
-14). É mecânico e é código, não prosa, portanto um `sed` é legítimo — a regra de
-reescrever à mão é para os `.md`. **Vai numa FASE própria e ANTES do NIO**, para
-que o diálogo de cada commit seja sobre uma coisa de cada vez, e para que o
-`Mapping` não nasça ao lado de um `list<u8>`.
+**Medido**, e em quatro categorias que não se tratam da mesma maneira:
+
+| onde | quantos | como |
+|---|---|---|
+| anotações em `.psc` | `list<` 753, `dict<` 154, `set<` 12, `socket`/`buffer` 14 | `sed` |
+| **as mensagens e comentários do próprio compilador**, em `.p` | 61 (`ps_sema` 28, `ps_lower` 8, `ps_parser` 4…) | `sed`, mas é o que o utilizador LÊ |
+| a prosa dos `.md` | 9 ficheiros | **à mão** |
+| o `bootstrap/` | regenerado | o portão do ponto fixo |
+
+A segunda linha é a que mais dói esquecer: `self->expect(TK_LT, "list<T>")` é uma
+cadeia dentro do compilador, e sem ela ele passa a dizer `list<T>` numa linguagem
+onde se escreve `List<T>`.
+
+**Vai numa FASE própria e ANTES do NIO**, para que o diálogo de cada commit seja
+sobre uma coisa de cada vez, e para que o `Mapping` não nasça ao lado de um
+`list<u8>`.
 
 ### 140 — o resto do pacote
 

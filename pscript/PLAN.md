@@ -2139,8 +2139,58 @@ E uma que fica registrada e não implementada: **um builtin como VALOR de funç�
 As decisões estão em `pscript/DESIGN.md`, baterias 135-140. **Só o utilizador
 decide**; o que está lá está fechado e não se repropõe.
 
-Sete fases. A **N** vem primeiro e não é sobre bytes — é a renomeação dos tipos,
+Dez fases. A **FN** vem primeiro e não é sobre bytes — é a renomeação dos tipos,
 feita antes para que nada novo nasça com o nome errado.
+
+---
+
+## A ÁRVORE INTEIRA — a regra que atravessa todas as fases
+
+Isto não é uma fase; é uma propriedade de todas elas, e é a coisa mais fácil de
+subestimar no plano inteiro. **Este trabalho muda a linguagem, e o compilador
+está escrito na linguagem que ele compila.**
+
+A escala:
+
+| | ficheiros | linhas |
+|---|---|---|
+| `.psc` | 376 | 35 192 |
+| `.p` / `.ph` (sem o `bootstrap/`) | 438 | 64 668 |
+
+E o que muda não se trata todo da mesma maneira — são **quatro categorias**:
+
+1. **Código em `.psc`** — anotações de tipo, assinaturas, `List<u8>` a virar
+   `bytes`. Mecânico, `sed`, e o compilador apanha o que escapar.
+2. **Código em `.p`, incluindo o compilador** — os 41 `import <stl/…>` da FE, e
+   as declarações `Foreign`/`Shared` da FS. E, menos óbvio, **as 61 cadeias e
+   comentários dentro do `selfhost/` que dizem `list<T>`**: são o que o
+   utilizador LÊ numa mensagem de erro, e sem elas o compilador fica a dizer uma
+   coisa que a linguagem já não diz.
+3. **A prosa dos `.md`** — 9 ficheiros com exemplos. **À mão, nunca por regex**;
+   é a lição que a tradução para inglês custou dois erros a aprender.
+4. **O `bootstrap/`** — o C comitado. Regenerado em cada fase que toque no
+   compilador, e o portão do ponto fixo (`s2 == s3`) é quem confirma.
+
+**E os pacotes publicados sobem de versão**: `stl` desaparece (FE), e `tar`,
+`sha2`, `ed25519`, `http`, `url` e `pui` mudam de assinatura (F1). São eventos de
+semver — que o `0.x` da F10 do pstudio acabou de destrancar, com aviso.
+
+### A consequência de ordem, que não é negociável
+
+Quando uma fase muda o que a linguagem ACEITA, o compilador que compila as fontes
+novas tem de as aceitar primeiro. Por isso **cada mudança de superfície é sempre
+três commits**, e cada um compila (é a 139.1, e vale para a FN, a FE e a F1):
+
+```
+1. o compilador aceita o velho E o novo, com um -W no velho
+2. a árvore migra
+3. o velho deixa de existir
+```
+
+Um commit do meio que não compila não se revê, porque uma falha esconde as
+outras. E os dois nomes coexistem durante exactamente um commit — deixá-los para
+sempre seria a linguagem ficar com duas grafias para tudo, que é o que estas
+fases existem para acabar.
 
 ---
 
