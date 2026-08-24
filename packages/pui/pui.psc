@@ -27,6 +27,8 @@ What CHANGED in the port, and why:
     free function does not capture; here a lambda captures the app (28.1/19.2),
     so the `ctx` has no reason to exist.
 """
+import <pui/theme.psc> as th
+
 
 # ---------- what a widget is ----------
 
@@ -105,26 +107,9 @@ struct Painter:
 
 
 # the theme (a dark one, compiled in; a config file is another conversation)
-struct Theme:
-    bg: int
-    panel: int
-    panel_hi: int      # hover
-    panel_lo: int      # pressed / sunken
-    border: int
-    text: int
-    text_dim: int
-    accent: int
-    sel: int
-    pad: int           # inner breathing room (buttons and the like)
-    sep: int           # separation between a BOX's children
-    handle: int        # thickness of the divider and of the bar
-
-
-def theme_dark() -> Theme:
-    return Theme(0xFF1E1F22, 0xFF2B2D30, 0xFF3A3D41, 0xFF232527, 0xFF17181A,
-                 0xFFD4D4D4, 0xFF808080, 0xFF4F9CF7, 0xFF264F78, 6, 4, 6)
-
-
+# The theme is a module of its own: eight roots and ~30 derived roles, so that
+# no widget ever writes a colour. See `theme.psc` — including why the syntax
+# roles live there.
 # A node of the tree. The payload fields of every type all live here: an empty
 # node costs a few pointers, and the price of that is not having five structs,
 # five allocations and a releaser that has to know about all of them.
@@ -240,7 +225,7 @@ struct Ui:
     focus: int           # keyboard focus: exactly one (Godot's model)
     capture: int         # the mouse stays captured by whoever pressed, until release
     hover: int
-    theme: Theme
+    theme: th.Theme
     cell_w: int          # the font cell, given from outside
     cell_h: int
     lay_w: int           # the size of the last layout (to redo it)
@@ -805,11 +790,15 @@ struct Ui:
             case WK_LABEL:
                 self.cmd_text(id, r.x + nd.pad, r.y + (r.h - lh) // 2, nd.text, th.text)
             case WK_BUTTON:
-                bg = th.panel_hi
+                # the roles already said this: `panel_hi` IS hover and
+                # `panel_lo` IS pressed. The base was using the hover role and
+                # hover had a literal of its own, which is how a theme with three
+                # states ends up with four colours.
+                bg = th.panel
                 if nd.pressed:
                     bg = th.panel_lo
                 elif nd.hover:
-                    bg = 0xFF45484D
+                    bg = th.panel_hi
                 self.cmd_rect(id, r, bg)
                 self.cmd_frame(id, r, th.border)
                 tw = self.text_w(nd.text)
@@ -1142,4 +1131,4 @@ struct Ui:
 def new_ui(cell_w: int, cell_h: int) -> Ui:
     """The font cell comes from outside: the toolkit does not talk to the driver,
     and that is what lets the layout be measured without a window."""
-    return Ui([], -1, -1, -1, -1, -1, theme_dark(), cell_w, cell_h, 0, 0, False)
+    return Ui([], -1, -1, -1, -1, -1, th.theme_dark(), cell_w, cell_h, 0, 0, False)

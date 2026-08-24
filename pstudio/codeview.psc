@@ -23,6 +23,7 @@ end — that the editor's logic runs without a driver, and is therefore testable
 import core
 import <pui> as pui
 import highlight as hlm
+import <pui/theme.psc> as thm
 import complete as cmp
 
 
@@ -41,24 +42,24 @@ const MM_COLS: int = 90
 const MM_ROW: int = 2
 
 
-# the colours per highlight class (dark theme; the index is lib_hl's HL_*). A
-# `match` and not a module list: an imported module does not run statements.
-def hl_color(cls: int) -> int:
+# the colour a highlight class is painted in — a ROLE of the theme, never a
+# literal. The index is `highlight.psc`'s HL_*.
+def hl_color(th: thm.Theme, cls: int) -> int:
     if cls == 1:
-        return 0xFFC586C0      # a language keyword (purple)
+        return th.syn_kw
     if cls == 2:
-        return 0xFFCE9178      # a string (orange)
+        return th.syn_str
     if cls == 3:
-        return 0xFFB5CEA8      # a number (light green)
+        return th.syn_num
     if cls == 4:
-        return 0xFF6A9955      # a comment (green)
-    return 0xFFD4D4D4          # plain text
+        return th.syn_comment
+    return th.syn_text
 
 
-# a highlight colour at minimap strength (translucent, so the runs read as a
-# texture)
-def mm_tint(cls: int) -> int:
-    return (hl_color(cls) & 0x00FFFFFF) | 0xB0000000
+# the same colour at minimap strength (translucent, so the runs read as a
+# texture instead of as text)
+def mm_tint(th: thm.Theme, cls: int) -> int:
+    return thm.fade(hl_color(th, cls), 0xB0)
 
 
 enum GutKind:
@@ -230,16 +231,17 @@ struct CodeView:
                 return str(line + 1)
 
     def gutter_color(self, kind: GutKind, line: int) -> int:
+        th = self.u.theme
         match kind:
             case GUT_MARKS:
-                return 0xFFE05252 if (self.buf.mark_of(line) & core.MARK_BREAK) != 0 else 0xFF4F9CF7
+                return th.mark_break if (self.buf.mark_of(line) & core.MARK_BREAK) != 0 else th.mark_book
             case GUT_FOLD:
-                return 0xFFD0A050 if self.buf.is_folded(line) else 0xFF6E7075
+                return th.fold_closed if self.buf.is_folded(line) else th.fold_open
             case _:
                 for k in range(self.buf.ncarets()):
                     if self.buf.caret(k).line == line:
-                        return 0xFFB0B0B0
-                return 0xFF6E7075
+                        return th.gutter_text_hi
+                return th.gutter_text
 
     def gutter_click(self, kind: GutKind, line: int) -> bool:
         match kind:
@@ -412,9 +414,9 @@ struct CodeView:
         vis = self.visible_lines()
         gw = self.gutter_w()
 
-        self.u.cmd_rect(self.id, r, 0xFF1E1F22)
+        self.u.cmd_rect(self.id, r, th.bg)
         if gw > 0:
-            self.u.cmd_rect(self.id, pui.Rect(r.x, r.y, gw, r.h), 0xFF232527)
+            self.u.cmd_rect(self.id, pui.Rect(r.x, r.y, gw, r.h), th.gutter)
 
         self.hl.update(self.buf)
 
@@ -422,7 +424,7 @@ struct CodeView:
         if self.buf.ncarets() == 1 and not self.buf.has_sel():
             crow = self.row_of_line(self.buf.caret(0).line)
             if crow >= 0 and crow < vis:
-                self.u.cmd_rect(self.id, pui.Rect(tr.x, tr.y + crow * lh, tr.w, lh), 0xFF26282C)
+                self.u.cmd_rect(self.id, pui.Rect(tr.x, tr.y + crow * lh, tr.w, lh), th.cur_line)
 
         # the selections (before the text: the replay is in order)
         for k in range(self.buf.ncarets()):
@@ -475,7 +477,7 @@ struct CodeView:
             while gcol < ind:
                 gxx = tr.x + (gcol - self.left) * cw
                 if gxx >= tr.x and gxx < tr.x + tr.w:
-                    self.u.cmd_rect(self.id, pui.Rect(gxx, y, 1, lh), 0xFF31343A)
+                    self.u.cmd_rect(self.id, pui.Rect(gxx, y, 1, lh), th.indent_guide)
                 gcol += CV_TAB
             s = self.buf.line_text(ln)
             sc = 0
@@ -486,7 +488,7 @@ struct CodeView:
                     adv = CV_TAB - (sc % CV_TAB)
                 if sc + adv > self.left and sc < self.left + cols and ch != "\t":
                     self.u.cmd_glyph(self.id, tr.x + (sc - self.left) * cw, y, ord(ch),
-                                     hl_color(self.hl.class_at(ln, cpi)))
+                                     hl_color(th, self.hl.class_at(ln, cpi)))
                 sc += adv
                 cpi += 1
                 if sc > self.left + cols:
@@ -494,14 +496,14 @@ struct CodeView:
             # a collapsed block shows Sublime's ellipsis after the header
             if self.buf.is_folded(ln):
                 ex = tr.x + (sc - self.left + 1) * cw
-                self.u.cmd_rect(self.id, pui.Rect(ex - 2, y, cw + 4, lh), 0xFF3A3D41)
+                self.u.cmd_rect(self.id, pui.Rect(ex - 2, y, cw + 4, lh), th.match_brace)
                 self.u.cmd_glyph(self.id, ex, y, pui.CP_ELLIPSIS, th.text_dim)
 
         # ---- the completion popup, anchored under the cursor ----
         if self.cmp_open and len(self.cmp_hits) > 0 and self.row_of_line(self.buf.caret(0).line) >= 0:
             pr = self.cmp_rect()
             rows2 = self.cmp_rows()
-            self.u.cmd_rect(self.id, pr, 0xFF2B2D30)
+            self.u.cmd_rect(self.id, pr, th.popup)
             self.u.cmd_frame(self.id, pr, th.accent)
             inner = pr.w - 2 * CMP_PAD
             for hi in range(rows2):
@@ -521,12 +523,12 @@ struct CodeView:
                     dw = inner - nw - 2 * cw
                     if dw >= CMP_MIN_DETAIL * cw:
                         self.u.cmd_text_fit(self.id, pr.x + CMP_PAD + nw + 2 * cw, ry,
-                                            sm.detail, dw, 0xFF6E7075)
+                                            sm.detail, dw, th.text_dim)
 
         # ---- the minimap: a run of the same class becomes one rectangle ----
         if self.minimap:
             mr = self.minimap_rect()
-            self.u.cmd_rect(self.id, mr, 0xFF1A1B1E)
+            self.u.cmd_rect(self.id, mr, th.minimap)
             rows = mr.h // MM_ROW
             total = self.buf.visible_count()
             first = self.mm_first(rows, vis, total)
@@ -549,7 +551,7 @@ struct CodeView:
                     if blank or clsm != runc:
                         if runs >= 0:
                             self.u.cmd_rect(self.id, pui.Rect(mr.x + runs, my, mc - runs, MM_ROW - 1),
-                                            mm_tint(runc))
+                                            mm_tint(th, runc))
                             runs = -1
                         if not blank:
                             runc = clsm
@@ -558,11 +560,11 @@ struct CodeView:
                 if runs >= 0 and runs < mr.w:
                     e2 = mc if mc < mr.w else mr.w
                     self.u.cmd_rect(self.id, pui.Rect(mr.x + runs, my, e2 - runs, MM_ROW - 1),
-                                    mm_tint(runc))
+                                    mm_tint(th, runc))
             # the view's window over the strip
             vy = mr.y + (self.buf.to_visible(self.top) - first) * MM_ROW
-            self.u.cmd_rect(self.id, pui.Rect(mr.x, vy, mr.w, vis * MM_ROW), 0x18FFFFFF)
-            self.u.cmd_frame(self.id, pui.Rect(mr.x, vy, mr.w, vis * MM_ROW), 0xFF3A3D41)
+            self.u.cmd_rect(self.id, pui.Rect(mr.x, vy, mr.w, vis * MM_ROW), th.minimap_view)
+            self.u.cmd_frame(self.id, pui.Rect(mr.x, vy, mr.w, vis * MM_ROW), th.panel_hi)
 
         # the cursors (on top of everything)
         if self.caret_on and self.u.focus_get() == self.id:
@@ -574,7 +576,7 @@ struct CodeView:
                 cx = tr.x + (self.screen_col(c.line, c.col) - self.left) * cw
                 if cx < tr.x - 1 or cx > tr.x + tr.w:
                     continue
-                self.u.cmd_rect(self.id, pui.Rect(cx, tr.y + krow * lh, 2, lh), 0xFFE8E8E8)
+                self.u.cmd_rect(self.id, pui.Rect(cx, tr.y + krow * lh, 2, lh), th.caret)
 
     def mm_first(self, rows: int, vis: int, total: int) -> int:
         """The first row the strip shows — the arithmetic is here because the

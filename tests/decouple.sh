@@ -49,6 +49,7 @@ pstudio/font_atlas.p
 pstudio/font_atlas.ph
 pstudio/font_atlas.bin
 packages/pui/pui.psc
+packages/pui/theme.psc
 packages/stl/cstr.p
 packages/stl/cstr.ph
 packages/stl/vec.ph

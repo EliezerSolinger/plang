@@ -121,9 +121,12 @@ echo "   pforge-json: the event stream and the query come out as JSON"
 # dependency appears underneath it, and not as a root. The order of the roots is
 # the manifest's, and pinning it here would make adding a package break a test
 # that is not about that.
+# the VERSION is not pinned here on purpose: `pui` went to 0.2.0 when the theme
+# changed its interface, and a test that fixed the number would have failed for
+# the one reason that is not a defect
 t=$("$OUT/pforge" tree 2>&1)
 case $t in
-    *"pui 0.1.0"*) ;;
+    *"pui "*) ;;
     *) echo "  FAIL: pforge tree"; echo "$t" | head -3; exit 1 ;;
 esac
 case $t in
@@ -132,7 +135,7 @@ case $t in
 esac
 w=$("$OUT/pforge" why pui 2>&1)
 case $w in
-    *"pui 0.1.0"*"packages/pui"*) ;;
+    *"pui "*"packages/pui"*) ;;
     *) echo "  FAIL: pforge why"; echo "$w" | head -3; exit 1 ;;
 esac
 if "$OUT/pforge" why doesnotexist >/dev/null 2>&1; then

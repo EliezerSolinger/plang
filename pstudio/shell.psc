@@ -14,6 +14,7 @@ palette, search, shortcuts — runs headless in a test, and what is left for
 """
 import <pui> as pui
 import codeview as cvm
+import <pui/theme.psc> as thm
 import core
 import os
 import path
@@ -649,6 +650,14 @@ struct Shell:
         cv.buf.clear_marks(core.MARK_BOOK)
         self.u.queue_redraw(cv.id)
 
+    def toggle_theme(self):
+        """Light and dark are eight numbers each, and the swap is one assignment:
+        every role is derived, so nothing else has to be told."""
+        dark = thm.chan(self.u.theme.text, 16) > thm.chan(self.u.theme.bg, 16)
+        self.u.theme = thm.theme_light() if dark else thm.theme_dark()
+        self.u.queue_redraw_tree(self.root)
+        self.u.relayout()
+
     def toggle_tree(self):
         self.u.set_visible(self.tree_pane, not self.u.is_visible(self.tree_pane))
 
@@ -1142,6 +1151,7 @@ def editor_commands() -> list<Command>:
         Command("Close Tab",        lambda s: s.close_tab(s.cur), None),
         Command("Reload File",      lambda s: s.reload_cur(), None),
         Command("Toggle File Tree", lambda s: s.toggle_tree(), None),
+        Command("Toggle Theme",     lambda s: s.toggle_theme(), None),
         Command("Zoom In",          lambda s: s.do_zoom(1), None),
         Command("Zoom Out",         lambda s: s.do_zoom(-1), None),
         Command("Zoom Reset",       lambda s: s.do_zoom(0), None),

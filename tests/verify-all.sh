@@ -191,6 +191,16 @@ else
     bad "o run do pforge divergiu (veja $V/runpforge.log)"
 fi
 
+# A REGRA DO TEMA: nenhuma camada usa cor directa. É um `grep`, e é o portão
+# mais barato da suíte — sem ele, um widget escrito no mês que vem com um hex
+# dentro simplesmente fica errado no tema claro e certo no escuro, que é o tipo
+# de defeito que ninguém reporta.
+if bash tests/theme.sh >$V/theme.log 2>&1; then
+    ok "theme $(grep -oE '[0-9]+ ok' $V/theme.log | tail -1) (nenhuma cor fora do theme.psc)"
+else
+    bad "alguém escreveu uma cor fora do tema (veja $V/theme.log)"
+fi
+
 # A PROVA DO CORTE: o `pcode` e o `pstudio` são dois programas, e a diferença é
 # uma lista de arquivos que o compilador responde (`--deps`). Sem este portão, a
 # separação vira uma afirmação num documento — e em três meses alguém acrescenta

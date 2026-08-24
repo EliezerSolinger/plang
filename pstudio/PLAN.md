@@ -367,8 +367,30 @@ def derive(r: Roots) -> Theme:
 Um tema novo são oito números; um tema afinado, oito mais os poucos que se
 discordar — porque **sobrepor um papel vence a derivação**.
 
-**Fica de pé:** claro e escuro, trocados por comando na paleta. E o portão é
-barato: **nenhum literal de cor fora do `theme.psc`**, que é um `grep`.
+**FEITA.** `packages/pui/theme.psc`: oito raízes, trinta papéis, e **zero
+literais de cor fora dele** — eram 21 no `codeview.psc` e 1 no `pui.psc`. Claro e
+escuro, trocados pelo comando `Toggle Theme`.
+
+A ideia que fez o tema claro funcionar sem fórmulas próprias: **`contrast(n)` — um
+passo da página em direcção ao TEXTO**, e não "mais claro". Uma superfície
+levantada é mais clara numa página escura e mais escura numa clara,
+automaticamente, porque as duas direcções são a mesma frase.
+
+Duas excepções, e são o motivo de a excepção estar escrita: uma **borda** e o
+**minimapa** são sombras, e uma sombra é mais escura em qualquer página. Derivá-
+las com `contrast` deu ao tema claro uma borda **mais clara que o próprio fundo**
+— invisível, e só visível como defeito depois de alguém olhar para o tema claro.
+Foi o teste de invariantes que o apanhou, não o `grep`.
+
+O portão é duplo: `tests/theme.sh` (nenhum literal fora do `theme.psc`, e as oito
+raízes continuam lá) e as invariantes no teste do `pui`, medidas nos DOIS temas —
+o texto legível na página, a borda visível, o `hover` mais longe da página que o
+painel, e duas classes de sintaxe nunca com a mesma cor.
+
+De passagem, um defeito no `pui`: o botão usava `panel_hi` como base e tinha um
+literal para o `hover` — três estados com quatro cores, e os papéis já diziam
+qual era qual. O `pui` foi a **0.2.0**: mudar o `Theme` remove campos, e é o caso
+que a F10 tem de resolver no `publish`.
 
 ---
 

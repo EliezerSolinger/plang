@@ -16,6 +16,7 @@ Two lines DIFFER on purpose, and why:
     the most direct measure of the same code path.
 """
 import <pui> as ui
+import <pui/theme.psc> as thm
 
 
 clicks = 0
@@ -122,4 +123,45 @@ u.set_visible(row, True)
 u.free_node(row)
 n2 = u.label(root, "new")
 print("reuse=" + ("1" if n2 == row or n2 == ba or n2 == bb else "0"))
+# ---- the theme: eight roots, thirty roles, and the invariants that matter ----
+# A derived palette can be self-consistent and still unusable — a border the same
+# colour as its background is derived correctly and invisible. These are the
+# properties a THEME has to have, checked on both, because the light one is where
+# a formula written while looking at the dark one goes wrong.
+def luma(c: int) -> int:
+    return (thm.chan(c, 16) * 30 + thm.chan(c, 8) * 59 + thm.chan(c, 0) * 11) // 100
+
+
+def apart(a: int, b: int) -> int:
+    d = luma(a) - luma(b)
+    return -d if d < 0 else d
+
+
+for name in ["dark", "light"]:
+    t = thm.theme_dark() if name == "dark" else thm.theme_light()
+    bad: list<str> = []
+    if apart(t.text, t.bg) < 100:
+        bad.append("text is not readable on the page")
+    if apart(t.border, t.bg) < 8:
+        bad.append("the border is invisible")
+    if apart(t.panel, t.bg) < 4:
+        bad.append("a panel does not stand out from the page")
+    if apart(t.panel_hi, t.bg) <= apart(t.panel, t.bg):
+        bad.append("hover is not further from the page than the panel")
+    if apart(t.gutter_text_hi, t.gutter) <= apart(t.gutter_text, t.gutter):
+        bad.append("the current line's number is not the brighter one")
+    for c in [t.syn_kw, t.syn_str, t.syn_num, t.syn_comment]:
+        if apart(c, t.bg) < 30:
+            bad.append("a syntax colour is lost in the page")
+    if t.syn_kw == t.syn_str or t.syn_str == t.syn_num or t.syn_num == t.syn_comment:
+        bad.append("two syntax classes share a colour")
+    print(name + ": " + ("ok" if len(bad) == 0 else "; ".join(bad)))
+
+# and the arithmetic itself, where an off-by-one is silent
+print("mix ends: " + str(thm.mix(0xFF000000, 0xFFFFFFFF, 100) == 0xFF000000) +
+      " " + str(thm.mix(0xFF000000, 0xFFFFFFFF, 0) == 0xFFFFFFFF))
+print("lighten/darken end: " + str(thm.lighten(0xFF808080, 100) == 0xFFFFFFFF) +
+      " " + str(thm.darken(0xFF808080, 100) == 0xFF000000))
+print("fade keeps the colour: " + str(thm.fade(0xFF123456, 0x18) == 0x18123456))
+
 print("pui-ok")

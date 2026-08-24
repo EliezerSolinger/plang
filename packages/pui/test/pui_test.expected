@@ -14,4 +14,9 @@ submits=1
 draw_cmds=1
 hidden_hit=1
 reuse=1
+dark: ok
+light: ok
+mix ends: True True
+lighten/darken end: True True
+fade keeps the colour: True
 pui-ok
