@@ -46,22 +46,24 @@ import path
 # what each one said — and it can draw that wherever it likes.
 
 private def on_edge_start(sh: appm.Shell, ide: idem.Ide, id: int, what: str):
-    ide.build_done += 0
-    ide.build_msg = "[" + str(ide.build_done) + "/" + str(ide.build_total) + "] " + what
+    ide.edge_started(id, what)
+    ide.build_msg = what
     sh.dirty_ui = True
 
 
 private def on_edge_end(sh: appm.Shell, ide: idem.Ide, id: int, st: int, out: str, ms: int):
     ide.build_done += 1
     if st != 0:
-        # the FIRST failure is the one that matters: the ones after it are
-        # almost always consequences, and the status bar has one line
+        # the FIRST failure is the one that matters for the status BAR: the ones
+        # after it are almost always consequences, and a bar has one line. The
+        # PANEL keeps all of them, which is the difference between the two.
         if len(ide.build_error) == 0:
             ide.build_error = out.strip()
             # ... and its POSITION, which is what turns a message into
             # navigation: the editor opens the file and puts the cursor there
             ide.mark_error(out)
-    ide.build_msg = "[" + str(ide.build_done) + "/" + str(ide.build_total) + "]"
+    # the count is the BAR's now, so the message is free to say what happened
+    ide.edge_ended(id, st, out, ms)
     sh.dirty_ui = True
 
 
@@ -146,10 +148,12 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
     target = ide.want_build
     ide.want_build_on = False
     ide.build_busy = True
-    ide.build_error = ""
-    ide.build_done = 0
-    ide.build_total = 0
+    ide.build_reset(target)
     ide.build_msg = "assembling the graph..."
+    # up it comes, on the Build page. It is the one thing somebody who just
+    # pressed Build wants to see, and asking them to open it first would mean
+    # they only ever see it after the build they missed.
+    ide.dock_open_at(idem.PAGE_BUILD)
     sh.dirty_ui = True
     g = await project_graph(sh, ide)
     if g == None:
@@ -204,6 +208,7 @@ private def first_executable(sh: appm.Shell, ide: idem.Ide) -> str:
 private def set_total(sh: appm.Shell, ide: idem.Ide, t: int):
     ide.build_total = t
     ide.build_msg = str(t) + " edge(s) to build" if t > 0 else "nothing to do"
+    ide.build_refresh()
 
 
 private def set_done(sh: appm.Shell, ide: idem.Ide, ok: bool, fails: int):
@@ -211,6 +216,11 @@ private def set_done(sh: appm.Shell, ide: idem.Ide, ok: bool, fails: int):
         ide.build_msg = "build ok (" + str(ide.build_done) + " edge(s))"
     else:
         ide.build_msg = "build FAILED: " + (ide.build_error if len(ide.build_error) > 0 else str(fails) + " problem(s)")
+        # and the panel STAYS: a build that broke is the one somebody has to
+        # look at, and a dock that closed itself on the way out would be a dock
+        # that hid the only thing it was opened for
+        ide.dock_open_at(idem.PAGE_BUILD)
+    ide.build_refresh()
 
 
 private def set_error(sh: appm.Shell, ide: idem.Ide, msg: str):

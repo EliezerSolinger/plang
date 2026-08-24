@@ -25,4 +25,15 @@ dock page=2 of 4
 dock shut=True
 and a build reopens it=True at page=0
 remembered: tree=220 outline_open=True dock_open=True target=[build/bin/pcode]
+panel rows=5
+  [cc main.c] 12 ms tone=0 depth=0
+  [cc other.c] failed tone=5 depth=0
+  [projide/main.p:2:5: error: invented for the test]  tone=4 depth=1
+  [cc: and a note]  tone=4 depth=1
+  [projide/main.p:3:2: error: and a second one]  tone=4 depth=1
+row 1 went to main.p:2:5
+the second diagnostic went to main.p:3:2
+a line with no position fell back to main.p:2:5
+toolbar says=[pcode]
+and with none=[(default)]
 ide-ok

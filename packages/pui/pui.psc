@@ -43,6 +43,7 @@ enum WKind:
     WK_INPUT          # one-line input (palette, search)
     WK_LIST           # a virtualised list of rows (a tree is one with depth)
     WK_TABS           # a horizontal strip of tabs, each closable
+    WK_PROGRESS       # a bar: how much of how many, with a caption on it
     WK_CUSTOM         # the app's widget: behaviour comes from the node's functions
 
 
@@ -429,6 +430,22 @@ struct Ui:
         self.nodes[id].focusable = True
         return id
 
+    def progress(self, parent: int) -> int:
+        """How much of how much, as a BAR.
+
+        `[41/86]` in a status bar is a number somebody has to read and compare
+        with the last one they read. A bar is the same information as a LENGTH,
+        which is the thing a person can see without deciding to look — and it is
+        the difference between knowing a build is moving and having to check."""
+        return self.new_node(WK_PROGRESS, parent)
+
+    def progress_set(self, id: int, value: int, total: int, text: str):
+        nd = self.nodes[id]
+        nd.value = value
+        nd.total = total
+        nd.text = text
+        self.queue_redraw(id)
+
     def scrollbar(self, parent: int, vertical: bool) -> int:
         id = self.new_node(WK_SCROLLBAR, parent)
         self.nodes[id].vertical = vertical
@@ -794,6 +811,9 @@ struct Ui:
             case WK_TABS:
                 w = 0
                 h = self.cell_h + 8
+            case WK_PROGRESS:
+                w = self.cell_w * 12
+                h = self.cell_h + th.pad
             case WK_LIST:
                 # a list asks for ONE row and expands: what it needs is what the
                 # container gives it, and it draws whatever fits
@@ -1072,6 +1092,20 @@ struct Ui:
                     if len(nd.text) > 0:
                         self.cmd_text(id, bx + self.icon_px + gap, r.y + (r.h - lh) // 2,
                                       nd.text, th.text)
+            case WK_PROGRESS:
+                self.cmd_rect(id, r, th.panel_lo)
+                if nd.total > 0 and nd.value > 0:
+                    fw = r.w * nd.value // nd.total
+                    if fw > r.w:
+                        fw = r.w
+                    # `sel` and not `accent`: the caption is written ON the bar,
+                    # and a full-strength accent under text is a caption nobody
+                    # can read for the half of the bar that is done
+                    self.cmd_rect(id, Rect(r.x, r.y, fw, r.h), th.sel)
+                self.cmd_frame(id, r, th.border)
+                if len(nd.text) > 0:
+                    self.cmd_text_fit(id, r.x + th.pad, r.y + (r.h - lh) // 2,
+                                      nd.text, r.w - th.pad * 2, th.text)
             case WK_INPUT:
                 self.cmd_rect(id, r, th.panel_lo)
                 self.cmd_frame(id, r, th.accent if self.focus == id else th.border)

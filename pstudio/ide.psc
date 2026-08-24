@@ -26,6 +26,24 @@ import core
 import path
 
 
+struct BuildEdge:
+    """One edge of the build graph, as it RAN.
+
+    The engine already says all of this — `pforge` reports a start, an end, a
+    status, what the command printed and how long it took. It was being thrown
+    away and reduced to a `[41/86]` in the status bar, which is the one shape of
+    it a person cannot click on."""
+    id: int          # the engine's, so the end can find the start
+    what: str        # what it said it was doing
+    status: int      # 0 = ok, -1 = still running
+    ms: int
+    out: str         # what the command printed
+    # ... and where its first error was, when it had one
+    file: str
+    line: int
+    col: int
+
+
 struct Ide:
     """The twenty-one fields that used to live inside the editor's own struct.
 
@@ -76,7 +94,12 @@ struct Ide:
     dock_tabs: int        # the strip at the top of the bottom dock
     dock_body: int        # what is under it
     dock_page: int        # which panel is up
-    dock_labels: list<int>  # one label per page: F7 and F9 replace them
+    dock_labels: list<int>  # one label per page: F9 and F10 replace two of them
+    # F7: the Build panel. The engine's report, kept instead of collapsed.
+    build_edges: list<BuildEdge>
+    build_bar: int        # a WK_PROGRESS, because a LENGTH is seen and a number is read
+    build_list: int       # the edges, one row each, the failing ones clickable
+    tb_target: int        # the toolbar button that says which target `Build` builds
     # `.pstudio.json`, read once by the driver and written back when a pane moves
     conf: cfg.Config
     want_conf_save: bool
@@ -131,6 +154,112 @@ struct Ide:
             self.conf.dock_open = True
         self.dock_show(i)
 
+    # ---------- F7: the Build panel ----------
+
+    def build_reset(self, target: str):
+        self.build_edges = []
+        self.build_error = ""
+        self.build_pos_file = ""
+        self.build_done = 0
+        self.build_total = 0
+        self.set_target_label()
+        self.build_refresh()
+
+    def edge_started(self, id: int, what: str):
+        self.build_edges.append(BuildEdge(id, what, -1, 0, "", "", 0, 0))
+        self.build_refresh()
+
+    def edge_ended(self, id: int, status: int, out: str, ms: int):
+        for i in range(len(self.build_edges) - 1, -1, -1):
+            e = self.build_edges[i]
+            if e.id != id or e.status != -1:
+                continue
+            e.status = status
+            e.ms = ms
+            e.out = out.strip()
+            if status != 0:
+                p = first_position(out)
+                if len(p) == 3:
+                    e.file = p[0]
+                    e.line = int(p[1])
+                    e.col = int(p[2])
+            break
+        self.build_refresh()
+
+    def build_refresh(self):
+        if self.build_bar < 0:
+            return
+        u = self.sh.u
+        cap = self.build_msg
+        if self.build_total > 0:
+            cap = "[" + str(self.build_done) + "/" + str(self.build_total) + "] " + cap
+        elif len(cap) == 0 and len(self.build_edges) == 0:
+            # an empty grey strip says nothing; the other three pages say they
+            # are empty out loud, and this one should too
+            cap = "(nothing built yet — press Build)"
+        u.progress_set(self.build_bar, self.build_done, self.build_total, cap)
+        rows: list<pui.ListRow> = []
+        for e in self.build_edges:
+            tone = pui.TONE_DIM
+            icon = ico.ICO_CIRCLE_DOT
+            detail = ""
+            if e.status == 0:
+                tone = pui.TONE_NORMAL
+                icon = ico.ICO_CHECK
+                detail = str(e.ms) + " ms"
+            elif e.status > 0:
+                tone = pui.TONE_BAD
+                icon = ico.ICO_X
+                detail = "failed"
+            rows.append(pui.ListRow(e.what, detail, 0, "", icon, tone, False))
+            # what a failing command PRINTED, under it and indented. It is the
+            # only thing anybody wants from a build that broke, and putting it
+            # anywhere else means a second place to look.
+            if e.status > 0 and len(e.out) > 0:
+                for ln in e.out.split("\n"):
+                    if len(ln.strip()) == 0:
+                        continue
+                    rows.append(pui.ListRow(ln, "", 1, "", pui.ICON_NONE,
+                                            pui.TONE_WARN, False))
+        u.list_set(self.build_list, rows)
+        self.sh.dirty_ui = True
+
+    def build_row_picked(self, row: int):
+        """A row of the panel, clicked. The ones with a position go there."""
+        i = 0
+        for e in self.build_edges:
+            if i == row:
+                if len(e.file) > 0:
+                    self.sh.goto_hit(e.file + ":" + str(e.line) + ":" + str(e.col))
+                return
+            i += 1
+            if e.status > 0 and len(e.out) > 0:
+                for ln in e.out.split("\n"):
+                    if len(ln.strip()) == 0:
+                        continue
+                    if i == row:
+                        # a line of output: it may carry its own position, and
+                        # that is more precise than the edge's first error
+                        p = first_position(ln)
+                        if len(p) == 3:
+                            self.sh.goto_hit(p[0] + ":" + p[1] + ":" + p[2])
+                        elif len(e.file) > 0:
+                            self.sh.goto_hit(e.file + ":" + str(e.line) + ":" + str(e.col))
+                        return
+                    i += 1
+
+    def set_target_label(self):
+        if self.tb_target < 0:
+            return
+        t = self.want_build
+        if len(t) == 0:
+            t = "(default)"
+        else:
+            cut = t.rfind("/")
+            if cut >= 0:
+                t = t[cut + 1:]
+        self.sh.u.set_text(self.tb_target, t)
+
     # ---------- F6: the outline ----------
 
     def outline_sync(self):
@@ -182,20 +311,13 @@ struct Ide:
         bar from an IDE: with it the editor opens the file and puts the cursor
         there. A line that does not have this shape is ignored — a `cc`'s output
         has plenty that is not a diagnostic."""
-        for line in text.split("\n"):
-            parts = line.split(":")
-            if len(parts) < 4:
-                continue
-            if not parts[1].isdigit() or not parts[2].isdigit():
-                continue
-            rest = ":".join(parts[3:len(parts)]).strip()
-            if not rest.startswith("error"):
-                continue           # the first ERROR, not the first warning
-            self.build_pos_file = parts[0].strip()
-            self.build_pos_line = int(parts[1])
-            self.build_pos_col = int(parts[2])
-            return True
-        return False
+        p = first_position(text)
+        if len(p) != 3:
+            return False
+        self.build_pos_file = p[0]
+        self.build_pos_line = int(p[1])
+        self.build_pos_col = int(p[2])
+        return True
 
     def goto_error(self) -> bool:
         """Opens the first error's file and puts the cursor in it. Returns
@@ -225,7 +347,6 @@ struct Ide:
         if self.build_busy:
             self.build_msg = "a build is already running"
             return
-        self.want_build = ""
         self.want_build_on = True
         self.want_run = run_after
         self.build_msg = "building..."
@@ -241,6 +362,7 @@ struct Ide:
         self.want_build = target
         self.want_build_on = True
         self.want_run = False
+        self.set_target_label()
         self.build_msg = "building " + target + "..."
 
     def targets_as_items(self) -> list<sh_mod.PalItem>:
@@ -313,7 +435,8 @@ def new_ide(sh: sh_mod.Shell) -> Ide:
     Two lines, and they are the whole seam: `pcode.psc` does not have them."""
     ide = Ide(sh, "", False, False, False, "", False, False, [], 0, 0, "",
               "", 0, 0, 0, False, "", "",
-              -1, [], -1, "", -1, -1, 0, [], cfg.default_config(), False)
+              -1, [], -1, "", -1, -1, 0, [], [], -1, -1, -1,
+              cfg.default_config(), False)
     sh.add_commands(ide_commands(ide))
     build_shell(ide)
     return ide
@@ -350,8 +473,12 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
 # child was visible, so a collapsed pane left a line across the middle of its
 # neighbour with nothing to drag. That is in `pui` now, where it belongs.
 
-# what the bottom dock offers. The pages are labels here and panels later: F7
-# replaces Build, F9 Tests, F10 Packages.
+# what the bottom dock offers. Build is real since F7; Tests and Packages are
+# still labels, and F9 and F10 replace them.
+const PAGE_BUILD: int = 0
+const PAGE_PROBLEMS: int = 1
+
+
 def dock_pages() -> list<str>:
     return ["Build", "Problems", "Tests", "Packages"]
 
@@ -381,6 +508,13 @@ def build_shell(ide: Ide):
     u.set_visible(sh.topbar, True)
     u.set_bg(sh.topbar, u.theme.panel)
     tool(ide, ico.ICO_HAMMER, "Build")
+    # ... and which target it builds. It opens the palette's target list rather
+    # than a dropdown of its own: the palette already picks from a list supplied
+    # by somebody else, it filters as you type, and a second list-picking widget
+    # would be the thing F5 spent a phase removing.
+    ide.tb_target = u.button(sh.topbar, "")
+    u.set_icon(ide.tb_target, ico.ICO_CHEVRON_DOWN)
+    u.on_click(ide.tb_target, lambda id, arg: sh.run_named("Build Target..."))
     tool(ide, ico.ICO_PLAY, "Run")
     tool(ide, ico.ICO_SQUARE, "Stop Build")
     tool(ide, ico.ICO_TRASH_2, "Clean")
@@ -407,16 +541,50 @@ def build_shell(ide: Ide):
     u.set_expand(ide.dock_body, True, True)
     names = dock_pages()
     for i in range(len(names)):
-        lb = u.label(ide.dock_body, "(" + names[i] + " is empty)")
-        u.set_pad(lb, 8)
-        # wide but not tall: a panel's content starts at the TOP of it, and a
-        # label that expanded vertically floated in the middle of the dock
-        u.set_expand(lb, True, False)
-        ide.dock_labels.append(lb)
+        if i == PAGE_BUILD:
+            # the Build page is REAL since F7; the others still say "empty".
+            # Whatever a page is made of, ONE node per page goes in the list, so
+            # `dock_show` hides one thing each and never learns what they are.
+            page = u.box(ide.dock_body, True)
+            u.set_expand(page, True, True)
+            ide.build_bar = u.progress(page)
+            u.set_expand(ide.build_bar, True, False)
+            ide.build_list = u.list(page)
+            u.set_expand(ide.build_list, True, True)
+            u.on_submit(ide.build_list, lambda id, row: ide.build_row_picked(row))
+            ide.dock_labels.append(page)
+        else:
+            lb = u.label(ide.dock_body, "(" + names[i] + " is empty)")
+            u.set_pad(lb, 8)
+            # wide but not tall: a panel's content starts at the TOP of it, and
+            # a label that expanded vertically floated in the middle of the dock
+            u.set_expand(lb, True, False)
+            ide.dock_labels.append(lb)
+    ide.build_refresh()
     ide.dock_refresh()
     ide.dock_show(0)
     u.split_set(sh.vsplit, 420)
     apply_config(ide, ide.conf)
+
+
+def first_position(text: str) -> list<str>:
+    """`file:line:column: error: ...` -> [file, line, column], or [].
+
+    The format the compiler already uses, and the one `pforge` copied on purpose
+    for its own errors. It is a free function because two things want it now —
+    the status bar's first error and a row of the Build panel — and neither of
+    them owns it."""
+    for line in text.split("\n"):
+        parts = line.split(":")
+        if len(parts) < 4:
+            continue
+        if not parts[1].isdigit() or not parts[2].isdigit():
+            continue
+        rest = ":".join(parts[3:len(parts)]).strip()
+        if not rest.startswith("error"):
+            continue           # the first ERROR, not the first warning
+        return [parts[0].strip(), parts[1], parts[2]]
+    return []
 
 
 def outline_icon(kind: cmp.SymKind) -> int:
@@ -457,6 +625,7 @@ def apply_config(ide: Ide, c: cfg.Config):
         u.split_set(ide.sh.vsplit, rv.h - c.dock_h)
     if len(c.target) > 0:
         ide.want_build = c.target
+    ide.set_target_label()
     ide.sh.u.relayout()
     ide.sh.dirty_ui = True
     # the status bar has ONE line, and a file with six mistakes in it has six

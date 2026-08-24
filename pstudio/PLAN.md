@@ -500,7 +500,7 @@ Entra aqui também o **atlas alargado**: JetBrains Mono tem cirílico e grego, s
 
 ---
 
-## F7 — o painel de Build
+## F7 — o painel de Build — **FEITA**
 
 O motor já está dentro do editor — falta a cara. Progresso `[n/total]` como
 **barra** e não como texto, a lista de arestas, o erro clicável, e o alvo
@@ -510,6 +510,15 @@ Sobe sozinho ao começar, e fica na falha. **Build é sempre explícito na v1**:
 nada de reconstruir ao salvar nem de vigiar o disco.
 
 **Fica de pé:** build → falhou aqui, a primeira metade da espinha.
+
+**Decisão tomada pelo caminho:** o alvo NÃO ganhou um menu suspenso próprio. O
+botão da barra abre a **paleta**, que já escolhe de uma lista fornecida por
+outro, já filtra ao escrever e já tem teclado — um segundo widget de escolher
+numa lista seria exatamente a coisa que a F5 gastou uma fase a remover. O botão
+mostra o alvo atual, que é o que faltava.
+
+E o `Build` deixou de **apagar** o alvo escolhido: fazia-o desde sempre, o que
+tornava mentira tudo o que o botão e o `.pstudio.json` dissessem sobre ele.
 
 ---
 

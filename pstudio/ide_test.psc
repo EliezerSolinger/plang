@@ -168,4 +168,57 @@ c = idem.snapshot_config(ide)
 print("remembered: tree=" + str(c.tree_w) + " outline_open=" + str(c.outline_open) +
       " dock_open=" + str(c.dock_open) + " target=[" + c.target + "]")
 
+# ---- F7: the Build panel ----
+#
+# Nothing builds here either: the engine's REPORT is what the panel is made of,
+# so the test plays the report back and looks at what the panel became.
+ide.build_total = 3
+ide.build_msg = "compiling"
+ide.edge_started(1, "cc main.c")
+ide.edge_started(2, "cc other.c")
+ide.edge_ended(1, 0, "", 12)
+ide.edge_ended(2, 1, D + "/main.p:2:5: error: invented for the test\ncc: and a note\n" +
+               D + "/main.p:3:2: error: and a second one\n", 30)
+brows = u.list_rows(ide.build_list)
+print("panel rows=" + str(len(brows)))
+for br in brows:
+    print("  [" + br.text + "] " + br.detail + " tone=" + str(br.tone) +
+          " depth=" + str(br.depth))
+# the failing edge's own row goes to its position
+sh.select_tab(0)
+ide.build_row_picked(1)
+
+
+def where() -> str:
+    c = sh.cur_cv()
+    if c == None:
+        return "nowhere"
+    parts = c.path.split("/")
+    return parts[len(parts) - 1] + ":" + str(c.buf.caret(0).line + 1) + ":" + str(c.buf.caret(0).col + 1)
+
+
+def back_to_the_top():
+    c = sh.cur_cv()
+    if c != None:
+        c.buf.move_to(0, 0)
+
+
+print("row 1 went to " + where())
+# ... and so does a line of its OUTPUT, by ITS OWN position — which is more
+# precise than the edge's, and is the whole reason the rows are separate
+back_to_the_top()
+ide.build_row_picked(4)
+print("the second diagnostic went to " + where())
+# a line with no position at all falls back to the edge's
+back_to_the_top()
+ide.build_row_picked(3)
+print("a line with no position fell back to " + where())
+
+# the toolbar says which target it will build
+ide.build_named("build/bin/pcode")
+print("toolbar says=[" + u.node(ide.tb_target).text + "]")
+ide.want_build = ""
+ide.set_target_label()
+print("and with none=[" + u.node(ide.tb_target).text + "]")
+
 print("ide-ok")

@@ -974,3 +974,53 @@ compilar outra coisa, e três repetições logo a seguir deram "ok".
 Um portão que grita lobo é um portão que as pessoas aprendem a voltar a correr em
 vez de ler. Passa a medir cinco vezes e a guardar o **mínimo** — que é a corrida
 que o escalonador deixou em paz, porque contenção só faz um número crescer.
+
+---
+
+## O painel de Build: o relatório que estava a ser deitado fora (F7, 2026-08-24)
+
+O motor já estava dentro do editor desde a F6 — o `pforge` é uma **biblioteca**
+que o editor importa, não um processo, e por isso o grafo é um `dict` e não uma
+corrente de texto a ser reanalisada do outro lado. O que faltava era a cara.
+
+E o que havia era uma **redução**: o `B.Rep` diz o início de cada aresta, o fim,
+o estado, o que o comando imprimiu e quantos milissegundos levou — e tudo isso
+era colapsado num `[41/86]` na barra de estado. É a única forma dessa informação
+em que não se pode clicar.
+
+Agora cada aresta é uma linha. A que falhou traz **o que ela imprimiu** por
+baixo, indentado — porque é a única coisa que alguém quer de uma construção que
+partiu, e pô-la noutro sítio significa um segundo lugar para procurar.
+
+**Uma linha de saída vai à SUA própria posição** quando tem uma, e à da aresta
+quando não tem. A diferença importa: um `cc` que falha imprime cinco
+diagnósticos, e o segundo não está onde o primeiro está.
+
+### O progresso é uma barra e não um número
+
+`[41/86]` é um número que alguém tem de ler e comparar com o último que leu. Uma
+barra é a mesma informação como **comprimento**, que é o que uma pessoa vê sem
+decidir olhar — e é a diferença entre saber que a construção anda e ter de ir
+verificar.
+
+A legenda escreve-se POR CIMA da barra, e é por isso que o preenchimento usa o
+papel `sel` e não o `accent`: um acento a toda a força por baixo de texto é uma
+legenda que não se lê na metade que já está feita.
+
+### Sobe ao começar, e FICA na falha
+
+Quem carregou em Build quer ver o painel; pedir que o abra primeiro significa que
+só o vê depois da construção que perdeu. E um painel que se fechasse sozinho no
+fim seria um painel que esconde a única coisa para que foi aberto.
+
+### O alvo: nenhum menu novo
+
+O botão da barra abre a **paleta**. Ela já escolhe de uma lista fornecida por
+outro (`PAL_LIST`, desde a F2), já filtra ao escrever, já tem teclado. Um segundo
+widget de escolher numa lista era exatamente o anti-padrão que a F5 gastou uma
+fase a remover.
+
+E apanhou-se um defeito ao ligar o botão: o `Build` **apagava** o alvo escolhido
+antes de construir. Fazia-o desde sempre, e ninguém tinha reparado porque nada
+mostrava o alvo — com um botão que o diz e um ficheiro que o lembra, passava a
+ser uma mentira visível.
