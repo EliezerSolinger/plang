@@ -6202,3 +6202,127 @@ nome fica ao lado do irmão: é a regra que o `os.spawn_pty` já seguiu na F8.
    (nomes que são hashes) sim; uma fonte que alguém está a editar não. O guarda da
    137.2 transforma isso numa excepção em vez de uma morte — mas a regra continua
    a ser não mapear o que outro processo reescreve.
+
+---
+
+## BATERIA 141 — o contrato da fronteira, e a linha entre runtime e pacote (2026-08-24)
+
+> *"existe algum contrato de garantia que eu possa fornecer via interface, uma
+> struct P passe a ser segura em PScript?"*
+
+### 141.0 — o que se descobriu a responder: a fronteira não é um muro
+
+Um `.psc` **já chama C directamente**. Medido:
+
+```python
+include <math.h>
+print(int(sqrt(16.0)), int(pow(2.0, 10.0)))   # → 4 1024
+```
+
+Portanto a segurança do pscript **não vem de não se conseguir chegar ao C** — vem
+de quase ninguém precisar. A regra que se segue é uma convenção sobre onde a
+encapsulação vive, não uma parede que o compilador levanta, e vale mais dizê-lo.
+
+### 141.1 — a linha entre RUNTIME e PACOTE
+
+> *"coisas que são de médio nível e que são base para as de alto nível… coisas
+> que precisam encapsular manipulação insegura, abstração crua das funções do
+> sistema operativo. o runtime em si vai conter as abstrações do OS que
+> estragariam a linguagem se implementadas nesse nível"*
+
+É uma regra melhor do que "precisa do sistema", porque decide os casos que essa
+não decidia:
+
+| fica no RUNTIME | porquê |
+|---|---|
+| `os`, `net`, `time`, `gc`, `sys` | encapsulam chamadas de sistema e o coletor |
+| `json` | *"renderiza coisas reflexivas"* — percorre os descritores de tipo que o compilador emite. Não se escreve isto ao nível da linguagem |
+| `re` | embrulha o `regex.h` da libc: ponteiros e buffers |
+| `math` | os tipos nativos usam-no |
+| **`bytes`, `Buffer`, `View`, `Mapping`, `Watcher`, os finalizadores** | é tudo o que a 135-140 acrescenta, e é tudo abstração crua do sistema ou do coletor |
+| o descodificador incremental de UTF-8 | *"se o tipo nativo já usa vai pro runtime"* — o `str(b)` já valida e descodifica; o incremental é o mesmo com o estado guardado |
+
+| vai para um pacote `stdlib` | porquê |
+|---|---|
+| `bisect`, `heapq`, `random` | algoritmos puros, sem nada de inseguro |
+| a metade pura do `path` (`join`, `dirname`, `basename`, `normpath`) | manipulação de cadeias — a mesma espécie que o `url`, que já é um pacote |
+
+E a metade de sistema do `path` (`exists`, `isdir`, `isfile`, `getsize`,
+`getmtime`) junta-se ao `os`, onde o `listdir` já está.
+
+**Medido antes de decidir, e o resultado mudou o argumento:** mover coisas para
+fora do runtime **não poupa nada**. O `pcode` carrega 6 650 bytes de
+json+re+random+heapq+bisect+math que não usa, num binário de 1 530 312 — **0,43 %**.
+Portanto a linha não é sobre custo; é sobre o que cada lado compra. Um pacote tem
+versão, lê-se, substitui-se. Um módulo do runtime importa-se sem caminho e o
+compilador valida-lhe os nomes.
+
+E a razão pela qual isto valia a pena: **a linha de hoje é história, não
+princípio.** O `json` e o `url` são a mesma espécie de coisa — um analisador de um
+formato com a sua suíte de conformidade (318/318 e 890/891) — e estão em lados
+opostos porque um entrou cedo e o outro tarde. Agora estão em lados opostos por
+uma razão que se pode dizer em voz alta.
+
+### 141.2 — o contrato: um trait, declarado DENTRO da struct
+
+Metade do mecanismo já existia: o `CStr`/`CBytes` (84.1) **já é um contrato, por
+FORMA** — o compilador reconhece *"um struct de exactamente um ponteiro e um
+tamanho"*. O que falta é poder declarar um.
+
+```
+struct Mapping implement Foreign, Shared:
+    data: *u8
+    len: usize
+
+    def release(ref self):
+        munmap(self.data, self.len)
+```
+
+**Dentro da própria definição, e isso é mais forte do que o que o Rust faz.** O
+`unsafe impl Send for TipoDeOutraPessoa {}` permite prometer em nome de um tipo
+cujas invariantes não se controlam, e é um pé-de-cabra conhecido. Exigir que a
+promessa viva no corpo da struct significa que **só o autor pode prometer** — e
+que ler a struct é saber tudo sobre ela, sem procurar um bloco noutro sítio.
+
+O preço, dito: um pacote deixa de poder acrescentar uma promessa a um tipo de
+outro pacote. Que é exactamente a vantagem, vista do outro lado.
+
+**Sem `unsafe` na grafia:** o nome do trait é que avisa. `Foreign` e `Shared` não
+se escrevem por acidente.
+
+### 141.3 — as três promessas, e a quarta que não precisa de nome
+
+| trait | promete |
+|---|---|
+| `Foreign` | tudo o que ela aponta está **fora do monte coletado**, e ela sabe libertar-se (`release`, que é o gancho da 136) |
+| `Shared` | dois workers podem segurá-la ao mesmo tempo |
+| `Transfer` | pode mudar de dono, pela regra do `transfer` da 18.2 |
+
+São três e não um porque quem só consegue prometer uma não deve ser obrigado a
+mentir para passar — é a razão por que o Rust tem `Send` e `Sync` separados. Um
+`Mapping` é `Foreign, Shared` e **não** `Transfer`: um mapa tem um dono. Um
+`Buffer` é os três.
+
+**E POSSUIR não é EMPRESTAR.** Isto sai sem inventar um quarto nome:
+
+> **Sem trait nenhum → só atravessa como ARGUMENTO.** Um empréstimo, válido
+> durante a chamada. É o `CStr`/`CBytes` de hoje, e não muda.
+> **Com `Foreign` → o pscript pode SEGURÁ-LA.**
+
+A razão é concreta: um `CStr` aponta para uma `str`, que vive no monte **e o
+coletor move**. Se o pscript o guardasse, a coleta seguinte deixava-o a apontar
+para o vazio. Já um `Mapping`, um `Buffer` ou um `bytes` estão fora do monte por
+construção e nunca se movem — e é exactamente por isso que uma struct de P que
+aponte para eles pode ser guardada.
+
+### 141.4 — o preço, dito antes de doer
+
+O compilador **não consegue verificar** nenhuma destas promessas. Ele regista-as.
+É o que o `unsafe impl` do Rust, o `@unchecked Sendable` do Swift, o `SafeHandle`
+do C# e as regras de ponteiros do cgo fazem — toda a gente chegou aqui pela mesma
+porta, e a conclusão é sempre a mesma: **a falha passa de "impossível de exprimir"
+para "culpa de quem prometeu, e encontra-se com um grep"**.
+
+É uma boa troca, mas é uma troca. E o portão que a torna aceitável é o mesmo que
+este repositório já constrói: `grep -rn "implement Foreign"` dá a lista completa
+das promessas que o sistema faz sem prova.

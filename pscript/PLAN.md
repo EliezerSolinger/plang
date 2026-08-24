@@ -2162,6 +2162,29 @@ durante exactamente um commit.
 
 ---
 
+## FS — o `stdlib`, e o contrato da fronteira (141)
+
+Logo a seguir à FN, porque as duas são arrumação e mexem na árvore inteira:
+atravessa-se os ficheiros uma vez em vez de duas.
+
+**O pacote `stdlib`** recebe o que é computação pura: `bisect`, `heapq`, `random`
+e a metade pura do `path` (`join`, `dirname`, `basename`, `normpath`). A metade
+de sistema do `path` junta-se ao `os`, onde o `listdir` já está. Ficam no runtime
+o `json` (percorre os descritores de tipo — não se escreve isso ao nível da
+linguagem), o `re` (embrulha a libc) e o `math` (os tipos nativos usam-no).
+
+**E o contrato:** os traits `Foreign`, `Shared` e `Transfer`, declarados dentro
+da própria struct (`struct Mapping implement Foreign, Shared:`). Sem trait, um
+tipo de P só atravessa como ARGUMENTO; com `Foreign`, o pscript pode segurá-lo.
+
+Vem antes do NIO porque o `Mapping` da F2 vai ser o primeiro a usá-lo, e é melhor
+o mecanismo existir do que nascer torto por baixo de um caso.
+
+**Fica de pé:** um pacote pode encapsular o inseguro sem ter de entrar no
+runtime, e `grep -rn "implement Foreign"` dá a lista das promessas sem prova.
+
+---
+
 ## F0 — `bytes`, `Buffer`, e as fatias (135.1, 135.3, 135.5, 136)
 
 O tipo `bytes`: imutável, coletado, fatiável sem copiar, e apoiado num bloco que
