@@ -1599,6 +1599,8 @@ static PsType *PsP_parse_type(PsP *self) {
             t = ps_type(self->a, PT_BOOL, pos);
         } else if (strcmp(name, "str") == 0) {
             t = ps_type(self->a, PT_STR, pos);
+        } else if (strcmp(name, "bytes") == 0) {
+            t = ps_type(self->a, PT_BYTES, pos);
         } else if (strcmp(name, "any") == 0) {
             t = ps_type(self->a, PT_ANY, pos);
         } else if (PsP_renamed(self, pos, name, "file", "File")) {
@@ -1704,6 +1706,12 @@ static PsExpr *PsP_parse_primary(PsP *self) {
             PsExpr *e2 = ps_expr(self->a, PE_STR, pos);
             e2->text = tk->text;
             return e2;
+        }
+        case TK_BYTESTR: {
+            PsP_adv(self);
+            PsExpr *eb2 = ps_expr(self->a, PE_BYTES, pos);
+            eb2->text = tk->text;
+            return eb2;
         }
         case TK_FSTRING: {
             PsP_adv(self);
@@ -2287,7 +2295,7 @@ static PsExpr *PsP_parse_dict_or_set(PsP *self) {
 
 static PsExpr *PsP_fstring(PsP *self, const char *lex, Pos pos) {
     size_t n = 0;
-    char *body = str_lit_decode(self->a, lex, &n);
+    char *body = str_lit_decode_py(self->a, lex, &n);
     PsExpr *acc = NULL;
     StrBuf lit = {0};
     size_t i = 0;
@@ -2768,7 +2776,7 @@ static int PsP_const_cond(PsP *self, PsExpr *e) {
                     fatal_at(self->file, e->pos, "the only comparison a `const if` at the top takes is `__PLANG_OS__ == \"name\"`");
                 }
                 size_t ln = 0;
-                char *sv = str_lit_decode(self->a, lit->text, &ln);
+                char *sv = str_lit_decode_py(self->a, lit->text, &ln);
                 int same = strcmp(sv, parser_predef_os()) == 0;
                 return (e->op == TK_EQ ? same : !same);
             }

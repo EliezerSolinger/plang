@@ -548,7 +548,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN, PT_PROC:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN, PT_PROC:
                 pass
         return t
 
@@ -662,6 +662,8 @@ struct PsSema:
                     t = self->hint
             case PE_STR:
                 t = ps_type(self->a, PT_STR, e->pos)
+            case PE_BYTES:
+                t = ps_type(self->a, PT_BYTES, e->pos)
             case PE_BOOL:
                 t = ps_type(self->a, PT_BOOL, e->pos)
             case PE_NONE:
@@ -1114,8 +1116,18 @@ struct PsSema:
                     t = ct3->inner
                 elif ct3 != None and ct3->kind == PT_STR:
                     t = ct3        # `s[i]` is the i-th CHARACTER, a 1-char string (3.4)
+                elif ct3 != None and ct3->kind == PT_BYTES:
+                    # `b[i]` is a NUMBER, and that is the one place `bytes` and
+                    # `str` deliberately answer differently. A character has no
+                    # type of its own (3.4), so `s[i]` can only be a string; a
+                    # byte does have one, and `b[0] == 0x7f` is what reading a
+                    # binary format looks like.
+                    bu9: *PsType = ps_type(self->a, PT_INT, e->pos)
+                    bu9->width = 8
+                    bu9->uns = True
+                    t = bu9
                 elif ct3 == None or ct3->kind != PT_LIST:
-                    fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str and list work)", ps_type_str(self->a, ct3))
+                    fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str, bytes and List work)", ps_type_str(self->a, ct3))
                 else:
                     t = ct3->inner
             case PE_DICT:
@@ -1255,8 +1267,8 @@ struct PsSema:
                 t = cw
             case PE_SLICE:
                 st4: *PsType = self->check_expr(e->lhs)
-                if st4 == None or (st4->kind != PT_STR and st4->kind != PT_LIST):
-                    fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str and list work)", ps_type_str(self->a, st4))
+                if st4 == None or (st4->kind != PT_STR and st4->kind != PT_BYTES and st4->kind != PT_LIST):
+                    fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes and List work)", ps_type_str(self->a, st4))
                 for i in range(3):
                     if e->args[i] != None:
                         pt4: *PsType = self->check_expr(e->args[i])
@@ -1728,7 +1740,15 @@ struct PsSema:
                     if jt == None or jt->kind != PT_LIST or jt->inner == None or jt->inner->kind != PT_STR:
                         fatal_at(self->file, e->pos, "join() takes a List<str>, not %s", ps_type_str(self->a, jt))
                     return st5
-                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
+                if strcmp(nm2, "encode") == 0:
+                    # 135.7, the third place a `bytes` is born. It is not a
+                    # conversion so much as taking off a promise: the bytes
+                    # handed over are the UTF-8 the `str` already stores, and
+                    # what is dropped is the guarantee that they are text.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "encode() takes no arguments: a `str` is UTF-8 already, and there is no second encoding to ask for")
+                    return ps_type(self->a, PT_BYTES, e->pos)
+                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -2151,7 +2171,7 @@ struct PsSema:
             if rd6 == None:
                 fatal_at(self->file, e->pos, "hasfield(): '%s' is not a record or a struct declared here", e->args[0]->text)
             fl6: usize = 0
-            fn6: const *char = str_lit_decode(self->a, e->args[1]->text, out fl6)
+            fn6: const *char = str_lit_decode_py(self->a, e->args[1]->text, out fl6)
             hit6: bool = False
             for i in range(rd6->nfields):
                 if strcmp(rd6->fields[i].name, fn6) == 0:
@@ -2578,6 +2598,41 @@ struct PsSema:
             wt7->width = ps_width_name(name)
             wt7->uns = name[0] == 'u'
             return wt7
+        # 135.6: `bytes(xs)` and `list(b)`, the crossing in both directions.
+        # Explicit BOTH ways, and on purpose: each one copies, and a copy that
+        # happens by itself is a copy nobody sees. The `List<u8>` is not going
+        # anywhere — it is still the right type for BUILDING and CHANGING
+        # bytes, with every list operation; `bytes` is what CROSSES.
+        if strcmp(name, "bytes") == 0:
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "bytes() takes one List<u8>, or one Buffer to copy")
+            # 68.2: a literal ADAPTS to the width of its context, so
+            # `bytes([0xFF, 0xFE])` is a `List<u8>` and not a `List<int>` that
+            # is then refused for a reason nobody wrote down.
+            bhu: *PsType = ps_type(self->a, PT_LIST, e->pos)
+            bhu->inner = ps_type(self->a, PT_INT, e->pos)
+            bhu->inner->width = 8
+            bhu->inner->uns = True
+            bph: *PsType = self->hint
+            self->hint = bhu
+            bfa: *PsType = self->check_expr(e->args[0])
+            self->hint = bph
+            if bfa != None and bfa->kind == PT_BYTES:
+                return bfa      # already bytes: asking again is not an error
+            if bfa == None or bfa->kind != PT_LIST or bfa->inner == None or bfa->inner->kind != PT_INT or bfa->inner->width != 8 or not bfa->inner->uns:
+                fatal_at(self->file, e->pos, "bytes() takes a List<u8> — a copy, said out loud (135.6) — found %s", ps_type_str(self->a, bfa))
+            return ps_type(self->a, PT_BYTES, e->pos)
+        if strcmp(name, "list") == 0:
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "list() takes one `bytes`, and gives back the List<u8> you can change")
+            lfa: *PsType = self->check_expr(e->args[0])
+            if lfa == None or lfa->kind != PT_BYTES:
+                fatal_at(self->file, e->pos, "list() takes `bytes` — the way back from what crosses to what you can build with (135.6) — found %s", ps_type_str(self->a, lfa))
+            lu8: *PsType = ps_type(self->a, PT_LIST, e->pos)
+            lu8->inner = ps_type(self->a, PT_INT, e->pos)
+            lu8->inner->width = 8
+            lu8->inner->uns = True
+            return lu8
         if strcmp(name, "str") == 0 or strcmp(name, "int") == 0 or strcmp(name, "float") == 0 or strcmp(name, "bool") == 0:
             if e->nargs != 1:
                 fatal_at(self->file, e->pos, "%s() takes exactly one argument", name)
@@ -3099,7 +3154,7 @@ struct PsSema:
             if e->nargs < 1 or e->nargs > 2 or e->args[0]->kind != PE_STR:
                 fatal_at(self->file, e->pos, "render() takes a string literal path and, if the holes are not names in scope, a dict literal with the values: `render(\"email.tpl\", {\"name\": who})` (63.2/75.2)")
             rl8: usize = 0
-            rel8: const *char = str_lit_decode(self->a, e->args[0]->text, out rl8)
+            rel8: const *char = str_lit_decode_py(self->a, e->args[0]->text, out rl8)
             p8: const *char = path_join(self->a, path_dir(self->a, self->file), rel8)
             n8: usize = 0
             by8: *char = read_entire_file_opt(p8, out n8)
@@ -3134,7 +3189,7 @@ struct PsSema:
                     if ent8->kind != PE_DESIG or ent8->lhs == None or ent8->lhs->kind != PE_STR:
                         fatal_at(self->file, ent8->pos if ent8 != None else e->pos, "render(): every key of the values dict is a string literal, because it names a hole of the template (75.2)")
                     kl8: usize = 0
-                    keys8[i8] = self->a->strdup(str_lit_decode(self->a, ent8->lhs->text, out kl8))
+                    keys8[i8] = self->a->strdup(str_lit_decode_py(self->a, ent8->lhs->text, out kl8))
                     for j8 in range(i8):
                         if strcmp(keys8[j8], keys8[i8]) == 0:
                             fatal_at(self->file, ent8->pos, "render(): the key '%s' is given twice", keys8[i8])
@@ -3156,7 +3211,7 @@ struct PsSema:
             if e->nargs != 1 or e->args[0]->kind != PE_STR:
                 fatal_at(self->file, e->pos, "%s() takes exactly one string literal path", name)
             rl7: usize = 0
-            rel7: const *char = str_lit_decode(self->a, e->args[0]->text, out rl7)
+            rel7: const *char = str_lit_decode_py(self->a, e->args[0]->text, out rl7)
             if rl7 == 0:
                 fatal_at(self->file, e->pos, "%s(): the path is empty", name)
             if strlen(rel7) != rl7:
@@ -3237,7 +3292,7 @@ struct PsSema:
                 # 98.1: how many slots, which is known at compile time — the
                 # length of a tuple is part of its TYPE
                 return ps_type(self->a, PT_INT, e->pos)
-            if at2 == None or at2->kind not in {PT_STR, PT_LIST, PT_DICT, PT_SET}:
+            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_DICT, PT_SET}:
                 fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2))
             return ps_type(self->a, PT_INT, e->pos)
         if strcmp(name, "abs") == 0:
@@ -4436,8 +4491,8 @@ struct PsSema:
                     if e->lhs->kind == PE_STR and e->rhs->kind == PE_STR:
                         l3: usize = 0
                         r3: usize = 0
-                        a3: *char = str_lit_decode(self->a, e->lhs->text, out l3)
-                        b3: *char = str_lit_decode(self->a, e->rhs->text, out r3)
+                        a3: *char = str_lit_decode_py(self->a, e->lhs->text, out l3)
+                        b3: *char = str_lit_decode_py(self->a, e->rhs->text, out r3)
                         same: bool = strcmp(a3, b3) == 0
                         return same if e->op == TK_EQ else not same
                     if e->lhs->kind == PE_INT and e->rhs->kind == PE_INT:
@@ -5990,7 +6045,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6192,6 +6247,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return a->printf("Task<%s>", ps_type_str(a, t->inner))
         case PT_WORKER:
             return a->printf("Worker<%s>", ps_type_str(a, t->inner))
+        case PT_BYTES:
+            return "bytes"
         case PT_FILE:
             return "File"
         case PT_BUFFER:

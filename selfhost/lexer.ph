@@ -26,6 +26,7 @@ struct Keyword:
 struct LexSpec:
     keywords: const *Keyword
     fstrings: bool     # f"..." is an interpolation prefix, not an identifier
+    bytestr: bool      # b"..." is a bytes literal (135.7), not an identifier
     triple_str: bool   # """...""" spans lines
     ext_ops: bool      # ?? ??= ?. ** // %* %+ %- @
 

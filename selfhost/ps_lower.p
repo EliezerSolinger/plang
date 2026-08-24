@@ -426,6 +426,8 @@ struct PsLow:
                 return ty_name(self->a, "bool")
             case PT_STR:
                 return ty_ptr(self->a, ty_name(self->a, "PsStr"))
+            case PT_BYTES:
+                return ty_ptr(self->a, ty_name(self->a, "PsBytes"))
             case PT_NAME:
                 if strcmp(t->name, "Error") == 0:
                     return ty_ptr(self->a, ty_name(self->a, "PsErr"))
@@ -1243,6 +1245,17 @@ struct PsLow:
                 name = "ps_str_from_float"
             case PT_BOOL:
                 name = "ps_str_from_bool"
+            case PT_BYTES:
+                # 79.1/135.5: bytes become text HERE, and it CHECKS. A `str`
+                # promises codepoints, so bytes that are not valid UTF-8 raise
+                # rather than quietly making a string that lies about itself.
+                sb9: *Expr = self->call_rt("ps_str_from_bytesobj", e->pos)
+                self->push_arg(sb9, self->ctx_arg(e->pos))
+                self->push_arg(sb9, v)
+                self->pos_args(sb9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return sb9
             case PT_TUPLE:
                 tr9: *Expr = self->repr_value(v, e->type, e->pos, 0)
                 if tr9 == None:
@@ -1353,7 +1366,7 @@ struct PsLow:
                 # the literal's BYTES, decoded once here and re-emitted, so what
                 # reaches the runtime is exactly what the source spelled
                 n: usize = 0
-                raw: *char = str_lit_decode(self->a, e->text, out n)
+                raw: *char = str_lit_decode_py(self->a, e->text, out n)
                 c: *Expr = self->call_rt("ps_str_new", e->pos)
                 self->push_arg(c, self->ctx_arg(e->pos))
                 lit: *Expr = ex_new(self->a, EX_STRING, e->pos)
@@ -1361,6 +1374,21 @@ struct PsLow:
                 self->push_arg(c, lit)
                 self->push_arg(c, self->num(self->a->printf("%zu", n), e->pos))
                 return c
+            case PE_BYTES:
+                # 135.7: the same decode a string literal gets, into a `bytes`
+                # instead of a `str`. It is one of the four places a `bytes` is
+                # born, and the one that makes a protocol constant readable:
+                # `src[0:4] == b"\x7fELF"` instead of `"\x7fELF".encode()`.
+                bn: usize = 0
+                braw: *char = str_lit_decode_py(self->a, e->text, out bn)
+                bc: *Expr = self->call_rt("ps_bytes_new", e->pos)
+                self->push_arg(bc, self->ctx_arg(e->pos))
+                blit: *Expr = ex_new(self->a, EX_STRING, e->pos)
+                blit->text = c_string_literal(self->a, braw, bn)
+                self->push_arg(bc, blit)
+                self->push_arg(bc, self->num(self->a->printf("%zu", bn), e->pos))
+                self->allocs = True
+                return bc
             case PE_SPAWN:
                 # `spawn(f, (a, b))` (35.1). The arguments are copied into a
                 # plain struct — bytes, which is what crosses heaps (34.3) —
@@ -2071,7 +2099,8 @@ struct PsLow:
                 self->allocs = True
                 return self->ident(cn, e->pos)
             case PE_SLICE:
-                sc: *Expr = self->call_rt("ps_list_slice" if e->lhs->type != None and e->lhs->type->kind == PT_LIST else "ps_str_slice", e->pos)
+                slk9: PsTypeKind = e->lhs->type->kind if e->lhs->type != None else PT_UNKNOWN
+                sc: *Expr = self->call_rt("ps_list_slice" if slk9 == PT_LIST else ("ps_bytes_slice" if slk9 == PT_BYTES else "ps_str_slice"), e->pos)
                 self->push_arg(sc, self->ctx_arg(e->pos))
                 self->push_arg(sc, self->expr(e->lhs))
                 self->push_arg(sc, self->expr(e->args[0]) if e->args[0] != None else self->num("0", e->pos))
@@ -2138,6 +2167,14 @@ struct PsLow:
                     self->pos_args(g2, e->pos)
                     self->raised = True
                     return self->slot_val(g2, e->type, e->pos)
+                if e->lhs->type != None and e->lhs->type->kind == PT_BYTES:
+                    ba9: *Expr = self->call_rt("ps_bytes_get", e->pos)
+                    self->push_arg(ba9, self->ctx_arg(e->pos))
+                    self->push_arg(ba9, self->expr(e->lhs))
+                    self->push_arg(ba9, self->expr(e->rhs))
+                    self->pos_args(ba9, e->pos)
+                    self->raised = True
+                    return ba9
                 if e->lhs->type != None and e->lhs->type->kind == PT_STR:
                     sa: *Expr = self->call_rt("ps_str_at", e->pos)
                     self->push_arg(sa, self->ctx_arg(e->pos))
@@ -2369,6 +2406,7 @@ struct PsLow:
         rk: PsTypeKind = e->rhs->type->kind if e->rhs->type != None else PT_UNKNOWN
         both_int: bool = lk == PT_INT and rk == PT_INT
         is_str: bool = lk == PT_STR and rk == PT_STR
+        is_bytes: bool = lk == PT_BYTES and rk == PT_BYTES
         # one operand float makes the operation float, and the int side is
         # promoted at the call — the one implicit conversion the language has
         isf: bool = lk == PT_FLOAT or rk == PT_FLOAT
@@ -2465,9 +2503,11 @@ struct PsLow:
                     cmp0->rhs = self->num("0", e->pos)
                     return cmp0
             case TK_EQ, TK_NE:
-                if is_str:
-                    # `==` on strings compares CONTENT (22.2)
-                    c3: *Expr = self->call_rt("ps_str_eq", e->pos)
+                if is_str or is_bytes:
+                    # `==` compares CONTENT (22.2), and `bytes` is no different
+                    # — which is what makes `src[0:4] == b"\x7fELF"` mean what
+                    # it looks like it means
+                    c3: *Expr = self->call_rt("ps_bytes_eq" if is_bytes else "ps_str_eq", e->pos)
                     self->push_arg(c3, self->expr(e->lhs))
                     self->push_arg(c3, self->expr(e->rhs))
                     if e->op == TK_NE:
@@ -2764,6 +2804,14 @@ struct PsLow:
                 tc5: *Expr = self->call_rt("ps_str_is_title", e->pos)
                 self->push_arg(tc5, self->expr(e->lhs->lhs))
                 return tc5
+            if strcmp(nm5, "encode") == 0:
+                # 135.7: the UTF-8 the `str` already holds, handed over as
+                # bytes. Nothing is re-encoded — what is dropped is the promise.
+                en5: *Expr = self->call_rt("ps_bytes_from_str", e->pos)
+                self->push_arg(en5, self->ctx_arg(e->pos))
+                self->push_arg(en5, self->expr(e->lhs->lhs))
+                self->allocs = True
+                return en5
             if strcmp(nm5, "splitlines") == 0 or strcmp(nm5, "zfill") == 0:
                 z5: *Expr = self->call_rt(self->a->printf("ps_str_%s", nm5), e->pos)
                 self->push_arg(z5, self->ctx_arg(e->pos))
@@ -3983,6 +4031,25 @@ struct PsLow:
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_ARRAY:
             ac8: *PsType = e->args[0]->type
             return self->num(ac8->count->text if ac8->count != None else "0", e->pos)
+        if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_BYTES:
+            cb8: *Expr = self->call_rt("ps_bytes_len", e->pos)
+            self->push_arg(cb8, self->expr(e->args[0]))
+            return cb8
+        # 135.6: the crossing, in both directions, and each one COPIES
+        if strcmp(name, "bytes") == 0:
+            if e->args[0]->type != None and e->args[0]->type->kind == PT_BYTES:
+                return self->expr(e->args[0])      # already bytes
+            bfc: *Expr = self->call_rt("ps_bytes_from_list", e->pos)
+            self->push_arg(bfc, self->ctx_arg(e->pos))
+            self->push_arg(bfc, self->expr(e->args[0]))
+            self->allocs = True
+            return bfc
+        if strcmp(name, "list") == 0:
+            lfc: *Expr = self->call_rt("ps_list_from_bytes", e->pos)
+            self->push_arg(lfc, self->ctx_arg(e->pos))
+            self->push_arg(lfc, self->expr(e->args[0]))
+            self->allocs = True
+            return lfc
         if strcmp(name, "len") == 0:
             if self->is_sdict(e->args[0]):
                 sl2: *Expr = self->call_rt("ps_sdict_len", e->pos)
@@ -4093,7 +4160,7 @@ struct PsLow:
                 rd9->type = ty_name(self->a, "CStr" if e->cstr_ret == 1 else "CBytes")
                 rd9->init = cc2
                 self->pre.push(rd9)
-                mk9: *Expr = self->call_rt("ps_str_checked" if e->cstr_ret == 1 else "ps_bytes_new", e->pos)
+                mk9: *Expr = self->call_rt("ps_str_checked" if e->cstr_ret == 1 else "ps_list_of_raw", e->pos)
                 self->push_arg(mk9, self->ctx_arg(e->pos))
                 pf9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
                 pf9->op = TK_DOT
@@ -5295,7 +5362,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -7446,7 +7513,7 @@ private def lower_shared_init(L: *PsLow, sv: Vec<*PsDecl>, with_body: bool) -> *
             if sv.data[i]->init->kind != PE_STR:
                 fatal_at(L->file, sv.data[i]->pos, "the initial value of a `shared` string is a literal: it is written before the program starts (42.1)")
             sn0: usize = 0
-            sb0: *char = str_lit_decode(L->a, sv.data[i]->init->text, out sn0)
+            sb0: *char = str_lit_decode_py(L->a, sv.data[i]->init->text, out sn0)
             si0: *Expr = L->call_rt("ps_shared_str_init", f->pos)
             L->push_arg(si0, L->addr_of_shared(sv.data[i]->name, f->pos))
             lit0: *Expr = ex_new(L->a, EX_STRING, f->pos)
@@ -10524,7 +10591,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

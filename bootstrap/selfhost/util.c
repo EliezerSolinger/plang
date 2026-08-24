@@ -594,7 +594,7 @@ const char *path_join(Arena *a, const char *dir, const char *rel) {
     return Arena_printf(a, "%s/%s", dir, rel);
 }
 
-static size_t decode_run(char *buf, size_t len0, const char *lex, size_t from, size_t end, char q, size_t *stop) {
+static size_t decode_run(char *buf, size_t len0, const char *lex, size_t from, size_t end, char q, int py, size_t *stop) {
     size_t len = len0;
     size_t i = from;
     while (i < end && lex[i] != q) {
@@ -628,9 +628,11 @@ static size_t decode_run(char *buf, size_t len0, const char *lex, size_t from, s
             buf[len] = (char)27;
         } else if (c == 'x') {
             uint32_t v = 0;
-            while (i < end && is_hexc(lex[i])) {
+            int32_t nx = 0;
+            while (i < end && is_hexc(lex[i]) && !(py && nx == 2)) {
                 v = v * 16 + (uint32_t)hexc(lex[i]);
                 i += 1;
+                nx += 1;
             }
             buf[len] = (char)(v & 0xFF);
         } else if (c >= '0' && c <= '7') {
@@ -652,6 +654,14 @@ static size_t decode_run(char *buf, size_t len0, const char *lex, size_t from, s
 }
 
 char *str_lit_decode(Arena *a, const char *lex, size_t *out_len) {
+    return str_lit_decode_ex(a, lex, 0, out_len);
+}
+
+char *str_lit_decode_py(Arena *a, const char *lex, size_t *out_len) {
+    return str_lit_decode_ex(a, lex, 1, out_len);
+}
+
+char *str_lit_decode_ex(Arena *a, const char *lex, int py, size_t *out_len) {
     size_t n = strlen(lex);
     char *buf = Arena_alloc(a, n + 1);
     size_t len = 0;
@@ -666,7 +676,7 @@ char *str_lit_decode(Arena *a, const char *lex, size_t *out_len) {
         }
     }
     if (n >= 6 && lex[0] == q && lex[1] == q && lex[2] == q) {
-        len = decode_run(buf, 0, lex, 3, n - 3, (char)0, &stop);
+        len = decode_run(buf, 0, lex, 3, n - 3, (char)0, py, &stop);
         buf[len] = '\0';
         *out_len = len;
         return buf;
@@ -677,7 +687,7 @@ char *str_lit_decode(Arena *a, const char *lex, size_t *out_len) {
             continue;
         }
         i += 1;
-        len = decode_run(buf, len, lex, i, n, q, &stop);
+        len = decode_run(buf, len, lex, i, n, q, py, &stop);
         i = stop;
         i += 1;
     }

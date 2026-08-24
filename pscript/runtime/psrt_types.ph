@@ -55,6 +55,8 @@ enum PsTyId:
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
     PS_TY_CONN = 15    # a socket, listening or connected (77.1)
     PS_TY_PROC = 16    # 118: um processo que já terminou (`os.run`)
+    PS_TY_BYTES = 17   # 135.3: an immutable VALUE of bytes, collected, whose
+                       #   block lives outside the heap and never moves
 
 struct PsObj:
     ty: i32
@@ -81,6 +83,34 @@ struct PsStr:
                     #   character), and a string nobody indexes pays nothing.
                     #   A `str` is immutable, so it never goes stale.
     data: char[1]   # flexible in practice: allocated with len + 1 bytes
+
+# `bytes` (135.1/135.3/135.7): an immutable VALUE of bytes. A `str` and a
+# `bytes` are siblings that differ in exactly one thing — a `str` promises to
+# be text and counts codepoints, a `bytes` promises nothing and counts bytes —
+# and in one more that decides the layout:
+#
+# **A `str` keeps its bytes INLINE and a `bytes` does not.** The reason is
+# 135.1: `b[0:8]` is a VIEW and not a copy. Inline bytes move with the object
+# every time the collector runs, so a view over them would be a pointer into
+# something that shuffles. So the header is collected — that is what lets a
+# `bytes` be a value with no `close` (136.1) — and the block is malloc'd,
+# outside every heap, never moving. It is the same shape the `Buffer` already
+# had, and the same reason.
+#
+# `owner` is who holds the block. None means THIS object owns it, and only
+# those register a finalizer — a slice registers nothing, so the mechanism
+# costs one entry per block and not one per slice. A slice points at the ROOT
+# owner and never at another slice, which is what stops a chain of slices of
+# slices from keeping a whole file alive through one byte.
+#
+# It is exactly the `owner` the views of 18.3 already use, and the collector
+# already knows to follow it.
+struct PsBytes:
+    obj: PsObj
+    data: *char      # malloc'd when `owner` is None; a window into the owner's otherwise
+    len: usize
+    owner: *PsBytes  # None = this one owns `data` and has the release hook
+    hash: u32        # 0 = not computed yet, like PsStr's
 
 # a heap block: allocation is a bump inside one of these, and the collector
 # copies into a fresh one
@@ -419,6 +449,32 @@ struct PsRoot:
     slot: **PsObj
     next: *PsRoot
 
+# ---------- finalizers (136) ----------
+#
+# A collected object that owns something the collector does NOT own — a
+# malloc'd block, a mapping, a descriptor — registers one of these. After a
+# collection, whoever was not forwarded is dead, and its hook runs.
+#
+# **The entry is malloc'd, never allocated in the heap**, for the reason every
+# other malloc'd thing here is: the collector MOVES what it owns, and this list
+# has to survive being walked while the heap is half-copied.
+#
+# `obj` is a heap pointer and therefore moves: the sweep rewrites it from the
+# forwarding address, which is the same trick the shadow stack uses.
+#
+# **The hook belongs to the RUNTIME, never to the user** (136.2). It is `free`,
+# `munmap`, `close` — it does not allocate, does not raise, and does not call
+# code anybody wrote. There is no `__del__` and no `Drop`, and that is what
+# keeps resurrection, inter-object ordering and a finalizer that raises
+# mid-collection from being questions at all.
+#
+# And a finalizer frees a RESOURCE; it never finishes a JOB (136.4). What has
+# to happen is still `with`'s and still the programmer's.
+struct PsFinal:
+    next: *PsFinal
+    obj: *PsObj
+    hook: def(o: *void)
+
 # ---------- context ----------
 # Every pscript function takes this as its hidden first parameter (49.3). A
 # worker is just another ctx, which is what makes the BEAM model work later.
@@ -710,6 +766,13 @@ struct PsCtx:
     blocks: *PsBlock     # newest first; allocation bumps in this one
     frames: *PsFrame     # shadow stack head (49.4)
     roots: *PsRoot       # module-level collected variables
+    # 136: the objects with a release hook, and the two counters that turn a
+    # leak into a NUMBER. `nfinal_run` counts the hooks that have run; at exit
+    # the last pass runs the rest, and a gate that compares registered against
+    # run is a leak test (136.3).
+    finals: *PsFinal
+    nfinal: i64          # registered, ever
+    nfinal_run: i64      # hooks that have run
     exc: *PsErr          # exception flag (49.2): None = no exception pending
     live: usize          # bytes alive after the last collection
     alloced: usize       # bytes allocated since then       (14.2)

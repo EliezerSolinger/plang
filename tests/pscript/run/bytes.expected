@@ -1,0 +1,17 @@
+4 127 69
+3 4
+olá
+refused: these bytes are not valid UTF-8: keep them as bytes, or decode them yourself
+hi 2
+3 33 2
+4 True False
+hello world
+hello
+el
+0
+100
+out of range: True
+ace
+True False False
+0 True
+bytes-ok

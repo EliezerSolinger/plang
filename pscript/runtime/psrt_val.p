@@ -565,6 +565,152 @@ def ps_list_min_str(ctx: *PsCtx, l: *PsList, want_max: bool, file: const *char, 
             v = b[i]
     return v
 
+# ---------- `bytes` (135.1/135.3/135.5/135.7) ----------
+#
+# The release hook, and it is all a finalizer is allowed to be (136.2): one
+# `free`, no allocation, no raising, no user code.
+private def ps_bytes_release(o: *void):
+    b: *PsBytes = (*PsBytes)(o)
+    if b->data != None:
+        free(b->data)
+        b->data = None
+    b->len = usize(0)
+
+
+# A `bytes` that OWNS its block. The block is malloc'd — outside every heap,
+# never moving — which is what lets a slice of it be a view instead of a copy
+# (135.1) and what lets it cross to P without pinning (141.3).
+def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes:
+    b: *PsBytes = ps_alloc(ctx, sizeof(PsBytes), PS_TY_BYTES)
+    b->data = None
+    b->len = usize(0)
+    b->owner = None
+    b->hash = 0
+    if len > usize(0):
+        d: *char = (*char)(malloc(len))
+        if d == None:
+            ps_raise(ctx, "out of memory for bytes", PS_CAT_VALUE, "<bytes>", 0)
+            return b
+        if src != None:
+            memcpy(d, src, len)
+        b->data = d
+        b->len = len
+    # only an OWNER registers: a slice shares this block and would double-free
+    # it. One entry per block, not one per slice.
+    ps_add_final(ctx, (*PsObj)(b), ps_bytes_release)
+    return b
+
+
+# The ROOT owner of a block. A slice of a slice points at the same place the
+# first slice does — otherwise a chain of them would keep every intermediate
+# header alive, and one byte of a file would hold the file.
+private def ps_bytes_root(b: *PsBytes) -> *PsBytes:
+    return b->owner if b->owner != None else b
+
+
+# A window over somebody else's block: no copy, no allocation of bytes, and no
+# finalizer. This is `b[a:b]` (135.1).
+def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsBytes:
+    v: *PsBytes = ps_alloc(ctx, sizeof(PsBytes), PS_TY_BYTES)
+    v->data = (src->data + off) if src->data != None else None
+    v->len = len
+    v->owner = ps_bytes_root(src)
+    v->hash = 0
+    return v
+
+
+def ps_bytes_len(b: *PsBytes) -> i64:
+    return i64(b->len) if b != None else i64(0)
+
+
+def ps_bytes_get(ctx: *PsCtx, b: *PsBytes, i: i64, file: const *char, line: i32) -> i64:
+    n: i64 = i64(b->len) if b != None else i64(0)
+    k: i64 = i + n if i < 0 else i          # 31.4: a negative index counts back
+    if k < 0 or k >= n:
+        ps_raise(ctx, "index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return i64(u8(b->data[usize(k)]))
+
+
+# Python's slicing rules, and the SAME bounds the list and the string use —
+# past the end trims instead of raising (17.3), which is the one place slicing
+# and indexing disagree on purpose.
+def ps_bytes_slice(ctx: *PsCtx, b: *PsBytes, a: i64, e: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsBytes:
+    n: i64 = i64(b->len) if b != None else i64(0)
+    lo: i64 = 0
+    hi: i64 = 0
+    if not ps_slice_bounds(ctx, n, a, e, st, has_a, has_b, out lo, out hi, file, line):
+        return ps_bytes_new(ctx, "", usize(0))
+    if st == 1:
+        # the whole point: contiguous, so it is a VIEW and costs nothing
+        if lo >= hi:
+            return ps_bytes_new(ctx, "", usize(0))
+        return ps_bytes_view(ctx, b, usize(lo), usize(hi - lo))
+    # a STEP is not contiguous, so there is nothing to be a window over: it
+    # copies, and says so by being the only branch that allocates a block
+    cnt: i64 = 0
+    q: i64 = lo
+    while (st > 0 and q < hi) or (st < 0 and q > hi):
+        cnt += 1
+        q += st
+    r: *PsBytes = ps_bytes_new(ctx, None, usize(cnt) if cnt > 0 else usize(0))
+    k: usize = usize(0)
+    q = lo
+    while (st > 0 and q < hi) or (st < 0 and q > hi):
+        r->data[k] = b->data[usize(q)]
+        k += usize(1)
+        q += st
+    return r
+
+
+# By CONTENT, like every other `==` in this language (22.2)
+def ps_bytes_eq(a: *PsBytes, b: *PsBytes) -> bool:
+    if a == None or b == None:
+        return a == b
+    if a->len != b->len:
+        return False
+    if a->len == usize(0):
+        return True
+    return memcmp(a->data, b->data, a->len) == 0
+
+
+# ---- the four places a `bytes` is born (135.7) ----
+
+# from a `List<u8>`: an explicit COPY, and explicit in both directions because
+# each one copies and a copy that happens by itself is a copy nobody sees
+def ps_bytes_from_list(ctx: *PsCtx, l: *PsList) -> *PsBytes:
+    n: usize = usize(l->len) if l != None else usize(0)
+    return ps_bytes_new(ctx, ps_list_base(l) if n > usize(0) else "", n)
+
+
+# and back
+def ps_list_from_bytes(ctx: *PsCtx, b: *PsBytes) -> *PsList:
+    n: i64 = i64(b->len) if b != None else i64(0)
+    l: *PsList = ps_list_new(ctx, 1, False, n)
+    if n > 0:
+        memcpy(ps_list_base(l), b->data, usize(n))
+        l->len = n
+    return l
+
+
+# `s.encode()`: the UTF-8 a `str` already stores, handed over as bytes
+def ps_bytes_from_str(ctx: *PsCtx, s: *PsStr) -> *PsBytes:
+    if s == None:
+        return ps_bytes_new(ctx, "", usize(0))
+    return ps_bytes_new(ctx, s->data, usize(s->len))
+
+
+# `str(b)`: and it CHECKS, for the reason 79.1 gives — a `str` promises
+# codepoints, so one built out of invalid UTF-8 would lie about itself
+def ps_str_from_bytesobj(ctx: *PsCtx, b: *PsBytes, file: const *char, line: i32) -> *PsStr:
+    n: usize = usize(b->len) if b != None else usize(0)
+    p: const *char = b->data if n > usize(0) else ""
+    if not ps_utf8_valid(p, n):
+        ps_raise(ctx, "these bytes are not valid UTF-8: keep them as bytes, or decode them yourself", PS_CAT_VALUE, file, line)
+        return ps_str_new(ctx, "", 0)
+    return ps_str_new(ctx, p, n)
+
+
 # ---------- buffers (19.4/52.3) ----------
 def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *PsBuffer:
     # malloc'd, not collected: a worker holds this pointer, and the collector
@@ -630,15 +776,21 @@ def ps_buffer_set_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, v: f64, file: const *ch
 # memória só guarda os números.
 def ps_gc_stats(ctx: *PsCtx) -> *PsDict:
     d: *PsDict = ps_dict_new(ctx, i32(sizeof(PsStrPtr)), i32(sizeof(i64)), 1, True, False)
-    NAMES: const *char[] = {"live", "alloced", "objects", "collections", "budget", "budget_objects"}
-    vals: i64[6]
+    # 136.3: the two that make a LEAK measurable. Registered against released
+    # is a number a gate can compare, and it is the whole reason the exit pass
+    # exists — without it "the cleanup is guaranteed" is a claim nobody checks.
+    NAMES: const *char[] = {"live", "alloced", "objects", "collections", "budget", "budget_objects",
+                            "finalizers", "finalizers_run"}
+    vals: i64[8]
     vals[0] = i64(ctx->live)
     vals[1] = i64(ctx->alloced)
     vals[2] = ctx->nalloc
     vals[3] = ctx->ngc
     vals[4] = i64(ctx->gc_bytes)
     vals[5] = ctx->gc_objects
-    for i in range(6):
+    vals[6] = ctx->nfinal
+    vals[7] = ctx->nfinal_run
+    for i in range(8):
         k: *PsStr = ps_str_new(ctx, NAMES[i], strlen(NAMES[i]))
         kp: *PsStr = k
         slot: *char = ps_dict_put(ctx, d, (*char)(&kp))
@@ -1507,8 +1659,11 @@ def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, lin
         return ps_str_new(ctx, "", 0)
     return ps_str_new(ctx, p, n)
 
-# ... and bytes, which promise nothing and so are not checked
-def ps_bytes_new(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList:
+# ... and raw bytes, which promise nothing and so are not checked. It builds a
+# `List<u8>`, which is what its name now says: with a real `bytes` type in the
+# language (135), `ps_bytes_new` is the constructor of THAT, and two functions
+# with one name reading two different types was an accident waiting.
+def ps_list_of_raw(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList:
     l: *PsList = ps_list_new(ctx, 1, False, i64(n))
     i: usize = 0
     while i < n:

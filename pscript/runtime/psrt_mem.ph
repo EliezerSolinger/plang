@@ -29,6 +29,13 @@ def ps_forward(to: *PsBlock, p: *PsObj) -> *PsObj
 def ps_gc_poll(ctx: *PsCtx)
 def ps_gc(ctx: *PsCtx)
 def ps_add_root(ctx: *PsCtx, slot: **PsObj)
+
+# 136: an object that owns something the collector does not. The hook is the
+# RUNTIME's — `free`, `munmap`, `close` — never a program's.
+def ps_add_final(ctx: *PsCtx, o: *PsObj, hook: def(o: *void))
+# the last pass, at exit: what is left is released and counted, which is what
+# makes a leak a NUMBER instead of a suspicion (136.3)
+def ps_run_finals(ctx: *PsCtx)
 def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32)
 def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char)
 def ps_push_fn_dbg(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char, names: const **char, tys: const **PsTy)

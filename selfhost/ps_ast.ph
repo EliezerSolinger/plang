@@ -30,6 +30,12 @@ enum PsTypeKind:
     PT_FLOAT         # f64
     PT_BOOL
     PT_STR
+    PT_BYTES         # 135.3: an immutable VALUE of bytes. `str`'s sibling: the
+                     #   one promises codepoints, the other promises nothing —
+                     #   and that is the whole difference. Lowercase because it
+                     #   IS a value (139); its mutable, shared, closeable
+                     #   counterpart is `Buffer`, and the rule puts the two
+                     #   apart in the spelling itself.
     PT_ANY           # tagged (39.2)
     PT_NAME          # record / struct / enum / interface, by name
     PT_LIST          # List<T>
@@ -89,6 +95,7 @@ enum PsExprKind:
     PE_INT = 0
     PE_FLOAT
     PE_STR
+    PE_BYTES         # b"..." (135.7)
     PE_FSTR       # f"...": parts alternate literal/expression
     PE_BOOL
     PE_NONE

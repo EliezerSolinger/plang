@@ -2037,6 +2037,7 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
         case PT_FLOAT:
         case PT_BOOL:
         case PT_STR:
+        case PT_BYTES:
         case PT_ANY:
         case PT_VOID:
         case PT_FILE:
@@ -2168,6 +2169,10 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
         }
         case PE_STR: {
             t = ps_type(self->a, PT_STR, e->pos);
+            break;
+        }
+        case PE_BYTES: {
+            t = ps_type(self->a, PT_BYTES, e->pos);
             break;
         }
         case PE_BOOL: {
@@ -2430,12 +2435,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_950_17 = e;
-                __with_950_17->kind = PE_CALL;
-                __with_950_17->lhs = cal8;
-                __with_950_17->args = args8;
-                __with_950_17->nargs = nc8;
-                __with_950_17->body = NULL;
+                PsExpr *__with_952_17 = e;
+                __with_952_17->kind = PE_CALL;
+                __with_952_17->lhs = cal8;
+                __with_952_17->args = args8;
+                __with_952_17->nargs = nc8;
+                __with_952_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -2606,8 +2611,13 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 t = ct3->inner;
             } else if (ct3 != NULL && ct3->kind == PT_STR) {
                 t = ct3;
+            } else if (ct3 != NULL && ct3->kind == PT_BYTES) {
+                PsType *bu9 = ps_type(self->a, PT_INT, e->pos);
+                bu9->width = 8;
+                bu9->uns = 1;
+                t = bu9;
             } else if (ct3 == NULL || ct3->kind != PT_LIST) {
-                fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str and list work)", ps_type_str(self->a, ct3));
+                fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str, bytes and List work)", ps_type_str(self->a, ct3));
             } else {
                 t = ct3->inner;
             }
@@ -2761,8 +2771,8 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
         }
         case PE_SLICE: {
             PsType *st4 = PsSema_check_expr(self, e->lhs);
-            if (st4 == NULL || (st4->kind != PT_STR && st4->kind != PT_LIST)) {
-                fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str and list work)", ps_type_str(self->a, st4));
+            if (st4 == NULL || (st4->kind != PT_STR && st4->kind != PT_BYTES && st4->kind != PT_LIST)) {
+                fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes and List work)", ps_type_str(self->a, st4));
             }
             size_t i;
             for (i = 0; i < 3; i += 1) {
@@ -3169,14 +3179,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1628_21 = e;
-                    __with_1628_21->kind = PE_COMPREHEND;
-                    __with_1628_21->op = TK_RBRACKET;
-                    __with_1628_21->var = kv9;
-                    __with_1628_21->lhs = pair;
-                    __with_1628_21->rhs = recv9;
-                    __with_1628_21->args = NULL;
-                    __with_1628_21->nargs = 0;
+                    PsExpr *__with_1640_21 = e;
+                    __with_1640_21->kind = PE_COMPREHEND;
+                    __with_1640_21->op = TK_RBRACKET;
+                    __with_1640_21->var = kv9;
+                    __with_1640_21->lhs = pair;
+                    __with_1640_21->rhs = recv9;
+                    __with_1640_21->args = NULL;
+                    __with_1640_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -3295,7 +3305,13 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 return st5;
             }
-            fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle");
+            if (strcmp(nm2, "encode") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "encode() takes no arguments: a `str` is UTF-8 already, and there is no second encoding to ask for");
+                }
+                return ps_type(self->a, PT_BYTES, e->pos);
+            }
+            fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle");
         }
         if (rt != NULL && rt->kind == PT_LIST) {
             const char *lm = e->lhs->text;
@@ -3759,7 +3775,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             fatal_at(self->file, e->pos, "hasfield(): '%s' is not a record or a struct declared here", e->args[0]->text);
         }
         size_t fl6 = 0;
-        const char *fn6 = str_lit_decode(self->a, e->args[1]->text, &fl6);
+        const char *fn6 = str_lit_decode_py(self->a, e->args[1]->text, &fl6);
         int hit6 = 0;
         size_t i;
         for (i = 0; i < rd6->nfields; i += 1) {
@@ -4189,6 +4205,40 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         wt7->uns = name[0] == 'u';
         return wt7;
     }
+    if (strcmp(name, "bytes") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "bytes() takes one List<u8>, or one Buffer to copy");
+        }
+        PsType *bhu = ps_type(self->a, PT_LIST, e->pos);
+        bhu->inner = ps_type(self->a, PT_INT, e->pos);
+        bhu->inner->width = 8;
+        bhu->inner->uns = 1;
+        PsType *bph = self->hint;
+        self->hint = bhu;
+        PsType *bfa = PsSema_check_expr(self, e->args[0]);
+        self->hint = bph;
+        if (bfa != NULL && bfa->kind == PT_BYTES) {
+            return bfa;
+        }
+        if (bfa == NULL || bfa->kind != PT_LIST || bfa->inner == NULL || bfa->inner->kind != PT_INT || bfa->inner->width != 8 || !bfa->inner->uns) {
+            fatal_at(self->file, e->pos, "bytes() takes a List<u8> — a copy, said out loud (135.6) — found %s", ps_type_str(self->a, bfa));
+        }
+        return ps_type(self->a, PT_BYTES, e->pos);
+    }
+    if (strcmp(name, "list") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "list() takes one `bytes`, and gives back the List<u8> you can change");
+        }
+        PsType *lfa = PsSema_check_expr(self, e->args[0]);
+        if (lfa == NULL || lfa->kind != PT_BYTES) {
+            fatal_at(self->file, e->pos, "list() takes `bytes` — the way back from what crosses to what you can build with (135.6) — found %s", ps_type_str(self->a, lfa));
+        }
+        PsType *lu8 = ps_type(self->a, PT_LIST, e->pos);
+        lu8->inner = ps_type(self->a, PT_INT, e->pos);
+        lu8->inner->width = 8;
+        lu8->inner->uns = 1;
+        return lu8;
+    }
     if (strcmp(name, "str") == 0 || strcmp(name, "int") == 0 || strcmp(name, "float") == 0 || strcmp(name, "bool") == 0) {
         if (e->nargs != 1) {
             fatal_at(self->file, e->pos, "%s() takes exactly one argument", name);
@@ -4452,12 +4502,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_2799_17 = e;
-                __with_2799_17->kind = PE_INDEX;
-                __with_2799_17->lhs = e->args[0];
-                __with_2799_17->rhs = below;
-                __with_2799_17->args = NULL;
-                __with_2799_17->nargs = 0;
+                PsExpr *__with_2854_17 = e;
+                __with_2854_17->kind = PE_INDEX;
+                __with_2854_17->lhs = e->args[0];
+                __with_2854_17->rhs = below;
+                __with_2854_17->args = NULL;
+                __with_2854_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -4792,7 +4842,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "render() takes a string literal path and, if the holes are not names in scope, a dict literal with the values: `render(\"email.tpl\", {\"name\": who})` (63.2/75.2)");
         }
         size_t rl8 = 0;
-        const char *rel8 = str_lit_decode(self->a, e->args[0]->text, &rl8);
+        const char *rel8 = str_lit_decode_py(self->a, e->args[0]->text, &rl8);
         const char *p8 = path_join(self->a, path_dir(self->a, self->file), rel8);
         size_t n8 = 0;
         char *by8 = read_entire_file_opt(p8, &n8);
@@ -4824,7 +4874,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
                     fatal_at(self->file, (ent8 != NULL ? ent8->pos : e->pos), "render(): every key of the values dict is a string literal, because it names a hole of the template (75.2)");
                 }
                 size_t kl8 = 0;
-                keys8[i8] = Arena_strdup(self->a, str_lit_decode(self->a, ent8->lhs->text, &kl8));
+                keys8[i8] = Arena_strdup(self->a, str_lit_decode_py(self->a, ent8->lhs->text, &kl8));
                 size_t j8;
                 for (j8 = 0; j8 < i8; j8 += 1) {
                     if (strcmp(keys8[j8], keys8[i8]) == 0) {
@@ -4852,7 +4902,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "%s() takes exactly one string literal path", name);
         }
         size_t rl7 = 0;
-        const char *rel7 = str_lit_decode(self->a, e->args[0]->text, &rl7);
+        const char *rel7 = str_lit_decode_py(self->a, e->args[0]->text, &rl7);
         if (rl7 == 0) {
             fatal_at(self->file, e->pos, "%s(): the path is empty", name);
         }
@@ -4872,26 +4922,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3176_17 = e;
-                __with_3176_17->kind = PE_STR;
-                __with_3176_17->text = lit7;
-                __with_3176_17->lhs = NULL;
-                __with_3176_17->rhs = NULL;
-                __with_3176_17->args = NULL;
-                __with_3176_17->nargs = 0;
+                PsExpr *__with_3231_17 = e;
+                __with_3231_17->kind = PE_STR;
+                __with_3231_17->text = lit7;
+                __with_3231_17->lhs = NULL;
+                __with_3231_17->rhs = NULL;
+                __with_3231_17->args = NULL;
+                __with_3231_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3189_13 = e;
-            __with_3189_13->kind = PE_LOWERED;
-            __with_3189_13->low = ln7;
-            __with_3189_13->lhs = NULL;
-            __with_3189_13->rhs = NULL;
-            __with_3189_13->args = NULL;
-            __with_3189_13->nargs = 0;
+            PsExpr *__with_3244_13 = e;
+            __with_3244_13->kind = PE_LOWERED;
+            __with_3244_13->low = ln7;
+            __with_3244_13->lhs = NULL;
+            __with_3244_13->rhs = NULL;
+            __with_3244_13->args = NULL;
+            __with_3244_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -4938,7 +4988,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         if (at2 != NULL && at2->kind == PT_TUPLE) {
             return ps_type(self->a, PT_INT, e->pos);
         }
-        if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_LIST || at2->kind == PT_DICT || at2->kind == PT_SET)) {
+        if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_BYTES || at2->kind == PT_LIST || at2->kind == PT_DICT || at2->kind == PT_SET)) {
             fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2));
         }
         return ps_type(self->a, PT_INT, e->pos);
@@ -5183,10 +5233,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3463_17 = &ns->quals[ns->nquals];
-                __with_3463_17->name = q;
-                __with_3463_17->orig = d->path;
-                __with_3463_17->ns = sub;
+                PsNsEnt *__with_3518_17 = &ns->quals[ns->nquals];
+                __with_3518_17->name = q;
+                __with_3518_17->orig = d->path;
+                __with_3518_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5199,10 +5249,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3475_21 = &ns->ents[ns->nents];
-                    __with_3475_21->name = local;
-                    __with_3475_21->orig = d->names[k];
-                    __with_3475_21->ns = sub;
+                    PsNsEnt *__with_3530_21 = &ns->ents[ns->nents];
+                    __with_3530_21->name = local;
+                    __with_3530_21->orig = d->names[k];
+                    __with_3530_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5653,10 +5703,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_3926_9 = e;
-        __with_3926_9->kind = PE_NAME;
-        __with_3926_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_3926_9->lhs = NULL;
+        PsExpr *__with_3981_9 = e;
+        __with_3981_9->kind = PE_NAME;
+        __with_3981_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_3981_9->lhs = NULL;
     }
     return 1;
 }
@@ -6168,8 +6218,8 @@ static int PsSema_const_truth(PsSema *self, PsExpr *e, int *ok) {
                 if (e->lhs->kind == PE_STR && e->rhs->kind == PE_STR) {
                     size_t l3 = 0;
                     size_t r3 = 0;
-                    char *a3 = str_lit_decode(self->a, e->lhs->text, &l3);
-                    char *b3 = str_lit_decode(self->a, e->rhs->text, &r3);
+                    char *a3 = str_lit_decode_py(self->a, e->lhs->text, &l3);
+                    char *b3 = str_lit_decode_py(self->a, e->rhs->text, &r3);
                     int same = strcmp(a3, b3) == 0;
                     return (e->op == TK_EQ ? same : !same);
                 }
@@ -7893,6 +7943,7 @@ int ps_is_ref_type(PsType *t) {
     }
     switch (t->kind) {
         case PT_STR:
+        case PT_BYTES:
         case PT_LIST:
         case PT_DICT:
         case PT_SET:
@@ -8197,6 +8248,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
         }
         case PT_WORKER: {
             return Arena_printf(a, "Worker<%s>", ps_type_str(a, t->inner));
+        }
+        case PT_BYTES: {
+            return "bytes";
         }
         case PT_FILE: {
             return "File";

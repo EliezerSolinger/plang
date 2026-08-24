@@ -454,6 +454,8 @@ private def p_type(b: *StrBuf, t: *PsType):
             b->puts("Worker<")
             p_type(b, t->inner)
             b->putc('>')
+        case PT_BYTES:
+            b->puts("bytes")
         case PT_FILE:
             b->puts("File")
         case PT_BUFFER:

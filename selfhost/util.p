@@ -542,8 +542,22 @@ def path_join(a: *Arena, dir: const *char, rel: const *char) -> const *char:
 # stopped. Pulled out of `str_lit_decode` because there are now two callers with
 # DIFFERENT stopping rules — a C literal ends at its quote, a triple-quoted one
 # ends where the lexeme does — and one escape table is what keeps them agreeing.
+# `\x` is where the two languages part company, and it is not a detail.
+#
+# **C's rule is GREEDY**: `\x` eats every hex digit that follows, so `"\x7fELF"`
+# is `\x7FE` truncated to one byte plus `LF` — three bytes, not four. That is
+# why C programmers write `"\x7f" "ELF"`. **Python takes exactly two**, which is
+# why `b"\x7fELF"` is the four bytes of an ELF header and reads like it.
+#
+# P keeps C's rule because P's literals become C's literals and a P string that
+# meant something else than the C it turns into would be a trap. pscript takes
+# Python's, because that is the language it is.
+#
+# It was the example in 135.7 that found this: `if src[0:4] == b"\x7fELF"` was
+# written down as the reason the literal exists, and under C's rule it compares
+# four bytes against three and is False forever.
 private def decode_run(buf: *char, len0: usize, lex: const *char, from: usize,
-                       end: usize, q: char, out stop: usize) -> usize:
+                       end: usize, q: char, py: bool, out stop: usize) -> usize:
     len: usize = len0
     i: usize = from
     while i < end and lex[i] != q:
@@ -575,9 +589,11 @@ private def decode_run(buf: *char, len0: usize, lex: const *char, from: usize,
             buf[len] = char(27)          # GNU \e
         elif c == 'x':
             v: u32 = 0
-            while i < end and is_hexc(lex[i]):
+            nx: i32 = 0
+            while i < end and is_hexc(lex[i]) and not (py and nx == 2):
                 v = v * 16 + u32(hexc(lex[i]))
                 i += 1
+                nx += 1
             buf[len] = char(v & 0xFF)
         elif c >= '0' and c <= '7':
             o: u32 = u32(c - '0')
@@ -593,7 +609,18 @@ private def decode_run(buf: *char, len0: usize, lex: const *char, from: usize,
     stop = i
     return len
 
+# P's spelling: `\x` is C's, greedy. This is the entry point every P call site
+# uses and it does not change.
 def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char:
+    return str_lit_decode_ex(a, lex, False, out out_len)
+
+
+# pscript's: `\x` takes exactly two hex digits, like Python's.
+def str_lit_decode_py(a: *Arena, lex: const *char, out out_len: usize) -> *char:
+    return str_lit_decode_ex(a, lex, True, out out_len)
+
+
+def str_lit_decode_ex(a: *Arena, lex: const *char, py: bool, out out_len: usize) -> *char:
     n: usize = strlen(lex)
     buf: *char = a->alloc(n + 1)
     len: usize = 0
@@ -610,7 +637,7 @@ def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char:
     # would come out as `a  c`. The stopping quote is a NUL, which a lexeme
     # (itself a C string) cannot contain.
     if n >= 6 and lex[0] == q and lex[1] == q and lex[2] == q:
-        len = decode_run(buf, 0, lex, 3, n - 3, char(0), out stop)
+        len = decode_run(buf, 0, lex, 3, n - 3, char(0), py, out stop)
         buf[len] = '\0'
         out_len = len
         return buf
@@ -619,7 +646,7 @@ def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char:
             i += 1
             continue
         i += 1
-        len = decode_run(buf, len, lex, i, n, q, out stop)
+        len = decode_run(buf, len, lex, i, n, q, py, out stop)
         i = stop
         i += 1                               # closing quote
     buf[len] = '\0'

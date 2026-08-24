@@ -34,7 +34,7 @@ def ps_is_kind(v: *PsObj, ty: i32, kind: i32) -> bool
 def ps_utf8_valid(b: const *char, n: usize) -> bool
 def ps_str_from_bytes(ctx: *PsCtx, l: *PsList, file: const *char, line: i32) -> *PsStr
 def ps_str_checked(ctx: *PsCtx, p: const *char, n: usize, file: const *char, line: i32) -> *PsStr
-def ps_bytes_new(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList
+def ps_list_of_raw(ctx: *PsCtx, p: const *u8, n: usize) -> *PsList
 def ps_std_file(ctx: *PsCtx, which: i32) -> *PsFile
 # The format is DEFINED: fields in declaration order, little-endian, DENSE —
 # the padding a record has in memory simply does not exist in the format, which
@@ -144,6 +144,22 @@ def ps_str_lstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_rstrip(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_str_strip(ctx: *PsCtx, s: *PsStr) -> *PsStr
 def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList
+
+# ---------- `bytes` (135) ----------
+# An immutable VALUE of bytes. The header is collected and the block is not:
+# that is what lets `b[0:8]` be a window instead of a copy, and what lets a
+# `bytes` have no `close` at all (136.1).
+def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes
+def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsBytes
+def ps_bytes_len(b: *PsBytes) -> i64
+def ps_bytes_get(ctx: *PsCtx, b: *PsBytes, i: i64, file: const *char, line: i32) -> i64
+def ps_bytes_slice(ctx: *PsCtx, b: *PsBytes, a: i64, e: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsBytes
+def ps_bytes_eq(a: *PsBytes, b: *PsBytes) -> bool
+# the crossings, explicit in both directions because each one COPIES (135.6)
+def ps_bytes_from_list(ctx: *PsCtx, l: *PsList) -> *PsBytes
+def ps_list_from_bytes(ctx: *PsCtx, b: *PsBytes) -> *PsList
+def ps_bytes_from_str(ctx: *PsCtx, s: *PsStr) -> *PsBytes
+def ps_str_from_bytesobj(ctx: *PsCtx, b: *PsBytes, file: const *char, line: i32) -> *PsStr
 # ... and the two that say "walk INTO the element" (98.5), set right after the
 # container is made because only the call site knows the element's shape
 def ps_list_etrace(l: *PsList, fn: def(o: *void, to: *PsBlock)) -> *PsList

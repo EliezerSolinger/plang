@@ -183,6 +183,9 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.blocks = ps_new_block(0)
     ctx.frames = None
     ctx.roots = None
+    ctx.finals = None
+    ctx.nfinal = 0
+    ctx.nfinal_run = 0
     ctx.exc = None
     ctx.live = 0
     ctx.alloced = 0
@@ -331,6 +334,61 @@ def ps_trace_capture(ctx: *PsCtx, e: *PsErr):
 def ps_pop_frame(ctx: *PsCtx, f: *PsFrame):
     ctx->frames = f->prev
 
+# 136: this object owns something the collector does not, and here is how to
+# let it go. Called at CREATION, by the runtime — never by a program.
+def ps_add_final(ctx: *PsCtx, o: *PsObj, hook: def(o: *void)):
+    f: *PsFinal = (*PsFinal)(malloc(sizeof(PsFinal)))
+    if f == None:
+        return
+    f->obj = o
+    f->hook = hook
+    f->next = ctx->finals
+    ctx->finals = f
+    ctx->nfinal += 1
+
+
+# The sweep, and the ORDER inside it is the whole delicate part.
+#
+# It runs after Cheney's scan and BEFORE `ps_free_blocks`, because a dead
+# object still lives in from-space until that call and the hook has to read the
+# pointer it is about to release. Running the hooks after the blocks were freed
+# would be reading memory that has already gone back to `malloc`.
+#
+# Survivors are not freed: they are RE-POINTED, because the collector moved
+# them and the entry is malloc'd and did not move with them.
+private def ps_sweep_finals(ctx: *PsCtx):
+    p: **PsFinal = &ctx->finals
+    while *p != None:
+        f: *PsFinal = *p
+        if f->obj != None and f->obj->ty == PS_TY_MOVED:
+            f->obj = f->obj->fwd          # survived: follow it to to-space
+            p = &f->next
+        else:
+            *p = f->next                  # dead: release, and forget it
+            if f->hook != None and f->obj != None:
+                f->hook((*void)(f->obj))
+            ctx->nfinal_run += 1
+            free(f)
+
+
+# 136.3: the last pass. The `runFinalizersOnExit` of Java was withdrawn for
+# being dangerous — but it was dangerous because it ran USER code, on another
+# thread, over objects that might still be live. With 136.2's restriction none
+# of that exists here: the hooks are `free` and `munmap`, and by the time this
+# runs nothing is going to touch any of it again.
+#
+# What it buys is the thing that decided it: **a leak becomes measurable.**
+# `nfinal` against `nfinal_run` is a number a gate can compare.
+def ps_run_finals(ctx: *PsCtx):
+    while ctx->finals != None:
+        f: *PsFinal = ctx->finals
+        ctx->finals = f->next
+        if f->hook != None and f->obj != None:
+            f->hook((*void)(f->obj))
+        ctx->nfinal_run += 1
+        free(f)
+
+
 def ps_add_root(ctx: *PsCtx, slot: **PsObj):
     r: *PsRoot = malloc(sizeof(PsRoot))
     if r == None:
@@ -394,6 +452,15 @@ private def ps_scan_object(to: *PsBlock, o: *PsObj):
                     if nvt < 192:
                         e->tr_val[nvt] = ps_forward(to, e->tr_val[nvt])
                         nvt += 1
+        case PS_TY_BYTES:
+            # the block is malloc'd and does not move, so there is nothing to
+            # forward in it; the OWNER is a collected object like any other, and
+            # forgetting this line would leave a slice pointing at a header the
+            # next collection dropped — the exact bug the view case above
+            # already carries a paragraph about.
+            by9: *PsBytes = (*PsBytes)(o)
+            if by9->owner != None:
+                by9->owner = (*PsBytes)(ps_forward(to, (*PsObj)(by9->owner)))
         case PS_TY_LIST:
             l: *PsList = (*PsList)(o)
             if l->raw != None:
@@ -544,6 +611,11 @@ def ps_gc(ctx: *PsCtx):
         ps_scan_object(to, o)
         scan += usize(o->size)
         nlive += 1
+
+    # 136: who was NOT forwarded is dead. This has to happen here — after the
+    # scan, before the blocks go back — because a dead object still exists in
+    # from-space until the next line, and its hook reads it.
+    ps_sweep_finals(ctx)
 
     ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = to

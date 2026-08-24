@@ -691,6 +691,9 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         case PT_STR: {
             return ty_ptr(self->a, ty_name(self->a, "PsStr"));
         }
+        case PT_BYTES: {
+            return ty_ptr(self->a, ty_name(self->a, "PsBytes"));
+        }
         case PT_NAME: {
             if (strcmp(t->name, "Error") == 0) {
                 return ty_ptr(self->a, ty_name(self->a, "PsErr"));
@@ -1524,6 +1527,15 @@ static Expr *PsLow_to_str(PsLow *self, PsExpr *e) {
             name = "ps_str_from_bool";
             break;
         }
+        case PT_BYTES: {
+            Expr *sb9 = PsLow_call_rt(self, "ps_str_from_bytesobj", e->pos);
+            PsLow_push_arg(self, sb9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, sb9, v);
+            PsLow_pos_args(self, sb9, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return sb9;
+        }
         case PT_TUPLE: {
             Expr *tr9 = PsLow_repr_value(self, v, e->type, e->pos, 0);
             if (tr9 == NULL) {
@@ -1637,7 +1649,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
         }
         case PE_STR: {
             size_t n = 0;
-            char *raw = str_lit_decode(self->a, e->text, &n);
+            char *raw = str_lit_decode_py(self->a, e->text, &n);
             Expr *c = PsLow_call_rt(self, "ps_str_new", e->pos);
             PsLow_push_arg(self, c, PsLow_ctx_arg(self, e->pos));
             Expr *lit = ex_new(self->a, EX_STRING, e->pos);
@@ -1645,6 +1657,18 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, c, lit);
             PsLow_push_arg(self, c, PsLow_num(self, Arena_printf(self->a, "%zu", n), e->pos));
             return c;
+        }
+        case PE_BYTES: {
+            size_t bn = 0;
+            char *braw = str_lit_decode_py(self->a, e->text, &bn);
+            Expr *bc = PsLow_call_rt(self, "ps_bytes_new", e->pos);
+            PsLow_push_arg(self, bc, PsLow_ctx_arg(self, e->pos));
+            Expr *blit = ex_new(self->a, EX_STRING, e->pos);
+            blit->text = c_string_literal(self->a, braw, bn);
+            PsLow_push_arg(self, bc, blit);
+            PsLow_push_arg(self, bc, PsLow_num(self, Arena_printf(self->a, "%zu", bn), e->pos));
+            self->allocs = 1;
+            return bc;
         }
         case PE_SPAWN: {
             Expr *sw = PsLow_call_rt(self, "ps_worker_new", e->pos);
@@ -2317,7 +2341,8 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             return PsLow_ident(self, cn, e->pos);
         }
         case PE_SLICE: {
-            Expr *sc = PsLow_call_rt(self, (e->lhs->type != NULL && e->lhs->type->kind == PT_LIST ? "ps_list_slice" : "ps_str_slice"), e->pos);
+            PsTypeKind slk9 = (e->lhs->type != NULL ? e->lhs->type->kind : PT_UNKNOWN);
+            Expr *sc = PsLow_call_rt(self, (slk9 == PT_LIST ? "ps_list_slice" : (slk9 == PT_BYTES ? "ps_bytes_slice" : "ps_str_slice")), e->pos);
             PsLow_push_arg(self, sc, PsLow_ctx_arg(self, e->pos));
             PsLow_push_arg(self, sc, PsLow_expr(self, e->lhs));
             PsLow_push_arg(self, sc, (e->args[0] != NULL ? PsLow_expr(self, e->args[0]) : PsLow_num(self, "0", e->pos)));
@@ -2380,6 +2405,15 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 PsLow_pos_args(self, g2, e->pos);
                 self->raised = 1;
                 return PsLow_slot_val(self, g2, e->type, e->pos);
+            }
+            if (e->lhs->type != NULL && e->lhs->type->kind == PT_BYTES) {
+                Expr *ba9 = PsLow_call_rt(self, "ps_bytes_get", e->pos);
+                PsLow_push_arg(self, ba9, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, ba9, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, ba9, PsLow_expr(self, e->rhs));
+                PsLow_pos_args(self, ba9, e->pos);
+                self->raised = 1;
+                return ba9;
             }
             if (e->lhs->type != NULL && e->lhs->type->kind == PT_STR) {
                 Expr *sa = PsLow_call_rt(self, "ps_str_at", e->pos);
@@ -2581,6 +2615,7 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
     PsTypeKind rk = (e->rhs->type != NULL ? e->rhs->type->kind : PT_UNKNOWN);
     int both_int = lk == PT_INT && rk == PT_INT;
     int is_str = lk == PT_STR && rk == PT_STR;
+    int is_bytes = lk == PT_BYTES && rk == PT_BYTES;
     int isf = lk == PT_FLOAT || rk == PT_FLOAT;
     switch (e->op) {
         case TK_PLUS: {
@@ -2695,8 +2730,8 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
         }
         case TK_EQ:
         case TK_NE: {
-            if (is_str) {
-                Expr *c3 = PsLow_call_rt(self, "ps_str_eq", e->pos);
+            if (is_str || is_bytes) {
+                Expr *c3 = PsLow_call_rt(self, (is_bytes ? "ps_bytes_eq" : "ps_str_eq"), e->pos);
                 PsLow_push_arg(self, c3, PsLow_expr(self, e->lhs));
                 PsLow_push_arg(self, c3, PsLow_expr(self, e->rhs));
                 if (e->op == TK_NE) {
@@ -3008,6 +3043,13 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             Expr *tc5 = PsLow_call_rt(self, "ps_str_is_title", e->pos);
             PsLow_push_arg(self, tc5, PsLow_expr(self, e->lhs->lhs));
             return tc5;
+        }
+        if (strcmp(nm5, "encode") == 0) {
+            Expr *en5 = PsLow_call_rt(self, "ps_bytes_from_str", e->pos);
+            PsLow_push_arg(self, en5, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, en5, PsLow_expr(self, e->lhs->lhs));
+            self->allocs = 1;
+            return en5;
         }
         if (strcmp(nm5, "splitlines") == 0 || strcmp(nm5, "zfill") == 0) {
             Expr *z5 = PsLow_call_rt(self, Arena_printf(self->a, "ps_str_%s", nm5), e->pos);
@@ -4295,6 +4337,28 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         PsType *ac8 = e->args[0]->type;
         return PsLow_num(self, (ac8->count != NULL ? ac8->count->text : "0"), e->pos);
     }
+    if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_BYTES) {
+        Expr *cb8 = PsLow_call_rt(self, "ps_bytes_len", e->pos);
+        PsLow_push_arg(self, cb8, PsLow_expr(self, e->args[0]));
+        return cb8;
+    }
+    if (strcmp(name, "bytes") == 0) {
+        if (e->args[0]->type != NULL && e->args[0]->type->kind == PT_BYTES) {
+            return PsLow_expr(self, e->args[0]);
+        }
+        Expr *bfc = PsLow_call_rt(self, "ps_bytes_from_list", e->pos);
+        PsLow_push_arg(self, bfc, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, bfc, PsLow_expr(self, e->args[0]));
+        self->allocs = 1;
+        return bfc;
+    }
+    if (strcmp(name, "list") == 0) {
+        Expr *lfc = PsLow_call_rt(self, "ps_list_from_bytes", e->pos);
+        PsLow_push_arg(self, lfc, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, lfc, PsLow_expr(self, e->args[0]));
+        self->allocs = 1;
+        return lfc;
+    }
     if (strcmp(name, "len") == 0) {
         if (PsLow_is_sdict(self, e->args[0])) {
             Expr *sl2 = PsLow_call_rt(self, "ps_sdict_len", e->pos);
@@ -4397,7 +4461,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             rd9->type = ty_name(self->a, (e->cstr_ret == 1 ? "CStr" : "CBytes"));
             rd9->init = cc2;
             Vec_pStmt_push(&self->pre, rd9);
-            Expr *mk9 = PsLow_call_rt(self, (e->cstr_ret == 1 ? "ps_str_checked" : "ps_bytes_new"), e->pos);
+            Expr *mk9 = PsLow_call_rt(self, (e->cstr_ret == 1 ? "ps_str_checked" : "ps_list_of_raw"), e->pos);
             PsLow_push_arg(self, mk9, PsLow_ctx_arg(self, e->pos));
             Expr *pf9 = ex_new(self->a, EX_FIELD, e->pos);
             pf9->op = TK_DOT;
@@ -5594,7 +5658,7 @@ static int PsLow_is_collected(PsLow *self, Type *t) {
         return 0;
     }
     const char *n = t->inner->name;
-    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
+    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
         return 1;
     }
     if (StrSet_has(&self->frame_names, n)) {
@@ -7650,7 +7714,7 @@ static Decl *lower_shared_init(PsLow *L, Vec_pPsDecl sv, int with_body) {
                 fatal_at(L->file, sv.data[i]->pos, "the initial value of a `shared` string is a literal: it is written before the program starts (42.1)");
             }
             size_t sn0 = 0;
-            char *sb0 = str_lit_decode(L->a, sv.data[i]->init->text, &sn0);
+            char *sb0 = str_lit_decode_py(L->a, sv.data[i]->init->text, &sn0);
             Expr *si0 = PsLow_call_rt(L, "ps_shared_str_init", f->pos);
             PsLow_push_arg(L, si0, PsLow_addr_of_shared(L, sv.data[i]->name, f->pos));
             Expr *lit0 = ex_new(L->a, EX_STRING, f->pos);
@@ -10816,7 +10880,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_STR || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

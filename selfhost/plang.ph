@@ -98,6 +98,11 @@ def same_space(a: const *char, b: const *char) -> bool
 
 # ---------- C string literals ----------
 def str_lit_decode(a: *Arena, lex: const *char, out out_len: usize) -> *char
+# the same, with PYTHON's `\x` — exactly two hex digits. See the comment on
+# `decode_run`: it is the one escape the two languages spell differently, and
+# it is what makes `b"\x7fELF"` four bytes instead of three.
+def str_lit_decode_py(a: *Arena, lex: const *char, out out_len: usize) -> *char
+def str_lit_decode_ex(a: *Arena, lex: const *char, py: bool, out out_len: usize) -> *char
 def c_string_literal(a: *Arena, bytes: const *char, n: usize) -> const *char
 
 # ---------- f-strings: the brace grammar, shared ----------

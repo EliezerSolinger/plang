@@ -263,6 +263,11 @@ struct PsP:
                 t = ps_type(self->a, PT_BOOL, pos)
             elif name == "str":
                 t = ps_type(self->a, PT_STR, pos)
+            elif name == "bytes":
+                # 135.3: lowercase, because it is a VALUE — immutable, collected,
+                # and with no `close` at all. The thing that IS closed is spelled
+                # `Buffer`, and 139 puts the two apart in the spelling.
+                t = ps_type(self->a, PT_BYTES, pos)
             elif name == "any":
                 t = ps_type(self->a, PT_ANY, pos)
             elif self->renamed(pos, name, "file", "File"):
@@ -386,6 +391,15 @@ struct PsP:
                 e2: *PsExpr = ps_expr(self->a, PE_STR, pos)
                 e2->text = tk->text
                 return e2
+            case TK_BYTESTR:
+                # b"..." (135.7): the lexeme carries the prefix and the quotes,
+                # exactly like an f-string's, and what decodes it is the same
+                # `str_lit_decode` a plain string uses — so `\x7f` means in a
+                # bytes literal what it means everywhere else.
+                self->adv()
+                eb2: *PsExpr = ps_expr(self->a, PE_BYTES, pos)
+                eb2->text = tk->text
+                return eb2
             case TK_FSTRING:
                 self->adv()
                 return self->fstring(tk->text, pos)
@@ -946,7 +960,7 @@ struct PsP:
     # design does not want.
     private def fstring(self: *PsP, lex: const *char, pos: Pos) -> *PsExpr:
         n: usize = 0
-        body: *char = str_lit_decode(self->a, lex, out n)
+        body: *char = str_lit_decode_py(self->a, lex, out n)
         acc: *PsExpr = None
         lit: StrBuf = {0}
         i: usize = 0
@@ -1383,7 +1397,7 @@ struct PsP:
                     if nm->kind != PE_NAME or lit->kind != PE_STR or strcmp(nm->text, "__PLANG_OS__") != 0:
                         fatal_at(self->file, e->pos, "the only comparison a `const if` at the top takes is `__PLANG_OS__ == \"name\"`")
                     ln: usize = 0
-                    sv: *char = str_lit_decode(self->a, lit->text, out ln)
+                    sv: *char = str_lit_decode_py(self->a, lit->text, out ln)
                     same: bool = strcmp(sv, parser_predef_os()) == 0
                     return same if e->op == TK_EQ else not same
                 fatal_at(self->file, e->pos, "a `const if` at the top takes a name, `defined(NAME)`, `not`, `and`, `or`, or `== \"...\"`")

@@ -112,6 +112,10 @@ int same_space(const char *a, const char *b);
 
 char *str_lit_decode(Arena *a, const char *lex, size_t *out_len);
 
+char *str_lit_decode_py(Arena *a, const char *lex, size_t *out_len);
+
+char *str_lit_decode_ex(Arena *a, const char *lex, int py, size_t *out_len);
+
 const char *c_string_literal(Arena *a, const char *bytes, size_t n);
 
 struct FStrParts {

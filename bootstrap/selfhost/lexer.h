@@ -29,6 +29,7 @@ struct Keyword {
 struct LexSpec {
     const Keyword *keywords;
     int fstrings;
+    int bytestr;
     int triple_str;
     int ext_ops;
 };

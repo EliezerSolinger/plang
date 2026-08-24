@@ -34,7 +34,7 @@ private const P_KEYWORDS: Keyword[] = {
 # nas duas linguagens, e o que a lexa é a mesma máquina. `?`/`@`/`**`/`//` não são
 # operadores em P: a única grafia com `?` que ele tem é o par de coalescência, na
 # tabela abaixo.
-private P_LEXSPEC: const LexSpec = {P_KEYWORDS, True, True, False}
+private P_LEXSPEC: const LexSpec = {P_KEYWORDS, True, False, True, False}
 
 # reconstructs a `<...>` header path from tokens. `include` is a CONTEXTUAL
 # word in both languages, not a keyword, so the lexer cannot special-case `<h>`
@@ -809,6 +809,20 @@ def lex_with(file: const *char, bytes: const *char, nbytes: usize, a: *Arena, to
                 k: TokKind = TK_STRING if q == '"' else TK_CHARLIT
                 lx.lex_str_at(pstart, pp, q, k)
                 continue
+        # b"..." (135.7) — the fourth place a `bytes` is born, and the one that
+        # earns its keep on the magic numbers and protocol constants that are
+        # half of what reading a binary format is:
+        #
+        #     if src[0:4] == b"\x7fELF":
+        #
+        # Without it the most obvious intention would be the noisiest one to
+        # write (`"\x7fELF".encode()`).
+        if lx.spec->bytestr and c == 'b' and lx.peek(1) == '"':
+            bstart: usize = lx.i
+            bp: Pos = lx.here()
+            lx.i += 1   # the prefix; now on the opening quote
+            lx.lex_str_at(bstart, bp, '"', TK_BYTESTR)
+            continue
         # f"..." (LexSpec.fstrings) — one token carrying the prefix and the
         # quotes; the placeholders are parsed later, where the expressions can
         # be handed to the real expression parser instead of a second scanner.

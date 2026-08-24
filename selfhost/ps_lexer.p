@@ -35,9 +35,10 @@ private const PS_KEYWORDS: Keyword[] = {
     {"implements", TK_IMPLEMENTS}, {"is", TK_IS},
     {None, TK_EOF}}
 
-# f-strings, triple quotes and the extended operator set: all three are things
-# pscript's surface has and P's does not.
-private PS_LEXSPEC: const LexSpec = {PS_KEYWORDS, True, True, True}
+# f-strings, byte literals, triple quotes and the extended operator set. The
+# `b"..."` is pscript's alone: P has no `bytes` type because it talks to C, and
+# there the answer is `CBytes` (84.1).
+private PS_LEXSPEC: const LexSpec = {PS_KEYWORDS, True, True, True, True}
 
 def ps_lex(file: const *char, bytes: const *char, nbytes: usize, a: *Arena) -> TokenList:
     return lex_with(file, bytes, nbytes, a, False, &PS_LEXSPEC)

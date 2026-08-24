@@ -137,6 +137,9 @@ enum TokKind:
     TK_WRAP_MINUS    # %-
     TK_AT            # @   — decorator
     TK_FSTRING       # f"..." (lexeme with the prefix and quotes)
+    TK_BYTESTR       # b"..." (135.7) — the same, and for the same reason: the
+                     #   prefix stays in the lexeme so the parser can tell it
+                     #   from a string without a second table
     TK_COUNT
 
 
