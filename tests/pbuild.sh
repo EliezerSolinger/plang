@@ -115,7 +115,7 @@ echo "   pbuild-json: the event stream and the query come out as JSON"
 
 # ---- `ppack tree` and `ppack why`: the PACKAGE queries ----
 # They run over THIS repository's workspace, which stopped being the simple case
-# of two independent packages: today there are nine, and one of them (`ed25519`)
+# of two independent packages: today there are eight, and one of them (`ed25519`)
 # pulls another (`sha2`), which in turn pulls `stl`. That is why what is demanded
 # here is the NESTING and not an order of lines — a package that is another's
 # dependency appears underneath it, and not as a root. The order of the roots is

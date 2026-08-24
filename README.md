@@ -2,11 +2,11 @@
 
 **A Python-syntax systems language that compiles to C.**
 
-Plang looks like Python — indentation blocks, `def`, `match`, no semicolons —
-but it is a small, statically-typed *systems* language: fixed-width integers,
-raw pointers, structs, manual memory, and direct C interop. The compiler
-(`plangc`) translates Plang to **readable C** (the default) or to **QBE IL**,
-so a Plang program is exactly as fast and as portable as the C it becomes.
+Plang looks like Python — indentation blocks, `def`, `match`, no semicolons — but
+it is a small, statically-typed *systems* language: fixed-width integers, raw
+pointers, structs, manual memory, direct C interop. The compiler (`plangc`)
+translates it to **readable C** (the default) or to **QBE IL**, so a Plang
+program is exactly as fast and as portable as the C it becomes.
 
 ```python
 include <stdio.h>
@@ -21,221 +21,174 @@ def main() -> int:
 plangc hello.p -o hello.c && cc hello.c -o hello && ./hello
 ```
 
-The compiler is **written in Plang itself** and bootstraps to a fixed point.
-This repository ships that Plang source plus the generated C **seed**, so the
-whole thing builds with nothing but a C compiler.
+The compiler is **written in Plang itself** and bootstraps to a fixed point. This
+repository ships that Plang source plus the generated C **seed**, so the whole
+thing builds with nothing but a C compiler.
 
-### One compiler, three languages
+## One compiler, three languages
 
-`plangc` accepts `.c`/`.i` (a full **C front end**), `.p`/`.ph` (Plang) and
-`.psc` (**pscript**, the garbage-collected sibling language described below),
-and all three go through the same back ends. So one project can mix C, Plang
-and pscript and be built by one compiler. Two things fall out of the C half:
+| input | what it is |
+|---|---|
+| `.p` `.ph` | **Plang** — zero runtime, C's ABI, manual memory |
+| `.c` `.i` | **C** — a full front end: C11 plus common GNU extensions |
+| `.psc` | **pscript** — the garbage-collected sibling ([below](#pscript--the-sibling-language-with-a-runtime)) |
 
-- **C11 → C89 on any C89 compiler.** Feed modern C (C11, plus common GNU
-  extensions) and emit **strict C89** — so code written today builds on an
-  ancient or vendor C89-only toolchain. VLAs become `malloc`/`free`,
-  designated initializers are lowered, etc.; the semantics are preserved.
-- **Emits C89 or C99/C11.** Default output targets C99/C11; `--std=c89` emits
-  conformant C89 that should build on **any C89-conformant compiler**.
+All three lower to the same AST, go through the same checker, and come out of the
+same back ends. One project can mix them and one compiler builds it.
 
-That makes Plang (and the C→C89 path) practical for **embedded systems, OS
-kernels, and microcontrollers** — anywhere you have a small conformant C
-compiler and want either a nicer language or a way to run modern C on it.
+The C half has a consequence worth naming: **C11 → C89**. Feed modern C and emit
+strict C89 (`--std=c89`) — VLAs become `malloc`/`free`, designated initializers
+are lowered, semantics preserved. That makes both Plang and the C→C89 path
+practical for **embedded systems, kernels and microcontrollers**: anywhere you
+have a small conformant C compiler and want either a nicer language or a way to
+run modern C on it.
 
 ## Build
 
-You only need a C compiler (`cc`/`gcc`/`clang`) and `make`:
+You need a C compiler (`cc`/`gcc`/`clang`), `make`, and — only for the editor —
+`libsdl2-dev` and `pkg-config`.
 
 ```sh
-make            # the whole thing: the bootstrap ladder, the editor, the tools
-make check      # ... and then compile & run a hello-world with it
+sudo apt install build-essential pkg-config libsdl2-dev   # Debian/Ubuntu
+make -j$(nproc)
 ```
 
-`make` takes about 70 seconds on a clean tree and seconds afterwards. It builds
-the C seed in `bootstrap/` with your `cc`, uses that to build **ppack** — this
-repository's own build system, written in pscript — and from then on the build
-is a graph: `build/bin/plangc_s2` is the compiler, and everything lands under
-`build/`.
+That is the whole thing: about two minutes from a clean tree on eight cores, then
+seconds. It compiles the committed C seed with your `cc`, uses that to build
+**ppack** — this repository's own build system, written in pscript — and from
+then on the build is a graph. The default build is 105 edges: 97 translations and
+compilations, 5 links, and **3 checks** that define what "built" means — the
+`s2 == s3` fixed point, no internal libc type in the generated C, and the stamp
+that joins them. *Building is not testing:* the suites are a target you ask for.
 
-If you would rather not go through `ppack` at all, `build.ninja` is committed
-and describes the same graph:
+| command | what it does |
+|---|---|
+| `make` | the ladder with its fixed point, `ppack`, and the editor |
+| `make check` | ... and then compiles and runs a hello-world with it |
+| `make test` | the corpus in C plus the pscript suite, case by case |
+| `make verify` | the whole battery, 8 gates (~6 min cold, 8 s when nothing moved) |
+| `make pstudio` | the editor alone, and it says so if SDL2 is missing |
+| `make selfhost` | just the ladder: seed → s1 → s2 → s3 |
+| `make doc <mod>` | a module's interface, with its documentation |
+| `make clean` \| `clean-all` | drop what was built \| drop what was downloaded too |
+
+Everything lands under `build/` — binaries, the three ladder rungs, objects,
+logs, packages. Nothing is installed anywhere else.
+
+Two notes on what is optional. `make` builds the editor **only if `pkg-config`
+finds `sdl2`**; without it the build succeeds and the editor simply does not
+exist, which is not an error — `make pstudio` is the target that refuses out
+loud. And `make verify` alone wants two extras: `git submodule update --init` for
+the vendored QBE, and `python3` for the test harnesses.
+
+If you would rather not go through `ppack` at all, `build.ninja` is committed and
+describes the same graph:
 
 ```sh
 cc -O2 -o plangc bootstrap/selfhost/*.c && ninja
 ```
 
-It is generated (`ppack ninja build.ninja`) and a gate in `make verify`
-regenerates it and compares — a committed generated file has exactly one way to
-fail, which is to age in silence.
-
-The QBE back end uses a vendored QBE, which is a **submodule**: `git submodule
-update --init` before `make verify`, or that one suite says so and stops.
-
-```sh
-make test       # the corpus in C plus the pscript suite, case by case
-make verify     # the whole battery (5 min from scratch, 9 s when nothing moved)
-make doc <mod>  # a module's interface, with its documentation
-make ninja      # regenerate the committed build.ninja
-```
-
-`plangc` has no runtime and no dependencies — it reads a `.p`/`.ph` file and
-writes C (or QBE IL) to stdout or `-o`.
+It is generated (`ppack ninja build.ninja`) and a gate regenerates it and
+compares — a committed generated file has exactly one way to fail, which is to
+age in silence.
 
 ## Using the compiler
 
+`plangc` has no runtime and no dependencies: it reads a file and writes C (or QBE
+IL) to stdout or `-o`.
+
 ```sh
-plangc prog.p -o prog.c      # Plang -> C (default backend)
-cc prog.c -o prog            # then any C compiler builds it
+plangc prog.p -o prog.c              # Plang -> C, then any C compiler builds it
+plangc --std=c89 modern.c -o out.c   # C11 (+ GNU exts) -> strict C89
+plangc --backend qbe prog.p -o prog.ssa   # needs the external `qbe` + as + ld
 ```
 
+A `.c` is preprocessed automatically — with **your** `cc -E` (`--cpp` or
+`PLANGC_CPP` picks another), because the machine's own preprocessor is the truth
+about the machine's own headers. Pass a `.i` if you preprocessed it yourself.
+
 For a project, `--out-dir` compiles many files at once and mirrors the source
-tree in the output (builds never write next to your sources):
+tree in the output, so builds never write next to your sources:
 
 ```sh
-plangc --out-dir out src/main.p       # `import` traz o resto: um arquivo basta
+plangc --out-dir out src/main.p      # `import` brings the rest: one file is enough
 cc out/src/*.c -o prog
 ```
 
-(Naming one file is enough because `import "x.ph"` implies the module: if
-`x.ph` has an `x.p` sibling, the compiler emits both. That is why no list of
-modules lives in a Makefile here — and `plangc --deps`/`--outputs` answer what
-it read and what it will emit, which is what a build system needs.)
+Naming one file is enough because `import "x.ph"` implies the module: if `x.ph`
+has an `x.p` sibling, the compiler emits both. That is why no list of modules
+lives in a Makefile here — and `--deps` / `--outputs` / `--api` / `--version`
+answer what it read, what it will emit, what its interface is and who it is,
+which is exactly what a build system needs.
 
-For code aimed at very old toolchains, emit strict C89:
+## What the language has
 
-```sh
-plangc --std=c89 prog.p -o prog.c   # C89-conformant output
-```
+Plang keeps C's memory model and ABI and adds the ergonomics C never had, **all
+at zero runtime cost** — everything lowers to plain C. The reference is
+**[SPECS.MD](SPECS.MD)**; the short list:
 
-A `.psc` (pscript) compiles the same way — it just needs its runtime compiled
-alongside; see [pscript](#pscript--the-sibling-language-with-a-runtime) below.
-
-### Compiling C (the C front end)
-
-`plangc` reads C too. A `.c` file is preprocessed automatically (`--cpp`
-chooses the compiler used for that; default `cc`); pass a `.i` if you already
-preprocessed it yourself:
-
-```sh
-cpp modern.c > modern.i              # optional: your preprocessor of choice
-plangc --std=c89 modern.i -o out.c   # C11 (+ GNU exts) -> strict C89
-cc89 out.c -o modern                 # builds on a C89-only compiler
-```
-
-The C front end understands C11 plus common GNU extensions (statement
-expressions `({...})`, `_Generic`, `__attribute__`, compound literals,
-designated initializers, `__builtin_*`). It can target the C89 back end (as
-above) or the QBE back end (`--backend qbe`).
-
-### QBE backend (optional)
-
-Plang can also emit [QBE](https://c9x.me/compile/) IL instead of C, for a fast
-native path without a full C compiler:
-
-```sh
-plangc --backend qbe prog.p -o prog.ssa
-qbe -o prog.s prog.ssa       # QBE: IL -> assembly   (external tool)
-as -o prog.o prog.s          # assembler
-cc prog.o -o prog            # link
-```
-
-This requires the external `qbe` tool (and an assembler/linker); the C backend
-above needs only `cc`, so it is the recommended default.
-
-## What Plang has
-
-Plang keeps C's memory model and ABI but adds the ergonomics C never had —
-**all at zero runtime cost** (everything lowers to plain C):
-
-- **Generics by explicit monomorphization** — something C lacks entirely:
-  `struct Vec<T>` and `def max<T>(...)`, instantiated with `declare`/
-  `implement`. No hidden code generation: you ask for each instance, and each
-  becomes a distinctly-named concrete type/function.
-- **Compile-time type dispatch:** `match type(x)` and `typestr(x)` fold at
-  compile time and prune dead branches (zero-cost, like — but nicer than —
-  C11's `_Generic`).
-- **`defer`** for scope-exit cleanup, **`with`** for struct subcontexts,
-  **`const def`** for compile-time functions, and compile-time constant folding
-  / branch pruning (an `#ifdef` without a preprocessor).
-- **Python-ish syntax:** indentation blocks, `def name(args) -> T:`, `if/elif/
-  else`, `while`, `for i in range(...)`, `match`, ternary `a if c else b`.
-- **Systems types:** `i8..i64`, `u8..u64`, `f32/f64`, `bool`, `char`, pointers
-  (`*T`), fixed arrays (`T[N]`), `usize`/`isize`; plus the native C spellings.
-- **Structs with methods**, unions, enums, bitfields, function pointers.
-- **`private`** on a `def`, a struct method or a module-level variable keeps
-  the name inside the translation unit — it emits C's `static`. It replaced
-  `static` as the spelling for privacy, so each word now means one thing:
-  `private` is privacy in both languages, and `static` is left to pscript's
-  static method inside a struct.
+- **Generics by explicit monomorphization** — `struct Vec<T>`, `def max<T>(...)`,
+  instantiated with `declare`/`implement`. No hidden code generation: you ask for
+  each instance, and each becomes a distinctly-named concrete type.
+- **Traits** as generic bounds — checked where the type is concrete and then
+  monomorphized: no vtable, no dispatch, nothing at run time. A trait may declare
+  an **associated type**, so `Iterable` is a contract about iterating rather than
+  about `i64`, and `for v in it` lowers to a cursor and direct calls.
+- **Compile-time everything** — `match type(x)`, `typestr(x)`, `const def`,
+  constant folding and branch pruning (an `#ifdef` without a preprocessor),
+  default and named arguments, f-strings resolved into `printf`.
+- **Pointers with proof** — `ref T` binds once, auto-dereferences, and is a plain
+  `T*` in the emitted C; `*T` stays nullable as C made it, and a raw pointer
+  enters `ref` only under `if p != None:`. The same flow analysis powers
+  `-Wnull-dereference`, and `??` coalesces.
 - **`out` / `ref` / `in` parameters** — sugar over plain pointers
-  (`divmod(17, 5, out r)`; `in` emits `const T*`). The ABI stays a raw
-  pointer; C calls it as always.
-- **`ref T`, a non-nullable reference** for locals and returns: it binds once,
-  auto-dereferences, and is a plain `T*` in the emitted C. `*T` stays nullable
-  as C made it, and a raw pointer enters `ref` only under proof
-  (`if p != None:`). The same flow analysis powers **`-Wnull-dereference`**,
-  and **`??`** coalesces pointers (`p ?? fallback`).
-- **Traits**: `trait Comparable:` plus `implement Comparable for T:`, used as
-  generic bounds (`def sort<T: Comparable>`) that are checked where the type is
-  concrete and then monomorphized — no vtable, no dispatch, nothing at run
-  time. An implementation has to match the trait's signature *whole*, return
-  type included. A trait may declare an **associated type** (`type Item`) that
-  each implementation fills in (`type Item = f64`), so `Iterable` is a contract
-  about iterating rather than a contract about `i64`. `for v in it` works over
-  any type that implements `Iterable`, and lowers to a cursor and direct calls.
+  (`divmod(17, 5, out r)`; `in` emits `const T*`). The ABI stays a raw pointer.
 - **`record`** — a struct the compiler has *checked* to be pure bytes: safe to
-  memcpy, to write to disk, and to compare by content.
-- **`embed("f.txt")` / `embed_bytes("f.bin")`** — a file becomes data at
-  compile time (a `private const` array), so a program ships as one binary.
-- **f-strings resolved at compile time** — `printf(f"n={n} hex={n:x}\n")`
-  becomes `printf("n=%lld hex=%llx\n", (long long)n, (unsigned long long)n)`.
-  The hole's TYPE picks the conversion and the spec is Python's, transliterated
-  onto printf's own. It is valid only as the format argument of a variadic
-  function (a method counts), because that is the only place where there is
-  something for it to become — there is no runtime to build a string with.
-- **Lambdas without capture** — `apply(xs, n, lambda v: v + 10)`. With nothing
-  to capture, a lambda IS a function pointer: the compiler lifts it to a
-  `private` top-level function and passes its name. The types come from the
-  context (the declared variable, parameter, assignment, return or field), and
-  reading a local of the enclosing function is an error that names the local.
-- **`in` / `not in`**, string `==` by content (`strcmp`; identity is `is`),
-  and `match` on strings.
-- **Default and named arguments**, resolved at compile time.
-- **Clang-compatible warnings:** `-W<group>`, `-Wall`, `-Werror`,
-  `-pedantic-errors` — same group names and defaults as clang.
-- **First-class C interop:** `include <stdio.h>` becomes `#include`; call libc
-  directly; the emitted C is clean enough to read and diff.
-- **Three ways to name a dependency, none of them ambiguous:**
-  `include <stdio.h>` is a C header, `import "neighbour.ph"` is a module beside
-  the file, and `import <pkg/mod.ph>` is a module of a PACKAGE, looked up in the
-  roots given by `--pkg-path` (repeatable). A `<>` that is not found is an
-  error — it never falls back to the relative form.
-- **Docstrings** (`"""..."""` as the first thing in a module, a body, a
-  `struct`, an `enum` or a `trait`): they reach the AST and emit no code, and
-  `plangc --api` prints them *after* the interface hash — so changing what a
-  function's documentation says never changes what its interface hashes to.
+  memcpy, to write to disk, to compare by content.
+- **`embed("f.txt")` / `embed_bytes("f.bin")`** — a file becomes data at compile
+  time, so a program ships as one binary.
+- **`defer`**, **`with`**, **`private`** (which emits C's `static`), lambdas
+  without capture, `in` / `not in`, string `==` by content, `match` on strings.
+- **Clang-compatible diagnostics** — `-W<group>`, `-Wall`, `-Werror`,
+  `-pedantic-errors`, with clang's own group names and defaults.
+- **Docstrings** that reach the AST and emit no code — and `--api` prints them
+  *after* the interface hash, so editing documentation never changes what an
+  interface hashes to.
 
-### Optional standard library (STL)
+### The optional standard library
 
-Plang ships an **optional**, header-only generic library in `stl/` — nothing
-requires it; import only what you want:
+`packages/stl` is a header-only generic library — `Vec<T>`, `List<T>`, `Map<K,V>`,
+`Dict<K,V>`, `Set<T>`, `Queue<T>`, `Str`, `Slice<T>`. Nothing requires it.
 
-`Vec<T>`, `List<T>`, `Map<K,V>`, `Dict<K,V>`, `Set<T>`, `Queue<T>`, `Str`,
-`Slice<T>`.
+```python
+include <stdio.h>
+import <stl/vec.ph>
 
-Because it's built on generics, containers store elements **by value** (a
-`Vec<Point>` holds `Point`s inline, no per-element indirection). It's
-header-only: `import "stl/vec.ph"`, then `declare Vec<int>` / `implement
-Vec<int>`. Skip it entirely and use raw pointers + libc if you prefer.
+declare Vec<i32>
+implement Vec<i32>
 
-See **[SPECS.MD](SPECS.MD)** for the language reference.
+def main() -> int:
+    v: Vec<i32> = {0}
+    v.push(3)
+    v.push(4)
+    printf("%d %d %d\n", v.get(0), v.get(1), v.len)
+    v.deinit()
+    return 0
+```
+
+```sh
+plangc --pkg-path packages --out-dir out prog.p
+cc $(find out -name '*.c') -o prog
+```
+
+Because it is built on generics, containers store elements **by value**: a
+`Vec<Point>` holds `Point`s inline, with no per-element indirection.
 
 ## pscript — the sibling language, with a runtime
 
-Plang's promise is *zero runtime*: no collector, no hidden allocation, C's ABI.
-That promise is also a ceiling. **pscript** (`.psc`) is the other side of it —
-a language for the code where safety matters more than the last byte:
+Plang's promise is *zero runtime*. That promise is also a ceiling. **pscript**
+(`.psc`) is the other side of it — for the code where safety matters more than
+the last byte:
 
 ```python
 record Point:
@@ -249,142 +202,103 @@ def farthest(ps: list<Point>) -> Point:
             best = p
     return best
 
-pts = [Point(1.0, 2.0), Point(3.0, 4.0)]
-print(farthest(pts))            # Point(x=3.0, y=4.0)
+print(farthest([Point(1.0, 2.0), Point(3.0, 4.0)]))   # Point(x=3.0, y=4.0)
 ```
 
-It has a **copying garbage collector**, exceptions with `try`/`catch`, real
-strings and `list`/`dict`/`set`, `T?` options with flow narrowing, closures,
-`async`/`await`, and **workers** — OS threads with a heap and a collector each,
-so nothing is shared by accident. Bounds are checked, integer overflow raises
-instead of wrapping (the wrap has its own spelling, `%+ %- %*`), and a
-`shared dict` gives workers named state without a pointer ever crossing two
-heaps.
+A copying garbage collector, `try`/`catch`, real strings and `list`/`dict`/`set`,
+`T?` with flow narrowing, closures, `async`/`await`, and **workers** — OS threads
+with a heap and a collector each, so nothing is shared by accident. Bounds are
+checked and integer overflow raises instead of wrapping (the wrap has its own
+spelling, `%+ %- %*`).
 
-A message crosses as a **copy**: numbers and records by memcpy, and anything
-the collector owns — a string, a list, a dict, a set, a `struct` with
-references — written out on one side and built again on the other, with a
-cycle guard, so an object that appears twice arrives as one object and an
-object that contains itself arrives at all. `await w.recv()` **parks** like
-`await sleep()` does: the scheduler waits on the queues' descriptors with the
-nearest deadline as its timeout, so a program can wait for a message and a
-clock at once and neither is missed.
+A message between workers crosses as a **copy**, with a cycle guard: an object
+that appears twice arrives as one object, and an object that contains itself
+arrives at all. `await w.recv()` parks like `await sleep()` does, so a program can
+wait for a message and a clock at once and neither is missed.
 
-Talking to Plang is one import:
-
-```python
-import "shim.ph"                 # compiles shim.p into this build too
-
-const WINDOW: Rect = Rect(1280, 720)
-open_window(WINDOW)              # a `const` record crosses by reference, read-only
-```
-
-The boundary is unchanged — pointer-free signatures, enum members, scalar
-constants, plus that one `const` record by reference — but the build is now a
-single command instead of two.
-
-It is not a second compiler: a `.psc` is lowered to **Plang's own AST** and
-from there down the pipeline is the one Plang already had — the same checker
-(which doubles as a verifier of the lowering), the same C and QBE back ends,
-the same three build modes. The runtime is Plang source compiled alongside your
-program, so there is still no library to install:
+It is **not a second compiler**: a `.psc` is lowered to Plang's own AST, and the
+rest of the pipeline is the one Plang already had — the same checker (which
+doubles as a verifier of the lowering), the same back ends, the same build modes.
+The runtime is Plang source compiled alongside your program, so there is nothing
+to install:
 
 ```sh
-# naming the umbrella is enough: `psrt.ph` imports the layers' headers and each
-# one has its `.p` sibling, so the closure brings the whole runtime in
-plangc --out-dir out pscript/runtime/psrt.ph
+plangc --out-dir out pscript/runtime/psrt.ph     # naming the umbrella is enough
 plangc --out-dir out hello.psc
 cc -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE \
    out/hello.c out/pscript/runtime/psrt_*.c -o hello -lm -pthread
 ```
 
-Or let the package manager do it — which is what it is for:
+Or let the package manager do it, which is what it is for. The second run costs
+about six milliseconds: a manifest lists every file the build read with its date,
+and if they all still match there is nothing to do.
 
 ```sh
-ppack run hello.psc arg1 arg2   # builds into build/run/ and BECOMES the process
+ppack run hello.psc arg1 arg2    # builds into build/run/ and BECOMES the process
 ```
 
-The second run costs about six milliseconds: a manifest lists every file the
-build read with its date, and if they all still match there is nothing to ask
-and nothing to do. (This used to be `plangc run`; it moved because deciding
-where to keep a binary and when it is stale is policy, and policy belongs to
-the package manager — not to the thing that translates a language.)
-
-Your program still includes ONE header (`psrt.h`, the umbrella). And the engine
-has knobs: `-D PSRT_GC_BYTES=...` and friends at compile time, `import gc` /
-`sys.pool(n)` at run time — see bateria 110.
-
-(`--ps-runtime <dir>` says where the runtime lives if it is not in
-`pscript/runtime`.)
+Talking to Plang is one import — `import "shim.ph"` compiles `shim.p` into this
+build too. The boundary is pointer-free signatures, enum members, scalar
+constants, plus one `const` record by reference.
 
 The validation program is a **path tracer**: `pscript/examples/smallpt_core.psc`
-renders and writes a PPM, `smallpt_workers.psc` renders it in parallel across
-workers, and `smallpt_full.psc` adds a CLI, a JSON scene and a shared
-framebuffer. All three run in the test suite, in all three modes.
+renders and writes a PPM, `smallpt_workers.psc` renders it across workers, and
+`smallpt_full.psc` adds a CLI, a JSON scene and a shared framebuffer. All three
+run in the suite, in all three modes.
 
-The design is written down decision by decision in
-[pscript/DESIGN.md](pscript/DESIGN.md), what exists in
-[pscript/FEATURES.md](pscript/FEATURES.md), and what is next in
-[pscript/PLAN.md](pscript/PLAN.md).
+Decisions are in [pscript/DESIGN.md](pscript/DESIGN.md), what exists in
+[FEATURES.md](pscript/FEATURES.md), what is next in [PLAN.md](pscript/PLAN.md).
 
-### The trial by fire: the editor
+## Plang Studio — the trial by fire
 
-Plang Studio is a GUI code editor — tabs, a file tree, a fuzzy command palette
-(ctrl+p), multi-caret editing (ctrl+d), coalesced undo, incremental search
-(ctrl+f, POSIX regex with a `/` prefix), folding, a minimap, and syntax
-highlighting that reuses **the compiler's own lexer**. The UI toolkit and the
-software rasterizer are ours too — no widget library involved.
+A GUI code editor: tabs, a file tree, a fuzzy command palette (ctrl+p),
+multi-caret editing (ctrl+d), coalesced undo, incremental search (ctrl+f, POSIX
+regex with a `/` prefix), folding, a minimap, and syntax highlighting that reuses
+**the compiler's own lexer**. The UI toolkit and the software rasterizer are ours
+too — no widget library involved.
 
 ```sh
-sudo apt install libsdl2-dev     # the only dependency
-make pstudio                     # -> build/bin/pstudio
-./build/bin/pstudio .            # open the tree in the current directory
+make pstudio
+./build/bin/pstudio .          # open the tree in the current directory
 ```
 
-**It is written in pscript, and the split was decided by the boundary rule
-rather than by taste.** Only a pointer-free signature crosses (45.5), so the two
-places that hold a pointer stay in Plang and expose scalars:
+**It is written in pscript, and the split was decided by the boundary rule rather
+than by taste.** Only a pointer-free signature crosses, so the two places that
+hold a pointer stay in Plang and expose scalars:
 
 | in Plang | why |
 |---|---|
 | `ps/shim.p` + `pgfx*.p` + `font_atlas.p` | SDL2 and the pixels: a window handle, a key code, a colour, one glyph at a time |
-| `ps/hl.p` | the compiler's lexer: the buffer's text goes in as a `CStr` (pointer + length, no copy) and the tokens come back as numbers |
+| `ps/hl.p` | the compiler's lexer: the text goes in as a `CStr` (pointer + length, no copy) and the tokens come back as numbers |
 
-Everything above that — lines, carets, selection, undo, search, folding, the
-widget tree, the layout, the key bindings, the painting, the tabs, the tree, the
-palette — is pscript: **4200 lines of it over 820 of Plang**. The editor in pure
-Plang that came before it was 6448 lines and was retired once parity had been
-measured method by method (197 of them; the three real gaps it found are in
-`pstudio/DESIGN.md`).
+Everything above that — lines, carets, undo, search, folding, the widget tree,
+the layout, the key bindings, the painting — is pscript: **4 671 lines of it over
+1 103 of Plang**. The editor in pure Plang that came before it was 6 448 lines,
+and was retired once parity had been measured method by method.
 
 The ratio is the interesting part: the buffer needs 914 lines of pscript where
-the Plang one needed 1505, and the difference is not style — a line is a `str`,
-`len(s)` is codepoints, slicing copies, and the collector owns the graph, so
-three UTF-8 helpers, every `malloc`/`free` pair and every `deinit` are simply
-not there. The layout code, which is arithmetic, did not shrink at all.
+the Plang one needed 1 505, and the difference is not style — a line is a `str`,
+`len(s)` is codepoints, slicing copies, and the collector owns the graph, so three
+UTF-8 helpers, every `malloc`/`free` pair and every `deinit` are simply not there.
+The layout code, which is arithmetic, did not shrink at all.
 
-Everything is gated: `make verify` compiles and links the whole editor and runs
-its self-test with SDL's dummy driver, and `tests/pstudio/` drives the buffer,
-the toolkit, the editing widget and the entire application headless, with
-synthetic events. What the port found on the way — fifteen real compiler bugs
-across four batteries — is written down in
-[pscript/DESIGN.md](pscript/DESIGN.md) (batteries 111-116).
-
-The font atlas shows what `embed_bytes` is for: 263 KB of glyphs used to be
-eleven thousand lines of decimal in a `.p`, and are now one line reading a
-`.bin` at compile time — same single binary, same static array, a page of
-source instead of a phone book.
+Everything is gated: `make verify` compiles and links the editor and runs its
+self-test under SDL's dummy driver, and `pstudio/ps/*_test.psc` drives the buffer,
+the toolkit, the editing widget and the whole application headless, with synthetic
+events. With no display, `--shot img.ppm` writes a frame instead of opening a
+window. The font atlas is what `embed_bytes` is for: 263 KB of glyphs used to be
+eleven thousand lines of decimal in a `.p`, and are now one line reading a `.bin`
+at compile time.
 
 ## ppack — the build system and the package manager
 
-`ppack` is this project's build system and package manager, written **in
-pscript** and built by the compiler it builds. One binary, three modes:
-*resolve* (the only one that touches the network), *describe* and *execute*.
+Written **in pscript** and built by the compiler it builds. One binary, three
+modes: *resolve* (the only one that touches the network), *describe*, *execute*.
 
 ```sh
-ppack build [target]      # build; -j N, -k N, -n (dry run), --explain
+ppack build [target]      # -j N, -k N, -n (dry run), --explain, --repro
 ppack run x.psc [args]    # build it and BECOME it (stdin, stdout, exit code)
-ppack test / ppack verify # the named suites / the whole battery
+ppack test / verify       # the named suites / the whole battery
 ppack dev [target]        # rebuild and relaunch on every change
 ppack doc <mod> [sym]     # a module's interface and docs; --html for a folder
 ppack why / tree / graph / explain      # why did this rebuild, and who pulled that
@@ -392,134 +306,102 @@ ppack add x@1.0 / lock / install / up   # the manifest and the lock
 ppack publish x --to <dir> --key <k>    # a tarball, a hash and two signatures
 ```
 
-The engine is the one the ninja documents describe: a node is a file, an edge
-is a command, and "out of date" is ninja's six tests — with `restat` comparing
+The engine is the one the ninja documents describe: a node is a file, an edge is
+a command, and "out of date" is ninja's six tests — with `restat` comparing
 **content** (our compiler rewrites C that is often byte-identical, and then
-nothing downstream needs to run) and the queue ordered by the **duration** the
-log recorded last time. Commands are `argv`, never a shell string.
+nothing downstream needs to run) and the queue ordered by the **duration** the log
+recorded last time. Commands are `argv`, never a shell string.
 
-Two things are unusual and both are deliberate:
+Two things are unusual, and both are deliberate:
 
-- **The compiler answers; the build system decides.** `plangc --deps`,
-  `--outputs`, `--api` and `--version` tell a build system what it read, what
-  it will emit, what its interface is and who it is. What to rebuild, in what
-  order, with how many processes is never the compiler's business — which is
-  what keeps a second build system from growing inside it.
-- **Nothing is global.** Packages, objects, binaries and logs all live in the
+- **The compiler answers; the build system decides.** What to rebuild, in what
+  order, with how many processes is never the compiler's business — which is what
+  keeps a second build system from growing inside it.
+- **Nothing is global.** Packages, objects, binaries and logs live in the
   project's `build/`. A repository is a *format*, not a service: a directory
-  served by anything, with trust coming from content (SHA-256 plus Ed25519),
-  never from the transport.
+  served by anything, with trust coming from content (SHA-256 plus Ed25519), never
+  from the transport.
 
-The design is written down decision by decision in `pbuild/DESIGN.md`,
-`pbuild/ARQUITETURA.md`, `ppack/DESIGN.md` and `ppack/REPOSITORIO.md`, with
-`pbuild/DECISOES.md` as the one-line index and `pbuild/PLAN.md` as the diary.
+Decisions are in `pbuild/DESIGN.md` and `pbuild/ARQUITETURA.md`,
+`ppack/DESIGN.md` and `ppack/REPOSITORIO.md`, with `pbuild/DECISOES.md` as the
+one-line index.
 
 ## Repository layout
 
 ```
-selfhost/     the compiler, written in Plang (.p source, .ph headers)
-              — including the C front end (cfront) and pscript's (ps_*)
-bootstrap/    the C seed generated from selfhost/ (+ bootstrap/packages/stl)
-packages/     what WE publish, each one a package with its own pack.json and
-              its own tests: stl (the generic containers), pui (the editor's
-              toolkit), sha2, tar, ed25519, http, url, and pbuild — the build
-              engine itself
-pbuild/       the build system's documents and its programs: ppack (the CLI),
-              build_plang.psc (THIS repository's descriptor), and the engine's
-              own suite
-ppack/        the package manager's documents (the repository format, the
-              decisions)
-pscript/      the sibling language: its runtime (in Plang), design and examples
-pstudio/      Plang Studio: the editor — pscript on top (ps/*.psc),
-              the SDL2 driver and the lexer bridge in Plang
-qbe/          the vendored QBE, as a SUBMODULE (`git submodule update --init`)
-tests/        gating suites; corpora somebody else wrote (c-testsuite,
-              wacct, JSONTestSuite, web-platform-tests); clang, python3 and
-              node as oracles; and the collector under stress
-tools/        generators for data that is not written by hand (the Unicode
-              case table)
-pack.json     this repository IS a workspace, like any other project ppack
-              builds — which is how the ecosystem is tested by the people who
-              write it, against the hardest case there is
+selfhost/     the compiler, in Plang — including the C front end (cfront)
+              and pscript's (ps_*)
+bootstrap/    the C seed generated from selfhost/, committed
+packages/     what WE publish, each with its own pack.json and its own tests:
+              stl, pui (the editor's toolkit), sha2, tar, ed25519, http, url,
+              and pbuild — the build engine itself
+pbuild/       the build system's documents and programs: ppack (the CLI),
+              build_plang.psc (THIS repository's descriptor), its own suite
+ppack/        the package manager's documents (the repository format)
+pscript/      the sibling language: runtime (in Plang), design, examples
+pstudio/      the editor: pscript on top (ps/*.psc), the SDL2 driver and the
+              lexer bridge in Plang
+qbe/          the vendored QBE, as a submodule
+tests/        gating suites; corpora somebody else wrote; clang, python3 and
+              node as oracles; the collector under stress
+tools/        generators for data that is not written by hand
+pack.json     this repository IS a workspace, like any project ppack builds
 build.ninja   generated and committed, so a clean machine needs no ppack
 Makefile      a thin shell over ppack (and it builds the seed)
 SPECS.MD      language reference
 ```
 
-`plangc` is the compiler; `selfhost/` is both its implementation and a large,
-real example of idiomatic Plang. To rebuild the compiler from the Plang source
-(and confirm it still self-hosts on your machine):
-
-```sh
-make selfhost   # the ladder: seed -> s1 -> s2 -> s3, with s2 == s3 checked
-```
-
-That *is* the default build's first half: the seed compiles the sources, the
-result compiles them again, and the third pass has to produce byte-identical C.
-A compiler that reproduces itself is the only kind you can trust to have
-compiled itself correctly.
+`selfhost/` is both the compiler's implementation and a large, real example of
+idiomatic Plang. `make selfhost` rebuilds it from that source and checks that it
+still self-hosts: the seed compiles the sources, the result compiles them again,
+and the third pass has to produce byte-identical C. A compiler that reproduces
+itself is the only kind you can trust to have compiled itself correctly.
 
 ## Status
 
-The compiler self-hosts (3-stage fixed point, through both back ends) and
-passes its test suite on Unix systems with a standard C toolchain. Every gating
-suite runs three times — C, QBE and strict C89 — and `make verify` runs the
-whole battery, from the seed's fixed point to the editor's headless tests.
+The compiler self-hosts (3-stage fixed point, through both back ends) and passes
+its suite on Unix with a standard C toolchain. Every gating suite runs three
+times — C, QBE and strict C89.
 
-Both front ends are measured against corpora written by other people rather
-than against claims of our own.
+Both front ends are measured against corpora written by other people rather than
+against claims of our own:
 
-For C: the c-testsuite passes 220/220, 741 wacct programs produce their expected
-exit codes, and 155 diagnostics match clang's text exactly.
+| corpus | |
+|---|---|
+| c-testsuite | **220/220** |
+| wacct programs, by exit code | **741** |
+| diagnostics matching clang's text exactly | **155** |
+| nst/JSONTestSuite | **318/318** |
+| web-platform-tests, URL | **890/891** |
+| nodejs/llhttp (the fixtures node itself runs) | **202/202** |
 
-For pscript, `bash tests/conformance/run.sh` runs the corpora the rest of the
-world is measured on — nst/JSONTestSuite at **318/318**, the web-platform-tests
-URL corpus at **890/891**, and nodejs/llhttp, the fixtures node itself runs, at
-**202/202**. The exceptions are written down in `tests/conformance/*.skips`, one
-line each with the reason.
-
-None of those numbers was free. The JSON parser was not decoding `\uXXXX` at all,
-took `01` and `NaN` as numbers, and had no depth limit — a hundred thousand `[`
-was a segfault reachable from a string somebody else wrote. The HTTP parser had
-twelve request-smuggling doors open, and the shape of most of them is the same:
+The exceptions are written down in `tests/conformance/*.skips`, one line each with
+the reason. None of those numbers was free: the JSON parser was not decoding
+`\uXXXX` at all and had no depth limit, and the HTTP parser had twelve
+request-smuggling doors open — most of them the same shape, where
 `x:<CR>Transfer-Encoding: chunked` was one header to us and two to the hop next
-door, which is the whole attack. A `101 Switching Protocols` was given a body,
-which means the next protocol's first packet was handed over as one.
+door, which is the whole attack.
 
-`bash tests/oracle/run.sh` measures the other half, the part no downloadable
-corpus can: it runs our own programs twice, once here and once by the
-implementation whose behaviour we said we would copy. `python3` is the oracle for
-the language — the arithmetic and string rules the design keeps stating "as
-Python does", including case mapping compared over all 1 114 112 code points —
-and `node` is the oracle for the runtime model, where the promises are about
-ORDER. It found, among others, that timers with the same deadline were waking in
-the wrong order.
+Three harnesses measure what no downloadable corpus can:
 
-`bash tests/bench.sh` runs the same program here, in `python3` and in `node`,
-with the compile time in a column of its own — long on purpose, and ours to have:
-this is ahead-of-time through C at `-O3 -flto`. None of the speed comes from the
-code generator, which optimises nothing; it comes from GCC plus two policy fixes
-that measurement forced. Link-time optimisation is worth 3.4x on recursion,
-because a program and the runtime are two translation units and every operation
-is a call across that boundary. And the collector's trigger is now proportional
-to what is live rather than a fixed 2 MiB — a fixed trigger makes a copying
-collector quadratic on anything that accumulates, which is why building a list of
-strings cost 0.49 µs an item at fifty thousand and 1.27 at four hundred thousand.
-It is flat now.
+- **`tests/oracle/run.sh`** runs our own programs twice — once here, once by the
+  implementation whose behaviour we said we would copy. `python3` is the oracle
+  for the language (including case mapping over all 1 114 112 code points),
+  `node` for the runtime model, where the promises are about ORDER.
+- **`tests/gc-stress.sh`** collects at every safe point and poisons the space it
+  frees. A copying collector has one way to be wrong — something held a pointer
+  across a safe point without telling the collector — and the danger is the
+  invisibility: with the normal threshold a small program never collects at all.
+  The first run turned thirteen green tests red, and every one was a real defect.
+- **`tests/bench.sh`** runs the same program here, in `python3` and in `node`.
+  None of the speed comes from the code generator, which optimises nothing; it
+  comes from GCC plus two fixes measurement forced — LTO (worth 3.4× on
+  recursion, because a program and the runtime are two translation units) and a
+  collector trigger proportional to what is live rather than a fixed 2 MiB, which
+  was making a copying collector quadratic on anything that accumulates.
 
-`bash tests/gc-stress.sh` collects at every safe point and poisons the space it
-frees. A copying collector has one way to be wrong — something held a pointer
-across a safe point without telling the collector — and the danger is not the
-fix but the invisibility: with the normal threshold a small program never
-collects at all. The first run turned thirteen green tests red, and every one was
-a real defect. The worst answered wrongly rather than crashing: `in` over a
-collected element is an interior pointer, so a path tracer rendered a different
-image for every collection frequency.
-
-pscript is still younger than the C front end — `unsafe` is ahead, and
-[pscript/PLAN.md](pscript/PLAN.md) says where each piece stands and why. The
-awaitable I/O loop (epoll/kqueue/poll) landed and is what the build system runs
-on: `ppack` keeps N compilers in flight through it.
+pscript is younger than the C front end; [pscript/PLAN.md](pscript/PLAN.md) says
+where each piece stands and why.
 
 ## License
 
