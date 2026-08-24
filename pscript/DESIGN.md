@@ -6525,3 +6525,91 @@ E o `cstr.p` é a excepção da excepção: é o único com implementação, e e
 `.p` quer dizer que o código vai compilado para dentro do programa de quem
 importa — o mesmo que já acontece com um genérico materializado, só que sem o
 `implement` à vista.
+
+---
+
+## BATERIA 143 — o pscript já se apaga em P, e o que isso fecha (2026-08-24)
+
+> *"isso por acaso também permitiria que uma linguagem fosse superset da outra
+> directamente?"* / *"o ideal seria que o runtime fosse escrito em P, e o pscript
+> descesse pra esse runtime"*
+
+**O ideal descrito é o que já existe**, e vale ficar escrito porque é fácil de
+não ver. A primeira linha do `ps_lower.p` di-lo:
+
+```
+# ps_lower.p — pscript's tree becomes P's tree (49.1).
+```
+
+O runtime é P (`psrt_*.p`), o pscript desce para P, e o P gerado **importa o
+runtime com um `import` normal**. Os dois encontram-se em P, no mesmo ficheiro:
+
+```
+import "../pscript/runtime/psrt.ph"          ← e este ficheiro é P
+
+def soma(__ctx: *PsCtx, a: i64, b: i64) -> i64:
+    if ps_has_exc(__ctx):
+        return 0
+    __ret: i64 = ps_add(__ctx, a, b, "…", 2)
+    ...
+```
+
+**A fronteira não é uma fronteira de LINGUAGEM.** Há P escrito à mão e P gerado,
+ligados por um `import`. É a relação que o TypeScript tem com o JavaScript — com
+uma diferença: o TypeScript apaga-se para **nada**, e o pscript apaga-se para um
+**runtime**.
+
+### 143.1 — o preço é da PROMESSA, não de atravessar
+
+`a + b` em dois inteiros vira `ps_add(ctx, a, b, ficheiro, linha)` porque o `+` do
+pscript **promete** verificar transbordo e poder levantar. A chamada é o custo
+dessa promessa.
+
+**Medido, em `url.psc` — análise de cadeias pura, 890 testes de conformidade:**
+
+```
+linhas de C geradas:      6 984
+chamadas ao runtime:      2 387
+   destas, aritmética:      161   →  6,7 %
+```
+
+Se se desligassem TODAS as promessas, poupavam-se 6,7 %. Os outros 93 % são
+`ps_str_concat`, `ps_list_append`, `ps_dict_get` — **não são a segurança do
+pscript, são o pscript**.
+
+> **Portanto "pscript sem runtime" não é um modo. Levado ao fim, é o P com outra
+> sintaxe** — ter-se-ia renomeado em vez de unificado.
+
+Fica escrito para não ser voltado a devanear: a ideia foi considerada, medida, e
+o número é que a fecha.
+
+### 143.2 — e o P não tem um tipo `str`
+
+Uma correcção a uma coisa que eu tinha afirmado sem verificar. Não há colisão
+entre as duas linguagens sobre a palavra `str`, porque o P não a usa:
+
+```
+const *char   1 645 usos        Str    11   (o StrBuf da 141.7)
+*char           248             CStr   30
+```
+
+O `str` do pscript é minúsculo por ser um valor; o `StrBuf` do `stl` é maiúsculo
+por ser uma coisa. A regra da 139 já os separava correctamente, e o "bloqueio
+duro" que eu tinha levantado entre as duas linguagens **não existe**.
+
+### 143.3 — a propriedade que um superset destruiria
+
+```sh
+plangc --backend p foo.psc     # e sai o P que o teu pscript virou
+```
+
+**Dá para LER a descida.** Um superset não teria nada para mostrar — a linguagem
+de cima *seria* a de baixo, e não haveria tradução nenhuma para ver. É uma
+propriedade de ensino e de depuração que se perde no instante em que as duas
+linguagens passam a ser uma.
+
+O precedente mais próximo do que foi imaginado é o **Nim** — uma linguagem só,
+com o coletor opcional — e a lição dele é a que se esperaria: **os dois regimes
+entornam um no outro**, e os modos de gestão de memória do Nim têm sido uma fonte
+recorrente de instabilidade. Duas linguagens com uma costura tipada não têm esse
+problema, porque nenhuma finge ser a outra.
