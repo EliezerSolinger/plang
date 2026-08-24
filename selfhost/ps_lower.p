@@ -239,7 +239,7 @@ struct PsLow:
                           #   moves bytes and knows nothing about them, so the
                           #   adapter is emitted per ELEMENT TYPE — deduped by
                           #   the mangled name, which is what makes a nested
-                          #   container work: the adapter for `list<int>` calls
+                          #   container work: the adapter for `List<int>` calls
                           #   the one for `int`.
     cmpads: Vec<*PsExpr> # `sorted(xs)` over a `Comparable` type (62.1): one
                          #   adapter per call site, for the same reason the
@@ -258,7 +258,7 @@ struct PsLow:
                         #   the `for` lowering instead of a pscript block
     # 119/F6: o nome e o TIPO PSCRIPT de cada variável da função que está a ser
     # baixada, para o post-mortem. O `frame_wrap` recebe a árvore de P, onde os
-    # tipos da linguagem de cima já não existem (`list<int>` é `*PsList` e mais
+    # tipos da linguagem de cima já não existem (`List<int>` é `*PsList` e mais
     # nada), então a correspondência faz-se aqui, pelo NOME — e um nome
     # declarado duas vezes com tipos diferentes fica de fora, porque imprimir um
     # valor com o tipo errado é pior do que não o imprimir.
@@ -1098,7 +1098,7 @@ struct PsLow:
         # F5: também isto vem da tabela. O que havia era um ADAPTADOR gerado por
         # tipo de elemento (`__ps_reprad_l_int`), que o runtime chamava a cada
         # elemento; agora o runtime recebe o TIPO como dado e não precisa que
-        # ninguém lhe escreva uma função. `list<list<int>>` deixou de precisar de
+        # ninguém lhe escreva uma função. `List<List<int>>` deixou de precisar de
         # duas.
         if (t->kind == PT_LIST or t->kind == PT_SET or t->kind == PT_DICT) and not tem_tupla(t, 0):
             c0: *Expr = self->call_rt("ps_repr_val", pos)
@@ -2919,7 +2919,7 @@ struct PsLow:
         # calling a function VALUE (28.1): through the pointer the closure
         # carries, with its environment as the hidden first argument. The cast
         # is where the signature comes back — the closure itself is one shape
-        # for every function type, which is what lets a `dict<str, def>` hold
+        # for every function type, which is what lets a `Dict<str, def>` hold
         # them side by side.
         if e->lhs != None and e->lhs->type != None and e->lhs->type->kind == PT_FUNC and e->lhs->kind in {PE_NAME, PE_INDEX, PE_CALL, PE_FIELD}:
             sig8: *PsType = e->lhs->type
@@ -3942,7 +3942,7 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return rm9
-        if strcmp(name, "buffer") == 0:
+        if strcmp(name, "buffer") == 0 or strcmp(name, "Buffer") == 0:
             bf: *Expr = self->call_rt("ps_buffer_new", e->pos)
             self->push_arg(bf, self->ctx_arg(e->pos))
             self->push_arg(bf, self->expr(e->args[0]))
@@ -4044,7 +4044,7 @@ struct PsLow:
                     if csk9 == 1:
                         il9->args[0] = fp9
                     else:
-                        # a `list<u8>` keeps its bytes after the header
+                        # a `List<u8>` keeps its bytes after the header
                         bp9: *Expr = self->call_rt("ps_list_base", e->pos)
                         self->push_arg(bp9, self->ident(sn9, e->pos))
                         cst9: *Expr = ex_new(self->a, EX_CAST, e->pos)
@@ -4117,7 +4117,7 @@ struct PsLow:
         pre3: *Expr = None
         ov: **Expr = self->lower_ordered(e->args, e->nargs, ref pre3)
         # `*xs` (44.2): everything from that parameter on is one list, built
-        # here — inside the function it is an ordinary `list<T>`
+        # here — inside the function it is an ordinary `List<T>`
         vpf: *PsFunc = self->find_ps_func(name)
         vidx: i32 = -1
         if vpf != None and vpf->nparams > 0 and vpf->params[vpf->nparams - 1].is_varargs:
@@ -4713,7 +4713,7 @@ struct PsLow:
         return ix
 
     # ---------- dicts and sets ----------
-    # `set<T>` is a dict with a zero-sized value, so one implementation serves
+    # `Set<T>` is a dict with a zero-sized value, so one implementation serves
     # both and the collector has one place to learn about.
     private def dict_new(self: *PsLow, t: *PsType, pos: Pos) -> *Expr:
         isset: bool = t->kind == PT_SET
@@ -9363,7 +9363,7 @@ private def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *c
 # ---------- o mapa do post-mortem (F6) ----------
 #
 # Nome -> tipo PSCRIPT, para a função que está a ser baixada. Existe porque o
-# `frame_wrap` trabalha na árvore de P, onde `list<int>` já é `*PsList` e mais
+# `frame_wrap` trabalha na árvore de P, onde `List<int>` já é `*PsList` e mais
 # nada — e sem o tipo de cima o `repr` genérico não sabe o que está a olhar.
 #
 # Um nome declarado DUAS VEZES com tipos diferentes (dois blocos, dois `for`)
@@ -10514,10 +10514,10 @@ private def opt_is_ref(t: *PsType) -> bool:
         return False
     # 113: um `T?` cujo T É referência TAMBÉM é uma referência nua — é essa a
     # representação escolhida na 9.4 (None é o ponteiro nulo, e custa zero). Sem
-    # esta linha, um `dict<str, def(int,int)?>` nascia com `vref = False`: o
+    # esta linha, um `Dict<str, def(int,int)?>` nascia com `vref = False`: o
     # coletor não seguia os valores, e depois de uma coleta o dict devolvia um
     # ponteiro para o CEMITÉRIO. Vale para toda referência dentro de opcional —
-    # `list<str?>`, `dict<str, Node?>` — e foi o gc-stress que cobrou.
+    # `List<str?>`, `Dict<str, Node?>` — e foi o gc-stress que cobrou.
     if t->kind == PT_OPT:
         return opt_is_ref(t->inner)
     # `Error` is the one BUILTIN reference spelled as a plain name: a pointer to
@@ -10931,7 +10931,7 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     for i in range(L.cmpads.len):
         L.out.push(lower_cmpad(&L, L.cmpads.data[i], i, True))
     # the bodies come AFTER the prototypes, and a body may name another adapter
-    # (`list<list<int>>` calls the one for `list<int>`) — which is why the list
+    # (`List<List<int>>` calls the one for `List<int>`) — which is why the list
     # is complete before any of them is written
     for i in range(L.reprads.len):
         L.out.push(lower_reprad(&L, L.reprads.data[i], True))

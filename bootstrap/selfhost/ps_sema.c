@@ -1590,7 +1590,7 @@ static PsDecl *ps_prog_shadows(PsModule *m, const char *name);
 
 int ps_is_ref_type(PsType *t);
 
-static PsType *ps_kind_of_name(Arena *a, PsExpr *e, Pos pos);
+static PsType *ps_kind_of_name(Arena *a, const char *file, PsExpr *e, Pos pos);
 
 static void ps_lit_fits(const char *file, PsExpr *e, PsType *t);
 
@@ -2086,7 +2086,7 @@ static void PsSema_want(PsSema *self, PsExpr *e, PsType *got, PsType *expect, co
             case PT_LIST:
             case PT_DICT: {
                 if (got->inner == NULL || got->inner->kind != PT_ANY) {
-                    fatal_at(self->file, e->pos, "an `any` holds %s only when its elements are `any` too: write `list<any>`/`dict<str, any>`, because what is inside has to carry its own type (39.2)", (got->kind == PT_LIST ? "a list" : "a dict"));
+                    fatal_at(self->file, e->pos, "an `any` holds %s only when its elements are `any` too: write `List<any>`/`Dict<str, any>`, because what is inside has to carry its own type (39.2)", (got->kind == PT_LIST ? "a list" : "a dict"));
                 }
                 e->box_any = 1;
                 return;
@@ -2530,7 +2530,7 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             }
             if (e->nargs == 0) {
                 if (self->hint == NULL || self->hint->kind != PT_LIST) {
-                    fatal_at(self->file, e->pos, "an empty list literal needs a type: `xs: list<int> = []`");
+                    fatal_at(self->file, e->pos, "an empty list literal needs a type: `xs: List<int> = []`");
                 }
                 t = self->hint;
                 e->type = t;
@@ -2622,7 +2622,7 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             }
             if (e->nargs == 0) {
                 if (self->hint == NULL || self->hint->kind != PT_DICT) {
-                    fatal_at(self->file, e->pos, "an empty dict literal needs a type: `d: dict<str, int> = {}`");
+                    fatal_at(self->file, e->pos, "an empty dict literal needs a type: `d: Dict<str, int> = {}`");
                 }
                 t = self->hint;
                 e->type = t;
@@ -2661,7 +2661,7 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                     e->type = t;
                     return t;
                 }
-                fatal_at(self->file, e->pos, "`{}` is the empty DICT; an empty set is `set<T>()`");
+                fatal_at(self->file, e->pos, "`{}` is the empty DICT; an empty set is `Set<T>()`");
             }
             PsType *et5 = PsSema_check_expr(self, e->args[0]);
             PsSema_key_ok(self, et5, e->pos, "a set element");
@@ -3085,7 +3085,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             }
             if (strcmp(nm3, "update") == 0) {
                 if (e->nargs != 1) {
-                    fatal_at(self->file, e->pos, "update() takes one %s", (rt->kind == PT_DICT ? "dict" : "set"));
+                    fatal_at(self->file, e->pos, "update() takes one %s", (rt->kind == PT_DICT ? "Dict" : "Set"));
                 }
                 PsSema_deny_const_mut(self, e->lhs->lhs, "update()");
                 PsSema_check_want(self, e->args[0], rt, "the update");
@@ -3180,7 +3180,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 return PsSema_check_expr(self, e);
             }
-            fatal_at(self->file, e->pos, "a %s has %s", (rt->kind == PT_DICT ? "dict" : "set"), (rt->kind == PT_DICT ? "get, pop, setdefault, remove, update, clear, copy, keys, values and items" : "add, remove, discard, update, clear, copy and keys"));
+            fatal_at(self->file, e->pos, "a %s has %s", (rt->kind == PT_DICT ? "Dict" : "Set"), (rt->kind == PT_DICT ? "get, pop, setdefault, remove, update, clear, copy, keys, values and items" : "add, remove, discard, update, clear, copy and keys"));
         }
         if (rt != NULL && rt->kind == PT_STR) {
             const char *nm2 = e->lhs->text;
@@ -3291,7 +3291,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 PsType *jt = PsSema_check_expr(self, e->args[0]);
                 if (jt == NULL || jt->kind != PT_LIST || jt->inner == NULL || jt->inner->kind != PT_STR) {
-                    fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt));
+                    fatal_at(self->file, e->pos, "join() takes a List<str>, not %s", ps_type_str(self->a, jt));
                 }
                 return st5;
             }
@@ -3465,11 +3465,11 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             PsType *ctk = ps_type(self->a, PT_TASK, e->pos);
             if (strcmp(cm, "write") == 0) {
                 if (e->nargs != 1) {
-                    fatal_at(self->file, e->pos, "write() takes one str or one list<u8>");
+                    fatal_at(self->file, e->pos, "write() takes one str or one List<u8>");
                 }
                 PsType *cw = PsSema_check_expr(self, e->args[0]);
                 if (cw == NULL || !(cw->kind == PT_STR || (cw->kind == PT_LIST && cw->inner != NULL && cw->inner->kind == PT_INT && cw->inner->width == 8))) {
-                    fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, cw));
+                    fatal_at(self->file, e->pos, "write() takes a str or a List<u8>, found %s", ps_type_str(self->a, cw));
                 }
                 ctk->inner = ps_type(self->a, PT_INT, e->pos);
                 return ctk;
@@ -3508,11 +3508,11 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             PsType *ftk = ps_type(self->a, PT_TASK, e->pos);
             if (strcmp(fm, "write") == 0) {
                 if (e->nargs != 1) {
-                    fatal_at(self->file, e->pos, "write() takes one string or one list<u8>");
+                    fatal_at(self->file, e->pos, "write() takes one string or one List<u8>");
                 }
                 PsType *wat = PsSema_check_expr(self, e->args[0]);
                 if (wat == NULL || !(wat->kind == PT_STR || (wat->kind == PT_LIST && wat->inner != NULL && wat->inner->kind == PT_INT && wat->inner->width == 8))) {
-                    fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, wat));
+                    fatal_at(self->file, e->pos, "write() takes a str or a List<u8>, found %s", ps_type_str(self->a, wat));
                 }
                 ftk->inner = ps_type(self->a, PT_INT, e->pos);
                 return ftk;
@@ -4553,7 +4553,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             PsType *at0 = PsSema_check_expr(self, e->args[0]);
             if (at0 == NULL || at0->kind != PT_LIST || at0->inner == NULL || at0->inner->kind != PT_STR) {
-                fatal_at(self->file, e->args[0]->pos, "os.run() takes a list<str> — the program and its arguments, one per element, with NO shell in between (1.6) — found %s", ps_type_str(self->a, at0));
+                fatal_at(self->file, e->args[0]->pos, "os.run() takes a List<str> — the program and its arguments, one per element, with NO shell in between (1.6) — found %s", ps_type_str(self->a, at0));
             }
             int seen_env = 0;
             int seen_cwd = 0;
@@ -4573,7 +4573,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
                     }
                     seen_env = 1;
                     if (rv == NULL || rv->kind != PT_DICT || rv->key == NULL || rv->key->kind != PT_STR || rv->inner == NULL || rv->inner->kind != PT_STR) {
-                        fatal_at(self->file, ra->pos, "os.run(env=): a dict<str, str>, and it REPLACES the environment (it is not merged) — found %s", ps_type_str(self->a, rv));
+                        fatal_at(self->file, ra->pos, "os.run(env=): a Dict<str, str>, and it REPLACES the environment (it is not merged) — found %s", ps_type_str(self->a, rv));
                     }
                 } else if (strcmp(rn, "cwd") == 0 || strcmp(rn, "stdout") == 0) {
                     if ((strcmp(rn, "cwd") == 0 && seen_cwd) || (strcmp(rn, "stdout") == 0 && seen_out)) {
@@ -4615,7 +4615,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             PsType *sa = PsSema_check_expr(self, e->args[0]);
             if (sa == NULL || sa->kind != PT_LIST || sa->inner == NULL || sa->inner->kind != PT_STR) {
-                fatal_at(self->file, e->args[0]->pos, "os.spawn() takes a list<str> — o programa e os argumentos, um por elemento (1.6) — found %s", ps_type_str(self->a, sa));
+                fatal_at(self->file, e->args[0]->pos, "os.spawn() takes a List<str> — o programa e os argumentos, um por elemento (1.6) — found %s", ps_type_str(self->a, sa));
             }
             return ps_type(self->a, PT_INT, e->pos);
         }
@@ -4625,7 +4625,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             PsType *pa = PsSema_check_expr(self, e->args[0]);
             if (pa == NULL || pa->kind != PT_LIST || pa->inner == NULL || pa->inner->kind != PT_STR) {
-                fatal_at(self->file, e->args[0]->pos, "os.spawn_pty() takes a list<str> — the program and its arguments, one per element (1.6) — found %s", ps_type_str(self->a, pa));
+                fatal_at(self->file, e->args[0]->pos, "os.spawn_pty() takes a List<str> — the program and its arguments, one per element (1.6) — found %s", ps_type_str(self->a, pa));
             }
             PsSema_check_want(self, e->args[1], ps_type(self->a, PT_INT, e->pos), "as colunas");
             PsSema_check_want(self, e->args[2], ps_type(self->a, PT_INT, e->pos), "as linhas");
@@ -4669,7 +4669,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             PsType *ae = PsSema_check_expr(self, e->args[0]);
             if (ae == NULL || ae->kind != PT_LIST || ae->inner == NULL || ae->inner->kind != PT_STR) {
-                fatal_at(self->file, e->args[0]->pos, "os.exec() takes a list<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae));
+                fatal_at(self->file, e->args[0]->pos, "os.exec() takes a List<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae));
             }
             return ps_type(self->a, PT_VOID, e->pos);
         }
@@ -4779,7 +4779,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         }
         PsType *bt9 = PsSema_check_expr(self, e->args[0]);
         if (bt9 == NULL || bt9->kind != PT_LIST || bt9->inner == NULL || bt9->inner->kind != PT_INT || bt9->inner->width != 8) {
-            fatal_at(self->file, e->pos, "unpack reads the `list<u8>` that pack made, found %s", ps_type_str(self->a, bt9));
+            fatal_at(self->file, e->pos, "unpack reads the `List<u8>` that pack made, found %s", ps_type_str(self->a, bt9));
         }
         if (e->nargs == 2) {
             PsSema_check_endian(self, e->args[1]);
@@ -4903,12 +4903,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         e->type = at7;
         return at7;
     }
-    if (strcmp(name, "buffer") == 0) {
+    if (ps_renamed_name(self->file, e->pos, name, "buffer", "Buffer")) {
         if (e->nargs != 1) {
-            fatal_at(self->file, e->pos, "buffer() takes a size in bytes");
+            fatal_at(self->file, e->pos, "Buffer() takes a size in bytes");
         }
         PsType *bst = PsSema_check_expr(self, e->args[0]);
-        PsSema_want(self, e->args[0], bst, ps_type(self->a, PT_INT, e->pos), "the size of a buffer");
+        PsSema_want(self, e->args[0], bst, ps_type(self->a, PT_INT, e->pos), "the size of a Buffer");
         return ps_type(self->a, PT_BUFFER, e->pos);
     }
     if (strcmp(name, "open") == 0) {
@@ -4972,7 +4972,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         }
         PsType *alt = PsSema_check_expr(self, e->args[0]);
         if (alt == NULL || alt->kind != PT_LIST || alt->inner == NULL || alt->inner->kind != PT_BOOL) {
-            fatal_at(self->file, e->pos, "%s() takes a list<bool> — write the test in a comprehension: %s([x > 0 for x in xs]). There is no truthiness here (39.3), so a list of numbers has no answer", name, name);
+            fatal_at(self->file, e->pos, "%s() takes a List<bool> — write the test in a comprehension: %s([x > 0 for x in xs]). There is no truthiness here (39.3), so a list of numbers has no answer", name, name);
         }
         return ps_type(self->a, PT_BOOL, e->pos);
     }
@@ -5969,7 +5969,7 @@ static void PsSema_sendable_in(PsSema *self, PsType *t, Pos pos, const char *wha
             break;
         }
     }
-    fatal_at(self->file, pos, "%s is %s, which a message cannot carry (34.3): numbers, bools, enums, records, str, list, set, dict and `struct` cross — a worker, a task, a file, a lambda or an `any` do not, because what they name is not the receiver's to have", what, ps_type_str(self->a, t));
+    fatal_at(self->file, pos, "%s is %s, which a message cannot carry (34.3): numbers, bools, enums, records, str, List, Set, Dict and `struct` cross — a Worker, a Task, a File, a lambda or an `any` do not, because what they name is not the receiver's to have", what, ps_type_str(self->a, t));
 }
 
 static void PsSema_copyable(PsSema *self, PsType *t, Pos pos, const char *what) {
@@ -6308,7 +6308,7 @@ static void PsSema_check_method(PsSema *self, PsDecl *d, PsFunc *f) {
         }
         if (p->is_varargs) {
             if (p->type == NULL || p->type->kind != PT_LIST) {
-                fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: list<int>` (44.2)", p->name, p->name);
+                fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: List<int>` (44.2)", p->name, p->name);
             }
             if (i != f->nparams - 1) {
                 fatal_at(self->file, p->pos, "`*%s` has to be the last parameter", p->name);
@@ -7498,9 +7498,9 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                         if (c->nvals != 1 || !(c->vals[0]->kind == PE_NAME || c->vals[0]->kind == PE_NONE)) {
                             fatal_at(self->file, s->pos, "a `match type` case is ONE type: int, float, bool, str, list, dict or None");
                         }
-                        ct = ps_kind_of_name(self->a, c->vals[0], s->pos);
+                        ct = ps_kind_of_name(self->a, self->file, c->vals[0], s->pos);
                         if (ct == NULL) {
-                            fatal_at(self->file, c->vals[0]->pos, "'%s' is not a kind an `any` holds: int, float, bool, str, list, dict or None", c->vals[0]->text);
+                            fatal_at(self->file, c->vals[0]->pos, "'%s' is not a kind an `any` holds: int, float, bool, str, List, Dict or None", c->vals[0]->text);
                         }
                         c->vals[0]->type = ct;
                     }
@@ -7630,7 +7630,7 @@ static void PsSema_check_func(PsSema *self, PsFunc *f) {
         }
         if (p->is_varargs) {
             if (p->type == NULL || p->type->kind != PT_LIST) {
-                fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: list<int>` (44.2)", p->name, p->name);
+                fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: List<int>` (44.2)", p->name, p->name);
             }
             if (i != f->nparams - 1) {
                 fatal_at(self->file, p->pos, "`*%s` has to be the last parameter", p->name);
@@ -7788,7 +7788,7 @@ int opt_is_ref_ps(PsType *t) {
     return ps_is_ref_type(t);
 }
 
-static PsType *ps_kind_of_name(Arena *a, PsExpr *e, Pos pos) {
+static PsType *ps_kind_of_name(Arena *a, const char *file, PsExpr *e, Pos pos) {
     if (e->kind == PE_NONE) {
         return ps_type(a, PT_OPT, pos);
     }
@@ -7805,12 +7805,12 @@ static PsType *ps_kind_of_name(Arena *a, PsExpr *e, Pos pos) {
     if (strcmp(n, "str") == 0) {
         return ps_type(a, PT_STR, pos);
     }
-    if (strcmp(n, "list") == 0) {
+    if (ps_renamed_name(file, pos, n, "list", "List")) {
         PsType *t = ps_type(a, PT_LIST, pos);
         t->inner = ps_type(a, PT_ANY, pos);
         return t;
     }
-    if (strcmp(n, "dict") == 0) {
+    if (ps_renamed_name(file, pos, n, "dict", "Dict")) {
         PsType *t2 = ps_type(a, PT_DICT, pos);
         t2->key = ps_type(a, PT_STR, pos);
         t2->inner = ps_type(a, PT_ANY, pos);
@@ -8199,13 +8199,13 @@ const char *ps_type_str(Arena *a, PsType *t) {
             return Arena_printf(a, "Worker<%s>", ps_type_str(a, t->inner));
         }
         case PT_FILE: {
-            return "file";
+            return "File";
         }
         case PT_BUFFER: {
-            return "buffer";
+            return "Buffer";
         }
         case PT_CONN: {
-            return "socket";
+            return "Socket";
         }
         case PT_PROC: {
             return "a finished process";
@@ -8214,13 +8214,13 @@ const char *ps_type_str(Arena *a, PsType *t) {
             return "a timer";
         }
         case PT_LIST: {
-            return Arena_printf(a, "list<%s>", ps_type_str(a, t->inner));
+            return Arena_printf(a, "List<%s>", ps_type_str(a, t->inner));
         }
         case PT_SET: {
-            return Arena_printf(a, "set<%s>", ps_type_str(a, t->inner));
+            return Arena_printf(a, "Set<%s>", ps_type_str(a, t->inner));
         }
         case PT_DICT: {
-            return Arena_printf(a, "dict<%s, %s>", ps_type_str(a, t->key), ps_type_str(a, t->inner));
+            return Arena_printf(a, "Dict<%s, %s>", ps_type_str(a, t->key), ps_type_str(a, t->inner));
         }
         case PT_ARRAY: {
             return Arena_printf(a, "%s[]", ps_type_str(a, t->inner));

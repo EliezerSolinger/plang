@@ -7,6 +7,12 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule
 # `i8`…`u32`, `f32`: the exact-width spellings (68.2); 0 = not one of them
 def ps_width_name(n: const *char) -> i32
 
+# 139: was this name written in the OLD spelling? Answers True for either one,
+# and warns on the old — which is what makes the two coexist for exactly one
+# commit (139.1). One implementation, because the parser is not the only place
+# that reads a type off its name: `match type(x): case List:` does too.
+def ps_renamed_name(file: const *char, pos: Pos, written: const *char, old: const *char, new_: const *char) -> bool
+
 # a template file read as an f-string (63.2): the bytes come in as a string
 # LITERAL spelling, and what comes back is the same tree `f"..."` would give
 def ps_template(a: *Arena, file: const *char, lexeme: const *char, pos: Pos) -> *PsExpr

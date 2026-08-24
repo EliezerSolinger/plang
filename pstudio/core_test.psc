@@ -13,7 +13,7 @@ slicing by codepoint, and about forty methods that mutate shared state.
 import core
 
 
-def show(b: core.Buffer) -> str:
+def show(b: core.TextBuffer) -> str:
     out = ""
     for i in range(b.nlines()):
         if i > 0:
@@ -22,7 +22,7 @@ def show(b: core.Buffer) -> str:
     return out
 
 
-def carets(b: core.Buffer) -> str:
+def carets(b: core.TextBuffer) -> str:
     out = ""
     for k in range(b.ncarets()):
         c = b.caret(k)

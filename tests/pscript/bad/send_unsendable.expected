@@ -1,1 +1,1 @@
-field 'log' of Job is file, which a message cannot carry
+field 'log' of Job is File, which a message cannot carry

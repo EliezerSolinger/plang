@@ -163,7 +163,7 @@ private def ns_find(v: *PsNsEnt, n: i32, name: const *char) -> *PsNsEnt
 def ps_const_len(e: *PsExpr, ref out: i64) -> bool
 private def ps_prog_shadows(m: *PsModule, name: const *char) -> *PsDecl
 def ps_is_ref_type(t: *PsType) -> bool
-private def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType
+private def ps_kind_of_name(a: *Arena, file: const *char, e: *PsExpr, pos: Pos) -> *PsType
 private def ps_lit_fits(file: const *char, e: *PsExpr, t: *PsType)
 private def ps_int_widens(from2: *PsType, to: *PsType) -> bool
 private def ps_adapt_lit(file: const *char, e: *PsExpr, t: *PsType) -> bool
@@ -228,7 +228,7 @@ struct PsSema:
     nogc_depth: i32          # `nogc:` blocks around the statement being checked
                              #   (26.5.1): `await` inside one is refused
     hint: *PsType            # the type the CONTEXT wants, for the one literal that
-                             #   cannot infer it alone: `xs: list<int> = []`
+                             #   cannot infer it alone: `xs: List<int> = []`
     cpp: const *char         # the C compiler used to preprocess an `include <h>`
     cfuncs: StrMap<*PsFunc>  # C functions the boundary rule (45.5) lets through
     cconsts: StrMap<*PsExpr> # C CONSTANTS the boundary lets through (72.4): a
@@ -593,7 +593,7 @@ struct PsSema:
                     # what goes inside has to carry its own type too, or reading
                     # it back would be reading bytes nobody tagged (39.2)
                     if got->inner == None or got->inner->kind != PT_ANY:
-                        fatal_at(self->file, e->pos, "an `any` holds %s only when its elements are `any` too: write `list<any>`/`dict<str, any>`, because what is inside has to carry its own type (39.2)", "a list" if got->kind == PT_LIST else "a dict")
+                        fatal_at(self->file, e->pos, "an `any` holds %s only when its elements are `any` too: write `List<any>`/`Dict<str, any>`, because what is inside has to carry its own type (39.2)", "a list" if got->kind == PT_LIST else "a dict")
                     e->box_any = True
                     return
                 case PT_INT, PT_FLOAT, PT_BOOL, PT_STR:
@@ -1029,7 +1029,7 @@ struct PsSema:
                 else:
                     fatal_at(self->file, e->pos, "the two arms of a conditional expression differ: %s and %s", ps_type_str(self->a, at), ps_type_str(self->a, bt))
             case PE_LIST:
-                # An `any` holding a list holds a `list<any>` (39.2): the value
+                # An `any` holding a list holds a `List<any>` (39.2): the value
                 # inside has to carry its own type, and only `any` elements do.
                 if self->hint != None and self->hint->kind == PT_ANY:
                     la9: *PsType = ps_type(self->a, PT_LIST, e->pos)
@@ -1040,7 +1040,7 @@ struct PsSema:
                 if e->nargs == 0:
                     # nothing to infer from, so the annotation has to say it
                     if self->hint == None or self->hint->kind != PT_LIST:
-                        fatal_at(self->file, e->pos, "an empty list literal needs a type: `xs: list<int> = []`")
+                        fatal_at(self->file, e->pos, "an empty list literal needs a type: `xs: List<int> = []`")
                     t = self->hint
                     e->type = t
                     return t
@@ -1057,7 +1057,7 @@ struct PsSema:
                         self->check_want(e->args[i], at9->inner, "an element of this array")
                     e->type = at9
                     return at9
-                # the ANNOTATION wins when there is one: `list<dyn Shape>` is
+                # the ANNOTATION wins when there is one: `List<dyn Shape>` is
                 # exactly the case where the elements differ from each other on
                 # purpose and each one converts (66.3)
                 want_e: *PsType = self->hint->inner if self->hint != None and self->hint->kind == PT_LIST else None
@@ -1126,7 +1126,7 @@ struct PsSema:
                     self->hint = da9
                 if e->nargs == 0:
                     if self->hint == None or self->hint->kind != PT_DICT:
-                        fatal_at(self->file, e->pos, "an empty dict literal needs a type: `d: dict<str, int> = {}`")
+                        fatal_at(self->file, e->pos, "an empty dict literal needs a type: `d: Dict<str, int> = {}`")
                     t = self->hint
                     e->type = t
                     return t
@@ -1155,13 +1155,13 @@ struct PsSema:
                 t = dw
             case PE_SET:
                 if e->nargs == 0:
-                    # `set<T>()`: the parser already read the element type onto
+                    # `Set<T>()`: the parser already read the element type onto
                     # the node, and there is nothing to infer from
                     if e->type != None and e->type->kind == PT_SET:
                         t = self->resolve_type(e->type)
                         e->type = t
                         return t
-                    fatal_at(self->file, e->pos, "`{}` is the empty DICT; an empty set is `set<T>()`")
+                    fatal_at(self->file, e->pos, "`{}` is the empty DICT; an empty set is `Set<T>()`")
                 et5: *PsType = self->check_expr(e->args[0])
                 self->key_ok(et5, e->pos, "a set element")
                 for i in range(1, e->nargs):
@@ -1546,7 +1546,7 @@ struct PsSema:
                     return rt
                 if strcmp(nm3, "update") == 0:
                     if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "update() takes one %s", "dict" if rt->kind == PT_DICT else "set")
+                        fatal_at(self->file, e->pos, "update() takes one %s", "Dict" if rt->kind == PT_DICT else "Set")
                     self->deny_const_mut(e->lhs->lhs, "update()")
                     self->check_want(e->args[0], rt, "the update")
                     return ps_type(self->a, PT_VOID, e->pos)
@@ -1634,7 +1634,7 @@ struct PsSema:
                         .args = None
                         .nargs = 0
                     return self->check_expr(e)
-                fatal_at(self->file, e->pos, "a %s has %s", "dict" if rt->kind == PT_DICT else "set", "get, pop, setdefault, remove, update, clear, copy, keys, values and items" if rt->kind == PT_DICT else "add, remove, discard, update, clear, copy and keys")
+                fatal_at(self->file, e->pos, "a %s has %s", "Dict" if rt->kind == PT_DICT else "Set", "get, pop, setdefault, remove, update, clear, copy, keys, values and items" if rt->kind == PT_DICT else "add, remove, discard, update, clear, copy and keys")
             if rt != None and rt->kind == PT_STR:
                 nm2: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -1726,7 +1726,7 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "join() takes one list of strings")
                     jt: *PsType = self->check_expr(e->args[0])
                     if jt == None or jt->kind != PT_LIST or jt->inner == None or jt->inner->kind != PT_STR:
-                        fatal_at(self->file, e->pos, "join() takes a list<str>, not %s", ps_type_str(self->a, jt))
+                        fatal_at(self->file, e->pos, "join() takes a List<str>, not %s", ps_type_str(self->a, jt))
                     return st5
                 fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
             if rt != None and rt->kind == PT_LIST:
@@ -1880,10 +1880,10 @@ struct PsSema:
                 ctk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 if strcmp(cm, "write") == 0:
                     if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "write() takes one str or one list<u8>")
+                        fatal_at(self->file, e->pos, "write() takes one str or one List<u8>")
                     cw: *PsType = self->check_expr(e->args[0])
                     if cw == None or not (cw->kind == PT_STR or (cw->kind == PT_LIST and cw->inner != None and cw->inner->kind == PT_INT and cw->inner->width == 8)):
-                        fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, cw))
+                        fatal_at(self->file, e->pos, "write() takes a str or a List<u8>, found %s", ps_type_str(self->a, cw))
                     ctk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ctk
                 if strcmp(cm, "read") == 0:
@@ -1918,10 +1918,10 @@ struct PsSema:
                 ftk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 if strcmp(fm, "write") == 0:
                     if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "write() takes one string or one list<u8>")
+                        fatal_at(self->file, e->pos, "write() takes one string or one List<u8>")
                     wat: *PsType = self->check_expr(e->args[0])
                     if wat == None or not (wat->kind == PT_STR or (wat->kind == PT_LIST and wat->inner != None and wat->inner->kind == PT_INT and wat->inner->width == 8)):
-                        fatal_at(self->file, e->pos, "write() takes a str or a list<u8>, found %s", ps_type_str(self->a, wat))
+                        fatal_at(self->file, e->pos, "write() takes a str or a List<u8>, found %s", ps_type_str(self->a, wat))
                     ftk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ftk
                 if strcmp(fm, "read") == 0:
@@ -2088,7 +2088,7 @@ struct PsSema:
                 return mtk
             return mret
         # a VALUE of function type, called (28.1): a local, a parameter, an
-        # element of a `dict<str, def(...)>`, the result of an index
+        # element of a `Dict<str, def(...)>`, the result of an index
         sig7: *PsType = None
         if e->lhs != None and e->lhs->kind == PE_NAME:
             lv7: i32 = self->find_local(e->lhs->text)
@@ -2631,7 +2631,7 @@ struct PsSema:
             if strcmp(gf, "stats") == 0:
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "gc.stats() takes no arguments")
-                # dict<str, int>: nenhum tipo novo para a linguagem aprender, e
+                # Dict<str, int>: nenhum tipo novo para a linguagem aprender, e
                 # o `print` já sabe imprimi-lo
                 gd: *PsType = ps_type(self->a, PT_DICT, e->pos)
                 gd->key = ps_type(self->a, PT_STR, e->pos)
@@ -2878,7 +2878,7 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "os.run(): the command comes first, and by position")
                 at0: *PsType = self->check_expr(e->args[0])
                 if at0 == None or at0->kind != PT_LIST or at0->inner == None or at0->inner->kind != PT_STR:
-                    fatal_at(self->file, e->args[0]->pos, "os.run() takes a list<str> — the program and its arguments, one per element, with NO shell in between (1.6) — found %s", ps_type_str(self->a, at0))
+                    fatal_at(self->file, e->args[0]->pos, "os.run() takes a List<str> — the program and its arguments, one per element, with NO shell in between (1.6) — found %s", ps_type_str(self->a, at0))
                 seen_env: bool = False
                 seen_cwd: bool = False
                 seen_out: bool = False
@@ -2894,7 +2894,7 @@ struct PsSema:
                             fatal_at(self->file, ra->pos, "os.run(): 'env' given twice")
                         seen_env = True
                         if rv == None or rv->kind != PT_DICT or rv->key == None or rv->key->kind != PT_STR or rv->inner == None or rv->inner->kind != PT_STR:
-                            fatal_at(self->file, ra->pos, "os.run(env=): a dict<str, str>, and it REPLACES the environment (it is not merged) — found %s", ps_type_str(self->a, rv))
+                            fatal_at(self->file, ra->pos, "os.run(env=): a Dict<str, str>, and it REPLACES the environment (it is not merged) — found %s", ps_type_str(self->a, rv))
                     elif strcmp(rn, "cwd") == 0 or strcmp(rn, "stdout") == 0:
                         if (strcmp(rn, "cwd") == 0 and seen_cwd) or (strcmp(rn, "stdout") == 0 and seen_out):
                             fatal_at(self->file, ra->pos, "os.run(): '%s' given twice", rn)
@@ -2934,7 +2934,7 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "os.spawn() takes the command as a list: os.spawn([\"./meu-programa\"])")
                 sa: *PsType = self->check_expr(e->args[0])
                 if sa == None or sa->kind != PT_LIST or sa->inner == None or sa->inner->kind != PT_STR:
-                    fatal_at(self->file, e->args[0]->pos, "os.spawn() takes a list<str> — o programa e os argumentos, um por elemento (1.6) — found %s", ps_type_str(self->a, sa))
+                    fatal_at(self->file, e->args[0]->pos, "os.spawn() takes a List<str> — o programa e os argumentos, um por elemento (1.6) — found %s", ps_type_str(self->a, sa))
                 return ps_type(self->a, PT_INT, e->pos)
             if isos and strcmp(of, "spawn_pty") == 0:
                 # F8: the fourth case. `run` waits, `exec` becomes the child,
@@ -2953,7 +2953,7 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "os.spawn_pty() takes the command, the columns and the rows: os.spawn_pty([\"/bin/sh\"], 80, 24)")
                 pa: *PsType = self->check_expr(e->args[0])
                 if pa == None or pa->kind != PT_LIST or pa->inner == None or pa->inner->kind != PT_STR:
-                    fatal_at(self->file, e->args[0]->pos, "os.spawn_pty() takes a list<str> — the program and its arguments, one per element (1.6) — found %s", ps_type_str(self->a, pa))
+                    fatal_at(self->file, e->args[0]->pos, "os.spawn_pty() takes a List<str> — the program and its arguments, one per element (1.6) — found %s", ps_type_str(self->a, pa))
                 self->check_want(e->args[1], ps_type(self->a, PT_INT, e->pos), "as colunas")
                 self->check_want(e->args[2], ps_type(self->a, PT_INT, e->pos), "as linhas")
                 return ps_type(self->a, PT_CONN, e->pos)
@@ -2991,7 +2991,7 @@ struct PsSema:
                     fatal_at(self->file, e->pos, "os.exec() takes the command as a list: os.exec([\"vim\", \"a.txt\"])")
                 ae: *PsType = self->check_expr(e->args[0])
                 if ae == None or ae->kind != PT_LIST or ae->inner == None or ae->inner->kind != PT_STR:
-                    fatal_at(self->file, e->args[0]->pos, "os.exec() takes a list<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae))
+                    fatal_at(self->file, e->args[0]->pos, "os.exec() takes a List<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae))
                 return ps_type(self->a, PT_VOID, e->pos)
             if isos and strcmp(of, "nproc") == 0:
                 if e->nargs != 0:
@@ -3062,7 +3062,7 @@ struct PsSema:
         if strcmp(name, "pack") == 0:
             # 59.1/62.4: the compiler knows the offsets, so this is a language
             # primitive and not a protocol somebody writes. What comes back is
-            # `list<u8>` — no new `bytes` type (62.4)
+            # `List<u8>` — no new `bytes` type (62.4)
             if e->nargs < 1 or e->nargs > 2:
                 fatal_at(self->file, e->pos, "pack() takes a record and, if the bytes are for somebody else, the byte order: `pack(r, BE)`")
             pt9: *PsType = self->check_expr(e->args[0])
@@ -3085,7 +3085,7 @@ struct PsSema:
                 fatal_at(self->file, e->pos, "unpack reads a `record`, found %s", ps_type_str(self->a, ut9))
             bt9: *PsType = self->check_expr(e->args[0])
             if bt9 == None or bt9->kind != PT_LIST or bt9->inner == None or bt9->inner->kind != PT_INT or bt9->inner->width != 8:
-                fatal_at(self->file, e->pos, "unpack reads the `list<u8>` that pack made, found %s", ps_type_str(self->a, bt9))
+                fatal_at(self->file, e->pos, "unpack reads the `List<u8>` that pack made, found %s", ps_type_str(self->a, bt9))
             if e->nargs == 2:
                 self->check_endian(e->args[1])
             e->type = ut9
@@ -3202,13 +3202,13 @@ struct PsSema:
             at7->count->type = ps_type(self->a, PT_INT, e->pos)
             e->type = at7
             return at7
-        if strcmp(name, "buffer") == 0:
+        if ps_renamed_name(self->file, e->pos, name, "buffer", "Buffer"):
             # 19.4/52.3: bytes every worker can write into, closed explicitly —
             # which is what `with` is for
             if e->nargs != 1:
-                fatal_at(self->file, e->pos, "buffer() takes a size in bytes")
+                fatal_at(self->file, e->pos, "Buffer() takes a size in bytes")
             bst: *PsType = self->check_expr(e->args[0])
-            self->want(e->args[0], bst, ps_type(self->a, PT_INT, e->pos), "the size of a buffer")
+            self->want(e->args[0], bst, ps_type(self->a, PT_INT, e->pos), "the size of a Buffer")
             return ps_type(self->a, PT_BUFFER, e->pos)
         if strcmp(name, "open") == 0:
             # 48.1: Python's shape, and failure RAISES with the `io` category —
@@ -3262,7 +3262,7 @@ struct PsSema:
                 fatal_at(self->file, e->pos, "%s(xs) takes one list", name)
             alt: *PsType = self->check_expr(e->args[0])
             if alt == None or alt->kind != PT_LIST or alt->inner == None or alt->inner->kind != PT_BOOL:
-                fatal_at(self->file, e->pos, "%s() takes a list<bool> — write the test in a comprehension: %s([x > 0 for x in xs]). There is no truthiness here (39.3), so a list of numbers has no answer", name, name)
+                fatal_at(self->file, e->pos, "%s() takes a List<bool> — write the test in a comprehension: %s([x > 0 for x in xs]). There is no truthiness here (39.3), so a list of numbers has no answer", name, name)
             return ps_type(self->a, PT_BOOL, e->pos)
         if strcmp(name, "round") == 0:
             if e->nargs < 1 or e->nargs > 2:
@@ -4123,7 +4123,7 @@ struct PsSema:
                     csk: i32 = self->cstr_kind(f->params[j].type)
                     if csk != 0:
                         # 84.1: a pointer and its length, as a value. On this
-                        # side it is `str` or `list<u8>`; what crosses is the
+                        # side it is `str` or `List<u8>`; what crosses is the
                         # pair, built at the call and valid for its duration.
                         pt = ps_type(self->a, PT_STR, zero_ps_pos()) if csk == 1 else self->bytes_type(zero_ps_pos())
                         # `in s: CStr` is P's spelling for a const reference, so
@@ -4265,7 +4265,7 @@ struct PsSema:
                     return
             case _:
                 pass
-        fatal_at(self->file, pos, "%s is %s, which a message cannot carry (34.3): numbers, bools, enums, records, str, list, set, dict and `struct` cross — a worker, a task, a file, a lambda or an `any` do not, because what they name is not the receiver's to have", what, ps_type_str(self->a, t))
+        fatal_at(self->file, pos, "%s is %s, which a message cannot carry (34.3): numbers, bools, enums, records, str, List, Set, Dict and `struct` cross — a Worker, a Task, a File, a lambda or an `any` do not, because what they name is not the receiver's to have", what, ps_type_str(self->a, t))
 
     private def copyable(self: *PsSema, t: *PsType, pos: Pos, what: const *char):
         if t != None and t->kind == PT_STR:
@@ -4555,11 +4555,11 @@ struct PsSema:
                 self->check_want(p->dflt, self->resolve_type(p->type), self->a->printf("the default of '%s'", p->name))
                 self->nlocals = svd
             if p->is_varargs:
-                # 44.2: `*xs` is sugar over `list<T>` — inside the function it
+                # 44.2: `*xs` is sugar over `List<T>` — inside the function it
                 # IS a list, and what the call site does is build one. Nothing
                 # new in the type system, which is the point of the sugar.
                 if p->type == None or p->type->kind != PT_LIST:
-                    fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: list<int>` (44.2)", p->name, p->name)
+                    fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: List<int>` (44.2)", p->name, p->name)
                 if i != f->nparams - 1:
                     fatal_at(self->file, p->pos, "`*%s` has to be the last parameter", p->name)
             self->add_local(p->name, self->resolve_type(p->type), True, False)
@@ -5252,7 +5252,7 @@ struct PsSema:
                 self->add_local(s->name, vt, s->rhs != None, s->is_const)
                 if s->is_const:
                     # 61.3: const freezes DEEP, and this is the OTHER declaration
-                    # path — the one an annotated `const xs: list<int> = [...]`
+                    # path — the one an annotated `const xs: List<int> = [...]`
                     # takes. Two paths, one rule.
                     self->locals[self->nlocals - 1].frozen = True
                 s->type = vt
@@ -5559,7 +5559,7 @@ struct PsSema:
                     lit4: *PsType = self->check_expr(s->iter)
                     # a value of a type that implements `Iterable` (40.3/D3):
                     # the loop is the protocol, written out — `has_next()` then
-                    # `next()`, which is the pair that lets `list<int?>` tell
+                    # `next()`, which is the pair that lets `List<int?>` tell
                     # the end from an element that is None
                     if lit4 != None and lit4->kind == PT_NAME and self->records.has(lit4->name):
                         ird: *PsDecl = self->records.get_or(lit4->name, None)
@@ -5669,9 +5669,9 @@ struct PsSema:
                         if not c->is_default:
                             if c->nvals != 1 or c->vals[0]->kind not in {PE_NAME, PE_NONE}:
                                 fatal_at(self->file, s->pos, "a `match type` case is ONE type: int, float, bool, str, list, dict or None")
-                            ct = ps_kind_of_name(self->a, c->vals[0], s->pos)
+                            ct = ps_kind_of_name(self->a, self->file, c->vals[0], s->pos)
                             if ct == None:
-                                fatal_at(self->file, c->vals[0]->pos, "'%s' is not a kind an `any` holds: int, float, bool, str, list, dict or None", c->vals[0]->text)
+                                fatal_at(self->file, c->vals[0]->pos, "'%s' is not a kind an `any` holds: int, float, bool, str, List, Dict or None", c->vals[0]->text)
                             c->vals[0]->type = ct
                         self->depth += 1
                         if sli >= 0 and ct != None:
@@ -5768,11 +5768,11 @@ struct PsSema:
                 self->check_want(p->dflt, self->resolve_type(p->type), self->a->printf("the default of '%s'", p->name))
                 self->nlocals = svd
             if p->is_varargs:
-                # 44.2: `*xs` is sugar over `list<T>` — inside the function it
+                # 44.2: `*xs` is sugar over `List<T>` — inside the function it
                 # IS a list, and what the call site does is build one. Nothing
                 # new in the type system, which is the point of the sugar.
                 if p->type == None or p->type->kind != PT_LIST:
-                    fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: list<int>` (44.2)", p->name, p->name)
+                    fatal_at(self->file, p->pos, "`*%s` needs a list type: `*%s: List<int>` (44.2)", p->name, p->name)
                 if i != f->nparams - 1:
                     fatal_at(self->file, p->pos, "`*%s` has to be the last parameter", p->name)
             self->add_local(p->name, self->resolve_type(p->type), True, False)
@@ -5819,7 +5819,7 @@ private def ns_check_visible(ns: *PsNs, name: const *char, file: const *char, po
     if not ns->sym.has(name):
         fatal_at(file, pos, "module '%s' declares no '%s'", spelled, name)
 
-# A type as a piece of an identifier: `list<int>` -> `list_int`. The instance
+# A type as a piece of an identifier: `List<int>` -> `list_int`. The instance
 # name is what the reader sees in the generated C, so it spells the type out
 # instead of a number.
 def ps_mangle_type(a: *Arena, t: *PsType) -> const *char:
@@ -5866,8 +5866,8 @@ private def ps_subst_self(t: *PsType, name: const *char):
     for i in range(t->nparams):
         ps_subst_self(t->params[i], name)
 
-# the associated type, substituted by NODE: `list<Item>` with `Item = int` has
-# to become `list<int>`, so every site takes back what this returns
+# the associated type, substituted by NODE: `List<Item>` with `Item = int` has
+# to become `List<int>`, so every site takes back what this returns
 private def ps_subst_named(a: *Arena, t: *PsType, name: const *char, conc: *PsType) -> *PsType:
     if t == None:
         return None
@@ -5900,7 +5900,7 @@ def opt_is_ref_ps(t: *PsType) -> bool:
 # a `match type` case, read off its spelling: the kinds an `any` can hold.
 # `list` and `dict` come back with `any` inside, because that is the only thing
 # a list INSIDE an any can hold (39.2).
-private def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType:
+private def ps_kind_of_name(a: *Arena, file: const *char, e: *PsExpr, pos: Pos) -> *PsType:
     if e->kind == PE_NONE:
         return ps_type(a, PT_OPT, pos)      # the empty: what a boxed None is
     n: const *char = e->text
@@ -5912,11 +5912,11 @@ private def ps_kind_of_name(a: *Arena, e: *PsExpr, pos: Pos) -> *PsType:
         return ps_type(a, PT_BOOL, pos)
     if strcmp(n, "str") == 0:
         return ps_type(a, PT_STR, pos)
-    if strcmp(n, "list") == 0:
+    if ps_renamed_name(file, pos, n, "list", "List"):
         t: *PsType = ps_type(a, PT_LIST, pos)
         t->inner = ps_type(a, PT_ANY, pos)
         return t
-    if strcmp(n, "dict") == 0:
+    if ps_renamed_name(file, pos, n, "dict", "Dict"):
         t2: *PsType = ps_type(a, PT_DICT, pos)
         t2->key = ps_type(a, PT_STR, pos)
         t2->inner = ps_type(a, PT_ANY, pos)
@@ -6193,21 +6193,21 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
         case PT_WORKER:
             return a->printf("Worker<%s>", ps_type_str(a, t->inner))
         case PT_FILE:
-            return "file"
+            return "File"
         case PT_BUFFER:
-            return "buffer"
+            return "Buffer"
         case PT_CONN:
-            return "socket"
+            return "Socket"
         case PT_PROC:
             return "a finished process"
         case PT_TIMER:
             return "a timer"
         case PT_LIST:
-            return a->printf("list<%s>", ps_type_str(a, t->inner))
+            return a->printf("List<%s>", ps_type_str(a, t->inner))
         case PT_SET:
-            return a->printf("set<%s>", ps_type_str(a, t->inner))
+            return a->printf("Set<%s>", ps_type_str(a, t->inner))
         case PT_DICT:
-            return a->printf("dict<%s, %s>", ps_type_str(a, t->key), ps_type_str(a, t->inner))
+            return a->printf("Dict<%s, %s>", ps_type_str(a, t->key), ps_type_str(a, t->inner))
         case PT_ARRAY:
             return a->printf("%s[]", ps_type_str(a, t->inner))
         case PT_OPT:
@@ -6443,7 +6443,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nr
             s.cur_fn = "the module"
             gt: *PsType = s.resolve_type(d->type)
             # the DECLARED type is context for the value, exactly as it is for a
-            # local: `d: dict<str, int> = {}` says what the empty one holds
+            # local: `d: Dict<str, int> = {}` says what the empty one holds
             s.hint = gt
             it: *PsType = s.check_expr(d->init)
             s.hint = None

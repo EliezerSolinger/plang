@@ -1,6 +1,6 @@
 # ps_generic.p — instantiating a generic pscript function (66.3).
 #
-# `def sort<T: Comparable>(xs: list<T>)` monomorphizes: the call site knows the
+# `def sort<T: Comparable>(xs: List<T>)` monomorphizes: the call site knows the
 # concrete type, and what runs is a COPY of the body with that type in place of
 # the parameter. There is no vtable, no boxing and no dispatch — the trait bound
 # is a promise checked once, at the instantiation, and then it is gone. That is
@@ -10,8 +10,8 @@
 # pass, because a clone that is then edited would need a second walker, and two
 # walkers over the same tree drift apart the day a node gains a field.
 #
-# The substitution replaces a NODE, not a name: `list<T>` with `T = str` has to
-# become `list<str>`, so every type site reassigns what the walker returns.
+# The substitution replaces a NODE, not a name: `List<T>` with `T = str` has to
+# become `List<str>`, so every type site reassigns what the walker returns.
 include <string.h>
 import "ps_generic.ph"
 
@@ -133,7 +133,7 @@ def ps_instantiate(a: *Arena, f: *PsFunc, conc: *PsType, iname: const *char) -> 
 
 # Infer the type parameter from an argument: walk the DECLARED type and the
 # actual one together, and the first place the parameter stands is what it
-# stands for. `xs: list<T>` against `list<str>` binds T to str.
+# stands for. `xs: List<T>` against `List<str>` binds T to str.
 def ps_infer(pt: *PsType, at: *PsType, name: const *char) -> *PsType:
     if pt == None or at == None:
         return None

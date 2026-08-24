@@ -546,19 +546,19 @@ static void p_type(StrBuf *b, PsType *t) {
             break;
         }
         case PT_LIST: {
-            StrBuf_puts(b, "list<");
+            StrBuf_puts(b, "List<");
             p_type(b, t->inner);
             StrBuf_putc(b, '>');
             break;
         }
         case PT_SET: {
-            StrBuf_puts(b, "set<");
+            StrBuf_puts(b, "Set<");
             p_type(b, t->inner);
             StrBuf_putc(b, '>');
             break;
         }
         case PT_DICT: {
-            StrBuf_puts(b, "dict<");
+            StrBuf_puts(b, "Dict<");
             p_type(b, t->key);
             StrBuf_puts(b, ", ");
             p_type(b, t->inner);
@@ -613,15 +613,15 @@ static void p_type(StrBuf *b, PsType *t) {
             break;
         }
         case PT_FILE: {
-            StrBuf_puts(b, "file");
+            StrBuf_puts(b, "File");
             break;
         }
         case PT_BUFFER: {
-            StrBuf_puts(b, "buffer");
+            StrBuf_puts(b, "Buffer");
             break;
         }
         case PT_CONN: {
-            StrBuf_puts(b, "socket");
+            StrBuf_puts(b, "Socket");
             break;
         }
         case PT_PROC: {
@@ -629,7 +629,7 @@ static void p_type(StrBuf *b, PsType *t) {
             break;
         }
         case PT_TIMER: {
-            StrBuf_puts(b, "timer");
+            StrBuf_puts(b, "Timer");
             break;
         }
         case PT_DYN: {

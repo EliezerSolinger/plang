@@ -32,9 +32,9 @@ enum PsTypeKind:
     PT_STR
     PT_ANY           # tagged (39.2)
     PT_NAME          # record / struct / enum / interface, by name
-    PT_LIST          # list<T>
-    PT_DICT          # dict<K,V>
-    PT_SET           # set<T>
+    PT_LIST          # List<T>
+    PT_DICT          # Dict<K,V>
+    PT_SET           # Set<T>
     PT_ARRAY         # T[N] — fixed, opt-in (33.4)
     PT_TUPLE         # (T, U) — immutable, first class (3.2/38.2)
     PT_OPT           # T?
@@ -269,7 +269,7 @@ struct PsStmt:
 
 # ---------- declarations ----------
 # 84.1: a parameter or return the P side spells `CStr`/`CBytes` — a pointer and
-# its length, as a value. pscript sees `str` or `list<u8>`; what the compiler
+# its length, as a value. pscript sees `str` or `List<u8>`; what the compiler
 # keeps here is WHICH of the two, so the call site can build the pair on the way
 # out and copy on the way in.
 enum PsCStrKind:
@@ -281,7 +281,7 @@ struct PsParam:
     name: const *char
     type: *PsType
     dflt: *PsExpr    # evaluated per call (44.1)
-    is_varargs: bool # `*xs: list<T>` — sugar over a list (44.2)
+    is_varargs: bool # `*xs: List<T>` — sugar over a list (44.2)
     is_in: bool      # `in x` — read by reference, no copy (55.4). Spelled at
                      #   the CALL SITE too, as in P: the reader of the call can
                      #   see that nothing is being copied.
@@ -291,7 +291,7 @@ struct PsParam:
                      #   reason `in` is: mutating a caller's variable is visible
                      #   where it happens.
     cstr: i32        # the P side spells it `CStr`/`CBytes` (84.1): pscript sees
-                     #   `str` or `list<u8>`, and this says which pair to build
+                     #   `str` or `List<u8>`, and this says which pair to build
     pos: Pos
 
 # `def sort<T: Comparable>(...)` — a type parameter and the trait it is bound to

@@ -27,7 +27,7 @@ import sys
 PATH: str = "aio_files_demo.txt"
 
 
-struct File:
+struct Doc:
     name: str
     read_bytes: int
 
@@ -66,7 +66,7 @@ async def clock(n: int) -> int:
     return k
 
 
-a = File(PATH, 0)
+a = Doc(PATH, 0)
 
 # the file and the clock run TOGETHER: if the I/O blocked the thread, the two
 # times would add up instead of overlapping

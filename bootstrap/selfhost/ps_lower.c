@@ -4252,7 +4252,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         return rm9;
     }
-    if (strcmp(name, "buffer") == 0) {
+    if (strcmp(name, "buffer") == 0 || strcmp(name, "Buffer") == 0) {
         Expr *bf = PsLow_call_rt(self, "ps_buffer_new", e->pos);
         PsLow_push_arg(self, bf, PsLow_ctx_arg(self, e->pos));
         PsLow_push_arg(self, bf, PsLow_expr(self, e->args[0]));

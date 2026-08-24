@@ -282,7 +282,7 @@ def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool
 # 108: era privada do arquivo único; o dict compartilhado (camada do que roda)
 # hasheia com ela
 def ps_hash_bytes(b: const *char, n: usize) -> u64
-# 110: o estado do coletor deste contexto, como dict<str, int>
+# 110: o estado do coletor deste contexto, como Dict<str, int>
 def ps_gc_stats(ctx: *PsCtx) -> *PsDict
 
 # ---------- o repr como DADO (F5) ----------

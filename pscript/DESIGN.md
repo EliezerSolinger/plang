@@ -90,9 +90,9 @@ visível dentro do pscript — não há tradução de fronteira.
 
 ### Bateria 3 — Dados (2026-07-29)
 
-**3.1 Contêineres genéricos.** `list` escrito sem parâmetro **é** `list<any>`.
-Para elemento desboxeado, anota-se: `list<int>`.
-*(Esclarecido na 4.1: `x = [1, 2, 3]` sem anotação recebe `list<any>`.)*
+**3.1 Contêineres genéricos.** `list` escrito sem parâmetro **é** `List<any>`.
+Para elemento desboxeado, anota-se: `List<int>`.
+*(Esclarecido na 4.1: `x = [1, 2, 3]` sem anotação recebe `List<any>`.)*
 
 **3.2 Tuplas.** **Existem, como tipo de primeira classe**: `a, b = f()`, retorno
 múltiplo, desempacotamento, tupla guardada em variável.
@@ -110,7 +110,7 @@ cache de posição ou largura fixa. Fica para a bateria de representação.
 ### Bateria 4 — Memória (2026-07-29)
 
 **4.1 Inferência de contêiner (esclarece 3.1).** `x = [1, 2, 3]` sem anotação
-recebe **`list<any>`** — encaixota por padrão. `list<int>` é o opt-in de
+recebe **`List<any>`** — encaixota por padrão. `List<int>` é o opt-in de
 desempenho, escrito à mão.
 
 > Divisão que fica: **escalar é estático e desboxeado; contêiner é universal por
@@ -542,7 +542,7 @@ referência de quem enviou — zero cópia.
 > sabe andar no grafo de um objeto, e clonar entre heaps é o mesmo caminho.
 
 **18.3 Buffer compartilhado: bytes + vistas tipadas.** Alocado **fora** dos heaps
-coletados; o mesmo buffer é visto como `list<i32>` ou `list<f64>` sem cópia, com
+coletados; o mesmo buffer é visto como `List<i32>` ou `List<f64>` sem cópia, com
 operações atômicas para coordenar. Nunca contém referência a objeto.
 
 > Correção de uma objeção que eu havia levantado: isso **não** contradiz a 17.3
@@ -662,7 +662,7 @@ ambiente coletado. O usuário não vê diferença.
 instanciação que o P já tem. Encaixa bem com o coletor: a função de percurso é
 gerada **por instância**, com os tipos concretos já resolvidos — que é exatamente o
 que o coletor precisa. E o mecanismo vai existir de qualquer forma, porque
-`list<int>` (4.1) já é genérico.
+`List<int>` (4.1) já é genérico.
 
 ### Bateria 21 — `record` fechado (2026-07-29)
 
@@ -722,10 +722,10 @@ são operações diferentes com a mesma cara.
 **23.4 A 4.3 (chave só int/str) está REABERTA.** Suas palavras: *"devemos ter nosso
 próprio dict… se for um tipo `any`? qualquer coisa hasheável serviria"*.
 
-O que muda: o dict é tipado, então a chave tem tipo estático — `dict<int, V>`,
-`dict<str, V>`, `dict<Ponto, V>`. A pergunta deixa de ser "quais tipos a linguagem
+O que muda: o dict é tipado, então a chave tem tipo estático — `Dict<int, V>`,
+`Dict<str, V>`, `Dict<Ponto, V>`. A pergunta deixa de ser "quais tipos a linguagem
 permite" e passa a ser **"o que torna um tipo hasheável"**, e no caso de
-`dict<any, V>` o despacho é pela etiqueta em runtime.
+`Dict<any, V>` o despacho é pela etiqueta em runtime.
 
 Candidatos, e o que cada um custa:
 
@@ -758,7 +758,7 @@ pequenos"*. Então:
   pelo compilador a partir dos campos, sem protocolo
 - `struct`, `list`, `dict`, `set` → hash pela **identidade** da instância
 
-E `dict<any, V>` nunca falha na inserção, porque não há chave inválida.
+E `Dict<any, V>` nunca falha na inserção, porque não há chave inválida.
 
 **24.2 Id estável: campo no cabeçalho, sempre.** Todo objeto nasce com id. Necessário
 porque o semiespaço (23.1) muda o endereço em cada coleta, então identidade não pode
@@ -907,18 +907,18 @@ pensada para quem não conhece o interior. A 1.2 deixa de ser licença para pula
 
 ### 27.3 Inferência de contêiner homogêneo — REVISA a 4.1
 
-Minha provocação: `list<any>` por padrão faz o laço mais comum da linguagem
+Minha provocação: `List<any>` por padrão faz o laço mais comum da linguagem
 (`for x in [1,2,3]: soma += x`) pagar caixa no heap por elemento **mais** checagem de
 etiqueta por acesso (11.3) — velocidade de Python com passos extras, apagando a
 vantagem que os tipos estáticos compraram.
 
 **Aceita.** Se todos os itens do literal forem do mesmo tipo — **primitivo ou
 `record`** — o array infere o tipo do elemento corretamente. Só heterogêneo vira
-`list<any>`.
+`List<any>`.
 
-> Revisa a 4.1, que dizia `list<any>` sempre. Pequeno ponto a esclarecer: e literal de
+> Revisa a 4.1, que dizia `List<any>` sempre. Pequeno ponto a esclarecer: e literal de
 > `struct` homogêneo (`[ed1, ed2]`)? Ali não há caixa a economizar, porque `struct` já
-> é referência — mas há tipo a checar, então inferir `list<Editor>` ainda paga.
+> é referência — mas há tipo a checar, então inferir `List<Editor>` ainda paga.
 
 ### 27.4 O problema não é fechamento — é FUNÇÃO COMO VALOR
 
@@ -1017,7 +1017,7 @@ uniforme (a do `vectorcall` do CPython).
 **Perguntas novas que a reversão cria:**
 1. Qual a sintaxe do tipo de função? (`def(int, int) -> int`, como o P já usa?)
 2. Função pode entrar em `any`? Se sim, precisa da ABI uniforme e do adaptador gerado.
-3. `list<def(int) -> int>` é escrevível?
+3. `List<def(int) -> int>` é escrevível?
 
 ## Bateria 29 — Função como valor: representação e tipos (2026-08-12)
 
@@ -1042,12 +1042,12 @@ com exaustividade checada — o `-Wswitch` que o plangc já tem. Variante com da
 > **O argumento que decidiu, e não é "força a especificar":** os dois têm tamanhos
 > naturais diferentes. Se função morasse dentro de `any`, ou `any` ficaria largo o
 > bastante para o pior caso — e **todo** `any` do programa pagaria, inclusive
-> `list<any>`, que é o contêiner padrão (4.1) — ou encaixotar função custaria uma
+> `List<any>`, que é o contêiner padrão (4.1) — ou encaixotar função custaria uma
 > **alocação a mais**, um objeto no heap só para guardar `{fp, env}` que já eram valor.
 > Separados, cada um fica no seu tamanho e nenhum compromete o outro.
 >
 > **Dois efeitos colaterais bons:** a tabela de despacho passa a ser visível no tipo
-> (`dict<str, any>` é dado por chave; `dict<str, def>` é callback por nome), o que dá
+> (`Dict<str, any>` é dado por chave; `Dict<str, def>` é callback por nome), o que dá
 > algo *grepável* a quem se preocupa com sopa de callback — a preocupação da 27.4. E os
 > casos genuinamente "qualquer coisa" (serializar, mandar para worker, imprimir)
 > naturalmente **excluem** função, então o `any` estreito não perde caso de uso real.
@@ -1162,12 +1162,12 @@ categoria fica com quem escreve o `catch`.
 **32.3 `id(x)` fica, e a palavra no cabeçalho com ele.** Cabeçalho é `{ty, gc, id}`.
 
 > E o custo que eu havia levantado **encolheu muito** depois da 27.3: com literal
-> homogêneo inferindo `list<int>`, uma lista de mil inteiros não tem objeto nenhum —
+> homogêneo inferindo `List<int>`, uma lista de mil inteiros não tem objeto nenhum —
 > são mil `int64_t` num array. A conta de "mil caixas × 24 bytes" só valia quando o
-> padrão era `list<any>`.
+> padrão era `List<any>`.
 
 **32.4 `set` de `struct` é impossível, e isso é aceito.** Quem quer conjunto de objetos
-usa `dict<int, Struct>` indexado por um id próprio. Mantém o contrato hash/igualdade
+usa `Dict<int, Struct>` indexado por um id próprio. Mantém o contrato hash/igualdade
 limpo (25.1) e evita `set` e `dict` terem regras de chave diferentes.
 
 ## Bateria 33 — A STL do pscript, e arrays (2026-08-12)
@@ -1209,7 +1209,7 @@ tem problema de bootstrap.
 `f32[4]`. É POD, tem layout de C, atravessa por cópia (20.2). Estende a 21.1, que falava
 só de escalares e records aninhados.
 
-**33.4 `list<T>` é o padrão; `T[N]` é opt-in.** Suas palavras: *"em pscript por padrão
+**33.4 `List<T>` é o padrão; `T[N]` é opt-in.** Suas palavras: *"em pscript por padrão
 vai vir um `list`, mas poder especificar um tipo de array P fixo seria útil"*.
 
 `T[N]` é tipo completo — local, parâmetro, campo — como no P. Sem alocação e sem coletor
@@ -1224,7 +1224,7 @@ para buffer de tamanho conhecido. Não é o caminho normal: é a saída para qua
 > estrutura, e é melhor decidir antes de emiti-la.
 >
 > E a orientação de uso que decorre de ter dois tipos de sequência: `T[N]` quando o
-> tamanho é conhecido e não cresce (zero alocação, fora do coletor), `list<T>` quando
+> tamanho é conhecido e não cresce (zero alocação, fora do coletor), `List<T>` quando
 > cresce.
 
 ## Bateria 34 — Últimas pendências de runtime (2026-08-12)
@@ -1375,7 +1375,7 @@ sinais são conhecidos estaticamente.
 
 **39.2 `any` é TAGGEADO: int pequeno embutido no ponteiro.** Bit baixo distingue
 "ponteiro para objeto" de "int de 63 bits inline" (o esquema de OCaml/V8/LuaJIT). Um
-`any` que guarda int não aloca **nada** — mata a pressão de GC de `dict<str, any>` com
+`any` que guarda int não aloca **nada** — mata a pressão de GC de `Dict<str, any>` com
 números, que era o custo remanescente de ter recusado objetos imortais (14.4).
 
 > Não é union no fonte — é representação interna do runtime, invisível na linguagem.
@@ -1422,7 +1422,7 @@ depois do laço; variável nascida num ramo de `if` é visível depois dele.
 dois métodos; `for x in xs:` baixa para `while it.has_next(): x = it.next()`.
 
 > Bônus que essa escolha compra de graça: **dissolve a pergunta do aninhamento de
-> `T??`** — com `next() -> T?`, iterar `list<int?>` não distinguia fim de elemento-None
+> `T??`** — com `next() -> T?`, iterar `List<int?>` não distinguia fim de elemento-None
 > e exigia decidir se `T?` aninha. Com dois métodos, o problema não existe.
 
 **40.4 Global mutável pertence ao worker principal.** Suas palavras: *"o global já é um
@@ -1476,7 +1476,7 @@ keyword `global`/`shared` que já sincronizava aquilo."*
 - `shared contador = 0`, `shared config: Config` (record) — variável sincronizada de
   tipo **copiável** (primitivo, `str`, `record`, `tuple`): ler copia para fora,
   escrever copia para dentro.
-- `shared d: dict<str, Config>` — a tabela ETS de verdade, para estado nomeado
+- `shared d: Dict<str, Config>` — a tabela ETS de verdade, para estado nomeado
   dinâmico entre workers. Vive fora dos heaps coletados, com locks próprios; chave e
   valor restritos à escada de cópia.
 
@@ -1544,7 +1544,7 @@ P). Sobreposição assumida — três formas, o usuário escolhe o idioma.
 chamada sem o argumento — conserta a armadilha mais famosa do Python, divergindo dele
 exatamente onde ele é defeituoso.
 
-**44.2 `*args` existe, como açúcar sobre `list<T>`.** O call site constrói a lista; a
+**44.2 `*args` existe, como açúcar sobre `List<T>`.** O call site constrói a lista; a
 função recebe `list` comum. `f(*xs)` (splat) espalha na chamada. Tipado e sem ABI
 variádica — não toca a 12.1, que era sobre variádica **de C**. (`print(a, b, c)`
 precisa disso no primeiro dia.)
@@ -1659,7 +1659,7 @@ Fica fora: `select` dedicado entre canais (`race` sobre `recv()` cobre).
 **48.3 `sys`, como Python.** `sys.argv`, `sys.env`, `sys.exit(n)`.
 
 **48.4 Instâncias genéricas: static inline por TU, como o P já faz.** Cada módulo que
-usa `list<X>` recebe sua cópia estática — o mecanismo `inline Vec<int>` que o P já tem
+usa `List<X>` recebe sua cópia estática — o mecanismo `inline Vec<int>` que o P já tem
 ("TU-local, link-safe in many TUs"). O cache de .o (16.2) fica intacto, zero
 coordenação entre módulos. Custo assumido: código duplicado entre .o, bloat moderado.
 
@@ -1759,7 +1759,7 @@ era 100% de overhead no tipo mais quente do programa.
 remendo):**
 - **Travessia para C vira `memcpy`/passagem direta** — o marshalling campo a campo da
   21.2 morre; o layout já é o de C. A 20.2 fica mais simples do que era.
-- **`list<Vec>` é array plano contíguo** de valores de 24 bytes — sem ponteiro por
+- **`List<Vec>` é array plano contíguo** de valores de 24 bytes — sem ponteiro por
   elemento, cache perfeito para o raytracer.
 - **Campo record em struct coletada é inline**, e o percurso do coletor **pula** — a
   21.1 garante que não há referência lá dentro. Menos trabalho de trace.
@@ -1778,7 +1778,7 @@ O smallpt idiomático usa `add/sub/mul/dot/cross` nomeados. Registro forte: não
 omissão — o raytracer inteiro de vetores foi olhado e a resposta foi funções nomeadas
 mesmo assim. Reabertura futura exige caso mais forte que este.
 
-**52.3 Framebuffer: `shared buffer` com vista `list<f64>`.** Cada worker escreve seu
+**52.3 Framebuffer: `shared buffer` com vista `List<f64>`.** Cada worker escreve seu
 tile direto — tiles disjuntos, zero contenda, zero mensagem por pixel. É o caso de uso
 que a 18.3 foi desenhada para atender.
 
@@ -1804,7 +1804,7 @@ assume.
 - Docstring com aspas triplas `"""…"""` (string multilinha nunca foi decidida).
 - Literal `[...]` para `T[N]` em contexto const.
 - `raise error("msg")` para lançar, `raise e` para relançar.
-- Casts genéricos na saída de `any`: `list<any>(x)`, `dict<str, any>(x)`, `str(x)`, e
+- Casts genéricos na saída de `any`: `List<any>(x)`, `Dict<str, any>(x)`, `str(x)`, e
   record-de-any `Estat(m)` — generalização do `int(x)` da 23.2.
 - `global` para atribuir global de dentro de função (inclusive `shared`) — o
   `ST_GLOBAL` do P/Python.
@@ -1861,13 +1861,13 @@ desambigua de parênteses de agrupamento; o parser paga um lookahead.
 
 **55.2 `as` para desencaixotar; `T(x)` só converte.** REVISA a 23.2. Duas operações,
 duas grafias:
-- `x as list<any>`, `m as Estat`, `v as int` — **desencaixota checando** (lança
+- `x as List<any>`, `m as Estat`, `v as int` — **desencaixota checando** (lança
   categoria TYPE se a etiqueta não bate). Mesma forma do `as def(...)` da 29.4 —
   agora uniforme.
 - `int("42")`, `float(n)` — **converte valor** (parse, alargamento). `T(campos...)`
   continua sendo o construtor (54.2).
 
-O rascunho precisa de ajuste: `list<any>(bruto)` → `bruto as list<any>`, etc.
+O rascunho precisa de ajuste: `List<any>(bruto)` → `bruto as List<any>`, etc.
 
 **55.3 As duas regras de sema abençoadas:** `global` para atribuir global/`shared` de
 dentro de função (o ST_GLOBAL do P), e match exaustivo sobre enum conta como "todos os
@@ -1989,7 +1989,7 @@ fila. E é a resposta concreta ao seu ponto: *"várias coisas que objetos dinâm
 limitam"* — record dá isso porque é bytes puros (58.2); struct/list nunca darão, e não
 devem.
 
-> Suposição registrada à espera de bênção (não decidida): `pack` devolve `list<u8>` e
+> Suposição registrada à espera de bênção (não decidida): `pack` devolve `List<u8>` e
 > `unpack<T>` a recebe — usa tipo que já existe, sem introduzir um tipo `bytes` novo.
 > Se um dia houver tipo `bytes` dedicado, o par migra junto.
 
@@ -2023,7 +2023,7 @@ custo, e também poderíamos implementá-las explicitamente."*
   declaração explícita. Isso REFINA a 30.1: estrutural por padrão, com afirmação
   opcional para intenção visível e erro mais cedo.
 
-> Consequência prática: `def total(xs: Sequence<float>)` aceita `list<float>` e
+> Consequência prática: `def total(xs: Sequence<float>)` aceita `List<float>` e
 > `f64[N]` sem duplicar código nem copiar — resolve a pergunta original pela via da
 > interface, não pela via do aliasing de memória (que a 60.1 recusou).
 >
@@ -2061,7 +2061,7 @@ mutação do conteúdo, transitivo, checado em compilação.
 **62.1 Conjunto inicial: `Iterable`, `Sequence`, `Comparable`, `Printable`.**
 - `Iterable` — percorrível no `for`;
 - `Sequence` — Iterable + `len()` + `get(i)` (é o tipo do parâmetro que aceita
-  `list<T>` e `T[N]` sem cópia, 60.3);
+  `List<T>` e `T[N]` sem cópia, 60.3);
 - `Comparable` — ordenação custom no `sorted` (nativos: números/str/tuple, 61.2);
 - `Printable` — `to_str()`, sobrepõe o repr derivado (44.3).
 
@@ -2080,7 +2080,7 @@ funciona. Senão, usa `has_next`/`next` direto no objeto (padrão `Rows`, single
 Contêineres nativos continuam baixados para laço de índice, custo zero. Fecha a
 pendência da 60.3.
 
-**62.4 `pack` devolve `list<u8>`, abençoado.** Sem tipo `bytes` novo.
+**62.4 `pack` devolve `List<u8>`, abençoado.** Sem tipo `bytes` novo.
 
 **62.5 Afirmação sua, registrada como princípio:** *"eu sei que é estranho que parte
 da linguagem seja programada um nível abaixo (no caso, P), mas vai ser bom ter partes
@@ -2583,7 +2583,7 @@ trait Iterable:
 
 > A 40.3 fica intacta: `has_next()`/`next()` e não o `next() -> Option` do Rust — a
 > escolha original foi por um motivo que continua valendo (com `Option`, iterar
-> `list<int?>` não distingue fim de elemento-None).
+> `List<int?>` não distingue fim de elemento-None).
 
 ## Bateria 67 — Traits no P, e coerência (2026-08-14)
 
@@ -3511,7 +3511,7 @@ escreveu: desempacotamento (`a, b = f()`), retorno múltiplo, índice (`t[0]`),
 hash e igualdade por CONTEÚDO derivados dos campos.
 
 **98.2 E o que ela desbloqueia, que é o teste de a decisão ser certa:**
-`d.items()` passa a ser um valor de verdade (`list<(K, V)>`), `for k, v in
+`d.items()` passa a ser um valor de verdade (`List<(K, V)>`), `for k, v in
 d.items()` deixa de ser forma especial, `d[(linha, coluna)]` funciona, e uma
 função que devolve duas coisas para de precisar de um `record` só para isso.
 
@@ -3541,7 +3541,7 @@ Então a escolha não é "valor ou objeto": é **quantos slots o frame registra*
     a 34.1 abriu para array, e custa zero numa tupla pura;
   * **variável de módulo:** uma RAIZ por referência dentro (`ps_add_root(&__g->t._0)`)
     — mesma ideia, outro lugar;
-  * **dentro de contêiner** (`list<(str, int)>`, que é o que `d.items()` como
+  * **dentro de contêiner** (`List<(str, int)>`, que é o que `d.items()` como
     valor precisa): o contêiner leva um **ponteiro de percurso** que o compilador
     escreveu (`etrace` na lista, `vtrace` no dict) e o coletor anda DENTRO de
     cada elemento em vez de segui-lo. Feito, com estresse;
@@ -4188,14 +4188,14 @@ copiar estava com `0xdd` em todo campo, o veneno do cemitério.
 
 A causa: `T?` de referência É o ponteiro nu (a representação que a 9.4 escolheu,
 e que custa zero), mas o predicado que responde "isto é referência" não tinha
-caso para `PT_OPT`. Então um `dict<str, def(int,int)?>` nascia com `vref =
+caso para `PT_OPT`. Então um `Dict<str, def(int,int)?>` nascia com `vref =
 False`: o coletor não seguia os valores, e depois de uma coleta o dict devolvia
 ponteiro para o cemitério. **Não é só função:** o mesmo predicado decide o
-`eref` de `list<str?>`, o `kref`/`vref` de todo dict e set, e as marcas de
+`eref` de `List<str?>`, o `kref`/`vref` de todo dict e set, e as marcas de
 "grafo" das mensagens de worker. Um campo de struct escapava (aquele caminho
 pergunta pelo tipo C, e `str?` já chegava lá como `PsStr *`).
 
-> Um programa com `list<str?>` corrompia memória sob pressão de coleta desde que
+> Um programa com `List<str?>` corrompia memória sob pressão de coleta desde que
 > `T?` existe, e nenhum teste tinha as duas coisas ao mesmo tempo — opcional de
 > referência num contêiner E alocação suficiente para coletar no meio. O
 > `tests/pscript/run/optref.psc` agora tem: 200 opcionais em lista, dois dicts,
@@ -4371,7 +4371,7 @@ porque tem de ser conhecido ao compilar):
 o módulo **`gc`** — `gc.collect()`, `gc.tune(bytes=..., objects=...)`,
 `gc.stats()` — e **`sys.pool(n)`**.
 
-- **`gc.stats()` devolve `dict<str, int>`** (live, alloced, objects,
+- **`gc.stats()` devolve `Dict<str, int>`** (live, alloced, objects,
   collections, budget, budget_objects). Um dict e não um record: nenhum tipo novo
   para a linguagem aprender, o `print` já sabe imprimi-lo, e acrescentar uma
   medida depois não quebra programa nenhum.
@@ -4946,7 +4946,7 @@ indexa por posição) com a saída à mão — `enumerate(d.keys())`.
 `min`/`max` de UMA lista. As bordas são as do Python e estão no oráculo:
 `sum([])` é 0, `all([])` é True (não há contraexemplo), `min([])` LEVANTA.
 
-- **`any`/`all` tomam `list<bool>`**, não uma lista de números: não há
+- **`any`/`all` tomam `List<bool>`**, não uma lista de números: não há
   veracidade implícita (39.3), então `any([x > 0 for x in xs])` é a forma — e a
   mensagem de erro diz isso.
 - **`round` é meio para o PAR** (`round(2.5)` é 2), e sem casas devolve **int**.
@@ -5713,7 +5713,7 @@ sobre o laço de eventos* — e isto é ela.
 **118.1 A forma.** `await os.run(argv, env=, cwd=, stdout=)` devolve um processo
 que já terminou, com `status()` e `output()`.
 
-**118.2 SEM shell.** O comando é um `list<str>` e é o `execvp` que o recebe. Não
+**118.2 SEM shell.** O comando é um `List<str>` e é o `execvp` que o recebe. Não
 há aspas para escapar, não há `&&`, não há glob, e nada do que o programa
 escreveu pode virar sintaxe — que é a decisão 1.6 do pforge vista de dentro. Uma
 `str` no lugar da lista é recusada com a forma certa na mensagem, e o teste
@@ -5735,7 +5735,7 @@ cobre o ambiente efetivo, e "mesclar" não tem resposta única. O ambiente do fi
 seguro entre o fork e o exec, ao contrário de `setenv`, que aloca (e alocar ali é
 o travamento clássico de um programa com threads).
 
-**118.6 Um tipo novo, `proc`, e não um dict.** A 110 escolheu `dict<str,int>`
+**118.6 Um tipo novo, `proc`, e não um dict.** A 110 escolheu `Dict<str,int>`
 para o `gc.stats()` com um bom argumento ("nenhum tipo novo para a linguagem
 aprender"), mas aqui o resultado é heterogéneo — um número e uma str — e um
 `record` não pode carregar `str` (58.2: record é bytes puros). Então é um OBJETO
@@ -5788,7 +5788,7 @@ que uma chamada de sistema vê têm de estar fora dele.
 O problema é o caminho que a I/O faz hoje:
 
 ```
-recv → malloc(w->buf) → memcpy → list<u8> coletada → fatiar → mais cópias
+recv → malloc(w->buf) → memcpy → List<u8> coletada → fatiar → mais cópias
 ```
 
 Um proxy que mova um megabyte copia-o quatro vezes.
@@ -6031,7 +6031,7 @@ Em P um mapa **não precisa de tipo novo nenhum**: é um ponteiro e um tamanho, 
 E a ponte já estava desenhada: o **`CBytes` (84.1)** é *"um struct de exactamente
 um ponteiro e um tamanho"*. O que torna um `Mapping` o **melhor** valor possível
 para atravessar essa fronteira é a propriedade que ele já tem por construção:
-está fora do monte e nunca se move. Um `list<u8>` coletado, para ir para P, ou
+está fora do monte e nunca se move. Um `List<u8>` coletado, para ir para P, ou
 copia ou precisa de ser fixado; um `Mapping` não precisa de nada.
 
 ```python
@@ -6613,3 +6613,60 @@ com o coletor opcional — e a lição dele é a que se esperaria: **os dois reg
 entornam um no outro**, e os modos de gestão de memória do Nim têm sido uma fonte
 recorrente de instabilidade. Duas linguagens com uma costura tipada não têm esse
 problema, porque nenhuma finge ser a outra.
+
+## BATERIA 144 — um programa pode chamar `Buffer` ao seu tipo? (2026-08-24)
+
+> **PENDENTE DE DECISÃO — segui com (b) para não travar.** Só o utilizador
+> decide; o que está abaixo são as opções e o preço de cada uma.
+
+Isto não foi imaginado: apareceu ao COMPILAR a FN, e o primeiro programa a
+tropeçar nele foi o nosso.
+
+```
+pstudio/core.psc:1191: error: the return value expects Buffer, found core.Buffer
+```
+
+O editor tem um `struct Buffer` desde que existe — linhas, cursores, marcas e um
+registo de desfazer — e a 139 acaba de dar esse nome ao bloco de bytes que os
+workers partilham. O mesmo aconteceu num teste, com `struct File`. **A regra dos
+nomes tira ao programa dois nomes que ele tinha o direito de usar**, e a tabela
+de consequências da FN não apanhou isto porque contou GRAFIAS a mudar e não
+NOMES a perder.
+
+E a pergunta tem precedente directo neste repositório: a **68.3** decidiu que,
+quando o programa declara um nome que o prelúdio também declara, **o do programa
+ganha, com aviso, e só o item colidido cai** — porque `TYPE`, `VALUE` e `KEY` são
+palavras que um programa tem direito de usar. `Buffer` e `File` são exactamente
+o mesmo caso, com a mesma frase a defendê-las.
+
+### As opções
+
+**(a) O programa ganha, como na 68.3.** `struct Buffer:` sombra o embutido, com
+aviso, e dentro desse módulo `Buffer` é o do programa.
+*Consequência:* é a resposta que a 68.3 já deu para o prelúdio, portanto a
+linguagem passa a ter UMA regra de sombra em vez de duas. **Custa maquinaria**: o
+parser decide o tipo pela grafia e ainda não conhece as declarações, então o nome
+embutido teria de ser resolvido na sema — que é onde a 68.3 já vive. É a opção
+certa se a resposta for "sim".
+
+**(b) O embutido ganha, e o programa renomeia.** ← *seguido, por ser o que não
+decide nada sobre a linguagem*
+*Consequência:* os nomes da 139 tornam-se reservados de facto. Aqui custou dois
+renomes, e um deles foi uma melhoria por si: o tipo central do editor passou a
+`TextBuffer`, que é o que ele é — um buffer de TEXTO, com linhas e cursores, e
+não o bloco de bytes que a 139 chama `Buffer`. O preço real não é este; é o de
+quem chegar de fora com um `struct File` seu.
+
+**(c) Só os genéricos são reservados.** `List`, `Dict`, `Set` levam `<` e são
+inconfundíveis; `Buffer`, `File`, `Socket`, `Timer` seriam nomes de biblioteca
+como outro qualquer, alcançáveis por um módulo.
+*Consequência:* separa o núcleo da biblioteca, que é como o Python o faz
+(`list` é embutido, `Path` vem do `pathlib`). Mas obrigaria um `import` para
+anotar um ficheiro aberto, e hoje `open()` devolve um `File` sem importar nada.
+
+### O que já se sabe, e não depende da escolha
+
+**Os nomes que a 139 reserva são poucos e todos maiúsculos**, portanto a colisão
+só acontece com um tipo do utilizador — nunca com uma variável, um campo ou uma
+função. Foram dois em 376 ficheiros `.psc`, o que dimensiona o problema: é real,
+e é raro.

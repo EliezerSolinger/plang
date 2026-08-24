@@ -1373,6 +1373,8 @@ static int PsP_accept(PsP *self, TokKind k);
 
 static Token *PsP_expect(PsP *self, TokKind k, const char *ctx);
 
+static int PsP_renamed(PsP *self, Pos pos, const char *written, const char *old, const char *new_);
+
 static PsType *PsP_parse_type(PsP *self);
 
 static void PsP_expect_gt(PsP *self, const char *what);
@@ -1539,6 +1541,10 @@ static void PsP_expect_gt(PsP *self, const char *what) {
     PsP_expect(self, TK_GT, what);
 }
 
+static int PsP_renamed(PsP *self, Pos pos, const char *written, const char *old, const char *new_) {
+    return ps_renamed_name(self->file, pos, written, old, new_);
+}
+
 static PsType *PsP_parse_type(PsP *self) {
     Pos pos = PsP_pk(self)->pos;
     PsType *t;
@@ -1595,31 +1601,31 @@ static PsType *PsP_parse_type(PsP *self) {
             t = ps_type(self->a, PT_STR, pos);
         } else if (strcmp(name, "any") == 0) {
             t = ps_type(self->a, PT_ANY, pos);
-        } else if (strcmp(name, "file") == 0) {
+        } else if (PsP_renamed(self, pos, name, "file", "File")) {
             t = ps_type(self->a, PT_FILE, pos);
-        } else if (strcmp(name, "buffer") == 0) {
+        } else if (PsP_renamed(self, pos, name, "buffer", "Buffer")) {
             t = ps_type(self->a, PT_BUFFER, pos);
-        } else if (strcmp(name, "socket") == 0) {
+        } else if (PsP_renamed(self, pos, name, "socket", "Socket")) {
             t = ps_type(self->a, PT_CONN, pos);
         } else if (strcmp(name, "proc") == 0) {
             t = ps_type(self->a, PT_PROC, pos);
-        } else if (strcmp(name, "list") == 0) {
+        } else if (PsP_renamed(self, pos, name, "list", "List")) {
             t = ps_type(self->a, PT_LIST, pos);
-            PsP_expect(self, TK_LT, "list<T>");
+            PsP_expect(self, TK_LT, "List<T>");
             t->inner = PsP_parse_type(self);
-            PsP_expect_gt(self, "list<T>");
-        } else if (strcmp(name, "set") == 0) {
+            PsP_expect_gt(self, "List<T>");
+        } else if (PsP_renamed(self, pos, name, "set", "Set")) {
             t = ps_type(self->a, PT_SET, pos);
-            PsP_expect(self, TK_LT, "set<T>");
+            PsP_expect(self, TK_LT, "Set<T>");
             t->inner = PsP_parse_type(self);
-            PsP_expect_gt(self, "set<T>");
-        } else if (strcmp(name, "dict") == 0) {
+            PsP_expect_gt(self, "Set<T>");
+        } else if (PsP_renamed(self, pos, name, "dict", "Dict")) {
             t = ps_type(self->a, PT_DICT, pos);
-            PsP_expect(self, TK_LT, "dict<K, V>");
+            PsP_expect(self, TK_LT, "Dict<K, V>");
             t->key = PsP_parse_type(self);
-            PsP_expect(self, TK_COMMA, "dict<K, V>");
+            PsP_expect(self, TK_COMMA, "Dict<K, V>");
             t->inner = PsP_parse_type(self);
-            PsP_expect_gt(self, "dict<K, V>");
+            PsP_expect_gt(self, "Dict<K, V>");
         } else if (strcmp(name, "Task") == 0 || strcmp(name, "Worker") == 0) {
             t = ps_type(self->a, (strcmp(name, "Task") == 0 ? PT_TASK : PT_WORKER), pos);
             PsP_expect(self, TK_LT, "Task<T>");
@@ -1716,13 +1722,14 @@ static PsExpr *PsP_parse_primary(PsP *self) {
         }
         case TK_IDENT: {
             PsP_adv(self);
-            if (strcmp(tk->text, "set") == 0 && PsP_at(self, TK_LT)) {
+            if ((strcmp(tk->text, "Set") == 0 || strcmp(tk->text, "set") == 0) && PsP_at(self, TK_LT)) {
+                PsP_renamed(self, pos, tk->text, "set", "Set");
                 PsP_adv(self);
                 PsType *st9 = ps_type(self->a, PT_SET, pos);
                 st9->inner = PsP_parse_type(self);
-                PsP_expect_gt(self, "set<T>()");
-                PsP_expect(self, TK_LPAREN, "set<T>()");
-                PsP_expect(self, TK_RPAREN, "set<T>()");
+                PsP_expect_gt(self, "Set<T>()");
+                PsP_expect(self, TK_LPAREN, "Set<T>()");
+                PsP_expect(self, TK_RPAREN, "Set<T>()");
                 PsExpr *es9 = ps_expr(self->a, PE_SET, pos);
                 es9->type = st9;
                 return es9;
@@ -3268,6 +3275,14 @@ static PsDecl *PsP_parse_include(PsP *self) {
     }
     PsP_expect(self, TK_NEWLINE, "include");
     return d;
+}
+
+int ps_renamed_name(const char *file, Pos pos, const char *written, const char *old, const char *new_) {
+    if (strcmp(written, old) == 0) {
+        cdiag_at(file, pos, "renamed-type", WD_WARN, "'%s' is now written '%s' (139: lowercase is a value, uppercase is a thing with identity)", old, new_);
+        return 1;
+    }
+    return strcmp(written, new_) == 0;
 }
 
 int32_t ps_width_name(const char *n) {

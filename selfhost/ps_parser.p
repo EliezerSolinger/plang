@@ -84,6 +84,7 @@ struct PsP:
     private def adv(self: *PsP) -> *Token
     private def accept(self: *PsP, k: TokKind) -> bool
     private def expect(self: *PsP, k: TokKind, ctx: const *char) -> *Token
+    private def renamed(self: *PsP, pos: Pos, written: const *char, old: const *char, new_: const *char) -> bool
     private def parse_type(self: *PsP) -> *PsType
     private def expect_gt(self: *PsP, what: const *char)
     private def parse_expr(self: *PsP) -> *PsExpr
@@ -188,7 +189,7 @@ struct PsP:
         return None
 
     # ---------- types ----------
-    # `list<list<int>>` ends in a `>>`, which the lexer read as a shift: it
+    # `List<List<int>>` ends in a `>>`, which the lexer read as a shift: it
     # cannot know it is in a type. The parser splits it — one `>` closes this
     # generic, the other stays for the one outside. Every C++ compiler does the
     # same thing, and doing it here keeps the lexer honest.
@@ -198,6 +199,11 @@ struct PsP:
             t->kind = TK_GT
             return
         self->expect(TK_GT, what)
+
+    # 139, the naming rule — see `ps_renamed_name` at the bottom of this file
+    # for what it says and why the two spellings coexist for one commit.
+    private def renamed(self: *PsP, pos: Pos, written: const *char, old: const *char, new_: const *char) -> bool:
+        return ps_renamed_name(self->file, pos, written, old, new_)
 
     private def parse_type(self: *PsP) -> *PsType:
         pos: Pos = self->pk()->pos
@@ -221,7 +227,7 @@ struct PsP:
         elif self->at(TK_DEF):
             # `def(T, U) -> R` is a narrow function type; a bare `def` is the
             # WIDE one — some function, signature unknown (29.3). The wide form
-            # is what a `dict<str, def>` holds, and narrowing it back is what
+            # is what a `Dict<str, def>` holds, and narrowing it back is what
             # `as def(float) -> float` is for (29.4).
             self->adv()
             t = ps_type(self->a, PT_FUNC, pos)
@@ -259,11 +265,11 @@ struct PsP:
                 t = ps_type(self->a, PT_STR, pos)
             elif name == "any":
                 t = ps_type(self->a, PT_ANY, pos)
-            elif name == "file":
+            elif self->renamed(pos, name, "file", "File"):
                 t = ps_type(self->a, PT_FILE, pos)
-            elif name == "buffer":
+            elif self->renamed(pos, name, "buffer", "Buffer"):
                 t = ps_type(self->a, PT_BUFFER, pos)
-            elif name == "socket":
+            elif self->renamed(pos, name, "socket", "Socket"):
                 # 77.1: one name for both ends of it — what `net.listen` gives
                 # and what `accept` gives are the same kind of thing, and the
                 # program tells them apart by what it does with them
@@ -271,25 +277,25 @@ struct PsP:
             elif name == "proc":
                 # 118: um processo que já terminou — o que `await os.run(...)`
                 # devolve. Tem nome escrevível porque um programa precisa
-                # anotá-lo: `async def um(cmd: list<str>) -> proc`.
+                # anotá-lo: `async def um(cmd: List<str>) -> proc`.
                 t = ps_type(self->a, PT_PROC, pos)
-            elif name == "list":
+            elif self->renamed(pos, name, "list", "List"):
                 t = ps_type(self->a, PT_LIST, pos)
-                self->expect(TK_LT, "list<T>")
+                self->expect(TK_LT, "List<T>")
                 t->inner = self->parse_type()
-                self->expect_gt("list<T>")
-            elif name == "set":
+                self->expect_gt("List<T>")
+            elif self->renamed(pos, name, "set", "Set"):
                 t = ps_type(self->a, PT_SET, pos)
-                self->expect(TK_LT, "set<T>")
+                self->expect(TK_LT, "Set<T>")
                 t->inner = self->parse_type()
-                self->expect_gt("set<T>")
-            elif name == "dict":
+                self->expect_gt("Set<T>")
+            elif self->renamed(pos, name, "dict", "Dict"):
                 t = ps_type(self->a, PT_DICT, pos)
-                self->expect(TK_LT, "dict<K, V>")
+                self->expect(TK_LT, "Dict<K, V>")
                 t->key = self->parse_type()
-                self->expect(TK_COMMA, "dict<K, V>")
+                self->expect(TK_COMMA, "Dict<K, V>")
                 t->inner = self->parse_type()
-                self->expect_gt("dict<K, V>")
+                self->expect_gt("Dict<K, V>")
             elif name == "Task" or name == "Worker":
                 # `Task<T>` (35.3) and `Worker<T>` (35.1): what an `async def`
                 # and a `spawn` give back, written down where a variable or a
@@ -393,19 +399,20 @@ struct PsP:
                 return ps_expr(self->a, PE_NONE, pos)
             case TK_IDENT:
                 self->adv()
-                # `set<T>()` — the empty SET (4.x/38.1). `{}` is the empty DICT,
+                # `Set<T>()` — the empty SET (4.x/38.1). `{}` is the empty DICT,
                 # as in Python, so the empty set needs a spelling of its own, and
                 # the sema has been recommending this one in a message while the
-                # parser could not read it: `set < int > ()` came out as a chain
-                # of comparisons. Recognised by the shape `set` `<`, which is
-                # why `set` stops being usable as the left side of a `<`.
-                if strcmp(tk->text, "set") == 0 and self->at(TK_LT):
+                # parser could not read it: `Set < int > ()` came out as a chain
+                # of comparisons. Recognised by the shape `Set` `<`, which is
+                # why `Set` stops being usable as the left side of a `<`.
+                if (strcmp(tk->text, "Set") == 0 or strcmp(tk->text, "set") == 0) and self->at(TK_LT):
+                    self->renamed(pos, tk->text, "set", "Set")
                     self->adv()
                     st9: *PsType = ps_type(self->a, PT_SET, pos)
                     st9->inner = self->parse_type()
-                    self->expect_gt("set<T>()")
-                    self->expect(TK_LPAREN, "set<T>()")
-                    self->expect(TK_RPAREN, "set<T>()")
+                    self->expect_gt("Set<T>()")
+                    self->expect(TK_LPAREN, "Set<T>()")
+                    self->expect(TK_RPAREN, "Set<T>()")
                     es9: *PsExpr = ps_expr(self->a, PE_SET, pos)
                     es9->type = st9
                     return es9
@@ -1875,6 +1882,25 @@ struct PsP:
             fatal_at(self->file, pos, "include expects a C header: include <stdio.h>")
         self->expect(TK_NEWLINE, "include")
         return d
+
+
+# 139: **lowercase is a VALUE, uppercase is a THING with identity and a
+# lifetime.** `int`, `str`, `bytes`, `u8` on one side; `List<T>`, `Dict<K, V>`,
+# `Socket`, `Buffer`, `File` on the other. The convention used to be split with
+# no rule behind it — `str` and `list` lowercase next to `Task<T>` and `Error`
+# uppercase — and the rule separates `bytes` (immutable, a value) from `Buffer`
+# (mutable, shared, closed) for free: the distinction is now in the spelling.
+#
+# The crossing is 139.1: both spellings hold for EXACTLY one commit, with the
+# old one warning. Letting them coexist forever would leave the language with
+# two spellings for everything, which is the thing the rule exists to end.
+def ps_renamed_name(file: const *char, pos: Pos, written: const *char, old: const *char, new_: const *char) -> bool:
+    if strcmp(written, old) == 0:
+        cdiag_at(file, pos, "renamed-type", WD_WARN,
+                 "'%s' is now written '%s' (139: lowercase is a value, uppercase is a thing with identity)",
+                 old, new_)
+        return True
+    return strcmp(written, new_) == 0
 
 
 # `i8`…`u32`, `f32`: the exact-width spellings (68.2). `i64`/`u64`/`f64` are

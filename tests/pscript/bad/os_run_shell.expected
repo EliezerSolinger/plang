@@ -1,1 +1,1 @@
-os.run() takes a list<str>
+os.run() takes a List<str>

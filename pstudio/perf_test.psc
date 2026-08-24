@@ -1,6 +1,6 @@
 """The editor's speed, with CEILINGS — the gate that did not exist.
 
-Nothing measured time, and that is why `Buffer.text()` stayed quadratic until
+Nothing measured time, and that is why `TextBuffer.text()` stayed quadratic until
 somebody happened to look: it built the whole file with `+=` in a loop, and it is
 called on EVERY save and on every rebuild of the completion index. Eight thousand
 lines cost 672 ms that way, thirty-two thousand cost seventeen seconds, and the

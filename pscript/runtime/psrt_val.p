@@ -622,7 +622,7 @@ def ps_buffer_set_f64(ctx: *PsCtx, b: *PsBuffer, i: i64, v: f64, file: const *ch
         *p = v
 
 # has THIS context given the buffer away? (18.2)
-# 110: `gc.stats()` — o estado do coletor DESTE contexto, como `dict<str, int>`.
+# 110: `gc.stats()` — o estado do coletor DESTE contexto, como `Dict<str, int>`.
 #
 # Um dict e não um record: assim não há tipo novo para a linguagem aprender, o
 # `print` já sabe imprimi-lo, e acrescentar uma medida depois não quebra
@@ -836,9 +836,9 @@ private def ps_any_what(v: *PsObj) -> const *char:
         case PS_TY_STR:
             return "str"
         case PS_TY_LIST:
-            return "list"
+            return "List"
         case PS_TY_DICT:
-            return "dict"
+            return "Dict"
         case PS_TY_ANY:
             a: *PsAny = (*PsAny)(v)
             if a->kind == PS_ANY_INT:

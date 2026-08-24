@@ -114,7 +114,7 @@ def adj_del_pos(r: Span, pl: int, pc: int) -> Caret:
     return Caret(pl - (r.l1 - r.l0), pc, 0, 0, -1)
 
 
-struct Buffer:
+struct TextBuffer:
     lines: list<BufLine>
     carets: list<Caret>        # ALWAYS >= 1, sorted by position
     undo: list<UndoGroup>
@@ -1184,8 +1184,8 @@ struct Buffer:
         return None
 
 
-def new_buffer() -> Buffer:
+def new_buffer() -> TextBuffer:
     """An empty buffer: one line, one caret — never zero of either."""
-    b = Buffer([], [], [], [], False, 0, False, False, 0)
+    b = TextBuffer([], [], [], [], False, 0, False, False, 0)
     b.load("")
     return b

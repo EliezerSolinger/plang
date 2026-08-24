@@ -11,11 +11,11 @@ def ps_heapify(l: *PsList, kind: i32)
 # what changes is who may use them.
 def ps_buffer_transfer(ctx: *PsCtx, b: *PsBuffer)
 # a typed WINDOW over the same bytes, with no copy (18.3): what comes back is a
-# `list<T>` in every way that reads — len, index, iterate, slice — and refuses
+# `List<T>` in every way that reads — len, index, iterate, slice — and refuses
 # the ways that would need to own the memory
 def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, line: i32) -> *PsList
-# Parse into `any` (39.2): an object becomes `dict<str, any>`, an array a
-# `list<any>`, and the leaves are str, float, bool and None. There is no schema
+# Parse into `any` (39.2): an object becomes `Dict<str, any>`, an array a
+# `List<any>`, and the leaves are str, float, bool and None. There is no schema
 # and no type to declare — reading it back is `as`, which checks (55.2), and
 # that is the whole contract.
 def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *PsObj

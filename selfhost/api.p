@@ -412,15 +412,15 @@ private def p_type(b: *StrBuf, t: *PsType):
                 b->printf("%s.", t->qual)
             b->puts(t->name if t->name != None else "?")
         case PT_LIST:
-            b->puts("list<")
+            b->puts("List<")
             p_type(b, t->inner)
             b->putc('>')
         case PT_SET:
-            b->puts("set<")
+            b->puts("Set<")
             p_type(b, t->inner)
             b->putc('>')
         case PT_DICT:
-            b->puts("dict<")
+            b->puts("Dict<")
             p_type(b, t->key)
             b->puts(", ")
             p_type(b, t->inner)
@@ -455,15 +455,15 @@ private def p_type(b: *StrBuf, t: *PsType):
             p_type(b, t->inner)
             b->putc('>')
         case PT_FILE:
-            b->puts("file")
+            b->puts("File")
         case PT_BUFFER:
-            b->puts("buffer")
+            b->puts("Buffer")
         case PT_CONN:
-            b->puts("socket")
+            b->puts("Socket")
         case PT_PROC:
             b->puts("proc")
         case PT_TIMER:
-            b->puts("timer")
+            b->puts("Timer")
         case PT_DYN:
             b->puts("dyn ")
             b->puts(t->name if t->name != None else "?")

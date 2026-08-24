@@ -101,7 +101,7 @@ struct Index:
     cur_file: str     # which file `scan` is walking right now ("" = the buffer)
     cur_line: int     #   ... and which line the declaration it is adding is on
 
-    def is_stale(self, b: core.Buffer) -> bool:
+    def is_stale(self, b: core.TextBuffer) -> bool:
         return not self.ready or self.version != b.version
 
     def sym(self, i: int) -> CSym:
@@ -218,13 +218,13 @@ struct Index:
             i += 1
         return imports
 
-    def imports_of(self, b: core.Buffer) -> list<str>:
+    def imports_of(self, b: core.TextBuffer) -> list<str>:
         """The `.ph` files the buffer imports, without indexing anything — for
         whoever CAN read files (the event loop) to fetch the texts."""
         probe = Index([], [], 0, False, "", 0)
         return probe.scan(b.text(), False)
 
-    def build(self, b: core.Buffer, extra: list<Source>):
+    def build(self, b: core.TextBuffer, extra: list<Source>):
         """Builds from the buffer and from whatever files came with it."""
         self.syms = []
         self.vars = []

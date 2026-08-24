@@ -60,7 +60,7 @@ struct Hl:
         if line >= 0 and line < len(self.lines) and length > 0:
             self.lines[line].append(HlSpan(col, length, cls))
 
-    def update(self, b: core.Buffer):
+    def update(self, b: core.TextBuffer):
         """Relexes the WHOLE file when the buffer's version changed.
 
         It is what the editor in P does, and it is called once per FRAME (from

@@ -307,12 +307,12 @@ struct PsErr:
     tr_name: const *char[192]
     tr_ty: const *PsTy[192]
 
-# `list<T>` (27.3). Two objects: the header, which is what a variable points at,
+# `List<T>` (27.3). Two objects: the header, which is what a variable points at,
 # and the backing storage, which grows by being replaced. Splitting them is what
 # lets the list grow while every reference to it stays valid — the header does
 # not move when the storage does.
 #
-# Elements are stored INLINE, by value: `list<Vec>` is a flat array of 24-byte
+# Elements are stored INLINE, by value: `List<Vec>` is a flat array of 24-byte
 # records with no pointer per element (52.1), which is the whole reason `record`
 # is a value type.
 struct PsArr:
@@ -340,12 +340,12 @@ struct PsList:
     raw: *char
     owner: *PsBuffer
 
-# `dict<K,V>` and `set<T>` (4.x/38.1). Open addressing with linear probing, and
+# `Dict<K,V>` and `Set<T>` (4.x/38.1). Open addressing with linear probing, and
 # the key stored BY VALUE — the key is copied on insert, which is what makes
 # "key by CONTENT" mean something: whatever the caller does to its copy
 # afterwards cannot reach the one in the table.
 #
-# A `set<T>` is this with a zero-sized value, so there is one implementation and
+# A `Set<T>` is this with a zero-sized value, so there is one implementation and
 # one place for the collector to learn about.
 enum PsKeyKind:
     PS_K_BITS = 0      # int, bool, enum: hash the bits

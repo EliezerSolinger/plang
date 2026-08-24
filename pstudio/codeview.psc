@@ -95,7 +95,7 @@ def pair_is_close(ch: str) -> bool:
 
 
 struct CodeView:
-    buf: core.Buffer
+    buf: core.TextBuffer
     hl: hlm.Hl
     index: cmp.Index
     path: str              # "" = a loose buffer, with no file
