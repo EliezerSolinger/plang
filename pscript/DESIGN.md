@@ -6360,6 +6360,34 @@ O preço, concreto: o `hl.p` do editor recebe o texto outra vez em cada chamada 
 vez de o guardar entre elas. Como o `CStr` é um endereço e não uma cópia, isso
 custa zero — o que custaria era guardar.
 
+### 141.6 — a MECÂNICA fica em ABERTO, e o bloqueio tem nome
+
+O que está decidido acima é a FORMA do contrato: um trait, dentro da definição,
+três promessas. **Como é que isto funciona por baixo não está decidido**, e fica
+dito para o documento não se ler como pronto a implementar.
+
+Medido: hoje uma função livre em P com tipos escalares **já atravessa** para o
+pscript; uma que mencione uma struct de P não — e o erro é `unknown function`,
+porque o que falta não é a função, é o **tipo não ter nome do lado de cima**.
+
+E o bloqueio é este:
+
+> **Objecto dentro de objecto.**
+
+Uma struct `Foreign` só com escalares é fácil: a fronteira copia-a para um bloco
+malloc'd, o `release` liberta-a, e o coletor não percorre nada — que é
+literalmente a promessa. Assim que ela tem **um ponteiro para outro objecto**,
+tudo isso cai: o `release` teria de libertar em cadeia (e não pode saber se o de
+dentro é partilhado), e se o de dentro for um valor coletado o coletor teria de
+percorrer memória do P — que é exactamente o que o `Foreign` prometia não ser
+preciso.
+
+A única resposta real que alguém encontrou para isto é o autor escrever a função
+de percurso à mão — é o `tp_traverse` do CPython, e é a razão por que escrever uma
+extensão em C para o Python é o que é. Toda a API de embebimento acaba aqui.
+
+Portanto: **parado de propósito**, e não por falta de ideia.
+
 ### 141.4 — o preço, dito antes de doer
 
 O compilador **não consegue verificar** nenhuma destas promessas. Ele regista-as.
