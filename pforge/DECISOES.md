@@ -204,3 +204,5 @@ Três decisões que estão no código e merecem estar aqui:
 | **a suíte do pscript como grafo** | 585 arestas · 72 s do zero · 6,6 s sem mudança |
 | **o `build.ninja` exportado** | 639 regras, determinista |
 | o runtime como OBJETO | 6 compilações em vez de 600 (uma por programa) |
+
+- **O que o `.pak` embrulha** (2026-08-24) — tudo menos uma lista NEGRA fixa; sem `include`/`exclude`, ao contrário do Cargo. E nenhum pacote publicado embebe um binário hoje: o caminho nunca foi exercido. Ver `PACOTES.md`.

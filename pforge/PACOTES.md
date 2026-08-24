@@ -722,3 +722,71 @@ build seguinte). AVISO — entrada declarada e nunca lida, aresta que nunca fica
 pronta, saída que ninguém consome. São os avisos que pegam **declaração errada
 antes de ela virar build velho**, que é o único modo de falhar que esta
 investigação passou o tempo todo tentando evitar.
+
+---
+
+## O que o `.pak` embrulha — dois achados ao responder a uma pergunta (2026-08-24)
+
+> *"comparando um pak com um jar ou com um python, um pacote consegue englobar
+> várias coisas? e pastas dentro? ele suporta empacotar coisas como um `.bin` pro
+> embed?"*
+
+A resposta às três é **sim**, e vale escrever o que o `pack()` faz porque a
+maneira como ele decide é que traz os achados.
+
+Ele percorre a árvore inteira, recursivamente, e insere as entradas de directório
+intermédias de propósito — *"um `tar` que extrai sem elas depende do comportamento
+do extractor, e este formato não depende da bondade dos outros"*. É **reprodutível
+por desenho**: a data é zero e o modo é fixo, porque o hash do tarball É a
+identidade do pacote no índice e no lock. O preço está escrito lá: o bit de
+execução não sobrevive.
+
+E um `.bin` para o `embed` entra, porque a exclusão é uma lista fixa e não o
+menciona:
+
+```
+dirs:     build .git .hg .svn .verify __pycache__ node_modules .idea .vscode
+sufixos:  .o .a .so .dylib .dll .exe .tar .sig .orig .rej .swp ~
+nomes:    .DS_Store  pack.lock  core
+```
+
+### Achado 1 — é uma lista NEGRA, e não há `include`/`exclude`
+
+Um pacote embrulha **tudo** o que estiver na pasta menos essa lista. Um `.env`,
+uma fixture de 200 MB, um dump de base de dados que alguém deixou lá — vão todos,
+e ninguém vê antes de o tarball estar publicado e hasheado (e uma versão
+publicada é IMUTÁVEL, o que torna o engano permanente).
+
+O Cargo tem `include`/`exclude` no `Cargo.toml`; o Python tem `MANIFEST.in`. E há
+uma ironia interna: **este repositório já decidiu, noutro sítio, que a lista
+branca é a única que não envelhece** — é o argumento escrito no
+`tests/decouple.sh`, *"uma lista negra nomeia o que não pode entrar, e um módulo
+inventado no mês que vem com outro nome passa-lhe ao lado"*. O empacotador faz o
+contrário do que o portão do editor faz.
+
+**Em aberto, com as opções nomeadas:**
+
+1. `include`/`exclude` no `pack.json` (o modelo do Cargo);
+2. manter a lista negra e o `publish` **dizer o que embrulhou** — quantos
+   ficheiros, que tamanho, e os cinco maiores. É o padrão de "tornar o custo
+   visível" que o resto do repositório já usa, e custa cinco linhas;
+3. um `pforge publish --list` que mostra sem publicar.
+
+A (2) é a mais barata e apanha o caso que interessa — alguém vê "312 ficheiros,
+47 MB" e pára. A (1) é a que resolve de verdade.
+
+### Achado 2 — nenhum pacote publicado embebe um binário, hoje
+
+O `embed`/`embed_bytes` só é usado no `pstudio` (o atlas da fonte, os ícones) e no
+`selfhost` (o prelúdio do pscript) — e **nenhum dos dois é um pacote**.
+
+Ou seja: o caminho *deve* funcionar — o pacote é extraído para
+`build/pkg/<nome>-<versão>-<hash>/` e o `embed` resolve relativo à fonte, que
+está lá dentro — mas **nunca foi exercido**. É a diferença entre "não há razão
+para falhar" e "sabemos que não falha", e é exactamente o género de coisa que só
+se descobre quando alguém publica.
+
+**O teste que falta** é pequeno e cabe no `tests/repo.sh`, que já faz a volta
+completa `publish → update → add → install → compilar e CORRER`: um pacote com um
+`.bin` ao lado de um `.p` que faz `embed_bytes`, e o programa a imprimir o que
+leu de lá.
