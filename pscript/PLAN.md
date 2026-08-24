@@ -2154,9 +2154,9 @@ numéricos com tamanho.
 mensagens do compilador; **à mão** os `.md`, que é a lição que a tradução para
 inglês custou dois erros a aprender.
 
-Ordem dentro da fase: primeiro o compilador aceita os dois nomes (o velho com um
-aviso), depois a árvore migra, depois o velho sai. Sem isso, o commit do meio não
-compila.
+Três commits, e cada um compila (139.1): o compilador aceita os dois nomes com um
+`-W` no velho → a árvore migra → o velho deixa de existir. Os dois coexistem
+durante exactamente um commit.
 
 **Fica de pé:** a linguagem com uma regra em vez de um hábito, e o `verify` verde.
 
@@ -2189,6 +2189,11 @@ com um caso que abre e larga dez mil blocos.
 
 `c.read_into(buf, off, n)`, `c.write_from(buf, off, n)`, e `readv`/`writev` para
 quem tem várias fatias. `f.read_all()` e `R.fetch()` devolvem `bytes`.
+
+**O que NÃO muda no ficheiro:** `text()` e `readlines()` ficam como estão —
+devolvem `str` e `List<str>`, são conveniência de texto e não I/O de bytes
+(135.9). E o `read_all()` não ganha tecto: o tamanho é sabível, e quem não quer
+trazer o ficheiro para a memória usa o `os.mmap` (135.10).
 `b.freeze()` entrega o bloco com zero cópia e invalida o buffer (18.2).
 
 **O `c.read(n)` deixa de existir** — porque agora há uma resposta melhor para
@@ -2214,7 +2219,8 @@ F10 do pstudio destrancou:
 
 ## F2 — o `Mapping` (137)
 
-`os.mmap(path, mode)` devolve um `Mapping`: fecha com `with`, fatia-se em `bytes`
+`os.mmap(p)` mapeia o ficheiro inteiro e `os.mmap(p, off, n)` uma região (137.3).
+Devolve um `Mapping`: fecha com `with`, fatia-se em `bytes`
 sem copiar, e tem as opções que o sistema dá — `advise`, `sync`, `lock`,
 `populate`.
 
@@ -2249,7 +2255,9 @@ A ponte é o `CBytes` que já existe: um `Mapping` e um `Buffer` atravessam para
 
 `os.pread`/`os.pwrite` (posicional, sem `seek` — é o que torna o acesso
 concorrente a partir de workers seguro), `os.stat` de uma vez em vez de seis
-chamadas, e `os.listdir` a PERCORRER em vez de devolver a lista toda.
+chamadas, `os.listdir` a PERCORRER em vez de devolver a lista toda, e **`f.size()`**
+— um `fstat` no descritor, para um ficheiro já aberto saber o seu tamanho sem
+guardar o caminho (135.10).
 
 **Fica de pé:** um `pforge` que anda numa árvore grande sem construir a lista
 inteira primeiro.

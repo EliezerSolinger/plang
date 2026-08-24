@@ -5849,6 +5849,22 @@ para quem quer ficar com os dois.
 **135.5 — Todas as operações valem nos dois.** `len`, indexar, iterar, comparar,
 `str()` para descodificar. O código que migra muda a ASSINATURA e mais nada.
 
+**135.9 — O que muda num FICHEIRO, e o que não muda.** `text()` e `readlines()`
+**ficam** — devolvem `str` e `List<str>`, não são I/O de bytes, são conveniência
+de texto, e ninguém os quer trocar por um buffer. Muda só o que devolvia bytes:
+`read_all()` passa a dar `bytes`, e `read(n)` vira `read_into(buf, off, n)`.
+
+**135.10 — O `read_all()` não tem tecto, e não precisa: o tamanho é sabível.**
+Ler um ficheiro de 4 GB aloca 4 GB, e está certo — foi o que se pediu. Um tecto
+seria um número mágico que alguém um dia teria de aumentar por uma razão
+legítima, e a alternativa a trazer tudo para a memória não é ler menos, é o
+`os.mmap`, que é literalmente a ferramenta de "quero o ficheiro sem o trazer".
+
+O que faltava era saber o tamanho de um ficheiro **já aberto**: o `path.getsize`
+existe, mas obriga a guardar o caminho depois de se ter o `File`. Entra
+**`f.size()`** na F4 — um `fstat` no descritor, sem segunda procura do caminho e
+sem a janela entre o `stat` e a leitura em que o ficheiro pode mudar.
+
 **135.6 — Onde o `List<u8>` continua a ser a resposta certa: CONSTRUIR e
 MEXER.** Acrescentar, inserir, ordenar, remover — é uma lista, e faz isso bem. O
 `bytes` é o que ATRAVESSA: I/O, hash, uma fronteira para P. `bytes(xs)` e
@@ -5976,6 +5992,12 @@ O nome foi decidido por eliminação: `Map` colide com a estrutura de dados
 Map"*), `MappedMemory` foi proposto e ficou como `Mapping` — que a **regra dos
 nomes da 139** depois confirmou em maiúscula, por ser uma coisa e não um valor.
 
+**137.3 — Mapeia o ficheiro inteiro, ou uma REGIÃO.** `os.mmap(p)` é o caso
+comum; `os.mmap(p, off, n)` lê um membro de um arquivo enorme sem mapear os
+outros gigabytes. É o que o `FileChannel.map` do Java também dá, e custa dois
+argumentos. (Uma fatia `m[off:off+n]` dá a região *dentro* de um mapa que já
+existe; o que isto dá é não mapear o resto de todo.)
+
 O finalizador da 136 fica como REDE, não como plano: o `with` é que fecha.
 
 ```python
@@ -6055,6 +6077,15 @@ minúsculos; `Task<T>`, `Worker<T>`, `Error` maiúsculos. A regra que a arruma:
 E repara no que ela faz de graça: separa o `bytes` (imutável, coletado, um valor)
 do `Buffer` (mutável, partilhado, fecha-se) — a distinção da 135.3 passa a estar
 na própria grafia.
+
+**139.1 — A travessia é em TRÊS commits, e cada um compila.** O compilador passa
+a aceitar os dois nomes, com um `-W` no velho; a árvore migra; o velho deixa de
+existir. Sem isso, o commit do meio é um estado em que nada compila — e um commit
+que não compila não se revê, porque uma falha esconde as outras.
+
+Os dois nomes coexistem durante exactamente um commit. Deixá-los coexistir para
+sempre seria a linguagem ficar com duas grafias para tudo, que é a coisa que a
+regra queria acabar.
 
 **Medido: ~1 150 sítios** (`list<` 893, `dict<` 213, `set<` 46, `socket`/`buffer`
 14). É mecânico e é código, não prosa, portanto um `sed` é legítimo — a regra de
