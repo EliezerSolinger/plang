@@ -173,6 +173,9 @@ def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask
 def ps_conn_write(ctx: *PsCtx, c: *PsConn, s: *PsStr) -> *PsTask
 def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask
 def ps_conn_close(ctx: *PsCtx, c: *PsConn)
+# F8: `os.spawn_pty` is a layer up and builds a Conn of its own
+def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
+def ps_sock_nonblock(fd: int)
 def ps_conn_port(c: *PsConn) -> i64
 def ps_file_write(ctx: *PsCtx, f: *PsFile, s: *PsStr, file: const *char, line: i32) -> i64
 def ps_file_read(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsStr
@@ -214,6 +217,9 @@ def ps_dyn_data(ctx: *PsCtx, d: *PsDyn) -> *void
 # `xs.insert(i, v)` returns where to write; `remove_at` drops one element
 def ps_list_has(ctx: *PsCtx, l: *PsList, needle: const *void, kind: i32) -> bool
 # 108: definida nos três corpos de plataforma do multiplexador
+# a descriptor about to be closed leaves the interest set: numbers are REUSED,
+# and a stale entry made the next socket with that number never be watched
+def ps_mux_forget(ctx: *PsCtx, fd: int)
 def ps_mux_free(ctx: *PsCtx)
 # 110: quantas threads de I/O o programa quer (antes da primeira operação)
 def ps_pool_want(ctx: *PsCtx, n: i64, file: const *char, line: i32)

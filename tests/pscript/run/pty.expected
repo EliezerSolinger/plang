@@ -1,0 +1,9 @@
+pid>0 True
+[yes-a-tty]
+[40 100]
+crlf True
+stdin True
+resized True
+missing program survived
+empty refused: True
+pty-ok

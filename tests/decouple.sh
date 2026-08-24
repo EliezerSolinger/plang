@@ -106,7 +106,7 @@ done
 
 # 3. the IDE and the engine are on the OTHER side. Without this the gate would
 #    pass on the day somebody deleted the IDE.
-for f in pstudio/ide.psc pstudio/config.psc packages/pforge/build.psc packages/pforge/graph.psc packages/pforge/manifest.psc; do
+for f in pstudio/ide.psc pstudio/config.psc pstudio/terminal.psc packages/pforge/build.psc packages/pforge/graph.psc packages/pforge/manifest.psc; do
     if echo "$studio" | grep -qx "$f"; then ok=$((ok+1))
     else echo "  FAIL pstudio does not read '$f' — is there still an IDE?"; fail=$((fail+1)); fi
     if echo "$pcode" | grep -qx "$f"; then echo "  FAIL pcode reads '$f'"; fail=$((fail+1)); else ok=$((ok+1)); fi

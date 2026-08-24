@@ -4062,6 +4062,27 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             }
             return sc0;
         }
+        if (isos0 && strcmp(of0, "spawn_pty") == 0) {
+            Expr *pt0 = PsLow_call_rt(self, "ps_os_spawn_pty", e->pos);
+            PsLow_push_arg(self, pt0, PsLow_ctx_arg(self, e->pos));
+            size_t i;
+            for (i = 0; i < 3; i += 1) {
+                PsLow_push_arg(self, pt0, PsLow_expr(self, e->args[i]));
+            }
+            PsLow_pos_args(self, pt0, e->pos);
+            self->allocs = 1;
+            self->raised = 1;
+            return pt0;
+        }
+        if (isos0 && (strcmp(of0, "pty_resize") == 0 || strcmp(of0, "pty_pid") == 0)) {
+            Expr *pz0 = PsLow_call_rt(self, Arena_printf(self->a, "ps_os_%s", of0), e->pos);
+            PsLow_push_arg(self, pz0, PsLow_ctx_arg(self, e->pos));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, pz0, PsLow_expr(self, e->args[i]));
+            }
+            return pz0;
+        }
         if (isos0 && strcmp(of0, "exec") == 0) {
             Expr *ec0 = PsLow_call_rt(self, "ps_os_exec", e->pos);
             PsLow_push_arg(self, ec0, PsLow_ctx_arg(self, e->pos));
@@ -7184,12 +7205,21 @@ static void PsLow_lower_try(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         Vec_pStmt cb;
         Vec_pStmt_init(&cb);
         if (s->name != NULL && block_uses(s->catch_block, s->name)) {
-            Stmt *bind = st_new(self->a, ST_VAR, s->pos);
-            bind->name = ps_cname(self->a, s->name);
-            bind->type = ty_ptr(self->a, ty_name(self->a, "PsErr"));
-            bind->init = PsLow_call_rt(self, "ps_take_exc", s->pos);
-            PsLow_push_arg(self, bind->init, PsLow_ctx_arg(self, s->pos));
-            Vec_pStmt_push(&cb, bind);
+            Expr *take = PsLow_call_rt(self, "ps_take_exc", s->pos);
+            PsLow_push_arg(self, take, PsLow_ctx_arg(self, s->pos));
+            if (PsLow_in_frame(self, s->name)) {
+                Stmt *fb = st_new(self->a, ST_ASSIGN, s->pos);
+                fb->lhs = PsLow_async_field(self, s->name, s->pos);
+                fb->op = TK_ASSIGN;
+                fb->rhs = take;
+                Vec_pStmt_push(&cb, fb);
+            } else {
+                Stmt *bind = st_new(self->a, ST_VAR, s->pos);
+                bind->name = ps_cname(self->a, s->name);
+                bind->type = ty_ptr(self->a, ty_name(self->a, "PsErr"));
+                bind->init = take;
+                Vec_pStmt_push(&cb, bind);
+            }
         } else {
             Stmt *clr = st_new(self->a, ST_EXPR, s->pos);
             clr->expr = PsLow_call_rt(self, "ps_take_exc", s->pos);

@@ -2936,6 +2936,46 @@ struct PsSema:
                 if sa == None or sa->kind != PT_LIST or sa->inner == None or sa->inner->kind != PT_STR:
                     fatal_at(self->file, e->args[0]->pos, "os.spawn() takes a list<str> — o programa e os argumentos, um por elemento (1.6) — found %s", ps_type_str(self->a, sa))
                 return ps_type(self->a, PT_INT, e->pos)
+            if isos and strcmp(of, "spawn_pty") == 0:
+                # F8: the fourth case. `run` waits, `exec` becomes the child,
+                # `spawn` launches and moves on — and this one gives the child a
+                # TERMINAL, which is what makes an interactive program behave
+                # the way it does in a shell: line editing, colours, a prompt,
+                # and a SIGINT that reaches it.
+                #
+                # What comes back is a `Conn`, the same type a socket is. That is
+                # the decision: `read`, `write` and `close` on it are already
+                # written, already awaitable and already polled by the scheduler
+                # instead of blocking a thread, and a terminal is a descriptor
+                # with a child on the other end — which is what a socket is, with
+                # a machine on the other end.
+                if e->nargs != 3:
+                    fatal_at(self->file, e->pos, "os.spawn_pty() takes the command, the columns and the rows: os.spawn_pty([\"/bin/sh\"], 80, 24)")
+                pa: *PsType = self->check_expr(e->args[0])
+                if pa == None or pa->kind != PT_LIST or pa->inner == None or pa->inner->kind != PT_STR:
+                    fatal_at(self->file, e->args[0]->pos, "os.spawn_pty() takes a list<str> — the program and its arguments, one per element (1.6) — found %s", ps_type_str(self->a, pa))
+                self->check_want(e->args[1], ps_type(self->a, PT_INT, e->pos), "as colunas")
+                self->check_want(e->args[2], ps_type(self->a, PT_INT, e->pos), "as linhas")
+                return ps_type(self->a, PT_CONN, e->pos)
+            if isos and strcmp(of, "pty_resize") == 0:
+                # the one thing a terminal needs that a socket does not, so it is
+                # a function and not a method: a socket has no size, and giving
+                # every socket a `resize` would be lying about what one is
+                if e->nargs != 3:
+                    fatal_at(self->file, e->pos, "os.pty_resize() takes the terminal, the columns and the rows")
+                pr: *PsType = self->check_expr(e->args[0])
+                if pr == None or pr->kind != PT_CONN:
+                    fatal_at(self->file, e->args[0]->pos, "os.pty_resize() takes what os.spawn_pty() gave, found %s", ps_type_str(self->a, pr))
+                self->check_want(e->args[1], ps_type(self->a, PT_INT, e->pos), "as colunas")
+                self->check_want(e->args[2], ps_type(self->a, PT_INT, e->pos), "as linhas")
+                return ps_type(self->a, PT_VOID, e->pos)
+            if isos and strcmp(of, "pty_pid") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "os.pty_pid() takes what os.spawn_pty() gave")
+                pp: *PsType = self->check_expr(e->args[0])
+                if pp == None or pp->kind != PT_CONN:
+                    fatal_at(self->file, e->args[0]->pos, "os.pty_pid() takes what os.spawn_pty() gave, found %s", ps_type_str(self->a, pp))
+                return ps_type(self->a, PT_INT, e->pos)
             if isos and (strcmp(of, "kill") == 0 or strcmp(of, "alive") == 0):
                 if e->nargs != 1:
                     fatal_at(self->file, e->pos, "os.%s() takes the pid that os.spawn() gave", of)
@@ -3787,6 +3827,11 @@ struct PsSema:
             ns->sym.add("spawn")
             ns->sym.add("kill")
             ns->sym.add("alive")
+            # F8: o quarto caso — um filho num TERMINAL. O que volta é o mesmo
+            # `Conn` de um socket, então `read`, `write` e `close` já existem.
+            ns->sym.add("spawn_pty")
+            ns->sym.add("pty_resize")
+            ns->sym.add("pty_pid")
         elif strcmp(name, "path") == 0:
             ns->sym.add("join")
             ns->sym.add("dirname")

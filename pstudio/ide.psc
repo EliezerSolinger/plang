@@ -22,6 +22,8 @@ import shell as sh_mod
 import icon_ids as ico
 import complete as cmp
 import config as cfg
+import terminal as trm
+import sys
 import core
 import path
 
@@ -100,6 +102,16 @@ struct Ide:
     build_bar: int        # a WK_PROGRESS, because a LENGTH is seen and a number is read
     build_list: int       # the edges, one row each, the failing ones clickable
     tb_target: int        # the toolbar button that says which target `Build` builds
+    # F8: the terminal. The GRID is the editor's — it is a parser and a screen,
+    # and neither of those needs to wait for anything. What has to wait is the
+    # pseudo-terminal on the other end, so that belongs to the driver and what
+    # is here is three requests.
+    term: trm.Term
+    term_node: int
+    term_live: bool
+    want_term_cmd: list<str>   # [] = nothing to start
+    want_term_in: str          # what the keyboard typed, on its way to the child
+    want_term_stop: bool
     # `.pstudio.json`, read once by the driver and written back when a pane moves
     conf: cfg.Config
     want_conf_save: bool
@@ -153,6 +165,59 @@ struct Ide:
             self.sh.u.set_visible(self.sh.dock, True)
             self.conf.dock_open = True
         self.dock_show(i)
+
+    # ---------- F8: the terminal ----------
+
+    def open_terminal(self):
+        """A shell, in the dock. `Run` uses the same door with another command —
+        which is the point of `Run` running in a terminal at all: a program with
+        a real TTY behaves the way it behaves in a shell, and one without it
+        does not."""
+        self.dock_open_at(PAGE_TERMINAL)
+        self.sh.u.focus_set(self.term_node)
+        if not self.term_live:
+            sh_env = os_env_shell()
+            self.want_term_cmd = [sh_env]
+        self.sh.dirty_ui = True
+
+    def run_in_terminal(self, cmd: list<str>):
+        self.dock_open_at(PAGE_TERMINAL)
+        self.sh.u.focus_set(self.term_node)
+        self.want_term_cmd = cmd
+        self.sh.dirty_ui = True
+
+    def stop_terminal(self):
+        self.want_term_stop = True
+        self.sh.dirty_ui = True
+
+    def term_input(self, ev: pui.Event) -> bool:
+        """The keyboard, as the bytes a program on the other end expects.
+
+        This is the half of a terminal nobody remembers until an arrow key
+        prints `^[[A` into somebody's shell."""
+        if ev.kind == pui.EV_WHEEL:
+            self.term.scroll_view(ev.wheel * 3)
+            self.sh.dirty_ui = True
+            return True
+        if ev.kind == pui.EV_MOUSE_DOWN:
+            self.sh.u.focus_set(self.term_node)
+            return True
+        if ev.kind == pui.EV_TEXT:
+            self.want_term_in += trm.key_bytes(0, ev.mods, ev.cp)
+            return True
+        if ev.kind == pui.EV_KEY:
+            if not self.term_live:
+                return False
+            b = trm.key_bytes(ev.key, ev.mods, 0)
+            if len(b) == 0:
+                return False
+            # anything typed brings the view back to the bottom: a shell that
+            # answered a key somewhere above what is on screen is a shell nobody
+            # can follow
+            self.term.scroll_view(-self.term.view)
+            self.want_term_in += b
+            return True
+        return False
 
     # ---------- F7: the Build panel ----------
 
@@ -436,6 +501,7 @@ def new_ide(sh: sh_mod.Shell) -> Ide:
     ide = Ide(sh, "", False, False, False, "", False, False, [], 0, 0, "",
               "", 0, 0, 0, False, "", "",
               -1, [], -1, "", -1, -1, 0, [], [], -1, -1, -1,
+              trm.new_term(80, 24), -1, False, [], "", False,
               cfg.default_config(), False)
     sh.add_commands(ide_commands(ide))
     build_shell(ide)
@@ -458,6 +524,8 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
         sh_mod.Command("Toggle Outline", lambda s: ide.toggle_outline(), None),
         sh_mod.Command("Toggle Panel", lambda s: ide.toggle_dock(), None),
         sh_mod.Command("Toggle Toolbar", lambda s: ide.toggle_toolbar(), None),
+        sh_mod.Command("Terminal", lambda s: ide.open_terminal(), None),
+        sh_mod.Command("Terminal: Stop", lambda s: ide.stop_terminal(), None),
     ]
 
 
@@ -477,14 +545,16 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
 # still labels, and F9 and F10 replace them.
 const PAGE_BUILD: int = 0
 const PAGE_PROBLEMS: int = 1
+const PAGE_TERMINAL: int = 4
 
 
 def dock_pages() -> list<str>:
-    return ["Build", "Problems", "Tests", "Packages"]
+    return ["Build", "Problems", "Tests", "Packages", "Terminal"]
 
 
 def dock_icons() -> list<int>:
-    return [ico.ICO_HAMMER, ico.ICO_TRIANGLE_ALERT, ico.ICO_FLASK_CONICAL, ico.ICO_PACKAGE]
+    return [ico.ICO_HAMMER, ico.ICO_TRIANGLE_ALERT, ico.ICO_FLASK_CONICAL,
+            ico.ICO_PACKAGE, ico.ICO_TERMINAL]
 
 
 private def tool(ide: Ide, icon: int, command: str) -> int:
@@ -541,7 +611,26 @@ def build_shell(ide: Ide):
     u.set_expand(ide.dock_body, True, True)
     names = dock_pages()
     for i in range(len(names)):
-        if i == PAGE_BUILD:
+        if i == PAGE_TERMINAL:
+            # The one widget that draws itself DURING the draw. An 80x24 grid
+            # with a background per cell is 1 920 rectangles plus 1 920 glyphs,
+            # and retaining that list between frames would cost more than the
+            # text it shows. It is still the painter it is handed — see
+            # `set_paint`.
+            tn = u.custom(ide.dock_body, None)
+            u.set_expand(tn, True, True)
+            u.set_focusable(tn, True)
+            u.set_custom(tn,
+                         lambda u2, id: pui.Size(u2.cell_w * 20, u2.cell_h * 4),
+                         None,
+                         lambda u2, id, ev: ide.term_input(ev),
+                         None)
+            u.set_paint(tn, lambda u2, id, r, pt: trm.draw(
+                ide.term, pt, r, u2.cell_w, u2.cell_h, u2.theme,
+                u2.focus_get() == id, True))
+            ide.term_node = tn
+            ide.dock_labels.append(tn)
+        elif i == PAGE_BUILD:
             # the Build page is REAL since F7; the others still say "empty".
             # Whatever a page is made of, ONE node per page goes in the list, so
             # `dock_show` hides one thing each and never learns what they are.
@@ -655,3 +744,13 @@ def snapshot_config(ide: Ide) -> cfg.Config:
     c.dock_open = u.is_visible(ide.sh.dock)
     c.target = ide.want_build
     return c
+
+
+def os_env_shell() -> str:
+    """The user's shell, or the one every system has.
+
+    `SHELL` and not a guess: somebody who chose `fish` typed that choice
+    somewhere, and starting `bash` for them would be this program having an
+    opinion about it."""
+    v = sys.env.get("SHELL", "")
+    return v if len(v) > 0 else "/bin/sh"

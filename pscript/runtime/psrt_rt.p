@@ -185,8 +185,8 @@ private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
 private def ps_io_run(w: *PsWork)
 private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool
 private def ps_sigpipe_noop(sig: int)
-private def ps_sock_nonblock(fd: int)
-private def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
+def ps_sock_nonblock(fd: int)
+def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
 private def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool
 private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
 private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask
@@ -1070,7 +1070,7 @@ private def ps_sigpipe_noop(sig: int):
 
 private g_sigpipe_done: i32 = 0
 
-private def ps_sock_nonblock(fd: int):
+def ps_sock_nonblock(fd: int):
     if g_sigpipe_done == 0:
         g_sigpipe_done = 1
         signal(SIGPIPE, ps_sigpipe_noop)
@@ -1104,11 +1104,15 @@ private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *Ps
     ps_park(ctx, t)
     return t
 
-private def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
+# Not private since F8: `os.spawn_pty` builds one of these too, and it lives a
+# layer up (a pseudo-terminal is a PROCESS thing, and that is where the argv
+# conversion and the fork already are).
+def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
     c: *PsConn = (*PsConn)(ps_alloc(ctx, sizeof(PsConn), PS_TY_CONN))
     c->fd = fd
     c->is_open = 1 if fd >= 0 else 0
     c->listening = listening
+    c->pid = 0
     return c
 
 def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
@@ -1170,6 +1174,7 @@ def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask:
     w: *PsWork = ps_work_new(PS_IO_RECV)
     w->want = PS_W_BYTES
     w->fd = c->fd
+    w->pty = 1 if c->pid > 0 else 0
     w->events = i16(POLLIN)
     w->n = usize(n if n > 0 else 0)
     w->buf = (*char)(malloc(w->n if w->n > 0 else usize(1)))
@@ -1200,9 +1205,19 @@ def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask:
 
 def ps_conn_close(ctx: *PsCtx, c: *PsConn):
     if c != None and c->is_open != 0:
+        ps_mux_forget(ctx, c->fd)      # BEFORE the close, so the DEL is valid
         close(c->fd)
         c->is_open = 0
         c->fd = -1
+        # F8: a terminal has a child on the other end. Closing the master sends
+        # it a HUP, and then somebody has to COLLECT it — without this, a
+        # development loop that reruns a program every ten seconds fills the
+        # process table in an afternoon.
+        if c->pid > 0:
+            st: i32 = 0
+            kill(c->pid, SIGHUP)
+            waitpid(c->pid, &st, 0)
+            c->pid = 0
 
 # connect and DNS go to the POOL: `getaddrinfo` blocks, and a connect that
 # waits for a handshake on the other side of the world blocks with it
@@ -1567,15 +1582,25 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             w->rc = i64(fd2)
             return True
         case PS_IO_RECV:
-            got: i64 = i64(recv(w->fd, w->buf, w->n, 0))
+            # `read` and not `recv`, since F8: they are the same call for a
+            # socket with no flags, and `recv` on a pseudo-terminal fails with
+            # "not a socket". Using the general one is what lets a terminal BE a
+            # socket to everything above this line, which is the whole design.
+            got: i64 = i64(read(w->fd, w->buf, w->n))
             if got < 0:
-                w->err = 1
-                w->n = 0
+                if w->pty != 0:
+                    # on a master, the read after the last slave closes FAILS
+                    # rather than returning zero. It is the end, and the layers
+                    # above already know what an empty answer means (79.2).
+                    w->n = 0
+                else:
+                    w->err = 1
+                    w->n = 0
             else:
                 w->n = usize(got)   # 79.2: zero means the other side closed
             return True
         case PS_IO_SEND:
-            put: i64 = i64(send(w->fd, w->buf + w->off, w->n - w->off, 0))
+            put: i64 = i64(write(w->fd, w->buf + w->off, w->n - w->off))
             if put < 0:
                 w->err = 1
                 return True
@@ -2606,6 +2631,26 @@ const if __PLANG_LINUX__:
 
     # one event loop per worker (22.3) means one of these per context, and a
     # worker that came and went must not leave a descriptor behind
+    # A descriptor that is about to be CLOSED leaves the set now.
+    #
+    # Closing removes it from the kernel's set on its own — but not from `ent`,
+    # and descriptor numbers are REUSED. The next socket got the same number,
+    # `ps_mux_want` found the stale entry, believed it was already being
+    # watched, and never added it: the read parked and never woke.
+    #
+    # Sockets are long-lived enough that nobody had met this. A terminal is
+    # opened and closed every time somebody runs something.
+    def ps_mux_forget(ctx: *PsCtx, fd: int):
+        if ctx->mux == None or fd < 0:
+            return
+        m: *PsMux = (*PsMux)(ctx->mux)
+        k: i32 = ps_mux_find(m, fd)
+        if k < 0:
+            return
+        epoll_ctl(m->efd, EPOLL_CTL_DEL, fd, None)
+        m->ent[k] = m->ent[m->n - 1]
+        m->n -= 1
+
     def ps_mux_free(ctx: *PsCtx):
         if ctx->mux == None:
             return
@@ -2626,6 +2671,12 @@ const if __PLANG_LINUX__:
         if m->n == 0:
             return
         got: int = epoll_wait(m->efd, m->out, m->n, ms)
+        # A wait can FAIL — a signal delivered while it sleeps is the ordinary
+        # way — and -1 walked straight off the end of the array, because a count
+        # is what the loop takes. It only ever showed up under a debugger, which
+        # is a tracer, which is a thing that interrupts syscalls.
+        if got < 0:
+            return
         for i in range(got):
             fd: int = m->out[i].data.fd
             k: i32 = ps_mux_find(m, fd)
@@ -2719,6 +2770,19 @@ elif __PLANG_MACOS__:
 
     private def ps_mux_collect(ctx: *PsCtx, m: *PsMux)
 
+    # see the note on the Linux twin: a closed descriptor has to leave `ent`,
+    # because the next one gets the same number
+    def ps_mux_forget(ctx: *PsCtx, fd: int):
+        if ctx->mux == None or fd < 0:
+            return
+        m: *PsMux = (*PsMux)(ctx->mux)
+        k: i32 = ps_mux_find(m, fd)
+        if k < 0:
+            return
+        ps_mux_change(m, fd, m->ent[k].events, False)
+        m->ent[k] = m->ent[m->n - 1]
+        m->n -= 1
+
     def ps_mux_free(ctx: *PsCtx):
         if ctx->mux == None:
             return
@@ -2745,6 +2809,8 @@ elif __PLANG_MACOS__:
             ts.tv_nsec = (i64(ms) % 1000) * 1000000
             tsp = &ts
         got: int = kevent(m->kq, None, 0, m->out, m->nout, tsp)
+        if got < 0:
+            return
         for i in range(got):
             fd: int = int(m->out[i].ident)
             k: i32 = ps_mux_find(m, fd)
@@ -2755,6 +2821,9 @@ else:
     # stays, because "the platform we have not met yet" still has to run.
     struct PsMux:
         unused: i32
+
+    def ps_mux_forget(ctx: *PsCtx, fd: int):
+        return          # `poll` is built fresh every wait: there is nothing stale
 
     def ps_mux_free(ctx: *PsCtx):
         return          # `poll` keeps no state of its own

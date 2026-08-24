@@ -1024,3 +1024,204 @@ E apanhou-se um defeito ao ligar o botão: o `Build` **apagava** o alvo escolhid
 antes de construir. Fazia-o desde sempre, e ninguém tinha reparado porque nada
 mostrava o alvo — com um botão que o diz e um ficheiro que o lembra, passava a
 ser uma mentira visível.
+
+---
+
+## O PTY: `os.spawn_pty` devolve um SOCKET (F8, 2026-08-24)
+
+A primitiva foi para o **runtime do pscript**, como o `os.run` tinha ido — não
+para o driver do pstudio. Assim qualquer programa em pscript a ganha, e ela ganha
+um segundo consumidor, que é o teste de que está no lugar certo.
+
+E devolve **o mesmo tipo que o `net.connect` devolve**. Essa é a decisão inteira:
+
+```python
+c = os.spawn_pty(["/bin/sh"], 80, 24)
+await c.write("ls\n")
+b = await c.read(4096)
+c.close()
+```
+
+`read`, `write` e `close` já estavam escritos, já eram aguardáveis, e já eram
+**sondados** pelo escalonador em vez de bloquearem uma thread. Um punho próprio
+teria duplicado a leitura aguardável, que é a parte difícil, e seria uma segunda
+coisa a saber. Um terminal é um descritor com um filho do outro lado; um socket é
+um descritor com uma máquina do outro lado.
+
+`os.pty_resize` é FUNÇÃO e não método porque um socket não tem tamanho, e dar a
+todos os sockets um `resize` seria mentir sobre o que um é.
+
+### O que não se usou, e porquê
+
+**Não** se usa `openpty()`: vive no `<pty.h>` no glibc e no `<util.h>` nos BSD, e
+o P não tem inclusão condicional. `posix_openpt` + `grantpt` + `unlockpt` +
+`ptsname` estão num só header nos dois — declarados à mão neste ficheiro, com os
+tipos da própria libc, que é o mesmo tratamento que o `popen`/`pclose` e o
+`execv`/`access` já tinham (e a razão está escrita lá: foi assim que a build do
+macOS partiu uma vez).
+
+**Não** se usa `TIOCSCTTY`, que é uma macro composta nos BSD e seria mais uma
+coisa a torcer para o front end de C conseguir avaliar. O POSIX diz que um líder
+de sessão sem terminal de controlo que abre um SEM `O_NOCTTY` fica com ele — o
+`open` é o trabalho todo. Testado: o filho vê `tty` a responder `/dev/pts/N`.
+
+Fica por verificar o `TIOCSWINSZ` no macOS, que é `_IOW(...)` lá. É o único ponto
+desta fase que não consigo testar aqui, e fica dito em vez de implícito.
+
+### Três defeitos que só um terminal desenterra
+
+Um socket vive muito tempo. Um terminal abre e fecha de cada vez que alguém corre
+alguma coisa — e foi isso que encontrou:
+
+1. **`recv` num pseudo-terminal falha com "não é um socket".** O caminho sondado
+   usava `recv`/`send`; passou a usar `read`/`write`, que são a mesma chamada
+   para um socket sem opções. É o que deixa um terminal SER um socket para tudo
+   o que está acima.
+
+2. **Um descritor fechado ficava no conjunto de interesse do `epoll`.** Fechar
+   tira-o do núcleo mas não da tabela do multiplexador — e os NÚMEROS são
+   reutilizados. O socket seguinte apanhava o mesmo número, o `ps_mux_want`
+   encontrava a entrada velha, acreditava que já estava a ser vigiado, e nunca o
+   acrescentava: a leitura estacionava e nunca acordava. Agora o fecho esquece.
+
+3. **`epoll_wait` a devolver −1 andava para fora do array.** Uma espera pode
+   FALHAR — um sinal entregue enquanto ela dorme é a maneira normal — e o laço
+   recebe uma contagem. Só aparecia debaixo de um depurador, que é um tracer, que
+   é uma coisa que interrompe chamadas de sistema.
+
+E um quarto, que não é do terminal e é o mais grave de todos:
+
+4. **`catch e:` dentro de um `async def` estava partido.** Dentro de uma função
+   assíncrona cada local vive no QUADRO da tarefa (50.1), porque a função pode
+   parar num `await` e ser retomada noutra volta. A ligação do `catch` é um local
+   como outro qualquer — e era DECLARADA como local em C enquanto o corpo a LIA
+   pelo quadro. O `e` era o que o quadro nunca tinha recebido, que é NULL, e
+   `e.message` era uma falha de segmentação. Era **todos** os `catch e:` numa
+   função assíncrona, em silêncio até alguém usar o nome. Está em
+   `tests/pscript/run/catchasync.psc`.
+
+### O segundo consumidor, dito com honestidade
+
+O plano justificava pôr a primitiva no runtime com "o `pforge dev` também a
+ganha, e um segundo consumidor é o teste de que ela está no lugar certo". O
+`pforge dev` **não existe** — e a justificação continua a valer, só que o segundo
+consumidor é hoje `tests/pscript/run/pty.psc`: um programa em pscript comum, que
+não sabe o que um editor é, e que a usa com `read`, `write`, `close` e mais nada.
+Foi ele que encontrou os quatro defeitos abaixo, e não o editor.
+
+### O widget desenha-se em modo IMEDIATO
+
+Foi a única questão de pesquisa que havia: uma grelha 80×24 com fundo por célula
+são 1 920 rectângulos mais 1 920 glifos por quadro, contra os ~50 que o codeview
+emite — e reter essa lista entre quadros custaria mais memória do que o texto que
+ela mostra.
+
+Então o nó leva um `c_paint` e o `pui` chama-o DURANTE o desenho, com o pintor na
+mão. É ainda o pintor: um widget que fosse buscar o driver directamente seria um
+widget que ninguém consegue testar sem uma janela, e o teste sem cabeça conta o
+que ele desenha como conta o dos outros.
+
+O que torna o custo suportável são duas linhas no `draw`: **corridas de fundo
+igual viram UM rectângulo** (o ecrã inteiro de saída comum custa 2, e um com
+fundo colorido por linha custa 26 — medido no teste), e uma célula em branco com
+o fundo padrão não desenha nada.
+
+### As dezasseis cores são PAPÉIS
+
+Vermelho é `danger`, verde é `ok`, azul é `primary`. Derivadas das oito raízes,
+como tudo o resto — então um terminal no tema claro é um terminal claro, e
+ninguém teve de escrever uma segunda paleta. "Brilhante" é um passo mais para
+longe da página e para o texto, que é a mesma frase em que o `contrast` assenta;
+tomá-lo por "juntar branco" é o que faz as cores brilhantes de um tema claro
+desaparecerem nele.
+
+O cubo de 6×6×6 e a rampa de cinzentos são absolutos por definição — um programa
+que pede o 196 quer aquele vermelho — e por isso são calculados e não derivados.
+`38;2;r;g;b` é **arredondado** ao cubo, porque uma célula guarda um ÍNDICE e não
+uma cor: um índice é uma coisa sobre a qual o tema ainda pode ter opinião.
+
+### E a rolagem move a janela, não os pixels
+
+Rolar um ecrã inteiro mexe num inteiro (`origin`) em vez de copiar cada célula
+para cima: um programa a imprimir mil linhas por segundo moveria quase dois
+milhões de células por segundo, e um `cat` de um ficheiro grande rastejaria. Uma
+REGIÃO de rolagem continua a copiar — são poucas linhas, é raro, e o índice
+teria de ser por região para ajudar.
+
+---
+
+## O painel de Testes: uma suíte é um ALVO e um caso é uma ARESTA (F9)
+
+Veio quase de graça, e a razão é a forma que o `pforge` já tinha. Correr os
+testes é `B.build` com outro alvo, e o relatório são as mesmas cinco chamadas de
+volta — o que muda é qual painel elas alimentam.
+
+O rótulo de uma aresta de teste é `suíte: caso`, que é como a biblioteca de alvos
+os escreve, e é isso que a árvore usa para agrupar. Zero análise nova.
+
+**O `-k` é enorme de propósito**, e o raciocínio é o do próprio `cmd_test`: quem
+corre testes quer o quadro INTEIRO e não a primeira falha. Uma construção pára na
+primeira porque o resto ia falhar com ela; uma suíte não.
+
+**Uma suíte verde colapsa na sua própria linha** — a contagem e o tempo são o
+relatório inteiro, e mil e duzentas linhas verdes são mil e duzentas linhas que
+ninguém lê. Uma suíte com falha mostra os casos que falharam e o que eles
+imprimiram, que é o diff.
+
+**Sobe sozinho SÓ ao falhar.** Uma suíte verde não deve roubar a tela.
+
+Qual alvo É a suíte: a convenção primeiro (os projetos do `pforge` carimbam-na em
+`.../stamp/test`) e o `.pstudio.json` por cima, porque um projeto que lhe chama
+outra coisa deve dizê-lo uma vez em vez de ser adivinhado sempre.
+
+---
+
+## Pacotes: o tarball É o pacote (F10)
+
+> *"porque não um tar sem um repo definido? mesmo que entre como usuário"*
+
+```sh
+pforge add ./foo-0.1.0.tar
+pforge add https://algum.site/foo-0.1.0.tar
+```
+
+Não há índice para consultar e não há nada para resolver: o ficheiro que chegou
+traz o seu próprio `pack.json`, e esse diz o nome, a versão, o requisito de
+ferramenta e as dependências. O que acontece é que os bytes são hasheados,
+guardados sob esse hash, e escritos no lock com de onde vieram.
+
+**É sempre `unsafe` a não ser que alguém nomeie o AUTOR**, e essa é a parte
+honesta: um `.sig` ao lado de um ficheiro prova que quem fez a assinatura fez a
+assinatura. O que um repositório acrescenta é um NOME contra o qual verificá-la.
+Então `--author <hex>` vai buscar o `.sig` e verifica; sem ele, a linha entra no
+lock a dizer `"unsafe": true`, que é o que quem revê o pull request vê.
+
+O hash é conferido no sentido que importa aqui: é CALCULADO do que chegou e
+escrito, portanto o `pforge install` seguinte noutra máquina recebe os mesmos
+bytes ou falha. Um JAR num classpath não tem isso.
+
+Uma dependência do tarball **não é seguida** — não há índice atrás de um ficheiro
+avulso para a seguir — e dizê-lo é melhor do que um "não encontrei" mais tarde.
+
+### O `0.x` passa a ser especial no `publish`
+
+O semver di-lo em voz alta (cláusula 4): enquanto o major é zero, *"anything MAY
+change at any time"*, e por convenção o encaixe que leva a quebra é o minor. O
+Cargo trata o `0.x` exactamente assim. Recusá-lo aqui significaria que uma
+biblioteca não pode corrigir a sua própria interface antes do primeiro
+lançamento estável — que é para o que o período pré-1.0 SERVE. (Foi a mudança do
+`Theme` na F4 que forçou a questão: acrescentar oito papéis é um minor, e mudar
+uma raiz podia tirar um.)
+
+E **avisa** em vez de se calar: uma excepção visível em cada publicação é uma
+excepção com que alguém pode discordar. Escondida na regra, seria uma regra de
+que ninguém sabe que depende.
+
+### O painel
+
+**LER** o `pack.lock` é uma chamada de biblioteca — é um ficheiro, e o `lock.psc`
+está cá dentro. **MUDAR** é correr o `pforge` como processo, exactamente pela
+razão por que o grafo o é: resolver uma versão, conferir um hash e verificar uma
+assinatura são do `pforge` daquele projeto, e o editor abre qualquer árvore. A
+alternativa seria o editor embeber o resolvedor de um projeto — o que funciona
+para um projeto, que seria este.

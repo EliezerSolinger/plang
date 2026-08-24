@@ -199,6 +199,11 @@ struct Shell:
     running: bool
     dirty_ui: bool     # a frame needs presenting
     now_ms: int        # the clock, which comes from the driver
+    # how long the loop may doze. Half a second is right for a caret that
+    # blinks and costs no CPU; it is far too long for a terminal, where output
+    # arriving just after a wait began would sit there until the blink. So it is
+    # a FIELD: whoever needs a faster loop lowers it, and `pcode` never does.
+    wait_ms: int
     want_open: str     # 114: a file the app wants and the driver has to READ
     want_reload: list<str>   # ... and the ones whose cached text is STALE
     want_msg: str      # a message for the status bar (a write failure)
@@ -1158,7 +1163,7 @@ def new_shell(u: pui.Ui, root_dir: str) -> Shell:
     sh = Shell(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
               [], -1, [], 0, root_dir, PAL_FILES, [], -1, [], [],
               [], "", None,
-              False, True, True, 0, "", [], "", "",
+              False, True, True, 0, BLINK_MS, "", [], "", "",
               False, [], "",
               None, None, None, None, None, None, None, None, None)
 

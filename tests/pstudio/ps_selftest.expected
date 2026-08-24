@@ -20,4 +20,6 @@ typed >nothing
 refused without a version a dependency is `name@version` — v1 has no resolver
 asked for the dependency tar@0.1.0
 drawn yes
+terminal says from the terminal
+terminal is 112 by 4 and the child is gone True
 selftest ok

@@ -349,7 +349,7 @@ async def step(dv: Driver, sh: appm.Shell, blink: int) -> int:
     present holds about 16 ms, and one per movement event leaves a drag behind
     the cursor (measured in the editor in P: 200 movements were 182 ms that way
     and 1 ms this way)."""
-    kind = shim_wait(appm.BLINK_MS)
+    kind = shim_wait(sh.wait_ms if sh.wait_ms > 0 else appm.BLINK_MS)
     sh.now_ms = now_ms()
     try:
         if kind == SHIM_TIMEOUT or kind == SHIM_NONE:

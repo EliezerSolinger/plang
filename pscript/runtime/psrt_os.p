@@ -14,6 +14,8 @@ include <sys/types.h>
 include <sys/wait.h>   # 119/F6: `waitpid` com WNOHANG, para saber se o filho
                        #   que se lançou ainda está de pé
 include <signal.h>
+include <sys/ioctl.h>   # F8: `struct winsize` and TIOCSWINSZ, for a terminal
+                        #     that has to be told when the window changed
 import "psrt_types.ph"
 import "psrt_mem.ph"
 import "psrt_val.ph"
@@ -508,6 +510,24 @@ def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32):
     free(av)
 
 
+# ---------- a child on a TERMINAL (F8) ----------
+#
+# `posix_openpt`, `grantpt`, `unlockpt` and `ptsname` are POSIX and <stdlib.h>
+# hides them under the feature macros this build uses, so the prototypes are
+# ours. It is the same treatment `popen`/`pclose` and `execv`/`access` already
+# get in the compiler, and for the same reason — and spelled with libc's own
+# types, so the declaration stays compatible wherever the system header is also
+# visible (that is what broke the macOS build once, and the rule came out of it).
+#
+# NOT `openpty()`: that one lives in <pty.h> on glibc and <util.h> on the BSDs,
+# and P has no conditional include. The four above are in one header on both.
+def posix_openpt(flags: int) -> int
+def grantpt(fd: int) -> int
+def unlockpt(fd: int) -> int
+def ptsname(fd: int) -> *char
+def setsid() -> int
+
+
 # ---------- um filho que NÃO se espera (F6) ----------
 #
 # `os.run` cria um filho e espera; `os.exec` vira o filho. Falta o terceiro caso,
@@ -558,6 +578,113 @@ def ps_os_kill(ctx: *PsCtx, pid: i64):
     salvar é pior do que um que espera meio segundo."""
     if pid > 0:
         kill(i32(pid), SIGTERM)
+
+# What a terminal IS, here: a descriptor with a child on the other end. It comes
+# back as the same `Conn` `net.connect` returns, and that is the whole design —
+# `await c.read(n)`, `await c.write(s)` and `c.close()` are already written, they
+# are already polled by the scheduler instead of blocking a thread, and the
+# terminal widget above needs to learn none of it.
+#
+# The alternative was a handle of its own with six functions around it. It would
+# have duplicated the awaitable read, which is the hard part, and it would have
+# been a second thing to know.
+def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: const *char, line: i32) -> *PsConn:
+    if argv == None or argv->len < 1:
+        ps_raise(ctx, "os.spawn_pty() takes the command as a non-empty list", PS_CAT_VALUE, file, line)
+        return ps_conn_new(ctx, -1, 0)
+    n: i64 = argv->len
+    av: **char = (**char)(malloc(usize(n + 1) * sizeof(*av)))
+    memset(av, 0, usize(n + 1) * sizeof(*av))
+    abase: *char = (*char)(argv->data) + sizeof(PsArr)
+    for i in range(n):
+        sp: *PsStr = *(**PsStr)(abase + usize(i) * usize(argv->esize))
+        c0: *char = os_arg_cstr(ctx, sp, "argument", file, line)
+        if c0 == None:
+            free(av)
+            return ps_conn_new(ctx, -1, 0)
+        av[i] = c0
+
+    m: int = posix_openpt(O_RDWR | O_NOCTTY)
+    if m < 0 or grantpt(m) != 0 or unlockpt(m) != 0:
+        if m >= 0:
+            close(m)
+        for i in range(n):
+            free(av[i])
+        free(av)
+        ps_raise(ctx, "os.spawn_pty(): could not open a pseudo-terminal", PS_CAT_IO, file, line)
+        return ps_conn_new(ctx, -1, 0)
+    slave: const *char = ptsname(m)
+    if slave == None:
+        close(m)
+        for i in range(n):
+            free(av[i])
+        free(av)
+        ps_raise(ctx, "os.spawn_pty(): the pseudo-terminal has no name", PS_CAT_IO, file, line)
+        return ps_conn_new(ctx, -1, 0)
+    sname: *char = strdup(slave)
+
+    ws: winsize
+    memset(&ws, 0, sizeof(ws))
+    ws.ws_col = u16(cols if cols > 0 else 80)
+    ws.ws_row = u16(rows if rows > 0 else 24)
+    ioctl(m, u64(TIOCSWINSZ), &ws)
+
+    fflush(stdout)
+    fflush(stderr)
+    pid: i32 = fork()
+    if pid == 0:
+        setsid()
+        # POSIX: a session leader with no controlling terminal that opens one
+        # WITHOUT O_NOCTTY gets it as its controlling terminal. So this open is
+        # the whole job, and TIOCSCTTY — which is a compound macro on the BSDs
+        # and would be one more thing to hope the C front end can evaluate —
+        # never has to be named.
+        sfd: int = open(sname, O_RDWR)
+        if sfd < 0:
+            _exit(127)
+        dup2(sfd, 0)
+        dup2(sfd, 1)
+        dup2(sfd, 2)
+        if sfd > 2:
+            close(sfd)
+        close(m)
+        execvp(av[0], av)
+        _exit(127)
+    free(sname)
+    for i in range(n):
+        free(av[i])
+    free(av)
+    if pid < 0:
+        close(m)
+        ps_raise(ctx, "os.spawn_pty(): could not create the process", PS_CAT_IO, file, line)
+        return ps_conn_new(ctx, -1, 0)
+    # non-blocking, because from here on it is an ordinary polled descriptor and
+    # the scheduler owns the waiting
+    ps_sock_nonblock(m)
+    c: *PsConn = ps_conn_new(ctx, m, 0)
+    c->pid = pid
+    return c
+
+
+def ps_os_pty_resize(ctx: *PsCtx, c: *PsConn, cols: i64, rows: i64):
+    """The window changed size, so the program inside has to be told.
+
+    This is the one thing a terminal needs that a socket does not, and it is why
+    it is a function in `os` rather than a method on a `Conn`: a socket has no
+    size, and giving every socket a `resize` would be lying about what one is."""
+    if c == None or c->is_open == 0:
+        return
+    ws: winsize
+    memset(&ws, 0, sizeof(ws))
+    ws.ws_col = u16(cols if cols > 0 else 80)
+    ws.ws_row = u16(rows if rows > 0 else 24)
+    ioctl(c->fd, u64(TIOCSWINSZ), &ws)
+
+
+def ps_os_pty_pid(ctx: *PsCtx, c: *PsConn) -> i64:
+    """The child's pid, for `os.kill` and `os.alive`. Zero for a plain socket."""
+    return 0 if c == None else i64(c->pid)
+
 
 def ps_os_alive(ctx: *PsCtx, pid: i64) -> bool:
     """Ainda a correr? E, de caminho, COLHE o que já morreu — sem isto cada

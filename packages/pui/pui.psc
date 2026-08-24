@@ -225,6 +225,19 @@ struct Node:
     c_build: def(Ui, int)?                # rewrites the commands (cmd_*)
     c_input: (def(Ui, int, Event) -> bool)?
     c_layout: def(Ui, int, Rect)?         # positions its own children
+    # IMMEDIATE mode, for the one widget that cannot afford to retain.
+    #
+    # Every other widget writes a command list once and it is replayed until
+    # something goes dirty. A terminal cannot be one of those: an 80x24 grid
+    # with a background per cell is 1 920 rectangles plus 1 920 glyphs, and
+    # keeping that list alive between frames costs more memory than the text it
+    # is showing.
+    #
+    # So this one is called DURING the draw, with the painter in hand. It is
+    # still the painter — a widget that reached for the driver directly would be
+    # a widget nobody could test without a window, and the headless test counts
+    # what it draws like everything else.
+    c_paint: (def(Ui, int, Rect, Painter))?
     data: any?                            # the state of the app's widget
 
 
@@ -282,7 +295,7 @@ def new_node_blank() -> Node:
                 [],
                 False, 0, False, 0, "", -1, 0, 1, 1, 0, [], 0, -1, [], -1, False,
                 None, None, None, None, None,
-                None, None, None, None, None)
+                None, None, None, None, None, None)
 
 
 struct Ui:
@@ -609,6 +622,12 @@ struct Ui:
         self.nodes[id].icon = icon
         self.queue_redraw(id)
         self.relayout()
+
+    def set_paint(self, id: int, fn: (def(Ui, int, Rect, Painter))?):
+        """Draw this node's contents DURING the draw instead of retaining them.
+        See `c_paint`. `None` gives the node back to the retained path."""
+        self.nodes[id].c_paint = fn
+        self.queue_redraw(id)
 
     def set_bg(self, id: int, color: int):
         self.nodes[id].bg = color
@@ -1272,6 +1291,11 @@ struct Ui:
                     p.glyph(cm.cp, cm.x, cm.y, cm.color)
                 case CMD_ICON:
                     p.icon(cm.cp, cm.x, cm.y, cm.color)
+        # ... and then whatever draws itself, over its own rectangle and inside
+        # the clip everything else got
+        pt = nd.c_paint
+        if pt != None:
+            pt(self, id, nd.rect, p)
         c = nd.first_child
         while c >= 0:
             if self.nodes[c].floating:

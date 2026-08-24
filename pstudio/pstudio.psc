@@ -12,7 +12,7 @@ The loop is four lines because the driver owns the turn:
 
     while sh.running:
         blink = await driver.step(dv, sh, blink)
-        await serve_ide(dv, sh, ide)
+        await serve_ide(dv, sh, ide, td)
         await driver.present(dv, sh)
 
 The middle line is the whole difference between the two binaries.
@@ -29,6 +29,7 @@ import <pforge/build.psc> as B
 import <pforge/graph.psc> as G
 import <pforge/manifest.psc> as MF
 import config as cfg
+import terminal as trm
 import sys
 import time
 import os
@@ -189,8 +190,13 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
         if ok:
             prog = target if len(target) > 0 else first_executable(sh, ide)
             if len(prog) > 0 and path.isfile(prog):
-                ide.run_pid = os.spawn([prog if prog.startswith("/") else path.join(os.getcwd(), prog)])
-                ide.build_msg = "running " + path.basename(prog) + " (pid " + str(ide.run_pid) + ")"
+                # F8: into the TERMINAL, and not detached into nowhere. A program
+                # with a real TTY behaves the way it behaves in a shell — it line
+                # buffers, it colours, it prints a prompt, it can be typed at —
+                # and the one that was being launched with `os.spawn` had its
+                # output going wherever the editor's own output went.
+                ide.run_in_terminal([prog if prog.startswith("/") else path.join(os.getcwd(), prog)])
+                ide.build_msg = "running " + path.basename(prog)
             else:
                 ide.build_msg = "it built, but I do not know what to run — use `Build Target…`"
     sh.dirty_ui = True
@@ -281,17 +287,122 @@ private def rmtree(d: str) -> int:
 
 
 
-async def serve_ide(dv: driver.Driver, sh: appm.Shell, ide: idem.Ide):
+async def serve_ide(dv: driver.Driver, sh: appm.Shell, ide: idem.Ide, td: TermDriver):
     """What the IDE asked for and could not do itself. The middle line of the
     loop, and the only thing `pcode` does not have."""
     await serve_manifest(sh, ide)
     await serve_build(sh, ide)
+    await serve_term(sh, ide, td)
+    # while a terminal is alive the loop cannot doze for half a second: output
+    # that arrives just after a wait began would sit there until the next blink
+    sh.wait_ms = 16 if ide.term_live else appm.BLINK_MS
     # the outline follows the buffer, and asks the index that already exists
     ide.outline_sync()
     if ide.want_conf_save:
         await save_config(sh, ide)
     if len(ide.build_msg) > 0:
         sh.u.set_text(sh.status, ide.build_msg)
+        sh.dirty_ui = True
+
+
+# ---------- F8: the terminal's other half ----------
+#
+# The GRID is the editor's — `terminal.psc` is a parser and a screen, and
+# neither of those waits for anything. What waits is the pseudo-terminal on the
+# other end, so it is here, and what crosses between them is three requests and
+# a stream of bytes.
+
+struct TermDriver:
+    """The descriptor, and the read that is in flight.
+
+    The read is raced against a MILLISECOND every frame and started again the
+    next one. That works because a polled read the clock beats was never run:
+    the system call only happens when the scheduler's `poll` says the descriptor
+    is ready, so cancelling one that is still parked loses nothing. Racing it is
+    what keeps the window answering the keyboard while a program floods it."""
+    conn: socket?
+    reading: Task<list<u8>>?
+    cols: int
+    rows: int
+
+
+def new_term_driver() -> TermDriver:
+    return TermDriver(None, None, 0, 0)
+
+
+private def term_size(sh: appm.Shell, ide: idem.Ide, td: TermDriver) -> bool:
+    """How many cells fit, right now. True when it changed."""
+    if ide.term_node < 0:
+        return False
+    r = sh.u.rect_of(ide.term_node)
+    cols = r.w // sh.u.cell_w
+    rows = r.h // sh.u.cell_h
+    if cols < 1:
+        cols = 1
+    if rows < 1:
+        rows = 1
+    if cols == td.cols and rows == td.rows:
+        return False
+    td.cols = cols
+    td.rows = rows
+    ide.term.resize(cols, rows)
+    sh.dirty_ui = True
+    return True
+
+
+private async def term_close(sh: appm.Shell, ide: idem.Ide, td: TermDriver):
+    c = td.conn
+    td.reading = None
+    td.conn = None
+    ide.term_live = False
+    if c != None:
+        c.close()          # which also collects the child (the runtime does it)
+    sh.dirty_ui = True
+
+
+async def serve_term(sh: appm.Shell, ide: idem.Ide, td: TermDriver):
+    if ide.want_term_stop:
+        ide.want_term_stop = False
+        await term_close(sh, ide, td)
+        ide.term.feed_text("\r\n[stopped]\r\n")
+        sh.dirty_ui = True
+    if len(ide.want_term_cmd) > 0:
+        cmd = ide.want_term_cmd
+        ide.want_term_cmd = []
+        await term_close(sh, ide, td)
+        term_size(sh, ide, td)
+        ide.term.reset()
+        try:
+            td.conn = os.spawn_pty(cmd, td.cols, td.rows)
+            ide.term_live = True
+        catch e:
+            ide.term.feed_text(e.message + "\r\n")
+            ide.term_live = False
+        sh.dirty_ui = True
+    c2 = td.conn
+    if c2 == None:
+        return
+    if term_size(sh, ide, td):
+        # the program has to be TOLD, or it goes on drawing for the size it had
+        os.pty_resize(c2, td.cols, td.rows)
+    if len(ide.want_term_in) > 0:
+        typed = ide.want_term_in
+        ide.want_term_in = ""
+        try:
+            await c2.write(typed)
+        catch e:
+            pass          # the child is gone; the read below will say so
+    if td.reading == None:
+        td.reading = c2.read(8192)
+    r2 = td.reading
+    td.reading = None      # consumed or cancelled: either way, start fresh
+    if r2 != None and await timeout(r2, 0.001):
+        b = await r2
+        if len(b) == 0:
+            await term_close(sh, ide, td)
+            ide.term.feed_text("\r\n[the program ended]\r\n")
+        else:
+            ide.term.feed_bytes(b)
         sh.dirty_ui = True
 
 
@@ -436,6 +547,28 @@ async def selftest(arg: str) -> int:
     n = sh.u.build_all()
     print("drawn", "yes" if n > 20 else "no")
     await driver.serve_shell(dv, sh)
+
+    # ---- F8: the terminal, with a REAL child on a real pseudo-terminal ----
+    #
+    # The grid has its own test and the primitive has its own test; this is the
+    # seam between them, which is the part neither of those can measure: the
+    # editor asks, the driver spawns, the bytes come back through the scheduler,
+    # and the parser puts them on a screen a person could read.
+    td = new_term_driver()
+    sh.u.layout(900, 500)
+    ide.run_in_terminal(["/bin/sh", "-c", "printf 'from the terminal\\n'"])
+    turns = 0
+    while turns < 400:
+        await serve_term(sh, ide, td)
+        if ide.term.dirty and not ide.term_live:
+            break
+        turns += 1
+    line = ""
+    for c in ide.term.visible(0):
+        line += chr(c.ch)
+    print("terminal says", line.strip())
+    print("terminal is", ide.term.cols, "by", ide.term.rows, "and the child is gone", not ide.term_live)
+
     print("selftest ok")
     return 0
 
@@ -564,10 +697,11 @@ async def main_run() -> int:
     ide.outline_sync()
     if len(a.shot) > 0:
         return driver.take_shot(sh, a.shot)
+    td = new_term_driver()
     blink = driver.now_ms()
     while sh.running:
         blink = await driver.step(dv, sh, blink)
-        await serve_ide(dv, sh, ide)
+        await serve_ide(dv, sh, ide, td)
         await driver.present(dv, sh)
     shim_close()
     return 0

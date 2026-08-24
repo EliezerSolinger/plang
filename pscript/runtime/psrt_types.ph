@@ -549,6 +549,11 @@ struct PsConn:
     fd: int
     is_open: i32
     listening: i32
+    # F8: the child on the other end, when this descriptor is a pseudo-terminal
+    # rather than a socket. Zero when there is none — and a terminal IS a
+    # socket to everything above this line, which is the whole point of giving
+    # `os.spawn_pty` the same type `net.connect` returns.
+    pid: i32
 
 # what the program holds: a collected handle with nothing collected inside
 struct PsWorker:
@@ -684,6 +689,11 @@ struct PsWork:
     events: i16        # ... and what to wait for (POLLIN / POLLOUT)
     off: usize         # a send that went out in pieces: how much already did
     port: i32          # connect: where to
+    # F8: this descriptor is a pseudo-terminal and not a socket. It changes one
+    # thing: on a master, the read that comes after the last close of the slave
+    # fails instead of returning zero — which is the END, and the only failure a
+    # master read has that anybody has to act on.
+    pty: i32
     # 118: PS_IO_RUN. Tudo malloc'd e montado ANTES do `fork`, porque entre o
     # fork e o exec só se pode chamar o que é seguro em manipulador de sinal —
     # e `malloc` não é (outra thread pode ter o cadeado dele no instante do

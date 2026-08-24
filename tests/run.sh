@@ -434,7 +434,7 @@ suite_pstudio() {
     # o `pui_test` saiu daqui: o toolkit virou o pacote `packages/pui`, e o teste
     # dele viaja COM o pacote (`packages/pui/test/`). Quem o roda é a suíte de
     # pacotes do `pforge` — um pacote publicado carrega a prova de que funciona.
-    for psprog in core_test:ps_core.expected:"the ported buffer" codeview_test:ps_codeview.expected:"the ported editing widget" shell_test:ps_shell.expected:"the editor (what pcode is)" ide_test:ps_ide.expected:"the IDE, with a driver of make-believe" perf_test:ps_perf.expected:"the ceilings on a big file" config_test:ps_config.expected:"the project's remembered state"; do
+    for psprog in core_test:ps_core.expected:"the ported buffer" codeview_test:ps_codeview.expected:"the ported editing widget" shell_test:ps_shell.expected:"the editor (what pcode is)" ide_test:ps_ide.expected:"the IDE, with a driver of make-believe" perf_test:ps_perf.expected:"the ceilings on a big file" config_test:ps_config.expected:"the project's remembered state" terminal_test:ps_terminal.expected:"the ANSI grid, without a terminal"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
         [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/$pname.psc 2>>"$errc" || ok=0; }

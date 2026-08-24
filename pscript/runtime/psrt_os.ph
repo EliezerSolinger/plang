@@ -72,3 +72,8 @@ def ps_os_exec(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32)
 def ps_os_spawn(ctx: *PsCtx, argv: *PsList, file: const *char, line: i32) -> i64
 def ps_os_kill(ctx: *PsCtx, pid: i64)
 def ps_os_alive(ctx: *PsCtx, pid: i64) -> bool
+# F8: a child on a pseudo-terminal. What comes back is the same `Conn` a socket
+# is, so `read`, `write` and `close` are the ones that already exist.
+def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: const *char, line: i32) -> *PsConn
+def ps_os_pty_resize(ctx: *PsCtx, c: *PsConn, cols: i64, rows: i64)
+def ps_os_pty_pid(ctx: *PsCtx, c: *PsConn) -> i64

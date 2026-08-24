@@ -394,7 +394,7 @@ que a F10 tem de resolver no `publish`.
 
 ---
 
-## F5 — os widgets sobem para o `pui`
+## F5 — os widgets sobem para o `pui` — **FEITA**
 
 > *"tudo o que for reutilizável e não for específico do programa vai pra pui,
 > assim como qualquer lib de ui"*
@@ -522,7 +522,7 @@ tornava mentira tudo o que o botão e o `.pstudio.json` dissessem sobre ele.
 
 ---
 
-## F8 — o PTY, e o terminal
+## F8 — o PTY, e o terminal — **FEITA**
 
 A primitiva vai para o **runtime do pscript** (`os.spawn_pty`, como o `os.run`
 foi), não para o driver do pstudio. Assim o `pforge dev` e qualquer programa
@@ -540,9 +540,15 @@ come a memória toda, e o coletor copiador não paga o dobro por isso.
 
 **Fica de pé:** `Run` roda o programa num terminal de verdade, com stdin.
 
+**O que se aprendeu:** a primitiva devolve o MESMO tipo que o `net.connect`
+devolve, e por isso `read`/`write`/`close` não custaram uma linha. E um terminal
+— que abre e fecha a cada `Run`, ao contrário de um socket, que vive muito tempo
+— desenterrou três defeitos do runtime e um do compilador (`catch e:` dentro de
+um `async def` estava partido, em silêncio, desde sempre). Ver o `DESIGN.md`.
+
 ---
 
-## F9 — o painel de Testes
+## F9 — o painel de Testes — **FEITA**
 
 Vem quase de graça: o `pforge test --json` já emite um evento por caso com
 `{"what": "suíte: caso", "status", "ms", "output"}`, e o `tally` já parte o
@@ -555,7 +561,7 @@ Sobe sozinho **só ao falhar**: uma suíte verde não deve roubar a tela.
 
 ---
 
-## F10 — pacotes
+## F10 — pacotes — **FEITA**
 
 Metade no `pforge`, metade painel.
 
@@ -584,7 +590,7 @@ no classpath não tem.
 
 ---
 
-## F11 — instalar
+## F11 — instalar — **FEITA**
 
 `make install` com `PREFIX` (por omissão `/usr/local`): copia `plangc`, `pforge`,
 `pcode` e `pstudio` para `$PREFIX/bin`. Unix simples, sem inventar formato — e

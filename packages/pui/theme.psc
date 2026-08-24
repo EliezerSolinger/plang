@@ -79,6 +79,25 @@ record Theme:
     syn_str: int
     syn_num: int
     syn_comment: int
+    # ---- the sixteen a terminal asks for ----
+    #
+    # They are ROLES like everything else, and they are derived from the same
+    # eight roots: red IS danger, green IS ok, blue IS primary. So a terminal in
+    # the light theme is a light terminal, and nobody had to write a second
+    # palette to get one.
+    #
+    # "Bright" is a step further from the page and towards the text — which is
+    # lighter on a dark page and darker on a light one, the same sentence
+    # `contrast` is built on. Taking it to mean "add white" is what makes a
+    # light theme's bright colours vanish into it.
+    ansi_black: int
+    ansi_red: int
+    ansi_green: int
+    ansi_yellow: int
+    ansi_blue: int
+    ansi_magenta: int
+    ansi_cyan: int
+    ansi_white: int
     # ---- metrics ----
     pad: int              # inner breathing room (buttons and the like)
     sep: int              # separation between a BOX's children
@@ -187,6 +206,14 @@ def derive(r: Roots) -> Theme:
         syn_str      = r.string,
         syn_num      = mix(r.ok, r.on_surface, 45),
         syn_comment  = r.ok,
+        ansi_black   = contrast(r, 18),
+        ansi_red     = r.danger,
+        ansi_green   = r.ok,
+        ansi_yellow  = r.warning,
+        ansi_blue    = r.primary,
+        ansi_magenta = r.keyword,
+        ansi_cyan    = mix(r.primary, r.ok, 50),
+        ansi_white   = r.on_surface,
         pad          = 6,
         sep          = 4,
         handle       = 6)
@@ -216,3 +243,101 @@ def theme_dark() -> Theme:
 
 def theme_light() -> Theme:
     return derive(light_roots())
+
+
+# ---------- what a terminal asks for ----------
+#
+# A terminal names colours by NUMBER, and the numbers mean three different
+# things: 0..15 are the sixteen a theme owns, 16..231 are a 6x6x6 cube and
+# 232..255 a grey ramp. The last two are absolute by definition — a program that
+# asks for 196 wants that red, and every terminal in the world gives it that red
+# — so they are computed here rather than derived, and this file stays the only
+# place in the toolkit where a colour is written down.
+
+def base16(t: Theme, i: int) -> int:
+    """0..7. The bright half goes through `bright` on top of this."""
+    if i == 0:
+        return t.ansi_black
+    if i == 1:
+        return t.ansi_red
+    if i == 2:
+        return t.ansi_green
+    if i == 3:
+        return t.ansi_yellow
+    if i == 4:
+        return t.ansi_blue
+    if i == 5:
+        return t.ansi_magenta
+    if i == 6:
+        return t.ansi_cyan
+    return t.ansi_white
+
+
+def bright(t: Theme, c: int) -> int:
+    """A step further from the page, towards what is written on it."""
+    return mix(c, t.text, 30)
+
+
+def cube_level(i: int) -> int:
+    """xterm's six levels. They are not evenly spaced, and rounding them to
+    51*i is what makes a `ls --color` look washed out next to every other
+    terminal."""
+    return 0 if i <= 0 else 55 + 40 * i
+
+
+def ansi(t: Theme, i: int) -> int:
+    if i < 0:
+        return t.text
+    if i < 8:
+        return base16(t, i)
+    if i < 16:
+        return bright(t, base16(t, i - 8))
+    if i < 232:
+        k = i - 16
+        return rgba(0xFF, cube_level(k // 36), cube_level((k // 6) % 6), cube_level(k % 6))
+    if i < 256:
+        v = 8 + 10 * (i - 232)
+        return rgba(0xFF, v, v, v)
+    return t.text
+
+
+def cube_index(v: int) -> int:
+    """The nearest of the six levels to one 8-bit channel."""
+    if v < 48:
+        return 0
+    if v < 115:
+        return 1
+    return clamp8((v - 35) // 40)
+
+
+def cube_of(r: int, g: int, b: int) -> int:
+    """24-bit colour, rounded into the 256 the grid can store.
+
+    A cell keeps an INDEX and not a colour, because an index is a thing the
+    theme can still have an opinion about and a colour is not. `38;2;r;g;b` is
+    therefore rounded — and saying so is better than storing a colour that no
+    theme can ever override."""
+    rr = clamp8(r)
+    gg = clamp8(g)
+    bb = clamp8(b)
+    hi = rr if rr > gg else gg
+    hi = hi if hi > bb else bb
+    lo = rr if rr < gg else gg
+    lo = lo if lo < bb else bb
+    if hi - lo < 10:
+        # a grey: the 24-step ramp is finer than the cube's diagonal
+        if rr < 8:
+            return 16
+        if rr > 238:
+            return 231
+        return 232 + (rr - 8) * 24 // 240
+    n = cube_index(rr)
+    if n > 5:
+        n = 5
+    m = cube_index(gg)
+    if m > 5:
+        m = 5
+    k = cube_index(bb)
+    if k > 5:
+        k = 5
+    return 16 + 36 * n + 6 * m + k

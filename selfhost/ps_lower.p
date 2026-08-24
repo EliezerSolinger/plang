@@ -3768,6 +3768,21 @@ struct PsLow:
                     self->pos_args(sc0, e->pos)
                     self->raised = True
                 return sc0
+            if isos0 and strcmp(of0, "spawn_pty") == 0:
+                pt0: *Expr = self->call_rt("ps_os_spawn_pty", e->pos)
+                self->push_arg(pt0, self->ctx_arg(e->pos))
+                for i in range(3):
+                    self->push_arg(pt0, self->expr(e->args[i]))
+                self->pos_args(pt0, e->pos)
+                self->allocs = True
+                self->raised = True
+                return pt0
+            if isos0 and (strcmp(of0, "pty_resize") == 0 or strcmp(of0, "pty_pid") == 0):
+                pz0: *Expr = self->call_rt(self->a->printf("ps_os_%s", of0), e->pos)
+                self->push_arg(pz0, self->ctx_arg(e->pos))
+                for i in range(e->nargs):
+                    self->push_arg(pz0, self->expr(e->args[i]))
+                return pz0
             if isos0 and strcmp(of0, "exec") == 0:
                 # não devolve — mas LEVANTA quando a troca não acontece, e é por
                 # isso que ele leva posição
@@ -7005,12 +7020,28 @@ struct PsLow:
             cb: Vec<*Stmt>
             cb.init()
             if s->name != None and block_uses(s->catch_block, s->name):
-                bind: *Stmt = st_new(self->a, ST_VAR, s->pos)
-                bind->name = ps_cname(self->a, s->name)
-                bind->type = ty_ptr(self->a, ty_name(self->a, "PsErr"))
-                bind->init = self->call_rt("ps_take_exc", s->pos)
-                self->push_arg(bind->init, self->ctx_arg(s->pos))
-                cb.push(bind)
+                take: *Expr = self->call_rt("ps_take_exc", s->pos)
+                self->push_arg(take, self->ctx_arg(s->pos))
+                if self->in_frame(s->name):
+                    # Inside an `async def` every local lives in the FRAME (50.1)
+                    # — and the catch's binding is a local like any other. It was
+                    # being DECLARED as a C local while the body READ it through
+                    # the frame, so `e` was whatever the frame had never been
+                    # given: NULL, and a segmentation fault at `e.message`.
+                    #
+                    # It was every `catch e:` in an asynchronous function, and it
+                    # was silent until somebody used the name.
+                    fb: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+                    fb->lhs = self->async_field(s->name, s->pos)
+                    fb->op = TK_ASSIGN
+                    fb->rhs = take
+                    cb.push(fb)
+                else:
+                    bind: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                    bind->name = ps_cname(self->a, s->name)
+                    bind->type = ty_ptr(self->a, ty_name(self->a, "PsErr"))
+                    bind->init = take
+                    cb.push(bind)
             else:
                 clr: *Stmt = st_new(self->a, ST_EXPR, s->pos)
                 clr->expr = self->call_rt("ps_take_exc", s->pos)

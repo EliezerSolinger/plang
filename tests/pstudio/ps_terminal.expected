@@ -1,0 +1,53 @@
+text:
+  |hello|
+  ||
+  ||
+  ||
+  cursor=5,0 region=0..3 back=0 view=0
+exactly one line: cursor=9,0 wrap_next=True
+and then one more:
+  |hello12345|
+  |X|
+  ||
+  ||
+  cursor=1,1 region=0..3 back=0 view=0
+CR: [Zbc]
+LF+TAB: [        qq]
+BS: [        Wq]
+CUP: [  xy] cursor=4,1
+CUU+CUF: [        Z]
+clamped to 9,3
+EL 0: [bbb]
+EL 1: []
+ED 0 leaves: [][]
+DCH: [abefgh]
+ICH: [ab  efgh]
+IL: [][two]
+DL: [two][six]
+history so far=0
+one line scrolled: back=1 top row=[l2]
+inside a region: back stays 1
+region scrolled:
+  |l2|
+  ||
+  ||
+  ||
+  ||
+  cursor=0,3 region=1..3 back=1 view=0
+back=8
+view 4 top=[row4]
+clamped view=8 top=[row0]
+back to live=0
+fg red=1 green=2 bold=1 reset fg=-1 attr=0
+reverse attr=16
+256=196 truecolour blue rounded to 21
+alt is empty: []
+and the main one came back: [before]
+split codepoint: [é!] len=2
+title=[a title] and the x survived: [x]
+shrunk: [three][four]
+grown back: [three][four]
+plain screen: rects=2 glyphs=1150
+one background per line: rects=26
+up=[\27[A] ctrl+c=[\3] enter=[\13] bs=[\127] alt+x=[\27x] plain=[q]
+terminal-ok
