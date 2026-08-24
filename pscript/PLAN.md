@@ -2252,6 +2252,13 @@ Dois consumidores no dia seguinte: o `check_external` do editor deixa de sondar,
 e o `pforge dev` — que o plano do PTY usou como justificação e que não existe —
 passa a ser possível.
 
+**Quatro coisas por decidir ANTES de escrever uma linha** (140.1): a recursão é
+trabalho nosso e não do núcleo; o macOS não tem `inotify` e o `kqueue` não serve
+(a resposta lá é o **FSEvents**, uma API diferente — é a maior distância entre
+plataformas de todo o plano); coalescer ou entregar cru; e um evento de cada vez
+ou um lote. O que já está decidido: o transbordo é um `OVERFLOW` explícito e
+nunca um silêncio.
+
 **Fica de pé:** o editor sabe que um ficheiro mudou sem perguntar.
 
 ---

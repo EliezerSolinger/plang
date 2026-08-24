@@ -5962,6 +5962,56 @@ que o diálogo de cada commit seja sobre uma coisa de cada vez, e para que o
 `ev = await w.next()`. O descritor do inotify/kqueue entra no mesmo `poll` do
 escalonador — sem thread, sem sondagem, e igual a tudo o resto que espera.
 
+#### 140.1 — o `Watcher`, e o que dele ainda não está decidido
+
+O tipo que o `os.watch` devolve. Estava nomeado na tabela da 139 e indefinido em
+todo o lado, que é precisamente o que a releitura das specs apanha — fica aqui
+com superfície antes de ser um buraco.
+
+```python
+with os.watch("src", recursive=True) as w:
+    while True:
+        ev = await w.next()          # WatchEvent
+        print(ev.path, ev.kind)
+```
+
+Um `WatchEvent` é `path`, `kind` (`CREATED`, `MODIFIED`, `DELETED`,
+`MOVED_FROM`, `MOVED_TO`) e um `cookie` para emparelhar as duas metades de um
+`moved` — sem ele, mover um ficheiro dentro da árvore lê-se como apagar um e
+criar outro, que é a diferença entre um `git mv` e uma perda.
+
+**Decidido:**
+
+* é aguardável e entra no `poll` do escalonador — sem thread e sem sondagem;
+* fecha-se com `with`, como todos os recursos da 139;
+* **o transbordo é um EVENTO e não um silêncio.** Quando a fila do núcleo enche,
+  o que se perdeu perdeu-se, e a única resposta honesta é `OVERFLOW` — "não sei o
+  que mudou, relê tudo" — em vez de continuar a entregar eventos como se nada
+  faltasse. É o `IN_Q_OVERFLOW` do inotify, e escondê-lo é a diferença entre um
+  vigia e um vigia que mente.
+
+**Em aberto, para decidir quando a F5 chegar** — escrito como aberto de propósito,
+para não ser resolvido por engano:
+
+1. **A recursão não é do sistema.** O `inotify` vigia UM directório. Uma árvore
+   são N vigias, e um directório criado depois de começar precisa de um vigia
+   novo — que é uma corrida contra os ficheiros criados lá dentro nesse
+   intervalo. O `recursive=True` é trabalho nosso, não uma opção do núcleo.
+2. **O macOS não tem `inotify`, e o `kqueue` não serve para isto.** Ele vigia
+   DESCRITORES: uma árvore são N descritores abertos, e o limite de ficheiros
+   abertos chega depressa. A resposta real do macOS é o **FSEvents**, que é uma
+   API completamente diferente — chamada de volta numa run loop, e já coalescida
+   por directório. **É a maior distância entre as duas plataformas em todo este
+   plano**, e vale mais dizê-lo agora do que descobri-lo na F5.
+3. **Coalescer, ou entregar cru.** Um editor a gravar um ficheiro produz três ou
+   quatro eventos (escrever num temporário, renomear, mudar atributos). Um vigia
+   que os entrega crus faz com que cada consumidor escreva o mesmo anti-ressalto.
+   O `WatchService` do Java não coalesce, e é uma queixa conhecida dele.
+4. **Um evento de cada vez, ou um lote.** Uma construção que toca em oitocentos
+   ficheiros produz oitocentos eventos, e `await` oitocentas vezes são oitocentas
+   voltas ao escalonador. Um `w.drain()` que devolve o que houver é a
+   alternativa, e muda a forma de quem consome.
+
 **Tudo cresce dentro do `os`/`net`/`Buffer` que já existem** — `os.mmap`,
 `os.watch`, `c.read_into`, `b.freeze()`. Sem módulo novo para aprender, e cada
 nome fica ao lado do irmão: é a regra que o `os.spawn_pty` já seguiu na F8.
