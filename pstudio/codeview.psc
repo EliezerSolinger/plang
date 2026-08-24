@@ -99,6 +99,9 @@ struct CodeView:
     hl: hlm.Hl
     index: cmp.Index
     path: str              # "" = a loose buffer, with no file
+    # F5: the project's other files, put here by the shell when somebody asks
+    # for a definition. Empty until then — nothing is read at startup.
+    sources: list<cmp.Source>
     u: pui.Ui              # the toolkit that draws it
     id: int                # this widget's id in the pool
     vsb: int               # the vertical bar (internal child)
@@ -838,7 +841,7 @@ struct CodeView:
 
     def complete_open(self):
         if self.index.is_stale(self.buf):
-            self.index.build(self.buf, [])
+            self.index.build(self.buf, self.sources)
         self.cmp_open = True
         self.cmp_sel = 0
         self.cmp_top = 0
@@ -1157,7 +1160,7 @@ def cv_create(u: pui.Ui, parent: int) -> CodeView:
     """Creates the widget with the internal bars and the three gutters, and
     returns the CodeView — its id is in `.id`."""
     cv = CodeView(core.new_buffer(), hlm.new_hl(hlm.LANG_P), cmp.new_index(), "",
-                  u, -1, -1, -1, 0, 0, [], False, [], 0, 0, 0, "",
+                  [], u, -1, -1, -1, 0, 0, [], False, [], 0, 0, 0, "",
                   True, False, True, False, 0, [], False, 0)
     id = u.custom(parent, None)
     u.set_focusable(id, True)

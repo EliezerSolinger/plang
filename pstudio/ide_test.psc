@@ -42,7 +42,7 @@ sh.read_file = lambda p: sh_mod.ReadOut(True, files[p], "") if p in files else s
 sh.mtime_of = lambda p: 1
 u.layout(1000, 700)
 
-# ---- the seam itself: the shell has 25 commands, and the IDE adds 9 ----
+# ---- the seam itself: the shell has 28 commands, and the IDE adds 9 ----
 print("editor commands=" + str(len(sh.commands)))
 ide = idem.new_ide(sh)
 print("with the IDE=" + str(len(sh.commands)))

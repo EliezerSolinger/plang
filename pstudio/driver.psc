@@ -28,6 +28,8 @@ import "shim.ph"
 
 import <pui> as pui
 import shell as appm
+import highlight as hlm
+import complete as cmp
 import sys
 import time
 import os
@@ -162,6 +164,76 @@ def zoom(sh: appm.Shell, step: int):
 
 
 
+const SEARCH_MAX: int = 500       # hits; past this the list stops being a list
+
+
+async def serve_search(dv: Driver, sh: appm.Shell):
+    """Reads the project's files and finds the needle in them.
+
+    It VARRE every time. There is no index to invalidate and nothing to keep in
+    memory, and for a source tree it is milliseconds — this repository is about
+    58 000 lines. The cap exists because five hundred hits is already more than
+    anybody reads, and a list of fifty thousand is not a list."""
+    needle = sh.want_search
+    sh.want_search = ""
+    hits: list<appm.PalItem> = []
+    for it in sh.files:
+        if len(hits) >= SEARCH_MAX:
+            break
+        p = it.payload
+        t = ""
+        if p in dv.cache:
+            t = dv.cache[p]
+        else:
+            got = await read_file(dv, p)
+            if got == None:
+                continue                    # binary, unreadable: not an error here
+            t = got
+            dv.cache[p] = t
+        if needle not in t:
+            continue                        # one native scan rejects most files
+        ln = 0
+        for line in t.split("\n"):
+            ln += 1
+            col = line.find(needle)
+            if col < 0:
+                continue
+            where = it.label + ":" + str(ln)
+            hits.append(appm.PalItem(where + ": " + line.strip(),
+                                     p + ":" + str(ln) + ":" + str(col + 1), 0))
+            if len(hits) >= SEARCH_MAX:
+                break
+    sh.search_ready(needle, hits)
+    sh.dirty_ui = True
+
+
+async def serve_index(dv: Driver, sh: appm.Shell):
+    """Reads the project's SOURCES, once, when somebody first asks a question
+    that needs them.
+
+    Nothing is read at startup, which is what makes the editor open instantly on
+    any folder. The first go-to-definition pays for it, and after that the answer
+    is in memory."""
+    sh.want_index = False
+    srcs: list<cmp.Source> = []
+    for it in sh.files:
+        p = it.payload
+        if hlm.lang_of(p) == hlm.LANG_NONE:
+            continue                      # only what a compiler here can read
+        t = ""
+        if p in dv.cache:
+            t = dv.cache[p]
+        else:
+            got = await read_file(dv, p)
+            if got == None:
+                continue
+            t = got
+            dv.cache[p] = t
+        srcs.append(cmp.Source(p, t))
+    sh.index_ready(srcs)
+    sh.dirty_ui = True
+
+
 async def serve_shell(dv: Driver, sh: appm.Shell):
     """What the EDITOR asked for: read a file, write one, say something.
 
@@ -185,6 +257,10 @@ async def serve_shell(dv: Driver, sh: appm.Shell):
             sh.reload_now(p2, t2)
         else:
             sh.want_msg = p2 + ": " + (dv.failed[p2] if p2 in dv.failed else "could not read it")
+    if len(sh.want_search) > 0:
+        await serve_search(dv, sh)
+    if sh.want_index:
+        await serve_index(dv, sh)
     await flush_writes(dv, sh)
     if len(sh.want_msg) > 0:
         sh.u.set_text(sh.status, sh.want_msg)

@@ -19,6 +19,7 @@ import <pui> as pui
 import shell as appm
 import codeview as cvm
 import core
+import complete as cmpm
 import os
 import path
 
@@ -216,6 +217,23 @@ u.input_event(pui.Event(pui.EV_MOUSE_DOWN, 0, 0, 0, tb.x + 4, tb.y + 4, 1, 1, 0)
 u.input_event(pui.Event(pui.EV_MOUSE_UP, 0, 0, 0, tb.x + 4, tb.y + 4, 1, 1, 0))
 print("clicked_tab=" + str(sh.cur))
 
+# F5: the tree is a LIST widget now — clicking a row goes through the same path
+# the mouse does, not through a method the test calls directly
+nrows = len(u.list_rows(sh.tree))
+print("tree rows=" + str(nrows) + " (entries=" + str(len(sh.entries)) + ")")
+dir_i = -1
+for i in range(len(sh.entries)):
+    if sh.entries[i].is_dir:
+        dir_i = i
+        break
+u.list_set_sel(sh.tree, dir_i)
+tr = u.rect_of(sh.tree)
+u.input_event(pui.Event(pui.EV_MOUSE_DOWN, 0, 0, 0, tr.x + 4,
+                        tr.y + dir_i * u.cell_h + 2, 1, 1, 0))
+print("clicking a directory expanded it=" + ("1" if len(u.list_rows(sh.tree)) > nrows else "0"))
+sh.tree_toggle(dir_i)
+sh.tree_refresh()
+
 # the tree: expand the directory
 for i in range(len(sh.entries)):
     if sh.entries[i].is_dir:
@@ -352,6 +370,69 @@ print("reload asked=" + str(len(sh.want_reload)) + " for=" +
       (path.basename(sh.want_reload[0]) if len(sh.want_reload) > 0 else "-"))
 sh.reload_now(D + "/hello.p", saved[D + "/hello.p"])
 print("reloaded=[" + sh.tabs[0].cv.buf.line_text(1) + "]")
+
+# ---- F5: searching the whole PROJECT, and going to a definition ----
+# Both are REQUESTS: the shell says what it wants and the driver, which is the
+# only side that may `await`, comes back. Here the test IS the driver.
+sh.run_named("Find in Project")
+print("asking=[" + sh.pal_prompt + "]")
+u.set_text(sh.palinput, "helper")
+sh.palette_filter()
+sh.palette_accept()
+print("search asked=[" + sh.want_search + "]")
+
+# what a driver would come back with
+sh.want_search = ""
+sh.search_ready("helper", [appm.PalItem("util.ph:1: def helper(a: i32) -> i32",
+                                        D + "/util.ph:1:5", 0)])
+print("results in the palette=" + str(len(sh.palitems)) +
+      " top=" + (sh.palitems[0].label if len(sh.palitems) > 0 else "-"))
+sh.palette_accept()
+gcv = sh.tabs[sh.cur].cv
+print("went to the hit: file=" + path.basename(gcv.path) +
+      " line=" + str(gcv.buf.caret(0).line + 1))
+
+# no hits is a message, not an empty palette
+sh.search_ready("nowhere", [])
+print("no hits=[" + sh.want_msg + "]")
+sh.want_msg = ""
+
+# go-to-definition: in the SAME buffer first, without reading anything
+sh.select_tab(0)
+c0 = sh.tabs[0].cv
+c0.buf.load("def helper(a: i32) -> i32:\n    return a\n\ndef main() -> i32:\n    return helper(1)\n")
+c0.buf.move_to(4, 12)
+print("word under the caret=[" + sh.word_at_caret() + "]")
+sh.run_named("Go To Definition")
+print("jumped to line=" + str(c0.buf.caret(0).line + 1) + " asked the driver=" + str(sh.want_index))
+
+# a name it has never seen ASKS the driver, and only then
+c0.buf.move_to(1, 0)
+c0.buf.insert("x = elsewhere_symbol", 1000)
+c0.buf.move_to(1, 5)
+sh.run_named("Go To Definition")
+print("unknown name: asked the driver=" + str(sh.want_index) + " waiting for=[" + sh.pending_goto + "]")
+# the driver has to HAVE the file it is going to be asked to open next
+saved[D + "/other.p"] = "def elsewhere_symbol() -> i32:\n    return 0\n"
+sh.index_ready([cmpm.Source(D + "/other.p", saved[D + "/other.p"])])
+gcv2 = sh.tabs[sh.cur].cv
+print("after the driver: file=" + path.basename(gcv2.path) +
+      " line=" + str(gcv2.buf.caret(0).line + 1))
+sh.want_msg = ""
+
+# back to the first tab, which is what the save below checks
+while len(sh.tabs) > 1:
+    sh.close_tab(len(sh.tabs) - 1)
+sh.select_tab(0)
+sh.tabs[0].cv.buf.mark_saved()
+
+# ---- F5: the keyboard leaves a pane (the toolkit declared K_TAB and never used it)
+before = u.focus_get()
+sh.feed(pui.Event(pui.EV_KEY, appm.K_F6, 0, 0, 0, 0, 0, 0, 0))
+mid = u.focus_get()
+sh.feed(pui.Event(pui.EV_KEY, appm.K_F6, 1, 0, 0, 0, 0, 0, 0))
+print("focus moves=" + str(mid != before) + " and comes back=" + str(u.focus_get() == before) +
+      " of " + str(len(u.focusables())) + " places")
 
 # save and close
 sh.save_cur()

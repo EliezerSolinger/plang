@@ -15,6 +15,7 @@ palette, search, shortcuts — runs headless in a test, and what is left for
 import <pui> as pui
 import codeview as cvm
 import <pui/theme.psc> as thm
+import complete as cmp
 import core
 import os
 import path
@@ -25,6 +26,7 @@ const MAX_SCAN: int = 20000      # ceiling on the project scan
 const PAL_ROWS: int = 12         # visible palette rows
 const TREE_MIN_CP: int = 18      # the tree's minimum width, in characters
 const K_F2: int = 1073741883     # SDL's F2
+const K_F6: int = 1073741887     # SDL's F6: moves the keyboard between panes
 
 
 enum PalMode:
@@ -143,15 +145,12 @@ struct Shell:
 
     tabs: list<Tab>
     cur: int           # aba ativa (-1 = nenhuma)
-    tab_hover: int
-    tab_hover_x: bool
     entries: list<TreeEntry>
     tree_top: int
     root_dir: str
     palmode: PalMode
     palitems: list<PalItem>
-    palsel: int
-    paltop: int
+    pallist: int       # the palette's rows: a WK_LIST since F5, not a hand-drawn one
     files: list<PalItem>
     commands: list<Command>
     # PAL_LIST / PAL_ASK: what was supplied, what is being asked, and who wants
@@ -166,6 +165,22 @@ struct Shell:
     want_open: str     # 114: a file the app wants and the driver has to READ
     want_reload: list<str>   # ... and the ones whose cached text is STALE
     want_msg: str      # a message for the status bar (a write failure)
+    # F5: searching the whole PROJECT. Reading files is `await`, so it is a
+    # request like any other — the editor says what to look for and the driver
+    # comes back with the hits.
+    #
+    # It VARRE on every search instead of keeping an index: no invalidation, no
+    # memory, and the results arrive as they are found. This repository is about
+    # 58 000 lines of source, which is milliseconds; an inverted index would be a
+    # lot of code for a gain that only appears in projects nobody has yet.
+    want_search: str
+    # F5: go-to-definition across files. The index has always had a parameter for
+    # this — documented as "the texts that came with it" — and it was always
+    # empty. Now it is filled, ON DEMAND: nothing is read at startup, and the
+    # first time somebody asks for a definition the driver goes and reads.
+    want_index: bool
+    sources: list<cmp.Source>
+    pending_goto: str      # the name to find once the sources arrive
     # ---- the driver, injected by `app.psc` ----
     read_file: (def(str) -> ReadOut)?
     write_file: (def(str, str) -> bool)?
@@ -264,12 +279,14 @@ struct Shell:
         cv = cvm.cv_create(self.u, self.cvhost)
         cv.load_text(p, r.text, self.do_mtime(p))
         self.tabs.append(Tab(cv, path.basename(p)))
+        self.tabbar_refresh()
         self.select_tab(len(self.tabs) - 1)
 
     def select_tab(self, i: int):
         if i < 0 or i >= len(self.tabs):
             return
         self.cur = i
+        self.tabbar_refresh()
         self.do_title("pstudio — " + self.tabs[i].title)
         for k in range(len(self.tabs)):
             self.u.set_visible(self.tabs[k].cv.id, k == i)
@@ -291,8 +308,6 @@ struct Shell:
                 return
         self.u.free_node(cv.id)
         self.tabs.remove_at(i)
-        self.tab_hover = -1
-        self.tab_hover_x = False
         if len(self.tabs) == 0:
             self.cur = -1
             self.u.relayout()
@@ -300,7 +315,7 @@ struct Shell:
             self.select_tab(i - 1 if i > 0 else 0)
         # the tab bar and the tree are RETAINED and their rectangle did not
         # change: without dirtying them by hand, the closed tab would stay painted
-        self.u.queue_redraw(self.tabbar)
+        self.tabbar_refresh()
         self.u.queue_redraw(self.tree)
         self.update_status()
         self.dirty_ui = True
@@ -320,7 +335,7 @@ struct Shell:
         ok = self.save_tab(self.cur)
         if not ok and self.cur >= 0:
             self.want_msg = "could not save " + self.tabs[self.cur].cv.path
-        self.u.queue_redraw(self.tabbar)
+        self.tabbar_refresh()
         self.dirty_ui = True
 
     def update_status(self):
@@ -430,8 +445,6 @@ struct Shell:
             self.u.set_text(self.palinput, ":")
         elif mode == PAL_LIST:
             self.u.set_text(self.palinput, "!")
-        self.palsel = 0
-        self.paltop = 0
         self.u.set_visible(self.palette, True)
         self.u.focus_set(self.palinput)
         self.palette_filter()
@@ -475,8 +488,6 @@ struct Shell:
             # asking: what gets typed is an ANSWER, and a `>` in the middle of
             # it is a character and not a mode
             self.palitems = []
-            self.palsel = 0
-            self.paltop = 0
             rot0 = self.pal_prompt + ": " + (q if len(q) > 0 else "…")
             self.palitems.append(PalItem(rot0, q, 0))
             return
@@ -495,8 +506,6 @@ struct Shell:
         else:
             self.palmode = PAL_FILES
         self.palitems = []
-        self.palsel = 0
-        self.paltop = 0
         match self.palmode:
             case PAL_COMMANDS:
                 # the TABLE is the list, and the payload is the NAME: no second
@@ -537,6 +546,7 @@ struct Shell:
             self.palitems[k] = t
         if len(self.palitems) > 200:
             self.palitems = self.palitems[0:200]      # the rest would not fit on screen
+        self.u.list_set(self.pallist, self.pal_rows())
         self.u.relayout()
         self.u.queue_redraw(self.palette)
         self.dirty_ui = True
@@ -545,7 +555,8 @@ struct Shell:
         if len(self.palitems) == 0:
             self.palette_close()
             return
-        it = self.palitems[self.palsel if self.palsel < len(self.palitems) else 0]
+        sel = self.u.list_sel(self.pallist)
+        it = self.palitems[sel if sel >= 0 and sel < len(self.palitems) else 0]
         mode = self.palmode
         payload = it.payload
         self.palette_close()
@@ -570,6 +581,113 @@ struct Shell:
                 self.open_file(payload)
 
     # ---------- busca ----------
+
+    def search_project(self):
+        """Asks for a search over every file in the project."""
+        q = ""
+        cv = self.cur_cv()
+        if cv != None and cv.buf.has_sel():
+            sel = cv.buf.sel_text(0)
+            if "\n" not in sel:
+                q = sel
+        self.palette_ask("find in project", lambda t: self.ask_search(t))
+        if len(q) > 0:
+            self.u.set_text(self.palinput, q)
+            self.palette_filter()
+
+    def ask_search(self, needle: str):
+        if len(needle) == 0:
+            return
+        self.want_search = needle
+        self.want_msg = "searching for " + needle + " ..."
+
+    def search_ready(self, needle: str, hits: list<PalItem>):
+        """The driver came back. The hits go through the same palette everything
+        else goes through — `pcode` has no panels, and a result list that only
+        existed in the IDE would be the editor losing what makes an editor."""
+        if len(hits) == 0:
+            self.want_msg = "no hits for " + needle
+            self.dirty_ui = True
+            return
+        self.palette_choose(str(len(hits)) + " hits for " + needle, hits,
+                            lambda payload: self.goto_hit(payload))
+
+    def goto_hit(self, payload: str):
+        """`path:line:col`, which is the format the compiler and `pforge` use for
+        a position, and the one `mark_error` already reads."""
+        parts = payload.split(":")
+        if len(parts) < 3:
+            return
+        self.open_file(parts[0])
+        cv = self.cur_cv()
+        if cv != None:
+            cv.buf.move_to(int(parts[1]) - 1, int(parts[2]) - 1)
+            cv.scroll_to_caret()
+            self.update_status()
+        self.dirty_ui = True
+
+    def word_at_caret(self) -> str:
+        cv = self.cur_cv()
+        if cv == None:
+            return ""
+        c = cv.buf.caret(0)
+        s = cv.buf.line_text(c.line)
+        if c.col > len(s):
+            return ""
+        a = c.col
+        while a > 0 and core.is_word_ch(s[a - 1:a]):
+            a -= 1
+        b = c.col
+        while b < len(s) and core.is_word_ch(s[b:b + 1]):
+            b += 1
+        return s[a:b]
+
+    def goto_definition(self):
+        """Where is this declared. Looks in what is already indexed first, and
+        only then asks the driver to read the project — which is the whole
+        difference between an editor that opens instantly and one that reads a
+        thousand files to show you a file."""
+        name = self.word_at_caret()
+        if len(name) == 0:
+            return
+        cv = self.cur_cv()
+        if cv == None:
+            return
+        if cv.index.is_stale(cv.buf):
+            cv.index.build(cv.buf, self.sources)
+        ln = cv.index.define_in_buffer(name)
+        if ln > 0:
+            cv.buf.move_to(ln - 1, 0)
+            cv.scroll_to_caret()
+            self.update_status()
+            self.dirty_ui = True
+            return
+        where = cv.index.define_of(name)
+        if len(where) > 0:
+            self.goto_hit(where)
+            return
+        if len(self.sources) > 0:
+            self.want_msg = "I do not know where " + name + " is declared"
+            self.dirty_ui = True
+            return
+        self.pending_goto = name
+        self.want_index = True
+        self.want_msg = "reading the project to find " + name + " ..."
+        self.dirty_ui = True
+
+    def index_ready(self, srcs: list<cmp.Source>):
+        """The driver read the project. The sources are the SHELL's — every tab
+        shares them, because a symbol does not stop existing when you change
+        file."""
+        self.sources = srcs
+        for t in self.tabs:
+            t.cv.sources = srcs
+            t.cv.index.ready = False
+        name = self.pending_goto
+        self.pending_goto = ""
+        if len(name) > 0:
+            self.want_msg = ""
+            self.goto_definition()
 
     def find_open(self):
         self.u.set_visible(self.findbar, True)
@@ -644,7 +762,7 @@ struct Shell:
         for i in range(len(self.tabs)):
             if not self.save_tab(i):
                 self.want_msg = "could not save " + self.tabs[i].cv.path
-        self.u.queue_redraw(self.tabbar)
+        self.tabbar_refresh()
 
     def clear_bookmarks(self, cv: cvm.CodeView):
         cv.buf.clear_marks(core.MARK_BOOK)
@@ -739,24 +857,27 @@ struct Shell:
         self.u.queue_redraw_tree(self.root)
         self.update_status()
 
-    # ---------- atalhos globais ----------
+    # ---------- global shortcuts ----------
 
     def key_shortcut(self, ev: pui.Event) -> bool:
         """True = consumed, and it does not reach the widget tree."""
+        # F6 moves the keyboard between panes, and shift+F6 goes back. It is the
+        # convention (VSCode, NetBeans) and, more to the point, it is one of the
+        # few keys the editor had not already spent — `tab` indents and ctrl+tab
+        # changes file, so neither of them was free.
+        if ev.key == K_F6:
+            self.u.focus_next((ev.mods & 1) != 0)
+            self.dirty_ui = True
+            return True
         pal_open = self.u.is_visible(self.palette)
         if pal_open and (ev.key == cvm.K_UP or ev.key == cvm.K_DOWN):
+            # the arrows move the LIST while the typing stays in the input: it is
+            # the one thing a palette needs that a plain focus cannot give, since
+            # the two widgets want the keyboard at the same time
             n = len(self.palitems)
             if n > 0:
-                self.palsel += 1 if ev.key == cvm.K_DOWN else -1
-                if self.palsel < 0:
-                    self.palsel = n - 1
-                if self.palsel >= n:
-                    self.palsel = 0
-                if self.palsel < self.paltop:
-                    self.paltop = self.palsel
-                elif self.palsel >= self.paltop + PAL_ROWS:
-                    self.paltop = self.palsel - PAL_ROWS + 1
-                self.u.queue_redraw(self.palette)
+                sel = self.u.list_sel(self.pallist) + (1 if ev.key == cvm.K_DOWN else -1)
+                self.u.list_set_sel(self.pallist, (n - 1) if sel < 0 else (0 if sel >= n else sel))
                 self.dirty_ui = True
             return True
         cv = self.cur_cv()
@@ -889,119 +1010,48 @@ struct Shell:
 
     # ---------- the app's three widgets ----------
 
-    def tab_at(self, r: pui.Rect, px: int, py: int) -> int:
-        """The tab under a point (-1 = none); marks `tab_hover_x` if it hit the
-        ×."""
-        self.tab_hover_x = False
-        if not pui.rect_has(r, px, py):
-            return -1
-        x = r.x
-        for i in range(len(self.tabs)):
-            w = tab_width(self.u, self.tabs[i])
-            if px >= x and px < x + w:
-                cx = tab_close_x(self.u, x, w)
-                self.tab_hover_x = px >= cx and px < cx + self.u.cell_w
-                return i
-            x += w
-        return -1
+    def tab_items(self) -> list<pui.TabItem>:
+        out: list<pui.TabItem> = []
+        for t in self.tabs:
+            out.append(pui.TabItem(t.title, t.cv.buf.dirty, True))
+        return out
 
-    def tabbar_build(self, id: int):
-        u = self.u
-        r = u.rect_of(id)
-        th = u.theme
-        u.cmd_rect(id, r, th.panel_lo)
-        x = r.x
-        for i in range(len(self.tabs)):
-            t = self.tabs[i]
-            w = tab_width(u, t)
-            active = i == self.cur
-            u.cmd_rect(id, pui.Rect(x, r.y, w, r.h), th.panel if active else th.panel_lo)
-            if active:
-                u.cmd_rect(id, pui.Rect(x, r.y + r.h - 2, w, 2), th.accent)
-            u.cmd_text(id, x + u.cell_w, r.y + (r.h - u.cell_h) // 2, t.title,
-                       th.text if active else th.text_dim)
-            # modified mark / close button: a dot when dirty, an × when the
-            # cursor is over it (Sublime's model)
-            cx = tab_close_x(u, x, w)
-            cy = r.y + (r.h - u.cell_h) // 2
-            if self.tab_hover == i and self.tab_hover_x:
-                u.cmd_rect(id, pui.Rect(cx, cy, u.cell_w, u.cell_h), th.panel_hi)
-                u.cmd_text(id, cx, cy, "×", th.text)
-            elif self.tab_hover == i:
-                u.cmd_text(id, cx, cy, "×", th.text_dim)
-            elif t.cv.buf.dirty:
-                u.cmd_text(id, cx, cy, "*", th.accent)
-            u.cmd_rect(id, pui.Rect(x + w - 1, r.y, 1, r.h), th.border)
-            x += w
-        u.cmd_rect(id, pui.Rect(r.x, r.y + r.h - 1, r.w, 1), th.border)
+    def tabbar_refresh(self):
+        self.u.tabs_set(self.tabbar, self.tab_items())
+        self.u.tabs_set_sel(self.tabbar, self.cur)
 
-    def tabbar_input(self, id: int, ev: pui.Event) -> bool:
-        r = self.u.rect_of(id)
-        was_hover = self.tab_hover
-        was_x = self.tab_hover_x
-        hit = self.tab_at(r, ev.x, ev.y)
-        if ev.kind == pui.EV_MOUSE_MOVE:
-            # only dirties when the state CHANGES (otherwise every move repaints)
-            if hit != was_hover or self.tab_hover_x != was_x:
-                self.tab_hover = hit
-                self.u.queue_redraw(id)
-            return hit >= 0
-        if ev.kind != pui.EV_MOUSE_DOWN or hit < 0:
-            return False
-        if ev.button == 2 or self.tab_hover_x:
-            self.close_tab(hit)        # the middle button or the × close the tab
-        elif ev.button == 1:
-            self.select_tab(hit)
-        return True
-
-    def tree_build(self, id: int):
-        u = self.u
-        r = u.rect_of(id)
-        th = u.theme
-        # no background and no header here: the panel (a box with a bg) carries
-        # both, and the SPLIT's divider is the separator — this widget is only rows
-        cur_path = ""
+    def tree_rows(self) -> list<pui.ListRow>:
+        """The tree, as rows. A tree IS a list that uses `depth` — the widget
+        never learns what a directory is, and the arrow is just a prefix."""
+        cur = ""
         cv = self.cur_cv()
         if cv != None:
-            cur_path = cv.path
-        vis = r.h // u.cell_h
-        for vi in range(vis + 1):
-            i = self.tree_top + vi
-            if i >= len(self.entries):
-                break
-            e = self.entries[i]
-            y = r.y + vi * u.cell_h
-            x = r.x + 4 + e.depth * u.cell_w * 2
-            if e.is_dir:
-                u.cmd_text(id, x, y, "v" if e.expanded else ">", th.text_dim)
-                u.cmd_text(id, x + u.cell_w * 2, y, e.name, th.text)
-            else:
-                act = len(cur_path) > 0 and cur_path == e.fullpath
-                if act:
-                    u.cmd_rect(id, pui.Rect(r.x, y, r.w - 1, u.cell_h), th.sel)
-                u.cmd_text(id, x + u.cell_w * 2, y, e.name, th.text if act else th.text_dim)
+            cur = cv.path
+        out: list<pui.ListRow> = []
+        for e in self.entries:
+            mark = not e.is_dir and len(cur) > 0 and cur == e.fullpath
+            out.append(pui.ListRow(e.name, "", e.depth,
+                                   ("v" if e.expanded else ">") if e.is_dir else "",
+                                   pui.TONE_NORMAL if (e.is_dir or mark) else pui.TONE_DIM,
+                                   mark))
+        return out
 
-    def tree_input(self, id: int, ev: pui.Event) -> bool:
-        r = self.u.rect_of(id)
-        if ev.kind == pui.EV_WHEEL:
-            t = self.tree_top - ev.wheel * 3
-            mx = len(self.entries) - 1
-            self.tree_top = 0 if t < 0 else (mx if t > mx else t)
-            self.u.queue_redraw(id)
-            return True
-        if ev.kind != pui.EV_MOUSE_DOWN or ev.button != 1:
-            return False
-        i = self.tree_top + (ev.y - r.y) // self.u.cell_h
+    def tree_refresh(self):
+        self.u.list_set(self.tree, self.tree_rows())
+
+    def tree_picked(self, i: int):
         if i < 0 or i >= len(self.entries):
-            return True
+            return
         if self.entries[i].is_dir:
             self.tree_toggle(i)
+            self.tree_refresh()
         else:
             self.open_file(self.entries[i].fullpath)
-        self.u.queue_redraw(id)
-        return True
+        self.dirty_ui = True
 
     def pal_layout(self, id: int, r: pui.Rect):
+        """Where the palette sits. It is the FLOATING layer's only job: a rect
+        computed from the window, not from a parent's box."""
         u = self.u
         w = r.w * 3 // 5
         if w < u.cell_w * 40:
@@ -1011,39 +1061,26 @@ struct Shell:
         rows = len(self.palitems)
         if rows > PAL_ROWS:
             rows = PAL_ROWS
+        if rows < 1:
+            rows = 1
         h = u.cell_h + 12 + rows * u.cell_h + 8
         me = pui.Rect(r.x + (r.w - w) // 2, r.y + r.h // 8, w, h)
         u.set_rect(id, me)
         u.set_rect(self.palinput, pui.Rect(me.x + 6, me.y + 6, me.w - 12, u.cell_h + 6))
+        u.set_rect(self.pallist, pui.Rect(me.x + 2, me.y + u.cell_h + 14,
+                                          me.w - 4, rows * u.cell_h))
 
     def pal_build(self, id: int):
         u = self.u
         r = u.rect_of(id)
-        th = u.theme
-        u.cmd_rect(id, r, th.panel)
-        u.cmd_frame(id, r, th.accent)
-        y = r.y + u.cell_h + 14
-        for vi in range(PAL_ROWS):
-            i = self.paltop + vi
-            if i >= len(self.palitems):
-                break
-            if y + u.cell_h > r.y + r.h:
-                break
-            if i == self.palsel:
-                u.cmd_rect(id, pui.Rect(r.x + 2, y, r.w - 4, u.cell_h), th.sel)
-            u.cmd_text_fit(id, r.x + 8, y, self.palitems[i].label, r.w - 16,
-                           th.text if i == self.palsel else th.text_dim)
-            y += u.cell_h
+        u.cmd_rect(id, r, u.theme.panel)
+        u.cmd_frame(id, r, u.theme.accent)
 
-    def pal_input(self, id: int, ev: pui.Event) -> bool:
-        if ev.kind == pui.EV_MOUSE_DOWN and ev.button == 1:
-            r = self.u.rect_of(id)
-            i = self.paltop + (ev.y - (r.y + self.u.cell_h + 14)) // self.u.cell_h
-            if i >= 0 and i < len(self.palitems):
-                self.palsel = i
-                self.palette_accept()
-            return True
-        return False
+    def pal_rows(self) -> list<pui.ListRow>:
+        out: list<pui.ListRow> = []
+        for it in self.palitems:
+            out.append(pui.ListRow(it.label, "", 0, "", pui.TONE_NORMAL, False))
+        return out
 
 
 # ---------- assembling the widget tree ----------
@@ -1053,19 +1090,12 @@ struct Shell:
 # Sublime), and the search bar as the column's LAST child — which is what pins it
 # to the footer.
 
-def tab_width(u: pui.Ui, t: Tab) -> int:
-    return u.text_w(t.title) + u.cell_w * 4
-
-
-def tab_close_x(u: pui.Ui, x: int, w: int) -> int:
-    return x + w - u.cell_w * 2
-
-
 def new_shell(u: pui.Ui, root_dir: str) -> Shell:
     sh = Shell(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-              [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [], [],
+              [], -1, [], 0, root_dir, PAL_FILES, [], -1, [], [],
               [], "", None,
-              False, True, True, 0, "", [], "",
+              False, True, True, 0, "", [], "", "",
+              False, [], "",
               None, None, None, None, None, None, None, None, None)
 
     sh.root = u.panel(-1)
@@ -1080,12 +1110,12 @@ def new_shell(u: pui.Ui, root_dir: str) -> Shell:
     head = u.label(sh.tree_pane, "FOLDERS")
     u.set_pad(head, 6)
     u.set_min(head, 0, u.cell_h + 8)
-    sh.tree = u.custom(sh.tree_pane, None)
+    sh.tree = u.list(sh.tree_pane)
     u.set_expand(sh.tree, True, True)
     sh.editors = u.box(sh.split, True)
     u.set_expand(sh.editors, True, True)
     u.split_set(sh.split, 220)
-    sh.tabbar = u.custom(sh.editors, None)
+    sh.tabbar = u.tabs(sh.editors)
     sh.cvhost = u.box(sh.editors, True)
     u.set_expand(sh.cvhost, True, True)
 
@@ -1103,32 +1133,30 @@ def new_shell(u: pui.Ui, root_dir: str) -> Shell:
 
     # the palette: the ROOT's last child, so it draws on top and wins the hit-test
     sh.palette = u.custom(sh.root, None)
+    u.set_float(sh.palette, True)      # above everything, clipped only to the window
     sh.palinput = u.line_input(sh.palette)
+    sh.pallist = u.list(sh.palette)
+    u.on_submit(sh.pallist, lambda id, row: sh.palette_accept())
     u.on_changed(sh.palinput, lambda wid, arg: sh.palette_filter())
     u.on_submit(sh.palinput, lambda wid, arg: sh.palette_accept())
     u.on_cancel(sh.palinput, lambda wid, arg: sh.palette_close())
     u.set_visible(sh.palette, False)
 
     # ---- the tab bar ----
-    u.set_custom(sh.tabbar,
-                 lambda u2, id: pui.Size(0, u2.cell_h + 8),
-                 lambda u2, id: sh.tabbar_build(id),
-                 lambda u2, id, ev: sh.tabbar_input(id, ev),
-                 None)
-    # ---- the tree ----
-    u.set_custom(sh.tree,
-                 lambda u2, id: pui.Size(u2.cell_w * TREE_MIN_CP, u2.cell_h),
-                 lambda u2, id: sh.tree_build(id),
-                 lambda u2, id, ev: sh.tree_input(id, ev),
-                 None)
+    u.on_submit(sh.tabbar, lambda id, i: sh.select_tab(i))
+    u.on_cancel(sh.tabbar, lambda id, i: sh.close_tab(i))
+    # ---- the tree: a LIST that uses `depth`, since F5 ----
+    u.set_min(sh.tree, u.cell_w * TREE_MIN_CP, u.cell_h)
+    u.on_submit(sh.tree, lambda id, row: sh.tree_picked(row))
     # ---- the palette ----
     u.set_custom(sh.palette,
                  lambda u2, id: pui.Size(0, 0),
                  lambda u2, id: sh.pal_build(id),
-                 lambda u2, id, ev: sh.pal_input(id, ev),
+                 None,
                  lambda u2, id, r: sh.pal_layout(id, r))
     sh.add_commands(editor_commands())
     sh.tree_scan()
+    sh.tree_refresh()
     return sh
 
 
@@ -1140,7 +1168,7 @@ def has_cv(s: Shell) -> bool:
 
 
 def editor_commands() -> list<Command>:
-    """The twenty-five the EDITOR has.
+    """The twenty-eight the EDITOR has.
 
     Everything here works on a buffer, a tab or the tree. Nothing here knows what
     a build, a target or a package is — that is `ide.psc`, and it adds its own to
@@ -1156,6 +1184,8 @@ def editor_commands() -> list<Command>:
         Command("Zoom Out",         lambda s: s.do_zoom(-1), None),
         Command("Zoom Reset",       lambda s: s.do_zoom(0), None),
         Command("Find",             lambda s: s.find_open(), None),
+        Command("Find in Project",  lambda s: s.search_project(), None),
+        Command("Go To Definition", lambda s: s.goto_definition(), has_cv),
         Command("Go To Line",       lambda s: s.palette_open(PAL_GOTO), None),
         Command("Quit",             lambda s: s.try_quit(), None),
         # `Fold` and `Unfold` are the same toggle under two names: whoever wants

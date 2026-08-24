@@ -36,6 +36,21 @@ struct CSym:
     detail: str       # shown dimmed on the right (signature, type); "" = nothing
     owner: str        # SYM_MEMBER: the struct it belongs to; "" = none
     kind: SymKind
+    # F5: WHERE it was declared. It costs two fields and it is the whole of
+    # go-to-definition — the scan already walked past the position and threw it
+    # away, which is why the feature looked expensive and was not.
+    file: str         # "" = the buffer being edited
+    line: int         # 1-based, like every position in this project
+
+
+struct Source:
+    """A file the index was given to read besides the open buffer.
+
+    `extra` was a `list<str>` from the first day, documented as "the texts that
+    came with it", and always empty. It is a list of these now, because a text
+    without its path cannot answer "where is this defined"."""
+    path: str
+    text: str
 
 
 # `struct` and not `record`: a record only holds numbers (58.2), and these two
@@ -83,6 +98,8 @@ struct Index:
     vars: list<CVar>
     version: int      # the buffer version this came out of
     ready: bool
+    cur_file: str     # which file `scan` is walking right now ("" = the buffer)
+    cur_line: int     #   ... and which line the declaration it is adding is on
 
     def is_stale(self, b: core.Buffer) -> bool:
         return not self.ready or self.version != b.version
@@ -97,9 +114,23 @@ struct Index:
         return False
 
     def add(self, name: str, detail: str, owner: str, kind: SymKind):
-        if len(name) == 0 or self.has(name, owner):
+        """A real DECLARATION replaces a loose word.
+
+        The buffer is scanned first and with `words` on, so every identifier in
+        it becomes a `SYM_WORD` — including the ones that are uses of something
+        declared elsewhere. `has` matched on (name, owner) and ignored the kind,
+        so that word shadowed the declaration arriving afterwards from another
+        file, and go-to-definition answered "I do not know" about a symbol it was
+        holding. Nothing noticed while `extra` was always empty."""
+        if len(name) == 0:
             return
-        self.syms.append(CSym(name, detail, owner, kind))
+        for i in range(len(self.syms)):
+            sy = self.syms[i]
+            if sy.name == name and sy.owner == owner:
+                if sy.kind == SYM_WORD and kind != SYM_WORD:
+                    self.syms[i] = CSym(name, detail, owner, kind, self.cur_file, self.cur_line)
+                return
+        self.syms.append(CSym(name, detail, owner, kind, self.cur_file, self.cur_line))
 
     def scan(self, text: str, words: bool) -> list<str>:
         """Walks ONE file's token stream. `words` = also collect loose
@@ -148,12 +179,15 @@ struct Index:
                 if i + 1 < n and hl_tok_kind(i + 1) == HLK_IDENT:
                     sig = lines[hl_tok_line(i + 1)].strip() if hl_tok_line(i + 1) < len(lines) else ""
                     if len(cur_struct) > 0:
+                        self.cur_line = hl_tok_line(i) + 1
                         self.add(tok_text(lines, i + 1), sig, cur_struct, SYM_MEMBER)
                     else:
+                        self.cur_line = hl_tok_line(i) + 1
                         self.add(tok_text(lines, i + 1), sig, "", SYM_FUNC)
                     i += 1        # the name is already in: it does not also enter as a word
             elif k == HLK_STRUCT or k == HLK_UNION or k == HLK_ENUM:
                 if i + 1 < n and hl_tok_kind(i + 1) == HLK_IDENT:
+                    self.cur_line = hl_tok_line(i) + 1
                     self.add(tok_text(lines, i + 1), "", "", SYM_TYPE)
                     cur_struct = tok_text(lines, i + 1)
                     depth = 0
@@ -175,6 +209,7 @@ struct Index:
                     tyname = decl_type_name(lines, n, i + 2)
                     if len(cur_struct) > 0:
                         d = lines[hl_tok_line(i)].strip() if hl_tok_line(i) < len(lines) else ""
+                        self.cur_line = hl_tok_line(i) + 1
                         self.add(tok_text(lines, i), d, cur_struct, SYM_MEMBER)
                     elif len(tyname) > 0:
                         self.vars.append(CVar(tok_text(lines, i), tyname))
@@ -186,20 +221,45 @@ struct Index:
     def imports_of(self, b: core.Buffer) -> list<str>:
         """The `.ph` files the buffer imports, without indexing anything — for
         whoever CAN read files (the event loop) to fetch the texts."""
-        probe = Index([], [], 0, False)
+        probe = Index([], [], 0, False, "", 0)
         return probe.scan(b.text(), False)
 
-    def build(self, b: core.Buffer, extra: list<str>):
-        """Builds from the buffer and from the already-read texts that came with it."""
+    def build(self, b: core.Buffer, extra: list<Source>):
+        """Builds from the buffer and from whatever files came with it."""
         self.syms = []
         self.vars = []
+        self.cur_file = ""
+        self.cur_line = 0
         for kw in KEYWORDS.split(" "):
             self.add(kw, "", "", SYM_KEYWORD)
         self.scan(b.text(), True)
         for src in extra:
-            self.scan(src, False)
+            self.cur_file = src.path
+            self.scan(src.text, False)
+        self.cur_file = ""
         self.version = b.version
         self.ready = True
+
+    def define_of(self, name: str) -> str:
+        """`path:line:1` for a name, or "" when this index has not seen it.
+
+        A declaration and not a use: the scan only records what `def`, `struct`,
+        `enum` and a member introduce, which is exactly the question."""
+        for sy in self.syms:
+            if sy.name == name and sy.kind != SYM_KEYWORD and sy.kind != SYM_WORD:
+                if len(sy.file) == 0 or sy.line <= 0:
+                    return ""
+                return sy.file + ":" + str(sy.line) + ":1"
+        return ""
+
+    def define_in_buffer(self, name: str) -> int:
+        """The line, when the declaration is in the buffer being edited. 0 = no."""
+        for sy in self.syms:
+            if sy.name == name and sy.kind != SYM_KEYWORD and sy.kind != SYM_WORD:
+                if len(sy.file) == 0 and sy.line > 0:
+                    return sy.line
+                return 0
+        return 0
 
     def owner_of(self, expr: str) -> str:
         """The struct whose members `expr` exposes: a variable's declared type,
@@ -263,4 +323,4 @@ struct Index:
 
 
 def new_index() -> Index:
-    return Index([], [], 0, False)
+    return Index([], [], 0, False, "", 0)

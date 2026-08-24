@@ -12,6 +12,8 @@ goto=3
 find1=1:15
 find2=2:10
 clicked_tab=0
+tree rows=3 (entries=3)
+clicking a directory expanded it=1
 tree_expanded=4
 can_fold0=1
 fold: folded0=1 visible=2
@@ -38,11 +40,21 @@ f2 mark: 1
 f2 goto: caret=1
 title=[pstudio — hello.p]
 status=[projps/hello.p*   2:1   LF   5 lines   17px]
-draw: rects=29 glyphs=188
+draw: rects=30 glyphs=179
 empty opens=1 lines=1
 unreadable stays out=1 said=[projps/photo.png: these bytes are not valid UTF-8]
 reload asked=1 for=hello.p
 reloaded=[    return 7]
+asking=[find in project]
+search asked=[helper]
+results in the palette=1 top=util.ph:1: def helper(a: i32) -> i32
+went to the hit: file=util.ph line=1
+no hits=[no hits for nowhere]
+word under the caret=[helper]
+jumped to line=1 asked the driver=False
+unknown name: asked the driver=True waiting for=[elsewhere_symbol]
+after the driver: file=other.p line=1
+focus moves=True and comes back=True of 2 places
 saved=1 dirty=0
 tabs=0
 pcode-ok

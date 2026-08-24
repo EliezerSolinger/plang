@@ -41,6 +41,8 @@ enum WKind:
     WK_BUTTON
     WK_SCROLLBAR
     WK_INPUT          # one-line input (palette, search)
+    WK_LIST           # a virtualised list of rows (a tree is one with depth)
+    WK_TABS           # a horizontal strip of tabs, each closable
     WK_CUSTOM         # the app's widget: behaviour comes from the node's functions
 
 
@@ -49,6 +51,46 @@ enum CmdKind:
     CMD_FRAME
     CMD_TEXT
     CMD_GLYPH
+
+
+# What a row of a list SAYS, without saying how it looks.
+#
+# `tone` and not a colour, because of the rule the theme was built on: a caller
+# that could pass a colour would be a caller that stops following the theme. The
+# list turns a tone into a role.
+const TONE_NORMAL: int = 0
+const TONE_DIM: int = 1      # secondary: a file that is not the current one
+const TONE_ACCENT: int = 2
+const TONE_OK: int = 3
+const TONE_WARN: int = 4
+const TONE_BAD: int = 5
+
+
+struct TabItem:
+    """One tab. Two consumers: the editor's files and the IDE's bottom dock.
+
+    `dot` and not "dirty": a strip of panels marks the one with something new in
+    it, and a strip of files marks the one with unsaved changes — the same mark,
+    two meanings, and the widget does not need to know which."""
+    text: str
+    dot: bool        # a small mark: unsaved, or something new arrived
+    closable: bool
+
+
+struct ListRow:
+    """One row. The list knows nothing about files, tests or packages — the
+    caller fills these six fields and gets back the INDEX of what was picked.
+
+    Six consumers wanted this widget and each had drawn it by hand: the file
+    tree, the command palette, the editor's tabs, and the three panels the IDE
+    is getting. The ones that existed were three `WK_CUSTOM`s that had drifted
+    into three slightly different scroll behaviours."""
+    text: str
+    detail: str      # a dimmer second column, right-aligned. "" = none
+    depth: int       # indentation in cells — a tree is a list that uses this
+    prefix: str      # before the text: an arrow, a mark, a bullet. "" = none
+    tone: int
+    marked: bool     # the "this is the current one" row (not the SELECTED one)
 
 
 record Rect:
@@ -130,6 +172,7 @@ struct Node:
     pad: int             # the text's left indent
 
     visible: bool
+    floating: bool       # drawn LAST and clipped only to the window (see `set_float`)
     expand_h: bool
     expand_v: bool
     dirty: bool          # the command list has to be rewritten
@@ -148,6 +191,12 @@ struct Node:
     total: int           # scrollbar: the content
     page: int            #            the visible part
     value: int           #            the position
+    rows: list<ListRow>  # list: what to show
+    top: int             #       the first visible row
+    sel: int             #       the selected one (-1 = none)
+    tabs: list<TabItem>  # tabs: the strip
+    tab_hover: int       #       which one the mouse is over (-1 = none)
+    tab_hover_x: bool    #       ... and whether it is over its ×
 
     # `def(...)?` and not `def(...)`: a signal nobody connected is ABSENT, and
     # the language only lets that be None if the type says so (9.4). The
@@ -204,6 +253,10 @@ const K_RIGHT: int = 1073741903
 const K_LEFT: int = 1073741904
 const K_HOME: int = 1073741898
 const K_END: int = 1073741901
+const K_UP: int = 1073741906
+const K_DOWN: int = 1073741905
+const K_PAGEUP: int = 1073741899
+const K_PAGEDOWN: int = 1073741902
 
 
 def new_node_blank() -> Node:
@@ -211,9 +264,9 @@ def new_node_blank() -> Node:
     that list has to appear ONCE, not in every widget constructor."""
     return Node(WK_NONE, False, -1, -1, -1,
                 Rect(0, 0, 0, 0), 0, 0, 1, 0, 0, 0, 0,
-                True, False, False, True, False, False, False,
+                True, False, False, False, True, False, False, False,
                 [],
-                False, 0, False, 0, "", 0, 1, 1, 0,
+                False, 0, False, 0, "", 0, 1, 1, 0, [], 0, -1, [], -1, False,
                 None, None, None, None, None,
                 None, None, None, None, None)
 
@@ -230,8 +283,9 @@ struct Ui:
     cell_h: int
     lay_w: int           # the size of the last layout (to redo it)
     lay_h: int
-    needs_draw: bool     # something went dirty since the last draw: the loop looks at this
-                         #   instead of repainting on every event
+    needs_draw: bool     # something went dirty since the last draw: the loop looks
+                         #   at this instead of repainting on every event
+    floats: list<int>    # collected during a draw: the floating layer
 
     # ---------- the tree ----------
 
@@ -370,6 +424,116 @@ struct Ui:
         self.nodes[id].focusable = True
         return id
 
+    def list(self, parent: int) -> int:
+        """A virtualised list. It draws only the rows that fit, so a hundred
+        thousand of them cost the same as twenty."""
+        id = self.new_node(WK_LIST, parent)
+        self.nodes[id].focusable = True
+        return id
+
+    def list_set(self, id: int, rows: list<ListRow>):
+        """Replaces the content. The selection is kept if it still exists, which
+        is what a list that is being FILTERED as somebody types has to do."""
+        nd = self.nodes[id]
+        nd.rows = rows
+        if nd.sel >= len(rows):
+            nd.sel = len(rows) - 1
+        if nd.sel < 0 and len(rows) > 0:
+            nd.sel = 0
+        self.list_reveal(id)
+        self.queue_redraw(id)
+
+    def list_rows(self, id: int) -> list<ListRow>:
+        return self.nodes[id].rows
+
+    def list_sel(self, id: int) -> int:
+        return self.nodes[id].sel
+
+    def list_top(self, id: int) -> int:
+        return self.nodes[id].top
+
+    def list_visible(self, id: int) -> int:
+        """How many rows fit. Zero before the first layout."""
+        h = self.nodes[id].rect.h
+        return h // self.cell_h if self.cell_h > 0 else 0
+
+    def list_set_sel(self, id: int, i: int):
+        nd = self.nodes[id]
+        n = len(nd.rows)
+        nd.sel = -1 if n == 0 else (0 if i < 0 else (n - 1 if i >= n else i))
+        self.list_reveal(id)
+        self.queue_redraw(id)
+
+    def list_set_top(self, id: int, t: int):
+        nd = self.nodes[id]
+        mx = len(nd.rows) - 1
+        nd.top = 0 if t < 0 else (mx if t > mx and mx > 0 else t)
+        if mx < 0:
+            nd.top = 0
+        self.queue_redraw(id)
+
+    def list_reveal(self, id: int):
+        """Scrolls the selection into view, and no further. A list that jumped
+        to centre the selection would move under the reader on every arrow."""
+        nd = self.nodes[id]
+        vis = self.list_visible(id)
+        if vis <= 0 or nd.sel < 0:
+            return
+        if nd.sel < nd.top:
+            nd.top = nd.sel
+        elif nd.sel >= nd.top + vis:
+            nd.top = nd.sel - vis + 1
+
+    def list_row_at(self, id: int, y: int) -> int:
+        """Which row is at this pixel. -1 when it is past the end."""
+        nd = self.nodes[id]
+        i = nd.top + (y - nd.rect.y) // self.cell_h
+        return i if i >= 0 and i < len(nd.rows) else -1
+
+    def tabs(self, parent: int) -> int:
+        """A horizontal strip. The editor's files are one; the IDE's bottom dock
+        is the other, and neither had to be written twice."""
+        id = self.new_node(WK_TABS, parent)
+        return id
+
+    def tabs_set(self, id: int, items: list<TabItem>):
+        nd = self.nodes[id]
+        nd.tabs = items
+        if nd.sel >= len(items):
+            nd.sel = len(items) - 1
+        self.queue_redraw(id)
+
+    def tabs_sel(self, id: int) -> int:
+        return self.nodes[id].sel
+
+    def tabs_set_sel(self, id: int, i: int):
+        nd = self.nodes[id]
+        n = len(nd.tabs)
+        nd.sel = -1 if n == 0 else (0 if i < 0 else (n - 1 if i >= n else i))
+        self.queue_redraw(id)
+
+    def tab_w(self, t: TabItem) -> int:
+        """Its width: the label, room for the ×, and a cell of breathing room on
+        each side."""
+        return self.text_w(t.text) + self.cell_w * (4 if t.closable else 2)
+
+    def tab_at(self, id: int, px: int, py: int) -> int:
+        """Which tab is at this pixel, and whether the pixel is on its ×. -1 when
+        it is past the last one."""
+        nd = self.nodes[id]
+        r = nd.rect
+        if not rect_has(r, px, py):
+            return -1
+        x = r.x
+        for i in range(len(nd.tabs)):
+            w = self.tab_w(nd.tabs[i])
+            if px < x + w:
+                cx = x + w - self.cell_w * 2
+                nd.tab_hover_x = nd.tabs[i].closable and px >= cx
+                return i
+            x += w
+        return -1
+
     def custom(self, parent: int, data: any?) -> int:
         """The app's widget. The functions come afterwards (`set_custom`),
         because one of them normally needs the id this constructor just gave."""
@@ -405,6 +569,18 @@ struct Ui:
     def set_pad(self, id: int, px: int):
         self.nodes[id].pad = px
         self.queue_redraw(id)
+
+    def set_float(self, id: int, f: bool):
+        """A FLOATING node is drawn after everything else and is clipped only to
+        the window.
+
+        Without it, a popup is clipped by whoever contains it — the completion
+        list that opens near the bottom of the editing widget is cut off by the
+        editing widget, which is not a decision anybody made. It is the same
+        mechanism a menu, a tooltip and a modal need, which is why it is one flag
+        and not three widgets."""
+        self.nodes[id].floating = f
+        self.queue_redraw_tree(id)
 
     def set_visible(self, id: int, vis: bool):
         nd = self.nodes[id]
@@ -511,6 +687,43 @@ struct Ui:
         if id >= 0:
             self.queue_redraw(id)
 
+    def focus_walk(self, id: int, out: list<int>):
+        if not self.is_vis(id):
+            return
+        if self.nodes[id].focusable:
+            out.append(id)
+        c = self.nodes[id].first_child
+        while c >= 0:
+            self.focus_walk(c, out)
+            c = self.nodes[c].next_sibling
+
+    def focusables(self) -> list<int>:
+        """Everything that can hold the keyboard, in DRAWING order — which is
+        the order somebody reading the window would go through them."""
+        out: list<int> = []
+        if self.root >= 0:
+            self.focus_walk(self.root, out)
+        return out
+
+    def focus_next(self, back: bool) -> int:
+        """Moves the keyboard to the next thing that can take it, and wraps.
+
+        The toolkit declared `K_TAB` from the first day and never did anything
+        with it. Without this, a panel is a place the mouse can reach and the
+        keyboard cannot leave — which is most of what makes an interface feel
+        like a form rather than a tool."""
+        fs = self.focusables()
+        if len(fs) == 0:
+            return -1
+        at = -1
+        for i in range(len(fs)):
+            if fs[i] == self.focus:
+                at = i
+                break
+        nxt = (at + (len(fs) - 1 if back else 1)) % len(fs) if at >= 0 else (len(fs) - 1 if back else 0)
+        self.focus_set(fs[nxt])
+        return fs[nxt]
+
     def focus_get(self) -> int:
         return self.focus
 
@@ -541,6 +754,14 @@ struct Ui:
             case WK_SCROLLBAR:
                 w = th.handle * 2 if nd.vertical else 0
                 h = 0 if nd.vertical else th.handle * 2
+            case WK_TABS:
+                w = 0
+                h = self.cell_h + 8
+            case WK_LIST:
+                # a list asks for ONE row and expands: what it needs is what the
+                # container gives it, and it draws whatever fits
+                w = self.cell_w * 8
+                h = self.cell_h
             case WK_BOX:
                 nvis = 0
                 c = nd.first_child
@@ -820,6 +1041,10 @@ struct Ui:
             case WK_SCROLLBAR:
                 self.cmd_rect(id, r, th.panel_lo)
                 self.cmd_rect(id, self.scroll_thumb(id), th.panel_hi)
+            case WK_LIST:
+                self.draw_list(id, r, th, lh)
+            case WK_TABS:
+                self.draw_tabs(id, r, th)
             case WK_CUSTOM:
                 fbld = nd.c_build
                 if fbld != None:
@@ -827,6 +1052,82 @@ struct Ui:
             case _:
                 pass
         nd.dirty = False
+
+    def tone_color(self, t: th.Theme, tone: int, dim: bool) -> int:
+        """A tone is a ROLE, never a colour: that is how a caller fills a list
+        without being able to break the theme."""
+        if tone == TONE_ACCENT:
+            return t.accent
+        if tone == TONE_OK:
+            return t.syn_comment
+        if tone == TONE_WARN:
+            return t.fold_closed
+        if tone == TONE_BAD:
+            return t.mark_error
+        if tone == TONE_DIM or dim:
+            return t.text_dim
+        return t.text
+
+    def draw_list(self, id: int, r: Rect, t: th.Theme, lh: int):
+        """Only the rows that FIT. A hundred thousand of them cost what twenty
+        cost, which is why the file tree and the palette can be the same widget
+        as a search over a whole project."""
+        nd = self.nodes[id]
+        vis = r.h // self.cell_h
+        focused = self.focus == id
+        for vi in range(vis + 1):
+            i = nd.top + vi
+            if i >= len(nd.rows):
+                break
+            row = nd.rows[i]
+            y = r.y + vi * self.cell_h
+            if y + self.cell_h > r.y + r.h:
+                break
+            if i == nd.sel:
+                self.cmd_rect(id, Rect(r.x, y, r.w, self.cell_h),
+                              t.sel if focused else t.panel_hi)
+            elif row.marked:
+                self.cmd_rect(id, Rect(r.x, y, r.w, self.cell_h), t.cur_line)
+            x = r.x + 4 + row.depth * self.cell_w * 2
+            if len(row.prefix) > 0:
+                self.cmd_text(id, x, y, row.prefix, t.text_dim)
+            x += self.cell_w * 2
+            col = self.tone_color(t, row.tone, not row.marked and i != nd.sel)
+            avail = r.w - (x - r.x) - 8
+            if len(row.detail) > 0:
+                dw = self.text_w(row.detail)
+                if dw < avail // 2:
+                    self.cmd_text(id, r.x + r.w - dw - 4, y, row.detail, t.text_dim)
+                    avail -= dw + 8
+            self.cmd_text_fit(id, x, y, row.text, avail, col)
+
+    def draw_tabs(self, id: int, r: Rect, t: th.Theme):
+        nd = self.nodes[id]
+        self.cmd_rect(id, r, t.panel_lo)
+        x = r.x
+        ty = r.y + (r.h - self.cell_h) // 2
+        for i in range(len(nd.tabs)):
+            it = nd.tabs[i]
+            w = self.tab_w(it)
+            active = i == nd.sel
+            self.cmd_rect(id, Rect(x, r.y, w, r.h), t.panel if active else t.panel_lo)
+            if active:
+                self.cmd_rect(id, Rect(x, r.y + r.h - 2, w, 2), t.accent)
+            self.cmd_text(id, x + self.cell_w, ty, it.text, t.text if active else t.text_dim)
+            # the modified mark and the close button share a cell: a dot when
+            # there is something to lose, an × when the mouse is over it
+            if it.closable:
+                cx = x + w - self.cell_w * 2
+                if nd.tab_hover == i and nd.tab_hover_x:
+                    self.cmd_rect(id, Rect(cx, ty, self.cell_w, self.cell_h), t.panel_hi)
+                    self.cmd_text(id, cx, ty, "\u00D7", t.text)
+                elif nd.tab_hover == i:
+                    self.cmd_text(id, cx, ty, "\u00D7", t.text_dim)
+                elif it.dot:
+                    self.cmd_text(id, cx, ty, "*", t.accent)
+            self.cmd_rect(id, Rect(x + w - 1, r.y, 1, r.h), t.border)
+            x += w
+        self.cmd_rect(id, Rect(r.x, r.y + r.h - 1, r.w, 1), t.border)
 
     def build_dirty(self, id: int) -> int:
         """Rewrites whoever went dirty, and returns how many commands the tree
@@ -848,6 +1149,8 @@ struct Ui:
     # ---------- the drawing ----------
 
     def draw_walk(self, p: Painter, id: int, clip: Rect):
+        """`floats` collects what has to be drawn after everything, so a popup is
+        never clipped by whoever happens to contain it."""
         if not self.is_vis(id):
             return
         nclip = rect_inter(clip, self.nodes[id].rect)
@@ -872,15 +1175,28 @@ struct Ui:
                     p.glyph(cm.cp, cm.x, cm.y, cm.color)
         c = nd.first_child
         while c >= 0:
-            self.draw_walk(p, c, nclip)
+            if self.nodes[c].floating:
+                self.floats.append(c)
+            else:
+                self.draw_walk(p, c, nclip)
             c = self.nodes[c].next_sibling
 
     def draw(self, p: Painter, w: int, h: int):
         self.needs_draw = False
+        self.floats = []
+        win = Rect(0, 0, w, h)
         p.clip_off()
         p.rect(0, 0, w, h, self.theme.bg)
         if self.root >= 0:
-            self.draw_walk(p, self.root, Rect(0, 0, w, h))
+            self.draw_walk(p, self.root, win)
+        # the floating layer, LAST and against the window. A `while` and not a
+        # `for`: a float may reveal another (a menu inside a modal), and the list
+        # grows while it is being walked.
+        i = 0
+        while i < len(self.floats):
+            f = self.floats[i]
+            i += 1
+            self.draw_walk(p, f, win)
         p.clip_off()
 
     # ---------- the input ----------
@@ -897,8 +1213,35 @@ struct Ui:
             c = self.nodes[c].next_sibling
         return best
 
+    def hit_float(self, id: int, x: int, y: int) -> int:
+        """The topmost FLOATING node containing the point.
+
+        It is searched without its ancestors' rectangles, because that is what
+        floating means: a popup hanging below the editing widget is still the
+        thing under the mouse, even though the point is outside the widget that
+        owns it."""
+        best = -1
+        if not self.is_vis(id):
+            return -1
+        c = self.nodes[id].first_child
+        while c >= 0:
+            cn = self.nodes[c]
+            if cn.floating and self.is_vis(c) and rect_has(cn.rect, x, y):
+                got = self.hit_walk(c, x, y)
+                if got >= 0:
+                    best = got
+            deep = self.hit_float(c, x, y)
+            if deep >= 0:
+                best = deep
+            c = cn.next_sibling
+        return best
+
     def hit(self, x: int, y: int) -> int:
-        return -1 if self.root < 0 else self.hit_walk(self.root, x, y)
+        if self.root < 0:
+            return -1
+        # the floating layer is on top, so it is asked FIRST
+        f = self.hit_float(self.root, x, y)
+        return f if f >= 0 else self.hit_walk(self.root, x, y)
 
     def emit(self, fn: def(int, int)?, id: int, arg: int):
         # the parameter is LOCAL, so the non-null proof holds here (43.1) — it is
@@ -1010,6 +1353,72 @@ struct Ui:
                     self.queue_redraw(id)
                     return True
                 return self.input_edit(id, ev)
+            case WK_TABS:
+                was = nd.tab_hover
+                wasx = nd.tab_hover_x
+                hit = self.tab_at(id, ev.x, ev.y)
+                if ev.kind == EV_MOUSE_MOVE:
+                    # only dirty when the state CHANGED: otherwise every movement
+                    # repaints the whole strip
+                    if hit != was or nd.tab_hover_x != wasx:
+                        nd.tab_hover = hit
+                        self.queue_redraw(id)
+                    return hit >= 0
+                if ev.kind == EV_MOUSE_DOWN and hit >= 0:
+                    if ev.button == 2 or nd.tab_hover_x:
+                        self.emit(nd.sig_cancel, id, hit)     # the × and the middle button CLOSE
+                    elif ev.button == 1:
+                        nd.sel = hit
+                        self.queue_redraw(id)
+                        self.emit(nd.sig_submit, id, hit)
+                    return True
+            case WK_LIST:
+                if ev.kind == EV_WHEEL:
+                    self.list_set_top(id, nd.top - ev.wheel * 3)
+                    return True
+                if ev.kind == EV_MOUSE_DOWN and ev.button == 1:
+                    self.focus_set(id)
+                    i = self.list_row_at(id, ev.y)
+                    if i >= 0:
+                        nd.sel = i
+                        self.queue_redraw(id)
+                        # a single click PICKS: this is a list in a panel, not a
+                        # desktop icon, and asking for two is asking twice
+                        self.emit(nd.sig_submit, id, i)
+                    return True
+                if ev.kind == EV_KEY and self.focus == id:
+                    n = len(nd.rows)
+                    vis = self.list_visible(id)
+                    if ev.key == K_DOWN:
+                        self.list_set_sel(id, nd.sel + 1)
+                        self.emit(nd.sig_changed, id, nd.sel)
+                        return True
+                    if ev.key == K_UP:
+                        self.list_set_sel(id, nd.sel - 1)
+                        self.emit(nd.sig_changed, id, nd.sel)
+                        return True
+                    if ev.key == K_PAGEDOWN:
+                        self.list_set_sel(id, nd.sel + (vis if vis > 1 else 1))
+                        self.emit(nd.sig_changed, id, nd.sel)
+                        return True
+                    if ev.key == K_PAGEUP:
+                        self.list_set_sel(id, nd.sel - (vis if vis > 1 else 1))
+                        self.emit(nd.sig_changed, id, nd.sel)
+                        return True
+                    if ev.key == K_HOME:
+                        self.list_set_sel(id, 0)
+                        self.emit(nd.sig_changed, id, nd.sel)
+                        return True
+                    if ev.key == K_END:
+                        self.list_set_sel(id, n - 1)
+                        self.emit(nd.sig_changed, id, nd.sel)
+                        return True
+                    if ev.key == K_RETURN and nd.sel >= 0:
+                        self.emit(nd.sig_submit, id, nd.sel)
+                        return True
+                    if ev.key == K_ESCAPE:
+                        self.emit(nd.sig_cancel, id, 0)
+                        return True
             case WK_SCROLLBAR:
                 vert0 = nd.vertical
                 if ev.kind == EV_MOUSE_DOWN and ev.button == 1:
@@ -1131,4 +1540,4 @@ struct Ui:
 def new_ui(cell_w: int, cell_h: int) -> Ui:
     """The font cell comes from outside: the toolkit does not talk to the driver,
     and that is what lets the layout be measured without a window."""
-    return Ui([], -1, -1, -1, -1, -1, th.theme_dark(), cell_w, cell_h, 0, 0, False)
+    return Ui([], -1, -1, -1, -1, -1, th.theme_dark(), cell_w, cell_h, 0, 0, False, [])
