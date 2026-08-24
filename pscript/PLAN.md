@@ -2277,6 +2277,28 @@ dele que parte um codepoint em dois pedaços passa a medir o do runtime.
 
 ---
 
+## F7 — os sockets que faltam (UDP e Unix)
+
+Estava na fase que aprovaste e eu escrevi-o para fora sem o dizer. Volta.
+
+`net.udp(port)` devolve um `Socket` que fala em **datagramas** — e um datagrama
+não é um stream, portanto a assinatura muda: `recv_from` devolve os bytes **e de
+quem vieram**, e `send_to` leva o destino. É a diferença que o `read_into` da F1
+não cobre sozinho, e é por isso que isto é uma fase e não uma linha.
+
+E `net.unix(path)`: o mesmo `Socket` sobre um caminho em vez de uma porta. Vale
+por si — é como dois processos na mesma máquina falam sem passar pela rede — e
+vale pelo que abre: passar um DESCRITOR entre processos (`SCM_RIGHTS`) é o
+mecanismo com que um servidor entrega uma ligação já aceite a outro processo.
+
+Herdam tudo o resto de graça: já são streams, já são sondados, já falam `bytes`
+depois da F1.
+
+**Fica de pé:** um servidor que responde a datagramas, e dois processos na mesma
+máquina a falar sem porta nenhuma.
+
+---
+
 ## O que NÃO está no plano
 
 | não entra | porquê |
@@ -2286,4 +2308,3 @@ dele que parte um codepoint em dois pedaços passa a medir o do runtime.
 | `mmap` de escrita | uma segunda história de durabilidade, e nada precisa dela ainda |
 | `FileLock` | não há dois processos a disputar um ficheiro neste ecossistema |
 | `sendfile` | vem de graça depois do `Mapping` + `writev` |
-| UDP, sockets Unix | são sockets, não são NIO; fase própria quando alguém os pedir |
