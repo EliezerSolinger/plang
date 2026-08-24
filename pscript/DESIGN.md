@@ -5990,6 +5990,24 @@ criar outro, que é a diferença entre um `git mv` e uma perda.
   faltasse. É o `IN_Q_OVERFLOW` do inotify, e escondê-lo é a diferença entre um
   vigia e um vigia que mente.
 
+* **vigia-se o DIRECTÓRIO, e filtra-se pelo nome — nunca o ficheiro.** É uma
+  armadilha e é exactamente o caso que o editor tem: um editor não escreve por
+  cima de um ficheiro, escreve num temporário e faz `rename`. O inode que estava
+  a ser vigiado morre, chega um `IN_MOVE_SELF`, e a partir daí **não chega mais
+  nada** — o vigia ficou agarrado a um inode que já não é o ficheiro. Toda a
+  gente tropeça nisto uma vez; fica escrito para ser zero.
+* **e não vigia sockets, de propósito.** Vigiar um socket já é `await` — um
+  `Watcher` que os aceitasse seria voltar a expor o `Selector` que a 135 recusou.
+  São três perguntas diferentes: "há bytes neste socket?" responde o escalonador
+  (sondado), "há bytes neste ficheiro?" responde o pool (um ficheiro regular não
+  se sonda — o `epoll` recusa-o com `EPERM`, porque está *sempre* pronto e o que
+  bloqueia é o disco), e "este caminho mudou?" é a única que não tinha resposta.
+  A linha não é ficheiro contra socket: é **stream contra ficheiro regular**, e a
+  F8 prova-o — um pty é um `Socket` aqui não por ser rede, mas por se sondar.
+  O que fecha o círculo: o descritor do próprio `inotify` é um stream, e é por
+  isso que o `Watcher` pode ser aguardado. Ele não é uma segunda maneira de
+  esperar; é mais um stream a usar a única que existe.
+
 **Em aberto, para decidir quando a F5 chegar** — escrito como aberto de propósito,
 para não ser resolvido por engano:
 
@@ -6007,7 +6025,10 @@ para não ser resolvido por engano:
    quatro eventos (escrever num temporário, renomear, mudar atributos). Um vigia
    que os entrega crus faz com que cada consumidor escreva o mesmo anti-ressalto.
    O `WatchService` do Java não coalesce, e é uma queixa conhecida dele.
-4. **Um evento de cada vez, ou um lote.** Uma construção que toca em oitocentos
+4. **O `inotify` é só do sistema de ficheiros local.** Uma alteração feita noutra
+   máquina sobre NFS é invisível. Não afecta nada aqui — as árvores são locais —
+   e é melhor estar dito do que ser descoberto por alguém com o `$HOME` em rede.
+5. **Um evento de cada vez, ou um lote.** Uma construção que toca em oitocentos
    ficheiros produz oitocentos eventos, e `await` oitocentas vezes são oitocentas
    voltas ao escalonador. Um `w.drain()` que devolve o que houver é a
    alternativa, e muda a forma de quem consome.
