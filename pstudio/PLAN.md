@@ -78,6 +78,31 @@ laço, e se abrisse, salvar truncava-o.
 `read_file` passa a devolver **`str?`**: `None` é falha (com o motivo na barra de
 estado, e sem abrir aba), `""` é um arquivo vazio de verdade.
 
+### F0.2b — três defeitos da mesma família, achados ao consertar
+
+O `""` não era o único sítio onde a estrutura de dados mentia:
+
+* **`reload_cur` lia o CACHE** — que é o que foi lido quando o arquivo abriu. Um
+  reload existe precisamente porque o disco deixou de bater com isso, então
+  "Reload File" e a recarga por mudança externa devolviam o texto VELHO. Passa a
+  ser um pedido ao driver (`want_reload`), e o driver acha a aba **pelo caminho**,
+  não por "a actual": entre pedir e ser servido passa uma volta do laço.
+* **`Buffer.load` era quadrático para arquivos CRLF** — tirava os `\r` com `+=`
+  num laço sobre o arquivo inteiro. `replace` e `split` no lugar.
+* **`Buffer.find` e `find_all` comparavam coluna a coluna**, alocando uma fatia
+  por coluna: meio milhão de alocações para varrer um arquivo de 11 000 linhas,
+  50 ms onde uma varredura nativa leva um. `find` no lugar.
+
+E dois no realce, que a medição destapou:
+
+* a passagem dos comentários **percorria os codepoints de todas as linhas** —
+  35 dos 48 ms de uma tecla. Nove linhas em dez não têm `#`, e perguntar isso de
+  uma vez é uma varredura em C;
+* `update` **realocava uma lista por linha** a cada relexagem — onze mil
+  alocações por tecla. Agora reusa quando a contagem de linhas não muda;
+* e o relex saiu do `changed()` (por EDIÇÃO) para o `build` (por QUADRO): entre
+  dois quadros pode haver várias edições, e só a última ia ser vista.
+
 ### F0.3 — o laço de eventos não tem `try`
 
 Em pscript, estouro de inteiro e índice fora de faixa LEVANTAM. Um defeito de
@@ -112,6 +137,20 @@ tests/pstudio/perf_test.psc   (selfhost/ps_lower.p, 11 076 linhas)
 # falha com o número medido, não com "lento":
 #   FAIL salvar: 1 340 ms, tecto 50 ms
 ```
+
+O portão é construído com **`-O2`, que é como o editor sai**. Medir velocidade num
+binário não optimizado mede o binário errado: o lexer do compilador sozinho custa
+15 ms sobre onze mil linhas a `-O0` e 9 ms a `-O2`, e uma tecla tem dezasseis.
+
+O que a F0 mediu, antes e depois:
+
+| | antes | depois |
+|---|---|---|
+| salvar (`text()`) | 1 340 ms | < 50 |
+| uma tecla (edição + relexagem) | 78 ms | < 16 |
+| abrir | 202 ms | < 200 |
+| busca no arquivo | 51 ms | < 50 |
+| abrir com CRLF | quadrático | < 200 |
 
 **A promessa de tamanho:** 50 mil linhas confortáveis — com folga sobre qualquer
 código-fonte. Acima disso o editor avisa e abre **só leitura**, sem índice nem

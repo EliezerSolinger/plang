@@ -1,0 +1,13 @@
+lines=11000
+open: ok
+save (text()): ok
+round trip=1
+completion index: ok
+one key: ok
+search: ok
+found=1
+open (CRLF): ok
+crlf=1
+copy all (range_text()): ok
+copied=1
+perf-ok

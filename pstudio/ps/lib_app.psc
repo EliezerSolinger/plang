@@ -34,6 +34,21 @@ enum PalMode:
     PAL_TEXT          # a TYPED line, for when it asks instead of offering
 
 
+struct ReadOut:
+    """The answer to "give me this file's text", with the three states it really
+    has instead of the two a `str` can carry.
+
+    They used to be two, and `""` meant all of them: an empty file, a file that
+    could not be decoded, and a file the driver had not read yet. The shell could
+    not tell "I have nothing" from "there is nothing", so it asked the driver to
+    read it again, for ever, every 500 ms, with no message. `touch x.p` was enough
+    to reproduce it. A `.png` fell down the same hole — and had it opened, saving
+    would have truncated it."""
+    have: bool       # the driver has an ANSWER — either the text or a reason
+    text: str
+    why: str         # "" = it worked; anything else is why it did not
+
+
 struct Tab:
     cv: cvm.CodeView
     title: str
@@ -127,6 +142,7 @@ struct App:
     dirty_ui: bool     # a frame needs presenting
     now_ms: int        # the clock, which comes from the driver
     want_open: str     # 114: a file the app wants and the driver has to READ
+    want_reload: list<str>   # ... and the ones whose cached text is STALE
     want_msg: str      # a message for the status bar (a write failure)
     # F6: the BUILD. The app does not build — it ASKS, the way it asks for a
     # file to be read, and the driver serves it in the event loop. The reason is
@@ -174,7 +190,7 @@ struct App:
     pal_build_default: bool
 
     # ---- the driver, injected by `app.psc` ----
-    read_file: (def(str) -> str)?        # "" when it did not work
+    read_file: (def(str) -> ReadOut)?
     write_file: (def(str, str) -> bool)?
     mtime_of: (def(str) -> int)?
     clip_get: (def() -> str)?
@@ -190,11 +206,11 @@ struct App:
     # into a variable and called INSIDE the branch. Doing that once per function
     # here leaves the rest of the file without an `if` at every use.
 
-    def do_read(self, p: str) -> str:
+    def do_read(self, p: str) -> ReadOut:
         f = self.read_file
         if f != None:
             return f(p)
-        return ""
+        return ReadOut(False, "", "")
 
     def do_write(self, p: str, text: str) -> bool:
         f = self.write_file
@@ -253,18 +269,23 @@ struct App:
             if self.tabs[i].cv.path == p:
                 self.select_tab(i)          # already open: just activate it
                 return
-        text = self.do_read(p)
+        r = self.do_read(p)
         # 114: READING is `await` in pscript (76.2), and this path is synchronous
         # on purpose (an index that waits forces every caller to wait). So the
         # app ASKS and the driver reads: `want_open` is the request, and the
-        # driver calls `open_file` again with the text already in hand.
-        if len(text) == 0 and path.isfile(p):
-            self.want_open = p
+        # driver calls `open_file` again with the answer already in hand.
+        if not r.have:
+            if path.isfile(p):
+                self.want_open = p
             return
-        if len(text) == 0 and not path.isfile(p):
+        if len(r.why) > 0:
+            # a file that cannot be read gets NO tab. An empty tab over a `.png`
+            # would truncate it on the next save, which is the worst thing an
+            # editor can do to a file it did not understand.
+            self.want_msg = p + ": " + r.why
             return
         cv = cvm.cv_create(self.u, self.cvhost)
-        cv.load_text(p, text, self.do_mtime(p))
+        cv.load_text(p, r.text, self.do_mtime(p))
         self.tabs.append(Tab(cv, path.basename(p)))
         self.select_tab(len(self.tabs) - 1)
 
@@ -779,18 +800,48 @@ struct App:
                 cv.toggle_minimap()
         self.dirty_ui = True
 
+    def request_reload(self, p: str):
+        """Asks the driver to read `p` FROM DISK again.
+
+        It does not read here (reading is `await`, 76.2) and it must not use what
+        the driver already has: the cache holds what was read when the file was
+        OPENED, and a reload exists precisely because the disk stopped matching
+        that. Reading the cache made "Reload File" and the external-change reload
+        both return the OLD text.
+
+        A LIST and not one field: `check_external` walks every tab, and several
+        files can have changed at once — a `git checkout` changes all of them."""
+        if len(p) > 0 and p not in self.want_reload:
+            self.want_reload.append(p)
+
     def reload_cur(self):
         cv = self.cur_cv()
-        if cv == None or len(cv.path) == 0:
-            return
-        keep = cv.top
-        cv.load_text(cv.path, self.do_read(cv.path), self.do_mtime(cv.path))
-        cv.top = keep
-        self.dirty_ui = True
+        if cv != None:
+            self.request_reload(cv.path)
+
+    def reload_now(self, p: str, text: str):
+        """The driver came back with fresh text for `p` (see `reload_cur`).
+
+        It finds the tab by PATH and not by "the current one": between asking and
+        being served there is a turn of the event loop, and the answer belongs to
+        the file that was asked for."""
+        for i in range(len(self.tabs)):
+            cv = self.tabs[i].cv
+            if cv.path == p:
+                keep = cv.top
+                cv.load_text(p, text, self.do_mtime(p))
+                cv.top = keep
+                self.dirty_ui = True
+                return
 
     def check_external(self):
         """A file changed on disk: reloads what is clean, asks about what has
-        local edits."""
+        local edits.
+
+        It no longer SWITCHES to the tab it is reloading. That used to happen
+        because the reload worked on "the current tab", and being yanked to
+        another file because something touched it in the background is not what
+        anybody asked for."""
         for i in range(len(self.tabs)):
             cv = self.tabs[i].cv
             if len(cv.path) == 0 or not path.exists(cv.path):
@@ -799,12 +850,10 @@ struct App:
             if m == cv.mtime:
                 continue
             if not cv.buf.dirty:
-                self.select_tab(i)
-                self.reload_cur()
+                self.request_reload(cv.path)
             else:
                 if self.do_confirm_reload(self.tabs[i].title):
-                    self.select_tab(i)
-                    self.reload_cur()
+                    self.request_reload(cv.path)
                 else:
                     cv.mtime = m      # they chose to keep it: do not ask again
         self.dirty_ui = True
@@ -1154,7 +1203,7 @@ def tab_close_x(u: pui.Ui, x: int, w: int) -> int:
 def new_app(u: pui.Ui, root_dir: str) -> App:
     app = App(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
               [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [],
-              False, True, True, 0, "", "",
+              False, True, True, 0, "", [], "",
               "", False, False, False, "", False, False, [], 0, 0, "", "", 0, 0, 0, False,
               "", "", 0, "", False,
               None, None, None, None, None, None, None, None, None)

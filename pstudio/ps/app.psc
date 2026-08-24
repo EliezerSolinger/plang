@@ -49,15 +49,23 @@ import path
 
 
 cache: dict<str, str> = {}
+failed: dict<str, str> = {}      # path -> why the read did not work
 pending: list<str> = []          # paths with a pending write (the text is in the cache)
 
 
-async def read_file(p: str) -> str:
+async def read_file(p: str) -> str?:
+    """`None` is a FAILURE; `""` is an empty file.
+
+    They used to be the same value, and that is why an empty file never opened:
+    the shell could not tell "I have nothing" from "there is nothing", so it asked
+    for the file to be read again for ever, every 500 ms, without a message. The
+    reason goes into `failed`, and the shell shows it in the status bar."""
     try:
         with await open(p, "r") as f:
             return await f.text()
     catch e:
-        return ""
+        failed[p] = e.message
+        return None
 
 
 async def flush_writes(app: appm.App):
@@ -71,8 +79,15 @@ async def flush_writes(app: appm.App):
             app.want_msg = "could not write " + p
 
 
-def read_cached(p: str) -> str:
-    return cache[p] if p in cache else ""
+def read_cached(p: str) -> appm.ReadOut:
+    """The three states the shell needs: I have the text, I have a reason, or I
+    have nothing yet. The cache is checked FIRST, so a path that failed once and
+    then read fine is not held against it."""
+    if p in cache:
+        return appm.ReadOut(True, cache[p], "")
+    if p in failed:
+        return appm.ReadOut(True, "", failed[p])
+    return appm.ReadOut(False, "", "")
 
 
 def queue_write(p: str, text: str) -> bool:
@@ -388,8 +403,21 @@ async def serve_requests(app: appm.App):
     if len(app.want_open) > 0:
         p = app.want_open
         app.want_open = ""
-        cache[p] = await read_file(p)
+        t = await read_file(p)
+        if t != None:
+            cache[p] = t
         app.open_file(p)
+    while len(app.want_reload) > 0:
+        # a reload does NOT go through the cache: the cache is what was read when
+        # the file was opened, and a reload exists because the disk stopped
+        # matching that
+        p2 = app.want_reload.pop()
+        t2 = await read_file(p2)
+        if t2 != None:
+            cache[p2] = t2
+            app.reload_now(p2, t2)
+        else:
+            app.want_msg = p2 + ": " + (failed[p2] if p2 in failed else "could not read it")
     await flush_writes(app)
     await serve_build(app)
     if len(app.build_msg) > 0:
@@ -403,8 +431,70 @@ async def serve_requests(app: appm.App):
 
 async def open_arg(app: appm.App, arg: str):
     if path.isfile(arg):
-        cache[arg] = await read_file(arg)
-        app.open_file(arg)
+        t = await read_file(arg)
+        if t != None:
+            cache[arg] = t
+        app.open_file(arg)      # `failed` already carries the reason if it did not
+
+
+# ---------- the loop survives a defect (F0) ----------
+#
+# pscript RAISES on integer overflow and on an index out of range, so a slip in
+# column arithmetic used to kill the process and take with it everything that had
+# not been saved. The loop had no `try` at all.
+#
+# Now a defect is a lost EVENT instead of lost work: what is modified goes to a
+# draft, the reason goes to a log and to the status bar, and the loop carries on.
+
+const CRASH_DIR: str = "build/pstudio"
+
+rescues: int = 0
+
+
+private def flat_name(p: str) -> str:
+    """`a/b/c.psc` -> `a%b%c.psc`. Two files called `main.psc` in different folders
+    are two drafts, not one overwriting the other."""
+    return p.replace("/", "%")
+
+
+private async def rescue(app: appm.App, doing: str, why: str):
+    """Keeps the work, records the reason, and lets the loop go on.
+
+    Nothing in here may raise: it runs precisely when something already did."""
+    global rescues
+    rescues += 1
+    kept = 0
+    if rescues == 1:
+        # only the FIRST time: if the state is broken, the second draft is not
+        # better than the first, and a defect that repeats every frame must not
+        # write a file every frame
+        for i in range(len(app.tabs)):
+            cv = app.tabs[i].cv
+            if not cv.buf.dirty or len(cv.path) == 0:
+                continue
+            try:
+                d = path.join(CRASH_DIR, "draft")
+                if not path.isdir(d):
+                    os.makedirs(d)
+                f = await open(path.join(d, flat_name(cv.path)), "w")
+                await f.write(cv.buf.text())
+                await f.close()
+                kept += 1
+            catch e:
+                pass
+    if rescues <= 20:
+        try:
+            if not path.isdir(CRASH_DIR):
+                os.makedirs(CRASH_DIR)
+            lg = await open(path.join(CRASH_DIR, "crash.log"), "a")
+            await lg.write("while " + doing + ": " + why + "\n")
+            await lg.close()
+        catch e2:
+            pass
+    app.want_msg = "internal error while " + doing + ": " + why
+    if kept > 0:
+        app.want_msg += " — " + str(kept) + " draft(s) in " + path.join(CRASH_DIR, "draft")
+    app.dirty_ui = True
 
 
 # ---------- the loop ----------
@@ -419,39 +509,49 @@ async def run(app: appm.App) -> int:
         # way, 1ms this way)
         kind = shim_wait(appm.BLINK_MS)
         app.now_ms = now_ms()
-        if kind == SHIM_TIMEOUT or kind == SHIM_NONE:
-            blink = app.tick(app.now_ms, blink)
-        elif kind == SHIM_FOCUS:
-            app.check_external()
-        elif kind == SHIM_QUIT:
-            app.try_quit()
-        elif kind == SHIM_RESIZE:
-            app.u.layout(shim_width(), shim_height())
-            app.u.queue_redraw_tree(app.root)
-            app.dirty_ui = True
-        else:
-            app.feed(ev_from_shim(kind))
-        while app.running:
-            k2 = shim_poll()
-            if k2 == SHIM_NONE:
-                break
-            app.now_ms = now_ms()
-            if k2 == SHIM_QUIT:
+        try:
+            if kind == SHIM_TIMEOUT or kind == SHIM_NONE:
+                blink = app.tick(app.now_ms, blink)
+            elif kind == SHIM_FOCUS:
+                app.check_external()
+            elif kind == SHIM_QUIT:
                 app.try_quit()
-            elif k2 == SHIM_RESIZE:
+            elif kind == SHIM_RESIZE:
                 app.u.layout(shim_width(), shim_height())
                 app.u.queue_redraw_tree(app.root)
                 app.dirty_ui = True
-            elif k2 == SHIM_FOCUS:
-                app.check_external()
             else:
-                app.feed(ev_from_shim(k2))
-        await serve_requests(app)
-        if app.dirty_ui or app.u.needs_draw:
-            shim_clear(app.u.theme.bg)
-            app.u.draw(painter(), shim_width(), shim_height())
-            shim_present()
-            app.dirty_ui = False
+                app.feed(ev_from_shim(kind))
+            while app.running:
+                k2 = shim_poll()
+                if k2 == SHIM_NONE:
+                    break
+                app.now_ms = now_ms()
+                if k2 == SHIM_QUIT:
+                    app.try_quit()
+                elif k2 == SHIM_RESIZE:
+                    app.u.layout(shim_width(), shim_height())
+                    app.u.queue_redraw_tree(app.root)
+                    app.dirty_ui = True
+                elif k2 == SHIM_FOCUS:
+                    app.check_external()
+                else:
+                    app.feed(ev_from_shim(k2))
+        catch e:
+            await rescue(app, "handling an event", e.message)
+        try:
+            await serve_requests(app)
+        catch e2:
+            await rescue(app, "serving a request", e2.message)
+        try:
+            if app.dirty_ui or app.u.needs_draw:
+                shim_clear(app.u.theme.bg)
+                app.u.draw(painter(), shim_width(), shim_height())
+                shim_present()
+                app.dirty_ui = False
+        catch e3:
+            app.dirty_ui = False       # do not redraw the same failure for ever
+            await rescue(app, "drawing", e3.message)
     return 0
 
 

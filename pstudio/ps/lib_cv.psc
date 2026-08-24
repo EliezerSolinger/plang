@@ -153,6 +153,7 @@ struct CodeView:
         self.top = 0
         self.left = 0
         self.changed()
+        self.hl.update(self.buf)      # opening is not a keystroke: lex it now
 
     def text_to_save(self) -> str:
         return self.buf.text()
@@ -392,7 +393,9 @@ struct CodeView:
         self.u.queue_redraw(self.id)
 
     def changed(self):
-        self.hl.update(self.buf)
+        # the relex is NOT done here: `build` does it, once per FRAME. Between two
+        # frames there can be several edits — a paste, a multi-caret insert,
+        # undoing a whole group — and only the last one of them matters.
         self.sync_bars()
         self.u.queue_redraw(self.id)
         self.dirty_cb = True
@@ -950,7 +953,7 @@ struct CodeView:
         self.changed()
         self.scroll_to_caret()
 
-    # ---------- busca ----------
+    # ---------- search ----------
 
     def search(self, needle: str, forward: bool, use_re: bool, from_caret: bool) -> bool:
         if len(needle) == 0:

@@ -434,13 +434,18 @@ suite_pstudio() {
     # o `pui_test` saiu daqui: o toolkit virou o pacote `packages/pui`, e o teste
     # dele viaja COM o pacote (`packages/pui/test/`). Quem o roda é a suíte de
     # pacotes do `ppack` — um pacote publicado carrega a prova de que funciona.
-    for psprog in core_test:ps_core.expected:"the ported buffer" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor"; do
+    for psprog in core_test:ps_core.expected:"the ported buffer" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor" perf_test:ps_perf.expected:"the ceilings on a big file"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
         [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }
         local extraobj=""
-        case $pname in cv_test|app_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
-        [ $ok = 1 ] && { $CC $CSTD -w -o "$C/$pname" "$C/pstudio/ps/$pname.c" \
+        case $pname in cv_test|app_test|perf_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
+        # the perf gate is built the way the editor SHIPS. Measuring speed on an
+        # unoptimised build measures the wrong binary: the compiler's lexer alone
+        # is 15ms over 11 000 lines at -O0 and 9ms at -O2, and the editor is -O2.
+        local optflag=""
+        case $pname in perf_test) optflag="-O2" ;; esac
+        [ $ok = 1 ] && { $CC $CSTD $optflag -w -o "$C/$pname" "$C/pstudio/ps/$pname.c" \
                              "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_os.c" "$C/pscript/runtime/psrt_top.c" $extraobj $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
         if [ $ok = 1 ] && check_run "$C/$pname" tests/pstudio/$pexp "pstudio-ps-${pname%_test}"; then
             pass=$((pass+1))

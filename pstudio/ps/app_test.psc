@@ -118,10 +118,17 @@ def set_clip(s: str):
     clip = s
 
 
-def read_now(p: str) -> str:
+unreadable: dict<str, str> = {}
+
+
+def read_now(p: str) -> appm.ReadOut:
+    """The three states, as the driver gives them: have the text, have a reason,
+    or have nothing yet (which is what makes the shell ask)."""
     if p in saved:
-        return saved[p]
-    return ""
+        return appm.ReadOut(True, saved[p], "")
+    if p in unreadable:
+        return appm.ReadOut(True, "", unreadable[p])
+    return appm.ReadOut(False, "", "")
 
 
 def write_now(p: str, t: str) -> bool:
@@ -133,6 +140,14 @@ def write_now(p: str, t: str) -> bool:
 saved[D + "/hello.p"] = "def main() -> i32:\n    x: i32 = 42  # answer\n    return x\n"
 saved[D + "/util.ph"] = "def helper(a: i32) -> i32\n"
 saved[D + "/sub/notes.txt"] = "one note\nanother note\n"
+
+# F0: the three answers a read can give. An EMPTY file used to never open — `""`
+# was the sentinel for "empty" and for "I could not read it" at the same time, so
+# the shell asked the driver to read it again, for ever, every 500 ms, with no
+# message. And a file that cannot be decoded must get NO tab: an empty tab over a
+# `.png` truncates it on the next save.
+saved[D + "/empty.p"] = ""
+unreadable[D + "/photo.png"] = "these bytes are not valid UTF-8"
 
 u.layout(1100, 720)
 print("tree=" + str(len(app.entries)) + " indexed_files=" + str(len(app.files)))
@@ -312,6 +327,28 @@ print("status=[" + u.text_of(app.status) + "]")
 p = pui.Painter(count_rect, count_frame, nothing4, nothing0, count_glyph)
 u.draw(p, 1100, 720)
 print("draw: rects=" + str(rects) + " glyphs=" + str(glyphs))
+
+# F0: the empty file opens (one line), and the unreadable one does not open at all
+app.open_file(D + "/empty.p")
+ntabs = len(app.tabs)
+print("empty opens=" + ("1" if app.tabs[ntabs - 1].cv.path == D + "/empty.p" else "0") +
+      " lines=" + str(app.tabs[ntabs - 1].cv.buf.nlines()))
+app.open_file(D + "/photo.png")
+print("unreadable stays out=" + ("1" if len(app.tabs) == ntabs else "0") +
+      " said=[" + app.want_msg + "]")
+app.want_msg = ""
+app.close_tab(ntabs - 1)
+app.select_tab(0)          # back to hello.p, which is what the save below checks
+
+# F0: a reload does NOT read the cache. The fake driver's table is the "disk":
+# change it, ask, and the buffer has to follow. Reading the cache made both
+# "Reload File" and the external-change reload hand back the OLD text.
+saved[D + "/hello.p"] = "def main() -> i32:\n    return 7\n"
+app.reload_cur()
+print("reload asked=" + str(len(app.want_reload)) + " for=" +
+      (path.basename(app.want_reload[0]) if len(app.want_reload) > 0 else "-"))
+app.reload_now(D + "/hello.p", saved[D + "/hello.p"])
+print("reloaded=[" + app.tabs[0].cv.buf.line_text(1) + "]")
 
 # save and close
 app.save_cur()

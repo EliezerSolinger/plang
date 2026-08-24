@@ -39,6 +39,10 @@ f2 goto: caret=1
 title=[pstudio — hello.p]
 status=[projps/hello.p*   2:1   LF   5 lines   17px]
 draw: rects=29 glyphs=188
+empty opens=1 lines=1
+unreadable stays out=1 said=[projps/photo.png: these bytes are not valid UTF-8]
+reload asked=1 for=hello.p
+reloaded=[    return 7]
 saved=1 dirty=0
 tabs=0
 app-ok

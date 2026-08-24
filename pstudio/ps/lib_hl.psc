@@ -53,14 +53,30 @@ struct Hl:
             self.lines[line].append(HlSpan(col, length, cls))
 
     def update(self, b: core.Buffer):
-        """Relexes the WHOLE file when the buffer's version changed. It is what
-        the editor in P does, and it is cheap enough: the compiler's lexer goes
-        through a thousand-line file in less than a millisecond."""
+        """Relexes the WHOLE file when the buffer's version changed.
+
+        It is what the editor in P does, and it is called once per FRAME (from
+        `build`) rather than once per edit — several edits between two frames
+        cost one relex, and only the last one of them was going to be seen.
+
+        On the biggest file in this repository (11 076 lines) the whole thing is
+        under 16 ms, and where it goes is worth knowing before anybody makes it
+        incremental: about 9 ms is the compiler's lexer itself, and the rest is
+        the spans. It used to be 78 ms, and 35 of those were walking the
+        codepoints of every line looking for a `#`."""
         if self.version == b.version and len(self.lines) == b.nlines():
             return
-        self.lines = []
-        for i in range(b.nlines()):
-            self.lines.append([])
+        # REUSE the per-line lists when the line count did not change, which is
+        # the common case (typing inside a line). Rebuilding them allocated one
+        # list per line on every keystroke — eleven thousand of them on a big
+        # file, and the collector paid for all of it.
+        if len(self.lines) == b.nlines():
+            for l in self.lines:
+                l.clear()
+        else:
+            self.lines = []
+            for i in range(b.nlines()):
+                self.lines.append([])
         self.version = b.version
         if not self.enabled:
             return
@@ -80,6 +96,11 @@ struct Hl:
         # the comment: the first `#` OUTSIDE a string runs to the end of the line
         for ln in range(b.nlines()):
             s = b.line_text(ln)
+            # asking "is there a `#` at all" in one go is a scan in C; walking the
+            # codepoints of EVERY line was 35 of the 48 ms that one keystroke cost
+            # on an 11 000-line file, and nine lines in ten have no `#`
+            if "#" not in s:
+                continue
             col = 0
             for ch in s:
                 if ch == "#":
