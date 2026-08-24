@@ -256,7 +256,7 @@ def area(p: Point, scale: float) -> int:
 private def hidden() -> str:
     return "does not come out in the API"
 
-async def later(n: int) -> list<str>:
+async def later(n: int) -> List<str>:
     await sleep(0.0)
     return []
 EOP
@@ -270,7 +270,7 @@ case $api in
     *) echo "  FAIL pscript api: the signature came out wrong"; fail=$((fail+1)) ;;
 esac
 case $api in
-    *"async def later(int) -> list<str>"*) ok=$((ok+1)) ;;
+    *"async def later(int) -> List<str>"*) ok=$((ok+1)) ;;
     *) echo "  FAIL pscript api: the async came out wrong"; fail=$((fail+1)) ;;
 esac
 # `private` is not interface

@@ -28,7 +28,7 @@ def berra(id: int, quantas: int) -> int:
         print(f"w{id}-{i}")
     return id
 
-ws: list<Worker<int>> = []
+ws: List<Worker<int>> = []
 for k in range(8):
     ws.append(spawn(berra, (k, 200)))
 for i in range(200):

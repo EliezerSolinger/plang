@@ -94,7 +94,7 @@ ls -d build/pkg/stl-0.1.0-* >/dev/null 2>&1 && ok || bad "install did not unpack
 # ---- 6. and a program that uses it COMPILES and RUNS ----
 cat > use.psc <<'EOF'
 import <sha2/sha2.ph>
-b: list<u8> = []
+b: List<u8> = []
 for ch in "abc":
     b.append(u8(ord(ch)))
 print(sha256_of(b))

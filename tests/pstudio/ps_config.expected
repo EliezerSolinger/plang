@@ -9,7 +9,7 @@ not json:
   ! .pstudio.json: is not a JSON object (invalid JSON: a key has to be a string at byte 2) — everything default
 not an object:
   tree=220 outline=240 dock=200 open=TTT target=[] test=[]
-  ! .pstudio.json: is not a JSON object (this `any` holds list, not dict<str, any>) — everything default
+  ! .pstudio.json: is not a JSON object (this `any` holds List, not Dict<str, any>) — everything default
 wrong types:
   tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: tree_w should be a number, using 220
