@@ -362,3 +362,188 @@ O que fica para você: **aposentar ou não o editor em P.** Ele são 8 mil linha
 é o que o passo 7/8 do `verify-all` usa para medir a compilação de P; apagá-lo
 tira essa medida. As duas versões convivem sem custo (`make pstudio` e
 `make pstudio-ps`), então não há pressa nenhuma nessa decisão.
+
+---
+
+## O destino do pstudio — baterias 120-123 (2026-08-24)
+
+Suas palavras: *"eu precisava mesmo é de uma IDE integrada com o ecossistema
+igual um netbeans da vida, acho que faz mais sentido como sendo editor da
+linguagem"* — e, na mesma sessão, *"vc poderia manter uma build dentro do
+pstudio minimalista junto com o pstudio, na mesma pasta. um PCode ai se o
+PStudio, ai teremos um zed e uma IDE, e também vai servir para provar
+desacoplamento de componentes"*.
+
+São **dois produtos na mesma pasta**, e o segundo existe por duas razões, não
+uma: ele é o editor que você quer usar, e é a PROVA de que as camadas estão
+mesmo separadas.
+
+### 120 — a identidade
+
+| decisão | o que fica dito |
+|---|---|
+| **IDE de verdade, painéis sempre visíveis** | Barra de ferramentas em cima, árvore à esquerda, outline à direita, dock de abas em baixo. O editor é UMA das áreas, não a tela toda. Quando o Zed e o NetBeans brigam, ganha o NetBeans — **no pstudio**. |
+| **A espinha é o ciclo** `build → rodar → testar → falhou aqui` | Não é o diagnóstico vivo, não é o depurador, não é o navegador de pacotes. É o laço que se percorre cem vezes por dia. |
+| **Sem depurador** | *"`print` e stack trace bastam"*. O investimento vai para tornar ISSO excelente — trace clicável, valores no erro — em vez de um depurador de verdade. Nada de informação de linha no C gerado, nada de protocolo de depuração, nada de parar o runtime. |
+| **C é cidadão de primeira classe** | P, pscript e C com realce **e navegação**. O compilador lê os três; o editor pinta os três. Consequência: o tokenizador de C do `cfront` (hoje `private`, e `cfront.ph` só exporta `c_parse` e `cchar_val`) tem de sair com um modo tolerante, como o `lex_ex(..., tolerant=True)` do lado do P. |
+
+### 121 — o corte, e a prova
+
+**O `pcode` é um editor PURO: zero ecossistema.** Abas, árvore, paleta, busca,
+realce, completamento, dobra, multi-cursor. Nada de build, teste, pacote ou
+diagnóstico. É o seam mais limpo que havia, e é o que torna a prova forte.
+
+```
+pcode                          pstudio
+  lib_shell ────────────┬──────  lib_shell
+  lib_cv    ────────────┼──────  lib_cv
+  lib_core  ────────────┼──────  lib_core
+  lib_hl    ────────────┼──────  lib_hl
+  lib_complete ─────────┼──────  lib_complete
+  pui       ────────────┼──────  pui
+  shim      ────────────┘        shim
+                               + lib_ide     (os painéis)
+                               + lib_build   (o motor pbuild)
+                               + lib_tests
+                               + lib_pkg     (pacotes)
+                               + packages/pbuild
+```
+
+**O portão é o GRAFO.** Uma checagem pergunta ao `ppack` quais fontes o alvo
+`pcode` lê — `--deps` já responde isso — e falha se aparecer um módulo da lista
+proibida. É barato, é automático, e a mensagem diz qual `import` quebrou a regra.
+Sem isso, em três meses o `pcode` linka a IDE inteira e ninguém nota.
+
+O `lib_app` de hoje parte em dois: `lib_shell` (abas, árvore, paleta, busca,
+atalhos — compartilhado) e `lib_ide` (painéis, build, testes, pacotes). A lista
+de comandos da paleta (`COMMANDS`, hoje uma string com 33 entradas incluindo
+`Build`, `Run`, `Clean` e os do manifesto) parte junto.
+
+### 122 — pacotes, terminal, painel, projeto
+
+**Pacote de terceiro entra como TAR AVULSO, e também por URL directo.** Suas
+palavras: *"porque não um tar sem um repo definido? mesmo que entre como
+usuário"*. O tarball JÁ é o pacote — traz o `pack.json` dentro. Hasheia-se o que
+chegou, grava-se no lock com `repo` = de onde veio e `unsafe: true` se ninguém
+assinou, e abre-se em `build/pkg/` como qualquer outro. O `.sig` ao lado verifica
+se existir.
+
+```sh
+ppack add ./foo-0.1.0.tar
+ppack add https://algum.site/foo-0.1.0.tar
+```
+
+O que se perde é a **busca** e a **lista de versões** (que é o que `search` e
+`up` usam) — exactamente o que um JAR também perde. O que **não** se perde é o
+hash, e é isso que faz o tar avulso ser mais honesto que uma dependência por
+caminho, que não tem hash nenhum e aponta para a sua pasta. A `struct Locked` já
+tem os sete campos que isto precisa.
+
+Isto não contraria a especificação, completa-a: `repos` sempre foi uma **lista**
+(`REPOSITORIO.md` §3.3, *"A ordem é a de busca"*), e o §3.3 já previa o pacote
+avulso — *"E um pacote solto também: `ppack add exp@0.1.0 --unsafe`"*. O que
+faltava era a entrada por arquivo e por URL.
+
+**O terminal é PTY de verdade**, e a primitiva vai para o **runtime do pscript**
+(`os.spawn_pty`, como o `os.run` foi), não para o driver do pstudio. Assim o
+`ppack dev` e qualquer programa pscript ganham, e a primitiva ganha um segundo
+consumidor — que é o teste de que ela está no lugar certo. O widget ANSI
+(cores, cursor, redimensionar, scrollback) vive no pstudio.
+
+**O terminal desenha-se SOZINHO, fora do `pui`** — um `WK_CUSTOM` com acesso
+directo ao `shim`. Foi a única questão de pesquisa que havia (uma grelha 80×24
+com fundo por célula são 3 840 comandos por quadro contra os ~50 do codeview), e
+a resposta fecha-a sem mexer no modelo de desenho.
+
+**O painel de baixo na v1:** `Build`, `Terminal/Saída` e `Testes`. Problemas fica
+para a v2 — o sublinhado no editor já avisa. Build sobe sozinha ao começar,
+Terminal sobe ao rodar, Testes sobe **só ao falhar**: uma suíte verde não deve
+roubar a tela.
+
+**O pstudio EXIGE projeto; o pcode abre qualquer pasta.** É mais um eixo de
+desacoplamento e não só cultura: o `pcode` nem sabe o que é um projeto.
+
+### 123 — a ordem, e duas regras
+
+**A ordem: o corte primeiro.** Partir o `lib_app`, nascer o alvo `pcode`, e o
+portão do grafo — antes de qualquer widget novo. Descobre CEDO se as camadas
+estão mesmo desacopladas, que é a pergunta cuja resposta ruim custa mais tarde; e
+cada widget que nascer depois já nasce do lado certo.
+
+**A aba de Testes entra na v1 afinal.** Ela vem quase de graça: o
+`ppack test --json` já emite um evento por caso com `{"what": "suíte: caso",
+"status", "ms", "output"}`, e o `tally` já parte o rótulo em suíte e caso
+(`ppack.psc:102`). Sem ela a espinha escolhida ficaria com uma vértebra a menos.
+
+O nome do editor mínimo é **`pcode`** — binário `build/bin/pcode`, janela
+"PCode".
+
+#### Regra do `pui`
+
+> *"tudo o que for reutilizável e não for específico do programa vai pra pui,
+> assim como qualquer lib de ui"*
+
+Não é uma escolha para estes três widgets: é a regra permanente. O que fica no
+`pstudio` é o que só faz sentido numa IDE.
+
+#### Regra do tema
+
+> *"criar uma estrutura de variáveis que juntas formam o tema, como se fosse uma
+> espécie de variáveis raiz de bootstrap; você altera elas e consegue trocar
+> todos os temas, porque todas as camadas abaixo não usam cores diretamente mas
+> referências como cor primária"*
+
+**Nenhuma camada usa cor directa.** Oito raízes geram ~30 papéis por derivação, e
+qualquer papel pode ser sobreposto à mão:
+
+```python
+record Roots:
+    surface:    int   # every background: panel, gutter, bar
+    on_surface: int   # every foreground: text, icons
+    primary:    int   # accent, focus ring, selection, links
+    danger:     int   # errors, breakpoints, failing tests
+    warning:    int   # warnings, folds, modified
+    ok:         int   # success, comments
+    string:     int   # string literals
+    keyword:    int   # keywords and types
+
+def derive(r: Roots) -> Theme:
+    return Theme(bg        = r.surface,
+                 panel     = lighten(r.surface, 6),
+                 panel_hi  = lighten(r.surface, 12),
+                 panel_lo  = darken (r.surface, 4),
+                 border    = darken (r.surface, 6),
+                 text      = r.on_surface,
+                 text_dim  = mix(r.on_surface, r.surface, 45),
+                 selection = mix(r.primary,    r.surface, 70), ...)
+```
+
+Um tema novo são oito números; um tema afinado, oito mais os poucos que se
+discordar. Hoje isto está violado em dois sítios que a arrumação tem de alcançar:
+`theme_dark()` tem 13 campos concretos, e o `lib_cv.psc` tem **onze literais de
+cor** espalhados — as cinco de sintaxe (`hl_color`, linha 46), as das marcas e da
+dobra, e o fundo do próprio widget (linha 412).
+
+### O que falta ao `pui` — o levantamento
+
+Cada linha sai de uma decisão acima. O achado central é que **a barra de abas, a
+árvore e a paleta não são widgets do `pui`**: são três `WK_CUSTOM` desenhados à
+mão dentro do `lib_app`. O `WK_CUSTOM` foi o escape certo — é por causa dele que
+o editor existe. Mas a IDE precisa da mesma lista desenhada à mão **seis vezes**,
+e aí deixa de ser escape e passa a ser dívida.
+
+| # | precisa | de qual decisão | o `pui` tem | falta |
+|---|---|---|---|---|
+| **A** | dock com abas de painel, colapsar, tamanhos guardados | 120, 122 | `SPLIT` de 2 vias com arrasto | a tira de abas do painel, o colapso, e o layout persistido (a decisão "sem sessão v0.1" cai aqui) |
+| **B** | lista e árvore virtualizadas: selecção, teclado, expandir, ícone e cor por linha | Build, Testes, Pacotes, Outline + as três de hoje | nada | o widget. **Seis consumidores** — é o item que mais se repete |
+| **C** | camada flutuante: menu, tooltip, modal com formulário | toolbar `[alvo ▾]`, hover de doc, "Adicionar pacote…" | o popup de completamento, preso ao rect do codeview | o conceito de "acima de tudo, recortado à janela". **Um mecanismo serve os três** |
+| **D** | terminal | 122 | — | resolvido: fica FORA do `pui` (`WK_CUSTOM` com acesso ao `shim`) |
+| **E** | barra de ferramentas com ícones | 120 | `BUTTON` só com texto | `▶ ⟳ ■` não estão no atlas (que tem `▸ ▾ ● ◆ ▪ ✓ ✗ ← →`). Barato: acrescentar codepoints ao `mkatlas.c` e regerar |
+| **F** | temas | regra do tema | `Theme` já é struct | as raízes, a derivação, e trazer as 11 cores do `lib_cv` para dentro |
+| **G** | travessia de foco por teclado | painéis só servem se der para sair deles sem rato | `focus_set`/`focus_get` | o `pui` **define `K_TAB` e nunca o trata**. Sem anel de foco, "ctrl+1 vai à árvore" não existe |
+| **H** | barra de progresso | `[3/105]` numa IDE é uma barra | — | trivial (é um `RECT`), mas não existe |
+
+Três leituras de custo: **B e C já foram escritos** — mal, três vezes, dentro do
+`lib_app`; o trabalho é promover, não inventar, e promover deixa o `lib_shell`
+mais fino, o que **fortalece a prova de desacoplamento**. **D deixou de ser
+risco** por decisão. E **E, F, G e H somados são menos trabalho que B sozinho**.

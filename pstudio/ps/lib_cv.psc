@@ -47,7 +47,7 @@ def hl_color(cls: int) -> int:
     if cls == 1:
         return 0xFFC586C0      # a language keyword (purple)
     if cls == 2:
-        return 0xFFCE9178      # cadeia (laranja)
+        return 0xFFCE9178      # a string (orange)
     if cls == 3:
         return 0xFFB5CEA8      # a number (light green)
     if cls == 4:
