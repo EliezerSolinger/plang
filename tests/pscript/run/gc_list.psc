@@ -8,13 +8,13 @@ locals were not registered, and this program segfaulted.
 """
 
 
-gxs: list<str> = []
+gxs: List<str> = []
 
 
 def build() -> int:
-    xs: list<str> = []
-    d: dict<str, int> = {}
-    st: set<str> = {"seed"}
+    xs: List<str> = []
+    d: Dict<str, int> = {}
+    st: Set<str> = {"seed"}
     i = 0
     while i < 20000:
         s = f"item {i}"

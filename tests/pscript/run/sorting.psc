@@ -87,7 +87,7 @@ print(f"struct {nodes[0].tag}{nodes[1].tag}{nodes[2].tag}")
 # ---- big enough that O(n²) would be felt: 2000 elements ----
 # The index sort was an insertion sort, which is stable and quadratic. A
 # language that says it competes with Python cannot sort like that.
-big: list<int> = []
+big: List<int> = []
 i = 0
 while i < 2000:
     big.append((i * 7919) % 2003)

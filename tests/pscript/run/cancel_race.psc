@@ -19,7 +19,7 @@ That is what makes the rest true:
 
 import sys
 
-log: list<str> = []
+log: List<str> = []
 
 
 async def worker(name: str, rounds: int, nap: float) -> int:

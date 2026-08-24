@@ -53,9 +53,9 @@ struct Request:
     target: str
     protocol: str
     version: str
-    headers: dict<str, str>
-    raw: list<Header>
-    body: list<u8>
+    headers: Dict<str, str>
+    raw: List<Header>
+    body: List<u8>
 
     def header(self, name: str) -> str:
         return self.headers[name] if name in self.headers else ""
@@ -66,9 +66,9 @@ struct Response:
     version: str
     status: int
     reason: str
-    headers: dict<str, str>
-    raw: list<Header>
-    body: list<u8>
+    headers: Dict<str, str>
+    raw: List<Header>
+    body: List<u8>
 
     def header(self, name: str) -> str:
         return self.headers[name] if name in self.headers else ""
@@ -92,7 +92,7 @@ enum HState:
 struct Parser:
     state: HState
     is_response: bool
-    buf: list<u8>          # what arrived and has not been consumed yet
+    buf: List<u8>          # what arrived and has not been consumed yet
     pos: int               # how far into `buf` the reading has got
     method: str
     target: str
@@ -100,14 +100,14 @@ struct Parser:
     version: str
     status: int
     reason: str
-    headers: dict<str, str>
-    raw: list<Header>
-    body: list<u8>
+    headers: Dict<str, str>
+    raw: List<Header>
+    body: List<u8>
     need: int              # bytes still missing from the body (or the chunk)
     chunked: bool
     seen_length: bool      # a `content-length` was already given
     length: int
-    te: list<str>          # the transfer codings, in the order they were given,
+    te: List<str>          # the transfer codings, in the order they were given,
                            #   across every `transfer-encoding` header (6.1)
     closed: bool           # the peer hung up (`finish` was called)
     problem: str
@@ -148,7 +148,7 @@ struct Parser:
                     self.fail("a bare LF is not a line ending")
                     return False
                 stop = i - 1
-                raw: list<u8> = []
+                raw: List<u8> = []
                 k = self.pos
                 while k < stop:
                     raw.append(self.buf[k])
@@ -201,7 +201,7 @@ struct Parser:
             return self.fail("unsupported version: " + tok)
         return True
 
-    def feed(self, chunk: list<u8>) -> bool:
+    def feed(self, chunk: List<u8>) -> bool:
         """Swallows what arrived and says whether a whole message can be read."""
         for b in chunk:
             self.buf.append(b)

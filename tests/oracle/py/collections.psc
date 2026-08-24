@@ -15,7 +15,7 @@ xs = [3, 1, 4, 1, 5, 9, 2, 6]
 print(len(xs), xs[0], xs[-1], xs[-2])
 
 # slices clamp, as Python's do — `xs[:99]` is the whole thing, not an error
-def show(ys: list<int>) -> str:
+def show(ys: List<int>) -> str:
     out = ""
     for y in ys:
         out += str(y) + ","
@@ -39,7 +39,7 @@ for w in by_len:
 print(out)
 
 # a dict keeps insertion order, and that is observable
-d: dict<str, int> = {}
+d: Dict<str, int> = {}
 d["z"] = 26
 d["a"] = 1
 d["m"] = 13
@@ -67,7 +67,7 @@ print("a" in d, "q" in d, d["a"])
 src = [3, 1, 2, 3, 1]
 
 
-def shows(xs: list<int>) -> str:
+def shows(xs: List<int>) -> str:
     out = ""
     for v in xs:
         out += str(v) + ","
@@ -92,7 +92,7 @@ for c in [c for c in "hi"]:
 print("chars", cs)
 
 # ---- the iteration pack (61.4) and the walrus (45.2) ----
-inv: dict<str, int> = {"pear": 4, "fig": 1, "plum": 9}
+inv: Dict<str, int> = {"pear": 4, "fig": 1, "plum": 9}
 for k, v in inv.items():
     print("item", k, v)
 kk = ""
@@ -119,8 +119,8 @@ print("dict", {"a": 1, "bb": 22})
 print("floats", [1.5, 2.0, -0.25])
 print("nested", [[1, 2], [3]])
 print("dict of list", {"a": [1, 2], "b": []})
-evazia: list<int> = []
-edict: dict<str, int> = {}
+evazia: List<int> = []
+edict: Dict<str, int> = {}
 print("empty", evazia, edict)
 print("in fstring", f"{[1, 2]} and {edict}")
 print("str()", str([1, 2, 3]), len(str({"a": 1})))
@@ -138,7 +138,7 @@ t = (1, 2, 3)
 print("slots", len(t), t[0], t[2])
 x, y = 10, 20
 print("bare", x, y)
-board: dict<(int, int), int> = {}
+board: Dict<(int, int), int> = {}
 board[(0, 0)] = 7
 board[(2, 3)] = 9
 print("board", len(board), board[(0, 0)], board[(2, 3)])
@@ -147,14 +147,14 @@ print("by content", board[k], (2, 3) in board, (9, 9) in board)
 print("eq", (1, 2) == (1, 2), (1, 2) == (1, 3))
 
 # ---- items() como valor, e o repr de tupla (98.5/97) ----
-inv2: dict<str, int> = {"pear": 4, "fig": 1}
+inv2: Dict<str, int> = {"pear": 4, "fig": 1}
 pr = inv2.items()
 print("items", len(pr))
 for p in pr:
     print("pair", p[0], p[1])
 print("items repr", pr)
 print("tuple repr", (1, "two", 3.5))
-rows: list<(str, int)> = []
+rows: List<(str, int)> = []
 i = 0
 while i < 3:
     rows.append((f"r{i}", i))

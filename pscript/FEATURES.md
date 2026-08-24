@@ -27,8 +27,8 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `any` checado na saída: `x as T` lança se errado | 11.3, 55.2 | `load_scene` (JSON→tipos) | ✅ |
 | `any` como ponteiro para objeto com cabeçalho | 39.2 | JSON inteiro | ✅ |
 | `any` e `def` separados | 29.3 | tabela de tone maps | ✅ |
-| `def` sem assinatura, estreitado com `as` | 29.3, 29.4 | `dict<str, def>` no teste `wide_def` | ✅ o valor carrega seu descritor; `as def(...)` confere e lança |
-| `T?` não-nulo por padrão | 9.4 | `re.match` devolve `list<str>?` | ✅ |
+| `def` sem assinatura, estreitado com `as` | 29.3, 29.4 | `Dict<str, def>` no teste `wide_def` | ✅ o valor carrega seu descritor; `as def(...)` confere e lança |
+| `T?` não-nulo por padrão | 9.4 | `re.match` devolve `List<str>?` | ✅ |
 | Narrowing por fluxo (`if x != None:` → `x: T`) | 43.1 | parse de `--dim` | ✅ (`if` e `while`) |
 | Truthiness só de `bool` e `T?` | 40.1 | condições | ✅ |
 | `??` | 43.2 | `sys.env.get(...)` | ✅ |
@@ -49,10 +49,10 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `struct` coletada, com métodos e mutação | 20.1 | iteradores | ✅ |
 | `tuple` imutável, desempacotamento | 3.2, 38.2 | — | ✅ (de bytes puros) |
 | `T[N]` array fixo (opt-in) | 33.4 | — | ✅ |
-| `list<T>` tipado; literal infere | 27.3 | cena, workers, stats | ✅ |
+| `List<T>` tipado; literal infere | 27.3 | cena, workers, stats | ✅ |
 | fatia de lista (cópia, clamp) | 17.3 | `sys.argv[1:]` | ✅ |
-| `dict<K,V>`; chave por conteúdo | 4.x, 38.1 | JSON, `sys.env` | ✅ |
-| `set` + `in`/`not in` | 8.1 | — | ✅ |
+| `Dict<K,V>`; chave por conteúdo | 4.x, 38.1 | JSON, `sys.env` | ✅ |
+| `Set` + `in`/`not in` | 8.1 | — | ✅ |
 | `str` imutável; `len` em codepoints | 31.3, 3.4 | tudo, e o buffer do editor | ✅ com `ord`/`chr` (a porta entre caractere e codepoint); `x in s` (substring) e `for ch in s` ainda não |
 | índice O(1) em `s[i]` e fatia | 7.1, 80.1b | `str_index` | ✅ ASCII direto (`nchars == len` já prova); não-ASCII ganha um índice de deslocamentos construído sob demanda e coletado com a string. NÃO é o PEP 393: guardar UCS-4 obrigaria a materializar UTF-8 em toda travessia (socket, arquivo, mensagem, fronteira), que é por que o próprio PEP guarda as duas formas |
 | `s[i]` por caractere; índice negativo; fatia | 3.4, 31.4, 17.3 | parse de `--dim` | ✅ |
@@ -106,7 +106,7 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | Default avaliado por chamada | 44.1 | `defaults` | ✅ `def f(xs=[])` dá lista nova a cada chamada; nomeados também, em função e método |
 | Construtor tipo-chamada, posicional + nomeado | 54.2 | `Vec(...)`, `Sphere(rad=...)` | ✅ |
 | `in` (leitura por referência, sem cópia) | 55.4, 56 | `hit_sphere(in s, in r)` | ✅ |
-| `*args` | 44.2 | `varargs` | ✅ `*xs: list<T>` na declaração e `f(*ys)` no sítio da chamada (a lista passa inteira, sem cópia) |
+| `*args` | 44.2 | `varargs` | ✅ `*xs: List<T>` na declaração e `f(*ys)` no sítio da chamada (a lista passa inteira, sem cópia) |
 | Escopo de BLOCO nas duas linguagens | 64.1 | tudo | ✅ |
 | `global` / `nonlocal` | 55.3 | RNG, `shared` | ✅ |
 | walrus `:=` | 45.2 | — | ✅ |
@@ -123,7 +123,7 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 |---|---|---|---|
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
-| Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
+| Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `List`, `Set`, `Dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
 | `await os.run(argv, env=, cwd=, stdout=)` -> `proc` | 118 | o motor do pforge | ✅ sem shell (o `execvp` recebe o vetor), stderr junto do stdout, status != 0 é resultado e não exceção, 128+sinal, `waitpid` no pool; `os.nproc` e `path.getmtime_ns` junto |
 | HTTP/1.1 escrito em pscript | 77.2, 78.1 | `http_server`, `lib_http` | ✅ parser incremental (linha, cabeçalhos, content-length, chunked) com as recusas do llhttp; servidor e clientes no mesmo processo |
 | Texto atravessa a fronteira (`CStr`/`CBytes`) | 81, 83, 84, 85, 86 | `text_boundary` | ✅ par {ponteiro, tamanho} que não aloca; ida sem cópia, volta com cópia e UTF-8 conferido; `in s: CStr` passa o endereço |

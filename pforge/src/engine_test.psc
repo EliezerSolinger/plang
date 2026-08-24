@@ -35,8 +35,8 @@ def check(what: str, want: str, got: str):
         print("  FAIL " + what + ": expected '" + want + "', got '" + got + "'")
 
 # ---------- a reporter that only COUNTS ----------
-ran: list<str> = []
-order: list<str> = []
+ran: List<str> = []
+order: List<str> = []
 # how many edges are IN FLIGHT now, and how many ever were: it is how you observe
 # `-j` from the outside, without looking inside the engine
 in_flight: int = 0
@@ -47,8 +47,8 @@ def r_plan(total: int):
 
 # each edge's LABEL and what its event brought back: it is how a case checks the
 # OUTPUT of a specific edge, and not only the scoreboard
-labels: dict<int, str> = {}
-outputs: dict<str, str> = {}
+labels: Dict<int, str> = {}
+outputs: Dict<str, str> = {}
 
 def r_start(id: int, what: str):
     global order
@@ -74,7 +74,7 @@ def r_done(ok: bool, fails: int):
 
 # the fifth event: the GRAPH's problems, kept so the hygiene cases can check the
 # MESSAGE and not only the count
-errors: list<str> = []
+errors: List<str> = []
 
 def r_error(msg: str):
     global errors
@@ -87,15 +87,15 @@ def reset():
     global ran
     global order
     global errors
-    fresh: list<str> = []
-    fresh2: list<str> = []
-    fresh3: list<str> = []
+    fresh: List<str> = []
+    fresh2: List<str> = []
+    fresh3: List<str> = []
     global in_flight
     global peak
     global labels
     global outputs
-    fresh4: dict<int, str> = {}
-    fresh5: dict<str, str> = {}
+    fresh4: Dict<int, str> = {}
+    fresh5: Dict<str, str> = {}
     ran = fresh
     order = fresh2
     errors = fresh3
@@ -131,7 +131,7 @@ private async def write_newer(p: str, txt: str, than: str):
     # after 400 tries the problem is not granularity: let it through and the case
     # fails saying what failed, which is better than hanging here
 
-private def touch_cmd(p: str, txt: str) -> list<str>:
+private def touch_cmd(p: str, txt: str) -> List<str>:
     return ["/bin/sh", "-c", "printf '%s' " + txt + " > " + p]
 
 # ---------- the cases ----------
@@ -637,7 +637,7 @@ async def case_packages():
     fixture has exactly the shape that makes them interesting: `txt` depends on
     `geo`, and `color` on nobody."""
     reset()
-    members: list<str> = ["tests/pkg/geo", "tests/pkg/txt", "tests/pkg/color"]
+    members: List<str> = ["tests/pkg/geo", "tests/pkg/txt", "tests/pkg/color"]
     m = await PK.read_world(members)
     check("packages: all three", "3", str(len(m.packages)))
     check("packages: nothing missing", "0", str(len(m.missing)))

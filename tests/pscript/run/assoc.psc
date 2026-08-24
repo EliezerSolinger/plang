@@ -3,7 +3,7 @@
 Without it `Iterable` would make the CALLER say what it yields; with it the
 IMPLEMENTATION says so once, and a generic over the trait reads it from there.
 The protocol is 40.3's — `has_next()`/`next()` and not Rust's `next() -> Option`,
-because with an option `list<int?>` cannot tell end from element-None.
+because with an option `List<int?>` cannot tell end from element-None.
 """
 
 trait Counter:

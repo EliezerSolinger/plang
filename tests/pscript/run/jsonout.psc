@@ -30,7 +30,7 @@ record Pt:
 struct Caixa:
     nome: str
     p: Pt
-    tags: list<str>
+    tags: List<str>
     n: int
     cor: Cor
     ok: bool
@@ -51,7 +51,7 @@ print(json.stringify("olá\n\t"))
 print(json.stringify(42))
 print(json.stringify(True))
 print(json.stringify(VERMELHO))
-xs: list<int> = []
+xs: List<int> = []
 print(json.stringify(xs))
 
 # o `to_str` NÃO manda aqui: o repr mostra `$2`, o JSON leva o campo
@@ -59,7 +59,7 @@ d = Dinheiro(250)
 print(d, json.stringify(d))
 
 # um conjunto vira array
-s: set<int> = {3, 1}
+s: Set<int> = {3, 1}
 print(json.stringify(s))
 
 # aninhado
@@ -76,7 +76,7 @@ catch e:
     print("recusou:", e.message)
 
 # uma chave que não é texto: um objeto JSON não a tem
-di: dict<int, int> = {1: 2}
+di: Dict<int, int> = {1: 2}
 try:
     print(json.stringify(di))
 catch e2:
@@ -85,8 +85,8 @@ catch e2:
 
 # ---- a volta: o que sai daqui entra no nosso próprio `parse` ----
 texto = json.stringify(Caixa("z", Pt(9, 0.5), ["t"], 1, VERDE, False))
-volta = json.parse(texto) as dict<str, any>
-print(volta["nome"] as str, (volta["p"] as dict<str, any>)["x"] as int, volta["cor"] as str)
+volta = json.parse(texto) as Dict<str, any>
+print(volta["nome"] as str, (volta["p"] as Dict<str, any>)["x"] as int, volta["cor"] as str)
 
 # ... e o `json.dumps` do python concorda caractere a caractere com isto:
 #   {"nome":"z","p":{"x":9,"y":0.5},"tags":["t"],"n":1,"cor":"VERDE","ok":false}

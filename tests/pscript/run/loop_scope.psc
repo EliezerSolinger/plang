@@ -36,7 +36,7 @@ async def a_range_await() -> int:
     return t * 1000 + i
 
 
-def s_list(xs: list<int>) -> int:
+def s_list(xs: List<int>) -> int:
     v = 99
     t = 0
     for v in xs:
@@ -44,7 +44,7 @@ def s_list(xs: list<int>) -> int:
     return t * 1000 + v
 
 
-async def a_list(xs: list<int>) -> int:
+async def a_list(xs: List<int>) -> int:
     v = 99
     t = 0
     for v in xs:
@@ -61,7 +61,7 @@ async def a_str(s: str) -> int:
     return t * 1000 + len(c)
 
 
-async def a_pairs(d: dict<str, int>) -> int:
+async def a_pairs(d: Dict<str, int>) -> int:
     k = "zzz"
     v = 0
     t = 0

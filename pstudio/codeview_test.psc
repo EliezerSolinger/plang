@@ -17,7 +17,7 @@ import highlight as hlm
 
 
 def make_src() -> str:
-    parts: list<str> = []
+    parts: List<str> = []
     for i in range(40):
         parts.append("def f" + str(i) + "():")
         for j in range(3):

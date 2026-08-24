@@ -205,7 +205,7 @@ record Point:
     x: float
     y: float
 
-def farthest(ps: list<Point>) -> Point:
+def farthest(ps: List<Point>) -> Point:
     best = ps[0]
     for p in ps:
         if p.x * p.x + p.y * p.y > best.x * best.x + best.y * best.y:

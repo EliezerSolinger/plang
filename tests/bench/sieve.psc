@@ -10,7 +10,7 @@ N: int = 2000000
 
 
 def count_primes(n: int) -> int:
-    sieve: list<bool> = []
+    sieve: List<bool> = []
     for f in range(n + 1):
         sieve.append(True)
     sieve[0] = False

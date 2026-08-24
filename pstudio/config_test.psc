@@ -11,7 +11,7 @@ silent.** Every case below takes the default AND leaves a note.
 import config as cfg
 
 
-CMDS: list<str> = ["Save", "Quit", "Find", "Build", "Toggle Theme", "Run Tests"]
+CMDS: List<str> = ["Save", "Quit", "Find", "Build", "Toggle Theme", "Run Tests"]
 
 
 def show(c: cfg.Config):

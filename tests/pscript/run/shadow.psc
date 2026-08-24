@@ -15,7 +15,7 @@ def classify(n: int) -> str:
 
 
 try:
-    empty: list<int> = []
+    empty: List<int> = []
     print(empty[2])
 catch e:
     # INDEX survived the sibling's shadowing

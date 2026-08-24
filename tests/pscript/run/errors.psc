@@ -78,7 +78,7 @@ print("done")
 # 15.2: the category has a NAME. `e.category == IO` reads like what it means,
 # and the enum comes from the prelude — no program declares it.
 try:
-    empty: list<int> = []
+    empty: List<int> = []
     print(empty[3])
 catch e:
     print("index?", e.category == INDEX, "io?", e.category == IO)

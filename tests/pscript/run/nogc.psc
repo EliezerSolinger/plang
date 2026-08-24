@@ -1,5 +1,5 @@
 def build(n: int) -> int:
-    xs: list<int> = []
+    xs: List<int> = []
     for i in range(n):
         xs.append(i)
     return len(xs)

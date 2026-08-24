@@ -16,12 +16,12 @@ calls = 0
 def twice(f: def(int) -> int) -> def(int) -> int:
     return lambda n: f(f(n))
 
-def store(d: dict<int, int>, k: int, v: int) -> int:
+def store(d: Dict<int, int>, k: int, v: int) -> int:
     d[k] = v
     return v
 
 def memo(f: def(int) -> int) -> def(int) -> int:
-    seen: dict<int, int> = {}
+    seen: Dict<int, int> = {}
     return lambda n: seen[n] if n in seen else store(seen, n, f(n))
 
 def repeat(times: int) -> def(def(int) -> int) -> def(int) -> int:

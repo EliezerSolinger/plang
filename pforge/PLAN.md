@@ -535,7 +535,7 @@ executor — o análogo das 1 546 linhas do samurai, com as nossas decisões.
 
 ### Parte A — `os.run` na stdlib (mexe no runtime; bateria própria)
 
-- [x] **API**: `await os.run(argv: list<str>, env: dict<str,str>? = None,
+- [x] **API**: `await os.run(argv: List<str>, env: Dict<str,str>? = None,
       cwd: str? = None, stdout: str? = None) -> ProcResult`, com `ProcResult`
       um record `(status: int, output: str)`
   - `argv` executado DIRETO (`posix_spawn` ou fork+execv — sem `/bin/sh`,
@@ -1108,7 +1108,7 @@ erros sublinhados, post-mortem. Nada passa a depender do pstudio.
           só com `-g` — a moldura recebe-os por uma função à parte
           (`ps_push_fn_dbg`), então um build sem `-g` não paga nem os dois
           stores nem os arrays. A correspondência nome→tipo faz-se do lado da
-          árvore PSCRIPT (na de P `list<int>` já é `*PsList` e mais nada), e um
+          árvore PSCRIPT (na de P `List<int>` já é `*PsList` e mais nada), e um
           nome declarado duas vezes com tipos diferentes fica de fora: imprimir
           um valor com o tipo errado é pior do que não o imprimir.
       No terminal sempre; o painel do editor é o que falta.

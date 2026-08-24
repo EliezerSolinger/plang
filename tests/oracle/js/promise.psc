@@ -15,7 +15,7 @@ running, so a race is compared on its winner and never on what became of the
 loser. A silent skip is how a divergence becomes a feature nobody chose.
 """
 
-log: list<str> = []
+log: List<str> = []
 
 
 async def after(ms: int, name: str) -> str:

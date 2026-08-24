@@ -1,7 +1,7 @@
 """`for x in obj` over a user type: the system trait `Iterable` (D3, 40.3).
 
 The protocol is `has_next()`/`next()` and not Rust's `next() -> Option`: with an
-option, iterating a `list<int?>` could not tell the end from an element that is
+option, iterating a `List<int?>` could not tell the end from an element that is
 None. The associated type (66.4) is what lets the IMPLEMENTATION say what it
 yields instead of making the caller say it.
 

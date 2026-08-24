@@ -49,9 +49,9 @@ struct Config:
     test: str
     # "ctrl+s" -> "Save". The command table made shortcuts data (F2); this is
     # what makes them EDITABLE data.
-    keys: dict<str, str>
+    keys: Dict<str, str>
     # what was wrong with the file, in the order it was found. Empty = clean.
-    notes: list<str>
+    notes: List<str>
 
 
 def default_config() -> Config:
@@ -65,7 +65,7 @@ def default_config() -> Config:
     return Config(220, 240, 200, True, True, True, "", "", default_keys(), [])
 
 
-def default_keys() -> dict<str, str>:
+def default_keys() -> Dict<str, str>:
     """Every shortcut the editor has, as data.
 
     This is the table `key_shortcut` reads, and it is the whole reason the F2
@@ -139,7 +139,7 @@ const K_PAGEDOWN: int = 1073741902
 const K_F1: int = 1073741882      # F1..F12 are contiguous in SDL
 
 
-def named_keys() -> dict<str, int>:
+def named_keys() -> Dict<str, int>:
     """The keys that are not a character. A dict and not a chain, because it is
     read in both directions — the writer needs the name and the parser the
     number."""
@@ -244,7 +244,7 @@ private def note(c: Config, what: str):
 # turns into a note and the default. There is no `isinstance` in this language
 # and there does not need to be — the cast IS the question.
 
-private def want_int(c: Config, o: dict<str, any>, key: str, dflt: int, lo: int, hi: int) -> int:
+private def want_int(c: Config, o: Dict<str, any>, key: str, dflt: int, lo: int, hi: int) -> int:
     if key not in o:
         return dflt
     nonlocal n
@@ -260,7 +260,7 @@ private def want_int(c: Config, o: dict<str, any>, key: str, dflt: int, lo: int,
     return n
 
 
-private def want_bool(c: Config, o: dict<str, any>, key: str, dflt: bool) -> bool:
+private def want_bool(c: Config, o: Dict<str, any>, key: str, dflt: bool) -> bool:
     if key not in o:
         return dflt
     try:
@@ -270,7 +270,7 @@ private def want_bool(c: Config, o: dict<str, any>, key: str, dflt: bool) -> boo
         return dflt
 
 
-private def want_str(c: Config, o: dict<str, any>, key: str, dflt: str) -> str:
+private def want_str(c: Config, o: Dict<str, any>, key: str, dflt: str) -> str:
     if key not in o:
         return dflt
     try:
@@ -288,12 +288,12 @@ private def is_layout_key(k: str) -> bool:
     return k == "tree_open" or k == "outline_open" or k == "dock_open"
 
 
-private def read_layout(c: Config, o: dict<str, any>):
+private def read_layout(c: Config, o: Dict<str, any>):
     if "layout" not in o:
         return
     nonlocal L
     try:
-        L = o["layout"] as dict<str, any>
+        L = o["layout"] as Dict<str, any>
     catch e:
         note(c, "layout should be an object, ignored")
         return
@@ -308,16 +308,16 @@ private def read_layout(c: Config, o: dict<str, any>):
             note(c, "layout." + k + " is not a setting, ignored")
 
 
-private def read_keys(c: Config, o: dict<str, any>, commands: list<str>):
+private def read_keys(c: Config, o: Dict<str, any>, commands: List<str>):
     if "keys" not in o:
         return
     nonlocal K
     try:
-        K = o["keys"] as dict<str, any>
+        K = o["keys"] as Dict<str, any>
     catch e:
         note(c, "keys should be an object, ignored")
         return
-    names: list<str> = []
+    names: List<str> = []
     for n in K:
         names.append(n)
     names = sorted(names)      # the notes come out in the same order every run
@@ -344,7 +344,7 @@ private def read_keys(c: Config, o: dict<str, any>, commands: list<str>):
         c.keys[name] = cmd
 
 
-def parse(text: str, commands: list<str>) -> Config:
+def parse(text: str, commands: List<str>) -> Config:
     """The TEXT of a `.pstudio.json`, and the commands that exist right now.
 
     `commands` is passed in rather than imported, because the set depends on
@@ -355,7 +355,7 @@ def parse(text: str, commands: list<str>) -> Config:
         return c
     nonlocal o
     try:
-        o = json.parse(text) as dict<str, any>
+        o = json.parse(text) as Dict<str, any>
     catch e:
         note(c, "is not a JSON object (" + e.message + ") — everything default")
         return c
@@ -389,7 +389,7 @@ def to_text(c: Config) -> str:
     out += '  "target": ' + json.stringify(c.target) + ',\n'
     out += '  "test": ' + json.stringify(c.test) + ',\n'
     base = default_keys()
-    changed: list<str> = []
+    changed: List<str> = []
     for k in c.keys:
         if k not in base or base[k] != c.keys[k]:
             changed.append(k)

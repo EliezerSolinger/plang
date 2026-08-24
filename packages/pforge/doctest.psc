@@ -39,12 +39,12 @@ import api as A
 
 struct Example:
     expr: str
-    expected: list<str>
+    expected: List<str>
 
 
-def extract(doc: str) -> list<Example>:
+def extract(doc: str) -> List<Example>:
     """A docstring's examples, in order."""
-    out: list<Example> = []
+    out: List<Example> = []
     for line in doc.split("\n"):
         t = line.strip()
         if t.startswith(">>>"):
@@ -55,7 +55,7 @@ def extract(doc: str) -> list<Example>:
             # a blank line CLOSES the expected output: without this, the
             # paragraph after the example became part of it
             out.append(Example("", []))
-    clean: list<Example> = []
+    clean: List<Example> = []
     for e in out:
         if len(e.expr) > 0:
             clean.append(e)
@@ -71,8 +71,8 @@ struct Program:
 def generate(mod: A.Api, imports: str) -> Program:
     """A module's program. `imports` is what goes in the `from ... import`:
     `<pkg/mod.psc>` for a package, or the name of the module next door."""
-    names: list<str> = []
-    examples: list<Example> = []
+    names: List<str> = []
+    examples: List<Example> = []
     for e in extract(mod.doc):
         examples.append(e)
     for s in mod.symbols:
@@ -101,7 +101,7 @@ def generate_ph(mod: A.Api, imports: str) -> Program:
     """The same, for a module in P: it comes in WHOLE (`import <pkg/mod.ph>`),
     because what crosses the boundary from it is decided by 45.5 and not by a list
     of names — and the names stay visible without a qualifier."""
-    examples: list<Example> = []
+    examples: List<Example> = []
     for e in extract(mod.doc):
         examples.append(e)
     for s in mod.symbols:

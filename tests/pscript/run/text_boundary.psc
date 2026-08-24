@@ -23,7 +23,7 @@ print("length in CHARACTERS here:", len(name))
 print("upper:", text_upper("plang and pscript"))
 print("version:", version())
 
-b: list<u8> = [1, 2, 3, 250]
+b: List<u8> = [1, 2, 3, 250]
 print("sum of the bytes:", bytes_sum(b))
 
 try:

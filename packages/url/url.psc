@@ -35,7 +35,7 @@ struct Url:
     host: str            # already serialised; `has_host` says whether it exists
     has_host: bool
     port: int            # -1 when there is none
-    path: list<str>      # the segments, when the path is not opaque
+    path: List<str>      # the segments, when the path is not opaque
     opaque: str          # ... and the whole thing, when it is
     is_opaque: bool
     query: str
@@ -160,8 +160,8 @@ def pct_encode_cp(cp: int) -> str:
 
 # Percent-DECODE, to bytes. What comes out is not text yet: a `%C3%A9` pair is
 # two bytes that only mean `é` once somebody decodes UTF-8 over them.
-def pct_decode(s: str) -> list<u8> :
-    out: list<u8> = []
+def pct_decode(s: str) -> List<u8> :
+    out: List<u8> = []
     i = 0
     n = len(s)
     while i < n:
@@ -177,8 +177,8 @@ def pct_decode(s: str) -> list<u8> :
     return out
 
 
-def utf8_bytes(cp: int) -> list<u8>:
-    out: list<u8> = []
+def utf8_bytes(cp: int) -> List<u8>:
+    out: List<u8> = []
     if cp < 0x80:
         out.append(u8(cp))
     elif cp < 0x800:
@@ -198,14 +198,14 @@ def utf8_bytes(cp: int) -> list<u8>:
 
 # ---------- code points in and out ----------
 
-def codepoints(s: str) -> list<int>:
-    out: list<int> = []
+def codepoints(s: str) -> List<int>:
+    out: List<int> = []
     for ch in s:
         out.append(ord(ch))
     return out
 
 
-def from_codepoints(cs: list<int>) -> str:
+def from_codepoints(cs: List<int>) -> str:
     out = ""
     for c in cs:
         out += chr(c)
@@ -264,7 +264,7 @@ def parse_ipv4(input: str) -> int:
         parts = parts[0:len(parts) - 1]
     if len(parts) > 4:
         return -1
-    numbers: list<int> = []
+    numbers: List<int> = []
     for p in parts:
         n = parse_ipv4_number(p)
         if not n.ok:
@@ -334,13 +334,13 @@ def ends_in_a_number(input: str) -> bool:
 # Returns the eight pieces, or None. Transcribed from the spec's state machine,
 # including the embedded-IPv4 tail (`::ffff:1.2.3.4`) and the `::` compression.
 
-def cp_at(cs: list<int>, k: int) -> int:
+def cp_at(cs: List<int>, k: int) -> int:
     return cs[k] if k >= 0 and k < len(cs) else -1
 
 
-def parse_ipv6(input: str) -> list<int>:
-    fail: list<int> = []
-    address: list<int> = [0, 0, 0, 0, 0, 0, 0, 0]
+def parse_ipv6(input: str) -> List<int>:
+    fail: List<int> = []
+    address: List<int> = [0, 0, 0, 0, 0, 0, 0, 0]
     piece = 0
     compress = -1
     ptr = 0
@@ -425,7 +425,7 @@ def parse_ipv6(input: str) -> list<int>:
     return address
 
 
-def serialize_ipv6(address: list<int>) -> str:
+def serialize_ipv6(address: List<int>) -> str:
     # the longest run of zeroes, longer than one, is the one that becomes `::`
     longest = -1
     longest_size = 1
@@ -529,7 +529,7 @@ def puny_digit(d: int) -> str:
 
 
 # "" means the label cannot be encoded
-def puny_encode(cps: list<int>) -> str:
+def puny_encode(cps: List<int>) -> str:
     out = ""
     basic = 0
     for c in cps:
@@ -646,7 +646,7 @@ def domain_to_ascii(domain: str) -> str:
         if not first:
             out += "."
         first = False
-        cps: list<int> = []
+        cps: List<int> = []
         ascii_only = True
         for ch in label:
             c = lower_c(ord(ch))
@@ -710,7 +710,7 @@ def parse_host(input: str, is_opaque: bool) -> Host:
 # Bytes to text, replacing anything that is not valid UTF-8 with U+FFFD — which
 # is what the spec's "UTF-8 decode without BOM" does, and what keeps the result
 # a `str` (83.2 says a str is valid UTF-8, so there is no other option here).
-def decode_utf8(bs: list<u8>) -> str:
+def decode_utf8(bs: List<u8>) -> str:
     out = ""
     i = 0
     n = len(bs)
@@ -812,7 +812,7 @@ def is_double_dot(b: str) -> bool:
 
 
 struct Parser:
-    input: list<int>
+    input: List<int>
     ptr: int
     base: Url
     has_base: bool
@@ -861,7 +861,7 @@ def clean_input(s: str) -> str:
     return out
 
 
-def starts_windows_drive(cs: list<int>, i: int) -> bool:
+def starts_windows_drive(cs: List<int>, i: int) -> bool:
     n = len(cs)
     if i + 1 >= n:
         return False
@@ -873,8 +873,8 @@ def starts_windows_drive(cs: list<int>, i: int) -> bool:
     return c == 0x2F or c == 0x5C or c == 0x3F or c == 0x23
 
 
-def copy_list(xs: list<str>) -> list<str>:
-    out: list<str> = []
+def copy_list(xs: List<str>) -> List<str>:
+    out: List<str> = []
     for x in xs:
         out.append(x)
     return out

@@ -12,7 +12,7 @@ E duas que apareceram no mesmo dia:
     por isso o campo é opcional.
 """
 
-log: list<str> = []
+log: List<str> = []
 
 
 struct Widget:
@@ -56,7 +56,7 @@ for line in log:
     print(line)
 
 # uma tabela de despacho em campo: o mesmo mecanismo, dentro de um dict
-handlers: dict<str, def(int, int)?> = {"a": lambda i, j: note("a"), "b": None}
+handlers: Dict<str, def(int, int)?> = {"a": lambda i, j: note("a"), "b": None}
 ha = handlers["a"]
 if ha != None:
     ha(0, 0)

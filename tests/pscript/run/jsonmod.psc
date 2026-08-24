@@ -1,6 +1,6 @@
 """`json` (41.1): text in, `any` out.
 
-An object becomes `dict<str, any>`, an array a `list<any>`, and the leaves are
+An object becomes `Dict<str, any>`, an array a `List<any>`, and the leaves are
 str, int, float, bool and None. There is no schema to declare and no type to
 write down — reading a value back is `as`, which CHECKS (55.2), and that is the
 whole contract.
@@ -15,25 +15,25 @@ everywhere (32.1).
 import json
 
 doc = json.parse("{\"name\": \"smallpt\", \"samples\": 16, \"gamma\": 2.2, \"fast\": true}")
-d = doc as dict<str, any>
+d = doc as Dict<str, any>
 print("name", d["name"] as str)
 print("samples", d["samples"] as int)
 print("gamma", d["gamma"] as float)
 print("fast", d["fast"] as bool)
 
-arr = json.parse("[1, 2, 3]") as list<any>
+arr = json.parse("[1, 2, 3]") as List<any>
 print("array", len(arr), arr[0] as int, arr[2] as float)
 
 # the spelling decides: `16` is an int, `16.0` is a float
-spelled = json.parse("[16, 16.0]") as list<any>
+spelled = json.parse("[16, 16.0]") as List<any>
 try:
     n = spelled[1] as int
     print("unreachable", n)
 catch e:
     print("16.0 is not an int:", e.message)
 
-nested = json.parse("{\"pos\": [1.0, 2.0, 3.0]}") as dict<str, any>
-pos = nested["pos"] as list<any>
+nested = json.parse("{\"pos\": [1.0, 2.0, 3.0]}") as Dict<str, any>
+pos = nested["pos"] as List<any>
 print("nested", len(pos), pos[1] as float)
 
 try:

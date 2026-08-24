@@ -34,21 +34,21 @@ struct Member:
     kind: str          # "file" or "dir"
     mode: int          # the permissions, in binary (0o644, 0o755)
     mtime: int         # seconds since the epoch
-    data: list<u8>     # empty in a directory
+    data: List<u8>     # empty in a directory
 
 
-def file(name: str, data: list<u8>, mode: int, mtime: int) -> Member:
+def file(name: str, data: List<u8>, mode: int, mtime: int) -> Member:
     return Member(name, "file", mode, mtime, data)
 
 
 def directory(name: str, mode: int, mtime: int) -> Member:
-    empty: list<u8> = []
+    empty: List<u8> = []
     return Member(name if name.endswith("/") else name + "/", "dir", mode, mtime, empty)
 
 
 # ---------- bytes and text ----------
 
-def bytes_of(s: str) -> list<u8>:
+def bytes_of(s: str) -> List<u8>:
     """The text as UTF-8. A file name may carry an accent, and what goes into the
     header is BYTES — counting codepoints would give a length that is not the
     disk's.
@@ -58,7 +58,7 @@ def bytes_of(s: str) -> list<u8>:
     >>> len(bytes_of("naïve"))
     6
     """
-    out: list<u8> = []
+    out: List<u8> = []
     for ch in s:
         cp = ord(ch)
         if cp < 0x80:
@@ -105,7 +105,7 @@ def octal(v: int, width: int) -> str:
     return d
 
 
-private def put_bytes(block: list<u8>, pos: int, bs: list<u8>, width: int):
+private def put_bytes(block: List<u8>, pos: int, bs: List<u8>, width: int):
     if len(bs) > width:
         raise error("a header field does not fit", VALUE)
     i = 0
@@ -114,11 +114,11 @@ private def put_bytes(block: list<u8>, pos: int, bs: list<u8>, width: int):
         i += 1
 
 
-private def put_text(block: list<u8>, pos: int, s: str, width: int):
+private def put_text(block: List<u8>, pos: int, s: str, width: int):
     put_bytes(block, pos, bytes_of(s), width)
 
 
-def header(m: Member) -> list<u8>:
+def header(m: Member) -> List<u8>:
     """A member's 512 bytes. The ustar `prefix` exists and is used: a name up to
     100 bytes goes whole into `name`, and more than that is split at a separator —
     which gives 255 and is enough for anything a package holds."""
@@ -139,7 +139,7 @@ def header(m: Member) -> list<u8>:
         prefix = name[0:cut]
         name = name[cut + 1:len(name)]
 
-    b: list<u8> = []
+    b: List<u8> = []
     for _ in range(512):
         b.append(u8(0))
     put_text(b, 0, name, 100)
@@ -174,10 +174,10 @@ def header(m: Member) -> list<u8>:
     return b
 
 
-def write(members: list<Member>) -> list<u8>:
+def write(members: List<Member>) -> List<u8>:
     """The whole tarball in memory. A source-code package fits, and having all the
     bytes in hand is what allows hashing and writing in a single pass."""
-    out: list<u8> = []
+    out: List<u8> = []
     for m in members:
         if m.name == "":
             raise error("a member with no name", VALUE)
@@ -197,8 +197,8 @@ def write(members: list<Member>) -> list<u8>:
 
 # ---------- reading ----------
 
-private def text_until_nul(b: list<u8>, pos: int, width: int) -> str:
-    slice: list<u8> = []
+private def text_until_nul(b: List<u8>, pos: int, width: int) -> str:
+    slice: List<u8> = []
     i = 0
     while i < width and b[pos + i] != u8(0):
         slice.append(b[pos + i])
@@ -206,7 +206,7 @@ private def text_until_nul(b: list<u8>, pos: int, width: int) -> str:
     return str(slice)
 
 
-private def read_octal(b: list<u8>, pos: int, width: int, field: str) -> int:
+private def read_octal(b: List<u8>, pos: int, width: int, field: str) -> int:
     v = 0
     i = 0
     seen = False
@@ -256,10 +256,10 @@ def safe_name(name: str) -> str:
     return ""
 
 
-def read(data: list<u8>) -> list<Member>:
+def read(data: List<u8>) -> List<Member>:
     """The members, in order. Raises at the first thing it does not
     understand."""
-    out: list<Member> = []
+    out: List<Member> = []
     pos = 0
     n = len(data)
     while pos + 512 <= n:
@@ -296,7 +296,7 @@ def read(data: list<u8>) -> list<Member>:
         size = read_octal(data, pos + 124, 12, "size")
         mtime = read_octal(data, pos + 136, 12, "mtime")
         pos += 512
-        body: list<u8> = []
+        body: List<u8> = []
         if kind_b == 53:
             if size != 0:
                 raise error("a directory with content: " + name, VALUE)

@@ -14,7 +14,7 @@ import sys
 import path
 import <tar/tar.psc> as tar
 
-e: list<int> = [0, 0]
+e: List<int> = [0, 0]
 DIR = "build/t/tarsys"
 
 
@@ -48,7 +48,7 @@ async def main() -> int:
     # 1) it LISTS what we put in there
     r = await os.run(["tar", "tf", target])
     check("tar tf returns 0", r.status() == 0)
-    names: list<str> = []
+    names: List<str> = []
     for ln in r.output().split("\n"):
         if len(ln) > 0:
             names.append(ln)

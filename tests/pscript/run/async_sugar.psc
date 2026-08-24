@@ -26,7 +26,7 @@ files.
 
 import sys
 
-done: list<str> = []
+done: List<str> = []
 
 
 async def wait_ms(ms: int, name: str) -> int:

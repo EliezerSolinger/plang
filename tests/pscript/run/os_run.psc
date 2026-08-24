@@ -22,7 +22,7 @@ escrever por fora. O que este arquivo prende:
 import os
 import path
 
-async def um(cmd: list<str>) -> proc:
+async def um(cmd: List<str>) -> proc:
     return await os.run(cmd)
 
 async def go():
@@ -63,7 +63,7 @@ async def go():
     cmds = [["/bin/sh", "-c", "echo n" + str(i)] for i in range(8)]
     rs = await gather_map(um, cmds, at_most=3)
     soma = 0
-    vistos: list<str> = []
+    vistos: List<str> = []
     for x in rs:
         soma += x.status()
         vistos.append(x.output())

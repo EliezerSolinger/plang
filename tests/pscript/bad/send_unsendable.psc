@@ -2,7 +2,7 @@
 # have (34.3/74.2)
 struct Job:
     name: str
-    log: file
+    log: File
 
 
 def worker(n: int) -> Job:

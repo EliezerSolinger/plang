@@ -9,11 +9,11 @@ one was not.
 """
 
 
-def three() -> list<int>:
+def three() -> List<int>:
     return [1, 2, 3]
 
 
-def names() -> list<str>:
+def names() -> List<str>:
     return ["a", "b"]
 
 

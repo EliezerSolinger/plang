@@ -137,7 +137,7 @@ def rnd() -> float:
     return float((x %* 2685821657736338717) >> 11) * (1.0 / 9007199254740992.0)
 
 
-def cornell() -> list<Sphere>:
+def cornell() -> List<Sphere>:
     """smallpt's Cornell box, built in code."""
     return [
         Sphere(1e5, Vec(1e5 + 1.0, 40.8, 81.6), BLACK, Vec(0.75, 0.25, 0.25), DIFF),
@@ -155,12 +155,12 @@ def cornell() -> list<Sphere>:
 def vec_from(v: any) -> Vec:
     """A JSON array of three numbers. `as` CHECKS (55.2): a document that says
     something else stops the program instead of rendering nonsense."""
-    trio = v as list<any>
+    trio = v as List<any>
     return Vec(trio[0] as float, trio[1] as float, trio[2] as float)
 
 
 def sphere_from(v: any) -> Sphere:
-    m = v as dict<str, any>
+    m = v as Dict<str, any>
     ks = m["kind"] as str
     kind = DIFF
     if ks == "spec":
@@ -171,14 +171,14 @@ def sphere_from(v: any) -> Sphere:
                   vec_from(m["color"]), kind)
 
 
-async def load_scene(path: str) -> list<Sphere>:
+async def load_scene(path: str) -> List<Sphere>:
     """JSON in, spheres out (41.1). Failure raises with the io category and the
     program says which file it could not read."""
     nonlocal text
     with await open(path, "r") as f:
         text = await f.text()
-    doc = json.parse(text) as list<any>
-    out: list<Sphere> = []
+    doc = json.parse(text) as List<any>
+    out: List<Sphere> = []
     i = 0
     while i < len(doc):
         out.append(sphere_from(doc[i]))
@@ -204,7 +204,7 @@ def hit_sphere(in s: Sphere, in r: Ray) -> float:
     return 0.0
 
 
-def nearest(spheres: list<Sphere>, in r: Ray) -> int:
+def nearest(spheres: List<Sphere>, in r: Ray) -> int:
     best = 1e20
     found = -1
     i = 0
@@ -217,7 +217,7 @@ def nearest(spheres: list<Sphere>, in r: Ray) -> int:
     return found
 
 
-def radiance(spheres: list<Sphere>, in r: Ray, depth: int) -> Vec:
+def radiance(spheres: List<Sphere>, in r: Ray, depth: int) -> Vec:
     """Recursive Monte Carlo. It does NOT allocate: `Vec` is a value (52.1), so
     the hot loop runs on the stack and the collector never fires inside it."""
     idx = nearest(spheres, in r)
@@ -280,7 +280,7 @@ def radiance(spheres: list<Sphere>, in r: Ray, depth: int) -> Vec:
 # ---------------------------------------------------------------- the worker
 
 async def render(wid: int, nworkers: int, width: int, height: int, spp: int,
-           scene_path: str, fb: buffer) -> Stat:
+           scene_path: str, fb: Buffer) -> Stat:
     """One worker's share: the rows y = wid, wid+n, wid+2n, …
 
     It has its own heap and its own collector (18.1), and the scene is built
@@ -388,14 +388,14 @@ print(f"smallpt {width}x{height}, {samples} samples/pixel, {nworkers} workers")
 gamma = 2.2
 tone: def(float) -> float = lambda v: clamp01(v) ** (1.0 / gamma)
 
-with buffer(width * height * 3 * 8) as fb:
-    ws: list<Worker<Stat>> = []
+with Buffer(width * height * 3 * 8) as fb:
+    ws: List<Worker<Stat>> = []
     w = 0
     while w < nworkers:
         ws.append(spawn(render, (w, nworkers, width, height, spp, scene_path, fb)))
         w += 1
 
-    stats: list<Stat> = []
+    stats: List<Stat> = []
     k = 0
     while k < len(ws):
         stats.append(await ws[k].recv())

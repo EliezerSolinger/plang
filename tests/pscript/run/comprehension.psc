@@ -19,7 +19,7 @@ labels = [f"n{x}" for x in xs if x > 4]
 print(f"labels {len(labels)}: {labels[0]} {labels[1]}")
 
 # over a dict: the keys
-d: dict<str, int> = {"a": 1, "b": 2}
+d: Dict<str, int> = {"a": 1, "b": 2}
 ks = [k for k in d]
 print(f"keys {len(ks)}")
 
@@ -66,7 +66,7 @@ sq = {i: i * i for i in range(4) if i > 0}
 print(f"squares {len(sq)}: {sq[3]}")
 
 # an annotation on what receives it wins over inference
-wide: dict<str, any> = {w: len(w) for w in words}
+wide: Dict<str, any> = {w: len(w) for w in words}
 print(f"annotated {len(wide)}")
 
 # the insertion order of a dict comprehension is the order of the LOOP (91.1)

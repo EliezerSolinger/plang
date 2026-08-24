@@ -15,8 +15,8 @@ import json
 
 v = json.parse("[\"a\", {\"x\": 1}, \"b\", 7]")
 
-xs: list<str> = []
-for item in v as list<any>:
+xs: List<str> = []
+for item in v as List<any>:
     try:
         xs.append(item as str)
     catch e:
@@ -26,9 +26,9 @@ for s in xs:
     print("[" + s + "]")
 
 # o mesmo com um dict, que também reserva antes de escrever
-d: dict<str, str> = {}
+d: Dict<str, str> = {}
 i = 0
-for item2 in v as list<any>:
+for item2 in v as List<any>:
     try:
         d["k" + str(i)] = item2 as str
     catch e2:
@@ -43,7 +43,7 @@ struct Caixa:
     dentro: str
 
 c = Caixa("inicial")
-lista = v as list<any>
+lista = v as List<any>
 try:
     c.dentro = lista[3] as str
 catch e3:

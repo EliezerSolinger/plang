@@ -43,7 +43,7 @@ const C_DEFAULT: int = -1        # "whatever the theme says text/background is"
 
 record Cell:
     """One character on the screen. A `record` and not a `struct` because it
-    holds only numbers — which is what lets `list<Cell>` be a flat array instead
+    holds only numbers — which is what lets `List<Cell>` be a flat array instead
     of an array of pointers, and a screen is two thousand of them."""
     ch: int          # the codepoint; 32 = blank
     fg: int          # 0..255 an ANSI colour, or C_DEFAULT
@@ -59,7 +59,7 @@ struct Line:
     """A row that has scrolled off the top. Kept whole rather than reflowed:
     reflowing history on every resize is a feature of its own, and the honest
     alternative — throwing it away — loses what somebody was reading."""
-    cells: list<Cell>
+    cells: List<Cell>
 
 
 # ---------- the parser's states ----------
@@ -78,8 +78,8 @@ const SCROLLBACK: int = 5000    # lines. A program in a loop must not eat the
 struct Term:
     cols: int
     rows: int
-    cells: list<Cell>        # rows*cols, row-major: the screen being written
-    other: list<Cell>        # the screen that is not being written (alt/main)
+    cells: List<Cell>        # rows*cols, row-major: the screen being written
+    other: List<Cell>        # the screen that is not being written (alt/main)
     on_alt: bool
     # Which physical row is the TOP one. Scrolling a full screen moves this by
     # one instead of copying every cell up: a program printing a thousand lines
@@ -89,7 +89,7 @@ struct Term:
     origin: int
 
     # the ring of what scrolled off the top
-    back: list<Line>
+    back: List<Line>
     back_head: int           # where the NEXT line goes
     back_len: int
     view: int                # how far back we are looking; 0 = live
@@ -111,7 +111,7 @@ struct Term:
 
     # the byte-level parser
     state: int
-    params: list<int>
+    params: List<int>
     priv: str                # `?` and friends, between CSI and the final byte
     osc: str
     # UTF-8 arrives a chunk at a time and a codepoint can straddle two chunks
@@ -139,7 +139,7 @@ struct Term:
         when a person does something, never per line of output."""
         if self.origin == 0:
             return
-        fresh: list<Cell> = []
+        fresh: List<Cell> = []
         for y in range(self.rows):
             for x in range(self.cols):
                 fresh.append(self.at(x, y))
@@ -233,7 +233,7 @@ struct Term:
 
     # ---------- the parser ----------
 
-    def feed_bytes(self, b: list<u8>):
+    def feed_bytes(self, b: List<u8>):
         for raw in b:
             self.feed_byte(int(raw))
         self.dirty = True
@@ -625,7 +625,7 @@ struct Term:
         oc = self.cols
         orr = self.rows
         b = blank(C_DEFAULT, C_DEFAULT, 0)
-        fresh: list<Cell> = []
+        fresh: List<Cell> = []
         for i in range(cols * rows):
             fresh.append(b)
         keep_rows = min_i(rows, orr)
@@ -635,7 +635,7 @@ struct Term:
             dy = rows - keep_rows + y
             for x in range(keep_cols):
                 fresh[dy * cols + x] = old[sy * oc + x]
-        other: list<Cell> = []
+        other: List<Cell> = []
         for i in range(cols * rows):
             other.append(b)
         self.cells = fresh
@@ -652,7 +652,7 @@ struct Term:
 
     # ---------- what is on screen right now ----------
 
-    def visible(self, y: int) -> list<Cell>:
+    def visible(self, y: int) -> List<Cell>:
         """Row `y` of what the user is LOOKING at, which is the screen when the
         view is live and the ring when it is not."""
         if self.view <= 0 or self.on_alt:
@@ -664,8 +664,8 @@ struct Term:
             return self.back_line(back - 1).cells
         return self.row_of(self.cells, -back)
 
-    def row_of(self, src: list<Cell>, y: int) -> list<Cell>:
-        out: list<Cell> = []
+    def row_of(self, src: List<Cell>, y: int) -> List<Cell>:
+        out: List<Cell> = []
         if y < 0 or y >= self.rows:
             return self.empty_row()
         base = ((self.origin + y) % self.rows) * self.cols
@@ -673,8 +673,8 @@ struct Term:
             out.append(src[base + x])
         return out
 
-    def empty_row(self) -> list<Cell>:
-        out: list<Cell> = []
+    def empty_row(self) -> List<Cell>:
+        out: List<Cell> = []
         b = blank(C_DEFAULT, C_DEFAULT, 0)
         for x in range(self.cols):
             out.append(b)

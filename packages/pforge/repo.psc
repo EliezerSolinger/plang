@@ -90,7 +90,7 @@ def local_path(r: Repo) -> str:
     return r.url[7:len(r.url)]
 
 
-async def fetch(r: Repo, rel: str) -> list<u8>:
+async def fetch(r: Repo, rel: str) -> List<u8>:
     """ONE file from the repository, by its relative path.
 
     It is the ONLY point where bytes from outside come in, and that is on
@@ -116,7 +116,7 @@ async def fetch(r: Repo, rel: str) -> list<u8>:
     raise error("I do not know how to fetch from " + r.url + " — the schemes are file://, http:// and https://", VALUE)
 
 
-async def fetch_http(r: Repo, rel: str) -> list<u8>:
+async def fetch_http(r: Repo, rel: str) -> List<u8>:
     """A GET, and nothing clever: no silently followed redirect, no cache, no
     session. What is asked for is an immutable file at a known path.
 
@@ -177,11 +177,11 @@ struct Release:
     author: str           # the key that signed the tarball ("" while unsafe)
     lang: str
     root: str
-    deps: list<M.Dep>
+    deps: List<M.Dep>
     toolchain: str
     description: str
-    api: dict<str, list<str>>    # module -> the canonical symbol list
-    api_hash: dict<str, str>     # module -> the interface hash
+    api: Dict<str, List<str>>    # module -> the canonical symbol list
+    api_hash: Dict<str, str>     # module -> the interface hash
 
 
 struct Index:
@@ -189,7 +189,7 @@ struct Index:
     name: str
     updated: str
     # name -> version -> the entry
-    packages: dict<str, dict<str, Release>>
+    packages: Dict<str, Dict<str, Release>>
 
     def has(self, name: str, version: str) -> bool:
         if name not in self.packages:
@@ -201,14 +201,14 @@ struct Index:
             raise error(f"{name}@{version} is not in the index", KEY)
         return self.packages[name][version]
 
-    def names(self) -> list<str>:
-        out: list<str> = []
+    def names(self) -> List<str>:
+        out: List<str> = []
         for n in self.packages:
             out.append(n)
         return sorted(out)
 
-    def versions(self, name: str) -> list<str>:
-        out: list<str> = []
+    def versions(self, name: str) -> List<str>:
+        out: List<str> = []
         if name not in self.packages:
             return out
         for v in self.packages[name]:
@@ -232,13 +232,13 @@ def new_index(name: str) -> Index:
 # with it would give a build that resolves versions out of garbage. What the
 # reader does is lend the message the file's name, so the error says WHICH index.
 
-private def txt(d: dict<str, any>, k: str, dflt: str) -> str:
+private def txt(d: Dict<str, any>, k: str, dflt: str) -> str:
     if k not in d:
         return dflt
     return d[k] as str
 
 
-private def num(d: dict<str, any>, k: str) -> int:
+private def num(d: Dict<str, any>, k: str) -> int:
     if k not in d:
         return 0
     return d[k] as int
@@ -252,7 +252,7 @@ def read_index(raw: str, whence: str) -> Index:
 
 
 private def read_index_x(raw: str) -> Index:
-    d = json.parse(raw) as dict<str, any>
+    d = json.parse(raw) as Dict<str, any>
     ix = new_index(txt(d, "name", ""))
     ix.format = num(d, "format")
     if ix.format != 1:
@@ -260,18 +260,18 @@ private def read_index_x(raw: str) -> Index:
     ix.updated = txt(d, "updated", "")
     if "packages" not in d:
         return ix
-    packages = d["packages"] as dict<str, any>
-    names: list<str> = []
+    packages = d["packages"] as Dict<str, any>
+    names: List<str> = []
     for n in packages:
         names.append(n)
     for name in sorted(names):
-        byver = packages[name] as dict<str, any>
-        out: dict<str, Release> = {}
-        vs: list<str> = []
+        byver = packages[name] as Dict<str, any>
+        out: Dict<str, Release> = {}
+        vs: List<str> = []
         for vn in byver:
             vs.append(vn)
         for version in sorted(vs):
-            e = byver[version] as dict<str, any>
+            e = byver[version] as Dict<str, any>
             u = empty_release()
             u.name = name
             u.version = version
@@ -284,23 +284,23 @@ private def read_index_x(raw: str) -> Index:
             u.toolchain = txt(e, "toolchain", "")
             u.description = txt(e, "description", "")
             if "deps" in e:
-                dd = e["deps"] as dict<str, any>
-                dns: list<str> = []
+                dd = e["deps"] as Dict<str, any>
+                dns: List<str> = []
                 for dn in dd:
                     dns.append(dn)
                 for dn2 in sorted(dns):
                     u.deps.append(M.Dep(dn2, dd[dn2] as str))
             if "api" in e:
-                aa = e["api"] as dict<str, any>
-                mods: list<str> = []
+                aa = e["api"] as Dict<str, any>
+                mods: List<str> = []
                 for mn in aa:
                     mods.append(mn)
                 for mod in sorted(mods):
-                    mm = aa[mod] as dict<str, any>
+                    mm = aa[mod] as Dict<str, any>
                     u.api_hash[mod] = txt(mm, "hash", "")
-                    syms: list<str> = []
+                    syms: List<str> = []
                     if "symbols" in mm:
-                        for sv in mm["symbols"] as list<any>:
+                        for sv in mm["symbols"] as List<any>:
                             syms.append(sv as str)
                     u.api[mod] = syms
             out[version] = u
@@ -367,7 +367,7 @@ def write_index(ix: Index) -> str:
             b += "},\n"
             b += "        \"api\": {"
             pa = True
-            mods: list<str> = []
+            mods: List<str> = []
             for mk in u.api:
                 mods.append(mk)
             for mod in sorted(mods):
@@ -399,11 +399,11 @@ def write_index(ix: Index) -> str:
 # already exists. What the list takes out is what is never source: what the build
 # produced, what version control keeps, and editor litter.
 
-const SKIP_DIRS: list<str> = ["build", ".git", ".hg", ".svn", ".verify",
+const SKIP_DIRS: List<str> = ["build", ".git", ".hg", ".svn", ".verify",
                               "__pycache__", "node_modules", ".idea", ".vscode"]
-const SKIP_SUFFIXES: list<str> = [".o", ".a", ".so", ".dylib", ".dll", ".exe",
+const SKIP_SUFFIXES: List<str> = [".o", ".a", ".so", ".dylib", ".dll", ".exe",
                                   ".tar", ".sig", ".orig", ".rej", ".swp", "~"]
-const SKIP_NAMES: list<str> = [".DS_Store", "pack.lock", "core"]
+const SKIP_NAMES: List<str> = [".DS_Store", "pack.lock", "core"]
 
 
 def skipped(name: str, is_dir: bool) -> bool:
@@ -417,7 +417,7 @@ def skipped(name: str, is_dir: bool) -> bool:
     return False
 
 
-private async def walk(root: str, rel: str, out: list<str>):
+private async def walk(root: str, rel: str, out: List<str>):
     """The tree's files, in order. The order is what makes two `publish` runs
     over the same content give the SAME tarball — and the tarball is the
     identity."""
@@ -434,7 +434,7 @@ private async def walk(root: str, rel: str, out: list<str>):
             out.append(r2)
 
 
-async def pack(dir: str, prefix: str) -> list<u8>:
+async def pack(dir: str, prefix: str) -> List<u8>:
     """A package's tree as a `.tar`, inside a `prefix/` directory.
 
     REPRODUCIBLE, and that is not elegance: the tarball's hash IS the package's
@@ -447,12 +447,12 @@ async def pack(dir: str, prefix: str) -> list<u8>:
     The price is known and accepted: the execute bit does not survive. A package
     of SOURCE CODE does not need it, and whoever needs a script calls `sh x.sh`.
     """
-    files: list<str> = []
+    files: List<str> = []
     await walk(dir, "", files)
     if len(files) == 0:
         raise error("there is nothing to pack in " + dir, VALUE)
-    members: list<tar.Member> = [tar.directory(prefix, 0o755, 0)]
-    seen: dict<str, int> = {}
+    members: List<tar.Member> = [tar.directory(prefix, 0o755, 0)]
+    seen: Dict<str, int> = {}
     for rel in files:
         # the intermediate directories go in before the first file that lives in
         # them: a `tar` that extracts without them depends on the extractor's
@@ -473,13 +473,13 @@ async def pack(dir: str, prefix: str) -> list<u8>:
     return tar.write(members)
 
 
-def hash_of(b: list<u8>) -> str:
+def hash_of(b: List<u8>) -> str:
     return sha256_of(b)
 
 
 # ---------- storing and reading what arrived ----------
 
-async def write_bytes(target: str, b: list<u8>):
+async def write_bytes(target: str, b: List<u8>):
     d = path.dirname(target)
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
@@ -488,14 +488,14 @@ async def write_bytes(target: str, b: list<u8>):
     await f.close()
 
 
-async def read_bytes(target: str) -> list<u8>:
+async def read_bytes(target: str) -> List<u8>:
     f = await open(target, "r")
     b = await f.read_all()
     await f.close()
     return b
 
 
-async def extract(b: list<u8>, dest: str) -> int:
+async def extract(b: List<u8>, dest: str) -> int:
     """Unpacks a tarball into `dest`. Returns how many files came out.
 
     The reader has already refused absolute paths, `..`, and anything that is
@@ -515,7 +515,7 @@ async def extract(b: list<u8>, dest: str) -> int:
     return n
 
 
-def bytes_of_text(s: str) -> list<u8>:
+def bytes_of_text(s: str) -> List<u8>:
     return tar.bytes_of(s)
 
 
@@ -562,7 +562,7 @@ def package_dir(name: str, version: str, sha: str) -> str:
     return path.join(STORE, name + "-" + version + "-" + sha[0:12])
 
 
-async def extract_package(b: list<u8>, dest: str, name: str) -> int:
+async def extract_package(b: List<u8>, dest: str, name: str) -> int:
     """Unpacks the tarball into `<dest>/<name>/`, stripping the prefix it was
     packed with (`<name>-<version>/`).
 
@@ -586,11 +586,11 @@ async def extract_package(b: list<u8>, dest: str, name: str) -> int:
     return n
 
 
-def installed_roots() -> list<str>:
+def installed_roots() -> List<str>:
     """The package roots `install` materialized. They go into `--pkg-path`
     alongside the workspace's — and after them, because what is in the tree wins
     over what came from outside."""
-    out: list<str> = []
+    out: List<str> = []
     if not path.isdir(STORE):
         return out
     for name in sorted(os.listdir(STORE)):
@@ -618,7 +618,7 @@ def installed_roots() -> list<str>:
 # would take it — and it does not go to the repository: it is the one thing here
 # that is not committed.
 
-async def read_seed(file: str) -> list<u8>:
+async def read_seed(file: str) -> List<u8>:
     """The private key from a file. It accepts the hexadecimal with spaces and
     newlines around it, because a key file tends to be copied by hand."""
     if not path.isfile(file):
@@ -628,7 +628,7 @@ async def read_seed(file: str) -> list<u8>:
     await f.close()
     if len(t) != 64:
         raise error(file + f": a private key is 64 hexadecimal digits (32 bytes), and this one has {len(t)}", VALUE)
-    b: list<u8> = []
+    b: List<u8> = []
     i = 0
     while i < 64:
         v = dehex(t[i]) * 16 + dehex(t[i + 1])
@@ -650,7 +650,7 @@ private def dehex(c: str) -> int:
     return -1000
 
 
-async def new_seed() -> list<u8>:
+async def new_seed() -> List<u8>:
     """Thirty-two bytes from `/dev/urandom`, and from nowhere else.
 
     The language's `random` is a generator for simulation: fast, reproducible and
@@ -665,15 +665,15 @@ async def new_seed() -> list<u8>:
     return b
 
 
-def public_key(seed: list<u8>) -> str:
+def public_key(seed: List<u8>) -> str:
     return ed25519_pub_hex(seed)
 
 
-def sign(seed: list<u8>, data: list<u8>) -> str:
+def sign(seed: List<u8>, data: List<u8>) -> str:
     return ed25519_sign_hex(seed, data)
 
 
-def verify_sig(pub_hex: str, data: list<u8>, sig_hex: str) -> bool:
+def verify_sig(pub_hex: str, data: List<u8>, sig_hex: str) -> bool:
     """From the verifier's point of view, a damaged file, a signature that is not
     hexadecimal and a wrong signature are the SAME answer."""
     if len(pub_hex) != 64 or len(sig_hex) != 128:
@@ -695,14 +695,14 @@ async def signature_of(r: Repo, rel: str) -> str:
         return ""
 
 
-def index_keys(ix: Index) -> list<str>:
+def index_keys(ix: Index) -> List<str>:
     """The author keys the index declares, without repetition.
 
     TOFU needs them for a small and important reason: accepting a key the first
     time is not accepting ANYTHING. The index's signature has to match some key
     the index itself names — otherwise what arrived is not even internally
     coherent, and that is not "an unknown key", it is a wrong signature."""
-    out: list<str> = []
+    out: List<str> = []
     for name in ix.names():
         for v in ix.versions(name):
             a = ix.get(name, v).author

@@ -1,10 +1,10 @@
-"""`list<T>` (27.3): a homogeneous, growable sequence.
+"""`List<T>` (27.3): a homogeneous, growable sequence.
 
 Two objects underneath — the header a variable points at, and the backing
 storage, which grows by being REPLACED. Splitting them is what lets a list grow
 while every reference to it stays valid.
 
-Elements live INLINE, by value: `list<Vec>` is a flat array of 24-byte records
+Elements live INLINE, by value: `List<Vec>` is a flat array of 24-byte records
 with no pointer per element (52.1), which is the whole reason `record` is a
 value type.
 """
@@ -35,19 +35,19 @@ for p in ps:
 print(f"record list {len(ps)} sum-x {sx}")
 
 # a list of strings: these ARE references, and the collector traces them
-names: list<str> = []
+names: List<str> = []
 for i in range(5):
     names.append(f"n{i}")
 print(f"names {names[0]} {names[2]} {names[4]} (len {len(names)})")
 
 # growth well past the initial capacity, with a collection in the middle
-big: list<int> = []
+big: List<int> = []
 for i in range(20000):
     big.append(i * 2)
 print(f"big {len(big)} {big[0]} {big[9999]} {big[19999]}")
 
 # strings survive collection while the list holds them
-kept: list<str> = []
+kept: List<str> = []
 for i in range(4000):
     junk = f"{i}-{i * 3}"
     if i % 1000 == 0:

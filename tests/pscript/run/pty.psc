@@ -19,7 +19,7 @@ translating the `\n` the program wrote.
 import os
 
 
-async def drain(c: socket) -> str:
+async def drain(c: Socket) -> str:
     """Everything until the other side closes. The empty answer is the end
     (79.2) — and on a terminal the end is the child exiting, because the last
     close of the slave hangs the master up."""
@@ -69,7 +69,7 @@ async def main_test():
     print("missing program survived")
 
     # ---- and an empty command is refused, with the name of the call in it ----
-    empty: list<str> = []
+    empty: List<str> = []
     try:
         os.spawn_pty(empty, 80, 24)
         print("empty NOT refused")

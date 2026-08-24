@@ -11,7 +11,7 @@ is our scheduler making a promise JS does not, and it belongs in the design
 document before it belongs in a fix.
 """
 
-log: list<str> = []
+log: List<str> = []
 
 
 async def chain(name: str, n: int) -> int:
@@ -40,7 +40,7 @@ async def parent() -> int:
 # The cursor lives in a one-element list because a module-level `int` is not
 # assignable from inside a function here, and the JS next door uses a plain
 # `let` for the same job — what is compared is the lines, not the cell.
-mark: list<int> = [0]
+mark: List<int> = [0]
 
 
 def show(label: str):

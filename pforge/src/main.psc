@@ -64,9 +64,9 @@ def on_plan(total: int):
     failed = False
     # an empty literal needs a type, and it is good that it does: a silent `= {}`
     # in an already-typed global would be one shape for two different intentions
-    lab0: dict<int, str> = {}
-    ok0: dict<str, int> = {}
-    bad0: dict<str, list<str>> = {}
+    lab0: Dict<int, str> = {}
+    ok0: Dict<str, int> = {}
+    bad0: Dict<str, List<str>> = {}
     labels = lab0
     score_ok = ok0
     score_bad = bad0
@@ -91,14 +91,14 @@ current_query: str = ""
 def query_global() -> str:
     return current_query
 
-labels: dict<int, str> = {}
+labels: Dict<int, str> = {}
 
 # the SCOREBOARD: how many edges of each suite passed, and which failed. The key
 # is what comes before the first `: ` in the description — which is how the target
 # library writes a case's label (`pscript: case_name`). An ordinary build has no
 # suite at all and the scoreboard does not appear.
-score_ok: dict<str, int> = {}
-score_bad: dict<str, list<str>> = {}
+score_ok: Dict<str, int> = {}
+score_bad: Dict<str, List<str>> = {}
 
 private def suite_of(label: str) -> str:
     k = label.find(": ")
@@ -161,12 +161,12 @@ def on_error(msg: str):
 
 def on_done(ok: bool, fails: int):
     if json_out:
-        parts: list<str> = []
-        ks0: list<str> = []
+        parts: List<str> = []
+        ks0: List<str> = []
         for k0 in score_ok:
             ks0.append(k0)
         for k1 in sorted(ks0):
-            bad0: list<str> = []
+            bad0: List<str> = []
             for nm in score_bad[k1]:
                 bad0.append(G.jstr(nm))
             parts.append(G.jstr(k1) + ': {"ok": ' + str(score_ok[k1])
@@ -177,7 +177,7 @@ def on_done(ok: bool, fails: int):
     # the SCOREBOARD, when there was a suite. It exists because "587 edges ok" is
     # not what whoever runs tests wants to know: what you want is how many cases
     # passed, and WHICH failed — and a six-hundred-edge build hides both.
-    ks: list<str> = []
+    ks: List<str> = []
     for k in score_ok:
         ks.append(k)
     for k2 in sorted(ks):
@@ -207,7 +207,7 @@ def on_start_verbose(id: int, what: str):
     labels[id] = what
     print("  ->", what)
 
-async def cmd_build(targets: list<str>, jobs: int, keep: int, dry: bool, query: str,
+async def cmd_build(targets: List<str>, jobs: int, keep: int, dry: bool, query: str,
                     verbose: bool, repro: bool) -> int:
     g = await BP.assemble(query)
     st = on_start_verbose if verbose else on_start
@@ -220,7 +220,7 @@ async def cmd_build(targets: list<str>, jobs: int, keep: int, dry: bool, query: 
 
 const REPRO: str = "build/repro"
 
-private async def check_repro(g: G.Graph, targets: list<str>, jobs: int, keep: int,
+private async def check_repro(g: G.Graph, targets: List<str>, jobs: int, keep: int,
                               query: str, rep: B.Rep) -> int:
     """`--repro`: builds twice and compares byte for byte.
 
@@ -248,7 +248,7 @@ private async def check_repro(g: G.Graph, targets: list<str>, jobs: int, keep: i
     reproducible by construction; a C package that uses `__DATE__`/`__TIME__` is
     not, and the world's answer to that (`SOURCE_DATE_EPOCH`) is the one to adopt
     the day it shows up."""
-    outputs: list<str> = []
+    outputs: List<str> = []
     for e in g.edges:
         if not e.want:
             continue
@@ -283,7 +283,7 @@ private async def check_repro(g: G.Graph, targets: list<str>, jobs: int, keep: i
         print("         the first time is the most expensive defect there is.")
         print("         what the first one had produced is back in place.")
         return 1
-    diffs: list<str> = []
+    diffs: List<str> = []
     for p3 in outputs:
         if not path.isfile(p3):
             diffs.append(p3 + "  (the second build did not produce it)")
@@ -293,7 +293,7 @@ private async def check_repro(g: G.Graph, targets: list<str>, jobs: int, keep: i
         if h1 != h2:
             diffs.append(p3 + "  " + h1[0:16] + "… -> " + h2[0:16] + "…")
     if json_out:
-        jd: list<str> = []
+        jd: List<str> = []
         for d0 in diffs:
             jd.append(G.jstr(d0))
         print('{"outputs": ' + str(len(outputs)) + ', "reproducible": '
@@ -311,7 +311,7 @@ private async def check_repro(g: G.Graph, targets: list<str>, jobs: int, keep: i
     return 1
 
 
-async def cmd_run(targets: list<str>, jobs: int, query: str, verbose: bool, builddir: str) -> int:
+async def cmd_run(targets: List<str>, jobs: int, query: str, verbose: bool, builddir: str) -> int:
     """Builds and runs. Two things it accepts, and the second is the one that
     closes F7:
 
@@ -349,7 +349,7 @@ async def cmd_run(targets: list<str>, jobs: int, query: str, verbose: bool, buil
         root = BP.script_root(target, builddir)
         ready = await BP.run_manifest_ok(target, root)
         if len(ready) > 0:
-            argv0: list<str> = [ready if ready.startswith("/") else path.join(os.getcwd(), ready)]
+            argv0: List<str> = [ready if ready.startswith("/") else path.join(os.getcwd(), ready)]
             i0 = 1
             while i0 < len(targets):
                 argv0.append(targets[i0])
@@ -374,7 +374,7 @@ async def cmd_run(targets: list<str>, jobs: int, query: str, verbose: bool, buil
         return 101
     if loose:
         await BP.run_manifest_write(targets[0], target, g, BP.script_root(targets[0], builddir))
-    argv: list<str> = [target if target.startswith("/") else path.join(os.getcwd(), target)]
+    argv: List<str> = [target if target.startswith("/") else path.join(os.getcwd(), target)]
     i = 1
     while i < len(targets):
         argv.append(targets[i])
@@ -383,7 +383,7 @@ async def cmd_run(targets: list<str>, jobs: int, query: str, verbose: bool, buil
     os.exec(argv)
     return 127
 
-async def cmd_dev(targets: list<str>, jobs: int, query: str, verbose: bool) -> int:
+async def cmd_dev(targets: List<str>, jobs: int, query: str, verbose: bool) -> int:
     """`pforge dev [target]` — builds, waits for something to change, and builds
     again. Until somebody presses Ctrl-C.
 
@@ -406,15 +406,15 @@ async def cmd_dev(targets: list<str>, jobs: int, query: str, verbose: bool) -> i
     corrupts a file on every save is worse than one that waits half a second."""
     g = await BP.assemble(query)
     target = targets[0] if len(targets) > 0 else ""
-    tl: list<str> = [target] if len(target) > 0 else []
+    tl: List<str> = [target] if len(target) > 0 else []
     st = on_start_verbose if verbose else on_start
     rep = B.Rep(on_plan, st, on_end, on_done, on_error)
     await B.build(g, LOG, tl, B.Opts(jobs, 1000000, False, False), rep)
     # what to watch: the INPUTS of every edge, which is what the compiler said it
     # reads. A file that does not exist yet goes in just the same — coming into
     # existence is a change like any other.
-    seen: dict<str, int> = {}
-    watched: list<str> = []
+    seen: Dict<str, int> = {}
+    watched: List<str> = []
     for e in g.edges:
         for iid in e.ins:
             p = g.nodes[iid].p
@@ -426,7 +426,7 @@ async def cmd_dev(targets: list<str>, jobs: int, query: str, verbose: bool) -> i
                 continue
             seen[p] = 1
             watched.append(p)
-    dates: dict<str, int> = {}
+    dates: Dict<str, int> = {}
     for p2 in watched:
         dates[p2] = path.getmtime_ns(p2) if path.isfile(p2) else 0
     # the program, when the target is one: launched now and relaunched on every
@@ -439,7 +439,7 @@ async def cmd_dev(targets: list<str>, jobs: int, query: str, verbose: bool) -> i
 
     while True:
         await sleep(0.2)
-        changed: list<str> = []
+        changed: List<str> = []
         for p3 in watched:
             now_ns = path.getmtime_ns(p3) if path.isfile(p3) else 0
             if now_ns != dates.get(p3, 0):
@@ -501,7 +501,7 @@ async def cmd_test(jobs: int, query: str, verbose: bool) -> int:
     ok = await B.build(g, LOG, [BP.TEST], B.Opts(jobs, 1000000, False, False), rep)
     return 0 if ok else 1
 
-async def cmd_explain(targets: list<str>, query: str) -> int:
+async def cmd_explain(targets: List<str>, query: str) -> int:
     g = await BP.assemble(query)
     w = await B.why_dirty(g, LOG, targets)
     if len(w) == 0:
@@ -510,12 +510,12 @@ async def cmd_explain(targets: list<str>, query: str) -> int:
         else:
             print("nothing is dirty")
         return 0
-    ks: list<str> = []
+    ks: List<str> = []
     for k in w:
         ks.append(k)
     ks = sorted(ks)
     if json_out:
-        parts: list<str> = []
+        parts: List<str> = []
         for k3 in ks:
             parts.append(G.jstr(k3) + ": " + G.jstr(w[k3]))
         print('{"dirty": {' + ", ".join(parts) + '}}')
@@ -562,7 +562,7 @@ async def cmd_check(query: str) -> int:
         man = await MF.read(path.join(p.dir, "pack.json"))
         if len(man.root) == 0:
             continue
-        argv: list<str> = [query]
+        argv: List<str> = [query]
         for r in roots:
             argv.append("--pkg-path")
             argv.append(r)
@@ -599,7 +599,7 @@ async def cmd_check(query: str) -> int:
                 problems.append(p2.name + " declares the system library `" + sd.name
                                 + "` and `pkg-config` does not find it on this machine")
     if json_out:
-        js: list<str> = []
+        js: List<str> = []
         for pr in problems:
             js.append(G.jstr(pr))
         print("[" + ", ".join(js) + "]")
@@ -619,9 +619,9 @@ async def cmd_tree() -> int:
         print("no packages: this project has no workspace `pack.json`, or it lists no members")
         return 1
     if json_out:
-        parts: list<str> = []
+        parts: List<str> = []
         for p in m.packages:
-            ds: list<str> = []
+            ds: List<str> = []
             i = 0
             while i < len(p.deps):
                 ds.append('{"name": ' + G.jstr(p.deps[i]) + ', "range": ' + G.jstr(p.reqs[i]) + '}')
@@ -639,7 +639,7 @@ async def cmd_tree() -> int:
         return 1
     return 0
 
-async def cmd_why(targets: list<str>) -> int:
+async def cmd_why(targets: List<str>) -> int:
     """`pforge why <package>` — who pulled it in.
 
     It is the question every large lock eventually provokes, and the answer has to
@@ -656,7 +656,7 @@ async def cmd_why(targets: list<str>) -> int:
         return 1
     who = m.who_pulls(target)
     if json_out:
-        ns: list<str> = []
+        ns: List<str> = []
         for q in who:
             ns.append(G.jstr(q))
         print('{"package": ' + G.jstr(target) + ', "pulled_by": [' + ", ".join(ns) + ']}')
@@ -728,7 +728,7 @@ private def indent(t: str) -> str:
 # ---------- the repository ----------
 
 private async def package_api(dir: str, m: MF.Manifest, query: str,
-                              api: dict<str, list<str>>, hashes: dict<str, str>):
+                              api: Dict<str, List<str>>, hashes: Dict<str, str>):
     """The canonical symbol list of each of the package's modules, in the index.
 
     It is not decoration: it is what makes `pforge search draw_rect` search BY
@@ -736,7 +736,7 @@ private async def package_api(dir: str, m: MF.Manifest, query: str,
     from the index — 0.1.0's interface and 0.1.1's are both there, and comparing
     them is a subtraction. And it comes for free, because the compiler already
     produces it (answer 5)."""
-    mods: list<str> = []
+    mods: List<str> = []
     if len(m.root) > 0:
         mods.append(path.join(dir, m.root))
     else:
@@ -747,7 +747,7 @@ private async def package_api(dir: str, m: MF.Manifest, query: str,
                 mods.append(path.join(dir, name))
     roots = await BP.workspace_roots("pack.json")
     for mod in mods:
-        argv: list<str> = [query]
+        argv: List<str> = [query]
         for r in roots:
             argv.append("--pkg-path")
             argv.append(r)
@@ -764,14 +764,14 @@ private async def package_api(dir: str, m: MF.Manifest, query: str,
             if not a.path.startswith(dir + "/"):
                 continue
             rel = a.path[len(dir) + 1:len(a.path)]
-            syms: list<str> = []
+            syms: List<str> = []
             for sb in a.symbols:
                 syms.append(sb.decl)
             api[rel] = syms
             hashes[rel] = a.hash
 
 
-async def cmd_keygen(targets: list<str>) -> int:
+async def cmd_keygen(targets: List<str>) -> int:
     """`pforge keygen <file>` — a new key.
 
     It writes the PRIVATE one into `<file>` (32 bytes in hexadecimal, and nothing
@@ -821,9 +821,9 @@ private async def compiler_version(query: str) -> str:
     return ""
 
 
-private async def project_repos() -> list<R.Repo>:
+private async def project_repos() -> List<R.Repo>:
     """This project's repositories, in search order."""
-    out: list<R.Repo> = []
+    out: List<R.Repo> = []
     if not path.isfile("pack.json"):
         return out
     m = await MF.read("pack.json")
@@ -908,7 +908,7 @@ async def cmd_update() -> int:
     return 0 if n > 0 else 1
 
 
-async def cmd_search(targets: list<str>) -> int:
+async def cmd_search(targets: List<str>) -> int:
     """`pforge search <term>` — OFFLINE, in the stored index, and BY SYMBOL too.
 
     Searching by symbol without downloading anything is something no package
@@ -921,18 +921,18 @@ async def cmd_search(targets: list<str>) -> int:
     term = targets[0].lower()
     repos = await project_repos()
     found = 0
-    jl: list<str> = []
+    jl: List<str> = []
     for r in repos:
         ix = await stored_index(r)
         for name in ix.names():
             for version in ix.versions(name):
                 u = ix.get(name, version)
-                lines: list<str> = []
+                lines: List<str> = []
                 if term in name.lower():
                     lines.append("[name]        " + (u.description if len(u.description) > 0 else "—"))
                 if term in u.description.lower():
                     lines.append("[description] " + u.description)
-                mods: list<str> = []
+                mods: List<str> = []
                 for mk in u.api:
                     mods.append(mk)
                 for mod in sorted(mods):
@@ -957,15 +957,15 @@ async def cmd_search(targets: list<str>) -> int:
     return 0
 
 
-private def split_at(spec: str) -> list<str>:
+private def split_at(spec: str) -> List<str>:
     i = spec.find("@")
     if i < 0:
         return [spec, ""]
     return [spec[0:i], spec[i + 1:len(spec)]]
 
 
-private async def resolve_lock(lk: LK.Lock, wanted: list<str>, swappable: list<str>,
-                               unsafe_ok: bool, placed: list<str>) -> int:
+private async def resolve_lock(lk: LK.Lock, wanted: List<str>, swappable: List<str>,
+                               unsafe_ok: bool, placed: List<str>) -> int:
     """The resolution, which is the same for `add` and for `lock`: follow the
     queue of requests, look each one up in the stored index, check the hash and
     the signature, keep the tarball in the store and lock the line down.
@@ -983,10 +983,10 @@ private async def resolve_lock(lk: LK.Lock, wanted: list<str>, swappable: list<s
     if len(vcomp) == 0:
         print("warning: I did not find a `plangc` to ask the version — the toolchain requirement was not checked")
         print("         (`--query <path>`, or put `plangc` on the PATH)")
-    queue: list<str> = []
+    queue: List<str> = []
     for pd in wanted:
         queue.append(pd)
-    why: dict<str, str> = {}
+    why: Dict<str, str> = {}
     while len(queue) > 0:
         cur = split_at(queue[0])
         queue = queue[1:len(queue)]
@@ -1001,7 +1001,7 @@ private async def resolve_lock(lk: LK.Lock, wanted: list<str>, swappable: list<s
             # remains a conflict is a DEPENDENCY disagreeing with what is already
             # locked — there nobody chose, and choosing on our own would be the
             # decision v1 does not take.
-            kept: list<LK.Locked> = []
+            kept: List<LK.Locked> = []
             for t9 in lk.packages:
                 if t9.name != n:
                     kept.append(t9)
@@ -1068,7 +1068,7 @@ private async def resolve_lock(lk: LK.Lock, wanted: list<str>, swappable: list<s
     return 0
 
 
-private def text_of(b: list<u8>) -> str:
+private def text_of(b: List<u8>) -> str:
     out = ""
     for x in b:
         out += chr(int(x))
@@ -1079,7 +1079,7 @@ private def looks_like_tarball(s: str) -> bool:
     return s.endswith(".tar")
 
 
-private async def tar_bytes(where: str) -> list<u8>:
+private async def tar_bytes(where: str) -> List<u8>:
     """The bytes of a tarball, from a path or from a URL. Nothing else knows
     which of the two it was — which is the point."""
     if where.startswith("http://") or where.startswith("https://"):
@@ -1093,7 +1093,7 @@ private async def tar_bytes(where: str) -> list<u8>:
     return await R.read_bytes(where)
 
 
-private def manifest_in(bs: list<u8>) -> MF.Manifest:
+private def manifest_in(bs: List<u8>) -> MF.Manifest:
     """The `pack.json` inside the tarball. A package packs itself with a
     `<name>-<version>/` prefix, so the manifest is the shortest path that ends
     in `pack.json` — anything deeper belongs to a member, not to the package."""
@@ -1168,7 +1168,7 @@ async def add_tarball(where: str, author: str, unsafe_ok: bool) -> int:
             print(m.name + "@" + m.version + " " + bad)
             return 1
     lk = await LK.read("pack.lock")
-    kept: list<LK.Locked> = []
+    kept: List<LK.Locked> = []
     for t in lk.packages:
         if t.name != m.name:
             kept.append(t)
@@ -1188,7 +1188,7 @@ async def add_tarball(where: str, author: str, unsafe_ok: bool) -> int:
     return 0
 
 
-async def cmd_add(targets: list<str>, unsafe_ok: bool) -> int:
+async def cmd_add(targets: List<str>, unsafe_ok: bool) -> int:
     """`pforge add <name>@<version>` — writes to the manifest and to the lock.
 
     `add` and `build` are different commands ON PURPOSE: one touches the manifest
@@ -1218,14 +1218,14 @@ async def cmd_add(targets: list<str>, unsafe_ok: bool) -> int:
         print("v1 has no resolver: the version is EXACT — `pforge add " + name + "@0.1.0`")
         return 2
     lk = await LK.read("pack.lock")
-    placed: list<str> = []
+    placed: List<str> = []
     rc = await resolve_lock(lk, [name + "@" + version], [name], unsafe_ok, placed)
     if rc != 0:
         return rc
     await LK.write(lk, "pack.lock")
     await MF.write_dep("pack.json", name, version)
     if json_out:
-        jadd: list<str> = []
+        jadd: List<str> = []
         for t2 in lk.packages:
             jadd.append('{"name": ' + G.jstr(t2.name) + ', "version": ' + G.jstr(t2.version)
                         + ', "sha256": ' + G.jstr(t2.sha256) + ', "repo": ' + G.jstr(t2.repo)
@@ -1240,7 +1240,7 @@ async def cmd_add(targets: list<str>, unsafe_ok: bool) -> int:
     return 0
 
 
-async def cmd_up(targets: list<str>, unsafe_ok: bool) -> int:
+async def cmd_up(targets: List<str>, unsafe_ok: bool) -> int:
     """`pforge up [<name>]` — raises to the highest version the index knows.
 
     With no resolver there is no "the version that serves everyone": there is the
@@ -1258,7 +1258,7 @@ async def cmd_up(targets: list<str>, unsafe_ok: bool) -> int:
         print("this project's pack.json asks for no dependencies")
         return 1
     repos = await project_repos()
-    which: list<str> = []
+    which: List<str> = []
     for d in m.deps:
         if len(targets) == 0 or d.name in targets:
             which.append(d.name)
@@ -1332,12 +1332,12 @@ async def cmd_lock(frozen: bool, unsafe_ok: bool) -> int:
         return 1
     fresh = await LK.read("pack.lock")
     fresh.packages = []
-    wanted: list<str> = []
-    swappable: list<str> = []
+    wanted: List<str> = []
+    swappable: List<str> = []
     for d in m.deps:
         wanted.append(d.name + "@" + d.req)
         swappable.append(d.name)
-    placed: list<str> = []
+    placed: List<str> = []
     rc = await resolve_lock(fresh, wanted, swappable, unsafe_ok, placed)
     if rc != 0:
         return rc
@@ -1351,7 +1351,7 @@ async def cmd_lock(frozen: bool, unsafe_ok: bool) -> int:
             print("this project asks for no dependencies: there is nothing to lock")
         return 0
     await LK.write(fresh, "pack.lock")
-    lines: list<str> = []
+    lines: List<str> = []
     for t in fresh.packages:
         i = old.find(t.name)
         if i < 0:
@@ -1364,7 +1364,7 @@ async def cmd_lock(frozen: bool, unsafe_ok: bool) -> int:
         if fresh.find(t2.name) < 0:
             lines.append("- " + t2.name + " " + t2.version + " (nobody asks for it)")
     if json_out:
-        jl: list<str> = []
+        jl: List<str> = []
         for t3 in fresh.packages:
             jl.append('{"name": ' + G.jstr(t3.name) + ', "version": ' + G.jstr(t3.version)
                       + ', "sha256": ' + G.jstr(t3.sha256) + '}')
@@ -1380,7 +1380,7 @@ async def cmd_lock(frozen: bool, unsafe_ok: bool) -> int:
     return 0
 
 
-private async def lock_vs_manifest(lk: LK.Lock) -> list<str>:
+private async def lock_vs_manifest(lk: LK.Lock) -> List<str>:
     """What `pack.json` asks for and what `pack.lock` has — and the difference
     between the two, said in lines.
 
@@ -1388,7 +1388,7 @@ private async def lock_vs_manifest(lk: LK.Lock) -> list<str>:
     machine": somebody added a dependency, forgot to commit the lock, and the
     other person's build installs something else. Here that is a LIST, which
     `install` prints and `--frozen` refuses."""
-    out: list<str> = []
+    out: List<str> = []
     if not path.isfile("pack.json"):
         return out
     m = await MF.read("pack.json")
@@ -1440,7 +1440,7 @@ async def cmd_install(frozen: bool) -> int:
     if len(vcomp) == 0 and not json_out:
         print("warning: I did not find a `plangc` to ask the version — the toolchain requirement was not checked")
     n = 0
-    ji: list<str> = []
+    ji: List<str> = []
     for t in lk.packages:
         if len(vcomp) > 0:
             bad = MF.toolchain_ok(t.toolchain, vcomp)
@@ -1451,7 +1451,7 @@ async def cmd_install(frozen: bool) -> int:
         if path.isdir(path.join(dest, t.name)):
             continue
         pak = path.join(R.tarballs_dir(), t.sha256)
-        bs: list<u8> = []
+        bs: List<u8> = []
         if path.isfile(pak):
             bs = await R.read_bytes(pak)
         else:
@@ -1487,15 +1487,15 @@ async def cmd_install(frozen: bool) -> int:
     return 0
 
 
-private def version_parts(v: str) -> list<int>:
+private def version_parts(v: str) -> List<int>:
     ps = v.split(".")
-    out: list<int> = []
+    out: List<int> = []
     for i in range(3):
         out.append(int(ps[i]) if i < len(ps) else 0)
     return out
 
 
-private def psc_outside_test(dir: str, rel: str, found: list<str>):
+private def psc_outside_test(dir: str, rel: str, found: List<str>):
     """A `.psc` inside a package declared `p`, not counting what is in `test/`.
 
     The test exception is not convenience: a package in P may very well be
@@ -1516,7 +1516,7 @@ private def psc_outside_test(dir: str, rel: str, found: list<str>):
 
 
 private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
-                                   u: R.Release, warn: list<str>) -> list<str>:
+                                   u: R.Release, warn: List<str>) -> List<str>:
     """The three cases where publishing would mean publishing something that does
     not serve.
 
@@ -1536,14 +1536,14 @@ private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
          promises.** A `patch` says "nothing changed in the interface" and a
          `minor` says "I only added" — both are verifiable from the index, and
          that is why the canonical API list is there."""
-    bad: list<str> = []
+    bad: List<str> = []
     for d in m.deps:
         if ix.has(d.name, d.req):
             continue
         bad.append("the dependency " + d.name + "@" + d.req
                    + " is not in this repository — publish it first")
     if m.lang == "p":
-        found: list<str> = []
+        found: List<str> = []
         psc_outside_test(dir, "", found)
         for a in found:
             bad.append(a + " is pscript, and the manifest declares `\"lang\": \"p\"`")
@@ -1584,7 +1584,7 @@ private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
     # visible on every publication is one somebody can argue with. Hidden in the
     # rule, it would be a rule nobody knows they are relying on.
     zero_major = va[0] == 0
-    prev_mods: list<str> = []
+    prev_mods: List<str> = []
     for k3 in prev_rel.api:
         prev_mods.append(k3)
     for mod3 in sorted(prev_mods):
@@ -1595,7 +1595,7 @@ private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
             else:
                 bad.append(gone + " (a minor adds, it does not take away)")
             continue
-        now_syms: list<str> = u.api[mod3]
+        now_syms: List<str> = u.api[mod3]
         for decl in prev_rel.api[mod3]:
             if decl not in now_syms:
                 left = "`" + decl + "` left " + mod3 + ", and " + m.version + " bumps the `minor` of " + prev
@@ -1606,14 +1606,14 @@ private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
     return bad
 
 
-private def sorted_keys(d: dict<str, str>) -> list<str>:
-    ks: list<str> = []
+private def sorted_keys(d: Dict<str, str>) -> List<str>:
+    ks: List<str> = []
     for k in d:
         ks.append(k)
     return sorted(ks)
 
 
-async def cmd_publish(targets: list<str>, to_dir: str, key_file: str, query: str) -> int:
+async def cmd_publish(targets: List<str>, to_dir: str, key_file: str, query: str) -> int:
     """`pforge publish <package> --to <dir>` — the `.tar`, the hash and the index
     entry, in the author's local repository.
 
@@ -1681,7 +1681,7 @@ async def cmd_publish(targets: list<str>, to_dir: str, key_file: str, query: str
     await package_api(dir, m, query, u.api, u.api_hash)
     # the REFUSAL happens before a byte is written. A repository with one tarball
     # too many and no index entry is a repository nobody knows how to fix.
-    warn: list<str> = []
+    warn: List<str> = []
     bad = await publish_refusals(ix, m, dir, u, warn)
     if len(bad) > 0:
         print(dir + "/pack.json: error: this cannot be published as it is:")
@@ -1701,7 +1701,7 @@ async def cmd_publish(targets: list<str>, to_dir: str, key_file: str, query: str
     u.size = len(bs)
     u.sha256 = sha
     if m.name not in ix.packages:
-        empty: dict<str, R.Release> = {}
+        empty: Dict<str, R.Release> = {}
         ix.packages[m.name] = empty
     signed = False
     if len(key_file) > 0:
@@ -1801,14 +1801,14 @@ private def page(title: str, body: str, up_link: str) -> str:
             + "</footer>\n</html>\n")
 
 
-private async def api_argv(file: str, query: str) -> list<str>:
+private async def api_argv(file: str, query: str) -> List<str>:
     """`--api` with the PACKAGE ROOTS, which is what makes the question work on a
     module that imports `<pkg/mod.ph>`.
 
     Without them the compiler answers "I did not find `<stl/cstr.ph>`" and half
     the workspace's documentation is left out — in silence, because a module that
     does not answer looks like a module with no interface."""
-    argv: list<str> = [query, "--api"]
+    argv: List<str> = [query, "--api"]
     roots = await BP.workspace_roots("pack.json")
     for ri in R.installed_roots():
         roots.append(ri)
@@ -1819,7 +1819,7 @@ private async def api_argv(file: str, query: str) -> list<str>:
     return argv
 
 
-private async def api_of(file: str, query: str) -> list<A.Api>:
+private async def api_of(file: str, query: str) -> List<A.Api>:
     r = await os.run(await api_argv(file, query))
     if r.status() != 0:
         return []
@@ -1833,7 +1833,7 @@ private def file_name_for(rel: str) -> str:
     return out + ".html"
 
 
-async def cmd_doc_html(targets: list<str>, dest: str, query: str) -> int:
+async def cmd_doc_html(targets: List<str>, dest: str, query: str) -> int:
     """`pforge doc --html <folder>` — the same content as the terminal, as a site.
 
     The source is the SAME answer 5 from the compiler that `pforge doc` already
@@ -1844,8 +1844,8 @@ async def cmd_doc_html(targets: list<str>, dest: str, query: str) -> int:
     With no target, it documents the whole workspace — every package and every one
     of its modules. The result is a folder of static files: no service, no
     network, no JavaScript. It opens with two clicks and copies anywhere."""
-    mods: list<str> = []
-    label: dict<str, str> = {}
+    mods: List<str> = []
+    label: Dict<str, str> = {}
     if len(targets) > 0:
         for a in targets:
             if path.isfile(a):
@@ -1889,7 +1889,7 @@ async def cmd_doc_html(targets: list<str>, dest: str, query: str) -> int:
         return 1
     if not path.isdir(dest):
         os.makedirs(dest)
-    lines: list<str> = []
+    lines: List<str> = []
     written = 0
     symbols = 0
     for md in mods:
@@ -1934,7 +1934,7 @@ async def cmd_doc_html(targets: list<str>, dest: str, query: str) -> int:
     return 0
 
 
-async def cmd_doc(targets: list<str>, query: str) -> int:
+async def cmd_doc(targets: List<str>, query: str) -> int:
     """`pforge doc` — the documentation in the TERMINAL, of what already exists.
 
     Nothing is built and nothing is generated: the source is the compiler's answer
@@ -1982,7 +1982,7 @@ async def cmd_doc(targets: list<str>, query: str) -> int:
             print(indent(s.doc))
         return 0
     if json_out:
-        syms: list<str> = []
+        syms: List<str> = []
         for s3 in m.symbols:
             syms.append('{"decl": ' + G.jstr(s3.decl) + ', "name": ' + G.jstr(s3.name)
                         + ', "doc": ' + G.jstr(s3.doc) + '}')
@@ -2001,7 +2001,7 @@ async def cmd_doc(targets: list<str>, query: str) -> int:
             print(indent(s2.doc))
     return 0
 
-async def cmd_ninja(targets: list<str>, query: str) -> int:
+async def cmd_ninja(targets: List<str>, query: str) -> int:
     """The ninja export (see `lib_ninja.psc`): the bootstrap on a machine that
     does not have `pforge` yet, and `compile_commands.json` for free (`ninja -t
     compdb`). With no argument it goes to standard output, so it can be checked
@@ -2078,7 +2078,7 @@ async def main() -> int:
     global json_out
     global current_query
     cmd = args[0]
-    targets: list<str> = []
+    targets: List<str> = []
     jobs = os.nproc()
     keep = 1
     dry = False
@@ -2105,7 +2105,7 @@ async def main() -> int:
     # everything after `--` belongs to the PROGRAM, not to us. Without this, `pforge
     # run p --version` would swallow the `--version` as an option of pforge's — and
     # a `run` that cannot pass arguments is good for nothing.
-    rest: list<str> = []
+    rest: List<str> = []
     j = 1
     while j < len(args):
         if args[j] == "--":
@@ -2113,7 +2113,7 @@ async def main() -> int:
             while k < len(args):
                 rest.append(args[k])
                 k += 1
-            trimmed: list<str> = []
+            trimmed: List<str> = []
             m = 0
             while m < j:
                 trimmed.append(args[m])

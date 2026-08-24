@@ -44,9 +44,9 @@ struct Driver:
     pressure: the cache, the queue of pending writes and the rescue counter
     belong to the driver, and here they are visible instead of being three
     globals nobody sees."""
-    cache: dict<str, str>
-    failed: dict<str, str>       # path -> why the read did not work
-    pending: list<str>           # paths with a pending write (the text is in the cache)
+    cache: Dict<str, str>
+    failed: Dict<str, str>       # path -> why the read did not work
+    pending: List<str>           # paths with a pending write (the text is in the cache)
     rescues: int
 
 
@@ -177,7 +177,7 @@ async def serve_search(dv: Driver, sh: appm.Shell):
     anybody reads, and a list of fifty thousand is not a list."""
     needle = sh.want_search
     sh.want_search = ""
-    hits: list<appm.PalItem> = []
+    hits: List<appm.PalItem> = []
     for it in sh.files:
         if len(hits) >= SEARCH_MAX:
             break
@@ -216,7 +216,7 @@ async def serve_index(dv: Driver, sh: appm.Shell):
     any folder. The first go-to-definition pays for it, and after that the answer
     is in memory."""
     sh.want_index = False
-    srcs: list<cmp.Source> = []
+    srcs: List<cmp.Source> = []
     for it in sh.files:
         p = it.payload
         if hlm.lang_of(p) == hlm.LANG_NONE:
@@ -406,7 +406,7 @@ async def present(dv: Driver, sh: appm.Shell):
 struct Args:
     """What both `pcode` and `pstudio` accept. Each of them handles its own
     modes (`--build`, `--manifest`) before getting here."""
-    files: list<str>
+    files: List<str>
     dir: str
     shot: str
     win_w: int
@@ -414,7 +414,7 @@ struct Args:
     ok: bool
 
 
-def parse_args(who: str, args: list<str>, first: int) -> Args:
+def parse_args(who: str, args: List<str>, first: int) -> Args:
     """Several files open in tabs; a directory becomes the tree's root.
 
     `--shot` writes one frame as PPM, which is how the editor is looked at on a

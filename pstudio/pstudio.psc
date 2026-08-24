@@ -163,7 +163,7 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
         sh.dirty_ui = True
         return
     # the targets, for the `!` palette: the editor does not know what a project builds
-    alvos_v: list<str> = []
+    alvos_v: List<str> = []
     for nd in g.nodes:
         if nd.gen >= 0:
             alvos_v.append(nd.p)
@@ -173,7 +173,7 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
                 lambda i, st, o, ms: on_edge_end(sh, ide, i, st, o, ms),
                 lambda ok, f: set_done(sh, ide, ok, f),
                 lambda m: set_error(sh, ide, m))
-    tl: list<str> = [target] if len(target) > 0 else []
+    tl: List<str> = [target] if len(target) > 0 else []
     ok = await B.build(g, "build/log/build.log", tl, B.Opts(os.nproc(), 1, False, False), rep)
     ide.build_busy = False
     # the PLAY: it built, now it runs. The previous program leaves first — it is
@@ -362,7 +362,7 @@ async def serve_packages(sh: appm.Shell, ide: idem.Ide):
         lf = await open(lockf, "r")
         raw = await lf.text()
         await lf.close()
-        asked: list<str> = []
+        asked: List<str> = []
         mf = path.join(sh.root_dir, "pack.json")
         if path.isfile(mf):
             m = await MF.read(mf)
@@ -375,9 +375,9 @@ async def serve_packages(sh: appm.Shell, ide: idem.Ide):
         # can be drawn is the wrong trade. Reading needs no crypto: the four
         # fields shown here are four strings and a flag. WRITING the lock is
         # `pforge`'s, and that is a process.
-        root = json.parse(raw) as dict<str, any>
-        for pv in root["packages"] as list<any>:
-            pd = pv as dict<str, any>
+        root = json.parse(raw) as Dict<str, any>
+        for pv in root["packages"] as List<any>:
+            pd = pv as Dict<str, any>
             nm = pd["name"] as str
             ide.packages.append(idem.PkgRow(nm, pd["version"] as str,
                                             pd["sha256"] as str, pd["repo"] as str,
@@ -389,14 +389,14 @@ async def serve_packages(sh: appm.Shell, ide: idem.Ide):
     sh.dirty_ui = True
 
 
-private async def run_pforge(sh: appm.Shell, ide: idem.Ide, args: list<str>):
+private async def run_pforge(sh: appm.Shell, ide: idem.Ide, args: List<str>):
     """One `pforge`, and its whole output into the panel.
 
     `console=False` because the output is the ANSWER — a hash that did not
     match, a conflict, a toolchain requirement — and it belongs on the screen the
     person is looking at rather than in whatever terminal the editor was started
     from."""
-    cmd: list<str> = [where_is_pforge()]
+    cmd: List<str> = [where_is_pforge()]
     for a in args:
         cmd.append(a)
     try:
@@ -465,7 +465,7 @@ async def serve_test(sh: appm.Shell, ide: idem.Ide):
         ide.test_msg = "there is no graph to test"
         ide.test_refresh()
         return
-    alvos: list<str> = []
+    alvos: List<str> = []
     for nd in g.nodes:
         if nd.gen >= 0:
             alvos.append(nd.p)
@@ -519,8 +519,8 @@ struct TermDriver:
     the system call only happens when the scheduler's `poll` says the descriptor
     is ready, so cancelling one that is still parked loses nothing. Racing it is
     what keeps the window answering the keyboard while a program floods it."""
-    conn: socket?
-    reading: Task<list<u8>>?
+    conn: Socket?
+    reading: Task<List<u8>>?
     cols: int
     rows: int
 
@@ -633,7 +633,7 @@ async def load_config(sh: appm.Shell, ide: idem.Ide):
         catch e:
             sh.want_msg = ".pstudio.json: " + e.message + " — everything default"
             return
-    names: list<str> = []
+    names: List<str> = []
     for c in sh.commands:
         names.append(c.name)
     idem.apply_config(ide, cfg.parse(txt, names))

@@ -16,7 +16,7 @@ def main():
     xs[2] //= 4
     print(xs[0], xs[1], xs[2])
 
-    d: dict<str, int> = {"a": 1, "b": 2}
+    d: Dict<str, int> = {"a": 1, "b": 2}
     d["a"] += 41
     d["b"] **= 3
     print(d["a"], d["b"])
@@ -34,7 +34,7 @@ def main():
     print(ss[1])
 
     # a nested container: the inner list is read once, not rebuilt
-    grid: list<list<int>> = [[1, 2], [3, 4]]
+    grid: List<List<int>> = [[1, 2], [3, 4]]
     grid[1][0] -= 3
     print(grid[1][0])
 

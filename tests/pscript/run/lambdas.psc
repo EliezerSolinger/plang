@@ -23,7 +23,7 @@ double: def(int) -> int = lambda v: v * 2
 print(f"lambda {double(7)}")
 
 # capture BY VALUE: each closure keeps the number it saw
-makers: list<def(int) -> int> = []
+makers: List<def(int) -> int> = []
 i = 1
 while i <= 3:
     factor = i * 10
@@ -32,7 +32,7 @@ while i <= 3:
 print(f"captured {makers[0](1)} {makers[1](1)} {makers[2](1)}")
 
 # a dict of functions, which is what a table of behaviours looks like (29.3)
-tones: dict<str, def(float) -> float> = {
+tones: Dict<str, def(float) -> float> = {
     "half": lambda v: v * 0.5,
     "square": lambda v: v * v,
 }
@@ -41,7 +41,7 @@ sq = tones["square"]
 print(f"table {half(9.0)} {sq(9.0)}")
 
 
-def apply_all(f: def(int) -> int, xs: list<int>) -> int:
+def apply_all(f: def(int) -> int, xs: List<int>) -> int:
     total = 0
     k = 0
     while k < len(xs):

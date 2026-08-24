@@ -24,7 +24,7 @@ Two things it pins on purpose:
 import net
 
 
-async def serve(srv: socket) -> int:
+async def serve(srv: Socket) -> int:
     total = 0
     for i in range(2):
         with await srv.accept() as c:

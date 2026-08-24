@@ -12,7 +12,7 @@ record Stat:
     seconds: float
 
 
-stats: list<Stat> = [Stat(0, 3.5), Stat(1, 1.25), Stat(2, 9.0), Stat(3, 0.5)]
+stats: List<Stat> = [Stat(0, 3.5), Stat(1, 1.25), Stat(2, 9.0), Stat(3, 0.5)]
 
 by_time = sorted(stats, key=lambda s: s.seconds)
 print("fastest", by_time[0].wid, "slowest", by_time[3].wid)
@@ -29,5 +29,5 @@ def seconds_of(s: Stat) -> float:
 again = sorted(stats, key=seconds_of)
 print("named key", again[0].wid, again[1].wid)
 
-nums: list<int> = [5, 3, 9]
+nums: List<int> = [5, 3, 9]
 print("plain", sorted(nums)[0], sorted(nums)[2])

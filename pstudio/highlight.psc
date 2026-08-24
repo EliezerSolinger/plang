@@ -44,7 +44,7 @@ record HlSpan:
 
 
 struct Hl:
-    lines: list<list<HlSpan>>   # one per buffer line
+    lines: List<List<HlSpan>>   # one per buffer line
     version: int                # the buffer version this came out of
     lang: int                   # LANG_NONE = no spans at all
 

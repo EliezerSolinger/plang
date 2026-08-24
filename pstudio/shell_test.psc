@@ -89,7 +89,7 @@ u = pui.new_ui(8, 17)
 sh = appm.new_shell(u, D)
 # the "driver": here it is synchronous and fake, which is exactly the point of
 # it being injected (in the real editor it is `sh.psc` that fills this in)
-saved: dict<str, str> = {}
+saved: Dict<str, str> = {}
 clip = ""
 title = ""
 cellw = 8
@@ -128,7 +128,7 @@ def set_clip(s: str):
     clip = s
 
 
-unreadable: dict<str, str> = {}
+unreadable: Dict<str, str> = {}
 
 
 def read_now(p: str) -> appm.ReadOut:

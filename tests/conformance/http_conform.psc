@@ -27,8 +27,8 @@ def hex_nib(c: int) -> int:
     return -1
 
 
-def unhex(s: str) -> list<u8>:
-    out: list<u8> = []
+def unhex(s: str) -> List<u8>:
+    out: List<u8> = []
     i = 0
     n = len(s)
     while i + 1 < n:
@@ -44,7 +44,7 @@ def unhex(s: str) -> list<u8>:
 HEX: str = "0123456789abcdef"
 
 
-def tohex(bs: list<u8>) -> str:
+def tohex(bs: List<u8>) -> str:
     out = ""
     for b in bs:
         v = int(b)
@@ -56,7 +56,7 @@ def tohex(bs: list<u8>) -> str:
 # The same reduction llhttp_digest.py performs on the log, performed on a
 # parser. Every line here is a field llhttp also states; nothing is added to
 # make the two agree.
-def digest(p: http.Parser, whole: bool, msg: int, out: list<str>):
+def digest(p: http.Parser, whole: bool, msg: int, out: List<str>):
     pre = "m" + str(msg) + " "
     if not p.is_response and len(p.method) > 0:
         out.append(pre + "method=" + p.method)
@@ -83,8 +83,8 @@ def digest(p: http.Parser, whole: bool, msg: int, out: list<str>):
 # llhttp reports them one after another. Our parser handles ONE, so the driver
 # is what restarts it with whatever bytes are left over — which is exactly what
 # a server does with the tail of a read.
-def run_case(kind: str, data: list<u8>) -> list<str>:
-    out: list<str> = []
+def run_case(kind: str, data: List<u8>) -> List<str>:
+    out: List<str> = []
     rest = data
     msg = 0
     while True:
@@ -103,7 +103,7 @@ def run_case(kind: str, data: list<u8>) -> list<str>:
             return out
         if p.state == http.H_HANDOFF or not whole:
             return out
-        left: list<u8> = []
+        left: List<u8> = []
         k = p.pos
         while k < len(p.buf):
             left.append(p.buf[k])

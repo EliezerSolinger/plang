@@ -14,13 +14,13 @@ array, so the order is not maintained, it simply IS the order. The three cases
 below are the ones where a naive implementation gets it wrong.
 """
 
-d: dict<str, int> = {}
+d: Dict<str, int> = {}
 d["zebra"] = 1
 d["apple"] = 2
 d["mango"] = 3
 
 
-def keys_of(m: dict<str, int>) -> str:
+def keys_of(m: Dict<str, int>) -> str:
     out = ""
     for k in m:
         out += k + " "
@@ -41,7 +41,7 @@ print(keys_of(d), len(d))
 
 # growing through several rebuilds keeps the order, which is the whole point of
 # compacting in place rather than rehashing into slots
-big: dict<int, int> = {}
+big: Dict<int, int> = {}
 for i in range(300):
     big[i] = i
 seen = 0
@@ -76,7 +76,7 @@ for k in big:
 print("new keys at the end:", tail, len(big))
 
 # a set keeps it too — it is the same table with no values
-s: set<str> = {"one", "two", "three"}
+s: Set<str> = {"one", "two", "three"}
 out = ""
 for k in s:
     out += k + " "

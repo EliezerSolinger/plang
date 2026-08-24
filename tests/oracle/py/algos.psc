@@ -42,7 +42,7 @@ print(sorted([0.0, -0.0, 0.0, -0.0]))
 print(sorted([-0.0, 0.0, -0.0, 0.0]))
 print(sorted([1.5, -0.0, 0.0, -2.5, 3.5]))
 print(sorted(["pera", "uva", "abacate", "uva", "manga"]))
-vazia: list<int> = []
+vazia: List<int> = []
 print(sorted(vazia))
 
 # um tamanho de cada, até passar do minrun (32) e do primeiro merge
@@ -69,7 +69,7 @@ ws = ["abacate", "manga", "pera"]
 print(bisect.bisect_left(ws, "manga"), bisect.bisect_right(ws, "manga"), bisect.bisect_left(ws, "uva"))
 bisect.insort(ws, "banana")
 print(ws)
-mt: list<int> = []
+mt: List<int> = []
 print(bisect.bisect_left(mt, 5), bisect.bisect_right(mt, 5))
 bisect.insort(mt, 5)
 print(mt)
@@ -85,7 +85,7 @@ while len(h) > 0:
     v = heapq.heappop(h)
     print(v, h)
 
-h2: list<int> = []
+h2: List<int> = []
 for v in [4, 2, 9, 1, 7, 7, 3]:
     heapq.heappush(h2, v)
     print(h2)

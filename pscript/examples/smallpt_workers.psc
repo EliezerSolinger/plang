@@ -113,7 +113,7 @@ def rnd() -> float:
     return float((x %* 2685821657736338717) >> 11) * (1.0 / 9007199254740992.0)
 
 
-def scene() -> list<Sphere>:
+def scene() -> List<Sphere>:
     """smallpt's Cornell box."""
     return [
         Sphere(1e5, Vec(1e5 + 1.0, 40.8, 81.6), BLACK, Vec(0.75, 0.25, 0.25), DIFF),
@@ -146,7 +146,7 @@ def hit_sphere(in s: Sphere, in r: Ray) -> float:
     return 0.0
 
 
-def nearest(spheres: list<Sphere>, in r: Ray) -> int:
+def nearest(spheres: List<Sphere>, in r: Ray) -> int:
     """Index of the nearest hit, or -1."""
     best = 1e20
     found = -1
@@ -160,11 +160,11 @@ def nearest(spheres: list<Sphere>, in r: Ray) -> int:
     return found
 
 
-def dist_to(spheres: list<Sphere>, in r: Ray, idx: int) -> float:
+def dist_to(spheres: List<Sphere>, in r: Ray, idx: int) -> float:
     return hit_sphere(in spheres[idx], in r)
 
 
-def radiance(spheres: list<Sphere>, in r: Ray, depth: int) -> Vec:
+def radiance(spheres: List<Sphere>, in r: Ray, depth: int) -> Vec:
     """Recursive Monte Carlo. It does NOT allocate: `Vec` is a value (52.1/56),
     so the whole hot loop runs on the stack and the collector never fires."""
     idx = nearest(spheres, in r)
@@ -288,7 +288,7 @@ def render_band(wid: int, nworkers: int) -> Band:
 
 NWORKERS = 4
 
-ws: list<Worker<Band>> = []
+ws: List<Worker<Band>> = []
 w = 0
 while w < NWORKERS:
     ws.append(spawn(render_band, (w, NWORKERS)))

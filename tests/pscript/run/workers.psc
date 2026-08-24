@@ -34,7 +34,7 @@ def crunch(wid: int, upto: int) -> Stat:
     return Stat(wid, total, made)
 
 
-ws: list<Worker<Stat>> = []
+ws: List<Worker<Stat>> = []
 w = 0
 while w < 4:
     ws.append(spawn(crunch, (w, 20000)))
@@ -58,7 +58,7 @@ record Point:
     y: int
 
 
-def summer(label: str, pts: list<Point>) -> Stat:
+def summer(label: str, pts: List<Point>) -> Stat:
     total = 0
     for p in pts:
         total += p.x * p.y
@@ -66,7 +66,7 @@ def summer(label: str, pts: list<Point>) -> Stat:
     return Stat(len(label), total, 0)
 
 
-pts: list<Point> = [Point(1, 2), Point(3, 4), Point(5, 6)]
+pts: List<Point> = [Point(1, 2), Point(3, 4), Point(5, 6)]
 sw = spawn(summer, ("abc", pts))
 got = await sw.recv()
 print(f"sent {got.wid} names and {got.total} of area")

@@ -12,7 +12,7 @@ struct Tarefa:
     nome: str
     prio: int
 
-mt: list<int> = []
+mt: List<int> = []
 try:
     print(str(heapq.heappop(mt)))
 catch e:
@@ -20,8 +20,8 @@ catch e:
 
 # uma fila de prioridade de verdade: as prioridades num heap, e o nome
 # alcançado por um dict — que é como se faz sem tupla comparável
-fila: list<int> = []
-nomes: dict<int, str> = {}
+fila: List<int> = []
+nomes: Dict<int, str> = {}
 tarefas = [Tarefa("backup", 5), Tarefa("email", 2), Tarefa("deploy", 1), Tarefa("log", 9)]
 for t in tarefas:
     heapq.heappush(fila, t.prio)
@@ -33,7 +33,7 @@ while len(fila) > 0:
 print(ordem)
 
 # a lista ordenada mantida por insort, com objetos alcançados pelo índice
-chaves: list<str> = []
+chaves: List<str> = []
 for t in tarefas:
     bisect.insort(chaves, t.nome)
 print(chaves)
@@ -49,7 +49,7 @@ for t in por_prio:
 print(saida)
 
 # e o coletor no meio: cada volta aloca uma string nova
-grande: list<int> = []
+grande: List<int> = []
 lixo = ""
 for i in range(200):
     heapq.heappush(grande, (i * 37) % 200)

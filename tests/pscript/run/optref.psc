@@ -2,7 +2,7 @@
 
 `T?` de referência é o ponteiro nu — é a representação que a 9.4 escolheu, e ela
 custa zero. Mas o predicado que diz "isto é referência" não conhecia o `?`:
-`dict<str, def(int,int)?>` nascia com `vref = False`, o coletor não seguia os
+`Dict<str, def(int,int)?>` nascia com `vref = False`, o coletor não seguia os
 valores, e depois de uma coleta o dict devolvia ponteiro para o cemitério.
 
 O teste é sobre PRESSÃO: alocar o suficiente para o coletor rodar no meio, e
@@ -11,14 +11,14 @@ depois LER tudo. Sem a correção, isto morre com SIGSEGV sob
 coletor e não da linguagem.
 """
 
-# list<str?>: metade None, e as cadeias criadas antes das coletas
-names: list<str?> = []
+# List<str?>: metade None, e as cadeias criadas antes das coletas
+names: List<str?> = []
 for i in range(200):
     names.append(None if i % 2 == 0 else "nome-" + str(i))
 
-# dict<str, str?> e dict<str, list<int>?>
-by_key: dict<str, str?> = {}
-lists: dict<str, list<int>?> = {}
+# Dict<str, str?> e Dict<str, List<int>?>
+by_key: Dict<str, str?> = {}
+lists: Dict<str, List<int>?> = {}
 for i in range(200):
     by_key["k" + str(i)] = None if i % 3 == 0 else "valor-" + str(i)
     lists["l" + str(i)] = None if i % 4 == 0 else [i, i + 1, i + 2]
@@ -27,7 +27,7 @@ for i in range(200):
 struct Node:
     name: str
     next: Node?
-    tag: list<int>?
+    tag: List<int>?
 
 head: Node? = None
 for i in range(200):
@@ -44,7 +44,7 @@ nn = 0
 for v in names:
     if v != None:
         nn += len(v)
-print("list<str?> " + str(nn))
+print("List<str?> " + str(nn))
 
 sk = 0
 for i in range(200):

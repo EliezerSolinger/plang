@@ -9,14 +9,14 @@ de propósito) e o desempacotar com objetos coletados dentro da tupla.
 struct Node:
     label: str
 
-async def soma(ns: list<int>) -> int:
+async def soma(ns: List<int>) -> int:
     t = 0
     for i, v in enumerate(ns):
         await sleep(0.0)
         t += i * v
     return t
 
-async def zipado(a: list<int>, b: list<str>) -> str:
+async def zipado(a: List<int>, b: List<str>) -> str:
     out = ""
     for n, s in zip(a, b):
         await sleep(0.0)

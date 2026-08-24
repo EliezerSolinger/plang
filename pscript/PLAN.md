@@ -191,21 +191,21 @@ lowering encolher e ficar conferido.
       tipo `char` para um literal de caractere ter (a 3.4 diz que `s[3]` devolve string
       de um caractere), e é a regra do Python. O lexer compartilhado continua
       distinguindo; quem decide que dá no mesmo é o parser do pscript.
-- [x] **C4 `list<T>`.** Feita: literal homogêneo com inferência, indexação com índice
+- [x] **C4 `List<T>`.** Feita: literal homogêneo com inferência, indexação com índice
       negativo (31.4) e erro de faixa que LANÇA (5.2), atribuição em índice, `append`,
       `len`, `for x in xs`, e o coletor rastreando os elementos quando são referência.
       Dois objetos por baixo — o cabeçalho, que é o que a variável aponta, e o
       armazenamento, que cresce sendo SUBSTITUÍDO: é o que deixa a lista crescer sem
       invalidar nenhuma referência a ela. Elementos ficam INLINE, por valor:
-      `list<Vec>` é array plano de records de 24 bytes, sem ponteiro por elemento
+      `List<Vec>` é array plano de records de 24 bytes, sem ponteiro por elemento
       (52.1) — que é a razão de `record` ser tipo de valor. Falta: fatia, `T[N]`
       interoperando por `in` (60.2), e os outros métodos de lista.
-- [x] **C5 `dict<K,V>` e `set<T>`.** Feitos: literais, `d[k]` (que LANÇA quando falta,
+- [x] **C5 `Dict<K,V>` e `Set<T>`.** Feitos: literais, `d[k]` (que LANÇA quando falta,
       5.2) e `get(k, default)` para o outro idioma, atribuição em chave, `in`/`not in`,
       `add`/`remove`, `len`, `for k in d` (dá as CHAVES, como Python), e o coletor
       rastreando chaves e valores quando são referência. Endereçamento aberto com a
       chave guardada POR VALOR — copiada no insert, que é o que faz "chave por conteúdo"
-      significar alguma coisa. `set<T>` é isto com valor de tamanho zero: uma
+      significar alguma coisa. `Set<T>` é isto com valor de tamanho zero: uma
       implementação só, e um lugar só para o coletor aprender. Chave de `record` pede
       hash campo a campo (bytes crus incluem padding) e por ora dá erro claro.
 
@@ -382,7 +382,7 @@ lowering encolher e ficar conferido.
       thread, cena montada em código, sem `sys`/`json`/`re` e sem topo assíncrono.
       Tudo o que o smallpt pede da LINGUAGEM, nada do que ele pede do runtime
       concorrente. Ele COMPILA E RENDERIZA: `record` com métodos e `in self`, enum com
-      `match` exaustivo, `list<Sphere>`, recursão profunda, `**` em float, `%*`
+      `match` exaustivo, `List<Sphere>`, recursão profunda, `**` em float, `%*`
       modular, variável de módulo com `global`, `include <math.h>`, e o coletor
       atravessando tudo isso. A 96x72 com 40 amostras a caixa de Cornell aparece: a
       faixa de luz no teto, as duas esferas, o chão claro.
@@ -559,7 +559,7 @@ lowering encolher e ficar conferido.
       tem de bater, e a mensagem diz o que o valor realmente era.
 
       Regra que a implementação obrigou a fixar: uma lista dentro de um `any` tem de ser
-      `list<any>` — o que está dentro também precisa carregar o próprio tipo, senão ler
+      `List<any>` — o que está dentro também precisa carregar o próprio tipo, senão ler
       de volta seria ler bytes que ninguém etiquetou. Um literal em posição de `any`
       já nasce assim.
 
@@ -572,8 +572,8 @@ lowering encolher e ficar conferido.
       ordem em que as TAREFAS foram dadas, não na ordem em que terminaram — quem precisa
       saber quem terminou primeiro não devia estar usando `gather`.
       Gate: `tests/pscript/run/gather.psc`.
-- [x] **`json`** (41.1): texto entra, `any` sai. Objeto vira `dict<str, any>`, array
-      vira `list<any>`, e as folhas são str, float, bool e None. Não há esquema para
+- [x] **`json`** (41.1): texto entra, `any` sai. Objeto vira `Dict<str, any>`, array
+      vira `List<any>`, e as folhas são str, float, bool e None. Não há esquema para
       declarar nem tipo para escrever — ler um valor de volta é `as`, que confere
       (55.2), e é esse o contrato inteiro. Número é sempre float, porque JSON tem UM
       tipo numérico e fingir o contrário seria inventar regra que o formato não tem.
@@ -590,7 +590,7 @@ lowering encolher e ficar conferido.
       Gate: `tests/pscript/run/buffers.psc` (quatro threads escrevendo no mesmo bloco).
 - [x] **Função é VALOR (28.1) e lambda captura POR VALOR (19.2).** `f: def(int) -> int`
       guarda uma função nomeada ou uma lambda; dá para passar, guardar em `list` e em
-      `dict<str, def(...)>`, e chamar de qualquer um desses lugares.
+      `Dict<str, def(...)>`, e chamar de qualquer um desses lugares.
 
       A captura é por valor: a lambda copia o que lê no momento em que é criada, e é
       isso que faz três closures feitas no mesmo laço guardarem três números diferentes
@@ -657,7 +657,7 @@ lowering encolher e ficar conferido.
       o buffer se movia debaixo do programa assim que uma coleta acontecia.
       Gate: `tests/pscript/run/smallpt_full.expected`, nos três modos.
 - [x] **`*args` (44.2) e `sorted(key=)` (28.4).**
-      `*xs` é açúcar sobre `list<T>` e nada mais: dentro da função o parâmetro É uma
+      `*xs` é açúcar sobre `List<T>` e nada mais: dentro da função o parâmetro É uma
       lista — a mesma que o resto da linguagem já conhece — e o que o sítio da chamada
       faz é construir uma. Nenhum tipo novo, nenhuma segunda convenção de chamada.
 
@@ -1092,7 +1092,7 @@ workers diferentes ao mesmo tempo.
 
 ### 74.2 — cópia PROFUNDA de grafo em mensagem — FEITO
 
-O caso geral: `list<str>`, `list<list<T>>`, `dict<K,V>`, `set<T>`, `struct` com
+O caso geral: `List<str>`, `List<List<T>>`, `Dict<K,V>`, `Set<T>`, `struct` com
 referências, e ciclo. (Um `record` não entra na lista porque a 58.2 já o
 mantém puro — ele continua atravessando por memcpy, que é o caminho rápido.)
 
@@ -1347,10 +1347,10 @@ Mesmo com o valor pronto, o `await` passa pelo escalonador. Ordem previsível e
 justiça entre tasks — sem isso, um laço de `await`s que sempre acha resposta
 pronta (um cliente rápido, num servidor) nunca deixa outra task rodar.
 
-### 79.1 — `read` devolve `list<u8>`
+### 79.1 — `read` devolve `List<u8>`
 
 Bytes são bytes: um socket traz metade de um caractere UTF-8, um JPEG, um frame
-binário. `read` dá `list<u8>` e quem sabe que aquilo é texto chama `str(b)`, que
+binário. `read` dá `List<u8>` e quem sabe que aquilo é texto chama `str(b)`, que
 LANÇA se não for UTF-8 válido. `write` aceita os dois. Usa um tipo que a
 linguagem já tem, que já atravessa em mensagem, e deixa o parser de HTTP
 natural.
@@ -1425,11 +1425,11 @@ contexto, e o `poll` do escalonador já esperava em descritores desde a 74.1.
 A superfície ficou:
 
     f = await open(caminho, "r")     # abrir também vai ao pool
-    b = await f.read(4096)           # list<u8>, até n, vazio = fim
+    b = await f.read(4096)           # List<u8>, até n, vazio = fim
     t = await f.text()               # tudo, decodificado e VALIDADO
     r = await f.read_all()           # tudo, cru
     ls = await f.readlines()
-    n = await f.write(x)             # str ou list<u8>
+    n = await f.write(x)             # str ou List<u8>
     await f.close()                  # e `with`/`defer` fecham SÍNCRONO (80.2)
 
 `read()` sem argumento deixou de existir: o nome diz o que volta, e não o
@@ -1494,7 +1494,7 @@ Teste: `tests/pscript/run/async_cleanup.psc`.
 
     srv = net.listen(0)          # 0 = o sistema escolhe; `srv.port()` diz qual
     c = await srv.accept()
-    dados = await c.read(4096)   # list<u8>, até n, vazio = o outro lado fechou
+    dados = await c.read(4096)   # List<u8>, até n, vazio = o outro lado fechou
     await c.write("pong")
     c.close()                    # e `with` fecha sozinho
 
@@ -1524,7 +1524,7 @@ Coisas que a implementação obrigou:
 
 ### 79.4 — `gather_settled` e `first_ok` — FEITOS
 
-`gather_settled(ts)` espera todas e devolve `list<Error?>`: o erro de cada uma,
+`gather_settled(ts)` espera todas e devolve `List<Error?>`: o erro de cada uma,
 None onde deu certo. Os valores se leem das próprias tasks, que já terminaram.
 `first_ok(ts)` devolve o índice da primeira que deu certo e cancela o resto;
 se todas falharem, lança.
@@ -1725,7 +1725,7 @@ coletado escapa.
 
 Virando `str`, o pscript confere UTF-8 e **lança** com categoria e posição se os
 bytes não forem válidos — em vez de deixar entrar um `str` que mente sobre o
-próprio `len()`. Virando `list<u8>`, copia como está. A validação fica onde a
+próprio `len()`. Virando `List<u8>`, copia como está. A validação fica onde a
 promessa é feita.
 
 ### 83.3 — os dois tipos moram no NÚCLEO do P
@@ -2134,13 +2134,53 @@ E uma que fica registrada e não implementada: **um builtin como VALOR de funç�
 
 ---
 
-# O NIO, à nossa maneira — o plano (baterias 135-140, 2026-08-24)
+# O NIO, à nossa maneira — o plano (baterias 135-143, 2026-08-24)
 
-As decisões estão em `pscript/DESIGN.md`, baterias 135-140. **Só o utilizador
+As decisões estão em `pscript/DESIGN.md`, baterias 135-143. **Só o utilizador
 decide**; o que está lá está fechado e não se repropõe.
 
 Dez fases. A **FN** vem primeiro e não é sobre bytes — é a renomeação dos tipos,
 feita antes para que nada novo nasça com o nome errado.
+
+## A ordem de execução, e o estado
+
+Cada fase só está `[x]` quando o portão dela ("fica de pé") tem TESTE que prende,
+o `verify-all` deu 8/8 nos três modos, e o seed foi regenerado se o compilador
+mudou. A ordem abaixo é a das dependências, não a da numeração:
+
+- [ ] **FN** — a regra dos nomes. Sem dependências; vem primeiro para que nada
+      novo nasça com o nome errado. Três commits (velho+novo com `-W` → migra →
+      velho morre).
+- [ ] **FS** — `stdlib` + o contrato da fronteira (`Foreign`/`Shared`/`Transfer`).
+      Logo a seguir à FN: as duas varrem a árvore inteira, e varre-se uma vez.
+      O maior `sed` do plano (140 chamadas de `path.*` → `os.*`).
+- [ ] **FE** — o `stl` para dentro do compilador + `Str`→`StrBuf`. Independente;
+      entra aqui porque regenera o `bootstrap/` de qualquer forma.
+- [ ] **F0** — `bytes`, fatias do `Buffer` (`View<u8>`), **finalizadores no
+      coletor**. Depende da FN (os nomes) e é a fundação de F1/F2/F6.
+- [ ] **F1** — a I/O passa a falar `bytes`; `read(n)` morre, `read_into`/`read_all`
+      nascem. Depende de F0. Sub-fases por pacote, cada uma com commit e verify
+      próprios: **F1a** `tar` → **F1b** `sha2`/`ed25519` → **F1c** `http`/`url` →
+      **F1d** `repo`/`pforge`/`pstudio`/conformidade. Os publicados sobem de versão.
+- [ ] **F2** — `os.mmap` → `Mapping`, com o guarda do SIGBUS. Depende de F0.
+      ⚠ questão em aberto antes de fechar: o guarda com VÁRIAS threads (um
+      handler de sinal não pode tomar lock) — se não houver resposta limpa,
+      registrar bateria e seguir com a saída conservadora (guarda só na thread
+      que mapeou, dito na doc).
+- [ ] **F3** — `declare Mapping` em P (primeira utilização real dos traits da FS)
+      e a ponte por `CBytes`. Depende de F2 **e** de FS.
+- [ ] **F4** — `os.pread`/`os.pwrite`, `os.stat`, `os.listdir` que percorre,
+      `f.size()`. Depende só de F1 (as assinaturas falam `bytes`).
+- [ ] **F5** — `os.watch` (Watcher). **BLOQUEADA por decisão**: as quatro
+      perguntas da 140.1 são do utilizador — rodar `AskUserQuestion` ANTES de
+      escrever uma linha (recursão nossa ou do núcleo; macOS = FSEvents;
+      coalescer ou cru; um evento ou lote). Fora isso, independente de F0-F4.
+- [ ] **F6** — o descodificador incremental de UTF-8. Depende de F0; apaga a
+      máquina de estados à mão do `terminal.psc` e herda o teste dela.
+- [ ] **F7** — UDP (`recv_from`/`send_to`) e Unix sockets. Depende de F1.
+
+**Marco de meio do caminho:** depois da F2, repetir a releitura das specs (o
+hábito da F9 do pforge — cada fase grande deixa decisões escritas e não feitas).
 
 ---
 
@@ -2236,7 +2276,9 @@ fases existem para acabar.
 Ficam minúsculos os VALORES: `int`, `float`, `bool`, `str`, `bytes` e os
 numéricos com tamanho.
 
-~1 150 sítios. É código e não prosa, portanto `sed` sobre os `.psc` e sobre as
+933 sítios em `.psc` mais 61 em cadeias do compilador (o "~1 150" de antes
+misturava as duas linguagens num grep só). É código e não prosa, portanto `sed`
+sobre os `.psc` e sobre as
 mensagens do compilador; **à mão** os `.md`, que é a lição que a tradução para
 inglês custou dois erros a aprender.
 

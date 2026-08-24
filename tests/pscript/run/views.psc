@@ -7,7 +7,7 @@ any other list; what it refuses is growing, because growing would mean owning.
 """
 
 def main():
-    b = buffer(48)
+    b = Buffer(48)
     px = b.view_f64()
     print(len(px))
     for i in range(len(px)):

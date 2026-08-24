@@ -82,7 +82,7 @@ struct Node:
     logmtime: int       # what the log says it had when it was produced
     loghash: u64        # ... and the hash of the command that produced it
     gen: int            # the edge that produces it; -1 = it is a source
-    used: list<int>     # the edges that consume it
+    used: List<int>     # the edges that consume it
     dirty: bool
 
     def stat_now(self):
@@ -104,15 +104,15 @@ struct Edge:
     this produced exactly like that?" and not "by a similar command".
     """
     id: int
-    argv: list<str>
-    env: dict<str, str>       # empty = inherit the caller's environment
+    argv: List<str>
+    env: Dict<str, str>       # empty = inherit the caller's environment
     cwd: str                  # "" = the caller's directory
     stdout_to: str            # "" = the output comes back captured
-    ins: list<int>
-    implicit: list<int>
-    order: list<int>
-    outs: list<int>
-    out_implicit: list<int>
+    ins: List<int>
+    implicit: List<int>
+    order: List<int>
+    outs: List<int>
+    out_implicit: List<int>
     restat: bool
     generator: bool
     pool: str                 # "" = none; "console" = talks to the terminal
@@ -147,7 +147,7 @@ struct Edge:
             h = hash_str(h, "\n")
         # the environment in KEY order: a dict keeps insertion order, and two
         # assemblies of the same environment need not insert in the same order
-        ks: list<str> = []
+        ks: List<str> = []
         for k in self.env:
             ks.append(k)
         ks = sorted(ks)
@@ -163,11 +163,11 @@ struct Edge:
 
 # ---------- the graph ----------
 struct Graph:
-    nodes: list<Node>
-    edges: list<Edge>
-    by_path: dict<str, int>
-    default_targets: list<str>
-    dupes: list<str>          # outputs with TWO producers (see `add_edge`)
+    nodes: List<Node>
+    edges: List<Edge>
+    by_path: Dict<str, int>
+    default_targets: List<str>
+    dupes: List<str>          # outputs with TWO producers (see `add_edge`)
 
     def node(self, p: str) -> Node:
         """The node for a path, created if this is the first time. The path is
@@ -208,7 +208,7 @@ struct Graph:
 def new_graph() -> Graph:
     return Graph([], [], {}, [], [])
 
-def new_edge(argv: list<str>) -> Edge:
+def new_edge(argv: List<str>) -> Edge:
     """An edge with every default in place. It exists because an edge has
     eighteen fields and building one by position would be unreadable — and
     because each field's default is a decision that deserves one home."""
@@ -221,29 +221,29 @@ def new_edge(argv: list<str>) -> Edge:
 # serves when whoever describes and whoever executes are not the same process,
 # and the one that leaves the door open for ninja's language to arrive later
 # without the engine knowing the difference.
-private def getl(d: dict<str, any>, k: str) -> list<str>:
-    out: list<str> = []
+private def getl(d: Dict<str, any>, k: str) -> List<str>:
+    out: List<str> = []
     if k in d:
-        for x in d[k] as list<any>:
+        for x in d[k] as List<any>:
             out.append(x as str)
     return out
 
-private def ss(d: dict<str, any>, k: str, dflt: str) -> str:
+private def ss(d: Dict<str, any>, k: str, dflt: str) -> str:
     if k in d:
         return d[k] as str
     return dflt
 
-private def sb(d: dict<str, any>, k: str) -> bool:
+private def sb(d: Dict<str, any>, k: str) -> bool:
     if k in d:
         return d[k] as bool
     return False
 
 def from_json(text: str) -> Graph:
-    root = json.parse(text) as dict<str, any>
+    root = json.parse(text) as Dict<str, any>
     g = new_graph()
     g.default_targets = getl(root, "default")
-    for ev in root["edges"] as list<any>:
-        d = ev as dict<str, any>
+    for ev in root["edges"] as List<any>:
+        d = ev as Dict<str, any>
         e = new_edge(getl(d, "argv"))
         e.cwd = ss(d, "cwd", "")
         e.stdout_to = ss(d, "stdout", "")
@@ -254,7 +254,7 @@ def from_json(text: str) -> Graph:
         e.restat = sb(d, "restat")
         e.generator = sb(d, "generator")
         if "env" in d:
-            ed = d["env"] as dict<str, any>
+            ed = d["env"] as Dict<str, any>
             for k in ed:
                 e.env[k] = ed[k] as str
         for p in getl(d, "in"):
@@ -292,8 +292,8 @@ def jstr(s: str) -> str:
             out += ch
     return out + '"'
 
-private def jlist(g: Graph, ids: list<int>) -> str:
-    parts: list<str> = []
+private def jlist(g: Graph, ids: List<int>) -> str:
+    parts: List<str> = []
     for i in ids:
         parts.append(jstr(g.nodes[i].p))
     return "[" + ", ".join(parts) + "]"
@@ -305,7 +305,7 @@ def to_json(g: Graph) -> str:
         if not first:
             out += ',\n'
         first = False
-        args: list<str> = []
+        args: List<str> = []
         for a in e.argv:
             args.append(jstr(a))
         out += '    {"argv": [' + ", ".join(args) + ']'
@@ -318,11 +318,11 @@ def to_json(g: Graph) -> str:
         if len(e.out_implicit) > 0:
             out += ', "out_implicit": ' + jlist(g, e.out_implicit)
         if len(e.env) > 0:
-            ks: list<str> = []
+            ks: List<str> = []
             for k in e.env:
                 ks.append(k)
             ks = sorted(ks)
-            evs: list<str> = []
+            evs: List<str> = []
             for k2 in ks:
                 evs.append(jstr(k2) + ': ' + jstr(e.env[k2]))
             out += ', "env": {' + ", ".join(evs) + '}'
@@ -345,7 +345,7 @@ def to_json(g: Graph) -> str:
         out += '}'
     out += '\n  ]'
     if len(g.default_targets) > 0:
-        ds: list<str> = []
+        ds: List<str> = []
         for t in g.default_targets:
             ds.append(jstr(t))
         out += ',\n  "default": [' + ", ".join(ds) + ']'

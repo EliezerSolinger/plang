@@ -39,18 +39,18 @@ struct Ctx:
     plangc_is_built: bool   # ... and if it is, it enters as an input of the edges
     query: str         # the compiler that ANSWERS the protocol's questions
     target: Target
-    cflags: list<str>
+    cflags: List<str>
     # pscript's runtime, generated ONCE per context (see `psrt`): twenty pscript
     # programs are not twenty compilations of the runtime, and two edges
     # producing the same `.c` would be a graph the engine refuses
-    rt_c: list<str>
-    rt_h: list<str>
-    rt_o: list<str>
+    rt_c: List<str>
+    rt_h: List<str>
+    rt_o: List<str>
     rt_ready: bool
     # this project's package roots (`--pkg-path`), in order. They go into EVERY
     # invocation of the compiler — the QUESTIONS included, because `--deps` of a
     # file that imports from a package needs to find the package to answer.
-    pkgroots: list<str>
+    pkgroots: List<str>
     # 2.13: the PREPROCESSOR flags the packages declare (`cflags` in the
     # manifest), already rewritten against each one's directory. They apply to
     # EVERY invocation of the compiler and not only to the package that declared
@@ -59,14 +59,14 @@ struct Ctx:
     # it is THEIR compilation that needs the `-I`. A flag from a package nobody
     # uses costs nothing; what the list does NOT decide is the link — what enters
     # the binary is the closure.
-    pkgcpp: list<str>
+    pkgcpp: List<str>
     # objects already emitted: the `.o` path -> the signature of the edge that
     # makes it. The same `.c` compiled in the same objdir by two different
     # PROGRAMS has been routine ever since packages existed — `sha2` is read by a
     # test in P and by one in pscript — and a file has ONE producer. If the
     # signature matches, the second request returns the object that already
     # exists; if it does not, the engine refuses, which is what has to happen.
-    objs_made: dict<str, str>
+    objs_made: Dict<str, str>
 
 def new_ctx(g: G.Graph, outdir: str, plangc: str) -> Ctx:
     # whoever ANSWERS and whoever RUNS may be different compilers, and on the
@@ -104,7 +104,7 @@ def derive(c: Ctx, outdir: str, plangc: str) -> Ctx:
 # descriptor does not reimplement `import` resolution — it ASKS. A second
 # implementation that diverged from the real one would give a stale build after
 # an edit, which is the only failure mode that matters.
-async def ask(c: Ctx, argv: list<str>) -> list<str>:
+async def ask(c: Ctx, argv: List<str>) -> List<str>:
     """The ANSWER comes back through a file, not through the pipe.
 
     `os.run` merges standard error into standard output on purpose — that is what
@@ -136,18 +136,18 @@ async def ask(c: Ctx, argv: list<str>) -> list<str>:
     txt = await f.text()
     await f.close()
     os.remove(resp)
-    out: list<str> = []
+    out: List<str> = []
     for line in txt.split("\n"):
         if len(line) > 0:
             out.append(line)
     return out
 
-def with_roots(c: Ctx, argv: list<str>) -> list<str>:
+def with_roots(c: Ctx, argv: List<str>) -> List<str>:
     """The `argv` with the package roots. They go into every invocation, the
     questions included: `--deps` of a file that imports `<pui/widget.ph>` needs to
     find `pui` to answer — and a question that does not find is an empty answer,
     which is the most dangerous failure mode there is in a build system."""
-    out: list<str> = []
+    out: List<str> = []
     out.append(argv[0])
     for r in c.pkgroots:
         out.append("--pkg-path")
@@ -158,7 +158,7 @@ def with_roots(c: Ctx, argv: list<str>) -> list<str>:
         i += 1
     return out
 
-async def deps_of(c: Ctx, src: str, outdir: str) -> list<str>:
+async def deps_of(c: Ctx, src: str, outdir: str) -> List<str>:
     """What this compilation READS — and "this" is the word that matters.
 
     The `--out-dir` goes into the QUESTION because it changes the answer: with
@@ -171,11 +171,11 @@ async def deps_of(c: Ctx, src: str, outdir: str) -> list<str>:
     nothing."""
     return await ask(c, with_roots(c, [c.query, "--deps", "--out-dir", outdir, src]))
 
-async def outputs_of(c: Ctx, src: str, outdir: str) -> list<str>:
+async def outputs_of(c: Ctx, src: str, outdir: str) -> List<str>:
     return await ask(c, with_roots(c, [c.query, "--outputs", "--out-dir", outdir, src]))
 
 # ---------- P and pscript -> C ----------
-async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>:
+async def p_module(c: Ctx, src: str, outdir: str, flags: List<str>) -> List<str>:
     """One edge: `plangc [flags] --out-dir <dir> <source>`.
 
     The `flags` are the COMPILER's, and they change what it emits: `-O` drops
@@ -190,7 +190,7 @@ async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>
     """
     ins = await deps_of(c, src, outdir)
     outs = await outputs_of(c, src, outdir)
-    argv: list<str> = [c.plangc]
+    argv: List<str> = [c.plangc]
     for r in c.pkgroots:
         argv.append("--pkg-path")
         argv.append(r)
@@ -238,7 +238,7 @@ async def p_module(c: Ctx, src: str, outdir: str, flags: list<str>) -> list<str>
     c.g.add_edge(e)
     return outs
 
-private def value_of(argv: list<str>, option: str) -> str:
+private def value_of(argv: List<str>, option: str) -> str:
     i = 0
     while i + 1 < len(argv):
         if argv[i] == option:
@@ -252,7 +252,7 @@ private def same_emitter(c: Ctx, eid: int, plangc: str, outdir: str) -> bool:
         return False
     return value_of(old.argv, "--out-dir") == outdir
 
-private def already_emitted(c: Ctx, outs: list<str>, plangc: str, outdir: str) -> bool:
+private def already_emitted(c: Ctx, outs: List<str>, plangc: str, outdir: str) -> bool:
     """Are these outputs already emitted — by the SAME compiler, into the SAME
     tree?
 
@@ -274,7 +274,7 @@ private def already_emitted(c: Ctx, outs: list<str>, plangc: str, outdir: str) -
             return False
     return True
 
-async def p_modules(c: Ctx, srcs: list<str>, outdir: str, flags: list<str>) -> list<str>:
+async def p_modules(c: Ctx, srcs: List<str>, outdir: str, flags: List<str>) -> List<str>:
     """The same, for a list. Returns EVERYTHING that was generated — `.c` and
     `.h`.
 
@@ -283,8 +283,8 @@ async def p_modules(c: Ctx, srcs: list<str>, outdir: str, flags: list<str>) -> l
     headers). A graph that returned only the `.c` files would not know the header
     has to exist first, and the build would fail on the first compilation — or
     worse, would use a stale header left over."""
-    out: list<str> = []
-    seen: dict<str, int> = {}
+    out: List<str> = []
+    seen: Dict<str, int> = {}
     for s in srcs:
         for o in await p_module(c, s, outdir, flags):
             # the list is a SET. Since 1.5(a) the same file shows up by two
@@ -298,8 +298,8 @@ async def p_modules(c: Ctx, srcs: list<str>, outdir: str, flags: list<str>) -> l
             out.append(o)
     return out
 
-def only(files: list<str>, suffix: str) -> list<str>:
-    out: list<str> = []
+def only(files: List<str>, suffix: str) -> List<str>:
+    out: List<str> = []
     for f in files:
         if f.endswith(suffix):
             out.append(f)
@@ -317,8 +317,8 @@ def only(files: list<str>, suffix: str) -> list<str>:
 # extracted (`build/pkg/<name>-<version>-<hash>/`) — and this is where they start
 # to count. The same for `-I`: a relative include flag is rewritten against the
 # package's directory, otherwise it would point at the builder's directory.
-def package_cflags(dir: str, flags: list<str>) -> list<str>:
-    out: list<str> = []
+def package_cflags(dir: str, flags: List<str>) -> List<str>:
+    out: List<str> = []
     for f in flags:
         if f.startswith("-I") and len(f) > 2 and not f[2:len(f)].startswith("/"):
             out.append("-I" + path.join(dir, f[2:len(f)]))
@@ -334,7 +334,7 @@ async def load_packages(c: Ctx):
     Once per context, and not per program: they are the same roots for everything
     this project builds, and rereading ten manifests per target would be repeated
     work to always give the same answer."""
-    fl: list<str> = []
+    fl: List<str> = []
     for r in c.pkgroots:
         if not path.isdir(r):
             continue
@@ -360,7 +360,7 @@ async def load_packages(c: Ctx):
     c.pkgcpp = fl
 
 
-private def with_cpp(c: Ctx, flags: list<str>) -> list<str>:
+private def with_cpp(c: Ctx, flags: List<str>) -> List<str>:
     """The compiler's flags, with the packages' inside the `--cpp`.
 
     `plangc` has no C `-I` and no `-D`: what it has is `--cpp`, the COMMAND it
@@ -375,7 +375,7 @@ private def with_cpp(c: Ctx, flags: list<str>) -> list<str>:
     if len(c.pkgcpp) == 0:
         return flags
     extra = " ".join(c.pkgcpp)
-    out: list<str> = []
+    out: List<str> = []
     found = False
     i = 0
     while i < len(flags):
@@ -392,8 +392,8 @@ private def with_cpp(c: Ctx, flags: list<str>) -> list<str>:
     return out
 
 
-async def pkg_c_objects(c: Ctx, dir: str, csources: list<str>, objdir: str,
-                        headers: list<str>) -> list<str>:
+async def pkg_c_objects(c: Ctx, dir: str, csources: List<str>, objdir: str,
+                        headers: List<str>) -> List<str>:
     """The objects for a package's C. Two edges per file: `plangc` reads the `.c`
     and emits `.c`, and the `cc` compiles what came out.
 
@@ -402,7 +402,7 @@ async def pkg_c_objects(c: Ctx, dir: str, csources: list<str>, objdir: str,
     and the `-D`s resolved. Passing them again would be asking the `cc` to redo
     work that is already done — and would give a different result from the one the
     front end saw."""
-    objs: list<str> = []
+    objs: List<str> = []
     for rel in csources:
         src = path.join(dir, rel)
         emitted = await p_module(c, src, c.outdir, [])
@@ -411,7 +411,7 @@ async def pkg_c_objects(c: Ctx, dir: str, csources: list<str>, objdir: str,
     return objs
 
 
-def package_of(pkgroots: list<str>, file: str) -> str:
+def package_of(pkgroots: List<str>, file: str) -> str:
     """The directory of the package `file` belongs to, or "" if it is not inside
     any root.
 
@@ -431,7 +431,7 @@ def package_of(pkgroots: list<str>, file: str) -> str:
 
 
 # ---------- C -> object ----------
-def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>) -> str:
+def c_object(c: Ctx, src: str, obj: str, flags: List<str>, extra_ins: List<str>) -> str:
     """`cc -c`, with `-MD` so the compiler says which headers it read. The `.d`
     stays on disk and is read in the next run's plan — on the C side there is no
     protocol, and this is the price.
@@ -441,7 +441,7 @@ def c_object(c: Ctx, src: str, obj: str, flags: list<str>, extra_ins: list<str>)
     them, the first run of a clean build could compile a `.c` before the `.h` it
     includes has been written. After the first, the `.d` covers the rest — the
     system headers included."""
-    argv: list<str> = [c.target.cc]
+    argv: List<str> = [c.target.cc]
     for f in c.cflags:
         argv.append(f)
     # 2.13: the flags of packages with C reach the `cc` too, and there is one
@@ -518,15 +518,15 @@ def obj_for(objdir: str, src: str) -> str:
     which of the two defines the content would depend on the order."""
     return path.join(objdir, src + ".o")
 
-def c_objects(c: Ctx, srcs: list<str>, objdir: str, flags: list<str>, extra_ins: list<str>) -> list<str>:
-    objs: list<str> = []
+def c_objects(c: Ctx, srcs: List<str>, objdir: str, flags: List<str>, extra_ins: List<str>) -> List<str>:
+    objs: List<str> = []
     for s in srcs:
         objs.append(c_object(c, s, obj_for(objdir, s), flags, extra_ins))
     return objs
 
 # ---------- objects -> binary ----------
-def executable(c: Ctx, out: str, objs: list<str>, libs: list<str>) -> str:
-    argv: list<str> = [c.target.cc]
+def executable(c: Ctx, out: str, objs: List<str>, libs: List<str>) -> str:
+    argv: List<str> = [c.target.cc]
     for f in c.cflags:
         argv.append(f)
     argv.append("-o")
@@ -544,10 +544,10 @@ def executable(c: Ctx, out: str, objs: list<str>, libs: list<str>) -> str:
     c.g.add_edge(e)
     return out
 
-def cc_program(c: Ctx, out: str, srcs: list<str>, extra_ins: list<str>, flags: list<str>, libs: list<str>) -> str:
+def cc_program(c: Ctx, out: str, srcs: List<str>, extra_ins: List<str>, flags: List<str>, libs: List<str>) -> str:
     """A binary straight from C sources, with no intermediate objects — which is
     what the compiler's seed is: a `cc` over the committed C."""
-    argv: list<str> = [c.target.cc]
+    argv: List<str> = [c.target.cc]
     for f in c.cflags:
         argv.append(f)
     for f2 in flags:
@@ -581,27 +581,27 @@ def cc_program(c: Ctx, out: str, srcs: list<str>, extra_ins: list<str>, flags: l
 # The order matters and is not alphabetical: these are LAYERS (memory, values,
 # what runs, the library, the system, the epilogue), and the compiler sees them
 # in this order.
-const RT_MODULES: list<str> = ["psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_val.ph",
+const RT_MODULES: List<str> = ["psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_val.ph",
                                "psrt_rt.ph", "psrt_std.ph", "psrt_os.ph", "psrt_top.ph",
                                "psrt_mem.p", "psrt_val.p", "psrt_rt.p", "psrt_std.p",
                                "psrt_os.p", "psrt_top.p"]
 
 # glibc hides socket/getaddrinfo/poll/pipe under a strict `-std=`, and the runtime
 # speaks POSIX from beginning to end
-const PSDEFS: list<str> = ["-D_POSIX_C_SOURCE=200112L", "-D_DEFAULT_SOURCE"]
+const PSDEFS: List<str> = ["-D_POSIX_C_SOURCE=200112L", "-D_DEFAULT_SOURCE"]
 
 
-async def psrt(c: Ctx) -> list<str>:
+async def psrt(c: Ctx) -> List<str>:
     """pscript's runtime, compiled ONCE per context. Returns everything it
     generated — `.c` and `.h`."""
     if c.rt_ready:
-        out: list<str> = []
+        out: List<str> = []
         for x in c.rt_c:
             out.append(x)
         for y in c.rt_h:
             out.append(y)
         return out
-    srcs: list<str> = []
+    srcs: List<str> = []
     for m in RT_MODULES:
         srcs.append(path.join("pscript/runtime", m))
     all = await p_modules(c, srcs, c.outdir, [])
@@ -611,7 +611,7 @@ async def psrt(c: Ctx) -> list<str>:
     return all
 
 
-private async def rt_objects(c: Ctx, objdir: str) -> list<str>:
+private async def rt_objects(c: Ctx, objdir: str) -> List<str>:
     """The runtime compiled to OBJECTS, once for the whole context.
 
     Here is the difference you feel most: `psbuild.sh` relinks the runtime's six
@@ -625,8 +625,8 @@ private async def rt_objects(c: Ctx, objdir: str) -> list<str>:
     return c.rt_o
 
 
-async def psc_program_with(c: Ctx, src: str, out: str, objdir: str, p_srcs: list<str>,
-                           flags: list<str>, cflags: list<str>, libs: list<str>) -> str:
+async def psc_program_with(c: Ctx, src: str, out: str, objdir: str, p_srcs: List<str>,
+                           flags: List<str>, cflags: List<str>, libs: List<str>) -> str:
     """The same, plus P MODULES compiled alongside.
 
     It is the editor's case: the logic is pscript, but the hand that touches SDL2
@@ -647,33 +647,33 @@ async def psc_program_with(c: Ctx, src: str, out: str, objdir: str, p_srcs: list
     # another module imports deeper down, and its `.p`.
     prog = await p_module(c, src, c.outdir, flags)
     extras = await p_modules(c, p_srcs, c.outdir, flags)
-    headers: list<str> = []
+    headers: List<str> = []
     for h in c.rt_h:
         headers.append(h)
     for h2 in only(extras, ".h"):
         headers.append(h2)
     for h3 in only(prog, ".h"):
         headers.append(h3)
-    all_cflags: list<str> = []
+    all_cflags: List<str> = []
     for d in PSDEFS:
         all_cflags.append(d)
     for x in cflags:
         all_cflags.append(x)
-    objs: list<str> = []
+    objs: List<str> = []
     for o in rtos:
         objs.append(o)
     for cf in only(extras, ".c"):
         objs.append(c_object(c, cf, obj_for(objdir, cf), all_cflags, headers))
     for cf2 in only(prog, ".c"):
         objs.append(c_object(c, cf2, obj_for(objdir, cf2), all_cflags, headers))
-    closure: list<str> = []
+    closure: List<str> = []
     for a1 in prog:
         closure.append(a1)
     for a2 in extras:
         closure.append(a2)
     for co in await packages_c(c, closure, objdir, headers):
         objs.append(co)
-    all_libs: list<str> = []
+    all_libs: List<str> = []
     for l in libs:
         all_libs.append(l)
     all_libs.append("-lm")
@@ -681,7 +681,7 @@ async def psc_program_with(c: Ctx, src: str, out: str, objdir: str, p_srcs: list
     return executable(c, out, objs, all_libs)
 
 
-async def psc_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, libs: list<str>) -> str:
+async def psc_program(c: Ctx, src: str, out: str, objdir: str, flags: List<str>, libs: List<str>) -> str:
     """A pscript program: the runtime alongside (16.4 — it is SOURCE compiled
     together, not a library the compiler links), the program's own import
     closure, and one link that joins everything.
@@ -693,19 +693,19 @@ async def psc_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>,
     becomes an object once instead of being recompiled per program."""
     rtos = await rt_objects(c, objdir)
     prog = await p_module(c, src, c.outdir, flags)
-    headers: list<str> = []
+    headers: List<str> = []
     for h in c.rt_h:
         headers.append(h)
     for h2 in only(prog, ".h"):
         headers.append(h2)
-    objs: list<str> = []
+    objs: List<str> = []
     for o in rtos:
         objs.append(o)
     # `import "x.ph"` (75.3) makes the compiler emit the P module alongside, into
     # the same mirror — and answer 3 already lists it, so there is no glob here
     for cf in only(prog, ".c"):
         objs.append(c_object(c, cf, obj_for(objdir, cf), PSDEFS, headers))
-    all_libs: list<str> = []
+    all_libs: List<str> = []
     for l in libs:
         all_libs.append(l)
     all_libs.append("-lm")
@@ -720,9 +720,9 @@ async def psc_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>,
 # version rebuilds what depends on it. An edge that called `pkg-config` from
 # inside would always have the same command and the same hash, and the build would
 # silently reuse another library's artifact.
-async def pkg_config(c: Ctx, lib: str, what: str) -> list<str>:
+async def pkg_config(c: Ctx, lib: str, what: str) -> List<str>:
     lines = await ask(c, ["pkg-config", what, lib])
-    out: list<str> = []
+    out: List<str> = []
     for l in lines:
         for w in l.split(" "):
             if len(w) > 0:
@@ -735,8 +735,8 @@ async def has_pkg(lib: str) -> bool:
     return r.status() == 0
 
 
-private async def packages_c(c: Ctx, generated: list<str>, objdir: str,
-                             headers: list<str>) -> list<str>:
+private async def packages_c(c: Ctx, generated: List<str>, objdir: str,
+                             headers: List<str>) -> List<str>:
     """The hand-written C of the packages this program reaches.
 
     WHICH packages is the compiler's answer 3, not a hand-kept list: what it is
@@ -750,8 +750,8 @@ private async def packages_c(c: Ctx, generated: list<str>, objdir: str,
     `<outdir>/packages/sha2/sha2.c`, with the whole tree replicated inside.
     Stripping the prefix gives back the source path — and it is free, whereas
     asking again would cost one compiler invocation per program."""
-    objs: list<str> = []
-    seen: dict<str, int> = {}
+    objs: List<str> = []
+    seen: Dict<str, int> = {}
     pref = c.outdir + "/"
     for f in generated:
         rel = f[len(pref):len(f)] if f.startswith(pref) else f
@@ -768,13 +768,13 @@ private async def packages_c(c: Ctx, generated: list<str>, objdir: str,
     return objs
 
 
-async def p_program(c: Ctx, src: str, out: str, objdir: str, flags: list<str>, libs: list<str>) -> str:
+async def p_program(c: Ctx, src: str, out: str, objdir: str, flags: List<str>, libs: List<str>) -> str:
     """A program in P: its closure to objects, and one link. With no runtime at
     all — that is the whole difference between the two languages, and it shows up
     here as the absence of a line."""
     generated = await p_module(c, src, c.outdir, flags)
-    headers: list<str> = only(generated, ".h")
-    objs: list<str> = []
+    headers: List<str> = only(generated, ".h")
+    objs: List<str> = []
     for cf in only(generated, ".c"):
         objs.append(c_object(c, cf, obj_for(objdir, cf), [], headers))
     for co in await packages_c(c, generated, objdir, headers):
@@ -794,7 +794,7 @@ struct Case:
     cwd: str
 
 
-def suite(c: Ctx, name: str, cases: list<Case>, verdict: str, stampdir: str) -> str:
+def suite(c: Ctx, name: str, cases: List<Case>, verdict: str, stampdir: str) -> str:
     """A suite: one edge PER CASE, and a stamp that joins them all.
 
     One edge per case is the whole point, and it has two consequences a shell
@@ -805,7 +805,7 @@ def suite(c: Ctx, name: str, cases: list<Case>, verdict: str, stampdir: str) -> 
 
     What runs is not the case: it is the `verdict` (see `verdict.psc`), because a
     case's exit status is data and not a verdict."""
-    stamps: list<str> = []
+    stamps: List<str> = []
     for k in cases:
         st = path.join(stampdir, name + "." + k.name + ".ok")
         e = G.new_edge([verdict, k.binary, k.expected, str(k.status), k.cwd, st])
@@ -823,7 +823,7 @@ def suite(c: Ctx, name: str, cases: list<Case>, verdict: str, stampdir: str) -> 
     return phony(c, path.join(stampdir, name + ".suite"), stamps, name + " — " + str(len(cases)) + " cases")
 
 
-def phony(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:
+def phony(c: Ctx, stamp: str, ins: List<str>, desc: str) -> str:
     """A node that exists only to be ASKED FOR: it depends on everything and
     produces a stamp. It is how you ask for "the whole suite" from a graph that
     only knows how to talk about files."""
@@ -852,10 +852,10 @@ def phony(c: Ctx, stamp: str, ins: list<str>, desc: str) -> str:
 # way out is `/usr/bin/env` as argv[0]: it ADDS to the environment it inherited,
 # the argument vector stays exact, and there is no shell in the middle to
 # reinterpret anything.
-def harness(c: Ctx, name: str, argv: list<str>, vars: dict<str, str>,
-            ins: list<str>, logdir: str, desc: str) -> str:
-    line: list<str> = ["env"]
-    ks: list<str> = []
+def harness(c: Ctx, name: str, argv: List<str>, vars: Dict<str, str>,
+            ins: List<str>, logdir: str, desc: str) -> str:
+    line: List<str> = ["env"]
+    ks: List<str> = []
     for k in vars:
         ks.append(k)
     ks = sorted(ks)     # sorted: the edge's hash cannot depend on the order
@@ -898,7 +898,7 @@ def score_floor(c: Ctx, prog: str, log: str, prefix: str, minimum: str,
 
 
 # ---------- a gate by the NEGATIVE ----------
-def must_not_match(c: Ctx, pattern: str, files: list<str>, stamp: str, desc: str) -> str:
+def must_not_match(c: Ctx, pattern: str, files: List<str>, stamp: str, desc: str) -> str:
     """Passes when the pattern does NOT appear in any of the files.
 
     It is the shape of several gates that are worth having, and of the one in
@@ -927,7 +927,7 @@ def must_not_match(c: Ctx, pattern: str, files: list<str>, stamp: str, desc: str
 
 
 # ---------- commands and checks ----------
-def command(c: Ctx, argv: list<str>, ins: list<str>, outs: list<str>, desc: str) -> G.Edge:
+def command(c: Ctx, argv: List<str>, ins: List<str>, outs: List<str>, desc: str) -> G.Edge:
     """The raw edge, always available. Whoever needs something the library does
     not foresee drops one level without leaving the language."""
     e = G.new_edge(argv)
@@ -940,7 +940,7 @@ def command(c: Ctx, argv: list<str>, ins: list<str>, outs: list<str>, desc: str)
     c.g.add_edge(e)
     return e
 
-def compare_dirs(c: Ctx, a: str, b: str, stamp: str, ins: list<str>, desc: str) -> G.Edge:
+def compare_dirs(c: Ctx, a: str, b: str, stamp: str, ins: List<str>, desc: str) -> G.Edge:
     """Two trees have to be IDENTICAL, and the `diff`'s output becomes the stamp.
 
     With no shell there is no `&&` and no `>`, and none is needed: the edge's
@@ -970,13 +970,13 @@ def compare_files(c: Ctx, a: str, b: str, stamp: str, desc: str) -> G.Edge:
     return e
 
 # ---------- file helpers ----------
-def glob(dir: str, suffix: str) -> list<str>:
+def glob(dir: str, suffix: str) -> List<str>:
     """The files in a directory with a suffix, SORTED. The glob lives in the
     DESCRIPTOR and never in an edge (1.6d): a pattern inside an edge would make
     the command's hash lie — two runs with different files on disk would be
     different builds with the same graph. And `os.listdir` sorts on purpose (111),
     so the graph comes out the same on every machine."""
-    out: list<str> = []
+    out: List<str> = []
     for n in os.listdir(dir):
         if n.endswith(suffix):
             out.append(path.join(dir, n))

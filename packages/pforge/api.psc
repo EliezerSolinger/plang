@@ -27,7 +27,7 @@ struct Api:
     path: str
     hash: str
     doc: str            # the module's own
-    symbols: list<Symbol>
+    symbols: List<Symbol>
 
     def find(self, name: str) -> int:
         i = 0
@@ -104,12 +104,12 @@ def cleandoc(t: str) -> str:
         j += 1
     return out.rstrip()
 
-def parse(text: str) -> list<Api>:
+def parse(text: str) -> List<Api>:
     """The whole answer: one `Api` per module, in the order the compiler wrote
     them. A line that is not recognised is IGNORED rather than being an error —
     the format may gain new lines, and a reader that blows up on a line it does
     not know ages badly."""
-    out: list<Api> = []
+    out: List<Api> = []
     cur = Api("", "", "", [])
     have = False
     for line in text.split("\n"):

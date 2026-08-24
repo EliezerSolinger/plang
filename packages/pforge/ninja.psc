@@ -79,7 +79,7 @@ def cmdline(e: G.Edge) -> str:
     """The argument vector becomes ONE shell line — with `env -i` in front if the
     edge carried an environment, with a `cd` if it carried a directory, and with a
     redirection if it sent its output to a file."""
-    parts: list<str> = []
+    parts: List<str> = []
     for a in e.argv:
         parts.append(G.sh_quote(a))
     line = " ".join(parts)
@@ -89,11 +89,11 @@ def cmdline(e: G.Edge) -> str:
         # the SAME semantics as our `os.run`: it replaces, it does not merge.
         # `env -i` is what says that in shell, and the keys go in order so that
         # two `--emit-ninja` runs over the same graph give the same file
-        ks: list<str> = []
+        ks: List<str> = []
         for k in e.env:
             ks.append(k)
         ks = sorted(ks)
-        pre: list<str> = ["env", "-i"]
+        pre: List<str> = ["env", "-i"]
         for k2 in ks:
             pre.append(G.sh_quote(k2 + "=" + e.env[k2]))
         line = " ".join(pre) + " " + line
@@ -103,8 +103,8 @@ def cmdline(e: G.Edge) -> str:
         line = "sh -c " + G.sh_quote(line)
     return esc_command(line)
 
-private def paths(g: G.Graph, ids: list<int>) -> str:
-    out: list<str> = []
+private def paths(g: G.Graph, ids: List<int>) -> str:
+    out: List<str> = []
     for i in ids:
         out.append(ninja_path(g.nodes[i].p))
     return " ".join(out)
@@ -160,7 +160,7 @@ def emit(g: G.Graph) -> str:
             line += " || " + paths(g, e.order)
         out += line + "\n\n"
     if len(g.default_targets) > 0:
-        ds: list<str> = []
+        ds: List<str> = []
         for d in g.default_targets:
             ds.append(ninja_path(d))
         out += "default " + " ".join(ds) + "\n"

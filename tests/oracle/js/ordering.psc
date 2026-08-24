@@ -10,7 +10,7 @@ The JS next door is written to print the same lines for the same reasons — not
 translated afterwards.
 """
 
-log: list<str> = []
+log: List<str> = []
 
 
 async def step(name: str, n: int) -> str:

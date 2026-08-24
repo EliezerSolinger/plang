@@ -139,7 +139,7 @@ def apart(a: int, b: int) -> int:
 
 for name in ["dark", "light"]:
     t = thm.theme_dark() if name == "dark" else thm.theme_light()
-    bad: list<str> = []
+    bad: List<str> = []
     if apart(t.text, t.bg) < 100:
         bad.append("text is not readable on the page")
     if apart(t.border, t.bg) < 8:

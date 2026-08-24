@@ -23,7 +23,7 @@ coletor precisa não é um cabeçalho — é saber ONDE, dentro daqueles bytes, 
 as referências. Isso é dado de tipo: o frame registra um slot por referência
 dentro do valor (`&t._0`), e uma variável de módulo ganha uma raiz por
 referência. E o que anda DENTRO do elemento de um contêiner também entrou: o contêiner leva
-um ponteiro de percurso que o compilador escreveu, então `list<(str, int)>` — e
+um ponteiro de percurso que o compilador escreveu, então `List<(str, int)>` — e
 com ele `d.items()` como VALOR — funciona com a tupla ainda sendo valor. Falta só
 o `==` dela, que usa o mesmo percurso, e a chave de dict, que continua pura.
 """
@@ -55,7 +55,7 @@ nested = ((1, 2), 3)
 print(f"nested {nested[0][1]} {nested[1]}")
 
 # ---- chave de dict (24.3) ----
-board: dict<(int, int), str> = {}
+board: Dict<(int, int), str> = {}
 board[(0, 0)] = "origin"
 board[(2, 3)] = "far"
 print(f"board {len(board)}: {board[(0, 0)]} {board[(2, 3)]}")
@@ -97,7 +97,7 @@ print(f"module-level {MODULE_TUPLE[0]} {MODULE_TUPLE[1]}")
 
 
 # ---- dentro de um contêiner, com o coletor andando DENTRO do elemento ----
-rows: list<(str, int)> = []
+rows: List<(str, int)> = []
 i = 0
 while i < 4:
     rows.append((f"row{i}", i * i))

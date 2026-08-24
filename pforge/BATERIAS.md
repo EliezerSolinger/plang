@@ -333,7 +333,7 @@ Duas consequências, e a segunda é a séria:
 
 Agora há um dumper por linguagem, e o do pscript lê a árvore da própria
 linguagem: `record Rect {x: int, y: int, w: int, h: int}`,
-`async def tarde(int) -> list<str>`, `private` fora. É uma cópia rasa do módulo
+`async def tarde(int) -> List<str>`, `private` fora. É uma cópia rasa do módulo
 tirada ANTES da sema — a interface de um módulo é o que ELE declara, não o que
 ele vê.
 

@@ -223,8 +223,8 @@ record Command:
 
 struct Shell:
     tabs, tree, palette, find, ...   # 31 campos, todos do editor
-    commands: list<Command>
-    def add_commands(self, cs: list<Command>)
+    commands: List<Command>
+    def add_commands(self, cs: List<Command>)
 
 struct Ide:
     sh: Shell                        # composição — nunca um campo dentro de Shell
@@ -420,7 +420,7 @@ CASCA — os dois binários ganham:
   invalidação, sem memória, com os resultados a aparecer à medida que chegam.
   Este repositório são ~58 mil linhas de fonte.
 * **Ir-para-definição entre arquivos.** O `index.build(buf, [])` tem um parâmetro
-  `extra: list<str>` documentado para isto e **sempre vazio**. Passa a ser um
+  `extra: List<str>` documentado para isto e **sempre vazio**. Passa a ser um
   índice do projeto **sob demanda**: nada ao abrir, e ao pedir a definição de um
   símbolo desconhecido varre nesse momento e guarda.
 

@@ -16,7 +16,7 @@ import sys
 
 
 def gasta(n: int) -> int:
-    lixo: list<str> = []
+    lixo: List<str> = []
     for i in range(n):
         lixo.append(f"n{i}")
     return len(lixo)

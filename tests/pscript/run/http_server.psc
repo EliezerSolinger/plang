@@ -19,7 +19,7 @@ import net
 import <http/http.psc> as http
 
 
-async def serve(srv: socket, how_many: int) -> int:
+async def serve(srv: Socket, how_many: int) -> int:
     served = 0
     for i in range(how_many):
         with await srv.accept() as c:
@@ -46,7 +46,7 @@ async def client(port: int, text: str) -> str:
     with await net.connect("127.0.0.1", port) as c:
         await c.write(text)
         # the answer may arrive in pieces, like anything else
-        all: list<u8> = []
+        all: List<u8> = []
         while True:
             part = await c.read(128)
             if len(part) == 0:
@@ -84,14 +84,14 @@ srv.close()
 
 # ---- the refusals, which need no socket ----
 bad = http.new_parser()
-bad_bytes: list<u8> = []
+bad_bytes: List<u8> = []
 for ch in "GET / HTTP/1.1\r\nhost : x\r\n\r\n":
     bad_bytes.append(u8(ord(ch)))
 bad.feed(bad_bytes)
 print("refused 1:", bad.problem)
 
 bad2 = http.new_parser()
-b2: list<u8> = []
+b2: List<u8> = []
 for ch in "GET / HTTP/1.1\r\ncontent-length: 3\r\ntransfer-encoding: chunked\r\n\r\n":
     b2.append(u8(ord(ch)))
 bad2.feed(b2)

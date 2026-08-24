@@ -101,7 +101,7 @@ struct Ide:
     build_stop: bool
     # the targets this project builds, put here by the DRIVER from the graph:
     # the editor does not know what a project builds, and should not know
-    build_targets: list<str>
+    build_targets: List<str>
     build_total: int
     build_done: int
     build_error: str
@@ -126,15 +126,15 @@ struct Ide:
     # The three slots the editor left empty, filled. `pcode` has the same three
     # and leaves them shut, which is what the whitelist gate measures.
     outline: int          # the WK_LIST inside `sh.side`
-    outline_syms: list<cmp.CSym>   # what it is showing, in file order
+    outline_syms: List<cmp.CSym>   # what it is showing, in file order
     outline_ver: int      # the buffer version it came from
     outline_path: str     # ... and which file, so a tab change rebuilds it
     dock_tabs: int        # the strip at the top of the bottom dock
     dock_body: int        # what is under it
     dock_page: int        # which panel is up
-    dock_labels: list<int>  # one label per page: F9 and F10 replace two of them
+    dock_labels: List<int>  # one label per page: F9 and F10 replace two of them
     # F7: the Build panel. The engine's report, kept instead of collapsed.
-    build_edges: list<BuildEdge>
+    build_edges: List<BuildEdge>
     build_bar: int        # a WK_PROGRESS, because a LENGTH is seen and a number is read
     build_list: int       # the edges, one row each, the failing ones clickable
     tb_target: int        # the toolbar button that says which target `Build` builds
@@ -145,17 +145,17 @@ struct Ide:
     term: trm.Term
     term_node: int
     term_live: bool
-    want_term_cmd: list<str>   # [] = nothing to start
+    want_term_cmd: List<str>   # [] = nothing to start
     want_term_in: str          # what the keyboard typed, on its way to the child
     want_term_stop: bool
     # F9: the Tests panel. The same shape as the build's, because it IS the
     # build's — a suite is a target and a case is an edge of it.
     want_test: bool
     test_busy: bool
-    test_cases: list<TestCase>
+    test_cases: List<TestCase>
     test_bar: int
     test_list: int
-    test_rows: list<int>    # a row of the widget -> a case, or -1 for a suite
+    test_rows: List<int>    # a row of the widget -> a case, or -1 for a suite
     test_total: int
     test_done: int
     test_bad: int
@@ -164,7 +164,7 @@ struct Ide:
     # is the half that may await) and asks `pforge` to change it — resolving a
     # version belongs to the project's own pforge, for the same reason the graph
     # does: the editor opens any tree, and each one is its own.
-    packages: list<PkgRow>
+    packages: List<PkgRow>
     pkg_list: int
     pkg_msg: str
     want_pkg_read: bool
@@ -198,7 +198,7 @@ struct Ide:
     def dock_refresh(self):
         names = dock_pages()
         icons = dock_icons()
-        items: list<pui.TabItem> = []
+        items: List<pui.TabItem> = []
         for i in range(len(names)):
             items.append(pui.TabItem(names[i], icons[i], False, False))
         self.sh.u.tabs_set(self.dock_tabs, items)
@@ -255,7 +255,7 @@ struct Ide:
     def pkg_refresh(self):
         if self.pkg_list < 0:
             return
-        rows: list<pui.ListRow> = []
+        rows: List<pui.ListRow> = []
         if len(self.pkg_msg) > 0:
             rows.append(pui.ListRow(self.pkg_msg, "", 0, "", ico.ICO_INFO,
                                     pui.TONE_ACCENT, False))
@@ -335,9 +335,9 @@ struct Ide:
         if self.test_total > 0:
             cap = "[" + str(self.test_done) + "/" + str(self.test_total) + "] " + cap
         u.progress_set(self.test_bar, self.test_done, self.test_total, cap)
-        rows: list<pui.ListRow> = []
+        rows: List<pui.ListRow> = []
         self.test_rows = []
-        suites: list<str> = []
+        suites: List<str> = []
         for c in self.test_cases:
             if c.suite not in suites:
                 suites.append(c.suite)
@@ -402,7 +402,7 @@ struct Ide:
             self.want_term_cmd = [sh_env]
         self.sh.dirty_ui = True
 
-    def run_in_terminal(self, cmd: list<str>):
+    def run_in_terminal(self, cmd: List<str>):
         self.dock_open_at(PAGE_TERMINAL)
         self.sh.u.focus_set(self.term_node)
         self.want_term_cmd = cmd
@@ -485,7 +485,7 @@ struct Ide:
             # are empty out loud, and this one should too
             cap = "(nothing built yet — press Build)"
         u.progress_set(self.build_bar, self.build_done, self.build_total, cap)
-        rows: list<pui.ListRow> = []
+        rows: List<pui.ListRow> = []
         for e in self.build_edges:
             tone = pui.TONE_DIM
             icon = ico.ICO_CIRCLE_DOT
@@ -571,7 +571,7 @@ struct Ide:
         self.outline_path = cv.path
         self.outline_ver = cv.buf.version
         self.outline_syms = cv.index.outline()
-        rows: list<pui.ListRow> = []
+        rows: List<pui.ListRow> = []
         for sy in self.outline_syms:
             rows.append(pui.ListRow(sy.name, str(sy.line), 1 if sy.kind == cmp.SYM_MEMBER else 0,
                                     "", outline_icon(sy.kind), pui.TONE_NORMAL, False))
@@ -652,8 +652,8 @@ struct Ide:
         self.set_target_label()
         self.build_msg = "building " + target + "..."
 
-    def targets_as_items(self) -> list<sh_mod.PalItem>:
-        out: list<sh_mod.PalItem> = []
+    def targets_as_items(self) -> List<sh_mod.PalItem>:
+        out: List<sh_mod.PalItem> = []
         for t in self.build_targets:
             out.append(sh_mod.PalItem(t, t, 0))
         return out
@@ -732,7 +732,7 @@ def new_ide(sh: sh_mod.Shell) -> Ide:
     return ide
 
 
-def ide_commands(ide: Ide) -> list<sh_mod.Command>:
+def ide_commands(ide: Ide) -> List<sh_mod.Command>:
     """The nine the IDE adds. They close over `ide`, which is how the shell runs
     them while knowing nothing about it."""
     return [
@@ -780,11 +780,11 @@ const PAGE_PACKAGES: int = 2
 const PAGE_TERMINAL: int = 3
 
 
-def dock_pages() -> list<str>:
+def dock_pages() -> List<str>:
     return ["Build", "Tests", "Packages", "Terminal"]
 
 
-def dock_icons() -> list<int>:
+def dock_icons() -> List<int>:
     return [ico.ICO_HAMMER, ico.ICO_FLASK_CONICAL, ico.ICO_PACKAGE,
             ico.ICO_TERMINAL]
 
@@ -906,7 +906,7 @@ def build_shell(ide: Ide):
     apply_config(ide, ide.conf)
 
 
-def first_position(text: str) -> list<str>:
+def first_position(text: str) -> List<str>:
     """`file:line:column: error: ...` -> [file, line, column], or [].
 
     The format the compiler already uses, and the one `pforge` copied on purpose

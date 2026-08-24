@@ -21,7 +21,7 @@ def hex_nib(c: int) -> int:
 
 
 def unhex_text(s: str) -> str:
-    bs: list<u8> = []
+    bs: List<u8> = []
     i = 0
     n = len(s)
     while i + 1 < n:
@@ -34,8 +34,8 @@ def unhex_text(s: str) -> str:
     return url.decode_utf8(bs)
 
 
-def components(u: url.Url) -> list<str>:
-    out: list<str> = []
+def components(u: url.Url) -> List<str>:
+    out: List<str> = []
     out.append("href=" + url.href(u))
     out.append("protocol=" + u.scheme + ":")
     out.append("username=" + u.username)
@@ -54,8 +54,8 @@ def components(u: url.Url) -> list<str>:
 
 # The base is parsed first, and its own failure makes the case fail — which is
 # what a browser does with a base it cannot read.
-def run_case(input_s: str, base_s: str) -> list<str>:
-    failed: list<str> = ["failure"]
+def run_case(input_s: str, base_s: str) -> List<str>:
+    failed: List<str> = ["failure"]
     base = url.blank_url()
     has_base = False
     if base_s != "-":

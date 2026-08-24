@@ -22,7 +22,7 @@ record Pt:
 
 shared tally: int = 0
 shared label: str = "start"
-shared seen: dict<str, int> = {}
+shared seen: Dict<str, int> = {}
 
 
 def talker(n: int) -> str:
@@ -30,16 +30,16 @@ def talker(n: int) -> str:
     return "done"
 
 
-def counter(n: int) -> list<int>:
-    out: list<int> = []
+def counter(n: int) -> List<int>:
+    out: List<int> = []
     for i in range(n):
         out.append(i * i)
     parent.send(out)
     return out
 
 
-def shaper(n: int) -> list<Pt>:
-    out: list<Pt> = []
+def shaper(n: int) -> List<Pt>:
+    out: List<Pt> = []
     for i in range(n):
         out.append(Pt(i, -i))
     parent.send(out)
@@ -58,7 +58,7 @@ def bookkeeper(n: int) -> int:
     return n
 
 
-def filler(b: buffer, n: int) -> int:
+def filler(b: Buffer, n: int) -> int:
     px = b.view_f64()
     for i in range(n):
         px[i] = float(i) * 1.5
@@ -93,7 +93,7 @@ print("worker did", await d.recv())
 print("tally", tally, "label", label, "table", seen["w"])
 
 # a buffer whose bytes are TRANSFERRED: the sender may not touch them again
-buf = buffer(8 * 4)
+buf = Buffer(8 * 4)
 e = spawn(filler, (transfer(buf), 4))
 print("filled", await e.recv())
 try:

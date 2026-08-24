@@ -1,9 +1,9 @@
-def total(first: int, *xs: list<int>) -> int:
+def total(first: int, *xs: List<int>) -> int:
     s = first
     for x in xs:
         s += x
     return s
-def join(sep: str, *ws: list<str>) -> str:
+def join(sep: str, *ws: List<str>) -> str:
     out = ""
     for w in ws:
         if len(out) > 0:

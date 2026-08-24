@@ -2,7 +2,7 @@
 
 `any` and `def` are separate universals on purpose: they have different natural
 sizes, and putting a function inside `any` would make every `any` in the
-program — `list<any>` above all — pay for the worst case. So a function value
+program — `List<any>` above all — pay for the worst case. So a function value
 stays {fp, env, sig}, and the descriptor travels with it.
 
 Calling one takes narrowing first (29.4), and narrowing is CHECKED: one
@@ -19,7 +19,7 @@ def scale(v: float) -> float:
 def count(a: int, b: int) -> int:
     return a + b
 
-table: dict<str, def> = {}
+table: Dict<str, def> = {}
 table["save"] = save
 table["scale"] = scale
 table["count"] = count

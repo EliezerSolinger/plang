@@ -74,7 +74,7 @@ rng_state: u64 = 88172645463325252
 
 # shared = synchronized across workers, one lock per variable (42.1, 42.3)
 shared rows_done = 0
-shared times: dict<int, float>         # ETS table: time per worker (42.1)
+shared times: Dict<int, float>         # ETS table: time per worker (42.1)
 
 
 def seed(s: u64):
@@ -112,7 +112,7 @@ private def intersect_sphere(in s: Sphere, in r: Ray) -> float:
         return t
     return 0.0
 
-private def intersect(scene: list<Sphere>, in r: Ray) -> (float, int)?:
+private def intersect(scene: List<Sphere>, in r: Ray) -> (float, int)?:
     """(distance, index) of the nearest hit, or None (9.4)."""
     best = 1e20
     found = -1
@@ -128,14 +128,14 @@ private def intersect(scene: list<Sphere>, in r: Ray) -> (float, int)?:
 
 # ------------------------------------------------------------------ radiance
 
-def max_of(*xs: list<float>) -> float:     # *args = sugar over list (44.2)
+def max_of(*xs: List<float>) -> float:     # *args = sugar over list (44.2)
     m = xs[0]
     for v in xs:
         if v > m:
             m = v
     return m
 
-def radiance(scene: list<Sphere>, in r: Ray, depth: int = 0) -> Vec:
+def radiance(scene: List<Sphere>, in r: Ray, depth: int = 0) -> Vec:
     """Recursive Monte Carlo. Does NOT allocate: Vec is a value (52.1/56) —
     the whole hot loop runs on the stack and the collector never fires here."""
     hit = intersect(scene, in r)
@@ -222,7 +222,7 @@ struct Rows implements Iterable:
         return y
 
 def render(wid: int, n_workers: int, width: int, height: int, spp: int,
-           scene: list<Sphere>, fb: Buffer):
+           scene: List<Sphere>, fb: Buffer):
     """Worker body (35.1): own heap, collector and RNG. Writes into the shared
     framebuffer (52.3) and counts rows in the shared var (42.1)."""
     global rows_done
@@ -266,11 +266,11 @@ def render(wid: int, n_workers: int, width: int, height: int, spp: int,
 # ------------------------------------------------------------------ JSON scene
 
 private def vec_from(o: any) -> Vec:
-    trio = o as list<any>                      # unboxing is `as`, checked (55.2)
+    trio = o as List<any>                      # unboxing is `as`, checked (55.2)
     return Vec(trio[0] as float, trio[1] as float, trio[2] as float)
 
 private def sphere_from(o: any) -> Sphere:
-    m = o as dict<str, any>
+    m = o as Dict<str, any>
     kind_s = m["kind"] as str
     if kind_s not in MATERIALS:                # set + not in (8.1)
         raise error(f"unknown material: {kind_s}")
@@ -278,16 +278,16 @@ private def sphere_from(o: any) -> Sphere:
     return Sphere(rad=m["rad"] as float, pos=vec_from(m["pos"]),
                   emit=vec_from(m["emit"]), color=vec_from(m["color"]), kind=kind)
 
-def load_scene(path: str) -> list<Sphere>:
+def load_scene(path: str) -> List<Sphere>:
     """JSON -> scene. Exercises json.parse -> any and checked navigation (41.1)."""
     with open(path, "r") as f:                 # 48.1; failure raises category io
         raw = json.parse(f.read())
-    return [sphere_from(o) for o in raw as list<any>]   # comprehension (8.1)
+    return [sphere_from(o) for o in raw as List<any>]   # comprehension (8.1)
 
 
 # ------------------------------------------------------------------ output
 
-def save_ppm(path: str, px: list<f64>, width: int, height: int,
+def save_ppm(path: str, px: List<f64>, width: int, height: int,
              tone: def(float) -> float):       # function as parameter (28.1)
     """PPM P3, with pluggable tone mapping."""
     with open(path, "w") as f:
@@ -343,9 +343,9 @@ assert width > 0 and height > 0, "bad dimensions"        # assert (46.4)
 assert samples >= 4, "at least 4 samples"
 spp = samples // 4                              # // floor (39.1): 4 subpixels
 
-# tone mapping: dict<str, def> — callbacks by name, visible in the type (29.3)
+# tone mapping: Dict<str, def> — callbacks by name, visible in the type (29.3)
 gamma = 2.2
-tonemaps: dict<str, def> = {
+tonemaps: Dict<str, def> = {
     "gamma":    lambda v: clamp01(v) ** (1.0 / gamma),   # capture by value (19.2)
     "linear":   lambda v: clamp01(v),
     "reinhard": lambda v: clamp01(v / (1.0 + v)) ** (1.0 / gamma),
@@ -360,7 +360,7 @@ scene = load_scene(scene_path) if scene_path else [s for s in SCENE]   # T[N] ->
 
 print(f"smallpt {width}x{height}, {samples} samples/pixel, {n_workers} workers")
 
-with buffer(width * height * 3 * 8) as fb:      # shared buffer + with (19.4)
+with Buffer(width * height * 3 * 8) as fb:      # shared Buffer + with (19.4)
     ws = [spawn(render, (wid, n_workers, width, height, spp, scene, fb))
           for wid in range(n_workers)]          # spawn (35.1) in a comprehension
 

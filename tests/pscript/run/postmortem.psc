@@ -25,7 +25,7 @@ record Pt:
 
 struct Caixa:
     nome: str
-    pts: list<Pt>
+    pts: List<Pt>
 
 enum Cor:
     VERDE
@@ -33,8 +33,8 @@ enum Cor:
 
 def fundo(c: Caixa, quantos: int) -> int:
     etiqueta = "no fundo"
-    tags: list<str> = ["a", "b"]
-    mapa: dict<str, int> = {"k": 1}
+    tags: List<str> = ["a", "b"]
+    mapa: Dict<str, int> = {"k": 1}
     raise error("estourou de propósito")
 
 def meio(c: Caixa) -> int:

@@ -193,7 +193,7 @@ struct Node:
     hover: bool          # computed by the input (read-only for the app)
     pressed: bool
 
-    cmds: list<Cmd>      # the RETAINED list
+    cmds: List<Cmd>      # the RETAINED list
 
     vertical: bool       # box, split, scrollbar
     offset: int          # split: the first child's size, in axis pixels
@@ -205,10 +205,10 @@ struct Node:
     total: int           # scrollbar: the content
     page: int            #            the visible part
     value: int           #            the position
-    rows: list<ListRow>  # list: what to show
+    rows: List<ListRow>  # list: what to show
     top: int             #       the first visible row
     sel: int             #       the selected one (-1 = none)
-    tabs: list<TabItem>  # tabs: the strip
+    tabs: List<TabItem>  # tabs: the strip
     tab_hover: int       #       which one the mouse is over (-1 = none)
     tab_hover_x: bool    #       ... and whether it is over its ×
 
@@ -299,7 +299,7 @@ def new_node_blank() -> Node:
 
 
 struct Ui:
-    nodes: list<Node>
+    nodes: List<Node>
     free_head: int       # freelist, chained through next_sibling
     root: int
     focus: int           # keyboard focus: exactly one (Godot's model)
@@ -314,7 +314,7 @@ struct Ui:
     lay_h: int
     needs_draw: bool     # something went dirty since the last draw: the loop looks
                          #   at this instead of repainting on every event
-    floats: list<int>    # collected during a draw: the floating layer
+    floats: List<int>    # collected during a draw: the floating layer
 
     # ---------- the tree ----------
 
@@ -476,7 +476,7 @@ struct Ui:
         self.nodes[id].focusable = True
         return id
 
-    def list_set(self, id: int, rows: list<ListRow>):
+    def list_set(self, id: int, rows: List<ListRow>):
         """Replaces the content. The selection is kept if it still exists, which
         is what a list that is being FILTERED as somebody types has to do."""
         nd = self.nodes[id]
@@ -488,7 +488,7 @@ struct Ui:
         self.list_reveal(id)
         self.queue_redraw(id)
 
-    def list_rows(self, id: int) -> list<ListRow>:
+    def list_rows(self, id: int) -> List<ListRow>:
         return self.nodes[id].rows
 
     def list_sel(self, id: int) -> int:
@@ -541,7 +541,7 @@ struct Ui:
         id = self.new_node(WK_TABS, parent)
         return id
 
-    def tabs_set(self, id: int, items: list<TabItem>):
+    def tabs_set(self, id: int, items: List<TabItem>):
         nd = self.nodes[id]
         nd.tabs = items
         if nd.sel >= len(items):
@@ -754,7 +754,7 @@ struct Ui:
         if id >= 0:
             self.queue_redraw(id)
 
-    def focus_walk(self, id: int, out: list<int>):
+    def focus_walk(self, id: int, out: List<int>):
         if not self.is_vis(id):
             return
         if self.nodes[id].focusable:
@@ -764,10 +764,10 @@ struct Ui:
             self.focus_walk(c, out)
             c = self.nodes[c].next_sibling
 
-    def focusables(self) -> list<int>:
+    def focusables(self) -> List<int>:
         """Everything that can hold the keyboard, in DRAWING order — which is
         the order somebody reading the window would go through them."""
-        out: list<int> = []
+        out: List<int> = []
         if self.root >= 0:
             self.focus_walk(self.root, out)
         return out

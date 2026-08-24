@@ -8,7 +8,7 @@ reader exists.
 
 import <tar/tar.psc> as tar
 
-e: list<int> = [0, 0]
+e: List<int> = [0, 0]
 
 
 def check(name: str, cond: bool):
@@ -19,16 +19,16 @@ def check(name: str, cond: bool):
         print("  FAILED: " + name)
 
 
-def bs(s: str) -> list<u8>:
+def bs(s: str) -> List<u8>:
     return tar.bytes_of(s)
 
 
-def txt(b: list<u8>) -> str:
+def txt(b: List<u8>) -> str:
     return str(b)
 
 
 # ---------- the round trip ----------
-ms: list<tar.Member> = [
+ms: List<tar.Member> = [
     tar.directory("pkg", 0o755, 1700000000),
     tar.file("pkg/pack.json", bs("{\"name\": \"x\"}"), 0o644, 1700000001),
     tar.file("pkg/empty.txt", bs(""), 0o644, 1700000002),
@@ -101,7 +101,7 @@ def refused_kind() -> int:
 
 def ends_halfway() -> int:
     whole = tar.write([tar.file("a.txt", bs("x" * 600), 0o644, 1)])
-    cut: list<u8> = []
+    cut: List<u8> = []
     for i in range(700):
         cut.append(whole[i])
     return len(tar.read(cut))

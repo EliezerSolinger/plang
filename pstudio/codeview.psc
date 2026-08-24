@@ -101,16 +101,16 @@ struct CodeView:
     path: str              # "" = a loose buffer, with no file
     # F5: the project's other files, put here by the shell when somebody asks
     # for a definition. Empty until then — nothing is read at startup.
-    sources: list<cmp.Source>
+    sources: List<cmp.Source>
     u: pui.Ui              # the toolkit that draws it
     id: int                # this widget's id in the pool
     vsb: int               # the vertical bar (internal child)
     hsb: int               # the horizontal one
     top: int               # first visible line
     left: int              # first visible SCREEN COLUMN (tabs expanded)
-    gutters: list<Gutter>
+    gutters: List<Gutter>
     cmp_open: bool         # the popup is showing
-    cmp_hits: list<int>
+    cmp_hits: List<int>
     cmp_sel: int
     cmp_top: int           # first line shown in the popup
     cmp_col: int           # column where the word being completed starts
@@ -120,7 +120,7 @@ struct CodeView:
     caret_on: bool         # blink phase (the app toggles it on timeout)
     mouse_sel: bool        # dragging a selection
     mtime: int             # the file's mtime at the last read
-    clip: list<str>        # the pieces of the last copy (one per cursor)
+    clip: List<str>        # the pieces of the last copy (one per cursor)
     dirty_cb: bool         # something changed and the app has not looked yet
     now_ms: int            # the clock, set by the app every frame — the input
                            #   comes from the toolkit, which knows nothing of time
@@ -607,7 +607,7 @@ struct CodeView:
         N pieces for the multi-cursor paste. "" = there was no selection."""
         if not self.buf.has_sel():
             return ""
-        parts: list<str> = []
+        parts: List<str> = []
         for k in range(self.buf.ncarets()):
             parts.append(self.buf.sel_text(k))
         self.clip = parts

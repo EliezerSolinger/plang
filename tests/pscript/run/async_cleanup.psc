@@ -18,7 +18,7 @@ an exception is unwinding, and waiting in the middle of an unwind would make
 the cleanup itself a state.
 """
 
-order: list<str> = []
+order: List<str> = []
 
 PATH: str = "async_cleanup_demo.txt"
 

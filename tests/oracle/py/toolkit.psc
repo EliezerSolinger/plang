@@ -14,8 +14,8 @@ aqui vem da inserção (91.1). O que se compara é o conteúdo ordenado.
 xs = [3, 1, 4, 1, 5, 9, 2, 6]
 fs = [1.5, -2.5, 3.0]
 ws = ["pera", "abacate", "uva"]
-mt: list<int> = []
-mb: list<bool> = []
+mt: List<int> = []
+mb: List<bool> = []
 
 # ---- sum, any, all ----
 print(sum(xs), sum(fs), sum(xs, 100), sum(mt))

@@ -15,7 +15,7 @@ not honour the async frame, so `for k in d` inside an `async def` read a field
 nothing had written — and crashed. `for ch in s` next door was right all along.
 """
 
-d: dict<str, int> = {"zebra": 26, "apple": 1, "mango": 13}
+d: Dict<str, int> = {"zebra": 26, "apple": 1, "mango": 13}
 
 for k, v in d.items():
     print(f"{k} -> {v}")
@@ -26,7 +26,7 @@ print(f"keys {len(ks)}: {ks[0]} {ks[1]} {ks[2]}")
 print(f"values {len(vs)}: {vs[0]} {vs[1]} {vs[2]}")
 
 # a set has keys and nothing else
-s: set<int> = {5, 7, 5}
+s: Set<int> = {5, 7, 5}
 print(f"set keys {len(s.keys())}")
 
 # the copy is a real list: sorting it does not touch the dict
@@ -39,14 +39,14 @@ print(f"after remove {len(d)}, copy still {len(ks)}")
 
 
 async def in_async() -> int:
-    e: dict<str, int> = {"a": 1, "b": 2, "c": 3}
+    e: Dict<str, int> = {"a": 1, "b": 2, "c": 3}
     seen = ""
     total = 0
     for k in e:
         seen += k
     for k2, v2 in e.items():
         total += v2
-    t: set<int> = {4, 6}
+    t: Set<int> = {4, 6}
     tsum = 0
     for x in t:
         tsum += x

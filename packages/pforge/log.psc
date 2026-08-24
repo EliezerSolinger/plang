@@ -93,7 +93,7 @@ def from_hex(s: str) -> u64:
 # ---------- the log ----------
 struct Log:
     p: str
-    ents: dict<str, LogEnt>
+    ents: Dict<str, LogEnt>
     dirty: bool
 
     def get(self, key: str) -> LogEnt:
@@ -143,7 +143,7 @@ async def save(lg: Log):
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
     out = LOG_HEADER + "\n"
-    ks: list<str> = []
+    ks: List<str> = []
     for k in lg.ents:
         ks.append(k)
     ks = sorted(ks)     # sorted: two identical builds give identical logs
@@ -162,8 +162,8 @@ async def save(lg: Log):
 # which headers it read), and this is the price — thirty lines of parser. On OUR
 # side the compiler answers question 1 of the protocol and none of this is
 # needed.
-def parse_depfile(txt: str) -> list<str>:
-    out: list<str> = []
+def parse_depfile(txt: str) -> List<str>:
+    out: List<str> = []
     # join the continuations and turn every separator into a space
     flat = ""
     i = 0

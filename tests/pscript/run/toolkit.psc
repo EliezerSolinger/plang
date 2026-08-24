@@ -10,7 +10,7 @@ struct Cliente:
     nome: str
     saldo: int
 
-mt: list<int> = []
+mt: List<int> = []
 
 try:
     print(str(min(mt)))
@@ -38,7 +38,7 @@ try:
 catch e:
     print(f"pop 7: {e.message}")
 try:
-    d: dict<str, int> = {}
+    d: Dict<str, int> = {}
     print(str(d.pop("nada")))
 catch e:
     print(f"dict pop: {e.message}")

@@ -47,7 +47,7 @@ print("characters:", len(big), "sum:", total)
 
 # a collection in the middle does not lose the index: it is a collected object
 # like any other
-junk: list<str> = []
+junk: List<str> = []
 for i in range(2000):
     junk.append("x" + str(i))
 print("after the collection:", big[599], len(big))

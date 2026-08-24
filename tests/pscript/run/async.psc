@@ -10,7 +10,7 @@ one case per stretch between awaits — because P forbids `goto` in a function
 with `defer` and 50.1 chose the C# shape for exactly that reason.
 """
 
-trace: list<str> = []
+trace: List<str> = []
 
 
 async def double(x: int) -> int:

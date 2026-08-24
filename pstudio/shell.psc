@@ -180,19 +180,19 @@ struct Shell:
     palette: int
     palinput: int
 
-    tabs: list<Tab>
+    tabs: List<Tab>
     cur: int           # aba ativa (-1 = nenhuma)
-    entries: list<TreeEntry>
+    entries: List<TreeEntry>
     tree_top: int
     root_dir: str
     palmode: PalMode
-    palitems: list<PalItem>
+    palitems: List<PalItem>
     pallist: int       # the palette's rows: a WK_LIST since F5, not a hand-drawn one
-    files: list<PalItem>
-    commands: list<Command>
+    files: List<PalItem>
+    commands: List<Command>
     # PAL_LIST / PAL_ASK: what was supplied, what is being asked, and who wants
     # the answer. Three fields, and none of them knows what a build is.
-    pal_items: list<PalItem>
+    pal_items: List<PalItem>
     pal_prompt: str
     pal_answer: (def(str))?
     find_re: bool      # regex search (the query starts with '/')
@@ -205,7 +205,7 @@ struct Shell:
     # a FIELD: whoever needs a faster loop lowers it, and `pcode` never does.
     wait_ms: int
     want_open: str     # 114: a file the app wants and the driver has to READ
-    want_reload: list<str>   # ... and the ones whose cached text is STALE
+    want_reload: List<str>   # ... and the ones whose cached text is STALE
     want_msg: str      # a message for the status bar (a write failure)
     # F5: searching the whole PROJECT. Reading files is `await`, so it is a
     # request like any other — the editor says what to look for and the driver
@@ -221,7 +221,7 @@ struct Shell:
     # empty. Now it is filled, ON DEMAND: nothing is read at startup, and the
     # first time somebody asks for a definition the driver goes and reads.
     want_index: bool
-    sources: list<cmp.Source>
+    sources: List<cmp.Source>
     pending_goto: str      # the name to find once the sources arrive
     # ---- the driver, injected by `app.psc` ----
     read_file: (def(str) -> ReadOut)?
@@ -400,15 +400,15 @@ struct Shell:
     def dir_rows(self, dir: str, depth: int, at: int) -> int:
         """Inserts a directory's rows at `at`, directories first. Returns where
         the insertion stopped."""
-        names: list<str> = []
+        names: List<str> = []
         if not path.isdir(dir):
             return at
         try:
             names = os.listdir(dir)
         catch e:
             return at
-        dirs: list<str> = []
-        files: list<str> = []
+        dirs: List<str> = []
+        files: List<str> = []
         for nm in names:
             if is_hidden(nm):
                 continue
@@ -429,7 +429,7 @@ struct Shell:
         """The palette's index: a recursive scan, with a ceiling."""
         if depth > 8 or len(self.files) >= MAX_SCAN:
             return len(self.files)
-        names: list<str> = []
+        names: List<str> = []
         try:
             names = os.listdir(dir)
         catch e:
@@ -510,7 +510,7 @@ struct Shell:
         self.pal_answer = answer
         self.palette_open(PAL_ASK)
 
-    def palette_choose(self, prompt: str, items: list<PalItem>, answer: def(str)):
+    def palette_choose(self, prompt: str, items: List<PalItem>, answer: def(str)):
         """The same, over a list SOMEBODY ELSE supplied."""
         self.pal_prompt = prompt
         self.pal_items = items
@@ -643,7 +643,7 @@ struct Shell:
         self.want_search = needle
         self.want_msg = "searching for " + needle + " ..."
 
-    def search_ready(self, needle: str, hits: list<PalItem>):
+    def search_ready(self, needle: str, hits: List<PalItem>):
         """The driver came back. The hits go through the same palette everything
         else goes through — `pcode` has no panels, and a result list that only
         existed in the IDE would be the editor losing what makes an editor."""
@@ -717,7 +717,7 @@ struct Shell:
         self.want_msg = "reading the project to find " + name + " ..."
         self.dirty_ui = True
 
-    def index_ready(self, srcs: list<cmp.Source>):
+    def index_ready(self, srcs: List<cmp.Source>):
         """The driver read the project. The sources are the SHELL's — every tab
         shares them, because a symbol does not stop existing when you change
         file."""
@@ -768,7 +768,7 @@ struct Shell:
 
     # ---------- commands ----------
 
-    def add_commands(self, cs: list<Command>):
+    def add_commands(self, cs: List<Command>):
         """How the IDE extends the editor, and the only direction that exists:
         `ide.psc` knows `shell.psc`, and `shell.psc` has never heard of it."""
         for c in cs:
@@ -1058,8 +1058,8 @@ struct Shell:
 
     # ---------- the app's three widgets ----------
 
-    def tab_items(self) -> list<pui.TabItem>:
-        out: list<pui.TabItem> = []
+    def tab_items(self) -> List<pui.TabItem>:
+        out: List<pui.TabItem> = []
         for t in self.tabs:
             out.append(pui.TabItem(t.title, icon_of(t.title, False, False),
                                    t.cv.buf.dirty, True))
@@ -1069,14 +1069,14 @@ struct Shell:
         self.u.tabs_set(self.tabbar, self.tab_items())
         self.u.tabs_set_sel(self.tabbar, self.cur)
 
-    def tree_rows(self) -> list<pui.ListRow>:
+    def tree_rows(self) -> List<pui.ListRow>:
         """The tree, as rows. A tree IS a list that uses `depth` — the widget
         never learns what a directory is, and the arrow is just a prefix."""
         cur = ""
         cv = self.cur_cv()
         if cv != None:
             cur = cv.path
-        out: list<pui.ListRow> = []
+        out: List<pui.ListRow> = []
         for e in self.entries:
             mark = not e.is_dir and len(cur) > 0 and cur == e.fullpath
             out.append(pui.ListRow(e.name, "", e.depth, "",
@@ -1144,8 +1144,8 @@ struct Shell:
                 return ico.ICO_SEARCH
         return pui.ICON_NONE
 
-    def pal_rows(self) -> list<pui.ListRow>:
-        out: list<pui.ListRow> = []
+    def pal_rows(self) -> List<pui.ListRow>:
+        out: List<pui.ListRow> = []
         for it in self.palitems:
             out.append(pui.ListRow(it.label, "", 0, "", self.pal_icon(it),
                                    pui.TONE_NORMAL, False))
@@ -1255,7 +1255,7 @@ def has_cv(s: Shell) -> bool:
     return s.cur_cv() != None
 
 
-def editor_commands() -> list<Command>:
+def editor_commands() -> List<Command>:
     """The twenty-eight the EDITOR has.
 
     Everything here works on a buffer, a tab or the tree. Nothing here knows what

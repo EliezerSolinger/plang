@@ -39,7 +39,7 @@ const LIMIT = 64
 shared counter: int = 0
 
 
-private def helper(in p: Point, scale: float = 1.0, *rest: list<int>) -> float:
+private def helper(in p: Point, scale: float = 1.0, *rest: List<int>) -> float:
     return p.x * scale
 
 
@@ -48,7 +48,7 @@ async def worker(id: int) -> int:
     return id
 
 
-def kitchen_sink(items: list<int>, table: dict<str, def>, maybe: int?) -> (int, str)?:
+def kitchen_sink(items: List<int>, table: Dict<str, def>, maybe: int?) -> (int, str)?:
     total = 0
     total += 1
     total **= 2

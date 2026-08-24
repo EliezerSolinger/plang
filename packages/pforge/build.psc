@@ -78,13 +78,13 @@ struct Build:
     lg: L.Log
     op: Opts
     rep: Rep
-    ready: list<int>       # ready edges, the most expensive at the front
+    ready: List<int>       # ready edges, the most expensive at the front
     running: int           # how many edges are IN FLIGHT right now
     fails: int
     total: int             # how many edges the plan will run
     console: bool          # a terminal edge is running: nothing else starts
-    errs: list<str>        # hygiene: what stops the build from being trustworthy
-    why: dict<str, str>    # explain: why each output is dirty
+    errs: List<str>        # hygiene: what stops the build from being trustworthy
+    why: Dict<str, str>    # explain: why each output is dirty
 
 # ---------- hygiene ----------
 # Three things are ERRORS, not warnings, because each one breaks the correctness
@@ -217,7 +217,7 @@ private async def stamp_restat(b: Build):
                 n.mtime = ent.mtime
 
 # ---------- the plan ----------
-private def want_node(b: Build, nid: int, stack: list<int>) -> bool:
+private def want_node(b: Build, nid: int, stack: List<int>) -> bool:
     """Marks what has to be built for `nid` to exist and be up to date. Returns
     whether the node ended up dirty. It is recursive and keeps the stack, because
     a cycle here is the only way for the engine to spin forever."""
@@ -302,8 +302,8 @@ private def cost(e: G.Edge) -> int:
     return 1000     # never ran: a one-second guess, so it does not end up last
 
 private def critical_path(b: Build):
-    order: list<int> = []
-    seen: list<bool> = []
+    order: List<int> = []
+    seen: List<bool> = []
     for _e in b.g.edges:
         seen.append(False)
     # topological order: a producer appears BEFORE whoever consumes it
@@ -331,7 +331,7 @@ private def critical_path(b: Build):
                     pe2.cpw = cand2
         i -= 1
 
-private def visit_topo(b: Build, eid: int, seen: list<bool>, order: list<int>):
+private def visit_topo(b: Build, eid: int, seen: List<bool>, order: List<int>):
     if seen[eid]:
         return
     seen[eid] = True
@@ -584,7 +584,7 @@ private def time_ms() -> int:
     return int(time.monotonic() * 1000.0)
 
 # ---------- the facade ----------
-async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep) -> bool:
+async def build(g: G.Graph, logpath: str, targets: List<str>, op: Opts, rep: Rep) -> bool:
     """Builds `targets` (or the graph's default). Returns whether it worked.
 
     The phases are here in the order the design names them: PLAN (what is stale),
@@ -612,7 +612,7 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
         for n in g.nodes:
             if n.gen >= 0 and len(n.used) == 0:
                 tl.append(n.p)
-    stack: list<int> = []
+    stack: List<int> = []
     for t in tl:
         if t not in g.by_path:
             err(b, "unknown target: " + t)
@@ -642,7 +642,7 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
         # until nothing is in flight any more. Whoever finds no work and sees
         # someone running waits a millisecond and looks again — that is the price
         # of having no signalling, and it is only paid while an arm is IDLE.
-        arms: list<Task<int>> = []
+        arms: List<Task<int>> = []
         n = b.op.jobs if b.op.jobs > 0 else 1
         for i in range(n):
             arms.append(pump(b))
@@ -652,7 +652,7 @@ async def build(g: G.Graph, logpath: str, targets: list<str>, op: Opts, rep: Rep
     rep.on_done(ok, b.fails + len(b.errs))
     return ok
 
-async def why_dirty(g: G.Graph, logpath: str, targets: list<str>) -> dict<str, str>:
+async def why_dirty(g: G.Graph, logpath: str, targets: List<str>) -> Dict<str, str>:
     """`--explain`, and it is a QUERY and not an event: it runs only the PLAN and
     returns, per output, the reason it is dirty. It stays out of the event stream
     on purpose — the reason is almost never read, and carrying it in every event
@@ -667,11 +667,11 @@ async def why_dirty(g: G.Graph, logpath: str, targets: list<str>) -> dict<str, s
     tl = targets
     if len(tl) == 0:
         tl = g.default_targets
-    stack: list<int> = []
+    stack: List<int> = []
     for t in tl:
         if t in g.by_path:
             want_node(b, g.by_path[t], stack)
     return b.why
 
-def errors(b: Build) -> list<str>:
+def errors(b: Build) -> List<str>:
     return b.errs

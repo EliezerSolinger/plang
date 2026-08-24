@@ -45,7 +45,7 @@ same = unpack<Sphere>(pack(s, LE), LE)
 print(same.pos.z)
 
 try:
-    tiny: list<u8> = [1, 2, 3]
+    tiny: List<u8> = [1, 2, 3]
     bad = unpack<Sphere>(tiny)
     print("unreachable", bad.id)
 catch e:

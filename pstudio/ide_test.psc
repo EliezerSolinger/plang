@@ -34,7 +34,7 @@ async def build_project():
 
 await build_project()
 
-files: dict<str, str> = {D + "/main.p": "def main() -> i32:\n    x: i32 = 1\n    return x\n"}
+files: Dict<str, str> = {D + "/main.p": "def main() -> i32:\n    x: i32 = 1\n    return x\n"}
 
 u = pui.new_ui(8, 17)
 sh = sh_mod.new_shell(u, D)

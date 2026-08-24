@@ -37,7 +37,7 @@ def describe(s: dyn Shape) -> str:
     return f"{s.name()} {s.area()}"
 
 
-shapes: list<dyn Shape> = [Circle(1.0), Rect(2.0, 3.0), Circle(2.0)]
+shapes: List<dyn Shape> = [Circle(1.0), Rect(2.0, 3.0), Circle(2.0)]
 total = 0.0
 for s in shapes:
     print(describe(s))

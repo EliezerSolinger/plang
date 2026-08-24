@@ -77,9 +77,9 @@ struct EditOp:
 
 
 struct UndoGroup:
-    ops: list<EditOp>
-    before: list<Caret>
-    after: list<Caret>
+    ops: List<EditOp>
+    before: List<Caret>
+    after: List<Caret>
 
 
 # ---------- helpers ----------
@@ -115,10 +115,10 @@ def adj_del_pos(r: Span, pl: int, pc: int) -> Caret:
 
 
 struct TextBuffer:
-    lines: list<BufLine>
-    carets: list<Caret>        # ALWAYS >= 1, sorted by position
-    undo: list<UndoGroup>
-    redo: list<UndoGroup>
+    lines: List<BufLine>
+    carets: List<Caret>        # ALWAYS >= 1, sorted by position
+    undo: List<UndoGroup>
+    redo: List<UndoGroup>
     group_open: bool
     last_ms: int
     crlf: bool                 # the EOL found on load, preserved on save
@@ -160,7 +160,7 @@ struct TextBuffer:
         every rebuild of the completion index, so the biggest file in this
         repository (11 076 lines) used to freeze the editor for over a second,
         twice."""
-        parts: list<str> = []
+        parts: List<str> = []
         for l in self.lines:
             parts.append(l.text)
         return ("\r\n" if self.crlf else "\n").join(parts)
@@ -205,7 +205,7 @@ struct TextBuffer:
         # spans the whole file went down the same quadratic path
         if r.l0 == r.l1:
             return self.line_text(r.l0)[r.c0:r.c1]
-        parts: list<str> = [self.line_text(r.l0)[r.c0:]]
+        parts: List<str> = [self.line_text(r.l0)[r.c0:]]
         for l in range(r.l0 + 1, r.l1):
             parts.append(self.line_text(l))
         parts.append(self.line_text(r.l1)[0:r.c1])
@@ -220,8 +220,8 @@ struct TextBuffer:
 
     # ---------- undo bookkeeping ----------
 
-    def snap(self) -> list<Caret>:
-        out: list<Caret> = []
+    def snap(self) -> List<Caret>:
+        out: List<Caret> = []
         for c in self.carets:
             out.append(c)
         return out
@@ -261,7 +261,7 @@ struct TextBuffer:
         if not ("\n" in text):
             cur.text = head + text + tail
             return end
-        parts: list<str> = []
+        parts: List<str> = []
         acc = ""
         for ch in text:
             if ch == "\n":
@@ -341,7 +341,7 @@ struct TextBuffer:
                 else:
                     j = 0
             i += 1
-        out: list<Caret> = []
+        out: List<Caret> = []
         for c in self.carets:
             keep = True
             for d in out:
@@ -697,8 +697,8 @@ struct TextBuffer:
                 return Span(l, col, l, col + len(needle))
         return None
 
-    def find_all(self, needle: str) -> list<Span>:
-        out: list<Span> = []
+    def find_all(self, needle: str) -> List<Span>:
+        out: List<Span> = []
         if len(needle) == 0:
             return out
         for l in range(len(self.lines)):
@@ -735,14 +735,14 @@ struct TextBuffer:
 
     # ---------- whole-line commands ----------
 
-    def line_span(self) -> list<Span>:
+    def line_span(self) -> List<Span>:
         """The blocks of whole lines the carets cover, merged when they touch.
 
         One block per caret, in order — and two that meet or are neighbours
         become one, so a command that moves lines never moves the same line
         twice.
         """
-        out: list<Span> = []
+        out: List<Span> = []
         for k in range(len(self.carets)):
             c = self.carets[k]
             lo = c.line if c.line < c.aline else c.aline
@@ -1056,7 +1056,7 @@ struct TextBuffer:
 
     # ---------- the line commands that were missing ----------
 
-    def insert_each(self, texts: list<str>, now_ms: int):
+    def insert_each(self, texts: List<str>, now_ms: int):
         """N pieces for N cursors (Sublime's model). From the bottom up, so the
         positions not yet used stay valid."""
         if len(texts) != len(self.carets):

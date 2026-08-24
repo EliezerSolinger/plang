@@ -11,7 +11,7 @@ with a message that says what the value really was. Converting between numbers
 is a different operation with a different name (`int(x)`).
 """
 
-values: list<any> = [1, 2.5, True, "text", None]
+values: List<any> = [1, 2.5, True, "text", None]
 
 print("count", len(values))
 print("int", values[0] as int)
@@ -30,9 +30,9 @@ catch e:
     print("caught:", e.message)
 
 # a dict of `any` is what a parsed document looks like (41.1)
-doc: dict<str, any> = {"name": "smallpt", "samples": 16, "gamma": 2.2}
+doc: Dict<str, any> = {"name": "smallpt", "samples": 16, "gamma": 2.2}
 print("doc", doc["name"] as str, doc["samples"] as int, doc["gamma"] as float)
 
-nested: list<any> = [[1, 2], "x"]
-inner = nested[0] as list<any>
+nested: List<any> = [[1, 2], "x"]
+inner = nested[0] as List<any>
 print("nested", len(inner), inner[1] as int)

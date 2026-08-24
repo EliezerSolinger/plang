@@ -25,12 +25,12 @@ struct Package:
     version: str
     lang: str
     dir: str
-    deps: list<str>       # the names, in the manifest's order
-    reqs: list<str>       # ... and the requirement each one asked for
+    deps: List<str>       # the names, in the manifest's order
+    reqs: List<str>       # ... and the requirement each one asked for
 
 struct World:
-    packages: list<Package>
-    missing: list<str>    # dependencies asked for that nobody offers
+    packages: List<Package>
+    missing: List<str>    # dependencies asked for that nobody offers
 
     def find(self, name: str) -> int:
         i = 0
@@ -40,9 +40,9 @@ struct World:
             i += 1
         return -1
 
-    def who_pulls(self, name: str) -> list<str>:
+    def who_pulls(self, name: str) -> List<str>:
         """The packages that depend on THIS one, in the order they appear."""
-        out: list<str> = []
+        out: List<str> = []
         for p in self.packages:
             for d in p.deps:
                 if d == name:
@@ -50,7 +50,7 @@ struct World:
         return out
 
 
-def check_languages(m: World) -> list<str>:
+def check_languages(m: World) -> List<str>:
     """The invariant that keeps P runtime-free THROUGH the packages.
 
     A `lang: p` package may not depend on a `pscript` package. The reason is not
@@ -64,7 +64,7 @@ def check_languages(m: World) -> list<str>:
     exists for exactly that.
 
     Returns the list of problems, empty when all is well."""
-    out: list<str> = []
+    out: List<str> = []
     for p in m.packages:
         if p.lang != "p":
             continue
@@ -79,7 +79,7 @@ def check_languages(m: World) -> list<str>:
     return out
 
 
-async def read_world(members: list<str>) -> World:
+async def read_world(members: List<str>) -> World:
     """Reads each workspace member's manifest. A member with no `pack.json` is
     ignored silently — the workspace may list a folder that is not a package yet,
     and refusing that would force you to edit the manifest just to experiment."""
@@ -91,8 +91,8 @@ async def read_world(members: list<str>) -> World:
         pk = await M.read(man)
         if pk.is_workspace:
             continue
-        names: list<str> = []
-        reqs: list<str> = []
+        names: List<str> = []
+        reqs: List<str> = []
         for d in pk.deps:
             names.append(d.name)
             reqs.append(d.req)
@@ -107,7 +107,7 @@ async def read_world(members: list<str>) -> World:
 
 
 # ---------- the tree ----------
-private def branch(m: World, name: str, prefix: str, last: bool, stack: list<str>) -> str:
+private def branch(m: World, name: str, prefix: str, last: bool, stack: List<str>) -> str:
     i = m.find(name)
     mark = "└─ " if last else "├─ "
     if i < 0:
@@ -137,7 +137,7 @@ def tree(m: World) -> str:
     twice — it is a tree, and not a graph drawn as a tree, because what you want
     to see is the PATH to it."""
     out = ""
-    roots: list<str> = []
+    roots: List<str> = []
     for p in m.packages:
         if len(m.who_pulls(p.name)) == 0:
             roots.append(p.name)
@@ -148,7 +148,7 @@ def tree(m: World) -> str:
             roots.append(p2.name)
     k = 0
     while k < len(roots):
-        stack: list<str> = []
+        stack: List<str> = []
         out += branch(m, roots[k], "", k == len(roots) - 1, stack)
         k += 1
     return out

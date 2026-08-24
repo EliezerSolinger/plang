@@ -77,7 +77,7 @@ async def main_task() -> int:
     print("too slow", yn(await timeout(after(50, "slow"), 0.005)))
 
     # 6. a shorter wait made LATER still finishes first
-    order: list<str> = []
+    order: List<str> = []
     long_one = after(30, "long")
     short_one = after(5, "short")
     order.append(await short_one)

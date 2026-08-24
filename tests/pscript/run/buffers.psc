@@ -9,7 +9,7 @@ Closing is explicit (19.4), which is what `with` is for.
 """
 
 
-def fill(b: buffer, wid: int, n: int, count: int) -> int:
+def fill(b: Buffer, wid: int, n: int, count: int) -> int:
     i = wid
     while i < count:
         b.set_f64(i, float(i) * 1.5)
@@ -18,10 +18,10 @@ def fill(b: buffer, wid: int, n: int, count: int) -> int:
     return wid
 
 
-with buffer(64 * 8) as fb:
+with Buffer(64 * 8) as fb:
     print("size", fb.size(), "slots", fb.size() / 8)
 
-    ws: list<Worker<int>> = []
+    ws: List<Worker<int>> = []
     w = 0
     while w < 4:
         ws.append(spawn(fill, (fb, w, 4, 64)))

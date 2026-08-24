@@ -13,9 +13,9 @@ ONE object, and an object that contains itself arrives at all.
 
 struct Node:
     label: str
-    tags: list<str>
-    kids: list<Node>
-    weights: dict<str, int>
+    tags: List<str>
+    kids: List<Node>
+    weights: Dict<str, int>
 
 
 record Pt:
@@ -23,10 +23,10 @@ record Pt:
     y: int
 
 
-def shapes(n: int) -> list<list<int>>:
-    out: list<list<int>> = []
+def shapes(n: int) -> List<List<int>>:
+    out: List<List<int>> = []
     for i in range(n):
-        row: list<int> = []
+        row: List<int> = []
         for j in range(i + 1):
             row.append(i * 10 + j)
         out.append(row)
@@ -34,24 +34,24 @@ def shapes(n: int) -> list<list<int>>:
     return out
 
 
-def names(n: int) -> list<str>:
-    out: list<str> = []
+def names(n: int) -> List<str>:
+    out: List<str> = []
     for i in range(n):
         out.append("name" + str(i))
     parent.send(out)
     return out
 
 
-def counts(n: int) -> dict<str, list<int>>:
-    d: dict<str, list<int>> = {}
+def counts(n: int) -> Dict<str, List<int>>:
+    d: Dict<str, List<int>> = {}
     for i in range(n):
         d["k" + str(i)] = [i, i * i]
     parent.send(d)
     return d
 
 
-def tagset(n: int) -> set<str>:
-    s: set<str> = {"t0"}
+def tagset(n: int) -> Set<str>:
+    s: Set<str> = {"t0"}
     for i in range(n):
         s.add("t" + str(i % 3))
     parent.send(s)
@@ -74,8 +74,8 @@ def tree(n: int) -> Node:
     return root
 
 
-def pairs(n: int) -> list<Pt>:
-    out: list<Pt> = []
+def pairs(n: int) -> List<Pt>:
+    out: List<Pt> = []
     for i in range(n):
         out.append(Pt(i, -i))
     parent.send(out)

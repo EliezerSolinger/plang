@@ -1,4 +1,4 @@
-"""The ETS table of 42.1: `shared d: dict<K, V>`.
+"""The ETS table of 42.1: `shared d: Dict<K, V>`.
 
 It lives OUTSIDE every collected heap — malloc'ed, with a lock of its own — and
 everything that goes in or comes out is a COPY. That is what lets four workers
@@ -13,9 +13,9 @@ record Conf:
     tries: int
     ratio: float
 
-shared tally: dict<str, int> = {}
-shared confs: dict<str, Conf> = {}
-shared names: dict<int, str> = {}
+shared tally: Dict<str, int> = {}
+shared confs: Dict<str, Conf> = {}
+shared names: Dict<int, str> = {}
 
 def worker(n: int) -> int:
     global tally

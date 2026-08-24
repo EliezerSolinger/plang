@@ -30,7 +30,7 @@ print(label)
 # A top-level declaration is a MODULE variable, as in Python: every function
 # sees it, and assigning it from inside one is opted into with `global` (55.3).
 rng_state: int = 7
-history: list<int> = []
+history: List<int> = []
 
 
 def next_rand() -> int:

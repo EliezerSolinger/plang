@@ -11,9 +11,9 @@ sistema de build escreve o tempo todo.
 """
 import os
 
-async def linhas(n: int) -> list<str>:
+async def linhas(n: int) -> List<str>:
     r = await os.run(["/bin/echo", "linha" + str(n)])
-    out: list<str> = []
+    out: List<str> = []
     for line in r.output().split("\n"):
         if len(line) > 0:
             out.append(line)

@@ -18,7 +18,7 @@ implement Closeable for Session:
         print("closed", self.id)
 
 
-log: list<str> = []
+log: List<str> = []
 
 s = Session(7, 1)
 with s as sess:

@@ -30,7 +30,7 @@ def worker(wid: int, rounds: int) -> int:
     return wid
 
 
-ws: list<Worker<int>> = []
+ws: List<Worker<int>> = []
 w = 0
 while w < 4:
     ws.append(spawn(worker, (w, 25000)))

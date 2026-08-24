@@ -719,7 +719,7 @@ invalidação, sem memória; os resultados aparecem à medida que chegam. Este
 repositório são ~58 mil linhas de fonte.
 
 **Ir-para-definição entre arquivos não existe** — o `index.build(buf, [])` tem um
-parâmetro `extra: list<str>` documentado para isto e sempre vazio. Passa a ser um
+parâmetro `extra: List<str>` documentado para isto e sempre vazio. Passa a ser um
 **índice do projeto construído sob demanda**: nada ao abrir, e ao pedir "ir para
 definição" de um símbolo desconhecido varre nesse momento e guarda.
 

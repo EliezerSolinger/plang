@@ -42,8 +42,8 @@ struct KnownRepo:
 
 struct Lock:
     format: int
-    repos: list<KnownRepo>
-    packages: list<Locked>
+    repos: List<KnownRepo>
+    packages: List<Locked>
 
     def find(self, name: str) -> int:
         i = 0
@@ -66,13 +66,13 @@ def new_lock() -> Lock:
     return Lock(1, [], [])
 
 
-private def txt(d: dict<str, any>, k: str) -> str:
+private def txt(d: Dict<str, any>, k: str) -> str:
     if k not in d:
         return ""
     return d[k] as str
 
 
-private def flag(d: dict<str, any>, k: str) -> bool:
+private def flag(d: Dict<str, any>, k: str) -> bool:
     if k not in d:
         return False
     return d[k] as bool
@@ -86,18 +86,18 @@ async def read(file: str) -> Lock:
     raw = await f.text()
     await f.close()
     try:
-        d = json.parse(raw) as dict<str, any>
+        d = json.parse(raw) as Dict<str, any>
         if "repos" in d:
-            rr = d["repos"] as dict<str, any>
-            urls: list<str> = []
+            rr = d["repos"] as Dict<str, any>
+            urls: List<str> = []
             for u in rr:
                 urls.append(u)
             for url in sorted(urls):
-                e = rr[url] as dict<str, any>
+                e = rr[url] as Dict<str, any>
                 lk.repos.append(KnownRepo(url, txt(e, "key"), txt(e, "first_seen")))
         if "packages" in d:
-            for item in d["packages"] as list<any>:
-                e2 = item as dict<str, any>
+            for item in d["packages"] as List<any>:
+                e2 = item as Dict<str, any>
                 lk.packages.append(Locked(txt(e2, "name"), txt(e2, "version"), txt(e2, "sha256"),
                                           txt(e2, "repo"), txt(e2, "file"),
                                           flag(e2, "unsafe"), txt(e2, "toolchain")))
@@ -122,7 +122,7 @@ def text(lk: Lock) -> str:
     anything changing is a diff nobody reads."""
     b = "{\n  \"format\": 1,\n  \"repos\": {"
     p = True
-    ordered: list<str> = []
+    ordered: List<str> = []
     for r in lk.repos:
         ordered.append(r.url)
     for url in sorted(ordered):
@@ -133,7 +133,7 @@ def text(lk: Lock) -> str:
         b += "\n    " + esc(r.url) + ": {\"key\": " + esc(r.key) + ", \"first_seen\": " + esc(r.first_seen) + "}"
     b += "\n  }" if not p else "}"
     b += ",\n  \"packages\": ["
-    names: list<str> = []
+    names: List<str> = []
     for x in lk.packages:
         names.append(x.name)
     p2 = True

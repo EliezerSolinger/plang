@@ -23,9 +23,9 @@ what `cfg` owns just as much as `cfg.append(x)` would.
 """
 
 const NAMES = ["ada", "linus", "grace"]
-const SIZES: dict<str, int> = {"small": 1, "large": 99}
+const SIZES: Dict<str, int> = {"small": 1, "large": 99}
 const GREETING = "hello " + "world"
-const TABLE: list<int> = [n * 2 for n in range(4)]
+const TABLE: List<int> = [n * 2 for n in range(4)]
 
 print(f"names {len(NAMES)}: {NAMES[0]} {NAMES[2]}")
 big = SIZES["large"]

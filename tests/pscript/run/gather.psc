@@ -15,7 +15,7 @@ async def label(n: int) -> str:
     return f"#{n}"
 
 
-ts: list<Task<int>> = []
+ts: List<Task<int>> = []
 i = 1
 while i <= 5:
     ts.append(square(i))
@@ -24,6 +24,6 @@ while i <= 5:
 nums = await gather(ts)
 print("squares", len(nums), nums[0], nums[4])
 
-ls: list<Task<str>> = [label(1), label(2)]
+ls: List<Task<str>> = [label(1), label(2)]
 names = await gather(ls)
 print("labels", names[0], names[1])

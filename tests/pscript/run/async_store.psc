@@ -70,7 +70,7 @@ async def morsa(n: int) -> int:
 
 async def numa_lista(n: int) -> int:
     # o mesmo, guardando num objeto que NÃO é o quadro: uma lista
-    xs: list<str> = []
+    xs: List<str> = []
     for i in range(n):
         xs.append(junta(i))
     await sleep(0.0)

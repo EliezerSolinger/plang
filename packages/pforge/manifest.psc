@@ -43,26 +43,26 @@ struct Manifest:
     version: str
     lang: str           # "p" or "pscript"
     root: str           # the root module, relative to the package directory
-    deps: list<Dep>
-    system: list<Dep>
+    deps: List<Dep>
+    system: List<Dep>
     toolchain: str
     description: str
     # 2.13: the C the package brings HAND-WRITTEN, and its flags. The paths are
     # relative to the package directory — it does not know where it was
     # extracted — and whoever makes them absolute is the tooling, never the
     # manifest.
-    csources: list<str>
-    cflags: list<str>
+    csources: List<str>
+    cflags: List<str>
     # workspace
-    members: list<str>
+    members: List<str>
     default_target: str
     # ... and where the dependencies that are NOT in the tree come from. The
     # list belongs to the PROJECT and not to the machine: two projects on the
     # same computer may use different repositories, and a project you clone
     # brings along where its dependencies come from. The order is the search
     # order; with no list, the default one applies.
-    repos: list<str>
-    repos_unsafe: list<bool>
+    repos: List<str>
+    repos_unsafe: List<bool>
 
 def empty(file: str) -> Manifest:
     return Manifest(file, False, "", "", "", "", [], [], "", "", [], [], [], "", [], [])
@@ -128,17 +128,17 @@ def version_ok(s: str) -> bool:
     return True
 
 # ---------- reading ----------
-private def text_of(d: dict<str, any>, k: str, dflt: str) -> str:
+private def text_of(d: Dict<str, any>, k: str, dflt: str) -> str:
     if k in d:
         return d[k] as str
     return dflt
 
-private def pairs(d: dict<str, any>, k: str) -> list<Dep>:
-    out: list<Dep> = []
+private def pairs(d: Dict<str, any>, k: str) -> List<Dep>:
+    out: List<Dep> = []
     if k not in d:
         return out
-    sub = d[k] as dict<str, any>
-    ks: list<str> = []
+    sub = d[k] as Dict<str, any>
+    ks: List<str> = []
     for n in sub:
         ks.append(n)
     ks = sorted(ks)     # sorted: two identical manifests give the same list
@@ -146,11 +146,11 @@ private def pairs(d: dict<str, any>, k: str) -> list<Dep>:
         out.append(Dep(n2, sub[n2] as str))
     return out
 
-private def strings(d: dict<str, any>, key: str) -> list<str>:
-    out: list<str> = []
+private def strings(d: Dict<str, any>, key: str) -> List<str>:
+    out: List<str> = []
     if key not in d:
         return out
-    for x in d[key] as list<any>:
+    for x in d[key] as List<any>:
         out.append(x as str)
     return out
 
@@ -175,13 +175,13 @@ def parse(raw: str, file: str, on_disk: bool) -> Manifest:
     m = empty(file)
     nonlocal root
     try:
-        root = json.parse(raw) as dict<str, any>
+        root = json.parse(raw) as Dict<str, any>
     catch e:
         raise error(file + ": error: not a JSON object (" + e.message + ")")
 
     if "members" in root:
         m.is_workspace = True
-        for x in root["members"] as list<any>:
+        for x in root["members"] as List<any>:
             m.members.append(x as str)
         m.default_target = text_of(root, "default", "")
         # the workspace also declares the project's EXTERNAL dependencies, which
@@ -189,7 +189,7 @@ def parse(raw: str, file: str, on_disk: bool) -> Manifest:
         # is code from outside with a name, a version and a hash
         m.deps = pairs(root, "deps")
         if "repos" in root:
-            for rv in root["repos"] as list<any>:
+            for rv in root["repos"] as List<any>:
                 # two shapes, and the short one is the common one: a URL. The
                 # long one exists for the unsigned development mirror, which is
                 # `unsafe` throughout. `as` raises when the type does not match,
@@ -201,7 +201,7 @@ def parse(raw: str, file: str, on_disk: bool) -> Manifest:
                     m.repos_unsafe.append(False)
                 catch e2:
                     try:
-                        rd = rv as dict<str, any>
+                        rd = rv as Dict<str, any>
                         m.repos.append(text_of(rd, "url", ""))
                         m.repos_unsafe.append(("unsafe" in rd) and (rd["unsafe"] as bool))
                     catch e3:

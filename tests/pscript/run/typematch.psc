@@ -19,7 +19,7 @@ def describe(v: any) -> str:
             return f"str {len(v)} chars"
         case bool:
             return "yes" if v else "no"
-        case list:
+        case List:
             return f"list of {len(v)}"
         case None:
             return "nothing"
@@ -27,14 +27,14 @@ def describe(v: any) -> str:
             return "something else"
 
 
-values: list<any> = [21, 2.0, "hello", True, [1, 2, 3], None]
+values: List<any> = [21, 2.0, "hello", True, [1, 2, 3], None]
 i = 0
 while i < len(values):
     print(describe(values[i]))
     i += 1
 
 # straight from a parsed document, which is where the question comes up (41.1)
-doc = json.parse("{\"n\": 7, \"name\": \"x\"}") as dict<str, any>
+doc = json.parse("{\"n\": 7, \"name\": \"x\"}") as Dict<str, any>
 match type(doc["n"]):
     case int:
         print("n is an int")

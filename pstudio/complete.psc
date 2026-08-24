@@ -46,7 +46,7 @@ struct CSym:
 struct Source:
     """A file the index was given to read besides the open buffer.
 
-    `extra` was a `list<str>` from the first day, documented as "the texts that
+    `extra` was a `List<str>` from the first day, documented as "the texts that
     came with it", and always empty. It is a list of these now, because a text
     without its path cannot answer "where is this defined"."""
     path: str
@@ -69,7 +69,7 @@ const KEYWORDS: str = "def return if elif else while for in do match case break 
 
 # a token's text: sliced out of the file itself by position, because a string
 # does not come back across the boundary (113) — the buffer is already on this side
-def tok_text(lines: list<str>, i: int) -> str:
+def tok_text(lines: List<str>, i: int) -> str:
     ln = hl_tok_line(i)
     if ln < 0 or ln >= len(lines):
         return ""
@@ -84,7 +84,7 @@ def tok_text(lines: list<str>, i: int) -> str:
 # The NAME of the type a declaration binds to, from the token after the `:`. It
 # steps over `const` and the stars: in this code nearly every variable is
 # `x: *Type`, and stopping at the `*` made member completion resolve nothing.
-def decl_type_name(lines: list<str>, n: int, at: int) -> str:
+def decl_type_name(lines: List<str>, n: int, at: int) -> str:
     i = at
     while i < n and (hl_tok_kind(i) == HLK_STAR or hl_tok_kind(i) == HLK_CONST):
         i += 1
@@ -94,8 +94,8 @@ def decl_type_name(lines: list<str>, n: int, at: int) -> str:
 
 
 struct Index:
-    syms: list<CSym>
-    vars: list<CVar>
+    syms: List<CSym>
+    vars: List<CVar>
     version: int      # the buffer version this came out of
     ready: bool
     cur_file: str     # which file `scan` is walking right now ("" = the buffer)
@@ -132,11 +132,11 @@ struct Index:
                 return
         self.syms.append(CSym(name, detail, owner, kind, self.cur_file, self.cur_line))
 
-    def scan(self, text: str, words: bool) -> list<str>:
+    def scan(self, text: str, words: bool) -> List<str>:
         """Walks ONE file's token stream. `words` = also collect loose
         identifiers (only for the buffer being edited; an import contributes only
         its declarations). Returns the imports it saw."""
-        imports: list<str> = []
+        imports: List<str> = []
         lines = text.split("\n")
         n = hl_lex(text)
         cur_struct = ""     # the struct in whose body we are
@@ -218,13 +218,13 @@ struct Index:
             i += 1
         return imports
 
-    def imports_of(self, b: core.TextBuffer) -> list<str>:
+    def imports_of(self, b: core.TextBuffer) -> List<str>:
         """The `.ph` files the buffer imports, without indexing anything — for
         whoever CAN read files (the event loop) to fetch the texts."""
         probe = Index([], [], 0, False, "", 0)
         return probe.scan(b.text(), False)
 
-    def build(self, b: core.TextBuffer, extra: list<Source>):
+    def build(self, b: core.TextBuffer, extra: List<Source>):
         """Builds from the buffer and from whatever files came with it."""
         self.syms = []
         self.vars = []
@@ -240,7 +240,7 @@ struct Index:
         self.version = b.version
         self.ready = True
 
-    def outline(self) -> list<CSym>:
+    def outline(self) -> List<CSym>:
         """The BUFFER's own declarations, in the order they appear in it.
 
         There is no new analysis here and that is the whole point: the completion
@@ -251,7 +251,7 @@ struct Index:
 
         Only the buffer: a symbol with a `file` came from the project scan and
         belongs to another window."""
-        out: list<CSym> = []
+        out: List<CSym> = []
         for sy in self.syms:
             if len(sy.file) > 0 or sy.line <= 0:
                 continue
@@ -322,10 +322,10 @@ struct Index:
             r += 50                      # the same case that was typed
         return r - len(s.name) // 2
 
-    def query(self, prefix: str, owner: str) -> list<int>:
+    def query(self, prefix: str, owner: str) -> List<int>:
         """Indices in `syms` that complete `prefix`, best first. A non-empty
         `owner` restricts to that struct's members (the `x.` case)."""
-        hits: list<int> = []
+        hits: List<int> = []
         pl = len(prefix)
         low = prefix.lower()
         for i in range(len(self.syms)):

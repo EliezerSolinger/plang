@@ -68,7 +68,7 @@ async def main() -> int:
     await f.close()
     got = r.output()
 
-    problems: list<str> = []
+    problems: List<str> = []
     if r.status() != wants:
         problems.append("status " + str(r.status()) + ", expected " + str(wants))
     if got != wants_txt:

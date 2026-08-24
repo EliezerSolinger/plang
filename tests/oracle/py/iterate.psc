@@ -33,7 +33,7 @@ for c in reversed("abc"):
     print(c)
 
 # uma lista vazia não dá volta nenhuma nos quatro
-empty: list<int> = []
+empty: List<int> = []
 for i, v in enumerate(empty):
     print("nunca")
 for a, b in zip(empty, ns):

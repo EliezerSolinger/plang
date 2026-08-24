@@ -107,7 +107,7 @@ def rnd() -> float:
     return float((x %* 2685821657736338717) >> 11) * (1.0 / 9007199254740992.0)
 
 
-def scene() -> list<Sphere>:
+def scene() -> List<Sphere>:
     """smallpt's Cornell box."""
     return [
         Sphere(1e5, Vec(1e5 + 1.0, 40.8, 81.6), BLACK, Vec(0.75, 0.25, 0.25), DIFF),
@@ -140,7 +140,7 @@ def hit_sphere(in s: Sphere, in r: Ray) -> float:
     return 0.0
 
 
-def nearest(spheres: list<Sphere>, in r: Ray) -> int:
+def nearest(spheres: List<Sphere>, in r: Ray) -> int:
     """Index of the nearest hit, or -1."""
     best = 1e20
     found = -1
@@ -154,11 +154,11 @@ def nearest(spheres: list<Sphere>, in r: Ray) -> int:
     return found
 
 
-def dist_to(spheres: list<Sphere>, in r: Ray, idx: int) -> float:
+def dist_to(spheres: List<Sphere>, in r: Ray, idx: int) -> float:
     return hit_sphere(in spheres[idx], in r)
 
 
-def radiance(spheres: list<Sphere>, in r: Ray, depth: int) -> Vec:
+def radiance(spheres: List<Sphere>, in r: Ray, depth: int) -> Vec:
     """Recursive Monte Carlo. It does NOT allocate: `Vec` is a value (52.1/56),
     so the whole hot loop runs on the stack and the collector never fires."""
     idx = nearest(spheres, in r)
@@ -226,12 +226,12 @@ def to_byte(v: float) -> int:
     return int(255.0 * (clamp01(v) ** (1.0 / 2.2)) + 0.5)
 
 
-def render(width: int, height: int, samples: int) -> list<int>:
+def render(width: int, height: int, samples: int) -> List<int>:
     spheres = scene()
     cam = Ray(Vec(50.0, 52.0, 295.6), Vec(0.0, -0.042612, -1.0).norm())
     cx = Vec(float(width) * 0.5135 / float(height), 0.0, 0.0)
     cy = cx.cross(cam.dir).norm().scale(0.5135)
-    px: list<int> = []
+    px: List<int> = []
     y = 0
     while y < height:
         x = 0

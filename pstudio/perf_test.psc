@@ -58,7 +58,7 @@ def check(what: str, ms: int, ceiling: int):
 def make_source(n: int) -> str:
     """Plausible P, with lines of varied length — a file of identical lines would
     measure the allocator and not the editor."""
-    parts: list<str> = []
+    parts: List<str> = []
     i = 0
     while len(parts) < n:
         parts.append("")

@@ -47,7 +47,7 @@ async def ladder(c: T.Ctx) -> str:
     seed = T.cc_program(c, path.join(BUILD, "bin/plangc_seed"), seed_srcs, [], [], [])
 
     # 2) the compiler's sources, in the order the `--out-dir` mirrors
-    sources: list<str> = []
+    sources: List<str> = []
     # `stl` is NOT named: it is a package (`packages/stl`), the sources import it
     # through `<stl/vec.ph>`, and 1.5(a)'s closure brings its headers along. It
     # was the largest of the lists this descriptor used to carry.
@@ -74,7 +74,7 @@ async def ladder(c: T.Ctx) -> str:
     # 4) the FIXED POINT: what s1 generated and what s2 generated have to be the
     #    same text. It is the test that says the compiler reproduces itself — and
     #    the reason the ladder has three rungs and not two.
-    all: list<str> = []
+    all: List<str> = []
     for x in s2all:
         all.append(x)
     for y in s3all:
@@ -103,9 +103,9 @@ async def ladder(c: T.Ctx) -> str:
 struct Program:
     name: str
     source: str
-    libs: list<str>
+    libs: List<str>
 
-def programs() -> list<Program>:
+def programs() -> List<Program>:
     return [
         # the build system itself, built by the build system. It is not
         # showing off: it is the hardest test there is for it, because a wrong
@@ -120,9 +120,9 @@ def programs() -> list<Program>:
     ]
 
 
-async def all_pscript(c: T.Ctx) -> dict<str, str>:
+async def all_pscript(c: T.Ctx) -> Dict<str, str>:
     """The pscript programs, and each binary's path by name."""
-    out: dict<str, str> = {}
+    out: Dict<str, str> = {}
     for p in programs():
         out[p.name] = await T.psc_program(c, p.source, path.join(BUILD, "bin", p.name),
                                           path.join(BUILD, "obj"), [], p.libs)
@@ -134,7 +134,7 @@ async def all_pscript(c: T.Ctx) -> dict<str, str>:
 # into one binary, and that is why it proves the target library best: the logic is
 # pscript, the hand that touches SDL2 and the one that calls the compiler's lexer
 # are P, and SDL2 is C from outside, found by `pkg-config`.
-def pstudio_p() -> list<str>:
+def pstudio_p() -> List<str>:
     """What the import CLOSURE does not reach.
 
     Since 1.5(d) the compiler pulls in the P module of any `import "x.ph"` in the
@@ -150,7 +150,7 @@ def pstudio_p() -> list<str>:
     return ["selfhost/util.p", "selfhost/utf8.p"]
 
 
-async def editors(c: T.Ctx) -> list<str>:
+async def editors(c: T.Ctx) -> List<str>:
     """The two binaries, or an empty list if the machine has no SDL2 — and not
     having it is not an error: it is a machine without what an editor needs, and
     the rest of the build has nothing to do with that.
@@ -171,7 +171,7 @@ async def editors(c: T.Ctx) -> list<str>:
     cpp = "cc"
     for x in cf:
         cpp += " " + x
-    out: list<str> = []
+    out: List<str> = []
     for name in ["pcode", "pstudio"]:
         out.append(await T.psc_program_with(c, "pstudio/" + name + ".psc",
                                             path.join(BUILD, "bin/" + name),
@@ -192,7 +192,7 @@ const CORPUS: str = "tests/pscript/run"
 const SUITE_PSCRIPT: str = "build/t/stamp/pscript.suite"
 
 async def pscript_suite(c: T.Ctx, verdict: str) -> str:
-    cases: list<T.Case> = []
+    cases: List<T.Case> = []
     for src in T.glob(CORPUS, ".psc"):
         base = path.basename(src)
         name = base[0:len(base) - 4]
@@ -210,7 +210,7 @@ async def pscript_suite(c: T.Ctx, verdict: str) -> str:
         # option that changes what gets emitted gets a gate at all: `-O` drops
         # `assert` (46.4), and the only way to see that is to build the same
         # program with it
-        flags: list<str> = []
+        flags: List<str> = []
         flags_file = path.join(CORPUS, name + ".flags")
         if path.isfile(flags_file):
             for w in (await read_text(flags_file)).strip().split(" "):
@@ -248,14 +248,14 @@ const VERIFY: str = "build/t/stamp/verify"
 # what `make test` always meant, and that is why it is what it still means.
 const TEST: str = "build/t/stamp/test"
 
-def shell_suites() -> list<str>:
+def shell_suites() -> List<str>:
     # the SAME list as `verify-all.sh`'s, and that is why `pstudio` and
     # `roundtrip` are here: a verification that runs less than the old one is not
     # the same verification
     return ["cases", "modules", "stl", "p-suite", "errors", "pstudio", "roundtrip", "pscript"]
 
 async def verification(c: T.Ctx, plangc: str, floor_prog: str, suite: str, spkg: str, sdoc: str, fixpoint: str, editor: str) -> str:
-    logs: list<str> = []
+    logs: List<str> = []
     logdir = path.join(BUILD, "t/log")
     gating = shell_suites()
 
@@ -263,12 +263,12 @@ async def verification(c: T.Ctx, plangc: str, floor_prog: str, suite: str, spkg:
     # suite with the same compiler, and that is precisely why they are worth it —
     # what they compare is the BACK END.
     for mode in [["c", ""], ["qbe", "qbe"], ["c89", ""]]:
-        vars: dict<str, str> = {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h", mode[0])}
+        vars: Dict<str, str> = {"PLANGC": plangc, "OUT": path.join(BUILD, "t/h", mode[0])}
         if len(mode[1]) > 0:
             vars["BACKEND"] = mode[1]
         if mode[0] == "c89":
             vars["STD"] = "c89"
-        argv: list<str> = ["bash", "tests/run.sh"]
+        argv: List<str> = ["bash", "tests/run.sh"]
         for x in gating:
             argv.append(x)
         logs.append(T.harness(c, "suite-" + mode[0], argv, vars, [plangc], logdir,
@@ -349,7 +349,7 @@ async def verification(c: T.Ctx, plangc: str, floor_prog: str, suite: str, spkg:
 
     # the pscript suite as a GRAPH comes along: it measures the same thing
     # `suite-c` does, by another route and case by case — and it is the fast one
-    everything: list<str> = []
+    everything: List<str> = []
     for l in logs:
         everything.append(l)
     everything.append(suite)
@@ -371,8 +371,8 @@ async def verification(c: T.Ctx, plangc: str, floor_prog: str, suite: str, spkg:
 # One thing comes out of it for the compiler: the search ROOTS. The directory that
 # CONTAINS the members is a root, because that is how `import <pui/widget.ph>`
 # resolves — the package's name is the path's first piece.
-async def workspace_roots(manifest: str) -> list<str>:
-    out: list<str> = []
+async def workspace_roots(manifest: str) -> List<str>:
+    out: List<str> = []
     if not path.isfile(manifest):
         return out
     m = await M.read(manifest)
@@ -402,8 +402,8 @@ async def workspace_roots(manifest: str) -> list<str>:
 #     because it is where it has to be;
 #   * and the project's `pforge test` runs the workspace packages' tests, which is
 #     what makes moving a package here not lose coverage.
-async def workspace_members(manifest: str) -> list<str>:
-    out: list<str> = []
+async def workspace_members(manifest: str) -> List<str>:
+    out: List<str> = []
     if not path.isfile(manifest):
         return out
     m = await M.read(manifest)
@@ -426,10 +426,10 @@ async def doctest_suite(c: T.Ctx, verdict: str) -> str:
     the same canonical list `pforge doc` shows. Generating it in the plan is what
     guarantees it is always up to date: the docstring changed, the program
     changes, the edge goes dirty."""
-    cases: list<T.Case> = []
+    cases: List<T.Case> = []
     for dir in await workspace_members("pack.json"):
         pkg = path.basename(dir)
-        mods: list<str> = []
+        mods: List<str> = []
         for f in sorted(os.listdir(dir)):
             if f.endswith(".psc") or f.endswith(".ph"):
                 mods.append(f)
@@ -462,7 +462,7 @@ async def doctest_suite(c: T.Ctx, verdict: str) -> str:
 
 
 async def packages_suite(c: T.Ctx, verdict: str) -> str:
-    cases: list<T.Case> = []
+    cases: List<T.Case> = []
     for dir in await workspace_members("pack.json"):
         tdir = path.join(dir, "test")
         if not path.isdir(tdir):
@@ -470,7 +470,7 @@ async def packages_suite(c: T.Ctx, verdict: str) -> str:
         name = path.basename(dir)
         # a package's test may be in either language: `pui` is pscript and `sha2`
         # is P. The difference is only in how it gets built.
-        sources: list<str> = []
+        sources: List<str> = []
         for a in T.glob(tdir, ".psc"):
             sources.append(a)
         for b in T.glob(tdir, ".p"):
@@ -551,8 +551,8 @@ async def run_manifest_write(src: str, binary: str, g: G.Graph, root: str):
     """The list of what the build READ, with the dates. The inputs come from the
     GRAPH, which got them from the compiler — nothing here is guessed from the
     source."""
-    seen: dict<str, int> = {}
-    lines: list<str> = [binary]
+    seen: Dict<str, int> = {}
+    lines: List<str> = [binary]
     for e in g.edges:
         for iid in e.ins:
             p = g.nodes[iid].p

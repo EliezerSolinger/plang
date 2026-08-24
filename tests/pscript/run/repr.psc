@@ -49,22 +49,22 @@ def main():
     xs = [1, 2, 3]
     print(xs)
     print(["ada", "it's", "a \"b\""])
-    d: dict<str, int> = {"a": 1, "bb": 22}
+    d: Dict<str, int> = {"a": 1, "bb": 22}
     print(d)
-    st: set<int> = {3, 1}
+    st: Set<int> = {3, 1}
     print(st)
     print([1.5, 2.0])
 
     # os três vazios, e a assimetria do Python entre eles
-    empty: list<int> = []
-    ed: dict<str, int> = {}
-    print(empty, ed, set<int>())
+    empty: List<int> = []
+    ed: Dict<str, int> = {}
+    print(empty, ed, Set<int>())
 
-    # aninhado: o adaptador de `list<int>` é chamado pelo de `dict<str,
-    # list<int>>`, e é por isso que a lista de adaptadores está fechada antes de
+    # aninhado: o adaptador de `List<int>` é chamado pelo de `Dict<str,
+    # List<int>>`, e é por isso que a lista de adaptadores está fechada antes de
     # qualquer corpo ser escrito
     print([[1, 2], [3]])
-    dl: dict<str, list<int>> = {"a": [1, 2], "b": []}
+    dl: Dict<str, List<int>> = {"a": [1, 2], "b": []}
     print(dl)
     print([{1}, {2, 3}])
 
