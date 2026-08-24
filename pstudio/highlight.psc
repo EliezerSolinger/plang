@@ -29,6 +29,14 @@ const HL_NUM: int = 3
 const HL_COMMENT: int = 4
 
 
+# which lexer paints a file. `LANG_NONE` is not a gap: a `.md` or a `.json` opens
+# as plain text on purpose, because the editor paints what a COMPILER sees and
+# there is no compiler for those here.
+const LANG_NONE: int = 0
+const LANG_P: int = 1        # .p .ph .psc .psh — `lex_ex`, the P/pscript lexer
+const LANG_C: int = 2        # .c .h .i        — `c_lex_display`, cfront's
+
+
 record HlSpan:
     col: int          # the first codepoint
     length: int       # length in codepoints
@@ -38,10 +46,10 @@ record HlSpan:
 struct Hl:
     lines: list<list<HlSpan>>   # one per buffer line
     version: int                # the buffer version this came out of
-    enabled: bool               # False = not a P file (no spans at all)
+    lang: int                   # LANG_NONE = no spans at all
 
     def class_at(self, line: int, col: int) -> int:
-        if not self.enabled or line < 0 or line >= len(self.lines):
+        if self.lang == LANG_NONE or line < 0 or line >= len(self.lines):
             return HL_TEXT
         for sp in self.lines[line]:
             if col >= sp.col and col < sp.col + sp.length:
@@ -78,9 +86,13 @@ struct Hl:
             for i in range(b.nlines()):
                 self.lines.append([])
         self.version = b.version
-        if not self.enabled:
+        if self.lang == LANG_NONE:
             return
-        n = hl_lex(b.text())
+        # the two doors, and the only place the difference is visible: below
+        # this line a token is a number, and which language it came from stops
+        # mattering
+        txt = b.text()
+        n = hl_lex_c(txt) if self.lang == LANG_C else hl_lex(txt)
         for i in range(n):
             cls = hl_tok_class(i)
             # an identifier is not a span (it is ordinary text) and punctuation
@@ -92,8 +104,16 @@ struct Hl:
                 mine = HL_STR
             elif cls == HLC_NUM:
                 mine = HL_NUM
+            elif cls == HLC_COMMENT:
+                mine = HL_COMMENT
+            elif cls == HLC_PP:
+                mine = HL_KW      # `#include` reads as a keyword, and it is one
             self.add(hl_tok_line(i), hl_tok_col(i), hl_tok_cp(i), mine)
-        # the comment: the first `#` OUTSIDE a string runs to the end of the line
+        # the comment: the first `#` OUTSIDE a string runs to the end of the line.
+        # Only on the P side — C's tokenizer hands comments over, so looking for
+        # `/*` a second time here would be a second rule to keep in step.
+        if self.lang != LANG_P:
+            return
         for ln in range(b.nlines()):
             s = b.line_text(ln)
             # asking "is there a `#` at all" in one go is a scan in C; walking the
@@ -115,14 +135,21 @@ struct Hl:
                 col += 1
 
 
-def new_hl(enabled: bool) -> Hl:
-    return Hl([], 0, enabled)
+def new_hl(lang: int) -> Hl:
+    return Hl([], 0, lang)
 
 
-def is_p_file(path: str) -> bool:
-    """Highlighting is for P and pscript — other files open with no spans at
-    all, which is what `enabled=False` means."""
+def lang_of(path: str) -> int:
+    """Which of the compiler's lexers paints this file.
+
+    The editor paints what the COMPILER sees, and the compiler reads three
+    languages — so the editor paints three. What it does not read opens as plain
+    text, which is honest: a `.md` with invented colours would be a second
+    highlighter with no compiler behind it."""
     for ext in [".p", ".ph", ".psc", ".psh"]:
         if path.endswith(ext):
-            return True
-    return False
+            return LANG_P
+    for ext2 in [".c", ".h", ".i"]:
+        if path.endswith(ext2):
+            return LANG_C
+    return LANG_NONE

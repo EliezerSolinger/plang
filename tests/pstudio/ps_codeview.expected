@@ -8,4 +8,9 @@ at_caret: top=24 caret=40 folded=1
 hl: kw=1 ident=0 num=3 comment=4 outside=0
 cmp: sum detail=[def sum(a: i32, b: i32) -> i32:]
 owner_of(x)=i32
+lang=2 (P=1 C=2)
+c: pp=1 block comment=4 kw=1 ident=0 num=3 line comment=4
+c: `int` is a keyword=1 and `main` is not=0
+md: lang=0 class=0
+half-written C survived, lines=3
 fold-scroll-ok

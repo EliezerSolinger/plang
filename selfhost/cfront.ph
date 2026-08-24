@@ -16,3 +16,44 @@ def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, str
 # value of a C char literal ('a', '\n', '\x41', '\012') — the single source of
 # truth for escapes (sema's comptime folding delegates here)
 def cchar_val(lex: const *char) -> i32
+
+
+# ---------- the tokens, for whoever wants to DISPLAY C ----------
+#
+# The editor paints what the COMPILER sees, in all three languages: P and pscript
+# go through `lex_ex` and C goes through here. A second lexer written to display
+# would drift from this one, and the day it did, the colours would stop meaning
+# what the compiler means.
+#
+# Two kinds exist only for display. The parser's tokenizer EATS comments and
+# preprocessor lines, because a parser has no use for them; `c_lex_display` emits
+# them instead, and that is the whole difference between the two modes. The
+# parser never sees them, because it never asks for them.
+enum CtKind:
+    CT_EOF = 0
+    CT_ID
+    CT_NUM
+    CT_STR
+    CT_CHAR
+    CT_PUNCT
+    CT_COMMENT      # display only: `//...` and `/*...*/`
+    CT_PP           # display only: a `#` line, directive or marker
+
+struct CTok:
+    kind: CtKind
+    text: const *char
+    pos: Pos
+
+struct CTokList:
+    toks: *CTok
+    n: usize
+
+# Lexes for DISPLAY: tolerant (never fatal — an editor buffer is half-written by
+# definition) and with comments and `#` lines kept. The tokens live in the arena.
+def c_lex_display(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> CTokList
+
+# "is this WORD in this space-separated list" — the front end's own lookup, and
+# the same one the display side needs. C has no single table of keywords to
+# borrow: the parser recognises them where they matter, contextually. So the
+# highlighter writes its own list, and at least asks the question the same way.
+def word_in(s: const *char, w: const *char) -> bool

@@ -4,6 +4,7 @@ include <stdlib.h>
 include <string.h>
 import "hl.ph"
 import "../selfhost/lexer.ph"
+import "../selfhost/cfront.ph"
 
 
 # one token, with only what crosses
@@ -124,6 +125,69 @@ def hl_lex(in text: CStr) -> i32:
     arena_drop_hl(&a)
     free(buf)
     return g_n
+
+# ---------- the C side (F3) ----------
+#
+# The same three answers — where, how wide, what colour — from the other lexer.
+# A C keyword is not a token kind: the tokenizer says CT_ID for `int` and for
+# `count` alike, so the word list lives here. It is the ONE place where a
+# language's words are written down by hand in this editor, and it is written
+# down because C has no other way of saying it.
+private C_KEYWORDS: const *char = " auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Bool _Complex _Imaginary _Alignas _Alignof _Atomic _Generic _Noreturn _Static_assert _Thread_local "
+
+private def c_is_keyword(w: const *char) -> bool:
+    if w == None:
+        return False
+    return word_in(C_KEYWORDS, w)
+
+private def c_class_of(k: CtKind, text: const *char) -> i32:
+    match k:
+        case CT_NUM:
+            return HLC_NUM
+        case CT_STR:
+            return HLC_STR
+        case CT_CHAR:
+            return HLC_STR
+        case CT_COMMENT:
+            return HLC_COMMENT
+        case CT_PP:
+            return HLC_PP
+        case CT_PUNCT:
+            return HLC_PUNCT
+        case CT_ID:
+            return HLC_KW if c_is_keyword(text) else HLC_TEXT
+        case _:
+            return HLC_TEXT
+
+def hl_lex_c(in text: CStr) -> i32:
+    """The compiler's C tokenizer, in display mode: tolerant, and with comments
+    and `#` lines kept. Same copy, same arena, same numbers out."""
+    hl_release()
+    buf: *char = malloc(text.len + 1)
+    if buf == None:
+        return 0
+    memcpy(buf, text.ptr, text.len)
+    buf[text.len] = '\0'
+    a: Arena = {0}
+    tl: CTokList = c_lex_display(&a, "<buffer>", buf, text.len)
+    n: i32 = i32(tl.n)
+    if n > 0:
+        g_toks = (*HlTok)(malloc(usize(n) * sizeof(HlTok)))
+        g_cap = n
+    for i in range(n):
+        t: *CTok = &tl.toks[i]
+        if t->kind == CT_EOF:
+            continue
+        g_toks[g_n].line = t->pos.line - 1
+        g_toks[g_n].col = t->pos.col - 1
+        g_toks[g_n].cp = cp_count(t->text) if t->text != None else 1
+        g_toks[g_n].cls = c_class_of(t->kind, t->text)
+        g_toks[g_n].kind = HLK_OTHER      # completion in C needs a parse, not a scan
+        g_n += 1
+    arena_drop_hl(&a)
+    free(buf)
+    return g_n
+
 
 def hl_tok_line(i: i32) -> i32:
     return g_toks[i].line if i >= 0 and i < g_n else 0

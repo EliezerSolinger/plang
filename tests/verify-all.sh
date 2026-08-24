@@ -253,9 +253,10 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
   # cada um tem o `.p` irmão
   RT_ARGS="pscript/runtime/psrt.ph"
   if $V/plangc_s2 --pkg-path packages --out-dir $V/pst selfhost/plang.ph selfhost/ast.ph \
-       selfhost/lexer.ph pstudio/*.ph pstudio/shim.ph pstudio/hl.ph \
+       selfhost/lexer.ph selfhost/cfront.ph selfhost/vecs.ph pstudio/*.ph pstudio/shim.ph pstudio/hl.ph \
        pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p \
        pstudio/shim.p pstudio/hl.p selfhost/lexer.p selfhost/utf8.p selfhost/util.p \
+       selfhost/cfront.p selfhost/vecs.p \
        $RT_ARGS >$V/pstudio.log 2>&1 &&
      true; then
     # OS DOIS: o `pcode` (o editor) e o `pstudio` (o editor mais a IDE), das
@@ -271,6 +272,7 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
            $V/pst/pstudio/shim.c $V/pst/pstudio/hl.c \
            $V/pst/pstudio/pgfx.c $V/pst/pstudio/pgfx_raster.c $V/pst/pstudio/font_atlas.c \
            $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
+           $V/pst/selfhost/cfront.c $V/pst/selfhost/vecs.c \
            $nosimd $(pkg-config --cflags --libs sdl2) -lm -pthread >>$V/pstudio.log 2>&1 &&
          ( cd $V/pst && SDL_VIDEODRIVER=dummy timeout 30 ../bin_$b --selftest sample.txt >saida.$b 2>&1 ) &&
          diff -q $V/pst/saida.$b "$exp" >/dev/null 2>&1; then

@@ -19,10 +19,16 @@ cd "$(dirname "$0")/.."
 PLANGC=${PLANGC:-build/bin/plangc_s2}
 ok=0; fail=0
 
-# What `pcode` is allowed to read. Twenty-six files: the editor's own six
-# modules, the two P adapters (SDL and the compiler's lexer), the graphics
-# driver, the font atlas, the toolkit, two `stl` headers, and the four the
-# compiler's lexer needs.
+# What `pcode` is allowed to read: the editor's own modules, the two P adapters
+# (SDL and the compiler's lexers), the graphics driver, the font atlas, the
+# toolkit, and what the compiler's two front ends need to paint three languages.
+#
+# The C front end is here since F3, and it is the one entry that deserves an
+# argument. The editor paints what the COMPILER sees, so it uses the compiler's
+# lexer — for P through `lexer.p` and for C through `cfront.p`. It costs about
+# 98 KB in the binary, and it buys colours that cannot disagree with the
+# compiler, ever. A second lexer written for display would be cheaper and would
+# drift.
 ALLOWED="
 pstudio/pcode.psc
 pstudio/driver.psc
@@ -50,6 +56,13 @@ selfhost/lexer.p
 selfhost/lexer.ph
 selfhost/plang.ph
 selfhost/ast.ph
+selfhost/cfront.p
+selfhost/cfront.ph
+selfhost/vecs.p
+selfhost/vecs.ph
+packages/stl/set.ph
+packages/stl/map.ph
+packages/stl/hash.ph
 "
 
 deps() { $PLANGC --pkg-path packages --deps "$1" 2>/dev/null | sort; }

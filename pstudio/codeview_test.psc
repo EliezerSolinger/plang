@@ -13,6 +13,7 @@ codeview talks to no driver at all — not for files (the text comes in through
 """
 import <pui> as pui
 import codeview as cvm
+import highlight as hlm
 
 
 def make_src() -> str:
@@ -91,4 +92,32 @@ print("cmp: " + (cv.index.sym(hits[0]).name if len(hits) > 0 else "<none>") +
       " detail=[" + (cv.index.sym(hits[0]).detail if len(hits) > 0 else "") + "]")
 own = cv.index.owner_of("x")
 print("owner_of(x)=" + own)
+
+# ---- F3: the SAME editor painting C, through the compiler's other lexer ----
+# The editor paints what the COMPILER sees, and the compiler reads three
+# languages. What crosses is the same numbers, so nothing below the boundary
+# knows which lexer answered.
+cv.load_text("crc.c", "#include <stdio.h>\n" +
+                      "/* the CRC-32 of the zip and the PNG */\n" +
+                      "static unsigned poly = 0xEDB88320u;   // the polynomial\n" +
+                      "int main(void) { return (int)poly; }\n", 0)
+print("lang=" + str(cv.hl.lang) + " (P=" + str(hlm.LANG_P) + " C=" + str(hlm.LANG_C) + ")")
+# 1=keyword 0=plain 3=number 4=comment
+print("c: pp=" + str(cv.hl.class_at(0, 0)) +
+      " block comment=" + str(cv.hl.class_at(1, 3)) +
+      " kw=" + str(cv.hl.class_at(2, 0)) +
+      " ident=" + str(cv.hl.class_at(2, 17)) +
+      " num=" + str(cv.hl.class_at(2, 24)) +
+      " line comment=" + str(cv.hl.class_at(2, 40)))
+print("c: `int` is a keyword=" + str(cv.hl.class_at(3, 0)) +
+      " and `main` is not=" + str(cv.hl.class_at(3, 4)))
+
+# a file the compiler does not read opens as plain text — no invented colours
+cv.load_text("notes.md", "# a heading\n*emphasis* and `code`\n", 0)
+print("md: lang=" + str(cv.hl.lang) + " class=" + str(cv.hl.class_at(0, 0)))
+
+# and a HALF-WRITTEN C file must not be fatal: an editor buffer never is finished
+cv.load_text("half.c", "int f(void) { char *s = \"unterminated\n  return 0;\n", 0)
+print("half-written C survived, lines=" + str(cv.buf.nlines()))
+
 print("fold-scroll-ok")

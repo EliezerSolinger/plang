@@ -71,140 +71,6 @@ struct CVal {
     const char *sval;
 };
 
-
-void StrSet_init(StrSet *self) {
-    memset(self, 0, sizeof(*self));
-}
-
-int32_t StrSet_find_slot(const StrSet *self, const char *key, uint64_t h, int32_t *out_entry) {
-    int32_t mask = self->icap - 1;
-    int32_t slot = (int32_t)(h & (uint64_t)mask);
-    int32_t first_tomb = -1;
-    while (1) {
-        int32_t idx = self->indices[slot];
-        if (idx == -1) {
-            *out_entry = -1;
-            return (first_tomb != -1 ? first_tomb : slot);
-        }
-        if (idx == -2) {
-            if (first_tomb == -1) {
-                first_tomb = slot;
-            }
-        } else if (!self->dead[idx] && strcmp(self->keys[idx], key) == 0) {
-            *out_entry = idx;
-            return slot;
-        }
-        slot = (slot + 1) & mask;
-    }
-}
-
-void StrSet_rehash(StrSet *self, int32_t newcap) {
-    int32_t w = 0;
-    int32_t r;
-    for (r = 0; r < self->elen; r += 1) {
-        if (!self->dead[r]) {
-            if (w != r) {
-                self->keys[w] = self->keys[r];
-            }
-            self->dead[w] = 0;
-            w += 1;
-        }
-    }
-    self->elen = w;
-    self->tombs = 0;
-    free(self->indices);
-    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
-    self->icap = newcap;
-    int32_t i;
-    for (i = 0; i < newcap; i += 1) {
-        self->indices[i] = -1;
-    }
-    int32_t mask = newcap - 1;
-    for (i = 0; i < self->elen; i += 1) {
-        int32_t slot = (int32_t)(hash_cstr(self->keys[i]) & (uint64_t)mask);
-        while (self->indices[slot] != -1) {
-            slot = (slot + 1) & mask;
-        }
-        self->indices[slot] = i;
-    }
-}
-
-void StrSet_grow_entries(StrSet *self) {
-    if (self->elen < self->ecap) {
-        return;
-    }
-    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
-    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
-    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
-    self->ecap = nc;
-}
-
-int StrSet_add(StrSet *self, const char *key) {
-    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
-        StrSet_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
-    }
-    uint64_t h = hash_cstr(key);
-    int32_t entry = -1;
-    int32_t slot = StrSet_find_slot(self, key, h, &entry);
-    if (entry >= 0) {
-        return 0;
-    }
-    StrSet_grow_entries(self);
-    size_t n = strlen(key) + 1;
-    char *kcopy = malloc(n);
-    memcpy(kcopy, key, n);
-    int32_t e = self->elen;
-    self->keys[e] = kcopy;
-    self->dead[e] = 0;
-    self->elen += 1;
-    if (self->indices[slot] == -2) {
-        self->tombs -= 1;
-    }
-    self->indices[slot] = e;
-    self->size += 1;
-    return 1;
-}
-
-int StrSet_has(const StrSet *self, const char *key) {
-    if (self->size == 0) {
-        return 0;
-    }
-    int32_t entry = -1;
-    StrSet_find_slot(self, key, hash_cstr(key), &entry);
-    return entry >= 0;
-}
-
-int StrSet_remove(StrSet *self, const char *key) {
-    if (self->size == 0) {
-        return 0;
-    }
-    int32_t entry = -1;
-    int32_t slot = StrSet_find_slot(self, key, hash_cstr(key), &entry);
-    if (entry < 0) {
-        return 0;
-    }
-    free(self->keys[entry]);
-    self->keys[entry] = NULL;
-    self->dead[entry] = 1;
-    self->indices[slot] = -2;
-    self->size -= 1;
-    self->tombs += 1;
-    return 1;
-}
-
-void StrSet_deinit(StrSet *self) {
-    int32_t i;
-    for (i = 0; i < self->elen; i += 1) {
-        if (!self->dead[i]) {
-            free(self->keys[i]);
-        }
-    }
-    free(self->indices);
-    free(self->keys);
-    free(self->dead);
-    memset(self, 0, sizeof(*self));
-}
-
 struct StrMap_pSInfo {
     int32_t *indices;
     int32_t icap;
@@ -625,167 +491,6 @@ int StrMap_pType_has(const StrMap_pType *self, const char *key);
 int StrMap_pType_remove(StrMap_pType *self, const char *key);
 
 void StrMap_pType_deinit(StrMap_pType *self);
-
-
-void StrMap_pType_init(StrMap_pType *self) {
-    memset(self, 0, sizeof(*self));
-}
-
-int32_t StrMap_pType_find_slot(const StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry) {
-    int32_t mask = self->icap - 1;
-    int32_t slot = (int32_t)(h & (uint64_t)mask);
-    int32_t first_tomb = -1;
-    while (1) {
-        int32_t idx = self->indices[slot];
-        if (idx == -1) {
-            *out_entry = -1;
-            return (first_tomb != -1 ? first_tomb : slot);
-        }
-        if (idx == -2) {
-            if (first_tomb == -1) {
-                first_tomb = slot;
-            }
-        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
-            *out_entry = idx;
-            return slot;
-        }
-        slot = (slot + 1) & mask;
-    }
-}
-
-void StrMap_pType_rehash(StrMap_pType *self, int32_t newcap) {
-    int32_t w = 0;
-    int32_t r;
-    for (r = 0; r < self->elen; r += 1) {
-        if (!self->dead[r]) {
-            if (w != r) {
-                self->hashes[w] = self->hashes[r];
-                self->keys[w] = self->keys[r];
-                self->vals[w] = self->vals[r];
-            }
-            self->dead[w] = 0;
-            w += 1;
-        }
-    }
-    self->elen = w;
-    self->tombs = 0;
-    free(self->indices);
-    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
-    self->icap = newcap;
-    int32_t i;
-    for (i = 0; i < newcap; i += 1) {
-        self->indices[i] = -1;
-    }
-    int32_t mask = newcap - 1;
-    for (i = 0; i < self->elen; i += 1) {
-        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
-        while (self->indices[slot] != -1) {
-            slot = (slot + 1) & mask;
-        }
-        self->indices[slot] = i;
-    }
-}
-
-void StrMap_pType_grow_entries(StrMap_pType *self) {
-    if (self->elen < self->ecap) {
-        return;
-    }
-    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
-    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
-    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
-    self->vals = realloc(self->vals, sizeof(Type *) * (size_t)nc);
-    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
-    self->ecap = nc;
-}
-
-void StrMap_pType_put(StrMap_pType *self, const char *key, Type *value) {
-    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
-        StrMap_pType_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
-    }
-    uint64_t h = hash_cstr(key);
-    int32_t entry = -1;
-    int32_t slot = StrMap_pType_find_slot(self, key, h, &entry);
-    if (entry >= 0) {
-        self->vals[entry] = value;
-        return;
-    }
-    StrMap_pType_grow_entries(self);
-    size_t n = strlen(key) + 1;
-    char *kcopy = malloc(n);
-    memcpy(kcopy, key, n);
-    int32_t e = self->elen;
-    self->hashes[e] = h;
-    self->keys[e] = kcopy;
-    self->vals[e] = value;
-    self->dead[e] = 0;
-    self->elen += 1;
-    if (self->indices[slot] == -2) {
-        self->tombs -= 1;
-    }
-    self->indices[slot] = e;
-    self->size += 1;
-}
-
-int StrMap_pType_get(const StrMap_pType *self, const char *key, Type **out) {
-    if (self->size == 0) {
-        return 0;
-    }
-    int32_t entry = -1;
-    StrMap_pType_find_slot(self, key, hash_cstr(key), &entry);
-    if (entry < 0) {
-        return 0;
-    }
-    *out = self->vals[entry];
-    return 1;
-}
-
-Type *StrMap_pType_get_or(const StrMap_pType *self, const char *key, Type *fallback) {
-    Type *v = fallback;
-    StrMap_pType_get(self, key, &v);
-    return v;
-}
-
-int StrMap_pType_has(const StrMap_pType *self, const char *key) {
-    int32_t entry = -1;
-    if (self->size == 0) {
-        return 0;
-    }
-    StrMap_pType_find_slot(self, key, hash_cstr(key), &entry);
-    return entry >= 0;
-}
-
-int StrMap_pType_remove(StrMap_pType *self, const char *key) {
-    if (self->size == 0) {
-        return 0;
-    }
-    int32_t entry = -1;
-    int32_t slot = StrMap_pType_find_slot(self, key, hash_cstr(key), &entry);
-    if (entry < 0) {
-        return 0;
-    }
-    free(self->keys[entry]);
-    self->keys[entry] = NULL;
-    self->dead[entry] = 1;
-    self->indices[slot] = -2;
-    self->size -= 1;
-    self->tombs += 1;
-    return 1;
-}
-
-void StrMap_pType_deinit(StrMap_pType *self) {
-    int32_t i;
-    for (i = 0; i < self->elen; i += 1) {
-        if (!self->dead[i]) {
-            free(self->keys[i]);
-        }
-    }
-    free(self->indices);
-    free(self->hashes);
-    free(self->keys);
-    free(self->vals);
-    free(self->dead);
-    memset(self, 0, sizeof(*self));
-}
 
 struct StrMap_pDecl {
     int32_t *indices;
@@ -1240,167 +945,6 @@ int StrMap_i64_has(const StrMap_i64 *self, const char *key);
 int StrMap_i64_remove(StrMap_i64 *self, const char *key);
 
 void StrMap_i64_deinit(StrMap_i64 *self);
-
-
-void StrMap_i64_init(StrMap_i64 *self) {
-    memset(self, 0, sizeof(*self));
-}
-
-int32_t StrMap_i64_find_slot(const StrMap_i64 *self, const char *key, uint64_t h, int32_t *out_entry) {
-    int32_t mask = self->icap - 1;
-    int32_t slot = (int32_t)(h & (uint64_t)mask);
-    int32_t first_tomb = -1;
-    while (1) {
-        int32_t idx = self->indices[slot];
-        if (idx == -1) {
-            *out_entry = -1;
-            return (first_tomb != -1 ? first_tomb : slot);
-        }
-        if (idx == -2) {
-            if (first_tomb == -1) {
-                first_tomb = slot;
-            }
-        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
-            *out_entry = idx;
-            return slot;
-        }
-        slot = (slot + 1) & mask;
-    }
-}
-
-void StrMap_i64_rehash(StrMap_i64 *self, int32_t newcap) {
-    int32_t w = 0;
-    int32_t r;
-    for (r = 0; r < self->elen; r += 1) {
-        if (!self->dead[r]) {
-            if (w != r) {
-                self->hashes[w] = self->hashes[r];
-                self->keys[w] = self->keys[r];
-                self->vals[w] = self->vals[r];
-            }
-            self->dead[w] = 0;
-            w += 1;
-        }
-    }
-    self->elen = w;
-    self->tombs = 0;
-    free(self->indices);
-    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
-    self->icap = newcap;
-    int32_t i;
-    for (i = 0; i < newcap; i += 1) {
-        self->indices[i] = -1;
-    }
-    int32_t mask = newcap - 1;
-    for (i = 0; i < self->elen; i += 1) {
-        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
-        while (self->indices[slot] != -1) {
-            slot = (slot + 1) & mask;
-        }
-        self->indices[slot] = i;
-    }
-}
-
-void StrMap_i64_grow_entries(StrMap_i64 *self) {
-    if (self->elen < self->ecap) {
-        return;
-    }
-    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
-    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
-    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
-    self->vals = realloc(self->vals, sizeof(int64_t) * (size_t)nc);
-    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
-    self->ecap = nc;
-}
-
-void StrMap_i64_put(StrMap_i64 *self, const char *key, int64_t value) {
-    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
-        StrMap_i64_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
-    }
-    uint64_t h = hash_cstr(key);
-    int32_t entry = -1;
-    int32_t slot = StrMap_i64_find_slot(self, key, h, &entry);
-    if (entry >= 0) {
-        self->vals[entry] = value;
-        return;
-    }
-    StrMap_i64_grow_entries(self);
-    size_t n = strlen(key) + 1;
-    char *kcopy = malloc(n);
-    memcpy(kcopy, key, n);
-    int32_t e = self->elen;
-    self->hashes[e] = h;
-    self->keys[e] = kcopy;
-    self->vals[e] = value;
-    self->dead[e] = 0;
-    self->elen += 1;
-    if (self->indices[slot] == -2) {
-        self->tombs -= 1;
-    }
-    self->indices[slot] = e;
-    self->size += 1;
-}
-
-int StrMap_i64_get(const StrMap_i64 *self, const char *key, int64_t *out) {
-    if (self->size == 0) {
-        return 0;
-    }
-    int32_t entry = -1;
-    StrMap_i64_find_slot(self, key, hash_cstr(key), &entry);
-    if (entry < 0) {
-        return 0;
-    }
-    *out = self->vals[entry];
-    return 1;
-}
-
-int64_t StrMap_i64_get_or(const StrMap_i64 *self, const char *key, int64_t fallback) {
-    int64_t v = fallback;
-    StrMap_i64_get(self, key, &v);
-    return v;
-}
-
-int StrMap_i64_has(const StrMap_i64 *self, const char *key) {
-    int32_t entry = -1;
-    if (self->size == 0) {
-        return 0;
-    }
-    StrMap_i64_find_slot(self, key, hash_cstr(key), &entry);
-    return entry >= 0;
-}
-
-int StrMap_i64_remove(StrMap_i64 *self, const char *key) {
-    if (self->size == 0) {
-        return 0;
-    }
-    int32_t entry = -1;
-    int32_t slot = StrMap_i64_find_slot(self, key, hash_cstr(key), &entry);
-    if (entry < 0) {
-        return 0;
-    }
-    free(self->keys[entry]);
-    self->keys[entry] = NULL;
-    self->dead[entry] = 1;
-    self->indices[slot] = -2;
-    self->size -= 1;
-    self->tombs += 1;
-    return 1;
-}
-
-void StrMap_i64_deinit(StrMap_i64 *self) {
-    int32_t i;
-    for (i = 0; i < self->elen; i += 1) {
-        if (!self->dead[i]) {
-            free(self->keys[i]);
-        }
-    }
-    free(self->indices);
-    free(self->hashes);
-    free(self->keys);
-    free(self->vals);
-    free(self->dead);
-    memset(self, 0, sizeof(*self));
-}
 
 struct StrMap_pCVal {
     int32_t *indices;
@@ -2381,24 +1925,24 @@ static Expr *Sema_clone_expr(Sema *self, Subst *sub, Expr *e) {
     }
     Expr *ne = ex_new(self->a, e->kind, e->pos);
     {
-        Expr *__with_701_9 = ne;
-        __with_701_9->text = e->text;
-        __with_701_9->op = e->op;
-        __with_701_9->lhs = Sema_clone_expr(self, sub, e->lhs);
-        __with_701_9->rhs = Sema_clone_expr(self, sub, e->rhs);
-        __with_701_9->cond = Sema_clone_expr(self, sub, e->cond);
-        __with_701_9->nargs = e->nargs;
+        Expr *__with_704_9 = ne;
+        __with_704_9->text = e->text;
+        __with_704_9->op = e->op;
+        __with_704_9->lhs = Sema_clone_expr(self, sub, e->lhs);
+        __with_704_9->rhs = Sema_clone_expr(self, sub, e->rhs);
+        __with_704_9->cond = Sema_clone_expr(self, sub, e->cond);
+        __with_704_9->nargs = e->nargs;
         if (e->args != NULL) {
             Expr **args = Arena_alloc(self->a, (size_t)e->nargs * sizeof(*args));
             size_t i;
             for (i = 0; i < e->nargs; i += 1) {
                 args[i] = Sema_clone_expr(self, sub, e->args[i]);
             }
-            __with_701_9->args = args;
+            __with_704_9->args = args;
         }
-        __with_701_9->field = e->field;
-        __with_701_9->cast_type = Sema_clone_type(self, sub, e->cast_type);
-        __with_701_9->cast_tentative = e->cast_tentative;
+        __with_704_9->field = e->field;
+        __with_704_9->cast_type = Sema_clone_type(self, sub, e->cast_type);
+        __with_704_9->cast_tentative = e->cast_tentative;
     }
     return ne;
 }
@@ -2406,15 +1950,15 @@ static Expr *Sema_clone_expr(Sema *self, Subst *sub, Expr *e) {
 static Stmt *Sema_clone_stmt(Sema *self, Subst *sub, Stmt *st) {
     Stmt *ns = st_new(self->a, st->kind, st->pos);
     {
-        Stmt *__with_720_9 = ns;
-        __with_720_9->name = st->name;
-        __with_720_9->type = Sema_clone_type(self, sub, st->type);
-        __with_720_9->init = Sema_clone_expr(self, sub, st->init);
-        __with_720_9->is_const = st->is_const;
-        __with_720_9->lhs = Sema_clone_expr(self, sub, st->lhs);
-        __with_720_9->op = st->op;
-        __with_720_9->rhs = Sema_clone_expr(self, sub, st->rhs);
-        __with_720_9->expr = Sema_clone_expr(self, sub, st->expr);
+        Stmt *__with_723_9 = ns;
+        __with_723_9->name = st->name;
+        __with_723_9->type = Sema_clone_type(self, sub, st->type);
+        __with_723_9->init = Sema_clone_expr(self, sub, st->init);
+        __with_723_9->is_const = st->is_const;
+        __with_723_9->lhs = Sema_clone_expr(self, sub, st->lhs);
+        __with_723_9->op = st->op;
+        __with_723_9->rhs = Sema_clone_expr(self, sub, st->rhs);
+        __with_723_9->expr = Sema_clone_expr(self, sub, st->expr);
         if (st->conds != NULL) {
             Expr **nc = Arena_alloc(self->a, (size_t)st->nconds * sizeof(*nc));
             Block **nb = Arena_alloc(self->a, (size_t)st->nconds * sizeof(*nb));
@@ -2423,19 +1967,19 @@ static Stmt *Sema_clone_stmt(Sema *self, Subst *sub, Stmt *st) {
                 nc[i] = Sema_clone_expr(self, sub, st->conds[i]);
                 nb[i] = Sema_clone_block(self, sub, st->blocks[i]);
             }
-            __with_720_9->conds = nc;
-            __with_720_9->blocks = nb;
+            __with_723_9->conds = nc;
+            __with_723_9->blocks = nb;
         }
-        __with_720_9->nconds = st->nconds;
-        __with_720_9->else_block = Sema_clone_block(self, sub, st->else_block);
-        __with_720_9->if_sel = st->if_sel;
-        __with_720_9->cond = Sema_clone_expr(self, sub, st->cond);
-        __with_720_9->body = Sema_clone_block(self, sub, st->body);
-        __with_720_9->var = st->var;
-        __with_720_9->from = Sema_clone_expr(self, sub, st->from);
-        __with_720_9->to = Sema_clone_expr(self, sub, st->to);
-        __with_720_9->step = Sema_clone_expr(self, sub, st->step);
-        __with_720_9->subject = Sema_clone_expr(self, sub, st->subject);
+        __with_723_9->nconds = st->nconds;
+        __with_723_9->else_block = Sema_clone_block(self, sub, st->else_block);
+        __with_723_9->if_sel = st->if_sel;
+        __with_723_9->cond = Sema_clone_expr(self, sub, st->cond);
+        __with_723_9->body = Sema_clone_block(self, sub, st->body);
+        __with_723_9->var = st->var;
+        __with_723_9->from = Sema_clone_expr(self, sub, st->from);
+        __with_723_9->to = Sema_clone_expr(self, sub, st->to);
+        __with_723_9->step = Sema_clone_expr(self, sub, st->step);
+        __with_723_9->subject = Sema_clone_expr(self, sub, st->subject);
         if (st->cases != NULL) {
             MatchCase **cs = Arena_alloc(self->a, (size_t)st->ncases * sizeof(*cs));
             size_t j;
@@ -2443,28 +1987,28 @@ static Stmt *Sema_clone_stmt(Sema *self, Subst *sub, Stmt *st) {
                 MatchCase *oc = st->cases[j];
                 MatchCase *mc = Arena_alloc(self->a, sizeof(MatchCase));
                 {
-                    MatchCase *__with_752_21 = mc;
-                    __with_752_21->is_default = oc->is_default;
-                    __with_752_21->nvals = oc->nvals;
+                    MatchCase *__with_755_21 = mc;
+                    __with_755_21->is_default = oc->is_default;
+                    __with_755_21->nvals = oc->nvals;
                     if (oc->vals != NULL) {
                         Expr **vs = Arena_alloc(self->a, (size_t)oc->nvals * sizeof(*vs));
                         size_t k;
                         for (k = 0; k < oc->nvals; k += 1) {
                             vs[k] = Sema_clone_expr(self, sub, oc->vals[k]);
                         }
-                        __with_752_21->vals = vs;
+                        __with_755_21->vals = vs;
                     }
-                    __with_752_21->type_pat = Sema_clone_type(self, sub, oc->type_pat);
-                    __with_752_21->body = Sema_clone_block(self, sub, oc->body);
+                    __with_755_21->type_pat = Sema_clone_type(self, sub, oc->type_pat);
+                    __with_755_21->body = Sema_clone_block(self, sub, oc->body);
                 }
                 cs[j] = mc;
             }
-            __with_720_9->cases = cs;
+            __with_723_9->cases = cs;
         }
-        __with_720_9->ncases = st->ncases;
-        __with_720_9->is_typematch = st->is_typematch;
-        __with_720_9->tm_sel = st->tm_sel;
-        __with_720_9->label = st->label;
+        __with_723_9->ncases = st->ncases;
+        __with_723_9->is_typematch = st->is_typematch;
+        __with_723_9->tm_sel = st->tm_sel;
+        __with_723_9->label = st->label;
     }
     return ns;
 }
@@ -3580,12 +3124,12 @@ static void Sema_ensure_libc_proto(Sema *self, const char *name, Type *ret) {
     }
     Func *lf = Arena_alloc(self->a, sizeof(Func));
     {
-        Func *__with_1685_9 = lf;
-        __with_1685_9->name = name;
-        __with_1685_9->cname = name;
-        __with_1685_9->ret = ret;
-        __with_1685_9->nparams = 0;
-        __with_1685_9->sig_empty = 1;
+        Func *__with_1688_9 = lf;
+        __with_1688_9->name = name;
+        __with_1688_9->cname = name;
+        __with_1688_9->ret = ret;
+        __with_1688_9->nparams = 0;
+        __with_1688_9->sig_empty = 1;
     }
     StrMap_pFunc_put(&self->funcs, name, lf);
 }
@@ -3687,12 +3231,12 @@ static void Sema_lam_fix(Sema *self, Expr *e, Type *want) {
     self->lam_pend[self->nlam_pend] = f;
     self->nlam_pend += 1;
     {
-        Expr *__with_1795_9 = e;
-        __with_1795_9->kind = EX_IDENT;
-        __with_1795_9->text = f->name;
-        __with_1795_9->lhs = NULL;
-        __with_1795_9->args = NULL;
-        __with_1795_9->nargs = 0;
+        Expr *__with_1798_9 = e;
+        __with_1798_9->kind = EX_IDENT;
+        __with_1798_9->text = f->name;
+        __with_1798_9->lhs = NULL;
+        __with_1798_9->args = NULL;
+        __with_1798_9->nargs = 0;
     }
 }
 
@@ -4549,16 +4093,16 @@ static void Sema_lower_match_strings(Sema *self, Stmt *st) {
         nc += 1;
     }
     {
-        Stmt *__with_2498_9 = st;
-        __with_2498_9->kind = ST_IF;
-        __with_2498_9->conds = conds;
-        __with_2498_9->blocks = blocks;
-        __with_2498_9->nconds = nc;
-        __with_2498_9->else_block = els;
-        __with_2498_9->subject = NULL;
-        __with_2498_9->cases = NULL;
-        __with_2498_9->ncases = 0;
-        __with_2498_9->if_sel = -1;
+        Stmt *__with_2501_9 = st;
+        __with_2501_9->kind = ST_IF;
+        __with_2501_9->conds = conds;
+        __with_2501_9->blocks = blocks;
+        __with_2501_9->nconds = nc;
+        __with_2501_9->else_block = els;
+        __with_2501_9->subject = NULL;
+        __with_2501_9->cases = NULL;
+        __with_2501_9->ncases = 0;
+        __with_2501_9->if_sel = -1;
     }
 }
 
@@ -4943,13 +4487,13 @@ static void Sema_check_assign_types(Sema *self, Pos pos, Type *lt, Type *rt, Exp
         Expr *rin = Arena_alloc(self->a, sizeof(Expr));
         *rin = *rhs;
         {
-            Expr *__with_2833_13 = rhs;
-            __with_2833_13->kind = EX_UNARY;
-            __with_2833_13->op = TK_STAR;
-            __with_2833_13->lhs = rin;
-            __with_2833_13->rhs = NULL;
-            __with_2833_13->out_done = 1;
-            __with_2833_13->text = NULL;
+            Expr *__with_2836_13 = rhs;
+            __with_2836_13->kind = EX_UNARY;
+            __with_2836_13->op = TK_STAR;
+            __with_2836_13->lhs = rin;
+            __with_2836_13->rhs = NULL;
+            __with_2836_13->out_done = 1;
+            __with_2836_13->text = NULL;
         }
         rt = rt->inner;
     }
@@ -5632,12 +5176,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             }
             if (callee->kind == EX_IDENT && strcmp(callee->text, "is_defined") == 0 && e->nargs == 1 && e->args[0]->kind == EX_IDENT) {
                 {
-                    Expr *__with_3395_21 = e;
-                    __with_3395_21->kind = EX_NUMBER;
-                    __with_3395_21->text = (StrMap_pCVal_has(&self->constvals, e->args[0]->text) ? "1" : "0");
-                    __with_3395_21->lhs = NULL;
-                    __with_3395_21->args = NULL;
-                    __with_3395_21->nargs = 0;
+                    Expr *__with_3398_21 = e;
+                    __with_3398_21->kind = EX_NUMBER;
+                    __with_3398_21->text = (StrMap_pCVal_has(&self->constvals, e->args[0]->text) ? "1" : "0");
+                    __with_3398_21->lhs = NULL;
+                    __with_3398_21->args = NULL;
+                    __with_3398_21->nargs = 0;
                 }
                 return;
             }
@@ -5654,13 +5198,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 idx0->lhs = arr;
                 idx0->rhs = zero;
                 {
-                    Expr *__with_3418_21 = e;
-                    __with_3418_21->kind = EX_BINARY;
-                    __with_3418_21->op = TK_SLASH;
-                    __with_3418_21->lhs = mk_call1(self->a, "sizeof", arr, e->pos);
-                    __with_3418_21->rhs = mk_call1(self->a, "sizeof", idx0, e->pos);
-                    __with_3418_21->args = NULL;
-                    __with_3418_21->nargs = 0;
+                    Expr *__with_3421_21 = e;
+                    __with_3421_21->kind = EX_BINARY;
+                    __with_3421_21->op = TK_SLASH;
+                    __with_3421_21->lhs = mk_call1(self->a, "sizeof", arr, e->pos);
+                    __with_3421_21->rhs = mk_call1(self->a, "sizeof", idx0, e->pos);
+                    __with_3421_21->args = NULL;
+                    __with_3421_21->nargs = 0;
                 }
                 return;
             }
@@ -5704,24 +5248,24 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             if (callee->kind == EX_IDENT && strcmp(callee->text, "typestr") == 0 && e->nargs == 1) {
                 const char *tn = render_type_p(self->a, Sema_type_of(self, e->args[0]));
                 {
-                    Expr *__with_3464_21 = e;
-                    __with_3464_21->kind = EX_STRING;
-                    __with_3464_21->text = Arena_printf(self->a, "\"%s\"", tn);
-                    __with_3464_21->lhs = NULL;
-                    __with_3464_21->args = NULL;
-                    __with_3464_21->nargs = 0;
+                    Expr *__with_3467_21 = e;
+                    __with_3467_21->kind = EX_STRING;
+                    __with_3467_21->text = Arena_printf(self->a, "\"%s\"", tn);
+                    __with_3467_21->lhs = NULL;
+                    __with_3467_21->args = NULL;
+                    __with_3467_21->nargs = 0;
                 }
                 return;
             }
             if (callee->kind == EX_IDENT && strcmp(callee->text, "hasfield") == 0 && e->nargs == 2) {
                 int hf = Sema_hasfield_of(self, e);
                 {
-                    Expr *__with_3484_21 = e;
-                    __with_3484_21->kind = (hf ? EX_TRUE : EX_FALSE);
-                    __with_3484_21->text = NULL;
-                    __with_3484_21->lhs = NULL;
-                    __with_3484_21->args = NULL;
-                    __with_3484_21->nargs = 0;
+                    Expr *__with_3487_21 = e;
+                    __with_3487_21->kind = (hf ? EX_TRUE : EX_FALSE);
+                    __with_3487_21->text = NULL;
+                    __with_3487_21->lhs = NULL;
+                    __with_3487_21->args = NULL;
+                    __with_3487_21->nargs = 0;
                 }
                 return;
             }
@@ -5732,12 +5276,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 Expr *targ = e->args[0];
                 Sema_check_expr(self, targ);
                 {
-                    Expr *__with_3497_21 = e;
-                    __with_3497_21->kind = EX_CAST;
-                    __with_3497_21->cast_type = callee->cast_type;
-                    __with_3497_21->lhs = targ;
-                    __with_3497_21->args = NULL;
-                    __with_3497_21->nargs = 0;
+                    Expr *__with_3500_21 = e;
+                    __with_3500_21->kind = EX_CAST;
+                    __with_3500_21->cast_type = callee->cast_type;
+                    __with_3500_21->lhs = targ;
+                    __with_3500_21->args = NULL;
+                    __with_3500_21->nargs = 0;
                 }
                 return;
             }
@@ -5753,12 +5297,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                 Expr *arg = e->args[0];
                 Sema_check_expr(self, arg);
                 {
-                    Expr *__with_3519_21 = e;
-                    __with_3519_21->kind = EX_CAST;
-                    __with_3519_21->cast_type = ty_name(self->a, callee->text);
-                    __with_3519_21->lhs = arg;
-                    __with_3519_21->args = NULL;
-                    __with_3519_21->nargs = 0;
+                    Expr *__with_3522_21 = e;
+                    __with_3522_21->kind = EX_CAST;
+                    __with_3522_21->cast_type = ty_name(self->a, callee->text);
+                    __with_3522_21->lhs = arg;
+                    __with_3522_21->args = NULL;
+                    __with_3522_21->nargs = 0;
                 }
                 return;
             }
@@ -5962,13 +5506,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     args2[n2] = e->lhs;
                     n2 += 1;
                     {
-                        Expr *__with_3708_25 = e;
-                        __with_3708_25->kind = EX_CALL;
-                        __with_3708_25->lhs = deref;
-                        __with_3708_25->args = args2;
-                        __with_3708_25->nargs = n2;
-                        __with_3708_25->cast_type = NULL;
-                        __with_3708_25->cast_tentative = 0;
+                        Expr *__with_3711_25 = e;
+                        __with_3711_25->kind = EX_CALL;
+                        __with_3711_25->lhs = deref;
+                        __with_3711_25->args = args2;
+                        __with_3711_25->nargs = n2;
+                        __with_3711_25->cast_type = NULL;
+                        __with_3711_25->cast_tentative = 0;
                     }
                     Sema_check_expr(self, e);
                     return;
@@ -6063,11 +5607,11 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     Expr *oin = mk_ident(self->a, e->text, e->pos);
                     oin->out_done = 1;
                     {
-                        Expr *__with_3801_25 = e;
-                        __with_3801_25->kind = EX_UNARY;
-                        __with_3801_25->op = TK_STAR;
-                        __with_3801_25->lhs = oin;
-                        __with_3801_25->text = NULL;
+                        Expr *__with_3804_25 = e;
+                        __with_3804_25->kind = EX_UNARY;
+                        __with_3804_25->op = TK_STAR;
+                        __with_3804_25->lhs = oin;
+                        __with_3804_25->text = NULL;
                     }
                     Sema_check_expr(self, e);
                     return;
@@ -6462,12 +6006,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             }
             Expr *wid = mk_ident(self->a, e->text, e->pos);
             {
-                Expr *__with_4134_17 = e;
-                __with_4134_17->kind = EX_ASSIGN;
-                __with_4134_17->op = TK_ASSIGN;
-                __with_4134_17->rhs = e->lhs;
-                __with_4134_17->lhs = wid;
-                __with_4134_17->text = NULL;
+                Expr *__with_4137_17 = e;
+                __with_4137_17->kind = EX_ASSIGN;
+                __with_4137_17->op = TK_ASSIGN;
+                __with_4137_17->rhs = e->lhs;
+                __with_4137_17->lhs = wid;
+                __with_4137_17->text = NULL;
             }
             return;
         }
@@ -6777,12 +6321,12 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
                     return;
                 }
                 {
-                    Stmt *__with_4418_21 = st;
-                    __with_4418_21->kind = ST_VAR;
-                    __with_4418_21->name = st->lhs->text;
-                    __with_4418_21->type = ity;
-                    __with_4418_21->init = st->rhs;
-                    __with_4418_21->is_const = 0;
+                    Stmt *__with_4421_21 = st;
+                    __with_4421_21->kind = ST_VAR;
+                    __with_4421_21->name = st->lhs->text;
+                    __with_4421_21->type = ity;
+                    __with_4421_21->init = st->rhs;
+                    __with_4421_21->is_const = 0;
                 }
                 Sema_resolve_type(self, st->type);
                 Sema_scope_add(self, st->name, st->type);
@@ -8086,13 +7630,13 @@ static void Sema_trait_impl(Sema *self, Module *m, Decl *d, int check_bodies) {
         }
     }
     {
-        Decl *__with_5586_9 = d;
-        __with_5586_9->kind = DL_STRUCT;
-        __with_5586_9->name = d->trait_for;
-        __with_5586_9->fields = NULL;
-        __with_5586_9->nfields = 0;
-        __with_5586_9->is_def = 0;
-        __with_5586_9->is_fwd = 0;
+        Decl *__with_5589_9 = d;
+        __with_5589_9->kind = DL_STRUCT;
+        __with_5589_9->name = d->trait_for;
+        __with_5589_9->fields = NULL;
+        __with_5589_9->nfields = 0;
+        __with_5589_9->is_def = 0;
+        __with_5589_9->is_fwd = 0;
     }
 }
 
@@ -8158,13 +7702,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_5646_13 = d;
-            __with_5646_13->kind = DL_STRUCT;
-            __with_5646_13->name = si0->name;
-            __with_5646_13->fields = NULL;
-            __with_5646_13->nfields = 0;
-            __with_5646_13->methods = bodies0;
-            __with_5646_13->nmethods = nb;
+            Decl *__with_5649_13 = d;
+            __with_5649_13->kind = DL_STRUCT;
+            __with_5649_13->name = si0->name;
+            __with_5649_13->fields = NULL;
+            __with_5649_13->nfields = 0;
+            __with_5649_13->methods = bodies0;
+            __with_5649_13->nmethods = nb;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -8204,9 +7748,9 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             inst->is_inline = 1;
         }
         {
-            Decl *__with_5687_13 = d;
-            __with_5687_13->kind = DL_FUNC;
-            __with_5687_13->func = inst;
+            Decl *__with_5690_13 = d;
+            __with_5690_13->kind = DL_FUNC;
+            __with_5690_13->func = inst;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -8242,13 +7786,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             ibodies[ii]->is_inline = 1;
         }
         {
-            Decl *__with_5718_13 = d;
-            __with_5718_13->kind = DL_STRUCT;
-            __with_5718_13->name = mangled;
-            __with_5718_13->fields = iflds;
-            __with_5718_13->nfields = tpl->nfields;
-            __with_5718_13->methods = ibodies;
-            __with_5718_13->nmethods = tpl->nmethods;
+            Decl *__with_5721_13 = d;
+            __with_5721_13->kind = DL_STRUCT;
+            __with_5721_13->name = mangled;
+            __with_5721_13->fields = iflds;
+            __with_5721_13->nfields = tpl->nfields;
+            __with_5721_13->methods = ibodies;
+            __with_5721_13->nmethods = tpl->nmethods;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -8267,13 +7811,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             protos[i] = Sema_clone_func(self, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_5738_13 = d;
-            __with_5738_13->kind = DL_STRUCT;
-            __with_5738_13->name = mangled;
-            __with_5738_13->fields = fields;
-            __with_5738_13->nfields = tpl->nfields;
-            __with_5738_13->methods = protos;
-            __with_5738_13->nmethods = tpl->nmethods;
+            Decl *__with_5741_13 = d;
+            __with_5741_13->kind = DL_STRUCT;
+            __with_5741_13->name = mangled;
+            __with_5741_13->fields = fields;
+            __with_5741_13->nfields = tpl->nfields;
+            __with_5741_13->methods = protos;
+            __with_5741_13->nmethods = tpl->nmethods;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -8290,13 +7834,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
         bodies[i] = Sema_clone_func(self, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_5757_9 = d;
-        __with_5757_9->kind = DL_STRUCT;
-        __with_5757_9->name = mangled;
-        __with_5757_9->fields = NULL;
-        __with_5757_9->nfields = 0;
-        __with_5757_9->methods = bodies;
-        __with_5757_9->nmethods = tpl->nmethods;
+        Decl *__with_5760_9 = d;
+        __with_5760_9->kind = DL_STRUCT;
+        __with_5760_9->name = mangled;
+        __with_5760_9->fields = NULL;
+        __with_5760_9->nfields = 0;
+        __with_5760_9->methods = bodies;
+        __with_5760_9->nmethods = tpl->nmethods;
     }
     Sema_register_decl(self, m, d, check_bodies);
 }
@@ -8373,11 +7917,11 @@ static int Sema_try_ns_ref(Sema *self, Expr *e) {
     }
     const char *qual = Arena_printf(self->a, "%s.%s", e->lhs->text, e->field);
     {
-        Expr *__with_5820_9 = e;
-        __with_5820_9->kind = EX_IDENT;
-        __with_5820_9->text = Sema_ns_plain(self, qual, e->pos);
-        __with_5820_9->lhs = NULL;
-        __with_5820_9->field = NULL;
+        Expr *__with_5823_9 = e;
+        __with_5823_9->kind = EX_IDENT;
+        __with_5823_9->text = Sema_ns_plain(self, qual, e->pos);
+        __with_5823_9->lhs = NULL;
+        __with_5823_9->field = NULL;
     }
     return 1;
 }
@@ -8728,10 +8272,10 @@ static void Sema_record_ctor(Sema *self, Expr *e, SInfo *si) {
     Type *ct = ty_name(self->a, si->name);
     Sema_resolve_type(self, ct);
     {
-        Expr *__with_6136_9 = e;
-        __with_6136_9->kind = EX_COMPOUND;
-        __with_6136_9->cast_type = ct;
-        __with_6136_9->lhs = NULL;
+        Expr *__with_6139_9 = e;
+        __with_6139_9->kind = EX_COMPOUND;
+        __with_6139_9->cast_type = ct;
+        __with_6139_9->lhs = NULL;
     }
     if (self->cc != NULL && self->cc->std_version == 89 && !self->in_complit_init) {
         Sema_complit_to_temp(self, e, si);
@@ -9095,14 +8639,14 @@ static void Sema_inject_defines(Sema *self, Cc *cc, Module *m) {
         }
         Decl *dc = Arena_alloc(self->a, sizeof(Decl));
         {
-            Decl *__with_6494_13 = dc;
-            __with_6494_13->kind = DL_VAR;
-            __with_6494_13->pos = zp;
-            __with_6494_13->name = name;
-            __with_6494_13->is_const = 1;
-            __with_6494_13->is_static = 1;
-            __with_6494_13->is_define = 1;
-            __with_6494_13->init = ini;
+            Decl *__with_6497_13 = dc;
+            __with_6497_13->kind = DL_VAR;
+            __with_6497_13->pos = zp;
+            __with_6497_13->name = name;
+            __with_6497_13->is_const = 1;
+            __with_6497_13->is_static = 1;
+            __with_6497_13->is_define = 1;
+            __with_6497_13->init = ini;
         }
         nd[np] = dc;
         np += 1;

@@ -68,14 +68,18 @@ struct CVal:
     fval: f64
     sval: const *char   # text of the string literal (with quotes), for EX_STRING
 
-# symbol tables use the compiler's own STL
-implement StrSet
+# symbol tables use the compiler's own STL. `StrSet` is NOT implemented here:
+# `cfront.p` uses it too, and an editor that links the C front end for its
+# highlighting would have had to drag this whole file in for one set. It lives in
+# `vecs.p`, which is where the containers shared between front ends belong.
 declare StrMap<*SInfo>
 implement StrMap<*SInfo>
 declare StrMap<*Func>
 implement StrMap<*Func>
+# `StrMap<*Type>` and `StrMap<i64>`: DECLARED here and implemented in `vecs.p`,
+# for the reason written there — `cfront.p` uses both, and whoever links only the
+# C front end (the editor, to paint C) should not have to bring this file too.
 declare StrMap<*Type>
-implement StrMap<*Type>
 declare StrMap<*Decl>
 implement StrMap<*Decl>
 # declare only: cfront.p already IMPLEMENTS this instance, and a second set of
@@ -85,7 +89,6 @@ declare StrMap<*char>
 declare StrMap<*Expr>
 implement StrMap<*Expr>
 declare StrMap<i64>
-implement StrMap<i64>
 declare StrMap<*CVal>
 implement StrMap<*CVal>
 

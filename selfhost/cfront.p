@@ -16,14 +16,6 @@ declare StrMap<*char>
 implement StrMap<*char>
 
 # C tokens (kind + text); punctuators store the string ("+", "==", ";")
-enum CtKind:
-    CT_EOF = 0
-    CT_ID
-    CT_NUM
-    CT_STR
-    CT_CHAR
-    CT_PUNCT
-
 # forward (used inside the tokenizer's methods, defined later)
 def is_alpha_(c: char) -> bool
 def is_alnum_(c: char) -> bool
@@ -33,12 +25,6 @@ def c_num_error(t: const *char) -> const *char
 def c_static_assert(p: *Cp)
 def c_ternary(p: *Cp) -> *Expr
 def word_count(s: const *char, w: const *char) -> i32
-def word_in(s: const *char, w: const *char) -> bool
-
-struct CTok:
-    kind: CtKind
-    text: const *char
-    pos: Pos
 
 declare Vec<CTok>
 implement Vec<CTok>
@@ -61,6 +47,7 @@ struct Cx:
     toks: Vec<CTok>
     a: *Arena
     strict: bool   # user code: lexical constraint violations are errors
+    display: bool  # keep comments and `#` lines, for whoever paints them
 
     private def lex_punct(self: *Cx, pos: Pos)
 
@@ -95,21 +82,33 @@ struct Cx:
                 continue
             # preprocessor marker lines: # 1 "file" ...
             if c == '#':
+                ppos: Pos = self->here()
+                pstart: usize = self->i
                 while self->i < self->n and self->s[self->i] != '\n':
                     self->adv()
+                if self->display:
+                    self->push(CT_PP, ppos, self->slice(pstart))
                 continue
             # comments
             if c == '/' and self->peekc(1) == '/':
+                cpos: Pos = self->here()
+                cstart: usize = self->i
                 while self->i < self->n and self->s[self->i] != '\n':
                     self->adv()
+                if self->display:
+                    self->push(CT_COMMENT, cpos, self->slice(cstart))
                 continue
             if c == '/' and self->peekc(1) == '*':
+                cpos2: Pos = self->here()
+                cstart2: usize = self->i
                 self->adv()
                 self->adv()
                 while self->i < self->n and not (self->s[self->i] == '*' and self->peekc(1) == '/'):
                     self->adv()
                 self->adv()
                 self->adv()
+                if self->display:
+                    self->push(CT_COMMENT, cpos2, self->slice(cstart2))
                 continue
             pos: Pos = self->here()
             # wide/unicode literal prefix (L'..' L".." u'..' U".."): the prefix
@@ -2752,6 +2751,31 @@ def mark_static(d: *Decl, is_static: bool):
         d->func->is_static = True
     elif d->kind == DL_VAR:
         d->is_static = True
+
+def c_lex_display(a: *Arena, file: const *char, bytes: const *char, nbytes: usize) -> CTokList:
+    """The tokens of a C file, for whoever paints them.
+
+    It is the SAME tokenizer the parser uses, with two switches: `strict` off, so
+    a half-written buffer never becomes a fatal error, and `display` on, so
+    comments and `#` lines come out as tokens instead of being eaten.
+
+    One tokenizer with a flag, and not a second one written for the editor: a
+    second one would drift, and the day it did, the colours would stop meaning
+    what the compiler means."""
+    cx: Cx = {0}
+    cx.file = file
+    cx.strict = False
+    cx.display = True
+    cx.s = bytes
+    cx.n = nbytes
+    cx.line = 1
+    cx.col = 1
+    cx.a = a
+    cx.toks.init()
+    cx.tokenize()
+    out: CTokList = {cx.toks.data, usize(cx.toks.len)}
+    return out
+
 
 def c_parse(a: *Arena, file: const *char, bytes: const *char, nbytes: usize, strict: bool) -> *Module:
     cx: Cx = {0}

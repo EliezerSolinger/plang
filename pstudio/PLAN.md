@@ -319,8 +319,27 @@ tokens; em C uma definição de função não tem palavra nenhuma a marcá-la
 (`static unsigned crc32_bytes(const char *d, unsigned n)`) — exige parse, e o
 parse exige o pré-processador.
 
-**Fica de pé:** o `pcode` pinta os `.c`, `.h` e `.i` deste repositório — os 20 do
-`bootstrap/` e o `tools/mkatlas.c` — com o lexer do próprio compilador.
+**FEITA.** O `pcode` pinta os `.c`, `.h` e `.i` com o lexer do próprio
+compilador. `#include` como palavra-chave, `/* */` e `//` como comentário,
+`0xEDB88320u` como número, `int` como palavra-chave e `main` como texto — e um
+`.md` abre cru, porque não há compilador para ele e uma cor inventada seria um
+segundo realce sem ninguém por trás.
+
+O modo tolerante **já existia**: todos os `fatal_at` do tokenizador do C estavam
+atrás de `self->strict`, que é como os headers do sistema são ingeridos. Faltava
+só classificar em vez de comer — um campo `display: bool` no `Cx`, e duas
+espécies de token (`CT_COMMENT`, `CT_PP`) que o parser nunca vê porque nunca as
+pede. **Um tokenizador com uma flag, e não dois**: um segundo, escrito para
+exibir, ia divergir, e no dia em que divergisse as cores deixavam de querer
+dizer o que o compilador quer dizer.
+
+O que custou, e não estava previsto: o `cfront.p` usa `StrSet`, `StrMap<*Type>` e
+`StrMap<i64>`, e os três eram **`implement`ados no `sema.p`** — 7 332 linhas que
+um editor não tem uso nenhum para linkar. Foram para o `vecs.p`, que é a casa das
+instanciações partilhadas entre front ends, e cujo cabeçalho já dizia isso
+("neutral... o front end de C e os back ends usam estes Vecs sem depender do
+parser do P"). O `pcode` cresceu **98 KB**, e a lista branca passou de 26 para 33
+arquivos — com o argumento escrito dentro dela.
 
 ---
 

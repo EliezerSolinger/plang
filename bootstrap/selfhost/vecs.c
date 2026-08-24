@@ -1,7 +1,535 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "vecs.h"
+#include "../packages/stl/set.h"
+#include "../packages/stl/map.h"
+
+
+void StrSet_init(StrSet *self) {
+    memset(self, 0, sizeof(*self));
+}
+
+int32_t StrSet_find_slot(const StrSet *self, const char *key, uint64_t h, int32_t *out_entry) {
+    int32_t mask = self->icap - 1;
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    int32_t first_tomb = -1;
+    while (1) {
+        int32_t idx = self->indices[slot];
+        if (idx == -1) {
+            *out_entry = -1;
+            return (first_tomb != -1 ? first_tomb : slot);
+        }
+        if (idx == -2) {
+            if (first_tomb == -1) {
+                first_tomb = slot;
+            }
+        } else if (!self->dead[idx] && strcmp(self->keys[idx], key) == 0) {
+            *out_entry = idx;
+            return slot;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+void StrSet_rehash(StrSet *self, int32_t newcap) {
+    int32_t w = 0;
+    int32_t r;
+    for (r = 0; r < self->elen; r += 1) {
+        if (!self->dead[r]) {
+            if (w != r) {
+                self->keys[w] = self->keys[r];
+            }
+            self->dead[w] = 0;
+            w += 1;
+        }
+    }
+    self->elen = w;
+    self->tombs = 0;
+    free(self->indices);
+    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    self->icap = newcap;
+    int32_t i;
+    for (i = 0; i < newcap; i += 1) {
+        self->indices[i] = -1;
+    }
+    int32_t mask = newcap - 1;
+    for (i = 0; i < self->elen; i += 1) {
+        int32_t slot = (int32_t)(hash_cstr(self->keys[i]) & (uint64_t)mask);
+        while (self->indices[slot] != -1) {
+            slot = (slot + 1) & mask;
+        }
+        self->indices[slot] = i;
+    }
+}
+
+void StrSet_grow_entries(StrSet *self) {
+    if (self->elen < self->ecap) {
+        return;
+    }
+    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
+    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
+    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
+    self->ecap = nc;
+}
+
+int StrSet_add(StrSet *self, const char *key) {
+    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
+        StrSet_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
+    }
+    uint64_t h = hash_cstr(key);
+    int32_t entry = -1;
+    int32_t slot = StrSet_find_slot(self, key, h, &entry);
+    if (entry >= 0) {
+        return 0;
+    }
+    StrSet_grow_entries(self);
+    size_t n = strlen(key) + 1;
+    char *kcopy = malloc(n);
+    memcpy(kcopy, key, n);
+    int32_t e = self->elen;
+    self->keys[e] = kcopy;
+    self->dead[e] = 0;
+    self->elen += 1;
+    if (self->indices[slot] == -2) {
+        self->tombs -= 1;
+    }
+    self->indices[slot] = e;
+    self->size += 1;
+    return 1;
+}
+
+int StrSet_has(const StrSet *self, const char *key) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    StrSet_find_slot(self, key, hash_cstr(key), &entry);
+    return entry >= 0;
+}
+
+int StrSet_remove(StrSet *self, const char *key) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    int32_t slot = StrSet_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    free(self->keys[entry]);
+    self->keys[entry] = NULL;
+    self->dead[entry] = 1;
+    self->indices[slot] = -2;
+    self->size -= 1;
+    self->tombs += 1;
+    return 1;
+}
+
+void StrSet_deinit(StrSet *self) {
+    int32_t i;
+    for (i = 0; i < self->elen; i += 1) {
+        if (!self->dead[i]) {
+            free(self->keys[i]);
+        }
+    }
+    free(self->indices);
+    free(self->keys);
+    free(self->dead);
+    memset(self, 0, sizeof(*self));
+}
+
+typedef struct StrMap_pType StrMap_pType;
+typedef struct StrMap_i64 StrMap_i64;
+
+struct StrMap_pType {
+    int32_t *indices;
+    int32_t icap;
+    uint64_t *hashes;
+    char **keys;
+    Type **vals;
+    int *dead;
+    int32_t elen;
+    int32_t ecap;
+    int32_t size;
+    int32_t tombs;
+};
+
+void StrMap_pType_init(StrMap_pType *self);
+
+int32_t StrMap_pType_find_slot(const StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry);
+
+void StrMap_pType_rehash(StrMap_pType *self, int32_t newcap);
+
+void StrMap_pType_grow_entries(StrMap_pType *self);
+
+void StrMap_pType_put(StrMap_pType *self, const char *key, Type *value);
+
+int StrMap_pType_get(const StrMap_pType *self, const char *key, Type **out);
+
+Type *StrMap_pType_get_or(const StrMap_pType *self, const char *key, Type *fallback);
+
+int StrMap_pType_has(const StrMap_pType *self, const char *key);
+
+int StrMap_pType_remove(StrMap_pType *self, const char *key);
+
+void StrMap_pType_deinit(StrMap_pType *self);
+
+
+void StrMap_pType_init(StrMap_pType *self) {
+    memset(self, 0, sizeof(*self));
+}
+
+int32_t StrMap_pType_find_slot(const StrMap_pType *self, const char *key, uint64_t h, int32_t *out_entry) {
+    int32_t mask = self->icap - 1;
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    int32_t first_tomb = -1;
+    while (1) {
+        int32_t idx = self->indices[slot];
+        if (idx == -1) {
+            *out_entry = -1;
+            return (first_tomb != -1 ? first_tomb : slot);
+        }
+        if (idx == -2) {
+            if (first_tomb == -1) {
+                first_tomb = slot;
+            }
+        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
+            *out_entry = idx;
+            return slot;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+void StrMap_pType_rehash(StrMap_pType *self, int32_t newcap) {
+    int32_t w = 0;
+    int32_t r;
+    for (r = 0; r < self->elen; r += 1) {
+        if (!self->dead[r]) {
+            if (w != r) {
+                self->hashes[w] = self->hashes[r];
+                self->keys[w] = self->keys[r];
+                self->vals[w] = self->vals[r];
+            }
+            self->dead[w] = 0;
+            w += 1;
+        }
+    }
+    self->elen = w;
+    self->tombs = 0;
+    free(self->indices);
+    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    self->icap = newcap;
+    int32_t i;
+    for (i = 0; i < newcap; i += 1) {
+        self->indices[i] = -1;
+    }
+    int32_t mask = newcap - 1;
+    for (i = 0; i < self->elen; i += 1) {
+        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
+        while (self->indices[slot] != -1) {
+            slot = (slot + 1) & mask;
+        }
+        self->indices[slot] = i;
+    }
+}
+
+void StrMap_pType_grow_entries(StrMap_pType *self) {
+    if (self->elen < self->ecap) {
+        return;
+    }
+    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
+    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
+    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
+    self->vals = realloc(self->vals, sizeof(Type *) * (size_t)nc);
+    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
+    self->ecap = nc;
+}
+
+void StrMap_pType_put(StrMap_pType *self, const char *key, Type *value) {
+    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
+        StrMap_pType_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
+    }
+    uint64_t h = hash_cstr(key);
+    int32_t entry = -1;
+    int32_t slot = StrMap_pType_find_slot(self, key, h, &entry);
+    if (entry >= 0) {
+        self->vals[entry] = value;
+        return;
+    }
+    StrMap_pType_grow_entries(self);
+    size_t n = strlen(key) + 1;
+    char *kcopy = malloc(n);
+    memcpy(kcopy, key, n);
+    int32_t e = self->elen;
+    self->hashes[e] = h;
+    self->keys[e] = kcopy;
+    self->vals[e] = value;
+    self->dead[e] = 0;
+    self->elen += 1;
+    if (self->indices[slot] == -2) {
+        self->tombs -= 1;
+    }
+    self->indices[slot] = e;
+    self->size += 1;
+}
+
+int StrMap_pType_get(const StrMap_pType *self, const char *key, Type **out) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    StrMap_pType_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    *out = self->vals[entry];
+    return 1;
+}
+
+Type *StrMap_pType_get_or(const StrMap_pType *self, const char *key, Type *fallback) {
+    Type *v = fallback;
+    StrMap_pType_get(self, key, &v);
+    return v;
+}
+
+int StrMap_pType_has(const StrMap_pType *self, const char *key) {
+    int32_t entry = -1;
+    if (self->size == 0) {
+        return 0;
+    }
+    StrMap_pType_find_slot(self, key, hash_cstr(key), &entry);
+    return entry >= 0;
+}
+
+int StrMap_pType_remove(StrMap_pType *self, const char *key) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    int32_t slot = StrMap_pType_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    free(self->keys[entry]);
+    self->keys[entry] = NULL;
+    self->dead[entry] = 1;
+    self->indices[slot] = -2;
+    self->size -= 1;
+    self->tombs += 1;
+    return 1;
+}
+
+void StrMap_pType_deinit(StrMap_pType *self) {
+    int32_t i;
+    for (i = 0; i < self->elen; i += 1) {
+        if (!self->dead[i]) {
+            free(self->keys[i]);
+        }
+    }
+    free(self->indices);
+    free(self->hashes);
+    free(self->keys);
+    free(self->vals);
+    free(self->dead);
+    memset(self, 0, sizeof(*self));
+}
+
+struct StrMap_i64 {
+    int32_t *indices;
+    int32_t icap;
+    uint64_t *hashes;
+    char **keys;
+    int64_t *vals;
+    int *dead;
+    int32_t elen;
+    int32_t ecap;
+    int32_t size;
+    int32_t tombs;
+};
+
+void StrMap_i64_init(StrMap_i64 *self);
+
+int32_t StrMap_i64_find_slot(const StrMap_i64 *self, const char *key, uint64_t h, int32_t *out_entry);
+
+void StrMap_i64_rehash(StrMap_i64 *self, int32_t newcap);
+
+void StrMap_i64_grow_entries(StrMap_i64 *self);
+
+void StrMap_i64_put(StrMap_i64 *self, const char *key, int64_t value);
+
+int StrMap_i64_get(const StrMap_i64 *self, const char *key, int64_t *out);
+
+int64_t StrMap_i64_get_or(const StrMap_i64 *self, const char *key, int64_t fallback);
+
+int StrMap_i64_has(const StrMap_i64 *self, const char *key);
+
+int StrMap_i64_remove(StrMap_i64 *self, const char *key);
+
+void StrMap_i64_deinit(StrMap_i64 *self);
+
+
+void StrMap_i64_init(StrMap_i64 *self) {
+    memset(self, 0, sizeof(*self));
+}
+
+int32_t StrMap_i64_find_slot(const StrMap_i64 *self, const char *key, uint64_t h, int32_t *out_entry) {
+    int32_t mask = self->icap - 1;
+    int32_t slot = (int32_t)(h & (uint64_t)mask);
+    int32_t first_tomb = -1;
+    while (1) {
+        int32_t idx = self->indices[slot];
+        if (idx == -1) {
+            *out_entry = -1;
+            return (first_tomb != -1 ? first_tomb : slot);
+        }
+        if (idx == -2) {
+            if (first_tomb == -1) {
+                first_tomb = slot;
+            }
+        } else if (!self->dead[idx] && self->hashes[idx] == h && strcmp(self->keys[idx], key) == 0) {
+            *out_entry = idx;
+            return slot;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+void StrMap_i64_rehash(StrMap_i64 *self, int32_t newcap) {
+    int32_t w = 0;
+    int32_t r;
+    for (r = 0; r < self->elen; r += 1) {
+        if (!self->dead[r]) {
+            if (w != r) {
+                self->hashes[w] = self->hashes[r];
+                self->keys[w] = self->keys[r];
+                self->vals[w] = self->vals[r];
+            }
+            self->dead[w] = 0;
+            w += 1;
+        }
+    }
+    self->elen = w;
+    self->tombs = 0;
+    free(self->indices);
+    self->indices = malloc(sizeof(int32_t) * (size_t)newcap);
+    self->icap = newcap;
+    int32_t i;
+    for (i = 0; i < newcap; i += 1) {
+        self->indices[i] = -1;
+    }
+    int32_t mask = newcap - 1;
+    for (i = 0; i < self->elen; i += 1) {
+        int32_t slot = (int32_t)(self->hashes[i] & (uint64_t)mask);
+        while (self->indices[slot] != -1) {
+            slot = (slot + 1) & mask;
+        }
+        self->indices[slot] = i;
+    }
+}
+
+void StrMap_i64_grow_entries(StrMap_i64 *self) {
+    if (self->elen < self->ecap) {
+        return;
+    }
+    int32_t nc = (self->ecap == 0 ? 8 : self->ecap * 2);
+    self->hashes = realloc(self->hashes, sizeof(uint64_t) * (size_t)nc);
+    self->keys = realloc(self->keys, sizeof(self->keys[0]) * (size_t)nc);
+    self->vals = realloc(self->vals, sizeof(int64_t) * (size_t)nc);
+    self->dead = realloc(self->dead, sizeof(int) * (size_t)nc);
+    self->ecap = nc;
+}
+
+void StrMap_i64_put(StrMap_i64 *self, const char *key, int64_t value) {
+    if (self->icap == 0 || (self->size + self->tombs + 1) * 3 >= self->icap * 2) {
+        StrMap_i64_rehash(self, (self->icap == 0 ? 8 : self->icap * 2));
+    }
+    uint64_t h = hash_cstr(key);
+    int32_t entry = -1;
+    int32_t slot = StrMap_i64_find_slot(self, key, h, &entry);
+    if (entry >= 0) {
+        self->vals[entry] = value;
+        return;
+    }
+    StrMap_i64_grow_entries(self);
+    size_t n = strlen(key) + 1;
+    char *kcopy = malloc(n);
+    memcpy(kcopy, key, n);
+    int32_t e = self->elen;
+    self->hashes[e] = h;
+    self->keys[e] = kcopy;
+    self->vals[e] = value;
+    self->dead[e] = 0;
+    self->elen += 1;
+    if (self->indices[slot] == -2) {
+        self->tombs -= 1;
+    }
+    self->indices[slot] = e;
+    self->size += 1;
+}
+
+int StrMap_i64_get(const StrMap_i64 *self, const char *key, int64_t *out) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    StrMap_i64_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    *out = self->vals[entry];
+    return 1;
+}
+
+int64_t StrMap_i64_get_or(const StrMap_i64 *self, const char *key, int64_t fallback) {
+    int64_t v = fallback;
+    StrMap_i64_get(self, key, &v);
+    return v;
+}
+
+int StrMap_i64_has(const StrMap_i64 *self, const char *key) {
+    int32_t entry = -1;
+    if (self->size == 0) {
+        return 0;
+    }
+    StrMap_i64_find_slot(self, key, hash_cstr(key), &entry);
+    return entry >= 0;
+}
+
+int StrMap_i64_remove(StrMap_i64 *self, const char *key) {
+    if (self->size == 0) {
+        return 0;
+    }
+    int32_t entry = -1;
+    int32_t slot = StrMap_i64_find_slot(self, key, hash_cstr(key), &entry);
+    if (entry < 0) {
+        return 0;
+    }
+    free(self->keys[entry]);
+    self->keys[entry] = NULL;
+    self->dead[entry] = 1;
+    self->indices[slot] = -2;
+    self->size -= 1;
+    self->tombs += 1;
+    return 1;
+}
+
+void StrMap_i64_deinit(StrMap_i64 *self) {
+    int32_t i;
+    for (i = 0; i < self->elen; i += 1) {
+        if (!self->dead[i]) {
+            free(self->keys[i]);
+        }
+    }
+    free(self->indices);
+    free(self->hashes);
+    free(self->keys);
+    free(self->vals);
+    free(self->dead);
+    memset(self, 0, sizeof(*self));
+}
 
 
 void Vec_pExpr_init(Vec_pExpr *self) {

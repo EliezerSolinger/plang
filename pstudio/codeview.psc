@@ -149,7 +149,7 @@ struct CodeView:
         self.buf.load(data)
         self.path = path
         self.mtime = mtime
-        self.hl = hlm.new_hl(hlm.is_p_file(path))
+        self.hl = hlm.new_hl(hlm.lang_of(path))
         self.top = 0
         self.left = 0
         self.changed()
@@ -1154,7 +1154,7 @@ const K_PAGEDOWN: int = 1073741902
 def cv_create(u: pui.Ui, parent: int) -> CodeView:
     """Creates the widget with the internal bars and the three gutters, and
     returns the CodeView — its id is in `.id`."""
-    cv = CodeView(core.new_buffer(), hlm.new_hl(True), cmp.new_index(), "",
+    cv = CodeView(core.new_buffer(), hlm.new_hl(hlm.LANG_P), cmp.new_index(), "",
                   u, -1, -1, -1, 0, 0, [], False, [], 0, 0, 0, "",
                   True, False, True, False, 0, [], False, 0)
     id = u.custom(parent, None)

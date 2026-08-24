@@ -30,7 +30,12 @@ HLC_TEXT: const i32 = 0
 HLC_KW: const i32 = 1
 HLC_STR: const i32 = 2
 HLC_NUM: const i32 = 3
-HLC_PUNCT: const i32 = 4       # the comment is the pscript side's: the lexer eats them
+HLC_PUNCT: const i32 = 4
+# The two below only ever come out of `hl_lex_c`. On the P side the lexer eats
+# comments, so the pscript layer finds the `#` itself; on the C side the tokenizer
+# can hand them over, and there is no reason to look for `/*` twice.
+HLC_COMMENT: const i32 = 5
+HLC_PP: const i32 = 6          # a `#` line: `#include`, `#define`, `#if`
 
 # ---- the `kind`s completion needs to tell apart (the rest is OTHER) ----
 HLK_OTHER: const i32 = 0
@@ -55,7 +60,13 @@ HLK_CONST: const i32 = 17
 # Lexes the whole text and KEEPS the tokens until the next call (`strerror`'s
 # convention, which is the same as 84's `pmod_text`: nothing for anybody to
 # free). Returns how many tokens came out.
+#
+# TWO doors, because there are two lexers and both are the compiler's: `hl_lex`
+# is P and pscript, `hl_lex_c` is C. What comes back is the same numbers, so the
+# layer above picks the door by extension and then stops caring which language it
+# is looking at.
 def hl_lex(in text: CStr) -> i32
+def hl_lex_c(in text: CStr) -> i32
 # (line, column, length) ZERO-based and in CODEPOINTS — which is the unit the
 # editor measures in, because `len(s)` in pscript is codepoints (3.4)
 def hl_tok_line(i: i32) -> i32

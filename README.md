@@ -254,8 +254,14 @@ Decisions are in [pscript/DESIGN.md](pscript/DESIGN.md), what exists in
 A GUI code editor: tabs, a file tree, a fuzzy command palette (ctrl+p),
 multi-caret editing (ctrl+d), coalesced undo, incremental search (ctrl+f, POSIX
 regex with a `/` prefix), folding, a minimap, and syntax highlighting that reuses
-**the compiler's own lexer**. The UI toolkit and the software rasterizer are ours
-too — no widget library involved.
+**the compiler's own lexer** — for P and pscript through `lex_ex`, and for C
+through the front end's own tokenizer in display mode. The UI toolkit and the
+software rasterizer are ours too — no widget library involved.
+
+Painting all three with the compiler's lexers rather than with a second one
+written for display is what makes the colours unable to disagree with it. What
+the compiler does not read — a `.md`, a `.json` — opens as plain text, which is
+the honest answer rather than invented colours.
 
 There are **two programs from the same layers**: `pcode` is the editor, and
 `pstudio` is the editor plus the IDE — the build, the run and the manifest, with

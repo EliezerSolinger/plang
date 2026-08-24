@@ -158,7 +158,7 @@ print("tree=" + str(len(sh.entries)) + " indexed_files=" + str(len(sh.files)))
 sh.open_file(D + "/hello.p")
 print("tabs=" + str(len(sh.tabs)) + " cur=" + str(sh.cur) + " title=" + sh.tabs[0].title)
 cv = sh.tabs[0].cv
-print("lines=" + str(cv.buf.nlines()) + " hl=" + ("1" if cv.hl.enabled else "0") +
+print("lines=" + str(cv.buf.nlines()) + " hl=" + str(cv.hl.lang) +
       " gutter=" + str(cv.gutter_w()))
 
 # type at the end of line 2
@@ -183,7 +183,7 @@ print("palette=" + ("1" if u.is_visible(sh.palette) else "0") +
       " top=" + (sh.palitems[0].label if len(sh.palitems) > 0 else "<empty>"))
 sh.palette_accept()
 print("tabs=" + str(len(sh.tabs)) + " cur=" + sh.tabs[sh.cur].title +
-      " hl_txt=" + ("1" if sh.tabs[sh.cur].cv.hl.enabled else "0"))
+      " hl_txt=" + str(sh.tabs[sh.cur].cv.hl.lang))
 
 # the command palette
 sh.palette_open(appm.PAL_COMMANDS)
