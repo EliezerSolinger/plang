@@ -2157,11 +2157,24 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       programa nomes que ele tinha o direito de usar — o editor tinha um `struct
       Buffer` e um teste um `struct File`. Ficou a **bateria 144**, com as três
       opções, seguida pela conservadora (renomeei os nossos: `TextBuffer`).
+> **A ordem mudou depois da FN, e a razão fica escrita.** O argumento para pôr a
+> FS a seguir à FN era *"as duas varrem a árvore inteira, e varre-se uma vez"* —
+> e esse argumento EXPIROU no momento em que a FN foi committada: as varreduras
+> passaram a ser separadas de qualquer maneira. Ficando só o mérito de cada
+> fase, a F0 é a que o resto do plano espera (F1, F2 e F6 dependem dela) e a FS
+> e a FE são arrumação que só destrancam a F3. Portanto **a F0 vem a seguir**, e
+> a FS e a FE descem para junto da F3, que é quem precisa dos traits.
+>
+> Isto é uma mudança de ORDEM e não de âmbito: nada saiu do plano.
+
 - [ ] **FS** — `stdlib` + o contrato da fronteira (`Foreign`/`Shared`/`Transfer`).
-      Logo a seguir à FN: as duas varrem a árvore inteira, e varre-se uma vez.
-      O maior `sed` do plano (140 chamadas de `path.*` → `os.*`).
-- [ ] **FE** — o `stl` para dentro do compilador + `Str`→`StrBuf`. Independente;
-      entra aqui porque regenera o `bootstrap/` de qualquer forma.
+      O maior `sed` do plano (140 chamadas de `path.*` → `os.*`). ⚠ metade dela
+      — a MECÂNICA dos traits — está **bloqueada pela 141.6** (objecto dentro de
+      objecto), que tu paraste de propósito. O que dá para fazer sem te
+      perguntar: o pacote `stdlib`, a divisão do `path`, e a DECLARAÇÃO dos
+      traits com a checagem que recusa o caso bloqueado.
+- [ ] **FE** — o `stl` para dentro do compilador + `Str`→`StrBuf`. Independente
+      de tudo; entra quando regenerar o `bootstrap/` já for preciso.
 - [ ] **F0** — `bytes`, fatias do `Buffer` (`View<u8>`), **finalizadores no
       coletor**. Depende da FN (os nomes) e é a fundação de F1/F2/F6.
 - [ ] **F1** — a I/O passa a falar `bytes`; `read(n)` morre, `read_into`/`read_all`
