@@ -2184,7 +2184,13 @@ com um caso que abre e larga dez mil blocos.
 quem tem várias fatias. `f.read_all()` e `R.fetch()` devolvem `bytes`.
 `b.freeze()` entrega o bloco com zero cópia e invalida o buffer (18.2).
 
-**O `c.read(n)` deixa de existir.** A travessia é pacote a pacote, cada um com o
+**O `c.read(n)` deixa de existir** — porque agora há uma resposta melhor para
+aquela pergunta, e não porque a antiga fosse má (135.2). O `List<u8>` fica na
+linguagem, com `bytes(xs)`/`list(b)` a atravessar nos dois sentidos, sempre
+explicitamente: cada uma copia, e uma cópia que acontece sozinha é uma cópia que
+ninguém vê.
+
+A travessia é pacote a pacote, cada um com o
 seu commit e o `verify` verde, e os publicados sobem de versão — que o `0.x` da
 F10 do pstudio destrancou:
 

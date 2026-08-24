@@ -5808,10 +5808,27 @@ mesmos bytes, sem copiar. Nenhum estado escondido dentro do buffer. O
 Java desistiu dele no `MemorySegment` da FFM API — e é a origem de metade dos
 defeitos de quem usa NIO.
 
-**135.2 — O buffer SUBSTITUI o `list<u8>` na I/O.** O `c.read(n)` deixa de
-existir. Uma só maneira de fazer I/O, e a rápida por omissão. Medido antes de
-decidir: **14 ficheiros, 66 sítios**, dos quais os pesados são o `tar` (16) e o
-`repo` (15).
+**135.2 — O `Buffer` substitui o `List<u8>` NA I/O — e só aí.**
+
+> *"eu não sou contra o `list<u8>`, totalmente contra ele, mas ele estava
+> quebrando galho onde não existia solução melhor antes."*
+
+É a leitura certa e vale a pena estar escrita, porque a decisão lê-se facilmente
+como uma condenação e não é uma. O `List<u8>` **não sai da linguagem** e não é um
+erro a corrigir: ele estava a fazer o trabalho de uma coisa que não existia, e
+fê-lo bem durante todo o tempo em que era a única.
+
+O que muda é que deixa de ser a **moeda da I/O**. `c.read(n)` deixa de existir
+porque agora há uma resposta melhor para aquela pergunta — não porque a antiga
+fosse má.
+
+E continua a ser o tipo certo para o que ele realmente é: uma lista de números
+pequenos, com todas as operações de lista. As conversões existem e são
+**explícitas nos dois sentidos** — `bytes(xs)` e `list(b)` — porque cada uma
+copia, e uma cópia que acontece sozinha é uma cópia que ninguém vê.
+
+Medido antes de decidir: **14 ficheiros, 66 sítios**, dos quais os pesados são o
+`tar` (16) e o `repo` (15).
 
 **135.3 — Dois tipos, e a linha entre eles é visível na grafia.**
 
