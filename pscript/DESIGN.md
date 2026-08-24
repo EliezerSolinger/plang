@@ -6250,6 +6250,22 @@ não decidia:
 E a metade de sistema do `path` (`exists`, `isdir`, `isfile`, `getsize`,
 `getmtime`) junta-se ao `os`, onde o `listdir` já está.
 
+**E há uma segunda cláusula, que não é sobre segurança mas sobre QUANDO:**
+
+> *"os contentores padrão do Python e da linguagem ficam internos, porque eles são
+> o coração da linguagem: devem ser resolvidos em tempo de compilação do próprio
+> compilador e não do programa."*
+
+`str`, `List`, `Dict`, `Set` ficam no runtime — não por serem inseguros, mas
+porque um programa que escreve `[]` **não pode depender de um pacote existir, ser
+encontrado, ser instalado e estar na versão certa**. Um compilador de C não
+distribui o `int` num header. O que é o coração resolve-se quando o COMPILADOR é
+construído; o que é conveniência resolve-se quando o PROGRAMA é construído.
+
+E é isso que separa o `psrt_val.p` (fica) do `bisect`/`heapq`/`random` (saem): um
+programa que não usa `bisect` não precisa dele, e um que usa tolera bem uma
+dependência. Um programa que usa `[]` não tolera nenhuma.
+
 **Medido antes de decidir, e o resultado mudou o argumento:** mover coisas para
 fora do runtime **não poupa nada**. O `pcode` carrega 6 650 bytes de
 json+re+random+heapq+bisect+math que não usa, num binário de 1 530 312 — **0,43 %**.
@@ -6314,6 +6330,24 @@ coletor move**. Se o pscript o guardasse, a coleta seguinte deixava-o a apontar
 para o vazio. Já um `Mapping`, um `Buffer` ou um `bytes` estão fora do monte por
 construção e nunca se movem — e é exactamente por isso que uma struct de P que
 aponte para eles pode ser guardada.
+
+### 141.5 — e o sentido contrário NÃO existe
+
+> *"Não deve. No máximo receber uma cópia."*
+
+O P **não segura** um valor do pscript através de uma coleta. Nada de raízes
+registadas, nada de `luaL_ref`, nada de referências globais como as do JNI. Um
+tipo de P recebe um empréstimo durante a chamada (`in s: CStr`, sem cópia) ou
+recebe uma **cópia** que passa a ser sua — e mais nada.
+
+A costura fica assimétrica de propósito: **o pscript pode segurar coisas do P
+(`Foreign`), e o P não pode segurar coisas do pscript.** É a direcção que não
+precisa de o coletor aprender nada sobre quem está lá fora, e é a que não tem
+maneira de vazar: não há `unroot` para esquecer, porque não há `root`.
+
+O preço, concreto: o `hl.p` do editor recebe o texto outra vez em cada chamada em
+vez de o guardar entre elas. Como o `CStr` é um endereço e não uma cópia, isso
+custa zero — o que custaria era guardar.
 
 ### 141.4 — o preço, dito antes de doer
 
