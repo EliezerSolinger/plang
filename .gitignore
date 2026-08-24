@@ -13,6 +13,17 @@ tests/out/
 qbe/qbe
 qbe/*.o
 qbe/*/*.o
+# o C gerado ao lado das FONTES. O `selfhost/` é `.p`/`.ph`; o C dele sai para a
+# árvore de build como o de qualquer outro módulo. Entraram uma vez por um
+# `git add -A` depois de um `plangc` sem `--out-dir`, ficaram dois dias, e 15 dos
+# 19 já estavam desactualizados quando foram removidos — que é o que um artefacto
+# comitado faz: envelhece em silêncio ao lado da fonte que devia gerá-lo.
+#
+# O `/` inicial ANCORA na raiz: o `bootstrap/selfhost/*.c` é o seed comitado de
+# propósito e não é apanhado por isto.
+/selfhost/*.c
+/selfhost/*.h
+
 # generated STL headers — o `stl` é um PACOTE desde a F4, e os headers dele saem
 # para a árvore de build como os de qualquer outro módulo
 packages/stl/*.h
