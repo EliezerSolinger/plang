@@ -5849,6 +5849,45 @@ para quem quer ficar com os dois.
 **135.5 — Todas as operações valem nos dois.** `len`, indexar, iterar, comparar,
 `str()` para descodificar. O código que migra muda a ASSINATURA e mais nada.
 
+**135.6 — Onde o `List<u8>` continua a ser a resposta certa: CONSTRUIR e
+MEXER.** Acrescentar, inserir, ordenar, remover — é uma lista, e faz isso bem. O
+`bytes` é o que ATRAVESSA: I/O, hash, uma fronteira para P. `bytes(xs)` e
+`list(b)` nos dois sentidos, sempre explícitos, porque cada um copia.
+
+E é por isso que **não há um `Writer`**: construir uma saída de tamanho
+desconhecido faz-se num `List<u8>` e converte-se no fim.
+
+> *"isso até me lembrou o stringbuilder"* — e é mesmo, mas não por analogia: é o
+> padrão que a linguagem **já tem para strings**, e já medido. O `core.psc:154`
+> do editor diz *"`join`, and not `+=` in a loop, for a measured reason: the loop
+> is quadratic. 8 000 lines cost 672 ms that way and 0 ms this way; 32 000 cost
+> 16 972 ms against 3 ms"*. O `join` é o StringBuilder desta linguagem, e
+> `List<u8>` + `bytes(xs)` é a mesma forma para bytes.
+
+Um `Writer` seria isso mais uma optimização — o `freeze()` a entregar o bloco sem
+copiar. Um tipo novo por uma cópia que só se nota em megabytes: fica de fora até
+uma medição o pedir, que é como este repositório decide estas coisas.
+
+**135.7 — Um `bytes` nasce de quatro sítios:** de uma leitura, de `bytes(xs)`, de
+`s.encode()`, e de um **literal `b"..."`**. O literal ganha o lugar por causa dos
+números mágicos e das constantes de protocolo, que são metade do que ler um
+formato binário é — sem ele, a intenção mais óbvia seria a que ficaria mais
+ruidosa:
+
+```python
+if src[0:4] == b"\x7fELF":   ...      # e não "\x7fELF".encode()
+```
+
+**135.8 — `b[0:8]` é a VISTA que já existe.** O `PsBufView` da 18.3 já está no
+runtime, com um campo `owner` documentado exactamente para manter o dono vivo, e
+as vistas tipadas (`view_u8`, `view_f64`) já são a mesma coisa com outro
+elemento. Portanto `b[0:8]` é açúcar para `b.view_u8(0, 8)` e o tipo é `View<u8>`
+— **não um `Buffer`**.
+
+O que se ganha em ser um tipo diferente: uma `View` **não tem `close`**. Fechar
+uma vista deixa de ser um erro que levanta em tempo de execução e passa a ser
+uma coisa que não se consegue escrever.
+
 ### 136 — os finalizadores, e a regra que diz quando usar cada coisa
 
 O coletor ganha **finalizadores**: uma lista de objetos com um gancho de

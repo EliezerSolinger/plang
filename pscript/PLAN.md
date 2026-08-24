@@ -2165,8 +2165,15 @@ compila.
 ## F0 — `bytes`, `Buffer`, e as fatias (135.1, 135.3, 135.5, 136)
 
 O tipo `bytes`: imutável, coletado, fatiável sem copiar, e apoiado num bloco que
-não se move. O `Buffer` que já existe ganha fatias mutáveis com dono
-(`PsBufView.owner` já está lá, documentado exactamente para isto).
+não se move. Nasce de quatro sítios: de uma leitura, de `bytes(xs)`, de
+`s.encode()` e de um literal `b"..."`. O `Buffer` que já existe ganha fatias: `b[0:8]` é açúcar para `b.view_u8(0, 8)`,
+e o tipo é `View<u8>` — a vista da 18.3, que já tem o campo `owner` para manter o
+dono vivo. Uma `View` não tem `close`, portanto fechar uma vista deixa de ser um
+erro que levanta e passa a ser uma coisa que não se consegue escrever.
+
+**Não há `Writer`**: construir uma saída de tamanho desconhecido faz-se num
+`List<u8>` e converte-se no fim, que é a mesma forma que a linguagem já usa para
+strings (`join`, medido em `core.psc:154`: 16 972 ms contra 3 ms).
 
 E o coletor ganha **finalizadores**, que é a maquinaria nova desta fase e a
 condição para que um `bytes` não precise de ser fechado.
