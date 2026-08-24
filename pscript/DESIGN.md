@@ -6360,3 +6360,84 @@ para "culpa de quem prometeu, e encontra-se com um grep"**.
 É uma boa troca, mas é uma troca. E o portão que a torna aceitável é o mesmo que
 este repositório já constrói: `grep -rn "implement Foreign"` dá a lista completa
 das promessas que o sistema faz sem prova.
+
+---
+
+## BATERIA 142 — o `stl` entra para dentro do compilador (2026-08-24)
+
+> *"vc consegue jogar nossa stl do P pra dentro do compilador do P, pra pessoa
+> poder simplesmente importar ou declarar algo da stl sem precisar do pacote?
+> (…) isso é possível pq todos eles são `ph`"*
+
+A observação está certa e é ela que torna isto barato: **são 11 cabeçalhos
+genéricos e uma implementação de 15 linhas**, 1 337 linhas ao todo. Nada disto se
+linka — tudo se materializa no sítio do uso com `declare`/`implement`. Não há
+objecto para distribuir; há **texto**.
+
+### 142.0 — o problema, medido
+
+Um recém-chegado que escreve um `.p` com um `Vec` bate em duas falésias de
+configuração antes de compilar o que quer que seja:
+
+```
+exemplo.p:2:1: error: import <stl/vec.ph>: not found in any package root
+                      (none was given: `--pkg-path <dir>`, repeatable)
+
+# e depois, com --pkg-path absoluto e a fonte relativa:
+exemplo.p:2:1: error: … the package root and the sources have to be named the
+                      same way — both relative, or both absolute …
+```
+
+### 142.1 — e o compilador já resolveu isto uma vez, para o pscript
+
+O `ps_prelude.psc` é um ficheiro REAL em `selfhost/`, embebido com `embed()` e
+**analisado como um módulo qualquer**. A justificação está escrita ao lado dele e
+serve palavra por palavra para o `stl`:
+
+> *"`embed` é o que lhe permite ser um ficheiro de verdade e não custar nada em
+> tempo de execução: os bytes são lidos em tempo de COMPILAÇÃO e viram um vector
+> estático, portanto **não há ficheiro para encontrar, não há caminho para
+> configurar**, e o prelúdio que um compilador carrega é exactamente o que foi
+> compilado para dentro dele."*
+
+Então: **o `stl` passa a viver em `selfhost/`, embebido, e `packages/stl/`
+desaparece.** Deixa de ser um pacote e passa a ser parte do compilador — que é o
+que ele já era na prática, porque o maior consumidor dele é o próprio compilador
+(`parser.p`, `main.p`, `api.p`, `backend_c.p`, `ps_lower.p`, `vecs.p`).
+
+Custa ~40 KB no binário do compilador, e um `plangc foo.p` passa a funcionar
+sozinho.
+
+### 142.2 — a grafia passa a ser `import <vec>`
+
+Não por ser mais curta: porque depois da 142.1 o `<stl/vec.ph>` nomeia **um
+directório que não existe e uma extensão de um ficheiro que ninguém vai abrir**.
+Seria um fóssil apontado para o vazio.
+
+E não é uma forma nova — é a mesma do `import <pui>`, que já quer dizer "a raiz
+de um módulo que não está ao meu lado". As setas continuam a distinguir o que é
+meu (`import "vec.ph"`) do que não é.
+
+A travessia é a da 139.1, em três commits e cada um compila: o compilador aceita
+os dois com um `-W` no velho → os ~30 imports da árvore migram → o velho sai.
+
+### 142.3 — o embebido ganha SEMPRE, e não há como substituir
+
+Um `stl` instalado é simplesmente ignorado. A razão é a mesma frase do prelúdio:
+*"o que um compilador carrega é exactamente o que foi compilado para dentro
+dele"*. Um ficheiro que pudesse substituí-lo em silêncio traz de volta a classe
+de erro que o `embed` existe para matar — a de duas cópias e ninguém saber qual
+correu.
+
+### O que vigiar
+
+**O compilador passa a embeber a biblioteca que ele próprio usa.** Mudar o
+`vec.ph` muda o compilador, que muda o que ele embebe — um efeito em dois tempos.
+Não é um problema novo: é exactamente o que o `ps_prelude.psc` já faz, e o portão
+do ponto fixo (`s2 == s3`) mais a regeneração do `bootstrap/` cobrem-no. Mas é a
+coisa a olhar quando a fase correr.
+
+E o `cstr.p` é a excepção da excepção: é o único com implementação, e embeber um
+`.p` quer dizer que o código vai compilado para dentro do programa de quem
+importa — o mesmo que já acontece com um genérico materializado, só que sem o
+`implement` à vista.

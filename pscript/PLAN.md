@@ -2185,6 +2185,25 @@ runtime, e `grep -rn "implement Foreign"` dá a lista das promessas sem prova.
 
 ---
 
+## FE — o `stl` entra para dentro do compilador (142)
+
+Independente de tudo o resto, e a mais barata de todas: o `stl` deixa de ser um
+pacote e passa a ser texto embebido no compilador, como o `ps_prelude.psc` já é.
+`packages/stl/` desaparece para dentro de `selfhost/`.
+
+O que se ganha é uma falésia a menos para quem chega: hoje um `.p` que usa um
+`Vec` não compila sem `--pkg-path`, e com ele falha outra vez se o caminho for
+absoluto e a fonte relativa. Depois disto, `plangc foo.p` funciona sozinho.
+
+A grafia passa a `import <vec>` (o `<stl/vec.ph>` passaria a apontar para um
+directório que já não existe), em três commits como a 139.1. O embebido ganha
+sempre — não há substituição.
+
+**Fica de pé:** `plangc foo.p` compila um programa que usa `Vec`, `Map` e `Set`
+sem configuração nenhuma.
+
+---
+
 ## F0 — `bytes`, `Buffer`, e as fatias (135.1, 135.3, 135.5, 136)
 
 O tipo `bytes`: imutável, coletado, fatiável sem copiar, e apoiado num bloco que
