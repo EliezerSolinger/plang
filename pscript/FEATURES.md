@@ -124,7 +124,7 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 | `spawn(fn, args)` = thread com heap e coletor próprios | 35.1, 18.1 | os workers do render | ✅ |
 | Worker É o canal (`w.send` / `await w.recv`) | 36.1 | `Stat` de cada worker | ✅ |
 | Mensagem POD por memcpy; o resto SERIALIZADO | 34.3, 74.2 | `workers_full`, `deep_messages` | ✅ bytes por memcpy; `str`, `list`, `set`, `dict` e `struct` atravessam como GRAFO — escritos de um lado, reconstruídos no heap de quem recebe, com guarda de ciclo (um objeto repetido chega como UM objeto; um que contém a si mesmo chega). O compilador deixa um `PsShape` por tipo; o runtime tem o formato |
-| `await os.run(argv, env=, cwd=, stdout=)` -> `proc` | 118 | o motor do pbuild | ✅ sem shell (o `execvp` recebe o vetor), stderr junto do stdout, status != 0 é resultado e não exceção, 128+sinal, `waitpid` no pool; `os.nproc` e `path.getmtime_ns` junto |
+| `await os.run(argv, env=, cwd=, stdout=)` -> `proc` | 118 | o motor do pforge | ✅ sem shell (o `execvp` recebe o vetor), stderr junto do stdout, status != 0 é resultado e não exceção, 128+sinal, `waitpid` no pool; `os.nproc` e `path.getmtime_ns` junto |
 | HTTP/1.1 escrito em pscript | 77.2, 78.1 | `http_server`, `lib_http` | ✅ parser incremental (linha, cabeçalhos, content-length, chunked) com as recusas do llhttp; servidor e clientes no mesmo processo |
 | Texto atravessa a fronteira (`CStr`/`CBytes`) | 81, 83, 84, 85, 86 | `text_boundary` | ✅ par {ponteiro, tamanho} que não aloca; ida sem cópia, volta com cópia e UTF-8 conferido; `in s: CStr` passa o endereço |
 | `str.lower()` / `str.upper()` | — | `lib_http` | ✅ ASCII (caixa Unicode depende de língua) |
@@ -158,10 +158,10 @@ parte (o que falta está dito); **⏳** decidido no design, ainda não implement
 
 ## O porte do editor (bateria 71)
 
-O pstudio foi portado para pscript em `pstudio/ps/` — buffer, aplicação e
+O pstudio foi portado para pscript em `pstudio/` — buffer, aplicação e
 desenho em pscript, com janela/eventos/pixels em P atrás de uma fronteira só de
 escalares. Roda e está no gate (headless e com SDL dummy). Ver
-`pstudio/ps/README.md`.
+`pstudio/README.md`.
 
 | Recurso | Decisão | Exercitado em | Estado |
 |---|---|---|---|
@@ -188,7 +188,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | `None if c else v` (um lado ausente) | 112.7 | `optref` | ✅ o resultado é `T?` — antes os dois lados tinham de ter o MESMO tipo, e escrever "pode faltar" numa expressão era impossível |
 | Prova de não-nulo, cinco formas | 114 (43.1) | `narrow` | ✅ `if x != None:`, a GUARDA (`if x == None: return` e o resto da função), o `else` de um `== None`, `x != None and x.f`, `x == None or x.f`, e cada ramo de um `elif`. Sempre em LOCAL — campo pede análise de fluxo sobre campos |
 | Função em CAMPO, chamada direto | 112.2 | `fnfield` | ✅ `x.f(a)` quando `f` é campo de tipo função (28.1: valor vive em contêiner). Campo OPCIONAL sai para uma variável primeiro — a prova de não-nulo é sobre LOCAL (43.1), e a mensagem diz como |
-| `os` / `path` (camada de sistema) | 111.1 | `syslayer`, `paths` | ✅ `os.listdir` (ORDENADO, 111.5) `mkdir`/`makedirs`/`remove`/`rmdir`/`rename`/`getcwd`; `path.join`/`dirname`/`basename`/`normpath`/`abspath`/`exists`/`isdir`/`isfile`/`getsize`/`getmtime` — o `posixpath` do CPython conferido por varredura (mil caminhos). Sem `chdir` (o cwd é do processo, o worker é thread); rodar processo é a 1.2 do pbuild |
+| `os` / `path` (camada de sistema) | 111.1 | `syslayer`, `paths` | ✅ `os.listdir` (ORDENADO, 111.5) `mkdir`/`makedirs`/`remove`/`rmdir`/`rename`/`getcwd`; `path.join`/`dirname`/`basename`/`normpath`/`abspath`/`exists`/`isdir`/`isfile`/`getsize`/`getmtime` — o `posixpath` do CPython conferido por varredura (mil caminhos). Sem `chdir` (o cwd é do processo, o worker é thread); rodar processo é a 1.2 do pforge |
 | `bisect` / `heapq` | 106.3 | `algos` | ✅ **portados** de `Lib/bisect.py` e `Lib/heapq.py`: o oráculo compara o ARRAY do heap passo a passo com o do Python. int, float e str |
 | `sorted` ESTÁVEL nos três caminhos | 106.1 | `algos` | ✅ merge sort nosso com detecção de corridas; `qsort` deixava a estabilidade por conta da libc (a do macOS não é estável) |
 | f-string com spec | 45.1 | tudo | ✅ |

@@ -423,29 +423,29 @@ suite_pstudio() {
     # linhas de retângulo dele foram conferidas contra o teste do pui em P
     # quando ele existia (bateria 112); o editor em P saiu na 116, e o que
     # ficou é este número, que não pode mudar.
-    # 113: o `codeview` portado precisa do ADAPTADOR do lexer (pstudio/ps/hl.p)
+    # 113: o `codeview` portado precisa do ADAPTADOR do lexer (pstudio/hl.p)
     # e, com ele, do lexer do compilador — que é o ponto: o editor em pscript
     # realça com o mesmo lexer que o compilador usa, e não com um segundo.
     local HLC=""
-    if $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph pstudio/ps/hl.ph 2>>"$errc" &&
-       $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/ps/hl.p 2>>"$errc"; then
-        HLC="$C/pstudio/ps/hl.c $C/selfhost/lexer.c $C/selfhost/util.c $C/selfhost/utf8.c"
+    if $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph pstudio/hl.ph 2>>"$errc" &&
+       $PLANGC $PFLAGS $PKGP --out-dir "$C" selfhost/lexer.p selfhost/util.p selfhost/utf8.p pstudio/hl.p 2>>"$errc"; then
+        HLC="$C/pstudio/hl.c $C/selfhost/lexer.c $C/selfhost/util.c $C/selfhost/utf8.c"
     fi
     # o `pui_test` saiu daqui: o toolkit virou o pacote `packages/pui`, e o teste
     # dele viaja COM o pacote (`packages/pui/test/`). Quem o roda é a suíte de
-    # pacotes do `ppack` — um pacote publicado carrega a prova de que funciona.
-    for psprog in core_test:ps_core.expected:"the ported buffer" cv_test:ps_cv.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor" perf_test:ps_perf.expected:"the ceilings on a big file"; do
+    # pacotes do `pforge` — um pacote publicado carrega a prova de que funciona.
+    for psprog in core_test:ps_core.expected:"the ported buffer" codeview_test:ps_codeview.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor" perf_test:ps_perf.expected:"the ceilings on a big file"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
-        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/ps/$pname.psc 2>>"$errc" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/$pname.psc 2>>"$errc" || ok=0; }
         local extraobj=""
-        case $pname in cv_test|app_test|perf_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
+        case $pname in codeview_test|app_test|perf_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
         # the perf gate is built the way the editor SHIPS. Measuring speed on an
         # unoptimised build measures the wrong binary: the compiler's lexer alone
         # is 15ms over 11 000 lines at -O0 and 9ms at -O2, and the editor is -O2.
         local optflag=""
         case $pname in perf_test) optflag="-O2" ;; esac
-        [ $ok = 1 ] && { $CC $CSTD $optflag -w -o "$C/$pname" "$C/pstudio/ps/$pname.c" \
+        [ $ok = 1 ] && { $CC $CSTD $optflag -w -o "$C/$pname" "$C/pstudio/$pname.c" \
                              "$C/pscript/runtime/psrt_mem.c" "$C/pscript/runtime/psrt_val.c" "$C/pscript/runtime/psrt_rt.c" "$C/pscript/runtime/psrt_std.c" "$C/pscript/runtime/psrt_os.c" "$C/pscript/runtime/psrt_top.c" $extraobj $PSDEFS -lm -pthread 2>>"$errc" || ok=0; }
         if [ $ok = 1 ] && check_run "$C/$pname" tests/pstudio/$pexp "pstudio-ps-${pname%_test}"; then
             pass=$((pass+1))
@@ -467,15 +467,15 @@ suite_pstudio() {
         ok=1
         # 114: o driver em P é SDL + o lexer do compilador. O `psys` saiu: a
         # camada de sistema é a da stdlib do pscript desde a 111.
-        for d in pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph; do
+        for d in pstudio/*.ph pstudio/shim.ph pstudio/hl.ph selfhost/plang.ph selfhost/ast.ph selfhost/lexer.ph; do
             $PLANGC $PFLAGS $PKGP --out-dir "$P" "$d" 2>>"$err2" || ok=0
         done
-        for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/ps/shim pstudio/ps/hl selfhost/lexer selfhost/util selfhost/utf8; do
+        for d in pstudio/pgfx pstudio/pgfx_raster pstudio/font_atlas pstudio/shim pstudio/hl selfhost/lexer selfhost/util selfhost/utf8; do
             [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
         done
         [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pscript/runtime/psrt.ph 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pstudio/ps/app.psc 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -o "$P/pstudio_ps"               "$P/pstudio/ps/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/ps/shim.c" "$P/pstudio/ps/hl.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/selfhost/lexer.c" "$P/selfhost/util.c" "$P/selfhost/utf8.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pstudio/app.psc 2>>"$err2" || ok=0; }
+        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -o "$P/pstudio_ps"               "$P/pstudio/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/shim.c" "$P/pstudio/hl.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/selfhost/lexer.c" "$P/selfhost/util.c" "$P/selfhost/utf8.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
         printf 'line one\nline two\nline three\n' > "$P/sample.txt"
         if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
            diff -q "$P/out" tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then

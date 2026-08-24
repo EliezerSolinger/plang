@@ -800,7 +800,7 @@ extern environ: **char
 # sinal. Sem isto um `chdir` que falha vira um status 127 mudo, e ninguém
 # descobre por quê.
 private def ps_child_say(fd: int, what: const *char, arg: const *char):
-    write(fd, "pbuild: ", 8)
+    write(fd, "pforge: ", 8)
     write(fd, what, strlen(what))
     if arg != None:
         write(fd, " '", 2)

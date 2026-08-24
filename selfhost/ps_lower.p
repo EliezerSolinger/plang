@@ -3728,7 +3728,7 @@ struct PsLow:
         if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
             isos0: bool = strncmp(name, "__os_", 5) == 0
             of0: const *char = name + (5 if isos0 else 7)
-            # 118 / pbuild 1.2: `os.run(argv, env=, cwd=, stdout=)`. Os três
+            # 118 / pforge 1.2: `os.run(argv, env=, cwd=, stdout=)`. Os três
             # opcionais viajam como ponteiro, e o que não veio vai como None —
             # é o runtime que sabe o que "não veio" significa em cada um (herdar
             # o ambiente, ficar no diretório de quem chamou, devolver a saída em
@@ -6112,7 +6112,7 @@ struct PsLow:
                 # definida. O gcc carrega `__fr` num registrador, `f` aloca, o
                 # coletor MOVE o quadro e conserta a pilha de sombra — e a
                 # escrita vai para o endereço VELHO. O valor some sem erro
-                # nenhum: foi assim que o `restat` do pbuild passou a comparar 0
+                # nenhum: foi assim que o `restat` do pforge passou a comparar 0
                 # com 0, e que `hash_str` devolveu zero de dentro de um `await`.
                 # `for x in xs` e as declarações já passavam por aqui; a
                 # ATRIBUIÇÃO a um nome não passava.

@@ -1,6 +1,6 @@
 # api.ph — a LISTA CANÓNICA da API de um módulo (perguntas 2 e 5 do protocolo).
 #
-# O que o `pbuild`/`ppack` perguntam ao compilador, e por quê: só o compilador
+# O que o `pforge`/`pforge` perguntam ao compilador, e por quê: só o compilador
 # sabe o que um módulo oferece, e hoje quem quer saber tem de ler o fonte de
 # novo (é o que um gerador de doc faz, e é como a doc apodrece). A lista sai
 # daqui em UMA forma, e serve três consumidores: verificar semver na publicação,

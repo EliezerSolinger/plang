@@ -10,7 +10,7 @@ se possa usar. Foi assim que o `pforge` foi feito (F0–F9) e funcionou.
 
 ```
 F0   os defeitos (text() quadrático, arquivo vazio, laço sem try) + portão de desempenho
-F1   os nomes: ppack -> pforge, cai o lib_ e o ps/
+F1   os nomes: pforge -> pforge, cai o lib_ e o ps/
 F2   o corte: shell/ide/driver, o pcode nasce, a lista branca
 F3   C como cidadão de primeira classe (realce pelos três lexers)
 F4   o tema, pelas raízes (8 raízes -> ~30 papéis)
@@ -37,9 +37,9 @@ F11  make install
 
 Duas coisas jogam a favor, e as duas foram verificadas:
 
-* **O portão já funciona.** `plangc --pkg-path packages --deps pstudio/ps/app.psc`
+* **O portão já funciona.** `plangc --pkg-path packages --deps pstudio/app.psc`
   devolve **29 arquivos**, entre eles os quatro proibidos
-  (`packages/pbuild/lib_{build,graph,log,manifest}.psc`). Transitivo, e a falha
+  (`packages/pforge/lib_{build,graph,log,manifest}.psc`). Transitivo, e a falha
   nomeia o arquivo.
 * **O `app_test.psc` (323 linhas) não exercita build nenhum.** Já é um teste puro
   da casca — vira o teste do `pcode` quase sem mexer. A parte de IDE está no
@@ -167,17 +167,17 @@ Nada de funcionalidade. É o momento mais barato que vai existir: **463
 referências em 45 arquivos** hoje, e cada fase daqui para a frente acrescenta
 mais.
 
-### F1.1 — `ppack` vira `pforge`
+### F1.1 — `pforge` vira `pforge`
 
 O binário faz build **e** pacotes; o nome dizia metade. Uma forja faz coisas a
 partir de matéria-prima, e "forge" carrega também o sentido de onde o código
 mora.
 
 ```
-build/bin/ppack        ->  build/bin/pforge
-pbuild/ + ppack/       ->  pforge/            (os 8 documentos, na raiz dela)
-pbuild/ps/*.psc        ->  pforge/src/*.psc   (ppack.psc -> main.psc)
-packages/pbuild/       ->  packages/pforge/
+build/bin/pforge        ->  build/bin/pforge
+pforge/ + pforge/       ->  pforge/            (os 8 documentos, na raiz dela)
+pforge/src/*.psc        ->  pforge/src/*.psc   (pforge.psc -> main.psc)
+packages/pforge/       ->  packages/pforge/
 ```
 
 A biblioteca muda pela mesma razão que o binário: **4 dos 11 módulos** são do
@@ -190,11 +190,11 @@ A 116 aposentou os `.p` e ele ficou órfão. A pasta `ps/` ("pscript") tem quatr
 arquivos em P dentro — mente duas vezes.
 
 ```
-pstudio/ps/lib_core.psc      ->  pstudio/core.psc
-pstudio/ps/lib_cv.psc        ->  pstudio/codeview.psc
-pstudio/ps/lib_hl.psc        ->  pstudio/highlight.psc
-pstudio/ps/lib_complete.psc  ->  pstudio/complete.psc
-pstudio/ps/{shim,hl}.{p,ph}  ->  pstudio/{shim,hl}.{p,ph}
+pstudio/core.psc      ->  pstudio/core.psc
+pstudio/codeview.psc        ->  pstudio/codeview.psc
+pstudio/highlight.psc        ->  pstudio/highlight.psc
+pstudio/complete.psc  ->  pstudio/complete.psc
+pstudio/{shim,hl}.{p,ph}  ->  pstudio/{shim,hl}.{p,ph}
 packages/pforge/lib_graph.psc -> packages/pforge/graph.psc   (e os outros dez)
 ```
 
@@ -492,7 +492,7 @@ subir versão, e ver o que um pacote exporta (`--api` já responde).
 
 Entra aqui uma correcção que a F4 vai forçar antes: mudar o `Theme` **remove
 campos** do `pui`, e com o mesmo `major` o nosso `publish` só aceita um `minor`
-que acrescenta (`ppack.psc:1429`). **0.x passa a ser especial** — é o que o
+que acrescenta (`pforge.psc:1429`). **0.x passa a ser especial** — é o que o
 semver diz e o que o Cargo faz — e o `publish` **aceita e AVISA**, para a
 excepção ficar visível em cada publicação em vez de escondida na regra.
 

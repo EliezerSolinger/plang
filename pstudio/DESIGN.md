@@ -237,15 +237,15 @@ ao fim, e o lexer do compilador. A tabela é o mapa de quem faz o quê.
 
 | arquivo | linguagem | o que é |
 |---|---|---|
-| `ps/lib_core.psc` | pscript | `Buffer`: linhas UTF-8, multi-caret, undo agrupado, busca, dobra, marcas |
+| `core.psc` | pscript | `Buffer`: linhas UTF-8, multi-caret, undo agrupado, busca, dobra, marcas |
 | `ps/lib_pui.psc` | pscript | `Ui`: pool de nós, layout em 2 fases (Godot), listas de comando retidas, sinais, entrada |
-| `ps/lib_hl.psc` | pscript | o realce: spans por linha a partir dos tokens, e o comentário |
-| `ps/lib_complete.psc` | pscript | o índice de completamento (declarações, membros, `self.`) |
-| `ps/lib_cv.psc` | pscript | o widget de edição: sarjetas, barras internas, minimapa, popup |
-| `ps/lib_app.psc` | pscript | abas, árvore, paleta, busca, atalhos, barra de estado |
-| `ps/app.psc` | pscript | o driver do editor: janela, tradução de evento, quadro, linha de comando |
-| `ps/shim.ph/.p` | **P** | a fronteira do SDL2: janela, evento, pixel, glifo, área de transferência — assinatura de ESCALARES (45.5) |
-| `ps/hl.ph/.p` | **P** | a fronteira do LEXER do compilador: o texto entra como `CStr`, os tokens voltam como números (113) |
+| `highlight.psc` | pscript | o realce: spans por linha a partir dos tokens, e o comentário |
+| `complete.psc` | pscript | o índice de completamento (declarações, membros, `self.`) |
+| `codeview.psc` | pscript | o widget de edição: sarjetas, barras internas, minimapa, popup |
+| `shell.psc` | pscript | abas, árvore, paleta, busca, atalhos, barra de estado |
+| `app.psc` | pscript | o driver do editor: janela, tradução de evento, quadro, linha de comando |
+| `shim.ph/.p` | **P** | a fronteira do SDL2: janela, evento, pixel, glifo, área de transferência — assinatura de ESCALARES (45.5) |
+| `hl.ph/.p` | **P** | a fronteira do LEXER do compilador: o texto entra como `CStr`, os tokens voltam como números (113) |
 | `pgfx.ph/.p` | **P** | SDL2: janela, textura streaming, eventos, diálogos |
 | `pgfx_raster.ph/.p` | **P** | `PgRect`/`PgFont`/`PgFb`: rects, clip, blend, texto — headless |
 | `font_atlas.ph/.p` | **P** | o atlas GERADO (ASCII + Latin-1 + pontuação, □ de fallback) |
@@ -282,14 +282,14 @@ O que isso quer dizer, camada por camada:
 | `psys.p` (P): arquivo, diretório, `stat`, `ps_run`, caminho, tempo | vira **stdlib do pscript** (um módulo `os`/`path`, implementado em P como `random` e `time` — 108.4). O pstudio passa a IMPORTAR, não a conter |
 | `pgfx.p`, `pgfx_raster.p`, `font_atlas.p` (P) | **ficam em P**: são pixels e ponteiro do começo ao fim, e a 45.5 não deixa isso atravessar. Passam a ser o DRIVER, chamado só pelo shim |
 | `pui.p`, `core.p`, `app.p`, `codeview.p`, `complete.p` (P) | pscript |
-| o shim escalar da bateria 71 (`pstudio/ps/shim.p`) | **fica, e é a fronteira**: janela, evento, pixel e glifo, com assinatura de escalares. É o que "totalmente em pscript" quer dizer num programa que fala SDL — a lógica inteira em pscript, e uma página de P a tocar o ponteiro |
-| o realce, que usa o lexer DO COMPILADOR (`lex_ex`, core.p:1464) | **DECIDIDO (113)**: o lexer continua em P, num adaptador (`pstudio/ps/hl.p`) que recebe o texto inteiro como `CStr` e devolve os tokens como NÚMEROS. A lógica (classe, comentário, índice de completamento) fica em pscript. Um segundo lexer em pscript divergiria do do compilador, que é justamente o que o realce serve para mostrar |
+| o shim escalar da bateria 71 (`pstudio/shim.p`) | **fica, e é a fronteira**: janela, evento, pixel e glifo, com assinatura de escalares. É o que "totalmente em pscript" quer dizer num programa que fala SDL — a lógica inteira em pscript, e uma página de P a tocar o ponteiro |
+| o realce, que usa o lexer DO COMPILADOR (`lex_ex`, core.p:1464) | **DECIDIDO (113)**: o lexer continua em P, num adaptador (`pstudio/hl.p`) que recebe o texto inteiro como `CStr` e devolve os tokens como NÚMEROS. A lógica (classe, comentário, índice de completamento) fica em pscript. Um segundo lexer em pscript divergiria do do compilador, que é justamente o que o realce serve para mostrar |
 
 O ganho não é estético: **o pstudio é o maior consumidor de P do projeto** (é o
 que a bateria 7/8 do `verify-all` mede), e ele em pscript é o maior programa
 gráfico em pscript que existe — com o coletor, os workers e o laço de eventos
 sob carga real. E a camada de sistema, ao sair daqui para a stdlib, ganha um
-segundo consumidor: o **pbuild** (ver `pbuild/DESIGN.md`, 1.1), que é justamente
+segundo consumidor: o **pforge** (ver `pforge/DESIGN.md`, 1.1), que é justamente
 o teste de que ela está no lugar certo.
 
 O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor não
@@ -299,11 +299,11 @@ O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor n
 
   1. a bateria 111 do pscript tirou a camada de SISTEMA daqui e pôs na stdlib
      (`os` e `path`), com o `psys.p` como fonte do porte;
-  2. a bateria 112 portou o `pui` — `pstudio/ps/lib_pui.psc`, com o teste
+  2. a bateria 112 portou o `pui` — `pstudio/lib_pui.psc`, com o teste
      headless imprimindo os MESMOS retângulos que o teste do pui em P;
   3. a bateria 113 respondeu a pergunta do REALCE e portou o resto do miolo: o
      lexer do compilador fica em P e atravessa por um adaptador de escalares
-     (`pstudio/ps/hl.p`, aprovado por você), e com ele vieram `lib_hl.psc`,
+     (`pstudio/hl.p`, aprovado por você), e com ele vieram `lib_hl.psc`,
      `lib_complete.psc` e `lib_cv.psc` — o `codeview` inteiro, imprimindo as
      mesmas sete linhas do teste de dobra do editor em P.
 
@@ -312,8 +312,8 @@ O limite nomeado: **SDL, janela e teclado continuam aqui**. O que é do editor n
      e o `make pstudio-ps` constrói o editor COMPLETO.
 
 **A migração está feita, e a paridade está medida** (ver a seção seguinte). Em P sobrou o que a 45.5 não deixa atravessar: SDL
-(`pgfx`, `pgfx_raster`, `font_atlas`, `ps/shim.p`) e o lexer do compilador
-(`ps/hl.p`). É o que "totalmente em pscript" quer dizer num programa que fala com
+(`pgfx`, `pgfx_raster`, `font_atlas`, `shim.p`) e o lexer do compilador
+(`hl.p`). É o que "totalmente em pscript" quer dizer num programa que fala com
 uma placa de vídeo — a lógica inteira de um lado, duas páginas de P do outro.
 
 ## Paridade: o que o editor em P fazia, e onde está agora (bateria 115)
@@ -403,13 +403,13 @@ pcode                          pstudio
   pui       ────────────┼──────  pui
   shim      ────────────┘        shim
                                + lib_ide     (os painéis)
-                               + lib_build   (o motor pbuild)
+                               + lib_build   (o motor pforge)
                                + lib_tests
                                + lib_pkg     (pacotes)
-                               + packages/pbuild
+                               + packages/pforge
 ```
 
-**O portão é o GRAFO.** Uma checagem pergunta ao `ppack` quais fontes o alvo
+**O portão é o GRAFO.** Uma checagem pergunta ao `pforge` quais fontes o alvo
 `pcode` lê — `--deps` já responde isso — e falha se aparecer um módulo da lista
 proibida. É barato, é automático, e a mensagem diz qual `import` quebrou a regra.
 Sem isso, em três meses o `pcode` linka a IDE inteira e ninguém nota.
@@ -429,8 +429,8 @@ assinou, e abre-se em `build/pkg/` como qualquer outro. O `.sig` ao lado verific
 se existir.
 
 ```sh
-ppack add ./foo-0.1.0.tar
-ppack add https://algum.site/foo-0.1.0.tar
+pforge add ./foo-0.1.0.tar
+pforge add https://algum.site/foo-0.1.0.tar
 ```
 
 O que se perde é a **busca** e a **lista de versões** (que é o que `search` e
@@ -446,7 +446,7 @@ faltava era a entrada por arquivo e por URL.
 
 **O terminal é PTY de verdade**, e a primitiva vai para o **runtime do pscript**
 (`os.spawn_pty`, como o `os.run` foi), não para o driver do pstudio. Assim o
-`ppack dev` e qualquer programa pscript ganham, e a primitiva ganha um segundo
+`pforge dev` e qualquer programa pscript ganham, e a primitiva ganha um segundo
 consumidor — que é o teste de que ela está no lugar certo. O widget ANSI
 (cores, cursor, redimensionar, scrollback) vive no pstudio.
 
@@ -471,9 +471,9 @@ estão mesmo desacopladas, que é a pergunta cuja resposta ruim custa mais tarde
 cada widget que nascer depois já nasce do lado certo.
 
 **A aba de Testes entra na v1 afinal.** Ela vem quase de graça: o
-`ppack test --json` já emite um evento por caso com `{"what": "suíte: caso",
+`pforge test --json` já emite um evento por caso com `{"what": "suíte: caso",
 "status", "ms", "output"}`, e o `tally` já parte o rótulo em suíte e caso
-(`ppack.psc:102`). Sem ela a espinha escolhida ficaria com uma vértebra a menos.
+(`pforge.psc:102`). Sem ela a espinha escolhida ficaria com uma vértebra a menos.
 
 O nome do editor mínimo é **`pcode`** — binário `build/bin/pcode`, janela
 "PCode".
@@ -584,7 +584,7 @@ Corre no `make verify`; os dois binários entram no `make` por omissão.
 O prefixo `lib_` nasceu na migração, quando `core.p` e a versão em pscript
 coexistiam. A 116 aposentou os `.p` e o prefixo ficou órfão; a pasta `ps/`
 ("pscript") tem quatro arquivos em P dentro. Cai tudo, e cai também no
-`packages/pbuild`, onde `lib_x` é redundante porque o pacote já é a lib.
+`packages/pforge`, onde `lib_x` é redundante porque o pacote já é a lib.
 
 Os três `WK_CUSTOM` (abas, árvore, paleta) **promovem-se ao `pui` e o editor
 passa a usar os novos** — não ficam duas listas no mesmo programa.
@@ -652,7 +652,7 @@ A palavra é **`pforge`**: uma forja faz coisas a partir de matéria-prima, e
 "forge" também carrega o sentido de onde o código mora.
 
 ```
-pforge/                      (hoje pbuild/ + ppack/)
+pforge/                      (hoje pforge/ + pforge/)
   DESIGN.md  ARQUITETURA.md  DECISOES.md  PLAN.md
   BATERIAS.md  LINKER.md  REPOSITORIO.md
   gerenciador-de-pacotes-ideal.md

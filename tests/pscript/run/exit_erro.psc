@@ -5,7 +5,7 @@ reportava. `sys.exit` avalia o argumento e depois chama; se a avaliação
 levantou, o código que se ia devolver nem chegou a existir — e sair com ele era
 sair com ZERO, isto é, com sucesso, sem uma linha de mensagem.
 
-Custou uma investigação: o `ppack` morria a montar o grafo e devolvia 0, e o
+Custou uma investigação: o `pforge` morria a montar o grafo e devolvia 0, e o
 arreio que só olhava o status dizia que estava tudo bem.
 
 O que se prende aqui é o par: a mensagem sai e o status é 1. E o caminho normal

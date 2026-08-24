@@ -1,7 +1,7 @@
 # `packages/` — os pacotes deste repositório
 
 **Os dois primeiros pacotes já moraram para cá** (2026-08-22): `stl` e `pui`.
-Este arquivo registra a estrutura decidida (`ppack/DESIGN.md`), o preço medido de
+Este arquivo registra a estrutura decidida (`pforge/PACOTES.md`), o preço medido de
 cada migração, e o que a migração ensinou.
 
 ## Duas pastas com nomes parecidos e papéis opostos
@@ -9,7 +9,7 @@ cada migração, e o que a migração ensinou.
 | pasta | o que é | vai para o git? |
 |---|---|---|
 | **`packages/`** | os pacotes que **nós escrevemos** — fonte | **sim** |
-| `build/pkg/` | os pacotes que o `ppack` **baixou e verificou** | não |
+| `build/pkg/` | os pacotes que o `pforge` **baixou e verificou** | não |
 
 ## A forma de um pacote
 
@@ -57,7 +57,7 @@ teste dele saiu de `tests/pstudio/` e foi para `packages/pui/test/`, que é o
 ponto: **um pacote publicado carrega a prova de que funciona**, e quem o instala
 pode rodá-la na própria máquina.
 
-Quem roda os testes dos pacotes é o `ppack test`, e ele os acha por estarem onde
+Quem roda os testes dos pacotes é o `pforge test`, e ele os acha por estarem onde
 têm de estar — nenhum arreio os cita.
 
 Medido: `lib_pui.psc` tem **1 145 linhas e ZERO `import`** — não depende de
@@ -75,7 +75,7 @@ sendo bloqueio do **editor**, que é onde ele já dói hoje.)*
 
 ## O manifesto — IMPLEMENTADO como a proposta abaixo (2026-08-22)
 
-`pbuild/ps/lib_manifest.psc` lê e VALIDA as duas formas, e o erro sai como
+`pforge/src/lib_manifest.psc` lê e VALIDA as duas formas, e o erro sai como
 `pack.json:4:12: error: ...` — clicável na IDE pelo mesmo caminho que um erro de
 compilação, que é a razão de valer o trabalho. A posição é a da CHAVE, achada no
 texto cru: o `json.parse` da linguagem devolve a estrutura e não as posições, e
@@ -107,7 +107,7 @@ de cem linhas com portão próprio (`caso_manifesto` na suíte do motor).
 
 ## Como se importa de um pacote — DECIDIDO (2026-08-22)
 
-**`import <stl/vec.ph>`** — o `<>` procura no caminho de pacotes que o `ppack`
+**`import <stl/vec.ph>`** — o `<>` procura no caminho de pacotes que o `pforge`
 montou; o `"..."` continua sendo relativo ao arquivo. É a distinção do C, que a
 linguagem **já usa** para header de sistema, e agora o vocabulário fica com três
 formas sem uma ambiguidade:
@@ -120,7 +120,7 @@ formas sem uma ambiguidade:
 
 E o melhor: **o compilador continua sem saber o que é versão** — ele recebe um
 caminho de busca e procura, exatamente como a fronteira decidida em
-`pbuild/ARQUITETURA.md` manda.
+`pforge/ARQUITETURA.md` manda.
 
 **FEITO em 2026-08-22.** `--pkg-path <dir>` (repetível) dá as raízes; a busca é
 na ordem em que foram dadas, e a primeira que tiver o arquivo ganha. `<>` NÃO
@@ -141,7 +141,7 @@ ciclo de seed** do `static`→`private`.
 
 ## O teste vive dentro do pacote — DECIDIDO
 
-`packages/pui/test/` viaja com o pacote, e o `ppack test` roda os testes dos
+`packages/pui/test/` viaja com o pacote, e o `pforge test` roda os testes dos
 pacotes do workspace também. Três consequências:
 
 - **um pacote publicado carrega a prova de que funciona** — e quem instala pode

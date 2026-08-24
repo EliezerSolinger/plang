@@ -1,9 +1,0 @@
-{
-  "name": "pbuild",
-  "version": "0.1.0",
-  "lang": "pscript",
-  "deps": {},
-  "system": {},
-  "toolchain": ">= 0.1.0",
-  "description": "the build engine: graph, dirtiness, queue, executor, and the target library that feeds it"
-}

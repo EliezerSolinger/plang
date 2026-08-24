@@ -1,7 +1,7 @@
 # psrt_os.ph — a camada de SISTEMA: `os` e `path`.
 #
 # 111: nasceu do `psys.p` do pstudio (o editor já tinha tudo isto em P) porque
-# a decisão 1.1 do pbuild manda a camada de sistema para a lib/runtime do
+# a decisão 1.1 do pforge manda a camada de sistema para a lib/runtime do
 # pscript: dois consumidores diferentes — um gráfico, um paralelo — provam que
 # ela está no lugar certo.
 #
@@ -9,7 +9,7 @@
 #   * `chdir`/`umask` — o diretório de trabalho é do PROCESSO e um worker é uma
 #     THREAD (18.1), então mudá-lo seria uma corrida entre workers. Um caminho
 #     absoluto resolve o mesmo problema sem corrida.
-#   * rodar um processo — é a pergunta 1.2 do pbuild, e é SUA decisão (síncrono
+#   * rodar um processo — é a pergunta 1.2 do pforge, e é SUA decisão (síncrono
 #     como o `ps_run` do editor, ou uma task com `await`). Nada aqui a antecipa.
 import "psrt_types.ph"
 
@@ -58,7 +58,7 @@ def ps_os_getmtime_ns(ctx: *PsCtx, p: *PsStr, file: const *char, line: i32) -> i
 # em voo
 def ps_os_nproc() -> i64
 
-# ---------- 118 / pbuild 1.2: rodar um processo ----------
+# ---------- 118 / pforge 1.2: rodar um processo ----------
 # `await os.run(argv, env=, cwd=, stdout=, console=)` -> um processo terminado,
 # com o status e tudo que ele imprimiu. Sem shell: o comando é um VETOR, e o
 # `execvp` o recebe como está. Ver o comentário em psrt_os.p para o porquê de

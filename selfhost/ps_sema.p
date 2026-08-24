@@ -2868,7 +2868,7 @@ struct PsSema:
         if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
             isos: bool = strncmp(name, "__os_", 5) == 0
             of: const *char = name + (5 if isos else 7)
-            # 118 / pbuild 1.2: rodar um processo. Fica ANTES da conta genérica
+            # 118 / pforge 1.2: rodar um processo. Fica ANTES da conta genérica
             # porque não tem a forma das outras: um vetor de argumentos, três
             # opções por nome, e o que volta é uma TASK.
             if isos and strcmp(of, "run") == 0:

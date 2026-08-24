@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # repo.sh — the whole REPOSITORY, end to end, with no network.
 #
-# What is pinned down here is the complete round trip `ppack/REPOSITORIO.md`
+# What is pinned down here is the complete round trip `pforge/REPOSITORIO.md`
 # draws:
 #
 #     publish  ->  a `.tar` and an index entry, in a directory
@@ -21,7 +21,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-PPACK=${PPACK:-build/bin/ppack}
+PFORGE=${PFORGE:-build/bin/pforge}
 PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
 OUT=${OUT:-tests/out/repo}
@@ -37,13 +37,13 @@ ROOT=$PWD
 # relative to `$PWD` would stop being valid at the first `cd`. That is what
 # happened when `verify-all` passed them already absolute and the script prefixed
 # them again.
-case $PPACK in /*) ;; *) PPACK=$ROOT/$PPACK;; esac
+case $PFORGE in /*) ;; *) PFORGE=$ROOT/$PFORGE;; esac
 case $PLANGC in /*) ;; *) PLANGC=$ROOT/$PLANGC;; esac
 rm -rf "$OUT"; mkdir -p "$OUT/repo" "$OUT/proj"
 
 # ---- 1. publish: two packages of this repository become tarballs ----
-"$PPACK" publish stl  --to "$OUT/repo" >"$OUT/pub1.log" 2>&1 || bad "publish stl"
-"$PPACK" publish sha2 --to "$OUT/repo" >"$OUT/pub2.log" 2>&1 || bad "publish sha2"
+"$PFORGE" publish stl  --to "$OUT/repo" >"$OUT/pub1.log" 2>&1 || bad "publish stl"
+"$PFORGE" publish sha2 --to "$OUT/repo" >"$OUT/pub2.log" 2>&1 || bad "publish sha2"
 [ -f "$OUT/repo/index.json" ] && ok || bad "publish did not write the index"
 [ -f "$OUT/repo/pkg/sha2/sha2-0.1.0.tar" ] && ok || bad "publish did not write the tarball"
 
@@ -54,7 +54,7 @@ if command -v tar >/dev/null 2>&1; then
 fi
 
 # a published version is IMMUTABLE
-if "$PPACK" publish sha2 --to "$OUT/repo" >"$OUT/pub3.log" 2>&1; then
+if "$PFORGE" publish sha2 --to "$OUT/repo" >"$OUT/pub3.log" 2>&1; then
     bad "republishing the same version should be refused"
 else ok; fi
 
@@ -67,26 +67,26 @@ cat > pack.json <<EOF
 }
 EOF
 
-"$PPACK" update >update.log 2>&1 || bad "update"
+"$PFORGE" update >update.log 2>&1 || bad "update"
 grep -q "TOFU" update.log && ok || bad "the first update should say it accepted the repository"
 [ -f pack.lock ] && ok || bad "update did not write the lock"
 
 # ---- 3. search, offline and by symbol ----
-"$PPACK" search sha256_hex >search.log 2>&1
+"$PFORGE" search sha256_hex >search.log 2>&1
 grep -q '\[symbol\]' search.log && ok || bad "search did not find by symbol"
-"$PPACK" search nosuchthing >search2.log 2>&1 && bad "a search for nothing should fail" || ok
+"$PFORGE" search nosuchthing >search2.log 2>&1 && bad "a search for nothing should fail" || ok
 
 # ---- 4. add: the hash checks out, and the dependency comes along ----
-"$PPACK" add sha2@0.1.0 >add.log 2>&1 || bad "add"
+"$PFORGE" add sha2@0.1.0 >add.log 2>&1 || bad "add"
 grep -q "^stl 0.1.0" add.log && ok || bad 'stl should come as a dependency of sha2'
 grep -q '"unsafe": true' pack.lock && ok || bad "the lock should record unsafe mode"
 grep -q '"sha2": "0.1.0"' pack.json && ok || bad "add should write the dependency into the manifest"
 
 # with no exact version: a message, not a search
-"$PPACK" add sha2 >add2.log 2>&1 && bad "add with no version should be refused" || ok
+"$PFORGE" add sha2 >add2.log 2>&1 && bad "add with no version should be refused" || ok
 
 # ---- 5. install: the tree unpacked ----
-"$PPACK" install >install.log 2>&1 || bad "install"
+"$PFORGE" install >install.log 2>&1 || bad "install"
 d=$(ls -d build/pkg/sha2-0.1.0-* 2>/dev/null | head -1)
 [ -f "$d/sha2/sha2.ph" ] && ok || bad "install did not unpack the sha2 tree"
 ls -d build/pkg/stl-0.1.0-* >/dev/null 2>&1 && ok || bad "install did not unpack stl"
@@ -131,7 +131,7 @@ rm -rf build/pkg/sha2-0.1.0-*
 h=$(python3 -c "import json;d=json.load(open('pack.lock'));print([p for p in d['packages'] if p['name']=='sha2'][0]['sha256'])")
 pak=build/pkg/.pak/$h
 printf 'x' | dd of="$pak" bs=1 seek=600 count=1 conv=notrunc status=none
-if "$PPACK" install >install2.log 2>&1; then
+if "$PFORGE" install >install2.log 2>&1; then
     bad "install accepted a tampered tarball"
 else
     grep -q "hash does NOT match" install2.log && ok || bad "the refusal did not say it was the hash"
@@ -145,13 +145,13 @@ fi
 cd "$ROOT"
 rm -rf "$OUT/safe" "$OUT/keys" "$OUT/projs"
 mkdir -p "$OUT/keys"
-"$PPACK" keygen "$OUT/keys/k" >"$OUT/keygen.log" 2>&1 && ok || bad "keygen"
+"$PFORGE" keygen "$OUT/keys/k" >"$OUT/keygen.log" 2>&1 && ok || bad "keygen"
 [ -f "$OUT/keys/k.pub" ] && ok || bad "keygen did not write the public key"
 # a key that overwrites itself is a lost key
-"$PPACK" keygen "$OUT/keys/k" >/dev/null 2>&1 && bad "keygen should refuse to overwrite" || ok
+"$PFORGE" keygen "$OUT/keys/k" >/dev/null 2>&1 && bad "keygen should refuse to overwrite" || ok
 
-"$PPACK" publish stl  --to "$OUT/safe" --key "$OUT/keys/k" >"$OUT/ps1.log" 2>&1 || bad "signed publish (stl)"
-"$PPACK" publish sha2 --to "$OUT/safe" --key "$OUT/keys/k" >"$OUT/ps2.log" 2>&1 || bad "signed publish (sha2)"
+"$PFORGE" publish stl  --to "$OUT/safe" --key "$OUT/keys/k" >"$OUT/ps1.log" 2>&1 || bad "signed publish (stl)"
+"$PFORGE" publish sha2 --to "$OUT/safe" --key "$OUT/keys/k" >"$OUT/ps2.log" 2>&1 || bad "signed publish (sha2)"
 [ -f "$OUT/safe/index.json.sig" ] && ok || bad "the index was not signed"
 [ -f "$OUT/safe/pkg/sha2/sha2-0.1.0.tar.sig" ] && ok || bad "the tarball was not signed"
 
@@ -163,16 +163,16 @@ cat > pack.json <<EOF
   "repos": ["file://$ROOT/$OUT/safe/"]
 }
 EOF
-"$PPACK" update >update.log 2>&1 || bad "update in safe mode"
+"$PFORGE" update >update.log 2>&1 || bad "update in safe mode"
 grep -q "TOFU" update.log && ok || bad "the first time should accept the key (TOFU)"
 grep -q '"key": "[0-9a-f]\{64\}"' pack.lock && ok || bad "the key should be RECORDED in the lock"
-"$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add in safe mode"
+"$PFORGE" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add in safe mode"
 grep -q '"unsafe": false' pack.lock && ok || bad "signed is not unsafe"
 
 # the key is already known: the index does not change in silence
 cp "$ROOT/$OUT/safe/index.json" "$ROOT/$OUT/safe/index.json.bak"
 sed -i 's/"size": /"size": 1/' "$ROOT/$OUT/safe/index.json"
-"$PPACK" update >u2.log 2>&1 && bad "a swapped index should be refused" || ok
+"$PFORGE" update >u2.log 2>&1 && bad "a swapped index should be refused" || ok
 grep -q "key this project accepted" u2.log && ok || bad "the refusal did not mention the key (see $OUT/projs/u2.log)"
 mv "$ROOT/$OUT/safe/index.json.bak" "$ROOT/$OUT/safe/index.json"
 
@@ -188,8 +188,8 @@ cat > pack.json <<EOF
   "repos": ["file://$ROOT/$OUT/safe/"]
 }
 EOF
-"$PPACK" update >/dev/null 2>&1
-"$PPACK" add sha2@0.1.0 >add2.log 2>&1 && bad "a swapped tarball should be refused" || ok
+"$PFORGE" update >/dev/null 2>&1
+"$PFORGE" add sha2@0.1.0 >add2.log 2>&1 && bad "a swapped tarball should be refused" || ok
 grep -q "hash does NOT match" add2.log && ok || bad "the refusal did not mention the hash"
 cd "$ROOT"
 mv "$OUT/safe/pkg/sha2/sha2-0.1.0.tar.bak" "$OUT/safe/pkg/sha2/sha2-0.1.0.tar"
@@ -203,7 +203,7 @@ cat > pack.json <<EOF
   "repos": ["file://$ROOT/$OUT/repo/"]
 }
 EOF
-"$PPACK" update >un.log 2>&1 && bad 'a repository with no signature and no unsafe should be refused' || ok
+"$PFORGE" update >un.log 2>&1 && bad 'a repository with no signature and no unsafe should be refused' || ok
 grep -q "unsafe" un.log && ok || bad "the refusal did not say how to declare unsafe"
 cd "$ROOT"
 
@@ -211,7 +211,7 @@ cd "$ROOT"
 #
 # Three things the build does not check because they are not its job.
 cd "$ROOT"
-"$PPACK" check >check.log 2>&1 && ok || bad "ppack check should pass on this tree"
+"$PFORGE" check >check.log 2>&1 && ok || bad "pforge check should pass on this tree"
 grep -q "no problems" check.log && ok || bad "check did not say everything was fine"
 rm -f check.log
 
@@ -225,7 +225,7 @@ d = json.load(open(p))
 d["deps"]["pui"] = "0.1.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-"$PPACK" check >check2.log 2>&1 && bad "a P package pulling in a pscript one should be refused" || ok
+"$PFORGE" check >check2.log 2>&1 && bad "a P package pulling in a pscript one should be refused" || ok
 grep -q "drags the runtime along" check2.log && ok || bad "the refusal did not explain why"
 cp "$OUT/sha2-pack.bak" packages/sha2/pack.json
 rm -f check2.log
@@ -239,13 +239,13 @@ cat > pack.json <<EOF
   "repos": [{"url": "file://$ROOT/$OUT/repo/", "unsafe": true}]
 }
 EOF
-"$PPACK" update >/dev/null 2>&1
-"$PPACK" add sha2@0.1.0 >/dev/null 2>&1 && ok || bad "add in the up project"
+"$PFORGE" update >/dev/null 2>&1
+"$PFORGE" add sha2@0.1.0 >/dev/null 2>&1 && ok || bad "add in the up project"
 # TWO versions of the same package in the repository: that is what gives `up`
 # something to choose from, and it is the only way to measure that it picks the
 # highest
 cd "$ROOT"
-"$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
+"$PFORGE" publish tar --to "$OUT/repo" >/dev/null 2>&1
 python3 - <<'PYX'
 import json
 p = "packages/tar/pack.json"
@@ -253,7 +253,7 @@ d = json.load(open(p))
 d["version"] = "0.2.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-"$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
+"$PFORGE" publish tar --to "$OUT/repo" >/dev/null 2>&1
 python3 - <<'PYX'
 import json
 p = "packages/tar/pack.json"
@@ -262,9 +262,9 @@ d["version"] = "0.1.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
 cd "$ROOT/$OUT/projup"
-"$PPACK" update >/dev/null 2>&1
-"$PPACK" add tar@0.1.0 >addtar.log 2>&1 && ok || bad "add tar@0.1.0 (see $OUT/projup/addtar.log)"
-"$PPACK" up >up.log 2>&1 && ok || bad "ppack up"
+"$PFORGE" update >/dev/null 2>&1
+"$PFORGE" add tar@0.1.0 >addtar.log 2>&1 && ok || bad "add tar@0.1.0 (see $OUT/projup/addtar.log)"
+"$PFORGE" up >up.log 2>&1 && ok || bad "pforge up"
 grep -q "0.1.0 -> 0.2.0" up.log && ok || bad "up did not raise the version"
 python3 -c "import json,sys; d=json.load(open('pack.json')); sys.exit(0 if d['deps']['tar']=='0.2.0' else 1)" && ok || bad "the manifest did not end up with the new version (or stopped being JSON)"
 
@@ -278,7 +278,7 @@ d["toolchain"] = ">= 9.9.9"
 d["version"] = "0.3.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-"$PPACK" publish tar --to "$OUT/repo" >/dev/null 2>&1
+"$PFORGE" publish tar --to "$OUT/repo" >/dev/null 2>&1
 python3 - <<'PYX'
 import json
 p = "packages/tar/pack.json"
@@ -288,8 +288,8 @@ d["version"] = "0.1.0"
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
 cd "$ROOT/$OUT/projup"
-"$PPACK" update >/dev/null 2>&1
-"$PPACK" add tar@0.3.0 --query "$PLANGC" >tc.log 2>&1 && bad "a package requiring a compiler that does not exist should be refused" || ok
+"$PFORGE" update >/dev/null 2>&1
+"$PFORGE" add tar@0.3.0 --query "$PLANGC" >tc.log 2>&1 && bad "a package requiring a compiler that does not exist should be refused" || ok
 grep -q "requires plangc >= 9.9.9" tc.log && ok || bad "the refusal did not state the range and the version"
 
 # the lock mismatched with the manifest: it warns, and with --frozen it refuses
@@ -299,9 +299,9 @@ d = json.load(open("pack.json"))
 d["deps"]["doesnotexist"] = "9.9.9"
 open("pack.json", "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
 PYX
-"$PPACK" install >inst.log 2>&1
+"$PFORGE" install >inst.log 2>&1
 grep -q "does not match pack.json" inst.log && ok || bad "install should warn about the mismatched lock"
-"$PPACK" install --frozen >inst2.log 2>&1 && bad "--frozen should refuse" || ok
+"$PFORGE" install --frozen >inst2.log 2>&1 && bad "--frozen should refuse" || ok
 cd "$ROOT"
 
 # ---- 8b. `--json`: the SAME data, for whoever is not a person ----
@@ -311,9 +311,9 @@ cd "$ROOT"
 # that it is JSON, and who says so is `python3`.
 cd "$ROOT/$OUT/projs"
 if command -v python3 >/dev/null 2>&1; then
-    "$PPACK" search sha256 --json > s.json 2>/dev/null
+    "$PFORGE" search sha256 --json > s.json 2>/dev/null
     python3 -c "import json,sys; d=json.load(open('s.json')); sys.exit(0 if isinstance(d, list) and len(d) > 0 and 'name' in d[0] else 1)" && ok || bad "search --json is not a list of objects"
-    "$PPACK" install --json > i.json 2>/dev/null
+    "$PFORGE" install --json > i.json 2>/dev/null
     python3 -c "import json,sys; json.load(open('i.json'))" && ok || bad "install --json is not JSON"
 fi
 cd "$ROOT"
@@ -355,9 +355,9 @@ srv.serve_forever()
   "repos": [{"url": "http://127.0.0.1:$PORT/", "unsafe": true}]
 }
 EOF
-    "$PPACK" update >update.log 2>&1 && ok || bad "update over HTTP"
-    "$PPACK" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add over HTTP"
-    "$PPACK" install >install.log 2>&1 && ok || bad "install over HTTP"
+    "$PFORGE" update >update.log 2>&1 && ok || bad "update over HTTP"
+    "$PFORGE" add sha2@0.1.0 >add.log 2>&1 && ok || bad "add over HTTP"
+    "$PFORGE" install >install.log 2>&1 && ok || bad "install over HTTP"
     ls -d build/pkg/sha2-0.1.0-* >/dev/null 2>&1 && ok || bad "the tree did not come out of the tarball downloaded over HTTP"
     # and the hash is the SAME one that came over file:// — that is what makes
     # the transport not matter
@@ -365,9 +365,9 @@ EOF
     h2=$(grep -o '"sha256": "[0-9a-f]*"' "$ROOT/$OUT/proj/pack.lock" | head -1)
     check "the same package, the same hash, another transport" "$h2" "$h1"
     # a path that does not exist: HTTP 404, and the message has to say so
-    "$PPACK" update >/dev/null 2>&1
+    "$PFORGE" update >/dev/null 2>&1
     sed -i "s#127.0.0.1:$PORT/#127.0.0.1:$PORT/doesnotexist/#" pack.json
-    "$PPACK" update >u404.log 2>&1 && bad "an index that does not exist should fail" || ok
+    "$PFORGE" update >u404.log 2>&1 && bad "an index that does not exist should fail" || ok
     grep -q "404" u404.log && ok || bad "the HTTP failure did not state the status (see $OUT/proj-http/u404.log)"
     cd "$ROOT"
     pkill -P "$(cat "$OUT/httpd.pid")" 2>/dev/null
@@ -387,7 +387,7 @@ rm -rf "$FAKE"; mkdir -p "$FAKE/empty"
 
 # (a) a dependency the destination repository does not resolve. `sha2` depends on
 # `stl`; in an empty repository it does not exist.
-if "$PPACK" publish sha2 --to "$FAKE/empty" >"$FAKE/dep.log" 2>&1; then
+if "$PFORGE" publish sha2 --to "$FAKE/empty" >"$FAKE/dep.log" 2>&1; then
     bad "publishing with a dependency the destination does not have should be refused"
 else ok; fi
 grep -q "publish it first" "$FAKE/dep.log" && ok || bad "the dependency refusal did not say what to do"
@@ -408,14 +408,14 @@ def pmixed_dois() -> i32:
     return 2
 EOF
 mkdir -p "$FAKE/repo2"
-"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p1.log" 2>&1 && ok || bad "a simple P package should publish (see $FAKE/p1.log)"
+"$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p1.log" 2>&1 && ok || bad "a simple P package should publish (see $FAKE/p1.log)"
 mkdir -p "$FAKE/pkg/test"
 echo 'print("hi")' > "$FAKE/pkg/test/t.psc"
 rm -rf "$FAKE/repo3"; mkdir -p "$FAKE/repo3"
-"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo3" >"$FAKE/p2.log" 2>&1 && ok || bad "a .psc in test/ should NOT block it (see $FAKE/p2.log)"
+"$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo3" >"$FAKE/p2.log" 2>&1 && ok || bad "a .psc in test/ should NOT block it (see $FAKE/p2.log)"
 echo 'x: int = 1' > "$FAKE/pkg/extra.psc"
 rm -rf "$FAKE/repo4"; mkdir -p "$FAKE/repo4"
-if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo4" >"$FAKE/p3.log" 2>&1; then
+if "$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo4" >"$FAKE/p3.log" 2>&1; then
     bad "a .psc OUTSIDE test/ in a `lang: p` package should be refused"
 else ok; fi
 grep -q "extra.psc" "$FAKE/p3.log" && ok || bad "the refusal did not name the file"
@@ -435,13 +435,13 @@ def pmixed_dois() -> i32:
 def pmixed_tres() -> i32:
     return 3
 EOF
-if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p4.log" 2>&1; then
+if "$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p4.log" 2>&1; then
     bad "a patch with a changed interface should be refused"
 else ok; fi
 grep -q "patch" "$FAKE/p4.log" && ok || bad "the patch refusal did not say why"
 # the same change as a MINOR passes: adding is what a minor promises
 sed -i 's/"version": "0.1.1"/"version": "0.2.0"/' "$FAKE/pkg/pack.json"
-"$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p5.log" 2>&1 && ok || bad "a minor that ADDS should publish (see $FAKE/p5.log)"
+"$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p5.log" 2>&1 && ok || bad "a minor that ADDS should publish (see $FAKE/p5.log)"
 # and taking away in a minor, no
 sed -i 's/"version": "0.2.0"/"version": "0.3.0"/' "$FAKE/pkg/pack.json"
 cat > "$FAKE/pkg/pmixed.ph" <<'EOF'
@@ -452,12 +452,12 @@ import "pmixed.ph"
 def pmixed_tres() -> i32:
     return 3
 EOF
-if "$PPACK" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p6.log" 2>&1; then
+if "$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p6.log" 2>&1; then
     bad "a minor that TAKES AWAY from the interface should be refused"
 else ok; fi
 grep -q "a minor adds, it does not take away" "$FAKE/p6.log" && ok || bad "the minor refusal did not say why"
 
-# ---- 11. `ppack lock`: the lock from the manifest, without building ----
+# ---- 11. `pforge lock`: the lock from the manifest, without building ----
 cd "$ROOT/$OUT/proj"
 cp pack.lock lock.before
 # take a line out of the lock and ask for it to be redone: it comes back to what
@@ -468,13 +468,13 @@ d = json.load(open("pack.lock"))
 d["packages"] = [p for p in d["packages"] if p["name"] != "stl"]
 json.dump(d, open("pack.lock", "w"), indent=2)
 PY2
-"$PPACK" lock >lock.log 2>&1 && ok || bad "ppack lock (see $OUT/proj/lock.log)"
+"$PFORGE" lock >lock.log 2>&1 && ok || bad "pforge lock (see $OUT/proj/lock.log)"
 grep -q '"name": "stl"' pack.lock && ok || bad "the redone lock did not bring stl back"
 # and now it does match: `--frozen` accepts
-"$PPACK" lock --frozen >lock2.log 2>&1 && ok || bad "--frozen should accept an up-to-date lock"
+"$PFORGE" lock --frozen >lock2.log 2>&1 && ok || bad "--frozen should accept an up-to-date lock"
 # a manifest asking for a version the lock does not have: `--frozen` refuses
 sed -i 's/"sha2": "0.1.0"/"sha2": "0.9.9"/' pack.json
-"$PPACK" lock --frozen >lock3.log 2>&1 && bad "--frozen should refuse a stale lock" || ok
+"$PFORGE" lock --frozen >lock3.log 2>&1 && bad "--frozen should refuse a stale lock" || ok
 grep -q "frozen" lock3.log && ok || bad "the --frozen refusal did not explain itself"
 sed -i 's/"sha2": "0.9.9"/"sha2": "0.1.0"/' pack.json
 

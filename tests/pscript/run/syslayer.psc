@@ -1,6 +1,6 @@
 """A camada de sistema: `os` e `path` (111).
 
-Vinda do `psys.p` do pstudio, porque a decisão 1.1 do pbuild manda a parte de
+Vinda do `psys.p` do pstudio, porque a decisão 1.1 do pforge manda a parte de
 sistema para a lib/runtime do pscript — o editor e o build passam a usar a
 MESMA. As contas sobre o NOME (join/dirname/basename/normpath) são conferidas
 por varredura contra o `posixpath` do CPython em tests/oracle/py/paths.psc; o

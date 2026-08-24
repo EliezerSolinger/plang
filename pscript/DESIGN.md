@@ -2416,8 +2416,8 @@ nas duas linguagens. Ganha `==`/`!=` por conteúdo (campo a campo, código gerad
 memcmp, que compararia o padding) e o construtor `Vec(1.0, 2.0)` posicional e nomeado.
 Fica de fora do P o `pack`/`unpack` (59), por decisão sua.
 
-**65.2 f-string no P, resolvida inteiramente em compilação — ABERTO, e o primeiro
-dos dois que sobraram no Grupo A (117.5: vale 158 linhas de síntese).** No pscript ela constrói
+**65.2 f-string no P, resolvida inteiramente em compilação — FEITA na 119.1, na
+forma (a).** No pscript ela constrói
 um `str`; no P ela teria de baixar para o que o C tem — uma string de formato mais os
 argumentos. Forma possível: `printf(f"{n} itens")` vira `printf("%d itens", n)`.
 - (a) Sim, só em posição de argumento de função variádica (printf/snprintf).
@@ -2439,8 +2439,7 @@ não-nulável (local e retorno), `*T` continua anulável para a fronteira com o 
 - (c) Não: o P interopera com C, onde todo ponteiro é anulável, e a garantia seria
       falsa na fronteira.
 
-**65.4 Lambda sem captura no P — ABERTO, o segundo dos dois (117.5: vale 202
-linhas de síntese, e hoje o P não tem `lambda` nenhum).** A 20.3 já diz que o compilador escolhe entre ponteiro
+**65.4 Lambda sem captura no P — FEITA na 119.2, na forma (a).** A 20.3 já diz que o compilador escolhe entre ponteiro
 puro e `{fp, env}`; a forma SEM captura é literalmente um ponteiro de função, que o P já
 tem. `sorted(xs, key=lambda v: v.x)` sem alocar nada.
 - (a) Sim, e capturar vira erro de compilação com mensagem que diz por quê.
@@ -3598,6 +3597,88 @@ já funciona — e como VALOR, sem cabeçalho.
 mais claro do contrato da 27.1: a tupla precisa de hash derivado e de igualdade
 por conteúdo, que é runtime; o P é zero-runtime.
 
+## Bateria 119 — o Grupo A rende: f-string e lambda no P (2026-08-22)
+
+As duas pendências que a 117.5 isolou, decididas por você na forma (a) e feitas.
+O critério da 65 é o que as escolheu: cada travessia converte síntese confiada do
+`ps_lower` em código do P que a sema do P VERIFICA.
+
+**119.1 f-string no P (65.2a) — a regra e a implementação são a MESMA coisa.**
+Ela vale só como argumento de formato de função variádica, e o motivo não é
+política: é onde a expansão acontece. Só no CALL se sabe as duas metades — a
+assinatura do chamado (é variádica? esta é a posição do formato?) e o TIPO de
+cada buraco, que é o que escolhe `%lld` em vez de `%s` em vez de `%p`. Uma
+f-string em qualquer outro lugar não tem onde expandir, e a mensagem diz isso.
+
+O tipo do buraco decide a conversão, e o **molde** (`cast`) é o que a torna exata
+nos dois padrões: `long long`/`%lld` normalmente, `long`/`%ld` sob `--std=c89`,
+onde 64 bits são política do back end (a `base_cname`) e não nossa. O que sai é o
+C que uma pessoa escreveria:
+
+```
+printf(f"{s}, n={n}, hex={n:x}\n")
+printf("%s, n=%lld, hex=%llx\n", s, (long long)n, (unsigned long long)n);
+```
+
+Três coisas que valem estar escritas:
+
+- **método variádico também hospeda** — `b.printf(f"{x}")` é o caso que este
+  repositório usa mais, e a regra é sobre a ASSINATURA, não sobre `printf` pelo
+  nome. O receptor ocupa o primeiro parâmetro, então a posição do formato anda um;
+- **`bool` imprime `True`/`False`**, com um ternário sobre dois literais — a
+  grafia das duas linguagens, e continua zero runtime;
+- **`%` literal no texto vira `%%`**, senão o printf leria o texto como conversão.
+
+O que NÃO existe, dito e não descoberto depois: `^` (centrar) e `b` (binário) não
+têm conversão em printf, e a f-string do P **é** um formato de printf. Recusa com
+mensagem, não silêncio.
+
+**119.2 lambda no P (65.4a) — sem captura, e é isso que a torna grátis.** Sem
+nada para capturar, a lambda É um ponteiro de função, que o P já tinha. A sema dá
+nome a ela, leva para o topo como `private` e deixa o nome no lugar:
+
+```
+apply(&a[0], 4, lambda v: v + 10)      →      apply(&a[0], 4, __lambda_1);
+                                              static int32_t __lambda_1(int32_t v) { return v + 10; }
+```
+
+Os tipos vêm do CONTEXTO (68.7, a mesma regra do pscript), e o contexto é uma
+destas cinco coisas: a variável declarada, o parâmetro, a atribuição, o retorno,
+ou o campo que se inicializa (posicional ou por designador). Fora delas a
+mensagem manda anotar quem recebe.
+
+**Sem captura é PROVADO, não avisado:** antes de levantar, o corpo é varrido e um
+nome que seja local da função envolvente é erro — com o nome dele na mensagem,
+porque a correção (passar como parâmetro) só é óbvia quando se sabe qual era. Um
+global não é captura: ele tem armazenamento estático, e lê-se de graça.
+
+**Protótipo primeiro, corpo por último.** O C que emitimos não tem declarações
+adiantadas — imprime o módulo em ordem — então uma lambda levantada precisa ser
+anunciada antes da função que a nomeia e definida depois dos globais e structs que
+o corpo dela lê. Prepender tudo dava `'g' undeclared`; foi o teste com um global
+que mostrou.
+
+**119.3 A peça compartilhada, e é a única que a 117 tinha achado ali.** A
+gramática de chaves (`{e}`, `{e:spec}`, `{{`, `}}`) é a mesma nas duas linguagens
+e virou `fstr_split`/`FStrParts` no `util.p`; o que difere é o que cada front end
+FAZ com os pedaços (o pscript constrói um `str`, o P constrói um formato). Mesmo
+arranjo do `LexSpec`: máquina compartilhada, linguagem própria. O `ps_parser`
+passou a usar e a suíte do pscript (275) é a prova de que nada mudou de
+comportamento.
+
+**119.4 As duas são nós de AÇÚCAR que a sema apaga**, como o `EX_IN` da 97: o
+`P_EXPRS` do `backend.p` as aceita (a impressora de superfície roda ANTES da
+sema, de propósito), os geradores de código recusam com "internal:", e o
+`roundtrip` — imprimir P de volta e exigir C idêntico — é o gate que prova o
+conjunto. 236 casos.
+
+E o `-Wswitch` do próprio compilador (102) cobrou o `EX_LAMBDA` que faltava num
+`match` do `backend_c`: a checagem de exaustividade pagou-se sozinha nesta
+bateria.
+
+Gates: `cases/45_fstring.p` e `cases/46_lambda.p` (48 casos), mais onze recusas em
+`tests/errors/p_fstring_*` e `p_lambda_*` (112). Três modos.
+
 ## Bateria 118 — `static` sai, `private` entra (2026-08-22)
 
 *"vou substituir a keyword `static` pela keyword `private`, na própria linguagem
@@ -3734,8 +3815,8 @@ que a seção fosse atualizada:
 | 65.1 `record` no P | **feito** (2026-08-14) — 106 linhas de síntese saíram do `ps_lower` |
 | 65.3 `T?` no P | **fechado de outra forma** pela 69: `ref T` não-nulável, `*T` segue anulável, narrowing e `-Wnull-dereference`. `T?` no P não se repropõe |
 | 65.5 interface estática no P | **feito** pela 67.1 (`trait` no P) + 68.1 (limite nominal) |
-| 65.2 f-string no P | **aberto** — a máquina já existe no lexer atrás da flag `fstrings`; vale 158 linhas de `fmt_call`/`to_str` no `ps_lower` |
-| 65.4 lambda no P | **aberto** — o P não tem `TK_LAMBDA` nenhum; vale 202 linhas (`lower_lam_env`, `lower_lam_func`, `collect_lams_*`, `lower_fnval`) |
+| 65.2 f-string no P | **feita** na 119.1 (forma (a): argumento de formato de variádica) |
+| 65.4 lambda no P | **feita** na 119.2 (forma (a): sem captura, levantada para o topo) |
 | 65.15 superset de fonte ou de capacidade | **aberto**, e (a) é o que vale na prática |
 
 **117.6 Uma deriva que a medição achou, e é decisão sua.** A sema do P tem **40**
@@ -3751,7 +3832,7 @@ que as coisas foram feitas, e não escolha registrada.
 Saíram **6448 linhas de P** — `core.p`, `pui.p`, `codeview.p`, `complete.p`,
 `app.p`, `main.p` e `psys.p` com os seus headers — e os oito testes deles. O que
 ficou em P é o que a 45.5 não deixa atravessar: **820 linhas** de driver
-(`pgfx.p`, `pgfx_raster.p`, `font_atlas.p`, `ps/shim.p`) mais o `ps/hl.p`, a
+(`pgfx.p`, `pgfx_raster.p`, `font_atlas.p`, `shim.p`) mais o `hl.p`, a
 ponte para o lexer do compilador.
 
 O que a remoção obrigou a mexer, e é a parte que interessa:
@@ -3774,7 +3855,7 @@ binário completo com SDL.
 
 **116.3 O `psys` não tem substituto em pstudio** porque virou stdlib do pscript
 na 111 (`os` e `path`) — o arquivo era a FONTE do porte, e sai agora que os dois
-consumidores (o editor e, em breve, o pbuild) usam a stdlib.
+consumidores (o editor e, em breve, o pforge) usam a stdlib.
 
 Ficou registrado o que a migração inteira custou e rendeu: quatro baterias
 (111-116), **quinze defeitos do compilador** achados por escrever programa de
@@ -3838,7 +3919,7 @@ preenche na partida. É a mesma decisão do `Painter` (112) e do `load_text` (11
 levada ao fim: com o driver de fora, o editor inteiro roda num teste headless, e
 o que sobra no `app.psc` é tradução de evento e apresentação de quadro.
 
-O gate é `pstudio/ps/app_test.psc`, o gêmeo do `app_flow.p`: monta um projeto em
+O gate é `pstudio/app_test.psc`, o gêmeo do `app_flow.p`: monta um projeto em
 disco (com `os`/`path`, a camada da 111), abre arquivos, digita, desfaz, refaz,
 põe dois cursores, usa a paleta de arquivos e a de comandos, vai para a linha,
 busca duas vezes, clica numa aba, expande um diretório, dobra, marca, comenta,
@@ -3938,7 +4019,7 @@ Sua pergunta e a sua aprovação: *"ou seja eu teria que fazer uma interface/hea
 camada no compilador em P pra isso né"* → *"aprovado, faz o adaptador junto com o
 porte do codeview"*.
 
-**113.1 O adaptador: `pstudio/ps/hl.p`, 141 linhas, e NÃO é mexer no compilador.**
+**113.1 O adaptador: `pstudio/hl.p`, 141 linhas, e NÃO é mexer no compilador.**
 O lexer já é um header (`selfhost/lexer.ph`), e o adaptador mora ao lado do
 editor — do mesmo tipo que o `shim.p` é para o SDL. Duas correções ao que eu
 tinha dito antes de olhar:
@@ -3978,7 +4059,7 @@ do editor rode sem driver, e portanto seja testável:
 | `pgfx_clipboard_get/set` dentro do widget | `copy()` DEVOLVE o texto, `paste(texto)` RECEBE | quem fala com o sistema é o app, que é quem tem o driver — e o multi-cursor (N pedaços para N cursores) continua aqui |
 | `load_file`/`save_file` com `vfs` | `load_text`/`text_to_save` | I/O no pscript é `await` (76.2), e quem espera é o laço de eventos |
 
-**A prova é o mesmo diff da 112:** `pstudio/ps/cv_test.psc` imprime as SETE
+**A prova é o mesmo diff da 112:** `pstudio/cv_test.psc` imprime as SETE
 linhas de `tests/pstudio/cv_fold_scroll.expected` byte por byte — `top=20` que
 não se move ao dobrar pela sarjeta, `fold_all: inner=22 -> top=20`,
 `at_caret: top=24 caret=40 folded=1`. Mais o realce e o completamento pelo
@@ -4043,9 +4124,9 @@ linhas idênticas às do teste em P. Três modos: 273 no pscript.
 
 Segundo passo da migração do pstudio (a 111 foi o primeiro). O `pui.p` — 1158
 linhas de P: a árvore de widgets, as duas fases do layout do Godot, o desenho
-retido, a entrada — virou `pstudio/ps/lib_pui.psc`, 1136 linhas de pscript.
+retido, a entrada — virou `pstudio/lib_pui.psc`, 1136 linhas de pscript.
 
-**A prova é um diff.** `pstudio/ps/pui_test.psc` é o gêmeo de
+**A prova é um diff.** `pstudio/pui_test.psc` é o gêmeo de
 `tests/pstudio/pui_layout.p`, e as **oito linhas de retângulo são idênticas** —
 `[4] 24,21 216x29` nos dois. Duas linhas diferem de propósito e o teste diz
 quais: `changes=5` em vez de 3 (o evento de texto do shim carrega UM codepoint,
@@ -4140,8 +4221,8 @@ gc-stress 113.
 
 Sua decisão: *"o pstudio temos que migrar ele totalmente para PScript e a parte
 de sistema vai pra lib/runtime do PScript onde for possível"* — que é a 1.1 do
-`pbuild/DESIGN.md`. Esta bateria é o primeiro passo dela, e o passo que os DOIS
-projetos seguintes esperavam: o pbuild precisa listar diretório e ler mtime, e o
+`pforge/DESIGN.md`. Esta bateria é o primeiro passo dela, e o passo que os DOIS
+projetos seguintes esperavam: o pforge precisa listar diretório e ler mtime, e o
 pstudio migrado precisa das mesmas coisas.
 
 **Nada aqui foi inventado.** O `pstudio/psys.p` já tinha a camada escrita em P —
@@ -4166,14 +4247,14 @@ o sistema de arquivos — `listdir`, `mkdir`, `makedirs`, `remove`, `rmdir`,
 > **Por que NÃO tem um `stat` que devolve tudo de uma vez.** Quatro perguntas ao
 > disco são quatro `stat`, e um build que percorre mil arquivos sentiria. Mas a
 > forma de devolver "tudo" é um record novo ou um dict de tipos mistos, e nenhum
-> dos dois é óbvio — então fica para quando o pbuild MEDIR que dói. O que existe
+> dos dois é óbvio — então fica para quando o pforge MEDIR que dói. O que existe
 > hoje é o que o editor usava.
 
 **111.2 Sem `chdir`, e o motivo é o modelo de workers.** O diretório de trabalho
 é do PROCESSO e um worker é uma THREAD (18.1): um `chdir` num worker mudaria o
 caminho debaixo de todos os outros. Um caminho absoluto — que é o que `abspath`
 dá — resolve o mesmo problema sem corrida. E rodar um processo (`os.run`) NÃO
-entrou: é a pergunta 1.2 do pbuild, e é sua.
+entrou: é a pergunta 1.2 do pforge, e é sua.
 
 **111.3 O `posixpath` conferido por VARREDURA, e o "quase" que ele pegou.** O
 `ps_path_dirname` do editor devolvia `"."` para um nome sem barra; o Python
@@ -4226,7 +4307,7 @@ biblioteca portada), e isso custou **seis** listas de módulos editadas à mão:
 `Makefile`, `tests/run.sh` (três lugares), `tests/psbuild.sh`, `selfhost/main.p`.
 A 109 já tinha medido esse preço em quatro; agora são seis, e a primeira vez que
 esqueci uma delas o QBE disse `can't open psrt_os.s`. **É o argumento da 1.5 do
-pbuild** (definição de módulo/TU na linguagem) medido pela terceira vez.
+pforge** (definição de módulo/TU na linguagem) medido pela terceira vez.
 
 De passagem, uma corrente de dez `strcmp` que decidia quais módulos são builtin
 virou `ps_builtin_mod()`, com a lista num lugar só: esquecer de acrescentar ali
@@ -5621,3 +5702,59 @@ locale, que é outra decisão.
 
 Gates: `tests/pscript/run/unicase.psc` (os casos que mostram POR QUE uma tabela é
 necessária) e `tests/oracle/py/unicase.psc` (o espaço inteiro, contra o Python).
+
+
+## BATERIA 118 — `os.run`: rodar um processo (a 1.2 do pforge, implementada)
+
+A peça que faltava na camada de sistema, e a única que o `pforge` não tinha como
+escrever por fora. A decisão era 1.2 do `pforge/DESIGN.md` — *task com `await`,
+sobre o laço de eventos* — e isto é ela.
+
+**118.1 A forma.** `await os.run(argv, env=, cwd=, stdout=)` devolve um processo
+que já terminou, com `status()` e `output()`.
+
+**118.2 SEM shell.** O comando é um `list<str>` e é o `execvp` que o recebe. Não
+há aspas para escapar, não há `&&`, não há glob, e nada do que o programa
+escreveu pode virar sintaxe — que é a decisão 1.6 do pforge vista de dentro. Uma
+`str` no lugar da lista é recusada com a forma certa na mensagem, e o teste
+`tests/pscript/bad/os_run_shell.psc` prende isso.
+
+**118.3 Status != 0 NÃO é exceção.** Um `cc` que recusa o programa é RESULTADO, e
+quem chamou decide. Levantar ali obrigaria todo build a envolver toda compilação
+num `try`. Morto por sinal vira `128+sinal`, a convenção que todo shell usa.
+Levantar acontece só quando o processo não chega a começar.
+
+**118.4 O stderr vem JUNTO com o stdout**, um cano só, na ordem em que saíram —
+porque é assim que um relatório de erro se lê. `stdout=<caminho>` manda a saída
+padrão para um arquivo sem passar pela memória (o que um build quer quando a
+saída É o artefato) e o stderr continua vindo em `output()`.
+
+**118.5 `env=` SUBSTITUI o ambiente, não mescla.** O hash de uma aresta de build
+cobre o ambiente efetivo, e "mesclar" não tem resposta única. O ambiente do filho
+é montado ANTES do `fork` e entra por uma atribuição a `environ` — que é
+seguro entre o fork e o exec, ao contrário de `setenv`, que aloca (e alocar ali é
+o travamento clássico de um programa com threads).
+
+**118.6 Um tipo novo, `proc`, e não um dict.** A 110 escolheu `dict<str,int>`
+para o `gc.stats()` com um bom argumento ("nenhum tipo novo para a linguagem
+aprender"), mas aqui o resultado é heterogéneo — um número e uma str — e um
+`record` não pode carregar `str` (58.2: record é bytes puros). Então é um OBJETO
+do runtime, como `file` e `socket` já são, com membros que são chamadas
+(`r.status()`), que é a forma que `conn.port()` tinha. O nome é escrevível
+(`-> proc`) porque um programa precisa anotá-lo para passar a função ao
+`gather_map`.
+
+**118.7 O `waitpid` mora no POOL.** É a mesma decisão que o `getaddrinfo` já
+tinha (76.3): esperar um filho é bloquear, e não há descritor que o `poll` possa
+vigiar por ele. N processos em voo são N trabalhos no pool, e o limite de
+concorrência é de quem chama — `gather_map(um, cmds, at_most=n)`.
+
+**118.8 Duas medidas que o build pediu junto.** `path.getmtime_ns` (o mesmo
+mtime, sem jogar fora a parte de baixo: num build rápido dois arquivos escritos
+no mesmo segundo são indistinguíveis, e é assim que um incremental esquece de
+refazer alguma coisa) e `os.nproc` (quantos processos manter em voo).
+
+Portões: `tests/pscript/run/os_run.psc` (o comportamento inteiro, incluindo oito
+processos em paralelo com limite), três recusas em `tests/pscript/bad/os_run_*`,
+e `tests/oracle/py/proc.psc` — o mesmo programa contra o `subprocess` do
+python3, porque nenhuma dessas promessas é conferível por leitura.

@@ -6,15 +6,15 @@ palette 2 Fold All
 folded 4
 build cmd Build
 asked for a build True target (default)
-targets 1 build/bin/ppack
-asked for target build/bin/ppack
+targets 1 build/bin/pforge
+asked for target build/bin/pforge
 error positioned True 2 3
 went to the error True
 error mark 4
 caret at 2
 manifest cmd Manifest: Set Default Target...
 choosing the default target True 2
-asked for the default target build/bin/ppack and did not build False
+asked for the default target build/bin/pforge and did not build False
 asking dependency (name@version) 32
 typed >nothing
 refused without a version a dependency is `name@version` — v1 has no resolver

@@ -55,7 +55,7 @@ make -j$(nproc)
 
 That is the whole thing: about two minutes from a clean tree on eight cores, then
 seconds. It compiles the committed C seed with your `cc`, uses that to build
-**ppack** — this repository's own build system, written in pscript — and from
+**pforge** — this repository's own build system, written in pscript — and from
 then on the build is a graph. The default build is 105 edges: 97 translations and
 compilations, 5 links, and **3 checks** that define what "built" means — the
 `s2 == s3` fixed point, no internal libc type in the generated C, and the stamp
@@ -63,7 +63,7 @@ that joins them. *Building is not testing:* the suites are a target you ask for.
 
 | command | what it does |
 |---|---|
-| `make` | the ladder with its fixed point, `ppack`, and the editor |
+| `make` | the ladder with its fixed point, `pforge`, and the editor |
 | `make check` | ... and then compiles and runs a hello-world with it |
 | `make test` | the corpus in C plus the pscript suite, case by case |
 | `make verify` | the whole battery, 8 gates (~6 min cold, 8 s when nothing moved) |
@@ -81,14 +81,14 @@ exist, which is not an error — `make pstudio` is the target that refuses out
 loud. And `make verify` alone wants two extras: `git submodule update --init` for
 the vendored QBE, and `python3` for the test harnesses.
 
-If you would rather not go through `ppack` at all, `build.ninja` is committed and
+If you would rather not go through `pforge` at all, `build.ninja` is committed and
 describes the same graph:
 
 ```sh
 cc -O2 -o plangc bootstrap/selfhost/*.c && ninja
 ```
 
-It is generated (`ppack ninja build.ninja`) and a gate regenerates it and
+It is generated (`pforge ninja build.ninja`) and a gate regenerates it and
 compares — a committed generated file has exactly one way to fail, which is to
 age in silence.
 
@@ -234,7 +234,7 @@ about six milliseconds: a manifest lists every file the build read with its date
 and if they all still match there is nothing to do.
 
 ```sh
-ppack run hello.psc arg1 arg2    # builds into build/run/ and BECOMES the process
+pforge run hello.psc arg1 arg2    # builds into build/run/ and BECOMES the process
 ```
 
 Talking to Plang is one import — `import "shim.ph"` compiles `shim.p` into this
@@ -268,8 +268,8 @@ hold a pointer stay in Plang and expose scalars:
 
 | in Plang | why |
 |---|---|
-| `ps/shim.p` + `pgfx*.p` + `font_atlas.p` | SDL2 and the pixels: a window handle, a key code, a colour, one glyph at a time |
-| `ps/hl.p` | the compiler's lexer: the text goes in as a `CStr` (pointer + length, no copy) and the tokens come back as numbers |
+| `shim.p` + `pgfx*.p` + `font_atlas.p` | SDL2 and the pixels: a window handle, a key code, a colour, one glyph at a time |
+| `hl.p` | the compiler's lexer: the text goes in as a `CStr` (pointer + length, no copy) and the tokens come back as numbers |
 
 Everything above that — lines, carets, undo, search, folding, the widget tree,
 the layout, the key bindings, the painting — is pscript: **4 671 lines of it over
@@ -283,27 +283,27 @@ UTF-8 helpers, every `malloc`/`free` pair and every `deinit` are simply not ther
 The layout code, which is arithmetic, did not shrink at all.
 
 Everything is gated: `make verify` compiles and links the editor and runs its
-self-test under SDL's dummy driver, and `pstudio/ps/*_test.psc` drives the buffer,
+self-test under SDL's dummy driver, and `pstudio/*_test.psc` drives the buffer,
 the toolkit, the editing widget and the whole application headless, with synthetic
 events. With no display, `--shot img.ppm` writes a frame instead of opening a
 window. The font atlas is what `embed_bytes` is for: 263 KB of glyphs used to be
 eleven thousand lines of decimal in a `.p`, and are now one line reading a `.bin`
 at compile time.
 
-## ppack — the build system and the package manager
+## pforge — the build system and the package manager
 
 Written **in pscript** and built by the compiler it builds. One binary, three
 modes: *resolve* (the only one that touches the network), *describe*, *execute*.
 
 ```sh
-ppack build [target]      # -j N, -k N, -n (dry run), --explain, --repro
-ppack run x.psc [args]    # build it and BECOME it (stdin, stdout, exit code)
-ppack test / verify       # the named suites / the whole battery
-ppack dev [target]        # rebuild and relaunch on every change
-ppack doc <mod> [sym]     # a module's interface and docs; --html for a folder
-ppack why / tree / graph / explain      # why did this rebuild, and who pulled that
-ppack add x@1.0 / lock / install / up   # the manifest and the lock
-ppack publish x --to <dir> --key <k>    # a tarball, a hash and two signatures
+pforge build [target]      # -j N, -k N, -n (dry run), --explain, --repro
+pforge run x.psc [args]    # build it and BECOME it (stdin, stdout, exit code)
+pforge test / verify       # the named suites / the whole battery
+pforge dev [target]        # rebuild and relaunch on every change
+pforge doc <mod> [sym]     # a module's interface and docs; --html for a folder
+pforge why / tree / graph / explain      # why did this rebuild, and who pulled that
+pforge add x@1.0 / lock / install / up   # the manifest and the lock
+pforge publish x --to <dir> --key <k>    # a tarball, a hash and two signatures
 ```
 
 The engine is the one the ninja documents describe: a node is a file, an edge is
@@ -322,9 +322,13 @@ Two things are unusual, and both are deliberate:
   served by anything, with trust coming from content (SHA-256 plus Ed25519), never
   from the transport.
 
-Decisions are in `pbuild/DESIGN.md` and `pbuild/ARQUITETURA.md`,
-`ppack/DESIGN.md` and `ppack/REPOSITORIO.md`, with `pbuild/DECISOES.md` as the
+Decisions are in `pforge/DESIGN.md` and `pforge/ARQUITETURA.md`,
+`pforge/PACOTES.md` and `pforge/REPOSITORIO.md`, with `pforge/DECISOES.md` as the
 one-line index.
+
+The name covers both halves on purpose: one binary that builds *and* fetches
+should not be called after only one of them. It used to be `ppack`, in a folder
+called `pbuild` next to another called `ppack` — three names for two ideas.
 
 ## Repository layout
 
@@ -334,20 +338,20 @@ selfhost/     the compiler, in Plang — including the C front end (cfront)
 bootstrap/    the C seed generated from selfhost/, committed
 packages/     what WE publish, each with its own pack.json and its own tests:
               stl, pui (the editor's toolkit), sha2, tar, ed25519, http, url,
-              and pbuild — the build engine itself
-pbuild/       the build system's documents and programs: ppack (the CLI),
+              and pforge — the engine and the package manager, as a library
+pforge/       the tool's documents (DESIGN is the engine, PACOTES the packages,
+              REPOSITORIO the format) and src/: main.psc (the CLI),
               build_plang.psc (THIS repository's descriptor), its own suite
-ppack/        the package manager's documents (the repository format)
 pscript/      the sibling language: runtime (in Plang), design, examples
-pstudio/      the editor: pscript on top (ps/*.psc), the SDL2 driver and the
-              lexer bridge in Plang
+pstudio/      the editor: pscript on top, the SDL2 driver and the lexer bridge
+              in Plang
 qbe/          the vendored QBE, as a submodule
 tests/        gating suites; corpora somebody else wrote; clang, python3 and
               node as oracles; the collector under stress
 tools/        generators for data that is not written by hand
-pack.json     this repository IS a workspace, like any project ppack builds
-build.ninja   generated and committed, so a clean machine needs no ppack
-Makefile      a thin shell over ppack (and it builds the seed)
+pack.json     this repository IS a workspace, like any project pforge builds
+build.ninja   generated and committed, so a clean machine needs no pforge
+Makefile      a thin shell over pforge (and it builds the seed)
 SPECS.MD      language reference
 ```
 

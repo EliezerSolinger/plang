@@ -86,7 +86,7 @@ def has_suffix(s: const *char, suf: const *char) -> bool:
     return n >= m and strcmp(s + n - m, suf) == 0
 
 # 0.1.0 — a versão da LINGUAGEM, não do binário: menor = recurso novo, maior =
-# quebra. O manifesto de um pacote declara a faixa que ele exige e o `ppack` a
+# quebra. O manifesto de um pacote declara a faixa que ele exige e o `pforge` a
 # confere ANTES de compilar (a fase 1 do ciclo). O hash dos próprios bytes vai
 # junto porque é ELE que decide sujeira de build: dois compiladores da mesma
 # versão com bytes diferentes emitem C diferente.
@@ -436,14 +436,14 @@ def main(argc: int, argv: **char) -> int:
     # Ele era a única coisa neste binário que não era uma compilação: escolhia
     # onde guardar o binário, quando é que ele estava velho, e o que fazer com
     # os argumentos que sobravam. Nada disso é sobre traduzir uma linguagem — é
-    # POLÍTICA, e política é do gerenciador. `ppack run x.psc` faz o mesmo, com
+    # POLÍTICA, e política é do gerenciador. `pforge run x.psc` faz o mesmo, com
     # o binário em `build/run/` (dentro do projeto, que `make clean` alcança) em
     # vez de num `~/.cache` que ninguém sabe que existe, e com `os.exec` em vez
     # de um filho com a saída capturada — o que é a diferença entre correr um
     # programa e correr um programa que só imprime.
     for i in range(1, argc):
         if i == 1 and strcmp(argv[i], "run") == 0:
-            fatal("`plangc run` mudou-se: agora é `ppack run <arquivo>`.\n  O compilador deixou de escolher onde guardar o binário e quando ele está velho — isso é do\n  gerenciador, e lá o binário fica em `build/run/`, dentro do projeto, em vez de num `~/.cache`.\n  O programa também PASSA A SER o processo (os.exec), então teclado, tela e Ctrl-C funcionam.")
+            fatal("`plangc run` mudou-se: agora é `pforge run <arquivo>`.\n  O compilador deixou de escolher onde guardar o binário e quando ele está velho — isso é do\n  gerenciador, e lá o binário fica em `build/run/`, dentro do projeto, em vez de num `~/.cache`.\n  O programa também PASSA A SER o processo (os.exec), então teclado, tela e Ctrl-C funcionam.")
         if strncmp(argv[i], "--std=", 6) == 0:
             std: const *char = argv[i] + 6
             if std in {"c89", "c90"}:

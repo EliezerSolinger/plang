@@ -935,7 +935,7 @@ três modos, e o seed foi refeito ao fim de cada ciclo.
 ### Bateria 71 — a prova de fogo: pstudio em pscript (2026-08-15)
 
 O editor foi portado para pscript, com a mão que toca o SDL2 ainda em P
-(`pstudio/ps/`, com um README próprio). Roda: abre janela, carrega arquivo,
+(`pstudio/`, com um README próprio). Roda: abre janela, carrega arquivo,
 edita com múltiplos cursores, desfaz, busca, dobra, desenha pelo atlas de fonte
 e salva. Dois testes entram no gate — o núcleo headless e o autoteste do
 editor inteiro com SDL em driver dummy.

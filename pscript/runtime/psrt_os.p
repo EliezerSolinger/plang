@@ -4,7 +4,7 @@
 # Chama a memória e os valores, como a biblioteca portada. Fica em P por decisão
 # sua (108.4), e é PORTE do `pstudio/psys.p` — o editor já tinha esta camada
 # escrita; o que a bateria 111 faz é mudá-la de casa e dar-lhe a forma do
-# Python, para que o pbuild e o pstudio usem a MESMA.
+# Python, para que o pforge e o pstudio usem a MESMA.
 #
 # A regra do `errno` do runtime vale aqui também: a mensagem vem da OPERAÇÃO e
 # do caminho, nunca do `errno` — `errno` é macro, e P não vê macro.
@@ -362,8 +362,8 @@ def ps_os_nproc() -> i64:
     n: i64 = i64(sysconf(_SC_NPROCESSORS_ONLN))
     return n if n >= 1 else i64(1)
 
-# ---------- 118 / pbuild 1.2: rodar um processo ----------
-# A peça que faltava na camada de sistema, e a única que o pbuild não tinha como
+# ---------- 118 / pforge 1.2: rodar um processo ----------
+# A peça que faltava na camada de sistema, e a única que o pforge não tinha como
 # escrever por fora. É uma TASK: quem chama espera com `await`, N delas ficam em
 # voo ao mesmo tempo, e o limite de concorrência é de quem chama
 # (`gather_map(..., at_most=n)`). O `waitpid` acontece numa thread do pool, que é
@@ -472,7 +472,7 @@ def ps_os_run(ctx: *PsCtx, argv: *PsList, env: *PsDict, cwd: *PsStr, outfile: *P
 # `os.run` cria um filho e espera; `os.exec` não volta. A diferença importa numa
 # coisa só, e essa coisa é tudo: um programa lançado como filho tem a saída
 # CAPTURADA, então não pinta a tela, não lê o teclado, não sabe o tamanho do
-# terminal e não recebe Ctrl-C. Um lançador (`ppack run`) que use `os.run`
+# terminal e não recebe Ctrl-C. Um lançador (`pforge run`) que use `os.run`
 # consegue correr um programa que imprime, e mais nada.
 #
 # Depois do `execvp` não há "depois": o processo é outro programa, com o mesmo

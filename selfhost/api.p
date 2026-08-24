@@ -645,7 +645,7 @@ def api_dump(m: *Module, b: *StrBuf):
     # documentação de uma função não muda a interface dela, e um consumidor que
     # só quer saber "o que eu uso mudou?" não pode ser acordado por uma vírgula
     # num comentário. Elas ficam aqui para quem QUER a documentação — a IDE, o
-    # `ppack doc`, o gerador de site — e o hash acima continua estrutural.
+    # `pforge doc`, o gerador de site — e o hash acima continua estrutural.
     #
     # Uma linha por símbolo, com a quebra escapada: o formato é de linhas, e uma
     # docstring de dez linhas não pode virar dez registros.

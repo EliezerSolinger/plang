@@ -1,4 +1,4 @@
-"""`os.run` contra o `subprocess` do python3 (118 / pbuild 1.2).
+"""`os.run` contra o `subprocess` do python3 (118 / pforge 1.2).
 
 O par deste arquivo é `proc.py`, e os dois têm de imprimir as MESMAS linhas.
 Vale a pena dizer o que este oráculo mede, porque não é a sintaxe: é o

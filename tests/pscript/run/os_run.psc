@@ -1,6 +1,6 @@
-"""`os.run` — rodar um processo, e esperá-lo com `await` (118 / pbuild 1.2).
+"""`os.run` — rodar um processo, e esperá-lo com `await` (118 / pforge 1.2).
 
-A peça que faltava na camada de sistema, e a única que o pbuild não tinha como
+A peça que faltava na camada de sistema, e a única que o pforge não tinha como
 escrever por fora. O que este arquivo prende:
 
   * NÃO passa por shell. O comando é um vetor de argumentos e o `execvp` o

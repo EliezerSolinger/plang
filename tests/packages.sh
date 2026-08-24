@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # packages.sh — `import <pkg/mod.ph>`: the package as a SEARCH PATH (F1).
 #
-# What is pinned down here is the boundary decided in `pbuild/ARQUITETURA.md`:
+# What is pinned down here is the boundary decided in `pforge/ARQUITETURA.md`:
 # the compiler does NOT know what a package is. It receives search roots
 # (`--pkg-path`, repeatable) and looks in them, in order — the same rule as C's
 # `-I`, and for the same reason: it is the only one you can explain in one line.
-# Who knows what a version, a dependency and a resolution are is `ppack`.
+# Who knows what a version, a dependency and a resolution are is `pforge`.
 #
 # Three forms, with no ambiguity at all between them:
 #
@@ -122,7 +122,7 @@ e=$($PLANGC --pkg-path "$PWD/$PKG" --out-dir "$OUT/x" "$OUT/prog.p" 2>&1)
 echo "$e" | grep -q "named the same way" && ok || bad "mixed spaces: it should refuse with a message"
 
 # (the workspace `pack.json` and the root that comes out of it have their own
-# gate in the engine's suite — `case_manifest` in `pbuild/ps/engine_test.psc` —
+# gate in the engine's suite — `case_manifest` in `pforge/src/engine_test.psc` —
 # because whoever reads them is pscript, and the gate lives next to the code it
 # tests)
 

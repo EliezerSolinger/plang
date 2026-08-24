@@ -6,7 +6,7 @@ wants to forge an FNV collision can do it on a sheet of paper. A package manager
 that downloads code needs the other thing, and this is it.
 
 Written in P and with no dependencies at all, which makes it usable by the
-compiler, by `ppack`, and by any program in either language (pscript reaches it
+compiler, by `pforge`, and by any program in either language (pscript reaches it
 through `import <sha2/sha2.ph>`, which is the 45.5 boundary: signatures without
 pointers cross, and these cross).
 

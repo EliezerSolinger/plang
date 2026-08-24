@@ -4,7 +4,7 @@
 coisa só, e essa coisa é tudo: um filho tem a saída CAPTURADA, então não pinta a
 tela, não lê o teclado, não sabe o tamanho do terminal e não recebe Ctrl-C. Um
 lançador que só tenha `os.run` consegue correr um programa que imprime, e nada
-mais — que era exatamente o limite do `ppack run` até agora.
+mais — que era exatamente o limite do `pforge run` até agora.
 
 Depois da troca não há "depois": o processo é outro programa, com o mesmo PID,
 os mesmos descritores e o mesmo terminal. Por isso o que estiver por escrever é

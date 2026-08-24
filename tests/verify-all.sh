@@ -27,10 +27,10 @@ CFLAGS="-O2 -std=c11 -w"
 FAIL=0
 
 # Os PISOS dos placares não moram mais aqui: moram no descritor, junto da suíte
-# que os mede (`pbuild/ps/build_plang.psc`, a função `verificacao`), e quem os
+# que os mede (`pforge/src/build_plang.psc`, a função `verificacao`), e quem os
 # confere é uma aresta do grafo. Este arreio passou a LER o que o descritor diz,
 # para que exista um lugar só onde o número se sobe.
-piso_de() { grep -oE "\"$1\", \"[a-z-]+\", \"[^\"]+\", \"[0-9]+\"" pbuild/ps/build_plang.psc | grep -oE '[0-9]+"$' | tr -d '"'; }
+piso_de() { grep -oE "\"$1\", \"[a-z-]+\", \"[^\"]+\", \"[0-9]+\"" pforge/src/build_plang.psc | grep -oE '[0-9]+"$' | tr -d '"'; }
 CSUITE_FLOOR=$(piso_de c-suite); CSUITE_FLOOR=${CSUITE_FLOOR:-220}
 WACCT_FLOOR=$(piso_de wacct);    WACCT_FLOOR=${WACCT_FLOOR:-741}
 
@@ -152,7 +152,7 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/gc-stress.sh >$V/gcstress.log 2>&1; then
 else
     bad "gc-stress achou algo (veja $V/gcstress.log)"
 fi
-#   run-ppack    `ppack run` e o cache atrás dele: a única coisa aqui que não é
+#   run-pforge    `pforge run` e o cache atrás dele: a única coisa aqui que não é
 #                uma compilação, então o que se mede são COMPORTAMENTOS — que a
 #                segunda vez não chama o `cc`, que editar um módulo importado
 #                invalida, que o status de saída é o do programa.
@@ -183,23 +183,23 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/knobs.sh >$V/knobs.log 2>&1; then
 else
     bad "um knob de compilação não pegou (veja $V/knobs.log)"
 fi
-# run pelo ppack: os mesmos comportamentos do `plangc run`, medidos do lado onde
+# run pelo pforge: os mesmos comportamentos do `plangc run`, medidos do lado onde
 # a decisão passou a viver (F7)
-if PPACK=$PWD/build/bin/ppack bash tests/run-cmd-ppack.sh >$V/runppack.log 2>&1; then
-    ok "run-ppack $(grep -oE '[0-9]+ ok' $V/runppack.log | tail -1)"
+if PFORGE=$PWD/build/bin/pforge bash tests/run-cmd-pforge.sh >$V/runpforge.log 2>&1; then
+    ok "run-pforge $(grep -oE '[0-9]+ ok' $V/runpforge.log | tail -1)"
 else
-    bad "o run do ppack divergiu (veja $V/runppack.log)"
+    bad "o run do pforge divergiu (veja $V/runpforge.log)"
 fi
 
-# o MOTOR do pbuild, mecanismo por mecanismo (F2B), mais as consultas da CLI
+# o MOTOR do pforge, mecanismo por mecanismo (F2B), mais as consultas da CLI
 # sobre o grafo deste repositório. Ele estava escrito e não estava ligado a
 # portão nenhum — 89 conferências que ninguém corria, e uma delas já tinha
 # apodrecido em silêncio (esperava dois pacotes no workspace, que hoje tem nove).
 # Um teste que não corre não é um teste: é documentação que envelhece.
-if PLANGC=$PWD/$V/plangc_s2 bash tests/pbuild.sh >$V/pbuild.log 2>&1; then
-    ok "pbuild $(grep -oE '[0-9]+ ok' $V/pbuild.log | tail -1)"
+if PLANGC=$PWD/$V/plangc_s2 bash tests/pforge.sh >$V/pforge.log 2>&1; then
+    ok "pforge $(grep -oE '[0-9]+ ok' $V/pforge.log | tail -1)"
 else
-    bad "o motor do pbuild divergiu (veja $V/pbuild.log)"
+    bad "o motor do pforge divergiu (veja $V/pforge.log)"
 fi
 
 # packages: `import <pkg/mod.ph>` — o pacote como CAMINHO DE BUSCA, nas duas
@@ -214,7 +214,7 @@ fi
 # repo: publish -> update -> search -> add -> install -> compilar contra o que
 # foi instalado, tudo sobre `file://`. Um repositório é um FORMATO: aqui ele é
 # um diretório, e quando o HTTP entrar nada disto muda.
-if PPACK=$PWD/build/bin/ppack PLANGC=$PWD/$V/plangc_s2 bash tests/repo.sh >$V/repo.log 2>&1; then
+if PFORGE=$PWD/build/bin/pforge PLANGC=$PWD/$V/plangc_s2 bash tests/repo.sh >$V/repo.log 2>&1; then
     ok "repo $(grep -oE '[0-9]+ ok' $V/repo.log | tail -1)"
 else
     bad "o repositório divergiu (veja $V/repo.log)"
@@ -243,14 +243,14 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
   # cada um tem o `.p` irmão
   RT_ARGS="pscript/runtime/psrt.ph"
   if $V/plangc_s2 --pkg-path packages --out-dir $V/pst selfhost/plang.ph selfhost/ast.ph \
-       selfhost/lexer.ph pstudio/*.ph pstudio/ps/shim.ph pstudio/ps/hl.ph \
+       selfhost/lexer.ph pstudio/*.ph pstudio/shim.ph pstudio/hl.ph \
        pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p \
-       pstudio/ps/shim.p pstudio/ps/hl.p selfhost/lexer.p selfhost/utf8.p selfhost/util.p \
+       pstudio/shim.p pstudio/hl.p selfhost/lexer.p selfhost/utf8.p selfhost/util.p \
        $RT_ARGS >$V/pstudio.log 2>&1 &&
-     $V/plangc_s2 --pkg-path packages --out-dir $V/pst pstudio/ps/app.psc >>$V/pstudio.log 2>&1 &&
+     $V/plangc_s2 --pkg-path packages --out-dir $V/pst pstudio/app.psc >>$V/pstudio.log 2>&1 &&
      $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -o $V/pstudio_bin \
-       $V/pst/pstudio/ps/app.c $V/pst/pscript/runtime/psrt_*.c \
-       $V/pst/pstudio/ps/shim.c $V/pst/pstudio/ps/hl.c \
+       $V/pst/pstudio/app.c $V/pst/pscript/runtime/psrt_*.c \
+       $V/pst/pstudio/shim.c $V/pst/pstudio/hl.c \
        $V/pst/pstudio/pgfx.c $V/pst/pstudio/pgfx_raster.c $V/pst/pstudio/font_atlas.c \
        $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
        $nosimd $(pkg-config --cflags --libs sdl2) -lm -pthread >>$V/pstudio.log 2>&1; then

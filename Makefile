@@ -1,11 +1,11 @@
 # Plang — o projeto constrói-se a si mesmo.
 #
-# O caminho normal é o `ppack`, o sistema de build deste repositório, escrito em
+# O caminho normal é o `pforge`, o sistema de build deste repositório, escrito em
 # pscript e construído por ele mesmo. Este arquivo é a CASCA: ele nasce o
-# compilador a partir do C comitado, constrói o `ppack` com ele, e daí em diante
+# compilador a partir do C comitado, constrói o `pforge` com ele, e daí em diante
 # quem manda é o grafo.
 #
-#   make            # tudo: a escada com ponto fixo, o editor e o ppack (~70 s)
+#   make            # tudo: a escada com ponto fixo, o editor e o pforge (~70 s)
 #   make test       # a suíte, caso a caso, como grafo
 #   make verify     # a verificação inteira (5m48 do zero, 8 s sem mudança)
 #   make check      # compila e roda um hello-world
@@ -18,7 +18,7 @@
 # nada que não esteja no repositório.
 #
 # TUDO sai em `build/`:
-#   build/bin        os binários (plangc_seed, plangc_s1, plangc_s2, ppack, ...)
+#   build/bin        os binários (plangc_seed, plangc_s1, plangc_s2, pforge, ...)
 #   build/s1,s2,s3   os três degraus da escada (o C que cada compilador gerou)
 #   build/psc        o C dos programas em pscript
 #   build/obj        os objetos
@@ -32,7 +32,7 @@ CFLAGS ?= -O2 -std=c11
 J      ?= $(shell nproc 2>/dev/null || echo 4)
 
 SEED   = build/bin/plangc_seed
-PPACK  = build/bin/ppack
+PFORGE  = build/bin/pforge
 PLANGC = build/bin/plangc_s2
 
 .DEFAULT_GOAL := build
@@ -47,12 +47,12 @@ seed: $(SEED)
 
 # O sistema de build, construído pelo compilador que acabou de nascer. É a
 # única coisa que a casca ainda sabe fazer sozinha — daqui para a frente o grafo
-# manda, e ele constrói inclusive uma cópia deste mesmo `ppack`.
-$(PPACK): $(SEED) $(wildcard pbuild/ps/*.psc)
+# manda, e ele constrói inclusive uma cópia deste mesmo `pforge`.
+$(PFORGE): $(SEED) $(wildcard pforge/src/*.psc)
 	@mkdir -p build/bin
-	@PLANGC=$(SEED) bash tests/psbuild.sh pbuild/ps/ppack.psc $(PPACK)
+	@PLANGC=$(SEED) bash tests/psbuild.sh pforge/src/main.psc $(PFORGE)
 
-ppack: $(PPACK)
+pforge: $(PFORGE)
 
 # ---------------------------------------------------------------------------
 # E daqui para baixo é tudo o mesmo comando com outro alvo.
@@ -60,24 +60,24 @@ ppack: $(PPACK)
 # `--query` é o compilador que RESPONDE as perguntas do protocolo enquanto o
 # grafo é montado (o que este arquivo lê? o que ele vai emitir?); quem RODA em
 # cada degrau é o artefato daquele degrau.
-build: $(PPACK)
-	./$(PPACK) build -j $(J) --query $(SEED)
+build: $(PFORGE)
+	./$(PFORGE) build -j $(J) --query $(SEED)
 
-test: $(PPACK)
-	./$(PPACK) test -j $(J) --query $(SEED)
+test: $(PFORGE)
+	./$(PFORGE) test -j $(J) --query $(SEED)
 
-verify: $(PPACK)
-	./$(PPACK) verify -j $(J) --query $(SEED)
+verify: $(PFORGE)
+	./$(PFORGE) verify -j $(J) --query $(SEED)
 
-ninja: $(PPACK)
-	./$(PPACK) ninja build.ninja --query $(SEED)
+ninja: $(PFORGE)
+	./$(PFORGE) ninja build.ninja --query $(SEED)
 
-explain: $(PPACK)
-	./$(PPACK) explain --query $(SEED)
+explain: $(PFORGE)
+	./$(PFORGE) explain --query $(SEED)
 
 # `make doc pui` / `make doc x.ph nome` — os argumentos passam adiante
-doc: $(PPACK)
-	./$(PPACK) doc $(filter-out $@,$(MAKECMDGOALS)) --query $(SEED)
+doc: $(PFORGE)
+	./$(PFORGE) doc $(filter-out $@,$(MAKECMDGOALS)) --query $(SEED)
 %::
 	@:
 
@@ -91,12 +91,12 @@ check: build
 
 # o auto-hospedar É a escada: seed -> s1 -> s2 -> s3, com o ponto fixo conferido
 # (s2 == s3 byte a byte). O alvo existe pelo nome que as pessoas conhecem.
-selfhost: $(PPACK)
-	./$(PPACK) build build/stamp/compilador -j $(J) --query $(SEED)
+selfhost: $(PFORGE)
+	./$(PFORGE) build build/stamp/compilador -j $(J) --query $(SEED)
 
-pstudio pstudio-ps: $(PPACK)
+pstudio pstudio-ps: $(PFORGE)
 	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
-	./$(PPACK) build build/bin/pstudio -j $(J) --query $(SEED)
+	./$(PFORGE) build build/bin/pstudio -j $(J) --query $(SEED)
 	@echo "pstudio pronto: ./build/bin/pstudio [pasta|arquivos]"
 
 # ---------------------------------------------------------------------------
@@ -125,5 +125,5 @@ clean:
 clean-all:
 	rm -rf build tests/out out plangc plangc2 .hello .hello.p .hello.c
 
-.PHONY: seed ppack build test verify ninja explain doc check selfhost \
+.PHONY: seed pforge build test verify ninja explain doc check selfhost \
         pstudio pstudio-ps test-qbe test-c89 clean clean-all

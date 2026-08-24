@@ -144,7 +144,7 @@ struct StrBuf:
 #
 # O que se acrescenta é um SEGUNDO destino, ligado por `--diag-json <arquivo>`:
 # os mesmos diagnósticos, como dado, para quem os consome em vez de os ler. A
-# IDE quer sublinhar a coluna certa sem reparsear texto; o `ppack` quer contar e
+# IDE quer sublinhar a coluna certa sem reparsear texto; o `pforge` quer contar e
 # agrupar. Nenhum dos dois devia ter de escrever uma expressão regular para uma
 # informação que o compilador tem estruturada na mão.
 #

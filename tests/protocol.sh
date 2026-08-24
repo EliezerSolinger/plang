@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/protocol.sh — the compiler's answers to the build system (F0).
 #
-# `pbuild` decides what to recompile, and to decide it ASKS. There are four
+# `pforge` decides what to recompile, and to decide it ASKS. There are four
 # questions, and each one exists because the alternative is worse:
 #
 #   --version   who are you? The LANGUAGE's version (a package's manifest

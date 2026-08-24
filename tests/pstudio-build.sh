@@ -2,12 +2,12 @@
 # pstudio-build.sh — the BUILD ENGINE inside the editor (F6).
 #
 # F6 promises that the editor does not talk to a build process: it imports the
-# engine (`packages/pbuild`) and runs it on the same scheduler that handles the
+# engine (`packages/pforge`) and runs it on the same scheduler that handles the
 # keyboard. That is a claim which, without this harness, could only be checked by
 # looking at a window — and it is exactly the kind of thing that rots unseen.
 #
 # The descriptor belongs to the PROJECT and the editor does not know it (nor
-# should it: it opens any tree). Who knows it is that tree's `ppack`, so the
+# should it: it opens any tree). Who knows it is that tree's `pforge`, so the
 # editor asks IT for the graph and runs it. The serialization is the price of the
 # editor serving more than one project.
 set -u
@@ -26,7 +26,7 @@ case $got in
     *) echo "  FAIL a simple target: got '$got'"; fail=$((fail+1)) ;;
 esac
 
-# 2. the graph came whole (the editor asks ppack for it and runs it with the engine)
+# 2. the graph came whole (the editor asks pforge for it and runs it with the engine)
 n=$("$PSTUDIO" --build build/bin/verdict 2>&1 | grep -oE 'targets in the graph: [0-9]+' | grep -oE '[0-9]+')
 if [ "${n:-0}" -gt 100 ]; then ok=$((ok+1)); else echo "  FAIL the graph should have hundreds of targets, got ${n:-0}"; fail=$((fail+1)); fi
 
