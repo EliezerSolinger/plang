@@ -1891,12 +1891,20 @@ struct PsP:
 # uppercase — and the rule separates `bytes` (immutable, a value) from `Buffer`
 # (mutable, shared, closed) for free: the distinction is now in the spelling.
 #
-# The crossing is 139.1: both spellings hold for EXACTLY one commit, with the
-# old one warning. Letting them coexist forever would leave the language with
-# two spellings for everything, which is the thing the rule exists to end.
+# The crossing was 139.1, and it is DONE: the old spelling warned for exactly
+# one commit while the tree migrated, and now it is an error. Letting the two
+# coexist forever would have left the language with two spellings for
+# everything, which is the thing the rule exists to end.
+#
+# It is refused by the DIAGNOSTIC and not by deleting the branch, which is the
+# part worth keeping: the name is still recognised, so somebody who opens
+# five-year-old code reads "'list' is now written 'List'" instead of "unknown
+# type 'list'". And WD_ERR is demotable — `-Wno-error=renamed-type` gives back
+# the warning to whoever is migrating a tree of their own, which is exactly the
+# position this repository was in one commit ago.
 def ps_renamed_name(file: const *char, pos: Pos, written: const *char, old: const *char, new_: const *char) -> bool:
     if strcmp(written, old) == 0:
-        cdiag_at(file, pos, "renamed-type", WD_WARN,
+        cdiag_at(file, pos, "renamed-type", WD_ERR,
                  "'%s' is now written '%s' (139: lowercase is a value, uppercase is a thing with identity)",
                  old, new_)
         return True

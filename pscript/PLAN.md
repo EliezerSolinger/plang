@@ -2148,9 +2148,15 @@ Cada fase só está `[x]` quando o portão dela ("fica de pé") tem TESTE que pr
 o `verify-all` deu 8/8 nos três modos, e o seed foi regenerado se o compilador
 mudou. A ordem abaixo é a das dependências, não a da numeração:
 
-- [ ] **FN** — a regra dos nomes. Sem dependências; vem primeiro para que nada
-      novo nasça com o nome errado. Três commits (velho+novo com `-W` → migra →
-      velho morre).
+- [x] **FN** — a regra dos nomes. **FEITA** em três commits (1f29365, ae0c36f e
+      o terceiro): o compilador aceitou os dois com `-Wrenamed-type` → a árvore
+      migrou (897 substituições em 122 ficheiros, mais a prosa à mão) → a grafia
+      velha passou a ERRO, demovível com `-Wno-error=renamed-type` para quem
+      estiver a migrar uma árvore sua.
+      Achado que isto desenterrou, e que é **decisão sua**: a regra tira ao
+      programa nomes que ele tinha o direito de usar — o editor tinha um `struct
+      Buffer` e um teste um `struct File`. Ficou a **bateria 144**, com as três
+      opções, seguida pela conservadora (renomeei os nossos: `TextBuffer`).
 - [ ] **FS** — `stdlib` + o contrato da fronteira (`Foreign`/`Shared`/`Transfer`).
       Logo a seguir à FN: as duas varrem a árvore inteira, e varre-se uma vez.
       O maior `sed` do plano (140 chamadas de `path.*` → `os.*`).

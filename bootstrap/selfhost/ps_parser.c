@@ -3279,7 +3279,7 @@ static PsDecl *PsP_parse_include(PsP *self) {
 
 int ps_renamed_name(const char *file, Pos pos, const char *written, const char *old, const char *new_) {
     if (strcmp(written, old) == 0) {
-        cdiag_at(file, pos, "renamed-type", WD_WARN, "'%s' is now written '%s' (139: lowercase is a value, uppercase is a thing with identity)", old, new_);
+        cdiag_at(file, pos, "renamed-type", WD_ERR, "'%s' is now written '%s' (139: lowercase is a value, uppercase is a thing with identity)", old, new_);
         return 1;
     }
     return strcmp(written, new_) == 0;
