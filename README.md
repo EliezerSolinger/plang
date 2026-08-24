@@ -70,10 +70,20 @@ that joins them. *Building is not testing:* the suites are a target you ask for.
 | `make pstudio` | the editor alone, and it says so if SDL2 is missing |
 | `make selfhost` | just the ladder: seed → s1 → s2 → s3 |
 | `make doc <mod>` | a module's interface, with its documentation |
+| `make install` | copy the four binaries to `$PREFIX/bin` (default `/usr/local`) |
 | `make clean` \| `clean-all` | drop what was built \| drop what was downloaded too |
 
 Everything lands under `build/` — binaries, the three ladder rungs, objects,
-logs, packages. Nothing is installed anywhere else.
+logs, packages. Nothing is installed anywhere else *until you ask*:
+
+```sh
+make install PREFIX=~/.local        # plangc, pforge, pcode, pstudio
+make uninstall PREFIX=~/.local
+```
+
+Plain Unix, no invented format, and `DESTDIR` is honoured for whoever is
+packaging. It matters more than it looks: without it your `PATH` points inside a
+checkout, and a `make clean-all` deletes the editor you were using.
 
 Two notes on what is optional. `make` builds the editor **only if `pkg-config`
 finds `sdl2`**; without it the build succeeds and the editor simply does not

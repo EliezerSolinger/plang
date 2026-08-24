@@ -134,5 +134,28 @@ clean:
 clean-all:
 	rm -rf build tests/out out plangc plangc2 .hello .hello.p .hello.c
 
-.PHONY: seed pforge build test verify ninja explain doc check selfhost \
+# ---------------------------------------------------------------------------
+# INSTALAR. Unix simples, sem inventar formato.
+#
+# Sem isto o PATH aponta para dentro de um checkout — e um `make clean-all`
+# apaga o editor que se estava a usar.
+PREFIX ?= /usr/local
+
+install: build
+	@mkdir -p $(DESTDIR)$(PREFIX)/bin
+	@for b in plangc_s2:plangc pforge:pforge pcode:pcode pstudio:pstudio; do \
+	    src=build/bin/$${b%%:*}; dst=$(DESTDIR)$(PREFIX)/bin/$${b##*:}; \
+	    if [ -x "$$src" ]; then cp "$$src" "$$dst" && echo "  $$dst"; \
+	    else echo "  (sem $$src — nao instalado)"; fi; \
+	done
+	@echo "instalado em $(DESTDIR)$(PREFIX)/bin"
+
+uninstall:
+	@for b in plangc pforge pcode pstudio; do \
+	    f=$(DESTDIR)$(PREFIX)/bin/$$b; \
+	    if [ -e "$$f" ]; then rm -f "$$f" && echo "  removido $$f"; fi; \
+	done
+
+.PHONY: install uninstall \
+	seed pforge build test verify ninja explain doc check selfhost \
         pstudio pcode test-qbe test-c89 clean clean-all
