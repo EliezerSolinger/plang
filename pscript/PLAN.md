@@ -2285,6 +2285,12 @@ A grafia passa a `import <vec>` (o `<stl/vec.ph>` passaria a apontar para um
 directório que já não existe), em três commits como a 139.1. O embebido ganha
 sempre — não há substituição.
 
+Entra junto uma renomeação que não vale uma fase própria: o **`Str` do `stl` passa
+a `StrBuf`** (141.7). Ele é um buffer mutável que cresce — um *StringBuilder* — e
+o nome fazia-o parecer o irmão do `str` do pscript, que é imutável, coletado e
+conta codepoints. São 22 ocorrências em 4 ficheiros, um deles o `parser.p`; feito
+aqui custa zero, porque esta fase já regenera o `bootstrap/`.
+
 **Fica de pé:** `plangc foo.p` compila um programa que usa `Vec`, `Map` e `Set`
 sem configuração nenhuma.
 

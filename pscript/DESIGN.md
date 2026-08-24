@@ -6388,6 +6388,51 @@ extensão em C para o Python é o que é. Toda a API de embebimento acaba aqui.
 
 Portanto: **parado de propósito**, e não por falta de ideia.
 
+### 141.7 — quando é que um conceito pode ser UM, e quando não pode
+
+> *"o que eu não quero é ter duas `File` por exemplo."*
+
+Medido primeiro, porque o exemplo não existe: **não há duas `File`.** O P não tem
+abstracção de ficheiro nenhuma — usa o `*FILE` do stdio (19 usos) e
+`fopen`/`fread` directamente, que é exactamente o que a regra *"a libc é o
+runtime"* (27.1) manda. Uma linguagem tem a abstracção, a outra chama a
+biblioteca. Isso não é duplicação; é a regra a funcionar.
+
+A duplicação a sério é uma só, e são as colecções:
+
+| conceito | pscript | P |
+|---|---|---|
+| lista | `List<T>` | **`Vec<T>` — 428 usos** |
+| dicionário | `Dict<K,V>` | `StrMap<T>` — 87 |
+| conjunto | `Set<T>` | `StrSet` — 55 |
+
+E o `str`/`Str` **não é duplicação, é um nome mal escolhido**: o `str` do pscript é
+imutável, coletado e conta codepoints; o `Str` do `stl` é um buffer mutável que
+cresce. É um *StringBuilder* com nome de string, e passa a chamar-se **`StrBuf`**
+na FE (22 ocorrências, e o `stl` já lá vai para dentro do compilador de qualquer
+maneira).
+
+**A regra que decide os casos futuros:**
+
+> **Um conceito pode ser UM quando é só DADOS. Não pode quando envolve o
+> ESCALONADOR, nem quando o coletor tem de PERCORRER lá dentro.**
+
+| | é um só? | porquê |
+|---|---|---|
+| `Mapping` | **sim** | fd, ponteiro, tamanho. É por isso que o `declare Mapping` da 138.1 funciona |
+| `Watcher`, `Buffer`, `bytes` | **sim** | idem — só dados, e nada lá dentro que o coletor tenha de seguir |
+| `File` | **o punho sim, as operações não** | o punho é um fd; o `await f.read()` é o pool de threads e as tarefas |
+| `Socket` | idem | |
+| `List`/`Vec` | **não, e é a mesma pedra da 141.6** | os dados são ponteiro+tamanho+capacidade e podiam ser um. O que impede é o coletor ter de percorrer os ELEMENTOS — que é literalmente *objecto dentro de objecto* |
+
+A última linha é o que torna isto um critério e não uma observação: **as duas
+coisas que apareceram em conversas separadas — unificar as colecções, e a
+mecânica do contrato — estão bloqueadas pela mesma pedra.** Enquanto o coletor
+não souber percorrer memória que não é dele, nenhuma das duas anda.
+
+**E o que isto diz sobre o plano do NIO:** os tipos que ele acrescenta são todos
+só dados. **Nenhum deles vai virar dois.**
+
 ### 141.4 — o preço, dito antes de doer
 
 O compilador **não consegue verificar** nenhuma destas promessas. Ele regista-as.
