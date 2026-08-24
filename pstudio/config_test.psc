@@ -11,7 +11,7 @@ silent.** Every case below takes the default AND leaves a note.
 import config as cfg
 
 
-CMDS: list<str> = ["Save", "Quit", "Find", "Build", "Toggle Theme"]
+CMDS: list<str> = ["Save", "Quit", "Find", "Build", "Toggle Theme", "Run Tests"]
 
 
 def show(c: cfg.Config):
@@ -19,7 +19,7 @@ def show(c: cfg.Config):
           " dock=" + str(c.dock_h) +
           " open=" + ("T" if c.tree_open else "F") +
           ("T" if c.outline_open else "F") + ("T" if c.dock_open else "F") +
-          " target=[" + c.target + "]")
+          " target=[" + c.target + "] test=[" + c.test + "]")
     for n in c.notes:
         print("  ! " + n)
 

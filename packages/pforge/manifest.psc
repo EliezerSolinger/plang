@@ -156,9 +156,22 @@ private def strings(d: dict<str, any>, key: str) -> list<str>:
 
 
 async def read(file: str) -> Manifest:
+    """The file. The PARSING is `parse`, which takes the text — a manifest that
+    could only be read off a disk would be a manifest nobody could check inside
+    a tarball, and F10 needs exactly that."""
     f = await open(file, "r")
     raw = await f.text()
     await f.close()
+    return parse(raw, file, True)
+
+
+def parse(raw: str, file: str, on_disk: bool) -> Manifest:
+    """`on_disk` says whether the files this manifest NAMES can be looked for.
+
+    They can when it was read from a directory; they cannot when it was read out
+    of a tarball, where the manifest is text and the tree beside it is inside an
+    archive. Everything else is checked either way — the language, the version,
+    the names of the dependencies — because those are questions about the TEXT."""
     m = empty(file)
     nonlocal root
     try:
@@ -225,7 +238,7 @@ async def read(file: str) -> Manifest:
         if m.lang == "p" and m.root.endswith(".psc"):
             # the rule that makes a P package usable by whoever has no runtime
             fail(m, raw, "root", "a `p` package has no pscript module: the root is a `.ph`")
-        if not path.isfile(path.join(dirp, m.root)):
+        if on_disk and not path.isfile(path.join(dirp, m.root)):
             fail(m, raw, "root", "the root '" + m.root + "' does not exist in " + dirp)
     for dp in m.deps:
         if not name_ok(dp.name):
@@ -240,7 +253,7 @@ async def read(file: str) -> Manifest:
             # that leaves the package is a package reading the tree of whoever
             # installed it
             fail(m, raw, "csources", "'" + cs + "': the path is relative to the package, and does not leave it")
-        elif not path.isfile(path.join(dirp, cs)):
+        elif on_disk and not path.isfile(path.join(dirp, cs)):
             fail(m, raw, "csources", "'" + cs + "' does not exist in " + dirp)
     return m
 

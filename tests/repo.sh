@@ -442,7 +442,15 @@ grep -q "patch" "$FAKE/p4.log" && ok || bad "the patch refusal did not say why"
 # the same change as a MINOR passes: adding is what a minor promises
 sed -i 's/"version": "0.1.1"/"version": "0.2.0"/' "$FAKE/pkg/pack.json"
 "$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p5.log" 2>&1 && ok || bad "a minor that ADDS should publish (see $FAKE/p5.log)"
-# and taking away in a minor, no
+# Taking away in a minor: allowed WHILE THE MAJOR IS 0, and it says so.
+#
+# Semver clause 4 — "anything MAY change at any time" before 1.0 — and by
+# convention the minor is the slot that carries the break. Cargo does the same.
+# Refusing it would mean a library cannot correct its own interface before its
+# first stable release, which is what the pre-1.0 period is FOR.
+#
+# The WARNING is the point of the case: an exception nobody sees is a rule
+# nobody knows they are relying on.
 sed -i 's/"version": "0.2.0"/"version": "0.3.0"/' "$FAKE/pkg/pack.json"
 cat > "$FAKE/pkg/pmixed.ph" <<'EOF'
 def pmixed_tres() -> i32
@@ -452,10 +460,27 @@ import "pmixed.ph"
 def pmixed_tres() -> i32:
     return 3
 EOF
-if "$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p6.log" 2>&1; then
-    bad "a minor that TAKES AWAY from the interface should be refused"
+"$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p6.log" 2>&1 && ok || bad "0.x: a minor that takes away should publish (see $FAKE/p6.log)"
+grep -q "warning" "$FAKE/p6.log" && ok || bad "the 0.x exception has to WARN, not go quiet"
+grep -q "the major is 0" "$FAKE/p6.log" && ok || bad "the warning should say why it was allowed"
+
+# and past 1.0 the rule bites again: a major may change whatever it likes...
+sed -i 's/"version": "0.3.0"/"version": "1.0.0"/' "$FAKE/pkg/pack.json"
+"$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p7.log" 2>&1 && ok || bad "a major should publish (see $FAKE/p7.log)"
+# ... and then a minor may not take away
+sed -i 's/"version": "1.0.0"/"version": "1.1.0"/' "$FAKE/pkg/pack.json"
+cat > "$FAKE/pkg/pmixed.ph" <<'EOF'
+def pmixed_quatro() -> i32
+EOF
+cat > "$FAKE/pkg/pmixed.p" <<'EOF'
+import "pmixed.ph"
+def pmixed_quatro() -> i32:
+    return 4
+EOF
+if "$PFORGE" publish "$FAKE/pkg" --to "$FAKE/repo2" >"$FAKE/p8.log" 2>&1; then
+    bad "after 1.0, a minor that TAKES AWAY should be refused"
 else ok; fi
-grep -q "a minor adds, it does not take away" "$FAKE/p6.log" && ok || bad "the minor refusal did not say why"
+grep -q "a minor adds, it does not take away" "$FAKE/p8.log" && ok || bad "the minor refusal did not say why"
 
 # ---- 11. `pforge lock`: the lock from the manifest, without building ----
 cd "$ROOT/$OUT/proj"
@@ -477,6 +502,50 @@ sed -i 's/"sha2": "0.1.0"/"sha2": "0.9.9"/' pack.json
 "$PFORGE" lock --frozen >lock3.log 2>&1 && bad "--frozen should refuse a stale lock" || ok
 grep -q "frozen" lock3.log && ok || bad "the --frozen refusal did not explain itself"
 sed -i 's/"sha2": "0.9.9"/"sha2": "0.1.0"/' pack.json
+
+# ---- 12. a BARE tarball: no repository, no index, no resolution ----
+#
+# *"porque não um tar sem um repo definido? mesmo que entre como usuário"*. The
+# tarball IS the package: it carries its own `pack.json`, so there is nothing to
+# resolve — what happens is that the bytes are hashed, kept under that hash, and
+# written into the lock with where they came from.
+#
+# It is `unsafe` unless somebody names the AUTHOR, and that is the honest part: a
+# `.sig` beside a file proves that whoever made the signature made the signature.
+# A repository is what adds a NAME to check it against.
+mkdir -p "$ROOT/$OUT/bare"
+cd "$ROOT/$OUT/bare"
+cat > pack.json <<EOF
+{"members": ["nothing"]}
+EOF
+TARB="$ROOT/$OUT/repo/pkg/sha2/sha2-0.1.0.tar"
+
+# without --unsafe and without --author it is REFUSED, and it says why
+"$PFORGE" add "$TARB" >bare1.log 2>&1 && bad "a bare tarball with nobody to check it should be refused" || ok
+grep -q "author" bare1.log && ok || bad "the refusal should name --author"
+
+# with --unsafe it goes in, and the lock says so
+"$PFORGE" add "$TARB" --unsafe >bare2.log 2>&1 || bad "add of a bare tarball (see $OUT/bare/bare2.log)"
+grep -q '"name": "sha2"' pack.lock && ok || bad "the bare tarball did not reach the lock"
+grep -q '"unsafe": true' pack.lock && ok || bad "a tarball nobody signed has to be recorded unsafe"
+grep -q '"sha2": "0.1.0"' pack.json && ok || bad "add should write the dependency into the manifest"
+# the version came from INSIDE the tarball: nobody typed it
+grep -q '"version": "0.1.0"' pack.lock && ok || bad "the version should come from the tarball's own pack.json"
+# and the hash is the same one the repository published
+want=$(python3 -c "import json;d=json.load(open('$ROOT/$OUT/repo/index.json'));print(d['packages']['sha2']['0.1.0']['sha256'])" 2>/dev/null)
+got=$(python3 -c "import json;d=json.load(open('pack.lock'));print([p for p in d['packages'] if p['name']=='sha2'][0]['sha256'])" 2>/dev/null)
+check "the hash of a bare tarball" "$want" "$got"
+
+# a file that is not a package is refused for the right reason
+head -c 2048 /dev/urandom > notapackage.tar
+"$PFORGE" add ./notapackage.tar --unsafe >bare3.log 2>&1 && bad "a tar with no pack.json should be refused" || ok
+grep -q "not read this as a package" bare3.log && ok || bad "the refusal should name the file that was wrong"
+
+# a URL takes the same path (`file://` is the transport that needs no network),
+# and adding the same package twice REPLACES its line instead of doubling it
+"$PFORGE" add "file://$TARB" --unsafe >bare4.log 2>&1 || bad "add by file:// URL (see $OUT/bare/bare4.log)"
+n=$(python3 -c "import json;d=json.load(open('pack.lock'));print(len([p for p in d['packages'] if p['name']=='sha2']))" 2>/dev/null)
+check "adding twice leaves one line" "1" "$n"
 
 cd "$ROOT"
 echo "   repo: $pass ok, $fail failed"

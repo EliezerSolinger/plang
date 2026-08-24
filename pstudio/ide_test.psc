@@ -42,7 +42,7 @@ sh.read_file = lambda p: sh_mod.ReadOut(True, files[p], "") if p in files else s
 sh.mtime_of = lambda p: 1
 u.layout(1000, 700)
 
-# ---- the seam itself: the shell has 28 commands, and the IDE adds 14 ----
+# ---- the seam itself: the shell has 28 commands, and the IDE adds 18 ----
 print("editor commands=" + str(len(sh.commands)))
 ide = idem.new_ide(sh)
 print("with the IDE=" + str(len(sh.commands)))
@@ -220,5 +220,53 @@ print("toolbar says=[" + u.node(ide.tb_target).text + "]")
 ide.want_build = ""
 ide.set_target_label()
 print("and with none=[" + u.node(ide.tb_target).text + "]")
+
+# ---- F9: the Tests panel ----
+#
+# A suite is a TARGET and a case is an EDGE of it, so the engine's report is the
+# panel — the same five callbacks, another destination. Played back here, like
+# the build's.
+ide.test_total = 4
+ide.test_msg = "running"
+ide.case_started(1, "alpha: one")
+ide.case_started(2, "alpha: two")
+ide.case_started(3, "beta: three")
+ide.case_ended(1, 0, "", 5)
+ide.case_ended(2, 0, "", 7)
+ide.case_ended(3, 1, D + "/main.p:2:5: error: it broke\n", 9)
+trows = u.list_rows(ide.test_list)
+print("test rows=" + str(len(trows)))
+for tr in trows:
+    print("  [" + tr.text + "] " + tr.detail + " depth=" + str(tr.depth) +
+          " tone=" + str(tr.tone))
+# a green suite collapses into its own line; a red one shows the case and what
+# it printed, and the case goes to its position
+sh.select_tab(0)
+back_to_the_top()
+ide.test_row_picked(2)
+print("the failing case went to " + where())
+print("bad=" + str(ide.test_bad) + " done=" + str(ide.test_done))
+
+# ---- F10: the Packages panel ----
+#
+# The lock is READ (a file, and the driver's job); what CHANGES it is `pforge`,
+# run as a process. What the panel does with the rows is here.
+ide.packages = [idem.PkgRow("sha2", "0.1.0", "0de8cff670c9", "file:///x/sha2-0.1.0.tar", True, True),
+                idem.PkgRow("stl", "0.1.0", "aa11bb22cc33", "file:///x/repo/", False, False)]
+ide.pkg_msg = ""
+ide.pkg_refresh()
+prows = u.list_rows(ide.pkg_list)
+print("package rows=" + str(len(prows)))
+for pr in prows:
+    print("  [" + pr.text + "] " + pr.detail + " depth=" + str(pr.depth) +
+          " tone=" + str(pr.tone))
+sh.run_named("Packages: Add...")
+print("asking=[" + sh.pal_prompt + "]")
+u.set_text(sh.palinput, "tar@0.1.0")
+sh.palette_filter()
+sh.palette_accept()
+print("asked to add=[" + ide.want_pkg_add + "]")
+sh.run_named("Packages: Update All")
+print("asked to update=" + str(ide.want_pkg_up))
 
 print("ide-ok")

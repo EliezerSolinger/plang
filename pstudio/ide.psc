@@ -46,6 +46,42 @@ struct BuildEdge:
     col: int
 
 
+struct PkgRow:
+    """One line of `pack.lock`, as the panel shows it.
+
+    The lock is the truth about what a build will actually use — the manifest
+    says what was asked for, and those are different questions. `why` is the
+    manifest's answer: a package the project named itself, or one that came
+    along."""
+    name: str
+    version: str
+    sha: str
+    origin: str      # the repository, or the path/URL a bare tarball came from
+    # `unsigned` and not `unsafe`: the second is a keyword here, and the first is
+    # the truer word anyway — the bytes ARE checked (the hash always is); what is
+    # missing is somebody vouching for them.
+    unsigned: bool
+    direct: bool     # the manifest asks for it by name
+
+
+struct TestCase:
+    """One case, as `pforge` reported it.
+
+    The engine already says all of this: an edge of the test target IS a case,
+    its description is `suite: name` (which is how the target library writes
+    them), and the status, the milliseconds and what it printed come with the
+    end of the edge. The panel is that stream, grouped."""
+    id: int          # the engine's, so the end finds the start
+    suite: str
+    name: str
+    status: int      # -1 still running, 0 passed, > 0 failed
+    ms: int
+    out: str
+    file: str        # where its first error was, when it had one
+    line: int
+    col: int
+
+
 struct Ide:
     """The twenty-one fields that used to live inside the editor's own struct.
 
@@ -112,6 +148,28 @@ struct Ide:
     want_term_cmd: list<str>   # [] = nothing to start
     want_term_in: str          # what the keyboard typed, on its way to the child
     want_term_stop: bool
+    # F9: the Tests panel. The same shape as the build's, because it IS the
+    # build's — a suite is a target and a case is an edge of it.
+    want_test: bool
+    test_busy: bool
+    test_cases: list<TestCase>
+    test_bar: int
+    test_list: int
+    test_rows: list<int>    # a row of the widget -> a case, or -1 for a suite
+    test_total: int
+    test_done: int
+    test_bad: int
+    test_msg: str
+    # F10: the Packages panel. It READS `pack.lock` (through the driver, which
+    # is the half that may await) and asks `pforge` to change it — resolving a
+    # version belongs to the project's own pforge, for the same reason the graph
+    # does: the editor opens any tree, and each one is its own.
+    packages: list<PkgRow>
+    pkg_list: int
+    pkg_msg: str
+    want_pkg_read: bool
+    want_pkg_add: str       # "" = nothing to add
+    want_pkg_up: bool
     # `.pstudio.json`, read once by the driver and written back when a pane moves
     conf: cfg.Config
     want_conf_save: bool
@@ -165,6 +223,170 @@ struct Ide:
             self.sh.u.set_visible(self.sh.dock, True)
             self.conf.dock_open = True
         self.dock_show(i)
+
+    # ---------- F10: the Packages panel ----------
+
+    def open_packages(self):
+        self.want_pkg_read = True
+        self.dock_open_at(PAGE_PACKAGES)
+
+    def ask_package(self):
+        """*"incluir pacotes de terceiros no projeto, mais ou menos como incluir
+        jar nas IDEs java"* — with one difference in its favour: the tar has a
+        hash, and a JAR on a classpath does not.
+
+        What is typed is `name@version`, or a path, or a URL. Which of the three
+        it is, is `pforge`'s question and not the editor's."""
+        self.sh.palette_ask("package: name@version, a .tar path, or a URL",
+                            lambda answer: self.add_package(answer))
+
+    def add_package(self, spec: str):
+        if len(spec.strip()) == 0:
+            return
+        self.want_pkg_add = spec.strip()
+        self.pkg_msg = "adding " + self.want_pkg_add + "…"
+        self.dock_open_at(PAGE_PACKAGES)
+
+    def update_packages(self):
+        self.want_pkg_up = True
+        self.pkg_msg = "raising every dependency…"
+        self.dock_open_at(PAGE_PACKAGES)
+
+    def pkg_refresh(self):
+        if self.pkg_list < 0:
+            return
+        rows: list<pui.ListRow> = []
+        if len(self.pkg_msg) > 0:
+            rows.append(pui.ListRow(self.pkg_msg, "", 0, "", ico.ICO_INFO,
+                                    pui.TONE_ACCENT, False))
+        for p in self.packages:
+            rows.append(pui.ListRow(p.name, p.version + "   " + p.sha[0:12] + "…", 0, "",
+                                    ico.ICO_TRIANGLE_ALERT if p.unsigned else ico.ICO_PACKAGE,
+                                    pui.TONE_WARN if p.unsigned else pui.TONE_NORMAL, False))
+            rows.append(pui.ListRow(p.origin if len(p.origin) > 0 else "(no repository)",
+                                    "asked for" if p.direct else "came along", 1, "",
+                                    pui.ICON_NONE, pui.TONE_DIM, False))
+        if len(self.packages) == 0 and len(self.pkg_msg) == 0:
+            rows.append(pui.ListRow("(this project asks for no packages)", "", 0, "",
+                                    pui.ICON_NONE, pui.TONE_DIM, False))
+        self.sh.u.list_set(self.pkg_list, rows)
+        self.sh.dirty_ui = True
+
+    # ---------- F9: the Tests panel ----------
+
+    def start_tests(self):
+        """Ask for the suite. Which target that IS belongs to the project, and
+        the answer comes from the graph or from `.pstudio.json`."""
+        if self.test_busy or self.build_busy:
+            self.test_msg = "something is already running"
+            return
+        self.want_test = True
+        self.test_msg = "assembling the graph..."
+        self.dock_open_at(PAGE_TESTS)
+
+    def test_reset(self):
+        self.test_cases = []
+        self.test_total = 0
+        self.test_done = 0
+        self.test_bad = 0
+        self.test_refresh()
+
+    def case_started(self, id: int, what: str):
+        cut = what.find(": ")
+        if cut > 0:
+            self.test_cases.append(TestCase(id, what[:cut], what[cut + 2:], -1, 0, "", "", 0, 0))
+        else:
+            # an edge of the test target that is NOT a case — building the
+            # suite's own binary is one. It is still work, and hiding it would
+            # make the count disagree with the bar.
+            self.test_cases.append(TestCase(id, "", what, -1, 0, "", "", 0, 0))
+        self.test_refresh()
+
+    def case_ended(self, id: int, status: int, out: str, ms: int):
+        for i in range(len(self.test_cases) - 1, -1, -1):
+            c = self.test_cases[i]
+            if c.id != id or c.status != -1:
+                continue
+            c.status = status
+            c.ms = ms
+            c.out = out.strip()
+            if status != 0:
+                self.test_bad += 1
+                p = first_position(out)
+                if len(p) == 3:
+                    c.file = p[0]
+                    c.line = int(p[1])
+                    c.col = int(p[2])
+            break
+        self.test_done += 1
+        self.test_refresh()
+
+    def test_refresh(self):
+        """The tree: a row per suite, then its cases under it.
+
+        A suite that is entirely green collapses into its own row — the count
+        and the time are the whole report, and twelve hundred green lines are
+        twelve hundred lines nobody reads. A suite with a failure shows the
+        cases that failed, and what they printed."""
+        if self.test_bar < 0:
+            return
+        u = self.sh.u
+        cap = self.test_msg
+        if self.test_total > 0:
+            cap = "[" + str(self.test_done) + "/" + str(self.test_total) + "] " + cap
+        u.progress_set(self.test_bar, self.test_done, self.test_total, cap)
+        rows: list<pui.ListRow> = []
+        self.test_rows = []
+        suites: list<str> = []
+        for c in self.test_cases:
+            if c.suite not in suites:
+                suites.append(c.suite)
+        for su in suites:
+            ok = 0
+            bad = 0
+            ms = 0
+            for c in self.test_cases:
+                if c.suite != su:
+                    continue
+                ms += c.ms
+                if c.status == 0:
+                    ok += 1
+                elif c.status > 0:
+                    bad += 1
+            title = su if len(su) > 0 else "(the suite itself)"
+            rows.append(pui.ListRow(title, str(ok) + " ok" +
+                                    ("" if bad == 0 else ", " + str(bad) + " failed") +
+                                    "  " + str(ms) + " ms", 0, "",
+                                    ico.ICO_CIRCLE_X if bad > 0 else ico.ICO_CIRCLE_CHECK,
+                                    pui.TONE_BAD if bad > 0 else pui.TONE_OK, False))
+            self.test_rows.append(-1)
+            if bad == 0:
+                continue
+            for i in range(len(self.test_cases)):
+                c2 = self.test_cases[i]
+                if c2.suite != su or c2.status <= 0:
+                    continue
+                rows.append(pui.ListRow(c2.name, str(c2.ms) + " ms", 1, "",
+                                        ico.ICO_X, pui.TONE_BAD, False))
+                self.test_rows.append(i)
+                for ln in c2.out.split("\n"):
+                    if len(ln.strip()) == 0:
+                        continue
+                    rows.append(pui.ListRow(ln, "", 2, "", pui.ICON_NONE,
+                                            pui.TONE_WARN, False))
+                    self.test_rows.append(i)
+        u.list_set(self.test_list, rows)
+        self.sh.dirty_ui = True
+
+    def test_row_picked(self, row: int):
+        if row < 0 or row >= len(self.test_rows):
+            return
+        i = self.test_rows[row]
+        if i < 0 or i >= len(self.test_cases):
+            return
+        c = self.test_cases[i]
+        if len(c.file) > 0:
+            self.sh.goto_hit(c.file + ":" + str(c.line) + ":" + str(c.col))
 
     # ---------- F8: the terminal ----------
 
@@ -502,6 +724,8 @@ def new_ide(sh: sh_mod.Shell) -> Ide:
               "", 0, 0, 0, False, "", "",
               -1, [], -1, "", -1, -1, 0, [], [], -1, -1, -1,
               trm.new_term(80, 24), -1, False, [], "", False,
+              False, False, [], -1, -1, [], 0, 0, 0, "",
+              [], -1, "", True, "", False,
               cfg.default_config(), False)
     sh.add_commands(ide_commands(ide))
     build_shell(ide)
@@ -524,6 +748,10 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
         sh_mod.Command("Toggle Outline", lambda s: ide.toggle_outline(), None),
         sh_mod.Command("Toggle Panel", lambda s: ide.toggle_dock(), None),
         sh_mod.Command("Toggle Toolbar", lambda s: ide.toggle_toolbar(), None),
+        sh_mod.Command("Run Tests", lambda s: ide.start_tests(), None),
+        sh_mod.Command("Packages", lambda s: ide.open_packages(), None),
+        sh_mod.Command("Packages: Add...", lambda s: ide.ask_package(), None),
+        sh_mod.Command("Packages: Update All", lambda s: ide.update_packages(), None),
         sh_mod.Command("Terminal", lambda s: ide.open_terminal(), None),
         sh_mod.Command("Terminal: Stop", lambda s: ide.stop_terminal(), None),
     ]
@@ -545,6 +773,8 @@ def ide_commands(ide: Ide) -> list<sh_mod.Command>:
 # still labels, and F9 and F10 replace them.
 const PAGE_BUILD: int = 0
 const PAGE_PROBLEMS: int = 1
+const PAGE_TESTS: int = 2
+const PAGE_PACKAGES: int = 3
 const PAGE_TERMINAL: int = 4
 
 
@@ -587,6 +817,7 @@ def build_shell(ide: Ide):
     u.on_click(ide.tb_target, lambda id, arg: sh.run_named("Build Target..."))
     tool(ide, ico.ICO_PLAY, "Run")
     tool(ide, ico.ICO_SQUARE, "Stop Build")
+    tool(ide, ico.ICO_FLASK_CONICAL, "Run Tests")
     tool(ide, ico.ICO_TRASH_2, "Clean")
     tool(ide, ico.ICO_SEARCH, "Find in Project")
     tool(ide, ico.ICO_LIST_TREE, "Toggle Outline")
@@ -630,6 +861,21 @@ def build_shell(ide: Ide):
                 u2.focus_get() == id, True))
             ide.term_node = tn
             ide.dock_labels.append(tn)
+        elif i == PAGE_PACKAGES:
+            ppage = u.box(ide.dock_body, True)
+            u.set_expand(ppage, True, True)
+            ide.pkg_list = u.list(ppage)
+            u.set_expand(ide.pkg_list, True, True)
+            ide.dock_labels.append(ppage)
+        elif i == PAGE_TESTS:
+            tpage = u.box(ide.dock_body, True)
+            u.set_expand(tpage, True, True)
+            ide.test_bar = u.progress(tpage)
+            u.set_expand(ide.test_bar, True, False)
+            ide.test_list = u.list(tpage)
+            u.set_expand(ide.test_list, True, True)
+            u.on_submit(ide.test_list, lambda id, row: ide.test_row_picked(row))
+            ide.dock_labels.append(tpage)
         elif i == PAGE_BUILD:
             # the Build page is REAL since F7; the others still say "empty".
             # Whatever a page is made of, ONE node per page goes in the list, so
@@ -650,6 +896,8 @@ def build_shell(ide: Ide):
             u.set_expand(lb, True, False)
             ide.dock_labels.append(lb)
     ide.build_refresh()
+    ide.test_refresh()
+    ide.pkg_refresh()
     ide.dock_refresh()
     ide.dock_show(0)
     u.split_set(sh.vsplit, 420)

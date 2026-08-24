@@ -1,33 +1,33 @@
 empty:
-  tree=220 outline=240 dock=200 open=TTT target=[]
-keys by default=37
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
+keys by default=38
 good:
-  tree=300 outline=240 dock=150 open=TTT target=[build/bin/pcode]
-bound=[Build] removed=True kept=37 of 37
+  tree=300 outline=240 dock=150 open=TTT target=[build/bin/pcode] test=[]
+bound=[Build] removed=True kept=38 of 38
 not json:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: is not a JSON object (invalid JSON: a key has to be a string at byte 2) — everything default
 not an object:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: is not a JSON object (this `any` holds list, not dict<str, any>) — everything default
 wrong types:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: tree_w should be a number, using 220
   ! .pstudio.json: dock_open should be true or false, using true
   ! .pstudio.json: target should be text, ignored
 layout is not an object:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: layout should be an object, ignored
 out of range:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: tree_w=-5 is outside 0..4000, using 220
   ! .pstudio.json: outline_w=99999 is outside 0..4000, using 240
 names nobody knows:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: layout.tree_wide is not a setting, ignored
   ! .pstudio.json: colour is not a setting, ignored
 keys nobody can press, and commands nobody has:
-  tree=220 outline=240 dock=200 open=TTT target=[]
+  tree=220 outline=240 dock=200 open=TTT target=[] test=[]
   ! .pstudio.json: keys.ctrl+A is not a key, ignored
   ! .pstudio.json: keys.ctrl+b = 'Deploy To Production' is not a command, ignored
   ! .pstudio.json: keys.ctrl+ctrl+s is not a key, ignored
@@ -50,6 +50,7 @@ what it writes:
     "dock_open": true
   },
   "target": "x",
+  "test": "",
   "keys": {
     "ctrl+s": "",
     "ctrl+shift+b": "Build"

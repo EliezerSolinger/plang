@@ -37,6 +37,7 @@ import <pforge/manifest.psc> as MF
 import <pforge/pkg.psc> as PK
 import build_plang as BP
 import <pforge/repo.psc> as R
+import <tar/tar.psc> as TARM
 import <pforge/lock.psc> as LK
 
 const LOG: str = "build/log/build.log"
@@ -1067,6 +1068,126 @@ private async def resolve_lock(lk: LK.Lock, wanted: list<str>, swappable: list<s
     return 0
 
 
+private def text_of(b: list<u8>) -> str:
+    out = ""
+    for x in b:
+        out += chr(int(x))
+    return out
+
+
+private def looks_like_tarball(s: str) -> bool:
+    return s.endswith(".tar")
+
+
+private async def tar_bytes(where: str) -> list<u8>:
+    """The bytes of a tarball, from a path or from a URL. Nothing else knows
+    which of the two it was — which is the point."""
+    if where.startswith("http://") or where.startswith("https://"):
+        cut = where.rfind("/")
+        r = R.repo(where[0:cut], True)
+        return await R.fetch(r, where[cut + 1:])
+    # `file://` is a URL that is a path, and it is the transport a test can use
+    # without a network. Stripping it here is the whole difference.
+    if where.startswith("file://"):
+        return await R.read_bytes(where[7:])
+    return await R.read_bytes(where)
+
+
+private def manifest_in(bs: list<u8>) -> MF.Manifest:
+    """The `pack.json` inside the tarball. A package packs itself with a
+    `<name>-<version>/` prefix, so the manifest is the shortest path that ends
+    in `pack.json` — anything deeper belongs to a member, not to the package."""
+    best = ""
+    raw = ""
+    for mem in TARM.read(bs):
+        if not mem.name.endswith("pack.json"):
+            continue
+        if len(best) == 0 or len(mem.name) < len(best):
+            best = mem.name
+            raw = text_of(mem.data)
+    if len(best) == 0:
+        return MF.empty("")
+    return MF.parse(raw, best, False)
+
+
+async def add_tarball(where: str, author: str, unsafe_ok: bool) -> int:
+    """`pforge add ./foo-0.1.0.tar` — the tarball IS the package.
+
+    There is no index to consult and nothing to resolve: the file that arrived
+    carries its own `pack.json`, and that says the name, the version, the
+    toolchain requirement and the dependencies. What this does is hash what
+    arrived, keep it in the store under that hash, and write the line.
+
+    **It is always `unsafe` unless somebody names the AUTHOR.** A `.sig` beside a
+    tarball proves nothing on its own — it proves that whoever made the signature
+    also made the signature. What a repository adds is a NAME to check it
+    against, and a bare file has no repository. So: `--author <hex>` fetches the
+    `.sig` and verifies it, and without it the line goes into the lock saying
+    `"unsafe": true`, which is what the reviewer of the pull request sees.
+
+    The hash is checked in the sense that matters here: it is COMPUTED from what
+    arrived and written down, so the next `pforge install` on another machine
+    gets the same bytes or fails. A JAR on a classpath does not have that."""
+    bs = await tar_bytes(where)
+    if len(bs) == 0:
+        print("there is nothing at " + where)
+        return 1
+    sha = R.hash_of(bs)
+    nonlocal m
+    try:
+        m = manifest_in(bs)
+    catch e:
+        # a file that is not a tar at all raises out of the reader, and the
+        # message that comes out of THERE is about a checksum field. What
+        # somebody typing this command needs to know is which file was wrong.
+        print(where + ": I could not read this as a package (" + e.message + ")")
+        return 1
+    if len(m.name) == 0 or len(m.version) == 0:
+        print(where + ": there is no pack.json inside this tarball, so it is not a package")
+        return 1
+    unsigned = True
+    if len(author) > 0:
+        sigb = await tar_bytes(where + ".sig")
+        if len(sigb) == 0:
+            print(where + ".sig is not there, and --author says it should be")
+            return 1
+        sig = text_of(sigb).strip()
+        if not R.verify_sig(author, bs, sig):
+            print(where + ": the signature does not match the key given to --author")
+            return 1
+        unsigned = False
+    elif not unsafe_ok:
+        print(where + " comes with nobody to check it against.")
+        print("   `--author <hex>` to verify the `.sig` beside it, or `--unsafe` to take it as it is —")
+        print("   the second records `\"unsafe\": true` in the lock, for whoever reviews the PR to see.")
+        return 1
+    vcomp = await compiler_version(query_global())
+    if len(vcomp) > 0:
+        bad = MF.toolchain_ok(m.toolchain, vcomp)
+        if len(bad) > 0:
+            print(m.name + "@" + m.version + " " + bad)
+            return 1
+    lk = await LK.read("pack.lock")
+    kept: list<LK.Locked> = []
+    for t in lk.packages:
+        if t.name != m.name:
+            kept.append(t)
+    lk.packages = kept
+    await R.write_bytes(path.join(R.tarballs_dir(), sha), bs)
+    lk.packages.append(LK.Locked(m.name, m.version, sha, where, "", unsigned, m.toolchain))
+    await LK.write(lk, "pack.lock")
+    await MF.write_dep("pack.json", m.name, m.version)
+    print(m.name + " " + m.version + "  sha256 " + sha[0:16] + "…" +
+          ("  (unsafe: nobody signed for it)" if unsigned else "  (signed)"))
+    # a dependency of the tarball is NOT followed: there is no index behind a
+    # bare file to follow it into. Saying so beats an "I did not find" later.
+    if len(m.deps) > 0:
+        print("   it asks for " + str(len(m.deps)) + " dependency(ies) of its own; add them yourself —")
+        print("   a bare tarball has no index behind it to follow them into")
+    print("   `pforge install` to materialize it")
+    return 0
+
+
 async def cmd_add(targets: list<str>, unsafe_ok: bool) -> int:
     """`pforge add <name>@<version>` — writes to the manifest and to the lock.
 
@@ -1081,7 +1202,15 @@ async def cmd_add(targets: list<str>, unsafe_ok: bool) -> int:
     search."""
     if len(targets) == 0:
         print("usage: pforge add <name>@<version> [--unsafe]")
+        print("       pforge add ./foo-0.1.0.tar [--author <hex>] [--unsafe]")
+        print("       pforge add https://somewhere/foo-0.1.0.tar [--author <hex>] [--unsafe]")
         return 2
+    if looks_like_tarball(targets[0]):
+        author = ""
+        for i in range(1, len(targets)):
+            if targets[i] == "--author" and i + 1 < len(targets):
+                author = targets[i + 1]
+        return await add_tarball(targets[0], author, unsafe_ok)
     asked = split_at(targets[0])
     name = asked[0]
     version = asked[1]
@@ -1387,7 +1516,7 @@ private def psc_outside_test(dir: str, rel: str, found: list<str>):
 
 
 private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
-                                   u: R.Release) -> list<str>:
+                                   u: R.Release, warn: list<str>) -> list<str>:
     """The three cases where publishing would mean publishing something that does
     not serve.
 
@@ -1443,20 +1572,37 @@ private async def publish_refusals(ix: R.Index, m: MF.Manifest, dir: str,
                 bad.append("the module " + mod2 + " left, and " + m.version
                            + " only bumps the `patch` of " + prev)
         return bad
-    # minor: it may ADD, and nothing else
+    # minor: it may ADD, and nothing else — EXCEPT while the major is 0.
+    #
+    # Semver says it out loud (clause 4): "anything MAY change at any time" while
+    # the major is zero, and by convention the slot that carries the break is the
+    # minor. Cargo treats `0.x` exactly that way, and refusing it here would mean
+    # a library cannot correct its own interface before its first stable release
+    # — which is what the pre-1.0 period is FOR.
+    #
+    # It warns instead of going quiet: the exception is real, and an exception
+    # visible on every publication is one somebody can argue with. Hidden in the
+    # rule, it would be a rule nobody knows they are relying on.
+    zero_major = va[0] == 0
     prev_mods: list<str> = []
     for k3 in prev_rel.api:
         prev_mods.append(k3)
     for mod3 in sorted(prev_mods):
         if mod3 not in u.api:
-            bad.append("the module " + mod3 + " left, and " + m.version
-                       + " bumps the `minor` of " + prev + " (a minor adds, it does not take away)")
+            gone = "the module " + mod3 + " left, and " + m.version + " bumps the `minor` of " + prev
+            if zero_major:
+                warn.append(gone + " — allowed because the major is 0, where a minor MAY break")
+            else:
+                bad.append(gone + " (a minor adds, it does not take away)")
             continue
         now_syms: list<str> = u.api[mod3]
         for decl in prev_rel.api[mod3]:
             if decl not in now_syms:
-                bad.append("`" + decl + "` left " + mod3 + ", and " + m.version
-                           + " bumps the `minor` of " + prev + " (a minor adds, it does not take away)")
+                left = "`" + decl + "` left " + mod3 + ", and " + m.version + " bumps the `minor` of " + prev
+                if zero_major:
+                    warn.append(left + " — allowed because the major is 0, where a minor MAY break")
+                else:
+                    bad.append(left + " (a minor adds, it does not take away)")
     return bad
 
 
@@ -1535,12 +1681,18 @@ async def cmd_publish(targets: list<str>, to_dir: str, key_file: str, query: str
     await package_api(dir, m, query, u.api, u.api_hash)
     # the REFUSAL happens before a byte is written. A repository with one tarball
     # too many and no index entry is a repository nobody knows how to fix.
-    bad = await publish_refusals(ix, m, dir, u)
+    warn: list<str> = []
+    bad = await publish_refusals(ix, m, dir, u, warn)
     if len(bad) > 0:
         print(dir + "/pack.json: error: this cannot be published as it is:")
         for mm in bad:
             print("   " + mm)
         return 1
+    # what the `0.x` exception let through. It is printed on EVERY publication
+    # that uses it, because an exception nobody sees is a rule nobody knows they
+    # are relying on.
+    for wm in warn:
+        print(dir + "/pack.json: warning: " + wm)
     bs = await R.pack(dir, m.name + "-" + m.version)
     sha = R.hash_of(bs)
     rel = "pkg/" + m.name + "/" + m.name + "-" + m.version + ".tar"

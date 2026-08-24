@@ -1,5 +1,5 @@
 editor commands=28
-with the IDE=42
+with the IDE=46
 build offered=True first=Build
 asked=True target=[] run=False
 run asked=True and runs=True
@@ -36,4 +36,19 @@ the second diagnostic went to main.p:3:2
 a line with no position fell back to main.p:2:5
 toolbar says=[pcode]
 and with none=[(default)]
+test rows=4
+  [alpha] 2 ok  12 ms depth=0 tone=3
+  [beta] 0 ok, 1 failed  9 ms depth=0 tone=5
+  [three] 9 ms depth=1 tone=5
+  [projide/main.p:2:5: error: it broke]  depth=2 tone=4
+the failing case went to main.p:2:5
+bad=1 done=3
+package rows=4
+  [sha2] 0.1.0   0de8cff670c9… depth=0 tone=4
+  [file:///x/sha2-0.1.0.tar] asked for depth=1 tone=1
+  [stl] 0.1.0   aa11bb22cc33… depth=0 tone=0
+  [file:///x/repo/] came along depth=1 tone=1
+asking=[package: name@version, a .tar path, or a URL]
+asked to add=[tar@0.1.0]
+asked to update=True
 ide-ok

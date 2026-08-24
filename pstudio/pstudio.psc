@@ -28,6 +28,7 @@ import driver
 import <pforge/build.psc> as B
 import <pforge/graph.psc> as G
 import <pforge/manifest.psc> as MF
+import json
 import config as cfg
 import terminal as trm
 import sys
@@ -292,6 +293,8 @@ async def serve_ide(dv: driver.Driver, sh: appm.Shell, ide: idem.Ide, td: TermDr
     loop, and the only thing `pcode` does not have."""
     await serve_manifest(sh, ide)
     await serve_build(sh, ide)
+    await serve_test(sh, ide)
+    await serve_packages(sh, ide)
     await serve_term(sh, ide, td)
     # while a terminal is alive the loop cannot doze for half a second: output
     # that arrives just after a wait began would sit there until the next blink
@@ -303,6 +306,180 @@ async def serve_ide(dv: driver.Driver, sh: appm.Shell, ide: idem.Ide, td: TermDr
     if len(ide.build_msg) > 0:
         sh.u.set_text(sh.status, ide.build_msg)
         sh.dirty_ui = True
+
+
+# ---------- F10: the packages ----------
+#
+# READING is a library call — `pack.lock` is a file and `lock.psc` is in here.
+# CHANGING is `pforge`, run as a process, for exactly the reason the graph is:
+# resolving a version, checking a hash and verifying a signature belong to the
+# project's own pforge, and the editor opens any tree. The alternative would be
+# for the editor to embed one project's resolver, which works for one project,
+# which would be this one.
+
+async def serve_packages(sh: appm.Shell, ide: idem.Ide):
+    if len(ide.want_pkg_add) > 0:
+        spec = ide.want_pkg_add
+        ide.want_pkg_add = ""
+        await run_pforge(sh, ide, ["add", spec, "--unsafe"])
+        ide.want_pkg_read = True
+    if ide.want_pkg_up:
+        ide.want_pkg_up = False
+        await run_pforge(sh, ide, ["up"])
+        ide.want_pkg_read = True
+    if not ide.want_pkg_read:
+        return
+    ide.want_pkg_read = False
+    ide.packages = []
+    lockf = path.join(sh.root_dir, "pack.lock")
+    if not path.isfile(lockf):
+        ide.pkg_msg = ""
+        ide.pkg_refresh()
+        return
+    try:
+        lf = await open(lockf, "r")
+        raw = await lf.text()
+        await lf.close()
+        asked: list<str> = []
+        mf = path.join(sh.root_dir, "pack.json")
+        if path.isfile(mf):
+            m = await MF.read(mf)
+            for d in m.deps:
+                asked.append(d.name)
+        # the lock as JSON, and NOT through `lock.psc`.
+        #
+        # That module imports `repo.psc`, which is where signing lives — and
+        # dragging an ed25519 implementation into a text editor so that a table
+        # can be drawn is the wrong trade. Reading needs no crypto: the four
+        # fields shown here are four strings and a flag. WRITING the lock is
+        # `pforge`'s, and that is a process.
+        root = json.parse(raw) as dict<str, any>
+        for pv in root["packages"] as list<any>:
+            pd = pv as dict<str, any>
+            nm = pd["name"] as str
+            ide.packages.append(idem.PkgRow(nm, pd["version"] as str,
+                                            pd["sha256"] as str, pd["repo"] as str,
+                                            ("unsafe" in pd) and (pd["unsafe"] as bool),
+                                            nm in asked))
+    catch e:
+        ide.pkg_msg = "pack.lock: " + e.message
+    ide.pkg_refresh()
+    sh.dirty_ui = True
+
+
+private async def run_pforge(sh: appm.Shell, ide: idem.Ide, args: list<str>):
+    """One `pforge`, and its whole output into the panel.
+
+    `console=False` because the output is the ANSWER — a hash that did not
+    match, a conflict, a toolchain requirement — and it belongs on the screen the
+    person is looking at rather than in whatever terminal the editor was started
+    from."""
+    cmd: list<str> = [where_is_pforge()]
+    for a in args:
+        cmd.append(a)
+    try:
+        r = await os.run(cmd, cwd=sh.root_dir)
+        ide.pkg_msg = r.output().strip()
+        if r.status() != 0 and len(ide.pkg_msg) == 0:
+            ide.pkg_msg = "pforge " + args[0] + " failed (" + str(r.status()) + ")"
+    catch e:
+        ide.pkg_msg = e.message
+    sh.dirty_ui = True
+
+
+# ---------- F9: the suites ----------
+#
+# It comes almost free, and the reason is the shape `pforge` already had: a suite
+# is a TARGET and a case is an EDGE of it. So running the tests is `B.build` with
+# another target, and the report is the same five callbacks — what changes is
+# which panel they feed.
+#
+# `-k` is enormous on purpose, and it is `cmd_test`'s own reasoning: whoever runs
+# tests wants the whole scoreboard and not the first failure. A build stops at
+# the first because the rest was going to fail with it; a suite does not.
+
+private def test_target(ide: idem.Ide) -> str:
+    """Which target IS the suite.
+
+    The convention first — `pforge`'s own projects stamp it at `.../stamp/test` —
+    and `.pstudio.json` over it, because a project that names its suite something
+    else should say so once instead of being guessed at every time."""
+    if len(ide.conf.test) > 0:
+        return ide.conf.test
+    for t in ide.build_targets:
+        if t.endswith("/stamp/test"):
+            return t
+    return ""
+
+
+private def on_case_start(sh: appm.Shell, ide: idem.Ide, id: int, what: str):
+    ide.case_started(id, what)
+    sh.dirty_ui = True
+
+
+private def on_case_end(sh: appm.Shell, ide: idem.Ide, id: int, st: int, out: str, ms: int):
+    ide.case_ended(id, st, out, ms)
+    if st != 0:
+        # UP it comes, and only now: a green suite must not steal the screen,
+        # and a red one is the only thing anybody wants to look at
+        ide.dock_open_at(idem.PAGE_TESTS)
+    sh.dirty_ui = True
+
+
+async def serve_test(sh: appm.Shell, ide: idem.Ide):
+    if not ide.want_test:
+        return
+    ide.want_test = False
+    if ide.build_busy or ide.test_busy:
+        ide.test_msg = "something is already running"
+        return
+    ide.test_busy = True
+    ide.test_reset()
+    ide.test_msg = "assembling the graph..."
+    ide.test_refresh()
+    g = await project_graph(sh, ide)
+    if g == None:
+        ide.test_busy = False
+        ide.test_msg = "there is no graph to test"
+        ide.test_refresh()
+        return
+    alvos: list<str> = []
+    for nd in g.nodes:
+        if nd.gen >= 0:
+            alvos.append(nd.p)
+    ide.build_targets = sorted(alvos)
+    tgt = test_target(ide)
+    if len(tgt) == 0:
+        ide.test_msg = "I do not know which target is the suite — name it in .pstudio.json under \"test\""
+        ide.test_busy = False
+        ide.test_refresh()
+        return
+    ide.test_msg = "running " + path.basename(tgt)
+    rep = B.Rep(lambda t: set_test_total(sh, ide, t),
+                lambda i, w: on_case_start(sh, ide, i, w),
+                lambda i, st, o, ms: on_case_end(sh, ide, i, st, o, ms),
+                lambda ok, f: set_test_done(sh, ide, ok, f),
+                lambda m: set_test_error(sh, ide, m))
+    await B.build(g, "build/log/test.log", [tgt], B.Opts(os.nproc(), 1000000, False, False), rep)
+    ide.test_busy = False
+    ide.test_refresh()
+    sh.dirty_ui = True
+
+
+private def set_test_total(sh: appm.Shell, ide: idem.Ide, t: int):
+    ide.test_total = t
+    ide.test_msg = str(t) + " to run" if t > 0 else "nothing to run"
+    ide.test_refresh()
+
+
+private def set_test_done(sh: appm.Shell, ide: idem.Ide, ok: bool, fails: int):
+    ide.test_msg = ("all green (" + str(ide.test_done) + ")") if ok else (str(ide.test_bad) + " failed")
+    ide.test_refresh()
+
+
+private def set_test_error(sh: appm.Shell, ide: idem.Ide, msg: str):
+    if len(ide.test_msg) == 0:
+        ide.test_msg = msg
 
 
 # ---------- F8: the terminal's other half ----------
@@ -548,6 +725,27 @@ async def selftest(arg: str) -> int:
     print("drawn", "yes" if n > 20 else "no")
     await driver.serve_shell(dv, sh)
 
+    # ---- F10: the packages, read from the project that is open ----
+    #
+    # A lock written HERE, so the populated path is the one measured: an editor
+    # that only ever showed "(this project asks for no packages)" would pass a
+    # test about the empty case and tell nobody about the other one.
+    lf = await open(path.join(sh.root_dir, "pack.lock"), "w")
+    await lf.write('{"format": 1, "repos": {}, "packages": [' +
+                   '{"name": "sha2", "version": "0.1.0", "sha256": "0de8cf", "repo": "file:///x/sha2-0.1.0.tar", "file": "", "unsafe": true, "toolchain": ">= 0.1.0"},' +
+                   '{"name": "stl", "version": "0.1.0", "sha256": "aa11bb", "repo": "file:///x/repo/", "file": "pkg/stl/stl-0.1.0.tar", "unsafe": false, "toolchain": ">= 0.1.0"}]}')
+    await lf.close()
+    mf9 = await open(path.join(sh.root_dir, "pack.json"), "w")
+    await mf9.write('{"members": ["nothing"], "deps": {"sha2": "0.1.0"}}')
+    await mf9.close()
+    ide.want_pkg_read = True
+    await serve_packages(sh, ide)
+    print("packages", len(ide.packages), "and the panel has", len(u.list_rows(ide.pkg_list)), "rows")
+    for p9 in ide.packages:
+        print("  " + p9.name + " " + p9.version +
+              (" unsigned" if p9.unsigned else " signed") +
+              (" asked-for" if p9.direct else " came-along"))
+
     # ---- F8: the terminal, with a REAL child on a real pseudo-terminal ----
     #
     # The grid has its own test and the primitive has its own test; this is the
@@ -644,6 +842,26 @@ async def mode_manifest(arg: str) -> int:
     return 0
 
 
+async def mode_test() -> int:
+    """`pstudio --test` — a suíte INSIDE the editor, without a screen.
+
+    The same reason `--build` exists: "the tests run in the editor" is a claim
+    you could otherwise only check by looking at a window. What it prints is the
+    panel's own summary, and the exit status is the suite's."""
+    u = pui.new_ui(8, 17)
+    sh = appm.new_shell(u, ".")
+    ide = idem.new_ide(sh)
+    u.layout(1000, 700)
+    ide.start_tests()
+    await serve_test(sh, ide)
+    print(ide.test_msg)
+    print("cases:", len(ide.test_cases), " failed:", ide.test_bad)
+    for c in ide.test_cases:
+        if c.status > 0:
+            print("  FAILED " + c.suite + ": " + c.name)
+    return 1 if ide.test_bad > 0 else 0
+
+
 async def mode_build(target: str) -> int:
     """`pstudio --build [target]` — the build INSIDE the editor, without a screen.
 
@@ -674,6 +892,8 @@ async def main_run() -> int:
     args = sys.argv
     if len(args) > 1 and args[1] == "--selftest":
         return await selftest(args[2] if len(args) > 2 else "")
+    if len(args) > 1 and args[1] == "--test":
+        return await mode_test()
     if len(args) > 1 and args[1] == "--build":
         return await mode_build(args[2] if len(args) > 2 else "")
     if len(args) > 1 and args[1] == "--manifest":

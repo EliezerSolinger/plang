@@ -43,6 +43,10 @@ struct Config:
     dock_open: bool
     # the target `Build` builds with no argument. "" = ask the graph.
     target: str
+    # ... and the one `Run Tests` builds. "" = look for the convention, which is
+    # a node of the graph whose path ends in `/stamp/test`. A project that names
+    # its suite something else says so here, once.
+    test: str
     # "ctrl+s" -> "Save". The command table made shortcuts data (F2); this is
     # what makes them EDITABLE data.
     keys: dict<str, str>
@@ -58,7 +62,7 @@ def default_config() -> Config:
     All four zones are OPEN by default. An IDE that started with three of them
     collapsed would look like an editor, and somebody would have to find the
     command that turns each one on before knowing it existed."""
-    return Config(220, 240, 200, True, True, True, "", default_keys(), [])
+    return Config(220, 240, 200, True, True, True, "", "", default_keys(), [])
 
 
 def default_keys() -> dict<str, str>:
@@ -79,6 +83,7 @@ def default_keys() -> dict<str, str>:
         "ctrl+shift+p": "Command Palette",
         "ctrl+g": "Go To Line",
         "ctrl+shift+f": "Find in Project",
+        "ctrl+shift+t": "Run Tests",
         "ctrl+f": "Find",
         "ctrl+b": "Toggle File Tree",
         "ctrl+z": "Undo",
@@ -356,9 +361,10 @@ def parse(text: str, commands: list<str>) -> Config:
         return c
     read_layout(c, o)
     c.target = want_str(c, o, "target", c.target)
+    c.test = want_str(c, o, "test", c.test)
     read_keys(c, o, commands)
     for k in o:
-        if k != "layout" and k != "target" and k != "keys":
+        if k != "layout" and k != "target" and k != "keys" and k != "test":
             note(c, k + " is not a setting, ignored")
     return c
 
@@ -381,6 +387,7 @@ def to_text(c: Config) -> str:
     out += '    "dock_open": ' + ("true" if c.dock_open else "false") + '\n'
     out += '  },\n'
     out += '  "target": ' + json.stringify(c.target) + ',\n'
+    out += '  "test": ' + json.stringify(c.test) + ',\n'
     base = default_keys()
     changed: list<str> = []
     for k in c.keys:
