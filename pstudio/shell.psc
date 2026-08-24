@@ -30,8 +30,12 @@ enum PalMode:
     PAL_FILES         # fuzzy file search (the default)
     PAL_COMMANDS      # the '>' prefix
     PAL_GOTO          # the ':' prefix
-    PAL_BUILD         # the '!' prefix: a graph target
-    PAL_TEXT          # a TYPED line, for when it asks instead of offering
+    # The two below are GENERIC: whoever opens them supplies the list (or none)
+    # and what to do with the answer. They used to be `PAL_BUILD` and `PAL_TEXT`
+    # — a graph target and a dependency name — which put "what a build target is"
+    # inside a palette that has no business knowing.
+    PAL_LIST          # a list SOMEBODY ELSE supplied ('!' picks it too)
+    PAL_ASK           # no list: the item IS what is being typed
 
 
 struct ReadOut:
@@ -105,12 +109,23 @@ def fuzzy_score(hay: str, needle: str) -> int:
     return score - len(hay) // 4
 
 
-# the command palette: name and id, in a single string (an imported module does
-# not run statements, and a two-column table fits one line per command)
-const COMMANDS: str = "Save=0;Save All=1;Close Tab=2;Reload File=3;Toggle File Tree=4;Zoom In=5;Zoom Out=6;Zoom Reset=7;Find=8;Go To Line=9;Quit=10;Fold=11;Unfold=11;Fold All=12;Unfold All=13;Toggle Comment=14;Move Line Up=15;Move Line Down=16;Duplicate Line=17;Delete Line=18;Join Lines=19;Toggle Bookmark=20;Next Bookmark=21;Clear Bookmarks=22;Toggle Minimap=23;Build=24;Build Target...=25;Run=26;Clean=27;Stop Build=28;Go To Build Error=29;Manifest: Open pack.json=30;Manifest: Set Default Target...=31;Manifest: Add Dependency...=32"
+struct Command:
+    """A palette entry: a name, what it does, and when it is available.
+
+    A TABLE, and not a `switch` over an `int`. Two debts died with the switch: a
+    thirty-four entry string with fixed indices, where a command's name and its
+    number lived apart and had to be kept in step by hand; and the cascade that
+    read them.
+
+    And one thing became possible that was not: the IDE adds its own commands to
+    this list without the shell ever hearing about the IDE. That is the seam the
+    whitelist gate measures — `pcode` links the shell and not `ide.psc`."""
+    name: str
+    run: def(Shell)
+    when: (def(Shell) -> bool)?     # None = always available
 
 
-struct App:
+struct Shell:
     u: pui.Ui
     root: int          # the root panel (stacks the layout and the palette)
     tabbar: int
@@ -137,6 +152,12 @@ struct App:
     palsel: int
     paltop: int
     files: list<PalItem>
+    commands: list<Command>
+    # PAL_LIST / PAL_ASK: what was supplied, what is being asked, and who wants
+    # the answer. Three fields, and none of them knows what a build is.
+    pal_items: list<PalItem>
+    pal_prompt: str
+    pal_answer: (def(str))?
     find_re: bool      # regex search (the query starts with '/')
     running: bool
     dirty_ui: bool     # a frame needs presenting
@@ -144,51 +165,6 @@ struct App:
     want_open: str     # 114: a file the app wants and the driver has to READ
     want_reload: list<str>   # ... and the ones whose cached text is STALE
     want_msg: str      # a message for the status bar (a write failure)
-    # F6: the BUILD. The app does not build — it ASKS, the way it asks for a
-    # file to be read, and the driver serves it in the event loop. The reason is
-    # the same as 114's: the editor's logic is synchronous on purpose, and an
-    # `await` here would force every caller to wait.
-    #
-    # `want_build` is the target ("" = the graph's default), `want_run` says
-    # whether the program should run after building, and `build_msg` is what the
-    # status bar shows while that happens.
-    want_build: str
-    want_build_on: bool
-    want_run: bool
-    want_clean: bool
-    build_msg: str
-    build_busy: bool
-    build_stop: bool
-    # the targets this project builds, put here by the DRIVER from the graph:
-    # the editor does not know what a project builds, and should not know
-    build_targets: list<str>
-    build_total: int
-    build_done: int
-    build_error: str
-    # F6: where the build's first error points. The editor OPENS the file and
-    # puts the cursor there — which is what "clicking the error" does, without the click.
-    build_pos_file: str
-    build_pos_line: int
-    build_pos_col: int
-    # the program `Run` launched. Zero when there is none — and the number is
-    # the PID, because that is what `os.spawn` returns (see the `os.spawn` battery).
-    run_pid: int
-    want_stop_run: bool
-    # F6: the MANIFEST. The editor does not invent a form — it already is a text
-    # editor, and `pack.json` is text. What the palette adds is what is tedious
-    # to write by hand and easy to write wrong: the default target (which has to
-    # be a target THAT EXISTS, and the graph knows which ones do) and a
-    # dependency (which has to be resolved, checked and locked, and `pforge` is
-    # the one that knows how).
-    #
-    # Like everything else here, the app ASKS and the driver serves.
-    want_manifest_default: str      # "" = nothing to ask for
-    want_manifest_dep: str          # "name@version"
-    pal_text_for: int               # the command waiting for what gets typed
-    pal_prompt: str                 # ... and what is asked of whoever types
-    # when the target palette is for CHOOSING and not for building
-    pal_build_default: bool
-
     # ---- the driver, injected by `app.psc` ----
     read_file: (def(str) -> ReadOut)?
     write_file: (def(str, str) -> bool)?
@@ -451,7 +427,7 @@ struct App:
             self.u.set_text(self.palinput, ">")
         elif mode == PAL_GOTO:
             self.u.set_text(self.palinput, ":")
-        elif mode == PAL_BUILD:
+        elif mode == PAL_LIST:
             self.u.set_text(self.palinput, "!")
         self.palsel = 0
         self.paltop = 0
@@ -460,29 +436,30 @@ struct App:
         self.palette_filter()
         self.dirty_ui = True
 
-    def ask(self, prompt: str, for_cmd: int):
-        """Opens the palette ASKING, instead of offering.
+    def palette_ask(self, prompt: str, answer: def(str)):
+        """Opens the palette ASKING, instead of offering, and calls back with
+        what was typed.
 
         The editor has no dialog boxes, and that is not a gap: it has an input
         line that already serves to look for a file, a command and a line number
         — and asking is the fourth thing you do with it. A modal window with one
         field and two buttons would be a new mechanism for what already exists,
         and would force a decision about where it sits, how big it is and what
-        happens when the window shrinks."""
-        self.pal_prompt = prompt
-        self.pal_text_for = for_cmd
-        self.palette_open(PAL_TEXT)
+        happens when the window shrinks.
 
-    def text_accepted(self, for_cmd: int, txt: str):
-        """What was typed, handed to whoever asked."""
-        if for_cmd == 32:
-            if "@" not in txt:
-                self.build_msg = "a dependency is `name@version` — v1 has no resolver"
-                self.update_status()
-                return
-            self.want_manifest_dep = txt
-            self.build_msg = "a acrescentar " + txt + "..."
-            self.update_status()
+        The callback is what makes this usable by somebody the shell does not
+        know: the IDE asks for a dependency here without the shell learning what
+        a dependency is."""
+        self.pal_prompt = prompt
+        self.pal_answer = answer
+        self.palette_open(PAL_ASK)
+
+    def palette_choose(self, prompt: str, items: list<PalItem>, answer: def(str)):
+        """The same, over a list SOMEBODY ELSE supplied."""
+        self.pal_prompt = prompt
+        self.pal_items = items
+        self.pal_answer = answer
+        self.palette_open(PAL_LIST)
 
     def palette_close(self):
         self.u.set_visible(self.palette, False)
@@ -493,7 +470,7 @@ struct App:
 
     def palette_filter(self):
         q = self.u.text_of(self.palinput)
-        if self.palmode == PAL_TEXT:
+        if self.palmode == PAL_ASK:
             # asking: what gets typed is an ANSWER, and a `>` in the middle of
             # it is a character and not a mode
             self.palitems = []
@@ -510,9 +487,9 @@ struct App:
             self.palmode = PAL_GOTO
             q = q[1:len(q)]
         elif q.startswith("!"):
-            # F6: `!` picks a graph TARGET. The prefix is Sublime's idea —
+            # `!` picks from the SUPPLIED list. The prefix is Sublime's idea —
             # whoever knows the name types it, whoever does not sees the list.
-            self.palmode = PAL_BUILD
+            self.palmode = PAL_LIST
             q = q[1:len(q)]
         else:
             self.palmode = PAL_FILES
@@ -521,25 +498,29 @@ struct App:
         self.paltop = 0
         match self.palmode:
             case PAL_COMMANDS:
-                for entry in COMMANDS.split(";"):
-                    parts = entry.split("=")
-                    sc = fuzzy_score(parts[0], q)
+                # the TABLE is the list, and the payload is the NAME: no second
+                # place where a command's number and its label have to agree
+                for c in self.commands:
+                    w = c.when
+                    if w != None and not w(self):
+                        continue
+                    sc = fuzzy_score(c.name, q)
                     if sc >= 0:
-                        self.palitems.append(PalItem(parts[0], parts[1], sc))
+                        self.palitems.append(PalItem(c.name, c.name, sc))
             case PAL_GOTO:
                 self.palitems.append(PalItem("go to line " + (q if len(q) > 0 else "…"), q, 0))
-            case PAL_TEXT:
+            case PAL_ASK:
                 # there is no list: the item IS what is being typed. It exists
                 # so the palette can ASK, and not only offer.
                 rot = self.pal_prompt + ": " + (q if len(q) > 0 else "…")
                 self.palitems.append(PalItem(rot, q, 0))
-            case PAL_BUILD:
-                # the targets come from the GRAPH, which the driver put here:
-                # the editor does not know what this project builds, and should not
-                for t in self.build_targets:
-                    sc3 = fuzzy_score(t, q)
+            case PAL_LIST:
+                # the items were SUPPLIED. The editor does not know what they
+                # are — for the IDE they are graph targets, and it stays that way
+                for it3 in self.pal_items:
+                    sc3 = fuzzy_score(it3.label, q)
                     if sc3 >= 0:
-                        self.palitems.append(PalItem(t, t, sc3))
+                        self.palitems.append(PalItem(it3.label, it3.payload, sc3))
             case _:
                 for it in self.files:
                     sc2 = fuzzy_score(it.label, q)
@@ -569,26 +550,15 @@ struct App:
         self.palette_close()
         match mode:
             case PAL_COMMANDS:
-                self.run_command(int(payload))
-            case PAL_TEXT:
-                if len(payload) > 0:
-                    self.text_accepted(self.pal_text_for, payload)
-            case PAL_BUILD:
-                if self.pal_build_default:
-                    # choosing the project's DEFAULT target: what gets asked of
-                    # the driver is a write to the manifest, not a build
-                    self.pal_build_default = False
-                    self.want_manifest_default = payload
-                    self.build_msg = "writing the default target..."
-                    self.update_status()
-                elif self.build_busy:
-                    self.build_msg = "a build is already running"
-                else:
-                    self.want_build = payload
-                    self.want_build_on = True
-                    self.want_run = False
-                    self.build_msg = "building " + payload + "..."
-                self.update_status()
+                self.run_named(payload)
+            case PAL_ASK:
+                a = self.pal_answer
+                if len(payload) > 0 and a != None:
+                    a(payload)
+            case PAL_LIST:
+                a2 = self.pal_answer
+                if a2 != None:
+                    a2(payload)
             case PAL_GOTO:
                 cv = self.cur_cv()
                 if cv != None and len(payload) > 0:
@@ -635,170 +605,52 @@ struct App:
         self.update_status()
         self.dirty_ui = True
 
-    # ---------- the build error, as a position ----------
+    # ---------- commands ----------
 
-    def mark_error(self, text: str) -> bool:
-        """`file:line:column: error: message` — the format the compiler already
-        uses, and that `pforge` copied on purpose for its own errors.
+    def add_commands(self, cs: list<Command>):
+        """How the IDE extends the editor, and the only direction that exists:
+        `ide.psc` knows `shell.psc`, and `shell.psc` has never heard of it."""
+        for c in cs:
+            self.commands.append(c)
 
-        Keeping the POSITION instead of only the text is what separates a status
-        bar from an IDE: with it the editor opens the file and puts the cursor
-        there. A line that does not have this shape is ignored — a `cc`'s output
-        has plenty that is not a diagnostic."""
-        for line in text.split("\n"):
-            parts = line.split(":")
-            if len(parts) < 4:
+    def run_named(self, name: str) -> bool:
+        """Runs a command by NAME. False when there is none, or when its `when`
+        says it is not available right now."""
+        for c in self.commands:
+            if c.name != name:
                 continue
-            if not parts[1].isdigit() or not parts[2].isdigit():
-                continue
-            rest = ":".join(parts[3:len(parts)]).strip()
-            if not rest.startswith("error") and not rest.startswith("warning"):
-                continue
-            if not rest.startswith("error"):
-                continue           # the first ERROR, not the first warning
-            self.build_pos_file = parts[0].strip()
-            self.build_pos_line = int(parts[1])
-            self.build_pos_col = int(parts[2])
+            w = c.when
+            if w != None and not w(self):
+                return False
+            f = c.run
+            f(self)
+            self.dirty_ui = True
             return True
         return False
 
-    def goto_error(self) -> bool:
-        """Opens the first error's file and puts the cursor in it. Returns
-        whether there was anywhere to go."""
-        if len(self.build_pos_file) == 0:
-            return False
-        if not path.isfile(self.build_pos_file):
-            return False
-        self.open_file(self.build_pos_file)
-        cv = self.cur_cv()
-        if cv == None:
-            return False
-        cv.buf.move_to(self.build_pos_line - 1, self.build_pos_col - 1)
-        cv.scroll_to_caret()
-        # and the line stays MARKED in the gutter, so it can still be seen after
-        # cursor sair dali
-        cv.buf.clear_marks(core.MARK_ERROR)
-        cv.buf.toggle_mark(self.build_pos_line - 1, core.MARK_ERROR)
-        self.update_status()
-        return True
+    # ---------- what the editor's own commands do ----------
+    #
+    # Small methods rather than bodies inside the table: a lambda that is one
+    # call reads as the name of the thing, and the table stays a table.
 
-    # ---------- comandos ----------
-
-    def run_command(self, cmd: int):
+    def on_cv(self, f: def(cvm.CodeView)):
+        """Runs `f` on the current editing widget, when there is one."""
         cv = self.cur_cv()
-        now = self.now_ms
-        if cmd == 0:
-            self.save_cur()
-        elif cmd == 1:
-            for i in range(len(self.tabs)):
-                if not self.save_tab(i):
-                    self.want_msg = "could not save " + self.tabs[i].cv.path
-            self.u.queue_redraw(self.tabbar)
-        elif cmd == 2:
-            self.close_tab(self.cur)
-        elif cmd == 3:
-            self.reload_cur()
-        elif cmd == 4:
-            self.u.set_visible(self.tree_pane, not self.u.is_visible(self.tree_pane))
-        elif cmd == 5:
-            self.do_zoom(1)
-        elif cmd == 6:
-            self.do_zoom(-1)
-        elif cmd == 7:
-            self.do_zoom(0)
-        elif cmd == 10:
-            self.try_quit()
-        elif cmd == 24 or cmd == 26:
-            # F6: play. The app ASKS; whoever builds is the driver, in the same
-            # event loop — the engine is a library (`packages/pforge`) and not a
-            # process, so the graph is a `dict` and not a stream of text.
-            if self.build_busy:
-                self.build_msg = "a build is already running"
-            else:
-                self.want_build = ""
-                self.want_build_on = True
-                self.want_run = cmd == 26
-                self.build_msg = "building..."
-                # the previous error leaves the gutter: it belongs to a build
-                # that is no longer this one, and a stale mark is worse than none
-                for t in self.tabs:
-                    t.cv.buf.clear_marks(core.MARK_ERROR)
-            self.update_status()
-        elif cmd == 25:
-            self.pal_build_default = False
-            self.palette_open(PAL_BUILD)
-        elif cmd == 30:
-            # F6, the manifest "panel": OPEN the file. A text editor offering a
-            # form to edit text would be one more layer between the person and
-            # the file they are going to commit — and `pack.json` is small,
-            # declarative and made to be read.
-            self.open_file(path.join(self.root_dir, "pack.json"))
-        elif cmd == 31:
-            # what a form would do better than the text: guarantee the default
-            # target EXISTS. The list comes from the graph, the same as `!`'s.
-            if len(self.build_targets) == 0:
-                self.build_msg = "I do not know this project's targets (the graph has not arrived yet)"
-                self.update_status()
-            else:
-                self.pal_build_default = True
-                self.palette_open(PAL_BUILD)
-        elif cmd == 32:
-            # and the other one: a dependency is not a line you write, it is one
-            # you RESOLVE — `pforge` fetches, checks the hash, checks the signature
-            # and locks it. Here only the name is asked for.
-            self.ask("dependency (name@version)", 32)
-        elif cmd == 27:
-            self.want_clean = True
-            self.build_msg = "a limpar..."
-            self.update_status()
-        elif cmd == 29:
-            if not self.goto_error():
-                self.build_msg = "no build error to go to"
-                self.update_status()
-        elif cmd == 28:
-            # stopping is a REQUEST, not a killing: the executor finishes the
-            # edge that is running and does not start another. Killing a `cc`
-            # halfway leaves a truncated `.o`, which is exactly what the engine
-            # refuses afterwards.
-            #
-            # The PROGRAM, that one dies now: it is the user's and not the build's.
-            self.build_stop = True
-            self.want_stop_run = True
-            self.build_msg = "stopping after this edge..."
-            self.update_status()
-        elif cmd == 8:
-            self.find_open()
-        elif cmd == 9:
-            self.palette_open(PAL_GOTO)
-        elif cv != None:
-            if cmd == 11:
-                cv.toggle_fold_at_caret()
-            elif cmd == 12:
-                cv.fold_all()
-            elif cmd == 13:
-                cv.unfold_all()
-            elif cmd == 14:
-                cv.toggle_comment(now)
-            elif cmd == 15:
-                cv.move_lines(-1, now)
-            elif cmd == 16:
-                cv.move_lines(1, now)
-            elif cmd == 17:
-                cv.duplicate_lines(now)
-            elif cmd == 18:
-                cv.delete_lines(now)
-            elif cmd == 19:
-                cv.join_lines(now)
-            elif cmd == 20:
-                cv.toggle_bookmark()
-            elif cmd == 21:
-                cv.goto_mark(True)
-            elif cmd == 22:
-                cv.buf.clear_marks(core.MARK_BOOK)
-                self.u.queue_redraw(cv.id)
-            elif cmd == 23:
-                cv.toggle_minimap()
-        self.dirty_ui = True
+        if cv != None:
+            f(cv)
+
+    def save_all(self):
+        for i in range(len(self.tabs)):
+            if not self.save_tab(i):
+                self.want_msg = "could not save " + self.tabs[i].cv.path
+        self.u.queue_redraw(self.tabbar)
+
+    def clear_bookmarks(self, cv: cvm.CodeView):
+        cv.buf.clear_marks(core.MARK_BOOK)
+        self.u.queue_redraw(cv.id)
+
+    def toggle_tree(self):
+        self.u.set_visible(self.tree_pane, not self.u.is_visible(self.tree_pane))
 
     def request_reload(self, p: str):
         """Asks the driver to read `p` FROM DISK again.
@@ -915,7 +767,7 @@ struct App:
         now = self.now_ms
         k = ev.key
         if k == ord("s"):
-            self.run_command(1 if shift else 0)
+            self.run_named("Save All" if shift else "Save")
         elif k == ord("p"):
             self.palette_open(PAL_FILES)
         elif k == ord("g"):
@@ -927,13 +779,13 @@ struct App:
         elif k == ord("q"):
             self.try_quit()
         elif k == ord("b"):
-            self.run_command(4)
+            self.toggle_tree()
         elif k == ord("="):
-            self.run_command(5)
+            self.do_zoom(1)
         elif k == ord("-"):
-            self.run_command(6)
+            self.do_zoom(-1)
         elif k == ord("0"):
-            self.run_command(7)
+            self.do_zoom(0)
         elif k == pui.K_TAB:
             if len(self.tabs) > 0:
                 self.select_tab((self.cur + (len(self.tabs) - 1 if shift else 1)) % len(self.tabs))
@@ -1200,72 +1052,117 @@ def tab_close_x(u: pui.Ui, x: int, w: int) -> int:
     return x + w - u.cell_w * 2
 
 
-def new_app(u: pui.Ui, root_dir: str) -> App:
-    app = App(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-              [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [],
+def new_shell(u: pui.Ui, root_dir: str) -> Shell:
+    sh = Shell(u, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+              [], -1, -1, False, [], 0, root_dir, PAL_FILES, [], 0, 0, [], [],
+              [], "", None,
               False, True, True, 0, "", [], "",
-              "", False, False, False, "", False, False, [], 0, 0, "", "", 0, 0, 0, False,
-              "", "", 0, "", False,
               None, None, None, None, None, None, None, None, None)
 
-    app.root = u.panel(-1)
-    col = u.box(app.root, True)
-    app.split = u.split(col, False)
-    u.set_expand(app.split, True, True)
+    sh.root = u.panel(-1)
+    col = u.box(sh.root, True)
+    sh.split = u.split(col, False)
+    u.set_expand(sh.split, True, True)
     # the tree's PANEL is a box with a background: [ FOLDERS | rows ]. The
     # header is a real label, so it is the layout (and not a hand-written offset)
     # that decides where the rows begin.
-    app.tree_pane = u.box(app.split, True)
-    u.set_bg(app.tree_pane, u.theme.panel)
-    head = u.label(app.tree_pane, "FOLDERS")
+    sh.tree_pane = u.box(sh.split, True)
+    u.set_bg(sh.tree_pane, u.theme.panel)
+    head = u.label(sh.tree_pane, "FOLDERS")
     u.set_pad(head, 6)
     u.set_min(head, 0, u.cell_h + 8)
-    app.tree = u.custom(app.tree_pane, None)
-    u.set_expand(app.tree, True, True)
-    app.editors = u.box(app.split, True)
-    u.set_expand(app.editors, True, True)
-    u.split_set(app.split, 220)
-    app.tabbar = u.custom(app.editors, None)
-    app.cvhost = u.box(app.editors, True)
-    u.set_expand(app.cvhost, True, True)
+    sh.tree = u.custom(sh.tree_pane, None)
+    u.set_expand(sh.tree, True, True)
+    sh.editors = u.box(sh.split, True)
+    u.set_expand(sh.editors, True, True)
+    u.split_set(sh.split, 220)
+    sh.tabbar = u.custom(sh.editors, None)
+    sh.cvhost = u.box(sh.editors, True)
+    u.set_expand(sh.cvhost, True, True)
 
-    app.findbar = u.box(app.editors, False)
-    u.label(app.findbar, "find:")
-    app.findinput = u.line_input(app.findbar)
-    u.set_expand(app.findinput, True, False)
-    u.on_changed(app.findinput, lambda wid, arg: app.find_changed())
-    u.on_submit(app.findinput, lambda wid, arg: app.find_step(True))
-    u.on_cancel(app.findinput, lambda wid, arg: app.find_close())
-    u.set_visible(app.findbar, False)
+    sh.findbar = u.box(sh.editors, False)
+    u.label(sh.findbar, "find:")
+    sh.findinput = u.line_input(sh.findbar)
+    u.set_expand(sh.findinput, True, False)
+    u.on_changed(sh.findinput, lambda wid, arg: sh.find_changed())
+    u.on_submit(sh.findinput, lambda wid, arg: sh.find_step(True))
+    u.on_cancel(sh.findinput, lambda wid, arg: sh.find_close())
+    u.set_visible(sh.findbar, False)
 
-    app.status = u.label(col, "")
-    u.set_pad(app.status, 6)
+    sh.status = u.label(col, "")
+    u.set_pad(sh.status, 6)
 
     # the palette: the ROOT's last child, so it draws on top and wins the hit-test
-    app.palette = u.custom(app.root, None)
-    app.palinput = u.line_input(app.palette)
-    u.on_changed(app.palinput, lambda wid, arg: app.palette_filter())
-    u.on_submit(app.palinput, lambda wid, arg: app.palette_accept())
-    u.on_cancel(app.palinput, lambda wid, arg: app.palette_close())
-    u.set_visible(app.palette, False)
+    sh.palette = u.custom(sh.root, None)
+    sh.palinput = u.line_input(sh.palette)
+    u.on_changed(sh.palinput, lambda wid, arg: sh.palette_filter())
+    u.on_submit(sh.palinput, lambda wid, arg: sh.palette_accept())
+    u.on_cancel(sh.palinput, lambda wid, arg: sh.palette_close())
+    u.set_visible(sh.palette, False)
 
     # ---- the tab bar ----
-    u.set_custom(app.tabbar,
+    u.set_custom(sh.tabbar,
                  lambda u2, id: pui.Size(0, u2.cell_h + 8),
-                 lambda u2, id: app.tabbar_build(id),
-                 lambda u2, id, ev: app.tabbar_input(id, ev),
+                 lambda u2, id: sh.tabbar_build(id),
+                 lambda u2, id, ev: sh.tabbar_input(id, ev),
                  None)
     # ---- the tree ----
-    u.set_custom(app.tree,
+    u.set_custom(sh.tree,
                  lambda u2, id: pui.Size(u2.cell_w * TREE_MIN_CP, u2.cell_h),
-                 lambda u2, id: app.tree_build(id),
-                 lambda u2, id, ev: app.tree_input(id, ev),
+                 lambda u2, id: sh.tree_build(id),
+                 lambda u2, id, ev: sh.tree_input(id, ev),
                  None)
     # ---- the palette ----
-    u.set_custom(app.palette,
+    u.set_custom(sh.palette,
                  lambda u2, id: pui.Size(0, 0),
-                 lambda u2, id: app.pal_build(id),
-                 lambda u2, id, ev: app.pal_input(id, ev),
-                 lambda u2, id, r: app.pal_layout(id, r))
-    app.tree_scan()
-    return app
+                 lambda u2, id: sh.pal_build(id),
+                 lambda u2, id, ev: sh.pal_input(id, ev),
+                 lambda u2, id, r: sh.pal_layout(id, r))
+    sh.add_commands(editor_commands())
+    sh.tree_scan()
+    return sh
+
+
+def has_cv(s: Shell) -> bool:
+    """The guard for everything that works on a buffer. It used to be an
+    `elif cv != None:` wrapped around half of a `switch`; here it is a field of
+    each command, and the palette can grey out what is unavailable."""
+    return s.cur_cv() != None
+
+
+def editor_commands() -> list<Command>:
+    """The twenty-five the EDITOR has.
+
+    Everything here works on a buffer, a tab or the tree. Nothing here knows what
+    a build, a target or a package is — that is `ide.psc`, and it adds its own to
+    this list at startup."""
+    return [
+        Command("Save",             lambda s: s.save_cur(), None),
+        Command("Save All",         lambda s: s.save_all(), None),
+        Command("Close Tab",        lambda s: s.close_tab(s.cur), None),
+        Command("Reload File",      lambda s: s.reload_cur(), None),
+        Command("Toggle File Tree", lambda s: s.toggle_tree(), None),
+        Command("Zoom In",          lambda s: s.do_zoom(1), None),
+        Command("Zoom Out",         lambda s: s.do_zoom(-1), None),
+        Command("Zoom Reset",       lambda s: s.do_zoom(0), None),
+        Command("Find",             lambda s: s.find_open(), None),
+        Command("Go To Line",       lambda s: s.palette_open(PAL_GOTO), None),
+        Command("Quit",             lambda s: s.try_quit(), None),
+        # `Fold` and `Unfold` are the same toggle under two names: whoever wants
+        # to unfold looks for "unfold", and a palette that only knew "fold"
+        # would answer nothing
+        Command("Fold",             lambda s: s.on_cv(lambda c: c.toggle_fold_at_caret()), has_cv),
+        Command("Unfold",           lambda s: s.on_cv(lambda c: c.toggle_fold_at_caret()), has_cv),
+        Command("Fold All",         lambda s: s.on_cv(lambda c: c.fold_all()), has_cv),
+        Command("Unfold All",       lambda s: s.on_cv(lambda c: c.unfold_all()), has_cv),
+        Command("Toggle Comment",   lambda s: s.on_cv(lambda c: c.toggle_comment(s.now_ms)), has_cv),
+        Command("Move Line Up",     lambda s: s.on_cv(lambda c: c.move_lines(-1, s.now_ms)), has_cv),
+        Command("Move Line Down",   lambda s: s.on_cv(lambda c: c.move_lines(1, s.now_ms)), has_cv),
+        Command("Duplicate Line",   lambda s: s.on_cv(lambda c: c.duplicate_lines(s.now_ms)), has_cv),
+        Command("Delete Line",      lambda s: s.on_cv(lambda c: c.delete_lines(s.now_ms)), has_cv),
+        Command("Join Lines",       lambda s: s.on_cv(lambda c: c.join_lines(s.now_ms)), has_cv),
+        Command("Toggle Bookmark",  lambda s: s.on_cv(lambda c: c.toggle_bookmark()), has_cv),
+        Command("Next Bookmark",    lambda s: s.on_cv(lambda c: c.goto_mark(True)), has_cv),
+        Command("Clear Bookmarks",  lambda s: s.on_cv(lambda c: s.clear_bookmarks(c)), has_cv),
+        Command("Toggle Minimap",   lambda s: s.on_cv(lambda c: c.toggle_minimap()), has_cv),
+    ]

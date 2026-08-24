@@ -15,7 +15,7 @@ caret at 2
 manifest cmd Manifest: Set Default Target...
 choosing the default target True 2
 asked for the default target build/bin/pforge and did not build False
-asking dependency (name@version) 32
+asking dependency (name@version) True
 typed >nothing
 refused without a version a dependency is `name@version` — v1 has no resolver
 asked for the dependency tar@0.1.0

@@ -138,7 +138,7 @@ def pstudio_p() -> list<str>:
     """What the import CLOSURE does not reach.
 
     Since 1.5(d) the compiler pulls in the P module of any `import "x.ph"` in the
-    closure, and not only of the top file: `lib_hl.psc` imports `"hl.ph"`, and
+    closure, and not only of the top file: `highlight.psc` imports `"hl.ph"`, and
     `hl.c` — and the `lexer.c` it uses — come along on their own. The list, which
     had nineteen entries copied from the `Makefile`, is down to two.
 
@@ -150,12 +150,17 @@ def pstudio_p() -> list<str>:
     return ["selfhost/util.p", "selfhost/utf8.p"]
 
 
-async def pstudio(c: T.Ctx) -> str:
-    """Returns the binary's path, or "" if the machine has no SDL2 — and not
-    having it is not an error: it is a machine without what the editor needs, and
-    the rest of the build has nothing to do with that."""
+async def editors(c: T.Ctx) -> list<str>:
+    """The two binaries, or an empty list if the machine has no SDL2 — and not
+    having it is not an error: it is a machine without what an editor needs, and
+    the rest of the build has nothing to do with that.
+
+    TWO of them, from the same layers: `pcode` is the editor and `pstudio` is the
+    editor plus the IDE. That they share everything below the entry point is not
+    a claim in a document — `tests/decouple.sh` asks the compiler which files each
+    one reads and fails if the answer changes."""
     if not await T.has_pkg("sdl2"):
-        return ""
+        return []
     cf = await T.pkg_config(c, "sdl2", "--cflags")
     lb = await T.pkg_config(c, "sdl2", "--libs")
     # the compiler needs to PREPROCESS the SDL header in order to ingest
@@ -166,9 +171,13 @@ async def pstudio(c: T.Ctx) -> str:
     cpp = "cc"
     for x in cf:
         cpp += " " + x
-    return await T.psc_program_with(c, "pstudio/app.psc", path.join(BUILD, "bin/pstudio"),
-                                    path.join(BUILD, "obj"), pstudio_p(),
-                                    ["--cpp", cpp], cf, lb)
+    out: list<str> = []
+    for name in ["pcode", "pstudio"]:
+        out.append(await T.psc_program_with(c, "pstudio/" + name + ".psc",
+                                            path.join(BUILD, "bin/" + name),
+                                            path.join(BUILD, "obj"), pstudio_p(),
+                                            ["--cpp", cpp], cf, lb))
+    return out
 
 
 # ---------- the pscript suite ----------
@@ -350,7 +359,7 @@ async def verification(c: T.Ctx, plangc: str, floor_prog: str, suite: str, spkg:
     # and 7 of `verify-all`, which are already edges of this graph
     everything.append(fixpoint)
     if len(editor) > 0:
-        everything.append(editor)
+        everything.append(editor)      # the fixed point and the IDE close `verify`
     return T.phony(c, VERIFY, everything, "verify: " + str(len(everything)) + " parts")
 
 
@@ -629,7 +638,8 @@ async def assemble(query: str) -> G.Graph:
     # in two places — double work for nothing.
     cps = T.derive(c, path.join(BUILD, "psc"), PLANGC_S2)
     bins = await all_pscript(cps)
-    editor = await pstudio(cps)
+    eds = await editors(cps)
+    editor = eds[1] if len(eds) > 1 else ""      # the IDE: what `--build`/`--run` measure
     suite = await pscript_suite(cps, bins["verdict"])
     spkg = await packages_suite(cps, bins["verdict"])
     sdoc = await doctest_suite(cps, bins["verdict"])
@@ -640,6 +650,6 @@ async def assemble(query: str) -> G.Graph:
     # <stamp>`), not the default — building is not testing.
     g.default_targets.append(stamp)
     g.default_targets.append(bins["pforge"])
-    if len(editor) > 0:
-        g.default_targets.append(editor)
+    for e in eds:
+        g.default_targets.append(e)
     return g

@@ -1,0 +1,10 @@
+tabs 1
+lines 4
+typed Xline one
+undone line one
+palette 2 Fold All
+folded 4
+no build command 0
+commands 25
+drawn yes
+selftest ok

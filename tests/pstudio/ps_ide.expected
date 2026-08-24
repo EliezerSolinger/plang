@@ -1,0 +1,19 @@
+editor commands=25
+with the IDE=34
+build offered=True first=Build
+asked=True target=[] run=False
+run asked=True and runs=True
+busy=[a build is already running] asked=False
+targets offered=1 top=build/bin/pcode
+target asked=[build/bin/pcode]
+positioned=True 2:5
+went=True
+caret=2:5 mark=4
+noise ignored=True
+asking=[dependency (name@version)]
+refused=[a dependency is `name@version` — v1 has no resolver] dep=[]
+accepted dep=[tar@0.1.0]
+default=[build/bin/pforge] and did not build=True
+stop=True kill=True
+clean=True msg=[cleaning...]
+ide-ok

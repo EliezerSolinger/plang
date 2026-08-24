@@ -434,12 +434,12 @@ suite_pstudio() {
     # o `pui_test` saiu daqui: o toolkit virou o pacote `packages/pui`, e o teste
     # dele viaja COM o pacote (`packages/pui/test/`). Quem o roda é a suíte de
     # pacotes do `pforge` — um pacote publicado carrega a prova de que funciona.
-    for psprog in core_test:ps_core.expected:"the ported buffer" codeview_test:ps_codeview.expected:"the ported editing widget" app_test:ps_app.expected:"the whole ported editor" perf_test:ps_perf.expected:"the ceilings on a big file"; do
+    for psprog in core_test:ps_core.expected:"the ported buffer" codeview_test:ps_codeview.expected:"the ported editing widget" shell_test:ps_shell.expected:"the editor (what pcode is)" ide_test:ps_ide.expected:"the IDE, with a driver of make-believe" perf_test:ps_perf.expected:"the ceilings on a big file"; do
         pname=${psprog%%:*}; prest=${psprog#*:}; pexp=${prest%%:*}; pwhat=${prest#*:}
         ok=1
         [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$C" pstudio/$pname.psc 2>>"$errc" || ok=0; }
         local extraobj=""
-        case $pname in codeview_test|app_test|perf_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
+        case $pname in codeview_test|shell_test|ide_test|perf_test) extraobj="$HLC"; [ -z "$HLC" ] && ok=0 ;; esac
         # the perf gate is built the way the editor SHIPS. Measuring speed on an
         # unoptimised build measures the wrong binary: the compiler's lexer alone
         # is 15ms over 11 000 lines at -O0 and 9ms at -O2, and the editor is -O2.
@@ -474,18 +474,27 @@ suite_pstudio() {
             [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" $d.p 2>>"$err2" || ok=0; }
         done
         [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pscript/runtime/psrt.ph 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pstudio/app.psc 2>>"$err2" || ok=0; }
-        [ $ok = 1 ] && { $CC $CSTD $PSDEFS -w -o "$P/pstudio_ps"               "$P/pstudio/app.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/shim.c" "$P/pstudio/hl.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/selfhost/lexer.c" "$P/selfhost/util.c" "$P/selfhost/utf8.c"               $sdlflags -lm -pthread 2>>"$err2" || ok=0; }
+        # BOTH binaries, from the same layers: `pcode` is the editor and
+        # `pstudio` is the editor plus the IDE. Building the two here is half the
+        # proof of the split — the other half is `tests/decouple.sh`, which asks
+        # the compiler which files each one reads.
         printf 'line one\nline two\nline three\n' > "$P/sample.txt"
-        if [ $ok = 1 ] && ( cd "$P" && timeout 30 ./pstudio_ps --selftest sample.txt >out 2>&1 ) &&
-           diff -q "$P/out" tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then
-            pass=$((pass+1))
-        else
-            echo "  FAIL pstudio-ps (the pscript port)"
-            [ -s "$err2" ] && sed 's/^/       /' "$err2" | head -3
-            [ -f "$P/out" ] && diff "$P/out" tests/pstudio/ps_selftest.expected | head -4 | sed 's/^/       /'
-            fail=$((fail+1))
-        fi
+        for bin in pcode pstudio; do
+            local bok=$ok
+            [ $bok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$P" pstudio/$bin.psc 2>>"$err2" || bok=0; }
+            [ $bok = 1 ] && { $CC $CSTD $PSDEFS -w -o "$P/run_$bin"               "$P/pstudio/$bin.c" "$P/pscript/runtime/psrt_mem.c" "$P/pscript/runtime/psrt_val.c" "$P/pscript/runtime/psrt_rt.c" "$P/pscript/runtime/psrt_std.c" "$P/pscript/runtime/psrt_os.c" "$P/pscript/runtime/psrt_top.c" "$P/pstudio/shim.c" "$P/pstudio/hl.c"               "$P/pstudio/pgfx.c" "$P/pstudio/pgfx_raster.c" "$P/pstudio/font_atlas.c" "$P/selfhost/lexer.c" "$P/selfhost/util.c" "$P/selfhost/utf8.c"               $sdlflags -lm -pthread 2>>"$err2" || bok=0; }
+            local exp=tests/pstudio/ps_selftest.expected
+            [ "$bin" = pcode ] && exp=tests/pstudio/pcode_selftest.expected
+            if [ $bok = 1 ] && ( cd "$P" && timeout 30 ./run_$bin --selftest sample.txt >out.$bin 2>&1 ) &&
+               diff -q "$P/out.$bin" "$exp" >/dev/null 2>&1; then
+                pass=$((pass+1))
+            else
+                echo "  FAIL $bin (the binary's own self-test)"
+                [ -s "$err2" ] && sed 's/^/       /' "$err2" | head -3
+                [ -f "$P/out.$bin" ] && diff "$P/out.$bin" "$exp" | head -4 | sed 's/^/       /'
+                fail=$((fail+1))
+            fi
+        done
     fi
     unset SDL_VIDEODRIVER
     echo "   pstudio: $pass ok, $fail failed"

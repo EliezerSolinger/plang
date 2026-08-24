@@ -1,5 +1,8 @@
-"""THE WHOLE EDITOR in pscript, with no keyboard and no screen (the twin of
+"""THE EDITOR in pscript, with no keyboard and no screen (the twin of
 `tests/pstudio/app_flow.p`, retired along with the editor in P).
+
+After the cut it is `pcode`'s test: nothing here builds, tests or fetches a
+package — it never did, which is what made the seam visible in the first place.
 
 It builds a small project on disk — with `os`/`path`, 111's system layer — opens
 files, types, uses the palette, the search, the tabs, the tree, folding,
@@ -76,22 +79,22 @@ async def build_project():
 await build_project()
 
 u = pui.new_ui(8, 17)
-app = appm.new_app(u, D)
+sh = appm.new_shell(u, D)
 # the "driver": here it is synchronous and fake, which is exactly the point of
-# it being injected (in the real editor it is `app.psc` that fills this in)
+# it being injected (in the real editor it is `sh.psc` that fills this in)
 saved: dict<str, str> = {}
 clip = ""
 title = ""
 cellw = 8
 cellh = 17
-app.read_file = lambda p: read_now(p)
-app.write_file = lambda p, t: write_now(p, t)
-app.mtime_of = lambda p: path.getmtime(p) if path.exists(p) else 0
-app.clip_get = lambda: clip
-app.clip_set = lambda s: set_clip(s)
-app.confirm_close = lambda name: 1        # discard, without asking
-app.confirm_reload = lambda name: True
-app.set_title = lambda t: set_title(t)
+sh.read_file = lambda p: read_now(p)
+sh.write_file = lambda p, t: write_now(p, t)
+sh.mtime_of = lambda p: path.getmtime(p) if path.exists(p) else 0
+sh.clip_get = lambda: clip
+sh.clip_set = lambda s: set_clip(s)
+sh.confirm_close = lambda name: 1        # discard, without asking
+sh.confirm_reload = lambda name: True
+sh.set_title = lambda t: set_title(t)
 
 
 def set_title(t: str):
@@ -101,7 +104,7 @@ def set_title(t: str):
 
 # the zoom "driver" in the test: a fake grid, but the effect is the real one —
 # the cell changes and the toolkit redoes the whole layout
-def fake_zoom(a: appm.App, step: int):
+def fake_zoom(a: appm.Shell, step: int):
     global cellw
     global cellh
     if step == 0:
@@ -150,18 +153,18 @@ saved[D + "/empty.p"] = ""
 unreadable[D + "/photo.png"] = "these bytes are not valid UTF-8"
 
 u.layout(1100, 720)
-print("tree=" + str(len(app.entries)) + " indexed_files=" + str(len(app.files)))
+print("tree=" + str(len(sh.entries)) + " indexed_files=" + str(len(sh.files)))
 
-app.open_file(D + "/hello.p")
-print("tabs=" + str(len(app.tabs)) + " cur=" + str(app.cur) + " title=" + app.tabs[0].title)
-cv = app.tabs[0].cv
+sh.open_file(D + "/hello.p")
+print("tabs=" + str(len(sh.tabs)) + " cur=" + str(sh.cur) + " title=" + sh.tabs[0].title)
+cv = sh.tabs[0].cv
 print("lines=" + str(cv.buf.nlines()) + " hl=" + ("1" if cv.hl.enabled else "0") +
       " gutter=" + str(cv.gutter_w()))
 
 # type at the end of line 2
 cv.buf.move_to(1, cv.buf.line_cp(1))
 u.focus_set(cv.id)
-app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("0"), 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("0"), 0, 0, 0, 0, 0))
 print("typed=[" + cv.buf.line_text(1) + "] dirty=" + ("1" if cv.buf.dirty else "0"))
 cv.buf.undo_step()
 print("undo=[" + cv.buf.line_text(1) + "]")
@@ -173,79 +176,79 @@ cv.buf.add_caret(2, 0)
 print("carets=" + str(cv.buf.ncarets()))
 
 # the file palette
-app.palette_open(appm.PAL_FILES)
-u.set_text(app.palinput, "notes")
-app.palette_filter()
-print("palette=" + ("1" if u.is_visible(app.palette) else "0") +
-      " top=" + (app.palitems[0].label if len(app.palitems) > 0 else "<empty>"))
-app.palette_accept()
-print("tabs=" + str(len(app.tabs)) + " cur=" + app.tabs[app.cur].title +
-      " hl_txt=" + ("1" if app.tabs[app.cur].cv.hl.enabled else "0"))
+sh.palette_open(appm.PAL_FILES)
+u.set_text(sh.palinput, "notes")
+sh.palette_filter()
+print("palette=" + ("1" if u.is_visible(sh.palette) else "0") +
+      " top=" + (sh.palitems[0].label if len(sh.palitems) > 0 else "<empty>"))
+sh.palette_accept()
+print("tabs=" + str(len(sh.tabs)) + " cur=" + sh.tabs[sh.cur].title +
+      " hl_txt=" + ("1" if sh.tabs[sh.cur].cv.hl.enabled else "0"))
 
 # the command palette
-app.palette_open(appm.PAL_COMMANDS)
-u.set_text(app.palinput, ">zoom in")
-app.palette_filter()
-print("cmds=" + str(len(app.palitems)) + " top=" + app.palitems[0].label)
-app.palette_close()
+sh.palette_open(appm.PAL_COMMANDS)
+u.set_text(sh.palinput, ">zoom in")
+sh.palette_filter()
+print("cmds=" + str(len(sh.palitems)) + " top=" + sh.palitems[0].label)
+sh.palette_close()
 
 # go to line
-app.select_tab(0)
-app.palette_open(appm.PAL_GOTO)
-u.set_text(app.palinput, ":3")
-app.palette_filter()
-app.palette_accept()
+sh.select_tab(0)
+sh.palette_open(appm.PAL_GOTO)
+u.set_text(sh.palinput, ":3")
+sh.palette_filter()
+sh.palette_accept()
 print("goto=" + str(cv.buf.caret(0).line + 1))
 
 # the search
-app.find_open()
-u.set_text(app.findinput, "42")
-app.find_changed()
+sh.find_open()
+u.set_text(sh.findinput, "42")
+sh.find_changed()
 print("find1=" + str(cv.buf.caret(0).line) + ":" + str(cv.buf.caret(0).col))
-u.set_text(app.findinput, "return")
-app.find_changed()
+u.set_text(sh.findinput, "return")
+sh.find_changed()
 print("find2=" + str(cv.buf.caret(0).line) + ":" + str(cv.buf.caret(0).col))
-app.find_close()
+sh.find_close()
 
 # click a tab
-tb = u.rect_of(app.tabbar)
+tb = u.rect_of(sh.tabbar)
 u.input_event(pui.Event(pui.EV_MOUSE_DOWN, 0, 0, 0, tb.x + 4, tb.y + 4, 1, 1, 0))
 u.input_event(pui.Event(pui.EV_MOUSE_UP, 0, 0, 0, tb.x + 4, tb.y + 4, 1, 1, 0))
-print("clicked_tab=" + str(app.cur))
+print("clicked_tab=" + str(sh.cur))
 
 # the tree: expand the directory
-for i in range(len(app.entries)):
-    if app.entries[i].is_dir:
-        app.tree_toggle(i)
+for i in range(len(sh.entries)):
+    if sh.entries[i].is_dir:
+        sh.tree_toggle(i)
         break
-print("tree_expanded=" + str(len(app.entries)))
+print("tree_expanded=" + str(len(sh.entries)))
 
 # folding, bookmark and commenting, through the commands
-app.select_tab(0)
-cv = app.tabs[0].cv
+sh.select_tab(0)
+cv = sh.tabs[0].cv
 cv.buf.move_to(0, 0)
 print("can_fold0=" + ("1" if cv.buf.can_fold(0) else "0"))
-app.run_command(11)
+sh.run_named("Fold")
 print("fold: folded0=" + ("1" if cv.buf.is_folded(0) else "0") +
       " visible=" + str(cv.buf.visible_count()))
-app.run_command(11)
+sh.run_named("Fold")
 print("unfold: folded0=" + ("1" if cv.buf.is_folded(0) else "0") +
       " visible=" + str(cv.buf.visible_count()))
 cv.buf.move_to(1, 0)
-app.run_command(20)
+sh.run_named("Toggle Bookmark")
 print("bookmark: mark=" + str(cv.buf.mark_of(1)))
-app.run_command(14)
+sh.run_named("Toggle Comment")
 print("comment: 1=[" + cv.buf.line_text(1) + "]")
-app.run_command(14)
+sh.run_named("Toggle Comment")
 print("uncomment: 1=[" + cv.buf.line_text(1) + "]")
-app.run_command(17)
+sh.run_named("Duplicate Line")
 print("dup: lines=" + str(cv.buf.nlines()))
 
 # auto pairs
 cv.buf.move_to(1, cv.buf.line_cp(1))
-app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("("), 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("("), 0, 0, 0, 0, 0))
 print("pair: 1=[" + cv.buf.line_text(1) + "] col=" + str(cv.buf.caret(0).col))
-app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord(")"), 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_TEXT, 0, 0, ord(")"), 0, 0, 0, 0, 0))
 print("skip: 1=[" + cv.buf.line_text(1) + "] col=" + str(cv.buf.caret(0).col))
 
 # the completion popup
@@ -258,17 +261,17 @@ cv.complete_close()
 
 # the clipboard, through the shortcut (ctrl+c and ctrl+v)
 cv.buf.select_range(core.Span(2, 0, 2, cv.buf.line_cp(2)))
-app.feed(pui.Event(pui.EV_KEY, ord("c"), 2, 0, 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_KEY, ord("c"), 2, 0, 0, 0, 0, 0, 0))
 print("clip=[" + clip + "]")
 
 # ---- 115: what the editor's test in P measured and this one did not yet ----
 
 # the zoom: the font cell changes, and the whole layout is redone
 cell = 0
-app.zoom_step = lambda step: fake_zoom(app, step)
-app.run_command(5)                 # Zoom In
+sh.zoom_step = lambda step: fake_zoom(sh, step)
+sh.run_named("Zoom In")
 print("zoom: cell=" + str(u.cell_h))
-app.run_command(7)                 # Zoom Reset
+sh.run_named("Zoom Reset")
 print("zoom reset: cell=" + str(u.cell_h))
 
 # the click on the GUTTER, by pixel: the mark one sets and clears the breakpoint
@@ -287,41 +290,41 @@ print("gutter fold: folded0=" + ("1" if cv.buf.is_folded(0) else "0") +
 
 # 115: an EDIT inside the collapsed block releases it — the missing invariant
 cv.buf.move_to(0, cv.buf.line_cp(0))
-app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord(" "), 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_TEXT, 0, 0, ord(" "), 0, 0, 0, 0, 0))
 print("edit unfolds: folded0=" + ("1" if cv.buf.is_folded(0) else "0") +
       " hidden1=" + ("1" if cv.buf.is_hidden(1) else "0"))
 
 # move a line, and the pair's backspace
 cv.buf.move_to(2, 0)
 before_line = cv.buf.line_text(2)
-app.run_command(15)                # Move Line Up
+sh.run_named("Move Line Up")
 print("moved: caret=" + str(cv.buf.caret(0).line) + " same=" + ("1" if cv.buf.line_text(1) == before_line else "0"))
 cv.buf.move_to(1, cv.buf.line_cp(1))
-app.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("("), 0, 0, 0, 0, 0))
-app.feed(pui.Event(pui.EV_KEY, pui.K_BACKSPACE, 0, 0, 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_TEXT, 0, 0, ord("("), 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_KEY, pui.K_BACKSPACE, 0, 0, 0, 0, 0, 0, 0))
 print("pair_bs: 1=[" + cv.buf.line_text(1) + "]")
 
 # accept a candidate from the popup
 cv.buf.move_to(0, 7)
 cv.complete_open()
 if cv.cmp_open:
-    cv.complete_accept(app.now_ms)
+    cv.complete_accept(sh.now_ms)
 print("accepted: 0=[" + cv.buf.line_text(0) + "] open=" + ("1" if cv.cmp_open else "0"))
 
 # F2: sets the bookmark (ctrl+F2), walks between bookmarks (F2)
 cv.buf.move_to(2, 0)
-app.feed(pui.Event(pui.EV_KEY, appm.K_F2, 2, 0, 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_KEY, appm.K_F2, 2, 0, 0, 0, 0, 0, 0))
 print("f2 mark: " + str(cv.buf.mark_of(2)))
 cv.buf.move_to(0, 0)
-app.feed(pui.Event(pui.EV_KEY, appm.K_F2, 0, 0, 0, 0, 0, 0, 0))
+sh.feed(pui.Event(pui.EV_KEY, appm.K_F2, 0, 0, 0, 0, 0, 0, 0))
 print("f2 goto: caret=" + str(cv.buf.caret(0).line))
 
 # the window title follows the tab
 print("title=[" + title + "]")
 
 # the status bar
-app.update_status()
-print("status=[" + u.text_of(app.status) + "]")
+sh.update_status()
+print("status=[" + u.text_of(sh.status) + "]")
 
 # ONE FRAME: the whole retained drawing, with a painter that counts
 p = pui.Painter(count_rect, count_frame, nothing4, nothing0, count_glyph)
@@ -329,32 +332,32 @@ u.draw(p, 1100, 720)
 print("draw: rects=" + str(rects) + " glyphs=" + str(glyphs))
 
 # F0: the empty file opens (one line), and the unreadable one does not open at all
-app.open_file(D + "/empty.p")
-ntabs = len(app.tabs)
-print("empty opens=" + ("1" if app.tabs[ntabs - 1].cv.path == D + "/empty.p" else "0") +
-      " lines=" + str(app.tabs[ntabs - 1].cv.buf.nlines()))
-app.open_file(D + "/photo.png")
-print("unreadable stays out=" + ("1" if len(app.tabs) == ntabs else "0") +
-      " said=[" + app.want_msg + "]")
-app.want_msg = ""
-app.close_tab(ntabs - 1)
-app.select_tab(0)          # back to hello.p, which is what the save below checks
+sh.open_file(D + "/empty.p")
+ntabs = len(sh.tabs)
+print("empty opens=" + ("1" if sh.tabs[ntabs - 1].cv.path == D + "/empty.p" else "0") +
+      " lines=" + str(sh.tabs[ntabs - 1].cv.buf.nlines()))
+sh.open_file(D + "/photo.png")
+print("unreadable stays out=" + ("1" if len(sh.tabs) == ntabs else "0") +
+      " said=[" + sh.want_msg + "]")
+sh.want_msg = ""
+sh.close_tab(ntabs - 1)
+sh.select_tab(0)          # back to hello.p, which is what the save below checks
 
 # F0: a reload does NOT read the cache. The fake driver's table is the "disk":
 # change it, ask, and the buffer has to follow. Reading the cache made both
 # "Reload File" and the external-change reload hand back the OLD text.
 saved[D + "/hello.p"] = "def main() -> i32:\n    return 7\n"
-app.reload_cur()
-print("reload asked=" + str(len(app.want_reload)) + " for=" +
-      (path.basename(app.want_reload[0]) if len(app.want_reload) > 0 else "-"))
-app.reload_now(D + "/hello.p", saved[D + "/hello.p"])
-print("reloaded=[" + app.tabs[0].cv.buf.line_text(1) + "]")
+sh.reload_cur()
+print("reload asked=" + str(len(sh.want_reload)) + " for=" +
+      (path.basename(sh.want_reload[0]) if len(sh.want_reload) > 0 else "-"))
+sh.reload_now(D + "/hello.p", saved[D + "/hello.p"])
+print("reloaded=[" + sh.tabs[0].cv.buf.line_text(1) + "]")
 
 # save and close
-app.save_cur()
+sh.save_cur()
 print("saved=" + ("1" if len(saved[D + "/hello.p"]) > 0 else "0") +
       " dirty=" + ("1" if cv.buf.dirty else "0"))
-while len(app.tabs) > 0:
-    app.close_tab(0)
-print("tabs=" + str(len(app.tabs)))
-print("app-ok")
+while len(sh.tabs) > 0:
+    sh.close_tab(0)
+print("tabs=" + str(len(sh.tabs)))
+print("pcode-ok")

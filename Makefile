@@ -5,7 +5,7 @@
 # compilador a partir do C comitado, constrói o `pforge` com ele, e daí em diante
 # quem manda é o grafo.
 #
-#   make            # tudo: a escada com ponto fixo, o editor e o pforge (~70 s)
+#   make            # tudo: a escada com ponto fixo, os dois editores e o pforge
 #   make test       # a suíte, caso a caso, como grafo
 #   make verify     # a verificação inteira (5m48 do zero, 8 s sem mudança)
 #   make check      # compila e roda um hello-world
@@ -94,10 +94,19 @@ check: build
 selfhost: $(PFORGE)
 	./$(PFORGE) build build/stamp/compilador -j $(J) --query $(SEED)
 
-pstudio pstudio-ps: $(PFORGE)
+# OS DOIS EDITORES, do mesmo código: `pcode` é o editor e `pstudio` é o editor
+# mais a IDE. Que partilhem tudo abaixo do ponto de entrada não é uma afirmação
+# num documento — `tests/decouple.sh` pergunta ao compilador que arquivos cada um
+# lê e falha se a resposta mudar.
+pstudio: $(PFORGE)
 	@pkg-config --exists sdl2 || { echo "pstudio: falta libsdl2-dev"; exit 1; }
 	./$(PFORGE) build build/bin/pstudio -j $(J) --query $(SEED)
 	@echo "pstudio pronto: ./build/bin/pstudio [pasta|arquivos]"
+
+pcode: $(PFORGE)
+	@pkg-config --exists sdl2 || { echo "pcode: falta libsdl2-dev"; exit 1; }
+	./$(PFORGE) build build/bin/pcode -j $(J) --query $(SEED)
+	@echo "pcode pronto: ./build/bin/pcode [pasta|arquivos]"
 
 # ---------------------------------------------------------------------------
 # As leituras do corpus que o grafo ainda não expressa por dentro (o back end
@@ -126,4 +135,4 @@ clean-all:
 	rm -rf build tests/out out plangc plangc2 .hello .hello.p .hello.c
 
 .PHONY: seed pforge build test verify ninja explain doc check selfhost \
-        pstudio pstudio-ps test-qbe test-c89 clean clean-all
+        pstudio pcode test-qbe test-c89 clean clean-all

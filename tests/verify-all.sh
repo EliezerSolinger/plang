@@ -191,6 +191,16 @@ else
     bad "o run do pforge divergiu (veja $V/runpforge.log)"
 fi
 
+# A PROVA DO CORTE: o `pcode` e o `pstudio` são dois programas, e a diferença é
+# uma lista de arquivos que o compilador responde (`--deps`). Sem este portão, a
+# separação vira uma afirmação num documento — e em três meses alguém acrescenta
+# um `import` por uma boa razão e ninguém nota.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/decouple.sh >$V/decouple.log 2>&1; then
+    ok "decouple $(grep -oE '[0-9]+ ok' $V/decouple.log | tail -1) $(grep -oE '\(pcode [0-9]+ files, pstudio [0-9]+\)' $V/decouple.log)"
+else
+    bad "o corte entre pcode e pstudio deixou de valer (veja $V/decouple.log)"
+fi
+
 # o MOTOR do pforge, mecanismo por mecanismo (F2B), mais as consultas da CLI
 # sobre o grafo deste repositório. Ele estava escrito e não estava ligado a
 # portão nenhum — 89 conferências que ninguém corria, e uma delas já tinha
@@ -247,22 +257,28 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
        pstudio/pgfx.p pstudio/pgfx_raster.p pstudio/font_atlas.p \
        pstudio/shim.p pstudio/hl.p selfhost/lexer.p selfhost/utf8.p selfhost/util.p \
        $RT_ARGS >$V/pstudio.log 2>&1 &&
-     $V/plangc_s2 --pkg-path packages --out-dir $V/pst pstudio/app.psc >>$V/pstudio.log 2>&1 &&
-     $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -o $V/pstudio_bin \
-       $V/pst/pstudio/app.c $V/pst/pscript/runtime/psrt_*.c \
-       $V/pst/pstudio/shim.c $V/pst/pstudio/hl.c \
-       $V/pst/pstudio/pgfx.c $V/pst/pstudio/pgfx_raster.c $V/pst/pstudio/font_atlas.c \
-       $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
-       $nosimd $(pkg-config --cflags --libs sdl2) -lm -pthread >>$V/pstudio.log 2>&1; then
-    # o mesmo arquivo de amostra que a suite usa: o auto-teste conta linhas e
-    # dobras, e o .expected e um so para os dois harnesses
+     true; then
+    # OS DOIS: o `pcode` (o editor) e o `pstudio` (o editor mais a IDE), das
+    # mesmas camadas. Construir ambos aqui é metade da prova do corte; a outra
+    # metade é o portao `decouple`, que pergunta ao compilador o que cada um lê.
     printf 'line one\nline two\nline three\n' > $V/pst/sample.txt
-    if ( cd $V/pst && SDL_VIDEODRIVER=dummy timeout 30 ../pstudio_bin --selftest sample.txt >saida 2>&1 ) &&
-       diff -q $V/pst/saida tests/pstudio/ps_selftest.expected >/dev/null 2>&1; then
-      ok "editor compila, linka e passa o auto-teste"
-    else
-      bad "o auto-teste do editor falhou (veja $V/pst/saida)"
-    fi
+    for b in pcode pstudio; do
+      exp=tests/pstudio/ps_selftest.expected
+      [ "$b" = pcode ] && exp=tests/pstudio/pcode_selftest.expected
+      if $V/plangc_s2 --pkg-path packages --out-dir $V/pst pstudio/$b.psc >>$V/pstudio.log 2>&1 &&
+         $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -o $V/bin_$b \
+           $V/pst/pstudio/$b.c $V/pst/pscript/runtime/psrt_*.c \
+           $V/pst/pstudio/shim.c $V/pst/pstudio/hl.c \
+           $V/pst/pstudio/pgfx.c $V/pst/pstudio/pgfx_raster.c $V/pst/pstudio/font_atlas.c \
+           $V/pst/selfhost/lexer.c $V/pst/selfhost/utf8.c $V/pst/selfhost/util.c \
+           $nosimd $(pkg-config --cflags --libs sdl2) -lm -pthread >>$V/pstudio.log 2>&1 &&
+         ( cd $V/pst && SDL_VIDEODRIVER=dummy timeout 30 ../bin_$b --selftest sample.txt >saida.$b 2>&1 ) &&
+         diff -q $V/pst/saida.$b "$exp" >/dev/null 2>&1; then
+        ok "$b compila, linka e passa o auto-teste"
+      else
+        bad "o auto-teste do $b falhou (veja $V/pstudio.log e $V/pst/saida.$b)"
+      fi
+    done
   else
     bad "pstudio nao compilou (veja $V/pstudio.log)"
   fi

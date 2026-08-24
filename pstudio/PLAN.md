@@ -274,9 +274,25 @@ A mensagem de falha diz **qual arquivo entrou e não estava na lista**. Corre no
 um driver de mentira: pede build, o falso motor responde, o painel mostra, o erro
 navega. Cada binário mantém o seu `--selftest` com SDL dummy.
 
-**Fica de pé:** `build/bin/pcode` e `build/bin/pstudio`, os dois no `make`. O
-`pcode` é um editor completo e é o que se usa todos os dias; o `pstudio` faz o que
-faz hoje.
+**FEITA.** `build/bin/pcode` (964 KB) e `build/bin/pstudio` (1185 KB), os dois no
+`make`. O portão diz **26 arquivos contra 31**, e o auto-teste do `pcode` imprime
+`commands 25` contra os 34 do `pstudio` — a mesma prova, por dentro do binário.
+
+Três coisas que o corte obrigou e que não estavam previstas:
+
+* **`PAL_BUILD` e `PAL_TEXT` eram modos da paleta que só a IDE usava** — "um
+  alvo do grafo" e "o nome de uma dependência" dentro de um widget que não tem
+  nada que ver com isso. Viraram `PAL_LIST` e `PAL_ASK`: quem abre fornece a
+  lista (ou nenhuma) e uma função para a resposta. Três campos genéricos no
+  lugar de cinco específicos.
+* **Um módulo pscript não pode ter estado** (um módulo importado é um conjunto
+  de definições, não um programa). O `cache`, a fila de escritas e o contador de
+  socorros do driver viraram um `struct Driver` — o que é a pressão certa: eram
+  três globais que ninguém via.
+* **Não há tipo para uma função `async`**, então o driver não pode receber "o que
+  mais servir" como callback — e importar a IDE para a chamar é exactamente o
+  que o portão proíbe. O laço virou um PASSO, e cada `main` escreve as três
+  linhas à volta. A do meio é a única diferença entre os dois binários.
 
 ---
 

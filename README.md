@@ -249,7 +249,7 @@ run in the suite, in all three modes.
 Decisions are in [pscript/DESIGN.md](pscript/DESIGN.md), what exists in
 [FEATURES.md](pscript/FEATURES.md), what is next in [PLAN.md](pscript/PLAN.md).
 
-## Plang Studio — the trial by fire
+## pcode and pstudio — the trial by fire
 
 A GUI code editor: tabs, a file tree, a fuzzy command palette (ctrl+p),
 multi-caret editing (ctrl+d), coalesced undo, incremental search (ctrl+f, POSIX
@@ -257,10 +257,25 @@ regex with a `/` prefix), folding, a minimap, and syntax highlighting that reuse
 **the compiler's own lexer**. The UI toolkit and the software rasterizer are ours
 too — no widget library involved.
 
+There are **two programs from the same layers**: `pcode` is the editor, and
+`pstudio` is the editor plus the IDE — the build, the run and the manifest, with
+the engine imported as a library rather than called as a process.
+
 ```sh
-make pstudio
-./build/bin/pstudio .          # open the tree in the current directory
+make pcode                     # the editor
+make pstudio                   # ... and the IDE
+./build/bin/pcode .            # open the tree in the current directory
 ```
+
+The second one exists twice over: it is the tool, and it is the **proof**. That
+the two share every layer below the entry point is not a claim in a document —
+`tests/decouple.sh` asks the compiler (`plangc --deps`) which files each binary
+reads and fails if the answer changes. Today it is **26 against 31**, and
+`pcode --selftest` prints `commands 25` where `pstudio` has 34.
+
+The list is a WHITELIST and not a blacklist, which is the only kind that does not
+age: a blacklist names what may not come in, and a module invented next month
+under another name walks straight past it.
 
 **It is written in pscript, and the split was decided by the boundary rule rather
 than by taste.** Only a pointer-free signature crosses, so the two places that

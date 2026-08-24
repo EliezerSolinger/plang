@@ -1,15 +1,26 @@
-# pstudio em pscript — O editor
+# pcode e pstudio — o editor, e a IDE
 
-Este diretório **é** o Plang Studio. A lógica inteira é pscript; em P ficou o
-driver — a mão que toca o SDL2 e a que chama o lexer do compilador. O editor em
-P que existiu antes foi aposentado na bateria 116, depois de a paridade ter sido
-medida método por método (115).
+Este diretório tem **dois programas das mesmas camadas**: o `pcode` é o editor, e
+o `pstudio` é o editor mais a IDE (build, run, manifesto, e os painéis). A lógica
+inteira é pscript; em P ficou o driver — a mão que toca o SDL2 e a que chama o
+lexer do compilador. O editor em P que existiu antes foi aposentado na bateria
+116, depois de a paridade ter sido medida método por método (115).
 
 ```sh
-make pstudio                 # -> build/bin/pstudio
-./build/bin/pstudio .        # a árvore no diretório atual
-./build/bin/pstudio a.p b.p  # arquivos em abas
+make pcode                   # -> build/bin/pcode     (o editor)
+make pstudio                 # -> build/bin/pstudio   (a IDE)
+./build/bin/pcode .          # a árvore no diretório atual
+./build/bin/pcode a.p b.p    # arquivos em abas
 ```
+
+**O `pcode` é também a PROVA.** Que os dois partilhem tudo abaixo do ponto de
+entrada não é uma afirmação num documento: `tests/decouple.sh` pergunta ao
+compilador (`plangc --deps`) que arquivos cada um lê, e falha se a resposta
+mudar. Hoje são **26 contra 31**, e o auto-teste do `pcode` imprime
+`commands 25` onde o do `pstudio` tem 34.
+
+A lista é BRANCA e não negra: uma lista negra nomeia o que não pode entrar, e um
+módulo inventado no mês que vem com outro nome passa por ela.
 
 ## A divisão, e por que ela existe
 
@@ -25,9 +36,17 @@ no pscript — e não deve: é exatamente o tipo de código para o qual o P exis
 | `highlight.psc` | pscript | o realce: spans por linha, e o comentário |
 | `complete.psc` | pscript | o índice de completamento |
 | `codeview.psc` | pscript | o widget de edição: sarjetas, barras, minimapa, popup |
-| `shell.psc` | pscript | abas, árvore, paleta, busca, atalhos |
-| `app.psc` | pscript | o driver: janela, eventos, quadro, linha de comando |
-| `core_test.psc`, `codeview_test.psc`, `app_test.psc`, `perf_test.psc` | pscript | os testes headless (rodam na suíte) |
+| `shell.psc` | pscript | abas, árvore, paleta, busca, atalhos — e a TABELA de comandos |
+| `ide.psc` | pscript | build, run, manifesto: os 21 campos e os 9 comandos que só a IDE tem |
+| `driver.psc` | pscript | janela, eventos, quadro, cache de arquivos, linha de comando |
+| `pcode.psc` / `pstudio.psc` | pscript | os dois `main`, e a única coisa que os dois não partilham |
+| `core_test.psc`, `codeview_test.psc`, `shell_test.psc`, `ide_test.psc`, `perf_test.psc` | pscript | os testes headless (rodam na suíte) |
+
+A dependência anda num sentido só: **o `ide.psc` conhece o `shell.psc`, e o
+`shell.psc` nunca ouviu falar do `ide.psc`.** A IDE COMPÕE a casca (tem uma) e
+acrescenta os seus comandos a uma tabela. A alternativa — um campo `ide` opcional
+dentro do `Shell` — seria muito menos trabalho e não provaria nada, porque o
+módulo continuaria a ser LINKADO para o tipo existir.
 
 O toolkit **não está aqui**: virou o pacote `packages/pui`, com o seu próprio
 teste, porque é reutilizável e não é específico deste programa.
