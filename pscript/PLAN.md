@@ -2131,3 +2131,152 @@ Python:
 
 E uma que fica registrada e não implementada: **um builtin como VALOR de função**
 (`sorted(xs, key=len)`) não existe; escreve-se `key=lambda w: len(w)`.
+
+---
+
+# O NIO, à nossa maneira — o plano (baterias 135-140, 2026-08-24)
+
+As decisões estão em `pscript/DESIGN.md`, baterias 135-140. **Só o utilizador
+decide**; o que está lá está fechado e não se repropõe.
+
+Sete fases. A **N** vem primeiro e não é sobre bytes — é a renomeação dos tipos,
+feita antes para que nada novo nasça com o nome errado.
+
+---
+
+## FN — a regra dos nomes (139)
+
+`list`→`List`, `dict`→`Dict`, `set`→`Set`, `socket`→`Socket`, `buffer`→`Buffer`.
+Ficam minúsculos os VALORES: `int`, `float`, `bool`, `str`, `bytes` e os
+numéricos com tamanho.
+
+~1 150 sítios. É código e não prosa, portanto `sed` sobre os `.psc` e sobre as
+mensagens do compilador; **à mão** os `.md`, que é a lição que a tradução para
+inglês custou dois erros a aprender.
+
+Ordem dentro da fase: primeiro o compilador aceita os dois nomes (o velho com um
+aviso), depois a árvore migra, depois o velho sai. Sem isso, o commit do meio não
+compila.
+
+**Fica de pé:** a linguagem com uma regra em vez de um hábito, e o `verify` verde.
+
+---
+
+## F0 — `bytes`, `Buffer`, e as fatias (135.1, 135.3, 135.5, 136)
+
+O tipo `bytes`: imutável, coletado, fatiável sem copiar, e apoiado num bloco que
+não se move. O `Buffer` que já existe ganha fatias mutáveis com dono
+(`PsBufView.owner` já está lá, documentado exactamente para isto).
+
+E o coletor ganha **finalizadores**, que é a maquinaria nova desta fase e a
+condição para que um `bytes` não precise de ser fechado.
+
+`len`, indexar, iterar, comparar e `str()` passam a valer nos dois.
+
+**Fica de pé:** `b = bytes_of("olá"); h = b[0:2]` sem uma cópia, e o `gc-stress`
+com um caso que abre e larga dez mil blocos.
+
+---
+
+## F1 — a I/O passa a falar bytes (135.2, 135.4)
+
+`c.read_into(buf, off, n)`, `c.write_from(buf, off, n)`, e `readv`/`writev` para
+quem tem várias fatias. `f.read_all()` e `R.fetch()` devolvem `bytes`.
+`b.freeze()` entrega o bloco com zero cópia e invalida o buffer (18.2).
+
+**O `c.read(n)` deixa de existir.** A travessia é pacote a pacote, cada um com o
+seu commit e o `verify` verde, e os publicados sobem de versão — que o `0.x` da
+F10 do pstudio destrancou:
+
+| | quem migra |
+|---|---|
+| F1a | `tar` (16 sítios) |
+| F1b | `sha2`, `ed25519` |
+| F1c | `http`, `url` |
+| F1d | `repo`, `pforge`, `pstudio`, e os testes de conformidade |
+
+**Fica de pé:** um proxy que move um megabyte deixa de o copiar quatro vezes.
+
+---
+
+## F2 — o `Mapping` (137)
+
+`os.mmap(path, mode)` devolve um `Mapping`: fecha com `with`, fatia-se em `bytes`
+sem copiar, e tem as opções que o sistema dá — `advise`, `sync`, `lock`,
+`populate`.
+
+E o **guarda do SIGBUS**, que é a parte delicada: entrar no `with` grava um ponto
+de retorno e a **profundidade da pilha-sombra**; o manipulador confirma que o
+endereço é de um mapa nosso, desenrola até àquela profundidade e levanta — e
+re-levanta o sinal se não for, para que um defeito a sério continue a matar.
+
+Primeiro consumidor real: o `pforge` a hashear um tarball sem o trazer para a
+memória.
+
+**Fica de pé:** `with os.mmap(tar, "r") as m: sha256(m[:])`, e um teste que
+**trunca o ficheiro debaixo do mapa** e exige a excepção em vez do cadáver.
+
+---
+
+## F3 — o `Mapping` em P, e a ponte (138)
+
+`declare Mapping` / `implement Mapping`: o compilador materializa a struct onde
+for pedido, com o mecanismo dos genéricos e não com um header que possa derivar.
+O guarda não atravessa — em P vale a regra do C, e isso fica escrito.
+
+A ponte é o `CBytes` que já existe: um `Mapping` e um `Buffer` atravessam para P
+**sem cópia e sem fixação**, porque nenhum dos dois se move.
+
+**Fica de pé:** uma função em P a ler um tarball mapeado pelo pscript, e o mesmo
+`mmap` a servir os dois lados.
+
+---
+
+## F4 — o ficheiro que o `java.nio.file` tem e nós não (140)
+
+`os.pread`/`os.pwrite` (posicional, sem `seek` — é o que torna o acesso
+concorrente a partir de workers seguro), `os.stat` de uma vez em vez de seis
+chamadas, e `os.listdir` a PERCORRER em vez de devolver a lista toda.
+
+**Fica de pé:** um `pforge` que anda numa árvore grande sem construir a lista
+inteira primeiro.
+
+---
+
+## F5 — `os.watch` (140)
+
+Uma tarefa aguárdavel, como um socket: o descritor do inotify/kqueue entra no
+mesmo `poll` do escalonador. Sem thread e sem sondagem.
+
+Dois consumidores no dia seguinte: o `check_external` do editor deixa de sondar,
+e o `pforge dev` — que o plano do PTY usou como justificação e que não existe —
+passa a ser possível.
+
+**Fica de pé:** o editor sabe que um ficheiro mudou sem perguntar.
+
+---
+
+## F6 — o descodificador incremental (140)
+
+O que o `CharsetDecoder` do NIO é: alimentar bytes e receber o texto que já dá
+para dizer, guardando o que ficou a meio de um codepoint.
+
+Foi a peça que faltou de verdade: o widget de terminal da F8 do pstudio teve de
+escrever a máquina de estados de UTF-8 à mão porque `str(b)` descodifica tudo e
+levanta.
+
+**Fica de pé:** o terminal deixa de ter o seu próprio descodificador, e o teste
+dele que parte um codepoint em dois pedaços passa a medir o do runtime.
+
+---
+
+## O que NÃO está no plano
+
+| não entra | porquê |
+|---|---|
+| o `Selector` | o escalonador já é isso, e melhor |
+| `position`/`limit`/`flip` | o erro que o próprio Java foi corrigir |
+| `mmap` de escrita | uma segunda história de durabilidade, e nada precisa dela ainda |
+| `FileLock` | não há dois processos a disputar um ficheiro neste ecossistema |
+| `sendfile` | vem de graça depois do `Mapping` + `writev` |
+| UDP, sockets Unix | são sockets, não são NIO; fase própria quando alguém os pedir |

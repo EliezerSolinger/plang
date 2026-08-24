@@ -5758,3 +5758,239 @@ Portões: `tests/pscript/run/os_run.psc` (o comportamento inteiro, incluindo oit
 processos em paralelo com limite), três recusas em `tests/pscript/bad/os_run_*`,
 e `tests/oracle/py/proc.psc` — o mesmo programa contra o `subprocess` do
 python3, porque nenhuma dessas promessas é conferível por leitura.
+
+---
+
+## BATERIAS 135-140 — o NIO, à nossa maneira (2026-08-24)
+
+> *"sabe o que eu estava pensando que falta no nosso runtime.. um equivalente ao
+> JAVA NIO (o pacote completo), mas de uma forma que faça sentido para o nosso
+> modelo de paralelismo e nativo com P/C, shared etc"*
+
+### O diagnóstico: o NIO são três pacotes colados
+
+E nós temos o melhor deles, temos meio-construído o segundo, e não temos o
+terceiro.
+
+**1. O `Selector` — não se copia, e copiá-lo era andar para trás.** É a manchete
+do NIO e existe porque as threads do Java eram caras e a I/O era bloqueante: o
+programador monta o laço de multiplexação à mão. Aqui o escalonador já é isso
+desde a 74.1 — epoll/kqueue/poll, tarefas estacionadas, `await c.read(n)` — e
+ninguém escreve um laço de selecção. **Nada do `Selector` entra.**
+
+**2. O `buffer` já É um ByteBuffer directo — só que nenhuma chamada de I/O fala
+com ele.** O `buffer(n)` da 52.3 é malloc'd, **nunca se move**, é partilhado
+entre workers, transfere-se com zero cópia (18.2) e já tem vistas tipadas. Em
+Java chama-se *direct ByteBuffer*, e é a resposta que um coletor **copiador**
+obriga: um ponteiro para o monte não sobrevive a uma coleta, portanto os bytes
+que uma chamada de sistema vê têm de estar fora dele.
+
+O problema é o caminho que a I/O faz hoje:
+
+```
+recv → malloc(w->buf) → memcpy → list<u8> coletada → fatiar → mais cópias
+```
+
+Um proxy que mova um megabyte copia-o quatro vezes.
+
+**3. O `java.nio.file` falta inteiro.** Não há `mmap`, `pread`/`pwrite`,
+`readv`/`writev`, `sendfile` nem vigilância de ficheiros, e `listdir` devolve a
+lista toda em vez de a percorrer. E falta a descodificação **incremental** de
+UTF-8: o widget de terminal da F8 do pstudio teve de escrever à mão a máquina de
+estados de bytes porque `str(b)` descodifica tudo de uma vez e levanta. O
+`CharsetDecoder` é exactamente essa peça.
+
+### As decisões
+
+**135.1 — Fatias explícitas, sem cursor.** `b[off:off+n]` é uma VISTA sobre os
+mesmos bytes, sem copiar. Nenhum estado escondido dentro do buffer. O
+`position`/`limit`/`flip` do `ByteBuffer` é o erro clássico do Java — o próprio
+Java desistiu dele no `MemorySegment` da FFM API — e é a origem de metade dos
+defeitos de quem usa NIO.
+
+**135.2 — O buffer SUBSTITUI o `list<u8>` na I/O.** O `c.read(n)` deixa de
+existir. Uma só maneira de fazer I/O, e a rápida por omissão. Medido antes de
+decidir: **14 ficheiros, 66 sítios**, dos quais os pesados são o `tar` (16) e o
+`repo` (15).
+
+**135.3 — Dois tipos, e a linha entre eles é visível na grafia.**
+
+| | é | vive | fatia-se em |
+|---|---|---|---|
+| `bytes` | um VALOR imutável e coletado | fora do monte, num bloco que não se move | `bytes` (só de leitura) |
+| `Buffer` | uma COISA mutável e partilhada | malloc'd, fecha-se | vistas mutáveis |
+
+Uma leitura que PRODUZ bytes (`f.read_all()`, `R.fetch()`, um membro de um tar)
+devolve `bytes`: não se fecha, não se gere, atravessa para P sem cópia. Uma
+leitura para dentro de memória que já tens escreve num `Buffer`.
+
+**135.4 — `b.freeze()` passa de um ao outro com zero cópia**, e invalida o buffer
+— a mesma regra do `transfer` da 18.2, e o mesmo erro que ela previne: dois donos
+a escrever o mesmo bloco vira um erro em vez de uma corrida. `bytes(b)` copia,
+para quem quer ficar com os dois.
+
+**135.5 — Todas as operações valem nos dois.** `len`, indexar, iterar, comparar,
+`str()` para descodificar. O código que migra muda a ASSINATURA e mais nada.
+
+**136 — O coletor ganha FINALIZADORES.** É maquinaria nova e é a única maneira
+honesta de ter um `bytes` que ninguém fecha: uma lista de objetos com um gancho
+de libertação, e quem não for reencaminhado numa coleta é libertado. Serve para
+isto, para o `mmap` e para tudo o que venha a segurar um recurso do sistema.
+
+### 137 — o mapa de disco
+
+> *"não temos um tipo idiomático que mapeia do disco? como outras linguagens
+> resolve isso?"*
+
+| | o que devolve | quem desmapeia |
+|---|---|---|
+| **Java** | `MappedByteBuffer`, tipo próprio | **só o GC** — não há `close`. É o bug mais votado da história do JDK (JDK-4724038); o `MemorySegment`/`Arena` do JDK 14+ nasceu para o corrigir |
+| **Rust** (`memmap2`) | `Mmap`, que faz `Deref` para `&[u8]` | `Drop`, determinístico. Criar é `unsafe`, de propósito |
+| **Go**, **Zig** | um `[]byte` | à mão |
+| **Python** | `mmap.mmap`, sequência e ficheiro ao mesmo tempo | `with` |
+| **.NET** | `MemoryMappedViewAccessor` | `IDisposable` |
+
+Dois campos — "é só uma sequência" e "é um tipo próprio" — mas **a divisão que
+interessa não é essa**: é quem desmapeia. E aí só há um veredicto: o modelo do
+Java, libertar só na coleta, é o que toda a gente considera um erro. A razão é
+que **um mapa não é pressão de memória que o coletor consiga ver**: um programa
+que mapeia mil ficheiros tem mil mapas e um monte minúsculo, e o coletor não tem
+motivo nenhum para correr.
+
+**137.1 — `os.mmap` devolve um `Mapping`: um tipo próprio, fechável, que se fatia
+em `bytes` sem copiar.**
+
+> *"o map do sistema operacional te dá recursos e opções certo? o tipo também
+> poderia?"* — e é isso que justifica o tipo próprio. Nada disto cabe num
+> `bytes`: `madvise(SEQUENTIAL/RANDOM/WILLNEED)`, `msync`, `mlock`,
+> `MAP_POPULATE`, `PROT_*`, `MAP_SHARED/PRIVATE`.
+
+O nome foi decidido por eliminação: `Map` colide com a estrutura de dados
+(*"tem que ter um nome do tipo que não indique que é uma estrutura de dados
+Map"*), `MappedMemory` foi proposto e ficou como `Mapping` — que a **regra dos
+nomes da 139** depois confirmou em maiúscula, por ser uma coisa e não um valor.
+
+O finalizador da 136 fica como REDE, não como plano: o `with` é que fecha.
+
+```python
+with os.mmap(tar, "r") as m:
+    m.advise(os.SEQUENTIAL)
+    sha = sha256(m[:])          # bytes, zero cópia
+# munmap AQUI
+```
+
+**137.2 — O SIGBUS é apanhado, e o guarda é o `with`.** Se outro processo truncar
+o ficheiro, tocar na página que desapareceu mata o processo — é por isso que o
+Rust marca a criação como `unsafe`. Apanhá-lo é o que a JVM, o V8 e o Postgres
+fazem, e tem uma condição que muda o desenho: **um `siglongjmp` a partir do meio
+de código gerado deixa a pilha-sombra do coletor a meio**. O `try` do pscript é
+de bandeira, sem `goto`, exactamente porque o P proíbe saltar por cima de um
+`defer`.
+
+Então entrar no `with` grava um ponto de retorno **e a profundidade da
+pilha-sombra**. O manipulador confirma que o endereço caiu num mapa NOSSO,
+desenrola até àquela profundidade e levanta; se não caiu, re-levanta o sinal,
+para que um defeito a sério continue a matar. É o modelo do `PG_TRY` do Postgres.
+
+### 138 — o P também mapeia, e as duas já estavam casadas
+
+> *"o P também poderia ter um mapa de memória, que funcione lá, e não sei como
+> casaria com o mapa do PScript"*
+
+Em P um mapa **não precisa de tipo novo nenhum**: é um ponteiro e um tamanho, com
+`defer` a libertar — o que o `PgFb.init`/`deinit` já faz.
+
+E a ponte já estava desenhada: o **`CBytes` (84.1)** é *"um struct de exactamente
+um ponteiro e um tamanho"*. O que torna um `Mapping` o **melhor** valor possível
+para atravessar essa fronteira é a propriedade que ele já tem por construção:
+está fora do monte e nunca se move. Um `list<u8>` coletado, para ir para P, ou
+copia ou precisa de ser fixado; um `Mapping` não precisa de nada.
+
+```python
+with os.mmap(tar, "r") as m:
+    n = tar_count(m[:])        # uma função em P: `in b: CBytes`
+```
+
+**138.1 — O `Mapping` materializa-se em P com `declare`/`implement`**, e não por
+injecção automática:
+
+> *"no P o compilador pode inlinar structs, mas o usuário deve fazer
+> explicitamente, com a keyword inline assim igual com o genérico. ou poderia ser
+> o declare também declarar Mapping"*
+
+O mecanismo já existe e a segunda forma ganhou por isso: `declare StrMap<i64>` já
+quer dizer "materializa este tipo nesta unidade". `declare Mapping` lê-se igual,
+não precisa de palavra nova, e o `implement` continua a ser o sítio único onde o
+corpo sai. O ganho não é evitar um `import` — é que a **disposição da struct passa
+a ser garantida idêntica dos dois lados por construção**, em vez de por um header
+que pode derivar.
+
+**138.2 — O guarda do SIGBUS NÃO atravessa para P, de propósito.** A segurança
+vive na linguagem gerida; a primitiva vive na não-gerida. Um mapa aberto pelo P
+não está no registo do runtime, portanto o manipulador vê um endereço que não é
+dele e re-levanta: o processo morre, como morreria com qualquer biblioteca em C.
+
+### 139 — a regra dos nomes dos tipos
+
+> *"o certo acho q todos os tipos deveriam ser maiúsculos né"* / *"exceto os
+> primitivos"*
+
+A convenção estava dividida sem regra: `str`, `list`, `socket`, `buffer`
+minúsculos; `Task<T>`, `Worker<T>`, `Error` maiúsculos. A regra que a arruma:
+
+> **minúsculo = um VALOR. maiúsculo = uma COISA com identidade e tempo de vida.**
+
+| minúsculo | maiúsculo |
+|---|---|
+| `int` `float` `bool` `str` `bytes` `u8` `i32` `f64` `usize`… | `List<T>` `Dict<K,V>` `Set<T>` |
+| | `Socket` `Buffer` `File` `Mapping` `Watcher` |
+| | `Task<T>` `Worker<T>` `Error` `Timer` |
+
+E repara no que ela faz de graça: separa o `bytes` (imutável, coletado, um valor)
+do `Buffer` (mutável, partilhado, fecha-se) — a distinção da 135.3 passa a estar
+na própria grafia.
+
+**Medido: ~1 150 sítios** (`list<` 893, `dict<` 213, `set<` 46, `socket`/`buffer`
+14). É mecânico e é código, não prosa, portanto um `sed` é legítimo — a regra de
+reescrever à mão é para os `.md`. **Vai numa FASE própria e ANTES do NIO**, para
+que o diálogo de cada commit seja sobre uma coisa de cada vez, e para que o
+`Mapping` não nasça ao lado de um `list<u8>`.
+
+### 140 — o resto do pacote
+
+**`os.watch` é uma tarefa aguárdavel**, como um socket: `w = os.watch(dir)` e
+`ev = await w.next()`. O descritor do inotify/kqueue entra no mesmo `poll` do
+escalonador — sem thread, sem sondagem, e igual a tudo o resto que espera.
+
+**Tudo cresce dentro do `os`/`net`/`Buffer` que já existem** — `os.mmap`,
+`os.watch`, `c.read_into`, `b.freeze()`. Sem módulo novo para aprender, e cada
+nome fica ao lado do irmão: é a regra que o `os.spawn_pty` já seguiu na F8.
+
+### O que fica de fora, e porquê
+
+| não entra | porquê |
+|---|---|
+| o `Selector` | o escalonador já é isso, e melhor: ninguém escreve o laço |
+| `position`/`limit`/`flip` | o erro que o próprio Java foi corrigir |
+| `mmap` de escrita (`MAP_SHARED`) | é uma segunda história de durabilidade para contar ("quando é que chega ao disco?"), e nada aqui precisa dela ainda |
+| `FileLock` | v2. Não há dois processos a disputar o mesmo ficheiro neste ecossistema |
+| `sendfile`/`transferTo` | v2. Vem de graça depois do `Mapping` + `writev` |
+
+### Riscos, ditos antes de doerem
+
+1. **Os finalizadores são maquinaria nova no coletor.** Um gancho que corre
+   durante uma coleta e que liberta memória do sistema. Mitigação: só objetos com
+   gancho entram na lista, e o teste de estresse do coletor (`gc-stress`) ganha um
+   caso que abre e larga dez mil `bytes`.
+2. **O guarda do SIGBUS mexe na pilha-sombra.** É a parte mais delicada de tudo
+   isto. Mitigação: o desenrolamento é até uma profundidade GRAVADA, não uma
+   adivinhada, e o teste trunca um ficheiro debaixo de um mapa aberto e exige a
+   excepção.
+3. **A 135.2 quebra 6 pacotes publicados.** É um evento de semver — e a F10 do
+   pstudio acabou de destrancar o `0.x` a poder partir num `minor`, com aviso.
+4. **A renomeação da 139 toca em tudo.** Mitigação: fase própria, `sed` sobre
+   código, mãos sobre os `.md`, e o `verify` verde antes de o NIO começar.
+5. **O `mmap` só é seguro onde o ficheiro é imutável.** O armazém de tarballs
+   (nomes que são hashes) sim; uma fonte que alguém está a editar não. O guarda da
+   137.2 transforma isso numa excepção em vez de uma morte — mas a regra continua
+   a ser não mapear o que outro processo reescreve.
