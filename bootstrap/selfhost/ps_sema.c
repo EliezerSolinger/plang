@@ -36,6 +36,8 @@ const char *ps_mod_name(Arena *a, const char *p) {
     return Arena_strdup(a, base);
 }
 
+const int32_t PS_NARROW_MAX = 8;
+
 static int ps_builtin_mod(const char *name) {
     const char *MODS[13] = {"sys", "re", "json", "net", "random", "math", "time", "bisect", "heapq", "gc", "sched", "os", "path"};
     size_t i;
@@ -1835,11 +1837,17 @@ static PsFunc *PsSema_find_method(PsSema *self, PsDecl *rd, const char *name);
 
 static PsType *PsSema_field_type(PsSema *self, PsType *rt, const char *name, Pos pos);
 
-static int32_t PsSema_narrow_from(PsSema *self, PsExpr *c);
+static int32_t PsSema_narrow_from(PsSema *self, PsExpr *c, int32_t *idx);
 
-static int32_t PsSema_narrow_else(PsSema *self, PsExpr *c);
+static int32_t PsSema_narrow_else(PsSema *self, PsExpr *c, int32_t *idx);
 
-static int32_t PsSema_narrow_op(PsSema *self, PsExpr *c, int32_t op);
+static int32_t PsSema_narrow_one(PsSema *self, PsExpr *c, int32_t op);
+
+static int32_t PsSema_narrow_all(PsSema *self, PsExpr *c, int32_t op, int32_t *idx, int32_t n);
+
+static int32_t PsSema_narrow_push(PsSema *self, int32_t *idx, int32_t n);
+
+static void PsSema_narrow_pop(PsSema *self, int32_t *idx, int32_t n);
 
 static PsType *PsSema_check_ctor(PsSema *self, PsExpr *e, PsDecl *rd);
 
@@ -1849,23 +1857,15 @@ static void PsSema_check_lambda_body(PsSema *self, PsExpr *e, PsType *lh);
 
 static PsType *PsSema_check_binary(PsSema *self, PsExpr *e);
 
-static int32_t PsSema_narrow_from(PsSema *self, PsExpr *c) {
-    return PsSema_narrow_op(self, c, TK_NE);
+static int32_t PsSema_narrow_from(PsSema *self, PsExpr *c, int32_t *idx) {
+    return PsSema_narrow_all(self, c, TK_NE, idx, 0);
 }
 
-static int32_t PsSema_narrow_else(PsSema *self, PsExpr *c) {
-    return PsSema_narrow_op(self, c, TK_EQ);
+static int32_t PsSema_narrow_else(PsSema *self, PsExpr *c, int32_t *idx) {
+    return PsSema_narrow_all(self, c, TK_EQ, idx, 0);
 }
 
-static int32_t PsSema_narrow_op(PsSema *self, PsExpr *c, int32_t op) {
-    if (c != NULL && c->kind == PE_BINARY && c->op == TK_AND && op == TK_NE) {
-        int32_t l = PsSema_narrow_op(self, c->lhs, op);
-        return (l >= 0 ? l : PsSema_narrow_op(self, c->rhs, op));
-    }
-    if (c != NULL && c->kind == PE_BINARY && c->op == TK_OR && op == TK_EQ) {
-        int32_t l2 = PsSema_narrow_op(self, c->lhs, op);
-        return (l2 >= 0 ? l2 : PsSema_narrow_op(self, c->rhs, op));
-    }
+static int32_t PsSema_narrow_one(PsSema *self, PsExpr *c, int32_t op) {
     if (c == NULL || c->kind != PE_BINARY || c->op != op) {
         return -1;
     }
@@ -1883,6 +1883,53 @@ static int32_t PsSema_narrow_op(PsSema *self, PsExpr *c, int32_t op) {
         return -1;
     }
     return i;
+}
+
+static int32_t PsSema_narrow_all(PsSema *self, PsExpr *c, int32_t op, int32_t *idx, int32_t n) {
+    if (c == NULL || n >= PS_NARROW_MAX) {
+        return n;
+    }
+    if (c->kind == PE_BINARY && ((c->op == TK_AND && op == TK_NE) || (c->op == TK_OR && op == TK_EQ))) {
+        return PsSema_narrow_all(self, c->rhs, op, idx, PsSema_narrow_all(self, c->lhs, op, idx, n));
+    }
+    int32_t one = PsSema_narrow_one(self, c, op);
+    if (one < 0) {
+        return n;
+    }
+    size_t k;
+    for (k = 0; k < n; k += 1) {
+        if (idx[k] == one) {
+            return n;
+        }
+    }
+    idx[n] = one;
+    return n + 1;
+}
+
+static int32_t PsSema_narrow_push(PsSema *self, int32_t *idx, int32_t n) {
+    int32_t k = 0;
+    size_t i;
+    for (i = 0; i < n; i += 1) {
+        int32_t j = idx[i];
+        if (self->locals[j].opt_type == NULL && self->locals[j].type != NULL && self->locals[j].type->kind == PT_OPT) {
+            self->locals[j].opt_type = self->locals[j].type;
+            self->locals[j].type = self->locals[j].type->inner;
+            idx[k] = j;
+            k += 1;
+        }
+    }
+    return k;
+}
+
+static void PsSema_narrow_pop(PsSema *self, int32_t *idx, int32_t n) {
+    size_t i;
+    for (i = 0; i < n; i += 1) {
+        int32_t j = idx[i];
+        if (self->locals[j].opt_type != NULL) {
+            self->locals[j].type = self->locals[j].opt_type;
+            self->locals[j].opt_type = NULL;
+        }
+    }
 }
 
 static int32_t PsSema_find_local(PsSema *self, const char *name) {
@@ -1910,16 +1957,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_434_9 = &self->locals[self->nlocals];
-        __with_434_9->name = name;
-        __with_434_9->type = t;
-        __with_434_9->assigned = assigned;
-        __with_434_9->is_const = is_const;
-        __with_434_9->frozen = 0;
-        __with_434_9->is_module = 0;
-        __with_434_9->opt_type = NULL;
-        __with_434_9->any_type = NULL;
-        __with_434_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_479_9 = &self->locals[self->nlocals];
+        __with_479_9->name = name;
+        __with_479_9->type = t;
+        __with_479_9->assigned = assigned;
+        __with_479_9->is_const = is_const;
+        __with_479_9->frozen = 0;
+        __with_479_9->is_module = 0;
+        __with_479_9->opt_type = NULL;
+        __with_479_9->any_type = NULL;
+        __with_479_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2457,12 +2504,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_968_17 = e;
-                __with_968_17->kind = PE_CALL;
-                __with_968_17->lhs = cal8;
-                __with_968_17->args = args8;
-                __with_968_17->nargs = nc8;
-                __with_968_17->body = NULL;
+                PsExpr *__with_1013_17 = e;
+                __with_1013_17->kind = PE_CALL;
+                __with_1013_17->lhs = cal8;
+                __with_1013_17->args = args8;
+                __with_1013_17->nargs = nc8;
+                __with_1013_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -2915,24 +2962,16 @@ static PsType *PsSema_check_binary(PsSema *self, PsExpr *e) {
     PsType *prevh = self->hint;
     self->hint = NULL;
     PsType *lt = PsSema_check_expr(self, e->lhs);
-    int32_t nand = -1;
+    int32_t nwa[8];
+    int32_t nand = 0;
     if (e->op == TK_AND) {
-        nand = PsSema_narrow_op(self, e->lhs, TK_NE);
+        nand = PsSema_narrow_all(self, e->lhs, TK_NE, nwa, 0);
     } else if (e->op == TK_OR) {
-        nand = PsSema_narrow_op(self, e->lhs, TK_EQ);
+        nand = PsSema_narrow_all(self, e->lhs, TK_EQ, nwa, 0);
     }
-    if (nand >= 0 && (self->locals[nand].opt_type != NULL || self->locals[nand].type == NULL || self->locals[nand].type->kind != PT_OPT)) {
-        nand = -1;
-    }
-    if (nand >= 0) {
-        self->locals[nand].opt_type = self->locals[nand].type;
-        self->locals[nand].type = self->locals[nand].type->inner;
-    }
+    nand = PsSema_narrow_push(self, nwa, nand);
     PsType *rt = PsSema_check_expr(self, e->rhs);
-    if (nand >= 0 && self->locals[nand].opt_type != NULL) {
-        self->locals[nand].type = self->locals[nand].opt_type;
-        self->locals[nand].opt_type = NULL;
-    }
+    PsSema_narrow_pop(self, nwa, nand);
     self->hint = prevh;
     PsType *bl = ps_type(self->a, PT_BOOL, e->pos);
     if (lt != NULL && rt != NULL && lt->kind == PT_INT && rt->kind == PT_INT && !ps_type_eq(lt, rt)) {
@@ -3224,14 +3263,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1692_21 = e;
-                    __with_1692_21->kind = PE_COMPREHEND;
-                    __with_1692_21->op = TK_RBRACKET;
-                    __with_1692_21->var = kv9;
-                    __with_1692_21->lhs = pair;
-                    __with_1692_21->rhs = recv9;
-                    __with_1692_21->args = NULL;
-                    __with_1692_21->nargs = 0;
+                    PsExpr *__with_1732_21 = e;
+                    __with_1732_21->kind = PE_COMPREHEND;
+                    __with_1732_21->op = TK_RBRACKET;
+                    __with_1732_21->var = kv9;
+                    __with_1732_21->lhs = pair;
+                    __with_1732_21->rhs = recv9;
+                    __with_1732_21->args = NULL;
+                    __with_1732_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -4780,12 +4819,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3177_17 = e;
-                __with_3177_17->kind = PE_INDEX;
-                __with_3177_17->lhs = e->args[0];
-                __with_3177_17->rhs = below;
-                __with_3177_17->args = NULL;
-                __with_3177_17->nargs = 0;
+                PsExpr *__with_3217_17 = e;
+                __with_3217_17->kind = PE_INDEX;
+                __with_3217_17->lhs = e->args[0];
+                __with_3217_17->rhs = below;
+                __with_3217_17->args = NULL;
+                __with_3217_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -5270,26 +5309,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3626_17 = e;
-                __with_3626_17->kind = PE_STR;
-                __with_3626_17->text = lit7;
-                __with_3626_17->lhs = NULL;
-                __with_3626_17->rhs = NULL;
-                __with_3626_17->args = NULL;
-                __with_3626_17->nargs = 0;
+                PsExpr *__with_3666_17 = e;
+                __with_3666_17->kind = PE_STR;
+                __with_3666_17->text = lit7;
+                __with_3666_17->lhs = NULL;
+                __with_3666_17->rhs = NULL;
+                __with_3666_17->args = NULL;
+                __with_3666_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3639_13 = e;
-            __with_3639_13->kind = PE_LOWERED;
-            __with_3639_13->low = ln7;
-            __with_3639_13->lhs = NULL;
-            __with_3639_13->rhs = NULL;
-            __with_3639_13->args = NULL;
-            __with_3639_13->nargs = 0;
+            PsExpr *__with_3679_13 = e;
+            __with_3679_13->kind = PE_LOWERED;
+            __with_3679_13->low = ln7;
+            __with_3679_13->lhs = NULL;
+            __with_3679_13->rhs = NULL;
+            __with_3679_13->args = NULL;
+            __with_3679_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5611,10 +5650,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3945_17 = &ns->quals[ns->nquals];
-                __with_3945_17->name = q;
-                __with_3945_17->orig = d->path;
-                __with_3945_17->ns = sub;
+                PsNsEnt *__with_3985_17 = &ns->quals[ns->nquals];
+                __with_3985_17->name = q;
+                __with_3985_17->orig = d->path;
+                __with_3985_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5627,10 +5666,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3957_21 = &ns->ents[ns->nents];
-                    __with_3957_21->name = local;
-                    __with_3957_21->orig = d->names[k];
-                    __with_3957_21->ns = sub;
+                    PsNsEnt *__with_3997_21 = &ns->ents[ns->nents];
+                    __with_3997_21->name = local;
+                    __with_3997_21->orig = d->names[k];
+                    __with_3997_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6098,10 +6137,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4439_9 = e;
-        __with_4439_9->kind = PE_NAME;
-        __with_4439_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4439_9->lhs = NULL;
+        PsExpr *__with_4479_9 = e;
+        __with_4479_9->kind = PE_NAME;
+        __with_4479_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4479_9->lhs = NULL;
     }
     return 1;
 }
@@ -7656,8 +7695,11 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 PsType *ct = PsSema_check_expr(self, s->conds[i]);
                 PsSema_want(self, s->conds[i], ct, ps_type(self->a, PT_BOOL, s->pos), "a condition");
             }
-            int32_t narrowed = (s->nconds > 0 ? PsSema_narrow_from(self, s->conds[0]) : -1);
-            int32_t nelse = (s->nconds == 1 && s->else_block != NULL ? PsSema_narrow_else(self, s->conds[0]) : -1);
+            int32_t nwi[8];
+            int32_t nwe[8];
+            int32_t nwb[8];
+            int32_t narrowed = (s->nconds > 0 ? PsSema_narrow_from(self, s->conds[0], nwi) : 0);
+            int32_t nelse = (s->nconds == 1 && s->else_block != NULL ? PsSema_narrow_else(self, s->conds[0], nwe) : 0);
             int *was = calloc((size_t)(before + 1), sizeof(int));
             for (i = 0; i < before; i += 1) {
                 was[i] = self->locals[i].assigned;
@@ -7672,33 +7714,34 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 for (i = 0; i < before; i += 1) {
                     self->locals[i].assigned = was[i];
                 }
-                int32_t nb = -1;
+                int32_t nb = 0;
                 if (bi < s->nconds) {
-                    nb = (bi == 0 ? narrowed : PsSema_narrow_from(self, s->conds[bi]));
-                } else if (nelse >= 0) {
+                    if (bi == 0) {
+                        size_t q;
+                        for (q = 0; q < narrowed; q += 1) {
+                            nwb[q] = nwi[q];
+                        }
+                        nb = narrowed;
+                    } else {
+                        nb = PsSema_narrow_from(self, s->conds[bi], nwb);
+                    }
+                } else {
+                    size_t q;
+                    for (q = 0; q < nelse; q += 1) {
+                        nwb[q] = nwe[q];
+                    }
                     nb = nelse;
                 }
-                if (nb >= 0 && self->locals[nb].opt_type == NULL && self->locals[nb].type != NULL && self->locals[nb].type->kind == PT_OPT) {
-                    self->locals[nb].opt_type = self->locals[nb].type;
-                    self->locals[nb].type = self->locals[nb].type->inner;
-                } else {
-                    nb = -1;
-                }
+                nb = PsSema_narrow_push(self, nwb, nb);
                 PsSema_check_block(self, (bi < s->nconds ? s->blocks[bi] : s->else_block));
-                if (nb >= 0 && self->locals[nb].opt_type != NULL) {
-                    self->locals[nb].type = self->locals[nb].opt_type;
-                    self->locals[nb].opt_type = NULL;
-                }
+                PsSema_narrow_pop(self, nwb, nb);
                 for (i = 0; i < before; i += 1) {
                     merged[i] = merged[i] && self->locals[i].assigned;
                 }
             }
             if (s->nconds == 1 && s->else_block == NULL && PsSema_blk_exits(self, s->blocks[0])) {
-                int32_t ng = PsSema_narrow_else(self, s->conds[0]);
-                if (ng >= 0 && self->locals[ng].opt_type == NULL) {
-                    self->locals[ng].opt_type = self->locals[ng].type;
-                    self->locals[ng].type = self->locals[ng].type->inner;
-                }
+                int32_t nwg[8];
+                PsSema_narrow_push(self, nwg, PsSema_narrow_else(self, s->conds[0], nwg));
             }
             if (s->else_block == NULL) {
                 for (i = 0; i < before; i += 1) {
@@ -7722,19 +7765,13 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 fatal_at(self->file, s->pos, "`await` in the condition of a top-level loop is not compiled yet: the top level is not a state machine, so the wait would be hoisted OUT of the loop. Move it into the body, or into an `async def` (39.4/50.1)");
             }
             PsSema_want(self, s->cond, ct2, ps_type(self->a, PT_BOOL, s->pos), "a condition");
-            int32_t wn = PsSema_narrow_from(self, s->cond);
-            if (wn >= 0) {
-                self->locals[wn].opt_type = self->locals[wn].type;
-                self->locals[wn].type = self->locals[wn].type->inner;
-            }
+            int32_t nww[8];
+            int32_t wn = PsSema_narrow_push(self, nww, PsSema_narrow_from(self, s->cond, nww));
             int32_t snapshot = self->nlocals;
             self->loop_depth += 1;
             PsSema_check_block(self, s->body);
             self->loop_depth -= 1;
-            if (wn >= 0 && self->locals[wn].opt_type != NULL) {
-                self->locals[wn].type = self->locals[wn].opt_type;
-                self->locals[wn].opt_type = NULL;
-            }
+            PsSema_narrow_pop(self, nww, wn);
             size_t i;
             for (i = 0; i < snapshot; i += 1) {
                 ;

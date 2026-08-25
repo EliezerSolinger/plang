@@ -59,6 +59,13 @@ def ps_mod_name(a: *Arena, p: const *char) -> const *char:
         return a->strndup(base, n - 4)
     return a->strdup(base)
 
+# Quantas provas de não-nulidade uma condição pode carregar de uma vez —
+# `a != None and b != None and ...`. Oito é muito mais do que qualquer condição
+# legível tem, e é um limite dito em vez de um comportamento silencioso: passado
+# ele, as provas seguintes simplesmente não se aplicam, e o erro que aparece é o
+# mesmo que apareceria sem `and` nenhum.
+PS_NARROW_MAX: const i32 = 8
+
 private def ps_builtin_mod(name: const *char) -> bool:
     MODS: const *char[] = {"sys", "re", "json", "net", "random", "math", "time",
                            "bisect", "heapq", "gc", "sched", "os", "path"}
@@ -363,9 +370,12 @@ struct PsSema:
     private def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc)
     private def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
     private def field_type(self: *PsSema, rt: *PsType, name: const *char, pos: Pos) -> *PsType
-    private def narrow_from(self: *PsSema, c: *PsExpr) -> i32
-    private def narrow_else(self: *PsSema, c: *PsExpr) -> i32
-    private def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32
+    private def narrow_from(self: *PsSema, c: *PsExpr, idx: *i32) -> i32
+    private def narrow_else(self: *PsSema, c: *PsExpr, idx: *i32) -> i32
+    private def narrow_one(self: *PsSema, c: *PsExpr, op: i32) -> i32
+    private def narrow_all(self: *PsSema, c: *PsExpr, op: i32, idx: *i32, n: i32) -> i32
+    private def narrow_push(self: *PsSema, idx: *i32, n: i32) -> i32
+    private def narrow_pop(self: *PsSema, idx: *i32, n: i32)
     private def check_ctor(self: *PsSema, e: *PsExpr, rd: *PsDecl) -> *PsType
     private def check_async_lambda(self: *PsSema, e: *PsExpr, lh: *PsType)
     private def check_lambda_body(self: *PsSema, e: *PsExpr, lh: *PsType)
@@ -374,30 +384,19 @@ struct PsSema:
     # innermost first: an inner block may shadow an outer name, exactly as in P
     # `x != None` on a local of option type: the index of that local, or -1.
     # `None != x` counts too; anything else does not narrow.
-    private def narrow_from(self: *PsSema, c: *PsExpr) -> i32:
-        return self->narrow_op(c, TK_NE)
+    private def narrow_from(self: *PsSema, c: *PsExpr, idx: *i32) -> i32:
+        return self->narrow_all(c, TK_NE, idx, 0)
 
     # 114: e o INVERSO — `if x == None: ... else: <aqui x é T>`. É a mesma prova
     # vista do outro lado, e a forma aparece sozinha quando a função trata
     # primeiro o caso ausente. O que NÃO se faz aqui é o `if x == None: return`
     # seguido de código: isso pede análise de fluxo, e o ramo `else` é a metade
     # que sai de graça.
-    private def narrow_else(self: *PsSema, c: *PsExpr) -> i32:
-        return self->narrow_op(c, TK_EQ)
+    private def narrow_else(self: *PsSema, c: *PsExpr, idx: *i32) -> i32:
+        return self->narrow_all(c, TK_EQ, idx, 0)
 
-    private def narrow_op(self: *PsSema, c: *PsExpr, op: i32) -> i32:
-        # 114: `x != None and <resto>` também prova — o `and` só entra no ramo
-        # quando os DOIS lados valem. Só para `!=`: no `==`, o `else` pode ter
-        # sido tomado porque o OUTRO lado falhou, e aí nada está provado.
-        if c != None and c->kind == PE_BINARY and c->op == TK_AND and op == TK_NE:
-            l: i32 = self->narrow_op(c->lhs, op)
-            return l if l >= 0 else self->narrow_op(c->rhs, op)
-        # e o DUAL: `x == None or <resto>` como guarda. Se a guarda saiu, nenhum
-        # dos lados valia — então depois dela `x` não é None. É o que autoriza
-        # `if x == None or len(x.f) == 0: return`.
-        if c != None and c->kind == PE_BINARY and c->op == TK_OR and op == TK_EQ:
-            l2: i32 = self->narrow_op(c->lhs, op)
-            return l2 if l2 >= 0 else self->narrow_op(c->rhs, op)
+    # A FOLHA: `x != None` (ou `None != x`) sobre um local de tipo opcional.
+    private def narrow_one(self: *PsSema, c: *PsExpr, op: i32) -> i32:
         if c == None or c->kind != PE_BINARY or c->op != op:
             return -1
         n: *PsExpr = None
@@ -411,6 +410,52 @@ struct PsSema:
         if i < 0 or self->locals[i].type == None or self->locals[i].type->kind != PT_OPT:
             return -1
         return i
+
+    # ... e a CONJUNÇÃO, que é a parte que faltava. `x != None and y != None`
+    # prova as DUAS, e antes provava só a primeira — o `narrow_op` devolvia um
+    # índice, portanto sabia dizer "esta" e não "estas". Quem escrevia a forma
+    # natural tinha de a aninhar à mão, e foi o portão do `Channel<T>` (S3) que
+    # cobrou: `if v1 != None and v2 != None` não compilava.
+    #
+    # Só para `!=` no `and`: no `==`, o ramo `else` pode ter sido tomado porque
+    # o OUTRO lado falhou, e aí nada está provado. E o DUAL — `x == None or
+    # <resto>` como guarda — vale pela razão simétrica: se a guarda não saiu,
+    # nenhum dos lados valia.
+    private def narrow_all(self: *PsSema, c: *PsExpr, op: i32, idx: *i32, n: i32) -> i32:
+        if c == None or n >= PS_NARROW_MAX:
+            return n
+        if c->kind == PE_BINARY and ((c->op == TK_AND and op == TK_NE) or (c->op == TK_OR and op == TK_EQ)):
+            return self->narrow_all(c->rhs, op, idx, self->narrow_all(c->lhs, op, idx, n))
+        one: i32 = self->narrow_one(c, op)
+        if one < 0:
+            return n
+        for k in range(n):
+            if idx[k] == one:
+                return n       # `x != None and x != None` é uma prova, não duas
+        idx[n] = one
+        return n + 1
+
+    # Aplica as provas e COMPACTA a lista às que realmente se aplicaram — o que
+    # já estava estreitado por fora não se estreita outra vez, e é essa lista
+    # compactada que o `narrow_pop` desfaz.
+    private def narrow_push(self: *PsSema, idx: *i32, n: i32) -> i32:
+        k: i32 = 0
+        for i in range(n):
+            j: i32 = idx[i]
+            if self->locals[j].opt_type == None and self->locals[j].type != None and self->locals[j].type->kind == PT_OPT:
+                self->locals[j].opt_type = self->locals[j].type
+                self->locals[j].type = self->locals[j].type->inner
+                idx[k] = j
+                k += 1
+        return k
+
+    private def narrow_pop(self: *PsSema, idx: *i32, n: i32):
+        for i in range(n):
+            j: i32 = idx[i]
+            # uma atribuição dentro do ramo já a pode ter desfeito (43.1)
+            if self->locals[j].opt_type != None:
+                self->locals[j].type = self->locals[j].opt_type
+                self->locals[j].opt_type = None
 
     private def find_local(self: *PsSema, name: const *char) -> i32:
         i: i32 = self->nlocals - 1
@@ -1417,20 +1462,15 @@ struct PsSema:
         # `and`: o direito é checado com a prova do esquerdo. `or`: o direito é
         # checado sabendo que o esquerdo foi FALSO, então um `x == None` à
         # esquerda também prova (114).
-        nand: i32 = -1
+        nwa: i32[PS_NARROW_MAX]
+        nand: i32 = 0
         if e->op == TK_AND:
-            nand = self->narrow_op(e->lhs, TK_NE)
+            nand = self->narrow_all(e->lhs, TK_NE, nwa, 0)
         elif e->op == TK_OR:
-            nand = self->narrow_op(e->lhs, TK_EQ)
-        if nand >= 0 and (self->locals[nand].opt_type != None or self->locals[nand].type == None or self->locals[nand].type->kind != PT_OPT):
-            nand = -1
-        if nand >= 0:
-            self->locals[nand].opt_type = self->locals[nand].type
-            self->locals[nand].type = self->locals[nand].type->inner
+            nand = self->narrow_all(e->lhs, TK_EQ, nwa, 0)
+        nand = self->narrow_push(nwa, nand)
         rt: *PsType = self->check_expr(e->rhs)
-        if nand >= 0 and self->locals[nand].opt_type != None:
-            self->locals[nand].type = self->locals[nand].opt_type
-            self->locals[nand].opt_type = None
+        self->narrow_pop(nwa, nand)
         self->hint = prevh
         bl: *PsType = ps_type(self->a, PT_BOOL, e->pos)
         # exact widths (68.2): a literal takes the other side's width (range
@@ -5907,9 +5947,12 @@ struct PsSema:
                 # IS `T` (43.1) — Kotlin/TypeScript's smart cast. Only for
                 # locals, and an assignment inside the branch takes the proof
                 # away again (check_stmt PS_VAR/PS_ASSIGN restore it).
-                narrowed: i32 = self->narrow_from(s->conds[0]) if s->nconds > 0 else -1
+                nwi: i32[PS_NARROW_MAX]
+                nwe: i32[PS_NARROW_MAX]
+                nwb: i32[PS_NARROW_MAX]
+                narrowed: i32 = self->narrow_from(s->conds[0], nwi) if s->nconds > 0 else 0
                 # 114: `if x == None: ... else:` estreita no ELSE
-                nelse: i32 = self->narrow_else(s->conds[0]) if s->nconds == 1 and s->else_block != None else -1
+                nelse: i32 = self->narrow_else(s->conds[0], nwe) if s->nconds == 1 and s->else_block != None else 0
                 # A name counts as assigned after the statement only if EVERY
                 # path assigns it — including the implicit empty path when
                 # there is no `else`. That covers names born inside a branch
@@ -5929,20 +5972,21 @@ struct PsSema:
                         self->locals[i].assigned = was[i]
                     # 114: cada ramo é provado pela SUA condição — um `elif x
                     # != None:` estreita dentro dele, como o `if` sempre fez
-                    nb: i32 = -1
+                    nb: i32 = 0
                     if bi < s->nconds:
-                        nb = narrowed if bi == 0 else self->narrow_from(s->conds[bi])
-                    elif nelse >= 0:
-                        nb = nelse
-                    if nb >= 0 and self->locals[nb].opt_type == None and self->locals[nb].type != None and self->locals[nb].type->kind == PT_OPT:
-                        self->locals[nb].opt_type = self->locals[nb].type
-                        self->locals[nb].type = self->locals[nb].type->inner
+                        if bi == 0:
+                            for q in range(narrowed):
+                                nwb[q] = nwi[q]
+                            nb = narrowed
+                        else:
+                            nb = self->narrow_from(s->conds[bi], nwb)
                     else:
-                        nb = -1
+                        for q in range(nelse):
+                            nwb[q] = nwe[q]
+                        nb = nelse
+                    nb = self->narrow_push(nwb, nb)
                     self->check_block(s->blocks[bi] if bi < s->nconds else s->else_block)
-                    if nb >= 0 and self->locals[nb].opt_type != None:
-                        self->locals[nb].type = self->locals[nb].opt_type
-                        self->locals[nb].opt_type = None
+                    self->narrow_pop(nwb, nb)
                     for i in range(before):
                         merged[i] = merged[i] and self->locals[i].assigned
                 # 114: a GUARDA. `if x == None: return` (ou raise/break/
@@ -5950,10 +5994,10 @@ struct PsSema:
                 # que toda função com caso ausente tem, e sem isto ela obrigava
                 # a aninhar o corpo inteiro num `else`.
                 if s->nconds == 1 and s->else_block == None and self->blk_exits(s->blocks[0]):
-                    ng: i32 = self->narrow_else(s->conds[0])
-                    if ng >= 0 and self->locals[ng].opt_type == None:
-                        self->locals[ng].opt_type = self->locals[ng].type
-                        self->locals[ng].type = self->locals[ng].type->inner
+                    nwg: i32[PS_NARROW_MAX]
+                    # aplica e NÃO desfaz: a prova de uma guarda vale para o
+                    # resto do bloco, que é a razão de ela existir
+                    self->narrow_push(nwg, self->narrow_else(s->conds[0], nwg))
                 if s->else_block == None:
                     # the path where no branch runs assigns nothing new
                     for i in range(before):
@@ -5970,18 +6014,14 @@ struct PsSema:
                 # chain (`cur = cur.next`) is the shape that asks for it. The
                 # proof is retested every turn, and an assignment inside the
                 # body takes it away, which is the machinery `if` already has.
-                wn: i32 = self->narrow_from(s->cond)
-                if wn >= 0:
-                    self->locals[wn].opt_type = self->locals[wn].type
-                    self->locals[wn].type = self->locals[wn].type->inner
+                nww: i32[PS_NARROW_MAX]
+                wn: i32 = self->narrow_push(nww, self->narrow_from(s->cond, nww))
                 # the body may run zero times, so nothing it assigns counts after
                 snapshot: i32 = self->nlocals
                 self->loop_depth += 1
                 self->check_block(s->body)
                 self->loop_depth -= 1
-                if wn >= 0 and self->locals[wn].opt_type != None:
-                    self->locals[wn].type = self->locals[wn].opt_type
-                    self->locals[wn].opt_type = None
+                self->narrow_pop(nww, wn)
                 for i in range(snapshot):
                     pass
             case PS_ASSERT:
