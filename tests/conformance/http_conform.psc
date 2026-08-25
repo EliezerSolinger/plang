@@ -27,7 +27,7 @@ def hex_nib(c: int) -> int:
     return -1
 
 
-def unhex(s: str) -> List<u8>:
+def unhex(s: str) -> bytes:
     out: List<u8> = []
     i = 0
     n = len(s)
@@ -35,10 +35,12 @@ def unhex(s: str) -> List<u8>:
         hi = hex_nib(ord(s[i]))
         lo = hex_nib(ord(s[i + 1]))
         if hi < 0 or lo < 0:
-            return out
+            return bytes(out)
         out.append(u8(hi * 16 + lo))
         i += 2
-    return out
+    # 135.6 numa linha: construir num `List<u8>`, entregar como o valor que
+    # atravessa
+    return bytes(out)
 
 
 HEX: str = "0123456789abcdef"
@@ -83,7 +85,7 @@ def digest(p: http.Parser, whole: bool, msg: int, out: List<str>):
 # llhttp reports them one after another. Our parser handles ONE, so the driver
 # is what restarts it with whatever bytes are left over — which is exactly what
 # a server does with the tail of a read.
-def run_case(kind: str, data: List<u8>) -> List<str>:
+def run_case(kind: str, data: bytes) -> List<str>:
     out: List<str> = []
     rest = data
     msg = 0
@@ -103,6 +105,8 @@ def run_case(kind: str, data: List<u8>) -> List<str>:
             return out
         if p.state == http.H_HANDOFF or not whole:
             return out
+        # 135.6: o que sobra ACUMULA-SE numa lista, e vira `bytes` para voltar
+        # a entrar no analisador — que é a moeda de quem move
         left: List<u8> = []
         k = p.pos
         while k < len(p.buf):
@@ -119,7 +123,7 @@ def run_case(kind: str, data: List<u8>) -> List<str>:
             # error — which is what llhttp answers too
             out.append("error")
             return out
-        rest = left
+        rest = bytes(left)
         msg += 1
     return out
 

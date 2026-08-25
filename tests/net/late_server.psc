@@ -16,8 +16,9 @@ srv = net.listen(port)
 # é um arquivo, e quem espera a porta precisa dela ANTES de o programa terminar
 await sys.err.write(f"port {srv.port()}\n")
 with await srv.accept() as c:
-    got = await c.read(4096)
-    print(f"got {len(got)} {str(got)}")
-    rest = await c.read(4096)
-    print(f"then {len(rest)}")
+    with Buffer(4096) as rb:
+        n1 = await c.read_into(rb, 0, 4096)
+        print(f"got {n1} {str(bytes(rb[0:n1]))}")
+        n2 = await c.read_into(rb, 0, 4096)
+        print(f"then {n2}")
 srv.close()
