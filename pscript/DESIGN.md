@@ -6670,3 +6670,57 @@ anotar um ficheiro aberto, e hoje `open()` devolve um `File` sem importar nada.
 só acontece com um tipo do utilizador — nunca com uma variável, um campo ou uma
 função. Foram dois em 376 ficheiros `.psc`, o que dimensiona o problema: é real,
 e é raro.
+
+## BATERIA 145 — o guarda do SIGBUS, e a fronteira que o trava (2026-08-25)
+
+A 137.2 desenhou o guarda inteiro: *"entrar no `with` grava um ponto de retorno
+e a profundidade da pilha-sombra; o manipulador confirma que o endereço caiu num
+mapa NOSSO, desenrola até àquela profundidade e levanta; se não caiu, re-levanta
+o sinal."*
+
+**Ao implementá-lo, ele esbarra duas vezes na mesma fronteira** — a 72.4, *"uma
+macro que não é número não atravessa"* — e é a mesma que o manipulador de crash
+da 12.4 já tinha documentado para o `SA_ONSTACK`:
+
+1. **O ENDEREÇO da falha.** `siginfo_t.si_addr` só chega por `sigaction` com
+   `SA_SIGINFO`. O membro que guarda o manipulador é uma **macro sobre uma
+   união** cujo nome difere entre a glibc (`__sigaction_handler`) e o macOS
+   (`__sigaction_u`), e o offset de `sa_flags` difere com ela porque o
+   `sigset_t` do meio tem 128 bytes num e 4 no outro. E o próprio `si_addr` está
+   em offsets diferentes nos dois `siginfo_t`. Escrever qualquer uma das
+   grafias seria um `#ifdef` de plataforma no meio do runtime.
+
+2. **Um `setjmp` no frame que vai ser retomado.** Um `setjmp` chamado por uma
+   função do runtime deixa de valer no instante em que ela retorna — e o bloco
+   `with` está no frame de quem o escreveu. O salto teria de ser EMITIDO pelo
+   lowering para dentro da função do utilizador.
+
+### O que ficou feito
+
+Enquanto houver um mapa aberto, um SIGBUS deixa de morrer mudo:
+
+    pscript: SIGBUS: a page of a mapping went away — the file was very likely
+    truncated by somebody else while it was mapped (137.2)
+      in go (analise.psc)
+
+Mais a pilha do pscript que o manipulador da 12.4 já imprimia. Portão:
+`tests/mmap-truncate.sh`, que trunca mesmo o ficheiro debaixo de um mapa aberto.
+
+**É estritamente melhor do que nada e é menos do que a 137.2 pediu**, e a
+diferença é essa: quem trunca lê a causa em vez de a adivinhar, mas o programa
+continua a morrer em vez de levantar.
+
+### O desenho que fecharia isto, para quando se decidir
+
+> **O corpo do `with` passa a ser uma CLOSURE que o runtime chama.**
+
+Aí o `setjmp` vive no frame do RUNTIME — que é o dono dele — durante todo o
+bloco, e o problema (2) desaparece. O problema (1) desaparece com ele: sem
+precisar do endereço, o guarda pode ser "estou dentro do `with` DESTE mapa",
+que é exactamente o modelo do `PG_TRY` do Postgres que a 137.2 nomeou.
+
+O preço é que `break`, `continue`, `return` e `await` dentro do bloco passam a
+atravessar uma fronteira de função, e cada um deles precisa de resposta. É uma
+bateria própria, e não uma linha.
+
+**PENDENTE DE DECISÃO — segui com o guarda que diz a causa, para não travar.**

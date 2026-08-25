@@ -616,6 +616,10 @@ static void p_type(StrBuf *b, PsType *t) {
             StrBuf_puts(b, "bytes");
             break;
         }
+        case PT_MAPPING: {
+            StrBuf_puts(b, "Mapping");
+            break;
+        }
         case PT_VIEW: {
             StrBuf_puts(b, "View<");
             p_type(b, t->inner);

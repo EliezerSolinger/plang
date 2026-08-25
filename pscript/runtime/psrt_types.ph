@@ -55,6 +55,9 @@ enum PsTyId:
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
     PS_TY_CONN = 15    # a socket, listening or connected (77.1)
     PS_TY_PROC = 16    # 118: um processo que já terminou (`os.run`)
+    PS_TY_MAPPING = 18 # 137.1: a file mapped into memory. A THING with a
+                       #   lifetime — `with` closes it, and the finalizer is
+                       #   only the net (136.1)
     PS_TY_BYTES = 17   # 135.3: an immutable VALUE of bytes, collected, whose
                        #   block lives outside the heap and never moves
 
@@ -110,7 +113,37 @@ struct PsBytes:
     data: *char      # malloc'd when `owner` is None; a window into the owner's otherwise
     len: usize
     owner: *PsBytes  # None = this one owns `data` and has the release hook
+    # 137.1: the block belongs to somebody ELSE — the kernel, through a
+    # `Mapping`. It must not be freed and it is not owned, so `owner` is None
+    # AND there is no finalizer; this flag is what tells the two apart, because
+    # "owner is None" alone would read as "this one owns it".
+    foreign: i32
     hash: u32        # 0 = not computed yet, like PsStr's
+
+# 137.1: `os.mmap(p)` — the file, in memory, without reading it.
+#
+# **A type of its own and not a `bytes`**, because a map GIVES things a `bytes`
+# has nowhere to put: `madvise`, `msync`, `mlock`, `MAP_POPULATE`. That is the
+# question that decided it — *"o mapa do sistema operativo dá-te recursos e
+# opções; o tipo também podia?"*
+#
+# And it CLOSES, which a `bytes` does not (136.1): a map is address space, an
+# inode and a descriptor — things that run out long before the heap does, and
+# that the collector has no reason to notice. A thousand maps are a thousand
+# descriptors and a tiny heap; waiting for memory pressure is the mistake the
+# `MappedByteBuffer` of Java is famous for.
+#
+# The block is the kernel's, not ours: it never moves, so a slice of it is a
+# WINDOW (`bytes` with `owner`), exactly like a slice of a `bytes`.
+struct PsMapping:
+    obj: PsObj
+    data: *char        # what `mmap` gave back, or None once unmapped
+    len: usize         # the length of the REGION, which is what was asked for
+    base: *char        # what has to be handed to `munmap`: the page-aligned
+                       #   start, which is not `data` when an offset was given
+    blen: usize        # ... and its length
+    open: i32
+    writable: i32
 
 # a heap block: allocation is a bump inside one of these, and the collector
 # copies into a fresh one

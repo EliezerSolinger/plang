@@ -274,6 +274,8 @@ struct PsP:
                 t = ps_type(self->a, PT_FILE, pos)
             elif self->renamed(pos, name, "buffer", "Buffer"):
                 t = ps_type(self->a, PT_BUFFER, pos)
+            elif name == "Mapping":
+                t = ps_type(self->a, PT_MAPPING, pos)
             elif name == "View":
                 # 135.8: uppercase, because it is a thing with a lifetime — it
                 # keeps its `Buffer` alive for as long as it exists.

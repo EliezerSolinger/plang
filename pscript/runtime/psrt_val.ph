@@ -150,6 +150,13 @@ def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList
 # that is what lets `b[0:8]` be a window instead of a copy, and what lets a
 # `bytes` have no `close` at all (136.1).
 def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes
+# 137: quantos mapas estão abertos, e as duas contas. O manipulador de crash
+# usa-o para dizer a causa provável de um SIGBUS (137.2).
+def ps_maps_live() -> i64
+def ps_map_live_add()
+def ps_map_live_sub()
+# a mesma conta de fatia que a lista, a string e o `bytes` fazem
+def ps_slice_bounds_pub(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool
 # 135.4: a Buffer hands its block over and is invalidated — zero copy
 def ps_buffer_freeze(ctx: *PsCtx, b: *PsBuffer, file: const *char, line: i32) -> *PsBytes
 def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsBytes

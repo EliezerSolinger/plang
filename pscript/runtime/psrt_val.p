@@ -26,10 +26,16 @@ private PS_CRASH_CTX: *PsCtx = None
 private PS_CRASH_TID: pthread_t
 private PS_CRASH_HAVE: i32 = 0
 
+def ps_maps_live() -> i64
+
 private def ps_crash_name(sig: int) -> const *char:
     if sig == SIGSEGV:
         return "SIGSEGV (invalid memory access)"
     if sig == SIGBUS:
+        # 137.2: com um mapa aberto, esta é a causa quase certa — e dizê-la é a
+        # diferença entre depurar e adivinhar
+        if ps_maps_live() > 0:
+            return "SIGBUS: a page of a mapping went away — the file was very likely truncated by somebody else while it was mapped (137.2)"
         return "SIGBUS (misaligned or unmapped access)"
     if sig == SIGFPE:
         return "SIGFPE (arithmetic fault)"
@@ -73,6 +79,50 @@ private def ps_crash_handler(sig: int):
 # So `signal` it is, and what it covers is every crash that still has stack: a
 # wild pointer from the unsafe side, a misaligned access, an illegal
 # instruction. Which is what 12.4 was about — the C side failing.
+# ---------- 137.2: o SIGBUS, e o que este guarda consegue ser ----------
+#
+# Se outro processo TRUNCAR o ficheiro por baixo de um mapa, tocar na página que
+# desapareceu manda SIGBUS e mata o processo. É por isso que o Rust marca a
+# criação de um `mmap` como `unsafe`, e é o que a JVM, o V8 e o Postgres apanham.
+#
+# **O que a 137.2 desenhou, e o que é preciso para o fazer:** o manipulador
+# confirma que o endereço da falha caiu num mapa NOSSO, desenrola até à
+# profundidade da pilha-sombra que o `with` gravou, e levanta. Isso exige duas
+# coisas, e as duas esbarram na mesma fronteira que o manipulador de crash em
+# cima já documentou (72.4):
+#
+#   1. **o ENDEREÇO da falha** (`siginfo_t.si_addr`), que só chega por
+#      `sigaction` com `SA_SIGINFO`. O membro que guarda o manipulador é uma
+#      MACRO sobre uma união cujo nome difere entre a glibc e o macOS, e o
+#      offset de `sa_flags` difere com ela. E o próprio `si_addr` está em
+#      offsets diferentes nas duas.
+#   2. **um `setjmp` no frame que vai ser retomado.** Um `setjmp` chamado por
+#      uma função do runtime deixa de valer no instante em que ela retorna, e o
+#      bloco `with` está no frame de quem o escreveu — portanto o salto teria de
+#      ser EMITIDO pelo lowering para dentro da função do utilizador.
+#
+# **O que fica feito, e é estritamente melhor do que nada:** enquanto houver um
+# mapa aberto, um SIGBUS deixa de morrer mudo e passa a dizer o que quase de
+# certeza aconteceu, com o número de mapas abertos e a pilha do pscript. Um
+# programa que trunca um ficheiro debaixo de um mapa lê a causa em vez de ler
+# "SIGBUS" e adivinhar.
+#
+# O desenho que fecharia isto está registado na bateria 145: o corpo do `with`
+# passa a ser uma CLOSURE que o runtime chama, e então o `setjmp` vive no frame
+# do runtime — que é o dono dele — durante todo o bloco.
+private PS_MAPS_LIVE: i64 = 0
+
+def ps_map_live_add():
+    PS_MAPS_LIVE += 1
+
+def ps_map_live_sub():
+    if PS_MAPS_LIVE > 0:
+        PS_MAPS_LIVE -= 1
+
+def ps_maps_live() -> i64:
+    return PS_MAPS_LIVE
+
+
 def ps_install_crash_handler(ctx: *PsCtx):
     PS_CRASH_CTX = ctx
     PS_CRASH_TID = pthread_self()
@@ -104,6 +154,14 @@ def ps_install_crash_handler(ctx: *PsCtx):
 #   * a zero step is an error, because there is no answer.
 #
 # `out i` and `out j` come back already resolved, and `st` is the step.
+private def ps_slice_bounds(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool
+
+# 137.1: the os layer slices a mapping, and the bounds have to be the SAME
+# ones a list, a string and a `bytes` use — one rule, one implementation.
+def ps_slice_bounds_pub(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool:
+    return ps_slice_bounds(ctx, n, a, b, st, has_a, has_b, out i, out j, file, line)
+
+
 private def ps_slice_bounds(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool:
     if st == 0:
         ps_raise(ctx, "a slice step may not be zero", PS_CAT_VALUE, file, line)
@@ -593,6 +651,7 @@ def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes:
     b->data = None
     b->len = usize(0)
     b->owner = None
+    b->foreign = 0
     b->hash = 0
     if len > usize(0):
         d: *char = (*char)(malloc(len))
@@ -623,6 +682,11 @@ def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsByte
     v->data = (src->data + off) if src->data != None else None
     v->len = len
     v->owner = ps_bytes_root(src)
+    # a window over a FOREIGN block is foreign too, and it keeps no owner: the
+    # lifetime is the Mapping's, and the Mapping is what `with` closes
+    v->foreign = src->foreign
+    if src->foreign != 0:
+        v->owner = None
     v->hash = 0
     return v
 
@@ -760,6 +824,7 @@ def ps_buffer_freeze(ctx: *PsCtx, b: *PsBuffer, file: const *char, line: i32) ->
     r->data = b->data
     r->len = b->nbytes
     r->owner = None
+    r->foreign = 0
     r->hash = 0
     ps_add_final(ctx, (*PsObj)(r), ps_bytes_release)
     # the buffer gives the block up, and says so: `open = 0` is what every other

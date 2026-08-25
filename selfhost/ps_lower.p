@@ -461,6 +461,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsProc"))
             case PT_BUFFER:
                 return ty_ptr(self->a, ty_name(self->a, "PsBuffer"))
+            case PT_MAPPING:
+                return ty_ptr(self->a, ty_name(self->a, "PsMapping"))
             case PT_VIEW:
                 # 18.3: a view IS the list object with `raw` and `owner` set —
                 # nothing new is allocated and the runtime learns nothing. The
@@ -651,7 +653,7 @@ struct PsLow:
             self->push_arg(cl, rcv)
             self->push_arg(cl, self->ctx_arg(pos))
         else:
-            cl = self->call_rt("ps_buffer_close" if k == PT_BUFFER else ("ps_conn_close" if k == PT_CONN else "ps_file_close"), pos)
+            cl = self->call_rt("ps_buffer_close" if k == PT_BUFFER else ("ps_map_close" if k == PT_MAPPING else ("ps_conn_close" if k == PT_CONN else "ps_file_close")), pos)
             self->push_arg(cl, self->ctx_arg(pos))
             self->push_arg(cl, self->async_field(name, pos) if self->in_frame(name) else self->ident(name, pos))
         st: *Stmt = st_new(self->a, ST_EXPR, pos)
@@ -1687,6 +1689,17 @@ struct PsLow:
                     else:
                         lit9->text = "6.283185307179586"
                     return lit9
+                # 137.1: as três do `advise`, e são VALORES. Saem como 0, 1 e
+                # 2 e NÃO como `MADV_SEQUENTIAL`: a tradução para o que o núcleo
+                # chama é do runtime, porque é o runtime que inclui
+                # `<sys/mman.h>` — a unidade de tradução do programa não inclui,
+                # e não devia ter de incluir para dizer como vai ler um mapa.
+                if strcmp(e->text, "__os_SEQUENTIAL") == 0:
+                    return self->num("0", e->pos)
+                if strcmp(e->text, "__os_RANDOM") == 0:
+                    return self->num("1", e->pos)
+                if strcmp(e->text, "__os_WILLNEED") == 0:
+                    return self->num("2", e->pos)
                 if strcmp(e->text, "__sys_argv") == 0 or strcmp(e->text, "__sys_env") == 0:
                     sc9: *Expr = self->call_rt("ps_sys_argv" if strcmp(e->text, "__sys_argv") == 0 else "ps_sys_env", e->pos)
                     self->push_arg(sc9, self->ctx_arg(e->pos))
@@ -2107,6 +2120,19 @@ struct PsLow:
                 return self->ident(cn, e->pos)
             case PE_SLICE:
                 slk9: PsTypeKind = e->lhs->type->kind if e->lhs->type != None else PT_UNKNOWN
+                if slk9 == PT_MAPPING:
+                    msl: *Expr = self->call_rt("ps_map_slice", e->pos)
+                    self->push_arg(msl, self->ctx_arg(e->pos))
+                    self->push_arg(msl, self->expr(e->lhs))
+                    self->push_arg(msl, self->expr(e->args[0]) if e->args[0] != None else self->num("0", e->pos))
+                    self->push_arg(msl, self->expr(e->args[1]) if e->args[1] != None else self->num("0", e->pos))
+                    self->push_arg(msl, self->expr(e->args[2]) if e->args[2] != None else self->num("1", e->pos))
+                    self->push_arg(msl, ex_new(self->a, EX_TRUE if e->args[0] != None else EX_FALSE, e->pos))
+                    self->push_arg(msl, ex_new(self->a, EX_TRUE if e->args[1] != None else EX_FALSE, e->pos))
+                    self->pos_args(msl, e->pos)
+                    self->raised = True
+                    self->allocs = True
+                    return msl
                 if slk9 == PT_BUFFER:
                     # 135.8: `b[a:e]` IS `b.view_u8(a, e - a)`. It is written as
                     # a count and not as an end because that is what the window
@@ -3052,6 +3078,24 @@ struct PsLow:
             self->push_arg(tc9, self->expr(e->lhs->lhs))
             self->allocs = True
             return tc9
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_MAPPING:
+            mmn: const *char = e->lhs->text
+            if strcmp(mmn, "size") == 0:
+                ms9: *Expr = self->call_rt("ps_map_len", e->pos)
+                self->push_arg(ms9, self->expr(e->lhs->lhs))
+                return ms9
+            mc9: *Expr = self->call_rt(self->a->printf("ps_map_%s", mmn), e->pos)
+            self->push_arg(mc9, self->ctx_arg(e->pos))
+            self->push_arg(mc9, self->expr(e->lhs->lhs))
+            for i in range(e->nargs):
+                self->push_arg(mc9, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[i]))
+            if strcmp(mmn, "close") != 0:
+                # `close` cannot fail and needs no position; everything else
+                # can, because everything else touches a mapping that may be
+                # gone already
+                self->pos_args(mc9, e->pos)
+                self->raised = True
+            return mc9
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_BUFFER:
             ve: i32 = ps_view_esize(e->lhs->text)
             if ve != 0:
@@ -3833,6 +3877,8 @@ struct PsLow:
         # `mkdir`/`makedirs` são a MESMA função do runtime com um bool a decidir,
         # as três perguntas ao disco também (um `kind`), e `join` de N pedaços é
         # a chamada de dois ANINHADA, que é o que o `posixpath` faz também.
+        if strcmp(name, "__os_SEQUENTIAL") == 0 or strcmp(name, "__os_RANDOM") == 0 or strcmp(name, "__os_WILLNEED") == 0:
+            fatal_at(self->file, e->pos, "internal: os.%s is a value, not a call", name + 5)
         if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
             isos0: bool = strncmp(name, "__os_", 5) == 0
             of0: const *char = name + (5 if isos0 else 7)
@@ -3841,6 +3887,19 @@ struct PsLow:
             # é o runtime que sabe o que "não veio" significa em cada um (herdar
             # o ambiente, ficar no diretório de quem chamou, devolver a saída em
             # vez de gravá-la).
+            # 137: `os.mmap(p)` / `os.mmap(p, mode)` / `os.mmap(p, mode, off, n)`
+            if isos0 and strcmp(of0, "mmap") == 0:
+                mo: *Expr = self->call_rt("ps_map_open", e->pos)
+                self->push_arg(mo, self->ctx_arg(e->pos))
+                self->push_arg(mo, self->expr(e->args[0]))
+                self->push_arg(mo, self->expr(e->args[1]) if e->nargs >= 2 else self->str_lit("r", e->pos))
+                self->push_arg(mo, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[2]) if e->nargs == 4 else self->num("0", e->pos))
+                self->push_arg(mo, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[3]) if e->nargs == 4 else self->num("0", e->pos))
+                self->push_arg(mo, ex_new(self->a, EX_TRUE if e->nargs == 4 else EX_FALSE, e->pos))
+                self->pos_args(mo, e->pos)
+                self->raised = True
+                self->allocs = True
+                return mo
             if isos0 and strcmp(of0, "run") == 0:
                 rc0: *Expr = self->call_rt("ps_os_run", e->pos)
                 self->push_arg(rc0, self->ctx_arg(e->pos))
@@ -4090,6 +4149,10 @@ struct PsLow:
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_ARRAY:
             ac8: *PsType = e->args[0]->type
             return self->num(ac8->count->text if ac8->count != None else "0", e->pos)
+        if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_MAPPING:
+            cm8: *Expr = self->call_rt("ps_map_len", e->pos)
+            self->push_arg(cm8, self->expr(e->args[0]))
+            return cm8
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_BYTES:
             cb8: *Expr = self->call_rt("ps_bytes_len", e->pos)
             self->push_arg(cb8, self->expr(e->args[0]))
@@ -5432,7 +5495,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -6672,11 +6735,28 @@ struct PsLow:
                 # the one an error takes (48.1/19.4).
                 wb9: Vec<*Stmt>
                 wb9.init()
-                wd9: *Stmt = st_new(self->a, ST_VAR, s->pos)
-                wd9->name = ps_cname(self->a, s->name)
-                wd9->type = self->ty(s->expr->type)
-                wd9->init = self->expr(s->expr)
-                wb9.push(wd9)
+                # Inside an `async def` every local lives in the FRAME (50.1),
+                # and the `with` variable is a local like any other. Declaring
+                # it as a C local here while the BODY reads `__fr->name` is two
+                # different variables with one name — the assignment goes to one
+                # and every use reads the other, which is None.
+                #
+                # It only shows up when NEITHER the expression nor the body
+                # awaits: with an await anywhere, `ab_with` takes the statement
+                # and does this correctly. `with os.mmap(p) as m:` is the first
+                # thing that is both synchronous and collected, and it found it.
+                if self->in_frame(s->name):
+                    wa9: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
+                    wa9->lhs = self->async_field(s->name, s->pos)
+                    wa9->op = TK_ASSIGN
+                    wa9->rhs = self->expr(s->expr)
+                    wb9.push(wa9)
+                else:
+                    wd9: *Stmt = st_new(self->a, ST_VAR, s->pos)
+                    wd9->name = ps_cname(self->a, s->name)
+                    wd9->type = self->ty(s->expr->type)
+                    wd9->init = self->expr(s->expr)
+                    wb9.push(wd9)
                 if self->raised:
                     wb9.push(self->guard(s->pos))
                 wk9: PsTypeKind = s->expr->type->kind if s->expr->type != None else PT_UNKNOWN
@@ -6686,7 +6766,7 @@ struct PsLow:
                     # method the impl block registered — a direct call, exactly
                     # what the type would get anywhere else
                     cl9 = self->call_rt(self->a->printf("%s_close", ps_cname(self->a, s->expr->type->name)), s->pos)
-                    rcv9: *Expr = self->ident(s->name, s->pos)
+                    rcv9: *Expr = self->async_field(s->name, s->pos) if self->in_frame(s->name) else self->ident(s->name, s->pos)
                     if not s->expr->type->is_ref:
                         ra9: *Expr = ex_new(self->a, EX_UNARY, s->pos)
                         ra9->op = TK_AMP
@@ -6695,9 +6775,9 @@ struct PsLow:
                     self->push_arg(cl9, rcv9)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                 else:
-                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close"), s->pos)
+                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_map_close" if wk9 == PT_MAPPING else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close")), s->pos)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
-                    self->push_arg(cl9, self->ident(s->name, s->pos))
+                    self->push_arg(cl9, self->async_field(s->name, s->pos) if self->in_frame(s->name) else self->ident(s->name, s->pos))
                 ce9: *Stmt = st_new(self->a, ST_EXPR, s->pos)
                 ce9->expr = cl9
                 df9: *Stmt = st_new(self->a, ST_DEFER, s->pos)
@@ -10706,7 +10786,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

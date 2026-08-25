@@ -2050,6 +2050,7 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
         case PT_VOID:
         case PT_FILE:
         case PT_BUFFER:
+        case PT_MAPPING:
         case PT_TIMER:
         case PT_CONN:
         case PT_PROC: {
@@ -2265,6 +2266,8 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 }
                 if (strncmp(e->text, "__math_", 7) == 0 && (strcmp(e->text + 7, "pi") == 0 || strcmp(e->text + 7, "e") == 0 || strcmp(e->text + 7, "tau") == 0 || strcmp(e->text + 7, "inf") == 0 || strcmp(e->text + 7, "nan") == 0)) {
                     t = ps_type(self->a, PT_FLOAT, e->pos);
+                } else if (strcmp(e->text, "__os_SEQUENTIAL") == 0 || strcmp(e->text, "__os_RANDOM") == 0 || strcmp(e->text, "__os_WILLNEED") == 0) {
+                    t = ps_type(self->a, PT_INT, e->pos);
                 } else if (strcmp(e->text, "__sys_argv") == 0) {
                     PsType *av = ps_type(self->a, PT_LIST, e->pos);
                     av->inner = ps_type(self->a, PT_STR, e->pos);
@@ -2443,12 +2446,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_956_17 = e;
-                __with_956_17->kind = PE_CALL;
-                __with_956_17->lhs = cal8;
-                __with_956_17->args = args8;
-                __with_956_17->nargs = nc8;
-                __with_956_17->body = NULL;
+                PsExpr *__with_961_17 = e;
+                __with_961_17->kind = PE_CALL;
+                __with_961_17->lhs = cal8;
+                __with_961_17->args = args8;
+                __with_961_17->nargs = nc8;
+                __with_961_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -2781,8 +2784,8 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
         }
         case PE_SLICE: {
             PsType *st4 = PsSema_check_expr(self, e->lhs);
-            if (st4 == NULL || (st4->kind != PT_STR && st4->kind != PT_BYTES && st4->kind != PT_LIST && st4->kind != PT_VIEW && st4->kind != PT_BUFFER)) {
-                fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes, List, View and Buffer work)", ps_type_str(self->a, st4));
+            if (st4 == NULL || (st4->kind != PT_STR && st4->kind != PT_BYTES && st4->kind != PT_LIST && st4->kind != PT_VIEW && st4->kind != PT_BUFFER && st4->kind != PT_MAPPING)) {
+                fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes, List, View, Buffer and Mapping work)", ps_type_str(self->a, st4));
             }
             size_t i;
             for (i = 0; i < 3; i += 1) {
@@ -2791,7 +2794,9 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                     PsSema_want(self, e->args[i], pt4, ps_type(self->a, PT_INT, e->pos), "a slice bound");
                 }
             }
-            if (st4->kind == PT_BUFFER) {
+            if (st4->kind == PT_MAPPING) {
+                t = ps_type(self->a, PT_BYTES, e->pos);
+            } else if (st4->kind == PT_BUFFER) {
                 if (e->args[2] != NULL) {
                     fatal_at(self->file, e->pos, "a window over a Buffer has no step: it is the same bytes seen as elements, and a step would mean copying them (135.8) — slice the View it gives you");
                 }
@@ -3200,14 +3205,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1660_21 = e;
-                    __with_1660_21->kind = PE_COMPREHEND;
-                    __with_1660_21->op = TK_RBRACKET;
-                    __with_1660_21->var = kv9;
-                    __with_1660_21->lhs = pair;
-                    __with_1660_21->rhs = recv9;
-                    __with_1660_21->args = NULL;
-                    __with_1660_21->nargs = 0;
+                    PsExpr *__with_1671_21 = e;
+                    __with_1671_21->kind = PE_COMPREHEND;
+                    __with_1671_21->op = TK_RBRACKET;
+                    __with_1671_21->var = kv9;
+                    __with_1671_21->lhs = pair;
+                    __with_1671_21->rhs = recv9;
+                    __with_1671_21->args = NULL;
+                    __with_1671_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -3518,6 +3523,28 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 return vl;
             }
             fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm);
+        }
+        if (rt != NULL && rt->kind == PT_MAPPING) {
+            const char *mm = e->lhs->text;
+            e->lhs->type = rt;
+            if (strcmp(mm, "advise") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "advise() takes one of os.SEQUENTIAL, os.RANDOM or os.WILLNEED");
+                }
+                PsType *ma = PsSema_check_expr(self, e->args[0]);
+                PsSema_want(self, e->args[0], ma, ps_type(self->a, PT_INT, e->pos), "the advice");
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            if (e->nargs != 0) {
+                fatal_at(self->file, e->pos, "'%s' takes no arguments", mm);
+            }
+            if (strcmp(mm, "size") == 0) {
+                return ps_type(self->a, PT_INT, e->pos);
+            }
+            if (strcmp(mm, "sync") == 0 || strcmp(mm, "lock") == 0 || strcmp(mm, "close") == 0) {
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            fatal_at(self->file, e->pos, "a Mapping has size, advise, sync, lock and close (137.1), not '%s'", mm);
         }
         if (rt != NULL && rt->kind == PT_PROC) {
             const char *pm = e->lhs->text;
@@ -4570,12 +4597,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_2956_17 = e;
-                __with_2956_17->kind = PE_INDEX;
-                __with_2956_17->lhs = e->args[0];
-                __with_2956_17->rhs = below;
-                __with_2956_17->args = NULL;
-                __with_2956_17->nargs = 0;
+                PsExpr *__with_2987_17 = e;
+                __with_2987_17->kind = PE_INDEX;
+                __with_2987_17->lhs = e->args[0];
+                __with_2987_17->rhs = below;
+                __with_2987_17->args = NULL;
+                __with_2987_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -4791,6 +4818,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             return ps_type(self->a, PT_VOID, e->pos);
         }
+        if (isos && strcmp(of, "mmap") == 0) {
+            if (e->nargs != 1 && e->nargs != 2 && e->nargs != 4) {
+                fatal_at(self->file, e->pos, "os.mmap(path) maps the whole file, os.mmap(path, mode) says how, and os.mmap(path, mode, off, n) maps a REGION (137.3)");
+            }
+            PsType *mp0 = PsSema_check_expr(self, e->args[0]);
+            PsSema_want(self, e->args[0], mp0, ps_type(self->a, PT_STR, e->pos), "the path to map");
+            if (e->nargs >= 2) {
+                PsType *mp1 = PsSema_check_expr(self, e->args[1]);
+                PsSema_want(self, e->args[1], mp1, ps_type(self->a, PT_STR, e->pos), "the mode: \"r\" or \"w\"");
+            }
+            size_t mi;
+            for (mi = 2; mi < e->nargs; mi += 1) {
+                PsType *mpx = PsSema_check_expr(self, e->args[mi]);
+                PsSema_want(self, e->args[mi], mpx, ps_type(self->a, PT_INT, e->pos), (mi == 2 ? "where the region starts" : "how long the region is"));
+            }
+            return ps_type(self->a, PT_MAPPING, e->pos);
+        }
+        if (isos && (strcmp(of, "SEQUENTIAL") == 0 || strcmp(of, "RANDOM") == 0 || strcmp(of, "WILLNEED") == 0)) {
+            fatal_at(self->file, e->pos, "os.%s is a VALUE, not a call: `m.advise(os.%s)`", of, of);
+        }
         if (isos && strcmp(of, "nproc") == 0) {
             if (e->nargs != 0) {
                 fatal_at(self->file, e->pos, "os.nproc() takes no arguments");
@@ -4990,26 +5037,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3333_17 = e;
-                __with_3333_17->kind = PE_STR;
-                __with_3333_17->text = lit7;
-                __with_3333_17->lhs = NULL;
-                __with_3333_17->rhs = NULL;
-                __with_3333_17->args = NULL;
-                __with_3333_17->nargs = 0;
+                PsExpr *__with_3382_17 = e;
+                __with_3382_17->kind = PE_STR;
+                __with_3382_17->text = lit7;
+                __with_3382_17->lhs = NULL;
+                __with_3382_17->rhs = NULL;
+                __with_3382_17->args = NULL;
+                __with_3382_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3346_13 = e;
-            __with_3346_13->kind = PE_LOWERED;
-            __with_3346_13->low = ln7;
-            __with_3346_13->lhs = NULL;
-            __with_3346_13->rhs = NULL;
-            __with_3346_13->args = NULL;
-            __with_3346_13->nargs = 0;
+            PsExpr *__with_3395_13 = e;
+            __with_3395_13->kind = PE_LOWERED;
+            __with_3395_13->low = ln7;
+            __with_3395_13->lhs = NULL;
+            __with_3395_13->rhs = NULL;
+            __with_3395_13->args = NULL;
+            __with_3395_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5056,7 +5103,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         if (at2 != NULL && at2->kind == PT_TUPLE) {
             return ps_type(self->a, PT_INT, e->pos);
         }
-        if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_BYTES || at2->kind == PT_LIST || at2->kind == PT_VIEW || at2->kind == PT_DICT || at2->kind == PT_SET)) {
+        if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_BYTES || at2->kind == PT_LIST || at2->kind == PT_VIEW || at2->kind == PT_DICT || at2->kind == PT_SET || at2->kind == PT_MAPPING)) {
             fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2));
         }
         return ps_type(self->a, PT_INT, e->pos);
@@ -5301,10 +5348,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3620_17 = &ns->quals[ns->nquals];
-                __with_3620_17->name = q;
-                __with_3620_17->orig = d->path;
-                __with_3620_17->ns = sub;
+                PsNsEnt *__with_3669_17 = &ns->quals[ns->nquals];
+                __with_3669_17->name = q;
+                __with_3669_17->orig = d->path;
+                __with_3669_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5317,10 +5364,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3632_21 = &ns->ents[ns->nents];
-                    __with_3632_21->name = local;
-                    __with_3632_21->orig = d->names[k];
-                    __with_3632_21->ns = sub;
+                    PsNsEnt *__with_3681_21 = &ns->ents[ns->nents];
+                    __with_3681_21->name = local;
+                    __with_3681_21->orig = d->names[k];
+                    __with_3681_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5683,6 +5730,10 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "spawn");
         StrSet_add(&ns->sym, "kill");
         StrSet_add(&ns->sym, "alive");
+        StrSet_add(&ns->sym, "mmap");
+        StrSet_add(&ns->sym, "SEQUENTIAL");
+        StrSet_add(&ns->sym, "RANDOM");
+        StrSet_add(&ns->sym, "WILLNEED");
         StrSet_add(&ns->sym, "spawn_pty");
         StrSet_add(&ns->sym, "pty_resize");
         StrSet_add(&ns->sym, "pty_pid");
@@ -5774,10 +5825,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4089_9 = e;
-        __with_4089_9->kind = PE_NAME;
-        __with_4089_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4089_9->lhs = NULL;
+        PsExpr *__with_4145_9 = e;
+        __with_4145_9->kind = PE_NAME;
+        __with_4145_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4145_9->lhs = NULL;
     }
     return 1;
 }
@@ -7435,7 +7486,7 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
         }
         case PS_WITH: {
             PsType *wt9 = PsSema_check_expr(self, s->expr);
-            int closeable = wt9 != NULL && (wt9->kind == PT_FILE || wt9->kind == PT_BUFFER || wt9->kind == PT_CONN);
+            int closeable = wt9 != NULL && (wt9->kind == PT_FILE || wt9->kind == PT_BUFFER || wt9->kind == PT_CONN || wt9->kind == PT_MAPPING);
             if (!closeable && wt9 != NULL && wt9->kind == PT_NAME && StrMap_pPsDecl_has(&self->records, wt9->name)) {
                 closeable = StrSet_has(&self->timpls, Arena_printf(self->a, "Closeable|%s", wt9->name));
             }
@@ -8040,6 +8091,9 @@ const char *ps_builtin_tname(PsType *t) {
         case PT_BUFFER: {
             return "Buffer";
         }
+        case PT_MAPPING: {
+            return "Mapping";
+        }
         case PT_BYTES: {
             return "bytes";
         }
@@ -8067,6 +8121,7 @@ int ps_is_ref_type(PsType *t) {
         case PT_TASK:
         case PT_WORKER:
         case PT_FILE:
+        case PT_MAPPING:
         case PT_CONN:
         case PT_PROC:
         case PT_FUNC:
@@ -8367,6 +8422,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
         }
         case PT_BYTES: {
             return "bytes";
+        }
+        case PT_MAPPING: {
+            return "Mapping";
         }
         case PT_VIEW: {
             return Arena_printf(a, "View<%s>", ps_type_str(a, t->inner));

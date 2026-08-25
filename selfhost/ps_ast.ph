@@ -51,6 +51,9 @@ enum PsTypeKind:
                      #   type of message it sends back (36.1).
     PT_FILE          # an open file (48.1)
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
+    PT_MAPPING       # 137.1: `Mapping` — a file in memory. Uppercase, because
+                     #   it is a THING with a lifetime: it closes, and closing
+                     #   it is the plan rather than the net (136.1).
     PT_VIEW          # 135.8/18.3: `View<T>` — the same bytes seen as elements,
                      #   borrowed from a `Buffer`. It is the SAME object a list
                      #   is (`raw` + `owner`), so nothing new is allocated; what

@@ -552,7 +552,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_TIMER, PT_CONN, PT_PROC:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_TIMER, PT_CONN, PT_PROC:
                 pass
         return t
 
@@ -760,6 +760,11 @@ struct PsSema:
                     if strncmp(e->text, "__math_", 7) == 0 and (strcmp(e->text + 7, "pi") == 0 or strcmp(e->text + 7, "e") == 0 or strcmp(e->text + 7, "tau") == 0 or strcmp(e->text + 7, "inf") == 0 or strcmp(e->text + 7, "nan") == 0):
                         # 103: as constantes são VALORES, como `sys.argv` é
                         t = ps_type(self->a, PT_FLOAT, e->pos)
+                    elif strcmp(e->text, "__os_SEQUENTIAL") == 0 or strcmp(e->text, "__os_RANDOM") == 0 or strcmp(e->text, "__os_WILLNEED") == 0:
+                        # 137.1: as três que fazem valer o tipo próprio. São
+                        # VALORES, como `sys.argv` é, e o que elas nomeiam é o
+                        # que se diz ao núcleo sobre COMO o mapa vai ser lido.
+                        t = ps_type(self->a, PT_INT, e->pos)
                     elif strcmp(e->text, "__sys_argv") == 0:
                         av: *PsType = ps_type(self->a, PT_LIST, e->pos)
                         av->inner = ps_type(self->a, PT_STR, e->pos)
@@ -1273,13 +1278,19 @@ struct PsSema:
                 t = cw
             case PE_SLICE:
                 st4: *PsType = self->check_expr(e->lhs)
-                if st4 == None or (st4->kind != PT_STR and st4->kind != PT_BYTES and st4->kind != PT_LIST and st4->kind != PT_VIEW and st4->kind != PT_BUFFER):
-                    fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes, List, View and Buffer work)", ps_type_str(self->a, st4))
+                if st4 == None or (st4->kind != PT_STR and st4->kind != PT_BYTES and st4->kind != PT_LIST and st4->kind != PT_VIEW and st4->kind != PT_BUFFER and st4->kind != PT_MAPPING):
+                    fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes, List, View, Buffer and Mapping work)", ps_type_str(self->a, st4))
                 for i in range(3):
                     if e->args[i] != None:
                         pt4: *PsType = self->check_expr(e->args[i])
                         self->want(e->args[i], pt4, ps_type(self->a, PT_INT, e->pos), "a slice bound")
-                if st4->kind == PT_BUFFER:
+                if st4->kind == PT_MAPPING:
+                    # 137.1: fatia-se em `bytes` SEM copiar. O bloco é do
+                    # núcleo e não se move, que é a condição inteira que uma
+                    # janela pede — a mesma que faz a fatia de um `bytes` ser
+                    # uma janela.
+                    t = ps_type(self->a, PT_BYTES, e->pos)
+                elif st4->kind == PT_BUFFER:
                     # 135.8: `b[0:8]` is sugar for `b.view_u8(0, 8)`, so what
                     # comes back is a `View<u8>` and NOT a `Buffer`. That is the
                     # distinction earning its keep: the window cannot be closed,
@@ -1941,6 +1952,26 @@ struct PsSema:
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
                 fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+            # 137.1: o mapa É um tipo próprio porque DÁ coisas — `advise`,
+            # `sync`, `lock` — que não cabem num valor. E fecha-se: um mapa é
+            # espaço de endereçamento, um inode e um descritor, e essas coisas
+            # esgotam-se muito antes do monte (136.1).
+            if rt != None and rt->kind == PT_MAPPING:
+                mm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if strcmp(mm, "advise") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "advise() takes one of os.SEQUENTIAL, os.RANDOM or os.WILLNEED")
+                    ma: *PsType = self->check_expr(e->args[0])
+                    self->want(e->args[0], ma, ps_type(self->a, PT_INT, e->pos), "the advice")
+                    return ps_type(self->a, PT_VOID, e->pos)
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "'%s' takes no arguments", mm)
+                if strcmp(mm, "size") == 0:
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(mm, "sync") == 0 or strcmp(mm, "lock") == 0 or strcmp(mm, "close") == 0:
+                    return ps_type(self->a, PT_VOID, e->pos)
+                fatal_at(self->file, e->pos, "a Mapping has size, advise, sync, lock and close (137.1), not '%s'", mm)
             # 118: um processo que já terminou (`await os.run(...)`): o status
             # e tudo que ele imprimiu. Métodos e não campos, que é a forma que
             # `conn.port()` já tinha.
@@ -3150,6 +3181,24 @@ struct PsSema:
                 if ae == None or ae->kind != PT_LIST or ae->inner == None or ae->inner->kind != PT_STR:
                     fatal_at(self->file, e->args[0]->pos, "os.exec() takes a List<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae))
                 return ps_type(self->a, PT_VOID, e->pos)
+            if isos and strcmp(of, "mmap") == 0:
+                # 137.3: o ficheiro inteiro, ou uma REGIÃO. Um membro de um
+                # arquivo enorme lê-se sem mapear os outros gigabytes, e custa
+                # dois argumentos. (Uma fatia `m[off:off+n]` dá a região DENTRO
+                # de um mapa que já existe; isto dá não mapear o resto de todo.)
+                if e->nargs != 1 and e->nargs != 2 and e->nargs != 4:
+                    fatal_at(self->file, e->pos, "os.mmap(path) maps the whole file, os.mmap(path, mode) says how, and os.mmap(path, mode, off, n) maps a REGION (137.3)")
+                mp0: *PsType = self->check_expr(e->args[0])
+                self->want(e->args[0], mp0, ps_type(self->a, PT_STR, e->pos), "the path to map")
+                if e->nargs >= 2:
+                    mp1: *PsType = self->check_expr(e->args[1])
+                    self->want(e->args[1], mp1, ps_type(self->a, PT_STR, e->pos), "the mode: \"r\" or \"w\"")
+                for mi in range(2, e->nargs):
+                    mpx: *PsType = self->check_expr(e->args[mi])
+                    self->want(e->args[mi], mpx, ps_type(self->a, PT_INT, e->pos), "where the region starts" if mi == 2 else "how long the region is")
+                return ps_type(self->a, PT_MAPPING, e->pos)
+            if isos and (strcmp(of, "SEQUENTIAL") == 0 or strcmp(of, "RANDOM") == 0 or strcmp(of, "WILLNEED") == 0):
+                fatal_at(self->file, e->pos, "os.%s is a VALUE, not a call: `m.advise(os.%s)`", of, of)
             if isos and strcmp(of, "nproc") == 0:
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "os.nproc() takes no arguments")
@@ -3394,7 +3443,7 @@ struct PsSema:
                 # 98.1: how many slots, which is known at compile time — the
                 # length of a tuple is part of its TYPE
                 return ps_type(self->a, PT_INT, e->pos)
-            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET}:
+            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_MAPPING}:
                 fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2))
             return ps_type(self->a, PT_INT, e->pos)
         if strcmp(name, "abs") == 0:
@@ -3992,6 +4041,13 @@ struct PsSema:
             ns->sym.add("alive")
             # F8: o quarto caso — um filho num TERMINAL. O que volta é o mesmo
             # `Conn` de um socket, então `read`, `write` e `close` já existem.
+            # 137: `os.mmap(p)` — o ficheiro em memória, sem o ler
+            ns->sym.add("mmap")
+            # ... e as três constantes do `advise`, que são o que faz valer a
+            # pena o tipo próprio (137.1)
+            ns->sym.add("SEQUENTIAL")
+            ns->sym.add("RANDOM")
+            ns->sym.add("WILLNEED")
             ns->sym.add("spawn_pty")
             ns->sym.add("pty_resize")
             ns->sym.add("pty_pid")
@@ -5658,7 +5714,7 @@ struct PsSema:
                 # P's `defer`. Only a file so far; the general protocol (what
                 # `with` means for a type of your own) is not decided yet.
                 wt9: *PsType = self->check_expr(s->expr)
-                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN)
+                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN or wt9->kind == PT_MAPPING)
                 if not closeable and wt9 != None and wt9->kind == PT_NAME and self->records.has(wt9->name):
                     # the protocol (68.4): `with` takes anything that DECLARES
                     # Closeable — nominal, like every use of a trait — and calls
@@ -6189,6 +6245,8 @@ def ps_builtin_tname(t: *PsType) -> const *char:
             return "Socket"
         case PT_BUFFER:
             return "Buffer"
+        case PT_MAPPING:
+            return "Mapping"
         case PT_BYTES:
             return "bytes"
         case PT_STR:
@@ -6202,7 +6260,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6406,6 +6464,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return a->printf("Worker<%s>", ps_type_str(a, t->inner))
         case PT_BYTES:
             return "bytes"
+        case PT_MAPPING:
+            return "Mapping"
         case PT_VIEW:
             return a->printf("View<%s>", ps_type_str(a, t->inner))
         case PT_FILE:

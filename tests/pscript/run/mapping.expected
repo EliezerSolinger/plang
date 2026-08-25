@@ -1,0 +1,10 @@
+tamanho 208 208
+primeiros ABCDEF
+ultimos WXYZ
+meio ABCDEF 26
+bate: True False
+regiao 10 ABCDEFGHIJ
+fora: the region 200+100 falls outside mapdemo/dados.bin, which is 208 bytes
+fechado: slice: this mapping is closed
+vazio 0 0
+mapping-ok

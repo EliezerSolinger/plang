@@ -1607,6 +1607,8 @@ static PsType *PsP_parse_type(PsP *self) {
             t = ps_type(self->a, PT_FILE, pos);
         } else if (PsP_renamed(self, pos, name, "buffer", "Buffer")) {
             t = ps_type(self->a, PT_BUFFER, pos);
+        } else if (strcmp(name, "Mapping") == 0) {
+            t = ps_type(self->a, PT_MAPPING, pos);
         } else if (strcmp(name, "View") == 0) {
             t = ps_type(self->a, PT_VIEW, pos);
             PsP_expect(self, TK_LT, "View<T>");

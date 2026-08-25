@@ -147,6 +147,15 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/oracle/run.sh >$V/oracle.log 2>&1; then
 else
     bad "um oráculo divergiu (veja $V/oracle.log)"
 fi
+# 137.2: truncar um ficheiro DEBAIXO de um mapa aberto. O que ele exige é que a
+# mensagem diga o que aconteceu — a excepção continua por fazer, e a bateria 145
+# diz porquê.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/mmap-truncate.sh >$V/mmaptrunc.log 2>&1; then
+    ok "mmap-truncate $(grep -oE '[0-9]+ ok' $V/mmaptrunc.log | tail -1)"
+else
+    bad "mmap-truncate (veja $V/mmaptrunc.log)"
+fi
+
 if PLANGC=$PWD/$V/plangc_s2 bash tests/gc-stress.sh >$V/gcstress.log 2>&1; then
     ok "gc-stress $(grep -oE '[0-9]+ ok' $V/gcstress.log | tail -1)"
 else

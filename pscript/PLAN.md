@@ -2200,11 +2200,20 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       migra ou nada compila. O que substituiu a faseagem foi o verificador de
       tipos, que prova que a migração está completa.
 
-- [ ] **F2** — `os.mmap` → `Mapping`, com o guarda do SIGBUS. Depende de F0.
-      ⚠ questão em aberto antes de fechar: o guarda com VÁRIAS threads (um
-      handler de sinal não pode tomar lock) — se não houver resposta limpa,
-      registrar bateria e seguir com a saída conservadora (guarda só na thread
-      que mapeou, dito na doc).
+- [x] **F2** — **FEITA.** `os.mmap(p)` e `os.mmap(p, mode, off, n)` (137.3),
+      `advise`/`sync`/`lock`/`size`/`close`, `with`, o finalizador como rede, e a
+      fatia em `bytes` SEM copiar — o bloco é do núcleo e não se move, que é a
+      condição inteira que uma janela pede.
+      ⚠ O **guarda do SIGBUS** ficou a MEIO, e a **bateria 145** diz exactamente
+      porquê: o endereço da falha precisa de `sigaction`+`SA_SIGINFO` e o salto
+      precisa de um `setjmp` no frame de quem escreveu o `with` — as duas coisas
+      esbarram na 72.4. O que ficou: com um mapa aberto, um SIGBUS DIZ a causa em
+      vez de morrer mudo, com portão que trunca mesmo o ficheiro
+      (`tests/mmap-truncate.sh`). O desenho que fecharia isto está na 145.
+      Defeito ANTIGO que isto desenterrou: um `with` sem `await` nenhum dentro de
+      um `async def` declarava um local enquanto o corpo lia o campo da moldura —
+      duas variáveis com um nome.
+
 - [ ] **F3** — `declare Mapping` em P (primeira utilização real dos traits da FS)
       e a ponte por `CBytes`. Depende de F2 **e** de FS.
 - [ ] **F4** — `os.pread`/`os.pwrite`, `os.stat`, `os.listdir` que percorre,

@@ -77,3 +77,17 @@ def ps_os_alive(ctx: *PsCtx, pid: i64) -> bool
 def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: const *char, line: i32) -> *PsConn
 def ps_os_pty_resize(ctx: *PsCtx, c: *PsConn, cols: i64, rows: i64)
 def ps_os_pty_pid(ctx: *PsCtx, c: *PsConn) -> i64
+
+# ---------- 137: o mapa de disco ----------
+# `os.mmap(p)` — o ficheiro em memória, sem o ler. Um tipo PRÓPRIO porque DÁ
+# coisas que não cabem num valor (`advise`, `sync`, `lock`), e porque FECHA:
+# um mapa é espaço de endereçamento, um inode e um descritor, e essas coisas
+# esgotam-se muito antes do monte (136.1).
+def ps_map_open(ctx: *PsCtx, p: *PsStr, mode: *PsStr, off: i64, n: i64, has_region: bool, file: const *char, line: i32) -> *PsMapping
+def ps_map_len(m: *PsMapping) -> i64
+# fatia-se em `bytes` SEM copiar: o bloco é do núcleo e não se move (137.1)
+def ps_map_slice(ctx: *PsCtx, m: *PsMapping, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsBytes
+def ps_map_advise(ctx: *PsCtx, m: *PsMapping, how: i64, file: const *char, line: i32)
+def ps_map_sync(ctx: *PsCtx, m: *PsMapping, file: const *char, line: i32)
+def ps_map_lock(ctx: *PsCtx, m: *PsMapping, file: const *char, line: i32)
+def ps_map_close(ctx: *PsCtx, m: *PsMapping)

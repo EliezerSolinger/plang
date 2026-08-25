@@ -9,6 +9,9 @@
 # A regra do `errno` do runtime vale aqui também: a mensagem vem da OPERAÇÃO e
 # do caminho, nunca do `errno` — `errno` é macro, e P não vê macro.
 include <dirent.h>
+include <sys/mman.h>   # 137: mmap/munmap/madvise/msync/mlock
+include <fcntl.h>      # ... e o open(2) que os alimenta
+include <unistd.h>
 include <sys/stat.h>
 include <sys/types.h>
 include <sys/wait.h>   # 119/F6: `waitpid` com WNOHANG, para saber se o filho
@@ -695,3 +698,174 @@ def ps_os_alive(ctx: *PsCtx, pid: i64) -> bool:
     st: i32 = 0
     r: i32 = waitpid(i32(pid), &st, WNOHANG)
     return r == 0
+
+
+# ---------- 137: o mapa de disco ----------
+#
+# `os.mmap(p)` — o ficheiro em memória, sem o ler. Um tipo PRÓPRIO e não um
+# `bytes`, e a pergunta que o decidiu foi *"o mapa do sistema operativo dá-te
+# recursos e opções; o tipo também podia?"*: `madvise`, `msync`, `mlock` e o
+# `MAP_POPULATE` não cabem num valor.
+#
+# E FECHA-SE, o que um `bytes` não faz (136.1). Um mapa é espaço de
+# endereçamento, um inode e um descritor — coisas que se esgotam muito antes do
+# monte, e que o coletor não tem motivo nenhum para notar. Mil mapas são mil
+# descritores e um monte minúsculo; esperar por pressão de memória é o erro pelo
+# qual o `MappedByteBuffer` do Java é conhecido (JDK-4724038). O finalizador é a
+# REDE, e o `with` é o plano.
+
+private def ps_map_release(o: *void):
+    m: *PsMapping = (*PsMapping)(o)
+    if m->open != 0 and m->base != None:
+        munmap((*void)(m->base), m->blen)
+    m->base = None
+    m->data = None
+    m->len = usize(0)
+    m->blen = usize(0)
+    m->open = 0
+
+
+def ps_map_open(ctx: *PsCtx, p: *PsStr, mode: *PsStr, off: i64, n: i64, has_region: bool, file: const *char, line: i32) -> *PsMapping:
+    m: *PsMapping = ps_alloc(ctx, sizeof(PsMapping), PS_TY_MAPPING)
+    m->data = None
+    m->base = None
+    m->len = usize(0)
+    m->blen = usize(0)
+    m->open = 0
+    m->writable = 0
+    wr: bool = mode != None and mode->len > u32(0) and mode->data[0] == 'w'
+    fd: int = open(p->data, O_RDWR if wr else O_RDONLY)
+    if fd < 0:
+        msg: char[512]
+        snprintf(msg, 512, "could not open for mapping: %s", p->data)
+        ps_raise(ctx, msg, PS_CAT_IO, file, line)
+        return m
+    st: stat
+    if fstat(fd, &st) != 0:
+        close(fd)
+        ps_raise(ctx, "could not measure the file to map it", PS_CAT_IO, file, line)
+        return m
+    total: i64 = i64(st.st_size)
+    start: i64 = off if has_region else 0
+    want: i64 = n if has_region else total
+    if start < 0 or want < 0 or start + want > total:
+        close(fd)
+        msg2: char[512]
+        snprintf(msg2, 512, "the region %lld+%lld falls outside %s, which is %lld bytes",
+                 i64(start), i64(want), p->data, i64(total))
+        ps_raise(ctx, msg2, PS_CAT_INDEX, file, line)
+        return m
+    if want == 0:
+        # 137.3: an empty region is legal and maps nothing. `mmap` of zero
+        # length FAILS, and answering "it worked, and it is empty" is both true
+        # and what every caller wants.
+        close(fd)
+        m->open = 1
+        m->writable = 1 if wr else 0
+        return m
+    # `mmap` demands a page-aligned offset, and 137.3 does not: the caller says
+    # where the DATA starts and this rounds down to the page, keeping the
+    # difference so `data` still points where it was asked to.
+    pg: i64 = i64(sysconf(_SC_PAGESIZE))
+    if pg <= 0:
+        pg = 4096
+    algn: i64 = start - (start % pg)
+    slack: i64 = start - algn
+    blen: usize = usize(want + slack)
+    prot: int = (PROT_READ | PROT_WRITE) if wr else PROT_READ
+    base: *void = mmap(None, blen, prot, MAP_SHARED if wr else MAP_PRIVATE, fd, algn)
+    # the descriptor is NOT kept: the mapping holds the file open by itself,
+    # which is what makes a thousand maps cost a thousand pages of address space
+    # and not a thousand descriptors
+    close(fd)
+    # `MAP_FAILED` é `((void *) -1)`: uma macro que não é número, e macro que
+    # não é número não atravessa a fronteira (72.4). O valor é o mesmo em todos
+    # os sistemas que têm `mmap`, e compará-lo assim é o que se consegue dizer.
+    if (*char)(base) == (*char)(usize(0)) - usize(1):
+        ps_raise(ctx, "the mapping failed", PS_CAT_IO, file, line)
+        return m
+    m->base = (*char)(base)
+    m->blen = blen
+    m->data = m->base + usize(slack)
+    m->len = usize(want)
+    m->open = 1
+    m->writable = 1 if wr else 0
+    ps_map_live_add()
+    ps_add_final(ctx, (*PsObj)(m), ps_map_release)
+    return m
+
+
+private def ps_map_live(ctx: *PsCtx, m: *PsMapping, what: const *char, file: const *char, line: i32) -> bool:
+    if m == None or m->open == 0:
+        msg: char[128]
+        snprintf(msg, 128, "%s: this mapping is closed", what)
+        ps_raise(ctx, msg, PS_CAT_VALUE, file, line)
+        return False
+    return True
+
+
+def ps_map_len(m: *PsMapping) -> i64:
+    return i64(m->len) if m != None else i64(0)
+
+
+# 137.1: fatia-se em `bytes` SEM copiar. O bloco é do núcleo e não se move, que
+# é exactamente a condição que uma janela pede — a mesma que faz a fatia de um
+# `bytes` ser uma janela.
+def ps_map_slice(ctx: *PsCtx, m: *PsMapping, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsBytes:
+    if not ps_map_live(ctx, m, "slice", file, line):
+        return ps_bytes_new(ctx, "", usize(0))
+    lo: i64 = 0
+    hi: i64 = 0
+    if not ps_slice_bounds_pub(ctx, i64(m->len), a, b, st, has_a, has_b, out lo, out hi, file, line):
+        return ps_bytes_new(ctx, "", usize(0))
+    if st != 1:
+        ps_raise(ctx, "a mapping slices with no step: it is a window over the file, and a step would mean copying it", PS_CAT_VALUE, file, line)
+        return ps_bytes_new(ctx, "", usize(0))
+    if lo >= hi:
+        return ps_bytes_new(ctx, "", usize(0))
+    # a `bytes` whose block is the KERNEL's and whose owner is nobody: it must
+    # not be freed, so it registers no finalizer and owns nothing
+    v: *PsBytes = ps_alloc(ctx, sizeof(PsBytes), PS_TY_BYTES)
+    v->data = m->data + usize(lo)
+    v->len = usize(hi - lo)
+    v->owner = None
+    v->hash = 0
+    v->foreign = 1
+    return v
+
+
+def ps_map_advise(ctx: *PsCtx, m: *PsMapping, how: i64, file: const *char, line: i32):
+    if not ps_map_live(ctx, m, "advise", file, line):
+        return
+    # 0/1/2 e não `MADV_*`: o programa diz a INTENÇÃO e é aqui que ela vira o
+    # número do sistema. É também o que deixa a mesma intenção significar coisas
+    # diferentes em sistemas diferentes sem o programa saber.
+    if m->base != None:
+        k: int = MADV_NORMAL
+        if how == 0:
+            k = MADV_SEQUENTIAL
+        elif how == 1:
+            k = MADV_RANDOM
+        elif how == 2:
+            k = MADV_WILLNEED
+        madvise((*void)(m->base), m->blen, k)
+
+
+def ps_map_sync(ctx: *PsCtx, m: *PsMapping, file: const *char, line: i32):
+    if not ps_map_live(ctx, m, "sync", file, line):
+        return
+    if m->base != None and msync((*void)(m->base), m->blen, MS_SYNC) != 0:
+        ps_raise(ctx, "sync: the mapping could not be written back", PS_CAT_IO, file, line)
+
+
+def ps_map_lock(ctx: *PsCtx, m: *PsMapping, file: const *char, line: i32):
+    if not ps_map_live(ctx, m, "lock", file, line):
+        return
+    if m->base != None and mlock((*void)(m->base), m->blen) != 0:
+        ps_raise(ctx, "lock: the pages could not be pinned (RLIMIT_MEMLOCK?)", PS_CAT_IO, file, line)
+
+
+def ps_map_close(ctx: *PsCtx, m: *PsMapping):
+    if m != None and m->open != 0:
+        ps_map_release((*void)(m))
+        ps_map_live_sub()
