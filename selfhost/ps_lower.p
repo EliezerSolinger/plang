@@ -4376,6 +4376,20 @@ struct PsLow:
             return xc
         if strcmp(name, "__sys_time") == 0:
             return self->call_rt("ps_sys_monotonic", e->pos)
+        # S7: o `starttls` e o `starttls_insecure` são a MESMA função com um
+        # booleano diferente — mas o booleano vive aqui e não no sítio da
+        # chamada, que é toda a diferença: não há `verify=False` para alguém
+        # desligar "só para testar" (141.4).
+        if strcmp(name, "__net_starttls") == 0 or strcmp(name, "__net_starttls_insecure") == 0:
+            ts9: *Expr = self->call_rt("ps_net_starttls", e->pos)
+            self->push_arg(ts9, self->ctx_arg(e->pos))
+            self->push_arg(ts9, self->expr(e->args[0]))
+            self->push_arg(ts9, self->expr(e->args[1]))
+            self->push_arg(ts9, ex_new(self->a, EX_FALSE if strcmp(name, "__net_starttls_insecure") == 0 else EX_TRUE, e->pos))
+            self->pos_args(ts9, e->pos)
+            self->raised = True
+            self->allocs = True
+            return ts9
         if starts_with(name, "__net_"):
             nc: *Expr = self->call_rt(self->a->printf("ps_net_%s", name + 6), e->pos)
             self->push_arg(nc, self->ctx_arg(e->pos))

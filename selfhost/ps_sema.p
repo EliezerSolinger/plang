@@ -3115,6 +3115,26 @@ struct PsSema:
             ct: *PsType = ps_type(self->a, PT_TASK, e->pos)
             ct->inner = ps_type(self->a, PT_CONN, e->pos)
             return ct
+        if strcmp(name, "__net_starttls") == 0 or strcmp(name, "__net_starttls_insecure") == 0:
+            # `await net.starttls(c, "example.com")` — promove uma ligação já
+            # aberta. O NOME é obrigatório e não é decoração: é ele que vai no
+            # SNI e é contra ele que o certificado é verificado. Sem ele, um
+            # certificado válido para outro domínio passaria.
+            wt: const *char = "net.starttls()" if strcmp(name, "__net_starttls") == 0 else "net.starttls_insecure()"
+            if e->nargs != 2:
+                fatal_at(self->file, e->pos, "%s takes the connection and the host name: `await net.starttls(c, \"example.com\")`", wt)
+            tc: *PsType = self->check_expr(e->args[0])
+            if tc == None or tc->kind != PT_CONN:
+                fatal_at(self->file, e->args[0]->pos, "%s takes a Socket, found %s", wt, ps_type_str(self->a, tc))
+            th: *PsType = self->check_expr(e->args[1])
+            self->want(e->args[1], th, ps_type(self->a, PT_STR, e->pos), "the host name")
+            tt: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            tt->inner = ps_type(self->a, PT_BOOL, e->pos)
+            return tt
+        if strcmp(name, "__net_tls_available") == 0:
+            if e->nargs != 0:
+                fatal_at(self->file, e->pos, "net.tls_available() takes no arguments")
+            return ps_type(self->a, PT_BOOL, e->pos)
         if strcmp(name, "__net_lookup") == 0:
             if e->nargs != 1:
                 fatal_at(self->file, e->pos, "net.lookup() takes a host name")
@@ -4335,6 +4355,13 @@ struct PsSema:
             ns->sym.add("udp")
             ns->sym.add("unix")
             ns->sym.add("unix_listen")
+            # S7: o TLS é um MODO de uma ligação que já existe, portanto vive
+            # aqui e não num tipo novo. **Duas funções e não uma bandeira**: não
+            # há `verify=False`, há `starttls_insecure`, que aparece num `grep`
+            # e que ninguém escreve por descuido (141.4).
+            ns->sym.add("starttls")
+            ns->sym.add("starttls_insecure")
+            ns->sym.add("tls_available")
         elif strcmp(name, "re") == 0:
             # S2b: o motor passou a ser NOSSO, e com ele vieram as funções que
             # faltavam. `import re` continua a não ter caminho e o compilador

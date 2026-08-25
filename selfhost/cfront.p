@@ -2524,6 +2524,26 @@ def c_typedef(p: *Cp):
                 p->typedefs.put(fpn, fpt)
             continue
         if p->is_punct("("):
+            # `typedef T (X)(args);` — o declarador entre parênteses, que é C
+            # legal e quer dizer exactamente o mesmo que `typedef T X(args);`.
+            # Antes isto era SALTADO e o nome nunca era registado, portanto um
+            # `(X *)algo` mais abaixo no mesmo cabeçalho deixava de ser um cast e
+            # passava a ser uma multiplicação — e o erro saía a dizer
+            # "invalid expression (found ')')", que não aponta para nada.
+            #
+            # É o que o `<openssl/ssl.h>` faz, e foi ele que o desenterrou.
+            if p->pk1()->kind == CT_ID and p->t[p->i + 2].kind == CT_PUNCT and strcmp(p->t[p->i + 2].text, ")") == 0:
+                p->adv()                       # (
+                gname: const *char = p->adv()->text
+                p->adv()                       # )
+                if p->is_punct("("):
+                    p->skip_parens()           # (args): um tipo de FUNÇÃO
+                elif p->is_punct("["):
+                    ty = p->parse_decl_suffix(ty)
+                p->skip_gnu()
+                p->types.add(gname)
+                p->typedefs.put(gname, ty)
+                continue
             p->skip_parens()   # unsupported form: ignore this declarator
             if p->is_punct("("):
                 p->skip_parens()  # (args)

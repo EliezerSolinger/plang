@@ -1156,6 +1156,7 @@ def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
     c->listening = listening
     c->pid = 0
     c->dgram = 0
+    c->ssl = None
     return c
 
 def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
@@ -1217,6 +1218,7 @@ def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask:
     w: *PsWork = ps_work_new(PS_IO_RECV)
     w->want = PS_W_BYTES
     w->fd = c->fd
+    w->ssl = c->ssl
     w->pty = 1 if c->pid > 0 else 0
     w->events = i16(POLLIN)
     w->n = usize(n if n > 0 else 0)
@@ -1237,6 +1239,7 @@ def ps_conn_read_into(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, f
     w: *PsWork = ps_work_new(PS_IO_RECV)
     w->want = PS_W_NREAD
     w->fd = c->fd
+    w->ssl = c->ssl
     w->pty = 1 if c->pid > 0 else 0
     w->events = i16(POLLIN)
     w->n = usize(n)
@@ -1254,6 +1257,7 @@ def ps_conn_write_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, 
     w: *PsWork = ps_work_new(PS_IO_SEND)
     w->want = PS_W_INT
     w->fd = c->fd
+    w->ssl = c->ssl
     w->events = i16(POLLOUT)
     w->n = usize(n)
     w->off = 0
@@ -1266,6 +1270,7 @@ private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) 
     w: *PsWork = ps_work_new(PS_IO_SEND)
     w->want = PS_W_INT
     w->fd = c->fd
+    w->ssl = c->ssl
     w->events = i16(POLLOUT)
     w->n = n
     w->off = 0
@@ -1295,6 +1300,10 @@ def ps_conn_write_bytesobj(ctx: *PsCtx, c: *PsConn, b: *PsBytes) -> *PsTask:
 
 def ps_conn_close(ctx: *PsCtx, c: *PsConn):
     if c != None and c->is_open != 0:
+        # S7: o TLS fecha ANTES do socket, e a ordem é a única que funciona — o
+        # `SSL_shutdown` escreve um registo de despedida, e escrevê-lo num
+        # descritor já fechado não diz nada a ninguém
+        ps_tls_close(c)
         ps_mux_forget(ctx, c->fd)      # BEFORE the close, so the DEL is valid
         close(c->fd)
         c->is_open = 0
@@ -1773,7 +1782,33 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             w->rc = 1
             w->want = PS_W_TRUE
             return True
+        case PS_IO_TLS:
+            # S7: mais um passo do aperto de mão. Zero quer dizer "ainda não", e
+            # o `events` que o passo deixou diz o que esperar da próxima vez.
+            st: i32 = ps_tls_step(w)
+            if st == 0:
+                return False
+            if st < 0:
+                w->err = 1
+            w->rc = 1
+            w->want = PS_W_TRUE
+            return True
         case PS_IO_RECV:
+            # S7: numa ligação TLS quem lê é o `SSL_read`, e o resto desta função
+            # não muda — os bytes chegam decifrados ao mesmo sítio, e tudo o que
+            # está por cima continua a falar com um `Socket`.
+            if w->ssl != None:
+                tr: i64 = ps_tls_read(w, w->dest if w->dest != None else w->buf, w->n)
+                if tr == -2:
+                    return False      # o `SSL` quer mais um turno
+                if tr < 0:
+                    w->err = 1
+                    w->n = 0
+                    w->rc = 0
+                else:
+                    w->n = usize(tr)
+                    w->rc = tr
+                return True
             # `read` and not `recv`, since F8: they are the same call for a
             # socket with no flags, and `recv` on a pseudo-terminal fails with
             # "not a socket". Using the general one is what lets a terminal BE a
@@ -1800,6 +1835,18 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             return True
         case PS_IO_SEND:
             sb9: *char = w->dest if w->dest != None else w->buf
+            if w->ssl != None:
+                tw: i64 = ps_tls_write(w, sb9 + w->off, w->n - w->off)
+                if tw == -2:
+                    return False
+                if tw < 0:
+                    w->err = 1
+                    return True
+                w->off += usize(tw)
+                if w->off < w->n:
+                    return False
+                w->rc = i64(w->n)
+                return True
             put: i64 = i64(write(w->fd, sb9 + w->off, w->n - w->off))
             if put < 0:
                 w->err = 1
@@ -3116,6 +3163,202 @@ def ps_sched_drain(ctx: *PsCtx):
     while ps_sched_progress(ctx):
         if ctx->exc != None:
             return
+
+# ---------- S7: TLS ----------
+#
+# **Um MODO de uma ligação que já existe, e não um tipo novo.** É a decisão
+# inteira: tudo o que está por cima — `read_into`, `write_from`, os traits
+# `Reader`/`Writer`, o cliente HTTP — continua a falar com um `Socket` e não sabe
+# a diferença. Um `TlsSocket` à parte obrigaria cada camada acima a ter duas
+# versões de tudo, e é assim que uma biblioteca de rede duplica.
+#
+# **Compilado só com `-D PSRT_TLS`**, pela mesma razão que o `inotify` só existe
+# no Linux (99): o OpenSSL é uma dependência de SISTEMA, e um runtime que a
+# arrastasse sempre obrigaria todo o programa a linkar `-lssl` para nada. Sem
+# ela, `net.starttls` levanta com a frase que diz o que fazer.
+#
+# **E o aperto de mão é POLIDO como tudo o resto.** O `SSL_connect` sobre um
+# socket não bloqueante devolve `WANT_READ`/`WANT_WRITE`, que é literalmente
+# "ainda não" — e "ainda não" é o que o `ps_fd_try` já sabe dizer devolvendo
+# falso. Não há maquinaria nova: o TLS entra pela porta que o socket já tinha.
+
+const if defined(PSRT_TLS):
+    include <openssl/ssl.h>
+    include <openssl/err.h>
+
+    # UM contexto por processo. O `SSL_CTX` guarda a cadeia de confiança e nada
+    # que mude por ligação, e construí-lo lê o armazém do sistema do disco —
+    # fazê-lo por ligação seria ler os certificados todos a cada pedido.
+    private g_ssl_ctx: *SSL_CTX = None
+    private g_ssl_ready: i32 = 0
+
+    private def ps_tls_ctx() -> *SSL_CTX:
+        if g_ssl_ready != 0:
+            return g_ssl_ctx
+        g_ssl_ready = 1
+        OPENSSL_init_ssl(u64(0), None)
+        g_ssl_ctx = SSL_CTX_new(TLS_client_method())
+        if g_ssl_ctx == None:
+            return None
+        # **A confiança vem do SISTEMA**, e é a mesma razão do `tz`: uma
+        # autoridade revogada corrige-se com `apt upgrade` e não com uma
+        # recompilação nossa. `SSL_CERT_FILE`/`SSL_CERT_DIR` sobrepõem-se, que é
+        # a variável que o próprio OpenSSL define para isso.
+        _ = SSL_CTX_set_default_verify_paths(g_ssl_ctx)
+        # TLS 1.2 é o piso: abaixo disso está tudo partido há anos, e um piso
+        # que não se pode baixar é uma promessa que não se pode perder por
+        # descuido
+        # a macro é sobre o `SSL_CTX_ctrl`, e as duas constantes são NÚMEROS —
+        # portanto atravessam a fronteira (72.4). O que não atravessa é a macro
+        # em si, e é por isso que a chamada está escrita por extenso.
+        _ = SSL_CTX_ctrl(g_ssl_ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, i64(TLS1_2_VERSION), None)
+        return g_ssl_ctx
+
+    private def ps_tls_msg(buf: *char, cap: usize, what: const *char):
+        e: u64 = ERR_get_error()
+        if e == u64(0):
+            snprintf(buf, cap, "%s", what)
+            return
+        det: char[256]
+        ERR_error_string_n(e, det, usize(256))
+        snprintf(buf, cap, "%s: %s", what, det)
+
+    # Prepara o `SSL` e deixa-o pronto para o primeiro `SSL_connect`. O aperto de
+    # mão em si acontece no `ps_fd_try`, polido.
+    def ps_tls_begin(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> bool:
+        sc: *SSL_CTX = ps_tls_ctx()
+        if sc == None:
+            ps_raise(ctx, "tls: the OpenSSL context could not be created", PS_CAT_IO, file, line)
+            return False
+        ssl: *SSL = SSL_new(sc)
+        if ssl == None:
+            ps_raise(ctx, "tls: the connection could not be created", PS_CAT_IO, file, line)
+            return False
+        _ = SSL_set_fd(ssl, c->fd)
+        # SNI: sem ele, um servidor com muitos nomes no mesmo endereço devolve o
+        # certificado errado. É uma macro sobre `SSL_ctrl`, e as duas constantes
+        # são números — portanto atravessam (72.4).
+        _ = SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, i64(TLSEXT_NAMETYPE_host_name), (*void)(host->data))
+        if verify:
+            # As duas coisas, e as duas fazem falta: `SSL_VERIFY_PEER` confere a
+            # CADEIA, e `SSL_set1_host` confere o NOME. Sem a segunda, um
+            # certificado válido para outro domínio passa — que é o buraco
+            # clássico, e é por isso que ele não é opcional aqui.
+            SSL_set_verify(ssl, SSL_VERIFY_PEER, None)
+            if SSL_set1_host(ssl, host->data) != 1:
+                SSL_free(ssl)
+                ps_raise(ctx, "tls: the host name is not one a certificate can be checked against", PS_CAT_VALUE, file, line)
+                return False
+        c->ssl = (*void)(ssl)
+        return True
+
+    # O passo do aperto de mão. Devolve 1 quando acabou, 0 quando falta (e diz
+    # pelo `events` o que esperar), e -1 quando falhou.
+    def ps_tls_step(w: *PsWork) -> i32:
+        ssl: *SSL = (*SSL)(w->ssl)
+        r: int = SSL_connect(ssl)
+        if r == 1:
+            return 1
+        e: int = SSL_get_error(ssl, r)
+        if e == SSL_ERROR_WANT_READ:
+            w->events = i16(POLLIN)
+            return 0
+        if e == SSL_ERROR_WANT_WRITE:
+            w->events = i16(POLLOUT)
+            return 0
+        return -1
+
+    def ps_tls_read(w: *PsWork, buf: *char, n: usize) -> i64:
+        ssl: *SSL = (*SSL)(w->ssl)
+        r: int = SSL_read(ssl, (*void)(buf), int(n))
+        if r > 0:
+            return i64(r)
+        e: int = SSL_get_error(ssl, r)
+        if e == SSL_ERROR_WANT_READ:
+            w->events = i16(POLLIN)
+            return -2                # ainda não
+        if e == SSL_ERROR_WANT_WRITE:
+            w->events = i16(POLLOUT)
+            return -2
+        if e == SSL_ERROR_ZERO_RETURN:
+            return 0                 # o outro lado fechou LIMPAMENTE
+        return -1
+
+    def ps_tls_write(w: *PsWork, buf: const *char, n: usize) -> i64:
+        ssl: *SSL = (*SSL)(w->ssl)
+        r: int = SSL_write(ssl, (*void)(buf), int(n))
+        if r > 0:
+            return i64(r)
+        e: int = SSL_get_error(ssl, r)
+        if e == SSL_ERROR_WANT_READ:
+            w->events = i16(POLLIN)
+            return -2
+        if e == SSL_ERROR_WANT_WRITE:
+            w->events = i16(POLLOUT)
+            return -2
+        return -1
+
+    def ps_tls_close(c: *PsConn):
+        if c->ssl == None:
+            return
+        ssl: *SSL = (*SSL)(c->ssl)
+        # um `shutdown` só, e sem esperar pela resposta: insistir prenderia o
+        # fecho num servidor que já foi embora, e o que interessa é dizer que
+        # acabámos
+        _ = SSL_shutdown(ssl)
+        SSL_free(ssl)
+        c->ssl = None
+
+    def ps_tls_available() -> bool:
+        return True
+else:
+    # Sem `-D PSRT_TLS` nada disto existe, e as funções ficam com o corpo que
+    # diz o que fazer. É a mesma forma que o vigia usa fora do Linux (146.2):
+    # levantar apontando o caminho, em vez de faltar em silêncio.
+    def ps_tls_begin(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> bool:
+        ps_raise(ctx, "tls: this runtime was built without TLS — rebuild it with `-D PSRT_TLS` and link `-lssl -lcrypto`", PS_CAT_IO, file, line)
+        return False
+
+    def ps_tls_step(w: *PsWork) -> i32:
+        return -1
+
+    def ps_tls_read(w: *PsWork, buf: *char, n: usize) -> i64:
+        return -1
+
+    def ps_tls_write(w: *PsWork, buf: const *char, n: usize) -> i64:
+        return -1
+
+    def ps_tls_close(c: *PsConn):
+        pass
+
+    def ps_tls_available() -> bool:
+        return False
+
+# `net.starttls(c, host)` — promove uma ligação já aberta a TLS.
+#
+# **Duas funções e não um booleano**, e é a jogada da 141.4 aplicada à segurança:
+# não existe `verify=False`. Existe `starttls_insecure`, que aparece num `grep` e
+# que ninguém escreve por descuido. Uma bandeira que se desliga é uma bandeira
+# que alguém desliga "só para testar" e esquece.
+def ps_net_starttls(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> *PsTask:
+    if not ps_conn_live(ctx, c, "starttls"):
+        return ps_task_of_int(ctx, 0)
+    if c->ssl != None:
+        ps_raise(ctx, "starttls: this connection is already TLS", PS_CAT_VALUE, file, line)
+        return ps_task_of_int(ctx, 0)
+    if not ps_tls_begin(ctx, c, host, verify, file, line):
+        return ps_task_of_int(ctx, 0)
+    w: *PsWork = ps_work_new(PS_IO_TLS)
+    w->want = PS_W_TRUE
+    w->fd = c->fd
+    w->ssl = c->ssl
+    # o primeiro passo espera pela ESCRITA: um aperto de mão começa por dizer
+    # alguma coisa, e é o `ClientHello`
+    w->events = i16(POLLOUT)
+    return ps_fd_task(ctx, w, False, sizeof(i64))
+
+def ps_net_tls_available(ctx: *PsCtx) -> bool:
+    return ps_tls_available()
 
 # ---------- S3/147: `Channel<T>`, o canal entre TAREFAS ----------
 #

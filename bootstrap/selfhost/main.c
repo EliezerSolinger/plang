@@ -269,6 +269,9 @@ static const char *dest_for(Cc *cc, const char *out_path, const char *out_dir, c
     const char *dest = (out_path != NULL ? out_path : derive_output(&cc->arena, path, be));
     if (out_path != NULL && is_pulled(pulled, path)) {
         dest = Arena_printf(&cc->arena, "%s/%s", path_dir(&cc->arena, out_path), path_base(derive_output(&cc->arena, path, be)));
+        if (stl_builtin(path) != NULL) {
+            dest = Arena_printf(&cc->arena, "%s/%s", path_dir(&cc->arena, out_path), derive_output(&cc->arena, path, be));
+        }
     }
     if (out_dir != NULL) {
         dest = Arena_printf(&cc->arena, "%s/%s", out_dir, dest);
@@ -695,7 +698,7 @@ int main(int argc, char **argv) {
         StrBuf out = {0};
         backend_emit(be, m, &out);
         const char *dest = dest_for(&cc, out_path, out_dir, path, be, &pulled);
-        if (out_dir != NULL) {
+        if (out_dir != NULL || stl_builtin(path) != NULL) {
             mkdirs_for(dest);
         }
         if (strcmp(dest, "-") == 0) {

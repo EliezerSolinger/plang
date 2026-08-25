@@ -3315,6 +3315,20 @@ void c_typedef(Cp *p) {
             continue;
         }
         if (Cp_is_punct(p, "(")) {
+            if (Cp_pk1(p)->kind == CT_ID && p->t[p->i + 2].kind == CT_PUNCT && strcmp(p->t[p->i + 2].text, ")") == 0) {
+                Cp_adv(p);
+                const char *gname = Cp_adv(p)->text;
+                Cp_adv(p);
+                if (Cp_is_punct(p, "(")) {
+                    Cp_skip_parens(p);
+                } else if (Cp_is_punct(p, "[")) {
+                    ty = Cp_parse_decl_suffix(p, ty);
+                }
+                Cp_skip_gnu(p);
+                StrSet_add(&p->types, gname);
+                StrMap_pType_put(&p->typedefs, gname, ty);
+                continue;
+            }
             Cp_skip_parens(p);
             if (Cp_is_punct(p, "(")) {
                 Cp_skip_parens(p);
@@ -3368,17 +3382,17 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         if (fpty != NULL && fpty->kind == TY_FUNC) {
             Func *ff = Arena_alloc(p->a, sizeof(Func));
             {
-                Func *__with_2586_13 = ff;
-                __with_2586_13->pos = pos;
-                __with_2586_13->name = fpname;
-                __with_2586_13->cname = fpname;
-                __with_2586_13->ret = fpty->inner;
-                __with_2586_13->params = fprms.data;
-                __with_2586_13->nparams = fprms.len;
-                __with_2586_13->is_varargs = fva;
-                __with_2586_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
+                Func *__with_2606_13 = ff;
+                __with_2606_13->pos = pos;
+                __with_2606_13->name = fpname;
+                __with_2606_13->cname = fpname;
+                __with_2606_13->ret = fpty->inner;
+                __with_2606_13->params = fprms.data;
+                __with_2606_13->nparams = fprms.len;
+                __with_2606_13->is_varargs = fva;
+                __with_2606_13->sig_empty = (fhp ? p->cap_sig_empty : 0);
                 if (Cp_is_punct(p, "{")) {
-                    __with_2586_13->body = c_block(p);
+                    __with_2606_13->body = c_block(p);
                 }
             }
             Decl *df = Arena_alloc(p->a, sizeof(Decl));
@@ -3389,14 +3403,14 @@ Decl *parse_one_decl(Cp *p, Type *base, int is_extern, Pos pos) {
         }
         Decl *dfp = Arena_alloc(p->a, sizeof(Decl));
         {
-            Decl *__with_2603_9 = dfp;
-            __with_2603_9->kind = DL_VAR;
-            __with_2603_9->pos = pos;
-            __with_2603_9->name = fpname;
-            __with_2603_9->type = fpty;
-            __with_2603_9->is_extern = is_extern;
+            Decl *__with_2623_9 = dfp;
+            __with_2623_9->kind = DL_VAR;
+            __with_2623_9->pos = pos;
+            __with_2623_9->name = fpname;
+            __with_2623_9->type = fpty;
+            __with_2623_9->is_extern = is_extern;
             if (Cp_eat(p, "=")) {
-                __with_2603_9->init = c_initializer(p);
+                __with_2623_9->init = c_initializer(p);
             }
         }
         return dfp;
@@ -3419,17 +3433,17 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
         Cp_skip_gnu(p);
         Func *f = Arena_alloc(p->a, sizeof(Func));
         {
-            Func *__with_2629_9 = f;
-            __with_2629_9->pos = pos;
-            __with_2629_9->name = name;
-            __with_2629_9->cname = name;
-            __with_2629_9->ret = ty;
-            __with_2629_9->params = params.data;
-            __with_2629_9->nparams = params.len;
-            __with_2629_9->is_varargs = is_vararg;
-            __with_2629_9->sig_empty = p->params_empty;
+            Func *__with_2649_9 = f;
+            __with_2649_9->pos = pos;
+            __with_2649_9->name = name;
+            __with_2649_9->cname = name;
+            __with_2649_9->ret = ty;
+            __with_2649_9->params = params.data;
+            __with_2649_9->nparams = params.len;
+            __with_2649_9->is_varargs = is_vararg;
+            __with_2649_9->sig_empty = p->params_empty;
             if (Cp_is_punct(p, "{")) {
-                __with_2629_9->body = c_block(p);
+                __with_2649_9->body = c_block(p);
             }
         }
         Decl *d = Arena_alloc(p->a, sizeof(Decl));
@@ -3458,14 +3472,14 @@ Decl *parse_one_decl_named(Cp *p, Type *ty, const char *name, int is_extern, Pos
     Cp_skip_gnu(p);
     Decl *d2 = Arena_alloc(p->a, sizeof(Decl));
     {
-        Decl *__with_2662_5 = d2;
-        __with_2662_5->kind = DL_VAR;
-        __with_2662_5->pos = pos;
-        __with_2662_5->name = name;
-        __with_2662_5->type = ty;
-        __with_2662_5->is_extern = is_extern;
+        Decl *__with_2682_5 = d2;
+        __with_2682_5->kind = DL_VAR;
+        __with_2682_5->pos = pos;
+        __with_2682_5->name = name;
+        __with_2682_5->type = ty;
+        __with_2682_5->is_extern = is_extern;
         if (Cp_eat(p, "=")) {
-            __with_2662_5->init = c_initializer(p);
+            __with_2682_5->init = c_initializer(p);
         }
     }
     return d2;

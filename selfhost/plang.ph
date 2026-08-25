@@ -122,3 +122,8 @@ struct FStrParts:
 # Diagnostics point at `pos`, the position of the f-string as a whole: a hole is
 # lexed on its own, so it has no position of its own to offer.
 def fstr_split(a: *Arena, body: const *char, nbody: usize, file: const *char, pos: Pos) -> FStrParts
+
+# 142: o `stl` que vem DENTRO do compilador. `stl_builtin` devolve o texto de um
+# módulo dele, ou None; `STL_ROOT` é o nome da raiz virtual sob a qual eles
+# vivem, e é a primeira que o `pkg_find` procura.
+def stl_builtin(path: const *char) -> const *char

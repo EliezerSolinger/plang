@@ -264,3 +264,14 @@ def ps_chan_count(ch: *PsChan) -> i64
 def ps_group_new(ctx: *PsCtx) -> *PsGroup
 def ps_group_spawn(ctx: *PsCtx, g: *PsGroup, t: *PsTask, file: const *char, line: i32)
 def ps_group_close(ctx: *PsCtx, g: *PsGroup)
+
+# S7: o TLS. `starttls` promove uma ligação já aberta; a verificação NÃO se
+# desliga por bandeira — há uma segunda função com "insecure" no nome (141.4).
+def ps_net_starttls(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> *PsTask
+def ps_net_tls_available(ctx: *PsCtx) -> bool
+def ps_tls_begin(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> bool
+def ps_tls_step(w: *PsWork) -> i32
+def ps_tls_read(w: *PsWork, buf: *char, n: usize) -> i64
+def ps_tls_write(w: *PsWork, buf: const *char, n: usize) -> i64
+def ps_tls_close(c: *PsConn)
+def ps_tls_available() -> bool

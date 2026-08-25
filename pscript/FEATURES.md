@@ -184,8 +184,20 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | `os.tempdir/tempfile/tempdir_new` | S2 | `tempfile` | ✅ as duas últimas CRIAM, com `O_EXCL` e 0600 (0700 no directório): devolver um nome que ainda não existe é a corrida do `mktemp` |
 | `datetime` — o modelo do `java.time` | S4 | `datetime/test` | ✅ o TIPO responde se tem fuso; `Duration` é exacto e `Period` não é; ISO 8601/RFC 3339, os TRÊS formatos de data do HTTP, `strftime`/`strptime`. 85 comparações contra o CPython, incluindo antes da epoch e a era de 2400 |
 | `tz` — os fusos, lidos do SISTEMA | S4 | `tz/test` | ✅ TZif (RFC 8536) de `/usr/share/zoneinfo`, com a regra POSIX do rodapé para lá do fim do ficheiro. Não traz cópia: as regras mudam várias vezes por ano (149.2). Oráculo: o `zoneinfo` do CPython em 6 fusos × 6 instantes |
-| metapacotes `stdlib` e `crypto` | S0 | `tests/pkg/meta` | ✅ `"kind": "meta"`: instala, não importa |
+| `compress` — DEFLATE, zlib, gzip | S6 | `compress/test` | ✅ os três como TRÊS pares de funções e não um parâmetro; os vectores são do `zlib` do CPython com nível 9, portanto o que se prova é que LEMOS o que os outros escrevem. O `deflate` guarda em blocos literais e di-lo no docstring (150.1) |
+| `log` — registo estruturado | S8 | `log/test` | ✅ logfmt e JSON por linha, **sem cadeado nenhum** (a linha sai inteira porque o `print` já garante isso). O punho é explícito porque um módulo importado não pode ter estado (151.1) |
+| `ptest` — o teste de uma FUNÇÃO | S8 | `ptest/test` | ✅ `eq_str` diz em QUE caractere dois textos divergem, que é a razão de o pacote existir; o portão corre casos que falham de propósito e compara o RELATÓRIO |
+| `csv` — RFC 4180 | S9 | `csv/test` | ✅ e **não adivinha tipos**: tudo sai `str`, porque um leitor que decidisse que `007` é sete perderia o zero de um código postal. Lê o separador, os três fins de linha e o BOM do Excel |
+| metapacotes `stdlib`, `crypto` e `archive` | S0 | `tests/pkg/meta` | ✅ `"kind": "meta"`: instala, não importa |
 | `algo`, `random`, `path` como pacotes | S1 | — | ⏳ **ADIADA por decisão medida** — ninguém os consome fora dos testes (ver a adenda do `STDLIB.md`) |
+
+## O que o runtime ganhou (S2b, S3, S7)
+
+| Recurso | Decisão | Exercitado em | Estado |
+|---|---|---|---|
+| `re` — motor de Thompson NOSSO | 152 | `regex` | ✅ substitui o `regcomp` da libc: `(a+)+b` contra duzentos `a` DEVOLVE em vez de parar o processo, e é essa a razão de ele existir. Dialecto do RE2 — `\d \w \s \b`, não-guloso, `{m,n}`, grupos com nome, `(?i) (?m) (?s)`, `\p{L}` e as categorias do Unicode. **Sem retrocesso nem lookaround**, que é matemática e não esforço, e as recusas dizem porquê. `search`, `findall`, `finditer`, `sub`, `split` nasceram com ele. Oráculo: o `re` do CPython, 51 padrões varridos |
+| `str()` e `json.stringify` de um `any` | 151.3 | `log/test` | ✅ um `any` CARREGA o que é, portanto o runtime rende-o sem que o compilador diga o tipo — e um `any` só pode conter exactamente as formas do JSON, que é a razão de ele passar a atravessar o `stringify` |
+| TLS (`net.starttls`) | 153 | `tests/tls.sh` | ✅ um MODO da ligação e não um tipo novo, portanto nada acima muda. **Não existe `verify=False`** — existe `starttls_insecure`, que aparece num `grep`. Compilado com `-D PSRT_TLS`; sem ele, levanta com a frase que diz o que fazer |
 
 ## Módulos e stdlib
 

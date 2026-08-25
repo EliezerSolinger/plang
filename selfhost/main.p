@@ -285,6 +285,13 @@ private def dest_for(cc: *Cc, out_path: const *char, out_dir: const *char, path:
         # `-o` nomeia UM arquivo, e este não foi pedido pelo nome: sai ao lado do
         # que foi, com o nome que o próprio fonte lhe dá
         dest = cc->arena.printf("%s/%s", path_dir(&cc->arena, out_path), path_base(derive_output(&cc->arena, path, be)))
+        # 142: ... MENOS quando ele vem do `stl` embebido. O `#include` que o C
+        # emitido carrega é relativo (`__plang_builtin/stl/vec.h`), porque é
+        # assim que o espelho do `--out-dir` funciona — e achatá-lo aqui daria um
+        # header ao lado do `.c` e um include a apontar para um sítio que não
+        # existe. Com `-o`, o espelho nasce ao lado do ficheiro nomeado.
+        if stl_builtin(path) != None:
+            dest = cc->arena.printf("%s/%s", path_dir(&cc->arena, out_path), derive_output(&cc->arena, path, be))
     if out_dir != None:
         # a árvore de saída ESPELHA a de fontes sob --out-dir, para os includes
         # relativos do C emitido ("../packages/stl/x.h") resolverem lá dentro
@@ -796,7 +803,9 @@ def main(argc: int, argv: **char) -> int:
         backend_emit(be, m, &out)
 
         dest: const *char = dest_for(&cc, out_path, out_dir, path, be, &pulled)
-        if out_dir != None:
+        # 142: também com `-o`, porque o `stl` embebido sai para um espelho
+        # (`__plang_builtin/stl/`) que ainda não existe
+        if out_dir != None or stl_builtin(path) != None:
             mkdirs_for(dest)
         if dest == "-":
             fwrite(out.data, 1, out.len, stdout)

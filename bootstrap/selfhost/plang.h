@@ -127,3 +127,5 @@ struct FStrParts {
 };
 
 FStrParts fstr_split(Arena *a, const char *body, size_t nbody, const char *file, Pos pos);
+
+const char *stl_builtin(const char *path);

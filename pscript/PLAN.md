@@ -2183,8 +2183,13 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       ⚠ A outra metade — a MECÂNICA dos traits `Foreign`/`Shared`/`Transfer` —
       está **bloqueada pela 141.6** (objecto dentro de objecto), que tu paraste
       de propósito.
-- [ ] **FE** — o `stl` para dentro do compilador + `Str`→`StrBuf`. Independente
-      de tudo; entra quando regenerar o `bootstrap/` já for preciso.
+- [x] **FE** — **FEITA.** O `stl` vem DENTRO do compilador: `plangc foo.p`
+      compila sozinho, sem `--pkg-path` e sem `--out-dir`, que é o problema que a
+      142.0 mediu. A bateria **154** diz porque é que a versão que ficou é menor
+      do que a desenhada — há um FUNIL (`read_entire_file_opt`), e três linhas
+      nele mais uma raiz virtual chegam; a grafia não muda porque o motivo para
+      a mudar (o directório desaparecer) desapareceu. O `Str`→`StrBuf` fica: é
+      uma renomeação de 22 sítios que não depende disto.
 - [x] **F0** — **FEITA.** `bytes` (imutável, coletado, bloco malloc'd que não se
       move, fatia SEM cópia), `View<T>` como tipo próprio (o que ele NÃO pode
       fazer é recusado em compilação), e os **finalizadores no coletor** com o
@@ -2599,3 +2604,55 @@ máquina a falar sem porta nenhuma.
 | `mmap` de escrita | uma segunda história de durabilidade, e nada precisa dela ainda |
 | `FileLock` | não há dois processos a disputar um ficheiro neste ecossistema |
 | `sendfile` | vem de graça depois do `Mapping` + `writev` |
+
+---
+
+## O ponto de chegada (2026-08-25)
+
+As duas listas — a do NIO (`PLAN.md`) e a da stdlib (`STDLIB.md`) — estão feitas,
+com uma adiada por decisão medida e nada por esquecimento. O que fica escrito aqui
+é o mapa, para quem chegar a seguir não ter de o reconstruir a partir de vinte
+commits.
+
+| fase | o que ficou de pé |
+|---|---|
+| **FN, F0–F7** | a regra dos nomes; `bytes`/`View<u8>`/finalizadores; a I/O a falar `bytes`; `Mapping`; `os.stat`/`pread`/`scandir`; o `Watcher`; o `Decoder`; UDP e Unix |
+| **S0** | `"kind": "meta"` no manifesto — um nome instala um conjunto |
+| **S1** | **ADIADA por decisão medida** (ver a adenda do `STDLIB.md`): ninguém consome `random`/`bisect`/`heapq` fora dos testes |
+| **S2** | `codec`, `hash`, `hmac`, `csprng`, `os.tempfile` — e a **148.1**, que corrigiu uma promessa impossível (o trait `Hash` está atrás da 141.6) |
+| **S2b** | **o motor de regex nosso** — `(a+)+b` contra duzentos `a` devolve em vez de parar o processo |
+| **S3** | `Channel<T>`, `taskgroup`, `sched.stats()` — e a 147.7, um defeito que a métrica apanhou no primeiro dia |
+| **S4** | `datetime` (o modelo do `java.time`) e `tz`, que **lê o do sistema** em vez de trazer cópia |
+| **S6** | `compress` — e o portão prova que lemos o que os OUTROS escrevem |
+| **S7** | TLS como um **modo** da ligação, e sem `verify=False` |
+| **S8/S9** | `log`, `ptest`, `csv` — e a regra que elas descobriram duas vezes (151.1) |
+| **FE** | o `stl` DENTRO do compilador: `plangc foo.p` compila sozinho |
+
+### O que a linguagem ganhou pelo caminho, sem estar em plano nenhum
+
+Cada um destes apareceu ao escrever o TESTE de outra coisa, e nenhum estava
+previsto:
+
+* **uma condição prova TODAS as suas partes** — `if a != None and b != None:`
+  estreitava só o `a` (achado pelo portão do `Channel<T>`);
+* **`str()` e `json.stringify` de um `any`** — não compilavam, e um `any` só pode
+  conter exactamente as formas do JSON (achado pelo `log`);
+* **um `await` dentro de uma limpeza dava SIGSEGV** — o `finally` tinha-se
+  esquecido da recusa que o `defer` já tinha;
+* **um literal com campos nomeados não baixava as conversões** — e o erro saía no
+  LINKER, sem posição;
+* **um `typedef` com o declarador entre parênteses** não registava o nome — o que
+  impedia o P de ler o `<openssl/ssl.h>` e, com ele, meio cabeçalho de sistema;
+* **um prazo cancelado ficava na fila do relógio** — um `timeout(t, 0.05)` sobre
+  um `sleep(5.0)` saía cinco segundos depois na mesma.
+
+### O que fica em aberto, e onde está escrito
+
+| o quê | onde |
+|---|---|
+| a **S1**, se e quando alguém a quiser | adenda do `STDLIB.md` |
+| o trait `Hash` com estado incremental | **148.1**, atrás da **141.6** |
+| um `Pattern` de `re.compile` como valor | **152.8** |
+| o guarda do SIGBUS completo | **145** |
+| o `Str`→`StrBuf` (22 sítios) | **141.7** |
+| a ordem de um `Dict` (bateria 4.4) | por decidir |

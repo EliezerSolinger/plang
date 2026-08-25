@@ -4656,6 +4656,17 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strcmp(name, "__sys_time") == 0) {
         return PsLow_call_rt(self, "ps_sys_monotonic", e->pos);
     }
+    if (strcmp(name, "__net_starttls") == 0 || strcmp(name, "__net_starttls_insecure") == 0) {
+        Expr *ts9 = PsLow_call_rt(self, "ps_net_starttls", e->pos);
+        PsLow_push_arg(self, ts9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, ts9, PsLow_expr(self, e->args[0]));
+        PsLow_push_arg(self, ts9, PsLow_expr(self, e->args[1]));
+        PsLow_push_arg(self, ts9, ex_new(self->a, (strcmp(name, "__net_starttls_insecure") == 0 ? EX_FALSE : EX_TRUE), e->pos));
+        PsLow_pos_args(self, ts9, e->pos);
+        self->raised = 1;
+        self->allocs = 1;
+        return ts9;
+    }
     if (starts_with(name, "__net_")) {
         Expr *nc = PsLow_call_rt(self, Arena_printf(self->a, "ps_net_%s", name + 6), e->pos);
         PsLow_push_arg(self, nc, PsLow_ctx_arg(self, e->pos));

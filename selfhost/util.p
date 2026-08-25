@@ -476,16 +476,120 @@ def deps_get(i: i32) -> const *char:
     return g_deps[i]
 
 def read_entire_file(path: const *char, out out_len: usize) -> *char:
-    f: *FILE = fopen(path, "rb")
-    if f == None:
+    # 142: os DOIS leitores passam pelo embebido, e não só o `_opt`. O driver usa
+    # este para as entradas, e um módulo do `stl` é uma entrada como outra
+    # qualquer — só que não está em lado nenhum.
+    b: *char = read_entire_file_opt(path, out out_len)
+    if b == None:
         fatal("could not open '%s'", path)
-    defer fclose(f)
-    deps_add(path)
-    return read_open_file(f, path, out out_len)
+    return b
 
 # same, but the caller reports the failure: embed() wants a diagnostic that
 # points at the call site instead of a bare fatal.
+def read_entire_file_opt(path: const *char, out out_len: usize) -> *char
+
+# ---------- 142: o `stl` VEM DENTRO do compilador ----------
+#
+# Um recém-chegado que escreve um `.p` com um `Vec` batia em duas falésias de
+# configuração antes de compilar o que quer que fosse: `--pkg-path` em falta, e
+# depois a regra de os dois lados serem nomeados da mesma maneira. Nada disso é
+# sobre o programa dele.
+#
+# O compilador já tinha resolvido isto uma vez, para o prelúdio do pscript, e a
+# justificação escrita ao lado dele serve palavra por palavra:
+#
+#   *"`embed` é o que lhe permite ser um ficheiro de verdade e não custar nada em
+#   tempo de execução: os bytes são lidos em tempo de COMPILAÇÃO e viram um
+#   vector estático, portanto NÃO HÁ FICHEIRO PARA ENCONTRAR, NÃO HÁ CAMINHO
+#   PARA CONFIGURAR, e o prelúdio que um compilador carrega é exactamente o que
+#   foi compilado para dentro dele."*
+#
+# **Os ficheiros continuam a ser os de `packages/stl/`** — uma cópia só, que é o
+# que o `embed` garante: o que vai para dentro do binário é lido daquele
+# directório em tempo de compilação. O que muda é que já não é preciso
+# encontrá-los em tempo de execução.
+#
+# **E o embebido GANHA** (142.3): a raiz virtual é a PRIMEIRA que se procura, e
+# um `stl` instalado noutro sítio é simplesmente ignorado. A razão é a mesma
+# frase do prelúdio — um ficheiro que pudesse substituí-lo em silêncio traz de
+# volta a classe de erro que o `embed` existe para matar, a de duas cópias e
+# ninguém saber qual correu.
+# A raiz virtual é o CAMINHO REAL, e essa é a escolha que faz o resto
+# desaparecer. Um nome inventado (`__plang_builtin`) obrigaria o espelho do
+# `--out-dir`, o `bootstrap/`, o `reseed.sh` e o motor de build a aprenderem-no —
+# e o único ganho seria o `#include` do C emitido dizer de onde o texto veio.
+#
+# Com o caminho real, **nada disso muda**: os includes continuam a ser
+# `../packages/stl/x.h`, o seed continua onde estava, e o que muda é só isto —
+# quando alguém LÊ `packages/stl/vec.ph`, o texto vem de dentro do compilador em
+# vez de vir do disco.
+#
+# O preço, dito porque é real e porque a 142 já o tinha visto: mexer num
+# ficheiro do `stl` só tem efeito depois de o compilador ser reconstruído. É um
+# efeito em dois tempos, é o mesmo que o `ps_prelude.psc` já tem, e o portão do
+# ponto fixo (`s2 == s3`) mais a regeneração do `bootstrap/` cobrem-no.
+const STL_ROOT: const *char = "packages"
+
+private const STL_VEC: const *char = embed("../packages/stl/vec.ph")
+private const STL_MAP: const *char = embed("../packages/stl/map.ph")
+private const STL_SET: const *char = embed("../packages/stl/set.ph")
+private const STL_DICT: const *char = embed("../packages/stl/dict.ph")
+private const STL_LIST: const *char = embed("../packages/stl/list.ph")
+private const STL_QUEUE: const *char = embed("../packages/stl/queue.ph")
+private const STL_SLICE: const *char = embed("../packages/stl/slice.ph")
+private const STL_STR: const *char = embed("../packages/stl/str.ph")
+private const STL_HASH: const *char = embed("../packages/stl/hash.ph")
+private const STL_TRAITS: const *char = embed("../packages/stl/traits.ph")
+private const STL_CSTR_H: const *char = embed("../packages/stl/cstr.ph")
+private const STL_CSTR_P: const *char = embed("../packages/stl/cstr.p")
+
+# O texto de um módulo do `stl`, ou None quando o caminho não é um deles. O
+# caminho que chega aqui é o virtual — `__plang_builtin/stl/vec.ph` —, e é ele
+# que o `pkg_find` devolve quando resolve pela raiz embebida.
+def stl_builtin(path: const *char) -> const *char:
+    n: usize = strlen(STL_ROOT)
+    if strncmp(path, STL_ROOT, n) != 0 or path[n] != '/':
+        return None
+    rel: const *char = path + n + 1
+    if strncmp(rel, "stl/", 4) != 0:
+        return None
+    m: const *char = rel + 4
+    if strcmp(m, "vec.ph") == 0:
+        return STL_VEC
+    if strcmp(m, "map.ph") == 0:
+        return STL_MAP
+    if strcmp(m, "set.ph") == 0:
+        return STL_SET
+    if strcmp(m, "dict.ph") == 0:
+        return STL_DICT
+    if strcmp(m, "list.ph") == 0:
+        return STL_LIST
+    if strcmp(m, "queue.ph") == 0:
+        return STL_QUEUE
+    if strcmp(m, "slice.ph") == 0:
+        return STL_SLICE
+    if strcmp(m, "str.ph") == 0:
+        return STL_STR
+    if strcmp(m, "hash.ph") == 0:
+        return STL_HASH
+    if strcmp(m, "traits.ph") == 0:
+        return STL_TRAITS
+    if strcmp(m, "cstr.ph") == 0:
+        return STL_CSTR_H
+    if strcmp(m, "cstr.p") == 0:
+        return STL_CSTR_P
+    return None
+
 def read_entire_file_opt(path: const *char, out out_len: usize) -> *char:
+    # 142: um módulo do `stl` não está em lado nenhum — está aqui dentro. Este é
+    # o funil por onde TUDO passa (o `pkg_find`, o colector de entradas do
+    # driver, as duas sema), portanto uma linha aqui serve os quinze sítios.
+    emb: const *char = stl_builtin(path)
+    if emb != None:
+        out_len = strlen(emb)
+        cp: *char = (*char)(malloc(out_len + 1))
+        memcpy(cp, emb, out_len + 1)
+        return cp
     f: *FILE = fopen(path, "rb")
     if f == None:
         out_len = 0
@@ -707,6 +811,12 @@ def c_string_literal(a: *Arena, bytes: const *char, n: usize) -> const *char:
 # Mora aqui, e não na sema, porque as DUAS front ends precisam dela e nenhuma das
 # duas deve aprender a maquinaria da outra.
 def pkg_find(a: *Arena, roots: **char, nroots: i32, rel: const *char) -> const *char:
+    # 142.3: a raiz embebida é a PRIMEIRA, e por isso ganha. Um `stl` instalado
+    # noutro sítio é ignorado — um ficheiro que pudesse substituir o embebido em
+    # silêncio traz de volta a classe de erro que o `embed` existe para matar.
+    built: const *char = path_join(a, STL_ROOT, rel)
+    if stl_builtin(built) != None:
+        return built
     for i in range(nroots):
         cand: const *char = path_join(a, roots[i], rel)
         n: usize = 0

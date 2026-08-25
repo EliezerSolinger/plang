@@ -747,6 +747,16 @@ struct PsConn:
     # deitaria fora o que não coubesse, em silêncio. A marca é o que deixa a
     # sema recusar o par errado de métodos.
     dgram: i32
+    # S7: o `SSL*` quando esta ligação foi promovida a TLS, e nada quando não.
+    # **Um MODO e não um tipo novo**, e é essa a decisão inteira: tudo o que está
+    # por cima — `read_into`, `write_from`, os traits `Reader`/`Writer`, o
+    # cliente HTTP — continua a falar com um `Socket` e não sabe a diferença. Um
+    # `TlsSocket` à parte obrigaria cada camada acima a ter duas versões de tudo.
+    #
+    # `*void` porque o `SSL` é um tipo opaco do OpenSSL e o P só o vê quando o
+    # runtime é compilado com `-D PSRT_TLS`. Sem isso este campo fica sempre
+    # nulo e nada nesta camada muda.
+    ssl: *void
 
 # what the program holds: a collected handle with nothing collected inside
 struct PsWorker:
@@ -860,6 +870,10 @@ enum PsIoOp:
     PS_IO_RECV
     PS_IO_SEND
     PS_IO_CONNECT
+    # S7: o aperto de mão TLS. Entra aqui e não no pool porque o `SSL_connect`
+    # sobre um socket não bloqueante devolve `WANT_READ`/`WANT_WRITE` — que é
+    # literalmente "ainda não", e "ainda não" é o que este caminho já sabe dizer.
+    PS_IO_TLS
     PS_IO_LOOKUP       # ... except this one: `getaddrinfo` blocks, so it does
     PS_IO_RUN          # 118: um PROCESSO — `fork`+`exec`, ler o cano até o fim,
                        #   `waitpid`. Vai para o pool pela mesma razão que o
@@ -920,6 +934,10 @@ struct PsWork:
     cwd: *char         # None = o diretório de quem chamou
     outfile: *char     # None = a saída volta em `buf`; senão vai para o arquivo
     console: i32       # 1 = o filho FALA COM O TERMINAL: nem cano, nem captura
+    # S7: a ligação TLS a que este trabalho pertence, quando pertence a uma. O
+    # `fd` continua a ser o do socket — é ele que entra no `poll` —, e o `SSL` é
+    # quem transforma os bytes.
+    ssl: *void
 
 struct PsCtx:
     lost: *PsLost        # 107: os erros que ninguém foi buscar (ver PsLost)

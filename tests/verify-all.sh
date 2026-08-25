@@ -156,6 +156,23 @@ else
     bad "mmap-truncate (veja $V/mmaptrunc.log)"
 fi
 
+# 142: um recém-chegado compila um `.p` com um `Vec` SEM configurar nada — o
+# problema que a 142.0 mediu, e que era duas falésias antes do programa dele.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/builtin-stl.sh >$V/builtinstl.log 2>&1; then
+    ok "$(sed 's/^   //' $V/builtinstl.log | tail -1)"
+else
+    bad "builtin-stl (veja $V/builtinstl.log)"
+fi
+
+# S7: o TLS, contra um servidor LOCAL com certificado auto-assinado — o que
+# separa `starttls` de `starttls_insecure`. SALTA quando não há OpenSSL: a
+# dependência é de sistema, e a ausência dela não é um defeito nosso.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/tls.sh >$V/tls.log 2>&1; then
+    ok "$(sed 's/^   //' $V/tls.log | tail -1)"
+else
+    bad "tls (veja $V/tls.log)"
+fi
+
 if PLANGC=$PWD/$V/plangc_s2 bash tests/gc-stress.sh >$V/gcstress.log 2>&1; then
     ok "gc-stress $(grep -oE '[0-9]+ ok' $V/gcstress.log | tail -1)"
 else

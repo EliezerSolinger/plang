@@ -7369,3 +7369,152 @@ sempre quis dizer.
 
 Vale a pena registar porque é a única mudança de comportamento desta fase: tudo o
 resto — o dialecto, os grupos, o valor de retorno — é igual ou maior.
+
+---
+
+## 153 — a S7: o TLS, e a promessa perigosa que tem de estar escrita
+
+### 153.1 — um MODO de uma ligação, e não um tipo novo
+
+`net.starttls(c, "example.com")` promove um `Socket` já aberto. Tudo o que está
+por cima — `read_into`, `write_from`, os traits `Reader`/`Writer`, o cliente
+HTTP — continua a falar com um `Socket` e **não sabe a diferença**.
+
+Um `TlsSocket` à parte obrigaria cada camada acima a ter duas versões de tudo, e
+é assim que uma biblioteca de rede duplica. A `STDLIB.md` já dizia que o cliente
+HTTPS sairia "quase de graça"; é esta decisão que o torna verdade.
+
+### 153.2 — duas funções, e não uma bandeira
+
+> **Não existe `verify=False`.** Existe `net.starttls_insecure(c, host)`.
+
+É a jogada da 141.4 aplicada à segurança em vez de à memória: a promessa perigosa
+tem de estar **visivelmente escrita**. Uma bandeira que se desliga é uma bandeira
+que alguém desliga "só para testar" e esquece; um nome com `insecure` dentro
+aparece num `grep` e não sobrevive a uma revisão.
+
+**E a verificação é DUAS coisas**, e as duas fazem falta: `SSL_VERIFY_PEER`
+confere a CADEIA, e `SSL_set1_host` confere o NOME. Sem a segunda, um certificado
+válido para outro domínio passa — que é o buraco clássico, e é por isso que ele
+não é opcional aqui.
+
+### 153.3 — o aperto de mão entra pela porta que o socket já tinha
+
+O `SSL_connect` sobre um socket não bloqueante devolve `WANT_READ`/`WANT_WRITE`,
+que é literalmente *"ainda não"* — e "ainda não" é o que o `ps_fd_try` já sabia
+dizer devolvendo falso. **Não há maquinaria nova**: nem uma thread do pool, nem
+uma segunda maneira de esperar. O TLS é mais um estado do mesmo `poll`.
+
+### 153.4 — compilado só com `-D PSRT_TLS`
+
+O OpenSSL é uma dependência de SISTEMA, e um runtime que a arrastasse sempre
+obrigaria todo o programa a linkar `-lssl` para nada. É a mesma forma do
+`inotify` fora do Linux (99/146.2): sem ela, `net.starttls` **levanta com a frase
+que diz o que fazer** — em vez de faltar em silêncio.
+
+### 153.5 — o portão é HERMÉTICO, e é ele que prova as duas metades
+
+Um portão de TLS que fosse à Internet mediria a rede tanto quanto o código, e
+falharia numa máquina sem saída. `tests/tls.sh` levanta um `openssl s_server`
+ao lado, com um certificado auto-assinado gerado na hora — e um certificado
+auto-assinado é exactamente o que separa os dois caminhos:
+
+* `net.starttls` **tem de o recusar** (a cadeia não bate);
+* `net.starttls_insecure` **tem de o aceitar** — e é para isso que ele tem esse
+  nome.
+
+Um portão que só testasse o caminho feliz não provaria nada: a recusa É a
+funcionalidade.
+
+### 153.6 — e o P passou a ler o `<openssl/ssl.h>`
+
+O cabeçalho não compilava, com um erro que não apontava para nada: *"invalid
+expression (found ')')"*. A causa era pequena e vale a pena registá-la porque
+alarga o que o P consegue ler de qualquer cabeçalho de sistema:
+
+> **um `typedef` com o declarador entre parênteses** — `typedef T (X)(args);`,
+> que é C legal e quer dizer o mesmo que `typedef T X(args);` — era SALTADO, e o
+> nome nunca era registado. Um `(X *)algo` mais abaixo deixava então de ser um
+> cast e passava a ser uma multiplicação.
+
+O OpenSSL escreve-o assim no `core_dispatch.h`, e foi ele que o desenterrou.
+
+---
+
+## 154 — a FE feita: o `stl` vem DENTRO do compilador
+
+A **142** decidiu isto e desenhou-o em três commits com uma mudança de grafia
+(`import <stl/vec.ph>` → `import <vec>`) e o `packages/stl` a desaparecer.
+Implementá-lo mostrou que **o problema medido resolve-se sem nada disso**, e o
+que se segue é porquê a versão que ficou é menor e melhor.
+
+### 154.1 — há um FUNIL, e ele é uma função
+
+O compilador lê ficheiros por quinze sítios — o `pkg_find`, o colector de
+entradas do driver, as duas sema, o `embed` —, e **todos passam por
+`read_entire_file_opt`**. Portanto o `stl` embebido não precisa de tocar em
+nenhum deles: precisa de três linhas ali.
+
+```
+emb: const *char = stl_builtin(path)
+if emb != None:
+    ...devolve uma cópia do texto embebido
+```
+
+E uma **raiz virtual** (`__plang_builtin`) que o `pkg_find` procura PRIMEIRO. A
+partir daí tudo o resto do compilador — o back end, as dependências, o espelho do
+`--out-dir` — continua a ver um caminho e um ficheiro, e não aprende nada sobre
+isto.
+
+### 154.2 — a raiz virtual É o caminho real, e é isso que faz o resto desaparecer
+
+A primeira tentativa deu à raiz virtual um nome próprio (`__plang_builtin`), e ele
+apareceu imediatamente em quatro sítios que não têm nada que ver com isto: o
+espelho do `--out-dir`, o `bootstrap/`, o `reseed.sh` e o motor de build — que
+passou a ver uma entrada que *"não existe e ninguém produz"*.
+
+Com a raiz a ser `packages`, **nada disso muda**: os includes do C emitido
+continuam a ser `../packages/stl/x.h`, o seed continua onde estava, e o que muda
+é só isto —
+
+> quando alguém LÊ `packages/stl/vec.ph`, o texto vem de dentro do compilador em
+> vez de vir do disco.
+
+O preço, dito porque é real e porque a 142 já o tinha visto: mexer num ficheiro
+do `stl` só tem efeito depois de o compilador ser reconstruído. É um efeito em
+dois tempos, é o mesmo que o `ps_prelude.psc` já tem, e o portão do ponto fixo
+(`s2 == s3`) mais a regeneração do `bootstrap/` cobrem-no.
+
+### 154.3 — a grafia NÃO muda, e o motivo dela desapareceu
+
+A 142.2 queria `import <vec>` porque, depois de o `packages/stl` desaparecer, o
+`<stl/vec.ph>` nomearia *"um directório que não existe e a extensão de um ficheiro
+que ninguém vai abrir"*.
+
+**Mas o directório não desaparece**, e é isso que muda o argumento: os ficheiros
+continuam em `packages/stl/` como a **fonte única**, e é de lá que o `embed` os
+lê em tempo de compilação. A grafia continua a nomear uma coisa que existe.
+
+O que se ganha em não mudar: **zero migração** — os 47 `import <stl/…>` da árvore
+ficam como estão —, e o `pforge` continua a ver o `stl` como um pacote do espaço
+de trabalho, com o `pack.json` dele.
+
+### 154.4 — e o `cstr.p` deixa de ser a excepção da excepção
+
+A 142 marcou-o como o caso difícil: é o único com implementação, e embebê-lo
+quereria dizer compilar um `.p` que não está em lado nenhum.
+
+Com a raiz virtual isso resolve-se sozinho: o driver procura o `.p` irmão do
+header pelo caminho virtual, o funil devolve-lhe o texto, e ele vira uma unidade
+de compilação como outra qualquer — que sai para o espelho, ao lado das outras.
+
+### 154.5 — o embebido GANHA, e o portão prova-o
+
+`tests/builtin-stl.sh` compila fora da árvore, sem `--pkg-path` e sem
+`--out-dir`, nas duas formas (`-o` e `--out-dir`) — e as duas últimas
+verificações são as que interessam: **uma raiz com um `stl` que mente é
+ignorada**, e um directório `packages/stl` mesmo ao lado também não substitui.
+
+Um ficheiro que pudesse substituir o embebido em silêncio traria de volta a
+classe de erro que o `embed` existe para matar: a de duas cópias e ninguém saber
+qual correu.

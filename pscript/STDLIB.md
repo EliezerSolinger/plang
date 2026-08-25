@@ -870,3 +870,33 @@ públicos **não tem cópia do sistema**. Ou se traz, ou não se tem.
 O nome muda para **`tz`** porque o que o pacote tem não é dado — é o leitor.
 `TZDIR` sobrepõe-se ao caminho. E quando não há zoneinfo, **levanta**: nunca
 recua para UTC.
+
+---
+
+## Adenda de execução — a S7, e o TLS que ficou de pé (2026-08-25)
+
+Feita. A **bateria 153** tem tudo; aqui fica o que MUDOU em relação ao que a §5
+escreveu.
+
+### Não é um pacote: é um MODO de uma ligação
+
+A §5 punha o `tls` no metapacote `web`, como *"um `Reader`/`Writer` por cima do
+`Conn`"*. Está certo no efeito e errado no sítio: para intercetar os bytes é
+preciso estar **dentro** do `Conn`, e um pacote em pscript não chega lá.
+
+Portanto o TLS é um campo do `PsConn` e duas funções no `net` — e o que a §5
+queria cumpre-se melhor assim: **nada acima muda**. `read_into`, `write_from`, os
+traits e o cliente HTTP continuam a falar com um `Socket`.
+
+### `-D PSRT_TLS`, e sem ele levanta
+
+O OpenSSL é dependência de SISTEMA. Um runtime que a arrastasse sempre obrigaria
+todo o programa a linkar `-lssl` para nada, portanto ela entra por uma opção de
+compilação — a mesma forma do `inotify` fora do Linux. Sem ela, `net.starttls`
+levanta com a frase que diz o que fazer.
+
+### O resto da §5 cumpre-se palavra por palavra
+
+A confiança vem do sistema (`SSL_CERT_FILE`/`SSL_CERT_DIR` e o caminho por
+omissão), e **não existe `verify=False`** — existe `net.starttls_insecure`, que
+aparece num `grep`.
