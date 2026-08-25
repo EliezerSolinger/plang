@@ -2167,12 +2167,16 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
 >
 > Isto é uma mudança de ORDEM e não de âmbito: nada saiu do plano.
 
-- [ ] **FS** — `stdlib` + o contrato da fronteira (`Foreign`/`Shared`/`Transfer`).
-      O maior `sed` do plano (140 chamadas de `path.*` → `os.*`). ⚠ metade dela
-      — a MECÂNICA dos traits — está **bloqueada pela 141.6** (objecto dentro de
-      objecto), que tu paraste de propósito. O que dá para fazer sem te
-      perguntar: o pacote `stdlib`, a divisão do `path`, e a DECLARAÇÃO dos
-      traits com a checagem que recusa o caso bloqueado.
+- [ ] **FS** — **REVISTA por `pscript/STDLIB.md`**, que decidiste em paralelo e
+      que **tem de ser lido antes de executar esta fase**. O destino deixa de
+      ser um pacote `stdlib` monolítico e passa a ser TRÊS pacotes — `algo`
+      (bisect+heapq), `random`, `path` puro — reunidos por um METAPACOTE
+      (`"kind": "meta"`, que o manifesto ainda não sabe validar: é a fase S0
+      desse plano). O trabalho mecânico é o mesmo: 140 chamadas `path.*` →
+      `os.*`, com a metade de sistema a juntar-se ao `os` no runtime.
+      ⚠ A outra metade — a MECÂNICA dos traits `Foreign`/`Shared`/`Transfer` —
+      está **bloqueada pela 141.6** (objecto dentro de objecto), que tu paraste
+      de propósito.
 - [ ] **FE** — o `stl` para dentro do compilador + `Str`→`StrBuf`. Independente
       de tudo; entra quando regenerar o `bootstrap/` já for preciso.
 - [x] **F0** — **FEITA.** `bytes` (imutável, coletado, bloco malloc'd que não se
@@ -2188,6 +2192,10 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       nascem. Depende de F0. Sub-fases por pacote, cada uma com commit e verify
       próprios: **F1a** `tar` → **F1b** `sha2`/`ed25519` → **F1c** `http`/`url` →
       **F1d** `repo`/`pforge`/`pstudio`/conformidade. Os publicados sobem de versão.
+      ⚠ **COORDENAÇÃO** (`pscript/STDLIB.md` §6): a fase S5 desse plano diz que
+      os traits `Reader`/`Writer` têm de aterrar NO MESMO MOVIMENTO que esta —
+      *"não são duas peças"*. Ficheiro, socket e memória implementam os mesmos
+      dois traits, e uma função que copia um para o outro serve os três.
 - [ ] **F2** — `os.mmap` → `Mapping`, com o guarda do SIGBUS. Depende de F0.
       ⚠ questão em aberto antes de fechar: o guarda com VÁRIAS threads (um
       handler de sinal não pode tomar lock) — se não houver resposta limpa,
