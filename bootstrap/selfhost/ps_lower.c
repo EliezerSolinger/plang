@@ -2468,6 +2468,15 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                 self->raised = 1;
                 return PsLow_slot_val(self, g2, e->type, e->pos);
             }
+            if (e->lhs->type != NULL && e->lhs->type->kind == PT_BUFFER) {
+                Expr *bg9 = PsLow_call_rt(self, "ps_buffer_at", e->pos);
+                PsLow_push_arg(self, bg9, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, bg9, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, bg9, PsLow_expr(self, e->rhs));
+                PsLow_pos_args(self, bg9, e->pos);
+                self->raised = 1;
+                return bg9;
+            }
             if (e->lhs->type != NULL && e->lhs->type->kind == PT_BYTES) {
                 Expr *ba9 = PsLow_call_rt(self, "ps_bytes_get", e->pos);
                 PsLow_push_arg(self, ba9, PsLow_ctx_arg(self, e->pos));
@@ -4586,6 +4595,11 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_ARRAY) {
         PsType *ac8 = e->args[0]->type;
         return PsLow_num(self, (ac8->count != NULL ? ac8->count->text : "0"), e->pos);
+    }
+    if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_BUFFER) {
+        Expr *cb7 = PsLow_call_rt(self, "ps_buffer_size", e->pos);
+        PsLow_push_arg(self, cb7, PsLow_expr(self, e->args[0]));
+        return cb7;
     }
     if (strcmp(name, "len") == 0 && e->args[0]->type != NULL && e->args[0]->type->kind == PT_MAPPING) {
         Expr *cm8 = PsLow_call_rt(self, "ps_map_len", e->pos);
@@ -6722,6 +6736,17 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 Vec_pStmt_push(out, ia7);
                 return;
             }
+            if (s->lhs->kind == PE_INDEX && s->lhs->lhs->type != NULL && s->lhs->lhs->type->kind == PT_BUFFER) {
+                Expr *bp9 = PsLow_call_rt(self, "ps_buffer_put", s->pos);
+                PsLow_push_arg(self, bp9, PsLow_ctx_arg(self, s->pos));
+                PsLow_push_arg(self, bp9, PsLow_expr(self, s->lhs->lhs));
+                PsLow_push_arg(self, bp9, PsLow_expr(self, s->lhs->rhs));
+                PsLow_push_arg(self, bp9, PsLow_coerce(self, ps_type(self->a, PT_INT, s->pos), s->rhs));
+                PsLow_pos_args(self, bp9, s->pos);
+                self->raised = 1;
+                PsLow_push_expr_stmt(self, out, bp9, s->pos);
+                return;
+            }
             if (s->lhs->kind == PE_INDEX) {
                 Expr *chk = PsLow_call_rt(self, "ps_list_at", s->pos);
                 PsLow_push_arg(self, chk, PsLow_ctx_arg(self, s->pos));
@@ -6987,7 +7012,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 }
                 return;
             }
-            if (s->iter->type != NULL && s->iter->type->kind == PT_BYTES) {
+            if (s->iter->type != NULL && (s->iter->type->kind == PT_BYTES || s->iter->type->kind == PT_BUFFER)) {
                 PsLow_lower_bytes_for(self, s, out);
                 {
                     self->async_brk = sb8;
@@ -7427,12 +7452,13 @@ static void PsLow_lower_bytes_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     const char *bn = Arena_printf(self->a, "__bt%d", self->tmp_ctr);
     const char *iv = Arena_printf(self->a, "__bx%d", self->tmp_ctr);
     self->tmp_ctr += 1;
+    int isbuf = s->iter->type != NULL && s->iter->type->kind == PT_BUFFER;
     Stmt *bdl = st_new(self->a, ST_VAR, s->pos);
     bdl->name = bn;
-    bdl->type = ty_ptr(self->a, ty_name(self->a, "PsBytes"));
+    bdl->type = ty_ptr(self->a, ty_name(self->a, (isbuf ? "PsBuffer" : "PsBytes")));
     bdl->init = PsLow_expr(self, s->iter);
     Vec_pStmt_push(out, bdl);
-    Expr *cnt = PsLow_call_rt(self, "ps_bytes_len", s->pos);
+    Expr *cnt = PsLow_call_rt(self, (isbuf ? "ps_buffer_size" : "ps_bytes_len"), s->pos);
     PsLow_push_arg(self, cnt, PsLow_ident(self, bn, s->pos));
     Stmt *fr = st_new(self->a, ST_FOR, s->pos);
     fr->var = iv;
@@ -7440,7 +7466,7 @@ static void PsLow_lower_bytes_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Vec_pStmt inner;
     Vec_pStmt_init(&inner);
     PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
-    Expr *get = PsLow_call_rt(self, "ps_bytes_get", s->pos);
+    Expr *get = PsLow_call_rt(self, (isbuf ? "ps_buffer_at" : "ps_bytes_get"), s->pos);
     PsLow_push_arg(self, get, PsLow_ctx_arg(self, s->pos));
     PsLow_push_arg(self, get, PsLow_ident(self, bn, s->pos));
     PsLow_push_arg(self, get, PsLow_ident(self, iv, s->pos));

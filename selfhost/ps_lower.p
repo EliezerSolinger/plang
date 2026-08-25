@@ -2228,6 +2228,14 @@ struct PsLow:
                     self->pos_args(g2, e->pos)
                     self->raised = True
                     return self->slot_val(g2, e->type, e->pos)
+                if e->lhs->type != None and e->lhs->type->kind == PT_BUFFER:
+                    bg9: *Expr = self->call_rt("ps_buffer_at", e->pos)
+                    self->push_arg(bg9, self->ctx_arg(e->pos))
+                    self->push_arg(bg9, self->expr(e->lhs))
+                    self->push_arg(bg9, self->expr(e->rhs))
+                    self->pos_args(bg9, e->pos)
+                    self->raised = True
+                    return bg9
                 if e->lhs->type != None and e->lhs->type->kind == PT_BYTES:
                     ba9: *Expr = self->call_rt("ps_bytes_get", e->pos)
                     self->push_arg(ba9, self->ctx_arg(e->pos))
@@ -4292,6 +4300,10 @@ struct PsLow:
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_ARRAY:
             ac8: *PsType = e->args[0]->type
             return self->num(ac8->count->text if ac8->count != None else "0", e->pos)
+        if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_BUFFER:
+            cb7: *Expr = self->call_rt("ps_buffer_size", e->pos)
+            self->push_arg(cb7, self->expr(e->args[0]))
+            return cb7
         if strcmp(name, "len") == 0 and e->args[0]->type != None and e->args[0]->type->kind == PT_MAPPING:
             cm8: *Expr = self->call_rt("ps_map_len", e->pos)
             self->push_arg(cm8, self->expr(e->args[0]))
@@ -6445,6 +6457,17 @@ struct PsLow:
                     ia7->rhs = iv7
                     out->push(ia7)
                     return
+                if s->lhs->kind == PE_INDEX and s->lhs->lhs->type != None and s->lhs->lhs->type->kind == PT_BUFFER:
+                    # 135.5: escrever um byte num Buffer, directo
+                    bp9: *Expr = self->call_rt("ps_buffer_put", s->pos)
+                    self->push_arg(bp9, self->ctx_arg(s->pos))
+                    self->push_arg(bp9, self->expr(s->lhs->lhs))
+                    self->push_arg(bp9, self->expr(s->lhs->rhs))
+                    self->push_arg(bp9, self->coerce(ps_type(self->a, PT_INT, s->pos), s->rhs))
+                    self->pos_args(bp9, s->pos)
+                    self->raised = True
+                    self->push_expr_stmt(out, bp9, s->pos)
+                    return
                 if s->lhs->kind == PE_INDEX:
                     chk: *Expr = self->call_rt("ps_list_at", s->pos)
                     self->push_arg(chk, self->ctx_arg(s->pos))
@@ -6715,7 +6738,7 @@ struct PsLow:
                 if s->iter->type != None and s->iter->type->kind == PT_DIRITER:
                     self->lower_dir_for(s, out)
                     return
-                if s->iter->type != None and s->iter->type->kind == PT_BYTES:
+                if s->iter->type != None and (s->iter->type->kind == PT_BYTES or s->iter->type->kind == PT_BUFFER):
                     self->lower_bytes_for(s, out)
                     return
                 if s->iter->type != None and (s->iter->type->kind == PT_LIST or s->iter->type->kind == PT_VIEW):
@@ -7225,12 +7248,13 @@ struct PsLow:
         bn: const *char = self->a->printf("__bt%d", self->tmp_ctr)
         iv: const *char = self->a->printf("__bx%d", self->tmp_ctr)
         self->tmp_ctr += 1
+        isbuf: bool = s->iter->type != None and s->iter->type->kind == PT_BUFFER
         bdl: *Stmt = st_new(self->a, ST_VAR, s->pos)
         bdl->name = bn
-        bdl->type = ty_ptr(self->a, ty_name(self->a, "PsBytes"))
+        bdl->type = ty_ptr(self->a, ty_name(self->a, "PsBuffer" if isbuf else "PsBytes"))
         bdl->init = self->expr(s->iter)
         out->push(bdl)
-        cnt: *Expr = self->call_rt("ps_bytes_len", s->pos)
+        cnt: *Expr = self->call_rt("ps_buffer_size" if isbuf else "ps_bytes_len", s->pos)
         self->push_arg(cnt, self->ident(bn, s->pos))
         fr: *Stmt = st_new(self->a, ST_FOR, s->pos)
         fr->var = iv
@@ -7238,7 +7262,7 @@ struct PsLow:
         inner: Vec<*Stmt>
         inner.init()
         self->rn_push(s->names[0], self->vname(s->names[0]), False)
-        get: *Expr = self->call_rt("ps_bytes_get", s->pos)
+        get: *Expr = self->call_rt("ps_buffer_at" if isbuf else "ps_bytes_get", s->pos)
         self->push_arg(get, self->ctx_arg(s->pos))
         self->push_arg(get, self->ident(bn, s->pos))
         self->push_arg(get, self->ident(iv, s->pos))

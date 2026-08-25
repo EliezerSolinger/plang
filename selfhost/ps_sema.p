@@ -1137,6 +1137,14 @@ struct PsSema:
                     t = bu9
                 elif ct3 != None and ct3->kind == PT_VIEW:
                     t = ct3->inner
+                elif ct3 != None and ct3->kind == PT_BUFFER:
+                    # 135.5: as operações valem nos DOIS. `b[i]` num Buffer é um
+                    # byte, pela mesma razão que num `bytes` é: um byte tem tipo
+                    # próprio e um carácter não (3.4).
+                    bu8: *PsType = ps_type(self->a, PT_INT, e->pos)
+                    bu8->width = 8
+                    bu8->uns = True
+                    t = bu8
                 elif ct3 == None or ct3->kind != PT_LIST:
                     fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str, bytes, List and View work)", ps_type_str(self->a, ct3))
                 else:
@@ -3570,7 +3578,7 @@ struct PsSema:
                 # 98.1: how many slots, which is known at compile time — the
                 # length of a tuple is part of its TYPE
                 return ps_type(self->a, PT_INT, e->pos)
-            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_MAPPING}:
+            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_MAPPING, PT_BUFFER}:
                 fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2))
             return ps_type(self->a, PT_INT, e->pos)
         if strcmp(name, "abs") == 0:
@@ -5988,7 +5996,7 @@ struct PsSema:
                         self->pop_scope()
                         self->depth -= 1
                         return
-                    if lit4 == None or lit4->kind not in {PT_LIST, PT_VIEW, PT_BYTES, PT_DICT, PT_SET}:
+                    if lit4 == None or lit4->kind not in {PT_LIST, PT_VIEW, PT_BYTES, PT_BUFFER, PT_DICT, PT_SET}:
                         fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, `bytes`, a List, a View, a Dict, a Set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4))
                     if s->nnames != 1:
                         fatal_at(self->file, s->pos, "`for x in xs` takes one variable")
@@ -5998,7 +6006,7 @@ struct PsSema:
                     itel: *PsType = lit4->inner
                     if lit4->kind == PT_DICT:
                         itel = lit4->key
-                    elif lit4->kind == PT_BYTES:
+                    elif lit4->kind == PT_BYTES or lit4->kind == PT_BUFFER:
                         itel = ps_type(self->a, PT_INT, s->pos)
                         itel->width = 8
                         itel->uns = True

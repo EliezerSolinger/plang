@@ -10,3 +10,5 @@ bytes window 16
 to the end 8
 outside: this window falls outside the Buffer
 copied 4 3 7.0
+no buffer: 4 65 68
+iterou: 266 ABCD

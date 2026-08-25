@@ -168,6 +168,10 @@ def ps_map_live_sub()
 def ps_slice_bounds_pub(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool
 # 135.4: a Buffer hands its block over and is invalidated — zero copy
 def ps_buffer_freeze(ctx: *PsCtx, b: *PsBuffer, file: const *char, line: i32) -> *PsBytes
+# 135.5: um byte de um Buffer, directo — uma janela por índice seria uma
+# alocação por leitura
+def ps_buffer_at(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> i64
+def ps_buffer_put(ctx: *PsCtx, b: *PsBuffer, i: i64, v: i64, file: const *char, line: i32)
 def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsBytes
 def ps_bytes_len(b: *PsBytes) -> i64
 def ps_bytes_get(ctx: *PsCtx, b: *PsBytes, i: i64, file: const *char, line: i32) -> i64

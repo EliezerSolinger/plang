@@ -842,6 +842,40 @@ def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer):
         b->data = None
         b->open = 0
 
+# 135.5: as operações valem nos DOIS, e `b[i]` num Buffer é um byte — pela
+# mesma razão que num `bytes` é: um byte tem tipo próprio e um carácter não
+# (3.4). Directo, sem passar por uma janela: uma janela por índice seria uma
+# alocação por leitura.
+def ps_buffer_at(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> i64:
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return 0
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return 0
+    n: i64 = i64(b->nbytes)
+    k: i64 = i + n if i < 0 else i        # 31.4: índice negativo conta de trás
+    if k < 0 or k >= n:
+        ps_raise(ctx, "index out of range", PS_CAT_INDEX, file, line)
+        return 0
+    return i64(u8(b->data[usize(k)]))
+
+
+def ps_buffer_put(ctx: *PsCtx, b: *PsBuffer, i: i64, v: i64, file: const *char, line: i32):
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return
+    n: i64 = i64(b->nbytes)
+    k: i64 = i + n if i < 0 else i
+    if k < 0 or k >= n:
+        ps_raise(ctx, "index out of range", PS_CAT_INDEX, file, line)
+        return
+    b->data[usize(k)] = char(u8(v & 0xFF))
+
+
 def ps_buffer_size(b: *PsBuffer) -> i64:
     return i64(b->nbytes) if b != None else 0
 

@@ -2214,8 +2214,19 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       um `async def` declarava um local enquanto o corpo lia o campo da moldura —
       duas variáveis com um nome.
 
-- [ ] **F3** — `declare Mapping` em P (primeira utilização real dos traits da FS)
-      e a ponte por `CBytes`. Depende de F2 **e** de FS.
+- [x] **F3** — **FEITA, e mais barata do que o plano previa.** A 138 dizia que
+      *"as duas já estavam casadas"*, e estavam: um `Mapping` fatia-se em `bytes`,
+      um `bytes` atravessa como `CBytes` sem cópia e sem fixação — e essa metade
+      foi entregue pela F1. Nada de novo foi preciso.
+      O `declare Mapping` da 138.1 **não foi feito, e não é preciso**: o que
+      atravessa é o `CBytes` da fatia, nunca um objecto `Mapping`, portanto não
+      há disposição de struct para garantir dos dois lados. A 138 já o dizia —
+      *"em P um mapa não precisa de tipo novo nenhum"*. Fica registado para o dia
+      em que alguém queira que o P ABRA um mapa e o entregue ao pscript, que é o
+      sentido contrário e ainda não tem consumidor.
+      A 138.2 (o guarda não atravessa) é verdade por construção: um mapa aberto
+      pelo P não está no registo do runtime.
+
 - [x] **F4** — **FEITA.** `os.pread`/`os.pwrite` (posicionais, sem cursor),
       `os.stat` numa travessia só (um Dict, pela razão do `gc.stats()`),
       `f.size()` perguntado ao DESCRITOR (135.10), e `os.scandir(d)` que

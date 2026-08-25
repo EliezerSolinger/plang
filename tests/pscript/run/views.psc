@@ -57,6 +57,20 @@ def main():
     own.append(7.0)
     print("copied", len(own), len(mid), own[3])
 
+    # ---- 135.5: as operacoes valem nos DOIS ----
+    #
+    # `len`, indexar, escrever e iterar num `Buffer` respondem como num `bytes`
+    # — e `b[i]` e um NUMERO nos dois, porque um byte tem tipo proprio e um
+    # caractere nao (3.4).
+    z = Buffer(4)
+    for i in range(4):
+        z[i] = u8(65 + i)
+    print("no buffer:", len(z), z[0], z[-1])
+    soma = 0
+    for x in z:
+        soma += int(x)
+    print("iterou:", soma, str(z.freeze()))
+
     b.close()
 
 

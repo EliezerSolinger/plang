@@ -45,6 +45,20 @@ def ps_ctx_free(ctx: *PsCtx):
     ps_report_lost(ctx)
     ps_mux_free(ctx)
     ps_random_free(ctx)
+    # 136.3: a ÚLTIMA passagem dos finalizadores, e ANTES de largar os blocos —
+    # um gancho lê o objecto para saber o que libertar, e depois de
+    # `ps_free_blocks` o objecto já não existe. É a mesma ordem que a varredura
+    # dentro do coletor tem, pela mesma razão.
+    #
+    # O `runFinalizersOnExit` do Java foi retirado por ser perigoso, mas era
+    # perigoso porque corria código do UTILIZADOR, noutra thread, sobre objectos
+    # possivelmente vivos. Com a restrição da 136.2 — o gancho é `free`,
+    # `munmap`, `close`, e mais nada — nada disso existe aqui.
+    #
+    # E o que se ganha é o que decidiu: as fugas passam a ser MENSURÁVEIS.
+    # `gc.stats()` diz quantos ganchos foram registados e quantos correram, e um
+    # portão que compare os dois é um teste de fugas.
+    ps_run_finals(ctx)
     ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = None
     # the graveyard goes too: nothing may reference it any more, and a worker

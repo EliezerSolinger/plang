@@ -2631,6 +2631,11 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
                 t = bu9;
             } else if (ct3 != NULL && ct3->kind == PT_VIEW) {
                 t = ct3->inner;
+            } else if (ct3 != NULL && ct3->kind == PT_BUFFER) {
+                PsType *bu8 = ps_type(self->a, PT_INT, e->pos);
+                bu8->width = 8;
+                bu8->uns = 1;
+                t = bu8;
             } else if (ct3 == NULL || ct3->kind != PT_LIST) {
                 fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str, bytes, List and View work)", ps_type_str(self->a, ct3));
             } else {
@@ -3210,14 +3215,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1677_21 = e;
-                    __with_1677_21->kind = PE_COMPREHEND;
-                    __with_1677_21->op = TK_RBRACKET;
-                    __with_1677_21->var = kv9;
-                    __with_1677_21->lhs = pair;
-                    __with_1677_21->rhs = recv9;
-                    __with_1677_21->args = NULL;
-                    __with_1677_21->nargs = 0;
+                    PsExpr *__with_1685_21 = e;
+                    __with_1685_21->kind = PE_COMPREHEND;
+                    __with_1685_21->op = TK_RBRACKET;
+                    __with_1685_21->var = kv9;
+                    __with_1685_21->lhs = pair;
+                    __with_1685_21->rhs = recv9;
+                    __with_1685_21->args = NULL;
+                    __with_1685_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -4678,12 +4683,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3066_17 = e;
-                __with_3066_17->kind = PE_INDEX;
-                __with_3066_17->lhs = e->args[0];
-                __with_3066_17->rhs = below;
-                __with_3066_17->args = NULL;
-                __with_3066_17->nargs = 0;
+                PsExpr *__with_3074_17 = e;
+                __with_3074_17->kind = PE_INDEX;
+                __with_3074_17->lhs = e->args[0];
+                __with_3074_17->rhs = below;
+                __with_3074_17->args = NULL;
+                __with_3074_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -5156,26 +5161,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3503_17 = e;
-                __with_3503_17->kind = PE_STR;
-                __with_3503_17->text = lit7;
-                __with_3503_17->lhs = NULL;
-                __with_3503_17->rhs = NULL;
-                __with_3503_17->args = NULL;
-                __with_3503_17->nargs = 0;
+                PsExpr *__with_3511_17 = e;
+                __with_3511_17->kind = PE_STR;
+                __with_3511_17->text = lit7;
+                __with_3511_17->lhs = NULL;
+                __with_3511_17->rhs = NULL;
+                __with_3511_17->args = NULL;
+                __with_3511_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3516_13 = e;
-            __with_3516_13->kind = PE_LOWERED;
-            __with_3516_13->low = ln7;
-            __with_3516_13->lhs = NULL;
-            __with_3516_13->rhs = NULL;
-            __with_3516_13->args = NULL;
-            __with_3516_13->nargs = 0;
+            PsExpr *__with_3524_13 = e;
+            __with_3524_13->kind = PE_LOWERED;
+            __with_3524_13->low = ln7;
+            __with_3524_13->lhs = NULL;
+            __with_3524_13->rhs = NULL;
+            __with_3524_13->args = NULL;
+            __with_3524_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5228,7 +5233,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         if (at2 != NULL && at2->kind == PT_TUPLE) {
             return ps_type(self->a, PT_INT, e->pos);
         }
-        if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_BYTES || at2->kind == PT_LIST || at2->kind == PT_VIEW || at2->kind == PT_DICT || at2->kind == PT_SET || at2->kind == PT_MAPPING)) {
+        if (at2 == NULL || !(at2->kind == PT_STR || at2->kind == PT_BYTES || at2->kind == PT_LIST || at2->kind == PT_VIEW || at2->kind == PT_DICT || at2->kind == PT_SET || at2->kind == PT_MAPPING || at2->kind == PT_BUFFER)) {
             fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2));
         }
         return ps_type(self->a, PT_INT, e->pos);
@@ -5473,10 +5478,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3796_17 = &ns->quals[ns->nquals];
-                __with_3796_17->name = q;
-                __with_3796_17->orig = d->path;
-                __with_3796_17->ns = sub;
+                PsNsEnt *__with_3804_17 = &ns->quals[ns->nquals];
+                __with_3804_17->name = q;
+                __with_3804_17->orig = d->path;
+                __with_3804_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5489,10 +5494,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3808_21 = &ns->ents[ns->nents];
-                    __with_3808_21->name = local;
-                    __with_3808_21->orig = d->names[k];
-                    __with_3808_21->ns = sub;
+                    PsNsEnt *__with_3816_21 = &ns->ents[ns->nents];
+                    __with_3816_21->name = local;
+                    __with_3816_21->orig = d->names[k];
+                    __with_3816_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5957,10 +5962,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4283_9 = e;
-        __with_4283_9->kind = PE_NAME;
-        __with_4283_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4283_9->lhs = NULL;
+        PsExpr *__with_4291_9 = e;
+        __with_4291_9->kind = PE_NAME;
+        __with_4291_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4291_9->lhs = NULL;
     }
     return 1;
 }
@@ -7744,7 +7749,7 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                     self->depth -= 1;
                     return;
                 }
-                if (lit4 == NULL || !(lit4->kind == PT_LIST || lit4->kind == PT_VIEW || lit4->kind == PT_BYTES || lit4->kind == PT_DICT || lit4->kind == PT_SET)) {
+                if (lit4 == NULL || !(lit4->kind == PT_LIST || lit4->kind == PT_VIEW || lit4->kind == PT_BYTES || lit4->kind == PT_BUFFER || lit4->kind == PT_DICT || lit4->kind == PT_SET)) {
                     fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, `bytes`, a List, a View, a Dict, a Set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4));
                 }
                 if (s->nnames != 1) {
@@ -7754,7 +7759,7 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 PsType *itel = lit4->inner;
                 if (lit4->kind == PT_DICT) {
                     itel = lit4->key;
-                } else if (lit4->kind == PT_BYTES) {
+                } else if (lit4->kind == PT_BYTES || lit4->kind == PT_BUFFER) {
                     itel = ps_type(self->a, PT_INT, s->pos);
                     itel->width = 8;
                     itel->uns = 1;
