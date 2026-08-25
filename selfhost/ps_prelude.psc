@@ -59,3 +59,19 @@ trait Reader:
 
 trait Writer:
     async def write_from(self, b: Buffer, off: int, n: int) -> int
+
+
+# 140/F5: as espécies de mudança que um `Watcher` entrega.
+#
+# `RESCAN` é o transbordo (146.5): quando a fila do núcleo enche, o que se
+# perdeu perdeu-se, e a única resposta honesta é "não sei o que mudou, relê
+# tudo" — em vez de continuar a entregar eventos como se nada faltasse. O nome
+# diz o que FAZER e não o que aconteceu ao núcleo, que é o que um nome de evento
+# vale.
+enum Change:
+    CREATED
+    MODIFIED
+    DELETED
+    MOVED_FROM
+    MOVED_TO
+    RESCAN

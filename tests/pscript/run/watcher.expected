@@ -1,0 +1,6 @@
+comeca vazio: 0
+depois de criar: True a.txt:criado
+tres gravacoes deram 1 eventos de mudanca (coalescidos)
+viu dentro do directorio novo: True
+ready com fila cheia: True True
+watcher-ok

@@ -469,6 +469,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsDecoder"))
             case PT_DIRITER:
                 return ty_ptr(self->a, ty_name(self->a, "PsDirIter"))
+            case PT_WATCHER:
+                return ty_ptr(self->a, ty_name(self->a, "PsWatcher"))
             case PT_VIEW:
                 # 18.3: a view IS the list object with `raw` and `owner` set —
                 # nothing new is allocated and the runtime learns nothing. The
@@ -659,7 +661,7 @@ struct PsLow:
             self->push_arg(cl, rcv)
             self->push_arg(cl, self->ctx_arg(pos))
         else:
-            cl = self->call_rt("ps_buffer_close" if k == PT_BUFFER else ("ps_map_close" if k == PT_MAPPING else ("ps_conn_close" if k == PT_CONN else "ps_file_close")), pos)
+            cl = self->call_rt("ps_buffer_close" if k == PT_BUFFER else ("ps_map_close" if k == PT_MAPPING else ("ps_watch_close" if k == PT_WATCHER else ("ps_conn_close" if k == PT_CONN else "ps_file_close"))), pos)
             self->push_arg(cl, self->ctx_arg(pos))
             self->push_arg(cl, self->async_field(name, pos) if self->in_frame(name) else self->ident(name, pos))
         st: *Stmt = st_new(self->a, ST_EXPR, pos)
@@ -3116,6 +3118,73 @@ struct PsLow:
             self->push_arg(tc9, self->expr(e->lhs->lhs))
             self->allocs = True
             return tc9
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_WATCHER:
+            wmn: const *char = e->lhs->text
+            if strcmp(wmn, "close") == 0:
+                wc9: *Expr = self->call_rt("ps_watch_close", e->pos)
+                self->push_arg(wc9, self->ctx_arg(e->pos))
+                self->push_arg(wc9, self->expr(e->lhs->lhs))
+                return wc9
+            if strcmp(wmn, "ready") == 0:
+                wn9: *Expr = self->call_rt("ps_watch_next", e->pos)
+                self->push_arg(wn9, self->ctx_arg(e->pos))
+                self->push_arg(wn9, self->expr(e->lhs->lhs))
+                self->pos_args(wn9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return wn9
+            if strcmp(wmn, "take") == 0:
+                # o evento é um TRIO que segura uma `str`, portanto não é uma
+                # tupla de bytes puros e o P não tem construtor para ela (98.4):
+                # é um local escondido, preenchido campo a campo. É a mesma
+                # forma que o `recv_from` da F7 usa, e pela mesma razão.
+                tvn: const *char = self->a->printf("__wv%d", self->tmp_ctr)
+                pn9: const *char = self->a->printf("__wp%d", self->tmp_ctr)
+                cn9: const *char = self->a->printf("__wc%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                pd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                pd9->name = pn9
+                pd9->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
+                pd9->init = ex_new(self->a, EX_NONE, e->pos)
+                self->pre.push(pd9)
+                cd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                cd9->name = cn9
+                cd9->type = ty_name(self->a, "i64")
+                cd9->init = self->num("0", e->pos)
+                self->pre.push(cd9)
+                tk9: *Expr = self->call_rt("ps_watch_take_ck", e->pos)
+                self->push_arg(tk9, self->ctx_arg(e->pos))
+                self->push_arg(tk9, self->expr(e->lhs->lhs))
+                self->push_arg(tk9, self->addr_of(pn9, e->pos))
+                self->push_arg(tk9, self->addr_of(cn9, e->pos))
+                self->pos_args(tk9, e->pos)
+                self->raised = True
+                self->allocs = True
+                td9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                td9->name = tvn
+                td9->type = ty_name(self->a, self->tuple_record(e->type))
+                td9->init = self->zero_struct(e->pos)
+                self->pre.push(td9)
+                # a ORDEM importa: a chamada preenche os dois `out` e devolve a
+                # espécie, portanto o campo 1 vai primeiro
+                for fi in range(3):
+                    fx: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                    fx->op = TK_DOT
+                    fx->lhs = self->ident(tvn, e->pos)
+                    fx->field = self->a->printf("_%d", 1 if fi == 0 else (0 if fi == 1 else 2))
+                    ax: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
+                    ax->lhs = fx
+                    ax->op = TK_ASSIGN
+                    ax->rhs = tk9 if fi == 0 else (self->ident(pn9, e->pos) if fi == 1 else self->ident(cn9, e->pos))
+                    self->pre.push(ax)
+                return self->ident(tvn, e->pos)
+            # `pending`: quantos estão à espera de ser tirados. Lê do núcleo
+            # primeiro, porque a pergunta é "há alguma coisa AGORA" e não "havia
+            # da última vez que alguém olhou" (146.4).
+            wd9: *Expr = self->call_rt("ps_watch_pending", e->pos)
+            self->push_arg(wd9, self->ctx_arg(e->pos))
+            self->push_arg(wd9, self->expr(e->lhs->lhs))
+            return wd9
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_DECODER:
             dmn: const *char = e->lhs->text
             if strcmp(dmn, "pending") == 0:
@@ -4012,6 +4081,16 @@ struct PsLow:
             # é o runtime que sabe o que "não veio" significa em cada um (herdar
             # o ambiente, ficar no diretório de quem chamou, devolver a saída em
             # vez de gravá-la).
+            # 140/F5: `os.watch(d)` / `os.watch(d, True)` — o vigia
+            if isos0 and strcmp(of0, "watch") == 0:
+                wo9: *Expr = self->call_rt("ps_watch_open", e->pos)
+                self->push_arg(wo9, self->ctx_arg(e->pos))
+                self->push_arg(wo9, self->expr(e->args[0]))
+                self->push_arg(wo9, self->expr(e->args[1]) if e->nargs == 2 else ex_new(self->a, EX_FALSE, e->pos))
+                self->pos_args(wo9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return wo9
             # 140/F4: `os.scandir(d)` — o directório a ser percorrido
             if isos0 and strcmp(of0, "scandir") == 0:
                 sc9: *Expr = self->call_rt("ps_dir_open", e->pos)
@@ -5662,7 +5741,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsWatcher") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -6956,7 +7035,7 @@ struct PsLow:
                     self->push_arg(cl9, rcv9)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                 else:
-                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_map_close" if wk9 == PT_MAPPING else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close")), s->pos)
+                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_map_close" if wk9 == PT_MAPPING else ("ps_watch_close" if wk9 == PT_WATCHER else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close"))), s->pos)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                     self->push_arg(cl9, self->async_field(s->name, s->pos) if self->in_frame(s->name) else self->ident(s->name, s->pos))
                 ce9: *Stmt = st_new(self->a, ST_EXPR, s->pos)
@@ -11020,7 +11099,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_WATCHER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

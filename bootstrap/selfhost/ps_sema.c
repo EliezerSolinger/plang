@@ -1524,7 +1524,7 @@ void Vec_PsLamF_deinit(Vec_PsLamF *self) {
     self->cap = 0;
 }
 
-static const const char *PS_PRELUDE = "\"\"\"pscript's prelude \342\200\224 the names every program has without importing anything.\n\nIt is SOURCE, parsed like any other module and prepended to the program (D3),\nbecause a trait built by hand out of AST nodes would be a second way to say the\nsame thing, and the day the surface changed one of them would be forgotten.\n\nA program's own names WIN over these, with a warning (68.3): shadowing a\ndefault is legal, and worth saying out loud.\n\"\"\"\n\nenum Category:\n    NONE\n    INDEX\n    KEY\n    TYPE\n    VALUE\n    ZERO\n    OVERFLOW\n    IO\n\nenum Status:\n    RUNNING\n    DONE\n    ERROR\n    GONE\n\nenum Endian:\n    LE\n    BE\n\ntrait Comparable:\n    def cmp(in self, other: Self) -> int\n\ntrait Iterable:\n    type Item\n    def has_next(self) -> bool\n    def next(self) -> Item\n\ntrait Closeable:\n    def close(self)\n\n# 135.2/S5: the two ends of byte I/O, and the reason they are TRAITS is that\n# there are three implementations of each and a program should be able to write\n# one function that serves all three.\n#\n# `async`, and it is not a decoration: a file and a socket both PARK in the\n# scheduler, and a `Reader` that could not say `async` would not cover a socket\n# \342\200\224 which is half the reason to have one. The cost is that an implementation\n# with nothing to wait for still says `async`; today there is no such\n# implementation, so it costs nobody anything yet.\n#\n# The shape is the one 135.2 decided, and it is the same on both sides: a\n# `Buffer` the caller already has, where in it to start, and how many bytes. A\n# Buffer is malloc'd and never moves (52.3), so the syscall reads and writes it\n# DIRECTLY \342\200\224 which is what turns a proxy's four copies into none.\n\ntrait Reader:\n    async def read_into(self, b: Buffer, off: int, n: int) -> int\n\ntrait Writer:\n    async def write_from(self, b: Buffer, off: int, n: int) -> int\n";
+static const const char *PS_PRELUDE = "\"\"\"pscript's prelude \342\200\224 the names every program has without importing anything.\n\nIt is SOURCE, parsed like any other module and prepended to the program (D3),\nbecause a trait built by hand out of AST nodes would be a second way to say the\nsame thing, and the day the surface changed one of them would be forgotten.\n\nA program's own names WIN over these, with a warning (68.3): shadowing a\ndefault is legal, and worth saying out loud.\n\"\"\"\n\nenum Category:\n    NONE\n    INDEX\n    KEY\n    TYPE\n    VALUE\n    ZERO\n    OVERFLOW\n    IO\n\nenum Status:\n    RUNNING\n    DONE\n    ERROR\n    GONE\n\nenum Endian:\n    LE\n    BE\n\ntrait Comparable:\n    def cmp(in self, other: Self) -> int\n\ntrait Iterable:\n    type Item\n    def has_next(self) -> bool\n    def next(self) -> Item\n\ntrait Closeable:\n    def close(self)\n\n# 135.2/S5: the two ends of byte I/O, and the reason they are TRAITS is that\n# there are three implementations of each and a program should be able to write\n# one function that serves all three.\n#\n# `async`, and it is not a decoration: a file and a socket both PARK in the\n# scheduler, and a `Reader` that could not say `async` would not cover a socket\n# \342\200\224 which is half the reason to have one. The cost is that an implementation\n# with nothing to wait for still says `async`; today there is no such\n# implementation, so it costs nobody anything yet.\n#\n# The shape is the one 135.2 decided, and it is the same on both sides: a\n# `Buffer` the caller already has, where in it to start, and how many bytes. A\n# Buffer is malloc'd and never moves (52.3), so the syscall reads and writes it\n# DIRECTLY \342\200\224 which is what turns a proxy's four copies into none.\n\ntrait Reader:\n    async def read_into(self, b: Buffer, off: int, n: int) -> int\n\ntrait Writer:\n    async def write_from(self, b: Buffer, off: int, n: int) -> int\n\n\n# 140/F5: as esp\303\251cies de mudan\303\247a que um `Watcher` entrega.\n#\n# `RESCAN` \303\251 o transbordo (146.5): quando a fila do n\303\272cleo enche, o que se\n# perdeu perdeu-se, e a \303\272nica resposta honesta \303\251 \"n\303\243o sei o que mudou, rel\303\252\n# tudo\" \342\200\224 em vez de continuar a entregar eventos como se nada faltasse. O nome\n# diz o que FAZER e n\303\243o o que aconteceu ao n\303\272cleo, que \303\251 o que um nome de evento\n# vale.\nenum Change:\n    CREATED\n    MODIFIED\n    DELETED\n    MOVED_FROM\n    MOVED_TO\n    RESCAN\n";
 
 static const const int32_t PS_SEND_DEPTH = 64;
 
@@ -1740,6 +1740,8 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name);
 
 static void PsSema_io_window(PsSema *self, PsExpr *e, const char *what);
 
+static PsType *PsSema_watch_event_type(PsSema *self, Pos pos);
+
 static void PsSema_want(PsSema *self, PsExpr *e, PsType *got, PsType *expect, const char *ctx);
 
 static void PsSema_check_want(PsSema *self, PsExpr *e, PsType *expect, const char *ctx);
@@ -1907,16 +1909,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_429_9 = &self->locals[self->nlocals];
-        __with_429_9->name = name;
-        __with_429_9->type = t;
-        __with_429_9->assigned = assigned;
-        __with_429_9->is_const = is_const;
-        __with_429_9->frozen = 0;
-        __with_429_9->is_module = 0;
-        __with_429_9->opt_type = NULL;
-        __with_429_9->any_type = NULL;
-        __with_429_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_430_9 = &self->locals[self->nlocals];
+        __with_430_9->name = name;
+        __with_430_9->type = t;
+        __with_430_9->assigned = assigned;
+        __with_430_9->is_const = is_const;
+        __with_430_9->frozen = 0;
+        __with_430_9->is_module = 0;
+        __with_430_9->opt_type = NULL;
+        __with_430_9->any_type = NULL;
+        __with_430_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2053,6 +2055,7 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
         case PT_MAPPING:
         case PT_DECODER:
         case PT_DIRITER:
+        case PT_WATCHER:
         case PT_TIMER:
         case PT_CONN:
         case PT_PROC: {
@@ -2448,12 +2451,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_961_17 = e;
-                __with_961_17->kind = PE_CALL;
-                __with_961_17->lhs = cal8;
-                __with_961_17->args = args8;
-                __with_961_17->nargs = nc8;
-                __with_961_17->body = NULL;
+                PsExpr *__with_962_17 = e;
+                __with_962_17->kind = PE_CALL;
+                __with_962_17->lhs = cal8;
+                __with_962_17->args = args8;
+                __with_962_17->nargs = nc8;
+                __with_962_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -3215,14 +3218,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1685_21 = e;
-                    __with_1685_21->kind = PE_COMPREHEND;
-                    __with_1685_21->op = TK_RBRACKET;
-                    __with_1685_21->var = kv9;
-                    __with_1685_21->lhs = pair;
-                    __with_1685_21->rhs = recv9;
-                    __with_1685_21->args = NULL;
-                    __with_1685_21->nargs = 0;
+                    PsExpr *__with_1686_21 = e;
+                    __with_1686_21->kind = PE_COMPREHEND;
+                    __with_1686_21->op = TK_RBRACKET;
+                    __with_1686_21->var = kv9;
+                    __with_1686_21->lhs = pair;
+                    __with_1686_21->rhs = recv9;
+                    __with_1686_21->args = NULL;
+                    __with_1686_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -3533,6 +3536,28 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 return vl;
             }
             fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm);
+        }
+        if (rt != NULL && rt->kind == PT_WATCHER) {
+            const char *wm = e->lhs->text;
+            e->lhs->type = rt;
+            if (e->nargs != 0) {
+                fatal_at(self->file, e->pos, "'%s' takes no arguments", wm);
+            }
+            if (strcmp(wm, "ready") == 0) {
+                PsType *wt0 = ps_type(self->a, PT_TASK, e->pos);
+                wt0->inner = ps_type(self->a, PT_BOOL, e->pos);
+                return wt0;
+            }
+            if (strcmp(wm, "take") == 0) {
+                return PsSema_watch_event_type(self, e->pos);
+            }
+            if (strcmp(wm, "pending") == 0) {
+                return ps_type(self->a, PT_INT, e->pos);
+            }
+            if (strcmp(wm, "close") == 0) {
+                return ps_type(self->a, PT_VOID, e->pos);
+            }
+            fatal_at(self->file, e->pos, "a Watcher has ready(), take(), pending() and close() (140/146.4), not '%s'", wm);
         }
         if (rt != NULL && rt->kind == PT_DECODER) {
             const char *dm = e->lhs->text;
@@ -4143,6 +4168,17 @@ static PsType *PsSema_call_generic(PsSema *self, PsExpr *e, PsFunc *f, const cha
     return rt9;
 }
 
+static PsType *PsSema_watch_event_type(PsSema *self, Pos pos) {
+    PsType *t = ps_type(self->a, PT_TUPLE, pos);
+    t->params = Arena_alloc(self->a, (size_t)3 * sizeof(*t->params));
+    t->params[0] = ps_type(self->a, PT_STR, pos);
+    t->params[1] = ps_type(self->a, PT_NAME, pos);
+    t->params[1]->name = "Change";
+    t->params[2] = ps_type(self->a, PT_INT, pos);
+    t->nparams = 3;
+    return t;
+}
+
 static void PsSema_io_window(PsSema *self, PsExpr *e, const char *what) {
     if (e->nargs != 3) {
         fatal_at(self->file, e->pos, "%s(buf, off, n) takes a Buffer, where in it to start, and how many bytes (135.2)", what);
@@ -4683,12 +4719,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3074_17 = e;
-                __with_3074_17->kind = PE_INDEX;
-                __with_3074_17->lhs = e->args[0];
-                __with_3074_17->rhs = below;
-                __with_3074_17->args = NULL;
-                __with_3074_17->nargs = 0;
+                PsExpr *__with_3123_17 = e;
+                __with_3123_17->kind = PE_INDEX;
+                __with_3123_17->lhs = e->args[0];
+                __with_3123_17->rhs = below;
+                __with_3123_17->args = NULL;
+                __with_3123_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -4903,6 +4939,18 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
                 fatal_at(self->file, e->args[0]->pos, "os.exec() takes a List<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae));
             }
             return ps_type(self->a, PT_VOID, e->pos);
+        }
+        if (isos && strcmp(of, "watch") == 0) {
+            if (e->nargs != 1 && e->nargs != 2) {
+                fatal_at(self->file, e->pos, "os.watch(dir) watches a directory; os.watch(dir, True) watches the tree (140)");
+            }
+            PsType *wp0 = PsSema_check_expr(self, e->args[0]);
+            PsSema_want(self, e->args[0], wp0, ps_type(self->a, PT_STR, e->pos), "the directory to watch");
+            if (e->nargs == 2) {
+                PsType *wr0 = PsSema_check_expr(self, e->args[1]);
+                PsSema_want(self, e->args[1], wr0, ps_type(self->a, PT_BOOL, e->pos), "whether to watch the whole tree");
+            }
+            return ps_type(self->a, PT_WATCHER, e->pos);
         }
         if (isos && strcmp(of, "scandir") == 0) {
             if (e->nargs != 1) {
@@ -5161,26 +5209,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3511_17 = e;
-                __with_3511_17->kind = PE_STR;
-                __with_3511_17->text = lit7;
-                __with_3511_17->lhs = NULL;
-                __with_3511_17->rhs = NULL;
-                __with_3511_17->args = NULL;
-                __with_3511_17->nargs = 0;
+                PsExpr *__with_3572_17 = e;
+                __with_3572_17->kind = PE_STR;
+                __with_3572_17->text = lit7;
+                __with_3572_17->lhs = NULL;
+                __with_3572_17->rhs = NULL;
+                __with_3572_17->args = NULL;
+                __with_3572_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3524_13 = e;
-            __with_3524_13->kind = PE_LOWERED;
-            __with_3524_13->low = ln7;
-            __with_3524_13->lhs = NULL;
-            __with_3524_13->rhs = NULL;
-            __with_3524_13->args = NULL;
-            __with_3524_13->nargs = 0;
+            PsExpr *__with_3585_13 = e;
+            __with_3585_13->kind = PE_LOWERED;
+            __with_3585_13->low = ln7;
+            __with_3585_13->lhs = NULL;
+            __with_3585_13->rhs = NULL;
+            __with_3585_13->args = NULL;
+            __with_3585_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5478,10 +5526,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3804_17 = &ns->quals[ns->nquals];
-                __with_3804_17->name = q;
-                __with_3804_17->orig = d->path;
-                __with_3804_17->ns = sub;
+                PsNsEnt *__with_3865_17 = &ns->quals[ns->nquals];
+                __with_3865_17->name = q;
+                __with_3865_17->orig = d->path;
+                __with_3865_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5494,10 +5542,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3816_21 = &ns->ents[ns->nents];
-                    __with_3816_21->name = local;
-                    __with_3816_21->orig = d->names[k];
-                    __with_3816_21->ns = sub;
+                    PsNsEnt *__with_3877_21 = &ns->ents[ns->nents];
+                    __with_3877_21->name = local;
+                    __with_3877_21->orig = d->names[k];
+                    __with_3877_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5868,6 +5916,7 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "pread");
         StrSet_add(&ns->sym, "pwrite");
         StrSet_add(&ns->sym, "scandir");
+        StrSet_add(&ns->sym, "watch");
         StrSet_add(&ns->sym, "SEQUENTIAL");
         StrSet_add(&ns->sym, "RANDOM");
         StrSet_add(&ns->sym, "WILLNEED");
@@ -5962,10 +6011,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4291_9 = e;
-        __with_4291_9->kind = PE_NAME;
-        __with_4291_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4291_9->lhs = NULL;
+        PsExpr *__with_4354_9 = e;
+        __with_4354_9->kind = PE_NAME;
+        __with_4354_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4354_9->lhs = NULL;
     }
     return 1;
 }
@@ -7623,7 +7672,7 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
         }
         case PS_WITH: {
             PsType *wt9 = PsSema_check_expr(self, s->expr);
-            int closeable = wt9 != NULL && (wt9->kind == PT_FILE || wt9->kind == PT_BUFFER || wt9->kind == PT_CONN || wt9->kind == PT_MAPPING);
+            int closeable = wt9 != NULL && (wt9->kind == PT_FILE || wt9->kind == PT_BUFFER || wt9->kind == PT_CONN || wt9->kind == PT_MAPPING || wt9->kind == PT_WATCHER);
             if (!closeable && wt9 != NULL && wt9->kind == PT_NAME && StrMap_pPsDecl_has(&self->records, wt9->name)) {
                 closeable = StrSet_has(&self->timpls, Arena_printf(self->a, "Closeable|%s", wt9->name));
             }
@@ -8274,6 +8323,7 @@ int ps_is_ref_type(PsType *t) {
         case PT_MAPPING:
         case PT_DECODER:
         case PT_DIRITER:
+        case PT_WATCHER:
         case PT_CONN:
         case PT_PROC:
         case PT_FUNC:
@@ -8580,6 +8630,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
         }
         case PT_DECODER: {
             return "Decoder";
+        }
+        case PT_WATCHER: {
+            return "Watcher";
         }
         case PT_DIRITER: {
             return "a directory walk";

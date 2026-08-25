@@ -56,6 +56,7 @@ enum PsTyId:
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
     PS_TY_CONN = 15    # a socket, listening or connected (77.1)
     PS_TY_PROC = 16    # 118: um processo que já terminou (`os.run`)
+    PS_TY_WATCHER = 21 # 140/F5: um vigia de uma árvore de ficheiros
     PS_TY_DIRITER = 20 # 140/F4: a directory being WALKED, one name at a time
     PS_TY_DECODER = 19 # 140/F6: an incremental UTF-8 decoder — what the
                        #   `CharsetDecoder` of the NIO is
@@ -156,6 +157,37 @@ struct PsBytes:
 # 140/F4: um directório a ser PERCORRIDO. O `DIR *` é do sistema e é opaco: o
 # que se guarda é o ponteiro, e fechá-lo é do finalizador quando o laço sai a
 # meio — a rede da 136.1 exactamente onde ela serve.
+# 140/F5: o vigia.
+#
+# O descritor do `inotify` é um STREAM, e é isso que faz do vigia uma coisa
+# aguardável sem maquinaria nova: entra no mesmo `poll` que um socket, e não é
+# uma segunda maneira de esperar — é mais um stream a usar a única que existe.
+#
+# A árvore é NOSSA (146.1): o `inotify` vigia um directório, e uma árvore são N
+# vigias com um mapa de volta do descritor para o caminho.
+struct PsWatchEnt:
+    next: *PsWatchEnt
+    wd: int
+    path: *char        # malloc'd: o vigia sobrevive a coletas
+
+# a fila do que já foi lido do núcleo e ainda não foi entregue. Malloc'd, porque
+# ela é lida a partir do `poll` e o coletor não tem nada que ver com isso.
+struct PsWatchEv:
+    next: *PsWatchEv
+    path: *char
+    kind: i32
+    cookie: u32
+
+struct PsWatcher:
+    obj: PsObj
+    fd: int
+    open: i32
+    recursive: i32
+    ents: *PsWatchEnt
+    head: *PsWatchEv   # o mais antigo por entregar
+    tail: *PsWatchEv
+    root: *char        # o directório de topo, para as mensagens
+
 struct PsDirIter:
     obj: PsObj
     d: *void          # `DIR *`, opaco
@@ -768,12 +800,19 @@ enum PsIoWant:
                        #   ele é a moeda de quem CONSTRÓI, e o `bytes` é a de
                        #   quem move (135.6). São dois destinos, não uma
                        #   substituição.
+    PS_W_TRUE          # 140/F5: a espera acabou e a resposta é `True`. Tem
+                       #   nome próprio porque o TAMANHO do resultado é o de um
+                       #   bool e não o de um i64, e escrever oito bytes num
+                       #   espaço de um é como um `read_into` sem janela.
     PS_W_NREAD         # quantos bytes entraram num Buffer que o chamador já
                        #   tinha: o `read_into` da 135.2, e a razão inteira de
                        #   ele existir — nada é alocado e nada é copiado
 
 enum PsIoOp:
     PS_IO_OPEN = 0
+    PS_IO_WATCH        # 140/F5: esperar que um vigia tenha alguma coisa. O
+                       #   descritor é um stream, portanto a espera é a de
+                       #   sempre — o que muda é o que se lê quando acorda.
     PS_IO_READ         # up to n bytes
     PS_IO_READALL      # everything that is left
     PS_IO_WRITE

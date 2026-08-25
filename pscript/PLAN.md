@@ -2237,10 +2237,17 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       PONTEIROS, portanto `[1,2,3] == [1,2,3]` respondia False, contra a 22.2.
       Corrigido; e `==` num `Dict`/`Set` passa a ser RECUSADO em vez de mentir.
 
-- [ ] **F5** — `os.watch` (Watcher). **BLOQUEADA por decisão**: as quatro
-      perguntas da 140.1 são do utilizador — rodar `AskUserQuestion` ANTES de
-      escrever uma linha (recursão nossa ou do núcleo; macOS = FSEvents;
-      coalescer ou cru; um evento ou lote). Fora isso, independente de F0-F4.
+- [x] **F5** — **FEITA**, com as quatro perguntas da 140.1 respondidas na
+      **bateria 146**: a recursão é nossa e a corrida fecha-se com uma VARREDURA;
+      no macOS `os.watch` LEVANTA e diz que o FSEvents é o caminho; COALESCE por
+      par (caminho, espécie) consecutivo; e `ready()`/`pending()` são duas
+      perguntas, não uma versão pior da outra. O transbordo chama-se `RESCAN`
+      (146.5), que diz o que FAZER em vez do que aconteceu ao núcleo.
+      A superfície ficou `ready()` + `take()` em vez do `await w.next()` que a
+      140.1 esboçou, e a razão está na 146.4: um evento é um TRIO que segura uma
+      `str`, e o runtime não sabe montar um record sintetizado — `take()` monta-o
+      no lowering, pela mesma forma que o `recv_from` da F7 já usava.
+
 - [x] **F6** — **FEITA.** `Decoder()` no runtime: `feed(b)` dá o texto que já
       dá para dizer, `finish()` fecha o fluxo, `pending()` diz quantos bytes
       estão retidos. Erro SUBSTITUI por U+FFFD em vez de levantar — um fluxo não

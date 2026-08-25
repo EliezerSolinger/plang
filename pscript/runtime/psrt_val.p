@@ -111,6 +111,17 @@ private def ps_crash_handler(sig: int):
 # passa a ser uma CLOSURE que o runtime chama, e então o `setjmp` vive no frame
 # do runtime — que é o dono dele — durante todo o bloco.
 private PS_MAPS_LIVE: i64 = 0
+private PS_WATCH_LIVE: i64 = 0
+
+def ps_watch_live_add():
+    PS_WATCH_LIVE += 1
+
+def ps_watch_live_sub():
+    if PS_WATCH_LIVE > 0:
+        PS_WATCH_LIVE -= 1
+
+def ps_watches_live() -> i64:
+    return PS_WATCH_LIVE
 
 def ps_map_live_add():
     PS_MAPS_LIVE += 1

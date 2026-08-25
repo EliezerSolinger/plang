@@ -624,6 +624,10 @@ static void p_type(StrBuf *b, PsType *t) {
             StrBuf_puts(b, "Decoder");
             break;
         }
+        case PT_WATCHER: {
+            StrBuf_puts(b, "Watcher");
+            break;
+        }
         case PT_VIEW: {
             StrBuf_puts(b, "View<");
             p_type(b, t->inner);

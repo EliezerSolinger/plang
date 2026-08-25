@@ -166,7 +166,7 @@ def ps_worker_finish(ctx: *PsCtx, blk: *void):
     pthread_cond_broadcast(&b->cv)
     ps_pipe_wake(b->up_w)
 
-private def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
+def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
 private def ps_obj_msg_task(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, size: usize) -> *PsTask
 private def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize)
 private def ps_sh_slot(sh: const *PsShape) -> i32
@@ -188,7 +188,7 @@ private def ps_sigpipe_noop(sig: int)
 def ps_sock_nonblock(fd: int)
 def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
 private def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool
-private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
+def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
 private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask
 private def ps_file_live(ctx: *PsCtx, f: *PsFile, what: const *char) -> bool
 def ps_utf8_valid(b: const *char, n: usize) -> bool
@@ -629,7 +629,7 @@ def ps_worker_send_down(w: *PsWorker, p: const *void, size: usize) -> bool:
 # a finished task carrying `size` bytes of message: the shape `await` wants,
 # with the blocking done here. When the I/O loop of 18.4 exists, this is where
 # the task starts PARKED instead.
-private def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
+def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask:
     fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
     u: *PsUser = (*PsUser)(fr)
     u->desc = &PS_POD_DESC
@@ -1096,7 +1096,10 @@ def ps_sock_nonblock(fd: int):
 # A polled job: no pool thread, no queue. The scheduler puts the descriptor in
 # its `poll` and runs the syscall here when it says ready — which is what a
 # socket makes possible and a file does not.
-private def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
+# 140/F5: a camada de sistema espera um descritor pela MESMA porta que um
+# socket — é o que faz do vigia mais um stream em vez de uma segunda maneira de
+# esperar.
+def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask:
     fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
     u: *PsUser = (*PsUser)(fr)
     u->desc = &PS_REFMSG_DESC if isref else &PS_POD_DESC
@@ -1699,6 +1702,8 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             c->dgram = 0
             ps_sock_nonblock(c->fd)
             *(**PsConn)(ps_task_ret(t)) = c
+        case PS_W_TRUE:
+            *(*bool)(ps_task_ret(t)) = True
         case PS_W_INT, PS_W_NREAD:
             # PS_W_NREAD is an int like any other; it has its own name because
             # what it MEANS is different — how many bytes landed in memory the
@@ -1736,6 +1741,13 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             if fd2 < 0:
                 return False       # the queue emptied between poll and accept
             w->rc = i64(fd2)
+            return True
+        case PS_IO_WATCH:
+            # o `poll` já disse que há: não se lê nada aqui, porque quem lê e
+            # enfileira é o `ps_watch_poll` do lado do vigia — este trabalho
+            # existe só para ESPERAR
+            w->rc = 1
+            w->want = PS_W_TRUE
             return True
         case PS_IO_RECV:
             # `read` and not `recv`, since F8: they are the same call for a
@@ -3647,3 +3659,4 @@ def ps_conn_send_to(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, hos
         ps_raise(ctx, "send_to failed", PS_CAT_IO, file, line)
         return 0
     return put
+

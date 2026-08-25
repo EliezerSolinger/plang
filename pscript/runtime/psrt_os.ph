@@ -99,6 +99,21 @@ def ps_os_stat(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *PsDi
 # no fim, e é o fim do laço.
 def ps_dir_open(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *PsDirIter
 def ps_dir_next(ctx: *PsCtx, it: *PsDirIter) -> *PsStr
+
+# ---------- 140/F5: o vigia ----------
+# Aguardável porque o descritor do inotify é um STREAM: entra no mesmo `poll`
+# que um socket, e não é uma segunda maneira de esperar.
+def ps_watch_open(ctx: *PsCtx, path: *PsStr, recursive: bool, file: const *char, line: i32) -> *PsWatcher
+def ps_watch_fd(w: *PsWatcher) -> int
+def ps_watch_has(w: *PsWatcher) -> bool
+def ps_watch_poll(ctx: *PsCtx, w: *PsWatcher)
+def ps_watch_pending(ctx: *PsCtx, w: *PsWatcher) -> i64
+def ps_watch_take(ctx: *PsCtx, w: *PsWatcher, out path: *PsStr, out cookie: i64) -> i64
+def ps_watch_take_ck(ctx: *PsCtx, w: *PsWatcher, out path: *PsStr, out cookie: i64, file: const *char, line: i32) -> i64
+def ps_watch_close(ctx: *PsCtx, w: *PsWatcher)
+# esperar por uma mudança. É a MESMA espera de um socket, porque o descritor do
+# inotify é um stream — o vigia não é uma segunda maneira de esperar.
+def ps_watch_next(ctx: *PsCtx, w: *PsWatcher, file: const *char, line: i32) -> *PsTask
 # ler e escrever POR POSIÇÃO: sem cursor, portanto seguro a partir de workers
 def ps_os_pread(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64
 def ps_os_pwrite(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64

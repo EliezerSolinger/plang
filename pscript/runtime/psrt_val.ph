@@ -164,6 +164,10 @@ def ps_dec_pending(d: *PsDecoder) -> i64
 def ps_maps_live() -> i64
 def ps_map_live_add()
 def ps_map_live_sub()
+# 140/F5: e o vigia também é escasso — um descritor por árvore
+def ps_watch_live_add()
+def ps_watch_live_sub()
+def ps_watches_live() -> i64
 # a mesma conta de fatia que a lista, a string e o `bytes` fazem
 def ps_slice_bounds_pub(ctx: *PsCtx, n: i64, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, out i: i64, out j: i64, file: const *char, line: i32) -> bool
 # 135.4: a Buffer hands its block over and is invalidated — zero copy

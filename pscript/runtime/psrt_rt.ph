@@ -179,6 +179,11 @@ def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask
 # or leave from, memory the caller already had.
 def ps_conn_write_bytesobj(ctx: *PsCtx, c: *PsConn, b: *PsBytes) -> *PsTask
 def ps_conn_read_into(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
+# 140/F5: esperar por uma mudança. É a MESMA espera de um socket, porque o
+# descritor do inotify é um stream — não é uma segunda maneira de esperar.
+def ps_fd_task(ctx: *PsCtx, w: *PsWork, isref: bool, size: usize) -> *PsTask
+# ... e uma tarefa que já vem PRONTA, para quando não há nada por que esperar
+def ps_msg_task(ctx: *PsCtx, m: *PsMsg, size: usize) -> *PsTask
 # 140/F4: a janela de um Buffer, conferida uma vez e num sítio só
 def ps_buf_window_pub(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char
 def ps_conn_write_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask

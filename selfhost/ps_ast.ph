@@ -51,6 +51,9 @@ enum PsTypeKind:
                      #   type of message it sends back (36.1).
     PT_FILE          # an open file (48.1)
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
+    PT_WATCHER       # 140/F5: `Watcher` — uma árvore a ser vigiada. Maiúscula
+                     #   porque é uma COISA com tempo de vida: fecha-se, e um
+                     #   descritor do `inotify` é escasso (136.1).
     PT_DIRITER       # 140/F4: what `os.scandir(p)` gives — a directory being
                      #   walked. It has no name a program writes, because the
                      #   only thing anybody does with it is `for name in ...`.

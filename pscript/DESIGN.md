@@ -6724,3 +6724,88 @@ atravessar uma fronteira de função, e cada um deles precisa de resposta. É um
 bateria própria, e não uma linha.
 
 **PENDENTE DE DECISÃO — segui com o guarda que diz a causa, para não travar.**
+
+## BATERIA 146 — as quatro perguntas do `Watcher`, respondidas (2026-08-25)
+
+A 140.1 deixou-as escritas como abertas de propósito, *"para não serem
+resolvidas por engano"*. Foram decididas na execução da F5, com o utilizador a
+dormir e com a instrução de tomar a melhor decisão. Cada uma abaixo diz o que
+foi escolhido **e o que se perde com a escolha**, que é a parte que permite
+reabrir.
+
+### 146.1 — a recursão é nossa, e a corrida fecha-se com uma VARREDURA
+
+`os.watch(dir, True)` percorre a árvore ao abrir e põe um vigia por directório.
+Um directório criado depois recebe o seu quando o evento de criação chega — e
+entre o `mkdir` e o `inotify_add_watch` cabem ficheiros que ninguém viu.
+
+**A corrida não se evita; fecha-se.** Ao pôr o vigia num directório novo,
+LÊ-SE o directório e sintetiza-se um `CREATED` por cada coisa que já lá está.
+Um evento a mais é ruído; um evento a menos é um ficheiro que o build não
+recompila, e a diferença entre os dois é toda.
+
+*O que se perde:* um `CREATED` duplicado para o que chegou entre as duas coisas.
+É o preço certo, e é o que o `chokidar` e o `watchman` também pagam.
+
+### 146.2 — no macOS, `os.watch` LEVANTA, e diz o que falta
+
+O `inotify` é do Linux. O `kqueue` vigia DESCRITORES — uma árvore são N
+descritores abertos, e o limite chega depressa — e a resposta real do macOS é o
+**FSEvents**, uma API diferente, com chamada de volta numa run loop.
+
+**Não se escreve meio vigia.** No macOS, `os.watch` levanta com a mensagem a
+dizer que o FSEvents é o caminho e que não está escrito. É honesto, e é a única
+saída que não entrega um vigia que às vezes vê.
+
+*O que se perde:* o `pforge dev` e o `check_external` do editor não têm vigia no
+macOS até alguém escrever o FSEvents. Continuam a sondar, como sondam hoje.
+
+### 146.3 — COALESCE, e a unidade é o par (caminho, espécie) CONSECUTIVO
+
+Gravar um ficheiro num editor produz três ou quatro eventos. Entregá-los crus
+faz com que cada consumidor escreva o mesmo anti-ressalto, que é a queixa
+conhecida do `WatchService` do Java.
+
+Mas coalescer demais MENTE: um `CREATED` seguido de um `DELETED` não é nada, e
+colapsá-los perderia a única coisa que interessava. Então a unidade é a mais
+pequena que ajuda e não pode mentir: **duas entregas CONSECUTIVAS do mesmo
+caminho com a mesma espécie são uma**. A ordem fica intacta, e um par
+`MOVED_FROM`/`MOVED_TO` nunca se junta, porque as espécies diferem.
+
+*O que se perde:* nada que se consiga nomear. Um consumidor que quisesse contar
+escritas contaria menos — e não há consumidor desses.
+
+### 146.4 — os DOIS, porque são duas perguntas
+
+`await w.ready()` espera até haver alguma coisa. `w.pending()` diz quantos estão
+à espera AGORA, e `w.take()` tira um.
+
+    with os.watch("src", True) as w:
+        while await w.ready():
+            while w.pending() > 0:
+                caminho, especie, cookie = w.take()
+
+Uma construção que toca em oitocentos ficheiros é um laço sobre `pending` em vez
+de oitocentas esperas — e não custa oitocentas voltas ao escalonador, porque
+`ready()` sobre uma fila não vazia devolve uma tarefa JÁ PRONTA, e uma tarefa
+pronta não estaciona. **Nenhuma das duas é uma versão pior da outra.**
+
+**A superfície mudou em relação ao esboço da 140.1**, que escrevia
+`ev = await w.next()`, e a razão é de implementação e vale a pena estar dita: um
+evento é um TRIO que segura uma `str`, portanto é uma tupla com referência (98.4)
+— e o RUNTIME não sabe montar um record que o compilador sintetizou. `take()` é
+síncrono e monta-o no lowering, exactamente como o `recv_from` da F7 faz.
+
+Um `drain()` que devolvesse `List<(str, Change, int)>` obrigaria o runtime a
+construir uma lista de records cuja disposição ele não conhece — e `pending()`
+com `take()` dá o mesmo desempenho sem essa maquinaria. Não é um atalho: é o
+desenho mais simples que cumpre o requisito.
+
+### 146.5 — a espécie do transbordo chama-se `RESCAN`
+
+A 140.1 decidiu que o transbordo é um evento e não um silêncio. O nome que ela
+usava era `OVERFLOW` — que já está tomado, pela `Category` do prelúdio (54.3).
+
+`RESCAN` é melhor de qualquer maneira: diz ao consumidor o que FAZER — *"não sei
+o que mudou, relê tudo"* — em vez de lhe dizer o que aconteceu ao núcleo. O
+nome de um evento vale pelo que ele manda fazer.

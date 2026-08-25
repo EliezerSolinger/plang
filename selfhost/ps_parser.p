@@ -274,6 +274,8 @@ struct PsP:
                 t = ps_type(self->a, PT_FILE, pos)
             elif self->renamed(pos, name, "buffer", "Buffer"):
                 t = ps_type(self->a, PT_BUFFER, pos)
+            elif name == "Watcher":
+                t = ps_type(self->a, PT_WATCHER, pos)
             elif name == "Decoder":
                 t = ps_type(self->a, PT_DECODER, pos)
             elif name == "Mapping":

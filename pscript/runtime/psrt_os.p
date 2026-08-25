@@ -10,6 +10,8 @@
 # do caminho, nunca do `errno` — `errno` é macro, e P não vê macro.
 include <dirent.h>
 include <sys/mman.h>   # 137: mmap/munmap/madvise/msync/mlock
+const if __PLANG_LINUX__:
+    include <sys/inotify.h>   # 140/F5: o vigia. Só no Linux — a 146.2 diz porquê.
 include <fcntl.h>      # ... e o open(2) que os alimenta
 include <unistd.h>
 include <sys/stat.h>
@@ -1035,3 +1037,317 @@ private def ps_dir_release(o: *void):
         closedir((*DIR)(it->d))
         it->d = None
     it->done = 1
+
+
+# ---------- 140/F5: o vigia (baterias 140.1 e 146) ----------
+#
+# **146.2 — no macOS isto LEVANTA.** O `inotify` é do Linux; o `kqueue` vigia
+# DESCRITORES (uma árvore são N descritores abertos, e o limite chega depressa) e
+# a resposta real do macOS é o FSEvents, uma API diferente. Não se escreve meio
+# vigia: quem estiver no macOS lê o que falta em vez de receber eventos a menos.
+
+const if __PLANG_LINUX__:
+    PS_HAS_INOTIFY: const i32 = 1
+else:
+    PS_HAS_INOTIFY: const i32 = 0
+
+# as espécies, e são as da 140.1 com o nome do transbordo trocado pela 146.5:
+# `RESCAN` diz o que FAZER — "não sei o que mudou, relê tudo" — em vez de dizer
+# o que aconteceu ao núcleo
+PS_WK_CREATED: const i32 = 0
+PS_WK_MODIFIED: const i32 = 1
+PS_WK_DELETED: const i32 = 2
+PS_WK_MOVED_FROM: const i32 = 3
+PS_WK_MOVED_TO: const i32 = 4
+PS_WK_RESCAN: const i32 = 5
+
+
+private def ps_watch_release(o: *void):
+    w: *PsWatcher = (*PsWatcher)(o)
+    e: *PsWatchEnt = w->ents
+    while e != None:
+        n: *PsWatchEnt = e->next
+        free(e->path)
+        free(e)
+        e = n
+    w->ents = None
+    v: *PsWatchEv = w->head
+    while v != None:
+        vn: *PsWatchEv = v->next
+        free(v->path)
+        free(v)
+        v = vn
+    w->head = None
+    w->tail = None
+    if w->root != None:
+        free(w->root)
+        w->root = None
+    if w->open != 0 and w->fd >= 0:
+        close(w->fd)
+    w->fd = -1
+    w->open = 0
+
+
+private def ps_watch_path_of(w: *PsWatcher, wd: int) -> const *char:
+    e: *PsWatchEnt = w->ents
+    while e != None:
+        if e->wd == wd:
+            return e->path
+        e = e->next
+    return None
+
+
+# 146.3: COALESCE, e a unidade é o par (caminho, espécie) CONSECUTIVO. Duas
+# entregas seguidas do mesmo caminho com a mesma espécie são uma; a ordem fica
+# intacta, e um par MOVED_FROM/MOVED_TO nunca se junta porque as espécies
+# diferem. Coalescer mais do que isto mentiria: um CREATED seguido de um DELETED
+# não é nada, e colapsá-los perderia a única coisa que interessava.
+private def ps_watch_push(w: *PsWatcher, path: const *char, kind: i32, cookie: u32):
+    if w->tail != None and w->tail->kind == kind and kind != PS_WK_MOVED_FROM and kind != PS_WK_MOVED_TO and strcmp(w->tail->path, path) == 0:
+        return
+    v: *PsWatchEv = (*PsWatchEv)(malloc(sizeof(PsWatchEv)))
+    if v == None:
+        return
+    v->next = None
+    v->path = ps_dup(path)
+    v->kind = kind
+    v->cookie = cookie
+    if w->tail == None:
+        w->head = v
+        w->tail = v
+    else:
+        w->tail->next = v
+        w->tail = v
+
+
+# 146.1: a recursão é NOSSA, e a corrida fecha-se com uma VARREDURA.
+#
+# O `inotify` vigia UM directório. Ao pôr um vigia num directório novo, LÊ-SE o
+# directório e sintetiza-se um `CREATED` por cada coisa que já lá está — porque
+# entre o `mkdir` e o `inotify_add_watch` cabem ficheiros que ninguém viu. Um
+# evento a mais é ruído; um evento a menos é um ficheiro que o build não
+# recompila.
+private def ps_watch_add(ctx: *PsCtx, w: *PsWatcher, dir: const *char, announce: bool) -> bool:
+    const if __PLANG_LINUX__:
+        mask: u32 = u32(IN_CREATE | IN_MODIFY | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF)
+        wd: int = inotify_add_watch(w->fd, dir, mask)
+        if wd < 0:
+            return False
+        e: *PsWatchEnt = (*PsWatchEnt)(malloc(sizeof(PsWatchEnt)))
+        if e == None:
+            return False
+        e->wd = wd
+        e->path = ps_dup(dir)
+        e->next = w->ents
+        w->ents = e
+        if w->recursive == 0:
+            return True
+        d: *DIR = opendir(dir)
+        if d == None:
+            return True
+        while True:
+            de: *dirent = readdir(d)
+            if de == None:
+                break
+            nm: const *char = de->d_name
+            if strcmp(nm, ".") == 0 or strcmp(nm, "..") == 0:
+                continue
+            sub: char[4096]
+            snprintf(sub, 4096, "%s/%s", dir, nm)
+            if announce:
+                ps_watch_push(w, sub, PS_WK_CREATED, u32(0))
+            sb: stat
+            if stat(sub, &sb) == 0 and (i64(sb.st_mode) & 0o170000) == 0o040000:
+                ps_watch_add(ctx, w, sub, announce)
+        closedir(d)
+        return True
+    else:
+        return False
+
+
+def ps_watch_open(ctx: *PsCtx, path: *PsStr, recursive: bool, file: const *char, line: i32) -> *PsWatcher:
+    w: *PsWatcher = ps_alloc(ctx, sizeof(PsWatcher), PS_TY_WATCHER)
+    w->fd = -1
+    w->open = 0
+    w->recursive = 1 if recursive else 0
+    w->ents = None
+    w->head = None
+    w->tail = None
+    w->root = None
+    if PS_HAS_INOTIFY == 0:
+        ps_raise(ctx, "os.watch is Linux-only for now: the answer on macOS is FSEvents, which is a different API and is not written (146.2). Until it is, poll.", PS_CAT_IO, file, line)
+        return w
+    cs: const *char = os_cstr(ctx, path, file, line)
+    if cs == None:
+        return w
+    const if __PLANG_LINUX__:
+        fd: int = inotify_init1(IN_NONBLOCK)
+        if fd < 0:
+            ps_raise(ctx, "could not start watching (inotify_init1 failed — is the per-user limit reached?)", PS_CAT_IO, file, line)
+            return w
+        w->fd = fd
+        w->open = 1
+        w->root = ps_dup(cs)
+        ps_watch_live_add()
+        ps_add_final(ctx, (*PsObj)(w), ps_watch_release)
+        # o topo entra SEM anunciar: o que já lá estava quando o programa mandou
+        # vigiar não é uma mudança
+        if not ps_watch_add(ctx, w, cs, False):
+            msg: char[512]
+            snprintf(msg, 512, "could not watch %s", cs)
+            ps_raise(ctx, msg, PS_CAT_IO, file, line)
+    return w
+
+
+# lê o que o núcleo tiver, sem bloquear, e enfileira. É chamado de dois sítios:
+# do `drain` (146.4) e do `next` quando o `poll` diz que há.
+private def ps_watch_pump(ctx: *PsCtx, w: *PsWatcher):
+    const if __PLANG_LINUX__:
+        buf: char[8192]
+        while True:
+            got: i64 = i64(read(w->fd, (*void)(buf), usize(8192)))
+            if got <= 0:
+                return
+            i: usize = 0
+            while i + usize(16) <= usize(got):
+                # o `struct inotify_event` é ABI fixa no Linux: wd, mask, cookie
+                # e len, e o nome logo a seguir. Lê-se por deslocamento porque o
+                # último campo é um array flexível, e um array flexível não
+                # atravessa a fronteira dos tipos (72.4).
+                ev: *inotify_event = (*inotify_event)(buf + i)
+                nlen: usize = usize(ev->len)
+                base: const *char = ps_watch_path_of(w, ev->wd)
+                full: char[4096]
+                if base != None and nlen > usize(0) and (buf + i + usize(16))[0] != '\0':
+                    snprintf(full, 4096, "%s/%s", base, (buf + i + usize(16)))
+                elif base != None:
+                    snprintf(full, 4096, "%s", base)
+                else:
+                    full[0] = '\0'
+                m: u32 = ev->mask
+                if (m & u32(IN_Q_OVERFLOW)) != u32(0):
+                    # 140.1: o transbordo é um EVENTO e não um silêncio. O que se
+                    # perdeu perdeu-se, e a única resposta honesta é "relê tudo".
+                    ps_watch_push(w, w->root if w->root != None else "", PS_WK_RESCAN, u32(0))
+                elif full[0] != '\0':
+                    if (m & u32(IN_CREATE)) != u32(0):
+                        ps_watch_push(w, full, PS_WK_CREATED, ev->cookie)
+                        # 146.1: um directório novo ganha o seu vigia AGORA, e a
+                        # varredura fecha a corrida com o que já lá está
+                        if w->recursive != 0 and (m & u32(IN_ISDIR)) != u32(0):
+                            ps_watch_add(ctx, w, full, True)
+                    elif (m & u32(IN_MODIFY)) != u32(0):
+                        ps_watch_push(w, full, PS_WK_MODIFIED, ev->cookie)
+                    elif (m & u32(IN_MOVED_FROM)) != u32(0):
+                        ps_watch_push(w, full, PS_WK_MOVED_FROM, ev->cookie)
+                    elif (m & u32(IN_MOVED_TO)) != u32(0):
+                        ps_watch_push(w, full, PS_WK_MOVED_TO, ev->cookie)
+                        if w->recursive != 0 and (m & u32(IN_ISDIR)) != u32(0):
+                            ps_watch_add(ctx, w, full, True)
+                    elif (m & u32(IN_DELETE)) != u32(0):
+                        ps_watch_push(w, full, PS_WK_DELETED, ev->cookie)
+                i += usize(16) + nlen
+    else:
+        pass
+
+
+def ps_watch_fd(w: *PsWatcher) -> int:
+    return w->fd if w != None and w->open != 0 else -1
+
+
+def ps_watch_has(w: *PsWatcher) -> bool:
+    return w != None and w->head != None
+
+
+# tira UM da fila. O caminho sai por `out`, e o que a chamada devolve é a
+# espécie — ou -1 quando não havia nada.
+def ps_watch_take(ctx: *PsCtx, w: *PsWatcher, out path: *PsStr, out cookie: i64) -> i64:
+    path = ps_str_new(ctx, "", 0)
+    cookie = 0
+    if w == None or w->head == None:
+        return -1
+    v: *PsWatchEv = w->head
+    w->head = v->next
+    if w->head == None:
+        w->tail = None
+    path = ps_str_new(ctx, v->path, strlen(v->path))
+    cookie = i64(v->cookie)
+    k: i64 = i64(v->kind)
+    free(v->path)
+    free(v)
+    return k
+
+
+def ps_watch_poll(ctx: *PsCtx, w: *PsWatcher):
+    """Lê o que houver AGORA, sem esperar. É o que o `drain` faz (146.4)."""
+    if w != None and w->open != 0:
+        ps_watch_pump(ctx, w)
+
+
+def ps_watch_close(ctx: *PsCtx, w: *PsWatcher):
+    if w != None and w->open != 0:
+        ps_watch_release((*void)(w))
+        ps_watch_live_sub()
+
+
+# 140/F5: esperar por uma mudança.
+#
+# O descritor do `inotify` é um STREAM, e é isso que faz o vigia caber no
+# escalonador sem maquinaria nova: a espera é a MESMA que a de um socket — um
+# `POLLIN` no descritor — e o que muda é só o que se faz quando ele acorda.
+#
+# Se já houver eventos na fila, nem se espera: devolve-se uma tarefa já pronta,
+# que é o que `ps_msg_task` é.
+def ps_watch_next(ctx: *PsCtx, w: *PsWatcher, file: const *char, line: i32) -> *PsTask:
+    if w == None or ps_watch_fd(w) < 0:
+        # fechado NÃO é erro: é o "acabou", e é o mesmo que uma leitura de zero
+        # bytes quer dizer num socket (79.2). Um laço `while await w.ready()`
+        # termina por si quando alguém fecha o vigia.
+        ft9: *PsTask = ps_msg_task(ctx, None, sizeof(bool))
+        *(*bool)(ps_task_ret(ft9)) = False
+        return ft9
+    # o que o núcleo já tiver entra na fila antes de decidirmos esperar: sem
+    # isto, um evento que chegou entre duas chamadas ficaria à espera de um
+    # SEGUNDO evento para ser visto
+    ps_watch_poll(ctx, w)
+    if ps_watch_has(w):
+        # já há: uma tarefa JÁ PRONTA, que é o que faz oitocentos eventos serem
+        # um laço em vez de oitocentas esperas (146.4) — uma tarefa pronta não
+        # estaciona
+        rt9: *PsTask = ps_msg_task(ctx, None, sizeof(bool))
+        *(*bool)(ps_task_ret(rt9)) = True
+        return rt9
+    wk: *PsWork = ps_work_new(PS_IO_WATCH)
+    wk->want = PS_W_INT
+    wk->fd = ps_watch_fd(w)
+    wk->events = i16(POLLIN)
+    wk->n = usize(0)
+    return ps_fd_task(ctx, wk, False, sizeof(bool))
+
+
+def ps_watch_pending(ctx: *PsCtx, w: *PsWatcher) -> i64:
+    """Quantos eventos estão à espera de ser tirados, AGORA.
+
+    Lê do núcleo antes de contar: a pergunta é "há alguma coisa agora" e não
+    "havia da última vez que alguém olhou"."""
+    if w == None or w->open == 0:
+        return 0
+    ps_watch_pump(ctx, w)
+    n: i64 = 0
+    v: *PsWatchEv = w->head
+    while v != None:
+        n += 1
+        v = v->next
+    return n
+
+
+def ps_watch_take_ck(ctx: *PsCtx, w: *PsWatcher, out path: *PsStr, out cookie: i64, file: const *char, line: i32) -> i64:
+    """O mesmo `take`, mas que LEVANTA quando não há nada.
+
+    A pergunta "há alguma coisa?" tem nome próprio (`pending`), e responder a
+    `take` com um evento inventado seria pior do que recusar."""
+    k: i64 = ps_watch_take(ctx, w, out path, out cookie)
+    if k < 0:
+        ps_raise(ctx, "take(): there is no event waiting — ask pending() first, or await ready()", PS_CAT_VALUE, file, line)
+        return 0
+    return k

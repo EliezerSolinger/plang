@@ -312,6 +312,7 @@ struct PsSema:
     private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
     private def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
     private def io_window(self: *PsSema, e: *PsExpr, what: const *char)
+    private def watch_event_type(self: *PsSema, pos: Pos) -> *PsType
     private def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char)
     private def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char)
     private def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType
@@ -552,7 +553,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_TIMER, PT_CONN, PT_PROC:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_TIMER, PT_CONN, PT_PROC:
                 pass
         return t
 
@@ -1966,6 +1967,33 @@ struct PsSema:
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
                 fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+            if rt != None and rt->kind == PT_WATCHER:
+                # 146.4: os DOIS, porque são duas perguntas. `next()` espera;
+                # `pending()` diz quantos estão à espera AGORA, e é o que
+                # transforma oitocentos eventos num laço em vez de oitocentas
+                # esperas — porque `next()` sobre uma fila não vazia devolve uma
+                # tarefa JÁ PRONTA, e uma tarefa pronta não estaciona.
+                wm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "'%s' takes no arguments", wm)
+                if strcmp(wm, "ready") == 0:
+                    # espera até haver alguma coisa. `False` quer dizer que o
+                    # vigia fechou — é o mesmo "acabou" que uma leitura de zero
+                    # bytes quer dizer num socket (79.2).
+                    wt0: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                    wt0->inner = ps_type(self->a, PT_BOOL, e->pos)
+                    return wt0
+                if strcmp(wm, "take") == 0:
+                    # tira UM da fila, sem esperar. Levanta se não houver — a
+                    # pergunta "há alguma coisa?" tem nome próprio (`pending`),
+                    # e responder com um evento inventado seria pior.
+                    return self->watch_event_type(e->pos)
+                if strcmp(wm, "pending") == 0:
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(wm, "close") == 0:
+                    return ps_type(self->a, PT_VOID, e->pos)
+                fatal_at(self->file, e->pos, "a Watcher has ready(), take(), pending() and close() (140/146.4), not '%s'", wm)
             if rt != None and rt->kind == PT_DECODER:
                 dm: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -2570,6 +2598,27 @@ struct PsSema:
     # syscall may read and write it DIRECTLY. That is what turns four copies
     # into none — a proxy moving a megabyte used to malloc it, memcpy it into a
     # collected `List<u8>`, slice it, and copy again.
+    # 140/F5: o que um evento É — o caminho, a espécie, e o `cookie` que
+    # emparelha as duas metades de um `moved`. Sem ele, mover um ficheiro dentro
+    # da árvore lê-se como apagar um e criar outro, que é a diferença entre um
+    # `git mv` e uma perda.
+    #
+    # Uma TUPLA e não um record: um `record` é bytes puros (58.2) e isto carrega
+    # uma `str`. Uma tupla que segura uma referência é permitida e continua a ser
+    # um VALOR (98.4), que é exactamente o que um evento deve ser.
+    private def watch_event_type(self: *PsSema, pos: Pos) -> *PsType:
+        t: *PsType = ps_type(self->a, PT_TUPLE, pos)
+        t->params = self->a->alloc(usize(3) * sizeof(*t->params))
+        t->params[0] = ps_type(self->a, PT_STR, pos)
+        # a espécie é o enum `Change` do prelúdio, e não um `int`: comparar com
+        # `CREATED` tem de ler como comparar, e um `int` obrigaria a conversão
+        # em todo o sítio onde alguém quer saber o que mudou
+        t->params[1] = ps_type(self->a, PT_NAME, pos)
+        t->params[1]->name = "Change"
+        t->params[2] = ps_type(self->a, PT_INT, pos)
+        t->nparams = 3
+        return t
+
     private def io_window(self: *PsSema, e: *PsExpr, what: const *char):
         if e->nargs != 3:
             fatal_at(self->file, e->pos, "%s(buf, off, n) takes a Buffer, where in it to start, and how many bytes (135.2)", what)
@@ -3268,6 +3317,18 @@ struct PsSema:
                 if ae == None or ae->kind != PT_LIST or ae->inner == None or ae->inner->kind != PT_STR:
                     fatal_at(self->file, e->args[0]->pos, "os.exec() takes a List<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae))
                 return ps_type(self->a, PT_VOID, e->pos)
+            if isos and strcmp(of, "watch") == 0:
+                # 140/F5: `os.watch(d)` vigia um directório e `os.watch(d, True)`
+                # a árvore. A recursão é NOSSA (146.1): o `inotify` vigia um
+                # directório, e uma árvore são N vigias.
+                if e->nargs != 1 and e->nargs != 2:
+                    fatal_at(self->file, e->pos, "os.watch(dir) watches a directory; os.watch(dir, True) watches the tree (140)")
+                wp0: *PsType = self->check_expr(e->args[0])
+                self->want(e->args[0], wp0, ps_type(self->a, PT_STR, e->pos), "the directory to watch")
+                if e->nargs == 2:
+                    wr0: *PsType = self->check_expr(e->args[1])
+                    self->want(e->args[1], wr0, ps_type(self->a, PT_BOOL, e->pos), "whether to watch the whole tree")
+                return ps_type(self->a, PT_WATCHER, e->pos)
             if isos and strcmp(of, "scandir") == 0:
                 # 140/F4: os nomes UM DE CADA VEZ, na ordem em que o sistema de
                 # ficheiros os der. O `listdir` fica como está — devolve tudo,
@@ -4189,6 +4250,8 @@ struct PsSema:
             ns->sym.add("pread")
             ns->sym.add("pwrite")
             ns->sym.add("scandir")
+            # 140/F5: o vigia
+            ns->sym.add("watch")
             # ... e as três constantes do `advise`, que são o que faz valer a
             # pena o tipo próprio (137.1)
             ns->sym.add("SEQUENTIAL")
@@ -5860,7 +5923,7 @@ struct PsSema:
                 # P's `defer`. Only a file so far; the general protocol (what
                 # `with` means for a type of your own) is not decided yet.
                 wt9: *PsType = self->check_expr(s->expr)
-                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN or wt9->kind == PT_MAPPING)
+                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN or wt9->kind == PT_MAPPING or wt9->kind == PT_WATCHER)
                 if not closeable and wt9 != None and wt9->kind == PT_NAME and self->records.has(wt9->name):
                     # the protocol (68.4): `with` takes anything that DECLARES
                     # Closeable — nominal, like every use of a trait — and calls
@@ -6420,7 +6483,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6628,6 +6691,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "Mapping"
         case PT_DECODER:
             return "Decoder"
+        case PT_WATCHER:
+            return "Watcher"
         case PT_DIRITER:
             return "a directory walk"
         case PT_VIEW:
