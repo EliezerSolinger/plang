@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "kind": "meta",
   "deps": {
-    "codec": "0.1.0"
+    "codec": "0.1.0",
+    "datetime": "0.1.0",
+    "tz": "0.1.0"
   },
   "description": "the box: one name for the packages a program reaches for without thinking"
 }

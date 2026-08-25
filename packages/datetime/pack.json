@@ -1,0 +1,10 @@
+{
+  "name": "datetime",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "datetime.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "the java.time model: the TYPE answers whether it has a zone, and the arithmetic that is not exact says so"
+}

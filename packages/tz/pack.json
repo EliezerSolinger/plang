@@ -1,0 +1,10 @@
+{
+  "name": "tz",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "tz.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "named time zones, read from the system's tzdata (TZif/RFC 8536) rather than from a copy that ages"
+}

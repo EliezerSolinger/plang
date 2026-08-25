@@ -836,3 +836,37 @@ Três perguntas, três funções, e as duas últimas **criam** — nunca devolve
 que ainda não existe, que é a corrida do `mktemp`. Os nomes não são os do Python
 (`mkstemp`, `mkdtemp`) de propósito: o de lá devolve um descritor E um nome, e o
 nosso devolve só o nome.
+
+---
+
+## Adenda de execução — a S4, e o `tzdata` que passou a ser `tz` (2026-08-25)
+
+A S4 foi feita: o pacote `datetime` com o modelo do `java.time`, e o `tz` no
+lugar do `tzdata`. A bateria é a **149**; aqui fica o que MUDOU no que está
+escrito acima.
+
+### O `ZonedDateTime` não guarda o nome do fuso
+
+Um `record` do pscript é bytes puros (58.2), portanto uma `str` não cabe lá
+dentro. Isso obrigou a decidir — e a decisão é a certa por uma razão que não é a
+da restrição: **um nome de fuso sem as REGRAS não vale nada.** O que ele precisa
+de carregar para ser um ponto na linha do tempo é o DESLOCAMENTO, e é isso que
+ele carrega.
+
+### O `tzdata` LÊ O DO SISTEMA, e chama-se `tz`
+
+A §5 punha-o como pacote com gerador próprio, ao lado do `psl`. **Revisto**, e o
+argumento é o que a própria §5 usa para o `tls`: *"a confiança vem do sistema
+(…) uma autoridade revogada corrige-se com `apt upgrade` e não com uma
+recompilação nossa"*.
+
+As regras de fuso mudam **várias vezes por ano**. Uma cópia nossa estaria errada
+em produção antes de a tinta secar, e o sistema já tem a resposta certa em
+`/usr/share/zoneinfo`, em TZif (RFC 8536).
+
+O `psl` fica como está, e a diferença é exactamente essa: a lista de sufixos
+públicos **não tem cópia do sistema**. Ou se traz, ou não se tem.
+
+O nome muda para **`tz`** porque o que o pacote tem não é dado — é o leitor.
+`TZDIR` sobrepõe-se ao caminho. E quando não há zoneinfo, **levanta**: nunca
+recua para UTC.

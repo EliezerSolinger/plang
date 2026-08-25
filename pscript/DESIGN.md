@@ -7047,3 +7047,79 @@ razão. Portão em `tests/cases/desig_convert.p`.
 **E o que os dois têm em comum vale a pena dizer**: nenhum apareceu ao escrever a
 funcionalidade, e os dois apareceram ao escrever o TESTE dela. É o argumento a
 favor de o portão vir junto e não depois.
+
+---
+
+## 149 — a S4: o `datetime`, e onde os fusos moram
+
+### 149.1 — o `ZonedDateTime` não guarda o NOME do fuso, e é melhor assim
+
+O `record` do pscript é bytes puros (58.2), portanto uma `str` não cabe lá
+dentro. Isso obrigou a decidir, e a decisão é a certa por uma razão que não é a
+da restrição:
+
+> **um nome de fuso sem as REGRAS não vale nada.** `Europe/Lisbon` não diz que
+> horas são; diz onde ir perguntar.
+
+O que um `ZonedDateTime` precisa de carregar para ser um ponto na linha do tempo é
+o **deslocamento**, e é isso que ele carrega. Quem souber as regras converte o
+nome num deslocamento e constrói um; quem só tiver o deslocamento (que é o que
+qualquer RFC 3339 escreve) já tem tudo.
+
+### 149.2 — o `tzdata` LÊ O DO SISTEMA, e não traz uma cópia
+
+A `STDLIB.md` §5 põe o `tzdata` como pacote com gerador próprio, ao lado do
+`psl`. **Revisto**, e o argumento é o que ela própria usa para o `tls`:
+
+> *"a confiança vem do sistema (…), pela mesma razão do `tzdata`: uma autoridade
+> revogada corrige-se com `apt upgrade` e não com uma recompilação nossa."*
+
+As regras de fuso mudam **várias vezes por ano** — um país adia o horário de
+verão, outro muda de fuso, e a decisão é publicada com semanas de antecedência.
+Uma cópia nossa estaria errada em produção antes de a tinta secar, e a única
+maneira de a corrigir seria uma versão nova do pacote.
+
+E o sistema já tem a resposta certa: `/usr/share/zoneinfo`, em TZif (RFC 8536),
+actualizado pelo mesmo `apt upgrade` que corrige tudo o resto.
+
+**Diferente do `psl`**, e por isso ele fica como está: a lista de sufixos
+públicos **não tem cópia do sistema**. Não há de onde a ler; ou se traz, ou não
+se tem.
+
+**O que ele faz quando não há `/usr/share/zoneinfo`: LEVANTA.** Nunca recua para
+UTC. Um programa que pede `Europe/Lisbon` e recebe UTC em silêncio marca reuniões
+à hora errada durante meio ano — que é a mesma família de erro do CSPRNG que
+recuasse para o Mersenne Twister.
+
+**O nome é `tz` e não `tzdata`**, porque o que o pacote tem não é dado: é o
+leitor. `TZDIR` sobrepõe-se ao caminho, que é a variável que o próprio zoneinfo
+define para isso.
+
+### 149.3 — o que o portão do `tz` escolheu, e porquê cada um
+
+Os seis fusos do portão não são uma amostra: cada um apanha uma classe de erro
+que os outros não apanham.
+
+| fuso | o que apanha |
+|---|---|
+| `Europe/Lisbon` | o caso comum — e o instante zero apanha quem assume que Portugal sempre esteve em WET (em 1970 estava a +1) |
+| `UTC` | **nenhuma mudança**: o caminho onde a busca binária não corre de todo |
+| `America/New_York` | deslocamento negativo, onde o sinal invertido do POSIX morde |
+| `Asia/Kathmandu` | **quarenta e cinco minutos** — que uma API a contar horas não saberia escrever — e uma mudança de fuso em 1986 que **não é** horário de verão |
+| `Australia/Sydney` | o **hemisfério sul**, onde o verão atravessa o Ano Novo e a condição da regra POSIX inverte-se |
+| `Pacific/Chatham` | os dois ao mesmo tempo: sul **e** quarenta e cinco minutos |
+
+E dois dos seis instantes são **para lá do fim do ficheiro** (2050 e 2100), que é
+onde deixam de existir transições listadas e passa a mandar a regra POSIX do
+rodapé. Sem a ler, uma implementação apressada devolve o último deslocamento
+conhecido e erra **todas** as datas futuras — em silêncio, que é o pior de tudo.
+
+O oráculo é o `zoneinfo` do CPython, varrido: 36 pares (fuso, instante), mais o
+horário de verão e as cinco recusas.
+
+### 149.4 — o nome de um fuso vem de fora, e é tratado como tal
+
+`tz.load(name)` recusa um nome vazio, um caminho absoluto e qualquer `..`. Não é
+zelo: um nome de fuso chega quase sempre de um cabeçalho HTTP, de um campo de
+formulário ou de uma variável de ambiente, e `../../etc/shadow` é um nome
+perfeitamente válido para quem não olha.

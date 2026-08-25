@@ -173,6 +173,20 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 | tipo do campo como contexto do valor | 54.2 | o editor inteiro | ✅ |
 | `ord` / `chr` | — | `ordchr`, o desenho de todo glifo | ✅ **a confirmar por você** (não havia decisão; sem eles o porte parava) |
 
+## A caixa (`stdlib`, `crypto`) — as fases S0–S4
+
+| pacote | fase | portão | Estado |
+|---|---|---|---|
+| `codec` — base64 (as 4 variantes) e hex | S2 | `codec/test` | ✅ descodificar aceita os dois alfabetos e com ou sem `=`; recusa bits a sobrar num resto, que é como duas entradas dariam o mesmo valor |
+| `hash` — CRC32, SHA-1, MD5 (em P) | S2 | `hash/test` | ✅ vectores oficiais, e o ficheiro diz de si próprio o que vale: o CRC32 é uma soma de verificação e os outros dois estão PARTIDOS — estão ali para LER o que já existe |
+| `hmac` — HMAC-SHA256 (em P) | S2 | `hmac/test` | ✅ RFC 4231, e `hmac_equal` compara em tempo que não depende de ONDE os dois diferem. Genérico sobre um trait `Hash`: **atrás da 141.6** (148.1) |
+| `csprng` — `/dev/urandom` | S2 | `tests/pscript/run/tempfile` | ✅ e **falha em vez de recuar** para o MT19937 |
+| `os.tempdir/tempfile/tempdir_new` | S2 | `tempfile` | ✅ as duas últimas CRIAM, com `O_EXCL` e 0600 (0700 no directório): devolver um nome que ainda não existe é a corrida do `mktemp` |
+| `datetime` — o modelo do `java.time` | S4 | `datetime/test` | ✅ o TIPO responde se tem fuso; `Duration` é exacto e `Period` não é; ISO 8601/RFC 3339, os TRÊS formatos de data do HTTP, `strftime`/`strptime`. 85 comparações contra o CPython, incluindo antes da epoch e a era de 2400 |
+| `tz` — os fusos, lidos do SISTEMA | S4 | `tz/test` | ✅ TZif (RFC 8536) de `/usr/share/zoneinfo`, com a regra POSIX do rodapé para lá do fim do ficheiro. Não traz cópia: as regras mudam várias vezes por ano (149.2). Oráculo: o `zoneinfo` do CPython em 6 fusos × 6 instantes |
+| metapacotes `stdlib` e `crypto` | S0 | `tests/pkg/meta` | ✅ `"kind": "meta"`: instala, não importa |
+| `algo`, `random`, `path` como pacotes | S1 | — | ⏳ **ADIADA por decisão medida** — ninguém os consome fora dos testes (ver a adenda do `STDLIB.md`) |
+
 ## Módulos e stdlib
 
 | Recurso | Decisão | Exercitado em | Estado |
