@@ -51,6 +51,10 @@ enum PsTypeKind:
                      #   type of message it sends back (36.1).
     PT_FILE          # an open file (48.1)
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
+    PT_DECODER       # 140/F6: `Decoder` — the incremental UTF-8 decoder. A
+                     #   thing with STATE (the bytes of a codepoint that has not
+                     #   arrived whole), which is why it is a thing and not a
+                     #   function.
     PT_MAPPING       # 137.1: `Mapping` — a file in memory. Uppercase, because
                      #   it is a THING with a lifetime: it closes, and closing
                      #   it is the plan rather than the net (136.1).

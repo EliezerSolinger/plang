@@ -55,6 +55,8 @@ enum PsTyId:
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
     PS_TY_CONN = 15    # a socket, listening or connected (77.1)
     PS_TY_PROC = 16    # 118: um processo que já terminou (`os.run`)
+    PS_TY_DECODER = 19 # 140/F6: an incremental UTF-8 decoder — what the
+                       #   `CharsetDecoder` of the NIO is
     PS_TY_MAPPING = 18 # 137.1: a file mapped into memory. A THING with a
                        #   lifetime — `with` closes it, and the finalizer is
                        #   only the net (136.1)
@@ -135,6 +137,27 @@ struct PsBytes:
 #
 # The block is the kernel's, not ours: it never moves, so a slice of it is a
 # WINDOW (`bytes` with `owner`), exactly like a slice of a `bytes`.
+# 140/F6: o descodificador INCREMENTAL de UTF-8.
+#
+# `str(b)` descodifica tudo de uma vez e LEVANTA se os bytes não forem texto
+# (79.1), o que é a resposta certa para um ficheiro inteiro e a errada para um
+# fluxo: um codepoint pode chegar partido em duas leituras, e isso não é um erro
+# — é o que acontece quando se lê 4096 bytes de cada vez.
+#
+# Foi a peça que faltou de verdade: o widget de terminal do pstudio teve de
+# escrever esta máquina de estados à mão porque não havia outra.
+#
+# **A política de erro é SUBSTITUIR**, e não levantar. Um terminal que morresse
+# ao receber um byte solto de um ficheiro binário seria inútil, e U+FFFD é o que
+# todo o descodificador incremental do mundo põe ali. Quem quer a regra estrita
+# continua a ter `str(b)`, que levanta — são duas perguntas e há duas respostas.
+struct PsDecoder:
+    obj: PsObj
+    acc: u32           # o codepoint a ser montado
+    need: i32          # quantos bytes de continuação ainda faltam
+    lo: u32            # o menor valor que esta sequência pode ter tido, que é
+                       #   o que apanha a codificação demasiado longa
+
 struct PsMapping:
     obj: PsObj
     data: *char        # what `mmap` gave back, or None once unmapped

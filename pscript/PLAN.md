@@ -2222,8 +2222,16 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       perguntas da 140.1 são do utilizador — rodar `AskUserQuestion` ANTES de
       escrever uma linha (recursão nossa ou do núcleo; macOS = FSEvents;
       coalescer ou cru; um evento ou lote). Fora isso, independente de F0-F4.
-- [ ] **F6** — o descodificador incremental de UTF-8. Depende de F0; apaga a
-      máquina de estados à mão do `terminal.psc` e herda o teste dela.
+- [x] **F6** — **FEITA.** `Decoder()` no runtime: `feed(b)` dá o texto que já
+      dá para dizer, `finish()` fecha o fluxo, `pending()` diz quantos bytes
+      estão retidos. Erro SUBSTITUI por U+FFFD em vez de levantar — um fluxo não
+      é um ficheiro, e `str(b)` continua a ser o estrito (79.1). O terminal do
+      pstudio perdeu as catorze linhas de máquina de estados que tinha à mão, e
+      o teste dele que parte um codepoint em dois passa a medir o do runtime.
+      Decorrência que melhorou o editor: descodificar passou a vir ANTES do
+      analisador de escapes, portanto um título de OSC com acento deixa de
+      depender de a máquina de escapes saber UTF-8.
+
 - [ ] **F7** — UDP (`recv_from`/`send_to`) e Unix sockets. Depende de F1.
 
 **Marco de meio do caminho:** depois da F2, repetir a releitura das specs (o

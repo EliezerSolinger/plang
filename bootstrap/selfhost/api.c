@@ -620,6 +620,10 @@ static void p_type(StrBuf *b, PsType *t) {
             StrBuf_puts(b, "Mapping");
             break;
         }
+        case PT_DECODER: {
+            StrBuf_puts(b, "Decoder");
+            break;
+        }
         case PT_VIEW: {
             StrBuf_puts(b, "View<");
             p_type(b, t->inner);

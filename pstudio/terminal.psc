@@ -114,9 +114,11 @@ struct Term:
     params: List<int>
     priv: str                # `?` and friends, between CSI and the final byte
     osc: str
-    # UTF-8 arrives a chunk at a time and a codepoint can straddle two chunks
-    u_acc: int
-    u_left: int
+    # 140/F6: UTF-8 chega aos pedaços e um codepoint pode ficar a cavalo de duas
+    # leituras. Isto era catorze linhas de máquina de estados aqui dentro,
+    # escritas à mão porque não havia outra coisa; agora é o descodificador do
+    # runtime, e o teste que parte um codepoint em dois passa a medir ESSE.
+    dec: Decoder
 
     dirty: bool              # something changed since the last frame
 
@@ -234,8 +236,15 @@ struct Term:
     # ---------- the parser ----------
 
     def feed_bytes(self, b: View<u8>):
-        for raw in b:
-            self.feed_byte(int(raw))
+        """Os bytes que acabaram de chegar do filho.
+
+        Descodificar VEM PRIMEIRO (140/F6): o que o analisador de escapes vê são
+        CARACTERES, e um escape é sempre ASCII — portanto passa intacto. O que
+        se ganha é que um título de OSC com um acento deixa de depender de a
+        máquina de escapes saber UTF-8, e que um codepoint partido entre duas
+        leituras é problema de quem sabe resolvê-lo."""
+        for ch in self.dec.feed(b):
+            self.feed_byte(ord(ch))
         self.dirty = True
 
     def feed_text(self, s: str):
@@ -272,33 +281,13 @@ struct Term:
             self.params = []
             self.priv = ""
             return
-        if self.u_left > 0:
-            if x >= 0x80 and x < 0xC0:
-                self.u_acc = (self.u_acc << 6) | (x & 0x3F)
-                self.u_left -= 1
-                if self.u_left == 0:
-                    self.write_cp(self.u_acc)
-                return
-            # a broken sequence: the byte that broke it is still a byte, and
-            # dropping it silently would swallow real output
-            self.u_left = 0
-            self.write_cp(0xFFFD)
+        # 140/F6: o que chega aqui já é um CODEPOINT. As catorze linhas de
+        # UTF-8 que estavam neste sítio foram para o runtime, onde qualquer
+        # programa que leia um fluxo as encontra.
         if x < 32:
             self.control(x)
             return
-        if x < 0x80:
-            self.write_cp(x)
-        elif x >= 0xC0 and x < 0xE0:
-            self.u_acc = x & 0x1F
-            self.u_left = 1
-        elif x >= 0xE0 and x < 0xF0:
-            self.u_acc = x & 0x0F
-            self.u_left = 2
-        elif x >= 0xF0 and x < 0xF8:
-            self.u_acc = x & 0x07
-            self.u_left = 3
-        else:
-            self.write_cp(0xFFFD)
+        self.write_cp(x)
 
     def control(self, x: int):
         if x == 10:
@@ -711,7 +700,7 @@ def new_term(cols: int, rows: int) -> Term:
              [], 0, 0, 0,
              0, 0, 0, 0, 0, rows - 1,
              C_DEFAULT, C_DEFAULT, 0, False, True, True, "",
-             S_GROUND, [], "", "", 0, 0, False)
+             S_GROUND, [], "", "", Decoder(), False)
     b = blank(C_DEFAULT, C_DEFAULT, 0)
     for i in range(cols * rows):
         t.cells.append(b)

@@ -150,6 +150,12 @@ def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList
 # that is what lets `b[0:8]` be a window instead of a copy, and what lets a
 # `bytes` have no `close` at all (136.1).
 def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes
+# 140/F6: o descodificador INCREMENTAL. Substitui por U+FFFD em vez de levantar,
+# porque um fluxo não é um ficheiro — `str(b)` continua a ser o estrito.
+def ps_dec_new(ctx: *PsCtx) -> *PsDecoder
+def ps_dec_feed(ctx: *PsCtx, d: *PsDecoder, b: *PsBytes) -> *PsStr
+def ps_dec_finish(ctx: *PsCtx, d: *PsDecoder) -> *PsStr
+def ps_dec_pending(d: *PsDecoder) -> i64
 # 137: quantos mapas estão abertos, e as duas contas. O manipulador de crash
 # usa-o para dizer a causa provável de um SIGBUS (137.2).
 def ps_maps_live() -> i64

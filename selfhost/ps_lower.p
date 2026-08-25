@@ -393,6 +393,7 @@ struct PsLow:
     private def nl_flush(self: *PsLow, body: *Vec<*Stmt>) -> Vec<*Stmt>
     private def is_collected_ps(self: *PsLow, t: *PsType) -> bool
     private def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr
+    private def bytes_arg(self: *PsLow, e: *PsExpr) -> *Expr
     private def lower_ordered(self: *PsLow, es: **PsExpr, n: i32, ref pre: *Expr) -> **Expr
     private def lowered_ty(self: *PsLow, e: *PsExpr) -> *PsType
     private def once(self: *PsLow, e: *PsExpr, out assign: *Expr) -> *Expr
@@ -463,6 +464,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsBuffer"))
             case PT_MAPPING:
                 return ty_ptr(self->a, ty_name(self->a, "PsMapping"))
+            case PT_DECODER:
+                return ty_ptr(self->a, ty_name(self->a, "PsDecoder"))
             case PT_VIEW:
                 # 18.3: a view IS the list object with `raw` and `owner` set —
                 # nothing new is allocated and the runtime learns nothing. The
@@ -3078,6 +3081,19 @@ struct PsLow:
             self->push_arg(tc9, self->expr(e->lhs->lhs))
             self->allocs = True
             return tc9
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_DECODER:
+            dmn: const *char = e->lhs->text
+            if strcmp(dmn, "pending") == 0:
+                dp9: *Expr = self->call_rt("ps_dec_pending", e->pos)
+                self->push_arg(dp9, self->expr(e->lhs->lhs))
+                return dp9
+            dc9: *Expr = self->call_rt(self->a->printf("ps_dec_%s", dmn), e->pos)
+            self->push_arg(dc9, self->ctx_arg(e->pos))
+            self->push_arg(dc9, self->expr(e->lhs->lhs))
+            for i in range(e->nargs):
+                self->push_arg(dc9, self->bytes_arg(e->args[i]))
+            self->allocs = True
+            return dc9
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_MAPPING:
             mmn: const *char = e->lhs->text
             if strcmp(mmn, "size") == 0:
@@ -4108,6 +4124,11 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return rm9
+        if strcmp(name, "Decoder") == 0:
+            dn9: *Expr = self->call_rt("ps_dec_new", e->pos)
+            self->push_arg(dn9, self->ctx_arg(e->pos))
+            self->allocs = True
+            return dn9
         if strcmp(name, "buffer") == 0 or strcmp(name, "Buffer") == 0:
             bf: *Expr = self->call_rt("ps_buffer_new", e->pos)
             self->push_arg(bf, self->ctx_arg(e->pos))
@@ -4683,6 +4704,18 @@ struct PsLow:
         if t->kind == PT_OPT and t->inner == None:
             return False
         return self->is_collected(self->ty(t))
+
+    # 140/F6: `feed` takes `bytes`, and a `View<u8>` is what a `read_into` has
+    # in hand. The view is COPIED into a `bytes` here — one copy, at the one
+    # place where the two currencies meet, and said out loud by being a call.
+    private def bytes_arg(self: *PsLow, e: *PsExpr) -> *Expr:
+        if e->type != None and e->type->kind == PT_VIEW:
+            bc9: *Expr = self->call_rt("ps_bytes_from_list", e->pos)
+            self->push_arg(bc9, self->ctx_arg(e->pos))
+            self->push_arg(bc9, self->expr(e))
+            self->allocs = True
+            return bc9
+        return self->expr(e)
 
     private def bind_val(self: *PsLow, v: *Expr, t: *Type, pos: Pos, ref pre: *Expr) -> *Expr:
         name: const *char = self->a->printf("__ord%d", self->tmp_ctr)
@@ -5495,7 +5528,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -10786,7 +10819,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

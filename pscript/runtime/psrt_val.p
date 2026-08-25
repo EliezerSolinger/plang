@@ -3893,3 +3893,94 @@ def ps_json_stringify_at(ctx: *PsCtx, p: *void, ty: const *PsTy, file: const *ch
     out: *PsStr = ps_str_new(ctx, b.data if b.data != None else "", b.len)
     free(b.data)
     return out
+
+
+# ---------- 140/F6: o descodificador INCREMENTAL ----------
+#
+# É o que o `CharsetDecoder` do NIO é: alimentar bytes e receber o texto que já
+# dá para dizer, guardando o que ficou a meio de um codepoint.
+#
+# A política de erro é SUBSTITUIR por U+FFFD e continuar. Um fluxo não é um
+# ficheiro: um byte solto no meio de uma saída não é motivo para o programa
+# parar, e `str(b)` continua a ser a resposta estrita para quem quer a outra.
+
+def ps_dec_new(ctx: *PsCtx) -> *PsDecoder:
+    d: *PsDecoder = ps_alloc(ctx, sizeof(PsDecoder), PS_TY_DECODER)
+    d->acc = u32(0)
+    d->need = 0
+    d->lo = u32(0)
+    return d
+
+
+def ps_dec_pending(d: *PsDecoder) -> i64:
+    """Quantos bytes estão retidos à espera do resto do codepoint. Zero quer
+    dizer que tudo o que entrou já saiu — que é a pergunta que quem escreve um
+    protocolo faz antes de decidir que a mensagem acabou."""
+    return i64(d->need) if d != None else i64(0)
+
+
+def ps_dec_feed(ctx: *PsCtx, d: *PsDecoder, b: *PsBytes) -> *PsStr:
+    n: usize = usize(b->len) if b != None else usize(0)
+    # o pior caso é cada byte virar um U+FFFD, que são três bytes
+    cap: usize = n * usize(3) + usize(4)
+    buf: *char = (*char)(malloc(cap))
+    if buf == None:
+        return ps_str_new(ctx, "", 0)
+    k: usize = 0
+    i: usize = 0
+    while i < n:
+        x: u32 = u32(u8(b->data[i]))
+        i += 1
+        if d->need > 0:
+            if x >= u32(0x80) and x < u32(0xC0):
+                d->acc = (d->acc << 6) | (x & u32(0x3F))
+                d->need -= 1
+                if d->need == 0:
+                    cp: u32 = d->acc
+                    # o que uma sequência bem formada NÃO pode ser: curta
+                    # demais para o que codifica, um substituto, ou acima do
+                    # último plano. As três dão o mesmo U+FFFD.
+                    if cp < d->lo or (cp >= u32(0xD800) and cp <= u32(0xDFFF)) or cp > u32(0x10FFFF):
+                        k = ps_utf8_put(buf, k, 0xFFFD)
+                    else:
+                        k = ps_utf8_put(buf, k, i32(cp))
+                continue
+            # a sequência partiu-se, e o byte que a partiu ainda é um byte: cai
+            # um U+FFFD pelo que se perdeu e este byte é lido outra vez, do
+            # princípio — largá-lo em silêncio engoliria saída de verdade
+            d->need = 0
+            k = ps_utf8_put(buf, k, 0xFFFD)
+            i -= 1
+            continue
+        if x < u32(0x80):
+            buf[k] = char(x)
+            k += usize(1)
+        elif x >= u32(0xC2) and x < u32(0xE0):
+            # 0xC0 e 0xC1 nunca são legais: só codificariam ASCII em dois bytes
+            d->acc = x & u32(0x1F)
+            d->need = 1
+            d->lo = u32(0x80)
+        elif x >= u32(0xE0) and x < u32(0xF0):
+            d->acc = x & u32(0x0F)
+            d->need = 2
+            d->lo = u32(0x800)
+        elif x >= u32(0xF0) and x < u32(0xF5):
+            d->acc = x & u32(0x07)
+            d->need = 3
+            d->lo = u32(0x10000)
+        else:
+            k = ps_utf8_put(buf, k, 0xFFFD)
+    s: *PsStr = ps_str_new(ctx, buf, k)
+    free(buf)
+    return s
+
+
+def ps_dec_finish(ctx: *PsCtx, d: *PsDecoder) -> *PsStr:
+    """O fim do fluxo. Uma sequência a meio nunca vai ser completada, portanto o
+    que sobrou é exactamente um caractere perdido."""
+    if d == None or d->need == 0:
+        return ps_str_new(ctx, "", 0)
+    d->need = 0
+    buf: char[8]
+    k: usize = ps_utf8_put(buf, usize(0), 0xFFFD)
+    return ps_str_new(ctx, buf, k)

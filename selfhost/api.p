@@ -458,6 +458,8 @@ private def p_type(b: *StrBuf, t: *PsType):
             b->puts("bytes")
         case PT_MAPPING:
             b->puts("Mapping")
+        case PT_DECODER:
+            b->puts("Decoder")
         case PT_VIEW:
             b->puts("View<")
             p_type(b, t->inner)

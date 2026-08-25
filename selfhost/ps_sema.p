@@ -552,7 +552,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_TIMER, PT_CONN, PT_PROC:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_TIMER, PT_CONN, PT_PROC:
                 pass
         return t
 
@@ -1952,6 +1952,23 @@ struct PsSema:
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
                 fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+            if rt != None and rt->kind == PT_DECODER:
+                dm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if strcmp(dm, "feed") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "feed(b) takes the bytes that just arrived")
+                    dt: *PsType = self->check_expr(e->args[0])
+                    if dt == None or (dt->kind != PT_BYTES and dt->kind != PT_VIEW):
+                        fatal_at(self->file, e->args[0]->pos, "feed() takes `bytes` or a View<u8> — what a read gives (135.2) — found %s", ps_type_str(self->a, dt))
+                    return ps_type(self->a, PT_STR, e->pos)
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "'%s' takes no arguments", dm)
+                if strcmp(dm, "finish") == 0:
+                    return ps_type(self->a, PT_STR, e->pos)
+                if strcmp(dm, "pending") == 0:
+                    return ps_type(self->a, PT_INT, e->pos)
+                fatal_at(self->file, e->pos, "a Decoder has feed(b), finish() and pending() (140), not '%s'", dm)
             # 137.1: o mapa É um tipo próprio porque DÁ coisas — `advise`,
             # `sync`, `lock` — que não cabem num valor. E fecha-se: um mapa é
             # espaço de endereçamento, um inode e um descritor, e essas coisas
@@ -3408,6 +3425,12 @@ struct PsSema:
             at7->count->type = ps_type(self->a, PT_INT, e->pos)
             e->type = at7
             return at7
+        if strcmp(name, "Decoder") == 0:
+            # 140/F6: `Decoder()` — bytes entram, o texto que já dá para dizer
+            # sai, e o que ficou a meio de um codepoint fica cá dentro.
+            if e->nargs != 0:
+                fatal_at(self->file, e->pos, "Decoder() takes no arguments: what it decodes comes in through feed()")
+            return ps_type(self->a, PT_DECODER, e->pos)
         if ps_renamed_name(self->file, e->pos, name, "buffer", "Buffer"):
             # 19.4/52.3: bytes every worker can write into, closed explicitly —
             # which is what `with` is for
@@ -6260,7 +6283,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6466,6 +6489,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "bytes"
         case PT_MAPPING:
             return "Mapping"
+        case PT_DECODER:
+            return "Decoder"
         case PT_VIEW:
             return a->printf("View<%s>", ps_type_str(a, t->inner))
         case PT_FILE:
