@@ -65,6 +65,13 @@ enum PsTyId:
                        #   only the net (136.1)
     PS_TY_BYTES = 17   # 135.3: an immutable VALUE of bytes, collected, whose
                        #   block lives outside the heap and never moves
+    PS_TY_CHAN = 22    # S3/147: `Channel<T>` — o canal entre TAREFAS. Fica
+                       #   dentro de um heap só, e é isso que o torna barato de
+                       #   uma maneira que o worker nunca poderá ser: não
+                       #   serializa nada, o valor é o mesmo ponteiro.
+    PS_TY_GROUP = 23   # S3/147.4: `taskgroup()` — um grupo é sobre TEMPO DE
+                       #   VIDA e não sobre resultados: nenhuma tarefa dele
+                       #   sobrevive ao bloco, e a primeira falha mata as irmãs.
 
 struct PsObj:
     ty: i32
@@ -356,6 +363,14 @@ struct PsTask:
     rkind: i32           # 0 = raw bytes, 1 = a graph to rebuild (74.2)
     rsize: usize         # how many bytes the frame's slot holds
     rshape: const *PsShape   # ... and, for a graph, what shape it has
+    # S3/147.2: parada num CANAL — a quarta espécie sem passo. Não está em
+    # `ctx->waiters` e sim na fila do próprio canal, e é isso que faz um
+    # travamento de canal cair no "nothing can finish" que o escalonador já
+    # tinha. O valor entregue vai para a ranhura do quadro na forma que um `T?`
+    # tem, e a 147.6 é o que faz isso funcionar sem o compilador mandar a
+    # disposição: a marca de oito bytes põe o valor sempre no deslocamento 8.
+    is_chan: i32
+    chan: *PsChan
 
 # `dyn Trait` (66.3): the DYNAMIC half of the dispatch, and the only one that
 # costs anything. The value is boxed — a record is a value type and has no fixed
@@ -1061,6 +1076,52 @@ struct PsTimer:
     period: f64
     next: f64
 
+
+# ---------- S3/147: o canal entre TAREFAS ----------
+# O worker é entre THREADS e serializa; o canal é entre TAREFAS do mesmo heap e
+# não serializa nada — o valor que sai é o mesmo ponteiro que entrou. É um anel
+# sobre um `PsArr`, com o mesmo trio que uma lista usa para o coletor
+# (`esize`/`eref`/`etrace`), porque o problema é o mesmo: o runtime move bytes e
+# só o compilador sabe o que há dentro deles.
+#
+# 147.2: NÃO é sondado. Quem alimenta um canal é outra tarefa daqui, e o instante
+# em que o estado muda é uma linha nossa — então um `send` que encontra um
+# receptor parado escreve o valor no quadro dele e põe-no nos prontos ali mesmo.
+# As tarefas paradas num canal ficam FORA de `ctx->waiters`, nas duas filas
+# abaixo, e é isso que faz o travamento de canal cair no diagnóstico que o
+# escalonador já tinha.
+struct PsChan:
+    obj: PsObj
+    ring: *PsArr        # rcap ranhuras de esize, circular
+    cap: i64            # o que o programa pediu: `Channel<T>(n)`
+    rcap: i64           # o que o anel tem HOJE — cresce para além de `cap` para
+                        #   guardar o valor de cada emissor parado, e é por isso
+                        #   que `len > cap` quer dizer "há emissores parados"
+    head: i64           # de onde sai o próximo
+    len: i64            # quantos lá estão
+    esize: i32
+    eref: bool
+    closed: i32
+    # os receptores parados, em ordem de chegada: o primeiro a esperar é o
+    # primeiro a ser servido, que é a única ordem que não deixa ninguém à fome
+    rq: *PsTask
+    rq_tail: *PsTask
+    # ... e os emissores, cada um com o valor que não coube. O valor viaja no
+    # QUADRO da tarefa parada, que é memória que o coletor já percorre — guardá-lo
+    # aqui à parte seria uma segunda coisa a rastrear pela mesma razão.
+    sq: *PsTask
+    sq_tail: *PsTask
+
+# 147.4: um grupo guarda TAREFAS e mais nada. Não recolhe valores — isso é do
+# `gather`, que é homogéneo por bons motivos — e as três garantias que ele
+# acrescenta são todas sobre tempo de vida: criar dentro do âmbito, nada
+# sobrevive ao bloco, a primeira falha mata as irmãs.
+struct PsGroup:
+    obj: PsObj
+    tasks: *PsArr       # n ranhuras de *PsTask
+    n: i64
+    cap: i64
+    closing: i32        # já estamos a sair do bloco: `spawn` aqui é um erro
 
 # ---------- pack / unpack (59, 62.4) ----------
 

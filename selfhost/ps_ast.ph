@@ -79,6 +79,13 @@ enum PsTypeKind:
                      #   carrega uma `str`, e record é bytes puros (58.2).
     PT_TIMER         # a repeating clock (48.2/51.1): `await t.tick()` in an
                      #   ordinary loop, and a tick that COALESCES
+    PT_CHAN          # S3/147: `Channel<T>` — o canal entre TAREFAS. O worker é
+                     #   entre THREADS e serializa; este fica dentro de um heap
+                     #   só, e é isso que o torna barato de uma maneira que o
+                     #   worker nunca poderá ser. `inner` é o que atravessa.
+    PT_GROUP         # S3/147.4: o que `taskgroup()` dá. Não tem parâmetro de
+                     #   tipo porque um grupo é sobre TEMPO DE VIDA e não sobre
+                     #   resultados — recolher é trabalho do `gather`.
     PT_DYN           # dyn Trait — the dynamic half of the dispatch (66.3):
                      #   the value is boxed and carries the vtable of its pair
     PT_VOID

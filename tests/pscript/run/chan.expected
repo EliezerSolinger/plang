@@ -1,0 +1,11 @@
+produziu 5 e a soma chegou inteira: 100
+mandou 20 e os dois leram 20
+fechado aceita? False
+e recv da None: True
+open True len 2
+fechado mas com fila: True 2
+drenou 1 2
+e agora nao: False
+ponto 3 4
+zero: Channel<T>(n): the capacity is at least 1 — there is no rendezvous channel (147)
+chan-ok

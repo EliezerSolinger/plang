@@ -727,6 +727,12 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         case PT_TIMER: {
             return ty_ptr(self->a, ty_name(self->a, "PsTimer"));
         }
+        case PT_CHAN: {
+            return ty_ptr(self->a, ty_name(self->a, "PsChan"));
+        }
+        case PT_GROUP: {
+            return ty_ptr(self->a, ty_name(self->a, "PsGroup"));
+        }
         case PT_FILE: {
             return ty_ptr(self->a, ty_name(self->a, "PsFile"));
         }
@@ -3352,6 +3358,62 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         PsLow_push_arg(self, tc9, PsLow_expr(self, e->lhs->lhs));
         return tc9;
     }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_CHAN) {
+        const char *cmn = e->lhs->text;
+        Expr *crv = PsLow_expr(self, e->lhs->lhs);
+        PsType *it9 = e->lhs->type->inner;
+        if (strcmp(cmn, "send") == 0) {
+            Expr *sv9 = PsLow_spill(self, PsLow_coerce(self, it9, e->args[0]), it9, e->pos);
+            Expr *sa9 = ex_new(self->a, EX_UNARY, e->pos);
+            sa9->op = TK_AMP;
+            sa9->lhs = sv9;
+            Expr *sc9 = ex_new(self->a, EX_CAST, e->pos);
+            sc9->cast_type = ty_ptr(self->a, ty_name(self->a, "void"));
+            sc9->lhs = sa9;
+            Expr *cse = PsLow_call_rt(self, "ps_chan_send", e->pos);
+            PsLow_push_arg(self, cse, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, cse, crv);
+            PsLow_push_arg(self, cse, sc9);
+            PsLow_pos_args(self, cse, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return cse;
+        }
+        if (strcmp(cmn, "recv") == 0) {
+            Expr *cre = PsLow_call_rt(self, "ps_chan_recv", e->pos);
+            PsLow_push_arg(self, cre, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, cre, crv);
+            Expr *osz = PsLow_call_rt(self, "sizeof", e->pos);
+            Expr *ot9 = ex_new(self->a, EX_TYPEREF, e->pos);
+            PsType *op9 = ps_type(self->a, PT_OPT, e->pos);
+            op9->inner = it9;
+            ot9->cast_type = PsLow_ty(self, op9);
+            PsLow_push_arg(self, osz, ot9);
+            PsLow_push_arg(self, cre, osz);
+            PsLow_pos_args(self, cre, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return cre;
+        }
+        if (strcmp(cmn, "close") == 0) {
+            Expr *ccl = PsLow_call_rt(self, "ps_chan_close_ch", e->pos);
+            PsLow_push_arg(self, ccl, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ccl, crv);
+            return ccl;
+        }
+        Expr *cq = PsLow_call_rt(self, (strcmp(cmn, "open") == 0 ? "ps_chan_isopen" : "ps_chan_count"), e->pos);
+        PsLow_push_arg(self, cq, crv);
+        return cq;
+    }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_GROUP) {
+        Expr *gsp = PsLow_call_rt(self, "ps_group_spawn", e->pos);
+        PsLow_push_arg(self, gsp, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, gsp, PsLow_expr(self, e->lhs->lhs));
+        PsLow_push_arg(self, gsp, PsLow_expr(self, e->args[0]));
+        PsLow_pos_args(self, gsp, e->pos);
+        self->raised = 1;
+        return gsp;
+    }
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_TIMER) {
         Expr *tc9 = PsLow_call_rt(self, "ps_timer_tick", e->pos);
         PsLow_push_arg(self, tc9, PsLow_ctx_arg(self, e->pos));
@@ -4509,6 +4571,12 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->raised = 1;
         return oc0;
     }
+    if (strcmp(name, "__sched_stats") == 0) {
+        Expr *ss0 = PsLow_call_rt(self, "ps_sched_stats", e->pos);
+        PsLow_push_arg(self, ss0, PsLow_ctx_arg(self, e->pos));
+        self->allocs = 1;
+        return ss0;
+    }
     if (strncmp(name, "__gc_", 5) == 0) {
         const char *gf0 = name + 5;
         if (strcmp(gf0, "collect") == 0) {
@@ -4623,6 +4691,23 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->raised = 1;
         self->allocs = 1;
         return rm9;
+    }
+    if (strcmp(name, "Channel") == 0) {
+        Expr *cn9 = PsLow_call_rt(self, "ps_chan_new", e->pos);
+        PsLow_push_arg(self, cn9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, cn9, PsLow_expr(self, e->args[0]));
+        PsLow_push_arg(self, cn9, PsLow_elem_size(self, e->type->inner, e->pos));
+        PsLow_push_arg(self, cn9, ex_new(self->a, (opt_is_ref(e->type->inner) ? EX_TRUE : EX_FALSE), e->pos));
+        PsLow_pos_args(self, cn9, e->pos);
+        self->raised = 1;
+        self->allocs = 1;
+        return cn9;
+    }
+    if (strcmp(name, "taskgroup") == 0) {
+        Expr *tg9 = PsLow_call_rt(self, "ps_group_new", e->pos);
+        PsLow_push_arg(self, tg9, PsLow_ctx_arg(self, e->pos));
+        self->allocs = 1;
+        return tg9;
     }
     if (strcmp(name, "Decoder") == 0) {
         Expr *dn9 = PsLow_call_rt(self, "ps_dec_new", e->pos);
@@ -5572,7 +5657,7 @@ static const char *PsLow_option_record(PsLow *self, PsType *inner) {
     rd->name = name;
     rd->fields = Arena_alloc(self->a, 2 * sizeof(Field));
     rd->fields[0].name = "has";
-    rd->fields[0].type = ty_name(self->a, "bool");
+    rd->fields[0].type = ty_name(self->a, "i64");
     rd->fields[0].pos = inner->pos;
     rd->fields[0].bit_width = -1;
     rd->fields[1].name = "v";
@@ -6022,7 +6107,7 @@ static int PsLow_is_collected(PsLow *self, Type *t) {
         return 0;
     }
     const char *n = t->inner->name;
-    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsMapping") == 0 || strcmp(n, "PsDecoder") == 0 || strcmp(n, "PsDirIter") == 0 || strcmp(n, "PsWatcher") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
+    if (strcmp(n, "PsChan") == 0 || strcmp(n, "PsGroup") == 0 || strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsMapping") == 0 || strcmp(n, "PsDecoder") == 0 || strcmp(n, "PsDirIter") == 0 || strcmp(n, "PsWatcher") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
         return 1;
     }
     if (StrSet_has(&self->frame_names, n)) {
@@ -7307,7 +7392,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 PsLow_push_arg(self, cl9, rcv9);
                 PsLow_push_arg(self, cl9, PsLow_ctx_arg(self, s->pos));
             } else {
-                cl9 = PsLow_call_rt(self, (wk9 == PT_BUFFER ? "ps_buffer_close" : (wk9 == PT_MAPPING ? "ps_map_close" : (wk9 == PT_WATCHER ? "ps_watch_close" : (wk9 == PT_CONN ? "ps_conn_close" : "ps_file_close")))), s->pos);
+                cl9 = PsLow_call_rt(self, (wk9 == PT_GROUP ? "ps_group_close" : (wk9 == PT_BUFFER ? "ps_buffer_close" : (wk9 == PT_MAPPING ? "ps_map_close" : (wk9 == PT_WATCHER ? "ps_watch_close" : (wk9 == PT_CONN ? "ps_conn_close" : "ps_file_close"))))), s->pos);
                 PsLow_push_arg(self, cl9, PsLow_ctx_arg(self, s->pos));
                 PsLow_push_arg(self, cl9, (PsLow_in_frame(self, s->name) ? PsLow_async_field(self, s->name, s->pos) : PsLow_ident(self, s->name, s->pos)));
             }
@@ -11366,7 +11451,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_MAPPING || t->kind == PT_DECODER || t->kind == PT_DIRITER || t->kind == PT_WATCHER || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_CHAN || t->kind == PT_GROUP || t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_MAPPING || t->kind == PT_DECODER || t->kind == PT_DIRITER || t->kind == PT_WATCHER || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

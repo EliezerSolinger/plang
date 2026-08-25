@@ -536,6 +536,38 @@ private def ps_scan_object(to: *PsBlock, o: *PsObj):
                 tk->waiter = (*PsTask)(ps_forward(to, (*PsObj)(tk->waiter)))
             if tk->next != None:
                 tk->next = (*PsTask)(ps_forward(to, (*PsObj)(tk->next)))
+            if tk->chan != None:
+                tk->chan = (*PsChan)(ps_forward(to, (*PsObj)(tk->chan)))
+        case PS_TY_CHAN:
+            # S3/147: o anel, e as duas filas de tarefas paradas. O valor de um
+            # emissor parado está DENTRO do anel — é por isso que não há um
+            # terceiro sítio para percorrer aqui.
+            cc: *PsChan = (*PsChan)(o)
+            if cc->ring != None:
+                cc->ring = (*PsArr)(ps_forward(to, (*PsObj)(cc->ring)))
+                if cc->eref:
+                    cj: i64 = 0
+                    while cj < cc->len:
+                        cs: **PsObj = (**PsObj)((*char)(cc->ring) + sizeof(PsArr) + usize((cc->head + cj) % cc->rcap) * usize(cc->esize))
+                        *cs = ps_forward(to, *cs)
+                        cj += 1
+            if cc->rq != None:
+                cc->rq = (*PsTask)(ps_forward(to, (*PsObj)(cc->rq)))
+            if cc->rq_tail != None:
+                cc->rq_tail = (*PsTask)(ps_forward(to, (*PsObj)(cc->rq_tail)))
+            if cc->sq != None:
+                cc->sq = (*PsTask)(ps_forward(to, (*PsObj)(cc->sq)))
+            if cc->sq_tail != None:
+                cc->sq_tail = (*PsTask)(ps_forward(to, (*PsObj)(cc->sq_tail)))
+        case PS_TY_GROUP:
+            gg: *PsGroup = (*PsGroup)(o)
+            if gg->tasks != None:
+                gg->tasks = (*PsArr)(ps_forward(to, (*PsObj)(gg->tasks)))
+                gb: **PsObj = (**PsObj)((*char)(gg->tasks) + sizeof(PsArr))
+                gi: i64 = 0
+                while gi < gg->n:
+                    gb[gi] = ps_forward(to, gb[gi])
+                    gi += 1
         case PS_TY_WORKER, PS_TY_CONN:
             pass          # a descriptor is an int; nothing inside to follow
         case PS_TY_FILE:

@@ -248,3 +248,19 @@ def ps_mux_forget(ctx: *PsCtx, fd: int)
 def ps_mux_free(ctx: *PsCtx)
 # 110: quantas threads de I/O o programa quer (antes da primeira operação)
 def ps_pool_want(ctx: *PsCtx, n: i64, file: const *char, line: i32)
+
+# S3: as métricas do escalonador (`sched.stats()`). O mesmo formato do
+# `gc.stats()`: um Dict<str, int>, que a linguagem já sabe imprimir.
+def ps_pool_state(out_threads: *i64, out_busy: *i64, out_queued: *i64)
+def ps_sched_stats(ctx: *PsCtx) -> *PsDict
+
+# ---------- S3/147: o canal entre TAREFAS, e o grupo ----------
+def ps_chan_new(ctx: *PsCtx, cap: i64, esize: i32, eref: bool, file: const *char, line: i32) -> *PsChan
+def ps_chan_send(ctx: *PsCtx, ch: *PsChan, src: const *void, file: const *char, line: i32) -> *PsTask
+def ps_chan_recv(ctx: *PsCtx, ch: *PsChan, optsize: usize, file: const *char, line: i32) -> *PsTask
+def ps_chan_close_ch(ctx: *PsCtx, ch: *PsChan)
+def ps_chan_isopen(ch: *PsChan) -> bool
+def ps_chan_count(ch: *PsChan) -> i64
+def ps_group_new(ctx: *PsCtx) -> *PsGroup
+def ps_group_spawn(ctx: *PsCtx, g: *PsGroup, t: *PsTask, file: const *char, line: i32)
+def ps_group_close(ctx: *PsCtx, g: *PsGroup)

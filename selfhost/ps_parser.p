@@ -314,6 +314,13 @@ struct PsP:
                 self->expect(TK_COMMA, "Dict<K, V>")
                 t->inner = self->parse_type()
                 self->expect_gt("Dict<K, V>")
+            elif name == "Channel":
+                # S3/147: maiúscula porque é uma COISA com identidade (139) —
+                # tem estado, fecha-se, e duas tarefas falam POR ele
+                t = ps_type(self->a, PT_CHAN, pos)
+                self->expect(TK_LT, "Channel<T>")
+                t->inner = self->parse_type()
+                self->expect_gt("Channel<T>")
             elif name == "Task" or name == "Worker":
                 # `Task<T>` (35.3) and `Worker<T>` (35.1): what an `async def`
                 # and a `spawn` give back, written down where a variable or a

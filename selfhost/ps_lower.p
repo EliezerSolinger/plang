@@ -455,6 +455,10 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsObj"))
             case PT_TIMER:
                 return ty_ptr(self->a, ty_name(self->a, "PsTimer"))
+            case PT_CHAN:
+                return ty_ptr(self->a, ty_name(self->a, "PsChan"))
+            case PT_GROUP:
+                return ty_ptr(self->a, ty_name(self->a, "PsGroup"))
             case PT_FILE:
                 return ty_ptr(self->a, ty_name(self->a, "PsFile"))
             case PT_CONN:
@@ -496,7 +500,11 @@ struct PsLow:
                 #     nothing at all;
                 #   * a VALUE (int, float, bool, record, tuple) has no spare
                 #     bit pattern to mean "absent" — every int is a valid int —
-                #     so it gets a wrapper record `{has: bool, v: T}`.
+                #     so it gets a wrapper record `{has: i64, v: T}` — e a
+                #     marca é de OITO bytes pela 147.6: com ela o valor cai
+                #     sempre no deslocamento 8, e o runtime passa a poder
+                #     escrever um `T?` sem que o compilador lhe mande a
+                #     disposição, que é o que o `ch.recv()` precisa.
                 # Choosing per kind is what keeps the common `str?` free.
                 # 112: `None` sozinho tem tipo — `nothing?`, um opcional SEM
                 # dentro — e ele chega aqui quando um argumento literal precisa
@@ -3112,6 +3120,62 @@ struct PsLow:
                 self->push_arg(tc9, self->ctx_arg(e->pos))
             self->push_arg(tc9, self->expr(e->lhs->lhs))
             return tc9
+        # ---- S3/147: o canal e o grupo ----
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_CHAN:
+            cmn: const *char = e->lhs->text
+            crv: *Expr = self->expr(e->lhs->lhs)
+            it9: *PsType = e->lhs->type->inner
+            if strcmp(cmn, "send") == 0:
+                # o valor vai por ENDEREÇO: o runtime copia `esize` bytes e não
+                # sabe o que são, que é a mesma forma que uma lista já usa
+                sv9: *Expr = self->spill(self->coerce(it9, e->args[0]), it9, e->pos)
+                sa9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                sa9->op = TK_AMP
+                sa9->lhs = sv9
+                sc9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                sc9->cast_type = ty_ptr(self->a, ty_name(self->a, "void"))
+                sc9->lhs = sa9
+                cse: *Expr = self->call_rt("ps_chan_send", e->pos)
+                self->push_arg(cse, self->ctx_arg(e->pos))
+                self->push_arg(cse, crv)
+                self->push_arg(cse, sc9)
+                self->pos_args(cse, e->pos)
+                self->raised = True
+                self->allocs = True
+                return cse
+            if strcmp(cmn, "recv") == 0:
+                cre: *Expr = self->call_rt("ps_chan_recv", e->pos)
+                self->push_arg(cre, self->ctx_arg(e->pos))
+                self->push_arg(cre, crv)
+                # a ranhura do quadro é o `T?` inteiro — o runtime zera-a e
+                # escreve nela a 147.6
+                osz: *Expr = self->call_rt("sizeof", e->pos)
+                ot9: *Expr = ex_new(self->a, EX_TYPEREF, e->pos)
+                op9: *PsType = ps_type(self->a, PT_OPT, e->pos)
+                op9->inner = it9
+                ot9->cast_type = self->ty(op9)
+                self->push_arg(osz, ot9)
+                self->push_arg(cre, osz)
+                self->pos_args(cre, e->pos)
+                self->raised = True
+                self->allocs = True
+                return cre
+            if strcmp(cmn, "close") == 0:
+                ccl: *Expr = self->call_rt("ps_chan_close_ch", e->pos)
+                self->push_arg(ccl, self->ctx_arg(e->pos))
+                self->push_arg(ccl, crv)
+                return ccl
+            cq: *Expr = self->call_rt("ps_chan_isopen" if strcmp(cmn, "open") == 0 else "ps_chan_count", e->pos)
+            self->push_arg(cq, crv)
+            return cq
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_GROUP:
+            gsp: *Expr = self->call_rt("ps_group_spawn", e->pos)
+            self->push_arg(gsp, self->ctx_arg(e->pos))
+            self->push_arg(gsp, self->expr(e->lhs->lhs))
+            self->push_arg(gsp, self->expr(e->args[0]))
+            self->pos_args(gsp, e->pos)
+            self->raised = True
+            return gsp
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_TIMER:
             tc9: *Expr = self->call_rt("ps_timer_tick", e->pos)
             self->push_arg(tc9, self->ctx_arg(e->pos))
@@ -4227,6 +4291,12 @@ struct PsLow:
             self->pos_args(oc0, e->pos)
             self->raised = True
             return oc0
+        # ---- S3: o módulo `sched` ----
+        if strcmp(name, "__sched_stats") == 0:
+            ss0: *Expr = self->call_rt("ps_sched_stats", e->pos)
+            self->push_arg(ss0, self->ctx_arg(e->pos))
+            self->allocs = True
+            return ss0
         # ---- 110: o módulo `gc` e `sys.pool` ----
         if strncmp(name, "__gc_", 5) == 0:
             gf0: const *char = name + 5
@@ -4333,6 +4403,21 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return rm9
+        if strcmp(name, "Channel") == 0:
+            cn9: *Expr = self->call_rt("ps_chan_new", e->pos)
+            self->push_arg(cn9, self->ctx_arg(e->pos))
+            self->push_arg(cn9, self->expr(e->args[0]))
+            self->push_arg(cn9, self->elem_size(e->type->inner, e->pos))
+            self->push_arg(cn9, ex_new(self->a, EX_TRUE if opt_is_ref(e->type->inner) else EX_FALSE, e->pos))
+            self->pos_args(cn9, e->pos)
+            self->raised = True
+            self->allocs = True
+            return cn9
+        if strcmp(name, "taskgroup") == 0:
+            tg9: *Expr = self->call_rt("ps_group_new", e->pos)
+            self->push_arg(tg9, self->ctx_arg(e->pos))
+            self->allocs = True
+            return tg9
         if strcmp(name, "Decoder") == 0:
             dn9: *Expr = self->call_rt("ps_dec_new", e->pos)
             self->push_arg(dn9, self->ctx_arg(e->pos))
@@ -5321,7 +5406,15 @@ struct PsLow:
         rd->name = name
         rd->fields = self->a->alloc(2 * sizeof(Field))
         rd->fields[0].name = "has"
-        rd->fields[0].type = ty_name(self->a, "bool")
+        # S3/147.6: `i64` e não `bool`. Custa quatro bytes num tipo que já
+        # estava enchido até oito na esmagadora maioria dos casos, e compra uma
+        # coisa que não se tem de outra maneira: **o runtime passa a saber a
+        # disposição.** Com uma marca de oito bytes à frente, o valor cai sempre
+        # no deslocamento 8 — porque nenhum tipo do pscript se alinha para lá
+        # disso — e então uma função do runtime pode escrever um `T?` sem que o
+        # compilador lhe tenha de mandar um `offsetof`, que é o que o
+        # `ch.recv()` da 147.1 precisa de fazer.
+        rd->fields[0].type = ty_name(self->a, "i64")
         rd->fields[0].pos = inner->pos
         rd->fields[0].bit_width = -1
         rd->fields[1].name = "v"
@@ -5741,7 +5834,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsWatcher") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsChan") == 0 or strcmp(n, "PsGroup") == 0 or strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsWatcher") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -7035,7 +7128,7 @@ struct PsLow:
                     self->push_arg(cl9, rcv9)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                 else:
-                    cl9 = self->call_rt("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_map_close" if wk9 == PT_MAPPING else ("ps_watch_close" if wk9 == PT_WATCHER else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close"))), s->pos)
+                    cl9 = self->call_rt("ps_group_close" if wk9 == PT_GROUP else ("ps_buffer_close" if wk9 == PT_BUFFER else ("ps_map_close" if wk9 == PT_MAPPING else ("ps_watch_close" if wk9 == PT_WATCHER else ("ps_conn_close" if wk9 == PT_CONN else "ps_file_close")))), s->pos)
                     self->push_arg(cl9, self->ctx_arg(s->pos))
                     self->push_arg(cl9, self->async_field(s->name, s->pos) if self->in_frame(s->name) else self->ident(s->name, s->pos))
                 ce9: *Stmt = st_new(self->a, ST_EXPR, s->pos)
@@ -11099,7 +11192,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_WATCHER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_CHAN or t->kind == PT_GROUP or t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_WATCHER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

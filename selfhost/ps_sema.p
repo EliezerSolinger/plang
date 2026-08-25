@@ -61,7 +61,7 @@ def ps_mod_name(a: *Arena, p: const *char) -> const *char:
 
 private def ps_builtin_mod(name: const *char) -> bool:
     MODS: const *char[] = {"sys", "re", "json", "net", "random", "math", "time",
-                           "bisect", "heapq", "gc", "os", "path"}
+                           "bisect", "heapq", "gc", "sched", "os", "path"}
     for i in range(i32(sizeof(MODS) / sizeof(MODS[0]))):
         if strcmp(name, MODS[i]) == 0:
             return True
@@ -224,6 +224,10 @@ struct PsSema:
     cur_fn: const *char
     fn_gone: StrSet          # 107: nomes que já morreram com o bloco nesta função
     loop_depth: i32
+    in_with: i32             # S3/147.4: a checar a expressão de um `with`. O
+                             #   `taskgroup()` só existe lá — a garantia dele é
+                             #   o BLOCO, e fora de um não há bloco nenhum a que
+                             #   nada possa sobreviver.
     counter: i32             # `__COUNTER__` (65.11): a fresh number per read
     nogc_depth: i32          # `nogc:` blocks around the statement being checked
                              #   (26.5.1): `await` inside one is refused
@@ -553,7 +557,9 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_TIMER, PT_CONN, PT_PROC:
+            case PT_CHAN:
+                t->inner = self->resolve_type(t->inner)
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_TIMER, PT_CONN, PT_PROC, PT_GROUP:
                 pass
         return t
 
@@ -1967,6 +1973,46 @@ struct PsSema:
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
                 fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+            if rt != None and rt->kind == PT_CHAN:
+                cm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if strcmp(cm, "send") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "send(v) takes the value that crosses")
+                    self->check_want(e->args[0], rt->inner, "what a Channel carries")
+                    # 4.2/45.3: mandar para um canal fechado é uma RESPOSTA e
+                    # não uma excepção, exactamente como mandar para um worker
+                    # que já acabou
+                    cs9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                    cs9->inner = ps_type(self->a, PT_BOOL, e->pos)
+                    return cs9
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "'%s' takes no arguments", cm)
+                if strcmp(cm, "recv") == 0:
+                    # 147.1: `T?`, e None quer dizer que o canal fechou e não
+                    # sobrou nada. Chegar ao fim é parte do algoritmo, e a 4.2
+                    # diz que o que é parte do algoritmo devolve-se.
+                    cr9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                    cr9->inner = self->opt_of(rt->inner, e->pos)
+                    return cr9
+                if strcmp(cm, "open") == 0:
+                    return ps_type(self->a, PT_BOOL, e->pos)
+                if strcmp(cm, "len") == 0:
+                    return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(cm, "close") == 0:
+                    return ps_type(self->a, PT_VOID, e->pos)
+                fatal_at(self->file, e->pos, "a Channel has send(), recv(), open(), len() and close() (147), not '%s'", cm)
+            if rt != None and rt->kind == PT_GROUP:
+                gm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if strcmp(gm, "spawn") != 0:
+                    fatal_at(self->file, e->pos, "a task group has spawn() and nothing else — collecting results is what gather() is for (147.4), not '%s'", gm)
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "g.spawn(t) takes the task to keep inside the block")
+                gt9: *PsType = self->check_expr(e->args[0])
+                if gt9 == None or gt9->kind != PT_TASK:
+                    fatal_at(self->file, e->pos, "g.spawn() takes a task, found %s", ps_type_str(self->a, gt9))
+                return ps_type(self->a, PT_VOID, e->pos)
             if rt != None and rt->kind == PT_WATCHER:
                 # 146.4: os DOIS, porque são duas perguntas. `next()` espera;
                 # `pending()` diz quantos estão à espera AGORA, e é o que
@@ -2929,6 +2975,14 @@ struct PsSema:
             r->name = "Error"
             return r
         # ---- 110: o módulo `gc` e `sys.pool` ----
+        # ---- S3: o módulo `sched` ----
+        if strcmp(name, "__sched_stats") == 0:
+            if e->nargs != 0:
+                fatal_at(self->file, e->pos, "sched.stats() takes no arguments")
+            sd: *PsType = ps_type(self->a, PT_DICT, e->pos)
+            sd->key = ps_type(self->a, PT_STR, e->pos)
+            sd->inner = ps_type(self->a, PT_INT, e->pos)
+            return sd
         if strncmp(name, "__gc_", 5) == 0:
             gf: const *char = name + 5
             if strcmp(gf, "collect") == 0:
@@ -3598,6 +3652,32 @@ struct PsSema:
             at7->count->type = ps_type(self->a, PT_INT, e->pos)
             e->type = at7
             return at7
+        if strcmp(name, "Channel") == 0:
+            # S3/147: `Channel<T>(n)`. O elemento vem da ANOTAÇÃO, como um `[]`
+            # vazio — escrever `Channel<int>(4)` numa expressão daria ao `<` dois
+            # significados no mesmo sítio, e o preço disso paga-se para sempre.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "Channel(n) takes the capacity, and it is at least 1 — there is no rendezvous channel (147)")
+            cct: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], cct, ps_type(self->a, PT_INT, e->pos), "the capacity of a Channel")
+            ch9: *PsType = self->hint
+            if ch9 == None or ch9->kind != PT_CHAN or ch9->inner == None:
+                fatal_at(self->file, e->pos, "a Channel needs to say what crosses it: `ch: Channel<int> = Channel(4)`")
+            if ch9->inner->kind == PT_OPT:
+                # 147.1: `recv()` já responde None no fim. Um canal de `T?`
+                # faria de None duas coisas — um valor que atravessou e o fim do
+                # canal — e nenhum laço conseguiria distinguir as duas.
+                fatal_at(self->file, e->pos, "a Channel of `%s` cannot be told apart from its own end: recv() answers None when the channel closes (147.1)", ps_type_str(self->a, ch9->inner))
+            return ch9
+        if strcmp(name, "taskgroup") == 0:
+            # S3/147.4: um grupo é sobre TEMPO DE VIDA. Só faz sentido num
+            # `with`, e é lá que a garantia dele vive — fora dele não haveria
+            # bloco nenhum a que nada pudesse sobreviver.
+            if e->nargs != 0:
+                fatal_at(self->file, e->pos, "taskgroup() takes no arguments")
+            if self->in_with == 0:
+                fatal_at(self->file, e->pos, "a task group only exists as `with taskgroup() as g:` — what it promises is that nothing it started outlives the BLOCK, and outside one there is no block (147.4)")
+            return ps_type(self->a, PT_GROUP, e->pos)
         if strcmp(name, "Decoder") == 0:
             # 140/F6: `Decoder()` — bytes entram, o texto que já dá para dizer
             # sai, e o que ficou a meio de um codepoint fica cá dentro.
@@ -4202,6 +4282,11 @@ struct PsSema:
         elif strcmp(name, "time") == 0:
             ns->sym.add("time")
             ns->sym.add("monotonic")
+        elif strcmp(name, "sched") == 0:
+            # S3: o escalonador diz o que sabe. Módulo próprio e não `sys`,
+            # pelo mesmo motivo que o `gc` é próprio: são os botões e os números
+            # de UMA máquina, e juntá-los a `sys` faria de `sys` um caixote.
+            ns->sym.add("stats")
         elif strcmp(name, "gc") == 0:
             # 110: os knobs de RUNTIME do coletor. Módulo próprio, como no
             # Python — o que dimensiona array é `-D PSRT_*`, o que se ajusta com
@@ -5922,8 +6007,10 @@ struct PsSema:
                 # error leaves through the middle, because the release lowers to
                 # P's `defer`. Only a file so far; the general protocol (what
                 # `with` means for a type of your own) is not decided yet.
+                self->in_with += 1
                 wt9: *PsType = self->check_expr(s->expr)
-                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN or wt9->kind == PT_MAPPING or wt9->kind == PT_WATCHER)
+                self->in_with -= 1
+                closeable: bool = wt9 != None and (wt9->kind == PT_FILE or wt9->kind == PT_BUFFER or wt9->kind == PT_CONN or wt9->kind == PT_MAPPING or wt9->kind == PT_WATCHER or wt9->kind == PT_GROUP)
                 if not closeable and wt9 != None and wt9->kind == PT_NAME and self->records.has(wt9->name):
                     # the protocol (68.4): `with` takes anything that DECLARES
                     # Closeable — nominal, like every use of a trait — and calls
@@ -6483,7 +6570,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN, PT_CHAN, PT_GROUP:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6707,6 +6794,10 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "a finished process"
         case PT_TIMER:
             return "a timer"
+        case PT_CHAN:
+            return a->printf("Channel<%s>", ps_type_str(a, t->inner))
+        case PT_GROUP:
+            return "a task group"
         case PT_LIST:
             return a->printf("List<%s>", ps_type_str(a, t->inner))
         case PT_SET:

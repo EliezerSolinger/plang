@@ -1639,6 +1639,11 @@ static PsType *PsP_parse_type(PsP *self) {
             PsP_expect(self, TK_COMMA, "Dict<K, V>");
             t->inner = PsP_parse_type(self);
             PsP_expect_gt(self, "Dict<K, V>");
+        } else if (strcmp(name, "Channel") == 0) {
+            t = ps_type(self->a, PT_CHAN, pos);
+            PsP_expect(self, TK_LT, "Channel<T>");
+            t->inner = PsP_parse_type(self);
+            PsP_expect_gt(self, "Channel<T>");
         } else if (strcmp(name, "Task") == 0 || strcmp(name, "Worker") == 0) {
             t = ps_type(self->a, (strcmp(name, "Task") == 0 ? PT_TASK : PT_WORKER), pos);
             PsP_expect(self, TK_LT, "Task<T>");

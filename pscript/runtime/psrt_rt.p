@@ -674,6 +674,13 @@ struct PsPool:
     n: i32
     started: i32
     want: i32            # 110: o que `sys.pool(n)` pediu (0 = ninguém pediu)
+    # S3: quantas threads estão DENTRO de uma chamada agora. Mantido aqui, sob o
+    # mesmo cadeado que a fila, porque é onde a resposta é verdadeira: um
+    # contador por fora seria lido a meio de uma troca. É o número que separa
+    # "o pool está cheio" de "o pool está parado à espera de trabalho", e sem
+    # ele `pool_queued` sozinho não distingue os dois.
+    busy: i32
+    queued: i32          # trabalhos à espera de uma thread
 
 private g_pool: PsPool = {0}
 
@@ -687,9 +694,12 @@ private def ps_pool_thread(arg: *void) -> *void:
         if g_pool.head == None:
             g_pool.tail = None
         w->next = None
+        g_pool.queued -= 1
+        g_pool.busy += 1
         pthread_mutex_unlock(&g_pool.mu)
         ps_io_run(w)
         pthread_mutex_lock(&g_pool.mu)
+        g_pool.busy -= 1
         if w->orphan != 0:
             # 76.4: whoever was waiting gave up. The call ran to the end anyway
             # — a `read(2)` does not stop halfway — and the result is dropped
@@ -1029,7 +1039,19 @@ def ps_pool_submit(ctx: *PsCtx, w: *PsWork):
     else:
         g_pool.tail->next = w
         g_pool.tail = w
+    g_pool.queued += 1
     pthread_cond_signal(&g_pool.cv)
+
+# S3: o estado do pool, para o `sched.stats()`. Lido sob o cadeado da fila
+# porque é a fila que o mantém — perguntar sem ele daria um número de um
+# instante que nunca existiu, que é o defeito que uma métrica de escalonador não
+# pode ter.
+def ps_pool_state(out_threads: *i64, out_busy: *i64, out_queued: *i64):
+    pthread_mutex_lock(&g_pool.mu)
+    *out_threads = i64(g_pool.n)
+    *out_busy = i64(g_pool.busy)
+    *out_queued = i64(g_pool.queued)
+    pthread_mutex_unlock(&g_pool.mu)
 
 def ps_work_new(op: i32) -> *PsWork:
     w: *PsWork = (*PsWork)(malloc(sizeof(PsWork)))
@@ -1493,6 +1515,8 @@ private def ps_park(ctx: *PsCtx, t: *PsTask):
 # valgrind mostrou. É a mesma família da 107.6 (campo novo sem inicializar em
 # todos os sítios), e desta vez o campo tinha ANOS.
 private def ps_task_clear_recv(t: *PsTask):
+    t->is_chan = 0
+    t->chan = None
     t->is_recv = 0
     t->rblk = None
     t->rdir = 0
@@ -3093,6 +3117,407 @@ def ps_sched_drain(ctx: *PsCtx):
         if ctx->exc != None:
             return
 
+# ---------- S3/147: `Channel<T>`, o canal entre TAREFAS ----------
+#
+# O canal é entre TAREFAS; o worker é entre THREADS. É essa a regra, e o que ela
+# compra está aqui dentro: nada é serializado, o valor que sai é o mesmo
+# ponteiro que entrou, e o coletor percorre a fila porque ela é um objeto como
+# outro qualquer.
+#
+# O ANEL cresce para além da capacidade, e isso não é um descuido — é como um
+# emissor parado guarda o que não coube. `len > cap` significa exactamente
+# "há emissores parados", e o valor de cada um já está no anel, na posição
+# certa, à espera de ser aceite. Sem isto seria preciso um segundo sítio para
+# esses valores, com o seu próprio rastreio, pelo mesmo motivo.
+
+private def ps_chan_slot(ch: *PsChan, i: i64) -> *char:
+    return (*char)(ch->ring) + sizeof(PsArr) + usize((ch->head + i) % ch->rcap) * usize(ch->esize)
+
+private def ps_chan_grow(ctx: *PsCtx, ch: *PsChan, need: i64):
+    if ch->ring != None and need <= ch->rcap:
+        return
+    nc: i64 = ch->rcap * 2 if ch->rcap > 0 else (ch->cap if ch->cap > 0 else 1)
+    while nc < need:
+        nc = nc * 2
+    na: *PsArr = (*PsArr)(ps_alloc(ctx, sizeof(PsArr) + usize(nc) * usize(ch->esize), PS_TY_ARR))
+    na->nbytes = usize(nc) * usize(ch->esize)
+    memset((*char)(na) + sizeof(PsArr), 0, na->nbytes)
+    # desenrola: o que estava circular passa a começar no zero, que é a única
+    # forma de a cópia ser uma passagem só
+    if ch->ring != None:
+        i: i64 = 0
+        while i < ch->len:
+            memcpy((*char)(na) + sizeof(PsArr) + usize(i) * usize(ch->esize), ps_chan_slot(ch, i), usize(ch->esize))
+            i += 1
+    ch->ring = na
+    ch->rcap = nc
+    ch->head = 0
+
+def ps_chan_new(ctx: *PsCtx, cap: i64, esize: i32, eref: bool, file: const *char, line: i32) -> *PsChan:
+    if cap < 1:
+        # 147: sem o caso zero. O encontro à Go é a única forma que obriga o
+        # emissor a parar mesmo havendo um receptor pronto, e é onde toda a
+        # gente tropeça — então não existe, em vez de existir e surpreender.
+        ps_raise(ctx, "Channel<T>(n): the capacity is at least 1 — there is no rendezvous channel (147)", PS_CAT_VALUE, file, line)
+        return None
+    ch: *PsChan = (*PsChan)(ps_alloc(ctx, sizeof(PsChan), PS_TY_CHAN))
+    ch->ring = None
+    ch->cap = cap
+    ch->rcap = 0
+    ch->head = 0
+    ch->len = 0
+    ch->esize = esize
+    ch->eref = eref
+    ch->closed = 0
+    ch->rq = None
+    ch->rq_tail = None
+    ch->sq = None
+    ch->sq_tail = None
+    return ch
+
+# S3/147.6: para uma REFERÊNCIA, `T?` É o ponteiro e None é o nulo. Para tudo o
+# resto é `{i64 has; T v}` — e a marca de oito bytes é o que põe o valor no
+# deslocamento 8 seja qual for o T, porque nada no pscript se alinha para lá de
+# oito. É isso que deixa esta função escrever um `T?` sem que o compilador lhe
+# tenha de mandar a disposição.
+private const PS_OPT_VOFF: const usize = 8
+
+private def ps_chan_deliver(t: *PsTask, src: *char, esize: i32, eref: bool):
+    slot: *char = (*char)(t->frame) + sizeof(PsUser)
+    if eref:
+        memcpy(slot, src, usize(esize))
+        return
+    *(*i64)(slot) = 1
+    memcpy(slot + PS_OPT_VOFF, src, usize(esize))
+
+private def ps_chan_wake(ctx: *PsCtx, t: *PsTask):
+    t->is_chan = 0
+    t->chan = None
+    t->state = -1
+    w: *PsTask = t->waiter
+    t->waiter = None
+    if w != None:
+        w->waiting_on = None
+        ps_sched_push(ctx, w)
+
+private def ps_chan_pop_r(ch: *PsChan) -> *PsTask:
+    t: *PsTask = ch->rq
+    if t == None:
+        return None
+    ch->rq = t->next
+    if ch->rq == None:
+        ch->rq_tail = None
+    t->next = None
+    return t
+
+private def ps_chan_pop_s(ch: *PsChan) -> *PsTask:
+    t: *PsTask = ch->sq
+    if t == None:
+        return None
+    ch->sq = t->next
+    if ch->sq == None:
+        ch->sq_tail = None
+    t->next = None
+    return t
+
+# uma tarefa já terminada com um i64 lá dentro: o que `send` devolve
+private def ps_chan_bool(ctx: *PsCtx, v: i64) -> *PsTask:
+    return ps_task_of_int(ctx, v)
+
+def ps_chan_send(ctx: *PsCtx, ch: *PsChan, src: const *void, file: const *char, line: i32) -> *PsTask:
+    if ch == None:
+        ps_raise(ctx, "send() on a channel that is nothing", PS_CAT_VALUE, file, line)
+        return ps_chan_bool(ctx, 0)
+    if ch->closed != 0:
+        # 4.2/45.3: mandar para um canal fechado é uma RESPOSTA, como mandar
+        # para um worker morto. Não é excepcional — é o que acontece quando o
+        # outro lado acabou primeiro.
+        return ps_chan_bool(ctx, 0)
+    # 147.2: há um receptor parado — entrega DIRECTA, sem passar pelo anel e sem
+    # uma volta ao escalonador
+    r: *PsTask = ps_chan_pop_r(ch)
+    if r != None:
+        ps_chan_deliver(r, (*char)(src), ch->esize, ch->eref)
+        ps_chan_wake(ctx, r)
+        return ps_chan_bool(ctx, 1)
+    ps_chan_grow(ctx, ch, ch->len + 1)
+    memcpy(ps_chan_slot(ch, ch->len), src, usize(ch->esize))
+    ch->len += 1
+    if ch->len <= ch->cap:
+        return ps_chan_bool(ctx, 1)
+    # não coube: o valor FICA no anel, para lá da capacidade, e esta tarefa
+    # espera até que alguém o tire de lá
+    t: *PsTask = ps_task_of_int(ctx, 1)
+    t->state = 0
+    t->is_chan = 1
+    t->chan = ch
+    t->next = None
+    if ch->sq_tail == None:
+        ch->sq = t
+        ch->sq_tail = t
+    else:
+        ch->sq_tail->next = t
+        ch->sq_tail = t
+    return t
+
+def ps_chan_recv(ctx: *PsCtx, ch: *PsChan, optsize: usize, file: const *char, line: i32) -> *PsTask:
+    if ch == None:
+        ps_raise(ctx, "recv() on a channel that is nothing", PS_CAT_VALUE, file, line)
+        return None
+    # a ranhura do quadro é o `T?` inteiro, e nasce a dizer None
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + optsize, PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_REFMSG_DESC if ch->eref else &PS_POD_DESC
+    memset(fr + sizeof(PsUser), 0, optsize)
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = -1
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->lost = None
+    t->rmarked = 0
+    t->waiting_on = None
+    t->waiter = None
+    t->cancelled = 0
+    t->deadline = 0.0
+    t->is_timer = 0
+    t->next = None
+    ps_task_clear_recv(t)
+    t->rsize = optsize
+    if ch->len > 0:
+        ps_chan_deliver(t, ps_chan_slot(ch, 0), ch->esize, ch->eref)
+        ch->head = (ch->head + 1) % ch->rcap
+        ch->len -= 1
+        # abriu uma vaga: o emissor mais antigo já tem o valor dele no anel, e
+        # o que faltava era ser aceite
+        if ch->len <= ch->cap:
+            sd: *PsTask = ps_chan_pop_s(ch)
+            if sd != None:
+                ps_chan_wake(ctx, sd)
+        return t
+    if ch->closed != 0:
+        # 147.1: fechado e vazio devolve None. Chegar ao fim de um canal é parte
+        # do algoritmo, e a 4.2 diz que o que é parte do algoritmo devolve-se.
+        return t
+    t->state = 0
+    t->is_chan = 1
+    t->chan = ch
+    if ch->rq_tail == None:
+        ch->rq = t
+        ch->rq_tail = t
+    else:
+        ch->rq_tail->next = t
+        ch->rq_tail = t
+    return t
+
+# 147.5: fechar um canal é um SINAL — "não mando mais" — e não a libertação de
+# nada. Acorda todos os receptores parados, que é o que faz o laço de 147.1
+# terminar mesmo com vários receptores; e recusa os emissores parados, cujo
+# valor sai do anel por a contagem voltar à capacidade.
+def ps_chan_close_ch(ctx: *PsCtx, ch: *PsChan):
+    if ch == None or ch->closed != 0:
+        return
+    ch->closed = 1
+    while True:
+        s: *PsTask = ps_chan_pop_s(ch)
+        if s == None:
+            break
+        *(*i64)((*char)(s->frame) + sizeof(PsUser)) = 0
+        ps_chan_wake(ctx, s)
+    if ch->len > ch->cap:
+        ch->len = ch->cap
+    while True:
+        r: *PsTask = ps_chan_pop_r(ch)
+        if r == None:
+            break
+        # a ranhura já diz None desde que nasceu
+        ps_chan_wake(ctx, r)
+
+def ps_chan_isopen(ch: *PsChan) -> bool:
+    # o mesmo predicado do worker (36.1): aberto, ou ainda com coisa na fila
+    return ch != None and (ch->closed == 0 or ch->len > 0)
+
+def ps_chan_count(ch: *PsChan) -> i64:
+    if ch == None:
+        return 0
+    return ch->len if ch->len < ch->cap else ch->cap
+
+# ---------- S3/147.4: `taskgroup()` ----------
+#
+# Três garantias, nenhuma sobre valores: criar tarefas DENTRO do âmbito, nenhuma
+# sobrevive ao bloco, e a primeira falha mata as irmãs. Recolher resultados
+# continua a ser do `gather`, que é homogéneo por bons motivos — as tarefas de um
+# bloco não têm razão nenhuma para devolver todas a mesma coisa.
+
+def ps_group_new(ctx: *PsCtx) -> *PsGroup:
+    g: *PsGroup = (*PsGroup)(ps_alloc(ctx, sizeof(PsGroup), PS_TY_GROUP))
+    g->tasks = None
+    g->n = 0
+    g->cap = 0
+    g->closing = 0
+    return g
+
+def ps_group_spawn(ctx: *PsCtx, g: *PsGroup, t: *PsTask, file: const *char, line: i32):
+    if g == None:
+        return
+    if g->closing != 0:
+        ps_raise(ctx, "g.spawn(): the group is already leaving its block — a task started here would outlive it", PS_CAT_VALUE, file, line)
+        return
+    if g->n >= g->cap:
+        nc: i64 = g->cap * 2 if g->cap > 0 else 4
+        na: *PsArr = (*PsArr)(ps_alloc(ctx, sizeof(PsArr) + usize(nc) * sizeof(PsStrPtr), PS_TY_ARR))
+        na->nbytes = usize(nc) * sizeof(PsStrPtr)
+        memset((*char)(na) + sizeof(PsArr), 0, na->nbytes)
+        if g->tasks != None:
+            memcpy((*char)(na) + sizeof(PsArr), (*char)(g->tasks) + sizeof(PsArr), usize(g->n) * sizeof(PsStrPtr))
+        g->tasks = na
+        g->cap = nc
+    base: **PsTask = (**PsTask)((*char)(g->tasks) + sizeof(PsArr))
+    base[g->n] = t
+    g->n += 1
+
+# 147.3: a saída ARRASTA o escalonador, e não é um `await`. A libertação de um
+# `with` é um `defer` de P — uma chamada síncrona — e o `ps_task_wait` já é
+# exactamente isto num `def` normal e no topo do programa: não para a thread,
+# arrasta o laço até a tarefa acabar, e no caminho corre toda a gente.
+#
+# A primeira FALHA cancela as irmãs. A ordem importa: cancela-se ANTES de
+# continuar a esperar, senão uma irmã que nunca acaba prende o bloco de quem já
+# falhou — que é o travamento que o grupo existe para evitar.
+def ps_group_close(ctx: *PsCtx, g: *PsGroup):
+    if g == None:
+        return
+    g->closing = 1
+    # TUDO no quadro, e não é zelo: `ps_task_wait` arrasta o escalonador, o
+    # escalonador corre o passo de outra tarefa, esse passo aloca e chega a um
+    # ponto seguro — e o coletor move o grupo, a tarefa que estamos a esperar e
+    # o erro que está estacionado fora de `ctx->exc`. Sem isto o grupo passava
+    # em todos os testes e morria com `PSCRIPT_GC_STRESS`, que foi o que
+    # aconteceu.
+    t: *PsTask = None
+    first: *PsErr = None
+    outer: *PsErr = None
+    slots: **PsObj[4]
+    slots[0] = (**PsObj)(&g)
+    slots[1] = (**PsObj)(&t)
+    slots[2] = (**PsObj)(&first)
+    slots[3] = (**PsObj)(&outer)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 4)
+    defer ps_pop_frame(ctx, &f)
+    # o erro que já vinha a subir vence o do grupo: a falha que começou tudo é a
+    # que vale a pena reportar, e é a mesma regra que o `with` usa no `close()`
+    outer = ps_exc_take(ctx)
+    i: i64 = 0
+    while i < g->n:
+        t = *(**PsTask)((*char)(g->tasks) + sizeof(PsArr) + usize(i) * sizeof(PsStrPtr))
+        if t != None and not ps_task_done(t):
+            ps_task_wait(ctx, t)
+        e: *PsErr = ps_exc_take(ctx)
+        if e == None and t != None and t->err != None:
+            e = t->err
+            t->err = None
+        if e != None and first == None:
+            first = e
+            # mata as irmãs, e mata-as JÁ: esperar primeiro e cancelar depois
+            # prenderia o bloco de quem falhou numa irmã que nunca acaba, que é
+            # o travamento que o grupo existe para evitar
+            j: i64 = i + 1
+            while j < g->n:
+                o: *PsTask = *(**PsTask)((*char)(g->tasks) + sizeof(PsArr) + usize(j) * sizeof(PsStrPtr))
+                if o != None and not ps_task_done(o):
+                    ps_task_cancel(ctx, o)
+                j += 1
+        # 107: alguém veio buscar — a entrada de "erro que ninguém viu" sai
+        if t != None and t->lost != None:
+            t->lost->live = 0
+            t->lost = None
+        i += 1
+    ps_exc_put(ctx, outer if outer != None else first)
+
+# ---------- S3: `sched.stats()`, as métricas do escalonador ----------
+# O modelo é o `gc.stats()` da 110, e a razão de existir é uma frase concreta: no
+# dia em que um programa não acaba, ninguém sabe quem está à espera de quê. O
+# número que responde a isso não é quantas tarefas há — é quantas estão paradas
+# E POR QUE RAZÃO, e é isso que transforma um travamento de adivinha em leitura.
+#
+# Os contadores já existiam todos por dentro; o que faltava era um nome para
+# eles. E a ordem aqui importa: conta-se PRIMEIRO, para variáveis locais, e só
+# depois se constrói o dicionário — construí-lo pode coletar, e coletar MOVE as
+# tarefas que estas listas encadeiam.
+def ps_sched_stats(ctx: *PsCtx) -> *PsDict:
+    ready: i64 = 0
+    t: *PsTask = ctx->ready
+    while t != None:
+        ready += 1
+        t = t->next
+    # só os que AINDA esperam: um prazo já disparado (ou morto com a tarefa que
+    # o pediu) fica na lista até à próxima passagem do relógio, e contá-lo seria
+    # dizer que alguém espera quando já não espera ninguém
+    deadline: i64 = 0
+    t = ctx->timers
+    while t != None:
+        if t->state == 0:
+            deadline += 1
+        t = t->next
+    # os estacionados por razão: a mensagem de um worker, um descritor no
+    # multiplexador, uma chamada numa thread do pool
+    message: i64 = 0
+    descriptor: i64 = 0
+    pool_wait: i64 = 0
+    t = ctx->waiters
+    while t != None:
+        if t->is_recv != 0:
+            message += 1
+        elif t->is_io != 0 and t->work != None and t->work->fd >= 0:
+            descriptor += 1
+        else:
+            pool_wait += 1
+        t = t->next
+    # os workers que nasceram DAQUI, pelo estado que o `status()` já sabe dizer
+    running: i64 = 0
+    done: i64 = 0
+    failed: i64 = 0
+    b: *PsWorkerBlk = ctx->workers
+    while b != None:
+        if b->done == 0:
+            running += 1
+        elif b->failed != 0:
+            failed += 1
+        else:
+            done += 1
+        b = b->next
+    pth: i64 = 0
+    pbusy: i64 = 0
+    pq: i64 = 0
+    ps_pool_state(&pth, &pbusy, &pq)
+
+    NAMES: const *char[] = {"ready", "parked", "parked_deadline", "parked_message",
+                            "parked_descriptor", "parked_pool", "pool_threads",
+                            "pool_busy", "pool_queued", "workers", "workers_running",
+                            "workers_done", "workers_failed"}
+    vals: i64[13]
+    vals[0] = ready
+    vals[1] = deadline + message + descriptor + pool_wait
+    vals[2] = deadline
+    vals[3] = message
+    vals[4] = descriptor
+    vals[5] = pool_wait
+    vals[6] = pth
+    vals[7] = pbusy
+    vals[8] = pq
+    vals[9] = running + done + failed
+    vals[10] = running
+    vals[11] = done
+    vals[12] = failed
+    d: *PsDict = ps_dict_new(ctx, i32(sizeof(PsStrPtr)), i32(sizeof(i64)), 1, True, False)
+    for i in range(13):
+        k: *PsStr = ps_str_new(ctx, NAMES[i], strlen(NAMES[i]))
+        kp: *PsStr = k
+        slot: *char = ps_dict_put(ctx, d, (*char)(&kp))
+        *(*i64)(slot) = vals[i]
+    return d
+
 def ps_task_of_int(ctx: *PsCtx, v: i64) -> *PsTask:
     t: *PsTask = ps_msg_task(ctx, None, sizeof(i64))
     *(*i64)(ps_task_ret(t)) = v
@@ -3105,6 +3530,18 @@ def ps_task_cancel(ctx: *PsCtx, t: *PsTask):
     # it has to be REACHABLE by the scheduler to notice: a task parked on
     # another one is woken so its own next step can raise
     if t->waiting_on != None:
+        # S3: e o PRAZO em que ela estava parada morre com ela. Sem isto o
+        # relógio ficava na fila à espera de uma hora que já não interessa a
+        # ninguém — e o laço de eventos não acaba antes dela, portanto um
+        # `timeout(t, 0.05)` sobre um `sleep(5.0)` cancelava a tarefa em 50ms e o
+        # programa demorava cinco segundos a sair na mesma. Quem o desenterrou
+        # foi o `sched.stats()` desta mesma fase: ele contava uma tarefa parada
+        # no relógio que já não tinha dono, e uma métrica que aponta para um
+        # defeito é exactamente para o que ela serve.
+        w0: *PsTask = t->waiting_on
+        if w0->is_timer != 0 and w0->state == 0 and w0->waiter == t:
+            w0->state = -1
+            w0->waiter = None
         t->waiting_on = None
         ps_sched_push(ctx, t)
 

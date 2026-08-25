@@ -6809,3 +6809,132 @@ usava era `OVERFLOW` — que já está tomado, pela `Category` do prelúdio (54.
 `RESCAN` é melhor de qualquer maneira: diz ao consumidor o que FAZER — *"não sei
 o que mudou, relê tudo"* — em vez de lhe dizer o que aconteceu ao núcleo. O
 nome de um evento vale pelo que ele manda fazer.
+
+---
+
+## 147 — a S3: o que a concorrência ainda não tinha nome para dizer
+
+A `STDLIB.md` §4.1 decidiu as três peças; implementá-las obrigou a decidir mais
+quatro coisas que ela não podia ter previsto, e é isso que esta bateria fixa.
+
+### 147.1 — `ch.recv()` devolve `T?`, e a razão é a 4.2
+
+O vocabulário proposto era o do worker: `while ch.open():` e depois
+`await ch.recv()`. **O predicado fica** — é a forma mais curta e é a que já se
+escreve com um worker — mas ele sozinho não chega, e a razão é concreta: com
+DOIS receptores, os dois podem passar o `open()` com um único valor na fila, e o
+segundo fica preso para sempre num canal que já ninguém vai alimentar.
+
+Fechar um canal acorda todos os receptores parados, e então há uma pergunta que
+tem de ter resposta: **o que é que um `recv` acordado num canal fechado e vazio
+devolve?** Levantar seria fazer do fim de um fluxo uma excepção — exactamente o
+que a 4.2 proíbe, porque chegar ao fim de um canal É parte do algoritmo.
+
+> **`await ch.recv()` devolve `T?`: o valor, ou None quando o canal fechou e
+> não sobrou nada.**
+
+E então o laço completo, o que funciona com qualquer número de receptores, não
+precisa de predicado nenhum:
+
+```
+while True:
+    v = await ch.recv()
+    if v == None:
+        break
+    usa(v)
+```
+
+O `open()` continua lá para o caso de um receptor só, que é o comum.
+
+### 147.2 — o canal não é sondado: a entrega é DIRECTA
+
+Um socket precisa do multiplexador porque quem o alimenta é o núcleo. **Um canal
+não**: quem o alimenta é outra tarefa do mesmo heap, e o instante em que o
+estado muda é uma linha de código nossa. Portanto um `send` que encontra um
+receptor parado **escreve o valor no quadro dele e põe-no na fila de prontos ali
+mesmo** — sem passar pelo `poll`, sem uma volta ao escalonador, sem um descritor.
+
+Isto tem uma consequência boa e não óbvia: as tarefas paradas num canal ficam
+**fora de `ctx->waiters`**, na fila do próprio canal. Então quando toda a gente
+está parada num canal, o `ps_sched_progress` vê a fila de prontos vazia, nenhum
+prazo e nenhuma espera — devolve falso, e o `await` de quem está por cima
+levanta *"deadlock: awaiting a task that nothing can finish"*. **O travamento de
+canal é diagnosticado pela maquinaria que já existia**, e não por um detector
+novo.
+
+### 147.3 — a saída do `taskgroup` ARRASTA o escalonador, e não é `await`
+
+A §4.1(b) escreveu *"a saída do `with` faz o `gather`"*, e um `gather` é um
+`await`. Mas a libertação de um `with` é um `defer` de P — uma chamada
+**síncrona** — e pôr um ponto de espera dentro de um `defer` que corre também no
+caminho do erro é a peça de compilador mais cara deste plano inteiro.
+
+Não é preciso, e a razão é que a peça certa já existe: **o `ps_task_wait`**, que
+é como um `await` num `def` normal e no topo do programa já funciona. Ele não
+para a thread — arrasta o escalonador até a tarefa acabar, e no caminho corre
+toda a gente. A saída do grupo faz isso por cada filho.
+
+O que se perde, dito para não ser descoberto depois: dentro de um `async def`, a
+tarefa que sai de um grupo **não estaciona** enquanto espera pelos filhos, portanto
+quem a estiver a aguardar não a vê parada. O que ela promete — *o bloco não
+acaba antes dos filhos* — cumpre-se na mesma, e todas as outras tarefas correm.
+
+E o caso mau já tem diagnóstico: um filho que espere pelo pai faz o
+`ps_task_wait` chegar ao *"nothing can finish"* que ele sempre teve.
+
+### 147.4 — um grupo não recolhe VALORES, e é de propósito
+
+O `gather` é homogéneo: `List<Task<T>>`, um T só. Um grupo em que `g.spawn`
+aparece dentro de um `for` e de um `if` não pode ser — as tarefas de um bloco
+não têm razão nenhuma para devolver todas a mesma coisa.
+
+A saída é a que o `race` já tinha escrito: **o grupo é sobre TEMPO DE VIDA, não
+sobre resultados.** `g.spawn(t)` aceita um `Task<T>` de qualquer T, o grupo
+guarda-o como tarefa e mais nada, e quem quiser o valor lê-o da variável que
+guardou — que é o que o `race` diz por extenso (*"o valor lê-se dessa tarefa
+depois"*). Recolher continua a ser trabalho do `gather`, e as três garantias que
+a §4.1(b) pediu são todas sobre tempo de vida, nenhuma sobre valores.
+
+### 147.5 — o canal não tem `with`, e o `close` é um SINAL
+
+Tentador, e errado. Fechar um canal não liberta recurso escasso nenhum — é
+memória, e a 136.1 manda a memória para o coletor. O que `close()` faz é dizer
+**"não mando mais"**, que é protocolo e não limpeza: quem fecha é o produtor, e
+o produtor quase nunca é o dono do bloco onde o canal nasceu.
+
+Um `with Channel<int>(4) as ch:` fecharia no sítio errado com uma cara de
+correcto, e é o género de conveniência que só se paga uma vez, tarde.
+
+### 147.6 — a marca de um `T?` passa a ser de oito bytes
+
+Descoberta ao implementar o `recv` da 147.1, e é uma daquelas em que a coisa
+certa a mudar não é a que parecia.
+
+Um `T?` de referência **é o ponteiro** e None é o nulo — de graça, e o runtime
+sabe escrevê-lo. Um `T?` de valor é um registo `{has, v}`, e o deslocamento de
+`v` depende do enchimento que o compilador de C escolher para aquele T. O
+runtime não pode adivinhá-lo, e mandar-lho de fora obrigaria a emitir um
+`offsetof` — que o QBE trata por um nome e o C por outro.
+
+A saída foi mudar o registo: **`has` passa de `bool` a `i64`.** Com uma marca de
+oito bytes à frente, o valor cai **sempre no deslocamento 8**, porque nada no
+pscript se alinha para lá de oito. Custa quatro bytes num tipo que na maioria
+dos casos já estava enchido até lá, e compra uma coisa que não se tinha:
+
+> **o runtime passa a saber escrever um `T?` sem que o compilador lhe mande a
+> disposição.**
+
+### 147.7 — o `sched.stats()` apanhou um defeito no primeiro dia
+
+Ele existe para responder *"quem está à espera de quê"*, e a primeira coisa que
+respondeu foi que havia uma tarefa parada no relógio que já não tinha dono.
+
+O `timeout(t, 0.05)` sobre um `await sleep(5.0)` **cancelava a tarefa em 50ms e o
+programa saía cinco segundos depois na mesma**: o `ps_task_cancel` acordava quem
+estava parado, mas o PRAZO ficava na fila do relógio, e o laço de eventos não
+acaba antes do último prazo. Um `race` perdido deixava o mesmo rasto.
+
+Agora o prazo morre com a tarefa que o pediu. E vale a pena dizer o que isto é:
+uma métrica que aponta para um defeito no dia em que nasce é exactamente para o
+que ela serve — e é o argumento a favor do item 44 da interseção, feito por si
+próprio.
