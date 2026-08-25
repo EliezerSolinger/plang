@@ -30,6 +30,7 @@ include <poll.h>
 include <sys/socket.h>
 include <netinet/in.h>
 include <netdb.h>
+include <sys/un.h>       # F7: sockaddr_un, o socket sobre um CAMINHO
 include <arpa/inet.h>
 include <signal.h>
 
@@ -675,6 +676,11 @@ struct PsConn:
     # socket to everything above this line, which is the whole point of giving
     # `os.spawn_pty` the same type `net.connect` returns.
     pid: i32
+    # F7: um DATAGRAMA não é um fluxo, e a diferença tem de estar aqui — um
+    # `read_into` sobre um socket de datagramas leria um pacote inteiro e
+    # deitaria fora o que não coubesse, em silêncio. A marca é o que deixa a
+    # sema recusar o par errado de métodos.
+    dgram: i32
 
 # what the program holds: a collected handle with nothing collected inside
 struct PsWorker:

@@ -3190,6 +3190,70 @@ struct PsLow:
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_CONN:
             cmn: const *char = e->lhs->text
             cc7: *Expr = None
+            if strcmp(cmn, "recv_from") == 0:
+                # F7: devolve DOIS — de quem veio, e quantos bytes entraram no
+                # Buffer. O primeiro sai por um `out`, porque o runtime move
+                # bytes e a `str` é feita neste contexto; o segundo é o valor da
+                # chamada. O par é montado aqui, no tuple record que a 98.x já
+                # sintetiza para qualquer tupla.
+                fn9: const *char = self->a->printf("__rf%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                fd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                fd9->name = fn9
+                fd9->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
+                fd9->init = ex_new(self->a, EX_NONE, e->pos)
+                self->pre.push(fd9)
+                rc9: *Expr = self->call_rt("ps_conn_recv_from", e->pos)
+                self->push_arg(rc9, self->ctx_arg(e->pos))
+                self->push_arg(rc9, self->expr(e->lhs->lhs))
+                for i in range(e->nargs):
+                    self->push_arg(rc9, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[i]) if i >= 1 else self->expr(e->args[i]))
+                self->push_arg(rc9, self->addr_of(fn9, e->pos))
+                self->pos_args(rc9, e->pos)
+                self->raised = True
+                self->allocs = True
+                # o par carrega uma `str`, portanto NÃO é uma tupla de bytes
+                # puros e o P não tem construtor para ela (98.4): é um local
+                # escondido, preenchido campo a campo — a mesma forma que o
+                # `PE_TUPLE` já usa neste caso
+                tv9: const *char = self->a->printf("__rt%d", self->tmp_ctr)
+                self->tmp_ctr += 1
+                td9: *Stmt = st_new(self->a, ST_VAR, e->pos)
+                td9->name = tv9
+                td9->type = ty_name(self->a, self->tuple_record(e->type))
+                td9->init = self->zero_struct(e->pos)
+                self->pre.push(td9)
+                # a ORDEM importa: a chamada preenche o `out` e devolve a
+                # contagem, portanto o campo 1 é atribuído primeiro e o campo 0
+                # lê o que ela deixou
+                f1: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                f1->op = TK_DOT
+                f1->lhs = self->ident(tv9, e->pos)
+                f1->field = "_1"
+                a1: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
+                a1->lhs = f1
+                a1->op = TK_ASSIGN
+                a1->rhs = rc9
+                self->pre.push(a1)
+                f0: *Expr = ex_new(self->a, EX_FIELD, e->pos)
+                f0->op = TK_DOT
+                f0->lhs = self->ident(tv9, e->pos)
+                f0->field = "_0"
+                a0: *Stmt = st_new(self->a, ST_ASSIGN, e->pos)
+                a0->lhs = f0
+                a0->op = TK_ASSIGN
+                a0->rhs = self->ident(fn9, e->pos)
+                self->pre.push(a0)
+                return self->ident(tv9, e->pos)
+            if strcmp(cmn, "send_to") == 0:
+                st9: *Expr = self->call_rt("ps_conn_send_to", e->pos)
+                self->push_arg(st9, self->ctx_arg(e->pos))
+                self->push_arg(st9, self->expr(e->lhs->lhs))
+                for i in range(e->nargs):
+                    self->push_arg(st9, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[i]) if (i >= 1 and i <= 2) or i == 4 else self->expr(e->args[i]))
+                self->pos_args(st9, e->pos)
+                self->raised = True
+                return st9
             cpos7: bool = False
             if strcmp(cmn, "accept") == 0:
                 cc7 = self->call_rt("ps_net_accept", e->pos)

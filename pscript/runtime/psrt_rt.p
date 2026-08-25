@@ -1130,6 +1130,7 @@ def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
     c->is_open = 1 if fd >= 0 else 0
     c->listening = listening
     c->pid = 0
+    c->dgram = 0
     return c
 
 def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
@@ -1689,6 +1690,13 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             c->fd = int(w->rc)
             c->is_open = 1
             c->listening = 0
+            # `ps_alloc` NÃO zera (223), e estes dois faltavam. `pid` é o que o
+            # `close` usa para decidir se colhe um filho: com lixo de uma coleta
+            # anterior, fechar uma ligação ACEITE podia ir esperar por um
+            # processo que nunca existiu. É o mesmo engano que o `is_std` do
+            # ficheiro já tinha custado uma vez.
+            c->pid = 0
+            c->dgram = 0
             ps_sock_nonblock(c->fd)
             *(**PsConn)(ps_task_ret(t)) = c
         case PS_W_INT, PS_W_NREAD:
@@ -3477,3 +3485,165 @@ def ps_aprint(ctx: *PsCtx, s: *PsStr) -> *PsTask:
         memcpy(w->buf, s->data, usize(s->len))
     w->buf[s->len] = '\n'
     return ps_io_task(ctx, w, False, sizeof(i64))
+
+
+# ---------- F7: os sockets que faltavam ----------
+#
+# **UDP.** Um datagrama não é um fluxo, e a assinatura MUDA por isso: `recv_from`
+# devolve os bytes E DE QUEM VIERAM, e `send_to` leva o destino. Um `read_into`
+# sobre um socket de datagramas leria um pacote inteiro e deitaria fora o que
+# não coubesse, em silêncio — que é o erro clássico de quem trata os dois como
+# se fossem um.
+def ps_net_udp(ctx: *PsCtx, port: i64) -> *PsConn:
+    fd: int = socket(AF_INET, SOCK_DGRAM, 0)
+    if fd < 0:
+        ps_raise(ctx, "could not make a UDP socket", PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 0)
+    one: int = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, u32(sizeof(int)))
+    a: sockaddr_in
+    memset(&a, 0, sizeof(a))
+    a.sin_family = u16(AF_INET)
+    a.sin_port = htons(u16(port))
+    a.sin_addr.s_addr = htonl(u32(0))
+    if bind(fd, (*sockaddr)(&a), u32(sizeof(a))) != 0:
+        close(fd)
+        msg: char[128]
+        snprintf(msg, 128, "could not bind UDP port %ld", port)
+        ps_raise(ctx, msg, PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 0)
+    ps_sock_nonblock(fd)
+    c: *PsConn = ps_conn_new(ctx, fd, 0)
+    c->dgram = 1
+    return c
+
+
+# **Unix.** O mesmo `Socket` sobre um CAMINHO em vez de uma porta. Vale por si —
+# é como dois processos na mesma máquina falam sem passar pela rede — e vale
+# pelo que abre: passar um DESCRITOR entre processos (`SCM_RIGHTS`) é o
+# mecanismo com que um servidor entrega uma ligação já aceite a outro.
+private def ps_unix_addr(ctx: *PsCtx, p: *PsStr, out a: sockaddr_un) -> bool:
+    memset(&a, 0, sizeof(a))
+    a.sun_family = u16(AF_UNIX)
+    n: usize = usize(p->len)
+    # o caminho de um socket Unix cabe num array de tamanho fixo, e o limite
+    # varia (108 na glibc, 104 no macOS). Perguntá-lo ao próprio campo é o que
+    # o torna certo nos dois.
+    lim: usize = sizeof(a.sun_path) - usize(1)
+    if n > lim:
+        msg: char[256]
+        snprintf(msg, 256, "the path of a Unix socket fits in %zu bytes, and this one has %zu", lim, n)
+        ps_raise(ctx, msg, PS_CAT_VALUE, "<net>", 0)
+        return False
+    memcpy(a.sun_path, p->data, n)
+    return True
+
+
+def ps_net_unix_listen(ctx: *PsCtx, p: *PsStr) -> *PsConn:
+    a: sockaddr_un
+    if not ps_unix_addr(ctx, p, out a):
+        return ps_conn_new(ctx, -1, 1)
+    fd: int = socket(AF_UNIX, SOCK_STREAM, 0)
+    if fd < 0:
+        ps_raise(ctx, "could not make a Unix socket", PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 1)
+    # um socket Unix é uma ENTRADA no sistema de ficheiros, e ela sobrevive ao
+    # processo que a criou: sem isto, um servidor que morra deixa o caminho
+    # ocupado e o próximo arranque falha com "address already in use"
+    unlink(p->data)
+    if bind(fd, (*sockaddr)(&a), u32(sizeof(a))) != 0:
+        close(fd)
+        msg: char[512]
+        snprintf(msg, 512, "could not bind the Unix socket %s", p->data)
+        ps_raise(ctx, msg, PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 1)
+    if listen(fd, 128) != 0:
+        close(fd)
+        ps_raise(ctx, "could not listen on the Unix socket", PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 1)
+    ps_sock_nonblock(fd)
+    return ps_conn_new(ctx, fd, 1)
+
+
+def ps_net_unix(ctx: *PsCtx, p: *PsStr) -> *PsConn:
+    a: sockaddr_un
+    if not ps_unix_addr(ctx, p, out a):
+        return ps_conn_new(ctx, -1, 0)
+    fd: int = socket(AF_UNIX, SOCK_STREAM, 0)
+    if fd < 0:
+        ps_raise(ctx, "could not make a Unix socket", PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 0)
+    # BLOQUEANTE de propósito, e é o mesmo que o `connect` de rede faz pela
+    # piscina: um socket local liga na hora ou falha na hora — não há viagem
+    # nenhuma para esperar
+    if connect(fd, (*sockaddr)(&a), u32(sizeof(a))) != 0:
+        close(fd)
+        msg: char[512]
+        snprintf(msg, 512, "could not connect to the Unix socket %s", p->data)
+        ps_raise(ctx, msg, PS_CAT_IO, "<net>", 0)
+        return ps_conn_new(ctx, -1, 0)
+    ps_sock_nonblock(fd)
+    return ps_conn_new(ctx, fd, 0)
+
+
+# F7: `recv_from` devolve os bytes E DE QUEM VIERAM. É a diferença que o
+# `read_into` não cobre sozinho, e é por isso que isto é uma fase e não uma
+# linha: num fluxo há UM par de pontas e ninguém pergunta de onde veio; num
+# socket de datagramas cada pacote vem de onde vier.
+#
+# O que devolve é um `List<str>` de dois: os bytes descodificados não, o
+# ENDEREÇO ("1.2.3.4:5678") e nada mais — porque descodificar é uma decisão de
+# quem recebe, e o número de bytes vai no `Buffer` de quem chamou.
+def ps_conn_recv_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, out from: *PsStr, file: const *char, line: i32) -> i64:
+    from = ps_str_new(ctx, "", 0)
+    if c == None or c->is_open == 0:
+        ps_raise(ctx, "recv_from: this socket is closed", PS_CAT_IO, file, line)
+        return 0
+    if c->dgram == 0:
+        ps_raise(ctx, "recv_from is for DATAGRAMS: on a stream the bytes have no sender of their own — use read_into (F7)", PS_CAT_VALUE, file, line)
+        return 0
+    d: *char = ps_buf_window(ctx, b, off, n, "recv_from", file, line)
+    if d == None:
+        return 0
+    a: sockaddr_in
+    alen: u32 = u32(sizeof(a))
+    memset(&a, 0, sizeof(a))
+    got: i64 = i64(recvfrom(c->fd, (*void)(d), usize(n), 0, (*sockaddr)(&a), &alen))
+    if got < 0:
+        # NÃO é um erro: um socket não bloqueante sem nada para dar responde
+        # assim, e a resposta certa é "zero bytes, ninguém" — quem chama tenta
+        # outra vez quando o `poll` disser
+        return 0
+    txt: char[64]
+    ip: char[64]
+    inet_ntop(AF_INET, (*void)(&a.sin_addr), ip, u32(64))
+    snprintf(txt, 64, "%s:%d", ip, int(ntohs(a.sin_port)))
+    from = ps_str_new(ctx, txt, strlen(txt))
+    return got
+
+
+# ... e o outro sentido, que leva o destino
+def ps_conn_send_to(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, host: *PsStr, port: i64, file: const *char, line: i32) -> i64:
+    if c == None or c->is_open == 0:
+        ps_raise(ctx, "send_to: this socket is closed", PS_CAT_IO, file, line)
+        return 0
+    if c->dgram == 0:
+        ps_raise(ctx, "send_to is for DATAGRAMS: a stream already knows where it goes — use write_from (F7)", PS_CAT_VALUE, file, line)
+        return 0
+    d: *char = ps_buf_window(ctx, b, off, n, "send_to", file, line)
+    if d == None:
+        return 0
+    a: sockaddr_in
+    memset(&a, 0, sizeof(a))
+    a.sin_family = u16(AF_INET)
+    a.sin_port = htons(u16(port))
+    if inet_pton(AF_INET, host->data, (*void)(&a.sin_addr)) != 1:
+        msg: char[256]
+        snprintf(msg, 256, "send_to: '%s' is not an IPv4 address — a datagram goes to a NUMBER, and resolving a name is net.lookup's job", host->data)
+        ps_raise(ctx, msg, PS_CAT_VALUE, file, line)
+        return 0
+    put: i64 = i64(sendto(c->fd, (*void)(d), usize(n), 0, (*sockaddr)(&a), u32(sizeof(a))))
+    if put < 0:
+        ps_raise(ctx, "send_to failed", PS_CAT_IO, file, line)
+        return 0
+    return put

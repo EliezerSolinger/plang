@@ -2240,7 +2240,14 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       analisador de escapes, portanto um título de OSC com acento deixa de
       depender de a máquina de escapes saber UTF-8.
 
-- [ ] **F7** — UDP (`recv_from`/`send_to`) e Unix sockets. Depende de F1.
+- [x] **F7** — **FEITA.** `net.udp(port)` com `recv_from`/`send_to` — e a
+      assinatura muda mesmo, porque um datagrama diz DE ONDE veio; `net.unix(p)`
+      e `net.unix_listen(p)`, que herdam tudo o resto de graça. Um método de
+      datagramas num fluxo (e vice-versa) é RECUSADO com a razão.
+      Defeito latente apanhado aqui: uma ligação ACEITE nunca escrevia o `pid`, e
+      `ps_alloc` não zera — fechar uma ligação aceite podia ir esperar por um
+      processo que nunca existiu. É o mesmo engano que o `is_std` do ficheiro já
+      tinha custado uma vez.
 
 **Marco de meio do caminho:** depois da F2, repetir a releitura das specs (o
 hábito da F9 do pforge — cada fase grande deixa decisões escritas e não feitas).

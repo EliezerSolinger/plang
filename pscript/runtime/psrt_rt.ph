@@ -182,6 +182,16 @@ def ps_conn_read_into(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, f
 # 140/F4: a janela de um Buffer, conferida uma vez e num sítio só
 def ps_buf_window_pub(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char
 def ps_conn_write_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
+
+# ---------- F7: os sockets que faltavam ----------
+# UDP: um datagrama não é um fluxo, e a assinatura muda por isso — o que chega
+# diz DE ONDE veio, e o que sai leva o destino.
+def ps_net_udp(ctx: *PsCtx, port: i64) -> *PsConn
+def ps_conn_recv_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, out from: *PsStr, file: const *char, line: i32) -> i64
+def ps_conn_send_to(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, host: *PsStr, port: i64, file: const *char, line: i32) -> i64
+# Unix: o mesmo `Socket` sobre um CAMINHO em vez de uma porta
+def ps_net_unix_listen(ctx: *PsCtx, p: *PsStr) -> *PsConn
+def ps_net_unix(ctx: *PsCtx, p: *PsStr) -> *PsConn
 def ps_conn_close(ctx: *PsCtx, c: *PsConn)
 # F8: `os.spawn_pty` is a layer up and builds a Conn of its own
 def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn

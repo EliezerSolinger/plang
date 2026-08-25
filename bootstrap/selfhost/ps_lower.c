@@ -3432,6 +3432,64 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_CONN) {
         const char *cmn = e->lhs->text;
         Expr *cc7 = NULL;
+        if (strcmp(cmn, "recv_from") == 0) {
+            const char *fn9 = Arena_printf(self->a, "__rf%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            Stmt *fd9 = st_new(self->a, ST_VAR, e->pos);
+            fd9->name = fn9;
+            fd9->type = ty_ptr(self->a, ty_name(self->a, "PsStr"));
+            fd9->init = ex_new(self->a, EX_NONE, e->pos);
+            Vec_pStmt_push(&self->pre, fd9);
+            Expr *rc9 = PsLow_call_rt(self, "ps_conn_recv_from", e->pos);
+            PsLow_push_arg(self, rc9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, rc9, PsLow_expr(self, e->lhs->lhs));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, rc9, (i >= 1 ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[i]) : PsLow_expr(self, e->args[i])));
+            }
+            PsLow_push_arg(self, rc9, PsLow_addr_of(self, fn9, e->pos));
+            PsLow_pos_args(self, rc9, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            const char *tv9 = Arena_printf(self->a, "__rt%d", self->tmp_ctr);
+            self->tmp_ctr += 1;
+            Stmt *td9 = st_new(self->a, ST_VAR, e->pos);
+            td9->name = tv9;
+            td9->type = ty_name(self->a, PsLow_tuple_record(self, e->type));
+            td9->init = PsLow_zero_struct(self, e->pos);
+            Vec_pStmt_push(&self->pre, td9);
+            Expr *f1 = ex_new(self->a, EX_FIELD, e->pos);
+            f1->op = TK_DOT;
+            f1->lhs = PsLow_ident(self, tv9, e->pos);
+            f1->field = "_1";
+            Stmt *a1 = st_new(self->a, ST_ASSIGN, e->pos);
+            a1->lhs = f1;
+            a1->op = TK_ASSIGN;
+            a1->rhs = rc9;
+            Vec_pStmt_push(&self->pre, a1);
+            Expr *f0 = ex_new(self->a, EX_FIELD, e->pos);
+            f0->op = TK_DOT;
+            f0->lhs = PsLow_ident(self, tv9, e->pos);
+            f0->field = "_0";
+            Stmt *a0 = st_new(self->a, ST_ASSIGN, e->pos);
+            a0->lhs = f0;
+            a0->op = TK_ASSIGN;
+            a0->rhs = PsLow_ident(self, fn9, e->pos);
+            Vec_pStmt_push(&self->pre, a0);
+            return PsLow_ident(self, tv9, e->pos);
+        }
+        if (strcmp(cmn, "send_to") == 0) {
+            Expr *st9 = PsLow_call_rt(self, "ps_conn_send_to", e->pos);
+            PsLow_push_arg(self, st9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, st9, PsLow_expr(self, e->lhs->lhs));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, st9, ((i >= 1 && i <= 2) || i == 4 ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[i]) : PsLow_expr(self, e->args[i])));
+            }
+            PsLow_pos_args(self, st9, e->pos);
+            self->raised = 1;
+            return st9;
+        }
         int cpos7 = 0;
         if (strcmp(cmn, "accept") == 0) {
             cc7 = PsLow_call_rt(self, "ps_net_accept", e->pos);

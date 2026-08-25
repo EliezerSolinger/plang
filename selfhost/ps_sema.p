@@ -2028,6 +2028,34 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "write() takes a str, `bytes` or a List<u8>, found %s", ps_type_str(self->a, cw))
                     ctk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ctk
+                if strcmp(cm, "recv_from") == 0:
+                    # F7: um datagrama diz DE ONDE veio, e é a única diferença
+                    # que o `read_into` não cobre sozinho. Devolve os dois: quem
+                    # mandou, e quantos bytes entraram no Buffer.
+                    if e->nargs != 3:
+                        fatal_at(self->file, e->pos, "recv_from(buf, off, n) takes a Buffer, where in it to start, and how many bytes — and gives back (from, count)")
+                    self->io_window(e, cm)
+                    rf9: *PsType = ps_type(self->a, PT_TUPLE, e->pos)
+                    rf9->params = self->a->alloc(usize(2) * sizeof(*rf9->params))
+                    rf9->params[0] = ps_type(self->a, PT_STR, e->pos)
+                    rf9->params[1] = ps_type(self->a, PT_INT, e->pos)
+                    rf9->nparams = 2
+                    return rf9
+                if strcmp(cm, "send_to") == 0:
+                    if e->nargs != 5:
+                        fatal_at(self->file, e->pos, "send_to(buf, off, n, host, port) takes what to send and WHERE — a datagram carries its destination (F7)")
+                    for si in range(3):
+                        sat: *PsType = self->check_expr(e->args[si])
+                        if si == 0:
+                            if sat == None or sat->kind != PT_BUFFER:
+                                fatal_at(self->file, e->args[0]->pos, "send_to() takes a Buffer, found %s", ps_type_str(self->a, sat))
+                        else:
+                            self->want(e->args[si], sat, ps_type(self->a, PT_INT, e->pos), "where in the Buffer" if si == 1 else "how many bytes")
+                    sh9: *PsType = self->check_expr(e->args[3])
+                    self->want(e->args[3], sh9, ps_type(self->a, PT_STR, e->pos), "the address to send to")
+                    sp9: *PsType = self->check_expr(e->args[4])
+                    self->want(e->args[4], sp9, ps_type(self->a, PT_INT, e->pos), "the port")
+                    return ps_type(self->a, PT_INT, e->pos)
                 if strcmp(cm, "read_into") == 0 or strcmp(cm, "write_from") == 0:
                     self->io_window(e, cm)
                     ctk->inner = ps_type(self->a, PT_INT, e->pos)
@@ -2041,7 +2069,7 @@ struct PsSema:
                     return ps_type(self->a, PT_VOID, e->pos)
                 if strcmp(cm, "port") == 0:
                     return ps_type(self->a, PT_INT, e->pos)
-                fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close and port (77.1/135.2), not '%s'", cm)
+                fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close and port; a DATAGRAM one has recv_from and send_to (77.1/135.2/F7) — not '%s'", cm)
             # 48.1 + 76.2: every one of these is a TASK now. The names say what
             # comes back, because the return type follows the name and not the
             # number of arguments: `read(n)` gives BYTES (up to n, empty at the
@@ -2901,6 +2929,23 @@ struct PsSema:
             if e->nargs != 0:
                 fatal_at(self->file, e->pos, "sys.time() takes no arguments")
             return ps_type(self->a, PT_FLOAT, e->pos)
+        if strcmp(name, "__net_udp") == 0:
+            # F7: `net.udp(port)` — um `Socket` que fala em DATAGRAMAS. É o
+            # mesmo tipo, porque o que muda são os MÉTODOS que ele aceita, e
+            # essa é a distinção que a marca no objecto faz em execução.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "net.udp(port) takes the port to bind — 0 lets the system choose")
+            up: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], up, ps_type(self->a, PT_INT, e->pos), "the port")
+            return ps_type(self->a, PT_CONN, e->pos)
+        if strcmp(name, "__net_unix") == 0 or strcmp(name, "__net_unix_listen") == 0:
+            # F7: o mesmo `Socket` sobre um CAMINHO. Vale por si — é como dois
+            # processos na mesma máquina falam sem passar pela rede.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "net.%s(path) takes the path of the socket", "unix" if strcmp(name, "__net_unix") == 0 else "unix_listen")
+            xp: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], xp, ps_type(self->a, PT_STR, e->pos), "the path")
+            return ps_type(self->a, PT_CONN, e->pos)
         if strcmp(name, "__net_listen") == 0:
             # 77.1: binding and listening are instant, so this one is NOT a
             # task — what waits is `accept`, and that is where the await goes
@@ -4032,6 +4077,12 @@ struct PsSema:
             ns->sym.add("listen")
             ns->sym.add("connect")
             ns->sym.add("lookup")
+            # F7: os dois que faltavam. `udp` fala em DATAGRAMAS e `unix` fala
+            # sobre um CAMINHO — e o segundo herda tudo o resto de graça, porque
+            # já é um fluxo e já é sondado.
+            ns->sym.add("udp")
+            ns->sym.add("unix")
+            ns->sym.add("unix_listen")
         elif strcmp(name, "re") == 0:
             ns->sym.add("match")
         elif strcmp(name, "json") == 0:

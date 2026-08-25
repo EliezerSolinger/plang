@@ -1,0 +1,8 @@
+as duas ligaram-se: True True
+mandou 4 bytes
+chegou 4 de alguem em 127.0.0.1: True
+conteudo: ping
+num fluxo: send_to is for DATAGRAMS: a stream already knows where it goes — use write_from (F7)
+voltou: pelo caminho
+o servidor viu 12 bytes
+udpunix-ok

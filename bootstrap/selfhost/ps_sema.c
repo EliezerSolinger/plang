@@ -3604,6 +3604,39 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 ctk->inner = ps_type(self->a, PT_INT, e->pos);
                 return ctk;
             }
+            if (strcmp(cm, "recv_from") == 0) {
+                if (e->nargs != 3) {
+                    fatal_at(self->file, e->pos, "recv_from(buf, off, n) takes a Buffer, where in it to start, and how many bytes — and gives back (from, count)");
+                }
+                PsSema_io_window(self, e, cm);
+                PsType *rf9 = ps_type(self->a, PT_TUPLE, e->pos);
+                rf9->params = Arena_alloc(self->a, (size_t)2 * sizeof(*rf9->params));
+                rf9->params[0] = ps_type(self->a, PT_STR, e->pos);
+                rf9->params[1] = ps_type(self->a, PT_INT, e->pos);
+                rf9->nparams = 2;
+                return rf9;
+            }
+            if (strcmp(cm, "send_to") == 0) {
+                if (e->nargs != 5) {
+                    fatal_at(self->file, e->pos, "send_to(buf, off, n, host, port) takes what to send and WHERE — a datagram carries its destination (F7)");
+                }
+                size_t si;
+                for (si = 0; si < 3; si += 1) {
+                    PsType *sat = PsSema_check_expr(self, e->args[si]);
+                    if (si == 0) {
+                        if (sat == NULL || sat->kind != PT_BUFFER) {
+                            fatal_at(self->file, e->args[0]->pos, "send_to() takes a Buffer, found %s", ps_type_str(self->a, sat));
+                        }
+                    } else {
+                        PsSema_want(self, e->args[si], sat, ps_type(self->a, PT_INT, e->pos), (si == 1 ? "where in the Buffer" : "how many bytes"));
+                    }
+                }
+                PsType *sh9 = PsSema_check_expr(self, e->args[3]);
+                PsSema_want(self, e->args[3], sh9, ps_type(self->a, PT_STR, e->pos), "the address to send to");
+                PsType *sp9 = PsSema_check_expr(self, e->args[4]);
+                PsSema_want(self, e->args[4], sp9, ps_type(self->a, PT_INT, e->pos), "the port");
+                return ps_type(self->a, PT_INT, e->pos);
+            }
             if (strcmp(cm, "read_into") == 0 || strcmp(cm, "write_from") == 0) {
                 PsSema_io_window(self, e, cm);
                 ctk->inner = ps_type(self->a, PT_INT, e->pos);
@@ -3622,7 +3655,7 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             if (strcmp(cm, "port") == 0) {
                 return ps_type(self->a, PT_INT, e->pos);
             }
-            fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close and port (77.1/135.2), not '%s'", cm);
+            fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close and port; a DATAGRAM one has recv_from and send_to (77.1/135.2/F7) — not '%s'", cm);
         }
         if (rt != NULL && rt->kind == PT_FILE) {
             const char *fm = e->lhs->text;
@@ -4486,6 +4519,22 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         }
         return ps_type(self->a, PT_FLOAT, e->pos);
     }
+    if (strcmp(name, "__net_udp") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "net.udp(port) takes the port to bind — 0 lets the system choose");
+        }
+        PsType *up = PsSema_check_expr(self, e->args[0]);
+        PsSema_want(self, e->args[0], up, ps_type(self->a, PT_INT, e->pos), "the port");
+        return ps_type(self->a, PT_CONN, e->pos);
+    }
+    if (strcmp(name, "__net_unix") == 0 || strcmp(name, "__net_unix_listen") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "net.%s(path) takes the path of the socket", (strcmp(name, "__net_unix") == 0 ? "unix" : "unix_listen"));
+        }
+        PsType *xp = PsSema_check_expr(self, e->args[0]);
+        PsSema_want(self, e->args[0], xp, ps_type(self->a, PT_STR, e->pos), "the path");
+        return ps_type(self->a, PT_CONN, e->pos);
+    }
     if (strcmp(name, "__net_listen") == 0) {
         if (e->nargs != 1) {
             fatal_at(self->file, e->pos, "net.listen() takes a port: `net.listen(8080)`");
@@ -4629,12 +4678,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3021_17 = e;
-                __with_3021_17->kind = PE_INDEX;
-                __with_3021_17->lhs = e->args[0];
-                __with_3021_17->rhs = below;
-                __with_3021_17->args = NULL;
-                __with_3021_17->nargs = 0;
+                PsExpr *__with_3066_17 = e;
+                __with_3066_17->kind = PE_INDEX;
+                __with_3066_17->lhs = e->args[0];
+                __with_3066_17->rhs = below;
+                __with_3066_17->args = NULL;
+                __with_3066_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -5107,26 +5156,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3458_17 = e;
-                __with_3458_17->kind = PE_STR;
-                __with_3458_17->text = lit7;
-                __with_3458_17->lhs = NULL;
-                __with_3458_17->rhs = NULL;
-                __with_3458_17->args = NULL;
-                __with_3458_17->nargs = 0;
+                PsExpr *__with_3503_17 = e;
+                __with_3503_17->kind = PE_STR;
+                __with_3503_17->text = lit7;
+                __with_3503_17->lhs = NULL;
+                __with_3503_17->rhs = NULL;
+                __with_3503_17->args = NULL;
+                __with_3503_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3471_13 = e;
-            __with_3471_13->kind = PE_LOWERED;
-            __with_3471_13->low = ln7;
-            __with_3471_13->lhs = NULL;
-            __with_3471_13->rhs = NULL;
-            __with_3471_13->args = NULL;
-            __with_3471_13->nargs = 0;
+            PsExpr *__with_3516_13 = e;
+            __with_3516_13->kind = PE_LOWERED;
+            __with_3516_13->low = ln7;
+            __with_3516_13->lhs = NULL;
+            __with_3516_13->rhs = NULL;
+            __with_3516_13->args = NULL;
+            __with_3516_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5424,10 +5473,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3751_17 = &ns->quals[ns->nquals];
-                __with_3751_17->name = q;
-                __with_3751_17->orig = d->path;
-                __with_3751_17->ns = sub;
+                PsNsEnt *__with_3796_17 = &ns->quals[ns->nquals];
+                __with_3796_17->name = q;
+                __with_3796_17->orig = d->path;
+                __with_3796_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5440,10 +5489,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3763_21 = &ns->ents[ns->nents];
-                    __with_3763_21->name = local;
-                    __with_3763_21->orig = d->names[k];
-                    __with_3763_21->ns = sub;
+                    PsNsEnt *__with_3808_21 = &ns->ents[ns->nents];
+                    __with_3808_21->name = local;
+                    __with_3808_21->orig = d->names[k];
+                    __with_3808_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5731,6 +5780,9 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "listen");
         StrSet_add(&ns->sym, "connect");
         StrSet_add(&ns->sym, "lookup");
+        StrSet_add(&ns->sym, "udp");
+        StrSet_add(&ns->sym, "unix");
+        StrSet_add(&ns->sym, "unix_listen");
     } else if (strcmp(name, "re") == 0) {
         StrSet_add(&ns->sym, "match");
     } else if (strcmp(name, "json") == 0) {
@@ -5905,10 +5957,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4232_9 = e;
-        __with_4232_9->kind = PE_NAME;
-        __with_4232_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4232_9->lhs = NULL;
+        PsExpr *__with_4283_9 = e;
+        __with_4283_9->kind = PE_NAME;
+        __with_4283_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4283_9->lhs = NULL;
     }
     return 1;
 }
