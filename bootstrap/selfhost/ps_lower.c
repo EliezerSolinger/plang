@@ -11060,7 +11060,7 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     Vec_pPsDecl_init(&afr);
     for (i = 0; i < m->ndecls; i += 1) {
         PsDecl *d5 = m->decls[i];
-        if (d5->kind == PD_FUNC && d5->func != NULL && d5->func->is_async) {
+        if (d5->kind == PD_FUNC && d5->func != NULL && d5->func->is_async && d5->func->ntparams == 0) {
             Vec_pPsDecl_push(&afr, async_frame_decl(&L, d5->func, NULL, m->path));
         } else if (d5->kind == PD_RECORD || d5->kind == PD_STRUCT) {
             size_t j5;

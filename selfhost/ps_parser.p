@@ -1643,9 +1643,15 @@ struct PsP:
                 d->assoc = self->expect(TK_IDENT, "associated type name")->text
                 self->expect(TK_NEWLINE, "type")
                 continue
+            # `async def` in a trait, and it is not a convenience: a `Reader`
+            # that could not be async would not cover a socket, and a socket is
+            # half the reason to have one. The method is a signature either way
+            # — what `async` says is that calling it gives a `Task<T>`, which is
+            # part of the signature and therefore has to be sayable here.
+            tasync: bool = self->accept(TK_ASYNC)
             if not self->at(TK_DEF):
-                fatal_at(self->file, self->pk()->pos, "a trait holds method signatures: `def name(...) -> T`")
-            f: *PsFunc = self->parse_func_head(False, False, d->name)
+                fatal_at(self->file, self->pk()->pos, "a trait holds method signatures: `def name(...) -> T` or `async def name(...) -> T`")
+            f: *PsFunc = self->parse_func_head(False, tasync, d->name)
             if self->at(TK_COLON):
                 fatal_at(self->file, self->pk()->pos, "a trait method has no body — `implement %s for T:` supplies it", d->name)
             self->expect(TK_NEWLINE, "trait method")

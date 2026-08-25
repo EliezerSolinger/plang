@@ -2436,7 +2436,17 @@ struct PsSema:
         for i in range(e->nargs):
             at2: *PsType = e->args[i]->type
             self->want(e->args[i], at2, inst->params[i].type, self->a->printf("parameter '%s'", inst->params[i].name))
-        return inst->ret if inst->ret != None else ps_type(self->a, PT_VOID, e->pos)
+        rt9: *PsType = inst->ret if inst->ret != None else ps_type(self->a, PT_VOID, e->pos)
+        if inst->is_async:
+            # 35.3, and the ordinary call path already did this: calling an
+            # `async def` STARTS it and gives back the task. A generic one is
+            # not different, and forgetting it here made `await copy(r, w)`
+            # complain that `await` had been handed an `int` — which is what a
+            # generic over an async trait does on its very first line.
+            tg9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            tg9->inner = rt9
+            return tg9
+        return rt9
 
     # The builtins that have to exist on day one. `print` needs *args (44.2) to
     # be what Python's is; until that is compiled, one argument is the honest
@@ -3745,6 +3755,12 @@ struct PsSema:
                     break
             if im == None:
                 fatal_at(self->file, pos, "'%s' does not implement '%s.%s' (66.2)", ps_disp(rd->name), ps_disp(td->name), tm->name)
+            # `async` is part of the signature, not a decoration: an `async
+            # def` gives back a `Task<T>` and a plain `def` gives back the `T`.
+            # A caller written against the trait writes `await` or does not, so
+            # the two have to agree or the call site is wrong for one of them.
+            if im->is_async != tm->is_async:
+                fatal_at(self->file, im->pos, "'%s.%s' is %s; the trait declares it %s — `async` is part of the signature, because one gives back a Task and the other gives back the value", ps_disp(rd->name), im->name, "`async def`" if im->is_async else "a plain `def`", "`async def`" if tm->is_async else "a plain `def`")
             if im->nparams != tm->nparams:
                 fatal_at(self->file, im->pos, "'%s.%s' takes %d parameter(s); the trait declares %d", ps_disp(rd->name), im->name, im->nparams, tm->nparams)
             for k in range(tm->nparams):

@@ -10795,7 +10795,15 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     afr.init()
     for i in range(m->ndecls):
         d5: *PsDecl = m->decls[i]
-        if d5->kind == PD_FUNC and d5->func != None and d5->func->is_async:
+        # `ntparams == 0` and not just `is_async`: a GENERIC is a template, not
+        # a function (66.3). Its parameters are still `T`, so building a frame
+        # for it means asking the type of a name that does not exist yet — and
+        # the instances, which do have real types, are appended to `m->decls`
+        # by the sema and get their frames on the next turn of this same loop.
+        #
+        # It only ever mattered from the day a trait could say `async def`,
+        # because that is what makes somebody write `async def f<T: Reader>`.
+        if d5->kind == PD_FUNC and d5->func != None and d5->func->is_async and d5->func->ntparams == 0:
             afr.push(async_frame_decl(&L, d5->func, None, m->path))
         elif d5->kind == PD_RECORD or d5->kind == PD_STRUCT:
             # an async METHOD needs its own frame, named after the pair so two

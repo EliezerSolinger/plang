@@ -4039,7 +4039,13 @@ static PsType *PsSema_call_generic(PsSema *self, PsExpr *e, PsFunc *f, const cha
         PsType *at2 = e->args[i]->type;
         PsSema_want(self, e->args[i], at2, inst->params[i].type, Arena_printf(self->a, "parameter '%s'", inst->params[i].name));
     }
-    return (inst->ret != NULL ? inst->ret : ps_type(self->a, PT_VOID, e->pos));
+    PsType *rt9 = (inst->ret != NULL ? inst->ret : ps_type(self->a, PT_VOID, e->pos));
+    if (inst->is_async) {
+        PsType *tg9 = ps_type(self->a, PT_TASK, e->pos);
+        tg9->inner = rt9;
+        return tg9;
+    }
+    return rt9;
 }
 
 static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
@@ -4550,12 +4556,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_2910_17 = e;
-                __with_2910_17->kind = PE_INDEX;
-                __with_2910_17->lhs = e->args[0];
-                __with_2910_17->rhs = below;
-                __with_2910_17->args = NULL;
-                __with_2910_17->nargs = 0;
+                PsExpr *__with_2920_17 = e;
+                __with_2920_17->kind = PE_INDEX;
+                __with_2920_17->lhs = e->args[0];
+                __with_2920_17->rhs = below;
+                __with_2920_17->args = NULL;
+                __with_2920_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -4970,26 +4976,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3287_17 = e;
-                __with_3287_17->kind = PE_STR;
-                __with_3287_17->text = lit7;
-                __with_3287_17->lhs = NULL;
-                __with_3287_17->rhs = NULL;
-                __with_3287_17->args = NULL;
-                __with_3287_17->nargs = 0;
+                PsExpr *__with_3297_17 = e;
+                __with_3297_17->kind = PE_STR;
+                __with_3297_17->text = lit7;
+                __with_3297_17->lhs = NULL;
+                __with_3297_17->rhs = NULL;
+                __with_3297_17->args = NULL;
+                __with_3297_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3300_13 = e;
-            __with_3300_13->kind = PE_LOWERED;
-            __with_3300_13->low = ln7;
-            __with_3300_13->lhs = NULL;
-            __with_3300_13->rhs = NULL;
-            __with_3300_13->args = NULL;
-            __with_3300_13->nargs = 0;
+            PsExpr *__with_3310_13 = e;
+            __with_3310_13->kind = PE_LOWERED;
+            __with_3310_13->low = ln7;
+            __with_3310_13->lhs = NULL;
+            __with_3310_13->rhs = NULL;
+            __with_3310_13->args = NULL;
+            __with_3310_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5281,10 +5287,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3574_17 = &ns->quals[ns->nquals];
-                __with_3574_17->name = q;
-                __with_3574_17->orig = d->path;
-                __with_3574_17->ns = sub;
+                PsNsEnt *__with_3584_17 = &ns->quals[ns->nquals];
+                __with_3584_17->name = q;
+                __with_3584_17->orig = d->path;
+                __with_3584_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5297,10 +5303,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3586_21 = &ns->ents[ns->nents];
-                    __with_3586_21->name = local;
-                    __with_3586_21->orig = d->names[k];
-                    __with_3586_21->ns = sub;
+                    PsNsEnt *__with_3596_21 = &ns->ents[ns->nents];
+                    __with_3596_21->name = local;
+                    __with_3596_21->orig = d->names[k];
+                    __with_3596_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -5466,6 +5472,9 @@ static void PsSema_conform(PsSema *self, PsDecl *rd, PsDecl *td, PsFunc **ms, in
         }
         if (im == NULL) {
             fatal_at(self->file, pos, "'%s' does not implement '%s.%s' (66.2)", ps_disp(rd->name), ps_disp(td->name), tm->name);
+        }
+        if (im->is_async != tm->is_async) {
+            fatal_at(self->file, im->pos, "'%s.%s' is %s; the trait declares it %s — `async` is part of the signature, because one gives back a Task and the other gives back the value", ps_disp(rd->name), im->name, (im->is_async ? "`async def`" : "a plain `def`"), (tm->is_async ? "`async def`" : "a plain `def`"));
         }
         if (im->nparams != tm->nparams) {
             fatal_at(self->file, im->pos, "'%s.%s' takes %d parameter(s); the trait declares %d", ps_disp(rd->name), im->name, im->nparams, tm->nparams);
@@ -5751,10 +5760,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4037_9 = e;
-        __with_4037_9->kind = PE_NAME;
-        __with_4037_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4037_9->lhs = NULL;
+        PsExpr *__with_4053_9 = e;
+        __with_4053_9->kind = PE_NAME;
+        __with_4053_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4053_9->lhs = NULL;
     }
     return 1;
 }

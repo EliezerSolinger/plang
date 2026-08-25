@@ -3024,10 +3024,11 @@ static PsDecl *PsP_parse_trait(PsP *self) {
             PsP_expect(self, TK_NEWLINE, "type");
             continue;
         }
+        int tasync = PsP_accept(self, TK_ASYNC);
         if (!PsP_at(self, TK_DEF)) {
-            fatal_at(self->file, PsP_pk(self)->pos, "a trait holds method signatures: `def name(...) -> T`");
+            fatal_at(self->file, PsP_pk(self)->pos, "a trait holds method signatures: `def name(...) -> T` or `async def name(...) -> T`");
         }
-        PsFunc *f = PsP_parse_func_head(self, 0, 0, d->name);
+        PsFunc *f = PsP_parse_func_head(self, 0, tasync, d->name);
         if (PsP_at(self, TK_COLON)) {
             fatal_at(self->file, PsP_pk(self)->pos, "a trait method has no body — `implement %s for T:` supplies it", d->name);
         }
