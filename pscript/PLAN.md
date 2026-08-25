@@ -2167,6 +2167,12 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
 >
 > Isto é uma mudança de ORDEM e não de âmbito: nada saiu do plano.
 
+> **A FS/S1 ficou ADIADA por decisão medida**, e a razão está na adenda de
+> execução do `pscript/STDLIB.md`: ninguém consome `random`, `bisect` ou `heapq`
+> fora dos testes, portanto ela entrega arrumação e nenhuma capacidade — e as
+> duas metades dela são UMA decisão, porque mover `path.isfile` para `os.isfile`
+> só faz sentido se o `path` virar pacote, e diverge do Python se não virar.
+
 - [ ] **FS** — **REVISTA por `pscript/STDLIB.md`**, que decidiste em paralelo e
       que **tem de ser lido antes de executar esta fase**. O destino deixa de
       ser um pacote `stdlib` monolítico e passa a ser TRÊS pacotes — `algo`

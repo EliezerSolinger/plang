@@ -745,3 +745,51 @@ num conflito:
 | **supervisor à OTP** | ver §4.1(d) — volta quando houver um serviço nosso a pedi-lo |
 | **localização** (línguas, `%A`/`%B`, "há 3 minutos") | a formatação relativa foi posta de lado na ronda 8 junto com a decisão de não abrir localização. Sem língua só dá inglês, e inglês a fingir de universal é pior do que não haver |
 | ~~**`bigint`**~~ | **entrou** — deixou de ser pacote e é tipo da linguagem, ver §5. O bloqueio que eu lhe tinha atribuído era uma leitura errada da 52.2 |
+
+---
+
+## Adenda de execução — a S1 fica ADIADA, e a razão é medida (2026-08-25)
+
+Escrita ao executar o plano, com o utilizador a dormir e com a instrução de
+tomar a melhor decisão. **A S1 não foi feita**, e o que se segue é porquê — para
+que ela seja retomada por escolha e não por esquecimento.
+
+### O que a medição mostrou
+
+**Ninguém consome `random`, `bisect` ou `heapq` fora dos testes.** Medido:
+
+```
+random.  → tests/oracle/py/rng.psc, tests/pscript/run/stdmod.psc, 4 casos `bad`
+bisect. heapq. → tests/oracle/py/algos.psc, tests/pscript/run/algos.psc, 3 `bad`
+```
+
+Nem o `pforge`, nem o `pstudio`, nem um pacote publicado. Portanto o que a S1
+entrega hoje é **coerência de arrumação, e nenhuma capacidade** — enquanto a S2,
+a S3 e a S4 entregam coisas que a linguagem não tem de todo.
+
+### E as duas metades da S1 são UMA decisão, não duas
+
+A metade mecânica — as 148 chamadas `path.isfile`/`isdir`/`exists`/`getsize`/
+`getmtime` a mudarem para `os.*` — parece independente e não é. A única razão
+para ela existir é o `path` virar PACOTE: a metade de sistema não pode ir com
+ele, porque encapsula chamadas ao sistema (141.1).
+
+E ela tem um custo próprio que vale a pena dizer: **hoje nós casamos com o
+Python** — `os.listdir` e `os.path.isdir` estão nos mesmos sítios que lá — e
+mudar `path.isfile` para `os.isfile` DIVERGE. Fazer a metade mecânica sem a
+outra seria mudança por mudar.
+
+### O custo real da outra metade
+
+`random` são ~143 linhas de P dentro do `psrt_std.p`, com o estado do
+Mersenne Twister no contexto; `bisect`/`heapq` são ~100 sobre `PsList` com
+chaves cruas. Levá-los para um pacote é **reescrevê-los em pscript** — e o
+oráculo do `random` compara-o com o CPython bit a bit, portanto a reescrita é
+verificável mas não é barata.
+
+### O que fazer quando ela for retomada
+
+A ordem certa é a que o próprio `STDLIB.md` dá: os pacotes primeiro
+(`algo`, `random`, `path`), o metapacote a seguir — o `"kind": "meta"` da **S0
+já está feito e testado** — e o `sed` das 148 chamadas por último, num commit
+próprio, porque é o único pedaço que toca a árvore inteira.
