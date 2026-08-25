@@ -1,0 +1,15 @@
+tamanho com o ficheiro ainda aberto: 20
+stat 20 1 0 True
+do directorio 1 0
+mtime coerente: True
+pread(10,6): abcdef
+pread(0,4): 0123
+pread(18,8): 2 ij
+pwrite: 2
+e o tamanho nao mudou: 20
+ficou 01234XY789abcdefghij
+janela: pread: the window falls outside the Buffer
+scandir viu 4 iguais ao listdir: True
+saiu a meio depois de 2
+conteudo: True False False
+filepos-ok

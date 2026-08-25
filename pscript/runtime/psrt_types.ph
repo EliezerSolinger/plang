@@ -55,6 +55,7 @@ enum PsTyId:
     PS_TY_TIMER = 14   # a repeating clock (48.2/51.1)
     PS_TY_CONN = 15    # a socket, listening or connected (77.1)
     PS_TY_PROC = 16    # 118: um processo que já terminou (`os.run`)
+    PS_TY_DIRITER = 20 # 140/F4: a directory being WALKED, one name at a time
     PS_TY_DECODER = 19 # 140/F6: an incremental UTF-8 decoder — what the
                        #   `CharsetDecoder` of the NIO is
     PS_TY_MAPPING = 18 # 137.1: a file mapped into memory. A THING with a
@@ -151,6 +152,14 @@ struct PsBytes:
 # ao receber um byte solto de um ficheiro binário seria inútil, e U+FFFD é o que
 # todo o descodificador incremental do mundo põe ali. Quem quer a regra estrita
 # continua a ter `str(b)`, que levanta — são duas perguntas e há duas respostas.
+# 140/F4: um directório a ser PERCORRIDO. O `DIR *` é do sistema e é opaco: o
+# que se guarda é o ponteiro, e fechá-lo é do finalizador quando o laço sai a
+# meio — a rede da 136.1 exactamente onde ela serve.
+struct PsDirIter:
+    obj: PsObj
+    d: *void          # `DIR *`, opaco
+    done: i32
+
 struct PsDecoder:
     obj: PsObj
     acc: u32           # o codepoint a ser montado

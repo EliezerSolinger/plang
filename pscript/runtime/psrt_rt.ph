@@ -179,6 +179,8 @@ def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask
 # or leave from, memory the caller already had.
 def ps_conn_write_bytesobj(ctx: *PsCtx, c: *PsConn, b: *PsBytes) -> *PsTask
 def ps_conn_read_into(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
+# 140/F4: a janela de um Buffer, conferida uma vez e num sítio só
+def ps_buf_window_pub(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char
 def ps_conn_write_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
 def ps_conn_close(ctx: *PsCtx, c: *PsConn)
 # F8: `os.spawn_pty` is a layer up and builds a Conn of its own

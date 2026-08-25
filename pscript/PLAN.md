@@ -2216,8 +2216,16 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
 
 - [ ] **F3** — `declare Mapping` em P (primeira utilização real dos traits da FS)
       e a ponte por `CBytes`. Depende de F2 **e** de FS.
-- [ ] **F4** — `os.pread`/`os.pwrite`, `os.stat`, `os.listdir` que percorre,
-      `f.size()`. Depende só de F1 (as assinaturas falam `bytes`).
+- [x] **F4** — **FEITA.** `os.pread`/`os.pwrite` (posicionais, sem cursor),
+      `os.stat` numa travessia só (um Dict, pela razão do `gc.stats()`),
+      `f.size()` perguntado ao DESCRITOR (135.10), e `os.scandir(d)` que
+      PERCORRE. O `listdir` fica como está e a razão fica escrita: ordenar exige
+      ter tudo em mão, e é o que o oráculo compara com o do Python — são duas
+      perguntas e agora há duas respostas.
+      Defeito ANTIGO que isto desenterrou, e era grave: `==` numa lista comparava
+      PONTEIROS, portanto `[1,2,3] == [1,2,3]` respondia False, contra a 22.2.
+      Corrigido; e `==` num `Dict`/`Set` passa a ser RECUSADO em vez de mentir.
+
 - [ ] **F5** — `os.watch` (Watcher). **BLOQUEADA por decisão**: as quatro
       perguntas da 140.1 são do utilizador — rodar `AskUserQuestion` ANTES de
       escrever uma linha (recursão nossa ou do núcleo; macOS = FSEvents;

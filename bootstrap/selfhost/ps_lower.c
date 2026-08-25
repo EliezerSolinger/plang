@@ -569,6 +569,8 @@ static void PsLow_lower_dict_for(PsLow *self, PsStmt *s, Vec_pStmt *out);
 
 static void PsLow_lower_bytes_for(PsLow *self, PsStmt *s, Vec_pStmt *out);
 
+static void PsLow_lower_dir_for(PsLow *self, PsStmt *s, Vec_pStmt *out);
+
 static void PsLow_tail_return(PsLow *self, Vec_pStmt *body, Type *ret, Pos pos);
 
 static Stmt *PsLow_wrap_if(PsLow *self, const char *flag, Stmt *st, Pos pos);
@@ -742,6 +744,9 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         }
         case PT_DECODER: {
             return ty_ptr(self->a, ty_name(self->a, "PsDecoder"));
+        }
+        case PT_DIRITER: {
+            return ty_ptr(self->a, ty_name(self->a, "PsDirIter"));
         }
         case PT_VIEW: {
             return ty_ptr(self->a, ty_name(self->a, "PsList"));
@@ -2673,6 +2678,7 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
     int both_int = lk == PT_INT && rk == PT_INT;
     int is_str = lk == PT_STR && rk == PT_STR;
     int is_bytes = lk == PT_BYTES && rk == PT_BYTES;
+    int is_list = lk == PT_LIST && rk == PT_LIST;
     int isf = lk == PT_FLOAT || rk == PT_FLOAT;
     switch (e->op) {
         case TK_PLUS: {
@@ -2787,6 +2793,23 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
         }
         case TK_EQ:
         case TK_NE: {
+            if (is_list) {
+                PsType *el9 = e->lhs->type->inner;
+                if (el9 != NULL && (el9->kind == PT_LIST || el9->kind == PT_DICT || el9->kind == PT_SET || el9->kind == PT_NAME || el9->kind == PT_TUPLE)) {
+                    fatal_at(self->file, e->pos, "`==` on a List whose elements are %s is not compiled yet (22.2): compare them element by element", ps_type_str(self->a, el9));
+                }
+                Expr *lc9 = PsLow_call_rt(self, "ps_list_eq", e->pos);
+                PsLow_push_arg(self, lc9, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, lc9, PsLow_expr(self, e->rhs));
+                PsLow_push_arg(self, lc9, PsLow_num(self, (el9 != NULL && el9->kind == PT_STR ? "1" : "0"), e->pos));
+                if (e->op == TK_NE) {
+                    Expr *ln9 = ex_new(self->a, EX_UNARY, e->pos);
+                    ln9->op = TK_NOT;
+                    ln9->lhs = lc9;
+                    return ln9;
+                }
+                return lc9;
+            }
             if (is_str || is_bytes) {
                 Expr *c3 = PsLow_call_rt(self, (is_bytes ? "ps_bytes_eq" : "ps_str_eq"), e->pos);
                 PsLow_push_arg(self, c3, PsLow_expr(self, e->lhs));
@@ -3445,6 +3468,14 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         const char *fmn = e->lhs->text;
         const char *want = NULL;
         Expr *rt7 = NULL;
+        if (strcmp(fmn, "size") == 0) {
+            Expr *fs9 = PsLow_call_rt(self, "ps_file_size", e->pos);
+            PsLow_push_arg(self, fs9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, fs9, PsLow_expr(self, e->lhs->lhs));
+            PsLow_pos_args(self, fs9, e->pos);
+            self->raised = 1;
+            return fs9;
+        }
         int pos7 = 0;
         if (strcmp(fmn, "read_into") == 0 || strcmp(fmn, "write_from") == 0) {
             rt7 = PsLow_call_rt(self, (strcmp(fmn, "read_into") == 0 ? "ps_aio_read_into" : "ps_aio_write_from"), e->pos);
@@ -4183,6 +4214,29 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strncmp(name, "__os_", 5) == 0 || strncmp(name, "__path_", 7) == 0) {
         int isos0 = strncmp(name, "__os_", 5) == 0;
         const char *of0 = name + (isos0 ? 5 : 7);
+        if (isos0 && strcmp(of0, "scandir") == 0) {
+            Expr *sc9 = PsLow_call_rt(self, "ps_dir_open", e->pos);
+            PsLow_push_arg(self, sc9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, sc9, PsLow_expr(self, e->args[0]));
+            PsLow_pos_args(self, sc9, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return sc9;
+        }
+        if (isos0 && (strcmp(of0, "stat") == 0 || strcmp(of0, "pread") == 0 || strcmp(of0, "pwrite") == 0)) {
+            Expr *fc0 = PsLow_call_rt(self, Arena_printf(self->a, "ps_os_%s", of0), e->pos);
+            PsLow_push_arg(self, fc0, PsLow_ctx_arg(self, e->pos));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, fc0, (i >= 2 ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[i]) : PsLow_expr(self, e->args[i])));
+            }
+            PsLow_pos_args(self, fc0, e->pos);
+            self->raised = 1;
+            if (strcmp(of0, "stat") == 0) {
+                self->allocs = 1;
+            }
+            return fc0;
+        }
         if (isos0 && strcmp(of0, "mmap") == 0) {
             Expr *mo = PsLow_call_rt(self, "ps_map_open", e->pos);
             PsLow_push_arg(self, mo, PsLow_ctx_arg(self, e->pos));
@@ -5819,7 +5873,7 @@ static int PsLow_is_collected(PsLow *self, Type *t) {
         return 0;
     }
     const char *n = t->inner->name;
-    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsMapping") == 0 || strcmp(n, "PsDecoder") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
+    if (strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsMapping") == 0 || strcmp(n, "PsDecoder") == 0 || strcmp(n, "PsDirIter") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
         return 1;
     }
     if (StrSet_has(&self->frame_names, n)) {
@@ -6867,6 +6921,14 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 }
                 return;
             }
+            if (s->iter->type != NULL && s->iter->type->kind == PT_DIRITER) {
+                PsLow_lower_dir_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
+                return;
+            }
             if (s->iter->type != NULL && s->iter->type->kind == PT_BYTES) {
                 PsLow_lower_bytes_for(self, s, out);
                 {
@@ -7337,6 +7399,56 @@ static void PsLow_lower_bytes_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Vec_pStmt_push(&inner, bb);
     fr->body = PsLow_frame_wrap(self, &inner, NULL, 0, s->pos);
     Vec_pStmt_push(out, fr);
+}
+
+static void PsLow_lower_dir_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
+    const char *dn = Arena_printf(self->a, "__dw%d", self->tmp_ctr);
+    self->tmp_ctr += 1;
+    Stmt *dd = st_new(self->a, ST_VAR, s->pos);
+    dd->name = dn;
+    dd->type = ty_ptr(self->a, ty_name(self->a, "PsDirIter"));
+    dd->init = PsLow_expr(self, s->iter);
+    Vec_pStmt_push(out, dd);
+    if (self->raised) {
+        Vec_pStmt_push(out, PsLow_guard(self, s->pos));
+    }
+    Vec_pStmt inner;
+    Vec_pStmt_init(&inner);
+    PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+    Expr *nx = PsLow_call_rt(self, "ps_dir_next", s->pos);
+    PsLow_push_arg(self, nx, PsLow_ctx_arg(self, s->pos));
+    PsLow_push_arg(self, nx, PsLow_ident(self, dn, s->pos));
+    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+    bd->name = PsLow_vname(self, s->names[0]);
+    bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"));
+    bd->init = nx;
+    Vec_pStmt_push(&inner, bd);
+    Stmt *brk = st_new(self->a, ST_IF, s->pos);
+    Expr *bc = ex_new(self->a, EX_BINARY, s->pos);
+    bc->op = TK_EQ;
+    bc->lhs = PsLow_ident(self, PsLow_vname(self, s->names[0]), s->pos);
+    bc->rhs = ex_new(self->a, EX_NONE, s->pos);
+    Block *bb0 = Arena_alloc(self->a, sizeof(Block));
+    Stmt **bs0 = Arena_alloc(self->a, sizeof(*bs0));
+    bs0[0] = st_new(self->a, ST_BREAK, s->pos);
+    bb0->stmts = bs0;
+    bb0->n = 1;
+    brk->conds = Arena_alloc(self->a, sizeof(*brk->conds));
+    brk->conds[0] = bc;
+    brk->blocks = Arena_alloc(self->a, sizeof(*brk->blocks));
+    brk->blocks[0] = bb0;
+    brk->nconds = 1;
+    brk->if_sel = -1;
+    Vec_pStmt_push(&inner, brk);
+    Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
+    Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
+    bb->body = body;
+    Vec_pStmt_push(&inner, bb);
+    Stmt *wh = st_new(self->a, ST_WHILE, s->pos);
+    wh->cond = ex_new(self->a, EX_TRUE, s->pos);
+    wh->body = PsLow_frame_wrap(self, &inner, NULL, 0, s->pos);
+    Vec_pStmt_push(out, wh);
 }
 
 static void PsLow_lower_dict_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
@@ -11093,7 +11205,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_MAPPING || t->kind == PT_DECODER || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_MAPPING || t->kind == PT_DECODER || t->kind == PT_DIRITER || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

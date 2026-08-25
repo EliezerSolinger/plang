@@ -150,6 +150,9 @@ def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList
 # that is what lets `b[0:8]` be a window instead of a copy, and what lets a
 # `bytes` have no `close` at all (136.1).
 def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes
+# 22.2: `==` numa lista compara CONTEÚDO. Era um esquecimento: o que saía era
+# uma comparação de ponteiros, e `[1,2,3] == [1,2,3]` respondia False.
+def ps_list_eq(a: *PsList, b: *PsList, kind: i32) -> bool
 # 140/F6: o descodificador INCREMENTAL. Substitui por U+FFFD em vez de levantar,
 # porque um fluxo não é um ficheiro — `str(b)` continua a ser o estrito.
 def ps_dec_new(ctx: *PsCtx) -> *PsDecoder

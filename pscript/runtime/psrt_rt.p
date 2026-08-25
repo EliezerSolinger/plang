@@ -1341,6 +1341,13 @@ def ps_aio_readall(ctx: *PsCtx, f: *PsFile, want: i32) -> *PsTask:
 # ONCE and here rather than in each caller. A window past the end would be a
 # read or a write into memory the buffer does not own, so it raises — the same
 # line `ps_buffer_view_at` draws, and for the same reason.
+# 140/F4: a camada de sistema faz a mesma pergunta (`pread` para dentro de um
+# Buffer), e a resposta tem de ser a MESMA — uma janela fora do buffer levanta,
+# em vez de aparar em silêncio.
+def ps_buf_window_pub(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char:
+    return ps_buf_window(ctx, b, off, n, what, file, line)
+
+
 private def ps_buf_window(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char:
     if ps_buffer_gone(ctx, b):
         ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)

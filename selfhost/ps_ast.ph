@@ -51,6 +51,9 @@ enum PsTypeKind:
                      #   type of message it sends back (36.1).
     PT_FILE          # an open file (48.1)
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
+    PT_DIRITER       # 140/F4: what `os.scandir(p)` gives — a directory being
+                     #   walked. It has no name a program writes, because the
+                     #   only thing anybody does with it is `for name in ...`.
     PT_DECODER       # 140/F6: `Decoder` — the incremental UTF-8 decoder. A
                      #   thing with STATE (the bytes of a codepoint that has not
                      #   arrived whole), which is why it is a thing and not a

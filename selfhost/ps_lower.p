@@ -357,6 +357,7 @@ struct PsLow:
     private def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def lower_bytes_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_dir_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos)
     private def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt
     private def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
@@ -466,6 +467,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsMapping"))
             case PT_DECODER:
                 return ty_ptr(self->a, ty_name(self->a, "PsDecoder"))
+            case PT_DIRITER:
+                return ty_ptr(self->a, ty_name(self->a, "PsDirIter"))
             case PT_VIEW:
                 # 18.3: a view IS the list object with `raw` and `owner` set —
                 # nothing new is allocated and the runtime learns nothing. The
@@ -2465,6 +2468,11 @@ struct PsLow:
         both_int: bool = lk == PT_INT and rk == PT_INT
         is_str: bool = lk == PT_STR and rk == PT_STR
         is_bytes: bool = lk == PT_BYTES and rk == PT_BYTES
+        # 22.2: `==` compara CONTEÚDO, e uma lista não é excepção. Não estava
+        # feito — o que saía era uma comparação de PONTEIROS, e
+        # `[1, 2, 3] == [1, 2, 3]` respondia False. É o mesmo engano que a 55.4
+        # já tinha proibido no `in`.
+        is_list: bool = lk == PT_LIST and rk == PT_LIST
         # one operand float makes the operation float, and the int side is
         # promoted at the call — the one implicit conversion the language has
         isf: bool = lk == PT_FLOAT or rk == PT_FLOAT
@@ -2561,6 +2569,25 @@ struct PsLow:
                     cmp0->rhs = self->num("0", e->pos)
                     return cmp0
             case TK_EQ, TK_NE:
+                if is_list:
+                    el9: *PsType = e->lhs->type->inner
+                    if el9 != None and (el9->kind == PT_LIST or el9->kind == PT_DICT or el9->kind == PT_SET or el9->kind == PT_NAME or el9->kind == PT_TUPLE):
+                        # um elemento que ele próprio é um contentor pede uma
+                        # comparação que ANDA por dentro dele, e essa não está
+                        # escrita. Recusar é melhor do que responder por bytes:
+                        # dois `struct` iguais são ponteiros diferentes, e a
+                        # resposta seria False por uma razão que ninguém vê.
+                        fatal_at(self->file, e->pos, "`==` on a List whose elements are %s is not compiled yet (22.2): compare them element by element", ps_type_str(self->a, el9))
+                    lc9: *Expr = self->call_rt("ps_list_eq", e->pos)
+                    self->push_arg(lc9, self->expr(e->lhs))
+                    self->push_arg(lc9, self->expr(e->rhs))
+                    self->push_arg(lc9, self->num("1" if el9 != None and el9->kind == PT_STR else "0", e->pos))
+                    if e->op == TK_NE:
+                        ln9: *Expr = ex_new(self->a, EX_UNARY, e->pos)
+                        ln9->op = TK_NOT
+                        ln9->lhs = lc9
+                        return ln9
+                    return lc9
                 if is_str or is_bytes:
                     # `==` compares CONTENT (22.2), and `bytes` is no different
                     # — which is what makes `src[0:4] == b"\x7fELF"` mean what
@@ -3196,6 +3223,16 @@ struct PsLow:
             fmn: const *char = e->lhs->text
             want: const *char = None
             rt7: *Expr = None
+            if strcmp(fmn, "size") == 0:
+                # 135.10: um `fstat` no descritor aberto. Não vai à piscina —
+                # responde do que o núcleo já tem, e mandá-lo lá custaria mais
+                # do que a resposta.
+                fs9: *Expr = self->call_rt("ps_file_size", e->pos)
+                self->push_arg(fs9, self->ctx_arg(e->pos))
+                self->push_arg(fs9, self->expr(e->lhs->lhs))
+                self->pos_args(fs9, e->pos)
+                self->raised = True
+                return fs9
             pos7: bool = False       # does it carry file+line?
             if strcmp(fmn, "read_into") == 0 or strcmp(fmn, "write_from") == 0:
                 # 135.2: the only two that take memory the caller already has,
@@ -3903,6 +3940,27 @@ struct PsLow:
             # é o runtime que sabe o que "não veio" significa em cada um (herdar
             # o ambiente, ficar no diretório de quem chamou, devolver a saída em
             # vez de gravá-la).
+            # 140/F4: `os.scandir(d)` — o directório a ser percorrido
+            if isos0 and strcmp(of0, "scandir") == 0:
+                sc9: *Expr = self->call_rt("ps_dir_open", e->pos)
+                self->push_arg(sc9, self->ctx_arg(e->pos))
+                self->push_arg(sc9, self->expr(e->args[0]))
+                self->pos_args(sc9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return sc9
+            # 140/F4: `os.stat`, `os.pread`, `os.pwrite` — os três levam a
+            # posição a sério e nenhum deles mexe num cursor
+            if isos0 and (strcmp(of0, "stat") == 0 or strcmp(of0, "pread") == 0 or strcmp(of0, "pwrite") == 0):
+                fc0: *Expr = self->call_rt(self->a->printf("ps_os_%s", of0), e->pos)
+                self->push_arg(fc0, self->ctx_arg(e->pos))
+                for i in range(e->nargs):
+                    self->push_arg(fc0, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[i]) if i >= 2 else self->expr(e->args[i]))
+                self->pos_args(fc0, e->pos)
+                self->raised = True
+                if strcmp(of0, "stat") == 0:
+                    self->allocs = True
+                return fc0
             # 137: `os.mmap(p)` / `os.mmap(p, mode)` / `os.mmap(p, mode, off, n)`
             if isos0 and strcmp(of0, "mmap") == 0:
                 mo: *Expr = self->call_rt("ps_map_open", e->pos)
@@ -5528,7 +5586,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -6590,6 +6648,9 @@ struct PsLow:
                 if s->iter->type != None and s->iter->type->kind == PT_STR:
                     self->lower_str_for(s, out)
                     return
+                if s->iter->type != None and s->iter->type->kind == PT_DIRITER:
+                    self->lower_dir_for(s, out)
+                    return
                 if s->iter->type != None and s->iter->type->kind == PT_BYTES:
                     self->lower_bytes_for(s, out)
                     return
@@ -7130,6 +7191,58 @@ struct PsLow:
         inner.push(bb)
         fr->body = self->frame_wrap(&inner, None, 0, s->pos)
         out->push(fr)
+
+    # 140/F4: `for name in os.scandir(d)` — um `while` sobre `ps_dir_next`, que
+    # dá None no fim. Nada é materializado: o nome que se está a olhar é o único
+    # que existe, e um directório de um milhão de entradas custa uma string.
+    private def lower_dir_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+        dn: const *char = self->a->printf("__dw%d", self->tmp_ctr)
+        self->tmp_ctr += 1
+        dd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        dd->name = dn
+        dd->type = ty_ptr(self->a, ty_name(self->a, "PsDirIter"))
+        dd->init = self->expr(s->iter)
+        out->push(dd)
+        if self->raised:
+            out->push(self->guard(s->pos))
+        inner: Vec<*Stmt>
+        inner.init()
+        self->rn_push(s->names[0], self->vname(s->names[0]), False)
+        nx: *Expr = self->call_rt("ps_dir_next", s->pos)
+        self->push_arg(nx, self->ctx_arg(s->pos))
+        self->push_arg(nx, self->ident(dn, s->pos))
+        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bd->name = self->vname(s->names[0])
+        bd->type = ty_ptr(self->a, ty_name(self->a, "PsStr"))
+        bd->init = nx
+        inner.push(bd)
+        # None é o FIM, e é a única forma de o dizer sem uma segunda pergunta
+        brk: *Stmt = st_new(self->a, ST_IF, s->pos)
+        bc: *Expr = ex_new(self->a, EX_BINARY, s->pos)
+        bc->op = TK_EQ
+        bc->lhs = self->ident(self->vname(s->names[0]), s->pos)
+        bc->rhs = ex_new(self->a, EX_NONE, s->pos)
+        bb0: *Block = self->a->alloc(sizeof(Block))
+        bs0: **Stmt = self->a->alloc(sizeof(*bs0))
+        bs0[0] = st_new(self->a, ST_BREAK, s->pos)
+        bb0->stmts = bs0
+        bb0->n = 1
+        brk->conds = self->a->alloc(sizeof(*brk->conds))
+        brk->conds[0] = bc
+        brk->blocks = self->a->alloc(sizeof(*brk->blocks))
+        brk->blocks[0] = bb0
+        brk->nconds = 1
+        brk->if_sel = -1
+        inner.push(brk)
+        body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
+        wh: *Stmt = st_new(self->a, ST_WHILE, s->pos)
+        wh->cond = ex_new(self->a, EX_TRUE, s->pos)
+        wh->body = self->frame_wrap(&inner, None, 0, s->pos)
+        out->push(wh)
 
     # `for k in d` — walks the slots and skips the ones that are not live.
     # Iterating a dict yields its KEYS, as Python does.
@@ -10819,7 +10932,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

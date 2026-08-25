@@ -552,7 +552,7 @@ struct PsSema:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_TIMER, PT_CONN, PT_PROC:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_TIMER, PT_CONN, PT_PROC:
                 pass
         return t
 
@@ -1451,6 +1451,12 @@ struct PsSema:
                 # same kind of thing, with the int/float mix allowed
                 if not num and not ps_type_eq(lt, rt):
                     fatal_at(self->file, e->pos, "cannot compare %s with %s", ps_type_str(self->a, lt), ps_type_str(self->a, rt))
+                if lt != None and (lt->kind == PT_DICT or lt->kind == PT_SET):
+                    # 22.2 diz CONTEÚDO, e comparar dois dicts por conteúdo é
+                    # independente da ordem — não está escrito. O que estava a
+                    # sair era uma comparação de PONTEIROS, que responde False a
+                    # dois dicts iguais: recusar é melhor do que mentir.
+                    fatal_at(self->file, e->pos, "`==` on a %s is not compiled yet (22.2): compare `len()` and the keys, or say what you mean with a loop", "Dict" if lt->kind == PT_DICT else "Set")
                 if lt != None and lt->kind == PT_TUPLE and not tuple_is_pure(lt):
                     # a tuple of pure bytes gets P's derived `==` for free; one
                     # holding a `str` needs a comparison that walks it, and that
@@ -2059,6 +2065,17 @@ struct PsSema:
                     return ftk
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "'%s' takes no arguments", fm)
+                if strcmp(fm, "size") == 0:
+                    # 135.10: o tamanho de um ficheiro JÁ ABERTO, perguntado ao
+                    # DESCRITOR. O `path.getsize` obriga a guardar o caminho
+                    # depois de se ter o `File`, e a perguntar ao NOME — o que
+                    # abre uma janela entre a resposta e a leitura em que o
+                    # ficheiro pode ser trocado por outro.
+                    #
+                    # Não é `await`: um `fstat` num descritor aberto responde do
+                    # que o núcleo já tem, e mandá-lo à piscina custaria mais do
+                    # que a resposta.
+                    return ps_type(self->a, PT_INT, e->pos)
                 if strcmp(fm, "read_all") == 0:
                     # 135.9: what changes in a file is only what gave back
                     # BYTES. `text()` and `readlines()` stay exactly as they
@@ -2084,7 +2101,7 @@ struct PsSema:
                 if strcmp(fm, "close") == 0:
                     ftk->inner = ps_type(self->a, PT_VOID, e->pos)
                     return ftk
-                fatal_at(self->file, e->pos, "a file has read_into, read_all, text, readlines, write, write_from and close (48.1/76.2/135.2), not '%s'", fm)
+                fatal_at(self->file, e->pos, "a file has read_into, read_all, text, readlines, write, write_from, size and close (48.1/76.2/135.2/135.10), not '%s'", fm)
             # `w.send(x)` / `await w.recv()` — the worker IS the channel (36.1),
             # and one worker is one pipe in both directions.
             if rt != None and rt->kind == PT_WORKER:
@@ -3198,6 +3215,48 @@ struct PsSema:
                 if ae == None or ae->kind != PT_LIST or ae->inner == None or ae->inner->kind != PT_STR:
                     fatal_at(self->file, e->args[0]->pos, "os.exec() takes a List<str> — o programa e os argumentos, um por elemento, SEM shell no meio (1.6) — found %s", ps_type_str(self->a, ae))
                 return ps_type(self->a, PT_VOID, e->pos)
+            if isos and strcmp(of, "scandir") == 0:
+                # 140/F4: os nomes UM DE CADA VEZ, na ordem em que o sistema de
+                # ficheiros os der. O `listdir` fica como está — devolve tudo,
+                # ordenado, e é o que o oráculo compara com o do Python — e o
+                # que ele NÃO pode ser é preguiçoso, porque ordenar exige ter
+                # tudo em mão. Quem quer ordem chama `sorted`, e assim vê-se que
+                # a pediu.
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "os.scandir(path) takes one path")
+                cd0: *PsType = self->check_expr(e->args[0])
+                self->want(e->args[0], cd0, ps_type(self->a, PT_STR, e->pos), "the path")
+                return ps_type(self->a, PT_DIRITER, e->pos)
+            if isos and strcmp(of, "stat") == 0:
+                # 140/F4: tudo o que o disco sabe do nome, de UMA vez. Um Dict e
+                # não um record, pela mesma razão que o `gc.stats()` (110): não
+                # há tipo novo para a linguagem aprender, e acrescentar uma
+                # medida depois não quebra programa nenhum.
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "os.stat(path) takes one path")
+                sp0: *PsType = self->check_expr(e->args[0])
+                self->want(e->args[0], sp0, ps_type(self->a, PT_STR, e->pos), "the path")
+                sd0: *PsType = ps_type(self->a, PT_DICT, e->pos)
+                sd0->key = ps_type(self->a, PT_STR, e->pos)
+                sd0->inner = ps_type(self->a, PT_INT, e->pos)
+                return sd0
+            if isos and (strcmp(of, "pread") == 0 or strcmp(of, "pwrite") == 0):
+                # 140/F4: POSICIONAL, sem `seek`. É a diferença que torna o
+                # acesso concorrente seguro: um `seek` seguido de um `read` são
+                # duas operações sobre um cursor partilhado, e dois workers
+                # intercalam-se nelas.
+                if e->nargs != 4:
+                    fatal_at(self->file, e->pos, "os.%s(f, buf, off, n): the file, a Buffer, WHERE in the file, and how many bytes (140)", of)
+                pf0: *PsType = self->check_expr(e->args[0])
+                if pf0 == None or pf0->kind != PT_FILE:
+                    fatal_at(self->file, e->args[0]->pos, "os.%s() takes an open File, found %s", of, ps_type_str(self->a, pf0))
+                pb0: *PsType = self->check_expr(e->args[1])
+                if pb0 == None or pb0->kind != PT_BUFFER:
+                    fatal_at(self->file, e->args[1]->pos, "os.%s() takes a Buffer — memory you already have — found %s", of, ps_type_str(self->a, pb0))
+                for pi in range(2, 4):
+                    px0: *PsType = self->check_expr(e->args[pi])
+                    self->want(e->args[pi], px0, ps_type(self->a, PT_INT, e->pos), "where in the file" if pi == 2 else "how many bytes")
+                return ps_type(self->a, PT_INT, e->pos)
             if isos and strcmp(of, "mmap") == 0:
                 # 137.3: o ficheiro inteiro, ou uma REGIÃO. Um membro de um
                 # arquivo enorme lê-se sem mapear os outros gigabytes, e custa
@@ -4066,6 +4125,11 @@ struct PsSema:
             # `Conn` de um socket, então `read`, `write` e `close` já existem.
             # 137: `os.mmap(p)` — o ficheiro em memória, sem o ler
             ns->sym.add("mmap")
+            # 140/F4: o que o `java.nio.file` tem e nós não tínhamos
+            ns->sym.add("stat")
+            ns->sym.add("pread")
+            ns->sym.add("pwrite")
+            ns->sym.add("scandir")
             # ... e as três constantes do `advise`, que são o que faz valer a
             # pena o tipo próprio (137.1)
             ns->sym.add("SEQUENTIAL")
@@ -5859,6 +5923,20 @@ struct PsSema:
                         self->pop_scope()
                         self->depth -= 1
                         return
+                    if lit4 != None and lit4->kind == PT_DIRITER:
+                        # 140/F4: um nome de cada vez. A única coisa que se faz
+                        # com um `scandir` é percorrê-lo, e por isso ele não tem
+                        # nome que um programa escreva.
+                        if s->nnames != 1:
+                            fatal_at(self->file, s->pos, "`for name in os.scandir(d)` takes one variable")
+                        self->depth += 1
+                        self->add_local(s->names[0], ps_type(self->a, PT_STR, s->pos), True, False)
+                        self->loop_depth += 1
+                        self->check_block(s->body)
+                        self->loop_depth -= 1
+                        self->pop_scope()
+                        self->depth -= 1
+                        return
                     if lit4 == None or lit4->kind not in {PT_LIST, PT_VIEW, PT_BYTES, PT_DICT, PT_SET}:
                         fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, `bytes`, a List, a View, a Dict, a Set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4))
                     if s->nnames != 1:
@@ -6283,7 +6361,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6491,6 +6569,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "Mapping"
         case PT_DECODER:
             return "Decoder"
+        case PT_DIRITER:
+            return "a directory walk"
         case PT_VIEW:
             return a->printf("View<%s>", ps_type_str(a, t->inner))
         case PT_FILE:

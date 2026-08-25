@@ -91,3 +91,16 @@ def ps_map_advise(ctx: *PsCtx, m: *PsMapping, how: i64, file: const *char, line:
 def ps_map_sync(ctx: *PsCtx, m: *PsMapping, file: const *char, line: i32)
 def ps_map_lock(ctx: *PsCtx, m: *PsMapping, file: const *char, line: i32)
 def ps_map_close(ctx: *PsCtx, m: *PsMapping)
+
+# ---------- 140/F4 ----------
+# tudo o que o disco sabe do nome, de UMA vez (um Dict, como o `gc.stats`)
+def ps_os_stat(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *PsDict
+# percorrer um directório SEM construir a lista inteira primeiro. `next` dá None
+# no fim, e é o fim do laço.
+def ps_dir_open(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *PsDirIter
+def ps_dir_next(ctx: *PsCtx, it: *PsDirIter) -> *PsStr
+# ler e escrever POR POSIÇÃO: sem cursor, portanto seguro a partir de workers
+def ps_os_pread(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64
+def ps_os_pwrite(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64
+# 135.10: o tamanho de um ficheiro já aberto, perguntado ao DESCRITOR
+def ps_file_size(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> i64

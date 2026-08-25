@@ -869,3 +869,169 @@ def ps_map_close(ctx: *PsCtx, m: *PsMapping):
     if m != None and m->open != 0:
         ps_map_release((*void)(m))
         ps_map_live_sub()
+
+
+# ---------- 140/F4: o que o `java.nio.file` tem e nós não ----------
+
+def ps_os_stat(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *PsDict:
+    """Tudo o que o disco sabe do nome, de UMA vez.
+
+    Antes disto, saber se um caminho existe, se é directório, que tamanho tem e
+    quando mudou eram QUATRO travessias ao sistema de ficheiros sobre o mesmo
+    inode — e entre a primeira e a última o ficheiro podia mudar, o que faz de
+    quatro respostas uma imagem que nunca existiu.
+
+    Um DICT e não um record, pela mesma razão que o `gc.stats()` (110): não há
+    tipo novo para a linguagem aprender, o `print` já sabe imprimi-lo, e
+    acrescentar uma medida depois não quebra programa nenhum."""
+    d: *PsDict = ps_dict_new(ctx, i32(sizeof(PsStrPtr)), i32(sizeof(i64)), 1, True, False)
+    cs: const *char = os_cstr(ctx, path, file, line)
+    if cs == None:
+        return d
+    sb: stat
+    if stat(cs, &sb) != 0:
+        os_fail(ctx, "cannot stat", path, file, line)
+        return d
+    NAMES: const *char[] = {"size", "mtime", "mtime_ns", "mode", "is_dir", "is_file", "links", "inode"}
+    vals: i64[8]
+    vals[0] = i64(sb.st_size)
+    # a mesma travessia de plataforma que o `getmtime` já fazia (`st_mtim` na
+    # glibc, `st_mtimespec` no macOS, `st_mtime` no que é antigo), e por isso é
+    # `hasfield` — o comptime da 65.11 — e não um `#ifdef`
+    msec: i64 = 0
+    mns: i64 = 0
+    if hasfield(sb, "st_mtim"):
+        msec = i64(sb.st_mtim.tv_sec)
+        mns = i64(sb.st_mtim.tv_sec) * 1000000000 + i64(sb.st_mtim.tv_nsec)
+    elif hasfield(sb, "st_mtimespec"):
+        msec = i64(sb.st_mtimespec.tv_sec)
+        mns = i64(sb.st_mtimespec.tv_sec) * 1000000000 + i64(sb.st_mtimespec.tv_nsec)
+    else:
+        msec = i64(sb.st_mtime)
+        mns = msec * 1000000000
+    vals[1] = msec
+    vals[2] = mns
+    vals[3] = i64(sb.st_mode) & 0o7777
+    vals[4] = 1 if (i64(sb.st_mode) & 0o170000) == 0o040000 else 0
+    vals[5] = 1 if (i64(sb.st_mode) & 0o170000) == 0o100000 else 0
+    vals[6] = i64(sb.st_nlink)
+    vals[7] = i64(sb.st_ino)
+    for i in range(8):
+        k: *PsStr = ps_str_new(ctx, NAMES[i], strlen(NAMES[i]))
+        kp: *PsStr = k
+        slot: *char = ps_dict_put(ctx, d, (*char)(&kp))
+        *(*i64)(slot) = vals[i]
+    return d
+
+
+# 140/F4: ler e escrever POR POSIÇÃO, sem `seek`.
+#
+# É a diferença que torna o acesso concorrente seguro: um `seek` seguido de um
+# `read` são duas operações sobre um cursor PARTILHADO, e dois workers a
+# fazê-las intercalam-se. O `pread` leva a posição no próprio pedido, portanto
+# não há cursor para atropelar — que é o que faz dele a base de qualquer coisa
+# que leia um ficheiro grande em paralelo.
+#
+# O `Buffer` é malloc'd e não se move (52.3), portanto a chamada de sistema
+# escreve nele directamente e não há cópia nenhuma nos dois sentidos.
+def ps_os_pread(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64:
+    if f == None or f->is_open == 0:
+        ps_raise(ctx, "pread: this file is closed", PS_CAT_IO, file, line)
+        return 0
+    d: *char = ps_buf_window_pub(ctx, b, 0, n, "pread", file, line)
+    if d == None:
+        return 0
+    got: i64 = i64(pread(fileno(f->fp), (*void)(d), usize(n), off))
+    if got < 0:
+        ps_raise(ctx, "pread failed", PS_CAT_IO, file, line)
+        return 0
+    return got
+
+
+def ps_os_pwrite(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64:
+    if f == None or f->is_open == 0:
+        ps_raise(ctx, "pwrite: this file is closed", PS_CAT_IO, file, line)
+        return 0
+    d: *char = ps_buf_window_pub(ctx, b, 0, n, "pwrite", file, line)
+    if d == None:
+        return 0
+    # o stdio pode ter bytes por escrever, e um `pwrite` no descritor passaria
+    # por cima deles: esvaziar primeiro é o que faz as duas metades verem o
+    # mesmo ficheiro
+    fflush(f->fp)
+    put: i64 = i64(pwrite(fileno(f->fp), (*void)(d), usize(n), off))
+    if put < 0:
+        ps_raise(ctx, "pwrite failed", PS_CAT_IO, file, line)
+        return 0
+    return put
+
+
+# 135.10: o tamanho de um ficheiro JÁ ABERTO.
+#
+# O `path.getsize` existe, mas obriga a guardar o caminho depois de se ter o
+# `File` — e a perguntar ao NOME em vez de ao descritor, o que abre uma janela
+# entre a resposta e a leitura em que o ficheiro pode ser trocado por outro.
+def ps_file_size(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> i64:
+    if f == None or f->is_open == 0:
+        ps_raise(ctx, "size(): this file is closed", PS_CAT_IO, file, line)
+        return 0
+    fflush(f->fp)
+    sb: stat
+    if fstat(fileno(f->fp), &sb) != 0:
+        ps_raise(ctx, "size(): could not measure the file", PS_CAT_IO, file, line)
+        return 0
+    return i64(sb.st_size)
+
+
+# 140/F4: percorrer um directório SEM construir a lista inteira primeiro.
+#
+# O `listdir` fica como está — devolve tudo, ordenado, e é o que o oráculo
+# compara com o `os.listdir` do Python. O que ele NÃO pode fazer é ser
+# preguiçoso, porque ordenar exige ter tudo em mão; e o que ele custa numa
+# árvore grande é uma lista de milhares de strings para se olhar para a
+# primeira.
+#
+# `scandir` é a outra pergunta: os nomes, um de cada vez, na ordem em que o
+# sistema de ficheiros os der. Quem quer ordem chama `sorted`, e passa a ser
+# visível que o pediu.
+def ps_dir_open(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *PsDirIter:
+    it: *PsDirIter = ps_alloc(ctx, sizeof(PsDirIter), PS_TY_DIRITER)
+    it->d = None
+    it->done = 0
+    cs: const *char = os_cstr(ctx, path, file, line)
+    if cs == None:
+        it->done = 1
+        return it
+    it->d = opendir(cs)
+    if it->d == None:
+        os_fail(ctx, "cannot list the directory", path, file, line)
+        it->done = 1
+    return it
+
+
+# None quando acabou, e é o fim do laço. `.` e `..` nunca saem: são o
+# directório e o pai, não coisas que estejam dentro dele.
+def ps_dir_next(ctx: *PsCtx, it: *PsDirIter) -> *PsStr:
+    if it == None or it->done != 0 or it->d == None:
+        return None
+    while True:
+        de: *dirent = readdir((*DIR)(it->d))
+        if de == None:
+            closedir((*DIR)(it->d))
+            it->d = None
+            it->done = 1
+            return None
+        nm: const *char = de->d_name
+        if strcmp(nm, ".") == 0 or strcmp(nm, "..") == 0:
+            continue
+        return ps_str_new(ctx, nm, strlen(nm))
+
+
+# o directório fecha-se sozinho ao chegar ao fim; isto é para quem sai do laço a
+# meio, e para o finalizador que é a rede
+private def ps_dir_release(o: *void):
+    it: *PsDirIter = (*PsDirIter)(o)
+    if it->d != None:
+        closedir((*DIR)(it->d))
+        it->d = None
+    it->done = 1

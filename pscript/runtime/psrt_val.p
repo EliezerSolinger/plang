@@ -3984,3 +3984,33 @@ def ps_dec_finish(ctx: *PsCtx, d: *PsDecoder) -> *PsStr:
     buf: char[8]
     k: usize = ps_utf8_put(buf, usize(0), 0xFFFD)
     return ps_str_new(ctx, buf, k)
+
+
+# 22.2: `==` compara CONTEÚDO, e uma lista não era excepção — era um esquecimento.
+#
+# Antes disto, `[1, 2, 3] == [1, 2, 3]` respondia False, porque o que saía era
+# uma comparação de PONTEIROS. É o mesmo engano que a 55.4 já tinha proibido no
+# `in`, e a regra é a mesma: texto compara texto, o resto compara bytes.
+#
+# `kind` é `PS_K_STR` quando os elementos são strings, e o compilador é quem
+# sabe — o runtime só move bytes.
+def ps_list_eq(a: *PsList, b: *PsList, kind: i32) -> bool:
+    if a == None or b == None:
+        return a == b
+    if a->len != b->len:
+        return False
+    if a->esize != b->esize:
+        return False
+    pa: *char = ps_list_base(a)
+    pb: *char = ps_list_base(b)
+    i: i64 = 0
+    while i < a->len:
+        oa: *char = pa + usize(i) * usize(a->esize)
+        ob: *char = pb + usize(i) * usize(b->esize)
+        if kind == PS_K_STR:
+            if not ps_str_eq(*(**PsStr)(oa), *(**PsStr)(ob)):
+                return False
+        elif memcmp(oa, ob, usize(a->esize)) != 0:
+            return False
+        i += 1
+    return True
