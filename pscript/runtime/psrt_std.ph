@@ -50,3 +50,11 @@ def ps_random_expovariate(ctx: *PsCtx, lambd: f64, file: const *char, line: i32)
 def ps_random_shuffle(ctx: *PsCtx, l: *PsList, file: const *char, line: i32)
 # 108: o estado do gerador morre com o contexto
 def ps_random_free(ctx: *PsCtx)
+
+# 155: `codec` — base64 e hex. No runtime pela mesma razão que o `json`: uma
+# codificação de fio com especificação congelada e sem política. As duas que
+# LEEM devolvem None quando o texto não é aquilo (4.2).
+def ps_b64_encode(ctx: *PsCtx, b: *PsBytes, urlsafe: bool, pad: bool) -> *PsStr
+def ps_b64_decode(ctx: *PsCtx, s: *PsStr) -> *PsBytes
+def ps_hex_encode(ctx: *PsCtx, b: *PsBytes, upper: bool) -> *PsStr
+def ps_hex_decode(ctx: *PsCtx, s: *PsStr) -> *PsBytes

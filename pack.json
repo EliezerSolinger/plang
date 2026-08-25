@@ -8,7 +8,6 @@
     "packages/url",
     "packages/ed25519",
     "packages/pforge",
-    "packages/codec",
     "packages/hash",
     "packages/hmac",
     "packages/csprng",

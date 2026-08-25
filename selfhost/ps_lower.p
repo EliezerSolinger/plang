@@ -2831,6 +2831,32 @@ struct PsLow:
             tr3->lhs = self->slot_val(gg, dt2->inner, e->pos)
             tr3->rhs = self->coerce(dt2->inner, e->args[1])
             return tr3
+        # ---- 155: as codificações de fio, como MÉTODOS ----
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_BYTES:
+            bn9: const *char = e->lhs->text
+            b64f: bool = strcmp(bn9, "base64") == 0
+            cd9: *Expr = self->call_rt("ps_b64_encode" if b64f else "ps_hex_encode", e->pos)
+            self->push_arg(cd9, self->ctx_arg(e->pos))
+            self->push_arg(cd9, self->expr(e->lhs->lhs))
+            for i in range(e->nargs):
+                self->push_arg(cd9, self->expr(e->args[i]))
+            # as omissões: URL-safe NÃO e enchimento SIM, que é o que a RFC 4648
+            # §4 escreve; e minúsculas, que é o que toda a gente usa
+            if b64f:
+                if e->nargs < 1:
+                    self->push_arg(cd9, ex_new(self->a, EX_FALSE, e->pos))
+                if e->nargs < 2:
+                    self->push_arg(cd9, ex_new(self->a, EX_TRUE, e->pos))
+            elif e->nargs < 1:
+                self->push_arg(cd9, ex_new(self->a, EX_FALSE, e->pos))
+            self->allocs = True
+            return cd9
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_STR and (strcmp(e->lhs->text, "from_base64") == 0 or strcmp(e->lhs->text, "from_hex") == 0):
+            fd9: *Expr = self->call_rt("ps_b64_decode" if strcmp(e->lhs->text, "from_base64") == 0 else "ps_hex_decode", e->pos)
+            self->push_arg(fd9, self->ctx_arg(e->pos))
+            self->push_arg(fd9, self->expr(e->lhs->lhs))
+            self->allocs = True
+            return fd9
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_STR:
             nm5: const *char = e->lhs->text
             # ---- 104: os que não são só "chama ps_str_<nome>" ----

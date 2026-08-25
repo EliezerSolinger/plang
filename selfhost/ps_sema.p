@@ -1739,6 +1739,23 @@ struct PsSema:
                         .nargs = 0
                     return self->check_expr(e)
                 fatal_at(self->file, e->pos, "a %s has %s", "Dict" if rt->kind == PT_DICT else "Set", "get, pop, setdefault, remove, update, clear, copy, keys, values and items" if rt->kind == PT_DICT else "add, remove, discard, update, clear, copy and keys")
+            if rt != None and rt->kind == PT_BYTES:
+                # 155: ESCREVER uma codificação de fio é um método dos BYTES, e
+                # ler é um método do TEXTO. Não há módulo nenhum, portanto não há
+                # `import` para lembrar — e `d.hex()` é literalmente o que se
+                # escreveria em Python.
+                bm: const *char = e->lhs->text
+                e->lhs->type = rt
+                if strcmp(bm, "hex") == 0 or strcmp(bm, "base64") == 0:
+                    maxb: i32 = 2 if strcmp(bm, "base64") == 0 else 1
+                    if e->nargs > maxb:
+                        fatal_at(self->file, e->pos, "%s() takes %s", bm,
+                                 "nothing, or `urlsafe` and `pad`" if strcmp(bm, "base64") == 0 else "nothing, or `upper`")
+                    for i in range(e->nargs):
+                        bfl: *PsType = self->check_expr(e->args[i])
+                        self->want(e->args[i], bfl, ps_type(self->a, PT_BOOL, e->pos), self->a->printf("a flag of %s()", bm))
+                    return ps_type(self->a, PT_STR, e->pos)
+                fatal_at(self->file, e->pos, "`bytes` has hex() and base64() — and the way back is on the TEXT: `s.from_hex()`, `s.from_base64()` (155). Found '%s'", bm)
             if rt != None and rt->kind == PT_STR:
                 nm2: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -1840,7 +1857,19 @@ struct PsSema:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "encode() takes no arguments: a `str` is UTF-8 already, and there is no second encoding to ask for")
                     return ps_type(self->a, PT_BYTES, e->pos)
-                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
+                # 155: ler uma codificação de fio é um MÉTODO do texto, e não
+                # um módulo. Não há `import` nenhum, e o nome fica ao lado dos
+                # outros que o `str` já tem — que é onde alguém o procura.
+                #
+                # **Devolvem `bytes?`, e None quer dizer "isto não é aquilo"**
+                # (4.2): o texto veio de fora, e não analisar é uma resposta.
+                if strcmp(nm2, "from_base64") == 0 or strcmp(nm2, "from_hex") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "%s() takes no arguments: the text is the string it is called on", nm2)
+                    fo: *PsType = ps_type(self->a, PT_OPT, e->pos)
+                    fo->inner = ps_type(self->a, PT_BYTES, e->pos)
+                    return fo
+                fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, from_base64, from_hex, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
             if rt != None and rt->kind == PT_VIEW:
                 # 135.8, and this is the whole reason a View is a type of its
                 # own: what it CANNOT do is refused HERE, in compilation,

@@ -3049,6 +3049,36 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         tr3->rhs = PsLow_coerce(self, dt2->inner, e->args[1]);
         return tr3;
     }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_BYTES) {
+        const char *bn9 = e->lhs->text;
+        int b64f = strcmp(bn9, "base64") == 0;
+        Expr *cd9 = PsLow_call_rt(self, (b64f ? "ps_b64_encode" : "ps_hex_encode"), e->pos);
+        PsLow_push_arg(self, cd9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, cd9, PsLow_expr(self, e->lhs->lhs));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, cd9, PsLow_expr(self, e->args[i]));
+        }
+        if (b64f) {
+            if (e->nargs < 1) {
+                PsLow_push_arg(self, cd9, ex_new(self->a, EX_FALSE, e->pos));
+            }
+            if (e->nargs < 2) {
+                PsLow_push_arg(self, cd9, ex_new(self->a, EX_TRUE, e->pos));
+            }
+        } else if (e->nargs < 1) {
+            PsLow_push_arg(self, cd9, ex_new(self->a, EX_FALSE, e->pos));
+        }
+        self->allocs = 1;
+        return cd9;
+    }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_STR && (strcmp(e->lhs->text, "from_base64") == 0 || strcmp(e->lhs->text, "from_hex") == 0)) {
+        Expr *fd9 = PsLow_call_rt(self, (strcmp(e->lhs->text, "from_base64") == 0 ? "ps_b64_decode" : "ps_hex_decode"), e->pos);
+        PsLow_push_arg(self, fd9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, fd9, PsLow_expr(self, e->lhs->lhs));
+        self->allocs = 1;
+        return fd9;
+    }
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_STR) {
         const char *nm5 = e->lhs->text;
         if (strcmp(nm5, "split") == 0 && e->nargs == 0) {

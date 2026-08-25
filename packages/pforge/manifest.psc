@@ -46,9 +46,9 @@ struct Manifest:
     #
     # Um metapacote INSTALA, não IMPORTA. Ele não cria espaço de nomes nenhum:
     # traz os membros e sai da frente, e quem escreve continua a escrever
-    # `import <codec/base64>` tenha chegado lá pelo metapacote ou por um
-    # `pforge add codec`. É isso que torna verdadeira a cláusula "não são
-    # inseparáveis" — depender do `base64` e não do `datetime` continua a ser
+    # `import <csv/csv.psc>` tenha chegado lá pelo metapacote ou por um
+    # `pforge add csv`. É isso que torna verdadeira a cláusula "não são
+    # inseparáveis" — depender do `csv` e não do `datetime` continua a ser
     # possível, e continua a ser a mesma grafia. Se ele fosse um módulo que
     # reexporta, um programa que quisesse uma coisa arrastaria as dez.
     is_meta: bool

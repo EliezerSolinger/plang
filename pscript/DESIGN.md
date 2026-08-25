@@ -7518,3 +7518,79 @@ ignorada**, e um directório `packages/stl` mesmo ao lado também não substitui
 Um ficheiro que pudesse substituir o embebido em silêncio traria de volta a
 classe de erro que o `embed` existe para matar: a de duas cópias e ninguém saber
 qual correu.
+
+---
+
+## 155 — o `codec` entra para o runtime, e a linha que impede o resto de entrar
+
+> *"o pacote de base64 é tão minúsculo que dá para incluir no runtime direto da
+> linguagem. Simplesmente porque o custo de manter o pacote com funções
+> minúsculas é maior do que levar elas dentro do compilador."*
+
+Aceite. E o argumento fica mais forte do que foi dito, porque há um precedente
+que o decide sozinho:
+
+> **o `json` já está no runtime.**
+
+base64 e hex são a mesma espécie de coisa que ele — uma **codificação de fio com
+especificação congelada** — e são MENORES. Ter o `json` dentro e o base64 fora
+não é uma distinção que se consiga explicar a ninguém.
+
+### 155.1 — o custo medido, que é o que a pergunta apontava
+
+O pacote são **116 linhas de código** (145 com a prosa). À volta delas: um
+`pack.json` com uma versão para subir, uma entrada no espaço de trabalho, uma
+dependência no metapacote, um directório de testes e uma linha no lockfile de
+quem o usar.
+
+**A moldura é maior do que o quadro**, e o quadro não vai mudar — a RFC 4648 é de
+2006 e está fechada.
+
+### 155.2 — A LINHA, para isto não virar "tudo o que é pequeno entra"
+
+O tamanho **não** é o critério, e usá-lo abriria a porta ao `csv` a seguir. O
+critério é este:
+
+> **entra no runtime uma codificação com especificação CONGELADA e sem
+> POLÍTICA.** Fica pacote tudo o que tem dialecto, formato à escolha, dados que
+> envelhecem, ou uma decisão que o programa queira configurar.
+
+Confere contra o que existe hoje, e não sobra nenhum caso a explicar:
+
+| | onde | porquê |
+|---|---|---|
+| `json` | runtime | uma norma, nenhuma escolha |
+| `base64`, `hex` | **runtime** | RFC 4648, fechada em 2006. As quatro variantes são PARÂMETROS (alfabeto, enchimento), não política |
+| `csv` | pacote | tem dialectos — separador, aspas, fins de linha —, e cada um é uma escolha de quem lê |
+| `datetime` | pacote | um MODELO inteiro mais três formatos |
+| `compress` | pacote | três formatos, streaming, níveis |
+| `tz` | pacote | dados que envelheceram ontem |
+| `crypto` | pacote | algoritmos entre os quais se escolhe, e uma história de confiança |
+
+### 155.3 — e não é um MÓDULO: são métodos
+
+> *"nem precisa ligar o módulo `codec` no compilador, dá para inlinar a função
+> direto na string."*
+
+Também aceite, e é a metade que faltava. Um módulo `codec` obrigaria a um
+`import` que ninguém se lembra de escrever, e a um espaço de nomes para quatro
+funções. Métodos não obrigam a nada:
+
+```
+d.hex()                 # bytes -> texto
+token.from_base64()     # texto -> bytes?
+```
+
+**O sentido está no TIPO**, e é isso que torna a escolha óbvia em vez de
+arbitrária: escrever uma codificação sai dos BYTES, ler sai do TEXTO. E
+`d.hex()` é literalmente o que se escreveria em Python.
+
+O nome fica ao lado dos que o `str` e o `bytes` já têm — que é onde alguém o vai
+procurar — e as duas que LEEM devolvem `bytes?`, com None a querer dizer *"isto
+não é aquilo"* (4.2): o texto veio de fora, e não analisar é uma resposta.
+
+### 155.4 — o que se perde, dito porque é real
+
+O que entra no runtime **toda a gente paga e ninguém pode recusar**, e deixa de
+ter versão. Por 116 linhas de aritmética sobre seis bits isso é barato; a linha
+da 155.2 existe precisamente para que continue a ser.

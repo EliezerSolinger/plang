@@ -1,5 +1,4 @@
-
-Zg== Zm8= Zm9v
+[] Zg== Zm8= Zm9v
 Zm9vYg== Zm9vYmE= Zm9vYmFy
 std   +/+/
 url   -_-_
@@ -13,10 +12,11 @@ caractere de fora: True
 um caractere so: True
 bits a mais: True
 e sem bits a mais passa: True
-ida e volta: sem queixas acima
 000fa5ff A5
-hex nos dois casos: 000fa5ff
+le as duas caixas: 000fa5ff
 impar: True
 nao e hex: True
-vazio:  0
+vazio: [] 0
+todos os bytes: True True
+cada comprimento ate 20: True
 codec-ok

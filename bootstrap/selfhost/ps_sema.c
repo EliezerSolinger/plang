@@ -3276,6 +3276,23 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             }
             fatal_at(self->file, e->pos, "a %s has %s", (rt->kind == PT_DICT ? "Dict" : "Set"), (rt->kind == PT_DICT ? "get, pop, setdefault, remove, update, clear, copy, keys, values and items" : "add, remove, discard, update, clear, copy and keys"));
         }
+        if (rt != NULL && rt->kind == PT_BYTES) {
+            const char *bm = e->lhs->text;
+            e->lhs->type = rt;
+            if (strcmp(bm, "hex") == 0 || strcmp(bm, "base64") == 0) {
+                int32_t maxb = (strcmp(bm, "base64") == 0 ? 2 : 1);
+                if (e->nargs > maxb) {
+                    fatal_at(self->file, e->pos, "%s() takes %s", bm, (strcmp(bm, "base64") == 0 ? "nothing, or `urlsafe` and `pad`" : "nothing, or `upper`"));
+                }
+                size_t i;
+                for (i = 0; i < e->nargs; i += 1) {
+                    PsType *bfl = PsSema_check_expr(self, e->args[i]);
+                    PsSema_want(self, e->args[i], bfl, ps_type(self->a, PT_BOOL, e->pos), Arena_printf(self->a, "a flag of %s()", bm));
+                }
+                return ps_type(self->a, PT_STR, e->pos);
+            }
+            fatal_at(self->file, e->pos, "`bytes` has hex() and base64() — and the way back is on the TEXT: `s.from_hex()`, `s.from_base64()` (155). Found '%s'", bm);
+        }
         if (rt != NULL && rt->kind == PT_STR) {
             const char *nm2 = e->lhs->text;
             e->lhs->type = rt;
@@ -3395,7 +3412,15 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 return ps_type(self->a, PT_BYTES, e->pos);
             }
-            fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle");
+            if (strcmp(nm2, "from_base64") == 0 || strcmp(nm2, "from_hex") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "%s() takes no arguments: the text is the string it is called on", nm2);
+                }
+                PsType *fo = ps_type(self->a, PT_OPT, e->pos);
+                fo->inner = ps_type(self->a, PT_BYTES, e->pos);
+                return fo;
+            }
+            fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, from_base64, from_hex, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle");
         }
         if (rt != NULL && rt->kind == PT_VIEW) {
             const char *vm = e->lhs->text;
@@ -4840,12 +4865,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3241_17 = e;
-                __with_3241_17->kind = PE_INDEX;
-                __with_3241_17->lhs = e->args[0];
-                __with_3241_17->rhs = below;
-                __with_3241_17->args = NULL;
-                __with_3241_17->nargs = 0;
+                PsExpr *__with_3270_17 = e;
+                __with_3270_17->kind = PE_INDEX;
+                __with_3270_17->lhs = e->args[0];
+                __with_3270_17->rhs = below;
+                __with_3270_17->args = NULL;
+                __with_3270_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -5397,26 +5422,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3749_17 = e;
-                __with_3749_17->kind = PE_STR;
-                __with_3749_17->text = lit7;
-                __with_3749_17->lhs = NULL;
-                __with_3749_17->rhs = NULL;
-                __with_3749_17->args = NULL;
-                __with_3749_17->nargs = 0;
+                PsExpr *__with_3778_17 = e;
+                __with_3778_17->kind = PE_STR;
+                __with_3778_17->text = lit7;
+                __with_3778_17->lhs = NULL;
+                __with_3778_17->rhs = NULL;
+                __with_3778_17->args = NULL;
+                __with_3778_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3762_13 = e;
-            __with_3762_13->kind = PE_LOWERED;
-            __with_3762_13->low = ln7;
-            __with_3762_13->lhs = NULL;
-            __with_3762_13->rhs = NULL;
-            __with_3762_13->args = NULL;
-            __with_3762_13->nargs = 0;
+            PsExpr *__with_3791_13 = e;
+            __with_3791_13->kind = PE_LOWERED;
+            __with_3791_13->low = ln7;
+            __with_3791_13->lhs = NULL;
+            __with_3791_13->rhs = NULL;
+            __with_3791_13->args = NULL;
+            __with_3791_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5738,10 +5763,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_4068_17 = &ns->quals[ns->nquals];
-                __with_4068_17->name = q;
-                __with_4068_17->orig = d->path;
-                __with_4068_17->ns = sub;
+                PsNsEnt *__with_4097_17 = &ns->quals[ns->nquals];
+                __with_4097_17->name = q;
+                __with_4097_17->orig = d->path;
+                __with_4097_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5754,10 +5779,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_4080_21 = &ns->ents[ns->nents];
-                    __with_4080_21->name = local;
-                    __with_4080_21->orig = d->names[k];
-                    __with_4080_21->ns = sub;
+                    PsNsEnt *__with_4109_21 = &ns->ents[ns->nents];
+                    __with_4109_21->name = local;
+                    __with_4109_21->orig = d->names[k];
+                    __with_4109_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6236,10 +6261,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4583_9 = e;
-        __with_4583_9->kind = PE_NAME;
-        __with_4583_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4583_9->lhs = NULL;
+        PsExpr *__with_4612_9 = e;
+        __with_4612_9->kind = PE_NAME;
+        __with_4612_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4612_9->lhs = NULL;
     }
     return 1;
 }

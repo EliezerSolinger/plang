@@ -565,6 +565,155 @@ def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *P
         js_fail(&j, "there is text after the value")
     return v
 
+# ---------- `codec` (155): base64 e hex ----------
+#
+# **No runtime pela mesma razão que o `json`**: uma codificação de fio com
+# especificação CONGELADA e sem política. A RFC 4648 é de 2006 e está fechada, e
+# as quatro variantes do base64 são PARÂMETROS — o alfabeto e o enchimento — e
+# não escolhas de desenho. A 155.2 escreve a linha que impede o `csv` de vir
+# atrás.
+#
+# **Base64 tem quatro variantes, e é a vida que as cobra.** O alfabeto padrão
+# acaba em `+` e `/`, que são os dois caracteres que um URL não pode levar; por
+# isso a §5 define um segundo alfabeto. E o enchimento `=` é obrigatório para uns
+# leitores e proibido para outros (um JWT não tem nenhum). Duas perguntas, dois
+# booleanos, quatro respostas — e oferecer só uma delas é o que faz cada projecto
+# escrever as outras três à mão.
+
+private const B64_STD: const *char = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+private const B64_URL: const *char = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+private const CODEC_HEX: const *char = "0123456789abcdef"
+private const CODEC_HEXU: const *char = "0123456789ABCDEF"
+
+def ps_b64_encode(ctx: *PsCtx, b: *PsBytes, urlsafe: bool, pad: bool) -> *PsStr:
+    n: usize = b->len
+    al: const *char = B64_URL if urlsafe else B64_STD
+    # o tamanho exacto: quatro caracteres por cada três bytes, e o resto
+    cap: usize = (n / 3) * 4 + (4 if pad else (2 if n % 3 == 1 else 3)) * (1 if n % 3 != 0 else 0)
+    out: *char = (*char)(malloc(cap + 1))
+    defer free(out)
+    src: *u8 = (*u8)(b->data)
+    k: usize = 0
+    i: usize = 0
+    while i + 3 <= n:
+        v: u32 = (u32(src[i]) << 16) | (u32(src[i + 1]) << 8) | u32(src[i + 2])
+        out[k] = al[(v >> 18) & u32(63)]
+        out[k + 1] = al[(v >> 12) & u32(63)]
+        out[k + 2] = al[(v >> 6) & u32(63)]
+        out[k + 3] = al[v & u32(63)]
+        k += 4
+        i += 3
+    left: usize = n - i
+    if left == 1:
+        v1: u32 = u32(src[i]) << 16
+        out[k] = al[(v1 >> 18) & u32(63)]
+        out[k + 1] = al[(v1 >> 12) & u32(63)]
+        k += 2
+        if pad:
+            out[k] = '='
+            out[k + 1] = '='
+            k += 2
+    elif left == 2:
+        v2: u32 = (u32(src[i]) << 16) | (u32(src[i + 1]) << 8)
+        out[k] = al[(v2 >> 18) & u32(63)]
+        out[k + 1] = al[(v2 >> 12) & u32(63)]
+        out[k + 2] = al[(v2 >> 6) & u32(63)]
+        k += 3
+        if pad:
+            out[k] = '='
+            k += 1
+    out[k] = '\0'
+    return ps_str_new(ctx, out, k)
+
+# O valor de um caractere de base64, em QUALQUER dos dois alfabetos, ou -1.
+private def b64_val(c: char) -> i32:
+    o: i32 = i32(u8(c))
+    if o >= 65 and o <= 90:
+        return o - 65
+    if o >= 97 and o <= 122:
+        return o - 97 + 26
+    if o >= 48 and o <= 57:
+        return o - 48 + 52
+    if c == '+' or c == '-':
+        return 62
+    if c == '/' or c == '_':
+        return 63
+    return -1
+
+# **Descodificar ACEITA o que codificar não produziria**, e é de propósito: leva
+# qualquer dos alfabetos, com ou sem enchimento. É a regra de Postel aplicada
+# onde é segura — a entrada vem de outra pessoa, e há exactamente uma cadeia de
+# bytes que ela pode querer dizer.
+#
+# **E devolve None quando não é base64** (4.2): entrada de fora que não analisa é
+# um caso previsto, não um acidente.
+def ps_b64_decode(ctx: *PsCtx, s: *PsStr) -> *PsBytes:
+    n: usize = usize(s->len)
+    out: *char = (*char)(malloc(n + 1))
+    defer free(out)
+    acc: u32 = u32(0)
+    nbits: i32 = 0
+    k: usize = 0
+    for i in range(i64(n)):
+        c: char = s->data[i]
+        if c == '=':
+            break
+        v: i32 = b64_val(c)
+        if v < 0:
+            return None
+        acc = (acc << 6) | u32(v)
+        nbits += 6
+        if nbits >= 8:
+            nbits -= 8
+            out[k] = char((acc >> u32(nbits)) & u32(0xFF))
+            k += 1
+    # o que sobra tem de ser ENCHIMENTO, e enchimento é zero. Um resto com bits a
+    # um é texto que ninguém produziu a codificar, e aceitá-lo faria duas
+    # entradas diferentes dar o mesmo resultado — que é como se forjam
+    # assinaturas em base64.
+    if nbits >= 6:
+        return None
+    if nbits > 0 and (acc & ((u32(1) << u32(nbits)) - u32(1))) != u32(0):
+        return None
+    return ps_bytes_new(ctx, out, k)
+
+def ps_hex_encode(ctx: *PsCtx, b: *PsBytes, upper: bool) -> *PsStr:
+    n: usize = b->len
+    d: const *char = CODEC_HEXU if upper else CODEC_HEX
+    out: *char = (*char)(malloc(n * 2 + 1))
+    defer free(out)
+    src: *u8 = (*u8)(b->data)
+    for i in range(i64(n)):
+        out[i * 2] = d[(u32(src[i]) >> 4) & u32(15)]
+        out[i * 2 + 1] = d[u32(src[i]) & u32(15)]
+    out[n * 2] = '\0'
+    return ps_str_new(ctx, out, n * 2)
+
+private def hex_val(c: char) -> i32:
+    o: i32 = i32(u8(c))
+    if o >= 48 and o <= 57:
+        return o - 48
+    if o >= 97 and o <= 102:
+        return o - 97 + 10
+    if o >= 65 and o <= 70:
+        return o - 65 + 10
+    return -1
+
+def ps_hex_decode(ctx: *PsCtx, s: *PsStr) -> *PsBytes:
+    n: usize = usize(s->len)
+    # meio byte não é um byte
+    if n % 2 != 0:
+        return None
+    out: *char = (*char)(malloc(n / 2 + 1))
+    defer free(out)
+    for i in range(i64(n / 2)):
+        hi: i32 = hex_val(s->data[i * 2])
+        lo: i32 = hex_val(s->data[i * 2 + 1])
+        if hi < 0 or lo < 0:
+            return None
+        out[i] = char(hi * 16 + lo)
+    return ps_bytes_new(ctx, out, n / 2)
+
 # ---------- `re`: o motor de Thompson (S2b) ----------
 #
 # O motor de expressões regulares (S2b): um autómato de Thompson, e a garantia

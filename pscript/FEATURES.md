@@ -177,7 +177,7 @@ escalares. Roda e está no gate (headless e com SDL dummy). Ver
 
 | pacote | fase | portão | Estado |
 |---|---|---|---|
-| `codec` — base64 (as 4 variantes) e hex | S2 | `codec/test` | ✅ descodificar aceita os dois alfabetos e com ou sem `=`; recusa bits a sobrar num resto, que é como duas entradas dariam o mesmo valor |
+| base64 e hex — **métodos**, não pacote | 155 | `codec` | ✅ `d.hex()` e `token.from_base64()`: escrever sai dos BYTES, ler sai do TEXTO, e não há `import` nenhum. Descodificar aceita os dois alfabetos e com ou sem `=`; recusa bits a sobrar num resto, que é como duas entradas dariam o mesmo valor |
 | `hash` — CRC32, SHA-1, MD5 (em P) | S2 | `hash/test` | ✅ vectores oficiais, e o ficheiro diz de si próprio o que vale: o CRC32 é uma soma de verificação e os outros dois estão PARTIDOS — estão ali para LER o que já existe |
 | `hmac` — HMAC-SHA256 (em P) | S2 | `hmac/test` | ✅ RFC 4231, e `hmac_equal` compara em tempo que não depende de ONDE os dois diferem. Genérico sobre um trait `Hash`: **atrás da 141.6** (148.1) |
 | `csprng` — `/dev/urandom` | S2 | `tests/pscript/run/tempfile` | ✅ e **falha em vez de recuar** para o MT19937 |
