@@ -2216,26 +2216,8 @@ def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr:
         ps_raise(ctx, "chr() takes a codepoint between 0 and 0x10FFFF", PS_CAT_VALUE, file, line)
         return ps_str_new(ctx, "", 0)
     b: char[5]
-    n: usize = 0
-    v: u32 = u32(cp)
-    if v < 0x80:
-        b[0] = char(v)
-        n = 1
-    elif v < 0x800:
-        b[0] = char(0xC0 | (v >> 6))
-        b[1] = char(0x80 | (v & 0x3F))
-        n = 2
-    elif v < 0x10000:
-        b[0] = char(0xE0 | (v >> 12))
-        b[1] = char(0x80 | ((v >> 6) & 0x3F))
-        b[2] = char(0x80 | (v & 0x3F))
-        n = 3
-    else:
-        b[0] = char(0xF0 | (v >> 18))
-        b[1] = char(0x80 | ((v >> 12) & 0x3F))
-        b[2] = char(0x80 | ((v >> 6) & 0x3F))
-        b[3] = char(0x80 | (v & 0x3F))
-        n = 4
+    # the encoder lives in ONE place (`ps_utf8_put`); this is that plus a string
+    n: usize = ps_utf8_put(&b[0], usize(0), i32(cp))
     return ps_str_new(ctx, &b[0], n)
 
 def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsStr:
@@ -2599,7 +2581,6 @@ private const UC_LOM: const i32 = 3
 private const UC_CASED: const i32 = 4     # Cased
 private const UC_IGN: const i32 = 5       # Case_Ignorable
 
-private def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
 
 # ---------- 108: UM leitor para as tabelas geradas ----------
 #
@@ -2793,9 +2774,18 @@ private def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
     free(buf)
     return out
 
-# one code point, UTF-8, into a buffer. The same encoder `ps_str_chr` has, in
-# the shape a loop can use.
-private def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
+# ONE code point, UTF-8, into a buffer — and the ONLY encoder in the runtime.
+#
+# There used to be three: this one, `ps_str_chr`, and a `js_utf8` in the JSON
+# writer whose comment said the copies were safer than the sharing because they
+# could not drift. They could: repetition is what MAKES drift, and three sites
+# writing 0xC0/0xE0/0xF0 by hand is three chances to write one of them wrong —
+# which is exactly what happened out in the packages, where three encoders were
+# Latin-1 wearing a UTF-8 name.
+#
+# `k` is where to write and the return is where the next one goes, which is the
+# shape a loop wants; `ps_str_chr` is this plus an allocation.
+def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
     v: u32 = u32(cp)
     if v < 0x80:
         buf[k] = char(v)

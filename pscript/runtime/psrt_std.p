@@ -199,29 +199,6 @@ private def js_hex4(j: *PsJson) -> i32:
     j->i += usize(4)
     return v
 
-# one codepoint, UTF-8, into the buffer. Same shape as `ps_str_chr` because it
-# is the same encoding, and having two of them drift apart would be worse than
-# the four lines of repetition.
-private def js_utf8(buf: *char, k: usize, cp: i32) -> usize:
-    v: u32 = u32(cp)
-    if v < 0x80:
-        buf[k] = char(v)
-        return k + usize(1)
-    if v < 0x800:
-        buf[k] = char(0xC0 | (v >> 6))
-        buf[k + usize(1)] = char(0x80 | (v & 0x3F))
-        return k + usize(2)
-    if v < 0x10000:
-        buf[k] = char(0xE0 | (v >> 12))
-        buf[k + usize(1)] = char(0x80 | ((v >> 6) & 0x3F))
-        buf[k + usize(2)] = char(0x80 | (v & 0x3F))
-        return k + usize(3)
-    buf[k] = char(0xF0 | (v >> 18))
-    buf[k + usize(1)] = char(0x80 | ((v >> 12) & 0x3F))
-    buf[k + usize(2)] = char(0x80 | ((v >> 6) & 0x3F))
-    buf[k + usize(3)] = char(0x80 | (v & 0x3F))
-    return k + usize(4)
-
 # A JSON string is not "bytes until the next quote". Three rules the RFC states
 # and a lenient parser silently drops, each of which is a real disagreement:
 #
@@ -306,13 +283,13 @@ private def js_string(j: *PsJson) -> *PsStr:
                     else:
                         # the high one stood alone after all; the second escape
                         # is its own codepoint
-                        k = js_utf8(buf, k, 0xFFFD)
+                        k = ps_utf8_put(buf, k, 0xFFFD)
                         cp = 0xFFFD if (lo >= 0xD800 and lo <= 0xDFFF) else lo
                 else:
                     cp = 0xFFFD
             elif cp >= 0xDC00 and cp <= 0xDFFF:
                 cp = 0xFFFD       # a low surrogate with nothing in front of it
-            k = js_utf8(buf, k, cp)
+            k = ps_utf8_put(buf, k, cp)
         else:
             m: char[64]
             if u8(e) >= 0x20 and u8(e) < 0x7F:

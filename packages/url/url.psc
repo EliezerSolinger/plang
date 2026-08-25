@@ -148,14 +148,16 @@ def in_userinfo_set(c: int) -> bool:
 # UTF-8 of one code point, percent-encoded byte by byte. The encoding happens on
 # BYTES, never on the code point — this is the step that makes `é` into `%C3%A9`
 # and not into `%E9`, which is the old, lossy, pre-Unicode answer.
+#
+# The UTF-8 itself is not written here. `chr(cp).encode()` is the language's one
+# encoder, and a package that spells out 0xC0/0xE0/0xF0 again is a second one:
+# this file used to hold TWO, and three others in the tree turned out to be
+# Latin-1 wearing a UTF-8 name. What belongs here is the percent, not the UTF-8.
 def pct_encode_cp(cp: int) -> str:
-    if cp < 0x80:
-        return pct(cp)
-    if cp < 0x800:
-        return pct(0xC0 | (cp >> 6)) + pct(0x80 | (cp & 0x3F))
-    if cp < 0x10000:
-        return pct(0xE0 | (cp >> 12)) + pct(0x80 | ((cp >> 6) & 0x3F)) + pct(0x80 | (cp & 0x3F))
-    return pct(0xF0 | (cp >> 18)) + pct(0x80 | ((cp >> 12) & 0x3F)) + pct(0x80 | ((cp >> 6) & 0x3F)) + pct(0x80 | (cp & 0x3F))
+    out = ""
+    for b in chr(cp).encode():
+        out += pct(int(b))
+    return out
 
 
 # Percent-DECODE, to bytes. What comes out is not text yet: a `%C3%A9` pair is
@@ -168,31 +170,12 @@ def pct_decode(s: str) -> List<u8> :
         c = ord(s[i])
         if c != 0x25 or i + 2 >= n or not is_hex(ord(s[i + 1])) or not is_hex(ord(s[i + 2])):
             # not a valid escape: the `%` is itself, as the spec says
-            for b in utf8_bytes(c):
+            for b in chr(c).encode():
                 out.append(b)
             i += 1
         else:
             out.append(u8(hex_val(ord(s[i + 1])) * 16 + hex_val(ord(s[i + 2]))))
             i += 3
-    return out
-
-
-def utf8_bytes(cp: int) -> List<u8>:
-    out: List<u8> = []
-    if cp < 0x80:
-        out.append(u8(cp))
-    elif cp < 0x800:
-        out.append(u8(0xC0 | (cp >> 6)))
-        out.append(u8(0x80 | (cp & 0x3F)))
-    elif cp < 0x10000:
-        out.append(u8(0xE0 | (cp >> 12)))
-        out.append(u8(0x80 | ((cp >> 6) & 0x3F)))
-        out.append(u8(0x80 | (cp & 0x3F)))
-    else:
-        out.append(u8(0xF0 | (cp >> 18)))
-        out.append(u8(0x80 | ((cp >> 12) & 0x3F)))
-        out.append(u8(0x80 | ((cp >> 6) & 0x3F)))
-        out.append(u8(0x80 | (cp & 0x3F)))
     return out
 
 

@@ -103,6 +103,9 @@ def ps_str_at(ctx: *PsCtx, s: *PsStr, i: i64, file: const *char, line: i32) -> *
 # (3.4), so these are the only door between text and the number a codepoint is
 # — and the only way a string reaches an interface that speaks scalars.
 def ps_str_ord(ctx: *PsCtx, s: *PsStr, file: const *char, line: i32) -> i64
+# ONE code point, UTF-8, into a buffer — the runtime's only UTF-8 encoder.
+# `k` is where to write; the return is where the next one goes.
+def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize
 def ps_str_chr(ctx: *PsCtx, cp: i64, file: const *char, line: i32) -> *PsStr
 # `s[a:b]` — a COPY (17.3), so no interior pointer ever exists
 def ps_str_slice(ctx: *PsCtx, s: *PsStr, a: i64, b: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsStr

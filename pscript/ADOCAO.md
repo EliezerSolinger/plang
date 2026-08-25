@@ -151,6 +151,46 @@ passa a fazer — vale por tornar visível o código que a fazia à mão, e mal.
 
 ---
 
+## O corolário: UM codificador, e todos os outros usam-no
+
+A pergunta que fechou esta rodada foi *"porque é que temos quatro
+codificadores de UTF-8?"*, e a resposta ao contá-los foi pior do que quatro:
+
+| onde | o que era |
+|---|---|
+| `psrt_val.p` `ps_utf8_put` | o encoder |
+| `psrt_val.p` `ps_str_chr` | **o mesmo, outra vez**, à mão |
+| `psrt_std.p` `js_utf8` | **o mesmo, terceira vez** — cópia byte a byte de `ps_utf8_put` |
+| `url.psc` `utf8_bytes` | um quarto, num pacote |
+| `url.psc` `pct_encode_cp` | um quinto, fundido com o escape |
+| `selfhost/utf8.p` | o do COMPILADOR — outro programa |
+
+Três das cópias estavam dentro do runtime, que é justamente o sítio que devia
+tê-la uma só vez. E o comentário do `js_utf8` tinha visto o problema e concluído
+ao contrário:
+
+> *"Same shape as `ps_str_chr` because it is the same encoding, and having two of
+> them drift apart would be worse than the four lines of repetition."*
+
+**A repetição é o que CAUSA o desvio**, não a alternativa a ele. E foi o que
+aconteceu: com o encoder sem casa, cinco sítios escreveram-no à mão e três dos
+que estavam fora do runtime não eram UTF-8 nenhum — eram Latin-1.
+
+**Feito:** o runtime tem **um**. O `ps_utf8_put` deixou de ser privado e passou
+ao `psrt_val.ph`; o `ps_str_chr` é essa função mais uma alocação; o `js_utf8`
+desapareceu. No `url.psc` os dois viraram `chr(cp).encode()` — o que ali pertence
+é a percentagem, não o UTF-8. **Sítios em pscript que codificam UTF-8 à mão:
+zero.** O WPT continua em 890/890, que é o oráculo que isto tinha de não mexer.
+
+**Fica de fora, e de propósito:** o `selfhost/utf8.p`. É o *compilador*, um
+programa em P que não liga o runtime do pscript — não são dois pacotes a
+divergir, são dois programas. Juntá-los quer dizer pôr o encoder num
+`packages/stl/utf8.ph` que os dois importam, o que é possível (a 154 já embebe o
+`stl` dentro do compilador) mas mexe no bootstrap. É uma decisão a tomar, não um
+resto por limpar.
+
+---
+
 ## E o que a verificação achou por baixo
 
 Correr o `make verify` para fechar esta rodada desenterrou **três dívidas que já
