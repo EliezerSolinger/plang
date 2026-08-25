@@ -2175,8 +2175,15 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       traits com a checagem que recusa o caso bloqueado.
 - [ ] **FE** — o `stl` para dentro do compilador + `Str`→`StrBuf`. Independente
       de tudo; entra quando regenerar o `bootstrap/` já for preciso.
-- [ ] **F0** — `bytes`, fatias do `Buffer` (`View<u8>`), **finalizadores no
-      coletor**. Depende da FN (os nomes) e é a fundação de F1/F2/F6.
+- [x] **F0** — **FEITA.** `bytes` (imutável, coletado, bloco malloc'd que não se
+      move, fatia SEM cópia), `View<T>` como tipo próprio (o que ele NÃO pode
+      fazer é recusado em compilação), e os **finalizadores no coletor** com o
+      portão de fugas (`gc.stats()["finalizers"]` contra `["finalizers_run"]`).
+      Três defeitos apanhados no caminho, todos anteriores a esta fase:
+      o `\x` do C é guloso e fazia `b"\x7fELF"` ter três bytes (o próprio
+      exemplo da 135.7); `ps_list_slice` lia `l->data` cru, portanto `copy()` de
+      QUALQUER vista lia de NULL desde que as vistas existem; e um ramo de
+      método sem `e->lhs->type` derrubava o compilador.
 - [ ] **F1** — a I/O passa a falar `bytes`; `read(n)` morre, `read_into`/`read_all`
       nascem. Depende de F0. Sub-fases por pacote, cada uma com commit e verify
       próprios: **F1a** `tar` → **F1b** `sha2`/`ed25519` → **F1c** `http`/`url` →
