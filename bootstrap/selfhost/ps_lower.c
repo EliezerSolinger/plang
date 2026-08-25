@@ -567,6 +567,8 @@ static void PsLow_lower_arr_for(PsLow *self, PsStmt *s, Vec_pStmt *out);
 
 static void PsLow_lower_dict_for(PsLow *self, PsStmt *s, Vec_pStmt *out);
 
+static void PsLow_lower_bytes_for(PsLow *self, PsStmt *s, Vec_pStmt *out);
+
 static void PsLow_tail_return(PsLow *self, Vec_pStmt *body, Type *ret, Pos pos);
 
 static Stmt *PsLow_wrap_if(PsLow *self, const char *flag, Stmt *st, Pos pos);
@@ -3305,6 +3307,15 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->allocs = 1;
             return vc;
         }
+        if (strcmp(e->lhs->text, "freeze") == 0) {
+            Expr *fz9 = PsLow_call_rt(self, "ps_buffer_freeze", e->pos);
+            PsLow_push_arg(self, fz9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, fz9, PsLow_expr(self, e->lhs->lhs));
+            PsLow_pos_args(self, fz9, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return fz9;
+        }
         int bare = strcmp(e->lhs->text, "size") == 0 || strcmp(e->lhs->text, "close") == 0;
         Expr *bc = PsLow_call_rt(self, Arena_printf(self->a, "ps_buffer_%s", e->lhs->text), e->pos);
         if (strcmp(e->lhs->text, "size") != 0) {
@@ -3330,13 +3341,16 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_CONN) {
         const char *cmn = e->lhs->text;
         Expr *cc7 = NULL;
+        int cpos7 = 0;
         if (strcmp(cmn, "accept") == 0) {
             cc7 = PsLow_call_rt(self, "ps_net_accept", e->pos);
-        } else if (strcmp(cmn, "read") == 0) {
-            cc7 = PsLow_call_rt(self, "ps_conn_read", e->pos);
+        } else if (strcmp(cmn, "read_into") == 0 || strcmp(cmn, "write_from") == 0) {
+            cc7 = PsLow_call_rt(self, (strcmp(cmn, "read_into") == 0 ? "ps_conn_read_into" : "ps_conn_write_from"), e->pos);
+            cpos7 = 1;
         } else if (strcmp(cmn, "write") == 0) {
             PsType *cwa = e->args[0]->type;
-            cc7 = PsLow_call_rt(self, (cwa != NULL && cwa->kind == PT_LIST ? "ps_conn_write_bytes" : "ps_conn_write"), e->pos);
+            PsTypeKind ck7 = (cwa != NULL ? cwa->kind : PT_UNKNOWN);
+            cc7 = PsLow_call_rt(self, (ck7 == PT_BYTES ? "ps_conn_write_bytesobj" : (ck7 == PT_LIST ? "ps_conn_write_bytes" : "ps_conn_write")), e->pos);
         } else if (strcmp(cmn, "close") == 0) {
             cc7 = PsLow_call_rt(self, "ps_conn_close", e->pos);
         } else {
@@ -3350,6 +3364,9 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         for (i = 0; i < e->nargs; i += 1) {
             PsLow_push_arg(self, cc7, PsLow_expr(self, e->args[i]));
         }
+        if (cpos7) {
+            PsLow_pos_args(self, cc7, e->pos);
+        }
         if (strcmp(cmn, "close") != 0) {
             self->raised = 1;
             self->allocs = 1;
@@ -3360,17 +3377,19 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         const char *fmn = e->lhs->text;
         const char *want = NULL;
         Expr *rt7 = NULL;
-        if (strcmp(fmn, "read") == 0) {
-            rt7 = PsLow_call_rt(self, "ps_aio_read", e->pos);
+        int pos7 = 0;
+        if (strcmp(fmn, "read_into") == 0 || strcmp(fmn, "write_from") == 0) {
+            rt7 = PsLow_call_rt(self, (strcmp(fmn, "read_into") == 0 ? "ps_aio_read_into" : "ps_aio_write_from"), e->pos);
+            pos7 = 1;
         } else if (strcmp(fmn, "write") == 0) {
             PsType *wa = e->args[0]->type;
-            int bytes7 = wa != NULL && wa->kind == PT_LIST;
-            rt7 = PsLow_call_rt(self, (bytes7 ? "ps_aio_write_bytes" : "ps_aio_write"), e->pos);
+            PsTypeKind wk7 = (wa != NULL ? wa->kind : PT_UNKNOWN);
+            rt7 = PsLow_call_rt(self, (wk7 == PT_BYTES ? "ps_aio_write_bytesobj" : (wk7 == PT_LIST ? "ps_aio_write_bytes" : "ps_aio_write")), e->pos);
         } else if (strcmp(fmn, "close") == 0) {
             rt7 = PsLow_call_rt(self, "ps_aio_close", e->pos);
         } else {
             rt7 = PsLow_call_rt(self, "ps_aio_readall", e->pos);
-            want = (strcmp(fmn, "text") == 0 ? "PS_W_STR" : (strcmp(fmn, "readlines") == 0 ? "PS_W_LINES" : "PS_W_BYTES"));
+            want = (strcmp(fmn, "text") == 0 ? "PS_W_STR" : (strcmp(fmn, "readlines") == 0 ? "PS_W_LINES" : "PS_W_BYTESOBJ"));
         }
         PsLow_push_arg(self, rt7, PsLow_ctx_arg(self, e->pos));
         PsLow_push_arg(self, rt7, PsLow_expr(self, e->lhs->lhs));
@@ -3380,6 +3399,9 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         }
         if (want != NULL) {
             PsLow_push_arg(self, rt7, PsLow_ident(self, want, e->pos));
+        }
+        if (pos7) {
+            PsLow_pos_args(self, rt7, e->pos);
         }
         self->raised = 1;
         self->allocs = 1;
@@ -4425,7 +4447,8 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                 self->tmp_ctr += 1;
                 Stmt *sv9 = st_new(self->a, ST_VAR, e->pos);
                 sv9->name = sn9;
-                sv9->type = ty_ptr(self->a, ty_name(self->a, (csk9 == 1 ? "PsStr" : "PsList")));
+                int abk9 = e->args[i]->type != NULL && e->args[i]->type->kind == PT_BYTES;
+                sv9->type = ty_ptr(self->a, ty_name(self->a, (csk9 == 1 ? "PsStr" : (abk9 ? "PsBytes" : "PsList"))));
                 sv9->init = a9;
                 Vec_pStmt_push(&self->pre, sv9);
                 Stmt *vd9 = st_new(self->a, ST_VAR, e->pos);
@@ -4439,6 +4462,12 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                 fp9->field = (csk9 == 1 ? "data" : "data");
                 if (csk9 == 1) {
                     il9->args[0] = fp9;
+                } else if (abk9) {
+                    Expr *cbb9 = ex_new(self->a, EX_CAST, e->pos);
+                    cbb9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"));
+                    cbb9->cast_type->inner->is_const = 1;
+                    cbb9->lhs = fp9;
+                    il9->args[0] = cbb9;
                 } else {
                     Expr *bp9 = PsLow_call_rt(self, "ps_list_base", e->pos);
                     PsLow_push_arg(self, bp9, PsLow_ident(self, sn9, e->pos));
@@ -6732,6 +6761,14 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 }
                 return;
             }
+            if (s->iter->type != NULL && s->iter->type->kind == PT_BYTES) {
+                PsLow_lower_bytes_for(self, s, out);
+                {
+                    self->async_brk = sb8;
+                    self->async_cont = sc8;
+                }
+                return;
+            }
             if (s->iter->type != NULL && (s->iter->type->kind == PT_LIST || s->iter->type->kind == PT_VIEW)) {
                 PsLow_lower_list_for(self, s, out);
                 {
@@ -7149,6 +7186,42 @@ static void PsLow_lower_list_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Vec_pStmt_push(&inner, bb);
     Block *wb = PsLow_frame_wrap(self, &inner, NULL, 0, s->pos);
     fr->body = wb;
+    Vec_pStmt_push(out, fr);
+}
+
+static void PsLow_lower_bytes_for(PsLow *self, PsStmt *s, Vec_pStmt *out) {
+    const char *bn = Arena_printf(self->a, "__bt%d", self->tmp_ctr);
+    const char *iv = Arena_printf(self->a, "__bx%d", self->tmp_ctr);
+    self->tmp_ctr += 1;
+    Stmt *bdl = st_new(self->a, ST_VAR, s->pos);
+    bdl->name = bn;
+    bdl->type = ty_ptr(self->a, ty_name(self->a, "PsBytes"));
+    bdl->init = PsLow_expr(self, s->iter);
+    Vec_pStmt_push(out, bdl);
+    Expr *cnt = PsLow_call_rt(self, "ps_bytes_len", s->pos);
+    PsLow_push_arg(self, cnt, PsLow_ident(self, bn, s->pos));
+    Stmt *fr = st_new(self->a, ST_FOR, s->pos);
+    fr->var = iv;
+    fr->to = cnt;
+    Vec_pStmt inner;
+    Vec_pStmt_init(&inner);
+    PsLow_rn_push(self, s->names[0], PsLow_vname(self, s->names[0]), 0);
+    Expr *get = PsLow_call_rt(self, "ps_bytes_get", s->pos);
+    PsLow_push_arg(self, get, PsLow_ctx_arg(self, s->pos));
+    PsLow_push_arg(self, get, PsLow_ident(self, bn, s->pos));
+    PsLow_push_arg(self, get, PsLow_ident(self, iv, s->pos));
+    PsLow_pos_args(self, get, s->pos);
+    Stmt *bd = st_new(self->a, ST_VAR, s->pos);
+    bd->name = PsLow_vname(self, s->names[0]);
+    bd->type = ty_name(self->a, "u8");
+    bd->init = get;
+    Vec_pStmt_push(&inner, bd);
+    Block *body = (self->for_body != NULL ? self->for_body : PsLow_block(self, s->body));
+    PsLow_rn_pop(self);
+    Stmt *bb = st_new(self->a, ST_BLOCK, s->pos);
+    bb->body = body;
+    Vec_pStmt_push(&inner, bb);
+    fr->body = PsLow_frame_wrap(self, &inner, NULL, 0, s->pos);
     Vec_pStmt_push(out, fr);
 }
 

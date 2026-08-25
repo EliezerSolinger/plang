@@ -38,3 +38,24 @@ trait Iterable:
 
 trait Closeable:
     def close(self)
+
+# 135.2/S5: the two ends of byte I/O, and the reason they are TRAITS is that
+# there are three implementations of each and a program should be able to write
+# one function that serves all three.
+#
+# `async`, and it is not a decoration: a file and a socket both PARK in the
+# scheduler, and a `Reader` that could not say `async` would not cover a socket
+# — which is half the reason to have one. The cost is that an implementation
+# with nothing to wait for still says `async`; today there is no such
+# implementation, so it costs nobody anything yet.
+#
+# The shape is the one 135.2 decided, and it is the same on both sides: a
+# `Buffer` the caller already has, where in it to start, and how many bytes. A
+# Buffer is malloc'd and never moves (52.3), so the syscall reads and writes it
+# DIRECTLY — which is what turns a proxy's four copies into none.
+
+trait Reader:
+    async def read_into(self, b: Buffer, off: int, n: int) -> int
+
+trait Writer:
+    async def write_from(self, b: Buffer, off: int, n: int) -> int

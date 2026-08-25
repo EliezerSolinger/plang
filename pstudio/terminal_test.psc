@@ -171,9 +171,23 @@ feed(t, "\x1b[?1049l")
 print("and the main one came back: [" + row_text(t, 0) + "]")
 
 # ---- UTF-8 split across two reads ----
+#
+# `feed_bytes` takes a `View<u8>` and not a list, because that is what the
+# driver has: the read landed in a Buffer the terminal owns and the window says
+# how much of it arrived (135.2/135.8). Nothing is copied on that path, and the
+# price is these three lines here.
+fb = Buffer(4)
+
+
+def win(bs: List<u8>) -> View<u8>:
+    for i in range(len(bs)):
+        fb.view_u8()[i] = bs[i]
+    return fb[0:len(bs)]
+
+
 t = trm.new_term(8, 1)
-t.feed_bytes([0xC3])
-t.feed_bytes([0xA9, 0x21])
+t.feed_bytes(win([0xC3]))
+t.feed_bytes(win([0xA9, 0x21]))
 print("split codepoint: [" + row_text(t, 0) + "] len=" + str(len(row_text(t, 0))))
 
 # ---- the title, which is the only OSC anybody sets ----

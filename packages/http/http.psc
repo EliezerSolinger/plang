@@ -55,7 +55,7 @@ struct Request:
     version: str
     headers: Dict<str, str>
     raw: List<Header>
-    body: List<u8>
+    body: bytes
 
     def header(self, name: str) -> str:
         return self.headers[name] if name in self.headers else ""
@@ -68,7 +68,7 @@ struct Response:
     reason: str
     headers: Dict<str, str>
     raw: List<Header>
-    body: List<u8>
+    body: bytes
 
     def header(self, name: str) -> str:
         return self.headers[name] if name in self.headers else ""
@@ -201,8 +201,12 @@ struct Parser:
             return self.fail("unsupported version: " + tok)
         return True
 
-    def feed(self, chunk: List<u8>) -> bool:
-        """Swallows what arrived and says whether a whole message can be read."""
+    def feed(self, chunk: bytes) -> bool:
+        """Swallows what arrived and says whether a whole message can be read.
+
+        What comes IN is `bytes` — that is what a read gives (135.2) — and what
+        it lands in is a `List<u8>`, because the parser accumulates across calls
+        and a list is what accumulates (135.6)."""
         for b in chunk:
             self.buf.append(b)
         return self.step()
@@ -575,13 +579,15 @@ struct Parser:
             return True
         return self.is_response and self.status == 101
 
+    # ... and it is HERE, at the boundary, that the accumulated list becomes
+    # the value that crosses. One conversion, said out loud (135.6).
     def request(self) -> Request:
         return Request(self.method, self.target, self.protocol, self.version,
-                       self.headers, self.raw, self.body)
+                       self.headers, self.raw, bytes(self.body))
 
     def response(self) -> Response:
         return Response(self.protocol, self.version, self.status, self.reason,
-                        self.headers, self.raw, self.body)
+                        self.headers, self.raw, bytes(self.body))
 
 
 def new_parser() -> Parser:

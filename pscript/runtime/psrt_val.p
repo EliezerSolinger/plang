@@ -741,6 +741,36 @@ def ps_buffer_new(ctx: *PsCtx, nbytes: i64, file: const *char, line: i32) -> *Ps
     b->open = 1
     return b
 
+# 135.4: the block changes hands with zero copy, and the buffer is INVALIDATED.
+# It is the same rule `transfer` follows (18.2) and it prevents the same
+# mistake — two owners writing the same bytes — by making it an error instead
+# of a race. Whoever wants to keep both writes `bytes(b)`, which copies.
+#
+# The `bytes` that comes out OWNS the block from here on, so it registers the
+# finalizer and the buffer stops having one to run: `close` on a frozen buffer
+# finds nothing to free, which is exactly right.
+def ps_buffer_freeze(ctx: *PsCtx, b: *PsBuffer, file: const *char, line: i32) -> *PsBytes:
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return ps_bytes_new(ctx, "", usize(0))
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return ps_bytes_new(ctx, "", usize(0))
+    r: *PsBytes = ps_alloc(ctx, sizeof(PsBytes), PS_TY_BYTES)
+    r->data = b->data
+    r->len = b->nbytes
+    r->owner = None
+    r->hash = 0
+    ps_add_final(ctx, (*PsObj)(r), ps_bytes_release)
+    # the buffer gives the block up, and says so: `open = 0` is what every other
+    # method already tests, so every one of them refuses from here on with the
+    # message it already had
+    b->data = None
+    b->nbytes = usize(0)
+    b->open = 0
+    return r
+
+
 def ps_buffer_close(ctx: *PsCtx, b: *PsBuffer):
     if b != None and b->open != 0:
         free(b->data)

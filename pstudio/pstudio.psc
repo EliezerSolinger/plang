@@ -520,13 +520,17 @@ struct TermDriver:
     is ready, so cancelling one that is still parked loses nothing. Racing it is
     what keeps the window answering the keyboard while a program floods it."""
     conn: Socket?
-    reading: Task<List<u8>>?
+    # 135.2: ONE buffer for the terminal's whole life, and the read writes
+    # straight into it. Before this, every frame allocated a fresh `List<u8>`
+    # for eight kilobytes that were usually a keystroke.
+    rbuf: Buffer
+    reading: Task<int>?
     cols: int
     rows: int
 
 
 def new_term_driver() -> TermDriver:
-    return TermDriver(None, None, 0, 0)
+    return TermDriver(None, Buffer(8192), None, 0, 0)
 
 
 private def term_size(sh: appm.Shell, ide: idem.Ide, td: TermDriver) -> bool:
@@ -592,16 +596,18 @@ async def serve_term(sh: appm.Shell, ide: idem.Ide, td: TermDriver):
         catch e:
             pass          # the child is gone; the read below will say so
     if td.reading == None:
-        td.reading = c2.read(8192)
+        td.reading = c2.read_into(td.rbuf, 0, 8192)
     r2 = td.reading
     td.reading = None      # consumed or cancelled: either way, start fresh
     if r2 != None and await timeout(r2, 0.001):
-        b = await r2
-        if len(b) == 0:
+        n2 = await r2
+        if n2 == 0:
             await term_close(sh, ide, td)
             ide.term.feed_text("\r\n[the program ended]\r\n")
         else:
-            ide.term.feed_bytes(b)
+            # a WINDOW over what just arrived: no copy, and it lives exactly as
+            # long as the call below (135.8)
+            ide.term.feed_bytes(td.rbuf[0:n2])
         sh.dirty_ui = True
 
 

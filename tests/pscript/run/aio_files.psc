@@ -83,12 +83,17 @@ print("accumulated", a.read_bytes)
 # what is missing does not blow up: the catch is inside the `async def`
 print("missing", await a.read_or_empty("no/such/file.txt"))
 
-# bytes: up to n, and the empty answer is the end
+# 135.2: `read_into` reads into memory you already have, and gives back HOW
+# MANY landed — zero meaning the end, which is what a read has always meant
+# here (79.2). One buffer serves every read of the file.
 f = await open(PATH, "r")
-first = await f.read(6)
+rb = Buffer(16)
+n1 = await f.read_into(rb, 0, 6)
+first = bytes(rb[0:n1])
 rest = await f.read_all()
-end = await f.read(8)
-print("bytes", len(first), first[0], len(rest), len(end))
+n3 = await f.read_into(rb, 0, 8)
+print("bytes", n1, first[0], len(rest), n3)
+rb.close()
 await f.close()
 
 lines = await (await open(PATH, "r")).readlines()

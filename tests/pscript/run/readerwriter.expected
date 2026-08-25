@@ -1,0 +1,6 @@
+copiou 600 bytes em pedaços de 64
+igual: True 600
+do socket: 14 bytes pelo mesmo genérico
+congelado: ABCDEFGH 8
+e o Buffer foi-se: this buffer is closed
+readerwriter-ok

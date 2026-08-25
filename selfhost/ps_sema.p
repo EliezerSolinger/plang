@@ -311,6 +311,7 @@ struct PsSema:
     private def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char)
     private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
     private def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
+    private def io_window(self: *PsSema, e: *PsExpr, what: const *char)
     private def want(self: *PsSema, e: *PsExpr, got: *PsType, expect: *PsType, ctx: const *char)
     private def check_want(self: *PsSema, e: *PsExpr, expect: *PsType, ctx: const *char)
     private def opt_of(self: *PsSema, t: *PsType, pos: Pos) -> *PsType
@@ -352,6 +353,7 @@ struct PsSema:
     private def add_methods(self: *PsSema, rd: *PsDecl, ms: **PsFunc, nms: i32)
     private def c_type(self: *PsSema, t: *Type) -> *PsType
     private def cstr_kind(self: *PsSema, t: *Type) -> i32
+    private def cbytes_ok(self: *PsSema, t: *PsType) -> bool
     private def bytes_type(self: *PsSema, pos: Pos) -> *PsType
     private def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc)
     private def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
@@ -1908,6 +1910,16 @@ struct PsSema:
                     if e->nargs != 0:
                         fatal_at(self->file, e->pos, "size() takes no arguments")
                     return ps_type(self->a, PT_INT, e->pos)
+                if strcmp(bm, "freeze") == 0:
+                    # 135.4: the block changes hands with ZERO copy and the
+                    # buffer is invalidated — the same rule `transfer` follows
+                    # (18.2), and it prevents the same mistake: two owners
+                    # writing the same bytes becomes an error instead of a race.
+                    # Whoever wants to keep both writes `bytes(b)`, which copies
+                    # and says so.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "freeze() takes no arguments")
+                    return ps_type(self->a, PT_BYTES, e->pos)
                 # 18.3: the same bytes seen as elements. What comes back IS a
                 # list — len, index, write, iterate and slice all read the same
                 # way they do anywhere else — and it borrows: no copy, and no
@@ -1928,7 +1940,7 @@ struct PsSema:
                     vl: *PsType = ps_type(self->a, PT_VIEW, e->pos)
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
-                fatal_at(self->file, e->pos, "a buffer has get_f64, set_f64, size and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+                fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
             # 118: um processo que já terminou (`await os.run(...)`): o status
             # e tudo que ele imprimiu. Métodos e não campos, que é a forma que
             # `conn.port()` já tinha.
@@ -1956,22 +1968,15 @@ struct PsSema:
                 ctk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 if strcmp(cm, "write") == 0:
                     if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "write() takes one str or one List<u8>")
+                        fatal_at(self->file, e->pos, "write() takes one str, one `bytes` or one List<u8>")
                     cw: *PsType = self->check_expr(e->args[0])
-                    if cw == None or not (cw->kind == PT_STR or (cw->kind == PT_LIST and cw->inner != None and cw->inner->kind == PT_INT and cw->inner->width == 8)):
-                        fatal_at(self->file, e->pos, "write() takes a str or a List<u8>, found %s", ps_type_str(self->a, cw))
+                    if cw == None or not (cw->kind == PT_STR or cw->kind == PT_BYTES or (cw->kind == PT_LIST and cw->inner != None and cw->inner->kind == PT_INT and cw->inner->width == 8)):
+                        fatal_at(self->file, e->pos, "write() takes a str, `bytes` or a List<u8>, found %s", ps_type_str(self->a, cw))
                     ctk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ctk
-                if strcmp(cm, "read") == 0:
-                    if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "read(n) takes how many BYTES at most; the empty answer means the other side closed (79.2)")
-                    cn: *PsType = self->check_expr(e->args[0])
-                    self->want(e->args[0], cn, ps_type(self->a, PT_INT, e->pos), "read()")
-                    cb: *PsType = ps_type(self->a, PT_LIST, e->pos)
-                    cb->inner = ps_type(self->a, PT_INT, e->pos)
-                    cb->inner->width = 8
-                    cb->inner->uns = True
-                    ctk->inner = cb
+                if strcmp(cm, "read_into") == 0 or strcmp(cm, "write_from") == 0:
+                    self->io_window(e, cm)
+                    ctk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ctk
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "'%s' takes no arguments", cm)
@@ -1982,7 +1987,7 @@ struct PsSema:
                     return ps_type(self->a, PT_VOID, e->pos)
                 if strcmp(cm, "port") == 0:
                     return ps_type(self->a, PT_INT, e->pos)
-                fatal_at(self->file, e->pos, "a socket has accept, read(n), write, close and port (77.1), not '%s'", cm)
+                fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close and port (77.1/135.2), not '%s'", cm)
             # 48.1 + 76.2: every one of these is a TASK now. The names say what
             # comes back, because the return type follows the name and not the
             # number of arguments: `read(n)` gives BYTES (up to n, empty at the
@@ -1994,31 +1999,31 @@ struct PsSema:
                 ftk: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 if strcmp(fm, "write") == 0:
                     if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "write() takes one string or one List<u8>")
+                        fatal_at(self->file, e->pos, "write() takes one str, one `bytes` or one List<u8>")
                     wat: *PsType = self->check_expr(e->args[0])
-                    if wat == None or not (wat->kind == PT_STR or (wat->kind == PT_LIST and wat->inner != None and wat->inner->kind == PT_INT and wat->inner->width == 8)):
-                        fatal_at(self->file, e->pos, "write() takes a str or a List<u8>, found %s", ps_type_str(self->a, wat))
+                    if wat == None or not (wat->kind == PT_STR or wat->kind == PT_BYTES or (wat->kind == PT_LIST and wat->inner != None and wat->inner->kind == PT_INT and wat->inner->width == 8)):
+                        fatal_at(self->file, e->pos, "write() takes a str, `bytes` or a List<u8>, found %s", ps_type_str(self->a, wat))
                     ftk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ftk
-                if strcmp(fm, "read") == 0:
-                    if e->nargs != 1:
-                        fatal_at(self->file, e->pos, "read(n) takes the number of BYTES to read at most (79.2); the whole file is `text()` (as str) or `read_all()` (as bytes)")
-                    rnt: *PsType = self->check_expr(e->args[0])
-                    self->want(e->args[0], rnt, ps_type(self->a, PT_INT, e->pos), "read()")
-                    rb: *PsType = ps_type(self->a, PT_LIST, e->pos)
-                    rb->inner = ps_type(self->a, PT_INT, e->pos)
-                    rb->inner->width = 8
-                    rb->inner->uns = True
-                    ftk->inner = rb
+                if strcmp(fm, "read_into") == 0 or strcmp(fm, "write_from") == 0:
+                    self->io_window(e, fm)
+                    ftk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ftk
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "'%s' takes no arguments", fm)
                 if strcmp(fm, "read_all") == 0:
-                    ra: *PsType = ps_type(self->a, PT_LIST, e->pos)
-                    ra->inner = ps_type(self->a, PT_INT, e->pos)
-                    ra->inner->width = 8
-                    ra->inner->uns = True
-                    ftk->inner = ra
+                    # 135.9: what changes in a file is only what gave back
+                    # BYTES. `text()` and `readlines()` stay exactly as they
+                    # were — they are text convenience, not byte I/O, and
+                    # nobody wants them to become a buffer.
+                    #
+                    # 135.10: no ceiling, and it does not need one. Reading a
+                    # 4 GB file allocates 4 GB and that is right — it is what
+                    # was asked for. A ceiling would be a magic number somebody
+                    # would one day have to raise for a legitimate reason, and
+                    # the alternative to bringing it all in is not reading less:
+                    # it is `os.mmap`.
+                    ftk->inner = ps_type(self->a, PT_BYTES, e->pos)
                     return ftk
                 if strcmp(fm, "text") == 0:
                     ftk->inner = ps_type(self->a, PT_STR, e->pos)
@@ -2031,7 +2036,7 @@ struct PsSema:
                 if strcmp(fm, "close") == 0:
                     ftk->inner = ps_type(self->a, PT_VOID, e->pos)
                     return ftk
-                fatal_at(self->file, e->pos, "a file has read(n), read_all, text, readlines, write and close (48.1/76.2), not '%s'", fm)
+                fatal_at(self->file, e->pos, "a file has read_into, read_all, text, readlines, write, write_from and close (48.1/76.2/135.2), not '%s'", fm)
             # `w.send(x)` / `await w.recv()` — the worker IS the channel (36.1),
             # and one worker is one pipe in both directions.
             if rt != None and rt->kind == PT_WORKER:
@@ -2269,7 +2274,15 @@ struct PsSema:
                     if e->args[i]->kind != PE_NAME or not self->gconst.has(e->args[i]->text):
                         fatal_at(self->file, e->args[i]->pos, "'%s' takes '%s' by reference (72.6), so the argument has to be a module-level `const` of type %s — a value with an address that is stable and bytes nothing can change", name, cf->params[i].name, ps_type_str(self->a, cf->params[i].type))
                     e->args[i]->is_in = True
-                self->want(e->args[i], at4, cf->params[i].type, self->a->printf("parameter '%s'", cf->params[i].name))
+                if cf->params[i].cstr == 2:
+                    # either currency crosses as a `CBytes` (84.1/135.3), and
+                    # `bytes` crosses BETTER: its block is outside the heap and
+                    # never moves, so the pair points straight at it
+                    if not self->cbytes_ok(at4):
+                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes` or a List<u8>, found %s (84.1)", cf->params[i].name, ps_type_str(self->a, at4))
+                    e->args[i]->type = at4
+                else:
+                    self->want(e->args[i], at4, cf->params[i].type, self->a->printf("parameter '%s'", cf->params[i].name))
             e->is_cfunc = True
             e->cstr_ret = cf->ret_cstr
             return cf->ret
@@ -2418,7 +2431,8 @@ struct PsSema:
         # the type has to have declared the trait, in a clause or in a block
         if f->tparams[0].bound != None:
             td: *PsDecl = self->find_trait_named(f->tparams[0].bound, f->ns, e->pos)
-            if conc->kind != PT_NAME or not self->timpls.has(self->a->printf("%s|%s", td->name, conc->name)):
+            cn9: const *char = conc->name if conc->kind == PT_NAME else ps_builtin_tname(conc)
+            if cn9 == None or not self->timpls.has(self->a->printf("%s|%s", td->name, cn9)):
                 fatal_at(self->file, e->pos, "%s does not implement '%s', which '%s' requires of '%s' (66.2)", ps_type_str(self->a, conc), ps_disp(td->name), ps_disp(name), tp)
         key: const *char = self->a->printf("%s|%s", name, ps_type_str(self->a, conc))
         inst: *PsFunc = self->insts.get_or(key, None)
@@ -2447,6 +2461,23 @@ struct PsSema:
             tg9->inner = rt9
             return tg9
         return rt9
+
+    # 135.2: `read_into(buf, off, n)` and `write_from(buf, off, n)` — the same
+    # three arguments on both sides, and the same on a file and on a socket.
+    #
+    # The `Buffer` is the point: it is malloc'd and never moves (52.3), so the
+    # syscall may read and write it DIRECTLY. That is what turns four copies
+    # into none — a proxy moving a megabyte used to malloc it, memcpy it into a
+    # collected `List<u8>`, slice it, and copy again.
+    private def io_window(self: *PsSema, e: *PsExpr, what: const *char):
+        if e->nargs != 3:
+            fatal_at(self->file, e->pos, "%s(buf, off, n) takes a Buffer, where in it to start, and how many bytes (135.2)", what)
+        bt: *PsType = self->check_expr(e->args[0])
+        if bt == None or bt->kind != PT_BUFFER:
+            fatal_at(self->file, e->args[0]->pos, "%s() takes a Buffer — memory you already have, which is the whole reason it exists — found %s", what, ps_type_str(self->a, bt))
+        for i in range(1, 3):
+            at: *PsType = self->check_expr(e->args[i])
+            self->want(e->args[i], at, ps_type(self->a, PT_INT, e->pos), "where in the Buffer to start" if i == 1 else "how many bytes")
 
     # The builtins that have to exist on day one. `print` needs *args (44.2) to
     # be what Python's is; until that is compiled, one argument is the honest
@@ -2671,7 +2702,7 @@ struct PsSema:
         # bytes, with every list operation; `bytes` is what CROSSES.
         if strcmp(name, "bytes") == 0:
             if e->nargs != 1:
-                fatal_at(self->file, e->pos, "bytes() takes one List<u8>, or one Buffer to copy")
+                fatal_at(self->file, e->pos, "bytes() takes one List<u8> or one View<u8>")
             # 68.2: a literal ADAPTS to the width of its context, so
             # `bytes([0xFF, 0xFE])` is a `List<u8>` and not a `List<int>` that
             # is then refused for a reason nobody wrote down.
@@ -2685,8 +2716,13 @@ struct PsSema:
             self->hint = bph
             if bfa != None and bfa->kind == PT_BYTES:
                 return bfa      # already bytes: asking again is not an error
-            if bfa == None or bfa->kind != PT_LIST or bfa->inner == None or bfa->inner->kind != PT_INT or bfa->inner->width != 8 or not bfa->inner->uns:
-                fatal_at(self->file, e->pos, "bytes() takes a List<u8> — a copy, said out loud (135.6) — found %s", ps_type_str(self->a, bfa))
+            # a `View<u8>` counts too, and it is the form that reads best after
+            # a `read_into`: the window says which bytes, and `bytes()` says
+            # that they are being copied out of borrowed memory into a value
+            # that outlives it
+            bfk: PsTypeKind = bfa->kind if bfa != None else PT_UNKNOWN
+            if not ((bfk == PT_LIST or bfk == PT_VIEW) and bfa->inner != None and bfa->inner->kind == PT_INT and bfa->inner->width == 8 and bfa->inner->uns):
+                fatal_at(self->file, e->pos, "bytes() takes a List<u8> or a View<u8> — a copy, said out loud (135.6) — found %s", ps_type_str(self->a, bfa))
             return ps_type(self->a, PT_BYTES, e->pos)
         if strcmp(name, "list") == 0:
             if e->nargs != 1:
@@ -4290,6 +4326,19 @@ struct PsSema:
         if strcmp(b->name, "CBytes") == 0:
             return 2
         return 0
+
+    # 84.1 + 135.3: what a `CBytes` parameter accepts. `List<u8>` was the only
+    # answer before there was a `bytes`, and now there are two — and the second
+    # is the better one for exactly the reason 141.3 gives: a `bytes` block
+    # lives OUTSIDE the collected heap and never moves, so the pair handed over
+    # points straight at it. A `List<u8>` has to be borrowed carefully, because
+    # its storage is collected and the collector moves it.
+    private def cbytes_ok(self: *PsSema, t: *PsType) -> bool:
+        if t == None:
+            return False
+        if t->kind == PT_BYTES:
+            return True
+        return t->kind == PT_LIST and t->inner != None and t->inner->kind == PT_INT and t->inner->width == 8 and t->inner->uns
 
     private def bytes_type(self: *PsSema, pos: Pos) -> *PsType:
         l: *PsType = ps_type(self->a, PT_LIST, pos)
@@ -6120,6 +6169,34 @@ private def ps_adapt_lit(file: const *char, e: *PsExpr, t: *PsType) -> bool:
     e->type = t
     return True
 
+# S5: the name a BUILT-IN type answers to when a trait asks who it is.
+#
+# Conformance is keyed by NAME (`"Reader|File"`), and a built-in has no `name`
+# field — its identity is its KIND. This is the one place that translates, and
+# the reason it is a function rather than a field is that the answer must be
+# the same string the trait registration used, and one function is how you make
+# sure of that.
+#
+# None for a type that cannot implement anything: a number has no methods to
+# implement one with.
+def ps_builtin_tname(t: *PsType) -> const *char:
+    if t == None:
+        return None
+    match t->kind:
+        case PT_FILE:
+            return "File"
+        case PT_CONN:
+            return "Socket"
+        case PT_BUFFER:
+            return "Buffer"
+        case PT_BYTES:
+            return "bytes"
+        case PT_STR:
+            return "str"
+        case _:
+            return None
+
+
 # does a value of this type have an IDENTITY? Only a reference does (22.2).
 def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
@@ -6504,6 +6581,21 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nr
         m->ndecls = np2 + m->ndecls
     s.root_ns = s.build_ns(m, "", m->name if m->name != None else m->path)
     s.cur_ns = s.root_ns
+
+    # S5: what the RUNTIME already implements. `File` and `Socket` have
+    # `read_into` and `write_from` — the branches above give them exactly the
+    # signature the prelude's traits declare — so the pair is registered rather
+    # than checked: the implementation is the runtime's, and the proof that it
+    # matches is that both are written here, in this file, side by side.
+    #
+    # It is registered even when the program shadows the trait, and that is
+    # right: `timpls` is keyed by the trait's NAME, so a program that declares
+    # its own `Reader` gets its own key and this one simply never matches.
+    s.timpls.add("Reader|File")
+    s.timpls.add("Writer|File")
+    s.timpls.add("Reader|Socket")
+    s.timpls.add("Writer|Socket")
+
     s.fn_gone.init()
     s.fn_nonlocals.init()
     s.fn_globals.init()

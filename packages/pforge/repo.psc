@@ -90,7 +90,7 @@ def local_path(r: Repo) -> str:
     return r.url[7:len(r.url)]
 
 
-async def fetch(r: Repo, rel: str) -> List<u8>:
+async def fetch(r: Repo, rel: str) -> bytes:
     """ONE file from the repository, by its relative path.
 
     It is the ONLY point where bytes from outside come in, and that is on
@@ -116,7 +116,7 @@ async def fetch(r: Repo, rel: str) -> List<u8>:
     raise error("I do not know how to fetch from " + r.url + " — the schemes are file://, http:// and https://", VALUE)
 
 
-async def fetch_http(r: Repo, rel: str) -> List<u8>:
+async def fetch_http(r: Repo, rel: str) -> bytes:
     """A GET, and nothing clever: no silently followed redirect, no cache, no
     session. What is asked for is an immutable file at a known path.
 
@@ -148,15 +148,20 @@ async def fetch_http(r: Repo, rel: str) -> List<u8>:
     await c.write(req)
     p = H.new_response_parser()
     done = False
-    while not done:
-        chunk = await c.read(65536)
-        if len(chunk) == 0:
-            # the peer closed: it is the only way a response with neither
-            # `content-length` nor `chunked` can be complete, and the parser knows
-            # how to say so
-            done = p.finish()
-            break
-        done = p.feed(chunk)
+    # 135.2: ONE buffer for the whole download, reused on every turn. The old
+    # `read(n)` allocated a fresh `List<u8>` per chunk and copied into it; this
+    # allocates once and the syscall writes straight into it, because a Buffer
+    # is malloc'd and never moves (52.3).
+    with Buffer(65536) as rb:
+        while not done:
+            got = await c.read_into(rb, 0, 65536)
+            if got == 0:
+                # the peer closed: it is the only way a response with neither
+                # `content-length` nor `chunked` can be complete, and the parser
+                # knows how to say so
+                done = p.finish()
+                break
+            done = p.feed(bytes(rb[0:got]))
     c.close()
     if not done:
         raise error("the response from " + r.url + rel + " ended halfway: " + p.problem, IO)
@@ -434,7 +439,7 @@ private async def walk(root: str, rel: str, out: List<str>):
             out.append(r2)
 
 
-async def pack(dir: str, prefix: str) -> List<u8>:
+async def pack(dir: str, prefix: str) -> bytes:
     """A package's tree as a `.tar`, inside a `prefix/` directory.
 
     REPRODUCIBLE, and that is not elegance: the tarball's hash IS the package's
@@ -473,13 +478,13 @@ async def pack(dir: str, prefix: str) -> List<u8>:
     return tar.write(members)
 
 
-def hash_of(b: List<u8>) -> str:
+def hash_of(b: bytes) -> str:
     return sha256_of(b)
 
 
 # ---------- storing and reading what arrived ----------
 
-async def write_bytes(target: str, b: List<u8>):
+async def write_bytes(target: str, b: bytes):
     d = path.dirname(target)
     if len(d) > 0 and not path.isdir(d):
         os.makedirs(d)
@@ -488,14 +493,14 @@ async def write_bytes(target: str, b: List<u8>):
     await f.close()
 
 
-async def read_bytes(target: str) -> List<u8>:
+async def read_bytes(target: str) -> bytes:
     f = await open(target, "r")
     b = await f.read_all()
     await f.close()
     return b
 
 
-async def extract(b: List<u8>, dest: str) -> int:
+async def extract(b: bytes, dest: str) -> int:
     """Unpacks a tarball into `dest`. Returns how many files came out.
 
     The reader has already refused absolute paths, `..`, and anything that is
@@ -515,8 +520,8 @@ async def extract(b: List<u8>, dest: str) -> int:
     return n
 
 
-def bytes_of_text(s: str) -> List<u8>:
-    return tar.bytes_of(s)
+def bytes_of_text(s: str) -> bytes:
+    return s.encode()
 
 
 # ---------- the date ----------
@@ -562,7 +567,7 @@ def package_dir(name: str, version: str, sha: str) -> str:
     return path.join(STORE, name + "-" + version + "-" + sha[0:12])
 
 
-async def extract_package(b: List<u8>, dest: str, name: str) -> int:
+async def extract_package(b: bytes, dest: str, name: str) -> int:
     """Unpacks the tarball into `<dest>/<name>/`, stripping the prefix it was
     packed with (`<name>-<version>/`).
 
@@ -618,7 +623,7 @@ def installed_roots() -> List<str>:
 # would take it — and it does not go to the repository: it is the one thing here
 # that is not committed.
 
-async def read_seed(file: str) -> List<u8>:
+async def read_seed(file: str) -> bytes:
     """The private key from a file. It accepts the hexadecimal with spaces and
     newlines around it, because a key file tends to be copied by hand."""
     if not path.isfile(file):
@@ -636,7 +641,7 @@ async def read_seed(file: str) -> List<u8>:
             raise error(file + ": this is not hexadecimal", VALUE)
         b.append(u8(v))
         i += 2
-    return b
+    return bytes(b)
 
 
 private def dehex(c: str) -> int:
@@ -650,7 +655,7 @@ private def dehex(c: str) -> int:
     return -1000
 
 
-async def new_seed() -> List<u8>:
+async def new_seed() -> bytes:
     """Thirty-two bytes from `/dev/urandom`, and from nowhere else.
 
     The language's `random` is a generator for simulation: fast, reproducible and
@@ -658,22 +663,26 @@ async def new_seed() -> List<u8>:
     from it is a key you can guess. If there is no `/dev/urandom`, this FAILS —
     inventing an alternative would be the worst thing this file could do."""
     f = await open("/dev/urandom", "r")
-    b = await f.read(32)
-    await f.close()
-    if len(b) != 32:
-        raise error("/dev/urandom gave " + str(len(b)) + " bytes instead of 32", IO)
-    return b
+    with Buffer(32) as buf:
+        got = await f.read_into(buf, 0, 32)
+        await f.close()
+        if got != 32:
+            raise error("/dev/urandom gave " + str(got) + " bytes instead of 32", IO)
+        # `freeze` would hand the block over with zero copy, but the buffer is
+        # inside a `with` that is about to close it — so this copies, once, and
+        # the key outlives the block it came in
+        return bytes(buf[0:32])
 
 
-def public_key(seed: List<u8>) -> str:
+def public_key(seed: bytes) -> str:
     return ed25519_pub_hex(seed)
 
 
-def sign(seed: List<u8>, data: List<u8>) -> str:
+def sign(seed: bytes, data: bytes) -> str:
     return ed25519_sign_hex(seed, data)
 
 
-def verify_sig(pub_hex: str, data: List<u8>, sig_hex: str) -> bool:
+def verify_sig(pub_hex: str, data: bytes, sig_hex: str) -> bool:
     """From the verifier's point of view, a damaged file, a signature that is not
     hexadecimal and a wrong signature are the SAME answer."""
     if len(pub_hex) != 64 or len(sig_hex) != 128:

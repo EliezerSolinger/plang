@@ -146,6 +146,9 @@ def ps_aio_read(ctx: *PsCtx, f: *PsFile, n: i64) -> *PsTask
 def ps_aio_readall(ctx: *PsCtx, f: *PsFile, want: i32) -> *PsTask
 def ps_aio_write(ctx: *PsCtx, f: *PsFile, s: *PsStr) -> *PsTask
 def ps_aio_write_bytes(ctx: *PsCtx, f: *PsFile, l: *PsList) -> *PsTask
+def ps_aio_write_bytesobj(ctx: *PsCtx, f: *PsFile, b: *PsBytes) -> *PsTask
+def ps_aio_read_into(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
+def ps_aio_write_from(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
 def ps_aio_close(ctx: *PsCtx, f: *PsFile) -> *PsTask
 # 118: os dois membros de um processo terminado (`os.run`)
 def ps_proc_status(p: *PsProc) -> i64
@@ -172,6 +175,11 @@ def ps_net_lookup(ctx: *PsCtx, host: *PsStr) -> *PsTask
 def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask
 def ps_conn_write(ctx: *PsCtx, c: *PsConn, s: *PsStr) -> *PsTask
 def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask
+# 135.2: the I/O that does not allocate and does not copy — the bytes land in,
+# or leave from, memory the caller already had.
+def ps_conn_write_bytesobj(ctx: *PsCtx, c: *PsConn, b: *PsBytes) -> *PsTask
+def ps_conn_read_into(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
+def ps_conn_write_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask
 def ps_conn_close(ctx: *PsCtx, c: *PsConn)
 # F8: `os.spawn_pty` is a layer up and builds a Conn of its own
 def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn

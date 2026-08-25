@@ -921,13 +921,26 @@ private def ps_io_run(w: *PsWork):
                 w->fp = f
                 w->rc = 1
         case PS_IO_READ:
-            b: *char = (*char)(malloc(w->n if w->n > 0 else usize(1)))
-            got: usize = fread(b, 1, w->n, w->fp)
-            w->buf = b
-            w->n = got
-            w->rc = i64(got)
-            if got == 0 and ferror(w->fp) != 0:
-                w->err = 1
+            # 135.2: with a destination there is nothing to allocate and
+            # nothing to copy afterwards — the bytes land where the caller
+            # already had room for them. A `Buffer` is malloc'd and never moves
+            # (52.3), which is exactly what makes it legal for a POOL thread to
+            # write into: the collector does not own it and cannot move it
+            # under this thread's feet.
+            if w->dest != None:
+                gotd: usize = fread(w->dest, 1, w->n, w->fp)
+                w->n = gotd
+                w->rc = i64(gotd)
+                if gotd == 0 and ferror(w->fp) != 0:
+                    w->err = 1
+            else:
+                b: *char = (*char)(malloc(w->n if w->n > 0 else usize(1)))
+                got: usize = fread(b, 1, w->n, w->fp)
+                w->buf = b
+                w->n = got
+                w->rc = i64(got)
+                if got == 0 and ferror(w->fp) != 0:
+                    w->err = 1
         case PS_IO_READALL:
             cap: usize = 8192
             acc: *char = (*char)(malloc(cap))
@@ -946,7 +959,11 @@ private def ps_io_run(w: *PsWork):
             w->n = len
             w->rc = i64(len)
         case PS_IO_WRITE:
-            put: usize = fwrite(w->buf, 1, w->n, w->fp)
+            # `dest` is the caller's memory on this side too (135.2): a
+            # `write_from` hands the buffer over instead of duplicating it,
+            # which is the half of a proxy that `read_into` does not cover.
+            src9: *char = w->dest if w->dest != None else w->buf
+            put: usize = fwrite(src9, 1, w->n, w->fp)
             w->rc = i64(put)
             if put != w->n:
                 w->err = 1
@@ -1180,6 +1197,45 @@ def ps_conn_read(ctx: *PsCtx, c: *PsConn, n: i64) -> *PsTask:
     w->buf = (*char)(malloc(w->n if w->n > 0 else usize(1)))
     return ps_fd_task(ctx, w, True, sizeof(PsStrPtr))
 
+private def ps_buf_window(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char
+
+# 135.2 on the polled side. The shape is the pool's, and the reason is the
+# same: a `Buffer` is malloc'd and immovable, so the syscall may write into it
+# directly and there is no copy on either end.
+def ps_conn_read_into(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask:
+    if not ps_conn_live(ctx, c, "read"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    d: *char = ps_buf_window(ctx, b, off, n, "read_into", file, line)
+    if d == None:
+        return ps_msg_task(ctx, None, sizeof(i64))
+    w: *PsWork = ps_work_new(PS_IO_RECV)
+    w->want = PS_W_NREAD
+    w->fd = c->fd
+    w->pty = 1 if c->pid > 0 else 0
+    w->events = i16(POLLIN)
+    w->n = usize(n)
+    w->dest = d
+    w->downer = b
+    return ps_fd_task(ctx, w, False, sizeof(i64))
+
+
+def ps_conn_write_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask:
+    if not ps_conn_live(ctx, c, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    d: *char = ps_buf_window(ctx, b, off, n, "write_from", file, line)
+    if d == None:
+        return ps_msg_task(ctx, None, sizeof(i64))
+    w: *PsWork = ps_work_new(PS_IO_SEND)
+    w->want = PS_W_INT
+    w->fd = c->fd
+    w->events = i16(POLLOUT)
+    w->n = usize(n)
+    w->off = 0
+    w->dest = d
+    w->downer = b
+    return ps_fd_task(ctx, w, False, sizeof(i64))
+
+
 private def ps_send_task(ctx: *PsCtx, c: *PsConn, bytes: const *char, n: usize) -> *PsTask:
     w: *PsWork = ps_work_new(PS_IO_SEND)
     w->want = PS_W_INT
@@ -1202,6 +1258,14 @@ def ps_conn_write_bytes(ctx: *PsCtx, c: *PsConn, l: *PsList) -> *PsTask:
         return ps_msg_task(ctx, None, sizeof(i64))
     n: usize = usize(l->len) if l != None else usize(0)
     return ps_send_task(ctx, c, ps_list_base(l) if n > 0 else "", n)
+
+# `c.write(b)` where `b` is `bytes`
+def ps_conn_write_bytesobj(ctx: *PsCtx, c: *PsConn, b: *PsBytes) -> *PsTask:
+    if not ps_conn_live(ctx, c, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    n: usize = usize(b->len) if b != None else usize(0)
+    return ps_send_task(ctx, c, b->data if n > usize(0) else "", n)
+
 
 def ps_conn_close(ctx: *PsCtx, c: *PsConn):
     if c != None and c->is_open != 0:
@@ -1272,6 +1336,73 @@ def ps_aio_readall(ctx: *PsCtx, f: *PsFile, want: i32) -> *PsTask:
     w->want = want
     w->fp = f->fp
     return ps_io_task(ctx, w, True, sizeof(PsStrPtr))
+
+# 135.2: the window of a Buffer this operation is allowed to touch, checked
+# ONCE and here rather than in each caller. A window past the end would be a
+# read or a write into memory the buffer does not own, so it raises — the same
+# line `ps_buffer_view_at` draws, and for the same reason.
+private def ps_buf_window(ctx: *PsCtx, b: *PsBuffer, off: i64, n: i64, what: const *char, file: const *char, line: i32) -> *char:
+    if ps_buffer_gone(ctx, b):
+        ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
+        return None
+    if b == None or b->open == 0:
+        ps_raise(ctx, "this buffer is closed", PS_CAT_VALUE, file, line)
+        return None
+    if off < 0 or n < 0 or usize(off) + usize(n) > b->nbytes:
+        msg: char[160]
+        snprintf(msg, 160, "%s: the window falls outside the Buffer", what)
+        ps_raise(ctx, msg, PS_CAT_INDEX, file, line)
+        return None
+    return b->data + usize(off)
+
+
+# 135.2: read straight into memory the caller already has. Nothing is
+# allocated, nothing is copied, and what comes back is HOW MANY bytes landed —
+# zero meaning the end, which is what `read` has always meant here (79.2).
+def ps_aio_read_into(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask:
+    if not ps_file_live(ctx, f, "read"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    d: *char = ps_buf_window(ctx, b, off, n, "read_into", file, line)
+    if d == None:
+        return ps_msg_task(ctx, None, sizeof(i64))
+    w: *PsWork = ps_work_new(PS_IO_READ)
+    w->want = PS_W_NREAD
+    w->fp = f->fp
+    w->n = usize(n)
+    w->dest = d
+    w->downer = b
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
+
+# ... and the other half: hand the caller's bytes over without duplicating them
+def ps_aio_write_from(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> *PsTask:
+    if not ps_file_live(ctx, f, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    d: *char = ps_buf_window(ctx, b, off, n, "write_from", file, line)
+    if d == None:
+        return ps_msg_task(ctx, None, sizeof(i64))
+    w: *PsWork = ps_work_new(PS_IO_WRITE)
+    w->want = PS_W_INT
+    w->fp = f->fp
+    w->n = usize(n)
+    w->dest = d
+    w->downer = b
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
+
+# `f.write(b)` where `b` is `bytes` — the block is already contiguous and
+# already outside the heap, so there is nothing to gather first
+def ps_aio_write_bytesobj(ctx: *PsCtx, f: *PsFile, b: *PsBytes) -> *PsTask:
+    if not ps_file_live(ctx, f, "write"):
+        return ps_msg_task(ctx, None, sizeof(i64))
+    n: usize = usize(b->len) if b != None else usize(0)
+    w: *PsWork = ps_work_new(PS_IO_WRITE)
+    w->want = PS_W_INT
+    w->fp = f->fp
+    w->n = n
+    w->buf = ps_dupn(b->data if n > usize(0) else "", n)
+    return ps_io_task(ctx, w, False, sizeof(i64))
+
 
 def ps_aio_write(ctx: *PsCtx, f: *PsFile, s: *PsStr) -> *PsTask:
     if not ps_file_live(ctx, f, "write"):
@@ -1553,8 +1684,18 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             c->listening = 0
             ps_sock_nonblock(c->fd)
             *(**PsConn)(ps_task_ret(t)) = c
-        case PS_W_INT:
+        case PS_W_INT, PS_W_NREAD:
+            # PS_W_NREAD is an int like any other; it has its own name because
+            # what it MEANS is different — how many bytes landed in memory the
+            # caller already had — and a reader of `w->want` should not have to
+            # infer that from the op.
             *(*i64)(ps_task_ret(t)) = w->rc
+        case PS_W_BYTESOBJ:
+            # 135.2/135.3: `bytes`, and the ONE copy there is. The pool thread
+            # cannot allocate in this heap — it is another thread and the
+            # collector is this context's — so the bytes arrive in a malloc'd
+            # block and are copied here, on the waiter's side, exactly once.
+            *(**PsBytes)(ps_task_ret(t)) = ps_bytes_new(ctx, w->buf if w->buf != None else "", w->n)
         case _:
             pass
     ps_work_free(w)
@@ -1586,7 +1727,7 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             # socket with no flags, and `recv` on a pseudo-terminal fails with
             # "not a socket". Using the general one is what lets a terminal BE a
             # socket to everything above this line, which is the whole design.
-            got: i64 = i64(read(w->fd, w->buf, w->n))
+            got: i64 = i64(read(w->fd, w->dest if w->dest != None else w->buf, w->n))
             if got < 0:
                 if w->pty != 0:
                     # on a master, the read after the last slave closes FAILS
@@ -1596,11 +1737,19 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
                 else:
                     w->err = 1
                     w->n = 0
+                w->rc = 0
             else:
                 w->n = usize(got)   # 79.2: zero means the other side closed
+                # `rc` as well as `n`, and they are not the same question: `n`
+                # is how many bytes the BUFFER holds and `rc` is what the CALL
+                # returned. Everything that builds a value from the bytes reads
+                # `n`; `read_into` gives back the COUNT and reads `rc`, and
+                # leaving it at zero made every socket read look like the end.
+                w->rc = got
             return True
         case PS_IO_SEND:
-            put: i64 = i64(write(w->fd, w->buf + w->off, w->n - w->off))
+            sb9: *char = w->dest if w->dest != None else w->buf
+            put: i64 = i64(write(w->fd, sb9 + w->off, w->n - w->off))
             if put < 0:
                 w->err = 1
                 return True

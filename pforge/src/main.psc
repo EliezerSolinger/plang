@@ -1068,7 +1068,7 @@ private async def resolve_lock(lk: LK.Lock, wanted: List<str>, swappable: List<s
     return 0
 
 
-private def text_of(b: List<u8>) -> str:
+private def text_of(b: bytes) -> str:
     out = ""
     for x in b:
         out += chr(int(x))
@@ -1079,7 +1079,7 @@ private def looks_like_tarball(s: str) -> bool:
     return s.endswith(".tar")
 
 
-private async def tar_bytes(where: str) -> List<u8>:
+private async def tar_bytes(where: str) -> bytes:
     """The bytes of a tarball, from a path or from a URL. Nothing else knows
     which of the two it was — which is the point."""
     if where.startswith("http://") or where.startswith("https://"):
@@ -1093,7 +1093,7 @@ private async def tar_bytes(where: str) -> List<u8>:
     return await R.read_bytes(where)
 
 
-private def manifest_in(bs: List<u8>) -> MF.Manifest:
+private def manifest_in(bs: bytes) -> MF.Manifest:
     """The `pack.json` inside the tarball. A package packs itself with a
     `<name>-<version>/` prefix, so the manifest is the shortest path that ends
     in `pack.json` — anything deeper belongs to a member, not to the package."""
@@ -1451,7 +1451,7 @@ async def cmd_install(frozen: bool) -> int:
         if path.isdir(path.join(dest, t.name)):
             continue
         pak = path.join(R.tarballs_dir(), t.sha256)
-        bs: List<u8> = []
+        bs = b""
         if path.isfile(pak):
             bs = await R.read_bytes(pak)
         else:

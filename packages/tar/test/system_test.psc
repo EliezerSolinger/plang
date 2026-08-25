@@ -38,8 +38,8 @@ async def main() -> int:
     content = "line one\nline two\n"
     bs = tar.write([
         tar.directory("box", 0o755, 1700000000),
-        tar.file("box/a.txt", tar.bytes_of(content), 0o644, 1700000001),
-        tar.file("box/b.bin", tar.bytes_of("x" * 1000), 0o600, 1700000002),
+        tar.file("box/a.txt", content.encode(), 0o644, 1700000001),
+        tar.file("box/b.bin", ("x" * 1000).encode(), 0o600, 1700000002),
     ])
     f = await open(target, "w")
     await f.write(bs)

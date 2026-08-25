@@ -41,3 +41,12 @@ a.out
 *_dbg
 # scratch experiments (not part of the project)
 experiments/
+
+# o C que o compilador gera ao lado de um pacote de P, quando `psbuild.sh`
+# compila um programa que o importa. Não é fonte: nasce de `packages/*/*.p` e
+# `packages/*/*.ph`, e o `selfhost/` já tem a mesma regra desde 256a318.
+/packages/*/*.c
+/packages/*/*.h
+# ... e o que um teste que escreve ficheiros deixa na raiz
+/rwdemo/
+/projide/

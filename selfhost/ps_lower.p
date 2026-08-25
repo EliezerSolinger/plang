@@ -356,6 +356,7 @@ struct PsLow:
     private def lower_iter_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def lower_arr_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def lower_dict_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_bytes_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos)
     private def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt
     private def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
@@ -3069,6 +3070,14 @@ struct PsLow:
                 self->raised = True
                 self->allocs = True
                 return vc
+            if strcmp(e->lhs->text, "freeze") == 0:
+                fz9: *Expr = self->call_rt("ps_buffer_freeze", e->pos)
+                self->push_arg(fz9, self->ctx_arg(e->pos))
+                self->push_arg(fz9, self->expr(e->lhs->lhs))
+                self->pos_args(fz9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return fz9
             bare: bool = strcmp(e->lhs->text, "size") == 0 or strcmp(e->lhs->text, "close") == 0
             bc: *Expr = self->call_rt(self->a->printf("ps_buffer_%s", e->lhs->text), e->pos)
             if strcmp(e->lhs->text, "size") != 0:
@@ -3094,13 +3103,16 @@ struct PsLow:
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_CONN:
             cmn: const *char = e->lhs->text
             cc7: *Expr = None
+            cpos7: bool = False
             if strcmp(cmn, "accept") == 0:
                 cc7 = self->call_rt("ps_net_accept", e->pos)
-            elif strcmp(cmn, "read") == 0:
-                cc7 = self->call_rt("ps_conn_read", e->pos)
+            elif strcmp(cmn, "read_into") == 0 or strcmp(cmn, "write_from") == 0:
+                cc7 = self->call_rt("ps_conn_read_into" if strcmp(cmn, "read_into") == 0 else "ps_conn_write_from", e->pos)
+                cpos7 = True
             elif strcmp(cmn, "write") == 0:
                 cwa: *PsType = e->args[0]->type
-                cc7 = self->call_rt("ps_conn_write_bytes" if cwa != None and cwa->kind == PT_LIST else "ps_conn_write", e->pos)
+                ck7: PsTypeKind = cwa->kind if cwa != None else PT_UNKNOWN
+                cc7 = self->call_rt("ps_conn_write_bytesobj" if ck7 == PT_BYTES else ("ps_conn_write_bytes" if ck7 == PT_LIST else "ps_conn_write"), e->pos)
             elif strcmp(cmn, "close") == 0:
                 cc7 = self->call_rt("ps_conn_close", e->pos)
             else:
@@ -3111,6 +3123,8 @@ struct PsLow:
             self->push_arg(cc7, self->expr(e->lhs->lhs))
             for i in range(e->nargs):
                 self->push_arg(cc7, self->expr(e->args[i]))
+            if cpos7:
+                self->pos_args(cc7, e->pos)
             if strcmp(cmn, "close") != 0:
                 self->raised = True
                 self->allocs = True
@@ -3122,23 +3136,32 @@ struct PsLow:
             fmn: const *char = e->lhs->text
             want: const *char = None
             rt7: *Expr = None
-            if strcmp(fmn, "read") == 0:
-                rt7 = self->call_rt("ps_aio_read", e->pos)
+            pos7: bool = False       # does it carry file+line?
+            if strcmp(fmn, "read_into") == 0 or strcmp(fmn, "write_from") == 0:
+                # 135.2: the only two that take memory the caller already has,
+                # and therefore the only two that can fail on a WINDOW rather
+                # than on the descriptor — so they carry the position
+                rt7 = self->call_rt("ps_aio_read_into" if strcmp(fmn, "read_into") == 0 else "ps_aio_write_from", e->pos)
+                pos7 = True
             elif strcmp(fmn, "write") == 0:
                 wa: *PsType = e->args[0]->type
-                bytes7: bool = wa != None and wa->kind == PT_LIST
-                rt7 = self->call_rt("ps_aio_write_bytes" if bytes7 else "ps_aio_write", e->pos)
+                wk7: PsTypeKind = wa->kind if wa != None else PT_UNKNOWN
+                rt7 = self->call_rt("ps_aio_write_bytesobj" if wk7 == PT_BYTES else ("ps_aio_write_bytes" if wk7 == PT_LIST else "ps_aio_write"), e->pos)
             elif strcmp(fmn, "close") == 0:
                 rt7 = self->call_rt("ps_aio_close", e->pos)
             else:
                 rt7 = self->call_rt("ps_aio_readall", e->pos)
-                want = "PS_W_STR" if strcmp(fmn, "text") == 0 else ("PS_W_LINES" if strcmp(fmn, "readlines") == 0 else "PS_W_BYTES")
+                # 135.9: `read_all` gives `bytes` now; `text` and `readlines`
+                # are unchanged, because they were never byte I/O
+                want = "PS_W_STR" if strcmp(fmn, "text") == 0 else ("PS_W_LINES" if strcmp(fmn, "readlines") == 0 else "PS_W_BYTESOBJ")
             self->push_arg(rt7, self->ctx_arg(e->pos))
             self->push_arg(rt7, self->expr(e->lhs->lhs))
             for i in range(e->nargs):
                 self->push_arg(rt7, self->expr(e->args[i]))
             if want != None:
                 self->push_arg(rt7, self->ident(want, e->pos))
+            if pos7:
+                self->pos_args(rt7, e->pos)
             self->raised = True
             self->allocs = True
             return rt7
@@ -4132,7 +4155,8 @@ struct PsLow:
                     self->tmp_ctr += 1
                     sv9: *Stmt = st_new(self->a, ST_VAR, e->pos)
                     sv9->name = sn9
-                    sv9->type = ty_ptr(self->a, ty_name(self->a, "PsStr" if csk9 == 1 else "PsList"))
+                    abk9: bool = e->args[i]->type != None and e->args[i]->type->kind == PT_BYTES
+                    sv9->type = ty_ptr(self->a, ty_name(self->a, "PsStr" if csk9 == 1 else ("PsBytes" if abk9 else "PsList")))
                     sv9->init = a9
                     self->pre.push(sv9)
                     vd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
@@ -4146,6 +4170,16 @@ struct PsLow:
                     fp9->field = "data" if csk9 == 1 else "data"
                     if csk9 == 1:
                         il9->args[0] = fp9
+                    elif abk9:
+                        # 141.3: a `bytes` block is OUTSIDE the collected heap
+                        # and never moves, so the pair points straight at it —
+                        # no copy, and nothing to pin. This is the crossing the
+                        # `bytes` type was designed for.
+                        cbb9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                        cbb9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"))
+                        cbb9->cast_type->inner->is_const = True
+                        cbb9->lhs = fp9
+                        il9->args[0] = cbb9
                     else:
                         # a `List<u8>` keeps its bytes after the header
                         bp9: *Expr = self->call_rt("ps_list_base", e->pos)
@@ -6460,6 +6494,9 @@ struct PsLow:
                 if s->iter->type != None and s->iter->type->kind == PT_STR:
                     self->lower_str_for(s, out)
                     return
+                if s->iter->type != None and s->iter->type->kind == PT_BYTES:
+                    self->lower_bytes_for(s, out)
+                    return
                 if s->iter->type != None and (s->iter->type->kind == PT_LIST or s->iter->type->kind == PT_VIEW):
                     self->lower_list_for(s, out)
                     return
@@ -6937,6 +6974,48 @@ struct PsLow:
         inner.push(bb)
         wb: *Block = self->frame_wrap(&inner, None, 0, s->pos)
         fr->body = wb
+        out->push(fr)
+
+    # `for x in b` over `bytes` — a counted loop, and the variable is a NUMBER
+    # for the same reason `b[i]` is one: a byte has a type of its own and a
+    # character does not (3.4).
+    #
+    # It is not `lower_list_for` with another base, because a `bytes` is not a
+    # list: it has no element size to look up and no storage to forward. It is
+    # closer to the string loop, minus the decoding.
+    private def lower_bytes_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+        bn: const *char = self->a->printf("__bt%d", self->tmp_ctr)
+        iv: const *char = self->a->printf("__bx%d", self->tmp_ctr)
+        self->tmp_ctr += 1
+        bdl: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bdl->name = bn
+        bdl->type = ty_ptr(self->a, ty_name(self->a, "PsBytes"))
+        bdl->init = self->expr(s->iter)
+        out->push(bdl)
+        cnt: *Expr = self->call_rt("ps_bytes_len", s->pos)
+        self->push_arg(cnt, self->ident(bn, s->pos))
+        fr: *Stmt = st_new(self->a, ST_FOR, s->pos)
+        fr->var = iv
+        fr->to = cnt
+        inner: Vec<*Stmt>
+        inner.init()
+        self->rn_push(s->names[0], self->vname(s->names[0]), False)
+        get: *Expr = self->call_rt("ps_bytes_get", s->pos)
+        self->push_arg(get, self->ctx_arg(s->pos))
+        self->push_arg(get, self->ident(bn, s->pos))
+        self->push_arg(get, self->ident(iv, s->pos))
+        self->pos_args(get, s->pos)
+        bd: *Stmt = st_new(self->a, ST_VAR, s->pos)
+        bd->name = self->vname(s->names[0])
+        bd->type = ty_name(self->a, "u8")
+        bd->init = get
+        inner.push(bd)
+        body: *Block = self->for_body if self->for_body != None else self->block(s->body)
+        self->rn_pop()
+        bb: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+        bb->body = body
+        inner.push(bb)
+        fr->body = self->frame_wrap(&inner, None, 0, s->pos)
         out->push(fr)
 
     # `for k in d` — walks the slots and skips the ones that are not live.

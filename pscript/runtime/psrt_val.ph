@@ -150,6 +150,8 @@ def ps_list_new(ctx: *PsCtx, esize: i32, eref: bool, cap: i64) -> *PsList
 # that is what lets `b[0:8]` be a window instead of a copy, and what lets a
 # `bytes` have no `close` at all (136.1).
 def ps_bytes_new(ctx: *PsCtx, src: const *char, len: usize) -> *PsBytes
+# 135.4: a Buffer hands its block over and is invalidated — zero copy
+def ps_buffer_freeze(ctx: *PsCtx, b: *PsBuffer, file: const *char, line: i32) -> *PsBytes
 def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsBytes
 def ps_bytes_len(b: *PsBytes) -> i64
 def ps_bytes_get(ctx: *PsCtx, b: *PsBytes, i: i64, file: const *char, line: i32) -> i64

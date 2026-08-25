@@ -2188,14 +2188,18 @@ mudou. A ordem abaixo é a das dependências, não a da numeração:
       exemplo da 135.7); `ps_list_slice` lia `l->data` cru, portanto `copy()` de
       QUALQUER vista lia de NULL desde que as vistas existem; e um ramo de
       método sem `e->lhs->type` derrubava o compilador.
-- [ ] **F1** — a I/O passa a falar `bytes`; `read(n)` morre, `read_into`/`read_all`
-      nascem. Depende de F0. Sub-fases por pacote, cada uma com commit e verify
-      próprios: **F1a** `tar` → **F1b** `sha2`/`ed25519` → **F1c** `http`/`url` →
-      **F1d** `repo`/`pforge`/`pstudio`/conformidade. Os publicados sobem de versão.
-      ⚠ **COORDENAÇÃO** (`pscript/STDLIB.md` §6): a fase S5 desse plano diz que
-      os traits `Reader`/`Writer` têm de aterrar NO MESMO MOVIMENTO que esta —
-      *"não são duas peças"*. Ficheiro, socket e memória implementam os mesmos
-      dois traits, e uma função que copia um para o outro serve os três.
+- [x] **F1 + S5** — **FEITAS JUNTAS**, que é o que o `STDLIB.md` §6 pediu
+      (*"não são duas peças"*). `read_into(buf, off, n)` e `write_from(...)` nos
+      dois lados, `read_all()` a dar `bytes`, `write` a aceitar `bytes`,
+      `b.freeze()` com zero cópia, e os traits `Reader`/`Writer` no prelúdio com
+      o `File` e o `Socket` a implementá-los. `c.read(n)` morreu.
+      Um `bytes` atravessa para P como `CBytes` **sem cópia e sem fixação**,
+      que é a promessa da 141.3 a pagar-se.
+      A travessia por pacote que o plano previa NÃO se conseguiu fasear: mudar o
+      tipo de RETORNO do `read_all` não é aditivo, portanto ou a árvore inteira
+      migra ou nada compila. O que substituiu a faseagem foi o verificador de
+      tipos, que prova que a migração está completa.
+
 - [ ] **F2** — `os.mmap` → `Mapping`, com o guarda do SIGBUS. Depende de F0.
       ⚠ questão em aberto antes de fechar: o guarda com VÁRIAS threads (um
       handler de sinal não pode tomar lock) — se não houver resposta limpa,

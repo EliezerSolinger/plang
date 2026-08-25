@@ -34,16 +34,19 @@ struct Member:
     kind: str          # "file" or "dir"
     mode: int          # the permissions, in binary (0o644, 0o755)
     mtime: int         # seconds since the epoch
-    data: List<u8>     # empty in a directory
+    # 135.6: `bytes` is what CROSSES — it came from a read and it goes to a
+    # hash, to a write or to P — and neither of those wants a list it could
+    # change. What BUILDS the tarball below is still a `List<u8>`, because
+    # building is what a list is for.
+    data: bytes        # empty in a directory
 
 
-def file(name: str, data: List<u8>, mode: int, mtime: int) -> Member:
+def file(name: str, data: bytes, mode: int, mtime: int) -> Member:
     return Member(name, "file", mode, mtime, data)
 
 
 def directory(name: str, mode: int, mtime: int) -> Member:
-    empty: List<u8> = []
-    return Member(name if name.endswith("/") else name + "/", "dir", mode, mtime, empty)
+    return Member(name if name.endswith("/") else name + "/", "dir", mode, mtime, b"")
 
 
 # ---------- bytes and text ----------
@@ -174,7 +177,7 @@ def header(m: Member) -> List<u8>:
     return b
 
 
-def write(members: List<Member>) -> List<u8>:
+def write(members: List<Member>) -> bytes:
     """The whole tarball in memory. A source-code package fits, and having all the
     bytes in hand is what allows hashing and writing in a single pass."""
     out: List<u8> = []
@@ -192,21 +195,23 @@ def write(members: List<Member>) -> List<u8>:
     # the end marker: TWO blocks of zeros
     for _ in range(1024):
         out.append(u8(0))
-    return out
+    # ... and here is the one conversion (135.6): built in a list, handed over
+    # as the value that crosses
+    return bytes(out)
 
 
 # ---------- reading ----------
 
-private def text_until_nul(b: List<u8>, pos: int, width: int) -> str:
-    slice: List<u8> = []
+private def text_until_nul(b: bytes, pos: int, width: int) -> str:
     i = 0
     while i < width and b[pos + i] != u8(0):
-        slice.append(b[pos + i])
         i += 1
-    return str(slice)
+    # a WINDOW and then a decode: no list is built, and `str(bytes)` checks the
+    # UTF-8 exactly as `str(List<u8>)` did (79.1)
+    return str(b[pos:pos + i])
 
 
-private def read_octal(b: List<u8>, pos: int, width: int, field: str) -> int:
+private def read_octal(b: bytes, pos: int, width: int, field: str) -> int:
     v = 0
     i = 0
     seen = False
@@ -256,7 +261,7 @@ def safe_name(name: str) -> str:
     return ""
 
 
-def read(data: List<u8>) -> List<Member>:
+def read(data: bytes) -> List<Member>:
     """The members, in order. Raises at the first thing it does not
     understand."""
     out: List<Member> = []
@@ -296,15 +301,17 @@ def read(data: List<u8>) -> List<Member>:
         size = read_octal(data, pos + 124, 12, "size")
         mtime = read_octal(data, pos + 136, 12, "mtime")
         pos += 512
-        body: List<u8> = []
+        body = b""
         if kind_b == 53:
             if size != 0:
                 raise error("a directory with content: " + name, VALUE)
         else:
             if pos + size > n:
                 raise error("the tarball ends halfway through '" + name + "'", VALUE)
-            for i in range(size):
-                body.append(data[pos + i])
+            # 135.1: a WINDOW over the tarball, not a copy of it. The member's
+            # bytes are the tarball's bytes, and the tarball stays alive for as
+            # long as any member does — which is what `owner` is for.
+            body = data[pos:pos + size]
             pos += size
             rest = size % 512
             if rest != 0:

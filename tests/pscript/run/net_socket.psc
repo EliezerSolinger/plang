@@ -26,23 +26,24 @@ import net
 
 async def serve(srv: Socket) -> int:
     total = 0
-    for i in range(2):
-        with await srv.accept() as c:
-            asked = await c.read(4096)
-            total += len(asked)
-            await c.write("ok:" + str(asked) + "\n")
-            # the client closes; the next read sees the end
-            rest = await c.read(16)
-            if len(rest) == 0:
-                total += 100
+    with Buffer(4096) as rb:
+        for i in range(2):
+            with await srv.accept() as c:
+                n1 = await c.read_into(rb, 0, 4096)
+                total += n1
+                await c.write("ok:" + str(bytes(rb[0:n1])) + "\n")
+                # the client closes; the next read sees the end — zero
+                if await c.read_into(rb, 0, 16) == 0:
+                    total += 100
     return total
 
 
 async def client(port: int, text: str) -> str:
     with await net.connect("127.0.0.1", port) as c:
         await c.write(text)
-        answer = await c.read(256)
-        return str(answer)
+        with Buffer(256) as rb:
+            n2 = await c.read_into(rb, 0, 256)
+            return str(bytes(rb[0:n2]))
 
 
 srv = net.listen(0)

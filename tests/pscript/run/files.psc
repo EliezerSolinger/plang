@@ -44,15 +44,18 @@ try:
 catch e:
     print(f"caught {e.message}")
 
-# the byte side (79.1/79.2): `read(n)` gives up to n bytes and the empty answer
-# is the end — the semantics of `recv`, which is what an incremental parser
-# wants. `text()` is the whole thing decoded; `read_all()` the whole thing raw.
+# the byte side (79.1/79.2/135.2): `read_into` fills memory you already have and
+# says how many bytes landed; zero is the end, which is the semantics of `recv`
+# and what an incremental parser wants. `text()` is the whole thing decoded;
+# `read_all()` the whole thing as `bytes`.
 nonlocal head
-with await open(path, "r") as f:
-    head = await f.read(5)
-    rest = await f.read_all()
-    eof = await f.read(4)
-    print(f"head {len(head)} first {head[0]} rest {len(rest)} eof {len(eof)}")
+with Buffer(16) as rb:
+    with await open(path, "r") as f:
+        n1 = await f.read_into(rb, 0, 5)
+        head = bytes(rb[0:n1])
+        rest = await f.read_all()
+        n3 = await f.read_into(rb, 0, 4)
+        print(f"head {n1} first {head[0]} rest {len(rest)} eof {n3}")
 
 # and bytes go out the same door
 with await open(path, "w") as f:

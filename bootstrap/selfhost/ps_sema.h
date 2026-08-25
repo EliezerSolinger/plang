@@ -8,6 +8,8 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd, char **roots, int32
 
 const char *ps_type_str(Arena *a, PsType *t);
 
+const char *ps_builtin_tname(PsType *t);
+
 const char *ps_disp(const char *name);
 
 int32_t ps_view_esize(const char *name);

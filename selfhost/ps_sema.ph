@@ -9,6 +9,12 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nr
 # the resolved type of an expression, valid after ps_sema_run
 def ps_type_str(a: *Arena, t: *PsType) -> const *char
 
+# S5: the name a BUILT-IN type answers to when a trait asks who it is. A
+# built-in has no `name` field — its identity is its KIND — and conformance is
+# keyed by name, so this is the one place that translates. None for a type that
+# cannot implement anything.
+def ps_builtin_tname(t: *PsType) -> const *char
+
 # the name AS THE PROGRAM WROTE IT: a module rename (41.3) is a compiler
 # detail, and a message — or a derived repr (44.3) — has to say it back
 def ps_disp(name: const *char) -> const *char

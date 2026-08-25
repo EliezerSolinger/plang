@@ -19,11 +19,14 @@ def check(name: str, cond: bool):
         print("  FAILED: " + name)
 
 
-def bs(s: str) -> List<u8>:
-    return tar.bytes_of(s)
+def bs(s: str) -> bytes:
+    # 135.7: `s.encode()` IS this — the UTF-8 the string already holds, with
+    # the promise taken off. The package keeps `bytes_of` because its header
+    # builder wants a LIST it can index; a caller wants the value.
+    return s.encode()
 
 
-def txt(b: List<u8>) -> str:
+def txt(b: bytes) -> str:
     return str(b)
 
 
@@ -74,19 +77,19 @@ def climbs_out() -> int:
 
 
 def wrong_checksum() -> int:
-    bad = tar.write([tar.file("a.txt", bs("x"), 0o644, 1)])
+    bad = list(tar.write([tar.file("a.txt", bs("x"), 0o644, 1)]))
     bad[0] = u8(ord("b"))          # change the name without touching the checksum
-    return len(tar.read(bad))
+    return len(tar.read(bytes(bad)))
 
 
 def wrong_magic() -> int:
-    bad = tar.write([tar.file("a.txt", bs("x"), 0o644, 1)])
+    bad = list(tar.write([tar.file("a.txt", bs("x"), 0o644, 1)]))
     bad[257] = u8(ord("g"))
-    return len(tar.read(bad))
+    return len(tar.read(bytes(bad)))
 
 
 def refused_kind() -> int:
-    bad = tar.write([tar.file("a.txt", bs("x"), 0o644, 1)])
+    bad = list(tar.write([tar.file("a.txt", bs("x"), 0o644, 1)]))
     bad[156] = u8(ord("2"))        # symbolic link
     sum = 0
     for i in range(512):
@@ -96,15 +99,14 @@ def refused_kind() -> int:
     for ch in d:
         bad[148 + j] = u8(ord(ch))
         j += 1
-    return len(tar.read(bad))
+    return len(tar.read(bytes(bad)))
 
 
 def ends_halfway() -> int:
     whole = tar.write([tar.file("a.txt", bs("x" * 600), 0o644, 1)])
-    cut: List<u8> = []
-    for i in range(700):
-        cut.append(whole[i])
-    return len(tar.read(cut))
+    # a WINDOW over the first 700 bytes: no copy, and it says exactly what the
+    # test means — the same tarball, ending early (135.1)
+    return len(tar.read(whole[0:700]))
 
 
 check("refuses an absolute path", refuses("abs", absolute_path))

@@ -25,11 +25,13 @@ async def serve(srv: Socket, how_many: int) -> int:
         with await srv.accept() as c:
             p = http.new_parser()
             whole = False
-            while not whole:
-                chunk = await c.read(64)
-                if len(chunk) == 0:
-                    break
-                whole = p.feed(chunk)
+            # 135.2: one buffer per connection, and the read writes into it
+            with Buffer(64) as rb:
+                while not whole:
+                    got = await c.read_into(rb, 0, 64)
+                    if got == 0:
+                        break
+                    whole = p.feed(bytes(rb[0:got]))
             if not whole:
                 await c.write(http.response(400, "Bad Request", "text/plain", p.problem))
                 continue
@@ -45,14 +47,16 @@ async def serve(srv: Socket, how_many: int) -> int:
 async def client(port: int, text: str) -> str:
     with await net.connect("127.0.0.1", port) as c:
         await c.write(text)
-        # the answer may arrive in pieces, like anything else
+        # the answer may arrive in pieces, like anything else — and it
+        # ACCUMULATES, which is what a `List<u8>` is for (135.6)
         all: List<u8> = []
-        while True:
-            part = await c.read(128)
-            if len(part) == 0:
-                break
-            for b in part:
-                all.append(b)
+        with Buffer(128) as rb:
+            while True:
+                got = await c.read_into(rb, 0, 128)
+                if got == 0:
+                    break
+                for b in rb[0:got]:
+                    all.append(b)
         return str(all)
 
 
@@ -87,12 +91,12 @@ bad = http.new_parser()
 bad_bytes: List<u8> = []
 for ch in "GET / HTTP/1.1\r\nhost : x\r\n\r\n":
     bad_bytes.append(u8(ord(ch)))
-bad.feed(bad_bytes)
+bad.feed(bytes(bad_bytes))
 print("refused 1:", bad.problem)
 
 bad2 = http.new_parser()
 b2: List<u8> = []
 for ch in "GET / HTTP/1.1\r\ncontent-length: 3\r\ntransfer-encoding: chunked\r\n\r\n":
     b2.append(u8(ord(ch)))
-bad2.feed(b2)
+bad2.feed(bytes(b2))
 print("refused 2:", bad2.problem)

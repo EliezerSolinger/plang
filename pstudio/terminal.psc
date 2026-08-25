@@ -233,7 +233,7 @@ struct Term:
 
     # ---------- the parser ----------
 
-    def feed_bytes(self, b: List<u8>):
+    def feed_bytes(self, b: View<u8>):
         for raw in b:
             self.feed_byte(int(raw))
         self.dirty = True

@@ -24,11 +24,12 @@ async def drain(c: Socket) -> str:
     (79.2) — and on a terminal the end is the child exiting, because the last
     close of the slave hangs the master up."""
     out = ""
-    while True:
-        b = await c.read(4096)
-        if len(b) == 0:
-            break
-        out += str(b)
+    with Buffer(4096) as rb:
+        while True:
+            got = await c.read_into(rb, 0, 4096)
+            if got == 0:
+                break
+            out += str(bytes(rb[0:got]))
     return out
 
 

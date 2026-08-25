@@ -692,6 +692,14 @@ enum PsIoWant:
     PS_W_INT
     PS_W_CONN
     PS_W_PROC          # 118: o par status+saída que `os.run` devolve
+    PS_W_BYTESOBJ      # 135.2: `bytes`, o tipo que ATRAVESSA. `PS_W_BYTES`
+                       #   continua a existir e continua a dar `List<u8>` —
+                       #   ele é a moeda de quem CONSTRÓI, e o `bytes` é a de
+                       #   quem move (135.6). São dois destinos, não uma
+                       #   substituição.
+    PS_W_NREAD         # quantos bytes entraram num Buffer que o chamador já
+                       #   tinha: o `read_into` da 135.2, e a razão inteira de
+                       #   ele existir — nada é alocado e nada é copiado
 
 enum PsIoOp:
     PS_IO_OPEN = 0
@@ -731,6 +739,14 @@ struct PsWork:
     mode: *char
     buf: *char         # malloc'd, in (write) or out (read)
     n: usize           # bytes asked for, then bytes produced
+    # 135.2, `read_into`/`write_from`: the bytes the CALLER already has. A
+    # `Buffer` is malloc'd and never moves (52.3), so a pool thread may read and
+    # write it directly — which is the whole reason the operation exists: no
+    # allocation on the way in, no copy on the way out. `dest` is None for every
+    # other op, and then `buf` is used as before.
+    dest: *char
+    downer: *PsBuffer  # kept so the buffer cannot be closed while the pool
+                       #   thread is still writing into it
     want: i32          # what the WAITER wants built out of this: the syscall
                        #   and the shape of the answer are two questions, and a
                        #   `read all` may become a str, a list of bytes or a
