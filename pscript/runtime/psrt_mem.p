@@ -218,6 +218,11 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.repr_depth = 0
     ctx.mux = None
     ctx.rng = None
+    # S2b: os padrões já compilados. Um campo NOVO que ficasse com lixo aqui
+    # faria `re_cache_of` usar um ponteiro inventado à primeira chamada — que é
+    # exactamente o que aconteceu, e é a razão de esta inicialização ser campo a
+    # campo e não um memset: um campo esquecido tem de doer depressa.
+    ctx.recache = None
 
 # Allocation NEVER collects. When the block is full it chains on another one,
 # and ps_gc_poll does the collecting at a point where no C temporary is live.

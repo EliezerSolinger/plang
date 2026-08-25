@@ -59,6 +59,9 @@ def ps_ctx_free(ctx: *PsCtx):
     # `gc.stats()` diz quantos ganchos foram registados e quantos correram, e um
     # portão que compare os dois é um teste de fugas.
     ps_run_finals(ctx)
+    # S2b: os padrões compilados são malloc'd — o coletor não sabe deles, e é
+    # essa a razão de haver esta linha e não de eles morrerem com os blocos
+    ps_re_ctx_free(ctx)
     ps_free_blocks(ctx, ctx->blocks)
     ctx->blocks = None
     # the graveyard goes too: nothing may reference it any more, and a worker

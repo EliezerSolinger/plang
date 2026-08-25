@@ -565,38 +565,1447 @@ def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *P
         js_fail(&j, "there is text after the value")
     return v
 
-# ---------- `re` (41.2) ----------
-# 110: quantos grupos de captura uma regex devolve (`-D PSRT_RE_GROUPS=N`).
-const if defined(PSRT_RE_GROUPS):
-    PS_RE_MAX_GROUPS: const i32 = PSRT_RE_GROUPS
-else:
-    PS_RE_MAX_GROUPS: const i32 = 16
+# ---------- `re`: o motor de Thompson (S2b) ----------
+#
+# O motor de expressões regulares (S2b): um autómato de Thompson, e a garantia
+# que ele traz.
+#
+# **Substitui o `regcomp`/`regexec` da libc**, e o argumento não é gosto: um motor
+# com retrocesso pode ser feito parar por uma cadeia de entrada. `(a+)+b` contra
+# sessenta `a` pára um PCRE durante anos; aqui devolve. Uma linguagem que promete
+# quatro eixos de segurança de memória (9.1) e depois oferece um regex que uma
+# entrada consegue travar está a prometer com uma mão e a tirar com a outra.
+#
+# **O preço está pago à cabeça, e é matemática e não esforço:** um motor de tempo
+# linear NÃO PODE ter retrocesso (`\\1`) nem lookaround (`(?=…)`). O autómato não
+# guarda o texto que já casou — é essa a razão de ele ser linear. É o dialecto do
+# RE2, que é o do Go e o do `regex` do Rust, e a lista do que isso impede na
+# prática é curta.
+#
+# O que se ganha: `\\d` `\\w` `\\s` `\\b`, não-guloso (`*?`), grupos com nome,
+# classes, âncoras, e a garantia.
+#
+# ---
+#
+# **A forma:** o padrão vira um PROGRAMA — uma lista de instruções — e a execução
+# corre TODAS as linhas de execução ao mesmo tempo, um caractere de cada vez. É a
+# máquina do Pike. O que a faz linear é uma linha só: **num dado passo, cada
+# instrução entra na lista no máximo UMA vez**. Sem isso, duas linhas que chegam ao
+# mesmo sítio duplicam-se, e a duplicação é exponencial.
+#
+# **A memória do programa é malloc'd e não coletada.** Um padrão compilado é
+# estrutura interna, sem um único ponteiro para o monte, e assim uma coleta a meio
+# de um `sub` não tem nada que ver com ele — que é a mesma razão por que o
+# `PsWork` do pool também é malloc'd.
 
+
+# P precisa de um TIPO para o `sizeof`, e `*char` não é um nome — é uma
+# construção. Dois aliases de tamanho de ponteiro, como o `PsStrPtr` que o
+# `psrt_types.ph` já tinha pela mesma razão.
+struct PsCharPtr:
+    p: *char
+
+# ---------- as instruções ----------
+
+enum ReOp:
+    RE_CHAR = 0      # um codepoint exacto
+    RE_ANY = 1       # qualquer um — e `.` NÃO casa `\n` (é a regra de toda a gente)
+    RE_ANY_NL = 2    # ... e casa, com `(?s)`
+    RE_CLASS = 3     # uma classe: intervalos, com ou sem negação
+    RE_MATCH = 4
+    RE_JMP = 5
+    RE_SPLIT = 6     # duas continuações; a PRIMEIRA é a preferida
+    RE_SAVE = 7      # marca uma posição de captura
+    RE_BOL = 8       # `^`
+    RE_EOL = 9       # `$`
+    RE_BOT = 10      # `\A` — o começo do TEXTO, mesmo em modo multilinha
+    RE_EOT = 11      # `\z`
+    RE_WORDB = 12    # `\b`
+    RE_NWORDB = 13   # `\B`
+
+struct ReInst:
+    op: i32
+    c: u32           # RE_CHAR: o codepoint. RE_SAVE: a ranhura.
+    x: i32           # RE_JMP/RE_SPLIT: para onde
+    y: i32           # RE_SPLIT: a outra
+    cls: i32         # RE_CLASS: o índice na tabela de classes
+
+# Uma classe é uma lista de intervalos de codepoints, mais a marca de negação. Os
+# intervalos ficam ORDENADOS e sem sobreposição, para a pergunta ser uma busca
+# binária em vez de uma varredura — o que importa quando a classe é `\w` em
+# Unicode e tem centenas deles.
+struct ReClass:
+    lo: *u32
+    hi: *u32
+    n: i32
+    cap: i32
+    neg: i32
+    # 152.6: as categorias Unicode que esta classe também aceita. Um predicado e
+    # não intervalos, porque `\p{L}` são cento e trinta mil pontos de código em
+    # milhares de faixas — expandi-los daria uma tabela por padrão, e a tabela já
+    # existe uma vez só, gerada e conferida (105).
+    uni: *i32
+    nuni: i32
+
+struct ReProg:
+    inst: *ReInst
+    n: i32
+    cap: i32
+    cls: *ReClass
+    ncls: i32
+    clscap: i32
+    ngroup: i32          # quantos grupos capturam (o 0 é o casamento inteiro)
+    names: **char        # o nome de cada grupo, ou None
+    nnames: i32          # quantos cabem hoje — CRESCE, e é por isso que não há
+                         #   um tecto de grupos com nome nem um botão para ele
+    icase: i32
+    multiline: i32
+    dotall: i32
+    ok: i32
+    err: *char           # a mensagem, quando não compilou
+
+
+struct ReProgPtr:
+    p: *ReProg
+
+# ---------- construir o programa ----------
+
+private def re_grow(p: *ReProg):
+    if p->n < p->cap:
+        return
+    nc: i32 = p->cap * 2 if p->cap > 0 else 16
+    p->inst = (*ReInst)(realloc((*void)(p->inst), usize(nc) * sizeof(ReInst)))
+    p->cap = nc
+
+private def re_emit(p: *ReProg, op: i32) -> i32:
+    re_grow(p)
+    at: i32 = p->n
+    p->inst[at].op = op
+    p->inst[at].c = u32(0)
+    p->inst[at].x = 0
+    p->inst[at].y = 0
+    p->inst[at].cls = -1
+    p->n += 1
+    return at
+
+private def re_class_new(p: *ReProg) -> i32:
+    if p->ncls >= p->clscap:
+        nc: i32 = p->clscap * 2 if p->clscap > 0 else 8
+        p->cls = (*ReClass)(realloc((*void)(p->cls), usize(nc) * sizeof(ReClass)))
+        p->clscap = nc
+    at: i32 = p->ncls
+    p->cls[at].lo = None
+    p->cls[at].hi = None
+    p->cls[at].n = 0
+    p->cls[at].cap = 0
+    p->cls[at].neg = 0
+    p->cls[at].uni = None
+    p->cls[at].nuni = 0
+    p->ncls += 1
+    return at
+
+private def re_class_add(c: *ReClass, lo: u32, hi: u32):
+    if c->n >= c->cap:
+        nc: i32 = c->cap * 2 if c->cap > 0 else 8
+        c->lo = (*u32)(realloc((*void)(c->lo), usize(nc) * sizeof(u32)))
+        c->hi = (*u32)(realloc((*void)(c->hi), usize(nc) * sizeof(u32)))
+        c->cap = nc
+    c->lo[c->n] = lo
+    c->hi[c->n] = hi
+    c->n += 1
+
+private def re_class_add_uni(c: *ReClass, which: i32):
+    c->uni = (*i32)(realloc((*void)(c->uni), usize(c->nuni + 1) * sizeof(i32)))
+    c->uni[c->nuni] = which
+    c->nuni += 1
+
+private def re_class_has(c: const *ReClass, ch: u32) -> bool:
+    inside: bool = False
+    for i in range(c->n):
+        if ch >= c->lo[i] and ch <= c->hi[i]:
+            inside = True
+    if not inside:
+        for i in range(c->nuni):
+            if ps_cp_in_cat(i32(ch), c->uni[i]):
+                inside = True
+    return not inside if c->neg != 0 else inside
+
+
+# ---------- o analisador ----------
+#
+# Descida recursiva, e a gramática é a de sempre:
+#
+#   alt   := cat ('|' cat)*
+#   cat   := rep*
+#   rep   := atom ('*' | '+' | '?' | '{m,n}') '?'?
+#   atom  := '(' alt ')' | '[' class ']' | '.' | '^' | '$' | escape | literal
+#
+# O que ele emite é o programa directamente, sem árvore pelo meio: cada regra
+# sabe onde começou e o que tem de remendar, que é o que torna a repetição uma
+# questão de dois `SPLIT` e um `JMP`.
+
+struct ReParser:
+    pat: const *char
+    n: i32
+    i: i32
+    p: *ReProg
+    group: i32
+
+private def rp_fail(P: *ReParser, msg: const *char):
+    if P->p->ok != 0:
+        P->p->ok = 0
+        P->p->err = strdup(msg)
+
+private def rp_eof(P: *ReParser) -> bool:
+    return P->i >= P->n
+
+# O padrão é UTF-8 e o que ele fala são CODEPOINTS — `.` casa um codepoint, e um
+# `[á-ç]` tem de ter os extremos certos. Ler byte a byte daria uma classe com os
+# bytes da codificação lá dentro, que é o defeito clássico de quem só testou em
+# ASCII.
+private def re_utf8_at(s: const *char, n: i32, at: i32, out_len: *i32) -> i32:
+    if at >= n:
+        *out_len = 0
+        return -1
+    b0: u32 = u32(u8(s[at]))
+    if b0 < u32(0x80):
+        *out_len = 1
+        return i32(b0)
+    if b0 >= u32(0xC2) and b0 <= u32(0xDF) and at + 1 < n:
+        *out_len = 2
+        return i32(((b0 & u32(0x1F)) << 6) | (u32(u8(s[at + 1])) & u32(0x3F)))
+    if b0 >= u32(0xE0) and b0 <= u32(0xEF) and at + 2 < n:
+        *out_len = 3
+        return i32(((b0 & u32(0x0F)) << 12) | ((u32(u8(s[at + 1])) & u32(0x3F)) << 6) | (u32(u8(s[at + 2])) & u32(0x3F)))
+    if b0 >= u32(0xF0) and b0 <= u32(0xF4) and at + 3 < n:
+        *out_len = 4
+        return i32(((b0 & u32(0x07)) << 18) | ((u32(u8(s[at + 1])) & u32(0x3F)) << 12) | ((u32(u8(s[at + 2])) & u32(0x3F)) << 6) | (u32(u8(s[at + 3])) & u32(0x3F)))
+    # um byte que não é UTF-8 válido vale por si próprio: recusar aqui faria um
+    # padrão legítimo sobre bytes soltos deixar de compilar
+    *out_len = 1
+    return i32(b0)
+
+private def rp_peek(P: *ReParser) -> i32:
+    L: i32 = 0
+    return re_utf8_at(P->pat, P->n, P->i, &L)
+
+private def rp_next(P: *ReParser) -> i32:
+    L: i32 = 0
+    c: i32 = re_utf8_at(P->pat, P->n, P->i, &L)
+    P->i += L
+    return c
+
+private def rp_at(P: *ReParser, c: i32) -> bool:
+    return rp_peek(P) == c
+
+
+# ---------- as classes com nome ----------
+#
+# `\d`, `\w`, `\s` e os `[:alpha:]` do POSIX. Em ASCII por agora; a tabela de
+# categorias do Unicode (que já existe, 27 KB) entra por aqui quando o `\p{L}`
+# chegar, e é este o único sítio que muda.
+
+private def re_add_named(p: *ReProg, cls: i32, kind: i32) -> bool:
+    c: *ReClass = &p->cls[cls]
+    if kind == 'd':
+        re_class_add(c, u32(48), u32(57))
+        return True
+    if kind == 'w':
+        re_class_add(c, u32(48), u32(57))
+        re_class_add(c, u32(65), u32(90))
+        re_class_add(c, u32(95), u32(95))
+        re_class_add(c, u32(97), u32(122))
+        return True
+    if kind == 's':
+        re_class_add(c, u32(9), u32(13))
+        re_class_add(c, u32(32), u32(32))
+        return True
+    return False
+
+# `\D`, `\W`, `\S`: a classe negada. Não é o mesmo que negar a classe INTEIRA
+# quando ela está dentro de `[...]` — `[\D0]` é "não-dígito OU zero", e não
+# "não (dígito ou zero)". Por isso uma classe negada dentro de outra vira o seu
+# próprio intervalo complementar, calculado aqui.
+private def re_add_named_neg(p: *ReProg, cls: i32, kind: i32) -> bool:
+    tmp: i32 = re_class_new(p)
+    if not re_add_named(p, tmp, kind):
+        p->ncls -= 1
+        return False
+    t: *ReClass = &p->cls[tmp]
+    c: *ReClass = &p->cls[cls]
+    # os intervalos vêm ordenados de `re_add_named`, portanto o complemento é
+    # uma passagem
+    prev: u32 = u32(0)
+    for i in range(t->n):
+        if t->lo[i] > prev:
+            re_class_add(c, prev, t->lo[i] - u32(1))
+        prev = t->hi[i] + u32(1)
+    re_class_add(c, prev, u32(0x10FFFF))
+    p->ncls -= 1
+    free((*void)(t->lo))
+    free((*void)(t->hi))
+    return True
+
+
+# ---------- o corpo do analisador ----------
+
+private def rp_alt(P: *ReParser) -> bool
+private def rp_cat(P: *ReParser) -> bool
+private def rp_rep(P: *ReParser) -> bool
+private def rp_atom(P: *ReParser) -> bool
+private def rp_class(P: *ReParser) -> bool
+private def rp_escape(P: *ReParser) -> bool
+private def re_fix_shift(p: *ReProg, from: i32, to: i32, by: i32)
+private def re_star(p: *ReProg, start: i32, lazy: bool)
+private def re_plus(p: *ReProg, start: i32, lazy: bool)
+private def re_quest(p: *ReProg, start: i32, lazy: bool)
+private def re_is_count(P: *ReParser) -> bool
+private def re_counted(P: *ReParser, start: i32) -> bool
+private def re_paste(p: *ReProg, body: *ReInst, blen: i32, orig: i32)
+private def re_name_set(p: *ReProg, slot: i32, name: *char)
+private def re_escape_char(P: *ReParser, c: i32) -> i32
+private def re_hex(c: i32) -> i32
+private def re_read_uni(P: *ReParser) -> i32
+private def re_class_add_uni(c: *ReClass, which: i32)
+private def re_cache_of(ctx: *PsCtx) -> *ReCache
+private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, from: i32, anchored: bool, file: const *char, line: i32) -> *PsList
+private def re_group_by_name(p: *ReProg, nm: const *char) -> i32
+
+# `a|b` — o `SPLIT` fica ANTES do primeiro ramo e o `JMP` no fim dele, e os dois
+# só se sabem depois de o ramo estar emitido. Por isso o buraco é remendado a
+# seguir, que é a única maneira de gerar isto numa passagem.
+private def rp_alt(P: *ReParser) -> bool:
+    start: i32 = P->p->n
+    if not rp_cat(P):
+        return False
+    while rp_at(P, '|'):
+        _ = rp_next(P)
+        # abre espaço para o SPLIT no princípio: as instruções deslizam uma
+        sp: i32 = re_emit(P->p, RE_SPLIT)
+        memmove((*void)(&P->p->inst[start + 1]), (*void)(&P->p->inst[start]),
+                usize(sp - start) * sizeof(ReInst))
+        re_fix_shift(P->p, start, sp, 1)
+        P->p->inst[start].op = RE_SPLIT
+        P->p->inst[start].c = u32(0)
+        P->p->inst[start].cls = -1
+        P->p->inst[start].x = start + 1
+        jm: i32 = re_emit(P->p, RE_JMP)
+        P->p->inst[start].y = P->p->n
+        if not rp_cat(P):
+            return False
+        P->p->inst[jm].x = P->p->n
+    return True
+
+# Quando uma instrução é inserida no meio, todos os saltos que apontavam para
+# depois dela têm de andar. É a razão de o programa ser um ARRAY e não uma lista
+# ligada: o remendo é uma passagem, e a execução é um índice.
+private def re_fix_shift(p: *ReProg, from: i32, to: i32, by: i32):
+    for i in range(p->n):
+        if p->inst[i].op == RE_JMP or p->inst[i].op == RE_SPLIT:
+            if p->inst[i].x >= from and p->inst[i].x <= to:
+                p->inst[i].x += by
+            if p->inst[i].op == RE_SPLIT and p->inst[i].y >= from and p->inst[i].y <= to:
+                p->inst[i].y += by
+
+private def rp_cat(P: *ReParser) -> bool:
+    while not rp_eof(P) and not rp_at(P, '|') and not rp_at(P, ')'):
+        if not rp_rep(P):
+            return False
+    return True
+
+private def rp_rep(P: *ReParser) -> bool:
+    start: i32 = P->p->n
+    if not rp_atom(P):
+        return False
+    while True:
+        c: i32 = rp_peek(P)
+        if c != '*' and c != '+' and c != '?' and c != '{':
+            return True
+        if c == '{' and not re_is_count(P):
+            return True          # `{` que não é uma contagem é um literal
+        _ = rp_next(P)
+        # o `?` a seguir torna o operador NÃO GULOSO: a única diferença é qual
+        # dos dois ramos do SPLIT é o preferido
+        lazy: bool = False
+        if c != '{' and rp_at(P, '?'):
+            _ = rp_next(P)
+            lazy = True
+        if c == '*':
+            re_star(P->p, start, lazy)
+        elif c == '+':
+            re_plus(P->p, start, lazy)
+        elif c == '?':
+            re_quest(P->p, start, lazy)
+        else:
+            if not re_counted(P, start):
+                return False
+    return True
+
+
+# ---------- os operadores de repetição ----------
+#
+# Cada um é dois ou três remendos sobre o pedaço que já está emitido. O `lazy`
+# só troca a ordem dos dois ramos do `SPLIT`: o autómato prefere sempre o `x`, e
+# guloso ou não guloso é só qual dos dois é o `x`.
+
+private def re_star(p: *ReProg, start: i32, lazy: bool):
+    #   L1: SPLIT L2, L3
+    #   L2: <corpo>
+    #       JMP L1
+    #   L3:
+    sp: i32 = re_emit(p, RE_SPLIT)
+    memmove((*void)(&p->inst[start + 1]), (*void)(&p->inst[start]), usize(sp - start) * sizeof(ReInst))
+    re_fix_shift(p, start, sp, 1)
+    jm: i32 = re_emit(p, RE_JMP)
+    p->inst[jm].x = start
+    p->inst[start].op = RE_SPLIT
+    p->inst[start].cls = -1
+    if lazy:
+        p->inst[start].x = p->n
+        p->inst[start].y = start + 1
+    else:
+        p->inst[start].x = start + 1
+        p->inst[start].y = p->n
+
+private def re_plus(p: *ReProg, start: i32, lazy: bool):
+    #   L1: <corpo>
+    #       SPLIT L1, L2
+    #   L2:
+    sp: i32 = re_emit(p, RE_SPLIT)
+    p->inst[sp].cls = -1
+    if lazy:
+        p->inst[sp].x = p->n
+        p->inst[sp].y = start
+    else:
+        p->inst[sp].x = start
+        p->inst[sp].y = p->n
+
+private def re_quest(p: *ReProg, start: i32, lazy: bool):
+    #   L1: SPLIT L2, L3
+    #   L2: <corpo>
+    #   L3:
+    sp: i32 = re_emit(p, RE_SPLIT)
+    memmove((*void)(&p->inst[start + 1]), (*void)(&p->inst[start]), usize(sp - start) * sizeof(ReInst))
+    re_fix_shift(p, start, sp, 1)
+    p->inst[start].op = RE_SPLIT
+    p->inst[start].cls = -1
+    if lazy:
+        p->inst[start].x = p->n
+        p->inst[start].y = start + 1
+    else:
+        p->inst[start].x = start + 1
+        p->inst[start].y = p->n
+
+
+# ---------- `{m,n}` ----------
+#
+# Olha para a frente antes de decidir: um `{` que não é seguido de dígitos é um
+# literal, e é assim que `a{b}` continua a ser três caracteres. É o que o RE2
+# faz, e o contrário — recusar — partiria padrões que existem.
+private def re_is_count(P: *ReParser) -> bool:
+    j: i32 = P->i + 1
+    got: bool = False
+    while j < P->n and u8(P->pat[j]) >= u8(48) and u8(P->pat[j]) <= u8(57):
+        j += 1
+        got = True
+    if not got:
+        return False
+    if j < P->n and P->pat[j] == ',':
+        j += 1
+        while j < P->n and u8(P->pat[j]) >= u8(48) and u8(P->pat[j]) <= u8(57):
+            j += 1
+    return j < P->n and P->pat[j] == '}'
+
+# `{m,n}` é EXPANDIDO: `a{2,4}` vira `aa(a(a)?)?`. Repetir o pedaço é a única
+# forma que um autómato sem contadores tem, e é a que o RE2 usa — com o limite
+# abaixo, que existe para um `a{1000000}` não fazer um programa de um milhão de
+# instruções a partir de doze caracteres.
+private const RE_MAX_REPEAT: const i32 = 1000
+
+private def re_counted(P: *ReParser, start: i32) -> bool:
+    lo: i32 = 0
+    hi: i32 = -1
+    while not rp_eof(P) and rp_peek(P) >= '0' and rp_peek(P) <= '9':
+        lo = lo * 10 + (rp_next(P) - 48)
+    if rp_at(P, ','):
+        _ = rp_next(P)
+        if rp_at(P, '}'):
+            hi = -1
+        else:
+            hi = 0
+            while not rp_eof(P) and rp_peek(P) >= '0' and rp_peek(P) <= '9':
+                hi = hi * 10 + (rp_next(P) - 48)
+    else:
+        hi = lo
+    if not rp_at(P, '}'):
+        rp_fail(P, "a `{m,n}` that never closes")
+        return False
+    _ = rp_next(P)
+    if lo > RE_MAX_REPEAT or hi > RE_MAX_REPEAT:
+        rp_fail(P, "a repetition count above the ceiling: a pattern of a dozen characters would become a program of a million instructions")
+        return False
+    if hi >= 0 and hi < lo:
+        rp_fail(P, "a `{m,n}` with n smaller than m")
+        return False
+    lazy: bool = False
+    if rp_at(P, '?'):
+        _ = rp_next(P)
+        lazy = True
+    # o pedaço original é a UNIDADE que se copia
+    blen: i32 = P->p->n - start
+    body: *ReInst = (*ReInst)(malloc(usize(blen) * sizeof(ReInst)))
+    memcpy((*void)(body), (*void)(&P->p->inst[start]), usize(blen) * sizeof(ReInst))
+    P->p->n = start
+    for k in range(lo):
+        re_paste(P->p, body, blen, start)
+    if hi < 0:
+        # `{m,}` — o último vira `+`, ou um `*` quando m é zero
+        if lo == 0:
+            at: i32 = P->p->n
+            re_paste(P->p, body, blen, start)
+            re_star(P->p, at, lazy)
+        else:
+            at2: i32 = P->p->n - blen
+            re_plus(P->p, at2, lazy)
+    else:
+        for k in range(hi - lo):
+            at3: i32 = P->p->n
+            re_paste(P->p, body, blen, start)
+            re_quest(P->p, at3, lazy)
+    free((*void)(body))
+    return True
+
+# Cola uma cópia do pedaço no fim, com os saltos de dentro dele deslocados. Os
+# saltos que apontavam para fora do pedaço não existem — um pedaço é fechado por
+# construção —, portanto o ajuste é uma soma.
+private def re_paste(p: *ReProg, body: *ReInst, blen: i32, orig: i32):
+    at: i32 = p->n
+    for k in range(blen):
+        j: i32 = re_emit(p, body[k].op)
+        p->inst[j].c = body[k].c
+        p->inst[j].cls = body[k].cls
+        p->inst[j].x = body[k].x - orig + at
+        p->inst[j].y = body[k].y - orig + at
+
+
+# ---------- os átomos ----------
+
+private def rp_atom(P: *ReParser) -> bool:
+    c: i32 = rp_peek(P)
+    if c < 0:
+        return True
+    if c == '(':
+        _ = rp_next(P)
+        cap: bool = True
+        name: *char = None
+        if rp_at(P, '?'):
+            _ = rp_next(P)
+            k: i32 = rp_peek(P)
+            if k == ':':
+                _ = rp_next(P)
+                cap = False
+            elif k == 'P' or k == '<':
+                # `(?P<nome>…)` do Python e `(?<nome>…)` do resto do mundo: os
+                # dois, porque os dois existem e distingui-los não serve nada
+                if k == 'P':
+                    _ = rp_next(P)
+                if not rp_at(P, '<'):
+                    rp_fail(P, "a named group is written `(?<name>…)` or `(?P<name>…)`")
+                    return False
+                _ = rp_next(P)
+                st: i32 = P->i
+                while not rp_eof(P) and not rp_at(P, '>'):
+                    _ = rp_next(P)
+                if rp_eof(P):
+                    rp_fail(P, "a group name that never closes")
+                    return False
+                name = strndup(P->pat + st, usize(P->i - st))
+                _ = rp_next(P)
+            elif k == '=' or k == '!':
+                # 105.4/RE2: NÃO EXISTE, e é matemática e não esforço — o
+                # autómato não guarda o texto que já casou, e é isso que o torna
+                # linear. A mensagem diz porquê, para ninguém pensar que é uma
+                # falta.
+                rp_fail(P, "lookahead does not exist in this engine, and cannot: a linear-time automaton does not keep the text it already matched. That is the price of `(a+)+b` never hanging")
+                return False
+            else:
+                # `(?i)`, `(?m)`, `(?s)` — as marcas, que valem do sítio em
+                # diante e por isso se aplicam ao programa todo
+                while not rp_eof(P) and not rp_at(P, ')') and not rp_at(P, ':'):
+                    f: i32 = rp_next(P)
+                    if f == 'i':
+                        P->p->icase = 1
+                    elif f == 'm':
+                        P->p->multiline = 1
+                    elif f == 's':
+                        P->p->dotall = 1
+                    else:
+                        rp_fail(P, "an unknown flag: this engine has (?i), (?m) and (?s)")
+                        return False
+                if rp_at(P, ':'):
+                    _ = rp_next(P)
+                    cap = False
+                else:
+                    if not rp_at(P, ')'):
+                        rp_fail(P, "a `(?…)` that never closes")
+                        return False
+                    _ = rp_next(P)
+                    return True
+        slot: i32 = -1
+        if cap:
+            P->group += 1
+            slot = P->group
+            re_name_set(P->p, slot, name)
+            s1: i32 = re_emit(P->p, RE_SAVE)
+            P->p->inst[s1].c = u32(slot * 2)
+        if not rp_alt(P):
+            return False
+        if not rp_at(P, ')'):
+            rp_fail(P, "a group that never closes")
+            return False
+        _ = rp_next(P)
+        if cap:
+            s2: i32 = re_emit(P->p, RE_SAVE)
+            P->p->inst[s2].c = u32(slot * 2 + 1)
+        return True
+    if c == '[':
+        _ = rp_next(P)
+        return rp_class(P)
+    if c == '.':
+        _ = rp_next(P)
+        _ = re_emit(P->p, RE_ANY_NL if P->p->dotall != 0 else RE_ANY)
+        return True
+    if c == '^':
+        _ = rp_next(P)
+        _ = re_emit(P->p, RE_BOL)
+        return True
+    if c == '$':
+        _ = rp_next(P)
+        _ = re_emit(P->p, RE_EOL)
+        return True
+    if c == '\\':
+        _ = rp_next(P)
+        return rp_escape(P)
+    if c == ')':
+        return True
+    if c == '*' or c == '+' or c == '?':
+        rp_fail(P, "a repetition with nothing before it")
+        return False
+    _ = rp_next(P)
+    at: i32 = re_emit(P->p, RE_CHAR)
+    P->p->inst[at].c = u32(c)
+    return True
+
+private def re_name_set(p: *ReProg, slot: i32, name: *char):
+    # CRESCE em vez de truncar: um nome que se perdesse em silêncio faria
+    # `\g<x>` devolver vazio sem dizer porquê, e o tecto seria um número
+    # inventado num sítio onde não é preciso nenhum.
+    if slot >= p->nnames:
+        nn: i32 = slot + 8
+        p->names = (**char)(realloc((*void)(p->names), usize(nn) * sizeof(PsCharPtr)))
+        for i in range(p->nnames, nn):
+            p->names[i] = None
+        p->nnames = nn
+    p->names[slot] = name
+
+
+private def rp_escape(P: *ReParser) -> bool:
+    c: i32 = rp_next(P)
+    if c < 0:
+        rp_fail(P, "a `\\\\` at the end of the pattern")
+        return False
+    if c == '1' or c == '2' or c == '3' or c == '4' or c == '5' or c == '6' or c == '7' or c == '8' or c == '9':
+        # 105.4/RE2: NÃO EXISTE, pela mesma razão que o lookahead não existe.
+        rp_fail(P, "a backreference does not exist in this engine, and cannot: a linear-time automaton does not keep the text it already matched. That is the price of `(a+)+b` never hanging")
+        return False
+    if c == 'b':
+        _ = re_emit(P->p, RE_WORDB)
+        return True
+    if c == 'B':
+        _ = re_emit(P->p, RE_NWORDB)
+        return True
+    if c == 'A':
+        _ = re_emit(P->p, RE_BOT)
+        return True
+    if c == 'z':
+        _ = re_emit(P->p, RE_EOT)
+        return True
+    if c == 'p' or c == 'P':
+        u: i32 = re_read_uni(P)
+        if u < 0:
+            return False
+        ku: i32 = re_class_new(P->p)
+        re_class_add_uni(&P->p->cls[ku], u)
+        if c == 'P':
+            P->p->cls[ku].neg = 1
+        atu: i32 = re_emit(P->p, RE_CLASS)
+        P->p->inst[atu].cls = ku
+        return True
+    if c == 'd' or c == 'w' or c == 's':
+        k: i32 = re_class_new(P->p)
+        _ = re_add_named(P->p, k, c)
+        at: i32 = re_emit(P->p, RE_CLASS)
+        P->p->inst[at].cls = k
+        return True
+    if c == 'D' or c == 'W' or c == 'S':
+        k2: i32 = re_class_new(P->p)
+        _ = re_add_named(P->p, k2, c + 32)
+        P->p->cls[k2].neg = 1
+        at2: i32 = re_emit(P->p, RE_CLASS)
+        P->p->inst[at2].cls = k2
+        return True
+    v: i32 = re_escape_char(P, c)
+    if v < 0:
+        return False
+    at3: i32 = re_emit(P->p, RE_CHAR)
+    P->p->inst[at3].c = u32(v)
+    return True
+
+# As escapadas que dão UM caractere. `\n`, `\t`, `\xHH`, `\uHHHH` — e qualquer
+# outro caractere escapado vale por si próprio, que é o que faz `\.` ser um ponto
+# e `\\` ser uma barra.
+private def re_escape_char(P: *ReParser, c: i32) -> i32:
+    if c == 'n':
+        return 10
+    if c == 't':
+        return 9
+    if c == 'r':
+        return 13
+    if c == 'f':
+        return 12
+    if c == 'v':
+        return 11
+    if c == '0':
+        return 0
+    if c == 'a':
+        return 7
+    if c == 'x' or c == 'u' or c == 'U':
+        want: i32 = 2 if c == 'x' else (4 if c == 'u' else 8)
+        v: i32 = 0
+        for _ in range(want):
+            h: i32 = re_hex(rp_next(P))
+            if h < 0:
+                rp_fail(P, "a `\\\\x`, `\\\\u` or `\\\\U` with too few hex digits")
+                return -1
+            v = v * 16 + h
+        return v
+    return c
+
+# `\p{L}`, `\p{Lu}`, `\p{N}`, `\p{Nd}` — e a forma curta `\pL` de uma letra só,
+# que o Perl e o RE2 aceitam.
+private def re_read_uni(P: *ReParser) -> i32:
+    nm: char[16]
+    k: i32 = 0
+    if rp_at(P, '{'):
+        _ = rp_next(P)
+        while not rp_eof(P) and not rp_at(P, '}'):
+            ch: i32 = rp_next(P)
+            if k < 15:
+                nm[k] = char(ch)
+                k += 1
+        if rp_eof(P):
+            rp_fail(P, "a `\\p{...}` that never closes")
+            return -1
+        _ = rp_next(P)
+    else:
+        ch2: i32 = rp_next(P)
+        if ch2 < 0:
+            rp_fail(P, "a `\\p` with no category after it")
+            return -1
+        nm[0] = char(ch2)
+        k = 1
+    nm[k] = '\0'
+    if strcmp(nm, "L") == 0 or strcmp(nm, "Letter") == 0 or strcmp(nm, "Alpha") == 0:
+        return PS_UCAT_L
+    if strcmp(nm, "Lu") == 0:
+        return PS_UCAT_LU
+    if strcmp(nm, "Ll") == 0:
+        return PS_UCAT_LL
+    if strcmp(nm, "Lt") == 0:
+        return PS_UCAT_LT
+    if strcmp(nm, "N") == 0 or strcmp(nm, "Number") == 0:
+        return PS_UCAT_N
+    if strcmp(nm, "Nd") == 0 or strcmp(nm, "Digit") == 0:
+        return PS_UCAT_ND
+    if strcmp(nm, "Alnum") == 0:
+        return PS_UCAT_ALNUM
+    if strcmp(nm, "Space") == 0 or strcmp(nm, "White_Space") == 0:
+        return PS_UCAT_SPACE
+    rp_fail(P, "an unknown Unicode category: this engine knows L, Lu, Ll, Lt, N, Nd, Alnum and Space")
+    return -1
+
+private def re_hex(c: i32) -> i32:
+    if c >= 48 and c <= 57:
+        return c - 48
+    if c >= 97 and c <= 102:
+        return c - 87
+    if c >= 65 and c <= 70:
+        return c - 55
+    return -1
+
+
+# ---------- `[...]` ----------
+
+private def rp_class(P: *ReParser) -> bool:
+    k: i32 = re_class_new(P->p)
+    c: *ReClass = &P->p->cls[k]
+    if rp_at(P, '^'):
+        _ = rp_next(P)
+        c->neg = 1
+    first: bool = True
+    while True:
+        if rp_eof(P):
+            rp_fail(P, "a `[` that never closes")
+            return False
+        if rp_at(P, ']') and not first:
+            _ = rp_next(P)
+            break
+        first = False
+        lo: i32 = rp_next(P)
+        if lo == '\\':
+            e: i32 = rp_next(P)
+            if e == 'p' or e == 'P':
+                u2: i32 = re_read_uni(P)
+                if u2 < 0:
+                    return False
+                if e == 'P':
+                    # `[\P{L}]` dentro de uma classe seria o complemento de UMA
+                    # categoria, e o complemento de um predicado não é uma lista
+                    # de faixas — não há como o juntar às outras. Recusar é
+                    # melhor do que responder mal.
+                    rp_fail(P, "`\\P{...}` inside a `[...]` is not supported: negate the whole class with `[^...]`")
+                    return False
+                re_class_add_uni(&P->p->cls[k], u2)
+                c = &P->p->cls[k]
+                continue
+            if e == 'd' or e == 'w' or e == 's':
+                _ = re_add_named(P->p, k, e)
+                continue
+            if e == 'D' or e == 'W' or e == 'S':
+                # o complemento CALCULADO, e não a negação da classe inteira:
+                # `[\D0]` é "não-dígito OU zero", não "não (dígito ou zero)"
+                _ = re_add_named_neg(P->p, k, e + 32)
+                continue
+            lo = re_escape_char(P, e)
+            if lo < 0:
+                return False
+        hi: i32 = lo
+        if rp_at(P, '-'):
+            save: i32 = P->i
+            _ = rp_next(P)
+            if rp_at(P, ']'):
+                # um `-` mesmo antes do `]` é um traço literal
+                P->i = save
+            else:
+                h: i32 = rp_next(P)
+                if h == '\\':
+                    h = re_escape_char(P, rp_next(P))
+                    if h < 0:
+                        return False
+                if h < lo:
+                    rp_fail(P, "a range whose end comes before its start")
+                    return False
+                hi = h
+        re_class_add(c, u32(lo), u32(hi))
+        c = &P->p->cls[k]        # `re_class_add` pode ter mexido no array
+    at: i32 = re_emit(P->p, RE_CLASS)
+    P->p->inst[at].cls = k
+    return True
+
+
+# ---------- compilar ----------
+
+def re_compile(pat: const *char, n: i32) -> *ReProg:
+    p: *ReProg = (*ReProg)(calloc(usize(1), sizeof(ReProg)))
+    p->ok = 1
+    p->ngroup = 0
+    P: ReParser = {pat, n, 0, p, 0}
+    # a ranhura 0/1 é o casamento INTEIRO, e é por isso que o grupo 1 do
+    # programa é o primeiro parêntesis do padrão
+    s0: i32 = re_emit(p, RE_SAVE)
+    p->inst[s0].c = u32(0)
+    if rp_alt(&P):
+        if not rp_eof(&P):
+            rp_fail(&P, "a `)` with no `(` before it")
+    s1: i32 = re_emit(p, RE_SAVE)
+    p->inst[s1].c = u32(1)
+    _ = re_emit(p, RE_MATCH)
+    p->ngroup = P.group
+    return p
+
+def re_free(p: *ReProg):
+    if p == None:
+        return
+    for i in range(p->ncls):
+        free((*void)(p->cls[i].lo))
+        free((*void)(p->cls[i].hi))
+        free((*void)(p->cls[i].uni))
+    free((*void)(p->cls))
+    free((*void)(p->inst))
+    if p->names != None:
+        for i in range(p->nnames):
+            free((*void)(p->names[i]))
+        free((*void)(p->names))
+    free((*void)(p->err))
+    free((*void)(p))
+
+
+# ---------- a máquina do Pike ----------
+#
+# Corre TODAS as linhas de execução ao mesmo tempo, um codepoint de cada vez. O
+# que a torna linear é uma linha só:
+#
+#   **num dado passo, cada instrução entra na lista no máximo UMA vez.**
+#
+# Sem isso, duas linhas que chegam ao mesmo sítio duplicam-se, e a duplicação é
+# exponencial — que é exactamente o que faz `(a+)+b` parar um motor com
+# retrocesso. Com isso, o trabalho por caractere é no máximo o tamanho do
+# programa, e o total é `len(texto) × len(programa)`.
+
+struct ReThread:
+    pc: i32
+    cap: *i32        # 2 × (ngroup+1) posições, em BYTES do texto
+
+struct ReList:
+    t: *ReThread
+    n: i32
+    seen: *i32       # a última geração em que cada instrução entrou nesta lista
+    gen: i32         # a geração desta lista, subida sempre que ela é esvaziada
+
+private def rl_init(l: *ReList, ninst: i32, ncap: i32):
+    l->t = (*ReThread)(calloc(usize(ninst), sizeof(ReThread)))
+    for i in range(ninst):
+        l->t[i].cap = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    l->seen = (*i32)(calloc(usize(ninst), sizeof(i32)))
+    l->n = 0
+    l->gen = 0
+
+private def rl_free(l: *ReList, ninst: i32):
+    for i in range(ninst):
+        free((*void)(l->t[i].cap))
+    free((*void)(l->t))
+    free((*void)(l->seen))
+
+
+# Onde o texto está, e o que a máquina precisa de saber para responder às
+# âncoras sem voltar atrás.
+struct ReIn:
+    s: const *char
+    n: i32
+    icase: i32
+    multiline: i32
+
+private def re_fold(c: u32) -> u32:
+    """A dobra de caixa SIMPLES do Unicode: `(?i)Ä` casa `ä`, e `(?i)Σ` casa `σ`.
+
+    **Simples e não completa**, e é a escolha do RE2 e do `regexp` do Go — não
+    uma limitação nossa. A dobra completa mapeia `ß` para `ss`, ou seja UM
+    caractere para DOIS, e um autómato que anda um caractere de cada vez não tem
+    como casar dois de entrada contra um do padrão sem guardar o que já leu — que
+    é a propriedade que ele não tem, e a razão de ele ser linear.
+    """
+    return u32(ps_cp_fold(i32(c)))
+
+private def re_isword(c: i32) -> bool:
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or c == 95 or (c >= 97 and c <= 122)
+
+private def re_assert_ok(IN: *ReIn, op: i32, at: i32) -> bool:
+    if op == RE_BOT:
+        return at == 0
+    if op == RE_EOT:
+        return at == IN->n
+    if op == RE_BOL:
+        if at == 0:
+            return True
+        return IN->multiline != 0 and IN->s[at - 1] == '\n'
+    if op == RE_EOL:
+        if at == IN->n:
+            return True
+        return IN->multiline != 0 and IN->s[at] == '\n'
+    # `\b` e `\B`: a fronteira é entre um caractere de palavra e um que não é
+    L: i32 = 0
+    before: bool = False
+    if at > 0:
+        # o byte anterior chega: um caractere de palavra é ASCII neste motor, e
+        # a continuação de um UTF-8 nunca é um deles
+        before = re_isword(i32(u8(IN->s[at - 1])))
+    after: bool = False
+    if at < IN->n:
+        after = re_isword(re_utf8_at(IN->s, IN->n, at, &L))
+    b: bool = before != after
+    return b if op == RE_WORDB else not b
+
+# Acrescenta uma linha de execução, seguindo os saltos e as marcas de captura
+# até parar numa instrução que CONSOME. É aqui que a dedup por geração mora, e é
+# aqui que a garantia se cumpre.
+private def re_addthread(l: *ReList, p: *ReProg, IN: *ReIn, pc: i32, cap: *i32, ncap: i32, at: i32):
+    # **A garantia mora nestas três linhas.** Uma instrução entra nesta lista no
+    # máximo uma vez por geração; sem isso, duas linhas que chegam ao mesmo sítio
+    # duplicam-se, e a duplicação é exponencial — que é exactamente o que faz
+    # `(a+)+b` parar um motor com retrocesso.
+    if l->seen[pc] == l->gen:
+        return
+    l->seen[pc] = l->gen
+    op: i32 = p->inst[pc].op
+    if op == RE_JMP:
+        re_addthread(l, p, IN, p->inst[pc].x, cap, ncap, at)
+        return
+    if op == RE_SPLIT:
+        re_addthread(l, p, IN, p->inst[pc].x, cap, ncap, at)
+        re_addthread(l, p, IN, p->inst[pc].y, cap, ncap, at)
+        return
+    if op == RE_SAVE:
+        k: i32 = i32(p->inst[pc].c)
+        if k < ncap:
+            old: i32 = cap[k]
+            cap[k] = at
+            re_addthread(l, p, IN, pc + 1, cap, ncap, at)
+            cap[k] = old         # desfaz: a marca é DESTA linha e não das irmãs
+        else:
+            re_addthread(l, p, IN, pc + 1, cap, ncap, at)
+        return
+    if op == RE_BOL or op == RE_EOL or op == RE_BOT or op == RE_EOT or op == RE_WORDB or op == RE_NWORDB:
+        if re_assert_ok(IN, op, at):
+            re_addthread(l, p, IN, pc + 1, cap, ncap, at)
+        return
+    # consome (ou é o MATCH): entra na lista
+    l->t[l->n].pc = pc
+    memcpy((*void)(l->t[l->n].cap), (*void)(cap), usize(ncap) * sizeof(i32))
+    l->n += 1
+
+
+# O passo: corre o programa sobre o texto a partir de `from`, e devolve as
+# capturas do casamento mais à ESQUERDA e mais LONGO na ordem de preferência do
+# autómato (a "leftmost-first" do Perl, que é o que toda a gente espera).
+#
+# `out_cap` tem 2 × (ngroup+1) posições e fica com -1 onde um grupo não casou.
+def re_run(p: *ReProg, s: const *char, slen: i32, from: i32, out_cap: *i32) -> bool:
+    ncap: i32 = (p->ngroup + 1) * 2
+    IN: ReIn = {s, slen, p->icase, p->multiline}
+    cur: ReList
+    nxt: ReList
+    rl_init(&cur, p->n, ncap)
+    rl_init(&nxt, p->n, ncap)
+    defer rl_free(&cur, p->n)
+    defer rl_free(&nxt, p->n)
+    seed: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(seed))
+    matched: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(matched))
+    found: bool = False
+    at: i32 = from
+    cur.gen = 1
+    cur.n = 0
+    n: i32 = i32(slen)
+    while at <= n:
+        # A busca é NÃO ANCORADA: uma linha nova nasce em cada posição, e é
+        # isso que faz `re.search` procurar em vez de exigir o princípio. Mas
+        # só enquanto nada casou — assim que houve casamento, semear outra vez
+        # daria um resultado mais à direita, e o que se quer é o mais à esquerda.
+        if not found:
+            for k in range(ncap):
+                seed[k] = -1
+            re_addthread(&cur, p, &IN, 0, seed, ncap, at)
+        # Sair aqui com a lista vazia seria terminar a busca na primeira posição
+        # que não deixa nenhuma linha viva — e uma busca NÃO ANCORADA tem de
+        # continuar até ao fim do texto. Só depois de haver casamento é que uma
+        # lista vazia quer dizer "acabou", porque aí semear outra vez daria um
+        # resultado mais à direita.
+        if cur.n == 0 and found:
+            break
+        L: i32 = 0
+        ch: i32 = re_utf8_at(s, slen, at, &L)
+        nxt.n = 0
+        nxt.gen += 1
+        i: i32 = 0
+        while i < cur.n:
+            pc: i32 = cur.t[i].pc
+            op: i32 = p->inst[pc].op
+            if op == RE_MATCH:
+                memcpy((*void)(matched), (*void)(cur.t[i].cap), usize(ncap) * sizeof(i32))
+                found = True
+                # As linhas MENOS preferidas morrem aqui, e não é uma
+                # optimização: a ordem em que elas entraram na lista É a ordem
+                # de preferência do autómato, portanto o primeiro MATCH é o
+                # resultado. Continuar com as outras daria o casamento errado.
+                i = cur.n
+                continue
+            if ch >= 0:
+                ok: bool = False
+                if op == RE_CHAR:
+                    a: u32 = u32(ch)
+                    b: u32 = p->inst[pc].c
+                    ok = (re_fold(a) == re_fold(b)) if p->icase != 0 else (a == b)
+                elif op == RE_ANY:
+                    ok = ch != 10
+                elif op == RE_ANY_NL:
+                    ok = True
+                elif op == RE_CLASS:
+                    c2: const *ReClass = &p->cls[p->inst[pc].cls]
+                    ok = re_class_has(c2, u32(ch))
+                    if not ok and p->icase != 0:
+                        ok = re_class_has(c2, re_fold(u32(ch)))
+                        if not ok and u32(ch) >= u32(97) and u32(ch) <= u32(122):
+                            ok = re_class_has(c2, u32(ch) - u32(32))
+                if ok:
+                    re_addthread(&nxt, p, &IN, pc + 1, cur.t[i].cap, ncap, at + L)
+            i += 1
+        # as duas listas trocam de papel; a que passa a ser a corrente já tem a
+        # geração dela, e a outra vai ser esvaziada na volta seguinte
+        tmp: ReList = cur
+        cur = nxt
+        nxt = tmp
+        if ch < 0:
+            break
+        at += L
+    if found:
+        memcpy((*void)(out_cap), (*void)(matched), usize(ncap) * sizeof(i32))
+    return found
+
+
+# ---------- a cache de padrões compilados ----------
+#
+# Um padrão num laço compila UMA vez. A cache é pequena e por CONTEXTO — um
+# worker tem o seu heap e o seu laço (18.1), e uma cache partilhada entre threads
+# seria um cadeado por chamada a `re.match`.
+#
+# Vinte e quatro entradas, e a mais velha sai. Não é um número mágico: é mais do
+# que qualquer programa tem de padrões distintos num caminho quente, e pouco o
+# bastante para a busca linear ser mais rápida do que uma tabela.
+
+private const RE_CACHE: const i32 = 24
+
+struct ReCache:
+    pat: **char
+    prog: **ReProg
+    n: i32
+    tick: i32
+
+private def re_cache_get(c: *ReCache, pat: const *char, n: i32) -> *ReProg:
+    for i in range(c->n):
+        if strlen(c->pat[i]) == usize(n) and memcmp((*void)(c->pat[i]), (*void)(pat), usize(n)) == 0:
+            return c->prog[i]
+    p: *ReProg = re_compile(pat, n)
+    if c->pat == None:
+        c->pat = (**char)(calloc(usize(RE_CACHE), sizeof(PsCharPtr)))
+        c->prog = (**ReProg)(calloc(usize(RE_CACHE), sizeof(ReProgPtr)))
+    if c->n < RE_CACHE:
+        c->pat[c->n] = strndup(pat, usize(n))
+        c->prog[c->n] = p
+        c->n += 1
+    else:
+        # a mais velha sai, em roda: sem isto um programa que compõe padrões
+        # cresceria sem fim, que é o defeito que o `re` do Python teve
+        free((*void)(c->pat[c->tick]))
+        re_free(c->prog[c->tick])
+        c->pat[c->tick] = strndup(pat, usize(n))
+        c->prog[c->tick] = p
+        c->tick = (c->tick + 1) % RE_CACHE
+    return p
+
+def re_cache_free(c: *ReCache):
+    if c == None or c->pat == None:
+        return
+    for i in range(c->n):
+        free((*void)(c->pat[i]))
+        re_free(c->prog[i])
+    free((*void)(c->pat))
+    free((*void)(c->prog))
+    c->pat = None
+    c->prog = None
+    c->n = 0
+
+
+# ---------- a API que o pscript vê ----------
+#
+# `re.match`, `re.search`, `re.findall`, `re.finditer`, `re.sub`, `re.split`.
+# O que sai são valores do heap coletado; o que entra é texto. O programa
+# compilado fica na cache, fora do heap, e é isso que faz um `re` num laço não
+# alocar nada por volta.
+
+private def re_bad(ctx: *PsCtx, p: *ReProg, pat: *PsStr, file: const *char, line: i32) -> bool:
+    if p != None and p->ok != 0:
+        return False
+    msg: char[512]
+    snprintf(msg, usize(512), "re: %s — in the pattern %.*s",
+             p->err if p != None and p->err != None else "does not compile",
+             int(pat->len), pat->data)
+    ps_raise(ctx, msg, PS_CAT_VALUE, file, line)
+    return True
+
+# 41.2, e a assinatura NÃO MUDA: os grupos, ou None. O [0] é o casamento inteiro,
+# e um grupo que não casou dá string vazia — que é o que já era, portanto nenhum
+# programa que existe hoje muda uma linha.
 def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
-    rx: regex_t
-    rc: int = regcomp(&rx, pattern->data, REG_EXTENDED)
-    if rc != 0:
-        buf: char[256]
-        regerror(rc, &rx, buf, 256)
-        ps_raise(ctx, buf, PS_CAT_VALUE, file, line)
+    return ps_re_find(ctx, pattern, text, 0, True, file, line)
+
+def ps_re_search(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    return ps_re_find(ctx, pattern, text, 0, False, file, line)
+
+private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, from: i32, anchored: bool,
+                       file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
+    if re_bad(ctx, p, pattern, file, line):
         return None
-    m: regmatch_t[16]
-    got: int = regexec(&rx, text->data, usize(PS_RE_MAX_GROUPS), m, 0)
-    if got != 0:
-        regfree(&rx)
-        return None          # no match: the option is empty (9.4/40.1)
-    n: i32 = 0
-    while n < PS_RE_MAX_GROUPS and m[n].rm_so >= 0:
-        n += 1
-    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, i64(n))
-    for i in range(n):
-        st: *char = text->data + m[i].rm_so
-        ln: usize = usize(m[i].rm_eo - m[i].rm_so)
-        slot: *char = ps_list_push(ctx, out)
-        sp: **PsStr = (**PsStr)(slot)
-        *sp = ps_str_new(ctx, st, ln)
-    regfree(&rx)
+    ncap: i32 = (p->ngroup + 1) * 2
+    cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(cap))
+    if not re_run(p, text->data, i32(text->len), from, cap):
+        return None
+    # `match` exige o PRINCÍPIO e `search` não: a diferença está aqui e não no
+    # motor, porque um autómato não ancorado responde às duas perguntas — e
+    # ancorar por dentro obrigaria a compilar o mesmo padrão duas vezes
+    if anchored and cap[0] != from:
+        return None
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, i64(p->ngroup + 1))
+    for g in range(p->ngroup + 1):
+        a: i32 = cap[g * 2]
+        b: i32 = cap[g * 2 + 1]
+        piece: *PsStr = ps_str_new(ctx, "", 0) if a < 0 or b < a else ps_str_new(ctx, text->data + a, usize(b - a))
+        pp: *PsStr = piece
+        memcpy((*void)(ps_list_push(ctx, out)), (*void)(&pp), sizeof(PsStrPtr))
     return out
+
+
+# ---------- `findall` e `finditer` ----------
+#
+# A diferença entre os dois é o que sai, não o trabalho: um dá as strings e o
+# outro dá as POSIÇÕES, e quem quer substituir precisa das posições.
+#
+# **O casamento vazio avança uma posição**, e é a regra que impede um laço
+# infinito: `re.findall("a*", "bb")` casa o vazio em cada sítio e tem de acabar.
+# Toda a gente faz isto, e uma implementação que não o faça pendura o programa
+# no primeiro padrão que possa casar nada.
+
+def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
+    if re_bad(ctx, p, pattern, file, line):
+        return None
+    ncap: i32 = (p->ngroup + 1) * 2
+    cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(cap))
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 0)
+    slots: **PsObj[2]
+    slots[0] = (**PsObj)(&out)
+    slots[1] = (**PsObj)(&text)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 2)
+    defer ps_pop_frame(ctx, &f)
+    at: i32 = 0
+    n: i32 = i32(text->len)
+    while at <= n:
+        if not re_run(p, text->data, n, at, cap):
+            break
+        a: i32 = cap[0]
+        b: i32 = cap[1]
+        # o grupo 1 quando há grupos, o casamento inteiro quando não há — é o
+        # que o `findall` do Python faz, e é o que quem chama espera
+        g: i32 = 1 if p->ngroup >= 1 else 0
+        ga: i32 = cap[g * 2]
+        gb: i32 = cap[g * 2 + 1]
+        piece: *PsStr = ps_str_new(ctx, "", 0) if ga < 0 or gb < ga else ps_str_new(ctx, text->data + ga, usize(gb - ga))
+        pp: *PsStr = piece
+        memcpy((*void)(ps_list_push(ctx, out)), (*void)(&pp), sizeof(PsStrPtr))
+        at = b + 1 if b == a else b
+    return out
+
+# As posições, quatro números por casamento: início e fim do casamento inteiro,
+# e depois cada grupo. Uma lista plana e não uma de listas porque é o que o
+# `sub` precisa e é o que não aloca uma lista por casamento.
+def ps_re_finditer(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
+    if re_bad(ctx, p, pattern, file, line):
+        return None
+    ncap: i32 = (p->ngroup + 1) * 2
+    cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(cap))
+    out: *PsList = ps_list_new(ctx, i32(sizeof(i64)), False, 0)
+    slots: **PsObj[2]
+    slots[0] = (**PsObj)(&out)
+    slots[1] = (**PsObj)(&text)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 2)
+    defer ps_pop_frame(ctx, &f)
+    at: i32 = 0
+    n: i32 = i32(text->len)
+    while at <= n:
+        if not re_run(p, text->data, n, at, cap):
+            break
+        for k in range(ncap):
+            v: i64 = i64(cap[k])
+            memcpy((*void)(ps_list_push(ctx, out)), (*void)(&v), sizeof(i64))
+        at = cap[1] + 1 if cap[1] == cap[0] else cap[1]
+    return out
+
+
+# ---------- `sub` e `split` ----------
+
+# `\1`, `\2`, `\g<nome>` na substituição. **É a única coisa que `\1` faz neste
+# motor** — no PADRÃO ele não existe, e é a mesma razão dita ao contrário: no
+# padrão exigiria guardar o texto já casado, e aqui o texto já está todo casado.
+private def re_expand(ctx: *PsCtx, p: *ReProg, rep: *PsStr, text: *PsStr, cap: *i32, ncap: i32) -> *PsStr:
+    out: *PsStr = ps_str_new(ctx, "", 0)
+    i: i32 = 0
+    n: i32 = i32(rep->len)
+    start: i32 = 0
+    while i < n:
+        if rep->data[i] != '\\' or i + 1 >= n:
+            i += 1
+            continue
+        if i > start:
+            out = ps_str_concat(ctx, out, ps_str_new(ctx, rep->data + start, usize(i - start)))
+        c: char = rep->data[i + 1]
+        g: i32 = -1
+        i += 2
+        if c >= '0' and c <= '9':
+            g = i32(c) - 48
+            while i < n and rep->data[i] >= '0' and rep->data[i] <= '9':
+                g = g * 10 + (i32(rep->data[i]) - 48)
+                i += 1
+        elif c == 'g' and i < n and rep->data[i] == '<':
+            i += 1
+            st: i32 = i
+            while i < n and rep->data[i] != '>':
+                i += 1
+            nm: *char = strndup(rep->data + st, usize(i - st))
+            g = re_group_by_name(p, nm)
+            free((*void)(nm))
+            if i < n:
+                i += 1
+        elif c == 'n':
+            out = ps_str_concat(ctx, out, ps_str_new(ctx, "\n", 1))
+        elif c == 't':
+            out = ps_str_concat(ctx, out, ps_str_new(ctx, "\t", 1))
+        else:
+            out = ps_str_concat(ctx, out, ps_str_new(ctx, &c, 1))
+        if g >= 0 and g * 2 + 1 < ncap:
+            a: i32 = cap[g * 2]
+            b: i32 = cap[g * 2 + 1]
+            if a >= 0 and b >= a:
+                out = ps_str_concat(ctx, out, ps_str_new(ctx, text->data + a, usize(b - a)))
+        start = i
+    if n > start:
+        out = ps_str_concat(ctx, out, ps_str_new(ctx, rep->data + start, usize(n - start)))
+    return out
+
+private def re_group_by_name(p: *ReProg, nm: const *char) -> i32:
+    if p->names == None:
+        return -1
+    for i in range(p->nnames):
+        if p->names[i] != None and strcmp(p->names[i], nm) == 0:
+            return i
+    return -1
+
+def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, rep: *PsStr, text: *PsStr, count: i64,
+              file: const *char, line: i32) -> *PsStr:
+    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
+    if re_bad(ctx, p, pattern, file, line):
+        return ps_str_new(ctx, "", 0)
+    ncap: i32 = (p->ngroup + 1) * 2
+    cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(cap))
+    out: *PsStr = ps_str_new(ctx, "", 0)
+    slots: **PsObj[4]
+    slots[0] = (**PsObj)(&out)
+    slots[1] = (**PsObj)(&text)
+    slots[2] = (**PsObj)(&rep)
+    slots[3] = (**PsObj)(&pattern)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 4)
+    defer ps_pop_frame(ctx, &f)
+    at: i32 = 0
+    n: i32 = i32(text->len)
+    done: i64 = 0
+    while at <= n:
+        if count > 0 and done >= count:
+            break
+        if not re_run(p, text->data, n, at, cap):
+            break
+        a: i32 = cap[0]
+        b: i32 = cap[1]
+        if a > at:
+            out = ps_str_concat(ctx, out, ps_str_new(ctx, text->data + at, usize(a - at)))
+        out = ps_str_concat(ctx, out, re_expand(ctx, p, rep, text, cap, ncap))
+        done += 1
+        if b == a:
+            # um casamento vazio: copia o caractere e anda, senão o laço não sai
+            if a < n:
+                L: i32 = 0
+                _ = re_utf8_at(text->data, n, a, &L)
+                out = ps_str_concat(ctx, out, ps_str_new(ctx, text->data + a, usize(L)))
+                at = a + L
+            else:
+                at = a + 1
+        else:
+            at = b
+    if at < n:
+        out = ps_str_concat(ctx, out, ps_str_new(ctx, text->data + at, usize(n - at)))
+    return out
+
+def ps_re_split(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, count: i64,
+                file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
+    if re_bad(ctx, p, pattern, file, line):
+        return None
+    ncap: i32 = (p->ngroup + 1) * 2
+    cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
+    defer free((*void)(cap))
+    out: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, 0)
+    slots: **PsObj[2]
+    slots[0] = (**PsObj)(&out)
+    slots[1] = (**PsObj)(&text)
+    f: PsFrame
+    ps_push_frame(ctx, &f, slots, 2)
+    defer ps_pop_frame(ctx, &f)
+    at: i32 = 0
+    n: i32 = i32(text->len)
+    last: i32 = 0
+    done: i64 = 0
+    while at <= n:
+        if count > 0 and done >= count:
+            break
+        if not re_run(p, text->data, n, at, cap):
+            break
+        a: i32 = cap[0]
+        b: i32 = cap[1]
+        if b == a:
+            # 79: um separador VAZIO não separa nada. O `re.split` do Python
+            # mudou de comportamento na 3.7 por causa disto, e a escolha certa é
+            # ignorá-lo em vez de partir o texto entre cada dois caracteres.
+            at = a + 1
+            continue
+        piece: *PsStr = ps_str_new(ctx, text->data + last, usize(a - last))
+        pp: *PsStr = piece
+        memcpy((*void)(ps_list_push(ctx, out)), (*void)(&pp), sizeof(PsStrPtr))
+        # os GRUPOS do separador entram no resultado, como no Python: é o que
+        # permite partir guardando por onde se partiu
+        for g in range(1, p->ngroup + 1):
+            ga: i32 = cap[g * 2]
+            gb: i32 = cap[g * 2 + 1]
+            gp: *PsStr = ps_str_new(ctx, "", 0) if ga < 0 or gb < ga else ps_str_new(ctx, text->data + ga, usize(gb - ga))
+            gq: *PsStr = gp
+            memcpy((*void)(ps_list_push(ctx, out)), (*void)(&gq), sizeof(PsStrPtr))
+        last = b
+        at = b
+        done += 1
+    tail: *PsStr = ps_str_new(ctx, text->data + last, usize(n - last))
+    tq: *PsStr = tail
+    memcpy((*void)(ps_list_push(ctx, out)), (*void)(&tq), sizeof(PsStrPtr))
+    return out
+
+
+private def re_cache_of(ctx: *PsCtx) -> *ReCache:
+    if ctx->recache == None:
+        ctx->recache = calloc(usize(1), sizeof(ReCache))
+    return (*ReCache)(ctx->recache)
+
+def ps_re_ctx_free(ctx: *PsCtx):
+    """Chamada quando o contexto morre. Os programas compilados são malloc'd —
+    o coletor não sabe deles, e é essa a razão de haver esta linha."""
+    if ctx->recache != None:
+        re_cache_free((*ReCache)(ctx->recache))
+        free(ctx->recache)
+        ctx->recache = None
 
 # ---------- `random`: o Mersenne Twister do CPython, portado (103) ----------
 #

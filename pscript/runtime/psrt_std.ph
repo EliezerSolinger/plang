@@ -29,6 +29,14 @@ def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *P
 # parenthesized ones. No match is None, which is what makes `if not m:` read the
 # way it should (40.1).
 def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
+# S2b: o motor de Thompson. `search` procura, `match` exige o princípio — a
+# diferença está na API e não no autómato, que responde às duas perguntas.
+def ps_re_search(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_finditer(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, rep: *PsStr, text: *PsStr, count: i64, file: const *char, line: i32) -> *PsStr
+def ps_re_split(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, count: i64, file: const *char, line: i32) -> *PsList
+def ps_re_ctx_free(ctx: *PsCtx)
 # 103: `random`, portado do CPython (MT19937 + a camada de Lib/random.py)
 def ps_random_seed(ctx: *PsCtx, n: i64)
 def ps_random_random(ctx: *PsCtx) -> f64

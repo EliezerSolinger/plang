@@ -73,6 +73,19 @@ enum PsTyId:
                        #   VIDA e não sobre resultados: nenhuma tarefa dele
                        #   sobrevive ao bloco, e a primeira falha mata as irmãs.
 
+# S2b/152.6: as categorias Unicode que o `\p{...}` de uma regex nomeia. Ficam
+# aqui e não na camada dos valores porque o motor mora na da biblioteca, e um
+# número repetido nos dois sítios é a espécie de coisa que se desalinha.
+enum PsUCat:
+    PS_UCAT_L = 0       # qualquer letra
+    PS_UCAT_LU = 1      # maiúscula
+    PS_UCAT_LL = 2      # minúscula
+    PS_UCAT_LT = 3      # de título (`ǅ` e uns trinta outros)
+    PS_UCAT_N = 4       # qualquer número
+    PS_UCAT_ND = 5      # dígito decimal
+    PS_UCAT_ALNUM = 6   # letra ou número
+    PS_UCAT_SPACE = 7   # espaço
+
 struct PsObj:
     ty: i32
     size: u32       # bytes of the whole object, header included
@@ -968,6 +981,10 @@ struct PsCtx:
     nogc_start: usize
     repr_depth: i32     # 97.2: how deep a container repr is, so a cycle through
                         #   one prints `...` instead of running out of stack
+    recache: *void      # S2b: os padrões já compilados. Por CONTEXTO pela mesma
+                        #   razão que o `rng`: um worker é outro heap e outro
+                        #   laço (18.1), e uma cache partilhada entre threads
+                        #   seria um cadeado por cada `re.match`.
     rng: *void          # 103: o estado do Mersenne Twister deste contexto,
                         #   alocado na primeira chamada. Por CONTEXTO porque um
                         #   worker é outro heap e outro laço (18.1), e estado de

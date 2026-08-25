@@ -4428,15 +4428,37 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return jc
-        if strcmp(name, "__re_match") == 0:
-            rm9: *Expr = self->call_rt("ps_re_match", e->pos)
-            self->push_arg(rm9, self->ctx_arg(e->pos))
-            self->push_arg(rm9, self->expr(e->args[0]))
-            self->push_arg(rm9, self->expr(e->args[1]))
-            self->pos_args(rm9, e->pos)
-            self->raised = True
-            self->allocs = True
-            return rm9
+        if strncmp(name, "__re_", 5) == 0:
+            rf9: const *char = name + 5
+            rn9: const *char = None
+            if strcmp(rf9, "match") == 0:
+                rn9 = "ps_re_match"
+            elif strcmp(rf9, "search") == 0:
+                rn9 = "ps_re_search"
+            elif strcmp(rf9, "findall") == 0:
+                rn9 = "ps_re_findall"
+            elif strcmp(rf9, "finditer") == 0:
+                rn9 = "ps_re_finditer"
+            elif strcmp(rf9, "sub") == 0:
+                rn9 = "ps_re_sub"
+            elif strcmp(rf9, "split") == 0:
+                rn9 = "ps_re_split"
+            if rn9 != None:
+                rm9: *Expr = self->call_rt(rn9, e->pos)
+                self->push_arg(rm9, self->ctx_arg(e->pos))
+                for i in range(e->nargs):
+                    self->push_arg(rm9, self->expr(e->args[i]))
+                # o limite por omissão é ZERO, que quer dizer "todas": é o que o
+                # `re.sub` do Python faz, e a alternativa (um número grande)
+                # seria um limite a fingir de ausência
+                if strcmp(rf9, "sub") == 0 and e->nargs == 3:
+                    self->push_arg(rm9, self->num("0", e->pos))
+                if strcmp(rf9, "split") == 0 and e->nargs == 2:
+                    self->push_arg(rm9, self->num("0", e->pos))
+                self->pos_args(rm9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return rm9
         if strcmp(name, "Channel") == 0:
             cn9: *Expr = self->call_rt("ps_chan_new", e->pos)
             self->push_arg(cn9, self->ctx_arg(e->pos))

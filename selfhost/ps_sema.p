@@ -3531,18 +3531,68 @@ struct PsSema:
             if isos and strcmp(of, "getcwd") != 0:
                 return ps_type(self->a, PT_VOID, e->pos)
             return st1
-        if strcmp(name, "__re_match") == 0:
+        if strcmp(name, "__re_match") == 0 or strcmp(name, "__re_search") == 0:
             # 41.2: the groups, or None. [0] is the whole match.
+            #
+            # S2b: `match` exige o PRINCÍPIO e `search` procura. A diferença é da
+            # API e não do autómato — ele responde às duas perguntas com o mesmo
+            # programa, e ancorar por dentro obrigaria a compilar duas vezes.
+            what: const *char = "re.match()" if strcmp(name, "__re_match") == 0 else "re.search()"
             if e->nargs != 2:
-                fatal_at(self->file, e->pos, "re.match() takes a pattern and a string")
+                fatal_at(self->file, e->pos, "%s takes a pattern and a string", what)
             for i in range(2):
                 rat: *PsType = self->check_expr(e->args[i])
-                self->want(e->args[i], rat, ps_type(self->a, PT_STR, e->pos), "re.match()")
+                self->want(e->args[i], rat, ps_type(self->a, PT_STR, e->pos), what)
             gl: *PsType = ps_type(self->a, PT_LIST, e->pos)
             gl->inner = ps_type(self->a, PT_STR, e->pos)
             ro: *PsType = ps_type(self->a, PT_OPT, e->pos)
             ro->inner = gl
             return ro
+        if strcmp(name, "__re_findall") == 0 or strcmp(name, "__re_split") == 0:
+            # o que sai é uma lista SEMPRE — não achar nada é uma lista vazia, e
+            # não uma ausência: procurar todas as ocorrências de uma coisa que
+            # não está lá tem resposta, e a resposta é "nenhuma" (4.2)
+            wf: const *char = "re.findall()" if strcmp(name, "__re_findall") == 0 else "re.split()"
+            if e->nargs < 2 or e->nargs > (2 if strcmp(name, "__re_findall") == 0 else 3):
+                fatal_at(self->file, e->pos, "%s takes a pattern and a string%s", wf,
+                         "" if strcmp(name, "__re_findall") == 0 else ", and an optional limit")
+            for i in range(2):
+                rft: *PsType = self->check_expr(e->args[i])
+                self->want(e->args[i], rft, ps_type(self->a, PT_STR, e->pos), wf)
+            if e->nargs == 3:
+                lt3: *PsType = self->check_expr(e->args[2])
+                self->want(e->args[2], lt3, ps_type(self->a, PT_INT, e->pos), "the limit")
+            fl: *PsType = ps_type(self->a, PT_LIST, e->pos)
+            fl->inner = ps_type(self->a, PT_STR, e->pos)
+            return fl
+        if strcmp(name, "__re_finditer") == 0:
+            # as POSIÇÕES, quatro números por casamento e mais dois por grupo:
+            # início e fim de cada um. É o que quem substitui precisa, e é uma
+            # lista plana para não alocar uma lista por casamento.
+            if e->nargs != 2:
+                fatal_at(self->file, e->pos, "re.finditer() takes a pattern and a string")
+            for i in range(2):
+                rit: *PsType = self->check_expr(e->args[i])
+                self->want(e->args[i], rit, ps_type(self->a, PT_STR, e->pos), "re.finditer()")
+            il: *PsType = ps_type(self->a, PT_LIST, e->pos)
+            il->inner = ps_type(self->a, PT_INT, e->pos)
+            return il
+        if strcmp(name, "__re_sub") == 0:
+            if e->nargs < 3 or e->nargs > 4:
+                fatal_at(self->file, e->pos, "re.sub(pattern, replacement, text, count=0)")
+            for i in range(3):
+                rst: *PsType = self->check_expr(e->args[i])
+                self->want(e->args[i], rst, ps_type(self->a, PT_STR, e->pos), "re.sub()")
+            if e->nargs == 4:
+                ct4: *PsExpr = e->args[3]
+                if ct4->kind == PE_DESIG:
+                    if strcmp(ct4->text, "count") != 0:
+                        fatal_at(self->file, ct4->pos, "re.sub() names its limit `count`, not '%s'", ct4->text)
+                    ct4 = ct4->lhs
+                    e->args[3] = ct4
+                lt4: *PsType = self->check_expr(ct4)
+                self->want(ct4, lt4, ps_type(self->a, PT_INT, e->pos), "count")
+            return ps_type(self->a, PT_STR, e->pos)
         if strcmp(name, "ord") == 0 or strcmp(name, "chr") == 0:
             # Python's pair. A character IS a one-character string here (3.4),
             # so these are the door between text and the number a codepoint is
@@ -4286,7 +4336,15 @@ struct PsSema:
             ns->sym.add("unix")
             ns->sym.add("unix_listen")
         elif strcmp(name, "re") == 0:
+            # S2b: o motor passou a ser NOSSO, e com ele vieram as funções que
+            # faltavam. `import re` continua a não ter caminho e o compilador
+            # continua a validar os nomes — a libc foi substituída por dentro.
             ns->sym.add("match")
+            ns->sym.add("search")
+            ns->sym.add("findall")
+            ns->sym.add("finditer")
+            ns->sym.add("sub")
+            ns->sym.add("split")
         elif strcmp(name, "json") == 0:
             ns->sym.add("parse")
             ns->sym.add("stringify")

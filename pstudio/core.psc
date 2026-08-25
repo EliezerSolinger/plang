@@ -1173,7 +1173,11 @@ struct TextBuffer:
                     if from_col <= 0:
                         continue
                     s = s[0:from_col]
-            m = re.match(pattern, s)
+            # `re.search` e não `re.match` (S2b): o `regexec` da libc PROCURAVA,
+            # e o motor novo faz o que o nome diz — `match` exige o princípio.
+            # Esta busca quer encontrar em qualquer sítio, e é por isso que a
+            # linha seguinte procura a posição do que casou.
+            m = re.search(pattern, s)
             # the non-null proof holds INSIDE the branch (43.1): a `continue` in
             # the None branch does not narrow what comes after it
             if m != None:

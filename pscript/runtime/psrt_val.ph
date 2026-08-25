@@ -336,3 +336,7 @@ def ps_json_stringify_at(ctx: *PsCtx, p: *void, ty: const *PsTy, file: const *ch
 
 # 39.2: `str()` de um `any` — ele carrega o que é, portanto o runtime rende-o
 def ps_str_of_any(ctx: *PsCtx, o: *PsObj, file: const *char, line: i32) -> *PsStr
+
+# S2b/152.6: a porta para as tabelas Unicode, que o motor de regex atravessa
+def ps_cp_fold(cp: i32) -> i32
+def ps_cp_in_cat(cp: i32, which: i32) -> bool

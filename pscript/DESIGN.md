@@ -4364,7 +4364,7 @@ porque tem de ser conhecido ao compilar):
 | `PSRT_POOL_MAX` | 8 | o TETO de threads de I/O |
 | `PSRT_REPR_MAX` | 8 | a profundidade do `repr` |
 | `PSRT_JSON_DEPTH` | 1000 | a profundidade que o json aceita |
-| `PSRT_RE_GROUPS` | 16 | grupos de captura de uma regex |
+| ~~`PSRT_RE_GROUPS`~~ | — | **RETIRADO na S2b.** Existia porque o `regexec` da libc queria um `regmatch_t[16]` fixo. O motor de Thompson aloca por padrão e não tem tecto de grupos — um botão que já não controla nada é pior do que não haver botão |
 | `PSRT_GRAVE_MAX` | 16 | blocos envenenados no modo de estresse |
 
 **110.3 O que virou CHAMADA** (o que depende da carga, e só o programa sabe):
@@ -7246,3 +7246,126 @@ outra pessoa.
 E lê as três coisas que a norma não tem e os ficheiros têm: o separador (`;` em
 meia Europa, porque a vírgula é o separador decimal), os três fins de linha, e o
 BOM que o Excel põe à frente.
+
+---
+
+## 152 — a S2b: o motor de regex, e o que ele custa de propósito
+
+### 152.1 — a razão cabe numa linha, e é de coerência
+
+Um motor com retrocesso **pode ser feito parar por uma cadeia de entrada**.
+`(a+)+b` contra sessenta `a` são 2^60 caminhos, e o processo não volta.
+
+> Uma linguagem que promete quatro eixos de segurança de memória (9.1) e depois
+> oferece um regex que uma entrada consegue travar está a prometer com uma mão e
+> a tirar com a outra.
+
+O portão mede-o: quatro padrões catastróficos, com sessenta, duzentos e cem
+caracteres, e a asserção de que os quatro juntos demoram menos de cinco segundos.
+
+### 152.2 — o preço está pago à cabeça, e é matemática
+
+Um motor de tempo linear **não pode** ter retrocesso (`\1`) nem lookaround
+(`(?=…)`). O autómato não guarda o texto que já casou — é essa a razão de ele ser
+linear. Não é uma peça que falta; é a mesma propriedade dita ao contrário.
+
+E é por isso que **as duas mensagens de recusa dizem PORQUÊ**:
+
+> *"a backreference does not exist in this engine, and cannot: a linear-time
+> automaton does not keep the text it already matched. That is the price of
+> `(a+)+b` never hanging"*
+
+Uma mensagem que dissesse "não suportado" faria alguém esperar que um dia
+viesse.
+
+**E o `\1` na SUBSTITUIÇÃO continua a existir**, que não é contradição: ali o
+texto já está todo casado.
+
+### 152.3 — a garantia mora em três linhas
+
+```
+if l->seen[pc] == l->gen:
+    return
+l->seen[pc] = l->gen
+```
+
+Num dado passo, cada instrução entra na lista no máximo **uma vez**. Sem isso,
+duas linhas de execução que chegam ao mesmo sítio duplicam-se, e a duplicação é
+exponencial — que é exactamente o que faz `(a+)+b` parar um motor com retrocesso.
+Com isso, o trabalho por caractere é no máximo o tamanho do programa.
+
+### 152.4 — o oráculo é o `re` do CPython, varrido
+
+Cinquenta e um padrões contra cinquenta e um textos, com os grupos todos, mais as
+funções novas e os casos de canto. **O que se prova não é que o motor é
+consistente consigo próprio** — isso não é a pergunta — é que ele responde o
+mesmo que o motor que toda a gente usa.
+
+Dois casos merecem nome:
+
+* **o casamento VAZIO avança uma posição.** `findall("a*", "bb")` casa o vazio em
+  cada sítio e tem de acabar. Uma implementação que não o faça pendura o
+  programa no primeiro padrão que possa casar nada;
+* **um separador vazio não separa.** O `re.split` do Python mudou de
+  comportamento na 3.7 por causa disto, e a escolha certa é ignorá-lo em vez de
+  partir o texto entre cada dois caracteres.
+
+### 152.5 — dois defeitos que o motor encontrou no caminho
+
+* **a busca não ancorada parava cedo.** O laço saía assim que uma posição não
+  deixava nenhuma linha viva — e uma busca não ancorada tem de continuar até ao
+  fim do texto. Só DEPOIS de haver casamento é que uma lista vazia quer dizer
+  "acabou", porque aí semear outra vez daria um resultado mais à direita;
+* **um campo novo no `PsCtx` ficou com lixo.** O `ps_ctx_init` inicializa campo a
+  campo e o `recache` foi esquecido, portanto a primeira chamada usou um ponteiro
+  inventado. Vale a pena dizer que isto é o desenho a funcionar: um `memset`
+  teria escondido o esquecimento, e campo a campo fez-lhe doer no primeiro
+  programa que o tocou.
+
+### 152.6 — o Unicode entra, e a 105.4 fica REVISTA em vez de reaberta
+
+`\p{L}`, `\p{Lu}`, `\p{Ll}`, `\p{Lt}`, `\p{N}`, `\p{Nd}`, `\p{Alnum}` e
+`\p{Space}` — mais a forma curta `\pL` e a negada `\P{...}`. As tabelas já
+existiam, geradas e conferidas por um oráculo que varre todo o ponto de código
+(105); o que faltava era uma **porta**, porque o motor mora na camada da
+biblioteca e os leitores eram privados da dos valores.
+
+Uma categoria é um **predicado** e não intervalos: `\p{L}` são cento e trinta mil
+pontos de código em milhares de faixas, e expandi-los daria uma tabela por
+padrão quando ela já existe uma vez só.
+
+**E o `(?i)` dobra a caixa do Unicode — mas a dobra SIMPLES.** A `STDLIB.md`
+escreveu *"o `(?i)` é Unicode completo (…) entra a tabela de case folding (…) é
+ela que faz `(?i)` casar `İ` com `i` e `ß` com `ss`"*, e marcou a 105.4 para
+REABRIR. **Fica revista em vez disso**, e a razão não é economia:
+
+> a dobra COMPLETA mapeia `ß` para `ss` — **um caractere para dois**. Um autómato
+> que anda um caractere de cada vez não tem como casar dois de entrada contra um
+> do padrão sem guardar o que já leu, que é exactamente a propriedade que ele não
+> tem e a razão de ele ser linear.
+
+**O RE2 e o `regexp` do Go fazem o mesmo**, e pela mesma razão. Portanto a 105.4
+mantém-se: a tabela de `casefold` continua de fora, e não é uma falta — é uma
+consequência da garantia. O que entrou foi a de MINÚSCULA, que já lá estava.
+
+### 152.8 — o que ainda falta, dito para não parecer feito
+
+Um objecto `Pattern` de `re.compile` que se guarde numa variável. Hoje a cache
+faz o trabalho dele — um padrão num laço compila uma vez — mas quem quiser passar
+um padrão como valor ainda não tem tipo para isso.
+
+### 152.7 — o `re.match` antigo PROCURAVA, e o novo não
+
+O `regexec` da libc, chamado sem `REG_NOTBOL`, encontra um casamento **em
+qualquer sítio**. Portanto o `re.match` da 41.2, apesar do nome, era uma BUSCA —
+e havia código a contar com isso: a procura do `pstudio` (`core.psc`) chama-o e
+logo a seguir faz `s.find(hit)` para descobrir ONDE casou, que é uma linha que só
+faz sentido se o casamento pudesse ser no meio.
+
+O motor novo faz o que o nome diz: **`match` exige o princípio, `search`
+procura.** É a mesma correcção que a 139 fez aos nomes dos tipos, aplicada a uma
+função — e o único consumidor passou a chamar `re.search`, que é o que ele
+sempre quis dizer.
+
+Vale a pena registar porque é a única mudança de comportamento desta fase: tudo o
+resto — o dialecto, os grupos, o valor de retorno — é igual ou maior.

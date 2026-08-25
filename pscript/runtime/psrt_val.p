@@ -4208,3 +4208,41 @@ def ps_list_eq(a: *PsList, b: *PsList, kind: i32) -> bool:
             return False
         i += 1
     return True
+# ---------- S2b/152.6: o Unicode que o motor de regex pede ----------
+#
+# As duas tabelas já existiam — `unicase.bin` e `unicat.bin`, geradas e conferidas
+# por um oráculo que varre todo o ponto de código (105). O que faltava era uma
+# porta: o motor mora na camada da biblioteca e os leitores são privados desta.
+
+def ps_cp_fold(cp: i32) -> i32:
+    """A dobra de caixa SIMPLES: a minúscula de um ponto de código, ou ele
+    próprio.
+
+    **Simples e não completa**, e é a escolha do RE2 e do `regexp` do Go — não
+    uma limitação nossa. A dobra completa mapeia `ß` para `ss`, ou seja UM
+    caractere para DOIS, e um autómato que anda um caractere de cada vez não tem
+    como casar dois de entrada contra um do padrão sem guardar o que já leu — que
+    é exactamente a propriedade que ele não tem, e a razão de ser linear.
+    """
+    return tb_map(&PS_CASE[0], UC_LO, cp)
+
+# As categorias, pelos nomes que o `\p{...}` usa. `which` é um dos `PS_UCAT_*`.
+def ps_cp_in_cat(cp: i32, which: i32) -> bool:
+    if which == PS_UCAT_L:
+        return tb_in(&PS_CAT[0], CA_ALPHA, cp)
+    if which == PS_UCAT_LU:
+        return tb_in(&PS_CAT[0], CA_UPPER, cp)
+    if which == PS_UCAT_LL:
+        return tb_in(&PS_CAT[0], CA_LOWER, cp)
+    if which == PS_UCAT_LT:
+        return tb_in(&PS_CAT[0], CA_TITLECHAR, cp)
+    if which == PS_UCAT_N:
+        return tb_in(&PS_CAT[0], CA_DECIMAL, cp) or tb_in(&PS_CAT[0], CA_DIGIT, cp) or tb_in(&PS_CAT[0], CA_NUMERIC, cp)
+    if which == PS_UCAT_ND:
+        return tb_in(&PS_CAT[0], CA_DECIMAL, cp)
+    if which == PS_UCAT_ALNUM:
+        return tb_in(&PS_CAT[0], CA_ALPHA, cp) or tb_in(&PS_CAT[0], CA_DECIMAL, cp) or tb_in(&PS_CAT[0], CA_DIGIT, cp) or tb_in(&PS_CAT[0], CA_NUMERIC, cp)
+    if which == PS_UCAT_SPACE:
+        return ps_str_is_space_cp(cp)
+    return False
+

@@ -4706,15 +4706,40 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         return jc;
     }
-    if (strcmp(name, "__re_match") == 0) {
-        Expr *rm9 = PsLow_call_rt(self, "ps_re_match", e->pos);
-        PsLow_push_arg(self, rm9, PsLow_ctx_arg(self, e->pos));
-        PsLow_push_arg(self, rm9, PsLow_expr(self, e->args[0]));
-        PsLow_push_arg(self, rm9, PsLow_expr(self, e->args[1]));
-        PsLow_pos_args(self, rm9, e->pos);
-        self->raised = 1;
-        self->allocs = 1;
-        return rm9;
+    if (strncmp(name, "__re_", 5) == 0) {
+        const char *rf9 = name + 5;
+        const char *rn9 = NULL;
+        if (strcmp(rf9, "match") == 0) {
+            rn9 = "ps_re_match";
+        } else if (strcmp(rf9, "search") == 0) {
+            rn9 = "ps_re_search";
+        } else if (strcmp(rf9, "findall") == 0) {
+            rn9 = "ps_re_findall";
+        } else if (strcmp(rf9, "finditer") == 0) {
+            rn9 = "ps_re_finditer";
+        } else if (strcmp(rf9, "sub") == 0) {
+            rn9 = "ps_re_sub";
+        } else if (strcmp(rf9, "split") == 0) {
+            rn9 = "ps_re_split";
+        }
+        if (rn9 != NULL) {
+            Expr *rm9 = PsLow_call_rt(self, rn9, e->pos);
+            PsLow_push_arg(self, rm9, PsLow_ctx_arg(self, e->pos));
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsLow_push_arg(self, rm9, PsLow_expr(self, e->args[i]));
+            }
+            if (strcmp(rf9, "sub") == 0 && e->nargs == 3) {
+                PsLow_push_arg(self, rm9, PsLow_num(self, "0", e->pos));
+            }
+            if (strcmp(rf9, "split") == 0 && e->nargs == 2) {
+                PsLow_push_arg(self, rm9, PsLow_num(self, "0", e->pos));
+            }
+            PsLow_pos_args(self, rm9, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return rm9;
+        }
     }
     if (strcmp(name, "Channel") == 0) {
         Expr *cn9 = PsLow_call_rt(self, "ps_chan_new", e->pos);

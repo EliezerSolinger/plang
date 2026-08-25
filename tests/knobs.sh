@@ -46,7 +46,7 @@ got_r=$("$OUT/raso/bin")
 mkdir -p "$OUT/todos"
 if build todos -D PSRT_BLOCK_BYTES=262144 -D PSRT_GC_BYTES=1048576 \
         -D PSRT_GC_OBJECTS=50000 -D PSRT_TRACE_MAX=8 -D PSRT_POLL_MAX=16 \
-        -D PSRT_POOL_MAX=4 -D PSRT_JSON_DEPTH=100 -D PSRT_RE_GROUPS=8 \
+        -D PSRT_POOL_MAX=4 -D PSRT_JSON_DEPTH=100 \
         -D PSRT_GRAVE_MAX=4; then
     got_t=$("$OUT/todos/bin")
     [ "$got_t" = "[[[[[1, 2]]]]]" ] || { echo "  FAIL knobs: com todos os -D deu '$got_t'"; fail=1; }
