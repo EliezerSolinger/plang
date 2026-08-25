@@ -7123,3 +7123,48 @@ horário de verão e as cinco recusas.
 zelo: um nome de fuso chega quase sempre de um cabeçalho HTTP, de um campo de
 formulário ou de uma variável de ambiente, e `../../etc/shadow` é um nome
 perfeitamente válido para quem não olha.
+
+---
+
+## 150 — a S6: o `compress`, e a metade que importa
+
+### 150.1 — ler primeiro, e a `deflate` diz que não comprime
+
+O `deflate` deste pacote **guarda em blocos literais**: comprime zero, e é válido
+para qualquer leitor do mundo — o formato tem um tipo de bloco para exactamente
+isto.
+
+Não é um atalho escondido; está escrito no docstring da função. E a razão é uma
+ordem de valor:
+
+> **Ler o que os outros escreveram é o que desbloqueia consumidores.** O `tar`
+> quer isto, e o cliente HTTP quer `Accept-Encoding: gzip` — que é onde a
+> descompressão deixa de ser um extra e passa a ser o que faz metade da web
+> responder. Escrever BEM é uma optimização que se pode adiar sem que nada fique
+> por fazer, e quando ela chegar é uma função que muda e mais nada.
+
+O que o `gzip_compress` produz hoje o `gunzip` abre. É maior do que o original;
+é correcto.
+
+### 150.2 — o portão prova que lemos o que os OUTROS escrevem
+
+Os vectores são feitos pelo `zlib` do CPython com nível 9 — Huffman dinâmico,
+referências para trás, blocos que a nossa própria `deflate` nunca produziria. É
+de propósito: um portão que comprimisse e descomprimisse com o nosso código
+provaria que ele é consistente consigo próprio, que não é a pergunta.
+
+E os cinco casos são escolhidos, não amostrados. O que importa nomear é o
+terceiro: **trezentas vezes o mesmo byte** produz uma referência para trás com
+`distância < comprimento` — ela lê o que ela própria acabou de escrever. É o
+caso que uma cópia em bloco partiria, e é o mais comum de todos.
+
+### 150.3 — três formatos, três pares de funções
+
+`inflate`/`deflate` (RFC 1951), `zlib_decompress`/`zlib_compress` (RFC 1950),
+`gzip_decompress`/`gzip_compress` (RFC 1952). **Não é um parâmetro**, e não é
+falta de arrumação: confundi-los é o erro mais comum de quem usa a `zlib` pela
+primeira vez, e três nomes tornam-no impossível.
+
+E um fluxo que mente sobre si próprio **levanta**: o complemento do comprimento
+num bloco literal, o Adler-32 do zlib, o CRC-32 e o tamanho do gzip. Nenhum deles
+é uma condição do algoritmo (4.2) — é o ficheiro a dizer uma coisa e a ser outra.

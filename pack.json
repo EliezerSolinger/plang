@@ -13,7 +13,8 @@
     "packages/hmac",
     "packages/csprng",
     "packages/datetime",
-    "packages/tz"
+    "packages/tz",
+    "packages/compress"
   ],
   "default": "build/bin/pforge"
 }

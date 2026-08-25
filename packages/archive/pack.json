@@ -1,0 +1,10 @@
+{
+  "name": "archive",
+  "version": "0.1.0",
+  "kind": "meta",
+  "deps": {
+    "tar": "0.1.0",
+    "compress": "0.1.0"
+  },
+  "description": "reading and writing what is packed: tar, and DEFLATE/zlib/gzip"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "compress",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "compress.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "DEFLATE, zlib and gzip — ours, and the reading half is the half that matters"
+}
