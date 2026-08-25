@@ -41,7 +41,17 @@ struct Manifest:
     # package
     name: str
     version: str
-    lang: str           # "p" or "pscript"
+    lang: str           # "p" or "pscript" — vazio num metapacote
+    # S0: `"kind": "meta"` — um NOME para um conjunto de pacotes.
+    #
+    # Um metapacote INSTALA, não IMPORTA. Ele não cria espaço de nomes nenhum:
+    # traz os membros e sai da frente, e quem escreve continua a escrever
+    # `import <codec/base64>` tenha chegado lá pelo metapacote ou por um
+    # `pforge add codec`. É isso que torna verdadeira a cláusula "não são
+    # inseparáveis" — depender do `base64` e não do `datetime` continua a ser
+    # possível, e continua a ser a mesma grafia. Se ele fosse um módulo que
+    # reexporta, um programa que quisesse uma coisa arrastaria as dez.
+    is_meta: bool
     root: str           # the root module, relative to the package directory
     deps: List<Dep>
     system: List<Dep>
@@ -65,7 +75,7 @@ struct Manifest:
     repos_unsafe: List<bool>
 
 def empty(file: str) -> Manifest:
-    return Manifest(file, False, "", "", "", "", [], [], "", "", [], [], [], "", [], [])
+    return Manifest(file, False, "", "", "", False, "", [], [], "", "", [], [], [], "", [], [])
 
 # ---------- a key's position ----------
 def where_key(raw: str, key: str) -> str:
@@ -213,6 +223,7 @@ def parse(raw: str, file: str, on_disk: bool) -> Manifest:
     m.name = text_of(root, "name", "")
     m.version = text_of(root, "version", "")
     m.lang = text_of(root, "lang", "")
+    m.is_meta = text_of(root, "kind", "") == "meta"
     m.root = text_of(root, "root", "")
     m.toolchain = text_of(root, "toolchain", "")
     m.description = text_of(root, "description", "")
@@ -225,6 +236,20 @@ def parse(raw: str, file: str, on_disk: bool) -> Manifest:
         fail(m, raw, "name", "package name: lowercase, digits, `_` and `-`, starting with a letter (got '" + m.name + "')")
     if not version_ok(m.version):
         fail(m, raw, "version", "version: three numbers, `x.y.z` (got '" + m.version + "')")
+    if m.is_meta:
+        # S0: um metapacote exige o OPOSTO do que um pacote normal exige, e é
+        # por isso que ele é uma espécie e não um pacote com campos em falta.
+        # Sem código não há língua, sem língua não há raiz — e sem membros não
+        # há metapacote nenhum: um conjunto vazio é um engano, não um conjunto.
+        if len(m.lang) > 0:
+            fail(m, raw, "lang", "a metapackage has no code, so it has no `lang`: it is a NAME for a set of packages (S0)")
+        if len(m.root) > 0:
+            fail(m, raw, "root", "a metapackage has no code, so it has no `root`: it installs its members and gets out of the way (S0)")
+        if len(m.csources) > 0:
+            fail(m, raw, "csources", "a metapackage has no code, so it has no `csources` (S0)")
+        if len(m.deps) == 0:
+            fail(m, raw, "deps", "a metapackage with no members is not a metapackage: `deps` says which packages it names (S0)")
+        return m
     if m.lang != "p" and m.lang != "pscript":
         fail(m, raw, "lang", "lang: `p` or `pscript` (got '" + m.lang + "')")
     # `root` is OPTIONAL, and `stl` is the reason: it is ten independent `.ph`

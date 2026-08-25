@@ -1,0 +1,8 @@
+{
+  "name": "errado",
+  "version": "0.1.0",
+  "kind": "meta",
+  "lang": "pscript",
+  "root": "errado.psc",
+  "deps": { "geo": "0.1.0" }
+}

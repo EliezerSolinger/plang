@@ -1,0 +1,7 @@
+{
+  "name": "conjunto",
+  "version": "0.1.0",
+  "kind": "meta",
+  "deps": { "geo": "0.1.0", "txt": "0.1.0" },
+  "description": "um NOME para um conjunto de pacotes: instala, nao importa"
+}

@@ -72,6 +72,12 @@ def check_languages(m: World) -> List<str>:
             i = m.find(d)
             if i < 0:
                 continue
+            if len(m.packages[i].lang) == 0:
+                # S0: um metapacote não tem língua porque não tem código. Ele
+                # traz os membros e sai da frente, portanto o que interessa é a
+                # língua de CADA MEMBRO — que este mesmo laço confere, porque um
+                # membro é um pacote como outro qualquer.
+                continue
             if m.packages[i].lang != "p":
                 out.append(p.name + " is `lang: p` and depends on " + d + ", which is `"
                            + m.packages[i].lang + "`: a P package that pulls in a pscript "

@@ -774,8 +774,27 @@ async def case_manifest():
     st = await M.read("packages/stl/pack.json")
     check("manifest: a package with no root", "stl 0.1.0 p ", st.name + " " + st.version + " " + st.lang + " " + st.root)
 
-    # and the error has a line and a column
+    # S0: o metapacote — um NOME para um conjunto de pacotes. Ele INSTALA e não
+    # IMPORTA: não cria espaço de nomes nenhum, traz os membros e sai da frente,
+    # e é isso que torna verdadeira a cláusula "não são inseparáveis".
+    mt = await M.read("tests/pkg/meta/pack.json")
+    check("meta: sabe-se metapacote", "True", str(mt.is_meta))
+    check("meta: sem lingua e sem raiz", "conjunto 0.1.0  ", mt.name + " " + mt.version + " " + mt.lang + " " + mt.root)
+    check("meta: os membros vieram", "geo txt", mt.deps[0].name + " " + mt.deps[1].name)
+
+    # ... e ele exige o OPOSTO do que um pacote normal exige: sem código não há
+    # língua, sem língua não há raiz
     nonlocal msg
+    msg = ""
+    try:
+        await M.read("tests/pkg/badmeta/pack.json")
+        msg = "nao levantou"
+    catch em:
+        msg = em.message
+    check("meta: uma raiz num metapacote e recusada", "True",
+          str(msg.find("has no code") > 0))
+
+    # and the error has a line and a column
     msg = ""
     try:
         await M.read("tests/pkg/bad/pack.json")
