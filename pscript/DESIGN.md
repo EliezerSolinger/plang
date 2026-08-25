@@ -7594,3 +7594,78 @@ não é aquilo"* (4.2): o texto veio de fora, e não analisar é uma resposta.
 O que entra no runtime **toda a gente paga e ninguém pode recusar**, e deixa de
 ter versão. Por 116 linhas de aritmética sobre seis bits isso é barato; a linha
 da 155.2 existe precisamente para que continue a ser.
+
+## Bateria 156 — o `stl/utf8`, e o P ganha UTF-8 (2026-08-25)
+
+*"a gente só precisava de um completo embutido no runtime da linguagem e todos
+os outros pacotes usavam o mesmo"*
+
+### 156.1 — eram CINCO, e o P não tinha nenhum
+
+Contar a sério deu pior do que a pergunta sugeria:
+
+| onde | o que era |
+|---|---|
+| `psrt_val.p` `ps_utf8_put` | o encoder |
+| `psrt_val.p` `ps_str_chr` | o mesmo, outra vez |
+| `psrt_std.p` `js_utf8` | o mesmo, terceira vez — cópia byte a byte |
+| `url.psc` `utf8_bytes` | um quarto, num pacote |
+| `url.psc` `pct_encode_cp` | um quinto, fundido com o escape |
+| `selfhost/utf8.p` `utf8_encode` | um sexto — **e sem um único chamador** |
+
+E o `packages/stl` não tinha UTF-8 nenhum. Um programa em P que precisasse
+escrevia-o à mão, que é exactamente o que os pacotes faziam — e três dos que
+escreveram nem UTF-8 produziam, produziam Latin-1.
+
+### 156.2 — o `stl/utf8.ph` tem DUAS funções, e nenhuma aloca
+
+```
+def utf8_put(buf: *char, k: usize, cp: u32) -> usize
+def utf8_next(buf: const *char, n: usize, i: usize, out cp: u32) -> usize
+```
+
+`k` é onde escrever e o retorno é onde vai o seguinte; o `utf8_next` devolve a
+LARGURA lida, e **zero** quando o que lá está não é UTF-8 — zero e não `-1`
+porque o laço de quem chama é `i += w`, e zero é o único valor que não se soma
+por engano.
+
+O `utf8_next` recusa o que tem de recusar, e cada recusa é um defeito real: a
+sequência truncada, a continuação que não é uma, a codificação **overlong**
+(`0xC0 0x80` é o NUL disfarçado, o furo clássico de filtro), a metade de
+substituto, e o que passa de U+10FFFF.
+
+### 156.3 — o que NÃO entrou, e é a razão de o `utf8_decode` ficar onde está
+
+O `utf8_decode` do compilador não é um descodificador: é um transcodificador de
+buffer inteiro que aloca dois arrays paralelos de um `*Arena`. Descodificar um
+buffer precisa de um sítio para pôr o resultado, e "um sítio" é uma decisão de
+quem chama. Um módulo do `stl` que exigisse o `Arena` do compilador não era do
+`stl`. O lexer continua a fazer essa escolha — agora **por cima** do `utf8_next`.
+
+### 156.4 — `private` no `.ph`, e é requisito e não recuo
+
+A primeira tentativa pôs os corpos num `packages/stl/utf8.p`. O `pcode` não
+ligou: **`multiple definition of 'utf8_put'`**.
+
+A razão é estrutural e vale a pena por escrito. O `pcode` liga o lexer do
+compilador E o runtime do pscript no mesmo binário, e ambos lêem UTF-8. Os dois
+lados compilam com conjuntos de definições diferentes, portanto o mesmo `.c` sai
+em dois objectos — e os dois chegam ao mesmo `ld`. É a colisão que o comentário
+do `cstr.p` descreve e que o `implement` resolve **para tipos**; funções livres
+não têm `implement`.
+
+A resposta é `private` — que em P é `static`. Os corpos vivem no `.ph` e cada
+unidade de tradução leva a sua cópia; nenhum símbolo chega ao linker e a colisão
+deixa de ser possível. **Custa doze linhas de código-máquina por binário**, e é o
+modelo header-only a fazer aquilo para que existe.
+
+### 156.5 — o embutido da 154 vale para o módulo novo sem uma linha de encanamento
+
+`stl_builtin` ganhou `utf8.ph` e o compilador passou a trazê-lo dentro. Foi a 154
+a pagar por isto adiantado: um módulo novo do `stl` é uma constante `embed` e um
+`strcmp`.
+
+**Resultado.** Uma implementação em toda a árvore. Consumidores: o lexer do
+compilador, o runtime do pscript, e qualquer programa em P — que até agora não
+tinha nenhum. O portão está em `tests/stl/main.p` (roundtrip 8/8 nas fronteiras
+da codificação, 6/6 recusas), e o WPT do `url` continua em 890/890.

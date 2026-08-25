@@ -43,7 +43,6 @@ struct StrBuf:
 # out_off[i] = byte offset of codepoint i. Returns 0 or -1 (error,
 # with *err_off = offset of the invalid byte).
 def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out out_cp: *u32, out out_off: *u32, out out_n: usize, err_off: *usize) -> i32
-def utf8_encode(cp: u32, out: char[4]) -> i32
 
 # ---------- errors ----------
 def fatal(fmt: const *char, ...)

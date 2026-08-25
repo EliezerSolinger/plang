@@ -20,3 +20,10 @@ list<str>: count(a)=2 idx(buf 'a')=0 has(c)=0
 printable: (3, 4)
 iterable sum: 10
 for-in sum: 6
+utf8 A 1
+utf8 é 2
+utf8 € 3
+utf8 😀 4
+utf8 roundtrip 8/8
+utf8 refused 6/6
+utf8 walked 4 over 10 bytes

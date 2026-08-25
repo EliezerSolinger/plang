@@ -530,6 +530,7 @@ def read_entire_file_opt(path: const *char, out out_len: usize) -> *char
 # ponto fixo (`s2 == s3`) mais a regeneração do `bootstrap/` cobrem-no.
 const STL_ROOT: const *char = "packages"
 
+private const STL_UTF8: const *char = embed("../packages/stl/utf8.ph")
 private const STL_VEC: const *char = embed("../packages/stl/vec.ph")
 private const STL_MAP: const *char = embed("../packages/stl/map.ph")
 private const STL_SET: const *char = embed("../packages/stl/set.ph")
@@ -578,6 +579,8 @@ def stl_builtin(path: const *char) -> const *char:
         return STL_CSTR_H
     if strcmp(m, "cstr.p") == 0:
         return STL_CSTR_P
+    if strcmp(m, "utf8.ph") == 0:
+        return STL_UTF8
     return None
 
 def read_entire_file_opt(path: const *char, out out_len: usize) -> *char:

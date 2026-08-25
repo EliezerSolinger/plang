@@ -52,8 +52,6 @@ void StrBuf_deinit(StrBuf *self);
 
 int32_t utf8_decode(const char *bytes, size_t nbytes, Arena *a, uint32_t **out_cp, uint32_t **out_off, size_t *out_n, size_t *err_off);
 
-int32_t utf8_encode(uint32_t cp, char out[4]);
-
 void fatal(const char *fmt, ...);
 
 void fatal_at(const char *file, Pos pos, const char *fmt, ...);

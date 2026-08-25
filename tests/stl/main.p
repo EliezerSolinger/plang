@@ -10,6 +10,7 @@ import <stl/slice.ph>
 import <stl/dict.ph>
 import <stl/list.ph>
 import <stl/traits.ph>
+import <stl/utf8.ph>
 
 declare Vec<int>
 implement Vec<int>
@@ -96,6 +97,22 @@ implement show<Point>
 declare sum_all<Countdown>
 implement sum_all<Countdown>
 
+
+def show_cp(cp: u32):
+    b: char[8]
+    n: usize = utf8_put(&b[0], usize(0), cp)
+    b[n] = char(0)
+    printf("utf8 %s %d\n", &b[0], i32(n))
+
+def roundtrip(cp: u32) -> i32:
+    b: char[8]
+    n: usize = utf8_put(&b[0], usize(0), cp)
+    back: u32
+    return 1 if utf8_next(&b[0], n, usize(0), out back) == n and back == cp else 0
+
+def refuses(bytes: const *char, n: usize) -> i32:
+    cp: u32
+    return 1 if utf8_next(bytes, n, usize(0), out cp) == 0 else 0
 
 def main() -> int:
     # ---- Vec ----
@@ -260,4 +277,50 @@ def main() -> int:
     for v in cd2:
         forsum += v
     printf("for-in sum: %lld\n", forsum)
+
+    # ---- utf8: the tree's ONE UTF-8, and the first one P itself can use ----
+    #
+    # Before this module P had no UTF-8 at all: `stl` had vec, map, set, dict,
+    # list, queue, slice, str, hash, traits and cstr, and nothing that turned a
+    # code point into bytes. The only UTF-8 in P lived inside the compiler's
+    # lexer, and half of it (`utf8_encode`) had no caller anywhere.
+    show_cp(u32(0x41))
+    show_cp(u32(0xE9))
+    show_cp(u32(0x20AC))
+    show_cp(u32(0x1F600))
+
+    # what goes in comes out, at every boundary of the encoding
+    rt: i32 = 0
+    rt += roundtrip(u32(0))       + roundtrip(u32(0x7F))
+    rt += roundtrip(u32(0x80))    + roundtrip(u32(0x7FF))
+    rt += roundtrip(u32(0x800))   + roundtrip(u32(0xFFFF))
+    rt += roundtrip(u32(0x10000)) + roundtrip(u32(0x10FFFF))
+    printf("utf8 roundtrip %d/8\n", rt)
+
+    # and the refusals, which are the whole point of having a decoder: a
+    # truncated sequence, a continuation that is not one, an OVERLONG NUL (the
+    # classic filter bypass), a surrogate half, past U+10FFFF, and an orphan
+    nbad: i32 = 0
+    nbad += refuses("\xC3", usize(1))
+    nbad += refuses("\xC3\x41", usize(2))
+    nbad += refuses("\xC0\x80", usize(2))
+    nbad += refuses("\xED\xA0\x80", usize(3))
+    nbad += refuses("\xF4\x90\x80\x80", usize(4))
+    nbad += refuses("\x80", usize(1))
+    printf("utf8 refused %d/6\n", nbad)
+
+    # walking a string is `i += w`, and that is the whole loop
+    txt: const *char = "a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80"
+    tn: usize = strlen(txt)
+    ti: usize = 0
+    ncp: i32 = 0
+    while ti < tn:
+        gc: u32
+        gw: usize = utf8_next(txt, tn, ti, out gc)
+        if gw == 0:
+            printf("THIS SHOULD NOT HAPPEN\n")
+            return 1
+        ncp += 1
+        ti += gw
+    printf("utf8 walked %d over %d bytes\n", ncp, i32(tn))
     return 0

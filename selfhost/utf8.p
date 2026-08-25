@@ -1,25 +1,7 @@
 # utf8.p — stage 1 of the pipeline: bytes UTF-8 -> UTF-32 (port of src/utf8.c)
 # Uses P's fixed-width aliases (u32/usize/i32 — spec §3.1.1).
 import "plang.ph"
-
-def utf8_encode(cp: u32, out: char[4]) -> i32:
-    if cp < 0x80:
-        out[0] = char(cp)
-        return 1
-    if cp < 0x800:
-        out[0] = char(0xC0 | (cp >> 6))
-        out[1] = char(0x80 | (cp & 0x3F))
-        return 2
-    if cp < 0x10000:
-        out[0] = char(0xE0 | (cp >> 12))
-        out[1] = char(0x80 | ((cp >> 6) & 0x3F))
-        out[2] = char(0x80 | (cp & 0x3F))
-        return 3
-    out[0] = char(0xF0 | (cp >> 18))
-    out[1] = char(0x80 | ((cp >> 12) & 0x3F))
-    out[2] = char(0x80 | ((cp >> 6) & 0x3F))
-    out[3] = char(0x80 | (cp & 0x3F))
-    return 4
+import <stl/utf8.ph>
 
 def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out out_cp: *u32, out out_off: *u32, out out_n: usize, err_off: *usize) -> i32:
     cp: *u32 = a->alloc((nbytes + 1) * sizeof(u32))
@@ -32,36 +14,18 @@ def utf8_decode(bytes: const *char, nbytes: usize, a: *Arena, out out_cp: *u32, 
         i = 3
 
     while i < nbytes:
-        b: i32 = bytes[i] & 0xFF
+        # the code point itself is `stl/utf8`'s answer; what is LEFT here is the
+        # decision this function exists to make — where the results go. Two
+        # parallel arrays out of the arena, because the lexer wants the code
+        # points to index and the byte offsets to point diagnostics at.
         v: u32
-        len: i32
-        if b < 0x80:
-            v = u32(b); len = 1
-        elif (b & 0xE0) == 0xC0:
-            v = u32(b & 0x1F); len = 2
-        elif (b & 0xF0) == 0xE0:
-            v = u32(b & 0x0F); len = 3
-        elif (b & 0xF8) == 0xF0:
-            v = u32(b & 0x07); len = 4
-        else:
+        w: usize = utf8_next(bytes, nbytes, i, out v)
+        if w == 0:
             goto bad
-        if i + usize(len) > nbytes:
-            goto bad
-        for k in range(1, len):
-            c: i32 = bytes[i + k] & 0xFF
-            if (c & 0xC0) != 0x80:
-                goto bad
-            v = (v << 6) | u32(c & 0x3F)
-        # overlong, surrogates, and max range
-        if (len == 2 and v < 0x80) or (len == 3 and v < 0x800) or (len == 4 and v < 0x10000):
-            goto bad
-        if v > 0x10FFFF or (v >= 0xD800 and v <= 0xDFFF):
-            goto bad
-
         off[n] = u32(i)
         cp[n] = v
         n += 1
-        i += usize(len)
+        i += w
 
     out_cp = cp
     out_off = off

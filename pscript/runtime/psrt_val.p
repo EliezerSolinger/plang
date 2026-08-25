@@ -7,6 +7,7 @@
 import "psrt_types.ph"
 import "psrt_mem.ph"
 import "psrt_val.ph"
+import <stl/utf8.ph>
 
 # ---------- the crash that says where it was (12.4) ----------
 # 12.4 decided that failure in C is a CRASH and failure in pscript is an
@@ -2774,36 +2775,18 @@ private def ps_str_case(ctx: *PsCtx, s: *PsStr, upper: bool) -> *PsStr:
     free(buf)
     return out
 
-# ONE code point, UTF-8, into a buffer — and the ONLY encoder in the runtime.
+# ONE code point, UTF-8, into a buffer. The encoder itself is not written here
+# any more: it is `stl/utf8`, which the compiler's lexer reads with and any P
+# program can now use. This is the runtime's `i32` shape over it.
 #
-# There used to be three: this one, `ps_str_chr`, and a `js_utf8` in the JSON
-# writer whose comment said the copies were safer than the sharing because they
-# could not drift. They could: repetition is what MAKES drift, and three sites
-# writing 0xC0/0xE0/0xF0 by hand is three chances to write one of them wrong —
-# which is exactly what happened out in the packages, where three encoders were
-# Latin-1 wearing a UTF-8 name.
-#
-# `k` is where to write and the return is where the next one goes, which is the
-# shape a loop wants; `ps_str_chr` is this plus an allocation.
+# There used to be THREE copies in this runtime alone — this one, `ps_str_chr`,
+# and a `js_utf8` in the JSON writer whose comment argued that copies were safer
+# than sharing because they could not drift. They could: repetition is what MAKES
+# drift, and every site writing 0xC0/0xE0/0xF0 by hand is one more chance to
+# write one of them wrong — which is what happened out in the packages, where
+# three hand-written encoders turned out to be Latin-1 wearing a UTF-8 name.
 def ps_utf8_put(buf: *char, k: usize, cp: i32) -> usize:
-    v: u32 = u32(cp)
-    if v < 0x80:
-        buf[k] = char(v)
-        return k + usize(1)
-    if v < 0x800:
-        buf[k] = char(0xC0 | (v >> 6))
-        buf[k + usize(1)] = char(0x80 | (v & 0x3F))
-        return k + usize(2)
-    if v < 0x10000:
-        buf[k] = char(0xE0 | (v >> 12))
-        buf[k + usize(1)] = char(0x80 | ((v >> 6) & 0x3F))
-        buf[k + usize(2)] = char(0x80 | (v & 0x3F))
-        return k + usize(3)
-    buf[k] = char(0xF0 | (v >> 18))
-    buf[k + usize(1)] = char(0x80 | ((v >> 12) & 0x3F))
-    buf[k + usize(2)] = char(0x80 | ((v >> 6) & 0x3F))
-    buf[k + usize(3)] = char(0x80 | (v & 0x3F))
-    return k + usize(4)
+    return utf8_put(buf, k, u32(cp))
 
 def ps_str_lower(ctx: *PsCtx, s: *PsStr) -> *PsStr:
     return ps_str_case(ctx, s, False)
