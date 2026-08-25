@@ -46,11 +46,4 @@ async def random_bytes(n: int) -> bytes:
 async def token_hex(nbytes: int = 32) -> str:
     """`nbytes` of entropy, written as hex. Thirty-two bytes is the size that
     stops anybody arguing about whether it is enough."""
-    b = await random_bytes(nbytes)
-    d = "0123456789abcdef"
-    out: List<str> = []
-    for x in b:
-        v = int(x)
-        out.append(d[(v >> 4) & 15])
-        out.append(d[v & 15])
-    return "".join(out)
+    return (await random_bytes(nbytes)).hex()

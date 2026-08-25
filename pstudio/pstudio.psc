@@ -127,10 +127,14 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
     await serve_manifest(sh, ide)
     if ide.want_stop_run:
         ide.want_stop_run = False
-        if ide.run_pid > 0:
-            os.kill(ide.run_pid)
-            ide.build_msg = "stopped the program (pid " + str(ide.run_pid) + ")"
-            ide.run_pid = 0
+        # Since F8 the program runs in the TERMINAL, so stopping it is closing
+        # that child — `serve_term` runs later in this same frame and does it.
+        # This used to `os.kill(ide.run_pid)`, a field nothing had written since
+        # F8 took the `os.spawn` away: Stop killed pid 0, which is to say it
+        # killed nothing, quietly, every time.
+        if ide.term_live:
+            ide.want_term_stop = True
+            ide.build_msg = "stopped the program"
             sh.dirty_ui = True
     if ide.want_clean:
         ide.want_clean = False
@@ -178,16 +182,13 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
     ide.build_busy = False
     # the PLAY: it built, now it runs. The previous program leaves first — it is
     # using the binary the build has just rewritten — and it leaves by SIGTERM,
-    # which is a request: a `SIGKILL` does not let it close what it opened.
+    # which is a request: a `SIGKILL` does not let it close what it opened. That
+    # closing belongs to `serve_term` (F8), which owns the child.
     if ide.want_run:
         ide.want_run = False
-        if ide.run_pid > 0:
-            os.kill(ide.run_pid)
-            esperas = 0
-            while os.alive(ide.run_pid) and esperas < 100:
-                await sleep(0.05)
-                esperas += 1
-            ide.run_pid = 0
+        # The previous program leaving first is not written here any more:
+        # `serve_term` closes the old child before it spawns the new one, which
+        # is the same order with one owner instead of two.
         if ok:
             prog = target if len(target) > 0 else first_executable(sh, ide)
             if len(prog) > 0 and path.isfile(prog):
@@ -812,16 +813,22 @@ async def mode_run(target: str) -> int:
     ide.want_run = True
     await serve_build(sh, ide)
     print(ide.build_msg)
-    alive = ide.run_pid > 0 and os.alive(ide.run_pid)
-    print("launched", alive)
-    if ide.run_pid > 0:
-        ide.want_stop_run = True
-        await serve_build(sh, ide)
-        n = 0
-        while os.alive(ide.run_pid) and n < 60:
-            await sleep(0.05)
-            n += 1
-    return 0 if alive else 1
+    # F8 moved the PLAY into the terminal, and this checked `ide.run_pid`, which
+    # only the `os.spawn` it replaced ever wrote — so it read 0 forever and the
+    # harness had been failing ever since. What launches the program now is
+    # `serve_term`, the same step the window runs every frame, and the answer it
+    # leaves is `term_live`.
+    #
+    # And LAUNCHED means the child started, not that it is still here: the
+    # target the harness uses exits in two milliseconds with a usage error, so
+    # anything asking "is it alive?" on the next line is asking the clock.
+    td = new_term_driver()
+    await serve_term(sh, ide, td)
+    launched = ide.term_live
+    print("launched", launched)
+    if launched:
+        await term_close(sh, ide, td)
+    return 0 if launched else 1
 
 
 async def mode_manifest(arg: str) -> int:

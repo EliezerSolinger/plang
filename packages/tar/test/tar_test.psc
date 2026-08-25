@@ -21,8 +21,9 @@ def check(name: str, cond: bool):
 
 def bs(s: str) -> bytes:
     # 135.7: `s.encode()` IS this — the UTF-8 the string already holds, with
-    # the promise taken off. The package keeps `bytes_of` because its header
-    # builder wants a LIST it can index; a caller wants the value.
+    # the promise taken off. `tar.bytes_of` is now the same call: the reason it
+    # kept its own encoder (a list the header builder could index) did not
+    # survive a second look — `put_bytes` only READS what it is given.
     return s.encode()
 
 

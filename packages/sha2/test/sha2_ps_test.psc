@@ -8,11 +8,10 @@ same function in P, with `List<u8>` becoming a `CBytes` on the way in and a
 import <sha2/sha2.ph>
 
 
-def bytes_of(s: str) -> List<u8>:
-    b: List<u8> = []
-    for ch in s:
-        b.append(u8(ord(ch)))
-    return b
+def bytes_of(s: str) -> bytes:
+    # this was `u8(ord(ch))` per codepoint, which is Latin-1 and not UTF-8: the
+    # same answer for ASCII, and silently wrong for anything with an accent.
+    return s.encode()
 
 
 e: List<int> = [0, 0]

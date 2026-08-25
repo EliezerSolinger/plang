@@ -110,9 +110,9 @@ struct Ide:
     build_pos_file: str
     build_pos_line: int
     build_pos_col: int
-    # the program `Run` launched. Zero when there is none — and the number is the
-    # PID, because that is what `os.spawn` returns.
-    run_pid: int
+    # Stop, for the program the PLAY launched. Since F8 that program is the
+    # terminal's child, so this is served by closing it — there is no pid here
+    # any more, and there was not one being written since F8 either.
     want_stop_run: bool
     # the MANIFEST. The editor does not invent a form — it already is a text
     # editor, and `pack.json` is text. What the palette adds is what is tedious to
@@ -721,7 +721,7 @@ def new_ide(sh: sh_mod.Shell) -> Ide:
 
     Two lines, and they are the whole seam: `pcode.psc` does not have them."""
     ide = Ide(sh, "", False, False, False, "", False, False, [], 0, 0, "",
-              "", 0, 0, 0, False, "", "",
+              "", 0, 0, False, "", "",
               -1, [], -1, "", -1, -1, 0, [], [], -1, -1, -1,
               trm.new_term(80, 24), -1, False, [], "", False,
               False, False, [], -1, -1, [], 0, 0, 0, "",

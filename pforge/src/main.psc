@@ -393,12 +393,17 @@ async def cmd_dev(targets: List<str>, jobs: int, query: str, verbose: bool) -> i
     the files the build reads, and nothing else.
 
     **And it uses neither inotify nor kqueue**, which is a decision and not a gap.
-    Both exist, they differ from each other, and they would force a new primitive
-    into the runtime — to watch a few hundred files whose dates are read in less
-    than a millisecond. The loop asks every 200 ms; the cost does not show up in a
-    profile and the code works the same everywhere. The day the tree is big enough
-    for this to hurt, the primitive goes in underneath and this command does not
-    change.
+    The primitive now exists — `os.watch` went in with 146 — and this command
+    still does not use it, for the reason above and one more. The reason above:
+    `os.watch` watches a TREE, and a tree contains editor saves, temporary files
+    and `build/` itself; the graph is the only list that holds exactly what the
+    build reads. The one more: 146.2 makes `os.watch` RAISE on macOS, because
+    kqueue watches descriptors and the honest answer there is FSEvents, which
+    nobody has written. The loop asks every 200 ms, the dates of a few hundred
+    files are read in well under a millisecond, the cost does not show up in a
+    profile, and the code works the same everywhere. This paragraph used to say
+    the primitive would have to be built first; it exists, and the command still
+    does not change.
 
     **And it RESTARTS the program**: it kills the child, waits for it to leave,
     builds, relaunches. The `SIGTERM` is a request and not an execution — a
@@ -787,9 +792,7 @@ async def cmd_keygen(targets: List<str>) -> int:
         print(target + " already exists. A key you overwrite is a key you lost — delete it by hand if that is what you want.")
         return 1
     seed = await R.new_seed()
-    hex_text = ""
-    for b in seed:
-        hex_text += "0123456789abcdef"[int(b) >> 4] + "0123456789abcdef"[int(b) & 15]
+    hex_text = seed.hex()
     pub = R.public_key(seed)
     await R.write_bytes(target, R.bytes_of_text(hex_text + "\n"))
     await R.write_bytes(target + ".pub", R.bytes_of_text(pub + "\n"))

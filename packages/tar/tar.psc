@@ -51,34 +51,21 @@ def directory(name: str, mode: int, mtime: int) -> Member:
 
 # ---------- bytes and text ----------
 
-def bytes_of(s: str) -> List<u8>:
+def bytes_of(s: str) -> bytes:
     """The text as UTF-8. A file name may carry an accent, and what goes into the
     header is BYTES — counting codepoints would give a length that is not the
     disk's.
+
+    This was a UTF-8 encoder written out by hand, from before `str.encode()`
+    existed. `encode()` is the same bytes with nothing recomputed: a `str`
+    already HOLDS its UTF-8, and the method only takes the promise off.
 
     >>> len(bytes_of("abc"))
     3
     >>> len(bytes_of("naïve"))
     6
     """
-    out: List<u8> = []
-    for ch in s:
-        cp = ord(ch)
-        if cp < 0x80:
-            out.append(u8(cp))
-        elif cp < 0x800:
-            out.append(u8(0xC0 | (cp >> 6)))
-            out.append(u8(0x80 | (cp & 0x3F)))
-        elif cp < 0x10000:
-            out.append(u8(0xE0 | (cp >> 12)))
-            out.append(u8(0x80 | ((cp >> 6) & 0x3F)))
-            out.append(u8(0x80 | (cp & 0x3F)))
-        else:
-            out.append(u8(0xF0 | (cp >> 18)))
-            out.append(u8(0x80 | ((cp >> 12) & 0x3F)))
-            out.append(u8(0x80 | ((cp >> 6) & 0x3F)))
-            out.append(u8(0x80 | (cp & 0x3F)))
-    return out
+    return s.encode()
 
 
 # ---------- writing ----------
@@ -108,7 +95,7 @@ def octal(v: int, width: int) -> str:
     return d
 
 
-private def put_bytes(block: List<u8>, pos: int, bs: List<u8>, width: int):
+private def put_bytes(block: List<u8>, pos: int, bs: bytes, width: int):
     if len(bs) > width:
         raise error("a header field does not fit", VALUE)
     i = 0

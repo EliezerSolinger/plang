@@ -15,11 +15,10 @@ import <hash/hash.ph>
 import <hmac/hmac.ph>
 
 
-def b(s: str) -> List<u8>:
-    out: List<u8> = []
-    for ch in s:
-        out.append(u8(ord(ch)))
-    return out
+def b(s: str) -> bytes:
+    # was `u8(ord(ch))`, which is Latin-1; `encode()` gives the UTF-8 the string
+    # already holds
+    return s.encode()
 
 
 def rep(v: int, n: int) -> List<u8>:

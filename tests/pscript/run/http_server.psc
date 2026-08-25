@@ -88,15 +88,9 @@ srv.close()
 
 # ---- the refusals, which need no socket ----
 bad = http.new_parser()
-bad_bytes: List<u8> = []
-for ch in "GET / HTTP/1.1\r\nhost : x\r\n\r\n":
-    bad_bytes.append(u8(ord(ch)))
-bad.feed(bytes(bad_bytes))
+bad.feed("GET / HTTP/1.1\r\nhost : x\r\n\r\n".encode())
 print("refused 1:", bad.problem)
 
 bad2 = http.new_parser()
-b2: List<u8> = []
-for ch in "GET / HTTP/1.1\r\ncontent-length: 3\r\ntransfer-encoding: chunked\r\n\r\n":
-    b2.append(u8(ord(ch)))
-bad2.feed(bytes(b2))
+bad2.feed("GET / HTTP/1.1\r\ncontent-length: 3\r\ntransfer-encoding: chunked\r\n\r\n".encode())
 print("refused 2:", bad2.problem)

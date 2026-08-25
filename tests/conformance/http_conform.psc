@@ -43,16 +43,10 @@ def unhex(s: str) -> bytes:
     return bytes(out)
 
 
-HEX: str = "0123456789abcdef"
-
-
 def tohex(bs: List<u8>) -> str:
-    out = ""
-    for b in bs:
-        v = int(b)
-        out += HEX[v // 16]
-        out += HEX[v % 16]
-    return out
+    # the parser's body accumulates in a `List<u8>` because it grows piece by
+    # piece; `hex()` belongs to `bytes`, and copying a test body costs nothing
+    return bytes(bs).hex()
 
 
 # The same reduction llhttp_digest.py performs on the log, performed on a

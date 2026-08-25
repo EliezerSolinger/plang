@@ -37,6 +37,7 @@ import <http/http.psc> as H
 import <url/url.psc> as U
 import <tar/tar.psc> as tar
 import <sha2/sha2.ph>
+import <csprng/csprng.psc> as csprng
 
 # everything this project keeps from outside lives here, and `make clean` takes
 # it along — safe by construction, because the lock has the hash of everything
@@ -661,17 +662,14 @@ async def new_seed() -> bytes:
     The language's `random` is a generator for simulation: fast, reproducible and
     completely predictable to anyone who sees two outputs. A private key drawn
     from it is a key you can guess. If there is no `/dev/urandom`, this FAILS —
-    inventing an alternative would be the worst thing this file could do."""
-    f = await open("/dev/urandom", "r")
-    with Buffer(32) as buf:
-        got = await f.read_into(buf, 0, 32)
-        await f.close()
-        if got != 32:
-            raise error("/dev/urandom gave " + str(got) + " bytes instead of 32", IO)
-        # `freeze` would hand the block over with zero copy, but the buffer is
-        # inside a `with` that is about to close it — so this copies, once, and
-        # the key outlives the block it came in
-        return bytes(buf[0:32])
+    inventing an alternative would be the worst thing this file could do.
+
+    This used to open the file here. `csprng` is the same source with the two
+    failures handled once instead of once per caller: it raises when the source
+    is missing, and it KEEPS READING on a short read rather than treating it as
+    one — a key with less entropy than the caller believes it has is the bug this
+    file cannot afford."""
+    return await csprng.random_bytes(32)
 
 
 def public_key(seed: bytes) -> str:
