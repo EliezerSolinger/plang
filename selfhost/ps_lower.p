@@ -4137,6 +4137,20 @@ struct PsLow:
         # a chamada de dois ANINHADA, que é o que o `posixpath` faz também.
         if strcmp(name, "__os_SEQUENTIAL") == 0 or strcmp(name, "__os_RANDOM") == 0 or strcmp(name, "__os_WILLNEED") == 0:
             fatal_at(self->file, e->pos, "internal: os.%s is a value, not a call", name + 5)
+        # ---- S2: os temporários ----
+        if strcmp(name, "__os_tempdir") == 0 or strcmp(name, "__os_tempfile") == 0 or strcmp(name, "__os_tempdir_new") == 0:
+            tf9: *Expr = self->call_rt("ps_os_tempdir" if strcmp(name, "__os_tempdir") == 0 else ("ps_os_tempfile" if strcmp(name, "__os_tempfile") == 0 else "ps_os_tempdir_new"), e->pos)
+            self->push_arg(tf9, self->ctx_arg(e->pos))
+            nwant: i32 = 0 if strcmp(name, "__os_tempdir") == 0 else (2 if strcmp(name, "__os_tempfile") == 0 else 1)
+            for i in range(nwant):
+                # o que não vier fica vazio: um prefixo por omissão seria uma
+                # escolha nossa a aparecer no nome do ficheiro de outra pessoa
+                self->push_arg(tf9, self->expr(e->args[i]) if i < e->nargs else self->str_lit("", e->pos))
+            self->allocs = True
+            if nwant > 0:
+                self->pos_args(tf9, e->pos)
+                self->raised = True
+            return tf9
         if strncmp(name, "__os_", 5) == 0 or strncmp(name, "__path_", 7) == 0:
             isos0: bool = strncmp(name, "__os_", 5) == 0
             of0: const *char = name + (5 if isos0 else 7)
@@ -9385,12 +9399,18 @@ private def ab_plain(ref B: AsyncB, s: *PsStmt):
 # `defer` inside a step function: ARM a bit in the frame, and let the exits run
 # it. Never P's own `defer`, which would fire when the task merely suspends.
 private def ab_defer(ref B: AsyncB, s: *PsStmt):
-    if has_await_b(s->body):
-        fatal_at(B.file, s->pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1)")
     ab_arm(ref B, ps_cleanup_flag(B.L->a, s->pos), s->body, None, None, s->pos)
 
 # register a cleanup and emit the statement that arms it
 private def ab_arm(ref B: AsyncB, fl: const *char, body: *PsBlock, name: const *char, t: *PsType, pos: Pos):
+    # A recusa mora AQUI, e não em quem chama, porque quem chama são três — o
+    # `defer`, o `with` e o `finally` — e o `finally` tinha-se esquecido dela.
+    # O que ele emitia era a METADE de trás de um `await`: a leitura do
+    # resultado de uma tarefa que nunca chegou a existir, portanto
+    # `ps_task_ret(NULL)` e SIGSEGV. Uma limpeza que precisa de suspender é uma
+    # peça que falta; ir-se abaixo em silêncio é outra coisa.
+    if body != None and has_await_b(body):
+        fatal_at(B.file, pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1). Close before returning, or use a `with` — the release of a file, a socket, a Buffer or a Mapping does not suspend")
     B.L->acl_flag = vec_grow(B.L->acl_flag, B.L->nacl, ref B.L->cacl1, sizeof(*B.L->acl_flag))
     B.L->acl_body = vec_grow(B.L->acl_body, B.L->nacl, ref B.L->cacl2, sizeof(*B.L->acl_body))
     B.L->acl_name = vec_grow(B.L->acl_name, B.L->nacl, ref B.L->cacl3, sizeof(*B.L->acl_name))

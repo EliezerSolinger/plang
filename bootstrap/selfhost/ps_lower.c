@@ -4407,6 +4407,21 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strcmp(name, "__os_SEQUENTIAL") == 0 || strcmp(name, "__os_RANDOM") == 0 || strcmp(name, "__os_WILLNEED") == 0) {
         fatal_at(self->file, e->pos, "internal: os.%s is a value, not a call", name + 5);
     }
+    if (strcmp(name, "__os_tempdir") == 0 || strcmp(name, "__os_tempfile") == 0 || strcmp(name, "__os_tempdir_new") == 0) {
+        Expr *tf9 = PsLow_call_rt(self, (strcmp(name, "__os_tempdir") == 0 ? "ps_os_tempdir" : (strcmp(name, "__os_tempfile") == 0 ? "ps_os_tempfile" : "ps_os_tempdir_new")), e->pos);
+        PsLow_push_arg(self, tf9, PsLow_ctx_arg(self, e->pos));
+        int32_t nwant = (strcmp(name, "__os_tempdir") == 0 ? 0 : (strcmp(name, "__os_tempfile") == 0 ? 2 : 1));
+        size_t i;
+        for (i = 0; i < nwant; i += 1) {
+            PsLow_push_arg(self, tf9, (i < e->nargs ? PsLow_expr(self, e->args[i]) : PsLow_str_lit(self, "", e->pos)));
+        }
+        self->allocs = 1;
+        if (nwant > 0) {
+            PsLow_pos_args(self, tf9, e->pos);
+            self->raised = 1;
+        }
+        return tf9;
+    }
     if (strncmp(name, "__os_", 5) == 0 || strncmp(name, "__path_", 7) == 0) {
         int isos0 = strncmp(name, "__os_", 5) == 0;
         const char *of0 = name + (isos0 ? 5 : 7);
@@ -9596,13 +9611,13 @@ static void ab_plain(AsyncB *B, PsStmt *s) {
 }
 
 static void ab_defer(AsyncB *B, PsStmt *s) {
-    if (has_await_b(s->body)) {
-        fatal_at(B->file, s->pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1)");
-    }
     ab_arm(B, ps_cleanup_flag(B->L->a, s->pos), s->body, NULL, NULL, s->pos);
 }
 
 static void ab_arm(AsyncB *B, const char *fl, PsBlock *body, const char *name, PsType *t, Pos pos) {
+    if (body != NULL && has_await_b(body)) {
+        fatal_at(B->file, pos, "an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet: the cleanup would have to suspend, and it runs on the way out (50.1). Close before returning, or use a `with` — the release of a file, a socket, a Buffer or a Mapping does not suspend");
+    }
     B->L->acl_flag = vec_grow(B->L->acl_flag, B->L->nacl, &B->L->cacl1, sizeof(*B->L->acl_flag));
     B->L->acl_body = vec_grow(B->L->acl_body, B->L->nacl, &B->L->cacl2, sizeof(*B->L->acl_body));
     B->L->acl_name = vec_grow(B->L->acl_name, B->L->nacl, &B->L->cacl3, sizeof(*B->L->acl_name));

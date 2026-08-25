@@ -1,0 +1,9 @@
+{
+  "name": "stdlib",
+  "version": "0.1.0",
+  "kind": "meta",
+  "deps": {
+    "codec": "0.1.0"
+  },
+  "description": "the box: one name for the packages a program reaches for without thinking"
+}

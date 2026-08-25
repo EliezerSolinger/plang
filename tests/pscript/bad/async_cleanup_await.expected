@@ -1,0 +1,1 @@
+an `await` inside a cleanup (`defer`, `with` or `finally`) is not compiled yet

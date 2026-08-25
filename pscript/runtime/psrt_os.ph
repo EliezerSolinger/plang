@@ -119,3 +119,9 @@ def ps_os_pread(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: c
 def ps_os_pwrite(ctx: *PsCtx, f: *PsFile, b: *PsBuffer, off: i64, n: i64, file: const *char, line: i32) -> i64
 # 135.10: o tamanho de um ficheiro já aberto, perguntado ao DESCRITOR
 def ps_file_size(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> i64
+
+# S2: os ficheiros temporários. As três CRIAM ou dizem onde — nenhuma devolve um
+# nome que ainda não existe, que é a corrida clássica do `mktemp`.
+def ps_os_tempdir(ctx: *PsCtx) -> *PsStr
+def ps_os_tempfile(ctx: *PsCtx, prefix: *PsStr, suffix: *PsStr, file: const *char, line: i32) -> *PsStr
+def ps_os_tempdir_new(ctx: *PsCtx, prefix: *PsStr, file: const *char, line: i32) -> *PsStr

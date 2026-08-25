@@ -155,6 +155,98 @@ def ps_os_getcwd(ctx: *PsCtx, file: const *char, line: i32) -> *PsStr:
         return ps_str_new(ctx, "", 0)
     return ps_str_new(ctx, buf, strlen(buf))
 
+# ---------- S2: os ficheiros temporários ----------
+#
+# Três funções, e a razão de serem três é que são três perguntas: ONDE ficam, dá-
+# me um FICHEIRO, dá-me um DIRECTÓRIO.
+#
+# **Elas CRIAM, e não é detalhe.** Devolver um nome que ainda não existe é a
+# corrida clássica: entre a resposta e o `open` do chamador, qualquer um pode pôr
+# ali um link simbólico apontado ao ficheiro dele. Aqui o `O_EXCL` já reservou o
+# nome quando a função volta, com modo 0600 — o que resta a fazer é abri-lo.
+#
+# Os nomes não são os do Python (`mkstemp`, `mkdtemp`) **de propósito**: o
+# `mkstemp` de lá devolve um descritor e um nome, e o nosso devolve só o nome.
+# Dar o mesmo nome a duas coisas diferentes é como se aprende a errado.
+
+private def ps_tmp_root() -> const *char:
+    # a ordem do POSIX, e `/tmp` no fim porque é o único que se pode assumir.
+    # Exige-se ABSOLUTO: um `TMPDIR` relativo põe os temporários onde o programa
+    # calhou de ser lançado, que quase nunca é o que quem o pôs lá queria.
+    NAMES: const *char[] = {"TMPDIR", "TMP", "TEMP"}
+    for i in range(3):
+        v: const *char = getenv(NAMES[i])
+        if v != None and v[0] == '/':
+            return v
+    return "/tmp"
+
+def ps_os_tempdir(ctx: *PsCtx) -> *PsStr:
+    r: const *char = ps_tmp_root()
+    n: usize = strlen(r)
+    # sem a barra final, para que `path.join` faça o que faz em todo o lado
+    while n > 1 and r[n - 1] == '/':
+        n -= 1
+    return ps_str_new(ctx, r, n)
+
+# O contador que faz duas chamadas seguidas não colidirem antes sequer de o
+# sistema de ficheiros ser consultado. Não é a segurança — a segurança é o
+# `O_EXCL` — é só não desperdiçar tentativas.
+private g_tmp_seq: u64 = 0
+
+private def ps_tmp_name(buf: *char, cap: usize, prefix: const *char, suffix: const *char) -> bool:
+    r: const *char = ps_tmp_root()
+    g_tmp_seq += u64(1)
+    # o pid ancora no processo, o relógio no instante, o contador na chamada
+    v: u64 = u64(getpid()) * u64(2654435761) + u64(time(None)) * u64(40503) + g_tmp_seq * u64(2246822519)
+    v ^= v >> u64(29)
+    v *= u64(0xbf58476d1ce4e5b9)
+    v ^= v >> u64(32)
+    # o hex à mão, e não por `%llx`: o formato de um inteiro de 64 bits muda de
+    # plataforma para plataforma, e isto é dezasseis dígitos em qualquer uma
+    HEXD: const *char = "0123456789abcdef"
+    hx: char[17]
+    for i in range(16):
+        hx[i] = HEXD[i32((v >> u64(60 - i * 4)) & u64(0xF))]
+    hx[16] = '\0'
+    need: int = snprintf(buf, cap, "%s/%s%s%s", r, prefix, hx, suffix)
+    return need > 0 and usize(need) < cap
+
+def ps_os_tempfile(ctx: *PsCtx, prefix: *PsStr, suffix: *PsStr, file: const *char, line: i32) -> *PsStr:
+    buf: char[4096]
+    px: const *char = prefix->data if prefix != None else ""
+    sx: const *char = suffix->data if suffix != None else ""
+    for attempt in range(64):
+        if not ps_tmp_name(buf, usize(4096), px, sx):
+            ps_raise(ctx, "os.tempfile(): the name does not fit in a path", PS_CAT_VALUE, file, line)
+            return ps_str_new(ctx, "", 0)
+        # 384 é 0600. O `O_EXCL` é a peça que faz isto valer: ou o nome era
+        # nosso, ou a chamada falha — nunca abre o que já lá estava.
+        fd: int = open(buf, O_CREAT | O_EXCL | O_WRONLY, 384)
+        if fd >= 0:
+            close(fd)
+            return ps_str_new(ctx, buf, strlen(buf))
+    # A regra do `errno` desta camada: a mensagem vem da OPERAÇÃO e do caminho,
+    # nunca do `errno` — que é macro, e P não vê macro (72.4). Por isso não se
+    # distingue "o nome estava tomado" de "não há permissão": tenta-se sessenta e
+    # quatro vezes, e sessenta e quatro colisões seguidas não acontecem.
+    ps_raise(ctx, "os.tempfile(): could not create a file in the temporary directory (is it writable?)", PS_CAT_IO, file, line)
+    return ps_str_new(ctx, "", 0)
+
+def ps_os_tempdir_new(ctx: *PsCtx, prefix: *PsStr, file: const *char, line: i32) -> *PsStr:
+    buf: char[4096]
+    px: const *char = prefix->data if prefix != None else ""
+    for attempt in range(64):
+        if not ps_tmp_name(buf, usize(4096), px, ""):
+            ps_raise(ctx, "os.tempdir_new(): the name does not fit in a path", PS_CAT_VALUE, file, line)
+            return ps_str_new(ctx, "", 0)
+        # 448 é 0700: um directório temporário é NOSSO. Com 0755 qualquer um lê
+        # o que se escrever lá dentro, e o que se escreve num temporário é o que
+        # ainda não está pronto para ser lido.
+        if mkdir(buf, 448) == 0:
+            return ps_str_new(ctx, buf, strlen(buf))
+    ps_raise(ctx, "os.tempdir_new(): could not create a directory in the temporary directory (is it writable?)", PS_CAT_IO, file, line)
+    return ps_str_new(ctx, "", 0)
+
 # ---------- `path`: as contas sobre o NOME ----------
 # `posixpath.join`: um segundo pedaço ABSOLUTO joga o primeiro fora, e é por isso
 # que `join(dir, arg)` faz o que se espera quando `arg` veio da linha de comando.

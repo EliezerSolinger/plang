@@ -1,0 +1,16 @@
+existe e e directorio: True sem barra no fim: True
+ja existe: True
+esta na raiz dos temporarios: True
+prefixo e sufixo: True True
+nasce vazio: True
+dois nomes diferentes: True
+escreveu: 3
+sem nada: True True
+directorio: True True
+da para escrever la dentro: True
+trinta e dois bytes: 32 32
+e nunca os mesmos: True
+zero e zero: 0
+token: 32 True
+negativo: random_bytes(n): n cannot be negative
+tempfile-ok

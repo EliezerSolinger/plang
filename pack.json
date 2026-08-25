@@ -1,4 +1,17 @@
 {
-  "members": ["packages/stl", "packages/pui", "packages/sha2", "packages/tar", "packages/http", "packages/url", "packages/ed25519", "packages/pforge"],
+  "members": [
+    "packages/stl",
+    "packages/pui",
+    "packages/sha2",
+    "packages/tar",
+    "packages/http",
+    "packages/url",
+    "packages/ed25519",
+    "packages/pforge",
+    "packages/codec",
+    "packages/hash",
+    "packages/hmac",
+    "packages/csprng"
+  ],
   "default": "build/bin/pforge"
 }

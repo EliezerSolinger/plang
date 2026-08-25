@@ -5116,6 +5116,18 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             }
             return ps_type(self->a, PT_INT, e->pos);
         }
+        if (isos && (strcmp(of, "tempdir") == 0 || strcmp(of, "tempfile") == 0 || strcmp(of, "tempdir_new") == 0)) {
+            int32_t nt = (strcmp(of, "tempdir") == 0 ? 0 : (strcmp(of, "tempfile") == 0 ? 2 : 1));
+            if (e->nargs > nt) {
+                fatal_at(self->file, e->pos, "os.%s() takes %d argument(s)", of, nt);
+            }
+            PsType *stt = ps_type(self->a, PT_STR, e->pos);
+            size_t i;
+            for (i = 0; i < e->nargs; i += 1) {
+                PsSema_check_want(self, e->args[i], stt, (i == 0 ? "the prefix" : "the suffix"));
+            }
+            return stt;
+        }
         PsType *st1 = ps_type(self->a, PT_STR, e->pos);
         int32_t lo = 1;
         int32_t hi = 1;
@@ -5309,26 +5321,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3666_17 = e;
-                __with_3666_17->kind = PE_STR;
-                __with_3666_17->text = lit7;
-                __with_3666_17->lhs = NULL;
-                __with_3666_17->rhs = NULL;
-                __with_3666_17->args = NULL;
-                __with_3666_17->nargs = 0;
+                PsExpr *__with_3675_17 = e;
+                __with_3675_17->kind = PE_STR;
+                __with_3675_17->text = lit7;
+                __with_3675_17->lhs = NULL;
+                __with_3675_17->rhs = NULL;
+                __with_3675_17->args = NULL;
+                __with_3675_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3679_13 = e;
-            __with_3679_13->kind = PE_LOWERED;
-            __with_3679_13->low = ln7;
-            __with_3679_13->lhs = NULL;
-            __with_3679_13->rhs = NULL;
-            __with_3679_13->args = NULL;
-            __with_3679_13->nargs = 0;
+            PsExpr *__with_3688_13 = e;
+            __with_3688_13->kind = PE_LOWERED;
+            __with_3688_13->low = ln7;
+            __with_3688_13->lhs = NULL;
+            __with_3688_13->rhs = NULL;
+            __with_3688_13->args = NULL;
+            __with_3688_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5650,10 +5662,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_3985_17 = &ns->quals[ns->nquals];
-                __with_3985_17->name = q;
-                __with_3985_17->orig = d->path;
-                __with_3985_17->ns = sub;
+                PsNsEnt *__with_3994_17 = &ns->quals[ns->nquals];
+                __with_3994_17->name = q;
+                __with_3994_17->orig = d->path;
+                __with_3994_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5666,10 +5678,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_3997_21 = &ns->ents[ns->nents];
-                    __with_3997_21->name = local;
-                    __with_3997_21->orig = d->names[k];
-                    __with_3997_21->ns = sub;
+                    PsNsEnt *__with_4006_21 = &ns->ents[ns->nents];
+                    __with_4006_21->name = local;
+                    __with_4006_21->orig = d->names[k];
+                    __with_4006_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6046,6 +6058,9 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "SEQUENTIAL");
         StrSet_add(&ns->sym, "RANDOM");
         StrSet_add(&ns->sym, "WILLNEED");
+        StrSet_add(&ns->sym, "tempdir");
+        StrSet_add(&ns->sym, "tempfile");
+        StrSet_add(&ns->sym, "tempdir_new");
         StrSet_add(&ns->sym, "spawn_pty");
         StrSet_add(&ns->sym, "pty_resize");
         StrSet_add(&ns->sym, "pty_pid");
@@ -6137,10 +6152,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4479_9 = e;
-        __with_4479_9->kind = PE_NAME;
-        __with_4479_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4479_9->lhs = NULL;
+        PsExpr *__with_4494_9 = e;
+        __with_4494_9->kind = PE_NAME;
+        __with_4494_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_4494_9->lhs = NULL;
     }
     return 1;
 }

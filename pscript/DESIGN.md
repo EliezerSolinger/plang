@@ -6938,3 +6938,112 @@ Agora o prazo morre com a tarefa que o pediu. E vale a pena dizer o que isto é:
 uma métrica que aponta para um defeito no dia em que nasce é exactamente para o
 que ela serve — e é o argumento a favor do item 44 da interseção, feito por si
 próprio.
+
+---
+
+## 148 — a S2, e o que a medição mudou no que estava escrito
+
+A `STDLIB.md` decidiu a forma da S2; implementá-la obrigou a medir a fronteira, e
+a medição corrigiu uma promessa que aquele documento faz e não se pode cumprir.
+
+### 148.1 — o `Hash` como TRAIT não dá, e o bloqueio já tinha nome
+
+A `STDLIB.md` §5 escreve que o `sha2` *"já prova o caminho"* e que o trait
+`Hash` se declara com `implement Hash for sha2.Sha256:`. **Não dá**, e a razão
+está na 141.6, escrita meses antes.
+
+Medido em `selfhost/ps_sema.p`, na função `c_type`: o que atravessa a fronteira
+da 45.5 são **escalares por nome**, e mais nada — nem ponteiro, nem array, nem
+struct. A excepção que funciona é o `CStr`/`CBytes` da 84.1, que é um ponteiro e
+um comprimento **como valor**, e é assim que o `sha256_of(in data: CBytes) ->
+CStr` do `packages/sha2/sha2.ph` já é chamado do pscript hoje.
+
+O que isso permite e o que não permite é nítido:
+
+| | atravessa? | |
+|---|---|---|
+| `sha256_of(in data: CBytes) -> CStr` | **sim** | um tiro só, e é o que quase toda a gente quer |
+| `sha256_init/update/final` sobre `Sha256` | **não** | a `struct Sha256` não tem nome do lado de cima — é exactamente o `Foreign` que a 141.6 parou de propósito |
+
+Portanto **a S2 entrega o hash de um tiro**, e o trait `Hash` com estado
+incremental fica **atrás da 141.6**, escrito aqui para não voltar a ser
+prometido por engano. O `hmac` que sai agora é HMAC-SHA256 concreto e em P —
+onde o estado incremental do `sha2` está do mesmo lado e portanto é livre.
+
+Quando a 141.6 andar, o `hmac` ganha um parâmetro de tipo e não perde nada.
+
+### 148.2 — o `hash` é um pacote NOVO, e o `sha2` fica onde está
+
+O plano lista um pacote `hash` com os módulos `sha2`, `sha1`, `md5`, `crc32`.
+Mas o `sha2` **já é um pacote**, e o `pforge` depende dele **pelo nome** — está
+nos `pack.json`, nas fixtures do lockfile e no descritor de build. Mudá-lo de
+sítio custaria mais do que vale.
+
+Então: o `sha2` fica; nasce um pacote `hash` com o que faltava (`crc32`, `sha1`,
+`md5`); e o metapacote `crypto` reúne os dois com o `hmac`, o `csprng` e o
+`ed25519`. **O metapacote existe precisamente para isto** — dar um nome ao
+conjunto sem obrigar as peças a mudar de morada.
+
+### 148.3 — o que este pacote diz de si próprio
+
+Um ficheiro que contém CRC32, SHA-1 e MD5 tem de dizer, onde se lê, o que cada um
+vale, senão alguém escolhe o primeiro que reconhece:
+
+> **O CRC32 é uma soma de verificação** — apanha um bit trocado num fio ou num
+> disco, e não apanha nada de quem está a tentar. **O SHA-1 e o MD5 estão
+> partidos**, os dois, com colisões publicadas. Estão aqui para **LER o que já
+> existe**: um id de objecto do git é SHA-1, e meio mundo ainda publica MD5.
+> **Nada aqui decide se se confia em alguma coisa** — isso é o `sha2`, e o
+> gestor de pacotes já o usa.
+
+E o `hmac_equal` compara em tempo que não depende de ONDE os dois diferem, pela
+razão de sempre: uma comparação que pára no primeiro byte diferente diz a quem
+está a tentar quantos bytes acertou, e isso chega para descobrir o resto um byte
+de cada vez.
+
+### 148.4 — os temporários CRIAM, e não têm os nomes do Python
+
+`os.tempdir()` diz ONDE; `os.tempfile(prefix, suffix)` e `os.tempdir_new(prefix)`
+**criam** e devolvem o caminho do que criaram.
+
+Devolver um nome que ainda não existe é a corrida clássica do `mktemp`: entre a
+resposta e o `open` de quem chamou, qualquer um põe ali um link simbólico
+apontado ao ficheiro dele. Aqui o `O_EXCL` já reservou o nome quando a função
+volta, com modo 0600 — e o directório nasce com 0700, porque o que se escreve num
+temporário é justamente o que ainda não está pronto para ser lido.
+
+**Os nomes não são `mkstemp`/`mkdtemp` de propósito.** O `mkstemp` do Python
+devolve um descritor E um nome; o nosso devolve só o nome. Dar o mesmo nome a
+duas coisas diferentes é como se aprende o errado.
+
+E há um preço a dizer: o `errno` é macro e o P não o vê (72.4), portanto estas
+funções **não distinguem** "o nome estava tomado" de "não há permissão de
+escrita". Tentam sessenta e quatro nomes e depois levantam, com uma frase que
+pergunta o que provavelmente é — sessenta e quatro colisões seguidas não
+acontecem.
+
+### 148.5 — dois defeitos que a S2 desenterrou, e os dois eram silenciosos
+
+**(a) Um `await` dentro de uma limpeza dava SIGSEGV.** O `defer` recusava-o com
+uma frase; o `finally` não, porque a recusa morava em quem chamava e havia três
+chamadores. O que ele emitia era a METADE DE TRÁS de um `await` — a leitura do
+resultado de uma tarefa que nunca chegou a existir — logo `ps_task_ret(NULL)`.
+
+A recusa mudou-se para dentro do `ab_arm`, que é por onde os três passam. Uma
+limpeza que precisa de suspender é uma peça que falta; ir-se abaixo em silêncio é
+outra coisa, e a diferença entre as duas é a frase que diz o que escrever.
+
+**(b) Um literal com campos NOMEADOS não baixava as conversões.**
+`{.n = usize(64)}` saía em C tal e qual — uma chamada a uma função `usize` que
+não existe — e o erro aparecia no LINKER, longe do sítio e sem posição. A forma
+posicional sempre funcionou, o que fazia da diferença entre as duas uma armadilha
+em vez de uma escolha de estilo.
+
+A causa era uma linha: o `check_expr` de uma lista de chaves percorria os
+argumentos, e um `.campo = valor` é um nó DESIGNADOR cujo valor está lá dentro —
+portanto nunca era visitado. Vale para o `[i] = valor` de um array pela mesma
+razão. Portão em `tests/cases/desig_convert.p`.
+
+**E o que os dois têm em comum vale a pena dizer**: nenhum apareceu ao escrever a
+funcionalidade, e os dois apareceram ao escrever o TESTE dela. É o argumento a
+favor de o portão vir junto e não depois.

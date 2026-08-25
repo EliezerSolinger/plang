@@ -1,0 +1,10 @@
+{
+  "name": "csprng",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "csprng.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "random bytes you may build a secret out of — and it fails rather than falling back"
+}

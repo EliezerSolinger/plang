@@ -793,3 +793,46 @@ A ordem certa é a que o próprio `STDLIB.md` dá: os pacotes primeiro
 (`algo`, `random`, `path`), o metapacote a seguir — o `"kind": "meta"` da **S0
 já está feito e testado** — e o `sed` das 148 chamadas por último, num commit
 próprio, porque é o único pedaço que toca a árvore inteira.
+
+---
+
+## Adenda de execução — a S2, e a correcção que a medição obrigou (2026-08-25)
+
+A S2 foi feita. O que aqui fica é o que **mudou** em relação ao que está escrito
+acima, porque foi medido em vez de suposto. A bateria completa é a **148** do
+`pscript/DESIGN.md`; isto é o resumo, no sítio onde a promessa original está.
+
+### O `Hash` como trait não dá, e a §5 promete-o
+
+A tabela do `crypto` diz que o `sha2` *"já prova o caminho"* e que o trait `Hash`
+se escreve `implement Hash for sha2.Sha256:`. **Não dá.**
+
+Medido em `selfhost/ps_sema.p`, na função `c_type`: o que atravessa a fronteira da
+45.5 são escalares por nome, e mais nada. A excepção que funciona é o
+`CStr`/`CBytes` da 84.1 — um ponteiro e um comprimento como VALOR — e é assim que
+o `sha256_of(in data: CBytes) -> CStr` já é chamado do pscript hoje.
+
+Logo: **o hash de um tiro atravessa; a `struct Sha256` não.** O trait `Hash` com
+estado incremental precisa que ela tenha nome do lado de cima, que é exactamente
+o `Foreign` que a **141.6** parou de propósito.
+
+**O que a S2 entregou:** hashes de um tiro (`crc32`, `sha1`, `md5` no pacote novo
+`hash`, ao lado do `sha2` que já existia) e um `hmac_sha256` **concreto e em P**,
+onde o estado incremental do `sha2` está do mesmo lado e portanto é livre. Quando
+a 141.6 andar, o `hmac` ganha um parâmetro de tipo e não perde nada.
+
+### O `sha2` não muda de morada
+
+A §5 lista um pacote `hash` com os módulos `sha2`, `sha1`, `md5`, `crc32`. Mas o
+`sha2` **já é um pacote**, e o `pforge` depende dele pelo NOME — nos `pack.json`,
+nas fixtures do lockfile e no descritor de build.
+
+O metapacote existe precisamente para este caso: `crypto` reúne `sha2`, `hash`,
+`hmac`, `csprng` e `ed25519` **sem obrigar nenhum deles a mudar de sítio**.
+
+### Os temporários: `os.tempdir()`, `os.tempfile()`, `os.tempdir_new()`
+
+Três perguntas, três funções, e as duas últimas **criam** — nunca devolvem um nome
+que ainda não existe, que é a corrida do `mktemp`. Os nomes não são os do Python
+(`mkstemp`, `mkdtemp`) de propósito: o de lá devolve um descritor E um nome, e o
+nosso devolve só o nome.

@@ -1,0 +1,12 @@
+{
+  "name": "hash",
+  "version": "0.1.0",
+  "lang": "p",
+  "root": "hash.ph",
+  "deps": {
+    "stl": "0.1.0"
+  },
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "CRC32 (the gzip one), and SHA-1 and MD5 for reading what already exists"
+}

@@ -3487,6 +3487,15 @@ struct PsSema:
                 if e->nargs != 0:
                     fatal_at(self->file, e->pos, "os.nproc() takes no arguments")
                 return ps_type(self->a, PT_INT, e->pos)
+            # ---- S2: os temporários. Três perguntas, três funções ----
+            if isos and (strcmp(of, "tempdir") == 0 or strcmp(of, "tempfile") == 0 or strcmp(of, "tempdir_new") == 0):
+                nt: i32 = 0 if strcmp(of, "tempdir") == 0 else (2 if strcmp(of, "tempfile") == 0 else 1)
+                if e->nargs > nt:
+                    fatal_at(self->file, e->pos, "os.%s() takes %d argument(s)", of, nt)
+                stt: *PsType = ps_type(self->a, PT_STR, e->pos)
+                for i in range(e->nargs):
+                    self->check_want(e->args[i], stt, "the prefix" if i == 0 else "the suffix")
+                return stt
             st1: *PsType = ps_type(self->a, PT_STR, e->pos)
             # `getcwd()` é a única sem caminho; `rename` e `join` querem dois; e
             # `join` aceita MAIS de dois, como no Python (`path.join(a, b, c)`)
@@ -4382,6 +4391,12 @@ struct PsSema:
             ns->sym.add("SEQUENTIAL")
             ns->sym.add("RANDOM")
             ns->sym.add("WILLNEED")
+            # S2: os temporários. `tempdir()` diz ONDE; as outras duas CRIAM e
+            # devolvem o caminho — nunca um nome que ainda não existe, que é a
+            # corrida clássica do `mktemp`.
+            ns->sym.add("tempdir")
+            ns->sym.add("tempfile")
+            ns->sym.add("tempdir_new")
             ns->sym.add("spawn_pty")
             ns->sym.add("pty_resize")
             ns->sym.add("pty_pid")

@@ -1,0 +1,13 @@
+{
+  "name": "hmac",
+  "version": "0.1.0",
+  "lang": "p",
+  "root": "hmac.ph",
+  "deps": {
+    "stl": "0.1.0",
+    "sha2": "0.1.0"
+  },
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "HMAC-SHA256 (RFC 2104), with a comparison that does not leak where two MACs differ"
+}

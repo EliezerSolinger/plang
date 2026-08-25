@@ -4162,7 +4162,18 @@ struct Sema:
                 return
             case EX_INITLIST:
                 for i2 in range(e->nargs):
-                    self->check_expr(e->args[i2])
+                    a2: *Expr = e->args[i2]
+                    # `.campo = valor` e `[i] = valor`: a expressão é o que está
+                    # DEPOIS do igual, e o designador é só a etiqueta. Sem isto o
+                    # valor nunca chegava aqui, e uma conversão lá dentro
+                    # (`{.n = usize(64)}`) saía em C tal e qual — uma chamada a
+                    # uma função que não existe, e o erro aparecia no linker.
+                    if a2 != None and a2->kind == EX_DESIG:
+                        self->check_expr(a2->lhs)
+                        if a2->rhs != None:
+                            self->check_expr(a2->rhs)
+                    else:
+                        self->check_expr(a2)
                 return
             case _:
                 return

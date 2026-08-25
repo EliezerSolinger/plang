@@ -1,0 +1,22 @@
+
+Zg== Zm8= Zm9v
+Zm9vYg== Zm9vYmE= Zm9vYmFy
+std   +/+/
+url   -_-_
+nopad Zm8
+both  -_8
+aceita Zm8= -> 2 bytes
+aceita Zm8 -> 2 bytes
+aceita -_-_ -> 3 bytes
+aceita +/+_ -> 3 bytes
+caractere de fora: True
+um caractere so: True
+bits a mais: True
+e sem bits a mais passa: True
+ida e volta: sem queixas acima
+000fa5ff A5
+hex nos dois casos: 000fa5ff
+impar: True
+nao e hex: True
+vazio:  0
+codec-ok

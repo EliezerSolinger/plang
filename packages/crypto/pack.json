@@ -1,0 +1,13 @@
+{
+  "name": "crypto",
+  "version": "0.1.0",
+  "kind": "meta",
+  "deps": {
+    "sha2": "0.1.0",
+    "hash": "0.1.0",
+    "hmac": "0.1.0",
+    "csprng": "0.1.0",
+    "ed25519": "0.1.0"
+  },
+  "description": "hashes, MACs and entropy: one name for the five packages, and it installs rather than imports"
+}
