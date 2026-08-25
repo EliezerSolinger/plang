@@ -945,6 +945,84 @@ def ps_gc_stats(ctx: *PsCtx) -> *PsDict:
         *(*i64)(slot) = vals[i]
     return d
 
+# 39.2: `str()` de um `any`. Um `any` carrega o que é — um número, um bool ou
+# None vão numa caixa com a espécie escrita (`PsAny.kind`), e um objecto tem o
+# cabeçalho dele —, portanto isto rende sem que o compilador diga o tipo.
+#
+# O que NÃO se consegue é um contentor: o cabeçalho de uma lista diz que é uma
+# lista e não diz DE QUÊ, e o mesmo para um dicionário. Escrever "List(3)"
+# seria inventar; levantar com a frase que diz o que fazer é honesto, e a coisa a
+# fazer é estreitar com `as` — que é a porta que o `any` sempre teve (55.2).
+private def ps_any_render(ctx: *PsCtx, o: *PsObj, nested: bool, file: const *char, line: i32) -> *PsStr
+
+def ps_str_of_any(ctx: *PsCtx, o: *PsObj, file: const *char, line: i32) -> *PsStr:
+    return ps_any_render(ctx, o, False, file, line)
+
+# `nested` diz se isto está DENTRO de um contentor, e a única coisa que muda é a
+# string: `str("a")` é `a`, mas `["a"]` escreve-se `['a']`. É a distinção
+# str/repr do Python, e o caminho estático já a faz — se este não a fizesse, o
+# mesmo valor sairia de duas maneiras conforme o tipo com que foi anotado.
+private def ps_any_render(ctx: *PsCtx, o: *PsObj, nested: bool, file: const *char, line: i32) -> *PsStr:
+    if o == None:
+        return ps_str_new(ctx, "None", 4)
+    match o->ty:
+        case PS_TY_ANY:
+            a: *PsAny = (*PsAny)(o)
+            if a->kind == PS_ANY_INT:
+                return ps_str_from_int(ctx, a->i)
+            if a->kind == PS_ANY_FLOAT:
+                return ps_str_from_float(ctx, a->f)
+            if a->kind == PS_ANY_BOOL:
+                return ps_str_from_bool(ctx, a->i != 0)
+            return ps_str_new(ctx, "None", 4)
+        case PS_TY_STR:
+            # `str()` de uma string é a própria string; dentro de um contentor
+            # vai entre plicas, como o caminho estático faz
+            return ps_str_quoted(ctx, (*PsStr)(o)) if nested else (*PsStr)(o)
+        case PS_TY_BYTES:
+            return ps_str_from_bytesobj(ctx, (*PsBytes)(o), file, line)
+        case PS_TY_USER:
+            # um `struct` do programa: o descritor traz tudo — o `to_str()` que o
+            # tipo escreveu, ou a forma derivada da 44.3 —, e quem o percorre é o
+            # mesmo `ps_repr_desc` que o `print` de um tipo estático usa. Uma só
+            # implementação, portanto o mesmo texto pelos dois caminhos.
+            u: *PsUser = (*PsUser)(o)
+            if u->desc != None:
+                return ps_repr_desc(ctx, (*void)(o), u->desc, 0)
+            return ps_str_new(ctx, "<struct>", 8)
+        case PS_TY_LIST:
+            # 39.2 já garante que os elementos são `any` — o `any` não aceita
+            # uma `List<int>`, só uma `List<any>` —, portanto cada um carrega o
+            # que é e a recursão fecha.
+            l: *PsList = (*PsList)(o)
+            out: *PsStr = ps_str_new(ctx, "[", 1)
+            base: **PsObj = (**PsObj)(ps_list_base(l))
+            for i in range(i32(l->len)):
+                if i > 0:
+                    out = ps_str_concat(ctx, out, ps_str_new(ctx, ", ", 2))
+                out = ps_str_concat(ctx, out, ps_any_render(ctx, base[i], True, file, line))
+            return ps_str_concat(ctx, out, ps_str_new(ctx, "]", 1))
+        case PS_TY_DICT:
+            d: *PsDict = (*PsDict)(o)
+            od: *PsStr = ps_str_new(ctx, "{", 1)
+            n: i64 = ps_dict_len(d)
+            for i in range(i32(n)):
+                if i > 0:
+                    od = ps_str_concat(ctx, od, ps_str_new(ctx, ", ", 2))
+                kp: **PsStr = (**PsStr)(ps_dict_key_at(d, i64(i)))
+                od = ps_str_concat(ctx, od, ps_str_quoted(ctx, *kp))
+                od = ps_str_concat(ctx, od, ps_str_new(ctx, ": ", 2))
+                vp: **PsObj = (**PsObj)(ps_dict_val_at(d, i64(i)))
+                od = ps_str_concat(ctx, od, ps_any_render(ctx, *vp, True, file, line))
+            return ps_str_concat(ctx, od, ps_str_new(ctx, "}", 1))
+        case _:
+            pass
+    # o que sobra são punhos — um ficheiro, um socket, uma tarefa —, e nenhum
+    # deles é um valor que se escreva. A 39.2 também não os deixa entrar num
+    # `any`, portanto isto é a rede e não o caminho.
+    ps_raise(ctx, "str() of an `any` that holds something with no written form", PS_CAT_TYPE, file, line)
+    return ps_str_new(ctx, "", 0)
+
 def ps_buffer_gone(ctx: *PsCtx, b: *PsBuffer) -> bool:
     return b != None and b->gone_from != None and b->gone_from == (*void)(ctx)
 # ---------- the stable sort, shared by `key=` and by `Comparable` ----------
@@ -3757,11 +3835,20 @@ private def ps_json_bad(ctx: *PsCtx, what: const *char, caminho: const *char):
 private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, caminho: const *char, depth: i32)
 private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, caminho: const *char, depth: i32)
 
+private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *char, depth: i32)
+
 private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, caminho: const *char, depth: i32):
     if ty == None:
         ps_json_bad(ctx, "tipo desconhecido", caminho)
         return
     k: i32 = ty->kind
+    if k == 11:
+        # 39.2: um `any` diz de si próprio o que é. E o que ele pode conter é
+        # exactamente a lista de formas do JSON — número, texto, bool, None,
+        # `List<any>` e `Dict<str, any>` —, portanto isto fecha sem inventar
+        # nada. O `PsTy` estático não sabe; o VALOR sabe.
+        ps_json_any(ctx, ref b, (*PsObj)(o), caminho, depth)
+        return
     if k == 4:
         if o == None:
             ps_repr_put(ref b, "null", usize(4))
@@ -3849,6 +3936,68 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
         ps_json_desc(ctx, ref b, o, u->desc if u->desc != None else ty->desc, caminho, depth)
         return
     ps_json_ty(ctx, ref b, o, ty, caminho, depth)
+
+private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *char, depth: i32):
+    if o == None:
+        ps_repr_put(ref b, "null", usize(4))
+        return
+    if depth > 32:
+        ps_json_bad(ctx, "aninhamento demasiado fundo", caminho)
+        return
+    match o->ty:
+        case PS_TY_ANY:
+            a: *PsAny = (*PsAny)(o)
+            if a->kind == PS_ANY_INT:
+                num: char[32]
+                snprintf(num, usize(32), "%lld", a->i)
+                ps_repr_put(ref b, num, strlen(num))
+            elif a->kind == PS_ANY_FLOAT:
+                if a->f != a->f or a->f > 1.0e308 or a->f < -1.0e308:
+                    ps_json_bad(ctx, "JSON não tem NaN nem infinito", caminho)
+                    return
+                fs: *PsStr = ps_str_from_float(ctx, a->f)
+                ps_repr_put(ref b, fs->data, usize(fs->len))
+            elif a->kind == PS_ANY_BOOL:
+                if a->i != 0:
+                    ps_repr_put(ref b, "true", usize(4))
+                else:
+                    ps_repr_put(ref b, "false", usize(5))
+            else:
+                ps_repr_put(ref b, "null", usize(4))
+        case PS_TY_STR:
+            ps_json_esc(ref b, (*PsStr)(o))
+        case PS_TY_LIST:
+            l: *PsList = (*PsList)(o)
+            ps_repr_put(ref b, "[", usize(1))
+            base: **PsObj = (**PsObj)(ps_list_base(l))
+            for i in range(i32(l->len)):
+                if i > 0:
+                    ps_repr_put(ref b, ",", usize(1))
+                sub: char[64]
+                snprintf(sub, usize(64), "%s[%d]", caminho, int(i))
+                ps_json_any(ctx, ref b, base[i], sub, depth + 1)
+                if ps_has_exc(ctx):
+                    return
+            ps_repr_put(ref b, "]", usize(1))
+        case PS_TY_DICT:
+            d: *PsDict = (*PsDict)(o)
+            ps_repr_put(ref b, "{", usize(1))
+            n: i64 = ps_dict_len(d)
+            for i in range(i32(n)):
+                if i > 0:
+                    ps_repr_put(ref b, ",", usize(1))
+                kp: **PsStr = (**PsStr)(ps_dict_key_at(d, i64(i)))
+                ps_json_esc(ref b, *kp)
+                ps_repr_put(ref b, ":", usize(1))
+                vp: **PsObj = (**PsObj)(ps_dict_val_at(d, i64(i)))
+                sub2: char[64]
+                snprintf(sub2, usize(64), "%s.%d", caminho, int(i))
+                ps_json_any(ctx, ref b, *vp, sub2, depth + 1)
+                if ps_has_exc(ctx):
+                    return
+            ps_repr_put(ref b, "}", usize(1))
+        case _:
+            ps_json_bad(ctx, "um `any` que guarda algo que o JSON não tem", caminho)
 
 private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, caminho: const *char, depth: i32):
     if ty == None or p == None:

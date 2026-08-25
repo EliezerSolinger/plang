@@ -3131,7 +3131,11 @@ struct PsSema:
             if e->nargs != 1:
                 fatal_at(self->file, e->pos, "json.stringify() takes one value")
             st9: *PsType = self->check_expr(e->args[0])
-            if st9 == None or st9->kind in {PT_VOID, PT_UNKNOWN, PT_ANY, PT_FUNC, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_DYN}:
+            # o `any` ATRAVESSA (39.2): ele só pode conter números, bools,
+            # strings, None, `List<any>` e `Dict<str, any>` — que é exactamente
+            # a lista de formas que o JSON tem. Recusá-lo era recusar o tipo
+            # cuja forma é a do próprio formato.
+            if st9 == None or st9->kind in {PT_VOID, PT_UNKNOWN, PT_FUNC, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_DYN}:
                 fatal_at(self->file, e->args[0]->pos, "json.stringify() does not carry %s: JSON has numbers, text, booleans, lists and objects, and what is not one of those would have to be invented", ps_type_str(self->a, st9))
             return ps_type(self->a, PT_STR, e->pos)
         if strcmp(name, "__json_parse") == 0:

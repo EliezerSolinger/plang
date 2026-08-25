@@ -1,0 +1,10 @@
+{
+  "name": "csv",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "csv.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "RFC 4180 plus the three things real files have — and it never guesses a type"
+}

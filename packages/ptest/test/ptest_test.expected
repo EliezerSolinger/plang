@@ -1,0 +1,20 @@
+FALHOU exemplo/numeros
+  dois mais dois: deu 4, devia dar 5
+  fora da tolerancia: deu 1.0, devia dar 1.1 (tolerancia 0.01, diferenca 0.10000000000000009)
+FALHOU exemplo/texto
+  no meio: diferem no caractere 9
+    deu   o rapido cao castanho salta
+    devia o rapido gato castanho salta
+  prefixo: os primeiros 3 caracteres batem, mas deu 3 e devia dar 6
+    deu   abc
+    devia abcdef
+FALHOU exemplo/levanta
+  levantou: rebentou a meio
+FALHOU exemplo/nao para na primeira
+  um: deu 1, devia dar 2
+  dois: deu 3, devia dar 4
+  tres: deu 5, devia dar 6
+exemplo: 1 ok, 4 falharam
+o run devolveu 4
+A tem 1 e B tem 0
+ptest-ok

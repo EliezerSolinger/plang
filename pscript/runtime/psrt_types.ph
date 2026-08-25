@@ -259,6 +259,12 @@ enum PsTyKind:
     PS_T_REC           # `record`: valor, com descritor estático
     PS_T_OBJ           # `struct`: coletado, com o descritor no próprio objeto
     PS_T_ENUM
+    PS_T_ANY           # 39.2: o valor CARREGA o que é — um número, um bool ou
+                       #   None numa caixa com a espécie escrita, e um objecto
+                       #   com o cabeçalho dele. Portanto isto não é opaco: é
+                       #   "pergunta ao valor", e um `any` só pode conter
+                       #   exactamente as formas do JSON, que é a razão de ele
+                       #   agora atravessar o `json.stringify`.
 
 struct PsTy:
     kind: i32

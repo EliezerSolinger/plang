@@ -1,0 +1,21 @@
+4 ['nome', 'idade']
+silva, joao | com "aspas"
+[['a', 'b'], ['c', 'd'], ['e', 'f'], ['g', 'h']]
+[['a', 'b', 'c']]
+[['a,b', 'c']]
+vazio: []
+uma linha sem fim de linha: [['a', 'b']]
+campos vazios: [['a', '', 'c']]
+linha vazia no meio: [['a'], [''], ['b']]
+aspas com fim de linha dentro: [['a\r\nb', 'c']]
+nada adivinhado: ['007', '1.5', 'true']
+x,"com,virgula"\r\n"com ""aspas""","com\nlinha"\r\n,simples\r\n
+[['x', 'com,virgula'], ['com "aspas"', 'com\nlinha'], ['', 'simples']]
+['nome', 'idade'] 3
+silva, joao 30
+coluna que nao ha: -1
+linha curta: []
+sem coluna: csv: there is no column named xpto
+fora da tabela: csv: row 99 is outside the table
+aspas abertas: csv: a quoted field is never closed
+csv-ok

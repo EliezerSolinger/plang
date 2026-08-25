@@ -1,0 +1,10 @@
+level=info msg="server started" port=8080 tls=False
+level=warn msg=slow ms=1234 ratio=0.5
+level=info msg="com espacos" path="/tmp/a b" vazio="" igual="a=b"
+level=info msg=aspas q="diz \"ola\""
+level=error msg="isto sai" why="no disk"
+enabled: True False
+{"level":"info","msg":"em json","k":"v\"x","n":42,"b":true}
+impar: log: the extra arguments are key/value PAIRS — there are 1 of them, so one key has no value
+level=debug msg="o A fala"
+log-ok

@@ -1588,6 +1588,15 @@ static Expr *PsLow_to_str(PsLow *self, PsExpr *e) {
             }
             return rc9;
         }
+        case PT_ANY: {
+            Expr *an9 = PsLow_call_rt(self, "ps_str_of_any", e->pos);
+            PsLow_push_arg(self, an9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, an9, v);
+            PsLow_pos_args(self, an9, e->pos);
+            self->raised = 1;
+            self->allocs = 1;
+            return an9;
+        }
         case PT_NAME: {
             Expr *rp = PsLow_repr_of(self, v, e->type, e->pos, 0);
             if (rp == NULL) {
@@ -4661,7 +4670,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strcmp(name, "__json_stringify") == 0) {
         PsType *jt9 = e->args[0]->type;
         Expr *v9 = PsLow_expr(self, e->args[0]);
-        int ref9 = jt9 != NULL && (jt9->kind == PT_STR || jt9->kind == PT_LIST || jt9->kind == PT_SET || jt9->kind == PT_DICT);
+        int ref9 = jt9 != NULL && (jt9->kind == PT_STR || jt9->kind == PT_LIST || jt9->kind == PT_SET || jt9->kind == PT_DICT || jt9->kind == PT_ANY);
         if (!ref9 && jt9 != NULL && jt9->kind == PT_NAME) {
             PsDecl *dd9 = PsLow_decl_named(self, jt9->name);
             ref9 = dd9 != NULL && dd9->kind == PD_STRUCT;
@@ -10469,6 +10478,9 @@ static int32_t ty_kind_of(PsLow *L, PsType *t) {
         }
         case PT_DICT: {
             return 7;
+        }
+        case PT_ANY: {
+            return 11;
         }
         case PT_NAME: {
             PsDecl *dd = PsLow_decl_named(L, t->name);

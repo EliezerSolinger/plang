@@ -333,3 +333,6 @@ def ps_repr_val(ctx: *PsCtx, o: *void, ty: const *PsTy, depth: i32) -> *PsStr
 def ps_repr_desc(ctx: *PsCtx, o: *void, d: const *PsDesc, depth: i32) -> *PsStr
 def ps_json_stringify(ctx: *PsCtx, o: *void, ty: const *PsTy, file: const *char, line: i32) -> *PsStr
 def ps_json_stringify_at(ctx: *PsCtx, p: *void, ty: const *PsTy, file: const *char, line: i32) -> *PsStr
+
+# 39.2: `str()` de um `any` — ele carrega o que é, portanto o runtime rende-o
+def ps_str_of_any(ctx: *PsCtx, o: *PsObj, file: const *char, line: i32) -> *PsStr

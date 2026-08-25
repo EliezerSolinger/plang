@@ -1303,6 +1303,24 @@ struct PsLow:
                 if rc9 == None:
                     fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type))
                 return rc9
+            case PT_ANY:
+                # 39.2: um `any` CARREGA o que é — um número, um bool ou None vão
+                # numa caixa com a espécie escrita, e um objecto tem o cabeçalho
+                # dele. Portanto o runtime consegue rendê-lo sem que o
+                # compilador lhe diga o tipo, e `print(x)` de um `any` passa a
+                # funcionar em vez de não compilar.
+                #
+                # O que ele NÃO consegue é uma LISTA ou um DICIONÁRIO lá dentro:
+                # o cabeçalho diz que é uma lista e não diz de quê, e inventar
+                # "List(3)" seria pior do que recusar. Aí levanta, com a frase
+                # que diz o que fazer — estreitar com `as` primeiro.
+                an9: *Expr = self->call_rt("ps_str_of_any", e->pos)
+                self->push_arg(an9, self->ctx_arg(e->pos))
+                self->push_arg(an9, v)
+                self->pos_args(an9, e->pos)
+                self->raised = True
+                self->allocs = True
+                return an9
             case PT_NAME:
                 # a record, a struct or an enum: the derived form (44.3), or
                 # the type's own `to_str()` when it wrote one
@@ -4372,7 +4390,9 @@ struct PsLow:
             # uma REFERÊNCIA vai como está; um VALOR precisa de morada, e um
             # valor recém-feito não tem nenhuma — passa por um local, que é
             # onde o C o poria de qualquer maneira
-            ref9: bool = jt9 != None and jt9->kind in {PT_STR, PT_LIST, PT_SET, PT_DICT}
+            # 39.2: um `any` É um ponteiro para um objecto com cabeçalho — vai
+            # como está, e é o cabeçalho que diz o resto
+            ref9: bool = jt9 != None and jt9->kind in {PT_STR, PT_LIST, PT_SET, PT_DICT, PT_ANY}
             if not ref9 and jt9 != None and jt9->kind == PT_NAME:
                 dd9: *PsDecl = self->decl_named(jt9->name)
                 ref9 = dd9 != None and dd9->kind == PD_STRUCT
@@ -10280,6 +10300,8 @@ private def ty_kind_of(L: *PsLow, t: *PsType) -> i32:
             return 6
         case PT_DICT:
             return 7
+        case PT_ANY:
+            return 11
         case PT_NAME:
             # `decl_named` e não `records_by_name`: o segundo só conhece os
             # tipos com campos, e um enum é justamente o que não tem nenhum

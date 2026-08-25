@@ -1,0 +1,10 @@
+{
+  "name": "ptest",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "ptest.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "the test of a FUNCTION, with an assert_eq that says what changed — not just that something did"
+}

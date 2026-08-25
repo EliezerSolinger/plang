@@ -1,0 +1,10 @@
+{
+  "name": "log",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "log.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "structured logging with no lock: a mutable global is worker-private, so each worker has its own"
+}

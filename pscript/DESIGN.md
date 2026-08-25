@@ -7168,3 +7168,81 @@ primeira vez, e três nomes tornam-no impossível.
 E um fluxo que mente sobre si próprio **levanta**: o complemento do comprimento
 num bloco literal, o Adler-32 do zlib, o CRC-32 e o tamanho do gzip. Nenhum deles
 é uma condição do algoritmo (4.2) — é o ficheiro a dizer uma coisa e a ser outra.
+
+---
+
+## 151 — a S8 e a S9, e a regra que elas descobriram duas vezes
+
+### 151.1 — um PACOTE não pode ter estado, e isso muda dois desenhos
+
+A §4.1 do `STDLIB.md` decidiu que o `log` seria **global** — `log.info("...")` sem
+passar nada — apoiada na 42.2: uma global mutável no pscript é privada do worker,
+portanto cada worker teria o seu logger sem contenção e sem cadeado.
+
+**Não dá.** Um módulo IMPORTADO não pode ter estado no topo: só um programa pode,
+porque só ele tem uma ordem de execução definida. Um pacote é um conjunto de
+definições. E a mesma pedra apareceu logo a seguir no `ptest`, que queria
+acumular as falhas de um caso numa lista do módulo.
+
+Havia duas saídas, e a escolhida diz mais do que a outra:
+
+* pôr o `log` no RUNTIME, ao lado do `gc` e do `sched`, e ganhar a global. Isso
+  seria meter uma escolha de **política** — para onde vão os registos, a partir
+  de que nível — dentro da linguagem, e a linguagem é o sítio errado para
+  política;
+* **um punho que o programa cria e guarda**, que é o que o `slog` do Go e o
+  `tracing` do Rust fazem.
+
+O que se perde é uma palavra por chamada. O que se ganha é que **a história dos
+workers deixa de ser magia**: um worker que precise de outro nível recebe o punho
+dele na entrada, à vista, em vez de alguém descobrir mais tarde que o `set_level`
+do principal não chegou lá. E dois `Runner` deixam de se ver, o que a global
+nunca permitiria.
+
+**A metade boa da decisão original mantém-se inteira: não há cadeado nenhum.**
+Uma linha sai inteira porque o `print` já garante isso (107.2), e um logger que
+escreva por linhas herda a garantia em vez de a reconstruir.
+
+### 151.2 — os pares alternados, e porque não é `key=value`
+
+`log.info(lg, "started", "port", 8080)` — a forma do `slog`. A §4.1 escreveu
+`key=value` no sítio da chamada, e isso não pode ser: os argumentos nomeados do
+pscript são de tempo de compilação e quem os recebe tem de os **declarar**,
+portanto uma chave arbitrária não cabe lá.
+
+Um número ímpar de argumentos levanta, e a verificação é feita **antes** do
+nível: um par mal escrito é um erro de programa, e um erro de programa que só
+aparece quando alguém baixa o nível em produção é o pior sítio possível para ele
+aparecer.
+
+### 151.3 — o `any` passa a ter forma escrita, e o `json.stringify` aceita-o
+
+Duas coisas que faltavam e que só se notam quando se precisa delas — e foi o
+`log` a precisar:
+
+* **`str()` de um `any` não compilava**, portanto `print(x)` de um `any` também
+  não. Agora rende: um número, um bool ou None vão numa caixa com a espécie
+  escrita, um objecto tem o cabeçalho dele, e uma `List<any>`/`Dict<str, any>`
+  recorre. E cita as strings aninhadas, como o caminho estático faz — se não o
+  fizesse, o mesmo valor sairia de duas maneiras conforme o tipo com que foi
+  anotado;
+* **`json.stringify` recusava um `any`**, com a frase *"o que não é uma dessas
+  formas teria de ser inventado"*. Mas um `any` só pode conter números, texto,
+  bools, None, `List<any>` e `Dict<str, any>` — que é **exactamente** a lista de
+  formas do JSON. Recusá-lo era recusar o tipo cuja forma é a do próprio formato.
+
+Nasce um `PS_T_ANY` na tabela de tipos, e o que ele quer dizer é *"pergunta ao
+valor"*. É graças a isso que uma linha de registo em JSON sai com `"n":42` e
+`"b":true`, em vez de `"42"` e `"True"` — que era o que a torna útil a uma
+máquina.
+
+### 151.4 — o `csv` não adivinha tipos, e isso é a decisão
+
+Tudo o que sai é `str`. Um leitor que decidisse que `007` é o número sete perderia
+o zero à esquerda de um código postal — que é o defeito mais caro que esta família
+de bibliotecas tem, e o mais difícil de descobrir porque só aparece nos dados de
+outra pessoa.
+
+E lê as três coisas que a norma não tem e os ficheiros têm: o separador (`;` em
+meia Europa, porque a vírgula é o separador decimal), os três fins de linha, e o
+BOM que o Excel põe à frente.

@@ -14,7 +14,10 @@
     "packages/csprng",
     "packages/datetime",
     "packages/tz",
-    "packages/compress"
+    "packages/compress",
+    "packages/log",
+    "packages/ptest",
+    "packages/csv"
   ],
   "default": "build/bin/pforge"
 }
