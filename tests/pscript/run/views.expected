@@ -4,4 +4,9 @@
 7.5
 48
 sum 33.25
-append: a view over a buffer has a fixed size
+region 3 3.0 6.0
+shared 100.0
+bytes window 16
+to the end 8
+outside: this window falls outside the Buffer
+copied 4 3 7.0

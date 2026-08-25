@@ -51,6 +51,12 @@ enum PsTypeKind:
                      #   type of message it sends back (36.1).
     PT_FILE          # an open file (48.1)
     PT_BUFFER        # a block of bytes shared between workers (19.4/52.3)
+    PT_VIEW          # 135.8/18.3: `View<T>` — the same bytes seen as elements,
+                     #   borrowed from a `Buffer`. It is the SAME object a list
+                     #   is (`raw` + `owner`), so nothing new is allocated; what
+                     #   makes it a type of its own is what it CANNOT do —
+                     #   growing, and closing. A view that could be closed would
+                     #   be a runtime error where a compile error belongs.
     PT_CONN          # a socket, listening or connected (77.1): `net.listen`
                      #   gives one, `await srv.accept()` gives another
     PT_PROC          # 118: um processo que JÁ TERMINOU (`await os.run(...)`).

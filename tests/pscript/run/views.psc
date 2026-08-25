@@ -1,10 +1,17 @@
-"""The typed view of 18.3: the same bytes, seen as elements, with no copy.
+"""`View<T>` (18.3/135.8): the same bytes, seen as elements, with no copy.
 
-A buffer lives outside every heap and never moves, so a window over it is not
-an interior pointer into something the collector shuffles — which is exactly
-why 17.3 ("a slice is a copy") does not apply here. What comes back reads like
-any other list; what it refuses is growing, because growing would mean owning.
+A `Buffer` lives outside every heap and never moves, so a window over it is not
+an interior pointer into something the collector shuffles — which is exactly why
+17.3 ("a slice is a copy") does not apply here.
+
+**What makes it a type of its own is what it cannot do.** A `View` borrows: the
+elements belong to the buffer, and there are exactly as many as the window
+covers. Growing would mean owning them and `close` would mean deciding a
+lifetime that is not this object's — so neither is a mistake to be caught at run
+time. Neither is a thing anybody can write, and that is the whole trade 135.8
+asked for.
 """
+
 
 def main():
     b = Buffer(48)
@@ -25,10 +32,32 @@ def main():
     for v in px:
         total += v
     print("sum", total)
-    # a view does not grow: it does not own the bytes
+
+    # ---- 135.8: a window over a REGION, and `b[a:e]` is the sugar for it ----
+    mid = b.view_f64(2, 3)
+    print("region", len(mid), mid[0], mid[2])
+    mid[1] = 100.0
+    print("shared", px[3])            # the same eight bytes, written through
+
+    win = b[8:24]                     # sugar for `b.view_u8(8, 16)`
+    print("bytes window", len(win))
+    tail = b[40:]                     # to the end
+    print("to the end", len(tail))
+
+    # a window is not a slice: it does NOT clamp, it raises — trimming quietly
+    # would be a window over memory the buffer does not own
     try:
-        px.append(1.0)
+        bad = b[40:80]
+        print("should not get here", len(bad))
     catch e:
-        print("append:", e.message)
+        print("outside:", e.message)
+
+    # ---- and a view can be copied OUT of borrowing, which says so by copying
+    own = mid.copy()
+    own.append(7.0)
+    print("copied", len(own), len(mid), own[3])
+
     b.close()
+
+
 main()

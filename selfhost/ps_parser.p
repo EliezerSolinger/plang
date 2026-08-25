@@ -274,6 +274,13 @@ struct PsP:
                 t = ps_type(self->a, PT_FILE, pos)
             elif self->renamed(pos, name, "buffer", "Buffer"):
                 t = ps_type(self->a, PT_BUFFER, pos)
+            elif name == "View":
+                # 135.8: uppercase, because it is a thing with a lifetime — it
+                # keeps its `Buffer` alive for as long as it exists.
+                t = ps_type(self->a, PT_VIEW, pos)
+                self->expect(TK_LT, "View<T>")
+                t->inner = self->parse_type()
+                self->expect_gt("View<T>")
             elif self->renamed(pos, name, "socket", "Socket"):
                 # 77.1: one name for both ends of it — what `net.listen` gives
                 # and what `accept` gives are the same kind of thing, and the

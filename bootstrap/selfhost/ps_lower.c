@@ -733,6 +733,9 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         case PT_BUFFER: {
             return ty_ptr(self->a, ty_name(self->a, "PsBuffer"));
         }
+        case PT_VIEW: {
+            return ty_ptr(self->a, ty_name(self->a, "PsList"));
+        }
         case PT_FUNC: {
             return ty_ptr(self->a, ty_name(self->a, "PsClosure"));
         }
@@ -2342,6 +2345,27 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
         }
         case PE_SLICE: {
             PsTypeKind slk9 = (e->lhs->type != NULL ? e->lhs->type->kind : PT_UNKNOWN);
+            if (slk9 == PT_BUFFER) {
+                Expr *bva = PsLow_call_rt(self, "ps_buffer_view_at", e->pos);
+                PsLow_push_arg(self, bva, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, bva, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, bva, PsLow_num(self, "1", e->pos));
+                Expr *off9 = (e->args[0] != NULL ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[0]) : PsLow_num(self, "0", e->pos));
+                PsLow_push_arg(self, bva, off9);
+                if (e->args[1] == NULL) {
+                    PsLow_push_arg(self, bva, PsLow_num(self, "-1", e->pos));
+                } else {
+                    Expr *sub9 = ex_new(self->a, EX_BINARY, e->pos);
+                    sub9->op = TK_MINUS;
+                    sub9->lhs = PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[1]);
+                    sub9->rhs = (e->args[0] != NULL ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[0]) : PsLow_num(self, "0", e->pos));
+                    PsLow_push_arg(self, bva, sub9);
+                }
+                PsLow_pos_args(self, bva, e->pos);
+                self->raised = 1;
+                self->allocs = 1;
+                return bva;
+            }
             Expr *sc = PsLow_call_rt(self, (slk9 == PT_LIST ? "ps_list_slice" : (slk9 == PT_BYTES ? "ps_bytes_slice" : "ps_str_slice")), e->pos);
             PsLow_push_arg(self, sc, PsLow_ctx_arg(self, e->pos));
             PsLow_push_arg(self, sc, PsLow_expr(self, e->lhs));
@@ -3075,7 +3099,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         return sm;
     }
-    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_LIST) {
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && (e->lhs->type->kind == PT_LIST || e->lhs->type->kind == PT_VIEW)) {
         const char *lm9 = e->lhs->text;
         if (strcmp(lm9, "remove_at") == 0 || strcmp(lm9, "reverse") == 0) {
             Expr *rc9 = PsLow_call_rt(self, Arena_printf(self->a, "ps_list_%s", lm9), e->pos);
@@ -3270,10 +3294,12 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_BUFFER) {
         int32_t ve = ps_view_esize(e->lhs->text);
         if (ve != 0) {
-            Expr *vc = PsLow_call_rt(self, "ps_buffer_view", e->pos);
+            Expr *vc = PsLow_call_rt(self, "ps_buffer_view_at", e->pos);
             PsLow_push_arg(self, vc, PsLow_ctx_arg(self, e->pos));
             PsLow_push_arg(self, vc, PsLow_expr(self, e->lhs->lhs));
             PsLow_push_arg(self, vc, PsLow_num(self, Arena_printf(self->a, "%d", ve), e->pos));
+            PsLow_push_arg(self, vc, (e->nargs == 2 ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[0]) : PsLow_num(self, "0", e->pos)));
+            PsLow_push_arg(self, vc, (e->nargs == 2 ? PsLow_coerce(self, ps_type(self->a, PT_INT, e->pos), e->args[1]) : PsLow_num(self, "-1", e->pos)));
             PsLow_pos_args(self, vc, e->pos);
             self->raised = 1;
             self->allocs = 1;
@@ -4370,7 +4396,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, cd2, PsLow_expr(self, e->args[0]));
             return cd2;
         }
-        if (e->args[0]->type != NULL && e->args[0]->type->kind == PT_LIST) {
+        if (e->args[0]->type != NULL && (e->args[0]->type->kind == PT_LIST || e->args[0]->type->kind == PT_VIEW)) {
             Expr *cl = PsLow_call_rt(self, "ps_list_len", e->pos);
             PsLow_push_arg(self, cl, PsLow_expr(self, e->args[0]));
             return cl;
@@ -6706,7 +6732,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 }
                 return;
             }
-            if (s->iter->type != NULL && s->iter->type->kind == PT_LIST) {
+            if (s->iter->type != NULL && (s->iter->type->kind == PT_LIST || s->iter->type->kind == PT_VIEW)) {
                 PsLow_lower_list_for(self, s, out);
                 {
                     self->async_brk = sb8;
@@ -10880,7 +10906,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_LIST || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

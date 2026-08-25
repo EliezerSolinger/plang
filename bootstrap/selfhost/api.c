@@ -616,6 +616,12 @@ static void p_type(StrBuf *b, PsType *t) {
             StrBuf_puts(b, "bytes");
             break;
         }
+        case PT_VIEW: {
+            StrBuf_puts(b, "View<");
+            p_type(b, t->inner);
+            StrBuf_putc(b, '>');
+            break;
+        }
         case PT_FILE: {
             StrBuf_puts(b, "File");
             break;

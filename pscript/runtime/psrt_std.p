@@ -512,7 +512,9 @@ def ps_buffer_transfer(ctx: *PsCtx, b: *PsBuffer):
         b->gone_from = (*void)(ctx)
 
 
-def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, line: i32) -> *PsList:
+# 135.8: `off`/`cnt` in ELEMENTS, and `cnt < 0` means "everything from `off`",
+# which is what a window over the whole buffer asks for.
+def ps_buffer_view_at(ctx: *PsCtx, b: *PsBuffer, esize: i32, off: i64, cnt: i64, file: const *char, line: i32) -> *PsList:
     if ps_buffer_gone(ctx, b):
         ps_raise(ctx, "this buffer was transferred: it belongs to whoever received it (18.2)", PS_CAT_VALUE, file, line)
         return None
@@ -522,17 +524,30 @@ def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, lin
     if b->nbytes % usize(esize) != usize(0):
         ps_raise(ctx, "the buffer does not divide into elements of this size", PS_CAT_VALUE, file, line)
         return None
+    total: i64 = i64(b->nbytes / usize(esize))
+    n: i64 = (total - off) if cnt < 0 else cnt
+    # A window is NOT a slice: it does not clamp, it raises. A slice past the
+    # end trims because 17.3 says so about copies; a window past the end would
+    # be a window over memory the buffer does not own, and trimming that
+    # quietly is how a read walks off a block.
+    if off < 0 or n < 0 or off + n > total:
+        ps_raise(ctx, "this window falls outside the Buffer", PS_CAT_INDEX, file, line)
+        return None
     l: *PsList = ps_alloc(ctx, sizeof(PsList), PS_TY_LIST)
-    l->len = i64(b->nbytes / usize(esize))
-    l->cap = l->len
+    l->len = n
+    l->cap = n
     l->esize = esize
     l->eref = False
     l->etrace = None    # `ps_alloc` não zera; uma vista não o usa, mas o campo
                         #   existe e ficar com lixo é uma armadilha à espera
     l->data = None
-    l->raw = b->data
+    l->raw = b->data + usize(off) * usize(esize)
     l->owner = b
     return l
+
+
+def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, line: i32) -> *PsList:
+    return ps_buffer_view_at(ctx, b, esize, 0, -1, file, line)
 
 def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *PsObj:
     j: PsJson

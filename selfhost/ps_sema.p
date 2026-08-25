@@ -544,6 +544,8 @@ struct PsSema:
                 t->key = self->resolve_type(t->key)
                 t->inner = self->resolve_type(t->inner)
                 self->key_ok(t->key, t->pos, "a dict key")
+            case PT_VIEW:
+                t->inner = self->resolve_type(t->inner)
             case PT_TUPLE, PT_FUNC:
                 for i in range(t->nparams):
                     t->params[i] = self->resolve_type(t->params[i])
@@ -1126,8 +1128,10 @@ struct PsSema:
                     bu9->width = 8
                     bu9->uns = True
                     t = bu9
+                elif ct3 != None and ct3->kind == PT_VIEW:
+                    t = ct3->inner
                 elif ct3 == None or ct3->kind != PT_LIST:
-                    fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str, bytes and List work)", ps_type_str(self->a, ct3))
+                    fatal_at(self->file, e->pos, "indexing %s is not compiled yet (str, bytes, List and View work)", ps_type_str(self->a, ct3))
                 else:
                     t = ct3->inner
             case PE_DICT:
@@ -1267,13 +1271,27 @@ struct PsSema:
                 t = cw
             case PE_SLICE:
                 st4: *PsType = self->check_expr(e->lhs)
-                if st4 == None or (st4->kind != PT_STR and st4->kind != PT_BYTES and st4->kind != PT_LIST):
-                    fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes and List work)", ps_type_str(self->a, st4))
+                if st4 == None or (st4->kind != PT_STR and st4->kind != PT_BYTES and st4->kind != PT_LIST and st4->kind != PT_VIEW and st4->kind != PT_BUFFER):
+                    fatal_at(self->file, e->pos, "slicing %s is not compiled yet (str, bytes, List, View and Buffer work)", ps_type_str(self->a, st4))
                 for i in range(3):
                     if e->args[i] != None:
                         pt4: *PsType = self->check_expr(e->args[i])
                         self->want(e->args[i], pt4, ps_type(self->a, PT_INT, e->pos), "a slice bound")
-                t = st4
+                if st4->kind == PT_BUFFER:
+                    # 135.8: `b[0:8]` is sugar for `b.view_u8(0, 8)`, so what
+                    # comes back is a `View<u8>` and NOT a `Buffer`. That is the
+                    # distinction earning its keep: the window cannot be closed,
+                    # because closing it would mean deciding a lifetime that
+                    # belongs to the buffer.
+                    if e->args[2] != None:
+                        fatal_at(self->file, e->pos, "a window over a Buffer has no step: it is the same bytes seen as elements, and a step would mean copying them (135.8) — slice the View it gives you")
+                    vb4: *PsType = ps_type(self->a, PT_VIEW, e->pos)
+                    vb4->inner = ps_type(self->a, PT_INT, e->pos)
+                    vb4->inner->width = 8
+                    vb4->inner->uns = True
+                    t = vb4
+                else:
+                    t = st4
             case PE_TUPLE:
                 # a tuple is a VALUE (3.2/38.2): immutable, copied, no header.
                 # Its type is the list of its element types.
@@ -1749,6 +1767,39 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "encode() takes no arguments: a `str` is UTF-8 already, and there is no second encoding to ask for")
                     return ps_type(self->a, PT_BYTES, e->pos)
                 fatal_at(self->file, e->pos, "a string has split, splitlines, strip, lstrip, rstrip, lower, upper, title, capitalize, swapcase, find, rfind, index, rindex, count, contains, startswith, endswith, removeprefix, removesuffix, replace, join, ljust, rjust, center, zfill, encode, and isalpha/isdigit/isdecimal/isnumeric/isalnum/isspace/isupper/islower/istitle")
+            if rt != None and rt->kind == PT_VIEW:
+                # 135.8, and this is the whole reason a View is a type of its
+                # own: what it CANNOT do is refused HERE, in compilation,
+                # instead of raising when the program is already running.
+                #
+                # It borrows: the elements belong to a `Buffer` and there are
+                # exactly as many as the window says. Growing would mean owning
+                # them, and `close` would mean deciding a lifetime that is not
+                # this object's — so neither is a mistake to be caught. Neither
+                # is a thing anybody can write.
+                vm: const *char = e->lhs->text
+                # the RECEIVER's type has to be written back, exactly as the
+                # list branch below does: it is what the lowering dispatches on,
+                # and without it the call falls through to the user-method path
+                # and dereferences a name that is not there
+                e->lhs->type = rt
+                if vm in {"append", "insert", "remove_at", "extend", "clear", "pop", "remove", "sort", "reverse"}:
+                    fatal_at(self->file, e->pos, "a View borrows: it has exactly the elements the window covers, and `%s()` would mean owning them (135.8) — write into it by index, or build in a List and convert", vm)
+                if strcmp(vm, "close") == 0:
+                    fatal_at(self->file, e->pos, "a View has no close(): the lifetime belongs to the `Buffer` it borrows from (135.8/136.1) — close that instead")
+                if strcmp(vm, "copy") == 0:
+                    # the way OUT of borrowing, and it says so by copying
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "copy() takes no arguments")
+                    cpv: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    cpv->inner = rt->inner
+                    return cpv
+                if strcmp(vm, "index") == 0 or strcmp(vm, "count") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "%s() takes one value", vm)
+                    self->check_want(e->args[0], rt->inner, "the value looked for")
+                    return ps_type(self->a, PT_INT, e->pos)
+                fatal_at(self->file, e->pos, "a View has index, count and copy — it borrows, so it does not grow and does not close (135.8) — not '%s'", vm)
             if rt != None and rt->kind == PT_LIST:
                 lm: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -1867,9 +1918,14 @@ struct PsSema:
                     return ps_type(self->a, PT_VOID, e->pos)
                 vw: i32 = ps_view_esize(bm)
                 if vw != 0:
-                    if e->nargs != 0:
-                        fatal_at(self->file, e->pos, "%s() takes no arguments", bm)
-                    vl: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    # 135.8: with no arguments the window is the whole buffer;
+                    # with two it is a REGION, which is what `b[a:b]` lowers to.
+                    if e->nargs != 0 and e->nargs != 2:
+                        fatal_at(self->file, e->pos, "%s() takes nothing (the whole Buffer) or an offset and a count", bm)
+                    for vi in range(e->nargs):
+                        vat: *PsType = self->check_expr(e->args[vi])
+                        self->want(e->args[vi], vat, ps_type(self->a, PT_INT, e->pos), "an offset into a Buffer" if vi == 0 else "how many elements")
+                    vl: *PsType = ps_type(self->a, PT_VIEW, e->pos)
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
                 fatal_at(self->file, e->pos, "a buffer has get_f64, set_f64, size and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
@@ -3292,7 +3348,7 @@ struct PsSema:
                 # 98.1: how many slots, which is known at compile time — the
                 # length of a tuple is part of its TYPE
                 return ps_type(self->a, PT_INT, e->pos)
-            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_DICT, PT_SET}:
+            if at2 == None or at2->kind not in {PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET}:
                 fatal_at(self->file, e->pos, "len() of %s is not compiled yet", ps_type_str(self->a, at2))
             return ps_type(self->a, PT_INT, e->pos)
         if strcmp(name, "abs") == 0:
@@ -5659,13 +5715,21 @@ struct PsSema:
                         self->pop_scope()
                         self->depth -= 1
                         return
-                    if lit4 == None or lit4->kind not in {PT_LIST, PT_DICT, PT_SET}:
-                        fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, a list, a dict, a set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4))
+                    if lit4 == None or lit4->kind not in {PT_LIST, PT_VIEW, PT_BYTES, PT_DICT, PT_SET}:
+                        fatal_at(self->file, s->pos, "`for x in ...` takes a range, a string, `bytes`, a List, a View, a Dict, a Set or a type that implements `Iterable` (40.3), not %s", ps_type_str(self->a, lit4))
                     if s->nnames != 1:
                         fatal_at(self->file, s->pos, "`for x in xs` takes one variable")
                     self->depth += 1
-                    # iterating a dict gives its KEYS, as Python does
-                    self->add_local(s->names[0], lit4->key if lit4->kind == PT_DICT else lit4->inner, True, False)
+                    # iterating a dict gives its KEYS, as Python does; iterating
+                    # `bytes` gives NUMBERS, for the same reason `b[i]` is one
+                    itel: *PsType = lit4->inner
+                    if lit4->kind == PT_DICT:
+                        itel = lit4->key
+                    elif lit4->kind == PT_BYTES:
+                        itel = ps_type(self->a, PT_INT, s->pos)
+                        itel->width = 8
+                        itel->uns = True
+                    self->add_local(s->names[0], itel, True, False)
                     self->loop_depth += 1
                     self->check_block(s->body)
                     self->loop_depth -= 1
@@ -6045,7 +6109,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_CONN, PT_PROC, PT_FUNC, PT_DYN:
             return True
         case PT_NAME:
             return t->is_ref
@@ -6249,6 +6313,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return a->printf("Worker<%s>", ps_type_str(a, t->inner))
         case PT_BYTES:
             return "bytes"
+        case PT_VIEW:
+            return a->printf("View<%s>", ps_type_str(a, t->inner))
         case PT_FILE:
             return "File"
         case PT_BUFFER:

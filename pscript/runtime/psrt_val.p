@@ -148,7 +148,15 @@ def ps_list_slice(ctx: *PsCtx, l: *PsList, a: i64, b: i64, st: i64, has_a: bool,
     out: *PsList = ps_list_new(ctx, l->esize, l->eref, 0)
     k: i64 = i
     while (st > 0 and k < j) or (st < 0 and k > j):
-        src: *char = (*char)(l->data) + sizeof(PsArr) + usize(k) * usize(l->esize)
+        # `ps_list_base` and NOT `l->data`: a VIEW (18.3) has no storage of its
+        # own — its elements are the buffer's, and `raw` is where they are.
+        # Reading `l->data` there is reading NULL plus an offset, which is what
+        # `View.copy()` found the first time anybody sliced a window.
+        #
+        # It matters that `ps_list_push` can COLLECT: the base is therefore
+        # taken fresh on every turn, because a collection moves the storage of
+        # an ordinary list out from under a pointer taken before it.
+        src: *char = ps_list_base(l) + usize(k) * usize(l->esize)
         dst: *char = ps_list_push(ctx, out)
         memcpy(dst, src, usize(l->esize))
         k += st

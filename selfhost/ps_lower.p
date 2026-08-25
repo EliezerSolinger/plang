@@ -460,6 +460,12 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsProc"))
             case PT_BUFFER:
                 return ty_ptr(self->a, ty_name(self->a, "PsBuffer"))
+            case PT_VIEW:
+                # 18.3: a view IS the list object with `raw` and `owner` set —
+                # nothing new is allocated and the runtime learns nothing. The
+                # separate TYPE exists so the sema can refuse what a borrowed
+                # window may not do.
+                return ty_ptr(self->a, ty_name(self->a, "PsList"))
             case PT_FUNC:
                 # a function VALUE is the function plus what it captured (28.1)
                 return ty_ptr(self->a, ty_name(self->a, "PsClosure"))
@@ -2100,6 +2106,28 @@ struct PsLow:
                 return self->ident(cn, e->pos)
             case PE_SLICE:
                 slk9: PsTypeKind = e->lhs->type->kind if e->lhs->type != None else PT_UNKNOWN
+                if slk9 == PT_BUFFER:
+                    # 135.8: `b[a:e]` IS `b.view_u8(a, e - a)`. It is written as
+                    # a count and not as an end because that is what the window
+                    # is: a length, from a place.
+                    bva: *Expr = self->call_rt("ps_buffer_view_at", e->pos)
+                    self->push_arg(bva, self->ctx_arg(e->pos))
+                    self->push_arg(bva, self->expr(e->lhs))
+                    self->push_arg(bva, self->num("1", e->pos))
+                    off9: *Expr = self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[0]) if e->args[0] != None else self->num("0", e->pos)
+                    self->push_arg(bva, off9)
+                    if e->args[1] == None:
+                        self->push_arg(bva, self->num("-1", e->pos))    # to the end
+                    else:
+                        sub9: *Expr = ex_new(self->a, EX_BINARY, e->pos)
+                        sub9->op = TK_MINUS
+                        sub9->lhs = self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[1])
+                        sub9->rhs = self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[0]) if e->args[0] != None else self->num("0", e->pos)
+                        self->push_arg(bva, sub9)
+                    self->pos_args(bva, e->pos)
+                    self->raised = True
+                    self->allocs = True
+                    return bva
                 sc: *Expr = self->call_rt("ps_list_slice" if slk9 == PT_LIST else ("ps_bytes_slice" if slk9 == PT_BYTES else "ps_str_slice"), e->pos)
                 self->push_arg(sc, self->ctx_arg(e->pos))
                 self->push_arg(sc, self->expr(e->lhs))
@@ -2829,7 +2857,11 @@ struct PsLow:
                 self->push_arg(sm, self->expr(e->args[i]))
             self->allocs = True
             return sm
-        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_LIST:
+        # A `View` IS the list object underneath (18.3), so the three methods
+        # the sema lets it keep — `index`, `count`, `copy` — lower through the
+        # list path unchanged. Everything a view may NOT do was already refused
+        # in compilation, which is what the separate type bought (135.8).
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and (e->lhs->type->kind == PT_LIST or e->lhs->type->kind == PT_VIEW):
             lm9: const *char = e->lhs->text
             if strcmp(lm9, "remove_at") == 0 or strcmp(lm9, "reverse") == 0:
                 rc9: *Expr = self->call_rt(self->a->printf("ps_list_%s", lm9), e->pos)
@@ -3025,10 +3057,14 @@ struct PsLow:
                 # 18.3: one call, and what comes back is a list header pointing
                 # AT the buffer's bytes — every read after this is the ordinary
                 # list path, because the base pointer is the only difference
-                vc: *Expr = self->call_rt("ps_buffer_view", e->pos)
+                vc: *Expr = self->call_rt("ps_buffer_view_at", e->pos)
                 self->push_arg(vc, self->ctx_arg(e->pos))
                 self->push_arg(vc, self->expr(e->lhs->lhs))
                 self->push_arg(vc, self->num(self->a->printf("%d", ve), e->pos))
+                # no arguments = the whole buffer, which the runtime spells as
+                # offset 0 and a negative count (135.8)
+                self->push_arg(vc, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[0]) if e->nargs == 2 else self->num("0", e->pos))
+                self->push_arg(vc, self->coerce(ps_type(self->a, PT_INT, e->pos), e->args[1]) if e->nargs == 2 else self->num("-1", e->pos))
                 self->pos_args(vc, e->pos)
                 self->raised = True
                 self->allocs = True
@@ -4059,7 +4095,7 @@ struct PsLow:
                 cd2: *Expr = self->call_rt("ps_dict_len", e->pos)
                 self->push_arg(cd2, self->expr(e->args[0]))
                 return cd2
-            if e->args[0]->type != None and e->args[0]->type->kind == PT_LIST:
+            if e->args[0]->type != None and (e->args[0]->type->kind == PT_LIST or e->args[0]->type->kind == PT_VIEW):
                 cl: *Expr = self->call_rt("ps_list_len", e->pos)
                 self->push_arg(cl, self->expr(e->args[0]))
                 return cl
@@ -6424,7 +6460,7 @@ struct PsLow:
                 if s->iter->type != None and s->iter->type->kind == PT_STR:
                     self->lower_str_for(s, out)
                     return
-                if s->iter->type != None and s->iter->type->kind == PT_LIST:
+                if s->iter->type != None and (s->iter->type->kind == PT_LIST or s->iter->type->kind == PT_VIEW):
                     self->lower_list_for(s, out)
                     return
                 # P has `for x in range(a, b, step)` already, with the same
@@ -10591,7 +10627,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_LIST or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

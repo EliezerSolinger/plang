@@ -287,7 +287,7 @@ def load_scene(path: str) -> List<Sphere>:
 
 # ------------------------------------------------------------------ output
 
-def save_ppm(path: str, px: List<f64>, width: int, height: int,
+def save_ppm(path: str, px: View<f64>, width: int, height: int,
              tone: def(float) -> float):       # function as parameter (28.1)
     """PPM P3, with pluggable tone mapping."""
     with open(path, "w") as f:

@@ -14,6 +14,8 @@ def ps_buffer_transfer(ctx: *PsCtx, b: *PsBuffer)
 # `List<T>` in every way that reads — len, index, iterate, slice — and refuses
 # the ways that would need to own the memory
 def ps_buffer_view(ctx: *PsCtx, b: *PsBuffer, esize: i32, file: const *char, line: i32) -> *PsList
+# 135.8: a window over a REGION. `cnt < 0` = everything from `off`.
+def ps_buffer_view_at(ctx: *PsCtx, b: *PsBuffer, esize: i32, off: i64, cnt: i64, file: const *char, line: i32) -> *PsList
 # Parse into `any` (39.2): an object becomes `Dict<str, any>`, an array a
 # `List<any>`, and the leaves are str, float, bool and None. There is no schema
 # and no type to declare — reading it back is `as`, which checks (55.2), and
