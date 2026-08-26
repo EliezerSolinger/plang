@@ -12,6 +12,7 @@
 #   - nst/JSONTestSuite (MIT) — 318 files, the name carries the verdict
 #   - nodejs/llhttp (MIT) — 155 HTTP fixtures, input plus expected events
 #   - web-platform-tests url/resources (BSD-3) — 891 URL cases
+#   - http2jp/hpack-test-case (MIT) — 47 142 HPACK vectors from 14 encoders
 #   - tc39/test262 built-ins/Promise (BSD-3) — read, not run: the source of the
 #     ordering cases hand-ported into tests/conformance/promise/
 #
@@ -68,6 +69,21 @@ if [ ! -d external/llhttp ] || [ -z "$(ls external/llhttp 2>/dev/null)" ]; then
 fi
 
 # web-platform-tests (BSD-3): the URL corpus every browser is measured against.
+# http2jp/hpack-test-case (MIT): 47 142 vectors, `story_NN.json` per encoder.
+# The cases of one story share a dynamic table, which is what makes it measure
+# eviction instead of only the happy path.
+if [ ! -d external/hpack ] || [ -z "$(ls external/hpack 2>/dev/null)" ]; then
+    tmp=$(mktemp -d)
+    git clone --depth 1 https://github.com/http2jp/hpack-test-case.git "$tmp"
+    mkdir -p external/hpack
+    for d in "$tmp"/*/; do
+        [ -f "$d/story_00.json" ] || continue
+        cp -r "$d" external/hpack/
+    done
+    cp "$tmp"/LICENSE external/hpack/ 2>/dev/null || true
+    git -C "$tmp" rev-parse HEAD > external/hpack/.commit
+    rm -rf "$tmp"
+fi
 if [ ! -d external/wpt-url ] || [ -z "$(ls external/wpt-url 2>/dev/null)" ]; then
     tmp=$(mktemp -d)
     git clone --depth 1 --filter=blob:none --sparse https://github.com/web-platform-tests/wpt.git "$tmp"

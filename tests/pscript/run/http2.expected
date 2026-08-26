@@ -1,0 +1,24 @@
+o cliente abre com: PRI 4/0
+frames lidos: 1
+e nos confirmamos: 4/0
+a janela inicial do par passou a 65536
+stream 1 saiu como 1/1
+  campo :method = GET
+  campo :scheme = https
+  campo :authority = example.com
+  campo :path = /index.html
+  campo accept = */*
+terminou: True
+status 200 corpo ola mundo
+content-type: text/plain
+repetido junta-se: a, b
+e demos credito de volta: 8/0
+recusa continuation: http2: a header block was interrupted: only CONTINUATION for stream 1 may follow an unfinished HEADERS
+recusa window zero: http2: a WINDOW_UPDATE of zero says nothing and is an error
+recusa enchimento: http2: the padding of a frame is longer than the frame
+recusa push: http2: a PUSH_PROMISE arrived after SETTINGS_ENABLE_PUSH was 0
+recusa indice 0: hpack: index 0 does not name a header field (RFC 7541 6.1)
+recusa EOS: hpack: the EOS symbol is not allowed inside a Huffman string (RFC 7541 5.2)
+C.2.1: custom-key = custom-header | tabela: 55
+C.2.4: :method = GET
+C.4.1: 4 campos, o ultimo: :authority = www.example.com

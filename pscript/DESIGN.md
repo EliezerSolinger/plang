@@ -7739,3 +7739,143 @@ desencontro e a seguir esconde-o. O tamanho já lá estava — a sema normaliza 
 `count` para literal (33.4) — e só não estava a ser escrito.
 
 Antes do fim da sema não há número para imprimir, e aí a forma nua é a honesta.
+
+---
+
+## Bateria 158 — o HTTP/2, dentro do pacote que já existia (2026-08-26)
+
+Pedido teu, e a correcção a meio que mudou o desenho:
+
+> *"http2 não precisa ser um pacote novo, dá pra melhorar o pacote que já temos"*
+
+Está certo, e a razão só aparece ao escrever: **qual das versões foi falada é um
+RESULTADO, não uma escolha.** Quem pede um URL quer o corpo; se o par respondeu
+com uma linha de estado ou com um frame HEADERS é coisa que o ALPN decidiu uma
+camada abaixo. Dois pacotes empurrariam essa decisão para cima, para quem não
+tem como a tomar.
+
+E há uma segunda razão, que é o que o `h2.psc` acaba a devolver: o **mesmo
+`Response`** que o HTTP/1 produz. Um pacote à parte teria o seu próprio tipo, e
+todo o código acima passaria a ter duas versões de tudo — que é exactamente o
+argumento da 153.1 sobre o TLS, aplicado outra vez.
+
+### 158.1 — dois módulos, e a fronteira entre eles é o RFC
+
+`packages/http/hpack.psc` (RFC 7541) e `packages/http/h2.psc` (RFC 9113). São
+dois documentos e são dois ficheiros; o HPACK não sabe o que é um stream e o h2
+não sabe o que é um código de Huffman.
+
+### 158.2 — as tabelas foram EXTRAÍDAS do RFC, e conferidas
+
+Escrever à mão 61 entradas estáticas e 257 símbolos de Huffman é como um
+descodificador ganha uma linha errada que só alguns pares tropeçam. Aqui foram
+lidas do texto da RFC 7541 e verificadas antes de virarem código:
+
+* 61 entradas estáticas, índices 1..61 sem furos;
+* 257 símbolos, comprimentos 5..30, **livre de prefixos**;
+* o exemplo do próprio RFC reproduzido (`/` é 0x18 em seis bits);
+* e a verificação que valeu mais do que todas: **a reconstrução CANÓNICA dá os
+  257 códigos exactamente**, zero divergências. É isso que permite descodificar
+  com 31 entradas de contabilidade em vez de uma tabela de 65 536 — e é uma
+  propriedade que se confere, não uma que se assume.
+
+### 158.3 — as recusas, e cada uma tem um CVE atrás
+
+Nenhuma destas é pedantismo:
+
+* **CONTINUATION não pode ser interrompida.** O descodificador HPACK é estado da
+  LIGAÇÃO, portanto um bloco de cabeçalhos partido por outro tráfego não tem
+  significado definido. Quem o permite pode ser alimentado com CONTINUATION para
+  sempre num stream que nunca abre — um ataque de memória sem pedido nenhum por
+  trás (a família CVE-2024-27316). A verificação está **antes** do despacho de
+  propósito: colocada depois, já teria deixado passar um PING;
+* **`WINDOW_UPDATE` de zero é erro, e `DATA` de zero bytes é legal.** A
+  assimetria é a parte que se esquece;
+* **enchimento maior do que o frame** é erro de protocolo e não leitura curta.
+  Ao contrário é como se convence um analisador a ler para lá do fim;
+* **o EOS não aparece dentro de uma string Huffman**, e o enchimento final tem de
+  ser os bits altos do EOS e ter menos de oito bits — oito bits de enchimento são
+  um byte que podia não lá estar;
+* **índice 0 não nomeia campo nenhum**, e um índice além do fim também não. As
+  tabelas já divergiram: continuar é decodificar lixo numa ligação ainda aberta.
+
+### 158.4 — um defeito que a releitura apanhou antes de o corpus o apanhar
+
+O `find` do codificador tratava um `value` vazio como "qualquer valor serve", o
+que servia para a busca só-por-nome. Mas **um valor vazio é um valor**: um
+`:path` vazio casava com a entrada 4 e ia para o fio como `:path: /` — um pedido
+diferente, sem nada nos registos. Passou a haver `find_pair` e `find_name`, com
+os nomes a dizer qual é qual.
+
+### 158.5 — o oráculo: 47 142 vectores, catorze codificadores
+
+O corpus do `http2jp/hpack-test-case` entra como quarto corpus externo, ao lado
+do JSON, do llhttp e do WPT. Duas coisas fazem dele um teste a sério:
+
+* **a tabela dinâmica é da HISTÓRIA, não do caso.** Cada `story_NN.json` é uma
+  ligação: os casos partilham uma tabela por ordem de `seqno`, e um defeito de
+  despejo aparece como o caso 40 a decodificar lixo depois de 39 perfeitos.
+  Decodificar cada caso com tabela nova passa e não mede nada;
+* **catorze implementações codificaram os mesmos cabeçalhos de catorze
+  maneiras** — com Huffman e sem, com a tabela redimensionada a meio, só com a
+  estática. O nosso descodificador encontra todas as estratégias que alguém
+  achou que valia a pena publicar, e não só a que o nosso codificador produz.
+
+### 158.6 — o algoritmo foi validado ANTES de compilar, e isso separou duas buscas
+
+O `verify-all` da fase anterior estava a correr, e a árvore não se toca com um
+arreio a ler. Em vez de esperar parado, transcrevi o algoritmo — linha a linha,
+o mesmo laço canónico, a mesma tabela dinâmica, as mesmas recusas — para Python
+e corri-o contra o corpus: **47 142 de 47 142, zero falhas.**
+
+Isso não é uma curiosidade de método. Separa duas buscas que de outra forma se
+confundem: um caso que falhe depois disto é um erro de TRADUÇÃO para pscript, e
+não um erro de DESENHO — e essas duas coisas procuram-se em sítios diferentes. É
+a mesma jogada do oráculo rápido que a bateria do QBE registou.
+
+### 158.7 — o defeito que o corpus achou não era do HTTP/2, era do COMPILADOR
+
+O portão passou a compilar e morreu com SIGSEGV. Como o algoritmo já estava
+validado em Python (158.6), a busca era estreita — e o que ela encontrou não
+estava no HPACK.
+
+`PSCRIPT_GC_STRESS=1` tornou-o determinístico, o rastro deu a linha (a 157, no
+mesmo dia), e o ASan deu o resto: **`heap-use-after-free` dentro do
+`ps_forward`**, a seguir um slot do frame. Uma instrumentação temporária no
+coletor nomeou-o: *slot 0 de `hpack__decode`* — o primeiro argumento.
+
+O C gerado diz o resto:
+
+    hpack__Table *__ord275 = NULL;
+    PsBytes    *__ord276 = NULL;
+    PsList *__it274 = ((__ord275 = __fr->t,
+                        __ord276 = unhex(__ctx, __fr->hx)),
+                       hpack__decode(__ctx, __ord275, __ord276));
+
+O compilador **liga cada argumento a um temporário com nome** exactamente para
+que ele sobreviva a uma colecção dentro do argumento seguinte — o comentário do
+`lower_ordered` explica-o em vinte linhas e diz que foi o corpus do WPT que o
+ensinou. Mas aqui os temporários **não estão em frame nenhum**: o `__ord276`
+aloca, o coletor corre, actualiza o `__fr->t` e deixa o `__ord275` a apontar
+para a morada que o objecto teve.
+
+A causa é de uma linha. O `lower_try` embrulha CADA instrução do corpo num
+`if <bandeira>:`, e construía esse bloco à mão:
+
+    blk: *Block = self->a->alloc(sizeof(Block))
+    blk->stmts = one.data
+
+Sem `frame_wrap`. E é para dentro dele que os temporários da instrução caem.
+
+O mais instrutivo é que o ficheiro já tinha sido mordido por isto: o bloco do
+`try` PASSA pelo `frame_wrap`, com um comentário a explicar que sem ele *"um
+local coletado de um `try` era um local que o coletor nunca via"*. A correcção
+anterior tratou o bloco de fora e deixou os de dentro — e a diferença só aparece
+quando a colecção calha na janela entre dois argumentos.
+
+**O alcance é geral e não é do HTTP/2:** qualquer `f(a, g(b))` dentro de um
+`try:` em que `a` seja coletado e `g` aloque. Silencioso até uma colecção calhar
+ali — que é a definição de um defeito que espera.
+
+Depois da correcção: **47 142/47 142 concordam**, o `GC_STRESS` passa, e o
+llhttp (202/202) e o WPT (890/890) não mexeram.

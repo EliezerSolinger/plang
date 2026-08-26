@@ -6,5 +6,5 @@
   "deps": {},
   "system": {},
   "toolchain": ">= 0.1.0",
-  "description": "incremental HTTP/1.1: a state machine over bytes, checked against llhttp's fixtures"
+  "description": "HTTP/1.1 and HTTP/2 over one surface: an incremental parser checked against llhttp, and HPACK plus the frame layer checked against 47142 vectors"
 }

@@ -1,0 +1,6 @@
+# http2jp/hpack-test-case — o que esta implementação sabe que não faz.
+# Um `<case-id> <razão>` por linha. Um skip é contado e impresso, nunca dobrado
+# em silêncio no resultado, e um skip cujo caso passa a concordar é reportado
+# como STALE para a nota ser apagada com o problema.
+#
+# Resultado sem estes: ver o cabeçalho da bateria 158.

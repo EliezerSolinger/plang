@@ -18,6 +18,11 @@
 #           runs. Untrusted bytes off a socket: the most exposed code we have.
 #   url   — web-platform-tests (BSD-3), 891 cases, the corpus every browser is
 #           measured on. 267 of them exist to be REFUSED.
+#   hpack — http2jp/hpack-test-case (MIT), 47 142 vectors from FOURTEEN
+#           implementations. The dynamic table is shared across the cases of one
+#           story, so this measures eviction and not just the happy path — and
+#           fourteen encoders means every strategy anybody shipped, not only the
+#           one our own encoder happens to emit.
 #
 # GATING, like tests/clang-compare.sh: a single unexplained disagreement fails.
 # What we knowingly do not do lives in `<corpus>.skips`, one line each with the
@@ -85,12 +90,26 @@ run_url() {
     python3 "$CONF/compare.py" url "$OUT/url.want" "$OUT/url.got" "$CONF/url.skips" || FAIL=1
 }
 
-for s in ${*:-json http url}; do
+run_hpack() {
+    printf '\n\033[1m== hpack — http2jp/hpack-test-case ==\033[0m\n'
+    have hpack || { skip "no corpus (bash tests/fetch-external.sh)"; return; }
+    python3 "$CONF/hpack_digest.py" "$EXT/hpack" "$OUT/hpack.want" "$OUT/hpack.wire" > "$OUT/hpack.digest" 2>&1 || {
+        bad "hpack: could not read the corpus — see $OUT/hpack.digest"; return; }
+    build hpack_conform || return
+    if ! "$OUT/hpack_conform" "$OUT/hpack.wire" > "$OUT/hpack.got" 2>&1; then
+        bad "hpack: the driver died"
+        return
+    fi
+    python3 "$CONF/compare.py" hpack "$OUT/hpack.want" "$OUT/hpack.got" "$CONF/hpack.skips" || FAIL=1
+}
+
+for s in ${*:-json http url hpack}; do
     case $s in
-        json) run_json ;;
-        http) run_http ;;
-        url)  run_url ;;
-        *) echo "unknown corpus '$s' (json|http|url)"; exit 2 ;;
+        json)  run_json ;;
+        http)  run_http ;;
+        url)   run_url ;;
+        hpack) run_hpack ;;
+        *) echo "unknown corpus '$s' (json|http|url|hpack)"; exit 2 ;;
     esac
 done
 

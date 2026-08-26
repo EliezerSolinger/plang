@@ -7840,9 +7840,16 @@ struct PsLow:
                 one: Vec<*Stmt>
                 one.init()
                 self->stmt(s->body->stmts[i], &one)
-                blk: *Block = self->a->alloc(sizeof(Block))
-                blk->stmts = one.data
-                blk->n = one.len
+                # ... and THROUGH `frame_wrap`, for the same reason the try's own
+                # block goes through it (158.7). Lowering a statement hoists the
+                # temporaries its expressions need — an argument bound so it
+                # survives a collection inside the NEXT argument is exactly such
+                # a temporary — and they land here, inside this guard. Built by
+                # hand this block had no frame, so those bindings were invisible
+                # to the collector and the whole point of binding them was lost:
+                # `f(a, g(b))` inside a `try` passed `a`'s old address whenever
+                # `g` collected. Found by the HPACK corpus under `GC_STRESS`.
+                blk: *Block = self->frame_wrap(&one, None, 0, s->body->stmts[i]->pos)
                 g: *Stmt = st_new(self->a, ST_IF, s->pos)
                 g->conds = self->a->alloc(sizeof(*g->conds))
                 g->conds[0] = ex_new(self->a, EX_IDENT, s->pos)

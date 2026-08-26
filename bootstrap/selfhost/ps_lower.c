@@ -7980,9 +7980,7 @@ static void PsLow_lower_try(PsLow *self, PsStmt *s, Vec_pStmt *out) {
             Vec_pStmt one;
             Vec_pStmt_init(&one);
             PsLow_stmt(self, s->body->stmts[i], &one);
-            Block *blk = Arena_alloc(self->a, sizeof(Block));
-            blk->stmts = one.data;
-            blk->n = one.len;
+            Block *blk = PsLow_frame_wrap(self, &one, NULL, 0, s->body->stmts[i]->pos);
             Stmt *g = st_new(self->a, ST_IF, s->pos);
             g->conds = Arena_alloc(self->a, sizeof(*g->conds));
             g->conds[0] = ex_new(self->a, EX_IDENT, s->pos);
