@@ -517,7 +517,16 @@ private def emit_expr(b: *StrBuf, e: *Expr, min_prec: i32):
             b->printf(" %s ", op_cstr(e->op))
             emit_expr(b, e->rhs, PR_ASSIGN)
         case EX_COMMA:
-            emit_expr(b, e->lhs, PR_ASSIGN)
+            # 162.1: o filho ESQUERDO sai sem parênteses, porque a vírgula é
+            # associativa à esquerda em C — `a, b, c` já lê como `(a, b), c`.
+            #
+            # Não é cosmética. Uma lista literal baixa para uma cadeia de
+            # vírgulas com um elemento por nó, e um par de parênteses por nó
+            # dava 258 níveis de aninhamento numa tabela de 257 entradas — que
+            # é o `-fbracket-depth=256` do clang, e foi o que impediu a tabela
+            # do HPACK de compilar no macOS. O direito continua entre
+            # parênteses: aí eles mudam a associação.
+            emit_expr(b, e->lhs, PR_COMMA)
             b->puts(", ")
             emit_expr(b, e->rhs, PR_ASSIGN)
         case EX_COMPOUND:

@@ -612,7 +612,7 @@ static void emit_expr(StrBuf *b, Expr *e, int32_t min_prec) {
             break;
         }
         case EX_COMMA: {
-            emit_expr(b, e->lhs, PR_ASSIGN);
+            emit_expr(b, e->lhs, PR_COMMA);
             StrBuf_puts(b, ", ");
             emit_expr(b, e->rhs, PR_ASSIGN);
             break;

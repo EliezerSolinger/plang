@@ -470,6 +470,7 @@ struct PsSema:
     private def ceval_binop(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
     private def ceval_aug_op(self: *PsSema, op: i32, pos: Pos) -> i32
     private def ceval_step(self: *PsSema, pos: Pos)
+    private def cfold(self: *PsSema, e: *PsExpr) -> *PsExpr
     private def desugar_sequence(self: *PsSema, d: *PsDecl)
     private def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char)
     private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
@@ -5759,6 +5760,52 @@ struct PsSema:
     # and a comparison between two literals — which is everything a folded
     # predefine or an `is_defined` can leave behind. Anything else is "unknown",
     # and a `const if` says so instead of guessing.
+    # 163.2 — dobrar uma expressão de LITERAIS, sem levantar.
+    #
+    # O `const_truth` conhecia `==` e `!=` entre literais e mais nada, portanto
+    # um `const if fib(10) > 50` morria a dizer que a condição não era conhecida
+    # em compilação — quando o `check_expr` já tinha substituído o `fib(10)` por
+    # `55`. Faltava a comparação, e faltava a aritmética: `12 + 1` também não
+    # virava `13`.
+    #
+    # **A aritmética não é reescrita aqui.** Ela vive no `ceval_binop`, com o
+    # piso e o resto do Python que a 159.2 fixou, e uma segunda cópia era a
+    # forma exacta de as duas divergirem um dia. O que este faz é PRÉ-CONFERIR:
+    # só chama o avaliador quando os dois lados já são literais e o operador é
+    # um que ele trata — e nesse caso ele não pode levantar. Tudo o resto
+    # devolve None, que quem chama lê como "não é constante".
+    private def cfold(self: *PsSema, e: *PsExpr) -> *PsExpr:
+        if e == None:
+            return None
+        if e->kind == PE_INT or e->kind == PE_FLOAT or e->kind == PE_BOOL:
+            return e
+        if e->kind == PE_UNARY and e->op == TK_MINUS:
+            u: *PsExpr = self->cfold(e->lhs)
+            if u == None:
+                return None
+            if u->kind == PE_FLOAT:
+                return cmk_float(self->a, -cnum(u), e->pos)
+            return cmk_int(self->a, -cint(u), e->pos)
+        if e->kind != PE_BINARY:
+            return None
+        # os operadores que o `ceval_binop` computa sobre dois números
+        if not (e->op == TK_PLUS or e->op == TK_MINUS or e->op == TK_STAR
+                or e->op == TK_FLOORDIV or e->op == TK_PERCENT
+                or e->op == TK_LT or e->op == TK_LE or e->op == TK_GT or e->op == TK_GE
+                or e->op == TK_EQ or e->op == TK_NE):
+            return None
+        l: *PsExpr = self->cfold(e->lhs)
+        r: *PsExpr = self->cfold(e->rhs)
+        if l == None or r == None:
+            return None
+        # a divisão inteira por zero é a única coisa que o avaliador recusaria,
+        # e recusá-la aqui em silêncio seria esconder um erro real — mas numa
+        # condição de `const if` o que se quer dizer é "não é constante", e a
+        # mensagem de quem chama já é essa
+        if (e->op == TK_FLOORDIV or e->op == TK_PERCENT) and cnum(r) == 0.0:
+            return None
+        return self->ceval_binop(e->op, l, r, e->pos)
+
     private def const_truth(self: *PsSema, e: *PsExpr, ref ok: bool) -> bool:
         if e == None:
             ok = False
@@ -5776,6 +5823,11 @@ struct PsSema:
                 ok = False
                 return False
             case PE_BINARY:
+                # 163.2: uma comparação ou uma conta entre literais É constante,
+                # e o avaliador que já existe sabe computá-la
+                fv9: *PsExpr = self->cfold(e)
+                if fv9 != None:
+                    return cbool(fv9)
                 if e->op == TK_AND:
                     l: bool = self->const_truth(e->lhs, ref ok)
                     r: bool = self->const_truth(e->rhs, ref ok)

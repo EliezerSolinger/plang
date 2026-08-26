@@ -757,9 +757,29 @@ def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: cons
     # yet — where the master sees an immediate hangup instead of the child's
     # output. One open reference for the connection's whole life closes that
     # window for good.
-    wfd: int = open(sname, O_RDWR | O_NOCTTY)
-    if wfd >= 0:
-        ioctl(wfd, PS_TIOCSWINSZ, &ws)
+    # 163.1: e os dois núcleos divergem AQUI, portanto a divergência fica
+    # escrita em vez de arranjada.
+    #
+    # No Linux o `TIOCSWINSZ` assenta no MESTRE, e o pai nunca abre o slave —
+    # que era o que este ficheiro fazia antes do porte. No macOS o mestre
+    # recusa-o com ENOTTY, e é preciso abrir o slave para o fazer.
+    #
+    # Mas abrir e fechar o slave no pai leva a contagem de referências de 0 a 1
+    # e de volta a 0, e **é essa transição que levanta o HUP no mestre**. Por
+    # isso, no macOS, o pai fica com ele: enquanto o filho viver a contagem
+    # nunca volta a zero.
+    #
+    # E é precisamente por isso que ele NÃO pode ficar aberto no Linux: aí o pai
+    # é a única referência que sobra quando o filho sai, e o mestre nunca vê o
+    # fim. O `pstudio` dava o filho como vivo para sempre — 11 casos passaram a
+    # 10, e foi assim que isto apareceu.
+    wfd: int = -1
+    const if __PLANG_LINUX__:
+        ioctl(m, PS_TIOCSWINSZ, &ws)
+    else:
+        wfd = open(sname, O_RDWR | O_NOCTTY)
+        if wfd >= 0:
+            ioctl(wfd, PS_TIOCSWINSZ, &ws)
 
     fflush(stdout)
     fflush(stderr)
@@ -809,16 +829,19 @@ def ps_os_pty_resize(ctx: *PsCtx, c: *PsConn, cols: i64, rows: i64):
     This is the one thing a terminal needs that a socket does not, and it is why
     it is a function in `os` rather than a method on a `Conn`: a socket has no
     size, and giving every socket a `resize` would be lying about what one is."""
-    if c == None or c->is_open == 0 or c->pty_slave_fd < 0:
+    if c == None or c->is_open == 0:
         return
     ws: winsize
     memset(&ws, 0, sizeof(ws))
     ws.ws_col = u16(cols if cols > 0 else 80)
     ws.ws_row = u16(rows if rows > 0 else 24)
-    # the SLAVE reference kept since spawn_pty, not c->fd (the master) — see
-    # the struct comment on `pty_slave_fd`: macOS's ptmx master does not
-    # accept TIOCSWINSZ at all.
-    ioctl(c->pty_slave_fd, PS_TIOCSWINSZ, &ws)
+    # 163.1: no macOS é o SLAVE guardado desde o `spawn_pty` — o mestre do
+    # `ptmx` de lá recusa o `TIOCSWINSZ` com ENOTTY. No Linux é o mestre, e o
+    # pai não tem slave nenhum de propósito (ver o `spawn_pty`).
+    if c->pty_slave_fd >= 0:
+        ioctl(c->pty_slave_fd, PS_TIOCSWINSZ, &ws)
+    else:
+        ioctl(c->fd, PS_TIOCSWINSZ, &ws)
 
 
 def ps_os_pty_pid(ctx: *PsCtx, c: *PsConn) -> i64:

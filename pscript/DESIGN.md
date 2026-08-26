@@ -8178,3 +8178,115 @@ Portões: `tests/pscript/run/blobbridge.psc` (a travessia nos dois sentidos, mai
 uma vista), duas recusas em `tests/pscript/bad/cbuf_*`, e o tipo em si no
 `tests/stl/main.p` — onde o `slice(6, 99)` limita a 2 e o `copy_from` de três
 bytes para dois devolve 2.
+
+---
+
+## Bateria 163 — o que o porte para macOS partiu no Linux, e a dobra que faltava (2026-08-26)
+
+### 163.1 — a correcção do pty servia um núcleo e partia o outro
+
+O porte da 162 resolveu um problema real: no macOS, fechar a única referência ao
+lado *slave* do pty antes de o filho abrir a dele manda um HUP imediato ao
+mestre. A resposta foi o pai ficar com o *slave* aberto durante toda a vida da
+ligação.
+
+**No Linux isso impede o mestre de ver o fim.** Quando o filho sai, o pai é a
+única referência que sobra, e o mestre nunca reporta EOF: o `pstudio` dava o
+filho como vivo para sempre. Onze casos passaram a dez, e foi a diferença de uma
+palavra num teste — `the child is gone False` onde tinha de ser `True`.
+
+A causa está na contagem de referências, e os dois núcleos divergem **mesmo**:
+
+* o que levanta o HUP no macOS é a transição **1 → 0** do lado *slave*. Nunca
+  abrir o *slave* no pai — que era o que este ficheiro fazia antes do porte —
+  não a provoca, porque a contagem nunca sobe;
+* e o `TIOCSWINSZ` do macOS **recusa o mestre com ENOTTY**, que é a razão pela
+  qual o *slave* teve de ser aberto lá. No Linux ele assenta no mestre.
+
+Portanto a divergência fica **escrita** em vez de arranjada, com o mesmo
+`const if __PLANG_LINUX__` que a 162 já usara para o valor do próprio
+`TIOCSWINSZ`: no Linux o pai não abre *slave* nenhum e redimensiona pelo mestre;
+no macOS abre-o, guarda-o, e redimensiona por ele.
+
+Vale dizer o que isto ensina, porque é o oposto do que costuma ensinar-se:
+**uma correcção que serve as duas plataformas com um só caminho nem sempre
+existe.** Aqui os dois núcleos discordam sobre um facto, e o código que finge que
+não discordam parte um dos dois.
+
+### 163.2 — a mesma dobra por ligar, pela segunda vez
+
+`const if fib(10) > 50` morria a dizer que a condição não era conhecida em
+compilação — **depois de o `check_expr` já ter substituído o `fib(10)` por
+`55`**. O `const_truth` conhecia `==` e `!=` entre literais e mais nada.
+
+Faltavam duas coisas e não uma: as quatro comparações, **e a aritmética** —
+`12 + 1` também não dava `13`, portanto até o `==` falhava com uma conta pelo
+meio. Em P tudo isto já funcionava.
+
+**A aritmética não foi reescrita**, e essa é a parte que interessa. Ela vive no
+avaliador da 159, com o piso e o resto do Python que a 39.1 fixou; uma segunda
+cópia era a maneira exacta de as duas divergirem um dia — e esta sessão já viu o
+que uma lista escrita duas vezes faz (160.2). O que se acrescentou **pré-confere**
+e delega: só chama o avaliador quando os dois lados já são literais e o operador
+é um que ele trata, caso em que ele não pode levantar.
+
+E é a **segunda vez** que a mesma dobra fica por ligar. A 159.3 já tinha
+registado que eu a tinha ligado ao tamanho de um `T[N]` e não fui ver mais nada;
+o `const if` era o outro consumidor de constantes, e ficou. A lição não é sobre
+esta dobra: é que quem acrescenta um produtor de constantes tem de ir procurar os
+CONSUMIDORES, e eles não estão numa lista.
+
+### 163.3 — o que continua fechado, e a razão é boa
+
+Um `const if` **ao nível de topo** continua a aceitar só um nome, `defined(...)`,
+os operadores lógicos e `== "..."` — nas duas linguagens. E ali a restrição não é
+omissão: o `const if` de topo guarda também o `include <h>`, que é o
+pré-processador de C a correr **no parser**, antes de existirem tipos ou
+avaliador. O ramo perdedor tem de ser deitado fora antes disso, senão o macOS
+tenta ler um header que não tem.
+
+Fica dito porque a restrição é cobrada a TODOS os `const if` de topo, incluindo
+os que não guardam `include` nenhum. Alargá-la significaria duas espécies de
+`const if` com regras diferentes, e isso é uma decisão, não uma correcção.
+
+### 163.4 — o levantamento: o que o P tem e o pscript não, medido
+
+Pedido teu, a seguir às duas correcções: *"faça um levantamento de tudo o que tem
+no P que falta no PScript ou que está implementado errado ou parcialmente"*.
+
+Feito pelo método desta sessão — **trinta programas mínimos, os dois compiladores
+lado a lado**, e não a leitura da documentação. Foi isso que separou as duas
+categorias que interessam, e que nenhuma tabela escrita à mão teria separado.
+
+**O que o P tem e o pscript não** — e nada disto é acidente:
+
+| | nota |
+|---|---|
+| `goto` / rótulos, `do: ... while`, campos de bits | |
+| `union` | e no P está **deprecado** |
+| ponteiros `*T`, `&x`, `*p` | **de propósito** (20.1: tudo é referência) |
+| `sizeof` / `_Alignof` | não há tamanhos a expor |
+| `inline` | e medido: o `-O2` já inlina uma função de pscript, contexto e verificações de excepção incluídos |
+| `declare` / `implement` | modelo diferente — o pscript monomorfiza sozinho |
+| `include <h>` com ponteiros | **de propósito** (45.5): escalares e macros numéricas atravessam, `strlen` não |
+
+**O que está PARCIAL no pscript** — e quatro das cinco são dívida do avaliador
+que a 159 acabou de escrever:
+
+| | pscript | P |
+|---|---|---|
+| `const def` com `//=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` | ❌ | ✅ |
+| `const def` com unário `~` | ❌ | ✅ |
+| `const def` com `%` e `//` sobre floats | ❌ | ✅ |
+| `match` sobre `float` | ❌ | ✅ |
+
+**E a distinção que torna isto acionável em vez de deprimente:** `~`, `//=` e
+`&=` funcionam todos **em tempo de execução** no pscript. Não é a linguagem que
+não os tem — é o avaliador de compilação que não os computa, e ele diz-o na cara
+(*"a `const def` does not compute this operator yet"*). São umas trinta linhas, e
+o padrão é o mesmo da 163.2: **alargar a aritmética que existe, nunca escrever
+uma segunda.**
+
+**Divergências deliberadas**, listadas para não entrarem na conta: a divisão (o P
+é C, o pscript é Python — 39.1), o transbordo (o pscript verifica, o P não), e
+`T?`/`??`/`?.` contra o `ref T` não-nulável do P (69).
