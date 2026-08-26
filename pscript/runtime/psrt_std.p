@@ -994,7 +994,7 @@ private def re_hex(c: i32) -> i32
 private def re_read_uni(P: *ReParser) -> i32
 private def re_class_add_uni(c: *ReClass, which: i32)
 private def re_cache_of(ctx: *PsCtx) -> *ReCache
-private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, from: i32, anchored: bool, file: const *char, line: i32) -> *PsList
+private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, from: i32, anchored: bool, file: const *char, line: i32) -> *PsList
 private def re_group_by_name(p: *ReProg, nm: const *char) -> i32
 
 # `a|b` — o `SPLIT` fica ANTES do primeiro ramo e o `JMP` no fim dele, e os dois
@@ -1862,16 +1862,55 @@ private def re_bad(ctx: *PsCtx, p: *ReProg, pat: *PsStr, file: const *char, line
 # 41.2, e a assinatura NÃO MUDA: os grupos, ou None. O [0] é o casamento inteiro,
 # e um grupo que não casou dá string vazia — que é o que já era, portanto nenhum
 # programa que existe hoje muda uma linha.
-def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
-    return ps_re_find(ctx, pattern, text, 0, True, file, line)
-
-def ps_re_search(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
-    return ps_re_find(ctx, pattern, text, 0, False, file, line)
-
-private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, from: i32, anchored: bool,
-                       file: const *char, line: i32) -> *PsList:
+# 152.8: o programa a usar. Já compilado quando veio de um `Pattern`, ou da
+# cache quando o padrão foi escrito no sítio. Exactamente um dos dois é None, e é
+# quem chama que o garante — não há caminho em que os dois cheguem.
+private def re_prog_for(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, file: const *char, line: i32) -> *ReProg:
+    if pat != None:
+        return (*ReProg)(pat->prog)
     p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
     if re_bad(ctx, p, pattern, file, line):
+        return None
+    return p
+
+
+# 152.8: compila UMA vez e guarda. O `*ReProg` é malloc'd e não é do coletor,
+# portanto sai com um finalizador (136) — a mesma forma do `Mapping` e do
+# `Watcher`. E um padrão que não compila levanta AQUI, onde `re.compile` foi
+# escrito, em vez de três funções à frente na primeira vez que alguém o usar.
+def ps_re_compile(ctx: *PsCtx, pattern: *PsStr, file: const *char, line: i32) -> *PsPattern:
+    p: *ReProg = re_compile(pattern->data, i32(pattern->len))
+    if p == None or p->ok == 0:
+        _ = re_bad(ctx, p, pattern, file, line)
+        return None
+    pt: *PsPattern = ps_alloc(ctx, sizeof(PsPattern), PS_TY_PATTERN)
+    pt->prog = (*void)(p)
+    pt->src = pattern
+    ps_add_final(ctx, (*PsObj)(pt), ps_pattern_release)
+    return pt
+
+
+def ps_pattern_release(o: *void):
+    pt: *PsPattern = (*PsPattern)(o)
+    if pt->prog != None:
+        re_free((*ReProg)(pt->prog))
+        pt->prog = None
+
+
+def ps_pattern_src(pt: *PsPattern) -> *PsStr:
+    return pt->src
+
+
+def ps_re_match(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    return ps_re_find(ctx, pattern, pat, text, 0, True, file, line)
+
+def ps_re_search(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    return ps_re_find(ctx, pattern, pat, text, 0, False, file, line)
+
+private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, from: i32, anchored: bool,
+                       file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_prog_for(ctx, pattern, pat, file, line)
+    if p == None:
         return None
     ncap: i32 = (p->ngroup + 1) * 2
     cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
@@ -1903,9 +1942,9 @@ private def ps_re_find(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, from: i32, an
 # Toda a gente faz isto, e uma implementação que não o faça pendura o programa
 # no primeiro padrão que possa casar nada.
 
-def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
-    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
-    if re_bad(ctx, p, pattern, file, line):
+def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_prog_for(ctx, pattern, pat, file, line)
+    if p == None:
         return None
     ncap: i32 = (p->ngroup + 1) * 2
     cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
@@ -1938,9 +1977,9 @@ def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char,
 # As posições, quatro números por casamento: início e fim do casamento inteiro,
 # e depois cada grupo. Uma lista plana e não uma de listas porque é o que o
 # `sub` precisa e é o que não aloca uma lista por casamento.
-def ps_re_finditer(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList:
-    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
-    if re_bad(ctx, p, pattern, file, line):
+def ps_re_finditer(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList:
+    p: *ReProg = re_prog_for(ctx, pattern, pat, file, line)
+    if p == None:
         return None
     ncap: i32 = (p->ngroup + 1) * 2
     cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
@@ -2022,10 +2061,10 @@ private def re_group_by_name(p: *ReProg, nm: const *char) -> i32:
             return i
     return -1
 
-def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, rep: *PsStr, text: *PsStr, count: i64,
+def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, rep: *PsStr, text: *PsStr, count: i64,
               file: const *char, line: i32) -> *PsStr:
-    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
-    if re_bad(ctx, p, pattern, file, line):
+    p: *ReProg = re_prog_for(ctx, pattern, pat, file, line)
+    if p == None:
         return ps_str_new(ctx, "", 0)
     ncap: i32 = (p->ngroup + 1) * 2
     cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))
@@ -2068,10 +2107,10 @@ def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, rep: *PsStr, text: *PsStr, count: i6
         out = ps_str_concat(ctx, out, ps_str_new(ctx, text->data + at, usize(n - at)))
     return out
 
-def ps_re_split(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, count: i64,
+def ps_re_split(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, count: i64,
                 file: const *char, line: i32) -> *PsList:
-    p: *ReProg = re_cache_get(re_cache_of(ctx), pattern->data, i32(pattern->len))
-    if re_bad(ctx, p, pattern, file, line):
+    p: *ReProg = re_prog_for(ctx, pattern, pat, file, line)
+    if p == None:
         return None
     ncap: i32 = (p->ngroup + 1) * 2
     cap: *i32 = (*i32)(malloc(usize(ncap) * sizeof(i32)))

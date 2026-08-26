@@ -8001,3 +8001,78 @@ codificador escrito e conferido.
 E uma armadilha que não é minha e volta sempre: **o teste foi escrito antes do
 reseed**, e o seed comitado não conhecia `Sequence`. A ordem é a de sempre —
 mudar o compilador, `./reseed.sh`, e só então acrescentar os testes.
+
+---
+
+## Bateria 160 — o `Pattern`, e o aviso que estava escrito no sítio (2026-08-26)
+
+A 152.8 tinha-a deixado dita em três linhas: *"Hoje a cache faz o trabalho dele —
+um padrão num laço compila uma vez — mas quem quiser passar um padrão como valor
+ainda não tem tipo para isso."*
+
+### 160.1 — o que muda é o VALOR, e não a compilação
+
+A cache das 24 entradas continua onde estava e continua a servir quem escreve o
+padrão no sítio. O que isto acrescenta é **um valor**: um padrão que mora num
+campo de `struct`, se passa a uma função, se devolve, entra numa lista. E com ele
+a garantia que a cache não dá — a compilação está **ali dentro**, e não depende de
+o padrão não ter sido despejado por outros vinte e quatro pelo meio.
+
+**Os nomes são os do módulo, de propósito**, e os tipos de retorno também até ao
+fim: quem sabe `re.search(p, t)` sabe `p.search(t)`, e a única coisa que muda é de
+onde vem o padrão. Nenhuma das seis funções do runtime foi duplicada — elas
+passaram a aceitar **ou** o padrão escrito **ou** um programa já compilado, com um
+ajudante de cinco linhas a decidir qual.
+
+**E um padrão que não compila levanta em `re.compile`** — onde foi escrito, e não
+três funções à frente na primeira vez que alguém o usar.
+
+### 160.2 — o aviso estava escrito, e eu passei por ele duas vezes
+
+O portão sob `PSCRIPT_GC_STRESS` rebentou duas vezes, e as duas causas eram a
+mesma coisa dita de dois sítios:
+
+1. **o coletor não percorria o `src`.** Um `PsPattern` guarda a grafia como
+   `*PsStr`, que é uma referência coletada — sem a linha que a reencaminha, um
+   `p.pattern()` depois de uma colecção lê um cabeçalho já deitado fora;
+
+2. **e o `is_collected` do lowering não conhecia o `PsPattern`.** Este é o que
+   vale a pena guardar, porque o comentário dessa função **já dizia exactamente o
+   que ia acontecer**:
+
+   > *"Todo objeto que o runtime aloca com `ps_alloc` mora no heap COLETADO e tem
+   > de estar nesta lista: um que falte não é rastreado, o coletor o move, e quem
+   > o segurava fica com o endereço antigo. O defeito é silencioso até o dia em
+   > que uma coleta acontece no meio — e foi assim que `PsConn`, `PsTimer` e
+   > `PsProc` apareceram."*
+
+   `PsPattern` foi o quarto. A lista é uma lista escrita à mão, e uma lista
+   escrita à mão esquece — o comentário sabe-o, nomeia os três anteriores, e
+   mesmo assim o quarto passou. **O que a salvou foi o `GC_STRESS` ser um portão
+   e não uma sugestão**: sem ele isto ia para o repositório e aparecia meses
+   depois, num programa de outra pessoa, sob pressão de memória.
+
+O `gdb` deu-o em três linhas depois de o ASan não ver nada — porque não era um
+erro de heap que o ASan reconhece, era um ponteiro para um objecto que o coletor
+tinha movido debaixo dele.
+
+### 160.3 — e o hóspede que ainda não tem nome
+
+Três vezes nesta sessão o `psrt_os.p` apareceu com **as mesmas 92 linhas
+duplicadas**, byte a byte iguais, durante uma corrida de arreio. Ficou medido:
+
+* **não é nenhum dos dezanove sub-arreios** — corri-os um a um, com o `md5` do
+  ficheiro antes e depois de cada um;
+* **não é o `make build`** — testado à parte;
+* **não é um restauro**: o conteúdo não existe como objecto no repositório nem no
+  histórico de ficheiros do editor;
+* **nenhum dos commits foi contaminado** — todos com uma cópia de cada definição;
+* e o efeito é o runtime **não compilar**, portanto produz falhas FALSAS e nunca
+  aprovações falsas.
+
+Fica registado com a recuperação, que é uma linha:
+
+    git checkout -- pscript/runtime/psrt_os.p pscript/runtime/psrt_os.ph
+
+**Um `verify-all` que falhe em muitos sítios ao mesmo tempo merece um `git status`
+antes de qualquer diagnóstico.** Foi o que custou a primeira hora desta sessão.

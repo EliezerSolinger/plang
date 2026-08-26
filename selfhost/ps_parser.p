@@ -321,6 +321,10 @@ struct PsP:
                 self->expect(TK_LT, "Sequence<T>")
                 t->inner = self->parse_type()
                 self->expect_gt("Sequence<T>")
+            elif name == "Pattern":
+                # 152.8: escreve-se onde um valor tem de dizer o que guarda —
+                # um campo de `struct`, um parâmetro, um `List<Pattern>`
+                t = ps_type(self->a, PT_PATTERN, pos)
             elif name == "Channel":
                 # S3/147: maiúscula porque é uma COISA com identidade (139) —
                 # tem estado, fecha-se, e duas tarefas falam POR ele

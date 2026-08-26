@@ -2652,7 +2652,7 @@ previsto:
 |---|---|
 | a **S1**, se e quando alguém a quiser | adenda do `STDLIB.md` |
 | o trait `Hash` com estado incremental | **148.1**, atrás da **141.6** |
-| um `Pattern` de `re.compile` como valor | **152.8** |
+| ~~um `Pattern` de `re.compile` como valor~~ | FECHOU na **160** |
 | o guarda do SIGBUS completo | **145** |
 | o `Str`→`StrBuf` (22 sítios) | **141.7** |
 | a ordem de um `Dict` (bateria 4.4) | por decidir |

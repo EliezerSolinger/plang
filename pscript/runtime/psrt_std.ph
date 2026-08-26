@@ -28,14 +28,18 @@ def ps_json_parse(ctx: *PsCtx, text: *PsStr, file: const *char, line: i32) -> *P
 # `match` answers the groups: [0] is the whole match and [1..] are the
 # parenthesized ones. No match is None, which is what makes `if not m:` read the
 # way it should (40.1).
-def ps_re_match(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_match(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList
 # S2b: o motor de Thompson. `search` procura, `match` exige o princípio — a
 # diferença está na API e não no autómato, que responde às duas perguntas.
-def ps_re_search(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
-def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
-def ps_re_finditer(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, file: const *char, line: i32) -> *PsList
-def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, rep: *PsStr, text: *PsStr, count: i64, file: const *char, line: i32) -> *PsStr
-def ps_re_split(ctx: *PsCtx, pattern: *PsStr, text: *PsStr, count: i64, file: const *char, line: i32) -> *PsList
+def ps_re_search(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_findall(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_finditer(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, file: const *char, line: i32) -> *PsList
+def ps_re_sub(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, rep: *PsStr, text: *PsStr, count: i64, file: const *char, line: i32) -> *PsStr
+def ps_re_split(ctx: *PsCtx, pattern: *PsStr, pat: *PsPattern, text: *PsStr, count: i64, file: const *char, line: i32) -> *PsList
+# 152.8: um padrão compilado, guardado como VALOR
+def ps_re_compile(ctx: *PsCtx, pattern: *PsStr, file: const *char, line: i32) -> *PsPattern
+def ps_pattern_release(o: *void)
+def ps_pattern_src(pt: *PsPattern) -> *PsStr
 def ps_re_ctx_free(ctx: *PsCtx)
 # 103: `random`, portado do CPython (MT19937 + a camada de Lib/random.py)
 def ps_random_seed(ctx: *PsCtx, n: i64)

@@ -768,7 +768,7 @@ struct PsSema:
                 t->inner = self->resolve_type(t->inner)
             case PT_CHAN:
                 t->inner = self->resolve_type(t->inner)
-            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_TIMER, PT_CONN, PT_PROC, PT_GROUP:
+            case PT_UNKNOWN, PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_ANY, PT_VOID, PT_FILE, PT_BUFFER, PT_MAPPING, PT_DECODER, PT_PATTERN, PT_DIRITER, PT_WATCHER, PT_TIMER, PT_CONN, PT_PROC, PT_GROUP:
                 pass
         return t
 
@@ -2273,6 +2273,58 @@ struct PsSema:
                 if strcmp(wm, "close") == 0:
                     return ps_type(self->a, PT_VOID, e->pos)
                 fatal_at(self->file, e->pos, "a Watcher has ready(), take(), pending() and close() (140/146.4), not '%s'", wm)
+            if rt != None and rt->kind == PT_PATTERN:
+                # 152.8: as mesmas seis do módulo `re`, com o padrão implícito e
+                # os MESMOS tipos de retorno. Os nomes são os mesmos de
+                # propósito: quem sabe `re.search` sabe `p.search`, e a única
+                # coisa que muda é de onde vem o padrão.
+                pm: const *char = e->lhs->text
+                e->lhs->type = rt
+                pstr9: *PsType = ps_type(self->a, PT_STR, e->pos)
+                if strcmp(pm, "pattern") == 0:
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "p.pattern() takes no arguments: it gives back the text this was compiled from")
+                    return pstr9
+                if strcmp(pm, "match") == 0 or strcmp(pm, "search") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "p.%s(text) takes the text — the pattern IS the object (152.8)", pm)
+                    self->check_want(e->args[0], pstr9, "the text")
+                    gl9: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    gl9->inner = pstr9
+                    ro9: *PsType = ps_type(self->a, PT_OPT, e->pos)
+                    ro9->inner = gl9
+                    return ro9
+                if strcmp(pm, "findall") == 0 or strcmp(pm, "split") == 0:
+                    if e->nargs < 1 or e->nargs > (1 if strcmp(pm, "findall") == 0 else 2):
+                        fatal_at(self->file, e->pos, "p.%s(text%s) — the pattern IS the object (152.8)", pm, "" if strcmp(pm, "findall") == 0 else ", limit")
+                    self->check_want(e->args[0], pstr9, "the text")
+                    if e->nargs == 2:
+                        self->check_want(e->args[1], ps_type(self->a, PT_INT, e->pos), "the limit")
+                    fl9: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    fl9->inner = pstr9
+                    return fl9
+                if strcmp(pm, "finditer") == 0:
+                    if e->nargs != 1:
+                        fatal_at(self->file, e->pos, "p.finditer(text) takes the text (152.8)")
+                    self->check_want(e->args[0], pstr9, "the text")
+                    il9: *PsType = ps_type(self->a, PT_LIST, e->pos)
+                    il9->inner = ps_type(self->a, PT_INT, e->pos)
+                    return il9
+                if strcmp(pm, "sub") == 0:
+                    if e->nargs < 2 or e->nargs > 3:
+                        fatal_at(self->file, e->pos, "p.sub(replacement, text, count=0) (152.8)")
+                    self->check_want(e->args[0], pstr9, "the replacement")
+                    self->check_want(e->args[1], pstr9, "the text")
+                    if e->nargs == 3:
+                        c9: *PsExpr = e->args[2]
+                        if c9->kind == PE_DESIG:
+                            if strcmp(c9->text, "count") != 0:
+                                fatal_at(self->file, c9->pos, "p.sub() names its limit `count`, not '%s'", c9->text)
+                            c9 = c9->lhs
+                            e->args[2] = c9
+                        self->check_want(c9, ps_type(self->a, PT_INT, e->pos), "count")
+                    return pstr9
+                fatal_at(self->file, e->pos, "a Pattern has match(), search(), findall(), finditer(), sub(), split() and pattern() (152.8), not '%s'", pm)
             if rt != None and rt->kind == PT_DECODER:
                 dm: const *char = e->lhs->text
                 e->lhs->type = rt
@@ -4378,6 +4430,14 @@ struct PsSema:
             if self->in_with == 0:
                 fatal_at(self->file, e->pos, "a task group only exists as `with taskgroup() as g:` — what it promises is that nothing it started outlives the BLOCK, and outside one there is no block (147.4)")
             return ps_type(self->a, PT_GROUP, e->pos)
+        if strcmp(name, "__re_compile") == 0:
+            # 152.8: um padrão que não compila levanta AQUI, onde foi escrito —
+            # e não na primeira vez que alguém o usar, três funções à frente.
+            if e->nargs != 1:
+                fatal_at(self->file, e->pos, "re.compile(pattern) takes the pattern (152.8)")
+            pct: *PsType = self->check_expr(e->args[0])
+            self->want(e->args[0], pct, ps_type(self->a, PT_STR, e->pos), "the pattern")
+            return ps_type(self->a, PT_PATTERN, e->pos)
         if strcmp(name, "Decoder") == 0:
             # 140/F6: `Decoder()` — bytes entram, o texto que já dá para dizer
             # sai, e o que ficou a meio de um codepoint fica cá dentro.
@@ -4943,6 +5003,9 @@ struct PsSema:
             # S2b: o motor passou a ser NOSSO, e com ele vieram as funções que
             # faltavam. `import re` continua a não ter caminho e o compilador
             # continua a validar os nomes — a libc foi substituída por dentro.
+            # 152.8: um padrão como VALOR. A cache continua a servir quem
+            # escreve o padrão no sítio; isto é para quem o quer guardar.
+            ns->sym.add("compile")
             ns->sym.add("match")
             ns->sym.add("search")
             ns->sym.add("findall")
@@ -7291,7 +7354,7 @@ def ps_is_ref_type(t: *PsType) -> bool:
     if t == None:
         return False
     match t->kind:
-        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_DIRITER, PT_WATCHER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN, PT_CHAN, PT_GROUP:
+        case PT_STR, PT_BYTES, PT_LIST, PT_VIEW, PT_DICT, PT_SET, PT_ANY, PT_TASK, PT_WORKER, PT_FILE, PT_MAPPING, PT_DECODER, PT_PATTERN, PT_DIRITER, PT_WATCHER, PT_CONN, PT_PROC, PT_FUNC, PT_DYN, PT_CHAN, PT_GROUP:
             return True
         case PT_NAME:
             return t->is_ref
@@ -7499,6 +7562,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "Mapping"
         case PT_DECODER:
             return "Decoder"
+        case PT_PATTERN:
+            return "Pattern"
         case PT_WATCHER:
             return "Watcher"
         case PT_DIRITER:

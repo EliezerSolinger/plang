@@ -473,6 +473,8 @@ struct PsLow:
                 return ty_ptr(self->a, ty_name(self->a, "PsMapping"))
             case PT_DECODER:
                 return ty_ptr(self->a, ty_name(self->a, "PsDecoder"))
+            case PT_PATTERN:
+                return ty_ptr(self->a, ty_name(self->a, "PsPattern"))
             case PT_DIRITER:
                 return ty_ptr(self->a, ty_name(self->a, "PsDirIter"))
             case PT_WATCHER:
@@ -3295,6 +3297,29 @@ struct PsLow:
             self->push_arg(wd9, self->ctx_arg(e->pos))
             self->push_arg(wd9, self->expr(e->lhs->lhs))
             return wd9
+        if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_PATTERN:
+            # 152.8: `p.search(t)` é `ps_re_search(ctx, None, p, t, ...)` — a
+            # mesma função do módulo `re`, com o padrão a chegar pelo OUTRO lado
+            pmn: const *char = e->lhs->text
+            if strcmp(pmn, "pattern") == 0:
+                pp9: *Expr = self->call_rt("ps_pattern_src", e->pos)
+                self->push_arg(pp9, self->expr(e->lhs->lhs))
+                return pp9
+            pc9: *Expr = self->call_rt(self->a->printf("ps_re_%s", pmn), e->pos)
+            self->push_arg(pc9, self->ctx_arg(e->pos))
+            self->push_arg(pc9, ex_new(self->a, EX_NONE, e->pos))
+            self->push_arg(pc9, self->expr(e->lhs->lhs))
+            for i in range(e->nargs):
+                self->push_arg(pc9, self->expr(e->args[i]))
+            # o mesmo limite por omissão do módulo: ZERO quer dizer "todas"
+            if strcmp(pmn, "sub") == 0 and e->nargs == 2:
+                self->push_arg(pc9, self->num("0", e->pos))
+            if strcmp(pmn, "split") == 0 and e->nargs == 1:
+                self->push_arg(pc9, self->num("0", e->pos))
+            self->pos_args(pc9, e->pos)
+            self->raised = True
+            self->allocs = True
+            return pc9
         if e->lhs->kind == PE_FIELD and e->lhs->type != None and e->lhs->type->kind == PT_DECODER:
             dmn: const *char = e->lhs->text
             if strcmp(dmn, "pending") == 0:
@@ -4470,6 +4495,14 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return jc
+        if strcmp(name, "__re_compile") == 0:
+            rc9: *Expr = self->call_rt("ps_re_compile", e->pos)
+            self->push_arg(rc9, self->ctx_arg(e->pos))
+            self->push_arg(rc9, self->expr(e->args[0]))
+            self->pos_args(rc9, e->pos)
+            self->raised = True
+            self->allocs = True
+            return rc9
         if strncmp(name, "__re_", 5) == 0:
             rf9: const *char = name + 5
             rn9: const *char = None
@@ -4490,6 +4523,11 @@ struct PsLow:
                 self->push_arg(rm9, self->ctx_arg(e->pos))
                 for i in range(e->nargs):
                     self->push_arg(rm9, self->expr(e->args[i]))
+                    if i == 0:
+                        # 152.8: as seis do runtime aceitam OU o padrão escrito
+                        # OU um `Pattern` já compilado, e aqui o padrão veio
+                        # escrito — logo não há nenhum
+                        self->push_arg(rm9, ex_new(self->a, EX_NONE, e->pos))
                 # o limite por omissão é ZERO, que quer dizer "todas": é o que o
                 # `re.sub` do Python faz, e a alternativa (um número grande)
                 # seria um limite a fingir de ausência
@@ -5932,7 +5970,7 @@ struct PsLow:
         # `async def` já tinha o problema, e só não estourava porque o
         # gc-stress roda os programas de rede com N alto (a coleta a cada ponto
         # seguro custa mais que a volta pela rede).
-        if strcmp(n, "PsChan") == 0 or strcmp(n, "PsGroup") == 0 or strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsWatcher") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
+        if strcmp(n, "PsChan") == 0 or strcmp(n, "PsGroup") == 0 or strcmp(n, "PsStr") == 0 or strcmp(n, "PsBytes") == 0 or strcmp(n, "PsMapping") == 0 or strcmp(n, "PsPattern") == 0 or strcmp(n, "PsDecoder") == 0 or strcmp(n, "PsDirIter") == 0 or strcmp(n, "PsWatcher") == 0 or strcmp(n, "PsErr") == 0 or strcmp(n, "PsList") == 0 or strcmp(n, "PsDict") == 0 or strcmp(n, "PsDyn") == 0 or strcmp(n, "PsTask") == 0 or strcmp(n, "PsWorker") == 0 or strcmp(n, "PsFile") == 0 or strcmp(n, "PsClosure") == 0 or strcmp(n, "PsObj") == 0 or strcmp(n, "PsConn") == 0 or strcmp(n, "PsTimer") == 0 or strcmp(n, "PsProc") == 0:
             return True
         if self->frame_names.has(n):
             return True                 # an async frame (50.1) is a collected object
@@ -11376,7 +11414,7 @@ private def opt_is_ref(t: *PsType) -> bool:
     # the runtime's PsErr, so `Error?` is the null pointer and costs nothing
     if t->kind == PT_NAME and t->name != None and strcmp(t->name, "Error") == 0:
         return True
-    return t->kind == PT_CHAN or t->kind == PT_GROUP or t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_WATCHER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
+    return t->kind == PT_CHAN or t->kind == PT_GROUP or t->kind == PT_STR or t->kind == PT_BYTES or t->kind == PT_MAPPING or t->kind == PT_PATTERN or t->kind == PT_DECODER or t->kind == PT_DIRITER or t->kind == PT_WATCHER or t->kind == PT_LIST or t->kind == PT_VIEW or t->kind == PT_DICT or t->kind == PT_SET or t->kind == PT_DYN or t->kind == PT_TASK or t->kind == PT_WORKER or t->kind == PT_FILE or t->kind == PT_CONN or t->kind == PT_PROC or t->kind == PT_TIMER or t->kind == PT_FUNC or t->kind == PT_ANY or (t->kind == PT_NAME and t->is_ref)
 
 private def starts_with(s: const *char, p: const *char) -> bool:
     n: usize = strlen(p)

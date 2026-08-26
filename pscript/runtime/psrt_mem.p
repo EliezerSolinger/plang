@@ -469,6 +469,14 @@ private def ps_scan_object(to: *PsBlock, o: *PsObj):
                     if nvt < 192:
                         e->tr_val[nvt] = ps_forward(to, e->tr_val[nvt])
                         nvt += 1
+        case PS_TY_PATTERN:
+            # 152.8: o PROGRAMA é malloc'd e não se mexe — quem o liberta é o
+            # finalizador. O que TEM de ser reencaminhado é a grafia, que é uma
+            # `str` coletada como qualquer outra: sem esta linha, um `p.pattern()`
+            # depois de uma colecção lia um cabeçalho que já tinha sido deitado
+            # fora. Foi o que o portão sob `GC_STRESS` apanhou à primeira volta.
+            pt9: *PsPattern = (*PsPattern)(o)
+            pt9->src = (*PsStr)(ps_forward(to, (*PsObj)(pt9->src)))
         case PS_TY_BYTES:
             # the block is malloc'd and does not move, so there is nothing to
             # forward in it; the OWNER is a collected object like any other, and

@@ -69,6 +69,10 @@ enum PsTyId:
                        #   dentro de um heap só, e é isso que o torna barato de
                        #   uma maneira que o worker nunca poderá ser: não
                        #   serializa nada, o valor é o mesmo ponteiro.
+    PS_TY_PATTERN = 24 # 152.8: um padrão COMPILADO, guardado numa variável. O
+                       #   programa é malloc'd e não é do coletor, portanto vem
+                       #   com um finalizador (136) — a mesma forma do `Mapping`
+                       #   e do `Watcher`, e exactamente pela mesma razão.
     PS_TY_GROUP = 23   # S3/147.4: `taskgroup()` — um grupo é sobre TEMPO DE
                        #   VIDA e não sobre resultados: nenhuma tarefa dele
                        #   sobrevive ao bloco, e a primeira falha mata as irmãs.
@@ -219,6 +223,19 @@ struct PsDecoder:
     need: i32          # quantos bytes de continuação ainda faltam
     lo: u32            # o menor valor que esta sequência pode ter tido, que é
                        #   o que apanha a codificação demasiado longa
+
+# 152.8: o que `re.compile` devolve.
+#
+# A cache das 24 entradas continua a servir quem escreve o padrão no sítio, e
+# continua a compilar uma vez o padrão de um laço. O que isto acrescenta é **um
+# VALOR** — um padrão que se guarda num campo, se passa a uma função e se
+# devolve — e com ele a garantia que a cache não dá: a compilação está ALI
+# DENTRO, e não depende de o padrão não ter sido despejado por outros vinte e
+# quatro pelo meio.
+struct PsPattern:
+    obj: PsObj
+    prog: *void      # o `*ReProg`, que vive no `psrt_std` e é malloc'd
+    src: *PsStr      # a grafia, para o `repr` e para a mensagem de erro
 
 struct PsMapping:
     obj: PsObj

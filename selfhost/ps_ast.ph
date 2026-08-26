@@ -61,6 +61,9 @@ enum PsTypeKind:
                      #   else looks at it. What survives past that point is a
                      #   plain type parameter, so no backend and no collector
                      #   ever hears of this.
+    PT_PATTERN       # 152.8: `Pattern` — um padrão COMPILADO, guardado numa
+                     #   variável. Maiúscula porque é uma COISA (139): tem
+                     #   identidade, tem um programa lá dentro, e passa-se.
     PT_DIRITER       # 140/F4: what `os.scandir(p)` gives — a directory being
                      #   walked. It has no name a program writes, because the
                      #   only thing anybody does with it is `for name in ...`.

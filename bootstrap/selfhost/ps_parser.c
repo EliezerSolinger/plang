@@ -1644,6 +1644,8 @@ static PsType *PsP_parse_type(PsP *self) {
             PsP_expect(self, TK_LT, "Sequence<T>");
             t->inner = PsP_parse_type(self);
             PsP_expect_gt(self, "Sequence<T>");
+        } else if (strcmp(name, "Pattern") == 0) {
+            t = ps_type(self->a, PT_PATTERN, pos);
         } else if (strcmp(name, "Channel") == 0) {
             t = ps_type(self->a, PT_CHAN, pos);
             PsP_expect(self, TK_LT, "Channel<T>");

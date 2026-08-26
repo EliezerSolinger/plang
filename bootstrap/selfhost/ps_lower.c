@@ -755,6 +755,9 @@ static Type *PsLow_ty(PsLow *self, PsType *t) {
         case PT_DECODER: {
             return ty_ptr(self->a, ty_name(self->a, "PsDecoder"));
         }
+        case PT_PATTERN: {
+            return ty_ptr(self->a, ty_name(self->a, "PsPattern"));
+        }
         case PT_DIRITER: {
             return ty_ptr(self->a, ty_name(self->a, "PsDirIter"));
         }
@@ -3528,6 +3531,32 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         PsLow_push_arg(self, wd9, PsLow_expr(self, e->lhs->lhs));
         return wd9;
     }
+    if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_PATTERN) {
+        const char *pmn = e->lhs->text;
+        if (strcmp(pmn, "pattern") == 0) {
+            Expr *pp9 = PsLow_call_rt(self, "ps_pattern_src", e->pos);
+            PsLow_push_arg(self, pp9, PsLow_expr(self, e->lhs->lhs));
+            return pp9;
+        }
+        Expr *pc9 = PsLow_call_rt(self, Arena_printf(self->a, "ps_re_%s", pmn), e->pos);
+        PsLow_push_arg(self, pc9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, pc9, ex_new(self->a, EX_NONE, e->pos));
+        PsLow_push_arg(self, pc9, PsLow_expr(self, e->lhs->lhs));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, pc9, PsLow_expr(self, e->args[i]));
+        }
+        if (strcmp(pmn, "sub") == 0 && e->nargs == 2) {
+            PsLow_push_arg(self, pc9, PsLow_num(self, "0", e->pos));
+        }
+        if (strcmp(pmn, "split") == 0 && e->nargs == 1) {
+            PsLow_push_arg(self, pc9, PsLow_num(self, "0", e->pos));
+        }
+        PsLow_pos_args(self, pc9, e->pos);
+        self->raised = 1;
+        self->allocs = 1;
+        return pc9;
+    }
     if (e->lhs->kind == PE_FIELD && e->lhs->type != NULL && e->lhs->type->kind == PT_DECODER) {
         const char *dmn = e->lhs->text;
         if (strcmp(dmn, "pending") == 0) {
@@ -4751,6 +4780,15 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         return jc;
     }
+    if (strcmp(name, "__re_compile") == 0) {
+        Expr *rc9 = PsLow_call_rt(self, "ps_re_compile", e->pos);
+        PsLow_push_arg(self, rc9, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, rc9, PsLow_expr(self, e->args[0]));
+        PsLow_pos_args(self, rc9, e->pos);
+        self->raised = 1;
+        self->allocs = 1;
+        return rc9;
+    }
     if (strncmp(name, "__re_", 5) == 0) {
         const char *rf9 = name + 5;
         const char *rn9 = NULL;
@@ -4773,6 +4811,9 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             size_t i;
             for (i = 0; i < e->nargs; i += 1) {
                 PsLow_push_arg(self, rm9, PsLow_expr(self, e->args[i]));
+                if (i == 0) {
+                    PsLow_push_arg(self, rm9, ex_new(self->a, EX_NONE, e->pos));
+                }
             }
             if (strcmp(rf9, "sub") == 0 && e->nargs == 3) {
                 PsLow_push_arg(self, rm9, PsLow_num(self, "0", e->pos));
@@ -6201,7 +6242,7 @@ static int PsLow_is_collected(PsLow *self, Type *t) {
         return 0;
     }
     const char *n = t->inner->name;
-    if (strcmp(n, "PsChan") == 0 || strcmp(n, "PsGroup") == 0 || strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsMapping") == 0 || strcmp(n, "PsDecoder") == 0 || strcmp(n, "PsDirIter") == 0 || strcmp(n, "PsWatcher") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
+    if (strcmp(n, "PsChan") == 0 || strcmp(n, "PsGroup") == 0 || strcmp(n, "PsStr") == 0 || strcmp(n, "PsBytes") == 0 || strcmp(n, "PsMapping") == 0 || strcmp(n, "PsPattern") == 0 || strcmp(n, "PsDecoder") == 0 || strcmp(n, "PsDirIter") == 0 || strcmp(n, "PsWatcher") == 0 || strcmp(n, "PsErr") == 0 || strcmp(n, "PsList") == 0 || strcmp(n, "PsDict") == 0 || strcmp(n, "PsDyn") == 0 || strcmp(n, "PsTask") == 0 || strcmp(n, "PsWorker") == 0 || strcmp(n, "PsFile") == 0 || strcmp(n, "PsClosure") == 0 || strcmp(n, "PsObj") == 0 || strcmp(n, "PsConn") == 0 || strcmp(n, "PsTimer") == 0 || strcmp(n, "PsProc") == 0) {
         return 1;
     }
     if (StrSet_has(&self->frame_names, n)) {
@@ -11611,7 +11652,7 @@ static int opt_is_ref(PsType *t) {
     if (t->kind == PT_NAME && t->name != NULL && strcmp(t->name, "Error") == 0) {
         return 1;
     }
-    return t->kind == PT_CHAN || t->kind == PT_GROUP || t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_MAPPING || t->kind == PT_DECODER || t->kind == PT_DIRITER || t->kind == PT_WATCHER || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
+    return t->kind == PT_CHAN || t->kind == PT_GROUP || t->kind == PT_STR || t->kind == PT_BYTES || t->kind == PT_MAPPING || t->kind == PT_PATTERN || t->kind == PT_DECODER || t->kind == PT_DIRITER || t->kind == PT_WATCHER || t->kind == PT_LIST || t->kind == PT_VIEW || t->kind == PT_DICT || t->kind == PT_SET || t->kind == PT_DYN || t->kind == PT_TASK || t->kind == PT_WORKER || t->kind == PT_FILE || t->kind == PT_CONN || t->kind == PT_PROC || t->kind == PT_TIMER || t->kind == PT_FUNC || t->kind == PT_ANY || (t->kind == PT_NAME && t->is_ref);
 }
 
 static int starts_with(const char *s, const char *p) {

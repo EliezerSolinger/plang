@@ -2288,6 +2288,7 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
         case PT_BUFFER:
         case PT_MAPPING:
         case PT_DECODER:
+        case PT_PATTERN:
         case PT_DIRITER:
         case PT_WATCHER:
         case PT_TIMER:
@@ -3856,6 +3857,69 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 return ps_type(self->a, PT_VOID, e->pos);
             }
             fatal_at(self->file, e->pos, "a Watcher has ready(), take(), pending() and close() (140/146.4), not '%s'", wm);
+        }
+        if (rt != NULL && rt->kind == PT_PATTERN) {
+            const char *pm = e->lhs->text;
+            e->lhs->type = rt;
+            PsType *pstr9 = ps_type(self->a, PT_STR, e->pos);
+            if (strcmp(pm, "pattern") == 0) {
+                if (e->nargs != 0) {
+                    fatal_at(self->file, e->pos, "p.pattern() takes no arguments: it gives back the text this was compiled from");
+                }
+                return pstr9;
+            }
+            if (strcmp(pm, "match") == 0 || strcmp(pm, "search") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "p.%s(text) takes the text — the pattern IS the object (152.8)", pm);
+                }
+                PsSema_check_want(self, e->args[0], pstr9, "the text");
+                PsType *gl9 = ps_type(self->a, PT_LIST, e->pos);
+                gl9->inner = pstr9;
+                PsType *ro9 = ps_type(self->a, PT_OPT, e->pos);
+                ro9->inner = gl9;
+                return ro9;
+            }
+            if (strcmp(pm, "findall") == 0 || strcmp(pm, "split") == 0) {
+                if (e->nargs < 1 || e->nargs > (strcmp(pm, "findall") == 0 ? 1 : 2)) {
+                    fatal_at(self->file, e->pos, "p.%s(text%s) — the pattern IS the object (152.8)", pm, (strcmp(pm, "findall") == 0 ? "" : ", limit"));
+                }
+                PsSema_check_want(self, e->args[0], pstr9, "the text");
+                if (e->nargs == 2) {
+                    PsSema_check_want(self, e->args[1], ps_type(self->a, PT_INT, e->pos), "the limit");
+                }
+                PsType *fl9 = ps_type(self->a, PT_LIST, e->pos);
+                fl9->inner = pstr9;
+                return fl9;
+            }
+            if (strcmp(pm, "finditer") == 0) {
+                if (e->nargs != 1) {
+                    fatal_at(self->file, e->pos, "p.finditer(text) takes the text (152.8)");
+                }
+                PsSema_check_want(self, e->args[0], pstr9, "the text");
+                PsType *il9 = ps_type(self->a, PT_LIST, e->pos);
+                il9->inner = ps_type(self->a, PT_INT, e->pos);
+                return il9;
+            }
+            if (strcmp(pm, "sub") == 0) {
+                if (e->nargs < 2 || e->nargs > 3) {
+                    fatal_at(self->file, e->pos, "p.sub(replacement, text, count=0) (152.8)");
+                }
+                PsSema_check_want(self, e->args[0], pstr9, "the replacement");
+                PsSema_check_want(self, e->args[1], pstr9, "the text");
+                if (e->nargs == 3) {
+                    PsExpr *c9 = e->args[2];
+                    if (c9->kind == PE_DESIG) {
+                        if (strcmp(c9->text, "count") != 0) {
+                            fatal_at(self->file, c9->pos, "p.sub() names its limit `count`, not '%s'", c9->text);
+                        }
+                        c9 = c9->lhs;
+                        e->args[2] = c9;
+                    }
+                    PsSema_check_want(self, c9, ps_type(self->a, PT_INT, e->pos), "count");
+                }
+                return pstr9;
+            }
+            fatal_at(self->file, e->pos, "a Pattern has match(), search(), findall(), finditer(), sub(), split() and pattern() (152.8), not '%s'", pm);
         }
         if (rt != NULL && rt->kind == PT_DECODER) {
             const char *dm = e->lhs->text;
@@ -5510,12 +5574,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3818_17 = e;
-                __with_3818_17->kind = PE_INDEX;
-                __with_3818_17->lhs = e->args[0];
-                __with_3818_17->rhs = below;
-                __with_3818_17->args = NULL;
-                __with_3818_17->nargs = 0;
+                PsExpr *__with_3870_17 = e;
+                __with_3870_17->kind = PE_INDEX;
+                __with_3870_17->lhs = e->args[0];
+                __with_3870_17->rhs = below;
+                __with_3870_17->args = NULL;
+                __with_3870_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -6067,26 +6131,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_4326_17 = e;
-                __with_4326_17->kind = PE_STR;
-                __with_4326_17->text = lit7;
-                __with_4326_17->lhs = NULL;
-                __with_4326_17->rhs = NULL;
-                __with_4326_17->args = NULL;
-                __with_4326_17->nargs = 0;
+                PsExpr *__with_4378_17 = e;
+                __with_4378_17->kind = PE_STR;
+                __with_4378_17->text = lit7;
+                __with_4378_17->lhs = NULL;
+                __with_4378_17->rhs = NULL;
+                __with_4378_17->args = NULL;
+                __with_4378_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_4339_13 = e;
-            __with_4339_13->kind = PE_LOWERED;
-            __with_4339_13->low = ln7;
-            __with_4339_13->lhs = NULL;
-            __with_4339_13->rhs = NULL;
-            __with_4339_13->args = NULL;
-            __with_4339_13->nargs = 0;
+            PsExpr *__with_4391_13 = e;
+            __with_4391_13->kind = PE_LOWERED;
+            __with_4391_13->low = ln7;
+            __with_4391_13->lhs = NULL;
+            __with_4391_13->rhs = NULL;
+            __with_4391_13->args = NULL;
+            __with_4391_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -6121,6 +6185,14 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "a task group only exists as `with taskgroup() as g:` — what it promises is that nothing it started outlives the BLOCK, and outside one there is no block (147.4)");
         }
         return ps_type(self->a, PT_GROUP, e->pos);
+    }
+    if (strcmp(name, "__re_compile") == 0) {
+        if (e->nargs != 1) {
+            fatal_at(self->file, e->pos, "re.compile(pattern) takes the pattern (152.8)");
+        }
+        PsType *pct = PsSema_check_expr(self, e->args[0]);
+        PsSema_want(self, e->args[0], pct, ps_type(self->a, PT_STR, e->pos), "the pattern");
+        return ps_type(self->a, PT_PATTERN, e->pos);
     }
     if (strcmp(name, "Decoder") == 0) {
         if (e->nargs != 0) {
@@ -6408,10 +6480,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_4645_17 = &ns->quals[ns->nquals];
-                __with_4645_17->name = q;
-                __with_4645_17->orig = d->path;
-                __with_4645_17->ns = sub;
+                PsNsEnt *__with_4705_17 = &ns->quals[ns->nquals];
+                __with_4705_17->name = q;
+                __with_4705_17->orig = d->path;
+                __with_4705_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -6424,10 +6496,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_4657_21 = &ns->ents[ns->nents];
-                    __with_4657_21->name = local;
-                    __with_4657_21->orig = d->names[k];
-                    __with_4657_21->ns = sub;
+                    PsNsEnt *__with_4717_21 = &ns->ents[ns->nents];
+                    __with_4717_21->name = local;
+                    __with_4717_21->orig = d->names[k];
+                    __with_4717_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6722,6 +6794,7 @@ static PsNs *PsSema_builtin_ns(PsSema *self, const char *name, const char *path)
         StrSet_add(&ns->sym, "starttls_insecure");
         StrSet_add(&ns->sym, "tls_available");
     } else if (strcmp(name, "re") == 0) {
+        StrSet_add(&ns->sym, "compile");
         StrSet_add(&ns->sym, "match");
         StrSet_add(&ns->sym, "search");
         StrSet_add(&ns->sym, "findall");
@@ -6906,10 +6979,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_5160_9 = e;
-        __with_5160_9->kind = PE_NAME;
-        __with_5160_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_5160_9->lhs = NULL;
+        PsExpr *__with_5223_9 = e;
+        __with_5223_9->kind = PE_NAME;
+        __with_5223_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_5223_9->lhs = NULL;
     }
     return 1;
 }
@@ -9217,6 +9290,7 @@ int ps_is_ref_type(PsType *t) {
         case PT_FILE:
         case PT_MAPPING:
         case PT_DECODER:
+        case PT_PATTERN:
         case PT_DIRITER:
         case PT_WATCHER:
         case PT_CONN:
@@ -9528,6 +9602,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
         }
         case PT_DECODER: {
             return "Decoder";
+        }
+        case PT_PATTERN: {
+            return "Pattern";
         }
         case PT_WATCHER: {
             return "Watcher";

@@ -1,0 +1,9 @@
+guardado: [0-9]+
+search: 42
+match exige o principio: True True
+findall: ['1', '22', '333']
+split: ['a', 'b', 'c']
+sub: a#b#c | com limite: a#b22c
+finditer (posicoes): [1, 2, 3, 5]
+as duas regras: ola<esp><num><esp>mundo<esp><num>
+recusa: re: a `[` that never closes — in the pattern [unclosed
