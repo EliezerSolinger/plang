@@ -50,10 +50,19 @@ private def ps_crash_handler(sig: int):
     if PS_CRASH_HAVE != 0 and PS_CRASH_CTX != None and pthread_equal(pthread_self(), PS_CRASH_TID) != 0:
         f: *PsFrame = PS_CRASH_CTX->frames
         n: i32 = 0
+        # the same carry `ps_trace_capture` does: the line is on the innermost
+        # frame, which is a block's as often as a function's
+        ln: i32 = 0
         while f != None and n < 64:
+            if f->line != 0 and ln == 0:
+                ln = f->line
             if f->fn != None:
-                fprintf(stderr, "  in %s (%s)\n", f->fn, f->file if f->file != None else "?")
+                if ln != 0:
+                    fprintf(stderr, "  in %s (%s:%d)\n", f->fn, f->file if f->file != None else "?", ln)
+                else:
+                    fprintf(stderr, "  in %s (%s)\n", f->fn, f->file if f->file != None else "?")
                 n += 1
+                ln = 0
             f = f->prev
         if n == 0:
             fprintf(stderr, "  (no pscript frame held anything collected; build with --trace to name them all)\n")
@@ -3243,7 +3252,10 @@ def ps_report_exc(ctx: *PsCtx) -> int:
     # `repr` genérico da F5 — a tabela de campos sabe o que cada variável é.
     nv: i32 = 0
     for i in range(e->tr_n):
-        fprintf(stderr, "  in %s (%s)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?")
+        if e->tr_line[i] != 0:
+            fprintf(stderr, "  in %s (%s:%d)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?", e->tr_line[i])
+        else:
+            fprintf(stderr, "  in %s (%s)\n", e->tr_fn[i], e->tr_file[i] if e->tr_file[i] != None else "?")
         for j in range(e->tr_nsl[i]):
             if nv >= 192:
                 break

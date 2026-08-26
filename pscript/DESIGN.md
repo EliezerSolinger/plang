@@ -7669,3 +7669,73 @@ a pagar por isto adiantado: um módulo novo do `stl` é uma constante `embed` e 
 compilador, o runtime do pscript, e qualquer programa em P — que até agora não
 tinha nenhum. O portão está em `tests/stl/main.p` (roundtrip 8/8 nas fronteiras
 da codificação, 6/6 recusas), e o WPT do `url` continua em 890/890.
+
+---
+
+## Bateria 157 — a varredura do decidido-e-não-feito (2026-08-26)
+
+Pedido teu: *"implementa http2 e também tudo o que está decidido e ainda não
+está implementado"*. A segunda metade obrigou a uma varredura, e a varredura
+achou o de sempre: **metade do que estava escrito como por fazer já estava
+feito, e uma coisa que ninguém tinha escrito estava errada.**
+
+Por isso o método aqui não foi ler as caixas — foi **executar cada uma**. Uma
+caixa por marcar é uma afirmação sobre o passado; um programa que corre é uma
+afirmação sobre agora.
+
+### 157.1 — a LINHA por frame, e a fusão que a torna precisa
+
+A 34.2 pedia `função + arquivo:linha`; o que existia era `função + arquivo`. A
+metade que faltava era a que interessa — o ficheiro é a parte que o leitor já
+sabia.
+
+**A linha vive no frame, escrita directamente.** Um store num campo de uma
+struct local: sem chamada, sem desvio, e nada que o coletor tenha de percorrer.
+Só é emitida dentro de um bloco que TEM frame, portanto uma função folha sem
+nada coletado continua a não pagar nada.
+
+**Todas as instruções, e não só as que CHAMAM.** A nota original falava de "uma
+escrita por instrução que contém chamada", e isso estava a pensar só em quem
+empilha um frame novo. Mas a linha mais interna é onde o erro é LEVANTADO, e
+`xs[5]`, uma divisão por zero e um transbordo levantam sem chamar coisa nenhuma.
+
+**E a fusão, que é o que a torna correcta.** A instrução a correr está no bloco
+mais interno, e o frame que ela alcança é o DESSE bloco, não o da função. Um
+frame de bloco não tem nome e por isso não aparece no rastro — então o
+`ps_trace_capture` leva a linha para fora, até haver um frame com nome onde a
+pousar. É por isso que o portão mostra a linha de dentro do `if`, e não a do
+`for` que o contém.
+
+### 157.2 — medida antes, porque a própria nota mandava
+
+> *"É trabalho pequeno com custo mensurável, e vale medir antes."*
+
+| | antes | depois | |
+|---|---|---|---|
+| laço patológico (corpo todo com frame, quase nenhum trabalho) | 0,1671 s | 0,1742 s | **+4,2 %** |
+| carga realista (`dict`/`str`/`list`, 200 k palavras) | 0,0980 s | 0,0980 s | **0** |
+
+Fica **ligada por omissão**. No pior caso construído de propósito custa 4 %; no
+caso que alguém escreve de verdade não custa nada — porque o custo é por
+instrução com frame, e um programa real passa o tempo dentro das chamadas, não
+entre elas.
+
+### 157.3 — o frame que desaparece NÃO era defeito, e eu tinha-o chamado assim
+
+Ao medir, `def b(): c()` não aparecia no rastro. Escrevi que era um achado novo.
+Não era: é a **optimização de folha** da 49.4 — o frame é o do coletor, e uma
+função sem nada coletado não tem nenhum — está documentada no `ps_lower.p`, e
+`--trace` liga-a. Com ela a pilha sai inteira, `<main>` incluído.
+
+Fica registado porque o erro tem uma forma que se repete: **medir uma coisa e
+concluir sobre outra.** O que eu tinha medido era a ausência de um frame; o que
+concluí foi a ausência de uma decisão.
+
+### 157.4 — `int[3]` deixa de se chamar `int[]`
+
+`ps_type_str` imprimia `%s[]` para um `PT_ARRAY`. `int[3]` e `int[4]` são dois
+tipos diferentes, e uma mensagem que imprime os dois como `int[]` enuncia o
+desencontro e a seguir esconde-o. O tamanho já lá estava — a sema normaliza o
+`count` para literal (33.4) — e só não estava a ser escrito.
+
+Antes do fim da sema não há número para imprimir, e aí a forma nua é a honesta.

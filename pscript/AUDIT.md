@@ -130,7 +130,7 @@ decisão, compilado e rodado. O que está OK abaixo foi visto funcionando.
 | 29.x | tipo de função, `any` e `def` separados, `as def(...)` | **ok** |
 | 32.1–32.3 | `int + float` promove, ÷0 lança, `id(x)` | **ok** |
 | 33.3–33.4, 60.x | `T[N]` como tipo completo, `in` para atravessar | **ok** |
-| 34.2 | rastro de pilha `em f (arq.psc)` | **OK** — bateria 94; a LINHA por frame não (custaria uma escrita por chamada), e a função sem frame só aparece com `-g` (bateria 100) |
+| 34.2 | rastro de pilha `em f (arq.psc:linha)` | **OK** — bateria 94, e a LINHA por frame fechou na 157 (medida: +4,2 % num laço patológico, zero numa carga real); a função sem frame continua a só aparecer com `--trace` (bateria 100) |
 | 39.1 | divisão do Python (`/` dá float, `//` piso) | **OK** — oráculo `py/arith` |
 | 39.4 | top-level await | **OK** |
 | 40.1 | truthiness só de bool e `T?` | **OK** — `if 1:` é recusado com a razão |
@@ -265,11 +265,12 @@ trabalho:
    declarada e não serve para o que foi declarada.
 2. **`const def` (65.10)** — função avaliada em compilação.
 3. ~~`const` de contêiner no topo do módulo (61.3)~~ — FECHOU na bateria 96.
-4. **A LINHA por frame no rastro (34.2).** Hoje um frame diz a função e o
-   arquivo; a linha exigiria uma escrita por instrução que contém chamada. É
-   trabalho pequeno com custo mensurável, e vale medir antes.
+4. ~~A LINHA por frame no rastro (34.2)~~ — FECHOU na bateria 157. Foi medida
+   antes, como esta linha pedia: **+4,2 %** num laço cujo corpo é todo
+   instruções com frame, e **zero** numa carga realista. Ficou ligada por
+   omissão.
 
 O `epoll` saiu desta lista porque não é trabalho: é decisão (ver **D** abaixo).
 
-Também registrado, achado ao conferir: `ps_type_str` imprime `int[]` para
-`int[3]` — o tamanho do array não aparece na mensagem de erro.
+~~Também registrado, achado ao conferir: `ps_type_str` imprime `int[]` para
+`int[3]`~~ — FECHOU na 157: as mensagens dizem `int[3]`.

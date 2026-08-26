@@ -267,6 +267,7 @@ def ps_dup(s: const *char) -> *char:
 # ---------- the shadow stack ----------
 def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32):
     f->prev = ctx->frames
+    f->line = 0
     f->nslots = n
     f->slots = slots
     f->fn = None
@@ -281,6 +282,7 @@ def ps_push_frame(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32):
 # many it could not.
 def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char):
     f->prev = ctx->frames
+    f->line = 0
     f->nslots = n
     f->slots = slots
     f->fn = fn
@@ -296,6 +298,7 @@ def ps_push_fn(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *cha
 # estáticos.
 def ps_push_fn_dbg(ctx: *PsCtx, f: *PsFrame, slots: ***PsObj, n: i32, fn: const *char, file: const *char, names: const **char, tys: const **PsTy):
     f->prev = ctx->frames
+    f->line = 0
     f->nslots = n
     f->slots = slots
     f->fn = fn
@@ -312,11 +315,19 @@ def ps_trace_capture(ctx: *PsCtx, e: *PsErr):
     e->tr_lost = 0
     f: *PsFrame = ctx->frames
     nv: i32 = 0
+    # 34.2: the line of the statement being executed sits on the INNERMOST
+    # frame, which is a block's as often as a function's. Walking outwards, the
+    # first line seen since the last named frame belongs to the function whose
+    # frame comes next — so it is carried until there is somewhere to put it.
+    ln: i32 = 0
     while f != None:
+        if f->line != 0 and ln == 0:
+            ln = f->line
         if f->fn != None:
             if e->tr_n < PS_TRACE_MAX:
                 e->tr_fn[e->tr_n] = f->fn
                 e->tr_file[e->tr_n] = f->file
+                e->tr_line[e->tr_n] = ln
                 e->tr_nsl[e->tr_n] = 0
                 # os VALORES, quando o programa foi compilado com `-g`. Copiados
                 # AQUI e não no relatório: quando o relatório acontece a pilha já
@@ -334,6 +345,7 @@ def ps_trace_capture(ctx: *PsCtx, e: *PsErr):
                 e->tr_n += 1
             else:
                 e->tr_lost += 1
+            ln = 0
         f = f->prev
 
 def ps_pop_frame(ctx: *PsCtx, f: *PsFrame):

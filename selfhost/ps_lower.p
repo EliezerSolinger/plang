@@ -283,6 +283,8 @@ struct PsLow:
     private def block(self: *PsLow, b: *PsBlock) -> *Block
     private def is_collected(self: *PsLow, t: *Type) -> bool
     private def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block
+    private def line_stamp(self: *PsLow, v: *Vec<*Stmt>, fr: const *char)
+    private def stamp_block(self: *PsLow, b: *Block, fr: const *char)
     private def dbg_slot(self: *PsLow, nm: *Vec<*Expr>, ty: *Vec<*Expr>, name: const *char, pos: Pos)
     private def slot_store(self: *PsLow, arr: const *char, k: i32, name: const *char, pos: Pos) -> *Stmt
     private def zero_struct(self: *PsLow, pos: Pos) -> *Expr
@@ -5946,6 +5948,73 @@ struct PsLow:
     # not a scope change (they were already this block's) and it is what makes
     # the frame safe: a slot is registered only once it holds either None or a
     # real reference, never whatever was on the stack.
+    # 34.2 — `__frN.line = L` before every statement that can raise.
+    #
+    # A trace that says `in edit (codeview.psc)` tells the reader the file, which
+    # is the half they already knew. The line is the other half, and it costs one
+    # STORE to a local struct field: no call, no branch, nothing the collector
+    # has to know about. It is emitted only inside a block that HAS a frame, so a
+    # leaf function with nothing collected still pays exactly nothing.
+    #
+    # Every statement and not only the ones that CALL, because the innermost line
+    # is where the error is raised — and `xs[5]`, a division by zero and an
+    # overflow all raise without calling anything.
+    #
+    # It descends into a nested block that did NOT get a frame of its own: those
+    # statements run with THIS frame as the innermost one, so their lines belong
+    # here. A nested block that has its own frame stamps itself, and
+    # `ps_trace_capture` merges the two.
+    private def stamp_block(self: *PsLow, b: *Block, fr: const *char):
+        if b == None or b->n == 0:
+            return
+        for i in range(b->n):
+            if b->stmts[i]->kind == ST_VAR and b->stmts[i]->type != None and b->stmts[i]->type->kind == TY_NAME and b->stmts[i]->type->name != None and strcmp(b->stmts[i]->type->name, "PsFrame") == 0:
+                return   # it has its own frame; it stamps itself
+        v: Vec<*Stmt>
+        v.init()
+        for i in range(b->n):
+            v.push(b->stmts[i])
+        self->line_stamp(&v, fr)
+        b->stmts = v.data
+        b->n = i32(v.len)
+
+    private def line_stamp(self: *PsLow, v: *Vec<*Stmt>, fr: const *char):
+        out: Vec<*Stmt>
+        out.init()
+        last: i32 = 0
+        for i in range(v->len):
+            st: *Stmt = v->data[i]
+            # a declaration of the frame's own machinery has no line to report,
+            # and a label/case is not a statement that runs
+            if st->pos.line > 0 and st->pos.line != last and st->kind != ST_LABEL and st->kind != ST_CASE:
+                asg: *Stmt = st_new(self->a, ST_ASSIGN, st->pos)
+                fld: *Expr = ex_new(self->a, EX_FIELD, st->pos)
+                fld->op = TK_DOT
+                fld->lhs = self->ident(fr, st->pos)
+                fld->field = "line"
+                asg->lhs = fld
+                asg->op = TK_ASSIGN
+                asg->rhs = ex_new(self->a, EX_NUMBER, st->pos)
+                asg->rhs->text = self->a->printf("%d", st->pos.line)
+                out.push(asg)
+                last = st->pos.line
+            # ... and then into whatever blocks this statement carries
+            for k in range(st->nconds):
+                self->stamp_block(st->blocks[k], fr)
+                last = 0
+            if st->else_block != None:
+                self->stamp_block(st->else_block, fr)
+                last = 0
+            if st->body != None:
+                self->stamp_block(st->body, fr)
+                last = 0
+            for k2 in range(st->ncases):
+                self->stamp_block(st->cases[k2]->body, fr)
+                last = 0
+            out.push(st)
+        v->data = out.data
+        v->len = out.len
+
     private def frame_wrap(self: *PsLow, v: *Vec<*Stmt>, params: **Param, nparams: i32, pos: Pos) -> *Block:
         decls: Vec<*Stmt>
         decls.init()
@@ -6105,6 +6174,10 @@ struct PsLow:
         pb->n = 1
         po->body = pb
         out.push(po)
+        # 34.2: now that the frame exists and has a name, the body can say which
+        # line it is on. After the push, so a raise during the push itself — of
+        # which there is none — could not read a line that had not happened.
+        self->line_stamp(&body, fr)
         for i in range(body.len):
             out.push(body.data[i])
         r: *Block = self->a->alloc(sizeof(Block))

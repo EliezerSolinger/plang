@@ -421,6 +421,10 @@ static int PsLow_is_collected(PsLow *self, Type *t);
 
 static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_t nparams, Pos pos);
 
+static void PsLow_line_stamp(PsLow *self, Vec_pStmt *v, const char *fr);
+
+static void PsLow_stamp_block(PsLow *self, Block *b, const char *fr);
+
 static void PsLow_dbg_slot(PsLow *self, Vec_pExpr *nm, Vec_pExpr *ty, const char *name, Pos pos);
 
 static Stmt *PsLow_slot_store(PsLow *self, const char *arr, int32_t k, const char *name, Pos pos);
@@ -6206,6 +6210,70 @@ static int PsLow_is_collected(PsLow *self, Type *t) {
     return PsLow_is_pstruct(self, n);
 }
 
+static void PsLow_stamp_block(PsLow *self, Block *b, const char *fr) {
+    if (b == NULL || b->n == 0) {
+        return;
+    }
+    size_t i;
+    for (i = 0; i < b->n; i += 1) {
+        if (b->stmts[i]->kind == ST_VAR && b->stmts[i]->type != NULL && b->stmts[i]->type->kind == TY_NAME && b->stmts[i]->type->name != NULL && strcmp(b->stmts[i]->type->name, "PsFrame") == 0) {
+            return;
+        }
+    }
+    Vec_pStmt v;
+    Vec_pStmt_init(&v);
+    for (i = 0; i < b->n; i += 1) {
+        Vec_pStmt_push(&v, b->stmts[i]);
+    }
+    PsLow_line_stamp(self, &v, fr);
+    b->stmts = v.data;
+    b->n = (int32_t)v.len;
+}
+
+static void PsLow_line_stamp(PsLow *self, Vec_pStmt *v, const char *fr) {
+    Vec_pStmt out;
+    Vec_pStmt_init(&out);
+    int32_t last = 0;
+    size_t i;
+    for (i = 0; i < v->len; i += 1) {
+        Stmt *st = v->data[i];
+        if (st->pos.line > 0 && st->pos.line != last && st->kind != ST_LABEL && st->kind != ST_CASE) {
+            Stmt *asg = st_new(self->a, ST_ASSIGN, st->pos);
+            Expr *fld = ex_new(self->a, EX_FIELD, st->pos);
+            fld->op = TK_DOT;
+            fld->lhs = PsLow_ident(self, fr, st->pos);
+            fld->field = "line";
+            asg->lhs = fld;
+            asg->op = TK_ASSIGN;
+            asg->rhs = ex_new(self->a, EX_NUMBER, st->pos);
+            asg->rhs->text = Arena_printf(self->a, "%d", st->pos.line);
+            Vec_pStmt_push(&out, asg);
+            last = st->pos.line;
+        }
+        size_t k;
+        for (k = 0; k < st->nconds; k += 1) {
+            PsLow_stamp_block(self, st->blocks[k], fr);
+            last = 0;
+        }
+        if (st->else_block != NULL) {
+            PsLow_stamp_block(self, st->else_block, fr);
+            last = 0;
+        }
+        if (st->body != NULL) {
+            PsLow_stamp_block(self, st->body, fr);
+            last = 0;
+        }
+        size_t k2;
+        for (k2 = 0; k2 < st->ncases; k2 += 1) {
+            PsLow_stamp_block(self, st->cases[k2]->body, fr);
+            last = 0;
+        }
+        Vec_pStmt_push(&out, st);
+    }
+    v->data = out.data;
+    v->len = out.len;
+}
+
 static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_t nparams, Pos pos) {
     Vec_pStmt decls;
     Vec_pStmt_init(&decls);
@@ -6375,6 +6443,7 @@ static Block *PsLow_frame_wrap(PsLow *self, Vec_pStmt *v, Param **params, int32_
     pb->n = 1;
     po->body = pb;
     Vec_pStmt_push(&out, po);
+    PsLow_line_stamp(self, &body, fr);
     for (i = 0; i < body.len; i += 1) {
         Vec_pStmt_push(&out, body.data[i]);
     }

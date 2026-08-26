@@ -6978,6 +6978,13 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
         case PT_DICT:
             return a->printf("Dict<%s, %s>", ps_type_str(a, t->key), ps_type_str(a, t->inner))
         case PT_ARRAY:
+            # the SIZE belongs in the message: `int[3]` and `int[4]` are two
+            # different types, and a diagnostic that prints both as `int[]`
+            # states the mismatch and then hides it. Sema normalizes the count
+            # to a literal (33.4); before that — a parse-time error — there is
+            # no number to print and the bare form is the honest one.
+            if t->count != None and t->count->kind == PE_INT:
+                return a->printf("%s[%s]", ps_type_str(a, t->inner), t->count->text)
             return a->printf("%s[]", ps_type_str(a, t->inner))
         case PT_OPT:
             return a->printf("%s?", ps_type_str(a, t->inner))

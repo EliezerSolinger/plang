@@ -448,6 +448,7 @@ struct PsErr:
     line: i32
     tr_fn: const *char[24]
     tr_file: const *char[24]
+    tr_line: i32[24]
     tr_n: i32
     tr_lost: i32       # frames the array could not hold
     # ---- O POST-MORTEM (F6): os VALORES, e não só os nomes ----
@@ -559,6 +560,15 @@ struct PsFrame:
     prev: *PsFrame
     nslots: i32
     slots: ***PsObj    # array of slot ADDRESSES: `*slots[i]` is the reference
+    # 34.2: the LINE currently executing in this frame. Written before each
+    # statement that can call, so a trace says `in edit (codeview.psc:88)` and
+    # not just the file — the file alone is the part the reader already knew.
+    #
+    # It lives on EVERY frame, a block's included, because the statement being
+    # executed is inside the innermost block and the frame it can reach is that
+    # block's. `ps_trace_capture` merges: walking outwards, the first line seen
+    # since the last named frame is the line of the function that follows.
+    line: i32
     fn: const *char    # 34.2: the FUNCTION this frame belongs to, or None when
                        #   the frame is a block's (the lowering wraps loop
                        #   bodies and blocks too, and a trace that repeated the

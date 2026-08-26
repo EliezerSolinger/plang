@@ -8923,6 +8923,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
             return Arena_printf(a, "Dict<%s, %s>", ps_type_str(a, t->key), ps_type_str(a, t->inner));
         }
         case PT_ARRAY: {
+            if (t->count != NULL && t->count->kind == PE_INT) {
+                return Arena_printf(a, "%s[%s]", ps_type_str(a, t->inner), t->count->text);
+            }
             return Arena_printf(a, "%s[]", ps_type_str(a, t->inner));
         }
         case PT_OPT: {
