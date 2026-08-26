@@ -8076,3 +8076,105 @@ Fica registado com a recuperação, que é uma linha:
 
 **Um `verify-all` que falhe em muitos sítios ao mesmo tempo merece um `git status`
 antes de qualquer diagnóstico.** Foi o que custou a primeira hora desta sessão.
+
+---
+
+## Bateria 161 — o blob partilhado, e o `const` que era uma placa (2026-08-26)
+
+Pergunta tua: *"como um código P e um código PScript podem gerir um mesmo blob de
+bytes? digo um manipular dos dois lados"* — e depois, quando expliquei o que
+faltava: *"é seguro?"*
+
+### 161.1 — a medição que reformulou a pergunta
+
+Antes de propor o que quer que fosse, escrevi isto em P contra um `bytes`, que é
+**imutável por contrato**:
+
+    def escreve(in b: CBytes, v: i64) -> i64:
+        p: *u8 = (*u8)(b.ptr)      # tirar o const, à moda do C
+        for i in range(b.len):
+            p[i] = u8(v)
+
+    escreveu em 3 bytes de um `bytes` IMUTAVEL
+    e agora vale: 9 9 9
+
+**Já se escrevia.** O `const` no `CBytes.ptr` documenta a intenção; não a impõe
+contra ninguém. E não é um furo que alguém deixou aberto — é o que *"o P fala com
+o C sem runtime"* quer dizer, levado até ao fim: uma linguagem com ponteiros
+crus, conversões e `memcpy` não consegue prometer a ninguém que uns bytes não
+mudam.
+
+O que me incomodou não foi o furo. Foi a **prosa**: o `mapbridge.psc` e o
+`cstr.ph` deixavam o leitor inferir uma garantia que ali não estava. Quem lê "só
+de leitura" ouve *impossível escrever*, e o que era verdade é *não é suposto
+escrever*. Os dois ficheiros passaram a dizê-lo.
+
+Portanto a escolha nunca foi *seguro contra inseguro*. Era:
+
+* **antes** — a coisa perigosa é possível e **invisível**, uma conversão no meio
+  de um ficheiro em P;
+* **agora** — a coisa perigosa é possível e **está escrita na assinatura**.
+
+É a jogada da 141.4 e da 153.2 outra vez (*"a promessa perigosa tem de estar
+visivelmente escrita"*), com uma coisa por cima que a conversão nunca deu.
+
+### 161.2 — `CBuf`, e o que ele RECUSA é o que o torna melhor
+
+O terceiro membro da família do `cstr.ph`. A diferença é uma palavra — o `ptr`
+não tem `const` — e o que ela compra é a assinatura dizer qual dos lados é
+escrito antes de alguém ler o corpo.
+
+**O que o torna sólido é de onde ele pode vir.** A costura só o constrói sobre um
+`Buffer` ou uma `View<u8>` dele, e **recusa** os outros dois com a razão escrita:
+
+| | |
+|---|---|
+| `bytes` | *"a `bytes` is immutable by contract, and a `CBuf` is the pair that writes"* |
+| `List<u8>` | *"lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is"* |
+
+Antes da 161 escrevia-se nos dois com aquela conversão de duas linhas, sem
+ninguém se queixar. **Recusar estes dois é a parte que a conversão nunca poderia
+fazer.**
+
+E não VOLTA: um `CBuf` como tipo de retorno faz a função não atravessar. Devolvê-lo
+seria dar ao pscript um ponteiro cru cujo tempo de vida é do outro lado.
+
+**O índice cru continua cru**, como no `CStr.at` e no `CBytes.at` — isto é P, e o
+P não confere limites. O que está lá em vez disso são as três que NÃO conseguem
+sair fora: o `slice` limita, o `fill` anda o seu próprio comprimento, e o
+`copy_from` pára no mais curto dos dois e diz quantos coube. Ler para lá do fim
+dá lixo; escrever para lá do fim estraga o alocador, e por isso as operações que
+não pedem um índice à mão são as primeiras a que se pega.
+
+### 161.3 — o `Buffer` atravessa, e devia ter atravessado sempre
+
+O `cbytes_ok` aceitava `bytes` e `List<u8>`, e mais nada. Mas o teste real desta
+travessia é **"o ponteiro fica quieto?"**, e o `Buffer` é quem melhor o passa:
+`calloc` no header E no bloco, fora do monte coletado, feito assim em 19.4/52.3
+**precisamente para outra thread o segurar**. É mais estável do que o `List<u8>`
+que já atravessava — cujo armazenamento o coletor possui e move.
+
+Ficara de fora porque aquela lista foi escrita quando o `bytes` era a novidade, e
+ninguém voltou lá. Omissão, e não decisão.
+
+### 161.4 — e o defeito que apareceu ao usar o que eu tinha acabado de escrever
+
+O meu `copy_from` não compilava: `CBuf_copy_from(d, *s)`, um ponteiro e um valor.
+E não era meu — o `CBytes_eq(&a, b)` que já lá estava tem exactamente a mesma
+forma.
+
+**Numa chamada de MÉTODO, um `in` em falta no sítio da chamada não era
+diagnosticado.** O receptor é implícito e leva o `&` sozinho; um argumento não é,
+e a verificação que uma chamada de função comum já fazia — *"parameter '%s' of
+'%s' is declared 'in', so the call site says it too (65.12)"* — não existia no
+caminho dos métodos. O compilador emitia C partido em silêncio, e quem tentasse
+recebia um erro do compilador de C sobre um argumento que nunca escreveu.
+
+Medido: **nada na árvore chama `.eq`, `.starts_with` ou `.find` de um `CStr` ou
+`CBytes`.** Foram escritos, e nunca foram chamáveis. A queixa agora existe, e
+`a.eq(in b)` compila.
+
+Portões: `tests/pscript/run/blobbridge.psc` (a travessia nos dois sentidos, mais
+uma vista), duas recusas em `tests/pscript/bad/cbuf_*`, e o tipo em si no
+`tests/stl/main.p` — onde o `slice(6, 99)` limita a 2 e o `copy_from` de três
+bytes para dois devolve 2.

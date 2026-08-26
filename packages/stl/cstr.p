@@ -13,3 +13,4 @@
 import <stl/cstr.ph>
 implement CStr
 implement CBytes
+implement CBuf

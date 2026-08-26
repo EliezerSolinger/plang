@@ -2004,6 +2004,8 @@ static int32_t PsSema_cstr_kind(PsSema *self, Type *t);
 
 static int PsSema_cbytes_ok(PsSema *self, PsType *t);
 
+static int PsSema_cbuf_ok(PsSema *self, PsType *t);
+
 static PsType *PsSema_bytes_type(PsSema *self, Pos pos);
 
 static void PsSema_check_method(PsSema *self, PsDecl *d, PsFunc *f);
@@ -2132,16 +2134,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_631_9 = &self->locals[self->nlocals];
-        __with_631_9->name = name;
-        __with_631_9->type = t;
-        __with_631_9->assigned = assigned;
-        __with_631_9->is_const = is_const;
-        __with_631_9->frozen = 0;
-        __with_631_9->is_module = 0;
-        __with_631_9->opt_type = NULL;
-        __with_631_9->any_type = NULL;
-        __with_631_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_632_9 = &self->locals[self->nlocals];
+        __with_632_9->name = name;
+        __with_632_9->type = t;
+        __with_632_9->assigned = assigned;
+        __with_632_9->is_const = is_const;
+        __with_632_9->frozen = 0;
+        __with_632_9->is_module = 0;
+        __with_632_9->opt_type = NULL;
+        __with_632_9->any_type = NULL;
+        __with_632_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2687,12 +2689,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_1177_17 = e;
-                __with_1177_17->kind = PE_CALL;
-                __with_1177_17->lhs = cal8;
-                __with_1177_17->args = args8;
-                __with_1177_17->nargs = nc8;
-                __with_1177_17->body = NULL;
+                PsExpr *__with_1178_17 = e;
+                __with_1178_17->kind = PE_CALL;
+                __with_1178_17->lhs = cal8;
+                __with_1178_17->args = args8;
+                __with_1178_17->nargs = nc8;
+                __with_1178_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -3446,14 +3448,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1896_21 = e;
-                    __with_1896_21->kind = PE_COMPREHEND;
-                    __with_1896_21->op = TK_RBRACKET;
-                    __with_1896_21->var = kv9;
-                    __with_1896_21->lhs = pair;
-                    __with_1896_21->rhs = recv9;
-                    __with_1896_21->args = NULL;
-                    __with_1896_21->nargs = 0;
+                    PsExpr *__with_1897_21 = e;
+                    __with_1897_21->kind = PE_COMPREHEND;
+                    __with_1897_21->op = TK_RBRACKET;
+                    __with_1897_21->var = kv9;
+                    __with_1897_21->lhs = pair;
+                    __with_1897_21->rhs = recv9;
+                    __with_1897_21->args = NULL;
+                    __with_1897_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -4336,9 +4338,19 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 }
                 e->args[i]->is_in = 1;
             }
-            if (cf->params[i].cstr == 2) {
-                if (!PsSema_cbytes_ok(self, at4)) {
-                    fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes` or a List<u8>, found %s (84.1)", cf->params[i].name, ps_type_str(self->a, at4));
+            if (cf->params[i].cstr == 2 || cf->params[i].cstr == 3) {
+                if (cf->params[i].cstr == 3) {
+                    if (!PsSema_cbuf_ok(self, at4)) {
+                        const char *porque = "";
+                        if (at4 != NULL && at4->kind == PT_BYTES) {
+                            porque = " — a `bytes` is immutable by contract, and a `CBuf` is the pair that writes";
+                        } else if (at4 != NULL && at4->kind == PT_LIST) {
+                            porque = " — a `List<u8>` lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is";
+                        }
+                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBuf`: it takes a `Buffer` or a View<u8> of one, found %s%s (161.2)", cf->params[i].name, ps_type_str(self->a, at4), porque);
+                    }
+                } else if (!PsSema_cbytes_ok(self, at4)) {
+                    fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes`, a `Buffer`, a View<u8> or a List<u8>, found %s (84.1/161.3)", cf->params[i].name, ps_type_str(self->a, at4));
                 }
                 e->args[i]->type = at4;
             } else {
@@ -5574,12 +5586,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3870_17 = e;
-                __with_3870_17->kind = PE_INDEX;
-                __with_3870_17->lhs = e->args[0];
-                __with_3870_17->rhs = below;
-                __with_3870_17->args = NULL;
-                __with_3870_17->nargs = 0;
+                PsExpr *__with_3882_17 = e;
+                __with_3882_17->kind = PE_INDEX;
+                __with_3882_17->lhs = e->args[0];
+                __with_3882_17->rhs = below;
+                __with_3882_17->args = NULL;
+                __with_3882_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -6131,26 +6143,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_4378_17 = e;
-                __with_4378_17->kind = PE_STR;
-                __with_4378_17->text = lit7;
-                __with_4378_17->lhs = NULL;
-                __with_4378_17->rhs = NULL;
-                __with_4378_17->args = NULL;
-                __with_4378_17->nargs = 0;
+                PsExpr *__with_4390_17 = e;
+                __with_4390_17->kind = PE_STR;
+                __with_4390_17->text = lit7;
+                __with_4390_17->lhs = NULL;
+                __with_4390_17->rhs = NULL;
+                __with_4390_17->args = NULL;
+                __with_4390_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_4391_13 = e;
-            __with_4391_13->kind = PE_LOWERED;
-            __with_4391_13->low = ln7;
-            __with_4391_13->lhs = NULL;
-            __with_4391_13->rhs = NULL;
-            __with_4391_13->args = NULL;
-            __with_4391_13->nargs = 0;
+            PsExpr *__with_4403_13 = e;
+            __with_4403_13->kind = PE_LOWERED;
+            __with_4403_13->low = ln7;
+            __with_4403_13->lhs = NULL;
+            __with_4403_13->rhs = NULL;
+            __with_4403_13->args = NULL;
+            __with_4403_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -6480,10 +6492,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_4705_17 = &ns->quals[ns->nquals];
-                __with_4705_17->name = q;
-                __with_4705_17->orig = d->path;
-                __with_4705_17->ns = sub;
+                PsNsEnt *__with_4717_17 = &ns->quals[ns->nquals];
+                __with_4717_17->name = q;
+                __with_4717_17->orig = d->path;
+                __with_4717_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -6496,10 +6508,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_4717_21 = &ns->ents[ns->nents];
-                    __with_4717_21->name = local;
-                    __with_4717_21->orig = d->names[k];
-                    __with_4717_21->ns = sub;
+                    PsNsEnt *__with_4729_21 = &ns->ents[ns->nents];
+                    __with_4729_21->name = local;
+                    __with_4729_21->orig = d->names[k];
+                    __with_4729_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6979,10 +6991,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_5223_9 = e;
-        __with_5223_9->kind = PE_NAME;
-        __with_5223_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_5223_9->lhs = NULL;
+        PsExpr *__with_5235_9 = e;
+        __with_5235_9->kind = PE_NAME;
+        __with_5235_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_5235_9->lhs = NULL;
     }
     return 1;
 }
@@ -7133,6 +7145,9 @@ static void PsSema_ingest_cdecls(PsSema *self, PsModule *m, Module *cm) {
         }
         int32_t rck = PsSema_cstr_kind(self, f->ret);
         PsType *rt = PsSema_c_type(self, f->ret);
+        if (rck == 3) {
+            continue;
+        }
         if (rck != 0) {
             rt = (rck == 1 ? ps_type(self->a, PT_STR, zero_ps_pos()) : PsSema_bytes_type(self, zero_ps_pos()));
         }
@@ -7193,6 +7208,9 @@ static int32_t PsSema_cstr_kind(PsSema *self, Type *t) {
     if (strcmp(b->name, "CBytes") == 0) {
         return 2;
     }
+    if (strcmp(b->name, "CBuf") == 0) {
+        return 3;
+    }
     return 0;
 }
 
@@ -7203,7 +7221,23 @@ static int PsSema_cbytes_ok(PsSema *self, PsType *t) {
     if (t->kind == PT_BYTES) {
         return 1;
     }
+    if (t->kind == PT_BUFFER) {
+        return 1;
+    }
+    if (t->kind == PT_VIEW) {
+        return t->inner != NULL && t->inner->kind == PT_INT && t->inner->width == 8 && t->inner->uns;
+    }
     return t->kind == PT_LIST && t->inner != NULL && t->inner->kind == PT_INT && t->inner->width == 8 && t->inner->uns;
+}
+
+static int PsSema_cbuf_ok(PsSema *self, PsType *t) {
+    if (t == NULL) {
+        return 0;
+    }
+    if (t->kind == PT_BUFFER) {
+        return 1;
+    }
+    return t->kind == PT_VIEW && t->inner != NULL && t->inner->kind == PT_INT && t->inner->width == 8 && t->inner->uns;
 }
 
 static PsType *PsSema_bytes_type(PsSema *self, Pos pos) {

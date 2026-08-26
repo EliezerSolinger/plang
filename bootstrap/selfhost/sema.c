@@ -5365,6 +5365,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                                 Sema_lam_fix(self, e->args[i], mth->params[i + 1].type);
                             }
                             Sema_check_expr(self, e->args[i]);
+                            if (i + 1 < mth->nparams && mth->params[i + 1].byref != PK_NONE) {
+                                Type *mat = Sema_type_of(self, e->args[i]);
+                                if (mat != NULL && mat->kind != TY_PTR && mat->kind != TY_ARRAY) {
+                                    const char *mkw = (mth->params[i + 1].byref == PK_OUT ? "out" : (mth->params[i + 1].byref == PK_REF ? "ref" : "in"));
+                                    fatal_at(self->file, e->args[i]->pos, "parameter '%s' of method '%s' is declared '%s', so the call site says it too: `x.%s(%s y)` (65.12)", mth->params[i + 1].name, callee->field, mkw, callee->field, mkw);
+                                }
+                            }
                             args = vec_grow(args, n, &cn, sizeof(*args));
                             args[n] = e->args[i];
                             n += 1;
@@ -5506,13 +5513,13 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     args2[n2] = e->lhs;
                     n2 += 1;
                     {
-                        Expr *__with_3711_25 = e;
-                        __with_3711_25->kind = EX_CALL;
-                        __with_3711_25->lhs = deref;
-                        __with_3711_25->args = args2;
-                        __with_3711_25->nargs = n2;
-                        __with_3711_25->cast_type = NULL;
-                        __with_3711_25->cast_tentative = 0;
+                        Expr *__with_3726_25 = e;
+                        __with_3726_25->kind = EX_CALL;
+                        __with_3726_25->lhs = deref;
+                        __with_3726_25->args = args2;
+                        __with_3726_25->nargs = n2;
+                        __with_3726_25->cast_type = NULL;
+                        __with_3726_25->cast_tentative = 0;
                     }
                     Sema_check_expr(self, e);
                     return;
@@ -5607,11 +5614,11 @@ static void Sema_check_expr(Sema *self, Expr *e) {
                     Expr *oin = mk_ident(self->a, e->text, e->pos);
                     oin->out_done = 1;
                     {
-                        Expr *__with_3804_25 = e;
-                        __with_3804_25->kind = EX_UNARY;
-                        __with_3804_25->op = TK_STAR;
-                        __with_3804_25->lhs = oin;
-                        __with_3804_25->text = NULL;
+                        Expr *__with_3819_25 = e;
+                        __with_3819_25->kind = EX_UNARY;
+                        __with_3819_25->op = TK_STAR;
+                        __with_3819_25->lhs = oin;
+                        __with_3819_25->text = NULL;
                     }
                     Sema_check_expr(self, e);
                     return;
@@ -6006,12 +6013,12 @@ static void Sema_check_expr(Sema *self, Expr *e) {
             }
             Expr *wid = mk_ident(self->a, e->text, e->pos);
             {
-                Expr *__with_4137_17 = e;
-                __with_4137_17->kind = EX_ASSIGN;
-                __with_4137_17->op = TK_ASSIGN;
-                __with_4137_17->rhs = e->lhs;
-                __with_4137_17->lhs = wid;
-                __with_4137_17->text = NULL;
+                Expr *__with_4152_17 = e;
+                __with_4152_17->kind = EX_ASSIGN;
+                __with_4152_17->op = TK_ASSIGN;
+                __with_4152_17->rhs = e->lhs;
+                __with_4152_17->lhs = wid;
+                __with_4152_17->text = NULL;
             }
             return;
         }
@@ -6329,12 +6336,12 @@ static void Sema_check_stmt(Sema *self, Stmt *st) {
                     return;
                 }
                 {
-                    Stmt *__with_4432_21 = st;
-                    __with_4432_21->kind = ST_VAR;
-                    __with_4432_21->name = st->lhs->text;
-                    __with_4432_21->type = ity;
-                    __with_4432_21->init = st->rhs;
-                    __with_4432_21->is_const = 0;
+                    Stmt *__with_4447_21 = st;
+                    __with_4447_21->kind = ST_VAR;
+                    __with_4447_21->name = st->lhs->text;
+                    __with_4447_21->type = ity;
+                    __with_4447_21->init = st->rhs;
+                    __with_4447_21->is_const = 0;
                 }
                 Sema_resolve_type(self, st->type);
                 Sema_scope_add(self, st->name, st->type);
@@ -7638,13 +7645,13 @@ static void Sema_trait_impl(Sema *self, Module *m, Decl *d, int check_bodies) {
         }
     }
     {
-        Decl *__with_5600_9 = d;
-        __with_5600_9->kind = DL_STRUCT;
-        __with_5600_9->name = d->trait_for;
-        __with_5600_9->fields = NULL;
-        __with_5600_9->nfields = 0;
-        __with_5600_9->is_def = 0;
-        __with_5600_9->is_fwd = 0;
+        Decl *__with_5615_9 = d;
+        __with_5615_9->kind = DL_STRUCT;
+        __with_5615_9->name = d->trait_for;
+        __with_5615_9->fields = NULL;
+        __with_5615_9->nfields = 0;
+        __with_5615_9->is_def = 0;
+        __with_5615_9->is_fwd = 0;
     }
 }
 
@@ -7710,13 +7717,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             }
         }
         {
-            Decl *__with_5660_13 = d;
-            __with_5660_13->kind = DL_STRUCT;
-            __with_5660_13->name = si0->name;
-            __with_5660_13->fields = NULL;
-            __with_5660_13->nfields = 0;
-            __with_5660_13->methods = bodies0;
-            __with_5660_13->nmethods = nb;
+            Decl *__with_5675_13 = d;
+            __with_5675_13->kind = DL_STRUCT;
+            __with_5675_13->name = si0->name;
+            __with_5675_13->fields = NULL;
+            __with_5675_13->nfields = 0;
+            __with_5675_13->methods = bodies0;
+            __with_5675_13->nmethods = nb;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -7756,9 +7763,9 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             inst->is_inline = 1;
         }
         {
-            Decl *__with_5701_13 = d;
-            __with_5701_13->kind = DL_FUNC;
-            __with_5701_13->func = inst;
+            Decl *__with_5716_13 = d;
+            __with_5716_13->kind = DL_FUNC;
+            __with_5716_13->func = inst;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -7794,13 +7801,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             ibodies[ii]->is_inline = 1;
         }
         {
-            Decl *__with_5732_13 = d;
-            __with_5732_13->kind = DL_STRUCT;
-            __with_5732_13->name = mangled;
-            __with_5732_13->fields = iflds;
-            __with_5732_13->nfields = tpl->nfields;
-            __with_5732_13->methods = ibodies;
-            __with_5732_13->nmethods = tpl->nmethods;
+            Decl *__with_5747_13 = d;
+            __with_5747_13->kind = DL_STRUCT;
+            __with_5747_13->name = mangled;
+            __with_5747_13->fields = iflds;
+            __with_5747_13->nfields = tpl->nfields;
+            __with_5747_13->methods = ibodies;
+            __with_5747_13->nmethods = tpl->nmethods;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -7819,13 +7826,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
             protos[i] = Sema_clone_func(self, &sub, tpl->methods[i], mangled, 0);
         }
         {
-            Decl *__with_5752_13 = d;
-            __with_5752_13->kind = DL_STRUCT;
-            __with_5752_13->name = mangled;
-            __with_5752_13->fields = fields;
-            __with_5752_13->nfields = tpl->nfields;
-            __with_5752_13->methods = protos;
-            __with_5752_13->nmethods = tpl->nmethods;
+            Decl *__with_5767_13 = d;
+            __with_5767_13->kind = DL_STRUCT;
+            __with_5767_13->name = mangled;
+            __with_5767_13->fields = fields;
+            __with_5767_13->nfields = tpl->nfields;
+            __with_5767_13->methods = protos;
+            __with_5767_13->nmethods = tpl->nmethods;
         }
         Sema_register_decl(self, m, d, check_bodies);
         return;
@@ -7842,13 +7849,13 @@ static void Sema_instantiate(Sema *self, Module *m, Decl *d, int check_bodies) {
         bodies[i] = Sema_clone_func(self, &sub, tpl->methods[i], mangled, 1);
     }
     {
-        Decl *__with_5771_9 = d;
-        __with_5771_9->kind = DL_STRUCT;
-        __with_5771_9->name = mangled;
-        __with_5771_9->fields = NULL;
-        __with_5771_9->nfields = 0;
-        __with_5771_9->methods = bodies;
-        __with_5771_9->nmethods = tpl->nmethods;
+        Decl *__with_5786_9 = d;
+        __with_5786_9->kind = DL_STRUCT;
+        __with_5786_9->name = mangled;
+        __with_5786_9->fields = NULL;
+        __with_5786_9->nfields = 0;
+        __with_5786_9->methods = bodies;
+        __with_5786_9->nmethods = tpl->nmethods;
     }
     Sema_register_decl(self, m, d, check_bodies);
 }
@@ -7925,11 +7932,11 @@ static int Sema_try_ns_ref(Sema *self, Expr *e) {
     }
     const char *qual = Arena_printf(self->a, "%s.%s", e->lhs->text, e->field);
     {
-        Expr *__with_5834_9 = e;
-        __with_5834_9->kind = EX_IDENT;
-        __with_5834_9->text = Sema_ns_plain(self, qual, e->pos);
-        __with_5834_9->lhs = NULL;
-        __with_5834_9->field = NULL;
+        Expr *__with_5849_9 = e;
+        __with_5849_9->kind = EX_IDENT;
+        __with_5849_9->text = Sema_ns_plain(self, qual, e->pos);
+        __with_5849_9->lhs = NULL;
+        __with_5849_9->field = NULL;
     }
     return 1;
 }
@@ -8280,10 +8287,10 @@ static void Sema_record_ctor(Sema *self, Expr *e, SInfo *si) {
     Type *ct = ty_name(self->a, si->name);
     Sema_resolve_type(self, ct);
     {
-        Expr *__with_6150_9 = e;
-        __with_6150_9->kind = EX_COMPOUND;
-        __with_6150_9->cast_type = ct;
-        __with_6150_9->lhs = NULL;
+        Expr *__with_6165_9 = e;
+        __with_6165_9->kind = EX_COMPOUND;
+        __with_6165_9->cast_type = ct;
+        __with_6165_9->lhs = NULL;
     }
     if (self->cc != NULL && self->cc->std_version == 89 && !self->in_complit_init) {
         Sema_complit_to_temp(self, e, si);
@@ -8647,14 +8654,14 @@ static void Sema_inject_defines(Sema *self, Cc *cc, Module *m) {
         }
         Decl *dc = Arena_alloc(self->a, sizeof(Decl));
         {
-            Decl *__with_6508_13 = dc;
-            __with_6508_13->kind = DL_VAR;
-            __with_6508_13->pos = zp;
-            __with_6508_13->name = name;
-            __with_6508_13->is_const = 1;
-            __with_6508_13->is_static = 1;
-            __with_6508_13->is_define = 1;
-            __with_6508_13->init = ini;
+            Decl *__with_6523_13 = dc;
+            __with_6523_13->kind = DL_VAR;
+            __with_6523_13->pos = zp;
+            __with_6523_13->name = name;
+            __with_6523_13->is_const = 1;
+            __with_6523_13->is_static = 1;
+            __with_6523_13->is_define = 1;
+            __with_6523_13->init = ini;
         }
         nd[np] = dc;
         np += 1;

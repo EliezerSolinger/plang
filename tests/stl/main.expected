@@ -27,3 +27,7 @@ utf8 😀 4
 utf8 roundtrip 8/8
 utf8 refused 6/6
 utf8 walked 4 over 10 bytes
+cbuf 9 1 8
+cbuf slice 2 -> 1 4
+cbuf copy 2
+cbuf bytes 8 7

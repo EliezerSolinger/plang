@@ -4966,12 +4966,13 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                 Stmt *sv9 = st_new(self->a, ST_VAR, e->pos);
                 sv9->name = sn9;
                 int abk9 = e->args[i]->type != NULL && e->args[i]->type->kind == PT_BYTES;
-                sv9->type = ty_ptr(self->a, ty_name(self->a, (csk9 == 1 ? "PsStr" : (abk9 ? "PsBytes" : "PsList"))));
+                int abf9 = e->args[i]->type != NULL && e->args[i]->type->kind == PT_BUFFER;
+                sv9->type = ty_ptr(self->a, ty_name(self->a, (csk9 == 1 ? "PsStr" : (abk9 ? "PsBytes" : (abf9 ? "PsBuffer" : "PsList")))));
                 sv9->init = a9;
                 Vec_pStmt_push(&self->pre, sv9);
                 Stmt *vd9 = st_new(self->a, ST_VAR, e->pos);
                 vd9->name = tn9;
-                vd9->type = ty_name(self->a, (csk9 == 1 ? "CStr" : "CBytes"));
+                vd9->type = ty_name(self->a, (csk9 == 1 ? "CStr" : (csk9 == 3 ? "CBuf" : "CBytes")));
                 Expr *il9 = ex_new(self->a, EX_INITLIST, e->pos);
                 il9->args = Arena_alloc(self->a, (size_t)2 * sizeof(*il9->args));
                 Expr *fp9 = ex_new(self->a, EX_FIELD, e->pos);
@@ -4980,10 +4981,16 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                 fp9->field = (csk9 == 1 ? "data" : "data");
                 if (csk9 == 1) {
                     il9->args[0] = fp9;
+                } else if (abf9) {
+                    Expr *cbf9 = ex_new(self->a, EX_CAST, e->pos);
+                    cbf9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"));
+                    cbf9->cast_type->inner->is_const = csk9 != 3;
+                    cbf9->lhs = fp9;
+                    il9->args[0] = cbf9;
                 } else if (abk9) {
                     Expr *cbb9 = ex_new(self->a, EX_CAST, e->pos);
                     cbb9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"));
-                    cbb9->cast_type->inner->is_const = 1;
+                    cbb9->cast_type->inner->is_const = csk9 != 3;
                     cbb9->lhs = fp9;
                     il9->args[0] = cbb9;
                 } else {
@@ -4991,14 +4998,14 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
                     PsLow_push_arg(self, bp9, PsLow_ident(self, sn9, e->pos));
                     Expr *cst9 = ex_new(self->a, EX_CAST, e->pos);
                     cst9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"));
-                    cst9->cast_type->inner->is_const = 1;
+                    cst9->cast_type->inner->is_const = csk9 != 3;
                     cst9->lhs = bp9;
                     il9->args[0] = cst9;
                 }
                 Expr *ln9 = ex_new(self->a, EX_FIELD, e->pos);
                 ln9->op = TK_ARROW;
                 ln9->lhs = PsLow_ident(self, sn9, e->pos);
-                ln9->field = "len";
+                ln9->field = (abf9 ? "nbytes" : "len");
                 Expr *cl9 = ex_new(self->a, EX_CAST, e->pos);
                 cl9->cast_type = ty_name(self->a, "usize");
                 cl9->lhs = ln9;

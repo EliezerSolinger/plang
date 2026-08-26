@@ -9,6 +9,7 @@ import <stl/queue.ph>
 import <stl/slice.ph>
 import <stl/dict.ph>
 import <stl/list.ph>
+import <stl/cstr.ph>
 import <stl/traits.ph>
 import <stl/utf8.ph>
 
@@ -23,6 +24,9 @@ implement StrMap<int>
 
 implement StrBuf
 implement StrSet
+# 161: o par mutável mora no `cstr.ph` como os outros dois, e materializa-se aqui
+implement CBuf
+implement CBytes
 
 declare Set<int>
 implement Set<int>
@@ -323,4 +327,36 @@ def main() -> int:
         ncp += 1
         ti += gw
     printf("utf8 walked %d over %d bytes\n", ncp, i32(tn))
+
+    # ---- 161: o `CBuf`, o membro MUTÁVEL da família do `cstr.ph` ----
+    #
+    # A diferença é uma palavra — o `ptr` não tem `const` — e o que ela compra é
+    # a assinatura dizer qual dos lados é escrito. As três operações abaixo não
+    # conseguem sair fora: o `slice` limita, o `fill` anda o seu comprimento, e
+    # o `copy_from` pára no mais curto dos dois e diz quantos coube.
+    raw: u8[8]
+    cb: CBuf = cbuf(&raw[0], usize(8))
+    cb.fill(u8(1))
+    cb.set(usize(0), u8(9))
+    printf("cbuf %d %d %d\n", i32(cb.at(usize(0))), i32(cb.at(usize(7))), i32(cb.len))
+
+    # o `slice` LIMITA em vez de estourar: pedir para lá do fim dá o que há
+    meio: CBuf = cb.slice(usize(6), usize(99))
+    meio.fill(u8(4))
+    printf("cbuf slice %d -> %d %d\n", i32(meio.len), i32(cb.at(usize(5))), i32(cb.at(usize(6))))
+
+    # o `copy_from` pára no mais curto e diz quantos foram
+    src: u8[3]
+    src[0] = u8(7)
+    src[1] = u8(7)
+    src[2] = u8(7)
+    peq: CBuf = cb.slice(usize(0), usize(2))
+    # o `in` toma um ENDEREÇO, portanto quer um lvalue — só o receptor de um
+    # método pode materializar um temporário (a regra já escrita na sema)
+    fonte: CBytes = cbytes(&src[0], usize(3))
+    printf("cbuf copy %d\n", i32(peq.copy_from(in fonte)))
+
+    # ... e a vista só-de-leitura do mesmo par, de graça
+    ro: CBytes = cb.bytes()
+    printf("cbuf bytes %d %d\n", i32(ro.len), i32(ro.at(usize(0))))
     return 0

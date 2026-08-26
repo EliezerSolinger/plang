@@ -3582,6 +3582,21 @@ struct Sema:
                                     self->check_byref_kw(e->args[i], mth, i + 1)
                                     self->lam_fix(e->args[i], mth->params[i + 1].type)   # 65.4
                                 self->check_expr(e->args[i])
+                                # 161.4: a MESMA queixa que uma chamada de função
+                                # comum já dava, e que aqui faltava. O receptor de
+                                # um método é implícito e leva o `&` sozinho; um
+                                # argumento `in` NÃO é, e sem esta verificação o
+                                # compilador emitia C partido em silêncio —
+                                # `CBytes_eq(&a, b)`, um ponteiro e um valor. Foi
+                                # assim que o `eq`, o `starts_with` e o `find` do
+                                # `cstr.ph` ficaram desde sempre por chamar: quem
+                                # tentava recebia um erro do compilador de C sobre
+                                # um argumento que ele nunca escreveu.
+                                if i + 1 < mth->nparams and mth->params[i + 1].byref != PK_NONE:
+                                    mat: *Type = self->type_of(e->args[i])
+                                    if mat != None and mat->kind != TY_PTR and mat->kind != TY_ARRAY:
+                                        mkw: const *char = "out" if mth->params[i + 1].byref == PK_OUT else ("ref" if mth->params[i + 1].byref == PK_REF else "in")
+                                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' of method '%s' is declared '%s', so the call site says it too: `x.%s(%s y)` (65.12)", mth->params[i + 1].name, callee->field, mkw, callee->field, mkw)
                                 args = vec_grow(args, n, ref cn, sizeof(*args))
                                 args[n] = e->args[i]
                                 n += 1

@@ -518,6 +518,7 @@ struct PsSema:
     private def c_type(self: *PsSema, t: *Type) -> *PsType
     private def cstr_kind(self: *PsSema, t: *Type) -> i32
     private def cbytes_ok(self: *PsSema, t: *PsType) -> bool
+    private def cbuf_ok(self: *PsSema, t: *PsType) -> bool
     private def bytes_type(self: *PsSema, pos: Pos) -> *PsType
     private def check_method(self: *PsSema, d: *PsDecl, f: *PsFunc)
     private def find_method(self: *PsSema, rd: *PsDecl, name: const *char) -> *PsFunc
@@ -2734,12 +2735,23 @@ struct PsSema:
                     if e->args[i]->kind != PE_NAME or not self->gconst.has(e->args[i]->text):
                         fatal_at(self->file, e->args[i]->pos, "'%s' takes '%s' by reference (72.6), so the argument has to be a module-level `const` of type %s — a value with an address that is stable and bytes nothing can change", name, cf->params[i].name, ps_type_str(self->a, cf->params[i].type))
                     e->args[i]->is_in = True
-                if cf->params[i].cstr == 2:
+                if cf->params[i].cstr == 2 or cf->params[i].cstr == 3:
                     # either currency crosses as a `CBytes` (84.1/135.3), and
                     # `bytes` crosses BETTER: its block is outside the heap and
                     # never moves, so the pair points straight at it
-                    if not self->cbytes_ok(at4):
-                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes` or a List<u8>, found %s (84.1)", cf->params[i].name, ps_type_str(self->a, at4))
+                    if cf->params[i].cstr == 3:
+                        # 161.2: um `CBuf` ESCREVE, portanto só aceita o que é
+                        # mutável e não se mexe. A recusa nomeia a razão em vez
+                        # de dizer só que não serve.
+                        if not self->cbuf_ok(at4):
+                            porque: const *char = ""
+                            if at4 != None and at4->kind == PT_BYTES:
+                                porque = " — a `bytes` is immutable by contract, and a `CBuf` is the pair that writes"
+                            elif at4 != None and at4->kind == PT_LIST:
+                                porque = " — a `List<u8>` lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is"
+                            fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBuf`: it takes a `Buffer` or a View<u8> of one, found %s%s (161.2)", cf->params[i].name, ps_type_str(self->a, at4), porque)
+                    elif not self->cbytes_ok(at4):
+                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes`, a `Buffer`, a View<u8> or a List<u8>, found %s (84.1/161.3)", cf->params[i].name, ps_type_str(self->a, at4))
                     e->args[i]->type = at4
                 else:
                     self->want(e->args[i], at4, cf->params[i].type, self->a->printf("parameter '%s'", cf->params[i].name))
@@ -5403,6 +5415,12 @@ struct PsSema:
                 continue      # 12.1: C's variadic ABI does not cross
             rck: i32 = self->cstr_kind(f->ret)
             rt: *PsType = self->c_type(f->ret)
+            if rck == 3:
+                # 161.2: um `CBuf` não VOLTA. Devolvê-lo seria dar ao pscript um
+                # ponteiro cru cujo tempo de vida é do outro lado — e a costura
+                # é assimétrica precisamente para isso não acontecer. Entra como
+                # parâmetro, emprestado pela duração da chamada, e mais nada.
+                continue
             if rck != 0:
                 rt = ps_type(self->a, PT_STR, zero_ps_pos()) if rck == 1 else self->bytes_type(zero_ps_pos())
             if rt == None:
@@ -5459,6 +5477,9 @@ struct PsSema:
             return 1
         if strcmp(b->name, "CBytes") == 0:
             return 2
+        # 161.2: o terceiro da família, e o único que ESCREVE
+        if strcmp(b->name, "CBuf") == 0:
+            return 3
         return 0
 
     # 84.1 + 135.3: what a `CBytes` parameter accepts. `List<u8>` was the only
@@ -5472,7 +5493,28 @@ struct PsSema:
             return False
         if t->kind == PT_BYTES:
             return True
+        # 161.3: um `Buffer` e uma `View<u8>` dele também. O teste real desta
+        # travessia é *"o ponteiro fica quieto?"*, e o `Buffer` é quem melhor o
+        # passa — `calloc` no header e nos bytes, fora do monte, construído em
+        # 19.4/52.3 precisamente para outra thread o segurar. Ficara de fora por
+        # esta lista ter sido escrita quando o `bytes` era a novidade.
+        if t->kind == PT_BUFFER:
+            return True
+        if t->kind == PT_VIEW:
+            return t->inner != None and t->inner->kind == PT_INT and t->inner->width == 8 and t->inner->uns
         return t->kind == PT_LIST and t->inner != None and t->inner->kind == PT_INT and t->inner->width == 8 and t->inner->uns
+
+    # 161.2: e o que um `CBuf` aceita, que é MENOS de propósito.
+    #
+    # Um `bytes` é imutável por contrato e um `List<u8>` vive no monte coletado,
+    # que MOVE — escrever num deles seria escrever onde não se deve ou onde já
+    # não está. Sobram os dois que não se mexem e que são para escrever.
+    private def cbuf_ok(self: *PsSema, t: *PsType) -> bool:
+        if t == None:
+            return False
+        if t->kind == PT_BUFFER:
+            return True
+        return t->kind == PT_VIEW and t->inner != None and t->inner->kind == PT_INT and t->inner->width == 8 and t->inner->uns
 
     private def bytes_type(self: *PsSema, pos: Pos) -> *PsType:
         l: *PsType = ps_type(self->a, PT_LIST, pos)

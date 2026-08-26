@@ -15,6 +15,18 @@ fixado; um `Mapping` não precisa de nada.
 E o `in` diz o resto: os bytes são EMPRESTADOS e valem durante a chamada (141.5).
 A costura é assimétrica de propósito — o pscript pode segurar coisas do P, e o P
 não pode segurar coisas do pscript.
+
+**E uma correcção à palavra "só de leitura", que este ficheiro deixava passar
+como garantia** (161.1): o `const` no `ptr` de um `CBytes` é conferido deste lado
+e não imposto do outro. O P é a camada sem rede — tem ponteiros crus e tem
+conversões — e `(*u8)(b.ptr)` são duas linhas que escrevem. Medido, e num
+`bytes`, que é imutável DENTRO do pscript.
+
+Isso não é um furo que alguém deixou aberto: é o que "o P fala com o C sem
+runtime" quer dizer, levado até ao fim. Uma linguagem que chama `memcpy` não
+consegue prometer a ninguém que uns bytes não mudam. O que a 161 acrescenta não é
+uma capacidade nova — é um NOME para a que já existia, mais a única coisa que a
+conversão nunca deu: o compilador recusa construí-lo sobre o que é imutável.
 """
 import os
 import path

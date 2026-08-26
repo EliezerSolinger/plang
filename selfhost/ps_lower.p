@@ -4674,12 +4674,17 @@ struct PsLow:
                     sv9: *Stmt = st_new(self->a, ST_VAR, e->pos)
                     sv9->name = sn9
                     abk9: bool = e->args[i]->type != None and e->args[i]->type->kind == PT_BYTES
-                    sv9->type = ty_ptr(self->a, ty_name(self->a, "PsStr" if csk9 == 1 else ("PsBytes" if abk9 else "PsList")))
+                    # 161.3: um `Buffer` tem os seus próprios nomes de campo — os
+                    # bytes são `data` e o comprimento é `nbytes` — porque ele não
+                    # é um objecto do monte: é um punho sobre um bloco `calloc`'d
+                    # que não se mexe (19.4/52.3)
+                    abf9: bool = e->args[i]->type != None and e->args[i]->type->kind == PT_BUFFER
+                    sv9->type = ty_ptr(self->a, ty_name(self->a, "PsStr" if csk9 == 1 else ("PsBytes" if abk9 else ("PsBuffer" if abf9 else "PsList"))))
                     sv9->init = a9
                     self->pre.push(sv9)
                     vd9: *Stmt = st_new(self->a, ST_VAR, e->pos)
                     vd9->name = tn9
-                    vd9->type = ty_name(self->a, "CStr" if csk9 == 1 else "CBytes")
+                    vd9->type = ty_name(self->a, "CStr" if csk9 == 1 else ("CBuf" if csk9 == 3 else "CBytes"))
                     il9: *Expr = ex_new(self->a, EX_INITLIST, e->pos)
                     il9->args = self->a->alloc(usize(2) * sizeof(*il9->args))
                     fp9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
@@ -4688,6 +4693,16 @@ struct PsLow:
                     fp9->field = "data" if csk9 == 1 else "data"
                     if csk9 == 1:
                         il9->args[0] = fp9
+                    elif abf9:
+                        # os bytes de um `Buffer`, direitos. É a travessia mais
+                        # segura das quatro: `calloc` no header e no bloco, fora
+                        # do monte, e feito de propósito para outra thread o
+                        # segurar — uma colheita a meio da chamada não lhe toca.
+                        cbf9: *Expr = ex_new(self->a, EX_CAST, e->pos)
+                        cbf9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"))
+                        cbf9->cast_type->inner->is_const = csk9 != 3
+                        cbf9->lhs = fp9
+                        il9->args[0] = cbf9
                     elif abk9:
                         # 141.3: a `bytes` block is OUTSIDE the collected heap
                         # and never moves, so the pair points straight at it —
@@ -4695,7 +4710,7 @@ struct PsLow:
                         # `bytes` type was designed for.
                         cbb9: *Expr = ex_new(self->a, EX_CAST, e->pos)
                         cbb9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"))
-                        cbb9->cast_type->inner->is_const = True
+                        cbb9->cast_type->inner->is_const = csk9 != 3
                         cbb9->lhs = fp9
                         il9->args[0] = cbb9
                     else:
@@ -4704,13 +4719,13 @@ struct PsLow:
                         self->push_arg(bp9, self->ident(sn9, e->pos))
                         cst9: *Expr = ex_new(self->a, EX_CAST, e->pos)
                         cst9->cast_type = ty_ptr(self->a, ty_name(self->a, "u8"))
-                        cst9->cast_type->inner->is_const = True
+                        cst9->cast_type->inner->is_const = csk9 != 3
                         cst9->lhs = bp9
                         il9->args[0] = cst9
                     ln9: *Expr = ex_new(self->a, EX_FIELD, e->pos)
                     ln9->op = TK_ARROW
                     ln9->lhs = self->ident(sn9, e->pos)
-                    ln9->field = "len"
+                    ln9->field = "nbytes" if abf9 else "len"
                     cl9: *Expr = ex_new(self->a, EX_CAST, e->pos)
                     cl9->cast_type = ty_name(self->a, "usize")
                     cl9->lhs = ln9
