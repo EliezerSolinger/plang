@@ -362,7 +362,7 @@ struct PsLow:
     private def lower_dir_for(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def tail_return(self: *PsLow, body: *Vec<*Stmt>, ret: *Type, pos: Pos)
     private def wrap_if(self: *PsLow, flag: const *char, st: *Stmt, pos: Pos) -> *Stmt
-    private def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
+    private def lower_eq_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def lower_type_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>)
     private def is_record(self: *PsLow, name: const *char) -> bool
     private def is_pstruct(self: *PsLow, name: const *char) -> bool
@@ -7208,8 +7208,12 @@ struct PsLow:
                 if s->is_typematch:
                     self->lower_type_match(s, out)
                     return
-                if s->subject->type != None and s->subject->type->kind == PT_STR:
-                    self->lower_str_match(s, out)
+                if s->subject->type != None and (s->subject->type->kind == PT_STR or s->subject->type->kind == PT_FLOAT):
+                    # 164.2: uma `str` compara por CONTEÚDO e um `float` por
+                    # valor, mas a FORMA é a mesma — uma cadeia de `if/elif` em
+                    # vez do `switch` do C, que só toma inteiros. Uma função,
+                    # duas comparações.
+                    self->lower_eq_match(s, out)
                     return
                 mm: *Stmt = st_new(self->a, ST_MATCH, s->pos)
                 mm->subject = self->expr(s->subject)
@@ -8038,7 +8042,7 @@ struct PsLow:
         ifs->if_sel = -1
         out->push(ifs)
 
-    private def lower_str_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
+    private def lower_eq_match(self: *PsLow, s: *PsStmt, out: *Vec<*Stmt>):
         asg: *Expr = None
         subj: *Expr = self->once(s->subject, out asg)
         if asg != None:
@@ -8058,11 +8062,19 @@ struct PsLow:
             if c->is_default:
                 st->else_block = self->block(c->body)
                 continue
+            is_str9: bool = s->subject->type != None and s->subject->type->kind == PT_STR
             acc: *Expr = None
             for vi in range(c->nvals):
-                eq: *Expr = self->call_rt("ps_str_eq", s->pos)
-                self->push_arg(eq, subj)
-                self->push_arg(eq, self->expr(c->vals[vi]))
+                eq: *Expr = None
+                if is_str9:
+                    eq = self->call_rt("ps_str_eq", s->pos)
+                    self->push_arg(eq, subj)
+                    self->push_arg(eq, self->expr(c->vals[vi]))
+                else:
+                    eq = ex_new(self->a, EX_BINARY, s->pos)
+                    eq->op = TK_EQ
+                    eq->lhs = subj
+                    eq->rhs = self->expr(c->vals[vi])
                 if acc == None:
                     acc = eq
                 else:

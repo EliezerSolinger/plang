@@ -579,7 +579,7 @@ static void PsLow_tail_return(PsLow *self, Vec_pStmt *body, Type *ret, Pos pos);
 
 static Stmt *PsLow_wrap_if(PsLow *self, const char *flag, Stmt *st, Pos pos);
 
-static void PsLow_lower_str_match(PsLow *self, PsStmt *s, Vec_pStmt *out);
+static void PsLow_lower_eq_match(PsLow *self, PsStmt *s, Vec_pStmt *out);
 
 static void PsLow_lower_type_match(PsLow *self, PsStmt *s, Vec_pStmt *out);
 
@@ -7454,8 +7454,8 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 PsLow_lower_type_match(self, s, out);
                 return;
             }
-            if (s->subject->type != NULL && s->subject->type->kind == PT_STR) {
-                PsLow_lower_str_match(self, s, out);
+            if (s->subject->type != NULL && (s->subject->type->kind == PT_STR || s->subject->type->kind == PT_FLOAT)) {
+                PsLow_lower_eq_match(self, s, out);
                 return;
             }
             Stmt *mm = st_new(self->a, ST_MATCH, s->pos);
@@ -8165,7 +8165,7 @@ static void PsLow_lower_type_match(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Vec_pStmt_push(out, ifs);
 }
 
-static void PsLow_lower_str_match(PsLow *self, PsStmt *s, Vec_pStmt *out) {
+static void PsLow_lower_eq_match(PsLow *self, PsStmt *s, Vec_pStmt *out) {
     Expr *asg = NULL;
     Expr *subj = PsLow_once(self, s->subject, &asg);
     if (asg != NULL) {
@@ -8190,12 +8190,21 @@ static void PsLow_lower_str_match(PsLow *self, PsStmt *s, Vec_pStmt *out) {
             st->else_block = PsLow_block(self, c->body);
             continue;
         }
+        int is_str9 = s->subject->type != NULL && s->subject->type->kind == PT_STR;
         Expr *acc = NULL;
         size_t vi;
         for (vi = 0; vi < c->nvals; vi += 1) {
-            Expr *eq = PsLow_call_rt(self, "ps_str_eq", s->pos);
-            PsLow_push_arg(self, eq, subj);
-            PsLow_push_arg(self, eq, PsLow_expr(self, c->vals[vi]));
+            Expr *eq = NULL;
+            if (is_str9) {
+                eq = PsLow_call_rt(self, "ps_str_eq", s->pos);
+                PsLow_push_arg(self, eq, subj);
+                PsLow_push_arg(self, eq, PsLow_expr(self, c->vals[vi]));
+            } else {
+                eq = ex_new(self->a, EX_BINARY, s->pos);
+                eq->op = TK_EQ;
+                eq->lhs = subj;
+                eq->rhs = PsLow_expr(self, c->vals[vi]);
+            }
             if (acc == NULL) {
                 acc = eq;
             } else {

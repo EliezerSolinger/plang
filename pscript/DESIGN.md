@@ -8290,3 +8290,55 @@ uma segunda.**
 **Divergências deliberadas**, listadas para não entrarem na conta: a divisão (o P
 é C, o pscript é Python — 39.1), o transbordo (o pscript verifica, o P não), e
 `T?`/`??`/`?.` contra o `ref T` não-nulável do P (69).
+
+---
+
+## Bateria 164 — as cinco parciais, fechadas (2026-08-26)
+
+Pedido teu depois do levantamento: *"implemente tudo e corrija tudo"*.
+
+Antes de mais, a distinção que impede isto de ser trabalho errado: **a lista A da
+163.4 não são defeitos.** Ponteiros, `sizeof` e o `include <h>` com ponteiros são
+decisões escritas (20.1, 45.5); o `union` está deprecado no próprio P; e o
+`inline` foi MEDIDO a não comprar nada, porque o `-O2` já inlina uma função de
+pscript com o contexto e as verificações de excepção pelo meio. Implementá-los
+seria desfazer o desenho do pscript, e não corrigi-lo.
+
+O que se fechou foi a lista B — as cinco onde o pscript era **parcial**, quatro
+delas dívida do avaliador que a 159 tinha acabado de escrever.
+
+### 164.1 — o `const def` deixa de ser uma linguagem mais pequena dentro da linguagem
+
+Sete operadores compostos (`//=`, `**=`, `&=`, `|=`, `^=`, `<<=`, `>>=`), o
+unário `~`, e o `%` e o `//` sobre floats.
+
+**E o que os tornava accionáveis era isto: os três primeiros já funcionavam em
+tempo de execução.** Não era a linguagem que não os tinha — era o avaliador de
+compilação que não os computava, e ele dizia-o na cara (*"a `const def` does not
+compute this operator yet"*). O efeito era um `const def` ser um subconjunto do
+pscript por nenhuma razão melhor do que uma lista por acabar.
+
+**O piso e o resto sobre floats seguem a regra dos inteiros** (39.1/159.2): o
+resto tem o sinal do DIVISOR, portanto `-7.5 % 2.0` é 0.5 e não -1.5. E o `floor`
+é escrito à mão — truncar para inteiro e descer um se o quociente era negativo e
+não exacto — porque **o compilador não liga a `libm`**. Foi a pedra que travou o
+`pow` na 159.2, e apareceu outra vez aqui.
+
+Conferido contra o Python nos seis casos antes de virar código, divisor negativo
+incluído, que é onde o `//` e o `%` mudam de sinal juntos.
+
+### 164.2 — `match` sobre `float`, sem máquina nova
+
+Um `float` não desce para o `switch` do C, que só toma inteiros. Mas desce para a
+**mesma cadeia de `if/elif`** que uma `str` já usava — e por isso não custou
+código novo, custou generalizar uma função e trocar-lhe o nome: a `str` compara
+por conteúdo (`ps_str_eq`), o `float` por valor (`==`), e a forma é uma só.
+
+O C gerado confirma-o: `else if (x == 1.5 || x == 2.5)`, e zero `switch`.
+
+### 164.3 — e as duas promessas, medidas outra vez
+
+Das seis `const def` do portão, **zero** aparecem no C, e no lugar das chamadas
+estão `4`, `30`, `27`, `-6`, `296` e `1505`. É a promessa da 65.10 conferida pela
+terceira vez — e conferi-la de novo é barato exactamente porque ela é uma
+propriedade do C emitido, e não uma intenção.

@@ -3063,6 +3063,9 @@ struct PsSema:
                 fatal_at(self->file, s->pos, "a `const def` does not do this at compile time (65.10): what it computes is numbers and booleans, with `if`, `while`, `for i in range(...)`, locals, and calls to other `const def`s")
 
     # o operador por trás de um `+=`, para o composto e o simples serem um só
+    # 164.1: os DOZE, e não cinco. Um `x //= 2` funciona em tempo de execução e
+    # não funcionava aqui — o que faz de `const def` uma linguagem mais pequena
+    # do que a linguagem, e por um motivo que era só uma lista por acabar.
     private def ceval_aug_op(self: *PsSema, op: i32, pos: Pos) -> i32:
         if op == TK_PLUS_EQ:
             return TK_PLUS
@@ -3074,6 +3077,20 @@ struct PsSema:
             return TK_SLASH
         if op == TK_PERCENT_EQ:
             return TK_PERCENT
+        if op == TK_FLOORDIV_EQ:
+            return TK_FLOORDIV
+        if op == TK_POW_EQ:
+            return TK_POW
+        if op == TK_AMP_EQ:
+            return TK_AMP
+        if op == TK_PIPE_EQ:
+            return TK_PIPE
+        if op == TK_CARET_EQ:
+            return TK_CARET
+        if op == TK_SHL_EQ:
+            return TK_SHL
+        if op == TK_SHR_EQ:
+            return TK_SHR
         fatal_at(self->file, pos, "a `const def` does not compute this compound assignment yet (65.10)")
         return TK_PLUS
 
@@ -3112,6 +3129,12 @@ struct PsSema:
                     return cmk_int(self->a, -cint(u), e->pos)
                 if e->op == TK_PLUS:
                     return u
+                if e->op == TK_TILDE:
+                    # 164.1: sobre um INTEIRO, como em execução — o `~` de um
+                    # float não existe na linguagem, portanto também não aqui
+                    if u->kind == PE_FLOAT:
+                        fatal_at(self->file, e->pos, "`~` takes a whole number, not a float")
+                    return cmk_int(self->a, ~cint(u), e->pos)
                 fatal_at(self->file, e->pos, "a `const def` does not compute this unary operator yet (65.10)")
             case PE_BINARY:
                 # `and`/`or` PARAM no primeiro que decide, como em tempo de
@@ -3163,6 +3186,27 @@ struct PsSema:
                 fatal_at(self->file, pos, "division by zero, at compile time")
             return cmk_float(self->a, cnum(l) / cnum(r), pos)
         if flt:
+            if op == TK_FLOORDIV or op == TK_PERCENT:
+                # 164.1: o piso e o resto do PYTHON sobre floats, e a mesma
+                # regra que a 159.2 fixou para os inteiros — o resto tem o sinal
+                # do DIVISOR. `-7.5 % 2.0` é 0.5 e não -1.5.
+                #
+                # O `floor` é escrito à mão porque o compilador não liga a
+                # `libm` (foi o que travou o `pow` na 159.2): truncar para
+                # inteiro e descer um se o quociente era negativo e não exacto.
+                fb: f64 = cnum(r)
+                if fb == 0.0:
+                    fatal_at(self->file, pos, "division by zero, at compile time")
+                fa: f64 = cnum(l)
+                qf: f64 = fa / fb
+                if qf > 9.0e18 or qf < -9.0e18:
+                    fatal_at(self->file, pos, "`//` at compile time works within a whole number's range")
+                fl: f64 = f64(i64(qf))
+                if fl > qf:
+                    fl -= 1.0
+                if op == TK_FLOORDIV:
+                    return cmk_float(self->a, fl, pos)
+                return cmk_float(self->a, fa - fl * fb, pos)
             if op == TK_POW:
                 # o expoente é um INTEIRO não-negativo, e a potência é uma
                 # multiplicação repetida. O compilador não liga a `libm` — e um
@@ -7111,8 +7155,11 @@ struct PsSema:
                         self->depth -= 1
                     return
                 ismatch_enum: bool = mt2->kind == PT_NAME and self->enums.has(mt2->name)
-                if not ismatch_enum and mt2->kind not in {PT_INT, PT_STR, PT_BOOL}:
-                    fatal_at(self->file, s->pos, "match on %s is not compiled yet (int, str, bool and enum work)", ps_type_str(self->a, mt2))
+                # 164.2: e `float` também. Ele não desce para o `switch` do C —
+                # que só toma inteiros — mas para a mesma cadeia de comparações
+                # que uma `str` já usava, e por isso não custou máquina nova.
+                if not ismatch_enum and mt2->kind not in {PT_INT, PT_STR, PT_BOOL, PT_FLOAT}:
+                    fatal_at(self->file, s->pos, "match on %s is not compiled yet (int, float, str, bool and enum work)", ps_type_str(self->a, mt2))
                 ndef: i32 = 0
                 seen_items: *bool = None
                 ed2: *PsDecl = self->enums.get_or(mt2->name, None) if ismatch_enum else None

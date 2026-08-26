@@ -4707,6 +4707,27 @@ static int32_t PsSema_ceval_aug_op(PsSema *self, int32_t op, Pos pos) {
     if (op == TK_PERCENT_EQ) {
         return TK_PERCENT;
     }
+    if (op == TK_FLOORDIV_EQ) {
+        return TK_FLOORDIV;
+    }
+    if (op == TK_POW_EQ) {
+        return TK_POW;
+    }
+    if (op == TK_AMP_EQ) {
+        return TK_AMP;
+    }
+    if (op == TK_PIPE_EQ) {
+        return TK_PIPE;
+    }
+    if (op == TK_CARET_EQ) {
+        return TK_CARET;
+    }
+    if (op == TK_SHL_EQ) {
+        return TK_SHL;
+    }
+    if (op == TK_SHR_EQ) {
+        return TK_SHR;
+    }
     fatal_at(self->file, pos, "a `const def` does not compute this compound assignment yet (65.10)");
     return TK_PLUS;
 }
@@ -4753,6 +4774,12 @@ static PsExpr *PsSema_ceval_expr(PsSema *self, PsExpr *e, CEnv *env) {
             }
             if (e->op == TK_PLUS) {
                 return u;
+            }
+            if (e->op == TK_TILDE) {
+                if (u->kind == PE_FLOAT) {
+                    fatal_at(self->file, e->pos, "`~` takes a whole number, not a float");
+                }
+                return cmk_int(self->a, ~cint(u), e->pos);
             }
             fatal_at(self->file, e->pos, "a `const def` does not compute this unary operator yet (65.10)");
             break;
@@ -4821,6 +4848,25 @@ static PsExpr *PsSema_ceval_binop(PsSema *self, int32_t op, PsExpr *l, PsExpr *r
         return cmk_float(self->a, cnum(l) / cnum(r), pos);
     }
     if (flt) {
+        if (op == TK_FLOORDIV || op == TK_PERCENT) {
+            double fb = cnum(r);
+            if (fb == 0.0) {
+                fatal_at(self->file, pos, "division by zero, at compile time");
+            }
+            double fa = cnum(l);
+            double qf = fa / fb;
+            if (qf > 9.0e18 || qf < -9.0e18) {
+                fatal_at(self->file, pos, "`//` at compile time works within a whole number's range");
+            }
+            double fl = (double)(int64_t)qf;
+            if (fl > qf) {
+                fl -= 1.0;
+            }
+            if (op == TK_FLOORDIV) {
+                return cmk_float(self->a, fl, pos);
+            }
+            return cmk_float(self->a, fa - fl * fb, pos);
+        }
         if (op == TK_POW) {
             if (r->kind == PE_FLOAT || cint(r) < 0) {
                 fatal_at(self->file, pos, "`**` at compile time takes a non-negative whole exponent (65.10): the compiler does not link the maths library");
@@ -5588,12 +5634,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3883_17 = e;
-                __with_3883_17->kind = PE_INDEX;
-                __with_3883_17->lhs = e->args[0];
-                __with_3883_17->rhs = below;
-                __with_3883_17->args = NULL;
-                __with_3883_17->nargs = 0;
+                PsExpr *__with_3927_17 = e;
+                __with_3927_17->kind = PE_INDEX;
+                __with_3927_17->lhs = e->args[0];
+                __with_3927_17->rhs = below;
+                __with_3927_17->args = NULL;
+                __with_3927_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -6145,26 +6191,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_4391_17 = e;
-                __with_4391_17->kind = PE_STR;
-                __with_4391_17->text = lit7;
-                __with_4391_17->lhs = NULL;
-                __with_4391_17->rhs = NULL;
-                __with_4391_17->args = NULL;
-                __with_4391_17->nargs = 0;
+                PsExpr *__with_4435_17 = e;
+                __with_4435_17->kind = PE_STR;
+                __with_4435_17->text = lit7;
+                __with_4435_17->lhs = NULL;
+                __with_4435_17->rhs = NULL;
+                __with_4435_17->args = NULL;
+                __with_4435_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_4404_13 = e;
-            __with_4404_13->kind = PE_LOWERED;
-            __with_4404_13->low = ln7;
-            __with_4404_13->lhs = NULL;
-            __with_4404_13->rhs = NULL;
-            __with_4404_13->args = NULL;
-            __with_4404_13->nargs = 0;
+            PsExpr *__with_4448_13 = e;
+            __with_4448_13->kind = PE_LOWERED;
+            __with_4448_13->low = ln7;
+            __with_4448_13->lhs = NULL;
+            __with_4448_13->rhs = NULL;
+            __with_4448_13->args = NULL;
+            __with_4448_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -6494,10 +6540,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_4718_17 = &ns->quals[ns->nquals];
-                __with_4718_17->name = q;
-                __with_4718_17->orig = d->path;
-                __with_4718_17->ns = sub;
+                PsNsEnt *__with_4762_17 = &ns->quals[ns->nquals];
+                __with_4762_17->name = q;
+                __with_4762_17->orig = d->path;
+                __with_4762_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -6510,10 +6556,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_4730_21 = &ns->ents[ns->nents];
-                    __with_4730_21->name = local;
-                    __with_4730_21->orig = d->names[k];
-                    __with_4730_21->ns = sub;
+                    PsNsEnt *__with_4774_21 = &ns->ents[ns->nents];
+                    __with_4774_21->name = local;
+                    __with_4774_21->orig = d->names[k];
+                    __with_4774_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6993,10 +7039,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_5236_9 = e;
-        __with_5236_9->kind = PE_NAME;
-        __with_5236_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_5236_9->lhs = NULL;
+        PsExpr *__with_5280_9 = e;
+        __with_5280_9->kind = PE_NAME;
+        __with_5280_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_5280_9->lhs = NULL;
     }
     return 1;
 }
@@ -8949,8 +8995,8 @@ static void PsSema_check_stmt(PsSema *self, PsStmt *s) {
                 return;
             }
             int ismatch_enum = mt2->kind == PT_NAME && StrMap_pPsDecl_has(&self->enums, mt2->name);
-            if (!ismatch_enum && !(mt2->kind == PT_INT || mt2->kind == PT_STR || mt2->kind == PT_BOOL)) {
-                fatal_at(self->file, s->pos, "match on %s is not compiled yet (int, str, bool and enum work)", ps_type_str(self->a, mt2));
+            if (!ismatch_enum && !(mt2->kind == PT_INT || mt2->kind == PT_STR || mt2->kind == PT_BOOL || mt2->kind == PT_FLOAT)) {
+                fatal_at(self->file, s->pos, "match on %s is not compiled yet (int, float, str, bool and enum work)", ps_type_str(self->a, mt2));
             }
             int32_t ndef = 0;
             int *seen_items = NULL;
