@@ -303,7 +303,7 @@ if pkg-config --exists sdl2 >/dev/null 2>&1; then
       exp=tests/pstudio/ps_selftest.expected
       [ "$b" = pcode ] && exp=tests/pstudio/pcode_selftest.expected
       if $V/plangc_s2 --pkg-path packages --out-dir $V/pst pstudio/$b.psc >>$V/pstudio.log 2>&1 &&
-         $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -o $V/bin_$b \
+         $CC -w -D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -o $V/bin_$b \
            $V/pst/pstudio/$b.c $V/pst/pscript/runtime/psrt_*.c \
            $V/pst/pstudio/shim.c $V/pst/pstudio/hl.c \
            $V/pst/pstudio/pgfx.c $V/pst/pstudio/pgfx_raster.c $V/pst/pstudio/font_atlas.c $V/pst/pstudio/icons.c \

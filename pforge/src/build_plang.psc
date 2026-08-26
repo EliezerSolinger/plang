@@ -168,7 +168,18 @@ async def editors(c: T.Ctx) -> List<str>:
     # says where it is. `--cpp` instead of the environment variable: an edge's
     # `env=` REPLACES the environment, and a command with no `PATH` does not find
     # the `cc`.
-    cpp = "cc"
+    # SDL_cpuinfo.h pulls in the host architecture's SIMD-intrinsics header
+    # (<arm_neon.h> on Apple Silicon's cc, <immintrin.h> and friends on x86)
+    # whenever the matching feature macro is set, and those headers lean on
+    # GNU statement expressions (`__extension__ ({ ... })`) for their
+    # intrinsics — a construct this front end's expression parser does not
+    # model. SDL ships an SDL_DISABLE_*_H per header exactly for a caller that
+    # has no reason to parse any of them (nothing here calls an intrinsic):
+    # each skips its header outright, on every platform, not just this one.
+    # Same set tests/run.sh's own PLANGC_CPP already carries for the shell
+    # harness — kept identical so neither build path is the one that forgot
+    # an architecture.
+    cpp = "cc -DSDL_DISABLE_IMMINTRIN_H -DSDL_DISABLE_MMINTRIN_H -DSDL_DISABLE_XMMINTRIN_H -DSDL_DISABLE_EMMINTRIN_H -DSDL_DISABLE_PMMINTRIN_H -DSDL_DISABLE_ARM_NEON_H -DSDL_DISABLE_MM3DNOW_H -DSDL_DISABLE_LSX_H -DSDL_DISABLE_LASX_H"
     for x in cf:
         cpp += " " + x
     out: List<str> = []
@@ -187,6 +198,12 @@ async def editors(c: T.Ctx) -> List<str>:
 # whose expected output did not change does not run.
 const CORPUS: str = "tests/pscript/run"
 
+# 146.2: `os.watch` is Linux-only (inotify has no macOS answer yet — FSEvents
+# is a different API, and it is not written). `watcher.psc` proves the raise,
+# not the feature, so its `.expected` assumes the Linux behavior; running it
+# elsewhere would be testing a gap the runtime already documents, not a bug.
+const PSCRIPT_HOST_HAS_WATCH: bool = __PLANG_LINUX__
+
 # the suite's stamp, which is how you ASK for "run the suite" from a graph that
 # only knows how to talk about files (`pforge test`, or `pforge build <this path>`)
 const SUITE_PSCRIPT: str = "build/t/stamp/pscript.suite"
@@ -198,6 +215,8 @@ async def pscript_suite(c: T.Ctx, verdict: str) -> str:
         name = base[0:len(base) - 4]
         # `lib_*.psc` are import pieces, not programs
         if name.startswith("lib_"):
+            continue
+        if name == "watcher" and not PSCRIPT_HOST_HAS_WATCH:
             continue
         expected = path.join(CORPUS, name + ".expected")
         if not path.isfile(expected):

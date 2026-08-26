@@ -24,7 +24,7 @@ PLANGC=${PLANGC:-build/bin/plangc_s2}
 # the runtime speaks POSIX (socket, getaddrinfo, poll, pipe, pthread) and glibc
 # hides those under a strict `-std=`; asking for them explicitly is what every
 # project that uses them does
-PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
+PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE"   # macOS's equivalent of _DEFAULT_SOURCE (tests/psbuild.sh)
 CC=${CC:-cc}
 BACKEND=${BACKEND:-c}
 STD=${STD:-}
@@ -85,6 +85,25 @@ for d in tests/cases tests/p-suite tests/modules tests/stl tests/pstudio; do
     [ -d "$d" ] && CPPX="$CPPX -I$d"
 done
 export PLANGC_CPP="$CPPX"
+
+# `timeout` is GNU coreutils, not part of the base macOS install (Homebrew's
+# coreutils would give it as `gtimeout`, and this harness cannot assume that
+# either) — every `timeout N cmd...` call below silently ran unbounded there.
+# The replacement is the standard background+watchdog shape: run the command,
+# race a `sleep N` that SIGTERMs it, propagate the command's own exit status.
+if ! command -v timeout >/dev/null 2>&1; then
+    timeout() {
+        local dur=$1; shift
+        "$@" &
+        local cmdpid=$!
+        ( sleep "$dur"; kill -TERM "$cmdpid" ) >/dev/null 2>&1 &
+        local watchpid=$!
+        wait "$cmdpid" 2>/dev/null; local rc=$?
+        kill "$watchpid" >/dev/null 2>&1
+        wait "$watchpid" 2>/dev/null
+        return $rc
+    }
+fi
 
 total_fail=0
 
@@ -401,8 +420,9 @@ suite_pstudio() {
             done
             [ $ok = 1 ] && { $PLANGC $PFLAGS $PKGP --out-dir "$M" "$src" 2>>"$err" || ok=0; }
             # -D_DEFAULT_SOURCE: o POSIX que o -std=c11 estrito da suíte esconde
-            # (o ingest do plangc vê modo GNU)
-            [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -w "$M/tests/pstudio/$name.c" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
+            # (o ingest do plangc vê modo GNU); -D_DARWIN_C_SOURCE é o mesmo
+            # destravamento no macOS, onde _DEFAULT_SOURCE não existe
+            [ $ok = 1 ] && { $CC $CSTD -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -w "$M/tests/pstudio/$name.c" $cobjs -o "$bin" $ldext -lm 2>>"$err" || ok=0; }
         fi
         if [ $ok = 1 ] && check_run "$bin" "tests/pstudio/$name.expected" "$name"; then
             pass=$((pass+1))
@@ -592,6 +612,12 @@ suite_pscript() {
         [ -f "$src" ] || continue
         name=$(basename "$src"); name=${name%.psc}; err=$d/$name.err
         case $name in lib_*) continue ;; esac   # import fixtures, not programs
+        # 146.2: `os.watch` is Linux-only (inotify has no macOS answer yet —
+        # FSEvents is a different API, not written). `watcher.psc` proves the
+        # raise, and its `.expected` assumes the Linux behavior, so running it
+        # elsewhere tests a documented gap, not a bug (mirrors the same skip
+        # in pforge/src/build_plang.psc's native suite).
+        case $name in watcher) [ "$(uname)" = "Linux" ] || continue ;; esac
         local want_exit=0
         [ -f "tests/pscript/run/$name.exit" ] && want_exit=$(cat "tests/pscript/run/$name.exit")
         # a program may ask for extra COMPILER flags (`<name>.flags`) — which is

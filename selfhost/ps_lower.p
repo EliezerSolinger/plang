@@ -8586,7 +8586,14 @@ private def lower_gmad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *Dec
     pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
     pf->params[1].pos = e->pos
     pf->params[2].name = "__ep"
-    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    # `const *void`: matches ps_gather_map(_task)'s `ep: const *void` in
+    # psrt_rt.p exactly — the thunk is passed AS a function pointer value, and
+    # a bare `void *` is a different C type there, which recent clang rejects
+    # outright (-Wincompatible-function-pointer-types is an error by default
+    # since Clang 16) instead of just warning about it.
+    gmad_ep: *Type = ty_name(L->a, "void")
+    gmad_ep->is_const = True
+    pf->params[2].type = ty_ptr(L->a, gmad_ep)
     pf->params[2].pos = e->pos
     pf->nparams = 3
     d: *Decl = L->a->alloc(sizeof(Decl))
@@ -8743,7 +8750,11 @@ private def lower_reprad(L: *PsLow, t: *PsType, with_body: bool) -> *Decl:
     pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
     pf->params[1].pos = t->pos
     pf->params[2].name = "__ep"
-    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    # `const *void`: matches ps_repr_seq/ps_repr_dict's `ep: const *void` in
+    # psrt_val.p exactly — see lower_gmad's note on why the const must match.
+    reprad_ep: *Type = ty_name(L->a, "void")
+    reprad_ep->is_const = True
+    pf->params[2].type = ty_ptr(L->a, reprad_ep)
     pf->params[2].pos = t->pos
     pf->nparams = 3
     d: *Decl = L->a->alloc(sizeof(Decl))
@@ -8791,10 +8802,16 @@ private def lower_cmpad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *De
     pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
     pf->params[1].pos = e->pos
     pf->params[2].name = "__ap"
-    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    # `const *void` on both: matches ps_list_sorted_cmp's `a: const *void, b:
+    # const *void` in psrt_val.p exactly — see lower_gmad's note on why.
+    cmpad_ap: *Type = ty_name(L->a, "void")
+    cmpad_ap->is_const = True
+    pf->params[2].type = ty_ptr(L->a, cmpad_ap)
     pf->params[2].pos = e->pos
     pf->params[3].name = "__bp"
-    pf->params[3].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    cmpad_bp: *Type = ty_name(L->a, "void")
+    cmpad_bp->is_const = True
+    pf->params[3].type = ty_ptr(L->a, cmpad_bp)
     pf->params[3].pos = e->pos
     pf->nparams = 4
     d: *Decl = L->a->alloc(sizeof(Decl))
@@ -8860,7 +8877,11 @@ private def lower_keyad(L: *PsLow, e: *PsExpr, idx: i32, with_body: bool) -> *De
     pf->params[1].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
     pf->params[1].pos = e->pos
     pf->params[2].name = "__ep"
-    pf->params[2].type = ty_ptr(L->a, ty_name(L->a, "void"))
+    # `const *void`: matches ps_list_sorted_by's `ep: const *void` in
+    # psrt_val.p exactly — see lower_gmad's note on why the const must match.
+    keyad_ep: *Type = ty_name(L->a, "void")
+    keyad_ep->is_const = True
+    pf->params[2].type = ty_ptr(L->a, keyad_ep)
     pf->params[2].pos = e->pos
     pf->nparams = 3
     d: *Decl = L->a->alloc(sizeof(Decl))

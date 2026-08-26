@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 T=tests/out/tls-$$
 PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
-PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
+PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE"   # macOS's equivalent of _DEFAULT_SOURCE (tests/psbuild.sh)
 
 if ! echo '#include <openssl/ssl.h>' | $CC -fsyntax-only -xc - 2>/dev/null; then
     echo "   SKIP tls: sem os cabeçalhos do OpenSSL (libssl-dev)"

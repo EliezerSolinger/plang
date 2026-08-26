@@ -1157,7 +1157,23 @@ def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn:
     c->pid = 0
     c->dgram = 0
     c->ssl = None
+    c->pty_slave_fd = -1
     return c
+
+# `htons`/`ntohs` are ordinary extern functions on Linux but pure preprocessor
+# macros on macOS (<arpa/inet.h> expands them straight to a __builtin_bswap /
+# _OSSwapInt16 call, no declaration behind them) — a header ingest sees nothing
+# to declare, so a P call site failed with "implicit declaration of function
+# 'htons'" on macOS only. Every target this runtime ships to is little-endian,
+# so network byte order (always big-endian) is just a fixed 16-bit byte swap,
+# and writing it out here needs nothing from <arpa/inet.h> at all — `htonl` is
+# never called with anything but 0 (INADDR_ANY), which a swap leaves unchanged,
+# so those call sites just drop it.
+private def ps_hton16(x: u16) -> u16:
+    return u16(((u32(x) & 0x00ff) << 8) | ((u32(x) & 0xff00) >> 8))
+
+private def ps_ntoh16(x: u16) -> u16:
+    return ps_hton16(x)   # the swap is its own inverse
 
 def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
     fd: int = socket(AF_INET, SOCK_STREAM, 0)
@@ -1169,8 +1185,8 @@ def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
     a: sockaddr_in
     memset(&a, 0, sizeof(a))
     a.sin_family = u16(AF_INET)
-    a.sin_port = htons(u16(port))
-    a.sin_addr.s_addr = htonl(u32(0))   # INADDR_ANY is a cast macro, and 0 is what it says
+    a.sin_port = ps_hton16(u16(port))
+    a.sin_addr.s_addr = u32(0)   # INADDR_ANY is a cast macro, and 0 is what it says
     if bind(fd, (*sockaddr)(&a), u32(sizeof(a))) != 0:
         close(fd)
         msg: char[128]
@@ -1193,7 +1209,7 @@ def ps_conn_port(c: *PsConn) -> i64:
     memset(&a, 0, sizeof(a))
     if getsockname(c->fd, (*sockaddr)(&a), &n) != 0:
         return 0
-    return i64(ntohs(a.sin_port))
+    return i64(ps_ntoh16(a.sin_port))
 
 private def ps_conn_live(ctx: *PsCtx, c: *PsConn, what: const *char) -> bool:
     if c == None or c->is_open == 0:
@@ -1317,6 +1333,9 @@ def ps_conn_close(ctx: *PsCtx, c: *PsConn):
             kill(c->pid, SIGHUP)
             waitpid(c->pid, &st, 0)
             c->pid = 0
+        if c->pty_slave_fd >= 0:
+            close(c->pty_slave_fd)
+            c->pty_slave_fd = -1
 
 # connect and DNS go to the POOL: `getaddrinfo` blocks, and a connect that
 # waits for a handshake on the other side of the world blocks with it
@@ -1726,13 +1745,17 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             c->fd = int(w->rc)
             c->is_open = 1
             c->listening = 0
-            # `ps_alloc` NÃO zera (223), e estes dois faltavam. `pid` é o que o
+            # `ps_alloc` NÃO zera (223), e estes faltavam. `pid` é o que o
             # `close` usa para decidir se colhe um filho: com lixo de uma coleta
             # anterior, fechar uma ligação ACEITE podia ir esperar por um
             # processo que nunca existiu. É o mesmo engano que o `is_std` do
-            # ficheiro já tinha custado uma vez.
+            # ficheiro já tinha custado uma vez — e que `pty_slave_fd` (F8/
+            # 146.3-mac) repetiu: sem isto `close` chamava `close()` sobre lixo
+            # de uma coleta anterior, que podia ser QUALQUER descritor deste
+            # processo, incluindo o socket que escuta.
             c->pid = 0
             c->dgram = 0
+            c->pty_slave_fd = -1
             ps_sock_nonblock(c->fd)
             *(**PsConn)(ps_task_ret(t)) = c
         case PS_W_TRUE:
@@ -2967,14 +2990,26 @@ elif __PLANG_MACOS__:
                 return i
         return -1
 
+    # `EV_SET` is a macro (a `do { ... } while(0)` of field stores), not a real
+    # function — same trap as `htons` (see the note on 18.4's twin above): a
+    # header ingest sees nothing to declare, so the call was implicit on macOS
+    # only. It only ever set six fields, so writing them out replaces it exactly.
+    private def ps_ev_set(kevp: *kevent, ident: u64, filter: i16, flags: u16):
+        kevp->ident = ident
+        kevp->filter = filter
+        kevp->flags = flags
+        kevp->fflags = 0
+        kevp->data = 0
+        kevp->udata = None
+
     private def ps_mux_change(m: *PsMux, fd: int, events: i16, add: bool):
         ch: kevent[2]
         n: i32 = 0
         if (int(events) & POLLIN) != 0:
-            EV_SET(&ch[n], u64(fd), i16(EVFILT_READ), u16(EV_ADD if add else EV_DELETE), 0, 0, None)
+            ps_ev_set(&ch[n], u64(fd), i16(EVFILT_READ), u16(EV_ADD if add else EV_DELETE))
             n += 1
         if (int(events) & POLLOUT) != 0:
-            EV_SET(&ch[n], u64(fd), i16(EVFILT_WRITE), u16(EV_ADD if add else EV_DELETE), 0, 0, None)
+            ps_ev_set(&ch[n], u64(fd), i16(EVFILT_WRITE), u16(EV_ADD if add else EV_DELETE))
             n += 1
         if n > 0:
             kevent(m->kq, &ch[0], n, None, 0, None)
@@ -4196,8 +4231,8 @@ def ps_net_udp(ctx: *PsCtx, port: i64) -> *PsConn:
     a: sockaddr_in
     memset(&a, 0, sizeof(a))
     a.sin_family = u16(AF_INET)
-    a.sin_port = htons(u16(port))
-    a.sin_addr.s_addr = htonl(u32(0))
+    a.sin_port = ps_hton16(u16(port))
+    a.sin_addr.s_addr = u32(0)
     if bind(fd, (*sockaddr)(&a), u32(sizeof(a))) != 0:
         close(fd)
         msg: char[128]
@@ -4309,7 +4344,7 @@ def ps_conn_recv_from(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, o
     txt: char[64]
     ip: char[64]
     inet_ntop(AF_INET, (*void)(&a.sin_addr), ip, u32(64))
-    snprintf(txt, 64, "%s:%d", ip, int(ntohs(a.sin_port)))
+    snprintf(txt, 64, "%s:%d", ip, int(ps_ntoh16(a.sin_port)))
     from = ps_str_new(ctx, txt, strlen(txt))
     return got
 
@@ -4328,7 +4363,7 @@ def ps_conn_send_to(ctx: *PsCtx, c: *PsConn, b: *PsBuffer, off: i64, n: i64, hos
     a: sockaddr_in
     memset(&a, 0, sizeof(a))
     a.sin_family = u16(AF_INET)
-    a.sin_port = htons(u16(port))
+    a.sin_port = ps_hton16(u16(port))
     if inet_pton(AF_INET, host->data, (*void)(&a.sin_addr)) != 1:
         msg: char[256]
         snprintf(msg, 256, "send_to: '%s' is not an IPv4 address — a datagram goes to a NUMBER, and resolving a name is net.lookup's job", host->data)

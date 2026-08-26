@@ -8,8 +8,7 @@ erro
 sinal: 137
 env: [sim][]
 
-cwd: /tmp
-
+cwd: True
 com stdout=, output tem so o cano: no cano
 
 e o arquivo: no arquivo

@@ -1285,6 +1285,17 @@ private def emit_decl(b: *StrBuf, d: *Decl):
                 path = fixed
             if d->import_system:
                 b->printf("#include <%s>\n", path)
+                # <math.h> still carries the six SVID `matherr()` names (DOMAIN,
+                # SING, OVERFLOW, UNDERFLOW, TLOSS, PLOSS) — matherr itself was
+                # dropped from C99, nothing in this runtime calls it, but macOS's
+                # libc defines the macros unconditionally (glibc gates them
+                # behind __USE_MISC, so this rarely bites there). Left standing,
+                # any program's OWN `OVERFLOW` — pscript's prelude `Category`
+                # enum has one — gets silently rewritten by the preprocessor.
+                # Undefining right after the #include is exactly as scoped as
+                # the collision: nothing after this line can still see them.
+                if strcmp(path, "math.h") == 0:
+                    b->puts("#undef DOMAIN\n#undef SING\n#undef OVERFLOW\n#undef UNDERFLOW\n#undef TLOSS\n#undef PLOSS\n")
             else:
                 b->printf("#include \"%s\"\n", path)
             free(fixed)

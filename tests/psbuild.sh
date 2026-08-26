@@ -26,7 +26,11 @@ PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
 CSTD=${CSTD:--std=c11}
 CCOPT=${CCOPT:--O0}
-PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
+# _DEFAULT_SOURCE unlocks BSD/POSIX extensions on glibc regardless of
+# _POSIX_C_SOURCE; macOS's libc has no such macro, so the same -D alone left
+# strndup/madvise/`st_mtimespec` undeclared there — _DARWIN_C_SOURCE is its
+# equivalent (harmless no-op on Linux, where nothing looks at that name).
+PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE"
 RT=${PSBUILD_RT:-tests/out/psbuild-rt}
 
 src=$1; out=$2; shift 2

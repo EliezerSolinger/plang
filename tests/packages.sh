@@ -23,7 +23,7 @@ PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
 OUT=${OUT:-tests/out/packages}
 PKG=tests/pkg
-PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
+PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE"   # macOS's equivalent of _DEFAULT_SOURCE (tests/psbuild.sh)
 rm -rf "$OUT"; mkdir -p "$OUT"
 pass=0; fail=0
 

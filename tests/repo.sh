@@ -25,7 +25,7 @@ PFORGE=${PFORGE:-build/bin/pforge}
 PLANGC=${PLANGC:-build/bin/plangc_s2}
 CC=${CC:-cc}
 OUT=${OUT:-tests/out/repo}
-PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE"
+PSDEFS="-D_POSIX_C_SOURCE=200112L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE"   # macOS's equivalent of _DEFAULT_SOURCE (tests/psbuild.sh)
 pass=0; fail=0
 ok()  { pass=$((pass+1)); }
 bad() { fail=$((fail+1)); printf '   FAIL %s\n' "$1"; }

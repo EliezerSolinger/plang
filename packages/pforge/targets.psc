@@ -587,8 +587,11 @@ const RT_MODULES: List<str> = ["psrt.ph", "psrt_types.ph", "psrt_mem.ph", "psrt_
                                "psrt_os.p", "psrt_top.p"]
 
 # glibc hides socket/getaddrinfo/poll/pipe under a strict `-std=`, and the runtime
-# speaks POSIX from beginning to end
-const PSDEFS: List<str> = ["-D_POSIX_C_SOURCE=200112L", "-D_DEFAULT_SOURCE"]
+# speaks POSIX from beginning to end. `_DEFAULT_SOURCE` is what unlocks the
+# extensions on glibc; macOS's libc doesn't know that macro, so the same
+# `-std=` there hid strndup/madvise/`st_mtimespec` until `_DARWIN_C_SOURCE`
+# (its own equivalent, a harmless no-op on Linux) joined it.
+const PSDEFS: List<str> = ["-D_POSIX_C_SOURCE=200112L", "-D_DEFAULT_SOURCE", "-D_DARWIN_C_SOURCE"]
 
 
 async def psrt(c: Ctx) -> List<str>:

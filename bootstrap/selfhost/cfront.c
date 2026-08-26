@@ -1089,6 +1089,8 @@ static void Cp_skip_to(Cp *self, const char *a, const char *b);
 
 static int Cp_is_type_kw(Cp *self, const char *w);
 
+static const char *Cp_arith_word(Cp *self, const char *w);
+
 static const char *Cp_canon_arith(Cp *self, const char *n);
 
 static void Cp_check_arith_specs(Cp *self, const char *n, Pos pos);
@@ -1169,7 +1171,14 @@ static void Cp_expect_punct(Cp *self, const char *p) {
 }
 
 static int Cp_is_type_kw(Cp *self, const char *w) {
-    return strcmp(w, "void") == 0 || strcmp(w, "char") == 0 || strcmp(w, "short") == 0 || strcmp(w, "int") == 0 || strcmp(w, "long") == 0 || strcmp(w, "float") == 0 || strcmp(w, "double") == 0 || strcmp(w, "signed") == 0 || strcmp(w, "unsigned") == 0 || strcmp(w, "_Bool") == 0 || strcmp(w, "__int128") == 0 || strcmp(w, "_Complex") == 0 || strcmp(w, "_Imaginary") == 0;
+    return strcmp(w, "void") == 0 || strcmp(w, "char") == 0 || strcmp(w, "short") == 0 || strcmp(w, "int") == 0 || strcmp(w, "long") == 0 || strcmp(w, "float") == 0 || strcmp(w, "double") == 0 || strcmp(w, "signed") == 0 || strcmp(w, "unsigned") == 0 || strcmp(w, "_Bool") == 0 || strcmp(w, "__int128") == 0 || strcmp(w, "_Complex") == 0 || strcmp(w, "_Imaginary") == 0 || strcmp(w, "__signed") == 0 || strcmp(w, "__signed__") == 0;
+}
+
+static const char *Cp_arith_word(Cp *self, const char *w) {
+    if (strcmp(w, "__signed") == 0 || strcmp(w, "__signed__") == 0) {
+        return "signed";
+    }
+    return w;
 }
 
 static int Cp_is_storage_kw(Cp *self, const char *w) {
@@ -1341,7 +1350,7 @@ static Type *Cp_parse_base_type_raw(Cp *self) {
     }
     if (Cp_is_type_kw(self, w)) {
         Pos spos = Cp_pk(self)->pos;
-        const char *name = Cp_adv(self)->text;
+        const char *name = Cp_arith_word(self, Cp_adv(self)->text);
         while (Cp_pk(self)->kind == CT_ID && (Cp_is_type_kw(self, Cp_pk(self)->text) || Cp_is_storage_kw(self, Cp_pk(self)->text))) {
             if (Cp_is_storage_kw(self, Cp_pk(self)->text)) {
                 if (Cp_pk(self)->text[1] == 't') {
@@ -1357,7 +1366,7 @@ static Type *Cp_parse_base_type_raw(Cp *self) {
                 }
                 Cp_adv(self);
             } else {
-                name = Arena_printf(self->a, "%s %s", name, Cp_adv(self)->text);
+                name = Arena_printf(self->a, "%s %s", name, Cp_arith_word(self, Cp_adv(self)->text));
             }
         }
         Cp_check_arith_specs(self, name, spos);
@@ -1492,6 +1501,9 @@ static const char *Cp_canon_arith(Cp *self, const char *n) {
 
 static Type *Cp_parse_stars(Cp *self, Type *base) {
     Type *t = base;
+    while (Cp_pk(self)->kind == CT_ID && (strcmp(Cp_pk(self)->text, "_Nullable") == 0 || strcmp(Cp_pk(self)->text, "_Nonnull") == 0 || strcmp(Cp_pk(self)->text, "_Null_unspecified") == 0 || strcmp(Cp_pk(self)->text, "__nullable") == 0 || strcmp(Cp_pk(self)->text, "__nonnull") == 0 || strcmp(Cp_pk(self)->text, "__null_unspecified") == 0)) {
+        Cp_adv(self);
+    }
     if (Cp_pk(self)->kind == CT_ID && (strcmp(Cp_pk(self)->text, "const") == 0 || strcmp(Cp_pk(self)->text, "volatile") == 0)) {
         if (strcmp(Cp_pk(self)->text, "const") == 0) {
             t->is_const = 1;
@@ -3524,6 +3536,10 @@ Decl *c_top(Cp *p) {
             Cp_skip_braces(p);
         }
         Cp_eat(p, ";");
+        return NULL;
+    }
+    if (Cp_is_punct(p, ";")) {
+        Cp_adv(p);
         return NULL;
     }
     Type *base = Cp_parse_base_type(p);

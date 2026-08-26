@@ -507,6 +507,7 @@ struct Cp:
     private def has_block_decl(self: *Cp) -> bool
     private def skip_to(self: *Cp, a: const *char, b: const *char)
     private def is_type_kw(self: *Cp, w: const *char) -> bool
+    private def arith_word(self: *Cp, w: const *char) -> const *char
     private def canon_arith(self: *Cp, n: const *char) -> const *char
     private def check_arith_specs(self: *Cp, n: const *char, pos: Pos)
     private def parse_base_type(self: *Cp) -> *Type
@@ -559,8 +560,18 @@ struct Cp:
 
     # C type keyword (base arithmetic)
     private def is_type_kw(self: *Cp, w: const *char) -> bool:
-        # __int128/_Complex combine as type words
-        return w in {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "__int128", "_Complex", "_Imaginary"}
+        # __int128/_Complex combine as type words; __signed[__] is the BSD
+        # spelling of `signed` that Apple's _types.h family uses throughout
+        # (`typedef __signed char __int8_t;` in sys/event.h among others)
+        return w in {"void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "__int128", "_Complex", "_Imaginary", "__signed", "__signed__"}
+
+    # normalizes an underscore-alias arithmetic word to its standard spelling
+    # before it joins the multi-word name — canon_arith/check_arith_specs match
+    # on the exact words "signed"/"char"/etc, so the alias has to fold here.
+    private def arith_word(self: *Cp, w: const *char) -> const *char:
+        if w == "__signed" or w == "__signed__":
+            return "signed"
+        return w
 
     # storage-class specifier — legal in any position among the type words
     private def is_storage_kw(self: *Cp, w: const *char) -> bool:
@@ -741,7 +752,7 @@ struct Cp:
         # specifiers may interleave (`int static signed i`): absorb them.
         if self->is_type_kw(w):
             spos: Pos = self->pk()->pos
-            name: const *char = self->adv()->text
+            name: const *char = self->arith_word(self->adv()->text)
             while self->pk()->kind == CT_ID and (self->is_type_kw(self->pk()->text) or self->is_storage_kw(self->pk()->text)):
                 if self->is_storage_kw(self->pk()->text):
                     if self->pk()->text[1] == 't':
@@ -754,7 +765,7 @@ struct Cp:
                         self->spec_extern = True
                     self->adv()
                 else:
-                    name = self->a->printf("%s %s", name, self->adv()->text)
+                    name = self->a->printf("%s %s", name, self->arith_word(self->adv()->text))
             self->check_arith_specs(name, spos)
             return self->base_name(self->canon_arith(name))
         # typedef name: resolves to the underlying type (the backend doesn't change;
@@ -873,6 +884,17 @@ struct Cp:
 
     private def parse_stars(self: *Cp, base: *Type) -> *Type:
         t: *Type = base
+        # nullability right after the base name, BEFORE any '*': the macOS SDK
+        # spells `pthread_t _Nullable * _Nonnull restrict` this way whenever the
+        # typedef itself is already a pointer (`pthread_t` == `struct ... *`).
+        # skip_gnu() only fires after a '*' or a storage/qualifier word, so
+        # without this loop the qualifier is left unconsumed and the '*' check
+        # below never sees a '*' at all — the pointer silently disappears.
+        while self->pk()->kind == CT_ID:
+            nw: const *char = self->pk()->text
+            if nw not in {"_Nullable", "_Nonnull", "_Null_unspecified", "__nullable", "__nonnull", "__null_unspecified"}:
+                break
+            self->adv()
         # qualificador PÓS-base: `void const *p` == `const void *p` (C permite
         # qualifiers em qualquer ordem entre as palavras do tipo)
         if self->pk()->kind == CT_ID and (self->pk()->text == "const" or self->pk()->text == "volatile"):
@@ -2734,6 +2756,16 @@ def c_top(p: *Cp) -> *Decl:
         if p->is_punct("{"):
             p->skip_braces()
         p->eat(";")
+        return None
+    # a bare top-level ';' — an empty declaration, which GCC/clang accept as an
+    # extension. The macOS SDK leaves one behind wherever a `#if` guarded
+    # declaration's terminator survives preprocessing without its declaration
+    # (sys/socket.h does this right after `struct sockaddr`). Without this,
+    # parse_base_type() below tries to read ';' as a type, silently eats it as
+    # "unknown -> int" (header noise is non-strict), and then misparses
+    # whatever comes next as that bogus declarator.
+    if p->is_punct(";"):
+        p->adv()
         return None
     base: *Type = p->parse_base_type()
     # storage class in any position (before/after/among the type words) was

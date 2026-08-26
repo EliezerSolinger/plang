@@ -769,6 +769,21 @@ struct PsConn:
     # socket to everything above this line, which is the whole point of giving
     # `os.spawn_pty` the same type `net.connect` returns.
     pid: i32
+    # F8/146.3-mac: a SPARE open reference to the pty's slave, held for the
+    # connection's whole life. Two reasons, both macOS-only surprises:
+    #   1. `TIOCSWINSZ` is refused on the ptmx MASTER there (ENOTTY) — only the
+    #      slave accepts it, unlike Linux, where either end does — so
+    #      `os.pty_resize` (which only ever sees the master, long after spawn)
+    #      needs a slave fd to reach for.
+    #   2. the slave's reference count hitting zero hangs the master UP: if
+    #      this fd were opened-and-closed just to set the size before the
+    #      child exists, there is a window with NO slave reference at all
+    #      (parent closed its copy, child has not opened its own yet) where
+    #      the master sees an immediate EOF instead of the child's output.
+    #      Holding one open for the connection's life keeps that count above
+    #      zero no matter how the child's own open is scheduled.
+    # -1 when this Conn is a plain socket.
+    pty_slave_fd: int
     # F7: um DATAGRAMA não é um fluxo, e a diferença tem de estar aqui — um
     # `read_into` sobre um socket de datagramas leria um pacote inteiro e
     # deitaria fora o que não coubesse, em silêncio. A marca é o que deixa a

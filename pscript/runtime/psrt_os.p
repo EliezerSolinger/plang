@@ -27,6 +27,20 @@ import "psrt_val.ph"
 import "psrt_rt.ph"    # 118: o pool e a task que `os.run` devolve
 import "psrt_os.ph"
 
+# `TIOCSWINSZ` is a compound BSD ioctl-encoding macro on macOS (`_IOW('t', 103,
+# struct winsize)`, folding in sizeof(struct winsize)) — the same trap the
+# TIOCSCTTY comment above warns about, just missed for this one. A header
+# ingest only turns a `#define` into a constant when the right-hand side is a
+# bare integer literal or a rename of another such constant (sema.p's
+# ingest_macros), so a macro built from a macro CALL is invisible to P, on
+# macOS only (Linux's TIOCSWINSZ is a plain literal and ingests fine — this
+# constant exists so both platforms go through one name). Values pinned by
+# reading them off each platform's own <sys/ioctl.h>.
+const if __PLANG_LINUX__:
+    PS_TIOCSWINSZ: const u64 = 0x5414
+else:
+    PS_TIOCSWINSZ: const u64 = 0x80087467
+
 # ---------- o caminho como o sistema o quer ----------
 # Uma str do pscript pode conter o byte 0 no meio; um caminho não pode. Se
 # passasse assim, a chamada veria o caminho CORTADO no zero e agiria sobre outro
@@ -79,11 +93,6 @@ def ps_os_listdir(ctx: *PsCtx, path: *PsStr, file: const *char, line: i32) -> *P
             j -= 1
     return out
 
-# 511 é 0777, que é o modo que o Python passa: o `umask` do processo recorta o
-# que sobra, e é o mesmo resultado de um `mkdir` na linha de comando.
-private def os_mkdir_one(cs: const *char) -> bool:
-    return mkdir(cs, 511) == 0
-
 private def os_is_dir(cs: const *char) -> bool:
     sb: stat
     if stat(cs, &sb) != 0:
@@ -91,11 +100,19 @@ private def os_is_dir(cs: const *char) -> bool:
     # S_ISDIR é macro (desaparece no ingest): a máscara POSIX estável
     return (i32(sb.st_mode) & 0xF000) == 0x4000
 
+# 511 é 0777, que é o modo que o Python passa: o `umask` do processo recorta o
+# que sobra, e é o mesmo resultado de um `mkdir` na linha de comando.
+private def os_mkdir_one(cs: const *char) -> bool:
+    return mkdir(cs, 511) == 0
+
 def ps_os_mkdir(ctx: *PsCtx, path: *PsStr, parents: bool, file: const *char, line: i32):
     cs: const *char = os_cstr(ctx, path, file, line)
     if cs == None:
         return
     if not parents:
+        # `mkdir` (sem `-p`) TEM de levantar se o diretório já existe (o
+        # cabeçalho do arquivo é explícito nisso) — ao contrário do laço de
+        # baixo, aqui não há uma segunda tentativa de propósito.
         if not os_mkdir_one(cs):
             os_fail(ctx, "cannot create the directory", path, file, line)
         return
@@ -113,7 +130,15 @@ def ps_os_mkdir(ctx: *PsCtx, path: *PsStr, parents: bool, file: const *char, lin
                 break   # "a/b/" — o prefixo já foi criado no passo anterior
             saved: char = buf[i]
             buf[i] = '\0'
-            if not os_is_dir(buf) and not os_mkdir_one(buf):
+            # `-p` runs one prefix at a time with no lock between the
+            # is-a-directory check and the mkdir (18.4's test runner spawns
+            # cases in parallel, and many share the same "build/t/run"
+            # parent): two workers can both see the prefix missing and both
+            # call mkdir, and the loser gets EEXIST. That is success too — the
+            # directory is there, which is all `-p` ever promised — so a
+            # failed mkdir gets ONE more look before it is called a failure,
+            # unlike the strict `mkdir` above, which means EEXIST.
+            if not os_is_dir(buf) and not os_mkdir_one(buf) and not os_is_dir(buf):
                 buf[i] = saved
                 free(buf)
                 os_fail(ctx, "cannot create the directory", path, file, line)
@@ -724,7 +749,17 @@ def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: cons
     memset(&ws, 0, sizeof(ws))
     ws.ws_col = u16(cols if cols > 0 else 80)
     ws.ws_row = u16(rows if rows > 0 else 24)
-    ioctl(m, u64(TIOCSWINSZ), &ws)
+    # Open the SLAVE here, before the child exists, and keep the fd — see the
+    # struct comment on `pty_slave_fd` for both reasons: TIOCSWINSZ has to
+    # land on the slave on macOS (ENOTTY on the master there), and the fd has
+    # to stay OPEN, not just be used and closed, or there is a window with no
+    # slave reference at all — the parent's copy gone, the child's not made
+    # yet — where the master sees an immediate hangup instead of the child's
+    # output. One open reference for the connection's whole life closes that
+    # window for good.
+    wfd: int = open(sname, O_RDWR | O_NOCTTY)
+    if wfd >= 0:
+        ioctl(wfd, PS_TIOCSWINSZ, &ws)
 
     fflush(stdout)
     fflush(stderr)
@@ -744,6 +779,8 @@ def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: cons
         dup2(sfd, 2)
         if sfd > 2:
             close(sfd)
+        if wfd >= 0:
+            close(wfd)   # the parent's spare reference — this process has its own now
         close(m)
         execvp(av[0], av)
         _exit(127)
@@ -753,6 +790,8 @@ def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: cons
     free(av)
     if pid < 0:
         close(m)
+        if wfd >= 0:
+            close(wfd)
         ps_raise(ctx, "os.spawn_pty(): could not create the process", PS_CAT_IO, file, line)
         return ps_conn_new(ctx, -1, 0)
     # non-blocking, because from here on it is an ordinary polled descriptor and
@@ -760,6 +799,7 @@ def ps_os_spawn_pty(ctx: *PsCtx, argv: *PsList, cols: i64, rows: i64, file: cons
     ps_sock_nonblock(m)
     c: *PsConn = ps_conn_new(ctx, m, 0)
     c->pid = pid
+    c->pty_slave_fd = wfd
     return c
 
 
@@ -769,13 +809,16 @@ def ps_os_pty_resize(ctx: *PsCtx, c: *PsConn, cols: i64, rows: i64):
     This is the one thing a terminal needs that a socket does not, and it is why
     it is a function in `os` rather than a method on a `Conn`: a socket has no
     size, and giving every socket a `resize` would be lying about what one is."""
-    if c == None or c->is_open == 0:
+    if c == None or c->is_open == 0 or c->pty_slave_fd < 0:
         return
     ws: winsize
     memset(&ws, 0, sizeof(ws))
     ws.ws_col = u16(cols if cols > 0 else 80)
     ws.ws_row = u16(rows if rows > 0 else 24)
-    ioctl(c->fd, u64(TIOCSWINSZ), &ws)
+    # the SLAVE reference kept since spawn_pty, not c->fd (the master) — see
+    # the struct comment on `pty_slave_fd`: macOS's ptmx master does not
+    # accept TIOCSWINSZ at all.
+    ioctl(c->pty_slave_fd, PS_TIOCSWINSZ, &ws)
 
 
 def ps_os_pty_pid(ctx: *PsCtx, c: *PsConn) -> i64:

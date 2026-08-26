@@ -1485,6 +1485,9 @@ static void emit_decl(StrBuf *b, Decl *d) {
             }
             if (d->import_system) {
                 StrBuf_printf(b, "#include <%s>\n", path);
+                if (strcmp(path, "math.h") == 0) {
+                    StrBuf_puts(b, "#undef DOMAIN\n#undef SING\n#undef OVERFLOW\n#undef UNDERFLOW\n#undef TLOSS\n#undef PLOSS\n");
+                }
             } else {
                 StrBuf_printf(b, "#include \"%s\"\n", path);
             }

@@ -46,9 +46,12 @@ async def go():
     e = await os.run(["/bin/sh", "-c", "echo [$OS_RUN_TESTE][$HOME]"], env={"OS_RUN_TESTE": "sim"})
     print("env:", e.output())
 
-    # cwd= roda em outro diretório
+    # cwd= roda em outro diretório. Não compara IGUAL a "/tmp": no macOS ele é
+    # um symlink para /private/tmp, e `pwd` devolve o caminho FÍSICO — o
+    # `chdir` funcionou do mesmo jeito nas duas plataformas, só o nome
+    # canônico do destino muda, e `endswith` é o que sobrevive a isso.
     c = await os.run(["/bin/pwd"], cwd="/tmp")
-    print("cwd:", c.output())
+    print("cwd:", c.output().strip().endswith("/tmp"))
 
     # stdout= vai para o arquivo; o stderr continua vindo em output()
     os.makedirs("os_run_demo")
