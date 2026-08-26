@@ -14,7 +14,7 @@
 #
 # The receiver is spelled `*TraitName` in the signature: it is a placeholder
 # that the implementing type replaces, exactly as `Self` does in pscript.
-import "str.ph"
+import "strbuf.ph"
 
 # `cmp(a, b)` is negative, zero or positive, like C's convention — which is what
 # every sort in the neighbourhood already speaks.
@@ -39,4 +39,4 @@ trait Iterable:
 # initialized, and what the method does is append to it — `out` in P means the
 # callee assigns the whole thing, which is a different promise.
 trait Printable:
-    def to_str(self: *Printable, ref b: Str)
+    def to_str(self: *Printable, ref b: StrBuf)

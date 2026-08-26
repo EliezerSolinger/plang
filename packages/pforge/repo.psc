@@ -130,17 +130,36 @@ async def fetch_http(r: Repo, rel: str) -> bytes:
         raise error("URL I do not understand: " + r.url + rel, VALUE)
     # `!= None` PROVES non-null (43.1): from here down `parsed` IS a `Url`
     u = parsed
-    if u.scheme == "https":
-        raise error("https not yet: TLS is missing. Trust here comes from the HASH and not from the connection, "
-                    + "so a mirror over http:// serves — but saying https was spoken when it was not, does not.", VALUE)
-    port = u.port if u.port > 0 else 80
+    # 158.8: `https` speaks. The refusal that used to stand here was written
+    # when there was no TLS; there has been since S7/153, and what was missing
+    # was the wiring — not the protocol.
+    #
+    # It stays OPTIONAL, and that is the honest position rather than a
+    # limitation: the index is SIGNED (2.9), so integrity comes from the hash
+    # and not from the connection, and a `pforge` built without OpenSSL keeps
+    # working against an http:// mirror. What TLS adds here is confidentiality —
+    # which package you asked for — and that is worth having when it is there.
+    tls = u.scheme == "https"
+    if tls and not net.tls_available():
+        raise error("this pforge was built without TLS: rebuild the runtime with `-D PSRT_TLS` and link "
+                    + "`-lssl -lcrypto`, or point at an http:// mirror — the index is signed, so what "
+                    + "you would lose is privacy and not integrity", IO)
+    port = u.port if u.port > 0 else (443 if tls else 80)
     target = U.serialize_path(u)
     if len(target) == 0:
         target = "/"
     if u.has_query and len(u.query) > 0:
         target = target + "?" + u.query
-    hostval = u.host if port == 80 else u.host + ":" + str(port)
+    hostval = u.host if port == (443 if tls else 80) else u.host + ":" + str(port)
     c = await net.connect(u.host, port)
+    if tls:
+        # 153.1: promotes the SAME connection. Everything above — `read_into`,
+        # `write_from`, the parser — goes on talking to a `Socket` and does not
+        # know the difference, which is why this is four lines and not a second
+        # client.
+        if not await net.starttls(c, u.host):
+            c.close()
+            raise error("the TLS handshake with " + u.host + " did not complete", IO)
     req = "GET " + target + " HTTP/1.1\r\n"
     req += "host: " + hostval + "\r\n"
     req += "user-agent: pforge/" + UA_VERSION + "\r\n"

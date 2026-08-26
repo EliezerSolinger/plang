@@ -14,7 +14,7 @@ memória manual via `init`/`deinit`, como manda a filosofia da linguagem.
 ```python
 import "stl/vec.ph"          # caminho relativo ao seu arquivo
 import "stl/map.ph"
-import "stl/str.ph"
+import "stl/strbuf.ph"
 
 declare Vec<int>             # no seu .ph (ou .p): emite a definição
 implement Vec<int>           # em UM único .p: emite os corpos
@@ -36,7 +36,7 @@ Transpile os `.ph` da stl junto (gera os `.h` ao lado): `plangc stl/*.ph`.
 |---|---|---|
 | `vec.ph` | `Vec<T>` array dinâmico | `push/pop/get/set/last/insert_at/insert_gap/remove_at/remove_range/swap_remove/reserve/clear`; sem bounds-check (semântica C) |
 | `map.ph` | `Map<K,V>` e `StrMap<V>` | compact dict estilo Python 3.7: ordem de inserção preservada, probe linear, tombstones, resize a 2/3 de carga |
-| `str.ph` | `Str` string dinâmica | sempre NUL-terminada; `append/appendf(fmt, ...)/push/eq/cstr`; exige `implement Str` em um `.p` |
+| `strbuf.ph` | `StrBuf` buffer de texto que cresce | sempre NUL-terminado; `append/appendf(fmt, ...)/push/eq/cstr`; exige `implement StrBuf` em um `.p`. **Chamava-se `Str` e o nome mentia** (141.7): não é uma string, é um *StringBuilder* — quem constrói texto por pedaços usa isto, quem só o carrega usa `const *char` |
 | `set.ph` | `Set<T>` e `StrSet` | mesma topologia do dict, sem hash cacheado (recalcula no resize — economia de memória); `StrSet` copia as chaves e exige `implement StrSet` |
 | `queue.ph` | `Queue<T>` FIFO | ring buffer; resize dobra e lineariza |
 | `slice.ph` | `Slice<T>` view | `{data, len}` não-dona — não sobrevive ao dono; `sub()` sem cópia |
@@ -60,8 +60,8 @@ Transpile os `.ph` da stl junto (gera os `.h` ao lado): `plangc stl/*.ph`.
 
 - `init()` zera; `deinit()` libera e zera — sem construtores mágicos.
 - **Uma regra só**: `.ph` nunca gera código executável; `implement`
-  materializa — `implement Vec<int>` (genérico) e `implement Str`
+  materializa — `implement Vec<int>` (genérico) e `implement StrBuf`
   (não-genérico) em **um único** `.p` do programa.
 - `declare X<...>` no `.ph` público se outros módulos usam o tipo.
-- Se o linker reclamar de `undefined reference to Str_...`, faltou o
-  `implement Str` em algum `.p`.
+- Se o linker reclamar de `undefined reference to StrBuf_...`, faltou o
+  `implement StrBuf` em algum `.p`.

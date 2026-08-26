@@ -7879,3 +7879,36 @@ ali — que é a definição de um defeito que espera.
 
 Depois da correcção: **47 142/47 142 concordam**, o `GC_STRESS` passa, e o
 llhttp (202/202) e o WPT (890/890) não mexeram.
+
+### 158.8 — o `https` do pforge existia e não estava ligado
+
+O `fetch_http` levantava *"https not yet: TLS is missing"*. O TLS chegou na 153;
+o que faltava era a ligação, e a frase envelheceu no sítio onde ninguém a lê
+até precisar dela.
+
+São quatro linhas, e o motivo de serem quatro é a **153.1**: o `starttls` promove
+a MESMA ligação, portanto tudo o que está por cima — `read_into`, `write_from`, o
+analisador de respostas — continua a falar com um `Socket` e não sabe a diferença.
+
+**Fica OPCIONAL, e isso é a posição honesta e não uma limitação.** A 2.9 decidiu
+o índice ASSINADO, portanto a integridade vem do hash e não da ligação: um
+`pforge` construído sem OpenSSL continua a funcionar contra um espelho `http://`.
+O que o TLS acrescenta aqui é **privacidade** — qual pacote é que pediste — e a
+mensagem passou a dizer exactamente isso em vez de dizer que o TLS não existe.
+
+### 158.9 — `Str` passa a `StrBuf`, e o ficheiro com ele
+
+A 141.7 tinha-o decidido: *"o `str` do pscript é imutável, coletado e conta
+codepoints; o `Str` do `stl` é um buffer mutável que cresce. É um *StringBuilder*
+com nome de string."*
+
+Medido antes de mexer, e a medida foi melhor do que a nota dizia: **quatro sítios
+fora do próprio ficheiro**, não vinte e dois. O `traits.ph` (a assinatura do
+`Printable`) e três no `tests/stl/main.p`. O tipo não tinha consumidor nenhum na
+árvore — o que torna esta a última hora barata para o renomear, não a primeira.
+
+O ficheiro foi com ele (`str.ph` → `strbuf.ph`), porque um `str.ph` que declara
+`StrBuf` é a mesma confusão com uma indirecção a mais. O `stl_builtin` da 154 e o
+`build.ninja` seguiram; o `README` do `stl` foi reescrito à mão, e agora diz o que
+o nome antigo escondia: quem CONSTRÓI texto por pedaços usa isto, quem só o
+carrega usa `const *char`.

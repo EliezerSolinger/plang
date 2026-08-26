@@ -538,7 +538,7 @@ private const STL_DICT: const *char = embed("../packages/stl/dict.ph")
 private const STL_LIST: const *char = embed("../packages/stl/list.ph")
 private const STL_QUEUE: const *char = embed("../packages/stl/queue.ph")
 private const STL_SLICE: const *char = embed("../packages/stl/slice.ph")
-private const STL_STR: const *char = embed("../packages/stl/str.ph")
+private const STL_STRBUF: const *char = embed("../packages/stl/strbuf.ph")
 private const STL_HASH: const *char = embed("../packages/stl/hash.ph")
 private const STL_TRAITS: const *char = embed("../packages/stl/traits.ph")
 private const STL_CSTR_H: const *char = embed("../packages/stl/cstr.ph")
@@ -569,8 +569,8 @@ def stl_builtin(path: const *char) -> const *char:
         return STL_QUEUE
     if strcmp(m, "slice.ph") == 0:
         return STL_SLICE
-    if strcmp(m, "str.ph") == 0:
-        return STL_STR
+    if strcmp(m, "strbuf.ph") == 0:
+        return STL_STRBUF
     if strcmp(m, "hash.ph") == 0:
         return STL_HASH
     if strcmp(m, "traits.ph") == 0:

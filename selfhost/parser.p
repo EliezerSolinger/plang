@@ -1471,7 +1471,7 @@ struct P:
         return d
 
     # declare Vec<int> / implement Vec<int> — explicit instantiation of a generic
-    # implement Str (no <>) — materializes bodies of a struct declared in .ph
+    # implement StrBuf (no <>) — materializes bodies of a struct declared in .ph
     # `trait Name:` — a named set of method signatures (67.1). The bodies are
     # never here; an `implement Name for T:` block supplies them per type.
     # `Self` inside a signature means "the type this is implemented for", which

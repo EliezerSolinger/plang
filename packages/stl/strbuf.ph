@@ -1,8 +1,8 @@
-# str.ph — Str: STL dynamic string (always NUL-terminated).
-# Bodies here become prototypes in the .h; materialize with `implement Str`
+# strbuf.ph — StrBuf: STL dynamic string (always NUL-terminated).
+# Bodies here become prototypes in the .h; materialize with `implement StrBuf`
 # in ONE .p file of your program (same model as the generics).
 #
-#   s: Str
+#   s: StrBuf
 #   s.init()
 #   s.append("hello")
 #   s.appendf(" world %d", 42)
@@ -13,18 +13,18 @@ include <stdlib.h>
 include <string.h>
 include <stdarg.h>
 
-struct Str:
+struct StrBuf:
     data: *char
     len: usize
     cap: usize
 
-    def init(out self: Str):
+    def init(out self: StrBuf):
         self.data = None
         self.len = 0
         self.cap = 0
 
     # ensures room for `extra` more bytes + NUL
-    def reserve(ref self: Str, extra: usize):
+    def reserve(ref self: StrBuf, extra: usize):
         if self.len + extra + 1 <= self.cap:
             return
         nc: usize = 32 if self.cap == 0 else self.cap
@@ -33,20 +33,20 @@ struct Str:
         self.data = realloc(self.data, nc)
         self.cap = nc
 
-    def push(ref self: Str, c: char):
+    def push(ref self: StrBuf, c: char):
         self.reserve(1)
         self.data[self.len] = c
         self.len += 1
         self.data[self.len] = '\0'
 
-    def append(ref self: Str, s: const *char):
+    def append(ref self: StrBuf, s: const *char):
         n: usize = strlen(s)
         self.reserve(n)
         memcpy(self.data + self.len, s, n)
         self.len += n
         self.data[self.len] = '\0'
 
-    def appendf(ref self: Str, fmt: const *char, ...):
+    def appendf(ref self: StrBuf, fmt: const *char, ...):
         ap: va_list
         ap2: va_list
         va_start(ap, fmt)
@@ -61,18 +61,18 @@ struct Str:
         va_end(ap2)
         self.len += usize(n)
 
-    def cstr(in self: Str) -> const *char:
+    def cstr(in self: StrBuf) -> const *char:
         return self.data if self.data != None else ""
 
-    def eq(in self: Str, other: const *char) -> bool:
+    def eq(in self: StrBuf, other: const *char) -> bool:
         return strcmp(self.cstr(), other) == 0
 
-    def clear(ref self: Str):
+    def clear(ref self: StrBuf):
         self.len = 0
         if self.data != None:
             self.data[0] = '\0'
 
-    def deinit(ref self: Str):
+    def deinit(ref self: StrBuf):
         free(self.data)
         self.data = None
         self.len = 0

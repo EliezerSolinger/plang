@@ -1,9 +1,9 @@
-# teste da STL: Vec<T>, Map<K,V>, StrMap<V>, Str, hash — tudo header-only
+# teste da STL: Vec<T>, Map<K,V>, StrMap<V>, StrBuf, hash — tudo header-only
 include <stdio.h>
 include <string.h>
 import <stl/vec.ph>
 import <stl/map.ph>
-import <stl/str.ph>
+import <stl/strbuf.ph>
 import <stl/set.ph>
 import <stl/queue.ph>
 import <stl/slice.ph>
@@ -21,7 +21,7 @@ implement Map<int, *char>
 declare StrMap<int>
 implement StrMap<int>
 
-implement Str
+implement StrBuf
 implement StrSet
 
 declare Set<int>
@@ -58,7 +58,7 @@ implement Comparable for Point:
         return (self->x * self->x + self->y * self->y) - (other->x * other->x + other->y * other->y)
 
 implement Printable for Point:
-    def to_str(self: *Point, ref b: Str):
+    def to_str(self: *Point, ref b: StrBuf):
         b.appendf("(%d, %d)", self->x, self->y)
 
 struct Countdown:
@@ -78,7 +78,7 @@ def bigger<T: Comparable>(a: *T, b: *T) -> *T:
     return a if a->cmp(b) >= 0 else b
 
 def show<T: Printable>(v: *T):
-    sb: Str
+    sb: StrBuf
     sb.init()
     v->to_str(ref sb)
     printf("printable: %s\n", sb.cstr())
@@ -213,8 +213,8 @@ def main() -> int:
     printf("slice=%d %d..%d\n", mid.len, mid.get(0), mid.last())
     v2.deinit()
 
-    # ---- Str ----
-    s: Str
+    # ---- StrBuf ----
+    s: StrBuf
     s.init()
     s.append("olá")
     s.push(',')

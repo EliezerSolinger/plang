@@ -3,7 +3,7 @@
 # P had no text type: it had `const *char`, and that is exactly why it had no
 # hidden allocation — there is no string operation that could allocate (`a + b`
 # between pointers is an error, `==` compares with `strcmp`, and building text
-# is `snprintf` into your own buffer or the `Str` next door, whose `realloc`
+# is `snprintf` into your own buffer or the `StrBuf` next door, whose `realloc`
 # sits inside a function you called).
 #
 # These two keep that property whole: they are two-register values that
@@ -11,7 +11,7 @@
 # pointer — no `strlen`, no terminator required, and slicing for free.
 #
 # What they are not: owners. Nobody frees a `CStr`; it points at somebody
-# else's bytes — a literal, a buffer of yours, a built `Str`, the bytes of a
+# else's bytes — a literal, a buffer of yours, a built `StrBuf`, the bytes of a
 # pscript `str` for the duration of a call. That is why the compiler lets them
 # live only as PARAMETER, LOCAL and RETURN (84.2, the rule `ref T` already has
 # from 69): so that none of them outlives the scope that made it by accident.
