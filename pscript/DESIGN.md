@@ -7912,3 +7912,92 @@ O ficheiro foi com ele (`str.ph` → `strbuf.ph`), porque um `str.ph` que declar
 `build.ninja` seguiram; o `README` do `stl` foi reescrito à mão, e agora diz o que
 o nome antigo escondia: quem CONSTRÓI texto por pedaços usa isto, quem só o
 carrega usa `const *char`.
+
+---
+
+## Bateria 159 — as duas que estavam decididas e não feitas (2026-08-26)
+
+A varredura da 157 deixou-as no topo da lista da `AUDIT.md`: *"nenhum destes
+precisa de bateria, só de trabalho"*. São as duas maiores dessa lista, e cada uma
+custou uma descoberta.
+
+### 159.1 — `Sequence<T>` não é um tipo: é uma função genérica escrita sem cerimónia
+
+A 60.3 prometeu que `def total(xs: Sequence<float>)` aceitaria `List<float>` e
+`f64[N]` **sem duplicar código nem copiar**. O que faltava não era um tipo — era
+perceber que ele não é um.
+
+`Sequence<float>` vira, na sema e antes de mais nada,
+
+    def total<__seq: Sequence<float>>(xs: __seq)
+
+e daí em diante a maquinaria é a que existe desde a 66.3: o parâmetro é inferido
+do argumento, o limite é conferido onde o tipo concreto está, e o corpo é
+monomorfizado. **Zero vtable e zero cópia** — e nenhum backend, nenhum coletor e
+nenhuma parte do lowering ouviu falar de `Sequence`.
+
+**O limite é NATIVO e não nominal**, e é a diferença para uma trait que alguém
+escreve: ninguém declara `implement Sequence for List<T>`, porque `List` não é um
+tipo onde se abra um bloco `implement`. O que se confere é que o contentor é um
+que a linguagem sabe percorrer — `List<T>`, `T[N]`, `View<T>`, `bytes` — e que o
+elemento é o pedido.
+
+**Duas restrições, assumidas e escritas na mensagem de erro:**
+
+* vários parâmetros `Sequence` **partilham um** parâmetro de tipo, portanto
+  `def dot(a: Sequence<float>, b: Sequence<float>)` exige que os dois sejam o
+  mesmo contentor. A alternativa era um parâmetro de tipo por argumento, e o
+  `ps_instantiate` compila um;
+* `Sequence` só se escreve no tipo de um **parâmetro**. Num retorno ou numa
+  variável é erro, porque **nenhum valor tem este tipo**: ele diz o que uma
+  função aceita, não o que existe.
+
+### 159.2 — `const def`, e a promessa que obriga o avaliador a ser total
+
+A 65.10 pedia *"função avaliada em compilação, zero runtime"*. A promessa é que
+ela **não existe em tempo de execução**, e é isso que decide o desenho todo: o
+avaliador ou devolve um literal, ou dá um erro com uma posição. **Nunca cai para
+uma chamada.** Uma que caísse tornaria a promessa num acaso — a função existiria
+ou não conforme os argumentos, e ninguém saberia qual dos dois sem ler o C.
+
+Medido no fim: das seis `const def` do portão, **zero** aparecem no C gerado, e
+no lugar das chamadas estão `42`, `3628800`, `6765`, `4096` e `16`.
+
+O `const` já estava na linguagem e já queria dizer *conhecido em compilação*;
+pô-lo à frente do `def` diz a mesma coisa da função e não custa palavra nova.
+
+**A divisão é a do Python e não a do C**, e isto tem de estar escrito porque é a
+diferença entre uma constante certa e uma errada: em C o `-7 / 2` trunca para -3
+e o resto fica negativo; aqui o piso é -4 e o resto tem o sinal do divisor,
+exactamente como em tempo de execução. **Uma constante que mudasse de valor por
+ser dobrada era pior do que não haver dobra nenhuma.**
+
+**Números e booleanos, e o texto não** — e é recusa, não esquecimento. O `text`
+de um literal é a GRAFIA da fonte (aspas e escapes), e devolver um literal novo
+exigiria reconstruí-la ao contrário, que é onde um escape mal posto vira um valor
+diferente sem ninguém dar por isso. A 65.10 nasceu para o `T[N]` e para a
+f-string, que são números; o texto entra quando alguém o precisar, com o
+codificador escrito e conferido.
+
+### 159.3 — três defeitos meus, e o segundo é o que vale a pena guardar
+
+1. **os argumentos eram avaliados no ambiente errado** — no do corpo em vez de no
+   de quem chama, o que punha `fib(n - 1)` a procurar o `n` do próprio `fib` que
+   ainda não tinha nenhum. Uma recursão a olhar para dentro de si em vez de para
+   fora;
+
+2. **o corpo de um `const def` não pode ser verificado como função normal.** Ao
+   verificar o tipo de `fib(n - 1)` dentro do `fib`, a dobra disparava — com o
+   `n` sem valor. Quem confere um `const def` é a chamada que o usa; o corpo não
+   é código que corre, é uma receita que o avaliador percorre. É a mesma forma da
+   regra que já existia para um genérico (*"o que é verificado é cada
+   instância"*), e não foi por acaso: as duas dizem que um TEMPLATE não se
+   verifica sozinho;
+
+3. **o `T[N]` não dobrava a chamada** — que é literalmente o caso que a 65.10
+   nomeou ao ser decidida, e que estava a faltar no sítio onde o tamanho de um
+   array é resolvido.
+
+E uma armadilha que não é minha e volta sempre: **o teste foi escrito antes do
+reseed**, e o seed comitado não conhecia `Sequence`. A ordem é a de sempre —
+mudar o compilador, `./reseed.sh`, e só então acrescentar os testes.

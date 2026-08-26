@@ -59,12 +59,14 @@ typedef struct StrMap_pPsNs StrMap_pPsNs;
 typedef struct StrMap_pchar StrMap_pchar;
 typedef struct Vec_pPsDecl Vec_pPsDecl;
 typedef struct Vec_pPsFunc Vec_pPsFunc;
+typedef struct Vec_pPsExpr Vec_pPsExpr;
 typedef struct Vec_pPsStmt Vec_pPsStmt;
 typedef struct Vec_PsParam Vec_PsParam;
 typedef struct Vec_PsDynUse Vec_PsDynUse;
 typedef struct PsLamF PsLamF;
 typedef struct Vec_PsLamF Vec_PsLamF;
 typedef struct PsLocal PsLocal;
+typedef struct CEnv CEnv;
 typedef struct PsSema PsSema;
 
 struct StrMap_i64 {
@@ -1211,6 +1213,42 @@ void Vec_pPsFunc_clear(Vec_pPsFunc *self);
 
 void Vec_pPsFunc_deinit(Vec_pPsFunc *self);
 
+struct Vec_pPsExpr {
+    PsExpr **data;
+    int32_t len;
+    int32_t cap;
+};
+
+void Vec_pPsExpr_init(Vec_pPsExpr *self);
+
+void Vec_pPsExpr_reserve(Vec_pPsExpr *self, int32_t n);
+
+void Vec_pPsExpr_push(Vec_pPsExpr *self, PsExpr *item);
+
+PsExpr *Vec_pPsExpr_pop(Vec_pPsExpr *self);
+
+PsExpr *Vec_pPsExpr_get(const Vec_pPsExpr *self, int32_t i);
+
+void Vec_pPsExpr_set(Vec_pPsExpr *self, int32_t i, PsExpr *item);
+
+PsExpr *Vec_pPsExpr_last(const Vec_pPsExpr *self);
+
+int Vec_pPsExpr_is_empty(const Vec_pPsExpr *self);
+
+void Vec_pPsExpr_insert_gap(Vec_pPsExpr *self, int32_t i, int32_t n);
+
+void Vec_pPsExpr_insert_at(Vec_pPsExpr *self, int32_t i, PsExpr *item);
+
+void Vec_pPsExpr_remove_range(Vec_pPsExpr *self, int32_t i, int32_t n);
+
+void Vec_pPsExpr_remove_at(Vec_pPsExpr *self, int32_t i);
+
+void Vec_pPsExpr_swap_remove(Vec_pPsExpr *self, int32_t i);
+
+void Vec_pPsExpr_clear(Vec_pPsExpr *self);
+
+void Vec_pPsExpr_deinit(Vec_pPsExpr *self);
+
 struct Vec_pPsStmt {
     PsStmt **data;
     int32_t len;
@@ -1632,6 +1670,123 @@ struct PsLocal {
     PsType *any_type;
 };
 
+static const int64_t CEVAL_BUDGET = 1000000;
+
+struct CEnv {
+    Vec_pchar names;
+    Vec_pPsExpr vals;
+    PsExpr *ret;
+    int done;
+};
+
+static PsExpr *cenv_get(CEnv *env, const char *name) {
+    int32_t i = (int32_t)env->names.len - 1;
+    while (i >= 0) {
+        if (strcmp(env->names.data[i], name) == 0) {
+            return env->vals.data[i];
+        }
+        i -= 1;
+    }
+    return NULL;
+}
+
+static void cenv_set(CEnv *env, const char *name, PsExpr *v) {
+    int32_t i = (int32_t)env->names.len - 1;
+    while (i >= 0) {
+        if (strcmp(env->names.data[i], name) == 0) {
+            env->vals.data[i] = v;
+            return;
+        }
+        i -= 1;
+    }
+    Vec_pchar_push(&env->names, (char *)name);
+    Vec_pPsExpr_push(&env->vals, v);
+}
+
+static PsExpr *cmk_int(Arena *a, int64_t v, Pos pos) {
+    PsExpr *e = ps_expr(a, PE_INT, pos);
+    e->text = Arena_printf(a, "%lld", v);
+    e->type = ps_type(a, PT_INT, pos);
+    return e;
+}
+
+static PsExpr *cmk_float(Arena *a, double v, Pos pos) {
+    PsExpr *e = ps_expr(a, PE_FLOAT, pos);
+    e->text = Arena_printf(a, "%.17g", v);
+    e->type = ps_type(a, PT_FLOAT, pos);
+    return e;
+}
+
+static PsExpr *cmk_bool(Arena *a, int v, Pos pos) {
+    PsExpr *e = ps_expr(a, PE_BOOL, pos);
+    e->text = (v ? "True" : "False");
+    e->type = ps_type(a, PT_BOOL, pos);
+    return e;
+}
+
+static PsExpr *cmk_str(Arena *a, const char *s, Pos pos) {
+    PsExpr *e = ps_expr(a, PE_STR, pos);
+    e->text = s;
+    e->type = ps_type(a, PT_STR, pos);
+    return e;
+}
+
+static int cis_num(PsExpr *e) {
+    return e != NULL && (e->kind == PE_INT || e->kind == PE_FLOAT);
+}
+
+static double cnum(PsExpr *e) {
+    if (e == NULL) {
+        return 0.0;
+    }
+    if (e->kind == PE_INT) {
+        return (double)strtoll(e->text, NULL, 0);
+    }
+    if (e->kind == PE_FLOAT) {
+        return strtod(e->text, NULL);
+    }
+    if (e->kind == PE_BOOL) {
+        return (strcmp(e->text, "True") == 0 ? 1.0 : 0.0);
+    }
+    return 0.0;
+}
+
+static int64_t cint(PsExpr *e) {
+    if (e != NULL && e->kind == PE_FLOAT) {
+        return (int64_t)strtod(e->text, NULL);
+    }
+    if (e != NULL && e->kind == PE_BOOL) {
+        return (strcmp(e->text, "True") == 0 ? 1 : 0);
+    }
+    return (e != NULL ? strtoll(e->text, NULL, 0) : 0);
+}
+
+static int cbool(PsExpr *e) {
+    if (e == NULL) {
+        return 0;
+    }
+    if (e->kind == PE_BOOL) {
+        return strcmp(e->text, "True") == 0;
+    }
+    return cnum(e) != 0.0;
+}
+
+static const char *cval_kind(Arena *a, PsExpr *e) {
+    if (e == NULL) {
+        return "nothing";
+    }
+    if (e->kind == PE_INT) {
+        return "an int";
+    }
+    if (e->kind == PE_FLOAT) {
+        return "a float";
+    }
+    if (e->kind == PE_BOOL) {
+        return "a bool";
+    }
+    return "a value this evaluator does not compute";
+}
+
 struct PsSema {
     Arena *a;
     const char *file;
@@ -1645,6 +1800,8 @@ struct PsSema {
     StrMap_pPsType globals;
     StrSet gconst;
     StrMap_i64 gconst_num;
+    int64_t cbudget;
+    int32_t cdepth;
     PsLocal *locals;
     int32_t nlocals;
     int32_t clocals;
@@ -1734,6 +1891,24 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t);
 static PsType *PsSema_check_call(PsSema *self, PsExpr *e);
 
 static PsType *PsSema_call_generic(PsSema *self, PsExpr *e, PsFunc *f, const char *name);
+
+static PsExpr *PsSema_ceval_call(PsSema *self, PsFunc *f, PsExpr **args, int32_t nargs, Pos pos);
+
+static void PsSema_ceval_block(PsSema *self, PsBlock *b, CEnv *env, Pos pos);
+
+static void PsSema_ceval_stmt(PsSema *self, PsStmt *s, CEnv *env);
+
+static PsExpr *PsSema_ceval_expr(PsSema *self, PsExpr *e, CEnv *env);
+
+static PsExpr *PsSema_ceval_callexpr(PsSema *self, PsExpr *e, CEnv *env);
+
+static PsExpr *PsSema_ceval_binop(PsSema *self, int32_t op, PsExpr *l, PsExpr *r, Pos pos);
+
+static int32_t PsSema_ceval_aug_op(PsSema *self, int32_t op, Pos pos);
+
+static void PsSema_ceval_step(PsSema *self, Pos pos);
+
+static void PsSema_desugar_sequence(PsSema *self, PsDecl *d);
 
 static void PsSema_bind_call_args(PsSema *self, PsExpr *e, PsParam *params, int32_t nparams, const char *what);
 
@@ -1957,16 +2132,16 @@ static int32_t PsSema_find_local_here(PsSema *self, const char *name) {
 static void PsSema_add_local(PsSema *self, const char *name, PsType *t, int assigned, int is_const) {
     self->locals = vec_grow(self->locals, self->nlocals, &self->clocals, sizeof(*self->locals));
     {
-        PsLocal *__with_479_9 = &self->locals[self->nlocals];
-        __with_479_9->name = name;
-        __with_479_9->type = t;
-        __with_479_9->assigned = assigned;
-        __with_479_9->is_const = is_const;
-        __with_479_9->frozen = 0;
-        __with_479_9->is_module = 0;
-        __with_479_9->opt_type = NULL;
-        __with_479_9->any_type = NULL;
-        __with_479_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
+        PsLocal *__with_631_9 = &self->locals[self->nlocals];
+        __with_631_9->name = name;
+        __with_631_9->type = t;
+        __with_631_9->assigned = assigned;
+        __with_631_9->is_const = is_const;
+        __with_631_9->frozen = 0;
+        __with_631_9->is_module = 0;
+        __with_631_9->opt_type = NULL;
+        __with_631_9->any_type = NULL;
+        __with_631_9->depth = (StrSet_has(&self->fn_nonlocals, name) ? 0 : self->depth);
     }
     self->nlocals += 1;
 }
@@ -2036,6 +2211,10 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
             PsSema_note_dyn_trait(self, td2);
             break;
         }
+        case PT_SEQ: {
+            fatal_at(self->file, t->pos, "`Sequence<T>` is only a PARAMETER's type (60.3): it says what a function accepts, and no value ever has it — write the container itself (`List<T>`, `T[N]`, `View<T>`)");
+            break;
+        }
         case PT_OPT: {
             if (t->inner == NULL) {
                 fatal_at(self->file, t->pos, "an option needs a type: write `T\?`");
@@ -2048,6 +2227,9 @@ static PsType *PsSema_resolve_type(PsSema *self, PsType *t) {
         }
         case PT_ARRAY: {
             t->inner = PsSema_resolve_type(self, t->inner);
+            if (t->count != NULL && t->count->kind == PE_CALL) {
+                PsType *_ = PsSema_check_expr(self, t->count);
+            }
             if (t->count != NULL && t->count->kind == PE_NAME) {
                 const char *cn9 = PsSema_gname_soft(self, t->count->text);
                 if (StrMap_i64_has(&self->gconst_num, cn9)) {
@@ -2504,12 +2686,12 @@ static PsType *PsSema_check_expr(PsSema *self, PsExpr *e) {
             PsExpr *cal8 = ps_expr(self->a, PE_NAME, e->pos);
             cal8->text = fn8->name;
             {
-                PsExpr *__with_1013_17 = e;
-                __with_1013_17->kind = PE_CALL;
-                __with_1013_17->lhs = cal8;
-                __with_1013_17->args = args8;
-                __with_1013_17->nargs = nc8;
-                __with_1013_17->body = NULL;
+                PsExpr *__with_1177_17 = e;
+                __with_1177_17->kind = PE_CALL;
+                __with_1177_17->lhs = cal8;
+                __with_1177_17->args = args8;
+                __with_1177_17->nargs = nc8;
+                __with_1177_17->body = NULL;
             }
             PsType *tk8 = ps_type(self->a, PT_TASK, e->pos);
             tk8->inner = ps_type(self->a, PT_VOID, e->pos);
@@ -3263,14 +3445,14 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
                 cmp9->lhs = pair;
                 cmp9->rhs = recv9;
                 {
-                    PsExpr *__with_1732_21 = e;
-                    __with_1732_21->kind = PE_COMPREHEND;
-                    __with_1732_21->op = TK_RBRACKET;
-                    __with_1732_21->var = kv9;
-                    __with_1732_21->lhs = pair;
-                    __with_1732_21->rhs = recv9;
-                    __with_1732_21->args = NULL;
-                    __with_1732_21->nargs = 0;
+                    PsExpr *__with_1896_21 = e;
+                    __with_1896_21->kind = PE_COMPREHEND;
+                    __with_1896_21->op = TK_RBRACKET;
+                    __with_1896_21->var = kv9;
+                    __with_1896_21->lhs = pair;
+                    __with_1896_21->rhs = recv9;
+                    __with_1896_21->args = NULL;
+                    __with_1896_21->nargs = 0;
                 }
                 return PsSema_check_expr(self, e);
             }
@@ -4105,6 +4287,23 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
     }
     if (StrMap_pPsFunc_has(&self->funcs, name)) {
         PsFunc *f = StrMap_pPsFunc_get_or(&self->funcs, name, NULL);
+        if (f->is_ceval) {
+            CEnv top;
+            Vec_pchar_init(&top.names);
+            Vec_pPsExpr_init(&top.vals);
+            top.ret = NULL;
+            top.done = 0;
+            PsExpr **tv = Arena_alloc(self->a, (size_t)(e->nargs + 1) * sizeof(*tv));
+            size_t k9;
+            for (k9 = 0; k9 < e->nargs; k9 += 1) {
+                tv[k9] = PsSema_ceval_expr(self, e->args[k9], &top);
+            }
+            PsExpr *lit = PsSema_ceval_call(self, f, tv, e->nargs, e->pos);
+            Vec_pchar_deinit(&top.names);
+            Vec_pPsExpr_deinit(&top.vals);
+            *e = *lit;
+            return e->type;
+        }
         if (f->ntparams > 0) {
             return PsSema_call_generic(self, e, f, name);
         }
@@ -4230,6 +4429,440 @@ static void PsSema_bind_call_args(PsSema *self, PsExpr *e, PsParam *params, int3
     e->nargs = nparams;
 }
 
+static void PsSema_desugar_sequence(PsSema *self, PsDecl *d) {
+    PsFunc *f = d->func;
+    if (f == NULL || f->nparams == 0) {
+        return;
+    }
+    int32_t first = -1;
+    size_t i;
+    for (i = 0; i < f->nparams; i += 1) {
+        if (f->params[i].type != NULL && f->params[i].type->kind == PT_SEQ) {
+            if (first < 0) {
+                first = i;
+            } else if (!ps_type_eq(f->params[i].type->inner, f->params[first].type->inner)) {
+                fatal_at(self->file, f->params[i].type->pos, "'%s' asks for two different Sequence elements; the parameters share ONE type parameter, so they share the element too (60.3)", ps_disp(f->name));
+            }
+        }
+    }
+    if (first < 0) {
+        return;
+    }
+    if (f->ntparams > 0) {
+        fatal_at(self->file, f->pos, "'%s' is already generic: a `Sequence` parameter IS the type parameter, so the two are not written together (60.3)", ps_disp(f->name));
+    }
+    PsTParam *tp = Arena_alloc(self->a, sizeof(PsTParam));
+    tp->name = Arena_printf(self->a, "__seq_%s", f->name);
+    tp->bound = NULL;
+    tp->seq_elem = f->params[first].type->inner;
+    tp->pos = f->params[first].type->pos;
+    f->tparams = tp;
+    f->ntparams = 1;
+    size_t j;
+    for (j = 0; j < f->nparams; j += 1) {
+        if (f->params[j].type != NULL && f->params[j].type->kind == PT_SEQ) {
+            PsType *nt = ps_type(self->a, PT_NAME, f->params[j].type->pos);
+            nt->name = tp->name;
+            f->params[j].type = nt;
+        }
+    }
+}
+
+static PsExpr *PsSema_ceval_call(PsSema *self, PsFunc *f, PsExpr **args, int32_t nargs, Pos pos) {
+    if (f->is_async) {
+        fatal_at(self->file, pos, "'%s' is a `const def` and `async`: a function evaluated at compile time has nothing to wait for (65.10)", ps_disp(f->name));
+    }
+    if (nargs != f->nparams) {
+        fatal_at(self->file, pos, "'%s' takes %d argument(s), %d given", ps_disp(f->name), f->nparams, nargs);
+    }
+    self->cdepth += 1;
+    if (self->cdepth > 64) {
+        fatal_at(self->file, pos, "'%s' calls itself deeper than a compile-time evaluation goes (65.10): 64 frames", ps_disp(f->name));
+    }
+    CEnv env;
+    Vec_pchar_init(&env.names);
+    Vec_pPsExpr_init(&env.vals);
+    env.ret = NULL;
+    env.done = 0;
+    size_t i;
+    for (i = 0; i < nargs; i += 1) {
+        cenv_set(&env, f->params[i].name, args[i]);
+    }
+    PsSema_ceval_block(self, f->body, &env, pos);
+    self->cdepth -= 1;
+    if (env.ret == NULL) {
+        fatal_at(self->file, pos, "'%s' is a `const def` and this call reached its end without a `return` (65.10): a compile-time evaluation has to produce a value", ps_disp(f->name));
+    }
+    PsExpr *r = env.ret;
+    Vec_pchar_deinit(&env.names);
+    Vec_pPsExpr_deinit(&env.vals);
+    return r;
+}
+
+static void PsSema_ceval_step(PsSema *self, Pos pos) {
+    self->cbudget -= 1;
+    if (self->cbudget <= 0) {
+        fatal_at(self->file, pos, "a compile-time evaluation ran past its budget of %d steps (65.10) — a `const def` that does not finish is a compiler that does not answer, which is why the budget exists", CEVAL_BUDGET);
+    }
+}
+
+static void PsSema_ceval_block(PsSema *self, PsBlock *b, CEnv *env, Pos pos) {
+    if (b == NULL) {
+        return;
+    }
+    size_t i;
+    for (i = 0; i < b->n; i += 1) {
+        if (env->done) {
+            return;
+        }
+        PsSema_ceval_stmt(self, b->stmts[i], env);
+    }
+}
+
+static void PsSema_ceval_stmt(PsSema *self, PsStmt *s, CEnv *env) {
+    PsSema_ceval_step(self, s->pos);
+    switch (s->kind) {
+        case PS_RETURN: {
+            env->ret = (s->expr != NULL ? PsSema_ceval_expr(self, s->expr, env) : NULL);
+            env->done = 1;
+            break;
+        }
+        case PS_VAR:
+        case PS_ASSIGN: {
+            if (s->lhs != NULL && s->lhs->kind != PE_NAME) {
+                fatal_at(self->file, s->pos, "a `const def` assigns to plain names only (65.10)");
+            }
+            const char *nm = (s->name != NULL ? s->name : s->lhs->text);
+            if (s->op != 0 && s->op != TK_ASSIGN) {
+                PsExpr *cur = cenv_get(env, nm);
+                if (cur == NULL) {
+                    fatal_at(self->file, s->pos, "'%s' is not a name this compile-time evaluation knows", nm);
+                }
+                cenv_set(env, nm, PsSema_ceval_binop(self, PsSema_ceval_aug_op(self, s->op, s->pos), cur, PsSema_ceval_expr(self, s->rhs, env), s->pos));
+            } else {
+                if (s->rhs == NULL) {
+                    fatal_at(self->file, s->pos, "a name in a `const def` is born with a value (65.10)");
+                }
+                cenv_set(env, nm, PsSema_ceval_expr(self, s->rhs, env));
+            }
+            break;
+        }
+        case PS_EXPR: {
+            PsExpr *_ = PsSema_ceval_expr(self, s->expr, env);
+            break;
+        }
+        case PS_PASS: {
+            ;
+            break;
+        }
+        case PS_IF: {
+            size_t k;
+            for (k = 0; k < s->nconds; k += 1) {
+                if (cbool(PsSema_ceval_expr(self, s->conds[k], env))) {
+                    PsSema_ceval_block(self, s->blocks[k], env, s->pos);
+                    return;
+                }
+            }
+            PsSema_ceval_block(self, s->else_block, env, s->pos);
+            break;
+        }
+        case PS_WHILE: {
+            while (cbool(PsSema_ceval_expr(self, s->cond, env)) && !env->done) {
+                PsSema_ceval_step(self, s->pos);
+                PsSema_ceval_block(self, s->body, env, s->pos);
+            }
+            break;
+        }
+        case PS_FOR: {
+            int isr = s->iter != NULL && s->iter->kind == PE_CALL && s->iter->lhs != NULL && s->iter->lhs->kind == PE_NAME && strcmp(s->iter->lhs->text, "range") == 0;
+            if (!isr || s->nnames != 1) {
+                fatal_at(self->file, s->pos, "a `for` in a `const def` walks a `range(...)` with one variable (65.10): at compile time there is no container to walk");
+            }
+            int32_t na = s->iter->nargs;
+            if (na < 1 || na > 3) {
+                fatal_at(self->file, s->pos, "`range` takes one, two or three arguments");
+            }
+            int64_t lo = 0;
+            int64_t hi = 0;
+            int64_t st = 1;
+            if (na == 1) {
+                hi = cint(PsSema_ceval_expr(self, s->iter->args[0], env));
+            } else {
+                lo = cint(PsSema_ceval_expr(self, s->iter->args[0], env));
+                hi = cint(PsSema_ceval_expr(self, s->iter->args[1], env));
+                if (na == 3) {
+                    st = cint(PsSema_ceval_expr(self, s->iter->args[2], env));
+                }
+            }
+            if (st == 0) {
+                fatal_at(self->file, s->pos, "a `range` step of zero never advances");
+            }
+            int64_t v = lo;
+            while ((st > 0 ? v < hi : v > hi) && !env->done) {
+                PsSema_ceval_step(self, s->pos);
+                cenv_set(env, s->names[0], cmk_int(self->a, v, s->pos));
+                PsSema_ceval_block(self, s->body, env, s->pos);
+                v += st;
+            }
+            break;
+        }
+        default: {
+            fatal_at(self->file, s->pos, "a `const def` does not do this at compile time (65.10): what it computes is numbers and booleans, with `if`, `while`, `for i in range(...)`, locals, and calls to other `const def`s");
+            break;
+        }
+    }
+}
+
+static int32_t PsSema_ceval_aug_op(PsSema *self, int32_t op, Pos pos) {
+    if (op == TK_PLUS_EQ) {
+        return TK_PLUS;
+    }
+    if (op == TK_MINUS_EQ) {
+        return TK_MINUS;
+    }
+    if (op == TK_STAR_EQ) {
+        return TK_STAR;
+    }
+    if (op == TK_SLASH_EQ) {
+        return TK_SLASH;
+    }
+    if (op == TK_PERCENT_EQ) {
+        return TK_PERCENT;
+    }
+    fatal_at(self->file, pos, "a `const def` does not compute this compound assignment yet (65.10)");
+    return TK_PLUS;
+}
+
+static PsExpr *PsSema_ceval_expr(PsSema *self, PsExpr *e, CEnv *env) {
+    if (e == NULL) {
+        Pos z;
+        z.line = 0;
+        z.col = 0;
+        fatal_at(self->file, z, "a `const def` was handed nothing to evaluate");
+    }
+    PsSema_ceval_step(self, e->pos);
+    switch (e->kind) {
+        case PE_INT:
+        case PE_FLOAT:
+        case PE_BOOL: {
+            return e;
+        }
+        case PE_NAME: {
+            PsExpr *v = cenv_get(env, e->text);
+            if (v != NULL) {
+                return v;
+            }
+            const char *gn = PsSema_gname_soft(self, e->text);
+            if (StrMap_i64_has(&self->gconst_num, gn)) {
+                return cmk_int(self->a, StrMap_i64_get_or(&self->gconst_num, gn, 0), e->pos);
+            }
+            if (StrMap_i64_has(&self->gconst_num, e->text)) {
+                return cmk_int(self->a, StrMap_i64_get_or(&self->gconst_num, e->text, 0), e->pos);
+            }
+            fatal_at(self->file, e->pos, "'%s' is not known at compile time: a `const def` sees its own parameters, its own locals, and the module's `const`s (65.10)", e->text);
+            break;
+        }
+        case PE_UNARY: {
+            PsExpr *u = PsSema_ceval_expr(self, e->lhs, env);
+            if (e->op == TK_NOT) {
+                return cmk_bool(self->a, !cbool(u), e->pos);
+            }
+            if (e->op == TK_MINUS) {
+                if (u->kind == PE_FLOAT) {
+                    return cmk_float(self->a, -cnum(u), e->pos);
+                }
+                return cmk_int(self->a, -cint(u), e->pos);
+            }
+            if (e->op == TK_PLUS) {
+                return u;
+            }
+            fatal_at(self->file, e->pos, "a `const def` does not compute this unary operator yet (65.10)");
+            break;
+        }
+        case PE_BINARY: {
+            if (e->op == TK_AND) {
+                PsExpr *l1 = PsSema_ceval_expr(self, e->lhs, env);
+                if (!cbool(l1)) {
+                    return cmk_bool(self->a, 0, e->pos);
+                }
+                return cmk_bool(self->a, cbool(PsSema_ceval_expr(self, e->rhs, env)), e->pos);
+            }
+            if (e->op == TK_OR) {
+                PsExpr *l2 = PsSema_ceval_expr(self, e->lhs, env);
+                if (cbool(l2)) {
+                    return cmk_bool(self->a, 1, e->pos);
+                }
+                return cmk_bool(self->a, cbool(PsSema_ceval_expr(self, e->rhs, env)), e->pos);
+            }
+            return PsSema_ceval_binop(self, e->op, PsSema_ceval_expr(self, e->lhs, env), PsSema_ceval_expr(self, e->rhs, env), e->pos);
+        }
+        case PE_TERNARY: {
+            return PsSema_ceval_expr(self, (cbool(PsSema_ceval_expr(self, e->cond, env)) ? e->lhs : e->rhs), env);
+        }
+        case PE_CALL: {
+            return PsSema_ceval_callexpr(self, e, env);
+        }
+        default: {
+            fatal_at(self->file, e->pos, "a `const def` computes numbers and booleans (65.10), and this is %s", cval_kind(self->a, e));
+            break;
+        }
+    }
+    return NULL;
+}
+
+static PsExpr *PsSema_ceval_binop(PsSema *self, int32_t op, PsExpr *l, PsExpr *r, Pos pos) {
+    if (!cis_num(l) && l->kind != PE_BOOL) {
+        fatal_at(self->file, pos, "a `const def` computes numbers and booleans (65.10), and the left side is %s", cval_kind(self->a, l));
+    }
+    if (!cis_num(r) && r->kind != PE_BOOL) {
+        fatal_at(self->file, pos, "a `const def` computes numbers and booleans (65.10), and the right side is %s", cval_kind(self->a, r));
+    }
+    int flt = l->kind == PE_FLOAT || r->kind == PE_FLOAT;
+    if (op == TK_EQ) {
+        return cmk_bool(self->a, cnum(l) == cnum(r), pos);
+    }
+    if (op == TK_NE) {
+        return cmk_bool(self->a, cnum(l) != cnum(r), pos);
+    }
+    if (op == TK_LT) {
+        return cmk_bool(self->a, cnum(l) < cnum(r), pos);
+    }
+    if (op == TK_LE) {
+        return cmk_bool(self->a, cnum(l) <= cnum(r), pos);
+    }
+    if (op == TK_GT) {
+        return cmk_bool(self->a, cnum(l) > cnum(r), pos);
+    }
+    if (op == TK_GE) {
+        return cmk_bool(self->a, cnum(l) >= cnum(r), pos);
+    }
+    if (op == TK_SLASH) {
+        if (cnum(r) == 0.0) {
+            fatal_at(self->file, pos, "division by zero, at compile time");
+        }
+        return cmk_float(self->a, cnum(l) / cnum(r), pos);
+    }
+    if (flt) {
+        if (op == TK_POW) {
+            if (r->kind == PE_FLOAT || cint(r) < 0) {
+                fatal_at(self->file, pos, "`**` at compile time takes a non-negative whole exponent (65.10): the compiler does not link the maths library");
+            }
+            double fp = 1.0;
+            size_t _f;
+            for (_f = 0; _f < (int32_t)cint(r); _f += 1) {
+                fp *= cnum(l);
+            }
+            return cmk_float(self->a, fp, pos);
+        }
+        if (op == TK_PLUS) {
+            return cmk_float(self->a, cnum(l) + cnum(r), pos);
+        }
+        if (op == TK_MINUS) {
+            return cmk_float(self->a, cnum(l) - cnum(r), pos);
+        }
+        if (op == TK_STAR) {
+            return cmk_float(self->a, cnum(l) * cnum(r), pos);
+        }
+        fatal_at(self->file, pos, "a `const def` does not compute this operator on floats yet (65.10)");
+    }
+    int64_t li = cint(l);
+    int64_t ri = cint(r);
+    if (op == TK_PLUS) {
+        return cmk_int(self->a, li + ri, pos);
+    }
+    if (op == TK_MINUS) {
+        return cmk_int(self->a, li - ri, pos);
+    }
+    if (op == TK_STAR) {
+        return cmk_int(self->a, li * ri, pos);
+    }
+    if (op == TK_FLOORDIV || op == TK_PERCENT) {
+        if (ri == 0) {
+            fatal_at(self->file, pos, "division by zero, at compile time");
+        }
+        int64_t q = li / ri;
+        int64_t m = li % ri;
+        if (m != 0 && (m < 0) != (ri < 0)) {
+            q -= 1;
+            m += ri;
+        }
+        return cmk_int(self->a, (op == TK_FLOORDIV ? q : m), pos);
+    }
+    if (op == TK_AMP) {
+        return cmk_int(self->a, li & ri, pos);
+    }
+    if (op == TK_PIPE) {
+        return cmk_int(self->a, li | ri, pos);
+    }
+    if (op == TK_CARET) {
+        return cmk_int(self->a, li ^ ri, pos);
+    }
+    if (op == TK_SHL) {
+        return cmk_int(self->a, li << ri, pos);
+    }
+    if (op == TK_SHR) {
+        return cmk_int(self->a, li >> ri, pos);
+    }
+    if (op == TK_POW) {
+        if (ri < 0) {
+            fatal_at(self->file, pos, "`**` at compile time takes a non-negative whole exponent (65.10): a negative one is a division, and `x ** -1` is written `1 / x`");
+        }
+        int64_t p9 = 1;
+        size_t _k;
+        for (_k = 0; _k < (int32_t)ri; _k += 1) {
+            p9 *= li;
+        }
+        return cmk_int(self->a, p9, pos);
+    }
+    fatal_at(self->file, pos, "a `const def` does not compute this operator yet (65.10)");
+    return NULL;
+}
+
+static PsExpr *PsSema_ceval_callexpr(PsSema *self, PsExpr *e, CEnv *env) {
+    if (e->lhs == NULL || e->lhs->kind != PE_NAME) {
+        fatal_at(self->file, e->pos, "a `const def` calls a plain name (65.10)");
+    }
+    const char *nm = e->lhs->text;
+    if (strcmp(nm, "int") == 0 && e->nargs == 1) {
+        return cmk_int(self->a, cint(PsSema_ceval_expr(self, e->args[0], env)), e->pos);
+    }
+    if (strcmp(nm, "float") == 0 && e->nargs == 1) {
+        return cmk_float(self->a, cnum(PsSema_ceval_expr(self, e->args[0], env)), e->pos);
+    }
+    if (strcmp(nm, "bool") == 0 && e->nargs == 1) {
+        return cmk_bool(self->a, cbool(PsSema_ceval_expr(self, e->args[0], env)), e->pos);
+    }
+    if (strcmp(nm, "abs") == 0 && e->nargs == 1) {
+        PsExpr *av = PsSema_ceval_expr(self, e->args[0], env);
+        if (av->kind == PE_FLOAT) {
+            double fv = cnum(av);
+            return cmk_float(self->a, (fv < 0.0 ? -fv : fv), e->pos);
+        }
+        int64_t iv = cint(av);
+        return cmk_int(self->a, (iv < 0 ? -iv : iv), e->pos);
+    }
+    if ((strcmp(nm, "min") == 0 || strcmp(nm, "max") == 0) && e->nargs == 2) {
+        PsExpr *m1 = PsSema_ceval_expr(self, e->args[0], env);
+        PsExpr *m2 = PsSema_ceval_expr(self, e->args[1], env);
+        int wants_lo = strcmp(nm, "min") == 0;
+        return ((cnum(m1) <= cnum(m2)) == wants_lo ? m1 : m2);
+    }
+    const char *gf = PsSema_gname_soft(self, nm);
+    PsFunc *cf = StrMap_pPsFunc_get_or(&self->funcs, gf, NULL);
+    if (cf == NULL) {
+        cf = StrMap_pPsFunc_get_or(&self->funcs, nm, NULL);
+    }
+    if (cf == NULL || !cf->is_ceval) {
+        fatal_at(self->file, e->pos, "a `const def` calls other `const def`s and `int`/`float`/`bool`/`abs`/`min`/`max` (65.10); '%s' is not one of those", ps_disp(nm));
+    }
+    PsExpr **vals = Arena_alloc(self->a, (size_t)(e->nargs + 1) * sizeof(*vals));
+    size_t k;
+    for (k = 0; k < e->nargs; k += 1) {
+        vals[k] = PsSema_ceval_expr(self, e->args[k], env);
+    }
+    return PsSema_ceval_call(self, cf, vals, e->nargs, e->pos);
+}
+
 static PsType *PsSema_call_generic(PsSema *self, PsExpr *e, PsFunc *f, const char *name) {
     if (f->ntparams != 1) {
         fatal_at(self->file, e->pos, "'%s' has %d type parameters; one is what is compiled so far", ps_disp(name), f->ntparams);
@@ -4249,7 +4882,19 @@ static PsType *PsSema_call_generic(PsSema *self, PsExpr *e, PsFunc *f, const cha
     if (conc == NULL) {
         fatal_at(self->file, e->pos, "cannot tell what '%s' is in this call to '%s': it has to appear in a parameter's type", tp, ps_disp(name));
     }
-    if (f->tparams[0].bound != NULL) {
+    if (f->tparams[0].seq_elem != NULL) {
+        PsType *el9 = NULL;
+        if (conc->kind == PT_LIST || conc->kind == PT_ARRAY || conc->kind == PT_VIEW) {
+            el9 = conc->inner;
+        } else if (conc->kind == PT_BYTES) {
+            el9 = ps_type(self->a, PT_INT, e->pos);
+            el9->width = 8;
+            el9->uns = 1;
+        }
+        if (el9 == NULL || !ps_type_eq(el9, f->tparams[0].seq_elem)) {
+            fatal_at(self->file, e->pos, "'%s' takes a Sequence<%s> — a `List`, a `T[N]`, a `View` or `bytes` of it — and %s is not one", ps_disp(name), ps_type_str(self->a, f->tparams[0].seq_elem), ps_type_str(self->a, conc));
+        }
+    } else if (f->tparams[0].bound != NULL) {
         PsDecl *td = PsSema_find_trait_named(self, f->tparams[0].bound, f->ns, e->pos);
         const char *cn9 = (conc->kind == PT_NAME ? conc->name : ps_builtin_tname(conc));
         if (cn9 == NULL || !StrSet_has(&self->timpls, Arena_printf(self->a, "%s|%s", td->name, cn9))) {
@@ -4865,12 +5510,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_3270_17 = e;
-                __with_3270_17->kind = PE_INDEX;
-                __with_3270_17->lhs = e->args[0];
-                __with_3270_17->rhs = below;
-                __with_3270_17->args = NULL;
-                __with_3270_17->nargs = 0;
+                PsExpr *__with_3818_17 = e;
+                __with_3818_17->kind = PE_INDEX;
+                __with_3818_17->lhs = e->args[0];
+                __with_3818_17->rhs = below;
+                __with_3818_17->args = NULL;
+                __with_3818_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -5422,26 +6067,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_3778_17 = e;
-                __with_3778_17->kind = PE_STR;
-                __with_3778_17->text = lit7;
-                __with_3778_17->lhs = NULL;
-                __with_3778_17->rhs = NULL;
-                __with_3778_17->args = NULL;
-                __with_3778_17->nargs = 0;
+                PsExpr *__with_4326_17 = e;
+                __with_4326_17->kind = PE_STR;
+                __with_4326_17->text = lit7;
+                __with_4326_17->lhs = NULL;
+                __with_4326_17->rhs = NULL;
+                __with_4326_17->args = NULL;
+                __with_4326_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_3791_13 = e;
-            __with_3791_13->kind = PE_LOWERED;
-            __with_3791_13->low = ln7;
-            __with_3791_13->lhs = NULL;
-            __with_3791_13->rhs = NULL;
-            __with_3791_13->args = NULL;
-            __with_3791_13->nargs = 0;
+            PsExpr *__with_4339_13 = e;
+            __with_4339_13->kind = PE_LOWERED;
+            __with_4339_13->low = ln7;
+            __with_4339_13->lhs = NULL;
+            __with_4339_13->rhs = NULL;
+            __with_4339_13->args = NULL;
+            __with_4339_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -5763,10 +6408,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_4097_17 = &ns->quals[ns->nquals];
-                __with_4097_17->name = q;
-                __with_4097_17->orig = d->path;
-                __with_4097_17->ns = sub;
+                PsNsEnt *__with_4645_17 = &ns->quals[ns->nquals];
+                __with_4645_17->name = q;
+                __with_4645_17->orig = d->path;
+                __with_4645_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -5779,10 +6424,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_4109_21 = &ns->ents[ns->nents];
-                    __with_4109_21->name = local;
-                    __with_4109_21->orig = d->names[k];
-                    __with_4109_21->ns = sub;
+                    PsNsEnt *__with_4657_21 = &ns->ents[ns->nents];
+                    __with_4657_21->name = local;
+                    __with_4657_21->orig = d->names[k];
+                    __with_4657_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -6261,10 +6906,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_4612_9 = e;
-        __with_4612_9->kind = PE_NAME;
-        __with_4612_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_4612_9->lhs = NULL;
+        PsExpr *__with_5160_9 = e;
+        __with_5160_9->kind = PE_NAME;
+        __with_5160_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_5160_9->lhs = NULL;
     }
     return 1;
 }
@@ -8808,7 +9453,8 @@ int ps_type_eq(PsType *x, PsType *y) {
         case PT_LIST:
         case PT_SET:
         case PT_OPT:
-        case PT_ARRAY: {
+        case PT_ARRAY:
+        case PT_SEQ: {
             return ps_type_eq(x->inner, y->inner);
         }
         case PT_DICT: {
@@ -8891,6 +9537,9 @@ const char *ps_type_str(Arena *a, PsType *t) {
         }
         case PT_VIEW: {
             return Arena_printf(a, "View<%s>", ps_type_str(a, t->inner));
+        }
+        case PT_SEQ: {
+            return Arena_printf(a, "Sequence<%s>", ps_type_str(a, t->inner));
         }
         case PT_FILE: {
             return "File";
@@ -9022,6 +9671,8 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd, char **roots, int32
     StrMap_pPsType_init(&s.globals);
     StrSet_init(&s.gconst);
     StrMap_i64_init(&s.gconst_num);
+    s.cbudget = CEVAL_BUDGET;
+    s.cdepth = 0;
     StrMap_pPsFunc_init(&s.cfuncs);
     StrMap_pPsExpr_init(&s.cconsts);
     StrMap_pPsNs_init(&s.nsof);
@@ -9103,6 +9754,7 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd, char **roots, int32
                 if (StrMap_pPsFunc_has(&s.funcs, d->name)) {
                     fatal_at(m->path, d->pos, "'%s' is defined twice", d->name);
                 }
+                PsSema_desugar_sequence(&s, d);
                 StrMap_pPsFunc_put(&s.funcs, d->name, d->func);
                 break;
             }
@@ -9268,7 +9920,7 @@ void ps_sema_run(Arena *a, PsModule *m, const char *cpp_cmd, char **roots, int32
                 PsSema_check_method(&s, d2, d2->methods[j]);
             }
         }
-        if (d2->kind == PD_FUNC && d2->func->ntparams == 0) {
+        if (d2->kind == PD_FUNC && d2->func->ntparams == 0 && !d2->func->is_ceval) {
             PsSema_check_func(&s, d2->func);
         }
     }

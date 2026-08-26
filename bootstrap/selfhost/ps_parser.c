@@ -1639,6 +1639,11 @@ static PsType *PsP_parse_type(PsP *self) {
             PsP_expect(self, TK_COMMA, "Dict<K, V>");
             t->inner = PsP_parse_type(self);
             PsP_expect_gt(self, "Dict<K, V>");
+        } else if (strcmp(name, "Sequence") == 0) {
+            t = ps_type(self->a, PT_SEQ, pos);
+            PsP_expect(self, TK_LT, "Sequence<T>");
+            t->inner = PsP_parse_type(self);
+            PsP_expect_gt(self, "Sequence<T>");
         } else if (strcmp(name, "Channel") == 0) {
             t = ps_type(self->a, PT_CHAN, pos);
             PsP_expect(self, TK_LT, "Channel<T>");
@@ -3577,6 +3582,17 @@ PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
             case TK_CONST: {
                 if (PsP_pk1(&p)->kind == TK_IF) {
                     ps_const_if_top(&p, &decls, &top, a);
+                    continue;
+                }
+                if (PsP_pk1(&p)->kind == TK_DEF) {
+                    PsP_adv(&p);
+                    PsDecl *cfd = ps_decl(a, PD_FUNC, PsP_pk(&p)->pos);
+                    cfd->func = PsP_parse_func(&p, 0, 0, NULL);
+                    cfd->func->is_ceval = 1;
+                    cfd->func->decorators = decs.data;
+                    cfd->func->ndecorators = decs.len;
+                    cfd->name = cfd->func->name;
+                    Vec_pPsDecl_push(&decls, cfd);
                     continue;
                 }
                 Pos cpos = PsP_adv(&p)->pos;

@@ -261,9 +261,11 @@ local com literal não compilava, e `in xs: T[N]` não compilava.
 Ordem de valor, na minha leitura — nenhum destes precisa de bateria, só de
 trabalho:
 
-1. **`Sequence<T>` como parâmetro (60.3/62.1)** — a trait do sistema que está
-   declarada e não serve para o que foi declarada.
-2. **`const def` (65.10)** — função avaliada em compilação.
+1. ~~`Sequence<T>` como parâmetro (60.3/62.1)~~ — FECHOU na bateria 159. E o que
+   faltava não era um tipo: era perceber que ele não é um. `Sequence<float>` é
+   uma função genérica sobre o seu contentor, escrita sem a cerimónia.
+2. ~~`const def` (65.10)~~ — FECHOU na bateria 159. Medido: das seis do portão,
+   **zero** aparecem no C gerado.
 3. ~~`const` de contêiner no topo do módulo (61.3)~~ — FECHOU na bateria 96.
 4. ~~A LINHA por frame no rastro (34.2)~~ — FECHOU na bateria 157. Foi medida
    antes, como esta linha pedia: **+4,2 %** num laço cujo corpo é todo

@@ -11884,6 +11884,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     }
     for (i = 0; i < m->ndecls; i += 1) {
         PsDecl *d = m->decls[i];
+        if (d->kind == PD_FUNC && d->func != NULL && d->func->is_ceval) {
+            continue;
+        }
         if (d->kind == PD_FUNC && d->func->ntparams == 0 && d->func->is_async) {
             int32_t k6 = frame_index(&afr, Arena_printf(L.a, "%s__frame", ps_cname(L.a, d->func->name)));
             Vec_pDecl_push(&L.out, lower_async_step(&L, d->func, afr.data[k6], NULL, m->path, 0));
@@ -11983,6 +11986,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     }
     for (i = 0; i < m->ndecls; i += 1) {
         PsDecl *d = m->decls[i];
+        if (d->kind == PD_FUNC && d->func != NULL && d->func->is_ceval) {
+            continue;
+        }
         if (d->kind == PD_FUNC && d->func->ntparams == 0 && d->func->is_async) {
             int32_t k7 = frame_index(&afr, Arena_printf(L.a, "%s__frame", ps_cname(L.a, d->func->name)));
             Vec_pDecl_push(&L.out, lower_async_step(&L, d->func, afr.data[k7], NULL, m->path, 1));

@@ -89,6 +89,7 @@ implement StrMap<*PsNs>
 declare StrMap<*char>   # implemented in cfront.p; one TU implements, the rest declare
 declare Vec<*PsDecl>
 declare Vec<*PsFunc>
+declare Vec<*PsExpr>   # implemented in ps_parser.p — o ambiente do 65.10
 declare Vec<*PsStmt>   # implemented in ps_parser.p
 declare Vec<PsParam>   # implemented in ps_parser.p
 declare Vec<PsDynUse>
@@ -205,6 +206,139 @@ struct PsLocal:
     any_type: *PsType # while a `match type(x)` case holds (68.5): what the
                       #   `any` was PROVED to be inside this branch
 
+# quantos passos uma avaliação de compilação pode dar antes de o compilador
+# desistir e dizer porquê. Um milhão é muito mais do que uma constante precisa e
+# muito menos do que um segundo de espera.
+private const CEVAL_BUDGET: i64 = 1000000
+
+# ---------- 65.10: o avaliador de COMPILAÇÃO ----------
+#
+# A promessa do `const def` é *"isto não existe em tempo de execução"*, e é por
+# isso que o avaliador tem de ser TOTAL sobre o que aceita: ou devolve um
+# literal, ou dá um erro com uma posição. **Nunca cai para uma chamada.** Uma
+# que caísse tornaria a promessa num acaso — a função passaria a existir ou não
+# conforme os argumentos, e ninguém saberia qual dos dois sem ler o C gerado.
+#
+# O que ele sabe é o que uma constante precisa: números, texto, booleanos, as
+# operações entre eles, `if`/`while`/`for`, variáveis locais, e chamadas a
+# outros `const def`. O que ele não sabe recusa-o pelo NOME — "um `while` que
+# não acaba" é uma mensagem melhor do que um compilador que pára.
+#
+# O orçamento é o que fecha o buraco do laço infinito. Um `const def` mal
+# escrito é um compilador que nunca devolve, e isso não é um erro do programa —
+# é um erro do programa que se parece com um erro nosso.
+
+struct CEnv:
+    names: Vec<*char>
+    vals: Vec<*PsExpr>
+    ret: *PsExpr
+    done: bool
+
+
+private def cenv_get(ref env: CEnv, name: const *char) -> *PsExpr:
+    i: i32 = i32(env.names.len) - 1
+    while i >= 0:
+        if strcmp(env.names.data[i], name) == 0:
+            return env.vals.data[i]
+        i -= 1
+    return None
+
+
+private def cenv_set(ref env: CEnv, name: const *char, v: *PsExpr):
+    i: i32 = i32(env.names.len) - 1
+    while i >= 0:
+        if strcmp(env.names.data[i], name) == 0:
+            env.vals.data[i] = v
+            return
+        i -= 1
+    env.names.push((*char)(name))
+    env.vals.push(v)
+
+
+# ---- os valores, que são LITERAIS: o resultado substitui a chamada ----
+
+private def cmk_int(a: *Arena, v: i64, pos: Pos) -> *PsExpr:
+    e: *PsExpr = ps_expr(a, PE_INT, pos)
+    e->text = a->printf("%lld", v)
+    e->type = ps_type(a, PT_INT, pos)
+    return e
+
+
+private def cmk_float(a: *Arena, v: f64, pos: Pos) -> *PsExpr:
+    e: *PsExpr = ps_expr(a, PE_FLOAT, pos)
+    # `%.17g` e não `%g`: dezassete dígitos significativos é o que faz um `f64`
+    # sobreviver à ida e volta por texto, e este número vai ser RELIDO pelo
+    # compilador de C. Com menos, uma constante muda de valor ao ser escrita.
+    e->text = a->printf("%.17g", v)
+    e->type = ps_type(a, PT_FLOAT, pos)
+    return e
+
+
+private def cmk_bool(a: *Arena, v: bool, pos: Pos) -> *PsExpr:
+    e: *PsExpr = ps_expr(a, PE_BOOL, pos)
+    e->text = "True" if v else "False"
+    e->type = ps_type(a, PT_BOOL, pos)
+    return e
+
+
+private def cmk_str(a: *Arena, s: const *char, pos: Pos) -> *PsExpr:
+    e: *PsExpr = ps_expr(a, PE_STR, pos)
+    e->text = s
+    e->type = ps_type(a, PT_STR, pos)
+    return e
+
+
+private def cis_num(e: *PsExpr) -> bool:
+    return e != None and (e->kind == PE_INT or e->kind == PE_FLOAT)
+
+
+private def cnum(e: *PsExpr) -> f64:
+    if e == None:
+        return 0.0
+    if e->kind == PE_INT:
+        return f64(strtoll(e->text, None, 0))
+    if e->kind == PE_FLOAT:
+        return strtod(e->text, None)
+    if e->kind == PE_BOOL:
+        return 1.0 if strcmp(e->text, "True") == 0 else 0.0
+    return 0.0
+
+
+private def cint(e: *PsExpr) -> i64:
+    if e != None and e->kind == PE_FLOAT:
+        return i64(strtod(e->text, None))
+    if e != None and e->kind == PE_BOOL:
+        return 1 if strcmp(e->text, "True") == 0 else 0
+    return strtoll(e->text, None, 0) if e != None else 0
+
+
+private def cbool(e: *PsExpr) -> bool:
+    if e == None:
+        return False
+    if e->kind == PE_BOOL:
+        return strcmp(e->text, "True") == 0
+    return cnum(e) != 0.0
+
+
+# **Números e booleanos, e o texto ainda não.** O `text` de um `PE_STR` é a
+# GRAFIA da fonte — com as aspas e os escapes — e devolver um literal novo
+# exigiria reconstruir essa grafia ao contrário, que é onde um escape mal posto
+# vira um valor diferente sem ninguém dar por isso. A 65.10 nasceu para o `T[N]`
+# e para a f-string, que são números; o texto entra quando alguém o precisar, e
+# entra com o codificador escrito e conferido, não de passagem.
+private def cval_kind(a: *Arena, e: *PsExpr) -> const *char:
+    if e == None:
+        return "nothing"
+    if e->kind == PE_INT:
+        return "an int"
+    if e->kind == PE_FLOAT:
+        return "a float"
+    if e->kind == PE_BOOL:
+        return "a bool"
+    return "a value this evaluator does not compute"
+
+
+
 struct PsSema:
     a: *Arena
     file: const *char
@@ -221,6 +355,12 @@ struct PsSema:
     globals: StrMap<*PsType>
     gconst: StrSet          # module variables declared `const`
     gconst_num: StrMap<i64> # ... and the VALUE of the ones that are an integer
+    # 65.10: o que sobra de uma avaliação de compilação, e o quão fundo ela vai.
+    # O orçamento é o que fecha o buraco do laço infinito: um `const def` que
+    # não acaba é um compilador que não responde, e isso parece-se com um erro
+    # NOSSO em vez de um erro do programa.
+    cbudget: i64
+    cdepth: i32
                             #   literal, because `xs: int[N]` needs a number:
                             #   C says an array size is a constant expression,
                             #   and a `static const int` is not one (that is C++)
@@ -319,6 +459,18 @@ struct PsSema:
     private def resolve_type(self: *PsSema, t: *PsType) -> *PsType
     private def check_call(self: *PsSema, e: *PsExpr) -> *PsType
     private def call_generic(self: *PsSema, e: *PsExpr, f: *PsFunc, name: const *char) -> *PsType
+    # 65.10: os cinco do avaliador de compilação, declarados aqui porque se
+    # chamam uns aos outros em ciclo — uma expressão contém uma chamada, e uma
+    # chamada avalia um corpo cheio de expressões
+    private def ceval_call(self: *PsSema, f: *PsFunc, args: **PsExpr, nargs: i32, pos: Pos) -> *PsExpr
+    private def ceval_block(self: *PsSema, b: *PsBlock, ref env: CEnv, pos: Pos)
+    private def ceval_stmt(self: *PsSema, s: *PsStmt, ref env: CEnv)
+    private def ceval_expr(self: *PsSema, e: *PsExpr, ref env: CEnv) -> *PsExpr
+    private def ceval_callexpr(self: *PsSema, e: *PsExpr, ref env: CEnv) -> *PsExpr
+    private def ceval_binop(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr
+    private def ceval_aug_op(self: *PsSema, op: i32, pos: Pos) -> i32
+    private def ceval_step(self: *PsSema, pos: Pos)
+    private def desugar_sequence(self: *PsSema, d: *PsDecl)
     private def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char)
     private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
     private def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
@@ -563,6 +715,12 @@ struct PsSema:
                 t->name = td2->name
                 t->qual = None
                 self->note_dyn_trait(td2)
+            case PT_SEQ:
+                # a sema desaçucara os parâmetros ANTES de resolver o que quer
+                # que seja, portanto um `Sequence` que chegue aqui está escrito
+                # onde não podia estar. Um valor nunca TEM este tipo: ele diz o
+                # que a função aceita, e não o que existe.
+                fatal_at(self->file, t->pos, "`Sequence<T>` is only a PARAMETER's type (60.3): it says what a function accepts, and no value ever has it — write the container itself (`List<T>`, `T[N]`, `View<T>`)")
             case PT_OPT:
                 if t->inner == None:
                     fatal_at(self->file, t->pos, "an option needs a type: write `T?`")
@@ -578,6 +736,12 @@ struct PsSema:
                 # would refuse (it emitted an array of no size at all, which
                 # became "flexible array member in a struct with no named
                 # members" three layers away from the cause).
+                # 65.10: e uma CHAMADA a um `const def` também é um número
+                # conhecido em compilação — que é literalmente o caso que a
+                # 65.10 nomeou ao ser decidida. `check_expr` dobra a chamada no
+                # literal, portanto depois desta linha o `count` já é um.
+                if t->count != None and t->count->kind == PE_CALL:
+                    _ = self->check_expr(t->count)
                 if t->count != None and t->count->kind == PE_NAME:
                     cn9: const *char = self->gname_soft(t->count->text)
                     if self->gconst_num.has(cn9):
@@ -2532,6 +2696,23 @@ struct PsSema:
             return cf->ret
         if self->funcs.has(name):
             f: *PsFunc = self->funcs.get_or(name, None)
+            if f->is_ceval:
+                # 65.10: a chamada NÃO fica. O que fica é o literal que ela deu,
+                # escrito por cima deste nó — e é por isso que o `const def` não
+                # é emitido: depois desta linha não há quem lhe chame.
+                top: CEnv
+                top.names.init()
+                top.vals.init()
+                top.ret = None
+                top.done = False
+                tv: **PsExpr = self->a->alloc(usize(e->nargs + 1) * sizeof(*tv))
+                for k9 in range(e->nargs):
+                    tv[k9] = self->ceval_expr(e->args[k9], ref top)
+                lit: *PsExpr = self->ceval_call(f, tv, e->nargs, e->pos)
+                top.names.deinit()
+                top.vals.deinit()
+                *e = *lit
+                return e->type
             if f->ntparams > 0:
                 return self->call_generic(e, f, name)
             if f->is_async:
@@ -2658,6 +2839,360 @@ struct PsSema:
         e->args = slots
         e->nargs = nparams
 
+    # 60.3/62.1 — `Sequence<T>` como parâmetro, e o que ele realmente é.
+    #
+    # `def total(xs: Sequence<float>)` vira, aqui e agora,
+    #
+    #     def total<__seq: Sequence<float>>(xs: __seq)
+    #
+    # e daí em diante a maquinaria é a que existe desde a 66.3: o parâmetro é
+    # inferido do argumento, o limite é conferido onde o tipo concreto está, e o
+    # corpo é monomorfizado. **Zero vtable e zero cópia** — que é o que a 60.3
+    # prometeu e o que um parâmetro `List<float>` não dava, porque obrigava quem
+    # tem um `float[8]` a construir uma lista para poder chamar.
+    #
+    # **Vários parâmetros `Sequence` partilham UM parâmetro de tipo**, portanto
+    # `def dot(a: Sequence<float>, b: Sequence<float>)` exige que os dois sejam
+    # o mesmo contentor. É uma restrição real e é a honesta: a alternativa era
+    # um parâmetro de tipo por argumento, e a monomorfização compila um.
+    private def desugar_sequence(self: *PsSema, d: *PsDecl):
+        f: *PsFunc = d->func
+        if f == None or f->nparams == 0:
+            return
+        first: i32 = -1
+        for i in range(f->nparams):
+            if f->params[i].type != None and f->params[i].type->kind == PT_SEQ:
+                if first < 0:
+                    first = i
+                elif not ps_type_eq(f->params[i].type->inner, f->params[first].type->inner):
+                    fatal_at(self->file, f->params[i].type->pos, "'%s' asks for two different Sequence elements; the parameters share ONE type parameter, so they share the element too (60.3)", ps_disp(f->name))
+        if first < 0:
+            return
+        if f->ntparams > 0:
+            fatal_at(self->file, f->pos, "'%s' is already generic: a `Sequence` parameter IS the type parameter, so the two are not written together (60.3)", ps_disp(f->name))
+        tp: *PsTParam = self->a->alloc(sizeof(PsTParam))
+        tp->name = self->a->printf("__seq_%s", f->name)
+        tp->bound = None
+        tp->seq_elem = f->params[first].type->inner
+        tp->pos = f->params[first].type->pos
+        f->tparams = tp
+        f->ntparams = 1
+        for j in range(f->nparams):
+            if f->params[j].type != None and f->params[j].type->kind == PT_SEQ:
+                nt: *PsType = ps_type(self->a, PT_NAME, f->params[j].type->pos)
+                nt->name = tp->name
+                f->params[j].type = nt
+
+    # ---------- 65.10: avaliar um `const def` ----------
+    #
+    # Uma chamada a um `const def` é substituída pelo literal que ela dá, e a
+    # função nunca chega a existir. O que segue é o interpretador que produz
+    # esse literal — pequeno de propósito, e a recusar pelo nome tudo o que não
+    # sabe fazer.
+    private def ceval_call(self: *PsSema, f: *PsFunc, args: **PsExpr, nargs: i32, pos: Pos) -> *PsExpr:
+        if f->is_async:
+            fatal_at(self->file, pos, "'%s' is a `const def` and `async`: a function evaluated at compile time has nothing to wait for (65.10)", ps_disp(f->name))
+        if nargs != f->nparams:
+            fatal_at(self->file, pos, "'%s' takes %d argument(s), %d given", ps_disp(f->name), f->nparams, nargs)
+        self->cdepth += 1
+        if self->cdepth > 64:
+            fatal_at(self->file, pos, "'%s' calls itself deeper than a compile-time evaluation goes (65.10): 64 frames", ps_disp(f->name))
+        # os argumentos chegam JÁ AVALIADOS, e não podia ser de outra maneira:
+        # eles pertencem ao ambiente de quem CHAMA, e o ambiente novo é o do
+        # corpo. Avaliá-los aqui dava um `fib(n - 1)` a procurar o `n` do
+        # próprio `fib` que ainda não tem nenhum — que é uma recursão a olhar
+        # para dentro de si em vez de para fora.
+        env: CEnv
+        env.names.init()
+        env.vals.init()
+        env.ret = None
+        env.done = False
+        for i in range(nargs):
+            cenv_set(ref env, f->params[i].name, args[i])
+        self->ceval_block(f->body, ref env, pos)
+        self->cdepth -= 1
+        if env.ret == None:
+            fatal_at(self->file, pos, "'%s' is a `const def` and this call reached its end without a `return` (65.10): a compile-time evaluation has to produce a value", ps_disp(f->name))
+        r: *PsExpr = env.ret
+        env.names.deinit()
+        env.vals.deinit()
+        return r
+
+    private def ceval_step(self: *PsSema, pos: Pos):
+        self->cbudget -= 1
+        if self->cbudget <= 0:
+            fatal_at(self->file, pos, "a compile-time evaluation ran past its budget of %d steps (65.10) — a `const def` that does not finish is a compiler that does not answer, which is why the budget exists", CEVAL_BUDGET)
+
+    private def ceval_block(self: *PsSema, b: *PsBlock, ref env: CEnv, pos: Pos):
+        if b == None:
+            return
+        for i in range(b->n):
+            if env.done:
+                return
+            self->ceval_stmt(b->stmts[i], ref env)
+
+    private def ceval_stmt(self: *PsSema, s: *PsStmt, ref env: CEnv):
+        self->ceval_step(s->pos)
+        match s->kind:
+            case PS_RETURN:
+                env.ret = self->ceval_expr(s->expr, ref env) if s->expr != None else None
+                env.done = True
+            case PS_VAR, PS_ASSIGN:
+                if s->lhs != None and s->lhs->kind != PE_NAME:
+                    fatal_at(self->file, s->pos, "a `const def` assigns to plain names only (65.10)")
+                nm: const *char = s->name if s->name != None else s->lhs->text
+                if s->op != 0 and s->op != TK_ASSIGN:
+                    # `x += e` — o mesmo operador composto, resolvido aqui
+                    cur: *PsExpr = cenv_get(ref env, nm)
+                    if cur == None:
+                        fatal_at(self->file, s->pos, "'%s' is not a name this compile-time evaluation knows", nm)
+                    cenv_set(ref env, nm, self->ceval_binop(self->ceval_aug_op(s->op, s->pos), cur, self->ceval_expr(s->rhs, ref env), s->pos))
+                else:
+                    if s->rhs == None:
+                        fatal_at(self->file, s->pos, "a name in a `const def` is born with a value (65.10)")
+                    cenv_set(ref env, nm, self->ceval_expr(s->rhs, ref env))
+            case PS_EXPR:
+                _ = self->ceval_expr(s->expr, ref env)
+            case PS_PASS:
+                pass
+            case PS_IF:
+                for k in range(s->nconds):
+                    if cbool(self->ceval_expr(s->conds[k], ref env)):
+                        self->ceval_block(s->blocks[k], ref env, s->pos)
+                        return
+                self->ceval_block(s->else_block, ref env, s->pos)
+            case PS_WHILE:
+                while cbool(self->ceval_expr(s->cond, ref env)) and not env.done:
+                    self->ceval_step(s->pos)
+                    self->ceval_block(s->body, ref env, s->pos)
+            case PS_FOR:
+                # um `range`, e nada mais. O protocolo geral de iteração (40.3)
+                # precisa de um cursor mutável, e em compilação não há contentor
+                # nenhum para percorrer — o mesmo motivo pelo qual a v1 do `for`
+                # em tempo de execução também só sabe `range`.
+                isr: bool = s->iter != None and s->iter->kind == PE_CALL and s->iter->lhs != None and s->iter->lhs->kind == PE_NAME and strcmp(s->iter->lhs->text, "range") == 0
+                if not isr or s->nnames != 1:
+                    fatal_at(self->file, s->pos, "a `for` in a `const def` walks a `range(...)` with one variable (65.10): at compile time there is no container to walk")
+                na: i32 = s->iter->nargs
+                if na < 1 or na > 3:
+                    fatal_at(self->file, s->pos, "`range` takes one, two or three arguments")
+                lo: i64 = 0
+                hi: i64 = 0
+                st: i64 = 1
+                if na == 1:
+                    hi = cint(self->ceval_expr(s->iter->args[0], ref env))
+                else:
+                    lo = cint(self->ceval_expr(s->iter->args[0], ref env))
+                    hi = cint(self->ceval_expr(s->iter->args[1], ref env))
+                    if na == 3:
+                        st = cint(self->ceval_expr(s->iter->args[2], ref env))
+                if st == 0:
+                    fatal_at(self->file, s->pos, "a `range` step of zero never advances")
+                v: i64 = lo
+                while (v < hi if st > 0 else v > hi) and not env.done:
+                    self->ceval_step(s->pos)
+                    cenv_set(ref env, s->names[0], cmk_int(self->a, v, s->pos))
+                    self->ceval_block(s->body, ref env, s->pos)
+                    v += st
+            case _:
+                fatal_at(self->file, s->pos, "a `const def` does not do this at compile time (65.10): what it computes is numbers and booleans, with `if`, `while`, `for i in range(...)`, locals, and calls to other `const def`s")
+
+    # o operador por trás de um `+=`, para o composto e o simples serem um só
+    private def ceval_aug_op(self: *PsSema, op: i32, pos: Pos) -> i32:
+        if op == TK_PLUS_EQ:
+            return TK_PLUS
+        if op == TK_MINUS_EQ:
+            return TK_MINUS
+        if op == TK_STAR_EQ:
+            return TK_STAR
+        if op == TK_SLASH_EQ:
+            return TK_SLASH
+        if op == TK_PERCENT_EQ:
+            return TK_PERCENT
+        fatal_at(self->file, pos, "a `const def` does not compute this compound assignment yet (65.10)")
+        return TK_PLUS
+
+    private def ceval_expr(self: *PsSema, e: *PsExpr, ref env: CEnv) -> *PsExpr:
+        if e == None:
+            # não devia acontecer: quem chama já conferiu. Mas um avaliador que
+            # rebenta em vez de dizer é a pior maneira de descobrir isso.
+            z: Pos
+            z.line = 0
+            z.col = 0
+            fatal_at(self->file, z, "a `const def` was handed nothing to evaluate")
+        self->ceval_step(e->pos)
+        match e->kind:
+            case PE_INT, PE_FLOAT, PE_BOOL:
+                return e
+            case PE_NAME:
+                v: *PsExpr = cenv_get(ref env, e->text)
+                if v != None:
+                    return v
+                # um `const` do módulo é conhecido em compilação por definição,
+                # e é o que torna `const N: int = 8` utilizável dentro de um
+                # `const def` sem o passar como argumento
+                gn: const *char = self->gname_soft(e->text)
+                if self->gconst_num.has(gn):
+                    return cmk_int(self->a, self->gconst_num.get_or(gn, 0), e->pos)
+                if self->gconst_num.has(e->text):
+                    return cmk_int(self->a, self->gconst_num.get_or(e->text, 0), e->pos)
+                fatal_at(self->file, e->pos, "'%s' is not known at compile time: a `const def` sees its own parameters, its own locals, and the module's `const`s (65.10)", e->text)
+            case PE_UNARY:
+                u: *PsExpr = self->ceval_expr(e->lhs, ref env)
+                if e->op == TK_NOT:
+                    return cmk_bool(self->a, not cbool(u), e->pos)
+                if e->op == TK_MINUS:
+                    if u->kind == PE_FLOAT:
+                        return cmk_float(self->a, -cnum(u), e->pos)
+                    return cmk_int(self->a, -cint(u), e->pos)
+                if e->op == TK_PLUS:
+                    return u
+                fatal_at(self->file, e->pos, "a `const def` does not compute this unary operator yet (65.10)")
+            case PE_BINARY:
+                # `and`/`or` PARAM no primeiro que decide, como em tempo de
+                # execução — e é isso que faz `n != 0 and 100 // n` ser legal
+                if e->op == TK_AND:
+                    l1: *PsExpr = self->ceval_expr(e->lhs, ref env)
+                    if not cbool(l1):
+                        return cmk_bool(self->a, False, e->pos)
+                    return cmk_bool(self->a, cbool(self->ceval_expr(e->rhs, ref env)), e->pos)
+                if e->op == TK_OR:
+                    l2: *PsExpr = self->ceval_expr(e->lhs, ref env)
+                    if cbool(l2):
+                        return cmk_bool(self->a, True, e->pos)
+                    return cmk_bool(self->a, cbool(self->ceval_expr(e->rhs, ref env)), e->pos)
+                return self->ceval_binop(e->op, self->ceval_expr(e->lhs, ref env), self->ceval_expr(e->rhs, ref env), e->pos)
+            case PE_TERNARY:
+                return self->ceval_expr(e->lhs if cbool(self->ceval_expr(e->cond, ref env)) else e->rhs, ref env)
+            case PE_CALL:
+                return self->ceval_callexpr(e, ref env)
+            case _:
+                fatal_at(self->file, e->pos, "a `const def` computes numbers and booleans (65.10), and this is %s", cval_kind(self->a, e))
+        return None
+
+    # `a <op> b`, com a promoção da 32.1: um `int` e um `float` acertam em
+    # `float`, e `/` dá sempre `float` enquanto `//` dá o piso — a divisão do
+    # Python que a 39.1 fixou, e que aqui tem de dar o MESMO resultado que dá em
+    # tempo de execução, senão uma constante muda de valor ao ser dobrada.
+    private def ceval_binop(self: *PsSema, op: i32, l: *PsExpr, r: *PsExpr, pos: Pos) -> *PsExpr:
+        if not cis_num(l) and l->kind != PE_BOOL:
+            fatal_at(self->file, pos, "a `const def` computes numbers and booleans (65.10), and the left side is %s", cval_kind(self->a, l))
+        if not cis_num(r) and r->kind != PE_BOOL:
+            fatal_at(self->file, pos, "a `const def` computes numbers and booleans (65.10), and the right side is %s", cval_kind(self->a, r))
+        flt: bool = l->kind == PE_FLOAT or r->kind == PE_FLOAT
+        if op == TK_EQ:
+            return cmk_bool(self->a, cnum(l) == cnum(r), pos)
+        if op == TK_NE:
+            return cmk_bool(self->a, cnum(l) != cnum(r), pos)
+        if op == TK_LT:
+            return cmk_bool(self->a, cnum(l) < cnum(r), pos)
+        if op == TK_LE:
+            return cmk_bool(self->a, cnum(l) <= cnum(r), pos)
+        if op == TK_GT:
+            return cmk_bool(self->a, cnum(l) > cnum(r), pos)
+        if op == TK_GE:
+            return cmk_bool(self->a, cnum(l) >= cnum(r), pos)
+        if op == TK_SLASH:
+            # 39.1: `/` é SEMPRE float, mesmo entre dois inteiros
+            if cnum(r) == 0.0:
+                fatal_at(self->file, pos, "division by zero, at compile time")
+            return cmk_float(self->a, cnum(l) / cnum(r), pos)
+        if flt:
+            if op == TK_POW:
+                # o expoente é um INTEIRO não-negativo, e a potência é uma
+                # multiplicação repetida. O compilador não liga a `libm` — e um
+                # `2 ** 0.5` em compilação era pedir uma raiz quadrada ao
+                # compilador, que é um pedido diferente e merece a sua recusa.
+                if r->kind == PE_FLOAT or cint(r) < 0:
+                    fatal_at(self->file, pos, "`**` at compile time takes a non-negative whole exponent (65.10): the compiler does not link the maths library")
+                fp: f64 = 1.0
+                for _f in range(i32(cint(r))):
+                    fp *= cnum(l)
+                return cmk_float(self->a, fp, pos)
+            if op == TK_PLUS:
+                return cmk_float(self->a, cnum(l) + cnum(r), pos)
+            if op == TK_MINUS:
+                return cmk_float(self->a, cnum(l) - cnum(r), pos)
+            if op == TK_STAR:
+                return cmk_float(self->a, cnum(l) * cnum(r), pos)
+            fatal_at(self->file, pos, "a `const def` does not compute this operator on floats yet (65.10)")
+        li: i64 = cint(l)
+        ri: i64 = cint(r)
+        if op == TK_PLUS:
+            return cmk_int(self->a, li + ri, pos)
+        if op == TK_MINUS:
+            return cmk_int(self->a, li - ri, pos)
+        if op == TK_STAR:
+            return cmk_int(self->a, li * ri, pos)
+        if op == TK_FLOORDIV or op == TK_PERCENT:
+            if ri == 0:
+                fatal_at(self->file, pos, "division by zero, at compile time")
+            # 39.1: o piso e o resto do PYTHON, e não os do C. Em C o `-7 / 2`
+            # trunca para -3 e o resto fica negativo; em Python o piso é -4 e o
+            # resto tem o sinal do divisor. Escrito à mão porque o C não o dá.
+            q: i64 = li / ri
+            m: i64 = li % ri
+            if m != 0 and ((m < 0) != (ri < 0)):
+                q -= 1
+                m += ri
+            return cmk_int(self->a, q if op == TK_FLOORDIV else m, pos)
+        if op == TK_AMP:
+            return cmk_int(self->a, li & ri, pos)
+        if op == TK_PIPE:
+            return cmk_int(self->a, li | ri, pos)
+        if op == TK_CARET:
+            return cmk_int(self->a, li ^ ri, pos)
+        if op == TK_SHL:
+            return cmk_int(self->a, li << ri, pos)
+        if op == TK_SHR:
+            return cmk_int(self->a, li >> ri, pos)
+        if op == TK_POW:
+            if ri < 0:
+                fatal_at(self->file, pos, "`**` at compile time takes a non-negative whole exponent (65.10): a negative one is a division, and `x ** -1` is written `1 / x`")
+            p9: i64 = 1
+            for _k in range(i32(ri)):
+                p9 *= li
+            return cmk_int(self->a, p9, pos)
+        fatal_at(self->file, pos, "a `const def` does not compute this operator yet (65.10)")
+        return None
+
+    # Uma chamada DENTRO de um `const def`: outro `const def`, ou uma das poucas
+    # funções embutidas que fazem sentido sem tempo de execução. Tudo o resto é
+    # recusado pelo nome — `print` num `const def` é um pedido para imprimir
+    # durante a compilação, e a resposta é dizê-lo em vez de o ignorar.
+    private def ceval_callexpr(self: *PsSema, e: *PsExpr, ref env: CEnv) -> *PsExpr:
+        if e->lhs == None or e->lhs->kind != PE_NAME:
+            fatal_at(self->file, e->pos, "a `const def` calls a plain name (65.10)")
+        nm: const *char = e->lhs->text
+        if strcmp(nm, "int") == 0 and e->nargs == 1:
+            return cmk_int(self->a, cint(self->ceval_expr(e->args[0], ref env)), e->pos)
+        if strcmp(nm, "float") == 0 and e->nargs == 1:
+            return cmk_float(self->a, cnum(self->ceval_expr(e->args[0], ref env)), e->pos)
+        if strcmp(nm, "bool") == 0 and e->nargs == 1:
+            return cmk_bool(self->a, cbool(self->ceval_expr(e->args[0], ref env)), e->pos)
+        if strcmp(nm, "abs") == 0 and e->nargs == 1:
+            av: *PsExpr = self->ceval_expr(e->args[0], ref env)
+            if av->kind == PE_FLOAT:
+                fv: f64 = cnum(av)
+                return cmk_float(self->a, -fv if fv < 0.0 else fv, e->pos)
+            iv: i64 = cint(av)
+            return cmk_int(self->a, -iv if iv < 0 else iv, e->pos)
+        if (strcmp(nm, "min") == 0 or strcmp(nm, "max") == 0) and e->nargs == 2:
+            m1: *PsExpr = self->ceval_expr(e->args[0], ref env)
+            m2: *PsExpr = self->ceval_expr(e->args[1], ref env)
+            wants_lo: bool = strcmp(nm, "min") == 0
+            return m1 if (cnum(m1) <= cnum(m2)) == wants_lo else m2
+        gf: const *char = self->gname_soft(nm)
+        cf: *PsFunc = self->funcs.get_or(gf, None)
+        if cf == None:
+            cf = self->funcs.get_or(nm, None)
+        if cf == None or not cf->is_ceval:
+            fatal_at(self->file, e->pos, "a `const def` calls other `const def`s and `int`/`float`/`bool`/`abs`/`min`/`max` (65.10); '%s' is not one of those", ps_disp(nm))
+        vals: **PsExpr = self->a->alloc(usize(e->nargs + 1) * sizeof(*vals))
+        for k in range(e->nargs):
+            vals[k] = self->ceval_expr(e->args[k], ref env)
+        return self->ceval_call(cf, vals, e->nargs, e->pos)
+
     private def call_generic(self: *PsSema, e: *PsExpr, f: *PsFunc, name: const *char) -> *PsType:
         if f->ntparams != 1:
             fatal_at(self->file, e->pos, "'%s' has %d type parameters; one is what is compiled so far", ps_disp(name), f->ntparams)
@@ -2671,9 +3206,22 @@ struct PsSema:
                 conc = ps_infer(f->params[i].type, at, tp)
         if conc == None:
             fatal_at(self->file, e->pos, "cannot tell what '%s' is in this call to '%s': it has to appear in a parameter's type", tp, ps_disp(name))
+        # 60.3: um limite NATIVO — o contentor tem de ser um que a linguagem
+        # saiba percorrer, e o elemento tem de ser o pedido. Não há trait para
+        # procurar porque não há `implement Sequence for List<T>` para escrever.
+        if f->tparams[0].seq_elem != None:
+            el9: *PsType = None
+            if conc->kind == PT_LIST or conc->kind == PT_ARRAY or conc->kind == PT_VIEW:
+                el9 = conc->inner
+            elif conc->kind == PT_BYTES:
+                el9 = ps_type(self->a, PT_INT, e->pos)
+                el9->width = 8
+                el9->uns = True
+            if el9 == None or not ps_type_eq(el9, f->tparams[0].seq_elem):
+                fatal_at(self->file, e->pos, "'%s' takes a Sequence<%s> — a `List`, a `T[N]`, a `View` or `bytes` of it — and %s is not one", ps_disp(name), ps_type_str(self->a, f->tparams[0].seq_elem), ps_type_str(self->a, conc))
         # the bound (66.2/67.3): NOMINAL, so having the methods is not enough —
         # the type has to have declared the trait, in a clause or in a block
-        if f->tparams[0].bound != None:
+        elif f->tparams[0].bound != None:
             td: *PsDecl = self->find_trait_named(f->tparams[0].bound, f->ns, e->pos)
             cn9: const *char = conc->name if conc->kind == PT_NAME else ps_builtin_tname(conc)
             if cn9 == None or not self->timpls.has(self->a->printf("%s|%s", td->name, cn9)):
@@ -6903,7 +7451,7 @@ def ps_type_eq(x: *PsType, y: *PsType) -> bool:
             return x->width == y->width and x->uns == y->uns
         case PT_TASK, PT_WORKER:
             return ps_type_eq(x->inner, y->inner)
-        case PT_LIST, PT_SET, PT_OPT, PT_ARRAY:
+        case PT_LIST, PT_SET, PT_OPT, PT_ARRAY, PT_SEQ:
             return ps_type_eq(x->inner, y->inner)
         case PT_DICT:
             return ps_type_eq(x->key, y->key) and ps_type_eq(x->inner, y->inner)
@@ -6957,6 +7505,8 @@ def ps_type_str(a: *Arena, t: *PsType) -> const *char:
             return "a directory walk"
         case PT_VIEW:
             return a->printf("View<%s>", ps_type_str(a, t->inner))
+        case PT_SEQ:
+            return a->printf("Sequence<%s>", ps_type_str(a, t->inner))
         case PT_FILE:
             return "File"
         case PT_BUFFER:
@@ -7075,6 +7625,8 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nr
     s.globals.init()
     s.gconst.init()
     s.gconst_num.init()
+    s.cbudget = CEVAL_BUDGET
+    s.cdepth = 0
     s.cfuncs.init()
     s.cconsts.init()
     s.nsof.init()
@@ -7170,6 +7722,7 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nr
             case PD_FUNC:
                 if s.funcs.has(d->name):
                     fatal_at(m->path, d->pos, "'%s' is defined twice", d->name)
+                s.desugar_sequence(d)
                 s.funcs.put(d->name, d->func)
             case PD_RECORD, PD_STRUCT:
                 s.records.put(d->name, d)
@@ -7321,7 +7874,15 @@ def ps_sema_run(a: *Arena, m: *PsModule, cpp_cmd: const *char, roots: **char, nr
                 s.check_method(d2, d2->methods[j])
         # a generic is a TEMPLATE: what gets checked is each instance, where
         # the type parameter is a real type (66.3)
-        if d2->kind == PD_FUNC and d2->func->ntparams == 0:
+        #
+        # 65.10: e um `const def` também não é verificado aqui, pela mesma razão
+        # com outro nome — o corpo dele não é código que corre, é uma receita
+        # que o AVALIADOR percorre. Verificá-lo como função normal dobrava a sua
+        # própria recursão a meio do caminho: `fib(n - 1)` dentro do `fib` é uma
+        # chamada a um `const def`, e a dobra disparava com o `n` ainda sem
+        # valor nenhum. Quem confere um `const def` é a chamada que o usa, e o
+        # que ele não sabe fazer sai com a posição e o nome.
+        if d2->kind == PD_FUNC and d2->func->ntparams == 0 and not d2->func->is_ceval:
             s.check_func(d2->func)
 
     # one file-scope variable per module variable the top level declared: the

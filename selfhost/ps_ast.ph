@@ -54,6 +54,13 @@ enum PsTypeKind:
     PT_WATCHER       # 140/F5: `Watcher` — uma árvore a ser vigiada. Maiúscula
                      #   porque é uma COISA com tempo de vida: fecha-se, e um
                      #   descritor do `inotify` é escasso (136.1).
+    PT_SEQ           # 60.3/62.1: `Sequence<T>` — and it is not a type any
+                     #   value ever HAS. It may stand only where a parameter's
+                     #   type is written, and the sema turns the function into
+                     #   one that is generic over its container before anything
+                     #   else looks at it. What survives past that point is a
+                     #   plain type parameter, so no backend and no collector
+                     #   ever hears of this.
     PT_DIRITER       # 140/F4: what `os.scandir(p)` gives — a directory being
                      #   walked. It has no name a program writes, because the
                      #   only thing anybody does with it is `for name in ...`.
@@ -333,6 +340,11 @@ struct PsParam:
 struct PsTParam:
     name: const *char
     bound: const *char     # None = unbounded
+    # 60.3: a NATIVE bound, and it is what tells this apart from a trait
+    # somebody wrote. Nobody declares `implement Sequence for List<T>`, because
+    # `List` is not a type an `implement` block can be opened on. Non-None means
+    # "a container the language knows how to walk, holding THIS element".
+    seq_elem: *PsType
     pos: Pos
 
 struct PsFunc:
@@ -344,6 +356,12 @@ struct PsFunc:
     ret: *PsType
     body: *PsBlock
     is_async: bool
+    # 65.10: `const def` — avaliada em COMPILAÇÃO, e por isso não existe em
+    # tempo de execução: não é emitida, não tem endereço, e uma chamada a ela é
+    # substituída pelo literal que ela deu. É o que a torna diferente de uma
+    # função normal que por acaso é pura — a promessa está escrita, e o
+    # compilador recusa tudo o que a impedisse de a cumprir.
+    is_ceval: bool
     is_private: bool  # module-private (44.4) — written `private`
     is_smethod: bool  # STATIC METHOD: a def inside a struct with no receiver.
                       #   The two used to share one flag called `is_static`,

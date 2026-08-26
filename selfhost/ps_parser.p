@@ -314,6 +314,13 @@ struct PsP:
                 self->expect(TK_COMMA, "Dict<K, V>")
                 t->inner = self->parse_type()
                 self->expect_gt("Dict<K, V>")
+            elif name == "Sequence":
+                # 60.3: só se escreve no tipo de um PARÂMETRO, e a sema recusa-o
+                # em qualquer outro sítio. Aqui é só uma forma.
+                t = ps_type(self->a, PT_SEQ, pos)
+                self->expect(TK_LT, "Sequence<T>")
+                t->inner = self->parse_type()
+                self->expect_gt("Sequence<T>")
             elif name == "Channel":
                 # S3/147: maiúscula porque é uma COISA com identidade (139) —
                 # tem estado, fecha-se, e duas tarefas falam POR ele
@@ -2183,6 +2190,20 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
                 # the `import` and the `include <h>` that only one platform has
                 if p.pk1()->kind == TK_IF:
                     ps_const_if_top(&p, &decls, &top, a)
+                    continue
+                # 65.10: `const def` — uma função avaliada em compilação. O
+                # `const` já está aqui e já quer dizer "conhecido em compilação";
+                # pô-lo à frente do `def` diz a mesma coisa da função, e não
+                # custa uma palavra nova à linguagem.
+                if p.pk1()->kind == TK_DEF:
+                    p.adv()
+                    cfd: *PsDecl = ps_decl(a, PD_FUNC, p.pk()->pos)
+                    cfd->func = p.parse_func(False, False, None)
+                    cfd->func->is_ceval = True
+                    cfd->func->decorators = decs.data
+                    cfd->func->ndecorators = decs.len
+                    cfd->name = cfd->func->name
+                    decls.push(cfd)
                     continue
                 # a module-level `const` is a DECLARATION, not a statement: it
                 # is known at compile time and has no place in the run order.

@@ -11660,6 +11660,12 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     # order stop mattering.
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]
+        # 65.10: um `const def` não é emitido. Ele já foi avaliado, e cada
+        # chamada foi substituída pelo literal que deu — não há quem lhe chame,
+        # e é isso que faz o "zero runtime" da 65.10 ser verdade e não uma
+        # esperança.
+        if d->kind == PD_FUNC and d->func != None and d->func->is_ceval:
+            continue
         if d->kind == PD_FUNC and d->func->ntparams == 0 and d->func->is_async:
             # the frame is named with the C-SAFE name, because that is what
             # `async_frame_decl` used: an `async def main` becomes `main_` (C
@@ -11764,6 +11770,12 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
 
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]
+        # 65.10: um `const def` não é emitido. Ele já foi avaliado, e cada
+        # chamada foi substituída pelo literal que deu — não há quem lhe chame,
+        # e é isso que faz o "zero runtime" da 65.10 ser verdade e não uma
+        # esperança.
+        if d->kind == PD_FUNC and d->func != None and d->func->is_ceval:
+            continue
         if d->kind == PD_FUNC and d->func->ntparams == 0 and d->func->is_async:
             k7: i32 = frame_index(ref afr, L.a->printf("%s__frame", ps_cname(L.a, d->func->name)))
             L.out.push(lower_async_step(&L, d->func, afr.data[k7], None, m->path, True))
