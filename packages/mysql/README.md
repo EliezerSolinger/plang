@@ -16,21 +16,37 @@ import <mysql/mysql.psc> as my
 async def main() -> int:
     conn = await my.connect("127.0.0.1", 3306, "usuario", "senha", "banco")
 
-    r = await conn.query("SELECT id, nome FROM jogadores WHERE nivel > 10")
+    r = await conn.query("SELECT id, nome, nivel FROM jogadores WHERE nivel > 10")
     for row in r.rows:
-        id_bytes = row[0]
-        nome_bytes = row[1]
-        # cada valor é `bytes?` — None é o NULL de SQL, e a conversão para
-        # número/texto é de quem sabe o tipo da coluna
+        # acesso por NOME e por TIPO — o valor já vem convertido
+        id = row.get_int("id")          # INT -> int
+        nome = row.get_str("nome")      # VARCHAR -> str
+        nivel = row.get_int("nivel")
         ...
+
+    # o caso "no máximo uma linha":
+    dono = (await conn.query_str(
+        "SELECT nome FROM jogadores WHERE id = %s", [str(id)])).one()
+    if dono != None:
+        print(dono.get_str("nome"))
+
+    # e o escalar direto:
+    total = (await conn.query("SELECT COUNT(*) FROM jogadores")).scalar()
 
     # NUNCA concatene o valor no SQL — isso é injeção. Use %s:
     r = await conn.query_str(
         "SELECT id FROM jogadores WHERE nome = %s AND nivel > %s",
         [nome_digitado, str(nivel_minimo)])
 
-    up = await conn.execute("UPDATE jogadores SET online = 1 WHERE id = 42")
-    print(up.affected_rows)
+    # transação: as escritas valem JUNTAS, ou nenhuma
+    await conn.begin()
+    try:
+        await conn.query_str("UPDATE jogadores SET online = 1 WHERE id = %s", [str(id)])
+        await conn.query_str("INSERT INTO log (evento) VALUES (%s)", ["entrou"])
+        await conn.commit()
+    catch e:
+        await conn.rollback()
+        raise e
 
     await conn.close()
     return 0
@@ -45,13 +61,20 @@ sys.exit(await main())
 | aperto de mão + login | `mysql_native_password` (o plugin padrão do MariaDB) |
 | `query(sql)` / `execute(sql)` | devolvem um `Result` (colunas, linhas, `affected_rows`, `insert_id`) |
 | `query_str(sql, args)` | uma query com `%s`, cada arg ESCAPADO e aspado — a forma segura |
+| `Row` com acesso por nome | `row.get_int("level")`, `get_str`, `get_float`, `get_datetime`, `get`, `raw` |
+| conversão de tipo por coluna | INT→`int`, DOUBLE→`float`, DATETIME→`LocalDateTime`, TEXT/JSON/ENUM→`str` |
+| `Result.one()` / `.scalar()` | a linha única, o valor único (o `fetchone` do DB-API) |
+| transações | `begin()` / `commit()` / `rollback()` / `set_autocommit()` |
+| `execute_many(sql, rows)` | o mesmo comando por linha, numa transação se envolvido |
 | `ping()` / `select_db()` / `close()` | |
 | erro do servidor | vira exceção com o código e a mensagem (`MySQL 1045: Access denied...`) |
 
-Cada valor de uma linha chega como `bytes?`. **Não há conversão de tipo por
-coluna ainda** — quem lê sabe se a coluna é `INT` ou `VARCHAR` e chama `int(...)`
-ou `str(...)`. É a decisão que o `csv` do próprio pscript tomou pela mesma razão
-(não adivinhar que `007` é sete perde o zero de um CEP).
+Um valor de coluna vem no tipo que a coluna promete, como `any` (carrega o seu
+tipo): `row.get("x")` devolve `any?`, e os atalhos `get_int`/`get_str`/... fazem o
+`as` e levantam no NULL. Um **DECIMAL fica `str`** de propósito — um preço com
+casas exatas viraria float e perderia o centavo, a mesma razão pela qual o `csv`
+do pscript não adivinha que `007` é sete. Um **BLOB binário** vai por `row.raw()`,
+porque um `any` ainda não guarda `bytes` (ver abaixo).
 
 ## O que falta, e onde entraria
 
@@ -66,7 +89,12 @@ ou `str(...)`. É a decisão que o `csv` do próprio pscript tomou pela mesma ra
   escape já resolve.
 - **TLS**: o pscript tem `net.starttls`; o gancho é depois do handshake, antes do
   login.
-- **Conversão de tipo por coluna**: o `type_code` do `Field` já está lido.
+- **`bytes` e `datetime` dentro de `any`**: hoje o `any` do core guarda números,
+  bools, strings, listas e dicts — não `bytes` nem um `record`. Por isso um BLOB
+  binário sai por `raw()` e uma data por `get_datetime()`, cada um com a sua
+  porta em vez de virem no `get()` genérico. Este schema não tem BLOB (os chunks
+  são JSON), então não apertou; num que tenha, o caminho limpo é o core aprender
+  a guardar `bytes` num `any`.
 
 ## Estrutura
 
@@ -75,7 +103,7 @@ packet.psc    o pacote e o cursor: inteiros LE, length-encoded, strings
 sha1.psc      SHA-1 em pscript puro (o handshake precisa; ~70 linhas)
 auth.psc      scramble_native_password: SHA1(pw) XOR SHA1(salt ++ SHA1(SHA1(pw)))
 escape.psc    escapar um valor para dentro de uma query (a defesa contra injeção)
-mysql.psc     a conexão: handshake, login, query, leitura de resultado
+mysql.psc     a conexão: handshake, login, query, conversão, Row, transações
 test/         o que se prova sem servidor (vetores de SHA-1 e do scramble)
 test_live.psc a conexão de verdade, contra um MariaDB (fora do corpus)
 ```

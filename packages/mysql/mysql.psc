@@ -23,6 +23,7 @@ import net
 import <mysql/packet.psc> as pkt
 import <mysql/auth.psc> as auth
 import <mysql/escape.psc> as esc
+import <datetime/datetime.psc> as dt
 
 
 const MAX_PACKET_LEN = 16777215     # 2^24 - 1
@@ -52,6 +53,35 @@ const COM_INIT_DB = 0x02
 
 const UTF8MB4_ID = 45      # o charset_nr de utf8mb4_general_ci
 
+# ── os tipos de coluna (constants/FIELD_TYPE.py) ──────────────────────────────
+# O que decide para que tipo pscript um valor de texto do servidor vira. Só os
+# que aparecem numa tabela real; o resto cai no ramo `str`.
+const FIELD_DECIMAL    = 0
+const FIELD_TINY       = 1
+const FIELD_SHORT      = 2
+const FIELD_LONG       = 3
+const FIELD_FLOAT      = 4
+const FIELD_DOUBLE     = 5
+const FIELD_NULL       = 6
+const FIELD_TIMESTAMP  = 7
+const FIELD_LONGLONG   = 8
+const FIELD_INT24      = 9
+const FIELD_DATE       = 10
+const FIELD_TIME       = 11
+const FIELD_DATETIME   = 12
+const FIELD_YEAR       = 13
+const FIELD_NEWDECIMAL = 246
+const FIELD_TINY_BLOB   = 249
+const FIELD_MEDIUM_BLOB = 250
+const FIELD_LONG_BLOB   = 251
+const FIELD_BLOB        = 252
+const FIELD_VAR_STRING  = 253
+const FIELD_STRING      = 254
+
+# charsetnr 63 é `binary`: um BLOB de verdade, e não texto. É o que separa um
+# TEXT de um BLOB, que compartilham o type code.
+const CHARSET_BINARY = 63
+
 
 struct Field:
     """A descrição de uma coluna de um resultado."""
@@ -61,23 +91,115 @@ struct Field:
     flags: int
 
 
-struct Result:
-    """O que uma query devolve. Para um SELECT, `fields` e `rows` (cada valor é
-    `bytes?` — None é o NULL de SQL). Para um INSERT/UPDATE, `affected_rows` e
-    `insert_id`."""
+struct Row:
+    """Uma linha de resultado, acessada por NOME de coluna — é como o código do
+    jogo lê (`row.get_int("level")`), e não por índice.
+
+    A linha guarda os bytes CRUS de cada coluna e converte sob demanda: `get`
+    devolve o tipo que a coluna promete (INT→int, DOUBLE→float, DATETIME→uma
+    data, TEXT/JSON/ENUM→str), como `any?` — carrega o seu tipo, e `None` é o
+    NULL de SQL. `raw` devolve os bytes sem conversão, para um BLOB binário ou
+    para quem quer o texto exato.
+
+    Os métodos tipados (`get_int`, `get_str`, `get_float`, `get_datetime`) são o
+    atalho para o caso comum, e levantam se a coluna não existe ou é NULL —
+    porque um `level` que falta é defeito, não um zero silencioso."""
     fields: List<Field>
-    rows: List<List<bytes?>>
-    affected_rows: int
-    insert_id: int
+    raws: List<bytes?>
 
     def column(self, name: str) -> int:
-        """O índice da coluna com este nome, ou -1."""
         i = 0
         while i < len(self.fields):
             if self.fields[i].name == name:
                 return i
             i += 1
         return -1
+
+    def raw(self, name: str) -> bytes?:
+        """Os bytes crus da coluna, sem conversão nenhuma. É a porta para um
+        BLOB binário (que não cabe num `any` ainda) e para quem quer o texto
+        exato que o servidor mandou."""
+        i = self.column(name)
+        if i < 0:
+            raise error(f"a query não tem a coluna '{name}'")
+        return self.raws[i]
+
+    def get(self, name: str) -> any?:
+        """O valor da coluna já no tipo dela, `any?`. `None` se é NULL; levanta
+        se o nome não existe (um nome errado é engano de quem escreveu a query)."""
+        i = self.column(name)
+        if i < 0:
+            raise error(f"a query não tem a coluna '{name}'")
+        return convert_value(self.raws[i], self.fields[i])
+
+    def at(self, i: int) -> any?:
+        """O valor pela POSIÇÃO, para quem sabe a ordem das colunas."""
+        return convert_value(self.raws[i], self.fields[i])
+
+    def is_null(self, name: str) -> bool:
+        return self.raw(name) == None
+
+    def get_int(self, name: str) -> int:
+        v = self.get(name)
+        if v == None:
+            raise error(f"a coluna '{name}' é NULL, não um int")
+        return v as int
+
+    def get_float(self, name: str) -> float:
+        v = self.get(name)
+        if v == None:
+            raise error(f"a coluna '{name}' é NULL, não um float")
+        return v as float
+
+    def get_str(self, name: str) -> str:
+        v = self.get(name)
+        if v == None:
+            raise error(f"a coluna '{name}' é NULL, não uma string")
+        return v as str
+
+    def get_bytes(self, name: str) -> bytes:
+        """Os bytes crus, e o mesmo que `raw` — mas levanta no NULL, para o
+        caso em que a ausência é defeito."""
+        v = self.raw(name)
+        if v == None:
+            raise error(f"a coluna '{name}' é NULL, não bytes")
+        return v
+
+    def get_datetime(self, name: str) -> dt.LocalDateTime:
+        """A coluna como uma data, parseada dos bytes crus — não passa pelo
+        `any`, porque um `LocalDateTime` não cabe nele. Levanta no NULL e num
+        valor que não é uma data ISO (o `0000-00-00` do MySQL, por exemplo)."""
+        b = self.raw(name)
+        if b == None:
+            raise error(f"a coluna '{name}' é NULL, não uma data")
+        d = dt.parse_datetime(str(b))
+        if d == None:
+            raise error(f"a coluna '{name}' não é uma data reconhecível: {str(b)}")
+        return d
+
+
+struct Result:
+    """O que uma query devolve. Para um SELECT, `fields` (as colunas) e `rows`
+    (cada uma um `Row`, com os valores já convertidos). Para um INSERT/UPDATE,
+    `affected_rows` e `insert_id`."""
+    fields: List<Field>
+    rows: List<Row>
+    affected_rows: int
+    insert_id: int
+
+    def one(self) -> Row?:
+        """A primeira linha, ou `None` se não veio nenhuma — o `fetchone` do
+        DB-API, para uma query que espera no máximo uma linha."""
+        if len(self.rows) == 0:
+            return None
+        return self.rows[0]
+
+    def scalar(self) -> any?:
+        """O primeiro valor da primeira linha — o `SELECT COUNT(*)`, o
+        `SELECT id WHERE ...`. `None` se não veio linha nenhuma."""
+        if len(self.rows) == 0:
+            return None
+        return self.rows[0].at(0)
 
 
 struct Connection:
@@ -188,6 +310,52 @@ struct Connection:
         cada um é escapado e aspado. O número de `%s` tem de bater com o de args."""
         return await self.query(format_query(sql, args))
 
+    async def execute_many(self, sql: str, rows: List<List<str>>) -> int:
+        """O mesmo `sql` com `%s`, executado uma vez por linha de `rows`, e
+        devolve o total de linhas afetadas. É o INSERT em lote — mais rápido que
+        um `query_str` por linha porque não paga a ida e volta de cada um... por
+        ora paga: manda um comando por linha. O caminho de um único INSERT com
+        muitos `VALUES` fica para quando o perfil pedir.
+
+        Numa transação (entre `begin` e `commit`), ou todas entram ou nenhuma."""
+        total = 0
+        for r in rows:
+            res = await self.query_str(sql, r)
+            total += res.affected_rows
+        return total
+
+    # ── transações ────────────────────────────────────────────────────────────
+    # Um servidor de jogo escreve várias linhas que têm de valer JUNTAS: tirar um
+    # item do inventário e pô-lo num baú são duas escritas que não podem existir
+    # uma sem a outra. É o que a transação garante — ou as duas, ou nenhuma.
+
+    async def begin(self):
+        """Abre uma transação. O que vier até `commit` fica invisível para os
+        outros e reversível por `rollback`."""
+        await self.query("BEGIN")
+
+    async def commit(self):
+        """Confirma tudo desde o `begin`. A partir daqui é definitivo."""
+        await self.send_command(COM_QUERY, bytes_of_str("COMMIT"))
+        p2 = await self.read_packet()
+        if not p2.is_ok_packet():
+            raise error("o COMMIT não foi confirmado")
+
+    async def rollback(self):
+        """Desfaz tudo desde o `begin`. É o que uma exceção no meio de uma
+        escrita composta tem de chamar."""
+        await self.send_command(COM_QUERY, bytes_of_str("ROLLBACK"))
+        p3 = await self.read_packet()
+        if not p3.is_ok_packet():
+            raise error("o ROLLBACK não foi confirmado")
+
+    async def set_autocommit(self, on: bool):
+        """Liga ou desliga o commit automático de cada comando. Desligado, um
+        `begin` é implícito e nada é definitivo até um `commit` — é como um
+        servidor que faz escritas compostas costuma preferir."""
+        v = "1" if on else "0"
+        await self.query(f"SET autocommit = {v}")
+
     async def ping(self):
         await self.send_command(COM_PING, bytes([]))
         p = await self.read_packet()
@@ -219,18 +387,19 @@ struct Connection:
         eof1 = await self.read_packet()
         if not eof1.is_eof_packet():
             raise error("esperava o EOF depois das colunas")
-        # as linhas, até o EOF final
-        rows: List<List<bytes?>> = []
+        # as linhas, até o EOF final. Cada valor cru (bytes ou NULL) é
+        # convertido para o tipo pscript da sua coluna aqui, uma vez.
+        rows: List<Row> = []
         while True:
             rp = await self.read_packet()
             if rp.is_eof_packet():
                 break
-            row: List<bytes?> = []
+            raws: List<bytes?> = []
             cc = 0
             while cc < ncol:
-                row.append(rp.read_length_coded_string())
+                raws.append(rp.read_length_coded_string())
                 cc += 1
-            rows.append(row)
+            rows.append(Row(fields, raws))
         return Result(fields, rows, len(rows), 0)
 
     async def close(self):
@@ -387,7 +556,8 @@ private def read_ok(p: pkt.Packet) -> Result:
     ins = p.read_length_encoded_integer()
     a = aff ?? 0
     ii = ins ?? 0
-    return Result([], [], a, ii)
+    empty: List<Row> = []
+    return Result([], empty, a, ii)
 
 
 private def raise_error(p: pkt.Packet):
@@ -408,6 +578,59 @@ private def raise_error(p: pkt.Packet):
 
 
 # ── ajudantes de bytes ────────────────────────────────────────────────────────
+
+def convert_value(raw: bytes?, f: Field) -> any?:
+    """Um valor cru de coluna vira o tipo pscript que a coluna promete.
+
+    A tabela é a do `converters.py` do pymysql, e a regra é a dele: os inteiros
+    viram `int`, os de ponto flutuante `float`, as datas um tipo do pacote
+    `datetime`, e o resto — texto e binário — fica como `str` ou `bytes`. Um
+    NULL (o `raw` ausente) atravessa como `None`.
+
+    O que NÃO se adivinha: um DECIMAL fica `str`. Um preço com casas decimais
+    exatas viraria float e perderia o último centavo — é a mesma razão pela qual
+    o `csv` do pscript não adivinha que `007` é sete. Quem quer o número decide.
+
+    Uma data ILEGAL (o MySQL guarda `0000-00-00`) não converte: volta como a
+    `str` que era, que é o que o pymysql faz — levantar aqui seria transformar um
+    dado velho do banco num erro de leitura."""
+    if raw == None:
+        return None
+    t = f.type_code
+
+    # inteiros
+    if (t == FIELD_TINY or t == FIELD_SHORT or t == FIELD_LONG
+            or t == FIELD_LONGLONG or t == FIELD_INT24 or t == FIELD_YEAR):
+        r: any = int(str(raw))
+        return r
+
+    # ponto flutuante
+    if t == FIELD_FLOAT or t == FIELD_DOUBLE:
+        r2: any = float(str(raw))
+        return r2
+
+    # datas ficam como a `str` do servidor: um `any` não guarda um
+    # `LocalDateTime` (é um struct, e o `any` carrega números, bools, strings,
+    # listas e dicts). Quem quer a data como tipo chama `row.get_datetime(...)`,
+    # que a parseia sem passar pelo `any`. É o mesmo motivo por que um BLOB vai
+    # por `raw`: o tipo rico tem a sua própria porta.
+
+    # um BLOB de charset `binary` é binário de verdade, e um `any` ainda não
+    # guarda `bytes` — então `get` de uma coluna dessas manda usar `raw`, que
+    # devolve os bytes sem passar por `any`. Um "BLOB" de charset de texto (um
+    # TEXT, que compartilha o type code) é UTF-8 e vira `str`.
+    if (t == FIELD_BLOB or t == FIELD_TINY_BLOB or t == FIELD_MEDIUM_BLOB
+            or t == FIELD_LONG_BLOB):
+        if f.charsetnr == CHARSET_BINARY:
+            raise error(f"a coluna '{f.name}' é binária (BLOB): use row.raw(...), porque um `any` ainda não guarda bytes")
+        rt: any = str(raw)
+        return rt
+
+    # DECIMAL fica str de propósito (a exatidão), e o resto (VARCHAR, STRING,
+    # ENUM, SET, ...) é texto
+    r7: any = str(raw)
+    return r7
+
 
 def format_query(sql: str, args: List<str>) -> str:
     """Substitui cada `%s` do `sql` pelo próximo `args`, escapado e entre aspas.

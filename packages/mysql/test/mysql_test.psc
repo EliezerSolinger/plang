@@ -46,4 +46,40 @@ check("format aspas", my.format_query("nome = %s", ["O'Brien"]), "nome = 'O\\'Br
 check("format porcento", my.format_query("100%% e %s", ["x"]), "100% e 'x'")
 check("format dois", my.format_query("%s e %s", ["a", "b"]), "'a' e 'b'")
 
+# ── conversao de valor por tipo de coluna ────────────────────────────────────
+# um Field falso e o valor cru; convert_value decide o tipo pscript
+fi_int = my.Field("n", my.FIELD_LONG, 63, 0)
+vi = my.convert_value(b"12345", fi_int)
+if vi != None:
+    check("convert INT", f"{vi as int}", "12345")
+    check("convert INT tipo", typestr(vi as int), "int")
+
+fi_big = my.Field("n", my.FIELD_LONGLONG, 63, 0)
+vb = my.convert_value(b"9223372036854775807", fi_big)
+if vb != None:
+    check("convert BIGINT", f"{vb as int}", "9223372036854775807")
+
+fi_dbl = my.Field("f", my.FIELD_DOUBLE, 63, 0)
+vf = my.convert_value(b"3.14159", fi_dbl)
+if vf != None:
+    check("convert DOUBLE", f"{vf as float}", "3.14159")
+
+fi_str = my.Field("s", my.FIELD_VAR_STRING, 45, 0)
+vs = my.convert_value(b"texto", fi_str)
+if vs != None:
+    check("convert VARCHAR", vs as str, "texto")
+
+# NULL atravessa como None
+vn = my.convert_value(None, fi_int)
+check("convert NULL", f"{vn == None}", "True")
+
+# ── uma Row montada a mao: acesso por nome e por tipo ────────────────────────
+flds: List<my.Field> = [my.Field("level", my.FIELD_LONG, 63, 0),
+                        my.Field("nome", my.FIELD_VAR_STRING, 45, 0)]
+raws: List<bytes?> = [b"42", b"Steve"]
+rw = my.Row(flds, raws)
+check("row get_int por nome", f"{rw.get_int(\"level\")}", "42")
+check("row get_str por nome", rw.get_str("nome"), "Steve")
+check("row column ausente", f"{rw.column(\"xyz\")}", "-1")
+
 print("fim")

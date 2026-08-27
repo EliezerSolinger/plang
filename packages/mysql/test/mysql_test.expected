@@ -12,4 +12,13 @@ ok format simples
 ok format aspas
 ok format porcento
 ok format dois
+ok convert INT
+ok convert INT tipo
+ok convert BIGINT
+ok convert DOUBLE
+ok convert VARCHAR
+ok convert NULL
+ok row get_int por nome
+ok row get_str por nome
+ok row column ausente
 fim
