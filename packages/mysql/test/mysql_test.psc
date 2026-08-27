@@ -8,6 +8,7 @@ bugs que o porte teve morreriam antes de chegar ao servidor.
 import <mysql/packet.psc> as pkt
 import <mysql/sha1.psc> as sha
 import <mysql/auth.psc> as auth
+import <mysql/mysql.psc> as my
 
 
 def check(nome: str, got: str, want: str):
@@ -38,5 +39,11 @@ if lv != None:
 check("lenenc write 10", pkt.lenenc_int(10).hex(), "0a")
 check("lenenc write 300", pkt.lenenc_int(300).hex(), "fc2c01")
 check("lenenc write 70000", pkt.lenenc_int(70000).hex(), "fd701101")
+
+# ── o escape e a query parametrizada: a defesa contra injecao ─────────────────
+check("format simples", my.format_query("id = %s", ["5"]), "id = '5'")
+check("format aspas", my.format_query("nome = %s", ["O'Brien"]), "nome = 'O\\'Brien'")
+check("format porcento", my.format_query("100%% e %s", ["x"]), "100% e 'x'")
+check("format dois", my.format_query("%s e %s", ["a", "b"]), "'a' e 'b'")
 
 print("fim")

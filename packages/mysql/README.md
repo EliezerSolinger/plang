@@ -24,6 +24,11 @@ async def main() -> int:
         # número/texto é de quem sabe o tipo da coluna
         ...
 
+    # NUNCA concatene o valor no SQL — isso é injeção. Use %s:
+    r = await conn.query_str(
+        "SELECT id FROM jogadores WHERE nome = %s AND nivel > %s",
+        [nome_digitado, str(nivel_minimo)])
+
     up = await conn.execute("UPDATE jogadores SET online = 1 WHERE id = 42")
     print(up.affected_rows)
 
@@ -39,6 +44,7 @@ sys.exit(await main())
 |---|---|
 | aperto de mão + login | `mysql_native_password` (o plugin padrão do MariaDB) |
 | `query(sql)` / `execute(sql)` | devolvem um `Result` (colunas, linhas, `affected_rows`, `insert_id`) |
+| `query_str(sql, args)` | uma query com `%s`, cada arg ESCAPADO e aspado — a forma segura |
 | `ping()` / `select_db()` / `close()` | |
 | erro do servidor | vira exceção com o código e a mensagem (`MySQL 1045: Access denied...`) |
 
@@ -53,8 +59,11 @@ ou `str(...)`. É a decisão que o `csv` do próprio pscript tomou pela mesma ra
   MariaDB): o primeiro precisa de RSA no caminho lento, o segundo de curva de
   Edwards. O ponto de entrada é o pedido de troca de plugin, tratado em
   `connect`.
-- **Prepared statements** (`COM_STMT_*`): hoje a query é texto. Para o servidor
-  de jogo, que monta SQL de dados do jogador, é a próxima peça que importa.
+- **Prepared statements do protocolo** (`COM_STMT_*`): hoje um valor entra por
+  escape (`query_str`), que é o que o PyMySQL faz — o `execute(sql, args)` dele
+  também escapa no cliente e manda texto, não usa `COM_STMT`. O protocolo binário
+  seria mais rápido para a mesma query repetida muitas vezes; para segurança, o
+  escape já resolve.
 - **TLS**: o pscript tem `net.starttls`; o gancho é depois do handshake, antes do
   login.
 - **Conversão de tipo por coluna**: o `type_code` do `Field` já está lido.
@@ -65,6 +74,7 @@ ou `str(...)`. É a decisão que o `csv` do próprio pscript tomou pela mesma ra
 packet.psc    o pacote e o cursor: inteiros LE, length-encoded, strings
 sha1.psc      SHA-1 em pscript puro (o handshake precisa; ~70 linhas)
 auth.psc      scramble_native_password: SHA1(pw) XOR SHA1(salt ++ SHA1(SHA1(pw)))
+escape.psc    escapar um valor para dentro de uma query (a defesa contra injeção)
 mysql.psc     a conexão: handshake, login, query, leitura de resultado
 test/         o que se prova sem servidor (vetores de SHA-1 e do scramble)
 test_live.psc a conexão de verdade, contra um MariaDB (fora do corpus)

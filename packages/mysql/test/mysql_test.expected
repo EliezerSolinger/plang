@@ -8,4 +8,8 @@ ok lenenc 300
 ok lenenc write 10
 ok lenenc write 300
 ok lenenc write 70000
+ok format simples
+ok format aspas
+ok format porcento
+ok format dois
 fim

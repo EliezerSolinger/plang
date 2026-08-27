@@ -22,6 +22,7 @@ O que fica de fora, dito onde entraria: `caching_sha2_password` e `ed25519`
 import net
 import <mysql/packet.psc> as pkt
 import <mysql/auth.psc> as auth
+import <mysql/escape.psc> as esc
 
 
 const MAX_PACKET_LEN = 16777215     # 2^24 - 1
@@ -177,6 +178,15 @@ struct Connection:
         """O mesmo que `query`, e o nome existe só para dizer no sítio da chamada
         que não se espera um resultado — a leitura é a mesma."""
         return await self.query(sql)
+
+    async def query_str(self, sql: str, args: List<str>) -> Result:
+        """Uma query com valores, e a ÚNICA forma segura de os pôr: cada `%s` no
+        `sql` é substituído por um `args` ESCAPADO e entre aspas. Concatenar o
+        valor à mão no SQL é injeção; este método existe para que ninguém precise.
+
+        Os valores entram como `str` (o chamador chama `str(n)` num número), e
+        cada um é escapado e aspado. O número de `%s` tem de bater com o de args."""
+        return await self.query(format_query(sql, args))
 
     async def ping(self):
         await self.send_command(COM_PING, bytes([]))
@@ -398,6 +408,32 @@ private def raise_error(p: pkt.Packet):
 
 
 # ── ajudantes de bytes ────────────────────────────────────────────────────────
+
+def format_query(sql: str, args: List<str>) -> str:
+    """Substitui cada `%s` do `sql` pelo próximo `args`, escapado e entre aspas.
+    Um `%s` a mais ou a menos do que args levanta — um descompasso aqui é um
+    valor perdido ou um literal `%s` chegando ao servidor."""
+    out = ""
+    ai = 0
+    i = 0
+    n = len(sql)
+    while i < n:
+        if i + 1 < n and sql[i] == "%" and sql[i + 1] == "s":
+            if ai >= len(args):
+                raise error("mais %s do que argumentos na query")
+            out += esc.quote_string(args[ai])
+            ai += 1
+            i += 2
+        elif i + 1 < n and sql[i] == "%" and sql[i + 1] == "%":
+            out += "%"
+            i += 2
+        else:
+            out += sql[i]
+            i += 1
+    if ai != len(args):
+        raise error(f"a query tem {ai} %s mas vieram {len(args)} argumentos")
+    return out
+
 
 private def bytes_of_str(s: str) -> bytes:
     """Uma `str` como os seus bytes UTF-8 — o que atravessa o socket."""

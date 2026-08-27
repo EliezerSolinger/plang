@@ -67,7 +67,15 @@ async def main() -> int:
             ls = str(linhas)
         print(f"  {ns}: {ls} linhas")
 
-    # 4. ping
+    # 4. uma query PARAMETRIZADA — a forma segura, com o valor escapado
+    r4 = await conn.query_str("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name LIKE %s LIMIT 3", [db, "a%"])
+    print(f"tabelas que comecam com 'a' ({len(r4.rows)}):")
+    for row in r4.rows:
+        nm = row[0]
+        if nm != None:
+            print(f"  {str(nm)}")
+
+    # 5. ping
     await conn.ping()
     print("ping ok")
 
