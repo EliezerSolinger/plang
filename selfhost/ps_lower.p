@@ -5108,6 +5108,25 @@ struct PsLow:
                 return not e->is_gref
             case PE_FIELD:
                 return self->is_trivial(e->lhs)
+            case PE_UNARY:
+                # `-1.0` num argumento nao e efeito nenhum: nao chama, nao aloca,
+                # nao pode coletar. Dizer que e' faz `lower_ordered` amarrar um
+                # `__ordN`, e um inicializador de `const` de MODULO vira dado
+                # estatico em C — que nao tem bloco onde declarar o temporario.
+                # O sintoma era `const D = V(0.0, -1.0)` morrer com "use of
+                # undeclared identifier '__ord0'", enquanto `V(0.0, 1.0)`
+                # compilava e `V(x=0.0, y=-1.0)` (nomeado, outro caminho) tambem.
+                #
+                # A excecao e' o menos INTEIRO, que baixa para `ps_neg` porque
+                # negar o inteiro mais negativo estoura e estouro levanta (7.2) —
+                # esse chama, e chamada e' efeito. O literal de largura padrao
+                # nao, que e' o que `unary()` ja dobra no sinal.
+                if e->op == TK_MINUS and e->type != None and e->type->kind == PT_INT:
+                    folds: bool = (e->lhs != None and e->lhs->kind == PE_INT
+                                   and e->lhs->text != None and e->type->width == 0)
+                    if not folds:
+                        return False
+                return self->is_trivial(e->lhs)
             case _:
                 return False
 

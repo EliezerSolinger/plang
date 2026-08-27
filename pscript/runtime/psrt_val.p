@@ -3424,14 +3424,52 @@ def ps_sub(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
     return a - b
 
 def ps_mul(ctx: *PsCtx, a: i64, b: i64, file: const *char, line: i32) -> i64:
-    if a != 0:
-        r: i64 = a * b
-        # the division check: exact for every case except the one below
-        if b != 0 and (r / a != b or (a == -1 and b == (-9223372036854775807 - 1))):
-            ps_raise(ctx, "integer overflow in *", PS_CAT_OVERFLOW, file, line)
-            return 0
-        return r
-    return 0
+    # A PERGUNTA VEM ANTES DA MULTIPLICAÇÃO, e é essa a única coisa que importa
+    # aqui.
+    #
+    # A forma anterior multiplicava e conferia depois, com a divisão:
+    #
+    #     r: i64 = a * b
+    #     if b != 0 and (r / a != b or ...):   # tarde demais
+    #
+    # A conta está certa e o teste é exato; o problema é que `a * b` de signed
+    # que estoura é COMPORTAMENTO INDEFINIDO em C. O gcc tem então o direito de
+    # assumir que não estoura, provar que `r / a == b` sempre vale, e APAGAR o
+    # `if`. Foi o que ele fez, e a garantia 7.2 — "estouro de int lança", um dos
+    # quatro eixos de segurança — era falsa em todo build otimizado:
+    #
+    #     flags            9223372036854775807 * 2
+    #     -O0              levanta          (correto)
+    #     -O1              -2               EM SILÊNCIO
+    #     -O2              -2               EM SILÊNCIO
+    #     -O2 -flto        -2               EM SILÊNCIO
+    #     -O2 -fwrapv      levanta          (porque aí o estouro passa a ser definido)
+    #
+    # `-fwrapv` conserta e é a saída errada: passa a depender de uma bandeira que
+    # quem compila o programa gerado tem de lembrar de pôr, e a linguagem promete
+    # C portável. `__builtin_mul_overflow` também não serve: o alvo inclui C89 em
+    # compilador pequeno.
+    #
+    # Então a checagem é feita sobre os OPERANDOS, com divisão — que nunca
+    # estoura —, nos quatro quadrantes de sinal. `ps_add` e `ps_sub` sempre
+    # fizeram assim; só a multiplicação não fazia.
+    if a == 0 or b == 0:
+        return 0
+    MIN: i64 = -9223372036854775807 - 1
+    MAX: i64 = 9223372036854775807
+    over: bool = False
+    if a > 0:
+        over = a > MAX / b if b > 0 else b < MIN / a
+    else:
+        # os dois negativos dão produto POSITIVO, e o teto é o MAX; um negativo
+        # com um positivo dá produto negativo, e o piso é o MIN. O caso que a
+        # forma antiga tratava à parte (`a == -1 and b == MIN`) cai aqui sem
+        # exceção nenhuma: `MAX / MIN` é 0 e `-1 < 0`.
+        over = a < MIN / b if b > 0 else a < MAX / b
+    if over:
+        ps_raise(ctx, "integer overflow in *", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return a * b
 
 def ps_neg(ctx: *PsCtx, a: i64, file: const *char, line: i32) -> i64:
     if a == (-9223372036854775807 - 1):

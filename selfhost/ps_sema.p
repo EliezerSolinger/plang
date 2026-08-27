@@ -136,6 +136,12 @@ def ps_view_esize(name: const *char) -> i32:
         return 8
     if strcmp(name, "view_f32") == 0 or strcmp(name, "view_i32") == 0:
         return 4
+    # 16 bits: e a largura de um formato de VOXEL (id de 12 bits mais um nibble
+    # de estado), e de qualquer amostra de audio. Sem ela um formato de 16 bits
+    # tem de ser lido como dois `u8` e remontado a mao, do lado de fora, em toda
+    # travessia — que e' precisamente o que uma vista tipada existe para evitar.
+    if strcmp(name, "view_u16") == 0 or strcmp(name, "view_i16") == 0:
+        return 2
     if strcmp(name, "view_u8") == 0:
         return 1
     return 0
@@ -150,6 +156,11 @@ def ps_view_elem(a: *Arena, name: const *char, pos: Pos) -> *PsType:
     t2: *PsType = ps_type(a, PT_INT, pos)
     if strcmp(name, "view_i32") == 0:
         t2->width = 32
+    elif strcmp(name, "view_i16") == 0:
+        t2->width = 16
+    elif strcmp(name, "view_u16") == 0:
+        t2->width = 16
+        t2->uns = True
     elif strcmp(name, "view_u8") == 0:
         t2->width = 8
         t2->uns = True
@@ -2207,7 +2218,7 @@ struct PsSema:
                     vl: *PsType = ps_type(self->a, PT_VIEW, e->pos)
                     vl->inner = ps_view_elem(self->a, bm, e->pos)
                     return vl
-                fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u8) — not '%s'", bm)
+                fatal_at(self->file, e->pos, "a Buffer has get_f64, set_f64, size, freeze and the typed views (view_f64, view_f32, view_i64, view_i32, view_u16, view_i16, view_u8) — not '%s'", bm)
             if rt != None and rt->kind == PT_CHAN:
                 cm: const *char = e->lhs->text
                 e->lhs->type = rt
