@@ -1,0 +1,10 @@
+{
+  "name": "mysql",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "mysql.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "Cliente MySQL/MariaDB: o protocolo cliente-servidor, portado do PyMySQL, sobre a `net` do pscript"
+}

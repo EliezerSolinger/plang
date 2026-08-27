@@ -488,6 +488,49 @@ entra quando o mesher chegar.
 
 ---
 
+## 13 — ABERTO · `u8 << 8` fica preso em 8 bits, e em SILÊNCIO
+
+Achado ao portar o conector MySQL. Ler um inteiro little-endian de um pacote é o
+idioma mais comum de um protocolo binário:
+
+```python
+b = bytes([0x78, 0x56, 0x34, 0x12])
+x = b[0]
+y = b[1]
+print(x | (y << 8))       # 120, e o certo é 22136
+```
+
+`b[i]` devolve `u8`, e `u8 << 8` **fica em `u8`** — a largura estreita mascara à
+largura (68.2), então o byte alto some. `typestr(y << 8)` confirma: o resultado é
+`u8`. E `int(x)` DEPOIS não recupera nada, porque o valor já foi truncado.
+
+Isto é a regra da linguagem (68.2 é deliberada), não um defeito do lowering. Mas
+é uma armadilha silenciosa: **o programa compila, roda, e dá o número errado.**
+`read_uint32` de um pacote MySQL devolvia `120` em vez de `305419896`, e o
+sintoma só apareceu quando um valor de protocolo veio absurdo. O idioma correto é
+`int(b[i])` ANTES do shift, e é o que `packages/mysql/packet.psc` faz.
+
+A pergunta que fica é se o compilador deveria avisar. Um `<<` cuja largura do
+resultado não cabe o que o deslocamento produz — `u8 << 8` desloca todos os bits
+para fora — é, com certeza prática, engano. Um `-Wshift-overflows-width` custaria
+uma checagem e mataria a classe. É a mesma forma dos outros achados desta série:
+uma operação de largura estreita que faz silenciosamente menos do que parece.
+
+## 14 — os dois bugs do conector, e por que um `.expected` não bastava
+
+O porte do MySQL teve exactamente dois bugs, e os dois são instrutivos porque
+NENHUM apareceria numa checagem de tipos — os dois compilam e rodam:
+
+1. o `u8 << 8` acima, no `read_uint32`;
+2. um byte a menos no salt do handshake (8 + 12 bytes de desafio, e o NUL
+   terminador vem DEPOIS dos 12; eu tirei um a mais e o servidor recusou com
+   "Access denied", sem dizer que o problema foi o desafio).
+
+O segundo só se pega falando com um servidor de verdade, e o primeiro só se pega
+com um valor que o teste saiba prever. Ambos estão agora presos em
+`packages/mysql/test/`, contra os vetores oficiais do SHA-1 e o scramble do
+próprio pymysql — a mesma disciplina de oráculo que o resto do repositório usa.
+
 # O que a linguagem ganhou, e o que cada coisa custou
 
 Três features, todas nascidas de o porte esbarrar, todas seguindo um precedente

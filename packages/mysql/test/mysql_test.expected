@@ -1,0 +1,11 @@
+ok sha1 vazio
+ok sha1 abc
+ok scramble foobar
+ok scramble vazio
+ok uint32 LE
+ok uint16 LE
+ok lenenc 300
+ok lenenc write 10
+ok lenenc write 300
+ok lenenc write 70000
+fim
