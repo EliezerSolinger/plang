@@ -200,6 +200,21 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/print-atomic.sh >$V/printatomic.log 2>&1;
 else
     bad "o print de workers concorrentes costurou linhas (veja $V/printatomic.log)"
 fi
+#   overflow-opt a aritmética checada continua a levantar COM otimização — o
+#                corpus compila a -O0, e este defeito (o `*` que perdia a
+#                checagem por UB) só existe a partir de -O1.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/overflow-opt.sh >$V/overflowopt.log 2>&1; then
+    ok "overflow-opt $(grep -oE '[0-9]+ níveis' $V/overflowopt.log | tail -1)"
+else
+    bad "a aritmética checada mudou de resposta com otimização (veja $V/overflowopt.log)"
+fi
+#   nocheck      o bloco `nocheck:` dá a volta em release e levanta com -g — dois
+#                modos de compilação do mesmo ficheiro, o que um `.expected` não vê.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/nocheck.sh >$V/nocheck.log 2>&1; then
+    ok "nocheck $(grep -oE 'batem nos dois' $V/nocheck.log | tail -1 | sed 's/.*/ok/')"
+else
+    bad "o bloco nocheck não se comportou nos dois modos (veja $V/nocheck.log)"
+fi
 #   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
 #                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
 #                que se vê sem medir), e com TODOS os knobs de fora ele ainda

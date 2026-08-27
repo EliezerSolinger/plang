@@ -593,6 +593,11 @@ def ps_all(l: *PsList) -> bool:
 # de arredondamento padrão do IEEE, então `rint` faz exatamente isso — escrever
 # `floor(x + 0.5)` daria 3 em round(2.5) e divergiria em todo meio exato.
 def ps_round(x: f64) -> i64:
+    # NAO E' MAIS CHAMADA pela baixada: `round(x)` passou a emitir `rint` da libm
+    # envolvido em `ps_f_to_i`, para que a conversao seja checada como qualquer
+    # outra. Fica porque o SEED em C commitado ainda a chama com esta assinatura,
+    # e mudar a assinatura de uma funcao do runtime obriga a re-semear. Sai na
+    # proxima semeadura.
     return i64(rint(x))
 
 # Com casas decimais o Python devolve FLOAT, e arredonda o valor DECIMAL — o que
@@ -3594,6 +3599,43 @@ def ps_u_to_i(ctx: *PsCtx, v: u64, file: const *char, line: i32) -> i64:
         ps_raise(ctx, "this u64 does not fit int", PS_CAT_OVERFLOW, file, line)
         return 0
     return i64(v)
+
+def ps_f_to_i(ctx: *PsCtx, x: f64, file: const *char, line: i32) -> i64:
+    """A travessia de float para int, CHECADA.
+
+    `(int64_t)x` em C é comportamento indefinido quando `x` é NaN, infinito, ou
+    finito mas fora da faixa do i64 — e o compilador exerce esse direito. Medido,
+    o MESMO programa na MESMA máquina:
+
+        int(1e300)      -O0   -9223372036854775808
+                        -O2    9223372036854775807
+
+    E não é só a otimização: no x86 o `cvttsd2si` devolve o "integer indefinite"
+    (INT64_MIN) e no ARM64 o `fcvtzs` SATURA, então a mesma linha dá INT64_MIN num
+    Linux de mesa e INT64_MAX num Apple Silicon. Uma linguagem que promete o mesmo
+    programa em todo o lado não pode ter isto no caminho de `int(x)`.
+
+    `1e300` mostra que não se trata de NaN: é um float finito que não cabe, ou
+    seja ESTOURO, e a 7.2 diz que estouro levanta.
+
+    As mensagens seguem o Python, que é o oráculo da linguagem: ele levanta
+    `ValueError` no NaN e `OverflowError` no infinito. O terceiro caso é nosso —
+    o `int` do Python é de precisão arbitrária e aceita `1e300`; o nosso é i64.
+
+    A faixa é comparada em FLOAT, sem converter primeiro: 2^63 é exactamente
+    representável em f64 e i64 vai até 2^63-1, logo o que cabe é
+    `-2^63 <= x < 2^63`."""
+    if x != x:
+        ps_raise(ctx, "cannot convert float NaN to integer", PS_CAT_VALUE, file, line)
+        return 0
+    # depois do NaN, so' o infinito faz `x - x` nao ser zero
+    if x - x != 0.0:
+        ps_raise(ctx, "cannot convert float infinity to integer", PS_CAT_OVERFLOW, file, line)
+        return 0
+    if x >= 9223372036854775808.0 or x < -9223372036854775808.0:
+        ps_raise(ctx, "this float does not fit int", PS_CAT_OVERFLOW, file, line)
+        return 0
+    return i64(x)
 
 def ps_i_to_u64(ctx: *PsCtx, v: i64, file: const *char, line: i32) -> u64:
     if v < 0:

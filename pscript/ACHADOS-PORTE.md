@@ -122,6 +122,58 @@ modo em que todos rodam. Enquanto ele não existir, a mesma
 classe pode estar viva noutro lugar: **todo sítio do runtime que calcula primeiro
 e confere depois é suspeito.**
 
+## 0b — CONSERTADO · `int(x)` de NaN, de infinito ou fora da faixa era UB
+
+O gêmeo do 0, achado quando o dono perguntou "tem um furo na nossa linguagem
+pscript no NaN?".
+
+`int(x)` emitia `(int64_t)x`, que em C é comportamento indefinido quando `x` é
+NaN, infinito, ou finito mas fora da faixa do i64. O mesmo programa, na mesma
+máquina:
+
+| flags | `int(nan)` | `int(inf)` | `int(1e300)` |
+|---|---|---|---|
+| `-O0` | `-9223372036854775808` | `-9223372036854775808` | `-9223372036854775808` |
+| `-O2` | `-9223372036854775808` | `-9223372036854775808` | **`9223372036854775807`** |
+
+O `1e300` muda de resposta com a otimização, e não é NaN: é um float finito que
+não cabe em i64, ou seja ESTOURO, que a 7.2 promete que levanta.
+
+E há o eixo da arquitetura, que é o mais grave para uma linguagem que promete o
+mesmo programa em todo o lado: no x86 o `cvttsd2si` devolve o "integer
+indefinite" (INT64_MIN) e no ARM64 o `fcvtzs` **satura**. A mesma linha dá
+INT64_MIN num Linux de mesa e INT64_MAX num Apple Silicon — e o porte para macOS
+é recente.
+
+Os oráculos concordam que ninguém devia dar INT64_MIN: o Python levanta
+`ValueError` no NaN e `OverflowError` no infinito; o JavaScript dá `0` ou `NaN`.
+
+**O detalhe que dói: a checagem já existia.** `ps_f_to_iw` confere NaN e faixa —
+mas só é chamada ao ESTREITAR. `i32(nan)` sempre levantou; era a largura PADRÃO
+que passava sem conferir. O motivo provável de não a reusarem para i64 é a borda:
+`f64(2^63-1)` arredonda para `2^63`, então `v > f64(hi)` aceitaria `2^63`, que não
+cabe. A faixa certa é `-2^63 <= x < 2^63`, com `>=`.
+
+**O conserto** é `ps_f_to_i`, usado nos quatro sítios que convertiam sem conferir:
+`int(x)`, `math.floor`, `math.ceil`/`trunc` e `round(x)`. As mensagens são as
+palavras do Python. Resultado idêntico em `-O0`, `-O2` e `-O2 -flto`:
+
+```
+int(nan)    cannot convert float NaN to integer
+int(inf)    cannot convert float infinity to integer
+int(1e300)  this float does not fit int
+floor(nan)  cannot convert float NaN to integer
+round(inf)  cannot convert float infinity to integer
+```
+
+`round(x)` deixou de chamar `ps_round` e passa a emitir `rint` da libm envolvido
+na travessia checada — de propósito, para não mudar a assinatura de uma função do
+runtime: o SEED em C commitado ainda a chama com a antiga, e mudá-la obrigaria a
+re-semear. `ps_round` ficou no runtime com um comentário a dizer que sai na
+próxima semeadura.
+
+Portão: `tests/pscript/run/f2i.psc`.
+
 ## 1 — CONSERTADO · `const R(0.0, -1.0)` não compilava
 
 ```python
@@ -435,6 +487,131 @@ As duas alavancas que a linguagem já tem para o resto: `%+` no contador tirou u
 entra quando o mesher chegar.
 
 ---
+
+# O que a linguagem ganhou, e o que cada coisa custou
+
+Três features, todas nascidas de o porte esbarrar, todas seguindo um precedente
+que já estava no código.
+
+## `Tipo.metodo()` — um estático alcançável pela sua grafia
+
+Era o item 3 deste documento. O modelo estava completo (`is_smethod` no AST,
+`nrecv` na checagem, e chamar pela instância FUNCIONAVA), e faltava só resolver o
+nome do tipo no sítio da chamada.
+
+A baixada não precisou de **nada**: ela já decide o receptor pelo parâmetro
+chamado `self` (`recv`, em `ps_lower`), então um método sem receptor já emitia
+`Mat4_identity(&__ctx, ...)` sem tocar no lado esquerdo. A sema ganhou um
+`type_smethod` ao lado do `try_mod_qual`, de quem é irmão — a mesma pergunta
+("este nome é um módulo?" / "este nome é um tipo?") no mesmo sítio.
+
+Um valor de mesmo nome ganha do tipo, porque uma variável sombreia um tipo em
+toda a parte.
+
+## `static` deixou de ser obrigatório
+
+`f->is_smethod` vinha da PALAVRA, e o resto do compilador já discordava disso: o
+comentário do `ps_ast.ph` diz "a def inside a struct with no receiver", e a
+baixada decide pelo parâmetro. Três lugares, duas definições.
+
+O sintoma da discordância era uma aridade NEGATIVA — o item 4:
+`'M.identity' takes -1 argument(s), 0 given`. Agora a ausência do receptor
+decide, `static` é a mesma coisa dita em voz alta, e o item 4 morreu com isso.
+
+A rede de segurança continua: um método que esqueceu o `self` numa implementação
+de trait é apanhado pela conformidade, com a mensagem certa
+(`'Quadrado.area' takes 0 parameter(s); the trait declares 1`).
+
+## `Tipo.CONSTANTE` — uma constante do tipo, copiável
+
+```python
+record Vec3:
+    x: float
+    y: float
+    z: float
+
+    const UP   = Vec3(0.0, 1.0, 0.0)
+    const ZERO = Vec3(0.0, 0.0, 0.0)
+```
+
+Zero palavra nova: `const` distingue isto de um campo (`x: float`) exactamente
+como `static` distinguia um método. E zero maquinaria nova para declarar ou
+emitir — o que sai do parser é um `const` de MÓDULO com o nome manjado
+`Tipo_NOME`, a mesma convenção com que um método já vira `Tipo_metodo`. Só a
+LEITURA é nova, e é o irmão do `try_mod_qual` outra vez.
+
+**Não custa memória no tipo**, medido: o `struct` em C continua a carregar só os
+campos declarados, e a constante sai como `static Vec3 Vec3_UP = {0.0, 1.0, 0.0}`
+— uma cópia no programa. E é copiável de verdade: `v = Vec3.UP` seguido de
+`v.y = 42.0` muda a cópia e não o original, que é o que um tipo de valor promete.
+
+Escrever nela é recusado, e a recusa teve de ficar no topo da atribuição: a
+reescrita apaga o ponto, e o teste de const que já existia só conhece locais —
+sem isso `Vec3.UP = ...` passava e MUDAVA a constante.
+
+No JavaScript essas constantes eram FUNÇÕES (`Vec3.UP()`, `Mat4.IDENTITY()`), e
+eram funções por necessidade: devolver um objeto compartilhado e mutável seria
+bug de aliasing. Aqui o valor não pode ser aliasado, então volta a ser o que
+sempre quis ser.
+
+## `nocheck:` — o bloco que não confere
+
+Pedido para o laço quente, depois de a medida mostrar que a aritmética checada
+custa **+16%** num laço que quase só multiplica (1278 ms contra 1100 ms em 200
+milhões de operações).
+
+É **açúcar sobre a 54.1**: dentro do bloco, `+ - *` sobre int passam a ser
+`%+ %- %*`, que já existem e já dão a volta. Medido:
+
+| | 200M multiplicações |
+|---|---|
+| checado | 1128 ms |
+| `nocheck:` | **753 ms** (1,50×) |
+| `%*` escrito à mão | 764 ms |
+
+Ou seja o bloco entrega exactamente o que os operadores entregam, e existe para
+poupar o `%` em cada operador num laço de índices de voxel — onde o estouro é
+impossível por construção, porque o índice é mascarado.
+
+**O que ele NÃO é: a operação signed crua.** O dono pediu "UB mesmo"; a medida
+diz que UB não compra nada. As duas formas geram as MESMAS instruções:
+
+```
+raw:   movq %rdi,%rax ; imulq %rsi,%rax ; ret
+wrap:  movq %rdi,%rax ; imulq %rsi,%rax ; ret
+```
+
+O que o UB compra é o compilador reescrever a guarda ao lado. Três linhas de C:
+
+```c
+int guarda(int a) { return a * 2 < 0; }
+```
+```
+guarda:  movl %edi,%eax ; shrl $31,%eax ; ret      /* virou "o bit de sinal de a" */
+```
+
+O gcc assumiu que `a*2` não estoura e trocou a pergunta. É o mecanismo do achado
+0, em três linhas — e é a razão pela qual o comentário da 54.1 já dizia que a
+forma que dá a volta tem de passar por unsigned.
+
+Com `-g` (a metade de depuração dos dois modos da 100.1) o bloco **mantém** as
+checagens, sem bandeira nova: um bloco que promete não levantar é exactamente o
+que se quer ver levantar num teste.
+
+Portão: `tests/nocheck.sh`, que compila o mesmo ficheiro nos dois modos.
+
+## E um conserto de uma linha: o `repr` contava o renomeamento
+
+```
+simple__Ponto(x=1.0, y=2.0)      # um record que veio de um módulo importado
+```
+
+O descritor do tipo levava `d->name`, o nome já renomeado. O campo para isto
+existia: `src_name`, que o próprio AST documenta como "the name AS WRITTEN,
+before the module rename (41.3) — what a diagnostic has to say back". É a mesma
+razão pela qual o `ps_disp` existe.
+
+Agora diz `Ponto(x=1.0, y=2.0)`.
 
 # O que o porte ganhou de graça, e vale registrar
 

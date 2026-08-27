@@ -485,6 +485,8 @@ struct PsSema:
     private def desugar_sequence(self: *PsSema, d: *PsDecl)
     private def bind_call_args(self: *PsSema, e: *PsExpr, params: *PsParam, nparams: i32, what: const *char)
     private def try_mod_qual(self: *PsSema, e: *PsExpr) -> bool
+    private def try_type_const(self: *PsSema, e: *PsExpr) -> bool
+    private def type_const_name(self: *PsSema, e: *PsExpr) -> const *char
     private def builtin_call(self: *PsSema, e: *PsExpr, name: const *char) -> *PsType
     private def io_window(self: *PsSema, e: *PsExpr, what: const *char)
     private def watch_event_type(self: *PsSema, pos: Pos) -> *PsType
@@ -1619,6 +1621,8 @@ struct PsSema:
             case PE_FIELD:
                 if self->try_mod_qual(e):
                     return self->check_expr(e)
+                if self->try_type_const(e):
+                    return self->check_expr(e)
                 t = self->field_type(self->check_expr(e->lhs), e->text, e->pos)
             case _:
                 fatal_at(self->file, e->pos, "%s is parsed but not compiled yet", ps_expr_what(e->kind))
@@ -1795,6 +1799,71 @@ struct PsSema:
         # `vec3.f(...)` is a QUALIFIED call, never a method call
         if self->try_mod_qual(e->lhs):
             pass
+        # `Mat4.identity()` — um método ESTÁTICO alcançado pelo seu TIPO, que é a
+        # grafia que um estático tem em toda a linguagem que tem um.
+        #
+        # É o irmão do `try_mod_qual` acima, e por isso vive ao lado dele: a
+        # posição do receptor guarda um NOME, e a pergunta é se esse nome é um
+        # tipo nosso em vez de um valor. O precedente é o `enum`, que já resolve
+        # `Cor.VERMELHO` pelo nome do tipo.
+        #
+        # Tem de vir ANTES do `check_expr(e->lhs->lhs)` de baixo, que é quem
+        # dizia "unknown name 'Mat4'" — um tipo não é um valor e não resolve como
+        # um. Sem isto, um estático só era alcançável através de uma INSTÂNCIA
+        # (`z.identity()`, com o `self` ignorado), que é o contrário do que um
+        # construtor é, e a saída era escrever função livre com prefixo à mão:
+        # `mat4_identity()`, `mat4_mul()`, `vec3_lerp()`. Um módulo de álgebra
+        # inteiro carregando o prefixo porque a grafia não existia.
+        #
+        # A BAIXADA NÃO PRECISOU DE NADA. Ela já decide o receptor pelo parâmetro
+        # chamado `self` (`recv`, em `ps_lower`), então um método sem receptor já
+        # emitia `Mat4_identity(&__ctx, ...)` sem tocar no lado esquerdo. O que
+        # faltava era só resolver o nome, aqui.
+        if e->lhs != None and e->lhs->kind == PE_FIELD and e->lhs->lhs != None:
+            # `m.Mat4.identity()` é uma CADEIA de dois campos, e o tipo está no
+            # meio. A qualificação de módulo é resolvida primeiro — em posição,
+            # como o `try_mod_qual` faz —, e aí o meio é um nome outra vez.
+            if self->try_mod_qual(e->lhs->lhs):
+                pass
+        if e->lhs != None and e->lhs->kind == PE_FIELD and e->lhs->lhs != None and e->lhs->lhs->kind == PE_NAME:
+            stn: const *char = e->lhs->lhs->text
+            # um VALOR de mesmo nome GANHA. Quem lê espera que uma variável
+            # sombreie um tipo, como sombreia em toda a parte, e um programa que
+            # já tinha `Mat4` como nome de variável não pode mudar de sentido
+            # porque este caminho passou a existir.
+            shadowed: bool = (self->find_local(stn) >= 0
+                              or self->globals.has(self->gname_soft(stn)))
+            # o `records` é indexado pelo nome QUALIFICADO (é o que o `hasfield`
+            # da 65.11 já faz: `gname` e então `get_or`). Dentro do módulo que
+            # está sendo compilado o texto já vem renomeado, então as duas
+            # grafias são tentadas — a crua primeiro, que é o caso do programa
+            # de topo.
+            stq: const *char = stn
+            if not self->records.has(stq):
+                stq = self->gname_soft(stn)
+            if not shadowed and self->records.has(stq):
+                srd: *PsDecl = self->records.get_or(stq, None)
+                sm: *PsFunc = self->find_method(srd, e->lhs->text)
+                if sm == None:
+                    fatal_at(self->file, e->pos, "'%s' has no method '%s' — and reached through the TYPE, only a method without a receiver can be called", ps_disp(stn), e->lhs->text)
+                if not sm->is_smethod:
+                    fatal_at(self->file, e->pos, "'%s.%s' takes a receiver, so it is called on a VALUE: write `x.%s(...)`. A method reached through its type is one that declares no `self`", ps_disp(stn), sm->name, sm->name)
+                if sm->nparams > 0:
+                    self->bind_call_args(e, &sm->params[0], sm->nparams, self->a->printf("'%s.%s'", ps_disp(stn), sm->name))
+                if e->nargs != sm->nparams:
+                    fatal_at(self->file, e->pos, "'%s.%s' takes %d argument(s), %d given", ps_disp(stn), sm->name, sm->nparams, e->nargs)
+                for si in range(e->nargs):
+                    self->check_want(e->args[si], sm->params[si].type, self->a->printf("parameter '%s'", sm->params[si].name))
+                # a baixada lê o NOME do tipo daqui para montar `Owner_metodo`
+                e->lhs->type = self->named_type(stq, e->lhs->pos)
+                smret: *PsType = sm->ret if sm->ret != None else ps_type(self->a, PT_VOID, e->pos)
+                if sm->is_async:
+                    # 35.3: chamar COMEÇA e devolve a tarefa, como em toda a
+                    # parte — um estático não é outra espécie de função
+                    stk: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                    stk->inner = smret
+                    return stk
+                return smret
         # `v.dot(w)` — a method on a record (57.1). The receiver goes in as the
         # first argument, by reference, because `in self` reads without copying.
         if e->lhs != None and e->lhs->kind == PE_FIELD:
@@ -5294,6 +5363,55 @@ struct PsSema:
             .lhs = None
         return True
 
+    # `Vec3.UP` — uma CONSTANTE DO TIPO, e o par de `Vec3.up()`, que é método.
+    #
+    # Irmã do `try_mod_qual` acima e escrita como ela: reescreve o nó no NOME
+    # que o parser manjou (`Vec3_UP`, a mesma convenção com que um método vira
+    # `Vec3_add`), e daí para baixo nada no compilador sabe que houve um ponto.
+    # Nada a declarar, nada a emitir, nada a baixar — o que se lê é um `const`
+    # de módulo, que é o que ele é. E não custa memória no agregado: medido, sai
+    # `static Vec3 UP = {0.0, 1.0, 0.0}` — uma cópia no programa, e o `record`
+    # continua a carregar só os campos declarados.
+    #
+    # Um VALOR de mesmo nome ganha do tipo, como no caminho do método estático.
+    private def try_type_const(self: *PsSema, e: *PsExpr) -> bool:
+        cn9: const *char = self->type_const_name(e)
+        if cn9 == None:
+            return False
+        with e:
+            .kind = PE_NAME
+            .text = cn9
+            .lhs = None
+        return True
+
+    # A PERGUNTA, sem a reescrita: quem vai ATRIBUIR precisa de saber que aquilo
+    # é uma constante de tipo para poder RECUSAR, e depois da reescrita o nó já
+    # não diz que houve um ponto — e o caminho de recusa de baixo só conhece
+    # locais, então deixava passar `Vec3.UP = ...` em silêncio.
+    private def type_const_name(self: *PsSema, e: *PsExpr) -> const *char:
+        if e == None or e->kind != PE_FIELD or e->lhs == None:
+            return None
+        # `m.Vec3.UP` é uma cadeia de dois campos: a qualificação de módulo
+        # resolve primeiro, em posição, e o meio volta a ser um nome
+        if self->try_mod_qual(e->lhs):
+            pass
+        if e->lhs->kind != PE_NAME:
+            return None
+        tn: const *char = e->lhs->text
+        if self->find_local(tn) >= 0:
+            return None
+        tq: const *char = tn
+        if not self->records.has(tq):
+            tq = self->gname_soft(tn)
+        if not self->records.has(tq):
+            return None
+        cn: const *char = self->a->printf("%s_%s", tq, e->text)
+        if not self->globals.has(cn):
+            cn = self->gname_soft(cn)
+            if not self->globals.has(cn):
+                return None
+        return cn
+
     # ---------- C headers (45.5) ----------
     # `include <math.h>` makes the header's declarations available — but ONLY
     # the ones whose signature has no pointer in it. That is the whole boundary
@@ -6734,6 +6852,13 @@ struct PsSema:
                     n->type = ut->params[i]
                 s->lhs->type = ut
             case PS_ASSIGN:
+                # `Vec3.UP = ...` — uma constante de TIPO é const, e a recusa
+                # vem aqui, antes de tudo: a reescrita de `type_const_name` apaga
+                # o ponto, e o teste de const que existe mais abaixo só conhece
+                # locais. Sem isto a atribuição passava e MUDAVA a constante.
+                tcn9: const *char = self->type_const_name(s->lhs)
+                if tcn9 != None:
+                    fatal_at(self->file, s->pos, "'%s.%s' is const: it is a constant of its type (assign to a copy instead — `v = %s.%s`)", ps_disp(s->lhs->lhs->text), s->lhs->text, ps_disp(s->lhs->lhs->text), s->lhs->text)
                 # 61.3: writing THROUGH a const — `xs[0] = v`, `d[k] = v`,
                 # `obj.field = v` — is a mutation, and a const forbids those too
                 if s->lhs->kind in {PE_INDEX, PE_FIELD, PE_OPTFIELD, PE_OPTINDEX}:
@@ -7208,6 +7333,12 @@ struct PsSema:
             case PS_BREAK, PS_CONTINUE:
                 if self->loop_depth == 0:
                     fatal_at(self->file, s->pos, "'%s' outside a loop", "break" if s->kind == PS_BREAK else "continue")
+            case PS_NOCHECK:
+                # o bloco não muda tipo nenhum e não pode falhar: o corpo é
+                # checado como qualquer outro, e quem decide o que emitir é a
+                # baixada. Não há `await` a recusar aqui (ao contrário do
+                # `nogc:`): suspender no meio não afeta a aritmética.
+                self->check_block(s->body)
             case PS_NOGC:
                 # 26: the collector stops for the block. The budget is optional
                 # and a CONSTANT — a promise the block makes before it starts,
@@ -7640,6 +7771,8 @@ private def ps_stmt_what(k: PsStmtKind) -> const *char:
             return "'unsafe'"
         case PS_NOGC:
             return "'nogc'"
+        case PS_NOCHECK:
+            return "'nocheck'"
         case _:
             return "this statement"
 

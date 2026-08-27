@@ -257,6 +257,7 @@ enum PsStmtKind:
     PS_NONLOCAL
     PS_UNSAFE     # unsafe: block (11-12)
     PS_NOGC       # nogc: block (26)
+    PS_NOCHECK    # nocheck: block — aritmetica que da a volta em vez de checar
 
 struct PsBlock:
     stmts: **PsStmt

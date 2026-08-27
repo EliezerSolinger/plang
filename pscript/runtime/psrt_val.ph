@@ -303,6 +303,7 @@ def ps_umod(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64
 def ps_upow(ctx: *PsCtx, a: u64, b: u64, file: const *char, line: i32) -> u64
 # the crossings between the two 64-bit worlds, checked
 def ps_u_to_i(ctx: *PsCtx, v: u64, file: const *char, line: i32) -> i64
+def ps_f_to_i(ctx: *PsCtx, x: f64, file: const *char, line: i32) -> i64
 def ps_i_to_u64(ctx: *PsCtx, v: i64, file: const *char, line: i32) -> u64
 def ps_f_to_u64(ctx: *PsCtx, v: f64, file: const *char, line: i32) -> u64
 # `%+ %- %*` on a narrow width: mask to the width, sign-extend if signed —

@@ -118,7 +118,7 @@ struct PsP:
     private def parse_func_head(self: *PsP, no_recv: bool, is_async: bool, owner: const *char) -> *PsFunc
     private def parse_trait(self: *PsP) -> *PsDecl
     private def parse_impl(self: *PsP) -> *PsDecl
-    private def parse_aggregate(self: *PsP, is_record: bool) -> *PsDecl
+    private def parse_aggregate(self: *PsP, is_record: bool, ref tconsts: Vec<*PsDecl>) -> *PsDecl
     private def parse_decorators(self: *PsP, ref into: Vec<*PsExpr>)
     private def parse_enum(self: *PsP) -> *PsDecl
     private def parse_import(self: *PsP) -> *PsDecl
@@ -1238,6 +1238,15 @@ struct PsP:
                 u: *PsStmt = ps_stmt(self->a, PS_UNSAFE, pos4)
                 u->body = self->parse_block()
                 return u
+            case TK_NOCHECK:
+                # `nocheck:` — dentro deste bloco `+ - *` sobre int NAO checam
+                # estouro. Nao tem orcamento como o `nogc(64k):` porque nao ha
+                # nada que possa falhar: a promessa e' precisamente a de nao
+                # levantar.
+                posn: Pos = self->adv()->pos
+                nc: *PsStmt = ps_stmt(self->a, PS_NOCHECK, posn)
+                nc->body = self->parse_block()
+                return nc
             case TK_NOGC:
                 pos5: Pos = self->adv()->pos
                 g: *PsStmt = ps_stmt(self->a, PS_NOGC, pos5)
@@ -1618,6 +1627,24 @@ struct PsP:
         self->expect(TK_RPAREN, "parameter list")
         f->params = ps.data
         f->nparams = ps.len
+        # O QUE FAZ DE UM MÉTODO UM ESTÁTICO É NÃO TER RECEPTOR, e não a palavra.
+        #
+        # `is_smethod` vinha só do `static`, e o resto do compilador já discordava
+        # disso: o comentário no `ps_ast.ph` diz "a def inside a struct with no
+        # receiver", e a BAIXADA decide pelo parâmetro — `recv` em `ps_lower` é
+        # `owner != None and nparams > 0 and params[0].name == "self"`, tanto na
+        # forma síncrona como na `async`. Três lugares, duas definições.
+        #
+        # O sintoma da discordância era uma aridade NEGATIVA: um `def` sem `self`
+        # e sem `static` chegava à checagem da chamada como método com receptor,
+        # e `nparams - 1` com `nparams` zero dava
+        # "'M.identity' takes -1 argument(s), 0 given". A declaração tem a
+        # mensagem certa para esse caso, mas a chamada é checada primeiro.
+        #
+        # Aqui a ausência do receptor DECIDE, e `static` fica sendo o que sempre
+        # descreveu: a mesma coisa, dita em voz alta.
+        if owner != None:
+            f->is_smethod = f->nparams == 0 or strcmp(f->params[0].name, "self") != 0
         if self->accept(TK_ARROW):
             f->ret = self->parse_type()
         return f
@@ -1725,7 +1752,7 @@ struct PsP:
     # `record R:` (value, pure bytes — 52.1/56/58.2) and `struct S:` (collected
     # reference — 20.1) share a body grammar and differ in everything else, so
     # they share a parser and are told apart by one flag.
-    private def parse_aggregate(self: *PsP, is_record: bool) -> *PsDecl:
+    private def parse_aggregate(self: *PsP, is_record: bool, ref tconsts: Vec<*PsDecl>) -> *PsDecl:
         pos: Pos = self->adv()->pos
         d: *PsDecl = ps_decl(self->a, PD_RECORD if is_record else PD_STRUCT, pos)
         d->name = self->expect(TK_IDENT, "record/struct name")->text
@@ -1774,6 +1801,33 @@ struct PsP:
                 fatal_at(self->file, self->pk()->pos, "a decorator has to be followed by a def")
             if st or masync:
                 fatal_at(self->file, self->pk()->pos, "'%s' here introduces a method", "static" if st else "async")
+            # `const UP = Vec3(0.0, 1.0, 0.0)` — uma CONSTANTE DO TIPO, lida
+            # como `Vec3.UP`.
+            #
+            # Zero palavra nova: `const` já distingue isto de um campo
+            # (`x: float`) exactamente como `static` distinguia um método. E zero
+            # maquinaria nova para declarar ou emitir, porque o que sai daqui é
+            # um `const` de MÓDULO com o nome manjado `Tipo_NOME` — a mesma
+            # convenção com que um método já vira `Tipo_metodo`. Só a LEITURA é
+            # nova, e mora na sema.
+            #
+            # Não custa memória no agregado: o `record` carrega os campos
+            # declarados e mais nada, e a constante é um dado do programa —
+            # medido, `static Vec3 UP = {0.0, 1.0, 0.0}`, uma cópia, 24 bytes.
+            if self->at(TK_CONST):
+                kpos: Pos = self->adv()->pos
+                kd: *PsDecl = ps_decl(self->a, PD_VAR, kpos)
+                kd->is_const = True
+                kname: const *char = self->expect(TK_IDENT, "const name")->text
+                kd->name = self->a->printf("%s_%s", d->name, kname)
+                kd->src_name = kname
+                if self->accept(TK_COLON):
+                    kd->type = self->parse_type()
+                self->expect(TK_ASSIGN, "const")
+                kd->init = self->parse_expr()
+                self->expect(TK_NEWLINE, "const")
+                tconsts.push(kd)
+                continue
             fp: Pos = self->pk()->pos
             fl: PsField = {0}
             fl.pos = fp
@@ -2150,10 +2204,15 @@ def ps_parse(a: *Arena, file: const *char, tl: TokenList) -> *PsModule:
                 decls.push(p.parse_import())
             case TK_FROM:
                 decls.push(p.parse_from())
-            case TK_RECORD:
-                decls.push(p.parse_aggregate(True))
-            case TK_STRUCT:
-                decls.push(p.parse_aggregate(False))
+            case TK_RECORD, TK_STRUCT:
+                # o AGREGADO primeiro e as suas constantes depois: o
+                # inicializador de `const UP = Vec3(...)` nomeia o tipo, e um
+                # leitor desta lista tem de encontrar o tipo antes do valor
+                tcs: Vec<*PsDecl>
+                tcs.init()
+                decls.push(p.parse_aggregate(p.pk()->kind == TK_RECORD, ref tcs))
+                for ti in range(tcs.len):
+                    decls.push(tcs.data[ti])
             case TK_ENUM:
                 decls.push(p.parse_enum())
             case TK_DEF:

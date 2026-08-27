@@ -272,6 +272,9 @@ struct PsLow:
     fr_file: const *char
     lazy_depth: i32     # inside a ternary arm or a short-circuit right side,
                         #   where hoisting a comprehension would change WHEN it runs
+    nocheck: i32        # profundidade de `nocheck:` — dentro dele `+ - *` de int
+                        #   viram as formas que DAO A VOLTA (54.1). Contador e nao
+                        #   bandeira, para aninhar como o `nogc:` aninha.
     in_main: bool       # lowering the implicit entry point (its exit differs)
 
     private def ty(self: *PsLow, t: *PsType) -> *Type
@@ -2506,6 +2509,23 @@ struct PsLow:
         lk: PsTypeKind = e->lhs->type->kind if e->lhs->type != None else PT_UNKNOWN
         rk: PsTypeKind = e->rhs->type->kind if e->rhs->type != None else PT_UNKNOWN
         both_int: bool = lk == PT_INT and rk == PT_INT
+        # `nocheck:` é AÇÚCAR sobre 54.1, e é por isso que a tradução é uma
+        # troca de operador e não um segundo caminho: `+ - *` de inteiro passam
+        # a ser `%+ %- %*`, que já existem, já dão a volta e já são DEFINIDOS
+        # (passam por unsigned). O que não se faz aqui é emitir a operação
+        # signed crua: essa é a única que o alvo tem licença para assumir que
+        # nunca estoura, e foi assim que o `ps_mul` perdeu a checagem dele.
+        #
+        # `-g` / `--debug` MANTÉM as checagens: é a metade de depuração dos dois
+        # modos da 100.1, e um bloco que promete não levantar é exactamente o
+        # que se quer ver levantar num teste.
+        if self->nocheck > 0 and both_int and not PS_FULL_TRACE:
+            if e->op == TK_PLUS:
+                e->op = TK_WRAP_PLUS
+            elif e->op == TK_MINUS:
+                e->op = TK_WRAP_MINUS
+            elif e->op == TK_STAR:
+                e->op = TK_WRAP_STAR
         is_str: bool = lk == PT_STR and rk == PT_STR
         is_bytes: bool = lk == PT_BYTES and rk == PT_BYTES
         # 22.2: `==` compara CONTEÚDO, e uma lista não é excepção. Não estava
@@ -3906,10 +3926,22 @@ struct PsLow:
             self->push_arg(ac3, self->expr(e->args[0]))
             return ac3
         if strcmp(name, "round") == 0:
-            rc3: *Expr = self->call_rt("ps_round_n" if e->nargs == 2 else "ps_round", e->pos)
-            self->push_arg(rc3, self->as_f64(e->args[0]))
             if e->nargs == 2:
-                self->push_arg(rc3, self->expr(e->args[1]))
+                # com casas decimais o Python devolve FLOAT e nada se converte
+                rn3: *Expr = self->call_rt("ps_round_n", e->pos)
+                self->push_arg(rn3, self->as_f64(e->args[0]))
+                self->push_arg(rn3, self->expr(e->args[1]))
+                return rn3
+            # com uma casa devolve INT, então é `rint` da libm (meio-para-o-par,
+            # a regra do Python) atravessando a conversão CHECADA — a mesma que
+            # `math.floor` usa, e pela mesma razão: `round(nan)` dava INT64_MIN
+            ri3: *Expr = self->call_rt("rint", e->pos)
+            self->push_arg(ri3, self->as_f64(e->args[0]))
+            rc3: *Expr = self->call_rt("ps_f_to_i", e->pos)
+            self->push_arg(rc3, self->ctx_arg(e->pos))
+            self->push_arg(rc3, ri3)
+            self->pos_args(rc3, e->pos)
+            self->raised = True
             return rc3
         if (strcmp(name, "min") == 0 or strcmp(name, "max") == 0) and e->nargs == 1:
             lk3: *PsType = e->args[0]->type
@@ -4192,10 +4224,15 @@ struct PsLow:
             for i in range(e->nargs):
                 self->push_arg(mc, self->as_f64(e->args[i]))
             if strcmp(mf, "floor") == 0 or strcmp(mf, "ceil") == 0 or strcmp(mf, "trunc") == 0:
-                # o Python devolve int nesses três, e um índice é o uso normal
-                ic9: *Expr = ex_new(self->a, EX_CAST, e->pos)
-                ic9->cast_type = ty_name(self->a, "i64")
-                ic9->lhs = mc
+                # o Python devolve int nesses três, e um índice é o uso normal —
+                # que é exactamente por que a conversão tem de ser a checada:
+                # `math.floor(nan)` dava INT64_MIN, e INT64_MIN como índice não
+                # é um erro de índice, é uma leitura em qualquer sítio
+                ic9: *Expr = self->call_rt("ps_f_to_i", e->pos)
+                self->push_arg(ic9, self->ctx_arg(e->pos))
+                self->push_arg(ic9, mc)
+                self->pos_args(ic9, e->pos)
+                self->raised = True
                 return ic9
             return mc
         if strncmp(name, "__time_", 7) == 0:
@@ -4927,7 +4964,8 @@ struct PsLow:
         if strcmp(name, "int") == 0:
             if sk == PT_INT:
                 if src->type->uns and src->type->width == 64:
-                    # the one crossing that can fail: above i64's ceiling raises
+                    # above i64's ceiling raises (and the float crossing below
+                    #   raises too -- this stopped being the only one)
                     gu: *Expr = self->call_rt("ps_u_to_i", e->pos)
                     self->push_arg(gu, self->ctx_arg(e->pos))
                     self->push_arg(gu, self->expr(src))
@@ -4946,7 +4984,18 @@ struct PsLow:
                 self->push_arg(c, self->expr(src))
                 self->raised = True
                 return c
-            if sk == PT_FLOAT or sk == PT_BOOL:
+            if sk == PT_FLOAT:
+                # a OUTRA travessia que pode falhar: `(int64_t)x` de um NaN, de
+                # um infinito ou de um finito fora da faixa e' UB em C, e o
+                # compilador exerce o direito -- `int(1e300)` dava INT64_MIN a
+                # -O0 e INT64_MAX a -O2, no mesmo binario gerado da mesma fonte
+                fi9: *Expr = self->call_rt("ps_f_to_i", e->pos)
+                self->push_arg(fi9, self->ctx_arg(e->pos))
+                self->push_arg(fi9, self->expr(src))
+                self->pos_args(fi9, e->pos)
+                self->raised = True
+                return fi9
+            if sk == PT_BOOL:
                 cast: *Expr = ex_new(self->a, EX_CAST, e->pos)
                 cast->cast_type = ty_name(self->a, "i64")
                 cast->lhs = self->expr(src)
@@ -7300,6 +7349,19 @@ struct PsLow:
                 dfp: *Stmt = st_new(self->a, ST_DEFER, s->pos)
                 dfp->body = self->block(s->body)
                 out->push(dfp)
+            case PS_NOCHECK:
+                # nada a emitir em volta: o bloco só muda o que a aritmética lá
+                # dentro baixa. Um `ST_BLOCK` mesmo assim, para que o escopo do
+                # que foi escrito dentro seja o que foi escrito dentro (64.1).
+                self->nocheck += 1
+                nk: Vec<*Stmt>
+                nk.init()
+                for i in range(s->body->n):
+                    self->stmt(s->body->stmts[i], &nk)
+                self->nocheck -= 1
+                nblk: *Stmt = st_new(self->a, ST_BLOCK, s->pos)
+                nblk->body = self->mk_block(&nk)
+                out->push(nblk)
             case PS_NOGC:
                 # 26: the collector stops here and comes back on the way out —
                 # whichever way out. That is `defer` (26.5.2), so unwinding is
@@ -10835,7 +10897,13 @@ private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_camp
     init: *Expr = ex_new(L->a, EX_INITLIST, d->pos)
     init->args = L->a->alloc(usize(6) * sizeof(*init->args))
     nm: *Expr = ex_new(L->a, EX_STRING, d->pos)
-    nm->text = L->a->printf("\"%s\"", d->name)
+    # o nome COMO FOI ESCRITO, e não o renomeado (41.3). O `repr` derivado
+    # imprimia `simple__Ponto(x=1.0, y=2.0)` para um record que veio de um
+    # módulo importado — contando ao leitor um renomeamento que ele não pediu,
+    # que é precisamente o que o `ps_disp` existe para não fazer nas mensagens.
+    # O campo para isto já existia: `src_name`, "what a diagnostic has to say
+    # back".
+    nm->text = L->a->printf("\"%s\"", d->src_name if d->src_name != None else d->name)
     init->args[0] = nm
     if has_trace:
         r: *Expr = ex_new(L->a, EX_IDENT, d->pos)

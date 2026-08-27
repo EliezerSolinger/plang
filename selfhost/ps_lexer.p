@@ -31,7 +31,7 @@ private const PS_KEYWORDS: Keyword[] = {
     {"try", TK_TRY}, {"catch", TK_CATCH}, {"finally", TK_FINALLY},
     {"global", TK_GLOBAL}, {"nonlocal", TK_NONLOCAL}, {"lambda", TK_LAMBDA},
     {"pass", TK_PASS}, {"assert", TK_ASSERT}, {"unsafe", TK_UNSAFE},
-    {"nogc", TK_NOGC}, {"from", TK_FROM}, {"as", TK_AS},
+    {"nogc", TK_NOGC}, {"nocheck", TK_NOCHECK}, {"from", TK_FROM}, {"as", TK_AS},
     {"implements", TK_IMPLEMENTS}, {"is", TK_IS},
     {None, TK_EOF}}
 

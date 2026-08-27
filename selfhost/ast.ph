@@ -120,6 +120,7 @@ enum TokKind:
     TK_ASSERT
     TK_UNSAFE
     TK_NOGC
+    TK_NOCHECK
     TK_FROM
     TK_AS
     TK_IMPLEMENTS
