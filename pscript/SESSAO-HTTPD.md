@@ -29,11 +29,16 @@ runtime (D11) e as doze da biblioteca:
 | **F8b** | cookies com os atributos seguros por omissão, e sessão assinada |
 | **F8c** | multipart e `Expect: 100-continue` |
 | **F8d** | proxies declarados e rate limit |
-| **F9** | compressão — e o `deflate` do repositório passou a comprimer de verdade |
+| **F9** | compressão: gzip no HTTP, **permessage-deflate** no ws — e o `deflate` do repositório passou a comprimir de verdade |
 | **F10** | o cliente HTTP e WebSocket, sobre o mesmo parser |
 | **F12** | o banco de ensaio, publicado com o que ele não mede |
 
-Falta a **F11** (h2 atrás de ALPN), que o desenho já punha por último.
+Falta a **F11** (h2 atrás de ALPN), que o desenho já punha por último — e o
+`packages/http/h2.psc` já lá está, conferido contra 47 mil vetores; o que falta é
+o ALPN e a cola.
+
+Em números: **19 commits, ~10 000 linhas**, quatro pacotes novos, sete portões
+novos, e 21 das 22 fases.
 
 ## Os pacotes novos
 
@@ -56,7 +61,7 @@ Nenhum deles se confere a si mesmo. O oráculo é sempre de fora:
 
 ## O que a linguagem ganhou, e o que ela devolveu
 
-Vinte e um achados, dos quais **catorze eram defeitos** — e cinco deles eram
+Vinte e seis achados, dos quais **catorze eram defeitos** — e cinco deles eram
 corrupção de memória ou UB, não um erro de mensagem:
 
 * um **`const` construído era `None` dentro de um worker**, o que quebrava
@@ -64,7 +69,8 @@ corrupção de memória ou UB, não um erro de mensagem:
   O sintoma era uma resposta em trinta a falhar;
 * uma **ligação aceite nascia com o `ssl` por inicializar** e falava TLS por
   acidente. Encontrado pelo banco de ensaio, ao comparar a nossa coluna de erros
-  com a do Bun;
+  com a do Bun — e a correcção não foi acrescentar o campo à lista, foi acabar
+  com a lista: o `accept` passou a usar o construtor que já existia;
 * **EAGAIN num socket era lido como "a ligação partiu-se"**;
 * a **mensagem vazia de um tipo que é referência** dava um ponteiro nulo, e o
   primeiro uso dele era um SIGSEGV numa thread sem pilha para ler;
@@ -79,8 +85,8 @@ corrupção de memória ou UB, não um erro de mensagem:
   escrita dentro de uma lista e não tinha no topo.
 
 E o que faltava e passou a existir: `bytes + bytes`, `remove()` num `shared
-dict`, o endereço de quem ligou, um DEFLATE que comprime, e as quatro funções dos
-tópicos.
+dict`, o endereço de quem ligou, um DEFLATE que comprime (mais um com *sync
+flush*, para um fluxo de conversa), e as quatro funções dos tópicos.
 
 ## O que fica aberto
 

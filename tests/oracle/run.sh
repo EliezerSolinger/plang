@@ -41,12 +41,40 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # difference nobody meant to test.
 export NO_COLOR=1 FORCE_COLOR=0
 
+# 148: A VERSÃO DO UNICODE dos dois lados.
+#
+# Os casos `unicat` e `unicase` perguntam a mesma coisa a duas bases de dados: a
+# nossa, gerada e comitada (o cabeçalho de `unicat.bin` diz qual), e a do python3
+# desta máquina. Quando as versões diferem, um desacordo não diz nada sobre o
+# nosso código — diz que uma delas conhece caracteres que a outra não tem. O
+# Unicode 15.1 acrescentou a extensão I do CJK, e é exactamente aí que eles
+# divergem numa máquina com Python 3.13.
+#
+# Portanto: SALTA, com as duas versões nomeadas. Um salto silencioso seria pior do
+# que a falha; uma falha por causa da versão seria ruído que ninguém consegue
+# corrigir sem decidir primeiro qual Unicode a linguagem segue.
+unicode_nosso() {
+    head -c 10 pscript/runtime/unicat.bin 2>/dev/null | tr -d '\0' | sed 's/^PSCA//'
+}
+unicode_deles() {
+    python3 -c 'import unicodedata; print(unicodedata.unidata_version)' 2>/dev/null
+}
+
 run_side() { # run_side <dir> <ext> <cmd...>
     local dir=$1 ext=$2; shift 2
     local pass=0 fail=0 src name ref
+    local nosso deles
+    nosso=$(unicode_nosso); deles=$(unicode_deles)
     for src in tests/oracle/$dir/*.psc; do
         [ -f "$src" ] || continue
         name=$(basename "$src" .psc)
+        case $name in
+            unicat|unicase)
+                if [ -n "$nosso" ] && [ -n "$deles" ] && [ "$nosso" != "$deles" ]; then
+                    echo "  SKIP $name — a nossa tabela é Unicode $nosso e o python3 é $deles: são duas bases diferentes, e o desacordo seria sobre os caracteres que uma tem e a outra não"
+                    continue
+                fi ;;
+        esac
         ref="tests/oracle/$dir/$name.$ext"
         [ -f "$ref" ] || { echo "  FAIL $name: no $ext reference next to it"; fail=$((fail+1)); continue; }
         if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh "$src" "$OUT/$name" >"$OUT/$name.build" 2>&1; then
@@ -69,7 +97,18 @@ run_side() { # run_side <dir> <ext> <cmd...>
 for s in ${*:-py js}; do
     case $s in
         py) printf '\n\033[1m== python3 as the oracle for the language ==\033[0m\n'
-            have python3 && run_side py py python3 || echo "   -- no python3" ;;
+            # 148: `PYTHONSAFEPATH` — o directório do script NÃO entra no
+            # `sys.path`. Sem isto, um dos ficheiros deste corpus tapa um módulo
+            # da biblioteca padrão para todos os outros: há um `collections.psc`
+            # (e portanto um `collections.py`), e o `import subprocess` do
+            # `proc.py` acaba a importar ESSE — o que executa a saída dele no
+            # meio da do `proc` e depois falha no `namedtuple`.
+            #
+            # Só apareceu com o Python 3.13, porque foi nele que o `subprocess`
+            # passou a puxar o `functools` no arranque. O nome do ficheiro é
+            # certo (o teste é sobre `collections`), e é o caminho que estava
+            # errado.
+            have python3 && PYTHONSAFEPATH=1 run_side py py python3 || echo "   -- no python3" ;;
         js) printf '\n\033[1m== node as the oracle for the runtime model ==\033[0m\n'
             have node && run_side js mjs node || echo "   -- no node" ;;
         *) echo "unknown oracle '$s' (py|js)"; exit 2 ;;

@@ -1475,3 +1475,38 @@ bomba de descompressao a espera de um atacante que sabe disto — que e toda a g
 Oraculo: a `websockets` do Python, que oferece a extensao por omissao. O portao
 mede tambem o fio em cru, porque a biblioteca entrega a mensagem ja
 descomprimida e a parte que interessa nao se veria.
+
+
+## 53 — um teste do corpus de oraculos tapava a biblioteca padrao do Python  OK corrigido
+
+O `tests/oracle/py/proc.py` falhava a IMPORTAR, e o diff mostrava a saida de outro
+teste no meio da dele. A causa: o directorio do script entra no `sys.path` do
+Python, e ha la um `collections.py` — o par do `collections.psc`, que e um teste
+legitimo sobre dicionarios e conjuntos. O `import subprocess` do `proc.py`
+acabava a importar ESSE, o que executava a saida dele e depois falhava no
+`namedtuple`.
+
+So apareceu com o Python 3.13, porque foi nele que o `subprocess` passou a puxar
+o `functools` no arranque — e o `functools` importa o `collections`.
+
+O nome do ficheiro esta certo (o teste e sobre `collections`); o que estava errado
+era o caminho. `PYTHONSAFEPATH=1` no arreio, e o directorio do script deixa de
+entrar no `sys.path`.
+
+## 54 — o oraculo do Unicode comparava duas bases DIFERENTES  OK corrigido
+
+Os casos `unicat` e `unicase` perguntam a mesma coisa a duas bases de dados: a
+nossa, gerada e comitada (o cabecalho de `unicat.bin` diz **15.0.0**), e a do
+python3 da maquina (**15.1.0** no Python 3.13). Quando as versoes diferem, um
+desacordo nao diz nada sobre o nosso codigo — diz que uma delas conhece
+caracteres que a outra nao tem. O Unicode 15.1 acrescentou a extensao I do CJK, e
+e exactamente ai que eles divergiam.
+
+O arreio passa a SALTAR esses dois casos quando as versoes nao batem, **com as
+duas nomeadas**. Um salto silencioso seria pior do que a falha; e uma falha por
+causa da versao e ruido que ninguem consegue corrigir sem decidir primeiro qual
+Unicode a linguagem segue.
+
+**Essa decisao fica em aberto e e do dono**: subir a tabela para a 15.1 fa-la
+seguir o Python desta maquina e diverge da de outra; mante-la na 15.0 e uma versao
+escolhida, que e defensavel — mas entao o portao tem de dizer isso, e agora diz.
