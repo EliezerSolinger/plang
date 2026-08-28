@@ -1510,3 +1510,27 @@ Unicode a linguagem segue.
 **Essa decisao fica em aberto e e do dono**: subir a tabela para a 15.1 fa-la
 seguir o Python desta maquina e diverge da de outra; mante-la na 15.0 e uma versao
 escolhida, que e defensavel — mas entao o portao tem de dizer isso, e agora diz.
+
+
+## Nota final — as duas falhas que ficam no `verify-all`, e porque nao sao nossas
+
+O `verify-all` acaba a dizer FAILED, e as falhas sao duas, repetidas uma vez por
+cada back end (C, QBE, C89):
+
+**`p-suite 00189`** — o teste toma o endereco do `fprintf` e guarda-o num
+`int (*)(FILE *, char *, ...)`. O glibc declara os parametros do `fprintf` com
+`restrict`, e o gcc 14 passou a tratar `-Wincompatible-pointer-types` como ERRO em
+vez de aviso. E o compilador de C da maquina que mudou de opiniao, nao o nosso.
+
+**`pstudio-ps-perf`** — um teto de tempo: "one key: 22 ms, ceiling 16 ms". Ele
+mede a latencia de uma tecla num ficheiro de onze mil linhas, e esta VPS e
+partilhada.
+
+Esta segunda merecia ser conferida e nao dispensada, porque esta sessao
+acrescentou verificacoes no `ps_list_at` e no `ps_list_base` — que e exactamente o
+caminho quente de um editor de texto. Portanto mediu-se: construiu-se o
+compilador de ANTES da sessao (`f9cb50d~1`) num worktree a parte e correu-se o
+mesmo teste.
+
+**22 ms nos dois.** Identico. O custo das verificacoes novas nao aparece na
+medicao, e a diferenca para o teto e da maquina.
