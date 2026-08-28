@@ -41,36 +41,36 @@ def check(name: str, got: str, wants: str):
 
 
 def main():
-    vazio: List<u8> = []
+    empty: List<u8> = []
 
     # ---- CRC32 (IEEE): os dois valores que toda a gente conhece ----
-    check("crc32 vazio", crc32_hex(vazio), "00000000")
+    check("crc32 vazio", crc32_hex(empty), "00000000")
     check("crc32 123456789", crc32_hex(b("123456789")), "cbf43926")
     # e em pedaços dá o mesmo que inteiro — que é o que permite verificar um
     # fluxo sem o segurar
-    meio = crc32_update(0, b("12345"))
-    check("crc32 aos pedacos", str(crc32_update(meio, b("6789"))), str(crc32_of(b("123456789"))))
+    half = crc32_update(0, b("12345"))
+    check("crc32 aos pedacos", str(crc32_update(half, b("6789"))), str(crc32_of(b("123456789"))))
 
     # ---- SHA-1 (FIPS 180-4) ----
-    check("sha1 vazio", sha1_of(vazio), "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+    check("sha1 vazio", sha1_of(empty), "da39a3ee5e6b4b0d3255bfef95601890afd80709")
     check("sha1 abc", sha1_of(b("abc")), "a9993e364706816aba3e25717850c26c9cd0d89d")
     check("sha1 448 bits", sha1_of(b("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
           "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
 
     # ---- MD5 (RFC 1321 §A.5) ----
-    check("md5 vazio", md5_of(vazio), "d41d8cd98f00b204e9800998ecf8427e")
+    check("md5 vazio", md5_of(empty), "d41d8cd98f00b204e9800998ecf8427e")
     check("md5 abc", md5_of(b("abc")), "900150983cd24fb0d6963f7d28e17f72")
     check("md5 message digest", md5_of(b("message digest")), "f96b697d7cb7938d525a2f31aaf161d0")
     check("md5 alfabeto", md5_of(b("abcdefghijklmnopqrstuvwxyz")), "c3fcd3d76192e4007dfb496cca67e13b")
 
     # ---- o caminho de MUITOS blocos, que é onde o enchimento se engana ----
     mil = rep(97, 1000)
-    milhao: List<u8> = []
+    million: List<u8> = []
     for _ in range(1000):
         for x in mil:
-            milhao.append(x)
-    check("sha1 um milhao de 'a'", sha1_of(milhao), "34aa973cd4c4daa4f61eeb2bdbad27316534016f")
-    check("md5 um milhao de 'a'", md5_of(milhao), "7707d6ae4e027c70eea2a935c2296f21")
+            million.append(x)
+    check("sha1 um milhao de 'a'", sha1_of(million), "34aa973cd4c4daa4f61eeb2bdbad27316534016f")
+    check("md5 um milhao de 'a'", md5_of(million), "7707d6ae4e027c70eea2a935c2296f21")
 
     # ---- e a fronteira dos 56 bytes, onde o bloco extra nasce ----
     for n in range(50, 66):

@@ -7,12 +7,12 @@ import path
 import sys
 
 
-raiz = sys.argv[2]
-arv = fl.files(raiz, "index.html", "max-age=60")
+root = sys.argv[2]
+tree = fl.files(root, "index.html", "max-age=60")
 
 
 async def handle(req: httpd.Request) -> httpd.Response:
-    return await fl.serve(arv, req)
+    return await fl.serve(tree, req)
 
 
 cfg = httpd.config()

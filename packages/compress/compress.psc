@@ -502,7 +502,7 @@ def put(o: Out, v: int, n: int):
             o.n -= 8
 
 
-def put_code(o: Out, codigo: int, n: int):
+def put_code(o: Out, code: int, n: int):
     """Um codigo de Huffman: do bit MAIS significativo primeiro.
 
     E a inversao que faz o formato parecer contraditorio e nao e: o FLUXO e
@@ -512,7 +512,7 @@ def put_code(o: Out, codigo: int, n: int):
     nocheck:
         i = n - 1
         while i >= 0:
-            put(o, (codigo >> i) & 1, 1)
+            put(o, (code >> i) & 1, 1)
             i -= 1
 
 
@@ -564,90 +564,100 @@ def dist_symbol(d: int) -> int:
 
 const HASH_BITS = 15
 const HASH_SIZE = 32768
-const JANELA = 32768
+const WINDOW = 32768
 const MAX_MATCH = 258
 const MIN_MATCH = 3
 # quantas posicoes da cadeia se experimentam antes de aceitar o que se tem. E o
 # botao de "quao bom" -- 128 e o territorio do nivel 6 do zlib, e subi-lo paga
 # cada vez menos.
-const MAX_CADEIA = 128
+const MAX_CHAIN = 128
 
 
-def deflate_fixed(src: bytes) -> bytes:
+def deflate_fixed(src: bytes, window: int = WINDOW) -> bytes:
     """LZ77 com a arvore fixa. Um bloco so, FINAL — o que serve um ficheiro."""
     o = out_new()
     put(o, 1, 1)        # BFINAL = 1: e o ultimo
     put(o, 1, 2)        # arvore fixa
-    lz77_fixo(o, src)
+    lz77_fixed(o, src, window)
     put_code(o, lit_code(256), lit_bits(256))
     return out_flush(o)
 
 
-def lz77_fixo(o: Out, src: bytes):
+def lz77_fixed(o: Out, src: bytes, window: int = WINDOW):
     """O MIOLO, partilhado pelo bloco final e pelo de fluxo: o casamento e a
     emissao. O que muda entre os dois e so o cabecalho do bloco e o que vem
-    depois do fim dele — e por isso e uma funcao e nao duas copias."""
-    n = len(src)
+    depois do fim dele — e por isso e uma funcao e nao duas copias.
 
-    # a tabela de dispersao e as cadeias: `cabeca[h]` e a posicao mais recente
-    # com aquele hash, e `anterior[p]` e a anterior a `p`. E a estrutura do zlib,
+    A `window` e a distancia MAXIMA de um casamento, e existe por causa do
+    `server_max_window_bits` do RFC 7692: um cliente que anuncia uma janela de
+    1024 bytes descomprime com uma janela de 1024 bytes, e um casamento nosso a
+    2000 bytes de distancia produziria lixo do lado dele. Limitar aqui e a
+    diferenca entre honrar o parametro e recusar a oferta.
+    """
+    n = len(src)
+    lim_dist = window if window < WINDOW else WINDOW
+    if lim_dist < 1:
+        lim_dist = WINDOW
+
+    # a tabela de dispersao e as cadeias: `head[h]` e a posicao mais recente
+    # com aquele hash, e `prev[p]` e a anterior a `p`. E a estrutura do zlib,
     # e cabe em duas listas.
-    cabeca: List<int> = []
+    head: List<int> = []
     for _ in range(HASH_SIZE):
-        cabeca.append(-1)
-    anterior: List<int> = []
+        head.append(-1)
+    prev: List<int> = []
     for _ in range(n if n > 0 else 1):
-        anterior.append(-1)
+        prev.append(-1)
     at = 0
     while at < n:
-        melhor_len = 0
-        melhor_dist = 0
+        best_len = 0
+        best_dist = 0
         if at + MIN_MATCH <= n:
             h = 0
             nocheck:
                 h = ((int(src[at]) << 10) ^ (int(src[at + 1]) << 5) ^ int(src[at + 2])) & (HASH_SIZE - 1)
-            p = cabeca[h]
+            p = head[h]
             # a INSCRICAO vem antes da busca, e a ordem e o defeito facil: o
-            # `anterior[at]` tem de guardar a cabeca ANTIGA, e so depois e que a
-            # cabeca passa a ser `at`. Ao contrario, `anterior[at]` fica igual a
+            # `prev[at]` tem de guardar a cabeca ANTIGA, e so depois e que a
+            # cabeca passa a ser `at`. Ao contrario, `prev[at]` fica igual a
             # `at` -- um laco sobre si mesmo, e a busca seguinte gira para sempre.
-            anterior[at] = p
-            cabeca[h] = at
-            tentativas = 0
-            while p >= 0 and tentativas < MAX_CADEIA:
-                if at - p > JANELA:
+            prev[at] = p
+            head[h] = at
+            tries = 0
+            while p >= 0 and tries < MAX_CHAIN:
+                if at - p > lim_dist:
                     break
                 k = 0
                 lim = MAX_MATCH if n - at > MAX_MATCH else n - at
                 while k < lim and src[p + k] == src[at + k]:
                     k += 1
-                if k > melhor_len:
-                    melhor_len = k
-                    melhor_dist = at - p
+                if k > best_len:
+                    best_len = k
+                    best_dist = at - p
                     if k >= lim:
                         break
-                p = anterior[p]
-                tentativas += 1
-        if melhor_len >= MIN_MATCH:
-            sl = len_symbol(melhor_len)
+                p = prev[p]
+                tries += 1
+        if best_len >= MIN_MATCH:
+            sl = len_symbol(best_len)
             put_code(o, lit_code(257 + sl), lit_bits(257 + sl))
             if LEN_EXTRA[sl] > 0:
-                put(o, melhor_len - LEN_BASE[sl], LEN_EXTRA[sl])
-            sd = dist_symbol(melhor_dist)
+                put(o, best_len - LEN_BASE[sl], LEN_EXTRA[sl])
+            sd = dist_symbol(best_dist)
             put_code(o, sd, 5)
             if DIST_EXTRA[sd] > 0:
-                put(o, melhor_dist - DIST_BASE[sd], DIST_EXTRA[sd])
+                put(o, best_dist - DIST_BASE[sd], DIST_EXTRA[sd])
             # as posicoes DENTRO do casamento tambem entram na tabela: sem isso a
             # cadeia perde-as e os casamentos seguintes ficam curtos
             k2 = 1
-            while k2 < melhor_len and at + k2 + MIN_MATCH <= n:
+            while k2 < best_len and at + k2 + MIN_MATCH <= n:
                 h2 = 0
                 nocheck:
                     h2 = ((int(src[at + k2]) << 10) ^ (int(src[at + k2 + 1]) << 5) ^ int(src[at + k2 + 2])) & (HASH_SIZE - 1)
-                anterior[at + k2] = cabeca[h2]
-                cabeca[h2] = at + k2
+                prev[at + k2] = head[h2]
+                head[h2] = at + k2
                 k2 += 1
-            at += melhor_len
+            at += best_len
         else:
             s = int(src[at])
             put_code(o, lit_code(s), lit_bits(s))
@@ -669,7 +679,7 @@ def lz77_fixo(o: Out, src: bytes):
 # sao sempre os mesmos e mandá-los seria mandar quatro bytes constantes por
 # mensagem.
 
-def deflate_sync(src: bytes) -> bytes:
+def deflate_sync(src: bytes, window: int = WINDOW) -> bytes:
     """LZ77 com a arvore fixa, num bloco NAO final, terminado por um sync flush.
 
     O que sai acaba sempre em `00 00 ff ff`, e e isso que o chamador corta.
@@ -677,7 +687,7 @@ def deflate_sync(src: bytes) -> bytes:
     o = out_new()
     put(o, 0, 1)        # BFINAL = 0: a conversa continua
     put(o, 1, 2)        # arvore fixa
-    lz77_fixo(o, src)
+    lz77_fixed(o, src, window)
     put_code(o, lit_code(256), lit_bits(256))    # fim do bloco
     # e o sync flush: um bloco armazenado vazio, que obriga ao alinhamento
     put(o, 0, 1)

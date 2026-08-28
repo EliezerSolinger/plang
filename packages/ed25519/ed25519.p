@@ -430,10 +430,10 @@ private def ge_decode(out r: Ge, s: const *char) -> bool:
         fe_const(out sq, SQRTM1_BYTES)
         fe_mul(out x, x, sq)
     # and the sign has to match the bit that came in
-    quer_neg: bool = (u8(s[31]) >> u8(7)) != u8(0)
-    if fe_is_zero(x) and quer_neg:
+    want_neg: bool = (u8(s[31]) >> u8(7)) != u8(0)
+    if fe_is_zero(x) and want_neg:
         return False                      # x = 0 with a negative sign does not exist
-    if fe_is_negative(x) != quer_neg:
+    if fe_is_negative(x) != want_neg:
         fe_neg(out x, x)
     fe_copy(out r.X, x)
     fe_copy(out r.Y, y)
@@ -633,11 +633,11 @@ def ed25519_verify(pub: const *char, msg: const *char, n: usize, sig: const *cha
     ge_scalarmult(out kA, k, negA)
     SB: Ge
     ge_scalarmult_base(out SB, sig + 32)
-    soma: Ge
-    ge_add(out soma, SB, kA)
+    sum_pt: Ge
+    ge_add(out sum_pt, SB, kA)
     e1: char[32]
     e2: char[32]
-    ge_encode(soma, e1)
+    ge_encode(sum_pt, e1)
     ge_encode(R, e2)
     return memcmp(e1, e2, usize(32)) == 0
 

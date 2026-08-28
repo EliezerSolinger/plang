@@ -113,12 +113,12 @@ def main():
     # ---- 7. as datas do HTTP: gerar UMA, aceitar TRÊS ----
     h = dt.instant_of(784111777, 0)
     ck("IMF-fixdate", dt.http_date(h), "Sun, 06 Nov 1994 08:49:37 GMT")
-    for texto in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"]:
-        got = dt.parse_http_date(texto)
+    for text in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"]:
+        got = dt.parse_http_date(text)
         if got == None:
-            ck("http: " + texto, "None", "784111777")
+            ck("http: " + text, "None", "784111777")
         else:
-            ck("http: " + texto, str(got.second), "784111777")
+            ck("http: " + text, str(got.second), "784111777")
     ck("http mau", str(dt.parse_http_date("nao e uma data") == None), "True")
 
     # ---- 8. strftime / strptime ----

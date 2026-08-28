@@ -309,7 +309,7 @@ private def critical_path(b: Build):
     # topological order: a producer appears BEFORE whoever consumes it
     for e in b.g.edges:
         if e.want:
-            visit_topo(b, e.id, seen, order)
+            visit_top(b, e.id, seen, order)
     for e2 in b.g.edges:
         e2.cpw = cost(e2)
     i = len(order) - 1
@@ -331,7 +331,7 @@ private def critical_path(b: Build):
                     pe2.cpw = cand2
         i -= 1
 
-private def visit_topo(b: Build, eid: int, seen: List<bool>, order: List<int>):
+private def visit_top(b: Build, eid: int, seen: List<bool>, order: List<int>):
     if seen[eid]:
         return
     seen[eid] = True
@@ -339,11 +339,11 @@ private def visit_topo(b: Build, eid: int, seen: List<bool>, order: List<int>):
     for iid in e.ins:
         n = b.g.nodes[iid]
         if n.gen >= 0:
-            visit_topo(b, n.gen, seen, order)
+            visit_top(b, n.gen, seen, order)
     for iid2 in e.implicit:
         n2 = b.g.nodes[iid2]
         if n2.gen >= 0:
-            visit_topo(b, n2.gen, seen, order)
+            visit_top(b, n2.gen, seen, order)
     order.append(eid)
 
 # ---------- the queue ----------

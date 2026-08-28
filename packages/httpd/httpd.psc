@@ -15,8 +15,8 @@ lock por operação), o `shared Buffer` (zero cópia) e a mensagem (serializa).
 As decisões que o desenho fixou e que este ficheiro cumpre:
 
   * **D3c — cabeçalhos são uma LISTA de pares.** O HTTP permite nomes repetidos e
-    a ordem importa; `Set-Cookie` é o caso de todos os dias. `req.header(nome)` dá
-    o primeiro, `req.headers_all(nome)` dá todos. Um `Dict<str,str>` obrigaria a
+    a ordem importa; `Set-Cookie` é o caso de todos os dias. `req.header(name_s)` dá
+    o primeiro, `req.headers_all(name_s)` dá todos. Um `Dict<str,str>` obrigaria a
     um caminho especial só para o `Set-Cookie`, que é a gambiarra que as
     bibliotecas de JavaScript carregam.
 
@@ -76,7 +76,21 @@ struct Request:
     raw: List<Header>
     body: bytes
     peer: str              # o endereço de quem ligou
-    params: Dict<str, str> # o que uma rota `:nome` capturou (F1b)
+    params: Dict<str, str> # o que uma rota `:name_s` capturou (F1b)
+    # O SÍTIO onde uma camada de cima guarda uma DECISÃO que já tomou.
+    #
+    # Existe por um defeito concreto: o `upgrade` do WebSocket escolhia o
+    # subprotocolo e a extensão a partir dos cabeçalhos, e o laço da conexão
+    # repetia a escolha a partir dos MESMOS cabeçalhos, apoiado em ela ser
+    # determinística. Era verdade e era frágil — qualquer parâmetro novo tinha de
+    # ser reproduzido nos dois sítios, e o dia em que os dois discordassem o
+    # servidor diria uma coisa ao cliente e usaria outra.
+    #
+    # Não é só do WebSocket: é onde um autenticador põe o utilizador que
+    # verificou, e a razão de ele não precisar de o verificar duas vezes. A httpd
+    # não lê nada daqui — as chaves são de quem as escreve, e é isso que a mantém
+    # cega ao que corre por cima dela (D7).
+    attrs: Dict<str, str>
 
     def header(self, name: str) -> str:
         """O PRIMEIRO valor com este nome, ou "" — nomes em minúsculas."""
@@ -102,27 +116,27 @@ struct Request:
     # ---------- F1c/D29: a query ----------
 
     def query_params(self) -> Dict<str, str>:
-        """`?a=1&b=dois` lido como um dicionário. É calculado a cada chamada e
+        """`?a=1&b=two` lido como um dicionário. É calculado a cada chamada e
         não guardado: a esmagadora maioria dos pedidos não tem query nenhuma, e
         um campo a mais na `Request` custaria a todos eles."""
         return parse_query(self.query)
 
-    def q(self, nome: str) -> str:
+    def q(self, name_s: str) -> str:
         """UM valor da query, ou "". O atalho para o caso de todos os dias, sem
         construir o dicionário inteiro para ler uma chave."""
-        for par in self.query.split("&"):
-            if len(par) == 0:
+        for pair in self.query.split("&"):
+            if len(pair) == 0:
                 continue
-            i = par.find("=")
-            k = form_decode(par) if i < 0 else form_decode(par[0:i])
-            if k == nome:
-                return "" if i < 0 else form_decode(par[i + 1:])
+            i = pair.find("=")
+            k = form_decode(pair) if i < 0 else form_decode(pair[0:i])
+            if k == name_s:
+                return "" if i < 0 else form_decode(pair[i + 1:])
         return ""
 
-    def q_all(self, nome: str) -> List<str>:
+    def q_all(self, name_s: str) -> List<str>:
         """TODOS os valores desta chave. `?t=a&t=b` é a forma normal de mandar
         uma lista, e um dicionário perde-a — a mesma razão da D3c."""
-        return query_all(self.query, nome)
+        return query_all(self.query, name_s)
 
     # ---------- F1c/D30: o corpo como JSON ----------
 
@@ -138,17 +152,17 @@ struct Request:
         """
         return jsn.parse(str(self.body))
 
-    def cookie(self, nome: str) -> str:
+    def cookie(self, name_s: str) -> str:
         """Um cookie do pedido, ou "". Calculado a cada chamada e nao guardado: a
         maioria dos pedidos de uma API nao tem cookies, e um campo a mais na
         `Request` custaria a todos eles."""
-        cs = parse_cookies(self.header("cookie"))
-        return cs[nome] if nome in cs else ""
+        cookie_map = parse_cookies(self.header("cookie"))
+        return cookie_map[name_s] if name_s in cookie_map else ""
 
     def cookies(self) -> Dict<str, str>:
         return parse_cookies(self.header("cookie"))
 
-    def ip(self, proxies_confiaveis: List<str>) -> str:
+    def ip(self, trusted_proxies: List<str>) -> str:
         """D32: O IP DO CLIENTE, e a regra que o torna confiavel.
 
         `peer` e o IP do socket, e e sempre verdade. O `X-Forwarded-For` e um
@@ -163,15 +177,15 @@ struct Request:
         escrever `X-Forwarded-For: 1.2.3.4` faz o primeiro elemento ser o que ele
         quiser. O ultimo foi posto pelo proxy em que confiamos.
         """
-        for p in proxies_confiaveis:
+        for p in trusted_proxies:
             if p == self.peer:
                 xff = self.header("x-forwarded-for")
                 if len(xff) > 0:
-                    partes = xff.split(",")
-                    return partes[len(partes) - 1].strip()
-                real = self.header("x-real-ip")
-                if len(real) > 0:
-                    return real.strip()
+                    parts = xff.split(",")
+                    return parts[len(parts) - 1].strip()
+                xreal = self.header("x-real-ip")
+                if len(xreal) > 0:
+                    return xreal.strip()
         return self.peer
 
     def is_json(self) -> bool:
@@ -198,42 +212,42 @@ def form_decode(s: str) -> str:
     regra errada faz `a+b` chegar ao programa como `a b` ou como `a+b` conforme
     o sítio, e é meia hora de depuração de cada vez.
     """
-    trocado = ""
+    swapped = ""
     for ch in s:
-        trocado += " " if ch == "+" else ch
-    return pct_decode_seg(trocado)
+        swapped += " " if ch == "+" else ch
+    return pct_decode_seg(swapped)
 
 
 def parse_query(q: str) -> Dict<str, str>:
-    """`a=1&b=dois&c` -> `{"a": "1", "b": "dois", "c": ""}`.
+    """`a=1&b=two&c` -> `{"a": "1", "b": "two", "c": ""}`.
 
     Uma chave sem `=` vale "", que é o que toda a gente faz — e uma chave
     REPETIDA fica com a primeira. Quem precisa de todas usa `query_all`, pela
     mesma razão que os cabeçalhos têm as duas portas (D3c).
     """
     out: Dict<str, str> = {}
-    for par in q.split("&"):
-        if len(par) == 0:
+    for pair in q.split("&"):
+        if len(pair) == 0:
             continue
-        i = par.find("=")
-        k = form_decode(par) if i < 0 else form_decode(par[0:i])
-        v = "" if i < 0 else form_decode(par[i + 1:])
+        i = pair.find("=")
+        k = form_decode(pair) if i < 0 else form_decode(pair[0:i])
+        v = "" if i < 0 else form_decode(pair[i + 1:])
         if k not in out:
             out[k] = v
     return out
 
 
-def query_all(q: str, nome: str) -> List<str>:
+def query_all(q: str, name_s: str) -> List<str>:
     """TODOS os valores desta chave, na ordem em que vieram. `?t=a&t=b` é a forma
     normal de mandar uma lista, e um dicionário perde-a."""
     out: List<str> = []
-    for par in q.split("&"):
-        if len(par) == 0:
+    for pair in q.split("&"):
+        if len(pair) == 0:
             continue
-        i = par.find("=")
-        k = form_decode(par) if i < 0 else form_decode(par[0:i])
-        if k == nome:
-            out.append("" if i < 0 else form_decode(par[i + 1:]))
+        i = pair.find("=")
+        k = form_decode(pair) if i < 0 else form_decode(pair[0:i])
+        if k == name_s:
+            out.append("" if i < 0 else form_decode(pair[i + 1:]))
     return out
 
 
@@ -408,29 +422,29 @@ def redirect(location: str, code: int = 302) -> Response:
 # módulo importado não pode ter instruções de topo, e é essa a regra que
 # decidiu. Ficou melhor: a memória é do SERVIDOR, portanto dois servidores no
 # mesmo worker (um de teste, um a sério) não partilham nada.
-const DIAS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-const MESES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
-def dois(n: int) -> str:
+def two(n: int) -> str:
     return "0" + str(n) if n < 10 else str(n)
 
 
 def http_date(secs: int) -> str:
     d = dt.to_utc(dt.instant_of(secs, 0))
     # `weekday` devolve 0=segunda, e o RFC começa a lista em `Mon` — batem
-    wd = DIAS[dt.weekday(d.date)]
-    return (wd + ", " + dois(d.date.day) + " " + MESES[d.date.month - 1] + " "
-            + str(d.date.year) + " " + dois(d.time.hour) + ":" + dois(d.time.minute)
-            + ":" + dois(d.time.second) + " GMT")
+    weekday_s = DAYS[dt.weekday(d.date)]
+    return (weekday_s + ", " + two(d.date.day) + " " + MONTHS[d.date.month - 1] + " "
+            + str(d.date.year) + " " + two(d.time.hour) + ":" + two(d.time.minute)
+            + ":" + two(d.time.second) + " GMT")
 
 
 def date_now(cfg: Config) -> str:
-    agora = int(time.time())
-    if agora != cfg.date_secs:
-        cfg.date_secs = agora
-        cfg.date_text = http_date(agora)
+    now_dt = int(time.time())
+    if now_dt != cfg.date_secs:
+        cfg.date_secs = now_dt
+        cfg.date_text = http_date(now_dt)
     return cfg.date_text
 
 
@@ -450,7 +464,18 @@ struct Config:
     server_name: str       # vazio = não anunciar nada (D42)
     allowed_hosts: List<str>   # vazia = qualquer um (D41)
     keep_alive: bool
-    idle_timeout: float    # quanto se espera pelo pedido seguinte, em segundos
+    # QUANTO SE ESPERA PELO PEDIDO SEGUINTE, em segundos. 0 desliga.
+    #
+    # Esteve declarado e MORTO — ninguem o lia —, e isso e um slowloris de graca:
+    # uma conexao keep-alive que nao manda nada ficava aberta enquanto o cliente
+    # quisesse, e mil conexoes caladas enchem os workers sem nunca fazer um
+    # pedido. Custa a um atacante um socket por conexao e mais nada.
+    #
+    # O prazo vale SO no limiar de um pedido novo, e nao a meio de um corpo: um
+    # upload legitimo de um ficheiro grande por uma linha lenta demora, e
+    # matá-lo seria trocar uma falha de seguranca por uma falha de servico. Quem
+    # limita o corpo e o `max_body`, que e outra pergunta.
+    idle_timeout: float
     # D42: a data formatada e o segundo a que ela pertence — ver `date_now`
     date_secs: int
     date_text: str
@@ -519,7 +544,7 @@ def sse(fn: def() -> Task<bytes>) -> Response:
     return r
 
 
-def evento(nome: str, dados: str) -> bytes:
+def sse_event(name_s: str, data: str) -> bytes:
     """Um evento SSE, com a moldura que a especificação pede.
 
     Cada linha dos dados leva o seu `data:`, porque uma quebra de linha crua
@@ -527,10 +552,10 @@ def evento(nome: str, dados: str) -> bytes:
     numa linha só não chega quando ele tem um `\n` lá dentro.
     """
     out = ""
-    if len(nome) > 0:
-        out += "event: " + nome + "\n"
-    for linha in dados.split("\n"):
-        out += "data: " + linha + "\n"
+    if len(name_s) > 0:
+        out += "event: " + name_s + "\n"
+    for line in data.split("\n"):
+        out += "data: " + line + "\n"
     return (out + "\n").encode()
 
 
@@ -544,7 +569,7 @@ def encode(r: Response, req_version: str, close_after: bool, cfg: Config) -> byt
     """
     sb: List<str> = []
     sb.append("HTTP/1.1 " + str(r.status) + " " + reason_for(r.status) + "\r\n")
-    tem_tipo = False
+    has_type = False
     for hd in r.headers:
         n = hd.name.lower()
         # o comprimento e a ligação são de quem SERVE, não de quem responde — um
@@ -560,7 +585,7 @@ def encode(r: Response, req_version: str, close_after: bool, cfg: Config) -> byt
         if n == "connection" and not r.upgraded:
             continue
         if n == "content-type":
-            tem_tipo = True
+            has_type = True
         sb.append(hd.name + ": " + hd.value + "\r\n")
     sb.append("date: " + date_now(cfg) + "\r\n")
     if len(cfg.server_name) > 0:
@@ -583,14 +608,14 @@ def encode(r: Response, req_version: str, close_after: bool, cfg: Config) -> byt
             sb.append("content-length: " + str(len(r.body)) + "\r\n")
         sb.append("connection: " + ("close" if close_after else "keep-alive") + "\r\n")
     sb.append("\r\n")
-    cab = "".join(sb).encode()
+    hdr = "".join(sb).encode()
     # HEAD e os estados sem corpo levam os cabeçalhos e mais nada
     if len(r.body) == 0:
-        return cab
-    return cab + r.body
+        return hdr
+    return hdr + r.body
 
 
-def sem_corpo(status: int, method: str) -> bool:
+def bodyless(status: int, method: str) -> bool:
     """RFC 9112 §6.3: estas respostas NÃO têm corpo, e escrever um faz o cliente
     lê-lo como o princípio da mensagem seguinte."""
     return method == "HEAD" or status == 204 or status == 304 or (status >= 100 and status < 200)
@@ -614,7 +639,7 @@ def to_request(r: h.Request, peer: str) -> Request:
         raw.append(Header(hd.name, hd.value))
     p = split_target(r.target)
     return Request(r.method, r.target, p[0], p[1], r.version,
-                   r.headers, raw, r.body, peer, {})
+                   r.headers, raw, r.body, peer, {}, {})
 
 
 def host_ok(req: Request, cfg: Config) -> bool:
@@ -624,19 +649,19 @@ def host_ok(req: Request, cfg: Config) -> bool:
     de sempre — está a deixar o cliente escolher o domínio para onde o utilizador
     vai. O Django tem `ALLOWED_HOSTS` por causa dessa história.
     """
-    hst = req.header("host")
-    if req.version == "1.1" and len(hst) == 0:
+    host_hdr = req.header("host")
+    if req.version == "1.1" and len(host_hdr) == 0:
         return False
     if len(cfg.allowed_hosts) == 0:
         return True
     # o porto não faz parte da comparação: `exemplo.pt` e `exemplo.pt:8080` são
     # o mesmo nome
-    nome = hst
-    i = nome.rfind(":")
-    if i > 0 and nome.find("]") < i:
-        nome = nome[0:i]
+    name_s = host_hdr
+    i = name_s.rfind(":")
+    if i > 0 and name_s.find("]") < i:
+        name_s = name_s[0:i]
     for a in cfg.allowed_hosts:
-        if a == nome:
+        if a == name_s:
             return True
     return False
 
@@ -654,16 +679,16 @@ def chunk(b: bytes) -> bytes:
 def hex_len(n: int) -> str:
     if n == 0:
         return "0"
-    digitos = "0123456789abcdef"
+    digits = "0123456789abcdef"
     out = ""
     v = n
     while v > 0:
-        out = digitos[v % 16] + out
+        out = digits[v % 16] + out
         v = v // 16
     return out
 
 
-async def escreve_stream(c: Socket, r: Response, cfg: Config) -> bool:
+async def write_stream(c: Socket, r: Response, cfg: Config) -> bool:
     """Os pedaços, até o cursor dizer que acabou.
 
     A CONTRAPRESSÃO vem de graça e não foi preciso escrevê-la: o `write` é um
@@ -675,25 +700,25 @@ async def escreve_stream(c: Socket, r: Response, cfg: Config) -> bool:
     if fn == None:
         return True
     while True:
-        pedaco = b""
+        piece = b""
         try:
-            pedaco = await fn()
+            piece = await fn()
         catch e:
             # o cursor rebentou a meio. Os cabeçalhos já foram, portanto não há
             # 500 possível — o que há é acabar o corpo e fechar, que é o que um
             # cliente lê como "a resposta foi interrompida".
-            ignora_log = await sys.err.write("httpd: stream: " + e.message + "\n")
+            ignored_log = await sys.err.write("httpd: stream: " + e.message + "\n")
             return False
-        if len(pedaco) == 0:
+        if len(piece) == 0:
             break
-        if not await escreve(c, chunk(pedaco)):
+        if not await write_all(c, chunk(piece)):
             return False
     # o pedaço de tamanho zero é o FIM, e o CRLF a seguir fecha os trailers que
     # não existem. Sem ele o cliente fica à espera de mais.
-    return await escreve(c, b"0\r\n\r\n")
+    return await write_all(c, b"0\r\n\r\n")
 
 
-async def escreve(c: Socket, b: bytes) -> bool:
+async def write_all(c: Socket, b: bytes) -> bool:
     """Escreve tudo, e diz se conseguiu. Um cliente que desliga a meio não é um
     erro do servidor — é o caso comum de quem carrega em `stop` no browser — e
     por isso isto responde em vez de levantar."""
@@ -716,15 +741,18 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
     servidor que morresse com isso não seria um servidor. Devolve QUANTOS pedidos
     serviu, que é o número que um teste consegue afirmar.
     """
-    servidos = 0
-    respondeu_expect = False
+    served_n = 0
+    answered_expect = False
+    # estamos no LIMIAR de um pedido, ou a meio de um? O prazo do `idle_timeout`
+    # vale so no limiar (ver a nota do campo)
+    idle = True
     # F4/D8: o TLS vai POR CIMA da ligação aceita, antes de se ler o primeiro
     # byte. Falhar aqui é o cliente a apresentar-se mal — fecha-se em silêncio,
     # porque não há canal por onde dizer nada: o que ele espera é TLS, e um 400 em
     # claro seria lixo.
     if len(cfg.tls_cert) > 0:
         try:
-            ignora_tls = await net.serve_tls(c, cfg.tls_cert, cfg.tls_key)
+            ignored_tls = await net.serve_tls(c, cfg.tls_cert, cfg.tls_key)
         catch e:
             c.close()
             return 0
@@ -734,9 +762,19 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
             # ---- lê o que houver ----
             n = 0
             try:
-                n = await c.read_into(rb, 0, 65536)
+                rd = c.read_into(rb, 0, 65536)
+                if idle and cfg.idle_timeout > 0.0:
+                    # o `timeout` CANCELA o perdedor (48.2), portanto uma conexao
+                    # calada custa o prazo e nem um descritor a mais. O `sleep`
+                    # dele estaciona no mesmo multiplexador que espera pelos
+                    # sockets, e por isso esperar aqui nao custa nada a ninguem.
+                    if not await timeout(rd, cfg.idle_timeout):
+                        break
+                # o valor le-se da tarefa depois de ela ter ganho (37.2)
+                n = await rd
             catch e:
                 break
+            idle = False
             if n == 0:
                 # o cliente fechou. Um corpo sem comprimento declarado acaba
                 # exactamente aqui, e é `finish` quem o diz ao parser.
@@ -754,51 +792,51 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
                 # antes de enviar. Sem esta linha ele espera o tempo dele (um
                 # segundo, no `curl`) e só depois manda — um segundo por pedido,
                 # que num teste passa por lentidão da rede.
-                if p.headers_done() and not respondeu_expect:
-                    respondeu_expect = True
+                if p.headers_done() and not answered_expect:
+                    answered_expect = True
                     decl = p.declared_length()
                     if decl > cfg.max_body:
                         # 413 ANTES de o corpo subir, que é o que se ganha
-                        await escreve(c, encode(status_code(413), "1.1", True, cfg))
+                        await write_all(c, encode(status_code(413), "1.1", True, cfg))
                         break
-                    if len(p.request().header("expect")) > 0 and espera_continuar(to_request(p.request(), peer)):
-                        if not await escreve(c, b"HTTP/1.1 100 Continue\r\n\r\n"):
+                    if len(p.request().header("expect")) > 0 and expect_continue(to_request(p.request(), peer)):
+                        if not await write_all(c, b"HTTP/1.1 100 Continue\r\n\r\n"):
                             break
                 if p.failed():
                     # 400, e fecha. O que sobra no cano pertence a uma mensagem
                     # que não se sabe onde acaba, e continuar a ler dela é
                     # exactamente o que o request smuggling explora.
-                    await escreve(c, encode(status_code(400), "1.1", True, cfg))
+                    await write_all(c, encode(status_code(400), "1.1", True, cfg))
                     break
                 if p.handoff():
                     # a conexão deixou de ser HTTP/1 sem passar pelo handler:
                     # um CONNECT ou o preâmbulo do HTTP/2. Nada aqui sabe o que
                     # fazer com ela (F6/F11), e fingir que sabe seria pior.
-                    await escreve(c, encode(status_code(501), "1.1", True, cfg))
+                    await write_all(c, encode(status_code(501), "1.1", True, cfg))
                     break
                 # a mensagem ainda não chegou inteira: lê mais
                 continue
 
             # ---- há um pedido inteiro ----
             req = to_request(p.request(), peer)
-            manter = cfg.keep_alive and p.keep_alive()
-            resp = await responde(req, handle, cfg)
-            if sem_corpo(resp.status, req.method):
+            keep = cfg.keep_alive and p.keep_alive()
+            resp = await respond(req, handle, cfg)
+            if bodyless(resp.status, req.method):
                 resp.body = b""
             if resp.status == 413 or resp.status == 400 or resp.status == 431:
                 # depois de recusar por forma, o que sobra no cano é de uma
                 # mensagem que não se sabe onde acaba — a única saída sã é fechar
-                manter = False
-            if not await escreve(c, encode(resp, req.version, not manter, cfg)):
+                keep = False
+            if not await write_all(c, encode(resp, req.version, not keep, cfg)):
                 break
             if resp.stream != None and req.method != "HEAD":
                 # um HEAD leva os cabeçalhos e mais nada, e isso inclui não
                 # chamar o cursor: gerar o corpo para o deitar fora seria pagar
                 # o trabalho inteiro pela resposta que existe para o evitar
-                if not await escreve_stream(c, resp, cfg):
+                if not await write_stream(c, resp, cfg):
                     break
-            servidos += 1
-            respondeu_expect = False
+            served_n += 1
+            answered_expect = False
             if resp.upgraded:
                 # a conexão deixou de ser HTTP/1. Entrega-se a quem a pediu, COM
                 # o que sobrou por ler: um cliente ansioso manda o primeiro
@@ -808,22 +846,23 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
                 # o estreitamento prova-se num LOCAL e não num campo (43.1): o
                 # campo pode ser reatribuído entre a prova e o uso, e um local
                 # não pode
-                quem = cfg.on_upgrade
-                if quem != None:
-                    ignora = await quem(c, req, p.rest())
-                    return servidos
+                up = cfg.on_upgrade
+                if up != None:
+                    ignored = await up(c, req, p.rest())
+                    return served_n
                 # ninguém a pediu: fecha, em vez de deixar um socket vivo a
                 # falar um protocolo que ninguém está a ler
                 c.close()
-                return servidos
-            if not manter:
+                return served_n
+            if not keep:
                 break
             p.reset()
+            idle = True
     c.close()
-    return servidos
+    return served_n
 
 
-async def responde(req: Request, handle: def(Request) -> Task<Response>,
+async def respond(req: Request, handle: def(Request) -> Task<Response>,
                    cfg: Config) -> Response:
     """O handler, com as recusas por forma à frente e a rede de segurança atrás.
 
@@ -840,7 +879,7 @@ async def responde(req: Request, handle: def(Request) -> Task<Response>,
     try:
         return await handle(req)
     catch e:
-        ignora_log = await sys.err.write("httpd: " + req.method + " " + req.target + ": " + e.message + "\n")
+        ignored_log = await sys.err.write("httpd: " + req.method + " " + req.target + ": " + e.message + "\n")
         if cfg.debug:
             r = status_code(500)
             r.body = ("500 Internal Server Error\n\n" + e.message + "\n").encode()
@@ -894,7 +933,7 @@ async def run(srv: Server, handle: def(Request) -> Task<Response>):
         try:
             c = await srv.sock.accept()
             srv.served += 1
-            conta(srv, c, handle)
+            count(srv, c, handle)
         catch e:
             if not srv.running:
                 break
@@ -904,7 +943,7 @@ async def run(srv: Server, handle: def(Request) -> Task<Response>):
             await sleep(0.01)
 
 
-def conta(srv: Server, c: Socket, handle: def(Request) -> Task<Response>):
+def count(srv: Server, c: Socket, handle: def(Request) -> Task<Response>):
     """Arranca a tarefa da conexão e deita fora o valor. Existe como função para
     dizer isso por escrito: o resultado é deliberadamente ignorado, e uma linha
     que ignora um valor sem o dizer lê-se como um esquecimento."""
@@ -960,7 +999,7 @@ async def serve(port: int, handle: def(Request) -> Task<Response>,
 
 # ---------- F9/D16: a COMPRESSAO ----------
 
-def aceita_gzip(req: Request) -> bool:
+def accepts_gzip(req: Request) -> bool:
     """O cliente disse que aceita gzip?
 
     A leitura e deliberadamente simples: procura-se o nome na lista. O que ela
@@ -969,11 +1008,11 @@ def aceita_gzip(req: Request) -> bool:
     aqui. Portanto o caso e tratado a mao: um `q=0` explicito e respeitado, e o
     resto e ordem de preferencia que ignoramos com uma resposta correcta.
     """
-    ae = req.header("accept-encoding").lower()
-    if len(ae) == 0:
+    accept_enc = req.header("accept-encoding").lower()
+    if len(accept_enc) == 0:
         return False
-    for parte in ae.split(","):
-        p = parte.strip()
+    for part in accept_enc.split(","):
+        p = part.strip()
         if p.startswith("gzip"):
             # `gzip;q=0` e uma recusa, e e a unica forma de peso que muda a
             # resposta em vez de a ordenar
@@ -983,7 +1022,7 @@ def aceita_gzip(req: Request) -> bool:
     return False
 
 
-def compressivel(tipo: str) -> bool:
+def compressible(ctype: str) -> bool:
     """Vale a pena comprimir este tipo?
 
     Comprimir um JPEG, um PNG, um MP4 ou um `.gz` **gasta CPU e aumenta o
@@ -991,7 +1030,7 @@ def compressivel(tipo: str) -> bool:
     moldura dele. E o erro mais comum de quem liga a compressao por omissao, e
     custa em CPU nos dois lados do fio.
     """
-    t = tipo.lower()
+    t = ctype.lower()
     if t.startswith("text/"):
         return True
     for m in ["application/json", "application/javascript", "application/xml",
@@ -1001,7 +1040,7 @@ def compressivel(tipo: str) -> bool:
     return False
 
 
-def comprime(r: Response, req: Request, minimo: int = 1024) -> Response:
+def compress(r: Response, req: Request, minimum: int = 1024) -> Response:
     """Comprime a resposta se valer a pena, e devolve-a de qualquer maneira.
 
     Tres condicoes, e nenhuma e opcional:
@@ -1023,11 +1062,11 @@ def comprime(r: Response, req: Request, minimo: int = 1024) -> Response:
         # mesmo que o permessage-deflate do ws precisa). Fica dito em vez de
         # feito pela metade.
         return r
-    if len(r.body) < minimo:
+    if len(r.body) < minimum:
         return r
-    if not aceita_gzip(req):
+    if not accepts_gzip(req):
         return r
-    if not compressivel(r.header("content-type")):
+    if not compressible(r.header("content-type")):
         return r
     if len(r.header("content-encoding")) > 0:
         return r        # ja vem codificada: nao se codifica duas vezes
@@ -1044,7 +1083,7 @@ def comprime(r: Response, req: Request, minimo: int = 1024) -> Response:
 
 # ---------- F8b/D33: os COOKIES ----------
 
-def parse_cookies(cab: str) -> Dict<str, str>:
+def parse_cookies(hdr: str) -> Dict<str, str>:
     """`Cookie: a=1; b=2` lido como um dicionario.
 
     O cabecalho `Cookie` e o UNICO que junta pares com `;` em vez de virem em
@@ -1053,8 +1092,8 @@ def parse_cookies(cab: str) -> Dict<str, str>:
     cookie de dominio e um de subdominio com o mesmo nome.
     """
     out: Dict<str, str> = {}
-    for par in cab.split(";"):
-        p = par.strip()
+    for pair in hdr.split(";"):
+        p = pair.strip()
         if len(p) == 0:
             continue
         i = p.find("=")
@@ -1086,8 +1125,8 @@ def cookie_ok(s: str) -> bool:
     return True
 
 
-def set_cookie(r: Response, nome: str, valor: str, max_age: int = -1,
-               caminho: str = "/", dominio: str = "", http_only: bool = True,
+def set_cookie(r: Response, name_s: str, value_s: str, max_age: int = -1,
+               path_s: str = "/", domain: str = "", http_only: bool = True,
                secure: bool = True, same_site: str = "Lax") -> Response:
     """Escreve um `Set-Cookie` com os atributos de seguranca POR OMISSAO.
 
@@ -1098,15 +1137,15 @@ def set_cookie(r: Response, nome: str, valor: str, max_age: int = -1,
 
     Quem precisa do contrario escreve-o, e a linha fica a dizer o que fez.
     """
-    if not cookie_ok(nome) or not cookie_ok(valor):
-        raise error("um nome ou valor de cookie com caracteres de controlo seria uma injeccao de cabecalho: " + nome)
-    sb = nome + "=" + valor
+    if not cookie_ok(name_s) or not cookie_ok(value_s):
+        raise error("um nome ou valor de cookie com caracteres de controlo seria uma injeccao de cabecalho: " + name_s)
+    sb = name_s + "=" + value_s
     if max_age >= 0:
         sb += "; Max-Age=" + str(max_age)
-    if len(caminho) > 0:
-        sb += "; Path=" + caminho
-    if len(dominio) > 0:
-        sb += "; Domain=" + dominio
+    if len(path_s) > 0:
+        sb += "; Path=" + path_s
+    if len(domain) > 0:
+        sb += "; Domain=" + domain
     if http_only:
         sb += "; HttpOnly"
     if secure:
@@ -1120,31 +1159,31 @@ def set_cookie(r: Response, nome: str, valor: str, max_age: int = -1,
     return r
 
 
-def clear_cookie(r: Response, nome: str, caminho: str = "/") -> Response:
+def clear_cookie(r: Response, name_s: str, path_s: str = "/") -> Response:
     """Apaga um cookie: e um `Set-Cookie` com o valor vazio e `Max-Age=0`.
 
     Nao ha outra maneira -- o HTTP nao tem "apaga este cookie". E o `Path` tem de
     ser o MESMO com que ele foi posto, senao apaga-se um cookie diferente e o
     original fica.
     """
-    return set_cookie(r, nome, "", 0, caminho, "", True, True, "Lax")
+    return set_cookie(r, name_s, "", 0, path_s, "", True, True, "Lax")
 
 
 # ---------- F8c/D30: MULTIPART/FORM-DATA ----------
 
-struct Parte:
-    """Um campo de um formulario. `nome` e o do campo; `ficheiro` e o nome do
+struct Part:
+    """Um campo de um formulario. `name_s` e o do campo; `file_name` e o nome do
     ficheiro quando havia um, ou "" quando era um campo de texto."""
-    nome: str
-    ficheiro: str
-    tipo: str
-    dados: bytes
+    name_s: str
+    file_name: str
+    ctype: str
+    data: bytes
 
-    def texto(self) -> str:
-        return str(self.dados)
+    def text(self) -> str:
+        return str(self.data)
 
 
-def limite_de(content_type: str) -> str:
+def boundary_of(content_type: str) -> str:
     """A fronteira do `Content-Type: multipart/form-data; boundary=...`.
 
     Ela pode vir entre aspas, e vem quando tem caracteres que um token nao
@@ -1164,8 +1203,8 @@ def limite_de(content_type: str) -> str:
     return b
 
 
-def acha(corpo: bytes, agulha: bytes, de: int) -> int:
-    """Onde `agulha` comeca em `corpo` a partir de `de`, ou -1.
+def index_of(body_b: bytes, needle: bytes, from_at: int) -> int:
+    """Onde `needle` comeca em `body_b` a partir de `from_at`, ou -1.
 
     Byte a byte e sem tabela: uma fronteira de multipart tem umas dezenas de
     bytes e aparece umas poucas vezes por pedido, portanto um Boyer-Moore aqui
@@ -1173,14 +1212,14 @@ def acha(corpo: bytes, agulha: bytes, de: int) -> int:
     procurar no TEXTO -- um corpo de upload nao e UTF-8, e converte-lo para o
     procurar seria transformar um ficheiro binario em erro.
     """
-    n = len(corpo)
-    m = len(agulha)
+    n = len(body_b)
+    m = len(needle)
     if m == 0 or m > n:
         return -1
-    i = de
+    i = from_at
     while i + m <= n:
         k = 0
-        while k < m and corpo[i + k] == agulha[k]:
+        while k < m and body_b[i + k] == needle[k]:
             k += 1
         if k == m:
             return i
@@ -1188,21 +1227,21 @@ def acha(corpo: bytes, agulha: bytes, de: int) -> int:
     return -1
 
 
-def cabecalhos_da_parte(bruto: str) -> Dict<str, str>:
+def part_headers(raw_s: str) -> Dict<str, str>:
     out: Dict<str, str> = {}
-    for linha in bruto.split("\r\n"):
-        i = linha.find(":")
+    for line in raw_s.split("\r\n"):
+        i = line.find(":")
         if i > 0:
-            out[linha[0:i].strip().lower()] = linha[i + 1:].strip()
+            out[line[0:i].strip().lower()] = line[i + 1:].strip()
     return out
 
 
-def valor_de(disp: str, chave: str) -> str:
+def value_of(disposition: str, key: str) -> str:
     """`form-data; name="a"; filename="b.txt"` -> o valor de uma das chaves."""
-    i = disp.lower().find(chave.lower() + "=")
+    i = disposition.lower().find(key.lower() + "=")
     if i < 0:
         return ""
-    v = disp[i + len(chave) + 1:]
+    v = disposition[i + len(key) + 1:]
     if v.startswith("\""):
         j = v.find("\"", 1)
         return v[1:j] if j > 0 else ""
@@ -1210,55 +1249,55 @@ def valor_de(disp: str, chave: str) -> str:
     return v[0:j2].strip() if j2 >= 0 else v.strip()
 
 
-def multipart(req: Request) -> List<Parte>:
+def multipart(req: Request) -> List<Part>:
     """As partes de um `multipart/form-data`. Lista vazia quando nao e um.
 
     O formato e da RFC 7578, e o que ele tem de traicoeiro esta em duas linhas: a
     fronteira no corpo leva DOIS hifens a frente, e a ultima leva dois atras
     tambem. Quem so procura a fronteira nua encontra-a dentro dela mesma.
     """
-    fronteira = limite_de(req.header("content-type"))
-    if len(fronteira) == 0:
+    boundary = boundary_of(req.header("content-type"))
+    if len(boundary) == 0:
         return []
-    marca = ("--" + fronteira).encode()
-    corpo = req.body
-    partes: List<Parte> = []
-    at = acha(corpo, marca, 0)
+    tag = ("--" + boundary).encode()
+    body_b = req.body
+    parts: List<Part> = []
+    at = index_of(body_b, tag, 0)
     if at < 0:
         return []
-    at += len(marca)
+    at += len(tag)
     while True:
         # depois da fronteira vem `\r\n` (ha mais uma parte) ou `--` (acabou)
-        if at + 2 > len(corpo):
+        if at + 2 > len(body_b):
             break
-        if int(corpo[at]) == 45 and int(corpo[at + 1]) == 45:
+        if int(body_b[at]) == 45 and int(body_b[at + 1]) == 45:
             break        # `--`: era a ultima
         # salta o CRLF
-        if int(corpo[at]) == 13:
+        if int(body_b[at]) == 13:
             at += 2
-        fim_cab = acha(corpo, b"\r\n\r\n", at)
-        if fim_cab < 0:
+        head_end = index_of(body_b, b"\r\n\r\n", at)
+        if head_end < 0:
             break
-        cab = cabecalhos_da_parte(str(corpo[at:fim_cab]))
-        inicio = fim_cab + 4
-        prox = acha(corpo, marca, inicio)
-        if prox < 0:
+        hdr = part_headers(str(body_b[at:head_end]))
+        start_at = head_end + 4
+        next_at = index_of(body_b, tag, start_at)
+        if next_at < 0:
             break
         # o corpo da parte acaba DOIS bytes antes da fronteira: o `\r\n` que a
         # separa pertence a moldura e nao aos dados. Levar-lhos e o defeito que
         # faz cada ficheiro carregado chegar com dois bytes a mais.
-        fim = prox - 2
-        disp = cab["content-disposition"] if "content-disposition" in cab else ""
-        tipo = cab["content-type"] if "content-type" in cab else ""
-        partes.append(Parte(valor_de(disp, "name"), valor_de(disp, "filename"),
-                            tipo, corpo[inicio:fim] if fim > inicio else b""))
-        at = prox + len(marca)
-    return partes
+        end_at = next_at - 2
+        disposition = hdr["content-disposition"] if "content-disposition" in hdr else ""
+        ctype = hdr["content-type"] if "content-type" in hdr else ""
+        parts.append(Part(value_of(disposition, "name"), value_of(disposition, "filename"),
+                            ctype, body_b[start_at:end_at] if end_at > start_at else b""))
+        at = next_at + len(tag)
+    return parts
 
 
 # ---------- F8c/D40: `Expect: 100-continue` ----------
 
-def espera_continuar(req: Request) -> bool:
+def expect_continue(req: Request) -> bool:
     """O cliente perguntou se pode mandar o corpo?
 
     O `curl` manda isto sozinho acima de um KiB, e e exactamente para isto que o

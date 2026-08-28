@@ -58,14 +58,61 @@ E 9 casos que TÊM de passar, para o portão não estar só a recusar tudo — e
 eles um `ping` no meio de uma mensagem fragmentada, e um caractere UTF-8 partido
 ao meio entre dois fragmentos.
 
+## A negociação, e o que ela custou ler a sério
+
+`Sec-WebSocket-Extensions` e `Sec-WebSocket-Protocol` são a mesma forma do RFC
+7230 §7 — uma lista de itens, cada um com parâmetros — e o `parse_list` lê-a como
+gramática e não por busca de subcadeia. A diferença tem um caso que a explica:
+
+    x; a="permessage-deflate"
+
+Uma busca por `"permessage-deflate"` acerta aqui e conclui que o cliente ofereceu
+a extensão. Não ofereceu: ofereceu uma extensão `x` cujo parâmetro `a` tem aquele
+*valor*. Um valor entre aspas pode conter vírgulas e pontos e vírgulas, e é isso
+que torna a busca de subcadeia insuficiente em vez de só imprecisa.
+
+O que se negoceia, e o que se faz com cada coisa:
+
+| parâmetro | o que se faz |
+|---|---|
+| `server_max_window_bits=N` | **honrado**: o LZ77 não emite um casamento a mais de 2^N bytes, e responde-se com o mesmo N |
+| `client_max_window_bits=N` | ecoado; o nosso `inflate` usa a janela inteira, portanto qualquer N é seguro |
+| `client_max_window_bits` sem valor | é "escolhe tu", e não se aperta o cliente por nada — não se responde valor nenhum |
+| `*_no_context_takeover` | **exigido** dos dois lados, e a razão está abaixo |
+| qualquer outro | a oferta é **recusada** (§7): responder a uma oferta que não se entendeu inteira é prometer o que ninguém definiu |
+
+Honrar os bits de janela precisou de uma coisa que não existia: o `deflate_sync`
+do `packages/compress` leva agora um limite de distância. E a promessa **não se
+confere com o `zlib`** — um `decompressobj(wbits=-8)` do CPython aceita
+alegremente um fluxo com casamentos a 400 bytes lido com uma janela de 256, e
+portanto passaria tanto o código certo como o errado. Quem a confere é o
+`tests/ws-window.py`, um leitor de DEFLATE escrito do RFC 1951 que olha para as
+distâncias emitidas.
+
+## Fragmentar o que sai
+
+O `fragments(op, payload, size)` parte uma mensagem em quadros, e a ordem em
+relação à compressão é obrigatória: **comprime-se a mensagem inteira e só depois
+se parte**. O fluxo do DEFLATE atravessa a fragmentação (§7.2.1 do RFC 7692), e
+comprimir cada fragmento por si daria N fluxos independentes que o outro lado não
+consegue juntar. Pela mesma razão o **RSV1 vai só no primeiro quadro**: ele
+descreve a mensagem, e repeti-lo nas continuações é um 1002.
+
+Durante muito tempo só se sabia *receber* fragmentos, o que é a metade fácil: uma
+mensagem grande num quadro único obriga o outro lado a ter tudo em memória antes
+de olhar para o primeiro byte.
+
 ## O que ainda não está aqui
 
 * **a janela partilhada** do permessage-deflate (`context takeover`). A extensão
-  está feita e negoceia `no_context_takeover` dos dois lados; com a janela
+  está feita e exige `no_context_takeover` dos dois lados; com a janela
   partilhada a mensagem N comprimiria contra o que a N-1 disse, e isso pede um
   LZ77 que guarde os últimos 32 KiB por conexão e dos dois lados. Medido: 888
   bytes no fio passam a 60 sem takeover; com ele passariam a menos, e a segunda
   mensagem a muito menos.
+* **a fase de descarte** do §7.1.7 do lado do SERVIDOR. O cliente tem-na (o
+  `discard()` do `packages/httpc`, com prazo); o servidor fecha o TCP logo depois
+  de mandar o quadro de fecho, que é o que o §7.1.1 lhe manda fazer.
 * **o aperto de mão HTTP**, que é da `packages/httpd` (F6) — aqui só entra o
   protocolo depois de a conexão já ser um WebSocket.
 

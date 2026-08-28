@@ -4,16 +4,16 @@ import <httpd/router.psc> as rt
 import sys
 
 
-async def raiz(req: httpd.Request) -> httpd.Response:
+async def root(req: httpd.Request) -> httpd.Response:
     return httpd.text("raiz")
 
-async def lista(req: httpd.Request) -> httpd.Response:
+async def list_h(req: httpd.Request) -> httpd.Response:
     return httpd.text("lista de jogadores")
 
-async def um(req: httpd.Request) -> httpd.Response:
+async def one(req: httpd.Request) -> httpd.Response:
     return httpd.text("jogador " + req.param("id"))
 
-async def inventario(req: httpd.Request) -> httpd.Response:
+async def inventory(req: httpd.Request) -> httpd.Response:
     return httpd.text("inventario de " + req.param("id"))
 
 async def literal(req: httpd.Request) -> httpd.Response:
@@ -22,34 +22,34 @@ async def literal(req: httpd.Request) -> httpd.Response:
     # DEPOIS do `:id`
     return httpd.text("sou eu")
 
-async def cria(req: httpd.Request) -> httpd.Response:
+async def create(req: httpd.Request) -> httpd.Response:
     return httpd.text("criado")
 
-async def ficheiro(req: httpd.Request) -> httpd.Response:
+async def file_name(req: httpd.Request) -> httpd.Response:
     return httpd.text("resto=" + req.param("*"))
 
-async def eco_query(req: httpd.Request) -> httpd.Response:
+async def echo_query(req: httpd.Request) -> httpd.Response:
     return httpd.text(req.q("nome") + "|" + req.q("vazio") + "|" + str(len(req.q("nao_existe"))))
 
-async def query_lista(req: httpd.Request) -> httpd.Response:
+async def query_list(req: httpd.Request) -> httpd.Response:
     return httpd.text(",".join(req.q_all("t")))
 
-async def corpo_json(req: httpd.Request) -> httpd.Response:
+async def json_body(req: httpd.Request) -> httpd.Response:
     v = req.json()
     return httpd.json({"recebi": v, "era_json": req.is_json()})
 
 
 r = rt.router()
-r.get("/", raiz)
-r.get("/jogadores", lista)
-r.get("/jogadores/:id", um)
-r.get("/jogadores/:id/inventario", inventario)
+r.get("/", root)
+r.get("/jogadores", list_h)
+r.get("/jogadores/:id", one)
+r.get("/jogadores/:id/inventario", inventory)
 r.get("/jogadores/eu", literal)          # registado DEPOIS do `:id`, e ganha
-r.post("/jogadores", cria)
-r.get("/ficheiros/*", ficheiro)
-r.get("/query", eco_query)
-r.get("/lista", query_lista)
-r.post("/json", corpo_json)
+r.post("/jogadores", create)
+r.get("/ficheiros/*", file_name)
+r.get("/query", echo_query)
+r.get("/lista", query_list)
+r.post("/json", json_body)
 
 cfg = httpd.config()
 cfg.debug = True
@@ -60,7 +60,7 @@ if len(sys.argv) > 1:
     f.close()
 
 
-async def despacha(req: httpd.Request) -> httpd.Response:
+async def dispatch_fn(req: httpd.Request) -> httpd.Response:
     return await rt.dispatch(r, req)
 
-await httpd.run(srv, despacha)
+await httpd.run(srv, dispatch_fn)

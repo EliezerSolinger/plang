@@ -83,6 +83,169 @@ def close_code_ok(c: int) -> bool:
     return c >= 3000 and c <= 4999
 
 
+
+
+# ---------- a gramática de um cabeçalho de LISTA COM PARÂMETROS ----------
+#
+# `Sec-WebSocket-Extensions` e `Sec-WebSocket-Protocol` são a mesma forma do
+# RFC 7230 §7, e o `permessage-deflate` do RFC 7692 §7 vive dentro dela:
+#
+#     lista  = 1#item
+#     item   = token *( ";" param )
+#     param  = token [ "=" ( token | quoted-string ) ]
+#
+# **Uma busca de subcadeia não serve, e é o que aqui estava.** Um valor entre
+# aspas pode conter uma vírgula e um ponto e vírgula, e um `find("server_max_
+# window_bits")` acerta dentro de `x="server_max_window_bits"` — que é um valor e
+# não um parâmetro. Ler a gramática é a diferença entre honrar
+# `client_max_window_bits=10` e não saber que ele foi pedido.
+
+
+struct Param:
+    name: str
+    value: str          # "" = o parâmetro veio SEM valor, que é diferente de ausente
+
+
+struct Offer:
+    """Um item da lista, com os seus parâmetros pela ordem em que vieram."""
+    name: str
+    params: List<Param>
+
+    def has(self, k: str) -> bool:
+        for p in self.params:
+            if p.name == k:
+                return True
+        return False
+
+    def get(self, k: str) -> str:
+        """O valor, ou "" quando o parâmetro não tem valor OU não está lá. Quem
+        precisa de distinguir os dois casos pergunta ao `has` primeiro — é a
+        mesma distinção entre "não disse" e "disse que não sabe" do código de
+        fecho 1005."""
+        for p in self.params:
+            if p.name == k:
+                return p.value
+        return ""
+
+
+def is_token_char(c: int) -> bool:
+    """Um `tchar` do RFC 7230 §3.2.6. A lista é branca e não preta de propósito:
+    um byte que não esteja aqui termina o token, e assim um cabeçalho torcido
+    para-se em vez de se ler para dentro do seguinte."""
+    if c >= 48 and c <= 57:
+        return True
+    if (c >= 65 and c <= 90) or (c >= 97 and c <= 122):
+        return True
+    # !#$%&'*+-.^_`|~ — os quinze que o RFC deixa passar num token
+    if c == 33 or c == 35 or c == 36 or c == 37 or c == 38:
+        return True
+    if c == 39 or c == 42 or c == 43 or c == 45 or c == 46:
+        return True
+    return c == 94 or c == 95 or c == 96 or c == 124 or c == 126
+
+
+def skip_ows(b: bytes, i: int) -> int:
+    """O `OWS` do §3.2.3: espaço e tabulação, e mais nada — um `\r` ou um `\n`
+    aqui dentro seria uma injecção de cabeçalho, e quem os deixa passar é que a
+    permite."""
+    n = len(b)
+    while i < n and (int(b[i]) == 32 or int(b[i]) == 9):
+        i += 1
+    return i
+
+
+def read_text(b: bytes) -> str:
+    """Os bytes como texto, ou "" quando não são UTF-8.
+
+    Um cabeçalho DEVIA ser ASCII, e é justamente por isso que isto não levanta:
+    um cliente que manda um byte torto num valor entre aspas conseguiria derrubar
+    a negociação inteira se o `str()` subisse daqui. O item fica com o valor
+    vazio e a oferta é recusada mais à frente, que é o que se quer.
+    """
+    try:
+        return str(b)
+    catch e:
+        return ""
+
+
+def parse_list(header: str) -> List<Offer>:
+    """A lista, item a item, pela ordem em que veio — que é a ordem de
+    PREFERÊNCIA de quem a mandou, e por isso não se ordena."""
+    out: List<Offer> = []
+    b = header.encode()
+    n = len(b)
+    i = 0
+    while i < n:
+        i = skip_ows(b, i)
+        start = i
+        while i < n and is_token_char(int(b[i])):
+            i += 1
+        name = read_text(b[start:i])
+        params: List<Param> = []
+        i = skip_ows(b, i)
+        while i < n and int(b[i]) == 59:            # ';'
+            i += 1
+            i = skip_ows(b, i)
+            ps = i
+            while i < n and is_token_char(int(b[i])):
+                i += 1
+            pname = read_text(b[ps:i])
+            pval = ""
+            i = skip_ows(b, i)
+            if i < n and int(b[i]) == 61:           # '='
+                i += 1
+                i = skip_ows(b, i)
+                if i < n and int(b[i]) == 34:       # '"' — uma quoted-string
+                    i += 1
+                    vb: List<u8> = []
+                    while i < n and int(b[i]) != 34:
+                        # o `quoted-pair` do §3.2.6: uma barra invertida escapa o
+                        # byte seguinte, e sem isto um valor com uma aspa dentro
+                        # fecharia a string no sítio errado
+                        if int(b[i]) == 92 and i + 1 < n:
+                            i += 1
+                        vb.append(b[i])
+                        i += 1
+                    if i < n:
+                        i += 1                      # a aspa de fecho
+                    pval = read_text(bytes(vb))
+                else:
+                    vs = i
+                    while i < n and is_token_char(int(b[i])):
+                        i += 1
+                    pval = read_text(b[vs:i])
+                i = skip_ows(b, i)
+            if len(pname) > 0:
+                params.append(Param(pname, pval))
+        if len(name) > 0:
+            out.append(Offer(name, params))
+        if i < n and int(b[i]) == 44:               # ',' — o item seguinte
+            i += 1
+        elif i < n:
+            # um byte que a gramática não prevê. Salta-se UM, e é o que garante
+            # que isto termina: sem este passo um cabeçalho com lixo a meio
+            # ficava em laço com `i` parado, e um laço infinito num parser de
+            # cabeçalhos é uma negação de serviço de um cabeçalho só.
+            i += 1
+    return out
+
+
+def pick_token(header: str, offered: List<str>) -> str:
+    """O primeiro item da lista que também esteja em `offered`, ou "".
+
+    A ordem que manda é a NOSSA e não a do cliente, e é uma decisão: o cliente
+    diz o que sabe falar, o servidor diz o que prefere. `offered` é a preferência
+    do programa, e percorrer-se-a por fora significa que a primeira que ele
+    escreveu ganha.
+    """
+    items = parse_list(header)
+    for want in offered:
+        for it in items:
+            if it.name == want:
+                return want
+    return ""
+
+
 # ---------- um quadro ----------
 
 struct Frame:
@@ -166,8 +329,8 @@ def serialize(f: Frame, key: bytes) -> bytes:
     if len(key) == 4:
         for b in key:
             out.append(b)
-    corpo = apply_mask(f.payload, key) if len(key) == 4 else f.payload
-    return bytes(out) + corpo
+    body = apply_mask(f.payload, key) if len(key) == 4 else f.payload
+    return bytes(out) + body
 
 
 def close_payload(code: int, reason: str) -> bytes:
@@ -181,6 +344,63 @@ def close_payload(code: int, reason: str) -> bytes:
         return b""
     out: List<u8> = [u8((code >> 8) & 0xFF), u8(code & 0xFF)]
     return bytes(out) + reason.encode()
+
+
+def fragment_bounds(n: int, size: int) -> List<int>:
+    """Os limites dos fragmentos de uma mensagem de `n` bytes: `[0, a, b, ..., n]`.
+
+    Devolve INTEIROS e nao quadros, e a diferenca e entre fragmentar e duplicar:
+    montar a lista de `Frame` de uma mensagem de dez megabytes copia os dez
+    megabytes para as fatias e guarda-os todos ao mesmo tempo — o DOBRO da
+    memoria, na funcao que existe justamente para nao precisar dela. Com os
+    limites, quem escreve corta um pedaco de cada vez e nunca tem mais do que um.
+
+    Uma mensagem VAZIA da `[0, 0]`: um fragmento de zero bytes, porque uma
+    mensagem vazia continua a ser uma mensagem.
+    """
+    out: List<int> = [0]
+    if size <= 0 or n <= size:
+        out.append(n)
+        return out
+    at = 0
+    while at < n:
+        end = at + size
+        if end > n:
+            end = n
+        out.append(end)
+        at = end
+    return out
+
+
+def fragments(op: int, payload: bytes, size: int, rsv1: bool = False) -> List<Frame>:
+    """Uma mensagem partida em quadros. `size` <= 0 = um quadro só.
+
+    **Porque e que isto faz falta.** Ate aqui tudo o que se enviava saia num
+    quadro unico, e um quadro unico de dez megabytes obriga o outro lado a ter os
+    dez megabytes inteiros em memoria antes de poder olhar para o primeiro byte
+    — e obriga-nos a escrever dez megabytes num `write` que nao cede. Um snapshot
+    de mundo de um jogo e exactamente esse caso.
+
+    **O RSV1 vai SO no primeiro quadro** (§6.1 do RFC 7692): ele descreve a
+    MENSAGEM e nao o quadro, e repeti-lo nas continuacoes e um erro de protocolo
+    que qualquer implementacao correcta recusa com 1002. Pela mesma razao a
+    compressao acontece ANTES desta funcao: o fluxo do DEFLATE atravessa a
+    fragmentacao, e comprimir cada fragmento por si daria N fluxos que o outro
+    lado nao consegue juntar.
+
+    O opcode do primeiro quadro e o da mensagem; os seguintes sao OP_CONT, e o
+    ultimo e o que leva o FIN.
+    """
+    out: List<Frame> = []
+    n = len(payload)
+    b = fragment_bounds(n, size)
+    i = 1
+    while i < len(b):
+        first = i == 1
+        out.append(Frame(b[i] >= n, rsv1 and first, False, False,
+                         op if first else OP_CONT, payload[b[i - 1]:b[i]]))
+        i += 1
+    return out
 
 
 # ---------- o parser incremental ----------
@@ -226,12 +446,12 @@ struct Parser:
         gigabyte numa tarde."""
         if self.pos == 0:
             return
-        novo: List<u8> = []
+        fresh: List<u8> = []
         i = self.pos
         while i < len(self.buf):
-            novo.append(self.buf[i])
+            fresh.append(self.buf[i])
             i += 1
-        self.buf = novo
+        self.buf = fresh
         self.pos = 0
 
     def next(self) -> Frame?:
@@ -254,8 +474,8 @@ struct Parser:
         rsv3 = (b0 & 0x10) != 0
         op = b0 & 0x0F
         masked = (b1 & 0x80) != 0
-        tam = b1 & 0x7F
-        cab = p + 2
+        size = b1 & 0x7F
+        head = p + 2
 
         # ---- as recusas que não dependem do corpo ----
         if rsv2 or rsv3 or (rsv1 and not self.rsv1_ok):
@@ -283,7 +503,7 @@ struct Parser:
                 # uma mensagem, que é justamente para o que ele serve (§5.5)
                 self.fail(CLOSE_PROTOCOL_ERROR, "a control frame may not be fragmented")
                 return None
-            if tam > 125:
+            if size > 125:
                 self.fail(CLOSE_PROTOCOL_ERROR, "a control frame may not carry more than 125 bytes")
                 return None
         if masked != self.is_server:
@@ -292,53 +512,53 @@ struct Parser:
             return None
 
         # ---- o comprimento, e a forma MÍNIMA ----
-        if tam == 126:
-            if n - cab < 2:
+        if size == 126:
+            if n - head < 2:
                 return None
-            tam = (int(self.buf[cab]) << 8) | int(self.buf[cab + 1])
-            cab += 2
-            if tam < 126:
+            size = (int(self.buf[head]) << 8) | int(self.buf[head + 1])
+            head += 2
+            if size < 126:
                 # o §5.2 diz "MUST": 125 escreve-se num byte, e escrevê-lo em dois
                 # é uma segunda maneira de dizer a mesma coisa — que é como se
                 # dessincronizam dois leitores do mesmo cano
                 self.fail(CLOSE_PROTOCOL_ERROR, "length not in its minimal form")
                 return None
-        elif tam == 127:
-            if n - cab < 8:
+        elif size == 127:
+            if n - head < 8:
                 return None
-            if (int(self.buf[cab]) & 0x80) != 0:
+            if (int(self.buf[head]) & 0x80) != 0:
                 self.fail(CLOSE_PROTOCOL_ERROR, "the high bit of a 64-bit length must be zero")
                 return None
-            tam = 0
+            size = 0
             i = 0
             while i < 8:
-                tam = (tam << 8) | int(self.buf[cab + i])
+                size = (size << 8) | int(self.buf[head + i])
                 i += 1
-            cab += 8
-            if tam < 65536:
+            head += 8
+            if size < 65536:
                 self.fail(CLOSE_PROTOCOL_ERROR, "length not in its minimal form")
                 return None
 
-        chave: List<u8> = []
+        key: List<u8> = []
         if masked:
-            if n - cab < 4:
+            if n - head < 4:
                 return None
-            chave = [self.buf[cab], self.buf[cab + 1], self.buf[cab + 2], self.buf[cab + 3]]
-            cab += 4
-        if n - cab < tam:
+            key = [self.buf[head], self.buf[head + 1], self.buf[head + 2], self.buf[head + 3]]
+            head += 4
+        if n - head < size:
             return None
 
-        corpo: List<u8> = []
+        body: List<u8> = []
         i = 0
-        while i < tam:
-            b = int(self.buf[cab + i])
+        while i < size:
+            b = int(self.buf[head + i])
             if masked:
-                b = b ^ int(chave[i & 3])
-            corpo.append(u8(b))
+                b = b ^ int(key[i & 3])
+            body.append(u8(b))
             i += 1
-        self.pos = cab + tam
+        self.pos = head + size
         self.compact()
-        return Frame(fin, rsv1, rsv2, rsv3, op, bytes(corpo))
+        return Frame(fin, rsv1, rsv2, rsv3, op, bytes(body))
 
 
 def parser(is_server: bool, rsv1_ok: bool = False) -> Parser:
@@ -389,7 +609,7 @@ struct Proto:
     # 148/F9b: a mensagem em curso veio comprimida? O RSV1 vem no PRIMEIRO
     # quadro de uma mensagem fragmentada e vale para ela inteira (§6.1), portanto
     # tem de ser guardado quando ela começa.
-    frag_comprimida: bool
+    frag_compressed: bool
     pmd: Deflate
 
     def failed(self) -> bool:
@@ -438,22 +658,22 @@ struct Proto:
                 self.fail(CLOSE_PROTOCOL_ERROR, "a close body of one byte is half a code")
                 return None
             code = 0
-            razao: bytes = b""
+            reason: bytes = b""
             if n >= 2:
                 code = (int(f.payload[0]) << 8) | int(f.payload[1])
                 if not close_code_ok(code):
                     self.fail(CLOSE_PROTOCOL_ERROR, "close code " + str(code) + " may not travel")
                     return None
-                razao = f.payload[2:]
+                reason = f.payload[2:]
                 # a razão é TEXTO, e portanto tem de ser UTF-8 — o mesmo 1007 de
                 # uma mensagem de texto, e pela mesma razão
                 try:
-                    ignora = str(razao)
+                    ignored = str(reason)
                 catch e:
                     self.fail(CLOSE_INVALID_DATA, "the close reason is not valid UTF-8")
                     return None
             self.close_received = True
-            return Event(EV_CLOSE, razao, code)
+            return Event(EV_CLOSE, reason, code)
 
         # ---- e um quadro de DADOS entra na montagem ----
         if f.op == OP_CONT:
@@ -468,7 +688,7 @@ struct Proto:
             self.frag = []
             self.fragmenting = True
             # o RSV1 do PRIMEIRO quadro vale para a mensagem inteira (§6.1)
-            self.frag_comprimida = f.rsv1
+            self.frag_compressed = f.rsv1
 
         for b in f.payload:
             self.frag.append(b)
@@ -478,39 +698,39 @@ struct Proto:
         if not f.fin:
             return None
 
-        corpo = bytes(self.frag)
+        body = bytes(self.frag)
         op = self.frag_op
         self.fragmenting = False
         self.frag = []
-        if self.frag_comprimida:
+        if self.frag_compressed:
             # a carga descomprime-se DEPOIS de a mensagem estar montada, e não
             # quadro a quadro: o fluxo do DEFLATE atravessa a fragmentação, e um
             # fragmento sozinho não é um fluxo que se possa ler.
             try:
-                corpo = descomprime_carga(corpo, self.max_message)
+                body = decompress_payload(body, self.max_message)
             catch e:
                 self.fail(CLOSE_INVALID_DATA, "the compressed payload could not be read: " + e.message)
                 return None
-            self.frag_comprimida = False
+            self.frag_compressed = False
         if op == OP_TEXT:
             # 1007, E SAI DE GRAÇA: `str(bytes)` levanta em UTF-8 inválido,
             # porque uma `str` PROMETE codepoints (79.1). O que noutras
             # bibliotecas é um validador escrito à mão — e é onde a Autobahn mais
             # reprova — aqui é a promessa do tipo a fazer o trabalho.
             try:
-                ignora2 = str(corpo)
+                ignored2 = str(body)
             catch e:
                 self.fail(CLOSE_INVALID_DATA, "the text message is not valid UTF-8")
                 return None
-            return Event(EV_TEXT, corpo, 0)
-        return Event(EV_BINARY, corpo, 0)
+            return Event(EV_TEXT, body, 0)
+        return Event(EV_BINARY, body, 0)
 
 
 def proto(is_server: bool, max_message: int = 1 << 24, pmd: Deflate? = None) -> Proto:
-    d: Deflate = sem_deflate()
+    d: Deflate = no_deflate()
     if pmd != None:
         d = pmd
-    return Proto(parser(is_server, d.ligada), is_server, 0, [], False, False, False, False,
+    return Proto(parser(is_server, d.enabled), is_server, 0, [], False, False, False, False,
                  max_message, False, d)
 
 
@@ -540,64 +760,253 @@ const RSV1 = 0x40      # o bit que diz "esta carga vem comprimida"
 
 
 struct Deflate:
-    """O estado da extensao numa conexao. Sem janela partilhada, portanto o que
-    ele guarda e a NEGOCIACAO e nao um dicionario."""
-    ligada: bool
-    # o tecto de uma mensagem DESCOMPRIMIDA. E uma defesa e nao uma afinacao:
-    # uns poucos quilobytes de zeros comprimidos expandem para gigabytes, e uma
-    # extensao de compressao sem tecto e uma bomba de descompressao a espera.
-    max_saida: int
+    """O estado da extensao numa conexao. Sem janela partilhada entre mensagens,
+    portanto o que ele guarda e a NEGOCIACAO e nao um dicionario."""
+    enabled: bool
+    # O TECTO da mensagem descomprimida NAO esta aqui, e chegou a estar: era um
+    # `max_output` que ninguem lia. O tecto que vale e o `max_message` do `Proto`
+    # — e o mesmo numero para uma mensagem comprimida e para uma fragmentada, que
+    # e a defesa contra as duas maneiras de encher a memoria de um servidor. Ter
+    # dois campos para um numero e ter um deles errado a certa altura.
+    #
+    # OS CAMPOS SAO POR DIRECCAO E NAO POR PAPEL, e a razao e concreta: o RFC
+    # chama-lhes `server_max_window_bits` e `client_max_window_bits`, e num
+    # servidor o primeiro descreve o NOSSO compressor enquanto num cliente
+    # descreve o do outro lado. Guardar os nomes do RFC obrigava cada lado a
+    # lembrar-se de qual e o seu, e um dia um deles trocava-os — o que produz
+    # bytes errados sem erro nenhum.
+    #
+    # `out_bits`: a janela que o NOSSO compressor respeita, porque foi o que o
+    # descompressor do outro lado anunciou. Honrar isto e o que permite aceitar
+    # uma oferta com limite de janela em vez de a saltar.
+    out_bits: int
+    # `in_bits`: o que o outro lado prometeu nao passar. O nosso `inflate` usa a
+    # janela inteira, portanto qualquer valor daqui e seguro de aceitar; o campo e
+    # o resultado da negociacao para quem o quiser LER — um programa que registe
+    # com que janela cada cliente ficou le-o daqui.
+    in_bits: int
 
 
-def sem_deflate() -> Deflate:
-    return Deflate(False, 1 << 24)
+struct Negotiated:
+    """O resultado de ler o `Sec-WebSocket-Extensions`: o que se responde, e o
+    estado que fica ligado na conexao.
 
-
-def negocia(oferta: str) -> str:
-    """Le o `Sec-WebSocket-Extensions` do cliente e devolve o que se aceita, ou
-    "" quando nao se aceita nada.
-
-    O cabecalho e uma lista de ofertas separadas por virgula, e o servidor escolhe
-    UMA. Percorre-se pela ordem em que vieram, que e a ordem de preferencia do
-    cliente.
+    Os dois vem juntos porque sao a MESMA decisao, e separa-los foi um defeito:
+    o `upgrade` respondia o cabecalho e o laco da conexao voltava a chamar a
+    negociacao para descobrir o estado, apoiado em ela ser deterministica. Era
+    verdade e era fragil — qualquer parametro que passasse a influenciar o
+    estado tinha de ser reproduzido nos dois sitios.
     """
-    for uma in oferta.split(","):
-        o = uma.strip()
-        if not o.startswith("permessage-deflate"):
+    accepted: str       # o cabecalho de resposta, ou "" quando nao se aceita
+    pmd: Deflate
+
+
+def no_deflate() -> Deflate:
+    return Deflate(False, 15, 15)
+
+
+def window_bits(v: str) -> int:
+    """Os bits de janela de um parametro, ou 0 quando o valor nao serve.
+
+    O RFC 7692 §7.1.2 fixa 8..15, e recusar fora disso nao e rigor por gosto: um
+    `server_max_window_bits=7` nao e uma janela pequena, e uma oferta que o pede
+    esta a pedir uma coisa que o DEFLATE nao tem.
+    """
+    if len(v) == 0:
+        return 0
+    n = 0
+    for c in v.encode():
+        d = int(c)
+        if d < 48 or d > 57:
+            return 0
+        n = n * 10 + (d - 48)
+        if n > 15:
+            return 0
+    return n if n >= 8 else 0
+
+
+def negotiate(offer: str) -> Negotiated:
+    """Le o `Sec-WebSocket-Extensions` do cliente e decide.
+
+    O cabecalho e uma lista de ofertas e o servidor escolhe UMA, pela ordem em
+    que vieram — que e a ordem de preferencia do cliente.
+
+    **O que se honra, e o que se recusa.** O RFC tem quatro parametros, e o que
+    manda neles e a janela partilhada entre mensagens (`context takeover`): com
+    ela, a mensagem N comprime contra o que a N-1 disse. Sem ela, cada mensagem
+    comprime sozinha.
+
+    Aqui exige-se `no_context_takeover` dos dois lados, e a razao esta dita em vez
+    de escondida: o nosso compressor e de uma passagem, sem estado entre chamadas,
+    e uma janela partilhada precisa de guardar os ultimos 32 KiB de cada conexao,
+    dos dois lados, em memoria.
+
+    Os `max_window_bits` **passaram a ser honrados** em vez de saltados, e a
+    diferenca esta no compressor: o `deflate_sync` leva uma janela e o LZ77 nao
+    emite um casamento mais distante do que ela. Antes, uma oferta com
+    `server_max_window_bits` era passada a frente — o cliente pedia uma coisa
+    legitima e ficava sem compressao nenhuma.
+
+    Um parametro DESCONHECIDO invalida a oferta (§7): responder a uma oferta que
+    nao se entendeu inteira e prometer um comportamento que ninguem definiu.
+    """
+    for o in parse_list(offer):
+        if o.name != "permessage-deflate":
             continue
-        # `client_max_window_bits` sem valor e um PEDIDO para o servidor escolher;
-        # com valor, e um limite. Como nao usamos janela partilhada, o tamanho
-        # dela nao muda nada e o parametro e ignorado — mas responder com um valor
-        # que nao se respeita seria mentir, portanto nao se responde nenhum.
-        if o.find("server_max_window_bits") >= 0:
-            # o cliente EXIGE uma janela de servidor de um tamanho: sem takeover
-            # a janela nao atravessa mensagens, e prometer um numero seria dizer
-            # uma coisa sobre nada. Passa-se a oferta seguinte.
+        server_b = 15
+        client_b = 0        # 0 = o cliente nao falou do parametro
+        ok = True
+        for pm in o.params:
+            if pm.name == "server_no_context_takeover" or pm.name == "client_no_context_takeover":
+                # §7.1.1: estes NAO levam valor, e um valor aqui e uma oferta
+                # torcida e nao um detalhe a ignorar
+                if len(pm.value) > 0:
+                    ok = False
+                continue
+            if pm.name == "server_max_window_bits":
+                # numa oferta de CLIENTE este parametro tem de ter valor (§7.1.2.2)
+                v = window_bits(pm.value)
+                if v == 0:
+                    ok = False
+                    continue
+                server_b = v
+                continue
+            if pm.name == "client_max_window_bits":
+                if len(pm.value) == 0:
+                    # sem valor e "eu suporto o parametro, escolhe tu". Nao ha
+                    # razao para apertar o cliente, portanto nao se aperta.
+                    client_b = 15
+                    continue
+                v2 = window_bits(pm.value)
+                if v2 == 0:
+                    ok = False
+                    continue
+                client_b = v2
+                continue
+            ok = False
+        if not ok:
             continue
-        return "permessage-deflate; server_no_context_takeover; client_no_context_takeover"
-    return ""
+        resp = "permessage-deflate; server_no_context_takeover; client_no_context_takeover"
+        if server_b != 15:
+            resp += "; server_max_window_bits=" + str(server_b)
+        # §7.1.2.1: se o cliente NAO ofereceu `client_max_window_bits`, o servidor
+        # NAO o pode incluir na resposta — seria exigir uma coisa que o cliente
+        # nao disse que sabia fazer
+        if client_b > 0 and client_b != 15:
+            resp += "; client_max_window_bits=" + str(client_b)
+        # do lado do SERVIDOR: `server_max_window_bits` e a nossa saida
+        return Negotiated(resp, Deflate(True, server_b, client_b if client_b > 0 else 15))
+    return Negotiated("", no_deflate())
 
 
-def liga(d: Deflate, resposta: str):
-    d.ligada = len(resposta) > 0
+# ---------- e o mesmo, do lado do CLIENTE ----------
 
 
-def comprime_carga(corpo: bytes) -> bytes:
+def client_offer() -> str:
+    """O `Sec-WebSocket-Extensions` que um cliente nosso manda.
+
+    Pede `no_context_takeover` nos dois sentidos porque e o que o nosso
+    compressor sabe fazer, e pedi-lo na OFERTA e mais honesto do que descobrir na
+    resposta que o servidor quer janela partilhada: assim um servidor que so
+    saiba com takeover recusa a extensao inteira em vez de combinar uma coisa que
+    nao vamos cumprir.
+
+    Nao se pede limite de janela: a nossa saida sabe respeitar o que o servidor
+    exigir, e a nossa entrada aguenta a janela inteira. Pedir um limite seria
+    apertar-nos a nos por nada.
+    """
+    return "permessage-deflate; client_no_context_takeover; server_no_context_takeover"
+
+
+def read_accepted(header: str) -> Deflate:
+    """Le a resposta do servidor a nossa oferta e devolve o que fica ligado.
+
+    **O que se exige, e o que nao se exige.** Os dois `no_context_takeover` nao
+    sao simetricos, e tratá-los como se fossem era um defeito meu:
+
+      * **`server_no_context_takeover` e OBRIGATORIO na resposta.** Nao e rigor:
+        e uma incapacidade nossa. O `inflate_stream` le cada mensagem como um
+        fluxo independente, e com janela partilhada a mensagem N refere-se ao que
+        a N-1 disse — o que sairia seriam bytes errados sem erro nenhum. O RFC
+        diz que aceitar uma oferta que pede este parametro ja obriga o servidor
+        (§7.1.1.1) e que o eco e opcional; exigi-lo mesmo assim e escolher
+        depender de uma promessa escrita em vez de uma implicita, e num sitio onde
+        o custo de estar errado e silencioso.
+      * **`client_no_context_takeover` nao e exigido**, e exigi-lo estava errado:
+        ele fala de NOS. Um servidor que o omite esta a PERMITIR-nos janela
+        partilhada, e nao usar uma coisa que e permitida e sempre seguro. Recusar
+        a extensao ai era recusar uma negociacao perfeitamente utilizavel.
+
+    E recusa-se **um parametro que nao pedimos** ou um valor de janela fora de
+    8..15: uma resposta que nao e subconjunto da oferta e o §7.1 a ser quebrado, e
+    a conexao fica sem extensao em vez de ficar com uma que ninguem definiu. A
+    excepcao e o `client_max_window_bits`, que se HONRA mesmo sem o termos pedido:
+    ele aperta a nossa propria saida, e um limite sobre nos mesmos nao pode
+    quebrar nada.
+
+    Devolve `no_deflate()` quando nao se aceita — e nao levanta: um servidor que
+    responde mal a uma extensao OPCIONAL nao e razao para nao falar com ele.
+    """
+    for o in parse_list(header):
+        if o.name != "permessage-deflate":
+            continue
+        if not o.has("server_no_context_takeover"):
+            return no_deflate()
+        out_b = 15      # o que O NOSSO compressor tem de respeitar
+        in_b = 15       # e o que o servidor prometeu
+        ok = True
+        for pm in o.params:
+            if pm.name == "server_no_context_takeover" or pm.name == "client_no_context_takeover":
+                if len(pm.value) > 0:
+                    ok = False
+                continue
+            if pm.name == "client_max_window_bits":
+                # NUMA RESPOSTA este parametro fala do CLIENTE, que somos nos: e
+                # a janela que a nossa saida tem de respeitar. E aqui que os
+                # nomes do RFC se invertem em relacao ao servidor.
+                v = window_bits(pm.value)
+                if v == 0:
+                    ok = False
+                    continue
+                out_b = v
+                continue
+            if pm.name == "server_max_window_bits":
+                v2 = window_bits(pm.value)
+                if v2 == 0:
+                    ok = False
+                    continue
+                in_b = v2
+                continue
+            ok = False
+        if not ok:
+            return no_deflate()
+        return Deflate(True, out_b, in_b)
+    return no_deflate()
+
+
+def compress_payload(body: bytes, bits: int = 15) -> bytes:
     """A carga de um quadro, comprimida. Os quatro bytes do sync flush saem, como
-    o s7.2.1 manda — eles sao sempre os mesmos, e mandá-los seria mandar quatro
-    bytes constantes por mensagem."""
-    z = comp.deflate_sync(corpo)
+    o §7.2.1 manda — eles sao sempre os mesmos, e mandá-los seria mandar quatro
+    bytes constantes por mensagem.
+
+    Os `bits` sao os que se negociou: o LZ77 nao emite um casamento mais distante
+    do que a janela do descompressor do outro lado. Comprimir com uma janela maior
+    do que a anunciada produz um fluxo que o outro lado le mal — e mal, aqui, quer
+    dizer bytes errados sem erro nenhum.
+    """
+    w = 1 << (bits if bits >= 8 and bits <= 15 else 15)
+    z = comp.deflate_sync(body, w)
     return z[0:len(z) - 4] if len(z) >= 4 else z
 
 
-def descomprime_carga(corpo: bytes, tecto: int) -> bytes:
+def decompress_payload(body: bytes, ceiling: int) -> bytes:
     """E o inverso: repoe os quatro bytes e descomprime.
 
-    O `tecto` nao e uma afinacao. Uns poucos quilobytes de zeros comprimidos
+    O `ceiling` nao e uma afinacao. Uns poucos quilobytes de zeros comprimidos
     expandem para gigabytes, e uma extensao de compressao sem tecto e uma bomba de
     descompressao a espera de um atacante que sabe disto — que e toda a gente.
     """
-    saiu = comp.inflate_stream(corpo + b"\x00\x00\xff\xff")
-    if len(saiu) > tecto:
+    out_bytes = comp.inflate_stream(body + b"\x00\x00\xff\xff")
+    if len(out_bytes) > ceiling:
         raise error("permessage-deflate: a mensagem descomprimida passa o tecto — e o que uma bomba de descompressao faz")
-    return saiu
+    return out_bytes

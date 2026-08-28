@@ -55,13 +55,13 @@ async def main() -> int:
         print(f"  - {f.name} (type {f.type_code})")
     print("linhas (nome por get_str, linhas por get_int, data por get_datetime):")
     for row in r3.rows:
-        nome = row.get_str("table_name")
-        linhas = row.get_int("table_rows")
-        quando = "?"
+        name_s = row.get_str("table_name")
+        rows = row.get_int("table_rows")
+        when = "?"
         if not row.is_null("create_time"):
             d = row.get_datetime("create_time")
-            quando = f"{d.date.year}-{d.date.month}-{d.date.day}"
-        print(f"  {nome}: {linhas} linhas, criada {quando}")
+            when = f"{d.date.year}-{d.date.month}-{d.date.day}"
+        print(f"  {name_s}: {rows} linhas, criada {when}")
 
     # 4. uma query PARAMETRIZADA — a forma segura, com o valor escapado
     r4 = await conn.query_str("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name LIKE %s LIMIT 3", [db, "a%"])
@@ -87,21 +87,21 @@ async def main() -> int:
     await conn.begin()
     await conn.query_str("INSERT INTO _dcp_probe (id, nome) VALUES (%s, %s)", ["1", "O'Brien"])
     await conn.query_str("INSERT INTO _dcp_probe (id, nome) VALUES (%s, %s)", ["2", "linha\ndupla"])
-    dentro = (await conn.query("SELECT COUNT(*) FROM _dcp_probe")).scalar()
-    if dentro != None:
-        print(f"dentro da transacao: {str(dentro)} linhas")
+    inside = (await conn.query("SELECT COUNT(*) FROM _dcp_probe")).scalar()
+    if inside != None:
+        print(f"dentro da transacao: {str(inside)} linhas")
     await conn.rollback()
-    depois = (await conn.query("SELECT COUNT(*) FROM _dcp_probe")).scalar()
-    if depois != None:
-        print(f"depois do rollback: {str(depois)} linhas (deve ser 0)")
+    after = (await conn.query("SELECT COUNT(*) FROM _dcp_probe")).scalar()
+    if after != None:
+        print(f"depois do rollback: {str(after)} linhas (deve ser 0)")
 
     # 6. execute_many: duas linhas de uma vez, e le de volta com o valor escapado
     await conn.execute_many("INSERT INTO _dcp_probe (id, nome) VALUES (%s, %s)",
                             [["10", "a'b"], ["20", "c\\d"]])
-    lidas = await conn.query("SELECT id, nome FROM _dcp_probe ORDER BY id")
-    print(f"execute_many inseriu {len(lidas.rows)}:")
-    for row in lidas.rows:
-        print(f"  id={row.get_int(\"id\")} nome={row.get_str(\"nome\")}")
+    n_read = await conn.query("SELECT id, nome FROM _dcp_probe ORDER BY id")
+    print(f"execute_many inseriu {len(n_read.rows)}:")
+    for row in n_read.rows:
+        print(f"  id={row.get_int(\"id\")} nome={row.get_str(\"name_s\")}")
 
     # 7. ping
     await conn.ping()

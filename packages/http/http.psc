@@ -612,12 +612,12 @@ struct Parser:
 
     # o que sobrou por ler, para quem vai continuar noutro protocolo
     def rest(self) -> bytes:
-        sobra: List<u8> = []
+        leftover: List<u8> = []
         i = self.pos
         while i < len(self.buf):
-            sobra.append(self.buf[i])
+            leftover.append(self.buf[i])
             i += 1
-        return bytes(sobra)
+        return bytes(leftover)
 
     # KEEP-ALIVE: a mesma conexão traz a mensagem seguinte, e o que sobrou do
     # `buf` depois do `pos` é o princípio dela.
@@ -633,13 +633,13 @@ struct Parser:
     # codificações da mensagem anterior seriam contaminação, e a contaminação
     # entre mensagens da mesma conexão é a família do request smuggling.
     def reset(self):
-        sobra: List<u8> = []
+        leftover: List<u8> = []
         i = self.pos
         while i < len(self.buf):
-            sobra.append(self.buf[i])
+            leftover.append(self.buf[i])
             i += 1
         self.state = H_LINE
-        self.buf = sobra
+        self.buf = leftover
         self.pos = 0
         self.method = ""
         self.target = ""

@@ -31,81 +31,81 @@ import topic
 # Um `struct` com números resolve-o, porque um struct nasce onde é construído — e
 # o worker constrói o seu no princípio. Fica-se com o mesmo isolamento e sem a
 # armadilha.
-struct Estado:
-    eu: int
-    servidos: int
-    recebidas: int
+struct State:
+    me: int
+    served_n: int
+    received: int
 
 
-estado: Estado? = None
+state: State? = None
 
 
-def meu() -> Estado:
+def mine() -> State:
     """O estado deste worker, construído à primeira pergunta. Um `T?` que se
     enche no primeiro uso é o que substitui um inicializador de topo dentro de um
     worker."""
-    global estado
-    e = estado
+    global state
+    e = state
     if e != None:
         return e
-    novo = Estado(0, 0, 0)
-    estado = novo
-    return novo
+    fresh = State(0, 0, 0)
+    state = fresh
+    return fresh
 
 
 async def handle(req: httpd.Request) -> httpd.Response:
-    e = meu()
+    e = mine()
     if req.path == "/quem":
-        e.servidos += 1
-        return httpd.text(str(e.eu))
+        e.served_n += 1
+        return httpd.text(str(e.me))
     if req.path == "/servi":
-        return httpd.text(str(e.eu) + ":" + str(e.servidos))
+        return httpd.text(str(e.me) + ":" + str(e.served_n))
     if req.path == "/difunde":
         n = topic.publish("todos", b"ola de um worker")
         return httpd.text(str(n))
     if req.path == "/recebi":
-        return httpd.text(str(e.eu) + ":" + str(e.recebidas))
+        return httpd.text(str(e.me) + ":" + str(e.received))
     return httpd.status_code(404)
 
 
-async def espia() -> int:
+async def peek() -> int:
     """Cada worker assina o tópico e conta o que recebe, para o portão ver que
     uma difusão atravessa os workers."""
     topic.subscribe("todos")
     while True:
         d = await topic.recv()
-        meu().recebidas += 1
+        mine().received += 1
 
 
 # O ADAPTADOR, e a razão de ele existir: o `spawn` só aceita uma função DO
 # PROGRAMA, não de um módulo importado. Portanto uma biblioteca não pode oferecer
-# um `serve(porta, handle, workers=N)` que se lance a si mesma — quem lança é
+# um `serve(port_n, handle, workers=N)` que se lance a si mesma — quem lança é
 # sempre o programa, com estas linhas. Fica registado nos ACHADOS.
-async def trabalhador(h: def(httpd.Request) -> Task<httpd.Response>, porta: int, n: int) -> int:
-    meu().eu = n
+async def worker_fn(h: def(httpd.Request) -> Task<httpd.Response>, port_n: int, n: int) -> int:
+    mine().me = n
     c = httpd.config()
     c.debug = True
-    srv = httpd.listen(porta, c, True)
-    t = espia()
+    srv = httpd.listen(port_n, c, True)
+    t = peek()
     await httpd.run(srv, h)
     return 0
 
 
-quantos = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+how_many = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 
 # o PRIMEIRO abre o porto e diz qual é; os outros ligam-se ao MESMO
-meu().eu = 1
+mine().me = 1
 cfg = httpd.config()
 cfg.debug = True
 srv0 = httpd.listen(0, cfg, True)
-porto = srv0.port
+port_n = srv0.port
 f = await open(sys.argv[1], "w")
-await f.write(str(porto))
+await f.write(str(port_n))
 f.close()
 
-trabalhadores: List<Worker<int>> = []
-for i in range(quantos - 1):
-    trabalhadores.append(spawn(trabalhador, (handle, porto, i + 2)))
+workers: List<Worker<int>> = []
+for i in range(how_many - 1):
+    workers.append(spawn(worker_fn, (handle, port_n, i + 2)))
 
-t0 = espia()
+t0 = peek()
 await httpd.run(srv0, handle)

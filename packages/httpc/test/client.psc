@@ -13,16 +13,16 @@ import sys
 base = "http://127.0.0.1:" + sys.argv[1]
 
 r1 = await hc.get(base + "/")
-print("get:", r1.status, r1.texto())
+print("get:", r1.status, r1.text())
 
 r2 = await hc.get(base + "/nao-existe")
 print("404:", r2.status)
 
 r3 = await hc.post(base + "/eco", b"0123456789")
-print("post:", r3.status, r3.texto())
+print("post:", r3.status, r3.text())
 
 r4 = await hc.get(base + "/json")
-print("json:", r4.texto())
+print("json:", r4.text())
 
 # o gzip, pedido e desfeito sem que quem chama saiba
 r5 = await hc.get(base + "/grande")
@@ -30,10 +30,10 @@ print("gzip:", r5.status, len(r5.body), r5.header("content-encoding"))
 
 # um redirect, seguido e contado
 r6 = await hc.get(base + "/parati")
-print("redirect:", r6.status, r6.redirects, r6.url_final.endswith("/"))
+print("redirect:", r6.status, r6.redirects, r6.final_url.endswith("/"))
 
 # ... e NÃO seguido, quando o tecto é zero
-p7 = hc.pedido("GET", base + "/parati")
+p7 = hc.request("GET", base + "/parati")
 p7.max_redirects = 0
 try:
     r7 = await hc.fetch(p7)
@@ -48,9 +48,9 @@ print("head:", r8.status, len(r8.body))
 # o desmontar de URLs, que é onde os enganos vivem
 for s in ["http://a.b/c", "https://a.b", "http://a.b:8080/x?y=1",
           "http://[::1]:99/z", "ftp://a.b/", "http://user:pw@a.b/", "nao-e-url"]:
-    a = hc.parse_alvo(s)
+    a = hc.parse_target(s)
     if a.ok:
-        print("url:", s, "->", a.esquema, a.host, a.porta, a.caminho)
+        print("url:", s, "->", a.scheme, a.host, a.port, a.path)
     else:
         print("url:", s, "-> recusado")
 

@@ -167,11 +167,11 @@ async def serve_build(sh: appm.Shell, ide: idem.Ide):
         sh.dirty_ui = True
         return
     # the targets, for the `!` palette: the editor does not know what a project builds
-    alvos_v: List<str> = []
+    targets_v: List<str> = []
     for nd in g.nodes:
         if nd.gen >= 0:
-            alvos_v.append(nd.p)
-    ide.build_targets = sorted(alvos_v)
+            targets_v.append(nd.p)
+    ide.build_targets = sorted(targets_v)
     rep = B.Rep(lambda t: set_total(sh, ide, t),
                 lambda i, w: on_edge_start(sh, ide, i, w),
                 lambda i, st, o, ms: on_edge_end(sh, ide, i, st, o, ms),
@@ -466,11 +466,11 @@ async def serve_test(sh: appm.Shell, ide: idem.Ide):
         ide.test_msg = "there is no graph to test"
         ide.test_refresh()
         return
-    alvos: List<str> = []
+    targets: List<str> = []
     for nd in g.nodes:
         if nd.gen >= 0:
-            alvos.append(nd.p)
-    ide.build_targets = sorted(alvos)
+            targets.append(nd.p)
+    ide.build_targets = sorted(targets)
     tgt = test_target(ide)
     if len(tgt) == 0:
         ide.test_msg = "I do not know which target is the suite — name it in .pstudio.json under \"test\""

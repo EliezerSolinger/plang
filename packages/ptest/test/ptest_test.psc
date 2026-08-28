@@ -15,7 +15,7 @@ pode ter estado no topo. O que se ganha é que dois `Runner` não se vêem.
 import <ptest/ptest.psc> as t
 
 
-def passa(r: t.Runner):
+def passes(r: t.Runner):
     t.eq_int(r, 2 + 2, 4, "dois mais dois")
     t.eq_str(r, "ola", "ola", "iguais")
     t.is_true(r, True, "verdade")
@@ -24,23 +24,23 @@ def passa(r: t.Runner):
     t.eq_any(r, 42, 42, "any igual")
 
 
-def falha_numeros(r: t.Runner):
+def fails_numbers(r: t.Runner):
     t.eq_int(r, 2 + 2, 5, "dois mais dois")
     t.eq_float(r, 1.0, 1.1, 0.01, "fora da tolerancia")
 
 
-def falha_texto(r: t.Runner):
+def fails_text(r: t.Runner):
     # difere no MEIO: o relatorio diz em que caractere
     t.eq_str(r, "o rapido cao castanho salta", "o rapido gato castanho salta", "no meio")
     # um e prefixo do outro: o relatorio diz que os primeiros batem
     t.eq_str(r, "abc", "abcdef", "prefixo")
 
 
-def levanta(r: t.Runner):
+def raises(r: t.Runner):
     raise error("rebentou a meio", VALUE)
 
 
-def continua_depois_de_falhar(r: t.Runner):
+def continues_after_failing(r: t.Runner):
     # TRES falhas, e as tres saem: um caso que parasse na primeira mostraria um
     # problema de cada vez, e quem corrige quer ver os tres de uma vez
     t.eq_int(r, 1, 2, "um")
@@ -49,11 +49,11 @@ def continua_depois_de_falhar(r: t.Runner):
 
 
 def main():
-    n = t.run("exemplo", [t.Case("tudo bem", passa),
-                          t.Case("numeros", falha_numeros),
-                          t.Case("texto", falha_texto),
-                          t.Case("levanta", levanta),
-                          t.Case("nao para na primeira", continua_depois_de_falhar)])
+    n = t.run("exemplo", [t.Case("tudo bem", passes),
+                          t.Case("numeros", fails_numbers),
+                          t.Case("texto", fails_text),
+                          t.Case("levanta", raises),
+                          t.Case("nao para na primeira", continues_after_failing)])
     print("o run devolveu", n)
 
     # dois Runner nao se veem um ao outro, que e o que o punho compra

@@ -1,0 +1,48 @@
+== a gramatica ==
+  <permessage-deflate>
+    item=permessage-deflate
+  <permessage-deflate; client_max_window_bits>
+    item=permessage-deflate | client_max_window_bits=<sem valor>
+  <permessage-deflate; server_max_window_bits=10; client_max_window_bits=12>
+    item=permessage-deflate | server_max_window_bits=10 | client_max_window_bits=12
+  <foo; a="um, dois; tres", permessage-deflate>
+    item=foo | a=um, dois; tres
+    item=permessage-deflate
+  <  x ; y = 1 ,  z >
+    item=x | y=1
+    item=z
+  <,,;;>
+== a negociacao ==
+  <permessage-deflate> -> <permessage-deflate; server_no_context_takeover; client_no_context_takeover> ligada=True sb=15
+  <permessage-deflate; client_max_window_bits> -> <permessage-deflate; server_no_context_takeover; client_no_context_takeover> ligada=True sb=15
+  <permessage-deflate; client_max_window_bits=10> -> <permessage-deflate; server_no_context_takeover; client_no_context_takeover; client_max_window_bits=10> ligada=True sb=15
+  <permessage-deflate; server_max_window_bits=9> -> <permessage-deflate; server_no_context_takeover; client_no_context_takeover; server_max_window_bits=9> ligada=True sb=9
+  <permessage-deflate; server_max_window_bits> -> <> ligada=False sb=15
+  <permessage-deflate; server_max_window_bits=7> -> <> ligada=False sb=15
+  <permessage-deflate; algo_novo> -> <> ligada=False sb=15
+  <permessage-deflate; algo_novo, permessage-deflate> -> <permessage-deflate; server_no_context_takeover; client_no_context_takeover> ligada=True sb=15
+  <x; a="permessage-deflate"> -> <> ligada=False sb=15
+  <> -> <> ligada=False sb=15
+== o subprotocolo ==
+   superchat
+   chat
+   <>
+== a fragmentacao ==
+  size=0: [op=1 fin=True rsv1=True n=10]
+  size=4: [op=1 fin=False rsv1=True n=4] [op=0 fin=False rsv1=False n=4] [op=0 fin=True rsv1=False n=2]
+  size=100: [op=1 fin=True rsv1=True n=10]
+  vazia -> 1 quadro(s), fin = True
+== ida e volta com janela apertada ==
+  bits=8 comprimido=7 igual=True
+  bits=10 comprimido=7 igual=True
+  bits=15 comprimido=7 igual=True
+== a oferta do cliente, e a resposta lida de volta ==
+  oferta: permessage-deflate; client_no_context_takeover; server_no_context_takeover
+  <permessage-deflate; server_no_context_takeover; client_no_context_takeover> -> ligada=True saida=15 entrada=15
+  <permessage-deflate; server_no_context_takeover; client_no_context_takeover; client_max_window_bits=10> -> ligada=True saida=10 entrada=15
+  <permessage-deflate; server_no_context_takeover> -> ligada=True saida=15 entrada=15
+  <permessage-deflate; client_no_context_takeover> -> ligada=False saida=15 entrada=15
+  <permessage-deflate> -> ligada=False saida=15 entrada=15
+  <permessage-deflate; server_no_context_takeover; client_no_context_takeover; algo_novo> -> ligada=False saida=15 entrada=15
+  <> -> ligada=False saida=15 entrada=15
+negotiate-ok

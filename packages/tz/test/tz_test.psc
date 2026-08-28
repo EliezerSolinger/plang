@@ -39,10 +39,10 @@ def ck(name: str, got: int, want: int):
 
 
 async def go() -> int:
-    QUANDO: List<int> = [0, 946684800, 1719792000, 1735689600, 2524608000, 4102444800]
-    NOMES: List<str> = ["Europe/Lisbon", "UTC", "America/New_York", "Asia/Kathmandu",
+    WHEN: List<int> = [0, 946684800, 1719792000, 1735689600, 2524608000, 4102444800]
+    NAMES: List<str> = ["Europe/Lisbon", "UTC", "America/New_York", "Asia/Kathmandu",
                         "Australia/Sydney", "Pacific/Chatham"]
-    ESPERA: List<int> = [
+    EXPECT: List<int> = [
         3600, 0, 3600, 0, 0, 0,
         0, 0, 0, 0, 0, 0,
         -18000, -18000, -14400, -18000, -18000, -18000,
@@ -50,10 +50,10 @@ async def go() -> int:
         36000, 39600, 36000, 39600, 39600, 39600,
         45900, 49500, 45900, 49500, 49500, 49500,
     ]
-    for zi in range(len(NOMES)):
-        z = await tz.load(NOMES[zi])
-        for ti in range(len(QUANDO)):
-            ck(NOMES[zi] + " @" + str(QUANDO[ti]), tz.offset_at(z, QUANDO[ti]), ESPERA[zi * 6 + ti])
+    for zi in range(len(NAMES)):
+        z = await tz.load(NAMES[zi])
+        for ti in range(len(WHEN)):
+            ck(NAMES[zi] + " @" + str(WHEN[ti]), tz.offset_at(z, WHEN[ti]), EXPECT[zi * 6 + ti])
 
     # o horário de verão diz que é, e onde não há não é
     lx = await tz.load("Europe/Lisbon")

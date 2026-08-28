@@ -15,53 +15,53 @@ import sys
 
 # F2/D5: um cursor. Cada chamada dá o pedaço seguinte, e `b""` diz que acabou —
 # a mesma forma do cursor do MySQL.
-contador: List<int> = [0]
+counter: List<int> = [0]
 
-async def pedacos() -> bytes:
-    contador[0] += 1
-    if contador[0] > 5:
-        contador[0] = 0
+async def pieces() -> bytes:
+    counter[0] += 1
+    if counter[0] > 5:
+        counter[0] = 0
         return b""
     await sleep(0.01)
-    return ("pedaco-" + str(contador[0]) + "\n").encode()
+    return ("pedaco-" + str(counter[0]) + "\n").encode()
 
 
 ticks: List<int> = [0]
 
-async def eventos() -> bytes:
+async def events() -> bytes:
     ticks[0] += 1
     if ticks[0] > 3:
         ticks[0] = 0
         return b""
     await sleep(0.01)
-    return httpd.evento("tick", "n=" + str(ticks[0]) + "\nlinha2")
+    return httpd.sse_event("tick", "n=" + str(ticks[0]) + "\nlinha2")
 
 
 async def handle(req: httpd.Request) -> httpd.Response:
     if req.path == "/upload":
         # F8c: as partes de um formulario, com os ficheiros
         ps = httpd.multipart(req)
-        linhas: List<str> = []
+        lines: List<str> = []
         for pt in ps:
-            if len(pt.ficheiro) > 0:
-                linhas.append("ficheiro:" + pt.nome + ":" + pt.ficheiro + ":"
-                              + pt.tipo + ":" + str(len(pt.dados)))
+            if len(pt.file_name) > 0:
+                lines.append("ficheiro:" + pt.name_s + ":" + pt.file_name + ":"
+                              + pt.ctype + ":" + str(len(pt.data)))
             else:
-                linhas.append("campo:" + pt.nome + ":" + pt.texto())
-        return httpd.text("\n".join(linhas))
+                lines.append("campo:" + pt.name_s + ":" + pt.text())
+        return httpd.text("\n".join(lines))
     if req.path == "/grande":
         # F9: texto compressivel e acima do minimo
-        return httpd.comprime(httpd.text("linha repetida\n" * 400), req)
+        return httpd.compress(httpd.text("linha repetida\n" * 400), req)
     if req.path == "/pequeno":
         # abaixo do minimo: NAO se comprime, porque a moldura nao se paga
-        return httpd.comprime(httpd.text("curto"), req)
+        return httpd.compress(httpd.text("curto"), req)
     if req.path == "/jpeg":
         # ja comprimido: comprimir gasta CPU e cresce
-        return httpd.comprime(httpd.blob(b"\xff\xd8\xff" + ("A" * 4000).encode(), "image/jpeg"), req)
+        return httpd.compress(httpd.blob(b"\xff\xd8\xff" + ("A" * 4000).encode(), "image/jpeg"), req)
     if req.path == "/fluxo":
-        return httpd.stream_of(pedacos, "text/plain; charset=utf-8")
+        return httpd.stream_of(pieces, "text/plain; charset=utf-8")
     if req.path == "/sse":
-        return httpd.sse(eventos)
+        return httpd.sse(events)
     if req.path == "/":
         return httpd.text("ola do pscript")
     if req.path == "/eco":
@@ -69,8 +69,8 @@ async def handle(req: httpd.Request) -> httpd.Response:
         return httpd.blob(req.body, "application/octet-stream")
     if req.path == "/cabecalhos":
         # D3c: os repetidos continuam separados, que é o que um `Dict` perderia
-        todos = req.headers_all("x-nota")
-        return httpd.text("|".join(todos))
+        all_h = req.headers_all("x-nota")
+        return httpd.text("|".join(all_h))
     if req.path == "/json":
         return httpd.json({"quem": "pscript", "quantos": 3})
     if req.path == "/html":
@@ -90,6 +90,10 @@ async def handle(req: httpd.Request) -> httpd.Response:
 
 
 cfg = httpd.config()
+# o portao do `idle_timeout` precisa de um prazo curto; sem argumento fica o
+# valor por omissao, e os outros 77 casos continuam a correr como antes
+if len(sys.argv) > 2:
+    cfg.idle_timeout = float(sys.argv[2])
 cfg.debug = True
 cfg.server_name = "pscript-httpd"
 srv = httpd.listen(0, cfg)

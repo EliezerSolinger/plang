@@ -13,11 +13,11 @@ import <mysql/mysql.psc> as my
 import <ed25519/ed25519.ph>
 
 
-def check(nome: str, got: str, want: str):
+def check(name_s: str, got: str, want: str):
     if got == want:
-        print(f"ok {nome}")
+        print(f"ok {name_s}")
     else:
-        print(f"FALHOU {nome}: {got} != {want}")
+        print(f"FALHOU {name_s}: {got} != {want}")
 
 
 check("sha1 vazio", sha.sha1(bytes([])).hex(), "da39a3ee5e6b4b0d3255bfef95601890afd80709")

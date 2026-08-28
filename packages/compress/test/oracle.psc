@@ -10,10 +10,10 @@ import sys
 
 
 f0 = await open(sys.argv[1], "r")
-grande = await f0.read_all()
+big = await f0.read_all()
 f0.close()
 
-casos: List<bytes> = [
+cases: List<bytes> = [
     b"",
     b"a",
     b"ab",
@@ -26,11 +26,11 @@ casos: List<bytes> = [
     # um casamento que se sobrepoe a si mesmo, que e o caso classico de erro:
     # distancia 1 e comprimento 200
     ("z" + "z" * 200).encode(),
-    grande,
+    big,
 ]
 
 i = 0
-for c in casos:
+for c in cases:
     z = comp.gzip_compress(c)
     v = comp.gzip_decompress(z)
     print(str(len(c)) + " -> " + str(len(z)) + " roundtrip=" + str(v == c))

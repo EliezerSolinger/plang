@@ -4,7 +4,7 @@
 import <httpc/httpc.psc> as hc
 
 r = await hc.get("https://exemplo.pt/api")
-print(r.status, r.texto())
+print(r.status, r.text())
 
 w = await hc.ws_connect("wss://exemplo.pt/ws")
 await w.send_text("olá")
@@ -48,7 +48,34 @@ divergiriam exactamente onde interessa.
 
 * **o `Sec-WebSocket-Accept` é CONFERIDO.** Não é cerimónia: é o que prova que do
   outro lado está um servidor que entendeu o pedido, e não um servidor HTTP
-  qualquer a devolver 101 por acidente ou um intermediário a responder à toa.
+  qualquer a devolver 101 por acidente ou um intermediário a responder à toa;
+
+* **e o SUBPROTOCOLO também.** Um servidor que responde `Sec-WebSocket-Protocol`
+  com uma coisa que não estava na nossa oferta está a dizer que vai falar um
+  dialecto que nunca oferecemos, e continuar seria falar línguas diferentes com os
+  dois lados convencidos de que se entendem. O §4.1 manda tratar isso como aperto
+  de mão falhado, e é o que se faz;
+
+* **o fecho tem PRAZO.** O §7.1.1 diz que, depois do quadro de fecho, quem fecha o
+  TCP é o servidor e o cliente espera por isso — e fechar o socket a martelo no
+  instante seguinte faz o servidor ver um RST em vez de um fim ordenado. Esperar
+  *sem* prazo seria dar a um servidor que ignora o fecho a maneira de segurar o
+  nosso processo, portanto a espera é o `discard()` do §7.1.7 dentro de um
+  `timeout` que cancela o perdedor;
+
+* **o permessage-deflate é oferecido e a resposta é LIDA.** Uma resposta a que
+  falte `no_context_takeover` num dos sentidos é recusada em vez de ignorada:
+  significa que o servidor conta com uma janela que atravessa mensagens, e o nosso
+  compressor não a tem — aceitar seria mandar-lhe quadros que ele lê mal. Numa
+  *resposta*, o `client_max_window_bits` fala de NÓS, e é a janela que a nossa
+  saída passa a respeitar; é o sítio onde os nomes do RFC se invertem em relação
+  ao servidor, e é por isso que a `Deflate` guarda `out_bits`/`in_bits` e não os
+  nomes da norma;
+
+* **o keepalive é EXPLÍCITO, ao contrário do servidor.** Lá o laço de leitura é da
+  biblioteca e o ping é automático; aqui quem chama `recv()` é o programa, e entre
+  duas chamadas dele a biblioteca não tem onde correr. Portanto arranca-se como
+  tarefa: `k = hc.ws_keepalive(cli, 20.0, 10.0)`.
 
 ## O portão
 
@@ -56,12 +83,14 @@ divergiriam exactamente onde interessa.
 outros dois portões provam é a outra metade: o `curl` como oráculo do servidor
 (`tests/httpd.sh`) e a biblioteca `websockets` do Python como oráculo do ws
 (`tests/ws.sh`). Se o nosso lado divergisse do RFC, divergiria junto — e são os
-oráculos de fora que apanham isso.
+oráculos de fora que apanham isso. O `tests/ws-features.sh` cobre a negociação de
+parâmetros, o subprotocolo, a fragmentação e o keepalive.
 
 ## O que ainda não está aqui
 
 O **pool de conexões**: cada pedido liga e fecha. Para um cliente que fala com o
 mesmo servidor mil vezes é a diferença toda (um aperto de mão TCP e um TLS por
-pedido), e a `uma_volta` está escrita para que o pool lhe troque o "liga e fecha"
-por "toma e devolve" sem mudar mais nada. Também não há **cookies automáticos**
-nem **h2** (F11).
+pedido), e a `one_round` está escrita para que o pool lhe troque o "liga e fecha"
+por "toma e devolve" sem mudar mais nada. Também não há **cookies automáticos**,
+**proxy** (o `proxy.py` da `websockets` não tem equivalente aqui) nem **h2**
+(F11).

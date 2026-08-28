@@ -14,7 +14,7 @@ caro que esta família de bibliotecas tem.
 import <csv/csv.psc> as csv
 
 
-def visivel(s: str) -> str:
+def visible(s: str) -> str:
     out: List<str> = []
     for c in s:
         if c == "\r":
@@ -50,7 +50,7 @@ def main():
 
     # ---- 5. escrever, e a ida e volta ----
     w = csv.write([["x", "com,virgula"], ["com \"aspas\"", "com\nlinha"], ["", "simples"]])
-    print(visivel(w))
+    print(visible(w))
     print(csv.parse(w))
 
     # ---- 6. a tabela com cabecalho ----
@@ -59,8 +59,8 @@ def main():
     print(csv.get(tb, 1, "nome"), csv.get(tb, 0, "idade"))
     print("coluna que nao ha:", csv.column_of(tb, "xpto"))
     # uma linha CURTA da string vazia, que e o que o Excel mostra
-    curta = csv.parse_table("a,b,c\r\n1\r\n")
-    print("linha curta:", "[" + csv.get(curta, 0, "c") + "]")
+    short = csv.parse_table("a,b,c\r\n1\r\n")
+    print("linha curta:", "[" + csv.get(short, 0, "c") + "]")
 
     # ---- 7. o que ele recusa ----
     try:

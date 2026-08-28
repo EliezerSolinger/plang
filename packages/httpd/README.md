@@ -66,18 +66,54 @@ visíveis:
 ```python
 import <httpd/ws.psc> as hws
 
-async def mensagem(c: hws.WsConn, ev: hws.Event) -> int:
+PROTOCOLS = ["jogo.v2", "jogo.v1"]
+
+async def message_h(c: hws.WsConn, ev: hws.Event) -> int:
     if ev.is_text():
+        # `c.protocol` diz qual dialecto ficou combinado no aperto de mão
         n = await c.hub.broadcast("lobby", ev.data, False)
     return 1
 
-cfg.on_upgrade = hws.upgrader(hws.handlers(aberto, mensagem, None))
+async def handle(req: httpd.Request) -> httpd.Response:
+    if req.path == "/ws":
+        return hws.upgrade(req, PROTOCOLS)
+    ...
+
+# a lista vai só ao `upgrade`, que é quem escolhe — guardá-la também aqui seria
+# um campo que ninguém lê
+hs = hws.handlers(opened, message_h, None,
+                  16384,          # fragment_size: 0 = uma mensagem por quadro
+                  20.0, 10.0)     # ping a cada 20 s, 10 s para o pong
+cfg.on_upgrade = hws.upgrader(hs)
 ```
 
 A `httpd` é **cega** ao WebSocket: ela sabe que alguém pediu para tomar conta da
 conexão e entrega-lha, com o pedido e com os bytes que já tinham chegado a seguir
 ao aperto de mão. Esses bytes não são um pormenor — um cliente ansioso manda o
 primeiro quadro colado ao pedido, no mesmo `read`.
+
+O **subprotocolo** é escolhido pela ordem em que o programa o escreveu, e não
+pela ordem do cliente: o cliente diz o que sabe falar, o servidor escolhe. Sem
+nada em comum o cabeçalho é omitido, e isso é uma resposta válida — o §4.1 deixa
+o cliente decidir se consegue seguir sem ele. A decisão fica guardada na
+`Request` (`req.attrs`) em vez de ser refeita pelo laço da conexão: antes era
+refeita, apoiada em a negociação ser determinística sobre os mesmos cabeçalhos —
+verdade, e frágil, porque o dia em que os dois sítios discordassem o servidor
+dizia uma coisa ao cliente e usava outra.
+
+O **keepalive vem ligado**, com um ping a cada 20 segundos e 10 para a resposta.
+Não é uma afinação: um cliente que desaparece sem FIN — um portátil que fecha uma
+tampa, um NAT que esquece uma tradução — deixa uma conexão que este lado julga
+viva para sempre, continua a receber as publicações do tópico, e um servidor de
+jogo acumula fantasmas até reiniciar. O custo são dois bytes por conexão a cada
+20 segundos, porque o `sleep` estaciona no mesmo `poll` que já espera pelos
+sockets. `ping_interval = 0.0` desliga-o.
+
+O **`fragment_size`** parte uma mensagem que sai em vários quadros. Fica em 0 por
+omissão, e de propósito: um jogo manda mensagens pequenas sessenta vezes por
+segundo e fragmentá-las seria pagar moldura por nada. Vale a pena para um
+snapshot grande, onde um quadro único obriga o outro lado a ter tudo em memória
+antes de olhar para o primeiro byte.
 
 Os **tópicos** têm dois degraus com o custo separado: dentro do worker o quadro é
 montado uma vez e escrito N, sem serializar nada; para os outros workers atravessa
@@ -88,14 +124,14 @@ com o tempo de vida do processo.
 
 ## Um exemplo completo
 
-[`exemplo/jogo.psc`](exemplo/jogo.psc) é um servidor de jogo em cinquenta linhas,
+[`example/game.psc`](example/game.psc) é um servidor de jogo em cinquenta linhas,
 e não é um brinquedo com as arestas escondidas: serve os ficheiros do cliente com
 ETag e `Range`, responde JSON numa rota de API, faz o upgrade para WebSocket
 **depois** de verificar o token (a autorização é código normal, não um privilégio
 do servidor), difunde cada mensagem a todos os workers, e usa a máquina inteira.
 
 ```
-bash tests/psbuild.sh packages/httpd/exemplo/jogo.psc /tmp/jogo
+bash tests/psbuild.sh packages/httpd/example/game.psc /tmp/jogo
 /tmp/jogo 3335 4 publico
 ```
 
