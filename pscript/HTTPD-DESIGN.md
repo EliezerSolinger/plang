@@ -482,6 +482,13 @@ httpd.serve(3335, handle,
             ws=httpd.Ws(ws_open, ws_message, None))
 ```
 
+## O que ficou feito
+
+Está tudo executado menos a **F11** (h2). O relatório da sessão — o que ficou
+pronto, os portões e os catorze defeitos da linguagem que isto desenterrou —
+está em [`SESSAO-HTTPD.md`](SESSAO-HTTPD.md), e os achados um a um em
+[`ACHADOS-PORTE.md`](ACHADOS-PORTE.md).
+
 ## As fases
 
 Cada fase só está `[x]` quando o seu portão tem TESTE que prende, o `verify` passa,
