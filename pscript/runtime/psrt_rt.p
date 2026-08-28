@@ -184,6 +184,7 @@ private def ps_mux_wait(ctx: *PsCtx, ms: int)
 private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32
 private def ps_io_run(w: *PsWork)
 private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool
+def ps_tls_has_pending(w: *PsWork) -> bool
 private def ps_sigpipe_noop(sig: int)
 def ps_sock_nonblock(fd: int)
 def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
@@ -1785,12 +1786,26 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
 # only question that matters: can this run without blocking?
 private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
     w: *PsWork = t->work
-    pf: pollfd[1]
-    pf[0].fd = w->fd
-    pf[0].events = w->events
-    pf[0].revents = 0
-    if poll(pf, u64(1), 0) <= 0:
-        return False
+    # O BUFFER DO SSL VEM ANTES DO `poll`. Numa ligação TLS, o `SSL_read` do
+    # aperto de mão pode ter lido do fd MAIS do que o handshake — em TLS 1.3 o
+    # servidor manda o NewSessionTicket, e um protocolo que fala logo a seguir
+    # (o MySQL manda o OK do login) tem a sua resposta já DECIFRADA no buffer
+    # interno do `SSL`, com NADA no fd. Esperar o `poll` do fd aí é esperar para
+    # sempre: os bytes não estão no fd, estão no `SSL`. `SSL_pending` é a
+    # pergunta "há algo já lido?", e quando há, lê-se sem passar pelo `poll`.
+    #
+    # Sem isto, TODO uso de TLS que leia depois do handshake trava — foi um
+    # cliente MySQL sobre TLS 1.3 que o encontrou.
+    ssl_ready: bool = False
+    if w->op == PS_IO_RECV and w->ssl != None:
+        ssl_ready = ps_tls_has_pending(w)
+    if not ssl_ready:
+        pf: pollfd[1]
+        pf[0].fd = w->fd
+        pf[0].events = w->events
+        pf[0].revents = 0
+        if poll(pf, u64(1), 0) <= 0:
+            return False
     match w->op:
         case PS_IO_ACCEPT:
             fd2: int = accept(w->fd, None, None)
@@ -3289,6 +3304,13 @@ const if defined(PSRT_TLS):
 
     # O passo do aperto de mão. Devolve 1 quando acabou, 0 quando falta (e diz
     # pelo `events` o que esperar), e -1 quando falhou.
+    # Há bytes já DECIFRADOS no buffer do `SSL`, à espera de serem lidos? Em
+    # TLS 1.3 o `SSL_connect` do handshake lê do fd mais do que o handshake, e o
+    # que sobra fica aqui — não no fd. Sem esta pergunta, um `read` logo a
+    # seguir espera no `poll` do fd por bytes que já foram lidos, e trava.
+    def ps_tls_has_pending(w: *PsWork) -> bool:
+        return SSL_pending((*SSL)(w->ssl)) > 0
+
     def ps_tls_step(w: *PsWork) -> i32:
         ssl: *SSL = (*SSL)(w->ssl)
         r: int = SSL_connect(ssl)
@@ -3352,6 +3374,9 @@ else:
     # levantar apontando o caminho, em vez de faltar em silêncio.
     def ps_tls_begin(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> bool:
         ps_raise(ctx, "tls: this runtime was built without TLS — rebuild it with `-D PSRT_TLS` and link `-lssl -lcrypto`", PS_CAT_IO, file, line)
+        return False
+
+    def ps_tls_has_pending(w: *PsWork) -> bool:
         return False
 
     def ps_tls_step(w: *PsWork) -> i32:
