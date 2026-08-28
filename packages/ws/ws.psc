@@ -33,6 +33,7 @@ proxies antigos podiam ser enganados a tratar o corpo como uma requisição HTTP
 chave seja IMPREVISÍVEL, e por isso vem do gerador criptográfico e não do
 `random`.
 """
+import <compress/compress.psc> as comp
 import <csprng/csprng.psc> as rng
 
 
@@ -199,6 +200,10 @@ struct Parser:
     pos: int
     problem: str        # vazio = tudo bem
     code: int           # o código de fecho com que se recusa
+    # 148/F9b: uma extensão foi negociada? É o que decide se o bit RSV1 é uma
+    # carga comprimida ou um emissor a falar de uma coisa que não combinámos.
+    # Sem extensão, os três bits reservados TÊM de ser zero (§5.2).
+    rsv1_ok: bool
 
     def fail(self, code: int, msg: str) -> bool:
         # a PRIMEIRA falha é a que conta: as seguintes são consequência dela, e
@@ -253,9 +258,11 @@ struct Parser:
         cab = p + 2
 
         # ---- as recusas que não dependem do corpo ----
-        if rsv1 or rsv2 or rsv3:
+        if rsv2 or rsv3 or (rsv1 and not self.rsv1_ok):
             # sem extensão negociada, um bit reservado ligado é um emissor a
-            # falar de uma coisa que não combinámos (§5.2)
+            # falar de uma coisa que não combinámos (§5.2). Com o
+            # permessage-deflate combinado, o RSV1 passa a ter significado — e
+            # SÓ ele: o RSV2 e o RSV3 continuam a ser um erro.
             self.fail(CLOSE_PROTOCOL_ERROR, "reserved bit set with no extension negotiated")
             return None
         if op != OP_CONT and op != OP_TEXT and op != OP_BIN and not is_control(op):
@@ -265,6 +272,12 @@ struct Parser:
             self.fail(CLOSE_PROTOCOL_ERROR, "reserved control opcode")
             return None
         if is_control(op):
+            if rsv1:
+                # §6.1 do RFC 7692: um quadro de CONTROLO nunca é comprimido, e
+                # o RSV1 nele é um erro de protocolo mesmo com a extensão
+                # combinada
+                self.fail(CLOSE_PROTOCOL_ERROR, "a control frame is never compressed")
+                return None
             if not fin:
                 # um controlo fragmentado nunca poderia ser entregue a meio de
                 # uma mensagem, que é justamente para o que ele serve (§5.5)
@@ -328,8 +341,8 @@ struct Parser:
         return Frame(fin, rsv1, rsv2, rsv3, op, bytes(corpo))
 
 
-def parser(is_server: bool) -> Parser:
-    return Parser(is_server, [], 0, "", 0)
+def parser(is_server: bool, rsv1_ok: bool = False) -> Parser:
+    return Parser(is_server, [], 0, "", 0, rsv1_ok)
 
 
 # ---------- a máquina de estados da CONEXÃO ----------
@@ -373,6 +386,11 @@ struct Proto:
     # sempre e a memória do servidor é dele — é uma negação de serviço de duas
     # linhas a escrever.
     max_message: int
+    # 148/F9b: a mensagem em curso veio comprimida? O RSV1 vem no PRIMEIRO
+    # quadro de uma mensagem fragmentada e vale para ela inteira (§6.1), portanto
+    # tem de ser guardado quando ela começa.
+    frag_comprimida: bool
+    pmd: Deflate
 
     def failed(self) -> bool:
         return self.p.failed()
@@ -449,6 +467,8 @@ struct Proto:
             self.frag_op = f.op
             self.frag = []
             self.fragmenting = True
+            # o RSV1 do PRIMEIRO quadro vale para a mensagem inteira (§6.1)
+            self.frag_comprimida = f.rsv1
 
         for b in f.payload:
             self.frag.append(b)
@@ -462,6 +482,16 @@ struct Proto:
         op = self.frag_op
         self.fragmenting = False
         self.frag = []
+        if self.frag_comprimida:
+            # a carga descomprime-se DEPOIS de a mensagem estar montada, e não
+            # quadro a quadro: o fluxo do DEFLATE atravessa a fragmentação, e um
+            # fragmento sozinho não é um fluxo que se possa ler.
+            try:
+                corpo = descomprime_carga(corpo, self.max_message)
+            catch e:
+                self.fail(CLOSE_INVALID_DATA, "the compressed payload could not be read: " + e.message)
+                return None
+            self.frag_comprimida = False
         if op == OP_TEXT:
             # 1007, E SAI DE GRAÇA: `str(bytes)` levanta em UTF-8 inválido,
             # porque uma `str` PROMETE codepoints (79.1). O que noutras
@@ -476,5 +506,98 @@ struct Proto:
         return Event(EV_BINARY, corpo, 0)
 
 
-def proto(is_server: bool, max_message: int = 1 << 24) -> Proto:
-    return Proto(parser(is_server), is_server, 0, [], False, False, False, False, max_message)
+def proto(is_server: bool, max_message: int = 1 << 24, pmd: Deflate? = None) -> Proto:
+    d: Deflate = sem_deflate()
+    if pmd != None:
+        d = pmd
+    return Proto(parser(is_server, d.ligada), is_server, 0, [], False, False, False, False,
+                 max_message, False, d)
+
+
+# ---------- 148/F9b: permessage-deflate (RFC 7692) ----------
+#
+# A extensao que comprime a CARGA de um quadro. Para um servidor de jogo que
+# difunde estado em JSON sessenta vezes por segundo, ela e a diferenca entre
+# mandar oitocentos bytes e mandar cinquenta.
+#
+# **O que se negoceia, e o que se recusa.** O RFC tem quatro parametros, e o que
+# manda neles e a JANELA partilhada entre mensagens (`context takeover`): com ela,
+# a mensagem N comprime contra o que a N-1 disse, e o ganho e grande num fluxo de
+# mensagens parecidas. Sem ela, cada mensagem comprime sozinha.
+#
+# **Aqui exige-se `no_context_takeover` dos dois lados**, e a razao esta dita em
+# vez de escondida: o nosso compressor e de uma passagem, sem estado entre
+# chamadas, e uma janela partilhada precisa de um LZ77 que guarde os ultimos 32
+# KiB de cada conexao — em memoria, por conexao, dos dois lados. E o que o desenho
+# chamou de "onde ele morde".
+#
+# A consequencia, medida: uma mensagem de 880 bytes de JSON repetido vai em 54.
+# Com takeover iria em menos, e a segunda iria em muito menos. O que se perde esta
+# quantificado; o que nao se faz e fingir que se suporta e mandar quadros que o
+# outro lado nao consegue ler.
+
+const RSV1 = 0x40      # o bit que diz "esta carga vem comprimida"
+
+
+struct Deflate:
+    """O estado da extensao numa conexao. Sem janela partilhada, portanto o que
+    ele guarda e a NEGOCIACAO e nao um dicionario."""
+    ligada: bool
+    # o tecto de uma mensagem DESCOMPRIMIDA. E uma defesa e nao uma afinacao:
+    # uns poucos quilobytes de zeros comprimidos expandem para gigabytes, e uma
+    # extensao de compressao sem tecto e uma bomba de descompressao a espera.
+    max_saida: int
+
+
+def sem_deflate() -> Deflate:
+    return Deflate(False, 1 << 24)
+
+
+def negocia(oferta: str) -> str:
+    """Le o `Sec-WebSocket-Extensions` do cliente e devolve o que se aceita, ou
+    "" quando nao se aceita nada.
+
+    O cabecalho e uma lista de ofertas separadas por virgula, e o servidor escolhe
+    UMA. Percorre-se pela ordem em que vieram, que e a ordem de preferencia do
+    cliente.
+    """
+    for uma in oferta.split(","):
+        o = uma.strip()
+        if not o.startswith("permessage-deflate"):
+            continue
+        # `client_max_window_bits` sem valor e um PEDIDO para o servidor escolher;
+        # com valor, e um limite. Como nao usamos janela partilhada, o tamanho
+        # dela nao muda nada e o parametro e ignorado — mas responder com um valor
+        # que nao se respeita seria mentir, portanto nao se responde nenhum.
+        if o.find("server_max_window_bits") >= 0:
+            # o cliente EXIGE uma janela de servidor de um tamanho: sem takeover
+            # a janela nao atravessa mensagens, e prometer um numero seria dizer
+            # uma coisa sobre nada. Passa-se a oferta seguinte.
+            continue
+        return "permessage-deflate; server_no_context_takeover; client_no_context_takeover"
+    return ""
+
+
+def liga(d: Deflate, resposta: str):
+    d.ligada = len(resposta) > 0
+
+
+def comprime_carga(corpo: bytes) -> bytes:
+    """A carga de um quadro, comprimida. Os quatro bytes do sync flush saem, como
+    o s7.2.1 manda — eles sao sempre os mesmos, e mandá-los seria mandar quatro
+    bytes constantes por mensagem."""
+    z = comp.deflate_sync(corpo)
+    return z[0:len(z) - 4] if len(z) >= 4 else z
+
+
+def descomprime_carga(corpo: bytes, tecto: int) -> bytes:
+    """E o inverso: repoe os quatro bytes e descomprime.
+
+    O `tecto` nao e uma afinacao. Uns poucos quilobytes de zeros comprimidos
+    expandem para gigabytes, e uma extensao de compressao sem tecto e uma bomba de
+    descompressao a espera de um atacante que sabe disto — que e toda a gente.
+    """
+    saiu = comp.inflate_stream(corpo + b"\x00\x00\xff\xff")
+    if len(saiu) > tecto:
+        raise error("permessage-deflate: a mensagem descomprimida passa o tecto — e o que uma bomba de descompressao faz")
+    return saiu

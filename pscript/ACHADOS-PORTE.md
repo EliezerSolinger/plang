@@ -1430,3 +1430,48 @@ nucleos — para medir o teto do servidor faria falta gerar a carga de outra
 maquina. E o gerador e escrito em C de proposito: um escrito na linguagem que esta
 a ser medida seria a pior escolha possivel, porque se ele fosse o gargalo os tres
 servidores dariam o mesmo numero.
+
+
+## 52 — permessage-deflate no WebSocket (F9b/RFC 7692)  OK feito
+
+Para um servidor de jogo que difunde estado em JSON sessenta vezes por segundo,
+esta extensao e a diferenca entre mandar oitocentos bytes e mandar sessenta.
+Medido no fio, no mesmo servidor: **888 bytes sem ela, 60 com ela**.
+
+O compressor precisou de uma peca nova, e vale a pena dizer qual. O
+`deflate_fixed` produz um fluxo COMPLETO -- um bloco com a marca de final -- e
+isso serve um ficheiro e nao serve uma conversa: o permessage-deflate manda uma
+mensagem de cada vez pelo mesmo fluxo logico, e nenhuma delas e a ultima. A forma
+que toda a gente usa e a do `Z_SYNC_FLUSH`: bloco sem marca de final, seguido de
+um bloco armazenado vazio -- o que obriga a alinhar ao byte e produz a sequencia
+`00 00 ff ff`, que o s7.2.1 manda cortar ao enviar e repor ao receber.
+
+Do outro lado fez falta um `inflate` que PARE LIMPO quando a entrada acaba num
+limite de bloco: o normal le ate encontrar a marca de final, e num fluxo de
+conversa ela nunca vem.
+
+**O que se recusa, e porque:** exige-se `no_context_takeover` dos dois lados. Com
+a janela partilhada, a mensagem N comprimiria contra o que a N-1 disse — e isso
+pede um LZ77 que guarde os ultimos 32 KiB **por conexao e dos dois lados**, que e
+o que o desenho chamou de "onde ele morde". O nosso compressor e de uma passagem.
+A consequencia esta quantificada acima; o que nao se faz e fingir que se suporta e
+mandar quadros que o outro lado nao consegue ler.
+
+Tres regras do RFC que o portao prende e que sao faceis de perder:
+
+* o **RSV1 vem no PRIMEIRO quadro** de uma mensagem fragmentada e vale para ela
+  inteira (s6.1) — portanto e guardado quando ela comeca, e a descompressao
+  acontece depois de a mensagem estar montada: o fluxo do DEFLATE atravessa a
+  fragmentacao, e um fragmento sozinho nao e um fluxo que se possa ler;
+* um **quadro de CONTROLO nunca e comprimido**, e o RSV1 nele e um erro de
+  protocolo mesmo com a extensao combinada;
+* e sem extensao negociada o RSV1 continua a ser um erro — o parser aprendeu a
+  distinguir "combinamos isto" de "estas a falar de uma coisa que nao combinamos".
+
+E o **tecto da descompressao** nao e uma afinacao: uns poucos quilobytes de zeros
+comprimidos expandem para gigabytes, e uma extensao de compressao sem tecto e uma
+bomba de descompressao a espera de um atacante que sabe disto — que e toda a gente.
+
+Oraculo: a `websockets` do Python, que oferece a extensao por omissao. O portao
+mede tambem o fio em cru, porque a biblioteca entrega a mensagem ja
+descomprimida e a parte que interessa nao se veria.

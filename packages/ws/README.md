@@ -60,9 +60,12 @@ ao meio entre dois fragmentos.
 
 ## O que ainda não está aqui
 
-* **permessage-deflate** (F9). O `packages/compress` já tem o DEFLATE inteiro; o
-  que falta é a negociação e a janela partilhada entre quadros do RFC 7692, que é
-  onde ele morde.
+* **a janela partilhada** do permessage-deflate (`context takeover`). A extensão
+  está feita e negoceia `no_context_takeover` dos dois lados; com a janela
+  partilhada a mensagem N comprimiria contra o que a N-1 disse, e isso pede um
+  LZ77 que guarde os últimos 32 KiB por conexão e dos dois lados. Medido: 888
+  bytes no fio passam a 60 sem takeover; com ele passariam a menos, e a segunda
+  mensagem a muito menos.
 * **o aperto de mão HTTP**, que é da `packages/httpd` (F6) — aqui só entra o
   protocolo depois de a conexão já ser um WebSocket.
 

@@ -1,0 +1,9 @@
+negociou True
+sem takeover dos dois lados True
+eco-comprimido True
+do-cliente True
+sem-extensao True
+eco-simples True
+sem-deflate-rsv1 False
+com-deflate-rsv1 True
+comprime-de-verdade True

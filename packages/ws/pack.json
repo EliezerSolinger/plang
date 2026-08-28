@@ -4,6 +4,7 @@
   "lang": "pscript",
   "root": "ws.psc",
   "deps": {
+    "compress": "0.1.0",
     "csprng": "0.1.0"
   },
   "system": {},

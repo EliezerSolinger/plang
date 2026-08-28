@@ -574,12 +574,21 @@ const MAX_CADEIA = 128
 
 
 def deflate_fixed(src: bytes) -> bytes:
-    """LZ77 com a arvore fixa. Um bloco so, final."""
+    """LZ77 com a arvore fixa. Um bloco so, FINAL — o que serve um ficheiro."""
     o = out_new()
-    # tipo 1 (arvore fixa), e este e o ultimo bloco
-    put(o, 1, 1)
-    put(o, 1, 2)
+    put(o, 1, 1)        # BFINAL = 1: e o ultimo
+    put(o, 1, 2)        # arvore fixa
+    lz77_fixo(o, src)
+    put_code(o, lit_code(256), lit_bits(256))
+    return out_flush(o)
+
+
+def lz77_fixo(o: Out, src: bytes):
+    """O MIOLO, partilhado pelo bloco final e pelo de fluxo: o casamento e a
+    emissao. O que muda entre os dois e so o cabecalho do bloco e o que vem
+    depois do fim dele — e por isso e uma funcao e nao duas copias."""
     n = len(src)
+
     # a tabela de dispersao e as cadeias: `cabeca[h]` e a posicao mais recente
     # com aquele hash, e `anterior[p]` e a anterior a `p`. E a estrutura do zlib,
     # e cabe em duas listas.
@@ -643,6 +652,89 @@ def deflate_fixed(src: bytes) -> bytes:
             s = int(src[at])
             put_code(o, lit_code(s), lit_bits(s))
             at += 1
-    # 256 e o fim do bloco
-    put_code(o, lit_code(256), lit_bits(256))
-    return out_flush(o)
+    return
+
+
+# ---------- 148: o DEFLATE de um FLUXO (RFC 1951 s3.2.4 + o `Z_SYNC_FLUSH`) ----------
+#
+# O `deflate_fixed` produz um fluxo COMPLETO: um bloco com a marca de final. Isso
+# serve um ficheiro e nao serve uma conversa -- o permessage-deflate de um
+# WebSocket (RFC 7692) manda uma mensagem de cada vez pelo mesmo fluxo logico, e
+# nenhuma delas e a ultima.
+#
+# A forma que toda a gente usa e a do `Z_SYNC_FLUSH` do zlib: o bloco vai SEM a
+# marca de final, e a seguir vem um bloco ARMAZENADO VAZIO -- o que obriga a
+# alinhar ao byte e produz a sequencia `00 00 ff ff` no fim. O RFC 7692 manda
+# CORTAR esses quatro bytes ao enviar e voltar a po-los ao receber, porque eles
+# sao sempre os mesmos e mandá-los seria mandar quatro bytes constantes por
+# mensagem.
+
+def deflate_sync(src: bytes) -> bytes:
+    """LZ77 com a arvore fixa, num bloco NAO final, terminado por um sync flush.
+
+    O que sai acaba sempre em `00 00 ff ff`, e e isso que o chamador corta.
+    """
+    o = out_new()
+    put(o, 0, 1)        # BFINAL = 0: a conversa continua
+    put(o, 1, 2)        # arvore fixa
+    lz77_fixo(o, src)
+    put_code(o, lit_code(256), lit_bits(256))    # fim do bloco
+    # e o sync flush: um bloco armazenado vazio, que obriga ao alinhamento
+    put(o, 0, 1)
+    put(o, 0, 2)
+    # o alinhamento ao byte E o mecanismo -- e dele que saem os `00 00`
+    if o.n > 0:
+        o.b.append(u8(o.acc & 255))
+        o.acc = 0
+        o.n = 0
+    o.b.append(u8(0))
+    o.b.append(u8(0))
+    o.b.append(u8(255))
+    o.b.append(u8(255))
+    return bytes(o.b)
+
+
+def inflate_stream(src: bytes) -> bytes:
+    """`inflate` que PARA LIMPO quando a entrada acaba num limite de bloco.
+
+    O `inflate` normal le blocos ate encontrar a marca de final, e num fluxo de
+    conversa essa marca nunca vem -- a mensagem acaba num sync flush. Aqui, ficar
+    sem bits exactamente entre dois blocos e o fim normal e nao um erro; ficar sem
+    eles a MEIO de um bloco continua a ser um erro, e e o que separa um fluxo
+    terminado de um truncado.
+    """
+    s = bits_new(src)
+    out: List<u8> = []
+    n = len(src)
+    while True:
+        # sem bits para o cabecalho do bloco seguinte: acabou, e acabou bem
+        if s.pos >= n and s.nacc < 3:
+            break
+        final = take(s, 1)
+        kind = take(s, 2)
+        if kind == 0:
+            align(s)
+            if s.pos + 4 > n:
+                # o sync flush do fim: os quatro bytes ja foram lidos, ou o
+                # chamador cortou-os. Nos dois casos e o fim.
+                break
+            a = int(src[s.pos]) | (int(src[s.pos + 1]) << 8)
+            b = int(src[s.pos + 2]) | (int(src[s.pos + 3]) << 8)
+            if a + b != 65535:
+                raise error("deflate: the stored block length does not match its complement", VALUE)
+            s.pos += 4
+            if s.pos + a > n:
+                raise error("deflate: a stored block runs past the end", VALUE)
+            for k in range(a):
+                out.append(src[s.pos + k])
+            s.pos += a
+        elif kind == 1:
+            inflate_block(s, out, fixed_lit(), fixed_dist())
+        elif kind == 2:
+            t = read_dynamic(s)
+            inflate_block(s, out, t.lit, t.dist)
+        else:
+            raise error("deflate: block type 3 does not exist", VALUE)
+        if final != 0:
+            break
+    return bytes(out)

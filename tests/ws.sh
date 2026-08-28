@@ -77,6 +77,9 @@ if [ "$SEM_ORACULO" = 0 ]; then
         # F7/D6/D9c: os tópicos, com três clientes de verdade
         got2=$(timeout 60 python3 tests/ws-pubsub.py "$(cat "$PF")" 2>&1)
         check "os tópicos e a dessubscrição do fecho" "$(cat tests/ws-pubsub.expected)" "$got2"
+        # F9b/RFC 7692: a compressão da carga, negociada e medida no fio
+        got3=$(timeout 60 python3 tests/ws-deflate.py "$(cat "$PF")" 2>&1)
+        check "permessage-deflate, negociado e no fio" "$(cat tests/ws-deflate.expected)" "$got3"
     else
         echo "  FAIL o servidor de websocket não abriu porto"; fail=$((fail+1))
     fi

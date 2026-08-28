@@ -554,7 +554,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [x] **F8d — Proxy e limites**: `trusted_proxies` (D32), `allowed_hosts` (D41) e o
       `rate_limit` (D37). Portão: um `X-Forwarded-For` forjado por um cliente que
       NÃO é proxy declarado é ignorado.
-- [x] **F9 — Compressão** (só o gzip do HTTP; o permessage-deflate do ws continua a faltar) (D16): gzip no HTTP; e o permessage-deflate do ws numa
+- [x] **F9 — Compressão** (gzip no HTTP e permessage-deflate no ws) (D16): gzip no HTTP; e o permessage-deflate do ws numa
       fase à parte, depois do Autobahn verde — a janela partilhada do RFC 7692 é
       onde ele morde.
 - [x] **F10 — Cliente HTTP completo** (D17): redirects, cookies, pool, timeouts. Um

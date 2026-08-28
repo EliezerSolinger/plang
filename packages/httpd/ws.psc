@@ -48,7 +48,7 @@ def is_upgrade(req: httpd.Request) -> bool:
     return len(req.header("sec-websocket-key")) > 0
 
 
-def upgrade(req: httpd.Request, subprotocol: str = "") -> httpd.Response:
+def upgrade(req: httpd.Request, subprotocol: str = "", comprimir: bool = True) -> httpd.Response:
     """A resposta 101 que faz a conexão deixar de ser HTTP.
 
     Quando o pedido não é um aperto de mão válido, isto responde **426 com
@@ -66,6 +66,13 @@ def upgrade(req: httpd.Request, subprotocol: str = "") -> httpd.Response:
     r2.headers.append(httpd.Header("sec-websocket-accept", accept_key(req.header("sec-websocket-key"))))
     if len(subprotocol) > 0:
         r2.headers.append(httpd.Header("sec-websocket-protocol", subprotocol))
+    # F9b/RFC 7692: a compressão da CARGA, se o cliente a ofereceu. A resposta
+    # tem de nomear exactamente o que se aceita — um servidor que ecoasse a
+    # oferta inteira estaria a prometer parâmetros que não implementa.
+    if comprimir:
+        aceite = ws.negocia(req.header("sec-websocket-extensions"))
+        if len(aceite) > 0:
+            r2.headers.append(httpd.Header("sec-websocket-extensions", aceite))
     return r2
 
 
@@ -93,6 +100,8 @@ struct WsConn:
     # — e a referência é circular de propósito: o hub tem as conexões e cada
     # conexão tem o hub, o que um coletor resolve e um `free` manual não.
     hub: Hub
+    # F9b: a compressão negociada nesta conexão, ou desligada
+    pmd: ws.Deflate
 
     def subscribe(self, topico: str):
         self.hub.subscribe(self, topico)
@@ -129,7 +138,14 @@ struct WsConn:
         if not self.aberta:
             return False
         try:
-            await self.sock.write(ws.serialize(ws.frame(op, corpo), b""))
+            f = ws.frame(op, corpo)
+            # F9b: só os quadros de DADOS se comprimem. Um `ping` de dois bytes
+            # comprimido fica maior, e o §6 proíbe-o de qualquer maneira: o RSV1
+            # num quadro de controlo é um erro de protocolo.
+            if self.pmd.ligada and (op == ws.OP_TEXT or op == ws.OP_BIN) and len(corpo) > 0:
+                f.payload = ws.comprime_carga(corpo)
+                f.rsv1 = True
+            await self.sock.write(ws.serialize(f, b""))
             return True
         catch e:
             self.aberta = False
@@ -197,7 +213,13 @@ async def serve_ws(sock: Socket, req: httpd.Request, resto: bytes, hs: Handlers)
     que só aparece com um cliente rápido, e portanto nunca no teste de quem o
     escreveu.
     """
-    c = WsConn(sock, ws.proto(True), req, hs.proximo_id, True, [], hs.hub)
+    pmd = ws.sem_deflate()
+    # o que o `upgrade` respondeu é o que vale: se ele aceitou a extensão, ela
+    # está ligada nesta conexão. A `Request` não o sabe — quem respondeu foi a
+    # `Response` —, e por isso a decisão é refeita aqui pela MESMA função, que é
+    # determinística sobre o mesmo cabeçalho.
+    ws.liga(pmd, ws.negocia(req.header("sec-websocket-extensions")))
+    c = WsConn(sock, ws.proto(True, 1 << 24, pmd), req, hs.proximo_id, True, [], hs.hub, pmd)
     hs.proximo_id += 1
     hs.hub.add(c)
     entregues = 0
