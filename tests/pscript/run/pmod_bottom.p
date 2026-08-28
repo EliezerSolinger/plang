@@ -1,8 +1,8 @@
-# o código de pmod_fundo.ph — P comum, sem ideia de quem o chama
-import "pmod_fundo.ph"
+# o código de pmod_bottom.ph — P comum, sem ideia de quem o chama
+import "pmod_bottom.ph"
 
-def fundo_dobro(v: i64) -> i64:
+def bottom_double(v: i64) -> i64:
     return v * 2
 
-def fundo_impar(v: i64) -> bool:
+def bottom_odd(v: i64) -> bool:
     return v % 2 != 0

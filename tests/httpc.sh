@@ -20,22 +20,22 @@ check() {
     else echo "  FAIL $1:"; diff <(echo "$2") <(echo "$3") | head -14; fail=$((fail+1)); fi
 }
 
-for m in packages/httpd/test/servidor.psc packages/httpd/test/wsservidor.psc packages/httpc/test/cliente.psc; do
+for m in packages/httpd/test/server.psc packages/httpd/test/wsserver.psc packages/httpc/test/client.psc; do
     n=$(basename "$m" .psc)
     if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh "$m" "$OUT/$n" >>"$OUT/build.log" 2>&1; then
         echo "  FAIL $m não compila"; tail -5 "$OUT/build.log"; exit 1
     fi
 done
 
-"$OUT/servidor"   "$OUT/pa" >"$OUT/srv.log" 2>&1 &
+"$OUT/server"     "$OUT/pa" >"$OUT/srv.log" 2>&1 &
 A=$!
-"$OUT/wsservidor" "$OUT/pb" >"$OUT/ws.log" 2>&1 &
+"$OUT/wsserver" "$OUT/pb" >"$OUT/ws.log" 2>&1 &
 B=$!
 trap 'kill $A $B 2>/dev/null' EXIT
 for _ in $(seq 1 100); do [ -s "$OUT/pa" ] && [ -s "$OUT/pb" ] && break; sleep 0.05; done
 [ -s "$OUT/pa" ] && [ -s "$OUT/pb" ] || { echo "  FAIL os servidores não abriram porto"; exit 1; }
 
-got=$(timeout 120 "$OUT/cliente" "$(cat "$OUT/pa")" "$(cat "$OUT/pb")" 2>&1)
+got=$(timeout 120 "$OUT/client" "$(cat "$OUT/pa")" "$(cat "$OUT/pb")" 2>&1)
 check "o cliente fala com o nosso servidor" "$(cat tests/httpc.expected)" "$got"
 
 echo "   httpc: $pass ok, $fail failed"

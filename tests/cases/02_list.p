@@ -14,7 +14,7 @@ def push(head: *Node, v: int) -> *Node:
     n.next = head
     return n
 
-def classifica(x: int) -> *char:
+def classify(x: int) -> *char:
     match x:
         case 0:
             return "zero"
@@ -24,15 +24,15 @@ def classifica(x: int) -> *char:
             return "grande"
 
 def main() -> int:
-    lista: *Node = None
+    list_v: *Node = None
     i: int
     for i in range(1, N + 1):
-        lista = push(lista, i)
+        list_v = push(list_v, i)
 
-    p: *Node = lista
+    p: *Node = list_v
     while p != None:
-        rotulo: *char = classifica(p.val)
-        sinal: *char = "par" if p.val % 2 == 0 else "impar"
-        printf("%d -> %s (%s)\n", p.val, rotulo, sinal)
+        label: *char = classify(p.val)
+        sign: *char = "par" if p.val % 2 == 0 else "impar"
+        printf("%d -> %s (%s)\n", p.val, label, sign)
         p = p.next
     return 0

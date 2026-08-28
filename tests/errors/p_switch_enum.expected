@@ -1,1 +1,1 @@
-enumeration values 'AZUL' and 'ROXO' not handled in match [-Wswitch]
+enumeration values 'BLUE' and 'PURPLE' not handled in match [-Wswitch]

@@ -16,7 +16,7 @@ check() {
     else echo "  FAIL $1: esperado '$2', veio '$3'"; fail=$((fail+1)); fi
 }
 
-if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/compress/test/oraculo.psc "$OUT/oraculo" >"$OUT/build.log" 2>&1; then
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/compress/test/oracle.psc "$OUT/oraculo" >"$OUT/build.log" 2>&1; then
     echo "  FAIL o oráculo do compress não compila"; tail -5 "$OUT/build.log"; exit 1
 fi
 "$OUT/oraculo" SPECS.MD "$OUT/gz" > "$OUT/nosso.txt" 2>&1

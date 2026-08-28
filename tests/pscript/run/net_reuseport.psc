@@ -35,22 +35,22 @@ async def serve_um(srv: Socket) -> str:
     with await srv.accept() as c:
         with Buffer(256) as rb:
             n = await c.read_into(rb, 0, 256)
-            texto: str = str(bytes(rb[0:n]))
-            await c.write("eco:" + texto)
-            return texto
+            text_s: str = str(bytes(rb[0:n]))
+            await c.write("eco:" + text_s)
+            return text_s
 
 
 # ---- 1. dois descritores no mesmo porto, porque foi pedido ----
 a = net.listen(0, True)
-porto = a.port()
-b = net.listen(porto, True)
-print("dois no mesmo porto:", porto > 0, b.port() == porto)
+port_n = a.port()
+b = net.listen(port_n, True)
+print("dois no mesmo porto:", port_n > 0, b.port() == port_n)
 
 # e o porto partilhado SERVE. O segundo fecha-se antes de alguém bater à porta,
 # para que quem aceita seja sabido — ver a nota acima.
 b.close()
 ta = serve_um(a)
-with await net.connect("127.0.0.1", porto) as c:
+with await net.connect("127.0.0.1", port_n) as c:
     await c.write("bate")
     with Buffer(256) as rb:
         n = await c.read_into(rb, 0, 256)
@@ -69,16 +69,16 @@ catch e:
 c1.close()
 
 # ---- 3. o mesmo Socket sobre um CAMINHO ----
-caminho = path.join(os.tempdir(), "psrt-unix-portao.sock")
-if path.exists(caminho):
-    os.remove(caminho)
-srv = net.unix_listen(caminho)
+path_s = path.join(os.tempdir(), "psrt-unix-portao.sock")
+if path.exists(path_s):
+    os.remove(path_s)
+srv = net.unix_listen(path_s)
 tu = serve_um(srv)
-with net.unix(caminho) as cu:
+with net.unix(path_s) as cu:
     await cu.write("ola unix")
     with Buffer(256) as rb:
         n = await cu.read_into(rb, 0, 256)
         print("unix:", str(bytes(rb[0:n])))
 print("o servidor unix viu:", await tu)
 srv.close()
-os.remove(caminho)
+os.remove(path_s)

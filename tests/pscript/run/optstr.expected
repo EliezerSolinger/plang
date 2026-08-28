@@ -5,8 +5,8 @@ None oi None 42 3.5 True
 [1, None, 3]
 [None, 'z', None] [1, None, 3]
 {'k': None, 'm': 7}
-Pessoa(nome='Ana', email=None, idade=3)
-Pessoa(nome='Rui', email='rui@exemplo.pt', idade=None)
-Pessoa(nome='Ana', email=None, idade=3)
+Person(name='Ana', email=None, age=3)
+Person(name='Rui', email='rui@exemplo.pt', age=None)
+Person(name='Ana', email=None, age=3)
 None [1, 2]
 [None, [7]]

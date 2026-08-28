@@ -26,7 +26,7 @@ valor por ser dobrada seria pior do que não haver dobra nenhuma.
 """
 
 
-const def dobro(x: int) -> int:
+const def double_v(x: int) -> int:
     return x * 2
 
 
@@ -52,16 +52,16 @@ const N: int = 8
 
 # ... e um `const` do módulo é conhecido em compilação por definição, portanto
 # vê-se de dentro sem ser passado
-const def dobro_de_N() -> int:
-    return dobro(N)
+const def double_of_N() -> int:
+    return double_v(N)
 
 
-print(dobro(21), fact(10), fib(20), kib(4), dobro_de_N())
+print(double_v(21), fact(10), fib(20), kib(4), double_of_N())
 
 # o caso que a 65.10 nomeou ao ser decidida: o tamanho de um `T[N]`
-buf: int[dobro(4)] = [1, 2, 3, 4, 5, 6, 7, 8]
+buf: int[double_v(4)] = [1, 2, 3, 4, 5, 6, 7, 8]
 print("o array tem", len(buf), "e o ultimo e", buf[7])
 
 # a aritmética, e o piso e o resto do PYTHON
 print(2 ** 10, 7 // 2, -7 // 2, 7 % 3, -7 % 3, 7 / 2)
-print(dobro(3) < fact(3), min(fib(10), 50), abs(dobro(-4)))
+print(double_v(3) < fact(3), min(fib(10), 50), abs(double_v(-4)))

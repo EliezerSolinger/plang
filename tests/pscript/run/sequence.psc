@@ -50,11 +50,11 @@ def biggest8(xs: Sequence<u8>) -> int:
 
 
 # os quatro contentores, e o mesmo corpo a servir os quatro
-lista: List<float> = [1.5, 2.5, 3.0]
-print("List:", total(lista))
+list_v: List<float> = [1.5, 2.5, 3.0]
+print("List:", total(list_v))
 
-fixo: float[4] = [1.0, 2.0, 3.0, 4.0]
-print("T[N]:", total(fixo))
+fixed: float[4] = [1.0, 2.0, 3.0, 4.0]
+print("T[N]:", total(fixed))
 
 with Buffer(16) as b:
     v = b.view_u8()

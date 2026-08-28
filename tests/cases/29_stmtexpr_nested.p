@@ -13,12 +13,12 @@
 # symbol (a link error). A bare `{ int x; }` from C input failed the same way.
 include <stdio.h>
 
-def soma(a: i32, b: i32) -> i32:
+def sum_v(a: i32, b: i32) -> i32:
     return a + b
 
 def main() -> i32:
     # two of them in the SAME call: each gets its own temporary
-    r: i32 = soma(({ t: i32 = 20; t + 1 }), ({ u: i32 = 20; u + 1 }))
+    r: i32 = sum_v(({ t: i32 = 20; t + 1 }), ({ u: i32 = 20; u + 1 }))
     # both operands of a binary
     v: i32 = ({ w: i32 = 5; w * 2 }) + ({ z: i32 = 3; z })
     # inside an index
@@ -30,6 +30,6 @@ def main() -> i32:
     # spellable in P at all: the '(' suppresses NEWLINE (implicit continuation),
     # so only ';' separates and a loop needs an indented block. That shape
     # reaches the AST only from ingested C.
-    c: i32 = soma(1, ({ acc: i32 = 4; acc = acc * 2; acc + 1 }))
+    c: i32 = sum_v(1, ({ acc: i32 = 4; acc = acc * 2; acc + 1 }))
     printf("%d %d %d %d %d\n", r, v, ix, n, c)
     return 0

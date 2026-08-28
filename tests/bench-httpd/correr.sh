@@ -23,7 +23,7 @@ CONNS=${CONNS:-16}
 NPROC=$(nproc 2>/dev/null || echo 4)
 
 [ -x "$B/carga" ] || cc -O2 -o "$B/carga" "$B/carga.c" -lpthread || exit 1
-[ -x "$B/pscript-srv" ] || bash tests/psbuild.sh "$B/servidor.psc" "$B/pscript-srv" -O2 || exit 1
+[ -x "$B/pscript-srv" ] || bash tests/psbuild.sh "$B/server.psc" "$B/pscript-srv" -O2 || exit 1
 
 medir() {  # medir <nome> <porto>
     sleep 0.5

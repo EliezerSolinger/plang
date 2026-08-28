@@ -23,7 +23,7 @@ struct Macish:
     st_mode: u32
     st_mtimespec: Ts
 
-struct Velho:
+struct Old:
     st_mode: u32
     st_mtime: i64
 
@@ -46,7 +46,7 @@ def secs_m(in s: Macish) -> i64:
     else:
         return s.st_mtime
 
-def secs_v(in s: Velho) -> i64:
+def secs_v(in s: Old) -> i64:
     if hasfield(s, "st_mtim"):
         return s.st_mtim.tv_sec
     elif hasfield(s, "st_mtimespec"):
@@ -55,7 +55,7 @@ def secs_v(in s: Velho) -> i64:
         return s.st_mtime
 
 # through a POINTER: hasfield(p, "x") asks about *p
-def por_ponteiro(p: *Macish) -> i64:
+def by_pointer(p: *Macish) -> i64:
     if hasfield(p, "st_mtimespec"):
         return p->st_mtimespec.tv_sec
     return -1
@@ -63,8 +63,8 @@ def por_ponteiro(p: *Macish) -> i64:
 def main() -> i32:
     l: Linuxish = {0, {11, 0}}
     m: Macish = {0, {22, 0}}
-    v: Velho = {0, 33}
-    printf("%lld %lld %lld %lld\n", secs_l(in l), secs_m(in m), secs_v(in v), por_ponteiro(&m))
+    v: Old = {0, 33}
+    printf("%lld %lld %lld %lld\n", secs_l(in l), secs_m(in m), secs_v(in v), by_pointer(&m))
     # usable as a plain comptime boolean too
     printf("%d %d\n", 1 if hasfield(l, "st_mtim") else 0, 1 if hasfield(l, "st_mtimespec") else 0)
     return 0

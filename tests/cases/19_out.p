@@ -1,7 +1,7 @@
 include <stdio.h>
 
-def divmod(a: i32, b: i32, out resto: i32) -> i32:
-    resto = a % b
+def divmod(a: i32, b: i32, out rest: i32) -> i32:
+    rest = a % b
     return a / b
 
 def try_parse(s: const *char, out v: i32) -> bool:
@@ -11,8 +11,8 @@ def try_parse(s: const *char, out v: i32) -> bool:
     v = i32(s[0] - '0')
     return True
 
-def chain(x: i32, out dobro: i32) -> bool:
-    return try_parse("7", out dobro)   # repassa o próprio out adiante
+def chain(x: i32, out double_v: i32) -> bool:
+    return try_parse("7", out double_v)   # repassa o próprio out adiante
 
 def main() -> int:
     r: i32

@@ -1,10 +1,10 @@
 tests/pscript/run/postmortem.psc:38: error: estourou de propósito
-  in fundo (tests/pscript/run/postmortem.psc:38)
-      c = Caixa(nome='caixa-um', pts=[Pt(x=1, y=2), Pt(x=3, y=4)])
-      etiqueta = 'no fundo'
+  in bottom (tests/pscript/run/postmortem.psc:38)
+      c = Box(name='caixa-um', pts=[Pt(x=1, y=2), Pt(x=3, y=4)])
+      label = 'no fundo'
       tags = ['a', 'b']
-      mapa = {'k': 1}
-  in meio (tests/pscript/run/postmortem.psc:42)
-      c = Caixa(nome='caixa-um', pts=[Pt(x=1, y=2), Pt(x=3, y=4)])
-      quem = 'caixa-um'
+      map_d = {'k': 1}
+  in middle (tests/pscript/run/postmortem.psc:42)
+      c = Box(name='caixa-um', pts=[Pt(x=1, y=2), Pt(x=3, y=4)])
+      who = 'caixa-um'
   in <main> (tests/pscript/run/postmortem.psc:45)

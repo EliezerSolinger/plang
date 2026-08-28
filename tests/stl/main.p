@@ -167,9 +167,9 @@ def main() -> int:
     sm.put("alfa", 1)
     sm.put("beta", 2)
     sm.put("alfa", 10)
-    achou: int = 0
-    tem: bool = sm.get("beta", &achou)
-    printf("%d %d %d\n", sm.get_or("alfa", -1), achou, tem)
+    found: int = 0
+    tem: bool = sm.get("beta", &found)
+    printf("%d %d %d\n", sm.get_or("alfa", -1), found, tem)
     printf("%d\n", sm.get_or("gama", -1))
     sm.deinit()
 
@@ -199,11 +199,11 @@ def main() -> int:
     q.init()
     for i in range(20):
         q.push(i)
-    soma: i32 = 0
+    sum_v: i32 = 0
     for i in range(10):
-        soma += q.pop()
+        sum_v += q.pop()
     q.push(100)
-    printf("q=%d peek=%d soma=%d\n", q.size, q.peek(), soma)
+    printf("q=%d peek=%d soma=%d\n", q.size, q.peek(), sum_v)
     q.deinit()
 
     # ---- Slice ----
@@ -341,9 +341,9 @@ def main() -> int:
     printf("cbuf %d %d %d\n", i32(cb.at(usize(0))), i32(cb.at(usize(7))), i32(cb.len))
 
     # o `slice` LIMITA em vez de estourar: pedir para lá do fim dá o que há
-    meio: CBuf = cb.slice(usize(6), usize(99))
-    meio.fill(u8(4))
-    printf("cbuf slice %d -> %d %d\n", i32(meio.len), i32(cb.at(usize(5))), i32(cb.at(usize(6))))
+    middle: CBuf = cb.slice(usize(6), usize(99))
+    middle.fill(u8(4))
+    printf("cbuf slice %d -> %d %d\n", i32(middle.len), i32(cb.at(usize(5))), i32(cb.at(usize(6))))
 
     # o `copy_from` pára no mais curto e diz quantos foram
     src: u8[3]
@@ -353,8 +353,8 @@ def main() -> int:
     peq: CBuf = cb.slice(usize(0), usize(2))
     # o `in` toma um ENDEREÇO, portanto quer um lvalue — só o receptor de um
     # método pode materializar um temporário (a regra já escrita na sema)
-    fonte: CBytes = cbytes(&src[0], usize(3))
-    printf("cbuf copy %d\n", i32(peq.copy_from(in fonte)))
+    source: CBytes = cbytes(&src[0], usize(3))
+    printf("cbuf copy %d\n", i32(peq.copy_from(in source)))
 
     # ... e a vista só-de-leitura do mesmo par, de graça
     ro: CBytes = cb.bytes()

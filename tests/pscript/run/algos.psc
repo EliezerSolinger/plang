@@ -8,8 +8,8 @@ onde a peneira mexe em ponteiros e o coletor pode entrar no meio.
 import bisect
 import heapq
 
-struct Tarefa:
-    nome: str
+struct Job:
+    name_s: str
     prio: int
 
 mt: List<int> = []
@@ -20,47 +20,47 @@ catch e:
 
 # uma fila de prioridade de verdade: as prioridades num heap, e o nome
 # alcançado por um dict — que é como se faz sem tupla comparável
-fila: List<int> = []
-nomes: Dict<int, str> = {}
-tarefas = [Tarefa("backup", 5), Tarefa("email", 2), Tarefa("deploy", 1), Tarefa("log", 9)]
-for t in tarefas:
-    heapq.heappush(fila, t.prio)
-    nomes[t.prio] = t.nome
-ordem = ""
-while len(fila) > 0:
-    p = heapq.heappop(fila)
-    ordem += nomes[p] + " "
-print(ordem)
+queue: List<int> = []
+names: Dict<int, str> = {}
+jobs = [Job("backup", 5), Job("email", 2), Job("deploy", 1), Job("log", 9)]
+for t in jobs:
+    heapq.heappush(queue, t.prio)
+    names[t.prio] = t.name_s
+order = ""
+while len(queue) > 0:
+    p = heapq.heappop(queue)
+    order += names[p] + " "
+print(order)
 
 # a lista ordenada mantida por insort, com objetos alcançados pelo índice
-chaves: List<str> = []
-for t in tarefas:
-    bisect.insort(chaves, t.nome)
-print(chaves)
-print(bisect.bisect_left(chaves, "email"), bisect.bisect_right(chaves, "email"))
+keys_l: List<str> = []
+for t in jobs:
+    bisect.insort(keys_l, t.name_s)
+print(keys_l)
+print(bisect.bisect_left(keys_l, "email"), bisect.bisect_right(keys_l, "email"))
 
 # ordenar uma lista de objetos por chave continua sendo `sorted(key=...)`, e é
 # estável: as prioridades iguais saem na ordem em que entraram
-mais = [Tarefa("a", 1), Tarefa("b", 0), Tarefa("c", 1), Tarefa("d", 0), Tarefa("e", 1)]
-por_prio = sorted(mais, key=lambda t: t.prio)
-saida = ""
+more = [Job("a", 1), Job("b", 0), Job("c", 1), Job("d", 0), Job("e", 1)]
+por_prio = sorted(more, key=lambda t: t.prio)
+out_s = ""
 for t in por_prio:
-    saida += t.nome
-print(saida)
+    out_s += t.name_s
+print(out_s)
 
 # e o coletor no meio: cada volta aloca uma string nova
-grande: List<int> = []
-lixo = ""
+big: List<int> = []
+junk = ""
 for i in range(200):
-    heapq.heappush(grande, (i * 37) % 200)
-    lixo += "x"
-soma = 0
+    heapq.heappush(big, (i * 37) % 200)
+    junk += "x"
+sum_v = 0
 ant = -1
-cresce = True
-while len(grande) > 0:
-    v = heapq.heappop(grande)
+grows = True
+while len(big) > 0:
+    v = heapq.heappop(big)
     if v < ant:
-        cresce = False
+        grows = False
     ant = v
-    soma += v
-print(f"200 saem em ordem: {cresce} soma {soma} lixo {len(lixo)}")
+    sum_v += v
+print(f"200 saem em ordem: {grows} soma {sum_v} lixo {len(junk)}")

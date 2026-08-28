@@ -15,14 +15,14 @@ import gc
 import sys
 
 
-def gasta(n: int) -> int:
-    lixo: List<str> = []
+def spend(n: int) -> int:
+    junk: List<str> = []
     for i in range(n):
-        lixo.append(f"n{i}")
-    return len(lixo)
+        junk.append(f"n{i}")
+    return len(junk)
 
 
-async def worker_afinado(n: int) -> int:
+async def worker_tuned(n: int) -> int:
     # o worker afina o SEU coletor, e o do pai não muda
     gc.tune(bytes=1 << 20, objects=1000)
     st = gc.stats()
@@ -31,8 +31,8 @@ async def worker_afinado(n: int) -> int:
 
 
 # ---- 1. o padrão, e o que o programa muda ----
-antes = gc.stats()
-print(f"orcamento padrao {antes['budget']} contagem {antes['budget_objects']}")
+before = gc.stats()
+print(f"orcamento padrao {before['budget']} contagem {before['budget_objects']}")
 
 gc.tune(bytes=4 << 20)
 print(f"depois de tune(bytes) {gc.stats()['budget']} contagem intacta {gc.stats()['budget_objects']}")
@@ -46,16 +46,16 @@ print(f"posicional {gc.stats()['budget']} {gc.stats()['budget_objects']}")
 
 # ---- 2. coletar na hora, e as contas subindo ----
 n0 = gc.stats()["collections"]
-gasta(3000)
+spend(3000)
 gc.collect()
 n1 = gc.stats()["collections"]
 print(f"coletou mais {n1 > n0} e o vivo é maior que zero: {gc.stats()['live'] > 0}")
 
 # ---- 3. as seis medidas existem e são inteiros ----
 st = gc.stats()
-chaves = [k for k in st]
-chaves.sort()
-print(f"medidas {chaves}")
+keys_l = [k for k in st]
+keys_l.sort()
+print(f"medidas {keys_l}")
 
 # ---- 4. o pool: antes da primeira operação de I/O ----
 sys.pool(2)
@@ -63,7 +63,7 @@ print("pool pedido")
 
 # ---- 5. o worker afina o dele, e o nosso fica como estava ----
 meu = gc.stats()["budget"]
-w = spawn(worker_afinado, (0,))
+w = spawn(worker_tuned, (0,))
 resp = await w.recv()
 print(f"worker afinou para {resp // 1000000}/{resp % 1000000}, e o meu continua {gc.stats()['budget'] == meu}")
 

@@ -8,10 +8,10 @@ que o chamasse concluiria que correu bem.
 import sys
 
 
-async def escolhe(n: int) -> int:
+async def choose(n: int) -> int:
     if n < 0:
         raise error("um código negativo não é um status")
     return n
 
 
-sys.exit(await escolhe(-1))
+sys.exit(await choose(-1))

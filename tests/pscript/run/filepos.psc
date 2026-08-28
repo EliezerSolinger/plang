@@ -26,22 +26,22 @@ D: str = "posdemo"
 async def go() -> int:
     if not path.isdir(D):
         os.makedirs(D)
-    alvo = path.join(D, "campo.bin")
+    target_s = path.join(D, "campo.bin")
 
-    f = await open(alvo, "w")
+    f = await open(target_s, "w")
     await f.write("0123456789abcdefghij")       # 20 bytes
     print("tamanho com o ficheiro ainda aberto:", f.size())
     await f.close()
 
     # ---- os.stat: uma travessia, oito respostas ----
-    st = os.stat(alvo)
+    st = os.stat(target_s)
     print("stat", st["size"], st["is_file"], st["is_dir"], st["links"] >= 1)
     d = os.stat(D)
     print("do directorio", d["is_dir"], d["is_file"])
     print("mtime coerente:", st["mtime_ns"] // 1000000000 == st["mtime"])
 
     # ---- pread: ler o MEIO sem tocar em cursor nenhum ----
-    r = await open(alvo, "r")
+    r = await open(target_s, "r")
     with Buffer(8) as buf:
         n1 = os.pread(r, buf, 10, 6)
         print("pread(10,6):", str(bytes(buf[0:n1])))
@@ -54,7 +54,7 @@ async def go() -> int:
     await r.close()
 
     # ---- pwrite: escrever no meio sem reescrever o resto ----
-    w = await open(alvo, "r+")
+    w = await open(target_s, "r+")
     with Buffer(4) as wb:
         v = wb.view_u8()
         v[0] = u8(ord("X"))
@@ -63,12 +63,12 @@ async def go() -> int:
         print("e o tamanho nao mudou:", w.size())
     await w.close()
 
-    q = await open(alvo, "r")
+    q = await open(target_s, "r")
     print("ficou", str(await q.read_all()))
     await q.close()
 
     # ---- o que a janela recusa ----
-    z = await open(alvo, "r")
+    z = await open(target_s, "r")
     with Buffer(4) as zb:
         try:
             os.pread(z, zb, 0, 100)
@@ -87,17 +87,17 @@ async def go() -> int:
         g = await open(path.join(D, "f" + str(extra) + ".txt"), "w")
         await g.write("x")
         await g.close()
-    vistos: List<str> = []
-    for nome in os.scandir(D):
-        vistos.append(nome)
-    print("scandir viu", len(vistos), "iguais ao listdir:", sorted(vistos) == sorted(os.listdir(D)))
+    seen: List<str> = []
+    for name_s in os.scandir(D):
+        seen.append(name_s)
+    print("scandir viu", len(seen), "iguais ao listdir:", sorted(seen) == sorted(os.listdir(D)))
     # sair a meio nao deixa o directorio aberto: o finalizador e a rede (136.1)
-    conta = 0
-    for nome2 in os.scandir(D):
-        conta += 1
-        if conta == 2:
+    count_v = 0
+    for name2 in os.scandir(D):
+        count_v += 1
+        if count_v == 2:
             break
-    print("saiu a meio depois de", conta)
+    print("saiu a meio depois de", count_v)
 
     # 22.2: e `==` numa lista compara CONTEUDO. Estava a comparar PONTEIROS, e
     # foi a linha acima que o desenterrou — `sorted(a) == sorted(b)` respondia

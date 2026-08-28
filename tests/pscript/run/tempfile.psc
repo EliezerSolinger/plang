@@ -50,11 +50,11 @@ async def go() -> int:
     # ---- 5. um directorio, que e NOSSO ----
     dd = os.tempdir_new("plang-")
     print("directorio:", path.isdir(dd), path.basename(dd).startswith("plang-"))
-    dentro = path.join(dd, "a.txt")
-    g = await open(dentro, "w")
+    inside = path.join(dd, "a.txt")
+    g = await open(inside, "w")
     await g.write("x")
     await g.close()
-    print("da para escrever la dentro:", path.isfile(dentro))
+    print("da para escrever la dentro:", path.isfile(inside))
 
     # ---- 6. o csprng: bytes, e nunca os mesmos ----
     a = await csprng.random_bytes(32)
@@ -71,7 +71,7 @@ async def go() -> int:
         print("negativo:", e.message)
 
     # ---- limpar ----
-    os.remove(dentro)
+    os.remove(inside)
     os.rmdir(dd)
     os.remove(f1)
     os.remove(f2)

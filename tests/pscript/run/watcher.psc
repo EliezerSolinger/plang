@@ -29,13 +29,13 @@ import path
 D: str = "watchdemo"
 
 
-async def escreve(p: str, texto: str):
+async def write_v(p: str, text_s: str):
     f = await open(p, "w")
-    await f.write(texto)
+    await f.write(text_s)
     await f.close()
 
 
-def nome_da_especie(k: Change) -> str:
+def kind_name(k: Change) -> str:
     if k == CREATED:
         return "criado"
     if k == MODIFIED:
@@ -52,13 +52,13 @@ def nome_da_especie(k: Change) -> str:
 async def go() -> int:
     if path.isdir(D):
         for n in os.listdir(D):
-            alvo = path.join(D, n)
-            if path.isdir(alvo):
-                for n2 in os.listdir(alvo):
-                    os.remove(path.join(alvo, n2))
-                os.rmdir(alvo)
+            target_s = path.join(D, n)
+            if path.isdir(target_s):
+                for n2 in os.listdir(target_s):
+                    os.remove(path.join(target_s, n2))
+                os.rmdir(target_s)
             else:
-                os.remove(alvo)
+                os.remove(target_s)
     else:
         os.makedirs(D)
 
@@ -66,13 +66,13 @@ async def go() -> int:
         # o que JÁ lá estava quando se mandou vigiar não é uma mudança
         print("comeca vazio:", w.pending())
 
-        await escreve(path.join(D, "a.txt"), "um")
+        await write_v(path.join(D, "a.txt"), "um")
         await sleep(0.05)
-        vistos: List<str> = []
+        seen: List<str> = []
         while w.pending() > 0:
-            caminho, especie, cookie = w.take()
-            vistos.append(path.basename(caminho) + ":" + nome_da_especie(especie))
-        print("depois de criar:", len(vistos) > 0, vistos[0])
+            path_s, kind, cookie = w.take()
+            seen.append(path.basename(path_s) + ":" + kind_name(kind))
+        print("depois de criar:", len(seen) > 0, seen[0])
 
         # 146.3: escrever tres vezes seguidas nao da tres MODIFIED seguidos
         for i in range(3):
@@ -91,17 +91,17 @@ async def go() -> int:
         # corrida com o que ja la esta
         sub = path.join(D, "novo")
         os.makedirs(sub)
-        await escreve(path.join(sub, "dentro.txt"), "ola")
+        await write_v(path.join(sub, "dentro.txt"), "ola")
         await sleep(0.1)
-        achou_dentro = False
+        found_inside = False
         while w.pending() > 0:
             c3, k3, ck3 = w.take()
             if path.basename(c3) == "dentro.txt":
-                achou_dentro = True
-        print("viu dentro do directorio novo:", achou_dentro)
+                found_inside = True
+        print("viu dentro do directorio novo:", found_inside)
 
         # `ready()` sobre uma fila que ja tem alguma coisa nao espera
-        await escreve(path.join(D, "b.txt"), "dois")
+        await write_v(path.join(D, "b.txt"), "dois")
         await sleep(0.05)
         print("ready com fila cheia:", await w.ready(), w.pending() > 0)
 

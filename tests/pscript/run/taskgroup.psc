@@ -28,18 +28,18 @@ toda a gente.
 import sched
 
 
-async def trabalha(n: int) -> int:
+async def works(n: int) -> int:
     await sleep(0.01 * float(n))
     print("acabou", n)
     return n
 
 
-async def falha(n: int) -> int:
+async def fails(n: int) -> int:
     await sleep(0.01)
     raise error("rebentou em " + str(n))
 
 
-async def demora() -> int:
+async def slow() -> int:
     # cinco segundos. Se o grupo não cancelasse as irmãs, este portão levaria
     # cinco segundos a passar — que é a maneira de o ver falhar.
     await sleep(5.0)
@@ -50,7 +50,7 @@ async def demora() -> int:
 async def bom() -> int:
     with taskgroup() as g:
         for i in range(3):
-            g.spawn(trabalha(i + 1))
+            g.spawn(works(i + 1))
         print("dentro do bloco, e nenhuma acabou ainda")
     print("e a saida esperou por todas")
     return 0
@@ -59,21 +59,21 @@ async def bom() -> int:
 async def mau() -> int:
     try:
         with taskgroup() as g:
-            g.spawn(falha(7))
-            g.spawn(demora())
+            g.spawn(fails(7))
+            g.spawn(slow())
         print("ISTO NAO DEVIA APARECER")
     catch e:
         print("a falha subiu na fronteira do bloco:", e.message)
     return 0
 
 
-async def medido() -> int:
+async def measured() -> int:
     # `sched.stats()` (S3): o item 44 da interseção, e o modelo é o `gc.stats()`
     # da 110. O número que faz falta não é quantas tarefas há — é quantas estão
     # paradas E POR QUE RAZÃO, que é o que transforma um travamento de adivinha
     # em leitura.
-    t1 = trabalha(20)
-    t2 = trabalha(21)
+    t1 = works(20)
+    t2 = works(21)
     await sleep(0.01)
     st = sched.stats()
     print("parados no relogio:", st["parked_deadline"])
@@ -81,12 +81,12 @@ async def medido() -> int:
     print("sem workers e sem descritores:", st["workers"], st["parked_descriptor"])
     await t1
     await t2
-    depois = sched.stats()
-    print("depois nao ha ninguem parado:", depois["parked"])
+    after = sched.stats()
+    print("depois nao ha ninguem parado:", after["parked"])
     return 0
 
 
 await bom()
 await mau()
-await medido()
+await measured()
 print("taskgroup-ok")

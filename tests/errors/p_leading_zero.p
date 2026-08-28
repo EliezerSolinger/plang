@@ -4,6 +4,6 @@
 include <stdio.h>
 
 def main() -> int:
-    modo: int = 0755
-    printf("%d\n", modo)
+    mode: int = 0755
+    printf("%d\n", mode)
     return 0

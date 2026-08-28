@@ -51,7 +51,7 @@ def mul_nc(a: int, b: int) -> int:
     nocheck:
         return a * b
 
-def soma_nc(a: int, b: int) -> int:
+def sum_nc(a: int, b: int) -> int:
     nocheck:
         return a + b
 
@@ -59,27 +59,27 @@ def sub_nc(a: int, b: int) -> int:
     nocheck:
         return a - b
 
-def aninhado(a: int, b: int) -> int:
+def nested(a: int, b: int) -> int:
     nocheck:
         nocheck:
             return a * b
 
-def mostra(nome: str, f: def(int, int) -> int, a: int, b: int):
+def show(name_s: str, f: def(int, int) -> int, a: int, b: int):
     try:
-        print(f"{nome} = {f(a, b)}")
+        print(f"{name_s} = {f(a, b)}")
     catch e:
-        print(f"{nome} levantou")
+        print(f"{name_s} levantou")
 
-mostra("checado MAX*2", mul, MAX, 2)
-mostra("checado MIN*-1", mul, MIN, -1)
-mostra("nocheck MAX*2", mul_nc, MAX, 2)
-mostra("nocheck MIN*-1", mul_nc, MIN, -1)
-mostra("nocheck MAX+1", soma_nc, MAX, 1)
-mostra("nocheck MIN-1", sub_nc, MIN, 1)
-mostra("nocheck aninhado MAX*2", aninhado, MAX, 2)
-mostra("nocheck 3*5", mul_nc, 3, 5)
-mostra("nocheck -3*5", mul_nc, -3, 5)
-mostra("nocheck -3*-5", mul_nc, -3, -5)
+show("checado MAX*2", mul, MAX, 2)
+show("checado MIN*-1", mul, MIN, -1)
+show("nocheck MAX*2", mul_nc, MAX, 2)
+show("nocheck MIN*-1", mul_nc, MIN, -1)
+show("nocheck MAX+1", sum_nc, MAX, 1)
+show("nocheck MIN-1", sub_nc, MIN, 1)
+show("nocheck nested MAX*2", nested, MAX, 2)
+show("nocheck 3*5", mul_nc, 3, 5)
+show("nocheck -3*5", mul_nc, -3, 5)
+show("nocheck -3*-5", mul_nc, -3, -5)
 EOF
 
 cat > "$OUT/release.txt" <<'EOF'
@@ -89,7 +89,7 @@ nocheck MAX*2 = -2
 nocheck MIN*-1 = -9223372036854775808
 nocheck MAX+1 = -9223372036854775808
 nocheck MIN-1 = 9223372036854775807
-nocheck aninhado MAX*2 = -2
+nocheck nested MAX*2 = -2
 nocheck 3*5 = 15
 nocheck -3*5 = -15
 nocheck -3*-5 = 15
@@ -102,7 +102,7 @@ nocheck MAX*2 levantou
 nocheck MIN*-1 levantou
 nocheck MAX+1 levantou
 nocheck MIN-1 levantou
-nocheck aninhado MAX*2 levantou
+nocheck nested MAX*2 levantou
 nocheck 3*5 = 15
 nocheck -3*5 = -15
 nocheck -3*-5 = 15

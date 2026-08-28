@@ -16,19 +16,19 @@ async def handle(req: httpd.Request) -> httpd.Response:
     return httpd.status_code(404)
 
 
-async def trabalhador(h: def(httpd.Request) -> Task<httpd.Response>, porta: int) -> int:
+async def worker_fn(h: def(httpd.Request) -> Task<httpd.Response>, port_n: int) -> int:
     c = httpd.config()
-    srv = httpd.listen(porta, c, True)
+    srv = httpd.listen(port_n, c, True)
     await httpd.run(srv, h)
     return 0
 
 
-quantos = int(sys.argv[2])
+how_many = int(sys.argv[2])
 cfg = httpd.config()
-srv0 = httpd.listen(0, cfg, quantos > 1)
+srv0 = httpd.listen(0, cfg, how_many > 1)
 f = await open(sys.argv[1], "w")
 await f.write(str(srv0.port))
 f.close()
-for i in range(quantos - 1):
-    w = spawn(trabalhador, (handle, srv0.port))
+for i in range(how_many - 1):
+    w = spawn(worker_fn, (handle, srv0.port))
 await httpd.run(srv0, handle)

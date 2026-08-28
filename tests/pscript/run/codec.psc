@@ -70,10 +70,10 @@ def main():
         print("vazio:", "[" + b"".hex() + "]", len(z))
 
     # ---- 6. ida e volta sobre TODOS os bytes, e sobre cada comprimento ----
-    todos: List<u8> = []
+    all_of: List<u8> = []
     for i in range(256):
-        todos.append(u8(i))
-    b = bytes(todos)
+        all_of.append(u8(i))
+    b = bytes(all_of)
     v1 = b.base64().from_base64()
     v2 = b.hex().from_hex()
     if v1 != None:
@@ -81,10 +81,10 @@ def main():
             print("todos os bytes:", v1 == b, v2 == b)
     mau = 0
     for n in range(20):
-        pedaco: List<u8> = []
+        piece: List<u8> = []
         for i in range(n):
-            pedaco.append(u8((i * 37 + 11) % 256))
-        p = bytes(pedaco)
+            piece.append(u8((i * 37 + 11) % 256))
+        p = bytes(piece)
         back = p.base64().from_base64()
         if back == None:
             mau += 1

@@ -30,10 +30,10 @@ partia uma thread com um argumento por preencher — um SIGSEGV noutra thread, q
 é o pior de dois mundos.
 """
 
-def dobro(x: int) -> int:
+def double_v(x: int) -> int:
     return x * 2
 
-def aplica(f: def(int) -> int, n: int) -> int:
+def apply_v(f: def(int) -> int, n: int) -> int:
     total: int = 0
     for i in range(n):
         total += f(i)
@@ -42,32 +42,32 @@ def aplica(f: def(int) -> int, n: int) -> int:
 
 
 # ---- 1. um `def` de topo, que é o caso que o servidor precisa ----
-w1 = spawn(aplica, (dobro, 5))
+w1 = spawn(apply_v, (double_v, 5))
 print("def de topo:", await w1.recv())
 
 
-async def com_captura():
+async def with_capture():
     # ---- 2. uma lambda cujas capturas são todas POD ----
     #
     # `k` é LOCAL de propósito: um nome de topo é uma global, e uma global é do
     # worker (42.2) — não seria captura nenhuma, e o teste passaria por engano.
     k: int = 100
     g: def(int) -> int = lambda a: a * 2 + k
-    w2 = spawn(aplica, (g, 5))
+    w2 = spawn(apply_v, (g, 5))
     print("lambda POD:", await w2.recv())
 
     # ---- 3. e a que captura algo do coletor, que é recusada ----
     s: str = "abcdefgh"
     h: def(int) -> int = lambda a: a + len(s)
     try:
-        w3 = spawn(aplica, (h, 5))
+        w3 = spawn(apply_v, (h, 5))
         print("NÃO devia chegar aqui:", await w3.recv())
     catch e:
         print("recusada:", e.message[:52])
 
     # o contexto continua são depois da recusa: o worker que voltou já vinha
     # terminado, e nada partiu
-    w4 = spawn(aplica, (dobro, 3))
+    w4 = spawn(apply_v, (double_v, 3))
     print("depois da recusa:", await w4.recv())
 
 
@@ -76,7 +76,7 @@ async def com_captura():
 # Aqui a função atravessa pela FORMA (`PS_SH_FUNC`) e não pelo bloco do `spawn`,
 # que é outro caminho no runtime. Um worker é UM cano nos dois sentidos (36.1),
 # portanto o tipo da mensagem é um só — e neste é a própria função.
-def triplo(x: int) -> int:
+def triple(x: int) -> int:
     return x * 3
 
 async def servo(n: int) -> def(int) -> int:
@@ -93,10 +93,10 @@ async def servo(n: int) -> def(int) -> int:
         total += f(n)
     print("o worker somou:", total)
     # a resposta é ela própria uma função, e volta pela subida
-    parent.send(dobro)
-    return dobro
+    parent.send(double_v)
+    return double_v
 
-async def por_mensagem():
+async def by_message():
     w = spawn(servo, (7,))
     s: str = "abcd"
     h: def(int) -> int = lambda a: a + len(s)
@@ -105,10 +105,10 @@ async def por_mensagem():
     catch e:
         print("recusada no send:", e.message[:52])
     # a recusa é de QUEM ESCREVE, e o worker do outro lado nem soube dela
-    print("aceites:", w.send(dobro), w.send(triplo))
+    print("aceites:", w.send(double_v), w.send(triple))
     # a resposta do worker é ela própria uma função: chama-se aqui, deste lado
-    volta: def(int) -> int = await w.recv()
-    print("a resposta do worker, chamada aqui:", volta(21))
+    back: def(int) -> int = await w.recv()
+    print("a resposta do worker, chamada aqui:", back(21))
     w.close()
 
 # ---- 5. e o VAZIO, que este trabalho desenterrou ----
@@ -119,17 +119,17 @@ async def por_mensagem():
 # `struct` — e agora funções. Para esses o vazio era o PONTEIRO NULO, que não é
 # valor nenhum, e o primeiro uso dele era um SIGSEGV numa thread sem pilha para
 # ler. Agora levanta.
-async def calado(n: int) -> str:
+async def quiet(n: int) -> str:
     return "isto nunca é enviado — `return` não é `send`"
 
-async def vazio():
-    w = spawn(calado, (1,))
+async def empty():
+    w = spawn(quiet, (1,))
     try:
         s: str = await w.recv()
         print("NÃO devia chegar aqui:", len(s))
     catch e:
         print("vazio:", e.message[:40])
 
-await com_captura()
-await por_mensagem()
-await vazio()
+await with_capture()
+await by_message()
+await empty()

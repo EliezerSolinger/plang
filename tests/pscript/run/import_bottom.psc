@@ -1,7 +1,7 @@
 """`import "x.ph"` DENTRO de um módulo importado (1.5d).
 
-O programa não menciona nenhum módulo P: ele importa `lib_fundo`, e é o
-`lib_fundo` que importa `"pmod_fundo.ph"`. Até a 1.5(d) isso era honrado pela
+O programa não menciona nenhum módulo P: ele importa `lib_bottom`, e é o
+`lib_bottom` que importa `"pmod_bottom.ph"`. Até a 1.5(d) isso era honrado pela
 metade — as declarações entravam, o `#include` saía no C, e o `.p` não era
 compilado: o link falhava, e quem construía compensava nomeando o arquivo à mão
 (era o que o alvo `pstudio` do Makefile fazia com o `hl.p`).
@@ -16,12 +16,12 @@ Isto vale também para a resposta 3 do protocolo (`--outputs`), e tem de valer
 SEM rodar a sema: um sistema de build pergunta o que vai ser emitido antes de
 mandar emitir.
 """
-import lib_fundo
+import lib_bottom
 
-print("dobro:", lib_fundo.dobro(21))
-print("impar:", lib_fundo.impar(7), lib_fundo.impar(8))
+print("dobro:", lib_bottom.double_v(21))
+print("impar:", lib_bottom.odd(7), lib_bottom.odd(8))
 
-soma = 0
+sum_v = 0
 for i in range(4):
-    soma += lib_fundo.dobro(i)
-print("soma:", soma)
+    sum_v += lib_bottom.double_v(i)
+print("soma:", sum_v)

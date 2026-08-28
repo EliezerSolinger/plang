@@ -1,5 +1,5 @@
-contador: i32 = 0
+counter: i32 = 0
 def f():
-    global contadr
+    global countr
 def main() -> int:
     return 0

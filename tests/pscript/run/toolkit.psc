@@ -6,9 +6,9 @@ mensagem que o programa vê — e, no fim, o mesmo ferramental sobre uma lista d
 objetos coletados, que é onde o coletor entra.
 """
 
-struct Cliente:
-    nome: str
-    saldo: int
+struct Customer:
+    name_s: str
+    balance: int
 
 mt: List<int> = []
 
@@ -61,23 +61,23 @@ catch e:
     print(f"sum: {e.message}")
 
 # ---- e sobre objetos coletados, com o coletor no meio ----
-cs = [Cliente("ana", 10), Cliente("bruno", 20), Cliente("carla", 30)]
-nomes = [c.nome for c in cs]
-print(nomes)
-saldos = [c.saldo for c in cs]
-print(sum(saldos), min(saldos), max(saldos))
-cs.append(Cliente("davi", 40))
-tirado = cs.pop(1)
-print(tirado.nome, len(cs))
-outra = cs.copy()
-outra.extend(cs)
-print(len(outra), outra[0].nome, outra[4].nome)
-por_nome = {c.nome: c.saldo for c in cs}
-print(por_nome)
-copia = por_nome.copy()
-copia.update({"ana": 99})
-print(por_nome["ana"], copia["ana"])
-nomes.sort()
-print(nomes)
-juntos = nomes + ["zebra"]
-print(", ".join(juntos))
+cs = [Customer("ana", 10), Customer("bruno", 20), Customer("carla", 30)]
+names = [c.name_s for c in cs]
+print(names)
+balances = [c.balance for c in cs]
+print(sum(balances), min(balances), max(balances))
+cs.append(Customer("davi", 40))
+taken = cs.pop(1)
+print(taken.name_s, len(cs))
+other = cs.copy()
+other.extend(cs)
+print(len(other), other[0].name_s, other[4].name_s)
+by_name = {c.name_s: c.balance for c in cs}
+print(by_name)
+copy_v = by_name.copy()
+copy_v.update({"ana": 99})
+print(by_name["ana"], copy_v["ana"])
+names.sort()
+print(names)
+together = names + ["zebra"]
+print(", ".join(together))

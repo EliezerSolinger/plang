@@ -11,7 +11,7 @@ sistema de build escreve o tempo todo.
 """
 import os
 
-async def linhas(n: int) -> List<str>:
+async def lines(n: int) -> List<str>:
     r = await os.run(["/bin/echo", "linha" + str(n)])
     out: List<str> = []
     for line in r.output().split("\n"):
@@ -20,19 +20,19 @@ async def linhas(n: int) -> List<str>:
     return out
 
 async def total() -> int:
-    soma = 0
+    sum_v = 0
     i = 0
     while i < 3:
-        for x in await linhas(i):    # o iterável é uma TAREFA
-            soma += len(x)
+        for x in await lines(i):    # o iterável é uma TAREFA
+            sum_v += len(x)
         i += 1
-    return soma
+    return sum_v
 
 async def go():
     print("soma:", await total())
     # e o mesmo com `range`, que é o outro caminho que a máquina de estados sabe
     n = 0
-    for k in range(await um(), await tres()):
+    for k in range(await um(), await three()):
         n += k
     print("range com await nos dois limites:", n)
 
@@ -40,7 +40,7 @@ async def um() -> int:
     r = await os.run(["/bin/echo", "1"])
     return int(r.output().strip())
 
-async def tres() -> int:
+async def three() -> int:
     r = await os.run(["/bin/echo", "3"])
     return int(r.output().strip())
 

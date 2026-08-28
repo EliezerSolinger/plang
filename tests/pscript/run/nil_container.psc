@@ -25,7 +25,7 @@ xs: List<int> = [1, 2, 3]
 ds: Dict<str, int> = {"a": 1}
 
 
-async def dentro(k: int) -> int:
+async def inside(k: int) -> int:
     try:
         xs[0] = 5
         print("ERRO: devia ter levantado")
@@ -50,5 +50,5 @@ async def dentro(k: int) -> int:
 
 # no topo elas EXISTEM, que é o outro lado da mesma regra
 print("no topo:", xs[0], ds["a"], len(xs))
-w = spawn(dentro, (1,))
+w = spawn(inside, (1,))
 print("o worker acabou:", await w.recv())

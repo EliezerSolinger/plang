@@ -23,37 +23,37 @@ const def fib(n: int) -> int:
     return fib(n - 1) + fib(n - 2)
 
 
-const def triplo(n: int) -> int:
+const def triple(n: int) -> int:
     return n * 3
 
 
-def compara() -> str:
+def compare() -> str:
     const if fib(10) > 50:
         return "maior"
     else:
         return "menor"
 
 
-def com_conta() -> str:
-    const if triplo(4) + 1 == 13:
+def with_count() -> str:
+    const if triple(4) + 1 == 13:
         return "a conta dobrou"
     else:
         return "nao dobrou"
 
 
-def encadeado() -> str:
-    const if triplo(2) > 3 and fib(7) < 20:
+def chained() -> str:
+    const if triple(2) > 3 and fib(7) < 20:
         return "as duas"
     else:
         return "alguma falhou"
 
 
-def piso() -> str:
+def floor_v() -> str:
     # o `//` do Python, com o mesmo resultado que teria em execução
-    const if triplo(4) // 5 == 2 and -7 // 2 == -4:
+    const if triple(4) // 5 == 2 and -7 // 2 == -4:
         return "piso do Python"
     else:
         return "piso do C"
 
 
-print(compara(), "|", com_conta(), "|", encadeado(), "|", piso())
+print(compare(), "|", with_count(), "|", chained(), "|", floor_v())

@@ -11,9 +11,9 @@ O teste compara stdout E stderr, então as duas metades estão aqui.
 """
 
 
-async def quebra(marca: str) -> int:
+async def breaks(tag: str) -> int:
     await sleep(0.0)
-    raise error("caiu: " + marca)
+    raise error("caiu: " + tag)
 
 
 async def vai(n: int) -> int:
@@ -22,14 +22,14 @@ async def vai(n: int) -> int:
 
 
 # ---- 1. colhido por `await`: nada é reportado ----
-t1 = quebra("await")
+t1 = breaks("await")
 try:
     print(await t1)
 catch e:
     print(f"peguei {e.message}")
 
 # ---- 2. colhido por gather_settled ----
-ts = [quebra("settled"), vai(1)]
+ts = [breaks("settled"), vai(1)]
 es = await gather_settled(ts)
 for i in range(len(es)):
     x = es[i]
@@ -37,7 +37,7 @@ for i in range(len(es)):
         print(f"settled viu {x.message}")
 
 # ---- 3. `first_ok`: as que falham foram olhadas ----
-ok = await first_ok([quebra("first"), vai(9)])
+ok = await first_ok([breaks("first"), vai(9)])
 print(f"first_ok {ok}")
 
 # ---- 4. cancelada: o erro é a resposta ao pedido ----
@@ -49,5 +49,5 @@ catch e2:
     print(f"cancelada {e2.message}")
 
 # ---- 5. NINGUÉM aguarda: é este que sai no stderr ----
-solto = quebra("orfa")
+loose = breaks("orfa")
 print("fim")

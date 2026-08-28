@@ -31,33 +31,33 @@ def f2i(x: float) -> int:
     return int(x)
 
 
-def estreito(x: float) -> i32:
+def narrow(x: float) -> i32:
     return i32(x)
 
 
-def mostra(nome: str, x: float):
+def show(name_s: str, x: float):
     try:
-        print(f"{nome} = {f2i(x)}")
+        print(f"{name_s} = {f2i(x)}")
     catch e:
-        print(f"{nome} levantou: {e.message}")
+        print(f"{name_s} levantou: {e.message}")
 
 
 print("-- o furo --")
-mostra("int(nan)", math.nan)
-mostra("int(inf)", math.inf)
-mostra("int(-inf)", -math.inf)
-mostra("int(1e300)", 1e300)
-mostra("int(-1e300)", -1e300)
+show("int(nan)", math.nan)
+show("int(inf)", math.inf)
+show("int(-inf)", -math.inf)
+show("int(1e300)", 1e300)
+show("int(-1e300)", -1e300)
 
 print("-- o que tem de continuar a passar --")
-mostra("int(2.7)", 2.7)
-mostra("int(-2.7)", -2.7)
-mostra("int(0.0)", 0.0)
-mostra("int(9.2e18)", 9.2e18)
+show("int(2.7)", 2.7)
+show("int(-2.7)", -2.7)
+show("int(0.0)", 0.0)
+show("int(9.2e18)", 9.2e18)
 
 print("-- estreitar ja era checado (ps_f_to_iw) --")
 try:
-    print(f"i32(1e30) = {estreito(1e30)}")
+    print(f"i32(1e30) = {narrow(1e30)}")
 catch e:
     print(f"i32(1e30) levantou (a mensagem vem do caminho antigo)")
 

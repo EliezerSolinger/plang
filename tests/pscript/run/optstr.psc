@@ -52,8 +52,8 @@ def main():
     print(d)
 
     # ---- 4. num campo, que é o caminho do descritor do tipo ----
-    p: Pessoa = Pessoa("Ana", None, 3)
-    q: Pessoa = Pessoa("Rui", "rui@exemplo.pt", None)
+    p: Person = Person("Ana", None, 3)
+    q: Person = Person("Rui", "rui@exemplo.pt", None)
     print(p)
     print(q)
     print(f"{p}")
@@ -65,9 +65,9 @@ def main():
     nn: List<List<int>?> = [None, [7]]
     print(nn)
 
-struct Pessoa:
-    nome: str
+struct Person:
+    name: str
     email: str?
-    idade: int?
+    age: int?
 
 main()

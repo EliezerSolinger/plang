@@ -31,15 +31,15 @@ print(f"choice {random.choice(cards)}")
 
 # uma lista de objetos embaralha do mesmo jeito: o `shuffle` troca os `esize`
 # bytes do elemento, e um elemento pode ser um ponteiro
-struct Carta:
-    nome: str
+struct Card:
+    name_s: str
 
-objs = [Carta("a"), Carta("b"), Carta("c"), Carta("d")]
+objs = [Card("a"), Card("b"), Card("c"), Card("d")]
 random.shuffle(objs)
-nomes = ""
+names = ""
 for c in objs:
-    nomes += c.nome
-print(f"objetos {nomes}")
+    names += c.name_s
+print(f"objetos {names}")
 
 print(f"gauss {random.gauss(0.0, 1.0)} {random.gauss(0.0, 1.0)}")
 print(f"expo {random.expovariate(2.0)}")
@@ -54,11 +54,11 @@ print(f"inf {math.inf > 1e300} nan {math.nan != math.nan}")
 
 # ---- time: `time()` é o relógio de parede, `monotonic()` é o que mede ----
 t0 = time.monotonic()
-soma = 0
+sum_v = 0
 for i in range(100000):
-    soma += i
+    sum_v += i
 dt = time.monotonic() - t0
-print(f"soma {soma} durou {dt >= 0.0}")
+print(f"soma {sum_v} durou {dt >= 0.0}")
 print(f"epoca {time.time() > 1600000000.0}")
 
 # ---- as recusas em tempo de execução ----

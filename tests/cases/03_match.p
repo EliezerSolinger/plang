@@ -1,6 +1,6 @@
 include <stdio.h>
 
-def nome(x: int) -> *char:
+def name_of(x: int) -> *char:
     match x:
         case 0:
             return "zero"
@@ -12,7 +12,7 @@ def nome(x: int) -> *char:
 def main() -> int:
     i: int
     for i in range(0, 4):
-        printf("%d=%s\n", i, nome(i))
+        printf("%d=%s\n", i, name_of(i))
     # match sem default e sem fallthrough
     m: int = 0
     match m:

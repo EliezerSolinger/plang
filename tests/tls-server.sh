@@ -41,23 +41,23 @@ import net
 import sys
 
 
-async def atende(c: Socket, cert: str, chave: str) -> int:
+async def serve_one(c: Socket, cert: str, key: str) -> int:
     # O TLS vai POR CIMA de uma ligação já aceita, e é a mesma decisão do lado
     # cliente (S7): um MODO de uma ligação que já existe, e não um tipo novo.
     # Portanto tudo o que está acima — `read_into`, `write` — não sabe a diferença.
-    n = await net.serve_tls(c, cert, chave)
-    lidos = 0
+    n = await net.serve_tls(c, cert, key)
+    n_read = 0
     with Buffer(4096) as rb:
-        nonlocal lidos
-        lidos = await rb_le(c, rb)
-        corpo = "ola por tls"
+        nonlocal n_read
+        n_read = await read_body(c, rb)
+        body = "ola por tls"
         await c.write("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: "
-                      + str(len(corpo)) + "\r\nconnection: close\r\n\r\n" + corpo)
+                      + str(len(body)) + "\r\nconnection: close\r\n\r\n" + body)
     c.close()
-    return lidos
+    return n_read
 
 
-async def rb_le(c: Socket, rb: Buffer) -> int:
+async def read_body(c: Socket, rb: Buffer) -> int:
     return await c.read_into(rb, 0, 4096)
 
 
@@ -68,7 +68,7 @@ f.close()
 i = 0
 while i < 4:
     c = await srv.accept()
-    t = atende(c, sys.argv[2], sys.argv[3])
+    t = serve_one(c, sys.argv[2], sys.argv[3])
     i += 1
 srv.close()
 PSC

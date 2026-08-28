@@ -22,30 +22,30 @@ formas estão aqui lado a lado porque a diferença entre elas é o defeito.
 """
 
 # construídos: vivem no contexto, e é destes que se trata
-const DIAS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 const PESOS = {"leve": 1, "medio": 5, "pesado": 20}
 const MATRIZ = [[1, 2], [3, 4]]
 
 # estáticos do C: um número e um literal, que sempre funcionaram
-const LIMITE = 4096
-const MARCA = "psrt"
+const LIMIT = 4096
+const TAG = "psrt"
 
 
-async def dentro(k: int) -> int:
+async def inside(k: int) -> int:
     # a leitura que era um SIGSEGV
-    print("dia:", DIAS[k], "de", len(DIAS))
+    print("dia:", DAYS[k], "de", len(DAYS))
     print("peso:", PESOS["medio"])
     print("matriz:", MATRIZ[1][0])
-    print("estaticos:", LIMITE, MARCA)
-    parent.send(len(DIAS) * 100 + PESOS["pesado"])
+    print("estaticos:", LIMIT, TAG)
+    parent.send(len(DAYS) * 100 + PESOS["pesado"])
     return 0
 
 
-print("no topo:", DIAS[0], PESOS["leve"], MATRIZ[0][1], LIMITE, MARCA)
-w = spawn(dentro, (3,))
+print("no topo:", DAYS[0], PESOS["leve"], MATRIZ[0][1], LIMIT, TAG)
+w = spawn(inside, (3,))
 print("o worker respondeu:", await w.recv())
 
 # e um SEGUNDO worker tem a SUA cópia: escrever nela seria impossível (é const),
 # mas o ponto é que ele a tem
-w2 = spawn(dentro, (5,))
+w2 = spawn(inside, (5,))
 print("o segundo tambem:", await w2.recv())

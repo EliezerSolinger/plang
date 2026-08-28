@@ -21,9 +21,9 @@ import path
 D: str = "mapdemo"
 
 
-async def escreve(p: str, texto: str) -> int:
+async def write_v(p: str, text_s: str) -> int:
     f = await open(p, "w")
-    n = await f.write(texto)
+    n = await f.write(text_s)
     await f.close()
     return n
 
@@ -31,37 +31,37 @@ async def escreve(p: str, texto: str) -> int:
 async def go() -> int:
     if not path.isdir(D):
         os.makedirs(D)
-    alvo = path.join(D, "dados.bin")
-    conteudo = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 8      # 208 bytes
-    await escreve(alvo, conteudo)
+    target_s = path.join(D, "dados.bin")
+    content = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 8      # 208 bytes
+    await write_v(target_s, content)
 
     # ---- 1. o ficheiro inteiro ----
-    with os.mmap(alvo) as m:
+    with os.mmap(target_s) as m:
         print("tamanho", m.size(), len(m))
         m.advise(os.SEQUENTIAL)
         # fatiar dá `bytes`, e a fatia é uma JANELA sobre a memória do núcleo
         print("primeiros", str(m[0:6]))
         print("ultimos", str(m[len(m) - 4:]))
         # ... e uma janela de uma janela continua a ser a mesma memória
-        meio = m[26:52]
-        print("meio", str(meio[0:6]), len(meio))
+        half = m[26:52]
+        print("meio", str(half[0:6]), len(half))
         # comparar por CONTEÚDO, como tudo o resto (22.2)
         print("bate:", m[0:4] == b"ABCD", m[0:4] == b"ABCE")
     # munmap AQUI
 
     # ---- 2. uma REGIÃO, sem mapear o resto (137.3) ----
-    with os.mmap(alvo, "r", 26, 10) as r:
+    with os.mmap(target_s, "r", 26, 10) as r:
         print("regiao", len(r), str(r[:]))
 
     # ---- 3. o que a região recusa: cair fora do ficheiro ----
     try:
-        with os.mmap(alvo, "r", 200, 100) as bad:
+        with os.mmap(target_s, "r", 200, 100) as bad:
             print("ISTO NAO DEVIA APARECER", len(bad))
     catch e:
         print("fora:", e.message)
 
     # ---- 4. um mapa fechado recusa tudo o que se lhe peça ----
-    z = os.mmap(alvo)
+    z = os.mmap(target_s)
     z.close()
     try:
         print(len(z[0:1]))
@@ -69,9 +69,9 @@ async def go() -> int:
         print("fechado:", e2.message)
 
     # ---- 5. o ficheiro vazio mapeia-se, e é vazio ----
-    vazio = path.join(D, "vazio.bin")
-    await escreve(vazio, "")
-    with os.mmap(vazio) as v:
+    empty = path.join(D, "vazio.bin")
+    await write_v(empty, "")
+    with os.mmap(empty) as v:
         print("vazio", len(v), len(v[:]))
 
     return 0

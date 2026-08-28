@@ -11,6 +11,6 @@
 # colheita a meio da chamada não lhe toca.
 import <stl/cstr.ph>
 
-def blob_soma(in b: CBytes) -> i64
-def blob_dobra(in d: CBuf)
-def blob_enche(in d: CBuf, v: i64)
+def blob_sum(in b: CBytes) -> i64
+def blob_double(in d: CBuf)
+def blob_fill(in d: CBuf, v: i64)

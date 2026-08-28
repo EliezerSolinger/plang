@@ -1,2 +1,2 @@
-def leva(w: worker) -> int:
+def takes(w: worker) -> int:
     return 1

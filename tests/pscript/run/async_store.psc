@@ -48,19 +48,19 @@ async def devolve_hash(s: str) -> u64:
     return fnv(OFF, s)
 
 
-async def acumula(n: int) -> str:
+async def accumulate(n: int) -> str:
     # `x = ...` e `x += ...` num campo do quadro
-    texto = ""
+    text = ""
     i = 0
     while i < n:
-        texto = texto + junta(1)
-        texto += "|"
+        text = text + junta(1)
+        text += "|"
         i += 1
     await sleep(0.0)
-    return texto
+    return text
 
 
-async def morsa(n: int) -> int:
+async def walrus(n: int) -> int:
     # `:=` num campo do quadro
     await sleep(0.0)
     if (t := junta(n)) != "":
@@ -68,7 +68,7 @@ async def morsa(n: int) -> int:
     return -1
 
 
-async def numa_lista(n: int) -> int:
+async def in_a_list(n: int) -> int:
     # o mesmo, guardando num objeto que NÃO é o quadro: uma lista
     xs: List<str> = []
     for i in range(n):
@@ -81,15 +81,15 @@ async def numa_lista(n: int) -> int:
 
 
 async def go():
-    esperado = fnv(OFF, "constante\n")
-    print("hash de fora:", str(esperado))
-    print("hash de dentro bate:", await devolve_hash("constante\n") == esperado)
+    expected = fnv(OFF, "constante\n")
+    print("hash de fora:", str(expected))
+    print("hash de dentro bate:", await devolve_hash("constante\n") == expected)
 
-    a = await acumula(4)
+    a = await accumulate(4)
     print("acumulado:", a, len(a))
 
-    print("morsa:", await morsa(3))
-    print("na lista:", await numa_lista(5))
+    print("morsa:", await walrus(3))
+    print("na lista:", await in_a_list(5))
 
 
 await go()

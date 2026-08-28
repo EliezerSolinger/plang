@@ -2,7 +2,7 @@
 # por onde os TRÊS passam (`defer`, `with`, `finally`), porque o `finally`
 # tinha-se esquecido dela e o que ele emitia era a metade de trás de um `await`:
 # a leitura do resultado de uma tarefa que nunca chegou a existir. Dava SIGSEGV.
-async def escreve(p: str) -> int:
+async def write_v(p: str) -> int:
     f = await open(p, "w")
     try:
         await f.write("x")
@@ -11,4 +11,4 @@ async def escreve(p: str) -> int:
         await f.close()
 
 
-print(await escreve("x.txt"))
+print(await write_v("x.txt"))

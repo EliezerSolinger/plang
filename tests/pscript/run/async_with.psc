@@ -24,38 +24,38 @@ import os
 import path
 
 
-async def tamanho(caminho: str) -> int:
+async def size_n(path_s: str) -> int:
     # o CABEÇALHO suspende e o corpo não: era exactamente este o caso
-    with await open(caminho, "r") as f:
+    with await open(path_s, "r") as f:
         return f.size()
 
 
-async def primeiros(caminho: str, n: int) -> str:
+async def firsts(path_s: str, n: int) -> str:
     # ... e agora com um segundo `with` lá dentro, que era a forma que o
     # `packages/httpd/files.psc` precisava para servir um `Range`
-    with await open(caminho, "r") as f:
+    with await open(path_s, "r") as f:
         with Buffer(4096) as buf:
             k = os.pread(f, buf, 0, n)
             return str(bytes(buf[0:k]))
 
 
-async def apanha(caminho: str) -> str:
+async def catches(path_s: str) -> str:
     # e a saída pelo ERRO também liberta: o `with` baixa para um `defer`, e o
     # `defer` corre em toda a saída do bloco
     try:
-        with await open(caminho, "r") as f:
+        with await open(path_s, "r") as f:
             raise error("rebentei com o ficheiro aberto")
     catch e:
         return e.message
     return "nao chegou aqui"
 
 
-alvo = path.join(os.tempdir(), "psrt-async-with.txt")
-g = await open(alvo, "w")
+target_s = path.join(os.tempdir(), "psrt-async-with.txt")
+g = await open(target_s, "w")
 await g.write("ola mundo asincrono")
 g.close()
 
-print("tamanho:", await tamanho(alvo))
-print("primeiros:", await primeiros(alvo, 3))
-print("erro:", await apanha(alvo))
-os.remove(alvo)
+print("tamanho:", await size_n(target_s))
+print("primeiros:", await firsts(target_s, 3))
+print("erro:", await catches(target_s))
+os.remove(target_s)

@@ -66,10 +66,10 @@ def main():
     for i in range(4):
         z[i] = u8(65 + i)
     print("no buffer:", len(z), z[0], z[-1])
-    soma = 0
+    sum_v = 0
     for x in z:
-        soma += int(x)
-    print("iterou:", soma, str(z.freeze()))
+        sum_v += int(x)
+    print("iterou:", sum_v, str(z.freeze()))
 
     b.close()
 

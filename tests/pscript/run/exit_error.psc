@@ -15,7 +15,7 @@ o que faz uma ferramenta de linha de comando ser usável num script.
 import sys
 
 
-async def escolhe(n: int) -> int:
+async def choose(n: int) -> int:
     if n < 0:
         raise error("um código negativo não é um status")
     return n
@@ -23,15 +23,15 @@ async def escolhe(n: int) -> int:
 
 async def go():
     # o caminho normal: o número pedido atravessa
-    print("normal:", await escolhe(3))
+    print("normal:", await choose(3))
 
     # e o que falha, apanhado, também não mata nada
     try:
-        await escolhe(-1)
+        await choose(-1)
         print("não devia chegar aqui")
     catch e:
         print("apanhado:", e.message)
 
 
 await go()
-sys.exit(await escolhe(0))
+sys.exit(await choose(0))

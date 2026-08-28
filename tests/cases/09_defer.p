@@ -24,7 +24,7 @@ def f(x: int) -> int:
     printf("fim\n")
     return 0
 
-def aloca() -> int:
+def alloc_v() -> int:
     p: *int = malloc(4 * sizeof(int))
     defer free(p)
     p[0] = 7
@@ -32,5 +32,5 @@ def aloca() -> int:
 
 def main() -> int:
     printf("ret=%d\n", f(2))
-    printf("aloca=%d\n", aloca())
+    printf("aloca=%d\n", alloc_v())
     return 0

@@ -43,22 +43,22 @@ const def com_til(n: int) -> int:
     return ~n
 
 
-const def piso_float() -> int:
+const def floor_float() -> int:
     # 7.5 // 2.0 = 3.0, e -7.5 // 2.0 = -4.0 (piso, nao truncatura)
     return int(7.5 // 2.0) * 100 + int(-7.5 // 2.0)
 
 
-const def resto_float() -> int:
+const def fmod_float() -> int:
     # o resto tem o sinal do DIVISOR: -7.5 % 2.0 = 0.5
     return int((7.5 % 2.0) * 10.0) * 100 + int((-7.5 % 2.0) * 10.0)
 
 
 print(com_floordiv(9), com_bits(15), com_pow(3), com_til(5))
-print(piso_float(), resto_float())
+print(floor_float(), fmod_float())
 
 
 # ---- e o `match` sobre float ----
-def classifica(x: float) -> str:
+def classify(x: float) -> str:
     match x:
         case 0.0:
             return "zero"
@@ -68,4 +68,4 @@ def classifica(x: float) -> str:
             return "outro"
 
 
-print(classifica(0.0), classifica(1.5), classifica(2.5), classifica(9.0))
+print(classify(0.0), classify(1.5), classify(2.5), classify(9.0))

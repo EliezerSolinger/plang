@@ -4,14 +4,14 @@
 # falta o `in`.
 include <stdio.h>
 
-struct Ponto:
+struct Point:
     x: i32
     y: i32
 
-private def soma(in p: Ponto) -> i32:
+private def sum_v(in p: Point) -> i32:
     return p.x + p.y
 
 def main() -> int:
-    a: Ponto = {1, 2}
-    printf("%d\n", soma(a))
+    a: Point = {1, 2}
+    printf("%d\n", sum_v(a))
     return 0

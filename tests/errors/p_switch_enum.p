@@ -8,20 +8,20 @@
 # nothing — which is why the omission has to be reported here.
 include <stdio.h>
 
-enum Cor:
-    VERMELHO
-    VERDE
-    AZUL
-    ROXO
+enum Color:
+    RED
+    GREEN
+    BLUE
+    PURPLE
 
-def nome(c: Cor) -> const *char:
+def name_of(c: Color) -> const *char:
     match c:
-        case VERMELHO:
-            return "vermelho"
-        case VERDE:
-            return "verde"
+        case RED:
+            return "red"
+        case GREEN:
+            return "green"
     return "?"
 
 def main() -> i32:
-    printf("%s\n", nome(VERMELHO))
+    printf("%s\n", name_of(RED))
     return 0

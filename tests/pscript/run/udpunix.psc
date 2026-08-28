@@ -31,15 +31,15 @@ async def go() -> int:
     # ---- 1. UDP: um pacote, e quem o mandou ----
     a = net.udp(0)
     b = net.udp(0)
-    porta_a = a.port()
-    print("as duas ligaram-se:", porta_a > 0, b.port() > 0)
+    port_a = a.port()
+    print("as duas ligaram-se:", port_a > 0, b.port() > 0)
 
     with Buffer(64) as tx:
         v = tx.view_u8()
         msg = "ping"
         for i in range(len(msg)):
             v[i] = u8(ord(msg[i]))
-        print("mandou", b.send_to(tx, 0, len(msg), "127.0.0.1", porta_a), "bytes")
+        print("mandou", b.send_to(tx, 0, len(msg), "127.0.0.1", port_a), "bytes")
 
     with Buffer(64) as rx:
         # o `poll` do escalonador é quem diz quando há alguma coisa; aqui basta
@@ -71,10 +71,10 @@ async def go() -> int:
     c = net.unix(sock)
     with Buffer(32) as wb:
         w = wb.view_u8()
-        texto = "pelo caminho"
-        for i in range(len(texto)):
-            w[i] = u8(ord(texto[i]))
-        await c.write_from(wb, 0, len(texto))
+        text_s = "pelo caminho"
+        for i in range(len(text_s)):
+            w[i] = u8(ord(text_s[i]))
+        await c.write_from(wb, 0, len(text_s))
         n2 = await c.read_into(wb, 0, 32)
         print("voltou:", str(bytes(wb[0:n2])))
     c.close()

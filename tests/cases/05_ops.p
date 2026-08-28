@@ -16,15 +16,15 @@ def main() -> int:
     printf("%d\n", i)
 
     v: int[3] = {1, 2, 4}
-    soma: int = 0
+    sum_v: int = 0
     j: int
     for j in range(3):
-        soma += v[j]
-    printf("%d\n", soma)
+        sum_v += v[j]
+    printf("%d\n", sum_v)
 
     for j in range(10, 0, -2):
-        soma += 1
-    printf("%d\n", soma)
+        sum_v += 1
+    printf("%d\n", sum_v)
 
     mask: int = (1 << 3) | 1
     printf("%d\n", mask & 15)

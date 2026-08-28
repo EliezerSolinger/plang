@@ -32,7 +32,7 @@ print(str(b"abcdef"[0:3] + b"XYZ"))
 print(str("ola ".encode() + "mundo".encode()))
 
 # num laço, que é como um protocolo se monta de verdade
-saida: bytes = b""
+out_s: bytes = b""
 for i in range(5):
-    saida = saida + str(i).encode()
-print(str(saida), len(saida))
+    out_s = out_s + str(i).encode()
+print(str(out_s), len(out_s))

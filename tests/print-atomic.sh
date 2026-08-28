@@ -23,14 +23,14 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 cat > "$OUT/storm.psc" <<'EOF'
-def berra(id: int, quantas: int) -> int:
+def shout(id: int, quantas: int) -> int:
     for i in range(quantas):
         print(f"w{id}-{i}")
     return id
 
 ws: List<Worker<int>> = []
 for k in range(8):
-    ws.append(spawn(berra, (k, 200)))
+    ws.append(spawn(shout, (k, 200)))
 for i in range(200):
     print(f"m-{i}")
 EOF

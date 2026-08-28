@@ -39,12 +39,12 @@ for k in sorted(d.keys()):
     print(k, "=", d[k])
 
 # e num campo de struct: o alvo é um endereço, e o mesmo raciocínio vale
-struct Caixa:
-    dentro: str
+struct Box:
+    inside: str
 
-c = Caixa("inicial")
-lista = v as List<any>
+c = Box("inicial")
+list_v = v as List<any>
 try:
-    c.dentro = lista[3] as str
+    c.inside = list_v[3] as str
 catch e3:
-    print("campo intacto:", c.dentro)
+    print("campo intacto:", c.inside)

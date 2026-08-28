@@ -1,5 +1,5 @@
 # `with` on an RVALUE. Pascal semantics say the target is evaluated exactly
-# once, so it has to be materialized into a temporary: `&faz()` is not C. The C
+# once, so it has to be materialized into a temporary: `&make()` is not C. The C
 # backend used to emit that and let the C compiler reject it (the QBE backend
 # refused outright) — the two backends disagreed, and the C one miscompiled.
 #
@@ -14,13 +14,13 @@ struct Pt:
 
 calls: i32 = 0
 
-def faz() -> Pt:
+def make() -> Pt:
     calls += 1
     p: Pt = {1, 2}
     return p
 
 def main() -> i32:
-    with faz():
+    with make():
         .x = 10
         .y = .x * 2
         printf("%d %d\n", .x, .y)

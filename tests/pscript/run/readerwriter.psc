@@ -47,7 +47,7 @@ async def drain<R: Reader>(src: R, buf: Buffer, chunk: int) -> int:
         total += got
 
 
-async def servidor(srv: Socket) -> int:
+async def server(srv: Socket) -> int:
     with await srv.accept() as c:
         await c.write("do outro lado\n")
         return 1
@@ -56,27 +56,27 @@ async def servidor(srv: Socket) -> int:
 async def go() -> int:
     if not path.isdir(D):
         os.makedirs(D)
-    origem = path.join(D, "origem.bin")
-    destino = path.join(D, "destino.bin")
+    source = path.join(D, "origem.bin")
+    dest = path.join(D, "destino.bin")
 
     # ---- 1. um ficheiro com algo lá dentro ----
-    f = await open(origem, "w")
+    f = await open(source, "w")
     await f.write(("linha de texto\n" * 40).encode())
     await f.close()
 
     # ---- 2. o genérico sobre um FICHEIRO ----
     nonlocal n
     with Buffer(64) as buf:
-        src = await open(origem, "r")
-        dst = await open(destino, "w")
+        src = await open(source, "r")
+        dst = await open(dest, "w")
         n = await copy_all(src, dst, buf, 64)
         await src.close()
         await dst.close()
         print("copiou", n, "bytes em pedaços de 64")
 
     # o destino tem exactamente o mesmo conteúdo
-    a = await open(origem, "r")
-    b = await open(destino, "r")
+    a = await open(source, "r")
+    b = await open(dest, "r")
     ca = await a.read_all()
     cb = await b.read_all()
     await a.close()
@@ -85,25 +85,25 @@ async def go() -> int:
 
     # ---- 3. o MESMO genérico sobre um SOCKET ----
     srv = net.listen(0)
-    porta = srv.port()
+    port_n = srv.port()
 
-    t = servidor(srv)
-    c = await net.connect("127.0.0.1", porta)
-    nonlocal lidos
+    t = server(srv)
+    c = await net.connect("127.0.0.1", port_n)
+    nonlocal read_n
     with Buffer(32) as buf2:
-        lidos = await drain(c, buf2, 32)
+        read_n = await drain(c, buf2, 32)
     c.close()
     await t
     srv.close()
-    print("do socket:", lidos, "bytes pelo mesmo genérico")
+    print("do socket:", read_n, "bytes pelo mesmo genérico")
 
     # ---- 4. `freeze`: o bloco muda de dono sem cópia, e o Buffer morre ----
     bf = Buffer(8)
     v = bf.view_u8()
     for i in range(8):
         v[i] = u8(65 + i)
-    congelado = bf.freeze()
-    print("congelado:", str(congelado), len(congelado))
+    frozen = bf.freeze()
+    print("congelado:", str(frozen), len(frozen))
     try:
         # congelar duas vezes é o engano que a 135.4 previne: o bloco já tem
         # dono. (`size()` não é a que fala — ela responde 0 e não levanta,

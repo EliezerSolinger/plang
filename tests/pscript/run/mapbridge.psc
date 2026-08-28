@@ -30,7 +30,7 @@ conversão nunca deu: o compilador recusa construí-lo sobre o que é imutável.
 """
 import os
 import path
-import "pmod_ponte.ph"
+import "pmod_bridge.ph"
 
 
 D: str = "brdemo"
@@ -39,23 +39,23 @@ D: str = "brdemo"
 async def go() -> int:
     if not path.isdir(D):
         os.makedirs(D)
-    alvo = path.join(D, "dados.bin")
-    f = await open(alvo, "w")
+    target_s = path.join(D, "dados.bin")
+    f = await open(target_s, "w")
     await f.write("abcdefghij")
     await f.close()
 
-    with os.mmap(alvo) as m:
+    with os.mmap(target_s) as m:
         # o ficheiro inteiro, visto de P — e nenhum byte foi copiado para lá
-        print("do P:", ponte_len(m[:]), ponte_soma(m[:]))
+        print("do P:", bridge_len(m[:]), bridge_sum(m[:]))
         # ... e uma REGIÃO dele, que também é só um par
-        print("uma janela:", ponte_len(m[2:5]), ponte_soma(m[2:5]))
+        print("uma janela:", bridge_len(m[2:5]), bridge_sum(m[2:5]))
         # duas janelas iguais comparam iguais do lado de lá
-        print("compara:", ponte_igual(m[0:3], m[0:3]), ponte_igual(m[0:3], m[1:4]))
+        print("compara:", bridge_eq(m[0:3], m[0:3]), bridge_eq(m[0:3], m[1:4]))
 
     # e o mesmo caminho serve um `bytes` que NÃO veio de um mapa: o P não vê
     # diferença nenhuma, porque não há nenhuma para ver
     b = "abcdefghij".encode()
-    print("de um bytes:", ponte_len(b), ponte_soma(b))
+    print("de um bytes:", bridge_len(b), bridge_sum(b))
     return 0
 
 

@@ -8,7 +8,7 @@ struct Par<T>:
         self.a = x
         self.b = y
 
-    def soma(in self: Par<T>) -> T:
+    def sum_v(in self: Par<T>) -> T:
         return self.a + self.b
 
 def max<T>(a: T, b: T) -> T:
@@ -20,5 +20,5 @@ inline max<int>
 def main() -> int:
     p: Par<int>
     p.init(40, 2)
-    printf("%d %d\n", p.soma(), max(3, 7))
+    printf("%d %d\n", p.sum_v(), max(3, 7))
     return 0

@@ -18,7 +18,7 @@ import random
 
 # ---- ordenação: os padrões ----
 random.seed(4242)
-casos = [
+cases = [
     [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5],
     [1, 2, 3, 4, 5, 6, 7, 8],
     [8, 7, 6, 5, 4, 3, 2, 1],
@@ -28,13 +28,13 @@ casos = [
     [0, -0, 0, -0],
     [-5, 3, -1, 0, 7, -9],
 ]
-for c in casos:
+for c in cases:
     print(sorted(c))
 
 serra = [i % 7 for i in range(50)]
 print(sorted(serra))
-grande = [random.randrange(100) for i in range(300)]
-print(sorted(grande))
+big = [random.randrange(100) for i in range(300)]
+print(sorted(big))
 
 # os floats, onde a estabilidade é VISÍVEL: 0.0 e -0.0 comparam iguais e
 # imprimem diferente, então a ordem entre eles mostra se a ordenação é estável
@@ -42,8 +42,8 @@ print(sorted([0.0, -0.0, 0.0, -0.0]))
 print(sorted([-0.0, 0.0, -0.0, 0.0]))
 print(sorted([1.5, -0.0, 0.0, -2.5, 3.5]))
 print(sorted(["pera", "uva", "abacate", "uva", "manga"]))
-vazia: List<int> = []
-print(sorted(vazia))
+empty: List<int> = []
+print(sorted(empty))
 
 # um tamanho de cada, até passar do minrun (32) e do primeiro merge
 for n in range(0, 40):
@@ -107,7 +107,7 @@ random.seed(7)
 hb = [random.randrange(1000) for i in range(200)]
 heapq.heapify(hb)
 print(hb)
-saida = ""
+out_s = ""
 while len(hb) > 0:
-    saida += str(heapq.heappop(hb)) + ","
-print(saida)
+    out_s += str(heapq.heappop(hb)) + ","
+print(out_s)

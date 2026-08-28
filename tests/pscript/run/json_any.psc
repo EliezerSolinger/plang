@@ -21,8 +21,8 @@ baixo vem ANTES de propósito — sem ela este ficheiro passava mesmo com o defe
 import json as jsn
 
 # o `bytes` primeiro: é ele que registava a chave partilhada
-marca: bytes = b"\x7fELF"
-print(marca.hex())
+tag: bytes = b"\x7fELF"
+print(tag.hex())
 
 # ---- 1. um `any` declarado, com as cinco formas que o JSON tem ----
 d: Dict<str, any> = {"a": "x", "b": 3, "c": True, "d": 1.5, "e": None}
@@ -40,10 +40,10 @@ print(envelope({"quem": "pscript", "quantos": 3}))
 print(envelope([1, "dois", True, None]))
 
 # ---- 4. e o `T?`, que é `null` — a palavra que o JSON tem para isso ----
-struct Pessoa:
-    nome: str
-    idade: int?
+struct Person:
+    name: str
+    age: int?
     email: str?
 
-print(jsn.stringify(Pessoa("Ana", 3, None)))
-print(jsn.stringify(Pessoa("Rui", None, "rui@exemplo.pt")))
+print(jsn.stringify(Person("Ana", 3, None)))
+print(jsn.stringify(Person("Rui", None, "rui@exemplo.pt")))

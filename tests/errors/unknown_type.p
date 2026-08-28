@@ -1,5 +1,5 @@
 struct Point:
     x: i32
 def main() -> int:
-    p: Ponto
+    p: Ponit
     return 0

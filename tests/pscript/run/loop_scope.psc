@@ -98,10 +98,10 @@ print(await a_str("abc"), await a_pairs({"x": 1, "yy": 2}))
 print(s_comp(), await a_comp(), await a_nested())
 
 # e o laço sem homônimo continua sendo um laço
-async def soma(n: int) -> int:
+async def sum_v(n: int) -> int:
     t = 0
     for i in range(n):
         t += i * i
     return t
 
-print(await soma(5))
+print(await sum_v(5))

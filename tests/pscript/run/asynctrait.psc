@@ -53,11 +53,11 @@ def drain<T: Sink>(d: T, v: int) -> int:
 
 async def go() -> int:
     m = Mem(10, 0)
-    direto = await m.get(5)
-    pelo_generico = await pump(m, 1)
-    print("direto", direto, "pelo generico", pelo_generico)
+    direct = await m.get(5)
+    via_generic = await pump(m, 1)
+    print("direto", direct, "pelo generico", via_generic)
     print("sincrono", drain(m, 7), drain(m, 3))
-    return direto + pelo_generico
+    return direct + via_generic
 
 
 print("total", await go())

@@ -17,14 +17,14 @@ include <stdio.h>
 
 # a by-value use, a pointer use and a function-pointer use: all three go through
 # the type printer, so all three must spell the typedef
-def escreve(f: *FILE, msg: const *char) -> int:
+def write_v(f: *FILE, msg: const *char) -> int:
     return fprintf(f, "%s\n", msg)
 
 fpp: def(f: *FILE, fmt: const *char, ...) -> int = &fprintf
 
 def main() -> i32:
     f: *FILE = stdout
-    escreve(f, "typedef")
+    write_v(f, "typedef")
     fpp(stdout, "%s\n", "ponteiro")
     printf("%d\n", 1 if f != None else 0)
     return 0

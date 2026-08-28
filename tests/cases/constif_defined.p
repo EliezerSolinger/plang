@@ -3,16 +3,16 @@
 # é o que pega um predefinido escrito errado.
 include <stdio.h>
 
-const if defined(MEU_TETO):
-    const TETO = MEU_TETO
+const if defined(MY_CEILING):
+    const CEILING = MY_CEILING
 else:
-    const TETO = 42
+    const CEILING = 42
 
-const if is_defined(OUTRO_NOME):
-    const SEG = OUTRO_NOME
+const if is_defined(OTHER_NAME):
+    const SEG = OTHER_NAME
 else:
     const SEG = 7
 
 def main() -> int:
-    printf("%d %d\n", TETO, SEG)
+    printf("%d %d\n", CEILING, SEG)
     return 0

@@ -1,4 +1,4 @@
 tests/pscript/run/trace_line.psc:24: error: list index out of range
-  in fundo (tests/pscript/run/trace_line.psc:24)
-  in meio (tests/pscript/run/trace_line.psc:31)
-  in topo (tests/pscript/run/trace_line.psc:36)
+  in bottom (tests/pscript/run/trace_line.psc:24)
+  in middle (tests/pscript/run/trace_line.psc:31)
+  in top (tests/pscript/run/trace_line.psc:36)

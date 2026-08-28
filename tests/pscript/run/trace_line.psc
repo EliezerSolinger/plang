@@ -16,24 +16,24 @@ a pousar. É por isso que a linha aqui é a de DENTRO do `if`, e não a do `for`
 """
 
 
-def fundo(xs: List<int>, k: int) -> int:
-    marca: str = "fundo"
+def bottom(xs: List<int>, k: int) -> int:
+    tag: str = "fundo"
     for i in range(3):
         if i == k:
             zero: List<int> = []
-            return len(marca) + zero[7]
+            return len(tag) + zero[7]
     return 0
 
 
-def meio(k: int) -> int:
-    guarda: str = "meio"
+def middle(k: int) -> int:
+    guard: str = "meio"
     xs: List<int> = [1, 2, 3]
-    return fundo(xs, k) + len(guarda)
+    return bottom(xs, k) + len(guard)
 
 
-def topo() -> int:
-    nome: str = "topo"
-    return meio(2) + len(nome)
+def top() -> int:
+    name_s: str = "topo"
+    return middle(2) + len(name_s)
 
 
-print(topo())
+print(top())

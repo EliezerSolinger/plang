@@ -30,16 +30,16 @@ with Buffer(4) as buf:
     v[3] = u8(4)
 
     # ---- 1. o P LÊ o buffer do pscript ----
-    print("o P le:", blob_soma(buf))
+    print("o P le:", blob_sum(buf))
 
     # ---- 2. ... e ESCREVE nele, que é o que a 161 abriu ----
-    blob_dobra(buf)
+    blob_double(buf)
     print("o P escreveu:", int(v[0]), int(v[1]), int(v[2]), int(v[3]))
 
     # ---- 3. uma VISTA também atravessa: é uma janela do mesmo bloco ----
-    blob_enche(v, 7)
+    blob_fill(v, 7)
     print("por uma vista:", int(v[0]), int(v[3]))
 
     # ---- 4. e o pscript continua a ver o mesmo, porque É o mesmo ----
     v[0] = u8(100)
-    print("e o pscript escreve de volta:", blob_soma(buf))
+    print("e o pscript escreve de volta:", blob_sum(buf))

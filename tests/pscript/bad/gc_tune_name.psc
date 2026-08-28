@@ -1,3 +1,3 @@
 import gc
 
-gc.tune(limite=10)
+gc.tune(limit=10)

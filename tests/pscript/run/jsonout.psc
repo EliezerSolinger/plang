@@ -18,30 +18,30 @@ O `repr` e o JSON não são a mesma coisa, e as diferenças são decisões:
 
 import json
 
-enum Cor:
-    VERMELHO
-    VERDE
-    AZUL
+enum Color:
+    RED
+    GREEN
+    BLUE
 
 record Pt:
     x: int
     y: float
 
-struct Caixa:
-    nome: str
+struct Box:
+    name: str
     p: Pt
     tags: List<str>
     n: int
-    cor: Cor
+    color: Color
     ok: bool
 
-struct Dinheiro:
-    centavos: int
+struct Money:
+    cents: int
     def to_str(self) -> str:
-        return "$" + str(self.centavos // 100)
+        return "$" + str(self.cents // 100)
 
 # ---- o caso inteiro ----
-print(json.stringify(Caixa("a\"b", Pt(1, 2.5), ["x", "y"], 7, AZUL, True)))
+print(json.stringify(Box("a\"b", Pt(1, 2.5), ["x", "y"], 7, BLUE, True)))
 
 # ---- os pedaços ----
 print(json.stringify([1, 2, 3]))
@@ -50,12 +50,12 @@ print(json.stringify(Pt(3, 4.0)))
 print(json.stringify("olá\n\t"))
 print(json.stringify(42))
 print(json.stringify(True))
-print(json.stringify(VERMELHO))
+print(json.stringify(RED))
 xs: List<int> = []
 print(json.stringify(xs))
 
 # o `to_str` NÃO manda aqui: o repr mostra `$2`, o JSON leva o campo
-d = Dinheiro(250)
+d = Money(250)
 print(d, json.stringify(d))
 
 # um conjunto vira array
@@ -67,11 +67,11 @@ print(json.stringify([Pt(1, 1.0), Pt(2, 2.0)]))
 print(json.stringify({"pontos": [1, 2], "vazio": []}))
 
 # ---- e o que ele RECUSA ----
-def infinito() -> float:
+def infinite() -> float:
     return 1.0e400
 
 try:
-    print(json.stringify([infinito()]))
+    print(json.stringify([infinite()]))
 catch e:
     print("recusou:", e.message)
 
@@ -84,10 +84,10 @@ catch e2:
 
 
 # ---- a volta: o que sai daqui entra no nosso próprio `parse` ----
-texto = json.stringify(Caixa("z", Pt(9, 0.5), ["t"], 1, VERDE, False))
-volta = json.parse(texto) as Dict<str, any>
-print(volta["nome"] as str, (volta["p"] as Dict<str, any>)["x"] as int, volta["cor"] as str)
+text = json.stringify(Box("z", Pt(9, 0.5), ["t"], 1, GREEN, False))
+back = json.parse(text) as Dict<str, any>
+print(back["name"] as str, (back["p"] as Dict<str, any>)["x"] as int, back["color"] as str)
 
 # ... e o `json.dumps` do python concorda caractere a caractere com isto:
 #   {"nome":"z","p":{"x":9,"y":0.5},"tags":["t"],"n":1,"cor":"VERDE","ok":false}
-print(texto)
+print(text)

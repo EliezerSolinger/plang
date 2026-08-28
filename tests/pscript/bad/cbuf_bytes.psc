@@ -2,4 +2,4 @@
 import "../run/pmod_blob.ph"
 
 
-blob_dobra(b"\x01\x02")
+blob_double(b"\x01\x02")

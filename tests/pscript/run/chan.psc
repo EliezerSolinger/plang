@@ -21,19 +21,19 @@ prontos ali mesmo: sem `poll`, sem descritor, sem uma volta ao escalonador.
 """
 
 
-record Ponto:
+record Point:
     x: int
     y: int
 
 
-async def produz(ch: Channel<int>, n: int) -> int:
+async def produce(ch: Channel<int>, n: int) -> int:
     for i in range(n):
         await ch.send(i * 10)
     ch.close()
     return n
 
 
-async def consome(ch: Channel<int>) -> int:
+async def consume(ch: Channel<int>) -> int:
     total = 0
     while True:
         v = await ch.recv()
@@ -43,7 +43,7 @@ async def consome(ch: Channel<int>) -> int:
     return total
 
 
-async def enche(ch: Channel<str>, n: int) -> int:
+async def fill(ch: Channel<str>, n: int) -> int:
     for i in range(n):
         ok = await ch.send("valor-" + str(i))
         if not ok:
@@ -51,7 +51,7 @@ async def enche(ch: Channel<str>, n: int) -> int:
     return n
 
 
-async def esvazia(ch: Channel<str>) -> int:
+async def drain(ch: Channel<str>) -> int:
     c = 0
     while True:
         v = await ch.recv()
@@ -68,8 +68,8 @@ async def go() -> int:
     # guardar o valor de quem está parado, e `len > cap` quer dizer exactamente
     # "há emissores à espera".
     ch: Channel<int> = Channel(2)
-    p = produz(ch, 5)
-    c = consome(ch)
+    p = produce(ch, 5)
+    c = consume(ch)
     print("produziu", await p, "e a soma chegou inteira:", await c)
 
     # ---- 2. referências, e DOIS receptores ----
@@ -78,9 +78,9 @@ async def go() -> int:
     # `open()` com um único valor na fila, e o segundo ficaria preso para sempre.
     # Fechar acorda os dois, e o `None` da 147.1 é o que os deixa sair.
     cs: Channel<str> = Channel(3)
-    pe = enche(cs, 20)
-    a = esvazia(cs)
-    b = esvazia(cs)
+    pe = fill(cs, 20)
+    a = drain(cs)
+    b = drain(cs)
     n = await pe
     cs.close()
     print("mandou", n, "e os dois leram", await a + await b)
@@ -107,8 +107,8 @@ async def go() -> int:
     print("e agora nao:", q.open())
 
     # ---- 5. um registo atravessa por VALOR ----
-    r: Channel<Ponto> = Channel(2)
-    await r.send(Ponto(3, 4))
+    r: Channel<Point> = Channel(2)
+    await r.send(Point(3, 4))
     pt = await r.recv()
     if pt != None:
         print("ponto", pt.x, pt.y)

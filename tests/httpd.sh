@@ -29,7 +29,7 @@ check() {
 
 command -v curl >/dev/null || { echo "   httpd: sem curl, saltado"; exit 0; }
 
-if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/servidor.psc "$OUT/srv" >"$OUT/build.log" 2>&1; then
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/server.psc "$OUT/srv" >"$OUT/build.log" 2>&1; then
     echo "  FAIL o servidor de teste não compila"; tail -5 "$OUT/build.log"; exit 1
 fi
 
@@ -82,7 +82,7 @@ check "tem Date" "1" "$(curl -s -i $B/ | tr -d '\r' | grep -c '^date: ')"
 # F1b/F1c — as ROTAS, a query e o JSON. Outro servidor, porque o mapa de rotas é
 # o que está a ser provado e um servidor com um `if` por caminho não o prova.
 # ============================================================================
-if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/rotas.psc "$OUT/rotas" >>"$OUT/build.log" 2>&1; then
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/routes.psc "$OUT/rotas" >>"$OUT/build.log" 2>&1; then
     echo "  FAIL o servidor de rotas não compila"; tail -5 "$OUT/build.log"; exit 1
 fi
 PF2="$OUT/porto2"
@@ -202,7 +202,7 @@ printf 'sub-indice'      > "$WWW/sub/index.html"
 # o ficheiro que NÃO pode ser servido: fica ao lado da raiz, não dentro
 printf 'SEGREDO'         > "$OUT/segredo.txt"
 
-if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/estaticos.psc "$OUT/est" >>"$OUT/build.log" 2>&1; then
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/static.psc "$OUT/est" >>"$OUT/build.log" 2>&1; then
     echo "  FAIL o servidor de estáticos não compila"; tail -5 "$OUT/build.log"; exit 1
 fi
 PF3="$OUT/porto3"
@@ -286,7 +286,7 @@ fi
 # tabela partilhada está na linguagem — e o portão prova-o lendo uma sessão
 # criada num worker a partir de conexões que caem noutros.
 # ============================================================================
-if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/sessoes.psc "$OUT/sess" >>"$OUT/build.log" 2>&1; then
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/sessions.psc "$OUT/sess" >>"$OUT/build.log" 2>&1; then
     echo "  FAIL o servidor de sessões não compila"; tail -5 "$OUT/build.log"; exit 1
 fi
 PF5="$OUT/porto5"
@@ -348,7 +348,7 @@ if python3 -c "import websockets" 2>/dev/null; then
     WWW2="$OUT/jogo-publico"; mkdir -p "$WWW2"
     printf '<!doctype html><title>desbravacraft</title><h1>o mundo</h1>' > "$WWW2/index.html"
     printf 'console.log("cliente")' > "$WWW2/jogo.js"
-    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/exemplo/jogo.psc "$OUT/jogo" >>"$OUT/build.log" 2>&1; then
+    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/example/game.psc "$OUT/jogo" >>"$OUT/build.log" 2>&1; then
         echo "  FAIL o exemplo do jogo não compila"; tail -5 "$OUT/build.log"; fail=$((fail+1))
     else
         PJ=$((20000 + RANDOM % 20000))
@@ -359,6 +359,26 @@ if python3 -c "import websockets" 2>/dev/null; then
         check "o exemplo do jogo, ponta a ponta" "$(cat tests/httpd-jogo.expected)" \
               "$(timeout 60 python3 tests/httpd-jogo.py "$PJ" 2>&1)"
     fi
+fi
+
+# ---------- D3d/o `idle_timeout`: uma conexão calada é fechada ----------
+#
+# O `curl` não serve de oráculo aqui — ele fala sempre —, portanto é um socket cru
+# que se cala de propósito. E prova as duas metades: a conexão calada fecha, e o
+# pedido que chega depressa é servido, o que mostra que o prazo não está a matar
+# tráfego legítimo.
+PF6="$OUT/porto6"
+"$OUT/srv" "$PF6" 1.0 >"$OUT/idle.log" 2>&1 &
+S6=$!
+trap 'kill $SRV $R $E $M $S5 ${J:-} $S6 2>/dev/null' EXIT
+for _ in $(seq 1 100); do [ -s "$PF6" ] && break; sleep 0.05; done
+if [ -s "$PF6" ]; then
+    P6=$(cat "$PF6")
+    check "uma conexão calada é fechada no prazo (idle_timeout)" \
+          "$(printf 'calado desde o principio: fechou, no prazo=True\no pedido foi servido: HTTP/1.1 200 OK\ncalado depois de servir: fechou, no prazo=True')" \
+          "$(timeout 60 python3 tests/httpd-idle.py "$P6" 1.0 2>&1)"
+else
+    echo "  FAIL o servidor do idle_timeout não abriu porto"; fail=$((fail+1))
 fi
 
 echo "   httpd: $pass ok, $fail failed"

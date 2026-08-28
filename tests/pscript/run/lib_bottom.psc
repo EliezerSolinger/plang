@@ -1,14 +1,14 @@
 """Um MÓDULO pscript que importa um módulo P (1.5d).
 
-O `import "pmod_fundo.ph"` está aqui, e não no programa. É essa a diferença que
+O `import "pmod_bottom.ph"` está aqui, e não no programa. É essa a diferença que
 o teste ao lado prende.
 """
-import "pmod_fundo.ph"
+import "pmod_bottom.ph"
 
 
-def dobro(v: int) -> int:
-    return fundo_dobro(v)
+def double_v(v: int) -> int:
+    return bottom_double(v)
 
 
-def impar(v: int) -> bool:
-    return fundo_impar(v)
+def odd(v: int) -> bool:
+    return bottom_odd(v)

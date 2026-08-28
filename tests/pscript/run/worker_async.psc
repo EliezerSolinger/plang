@@ -23,34 +23,34 @@ async def eco(n: int) -> int:
     """
     await sleep(0.05)
     total = 0
-    quantas = 0
+    how_many = 0
     while parent.open():
         v = await parent.recv()
         total += v
-        quantas += 1
-    parent.send(total * 100 + quantas)
+        how_many += 1
+    parent.send(total * 100 + how_many)
     return total
 
 
-async def soma(n: int) -> int:
+async def sum_v(n: int) -> int:
     for i in range(n):
         parent.send(i * i)
     return n
 
 
-async def coletor(w: Worker<int>, quantas: int) -> int:
+async def collector(w: Worker<int>, how_many: int) -> int:
     """`recv` DENTRO de uma task: enquanto ela espera, as outras andam."""
     t = 0
-    for i in range(quantas):
+    for i in range(how_many):
         t += await w.recv()
     return t
 
 
-async def ruido(marca: str, voltas: int) -> str:
+async def noise(tag: str, rounds: int) -> str:
     s = ""
-    for i in range(voltas):
+    for i in range(rounds):
         await sleep(0.0)
-        s += marca
+        s += tag
     return s
 
 
@@ -59,7 +59,7 @@ async def neto(n: int) -> int:
     return n
 
 
-async def filho(n: int) -> int:
+async def child(n: int) -> int:
     """spawn DENTRO de um worker: o filho tem o seu próprio filho."""
     g = spawn(neto, (n,))
     v = await g.recv()
@@ -67,12 +67,12 @@ async def filho(n: int) -> int:
     return v
 
 
-async def quebra(n: int) -> int:
+async def breaks(n: int) -> int:
     await sleep(0.0)
     raise error("estourei no worker")
 
 
-async def espera_sempre(n: int) -> int:
+async def waits_forever(n: int) -> int:
     """O pai nunca manda nada. Antes isto travava o programa para sempre: o
     `join` do fim esperava o worker, e o worker esperava uma mensagem que já não
     podia chegar. Agora o fim do pai FECHA o canal e o `recv` termina."""
@@ -87,49 +87,49 @@ w.close()
 print(f"eco {await w.recv()}")
 
 # ---- 2. recv dentro de uma task, com outra task andando ao lado ----
-s = spawn(soma, (5,))
-c = coletor(s, 5)
-r = ruido("r", 3)
+s = spawn(sum_v, (5,))
+c = collector(s, 5)
+r = noise("r", 3)
 print(f"coletor {await c} ruido {await r}")
 
 # ---- 3. dois esperando a MESMA fila: quem chegou primeiro recebe primeiro ----
-async def falante(n: int) -> int:
+async def talker(n: int) -> int:
     await sleep(0.01)
     parent.send(1)
     await sleep(0.01)
     parent.send(2)
     return n
 
-async def um(w2: Worker<int>, marca: str) -> str:
+async def um(w2: Worker<int>, tag: str) -> str:
     v = await w2.recv()
-    return f"{marca}{v}"
+    return f"{tag}{v}"
 
-f = spawn(falante, (0,))
+f = spawn(talker, (0,))
 a = um(f, "A")
 b = um(f, "B")
 print(f"fila {await a} {await b}")
 
 # ---- 3b. do lado do pai: `alive()` drena o que um worker que já foi deixou ----
-async def fala(n: int) -> int:
+async def talk(n: int) -> int:
     for i in range(4):
         parent.send(i + 1)
     return n
 
-fw = spawn(fala, (0,))
+fw = spawn(talk, (0,))
 await sleep(0.1)
 tot = 0
-lidas = 0
+n_read = 0
 while fw.alive():
     tot += await fw.recv()
-    lidas += 1
-print(f"drenou {tot} em {lidas}")
+    n_read += 1
+print(f"drenou {tot} em {n_read}")
 
 # ---- 4. spawn aninhado ----
-nw = spawn(filho, (7,))
+nw = spawn(child, (7,))
 print(f"neto {await nw.recv()}")
 
 # ---- 5. o erro do worker chega ao pai como Error ----
-q = spawn(quebra, (1,))
+q = spawn(breaks, (1,))
 await sleep(0.05)
 e = q.error()
 if e != None:
@@ -138,5 +138,5 @@ else:
     print("erro nenhum")
 
 # ---- 6. o pai acaba sem mandar nada, e o programa TERMINA ----
-z = spawn(espera_sempre, (0,))
+z = spawn(waits_forever, (0,))
 print("fim do main")

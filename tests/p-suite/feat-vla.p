@@ -5,7 +5,7 @@
 include <stdio.h>
 include <stdlib.h>
 
-def soma_quadrados(n: int) -> int:
+def sum_squares(n: int) -> int:
     a: int[n]
     i: int = 0
     while i < n:
@@ -39,10 +39,10 @@ def com_goto(n: int) -> int:
 def main() -> int:
     # dimensões constantes via operadores de P (and/or/comparação): dobram em
     # compile-time — NÃO são VLA (viram arrays fixos de tamanho 1).
-    fixo: int[2 and 3]
-    fixo[0] = 7
-    printf("%d\n", fixo[0])              # 7
-    printf("%d\n", soma_quadrados(5))    # 0+1+4+9+16 = 30
-    printf("%d\n", soma_quadrados(1))    # 0
+    fixed: int[2 and 3]
+    fixed[0] = 7
+    printf("%d\n", fixed[0])              # 7
+    printf("%d\n", sum_squares(5))    # 0+1+4+9+16 = 30
+    printf("%d\n", sum_squares(1))    # 0
     printf("%d\n", com_goto(5))          # 1+2+3+4+5 = 15
     return 0

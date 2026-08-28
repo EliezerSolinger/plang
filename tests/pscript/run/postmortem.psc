@@ -23,23 +23,23 @@ record Pt:
     x: int
     y: int
 
-struct Caixa:
-    nome: str
+struct Box:
+    name: str
     pts: List<Pt>
 
-enum Cor:
-    VERDE
-    AZUL
+enum Color:
+    GREEN
+    BLUE
 
-def fundo(c: Caixa, quantos: int) -> int:
-    etiqueta = "no fundo"
+def bottom(c: Box, how_many: int) -> int:
+    label = "no fundo"
     tags: List<str> = ["a", "b"]
-    mapa: Dict<str, int> = {"k": 1}
+    map_d: Dict<str, int> = {"k": 1}
     raise error("estourou de propósito")
 
-def meio(c: Caixa) -> int:
-    quem = c.nome
-    return fundo(c, 3)
+def middle(c: Box) -> int:
+    who = c.name
+    return bottom(c, 3)
 
-c = Caixa("caixa-um", [Pt(1, 2), Pt(3, 4)])
-print(meio(c))
+c = Box("caixa-um", [Pt(1, 2), Pt(3, 4)])
+print(middle(c))

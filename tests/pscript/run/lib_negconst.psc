@@ -6,9 +6,9 @@
 # compilador morria com "use of undeclared identifier '__ctx'", uma mensagem que
 # não tem como levar ninguém à causa. O conserto dobra o sinal em tempo de
 # compilação, que é o que um literal negativo é.
-const MENOS_UM: int = -1
-const MENOS_MIL: int = -1000
-const POSITIVO: int = 7
+const MINUS_ONE: int = -1
+const MINUS_THOUSAND: int = -1000
+const POSITIVE: int = 7
 
-def soma() -> int:
-    return MENOS_UM + MENOS_MIL + POSITIVO
+def sum_v() -> int:
+    return MINUS_ONE + MINUS_THOUSAND + POSITIVE

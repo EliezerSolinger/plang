@@ -14,7 +14,7 @@ dizer nada. São dois casos e eles têm respostas diferentes:
 """
 
 
-async def espera_o_pai(n: int) -> int:
+async def waits_for_parent(n: int) -> int:
     v = await parent.recv()
     print(f"worker recebeu {v}")
     return v
@@ -26,7 +26,7 @@ async def eco(n: int) -> int:
     return v
 
 
-async def demora(n: int) -> int:
+async def slow(n: int) -> int:
     await sleep(0.1)
     parent.send(n * 7)
     return n
@@ -34,11 +34,11 @@ async def demora(n: int) -> int:
 
 # ---- 1. um terceiro vivo não é travamento: o pai espera quem vai responder ----
 a = spawn(eco, (0,))
-b = spawn(demora, (6,))
+b = spawn(slow, (6,))
 print(f"b={await b.recv()}")
 print(a.send(5))
 print(f"a={await a.recv()}")
 
 # ---- 2. o pai acaba sem mandar: o canal fecha e o worker sai ----
-z = spawn(espera_o_pai, (0,))
+z = spawn(waits_for_parent, (0,))
 print("fim do main")

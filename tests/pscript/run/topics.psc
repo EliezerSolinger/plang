@@ -24,23 +24,23 @@ não atravessa. O que atravessa é o NOME.
 import topic
 
 
-async def ouvinte(quantas: int) -> int:
+async def listener(how_many: int) -> int:
     topic.subscribe("mundo")
     # o que o SEGUNDO worker assina e o primeiro não: prova que a entrega é POR
     # TÓPICO, e é por isso que ele espera QUATRO mensagens e o outro três
-    if quantas == 4:
+    if how_many == 4:
         topic.subscribe("so-meu")
     parent.send(-1)                     # "estou inscrito" — o encontro
     total = 0
-    for i in range(quantas):
+    for i in range(how_many):
         d = await topic.recv()
         total += len(d)
     parent.send(total)
     return total
 
 
-a = spawn(ouvinte, (3,))
-b = spawn(ouvinte, (4,))
+a = spawn(listener, (3,))
+b = spawn(listener, (4,))
 
 # o ENCONTRO: só se publica depois de os dois estarem inscritos. Sem isto o teste
 # seria uma corrida — publicar antes de alguém assinar não chega a ninguém, e

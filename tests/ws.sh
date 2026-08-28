@@ -27,7 +27,7 @@ check() {
 python3 -c "import websockets" 2>/dev/null || { echo "   ws: sem a lib websockets, o oráculo é saltado"; SEM_ORACULO=1; }
 SEM_ORACULO=${SEM_ORACULO:-0}
 
-for m in eco recusas; do
+for m in echo refusals; do
     if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/ws/test/$m.psc "$OUT/$m" >"$OUT/build.log" 2>&1; then
         echo "  FAIL packages/ws/test/$m.psc não compila"; tail -5 "$OUT/build.log"; exit 1
     fi
@@ -37,13 +37,13 @@ if [ "$SEM_ORACULO" = 0 ]; then
     for modo in nomask mask; do
         python3 tests/ws-oracle.py gerar $modo > "$OUT/v_$modo.txt"
         awk '{print $1, $2, $3, $4}' "$OUT/v_$modo.txt" > "$OUT/esp_$modo.txt"
-        "$OUT/eco" parse "$OUT/v_$modo.txt" > "$OUT/lido_$modo.txt"
+        "$OUT/echo" parse "$OUT/v_$modo.txt" > "$OUT/lido_$modo.txt"
         check "o nosso parser lê o que a lib escreveu ($modo)" \
               "$(cat "$OUT/esp_$modo.txt")" "$(cat "$OUT/lido_$modo.txt")"
     done
 
     # e o inverso: os NOSSOS bytes, lidos por ela — e byte a byte iguais aos dela
-    "$OUT/eco" serialize "$OUT/v_nomask.txt" > "$OUT/nosso.txt"
+    "$OUT/echo" serialize "$OUT/v_nomask.txt" > "$OUT/nosso.txt"
     python3 tests/ws-oracle.py conferir < "$OUT/nosso.txt" > "$OUT/ela_leu.txt"
     check "a lib lê o que nós escrevemos" \
           "$(cat "$OUT/esp_nomask.txt")" "$(cat "$OUT/ela_leu.txt")"
@@ -53,9 +53,9 @@ if [ "$SEM_ORACULO" = 0 ]; then
 fi
 
 # as recusas do RFC, com o código de fecho de cada uma
-"$OUT/recusas" packages/ws/test/recusas.txt > "$OUT/recusas.txt"
+"$OUT/refusals" packages/ws/test/refusals.txt > "$OUT/refusals.txt"
 check "as recusas do RFC 6455" \
-      "$(cat packages/ws/test/recusas.expected)" "$(cat "$OUT/recusas.txt")"
+      "$(cat packages/ws/test/refusals.expected)" "$(cat "$OUT/refusals.txt")"
 
 # ============================================================================
 # F6 — o mesmo protocolo, agora SOBRE UM SOCKET: o aperto de mão e a conexão.
@@ -63,7 +63,7 @@ check "as recusas do RFC 6455" \
 # aperto de mão, o aperto de mão está certo.
 # ============================================================================
 if [ "$SEM_ORACULO" = 0 ]; then
-    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/wsservidor.psc "$OUT/wssrv" >>"$OUT/build.log" 2>&1; then
+    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/wsserver.psc "$OUT/wssrv" >>"$OUT/build.log" 2>&1; then
         echo "  FAIL o servidor de websocket não compila"; tail -5 "$OUT/build.log"; exit 1
     fi
     PF="$OUT/porto"

@@ -65,14 +65,14 @@ async def go():
     # é determinística, então o que se mede é a soma e o conjunto.
     cmds = [["/bin/sh", "-c", "echo n" + str(i)] for i in range(8)]
     rs = await gather_map(um, cmds, at_most=3)
-    soma = 0
-    vistos: List<str> = []
+    sum_v = 0
+    seen: List<str> = []
     for x in rs:
-        soma += x.status()
-        vistos.append(x.output())
-    vistos = sorted(vistos)
-    print("oito em paralelo: soma dos status", soma, "e", len(vistos), "saidas")
-    print("a primeira e a ultima:", vistos[0], vistos[7])
+        sum_v += x.status()
+        seen.append(x.output())
+    seen = sorted(seen)
+    print("oito em paralelo: soma dos status", sum_v, "e", len(seen), "saidas")
+    print("a primeira e a ultima:", seen[0], seen[7])
 
     # o mtime em nanossegundos: mesma coisa que o de segundos, sem jogar fora a
     # parte de baixo — que é o que distingue dois arquivos escritos no mesmo

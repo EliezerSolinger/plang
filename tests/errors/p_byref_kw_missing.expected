@@ -1,1 +1,1 @@
-parameter 'p' of 'soma' is declared 'in', so the call site says it too: `soma(in x)` (65.12)
+parameter 'p' of 'sum_v' is declared 'in', so the call site says it too: `sum_v(in x)` (65.12)

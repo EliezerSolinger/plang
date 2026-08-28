@@ -10,19 +10,19 @@
 # ("not EXPLICITLY handled") when a default is present.
 include <stdio.h>
 
-enum Cor:
-    VERMELHO
-    VERDE
-    AZUL
-    ROXO
+enum Color:
+    RED
+    GREEN
+    BLUE
+    PURPLE
 
-def nome(c: Cor) -> const *char:
+def name_of(c: Color) -> const *char:
     match c:
-        case VERMELHO:
-            return "vermelho"
+        case RED:
+            return "red"
         case _:
-            return "outro"
+            return "other"
 
 def main() -> i32:
-    printf("%s\n", nome(AZUL))
+    printf("%s\n", name_of(BLUE))
     return 0

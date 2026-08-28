@@ -9,14 +9,14 @@ de propósito) e o desempacotar com objetos coletados dentro da tupla.
 struct Node:
     label: str
 
-async def soma(ns: List<int>) -> int:
+async def sum_v(ns: List<int>) -> int:
     t = 0
     for i, v in enumerate(ns):
         await sleep(0.0)
         t += i * v
     return t
 
-async def zipado(a: List<int>, b: List<str>) -> str:
+async def zipped(a: List<int>, b: List<str>) -> str:
     out = ""
     for n, s in zip(a, b):
         await sleep(0.0)
@@ -24,8 +24,8 @@ async def zipado(a: List<int>, b: List<str>) -> str:
     return out
 
 ns = [1, 2, 3, 4]
-print(await soma(ns))
-print(await zipado(ns, ["a", "b"]))
+print(await sum_v(ns))
+print(await zipped(ns, ["a", "b"]))
 
 # 64.1: a variável de laço vive no escopo do LAÇO. Quando o nome já existe
 # fora, o `for` atribui a ele (como o Python); quando não existe, ele não

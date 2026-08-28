@@ -22,18 +22,18 @@ três funções à frente na primeira vez que alguém o usar.
 import re
 
 
-struct Regra:
-    nome: str
+struct Rule:
+    name_s: str
     pat: Pattern
 
 
-def aplica(r: Regra, texto: str) -> str:
-    return r.pat.sub("<" + r.nome + ">", texto)
+def apply_v(r: Rule, text_s: str) -> str:
+    return r.pat.sub("<" + r.name_s + ">", text_s)
 
 
 p = re.compile("[0-9]+")
 print("guardado:", p.pattern())
-def primeiro(m: List<str>?) -> str:
+def first(m: List<str>?) -> str:
     if m == None:
         return "(nada)"
     for g in m:
@@ -41,7 +41,7 @@ def primeiro(m: List<str>?) -> str:
     return "(vazio)"
 
 
-print("search:", primeiro(p.search("abc 42 def")))
+print("search:", first(p.search("abc 42 def")))
 print("match exige o principio:", p.match("abc 42") == None, p.match("42 abc") != None)
 print("findall:", p.findall("1 22 333"))
 print("split:", p.split("a1b22c"))
@@ -49,11 +49,11 @@ print("sub:", p.sub("#", "a1b22c"), "| com limite:", p.sub("#", "a1b22c", 1))
 print("finditer (posicoes):", p.finditer("x1y22"))
 
 # ... e agora a parte que só um VALOR permite: guardá-lo
-regras: List<Regra> = [Regra("num", re.compile("[0-9]+")),
-                       Regra("esp", re.compile("[ ]+"))]
+rules: List<Rule> = [Rule("num", re.compile("[0-9]+")),
+                       Rule("esp", re.compile("[ ]+"))]
 t = "ola 12 mundo 345"
-for r in regras:
-    t = aplica(r, t)
+for r in rules:
+    t = apply_v(r, t)
 print("as duas regras:", t)
 
 # um padrão que não compila levanta onde foi ESCRITO

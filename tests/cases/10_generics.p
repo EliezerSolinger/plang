@@ -10,9 +10,9 @@ struct Vec<T>:
 
     def push(self: *Vec<T>, item: T):
         if self->len >= self->cap:
-            novo: i32 = 8 if self->cap == 0 else self->cap * 2
-            self->data = realloc(self->data, sizeof(T) * usize(novo))
-            self->cap = novo
+            make: i32 = 8 if self->cap == 0 else self->cap * 2
+            self->data = realloc(self->data, sizeof(T) * usize(make))
+            self->cap = make
         self->data[self->len] = item
         self->len += 1
 
@@ -30,11 +30,11 @@ declare Vec<*char>
 implement Vec<*char>
 
 struct Par<A, B>:
-    primeiro: A
-    segundo: B
+    first: A
+    second: B
 
-    def troca(self: *Par<A, B>) -> B:
-        return self->segundo
+    def swap(self: *Par<A, B>) -> B:
+        return self->second
 
 declare Par<int, *char>
 implement Par<int, *char>
@@ -45,8 +45,8 @@ def main() -> int:
     for i in range(5):
         v.push(i * i)
     printf("%d %d %d\n", v.get(0), v.get(2), v.get(4))
-    ultimo: int = v.pop()
-    printf("pop=%d len=%d\n", ultimo, v.len)
+    last: int = v.pop()
+    printf("pop=%d len=%d\n", last, v.len)
 
     s: Vec<*char> = {None, 0, 0}
     s.push("oi")
@@ -54,7 +54,7 @@ def main() -> int:
     printf("%s %s\n", s.get(0), s.get(1))
 
     par: Par<int, *char> = {42, "resposta"}
-    printf("%d %s\n", par.primeiro, par.troca())
+    printf("%d %s\n", par.first, par.swap())
 
     # nome manglado também é utilizável diretamente
     tam: usize = sizeof(Vec_int)

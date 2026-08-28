@@ -27,34 +27,34 @@ ponto seguro, que é onde o defeito vivia.
 import path
 import os
 
-CAMINHO: str = "aio_close_demo.txt"
+PATH: str = "aio_close_demo.txt"
 
 
-async def grava(p: str, n: int) -> int:
+async def store(p: str, n: int) -> int:
     # a string cresce alocando: cada volta é uma chance de coleta, e é depois
     # dela que o bloco do `PsFile` vem reciclado
-    texto = "cabecalho\n"
+    text = "cabecalho\n"
     for i in range(n):
-        texto += "linha " + str(i) + "\n"
+        text += "linha " + str(i) + "\n"
     f = await open(p, "w")
-    escritos = await f.write(texto)
+    written = await f.write(text)
     await f.close()
     # a medida que importa: o tamanho AGORA, com o processo ainda vivo
-    return escritos - path.getsize(p)
+    return written - path.getsize(p)
 
 
 async def go():
     for n in [1, 20, 50, 100]:
-        d = await grava(CAMINHO, n)
+        d = await store(PATH, n)
         print("n =", n, "-> escrito - no disco =", d)
 
-    f = await open(CAMINHO, "r")
+    f = await open(PATH, "r")
     todo = await f.text()
     await f.close()
     print("relido:", len(todo), "bytes,", len(todo.split("\n")) - 1, "linhas")
 
     # e um arquivo fechado recusa a escrita em vez de aceitá-la em silêncio
-    g = await open(CAMINHO, "w")
+    g = await open(PATH, "w")
     await g.close()
     try:
         await g.write("depois do fim")
@@ -62,8 +62,8 @@ async def go():
     catch e:
         print("fechado:", e.message)
 
-    os.remove(CAMINHO)
-    print("limpo:", path.exists(CAMINHO))
+    os.remove(PATH)
+    print("limpo:", path.exists(PATH))
 
 
 await go()

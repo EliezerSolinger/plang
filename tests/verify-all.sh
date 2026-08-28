@@ -230,6 +230,21 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/ws.sh >$V/ws.log 2>&1; then
 else
     bad "o WebSocket divergiu do oráculo ou de uma recusa (veja $V/ws.log)"
 fi
+#   ws-features  as quatro peças que faltavam ao WebSocket: o subprotocolo
+#                escolhido pela preferência do SERVIDOR, o envio fragmentado, o
+#                keepalive com prazo para o pong, e os parâmetros de janela do
+#                permessage-deflate. Três oráculos diferentes, porque as três
+#                perguntas são diferentes: um cliente de socket CRU para o que
+#                uma biblioteca correcta esconde (ela remonta fragmentos e
+#                responde a pings sozinha), um leitor de DEFLATE independente
+#                para as DISTÂNCIAS que a janela promete — o `zlib` não serve, ele
+#                aceita um fluxo que passa a janela que lhe deram —, e a
+#                `websockets` para a remontagem.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/ws-features.sh >$V/ws-features.log 2>&1; then
+    ok "ws-features $(grep -oE '[0-9]+ ok' $V/ws-features.log | tail -1)"
+else
+    bad "uma das peças novas do WebSocket falhou (veja $V/ws-features.log)"
+fi
 #   compress     o compressor DEFLATE contra DOIS leitores que não são nossos: o
 #                `zlib` do CPython e o `gunzip`. O nosso `inflate` ler o nosso
 #                `deflate` não prova nada — os dois podiam ter o mesmo defeito.

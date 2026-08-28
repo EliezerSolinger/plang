@@ -16,19 +16,19 @@ passar.
 """
 
 
-record Ponto:
+record Point:
     x: int
     y: int
 
 
-def soma(a: int?, b: int?, c: int?) -> int:
+def sum_v(a: int?, b: int?, c: int?) -> int:
     # a forma natural: uma condição, três provas
     if a != None and b != None and c != None:
         return a + b + c
     return -1
 
 
-def guarda(a: str?, b: str?) -> str:
+def guard(a: str?, b: str?) -> str:
     # o DUAL: se a guarda não saiu, nenhum dos lados valia — portanto depois
     # dela as duas estão provadas
     if a == None or b == None:
@@ -36,13 +36,13 @@ def guarda(a: str?, b: str?) -> str:
     return a + b
 
 
-def curto(a: int?, b: int?) -> bool:
+def short(a: int?, b: int?) -> bool:
     # o curto-circuito dentro da própria condição: o lado direito é checado com
     # a prova de TODOS os que estão à esquerda
     return a != None and b != None and a + b > 0
 
 
-def aninhado(p: Ponto?, q: Ponto?) -> int:
+def nested(p: Point?, q: Point?) -> int:
     # e a forma antiga continua a valer, como tem de ser
     if p != None:
         if q != None:
@@ -60,10 +60,10 @@ def ramos(a: int?, b: int?) -> str:
 
 
 def main():
-    print(soma(1, 2, 3), soma(1, None, 3))
-    print(guarda("ola", " mundo"), guarda(None, "x"))
-    print(curto(1, 2), curto(1, None), curto(-5, 2))
-    print(aninhado(Ponto(3, 4), Ponto(5, 6)), aninhado(None, Ponto(5, 6)))
+    print(sum_v(1, 2, 3), sum_v(1, None, 3))
+    print(guard("ola", " mundo"), guard(None, "x"))
+    print(short(1, 2), short(1, None), short(-5, 2))
+    print(nested(Point(3, 4), Point(5, 6)), nested(None, Point(5, 6)))
     print(ramos(1, 2), "|", ramos(1, None), "|", ramos(None, 2))
 
     # o `while` estreita da mesma maneira, e a atribuição tira a prova

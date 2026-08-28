@@ -50,7 +50,7 @@ cat > "$OUT/ovf.psc" <<'EOF'
 def mul(a: int, b: int) -> int:
     return a * b
 
-def soma(a: int, b: int) -> int:
+def sum_v(a: int, b: int) -> int:
     return a + b
 
 def sub(a: int, b: int) -> int:
@@ -59,22 +59,22 @@ def sub(a: int, b: int) -> int:
 def pot(a: int, b: int) -> int:
     return a ** b
 
-def esperado(nome: str, f: def(int, int) -> int, a: int, b: int):
+def expected(name_s: str, f: def(int, int) -> int, a: int, b: int):
     try:
-        print(f"{nome} NAO LEVANTOU: {f(a, b)}")
+        print(f"{name_s} NAO LEVANTOU: {f(a, b)}")
     catch e:
-        print(f"{nome} ok")
+        print(f"{name_s} ok")
 
 MAX = 9223372036854775807
 MIN = -9223372036854775807 - 1
 
-esperado("MAX+1", soma, MAX, 1)
-esperado("MIN-1", sub, MIN, 1)
-esperado("MAX*2", mul, MAX, 2)
-esperado("MAX*MAX", mul, MAX, MAX)
-esperado("MIN*-1", mul, MIN, -1)
-esperado("-1*MIN", mul, -1, MIN)
-esperado("2**100", pot, 2, 100)
+expected("MAX+1", sum_v, MAX, 1)
+expected("MIN-1", sub, MIN, 1)
+expected("MAX*2", mul, MAX, 2)
+expected("MAX*MAX", mul, MAX, MAX)
+expected("MIN*-1", mul, MIN, -1)
+expected("-1*MIN", mul, -1, MIN)
+expected("2**100", pot, 2, 100)
 
 # e o que NAO estoura continua a passar, com o valor certo
 print(f"3*5={mul(3, 5)}")
@@ -87,7 +87,7 @@ print(f"MAX*0={mul(MAX, 0)}")
 print(f"2**62={pot(2, 62)}")
 EOF
 
-cat > "$OUT/esperado.txt" <<'EOF'
+cat > "$OUT/expected.txt" <<'EOF'
 MAX+1 ok
 MIN-1 ok
 MAX*2 ok
@@ -127,9 +127,9 @@ for flags in "-O0" "-O1" "-O2" "-O3" "-O2 -flto" "-Os"; do
         sed 's/^/      /' "$OUT/saida$nivel" | head -5
         exit 1
     fi
-    if ! diff -q "$OUT/esperado.txt" "$OUT/saida$nivel" >/dev/null; then
+    if ! diff -q "$OUT/expected.txt" "$OUT/saida$nivel" >/dev/null; then
         echo "  FAIL overflow-opt [$flags]: a aritmética checada mudou de resposta"
-        diff "$OUT/esperado.txt" "$OUT/saida$nivel" | head -8 | sed 's/^/      /'
+        diff "$OUT/expected.txt" "$OUT/saida$nivel" | head -8 | sed 's/^/      /'
         exit 1
     fi
     nivel=$((nivel + 1))
