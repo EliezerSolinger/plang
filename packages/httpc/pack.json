@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "lang": "pscript",
   "root": "httpc.psc",
-  "deps": {"http": "0.1.0", "url": "0.1.0", "compress": "0.1.0", "ws": "0.1.0", "sha1": "0.1.0", "csprng": "0.1.0"},
+  "deps": {
+    "compress": "0.1.0",
+    "csprng": "0.1.0",
+    "http": "0.1.0",
+    "sha1": "0.1.0",
+    "url": "0.1.0",
+    "ws": "0.1.0"
+  },
   "system": {},
   "toolchain": ">= 0.1.0",
   "description": "An HTTP/1.1 and WebSocket client: redirects, keep-alive pool, timeouts, TLS, chunked and gzip, on the same llhttp-checked parser the server uses"

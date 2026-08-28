@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "lang": "pscript",
   "root": "ws.psc",
-  "deps": {},
+  "deps": {
+    "csprng": "0.1.0"
+  },
   "system": {},
   "toolchain": ">= 0.1.0",
   "description": "WebSocket (RFC 6455) as a sans-io state machine: frames in, events out, with the validation the Autobahn suite asks for"

@@ -4,10 +4,14 @@
   "lang": "pscript",
   "root": "httpd.psc",
   "deps": {
-    "http": "0.1.0",
+    "compress": "0.1.0",
+    "csprng": "0.1.0",
     "datetime": "0.1.0",
+    "hmac": "0.1.0",
+    "http": "0.1.0",
+    "sha1": "0.1.0",
     "url": "0.1.0",
-    "compress": "0.1.0"
+    "ws": "0.1.0"
   },
   "system": {},
   "toolchain": ">= 0.1.0",
