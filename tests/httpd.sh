@@ -124,6 +124,24 @@ check "query repetida"        "a,b,c"         "$(curl -s "$C/lista?t=a&t=b&t=c")
 check "corpo JSON" '{"recebi":{"x":[1,2],"y":"z"},"era_json":true}' \
       "$(curl -s -H 'content-type: application/json' -d '{"x":[1,2],"y":"z"}' $C/json)"
 
+# ---- F2/D5: o corpo por CURSOR, em `chunked` ----
+#
+# O que interessa provar é que os pedaços chegam EM PEDAÇOS, e um `curl` normal
+# não o prova: ele junta tudo e mostra o resultado, indistinguível de uma
+# resposta comum. O script mede os TEMPOS de chegada.
+check "o fluxo chega aos pedaços" "$(cat tests/httpd-stream.expected)" \
+      "$(timeout 30 python3 tests/httpd-stream.py "$(cat "$PORTFILE")" 2>&1)"
+check "sem content-length num fluxo" "0" \
+      "$(curl -s -o /dev/null -D - $B/fluxo | tr -d '\r' | grep -ci '^content-length')"
+check "keep-alive sobrevive a um fluxo" "1" \
+      "$(curl -s -o /dev/null -w '%{num_connects}' $B/fluxo $B/ | head -c 1)"
+# SSE: cada linha dos dados leva o seu `data:`, porque uma quebra de linha crua
+# dentro do campo TERMINA o evento
+check "o SSE emoldura cada linha" "3" \
+      "$(curl -s -N $B/sse | grep -c '^event: tick$')"
+check "e cada evento tem duas linhas de dados" "6" \
+      "$(curl -s -N $B/sse | grep -c '^data: ')"
+
 # ============================================================================
 # F8 — os ESTÁTICOS. A metade que interessa é a última: as tentativas de sair do
 # directório, em todas as grafias que um atacante tenta. Nenhuma pode devolver o

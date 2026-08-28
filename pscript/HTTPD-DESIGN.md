@@ -524,7 +524,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [x] **F1c — Query e JSON** (D29/D30): `req.query` sobre o `packages/url`, e
       `req.json()`. Portão: os casos de query dos WPT que o `url` já passa,
       atravessados pela httpd.
-- [ ] **F2 — Streaming** (D5): corpo por cursor, chunked e SSE.
+- [x] **F2 — Streaming** (D5): corpo por cursor, chunked e SSE.
 - [ ] **F3 — Multi-worker** sobre L1+L2. Portão: sob carga, os N workers servem e
       `sched.stats()` mostra a repartição.
 - [ ] **F4 — TLS servidor** sobre L3.

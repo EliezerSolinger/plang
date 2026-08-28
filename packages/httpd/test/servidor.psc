@@ -13,7 +13,35 @@ import os
 import sys
 
 
+# F2/D5: um cursor. Cada chamada dá o pedaço seguinte, e `b""` diz que acabou —
+# a mesma forma do cursor do MySQL.
+contador: List<int> = [0]
+
+async def pedacos() -> bytes:
+    contador[0] += 1
+    if contador[0] > 5:
+        contador[0] = 0
+        return b""
+    await sleep(0.01)
+    return ("pedaco-" + str(contador[0]) + "\n").encode()
+
+
+ticks: List<int> = [0]
+
+async def eventos() -> bytes:
+    ticks[0] += 1
+    if ticks[0] > 3:
+        ticks[0] = 0
+        return b""
+    await sleep(0.01)
+    return httpd.evento("tick", "n=" + str(ticks[0]) + "\nlinha2")
+
+
 async def handle(req: httpd.Request) -> httpd.Response:
+    if req.path == "/fluxo":
+        return httpd.stream_of(pedacos, "text/plain; charset=utf-8")
+    if req.path == "/sse":
+        return httpd.sse(eventos)
     if req.path == "/":
         return httpd.text("ola do pscript")
     if req.path == "/eco":

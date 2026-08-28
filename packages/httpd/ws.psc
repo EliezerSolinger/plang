@@ -59,7 +59,7 @@ def upgrade(req: httpd.Request, subprotocol: str = "") -> httpd.Response:
         r = httpd.status_code(426)
         r.headers.append(httpd.Header("sec-websocket-version", "13"))
         return r
-    r2 = httpd.Response(101, [], b"", True)
+    r2 = httpd.Response(101, [], b"", True, None)
     r2.headers.append(httpd.Header("upgrade", "websocket"))
     r2.headers.append(httpd.Header("connection", "Upgrade"))
     r2.headers.append(httpd.Header("sec-websocket-accept", accept_key(req.header("sec-websocket-key"))))

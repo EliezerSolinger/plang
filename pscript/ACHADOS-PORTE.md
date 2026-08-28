@@ -1094,3 +1094,34 @@ exista la dentro. Afirma que o conteudo do ficheiro de fora **nunca aparece**.
 O ETag e forte (e nao `W/`) porque a comparacao que o `Range` precisa exige um
 validador forte (RFC 9110 s13.1.3): com um fraco, um cliente que retoma uma
 descarga de um ficheiro que mudou coseria dois ficheiros diferentes.
+
+
+## 37 — streaming: o corpo por cursor (F2/D5)  OK feito
+
+`httpd.stream_of(fn, tipo)` e `httpd.sse(fn)`. O cursor devolve `bytes` a cada
+chamada e `b""` quando acabou -- a mesma forma do cursor do MySQL, para nao haver
+duas maneiras de ler algo aos bocados nesta base de codigo.
+
+Sai em `chunked` e NAO com `content-length`, porque o comprimento nao se sabe --
+e e essa a diferenca. Um servidor que juntasse os pedacos para o poder anunciar
+teria feito exactamente o trabalho que o streaming existe para evitar.
+
+**A contrapressao nao foi escrita: ela vem do modelo.** O `write` e um `await`,
+portanto um cliente lento faz a tarefa esperar no socket, e o cursor so e chamado
+outra vez quando o pedaco anterior saiu. A memoria nao cresce, e o worker corre
+as outras conexoes enquanto isto espera. E o que a D5 previa, e verifica-se: nao
+ha uma linha de codigo de contrapressao no ficheiro.
+
+Duas coisas que o portao prende e que um `curl` normal nao veria:
+
+* **os pedacos chegam EM PEDACOS.** Um `curl` junta tudo e mostra o resultado,
+  indistinguivel de uma resposta comum -- o teste mede os TEMPOS de chegada;
+
+* **cada linha de dados de um SSE leva o seu `data:`**. Uma quebra de linha crua
+  dentro do campo TERMINA o evento, e e o engano de sempre: serializar JSON numa
+  linha so nao chega quando ele tem um `\n` la dentro.
+
+E o `X-Accel-Buffering: no` do SSE nao e para nos -- e para um nginx a frente.
+Sem ele o proxy junta os eventos num tampao e entrega-os todos no fim, o que
+transforma um fluxo em tempo real numa resposta longa. E o problema mais
+reportado de SSE atras de um proxy, e cabe num cabecalho.

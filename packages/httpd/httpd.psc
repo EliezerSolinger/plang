@@ -214,6 +214,18 @@ struct Response:
     # 101: a conexão deixou de ser HTTP e passa a ser outra coisa. Quem serve lê
     # isto DEPOIS de escrever a resposta, e entrega o socket a quem vem a seguir.
     upgraded: bool
+    # F2/D5: O CORPO POR CURSOR.
+    #
+    # Uma resposta tem `body` OU isto, e nunca os dois. Não é um tipo-união: é um
+    # campo opcional, e quem serve pergunta por ele. A alternativa — um `body`
+    # que fosse `bytes | Cursor` — obrigaria toda a gente a desembrulhar em cada
+    # resposta, para um caso que é a minoria.
+    #
+    # O cursor devolve `bytes` a cada chamada e `b""` quando acabou, que é a
+    # mesma forma do `Cursor` do MySQL. O `write` de quem serve é um `await`,
+    # portanto a CONTRAPRESSÃO vem de graça: um cliente lento faz o cursor
+    # esperar, e a memória não cresce.
+    stream: (def() -> Task<bytes>)?
 
     def with_header(self, name: str, value: str) -> Response:
         self.headers.append(Header(name, value))
@@ -304,7 +316,7 @@ def reason_for(status: int) -> str:
 # ---------- D3g: as conveniências ----------
 
 def blob(body: bytes, kind: str) -> Response:
-    r = Response(200, [], body, False)
+    r = Response(200, [], body, False, None)
     r.headers.append(Header("content-type", kind))
     return r
 
@@ -334,7 +346,7 @@ def status_code(code: int) -> Response:
     # um estado sem corpo não leva corpo NEM tipo: dizer que o nada é
     # `text/plain` é dizer uma coisa a mais sobre nada
     if code == 204 or code == 304 or (code >= 100 and code < 200):
-        return Response(code, [], b"", False)
+        return Response(code, [], b"", False, None)
     r = blob((reason_for(code) + "\n").encode(), "text/plain; charset=utf-8")
     r.status = code
     return r
@@ -429,6 +441,52 @@ def config() -> Config:
 
 # ---------- escrever a resposta ----------
 
+def stream_of(fn: def() -> Task<bytes>, kind: str) -> Response:
+    """F2/D5: uma resposta cujo corpo vem por PEDAÇOS.
+
+    `fn()` devolve o pedaço seguinte, e `b""` diz que acabou — a mesma forma que
+    o cursor do MySQL tem, para não haver duas maneiras de ler algo aos bocados
+    nesta base de código.
+
+    Sai em `chunked` e não com `content-length`, porque o comprimento não se sabe
+    — e é essa a diferença entre isto e uma resposta normal. Um servidor que
+    juntasse os pedaços para poder anunciar o comprimento teria feito exactamente
+    o trabalho que o streaming existe para evitar.
+    """
+    r = Response(200, [], b"", False, fn)
+    r.headers.append(Header("content-type", kind))
+    return r
+
+
+def sse(fn: def() -> Task<bytes>) -> Response:
+    """Server-Sent Events: um cursor com os cabeçalhos que o browser espera.
+
+    O `X-Accel-Buffering: no` não é para nós — é para um nginx à frente. Sem ele
+    o proxy junta os eventos num tampão e entrega-os todos no fim, o que
+    transforma um fluxo em tempo real numa resposta longa. É o problema mais
+    reportado de SSE atrás de um proxy, e cabe num cabeçalho.
+    """
+    r = stream_of(fn, "text/event-stream")
+    r.headers.append(Header("cache-control", "no-cache"))
+    r.headers.append(Header("x-accel-buffering", "no"))
+    return r
+
+
+def evento(nome: str, dados: str) -> bytes:
+    """Um evento SSE, com a moldura que a especificação pede.
+
+    Cada linha dos dados leva o seu `data:`, porque uma quebra de linha crua
+    dentro do campo TERMINA o evento — é o engano de sempre, e serializar JSON
+    numa linha só não chega quando ele tem um `\n` lá dentro.
+    """
+    out = ""
+    if len(nome) > 0:
+        out += "event: " + nome + "\n"
+    for linha in dados.split("\n"):
+        out += "data: " + linha + "\n"
+    return (out + "\n").encode()
+
+
 def encode(r: Response, req_version: str, close_after: bool, cfg: Config) -> bytes:
     """A resposta inteira em bytes: linha de estado, cabeçalhos, corpo.
 
@@ -469,7 +527,12 @@ def encode(r: Response, req_version: str, close_after: bool, cfg: Config) -> byt
     # mesma resposta, e duas leituras da mesma resposta é a definição de
     # dessincronizar um cano partilhado.
     if not r.upgraded:
-        if not (r.status == 204 or (r.status >= 100 and r.status < 200)):
+        if r.stream != None:
+            # F2/D5: o comprimento NÃO SE SABE, e é essa a diferença. Um servidor
+            # que juntasse os pedaços para o poder anunciar teria feito
+            # exactamente o trabalho que o streaming existe para evitar.
+            sb.append("transfer-encoding: chunked\r\n")
+        elif not (r.status == 204 or (r.status >= 100 and r.status < 200)):
             sb.append("content-length: " + str(len(r.body)) + "\r\n")
         sb.append("connection: " + ("close" if close_after else "keep-alive") + "\r\n")
     sb.append("\r\n")
@@ -529,6 +592,58 @@ def host_ok(req: Request, cfg: Config) -> bool:
         if a == nome:
             return True
     return False
+
+
+def chunk(b: bytes) -> bytes:
+    """Um pedaço em `chunked`: o tamanho em HEXADECIMAL, CRLF, os bytes, CRLF.
+
+    Em hexadecimal e sem zeros à frente — o RFC 9112 §7.1 diz que é um
+    `chunk-size` hex, e um servidor que escrevesse decimal seria lido como um
+    tamanho dezasseis vezes maior no melhor dos casos.
+    """
+    return (hex_len(len(b)) + "\r\n").encode() + b + b"\r\n"
+
+
+def hex_len(n: int) -> str:
+    if n == 0:
+        return "0"
+    digitos = "0123456789abcdef"
+    out = ""
+    v = n
+    while v > 0:
+        out = digitos[v % 16] + out
+        v = v // 16
+    return out
+
+
+async def escreve_stream(c: Socket, r: Response, cfg: Config) -> bool:
+    """Os pedaços, até o cursor dizer que acabou.
+
+    A CONTRAPRESSÃO vem de graça e não foi preciso escrevê-la: o `write` é um
+    `await`, portanto um cliente lento faz esta tarefa esperar no socket, e o
+    cursor só é chamado outra vez quando o pedaço anterior saiu. A memória não
+    cresce, e o worker corre as outras conexões enquanto isto espera.
+    """
+    fn = r.stream
+    if fn == None:
+        return True
+    while True:
+        pedaco = b""
+        try:
+            pedaco = await fn()
+        catch e:
+            # o cursor rebentou a meio. Os cabeçalhos já foram, portanto não há
+            # 500 possível — o que há é acabar o corpo e fechar, que é o que um
+            # cliente lê como "a resposta foi interrompida".
+            aprint("httpd: stream: " + e.message)
+            return False
+        if len(pedaco) == 0:
+            break
+        if not await escreve(c, chunk(pedaco)):
+            return False
+    # o pedaço de tamanho zero é o FIM, e o CRLF a seguir fecha os trailers que
+    # não existem. Sem ele o cliente fica à espera de mais.
+    return await escreve(c, b"0\r\n\r\n")
 
 
 async def escreve(c: Socket, b: bytes) -> bool:
@@ -597,6 +712,12 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
                 manter = False
             if not await escreve(c, encode(resp, req.version, not manter, cfg)):
                 break
+            if resp.stream != None and req.method != "HEAD":
+                # um HEAD leva os cabeçalhos e mais nada, e isso inclui não
+                # chamar o cursor: gerar o corpo para o deitar fora seria pagar
+                # o trabalho inteiro pela resposta que existe para o evitar
+                if not await escreve_stream(c, resp, cfg):
+                    break
             servidos += 1
             if resp.upgraded:
                 # a conexão deixou de ser HTTP/1. Entrega-se a quem a pediu, COM

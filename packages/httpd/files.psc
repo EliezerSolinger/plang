@@ -255,9 +255,9 @@ async def serve(f: Files, req: httpd.Request) -> httpd.Response:
             if len(faixa) == 2:
                 n = faixa[1] - faixa[0] + 1
                 corpo = await ler_pedaco(alvo, faixa[0], n)
-                r3 = httpd.Response(206, cabecalhos, corpo, False)
+                r3 = httpd.Response(206, cabecalhos, corpo, False, None)
                 r3.headers.append(httpd.Header("content-range",
                     "bytes " + str(faixa[0]) + "-" + str(faixa[1]) + "/" + str(tamanho)))
                 return r3
 
-    return httpd.Response(200, cabecalhos, await ler_pedaco(alvo, 0, tamanho), False)
+    return httpd.Response(200, cabecalhos, await ler_pedaco(alvo, 0, tamanho), False, None)
