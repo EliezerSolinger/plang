@@ -66,6 +66,10 @@ sys.exit(await main())
 | `Result.one()` / `.scalar()` | a linha única, o valor único (o `fetchone` do DB-API) |
 | transações | `begin()` / `commit()` / `rollback()` / `set_autocommit()` |
 | `execute_many(sql, rows)` | o mesmo comando por linha, numa transação se envolvido |
+| `query_stream(sql)` → `Cursor` | lê linha a linha (`cur.next_row()`), sem carregar tudo — para SELECTs grandes |
+| `next_result()` / `has_next()` | drena os result sets de uma multi-statement |
+| **TLS** (`connect(..., tls=True)`) | cifra a ligação antes de a senha viajar (TLS 1.3 conferido) |
+| autenticação | `mysql_native_password`, `caching_sha2_password` (MySQL 8), `client_ed25519` (MariaDB) |
 | `ping()` / `select_db()` / `close()` | |
 | erro do servidor | vira exceção com o código e a mensagem (`MySQL 1045: Access denied...`) |
 
@@ -77,19 +81,33 @@ do pscript não adivinha que `007` é sete. Um **BLOB binário** vira `bytes` (o
 `any` do core aprendeu a guardá-los durante este porte), e `row.raw()` continua
 sendo o atalho direto para os bytes crus de qualquer coluna.
 
-## O que falta, e onde entraria
+## O que existe agora, e o que ainda falta
 
-- **`caching_sha2_password`** (o padrão do MySQL 8) e **`ed25519`** (uma opção do
-  MariaDB): o primeiro precisa de RSA no caminho lento, o segundo de curva de
-  Edwards. O ponto de entrada é o pedido de troca de plugin, tratado em
-  `connect`.
-- **Prepared statements do protocolo** (`COM_STMT_*`): hoje um valor entra por
-  escape (`query_str`), que é o que o PyMySQL faz — o `execute(sql, args)` dele
-  também escapa no cliente e manda texto, não usa `COM_STMT`. O protocolo binário
-  seria mais rápido para a mesma query repetida muitas vezes; para segurança, o
-  escape já resolve.
-- **TLS**: o pscript tem `net.starttls`; o gancho é depois do handshake, antes do
-  login.
+Tudo o que o `pymysql` tem de essencial está aqui:
+
+- **TLS** (`tls=True`, `tls_verify=False` para cert auto-assinado): manda um SSL
+  Request, sobe o TLS pelo `net.starttls` do pscript, e só então o login viaja —
+  cifrado. Conferido contra o MariaDB: `TLS_AES_256_GCM_SHA384` (TLS 1.3). O
+  runtime do pscript ganhou um conserto no caminho: `SSL_pending` antes do
+  `poll`, sem o qual qualquer protocolo TLS 1.3 que leia logo após o handshake
+  trava.
+- **Três plugins de auth**, cada um conferido byte a byte contra o pymysql:
+  `mysql_native_password`, `caching_sha2_password` (o padrão do MySQL 8; caminho
+  rápido com SHA-256, caminho lento com a senha sobre TLS) e `client_ed25519` (o
+  do MariaDB, que usa o pacote `ed25519` do repo).
+- **Streaming** (`query_stream`): um `Cursor` que entrega linha a linha, para o
+  SELECT que não cabe na memória.
+- **Multi-result** (`next_result`/`has_next`): drena os result sets de uma
+  multi-statement.
+
+O que fica de fora, e é o que o próprio pymysql também não faz ou raramente usa:
+
+- **Prepared statements do protocolo** (`COM_STMT_*`): um valor entra por escape
+  (`query_str`), que é o que o PyMySQL faz — o `execute(sql, args)` dele também
+  escapa no cliente e manda texto. O protocolo binário seria mais rápido para a
+  mesma query repetida muitas vezes.
+- **`caching_sha2` sem TLS** (o caminho lento por RSA): com TLS ligado funciona;
+  sem TLS, o RSA para cifrar a senha não está implementado.
 - **`datetime` dentro de `any`**: um `LocalDateTime` é um `record`, e o `any` do
   core guarda números, bools, strings, bytes, listas e dicts — não records. Por
   isso uma data vem por `get_datetime()` (que a parseia dos bytes crus), não no

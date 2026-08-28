@@ -69,6 +69,18 @@ async def main() -> int:
     for row in r4.rows:
         print(f"  {row.get_str(\"table_name\")}")
 
+    # 4b. STREAMING: ler linha a linha via cursor, sem carregar tudo
+    cur = await conn.query_stream("SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name")
+    n = 0
+    while True:
+        row = await cur.next_row()
+        if row == None:
+            break
+        n += 1
+        if n <= 2:
+            print(f"stream linha {n}: {row.get_str(\"table_name\")}")
+    print(f"streaming leu {n} linhas uma a uma")
+
     # 5. TRANSACAO com rollback: prova begin/rollback sem deixar rastro no banco
     #    de producao. Cria uma tabela temporaria, insere, conta, e desfaz TUDO.
     await conn.query("CREATE TEMPORARY TABLE _dcp_probe (id INT, nome VARCHAR(50))")

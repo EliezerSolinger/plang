@@ -2,6 +2,10 @@ ok sha1 vazio
 ok sha1 abc
 ok scramble foobar
 ok scramble vazio
+ok sha256 abc
+ok sha256 vazio
+ok caching_sha2 foobar
+ok ed25519 foobar
 ok uint32 LE
 ok uint16 LE
 ok lenenc 300

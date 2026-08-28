@@ -15,6 +15,7 @@ onde o pedido de troca de plugin é tratado.
 """
 
 import <mysql/sha1.psc> as sha
+import <mysql/sha256.psc> as sha2
 
 
 def scramble_native_password(password: bytes, salt: bytes) -> bytes:
@@ -45,4 +46,35 @@ def scramble_native_password(password: bytes, salt: bytes) -> bytes:
     while k < len(result):
         out.append(u8(int(result[k]) ^ int(stage1[k])))
         k += 1
+    return bytes(out)
+
+
+def scramble_caching_sha2(password: bytes, nonce: bytes) -> bytes:
+    """O scramble do `caching_sha2_password` (o padrão do MySQL 8), caminho
+    rápido: `XOR(SHA256(pw), SHA256(SHA256(SHA256(pw)) ++ nonce))`.
+
+    É o que basta quando a senha já está no cache do servidor. No primeiro login
+    (cache vazio) o servidor pede o caminho lento, e aí a senha viaja — cifrada
+    por RSA, ou em claro sobre TLS. Com a ligação já em TLS, o caminho lento é
+    mandar a senha e um NUL, e é o que o conector faz."""
+    if len(password) == 0:
+        return bytes([])
+    p1 = sha2.sha256(password)
+    p2 = sha2.sha256(p1)
+    combined: List<u8> = []
+    j = 0
+    while j < len(p2):
+        combined.append(p2[j])
+        j += 1
+    n = 20 if len(nonce) >= 20 else len(nonce)
+    k = 0
+    while k < n:
+        combined.append(nonce[k])
+        k += 1
+    p3 = sha2.sha256(bytes(combined))
+    out: List<u8> = []
+    i = 0
+    while i < len(p1):
+        out.append(u8(int(p1[i]) ^ int(p3[i])))
+        i += 1
     return bytes(out)

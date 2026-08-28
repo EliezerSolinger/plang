@@ -24,6 +24,7 @@ import <mysql/packet.psc> as pkt
 import <mysql/auth.psc> as auth
 import <mysql/escape.psc> as esc
 import <datetime/datetime.psc> as dt
+import <ed25519/ed25519.ph>
 
 
 const MAX_PACKET_LEN = 16777215     # 2^24 - 1
@@ -34,6 +35,7 @@ const CLIENT_LONG_FLAG      = 4
 const CLIENT_CONNECT_WITH_DB = 8
 const CLIENT_PROTOCOL_41    = 512
 const CLIENT_TRANSACTIONS   = 8192
+const CLIENT_SSL            = 2048
 const CLIENT_SECURE_CONNECTION = 32768
 const CLIENT_MULTI_RESULTS  = 131072
 const CLIENT_PLUGIN_AUTH    = 524288
@@ -52,6 +54,7 @@ const COM_PING  = 0x0E
 const COM_INIT_DB = 0x02
 
 const UTF8MB4_ID = 45      # o charset_nr de utf8mb4_general_ci
+const SERVER_MORE_RESULTS = 8   # SERVER_STATUS: há outro result set a seguir
 
 # ── os tipos de coluna (constants/FIELD_TYPE.py) ──────────────────────────────
 # O que decide para que tipo pscript um valor de texto do servidor vira. Só os
@@ -202,6 +205,39 @@ struct Result:
         return self.rows[0].at(0)
 
 
+struct Cursor:
+    """Um result set lido LINHA A LINHA, sem carregar tudo na memória. É o que
+    um SELECT de milhões de linhas pede — o `query` normal junta tudo, e para um
+    resultado que não cabe isso estoura.
+
+    `next_row()` devolve a próxima linha ou `None` no fim. Enquanto o cursor
+    está aberto, a conexão está OCUPADA com ele: não se pode mandar outra query
+    até drenar (chamar `next_row` até `None`) ou fechar."""
+    conn: Connection
+    fields: List<Field>
+    done: bool
+
+    async def next_row(self) -> Row?:
+        if self.done:
+            return None
+        rp = await self.conn.read_packet()
+        if rp.is_eof_packet():
+            self.done = True
+            return None
+        raws: List<bytes?> = []
+        cc = 0
+        while cc < len(self.fields):
+            raws.append(rp.read_length_coded_string())
+            cc += 1
+        return Row(self.fields, raws)
+
+    async def drain(self):
+        """Lê o resto e descarta — para quando se parou no meio e se quer a
+        conexão livre de novo."""
+        while not self.done:
+            r = await self.next_row()
+
+
 struct Connection:
     sock: Socket
     seq: int              # o número de sequência do próximo pacote
@@ -210,6 +246,7 @@ struct Connection:
     server_version: str
     auth_plugin: str
     closed: bool
+    status: int           # o SERVER_STATUS do último OK/EOF (o has_next mora aqui)
 
     # ── a camada de transporte: pacotes com cabeçalho de 4 bytes ──────────────
 
@@ -368,6 +405,30 @@ struct Connection:
         if not p.is_ok_packet():
             raise error("não consegui trocar de banco")
 
+    async def query_stream(self, sql: str) -> Cursor:
+        """Como `query`, mas devolve um `Cursor` que entrega as linhas uma a uma
+        em vez de todas na memória. Para um SELECT que não cabe."""
+        await self.send_command(COM_QUERY, bytes_of_str(sql))
+        first = await self.read_packet()
+        if first.is_ok_packet():
+            # sem result set (um comando): um cursor já vazio
+            empty: List<Field> = []
+            return Cursor(self, empty, True)
+        ncoln = first.read_length_encoded_integer()
+        if ncoln == None:
+            raise error("resposta de query malformada")
+        ncol = ncoln
+        fields: List<Field> = []
+        c = 0
+        while c < ncol:
+            fp = await self.read_packet()
+            fields.append(parse_field(fp))
+            c += 1
+        eof1 = await self.read_packet()
+        if not eof1.is_eof_packet():
+            raise error("esperava o EOF depois das colunas")
+        return Cursor(self, fields, False)
+
     async def read_result(self) -> Result:
         first = await self.read_packet()
         if first.is_ok_packet():
@@ -393,6 +454,10 @@ struct Connection:
         while True:
             rp = await self.read_packet()
             if rp.is_eof_packet():
+                # o EOF carrega o server_status: warnings (2 bytes) e status
+                rp.read_uint8()          # o 0xFE
+                rp.read_uint16()         # warnings
+                self.status = rp.read_uint16()
                 break
             raws: List<bytes?> = []
             cc = 0
@@ -401,6 +466,18 @@ struct Connection:
                 cc += 1
             rows.append(Row(fields, raws))
         return Result(fields, rows, len(rows), 0)
+
+    def has_next(self) -> bool:
+        """Há outro result set a seguir? (uma multi-statement, ou um CALL de
+        stored procedure que devolve vários)."""
+        return self.status & SERVER_MORE_RESULTS != 0
+
+    async def next_result(self) -> Result?:
+        """O próximo result set de uma multi-statement, ou `None` se não há.
+        Só faz sentido depois de um `query` cujo `has_next()` é verdade."""
+        if not self.has_next():
+            return None
+        return await self.read_result()
 
     async def close(self):
         if not self.closed:
@@ -418,31 +495,151 @@ struct Connection:
 
 # ── funções livres: o handshake, e os pedaços que não precisam do self ────────
 
-async def connect(host: str, port: int, user: str, password: str, db: str = "") -> Connection:
+async def connect(host: str, port: int, user: str, password: str, db: str = "",
+                  tls: bool = False, tls_verify: bool = True) -> Connection:
     """Abre a conexão, faz o aperto de mão e autentica. Devolve a `Connection`
-    pronta para `query`."""
+    pronta para `query`.
+
+    `tls=True` cifra a ligação ANTES de a senha viajar: sem ele, a prova da senha
+    e todos os dados vão em texto claro pela rede — o que só é aceitável quando o
+    servidor está na mesma máquina (um socket que não sai dela). Numa rede, é
+    obrigatório. Precisa que o runtime tenha sido compilado com `-D PSRT_TLS`; sem
+    isso, `net.tls_available()` é falso e pedir `tls=True` levanta.
+
+    `tls_verify=False` aceita um certificado auto-assinado (o que um MariaDB gera
+    sozinho): cifra, mas não prova a identidade do servidor."""
     sock = await net.connect(host, port)
-    conn = Connection(sock, 0, 0, bytes([]), "", "", False)
+    conn = Connection(sock, 0, 0, bytes([]), "", "", False, 0)
 
     # 1. o servidor fala primeiro: o Initial Handshake
     hs = await conn.read_packet()
     parse_handshake(conn, hs)
 
-    # 2. a resposta do cliente, com a prova da senha
+    # 1b. TLS, se pedido: a ordem é o que importa. Manda-se um SSL Request — as
+    # MESMAS flags do login mas SEM o usuário e SEM a senha —, faz-se o upgrade
+    # do socket, e SÓ DEPOIS o resto do login viaja, já cifrado. É a sequência
+    # `_do_ssl` do pymysql, e trocá-la manda a senha em claro no próprio pacote
+    # que devia protegê-la.
+    if tls:
+        if not net.tls_available():
+            raise error("TLS pedido mas o runtime não tem: recompile com -D PSRT_TLS")
+        if conn.caps & CLIENT_SSL == 0:
+            raise error("o servidor não anuncia suporte a TLS")
+        ssl_req = build_ssl_request(conn, db)
+        await conn.write_packet(ssl_req)
+        # `tls_verify=False` aceita um certificado que a cadeia não valida — o
+        # auto-assinado que um MariaDB gera sozinho. É a corda do `insecure`: a
+        # ligação é cifrada na mesma, mas não se PROVA com quem se está a falar,
+        # então um intermediário poderia pôr-se no meio. Para produção com um
+        # certificado de verdade, deixe em True.
+        ok_tls: bool = False
+        if tls_verify:
+            ok_tls = await net.starttls(sock, host)
+        else:
+            ok_tls = await net.starttls_insecure(sock, host)
+        if not ok_tls:
+            conn.sock.close()
+            raise error(f"o aperto de mão TLS com {host} não completou")
+
+
+    # 2. a resposta do cliente, com a prova da senha (já cifrada se houve TLS)
     scramble = auth.scramble_native_password(bytes_of_str(password), conn.salt)
-    resp = build_handshake_response(conn, user, scramble, db)
+    resp = build_handshake_response(conn, user, scramble, db, tls)
     await conn.write_packet(resp)
 
-    # 3. o servidor responde OK, ErrPacket, ou pede troca de plugin
+    # 3. o servidor responde OK, ErrPacket, pede troca de plugin, ou manda mais
+    #    dados de auth (o caching_sha2 faz isso)
     reply = await conn.read_packet()
-    if reply.is_ok_packet():
-        return conn
-    if reply.is_auth_switch_request():
-        raise error("o servidor pediu troca de plugin de auth: só "
-                    + "mysql_native_password está implementado por ora")
-    if not reply.is_ok_packet():
-        raise error("o login não foi aceito")
+    await handle_auth_reply(conn, reply, password, conn.auth_plugin, tls)
     return conn
+
+
+async def handle_auth_reply(conn: Connection, reply: pkt.Packet, password: str,
+                           plugin: str, tls: bool):
+    """Depois do primeiro login, o servidor pode: aceitar (OK), pedir OUTRO
+    plugin (Auth Switch), ou mandar mais dados do plugin atual (o caching_sha2
+    diz se a senha estava no cache). Aqui cada um desses caminhos é seguido até
+    um OK ou um erro."""
+    if reply.is_ok_packet():
+        return
+
+    if reply.is_auth_switch_request():
+        # 0xFE + nome do plugin (NUL) + o novo salt
+        reply.read_uint8()
+        pn = reply.read_string()
+        new_plugin = "mysql_native_password"
+        if pn != None:
+            new_plugin = str(pn)
+        new_salt = reply.read_all()
+        resp = auth_response(new_plugin, password, new_salt, tls)
+        # conn.seq já é o próximo depois do read; a resposta vai com ele
+        await conn.write_packet(resp)
+        # o servidor pode ainda mandar os dados extras do caching_sha2
+        nxt = await conn.read_packet()
+        await handle_auth_reply(conn, nxt, password, new_plugin, tls)
+        return
+
+    if reply.is_extra_auth_data():
+        # o caching_sha2 manda: 0x01 + (0x03 = cache HIT, ou 0x04 = precisa do
+        # caminho lento). No HIT o próximo pacote é o OK; no MISS, mandamos a
+        # senha (cifrada por TLS já em curso) e um NUL.
+        reply.read_uint8()          # o 0x01
+        marker = reply.read_uint8()
+        if marker == 3:
+            # cache hit: o servidor manda o OK a seguir
+            ok = await conn.read_packet()
+            if not ok.is_ok_packet():
+                raise error("caching_sha2: esperava OK depois do cache hit")
+            return
+        # cache miss (marker == 4): a senha em claro, sobre TLS
+        if not tls:
+            raise error("caching_sha2 pediu o caminho lento e a ligação não é "
+                        + "TLS: ligue tls=True (o caminho por RSA sem TLS não "
+                        + "está implementado)")
+        pw: List<u8> = []
+        b = bytes(password.encode())
+        i = 0
+        while i < len(b):
+            pw.append(b[i])
+            i += 1
+        pw.append(u8(0))
+        await conn.write_packet(bytes(pw))
+        ok2 = await conn.read_packet()
+        if not ok2.is_ok_packet():
+            raise error("caching_sha2: o login não foi aceito no caminho lento")
+        return
+
+    raise error("o login não foi aceito")
+
+
+private def auth_response(plugin: str, password: str, salt: bytes, tls: bool) -> bytes:
+    """A resposta de auth para o plugin que o servidor pediu no switch."""
+    if plugin == "mysql_native_password":
+        return auth.scramble_native_password(bytes(password.encode()), salt)
+    if plugin == "caching_sha2_password":
+        return auth.scramble_caching_sha2(bytes(password.encode()), salt)
+    if plugin == "client_ed25519":
+        # o plugin ed25519 do MariaDB: assina o salt com uma chave derivada da
+        # senha. A conta é crypto de curva e vem do pacote `ed25519` (em P), que
+        # devolve a assinatura em hex; aqui volta a bytes.
+        sighex = ed25519_password_hex(bytes(password.encode()), salt)
+        decoded = str(sighex).from_hex()
+        if decoded == None:
+            raise error("ed25519: a assinatura não voltou de hex")
+        return decoded
+    if plugin == "mysql_clear_password":
+        # só sobre TLS: a senha vai em claro
+        if not tls:
+            raise error("mysql_clear_password sem TLS manda a senha em claro; ligue tls=True")
+        pw: List<u8> = []
+        b = bytes(password.encode())
+        i = 0
+        while i < len(b):
+            pw.append(b[i])
+            i += 1
+        pw.append(u8(0))
+        return bytes(pw)
+    raise error(f"plugin de auth não implementado: {plugin}")
 
 
 private def parse_handshake(conn: Connection, p: pkt.Packet):
@@ -494,11 +691,32 @@ private def parse_handshake(conn: Connection, p: pkt.Packet):
         conn.salt = salt1
 
 
-private def build_handshake_response(conn: Connection, user: str, scramble: bytes, db: str) -> bytes:
+private def build_ssl_request(conn: Connection, db: str) -> bytes:
+    """O SSL Request: os 32 bytes iniciais de um login (flags com CLIENT_SSL,
+    tamanho máximo, charset, 23 reservados) e PARA por aí — nada de usuário nem
+    senha, que é o que ainda não pode viajar em claro. O servidor lê estes 32
+    bytes, faz o seu lado do TLS, e espera o resto cifrado."""
+    out: List<u8> = []
+    client_flags = DEFAULT_CAPS | CLIENT_SSL
+    if len(db) > 0:
+        client_flags = client_flags | CLIENT_CONNECT_WITH_DB
+    append_u32(out, client_flags)
+    append_u32(out, MAX_PACKET_LEN)
+    out.append(u8(UTF8MB4_ID))
+    r = 0
+    while r < 23:
+        out.append(u8(0))
+        r += 1
+    return bytes(out)
+
+
+private def build_handshake_response(conn: Connection, user: str, scramble: bytes, db: str, tls: bool) -> bytes:
     """A Handshake Response 41: flags, tamanho máximo, charset, o usuário, a
     prova, e (se houver) o banco e o nome do plugin."""
     out: List<u8> = []
     client_flags = DEFAULT_CAPS
+    if tls:
+        client_flags = client_flags | CLIENT_SSL
     if len(db) > 0:
         client_flags = client_flags | CLIENT_CONNECT_WITH_DB
 

@@ -8,7 +8,9 @@ bugs que o porte teve morreriam antes de chegar ao servidor.
 import <mysql/packet.psc> as pkt
 import <mysql/sha1.psc> as sha
 import <mysql/auth.psc> as auth
+import <mysql/sha256.psc> as sha2
 import <mysql/mysql.psc> as my
+import <ed25519/ed25519.ph>
 
 
 def check(nome: str, got: str, want: str):
@@ -26,6 +28,18 @@ sc = auth.scramble_native_password(b"foobar", salt20)
 check("scramble foobar", sc.hex(), "e419caeec63ade5aeb8e0f8bbb2ac2d86b183350")
 empty = auth.scramble_native_password(bytes([]), salt20)
 check("scramble vazio", f"{len(empty)}", "0")
+
+# ── SHA-256 e caching_sha2 (o plugin do MySQL 8), contra vetores ──────────────
+check("sha256 abc", sha2.sha256(b"abc").hex(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+check("sha256 vazio", sha2.sha256(bytes([])).hex(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+nonce20 = bytes([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20])
+check("caching_sha2 foobar", auth.scramble_caching_sha2(b"foobar", nonce20).hex(),
+      "b8d219ce85485ca1b632dba17e782bb0a42698fad919896ff91e86c9896489fd")
+
+# ── ed25519 (o plugin do MariaDB), contra o pymysql/pynacl ────────────────────
+scr32 = bytes([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32])
+check("ed25519 foobar", str(ed25519_password_hex(b"foobar", scr32)),
+      "18b9f913279f3a8508235680ffbb6a5c48370bf8172fdd98e0f29cb72d9dc9340e6a3fb68a27b22e447a61673306f236b1f16d0a297ad508e9912ebc5058a00a")
 
 q = pkt.new_packet(bytes([0x78, 0x56, 0x34, 0x12]))
 check("uint32 LE", f"{q.read_uint32()}", "305419896")
