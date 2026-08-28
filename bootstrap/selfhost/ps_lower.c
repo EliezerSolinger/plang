@@ -279,15 +279,15 @@ static Expr *sh_field_addr(PsLow *L, const char *sname, const char *fname, Pos p
 
 static Decl *lower_struct_walk(PsLow *L, PsDecl *d, int writing, int with_body);
 
-static int tem_tupla(PsType *t, int32_t depth);
+static int has_tuple(PsType *t, int32_t depth);
 
 static Type *ty_cst(Arena *a, const char *n);
 
 static void dbg_build(PsLow *L, PsFunc *f);
 
-static PsType *dbg_find(PsLow *L, const char *nome);
+static PsType *dbg_find(PsLow *L, const char *dbg_name);
 
-static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_campos);
+static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int with_fields);
 
 static Decl *lower_struct_fields(PsLow *L, PsDecl *d);
 
@@ -505,7 +505,7 @@ static PsFunc *PsLow_method_named(PsLow *self, PsDecl *d, const char *name);
 
 static Expr *PsLow_repr_of(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth);
 
-static Expr *PsLow_repr_of_gerado(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth);
+static Expr *PsLow_repr_of_generated(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth);
 
 static Expr *PsLow_repr_container(PsLow *self, Expr *v, PsType *t, Pos pos);
 
@@ -1356,7 +1356,7 @@ static Expr *PsLow_repr_of(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t dep
     return rc;
 }
 
-static Expr *PsLow_repr_of_gerado(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth) {
+static Expr *PsLow_repr_of_generated(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t depth) {
     PsDecl *d = PsLow_decl_named(self, t->name);
     PsFunc *um = PsLow_method_named(self, d, "to_str");
     if (um != NULL) {
@@ -1398,7 +1398,7 @@ static Expr *PsLow_repr_of_gerado(PsLow *self, Expr *v, PsType *t, Pos pos, int3
 }
 
 static Expr *PsLow_repr_container(PsLow *self, Expr *v, PsType *t, Pos pos) {
-    if ((t->kind == PT_LIST || t->kind == PT_SET || t->kind == PT_DICT) && !tem_tupla(t, 0)) {
+    if ((t->kind == PT_LIST || t->kind == PT_SET || t->kind == PT_DICT) && !has_tuple(t, 0)) {
         Expr *c0 = PsLow_call_rt(self, "ps_repr_val", pos);
         PsLow_push_arg(self, c0, PsLow_ctx_arg(self, pos));
         PsLow_push_arg(self, c0, v);
@@ -5613,7 +5613,7 @@ static Expr *PsLow_value_first(PsLow *self, PsExpr *e, PsType *want, Pos pos) {
     self->raised = 0;
     Expr *v = PsLow_coerce(self, want, e);
     int moved = self->allocs || self->raised;
-    int pode_levantar = self->raised;
+    int can_raise = self->raised;
     self->allocs = prev || self->allocs;
     self->raised = prevr || self->raised;
     if (!moved) {
@@ -5626,7 +5626,7 @@ static Expr *PsLow_value_first(PsLow *self, PsExpr *e, PsType *want, Pos pos) {
     d->type = (want != NULL ? PsLow_ty(self, want) : PsLow_ty(self, e->type));
     d->init = v;
     Vec_pStmt_push(&self->pre, d);
-    if (pode_levantar) {
+    if (can_raise) {
         self->pre_raise = 1;
         Vec_pStmt_push(&self->pre, PsLow_guard(self, pos));
     }
@@ -6967,10 +6967,10 @@ static void PsLow_stmt(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         Vec_pStmt_push(out, self->pre.data[i]);
     }
     self->pre = outer;
-    int guardado = self->pre_raise && self->try_flag != NULL;
+    int guarded = self->pre_raise && self->try_flag != NULL;
     self->pre_raise = prev_pr;
     for (i = 0; i < inner.len; i += 1) {
-        Vec_pStmt_push(out, (guardado ? PsLow_wrap_if(self, self->try_flag, inner.data[i], s->pos) : inner.data[i]));
+        Vec_pStmt_push(out, (guarded ? PsLow_wrap_if(self, self->try_flag, inner.data[i], s->pos) : inner.data[i]));
     }
     if (self->allocs && !(s->kind == PS_RETURN || s->kind == PS_BREAK || s->kind == PS_CONTINUE || s->kind == PS_RAISE)) {
         Stmt *poll = st_new(self->a, ST_EXPR, s->pos);
@@ -7292,9 +7292,9 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 Vec_pStmt_push(out, PsLow_shared_lock(self, nm5, 1, s->pos));
                 return;
             }
-            int campo = s->lhs->kind != PE_NAME || (!s->is_global && PsLow_in_frame(self, s->lhs->text));
+            int is_field = s->lhs->kind != PE_NAME || (!s->is_global && PsLow_in_frame(self, s->lhs->text));
             Expr *av = NULL;
-            if (s->op == TK_ASSIGN && campo) {
+            if (s->op == TK_ASSIGN && is_field) {
                 av = PsLow_value_first(self, s->rhs, s->lhs->type, s->pos);
             }
             Stmt *a2 = st_new(self->a, ST_ASSIGN, s->pos);
@@ -7324,7 +7324,7 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
                 Expr *bv8 = PsLow_binary(self, tmp);
                 int mv8 = self->allocs;
                 self->allocs = prev8 || mv8;
-                a2->rhs = (campo && mv8 ? PsLow_spill(self, bv8, s->lhs->type, s->pos) : bv8);
+                a2->rhs = (is_field && mv8 ? PsLow_spill(self, bv8, s->lhs->type, s->pos) : bv8);
             }
             Vec_pStmt_push(out, a2);
             break;
@@ -8496,7 +8496,7 @@ static Decl *lower_record_impl(PsLow *L, PsDecl *d) {
     return rd;
 }
 
-static const const char *PS_TAKEN[228] = {"auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "bool", "true", "false", "complex", "imaginary", "abs", "exit", "free", "malloc", "calloc", "realloc", "atoi", "atof", "rand", "srand", "qsort", "bsearch", "div", "labs", "system", "getenv", "printf", "fprintf", "sprintf", "snprintf", "puts", "putchar", "getchar", "fopen", "fclose", "fread", "fwrite", "fgets", "remove", "rename", "stdin", "stdout", "stderr", "memcpy", "memmove", "memset", "memcmp", "strlen", "strcmp", "strcpy", "strcat", "strchr", "strstr", "strtok", "index", "rindex", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "log", "log2", "log10", "pow", "sqrt", "cbrt", "hypot", "ceil", "floor", "round", "trunc", "fmod", "fabs", "fmin", "fmax", "gamma", "j0", "j1", "jn", "y0", "y1", "yn", "time", "clock", "main", "socket", "bind", "listen", "accept", "connect", "send", "recv", "sendto", "recvfrom", "shutdown", "setsockopt", "getsockopt", "getsockname", "getpeername", "socketpair", "htons", "htonl", "ntohs", "ntohl", "inet_addr", "inet_ntoa", "inet_pton", "inet_ntop", "getaddrinfo", "freeaddrinfo", "gai_strerror", "gethostbyname", "read", "write", "close", "open", "pipe", "dup", "dup2", "lseek", "unlink", "rmdir", "mkdir", "chdir", "getcwd", "access", "fcntl", "fsync", "ftruncate", "truncate", "isatty", "link", "symlink", "readlink", "chmod", "chown", "umask", "sync", "fork", "execv", "execvp", "execve", "wait", "waitpid", "getpid", "getppid", "kill", "alarm", "pause", "sleep", "usleep", "nice", "poll", "select", "signal", "raise", "abort", "pthread_create", "pthread_join", "pthread_self", "pthread_exit", "mmap", "munmap", "madvise", "stat", "fstat", "lstat", "creat", "gmtime", "localtime", "mktime", "strftime", "difftime", "nanosleep", "random", "srandom", "strdup", "strndup", "strsep", "bzero", "bcopy", "getline", "popen", "pclose", "tmpfile", "basename", "dirname", "regcomp", "regexec", "regfree", "regerror", NULL};
+static const const char *PS_TAKEN[326] = {"auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "bool", "true", "false", "complex", "imaginary", "abs", "exit", "free", "malloc", "calloc", "realloc", "atoi", "atof", "rand", "srand", "qsort", "bsearch", "div", "labs", "system", "getenv", "printf", "fprintf", "sprintf", "snprintf", "puts", "putchar", "getchar", "fopen", "fclose", "fread", "fwrite", "fgets", "remove", "rename", "stdin", "stdout", "stderr", "memcpy", "memmove", "memset", "memcmp", "strlen", "strcmp", "strcpy", "strcat", "strchr", "strstr", "strtok", "index", "rindex", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "log", "log2", "log10", "pow", "sqrt", "cbrt", "hypot", "ceil", "floor", "round", "trunc", "fmod", "fabs", "fmin", "fmax", "gamma", "j0", "j1", "jn", "y0", "y1", "yn", "time", "clock", "main", "socket", "bind", "listen", "accept", "connect", "send", "recv", "sendto", "recvfrom", "shutdown", "setsockopt", "getsockopt", "getsockname", "getpeername", "socketpair", "htons", "htonl", "ntohs", "ntohl", "inet_addr", "inet_ntoa", "inet_pton", "inet_ntop", "getaddrinfo", "freeaddrinfo", "gai_strerror", "gethostbyname", "read", "write", "close", "open", "pipe", "dup", "dup2", "lseek", "unlink", "rmdir", "mkdir", "chdir", "getcwd", "access", "fcntl", "fsync", "ftruncate", "truncate", "isatty", "link", "symlink", "readlink", "chmod", "chown", "umask", "sync", "fork", "execv", "execvp", "execve", "wait", "waitpid", "getpid", "getppid", "kill", "alarm", "pause", "sleep", "usleep", "nice", "poll", "select", "signal", "raise", "abort", "pthread_create", "pthread_join", "pthread_self", "pthread_exit", "mmap", "munmap", "madvise", "stat", "fstat", "lstat", "creat", "gmtime", "localtime", "mktime", "strftime", "difftime", "nanosleep", "random", "srandom", "strdup", "strndup", "strsep", "bzero", "bcopy", "getline", "popen", "pclose", "tmpfile", "basename", "dirname", "regcomp", "regexec", "regfree", "regerror", "revoke", "daemon", "crypt", "encrypt", "swab", "brk", "sbrk", "vfork", "chroot", "ttyname", "getpass", "realpath", "atexit", "setenv", "unsetenv", "putenv", "perror", "rewind", "feof", "ferror", "clearerr", "fileno", "getc", "putc", "ungetc", "scanf", "sscanf", "fscanf", "strerror", "memchr", "strrchr", "strncmp", "strncpy", "strncat", "strspn", "strcspn", "strpbrk", "strcoll", "strxfrm", "atol", "atoll", "strtol", "strtoul", "strtod", "mkstemp", "mkdtemp", "opendir", "readdir", "closedir", "rewinddir", "scandir", "telldir", "seekdir", "dirfd", "sigaction", "sigemptyset", "sigaddset", "sigdelset", "sigprocmask", "ctime", "asctime", "gettimeofday", "clock_gettime", "readv", "writev", "pread", "pwrite", "lockf", "fdatasync", "getuid", "geteuid", "setuid", "getgid", "getegid", "setgid", "gethostname", "sethostname", "getpgrp", "setpgid", "setsid", "sysconf", "pathconf", "fpathconf", "confstr", "getnameinfo", "gethostbyaddr", "sethostent", "endhostent", "setbuf", "setvbuf", "tmpnam", "vprintf", "vfprintf", "vsprintf", "vsnprintf", "fgetc", "fputc", "fputs", NULL};
 
 static const char *ps_cname(Arena *a, const char *name) {
     if (name == NULL) {
@@ -8816,8 +8816,8 @@ static Decl *lower_consts_init(PsLow *L, PsModule *m, int with_body) {
     if (!with_body) {
         return d;
     }
-    Vec_pStmt corpo;
-    Vec_pStmt_init(&corpo);
+    Vec_pStmt body;
+    Vec_pStmt_init(&body);
     size_t j;
     for (j = 0; j < m->ndecls; j += 1) {
         PsDecl *dc = m->decls[j];
@@ -8832,9 +8832,9 @@ static Decl *lower_consts_init(PsLow *L, PsModule *m, int with_body) {
         cs->type = dc->type;
         cs->rhs = dc->init;
         cs->is_global = 1;
-        PsLow_stmt(L, cs, &corpo);
+        PsLow_stmt(L, cs, &body);
     }
-    Vec_pStmt nl = PsLow_nl_flush(L, &corpo);
+    Vec_pStmt nl = PsLow_nl_flush(L, &body);
     L->fr_fn = "<consts>";
     L->fr_file = m->path;
     f->body = PsLow_frame_wrap(L, &nl, NULL, 0, zp);
@@ -10655,20 +10655,20 @@ static Decl *lower_async_step(PsLow *L, PsFunc *f, PsDecl *fd, const char *owner
     return d;
 }
 
-static void dbg_add(PsLow *L, const char *nome, PsType *t) {
-    if (nome == NULL || t == NULL) {
+static void dbg_add(PsLow *L, const char *dbg_name, PsType *t) {
+    if (dbg_name == NULL || t == NULL) {
         return;
     }
     size_t i;
     for (i = 0; i < L->dbg_nm.len; i += 1) {
-        if (strcmp(L->dbg_nm.data[i], nome) == 0) {
+        if (strcmp(L->dbg_nm.data[i], dbg_name) == 0) {
             if (L->dbg_ty.data[i] != NULL && !ps_type_eq(L->dbg_ty.data[i], t)) {
                 L->dbg_ty.data[i] = NULL;
             }
             return;
         }
     }
-    Vec_pchar_push(&L->dbg_nm, (char *)nome);
+    Vec_pchar_push(&L->dbg_nm, (char *)dbg_name);
     Vec_pPsType_push(&L->dbg_ty, t);
 }
 
@@ -10719,13 +10719,13 @@ static void dbg_build(PsLow *L, PsFunc *f) {
     dbg_scan_b(L, f->body);
 }
 
-static PsType *dbg_find(PsLow *L, const char *nome) {
-    if (nome == NULL) {
+static PsType *dbg_find(PsLow *L, const char *dbg_name) {
+    if (dbg_name == NULL) {
         return NULL;
     }
     size_t i;
     for (i = 0; i < L->dbg_nm.len; i += 1) {
-        if (strcmp(L->dbg_nm.data[i], nome) == 0) {
+        if (strcmp(L->dbg_nm.data[i], dbg_name) == 0) {
             return L->dbg_ty.data[i];
         }
     }
@@ -10844,7 +10844,7 @@ static Type *ty_cst(Arena *a, const char *n) {
     return t;
 }
 
-static int tem_tupla(PsType *t, int32_t depth) {
+static int has_tuple(PsType *t, int32_t depth) {
     if (t == NULL || depth > 4) {
         return 0;
     }
@@ -10852,13 +10852,13 @@ static int tem_tupla(PsType *t, int32_t depth) {
         return 1;
     }
     if (t->kind == PT_LIST || t->kind == PT_SET || t->kind == PT_ARRAY) {
-        return tem_tupla(t->inner, depth + 1);
+        return has_tuple(t->inner, depth + 1);
     }
     if (t->kind == PT_DICT) {
-        return tem_tupla(t->key, depth + 1) || tem_tupla(t->inner, depth + 1);
+        return has_tuple(t->key, depth + 1) || has_tuple(t->inner, depth + 1);
     }
     if (t->kind == PT_OPT) {
-        return tem_tupla(t->inner, depth + 1);
+        return has_tuple(t->inner, depth + 1);
     }
     return 0;
 }
@@ -11190,7 +11190,7 @@ static Decl *lower_struct_desc(PsLow *L, PsDecl *d, int has_trace) {
     return lower_struct_desc_x(L, d, has_trace, 0);
 }
 
-static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_campos) {
+static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int with_fields) {
     Decl *v = Arena_alloc(L->a, sizeof(Decl));
     v->kind = DL_VAR;
     v->pos = d->pos;
@@ -11210,7 +11210,7 @@ static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_cam
     } else {
         init->args[1] = ex_new(L->a, EX_NONE, d->pos);
     }
-    if (com_campos && d->nfields > 0) {
+    if (with_fields && d->nfields > 0) {
         Expr *fe = ex_new(L->a, EX_IDENT, d->pos);
         fe->text = Arena_printf(L->a, "%s__fields", ps_cname(L->a, d->name));
         init->args[2] = fe;
@@ -11223,7 +11223,7 @@ static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_cam
         init->args[3] = ty_num(L, 0, d->pos);
         init->args[4] = ex_new(L->a, EX_NONE, d->pos);
     }
-    if (com_campos && PsLow_method_named(L, d, "to_str") != NULL) {
+    if (with_fields && PsLow_method_named(L, d, "to_str") != NULL) {
         Expr *ts = ex_new(L->a, EX_IDENT, d->pos);
         ts->text = Arena_printf(L->a, "%s__tostr", ps_cname(L->a, d->name));
         init->args[5] = ts;

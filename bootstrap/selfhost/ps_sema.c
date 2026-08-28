@@ -4412,13 +4412,13 @@ static PsType *PsSema_check_call(PsSema *self, PsExpr *e) {
             if (cf->params[i].cstr == 2 || cf->params[i].cstr == 3) {
                 if (cf->params[i].cstr == 3) {
                     if (!PsSema_cbuf_ok(self, at4)) {
-                        const char *porque = "";
+                        const char *why = "";
                         if (at4 != NULL && at4->kind == PT_BYTES) {
-                            porque = " — a `bytes` is immutable by contract, and a `CBuf` is the pair that writes";
+                            why = " — a `bytes` is immutable by contract, and a `CBuf` is the pair that writes";
                         } else if (at4 != NULL && at4->kind == PT_LIST) {
-                            porque = " — a `List<u8>` lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is";
+                            why = " — a `List<u8>` lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is";
                         }
-                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBuf`: it takes a `Buffer` or a View<u8> of one, found %s%s (161.2)", cf->params[i].name, ps_type_str(self->a, at4), porque);
+                        fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBuf`: it takes a `Buffer` or a View<u8> of one, found %s%s (161.2)", cf->params[i].name, ps_type_str(self->a, at4), why);
                     }
                 } else if (!PsSema_cbytes_ok(self, at4)) {
                     fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes`, a `Buffer`, a View<u8> or a List<u8>, found %s (84.1/161.3)", cf->params[i].name, ps_type_str(self->a, at4));

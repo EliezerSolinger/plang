@@ -2845,12 +2845,12 @@ struct PsSema:
                         # mutável e não se mexe. A recusa nomeia a razão em vez
                         # de dizer só que não serve.
                         if not self->cbuf_ok(at4):
-                            porque: const *char = ""
+                            why: const *char = ""
                             if at4 != None and at4->kind == PT_BYTES:
-                                porque = " — a `bytes` is immutable by contract, and a `CBuf` is the pair that writes"
+                                why = " — a `bytes` is immutable by contract, and a `CBuf` is the pair that writes"
                             elif at4 != None and at4->kind == PT_LIST:
-                                porque = " — a `List<u8>` lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is"
-                            fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBuf`: it takes a `Buffer` or a View<u8> of one, found %s%s (161.2)", cf->params[i].name, ps_type_str(self->a, at4), porque)
+                                why = " — a `List<u8>` lives in the collected heap and the collector MOVES it; write through it and you write where it no longer is"
+                            fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBuf`: it takes a `Buffer` or a View<u8> of one, found %s%s (161.2)", cf->params[i].name, ps_type_str(self->a, at4), why)
                     elif not self->cbytes_ok(at4):
                         fatal_at(self->file, e->args[i]->pos, "parameter '%s' is a `CBytes`: it takes `bytes`, a `Buffer`, a View<u8> or a List<u8>, found %s (84.1/161.3)", cf->params[i].name, ps_type_str(self->a, at4))
                     e->args[i]->type = at4

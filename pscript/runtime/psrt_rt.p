@@ -218,7 +218,7 @@ def ps_topic_publish(ctx: *PsCtx, name: *PsStr, data: *PsBytes) -> i64:
         return 0
     n: usize = data->len if data != None else usize(0)
     src: const *char = data->data if data != None else None
-    alcancou: i64 = 0
+    reached: i64 = 0
     pthread_mutex_lock(&g_topics_mu)
     defer pthread_mutex_unlock(&g_topics_mu)
     s: *PsTopicSub = g_topics
@@ -229,9 +229,9 @@ def ps_topic_publish(ctx: *PsCtx, name: *PsStr, data: *PsBytes) -> i64:
             ps_msg_push(&d->tp_head, &d->tp_tail, src, n)
             pthread_mutex_unlock(&d->tp_mu)
             ps_pipe_wake(d->tp_w)
-            alcancou += 1
+            reached += 1
         s = s->next
-    return alcancou
+    return reached
 
 private def ps_topic_pop(ctx: *PsCtx) -> *PsMsg:
     pthread_mutex_lock(&ctx->tp_mu)
@@ -2135,7 +2135,7 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
 # NORMAL sob carga — e ele era lido como "a ligação partiu-se". No banco de ensaio
 # eram quatro respostas em dez mil a desaparecer; com respostas maiores, muito
 # mais. Custa um `poll` de espera zero, e só no caminho da falha.
-private def ps_fd_transiente(fd: int, events: i16) -> bool:
+private def ps_fd_transient(fd: int, events: i16) -> bool:
     p: pollfd[1]
     p[0].fd = fd
     p[0].events = events
@@ -2224,7 +2224,7 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             # "not a socket". Using the general one is what lets a terminal BE a
             # socket to everything above this line, which is the whole design.
             got: i64 = i64(read(w->fd, w->dest if w->dest != None else w->buf, w->n))
-            if got < 0 and w->pty == 0 and ps_fd_transiente(w->fd, i16(POLLIN)):
+            if got < 0 and w->pty == 0 and ps_fd_transient(w->fd, i16(POLLIN)):
                 # 148: o mesmo do outro lado. Um `read` que falha num descritor
                 # que ainda não tem nada é "ainda não", e não o fim.
                 w->events = i16(POLLIN)
@@ -2265,10 +2265,10 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             put: i64 = i64(write(w->fd, sb9 + w->off, w->n - w->off))
             if put < 0:
                 # 148: um tampão de envio cheio NÃO é a ligação a partir-se. Ver
-                # `ps_fd_transiente` — sem esta distinção, uma escrita sob carga
+                # `ps_fd_transient` — sem esta distinção, uma escrita sob carga
                 # matava a conexão, e no banco de ensaio eram quatro respostas em
                 # dez mil a desaparecer sem explicação.
-                if ps_fd_transiente(w->fd, i16(POLLOUT)):
+                if ps_fd_transient(w->fd, i16(POLLOUT)):
                     w->events = i16(POLLOUT)
                     return False
                 w->err = 1
@@ -3788,7 +3788,7 @@ const if defined(PSRT_TLS):
     private g_ssl_srv: *SSL_CTX = None
     private g_ssl_srv_ready: i32 = 0
 
-    private def ps_tls_server_ctx(ctx: *PsCtx, cert: const *char, chave: const *char, file: const *char, line: i32) -> *SSL_CTX:
+    private def ps_tls_server_ctx(ctx: *PsCtx, cert: const *char, key: const *char, file: const *char, line: i32) -> *SSL_CTX:
         if g_ssl_srv_ready != 0:
             return g_ssl_srv
         g_ssl_srv_ready = 1
@@ -3808,7 +3808,7 @@ const if defined(PSRT_TLS):
             g_ssl_srv_ready = 0
             ps_raise(ctx, msg, PS_CAT_IO, file, line)
             return None
-        if SSL_CTX_use_PrivateKey_file(sc, chave, SSL_FILETYPE_PEM) != 1:
+        if SSL_CTX_use_PrivateKey_file(sc, key, SSL_FILETYPE_PEM) != 1:
             ps_tls_msg(msg, usize(512), "tls: the private key could not be read")
             SSL_CTX_free(sc)
             g_ssl_srv_ready = 0
@@ -3826,8 +3826,8 @@ const if defined(PSRT_TLS):
         g_ssl_srv = sc
         return sc
 
-    def ps_tls_serve_begin(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> bool:
-        sc: *SSL_CTX = ps_tls_server_ctx(ctx, cert->data, chave->data, file, line)
+    def ps_tls_serve_begin(ctx: *PsCtx, c: *PsConn, cert: *PsStr, key: *PsStr, file: const *char, line: i32) -> bool:
+        sc: *SSL_CTX = ps_tls_server_ctx(ctx, cert->data, key->data, file, line)
         if sc == None:
             return False
         ssl: *SSL = SSL_new(sc)
@@ -3919,7 +3919,7 @@ else:
         ps_raise(ctx, "tls: this runtime was built without TLS — rebuild it with `-D PSRT_TLS` and link `-lssl -lcrypto`", PS_CAT_IO, file, line)
         return False
 
-    def ps_tls_serve_begin(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> bool:
+    def ps_tls_serve_begin(ctx: *PsCtx, c: *PsConn, cert: *PsStr, key: *PsStr, file: const *char, line: i32) -> bool:
         ps_raise(ctx, "tls: this runtime was built without TLS — rebuild it with `-D PSRT_TLS` and link `-lssl -lcrypto`", PS_CAT_IO, file, line)
         return False
 
@@ -3967,13 +3967,13 @@ def ps_net_starttls(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: c
 # 148/L3/D8: o `starttls` do lado de QUEM SERVE. O socket ja esta aceito; isto
 # poe-lhe o TLS por cima, e o aperto de mao e polido no mesmo `ps_fd_try` que o do
 # cliente — nao ha maquinaria nova.
-def ps_net_serve_tls(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> *PsTask:
+def ps_net_serve_tls(ctx: *PsCtx, c: *PsConn, cert: *PsStr, key: *PsStr, file: const *char, line: i32) -> *PsTask:
     if not ps_conn_live(ctx, c, "serve_tls"):
         return ps_task_of_int(ctx, 0)
     if c->ssl != None:
         ps_raise(ctx, "serve_tls: this connection is already TLS", PS_CAT_VALUE, file, line)
         return ps_task_of_int(ctx, 0)
-    if not ps_tls_serve_begin(ctx, c, cert, chave, file, line):
+    if not ps_tls_serve_begin(ctx, c, cert, key, file, line):
         return ps_task_of_int(ctx, 0)
     w: *PsWork = ps_work_new(PS_IO_TLS)
     w->want = PS_W_TRUE
@@ -4397,6 +4397,21 @@ def ps_task_cancel(ctx: *PsCtx, t: *PsTask):
     if t == None or ps_task_done(t):
         return
     t->cancelled = 1
+    # UM TEMPORIZADOR cancelado DIRECTAMENTE retira-se do relógio aqui, e este
+    # caso faltava. O ramo mais abaixo trata o temporizador em que OUTRA tarefa
+    # está parada; um temporizador que é ele próprio o alvo do cancelamento não
+    # tem `waiting_on` nem `waiter`, portanto ficava com `state == 0` na lista do
+    # relógio — o `ps_timer_soonest` continuava a devolver o prazo dele e o laço
+    # de eventos não acabava antes da hora.
+    #
+    # Quem o encontrou foi o `ps_timeout`: ele planta um temporizador para limitar
+    # a espera e, quando a tarefa ganha, cancela-o. O cancelamento não fazia nada,
+    # e o efeito num servidor HTTP com `idle_timeout` de trinta segundos era que
+    # cada pedido deixava trinta segundos de relógio atrás de si.
+    if t->is_timer != 0 and t->state == 0:
+        t->state = -1
+        t->waiter = None
+        return
     # it has to be REACHABLE by the scheduler to notice: a task parked on
     # another one is woken so its own next step can raise
     if t->waiting_on != None:
@@ -4466,24 +4481,43 @@ def ps_race(ctx: *PsCtx, ts: *PsList) -> i64:
 def ps_timeout(ctx: *PsCtx, t: *PsTask, seconds: f64) -> bool:
     deadline: f64 = ps_sys_monotonic() + seconds
     # its own deadline joins the clock, so the scheduler never sleeps PAST it
-    ps_timer_task(ctx, deadline)
-    slots: **PsObj[1]
+    clk: *PsTask = ps_timer_task(ctx, deadline)
+    # BOTH are roots: this drives the scheduler, the scheduler runs somebody
+    # else's step, that step allocates, and everything held across it moves
+    slots: **PsObj[2]
     slots[0] = (**PsObj)(&t)
+    slots[1] = (**PsObj)(&clk)
     f: PsFrame
-    ps_push_frame(ctx, &f, slots, 1)
+    ps_push_frame(ctx, &f, slots, 2)
     while not ps_task_done(t):
         if ps_sys_monotonic() >= deadline:
             ps_pop_frame(ctx, &f)
+            ps_task_cancel(ctx, clk)
             ps_task_cancel(ctx, t)
             return False
         if not ps_sched_progress(ctx):
             ps_pop_frame(ctx, &f)
+            ps_task_cancel(ctx, clk)
             ps_task_cancel(ctx, t)
             return False           # nothing left to run: the clock wins
         if ctx->exc != None:
             ps_pop_frame(ctx, &f)
+            ps_task_cancel(ctx, clk)
             return True
     ps_pop_frame(ctx, &f)
+    # O RELÓGIO SAI COM A CORRIDA, e esquecê-lo era um defeito grave: o
+    # `ps_timer_task` acima devolve a tarefa e a primeira versão disto descartava
+    # o valor. O temporizador ficava PARADO no escalonador até ao prazo, e a
+    # partir daí qualquer sítio que precisasse de esgotar o contexto esperava por
+    # ele — o programa dava a resposta certa e só terminava `seconds` depois.
+    #
+    # O `ps_race`, ao lado, sempre cancelou os perdedores. Aqui o perdedor é o
+    # relógio, e ele não estava em lista nenhuma para alguém se lembrar dele.
+    #
+    # Foi um `idle_timeout` de trinta segundos num servidor HTTP que o encontrou:
+    # cada pedido plantava um temporizador de trinta segundos, e o worker deixava
+    # de responder ao seguinte.
+    ps_task_cancel(ctx, clk)
     if t->err != None and ctx->exc == None:
         ctx->exc = t->err
     return True

@@ -297,7 +297,7 @@ def ps_net_starttls(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: c
 # 148/L3/D8: o irmão do lado de QUEM SERVE. A assimetria é real: um cliente
 # CONFERE uma cadeia que vem do sistema, e um servidor APRESENTA um certificado e
 # uma chave que vêm de dois ficheiros.
-def ps_net_serve_tls(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> *PsTask
+def ps_net_serve_tls(ctx: *PsCtx, c: *PsConn, cert: *PsStr, key: *PsStr, file: const *char, line: i32) -> *PsTask
 def ps_net_tls_available(ctx: *PsCtx) -> bool
 def ps_tls_begin(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: const *char, line: i32) -> bool
 def ps_tls_step(w: *PsWork) -> i32

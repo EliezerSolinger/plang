@@ -75,11 +75,11 @@ private def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char
 private def sh_ref(L: *PsLow, name: const *char, pos: Pos) -> *Expr
 private def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr
 private def lower_struct_walk(L: *PsLow, d: *PsDecl, writing: bool, with_body: bool) -> *Decl
-private def tem_tupla(t: *PsType, depth: i32) -> bool
+private def has_tuple(t: *PsType, depth: i32) -> bool
 private def ty_cst(a: *Arena, n: const *char) -> *Type
 private def dbg_build(L: *PsLow, f: *PsFunc)
-private def dbg_find(L: *PsLow, nome: const *char) -> *PsType
-private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_campos: bool) -> *Decl
+private def dbg_find(L: *PsLow, dbg_name: const *char) -> *PsType
+private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, with_fields: bool) -> *Decl
 private def lower_struct_fields(L: *PsLow, d: *PsDecl) -> *Decl
 private def lower_struct_at(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl
 private def lower_struct_tostr(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl
@@ -331,7 +331,7 @@ struct PsLow:
     private def decl_named(self: *PsLow, name: const *char) -> *PsDecl
     private def method_named(self: *PsLow, d: *PsDecl, name: const *char) -> *PsFunc
     private def repr_of(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
-    private def repr_of_gerado(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
+    private def repr_of_generated(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     private def repr_container(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr
     private def repr_value(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr
     private def zero_of(self: *PsLow, t: *Type, pos: Pos) -> *Expr
@@ -1091,7 +1091,7 @@ struct PsLow:
         self->raised = True
         return rc
 
-    private def repr_of_gerado(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
+    private def repr_of_generated(self: *PsLow, v: *Expr, t: *PsType, pos: Pos, depth: i32) -> *Expr:
         d: *PsDecl = self->decl_named(t->name)
         um: *PsFunc = self->method_named(d, "to_str")
         if um != None:
@@ -1138,7 +1138,7 @@ struct PsLow:
         # elemento; agora o runtime recebe o TIPO como dado e não precisa que
         # ninguém lhe escreva uma função. `List<List<int>>` deixou de precisar de
         # duas.
-        if (t->kind == PT_LIST or t->kind == PT_SET or t->kind == PT_DICT) and not tem_tupla(t, 0):
+        if (t->kind == PT_LIST or t->kind == PT_SET or t->kind == PT_DICT) and not has_tuple(t, 0):
             c0: *Expr = self->call_rt("ps_repr_val", pos)
             self->push_arg(c0, self->ctx_arg(pos))
             self->push_arg(c0, v)
@@ -5440,7 +5440,7 @@ struct PsLow:
     # ordinary case emits nothing extra.
     # O par de `value_first` para um valor JÁ baixado: quem chama mediu por si
     # se a baixa alocou (o `x += e` de um campo, que constrói a soma antes de
-    # saber onde ela vai). Ver o comentário do `campo` na atribuição (118).
+    # saber onde ela vai). Ver o comentário do `is_field` na atribuição (118).
     private def spill(self: *PsLow, v: *Expr, t: *PsType, pos: Pos) -> *Expr:
         n: const *char = self->a->printf("__st%d", self->tmp_ctr)
         self->tmp_ctr += 1
@@ -5470,7 +5470,7 @@ struct PsLow:
         # Em ambos os casos a regra é a mesma: o slot de destino só se pede
         # depois de o valor existir.
         moved: bool = self->allocs or self->raised
-        pode_levantar: bool = self->raised
+        can_raise: bool = self->raised
         self->allocs = prev or self->allocs
         self->raised = prevr or self->raised
         if not moved:
@@ -5482,7 +5482,7 @@ struct PsLow:
         d->type = self->ty(want) if want != None else self->ty(e->type)
         d->init = v
         self->pre.push(d)
-        if pode_levantar:
+        if can_raise:
             self->pre_raise = True
             # ... e o GUARDA logo a seguir. Tirar o valor para fora não bastava:
             # o teste de exceção sai no fim da instrução (49.2), então o destino
@@ -6779,10 +6779,10 @@ struct PsLow:
         for i in range(self->pre.len):
             out->push(self->pre.data[i])
         self->pre = outer
-        guardado: bool = self->pre_raise and self->try_flag != None
+        guarded: bool = self->pre_raise and self->try_flag != None
         self->pre_raise = prev_pr
         for i in range(inner.len):
-            out->push(self->wrap_if(self->try_flag, inner.data[i], s->pos) if guardado else inner.data[i])
+            out->push(self->wrap_if(self->try_flag, inner.data[i], s->pos) if guarded else inner.data[i])
         # The SAFE POINT. Collection happens only here, between statements,
         # where no C temporary holds a reference the shadow stack does not know
         # about. Emitted only after a statement that could allocate, so a loop
@@ -7137,9 +7137,9 @@ struct PsLow:
                 # com 0, e que `hash_str` devolveu zero de dentro de um `await`.
                 # `for x in xs` e as declarações já passavam por aqui; a
                 # ATRIBUIÇÃO a um nome não passava.
-                campo: bool = s->lhs->kind != PE_NAME or (not s->is_global and self->in_frame(s->lhs->text))
+                is_field: bool = s->lhs->kind != PE_NAME or (not s->is_global and self->in_frame(s->lhs->text))
                 av: *Expr = None
-                if s->op == TK_ASSIGN and campo:
+                if s->op == TK_ASSIGN and is_field:
                     av = self->value_first(s->rhs, s->lhs->type, s->pos)
                 a2: *Stmt = st_new(self->a, ST_ASSIGN, s->pos)
                 a2->lhs = self->expr(s->lhs)
@@ -7174,7 +7174,7 @@ struct PsLow:
                     bv8: *Expr = self->binary(tmp)
                     mv8: bool = self->allocs
                     self->allocs = prev8 or mv8
-                    a2->rhs = self->spill(bv8, s->lhs->type, s->pos) if campo and mv8 else bv8
+                    a2->rhs = self->spill(bv8, s->lhs->type, s->pos) if is_field and mv8 else bv8
                 out->push(a2)
             case PS_RETURN:
                 # In a step function (50.1) `return` does not leave a C
@@ -8491,7 +8491,34 @@ private const PS_TAKEN: const *char[] = {
     "gmtime", "localtime", "mktime", "strftime", "difftime", "nanosleep",
     "random", "srandom", "strdup", "strndup", "strsep", "bzero", "bcopy",
     "getline", "popen", "pclose", "tmpfile", "basename", "dirname",
-    "regcomp", "regexec", "regfree", "regerror", None}
+    "regcomp", "regexec", "regfree", "regerror",
+    # 155: E A SEGUNDA LEVA, pelo mesmo critério e pela mesma razão.
+    #
+    # Um `def revoke(chave, token)` numa biblioteca de sessões nascia com o nome
+    # `revoke` e ERA o `revoke(2)` do `<unistd.h>` a partir daí. O erro que saía
+    # falava de "conflicting types for 'revoke'" — legível, mas a apontar para o
+    # C emitido e não para a linha que o programador escreveu.
+    #
+    # O que se acrescenta são os nomes que os cabeçalhos incluídos declaram E que
+    # um programa plausivelmente escolheria: `revoke`, `daemon`, `link`, `crypt`.
+    # Um `strncmp` aqui não é para proteger ninguém de o escrever — é para a lista
+    # ser do que os cabeçalhos têm, e não do que alguém se lembrou.
+    "revoke", "daemon", "crypt", "encrypt", "swab", "brk", "sbrk", "vfork",
+    "chroot", "ttyname", "getpass", "realpath", "atexit", "setenv", "unsetenv",
+    "putenv", "perror", "rewind", "feof", "ferror", "clearerr", "fileno",
+    "getc", "putc", "ungetc", "scanf", "sscanf", "fscanf", "strerror",
+    "memchr", "strrchr", "strncmp", "strncpy", "strncat", "strspn", "strcspn",
+    "strpbrk", "strcoll", "strxfrm", "atol", "atoll", "strtol", "strtoul",
+    "strtod", "mkstemp", "mkdtemp", "opendir", "readdir", "closedir",
+    "rewinddir", "scandir", "telldir", "seekdir", "dirfd",
+    "sigaction", "sigemptyset", "sigaddset", "sigdelset", "sigprocmask",
+    "ctime", "asctime", "gettimeofday", "clock_gettime", "readv", "writev",
+    "pread", "pwrite", "lockf", "fdatasync", "getuid", "geteuid", "setuid",
+    "getgid", "getegid", "setgid", "gethostname", "sethostname", "getpgrp",
+    "setpgid", "setsid", "sysconf", "pathconf", "fpathconf", "confstr",
+    "getnameinfo", "gethostbyaddr", "sethostent", "endhostent",
+    "setbuf", "setvbuf", "tmpnam", "vprintf", "vfprintf", "vsprintf",
+    "vsnprintf", "fgetc", "fputc", "fputs", None}
 
 private def ps_cname(a: *Arena, name: const *char) -> const *char:
     if name == None:
@@ -8800,8 +8827,8 @@ private def lower_consts_init(L: *PsLow, m: *PsModule, with_body: bool) -> *Decl
     d->func = f
     if not with_body:
         return d
-    corpo: Vec<*Stmt>
-    corpo.init()
+    body: Vec<*Stmt>
+    body.init()
     # em ordem de DECLARAÇÃO: o inicializador de um `const` pode olhar para os
     # que vieram antes dele, que é a mesma regra que P tem para um `static`
     for j in range(m->ndecls):
@@ -8815,8 +8842,8 @@ private def lower_consts_init(L: *PsLow, m: *PsModule, with_body: bool) -> *Decl
         cs->type = dc->type
         cs->rhs = dc->init
         cs->is_global = True
-        L->stmt(cs, &corpo)
-    nl: Vec<*Stmt> = L->nl_flush(&corpo)
+        L->stmt(cs, &body)
+    nl: Vec<*Stmt> = L->nl_flush(&body)
     # a moldura da pilha-sombra: estas instruções ALOCAM, e o coletor precisa de
     # ver as referências vivas — é o mesmo tratamento que o corpo do `main` tem
     L->fr_fn = "<consts>"
@@ -10656,15 +10683,15 @@ private def lower_async_step(L: *PsLow, f: *PsFunc, fd: *PsDecl, owner: const *c
 # Um nome declarado DUAS VEZES com tipos diferentes (dois blocos, dois `for`)
 # fica de fora: imprimir um valor com o tipo errado é pior do que não o
 # imprimir, e é o único caso em que a correspondência por nome erra.
-private def dbg_add(L: *PsLow, nome: const *char, t: *PsType):
-    if nome == None or t == None:
+private def dbg_add(L: *PsLow, dbg_name: const *char, t: *PsType):
+    if dbg_name == None or t == None:
         return
     for i in range(L->dbg_nm.len):
-        if strcmp(L->dbg_nm.data[i], nome) == 0:
+        if strcmp(L->dbg_nm.data[i], dbg_name) == 0:
             if L->dbg_ty.data[i] != None and not ps_type_eq(L->dbg_ty.data[i], t):
                 L->dbg_ty.data[i] = None      # ambíguo: fica de fora
             return
-    L->dbg_nm.push((*char)(nome))
+    L->dbg_nm.push((*char)(dbg_name))
     L->dbg_ty.push(t)
 
 private def dbg_scan_b(L: *PsLow, b: *PsBlock)
@@ -10701,11 +10728,11 @@ private def dbg_build(L: *PsLow, f: *PsFunc):
         dbg_add(L, f->params[i].name, f->params[i].type)
     dbg_scan_b(L, f->body)
 
-private def dbg_find(L: *PsLow, nome: const *char) -> *PsType:
-    if nome == None:
+private def dbg_find(L: *PsLow, dbg_name: const *char) -> *PsType:
+    if dbg_name == None:
         return None
     for i in range(L->dbg_nm.len):
-        if strcmp(L->dbg_nm.data[i], nome) == 0:
+        if strcmp(L->dbg_nm.data[i], dbg_name) == 0:
             return L->dbg_ty.data[i]
     return None
 
@@ -10847,17 +10874,17 @@ private def ty_cst(a: *Arena, n: const *char) -> *Type:
 # outra forma, que a tabela ainda não sabe distinguir. Enquanto não souber, um
 # contentor com tuplas lá dentro continua pelo adaptador gerado. É a única coisa
 # que ainda o usa, e está dito aqui em vez de descoberto por alguém.
-private def tem_tupla(t: *PsType, depth: i32) -> bool:
+private def has_tuple(t: *PsType, depth: i32) -> bool:
     if t == None or depth > 4:
         return False
     if t->kind == PT_TUPLE:
         return True
     if t->kind == PT_LIST or t->kind == PT_SET or t->kind == PT_ARRAY:
-        return tem_tupla(t->inner, depth + 1)
+        return has_tuple(t->inner, depth + 1)
     if t->kind == PT_DICT:
-        return tem_tupla(t->key, depth + 1) or tem_tupla(t->inner, depth + 1)
+        return has_tuple(t->key, depth + 1) or has_tuple(t->inner, depth + 1)
     if t->kind == PT_OPT:
-        return tem_tupla(t->inner, depth + 1)
+        return has_tuple(t->inner, depth + 1)
     return False
 
 # os números são os do `PsTyKind` do runtime, na ordem em que estão lá
@@ -11168,7 +11195,7 @@ private def lower_struct_at(L: *PsLow, d: *PsDecl, with_body: bool) -> *Decl:
 private def lower_struct_desc(L: *PsLow, d: *PsDecl, has_trace: bool) -> *Decl:
     return lower_struct_desc_x(L, d, has_trace, False)
 
-private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_campos: bool) -> *Decl:
+private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, with_fields: bool) -> *Decl:
     v: *Decl = L->a->alloc(sizeof(Decl))
     v->kind = DL_VAR
     v->pos = d->pos
@@ -11196,7 +11223,7 @@ private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_camp
     # a tabela de campos (F5) só vai nos tipos DO PROGRAMA. Um ambiente de lambda
     # e uma moldura de `async` são maquinaria: ninguém lhes pede o `repr`, e
     # descrevê-los seria pagar bytes por dado que nunca é lido.
-    if com_campos and d->nfields > 0:
+    if with_fields and d->nfields > 0:
         fe: *Expr = ex_new(L->a, EX_IDENT, d->pos)
         fe->text = L->a->printf("%s__fields", ps_cname(L->a, d->name))
         init->args[2] = fe
@@ -11208,7 +11235,7 @@ private def lower_struct_desc_x(L: *PsLow, d: *PsDecl, has_trace: bool, com_camp
         init->args[2] = ex_new(L->a, EX_NONE, d->pos)
         init->args[3] = ty_num(L, 0, d->pos)
         init->args[4] = ex_new(L->a, EX_NONE, d->pos)
-    if com_campos and L->method_named(d, "to_str") != None:
+    if with_fields and L->method_named(d, "to_str") != None:
         ts: *Expr = ex_new(L->a, EX_IDENT, d->pos)
         ts->text = L->a->printf("%s__tostr", ps_cname(L->a, d->name))
         init->args[5] = ts

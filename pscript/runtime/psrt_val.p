@@ -3333,23 +3333,23 @@ def ps_report_exc(ctx: *PsCtx) -> int:
         for j in range(e->tr_nsl[i]):
             if nv >= 192:
                 break
-            nome: const *char = e->tr_name[nv]
+            name: const *char = e->tr_name[nv]
             ty: const *PsTy = e->tr_ty[nv]
             v: *PsObj = e->tr_val[nv]
             nv += 1
-            if nome == None:
+            if name == None:
                 continue
             if v == None:
-                fprintf(stderr, "      %s = None\n", nome)
+                fprintf(stderr, "      %s = None\n", name)
                 continue
             r: *PsStr = ps_repr_val(ctx, (*void)(v), ty, 1)
             if ps_has_exc(ctx):
                 # o repr de um valor não pode enterrar o erro que se está a
                 # relatar: se ele próprio falhar, diz-se isso e segue-se
                 ps_take_exc(ctx)
-                fprintf(stderr, "      %s = <não se deixou imprimir>\n", nome)
+                fprintf(stderr, "      %s = <não se deixou imprimir>\n", name)
                 continue
-            fprintf(stderr, "      %s = %s\n", nome, r->data)
+            fprintf(stderr, "      %s = %s\n", name, r->data)
     if e->tr_lost > 0:
         fprintf(stderr, "  ... and %d more\n", e->tr_lost)
     return 1
@@ -3971,25 +3971,25 @@ private def ps_json_esc(ref b: PsRepr, s: *PsStr):
         i += usize(1)
     ps_repr_put(ref b, "\"", usize(1))
 
-private def ps_json_bad(ctx: *PsCtx, what: const *char, caminho: const *char):
+private def ps_json_bad(ctx: *PsCtx, what: const *char, path: const *char):
     m: *PsStr = ps_str_new(ctx, "json.stringify: ", usize(16))
     m = ps_str_concat(ctx, m, ps_str_new(ctx, what, strlen(what)))
     # o CAMINHO é a metade útil da mensagem: num documento de trezentas linhas,
     # "isto não atravessa" sem dizer onde não serve para nada. Na raiz não há
     # caminho a dizer, e a mensagem acaba antes de o prometer.
-    if caminho != None and caminho[0] != '\0':
+    if path != None and path[0] != '\0':
         m = ps_str_concat(ctx, m, ps_str_new(ctx, " em ", usize(4)))
-        m = ps_str_concat(ctx, m, ps_str_new(ctx, caminho, strlen(caminho)))
+        m = ps_str_concat(ctx, m, ps_str_new(ctx, path, strlen(path)))
     ps_raise_str(ctx, m, i64(PS_CAT_VALUE), "json", 0)
 
-private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, caminho: const *char, depth: i32)
-private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, caminho: const *char, depth: i32)
+private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, path: const *char, depth: i32)
+private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, path: const *char, depth: i32)
 
-private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *char, depth: i32)
+private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, path: const *char, depth: i32)
 
-private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, caminho: const *char, depth: i32):
+private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, path: const *char, depth: i32):
     if ty == None:
-        ps_json_bad(ctx, "tipo desconhecido", caminho)
+        ps_json_bad(ctx, "tipo desconhecido", path)
         return
     k: i32 = ty->kind
     if k == 11:
@@ -3997,7 +3997,7 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
         # exactamente a lista de formas do JSON — número, texto, bool, None,
         # `List<any>` e `Dict<str, any>` —, portanto isto fecha sem inventar
         # nada. O `PsTy` estático não sabe; o VALOR sabe.
-        ps_json_any(ctx, ref b, (*PsObj)(o), caminho, depth)
+        ps_json_any(ctx, ref b, (*PsObj)(o), path, depth)
         return
     if k == 4:
         if o == None:
@@ -4018,7 +4018,7 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
                 if i > 0:
                     ps_repr_put(ref b, ",", usize(1))
                 sub: char[64]
-                snprintf(sub, usize(64), "%s[%d]", caminho, int(i))
+                snprintf(sub, usize(64), "%s[%d]", path, int(i))
                 ps_json_ty(ctx, ref b, (*void)(base + usize(i) * es), ty->inner, sub, depth + 1)
                 if ps_has_exc(ctx):
                     return
@@ -4038,7 +4038,7 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
                     ps_repr_put(ref b, ",", usize(1))
                 n += 1
                 sub2: char[64]
-                snprintf(sub2, usize(64), "%s[]", caminho)
+                snprintf(sub2, usize(64), "%s[]", path)
                 ps_json_ty(ctx, ref b, kp, ty->inner, sub2, depth + 1)
                 if ps_has_exc(ctx):
                     return
@@ -4050,7 +4050,7 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
             ps_repr_put(ref b, "{}", usize(2))
             return
         if ty->key == None or ty->key->kind != 4:
-            ps_json_bad(ctx, "um objeto JSON só tem chaves de texto", caminho)
+            ps_json_bad(ctx, "um objeto JSON só tem chaves de texto", path)
             return
         d3: *PsDict = (*PsDict)(o)
         ps_repr_put(ref b, "{", usize(1))
@@ -4066,12 +4066,12 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
             n2 += 1
             ks: *PsStr = *(**PsStr)(kp2)
             if ks == None:
-                ps_json_bad(ctx, "uma chave vazia", caminho)
+                ps_json_bad(ctx, "uma chave vazia", path)
                 return
             ps_json_esc(ref b, ks)
             ps_repr_put(ref b, ":", usize(1))
             sub3: char[128]
-            snprintf(sub3, usize(128), "%s.%.*s", caminho, int(ks->len), ks->data)
+            snprintf(sub3, usize(128), "%s.%.*s", path, int(ks->len), ks->data)
             ps_json_ty(ctx, ref b, (*void)(ps_dict_val_at(d3, i3)), ty->inner, sub3, depth + 1)
             if ps_has_exc(ctx):
                 return
@@ -4083,16 +4083,16 @@ private def ps_json_val(ctx: *PsCtx, ref b: PsRepr, o: *void, ty: const *PsTy, c
             ps_repr_put(ref b, "null", usize(4))
             return
         u: *PsUser = (*PsUser)(o)
-        ps_json_desc(ctx, ref b, o, u->desc if u->desc != None else ty->desc, caminho, depth)
+        ps_json_desc(ctx, ref b, o, u->desc if u->desc != None else ty->desc, path, depth)
         return
-    ps_json_ty(ctx, ref b, o, ty, caminho, depth)
+    ps_json_ty(ctx, ref b, o, ty, path, depth)
 
-private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *char, depth: i32):
+private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, path: const *char, depth: i32):
     if o == None:
         ps_repr_put(ref b, "null", usize(4))
         return
     if depth > 32:
-        ps_json_bad(ctx, "aninhamento demasiado fundo", caminho)
+        ps_json_bad(ctx, "aninhamento demasiado fundo", path)
         return
     match o->ty:
         case PS_TY_ANY:
@@ -4103,7 +4103,7 @@ private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *c
                 ps_repr_put(ref b, num, strlen(num))
             elif a->kind == PS_ANY_FLOAT:
                 if a->f != a->f or a->f > 1.0e308 or a->f < -1.0e308:
-                    ps_json_bad(ctx, "JSON não tem NaN nem infinito", caminho)
+                    ps_json_bad(ctx, "JSON não tem NaN nem infinito", path)
                     return
                 fs: *PsStr = ps_str_from_float(ctx, a->f)
                 ps_repr_put(ref b, fs->data, usize(fs->len))
@@ -4124,7 +4124,7 @@ private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *c
                 if i > 0:
                     ps_repr_put(ref b, ",", usize(1))
                 sub: char[64]
-                snprintf(sub, usize(64), "%s[%d]", caminho, int(i))
+                snprintf(sub, usize(64), "%s[%d]", path, int(i))
                 ps_json_any(ctx, ref b, base[i], sub, depth + 1)
                 if ps_has_exc(ctx):
                     return
@@ -4141,22 +4141,22 @@ private def ps_json_any(ctx: *PsCtx, ref b: PsRepr, o: *PsObj, caminho: const *c
                 ps_repr_put(ref b, ":", usize(1))
                 vp: **PsObj = (**PsObj)(ps_dict_val_at(d, i64(i)))
                 sub2: char[64]
-                snprintf(sub2, usize(64), "%s.%d", caminho, int(i))
+                snprintf(sub2, usize(64), "%s.%d", path, int(i))
                 ps_json_any(ctx, ref b, *vp, sub2, depth + 1)
                 if ps_has_exc(ctx):
                     return
             ps_repr_put(ref b, "}", usize(1))
         case _:
-            ps_json_bad(ctx, "um `any` que guarda algo que o JSON não tem", caminho)
+            ps_json_bad(ctx, "um `any` que guarda algo que o JSON não tem", path)
 
-private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, caminho: const *char, depth: i32):
+private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, path: const *char, depth: i32):
     if ty == None or p == None:
-        ps_json_bad(ctx, "tipo desconhecido", caminho)
+        ps_json_bad(ctx, "tipo desconhecido", path)
         return
     if depth > 64:
         # 64 níveis não é um limite de gosto: é o que separa "aninhado" de "um
         # ciclo", e um ciclo tem de parar com o CAMINHO onde parou
-        ps_json_bad(ctx, "fundo demais (um ciclo?)", caminho)
+        ps_json_bad(ctx, "fundo demais (um ciclo?)", path)
         return
     k: i32 = ty->kind
     if k == 1:
@@ -4170,7 +4170,7 @@ private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, ca
     if k == 2:
         v: f64 = f64(*(*f32)(p)) if ty->width == 32 else *(*f64)(p)
         if v != v or v > 1.0e308 or v < -1.0e308:
-            ps_json_bad(ctx, "JSON não tem NaN nem infinito", caminho)
+            ps_json_bad(ctx, "JSON não tem NaN nem infinito", path)
             return
         fs: *PsStr = ps_str_from_float(ctx, v)
         ps_repr_put(ref b, fs->data, usize(fs->len))
@@ -4182,7 +4182,7 @@ private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, ca
             ps_repr_put(ref b, "false", usize(5))
         return
     if k == 8:
-        ps_json_desc(ctx, ref b, p, ty->desc, caminho, depth)
+        ps_json_desc(ctx, ref b, p, ty->desc, path, depth)
         return
     if k == 10:
         # o NOME da variante, não o número: o número é uma escolha de
@@ -4192,10 +4192,10 @@ private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, ca
             nm: *PsStr = ps_str_new(ctx, ty->names[ev], strlen(ty->names[ev]))
             ps_json_esc(ref b, nm)
             return
-        ps_json_bad(ctx, "um enum fora das variantes que tem", caminho)
+        ps_json_bad(ctx, "um enum fora das variantes que tem", path)
         return
     if k == 4 or k == 5 or k == 6 or k == 7 or k == 9:
-        ps_json_val(ctx, ref b, *(**void)(p), ty, caminho, depth)
+        ps_json_val(ctx, ref b, *(**void)(p), ty, path, depth)
         return
     if k == 11:
         # 148: um `any` DECLARADO. O caminho por dentro de um `any` já existia —
@@ -4204,7 +4204,7 @@ private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, ca
         # resposta era a recusa. Portanto `Dict<str, any>`, que é a forma exacta
         # de um objecto JSON e a que sai de um `json.parse`, não voltava a
         # atravessar para texto. Um `stringify(parse(x))` não fechava o círculo.
-        ps_json_any(ctx, ref b, *(**PsObj)(p), caminho, depth)
+        ps_json_any(ctx, ref b, *(**PsObj)(p), path, depth)
         return
     if k == 12:
         # 148: `T?` — o vazio é `null`, que é a palavra que o JSON tem para isso.
@@ -4213,18 +4213,18 @@ private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, ca
             if *(**void)(p) == None:
                 ps_repr_put(ref b, "null", usize(4))
                 return
-            ps_json_ty(ctx, ref b, p, ty->inner, caminho, depth)
+            ps_json_ty(ctx, ref b, p, ty->inner, path, depth)
             return
         if *(*i64)(p) == 0:
             ps_repr_put(ref b, "null", usize(4))
             return
-        ps_json_ty(ctx, ref b, (*void)((*u8)(p) + usize(8)), ty->inner, caminho, depth)
+        ps_json_ty(ctx, ref b, (*void)((*u8)(p) + usize(8)), ty->inner, path, depth)
         return
-    ps_json_bad(ctx, "isto não atravessa (uma função?)", caminho)
+    ps_json_bad(ctx, "isto não atravessa (uma função?)", path)
 
-private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, caminho: const *char, depth: i32):
+private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, path: const *char, depth: i32):
     if d == None or d->fields == None or d->at == None:
-        ps_json_bad(ctx, "um tipo sem campos declarados", caminho)
+        ps_json_bad(ctx, "um tipo sem campos declarados", path)
         return
     ps_repr_put(ref b, "{", usize(1))
     for i in range(d->nfields):
@@ -4235,7 +4235,7 @@ private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc,
         ps_json_esc(ref b, ns)
         ps_repr_put(ref b, ":", usize(1))
         sub: char[128]
-        snprintf(sub, usize(128), "%s.%s", caminho, fn)
+        snprintf(sub, usize(128), "%s.%s", path, fn)
         ps_json_ty(ctx, ref b, d->at(o, i), d->fields[i].ty, sub, depth + 1)
         if ps_has_exc(ctx):
             return
