@@ -4,6 +4,18 @@
 > tomadas pelo dono, uma a uma. O que está escrito aqui não se repropõe — a forma
 > do DESIGN.md.
 
+## A régua: é uma BIBLIOTECA, e o jogo é um utilizador dela
+
+> Correção do dono, a meio do desenho, e ela reordena tudo o que vem abaixo:
+> **"não pense no jogo primeiramente — pense na lib. E se está a falar da lib,
+> faça o que a melhor lib das linguagens faz."**
+
+Os primeiros números deste documento vinham do caso do Desbravacraft. Foram
+refeitos a partir das referências, LIDAS e não recordadas: o `websockets` do
+Python (a fonte está em `ref/websockets-17.1`), o nginx, o `net/http` do Go, o
+Bun. Onde uma escolha nossa divergir de todas elas, tem de haver uma razão
+escrita — e o jogo não é razão suficiente.
+
 ## Por que, e por que agora
 
 O Bun tem um webserver embutido; nós não temos. Mas a razão para construir um não
@@ -255,6 +267,77 @@ O programa principal aloca o `shared Buffer` do mundo ANTES de subir os workers 
 passa-o como argumento do `spawn` — um Buffer partilhado atravessa, e o cabeçalho
 dele sai do heap coletado exactamente para isso (19.4/52.3). Todos vêem a mesma
 memória, sem cópia, e a posse é clara: o main é dono, os workers são vistas.
+
+### D19 — Rotas com `:param`, resolvidas pela biblioteca.
+```python
+httpd.routes({"GET /worlds/:id": ver_mundo, "POST /auth": entrar})
+```
+e o parâmetro chega em `req.param("id")`. O handler único continua por baixo — o
+matcher é um handler que despacha. Adiei isto no primeiro round e o dono
+revisitou: sem ele, todo projeto escreve o mesmo `if/elif` de vinte ramos, e o
+Bun 1.2 tem-no exactamente por isso.
+
+### D20 — Os limites de fábrica vêm das referências, não de nós.
+| | valor | de onde |
+|---|---|---|
+| cabeçalho | 8 KiB | o `large_client_header_buffers` do nginx |
+| prazo do cabeçalho | 10 s | contra slowloris |
+| corpo (`max_body`) | 1 MiB | o `client_max_body_size` do nginx |
+| conexão ociosa | 75 s | o `keepalive_timeout` do nginx |
+
+O `net/http` do Go não limita o corpo por omissão e é criticado por isso; o Node
+usa 16 KiB de cabeçalho. Ficamos com o nginx: são números que uma década de
+internet exposta já validou. Todos são argumentos do `serve`.
+
+### D21 — `files(dir)` serve `index.html` e NUNCA lista o directório.
+Sem index, 404. A listagem é vazamento de informação por omissão, e quem a tem
+costuma não saber que a tem — por isso nem como interruptor.
+
+### D22 — `stats()` com N workers: um `shared dict`.
+Cada worker publica os seus números na tabela partilhada (fora dos heaps, com
+lock próprio) e `server.stats()` lê o conjunto de qualquer lado. Usa a primitiva
+que a linguagem já tem — e é, ela própria, a demonstração do modelo que este
+documento defende.
+
+### D23 — O `on_message` recebe a MENSAGEM, remontada.
+O core junta os frames de continuação até ao tecto. É o que o `websockets` faz por
+omissão e o que quase todo o código quer; quem precisa dos frames crus tem um hook
+à parte.
+
+### D24 — Os padrões do WebSocket são os do `websockets`.
+Lidos da fonte, não recordados:
+
+| | valor |
+|---|---|
+| `ping_interval` | 20 s |
+| `ping_timeout` | 20 s |
+| `close_timeout` | 10 s |
+| `max_size` (mensagem) | 1 MiB (2²⁰) |
+| `max_queue` | 16 mensagens |
+
+O ping automático não é conforto: sem ele, um cliente que perdeu a rede sem
+fechar o socket fica "vivo" para sempre, a segurar estado e inscrições. Estes
+números detectam-no em ~40 s. O Bun usa 120 s de ocioso e 16 MiB de payload —
+escolhas de quem optimiza para o caso dele; dois minutos a segurar uma conexão
+morta é muito para uma biblioteca genérica.
+
+### D25 — Backpressure por fila limitada.
+16 mensagens em fila; cheia, o `read` deixa de consumir do socket e o TCP faz a
+pressão chegar ao emissor sozinho. A alternativa (fila sem tecto) é a falha
+clássica de servidor ws: um cliente rápido com um handler lento faz a memória
+crescer sem limite.
+
+### D26 — Desligar drena, com prazo, e avisa o ws.
+Fecha o listener, deixa terminar o que está em curso, manda `close` com o código
+**1001 ("going away")** aos WebSockets — que é o sinal para o cliente reconectar —
+e ao fim do prazo cancela o resto. O `taskgroup` faz isto: as três garantias dele
+são sobre tempo de vida.
+
+### D27 — O router do `Topic` decide-se MEDINDO, com as duas formas prontas.
+Implemento a via simples (o main roteia) e a directa (o worker escreve nos pipes
+dos outros) atrás da mesma API, e o portão da F7 mede qual ganha com K conexões e
+W workers. É a lição que esta sessão já deu duas vezes — o `inline` que não era o
+problema, o `%*` que valia 7%: medir, não adivinhar.
 
 ### D10 — h2 entra depois do v1, atrás de ALPN.
 Já está no repo, conferido contra 47 mil vetores. Mesma `Request`/`Response`.
