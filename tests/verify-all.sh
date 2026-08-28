@@ -222,6 +222,14 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/httpd.sh >$V/httpd.log 2>&1; then
 else
     bad "o servidor HTTP falhou no fio (veja $V/httpd.log)"
 fi
+#   ws           o WebSocket contra a lib `websockets` do Python NOS DOIS
+#                SENTIDOS, mais as recusas do RFC 6455 com o código de fecho de
+#                cada uma — que é onde a Autobahn separa as implementações.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/ws.sh >$V/ws.log 2>&1; then
+    ok "ws $(grep -oE '[0-9]+ ok' $V/ws.log | tail -1)"
+else
+    bad "o WebSocket divergiu do oráculo ou de uma recusa (veja $V/ws.log)"
+fi
 #   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
 #                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
 #                que se vê sem medir), e com TODOS os knobs de fora ele ainda

@@ -1,0 +1,34 @@
+rsv1-ligado 1002 reserved bit set with no extension negotiated
+rsv2-ligado 1002 reserved bit set with no extension negotiated
+rsv3-ligado 1002 reserved bit set with no extension negotiated
+opcode-reservado-3 1002 reserved opcode
+opcode-reservado-7 1002 reserved opcode
+controlo-reservado-b 1002 reserved control opcode
+controlo-reservado-f 1002 reserved control opcode
+ping-fragmentado 1002 a control frame may not be fragmented
+ping-grande 1002 a control frame may not carry more than 125 bytes
+continuacao-sem-inicio 1002 a continuation with nothing to continue
+texto-a-meio-de-texto 1002 a new message started while another was still open
+comprimento-nao-minimo-16 1002 length not in its minimal form
+comprimento-nao-minimo-64 1002 length not in its minimal form
+bit-alto-do-64 1002 the high bit of a 64-bit length must be zero
+sem-mascara-no-servidor 1002 a client frame must be masked
+utf8-invalido 1007 the text message is not valid UTF-8
+utf8-truncado 1007 the text message is not valid UTF-8
+fecho-de-um-byte 1002 a close body of one byte is half a code
+fecho-1004 1002 close code 1004 may not travel
+fecho-1005 1002 close code 1005 may not travel
+fecho-1006 1002 close code 1006 may not travel
+fecho-1016 1002 close code 1016 may not travel
+fecho-2999 1002 close code 2999 may not travel
+fecho-999 1002 close code 999 may not travel
+fecho-razao-invalida 1007 the close reason is not valid UTF-8
+ok-texto 0 aceitou (1 eventos)
+ok-fecho-1000 0 aceitou (1 eventos)
+ok-fecho-vazio 0 aceitou (1 eventos)
+ok-fecho-3000 0 aceitou (1 eventos)
+ok-fecho-4999 0 aceitou (1 eventos)
+ok-fecho-1012 0 aceitou (1 eventos)
+ok-fragmentado 0 aceitou (1 eventos)
+ok-ping-no-meio 0 aceitou (2 eventos)
+ok-utf8-partido 0 aceitou (1 eventos)
