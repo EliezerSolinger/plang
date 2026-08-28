@@ -339,6 +339,110 @@ dos outros) atrás da mesma API, e o portão da F7 mede qual ganha com K conexõ
 W workers. É a lição que esta sessão já deu duas vezes — o `inline` que não era o
 problema, o `%*` que valia 7%: medir, não adivinhar.
 
+### D28 — Middleware não é um conceito: é composição de funções.
+`serve(porta, com_log(com_auth(handle)))`. Um middleware é um handler que chama
+outro handler — zero conceito novo, zero cadeia nossa para depurar, e a ordem é
+visível na chamada. É o que o Go faz (`http.Handler` que embrulha outro) e
+envelheceu bem: quinze anos depois ainda é assim.
+
+### D29 — A query string sai do `packages/url`, que já passa 890/891 dos WPT.
+`req.path` (sem a query) e `req.query("q")` / `req.query_all("tag")`. O
+percent-decoding, o `+` como espaço, as chaves repetidas e o UTF-8 mal formado já
+estão resolvidos e conferidos contra os web-platform-tests. Reusar o que está
+provado é a regra da casa.
+
+### D30 — Corpo estruturado: JSON e `multipart/form-data`, ambos no v1.
+`req.json()` sai do `json` do runtime numa linha. O `multipart` é um parser
+próprio — fronteiras, cabeçalhos por parte, e o ficheiro por streaming em vez de
+inteiro na memória. É trabalho de uma fase inteira, e o dono escolheu tê-lo de
+fábrica.
+
+### D31 — Testar: primeiro na TEORIA, depois na PRÁTICA.
+> Resolução do dono, e é melhor do que as opções que lhe dei: **as duas, nessa
+> ordem.**
+
+O núcleo é `handle_request(Request) -> Response` — sans-io, como o parser HTTP e
+como o ws core. Um teste de unidade constrói uma `Request` e afirma sobre a
+`Response`: sem porta, sem rede, sem flaky. **E** há um portão de ponta a ponta
+sobre socket real, porque só ele prova que a casca também está certa. É o que o
+repositório já faz com o parser (vetores) e o `http_server.psc` (socket) — e o
+`pstudio-perf` desta VPS é o lembrete do que acontece quando um portão depende de
+tempo real.
+
+### D32 — O IP do cliente atrás de um proxy: só com proxies declarados.
+`req.ip` é o IP do socket. Com `serve(..., trusted_proxies=["127.0.0.1"])`, o
+`req.ip` passa a ler o `X-Forwarded-For` — **mas só quando a conexão vem de um
+proxy da lista**. Confiar no cabeçalho sem isso deixa qualquer cliente forjar o
+próprio IP, e aí o rate-limit e o ban por IP viram enfeite. É como o nginx e o
+Rails fazem.
+
+### D33 — Cookies com os atributos de segurança por PADRÃO, e sessão no servidor.
+`req.cookie("sid")` lê; `resp.set_cookie(nome, valor, http_only=True,
+secure=True, same_site="Lax")` escreve — e esses três são o padrão, não a opção.
+
+A **sessão** é assinada e guardada **no servidor**, num `shared dict`: o cookie
+leva só um ID assinado (HMAC, com o `hmac` que o repo já tem). Dá para REVOGAR —
+apagar a entrada mata a sessão na hora —, o tamanho não é limitado pelos 4 KiB do
+cookie, e nada sensível viaja. É a demonstração do modelo: onde o Bun manda subir
+um Redis, a tabela está na linguagem. O custo, dito: a sessão morre com o
+processo, a menos que o programa a persista.
+
+### D34 — `HEAD`, `OPTIONS` e o 405 são automáticos.
+`HEAD` responde como o `GET` da mesma rota, sem corpo. `OPTIONS` responde com o
+`Allow` das rotas que casam o caminho. E um caminho que existe com outro método dá
+**405 com `Allow`**, não 404 — a diferença entre "não existe" e "existe, mas não
+assim" é o que faz um cliente saber o que corrigir.
+
+### D35 — Escutar num socket UNIX: o runtime ganha `net.unix`.
+`serve(httpd.unix("/run/app.sock"), handle)`. O `PLAN.md` do pscript já previa
+`net.unix(path)` e `net.unix_listen(path)` (a F7 do plano NIO, por fazer) — esta é
+a ocasião. Evita a pilha TCP inteira no loopback, e é como o nginx fala com um
+backend.
+
+### D36 — WebSocket: negociação de subprotocolo.
+`upgrade(req, protocols=["jogo.v2", "jogo.v1"])` escolhe o primeiro que o cliente
+também aceita e responde-o no handshake. É assim que um protocolo evolui sem
+partir clientes antigos.
+
+### D37 — Um rate limit básico, embutido.
+`serve(..., rate_limit=httpd.PerIp(100, 60))` — cem pedidos por minuto por IP,
+contados num `shared dict`, e portanto correto entre workers sem nada externo. A
+política fica nossa para defender; em troca, a coisa mais fácil de esquecer passa
+a estar a um argumento de distância. Sobre o `req.ip` da D32, que é o que a torna
+confiável.
+
+### D38 — `serve` devolve um `Server`, e o `with` desliga-o.
+```python
+with await httpd.serve(porta, handle) as s:
+    ...
+```
+Sair do bloco desliga com a drenagem da D26. Fora dele, `s.stop()` e `s.stats()`.
+Usa o `Closeable` que a linguagem já tem, e faz do desligar limpo o caminho
+NORMAL em vez do cuidadoso.
+
+### D39 — Páginas de erro: dois hooks, que são handlers como os outros.
+`on_not_found(req)` e `on_error(req, err)` devolvem uma `Response` — então podem
+renderizar HTML, JSON ou o que a aplicação for. Sem eles, a lib responde um texto
+mínimo. Nenhum conceito novo.
+
+### D40 — `Expect: 100-continue`: responde 100, ou recusa ANTES do corpo viajar.
+O servidor confere o `Content-Length` contra o `max_body` e responde `100
+Continue` ou **413 antes de o corpo subir**. É exactamente para isto que o
+cabeçalho existe, e o `curl` manda-o sozinho acima de 1 KiB — com uploads no v1
+(D30), ignorá-lo custaria a subida inteira de um ficheiro que ia ser recusado.
+
+### D41 — O `Host` é exigido, e validá-lo é uma opção.
+Sem `Host` num pedido HTTP/1.1 → 400, como o RFC manda. E
+`serve(..., allowed_hosts=["exemplo.com"])` recusa com 400 um Host fora da lista —
+quem constrói URLs a partir do Host (o link de um reset de senha, por exemplo)
+precisa disto, e o Django tem `ALLOWED_HOSTS` por causa desta história.
+
+### D42 — `Date` sim, `Server` só a pedido.
+O `Date` é obrigatório no RFC e as caches dependem dele — e calcula-se **uma vez
+por segundo**, não por resposta: formatar a data é caro e o valor muda uma vez por
+segundo. O `Server` anuncia software e versão a quem procura alvos; sai por
+omissão, e quem quiser põe.
+
 ### D10 — h2 entra depois do v1, atrás de ALPN.
 Já está no repo, conferido contra 47 mil vetores. Mesma `Request`/`Response`.
 
@@ -402,13 +506,24 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [ ] **L4 — `Topic`** no runtime (D6/D7): subscrever, publicar, dessubscrever, por
       worker, sobre os pipes. Portão: um broadcast a K conexões repartidas por W
       workers chega a todas, uma vez cada.
+- [ ] **L5 — `net.unix`** (D35): escutar e ligar por socket UNIX. Já estava
+      previsto na F7 do plano NIO; esta é a ocasião. Portão: um servidor e um
+      cliente sobre um caminho, no mesmo processo.
 
 ### O que a BIBLIOTECA ganha
 
 - [ ] **F1 — httpd v1, um worker.** `serve(porta, handle)` sobre o parser que
-      existe, com keep-alive (D3d), o 500 com `debug` (D3e), o corpo em dois
-      acessores (D3f) e as conveniências de Response (D3g). Portão: hello-world,
-      POST com corpo, 404, e as recusas do parser propagadas como 400.
+      existe, devolvendo um `Server` com `with` (D38): keep-alive (D3d), o 500 com
+      `debug` (D3e), o corpo em dois acessores (D3f), as conveniências de Response
+      (D3g), o `Host` exigido (D41), o `Date` por segundo (D42) e os hooks de erro
+      (D39). Portão: **primeiro sans-io** (Request construída → Response afirmada),
+      **depois socket real** (D31) — hello-world, POST com corpo, 404, 400 do
+      parser.
+- [ ] **F1b — Rotas** (D19) com `:param`, e o `HEAD`/`OPTIONS`/405 automáticos
+      (D34). Portão: cada um dos três, e um `:param` com percent-encoding.
+- [ ] **F1c — Query e JSON** (D29/D30): `req.query` sobre o `packages/url`, e
+      `req.json()`. Portão: os casos de query dos WPT que o `url` já passa,
+      atravessados pela httpd.
 - [ ] **F2 — Streaming** (D5): corpo por cursor, chunked e SSE.
 - [ ] **F3 — Multi-worker** sobre L1+L2. Portão: sob carga, os N workers servem e
       `sched.stats()` mostra a repartição.
@@ -420,8 +535,18 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
       binário, ping/pong, close limpo.
 - [ ] **F7 — Pub/sub** sobre L4, com as duas portas de `publish` (D6) e a
       dessubscrição automática (D9c).
-- [ ] **F8 — Estáticos** (D13): `httpd.files(dir)` com MIME, ETag/304, Range e a
-      recusa de `..`.
+- [ ] **F8 — Estáticos** (D13/D21): `httpd.files(dir)` com MIME, ETag/304, Range,
+      `index.html` e a recusa de `..`. Portão: um `..` em todas as codificações que
+      um atacante tenta, e um Range parcial conferido byte a byte.
+- [ ] **F8b — Cookies e sessão** (D33): ler, escrever com os atributos seguros por
+      padrão, e a sessão assinada num `shared dict`. Portão: uma sessão sobrevive a
+      pedidos servidos por workers DIFERENTES, e revogar mata-a na hora.
+- [ ] **F8c — `multipart/form-data`** (D30) com o ficheiro por streaming, e o
+      `Expect: 100-continue` (D40). Portão: um upload maior que o teto é recusado
+      com 413 ANTES de o corpo subir.
+- [ ] **F8d — Proxy e limites**: `trusted_proxies` (D32), `allowed_hosts` (D41) e o
+      `rate_limit` (D37). Portão: um `X-Forwarded-For` forjado por um cliente que
+      NÃO é proxy declarado é ignorado.
 - [ ] **F9 — Compressão** (D16): gzip no HTTP; e o permessage-deflate do ws numa
       fase à parte, depois do Autobahn verde — a janela partilhada do RFC 7692 é
       onde ele morde.
