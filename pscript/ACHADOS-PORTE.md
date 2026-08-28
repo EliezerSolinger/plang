@@ -1188,3 +1188,59 @@ aparece quando o tampao enche e um registo que nao serve para nada.
 Fica em aberto se a linguagem devia avisar: uma tarefa cujo resultado e deitado
 fora e legitima (e o modelo da 35.3), mas `aprint` e um caso em que isso quer
 dizer "sem saida" -- e isso surpreende.
+
+
+## 41 — o DEFLATE do repositorio nao comprimia  OK corrigido
+
+O `packages/compress` sempre foi honesto sobre isso: o docstring do `deflate`
+dizia "comprime zero e e valido para qualquer leitor do mundo -- o formato tem um
+tipo de bloco para exactamente isto", e prometia que quando o compressor a serio
+chegasse seria essa funcao a mudar e mais nada. Chegou, e foi.
+
+**LZ77 mais Huffman FIXO.** A escolha do fixo em vez do dinamico e de custo: uma
+arvore dinamica ganha cerca de dez por cento em texto e obriga a contar
+frequencias, construir duas arvores canonicas e emiti-las com o terceiro alfabeto
+do RFC -- umas tres vezes o codigo, para dez por cento. Num servidor o que se
+poupa e a viagem pela rede, e nao o ultimo byte.
+
+Razao medida no `SPECS.MD`: 28 246 -> 14 756 (52%), contra 42% do `zlib -6`. A
+diferenca e exactamente o que se espera de fixo contra dinamico.
+
+**A armadilha que custa a todos**: o fluxo do DEFLATE escreve-se do bit menos
+significativo para o mais, MAS um codigo de Huffman escreve-se do bit MAIS
+significativo para o menos. O RFC diz as duas coisas em paragrafos diferentes.
+Sao por isso duas funcoes diferentes no escritor -- `put` e `put_code` -- e trocar
+uma pela outra da um ficheiro que nenhum leitor abre.
+
+**A segunda, que era minha e nao do RFC**: na cadeia de dispersao, o
+`anterior[at]` tem de guardar a cabeca ANTIGA e so depois e que a cabeca passa a
+ser `at`. Ao contrario, `anterior[at]` fica igual a `at` -- um laco sobre si mesmo,
+e a busca seguinte gira para sempre.
+
+O portao (`tests/compress.sh`) nao usa o nosso `inflate` como prova: os dois
+podiam ter o mesmo defeito e concordar. Quem confere sao o `zlib` do CPython e o
+`gunzip` da linha de comando -- dois leitores que nao partilham uma linha com este
+repositorio. Nove casos, incluindo o classico de erro: um casamento que se sobrepoe
+a si mesmo, com distancia 1 e comprimento 200.
+
+## 42 — compressao no servidor (F9/D16)  OK feito
+
+`httpd.comprime(resposta, pedido)`. Tres condicoes, e nenhuma e opcional:
+
+* o cliente **pediu** (`Accept-Encoding`), e um `gzip;q=0` e uma recusa;
+* o tipo **ganha** com isso -- comprimir um JPEG, um PNG ou um MP4 gasta CPU e
+  **cresce**, porque eles ja estao comprimidos e o DEFLATE acrescenta a moldura
+  dele. E o erro mais comum de quem liga a compressao por omissao;
+* o corpo passa do **minimo** (1 KiB). Abaixo disso a moldura do gzip e o CPU dos
+  dois lados nao se pagam, e um pacote TCP leva mil e quinhentos bytes: comprimir
+  de 400 para 380 nao poupa uma viagem.
+
+E o `Vary: Accept-Encoding` sai SEMPRE que se comprime, e nao e cortesia: sem ele
+uma cache intermediaria entrega a versao comprimida a um cliente que nao a pediu,
+e esse ve lixo binario. E o defeito classico de por compressao atras de um proxy.
+
+Medido no fio: 6000 bytes de texto viajam em 80.
+
+Um FLUXO (F2) nao se comprime -- o corpo ainda nao existe, e comprimi-lo pedaco a
+pedaco precisa de um DEFLATE com estado entre chamadas, que e o mesmo que o
+permessage-deflate do ws vai precisar. Fica dito em vez de feito pela metade.

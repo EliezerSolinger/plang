@@ -424,6 +424,17 @@ def deflate(src: bytes) -> bytes:
 
     Quando o compressor a sério chegar, é esta função que muda e mais nada.
     """
+    # 148: chegou. O `deflate_fixed` lá em baixo é LZ77 com a árvore fixa, e esta
+    # função é o que a promessa acima dizia que mudaria — o `gzip_compress` e o
+    # `zlib_compress` não mexeram numa linha. O caminho dos blocos literais fica
+    # abaixo, inalcançável mas legível: é a explicação do formato mais curta que
+    # existe, e um dia serve para um `nivel=0`.
+    return deflate_fixed(src)
+
+
+def deflate_stored(src: bytes) -> bytes:
+    """DEFLATE em blocos LITERAIS: comprime zero e é válido para qualquer leitor
+    do mundo, porque o formato tem um tipo de bloco para exactamente isto."""
     out: List<u8> = []
     n = len(src)
     if n == 0:
@@ -447,3 +458,191 @@ def deflate(src: bytes) -> bytes:
             out.append(src[at + k])
         at += take_n
     return bytes(out)
+
+
+# ---------- 148: o COMPRESSOR a serio ----------
+#
+# O `deflate` acima comprime zero por desenho, e o docstring dele diz que quando o
+# compressor a serio chegar e essa funcao que muda. Chegou; ela passou a chamar
+# esta, e mais nada mudou.
+#
+# **LZ77 mais Huffman FIXO**, e a escolha do fixo em vez do dinamico e uma
+# decisao de custo: uma arvore dinamica ganha uns 10% em texto e obriga a contar
+# frequencias, construir duas arvores canonicas e emiti-las com o terceiro
+# alfabeto do RFC -- cerca de tres vezes o codigo que esta aqui, para dez por
+# cento. O fixo esta na norma como numero, portanto um bloco de tipo 1 nao leva
+# tabela nenhuma, e num servidor o que se poupa e a viagem pela rede e nao o
+# ultimo byte.
+#
+# **A ARMADILHA DA ORDEM DOS BITS**, que e onde todo o mundo se corta: o fluxo do
+# DEFLATE escreve-se do bit menos significativo para o mais, MAS um codigo de
+# Huffman escreve-se do bit MAIS significativo para o menos. Portanto os dois
+# escritores abaixo sao diferentes de proposito -- `put` e `put_code` -- e trocar
+# um pelo outro da um ficheiro que nenhum leitor abre.
+
+struct Out:
+    """O escritor de bits, do menos significativo para o mais (RFC 1951 s3.1.1)."""
+    b: List<u8>
+    acc: int        # os bits ainda nao escritos
+    n: int          # quantos ha no acumulador
+
+
+def out_new() -> Out:
+    return Out([], 0, 0)
+
+
+def put(o: Out, v: int, n: int):
+    """`n` bits de `v`, do menos significativo primeiro."""
+    nocheck:
+        o.acc = o.acc | ((v & ((1 << n) - 1)) << o.n)
+        o.n += n
+        while o.n >= 8:
+            o.b.append(u8(o.acc & 255))
+            o.acc = o.acc >> 8
+            o.n -= 8
+
+
+def put_code(o: Out, codigo: int, n: int):
+    """Um codigo de Huffman: do bit MAIS significativo primeiro.
+
+    E a inversao que faz o formato parecer contraditorio e nao e: o FLUXO e
+    little-endian nos bits, e um CODIGO e big-endian. O RFC diz as duas coisas em
+    paragrafos diferentes, e quem le so uma escreve um ficheiro que nao abre.
+    """
+    nocheck:
+        i = n - 1
+        while i >= 0:
+            put(o, (codigo >> i) & 1, 1)
+            i -= 1
+
+
+def out_flush(o: Out) -> bytes:
+    if o.n > 0:
+        o.b.append(u8(o.acc & 255))
+        o.acc = 0
+        o.n = 0
+    return bytes(o.b)
+
+
+# os codigos da arvore FIXA, em valor e em largura (s3.2.6). Sao numeros da norma:
+# 0..143 em 8 bits comecando em 0x30, 144..255 em 9 comecando em 0x190, 256..279
+# em 7 comecando em 0, 280..287 em 8 comecando em 0xC0.
+def lit_code(s: int) -> int:
+    if s < 144:
+        return 0x30 + s
+    if s < 256:
+        return 0x190 + (s - 144)
+    if s < 280:
+        return s - 256
+    return 0xC0 + (s - 280)
+
+
+def lit_bits(s: int) -> int:
+    if s < 144:
+        return 8
+    if s < 256:
+        return 9
+    if s < 280:
+        return 7
+    return 8
+
+
+def len_symbol(n: int) -> int:
+    """Qual simbolo de comprimento cobre `n` bytes (3..258), pela tabela do RFC."""
+    i = 28
+    while i > 0 and LEN_BASE[i] > n:
+        i -= 1
+    return i
+
+
+def dist_symbol(d: int) -> int:
+    i = 29
+    while i > 0 and DIST_BASE[i] > d:
+        i -= 1
+    return i
+
+
+const HASH_BITS = 15
+const HASH_SIZE = 32768
+const JANELA = 32768
+const MAX_MATCH = 258
+const MIN_MATCH = 3
+# quantas posicoes da cadeia se experimentam antes de aceitar o que se tem. E o
+# botao de "quao bom" -- 128 e o territorio do nivel 6 do zlib, e subi-lo paga
+# cada vez menos.
+const MAX_CADEIA = 128
+
+
+def deflate_fixed(src: bytes) -> bytes:
+    """LZ77 com a arvore fixa. Um bloco so, final."""
+    o = out_new()
+    # tipo 1 (arvore fixa), e este e o ultimo bloco
+    put(o, 1, 1)
+    put(o, 1, 2)
+    n = len(src)
+    # a tabela de dispersao e as cadeias: `cabeca[h]` e a posicao mais recente
+    # com aquele hash, e `anterior[p]` e a anterior a `p`. E a estrutura do zlib,
+    # e cabe em duas listas.
+    cabeca: List<int> = []
+    for _ in range(HASH_SIZE):
+        cabeca.append(-1)
+    anterior: List<int> = []
+    for _ in range(n if n > 0 else 1):
+        anterior.append(-1)
+    at = 0
+    while at < n:
+        melhor_len = 0
+        melhor_dist = 0
+        if at + MIN_MATCH <= n:
+            h = 0
+            nocheck:
+                h = ((int(src[at]) << 10) ^ (int(src[at + 1]) << 5) ^ int(src[at + 2])) & (HASH_SIZE - 1)
+            p = cabeca[h]
+            # a INSCRICAO vem antes da busca, e a ordem e o defeito facil: o
+            # `anterior[at]` tem de guardar a cabeca ANTIGA, e so depois e que a
+            # cabeca passa a ser `at`. Ao contrario, `anterior[at]` fica igual a
+            # `at` -- um laco sobre si mesmo, e a busca seguinte gira para sempre.
+            anterior[at] = p
+            cabeca[h] = at
+            tentativas = 0
+            while p >= 0 and tentativas < MAX_CADEIA:
+                if at - p > JANELA:
+                    break
+                k = 0
+                lim = MAX_MATCH if n - at > MAX_MATCH else n - at
+                while k < lim and src[p + k] == src[at + k]:
+                    k += 1
+                if k > melhor_len:
+                    melhor_len = k
+                    melhor_dist = at - p
+                    if k >= lim:
+                        break
+                p = anterior[p]
+                tentativas += 1
+        if melhor_len >= MIN_MATCH:
+            sl = len_symbol(melhor_len)
+            put_code(o, lit_code(257 + sl), lit_bits(257 + sl))
+            if LEN_EXTRA[sl] > 0:
+                put(o, melhor_len - LEN_BASE[sl], LEN_EXTRA[sl])
+            sd = dist_symbol(melhor_dist)
+            put_code(o, sd, 5)
+            if DIST_EXTRA[sd] > 0:
+                put(o, melhor_dist - DIST_BASE[sd], DIST_EXTRA[sd])
+            # as posicoes DENTRO do casamento tambem entram na tabela: sem isso a
+            # cadeia perde-as e os casamentos seguintes ficam curtos
+            k2 = 1
+            while k2 < melhor_len and at + k2 + MIN_MATCH <= n:
+                h2 = 0
+                nocheck:
+                    h2 = ((int(src[at + k2]) << 10) ^ (int(src[at + k2 + 1]) << 5) ^ int(src[at + k2 + 2])) & (HASH_SIZE - 1)
+                anterior[at + k2] = cabeca[h2]
+                cabeca[h2] = at + k2
+                k2 += 1
+            at += melhor_len
+        else:
+            s = int(src[at])
+            put_code(o, lit_code(s), lit_bits(s))
+            at += 1
+    # 256 e o fim do bloco
+    put_code(o, lit_code(256), lit_bits(256))
+    return out_flush(o)

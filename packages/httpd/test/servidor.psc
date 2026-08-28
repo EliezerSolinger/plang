@@ -38,6 +38,15 @@ async def eventos() -> bytes:
 
 
 async def handle(req: httpd.Request) -> httpd.Response:
+    if req.path == "/grande":
+        # F9: texto compressivel e acima do minimo
+        return httpd.comprime(httpd.text("linha repetida\n" * 400), req)
+    if req.path == "/pequeno":
+        # abaixo do minimo: NAO se comprime, porque a moldura nao se paga
+        return httpd.comprime(httpd.text("curto"), req)
+    if req.path == "/jpeg":
+        # ja comprimido: comprimir gasta CPU e cresce
+        return httpd.comprime(httpd.blob(b"\xff\xd8\xff" + ("A" * 4000).encode(), "image/jpeg"), req)
     if req.path == "/fluxo":
         return httpd.stream_of(pedacos, "text/plain; charset=utf-8")
     if req.path == "/sse":

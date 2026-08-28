@@ -230,6 +230,14 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/ws.sh >$V/ws.log 2>&1; then
 else
     bad "o WebSocket divergiu do oráculo ou de uma recusa (veja $V/ws.log)"
 fi
+#   compress     o compressor DEFLATE contra DOIS leitores que não são nossos: o
+#                `zlib` do CPython e o `gunzip`. O nosso `inflate` ler o nosso
+#                `deflate` não prova nada — os dois podiam ter o mesmo defeito.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/compress.sh >$V/compress.log 2>&1; then
+    ok "compress $(grep -oE '[0-9]+ ok' $V/compress.log | tail -1)"
+else
+    bad "o gzip que escrevemos não foi aceite por um leitor de fora (veja $V/compress.log)"
+fi
 #   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
 #                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
 #                que se vê sem medir), e com TODOS os knobs de fora ele ainda

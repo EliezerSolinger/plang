@@ -142,6 +142,28 @@ check "o SSE emoldura cada linha" "3" \
 check "e cada evento tem duas linhas de dados" "6" \
       "$(curl -s -N $B/sse | grep -c '^data: ')"
 
+# ---- F9/D16: a COMPRESSÃO ----
+#
+# Três condições, e o portão bate nas três recusas: o cliente tem de pedir, o
+# tipo tem de ganhar com isso, e o corpo tem de passar o mínimo. Comprimir um
+# JPEG gasta CPU e CRESCE; comprimir 400 bytes não poupa uma viagem, porque um
+# pacote TCP leva mil e quinhentos.
+check "comprime o que vale a pena" "1" \
+      "$(curl -s -H 'Accept-Encoding: gzip' -o /dev/null -D - $B/grande | tr -d '\r' | grep -ci '^content-encoding: gzip')"
+check "e o Vary sai com ele" "1" \
+      "$(curl -s -H 'Accept-Encoding: gzip' -o /dev/null -D - $B/grande | tr -d '\r' | grep -ci '^vary')"
+check "o corpo volta inteiro" "6000" "$(curl -s --compressed $B/grande | wc -c | tr -d ' ')"
+check "e viaja MUITO menos" "sim" \
+      "$(test "$(curl -s -H 'Accept-Encoding: gzip' -o /dev/null -w '%{size_download}' $B/grande)" -lt 500 && echo sim || echo nao)"
+check "não comprime o que é pequeno" "0" \
+      "$(curl -s -H 'Accept-Encoding: gzip' -o /dev/null -D - $B/pequeno | tr -d '\r' | grep -ci content-encoding)"
+check "não comprime um JPEG" "0" \
+      "$(curl -s -H 'Accept-Encoding: gzip' -o /dev/null -D - $B/jpeg | tr -d '\r' | grep -ci content-encoding)"
+check "gzip;q=0 é uma recusa" "0" \
+      "$(curl -s -H 'Accept-Encoding: gzip;q=0' -o /dev/null -D - $B/grande | tr -d '\r' | grep -ci content-encoding)"
+check "sem pedir, não comprime" "0" \
+      "$(curl -s -o /dev/null -D - $B/grande | tr -d '\r' | grep -ci content-encoding)"
+
 # ============================================================================
 # F8 — os ESTÁTICOS. A metade que interessa é a última: as tentativas de sair do
 # directório, em todas as grafias que um atacante tenta. Nenhuma pode devolver o

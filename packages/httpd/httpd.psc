@@ -45,6 +45,7 @@ As decisões que o desenho fixou e que este ficheiro cumpre:
 import <http/http.psc> as h
 import <datetime/datetime.psc> as dt
 import <url/url.psc> as url
+import <compress/compress.psc> as comp
 import json as jsn
 import net
 import sys
@@ -874,3 +875,87 @@ async def serve(port: int, handle: def(Request) -> Task<Response>,
     srv = listen(port, c2)
     await run(srv, handle)
     return srv
+
+
+# ---------- F9/D16: a COMPRESSAO ----------
+
+def aceita_gzip(req: Request) -> bool:
+    """O cliente disse que aceita gzip?
+
+    A leitura e deliberadamente simples: procura-se o nome na lista. O que ela
+    NAO faz e ler os pesos `q=` -- um `gzip;q=0` significa "nao me mandes gzip",
+    e honra-lo pede uma gramatica de lista-com-parametros que ainda nao existe
+    aqui. Portanto o caso e tratado a mao: um `q=0` explicito e respeitado, e o
+    resto e ordem de preferencia que ignoramos com uma resposta correcta.
+    """
+    ae = req.header("accept-encoding").lower()
+    if len(ae) == 0:
+        return False
+    for parte in ae.split(","):
+        p = parte.strip()
+        if p.startswith("gzip"):
+            # `gzip;q=0` e uma recusa, e e a unica forma de peso que muda a
+            # resposta em vez de a ordenar
+            return p.find("q=0") < 0 or p.find("q=0.") >= 0
+        if p.startswith("*"):
+            return p.find("q=0") < 0 or p.find("q=0.") >= 0
+    return False
+
+
+def compressivel(tipo: str) -> bool:
+    """Vale a pena comprimir este tipo?
+
+    Comprimir um JPEG, um PNG, um MP4 ou um `.gz` **gasta CPU e aumenta o
+    tamanho** -- eles ja estao comprimidos, e o DEFLATE por cima acrescenta a
+    moldura dele. E o erro mais comum de quem liga a compressao por omissao, e
+    custa em CPU nos dois lados do fio.
+    """
+    t = tipo.lower()
+    if t.startswith("text/"):
+        return True
+    for m in ["application/json", "application/javascript", "application/xml",
+              "application/wasm", "image/svg+xml", "+json", "+xml"]:
+        if t.find(m) >= 0:
+            return True
+    return False
+
+
+def comprime(r: Response, req: Request, minimo: int = 1024) -> Response:
+    """Comprime a resposta se valer a pena, e devolve-a de qualquer maneira.
+
+    Tres condicoes, e nenhuma e opcional:
+
+      * o cliente **pediu** (`Accept-Encoding`);
+      * o tipo **ganha** com isso -- comprimir um JPEG gasta CPU e cresce;
+      * o corpo passa do **minimo**. Abaixo de um kilobyte a moldura do gzip
+        (dezoito bytes) e o CPU dos dois lados nao se pagam, e um pacote TCP leva
+        mil e quinhentos: comprimir de 400 para 380 bytes nao poupa uma viagem.
+
+    E o `Vary: Accept-Encoding` sai SEMPRE que se comprime, e nao e cortesia: sem
+    ele uma cache intermediaria entrega a versao comprimida a um cliente que nao
+    a pediu, e esse ve lixo binario. E o defeito classico de por compressao atras
+    de um proxy.
+    """
+    if r.stream != None:
+        # um fluxo nao se comprime aqui: o corpo ainda nao existe, e comprimi-lo
+        # pedaco a pedaco precisa de um DEFLATE com estado entre chamadas (o
+        # mesmo que o permessage-deflate do ws precisa). Fica dito em vez de
+        # feito pela metade.
+        return r
+    if len(r.body) < minimo:
+        return r
+    if not aceita_gzip(req):
+        return r
+    if not compressivel(r.header("content-type")):
+        return r
+    if len(r.header("content-encoding")) > 0:
+        return r        # ja vem codificada: nao se codifica duas vezes
+    z = comp.gzip_compress(r.body)
+    if len(z) >= len(r.body):
+        # aconteceu: comprimir cresceu. Devolve-se o original, porque o objectivo
+        # era poupar bytes e nao usar gzip.
+        return r
+    r.body = z
+    r.headers.append(Header("content-encoding", "gzip"))
+    r.headers.append(Header("vary", "Accept-Encoding"))
+    return r
