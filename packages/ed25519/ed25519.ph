@@ -69,6 +69,7 @@ def ed25519_pub_hex(in seed: CBytes) -> CStr:
     64
     """
 
+def ed25519_password_hex(in password: CBytes, in scramble: CBytes) -> CStr
 def ed25519_sign_hex(in seed: CBytes, in msg: CBytes) -> CStr:
     """The signature in hexadecimal (128 digits)."""
 

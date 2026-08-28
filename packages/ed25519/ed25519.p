@@ -696,6 +696,58 @@ def ed25519_sign_hex(in seed: CBytes, in msg: CBytes) -> CStr:
     hexify(sig, usize(64), g_sighex)
     return cstr_n(g_sighex, usize(128))
 
+# ---------- MariaDB `client_ed25519` ----------
+# A mesma construção da 5.1.6 do RFC 8032 que `ed25519_sign` faz, com UMA
+# diferença: o segredo não é um seed de 32 bytes, é a SENHA (de qualquer
+# tamanho), e a chave pública A deriva dela aqui dentro. É o que o
+# `ed25519_password` do PyMySQL faz com o pynacl, sem depender do pynacl.
+#
+#   h = SHA512(password);  a = clamp(h[:32]);  A = [a]B
+#   r = SHA512(h[32:] || scramble) mod L;      R = [r]B
+#   k = SHA512(R || A || scramble) mod L;      S = (k*a + r) mod L
+#   assinatura = R || S  (64 bytes)
+private g_edpwhex: char[129]
+def ed25519_password_hex(in password: CBytes, in scramble: CBytes) -> CStr:
+    h: char[64]
+    hs: Sha512
+    sha512_init(out hs)
+    sha512_update(ref hs, (*char)(password.ptr), password.len)
+    sha512_final(ref hs, h)
+    a: char[32]
+    memcpy(a, h, usize(32))
+    clamp(ref a)
+    # A = [a]B, a chave pública derivada da senha
+    A: Ge
+    ge_scalarmult_base(out A, a)
+    apub: char[32]
+    ge_encode(A, apub)
+    # r = H(h[32:] || scramble) mod L
+    rh: char[64]
+    rs: Sha512
+    sha512_init(out rs)
+    sha512_update(ref rs, h + 32, usize(32))
+    sha512_update(ref rs, (*char)(scramble.ptr), scramble.len)
+    sha512_final(ref rs, rh)
+    r: char[32]
+    sc_reduce_bytes(rh, 64, r)
+    sig: char[64]
+    R: Ge
+    ge_scalarmult_base(out R, r)
+    ge_encode(R, sig)
+    # k = H(R || A || scramble) mod L
+    kh: char[64]
+    ks: Sha512
+    sha512_init(out ks)
+    sha512_update(ref ks, sig, usize(32))
+    sha512_update(ref ks, apub, usize(32))
+    sha512_update(ref ks, (*char)(scramble.ptr), scramble.len)
+    sha512_final(ref ks, kh)
+    k: char[32]
+    sc_reduce_bytes(kh, 64, k)
+    sc_muladd(k, a, r, sig + 32)
+    hexify(sig, usize(64), g_edpwhex)
+    return cstr_n(g_edpwhex, usize(128))
+
 def ed25519_verify_hex(in pub_hex: CStr, in msg: CBytes, in sig_hex: CStr) -> bool:
     if pub_hex.len != usize(64) or sig_hex.len != usize(128):
         return False
