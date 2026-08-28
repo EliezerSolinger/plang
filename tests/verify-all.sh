@@ -238,6 +238,14 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/compress.sh >$V/compress.log 2>&1; then
 else
     bad "o gzip que escrevemos não foi aceite por um leitor de fora (veja $V/compress.log)"
 fi
+#   tls-server   o servidor a falar `https`, com o `openssl s_client` e o `curl`
+#                por oráculos — e o httpd inteiro por cima, para se ver que o TLS
+#                é um MODO da ligação e não um tipo novo.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/tls-server.sh >$V/tlsserver.log 2>&1; then
+    ok "tls-server $(grep -oE '[0-9]+ ok' $V/tlsserver.log | tail -1)"
+else
+    bad "o servidor TLS não apertou a mão com um cliente de fora (veja $V/tlsserver.log)"
+fi
 #   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
 #                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
 #                que se vê sem medir), e com TODOS os knobs de fora ele ainda

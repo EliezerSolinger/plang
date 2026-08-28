@@ -470,10 +470,19 @@ struct Config:
     # devolve um opcional, e `(def(...) -> Task<int>)?` é a função opcional. As
     # duas escrevem-se quase igual e querem dizer coisas diferentes.
     on_upgrade: (def(Socket, Request, bytes) -> Task<int>)?
+    # F4/D8: o SERVIDOR NASCE A FALAR `https`. Os dois caminhos (PEM), ou vazios
+    # para servir em claro.
+    #
+    # É um MODO da ligação e não um tipo novo, que é a mesma decisão da S7 do lado
+    # cliente: o `read_into`, o `write` e tudo o que está acima não sabem a
+    # diferença. Um `TlsSocket` à parte obrigaria cada camada acima a ter duas
+    # versões de tudo, e é assim que uma biblioteca de rede duplica.
+    tls_cert: str
+    tls_key: str
 
 
 def config() -> Config:
-    c: Config = Config(1 << 20, 1 << 16, False, "", [], True, 30.0, -1, "", None)
+    c: Config = Config(1 << 20, 1 << 16, False, "", [], True, 30.0, -1, "", None, "", "")
     return c
 
 
@@ -709,6 +718,16 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
     """
     servidos = 0
     respondeu_expect = False
+    # F4/D8: o TLS vai POR CIMA da ligação aceita, antes de se ler o primeiro
+    # byte. Falhar aqui é o cliente a apresentar-se mal — fecha-se em silêncio,
+    # porque não há canal por onde dizer nada: o que ele espera é TLS, e um 400 em
+    # claro seria lixo.
+    if len(cfg.tls_cert) > 0:
+        try:
+            ignora_tls = await net.serve_tls(c, cfg.tls_cert, cfg.tls_key)
+        catch e:
+            c.close()
+            return 0
     p = h.new_parser()
     with Buffer(65536) as rb:
         while True:

@@ -4790,6 +4790,18 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
     if (strcmp(name, "__sys_time") == 0) {
         return PsLow_call_rt(self, "ps_sys_monotonic", e->pos);
     }
+    if (strcmp(name, "__net_serve_tls") == 0) {
+        Expr *sv9 = PsLow_call_rt(self, "ps_net_serve_tls", e->pos);
+        PsLow_push_arg(self, sv9, PsLow_ctx_arg(self, e->pos));
+        size_t i;
+        for (i = 0; i < 3; i += 1) {
+            PsLow_push_arg(self, sv9, PsLow_expr(self, e->args[i]));
+        }
+        PsLow_pos_args(self, sv9, e->pos);
+        self->raised = 1;
+        self->allocs = 1;
+        return sv9;
+    }
     if (strcmp(name, "__net_starttls") == 0 || strcmp(name, "__net_starttls_insecure") == 0) {
         Expr *ts9 = PsLow_call_rt(self, "ps_net_starttls", e->pos);
         PsLow_push_arg(self, ts9, PsLow_ctx_arg(self, e->pos));

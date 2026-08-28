@@ -4569,6 +4569,15 @@ struct PsLow:
         # booleano diferente — mas o booleano vive aqui e não no sítio da
         # chamada, que é toda a diferença: não há `verify=False` para alguém
         # desligar "só para testar" (141.4).
+        if strcmp(name, "__net_serve_tls") == 0:
+            sv9: *Expr = self->call_rt("ps_net_serve_tls", e->pos)
+            self->push_arg(sv9, self->ctx_arg(e->pos))
+            for i in range(3):
+                self->push_arg(sv9, self->expr(e->args[i]))
+            self->pos_args(sv9, e->pos)
+            self->raised = True
+            self->allocs = True
+            return sv9
         if strcmp(name, "__net_starttls") == 0 or strcmp(name, "__net_starttls_insecure") == 0:
             ts9: *Expr = self->call_rt("ps_net_starttls", e->pos)
             self->push_arg(ts9, self->ctx_arg(e->pos))

@@ -1337,3 +1337,46 @@ um segundo por pedido, que num teste passa por lentidao da rede.
 A janela onde isso acontece precisou de uma pergunta nova no parser
 (`headers_done()`): e o unico momento em que os cabecalhos chegaram e o corpo
 ainda nao.
+
+
+## 48 — TLS do lado SERVIDOR (L3+F4/D8)  OK feito
+
+A terceira e ultima das tres coisas que o desenho deu ao runtime (D11). O
+`starttls` que ja havia era o lado CLIENTE, e a assimetria e real: um cliente
+CONFERE uma cadeia que vem do sistema, um servidor APRESENTA um certificado e uma
+chave que vem de dois ficheiros. Sao contextos diferentes do OpenSSL, e nao o
+mesmo com uma bandeira.
+
+**O passo do aperto de mao passou a ser um so para os dois lados**, e sem estado
+novo: o `SSL_connect` e o `SSL_accept` sao, cada um, um `set_*_state` seguido de um
+`do_handshake`. Como o estado ja e posto no `begin` — de conexao no cliente, de
+aceitacao no servidor —, o passo e a mesma funcao, e nao ha bandeira a manter em
+sincronia com nada.
+
+Tres conferencias no arranque, e as tres existem porque o erro que elas apanham
+aparece tarde de mais sem elas:
+
+* a **CADEIA** e nao so o certificado (`use_certificate_chain_file`). Um servidor
+  que mande apenas a folha funciona no browser de quem ja tem a intermediaria em
+  cache e falha em todos os outros — e ai o erro aparece "as vezes", que e o pior
+  modo de aparecer;
+* a chave, do ficheiro dela;
+* e que a chave **e daquele certificado** (`check_private_key`). Sem isso o erro
+  sai no primeiro aperto de mao de um cliente, e nao no arranque — portanto em
+  producao e nao no `deploy`.
+
+No httpd sao **dois campos na mesma `Config`**, e isso e a decisao da S7 aplicada:
+o TLS e um MODO da ligacao e nao um tipo novo, portanto as rotas, o keep-alive, a
+compressao e o WebSocket nao sabem a diferenca. Um `TlsSocket` a parte obrigaria
+cada camada acima a ter duas versoes de tudo.
+
+Os oraculos sao o `openssl s_client` e o `curl` — dois clientes TLS que nao
+partilham uma linha com este repositorio. E o portao prova os DOIS lados: eles
+apertam a mao com `-k`, e **sem** `-k` recusam o certificado auto-assinado. A
+segunda metade e a que garante que a verificacao nao foi desligada em nenhum
+sitio.
+
+O que fica de fora, dito: **SNI do lado do servidor**. Um processo serve UM
+certificado, porque o contexto e um por processo — servir varios nomes com
+certificados diferentes pede um retorno de chamada por ligacao. Para o jogo, que
+tem um dominio, nao faz falta.

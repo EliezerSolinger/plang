@@ -500,7 +500,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
       linguagem, e não depende de nada do servidor.*
 - [x] **L2 — `SO_REUSEPORT`** no `listen` (D2). Portão: dois workers no mesmo
       porto, o kernel reparte os accepts.
-- [ ] **L3 — `SSL_accept`** e carregar cert/chave, por caminho e por bytes (D8/D15).
+- [x] **L3 — `SSL_accept`** e carregar cert/chave, por caminho e por bytes (D8/D15).
       Portão: um GET por `https` com cert auto-assinado, conferido com
       `openssl s_client`.
 - [x] **L4 — `Topic`** no runtime (D6/D7): subscrever, publicar, dessubscrever, por
@@ -527,7 +527,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [x] **F2 — Streaming** (D5): corpo por cursor, chunked e SSE.
 - [x] **F3 — Multi-worker** sobre L1+L2. Portão: sob carga, os N workers servem e
       `sched.stats()` mostra a repartição.
-- [ ] **F4 — TLS servidor** sobre L3.
+- [x] **F4 — TLS servidor** sobre L3.
 - [x] **F5 — ws core sans-io** (D9): frames e máquina de estados do RFC 6455,
       cliente E servidor. Portão: o **Autobahn testsuite** e o `websockets` do
       Python como oráculo, frame a frame.

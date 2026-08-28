@@ -3957,6 +3957,22 @@ struct PsSema:
             ct: *PsType = ps_type(self->a, PT_TASK, e->pos)
             ct->inner = ps_type(self->a, PT_CONN, e->pos)
             return ct
+        if strcmp(name, "__net_serve_tls") == 0:
+            # 148/L3: `await net.serve_tls(conn, cert, chave)` — o TLS por cima de
+            # uma ligação JÁ ACEITA. É uma tarefa porque o aperto de mão é uma
+            # conversa, e ela é polida no mesmo laço que o resto (77.1).
+            if e->nargs != 3:
+                fatal_at(self->file, e->pos, "net.serve_tls(conn, cert, key) takes the accepted connection and the two PEM paths")
+            sc0: *PsType = self->check_expr(e->args[0])
+            if sc0 == None or sc0->kind != PT_CONN:
+                fatal_at(self->file, e->args[0]->pos, "net.serve_tls() takes a Socket, found %s", ps_type_str(self->a, sc0))
+            for si in range(1, 3):
+                sp0: *PsType = self->check_expr(e->args[si])
+                self->want(e->args[si], sp0, ps_type(self->a, PT_STR, e->pos),
+                           "the certificate chain (PEM)" if si == 1 else "the private key (PEM)")
+            stk9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+            stk9->inner = ps_type(self->a, PT_INT, e->pos)
+            return stk9
         if strcmp(name, "__net_starttls") == 0 or strcmp(name, "__net_starttls_insecure") == 0:
             # `await net.starttls(c, "example.com")` — promove uma ligação já
             # aberta. O NOME é obrigatório e não é decoração: é ele que vai no
@@ -5211,6 +5227,12 @@ struct PsSema:
             # e que ninguém escreve por descuido (141.4).
             ns->sym.add("starttls")
             ns->sym.add("starttls_insecure")
+            # 148/L3/D8: o lado de QUEM SERVE. Nome próprio e não uma bandeira no
+            # `starttls`, pela mesma razão que o `starttls_insecure` é uma função
+            # e não um `verify=False`: os dois lados fazem coisas diferentes — um
+            # confere uma cadeia, o outro apresenta um certificado — e um nome
+            # que diz qual deles é aparece num `grep`.
+            ns->sym.add("serve_tls")
             ns->sym.add("tls_available")
         elif strcmp(name, "re") == 0:
             # S2b: o motor passou a ser NOSSO, e com ele vieram as funções que

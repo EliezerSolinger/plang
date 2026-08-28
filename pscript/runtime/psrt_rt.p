@@ -3706,6 +3706,69 @@ const if defined(PSRT_TLS):
                 SSL_free(ssl)
                 ps_raise(ctx, "tls: the host name is not one a certificate can be checked against", PS_CAT_VALUE, file, line)
                 return False
+        # 148/L3: o estado, dito por escrito. Era implicito no `SSL_connect`; com
+        # o passo comum aos dois lados, tem de ser dito aqui.
+        SSL_set_connect_state(ssl)
+        c->ssl = (*void)(ssl)
+        return True
+
+    # ---------- 148/L3/D8: O LADO SERVIDOR ----------
+    #
+    # O que faltava era o irmao do `SSL_connect`, e a assimetria e real: um
+    # cliente CONFERE uma cadeia que vem do sistema, e um servidor APRESENTA um
+    # certificado e uma chave que vem de dois ficheiros. Sao contextos diferentes
+    # do OpenSSL, e nao o mesmo com uma bandeira.
+    private g_ssl_srv: *SSL_CTX = None
+    private g_ssl_srv_ready: i32 = 0
+
+    private def ps_tls_server_ctx(ctx: *PsCtx, cert: const *char, chave: const *char, file: const *char, line: i32) -> *SSL_CTX:
+        if g_ssl_srv_ready != 0:
+            return g_ssl_srv
+        g_ssl_srv_ready = 1
+        OPENSSL_init_ssl(u64(0), None)
+        sc: *SSL_CTX = SSL_CTX_new(TLS_server_method())
+        if sc == None:
+            ps_raise(ctx, "tls: the OpenSSL server context could not be created", PS_CAT_IO, file, line)
+            return None
+        _ = SSL_CTX_ctrl(sc, SSL_CTRL_SET_MIN_PROTO_VERSION, i64(TLS1_2_VERSION), None)
+        msg: char[512]
+        # a CADEIA e nao so o certificado: um servidor que mande apenas a folha
+        # funciona no browser de quem ja tem a intermediaria em cache e falha em
+        # todos os outros — e ai o erro aparece "as vezes", que e o pior modo
+        if SSL_CTX_use_certificate_chain_file(sc, cert) != 1:
+            ps_tls_msg(msg, usize(512), "tls: the certificate chain could not be read")
+            SSL_CTX_free(sc)
+            g_ssl_srv_ready = 0
+            ps_raise(ctx, msg, PS_CAT_IO, file, line)
+            return None
+        if SSL_CTX_use_PrivateKey_file(sc, chave, SSL_FILETYPE_PEM) != 1:
+            ps_tls_msg(msg, usize(512), "tls: the private key could not be read")
+            SSL_CTX_free(sc)
+            g_ssl_srv_ready = 0
+            ps_raise(ctx, msg, PS_CAT_IO, file, line)
+            return None
+        # ... e que a chave e DAQUELE certificado. Sem esta conferencia o erro
+        # aparece no primeiro aperto de mao de um cliente, e nao no arranque —
+        # portanto em producao e nao no `deploy`.
+        if SSL_CTX_check_private_key(sc) != 1:
+            ps_tls_msg(msg, usize(512), "tls: the private key does not match the certificate")
+            SSL_CTX_free(sc)
+            g_ssl_srv_ready = 0
+            ps_raise(ctx, msg, PS_CAT_VALUE, file, line)
+            return None
+        g_ssl_srv = sc
+        return sc
+
+    def ps_tls_serve_begin(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> bool:
+        sc: *SSL_CTX = ps_tls_server_ctx(ctx, cert->data, chave->data, file, line)
+        if sc == None:
+            return False
+        ssl: *SSL = SSL_new(sc)
+        if ssl == None:
+            ps_raise(ctx, "tls: the connection could not be created", PS_CAT_IO, file, line)
+            return False
+        _ = SSL_set_fd(ssl, c->fd)
+        SSL_set_accept_state(ssl)
         c->ssl = (*void)(ssl)
         return True
 
@@ -3720,7 +3783,13 @@ const if defined(PSRT_TLS):
 
     def ps_tls_step(w: *PsWork) -> i32:
         ssl: *SSL = (*SSL)(w->ssl)
-        r: int = SSL_connect(ssl)
+        # 148/L3: `SSL_do_handshake` e NAO `SSL_connect`, e serve os dois lados.
+        #
+        # O `SSL_connect` e o `SSL_accept` sao, cada um, um `set_*_state` seguido
+        # de um `do_handshake`. Como o estado ja foi posto no `begin` — de conexao
+        # no cliente, de aceitacao no servidor —, o passo passa a ser a mesma
+        # funcao para os dois, e nao ha uma bandeira nova a manter em sincronia.
+        r: int = SSL_do_handshake(ssl)
         if r == 1:
             return 1
         e: int = SSL_get_error(ssl, r)
@@ -3783,6 +3852,10 @@ else:
         ps_raise(ctx, "tls: this runtime was built without TLS — rebuild it with `-D PSRT_TLS` and link `-lssl -lcrypto`", PS_CAT_IO, file, line)
         return False
 
+    def ps_tls_serve_begin(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> bool:
+        ps_raise(ctx, "tls: this runtime was built without TLS — rebuild it with `-D PSRT_TLS` and link `-lssl -lcrypto`", PS_CAT_IO, file, line)
+        return False
+
     def ps_tls_has_pending(w: *PsWork) -> bool:
         return False
 
@@ -3822,6 +3895,26 @@ def ps_net_starttls(ctx: *PsCtx, c: *PsConn, host: *PsStr, verify: bool, file: c
     # o primeiro passo espera pela ESCRITA: um aperto de mão começa por dizer
     # alguma coisa, e é o `ClientHello`
     w->events = i16(POLLOUT)
+    return ps_fd_task(ctx, w, False, sizeof(i64))
+
+# 148/L3/D8: o `starttls` do lado de QUEM SERVE. O socket ja esta aceito; isto
+# poe-lhe o TLS por cima, e o aperto de mao e polido no mesmo `ps_fd_try` que o do
+# cliente — nao ha maquinaria nova.
+def ps_net_serve_tls(ctx: *PsCtx, c: *PsConn, cert: *PsStr, chave: *PsStr, file: const *char, line: i32) -> *PsTask:
+    if not ps_conn_live(ctx, c, "serve_tls"):
+        return ps_task_of_int(ctx, 0)
+    if c->ssl != None:
+        ps_raise(ctx, "serve_tls: this connection is already TLS", PS_CAT_VALUE, file, line)
+        return ps_task_of_int(ctx, 0)
+    if not ps_tls_serve_begin(ctx, c, cert, chave, file, line):
+        return ps_task_of_int(ctx, 0)
+    w: *PsWork = ps_work_new(PS_IO_TLS)
+    w->want = PS_W_TRUE
+    w->fd = c->fd
+    w->ssl = c->ssl
+    # o primeiro passo espera pela LEITURA, e e o inverso do cliente: quem serve
+    # nao diz nada primeiro — espera pelo `ClientHello`
+    w->events = i16(POLLIN)
     return ps_fd_task(ctx, w, False, sizeof(i64))
 
 def ps_net_tls_available(ctx: *PsCtx) -> bool:
