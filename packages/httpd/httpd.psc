@@ -138,6 +138,42 @@ struct Request:
         """
         return jsn.parse(str(self.body))
 
+    def cookie(self, nome: str) -> str:
+        """Um cookie do pedido, ou "". Calculado a cada chamada e nao guardado: a
+        maioria dos pedidos de uma API nao tem cookies, e um campo a mais na
+        `Request` custaria a todos eles."""
+        cs = parse_cookies(self.header("cookie"))
+        return cs[nome] if nome in cs else ""
+
+    def cookies(self) -> Dict<str, str>:
+        return parse_cookies(self.header("cookie"))
+
+    def ip(self, proxies_confiaveis: List<str>) -> str:
+        """D32: O IP DO CLIENTE, e a regra que o torna confiavel.
+
+        `peer` e o IP do socket, e e sempre verdade. O `X-Forwarded-For` e um
+        cabecalho, portanto qualquer cliente o escreve -- e por isso ele so e
+        lido **quando a conexao vem de um proxy da lista**. Confiar nele sem isso
+        deixa qualquer um forjar o proprio IP, e ai o rate-limit e o ban por IP
+        viram enfeite.
+
+        Da lista do `X-Forwarded-For` toma-se o **ultimo** e nao o primeiro. E ao
+        contrario do que a intuicao diz, e e a unica escolha segura: a cadeia e
+        `cliente, proxy1, proxy2`, e o cliente controla o principio dela --
+        escrever `X-Forwarded-For: 1.2.3.4` faz o primeiro elemento ser o que ele
+        quiser. O ultimo foi posto pelo proxy em que confiamos.
+        """
+        for p in proxies_confiaveis:
+            if p == self.peer:
+                xff = self.header("x-forwarded-for")
+                if len(xff) > 0:
+                    partes = xff.split(",")
+                    return partes[len(partes) - 1].strip()
+                real = self.header("x-real-ip")
+                if len(real) > 0:
+                    return real.strip()
+        return self.peer
+
     def is_json(self) -> bool:
         """O `content-type` DIZ que é JSON? A pergunta que decide se vale a pena
         tentar — separada do `json()` porque são duas perguntas."""
@@ -672,6 +708,7 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
     serviu, que é o número que um teste consegue afirmar.
     """
     servidos = 0
+    respondeu_expect = False
     p = h.new_parser()
     with Buffer(65536) as rb:
         while True:
@@ -687,6 +724,27 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
                 p.finish()
                 break
             if not p.feed(bytes(rb[0:n])):
+                # D40: A JANELA DO `Expect: 100-continue`.
+                #
+                # Os cabeçalhos chegaram e o corpo ainda não. É o único momento
+                # em que se pode recusar por tamanho ANTES de o upload subir, e é
+                # toda a razão de o cabeçalho existir — o `curl` manda-o sozinho
+                # acima de um KiB.
+                #
+                # E não é opcional: um cliente que o mande ESPERA pela resposta
+                # antes de enviar. Sem esta linha ele espera o tempo dele (um
+                # segundo, no `curl`) e só depois manda — um segundo por pedido,
+                # que num teste passa por lentidão da rede.
+                if p.headers_done() and not respondeu_expect:
+                    respondeu_expect = True
+                    decl = p.declared_length()
+                    if decl > cfg.max_body:
+                        # 413 ANTES de o corpo subir, que é o que se ganha
+                        await escreve(c, encode(status_code(413), "1.1", True, cfg))
+                        break
+                    if len(p.request().header("expect")) > 0 and espera_continuar(to_request(p.request(), peer)):
+                        if not await escreve(c, b"HTTP/1.1 100 Continue\r\n\r\n"):
+                            break
                 if p.failed():
                     # 400, e fecha. O que sobra no cano pertence a uma mensagem
                     # que não se sabe onde acaba, e continuar a ler dela é
@@ -721,6 +779,7 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
                 if not await escreve_stream(c, resp, cfg):
                     break
             servidos += 1
+            respondeu_expect = False
             if resp.upgraded:
                 # a conexão deixou de ser HTTP/1. Entrega-se a quem a pediu, COM
                 # o que sobrou por ler: um cliente ansioso manda o primeiro
@@ -830,7 +889,10 @@ def conta(srv: Server, c: Socket, handle: def(Request) -> Task<Response>):
     """Arranca a tarefa da conexão e deita fora o valor. Existe como função para
     dizer isso por escrito: o resultado é deliberadamente ignorado, e uma linha
     que ignora um valor sem o dizer lê-se como um esquecimento."""
-    t = serve_conn(c, "", handle, srv.cfg)
+    # D32: o endereço de quem ligou, lido do socket. É a única fonte que o
+    # cliente não pode escrever, e é por isso que o `X-Forwarded-For` só é lido
+    # quando ELE diz que a ligação vem de um proxy declarado.
+    t = serve_conn(c, c.peer(), handle, srv.cfg)
 
 
 # ---------- F3/D12: N WORKERS NO MESMO PORTO ----------
@@ -959,3 +1021,230 @@ def comprime(r: Response, req: Request, minimo: int = 1024) -> Response:
     r.headers.append(Header("content-encoding", "gzip"))
     r.headers.append(Header("vary", "Accept-Encoding"))
     return r
+
+
+# ---------- F8b/D33: os COOKIES ----------
+
+def parse_cookies(cab: str) -> Dict<str, str>:
+    """`Cookie: a=1; b=2` lido como um dicionario.
+
+    O cabecalho `Cookie` e o UNICO que junta pares com `;` em vez de virem em
+    linhas separadas -- e por isso e o unico que precisa de um parser proprio. Uma
+    chave repetida fica com a PRIMEIRA, que e o que os browsers fazem quando ha um
+    cookie de dominio e um de subdominio com o mesmo nome.
+    """
+    out: Dict<str, str> = {}
+    for par in cab.split(";"):
+        p = par.strip()
+        if len(p) == 0:
+            continue
+        i = p.find("=")
+        if i < 0:
+            continue
+        k = p[0:i].strip()
+        v = p[i + 1:].strip()
+        # um valor entre aspas: a RFC 6265 permite, e ha bibliotecas que as poem
+        if len(v) >= 2 and v.startswith("\"") and v.endswith("\""):
+            v = v[1:len(v) - 1]
+        if len(k) > 0 and k not in out:
+            out[k] = v
+    return out
+
+
+def cookie_ok(s: str) -> bool:
+    """Um nome ou valor de cookie NAO pode ter os caracteres que o quebrariam.
+
+    Nao e uma limpeza estetica: um `\r\n` num valor de cookie que va para um
+    `Set-Cookie` e uma INJECCAO DE CABECALHO -- quem controla o valor passa a
+    escrever cabecalhos, e dai sai um `Location` ou um segundo `Set-Cookie`. E por
+    isso que isto RECUSA em vez de limpar: limpar esconde o ataque, e recusar
+    mostra-o a quem escreveu o programa.
+    """
+    for ch in s:
+        c = ord(ch)
+        if c < 0x21 or c > 0x7E or ch == ";" or ch == "," or ch == "\\" or ch == "\"":
+            return False
+    return True
+
+
+def set_cookie(r: Response, nome: str, valor: str, max_age: int = -1,
+               caminho: str = "/", dominio: str = "", http_only: bool = True,
+               secure: bool = True, same_site: str = "Lax") -> Response:
+    """Escreve um `Set-Cookie` com os atributos de seguranca POR OMISSAO.
+
+    `http_only`, `secure` e `same_site=Lax` sao o **padrao** e nao a opcao, e a
+    diferenca importa: um cookie de sessao sem `HttpOnly` e legivel por qualquer
+    XSS, um sem `Secure` viaja em claro na primeira ligacao HTTP que o browser
+    fizer, e um sem `SameSite` vai em pedidos de outros sitios -- que e o CSRF.
+
+    Quem precisa do contrario escreve-o, e a linha fica a dizer o que fez.
+    """
+    if not cookie_ok(nome) or not cookie_ok(valor):
+        raise error("um nome ou valor de cookie com caracteres de controlo seria uma injeccao de cabecalho: " + nome)
+    sb = nome + "=" + valor
+    if max_age >= 0:
+        sb += "; Max-Age=" + str(max_age)
+    if len(caminho) > 0:
+        sb += "; Path=" + caminho
+    if len(dominio) > 0:
+        sb += "; Domain=" + dominio
+    if http_only:
+        sb += "; HttpOnly"
+    if secure:
+        sb += "; Secure"
+    if len(same_site) > 0:
+        sb += "; SameSite=" + same_site
+    # a LISTA de cabecalhos e o que faz isto funcionar (D3c): um `Set-Cookie` por
+    # cookie, e um dicionario juntaria-os com `, ` -- que os browsers leem como
+    # UM cookie com uma virgula no valor
+    r.headers.append(Header("set-cookie", sb))
+    return r
+
+
+def clear_cookie(r: Response, nome: str, caminho: str = "/") -> Response:
+    """Apaga um cookie: e um `Set-Cookie` com o valor vazio e `Max-Age=0`.
+
+    Nao ha outra maneira -- o HTTP nao tem "apaga este cookie". E o `Path` tem de
+    ser o MESMO com que ele foi posto, senao apaga-se um cookie diferente e o
+    original fica.
+    """
+    return set_cookie(r, nome, "", 0, caminho, "", True, True, "Lax")
+
+
+# ---------- F8c/D30: MULTIPART/FORM-DATA ----------
+
+struct Parte:
+    """Um campo de um formulario. `nome` e o do campo; `ficheiro` e o nome do
+    ficheiro quando havia um, ou "" quando era um campo de texto."""
+    nome: str
+    ficheiro: str
+    tipo: str
+    dados: bytes
+
+    def texto(self) -> str:
+        return str(self.dados)
+
+
+def limite_de(content_type: str) -> str:
+    """A fronteira do `Content-Type: multipart/form-data; boundary=...`.
+
+    Ela pode vir entre aspas, e vem quando tem caracteres que um token nao
+    permite -- o que acontece com a que o `curl` gera. Ler so a forma sem aspas e
+    o engano que faz metade dos uploads falharem contra metade dos clientes.
+    """
+    t = content_type
+    i = t.lower().find("boundary=")
+    if i < 0:
+        return ""
+    b = t[i + 9:].strip()
+    j = b.find(";")
+    if j >= 0:
+        b = b[0:j].strip()
+    if len(b) >= 2 and b.startswith("\"") and b.endswith("\""):
+        b = b[1:len(b) - 1]
+    return b
+
+
+def acha(corpo: bytes, agulha: bytes, de: int) -> int:
+    """Onde `agulha` comeca em `corpo` a partir de `de`, ou -1.
+
+    Byte a byte e sem tabela: uma fronteira de multipart tem umas dezenas de
+    bytes e aparece umas poucas vezes por pedido, portanto um Boyer-Moore aqui
+    seria codigo a mais para um ganho que ninguem mede. O que importa e nao
+    procurar no TEXTO -- um corpo de upload nao e UTF-8, e converte-lo para o
+    procurar seria transformar um ficheiro binario em erro.
+    """
+    n = len(corpo)
+    m = len(agulha)
+    if m == 0 or m > n:
+        return -1
+    i = de
+    while i + m <= n:
+        k = 0
+        while k < m and corpo[i + k] == agulha[k]:
+            k += 1
+        if k == m:
+            return i
+        i += 1
+    return -1
+
+
+def cabecalhos_da_parte(bruto: str) -> Dict<str, str>:
+    out: Dict<str, str> = {}
+    for linha in bruto.split("\r\n"):
+        i = linha.find(":")
+        if i > 0:
+            out[linha[0:i].strip().lower()] = linha[i + 1:].strip()
+    return out
+
+
+def valor_de(disp: str, chave: str) -> str:
+    """`form-data; name="a"; filename="b.txt"` -> o valor de uma das chaves."""
+    i = disp.lower().find(chave.lower() + "=")
+    if i < 0:
+        return ""
+    v = disp[i + len(chave) + 1:]
+    if v.startswith("\""):
+        j = v.find("\"", 1)
+        return v[1:j] if j > 0 else ""
+    j2 = v.find(";")
+    return v[0:j2].strip() if j2 >= 0 else v.strip()
+
+
+def multipart(req: Request) -> List<Parte>:
+    """As partes de um `multipart/form-data`. Lista vazia quando nao e um.
+
+    O formato e da RFC 7578, e o que ele tem de traicoeiro esta em duas linhas: a
+    fronteira no corpo leva DOIS hifens a frente, e a ultima leva dois atras
+    tambem. Quem so procura a fronteira nua encontra-a dentro dela mesma.
+    """
+    fronteira = limite_de(req.header("content-type"))
+    if len(fronteira) == 0:
+        return []
+    marca = ("--" + fronteira).encode()
+    corpo = req.body
+    partes: List<Parte> = []
+    at = acha(corpo, marca, 0)
+    if at < 0:
+        return []
+    at += len(marca)
+    while True:
+        # depois da fronteira vem `\r\n` (ha mais uma parte) ou `--` (acabou)
+        if at + 2 > len(corpo):
+            break
+        if int(corpo[at]) == 45 and int(corpo[at + 1]) == 45:
+            break        # `--`: era a ultima
+        # salta o CRLF
+        if int(corpo[at]) == 13:
+            at += 2
+        fim_cab = acha(corpo, b"\r\n\r\n", at)
+        if fim_cab < 0:
+            break
+        cab = cabecalhos_da_parte(str(corpo[at:fim_cab]))
+        inicio = fim_cab + 4
+        prox = acha(corpo, marca, inicio)
+        if prox < 0:
+            break
+        # o corpo da parte acaba DOIS bytes antes da fronteira: o `\r\n` que a
+        # separa pertence a moldura e nao aos dados. Levar-lhos e o defeito que
+        # faz cada ficheiro carregado chegar com dois bytes a mais.
+        fim = prox - 2
+        disp = cab["content-disposition"] if "content-disposition" in cab else ""
+        tipo = cab["content-type"] if "content-type" in cab else ""
+        partes.append(Parte(valor_de(disp, "name"), valor_de(disp, "filename"),
+                            tipo, corpo[inicio:fim] if fim > inicio else b""))
+        at = prox + len(marca)
+    return partes
+
+
+# ---------- F8c/D40: `Expect: 100-continue` ----------
+
+def espera_continuar(req: Request) -> bool:
+    """O cliente perguntou se pode mandar o corpo?
+
+    O `curl` manda isto sozinho acima de um KiB, e e exactamente para isto que o
+    cabecalho existe: um upload de um gigabyte que ia ser recusado por tamanho
+    nao tem de subir primeiro. Ignora-lo custa a subida inteira de um ficheiro que
+    ia ser deitado fora.
+    """
+    return req.header("expect").lower().find("100-continue") >= 0

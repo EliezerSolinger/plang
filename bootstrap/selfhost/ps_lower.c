@@ -3003,7 +3003,13 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             self->allocs = 1;
             return ad;
         }
-        if (strcmp(nm4, "remove") == 0) {
+        if (strcmp(nm4, "remove") == 0 || strcmp(nm4, "discard") == 0) {
+            if (PsLow_is_sdict(self, e->lhs->lhs)) {
+                Expr *sd9 = PsLow_call_rt(self, "ps_sdict_del", e->pos);
+                PsLow_push_arg(self, sd9, PsLow_expr(self, e->lhs->lhs));
+                PsLow_push_arg(self, sd9, PsLow_sd_arg(self, e->args[0], kt2, e->pos));
+                return sd9;
+            }
             Expr *rm = PsLow_call_rt(self, "ps_dict_del", e->pos);
             PsLow_push_arg(self, rm, PsLow_expr(self, e->lhs->lhs));
             PsLow_push_arg(self, rm, PsLow_key_ptr(self, e->args[0], kt2, e->pos));
@@ -3035,12 +3041,6 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, up4, PsLow_expr(self, e->args[0]));
             self->allocs = 1;
             return up4;
-        }
-        if (strcmp(nm4, "discard") == 0) {
-            Expr *dc4 = PsLow_call_rt(self, "ps_dict_del", e->pos);
-            PsLow_push_arg(self, dc4, PsLow_expr(self, e->lhs->lhs));
-            PsLow_push_arg(self, dc4, PsLow_key_ptr(self, e->args[0], kt2, e->pos));
-            return dc4;
         }
         if (strcmp(nm4, "pop") == 0) {
             Expr *pk4 = PsLow_key_ptr(self, e->args[0], kt2, e->pos);
@@ -3766,6 +3766,12 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             cc7 = PsLow_call_rt(self, (ck7 == PT_BYTES ? "ps_conn_write_bytesobj" : (ck7 == PT_LIST ? "ps_conn_write_bytes" : "ps_conn_write")), e->pos);
         } else if (strcmp(cmn, "close") == 0) {
             cc7 = PsLow_call_rt(self, "ps_conn_close", e->pos);
+        } else if (strcmp(cmn, "peer") == 0) {
+            cc7 = PsLow_call_rt(self, "ps_conn_peer", e->pos);
+            PsLow_push_arg(self, cc7, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, cc7, PsLow_expr(self, e->lhs->lhs));
+            self->allocs = 1;
+            return cc7;
         } else {
             cc7 = PsLow_call_rt(self, "ps_conn_port", e->pos);
             PsLow_push_arg(self, cc7, PsLow_expr(self, e->lhs->lhs));

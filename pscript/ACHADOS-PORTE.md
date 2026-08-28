@@ -1244,3 +1244,96 @@ Medido no fio: 6000 bytes de texto viajam em 80.
 Um FLUXO (F2) nao se comprime -- o corpo ainda nao existe, e comprimi-lo pedaco a
 pedaco precisa de um DEFLATE com estado entre chamadas, que e o mesmo que o
 permessage-deflate do ws vai precisar. Fica dito em vez de feito pela metade.
+
+
+## 43 — `remove()` num `shared dict` nao estava ligado  OK corrigido
+
+O `ps_sdict_del` existia no runtime; o que saia era um `ps_dict_del` a receber um
+`PsSDict`. Portanto **nao havia como apagar de uma tabela partilhada** -- e isso
+nao e um pormenor: uma sessao que nao se pode revogar e um contador que nunca
+esquece sao os dois casos em que a tabela existe para ser usada.
+
+E a CHAVE vai pelo `sd_arg` e nao pelo `key_ptr`: a tabela partilhada copia os
+bytes de uma string e recebe-a como ela e, ao passo que um dicionario coletado
+recebe o ENDERECO do lugar onde a chave esta. Passar um pelo outro le um endereco
+que nao e uma chave.
+
+## 44 — `x[k] if k in x else 0` sobre um `shared dict` levanta  aberto (contornado)
+
+Sobre um dicionario normal funciona; sobre uma tabela partilhada, nao. A leitura
+e hasteada para uma instrucao ANTES do ternario (ela precisa de um sitio onde o
+valor caia) e portanto corre mesmo quando a chave nao esta la.
+
+O contorno e um `if` explicito, e o `packages/httpd/sessao.psc` escreve-o assim
+com a razao ao lado. Mas o defeito e real e a forma dele e desagradavel: o mesmo
+codigo funciona numa tabela e nao na outra, o que faz dele um engano que so
+aparece quando se troca um `Dict` por um `shared Dict`.
+
+## 45 — percorrer um `shared dict` nao esta ligado  aberto (desenho)
+
+`for k in tabela:` sobre uma tabela partilhada nao compila. Nao e um esquecimento:
+e uma pergunta de desenho que precisa de uma resposta. Um INSTANTANEO (copia as
+chaves sob o cadeado e percorre a copia, que pode estar velha ao ser lida) ou AO
+VIVO (mantem o cadeado durante o laco inteiro, e ai um laco lento para os outros
+workers)?
+
+O `packages/httpd/sessao.psc` nao precisou dela: o rate limit guarda UMA entrada
+por IP com o numero da janela DENTRO do valor, e quando a janela roda a entrada e
+sobrescrita em vez de acumulada. A tabela cresce com o numero de IPs distintos --
+o mesmo tecto de qualquer estrutura por IP -- e nao com o numero de janelas.
+
+## 46 — sessao, cookies, proxy e rate limit (F8b/F8d)  OK feito
+
+`packages/httpd/sessao.psc`. E o sitio onde a resposta da linguagem aparece: onde
+o Bun manda subir um Redis, a tabela esta na linguagem, e o portao prova-o lendo
+uma sessao criada num worker a partir de conexoes que caem noutros.
+
+Quatro decisoes que valem a pena estar escritas:
+
+* **o cookie leva um ID assinado e mais nada.** Revogar funciona (apagar a entrada
+  mata a sessao na hora, coisa que um cookie assinado nao sabe fazer), o tamanho
+  nao e o dos 4 KiB de um cookie, e nada sensivel viaja. O custo, dito: a sessao
+  morre com o processo -- um `shared dict` e memoria, nao e uma base de dados;
+
+* **assinar um ID que ja e aleatorio** parece redundante e nao e: sem assinatura
+  um atacante pode SONDAR, e com ela um ID que nao bate e recusado antes de a
+  tabela ser consultada. A comparacao e em tempo constante (`hmac_equal`), porque
+  um `==` de strings conta quantos bytes bateram pelo tempo que leva;
+
+* **os atributos de seguranca do cookie sao o PADRAO** e nao a opcao. Um cookie de
+  sessao sem `HttpOnly` e legivel por qualquer XSS, um sem `Secure` viaja em claro
+  na primeira ligacao HTTP que o browser fizer, e um sem `SameSite` vai em pedidos
+  de outros sitios -- que e o CSRF. E o `set_cookie` RECUSA um valor com
+  caracteres de controlo em vez de os limpar: limpar esconde a injeccao de
+  cabecalho, recusar mostra-a;
+
+* **do `X-Forwarded-For` toma-se o ULTIMO e nao o primeiro**, e e ao contrario do
+  que a intuicao diz. A cadeia e `cliente, proxy1, proxy2` e o cliente controla o
+  PRINCIPIO dela: escrever `X-Forwarded-For: 1.2.3.4` faz o primeiro elemento ser
+  o que ele quiser. O ultimo foi posto pelo proxy em que confiamos -- e so se le
+  quando a ligacao vem de um proxy DECLARADO, que e o que impede qualquer cliente
+  de forjar o proprio IP.
+
+Pelo caminho o runtime ganhou `ps_conn_peer` (o endereco de quem ligou, via
+`getpeername`): sem ele nao ha como validar o `X-Forwarded-For` nem contar por IP,
+e as duas defesas passavam de defesa a enfeite.
+
+## 47 — multipart e `Expect: 100-continue` (F8c/D30/D40)  OK feito
+
+O multipart tem dois pormenores traicoeiros, e os dois estao no portao: a
+fronteira no corpo leva DOIS hifens a frente (quem procura a fronteira nua
+encontra-a dentro dela mesma), e o corpo de uma parte acaba DOIS bytes antes da
+fronteira seguinte -- o `\r\n` pertence a moldura. Levar-lhos faz cada ficheiro
+carregado chegar com dois bytes a mais.
+
+E o `Expect: 100-continue` **paga-se, e da-se a medir**: um corpo de tres
+megabytes acima do tecto e recusado com 413 e **ZERO bytes subidos**. Sem ele os
+tres megabytes subiam para serem deitados fora.
+
+Ele tambem nao e opcional: um cliente que o mande ESPERA pela resposta antes de
+enviar. Sem responder, o `curl` espera um segundo e manda de qualquer maneira --
+um segundo por pedido, que num teste passa por lentidao da rede.
+
+A janela onde isso acontece precisou de uma pergunta nova no parser
+(`headers_done()`): e o unico momento em que os cabecalhos chegaram e o corpo
+ainda nao.

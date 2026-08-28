@@ -587,6 +587,21 @@ struct Parser:
     def failed(self) -> bool:
         return self.state == H_ERROR
 
+    # 148/D40: OS CABEÇALHOS JÁ CHEGARAM, e o corpo ainda não.
+    #
+    # É a única janela onde um servidor pode responder a um `Expect:
+    # 100-continue` ou recusar por tamanho ANTES de o corpo subir — e é toda a
+    # razão de o cabeçalho existir. Sem esta pergunta, quem serve só vê a
+    # mensagem quando ela está inteira, e um upload de um gigabyte que ia ser
+    # recusado sobe primeiro.
+    def headers_done(self) -> bool:
+        return self.state in {H_BODY, H_CHUNK_SIZE, H_CHUNK_DATA, H_EOF_BODY, H_TRAILER}
+
+    def declared_length(self) -> int:
+        """O `content-length` que veio, ou -1 quando não veio nenhum (chunked, ou
+        um corpo que acaba com a conexão)."""
+        return self.length if self.seen_length else -1
+
     def handoff(self) -> bool:
         """A conexão passou a ser outro protocolo — um túnel, um websocket, o
         preâmbulo do HTTP/2. Os bytes a seguir NÃO são uma segunda mensagem e

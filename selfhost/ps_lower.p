@@ -2814,7 +2814,26 @@ struct PsLow:
                 self->push_arg(ad, self->key_ptr(e->args[0], kt2, e->pos))
                 self->allocs = True
                 return ad
-            if strcmp(nm4, "remove") == 0:
+            if strcmp(nm4, "remove") == 0 or strcmp(nm4, "discard") == 0:
+                # 148: um `shared dict` é uma tabela FORA de todos os heaps
+                # (42.1), e portanto tem funções próprias. O `remove` era o único
+                # que faltava ligar — o `ps_sdict_del` já existia no runtime, e o
+                # que saía era um `ps_dict_del` a receber um `PsSDict`.
+                #
+                # Sem ele não há como APAGAR de uma tabela partilhada, e isso não
+                # é um pormenor: uma sessão que não se pode revogar e um contador
+                # de rate-limit que nunca esquece uma janela antiga são os dois
+                # casos em que a tabela existe para ser usada.
+                if self->is_sdict(e->lhs->lhs):
+                    # a CHAVE vai pelo `sd_arg` e não pelo `key_ptr`: a tabela
+                    # partilhada copia os bytes de uma string e recebe-a como
+                    # ela é, ao passo que um dicionário coletado recebe o
+                    # ENDEREÇO do lugar onde a chave está. Passar um pelo outro
+                    # dá uma leitura de um endereço que não é uma chave.
+                    sd9: *Expr = self->call_rt("ps_sdict_del", e->pos)
+                    self->push_arg(sd9, self->expr(e->lhs->lhs))
+                    self->push_arg(sd9, self->sd_arg(e->args[0], kt2, e->pos))
+                    return sd9
                 rm: *Expr = self->call_rt("ps_dict_del", e->pos)
                 self->push_arg(rm, self->expr(e->lhs->lhs))
                 self->push_arg(rm, self->key_ptr(e->args[0], kt2, e->pos))
@@ -2846,11 +2865,7 @@ struct PsLow:
                 self->push_arg(up4, self->expr(e->args[0]))
                 self->allocs = True
                 return up4
-            if strcmp(nm4, "discard") == 0:
-                dc4: *Expr = self->call_rt("ps_dict_del", e->pos)
-                self->push_arg(dc4, self->expr(e->lhs->lhs))
-                self->push_arg(dc4, self->key_ptr(e->args[0], kt2, e->pos))
-                return dc4
+
             if strcmp(nm4, "pop") == 0:
                 # LÊ o valor, depois apaga. A chave é amarrada uma vez, e o
                 # `has` decide entre o valor e o padrão (ou o levantar, que é o
@@ -3564,6 +3579,14 @@ struct PsLow:
                 cc7 = self->call_rt("ps_conn_write_bytesobj" if ck7 == PT_BYTES else ("ps_conn_write_bytes" if ck7 == PT_LIST else "ps_conn_write"), e->pos)
             elif strcmp(cmn, "close") == 0:
                 cc7 = self->call_rt("ps_conn_close", e->pos)
+            elif strcmp(cmn, "peer") == 0:
+                # 148/D32: leva contexto porque devolve uma `str` — que é
+                # construída no heap de quem pergunta
+                cc7 = self->call_rt("ps_conn_peer", e->pos)
+                self->push_arg(cc7, self->ctx_arg(e->pos))
+                self->push_arg(cc7, self->expr(e->lhs->lhs))
+                self->allocs = True
+                return cc7
             else:
                 cc7 = self->call_rt("ps_conn_port", e->pos)
                 self->push_arg(cc7, self->expr(e->lhs->lhs))

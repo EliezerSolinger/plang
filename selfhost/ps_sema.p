@@ -2485,6 +2485,16 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "write() takes a str, `bytes` or a List<u8>, found %s", ps_type_str(self->a, cw))
                     ctk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ctk
+                if strcmp(cm, "peer") == 0:
+                    # 148/D32: o endereço de QUEM LIGOU, e não o porto local.
+                    #
+                    # É síncrono como o `port()` ao lado — o kernel já o tem — e
+                    # devolve só o endereço: o porto de origem muda a cada
+                    # ligação, e quem o metesse numa chave de rate-limit estaria a
+                    # contar cada pedido como vindo de outro cliente.
+                    if e->nargs != 0:
+                        fatal_at(self->file, e->pos, "peer() takes no arguments")
+                    return ps_type(self->a, PT_STR, e->pos)
                 if strcmp(cm, "recv_from") == 0:
                     # F7: um datagrama diz DE ONDE veio, e é a única diferença
                     # que o `read_into` não cobre sozinho. Devolve os dois: quem
@@ -2526,7 +2536,7 @@ struct PsSema:
                     return ps_type(self->a, PT_VOID, e->pos)
                 if strcmp(cm, "port") == 0:
                     return ps_type(self->a, PT_INT, e->pos)
-                fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close and port; a DATAGRAM one has recv_from and send_to (77.1/135.2/F7) — not '%s'", cm)
+                fatal_at(self->file, e->pos, "a socket has accept, read_into, write, write_from, close, port and peer; a DATAGRAM one has recv_from and send_to (77.1/135.2/F7) — not '%s'", cm)
             # 48.1 + 76.2: every one of these is a TASK now. The names say what
             # comes back, because the return type follows the name and not the
             # number of arguments: `read(n)` gives BYTES (up to n, empty at the

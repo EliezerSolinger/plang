@@ -223,6 +223,9 @@ def ps_conn_close(ctx: *PsCtx, c: *PsConn)
 # F8: `os.spawn_pty` is a layer up and builds a Conn of its own
 def ps_conn_new(ctx: *PsCtx, fd: int, listening: i32) -> *PsConn
 def ps_sock_nonblock(fd: int)
+# 148/D32: o endereço de quem ligou. Sem ele o `X-Forwarded-For` não se pode
+# validar e um rate-limit por IP conta pedidos de um IP que o cliente escolheu.
+def ps_conn_peer(ctx: *PsCtx, c: *PsConn) -> *PsStr
 def ps_conn_port(c: *PsConn) -> i64
 def ps_file_write(ctx: *PsCtx, f: *PsFile, s: *PsStr, file: const *char, line: i32) -> i64
 def ps_file_read(ctx: *PsCtx, f: *PsFile, file: const *char, line: i32) -> *PsStr

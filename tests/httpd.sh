@@ -142,6 +142,30 @@ check "o SSE emoldura cada linha" "3" \
 check "e cada evento tem duas linhas de dados" "6" \
       "$(curl -s -N $B/sse | grep -c '^data: ')"
 
+# ---- F8c/D30: MULTIPART, e F8c/D40: o `Expect: 100-continue` ----
+printf 'conteudo do ficheiro\nsegunda linha\n' > "$OUT/anexo.txt"
+printf '\x00\x01\xfe\xff binario'            > "$OUT/bin.dat"
+check "multipart: campos e ficheiros" \
+      "campo:nome:Ana
+campo:idade:30
+ficheiro:texto:anexo.txt:text/plain:35
+ficheiro:cru:bin.dat:application/octet-stream:12" \
+      "$(curl -s -F 'nome=Ana' -F 'idade=30' -F "texto=@$OUT/anexo.txt;type=text/plain" -F "cru=@$OUT/bin.dat" $B/upload)"
+
+# D40, E É AQUI QUE ELE SE PAGA: um corpo acima do tecto é recusado com ZERO
+# bytes subidos. Sem o `Expect`, os três megabytes subiam para serem deitados
+# fora — e é exactamente para isto que o cabeçalho existe.
+head -c 3000000 /dev/zero | tr '\0' 'y' > "$OUT/enorme.txt"
+check "413 sem o corpo subir" "413 0" \
+      "$(curl -s -H 'Expect: 100-continue' --data-binary @"$OUT/enorme.txt" -o /dev/null -w '%{http_code} %{size_upload}' $B/eco)"
+# e um corpo aceitável passa, e passa DEPRESSA: sem a resposta 100 o cliente
+# espera o tempo dele (um segundo, no curl) antes de enviar
+head -c 5000 /dev/zero | tr '\0' 'y' > "$OUT/medio.txt"
+check "100-continue: o corpo aceitável passa" "200" \
+      "$(curl -s -H 'Expect: 100-continue' --data-binary @"$OUT/medio.txt" -o /dev/null -w '%{http_code}' $B/eco)"
+check "e sem esperar um segundo" "sim" \
+      "$(test "$(curl -s -H 'Expect: 100-continue' --data-binary @"$OUT/medio.txt" -o /dev/null -w '%{time_total}' $B/eco | cut -d. -f1)" -lt 1 && echo sim || echo nao)"
+
 # ---- F9/D16: a COMPRESSÃO ----
 #
 # Três condições, e o portão bate nas três recusas: o cliente tem de pedir, o
@@ -253,6 +277,66 @@ if [ -s "$PF4" ]; then
           "$(curl -s "http://127.0.0.1:$(cat "$PF4")/difunde")"
 else
     echo "  FAIL o servidor multi-worker não abriu porto"; fail=$((fail+1))
+fi
+
+# ============================================================================
+# F8b/F8d — SESSÃO, COOKIES, PROXY e RATE LIMIT, com DOIS workers.
+#
+# É onde a resposta da linguagem aparece: onde o Bun manda subir um Redis, a
+# tabela partilhada está na linguagem — e o portão prova-o lendo uma sessão
+# criada num worker a partir de conexões que caem noutros.
+# ============================================================================
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/sessoes.psc "$OUT/sess" >>"$OUT/build.log" 2>&1; then
+    echo "  FAIL o servidor de sessões não compila"; tail -5 "$OUT/build.log"; exit 1
+fi
+PF5="$OUT/porto5"
+"$OUT/sess" "$PF5" >"$OUT/sess.log" 2>&1 &
+S5=$!
+trap 'kill $SRV $R $E $M $S5 2>/dev/null' EXIT
+for _ in $(seq 1 100); do [ -s "$PF5" ] && break; sleep 0.05; done
+if [ -s "$PF5" ]; then
+    D="http://127.0.0.1:$(cat "$PF5")"
+    JAR="$OUT/jar"
+
+    check "entra e recebe um cookie" "entrou" "$(curl -s -c "$JAR" "$D/entra?quem=ana")"
+    check "o cookie ficou na jarra" "1" "$(grep -c sid "$JAR")"
+    check "e a sessão lê-se com ele" "utilizador=ana" "$(curl -s -b "$JAR" $D/quem)"
+    check "sem cookie é 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' $D/quem)"
+    # um sid FORJADO é recusado pela assinatura, ANTES de a tabela ser consultada
+    check "um sid forjado é 401" "401" \
+          "$(curl -s -o /dev/null -w '%{http_code}' -H 'Cookie: sid=abc.def' $D/quem)"
+
+    # D33: os atributos de segurança são o PADRÃO e não a opção
+    sc=$(curl -s -i "$D/entra?quem=x" | tr -d '\r' | grep -i '^set-cookie')
+    check "o cookie leva HttpOnly" "1" "$(echo "$sc" | grep -c HttpOnly)"
+    check "o cookie leva SameSite" "1" "$(echo "$sc" | grep -c SameSite)"
+
+    # REVOGAR funciona, que é a coisa que um cookie assinado não sabe fazer
+    check "revoga" "revogou=True" "$(curl -s -b "$JAR" $D/sai)"
+    check "e a sessão morreu na hora" "401" \
+          "$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" $D/quem)"
+
+    # A TABELA É PARTILHADA: a sessão criada num worker lê-se de qualquer um.
+    # Doze conexões NOVAS caem em workers diferentes, e as doze vêem o mesmo.
+    JAR2="$OUT/jar2"
+    curl -s -c "$JAR2" -H 'Connection: close' "$D/entra?quem=cruzada" >/dev/null
+    vistos=$(for _ in $(seq 1 12); do curl -s -b "$JAR2" -H 'Connection: close' $D/quem; echo; done | sort -u | tr -d '\n')
+    check "a sessão atravessa os workers" "utilizador=cruzada" "$vistos"
+
+    # D32: o X-Forwarded-For só vale de um proxy DECLARADO
+    check "de um proxy da lista, o cabeçalho vale" "9.9.9.9" \
+          "$(curl -s -H 'X-Forwarded-For: 9.9.9.9' $D/ip)"
+    check "sem lista, o cabeçalho é ignorado" "127.0.0.1" \
+          "$(curl -s -H 'X-Forwarded-For: 9.9.9.9' $D/ip-estrito)"
+
+    # D37: o rate limit, três por janela
+    check "o rate limit trava ao quarto" "200 200 200 429 429" \
+          "$(for _ in 1 2 3 4 5; do printf '%s ' "$(curl -s -o /dev/null -w '%{http_code}' $D/limitado)"; done | sed 's/ $//')"
+
+    check "os cookies do pedido, todos" "a=1|b=2|c=3" \
+          "$(curl -s -H 'Cookie: a=1; b=2; c=3' $D/cookies)"
+else
+    echo "  FAIL o servidor de sessões não abriu porto"; fail=$((fail+1))
 fi
 
 echo "   httpd: $pass ok, $fail failed"

@@ -1490,6 +1490,34 @@ def ps_net_listen(ctx: *PsCtx, port: i64, reuseport: bool) -> *PsConn:
     ps_sock_nonblock(fd)
     return ps_conn_new(ctx, fd, 1)
 
+# 148/D32: QUEM LIGOU. O endereço do outro lado de uma ligação aceita.
+#
+# Não é um extra: sem ele o `X-Forwarded-For` não se pode validar (só se sabe se
+# a ligação vem de um proxy declarado comparando o endereço real com a lista), e
+# um rate-limit por IP conta pedidos de um IP que o cliente escolheu. As duas
+# coisas passam de defesa a enfeite.
+#
+# Devolve o texto do endereço — `127.0.0.1` ou `::1` — e nunca o porto: o porto de
+# origem muda a cada ligação, e quem o metesse numa chave de rate-limit estaria a
+# contar cada pedido como vindo de outro cliente.
+def ps_conn_peer(ctx: *PsCtx, c: *PsConn) -> *PsStr:
+    if c == None or c->is_open == 0:
+        return ps_str_new(ctx, "", usize(0))
+    a: sockaddr_storage
+    n: u32 = u32(sizeof(a))
+    memset(&a, 0, sizeof(a))
+    if getpeername(c->fd, (*sockaddr)(&a), &n) != 0:
+        return ps_str_new(ctx, "", usize(0))
+    buf: char[64]
+    buf[0] = '\0'
+    if a.ss_family == u16(AF_INET):
+        v4: *sockaddr_in = (*sockaddr_in)(&a)
+        inet_ntop(AF_INET, &v4->sin_addr, buf, u32(64))
+    elif a.ss_family == u16(AF_INET6):
+        v6: *sockaddr_in6 = (*sockaddr_in6)(&a)
+        inet_ntop(AF_INET6, &v6->sin6_addr, buf, u32(64))
+    return ps_str_new(ctx, buf, strlen(buf))
+
 # which port it really got, so `listen(0)` is usable in a test
 def ps_conn_port(c: *PsConn) -> i64:
     if c == None or c->is_open == 0:

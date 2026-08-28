@@ -38,6 +38,17 @@ async def eventos() -> bytes:
 
 
 async def handle(req: httpd.Request) -> httpd.Response:
+    if req.path == "/upload":
+        # F8c: as partes de um formulario, com os ficheiros
+        ps = httpd.multipart(req)
+        linhas: List<str> = []
+        for pt in ps:
+            if len(pt.ficheiro) > 0:
+                linhas.append("ficheiro:" + pt.nome + ":" + pt.ficheiro + ":"
+                              + pt.tipo + ":" + str(len(pt.dados)))
+            else:
+                linhas.append("campo:" + pt.nome + ":" + pt.texto())
+        return httpd.text("\n".join(linhas))
     if req.path == "/grande":
         # F9: texto compressivel e acima do minimo
         return httpd.comprime(httpd.text("linha repetida\n" * 400), req)

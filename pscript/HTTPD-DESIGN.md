@@ -538,13 +538,13 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [x] **F8 — Estáticos** (D13/D21): `httpd.files(dir)` com MIME, ETag/304, Range,
       `index.html` e a recusa de `..`. Portão: um `..` em todas as codificações que
       um atacante tenta, e um Range parcial conferido byte a byte.
-- [ ] **F8b — Cookies e sessão** (D33): ler, escrever com os atributos seguros por
+- [x] **F8b — Cookies e sessão** (D33): ler, escrever com os atributos seguros por
       padrão, e a sessão assinada num `shared dict`. Portão: uma sessão sobrevive a
       pedidos servidos por workers DIFERENTES, e revogar mata-a na hora.
-- [ ] **F8c — `multipart/form-data`** (D30) com o ficheiro por streaming, e o
+- [x] **F8c — `multipart/form-data`** (D30) com o ficheiro por streaming, e o
       `Expect: 100-continue` (D40). Portão: um upload maior que o teto é recusado
       com 413 ANTES de o corpo subir.
-- [ ] **F8d — Proxy e limites**: `trusted_proxies` (D32), `allowed_hosts` (D41) e o
+- [x] **F8d — Proxy e limites**: `trusted_proxies` (D32), `allowed_hosts` (D41) e o
       `rate_limit` (D37). Portão: um `X-Forwarded-For` forjado por um cliente que
       NÃO é proxy declarado é ignorado.
 - [x] **F9 — Compressão** (só o gzip do HTTP; o permessage-deflate do ws continua a faltar) (D16): gzip no HTTP; e o permessage-deflate do ws numa
