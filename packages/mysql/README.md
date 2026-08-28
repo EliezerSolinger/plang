@@ -73,8 +73,9 @@ Um valor de coluna vem no tipo que a coluna promete, como `any` (carrega o seu
 tipo): `row.get("x")` devolve `any?`, e os atalhos `get_int`/`get_str`/... fazem o
 `as` e levantam no NULL. Um **DECIMAL fica `str`** de propósito — um preço com
 casas exatas viraria float e perderia o centavo, a mesma razão pela qual o `csv`
-do pscript não adivinha que `007` é sete. Um **BLOB binário** vai por `row.raw()`,
-porque um `any` ainda não guarda `bytes` (ver abaixo).
+do pscript não adivinha que `007` é sete. Um **BLOB binário** vira `bytes` (o
+`any` do core aprendeu a guardá-los durante este porte), e `row.raw()` continua
+sendo o atalho direto para os bytes crus de qualquer coluna.
 
 ## O que falta, e onde entraria
 
@@ -89,12 +90,11 @@ porque um `any` ainda não guarda `bytes` (ver abaixo).
   escape já resolve.
 - **TLS**: o pscript tem `net.starttls`; o gancho é depois do handshake, antes do
   login.
-- **`bytes` e `datetime` dentro de `any`**: hoje o `any` do core guarda números,
-  bools, strings, listas e dicts — não `bytes` nem um `record`. Por isso um BLOB
-  binário sai por `raw()` e uma data por `get_datetime()`, cada um com a sua
-  porta em vez de virem no `get()` genérico. Este schema não tem BLOB (os chunks
-  são JSON), então não apertou; num que tenha, o caminho limpo é o core aprender
-  a guardar `bytes` num `any`.
+- **`datetime` dentro de `any`**: um `LocalDateTime` é um `record`, e o `any` do
+  core guarda números, bools, strings, bytes, listas e dicts — não records. Por
+  isso uma data vem por `get_datetime()` (que a parseia dos bytes crus), não no
+  `get()` genérico. `bytes` JÁ cabe no `any` (foi acrescentado neste porte),
+  então um BLOB binário vem no `get()` como qualquer valor.
 
 ## Estrutura
 

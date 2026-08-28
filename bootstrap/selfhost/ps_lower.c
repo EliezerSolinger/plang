@@ -400,6 +400,7 @@ struct PsLow {
     const char *fr_fn;
     const char *fr_file;
     int32_t lazy_depth;
+    int32_t nocheck;
     int in_main;
 };
 
@@ -1629,7 +1630,7 @@ static Expr *PsLow_expr(PsLow *self, PsExpr *e) {
     }
     if (e != NULL && e->box_any) {
         PsTypeKind k9 = (e->type != NULL ? e->type->kind : PT_UNKNOWN);
-        if (k9 == PT_STR || k9 == PT_LIST || k9 == PT_DICT) {
+        if (k9 == PT_STR || k9 == PT_BYTES || k9 == PT_LIST || k9 == PT_DICT) {
             Expr *cv9 = ex_new(self->a, EX_CAST, e->pos);
             cv9->cast_type = ty_ptr(self->a, ty_name(self->a, "PsObj"));
             cv9->lhs = v;
@@ -1898,7 +1899,7 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, rf9, PsLow_ctx_arg(self, e->pos));
             PsLow_push_arg(self, rf9, PsLow_expr(self, e->lhs));
             Expr *tyid = ex_new(self->a, EX_IDENT, e->pos);
-            tyid->text = (tk9 == PT_STR ? "PS_TY_STR" : (tk9 == PT_LIST ? "PS_TY_LIST" : "PS_TY_DICT"));
+            tyid->text = (tk9 == PT_STR ? "PS_TY_STR" : (tk9 == PT_BYTES ? "PS_TY_BYTES" : (tk9 == PT_LIST ? "PS_TY_LIST" : "PS_TY_DICT")));
             PsLow_push_arg(self, rf9, tyid);
             Expr *wl9 = ex_new(self->a, EX_STRING, e->pos);
             wl9->text = Arena_printf(self->a, "\"%s\"", ps_type_str(self->a, e->type));
@@ -2710,6 +2711,15 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
     PsTypeKind lk = (e->lhs->type != NULL ? e->lhs->type->kind : PT_UNKNOWN);
     PsTypeKind rk = (e->rhs->type != NULL ? e->rhs->type->kind : PT_UNKNOWN);
     int both_int = lk == PT_INT && rk == PT_INT;
+    if (self->nocheck > 0 && both_int && !PS_FULL_TRACE) {
+        if (e->op == TK_PLUS) {
+            e->op = TK_WRAP_PLUS;
+        } else if (e->op == TK_MINUS) {
+            e->op = TK_WRAP_MINUS;
+        } else if (e->op == TK_STAR) {
+            e->op = TK_WRAP_STAR;
+        }
+    }
     int is_str = lk == PT_STR && rk == PT_STR;
     int is_bytes = lk == PT_BYTES && rk == PT_BYTES;
     int is_list = lk == PT_LIST && rk == PT_LIST;
@@ -4154,11 +4164,19 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         return ac3;
     }
     if (strcmp(name, "round") == 0) {
-        Expr *rc3 = PsLow_call_rt(self, (e->nargs == 2 ? "ps_round_n" : "ps_round"), e->pos);
-        PsLow_push_arg(self, rc3, PsLow_as_f64(self, e->args[0]));
         if (e->nargs == 2) {
-            PsLow_push_arg(self, rc3, PsLow_expr(self, e->args[1]));
+            Expr *rn3 = PsLow_call_rt(self, "ps_round_n", e->pos);
+            PsLow_push_arg(self, rn3, PsLow_as_f64(self, e->args[0]));
+            PsLow_push_arg(self, rn3, PsLow_expr(self, e->args[1]));
+            return rn3;
         }
+        Expr *ri3 = PsLow_call_rt(self, "rint", e->pos);
+        PsLow_push_arg(self, ri3, PsLow_as_f64(self, e->args[0]));
+        Expr *rc3 = PsLow_call_rt(self, "ps_f_to_i", e->pos);
+        PsLow_push_arg(self, rc3, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, rc3, ri3);
+        PsLow_pos_args(self, rc3, e->pos);
+        self->raised = 1;
         return rc3;
     }
     if ((strcmp(name, "min") == 0 || strcmp(name, "max") == 0) && e->nargs == 1) {
@@ -4466,9 +4484,11 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, mc, PsLow_as_f64(self, e->args[i]));
         }
         if (strcmp(mf, "floor") == 0 || strcmp(mf, "ceil") == 0 || strcmp(mf, "trunc") == 0) {
-            Expr *ic9 = ex_new(self->a, EX_CAST, e->pos);
-            ic9->cast_type = ty_name(self->a, "i64");
-            ic9->lhs = mc;
+            Expr *ic9 = PsLow_call_rt(self, "ps_f_to_i", e->pos);
+            PsLow_push_arg(self, ic9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, ic9, mc);
+            PsLow_pos_args(self, ic9, e->pos);
+            self->raised = 1;
             return ic9;
         }
         return mc;
@@ -5231,7 +5251,15 @@ static Expr *PsLow_convert(PsLow *self, PsExpr *e, const char *name) {
             self->raised = 1;
             return c;
         }
-        if (sk == PT_FLOAT || sk == PT_BOOL) {
+        if (sk == PT_FLOAT) {
+            Expr *fi9 = PsLow_call_rt(self, "ps_f_to_i", e->pos);
+            PsLow_push_arg(self, fi9, PsLow_ctx_arg(self, e->pos));
+            PsLow_push_arg(self, fi9, PsLow_expr(self, src));
+            PsLow_pos_args(self, fi9, e->pos);
+            self->raised = 1;
+            return fi9;
+        }
+        if (sk == PT_BOOL) {
             Expr *cast = ex_new(self->a, EX_CAST, e->pos);
             cast->cast_type = ty_name(self->a, "i64");
             cast->lhs = PsLow_expr(self, src);
@@ -5373,6 +5401,15 @@ static int PsLow_is_trivial(PsLow *self, PsExpr *e) {
             return !e->is_gref;
         }
         case PE_FIELD: {
+            return PsLow_is_trivial(self, e->lhs);
+        }
+        case PE_UNARY: {
+            if (e->op == TK_MINUS && e->type != NULL && e->type->kind == PT_INT) {
+                int folds = e->lhs != NULL && e->lhs->kind == PE_INT && e->lhs->text != NULL && e->type->width == 0;
+                if (!folds) {
+                    return 0;
+                }
+            }
             return PsLow_is_trivial(self, e->lhs);
         }
         default: {
@@ -7540,6 +7577,20 @@ static void PsLow_stmt_inner(PsLow *self, PsStmt *s, Vec_pStmt *out) {
             Vec_pStmt_push(out, dfp);
             break;
         }
+        case PS_NOCHECK: {
+            self->nocheck += 1;
+            Vec_pStmt nk;
+            Vec_pStmt_init(&nk);
+            size_t i;
+            for (i = 0; i < s->body->n; i += 1) {
+                PsLow_stmt(self, s->body->stmts[i], &nk);
+            }
+            self->nocheck -= 1;
+            Stmt *nblk = st_new(self->a, ST_BLOCK, s->pos);
+            nblk->body = PsLow_mk_block(self, &nk);
+            Vec_pStmt_push(out, nblk);
+            break;
+        }
         case PS_NOGC: {
             Vec_pStmt ng;
             Vec_pStmt_init(&ng);
@@ -8117,6 +8168,11 @@ static void PsLow_lower_type_match(PsLow *self, PsStmt *s, Vec_pStmt *out) {
         switch (ct->kind) {
             case PT_STR: {
                 ty9->text = "PS_TY_STR";
+                kd9->text = "PS_ANY_NONE";
+                break;
+            }
+            case PT_BYTES: {
+                ty9->text = "PS_TY_BYTES";
                 kd9->text = "PS_ANY_NONE";
                 break;
             }
@@ -10985,7 +11041,7 @@ static Decl *lower_struct_desc_x(PsLow *L, PsDecl *d, int has_trace, int com_cam
     Expr *init = ex_new(L->a, EX_INITLIST, d->pos);
     init->args = Arena_alloc(L->a, (size_t)6 * sizeof(*init->args));
     Expr *nm = ex_new(L->a, EX_STRING, d->pos);
-    nm->text = Arena_printf(L->a, "\"%s\"", d->name);
+    nm->text = Arena_printf(L->a, "\"%s\"", (d->src_name != NULL ? d->src_name : d->name));
     init->args[0] = nm;
     if (has_trace) {
         Expr *r = ex_new(L->a, EX_IDENT, d->pos);

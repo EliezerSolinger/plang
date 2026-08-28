@@ -1354,7 +1354,7 @@ struct PsLow:
             # with a header, so it goes in as itself — one cast, no copy. A
             # number, a bool or None gets the box the header buys.
             k9: PsTypeKind = e->type->kind if e->type != None else PT_UNKNOWN
-            if k9 == PT_STR or k9 == PT_LIST or k9 == PT_DICT:
+            if k9 == PT_STR or k9 == PT_BYTES or k9 == PT_LIST or k9 == PT_DICT:
                 cv9: *Expr = ex_new(self->a, EX_CAST, e->pos)
                 cv9->cast_type = ty_ptr(self->a, ty_name(self->a, "PsObj"))
                 cv9->lhs = v
@@ -1636,7 +1636,7 @@ struct PsLow:
                 self->push_arg(rf9, self->ctx_arg(e->pos))
                 self->push_arg(rf9, self->expr(e->lhs))
                 tyid: *Expr = ex_new(self->a, EX_IDENT, e->pos)
-                tyid->text = "PS_TY_STR" if tk9 == PT_STR else ("PS_TY_LIST" if tk9 == PT_LIST else "PS_TY_DICT")
+                tyid->text = "PS_TY_STR" if tk9 == PT_STR else ("PS_TY_BYTES" if tk9 == PT_BYTES else ("PS_TY_LIST" if tk9 == PT_LIST else "PS_TY_DICT"))
                 self->push_arg(rf9, tyid)
                 wl9: *Expr = ex_new(self->a, EX_STRING, e->pos)
                 wl9->text = self->a->printf("\"%s\"", ps_type_str(self->a, e->type))
@@ -8092,6 +8092,9 @@ struct PsLow:
             match ct->kind:
                 case PT_STR:
                     ty9->text = "PS_TY_STR"
+                    kd9->text = "PS_ANY_NONE"
+                case PT_BYTES:
+                    ty9->text = "PS_TY_BYTES"
                     kd9->text = "PS_ANY_NONE"
                 case PT_LIST:
                     ty9->text = "PS_TY_LIST"

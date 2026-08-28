@@ -36,3 +36,41 @@ print("doc", doc["name"] as str, doc["samples"] as int, doc["gamma"] as float)
 nested: List<any> = [[1, 2], "x"]
 inner = nested[0] as List<any>
 print("nested", len(inner), inner[1] as int)
+
+# bytes num any (o BLOB de um banco, o binário de um protocolo). É objeto com
+# header, como str, então entra como si mesmo e sai por `as bytes`, checado.
+blob: any = b"\x00\x01\xff data"
+gotb = blob as bytes
+print("bytes", gotb.hex(), gotb == b"\x00\x01\xff data")
+mixed: List<any?> = []
+bv: any = b"row-blob"
+mixed.append(bv)
+iv: any = 7
+mixed.append(iv)
+mixed.append(None)
+m0 = mixed[0]
+if m0 != None:
+    print("frombytes", str(m0 as bytes))
+# a tag errada levanta, como para os outros
+try:
+    bad = blob as str
+    print("unreachable-bytes")
+catch e:
+    print("bytes-tag-caught")
+
+# `match type(x)` reconhece bytes, como reconhece str
+def kindof(v: any) -> str:
+    match type(v):
+        case bytes:
+            return "bytes"
+        case str:
+            return "str"
+        case int:
+            return "int"
+        case _:
+            return "other"
+
+kb: any = b"xy"
+ks: any = "xy"
+ki: any = 9
+print("kindof", kindof(kb), kindof(ks), kindof(ki))

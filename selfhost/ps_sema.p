@@ -831,7 +831,7 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "an `any` holds %s only when its elements are `any` too: write `List<any>`/`Dict<str, any>`, because what is inside has to carry its own type (39.2)", "a list" if got->kind == PT_LIST else "a dict")
                     e->box_any = True
                     return
-                case PT_INT, PT_FLOAT, PT_BOOL, PT_STR:
+                case PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES:
                     e->box_any = True
                     return
                 case PT_OPT:
@@ -840,7 +840,7 @@ struct PsSema:
                         return
                 case _:
                     pass
-            fatal_at(self->file, e->pos, "an `any` holds numbers, bools, strings, lists, dicts and None so far, not %s (39.2)", ps_type_str(self->a, got))
+            fatal_at(self->file, e->pos, "an `any` holds numbers, bools, strings, bytes, lists, dicts and None so far, not %s (39.2)", ps_type_str(self->a, got))
         # a record where a `dyn Trait` is wanted (66.3): BOXED here, and the
         # conversion is written down on the node so the lowering knows to do it.
         # Nominal, like every other use of a trait (66.2).
@@ -1219,8 +1219,8 @@ struct PsSema:
                 if ct9 == None or ct9->kind != PT_ANY:
                     fatal_at(self->file, e->pos, "`as` reads an `any` (55.2); to convert a number, write `int(x)` or `float(x)` — found %s", ps_type_str(self->a, ct9))
                 t = self->resolve_type(e->type)
-                if t == None or t->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_LIST, PT_DICT}:
-                    fatal_at(self->file, e->pos, "`as %s` is not compiled yet: an `any` holds numbers, bools, strings, lists and dicts so far", ps_type_str(self->a, t))
+                if t == None or t->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_BYTES, PT_LIST, PT_DICT}:
+                    fatal_at(self->file, e->pos, "`as %s` is not compiled yet: an `any` holds numbers, bools, strings, bytes, lists and dicts so far", ps_type_str(self->a, t))
             case PE_IS:
                 # `a is b` is IDENTITY (22.2): the same object, not an equal
                 # one. Only a reference has an identity to compare — a number
@@ -2862,11 +2862,18 @@ struct PsSema:
                 return self->call_generic(e, f, name)
             if f->is_async:
                 # 35.3: calling it STARTS it and gives back the task; the value
-                # is collected with `await`
-                if e->nargs != f->nparams:
-                    fatal_at(self->file, e->pos, "'%s' takes %d argument(s), %d given", ps_disp(name), f->nparams, e->nargs)
+                # is collected with `await`. `bind_call_args` preenche os
+                # DEFAULTS e ordena os nomeados, exactamente como no caminho
+                # síncrono abaixo — sem isto, um `async def f(a, b=2)` chamado
+                # `f(1)` dava "takes 2 argument(s), 1 given", porque a aridade
+                # era conferida antes de os defaults entrarem.
+                self->bind_call_args(e, f->params, f->nparams, self->a->printf("'%s'", ps_disp(name)))
+                vfa: bool = f->nparams > 0 and f->params[f->nparams - 1].is_varargs
+                if (not vfa and e->nargs != f->nparams) or (vfa and e->nargs < f->nparams - 1):
+                    fatal_at(self->file, e->pos, "'%s' takes %s%d argument(s), %d given", ps_disp(name), "at least " if vfa else "", f->nparams - (1 if vfa else 0), e->nargs)
                 for i in range(e->nargs):
-                    self->check_want(e->args[i], f->params[i].type, self->a->printf("parameter '%s'", f->params[i].name))
+                    pia: i32 = i if i < f->nparams else f->nparams - 1
+                    self->check_want(e->args[i], f->params[pia].type, self->a->printf("parameter '%s'", f->params[pia].name))
                 tk2: *PsType = ps_type(self->a, PT_TASK, e->pos)
                 tk2->inner = f->ret if f->ret != None else ps_type(self->a, PT_VOID, e->pos)
                 return tk2
@@ -7276,10 +7283,10 @@ struct PsSema:
                         ct: *PsType = None
                         if not c->is_default:
                             if c->nvals != 1 or c->vals[0]->kind not in {PE_NAME, PE_NONE}:
-                                fatal_at(self->file, s->pos, "a `match type` case is ONE type: int, float, bool, str, list, dict or None")
+                                fatal_at(self->file, s->pos, "a `match type` case is ONE type: int, float, bool, str, bytes, list, dict or None")
                             ct = ps_kind_of_name(self->a, self->file, c->vals[0], s->pos)
                             if ct == None:
-                                fatal_at(self->file, c->vals[0]->pos, "'%s' is not a kind an `any` holds: int, float, bool, str, List, Dict or None", c->vals[0]->text)
+                                fatal_at(self->file, c->vals[0]->pos, "'%s' is not a kind an `any` holds: int, float, bool, str, bytes, List, Dict or None", c->vals[0]->text)
                             c->vals[0]->type = ct
                         self->depth += 1
                         if sli >= 0 and ct != None:
@@ -7529,6 +7536,8 @@ private def ps_kind_of_name(a: *Arena, file: const *char, e: *PsExpr, pos: Pos) 
         return ps_type(a, PT_BOOL, pos)
     if strcmp(n, "str") == 0:
         return ps_type(a, PT_STR, pos)
+    if strcmp(n, "bytes") == 0:
+        return ps_type(a, PT_BYTES, pos)
     if ps_renamed_name(file, pos, n, "list", "List"):
         t: *PsType = ps_type(a, PT_LIST, pos)
         t->inner = ps_type(a, PT_ANY, pos)

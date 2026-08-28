@@ -1441,7 +1441,7 @@ static PsDecl *PsP_parse_trait(PsP *self);
 
 static PsDecl *PsP_parse_impl(PsP *self);
 
-static PsDecl *PsP_parse_aggregate(PsP *self, int is_record);
+static PsDecl *PsP_parse_aggregate(PsP *self, int is_record, Vec_pPsDecl *tconsts);
 
 static void PsP_parse_decorators(PsP *self, Vec_pPsExpr *into);
 
@@ -2592,6 +2592,12 @@ static PsStmt *PsP_parse_stmt(PsP *self) {
             u->body = PsP_parse_block(self);
             return u;
         }
+        case TK_NOCHECK: {
+            Pos posn = PsP_adv(self)->pos;
+            PsStmt *nc = ps_stmt(self->a, PS_NOCHECK, posn);
+            nc->body = PsP_parse_block(self);
+            return nc;
+        }
         case TK_NOGC: {
             Pos pos5 = PsP_adv(self)->pos;
             PsStmt *g = ps_stmt(self->a, PS_NOGC, pos5);
@@ -2991,6 +2997,9 @@ static PsFunc *PsP_parse_func_head(PsP *self, int no_recv, int is_async, const c
     PsP_expect(self, TK_RPAREN, "parameter list");
     f->params = ps.data;
     f->nparams = ps.len;
+    if (owner != NULL) {
+        f->is_smethod = f->nparams == 0 || strcmp(f->params[0].name, "self") != 0;
+    }
     if (PsP_accept(self, TK_ARROW)) {
         f->ret = PsP_parse_type(self);
     }
@@ -3095,7 +3104,7 @@ static PsDecl *PsP_parse_impl(PsP *self) {
     return d;
 }
 
-static PsDecl *PsP_parse_aggregate(PsP *self, int is_record) {
+static PsDecl *PsP_parse_aggregate(PsP *self, int is_record, Vec_pPsDecl *tconsts) {
     Pos pos = PsP_adv(self)->pos;
     PsDecl *d = ps_decl(self->a, (is_record ? PD_RECORD : PD_STRUCT), pos);
     d->name = PsP_expect(self, TK_IDENT, "record/struct name")->text;
@@ -3147,6 +3156,22 @@ static PsDecl *PsP_parse_aggregate(PsP *self, int is_record) {
         }
         if (st || masync) {
             fatal_at(self->file, PsP_pk(self)->pos, "'%s' here introduces a method", (st ? "static" : "async"));
+        }
+        if (PsP_at(self, TK_CONST)) {
+            Pos kpos = PsP_adv(self)->pos;
+            PsDecl *kd = ps_decl(self->a, PD_VAR, kpos);
+            kd->is_const = 1;
+            const char *kname = PsP_expect(self, TK_IDENT, "const name")->text;
+            kd->name = Arena_printf(self->a, "%s_%s", d->name, kname);
+            kd->src_name = kname;
+            if (PsP_accept(self, TK_COLON)) {
+                kd->type = PsP_parse_type(self);
+            }
+            PsP_expect(self, TK_ASSIGN, "const");
+            kd->init = PsP_parse_expr(self);
+            PsP_expect(self, TK_NEWLINE, "const");
+            Vec_pPsDecl_push(tconsts, kd);
+            continue;
         }
         Pos fp = PsP_pk(self)->pos;
         PsField fl = {0};
@@ -3530,12 +3555,15 @@ PsModule *ps_parse(Arena *a, const char *file, TokenList tl) {
                 Vec_pPsDecl_push(&decls, PsP_parse_from(&p));
                 break;
             }
-            case TK_RECORD: {
-                Vec_pPsDecl_push(&decls, PsP_parse_aggregate(&p, 1));
-                break;
-            }
+            case TK_RECORD:
             case TK_STRUCT: {
-                Vec_pPsDecl_push(&decls, PsP_parse_aggregate(&p, 0));
+                Vec_pPsDecl tcs;
+                Vec_pPsDecl_init(&tcs);
+                Vec_pPsDecl_push(&decls, PsP_parse_aggregate(&p, PsP_pk(&p)->kind == TK_RECORD, &tcs));
+                size_t ti;
+                for (ti = 0; ti < tcs.len; ti += 1) {
+                    Vec_pPsDecl_push(&decls, tcs.data[ti]);
+                }
                 break;
             }
             case TK_ENUM: {

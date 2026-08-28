@@ -10,3 +10,4 @@ written by the pool 42
 aprint gave back 23 bytes
 straight to stdout
 stdout is still alive, because it belongs to the process
+adef 111 103 16

@@ -7,3 +7,7 @@ identity True True
 caught: this `any` holds str, not int
 doc smallpt 16 2.2
 nested 2 2
+bytes 0001ff2064617461 True
+frombytes row-blob
+bytes-tag-caught
+kindof bytes str int

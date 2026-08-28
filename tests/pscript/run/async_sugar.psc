@@ -102,3 +102,8 @@ print("aprint gave back", n, "bytes")
 await sys.out.write("straight to stdout\n")
 sys.out.close()
 print("stdout is still alive, because it belongs to the process")
+
+# defaults e nomeados numa chamada de async def (bind_call_args no caminho async)
+async def withdef(a: int, b: int = 10, c: int = 100) -> int:
+    return a + b + c
+print("adef", await withdef(1), await withdef(1, 2), await withdef(1, c=5))

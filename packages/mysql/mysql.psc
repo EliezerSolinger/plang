@@ -615,14 +615,14 @@ def convert_value(raw: bytes?, f: Field) -> any?:
     # que a parseia sem passar pelo `any`. É o mesmo motivo por que um BLOB vai
     # por `raw`: o tipo rico tem a sua própria porta.
 
-    # um BLOB de charset `binary` é binário de verdade, e um `any` ainda não
-    # guarda `bytes` — então `get` de uma coluna dessas manda usar `raw`, que
-    # devolve os bytes sem passar por `any`. Um "BLOB" de charset de texto (um
-    # TEXT, que compartilha o type code) é UTF-8 e vira `str`.
+    # um BLOB de charset `binary` é binário de verdade e vira `bytes` (o `any`
+    # aprendeu a guardá-los); um "BLOB" de charset de texto (um TEXT, que
+    # compartilha o type code) é UTF-8 e vira `str`.
     if (t == FIELD_BLOB or t == FIELD_TINY_BLOB or t == FIELD_MEDIUM_BLOB
             or t == FIELD_LONG_BLOB):
         if f.charsetnr == CHARSET_BINARY:
-            raise error(f"a coluna '{f.name}' é binária (BLOB): use row.raw(...), porque um `any` ainda não guarda bytes")
+            rbin: any = raw
+            return rbin
         rt: any = str(raw)
         return rt
 

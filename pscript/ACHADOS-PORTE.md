@@ -531,6 +531,83 @@ com um valor que o teste saiba prever. Ambos estão agora presos em
 `packages/mysql/test/`, contra os vetores oficiais do SHA-1 e o scramble do
 próprio pymysql — a mesma disciplina de oráculo que o resto do repositório usa.
 
+## 15 — FEITO · `any` agora guarda `bytes`
+
+O conector MySQL desenterrou isto, e é ganho de linguagem, não do conector: um
+valor de coluna vira `any` (carrega o seu tipo), e um BLOB é `bytes` — mas o
+`any` do core só guardava números, bools, strings, listas e dicts. `x as bytes`
+dava *"is not compiled yet: an `any` holds numbers, bools, strings, lists and
+dicts so far"*.
+
+`bytes` é `PS_TY_BYTES`, um objeto com cabeçalho, exactamente como `str`. Então
+a mudança seguiu o `str` em cinco pontos, todos os que enumeram o que cabe num
+`any`:
+
+1. o boxing na sema (o valor CABE): `PT_BYTES` no case de `PT_STR`;
+2. o `as` na sema (pode ser LIDO de volta): `PT_BYTES` no conjunto permitido;
+3. a mensagem do que cabe;
+4. o boxing na baixada: `bytes` vai como cast (já é objeto), com `str`/`list`/`dict`;
+5. o unbox na baixada: a tag `PS_TY_BYTES` no `ps_as_ref`.
+
+Conferido: ida e volta (`b"\x00\x01\xff" as bytes` devolve os mesmos bytes),
+numa `List<any?>`, e a tag errada (`"texto" as bytes`) levanta — o mesmo
+`ps_as_ref` que protege `str`. E o adjacente ficou bem-comportado: `json.stringify`
+de um `any` com bytes RECUSA limpo (`VALUE`), porque bytes não é JSON, em vez de
+emitir lixo. Caso no corpus: `anyval.psc`.
+
+O que fica de fora, e é a próxima peça se alguém precisar: um `record` num `any`
+(um `LocalDateTime`, por exemplo). Um record é VALOR, não tem cabeçalho, então
+boxá-lo exige alocar — não é o cast que `bytes` e `str` são. Por isso o conector
+lê data por um getter dedicado (`get_datetime`), que a parseia sem passar pelo
+`any`.
+
+## 16 — CONSERTADO · defaults não valiam numa chamada de `async def`
+
+```python
+async def g(a: int, b: int = 2, c: int = 3) -> int:
+    return a + b + c
+
+await g(1)          # error: 'g' takes 3 argument(s), 1 given
+```
+
+Numa função síncrona `g(1)` preenche `b` e `c` com os defaults; num `async def`,
+não. A causa é uma assimetria clara em `ps_sema.p`: o caminho síncrono chama
+`bind_call_args` (que preenche os defaults e ordena os nomeados) antes de
+conferir a aridade; o caminho async conferia `e->nargs != f->nparams` DIRETO,
+sem passar por ele.
+
+Foi o conector MySQL que o encontrou: o `connect` é `async` e ganhou parâmetros
+com default (`db=""`, `tls=False`, `tls_verify=True`), e de repente a API pública
+exigia os sete argumentos sempre. O conserto é fazer o async usar o MESMO
+`bind_call_args` — três linhas movidas —, e com ele veio de graça o argumento
+NOMEADO numa chamada async (`connect(..., tls=True)`), que também não compilava.
+
+## 17 — CONSERTADO (no runtime) · TLS 1.3 travava um `read` logo após o handshake
+
+Não é do compilador, é do runtime de rede, e vale por qualquer cliente TLS e não
+só o MySQL.
+
+Um cliente que sobe TLS e lê logo a seguir — o MySQL manda o OK do login
+imediatamente — travava para sempre. O proxy que capturou o tráfego mostrou o
+handshake TLS COMPLETO (ClientHello, ServerHello, Finished) e a resposta do
+servidor a chegar em 89 ms; e o cliente a fechar por timeout 12 s depois, sem a
+ter lido.
+
+A causa é o clássico dos dados bufferizados no OpenSSL. Em TLS 1.3 o
+`SSL_connect` do handshake lê do fd MAIS do que o handshake (o NewSessionTicket,
+e com ele o que o servidor já mandou a seguir), e esse excedente fica DECIFRADO
+no buffer interno do `SSL` — não no fd. O `ps_fd_try` do runtime esperava sempre
+o `poll` do fd dizer que há dados antes de chamar `SSL_read`; mas os dados não
+estavam no fd, estavam no `SSL`, e o `poll` nunca acordava.
+
+O conserto é `SSL_pending` antes do `poll`: se o buffer do `SSL` já tem bytes
+decifrados, lê-se sem esperar o descritor. `SSL_pending` não existia no runtime;
+entrou como `ps_tls_has_pending`, no escopo onde o `<openssl/ssl.h>` é visível,
+com o stub correspondente no caminho sem TLS.
+
+O `tests/tls.sh` não o apanhava porque o seu servidor de teste não fala logo
+depois do handshake — é justamente o padrão do MySQL (responder já) que o expõe.
+
 # O que a linguagem ganhou, e o que cada coisa custou
 
 Três features, todas nascidas de o porte esbarrar, todas seguindo um precedente
