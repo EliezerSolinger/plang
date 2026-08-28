@@ -180,6 +180,9 @@ def ps_buffer_freeze(ctx: *PsCtx, b: *PsBuffer, file: const *char, line: i32) ->
 def ps_buffer_at(ctx: *PsCtx, b: *PsBuffer, i: i64, file: const *char, line: i32) -> i64
 def ps_buffer_put(ctx: *PsCtx, b: *PsBuffer, i: i64, v: i64, file: const *char, line: i32)
 def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsBytes
+# 148: `a + b`. Sempre um bloco NOVO e dono do que tem — juntar dois pedaços de
+# um `Mapping` não pode devolver uma janela, porque não há janela que cubra os dois.
+def ps_bytes_concat(ctx: *PsCtx, a: *PsBytes, b: *PsBytes) -> *PsBytes
 def ps_bytes_len(b: *PsBytes) -> i64
 def ps_bytes_get(ctx: *PsCtx, b: *PsBytes, i: i64, file: const *char, line: i32) -> i64
 def ps_bytes_slice(ctx: *PsCtx, b: *PsBytes, a: i64, e: i64, st: i64, has_a: bool, has_b: bool, file: const *char, line: i32) -> *PsBytes

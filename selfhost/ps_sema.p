@@ -1715,6 +1715,14 @@ struct PsSema:
             case TK_PLUS:
                 if lt != None and rt != None and lt->kind == PT_STR and rt->kind == PT_STR:
                     return lt
+                # 148: `bytes + bytes`, pela mesma razão que `str + str`. Sem
+                # isto, juntar dois pedaços de fio obrigava a passar por
+                # `List<u8>` e a voltar — duas cópias e uma travessia byte a
+                # byte para fazer o que um `memcpy` faz. Um servidor não faz
+                # outra coisa senão isto: a linha de estado mais os cabeçalhos
+                # mais o corpo, o cabeçalho de um quadro mais a carga.
+                if lt != None and rt != None and lt->kind == PT_BYTES and rt->kind == PT_BYTES:
+                    return lt
                 # 104: `a + b` de listas é uma lista NOVA, como no Python. O que
                 # ela copia são os ELEMENTOS (os bytes); dois objetos apontados
                 # continuam sendo os mesmos dois objetos.

@@ -215,6 +215,13 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/nocheck.sh >$V/nocheck.log 2>&1; then
 else
     bad "o bloco nocheck não se comportou nos dois modos (veja $V/nocheck.log)"
 fi
+#   httpd        o servidor HTTP/1.1 batido POR FORA, com o `curl` por oráculo:
+#                quem conta se houve UMA conexão para três pedidos é ele.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/httpd.sh >$V/httpd.log 2>&1; then
+    ok "httpd $(grep -oE '[0-9]+ ok' $V/httpd.log | tail -1)"
+else
+    bad "o servidor HTTP falhou no fio (veja $V/httpd.log)"
+fi
 #   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
 #                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
 #                que se vê sem medir), e com TODOS os knobs de fora ele ainda

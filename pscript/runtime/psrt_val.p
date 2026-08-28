@@ -717,6 +717,26 @@ def ps_bytes_view(ctx: *PsCtx, src: *PsBytes, off: usize, len: usize) -> *PsByte
     return v
 
 
+# 148: `a + b` sobre bytes. Um servidor não faz outra coisa senão juntar bytes —
+# a linha de estado mais os cabeçalhos mais o corpo, o cabeçalho de um quadro
+# mais a carga — e sem isto o caminho era passar por `List<u8>` e voltar, que é
+# duas cópias e uma travessia byte a byte para fazer o que um `memcpy` faz.
+#
+# O resultado é sempre um bloco NOVO e dono do que tem: juntar dois pedaços de
+# um `Mapping` não pode devolver uma janela, porque não há janela nenhuma que
+# cubra os dois.
+def ps_bytes_concat(ctx: *PsCtx, a: *PsBytes, b: *PsBytes) -> *PsBytes:
+    na: usize = a->len if a != None else usize(0)
+    nb: usize = b->len if b != None else usize(0)
+    out: *PsBytes = ps_bytes_new(ctx, None, na + nb)
+    if out->data == None:
+        return out
+    if na > usize(0):
+        memcpy(out->data, a->data, na)
+    if nb > usize(0):
+        memcpy(out->data + na, b->data, nb)
+    return out
+
 def ps_bytes_len(b: *PsBytes) -> i64:
     return i64(b->len) if b != None else i64(0)
 
@@ -4128,7 +4148,30 @@ private def ps_json_ty(ctx: *PsCtx, ref b: PsRepr, p: *void, ty: const *PsTy, ca
     if k == 4 or k == 5 or k == 6 or k == 7 or k == 9:
         ps_json_val(ctx, ref b, *(**void)(p), ty, caminho, depth)
         return
-    ps_json_bad(ctx, "isto não atravessa (uma função, um `any`?)", caminho)
+    if k == 11:
+        # 148: um `any` DECLARADO. O caminho por dentro de um `any` já existia —
+        # é o `ps_json_any` que trata os valores de um dicionário guardado num —,
+        # mas quando o TIPO ESTÁTICO dizia `any` caía-se aqui em baixo e a
+        # resposta era a recusa. Portanto `Dict<str, any>`, que é a forma exacta
+        # de um objecto JSON e a que sai de um `json.parse`, não voltava a
+        # atravessar para texto. Um `stringify(parse(x))` não fechava o círculo.
+        ps_json_any(ctx, ref b, *(**PsObj)(p), caminho, depth)
+        return
+    if k == 12:
+        # 148: `T?` — o vazio é `null`, que é a palavra que o JSON tem para isso.
+        # O `width` diz qual das duas representações da 9.4 está à frente.
+        if ty->width == 1:
+            if *(**void)(p) == None:
+                ps_repr_put(ref b, "null", usize(4))
+                return
+            ps_json_ty(ctx, ref b, p, ty->inner, caminho, depth)
+            return
+        if *(*i64)(p) == 0:
+            ps_repr_put(ref b, "null", usize(4))
+            return
+        ps_json_ty(ctx, ref b, (*void)((*u8)(p) + usize(8)), ty->inner, caminho, depth)
+        return
+    ps_json_bad(ctx, "isto não atravessa (uma função?)", caminho)
 
 private def ps_json_desc(ctx: *PsCtx, ref b: PsRepr, o: *void, d: const *PsDesc, caminho: const *char, depth: i32):
     if d == None or d->fields == None or d->at == None:

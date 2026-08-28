@@ -579,6 +579,70 @@ struct Parser:
             return True
         return self.is_response and self.status == 101
 
+    # O QUE `feed` NÃO DIZ. Ele responde "há mensagem inteira?", e um False tem
+    # três causas diferentes que quem serve tem de separar: ainda não chegou tudo,
+    # a mensagem está mal formada, ou a conexão deixou de ser HTTP/1. Perguntar
+    # pelo estado por fora obrigaria quem serve a conhecer o enum; estes dois
+    # predicados são a fronteira.
+    def failed(self) -> bool:
+        return self.state == H_ERROR
+
+    def handoff(self) -> bool:
+        """A conexão passou a ser outro protocolo — um túnel, um websocket, o
+        preâmbulo do HTTP/2. Os bytes a seguir NÃO são uma segunda mensagem e
+        também não são um erro; é a distinção entre o `HPE_PAUSED_UPGRADE` do
+        llhttp e a recusa dele, e lê-la mal transforma um aperto de mão de
+        websocket que funciona num pedido rejeitado."""
+        return self.state == H_HANDOFF
+
+    # o que sobrou por ler, para quem vai continuar noutro protocolo
+    def rest(self) -> bytes:
+        sobra: List<u8> = []
+        i = self.pos
+        while i < len(self.buf):
+            sobra.append(self.buf[i])
+            i += 1
+        return bytes(sobra)
+
+    # KEEP-ALIVE: a mesma conexão traz a mensagem seguinte, e o que sobrou do
+    # `buf` depois do `pos` é o princípio dela.
+    #
+    # Isto é um `reset` e não um parser novo de propósito. Uma mensagem pode
+    # chegar colada à anterior no MESMO `read` — é o caso normal com pipelining,
+    # e acontece sem pipelining sempre que o cliente escreve os dois pedidos numa
+    # só passagem — e nesse caso os bytes do segundo já estão aqui dentro. Um
+    # parser novo obrigaria quem chama a saber disso e a copiar-lhos; ficando
+    # aqui, quem serve escreve `p.reset()` e continua o laço.
+    #
+    # O que se guarda é o QUE SOBROU e nada mais: cabeçalhos, corpo, tamanhos e
+    # codificações da mensagem anterior seriam contaminação, e a contaminação
+    # entre mensagens da mesma conexão é a família do request smuggling.
+    def reset(self):
+        sobra: List<u8> = []
+        i = self.pos
+        while i < len(self.buf):
+            sobra.append(self.buf[i])
+            i += 1
+        self.state = H_LINE
+        self.buf = sobra
+        self.pos = 0
+        self.method = ""
+        self.target = ""
+        self.protocol = ""
+        self.version = ""
+        self.status = 0
+        self.reason = ""
+        self.headers = {}
+        self.raw = []
+        self.body = []
+        self.need = 0
+        self.chunked = False
+        self.seen_length = False
+        self.length = 0
+        self.te = []
+        self.problem = ""
+        self.last = ""
+
     # ... and it is HERE, at the boundary, that the accumulated list becomes
     # the value that crosses. One conversion, said out loud (135.6).
     def request(self) -> Request:

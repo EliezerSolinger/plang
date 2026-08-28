@@ -930,3 +930,60 @@ Gate: `tests/pscript/run/net_reuseport.psc`. O que ele deliberadamente NÃO afir
 é qual descritor recebe qual conexão: é a hash do kernel, e com duas conexões
 mandar as duas ao mesmo é uma resposta correcta. Chegou a estar escrito assim, e
 o teste pendurou-se no `accept` do outro.
+
+## 27 — `bytes + bytes` não existia  ✅ corrigido
+
+Um servidor não faz outra coisa senão juntar bytes: a linha de estado mais os
+cabeçalhos mais o corpo, o cabeçalho de um quadro mais a carga. Sem isto o
+caminho era `bytes -> List<u8> -> bytes`, que é duas cópias e uma travessia byte
+a byte para fazer o que um `memcpy` faz. `a + b` sobre bytes agora existe, pela
+mesma razão que `str + str` existe, e o resultado é sempre um bloco NOVO e dono
+do que tem — juntar dois pedaços de um `Mapping` não pode devolver uma janela,
+porque não há janela que cubra os dois.
+
+## 28 — `json.stringify` recusava um `any` DECLARADO  ✅ corrigido
+
+`Dict<str, any>` é a forma exacta de um objecto JSON, e é o que sai de um
+`json.parse`. Não voltava a atravessar para texto: `stringify(parse(x))` não
+fechava o círculo. O caminho por dentro de um `any` já existia — é o que trata
+os valores de um dicionário guardado num —, mas quando o TIPO ESTÁTICO dizia
+`any` caía-se na recusa. Uma linha em `ps_json_ty`. Junto foi o `T?`, que agora
+sai `null`, que é a palavra que o JSON tem para isso.
+
+## 29 — o `sh_mangle` dava a MESMA chave a espécies diferentes  ✅ corrigido (era grave)
+
+O fundo do `sh_mangle` respondia `"v"` a tudo o que não tivesse caso próprio —
+`any`, `bytes`, `Task`, `Socket`, `Channel`. Quem chegasse primeiro num módulo
+registava o descritor `__ty_v`, e todos os outros recebiam o dele.
+
+Enquanto todos eram opacos no descritor isso não se via, porque o corpo era
+igual. Deixou de o ser quando o `any` passou a ter espécie própria: num módulo
+onde um `bytes` fosse visto primeiro, o `any` ficava com o descritor OPACO dele —
+e `httpd.json({...})` recusava um dicionário perfeitamente válido, num sítio sem
+relação nenhuma com o `bytes`. Silencioso, dependente da ORDEM em que os tipos
+aparecem no ficheiro, e diferente entre módulos.
+
+O fundo passa a encodificar o número da espécie (`k12`), o que é total por
+construção: uma espécie nova ganha chave própria sem ninguém se lembrar dela.
+
+## 30 — um `def` de topo com nome de POSIX era capturado pela libc  ✅ corrigido
+
+`def listen(porta, cfg)` em pscript nascia com o nome `listen` no C emitido, e
+ERA o `listen(2)` a partir daí. O erro que saía falava de conversões de inteiro
+para ponteiro num sítio sem relação. Havia uma lista de nomes reservados
+(`PS_TAKEN`) e ela estava certa para quando o runtime só incluía `<stdio.h>`;
+hoje ele inclui `<unistd.h>`, `<sys/socket.h>`, `<netdb.h>`, `<signal.h>` e
+`<pthread.h>`, e cada um traz nomes curtos e comuns. A lista cresceu com os
+nomes desses cabeçalhos — o critério é "o que o runtime inclui", e não "tudo o
+que a libc tem": um nome que ninguém declara não captura nada.
+
+## 31 — um `def` de topo não tapa um embutido, e o erro não diz isso  ⬜ aberto
+
+`def status(code: int)` no `httpd` não compilou: `status(w)` é uma função da
+linguagem (a de perguntar por um worker, 107.8) e ganha. O módulo renomeou para
+`status_code` e segue.
+
+O que fica por decidir é de desenho, não de implementação: **um nome do programa
+deve ganhar a um embutido?** Em Python ganha. Se a resposta for não, o erro tem
+de o dizer — hoje sai uma queixa de tipos vinda da baixa, que não menciona
+sequer a palavra "embutido".

@@ -1,0 +1,10 @@
+{
+  "name": "httpd",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "httpd.psc",
+  "deps": {"http": "0.1.0", "datetime": "0.1.0", "url": "0.1.0"},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "An HTTP/1.1 and WebSocket server: the llhttp-checked parser plus keep-alive, routes, streaming, static files and pub/sub over N workers sharing a port"
+}

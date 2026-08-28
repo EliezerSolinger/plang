@@ -2595,6 +2595,17 @@ struct PsLow:
                     self->push_arg(c, self->expr(e->lhs))
                     self->push_arg(c, self->expr(e->rhs))
                     return c
+                if is_bytes:
+                    # 148: um bloco NOVO com os dois lados dentro. Não pode ser
+                    # uma janela: juntar dois pedaços de um `Mapping` não tem
+                    # janela nenhuma que cubra os dois.
+                    bc7: *Expr = self->call_rt("ps_bytes_concat", e->pos)
+                    self->push_arg(bc7, self->ctx_arg(e->pos))
+                    self->push_arg(bc7, self->expr(e->lhs))
+                    self->push_arg(bc7, self->expr(e->rhs))
+                    self->allocs = True
+                    self->raised = True
+                    return bc7
                 if lk == PT_LIST:
                     # 104: uma lista nova com os elementos das duas
                     lc4: *Expr = self->call_rt("ps_list_concat", e->pos)
@@ -8390,7 +8401,40 @@ private const PS_TAKEN: const *char[] = {
     "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh",
     "exp", "log", "log2", "log10", "pow", "sqrt", "cbrt", "hypot", "ceil",
     "floor", "round", "trunc", "fmod", "fabs", "fmin", "fmax", "gamma", "j0",
-    "j1", "jn", "y0", "y1", "yn", "time", "clock", "main", None}
+    "j1", "jn", "y0", "y1", "yn", "time", "clock", "main",
+    # 148: E OS NOMES DE POSIX, que faltavam.
+    #
+    # A lista acima era de palavras do C e de nomes da libc padrão, e isso estava
+    # certo quando o runtime só incluía `<stdio.h>` e `<string.h>`. Ele inclui
+    # hoje `<unistd.h>`, `<fcntl.h>`, `<sys/socket.h>`, `<netdb.h>`, `<signal.h>`
+    # e `<pthread.h>` — e cada um deles traz nomes curtos e comuns para o espaço
+    # global do C emitido.
+    #
+    # Sem estes, um `def listen(porta, cfg)` em pscript nascia com o nome `listen`
+    # e ERA o `listen(2)` a partir daí: a chamada de quem escreveu resolvia para a
+    # libc, e o erro que saía falava de conversões de inteiro para ponteiro num
+    # sítio que não tinha nada a ver. Foi assim que este foi encontrado — ao
+    # escrever `httpd.listen(porta)`, que é o nome óbvio.
+    #
+    # O critério é o dos cabeçalhos que o runtime inclui, e não "tudo o que a
+    # libc tem": um nome que ninguém declara não captura nada.
+    "socket", "bind", "listen", "accept", "connect", "send", "recv", "sendto",
+    "recvfrom", "shutdown", "setsockopt", "getsockopt", "getsockname",
+    "getpeername", "socketpair", "htons", "htonl", "ntohs", "ntohl",
+    "inet_addr", "inet_ntoa", "inet_pton", "inet_ntop", "getaddrinfo",
+    "freeaddrinfo", "gai_strerror", "gethostbyname",
+    "read", "write", "close", "open", "pipe", "dup", "dup2", "lseek", "unlink",
+    "rmdir", "mkdir", "chdir", "getcwd", "access", "fcntl", "fsync",
+    "ftruncate", "truncate", "isatty", "link", "symlink", "readlink", "chmod",
+    "chown", "umask", "sync", "fork", "execv", "execvp", "execve", "wait",
+    "waitpid", "getpid", "getppid", "kill", "alarm", "pause", "sleep",
+    "usleep", "nice", "poll", "select", "signal", "raise", "abort",
+    "pthread_create", "pthread_join", "pthread_self", "pthread_exit",
+    "mmap", "munmap", "madvise", "stat", "fstat", "lstat", "creat",
+    "gmtime", "localtime", "mktime", "strftime", "difftime", "nanosleep",
+    "random", "srandom", "strdup", "strndup", "strsep", "bzero", "bcopy",
+    "getline", "popen", "pclose", "tmpfile", "basename", "dirname",
+    "regcomp", "regexec", "regfree", "regerror", None}
 
 private def ps_cname(a: *Arena, name: const *char) -> const *char:
     if name == None:
@@ -11088,7 +11132,20 @@ private def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
             return L->a->printf("o_%s", sh_mangle(L, t->inner))
         case _:
             pass
-    return "v"
+    # O FUNDO ENCODIFICA A ESPÉCIE, e não é um detalhe de estilo: era um "v"
+    # fixo, e portanto `any`, `bytes`, `Task`, `Socket` e tudo o mais que não
+    # tivesse caso próprio pediam a MESMA chave. Quem chegasse primeiro registava
+    # o descritor, e os outros recebiam o dele.
+    #
+    # Enquanto todos esses eram opacos no descritor, o corpo era igual e não se
+    # via. Deixou de o ser quando o `any` passou a ter uma espécie que o
+    # `json.stringify` lê: num módulo onde um `bytes` fosse visto primeiro, o
+    # `any` recebia o descritor opaco dele e o `stringify` recusava um dicionário
+    # perfeitamente válido. Foi assim que apareceu — no `httpd.json(...)`.
+    #
+    # Encodificar o número da espécie é total por construção: uma espécie nova
+    # ganha chave própria sem ninguém se lembrar de a acrescentar aqui.
+    return L->a->printf("k%d", i32(t->kind))
 
 # `&x->f` for a field of the struct the generated walker was handed
 private def sh_field_addr(L: *PsLow, sname: const *char, fname: const *char, pos: Pos) -> *Expr:
