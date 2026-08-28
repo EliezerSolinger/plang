@@ -1405,7 +1405,27 @@ private def ps_list_grow(ctx: *PsCtx, l: *PsList, need: i64):
     l->data = a
     l->cap = ncap
 
+# 148: O CONTENTOR AUSENTE, e porque é que isto existe.
+#
+# Uma global é do WORKER (42.2), e o worker não corre o topo do programa —
+# portanto uma global `List<int> = []` é `None` lá dentro, e não uma lista vazia.
+# Indexá-la era um `l->len` no endereço zero: SIGSEGV numa thread sem pilha para
+# ler, que é o pior sítio possível para um defeito de programa.
+#
+# Agora levanta, e a mensagem diz a coisa que a pessoa precisa de saber — não
+# "ponteiro nulo", mas *porque* é que ele está nulo.
+private def ps_nil_container(ctx: *PsCtx, what: const *char, file: const *char, line: i32):
+    msg: char[256]
+    snprintf(msg, usize(256), "this %s is absent (None), not empty. A module-level variable is the WORKER's own (42.2) and a worker does not run the top level, so a global container is None inside one — build it in the worker, or pass it as an argument", what)
+    ps_raise(ctx, msg, PS_CAT_VALUE, file, line)
+
 def ps_list_len(l: *PsList) -> i64:
+    # 148: um contentor AUSENTE não tem elementos, e responder zero aqui é a
+    # única saída — esta função não tem contexto para levantar, e é chamada de
+    # dentro de laços onde um argumento a mais custaria em todas as voltas. Quem
+    # o USA levanta (ver `ps_list_at`), e é lá que a mensagem sai.
+    if l == None:
+        return 0
     return l->len
 
 # The base of the elements. A list with no storage yet answers a SCRATCH slot
@@ -1415,6 +1435,20 @@ def ps_list_len(l: *PsList) -> i64:
 private PS_SCRATCH: char[64]
 
 def ps_list_base(l: *PsList) -> *char:
+    # 148: UM CONTENTOR AUSENTE devolve o rascunho, e não levanta daqui.
+    #
+    # A razão é a ORDEM DE AVALIAÇÃO do C. Um `xs[i] = v` sai como
+    # `ps_list_base(xs)[ps_list_at(ctx, xs, i, ...)] = v`, e o C não define qual
+    # dos dois corre primeiro: se o `base` corresse antes do `at`, um `l->data`
+    # no endereço zero acontecia ANTES de o `at` ter a chance de levantar.
+    #
+    # Portanto o `at` é quem levanta (ele tem contexto e posição) e este devolve
+    # um sítio seguro para a escrita ir morrer. É o mesmo padrão que o índice
+    # fora de limites já usava: levantar, e devolver um valor que não estraga
+    # nada — a verificação da excepção na fronteira da instrução deita fora o
+    # resultado.
+    if l == None:
+        return PS_SCRATCH
     # a view (18.3) borrows the buffer's bytes: they are where they always
     # were, and indexing, iterating and slicing all go through here
     if l->raw != None:
@@ -1431,6 +1465,9 @@ def ps_arr_at(ctx: *PsCtx, i: i64, n: i64, file: const *char, line: i32) -> i64:
     return k
 
 def ps_list_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) -> i64:
+    if l == None:
+        ps_nil_container(ctx, "list", file, line)
+        return 0
     # negative counts from the end (31.4), and out of range RAISES (5.2) rather
     # than reading whatever is there
     k: i64 = i + l->len if i < 0 else i
@@ -1440,6 +1477,10 @@ def ps_list_at(ctx: *PsCtx, l: *PsList, i: i64, file: const *char, line: i32) ->
     return k
 
 def ps_list_push(ctx: *PsCtx, l: *PsList) -> *char:
+    if l == None:
+        # 148: o `append` a uma global que é None dentro de um worker
+        ps_nil_container(ctx, "list", "<list>", 0)
+        return PS_SCRATCH
     if l->raw != None:
         # 18.3: the window has exactly the elements the buffer has room for.
         # Growing would mean allocating, and then it would not be the same
@@ -1587,9 +1628,14 @@ def ps_dict_new(ctx: *PsCtx, ksize: i32, vsize: i32, kkind: i32, kref: bool, vre
     return d
 
 def ps_dict_len(d: *PsDict) -> i64:
+    if d == None:
+        return 0
     return d->n
 
 def ps_dict_put(ctx: *PsCtx, d: *PsDict, key: const *char) -> *char:
+    if d == None:
+        ps_nil_container(ctx, "dict", "<dict>", 0)
+        return PS_SCRATCH
     # Two things can be full: the dense array of entries, and the index at its
     # 3/4 load. Either one rebuilds — and the rebuild only GROWS when it is the
     # live set that filled the table. A table full of dead entries is compacted
@@ -1616,6 +1662,9 @@ def ps_dict_put(ctx: *PsCtx, d: *PsDict, key: const *char) -> *char:
     return ps_arr_data(d->vals) + usize(e) * usize(d->vsize)
 
 def ps_dict_get(ctx: *PsCtx, d: *PsDict, key: const *char, file: const *char, line: i32) -> *char:
+    if d == None:
+        ps_nil_container(ctx, "dict", file, line)
+        return PS_SCRATCH
     slot: i64 = 0
     e: i64 = ps_dict_find(d, key, ref slot)
     if e < 0:

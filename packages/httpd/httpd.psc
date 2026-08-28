@@ -47,6 +47,7 @@ import <datetime/datetime.psc> as dt
 import <url/url.psc> as url
 import json as jsn
 import net
+import sys
 import time
 
 
@@ -635,7 +636,7 @@ async def escreve_stream(c: Socket, r: Response, cfg: Config) -> bool:
             # o cursor rebentou a meio. Os cabeçalhos já foram, portanto não há
             # 500 possível — o que há é acabar o corpo e fechar, que é o que um
             # cliente lê como "a resposta foi interrompida".
-            aprint("httpd: stream: " + e.message)
+            ignora_log = await sys.err.write("httpd: stream: " + e.message + "\n")
             return False
         if len(pedaco) == 0:
             break
@@ -760,7 +761,7 @@ async def responde(req: Request, handle: def(Request) -> Task<Response>,
     try:
         return await handle(req)
     catch e:
-        aprint("httpd: " + req.method + " " + req.target + ": " + e.message)
+        ignora_log = await sys.err.write("httpd: " + req.method + " " + req.target + ": " + e.message + "\n")
         if cfg.debug:
             r = status_code(500)
             r.body = ("500 Internal Server Error\n\n" + e.message + "\n").encode()
@@ -829,6 +830,39 @@ def conta(srv: Server, c: Socket, handle: def(Request) -> Task<Response>):
     dizer isso por escrito: o resultado é deliberadamente ignorado, e uma linha
     que ignora um valor sem o dizer lê-se como um esquecimento."""
     t = serve_conn(c, "", handle, srv.cfg)
+
+
+# ---------- F3/D12: N WORKERS NO MESMO PORTO ----------
+#
+# É aqui que as três peças da linguagem se juntam, e nenhuma delas era acessória:
+#
+#   * **L1** — o handler ATRAVESSA para o worker. Um `def` de topo é um símbolo,
+#     o mesmo endereço em toda a thread do mesmo binário. Sem isto não havia como
+#     dar o handler a um worker, e o `serve(porta, handle, workers=N)` do desenho
+#     não podia existir;
+#   * **L2** — `SO_REUSEPORT`: os N escutam o MESMO porto e o kernel reparte as
+#     conexões. Sem aceitador único (que seria o gargalo) e sem thundering herd;
+#   * **L4** — os tópicos alcançam os N, para que uma difusão chegue a um jogador
+#     esteja ele no worker que estiver.
+#
+# **`workers=os.nproc()` por omissão** (D12): o servidor nasce a usar a máquina
+# inteira, que é o argumento. O Bun usa um e o `cluster` é opt-in; nascer
+# multi-core é exactamente o diferencial. `workers=1` é o opt-in de quem depura.
+async def worker_entry(handle: def(Request) -> Task<Response>, port: int, debug: bool) -> int:
+    """O que cada worker corre. Recebe o HANDLER pela travessia da L1.
+    
+    A `Config` não atravessa — ela é um `struct` e um struct é coletado, portanto
+    cada worker faz a sua. O que atravessa são os números e os bools, que é o que
+    a mensagem sabe carregar (34.3), e é também o desenho certo: a memória da
+    data (D42) e o hub dos tópicos passam a ser de cada worker, sem lock nenhum a
+    partilhar.
+    """
+    c = config()
+    c.debug = debug
+    # `reuseport=True`: é o que faz os N poderem ligar-se ao mesmo porto
+    srv = listen(port, c, True)
+    await run(srv, handle)
+    return 0
 
 
 async def serve(port: int, handle: def(Request) -> Task<Response>,

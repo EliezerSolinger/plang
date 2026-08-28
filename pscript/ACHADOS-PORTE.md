@@ -1125,3 +1125,66 @@ E o `X-Accel-Buffering: no` do SSE nao e para nos -- e para um nginx a frente.
 Sem ele o proxy junta os eventos num tampao e entrega-os todos no fim, o que
 transforma um fluxo em tempo real numa resposta longa. E o problema mais
 reportado de SSE atras de um proxy, e cabe num cabecalho.
+
+
+## 38 — um `const` CONSTRUIDO era `None` dentro de um worker  OK corrigido (era grave)
+
+Um `const` cujo valor tem de ser construido -- uma lista, um dicionario -- vive no
+conjunto do contexto (61.3), e o inicializador dele era codigo emitido dentro do
+`main`. Portanto num WORKER ele nunca corria: a tabela ficava `None`, e o primeiro
+`TABELA[i]` la dentro era um SIGSEGV numa thread sem pilha para ler.
+
+**Nao era um caso de nicho.** Quebrava qualquer pacote com uma tabela: o
+`datetime` (os nomes dos meses), o `compress` (as tabelas do DEFLATE), o `httpd`
+(os nomes dos dias, no cabecalho `Date`).
+
+E o sintoma nao apontava para lado nenhum. Um servidor com quatro workers falhava
+UMA resposta em trinta -- a primeira que cada worker formatava num segundo novo,
+porque a data e memorizada por segundo (D42) -- e as outras vinte e nove
+funcionavam. A depuracao levou uma hora e passou por tres hipoteses erradas
+(tarefa coletada, escrita parcial, accept perdido) antes de o diagnostico
+aparecer, e o que o revelou foi um `print` no `catch` do `write`.
+
+A correccao e uma funcao `__ps_consts_init(ctx)` que o `main` e o arranque de cada
+worker chamam. Correr o inicializador de um `const` POR CONTEXTO e o certo e nao
+um remendo: ele e imutavel, portanto N copias sao indistinguiveis de uma, e
+nenhuma referencia atravessa heaps (18.1) -- partilha-las seria o contrario disso.
+
+A chamada fica DEPOIS de os descritores dos tipos e os tamanhos das formas serem
+preenchidos, e nao junto ao `__ps_globals_init`: um `const` pode ser uma lista de
+records, e o `repr` de um record precisa do descritor.
+
+Gate: `tests/pscript/run/const_worker.psc`.
+
+## 39 — um contentor AUSENTE segfalhava em vez de levantar  OK corrigido
+
+O outro lado da mesma pedra. Uma global MUTAVEL continua a nascer no seu valor por
+omissao dentro de um worker -- e isso e o que a 42.2 promete, nao um defeito --,
+portanto uma `List<int>` global e `None` la dentro. Indexa-la era um `l->len` no
+endereco zero.
+
+Agora levanta, com uma mensagem que diz *porque* e que ele esta nulo e o que
+fazer. E o sitio onde a verificacao NAO pode ficar merece nota: no `ps_list_base`.
+Um `xs[i] = v` sai como `base(xs)[at(ctx, xs, i)] = v`, e o C nao define qual dos
+dois corre primeiro -- se o `base` corresse antes, o acesso ao endereco zero
+acontecia antes de o `at` ter a chance de levantar. Portanto quem levanta e o `at`
+(que tem contexto e posicao) e o `base` devolve um sitio seguro para a escrita ir
+morrer, que e o mesmo padrao do indice fora de limites.
+
+Gate: `tests/pscript/run/nil_container.psc`.
+
+## 40 — `aprint(...)` sem `await` nao imprime nada  OK corrigido no nosso codigo
+
+O `aprint` devolve uma tarefa, e uma tarefa que ninguem arranca nao corre. O
+registo de erros do `httpd` e do `ws` estava escrito com ele sem `await`, portanto
+nunca saiu uma linha -- e foi isso que fez a depuracao do `const` levar uma hora,
+porque o diagnostico que eu punha nao aparecia.
+
+Passou a `sys.err.write`, e isso e melhor por duas razoes independentes: o registo
+de um servidor pertence ao **stderr**, e o stderr nao e tamponado -- o `stdout` de
+quem escreve para um cano e tamponado por blocos, e uma linha de erro que so
+aparece quando o tampao enche e um registo que nao serve para nada.
+
+Fica em aberto se a linguagem devia avisar: uma tarefa cujo resultado e deitado
+fora e legitima (e o modelo da 35.3), mas `aprint` e um caso em que isso quer
+dizer "sem saida" -- e isso surpreende.

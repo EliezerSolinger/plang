@@ -206,5 +206,32 @@ for p in "/../segredo.txt" "/..%2fsegredo.txt" "/%2e%2e/segredo.txt" \
 done
 check "nenhuma travessia vazou" "0" "$vazou"
 
+# ============================================================================
+# F3/D12 — N WORKERS NO MESMO PORTO. É aqui que as três peças da linguagem se
+# juntam: o handler ATRAVESSA (L1), os N escutam o mesmo porto (L2), e uma
+# difusão alcança-os todos (L4).
+#
+# O portão bate com uma CONEXÃO NOVA de cada vez, porque é o accept que está a
+# ser testado e o keep-alive esconde-o. O zero de falhas é a metade que
+# interessa: foi ele que apanhou o `const` que era `None` dentro do worker.
+# ============================================================================
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/multi.psc "$OUT/multi" >>"$OUT/build.log" 2>&1; then
+    echo "  FAIL o servidor multi-worker não compila"; tail -5 "$OUT/build.log"; exit 1
+fi
+PF4="$OUT/porto4"
+"$OUT/multi" "$PF4" 4 >"$OUT/multi.log" 2>&1 &
+M=$!
+trap 'kill $SRV $R $E $M 2>/dev/null' EXIT
+for _ in $(seq 1 100); do [ -s "$PF4" ] && break; sleep 0.05; done
+if [ -s "$PF4" ]; then
+    check "quatro workers no mesmo porto" "$(cat tests/httpd-multi.expected)" \
+          "$(timeout 120 python3 tests/httpd-multi.py "$(cat "$PF4")" 4 2>&1)"
+    # L4 ao lado: uma difusão de um worker alcança os OUTROS TRÊS
+    check "a difusão alcança os outros workers" "3" \
+          "$(curl -s "http://127.0.0.1:$(cat "$PF4")/difunde")"
+else
+    echo "  FAIL o servidor multi-worker não abriu porto"; fail=$((fail+1))
+fi
+
 echo "   httpd: $pass ok, $fail failed"
 [ $fail -eq 0 ]

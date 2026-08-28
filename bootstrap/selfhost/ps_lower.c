@@ -388,6 +388,7 @@ struct PsLow {
     Vec_pPsFunc fnvals;
     Vec_pPsExpr gmads;
     Vec_pPsType tuptrs;
+    int tem_consts;
     Vec_pPsType reprads;
     Vec_pPsExpr cmpads;
     Vec_pPsExpr keyads;
@@ -8773,6 +8774,51 @@ static Decl *lower_globals_init(PsLow *L, Vec_pPsDecl gv, int with_body) {
     return d;
 }
 
+static Decl *lower_consts_init(PsLow *L, PsModule *m, int with_body) {
+    Pos zp = {0};
+    Func *f = Arena_alloc(L->a, sizeof(Func));
+    f->pos = zp;
+    f->name = "__ps_consts_init";
+    f->cname = f->name;
+    f->is_static = 1;
+    f->ret = ty_name(L->a, "void");
+    f->params = Arena_alloc(L->a, sizeof(*f->params));
+    f->params[0].name = CTX;
+    f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"));
+    f->params[0].pos = zp;
+    f->nparams = 1;
+    Decl *d = Arena_alloc(L->a, sizeof(Decl));
+    d->kind = DL_FUNC;
+    d->pos = zp;
+    d->func = f;
+    if (!with_body) {
+        return d;
+    }
+    Vec_pStmt corpo;
+    Vec_pStmt_init(&corpo);
+    size_t j;
+    for (j = 0; j < m->ndecls; j += 1) {
+        PsDecl *dc = m->decls[j];
+        if (dc->kind != PD_VAR || !dc->is_const || dc->init == NULL) {
+            continue;
+        }
+        if (ps_is_const_init(dc->init)) {
+            continue;
+        }
+        PsStmt *cs = ps_stmt(L->a, PS_VAR, dc->pos);
+        cs->name = dc->name;
+        cs->type = dc->type;
+        cs->rhs = dc->init;
+        cs->is_global = 1;
+        PsLow_stmt(L, cs, &corpo);
+    }
+    Vec_pStmt nl = PsLow_nl_flush(L, &corpo);
+    L->fr_fn = "<consts>";
+    L->fr_file = m->path;
+    f->body = PsLow_frame_wrap(L, &nl, NULL, 0, zp);
+    return d;
+}
+
 static void collect_lams_e(PsLow *L, PsExpr *e);
 
 static void collect_lams_s(PsLow *L, PsStmt *s);
@@ -9441,6 +9487,14 @@ static Decl *lower_worker_thunk(PsLow *L, PsFunc *f, int with_body) {
         gi->expr->lhs->text = "__ps_globals_init";
         PsLow_push_arg(L, gi->expr, PsLow_addr_of(L, "__wctx", f->pos));
         Vec_pStmt_push(&body, gi);
+    }
+    if (L->tem_consts) {
+        Stmt *ci9 = st_new(L->a, ST_EXPR, f->pos);
+        ci9->expr = ex_new(L->a, EX_CALL, f->pos);
+        ci9->expr->lhs = ex_new(L->a, EX_IDENT, f->pos);
+        ci9->expr->lhs->text = "__ps_consts_init";
+        PsLow_push_arg(L, ci9->expr, PsLow_addr_of(L, "__wctx", f->pos));
+        Vec_pStmt_push(&body, ci9);
     }
     Stmt *pa = st_new(L->a, ST_ASSIGN, f->pos);
     Expr *pf2 = ex_new(L->a, EX_FIELD, f->pos);
@@ -12201,6 +12255,16 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         Vec_pDecl_push(&L.out, lower_globals_struct(&L, gv));
         Vec_pDecl_push(&L.out, lower_globals_init(&L, gv, 0));
     }
+    size_t j;
+    for (j = 0; j < m->ndecls; j += 1) {
+        PsDecl *dq = m->decls[j];
+        if (dq->kind == PD_VAR && dq->is_const && dq->init != NULL && !ps_is_const_init(dq->init)) {
+            L.tem_consts = 1;
+        }
+    }
+    if (L.tem_consts) {
+        Vec_pDecl_push(&L.out, lower_consts_init(&L, m, 0));
+    }
     for (i = 0; i < m->ndecls; i += 1) {
         PsDecl *d = m->decls[i];
         if (d->kind == PD_FUNC && d->func != NULL && d->func->is_ceval) {
@@ -12213,7 +12277,6 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         } else if (d->kind == PD_FUNC && d->func->ntparams == 0) {
             Vec_pDecl_push(&L.out, lower_func(&L, d->func, NULL, 1));
         } else if (d->kind == PD_RECORD || d->kind == PD_STRUCT) {
-            size_t j;
             for (j = 0; j < d->nmethods; j += 1) {
                 if (d->methods[j]->is_async) {
                     int32_t kb = frame_index(&afr, Arena_printf(L.a, "%s_%s__frame", d->name, d->methods[j]->name));
@@ -12230,6 +12293,9 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     }
     if (gv.len > 0) {
         Vec_pDecl_push(&L.out, lower_globals_init(&L, gv, 1));
+    }
+    if (L.tem_consts) {
+        Vec_pDecl_push(&L.out, lower_consts_init(&L, m, 1));
     }
     for (i = 0; i < L.keyads.len; i += 1) {
         Vec_pDecl_push(&L.out, lower_keyad(&L, L.keyads.data[i], i, 1));
@@ -12289,7 +12355,6 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         }
     }
     for (i = 0; i < m->ndyns; i += 1) {
-        size_t j;
         for (j = 0; j < m->dyns[i].td->nmethods; j += 1) {
             Vec_pDecl_push(&L.out, lower_vt_thunk(&L, m->dyns[i].td, m->dyns[i].rd, m->dyns[i].td->methods[j], 1));
         }
@@ -12353,22 +12418,6 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
     }
     Vec_pStmt top;
     Vec_pStmt_init(&top);
-    size_t j;
-    for (j = 0; j < m->ndecls; j += 1) {
-        PsDecl *dc9 = m->decls[j];
-        if (dc9->kind != PD_VAR || !dc9->is_const || dc9->init == NULL) {
-            continue;
-        }
-        if (ps_is_const_init(dc9->init)) {
-            continue;
-        }
-        PsStmt *cs9 = ps_stmt(a, PS_VAR, dc9->pos);
-        cs9->name = dc9->name;
-        cs9->type = dc9->type;
-        cs9->rhs = dc9->init;
-        cs9->is_global = 1;
-        PsLow_stmt(&L, cs9, &top);
-    }
     if (m->main != NULL) {
         for (j = 0; j < m->main->n; j += 1) {
             PsLow_stmt(&L, m->main->stmts[j], &top);
@@ -12402,6 +12451,14 @@ Module *ps_lower(Arena *a, PsModule *m, const char *runtime_dir) {
         PsLow_push_arg(&L, sz9, tr9);
         fx->rhs = sz9;
         Vec_pStmt_push(&mb, fx);
+    }
+    if (L.tem_consts) {
+        Stmt *cc9 = st_new(a, ST_EXPR, zp);
+        cc9->expr = ex_new(a, EX_CALL, zp);
+        cc9->expr->lhs = ex_new(a, EX_IDENT, zp);
+        cc9->expr->lhs->text = "__ps_consts_init";
+        PsLow_push_arg(&L, cc9->expr, PsLow_ctx_arg(&L, zp));
+        Vec_pStmt_push(&mb, cc9);
     }
     Stmt *fd = st_new(a, ST_DEFER, zp);
     Block *fdb = Arena_alloc(a, sizeof(Block));

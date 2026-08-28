@@ -16,6 +16,7 @@ confia neste valor, ele só tem de ser difícil de acertar por acaso.
 import <httpd/httpd.psc> as httpd
 import <ws/ws.psc> as ws
 import <sha1/sha1.psc> as sha1
+import sys
 import topic
 
 
@@ -209,7 +210,7 @@ async def serve_ws(sock: Socket, req: httpd.Request, resto: bytes, hs: Handlers)
         try:
             ignora = await ab(c)
         catch e:
-            aprint("ws: on_open: " + e.message)
+            ignora_log = await sys.err.write("ws: on_open: " + e.message + "\n")
 
     with Buffer(65536) as rb:
         while c.aberta:
@@ -240,7 +241,7 @@ async def serve_ws(sock: Socket, req: httpd.Request, resto: bytes, hs: Handlers)
         try:
             ignora2 = await fc(c, 1006 if not c.pr.close_received else 1000, "")
         catch e:
-            aprint("ws: on_close: " + e.message)
+            ignora_log = await sys.err.write("ws: on_close: " + e.message + "\n")
     return entregues
 
 
@@ -291,7 +292,7 @@ async def drena(c: WsConn, hs: Handlers) -> bool:
             catch e:
                 # D3e outra vez: o handler rebenta, a conexão fecha com 1011, e o
                 # worker continua a servir toda a gente
-                aprint("ws: on_message: " + e.message)
+                ignora_log = await sys.err.write("ws: on_message: " + e.message + "\n")
                 ignora5 = await c.close(ws.CLOSE_INTERNAL, "")
                 return False
 

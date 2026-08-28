@@ -235,6 +235,10 @@ struct PsLow:
                           #   they hold a reference and live inside a container:
                           #   the collector walks INTO the element, and where the
                           #   references are is what the compiler knows
+    # 148: há `const` que têm de ser CONSTRUÍDOS? Se sim, os inicializadores
+    # deles vão para o `__ps_consts_init`, que corre em cada contexto — e o
+    # arranque de cada worker tem de o chamar.
+    tem_consts: bool
     reprads: Vec<*PsType> # 97: rendering ONE element of a container. The runtime
                           #   moves bytes and knows nothing about them, so the
                           #   adapter is emitted per ELEMENT TYPE — deduped by
@@ -8729,6 +8733,61 @@ private def lower_globals_init(L: *PsLow, gv: Vec<*PsDecl>, with_body: bool) -> 
     f->body = b
     return d
 
+# `static void __ps_consts_init(PsCtx *ctx)`: os inicializadores dos `const` que
+# têm de ser CONSTRUÍDOS, num sítio que corre EM CADA CONTEXTO.
+#
+# Antes disto eles eram baixados em linha dentro do `main`, e portanto num worker
+# nunca corriam: a tabela ficava `None` e o primeiro `TABELA[i]` era um SIGSEGV.
+# Quebrava qualquer pacote com uma tabela — o `datetime`, o `compress`, o próprio
+# `httpd` — e o sintoma era um servidor com N workers a falhar uma resposta em
+# trinta.
+#
+# Correr o inicializador por contexto é o certo e não um remendo: um `const` é
+# imutável, portanto N cópias são indistinguíveis de uma, e nenhuma referência
+# atravessa heaps (18.1). Partilhá-las seria o contrário disso.
+private def lower_consts_init(L: *PsLow, m: *PsModule, with_body: bool) -> *Decl:
+    zp: Pos = {0}
+    f: *Func = L->a->alloc(sizeof(Func))
+    f->pos = zp
+    f->name = "__ps_consts_init"
+    f->cname = f->name
+    f->is_static = True
+    f->ret = ty_name(L->a, "void")
+    f->params = L->a->alloc(sizeof(*f->params))
+    f->params[0].name = CTX
+    f->params[0].type = ty_ptr(L->a, ty_name(L->a, "PsCtx"))
+    f->params[0].pos = zp
+    f->nparams = 1
+    d: *Decl = L->a->alloc(sizeof(Decl))
+    d->kind = DL_FUNC
+    d->pos = zp
+    d->func = f
+    if not with_body:
+        return d
+    corpo: Vec<*Stmt>
+    corpo.init()
+    # em ordem de DECLARAÇÃO: o inicializador de um `const` pode olhar para os
+    # que vieram antes dele, que é a mesma regra que P tem para um `static`
+    for j in range(m->ndecls):
+        dc: *PsDecl = m->decls[j]
+        if dc->kind != PD_VAR or not dc->is_const or dc->init == None:
+            continue
+        if ps_is_const_init(dc->init):
+            continue        # um `static` do C: já inicializado onde é declarado
+        cs: *PsStmt = ps_stmt(L->a, PS_VAR, dc->pos)
+        cs->name = dc->name
+        cs->type = dc->type
+        cs->rhs = dc->init
+        cs->is_global = True
+        L->stmt(cs, &corpo)
+    nl: Vec<*Stmt> = L->nl_flush(&corpo)
+    # a moldura da pilha-sombra: estas instruções ALOCAM, e o coletor precisa de
+    # ver as referências vivas — é o mesmo tratamento que o corpo do `main` tem
+    L->fr_fn = "<consts>"
+    L->fr_file = m->path
+    f->body = L->frame_wrap(&nl, None, 0, zp)
+    return d
+
 private def collect_lams_e(L: *PsLow, e: *PsExpr)
 private def collect_lams_s(L: *PsLow, s: *PsStmt)
 private def collect_lams_b(L: *PsLow, b: *PsBlock)
@@ -9403,6 +9462,16 @@ private def lower_worker_thunk(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
         gi->expr->lhs->text = "__ps_globals_init"
         L->push_arg(gi->expr, L->addr_of("__wctx", f->pos))
         body.push(gi)
+    if L->tem_consts:
+        # 148: e os `const` que têm de ser CONSTRUÍDOS. Sem esta chamada a
+        # tabela de um pacote ficava `None` dentro do worker, e o primeiro
+        # `TABELA[i]` era um SIGSEGV numa thread sem pilha para ler.
+        ci9: *Stmt = st_new(L->a, ST_EXPR, f->pos)
+        ci9->expr = ex_new(L->a, EX_CALL, f->pos)
+        ci9->expr->lhs = ex_new(L->a, EX_IDENT, f->pos)
+        ci9->expr->lhs->text = "__ps_consts_init"
+        L->push_arg(ci9->expr, L->addr_of("__wctx", f->pos))
+        body.push(ci9)
     pa: *Stmt = st_new(L->a, ST_ASSIGN, f->pos)
     pf2: *Expr = ex_new(L->a, EX_FIELD, f->pos)
     pf2->op = TK_DOT
@@ -12148,6 +12217,29 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     if gv.len > 0:
         L.out.push(lower_globals_struct(&L, gv))
         L.out.push(lower_globals_init(&L, gv, False))
+    # 148: OS INICIALIZADORES DOS `const` PASSAM A CORRER EM CADA CONTEXTO.
+    #
+    # Um `const` cujo valor tem de ser CONSTRUÍDO — uma lista, um dicionário —
+    # vive no conjunto do contexto (61.3), e o inicializador dele era código
+    # emitido dentro do `main`. Portanto num WORKER ele nunca corria: a tabela
+    # ficava `None`, e o primeiro `TABELA[i]` lá dentro era um SIGSEGV.
+    #
+    # Não é um caso de nicho — quebrava qualquer pacote com uma tabela: o
+    # `datetime` (os nomes dos meses), o `compress` (as tabelas do DEFLATE), e o
+    # próprio `httpd` (os nomes dos dias, no cabeçalho `Date`). O sintoma era um
+    # servidor com N workers a falhar uma resposta em trinta, na primeira que
+    # cada worker formatava numa hora nova.
+    #
+    # A correcção é pô-los numa função à parte, que o `main` e o arranque de cada
+    # worker chamam. Correr o inicializador de um `const` por contexto é
+    # exactamente o certo: ele é imutável, portanto N cópias são
+    # indistinguíveis de uma — e nenhuma referência atravessa heaps (18.1).
+    for j in range(m->ndecls):
+        dq: *PsDecl = m->decls[j]
+        if dq->kind == PD_VAR and dq->is_const and dq->init != None and not ps_is_const_init(dq->init):
+            L.tem_consts = True
+    if L.tem_consts:
+        L.out.push(lower_consts_init(&L, m, False))
 
     for i in range(m->ndecls):
         d: *PsDecl = m->decls[i]
@@ -12178,6 +12270,8 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.out.push(lower_shared_init(&L, sv, True))
     if gv.len > 0:
         L.out.push(lower_globals_init(&L, gv, True))
+    if L.tem_consts:
+        L.out.push(lower_consts_init(&L, m, True))
 
     for i in range(L.keyads.len):
         L.out.push(lower_keyad(&L, L.keyads.data[i], i, True))
@@ -12308,18 +12402,6 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
     # can therefore be read by any of them, which is the whole point of it, and
     # its initializer may only look at consts declared before it, which is the
     # rule P has for a static.
-    for j in range(m->ndecls):
-        dc9: *PsDecl = m->decls[j]
-        if dc9->kind != PD_VAR or not dc9->is_const or dc9->init == None:
-            continue
-        if ps_is_const_init(dc9->init):
-            continue        # a C static: already initialized where it is declared
-        cs9: *PsStmt = ps_stmt(a, PS_VAR, dc9->pos)
-        cs9->name = dc9->name
-        cs9->type = dc9->type
-        cs9->rhs = dc9->init
-        cs9->is_global = True
-        L.stmt(cs9, &top)
     if m->main != None:
         for j in range(m->main->n):
             L.stmt(m->main->stmts[j], &top)
@@ -12355,6 +12437,18 @@ def ps_lower(a: *Arena, m: *PsModule, runtime_dir: const *char) -> *Module:
         L.push_arg(sz9, tr9)
         fx->rhs = sz9
         mb.push(fx)
+    # 148: A CHAMADA dos inicializadores dos `const`, e está AQUI por uma razão
+    # de ordem e não por acaso: um `const` pode ser uma lista de records, e o
+    # `repr` de um record precisa do descritor — que é preenchido nas duas
+    # passagens acima. Mais cedo, junto ao `__ps_globals_init`, dava um descritor
+    # a `None`.
+    if L.tem_consts:
+        cc9: *Stmt = st_new(a, ST_EXPR, zp)
+        cc9->expr = ex_new(a, EX_CALL, zp)
+        cc9->expr->lhs = ex_new(a, EX_IDENT, zp)
+        cc9->expr->lhs->text = "__ps_consts_init"
+        L.push_arg(cc9->expr, L.ctx_arg(zp))
+        mb.push(cc9)
     # THE HEAP IS GIVEN BACK LAST, and the way to say that is a defer registered
     # FIRST: P runs a block's defers in reverse, so the first one registered is
     # the last one to run — after every `defer`, `with` and `finally` the program
