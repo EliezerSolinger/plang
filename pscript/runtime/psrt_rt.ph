@@ -71,6 +71,20 @@ def ps_worker_args(blk: *void) -> *void
 # 34.3's copy ladder, for the one collected thing that can already cross: a
 # string leaves as malloc'd BYTES and is rebuilt on the other side, in the other
 # heap. No reference spans two heaps, which is the whole rule (18.1).
+# ---------- 148/L4/D6: os TÓPICOS ----------
+# O que atravessa é o ACORDAR, e não o objecto: quem se inscreve num tópico é um
+# CONTEXTO, e publicar é pôr os mesmos bytes na caixa de cada contexto inscrito e
+# bater-lhe à porta uma vez. Quem sabe quais CONEXÕES daquele worker assinam o
+# tópico é a biblioteca (D7).
+#
+# A publicação NÃO volta para quem publicou: ele tem o valor na mão, e devolvê-lo
+# por um cano seria uma cópia e um acordar para nada.
+def ps_topics_init()
+def ps_topic_subscribe(ctx: *PsCtx, name: *PsStr)
+def ps_topic_unsubscribe(ctx: *PsCtx, name: *PsStr)
+def ps_topic_leave_all(ctx: *PsCtx)
+def ps_topic_publish(ctx: *PsCtx, name: *PsStr, data: *PsBytes) -> i64
+def ps_topic_recv(ctx: *PsCtx, size: usize) -> *PsTask
 def ps_str_export(s: *PsStr) -> *char
 def ps_str_import(ctx: *PsCtx, p: *char) -> *PsStr
 # the same ladder for a list of PURE BYTES (34.3): the elements are copied out

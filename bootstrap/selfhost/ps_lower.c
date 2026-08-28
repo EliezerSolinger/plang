@@ -4794,6 +4794,24 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
         self->allocs = 1;
         return ts9;
     }
+    if (starts_with(name, "__topic_")) {
+        const char *tn9 = name + 8;
+        Expr *tc9 = PsLow_call_rt(self, Arena_printf(self->a, "ps_topic_%s", tn9), e->pos);
+        PsLow_push_arg(self, tc9, PsLow_ctx_arg(self, e->pos));
+        size_t i;
+        for (i = 0; i < e->nargs; i += 1) {
+            PsLow_push_arg(self, tc9, PsLow_expr(self, e->args[i]));
+        }
+        if (strcmp(tn9, "recv") == 0) {
+            Expr *sz9 = PsLow_call_rt(self, "sizeof", e->pos);
+            Expr *tr9 = ex_new(self->a, EX_TYPEREF, e->pos);
+            tr9->cast_type = ty_ptr(self->a, ty_name(self->a, "PsBytes"));
+            PsLow_push_arg(self, sz9, tr9);
+            PsLow_push_arg(self, tc9, sz9);
+        }
+        self->allocs = 1;
+        return tc9;
+    }
     if (starts_with(name, "__net_")) {
         Expr *nc = PsLow_call_rt(self, Arena_printf(self->a, "ps_net_%s", name + 6), e->pos);
         PsLow_push_arg(self, nc, PsLow_ctx_arg(self, e->pos));
@@ -9694,7 +9712,7 @@ static void async_fields_s(PsLow *L, PsStmt *s, Vec_PsField *v, const char *file
             if (s->name != NULL && s->expr != NULL) {
                 async_add_field(L, v, s->name, s->expr->type, s->pos, file);
             }
-            if (has_await_b(s->body)) {
+            if (has_await_b(s->body) || has_await_e(s->expr)) {
                 async_add_field(L, v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file);
             }
             break;

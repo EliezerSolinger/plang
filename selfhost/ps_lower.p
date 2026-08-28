@@ -4552,6 +4552,23 @@ struct PsLow:
             self->raised = True
             self->allocs = True
             return ts9
+        if starts_with(name, "__topic_"):
+            # 148/L4: as quatro passam por nome, como as do `net` logo abaixo. O
+            # `recv` é o único que devolve uma tarefa, e por isso é o único com
+            # um tamanho a dizer: é o do `bytes` que ele vai encher.
+            tn9: const *char = name + 8
+            tc9: *Expr = self->call_rt(self->a->printf("ps_topic_%s", tn9), e->pos)
+            self->push_arg(tc9, self->ctx_arg(e->pos))
+            for i in range(e->nargs):
+                self->push_arg(tc9, self->expr(e->args[i]))
+            if strcmp(tn9, "recv") == 0:
+                sz9: *Expr = self->call_rt("sizeof", e->pos)
+                tr9: *Expr = ex_new(self->a, EX_TYPEREF, e->pos)
+                tr9->cast_type = ty_ptr(self->a, ty_name(self->a, "PsBytes"))
+                self->push_arg(sz9, tr9)
+                self->push_arg(tc9, sz9)
+            self->allocs = True
+            return tc9
         if starts_with(name, "__net_"):
             nc: *Expr = self->call_rt(self->a->printf("ps_net_%s", name + 6), e->pos)
             self->push_arg(nc, self->ctx_arg(e->pos))
@@ -9637,7 +9654,19 @@ private def async_fields_s(L: *PsLow, s: *PsStmt, ref v: Vec<PsField>, file: con
         case PS_WITH:
             if s->name != None and s->expr != None:
                 async_add_field(L, ref v, s->name, s->expr->type, s->pos, file)
-            if has_await_b(s->body):
+            # A CONDIÇÃO TEM DE SER A MESMA DOS DOIS LADOS, e não era.
+            #
+            # O `ab_with` arma SEMPRE a marca de limpeza; esta passada só a
+            # declarava quando o CORPO suspendia. Um `with await open(p) as f:`
+            # suspende no CABEÇALHO e não no corpo — e então a máquina de estados
+            # escrevia numa marca que ninguém tinha declarado, com o C a queixar-se
+            # de um campo que não existe, num sítio sem relação nenhuma com o
+            # `await`.
+            #
+            # A forma `with await open(...)` é a forma NORMAL de abrir um ficheiro
+            # numa função assíncrona, o que torna o buraco maior do que parece:
+            # bastava um `with` com um corpo síncrono lá dentro.
+            if has_await_b(s->body) or has_await_e(s->expr):
                 async_add_field(L, ref v, ps_cleanup_flag(L->a, s->pos), ps_type(L->a, PT_BOOL, s->pos), s->pos, file)
         case _:
             pass

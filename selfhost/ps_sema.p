@@ -68,7 +68,7 @@ PS_NARROW_MAX: const i32 = 8
 
 private def ps_builtin_mod(name: const *char) -> bool:
     MODS: const *char[] = {"sys", "re", "json", "net", "random", "math", "time",
-                           "bisect", "heapq", "gc", "sched", "os", "path"}
+                           "bisect", "heapq", "gc", "sched", "os", "path", "topic"}
     for i in range(i32(sizeof(MODS) / sizeof(MODS[0]))):
         if strcmp(name, MODS[i]) == 0:
             return True
@@ -3881,6 +3881,32 @@ struct PsSema:
             xp: *PsType = self->check_expr(e->args[0])
             self->want(e->args[0], xp, ps_type(self->a, PT_STR, e->pos), "the path")
             return ps_type(self->a, PT_CONN, e->pos)
+        if strncmp(name, "__topic_", 8) == 0:
+            fn: const *char = name + 8
+            if strcmp(fn, "subscribe") == 0 or strcmp(fn, "unsubscribe") == 0:
+                if e->nargs != 1:
+                    fatal_at(self->file, e->pos, "topic.%s(name) takes the name of the topic", fn)
+                self->want(e->args[0], self->check_expr(e->args[0]), ps_type(self->a, PT_STR, e->pos), self->a->printf("topic.%s()", fn))
+                return ps_type(self->a, PT_VOID, e->pos)
+            if strcmp(fn, "publish") == 0:
+                # 148/D6: o CAMINHO QUENTE leva `bytes` e não um valor. Serializar
+                # é uma escolha de quem publica e por isso é visível — quem quiser
+                # mandar uma estrutura passa-a pelo `json.stringify` primeiro, e a
+                # linha diz que o fez. Uma porta que serializasse sozinha
+                # esconderia o custo por assinante.
+                if e->nargs != 2:
+                    fatal_at(self->file, e->pos, "topic.publish(name, data) takes the name of the topic and the bytes")
+                self->want(e->args[0], self->check_expr(e->args[0]), ps_type(self->a, PT_STR, e->pos), "topic.publish()")
+                self->want(e->args[1], self->check_expr(e->args[1]), ps_type(self->a, PT_BYTES, e->pos), "topic.publish()")
+                # quantos CONTEXTOS receberam — não quantas conexões, que é coisa
+                # da biblioteca (D7)
+                return ps_type(self->a, PT_INT, e->pos)
+            if strcmp(fn, "recv") == 0:
+                if e->nargs != 0:
+                    fatal_at(self->file, e->pos, "topic.recv() takes nothing: `await topic.recv()`")
+                tk9: *PsType = ps_type(self->a, PT_TASK, e->pos)
+                tk9->inner = ps_type(self->a, PT_BYTES, e->pos)
+                return tk9
         if strcmp(name, "__net_listen") == 0:
             # 77.1: binding and listening are instant, so this one is NOT a
             # task — what waits is `accept`, and that is where the await goes
@@ -5237,6 +5263,19 @@ struct PsSema:
         elif strcmp(name, "time") == 0:
             ns->sym.add("time")
             ns->sym.add("monotonic")
+        elif strcmp(name, "topic") == 0:
+            # 148/L4/D6: o pub/sub entre CONTEXTOS. Módulo próprio e não parte do
+            # `sys` pela mesma razão que o `sched` e o `gc` o são: são os botões
+            # de UMA máquina, e juntá-los a `sys` faria de `sys` um caixote.
+            #
+            # Quatro funções e nenhum tipo novo. Um `Topic` como objecto teria de
+            # ser coletado, e um objecto coletado não atravessa heaps (18.1) —
+            # portanto o que atravessa é o NOME, que é uma string, e o que fica
+            # do lado de cá é uma inscrição na tabela do processo.
+            ns->sym.add("subscribe")
+            ns->sym.add("unsubscribe")
+            ns->sym.add("publish")
+            ns->sym.add("recv")
         elif strcmp(name, "sched") == 0:
             # S3: o escalonador diz o que sabe. Módulo próprio e não `sys`,
             # pelo mesmo motivo que o `gc` é próprio: são os botões e os números

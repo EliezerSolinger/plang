@@ -126,6 +126,118 @@ def ps_worker_new(ctx: *PsCtx, entry: def(p: *void) -> *void, args: *void, nargs
     blk->started = 1
     return w
 
+# ---------- 148/L4/D6: os TÓPICOS ----------
+#
+# **O que atravessa é o ACORDAR, e não o objecto.** Um tópico é um nome; quem se
+# inscreve nele é um CONTEXTO (um worker, ou o topo do programa); e publicar é
+# pôr os mesmos bytes na caixa de cada contexto inscrito e bater-lhe à porta uma
+# vez. Quem sabe quais CONEXÕES daquele worker assinam o tópico é a biblioteca
+# (D7) — o runtime nunca conhece framing de WebSocket, e a alternativa (escrever
+# ele nos sockets, à uWebSockets) borraria a fronteira por um salto a menos.
+#
+# A tabela é do PROCESSO e é `malloc`'d. Dois workers têm heaps isolados e nada
+# coletado pode atravessar (18.1) — mas os dois vivem no mesmo espaço de
+# endereços, e é a mesma razão pela qual o bloco de controlo de um worker já é
+# malloc'd: outra thread lê-o, e um coletor que move não pode mover o que outra
+# thread está a ler.
+#
+# A publicação NÃO volta para quem publicou. Não é um capricho: quem publica tem
+# o valor na mão, e devolvê-lo por um cano seria uma cópia e um acordar para
+# nada. É também o que faz a camada de cima encaixar sem dizer nada — a
+# biblioteca entrega às conexões locais sem serializar, e o runtime trata das
+# outras.
+private g_topics: *PsTopicSub = None
+private g_topics_mu: pthread_mutex_t = {0}
+
+def ps_topics_init():
+    pthread_mutex_init(&g_topics_mu, None)
+
+private def ps_topic_pipe(ctx: *PsCtx):
+    """O cano abre-se na PRIMEIRA inscrição, e não no arranque do contexto: um
+    programa que nunca use tópicos não paga dois descritores, e um servidor com
+    N workers não paga 2N."""
+    if ctx->tp_r < 0:
+        ps_pipe_open(&ctx->tp_r, &ctx->tp_w)
+
+def ps_topic_subscribe(ctx: *PsCtx, name: *PsStr):
+    if name == None:
+        return
+    ps_topic_pipe(ctx)
+    pthread_mutex_lock(&g_topics_mu)
+    defer pthread_mutex_unlock(&g_topics_mu)
+    s: *PsTopicSub = g_topics
+    while s != None:
+        if s->ctx == ctx and strcmp(s->name, name->data) == 0:
+            return          # inscrever duas vezes é inscrever uma
+        s = s->next
+    n: *PsTopicSub = (*PsTopicSub)(malloc(sizeof(PsTopicSub)))
+    n->name = ps_dup(name->data)
+    n->ctx = ctx
+    n->next = g_topics
+    g_topics = n
+    ctx->tp_subs += 1
+
+def ps_topic_unsubscribe(ctx: *PsCtx, name: *PsStr):
+    if name == None:
+        return
+    pthread_mutex_lock(&g_topics_mu)
+    defer pthread_mutex_unlock(&g_topics_mu)
+    p: **PsTopicSub = &g_topics
+    while *p != None:
+        s: *PsTopicSub = *p
+        if s->ctx == ctx and strcmp(s->name, name->data) == 0:
+            *p = s->next
+            free(s->name)
+            free(s)
+            ctx->tp_subs -= 1
+            return
+        p = &s->next
+
+# ... e a saída inteira de um contexto, que é o que o fim de um worker faz. Sem
+# isto a tabela guardaria um ponteiro para um contexto que já não existe, e a
+# publicação seguinte escreveria num cano fechado — na melhor das hipóteses.
+def ps_topic_leave_all(ctx: *PsCtx):
+    pthread_mutex_lock(&g_topics_mu)
+    defer pthread_mutex_unlock(&g_topics_mu)
+    p: **PsTopicSub = &g_topics
+    while *p != None:
+        s: *PsTopicSub = *p
+        if s->ctx == ctx:
+            *p = s->next
+            free(s->name)
+            free(s)
+        else:
+            p = &s->next
+    ctx->tp_subs = 0
+
+def ps_topic_publish(ctx: *PsCtx, name: *PsStr, data: *PsBytes) -> i64:
+    """Os mesmos bytes na caixa de cada contexto inscrito, e uma pancada no cano
+    de cada um. Devolve a quantos CONTEXTOS foi — não a quantas conexões, que é
+    coisa da biblioteca."""
+    if name == None:
+        return 0
+    n: usize = data->len if data != None else usize(0)
+    src: const *char = data->data if data != None else None
+    alcancou: i64 = 0
+    pthread_mutex_lock(&g_topics_mu)
+    defer pthread_mutex_unlock(&g_topics_mu)
+    s: *PsTopicSub = g_topics
+    while s != None:
+        if s->ctx != ctx and strcmp(s->name, name->data) == 0:
+            d: *PsCtx = s->ctx
+            pthread_mutex_lock(&d->tp_mu)
+            ps_msg_push(&d->tp_head, &d->tp_tail, src, n)
+            pthread_mutex_unlock(&d->tp_mu)
+            ps_pipe_wake(d->tp_w)
+            alcancou += 1
+        s = s->next
+    return alcancou
+
+private def ps_topic_pop(ctx: *PsCtx) -> *PsMsg:
+    pthread_mutex_lock(&ctx->tp_mu)
+    defer pthread_mutex_unlock(&ctx->tp_mu)
+    return ps_msg_pop(&ctx->tp_head, &ctx->tp_tail)
+
 def ps_str_export(s: *PsStr) -> *char:
     n: usize = usize(s->len) if s != None else 0
     p: *char = (*char)(malloc(n + 1))
@@ -2075,6 +2187,50 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             return True
 
 # Every parked receive that can finish now, does. Returns whether any did.
+# 148/L4: os bytes que chegaram viram um `bytes` NO HEAP DE QUEM RECEBE — que é
+# a razão de eles terem viajado como bytes e não como objecto (18.1).
+private def ps_topic_finish(ctx: *PsCtx, t: *PsTask, m: *PsMsg):
+    ps_recv_unpark(t)
+    b: *PsBytes = ps_bytes_new(ctx, m->data, m->size)
+    *(**PsBytes)(ps_task_ret(t)) = b
+    free(m->data)
+    free(m)
+    t->state = -1
+    w: *PsTask = t->waiter
+    t->waiter = None
+    if w != None:
+        w->waiting_on = None
+        ps_sched_push(ctx, w)
+
+# `await topic.recv()` — a caixa deste contexto, com a espera feita aqui.
+def ps_topic_recv(ctx: *PsCtx, size: usize) -> *PsTask:
+    m: *PsMsg = ps_topic_pop(ctx)
+    fr: *char = (*char)(ps_alloc(ctx, sizeof(PsUser) + size, PS_TY_USER))
+    u: *PsUser = (*PsUser)(fr)
+    u->desc = &PS_REFMSG_DESC
+    memset(fr + sizeof(PsUser), 0, size)
+    t: *PsTask = (*PsTask)(ps_alloc(ctx, sizeof(PsTask), PS_TY_TASK))
+    t->state = 0
+    t->step = None
+    t->frame = (*PsObj)(fr)
+    t->err = None
+    t->waiter = None
+    t->is_topic = 1
+    t->rsize = size
+    if m != None:
+        # já lá estava: a tarefa nasce pronta, e o caminho comum não toca no
+        # escalonador nenhuma vez
+        b0: *PsBytes = ps_bytes_new(ctx, m->data, m->size)
+        *(**PsBytes)(ps_task_ret(t)) = b0
+        free(m->data)
+        free(m)
+        t->state = -1
+        return t
+    ps_topic_pipe(ctx)
+    t->next = ctx->waiters
+    ctx->waiters = t
+    return t
+
 private def ps_recvs_poll(ctx: *PsCtx) -> bool:
     any: bool = False
     t: *PsTask = ctx->waiters
@@ -2130,6 +2286,23 @@ private def ps_recvs_poll(ctx: *PsCtx) -> bool:
                         dw->waiting_on = None
                         ps_sched_push(ctx, dw)
                     any = True
+        elif t->state == 0 and t->is_topic != 0:
+            # 148/L4: parada na caixa de TÓPICOS. Não termina nunca por si — um
+            # tópico não tem "o outro lado foi-se embora": ele existe enquanto
+            # houver quem publique, e quem não quiser esperar mais cancela.
+            if t->cancelled != 0:
+                t->state = -1
+                tw: *PsTask = t->waiter
+                t->waiter = None
+                if tw != None:
+                    tw->waiting_on = None
+                    ps_sched_push(ctx, tw)
+                any = True
+            else:
+                mt: *PsMsg = ps_topic_pop(ctx)
+                if mt != None:
+                    ps_topic_finish(ctx, t, mt)
+                    any = True
         elif t->state == 0:
             if t->cancelled != 0:
                 # 37.2: a cancelled receive takes NOTHING out of the queue. A
@@ -2166,6 +2339,7 @@ private def ps_recvs_poll(ctx: *PsCtx) -> bool:
 private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
     cnt: i32 = 0
     io: bool = False
+    tp: bool = False
     *out_bad = False
     t: *PsTask = ctx->waiters
     while t != None:
@@ -2174,6 +2348,8 @@ private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
                 cnt += 1           # a socket waits on its own descriptor
             elif t->is_io != 0:
                 io = True          # every pool job wakes the SAME descriptor
+            elif t->is_topic != 0:
+                tp = True          # 148/L4: e toda a publicação, este outro
             else:
                 fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
                 if fd < 0:
@@ -2183,6 +2359,13 @@ private def ps_recv_fds(ctx: *PsCtx, out_bad: *bool) -> i32:
         t = t->next
     if io:
         if ctx->io_r < 0:
+            *out_bad = True
+        else:
+            cnt += 1
+    if tp:
+        # 148/L4: a caixa de tópicos deste contexto. Uma entrada só, mesmo com
+        # várias tarefas paradas nela — é um cano e não uma fila por tarefa.
+        if ctx->tp_r < 0:
             *out_bad = True
         else:
             cnt += 1
@@ -2308,6 +2491,11 @@ private PS_ARGV: **char = None
 def ps_sys_args(argc: int, argv: **char):
     PS_ARGC = argc
     PS_ARGV = argv
+    # 148/L4: a tabela dos tópicos é do PROCESSO, portanto o trinco dela nasce
+    # aqui — no ponto de entrada, que corre uma vez e antes de haver threads.
+    # Um `= {0}` estático serviria no Linux (o `PTHREAD_MUTEX_INITIALIZER` da
+    # glibc é tudo zeros) e não serviria no macOS, onde ele tem uma assinatura.
+    ps_topics_init()
 
 def ps_sys_argv(ctx: *PsCtx) -> *PsList:
     l: *PsList = ps_list_new(ctx, i32(sizeof(PsStrPtr)), True, i64(PS_ARGC))
@@ -3312,6 +3500,7 @@ else:
         drainable: bool[PS_POLL_MAX]
         k: i32 = 0
         anyio: bool = False
+        anytp: bool = False
         t2: *PsTask = ctx->waiters
         while t2 != None and k < PS_POLL_MAX:
             if t2->state == 0:
@@ -3323,6 +3512,8 @@ else:
                     k += 1
                 elif t2->is_io != 0:
                     anyio = True
+                elif t2->is_topic != 0:
+                    anytp = True
                 else:
                     fd: int = t2->rblk->up_r if t2->rdir == 0 else t2->rblk->dn_r
                     if fd >= 0:
@@ -3338,6 +3529,12 @@ else:
             fds[k].revents = 0
             drainable[k] = True
             k += 1
+        if anytp and ctx->tp_r >= 0 and k < PS_POLL_MAX:
+            fds[k].fd = ctx->tp_r
+            fds[k].events = i16(POLLIN)
+            fds[k].revents = 0
+            drainable[k] = True     # só uma pancada: os bytes estão na fila
+            k += 1
         poll(fds, u64(k), ms)
         for i in range(k):
             if fds[i].revents != 0 and drainable[i]:
@@ -3350,6 +3547,7 @@ else:
 const if __PLANG_LINUX__ or __PLANG_MACOS__:
     private def ps_mux_collect(ctx: *PsCtx, m: *PsMux):
         anyio: bool = False
+        anytp: bool = False
         t: *PsTask = ctx->waiters
         while t != None:
             if t->state == 0:
@@ -3357,12 +3555,16 @@ const if __PLANG_LINUX__ or __PLANG_MACOS__:
                     ps_mux_want(m, t->work->fd, t->work->events, False)
                 elif t->is_io != 0:
                     anyio = True
+                elif t->is_topic != 0:
+                    anytp = True
                 else:
                     fd: int = t->rblk->up_r if t->rdir == 0 else t->rblk->dn_r
                     ps_mux_want(m, fd, i16(POLLIN), True)
             t = t->next
         if anyio and ctx->io_r >= 0:
             ps_mux_want(m, ctx->io_r, i16(POLLIN), True)
+        if anytp and ctx->tp_r >= 0:
+            ps_mux_want(m, ctx->tp_r, i16(POLLIN), True)
 
 
 

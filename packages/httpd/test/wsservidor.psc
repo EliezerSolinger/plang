@@ -6,6 +6,8 @@ import sys
 
 
 async def aberto(c: hws.WsConn) -> int:
+    # F7: toda a gente entra no lobby, para o portão poder difundir
+    c.subscribe("lobby")
     ok = await c.send_text("bem-vindo " + str(c.id))
     return 1
 
@@ -18,6 +20,19 @@ async def mensagem(c: hws.WsConn, ev: hws.Event) -> int:
             return 1
         if t == "rebenta":
             raise error("rebentei de propósito")
+        if t.startswith("difunde:"):
+            # o CAMINHO QUENTE: os mesmos bytes para todo o lobby, com o quadro
+            # montado uma vez só
+            n = await c.publish_text("lobby", t[8:])
+            ok3 = await c.send_text("difundi para " + str(n))
+            return 1
+        if t == "quantos":
+            ok4 = await c.send_text("no lobby: " + str(c.hub.count("lobby")))
+            return 1
+        if t == "saio":
+            c.unsubscribe("lobby")
+            ok5 = await c.send_text("sai do lobby")
+            return 1
         ok = await c.send_text("eco:" + t)
         return 1
     ok2 = await c.send_bytes(ev.data)

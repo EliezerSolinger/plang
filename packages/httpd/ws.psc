@@ -16,6 +16,7 @@ confia neste valor, ele só tem de ser difícil de acertar por acaso.
 import <httpd/httpd.psc> as httpd
 import <ws/ws.psc> as ws
 import <sha1/sha1.psc> as sha1
+import topic
 
 
 # RFC 6455 §1.3: o GUID é literal, está na norma, e não é um segredo
@@ -86,6 +87,23 @@ struct WsConn:
     # os tópicos que esta conexão assina, para a dessubscrição automática do fecho
     # não depender de o programa se lembrar dela (D9c)
     topicos: List<str>
+    # o hub deste servidor. A conexão conhece-o para que o programa escreva
+    # `c.subscribe("lobby")` e não tenha de carregar o hub por todos os handlers
+    # — e a referência é circular de propósito: o hub tem as conexões e cada
+    # conexão tem o hub, o que um coletor resolve e um `free` manual não.
+    hub: Hub
+
+    def subscribe(self, topico: str):
+        self.hub.subscribe(self, topico)
+
+    def unsubscribe(self, topico: str):
+        self.hub.unsubscribe(self, topico)
+
+    async def publish(self, topico: str, corpo: bytes) -> int:
+        return await self.hub.publish(topico, corpo, True)
+
+    async def publish_text(self, topico: str, s: str) -> int:
+        return await self.hub.publish_text(topico, s)
 
     async def send_text(self, s: str) -> bool:
         return await self.send_frame(ws.OP_TEXT, s.encode())
@@ -146,6 +164,8 @@ struct Handlers:
     # mesmo worker não partilham a numeração, e não há lock porque uma conexão só
     # é falada dentro do worker que a tem (42.2).
     proximo_id: int
+    # F7: o hub dos tópicos, um por servidor
+    hub: Hub
 
 
 # o evento, reexportado para o programa não ter de importar o `ws` só por causa
@@ -176,8 +196,9 @@ async def serve_ws(sock: Socket, req: httpd.Request, resto: bytes, hs: Handlers)
     que só aparece com um cliente rápido, e portanto nunca no teste de quem o
     escreveu.
     """
-    c = WsConn(sock, ws.proto(True), req, hs.proximo_id, True, [])
+    c = WsConn(sock, ws.proto(True), req, hs.proximo_id, True, [], hs.hub)
     hs.proximo_id += 1
+    hs.hub.add(c)
     entregues = 0
 
     if len(resto) > 0:
@@ -211,6 +232,9 @@ async def serve_ws(sock: Socket, req: httpd.Request, resto: bytes, hs: Handlers)
 
     c.aberta = False
     sock.close()
+    # D9c: a inscrição morre com a conexão, e morre ANTES do `on_close` — assim
+    # um `on_close` que publique não escreve para o socket que acabou de fechar
+    hs.hub.drop(c)
     fc = hs.on_close
     if fc != None:
         try:
@@ -278,7 +302,7 @@ def handlers(on_open: (def(WsConn) -> Task<int>)?,
     # filtrar, e quem se esquecesse fazia eco de um ping como mensagem.
     on_message: (def(WsConn, Event) -> Task<int>)?,
              on_close: (def(WsConn, int, str) -> Task<int>)?) -> Handlers:
-    return Handlers(on_open, on_message, on_close, 1)
+    return Handlers(on_open, on_message, on_close, 1, hub())
 
 
 def upgrader(hs: Handlers) -> def(Socket, httpd.Request, bytes) -> Task<int>:
@@ -289,3 +313,172 @@ def upgrader(hs: Handlers) -> def(Socket, httpd.Request, bytes) -> Task<int>:
     isto, ou a httpd conhecia o ws, ou o programa escrevia esta cola.
     """
     return lambda s, r, resto: serve_ws(s, r, resto, hs)
+
+
+# ---------- F7/D6: os tópicos ----------
+
+struct Hub:
+    """As conexões deste worker, e quem assina o quê.
+
+    **DENTRO do worker isto não serializa nada.** Um tópico é um conjunto de
+    conexões e uma publicação é uma escrita directa no socket de cada uma — o
+    mesmo `bytes` vai para todas, e o quadro é montado UMA vez. É a diferença
+    entre este desenho e um em que cada assinante recebe uma mensagem própria.
+
+    O que o Hub NÃO faz é atravessar workers. A camada de cima disso é a L4 do
+    desenho: o runtime rastreia quais WORKERS assinam cada tópico e escreve uma
+    vez no pipe de cada um; quem distribui às conexões continua a ser isto, aqui
+    dentro. A fronteira é a D7 — o runtime nunca conhece framing de WebSocket —,
+    e por isso esta struct não muda quando essa camada chegar: ela ganha uma
+    entrada, não uma reescrita.
+    """
+    # tópico -> as conexões que o assinam, por id
+    subs: Dict<str, List<int>>
+    # id -> a conexão. Um id e não a conexão dentro do tópico porque uma conexão
+    # sai por muitos caminhos (fecha, rebenta, o cliente desaparece) e um id
+    # morto é fácil de limpar; um ponteiro morto não é.
+    conns: Dict<int, WsConn>
+
+    def add(self, c: WsConn):
+        self.conns[c.id] = c
+
+    def subscribe(self, c: WsConn, topico: str):
+        if topico not in self.subs:
+            self.subs[topico] = []
+            # o PRIMEIRO assinante local deste tópico inscreve o WORKER no
+            # runtime. Os seguintes não repetem: o runtime rastreia contextos.
+            topic.subscribe(topico)
+        if c.id not in self.subs[topico]:
+            self.subs[topico].append(c.id)
+        if topico not in c.topicos:
+            c.topicos.append(topico)
+
+    def unsubscribe(self, c: WsConn, topico: str):
+        if topico in self.subs:
+            novos: List<int> = []
+            for i in self.subs[topico]:
+                if i != c.id:
+                    novos.append(i)
+            self.subs[topico] = novos
+        restantes: List<str> = []
+        for t in c.topicos:
+            if t != topico:
+                restantes.append(t)
+        c.topicos = restantes
+
+    def drop(self, c: WsConn):
+        """D9c: FECHAR DESSUBSCREVE DE TUDO, sempre.
+
+        Não é conveniência: um servidor de jogo tem gente a entrar e a sair o dia
+        inteiro, e uma inscrição que sobrevive à conexão é uma fuga que cresce
+        com o tempo de vida do processo. Fazer o programa lembrar-se disto é
+        garantir que um dia ele se esquece.
+        """
+        for t in c.topicos:
+            if t in self.subs:
+                novos: List<int> = []
+                for i in self.subs[t]:
+                    if i != c.id:
+                        novos.append(i)
+                self.subs[t] = novos
+        c.topicos = []
+        if c.id in self.conns:
+            self.conns.remove(c.id)
+
+    def count(self, topico: str) -> int:
+        return len(self.subs[topico]) if topico in self.subs else 0
+
+    async def publish(self, topico: str, corpo: bytes, binario: bool) -> int:
+        """O CAMINHO QUENTE: os mesmos bytes para toda a gente do tópico.
+
+        O quadro é montado UMA vez e escrito N. Não há serialização por assinante
+        e não há cópia por assinante — é o que torna difundir o estado do mundo
+        60 vezes por segundo uma coisa que se pode fazer.
+
+        Devolve a quantos foi. As conexões mortas caem no caminho, que é o sítio
+        certo para as apanhar: quem publica é quem descobre que já não está lá.
+        """
+        if topico not in self.subs:
+            return 0
+        quadro = ws.serialize(ws.frame(ws.OP_BIN if binario else ws.OP_TEXT, corpo), b"")
+        vivos: List<int> = []
+        n = 0
+        for i in self.subs[topico]:
+            if i not in self.conns:
+                continue
+            c = self.conns[i]
+            if not c.aberta:
+                continue
+            ok = False
+            try:
+                await c.sock.write(quadro)
+                ok = True
+            catch e:
+                c.aberta = False
+            if ok:
+                vivos.append(i)
+                n += 1
+        self.subs[topico] = vivos
+        return n
+
+    async def publish_text(self, topico: str, s: str) -> int:
+        return await self.publish(topico, s.encode(), False)
+
+    # ---------- L4: e os OUTROS WORKERS ----------
+
+    def join(self, topico: str):
+        """Diz ao runtime que ESTE worker passa a receber publicações do tópico.
+
+        Chama-se uma vez por tópico e não uma vez por conexão: o runtime rastreia
+        CONTEXTOS (D7), e mandar-lhe a mesma inscrição N vezes seria N vezes o
+        mesmo. A `subscribe` de uma conexão chama isto por baixo.
+        """
+        topic.subscribe(topico)
+
+    async def broadcast(self, topico: str, corpo: bytes, binario: bool) -> int:
+        """A publicação COMPLETA: as conexões deste worker, e os outros workers.
+
+        Os dois degraus da D6 numa chamada, com os custos separados e visíveis:
+
+          * **aqui dentro** não serializa nada — o quadro é montado uma vez e
+            escrito N, e os mesmos bytes vão para todas as conexões;
+          * **para fora** atravessa como bytes, uma vez por WORKER e não uma vez
+            por conexão. Quem distribui do outro lado é esta mesma função, no
+            worker de lá, chamada pelo laço do `pump`.
+
+        Devolve quantas conexões LOCAIS receberam. O número dos outros workers
+        não se sabe daqui, e inventá-lo seria pior do que não o dar.
+        """
+        n = await self.publish(topico, corpo, binario)
+        # o cabeçalho é `nome\n` e é da BIBLIOTECA, não do runtime: ele routeia
+        # pelo nome que lhe foi dado e entrega os bytes tal e qual (D6), portanto
+        # quem recebe precisa de saber a que tópico pertencem. Um `\n` porque um
+        # nome de tópico não o tem — e se tiver, a culpa é de quem o escolheu.
+        marca = (topico + "\n").encode()
+        ignora = topic.publish(topico, marca + (b"\x01" if binario else b"\x00") + corpo)
+        return n
+
+    async def pump(self) -> int:
+        """Uma publicação vinda de OUTRO worker, entregue às conexões daqui.
+
+        Corre numa tarefa própria, em laço: `await topic.recv()` dorme no cano do
+        contexto — o mesmo `poll` que já espera pelos sockets — e por isso não
+        custa nada enquanto não há nada.
+        """
+        recebidas = 0
+        while True:
+            d = await topic.recv()
+            i = 0
+            while i < len(d) and int(d[i]) != 10:
+                i += 1
+            if i >= len(d):
+                continue
+            nome = str(d[0:i])
+            binario = len(d) > i + 1 and int(d[i + 1]) == 1
+            corpo = d[i + 2:]
+            ignora = await self.publish(nome, corpo, binario)
+            recebidas += 1
+
+
+def hub() -> Hub:
+    return Hub({}, {})

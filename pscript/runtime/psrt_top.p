@@ -42,6 +42,27 @@ def ps_ctx_done(ctx: *PsCtx) -> int:
 # ... and this half gives the world back. Called from the entry point's first
 # defer, so it is the last thing that happens in the process.
 def ps_ctx_free(ctx: *PsCtx):
+    # 148/L4: SAIR DOS TÓPICOS É O PRIMEIRO PASSO, e antes de tudo o resto.
+    #
+    # A tabela é do processo e guarda um ponteiro para este contexto. Se ele
+    # morresse inscrito, a publicação seguinte de outro worker escreveria num
+    # cano fechado e num contexto que já não existe — e é o género de defeito
+    # que só aparece quando um worker termina antes dos outros, portanto sob
+    # carga e nunca no teste.
+    ps_topic_leave_all(ctx)
+    if ctx->tp_r >= 0:
+        close(ctx->tp_r)
+        close(ctx->tp_w)
+        ctx->tp_r = -1
+        ctx->tp_w = -1
+    m: *PsMsg = ctx->tp_head
+    while m != None:
+        nx0: *PsMsg = m->next
+        free(m->data)
+        free(m)
+        m = nx0
+    ctx->tp_head = None
+    ctx->tp_tail = None
     ps_report_lost(ctx)
     ps_mux_free(ctx)
     ps_random_free(ctx)

@@ -402,6 +402,10 @@ struct PsTask:
     rblk: *PsWorkerBlk   # whose queue (malloc'd, never moves)
     rdir: i32            # 0 = the UP queue (a parent reading its worker),
                          #   1 = the DOWN queue (a worker reading its parent)
+    # 148/L4: parada na caixa de TÓPICOS deste contexto. É a quinta espécie de
+    # espera, e tem uma marca própria em vez de ir pelo `rblk`: a caixa é do
+    # CONTEXTO e não de um par pai/filho, portanto não há bloco nenhum a nomear.
+    is_topic: i32
     rkind: i32           # 0 = raw bytes, 1 = a graph to rebuild (74.2)
     rsize: usize         # how many bytes the frame's slot holds
     rshape: const *PsShape   # ... and, for a graph, what shape it has
@@ -867,6 +871,21 @@ struct PsDes:
     cbuilt: i32
     bad: i32           # the bytes ran short or said something impossible
 
+# 148/L4/D6: A INSCRIÇÃO DE UM CONTEXTO NUM TÓPICO.
+#
+# A tabela é do PROCESSO e não de um heap: dois workers têm heaps isolados (18.1)
+# e nada coletado pode atravessar, mas os dois vivem no mesmo espaço de endereços
+# e a tabela é `malloc`'d — como o bloco de controlo de um worker já é, e pela
+# mesma razão.
+#
+# O que ela guarda são CONTEXTOS e não conexões, que é a fronteira da D7: o
+# runtime nunca conhece framing de WebSocket. Ele acorda o worker; quem sabe
+# quais conexões daquele worker assinam o tópico é a biblioteca.
+struct PsTopicSub:
+    name: *char          # malloc'd: o nome pertence à tabela, não a um heap
+    ctx: *PsCtx
+    next: *PsTopicSub
+
 struct PsShape:
     kind: i32
     size: u32                 # POD: how many bytes; STRUCT: sizeof(S)
@@ -1034,6 +1053,22 @@ struct PsCtx:
                          #   deadline
     io_r: int            # completion pipe of THIS context (76.3): a pool thread
     io_w: int            #   writes a byte here when a job of ours finishes
+    # ---------- 148/L4/D6: os TÓPICOS ----------
+    # A caixa de correio deste contexto para publicações. É separada da fila de
+    # mensagens do worker (`parent`) de propósito: aquela é entre PAI e FILHO e
+    # tem um tipo combinado, esta é entre QUAISQUER dois contextos do processo e
+    # carrega bytes opacos. Misturá-las faria um `parent.recv()` receber uma
+    # publicação que não sabe ler.
+    #
+    # O cano é o mesmo mecanismo da fila de mensagens (74.1) e pela mesma razão:
+    # um escalonador parado tem de conseguir esperar por VÁRIAS coisas ao mesmo
+    # tempo, e uma variável de condição não sabe fazer isso.
+    tp_head: *PsMsg
+    tp_tail: *PsMsg
+    tp_mu: pthread_mutex_t   # outro contexto escreve aqui: o trinco é obrigatório
+    tp_r: int
+    tp_w: int
+    tp_subs: i32             # a quantos tópicos este contexto está inscrito
     waiters: *PsTask     # tasks waiting on a MESSAGE (74.1) or on the POOL
                          #   (76.3). Together with the
                          #   timers these are the whole of the wait: the loop

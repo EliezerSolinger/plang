@@ -1,0 +1,11 @@
+no-lobby no lobby: 3
+b-recebeu mundo-tick-1
+c-recebeu mundo-tick-1
+a-recebeu mundo-tick-1
+quantos-alcancou difundi para 3
+saiu sai do lobby
+c-ainda-recebe tick-2
+a-ainda-recebe tick-2
+alcancou-menos difundi para 2
+b-ve no lobby: 2
+depois-de-fechar no lobby: 1

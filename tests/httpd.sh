@@ -124,5 +124,69 @@ check "query repetida"        "a,b,c"         "$(curl -s "$C/lista?t=a&t=b&t=c")
 check "corpo JSON" '{"recebi":{"x":[1,2],"y":"z"},"era_json":true}' \
       "$(curl -s -H 'content-type: application/json' -d '{"x":[1,2],"y":"z"}' $C/json)"
 
+# ============================================================================
+# F8 — os ESTÁTICOS. A metade que interessa é a última: as tentativas de sair do
+# directório, em todas as grafias que um atacante tenta. Nenhuma pode devolver o
+# ficheiro que está FORA da raiz, e o portão prova-o procurando o conteúdo dele.
+# ============================================================================
+WWW="$OUT/www"
+mkdir -p "$WWW/sub"
+printf '<h1>indice</h1>' > "$WWW/index.html"
+printf 'corpo do a'      > "$WWW/a.txt"
+printf '0123456789abcdefghij' > "$WWW/dez.bin"
+printf 'sub-indice'      > "$WWW/sub/index.html"
+# o ficheiro que NÃO pode ser servido: fica ao lado da raiz, não dentro
+printf 'SEGREDO'         > "$OUT/segredo.txt"
+
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/estaticos.psc "$OUT/est" >>"$OUT/build.log" 2>&1; then
+    echo "  FAIL o servidor de estáticos não compila"; tail -5 "$OUT/build.log"; exit 1
+fi
+PF3="$OUT/porto3"
+"$OUT/est" "$PF3" "$WWW" >"$OUT/est.log" 2>&1 &
+E=$!
+trap 'kill $SRV $R $E 2>/dev/null' EXIT
+for _ in $(seq 1 100); do [ -s "$PF3" ] && break; sleep 0.05; done
+[ -s "$PF3" ] || { echo "  FAIL o servidor de estáticos não abriu porto"; exit 1; }
+S="http://127.0.0.1:$(cat "$PF3")"
+
+check "index de um directório" "<h1>indice</h1>" "$(curl -s $S/)"
+check "um ficheiro"            "corpo do a"     "$(curl -s $S/a.txt)"
+check "o MIME pela extensão"   "text/html; charset=utf-8"       "$(curl -s -o /dev/null -w '%{content_type}' $S/index.html)"
+check "index de um subdirectório" "sub-indice"  "$(curl -s $S/sub/)"
+check "o que não existe"       "404" "$(curl -s -o /dev/null -w '%{http_code}' $S/nada)"
+
+# o ETag e o 304: a conferência é ANTES de qualquer leitura, que é o ponto
+ET=$(curl -s -i $S/a.txt | tr -d '\r' | grep -i '^etag' | cut -d' ' -f2)
+check "If-None-Match dá 304" "304" \
+      "$(curl -s -o /dev/null -w '%{http_code}' -H "If-None-Match: $ET" $S/a.txt)"
+
+# o Range, que é o que faz um vídeo saltar em vez de descarregar tudo
+check "range do princípio" "01234" "$(curl -s -H 'Range: bytes=0-4' $S/dez.bin)"
+check "range do meio"      "56789" "$(curl -s -H 'Range: bytes=5-9' $S/dez.bin)"
+check "range dos últimos"  "hij"   "$(curl -s -H 'Range: bytes=-3' $S/dez.bin)"
+check "range aberto"       "fghij" "$(curl -s -H 'Range: bytes=15-' $S/dez.bin)"
+check "o content-range"    "content-range: bytes 2-4/20" \
+      "$(curl -s -o /dev/null -D - -H 'Range: bytes=2-4' $S/dez.bin | tr -d '\r' | grep -i content-range)"
+check "range fora do fim dá 416" "416" \
+      "$(curl -s -o /dev/null -w '%{http_code}' -H 'Range: bytes=999-' $S/dez.bin)"
+
+# ---- E A PARTE QUE INTERESSA ----
+#
+# Doze grafias de "sai do directório". O que se afirma NÃO é o código de estado —
+# um 403 e um 404 são os dois respostas certas, conforme o caminho normalizado
+# saia da raiz ou simplesmente não exista lá dentro. O que se afirma é que o
+# conteúdo do ficheiro de fora NUNCA aparece.
+vazou=0
+for p in "/../segredo.txt" "/..%2fsegredo.txt" "/%2e%2e/segredo.txt" \
+         "/%2e%2e%2fsegredo.txt" "/.%2e/segredo.txt" "/sub/../../segredo.txt" \
+         "/sub/%2e%2e/%2e%2e/segredo.txt" "/....//segredo.txt" \
+         "/..%252fsegredo.txt" "/%252e%252e%252fsegredo.txt" \
+         "//../segredo.txt" "/./../../segredo.txt"; do
+    if curl -s --path-as-is "$S$p" | grep -q SEGREDO; then
+        echo "  FAIL VAZOU por '$p'"; vazou=1
+    fi
+done
+check "nenhuma travessia vazou" "0" "$vazou"
+
 echo "   httpd: $pass ok, $fail failed"
 [ $fail -eq 0 ]

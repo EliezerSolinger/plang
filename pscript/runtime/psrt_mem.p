@@ -208,6 +208,15 @@ def ps_ctx_init(out ctx: PsCtx):
     ctx.lost = None
     ctx.io_r = -1
     ctx.io_w = -1
+    # 148/L4: a caixa de tópicos. O cano abre-se na primeira inscrição e não
+    # aqui: um programa que nunca use tópicos não paga dois descritores por
+    # contexto, e um servidor com N workers pagaria 2N.
+    ctx.tp_head = None
+    ctx.tp_tail = None
+    pthread_mutex_init(&ctx.tp_mu, None)
+    ctx.tp_r = -1
+    ctx.tp_w = -1
+    ctx.tp_subs = 0
     ctx.nlive = 0
     ctx.graveyard = None
     ctx.grave_n = 0

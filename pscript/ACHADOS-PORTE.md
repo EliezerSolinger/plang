@@ -1013,3 +1013,84 @@ resolvem-na. Fica registada porque custou uma leitura: o primeiro é a função 
 devolve um opcional, o segundo é a função opcional, e a mensagem de erro mostra
 os dois quase iguais. Um campo `on_upgrade` escrito sem parênteses aceita `None`
 como **valor de retorno** e não como valor do campo.
+
+## 34 — os TÓPICOS entre contextos (L4/D6)  ✅ feito
+
+O pub/sub é a peça que o desenho chamou de "a feature assassina", e é onde o
+modelo de concorrência aparece: N workers com heaps isolados, e uma difusão que
+os alcança a todos sem que nenhum objecto atravesse.
+
+Quatro funções e **nenhum tipo novo**, o que é a decisão central: um `Topic` como
+objecto seria coletado, e um objecto coletado não atravessa heaps (18.1). O que
+atravessa é o NOME, que é uma string, e a inscrição vive numa tabela do PROCESSO
+— `malloc`'d, pela mesma razão que o bloco de controlo de um worker já era: outra
+thread lê-a, e um coletor que move não pode mover o que outra thread está a ler.
+
+Três coisas que a implementação decidiu e que valem a pena estar escritas:
+
+* **a caixa de tópicos é SEPARADA da fila de mensagens do worker.** Aquela é
+  entre pai e filho e tem um tipo combinado; esta é entre quaisquer dois
+  contextos e carrega bytes opacos. Misturá-las faria um `parent.recv()` receber
+  uma publicação que não sabe ler;
+
+* **o cano abre-se na primeira inscrição**, e não no arranque do contexto: um
+  programa que nunca use tópicos não paga dois descritores, e um servidor com N
+  workers não paga 2N;
+
+* **a publicação não volta para quem publicou.** Quem publica tem o valor na mão,
+  e devolvê-lo por um cano seria uma cópia e um acordar para nada. É também o que
+  faz os dois degraus da D6 encaixarem sem uma linha de política: a biblioteca
+  entrega às conexões locais sem serializar nada, e o runtime trata dos outros
+  workers.
+
+E o `ps_topic_leave_all` no fim de um contexto não é higiene: a tabela guarda um
+ponteiro para ele, e um worker que morresse inscrito faria a publicação seguinte
+escrever num cano fechado — o género de defeito que só aparece quando um worker
+termina antes dos outros, portanto sob carga e nunca no teste.
+
+Gates: `tests/pscript/run/topics.psc` (entre workers, com encontro explícito para
+não ser uma corrida) e `tests/ws.sh` (dentro do worker, com três clientes e a
+dessubscrição do fecho).
+
+
+## 35 — `with await ...` num `async def` nao compilava  OK corrigido
+
+    async def ler(p: str) -> int:
+        with await open(p, "r") as f:      # <- erro num campo do frame
+            ...
+
+E a forma NORMAL de abrir um ficheiro numa funcao assincrona, e o erro que saia
+falava de um campo do frame que nao existe, num sitio sem relacao nenhuma com o
+`await` -- porque a causa estava noutra passada.
+
+A maquina de estados guarda no frame uma MARCA por limpeza armada, para saber a
+cada saida do bloco o que ja foi libertado. Quem a escreve arma-a **sempre**; quem
+monta o frame so a declarava quando o **corpo** do `with` suspendia. Um `with
+await open(...)` suspende no CABECALHO, e entao uma escrevia numa marca que a
+outra nao tinha declarado.
+
+As duas condicoes passam a ser a mesma. Vale a pena notar o que ja estava certo:
+os dois lados calculam o NOME da marca a partir da posicao, precisamente para nao
+poderem divergir -- o que faltava era a condicao, nao o nome.
+
+Gate: `tests/pscript/run/async_with.psc`.
+
+## 36 — ficheiros estaticos (F8/D13/D21)  OK feito
+
+`packages/httpd/files.psc`: MIME por extensao, ETag forte, 304, `Range` (com
+`If-Range`), 416, `index.html`, e **nunca listar o directorio**.
+
+A defesa contra travessia e a que importa, e o que ela **nao** faz e procurar
+`..` no texto do pedido. Essa rompe-se, porque ha sempre mais uma grafia --
+`%2e%2e`, `..%2f`, `.%2e/`, `..;/`, a dupla codificacao. A que nao se rompe e
+juntar a raiz, NORMALIZAR, e comparar o resultado com ela; e a comparacao e por
+prefixo **mais separador**, porque sem ele uma raiz `/srv/www` deixaria passar
+`/srv/www-privado`.
+
+O portao tenta doze grafias e nao afirma o codigo de estado -- um 403 e um 404 sao
+os dois respostas certas conforme o caminho saia da raiz ou simplesmente nao
+exista la dentro. Afirma que o conteudo do ficheiro de fora **nunca aparece**.
+
+O ETag e forte (e nao `W/`) porque a comparacao que o `Range` precisa exige um
+validador forte (RFC 9110 s13.1.3): com um fraco, um cliente que retoma uma
+descarga de um ficheiro que mudou coseria dois ficheiros diferentes.

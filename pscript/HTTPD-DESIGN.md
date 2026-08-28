@@ -503,7 +503,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [ ] **L3 — `SSL_accept`** e carregar cert/chave, por caminho e por bytes (D8/D15).
       Portão: um GET por `https` com cert auto-assinado, conferido com
       `openssl s_client`.
-- [ ] **L4 — `Topic`** no runtime (D6/D7): subscrever, publicar, dessubscrever, por
+- [x] **L4 — `Topic`** no runtime (D6/D7): subscrever, publicar, dessubscrever, por
       worker, sobre os pipes. Portão: um broadcast a K conexões repartidas por W
       workers chega a todas, uma vez cada.
 - [x] **L5 — `net.unix`** (D35): escutar e ligar por socket UNIX. Já estava
@@ -533,9 +533,9 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
       Python como oráculo, frame a frame.
 - [x] **F6 — Upgrade e `WsConn`** (D9b). Portão: um eco ponta a ponta, texto e
       binário, ping/pong, close limpo.
-- [ ] **F7 — Pub/sub** sobre L4, com as duas portas de `publish` (D6) e a
+- [x] **F7 — Pub/sub** sobre L4, com as duas portas de `publish` (D6) e a
       dessubscrição automática (D9c).
-- [ ] **F8 — Estáticos** (D13/D21): `httpd.files(dir)` com MIME, ETag/304, Range,
+- [x] **F8 — Estáticos** (D13/D21): `httpd.files(dir)` com MIME, ETag/304, Range,
       `index.html` e a recusa de `..`. Portão: um `..` em todas as codificações que
       um atacante tenta, e um Range parcial conferido byte a byte.
 - [ ] **F8b — Cookies e sessão** (D33): ler, escrever com os atributos seguros por
