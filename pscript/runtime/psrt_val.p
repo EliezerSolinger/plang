@@ -3780,6 +3780,22 @@ def ps_repr_ty(ctx: *PsCtx, p: *void, ty: const *PsTy, depth: i32) -> *PsStr:
         if ty->names != None and v >= 0 and v < ty->nnames:
             return ps_str_new(ctx, ty->names[v], strlen(ty->names[v]))
         return ps_str_new(ctx, "?", usize(1))
+    if k == 12:
+        # `T?` (9.4): o valor que lá está, ou `None` — o mesmo texto que o topo
+        # dá, agora também de dentro de uma lista ou de um campo.
+        #
+        # O teste é DIFERENTE nas duas representações e por isso o `width` existe:
+        # a referência nua pergunta pelo ponteiro, o registo pergunta pela marca
+        # e depois salta os oito bytes dela (147.6). Não se pode delegar o caso
+        # da referência ao `inner` sem mais: um `List<int>?` vazio sairia como
+        # `[]`, que é uma lista que existe e está vazia — outra coisa.
+        if ty->width == 1:
+            if *(**void)(p) == None:
+                return ps_str_new(ctx, "None", usize(4))
+            return ps_repr_ty(ctx, p, ty->inner, depth)
+        if *(*i64)(p) == 0:
+            return ps_str_new(ctx, "None", usize(4))
+        return ps_repr_ty(ctx, (*void)((*u8)(p) + usize(8)), ty->inner, depth)
     return ps_str_new(ctx, "?", usize(1))
 
 # um dict quer DOIS tipos, e a devolução de `ps_repr_dict` só carrega um `env`.

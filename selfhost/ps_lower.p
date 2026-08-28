@@ -1257,6 +1257,29 @@ struct PsLow:
                 return c3
             case PT_NAME:
                 return self->repr_of(v, t, pos, depth)
+            case PT_OPT:
+                # 97/9.4: um `T?` rende como em Python — o valor que lá está, ou
+                # `None`. Não é uma regra nova: é a MESMA pergunta que o
+                # `if x != None` já faz, e `opt_present`/`opt_value` já sabem
+                # respondê-la nas duas representações (o ponteiro nulo de uma
+                # referência e o registo `{has, v}` de um valor).
+                #
+                # `v` é lido duas vezes — pelo teste e pelo valor. Aqui isso é
+                # seguro porque quem chega a `repr_value` já chega ligado: o
+                # `lower_reprad` passa `*(T *)__ep` e o caso do tuplo ao lado já
+                # relê `v` uma vez por campo. Quem tem efeito é ligado antes, no
+                # `to_str`.
+                if t->inner == None:
+                    return self->str_lit("None", pos)
+                io9: *Expr = self->repr_value(self->opt_value(t, v, pos), t->inner, pos, depth)
+                if io9 == None:
+                    return None
+                to9: *Expr = ex_new(self->a, EX_TERNARY, pos)
+                to9->cond = self->opt_present(t, v, pos)
+                to9->lhs = io9
+                to9->rhs = self->str_lit("None", pos)
+                to9->parened = True
+                return to9
             case _:
                 return None
 
@@ -1328,6 +1351,24 @@ struct PsLow:
                 self->raised = True
                 self->allocs = True
                 return an9
+            case PT_OPT:
+                # `str(x)` e `f"{x}"` de um `T?`, com a semântica de Python: o
+                # valor, ou a palavra `None`. É o mesmo texto que já saía quando
+                # o `T?` estava DENTRO de uma lista — recusá-lo no topo era a
+                # incoerência de o mesmo valor ter forma escrita num sítio e não
+                # ter no outro.
+                #
+                # A ligação a um temporário é obrigatória quando a expressão tem
+                # efeito: o teste e o valor leem-na, e `f"{d.pop('k')}"` chamaria
+                # `pop` duas vezes.
+                if e->type->inner == None:
+                    return self->str_lit("None", e->pos)
+                pro: *Expr = None
+                vvo: *Expr = v if self->is_trivial(e) else self->bind_val(v, self->ty(e->type), e->pos, ref pro)
+                rvo: *Expr = self->repr_value(vvo, e->type, e->pos, 0)
+                if rvo == None:
+                    fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type))
+                return self->with_pre(pro, rvo, e->pos)
             case PT_NAME:
                 # a record, a struct or an enum: the derived form (44.3), or
                 # the type's own `to_str()` when it wrote one
@@ -5853,6 +5894,26 @@ struct PsLow:
             self->push_arg(cr, self->chr(e->args[3], e->pos))
             self->allocs = True
             return cr
+        if vt == PT_ANY or vt == PT_BYTES or vt == PT_OPT:
+            # o mesmo `str()` que o `print` usa: um `any` rende-se pelo
+            # descritor que carrega (39.2), um `bytes` decodifica com a
+            # verificação de UTF-8 (79.1) e um `T?` dá o valor ou `None` (9.4).
+            # A f-string diz o que o `print` diz.
+            #
+            # Um `T?` chega aqui já como TEXTO, e por isso a largura e o
+            # alinhamento aplicam-se-lhe como a uma string — não como ao número
+            # que talvez lá esteja. É a única regra que serve para os dois lados
+            # do `?`: `{x:>6}` alinha "None" e "42" na mesma coluna, ao passo
+            # que um `{x:03d}` sobre um vazio não teria resposta nenhuma (em
+            # Python o mesmo caso levanta).
+            sv8: *Expr = self->to_str(e->args[0])
+            fs8: *Expr = self->call_rt("ps_fmt_str", e->pos)
+            self->push_arg(fs8, self->ctx_arg(e->pos))
+            self->push_arg(fs8, sv8)
+            self->push_arg(fs8, self->expr(e->args[1]))
+            self->push_arg(fs8, self->chr(e->args[3], e->pos))
+            self->allocs = True
+            return fs8
         zt: i64 = strtoll(e->args[4]->text, None, 10)
         zero: bool = (zt / 256) != 0
         ty: i32 = i32(zt % 256)
@@ -10614,6 +10675,10 @@ private def ty_kind_of(L: *PsLow, t: *PsType) -> i32:
             return 7
         case PT_ANY:
             return 11
+        case PT_OPT:
+            # um `None` NU não tem tipo por dentro, e um descritor sem `inner`
+            # não teria o que dizer — esse fica opaco, como estava
+            return 12 if t->inner != None else 0
         case PT_NAME:
             # `decl_named` e não `records_by_name`: o segundo só conhece os
             # tipos com campos, e um enum é justamente o que não tem nenhum
@@ -10696,6 +10761,14 @@ private def ty_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
         elif kind == 7:
             knm = ty_of(L, t->key, pos)
             inner = ty_of(L, t->inner, pos)
+        elif kind == 12:
+            # o `width` de um opcional diz QUAL das duas representações da 9.4
+            # está à frente: 1 é a referência nua (o `None` é o ponteiro nulo),
+            # 0 é o registo `{has: i64, v: T}` — e aí o valor cai sempre no
+            # deslocamento 8 pela 147.6, que é o que deixa o runtime lê-lo sem
+            # que o compilador lhe mande um `offsetof`.
+            inner = ty_of(L, t->inner, pos)
+            width = 1 if opt_is_ref(t->inner) else 0
         elif kind == 10:
             ed: *PsDecl = L->decl_named(t->name)
             if ed != None:
@@ -10971,6 +11044,14 @@ private def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
             return L->a->printf("%s%d", "u" if t->uns else "i", t->width)
         case PT_NAME:
             return L->a->printf("%s_%s", "s" if opt_is_ref(t) else "p", ps_cname(L->a, t->name))
+        case PT_OPT:
+            # `T?` TEM de mangle-ar pelo que está lá dentro. Sem esta linha caía
+            # no "v" do fundo — e então `List<str?>` e `List<int?>` pediam a
+            # MESMA chave, ficando com a mesma forma: a primeira a ser emitida
+            # ganhava, e a outra passava a ser percorrida com a forma errada.
+            # Num dos sentidos isso é o coletor a seguir um inteiro como se
+            # fosse um ponteiro.
+            return L->a->printf("o_%s", sh_mangle(L, t->inner))
         case _:
             pass
     return "v"

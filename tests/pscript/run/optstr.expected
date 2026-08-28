@@ -1,0 +1,12 @@
+None oi None 42
+None oi None 42 3.5 True
+[  None][    42]
+[None, 'z', None]
+[1, None, 3]
+[None, 'z', None] [1, None, 3]
+{'k': None, 'm': 7}
+Pessoa(nome='Ana', email=None, idade=3)
+Pessoa(nome='Rui', email='rui@exemplo.pt', idade=None)
+Pessoa(nome='Ana', email=None, idade=3)
+None [1, 2]
+[None, [7]]

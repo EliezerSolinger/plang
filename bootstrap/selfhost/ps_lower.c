@@ -1534,6 +1534,21 @@ static Expr *PsLow_repr_value(PsLow *self, Expr *v, PsType *t, Pos pos, int32_t 
         case PT_NAME: {
             return PsLow_repr_of(self, v, t, pos, depth);
         }
+        case PT_OPT: {
+            if (t->inner == NULL) {
+                return PsLow_str_lit(self, "None", pos);
+            }
+            Expr *io9 = PsLow_repr_value(self, PsLow_opt_value(self, t, v, pos), t->inner, pos, depth);
+            if (io9 == NULL) {
+                return NULL;
+            }
+            Expr *to9 = ex_new(self->a, EX_TERNARY, pos);
+            to9->cond = PsLow_opt_present(self, t, v, pos);
+            to9->lhs = io9;
+            to9->rhs = PsLow_str_lit(self, "None", pos);
+            to9->parened = 1;
+            return to9;
+        }
         default: {
             return NULL;
         }
@@ -1604,6 +1619,18 @@ static Expr *PsLow_to_str(PsLow *self, PsExpr *e) {
             self->raised = 1;
             self->allocs = 1;
             return an9;
+        }
+        case PT_OPT: {
+            if (e->type->inner == NULL) {
+                return PsLow_str_lit(self, "None", e->pos);
+            }
+            Expr *pro = NULL;
+            Expr *vvo = (PsLow_is_trivial(self, e) ? v : PsLow_bind_val(self, v, PsLow_ty(self, e->type), e->pos, &pro));
+            Expr *rvo = PsLow_repr_value(self, vvo, e->type, e->pos, 0);
+            if (rvo == NULL) {
+                fatal_at(self->file, e->pos, "str() of %s is not compiled yet", ps_type_str(self->a, e->type));
+            }
+            return PsLow_with_pre(self, pro, rvo, e->pos);
         }
         case PT_NAME: {
             Expr *rp = PsLow_repr_of(self, v, e->type, e->pos, 0);
@@ -6079,6 +6106,16 @@ static Expr *PsLow_fmt_call(PsLow *self, PsExpr *e) {
         PsLow_push_arg(self, cr, PsLow_chr(self, e->args[3], e->pos));
         self->allocs = 1;
         return cr;
+    }
+    if (vt == PT_ANY || vt == PT_BYTES || vt == PT_OPT) {
+        Expr *sv8 = PsLow_to_str(self, e->args[0]);
+        Expr *fs8 = PsLow_call_rt(self, "ps_fmt_str", e->pos);
+        PsLow_push_arg(self, fs8, PsLow_ctx_arg(self, e->pos));
+        PsLow_push_arg(self, fs8, sv8);
+        PsLow_push_arg(self, fs8, PsLow_expr(self, e->args[1]));
+        PsLow_push_arg(self, fs8, PsLow_chr(self, e->args[3], e->pos));
+        self->allocs = 1;
+        return fs8;
     }
     int64_t zt = strtoll(e->args[4]->text, NULL, 10);
     int zero = zt / 256 != 0;
@@ -10738,6 +10775,9 @@ static int32_t ty_kind_of(PsLow *L, PsType *t) {
         case PT_ANY: {
             return 11;
         }
+        case PT_OPT: {
+            return (t->inner != NULL ? 12 : 0);
+        }
         case PT_NAME: {
             PsDecl *dd = PsLow_decl_named(L, t->name);
             if (dd == NULL) {
@@ -10831,6 +10871,9 @@ static const char *ty_of(PsLow *L, PsType *t, Pos pos) {
         } else if (kind == 7) {
             knm = ty_of(L, t->key, pos);
             inner = ty_of(L, t->inner, pos);
+        } else if (kind == 12) {
+            inner = ty_of(L, t->inner, pos);
+            width = (opt_is_ref(t->inner) ? 1 : 0);
         } else if (kind == 10) {
             PsDecl *ed = PsLow_decl_named(L, t->name);
             if (ed != NULL) {
@@ -11106,6 +11149,9 @@ static const char *sh_mangle(PsLow *L, PsType *t) {
         }
         case PT_NAME: {
             return Arena_printf(L->a, "%s_%s", (opt_is_ref(t) ? "s" : "p"), ps_cname(L->a, t->name));
+        }
+        case PT_OPT: {
+            return Arena_printf(L->a, "o_%s", sh_mangle(L, t->inner));
         }
         default: {
             ;

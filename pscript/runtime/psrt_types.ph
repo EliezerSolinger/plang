@@ -295,6 +295,12 @@ enum PsTyKind:
                        #   "pergunta ao valor", e um `any` só pode conter
                        #   exactamente as formas do JSON, que é a razão de ele
                        #   agora atravessar o `json.stringify`.
+    PS_T_OPT           # `T?` (9.4). O `inner` é o que lá está e o `width` diz
+                       #   QUAL das duas representações está à frente: 1 é a
+                       #   referência nua (o vazio é o ponteiro nulo), 0 é o
+                       #   registo `{has: i64, v: T}` — e nesse a marca de oito
+                       #   bytes da 147.6 põe o valor sempre no deslocamento 8,
+                       #   que é o que dispensa mandar um `offsetof` daqui.
 
 struct PsTy:
     kind: i32

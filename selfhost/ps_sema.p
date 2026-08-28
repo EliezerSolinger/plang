@@ -3767,7 +3767,10 @@ struct PsSema:
             # (44.3) — the same text `print` and `str()` give
             # ... and a CONTAINER through its own (97), which is the same text
             # again: one repr, three ways of asking for it
-            if vt2 == None or vt2->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_NAME, PT_LIST, PT_SET, PT_DICT, PT_TUPLE}:
+            # `any` e `bytes` formatam pelo MESMO `str()` que já existe ao lado
+            # — recusá-los aqui era uma incoerência: `str(x)` funcionava e
+            # `f"{x}"` não, sendo o mesmo trabalho.
+            if vt2 == None or vt2->kind not in {PT_INT, PT_FLOAT, PT_BOOL, PT_STR, PT_NAME, PT_LIST, PT_SET, PT_DICT, PT_TUPLE, PT_ANY, PT_BYTES, PT_OPT}:
                 fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, vt2))
             for i in range(1, 5):
                 self->check_expr(e->args[i])
@@ -6313,8 +6316,20 @@ struct PsSema:
             # the FIELD's type is context for the value (54.2), the same way a
             # declaration's is: `UndoGroup([], ...)` says what the empty list holds
             self->check_want(val, rd->fields[slot].type, self->a->printf("field '%s'", rd->fields[slot].name))
-            at: *PsType = val->type
-            a->type = rd->fields[slot].type
+            # O TIPO DO CAMPO vai para o nó do DESIGNADOR, nunca para o do valor.
+            #
+            # Na forma nomeada os dois nós são diferentes (`a` é o `nome=`, `val`
+            # é o que está do outro lado do `=`) e escrever em `a->type` não
+            # tocava no valor. Na POSICIONAL são o mesmo nó — e então isto
+            # carimbava `int?` por cima do `int` do literal. A baixa lê esse tipo
+            # para decidir se embrulha um `T` num `T?` (9.4), via `coerce`; ao
+            # ver que o valor "já é" opcional, deixava-o passar cru, e o C saía
+            # com um `__PsOpt_i` a receber um escalar.
+            #
+            # Só se via nos opcionais de VALOR: num de referência o embrulho é a
+            # identidade, e por isso `str?` funcionava e `int?` não.
+            if named:
+                a->type = rd->fields[slot].type
         if named:
             for fi in range(rd->nfields):
                 if not seen[fi]:

@@ -5409,7 +5409,7 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             fatal_at(self->file, e->pos, "__fmt is internal to f-strings");
         }
         PsType *vt2 = PsSema_check_expr(self, e->args[0]);
-        if (vt2 == NULL || !(vt2->kind == PT_INT || vt2->kind == PT_FLOAT || vt2->kind == PT_BOOL || vt2->kind == PT_STR || vt2->kind == PT_NAME || vt2->kind == PT_LIST || vt2->kind == PT_SET || vt2->kind == PT_DICT || vt2->kind == PT_TUPLE)) {
+        if (vt2 == NULL || !(vt2->kind == PT_INT || vt2->kind == PT_FLOAT || vt2->kind == PT_BOOL || vt2->kind == PT_STR || vt2->kind == PT_NAME || vt2->kind == PT_LIST || vt2->kind == PT_SET || vt2->kind == PT_DICT || vt2->kind == PT_TUPLE || vt2->kind == PT_ANY || vt2->kind == PT_BYTES || vt2->kind == PT_OPT)) {
             fatal_at(self->file, e->args[0]->pos, "an f-string cannot format %s yet", ps_type_str(self->a, vt2));
         }
         size_t i;
@@ -5694,12 +5694,12 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
             below->args[0] = lenc;
             below->nargs = 1;
             {
-                PsExpr *__with_4014_17 = e;
-                __with_4014_17->kind = PE_INDEX;
-                __with_4014_17->lhs = e->args[0];
-                __with_4014_17->rhs = below;
-                __with_4014_17->args = NULL;
-                __with_4014_17->nargs = 0;
+                PsExpr *__with_4017_17 = e;
+                __with_4017_17->kind = PE_INDEX;
+                __with_4017_17->lhs = e->args[0];
+                __with_4017_17->rhs = below;
+                __with_4017_17->args = NULL;
+                __with_4017_17->nargs = 0;
             }
             return PsSema_check_expr(self, e);
         }
@@ -6251,26 +6251,26 @@ static PsType *PsSema_builtin_call(PsSema *self, PsExpr *e, const char *name) {
         free(by7);
         if (!bin7) {
             {
-                PsExpr *__with_4522_17 = e;
-                __with_4522_17->kind = PE_STR;
-                __with_4522_17->text = lit7;
-                __with_4522_17->lhs = NULL;
-                __with_4522_17->rhs = NULL;
-                __with_4522_17->args = NULL;
-                __with_4522_17->nargs = 0;
+                PsExpr *__with_4525_17 = e;
+                __with_4525_17->kind = PE_STR;
+                __with_4525_17->text = lit7;
+                __with_4525_17->lhs = NULL;
+                __with_4525_17->rhs = NULL;
+                __with_4525_17->args = NULL;
+                __with_4525_17->nargs = 0;
             }
             return ps_type(self->a, PT_STR, e->pos);
         }
         Expr *ln7 = ex_new(self->a, EX_STRING, e->pos);
         ln7->text = lit7;
         {
-            PsExpr *__with_4535_13 = e;
-            __with_4535_13->kind = PE_LOWERED;
-            __with_4535_13->low = ln7;
-            __with_4535_13->lhs = NULL;
-            __with_4535_13->rhs = NULL;
-            __with_4535_13->args = NULL;
-            __with_4535_13->nargs = 0;
+            PsExpr *__with_4538_13 = e;
+            __with_4538_13->kind = PE_LOWERED;
+            __with_4538_13->low = ln7;
+            __with_4538_13->lhs = NULL;
+            __with_4538_13->rhs = NULL;
+            __with_4538_13->args = NULL;
+            __with_4538_13->nargs = 0;
         }
         PsType *at7 = ps_type(self->a, PT_ARRAY, e->pos);
         at7->inner = ps_type(self->a, PT_INT, e->pos);
@@ -6600,10 +6600,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
             }
             ns->quals = vec_grow(ns->quals, ns->nquals, &ns->cquals, sizeof(*ns->quals));
             {
-                PsNsEnt *__with_4849_17 = &ns->quals[ns->nquals];
-                __with_4849_17->name = q;
-                __with_4849_17->orig = d->path;
-                __with_4849_17->ns = sub;
+                PsNsEnt *__with_4852_17 = &ns->quals[ns->nquals];
+                __with_4852_17->name = q;
+                __with_4852_17->orig = d->path;
+                __with_4852_17->ns = sub;
             }
             ns->nquals += 1;
         } else {
@@ -6616,10 +6616,10 @@ static PsNs *PsSema_build_ns(PsSema *self, PsModule *m, const char *prefix, cons
                 }
                 ns->ents = vec_grow(ns->ents, ns->nents, &ns->cents, sizeof(*ns->ents));
                 {
-                    PsNsEnt *__with_4861_21 = &ns->ents[ns->nents];
-                    __with_4861_21->name = local;
-                    __with_4861_21->orig = d->names[k];
-                    __with_4861_21->ns = sub;
+                    PsNsEnt *__with_4864_21 = &ns->ents[ns->nents];
+                    __with_4864_21->name = local;
+                    __with_4864_21->orig = d->names[k];
+                    __with_4864_21->ns = sub;
                 }
                 ns->nents += 1;
             }
@@ -7099,10 +7099,10 @@ static int PsSema_try_mod_qual(PsSema *self, PsExpr *e) {
     }
     ns_check_visible(q->ns, e->text, self->file, e->pos, q->orig);
     {
-        PsExpr *__with_5367_9 = e;
-        __with_5367_9->kind = PE_NAME;
-        __with_5367_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
-        __with_5367_9->lhs = NULL;
+        PsExpr *__with_5370_9 = e;
+        __with_5370_9->kind = PE_NAME;
+        __with_5370_9->text = Arena_printf(self->a, "%s%s", q->ns->prefix, e->text);
+        __with_5370_9->lhs = NULL;
     }
     return 1;
 }
@@ -7113,10 +7113,10 @@ static int PsSema_try_type_const(PsSema *self, PsExpr *e) {
         return 0;
     }
     {
-        PsExpr *__with_5388_9 = e;
-        __with_5388_9->kind = PE_NAME;
-        __with_5388_9->text = cn9;
-        __with_5388_9->lhs = NULL;
+        PsExpr *__with_5391_9 = e;
+        __with_5391_9->kind = PE_NAME;
+        __with_5391_9->text = cn9;
+        __with_5391_9->lhs = NULL;
     }
     return 1;
 }
@@ -8056,8 +8056,9 @@ static PsType *PsSema_check_ctor(PsSema *self, PsExpr *e, PsDecl *rd) {
         }
         seen[slot] = 1;
         PsSema_check_want(self, val, rd->fields[slot].type, Arena_printf(self->a, "field '%s'", rd->fields[slot].name));
-        PsType *at = val->type;
-        a->type = rd->fields[slot].type;
+        if (named) {
+            a->type = rd->fields[slot].type;
+        }
     }
     if (named) {
         size_t fi;

@@ -255,7 +255,7 @@ o que existe. O lowering já era genérico (passa o tamanho do elemento ao
 runtime) e o runtime também (`ps_buffer_view_at` só guarda `l->esize`), então
 nada mais precisou mudar. É o desenho por tabela pagando.
 
-## 3 — ABERTO · um método estático não é alcançável pela sua própria grafia
+## 3 — CONSERTADO · um método estático não era alcançável pela sua própria grafia
 
 O modelo está **completo**: `is_smethod` existe no AST, o parser o marca, o
 `nrecv` da checagem já desconta o receptor, e chamar pela instância **funciona**
@@ -288,7 +288,7 @@ qualificada por módulo?". O irmão natural é um `type_smethod()` ali ao lado,
 **antes** de `rt = self->check_expr(e->lhs->lhs)` (`ps_sema.p:1801`), com um
 valor de mesmo nome tendo precedência sobre o tipo.
 
-## 4 — ABERTO · aridade NEGATIVA numa mensagem
+## 4 — CONSERTADO · aridade NEGATIVA numa mensagem
 
 ```python
 record M:
@@ -311,7 +311,7 @@ no receiver: write `in self` first, or `static def` for a function that needs
 none"* —, mas ela mora na checagem da DECLARAÇÃO, e a da CHAMADA corre primeiro.
 Nenhum número negativo devia poder sair numa contagem de argumentos.
 
-## 5 — DECISÃO · `def` sem `self` dentro de um record exige a palavra `static`
+## 5 — RESOLVIDO · `def` sem `self` dentro de um record já NÃO exige `static`
 
 Consequência do item 4, e é escolha e não defeito: `f->is_smethod = no_recv and
 owner != None`, onde `no_recv` vem da palavra `static`. Um `def` sem `self` não é
@@ -608,6 +608,69 @@ com o stub correspondente no caminho sem TLS.
 O `tests/tls.sh` não o apanhava porque o seu servidor de teste não fala logo
 depois do handshake — é justamente o padrão do MySQL (responder já) que o expõe.
 
+## 18 — ABERTO · a f-string recusa o que o `str()` ao lado já sabe fazer
+
+| | `f"{x}"` | `str(x)` |
+|---|---|---|
+| `any` | **erro** | ✓ funciona |
+| `bytes` | **erro** | ✓ funciona |
+| `int?`, `bytes?` | erro | erro |
+
+```
+an f-string cannot format any yet
+an f-string cannot format bytes yet
+```
+
+O `any` é o caso que mais dói, e é pura inconsistência: `str(a)` de um `any`
+funciona — o runtime rende o valor pelo descritor que ele carrega (151.3) — mas a
+f-string ao lado recusa. São o mesmo trabalho; a f-string só precisa de baixar
+para o `str` que já existe.
+
+`bytes` é o mesmo: `str(b)` decodifica e valida UTF-8, e a f-string não o chama.
+
+O opcional é outra pergunta, e é DECISÃO e não lacuna: o Python imprime `None`
+para um `T?` vazio. Se seguirmos (e o `math`, o `round`, o `int()` já seguem o
+Python), `f"{x}"` de um `int?` passa a escrever o número ou `None`, e uma prova de
+não-nulo deixa de ser exigida só para imprimir.
+
+**Custo do que isto obriga hoje**: em todo sítio onde um valor pode faltar — que
+num conector de banco e num parser é em toda a parte — escreve-se
+
+```python
+v = row.get("nome")
+if v != None:
+    print(f"{v}")        # e só aqui
+```
+
+Contei quinze vezes num só porte.
+
+## 19 — ABERTO · `b'...'` com aspas simples não existe, e a mensagem não diz isso
+
+```python
+s = 'texto'        # ok — uma str aceita as duas aspas
+b = b"bytes"       # ok
+c = b'bytes'       # error: expected end of line in statement, found char literal
+```
+
+Uma `str` aceita aspa simples e dupla; um literal de `bytes` só aceita a dupla. No
+Python os dois funcionam, e é de lá que vem a mão de quem escreve. A mensagem fala
+de *char literal* — porque o `'b'` do P é um caractere — e não do que a pessoa
+escreveu, então ela procura o erro no sítio errado. Custou-me três iterações num
+teste.
+
+## 20 — ABERTO · `import <pkg/x.ph>` de um pscript não aceita `as`
+
+```python
+import <ed25519/ed25519.ph>          # ok — e as funções vêm para o escopo
+import <ed25519/ed25519.ph> as ed    # error: expected end of line in import, found 'as'
+```
+
+Um pacote pscript (`.psc`) importa-se com `as` e ganha um espaço de nomes; um
+pacote P (`.ph`) não, e as funções dele entram no escopo global do módulo. A
+fronteira 45.5 explica a diferença de MECANISMO, mas quem escreve vê duas
+gramáticas para a mesma linha — e o `as` é justamente o que evita colisão quando
+se importam dois pacotes P.
+
 # O que a linguagem ganhou, e o que cada coisa custou
 
 Três features, todas nascidas de o porte esbarrar, todas seguindo um precedente
@@ -753,3 +816,42 @@ aloca zero. As duas famílias não foram portadas: foram **dispensadas**, e o qu
 sobrou é a álgebra. É o mesmo resultado que a bateria 71 mediu no porte do editor
 (914 linhas de pscript onde o P precisava de 1.505), pela mesma razão — o que
 desaparece não é estilo, é trabalho que a linguagem passou a fazer.
+
+## 21 — `str()` e f-string de um `T?` não compilavam  ✅ corrigido
+
+O buraco tinha uma forma estranha: um `T?` **dentro** de uma lista já saía
+escrito (`[None, 'z']`), porque quem percorre um contentor é o runtime guiado
+pela tabela de tipos. Mas `str(x)` e `f"{x}"` sobre o **mesmo** valor recusavam
+compilar. O mesmo valor tinha forma escrita num sítio e não tinha no outro.
+
+Três peças:
+
+* **compilador** — `repr_value`/`to_str` ganharam o caso `PT_OPT`, rendido pela
+  pergunta que a linguagem já faz (`!= None`, 43.1): as duas metades do ternário
+  são o valor e a palavra `None`;
+* **runtime** — espécie nova no descritor (`PS_T_OPT`), porque o runtime precisa
+  de saber ler as DUAS representações da 9.4, e o `width` diz qual: `1` é a
+  referência nua, `0` é o registo `{has, v}` (aí a marca de oito bytes da 147.6
+  põe o valor sempre no deslocamento 8);
+* **`sh_mangle`** — respondia `"v"` a *qualquer* opcional. Enquanto o opcional
+  era opaco isso não se via; com um descritor que carrega `inner` e `width`,
+  `List<str?>` e `List<int?>` passariam a pedir o **mesmo** descritor, e o
+  primeiro a ser emitido serviria os dois.
+
+Gate: `tests/pscript/run/optstr.psc`, conferido linha a linha contra Python.
+
+A única divergência deliberada é `f"{x:>6}"` sobre um opcional: aqui alinha o
+TEXTO (`"None"` e `"42"` na mesma coluna), enquanto Python levanta. É a única
+regra que serve aos dois lados do `?`.
+
+## 22 — construtor posicional não embrulhava um valor num campo `T?`  ✅ corrigido
+
+`P("Ana", None, 3)` com `i: int?` não compilava; `P(n="Ana", e=None, i=3)`
+compilava. A assimetria era a pista: em `check_ctor`, o `a->type = campo` escreve
+no nó do designador na forma nomeada — mas na posicional o designador e o valor
+**são o mesmo nó**, e o carimbo tapava o `int` do literal com `int?`. A baixa lê
+esse tipo para decidir se embrulha (`coerce`), via "já é opcional", e deixava
+passar cru: o C saía com um `__PsOpt_i` a receber um escalar.
+
+Só se via nos opcionais de VALOR — num de referência o embrulho é a identidade,
+e por isso `str?` funcionava e `int?` não.
