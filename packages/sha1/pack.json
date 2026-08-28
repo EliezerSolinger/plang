@@ -1,0 +1,10 @@
+{
+  "name": "sha1",
+  "version": "0.1.0",
+  "lang": "pscript",
+  "root": "sha1.psc",
+  "deps": {},
+  "system": {},
+  "toolchain": ">= 0.1.0",
+  "description": "SHA-1 (FIPS 180-4). Broken for trust since 2017, and still required by two live protocols: the MySQL handshake and the WebSocket upgrade"
+}

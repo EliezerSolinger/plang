@@ -6,7 +6,7 @@ bugs que o porte teve morreriam antes de chegar ao servidor.
 """
 
 import <mysql/packet.psc> as pkt
-import <mysql/sha1.psc> as sha
+import <sha1/sha1.psc> as sha
 import <mysql/auth.psc> as auth
 import <mysql/sha256.psc> as sha2
 import <mysql/mysql.psc> as my

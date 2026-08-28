@@ -5,7 +5,8 @@
   "root": "mysql.psc",
   "deps": {
     "datetime": "0.1.0",
-    "ed25519": "0.1.0"
+    "ed25519": "0.1.0",
+    "sha1": "0.1.0"
   },
   "system": {},
   "toolchain": ">= 0.1.0",

@@ -404,10 +404,27 @@ struct Config:
     # D42: a data formatada e o segundo a que ela pertence — ver `date_now`
     date_secs: int
     date_text: str
+    # F6/D7: QUEM FICA COM O SOCKET depois de um 101.
+    #
+    # A `httpd` não sabe o que é um WebSocket, e é essa a fronteira: ela sabe que
+    # alguém pediu para tomar conta da conexão e entrega-lha, com o pedido que a
+    # pediu e os bytes que já tinham chegado a seguir ao aperto de mão. Quem
+    # entende o que vem a seguir é outra camada — hoje o `packages/httpd/ws.psc`,
+    # amanhã um túnel de CONNECT ou o h2.
+    #
+    # Sem os bytes que sobraram isto não funcionaria: um cliente ansioso manda o
+    # primeiro quadro colado ao pedido, no MESMO `read`, e esses bytes estão no
+    # parser do HTTP quando ele acaba.
+    #
+    # Os PARÊNTESES não são estilo: `def(...) -> Task<int>?` é a função que
+    # devolve um opcional, e `(def(...) -> Task<int>)?` é a função opcional. As
+    # duas escrevem-se quase igual e querem dizer coisas diferentes.
+    on_upgrade: (def(Socket, Request, bytes) -> Task<int>)?
 
 
 def config() -> Config:
-    return Config(1 << 20, 1 << 16, False, "", [], True, 30.0, -1, "")
+    c: Config = Config(1 << 20, 1 << 16, False, "", [], True, 30.0, -1, "", None)
+    return c
 
 
 # ---------- escrever a resposta ----------
@@ -425,8 +442,17 @@ def encode(r: Response, req_version: str, close_after: bool, cfg: Config) -> byt
     tem_tipo = False
     for hd in r.headers:
         n = hd.name.lower()
-        # o comprimento e a ligação são de quem serve, não de quem responde
-        if n == "content-length" or n == "connection" or n == "date":
+        # o comprimento e a ligação são de quem SERVE, não de quem responde — um
+        # handler que escrevesse o seu comprimento poderia discordar do corpo, e
+        # dois comprimentos que discordam é a porta do request smuggling.
+        #
+        # A EXCEPÇÃO é o 101: aí a conexão deixa de ser HTTP, e quem sabe o que
+        # ela passa a ser é justamente quem respondeu — o `connection: Upgrade`
+        # é dele. Sem esta linha o aperto de mão sai sem o cabeçalho e qualquer
+        # cliente correcto recusa-o.
+        if n == "content-length" or n == "date":
+            continue
+        if n == "connection" and not r.upgraded:
             continue
         if n == "content-type":
             tem_tipo = True
@@ -573,8 +599,21 @@ async def serve_conn(c: Socket, peer: str, handle: def(Request) -> Task<Response
                 break
             servidos += 1
             if resp.upgraded:
-                # a conexão deixou de ser HTTP/1: quem trata do que vem a seguir
-                # é outra camada (F6), e este laço acabou
+                # a conexão deixou de ser HTTP/1. Entrega-se a quem a pediu, COM
+                # o que sobrou por ler: um cliente ansioso manda o primeiro
+                # quadro colado ao pedido, no mesmo `read`, e esses bytes estão
+                # aqui dentro. Sem os passar, a primeira mensagem perdia-se —
+                # e é o género de defeito que só aparece com um cliente rápido.
+                # o estreitamento prova-se num LOCAL e não num campo (43.1): o
+                # campo pode ser reatribuído entre a prova e o uso, e um local
+                # não pode
+                quem = cfg.on_upgrade
+                if quem != None:
+                    ignora = await quem(c, req, p.rest())
+                    return servidos
+                # ninguém a pediu: fecha, em vez de deixar um socket vivo a
+                # falar um protocolo que ninguém está a ler
+                c.close()
                 return servidos
             if not manter:
                 break

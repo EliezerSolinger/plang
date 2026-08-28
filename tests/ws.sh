@@ -57,5 +57,27 @@ fi
 check "as recusas do RFC 6455" \
       "$(cat packages/ws/test/recusas.expected)" "$(cat "$OUT/recusas.txt")"
 
+# ============================================================================
+# F6 — o mesmo protocolo, agora SOBRE UM SOCKET: o aperto de mão e a conexão.
+# O cliente é a `websockets` do Python, e ela é o oráculo — se ela aceita o
+# aperto de mão, o aperto de mão está certo.
+# ============================================================================
+if [ "$SEM_ORACULO" = 0 ]; then
+    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/wsservidor.psc "$OUT/wssrv" >>"$OUT/build.log" 2>&1; then
+        echo "  FAIL o servidor de websocket não compila"; tail -5 "$OUT/build.log"; exit 1
+    fi
+    PF="$OUT/porto"
+    "$OUT/wssrv" "$PF" >"$OUT/wssrv.log" 2>&1 &
+    W=$!
+    trap 'kill $W 2>/dev/null' EXIT
+    for _ in $(seq 1 100); do [ -s "$PF" ] && break; sleep 0.05; done
+    if [ -s "$PF" ]; then
+        got=$(timeout 60 python3 tests/ws-client.py "$(cat "$PF")" 2>&1)
+        check "o servidor ponta a ponta" "$(cat tests/ws-server.expected)" "$got"
+    else
+        echo "  FAIL o servidor de websocket não abriu porto"; fail=$((fail+1))
+    fi
+fi
+
 echo "   ws: $pass ok, $fail failed"
 [ $fail -eq 0 ]

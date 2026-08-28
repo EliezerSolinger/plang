@@ -1005,3 +1005,11 @@ async def despacha(req: httpd.Request) -> httpd.Response:
 Não é um remendo mau, mas é uma volta. Um método ligado é uma closure sobre o
 `self`, e a linguagem já tem closures com captura — o que falta é a forma
 escrita. Fica registado como coisa de desenho.
+
+## 33 — `def(...) -> T?` e `(def(...) -> T)?` escrevem-se quase igual  ⬜ nota
+
+Não é um defeito: é uma ambiguidade real da gramática de tipos, e os parênteses
+resolvem-na. Fica registada porque custou uma leitura: o primeiro é a função que
+devolve um opcional, o segundo é a função opcional, e a mensagem de erro mostra
+os dois quase iguais. Um campo `on_upgrade` escrito sem parênteses aceita `None`
+como **valor de retorno** e não como valor do campo.

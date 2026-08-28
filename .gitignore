@@ -50,3 +50,4 @@ experiments/
 # ... e o que um teste que escreve ficheiros deixa na raiz
 /rwdemo/
 /projide/
+packages/mysql/test/build/

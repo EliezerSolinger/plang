@@ -14,7 +14,7 @@ de curva de Edwards, e o alvo aqui — o MariaDB do Desbravacraft — usa
 onde o pedido de troca de plugin é tratado.
 """
 
-import <mysql/sha1.psc> as sha
+import <sha1/sha1.psc> as sha
 import <mysql/sha256.psc> as sha2
 
 

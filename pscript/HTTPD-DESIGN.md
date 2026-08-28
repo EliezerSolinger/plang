@@ -528,10 +528,10 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [ ] **F3 — Multi-worker** sobre L1+L2. Portão: sob carga, os N workers servem e
       `sched.stats()` mostra a repartição.
 - [ ] **F4 — TLS servidor** sobre L3.
-- [ ] **F5 — ws core sans-io** (D9): frames e máquina de estados do RFC 6455,
+- [x] **F5 — ws core sans-io** (D9): frames e máquina de estados do RFC 6455,
       cliente E servidor. Portão: o **Autobahn testsuite** e o `websockets` do
       Python como oráculo, frame a frame.
-- [ ] **F6 — Upgrade e `WsConn`** (D9b). Portão: um eco ponta a ponta, texto e
+- [x] **F6 — Upgrade e `WsConn`** (D9b). Portão: um eco ponta a ponta, texto e
       binário, ping/pong, close limpo.
 - [ ] **F7 — Pub/sub** sobre L4, com as duas portas de `publish` (D6) e a
       dessubscrição automática (D9c).
