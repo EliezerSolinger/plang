@@ -339,5 +339,27 @@ else
     echo "  FAIL o servidor de sessões não abriu porto"; fail=$((fail+1))
 fi
 
+# ============================================================================
+# O EXEMPLO, ponta a ponta. É o portão que junta tudo: estáticos, API, o upgrade
+# com autorização ANTES dele, e a difusão a atravessar os workers. Se este passa,
+# a biblioteca faz o que o desenho prometeu.
+# ============================================================================
+if python3 -c "import websockets" 2>/dev/null; then
+    WWW2="$OUT/jogo-publico"; mkdir -p "$WWW2"
+    printf '<!doctype html><title>desbravacraft</title><h1>o mundo</h1>' > "$WWW2/index.html"
+    printf 'console.log("cliente")' > "$WWW2/jogo.js"
+    if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/exemplo/jogo.psc "$OUT/jogo" >>"$OUT/build.log" 2>&1; then
+        echo "  FAIL o exemplo do jogo não compila"; tail -5 "$OUT/build.log"; fail=$((fail+1))
+    else
+        PJ=$((20000 + RANDOM % 20000))
+        "$OUT/jogo" "$PJ" 3 "$WWW2" >"$OUT/jogo.log" 2>&1 &
+        J=$!
+        trap 'kill $SRV $R $E $M $S5 $J 2>/dev/null' EXIT
+        for _ in $(seq 1 100); do curl -s -o /dev/null "http://127.0.0.1:$PJ/" && break; sleep 0.05; done
+        check "o exemplo do jogo, ponta a ponta" "$(cat tests/httpd-jogo.expected)" \
+              "$(timeout 60 python3 tests/httpd-jogo.py "$PJ" 2>&1)"
+    fi
+fi
+
 echo "   httpd: $pass ok, $fail failed"
 [ $fail -eq 0 ]

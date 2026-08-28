@@ -483,3 +483,10 @@ struct Hub:
 
 def hub() -> Hub:
     return Hub({}, {})
+
+
+# O LAÇO das publicações vindas de outros workers, como função livre — pela mesma
+# razão do `dispatch` do encaminhador: um método ligado não é um valor, e isto é
+# uma tarefa que o programa arranca.
+async def pump_hub(h: Hub) -> int:
+    return await h.pump()

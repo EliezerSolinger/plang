@@ -86,6 +86,22 @@ dessubscreve de tudo, sempre — um servidor de jogo tem gente a entrar e a sair
 dia inteiro, e uma inscrição que sobrevivesse à conexão seria uma fuga que cresce
 com o tempo de vida do processo.
 
+## Um exemplo completo
+
+[`exemplo/jogo.psc`](exemplo/jogo.psc) é um servidor de jogo em cinquenta linhas,
+e não é um brinquedo com as arestas escondidas: serve os ficheiros do cliente com
+ETag e `Range`, responde JSON numa rota de API, faz o upgrade para WebSocket
+**depois** de verificar o token (a autorização é código normal, não um privilégio
+do servidor), difunde cada mensagem a todos os workers, e usa a máquina inteira.
+
+```
+bash tests/psbuild.sh packages/httpd/exemplo/jogo.psc /tmp/jogo
+/tmp/jogo 3335 4 publico
+```
+
+O portão corre-o com três workers e três clientes, e exige que uma mensagem de um
+deles chegue aos três — o que só é verdade se ela atravessar os workers.
+
 ## O que os portões provam
 
 `bash tests/httpd.sh` (30 verificações) e `bash tests/ws.sh` (7). Nenhum deles tem
