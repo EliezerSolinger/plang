@@ -2485,6 +2485,8 @@ struct PsSema:
                         fatal_at(self->file, e->pos, "write() takes a str, `bytes` or a List<u8>, found %s", ps_type_str(self->a, cw))
                     ctk->inner = ps_type(self->a, PT_INT, e->pos)
                     return ctk
+                if strcmp(cm, "fd_num") == 0:
+                    return ps_type(self->a, PT_INT, e->pos)
                 if strcmp(cm, "peer") == 0:
                     # 148/D32: o endereço de QUEM LIGOU, e não o porto local.
                     #

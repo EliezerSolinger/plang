@@ -1500,6 +1500,9 @@ def ps_net_listen(ctx: *PsCtx, port: i64, reuseport: bool) -> *PsConn:
 # Devolve o texto do endereço — `127.0.0.1` ou `::1` — e nunca o porto: o porto de
 # origem muda a cada ligação, e quem o metesse numa chave de rate-limit estaria a
 # contar cada pedido como vindo de outro cliente.
+def ps_conn_fd(c: *PsConn) -> i64:
+    return i64(c->fd) if c != None else -1
+
 def ps_conn_peer(ctx: *PsCtx, c: *PsConn) -> *PsStr:
     if c == None or c->is_open == 0:
         return ps_str_new(ctx, "", usize(0))
@@ -2003,6 +2006,14 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
                 # processo). Um programa que roda e sai com status != 0 NÃO é
                 # erro: é resultado, e vem no `status`.
                 snprintf(msg, 512, "could not start '%s'", w->argv[0] if w->argv != None and w->argv[0] != None else "?")
+            case PS_IO_RECV:
+                snprintf(msg, 512, "the read from the socket failed")
+            case PS_IO_SEND:
+                snprintf(msg, 512, "the write to the socket failed")
+            case PS_IO_ACCEPT:
+                snprintf(msg, 512, "accept failed")
+            case PS_IO_CONNECT:
+                snprintf(msg, 512, "could not connect")
             case _:
                 snprintf(msg, 512, "the operation failed")
         ps_raise(ctx, msg, PS_CAT_IO, "<io>", 0)
@@ -2059,21 +2070,25 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
             nl: *PsStr = ps_str_new(ctx, "\n", 1)
             *(**PsList)(ps_task_ret(t)) = ps_str_split(ctx, whole, nl)
         case PS_W_CONN:
-            c: *PsConn = (*PsConn)(ps_alloc(ctx, sizeof(PsConn), PS_TY_CONN))
-            c->fd = int(w->rc)
-            c->is_open = 1
-            c->listening = 0
-            # `ps_alloc` NÃO zera (223), e estes faltavam. `pid` é o que o
-            # `close` usa para decidir se colhe um filho: com lixo de uma coleta
-            # anterior, fechar uma ligação ACEITE podia ir esperar por um
-            # processo que nunca existiu. É o mesmo engano que o `is_std` do
-            # ficheiro já tinha custado uma vez — e que `pty_slave_fd` (F8/
-            # 146.3-mac) repetiu: sem isto `close` chamava `close()` sobre lixo
-            # de uma coleta anterior, que podia ser QUALQUER descritor deste
-            # processo, incluindo o socket que escuta.
-            c->pid = 0
-            c->dgram = 0
-            c->pty_slave_fd = -1
+            # 148: UM CONSTRUTOR SÓ, e é a correcção que importa aqui.
+            #
+            # Isto era uma segunda inicialização à mão, campo por campo, ao lado
+            # da do `ps_conn_new` — e como o `ps_alloc` NÃO zera (223), o campo
+            # que faltasse ficava com lixo de uma coleta anterior. Faltava o
+            # `ssl`.
+            #
+            # A consequência era das piores que há: uma ligação ACEITE em claro,
+            # cujo `ssl` herdasse um valor não nulo, entrava no caminho do
+            # `SSL_read` — e o primeiro `read` dela falhava. Do lado do cliente
+            # isso chegava como um RST (o servidor fechava com o pedido ainda por
+            # ler), sem uma linha de erro em sítio nenhum. Sob carga eram uma ou
+            # duas respostas em mil a desaparecer, e o banco de ensaio foi o que
+            # as viu: o Bun dava zero erros com o mesmo gerador.
+            #
+            # O comentário que aqui estava já dizia que esta lista tinha custado
+            # o mesmo engano duas vezes (`is_std`, `pty_slave_fd`). A resposta
+            # não era acrescentar-lhe o terceiro nome: era não haver lista.
+            c: *PsConn = ps_conn_new(ctx, int(w->rc), 0)
             ps_sock_nonblock(c->fd)
             *(**PsConn)(ps_task_ret(t)) = c
         case PS_W_TRUE:
@@ -2101,6 +2116,46 @@ private def ps_io_finish(ctx: *PsCtx, t: *PsTask):
 # is asked of `poll` rather than read off `errno` — errno is a macro P cannot
 # see, and it is per-thread besides. Asking costs one syscall and answers the
 # only question that matters: can this run without blocking?
+# 148: A FALHA FOI FATAL, OU FOI "AINDA NÃO"?
+#
+# É a pergunta que o `errno` responderia, e o P não vê o `errno` — ele é uma macro
+# e é por thread. A resposta vem do `poll`, que é o que o resto deste ficheiro já
+# faz para saber se algo está pronto.
+#
+# O raciocínio: acabámos de tentar a chamada porque o `poll` disse que dava. Se
+# ela falhou, perguntamos outra vez, com espera zero:
+#
+#   * o descritor diz POLLERR ou POLLHUP -> o outro lado foi-se. É fatal.
+#   * o descritor diz que ESTÁ pronto -> uma chamada que falha num descritor
+#     pronto é um erro de verdade (EPIPE num socket meio-fechado, por exemplo).
+#   * o descritor não diz nada -> o tampão enchia-se entre o `poll` e a chamada.
+#     Foi EAGAIN, e a resposta é esperar mais um turno.
+#
+# O terceiro caso é o que estava a matar conexões. Um tampão de envio cheio é o
+# NORMAL sob carga — e ele era lido como "a ligação partiu-se". No banco de ensaio
+# eram quatro respostas em dez mil a desaparecer; com respostas maiores, muito
+# mais. Custa um `poll` de espera zero, e só no caminho da falha.
+private def ps_fd_transiente(fd: int, events: i16) -> bool:
+    p: pollfd[1]
+    p[0].fd = fd
+    p[0].events = events
+    p[0].revents = 0
+    if poll(p, u64(1), 0) < 0:
+        return True         # nem a pergunta se conseguiu fazer: tenta outra vez
+    # A ÚNICA prova de fim são os três sinais de erro do descritor. Tudo o mais é
+    # "tenta outra vez", e a razão é uma CORRIDA que a primeira versão desta
+    # função tinha: ela lia um `POLLIN` de volta como "está pronto e a falhar,
+    # logo é um erro de verdade" — mas entre o `read` que devolveu EAGAIN e este
+    # `poll`, os dados podem ter chegado. Sob carga chegam, e o resultado era a
+    # conexão morta com a mensagem mais inútil possível ("the operation failed").
+    #
+    # Não há risco de laço infinito: um descritor genuinamente partido responde
+    # sempre com um destes três. Um `EBADF` é POLLNVAL, uma ligação reiniciada é
+    # POLLERR, e o outro lado a fechar é POLLHUP.
+    if (int(p[0].revents) & (POLLERR | POLLHUP | POLLNVAL)) != 0:
+        return False
+    return True
+
 private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
     w: *PsWork = t->work
     # O BUFFER DO SSL VEM ANTES DO `poll`. Numa ligação TLS, o `SSL_read` do
@@ -2169,6 +2224,11 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
             # "not a socket". Using the general one is what lets a terminal BE a
             # socket to everything above this line, which is the whole design.
             got: i64 = i64(read(w->fd, w->dest if w->dest != None else w->buf, w->n))
+            if got < 0 and w->pty == 0 and ps_fd_transiente(w->fd, i16(POLLIN)):
+                # 148: o mesmo do outro lado. Um `read` que falha num descritor
+                # que ainda não tem nada é "ainda não", e não o fim.
+                w->events = i16(POLLIN)
+                return False
             if got < 0:
                 if w->pty != 0:
                     # on a master, the read after the last slave closes FAILS
@@ -2204,6 +2264,13 @@ private def ps_fd_try(ctx: *PsCtx, t: *PsTask) -> bool:
                 return True
             put: i64 = i64(write(w->fd, sb9 + w->off, w->n - w->off))
             if put < 0:
+                # 148: um tampão de envio cheio NÃO é a ligação a partir-se. Ver
+                # `ps_fd_transiente` — sem esta distinção, uma escrita sob carga
+                # matava a conexão, e no banco de ensaio eram quatro respostas em
+                # dez mil a desaparecer sem explicação.
+                if ps_fd_transiente(w->fd, i16(POLLOUT)):
+                    w->events = i16(POLLOUT)
+                    return False
                 w->err = 1
                 return True
             w->off += usize(put)

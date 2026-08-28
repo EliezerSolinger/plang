@@ -3766,6 +3766,10 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             cc7 = PsLow_call_rt(self, (ck7 == PT_BYTES ? "ps_conn_write_bytesobj" : (ck7 == PT_LIST ? "ps_conn_write_bytes" : "ps_conn_write")), e->pos);
         } else if (strcmp(cmn, "close") == 0) {
             cc7 = PsLow_call_rt(self, "ps_conn_close", e->pos);
+        } else if (strcmp(cmn, "fd_num") == 0) {
+            cc7 = PsLow_call_rt(self, "ps_conn_fd", e->pos);
+            PsLow_push_arg(self, cc7, PsLow_expr(self, e->lhs->lhs));
+            return cc7;
         } else if (strcmp(cmn, "peer") == 0) {
             cc7 = PsLow_call_rt(self, "ps_conn_peer", e->pos);
             PsLow_push_arg(self, cc7, PsLow_ctx_arg(self, e->pos));

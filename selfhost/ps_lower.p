@@ -3579,6 +3579,10 @@ struct PsLow:
                 cc7 = self->call_rt("ps_conn_write_bytesobj" if ck7 == PT_BYTES else ("ps_conn_write_bytes" if ck7 == PT_LIST else "ps_conn_write"), e->pos)
             elif strcmp(cmn, "close") == 0:
                 cc7 = self->call_rt("ps_conn_close", e->pos)
+            elif strcmp(cmn, "fd_num") == 0:
+                cc7 = self->call_rt("ps_conn_fd", e->pos)
+                self->push_arg(cc7, self->expr(e->lhs->lhs))
+                return cc7
             elif strcmp(cmn, "peer") == 0:
                 # 148/D32: leva contexto porque devolve uma `str` — que é
                 # construída no heap de quem pergunta

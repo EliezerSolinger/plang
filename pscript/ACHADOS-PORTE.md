@@ -1380,3 +1380,53 @@ O que fica de fora, dito: **SNI do lado do servidor**. Um processo serve UM
 certificado, porque o contexto e um por processo — servir varios nomes com
 certificados diferentes pede um retorno de chamada por ligacao. Para o jogo, que
 tem um dominio, nao faz falta.
+
+
+## 49 — uma ligacao ACEITE nascia com o `ssl` por inicializar  OK corrigido (o pior desta sessao)
+
+Encontrado pelo banco de ensaio, e e a razao de ele valer mais do que a tabela
+que produz: a coluna dos erros dizia **26** para nos e **0** para o Bun, com o
+mesmo gerador. Vinte e seis respostas em cem mil a desaparecer, sem uma linha de
+erro em sitio nenhum.
+
+O `ps_alloc` NAO zera (223), e o caminho do `accept` tinha uma segunda
+inicializacao a mao, campo por campo, ao lado da do `ps_conn_new`. Faltava-lhe o
+`ssl`. Uma conexao em claro cujo `ssl` herdasse lixo nao nulo de uma coleta
+anterior entrava no caminho do `SSL_read`; o primeiro `read` falhava, o servidor
+fechava com o pedido ainda por ler, e do lado do cliente isso chegava como um RST.
+
+O comentario que estava nessa lista ja dizia que ela tinha custado o mesmo engano
+duas vezes antes (`is_std`, `pty_slave_fd`). A correccao nao foi acrescentar-lhe o
+terceiro nome — foi **nao haver lista**: o `accept` passou a chamar o
+`ps_conn_new`, que e o construtor que ja inicializava tudo. Uma lista de campos
+duplicada e uma lista que envelhece, e esta envelheceu tres vezes.
+
+## 50 — EAGAIN num socket era lido como "a ligacao partiu-se"  OK corrigido
+
+Apanhado no caminho para o de cima. Um `write` num socket nao bloqueante devolve
+-1 quando o tampao de envio esta cheio — o que e o NORMAL sob carga — e o codigo
+punha `err = 1`. O mesmo do lado do `read`.
+
+A pergunta que o `errno` responderia nao se pode fazer em P (ele e uma macro e e
+por thread), e o ficheiro ja dizia isso. A resposta vem do `poll`: tentou-se
+porque ele disse que dava, e se falhou pergunta-se outra vez com espera zero.
+
+**A primeira versao dessa correccao tinha uma corrida**, e vale a pena estar
+escrita: ela lia um `POLLIN` de volta como "esta pronto e a falhar, logo e um erro
+de verdade" — mas entre o `read` que devolveu EAGAIN e o `poll`, os dados podem
+ter chegado. Sob carga chegam. A unica prova de fim sao POLLERR, POLLHUP e
+POLLNVAL; tudo o mais e "tenta outra vez", e nao ha risco de laco infinito porque
+um descritor genuinamente partido responde sempre com um dos tres.
+
+## 51 — o banco de ensaio (F12)  OK feito
+
+`tests/bench-httpd/`, com os resultados e a leitura em `RESULTADOS.md`. O resumo:
+**o Bun ganha** (24 mil contra os nossos 19,5 mil com a maquina inteira), e
+**ganhamos ao Node por 1,7×** com um worker so.
+
+Duas coisas ditas la que valem a pena estar aqui: os quatro workers dao 1,43×
+sobre um e nao 4×, porque o gerador tem quatro threads a disputar os mesmos quatro
+nucleos — para medir o teto do servidor faria falta gerar a carga de outra
+maquina. E o gerador e escrito em C de proposito: um escrito na linguagem que esta
+a ser medida seria a pior escolha possivel, porque se ele fosse o gargalo os tres
+servidores dariam o mesmo numero.

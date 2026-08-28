@@ -146,3 +146,10 @@ pforge run packages/mysql/test/mysql_test.psc
 DB_HOST=127.0.0.1 DB_USER=... DB_PASSWORD=... DB_NAME=... \
     pforge run packages/mysql/test_live.psc
 ```
+
+
+## Atribuição e licença
+
+O desenho do protocolo veio do PyMySQL, que foi também o oráculo dos testes. Ele
+é MIT, e a licença exige que o aviso de copyright acompanhe o trabalho derivado —
+ele está em [`ATRIBUICAO.md`](ATRIBUICAO.md), ao lado deste ficheiro.

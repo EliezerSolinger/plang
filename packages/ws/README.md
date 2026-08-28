@@ -66,10 +66,16 @@ ao meio entre dois fragmentos.
 * **o aperto de mão HTTP**, que é da `packages/httpd` (F6) — aqui só entra o
   protocolo depois de a conexão já ser um WebSocket.
 
-## Atribuição
+## Atribuição e licença
 
 O desenho *sans-io* — a máquina de estados separada do I/O — segue o da
 biblioteca [`websockets`](https://github.com/python-websockets/websockets) de
-Aymeric Augustin e colaboradores (BSD 3-Clause), que é também o **oráculo** do
-portão. Nenhum código foi copiado: o que está aqui é escrito a partir do RFC
-6455. A dívida é de desenho e de verificação, e fica dita.
+Aymeric Augustin e colaboradores, que é também o **oráculo** do portão. Nenhuma
+linha foi copiada: o que está aqui vem do RFC 6455. A dívida é de desenho e de
+verificação.
+
+Ela é BSD de 3 cláusulas, e a licença exige que o aviso de copyright, as
+condições e a isenção acompanhem qualquer redistribuição — estão em
+[`ATRIBUICAO.md`](ATRIBUICAO.md), ao lado deste ficheiro. A terceira cláusula é a
+que vale a pena ler: o nome dos autores não pode ser usado para endossar este
+pacote, e ele não os invoca — o que ela é aqui é um oráculo.

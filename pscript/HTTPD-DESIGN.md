@@ -554,7 +554,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
       projeto do tamanho do servidor, e por isso tardio; o `GameApi` do jogo é
       servido antes por um `get`/`post` mínimo.
 - [ ] **F11 — h2 atrás de ALPN** (D10).
-- [ ] **F12 — O benchmark, publicado.** Só com o produto completo: `wrk` contra o
+- [x] **F12 — O benchmark, publicado.** Só com o produto completo: `wrk` contra o
       nosso (workers=nproc), `Bun.serve`, `node http` e `python uvicorn` na MESMA
       VPS, no espírito do `bench.sh`.
 
