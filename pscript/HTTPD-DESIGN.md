@@ -66,19 +66,78 @@ O runtime ganha uma coisa: o `SO_REUSEPORT` no `listen` (hoje há só
 duração pode desequilibrar a carga. É o mesmo limite do Node cluster e do uWS; o
 kernel balanceia a ACEITAÇÃO, não as conexões já aceitas.
 
-### D3 — API: handler tipo Bun, com o loop exponível por baixo.
+### D3 — API: handler tipo Bun, com o laço exponível por baixo.
 ```python
 httpd.serve(3335, handle, workers=os.nproc())
 ```
 onde `handle` é `async def(Request) -> Response`. Por baixo, o laço
 accept/parse/respond é uma função PÚBLICA — quem quer controlo total (o próprio
-jogo pode querer) escreve `for conn in server:` e usa o parser à mão.
+jogo pode querer) escreve o seu e usa o parser à mão.
 
-`Request` e `Response` são **valores** (`record`). Combinado com globals por-worker
-(42.2), a armadilha clássica do JavaScript — capturar estado mutável num closure e
-ter race entre requisições — **não compila**. Um handler não pode corromper a
-conexão do vizinho nem querendo. Não é uma promessa num doc; é uma consequência do
-sistema de tipos.
+> **Correção medida.** O primeiro rascunho dizia que `Request`/`Response` seriam
+> `record` (valores) e que por isso a race não compilaria. **Está errado, e o
+> compilador diz porquê:** um `record` só guarda números, bools, enums e arrays
+> deles (58.2) — com um `str` ou `bytes` dentro, o tipo tem de ser `struct`
+> (coletado, referência).
+>
+> A promessa de segurança continua de pé, por uma razão mais forte: **cada worker
+> tem o seu heap**. Não há estado partilhado entre requisições de workers
+> diferentes para haver race — o que se partilha é explícito (`shared dict`,
+> `shared Buffer`) e nomeado. A armadilha do JavaScript (capturar estado mutável
+> num closure e ter corrida entre requisições) continua a não existir, mas por
+> isolamento e não por imutabilidade.
+
+### D3b — O handler chega aos workers porque um `def` passa a atravessar.
+O desenho original não podia funcionar, e medi:
+```
+error: an argument to a worker is def(int) -> int, and a message crosses heaps
+as BYTES (34.3): numbers, bools, enums and `record` do; anything the collector
+owns does not (yet)
+```
+`spawn(fn, args)` aceita a função de ENTRADA, mas não uma função nos ARGUMENTOS —
+logo `serve(porta, handle, workers=N)` não tinha como repassar o `handle`.
+
+**A decisão é mudar a linguagem, e é uma melhoria geral e não um remendo:** um
+`def` de topo é um SÍMBOLO — o mesmo endereço em todas as threads do mesmo
+binário, e nada dele mora no heap. Atravessa. Uma **lambda cujas capturas são
+todas POD** (números, bools, records — e a captura é por valor, 19.2) também
+atravessa: o ambiente é bytes, e copia-se como qualquer mensagem. O que continua
+recusado é a lambda que captura algo coletado, com a mensagem a dizer isso.
+
+Vale **no `spawn` e no `send`** — uma regra sem excepção é mais fácil de ensinar
+que uma com, e destrava mandar uma estratégia a um worker já a correr.
+
+### D3c — Cabeçalhos são uma LISTA de pares, não um dicionário.
+O HTTP permite nomes repetidos (`Set-Cookie` é o caso de todos os dias) e a ordem
+importa. `req.header("host")` dá o primeiro; `req.headers_all("set-cookie")` dá a
+lista. Um `Dict<str,str>` obrigaria a um caminho especial só para o `Set-Cookie` —
+exactamente a gambiarra que as bibliotecas de JavaScript carregam.
+
+### D3d — Keep-alive no v1.
+É o padrão do HTTP/1.1 e todo cliente moderno assume. Sem ele cada requisição paga
+um handshake TCP (e um TLS!), e o benchmark contra o Bun seria uma derrota
+autoinfligida. O laço é: aceita → enquanto a conexão viver, parseia e responde.
+
+### D3e — Uma exceção no handler vira 500, e o worker vive.
+A conexão recebe um 500; a exceção completa vai para o stderr com a posição (o
+`print` atómico da 107.2 garante que a linha sai inteira com N workers); o worker
+continua servindo. Com `debug=True` a mensagem e a posição vão também NO CORPO —
+o que um servidor de desenvolvimento faz, e o que ajuda ao portar o jogo.
+
+### D3f — O corpo da requisição: dois acessores, um botão.
+Sem tipo-união e sem escolha escondida:
+- `req.body` lê o corpo inteiro (`bytes`), até ao tecto; acima dele, 413;
+- `req.stream()` dá o cursor, para o que não cabe.
+
+Os dois existem sempre; o handler escolhe. A configuração é **um número**:
+```python
+httpd.serve(porta, handle, max_body=1 << 20)
+```
+
+### D3g — Response: conveniências mais o construtor.
+`httpd.text(s)`, `httpd.json(v)`, `httpd.html(s)`, `httpd.bytes(b, tipo)`,
+`httpd.status(404)` para o comum; `Response(status, headers, body)` para o resto.
+O caso de 90% é uma chamada, e nada fica escondido.
 
 ### D4 — Estado entre handlers: a tabela dos meios.
 Onde o Bun responde "sobe um Redis", a nossa resposta está na linguagem:
@@ -140,6 +199,63 @@ os dois lados: o game-server precisa do SERVIDOR, o cliente nativo precisa do
 CLIENTE. Portão: o **Autobahn testsuite** (a bateria oficial, ~500 casos) mais o
 próprio `websockets` do Python, frame a frame.
 
+### D9b — `upgrade(req)` devolve uma Response especial.
+O handler continua a ser `async def(Request) -> Response` — uma função, um tipo de
+retorno. `httpd.upgrade(req)` devolve o 101 já com o `Sec-WebSocket-Accept`
+calculado, e o servidor reconhece esse marcador e entrega a conexão aos hooks de
+ws. A decisão de aceitar (o token do jogador, a rota, a origem) é código normal
+ANTES do upgrade — não um privilégio do servidor.
+
+### D9c — A inscrição num tópico morre com a conexão.
+Fechar dessubscreve de tudo, sempre. Nenhum `publish` tenta escrever num socket
+morto, e um servidor de jogo com gente a entrar e a sair o dia inteiro não vaza
+inscrições. É o que o `with`/`defer` já faz com recurso, aplicado ao tópico.
+
+### D13 — O httpd serve estáticos: `httpd.files(dir)`.
+Um handler pronto que serve uma árvore: MIME por extensão, ETag/If-None-Match
+(304), `Range` para vídeo e áudio, e a recusa de `..` — que é a vulnerabilidade
+clássica, e escrever isto à mão em cada projeto é onde nascem os path traversals.
+Metade do que um servidor de jogo faz é isto.
+
+### D14 — Observabilidade: hooks mais `stats()`, nada imposto.
+`server.stats()` dá conexões vivas e requisições servidas por worker, somando o
+`sched.stats()` que o runtime já tem (ready/parked e as quatro razões). Um hook
+opcional `on_request(req, resp, dur)` deixa o programa escrever o log que quiser —
+o pacote `log` já faz logfmt e JSON por linha. Nada de formato nosso imposto.
+
+### D15 — TLS: caminhos de ficheiro E bytes.
+`Tls("cert.pem", "key.pem")` é o caminho normal (é o que o certbot produz, e a
+chave privada nunca passa pela memória do programa). `Tls.from_bytes(cert, key)`
+serve quem guarda o certificado num cofre ou o recebe pela rede. Duas portas, e as
+duas documentadas.
+
+### D16 — Compressão: gzip no HTTP e permessage-deflate no ws.
+O `packages/compress` já escreve gzip conferido contra o zlib do CPython. A
+resposta comprime quando o cliente pede (`Accept-Encoding`) e o tipo compensa —
+texto e JSON sim, imagem não. E o **permessage-deflate** (RFC 7692) no WebSocket,
+que para os chunks do jogo pode valer muito.
+
+> **O que isto custa, dito antes de começar:** o RFC 7692 tem a armadilha da
+> janela PARTILHADA entre frames — o `context_takeover` — e um erro ali corrompe a
+> stream inteira em vez de um frame. Por isso ele é uma fase própria, depois do ws
+> core estar verde no Autobahn, e não misturado com ele.
+
+### D17 — O lado cliente: ws de graça, HTTP completo como projeto próprio.
+O ws core nasce com os dois lados (D9), então o **cliente ws** — que é o que o
+cliente nativo do Desbravacraft mais usa — sai junto.
+
+Para HTTP, a decisão foi um cliente **completo**: redirects, cookies, pool de
+keep-alive, timeouts. Isso é útil muito além do jogo — mas é honestamente um
+projeto do tamanho do servidor, então é **fase própria e tardia** (F10), e o
+`GameApi` do jogo é servido antes por um `get`/`post` mínimo sobre o parser que já
+existe.
+
+### D18 — O mundo do jogo: o main cria o `Buffer`, os workers recebem-no.
+O programa principal aloca o `shared Buffer` do mundo ANTES de subir os workers e
+passa-o como argumento do `spawn` — um Buffer partilhado atravessa, e o cabeçalho
+dele sai do heap coletado exactamente para isso (19.4/52.3). Todos vêem a mesma
+memória, sem cópia, e a posse é clara: o main é dono, os workers são vistas.
+
 ### D10 — h2 entra depois do v1, atrás de ALPN.
 Já está no repo, conferido contra 47 mil vetores. Mesma `Request`/`Response`.
 
@@ -182,49 +298,57 @@ httpd.serve(3335, handle,
 ## As fases
 
 Cada fase só está `[x]` quando o seu portão tem TESTE que prende, o `verify` passa,
-e o seed foi regenerado se o compilador/runtime mudou. A ordem é a das dependências.
+e o seed foi regenerado se o compilador/runtime mudou.
 
-- [ ] **F0 — `SO_REUSEPORT`.** `net.listen(porta, reuse=True)` no runtime. Portão:
-      dois workers no mesmo porto, o kernel reparte os accepts, e uma bateria de N
-      conexões chega repartida entre eles.
+**O caminho crítico do jogo é F0→F1→F5→F6** — servidor básico mais WebSocket. As
+fases ambiciosas (cliente HTTP completo, permessage-deflate, h2) vêm depois de
+propósito: são valiosas por si, e nenhuma delas deve prender o porte.
+
+### O que a LINGUAGEM ganha (fases de compilador/runtime)
+
+- [ ] **L1 — `def` e lambda-POD atravessam para um worker** (D3b). No `spawn` e no
+      `send`. Portão: um `def` de topo e uma lambda de captura POD atravessam e
+      correm no worker; uma lambda que captura algo coletado é RECUSADA com a
+      mensagem que diz porquê. *É a fase mais valiosa deste documento para a
+      linguagem, e não depende de nada do servidor.*
+- [ ] **L2 — `SO_REUSEPORT`** no `listen` (D2). Portão: dois workers no mesmo
+      porto, o kernel reparte os accepts.
+- [ ] **L3 — `SSL_accept`** e carregar cert/chave, por caminho e por bytes (D8/D15).
+      Portão: um GET por `https` com cert auto-assinado, conferido com
+      `openssl s_client`.
+- [ ] **L4 — `Topic`** no runtime (D6/D7): subscrever, publicar, dessubscrever, por
+      worker, sobre os pipes. Portão: um broadcast a K conexões repartidas por W
+      workers chega a todas, uma vez cada.
+
+### O que a BIBLIOTECA ganha
 
 - [ ] **F1 — httpd v1, um worker.** `serve(porta, handle)` sobre o parser que
-      existe: accept → parse incremental → `handle` → escreve a `Response`. O laço
-      exponível (D3). Portão: hello-world, um POST com corpo, um 404, os erros do
-      parser (as recusas do llhttp propagadas como 400).
-
-- [ ] **F2 — Streaming.** Corpo de `Response` por cursor (D5): chunked e SSE.
-      Portão: um SSE que emite N eventos e um download chunked, lidos por um cliente
-      que acumula.
-
-- [ ] **F3 — Multi-worker.** `workers=N` sobre F0. Cada worker um `serve` completo.
-      Portão: sob carga concorrente, os N workers servem, e `sched.stats()` mostra a
-      repartição.
-
-- [ ] **F4 — TLS servidor.** `SSL_accept` + cert/chave no runtime (D8), e
-      `serve(..., tls=...)`. Portão: um GET por `https` com um cert auto-assinado,
-      conferido com `openssl s_client` e com o cliente HTTP que já temos.
-
-- [ ] **F5 — ws core (sans-io).** `packages/ws`: frames + máquina de estados do RFC
-      6455, cliente e servidor, sem I/O. Portão: o Autobahn testsuite e o
-      `websockets` do Python como oráculo, frame a frame.
-
-- [ ] **F6 — Upgrade + WsConn na httpd.** `httpd.upgrade(req)` faz o handshake
-      (Sec-WebSocket-Accept), e `WsConn` liga o socket ao ws core. Portão: um eco de
-      ws ponta a ponta, texto e binário, ping/pong, close limpo.
-
-- [ ] **F7 — `Topic` no runtime + pub/sub na httpd.** As três operações do runtime
-      (D11.3), a distribuição na biblioteca (D7), as duas portas de `publish` (D6).
-      Portão: um broadcast a K conexões repartidas por W workers chega a todas, uma
-      vez cada; e o caminho do `shared Buffer` (o payload grande não serializa).
-
-- [ ] **F8 — h2 atrás de ALPN** (D10). Portão: o mesmo handler servido sobre h2,
-      com o h2/hpack que já passa 47 mil vetores.
-
-- [ ] **F9 — O benchmark, publicado.** Só quando o produto está completo (a escolha
-      do dono): `wrk`/`hey` contra o nosso (workers=nproc), `Bun.serve`, `node http`
-      e `python uvicorn` na MESMA VPS, no espírito do `bench.sh`. Números honestos,
-      e onde perdermos, o número diz onde otimizar.
+      existe, com keep-alive (D3d), o 500 com `debug` (D3e), o corpo em dois
+      acessores (D3f) e as conveniências de Response (D3g). Portão: hello-world,
+      POST com corpo, 404, e as recusas do parser propagadas como 400.
+- [ ] **F2 — Streaming** (D5): corpo por cursor, chunked e SSE.
+- [ ] **F3 — Multi-worker** sobre L1+L2. Portão: sob carga, os N workers servem e
+      `sched.stats()` mostra a repartição.
+- [ ] **F4 — TLS servidor** sobre L3.
+- [ ] **F5 — ws core sans-io** (D9): frames e máquina de estados do RFC 6455,
+      cliente E servidor. Portão: o **Autobahn testsuite** e o `websockets` do
+      Python como oráculo, frame a frame.
+- [ ] **F6 — Upgrade e `WsConn`** (D9b). Portão: um eco ponta a ponta, texto e
+      binário, ping/pong, close limpo.
+- [ ] **F7 — Pub/sub** sobre L4, com as duas portas de `publish` (D6) e a
+      dessubscrição automática (D9c).
+- [ ] **F8 — Estáticos** (D13): `httpd.files(dir)` com MIME, ETag/304, Range e a
+      recusa de `..`.
+- [ ] **F9 — Compressão** (D16): gzip no HTTP; e o permessage-deflate do ws numa
+      fase à parte, depois do Autobahn verde — a janela partilhada do RFC 7692 é
+      onde ele morde.
+- [ ] **F10 — Cliente HTTP completo** (D17): redirects, cookies, pool, timeouts. Um
+      projeto do tamanho do servidor, e por isso tardio; o `GameApi` do jogo é
+      servido antes por um `get`/`post` mínimo.
+- [ ] **F11 — h2 atrás de ALPN** (D10).
+- [ ] **F12 — O benchmark, publicado.** Só com o produto completo: `wrk` contra o
+      nosso (workers=nproc), `Bun.serve`, `node http` e `python uvicorn` na MESMA
+      VPS, no espírito do `bench.sh`.
 
 ## Onde o modelo PERDE, dito em voz alta
 
