@@ -1264,7 +1264,7 @@ Sobre um dicionario normal funciona; sobre uma tabela partilhada, nao. A leitura
 e hasteada para uma instrucao ANTES do ternario (ela precisa de um sitio onde o
 valor caia) e portanto corre mesmo quando a chave nao esta la.
 
-O contorno e um `if` explicito, e o `packages/httpd/sessao.psc` escreve-o assim
+O contorno e um `if` explicito, e o `packages/httpd/session.psc` escreve-o assim
 com a razao ao lado. Mas o defeito e real e a forma dele e desagradavel: o mesmo
 codigo funciona numa tabela e nao na outra, o que faz dele um engano que so
 aparece quando se troca um `Dict` por um `shared Dict`.
@@ -1277,14 +1277,14 @@ chaves sob o cadeado e percorre a copia, que pode estar velha ao ser lida) ou AO
 VIVO (mantem o cadeado durante o laco inteiro, e ai um laco lento para os outros
 workers)?
 
-O `packages/httpd/sessao.psc` nao precisou dela: o rate limit guarda UMA entrada
+O `packages/httpd/session.psc` nao precisou dela: o rate limit guarda UMA entrada
 por IP com o numero da janela DENTRO do valor, e quando a janela roda a entrada e
 sobrescrita em vez de acumulada. A tabela cresce com o numero de IPs distintos --
 o mesmo tecto de qualquer estrutura por IP -- e nao com o numero de janelas.
 
 ## 46 — sessao, cookies, proxy e rate limit (F8b/F8d)  OK feito
 
-`packages/httpd/sessao.psc`. E o sitio onde a resposta da linguagem aparece: onde
+`packages/httpd/session.psc`. E o sitio onde a resposta da linguagem aparece: onde
 o Bun manda subir um Redis, a tabela esta na linguagem, e o portao prova-o lendo
 uma sessao criada num worker a partir de conexoes que caem noutros.
 
@@ -1534,3 +1534,246 @@ mesmo teste.
 
 **22 ms nos dois.** Identico. O custo das verificacoes novas nao aparece na
 medicao, e a diferenca para o teto e da maquina.
+
+---
+
+# Sessao seguinte — as quatro pecas que faltavam ao WebSocket
+
+Esta parte comeca com uma pergunta do dono: *"voce disse que ia ter umas 4 mil
+linhas de codigo portadas, e parece menos.. o que aconteceu"*. Parecia menos porque
+era menos: 1.263 linhas contra uma estimativa de ~2.100, e metade da diferenca nao
+era o pscript ser mais denso — era codigo que nao se escreveu.
+
+**O que os portoes cobriam era o que se tinha escrito, e nao o que faltava.** As 25
+recusas do RFC 6455 passavam, os quadros batiam byte a byte com a `websockets` nos
+dois sentidos, o eco funcionava ponta a ponta. Nada disso toca nas quatro pecas
+abaixo, e por isso elas passaram por feitas. E a licao mais util desta sessao: um
+portao verde prova o que ele pergunta, e a lista de perguntas nao se audita
+sozinha.
+
+## 55. Uma busca de subcadeia num cabecalho de lista nao e ler o cabecalho
+
+`Sec-WebSocket-Extensions` e uma lista de itens com parametros (RFC 7230 §7), e o
+que aqui estava era `o.find("server_max_window_bits") >= 0`. O caso que o desmente
+cabe numa linha:
+
+    x; a="permessage-deflate"
+
+A busca acerta e conclui que o cliente ofereceu a extensao. Nao ofereceu: ofereceu
+uma extensao `x` cujo parametro `a` tem aquele *valor*. Um valor entre aspas pode
+conter virgulas e pontos e virgulas, e e isso que torna a busca insuficiente em vez
+de so imprecisa. O `parse_list` le a gramatica; o portao tem o caso.
+
+## 56. Recusar uma oferta legitima nao e conservador, e perder a extensao
+
+A negociacao antiga saltava qualquer oferta com `server_max_window_bits`, com uma
+razao escrita: sem janela partilhada o tamanho dela nao muda nada, e prometer um
+numero seria mentir. O raciocinio estava errado ao contrario do que parece — o
+parametro nao descreve a nossa janela, descreve a do DESCOMPRESSOR do outro lado, e
+um casamento nosso mais distante do que ela produz bytes errados sem erro nenhum.
+
+Honra-lo custou uma linha no compressor (`deflate_sync` leva um limite de
+distancia) e mudou o resultado: um cliente que pede uma janela pequena passou de
+"sem compressao nenhuma" a "compressao com a janela que pediu".
+
+## 57. O `zlib` do CPython nao serve de oraculo para uma janela
+
+A promessa de `server_max_window_bits=N` e sobre DISTANCIAS, e a maneira obvia de a
+conferir nao funciona: um `zlib.decompressobj(wbits=-8)` aceita alegremente um
+fluxo com casamentos a 400 bytes de distancia. Foi medido nos dois sentidos — o
+fluxo certo e o errado passam os dois.
+
+Portanto o oraculo teve de ser outro: o `tests/ws-window.py` e um leitor de DEFLATE
+de arvore fixa escrito do RFC 1951 que reporta a maior distancia emitida. E
+provou-se que ele SABE falhar, rotulando um fluxo de 15 bits como sendo de 8.
+
+## 58. Uma biblioteca correcta esconde o que se quer testar
+
+A `websockets` remonta uma mensagem fragmentada antes de a entregar, e responde aos
+pings sozinha. As duas coisas sao certas e as duas tornam-na cega para estes
+portoes: com ela, 300 bytes num quadro e 300 bytes em cinco sao indistinguiveis, e
+nao ha como pedir a um cliente que IGNORE um ping.
+
+Foi por isso que apareceu o `tests/ws-raw.py`, um cliente de socket cru. Nao
+substitui o oraculo — a `websockets` continua a conferir os bytes nos dois
+sentidos e a remontagem —, responde as perguntas que ela nao pode responder.
+
+## 59. Refazer uma decisao "porque e deterministica" e uma armadilha adiada
+
+O `upgrade` escolhia o subprotocolo e a extensao a partir dos cabecalhos, e o laco
+da conexao repetia a escolha a partir dos MESMOS cabecalhos. Era deterministico e
+portanto correcto — e frágil: qualquer parametro novo tinha de ser reproduzido nos
+dois sitios, e o dia em que discordassem o servidor dizia uma coisa ao cliente e
+usava outra, sem erro nenhum.
+
+A `Request` ganhou um `attrs: Dict<str,str>` — o sitio onde uma camada de cima
+guarda uma decisao que ja tomou. Nao e do WebSocket: e onde um autenticador poe o
+utilizador que verificou. A httpd nao le nada de lá, e e isso que a mantem cega ao
+que corre por cima dela (D7).
+
+## 60. Uma renomeacao com `re.sub` estraga a prosa, e a prosa e metade do ficheiro
+
+O pedido era padronizar os identificadores em ingles. Um `re.sub(r'\bcorpo\b',
+'body')` sobre o ficheiro inteiro tambem entra nos comentarios e nas docstrings, e
+produziu frases como *"um POST sem body leva `content-length: 0`"*. Cerca de 330
+linhas de prosa em quatro ficheiros.
+
+Foram restauradas a partir do git e a ferramenta foi reescrita para separar tres
+coisas: no codigo renomeia; num LITERAL nao toca (um `"boundary="` e um token do
+HTTP e um `"content-disposition"` e o nome de um cabecalho — mudar-lhes o texto
+partiria o protocolo em silencio); num comentario renomeia so o que esta entre
+acentos graves, porque `body` numa frase e uma referencia ao identificador e
+"corpo" e uma palavra portuguesa.
+
+## 61. O `Config.idle_timeout` da httpd estava declarado e MORTO
+
+`packages/httpd/httpd.psc` declara `idle_timeout: float  # quanto se espera pelo
+pedido seguinte, em segundos` e **nunca o le**. Uma conexao keep-alive que nao
+manda nada fica aberta enquanto o cliente quiser, que e um slowloris de graça.
+
+**Ficou resolvido, e a peca que faltava ja existia.** O engano foi meu: escrevi
+aqui que era preciso um `read` com prazo na LINGUAGEM, e o `timeout(tarefa, s)` da
+48.2 e exactamente isso — corre a tarefa contra o relogio e CANCELA o perdedor.
+Foi o achado 62 que o destapou: com o comentario do `sleep` a valer, um prazo tinha
+de vir do runtime; com o `sleep` a ceder de verdade, o prazo e uma linha.
+
+O prazo vale **so no limiar de um pedido novo** e nao a meio de um corpo, e a
+distincao nao e um detalhe: um upload legitimo de um ficheiro grande por uma linha
+lenta demora, e matá-lo seria trocar uma falha de seguranca por uma falha de
+servico. Quem limita o corpo e o `max_body`, que e outra pergunta.
+
+Portao: `tests/httpd-idle.py`, e o `curl` nao serve de oraculo porque ele fala
+sempre. E prova as duas metades — a conexao calada fecha (nova, e depois de ja ter
+servido um pedido), e um pedido que chega depressa e servido, o que mostra que o
+prazo nao esta a matar trafego legitimo.
+
+## 62. Um comentario do compilador que ja nao e verdade
+
+O `ps_sema.p` diz, no `sleep`: *"what is missing is the loop that would let other
+tasks run meanwhile (18.4), and until then it really sleeps"*. Nao e verdade desde
+que a 18.4 chegou: o `ps_sleep` cria uma tarefa `is_timer`, o `ps_timer_soonest`
+entra no calculo do timeout do `epoll_wait`, e o `taskgroup.psc` prova-o — ele
+cancela uma irma parada num `sleep(5.0)` e o portao passa em milissegundos.
+
+Custou meia hora de desenho errado: com o comentario a valer, o keepalive tinha de
+ser um `read` com prazo (que nao existe); com o `sleep` a ceder de verdade, e uma
+tarefa a dormir e um `race`.
+
+
+## 63. Uma escrita PARCIAL estaciona a tarefa, e duas tarefas partem o quadro
+
+`psrt_rt.p`, no `PS_IO_SEND`: `if w->off < w->n: return False  # partial: wait for
+room and send the rest`. Uma escrita que nao caiba no tampao do kernel escreve o
+que cabe, guarda o deslocamento e volta a dormir no `POLLOUT`. **Enquanto ela
+dorme, outra tarefa que escreva no mesmo descritor mete os bytes dela no meio** —
+e num protocolo com moldura isso nao e uma mensagem trocada: e o fluxo desalinhado
+a partir dali, e o outro lado fecha com 1002.
+
+Ja valia para o `Hub.publish` a competir com um `send_text` do handler. O
+keepalive desta sessao tornou-o SISTEMATICO: uma mensagem grande a sair por um
+socket cheio, mais um ping a cada vinte segundos de outra tarefa.
+
+A correccao e um `Channel(1)` por conexao como semaforo binario, tomado por todo o
+caminho de escrita — o `write_frame` e o `write_raw` que a difusao usa. Nao ha
+`Lock` nem `Mutex` na linguagem, e a inversao do canal e de proposito: ele comeca
+VAZIO e o que guarda e "alguem esta a escrever", portanto nao ha nada a
+inicializar (com o sentido contrario, alguem tem de por o testemunho la dentro, e
+por-lo e um `await` num construtor sincrono).
+
+**O que NAO se conseguiu foi um portao para a corrupcao em si, e vale a pena dizer
+porque.** A intercalacao pede uma janela estreita: uma escrita tem de estar
+PARCIALMENTE feita e abrir espaco no instante em que outra tarefa quer escrever.
+Tentou-se forcá-la com um cliente a drenar devagar e um `SO_RCVBUF` de 2 KB, e as
+duas primeiras tentativas nao discriminaram — com o trinco e sem ele o resultado
+era o mesmo, porque 400 KB cabiam nos tampoes e nunca houve escrita parcial; a
+terceira, com drenagem estrangulada, ficou tao lenta que nao termina em tempo util.
+Um portao intermitente e pior do que nenhum, portanto foi retirado.
+
+O que ficou gated e o MECANISMO: o `tests/pscript/run/chan_lock.psc` afirma que o
+`Channel(1)` nunca deixa dois dentro ao mesmo tempo, com as tarefas a ceder o
+controlo a meio — que e exactamente o que uma escrita parcial faz. E a razao de o
+trinco ser necessario esta citada da linha do runtime acima, que e verificavel sem
+portao nenhum.
+
+## 64. Tres campos declarados que ninguem lia
+
+O `idle_timeout` foi o primeiro (achado 61), e a procura sistematica encontrou dois
+mais, ambos meus e ambos desta area:
+
+  * **`Handlers.protocols`** no `packages/httpd/ws.psc`: guardava a lista de
+    subprotocolos e nada a lia — quem escolhe e o `upgrade(req, protocols)`, como
+    a D36 diz. Saiu.
+  * **`Deflate.max_output`** no `packages/ws/ws.psc`: o tecto da mensagem
+    descomprimida. O tecto que vale e o `max_message` do `Proto`, que e o mesmo
+    numero para uma mensagem comprimida e para uma fragmentada. Dois campos para
+    um numero e ter um deles errado a certa altura. Saiu.
+
+O padrao e sempre o mesmo e vale como regra: um campo que se escreve e nunca se le
+nao e uma reserva para o futuro, e uma promessa que o codigo nao cumpre — e no caso
+do `idle_timeout` a promessa era de seguranca.
+
+## 65. O `timeout()` plantava um relógio e nunca o cancelava
+
+O `ps_timeout` limita a espera plantando um temporizador (`ps_timer_task`), para
+que o escalonador nunca durma para além do prazo. **A tarefa que ele devolve era
+descartada**, e quando a tarefa esperada ganhava a corrida o temporizador ficava
+parado no relógio até à hora dele. O programa dava a resposta certa e só terminava
+`seconds` depois.
+
+Medido numa sonda de trinta linhas: um servidor que faz `timeout(read, 30.0)` duas
+vezes respondia em milissegundos e **saía 30,3 segundos depois**. Com a correcção,
+0,8.
+
+A correcção tem duas metades, e a segunda é a que faltava mesmo:
+
+  * o `ps_timeout` guarda o temporizador e cancela-o em todas as saídas (o
+    `ps_race`, ao lado, sempre cancelou os perdedores — aqui o perdedor era o
+    relógio, e ele não estava em lista nenhuma para alguém se lembrar dele);
+  * o `ps_task_cancel` passou a **retirar do relógio um temporizador cancelado
+    directamente**. Ele já sabia retirar o temporizador em que OUTRA tarefa estava
+    parada (`w0->waiter == t`), mas um temporizador que é ele próprio o alvo não
+    tem `waiting_on` nem `waiter` — ficava com `state == 0` na lista, e o
+    `ps_timer_soonest` continuava a devolver o prazo dele. Sem esta segunda
+    metade, a primeira não fazia nada: cancelar era pôr uma bandeira que ninguém
+    lia.
+
+## 66. ABERTO — um `race`/`timeout` de vida longa dentro de uma conexão trava as outras
+
+O `ps_timeout` e o `ps_race` **conduzem o escalonador de dentro da tarefa que os
+chama**: têm um laço `while ... ps_sched_progress(ctx)` e só voltam quando o que
+esperam acaba. Enquanto isso, o passo dessa tarefa não retorna e a pilha de C fica
+presa.
+
+Para uma espera curta isso é invisível. Para uma longa não é, e o exemplo do jogo
+mediu-o de três maneiras:
+
+| o que o `serve_ws` fazia | jogo (`tests/httpd-jogo.py`) |
+|---|---|
+| `race([read_loop, keepalive])` — nunca volta enquanto a conexão viver | **0/4** |
+| prazo de 20 s na leitura, em fatias de 2 s | **0/4** |
+| prazo de 0,5 s na leitura | 4/4 |
+| sem prazo nenhum | 4/4 |
+| **keepalive como tarefa quente, `await sleep` a estacionar** | **8/8** |
+
+A forma que ficou é a última, e não é um remendo: um `await sleep(...)` numa tarefa
+que ninguém espera ESTACIONA no mesmo multiplexador que espera pelos sockets, tal
+como a `httpd` já faz com as conexões (`count()`). Quem decide que o cliente morreu
+fecha o socket, e é isso que faz o laço de leitura devolver zero — as duas tarefas
+não precisam de falar.
+
+**O que fica por perceber, e vale a pena dizer.** O `idle_timeout` do `serve_conn`
+tem a mesma forma (um `timeout` de 30 s dentro da tarefa da conexão) e **não**
+apresenta o problema: oito conexões keep-alive paradas e um pedido novo é servido
+em 0,00 s. A diferença entre os dois casos não está explicada. As duas suspeitas,
+por ordem:
+
+  1. o `race` do `serve_ws` não volta durante **toda a vida** da conexão, e não
+     apenas durante um prazo — é outra escala;
+  2. a versão com prazo na leitura **CANCELAVA** uma leitura parada no descritor,
+     e o `ps_task_cancel` não chama o `ps_mux_forget` — o descritor fica registado
+     no multiplexador sem tarefa. O `idle_timeout` quase nunca chega a cancelar
+     nada, porque o pedido chega antes do prazo.
+
+A segunda é a mais provável e é conferível: se for isso, cancelar uma tarefa de I/O
+tem de esquecer o descritor, e aí o prazo na leitura passa a ser legítimo. Fica
+registado em vez de adivinhado.

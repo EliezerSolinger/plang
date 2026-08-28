@@ -560,6 +560,36 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [x] **F10 — Cliente HTTP completo** (D17): redirects, cookies, pool, timeouts. Um
       projeto do tamanho do servidor, e por isso tardio; o `GameApi` do jogo é
       servido antes por um `get`/`post` mínimo.
+- [x] **F13 — As quatro peças que faltavam ao WebSocket** (D36 + RFC 7692 §7 +
+      RFC 6455 §5.4/§5.5.2). Não era uma fase do plano original, e é a lição de a
+      ter medido: a F5/F6/F9 estavam dadas por feitas porque os portões cobriam o
+      que se tinha escrito, e não o que faltava escrever.
+      * **a gramática** de `Sec-WebSocket-Extensions`/`-Protocol` (RFC 7230 §7)
+        lida a sério em vez de por busca de subcadeia — o caso que a exige é
+        `x; a="permessage-deflate"`, onde a busca conclui o contrário do que o
+        cabeçalho diz;
+      * **os parâmetros do permessage-deflate** negociados: `server_max_window_
+        bits` passou a ser HONRADO (o `deflate_sync` leva um limite de distância)
+        em vez de fazer saltar a oferta, e um parâmetro desconhecido recusa-a;
+      * **o subprotocolo escolhido** da lista do cliente pela preferência do
+        servidor (D36), com a decisão guardada na `Request` em vez de refeita;
+      * **o envio fragmentado** (§5.4), com o RSV1 só no primeiro quadro e a
+        compressão antes da partição;
+      * **o keepalive** com prazo para o pong, ligado por omissão, e o prazo do
+        fecho no cliente com a fase de descarte do §7.1.7. Ele é uma TAREFA
+        QUENTE que dorme no relógio, e não um `race` nem um prazo na leitura —
+        as duas formas foram tentadas e as duas travavam as outras conexões
+        (achado 66);
+      * e **dois defeitos do runtime** que isto destapou: o `timeout()` plantava
+        um relógio e nunca o cancelava (achado 65, corrigido e com portão em
+        `tests/pscript/run/timeout_clock.psc`), e uma escrita parcial estaciona a
+        tarefa, portanto duas tarefas na mesma conexão partem o quadro uma da
+        outra (achado 63, resolvido com um trinco por conexão).
+      Portão: `tests/ws-features.sh`, 18 verificações e três oráculos — um cliente
+      de socket cru (a `websockets` remonta fragmentos e responde a pings sozinha,
+      e por isso esconde justamente o que se quer ver), um leitor de DEFLATE
+      independente para as distâncias (o `zlib` NÃO serve: aceita um fluxo que
+      passa a janela que lhe deram), e a `websockets` para a remontagem.
 - [ ] **F11 — h2 atrás de ALPN** (D10).
 - [x] **F12 — O benchmark, publicado.** Só com o produto completo: `wrk` contra o
       nosso (workers=nproc), `Bun.serve`, `node http` e `python uvicorn` na MESMA
