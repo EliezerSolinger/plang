@@ -7444,6 +7444,9 @@ static void PsSema_sendable_in(PsSema *self, PsType *t, Pos pos, const char *wha
         return;
     }
     switch (t->kind) {
+        case PT_FUNC: {
+            return;
+        }
         case PT_INT:
         case PT_FLOAT:
         case PT_BOOL:
@@ -7545,6 +7548,9 @@ static void PsSema_pod_only(PsSema *self, PsType *t, Pos pos, const char *what) 
         case PT_FLOAT:
         case PT_BOOL:
         case PT_VOID: {
+            return;
+        }
+        case PT_FUNC: {
             return;
         }
         case PT_BUFFER: {

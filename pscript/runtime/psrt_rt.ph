@@ -78,6 +78,14 @@ def ps_str_import(ctx: *PsCtx, p: *char) -> *PsStr
 # would need each of them serialized too, and that is the rung above.
 def ps_list_export(l: *PsList) -> *void
 def ps_list_import(ctx: *PsCtx, p: *void) -> *PsList
+# 148/D3b: e a mesma escada para uma FUNÇÃO. Um `def` de topo é um símbolo — o
+# mesmo endereço em toda a thread do mesmo binário — e atravessa como um número;
+# o ambiente de uma lambda atravessa como bytes, e só se for POD. Quem prova essa
+# condição é o `trace` do descritor do ambiente: o compilador só o escreve quando
+# há uma referência para seguir, portanto a sua ausência É a prova. O `export`
+# levanta quando ela falta, com a posição do `spawn` que o leitor escreveu.
+def ps_closure_export(ctx: *PsCtx, c: *PsClosure, file: const *char, line: i32) -> *void
+def ps_closure_import(ctx: *PsCtx, p: *void) -> *PsClosure
 # ... and says it is finished, capturing an error nobody caught (37.4)
 def ps_worker_finish(ctx: *PsCtx, blk: *void)
 # `parent.send(x)` from inside; `w.send(x)` from outside. Both answer whether
@@ -96,7 +104,7 @@ def ps_worker_send_up(ctx: *PsCtx, p: const *void, size: usize) -> bool
 # bytes (21.1); a string, a list, a dict, a set and a `struct` are graphs and
 # go through the shape the compiler wrote for them (74.2).
 def ps_send_obj_up(ctx: *PsCtx, sh: const *PsShape, slot: const *void) -> bool
-def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool
+def ps_send_obj_down(ctx: *PsCtx, w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool
 def ps_worker_recv_obj(ctx: *PsCtx, w: *PsWorker, sh: const *PsShape, size: usize) -> *PsTask
 def ps_parent_recv_obj(ctx: *PsCtx, sh: const *PsShape, size: usize) -> *PsTask
 # what a generated `S__ser` / `S__des` calls, once per field

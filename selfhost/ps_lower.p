@@ -1517,6 +1517,16 @@ struct PsLow:
                         lx2: *Expr = self->call_rt("ps_list_export", e->pos)
                         self->push_arg(lx2, self->expr(ae2))
                         fa2->rhs = lx2
+                    elif pf7->params[i].type != None and pf7->params[i].type->kind == PT_FUNC:
+                        # 148/D3b: o símbolo mais o ambiente, se o ambiente for
+                        # POD. Leva a posição porque é aqui que a recusa sai, e
+                        # ela tem de apontar para o `spawn` que o leitor escreveu.
+                        fx2: *Expr = self->call_rt("ps_closure_export", e->pos)
+                        self->push_arg(fx2, self->ctx_arg(e->pos))
+                        self->push_arg(fx2, self->expr(ae2))
+                        self->pos_args(fx2, e->pos)
+                        self->raised = True
+                        fa2->rhs = fx2
                     else:
                         fa2->rhs = self->expr(ae2)
                     self->pre.push(fa2)
@@ -3623,10 +3633,14 @@ struct PsLow:
                 gd->init = self->expr(e->args[0])
                 self->pre.push(gd)
                 ss8: *Expr = self->call_rt("ps_send_obj_up" if to_parent else "ps_send_obj_down", e->pos)
-                if to_parent:
-                    self->push_arg(ss8, self->ctx_arg(e->pos))
-                else:
+                # 148: os dois sentidos levam o contexto de QUEM ESCREVE. Ele
+                # entrou porque uma função a atravessar pode ser recusada, e a
+                # recusa tem de sair deste lado — do outro seria um worker a
+                # levantar por um erro que não é dele.
+                self->push_arg(ss8, self->ctx_arg(e->pos))
+                if not to_parent:
                     self->push_arg(ss8, self->expr(e->lhs->lhs))
+                self->raised = True
                 shp8: *Expr = ex_new(self->a, EX_UNARY, e->pos)
                 shp8->op = TK_AMP
                 shp8->lhs = self->ident(shape_of(self, wt8->inner, e->pos), e->pos)
@@ -3686,6 +3700,12 @@ struct PsLow:
                 self->push_arg(szg, trg)
                 self->push_arg(rs8, szg)
                 self->allocs = True
+                # 148: e LEVANTA. A mensagem vazia de um tipo que é referência
+                # deixou de ser um ponteiro nulo e passou a ser uma exceção
+                # (107.8), portanto este sítio precisa da verificação a seguir —
+                # sem ela o valor nulo seguia para a instrução seguinte, que é
+                # onde o programa morria em vez de parar.
+                self->raised = True
                 return rs8
             rc: *Expr = self->call_rt("ps_parent_recv" if to_parent else "ps_worker_recv", e->pos)
             self->push_arg(rc, self->ctx_arg(e->pos))
@@ -9264,8 +9284,11 @@ private def lower_worker_args(L: *PsLow, f: *PsFunc) -> *Decl:
         # a string crosses as BYTES (34.3), so what travels is a malloc'd copy
         if f->params[i].type != None and f->params[i].type->kind == PT_STR:
             d->fields[i].type = ty_ptr(L->a, ty_name(L->a, "char"))
-        elif f->params[i].type != None and f->params[i].type->kind == PT_LIST:
-            # the list crosses as a malloc'd blob of its bytes (34.3)
+        elif f->params[i].type != None and (f->params[i].type->kind == PT_LIST or f->params[i].type->kind == PT_FUNC):
+            # a lista atravessa como um bloco malloc'd dos seus bytes (34.3), e
+            # uma FUNÇÃO como o par símbolo+ambiente da 148/D3b — nos dois casos
+            # o que viaja no struct é um ponteiro para memória que não é de heap
+            # nenhum
             d->fields[i].type = ty_ptr(L->a, ty_name(L->a, "void"))
         else:
             d->fields[i].type = L->ty(f->params[i].type)
@@ -9351,9 +9374,14 @@ private def lower_worker_thunk(L: *PsLow, f: *PsFunc, with_body: bool) -> *Decl:
         fa->op = TK_ARROW
         fa->lhs = L->ident("__wargs", f->pos)
         fa->field = ps_cname(L->a, f->params[i].name)
-        if f->params[i].type != None and (f->params[i].type->kind == PT_STR or f->params[i].type->kind == PT_LIST):
+        if f->params[i].type != None and f->params[i].type->kind in {PT_STR, PT_LIST, PT_FUNC}:
             # rebuilt HERE, in this thread's heap (34.3)
-            im: *Expr = L->call_rt("ps_str_import" if f->params[i].type->kind == PT_STR else "ps_list_import", f->pos)
+            imn: const *char = "ps_list_import"
+            if f->params[i].type->kind == PT_STR:
+                imn = "ps_str_import"
+            elif f->params[i].type->kind == PT_FUNC:
+                imn = "ps_closure_import"
+            im: *Expr = L->call_rt(imn, f->pos)
             L->push_arg(im, L->addr_of("__wctx", f->pos))
             L->push_arg(im, fa)
             L->push_arg(call, im)
@@ -11044,6 +11072,12 @@ private def sh_mangle(L: *PsLow, t: *PsType) -> const *char:
             return L->a->printf("%s%d", "u" if t->uns else "i", t->width)
         case PT_NAME:
             return L->a->printf("%s_%s", "s" if opt_is_ref(t) else "p", ps_cname(L->a, t->name))
+        case PT_FUNC:
+            # 148: com uma forma própria, uma função deixa de poder partilhar a
+            # chave com tudo o resto que caía no "v" — a mesma razão do opcional
+            # logo abaixo. A aridade chega para as separar: o que atravessa é o
+            # símbolo, e o tipo dele já foi conferido no sítio da chamada.
+            return L->a->printf("fn%d", t->nparams)
         case PT_OPT:
             # `T?` TEM de mangle-ar pelo que está lá dentro. Sem esta linha caía
             # no "v" do fundo — e então `List<str?>` e `List<int?>` pediam a
@@ -11187,6 +11221,10 @@ private def shape_of(L: *PsLow, t: *PsType, pos: Pos) -> const *char:
             case PT_NAME:
                 if sd != None:
                     kind = 5
+            case PT_FUNC:
+                # 148/D3b: o símbolo mais o ambiente. Não tem `inner` nenhum — o
+                # que atravessa está todo no valor, e quem o lê é o runtime.
+                kind = 6
             case _:
                 pass
 

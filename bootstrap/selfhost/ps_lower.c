@@ -1775,6 +1775,13 @@ static Expr *PsLow_expr_raw(PsLow *self, PsExpr *e) {
                     Expr *lx2 = PsLow_call_rt(self, "ps_list_export", e->pos);
                     PsLow_push_arg(self, lx2, PsLow_expr(self, ae2));
                     fa2->rhs = lx2;
+                } else if (pf7->params[i].type != NULL && pf7->params[i].type->kind == PT_FUNC) {
+                    Expr *fx2 = PsLow_call_rt(self, "ps_closure_export", e->pos);
+                    PsLow_push_arg(self, fx2, PsLow_ctx_arg(self, e->pos));
+                    PsLow_push_arg(self, fx2, PsLow_expr(self, ae2));
+                    PsLow_pos_args(self, fx2, e->pos);
+                    self->raised = 1;
+                    fa2->rhs = fx2;
                 } else {
                     fa2->rhs = PsLow_expr(self, ae2);
                 }
@@ -3830,11 +3837,11 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             gd->init = PsLow_expr(self, e->args[0]);
             Vec_pStmt_push(&self->pre, gd);
             Expr *ss8 = PsLow_call_rt(self, (to_parent ? "ps_send_obj_up" : "ps_send_obj_down"), e->pos);
-            if (to_parent) {
-                PsLow_push_arg(self, ss8, PsLow_ctx_arg(self, e->pos));
-            } else {
+            PsLow_push_arg(self, ss8, PsLow_ctx_arg(self, e->pos));
+            if (!to_parent) {
                 PsLow_push_arg(self, ss8, PsLow_expr(self, e->lhs->lhs));
             }
+            self->raised = 1;
             Expr *shp8 = ex_new(self->a, EX_UNARY, e->pos);
             shp8->op = TK_AMP;
             shp8->lhs = PsLow_ident(self, shape_of(self, wt8->inner, e->pos), e->pos);
@@ -3901,6 +3908,7 @@ static Expr *PsLow_call(PsLow *self, PsExpr *e) {
             PsLow_push_arg(self, szg, trg);
             PsLow_push_arg(self, rs8, szg);
             self->allocs = 1;
+            self->raised = 1;
             return rs8;
         }
         Expr *rc = PsLow_call_rt(self, (to_parent ? "ps_parent_recv" : "ps_worker_recv"), e->pos);
@@ -9351,7 +9359,7 @@ static Decl *lower_worker_args(PsLow *L, PsFunc *f) {
         d->fields[i].name = ps_cname(L->a, f->params[i].name);
         if (f->params[i].type != NULL && f->params[i].type->kind == PT_STR) {
             d->fields[i].type = ty_ptr(L->a, ty_name(L->a, "char"));
-        } else if (f->params[i].type != NULL && f->params[i].type->kind == PT_LIST) {
+        } else if (f->params[i].type != NULL && (f->params[i].type->kind == PT_LIST || f->params[i].type->kind == PT_FUNC)) {
             d->fields[i].type = ty_ptr(L->a, ty_name(L->a, "void"));
         } else {
             d->fields[i].type = PsLow_ty(L, f->params[i].type);
@@ -9439,8 +9447,14 @@ static Decl *lower_worker_thunk(PsLow *L, PsFunc *f, int with_body) {
         fa->op = TK_ARROW;
         fa->lhs = PsLow_ident(L, "__wargs", f->pos);
         fa->field = ps_cname(L->a, f->params[i].name);
-        if (f->params[i].type != NULL && (f->params[i].type->kind == PT_STR || f->params[i].type->kind == PT_LIST)) {
-            Expr *im = PsLow_call_rt(L, (f->params[i].type->kind == PT_STR ? "ps_str_import" : "ps_list_import"), f->pos);
+        if (f->params[i].type != NULL && (f->params[i].type->kind == PT_STR || f->params[i].type->kind == PT_LIST || f->params[i].type->kind == PT_FUNC)) {
+            const char *imn = "ps_list_import";
+            if (f->params[i].type->kind == PT_STR) {
+                imn = "ps_str_import";
+            } else if (f->params[i].type->kind == PT_FUNC) {
+                imn = "ps_closure_import";
+            }
+            Expr *im = PsLow_call_rt(L, imn, f->pos);
             PsLow_push_arg(L, im, PsLow_addr_of(L, "__wctx", f->pos));
             PsLow_push_arg(L, im, fa);
             PsLow_push_arg(L, call, im);
@@ -11150,6 +11164,9 @@ static const char *sh_mangle(PsLow *L, PsType *t) {
         case PT_NAME: {
             return Arena_printf(L->a, "%s_%s", (opt_is_ref(t) ? "s" : "p"), ps_cname(L->a, t->name));
         }
+        case PT_FUNC: {
+            return Arena_printf(L->a, "fn%d", t->nparams);
+        }
         case PT_OPT: {
             return Arena_printf(L->a, "o_%s", sh_mangle(L, t->inner));
         }
@@ -11301,6 +11318,10 @@ static const char *shape_of(PsLow *L, PsType *t, Pos pos) {
                 if (sd != NULL) {
                     kind = 5;
                 }
+                break;
+            }
+            case PT_FUNC: {
+                kind = 6;
                 break;
             }
             default: {

@@ -493,7 +493,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 
 ### O que a LINGUAGEM ganha (fases de compilador/runtime)
 
-- [ ] **L1 — `def` e lambda-POD atravessam para um worker** (D3b). No `spawn` e no
+- [x] **L1 — `def` e lambda-POD atravessam para um worker** (D3b). No `spawn` e no
       `send`. Portão: um `def` de topo e uma lambda de captura POD atravessam e
       correm no worker; uma lambda que captura algo coletado é RECUSADA com a
       mensagem que diz porquê. *É a fase mais valiosa deste documento para a

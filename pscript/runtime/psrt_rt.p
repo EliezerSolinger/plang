@@ -87,6 +87,21 @@ private def ps_pipe_close(fd: int):
         close(fd)
 
 def ps_worker_new(ctx: *PsCtx, entry: def(p: *void) -> *void, args: *void, nargs: usize) -> *PsWorker:
+    # 148: NÃO se arranca uma thread com o contexto já a desenrolar.
+    #
+    # Os argumentos de um `spawn` são preenchidos por atribuições ANTES da
+    # chamada, e uma delas pode levantar — é o que o `ps_closure_export` faz
+    # quando a lambda captura algo coletado. A verificação da exceção só chega
+    # no fim da instrução, portanto sem este guarda a thread partia na mesma,
+    # com um argumento por preencher: a recusa saía certa e logo a seguir vinha
+    # um SIGSEGV noutra thread, que é o pior de dois mundos.
+    #
+    # O worker devolvido é um que já está `done`: quem lhe pedir uma mensagem
+    # recebe o vazio, e o `catch` de quem chamou vê a exceção real.
+    if ctx->exc != None:
+        wz: *PsWorker = (*PsWorker)(ps_alloc(ctx, sizeof(PsWorker), PS_TY_WORKER))
+        wz->blk = None
+        return wz
     blk: *PsWorkerBlk = (*PsWorkerBlk)(malloc(sizeof(PsWorkerBlk)))
     memset(blk, 0, sizeof(PsWorkerBlk))
     pthread_mutex_init(&blk->mu, None)
@@ -146,6 +161,77 @@ def ps_list_import(ctx: *PsCtx, p: *void) -> *PsList:
         memcpy(dst, src + usize(i) * usize(es), usize(es))
     free(p)
     return l
+
+# ---------- 148/D3b: uma FUNÇÃO atravessa para um worker ----------
+#
+# Isto parece violar a 18.1 e não viola, e vale a pena dizer porquê.
+#
+# O que a 18.1 isola são HEAPS: nenhum worker vê um objeto coletado de outro,
+# porque o coletor de lá mexe-o e o ponteiro de cá deixaria de valer. Mas dois
+# workers são threads do MESMO processo, e portanto partilham o espaço de
+# endereços do BINÁRIO — o código, as constantes, os descritores estáticos.
+# Um `def` de topo é um símbolo: o mesmo endereço em toda a thread, e nada dele
+# mora no heap. Atravessar é literalmente copiar um número.
+#
+# O que resta é o AMBIENTE de uma lambda, e esse mora no heap. Copia-se como
+# qualquer mensagem — desde que não tenha lá dentro nada que o coletor siga. E
+# essa pergunta já tem resposta pronta: o compilador só escreve um `trace` no
+# descritor quando há uma referência para seguir. Portanto
+#
+#     env->desc->trace == None
+#
+# É a prova de "capturas todas POD" (19.2), sem uma marca nova e sem o
+# compilador ter de dizer nada. Uma lambda que capture uma `str` levanta aqui,
+# com a frase que diz o que fazer.
+def ps_closure_export(ctx: *PsCtx, c: *PsClosure, file: const *char, line: i32) -> *void:
+    if c == None:
+        return None
+    esz: usize = 0
+    dsc: const *PsDesc = None
+    if c->env != None:
+        u: *PsUser = (*PsUser)(c->env)
+        if u->desc == None or u->desc->trace != None:
+            ps_raise(ctx, "this lambda captures something the collector owns, and a worker has a heap of its own (18.1) — a `def` of the top level crosses, and so does a lambda whose captures are all numbers, bools, enums or records (19.2). Pass the value as a separate argument, or make the function a top-level `def`", PS_CAT_TYPE, file, line)
+            return None
+        esz = usize(c->env->size)
+        dsc = u->desc
+    # tudo por `memcpy` e não por conversão de ponteiro: os três primeiros campos
+    # são ENDEREÇOS a viajar como bytes, e escrevê-los assim não pede um tipo
+    # `const` do outro lado de um molde
+    hdr: usize = sizeof(PsStrPtr) * usize(3) + sizeof(usize)
+    p: *char = (*char)(malloc(hdr + esz))
+    memcpy(p, &c->fn, sizeof(PsStrPtr))
+    memcpy(p + sizeof(PsStrPtr), &c->sig, sizeof(PsStrPtr))
+    memcpy(p + sizeof(PsStrPtr) * usize(2), &dsc, sizeof(PsStrPtr))
+    memcpy(p + sizeof(PsStrPtr) * usize(3), &esz, sizeof(usize))
+    if esz > 0:
+        memcpy(p + hdr, c->env, esz)
+    return (*void)(p)
+
+def ps_closure_import(ctx: *PsCtx, p: *void) -> *PsClosure:
+    if p == None:
+        return None
+    b: *char = (*char)(p)
+    fn: *void = None
+    sig: const *char = None
+    dsc: const *PsDesc = None
+    esz: usize = 0
+    memcpy(&fn, b, sizeof(PsStrPtr))
+    memcpy(&sig, b + sizeof(PsStrPtr), sizeof(PsStrPtr))
+    memcpy(&dsc, b + sizeof(PsStrPtr) * usize(2), sizeof(PsStrPtr))
+    memcpy(&esz, b + sizeof(PsStrPtr) * usize(3), sizeof(usize))
+    hdr: usize = sizeof(PsStrPtr) * usize(3) + sizeof(usize)
+    env: *PsObj = None
+    if esz > 0 and dsc != None:
+        # o ambiente nasce no heap DESTE worker, que é a razão de os bytes terem
+        # viajado em vez do objeto. A cópia salta o cabeçalho: o `ps_new` acabou
+        # de escrever o desta banda, e o da outra traz um endereço de
+        # encaminhamento que aqui não quer dizer nada.
+        o: *void = ps_new(ctx, dsc, esz)
+        memcpy((*char)(o) + sizeof(PsUser), b + hdr + sizeof(PsUser), esz - sizeof(PsUser))
+        env = (*PsObj)(o)
+    free(p)
+    return ps_closure_new(ctx, fn, env, sig)
 
 def ps_worker_args(blk: *void) -> *void:
     return ((*PsWorkerBlk)(blk))->args
@@ -372,6 +458,27 @@ def ps_ser_value(s: *PsSer, sh: const *PsShape, slot: const *void):
         case PS_SH_STRUCT:
             if sh->ser != None:
                 sh->ser(s, o)
+        case PS_SH_FUNC:
+            # 148/D3b, e o MESMO conteúdo que o `ps_closure_export` põe num
+            # bloco: aqui só muda o destino, que é a fita da mensagem em vez de
+            # um `malloc`. O símbolo e a assinatura são endereços do binário e
+            # atravessam como números; o ambiente, se existir, atravessa como
+            # bytes — e só existe se for POD, o que o `trace` do descritor diz.
+            cl: *PsClosure = (*PsClosure)(o)
+            ps_ser_bytes(s, &cl->fn, sizeof(PsStrPtr))
+            ps_ser_bytes(s, &cl->sig, sizeof(PsStrPtr))
+            if cl->env == None:
+                ps_ser_i64(s, 0)
+            else:
+                ue: *PsUser = (*PsUser)(cl->env)
+                if ue->desc == None or ue->desc->trace != None:
+                    ps_ser_i64(s, 0)
+                    if s->ctx != None:
+                        ps_raise(s->ctx, "this lambda captures something the collector owns, and a worker has a heap of its own (18.1) — a `def` of the top level crosses, and so does a lambda whose captures are all numbers, bools, enums or records (19.2). Pass the value as a separate argument, or make the function a top-level `def`", PS_CAT_TYPE, "<send>", 0)
+                else:
+                    ps_ser_i64(s, i64(cl->env->size))
+                    ps_ser_bytes(s, &ue->desc, sizeof(PsStrPtr))
+                    ps_ser_bytes(s, cl->env, usize(cl->env->size))
         case _:
             pass
 
@@ -486,12 +593,42 @@ def ps_des_value(ctx: *PsCtx, d: *PsDes, sh: const *PsShape, slot: *void):
             *out = o5
             if sh->des != None:
                 sh->des(ctx, d, o5)
+        case PS_SH_FUNC:
+            # o outro extremo da 148/D3b. O símbolo e a assinatura voltam a ser
+            # os endereços que eram — é o mesmo binário —, e o ambiente nasce
+            # NESTE heap, que é a razão de os bytes terem viajado.
+            fn6: *void = None
+            sg6: const *char = None
+            pf6: const *char = ps_des_take(d, sizeof(PsStrPtr))
+            if pf6 != None:
+                memcpy(&fn6, pf6, sizeof(PsStrPtr))
+            ps6: const *char = ps_des_take(d, sizeof(PsStrPtr))
+            if ps6 != None:
+                memcpy(&sg6, ps6, sizeof(PsStrPtr))
+            n6: i64 = ps_des_i64(d)
+            ev6: *PsObj = None
+            if n6 > 0:
+                dc6: const *PsDesc = None
+                pd6: const *char = ps_des_take(d, sizeof(PsStrPtr))
+                if pd6 != None:
+                    memcpy(&dc6, pd6, sizeof(PsStrPtr))
+                bo6: const *char = ps_des_take(d, usize(n6))
+                if bo6 != None and dc6 != None:
+                    oe6: *void = ps_new(ctx, dc6, usize(n6))
+                    # a cópia salta o cabeçalho: o `ps_new` acabou de escrever o
+                    # desta banda, e o da outra traz um endereço de
+                    # encaminhamento que aqui não quer dizer nada
+                    memcpy((*char)(oe6) + sizeof(PsUser), bo6 + sizeof(PsUser), usize(n6) - sizeof(PsUser))
+                    ev6 = (*PsObj)(oe6)
+            c6: *PsClosure = ps_closure_new(ctx, fn6, ev6, sg6)
+            d->built[id] = (*void)(c6)
+            *out = (*void)(c6)
         case _:
             *out = None
 
 # ---------- the two ends ----------
-private def ps_ser_run(sh: const *PsShape, slot: const *void, out_n: *usize) -> *char:
-    s: PsSer = {None, 0, 0, None, None, 0, 0, 0}
+private def ps_ser_run(ctx: *PsCtx, sh: const *PsShape, slot: const *void, out_n: *usize) -> *char:
+    s: PsSer = {ctx, None, 0, 0, None, None, 0, 0, 0}
     ps_ser_value(&s, sh, slot)
     free(s.keys)
     free(s.vals)
@@ -526,17 +663,23 @@ def ps_send_obj_up(ctx: *PsCtx, sh: const *PsShape, slot: const *void) -> bool:
     if b == None:
         return False
     n: usize = 0
-    buf: *char = ps_ser_run(sh, slot, &n)
+    buf: *char = ps_ser_run(ctx, sh, slot, &n)
+    if ctx->exc != None:
+        free(buf)
+        return False
     ok: bool = ps_queue_put(b, False, buf, n)
     free(buf)
     return ok
 
-def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool:
+def ps_send_obj_down(ctx: *PsCtx, w: *PsWorker, sh: const *PsShape, slot: const *void) -> bool:
     if w == None or w->blk == None:
         return False
     b: *PsWorkerBlk = w->blk
     n: usize = 0
-    buf: *char = ps_ser_run(sh, slot, &n)
+    buf: *char = ps_ser_run(ctx, sh, slot, &n)
+    if ctx->exc != None:
+        free(buf)
+        return False
     ok: bool = ps_queue_put(b, True, buf, n)
     free(buf)
     return ok
@@ -547,6 +690,26 @@ def ps_send_obj_down(w: *PsWorker, sh: const *PsShape, slot: const *void) -> boo
 private def ps_des_run(ctx: *PsCtx, m: *PsMsg, sh: const *PsShape, slot: *void, size: usize):
     memset(slot, 0, size)
     if m == None:
+        # 148: A MENSAGEM VAZIA DE UM TIPO QUE É REFERÊNCIA TEM DE LEVANTAR.
+        #
+        # A 107.8 decidiu que `recv` devolve "mensagem vazia" quando não há mais
+        # nada, e isso foi escrito quando uma mensagem era bytes: o vazio de um
+        # número é um zero, e um zero é um valor. Depois a escada da 34.3 deixou
+        # passar `str`, listas, dicionários, `struct` e — desde a 148 — funções.
+        # Para esses o vazio passou a ser o PONTEIRO NULO, que não é um valor
+        # nenhum: é um `len(s)` a ler o endereço zero, numa thread onde não há
+        # pilha para contar a história.
+        #
+        # A janela existe mesmo com o predicado à frente: `parent.open()`
+        # responde "ainda pode chegar mensagem", e entre a resposta e o `recv` a
+        # fila pode esvaziar — o laço já entrou. Levantar é a única saída que
+        # deixa quem escreveu o laço ver o que aconteceu.
+        #
+        # O guarda vive AQUI e não na porta de cima porque há duas portas: o
+        # caminho síncrono (a mensagem já estava na fila) e o assíncrono (a
+        # tarefa dorme e é enchida depois). Só este corredor é comum às duas.
+        if sh != None and sh->kind != PS_SH_POD:
+            ps_raise(ctx, "recv() found no message: the other side is gone and the queue is drained. `parent.open()` / `w.alive()` answers whether one can still arrive, but the queue can drain BETWEEN that answer and this call (107.8) — a loop that reads until empty has to be ready for it", PS_CAT_VALUE, "<recv>", 0)
         return
     d: PsDes = {m->data, m->size, 0, None, 0, 0, 0}
     ps_des_value(ctx, &d, sh, slot)

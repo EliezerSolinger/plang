@@ -836,8 +836,19 @@ enum PsShKind:
     PS_SH_SET = 3
     PS_SH_DICT = 4
     PS_SH_STRUCT = 5   # a collected object, with a generated pair to walk it
+    PS_SH_FUNC = 6     # 148/D3b: uma função. O que atravessa é o SÍMBOLO — o
+                       #   mesmo endereço em toda a thread do mesmo binário — e,
+                       #   se houver, o ambiente de uma lambda cujas capturas
+                       #   sejam todas POD. O que prova essa condição é o
+                       #   `trace` do descritor do ambiente: o compilador só o
+                       #   escreve quando há uma referência para seguir.
 
 struct PsSer:
+    # 148: o contexto de QUEM ESCREVE. Ele entrou porque uma função a atravessar
+    # pode ser recusada (uma lambda que capture algo coletado), e a recusa tem de
+    # sair do lado que a cometeu — do outro lado ela seria um worker a levantar
+    # por um erro que não é dele.
+    ctx: *PsCtx
     buf: *char
     len: usize
     cap: usize

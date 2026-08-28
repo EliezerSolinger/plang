@@ -1,0 +1,9 @@
+def de topo: 20
+lambda POD: 520
+recusada: this lambda captures something the collector owns, a
+depois da recusa: 6
+recusada no send: this lambda captures something the collector owns, a
+aceites: True True
+o worker somou: 35
+a resposta do worker, chamada aqui: 42
+vazio: recv() found no message: the other side 

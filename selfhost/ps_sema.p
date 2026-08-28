@@ -5772,6 +5772,11 @@ struct PsSema:
         if t == None:
             return
         match t->kind:
+            case PT_FUNC:
+                # 148/D3b: pela mesma razão do `pod_only` ao lado — e a regra
+                # vale nos DOIS, porque uma regra sem excepção ensina-se e uma
+                # com excepção decora-se
+                return
             case PT_INT, PT_FLOAT, PT_BOOL, PT_VOID, PT_STR:
                 return
             case PT_LIST, PT_SET:
@@ -5843,6 +5848,18 @@ struct PsSema:
             return
         match t->kind:
             case PT_INT, PT_FLOAT, PT_BOOL, PT_VOID:
+                return
+            case PT_FUNC:
+                # 148/D3b: uma FUNÇÃO atravessa. Um `def` de topo é um símbolo —
+                # o mesmo endereço em toda a thread do mesmo binário, e nada dele
+                # mora no heap; uma lambda de capturas POD leva o ambiente como
+                # bytes, que é o que qualquer mensagem já faz.
+                #
+                # O que NÃO se decide aqui é qual das duas está à frente: o tipo
+                # `def(int) -> int` não distingue o símbolo da lambda, e o valor
+                # só se conhece a correr. A recusa vive portanto no `export` do
+                # runtime, onde o ambiente pode ser interrogado — e a prova é a
+                # que já existe, o `trace` do descritor.
                 return
             case PT_BUFFER:
                 # 52.3: the framebuffer is the one thing meant to be shared —

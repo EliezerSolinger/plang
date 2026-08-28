@@ -855,3 +855,57 @@ passar cru: o C saía com um `__PsOpt_i` a receber um escalar.
 
 Só se via nos opcionais de VALOR — num de referência o embrulho é a identidade,
 e por isso `str?` funcionava e `int?` não.
+
+## 23 — uma função não atravessava para um worker  ✅ corrigido (L1/D3b)
+
+`spawn(servir, (porta, handle))` não compilava: *"an argument to a worker is
+def(Request) -> Response, and a message crosses heaps as BYTES"*. Sem isto o
+desenho do httpd multi-worker não existia.
+
+Parece violar a 18.1 e não viola. O que a 18.1 isola são HEAPS; dois workers são
+threads do MESMO processo e partilham o espaço do BINÁRIO. **Um `def` de topo é
+um símbolo** — o mesmo endereço em toda a thread, nada dele no heap. O ambiente
+de uma lambda mora no heap e copia-se como qualquer mensagem, desde que seja POD.
+
+E a prova de "POD" já existia sem ninguém a ter pedido: **o compilador só escreve
+um `trace` no descritor quando há uma referência para seguir**, portanto
+`env->desc->trace == None` É a condição. A recusa é por isso a correr e não a
+compilar — e tinha de ser, porque `def(int) -> int` não distingue o símbolo da
+lambda.
+
+Vale nos dois sentidos: `spawn` (bloco malloc'd, `ps_closure_export/import`) e
+`send` (a forma `PS_SH_FUNC`). Gate: `tests/pscript/run/worker_func.psc`.
+
+## 24 — a mensagem VAZIA de um tipo que é referência dava um SIGSEGV  ✅ corrigido
+
+Anterior a este trabalho e geral. A 107.8 escolheu "`recv` devolve mensagem vazia
+quando não há mais nada", e estava certo quando uma mensagem era bytes: o vazio de
+um número é um zero, e um zero é um valor. A escada da 34.3 depois deixou passar
+`str`, listas, dicionários e `struct` — e para esses o vazio passou a ser o
+**ponteiro nulo**, que não é valor nenhum:
+
+```
+async def servo(n: int) -> str:
+    for i in range(3):
+        s: str = await parent.recv()
+        print(len(s))          # <- SIGSEGV na terceira volta
+```
+
+A janela existe mesmo com o predicado à frente: `parent.open()` responde "ainda
+pode chegar mensagem", e entre a resposta e o `recv` a fila pode esvaziar.
+
+Agora levanta, com a frase que explica a corrida. O guarda vive no `ps_des_run`
+porque há DUAS portas — o caminho síncrono (a mensagem já estava na fila) e o
+assíncrono (a tarefa dorme e é enchida depois) — e só esse corredor é comum.
+Pelo caminho, o `recv` de um tipo-grafo passou a marcar `raised`: sem isso o
+valor nulo seguia para a instrução seguinte, que era onde o programa morria em
+vez de parar.
+
+## 25 — um `spawn` arrancava a thread com o contexto já a desenrolar  ✅ corrigido
+
+Os argumentos de um `spawn` são preenchidos por atribuições ANTES da chamada, e
+uma delas pode levantar. A verificação da exceção só chega no fim da instrução —
+portanto a thread partia na mesma, com um argumento por preencher. A recusa saía
+certa e logo a seguir vinha um SIGSEGV noutra thread: o pior de dois mundos.
+`ps_worker_new` recusa agora arrancar quando `ctx->exc != None`, devolvendo um
+worker já terminado.
