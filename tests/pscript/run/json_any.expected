@@ -1,0 +1,7 @@
+7f454c46
+{"a":"x","b":3,"c":true,"d":1.5,"e":null}
+{"n":1,"s":"dois","l":[1,2,3],"o":{"k":true}}
+{"quem":"pscript","quantos":3}
+[1,"dois",true,null]
+{"nome":"Ana","idade":3,"email":null}
+{"nome":"Rui","idade":null,"email":"rui@exemplo.pt"}

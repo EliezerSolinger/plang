@@ -78,5 +78,51 @@ check "corpo acima do tecto da 413" "413" \
 # ---- D42: o `Date` está lá, e o `Server` só porque este servidor o pediu ----
 check "tem Date" "1" "$(curl -s -i $B/ | tr -d '\r' | grep -c '^date: ')"
 
+# ============================================================================
+# F1b/F1c — as ROTAS, a query e o JSON. Outro servidor, porque o mapa de rotas é
+# o que está a ser provado e um servidor com um `if` por caminho não o prova.
+# ============================================================================
+if ! PSBUILD_RT="$OUT/rt" bash tests/psbuild.sh packages/httpd/test/rotas.psc "$OUT/rotas" >>"$OUT/build.log" 2>&1; then
+    echo "  FAIL o servidor de rotas não compila"; tail -5 "$OUT/build.log"; exit 1
+fi
+PF2="$OUT/porto2"
+"$OUT/rotas" "$PF2" >"$OUT/rotas.log" 2>&1 &
+R=$!
+trap 'kill $SRV $R 2>/dev/null' EXIT
+for _ in $(seq 1 100); do [ -s "$PF2" ] && break; sleep 0.05; done
+[ -s "$PF2" ] || { echo "  FAIL o servidor de rotas não abriu porto"; exit 1; }
+C="http://127.0.0.1:$(cat "$PF2")"
+
+check "rota raiz"        "raiz"                 "$(curl -s $C/)"
+check "rota literal"     "lista de jogadores"   "$(curl -s $C/jogadores)"
+check "rota :param"      "jogador 42"           "$(curl -s $C/jogadores/42)"
+check "rota aninhada"    "inventario de 42"     "$(curl -s $C/jogadores/42/inventario)"
+
+# A ESPECIFICIDADE, e não a ordem: `/jogadores/eu` está registado DEPOIS do
+# `/jogadores/:id` no ficheiro, e ganha na mesma. Com a ordem a decidir, esta
+# linha devolveria "jogador eu".
+check "literal ganha a :param" "sou eu" "$(curl -s $C/jogadores/eu)"
+
+# um `%20` no segmento chega decodificado, e um `%2F` NÃO volta a partir o caminho
+check "percent no segmento" "jogador a b" "$(curl -s $C/jogadores/a%20b)"
+check "o resto com *"       "resto=a/b/c.txt" "$(curl -s $C/ficheiros/a/b/c.txt)"
+check "POST na mesma rota"  "criado"        "$(curl -s -X POST $C/jogadores)"
+
+# D34: existe com outro método -> 405 com Allow, e não 404
+check "405 e nao 404"  "405" "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $C/jogadores)"
+check "o Allow do 405" "allow: GET, POST, HEAD, OPTIONS"       "$(curl -s -i -X DELETE $C/jogadores | tr -d '\r' | grep -i '^allow')"
+check "OPTIONS responde 204" "204" "$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS $C/jogadores)"
+check "HEAD sai do GET" "HTTP/1.1 200 OK" "$(curl -s -I $C/jogadores | head -1 | tr -d '\r')"
+check "sem rota da 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' $C/nada)"
+
+# F1c/D29: `+` é espaço numa query (e seria um `+` literal num caminho), o
+# percent-decoding é UTF-8, e uma chave ausente é ""
+check "query com + e percent" "joão silva||0" "$(curl -s "$C/query?nome=jo%C3%A3o+silva&vazio=")"
+check "query repetida"        "a,b,c"         "$(curl -s "$C/lista?t=a&t=b&t=c")"
+
+# F1c/D30: o corpo como JSON, e o círculo fecha
+check "corpo JSON" '{"recebi":{"x":[1,2],"y":"z"},"era_json":true}' \
+      "$(curl -s -H 'content-type: application/json' -d '{"x":[1,2],"y":"z"}' $C/json)"
+
 echo "   httpd: $pass ok, $fail failed"
 [ $fail -eq 0 ]

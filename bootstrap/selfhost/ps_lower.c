@@ -2767,6 +2767,15 @@ static Expr *PsLow_binary_raw(PsLow *self, PsExpr *e) {
                 PsLow_push_arg(self, c, PsLow_expr(self, e->rhs));
                 return c;
             }
+            if (is_bytes) {
+                Expr *bc7 = PsLow_call_rt(self, "ps_bytes_concat", e->pos);
+                PsLow_push_arg(self, bc7, PsLow_ctx_arg(self, e->pos));
+                PsLow_push_arg(self, bc7, PsLow_expr(self, e->lhs));
+                PsLow_push_arg(self, bc7, PsLow_expr(self, e->rhs));
+                self->allocs = 1;
+                self->raised = 1;
+                return bc7;
+            }
             if (lk == PT_LIST) {
                 Expr *lc4 = PsLow_call_rt(self, "ps_list_concat", e->pos);
                 PsLow_push_arg(self, lc4, PsLow_ctx_arg(self, e->pos));
@@ -8446,7 +8455,7 @@ static Decl *lower_record_impl(PsLow *L, PsDecl *d) {
     return rd;
 }
 
-static const const char *PS_TAKEN[122] = {"auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "bool", "true", "false", "complex", "imaginary", "abs", "exit", "free", "malloc", "calloc", "realloc", "atoi", "atof", "rand", "srand", "qsort", "bsearch", "div", "labs", "system", "getenv", "printf", "fprintf", "sprintf", "snprintf", "puts", "putchar", "getchar", "fopen", "fclose", "fread", "fwrite", "fgets", "remove", "rename", "stdin", "stdout", "stderr", "memcpy", "memmove", "memset", "memcmp", "strlen", "strcmp", "strcpy", "strcat", "strchr", "strstr", "strtok", "index", "rindex", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "log", "log2", "log10", "pow", "sqrt", "cbrt", "hypot", "ceil", "floor", "round", "trunc", "fmod", "fabs", "fmin", "fmax", "gamma", "j0", "j1", "jn", "y0", "y1", "yn", "time", "clock", "main", NULL};
+static const const char *PS_TAKEN[228] = {"auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while", "bool", "true", "false", "complex", "imaginary", "abs", "exit", "free", "malloc", "calloc", "realloc", "atoi", "atof", "rand", "srand", "qsort", "bsearch", "div", "labs", "system", "getenv", "printf", "fprintf", "sprintf", "snprintf", "puts", "putchar", "getchar", "fopen", "fclose", "fread", "fwrite", "fgets", "remove", "rename", "stdin", "stdout", "stderr", "memcpy", "memmove", "memset", "memcmp", "strlen", "strcmp", "strcpy", "strcat", "strchr", "strstr", "strtok", "index", "rindex", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "log", "log2", "log10", "pow", "sqrt", "cbrt", "hypot", "ceil", "floor", "round", "trunc", "fmod", "fabs", "fmin", "fmax", "gamma", "j0", "j1", "jn", "y0", "y1", "yn", "time", "clock", "main", "socket", "bind", "listen", "accept", "connect", "send", "recv", "sendto", "recvfrom", "shutdown", "setsockopt", "getsockopt", "getsockname", "getpeername", "socketpair", "htons", "htonl", "ntohs", "ntohl", "inet_addr", "inet_ntoa", "inet_pton", "inet_ntop", "getaddrinfo", "freeaddrinfo", "gai_strerror", "gethostbyname", "read", "write", "close", "open", "pipe", "dup", "dup2", "lseek", "unlink", "rmdir", "mkdir", "chdir", "getcwd", "access", "fcntl", "fsync", "ftruncate", "truncate", "isatty", "link", "symlink", "readlink", "chmod", "chown", "umask", "sync", "fork", "execv", "execvp", "execve", "wait", "waitpid", "getpid", "getppid", "kill", "alarm", "pause", "sleep", "usleep", "nice", "poll", "select", "signal", "raise", "abort", "pthread_create", "pthread_join", "pthread_self", "pthread_exit", "mmap", "munmap", "madvise", "stat", "fstat", "lstat", "creat", "gmtime", "localtime", "mktime", "strftime", "difftime", "nanosleep", "random", "srandom", "strdup", "strndup", "strsep", "bzero", "bcopy", "getline", "popen", "pclose", "tmpfile", "basename", "dirname", "regcomp", "regexec", "regfree", "regerror", NULL};
 
 static const char *ps_cname(Arena *a, const char *name) {
     if (name == NULL) {
@@ -11175,7 +11184,7 @@ static const char *sh_mangle(PsLow *L, PsType *t) {
             break;
         }
     }
-    return "v";
+    return Arena_printf(L->a, "k%d", (int32_t)t->kind);
 }
 
 static Expr *sh_field_addr(PsLow *L, const char *sname, const char *fname, Pos pos) {

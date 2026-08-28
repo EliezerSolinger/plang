@@ -512,16 +512,16 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 
 ### O que a BIBLIOTECA ganha
 
-- [ ] **F1 — httpd v1, um worker.** `serve(porta, handle)` sobre o parser que
+- [x] **F1 — httpd v1, um worker.** `serve(porta, handle)` sobre o parser que
       existe, devolvendo um `Server` com `with` (D38): keep-alive (D3d), o 500 com
       `debug` (D3e), o corpo em dois acessores (D3f), as conveniências de Response
       (D3g), o `Host` exigido (D41), o `Date` por segundo (D42) e os hooks de erro
       (D39). Portão: **primeiro sans-io** (Request construída → Response afirmada),
       **depois socket real** (D31) — hello-world, POST com corpo, 404, 400 do
       parser.
-- [ ] **F1b — Rotas** (D19) com `:param`, e o `HEAD`/`OPTIONS`/405 automáticos
+- [x] **F1b — Rotas** (D19) com `:param`, e o `HEAD`/`OPTIONS`/405 automáticos
       (D34). Portão: cada um dos três, e um `:param` com percent-encoding.
-- [ ] **F1c — Query e JSON** (D29/D30): `req.query` sobre o `packages/url`, e
+- [x] **F1c — Query e JSON** (D29/D30): `req.query` sobre o `packages/url`, e
       `req.json()`. Portão: os casos de query dos WPT que o `url` já passa,
       atravessados pela httpd.
 - [ ] **F2 — Streaming** (D5): corpo por cursor, chunked e SSE.

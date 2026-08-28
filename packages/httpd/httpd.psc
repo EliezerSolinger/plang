@@ -44,6 +44,7 @@ As decisões que o desenho fixou e que este ficheiro cumpre:
 """
 import <http/http.psc> as h
 import <datetime/datetime.psc> as dt
+import <url/url.psc> as url
 import json as jsn
 import net
 import time
@@ -95,6 +96,107 @@ struct Request:
 
     def param(self, name: str) -> str:
         return self.params[name] if name in self.params else ""
+
+    # ---------- F1c/D29: a query ----------
+
+    def query_params(self) -> Dict<str, str>:
+        """`?a=1&b=dois` lido como um dicionário. É calculado a cada chamada e
+        não guardado: a esmagadora maioria dos pedidos não tem query nenhuma, e
+        um campo a mais na `Request` custaria a todos eles."""
+        return parse_query(self.query)
+
+    def q(self, nome: str) -> str:
+        """UM valor da query, ou "". O atalho para o caso de todos os dias, sem
+        construir o dicionário inteiro para ler uma chave."""
+        for par in self.query.split("&"):
+            if len(par) == 0:
+                continue
+            i = par.find("=")
+            k = form_decode(par) if i < 0 else form_decode(par[0:i])
+            if k == nome:
+                return "" if i < 0 else form_decode(par[i + 1:])
+        return ""
+
+    def q_all(self, nome: str) -> List<str>:
+        """TODOS os valores desta chave. `?t=a&t=b` é a forma normal de mandar
+        uma lista, e um dicionário perde-a — a mesma razão da D3c."""
+        return query_all(self.query, nome)
+
+    # ---------- F1c/D30: o corpo como JSON ----------
+
+    def json(self) -> any:
+        """O corpo lido como JSON. Levanta se não for JSON — e é isso que se
+        quer: um corpo que devia ser JSON e não é NÃO é um caso a tratar com um
+        valor vazio, é um 400. Quem quer o 400 escreve o `try`; quem não escreve
+        recebe o 500, que é a verdade sobre o que aconteceu.
+
+        O `content-type` NÃO é conferido aqui. Quem manda `text/plain` com JSON
+        lá dentro está a fazer uma coisa estranha e não uma coisa errada, e
+        recusar seria a biblioteca a ter opinião sobre o cliente de quem a usa.
+        """
+        return jsn.parse(str(self.body))
+
+    def is_json(self) -> bool:
+        """O `content-type` DIZ que é JSON? A pergunta que decide se vale a pena
+        tentar — separada do `json()` porque são duas perguntas."""
+        t = self.header("content-type").lower()
+        return t.startswith("application/json") or t.find("+json") > 0
+
+
+# ---------- D29/D30: percent-decoding e a query ----------
+
+def pct_decode_seg(s: str) -> str:
+    """O percent-decoding de um SEGMENTO. Um `%2F` aqui dentro NÃO volta a ser
+    uma barra que parta o caminho: a partição já aconteceu, e desfazê-la depois
+    é exactamente o truque com que se sai de um directório."""
+    return str(bytes(url.pct_decode(s)))
+
+
+def form_decode(s: str) -> str:
+    """O mesmo, mas para uma QUERY, onde `+` é um espaço.
+
+    A diferença entre isto e o `pct` acima não é um pormenor: `+` é espaço em
+    `application/x-www-form-urlencoded` e é um `+` literal num caminho. Usar a
+    regra errada faz `a+b` chegar ao programa como `a b` ou como `a+b` conforme
+    o sítio, e é meia hora de depuração de cada vez.
+    """
+    trocado = ""
+    for ch in s:
+        trocado += " " if ch == "+" else ch
+    return pct_decode_seg(trocado)
+
+
+def parse_query(q: str) -> Dict<str, str>:
+    """`a=1&b=dois&c` -> `{"a": "1", "b": "dois", "c": ""}`.
+
+    Uma chave sem `=` vale "", que é o que toda a gente faz — e uma chave
+    REPETIDA fica com a primeira. Quem precisa de todas usa `query_all`, pela
+    mesma razão que os cabeçalhos têm as duas portas (D3c).
+    """
+    out: Dict<str, str> = {}
+    for par in q.split("&"):
+        if len(par) == 0:
+            continue
+        i = par.find("=")
+        k = form_decode(par) if i < 0 else form_decode(par[0:i])
+        v = "" if i < 0 else form_decode(par[i + 1:])
+        if k not in out:
+            out[k] = v
+    return out
+
+
+def query_all(q: str, nome: str) -> List<str>:
+    """TODOS os valores desta chave, na ordem em que vieram. `?t=a&t=b` é a forma
+    normal de mandar uma lista, e um dicionário perde-a."""
+    out: List<str> = []
+    for par in q.split("&"):
+        if len(par) == 0:
+            continue
+        i = par.find("=")
+        k = form_decode(par) if i < 0 else form_decode(par[0:i])
+        if k == nome:
+            out.append("" if i < 0 else form_decode(par[i + 1:]))
+    return out
 
 
 # ---------- o que sai ----------

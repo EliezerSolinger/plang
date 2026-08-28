@@ -987,3 +987,21 @@ O que fica por decidir é de desenho, não de implementação: **um nome do prog
 deve ganhar a um embutido?** Em Python ganha. Se a resposta for não, o erro tem
 de o dizer — hoje sai uma queixa de tipos vinda da baixa, que não menciona
 sequer a palavra "embutido".
+
+## 32 — um método LIGADO não é um valor  ⬜ aberto
+
+`mapa.handle` não se escreve: o campo não existe. O `run` do servidor quer um
+`def(Request) -> Task<Response>` para chamar a cada pedido, e um encaminhador é
+exactamente a coisa que devia poder dar-lho.
+
+A volta é de duas linhas e o `packages/httpd/router.psc` dá-a por escrito — o
+despacho é uma FUNÇÃO LIVRE e o programa escreve o adaptador:
+
+```python
+async def despacha(req: httpd.Request) -> httpd.Response:
+    return await rt.dispatch(mapa, req)
+```
+
+Não é um remendo mau, mas é uma volta. Um método ligado é uma closure sobre o
+`self`, e a linguagem já tem closures com captura — o que falta é a forma
+escrita. Fica registado como coisa de desenho.
