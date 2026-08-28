@@ -3876,10 +3876,32 @@ struct PsSema:
         if strcmp(name, "__net_listen") == 0:
             # 77.1: binding and listening are instant, so this one is NOT a
             # task — what waits is `accept`, and that is where the await goes
-            if e->nargs != 1:
-                fatal_at(self->file, e->pos, "net.listen() takes a port: `net.listen(8080)`")
+            if e->nargs < 1 or e->nargs > 2:
+                fatal_at(self->file, e->pos, "net.listen() takes a port, and optionally whether the port may be shared: `net.listen(8080)` or `net.listen(8080, True)`")
             lp: *PsType = self->check_expr(e->args[0])
             self->want(e->args[0], lp, ps_type(self->a, PT_INT, e->pos), "net.listen()")
+            if e->nargs == 2:
+                # 148/D2: SO_REUSEPORT. N workers escutam o MESMO porto e é o
+                # KERNEL que reparte os accepts entre eles — em vez de um
+                # aceitador único a distribuir descritores, ou de todos
+                # acordarem para um só ganhar (o "thundering herd").
+                #
+                # Não é o `SO_REUSEADDR`, que já lá estava sempre: esse deixa
+                # RELIGAR um porto em TIME_WAIT, e não deixa dois escutarem.
+                rp: *PsType = self->check_expr(e->args[1])
+                self->want(e->args[1], rp, ps_type(self->a, PT_BOOL, e->pos), "net.listen()")
+            else:
+                # o valor por omissão é escrito AQUI e não no runtime: assim a
+                # baixa continua a ser a genérica dos `__net_*`, que passa os
+                # argumentos tais como estão
+                fb: *PsExpr = ps_expr(self->a, PE_BOOL, e->pos)
+                fb->text = "False"
+                fb->type = ps_type(self->a, PT_BOOL, e->pos)
+                na: **PsExpr = self->a->alloc(usize(3) * sizeof(*na))
+                na[0] = e->args[0]
+                na[1] = fb
+                e->args = na
+                e->nargs = 2
             return ps_type(self->a, PT_CONN, e->pos)
         if strcmp(name, "__net_connect") == 0:
             if e->nargs != 2:

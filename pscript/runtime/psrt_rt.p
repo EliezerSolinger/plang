@@ -1339,13 +1339,27 @@ private def ps_hton16(x: u16) -> u16:
 private def ps_ntoh16(x: u16) -> u16:
     return ps_hton16(x)   # the swap is its own inverse
 
-def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn:
+def ps_net_listen(ctx: *PsCtx, port: i64, reuseport: bool) -> *PsConn:
     fd: int = socket(AF_INET, SOCK_STREAM, 0)
     if fd < 0:
         ps_raise(ctx, "could not make a socket", PS_CAT_IO, "<net>", 0)
         return ps_conn_new(ctx, -1, 1)
     one: int = 1
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, u32(sizeof(int)))
+    if reuseport:
+        # 148/D2: SO_REUSEPORT, e não é o mesmo que o REUSEADDR de cima.
+        #
+        # O REUSEADDR deixa RELIGAR um porto que ficou em TIME_WAIT — é sobre o
+        # passado. O REUSEPORT deixa N descritores escutarem o MESMO porto ao
+        # mesmo tempo, e o kernel reparte os accepts entre eles por uma dispersão
+        # da quádrupla da conexão. É sobre o presente, e é a peça que faz N
+        # workers servirem um porto sem um aceitador único no meio e sem o
+        # "thundering herd" de todos acordarem para um só ganhar.
+        #
+        # A recusa é SILENCIOSA de propósito: um kernel que não o tenha continua
+        # a servir, com um worker a aceitar em vez de N. Levantar aqui tornaria
+        # o servidor inarrancável por uma optimização.
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, u32(sizeof(int)))
     a: sockaddr_in
     memset(&a, 0, sizeof(a))
     a.sin_family = u16(AF_INET)

@@ -1,0 +1,6 @@
+dois no mesmo porto: True True
+resposta: eco:bate
+o porto partilhado serve: bate
+sem reuseport, o segundo recusa: True
+unix: eco:ola unix
+o servidor unix viu: ola unix

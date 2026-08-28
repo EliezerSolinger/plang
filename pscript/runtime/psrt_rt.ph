@@ -176,7 +176,7 @@ def ps_aprint(ctx: *PsCtx, s: *PsStr) -> *PsTask
 # the scheduler waits for the descriptor in the `poll` it already runs (74.1)
 # and the syscall happens inline when it can no longer block. Connect and DNS
 # go to the POOL instead — `getaddrinfo` blocks and cannot be talked out of it.
-def ps_net_listen(ctx: *PsCtx, port: i64) -> *PsConn
+def ps_net_listen(ctx: *PsCtx, port: i64, reuseport: bool) -> *PsConn
 def ps_net_accept(ctx: *PsCtx, srv: *PsConn) -> *PsTask
 def ps_net_connect(ctx: *PsCtx, host: *PsStr, port: i64) -> *PsTask
 def ps_net_lookup(ctx: *PsCtx, host: *PsStr) -> *PsTask

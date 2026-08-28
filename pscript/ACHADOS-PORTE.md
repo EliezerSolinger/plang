@@ -909,3 +909,24 @@ portanto a thread partia na mesma, com um argumento por preencher. A recusa saí
 certa e logo a seguir vinha um SIGSEGV noutra thread: o pior de dois mundos.
 `ps_worker_new` recusa agora arrancar quando `ctx->exc != None`, devolvendo um
 worker já terminado.
+
+## 26 — `SO_REUSEPORT` (L2/D2)  ✅ feito
+
+`net.listen(porta, True)`. Não é o `SO_REUSEADDR`, que já lá estava sempre: esse
+deixa RELIGAR um porto em TIME_WAIT (é sobre o passado), este deixa N descritores
+escutarem ao mesmo tempo (é sobre o presente), e o kernel reparte os accepts por
+uma dispersão da quádrupla. É o que faz N workers servirem um porto sem um
+aceitador único no meio e sem *thundering herd*.
+
+O valor por omissão é escrito na SEMA e não no runtime — assim a baixa continua a
+ser a genérica dos `__net_*`, que passa os argumentos tais como estão. E a recusa
+do `setsockopt` é silenciosa: um kernel sem a opção continua a servir com um
+worker, e levantar tornaria o servidor inarrancável por causa de uma optimização.
+
+**L5 (`net.unix`) já existia** desde a F7 do plano NIO — `net.unix` e
+`net.unix_listen` — e o que faltava era um portão. Tem-no agora no mesmo ficheiro.
+
+Gate: `tests/pscript/run/net_reuseport.psc`. O que ele deliberadamente NÃO afirma
+é qual descritor recebe qual conexão: é a hash do kernel, e com duas conexões
+mandar as duas ao mesmo é uma resposta correcta. Chegou a estar escrito assim, e
+o teste pendurou-se no `accept` do outro.

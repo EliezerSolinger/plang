@@ -498,7 +498,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
       correm no worker; uma lambda que captura algo coletado é RECUSADA com a
       mensagem que diz porquê. *É a fase mais valiosa deste documento para a
       linguagem, e não depende de nada do servidor.*
-- [ ] **L2 — `SO_REUSEPORT`** no `listen` (D2). Portão: dois workers no mesmo
+- [x] **L2 — `SO_REUSEPORT`** no `listen` (D2). Portão: dois workers no mesmo
       porto, o kernel reparte os accepts.
 - [ ] **L3 — `SSL_accept`** e carregar cert/chave, por caminho e por bytes (D8/D15).
       Portão: um GET por `https` com cert auto-assinado, conferido com
@@ -506,7 +506,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [ ] **L4 — `Topic`** no runtime (D6/D7): subscrever, publicar, dessubscrever, por
       worker, sobre os pipes. Portão: um broadcast a K conexões repartidas por W
       workers chega a todas, uma vez cada.
-- [ ] **L5 — `net.unix`** (D35): escutar e ligar por socket UNIX. Já estava
+- [x] **L5 — `net.unix`** (D35): escutar e ligar por socket UNIX. Já estava
       previsto na F7 do plano NIO; esta é a ocasião. Portão: um servidor e um
       cliente sobre um caminho, no mesmo processo.
 
