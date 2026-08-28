@@ -550,7 +550,7 @@ propósito: são valiosas por si, e nenhuma delas deve prender o porte.
 - [x] **F9 — Compressão** (só o gzip do HTTP; o permessage-deflate do ws continua a faltar) (D16): gzip no HTTP; e o permessage-deflate do ws numa
       fase à parte, depois do Autobahn verde — a janela partilhada do RFC 7692 é
       onde ele morde.
-- [ ] **F10 — Cliente HTTP completo** (D17): redirects, cookies, pool, timeouts. Um
+- [x] **F10 — Cliente HTTP completo** (D17): redirects, cookies, pool, timeouts. Um
       projeto do tamanho do servidor, e por isso tardio; o `GameApi` do jogo é
       servido antes por um `get`/`post` mínimo.
 - [ ] **F11 — h2 atrás de ALPN** (D10).

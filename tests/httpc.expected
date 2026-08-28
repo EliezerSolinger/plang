@@ -1,0 +1,20 @@
+get: 200 ola do pscript
+404: 404
+post: 200 0123456789
+json: {"quem":"pscript","quantos":3}
+gzip: 200 6000 gzip
+redirect: 200 1 True
+com tecto zero: demasiados redirects (
+head: 200 0
+url: http://a.b/c -> http a.b 80 /c
+url: https://a.b -> https a.b 443 /
+url: http://a.b:8080/x?y=1 -> http a.b 8080 /x?y=1
+url: http://[::1]:99/z -> http ::1 99 /z
+url: ftp://a.b/ -> recusado
+url: http://user:pw@a.b/ -> recusado
+url: nao-e-url -> recusado
+ws boas-vindas: True
+ws eco: eco:ola do nosso cliente
+ws binario: 0001feff
+ws 70k: 70004
+ws fechou: True

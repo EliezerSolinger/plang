@@ -246,6 +246,15 @@ if PLANGC=$PWD/$V/plangc_s2 bash tests/tls-server.sh >$V/tlsserver.log 2>&1; the
 else
     bad "o servidor TLS não apertou a mão com um cliente de fora (veja $V/tlsserver.log)"
 fi
+#   httpc        o CLIENTE contra o nosso próprio servidor, HTTP e WebSocket. Os
+#                dois têm uma máquina de estados só, portanto quando o círculo
+#                fecha ele fecha nos dois sentidos — e quem apanha uma divergência
+#                do RFC são os oráculos de fora, nos outros dois portões.
+if PLANGC=$PWD/$V/plangc_s2 bash tests/httpc.sh >$V/httpc.log 2>&1; then
+    ok "httpc $(grep -oE '[0-9]+ ok' $V/httpc.log | tail -1)"
+else
+    bad "o cliente não fechou o círculo com o nosso servidor (veja $V/httpc.log)"
+fi
 #   knobs        os `-D PSRT_*` mudam o binário: o mesmo programa compilado duas
 #                vezes tem de dar saídas diferentes (a profundidade do `repr` é a
 #                que se vê sem medir), e com TODOS os knobs de fora ele ainda

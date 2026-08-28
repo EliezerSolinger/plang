@@ -1,0 +1,67 @@
+# httpc — um cliente HTTP/1.1 e WebSocket
+
+```python
+import <httpc/httpc.psc> as hc
+
+r = await hc.get("https://exemplo.pt/api")
+print(r.status, r.texto())
+
+w = await hc.ws_connect("wss://exemplo.pt/ws")
+await w.send_text("olá")
+ev = await w.recv()
+```
+
+**O parser é o MESMO do servidor** — `packages/http`, incremental e conferido
+contra o corpus do llhttp. Isso não é reaproveitamento por economia: é o que
+garante que o que o nosso servidor escreve o nosso cliente lê, porque os dois têm
+uma máquina de estados só. Duas implementações concordariam nos casos fáceis e
+divergiriam exactamente onde interessa.
+
+## As decisões que se notam
+
+* **os redirects são contados.** Um `Location` seguido às cegas é um laço
+  infinito à espera de acontecer, e um servidor hostil dá-lho de graça;
+
+* **um 301/302/303 sobre um POST vira GET** e perde o corpo — é o que todo o
+  cliente faz, e o RFC 9110 §15.4 acabou por o permitir por escrito. Um **307/308
+  não muda nada**: esses códigos foram criados exactamente para dizer "segue, e
+  NÃO mudes o método";
+
+* **os cabeçalhos sensíveis caem ao mudar de origem.** Seguir um redirect para
+  outro domínio a levar o `Authorization` é entregar a credencial a quem escreveu
+  o `Location`. É a falha que os clientes de HTTP tapam um a um, e cada um dela
+  demorou uma versão a aparecer;
+
+* **`user:senha@host` num URL é RECUSADO.** A forma é da RFC 3986 e ninguém
+  devia usá-la; ignorá-la em silêncio seria pior;
+
+* **um IPv6 entre parênteses rectos** parte no `:` que vem DEPOIS deles. Sem essa
+  distinção, `[::1]:8080` parte no primeiro dois-pontos e o host fica `[`;
+
+* **o gzip é pedido e desfeito** sem que quem chama saiba. Foi este módulo que
+  pôs o cabeçalho, portanto é ele que tem de desfazer o resultado;
+
+* **a máscara do WebSocket vem do gerador criptográfico**, uma por quadro. Ela
+  não é segurança e não vale a pena fingi-lo — a chave viaja no próprio quadro.
+  Ela existe porque proxies antigos podiam ser enganados a tratar o corpo como uma
+  requisição HTTP, e o que ela exige é que a chave seja **imprevisível**;
+
+* **o `Sec-WebSocket-Accept` é CONFERIDO.** Não é cerimónia: é o que prova que do
+  outro lado está um servidor que entendeu o pedido, e não um servidor HTTP
+  qualquer a devolver 101 por acidente ou um intermediário a responder à toa.
+
+## O portão
+
+`bash tests/httpc.sh` arranca os NOSSOS dois servidores e fala com eles. O que os
+outros dois portões provam é a outra metade: o `curl` como oráculo do servidor
+(`tests/httpd.sh`) e a biblioteca `websockets` do Python como oráculo do ws
+(`tests/ws.sh`). Se o nosso lado divergisse do RFC, divergiria junto — e são os
+oráculos de fora que apanham isso.
+
+## O que ainda não está aqui
+
+O **pool de conexões**: cada pedido liga e fecha. Para um cliente que fala com o
+mesmo servidor mil vezes é a diferença toda (um aperto de mão TCP e um TLS por
+pedido), e a `uma_volta` está escrita para que o pool lhe troque o "liga e fecha"
+por "toma e devolve" sem mudar mais nada. Também não há **cookies automáticos**
+nem **h2** (F11).
